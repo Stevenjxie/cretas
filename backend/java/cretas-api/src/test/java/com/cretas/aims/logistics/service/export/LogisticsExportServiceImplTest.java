@@ -188,7 +188,7 @@ class LogisticsExportServiceImplTest {
 
         // 未分配门店单独 section — 不静默丢弃 (fool-proof-design Rule 5)
         assertTrue(rows.get(3).get(0).contains("未分配门店"), "未分配 section 明确标注");
-        assertEquals(List.of("门店编码", "门店名称", "体积(m³)", "重量(kg)"), rows.get(4));
+        assertEquals(List.of("订单号", "门店名称", "体积(m³)", "重量(kg)"), rows.get(4));
         List<String> unassignedRow = rows.get(5);
         assertEquals("S-C", unassignedRow.get(0));
         assertEquals("门店C", unassignedRow.get(1));

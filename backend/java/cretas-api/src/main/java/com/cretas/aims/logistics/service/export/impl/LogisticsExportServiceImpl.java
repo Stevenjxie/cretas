@@ -62,7 +62,7 @@ public class LogisticsExportServiceImpl implements LogisticsExportService {
     private static final List<String> TRIP_HEADER = List.of(
             "线路", "车辆", "司机", "门店数", "方数(m³)", "重量(kg)", "装载率", "公里数", "配送顺序");
     private static final List<String> UNASSIGNED_HEADER = List.of(
-            "门店编码", "门店名称", "体积(m³)", "重量(kg)");
+            "订单号", "门店名称", "体积(m³)", "重量(kg)");
 
     private final LogisticsPlanRepository planRepository;
     private final LogisticsTripRepository tripRepository;

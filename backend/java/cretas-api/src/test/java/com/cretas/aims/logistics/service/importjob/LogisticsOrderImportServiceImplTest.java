@@ -203,7 +203,7 @@ class LogisticsOrderImportServiceImplTest {
     }
 
     @Test
-    @DisplayName("preview — 同批门店编码重复 → 第二次出现标记错误, 第一次仍有效")
+    @DisplayName("preview — 同批订单号重复 → 第二次出现标记错误, 第一次仍有效")
     void previewDuplicateStoreCode() {
         List<LogisticsOrderImportRow> rows = List.of(validRow("S020", "门店A"), validRow("S020", "门店A-重复"));
         PreviewResultDto result = service().preview(F1, buildFile(rows), 1L);
@@ -214,13 +214,13 @@ class LogisticsOrderImportServiceImplTest {
         assertThat(result.getRows().get(1).isValid()).isFalse();
         assertThat(result.getRows().get(1).getErrors()).anySatisfy(e -> {
             assertThat(e.getRowNumber()).isEqualTo(2);
-            assertThat(e.getColumn()).isEqualTo("门店编码");
+            assertThat(e.getColumn()).isEqualTo("订单号");
             assertThat(e.getMessage()).contains("重复");
         });
     }
 
     @Test
-    @DisplayName("preview — 整行完全重复 (不同门店编码但其余列相同不会误判; 这里用完全相同两行)")
+    @DisplayName("preview — 整行完全重复 (不同订单号但其余列相同不会误判; 这里用完全相同两行)")
     void previewFullRowDuplicate() {
         LogisticsOrderImportRow r1 = validRow("S030", "门店30");
         LogisticsOrderImportRow r2 = validRow("S030", "门店30");

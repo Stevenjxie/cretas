@@ -194,7 +194,7 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
                 errors.add(err(rowNumber, "订单号", "订单号在文件内重复: " + storeCode));
             }
 
-            // 整行完全重复（不仅门店编码，逐列比对）
+            // 整行完全重复（不仅订单号，逐列比对）
             String fullRowKey = String.join("",
                     nz(businessDateRaw), nz(storeCode), nz(storeName), nz(address),
                     nz(raw.getPieces()), nz(raw.getBoxes()), nz(raw.getWeightKg()), nz(raw.getVolumeCbm()),
