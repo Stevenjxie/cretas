@@ -131,7 +131,7 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
             }
 
             String storeCode = trim(raw.getStoreCode());
-            if (isBlank(storeCode)) errors.add(err(rowNumber, "门店编码", "必填字段为空"));
+            if (isBlank(storeCode)) errors.add(err(rowNumber, "订单号", "必填字段为空"));
 
             String storeName = trim(raw.getStoreName());
             if (isBlank(storeName)) errors.add(err(rowNumber, "门店名称", "必填字段为空"));
@@ -179,9 +179,9 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
 
             String areaCode = trim(raw.getAreaCode());
 
-            // 同批门店编码重复：保留第一次出现，后续标记为错误（不写库）
+            // 同批订单号重复：保留第一次出现，后续标记为错误（不写库）
             if (!isBlank(storeCode) && !seenStoreCodes.add(storeCode)) {
-                errors.add(err(rowNumber, "门店编码", "门店编码在文件内重复: " + storeCode));
+                errors.add(err(rowNumber, "订单号", "订单号在文件内重复: " + storeCode));
             }
 
             // 整行完全重复（不仅门店编码，逐列比对）
