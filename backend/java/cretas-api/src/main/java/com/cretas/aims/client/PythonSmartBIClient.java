@@ -1460,6 +1460,59 @@ public class PythonSmartBIClient {
     }
 
     /**
+     * 调用餐饮经营体检报告端点 (餐饮经营体检预警推送 — 反回扣 standing alert 数据源).
+     *
+     * <p>GET /api/smartbi/restaurant/{factoryId}/health-check-report?month=.
+     * 这是一个 server-to-server 内部调用 (定时扫描器触发, 无用户 JWT 可转发), 走
+     * X-Internal-Secret (由 OkHttp 拦截器自动加, 见构造函数) + X-Factory-Id
+     * (本方法显式加, 让 Python {@code auth_middleware.py} internal 分支正确
+     * scope 到该工厂, 见 restaurant_health_check.py 的 tenant guard:
+     * {@code caller != "INTERNAL" and caller != factory_id -> 403}).
+     *
+     * <p>禁降级: 服务不可用 / 请求失败时返回 {@code null} (调用方 —
+     * {@code RestaurantHealthAlertBridgeService} — 必须诚实跳过本次 sweep, 不
+     * 得编造诊断结果).
+     *
+     * @param factoryId 门店 factoryId (FactoryType.RESTAURANT)
+     * @param month     "YYYY-MM" / "上月" / "本月" / null(默认上月)
+     * @return 原始响应 Map ({@code {success, data:{reportMeta,summary,diagnoses}, message}});
+     *         null = 服务不可用或请求失败
+     * @since 2026-07-11
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> getRestaurantHealthCheckReport(String factoryId, String month) {
+        if (!config.isEnabled()) {
+            log.debug("Python SmartBI 服务未启用，跳过餐饮经营体检报告调用 factoryId={}", factoryId);
+            return null;
+        }
+
+        String baseUrl = config.getFullUrl("/api/smartbi/restaurant/" + factoryId + "/health-check-report");
+        HttpUrl parsed = HttpUrl.parse(baseUrl);
+        if (parsed == null) {
+            log.error("餐饮经营体检报告 URL 解析失败: {}", baseUrl);
+            return null;
+        }
+        HttpUrl.Builder urlBuilder = parsed.newBuilder();
+        if (month != null && !month.isBlank()) {
+            urlBuilder.addQueryParameter("month", month);
+        }
+
+        Request httpRequest = new Request.Builder()
+                .url(urlBuilder.build())
+                .header("X-Factory-Id", factoryId)
+                .get()
+                .build();
+        log.info("调用 Python 餐饮经营体检报告: factoryId={}, month={}", factoryId, month);
+
+        try {
+            return executeWithRetry(httpRequest, Map.class);
+        } catch (IOException | PythonServiceUnavailableException e) {
+            log.error("餐饮经营体检报告调用失败 factoryId={}: {}", factoryId, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * 通用 GET-style analysis 端点调用 (T6.6 Phase B Sub-A / Sub-B 共享).
      *
      * Mirrors the existing POST-based {@link #callAnalysisEndpoint} shape but
