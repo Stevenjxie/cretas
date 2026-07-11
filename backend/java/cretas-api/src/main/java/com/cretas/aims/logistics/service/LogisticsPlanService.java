@@ -4,6 +4,7 @@ import com.cretas.aims.logistics.dto.plan.MoveStopRequest;
 import com.cretas.aims.logistics.dto.plan.PlanDto;
 import com.cretas.aims.logistics.dto.plan.PlanSnapshotDto;
 import com.cretas.aims.logistics.entity.enums.PlanStatus;
+import com.cretas.aims.logistics.entity.enums.RouteOptimizeMode;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
@@ -27,8 +28,14 @@ import java.util.List;
  */
 public interface LogisticsPlanService {
 
-    /** POST /plans/generate — 委托 {@code LogisticsRoutingService.generatePlan}（幂等）。 */
-    PlanSnapshotDto generatePlan(String factoryId, String batchId, BigDecimal targetLoadPct);
+    /**
+     * POST /plans/generate — 委托 {@code LogisticsRoutingService.generatePlan}（幂等）。
+     *
+     * @param optimizeBy 排线优化模式 (TIME=时间最快 / DISTANCE=路程最短); null 按 DISTANCE。
+     *                   存于计划上, regenerate 复用 (档1-B 2026-07-11)。
+     */
+    PlanSnapshotDto generatePlan(String factoryId, String batchId, BigDecimal targetLoadPct,
+            RouteOptimizeMode optimizeBy);
 
     /** GET /plans — 工厂内计划列表，最新业务日期在前；{@code status} 可选过滤。 */
     Page<PlanDto> listPlans(String factoryId, PlanStatus status, Pageable pageable);

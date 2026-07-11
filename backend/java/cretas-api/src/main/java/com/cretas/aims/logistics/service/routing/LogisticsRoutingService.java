@@ -461,12 +461,13 @@ public class LogisticsRoutingService {
     }
 
     /**
-     * 把 direction 结果落到车次实体: 折线 (JSONB {@code [{"lng":..,"lat":..},...]}) +
-     * 时长 (分钟) + 总里程 (以 direction 里程覆盖边距离和, 保证"画的线/里程/时长"三者
-     * 出自同一次规划 = 单一事实源) + provider 标识。
+     * 把 direction 结果落到车次实体: 道路折线 → {@code roadPath} 列 (JSONB
+     * {@code [{"lng":..,"lat":..},...]}, GCJ-02 — <b>不是</b> {@code geometry} 列, 那是前端
+     * SVG 兜底地图的 {x,y} 像素点, 语义不同不混用) + 时长 (分钟) + 总里程 (以 direction 里程
+     * 覆盖边距离和, 保证"画的线/里程/时长"三者出自同一次规划 = 单一事实源) + provider 标识。
      */
     public static void applyRoadRoute(LogisticsTrip trip, DrivingRoute route) {
-        trip.setGeometry(polylineToGeometry(route.polyline()));
+        trip.setRoadPath(polylineToRoadPath(route.polyline()));
         trip.setTotalDurationMin(route.durationMin());
         trip.setTotalDistanceKm(route.distanceKm());
         trip.setRouteProvider(route.provider());
@@ -474,18 +475,18 @@ public class LogisticsRoutingService {
 
     /**
      * {@code {lng,lat}} 点串 → JSONB 持久化形状 {@code List<Map<String,Object>>}
-     * (每点 {@code {"lng":..,"lat":..}})。⚠️ 必须保持 List-of-Map — geometry 列是 JSONB
-     * 数组, 曾因映射成对象触发 500 (见 {@link LogisticsTrip#getGeometry()} 注释)。
+     * (每点 {@code {"lng":..,"lat":..}})。⚠️ 必须保持 List-of-Map — JSONB 数组列
+     * 曾因映射成对象触发 500 (见 {@link LogisticsTrip#getGeometry()} 注释)。
      */
-    public static List<Map<String, Object>> polylineToGeometry(List<double[]> polyline) {
-        List<Map<String, Object>> geometry = new ArrayList<>(polyline.size());
+    public static List<Map<String, Object>> polylineToRoadPath(List<double[]> polyline) {
+        List<Map<String, Object>> roadPath = new ArrayList<>(polyline.size());
         for (double[] point : polyline) {
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("lng", point[0]);
             entry.put("lat", point[1]);
-            geometry.add(entry);
+            roadPath.add(entry);
         }
-        return geometry;
+        return roadPath;
     }
 
     /**

@@ -129,14 +129,23 @@ public class LogisticsTrip extends BaseEntity {
      * H2 PG-compat test 下置 null (同项目 jsonb round-trip 既有限制, 见
      * {@code SemiFinishedInventoryRepositoryTest} 注释)。
      *
-     * <p>档1-B (2026-07-11) 起: 生成/重生成/人工调整时调用地图 provider 计算一次道路折线并
-     * 持久化于此 (每点 {@code {"lng":..,"lat":..}}, GCJ-02) — 查看计划零地图 API 调用 (缓存即本列)。
-     * ⚠️ 类型必须保持 {@code List<Map<String,Object>>} (JSONB 数组): 曾因映射成 Map 触发 500
-     * (2026-07-11 部署事故 #5), 不得改回对象映射。
+     * <p>⚠️ 语义是前端 SVG 兜底地图的 {x,y} 像素点 ({@code MapPoint[]}), <b>不是</b>经纬度 —
+     * 道路折线 (GCJ-02 lng/lat) 在独立的 {@link #roadPath} 列, 别混用 (档1-B 2026-07-11 决策)。
+     * 类型必须保持 {@code List<Map<String,Object>>} (JSONB 数组): 曾因映射成 Map 触发 500。
      */
     @Type(JsonBinaryType.class)
     @Column(name = "geometry", columnDefinition = "jsonb")
     private List<Map<String, Object>> geometry;
+
+    /**
+     * 道路折线缓存 (JSONB 数组, 每点 {@code {"lng":..,"lat":..}}, <b>GCJ-02</b>) —
+     * 档1-B (V20261028_54): 生成/重生成/人工调整时调用地图 provider (多提供商链) 计算一次并
+     * 持久化于此; 查看计划直读本列, 零地图 API 调用。Nullable — 路线规划失败/未启用时为 null
+     * (诚实降级, 前端回落既有画法)。与 {@link #geometry} (SVG {x,y}) 语义不同, 不得混用。
+     */
+    @Type(JsonBinaryType.class)
+    @Column(name = "road_path", columnDefinition = "jsonb")
+    private List<Map<String, Object>> roadPath;
 
     @Version
     @Column(name = "version", nullable = false)

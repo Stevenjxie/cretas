@@ -88,6 +88,11 @@ class LogisticsRoutingServiceTest {
     @MockBean
     private AmapClient amapClient;
 
+    // Mocked (档1-B) — 道路路线多提供商链。unstubbed anyEnabled()==false → generate 路径
+    // 完全跳过路线规划 (零地图调用), 既有断言全部不受影响。
+    @MockBean
+    private RouteProviderChain routeProviderChain;
+
     // ============================================================
     // Fixture builder — 2 门店同区域, 1 车 (容量刚好容纳2单), 1 主司机, 2 条完整距离边
     // ============================================================

@@ -2,6 +2,7 @@ package com.cretas.aims.logistics.dto.plan;
 
 import com.cretas.aims.logistics.entity.enums.PlanDistanceSource;
 import com.cretas.aims.logistics.entity.enums.PlanStatus;
+import com.cretas.aims.logistics.entity.enums.RouteOptimizeMode;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -35,6 +36,8 @@ public class PlanSnapshotDto {
     private BigDecimal targetLoadPct;
     private PlanStatus status;
     private PlanDistanceSource distanceSource;
+    /** 排线优化模式（TIME=时间最快 / DISTANCE=路程最短）— 旧数据 null 按 DISTANCE 展示。 */
+    private RouteOptimizeMode optimizeBy;
     private Integer totalStores;
     private Integer totalTrips;
     private BigDecimal totalDistanceKm;

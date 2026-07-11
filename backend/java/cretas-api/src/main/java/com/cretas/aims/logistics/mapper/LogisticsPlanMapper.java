@@ -74,6 +74,7 @@ public class LogisticsPlanMapper {
                 .targetLoadPct(plan.getTargetLoadPct())
                 .status(plan.getStatus())
                 .distanceSource(plan.getDistanceSource())
+                .optimizeBy(plan.getOptimizeBy())
                 .totalStores(plan.getTotalStores())
                 .totalTrips(plan.getTotalTrips())
                 .totalDistanceKm(plan.getTotalDistanceKm())
@@ -116,9 +117,14 @@ public class LogisticsPlanMapper {
                 .driverName(driver == null ? null : driver.getName())
                 .storeIds(storeIds)
                 .segmentKeys(segmentKeys)
+                // geometry = 前端 SVG 兜底地图 {x,y} 像素点语义, 后端不产出 → 恒空数组;
+                // 道路折线走独立的 roadPath (档1-B, 从 road_path 持久化列直读缓存)。
                 .geometry(Collections.emptyList())
+                .roadPath(trip.getRoadPath() == null ? Collections.emptyList() : trip.getRoadPath())
                 .segmentDistances(segmentDistances)
                 .totalDistanceKm(trip.getTotalDistanceKm())
+                .totalDurationMin(trip.getTotalDurationMin())
+                .routeProvider(trip.getRouteProvider())
                 .totalVolumeCbm(trip.getTotalVolumeCbm())
                 .totalWeightKg(trip.getTotalWeightKg())
                 .loadRate(trip.getLoadRate())
