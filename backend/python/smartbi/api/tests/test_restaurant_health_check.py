@@ -198,3 +198,76 @@ def test_subsector_query_overrides_map(client, monkeypatch):
         headers={"x-test-factory": "RES_3101_009"},
     )
     assert captured["sub_sector"] == "火锅"
+
+
+# ── 🔒 F2: generic tenant (empty sub_sector) must still fire benchmark alerts ──
+
+
+def test_generic_tenant_fires_benchmark_alerts_not_fake_healthy(client, monkeypatch):
+    """A tenant NOT in FACTORY_SUBSECTOR_MAP resolves to sub_sector="". Before
+    F2, DiagnosticsEngine never loaded _common.yaml benchmarks for empty
+    sub_sector → food_cost_ratio=55 (way over [35,45]) fired NOTHING and the
+    summary falsely reported '均无异常'. F2 forces the 通用 benchmark load."""
+    async def _ok_pool():
+        return object()
+
+    async def _fake_build(self, **kwargs):
+        return _bundle(
+            metrics={"food_cost_ratio": 55.0},  # 0-100 scale, way over [35,45]
+            coverage={"food_cost_ratio": "ok"},
+        )
+
+    monkeypatch.setattr(hc, "get_pg_pool", _ok_pool)
+    monkeypatch.setattr(hc.HealthCheckMetricsBuilder, "build", _fake_build)
+
+    # DEMO_REST_XXX not in FACTORY_SUBSECTOR_MAP, no sub_sector query → "".
+    resp = client.get(
+        "/api/smartbi/restaurant/DEMO_REST_X/health-check-report",
+        headers={"x-test-factory": "DEMO_REST_X"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    codes = {d["metricKey"] for d in data["diagnoses"]}
+    assert "food_cost_ratio" in codes, "generic tenant must get benchmark alerts (F2)"
+    assert data["summary"]["criticalCount"] + data["summary"]["warningCount"] >= 1
+    # generic (通用行业) sub_sector echoed
+    assert data["reportMeta"]["subSector"] == "通用行业"
+
+
+# ── 🔒 F3: benchmark-fallback avg_ticket target → severity cap + estimated ──
+
+
+def test_avg_ticket_estimated_target_caps_severity_and_marks_estimated(client, monkeypatch):
+    """When avg_ticket target came from the 通用 median (no tenant-set goal),
+    a would-be CRITICAL '客单价严重偏低' must be capped to warning + flagged
+    estimated (never a critical accusation against a target nobody set)."""
+    async def _ok_pool():
+        return object()
+
+    async def _fake_build(self, **kwargs):
+        b = _bundle(
+            # -0.30 is well past critical inline threshold (< -0.15)
+            metrics={"avg_ticket_vs_target": -0.30},
+            coverage={"avg_ticket_vs_target": "ok"},
+        )
+        b.avg_ticket_target_estimated = True
+        b.notes["avg_ticket_vs_target"] = "目标=行业通用人均中位数(未配置自定义客单价目标),仅供参考"
+        return b
+
+    monkeypatch.setattr(hc, "get_pg_pool", _ok_pool)
+    monkeypatch.setattr(hc.HealthCheckMetricsBuilder, "build", _fake_build)
+
+    resp = client.get(
+        "/api/smartbi/restaurant/DEMO_REST_X/health-check-report",
+        headers={"x-test-factory": "DEMO_REST_X"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    diag = next(d for d in data["diagnoses"] if d["metricKey"] == "avg_ticket_vs_target")
+    assert diag["severity"] == "warning", "estimated target must not stay critical"
+    assert diag["status"] != "严重偏低"
+    assert diag.get("estimated") is True
+    assert "未配置自定义客单价目标" in diag["descriptionZh"]
+    # capped diagnosis must not count toward criticalCount
+    assert data["summary"]["criticalCount"] == 0
+    assert data["summary"]["warningCount"] >= 1
