@@ -58,6 +58,8 @@ public class WorkflowClerkSheetConfigDTO {
     @AllArgsConstructor
     public static class PortDescriptor {
         private String workflowPortId;
+        /** 2B.2 端口身份: 对应 workflow 物料 Cell (节点) id (供 FE 回填 output line 的端口身份)。 */
+        private String materialNodeId;
         private String materialKind;
         private String skuId;
         private String materialName;

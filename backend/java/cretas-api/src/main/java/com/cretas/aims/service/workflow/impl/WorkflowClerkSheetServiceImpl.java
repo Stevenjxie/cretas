@@ -158,6 +158,7 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                 ? port.getUnit() : lookup.unit();
         return WorkflowClerkSheetConfigDTO.PortDescriptor.builder()
                 .workflowPortId(port.getWorkflowPortId())
+                .materialNodeId(port.getMaterialNodeId())
                 .materialKind(port.getMaterialKind())
                 .skuId(port.getSkuId())
                 .materialName(lookup.name())
