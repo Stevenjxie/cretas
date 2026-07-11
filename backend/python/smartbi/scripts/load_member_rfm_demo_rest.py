@@ -120,11 +120,10 @@ SELECT * FROM UNNEST(
     $11::numeric[], $12::numeric[], $13::numeric[], $14::int[],
     $15::timestamp[], $16::int[], $17::date[]
 )
-ON CONFLICT (factory_id, card_no)
+ON CONFLICT (factory_id, card_no, store_id)
 DO UPDATE SET
     member_name          = EXCLUDED.member_name,
     tier                 = EXCLUDED.tier,
-    store_id             = EXCLUDED.store_id,
     issue_store_id       = EXCLUDED.issue_store_id,
     principal_balance    = EXCLUDED.principal_balance,
     bonus_balance        = EXCLUDED.bonus_balance,
