@@ -31,6 +31,7 @@ from smartbi.gold import (
     finance_summary,
     kpi_summary,
     member_profile,
+    member_rfm,
     order_type_mix,
     review_city_ranking,
     review_complaints,
@@ -94,6 +95,12 @@ _GOLD_EXTRA_MONEY_KEYS: frozenset[str] = frozenset({
     "total_balance",
     "principal",
     "bonus",
+    # member-rfm (CRM P0 会员 RFM) 累计消费金额 — "total_cum_spend" /
+    # "avg_cum_spend" aren't matched by the shared _MONEY_PATTERN either
+    # (no "amount"/"spend"+"ing" substring), so strip them here too.
+    # avg_spend_interval is a day-count, NOT money, and stays visible.
+    "total_cum_spend",
+    "avg_cum_spend",
 })
 
 
@@ -510,6 +517,37 @@ async def get_member_profile(
         return _apply_rbac_strip(result, _get_role(request))
     except Exception as e:
         logger.exception("member-profile failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
+
+
+@router.get("/member-rfm")
+async def get_member_rfm(
+    request: Request,
+    factory_id: Optional[str] = Query(None),
+):
+    """会员 RFM 分析 (CRM P0) — Recency/Frequency/Monetary, full RFM.
+
+    New restaurant analytics dimension (greenfield, 有滋有味 cohort). UNLIKE
+    /member-profile (whose source has no per-member consumption event, so
+    is explicitly NOT RFM), this dimension's source (卡消费排行) IS a
+    per-card cumulative-consumption snapshot, so R/F/M are computed
+    directly. See member_rfm()'s docstring for the full field shape.
+
+    No date range: these three Gold tables are a current-state snapshot
+    (no per-row event date in the source), and recency-derived fields are
+    recomputed against CURRENT_DATE at MATERIALIZATION time (not query
+    time) — see materialized_analytics/member_rfm.py's module docstring.
+
+    🔒 Aggregate-only response — every field here is a count/sum/bucket,
+    never an individual member row (no card_no/member_name ever returned).
+    """
+    fid = _resolve_tenant(factory_id)
+    pool = await get_pg_pool()
+    try:
+        result = await member_rfm(pool, fid)
+        return _apply_rbac_strip(result, _get_role(request))
+    except Exception as e:
+        logger.exception("member-rfm failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
 
 

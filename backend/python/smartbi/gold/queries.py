@@ -2829,3 +2829,182 @@ async def member_profile(
             "的分组已合并入「其他」或不单独展示。"
         ),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# member_rfm — FULL RFM (Recency/Frequency/Monetary), CRM P0.
+#
+# Unlike member_profile() above (whose source has no per-member consumption
+# event — explicitly NOT RFM), this dimension's source (二维火 "卡消费排行")
+# IS a per-card cumulative-consumption snapshot, so R/F/M are computed
+# directly from fact_member_consumption (V20261008_01) and rolled up by
+# smartbi/services/materialized_analytics/member_rfm.py into
+# agg_member_rfm_segment / agg_member_rfm_tier / agg_member_lifecycle
+# (V20261008_02).
+#
+# 🔒 k-anonymity (k=5), same threshold/constant as member_profile()
+# (_MEMBER_K_ANON, defined above): rfm_tier_distribution and
+# lifecycle_distribution merge sub-5 cohorts into 其他 (nulling any money
+# field for the merged bucket if it's STILL sub-5); rfm_scatter drops
+# (does not merge) sub-5 (r,f,m) buckets entirely — merging a 3D scatter
+# point into a generic "其他" location wouldn't correspond to any real
+# position on the chart, so those members are counted honestly in
+# rfm_scatter_suppressed_count instead (mirrors member_profile()'s
+# birth_month_suppressed_count pattern).
+# ─────────────────────────────────────────────────────────────────────────
+
+
+async def member_rfm(pool: asyncpg.Pool, factory_id: str) -> Dict[str, Any]:
+    """会员 RFM 分析 — full RFM tier distribution + lifecycle + 3D scatter.
+
+    Honesty guard: data_available=False when the tenant has ZERO
+    agg_member_rfm_tier rows (never uploaded 卡消费排行 data) → all fields
+    are empty/zero and note explains why, rather than a fabricated empty
+    distribution indistinguishable from "uploaded but genuinely no members".
+
+    No date_range parameter: like member_profile()'s tier/gender/
+    birth-month dimensions, these three Gold tables are a current-state
+    snapshot (fact_member_consumption has no per-row event date to bucket
+    by — only cumulative R/F/M fields as of the source export). Recency-
+    derived fields (avg_spend_interval, lifecycle_stage) are recomputed
+    against CURRENT_DATE at MATERIALIZATION time, not query time — calling
+    this query again without re-materializing will NOT re-age members.
+
+    Returns:
+      - data_available: bool — whether the tenant has any RFM data at all
+      - member_count: snapshot total across all tiers (pre k-anon-merge sum,
+        same convention as member_profile()'s grand total)
+      - rfm_tier_distribution: [{rfm_tier, member_count, total_cum_spend,
+        avg_spend_interval}, ...] (k-anon; avg_spend_interval for a merged
+        其他 bucket is a member_count-weighted average across the underlying
+        sub-5 tiers, not a naive average-of-averages)
+      - lifecycle_distribution: [{lifecycle_stage, member_count,
+        total_balance}, ...] (k-anon)
+      - rfm_scatter: [{r_score, f_score, m_score, member_count,
+        avg_cum_spend}, ...] — only buckets with member_count >= k
+      - rfm_scatter_suppressed_count: members in sub-5 (r,f,m) buckets
+        dropped from rfm_scatter (honest coverage math, not silently lost)
+      - note: explains why data_available is False, if applicable
+      - caveat: explains this dimension IS full RFM (contrast with
+        member_profile()'s "NOT full RFM" caveat) + the k-anon disclosure
+    """
+    async with pool.acquire() as conn:
+        avail_row = await conn.fetchrow(
+            "SELECT EXISTS(SELECT 1 FROM agg_member_rfm_tier WHERE factory_id = $1) AS has_data",
+            factory_id,
+        )
+        # NOTE: unlike member_profile()'s agg_member_tier (PK includes
+        # store_id, so a SUM/GROUP BY is needed to roll stores up into a
+        # tenant total), all three RFM Gold tables here have NO store
+        # dimension in their PK — (factory_id, rfm_tier) /
+        # (factory_id, lifecycle_stage) / (factory_id, r_score, f_score,
+        # m_score) are each already exactly one row per bucket. Plain
+        # SELECTs, no aggregation needed.
+        tier_rows = await conn.fetch(
+            """
+            SELECT rfm_tier, member_count, total_cum_spend, avg_spend_interval
+              FROM agg_member_rfm_tier
+             WHERE factory_id = $1
+             ORDER BY member_count DESC
+            """,
+            factory_id,
+        )
+        lifecycle_rows = await conn.fetch(
+            """
+            SELECT lifecycle_stage, member_count, total_balance
+              FROM agg_member_lifecycle
+             WHERE factory_id = $1
+             ORDER BY member_count DESC
+            """,
+            factory_id,
+        )
+        scatter_rows = await conn.fetch(
+            """
+            SELECT r_score, f_score, m_score, member_count, avg_cum_spend
+              FROM agg_member_rfm_segment
+             WHERE factory_id = $1
+             ORDER BY r_score, f_score, m_score
+            """,
+            factory_id,
+        )
+
+    data_available = bool(avail_row["has_data"]) if avail_row else False
+
+    # rfm_tier_distribution: k-anon merge, weighted-average avg_spend_interval
+    # (a naive average-of-averages would misweight tiers of different size).
+    rfm_tier_distribution: list = []
+    small_tier_count = 0
+    small_tier_spend = 0.0
+    small_tier_interval_weighted = 0.0
+    for r in tier_rows:
+        cnt = int(r["member_count"] or 0)
+        if cnt >= _MEMBER_K_ANON:
+            rfm_tier_distribution.append({
+                "rfm_tier": r["rfm_tier"],
+                "member_count": cnt,
+                "total_cum_spend": float(r["total_cum_spend"] or 0),
+                "avg_spend_interval": (
+                    round(float(r["avg_spend_interval"]), 1)
+                    if r["avg_spend_interval"] is not None else None
+                ),
+            })
+        else:
+            small_tier_count += cnt
+            small_tier_spend += float(r["total_cum_spend"] or 0)
+            if r["avg_spend_interval"] is not None:
+                small_tier_interval_weighted += float(r["avg_spend_interval"]) * cnt
+    if small_tier_count > 0:
+        rfm_tier_distribution.append({
+            "rfm_tier": "其他",
+            "member_count": small_tier_count,
+            "total_cum_spend": (
+                small_tier_spend if small_tier_count >= _MEMBER_K_ANON else None
+            ),
+            "avg_spend_interval": (
+                round(small_tier_interval_weighted / small_tier_count, 1)
+                if small_tier_count >= _MEMBER_K_ANON else None
+            ),
+        })
+
+    lifecycle_distribution = _k_anon_merge_categorical(
+        lifecycle_rows, label_key="lifecycle_stage", with_balance=True
+    )
+
+    # rfm_scatter: DROP (not merge) sub-5 (r,f,m) buckets — no sensible
+    # "其他" position exists on a 3D scatter, so suppressed members are
+    # counted honestly instead of silently vanishing.
+    rfm_scatter: list = []
+    rfm_scatter_suppressed_count = 0
+    for r in scatter_rows:
+        cnt = int(r["member_count"] or 0)
+        if cnt >= _MEMBER_K_ANON:
+            rfm_scatter.append({
+                "r_score": int(r["r_score"]),
+                "f_score": int(r["f_score"]),
+                "m_score": int(r["m_score"]),
+                "member_count": cnt,
+                "avg_cum_spend": float(r["avg_cum_spend"] or 0),
+            })
+        else:
+            rfm_scatter_suppressed_count += cnt
+
+    member_count = sum(int(r["member_count"] or 0) for r in tier_rows)
+    note: Optional[str] = None if data_available else "未上传会员消费(RFM)数据"
+
+    return {
+        "factory_id": factory_id,
+        "data_available": data_available,
+        "member_count": member_count,
+        "rfm_tier_distribution": rfm_tier_distribution,
+        "lifecycle_distribution": lifecycle_distribution,
+        "rfm_scatter": rfm_scatter,
+        "rfm_scatter_suppressed_count": rfm_scatter_suppressed_count,
+        "note": note,
+        "caveat": (
+            "本维度为完整 RFM 分析(Recency/Frequency/Monetary): 数据源(卡消费排行)"
+            "为逐卡累计消费快照，R=最近消费距今天数，F=累计消费次数，M=累计消费金额，"
+            "按五分位打分(1-5)后映射为 7 大客群标签(Champions/Loyal/Potential/New/"
+            "At Risk/Hibernating/Lost)。为保护会员隐私，人数少于 5 的分组已合并入"
+            "「其他」(客群/生命周期分布)或不单独展示(RFM 散点分布)。"
+        ),
+    }
