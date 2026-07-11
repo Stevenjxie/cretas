@@ -418,8 +418,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             logChange(factoryId, planId, one, "CREATE", null, one, userId);
             ProcessSheetRowResult.OutputResult or = new ProcessSheetRowResult.OutputResult();
             or.setClientRowId(one.getClientRowId());
+            or.setWorkflowPortId(o.getWorkflowPortId());
+            or.setMaterialNodeId(o.getMaterialNodeId());
             or.setProductTypeId(o.getProductTypeId());
-            or.setBatchId(outcome.batchId());
+            or.setBatchId(outcome.batchId());        // generatedBatchId
             or.setBatchNumber(outcome.batchNumber());
             or.setQuantity(o.getQuantity());
             or.setUnit(one.getUnit());
@@ -496,9 +498,11 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         one.setInputUnit(base.getInputUnit());
         one.setProductWeight(o.getProductWeight());
         one.setCustomFields(base.getCustomFields());
-        // 2B.2 标记: 供结转成本诚实 null (工序不处理成本分摊) + 删除/重存整组级联。
+        // 2B.2 标记 (整组删除/重存级联) + 产出端口身份 (供 FE 重载映射, Workflow 不碰成本)。
         one.setMultiOutputMember(Boolean.TRUE);
         one.setMultiOutputBaseRowId(base.getClientRowId());
+        one.setWorkflowPortId(o.getWorkflowPortId());
+        one.setMaterialNodeId(o.getMaterialNodeId());
         if (carryInputs) {
             // 首产出行承载全部实际投入 (原样, 不拆分) + 人工/调料/逐锅原料/副产/留样/包装明细 (随投入落在首行, 计一次)。
             one.setInputQuantity(base.getInputQuantity());
@@ -2332,10 +2336,6 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                                                       List<String> warnings) {
         BigDecimal outputQty = req.getOutputQuantity();
         if (outputQty == null || outputQty.signum() <= 0) {
-            return null;
-        }
-        // 2B.2: 多产出行 SFI IN —— 工序不处理成本分摊 → 产出单位成本诚实 null (不伪造 ¥0 污染移动均价)。
-        if (Boolean.TRUE.equals(req.getMultiOutputMember())) {
             return null;
         }
         // 调味/熟制道: 调料桶无法现算 → 诚实 null (禁止只算 labor 降级成非-null 假数据)。

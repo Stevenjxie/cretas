@@ -113,13 +113,18 @@ public class ProcessSheetRowRequest {
 
     /**
      * 2B.2 内部标记 (合成产出行专用, FE 不传): true 表示本行是多产出分解出的产出行。
-     * 用途: (a) 结转成本诚实 null (工序不处理成本分摊, 不伪造 ¥0/不 N× 膨胀);
-     *       (b) 删除/重存按 {@link #multiOutputBaseRowId} 整组级联 (防单行删除留幻库存)。
+     * 用途: 删除/重存按 {@link #multiOutputBaseRowId} 整组级联 (防单行删除留幻库存)。
+     * <b>不</b>用于成本处理 —— 工序不新增/不清空/不覆盖成本字段 (成本由既有机制自行处理)。
      */
     private Boolean multiOutputMember;
 
     /** 2B.2 内部: 多产出组的 base clientRowId (= FE 原始 clientRowId, 各产出行 clientRowId = base#i)。 */
     private String multiOutputBaseRowId;
+
+    /** 2B.2 本行产出对应的 workflow 产出端口 id (端口身份; 单产出/legacy 可空)。随 payload 持久化供 FE 重载映射。 */
+    private String workflowPortId;
+    /** 2B.2 本行产出对应的 workflow 产出物料 Cell (节点) id。 */
+    private String materialNodeId;
 
     /** 原料领料行: 消耗的原料 MaterialBatch + 投料量。 */
     @Data
@@ -128,6 +133,13 @@ public class ProcessSheetRowRequest {
         private String materialBatchId;
         @NotNull
         private BigDecimal quantity;
+        // 2B.2 端口身份 (多产出/多投入必带, 区分同 SKU 出现在不同端口)。可空 (legacy 单产出/非 workflow)。
+        /** 对应 workflow 投入端口 id。 */
+        private String workflowPortId;
+        /** 对应 workflow 物料 Cell (节点) id。 */
+        private String materialNodeId;
+        /** 该端口物料 SKU (原料 RawMaterialType id)。 */
+        private String skuId;
     }
 
     /**
@@ -147,6 +159,8 @@ public class ProcessSheetRowRequest {
         private String unit;
         /** 产出是否成品 (true → FG, false → 半成品 SFI)。 */
         private boolean finished;
+        /** 对应 workflow 产出物料 Cell (节点) id (端口身份的另一半, 区分同 SKU 多端口)。 */
+        private String materialNodeId;
         /** 可选成品重(kg): 若设则 FG 按 kg 入库 (同顶层 productWeight 语义); 多数多产出场景留空按 quantity 入库。 */
         private BigDecimal productWeight;
     }
@@ -194,5 +208,13 @@ public class ProcessSheetRowRequest {
          * 默认 false。
          */
         private boolean finishedGoods;
+
+        // 2B.2 端口身份 (多投入合流必带, 区分同 SKU 出现在不同投入端口)。可空 (legacy 单产出/非 workflow)。
+        /** 对应 workflow 投入端口 id。 */
+        private String workflowPortId;
+        /** 对应 workflow 物料 Cell (节点) id。 */
+        private String materialNodeId;
+        /** 该端口物料 SKU (半成品/成品 ProductType id)。 */
+        private String skuId;
     }
 }
