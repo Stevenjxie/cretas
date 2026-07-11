@@ -213,6 +213,50 @@ export async function getMemberProfile(args: OptionalDateRangeQuery): Promise<Me
   })) as MemberProfile;
 }
 
+/**
+ * CRM P0 「会员与营销」— /api/smartbi/gold/member-rfm response (camelCased).
+ * All-time snapshot (no date bounds — RFM segmentation is inherently a
+ * cross-history computation, unlike rechargeTrend on MemberProfile).
+ */
+export interface MemberRfm {
+  factoryId: string;
+  // false = tenant has NO member consumption data at all — distinct from a
+  // genuine 0 members. Page shows the honest `note` empty-state, never a
+  // fabricated 0/chart.
+  dataAvailable: boolean;
+  memberCount: number;
+  rfmTierDistribution: Array<{
+    rfmTier: string; // 'Champions' | 'Loyal' | 'Potential' | 'New' | 'At Risk' | 'Hibernating' | 'Lost'
+    memberCount: number;
+    // null when RBAC price-strip fires OR the bucket is sub-5 (k-anonymity).
+    totalCumSpend: number | null;
+    avgSpendInterval: number | null;
+  }>;
+  lifecycleDistribution: Array<{
+    lifecycleStage: string; // e.g. '活跃' | '沉睡' | '流失' (already Chinese from backend)
+    memberCount: number;
+    totalBalance: number | null; // RBAC/k-anon nullable
+  }>;
+  rfmScatter: Array<{
+    rScore: number; // 1-5
+    fScore: number; // 1-5
+    mScore: number; // 1-5
+    memberCount: number;
+    avgCumSpend: number | null; // RBAC/k-anon nullable
+  }>;
+  // members hidden by k-anonymity (buckets with < 5 members) — never silently dropped
+  rfmScatterSuppressedCount: number;
+  note: string | null; // explains why dataAvailable is false, if applicable
+  caveat: string; // honest "非完整 RFM" disclosure — always show it
+}
+
+export async function getMemberRfm(args: { factoryId: string }): Promise<MemberRfm> {
+  const p = new URLSearchParams({ factory_id: args.factoryId });
+  return (await pythonFetch(`/api/smartbi/gold/member-rfm?${p.toString()}`, {
+    timeoutMs: PYTHON_LLM_TIMEOUT_MS,
+  })) as MemberRfm;
+}
+
 export interface KpiSummary {
   factoryId: string;
   startDate: string;

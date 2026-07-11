@@ -5,6 +5,7 @@ import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router';
 import { setupRouterGuards } from './guards';
 import smartBIRoutes, { smartBIRedirects } from './modules/smartbi';
 import productionAnalyticsRoutes from './modules/production-analytics';
+import crmRoutes from './modules/crm';
 import { buildHubRedirect } from './analysisHubRedirect';
 
 const platformAdminOnlyRoles = ['platform_admin'];
@@ -1962,7 +1963,10 @@ const businessRoutes: RouteRecordRaw[] = [
       ...productionAnalyticsRoutes,
 
       // SmartBI 智能BI (导入自模块)
-      ...smartBIRoutes
+      ...smartBIRoutes,
+
+      // CRM 会员与营销 (P0 — 会员分析; 导入自模块)
+      ...crmRoutes
     ]
   },
 

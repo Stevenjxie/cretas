@@ -349,6 +349,18 @@ const rawMenuConfig: MenuItem[] = [
         roles: ['platform_admin', 'permission_admin', 'factory_super_admin'] },
       { path: '/smart-bi/calibration', title: '行为校准监控', icon: 'Aim', module: 'analytics', roles: ['platform_admin'] },
     ]
+  },
+  {
+    // CRM P0「会员与营销」(2026-07-11): 首个 top-level 入口, 会员分析 (RFM 客群分层 +
+    // 三维散点 + 生命周期 + 会员画像). Scope-minimal: 只加这一个新顶级组, 不重排其它模块
+    // (完整 5-模块 IA 重构是后续 follow-up)。仅餐饮/demo 租户可见 — 与 revenue-report /
+    // health-report 同一套 hideForFactoryTypes + roles 白名单 (会员储值/消费金额敏感)。
+    path: '/crm', title: '会员与营销', icon: 'User', module: 'analytics',
+    hideForFactoryTypes: ['FACTORY'],
+    roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'finance_manager', 'restaurant_manager'],
+    children: [
+      { path: '/crm/member-analysis', title: '会员分析', icon: '', module: 'analytics' },
+    ]
   }
 ];
 
@@ -367,6 +379,7 @@ const TOP_LEVEL_FLOW_ORDER: Record<string, number> = {
   '/hr': 120,
   '/equipment': 130,
   '/restaurant': 140,
+  '/crm': 145,
 };
 
 function sortTopLevelMenu(items: MenuItem[]): MenuItem[] {
