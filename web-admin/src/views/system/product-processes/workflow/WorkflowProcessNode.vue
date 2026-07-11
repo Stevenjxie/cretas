@@ -55,15 +55,7 @@
           readonly
           size="small"
         />
-        <el-select
-          class="nodrag nowheel unit-select"
-          :model-value="port.unit"
-          :disabled="!canWrite"
-          size="small"
-          @change="(unit: string) => updatePort(port.id, { unit })"
-        >
-          <el-option v-for="unit in unitOptions" :key="unit" :label="unit" :value="unit" />
-        </el-select>
+        <span class="unit-chip" data-testid="input-unit-chip">{{ port.unit }}</span>
       </div>
     </section>
 
@@ -81,32 +73,13 @@
         >+ 产出</el-button>
       </div>
       <div v-for="port in outputPorts" :key="port.id" class="port-row output-row">
-        <el-select
-          class="nodrag nowheel sku-select"
-          :model-value="port.skuId"
-          :disabled="!canWrite"
-          filterable
+        <el-input
+          class="nodrag"
+          :model-value="port.materialName || '产出物料待在右侧产出 Cell 选择 SKU'"
+          readonly
           size="small"
-          placeholder="选择或现场创建 SKU"
-          @change="(skuId: string) => emit('selectOutputSku', port.id, skuId)"
-        >
-          <el-option class="create-option" label="＋ 现场创建半成品 SKU" value="__CREATE__" />
-          <el-option
-            v-for="option in skuOptions"
-            :key="option.id"
-            :label="`${option.name} · ${option.unit || '-'}`"
-            :value="option.id"
-          />
-        </el-select>
-        <el-select
-          class="nodrag nowheel unit-select"
-          :model-value="port.unit"
-          :disabled="!canWrite"
-          size="small"
-          @change="(unit: string) => updatePort(port.id, { unit })"
-        >
-          <el-option v-for="unit in unitOptions" :key="unit" :label="unit" :value="unit" />
-        </el-select>
+        />
+        <span class="unit-chip" data-testid="output-unit-chip">{{ port.unit }}</span>
       </div>
     </section>
 
@@ -156,36 +129,25 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
-import type { ConversionMode, ProcessNodeData, ProcessPort } from './types';
+import type { ConversionMode, ProcessNodeData } from './types';
 
 const props = defineProps<{
   data: ProcessNodeData;
   selected?: boolean;
   canWrite: boolean;
-  skuOptions: Array<{ id: string; name: string; unit?: string }>;
 }>();
 
 const emit = defineEmits<{
   update: [patch: Partial<ProcessNodeData>];
   addInput: [];
   addOutput: [];
-  selectOutputSku: [portId: string, skuId: string];
 }>();
 
-const unitOptions = ['kg', 'g', '只', '半只', '盒', '袋', '箱', '筐'];
 const processNodeStyle = { minHeight: '96px' } as const;
 const edgeOutputStyle = { top: '12px', right: '-14px' } as const;
 const hovered = ref(false);
 const inputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'INPUT'));
 const outputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'OUTPUT'));
-
-function updatePort(portId: string, patch: Partial<ProcessPort>): void {
-  emit('update', {
-    ports: props.data.ports.map((port) => port.id === portId ? { ...port, ...patch } : port),
-    ...(patch.unit && inputPorts.value.some((port) => port.id === portId) ? { inputUnit: patch.unit } : {}),
-    ...(patch.unit && outputPorts.value.some((port) => port.id === portId) ? { outputUnit: patch.unit } : {}),
-  });
-}
 
 function handleStyle(index: number, count: number): Record<string, string> {
   return { top: `${((index + 1) / (count + 1)) * 100}%` };
@@ -211,7 +173,19 @@ function handleStyle(index: number, count: number): Record<string, string> {
 .conversion-row { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 6px; }
 .conversion-example { margin-top: 6px; color: #8a95a8; font-size: 11px; }
 .reporting-row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; color: #667085; font-size: 12px; }
-.create-option { color: #409eff; font-weight: 600; }
+.unit-chip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: #f0f4f9;
+  color: #5b6577;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
 .edge-output-add {
   position: absolute;
   z-index: 2;

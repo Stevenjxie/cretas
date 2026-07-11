@@ -60,6 +60,7 @@ interface EditorVm {
   confirmAddProcess: () => void;
   addOutputToProcess: (processId: string) => void;
   selectOutputSku: (processId: string, portId: string, skuId: string) => void;
+  selectMaterialSku: (materialNodeId: string, skuId: string) => void;
   confirmCreateSku: () => Promise<void>;
 }
 
@@ -105,7 +106,10 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => timestamp++);
     apiMocks.get.mockImplementation((url: string) => Promise.resolve(
       url.includes('/product-types')
-        ? { success: true, data: { content: SKU_OPTIONS } }
+        // Fresh copy per mount: the editor's skuOptions ref mutates this array in place
+        // (e.g. confirmCreateSku unshifts), so sharing SKU_OPTIONS directly would leak
+        // state across tests/mounts.
+        ? { success: true, data: { content: [...SKU_OPTIONS] } }
         : { success: true, data: [] },
     ));
     apiMocks.post.mockResolvedValue({
@@ -194,6 +198,44 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
 
     expect(port).toMatchObject({ skuId, materialKind: expectedKind });
     expect(material.data).toMatchObject({ skuId, kind: expectedKind, bound: true });
+  });
+
+  it('binds a SKU selected on the SEMI output material Cell to the owning process OUTPUT port', async () => {
+    const vm = await mountEditor();
+    const { process, port, material } = addSecondOutput(vm);
+
+    vm.selectMaterialSku(material.id, 'SKU-SEMI');
+
+    expect(port).toMatchObject({ skuId: 'SKU-SEMI', materialKind: 'SEMI_FINISHED' });
+    expect(material.data).toMatchObject({ skuId: 'SKU-SEMI', kind: 'SEMI_FINISHED', bound: true });
+    expect(process.id).toBeTruthy();
+  });
+
+  it('opens the create-SKU dialog when __CREATE__ is selected on the material Cell', async () => {
+    const vm = await mountEditor();
+    const { port, material } = addSecondOutput(vm);
+
+    vm.selectMaterialSku(material.id, '__CREATE__');
+    await vm.confirmCreateSku();
+
+    expect(apiMocks.post).toHaveBeenCalledWith('/F006/product-types', expect.objectContaining({
+      productCategory: 'SEMI_FINISHED',
+    }));
+    expect(port).toMatchObject({ skuId: 'SKU-CREATED-SEMI', materialKind: 'SEMI_FINISHED' });
+    expect(material.data).toMatchObject({ skuId: 'SKU-CREATED-SEMI', kind: 'SEMI_FINISHED', bound: true });
+  });
+
+  it('warns and does nothing when a material Cell has no owning process OUTPUT port', async () => {
+    const warnSpy = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined);
+    const vm = await mountEditor();
+    const rawNode = vm.flowNodes.find((node) => node.data.kind === 'RAW_MATERIAL');
+    if (!rawNode) throw new Error('Expected raw material node');
+    const historyBefore = vm.history.length;
+
+    vm.selectMaterialSku(rawNode.id, 'SKU-SEMI');
+
+    expect(warnSpy).toHaveBeenCalledWith('未找到该产出 Cell 对应的工序，无法绑定 SKU');
+    expect(vm.history).toHaveLength(historyBefore);
   });
 
   it('filters input-only and unknown SKU categories out of the output dropdown', async () => {

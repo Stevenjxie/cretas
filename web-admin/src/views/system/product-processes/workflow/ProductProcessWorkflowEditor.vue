@@ -89,8 +89,10 @@
               :selected="slotProps.selected"
               :can-write="canEdit"
               :raw-material-options="rawMaterialOptions"
+              :sku-options="outputSkuOptions"
               @add-next="openAddProcess(slotProps.id)"
               @select-raw-sku="(skuId) => selectRawSku(slotProps.id, skuId)"
+              @select-sku="(skuId) => selectMaterialSku(slotProps.id, skuId)"
             />
           </template>
 
@@ -99,11 +101,9 @@
               :data="slotProps.data"
               :selected="slotProps.selected"
               :can-write="canEdit"
-              :sku-options="outputSkuOptions"
               @update="(patch) => updateProcessData(slotProps.id, patch)"
               @add-input="addInputToProcess(slotProps.id)"
               @add-output="addOutputToProcess(slotProps.id)"
-              @select-output-sku="(portId, skuId) => selectOutputSku(slotProps.id, portId, skuId)"
             />
           </template>
         </VueFlow>
@@ -851,6 +851,28 @@ function selectRawSku(materialNodeId: string, skuId: string): void {
       bound: true,
     };
   });
+}
+
+function findOutputPortOwner(materialNodeId: string): SkuBindingTarget | null {
+  for (const node of flowNodes.value) {
+    if (node.data?.kind !== 'PROCESS') continue;
+    const data = node.data as ProcessNodeData & { kind: 'PROCESS' };
+    const port = data.ports.find(
+      (candidate) => candidate.direction === 'OUTPUT' && candidate.materialNodeId === materialNodeId,
+    );
+    if (port) return { processId: node.id, portId: port.id };
+  }
+  return null;
+}
+
+function selectMaterialSku(materialNodeId: string, skuId: string): void {
+  if (!canEdit.value) return;
+  const owner = findOutputPortOwner(materialNodeId);
+  if (!owner) {
+    ElMessage.warning('未找到该产出 Cell 对应的工序，无法绑定 SKU');
+    return;
+  }
+  selectOutputSku(owner.processId, owner.portId, skuId);
 }
 
 function selectOutputSku(processId: string, portId: string, skuId: string): void {

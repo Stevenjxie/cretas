@@ -37,6 +37,25 @@
       />
     </el-select>
 
+    <el-select
+      v-if="(kind === 'SEMI_FINISHED' || kind === 'FINISHED_GOOD') && canWrite"
+      class="nodrag nowheel sku-selector"
+      data-testid="material-sku-select"
+      :model-value="data.skuId"
+      placeholder="选择或现场创建 SKU"
+      filterable
+      size="small"
+      @change="(value: string) => emit('selectSku', value)"
+    >
+      <el-option class="create-option" label="＋ 现场创建半成品 SKU" value="__CREATE__" />
+      <el-option
+        v-for="option in skuOptions"
+        :key="option.id"
+        :label="`${option.name} · ${option.unit || '-'}`"
+        :value="option.id"
+      />
+    </el-select>
+
     <div v-if="kind !== 'FINISHED_GOOD' && canWrite" class="node-actions nodrag">
       <el-button size="small" text type="primary" @click="emit('addNext')">+ 后续工序</el-button>
     </div>
@@ -54,11 +73,13 @@ const props = defineProps<{
   selected?: boolean;
   canWrite: boolean;
   rawMaterialOptions: Array<{ id: string; name: string; unit?: string }>;
+  skuOptions: Array<{ id: string; name: string; unit?: string }>;
 }>();
 
 const emit = defineEmits<{
   addNext: [];
   selectRawSku: [skuId: string];
+  selectSku: [skuId: string];
 }>();
 
 const kindLabel = computed(() => ({
@@ -101,6 +122,7 @@ const kindMark = computed(() => ({
 }
 .identity-row strong { overflow: hidden; color: #344054; text-overflow: ellipsis; white-space: nowrap; }
 .specification { margin-top: 6px; color: #7a8599; font-size: 11px; }
-.raw-selector { width: 100%; margin-top: 8px; }
+.raw-selector, .sku-selector { width: 100%; margin-top: 8px; }
+.create-option { color: #409eff; font-weight: 600; }
 .node-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
 </style>

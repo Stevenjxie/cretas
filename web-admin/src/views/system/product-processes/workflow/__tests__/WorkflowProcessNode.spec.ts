@@ -52,7 +52,6 @@ function mountNode(selected = true) {
       data: processData,
       selected,
       canWrite: true,
-      skuOptions: [],
     },
     global: {
       plugins: [ElementPlus],
@@ -91,6 +90,29 @@ describe('WorkflowProcessNode output gestures', () => {
 
     expect(wrapper.find('[data-testid="output-kind-select"]').exists()).toBe(false);
     expect(wrapper.find('.kind-select').exists()).toBe(false);
+  });
+
+  it('does not expose a SKU selector on the process Cell (SKU binding lives on the material Cell)', () => {
+    const wrapper = mountNode();
+
+    expect(wrapper.find('.sku-select').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="material-sku-select"]').exists()).toBe(false);
+    expect(wrapper.emitted('selectOutputSku')).toBeUndefined();
+  });
+
+  it('renders investment and output units as read-only chips, not editable selects', () => {
+    const wrapper = mountNode();
+
+    expect(wrapper.find('.unit-select').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="input-unit-chip"]').text()).toBe('kg');
+    expect(wrapper.get('[data-testid="output-unit-chip"]').text()).toBe('kg');
+  });
+
+  it('displays the produced material name read-only on the output row', () => {
+    const wrapper = mountNode();
+    const outputRow = wrapper.get('.output-row');
+
+    expect(outputRow.find('input').attributes('readonly')).toBeDefined();
   });
 
   it('does not emit addOutput when a workflow handle is clicked', async () => {
