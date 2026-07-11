@@ -1,5 +1,8 @@
-import { get, post, put } from '@/api/request';
-import type { ProductProcessWorkflowDefinition } from './types';
+import { del, get, post, put } from '@/api/request';
+import type {
+  ProductProcessWorkflowActivation,
+  ProductProcessWorkflowDefinition,
+} from './types';
 
 const workflowConflictConfig = {
   _handledErrorCodes: [
@@ -35,5 +38,34 @@ export function publishProductProcessWorkflow(
     `/${factoryId}/product-process-workflows/${productTypeId}/publish`,
     { lockVersion },
     workflowConflictConfig,
+  );
+}
+
+export function getProductProcessWorkflowActivation(
+  factoryId: string,
+  productTypeId: string,
+) {
+  return get<ProductProcessWorkflowActivation | null>(
+    `/${factoryId}/product-process-workflows/${productTypeId}/activation`,
+  );
+}
+
+export function activateProductProcessWorkflow(factoryId: string, workflowId: number) {
+  return put<ProductProcessWorkflowActivation>(
+    `/${factoryId}/product-process-workflows/${workflowId}/activation`,
+  );
+}
+
+export function deactivateProductProcessWorkflow(
+  factoryId: string,
+  productTypeId: string,
+  lockVersion: number,
+) {
+  const params = new URLSearchParams({
+    productTypeId,
+    lockVersion: String(lockVersion),
+  });
+  return del<ProductProcessWorkflowActivation>(
+    `/${factoryId}/product-process-workflows/activation?${params.toString()}`,
   );
 }

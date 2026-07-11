@@ -149,9 +149,10 @@ public class ProductProcessWorkflowRuntimeServiceImpl
     public ProductionWorkflowRuntimeDTO getRuntime(String factoryId, Long productionBatchId) {
         ProductionWorkflowInstance instance = instanceRepository
                 .findByFactoryIdAndProductionBatchId(factoryId, productionBatchId)
-                .orElseThrow(() -> notFound(
-                        "WORKFLOW_RUNTIME_NOT_FOUND",
-                        "No Workflow runtime exists for this factory batch"));
+                .orElse(null);
+        if (instance == null) {
+            return null;
+        }
         List<WorkProcessTask> tasks = taskRepository
                 .findByFactoryIdAndWorkflowInstanceIdOrderByProcessOrderAsc(
                         factoryId, instance.getId());

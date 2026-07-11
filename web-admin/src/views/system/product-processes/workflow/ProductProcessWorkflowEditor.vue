@@ -6,6 +6,12 @@
           <el-tag v-if="definition" :type="definition.status === 'PUBLISHED' ? 'success' : 'warning'">
             {{ definition.status === 'PUBLISHED' ? '已发布' : '草稿' }} v{{ definition.version }}
           </el-tag>
+          <el-tag
+            data-testid="activation-status"
+            :type="activation?.enabled ? 'success' : 'info'"
+          >
+            {{ activation?.enabled ? `已启用 v${activation.activeDefinitionVersion}` : '未启用' }}
+          </el-tag>
           <span v-if="dirty" class="dirty-status">● 有未保存改动</span>
           <span v-else-if="definition" class="saved-status">✓ 已保存</span>
           <span class="stage-note">图定义独立保存，暂不改写现有报工运行时</span>
@@ -23,11 +29,28 @@
             @click="saveDraft"
           >保存草稿</el-button>
           <el-button
+            data-testid="publish-workflow"
             type="success"
             :disabled="!canEdit || flowNodes.length === 0"
             :loading="publishing"
             @click="publishWorkflow"
           >发布版本</el-button>
+          <el-button
+            data-testid="activate-workflow"
+            type="primary"
+            :disabled="!canEdit || definition?.status !== 'PUBLISHED' || !definition?.id"
+            :loading="activationChanging"
+            @click="activateWorkflow"
+          >启用版本 v{{ definition?.version ?? '-' }}</el-button>
+          <el-button
+            v-if="activation?.enabled"
+            data-testid="deactivate-workflow"
+            type="danger"
+            plain
+            :disabled="!canEdit"
+            :loading="activationChanging"
+            @click="deactivateWorkflow"
+          >停用 Workflow</el-button>
         </div>
       </div>
 
@@ -197,7 +220,10 @@ import WorkflowMaterialNode from './WorkflowMaterialNode.vue';
 import WorkflowProcessNode from './WorkflowProcessNode.vue';
 import { classifyOutputSkuCategory } from './outputSkuClassification';
 import {
+  activateProductProcessWorkflow,
+  deactivateProductProcessWorkflow,
   getProductProcessWorkflow,
+  getProductProcessWorkflowActivation,
   publishProductProcessWorkflow,
   saveProductProcessWorkflowDraft,
 } from './workflowApi';
@@ -212,6 +238,7 @@ import {
 } from './workflowModel';
 import type {
   MaterialNodeData,
+  ProductProcessWorkflowActivation,
   ProcessNodeData,
   ProcessPort,
   ProductProcessNodeKind,
@@ -259,6 +286,7 @@ const props = defineProps<{
 
 const { fitView, getViewport, setViewport } = useVueFlow('product-process-workflow');
 const definition = ref<ProductProcessWorkflowDefinition | null>(null);
+const activation = ref<ProductProcessWorkflowActivation | null>(null);
 const loadedDefinitionIdentity = ref<WorkflowIdentity | null>(null);
 const flowNodes = ref<Node[]>([]);
 const flowEdges = ref<Edge[]>([]);
@@ -267,6 +295,7 @@ const catalogLoading = ref(false);
 const loadedCatalogFactoryId = ref<string | null>(null);
 const saving = ref(false);
 const publishing = ref(false);
+const activationChanging = ref(false);
 const dirty = ref(false);
 const selectedNodeId = ref('');
 const history = ref<ProductProcessWorkflowDefinition[]>([]);
@@ -293,6 +322,7 @@ let createSkuGeneration = 0;
 let loadGeneration = 0;
 let saveGeneration = 0;
 let publishGeneration = 0;
+let activationGeneration = 0;
 
 const productTypeId = computed(() => props.productTypeId);
 const canEdit = computed(() => (
@@ -334,16 +364,16 @@ const sourceMaterialLabel = computed(() => {
 
 onMounted(async () => {
   aiCollapsed.value = localStorage.getItem(aiStorageKey.value) === 'true';
-  await Promise.all([loadCatalogs(), loadDefinition()]);
+  await Promise.all([loadCatalogs(), loadDefinition(), loadActivation()]);
 });
 
 watch(() => [props.factoryId, props.productTypeId] as const, async (next, previous) => {
   if (next[0] === previous[0] && next[1] === previous[1]) return;
   if (next[0] !== previous[0]) {
-    await Promise.all([loadCatalogs(), loadDefinition()]);
+    await Promise.all([loadCatalogs(), loadDefinition(), loadActivation()]);
     return;
   }
-  await loadDefinition();
+  await Promise.all([loadDefinition(), loadActivation()]);
 });
 
 watch(aiStorageKey, () => {
@@ -488,6 +518,44 @@ function definitionMatchesIdentity(
 ): boolean {
   return (!candidate.factoryId || candidate.factoryId === identity.factoryId)
     && (!candidate.productTypeId || candidate.productTypeId === identity.productTypeId);
+}
+
+async function loadActivation(): Promise<void> {
+  const generation = ++activationGeneration;
+  const identity: WorkflowIdentity = {
+    factoryId: props.factoryId,
+    productTypeId: props.productTypeId,
+  };
+  activation.value = null;
+  if (!identity.factoryId || !identity.productTypeId) return;
+  try {
+    const response = await getProductProcessWorkflowActivation(
+      identity.factoryId,
+      identity.productTypeId,
+    );
+    if (generation !== activationGeneration || !propsMatchIdentity(identity)) return;
+    const candidate = response.success ? response.data : null;
+    activation.value = candidate && activationMatchesIdentity(candidate, identity)
+      ? candidate
+      : null;
+  } catch (error) {
+    if (generation !== activationGeneration || !propsMatchIdentity(identity)) return;
+    console.error('[ProductProcessWorkflow] activation loading failed', error);
+    activation.value = null;
+  }
+}
+
+function propsMatchIdentity(identity: WorkflowIdentity): boolean {
+  return props.factoryId === identity.factoryId
+    && props.productTypeId === identity.productTypeId;
+}
+
+function activationMatchesIdentity(
+  candidate: ProductProcessWorkflowActivation,
+  identity: WorkflowIdentity,
+): boolean {
+  return candidate.factoryId === identity.factoryId
+    && candidate.productTypeId === identity.productTypeId;
 }
 
 function currentLoadedIdentity(): WorkflowIdentity | null {
@@ -1046,6 +1114,74 @@ async function publishWorkflow(): Promise<void> {
     if (generation === publishGeneration) {
       publishing.value = false;
     }
+  }
+}
+
+async function activateWorkflow(): Promise<void> {
+  const identity = currentLoadedIdentity();
+  const workflowId = definition.value?.id;
+  if (!identity || !canEdit.value || definition.value?.status !== 'PUBLISHED' || !workflowId) return;
+  try {
+    await ElMessageBox.confirm(
+      '只影响之后新建的生产批次；正在生产的批次不会变化。',
+      '启用 Workflow 版本',
+      { type: 'warning', confirmButtonText: '确认启用' },
+    );
+  } catch {
+    return;
+  }
+  if (!isLoadedIdentityCurrent(identity)) return;
+  const generation = ++activationGeneration;
+  activationChanging.value = true;
+  try {
+    const response = await activateProductProcessWorkflow(identity.factoryId, workflowId);
+    if (generation !== activationGeneration || !isLoadedIdentityCurrent(identity)) return;
+    if (!response.success || !response.data
+      || !activationMatchesIdentity(response.data, identity)) return;
+    activation.value = response.data;
+    ElMessage.success(`Workflow v${response.data.activeDefinitionVersion} 已启用`);
+  } catch (error) {
+    if (generation === activationGeneration && isLoadedIdentityCurrent(identity)) {
+      console.error('[ProductProcessWorkflow] activation failed', error);
+    }
+  } finally {
+    if (generation === activationGeneration) activationChanging.value = false;
+  }
+}
+
+async function deactivateWorkflow(): Promise<void> {
+  const identity = currentLoadedIdentity();
+  const current = activation.value;
+  if (!identity || !canEdit.value || !current?.enabled) return;
+  try {
+    await ElMessageBox.confirm(
+      '停用后新批次恢复旧工序配置；已有批次继续当前 Workflow。',
+      '停用 Workflow',
+      { type: 'warning', confirmButtonText: '确认停用' },
+    );
+  } catch {
+    return;
+  }
+  if (!isLoadedIdentityCurrent(identity)) return;
+  const generation = ++activationGeneration;
+  activationChanging.value = true;
+  try {
+    const response = await deactivateProductProcessWorkflow(
+      identity.factoryId,
+      identity.productTypeId,
+      current.lockVersion,
+    );
+    if (generation !== activationGeneration || !isLoadedIdentityCurrent(identity)) return;
+    if (!response.success || !response.data
+      || !activationMatchesIdentity(response.data, identity)) return;
+    activation.value = response.data;
+    ElMessage.success('Workflow 已停用');
+  } catch (error) {
+    if (generation === activationGeneration && isLoadedIdentityCurrent(identity)) {
+      console.error('[ProductProcessWorkflow] deactivation failed', error);
+    }
+  } finally {
+    if (generation === activationGeneration) activationChanging.value = false;
   }
 }
 

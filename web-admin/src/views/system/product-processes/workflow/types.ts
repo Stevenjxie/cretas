@@ -97,6 +97,18 @@ export interface ProductProcessWorkflowDefinition {
   viewport: WorkflowViewport;
 }
 
+export interface ProductProcessWorkflowActivation {
+  id: number;
+  factoryId: string;
+  productTypeId: string;
+  activeWorkflowId: number;
+  activeDefinitionVersion: number;
+  enabled: boolean;
+  activatedBy?: number | null;
+  activatedAt?: string | null;
+  lockVersion: number;
+}
+
 export type WorkflowPatch =
   | { op: 'UPSERT_NODE'; node: ProductProcessWorkflowNode }
   | { op: 'REMOVE_NODE'; nodeId: string }

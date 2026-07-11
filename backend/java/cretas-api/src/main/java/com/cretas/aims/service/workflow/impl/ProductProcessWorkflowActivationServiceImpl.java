@@ -84,7 +84,9 @@ public class ProductProcessWorkflowActivationServiceImpl
     @Override
     @Transactional(readOnly = true)
     public ProductProcessWorkflowActivationDTO get(String factoryId, String productTypeId) {
-        return toDTO(findActivation(factoryId, productTypeId));
+        return activationRepository.findByFactoryIdAndProductTypeId(factoryId, productTypeId)
+                .map(this::toDTO)
+                .orElse(null);
     }
 
     private ProductProcessWorkflowActivation findActivation(String factoryId, String productTypeId) {

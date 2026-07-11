@@ -105,6 +105,16 @@ class ProductProcessWorkflowActivationServiceTest {
     }
 
     @Test
+    void getReturnsNullWhenProductHasNoActivation() {
+        when(activationRepository.findByFactoryIdAndProductTypeId("F006", "PT-NEW"))
+                .thenReturn(Optional.empty());
+
+        assertNull(service.get("F006", "PT-NEW"));
+
+        verifyNoInteractions(workflowRepository, validator, catalogValidator);
+    }
+
+    @Test
     void explicitActivationOfNewPublishedVersionUpdatesTheSingleExistingRow() {
         ProductProcessWorkflow next = publishedWorkflow(45L, "F006", "PT-PIG", 4);
         ProductProcessWorkflowActivation current = activation(
