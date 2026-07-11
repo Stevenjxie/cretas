@@ -63,8 +63,14 @@ public class WorkProcessTask extends BaseEntity {
     @Column(name = "production_batch_id", nullable = false)
     private Long productionBatchId;
 
-    @Column(name = "product_work_process_id", nullable = false)
+    @Column(name = "product_work_process_id")
     private Long productWorkProcessId;
+
+    @Column(name = "workflow_instance_id")
+    private Long workflowInstanceId;
+
+    @Column(name = "workflow_node_id", length = 128)
+    private String workflowNodeId;
 
     @Column(name = "work_process_id", nullable = false, length = 50)
     private String workProcessId;
