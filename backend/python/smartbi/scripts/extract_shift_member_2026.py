@@ -31,7 +31,7 @@ before the real header row):
      NEVER writes them to the output JSONL. 生日 is reduced to birth_month
      (1-12) immediately; day and year are discarded here, before the data
      ever reaches a file or a database row. See
-     V20261006_01__member_profile_silver.sql's header note.
+     V20261007_01__member_profile_silver.sql's header note.
 
   B. 卡充值统计 — pre-aggregated by the POS to (store, date, channel) grain
      already (no card_no column at all — no PII to begin with). Real
