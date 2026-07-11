@@ -2448,3 +2448,128 @@ async def void_audit(
             "(收银主管/店长授权撤单本就多，不等于违规); 应按此率而非撤单总数判断。"
         ),
     }
+
+
+# ── zone_efficiency (区域坪效) ──────────────────────────────────────
+# New restaurant analytics dimension (greenfield). Source: agg_daily_zone
+# (materialized from fact_zone_sales, see
+# smartbi/services/materialized_analytics/daily_zone.py).
+
+
+async def zone_efficiency(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[Optional[date], Optional[date]],
+    *,
+    top_n: int = 10,
+) -> Dict[str, Any]:
+    """区域坪效 (in-store dining-zone revenue/efficiency) — revenue + item
+    quantity ranked by 区域名称 (dining zone: 大厅/小桌/中桌/大桌/... or, in
+    the real source data, delivery-channel labels — see caveat below).
+
+    ⚠️ Honesty guard: literal 坪效 (revenue per unit FLOOR AREA, 元/平米) is
+    NOT computable — the 二维火 "区域销售报表" export carries no floor-area
+    or seat-count column for any zone. This returns revenue + item quantity
+    per zone as an EFFICIENCY PROXY (which zones generate the most revenue /
+    turn the most items), never a fabricated per-square-meter figure.
+
+    Honesty guards (never fabricate zeros for a tenant with no zone data):
+      - data_available=False (tenant has ZERO agg_daily_zone rows at all) →
+        note="未上传区域销售数据". Distinguishes "never uploaded a 区域销售
+        报表" from a genuine zero-revenue window.
+
+    Returns:
+      - data_available: bool — whether the tenant has any zone-sales data
+        at all
+      - total_revenue / total_item_qty: sums across the WHOLE range (not
+        just top N)
+      - zones: list of {zone_name, revenue, item_qty, revenue_pct} ranked
+        by revenue desc (revenue_pct is null when total_revenue is 0 —
+        avoids a divide-by-zero fabricated 0%)
+      - note: explains why the tenant has no data, if applicable
+      - caveat: honest disclaimer (proxy metric + delivery-channel-labeled
+        zone names)
+    """
+    start, end = date_range
+    _validate_range(start, end)
+    conds = ["factory_id = $1"]
+    params: list = [factory_id]
+    if start is not None:
+        params.append(start)
+        conds.append(f"date >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        conds.append(f"date <= ${len(params)}")
+    where = " AND ".join(conds)
+
+    params_top = list(params)
+    params_top.append(int(top_n))
+    limit_ph = f"${len(params_top)}"
+
+    async with pool.acquire() as conn:
+        # All-history availability (NOT date-filtered): does this tenant have
+        # ANY zone-sales data? Separates "未上传区域销售数据" from "0 revenue
+        # this window".
+        avail_row = await conn.fetchrow(
+            "SELECT EXISTS(SELECT 1 FROM agg_daily_zone WHERE factory_id = $1) AS has_data",
+            factory_id,
+        )
+        total_row = await conn.fetchrow(
+            f"SELECT COALESCE(SUM(revenue), 0) AS total_revenue, "
+            f"COALESCE(SUM(item_qty), 0) AS total_item_qty "
+            f"FROM agg_daily_zone WHERE {where}",
+            *params,
+        )
+        rows = await conn.fetch(
+            f"""
+            SELECT zone_name,
+                   SUM(revenue)  AS revenue,
+                   SUM(item_qty) AS item_qty
+              FROM agg_daily_zone
+             WHERE {where}
+             GROUP BY zone_name
+             ORDER BY SUM(revenue) DESC
+             LIMIT {limit_ph}
+            """,
+            *params_top,
+        )
+
+    data_available = bool(avail_row["has_data"]) if avail_row else False
+    total_revenue = Decimal(total_row["total_revenue"] or 0) if total_row else Decimal(0)
+    total_item_qty = Decimal(total_row["total_item_qty"] or 0) if total_row else Decimal(0)
+
+    zones = []
+    for r in rows:
+        rev = Decimal(r["revenue"] or 0)
+        qty = Decimal(r["item_qty"] or 0)
+        pct = (
+            (rev / total_revenue * Decimal(100)).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+            if total_revenue > 0
+            else None
+        )
+        zones.append({
+            "zone_name": r["zone_name"],
+            "revenue": float(rev),
+            "item_qty": float(qty),
+            "revenue_pct": float(pct) if pct is not None else None,
+        })
+
+    note: Optional[str] = None if data_available else "未上传区域销售数据"
+
+    return {
+        "factory_id": factory_id,
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
+        "data_available": data_available,
+        "note": note,
+        "total_revenue": float(total_revenue),
+        "total_item_qty": float(total_item_qty),
+        "zones": zones,
+        "caveat": (
+            "坪效为营收/数量代理指标：源数据无场地面积字段，无法计算真实的元/平米坪效；"
+            "部分区域名称代表外卖渠道（无桌位(美团外卖)/无桌位(饿了么外卖)/无桌位(京东外卖)/"
+            "外卖/京东/饿了么等），并非实体大厅/包间，对比时请结合门店实际场地情况参考。"
+        ),
+    }

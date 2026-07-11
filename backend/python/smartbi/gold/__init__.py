@@ -44,6 +44,7 @@ from smartbi.gold.queries import (
     trend_bundle,
     void_audit,
     void_rate,
+    zone_efficiency,
 )
 from smartbi.gold.review_queries import (
     review_city_ranking,
@@ -115,6 +116,7 @@ __all__ = [
     "trend_bundle",
     "void_audit",
     "void_rate",
+    "zone_efficiency",
     "run_silver_dual_write",
     "silver_dual_write_enabled",
 ]
