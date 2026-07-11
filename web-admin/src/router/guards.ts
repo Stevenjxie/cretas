@@ -4,6 +4,7 @@
  */
 import type { Router } from 'vue-router';
 import type { ModuleName } from '@/store/modules/permission';
+import { resolveLogisticsDemoRoute } from '@/views/demo/demoRoute';
 
 // 白名单路由 - 不需要登录
 const whiteList = ['/login', '/403', '/404', '/mobile-only', '/demo'];
@@ -78,6 +79,12 @@ export function setupRouterGuards(router: Router) {
       } else {
         next();
       }
+      return;
+    }
+
+    const logisticsLanding = resolveLogisticsDemoRoute(to.path, authStore.factoryType, authStore.factoryId);
+    if (logisticsLanding) {
+      next(logisticsLanding);
       return;
     }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveDemoRedirect, resolveDemoTenant } from '../demoRoute';
+import { resolveDemoRedirect, resolveDemoTenant, resolveLogisticsDemoRoute } from '../demoRoute';
 
 describe('demoRoute', () => {
   it('resolves restaurant demo tenants', () => {
@@ -29,5 +29,10 @@ describe('demoRoute', () => {
 
   it('opens the logistics workbench by default', () => {
     expect(resolveDemoRedirect({}, 'logistics')).toBe('/scheduling/logistics/workbench');
+  });
+
+  it('redirects the logistics demo away from the generic dashboard', () => {
+    expect(resolveLogisticsDemoRoute('/dashboard', 'LOGISTICS', 'DEMO_LOGISTICS')).toBe('/scheduling/logistics/workbench');
+    expect(resolveLogisticsDemoRoute('/dashboard', 'FACTORY', 'DEMO_FACTORY2')).toBeNull();
   });
 });

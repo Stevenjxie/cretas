@@ -34,7 +34,7 @@ export const financeManagerMenu: MenuItem[] = [
 ];
 
 const rawMenuConfig: MenuItem[] = [
-  { path: '/dashboard', title: '首页', icon: 'House', module: 'dashboard' },
+  { path: '/dashboard', title: '首页', icon: 'House', module: 'dashboard', hideForFactoryTypes: ['LOGISTICS'] },
   {
     path: '/workdesk',
     title: '工作台',
