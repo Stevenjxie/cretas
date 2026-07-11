@@ -1,39 +1,43 @@
 <script setup lang="ts">
+/**
+ * P2 web-admin/mobile synthesis parity (2026-07-11):
+ *
+ * This panel now calls the Python comprehensive-synthesis engine directly
+ * (askRestaurantSynthesis → POST /api/smartbi/synthesis/comprehensive) —
+ * the SAME endpoint mobile-rest-ai/ uses — instead of the Java intent
+ * executor (askRestaurantQuestion). That path never reached the synthesis
+ * engine, so 成本率/供应商价格异常(反回扣)/同比环比/加权毛利率 questions
+ * returned empty data on web-admin (verified) even though mobile answered
+ * them correctly. The Java-intent path (askRestaurantQuestion, owner-action
+ * scenario chaining, sections/followUpChips) is untouched in
+ * `@/api/smartbi/restaurant-chat` and still covered by its own tests — this
+ * panel just no longer calls it as the primary Q&A path.
+ *
+ * Tenant scope is derived by the backend from the JWT (request.state.factory_id
+ * via auth_middleware) — `props.factoryId` is not sent explicitly.
+ */
 import { ref, nextTick } from 'vue';
 import { ElInput, ElButton, ElMessage } from 'element-plus';
 import ChatBubble from './ChatBubble.vue';
 import ChatTypingIndicator from './ChatTypingIndicator.vue';
-import SectionCardRenderer from './SectionCardRenderer.vue';
-import { askRestaurantQuestion } from '@/api/smartbi/restaurant-chat';
+import { askRestaurantSynthesis } from '@/api/smartbi/restaurant-synthesis';
 import type { ChatTurn } from '@/types/restaurant-chat';
-import { useAuthStore } from '@/store/modules/auth';
 
-const props = defineProps<{
+defineProps<{
   factoryId: string;
   subSector?: string;
   uploadId?: string;
 }>();
 
-const auth = useAuthStore();
 const turns = ref<ChatTurn[]>([]);
 const isTyping = ref(false);
 const inputText = ref('');
 const chatContainer = ref<HTMLElement | null>(null);
-const javaIntentSessionId = ref<string | null>(null);
-const ownerActionSessionId = ref<string | null>(null);
-const ownerActionScenario = ref<string | null>(null);
-
-/**
- * Get current user ID.
- * auth.user has top-level `id` field (set from data.userId on login).
- * Falls back through username → 'anon' for unauthenticated preview mode.
- */
-function getUserId(): string {
-  const u = auth.user;
-  if (!u) return 'anon';
-  // User interface: { id, username, factoryUser: { factoryId, role, ... }, ... }
-  return String(u.id ?? u.username ?? 'anon');
-}
+// P2 multi-turn memory: stable session id for the lifetime of this
+// conversation, so the backend can resolve "它"/"那家店"/"第三点" follow-ups
+// (smartbi.services.chat_session_service.ChatSessionService). Reset on
+// clearConversation — a fresh conversation should not inherit old context.
+const sessionId = ref<string>(crypto.randomUUID());
 
 async function sendMessage(text?: string) {
   const query = (text ?? inputText.value).trim();
@@ -51,38 +55,39 @@ async function sendMessage(text?: string) {
 
   isTyping.value = true;
   try {
-    const response = await askRestaurantQuestion({
-      query,
-      factoryId: props.factoryId,
-      userId: getUserId(),
-      subSector: props.subSector,
-      uploadId: props.uploadId,
-      sessionId: javaIntentSessionId.value ?? undefined,
-      ownerActionSessionId: ownerActionSessionId.value ?? undefined,
-      ownerActionScenario: ownerActionScenario.value ?? undefined,
-    });
-    javaIntentSessionId.value = response.javaSessionId ?? javaIntentSessionId.value;
-    ownerActionSessionId.value = response.ownerActionSessionId ?? ownerActionSessionId.value;
-    ownerActionScenario.value = response.ownerActionScenario ?? ownerActionScenario.value;
+    const response = await askRestaurantSynthesis(query, sessionId.value);
 
-    const aiTurn: ChatTurn = {
-      id: crypto.randomUUID(),
-      role: 'ai',
-      content: response.message ?? '已完成分析',
-      timestamp: Date.now(),
-      intentCode: response.intentCode,
-      toolName: response.toolName,
-      skillName: response.skillName,
-      sections: response.sections ?? [],
-      followUpChips: response.followUpChips ?? [],
-    };
-    turns.value.push(aiTurn);
+    if (!response.success) {
+      // Honest failure: show the real backend/network message, never a
+      // silently-degraded fake answer (禁止降级处理 / api-response-handling).
+      const errMsg = response.error || '分析失败，请稍后重试';
+      turns.value.push({
+        id: crypto.randomUUID(),
+        role: 'ai',
+        content: `**请求失败**\n\n${errMsg}`,
+        timestamp: Date.now(),
+        error: errMsg,
+      });
+      ElMessage.error('聊天请求失败: ' + errMsg);
+    } else {
+      turns.value.push({
+        id: crypto.randomUUID(),
+        role: 'ai',
+        content: response.answer || '已完成分析',
+        timestamp: Date.now(),
+        charts: response.charts,
+        alerts: response.alerts,
+        source: response.source,
+      });
+    }
   } catch (error: unknown) {
+    // askRestaurantSynthesis catches internally and returns {success:false};
+    // this is belt-and-suspenders for anything unexpected in rendering.
     const errMsg = error instanceof Error ? error.message : String(error);
     turns.value.push({
       id: crypto.randomUUID(),
       role: 'ai',
-      content: '抱歉, 查询失败',
+      content: `**请求失败**\n\n${errMsg}`,
       timestamp: Date.now(),
       error: errMsg,
     });
@@ -101,9 +106,7 @@ async function scrollToBottom() {
 }
 
 async function clearConversation() {
-  javaIntentSessionId.value = null;
-  ownerActionSessionId.value = null;
-  ownerActionScenario.value = null;
+  sessionId.value = crypto.randomUUID();
   turns.value = [];
   ElMessage.success('对话已清空');
 }
@@ -133,13 +136,6 @@ defineExpose({
       </div>
 
       <ChatBubble v-for="turn in turns" :key="turn.id" :turn="turn">
-        <template #sections>
-          <SectionCardRenderer
-            v-for="(section, idx) in turn.sections ?? []"
-            :key="idx"
-            :section="section"
-          />
-        </template>
         <template #followups>
           <div
             v-if="turn.followUpChips && turn.followUpChips.length"

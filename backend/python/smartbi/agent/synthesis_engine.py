@@ -98,6 +98,7 @@ from smartbi.agent.factbook import (
     NOTE_VIP_SIGNAL,
     compute_store_attribution,
     factbook_to_dataframe,
+    _money,
 )
 from smartbi.agent.narrative_cache import (
     NarrativeCacheService,
@@ -412,6 +413,11 @@ class SynthesisResponse:
     tokens_cap: int
     elapsed_ms: int
     charts: List[Dict[str, Any]] = field(default_factory=list)
+    # 🔒 反回扣(anti-kickback) alerts — derived ONLY from grounded FactBook
+    # signals (supplier_anomaly / period_comparison.cost_ratio). See
+    # ComprehensiveSynthesisEngine.collect_alerts. Never fabricated: empty
+    # list when neither signal is present in this window.
+    alerts: List[Dict[str, Any]] = field(default_factory=list)
     plan: Optional[Dict[str, Any]] = None
     factbook_text: Optional[str] = None
     insight_summary: Optional[str] = None
@@ -426,6 +432,7 @@ class SynthesisResponse:
             "tokens_cap": self.tokens_cap,
             "elapsed_ms": self.elapsed_ms,
             "charts": self.charts,
+            "alerts": self.alerts,
             "plan": self.plan,
             "factbook_text": self.factbook_text,
             "insight_summary": self.insight_summary,
@@ -610,13 +617,18 @@ class ComprehensiveSynthesisEngine:
             hit = await self._cache.get(factory_id, q_hash)
             if hit is not None:
                 budget = await self._budget.check_budget(factory_id)
-                charts = (hit.get("chart_config") or {}).get("charts") or [] \
-                    if isinstance(hit.get("chart_config"), dict) else []
+                hit_cfg = hit.get("chart_config") if isinstance(hit.get("chart_config"), dict) else {}
+                charts = hit_cfg.get("charts") or []
+                # 🔒 alerts are persisted alongside charts in the same JSON blob
+                # (no schema migration — chart_config is a free-form JSON column)
+                # so a cached answer still carries the 反回扣 alerts that were
+                # true when it was computed.
+                alerts = hit_cfg.get("alerts") or []
                 return SynthesisResponse(
                     answer=hit["answer"], source=RESULT_SOURCE_CACHE, tokens=0,
                     tokens_used_today=budget.tokens_used, tokens_cap=budget.tokens_cap,
                     elapsed_ms=int((time.monotonic() - t0) * 1000),
-                    charts=charts,
+                    charts=charts, alerts=alerts,
                 )
 
         # 2. Budget check.
@@ -657,13 +669,14 @@ class ComprehensiveSynthesisEngine:
             if q_emb is not None:
                 sem = await self._cache.get_semantic(factory_id, q_emb, window_key, plan_key)
                 if sem is not None:
-                    sem_charts = (sem.get("chart_config") or {}).get("charts") or [] \
-                        if isinstance(sem.get("chart_config"), dict) else []
+                    sem_cfg = sem.get("chart_config") if isinstance(sem.get("chart_config"), dict) else {}
+                    sem_charts = sem_cfg.get("charts") or []
+                    sem_alerts = sem_cfg.get("alerts") or []
                     return SynthesisResponse(
                         answer=sem["answer"], source=RESULT_SOURCE_SEMANTIC_CACHE, tokens=0,
                         tokens_used_today=budget.tokens_used, tokens_cap=budget.tokens_cap,
                         elapsed_ms=int((time.monotonic() - t0) * 1000),
-                        charts=sem_charts, plan=plan,
+                        charts=sem_charts, alerts=sem_alerts, plan=plan,
                     )
 
         # 4. Build FactBook (parallel deterministic pulls per plan).
@@ -690,20 +703,26 @@ class ComprehensiveSynthesisEngine:
             if thin_answer is not None:
                 thin_answer, fc_meta = self._reconciler.reconcile(thin_answer, factbook)
                 charts = self.collect_charts(factbook, plan)
+                alerts = self.collect_alerts(factbook)
                 post_budget = await self._budget.consume(factory_id, thin_tokens)
                 await self._capture_distillation(
                     question, factbook, thin_answer, fc_meta, plan, factory_id)
                 if not conversation_history:
+                    cache_cfg = {}
+                    if charts:
+                        cache_cfg["charts"] = charts
+                    if alerts:
+                        cache_cfg["alerts"] = alerts
                     await self._cache.put(
                         factory_id, q_hash, thin_answer,
-                        chart_config={"charts": charts} if charts else None,
+                        chart_config=cache_cfg or None,
                         tokens=thin_tokens, ttl_hours=cache_ttl_hours,
                         question_embedding=q_emb, window_key=window_key, plan_key=plan_key)
                 return SynthesisResponse(
                     answer=thin_answer, source=RESULT_SOURCE_THIN_RESTATE, tokens=thin_tokens,
                     tokens_used_today=post_budget.tokens_used, tokens_cap=post_budget.tokens_cap,
                     elapsed_ms=int((time.monotonic() - t0) * 1000),
-                    charts=charts, plan=plan, factbook_text=factbook.to_prompt_text(),
+                    charts=charts, alerts=alerts, plan=plan, factbook_text=factbook.to_prompt_text(),
                     insight_summary=insight_summary, fact_check=fc_meta)
 
         # 6. LLM grounded narrative — inside RedactionScope (P0 数据主权).
@@ -725,17 +744,24 @@ class ComprehensiveSynthesisEngine:
         # 7. Grounding hard-check (backfill真值 + flag fabricated names).
         answer, fc_meta = self._reconciler.reconcile(answer, factbook)
 
-        # 8. Charts (gated by plan).
+        # 8. Charts + 🔒 反回扣 alerts (both gated by plan/factbook; alerts derive
+        # solely from grounded FactBook signals — see collect_alerts).
         charts = self.collect_charts(factbook, plan)
+        alerts = self.collect_alerts(factbook)
 
         # 9. Bookkeeping. Cache write skipped for history-bearing turns — a
         # context-resolved answer must not be replayed as the generic cached
         # answer for that literal question text (see synthesize docstring).
         post_budget = await self._budget.consume(factory_id, tokens)
         if not conversation_history:
+            cache_cfg = {}
+            if charts:
+                cache_cfg["charts"] = charts
+            if alerts:
+                cache_cfg["alerts"] = alerts
             await self._cache.put(
                 factory_id, q_hash, answer,
-                chart_config={"charts": charts} if charts else None,
+                chart_config=cache_cfg or None,
                 tokens=tokens, ttl_hours=cache_ttl_hours,
                 question_embedding=q_emb, window_key=window_key, plan_key=plan_key,
             )
@@ -755,7 +781,7 @@ class ComprehensiveSynthesisEngine:
             answer=answer, source=RESULT_SOURCE_LLM, tokens=tokens,
             tokens_used_today=post_budget.tokens_used, tokens_cap=post_budget.tokens_cap,
             elapsed_ms=int((time.monotonic() - t0) * 1000),
-            charts=charts, plan=plan, factbook_text=factbook.to_prompt_text(),
+            charts=charts, alerts=alerts, plan=plan, factbook_text=factbook.to_prompt_text(),
             insight_summary=insight_summary, fact_check=fc_meta,
         )
 
@@ -1462,3 +1488,76 @@ class ComprehensiveSynthesisEngine:
             })
 
         return charts
+
+    # =====================================================================
+    # 🔒 反回扣(anti-kickback) alerts — P2.1 web-admin parity
+    # =====================================================================
+    _RISK_LEVEL_TO_ALERT: Dict[str, str] = {"HIGH": "high", "MEDIUM": "medium"}
+    _DIRECTION_LABEL: Dict[str, str] = {"UP": "涨", "DOWN": "降"}
+    _RISK_LABEL: Dict[str, str] = {"high": "高风险", "medium": "中风险"}
+    # mom_pct (领料成本率环比, 百分点) at/above this threshold escalates the
+    # cost_ratio_rising alert from medium → high (mirrors the supplier
+    # anomaly HIGH/MEDIUM split; no equivalent "连续三次" signal exists for
+    # cost_ratio so a fixed point-threshold is used instead).
+    _COST_RATIO_HIGH_THRESHOLD_POINTS = 1.0
+
+    def collect_alerts(self, factbook: FactBook) -> List[Dict[str, Any]]:
+        """Derive 反回扣 alerts SOLELY from grounded FactBook signals.
+
+        Never fabricates: an empty list is returned when neither
+        ``factbook.supplier_anomaly`` nor a rising
+        ``factbook.period_comparison['cost_ratio']`` is present for this
+        window — no invented alert, no accusation without a real signal
+        behind it (🔒 an incorrect alert would falsely accuse a supplier or
+        implicate kickback/theft).
+
+        Each alert: ``{"type", "level", "title", "detail"}``.
+          - type="supplier_price_anomaly": one per anomaly in
+            ``factbook.supplier_anomaly["anomalies"]`` (already computed by
+            ``detect_price_anomalies`` — 威慑非处罚, HIGH = 连续三次同向异常).
+          - type="cost_ratio_rising": at most one, when 领料成本率 environmental
+            (mom) comparison is available and rising (mom_pct > 0).
+        """
+        alerts: List[Dict[str, Any]] = []
+
+        sa = factbook.supplier_anomaly or {}
+        for a in (sa.get("anomalies") or []):
+            level = self._RISK_LEVEL_TO_ALERT.get(a.get("riskLevel") or "")
+            if level is None:
+                continue  # unknown/absent riskLevel — skip rather than guess
+            name = a.get("ingredientName") or a.get("normalizedName") or "未知物料"
+            supplier = a.get("supplierName") or "未知供应商"
+            direction = self._DIRECTION_LABEL.get(a.get("direction") or "", "")
+            delta = a.get("deltaPct")
+            delta_text = f"{abs(float(delta))}%" if delta is not None else "?"
+            old_price, new_price = a.get("oldPrice"), a.get("newPrice")
+            alerts.append({
+                "type": "supplier_price_anomaly",
+                "level": level,
+                "title": f"供应商采购价异常：{name}",
+                "detail": (
+                    f"{supplier}的{name}采购价从¥{_money(old_price)}"
+                    f"{direction}到¥{_money(new_price)}（{delta_text}），"
+                    f"{self._RISK_LABEL[level]}。记录趋势要求解释，非处罚。"
+                ),
+            })
+
+        pc = factbook.period_comparison or {}
+        cr = pc.get("cost_ratio") or {}
+        mom_pct = cr.get("mom_pct")
+        if cr.get("mom_available") and mom_pct is not None and mom_pct > 0:
+            level = "high" if mom_pct >= self._COST_RATIO_HIGH_THRESHOLD_POINTS else "medium"
+            current = cr.get("current")
+            current_text = f"（当前{current}%）" if current is not None else ""
+            alerts.append({
+                "type": "cost_ratio_rising",
+                "level": level,
+                "title": "领料成本率环比上升",
+                "detail": (
+                    f"领料成本率环比+{mom_pct}个百分点{current_text}，"
+                    "疑似用料增加/漏损/回扣，建议核查物料用量与供应商。"
+                    "口径：领料申请估算（仅含已提交/已审批），非配方理论COGS，非盘点rollforward。"
+                ),
+            })
+
+        return alerts
