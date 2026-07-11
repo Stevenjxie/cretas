@@ -193,6 +193,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             String anchor = postSfiOutput(factoryId, planId, req, warnings);
             persistRow(factoryId, planId, req, null, anchor, ProcessSheetRow.STATUS_SAVED_SFI);
             logChange(factoryId, planId, req, "CREATE", null, req, userId);
+            stampWorkflowTaskIfApplicable(factoryId, planId, req); // 2B B3 F3: 回写 workflow 任务进度 (fail-soft)
             // materialized=true: 产出已入 SFI 库 (下游可选); yieldRate 可算; 成本诚实 (投入未知 → null)。
             return buildResult(req, null, anchor, yieldRate(req), null, null, false, true, warnings);
         }
@@ -220,6 +221,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // 8. 写 process_sheet_rows (try/catch UK 冲突 → 409; 完整并发测在 Task 1.7)
         persistRow(factoryId, planId, req, mat.getProductionBatchId(), mat.getBatchNumber(), "SAVED");
         logChange(factoryId, planId, req, "CREATE", null, req, userId);
+        stampWorkflowTaskIfApplicable(factoryId, planId, req); // 2B B3 F3: 回写 workflow 任务进度 (fail-soft)
 
         // 9. 组装结果
         return buildResult(req, mat.getProductionBatchId(), mat.getBatchNumber(),
@@ -293,6 +295,53 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     + expectUnit + "」，当前为「" + actualUnit + "」")
                     .withCode("WORKFLOW_ROW_OUTPUT_UNIT_MISMATCH")
                     .withHint("请按 Workflow 配置的单位录入产出数量");
+        }
+    }
+
+    /**
+     * 2B B3 (F3 回写): workflow 批次行产出后, 把对应 workflow 工序任务 (WorkProcessTask) 标记为 COMPLETED
+     * 并回写实际产量, 使 workflow 运行时视图反映文员逐道录入的进度 (否则任务永远 PENDING)。
+     *
+     * <p><b>fail-soft</b>: 任何异常只记 warn, 绝不阻断已完成的行保存/物化/库存写入 (进度回写非关键路径)。
+     * legacy 计划 / 未注入 / 找不到对应任务 → 静默跳过。仅在行确有产出 (SAVED / SAVED_SFI) 后调用。
+     */
+    private void stampWorkflowTaskIfApplicable(String factoryId, String planId, ProcessSheetRowRequest req) {
+        if (workflowClerkSheetService == null || taskRepo == null) {
+            return;
+        }
+        try {
+            com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO config =
+                    workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId);
+            if (config == null || config.getProcesses() == null || config.getWorkflowInstanceId() == null) {
+                return; // legacy 计划
+            }
+            com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.ProcessDescriptor desc =
+                    config.getProcesses().stream()
+                            .filter(p -> p.getProcessOrder() != null
+                                    && p.getProcessOrder().equals(req.getProcessOrder()))
+                            .findFirst()
+                            .orElse(null);
+            if (desc == null || desc.getWorkflowNodeId() == null) {
+                return;
+            }
+            List<com.cretas.aims.entity.workprocess.WorkProcessTask> tasks =
+                    taskRepo.findByFactoryIdAndWorkflowInstanceIdOrderByProcessOrderAsc(
+                            factoryId, config.getWorkflowInstanceId());
+            com.cretas.aims.entity.workprocess.WorkProcessTask task = tasks.stream()
+                    .filter(t -> desc.getWorkflowNodeId().equals(t.getWorkflowNodeId()))
+                    .findFirst()
+                    .orElse(null);
+            if (task == null) {
+                return;
+            }
+            if (req.getOutputQuantity() != null) {
+                task.setActualQuantity(req.getOutputQuantity());
+            }
+            task.setStatus(com.cretas.aims.entity.workprocess.WorkProcessTask.Status.COMPLETED);
+            taskRepo.save(task);
+        } catch (Exception e) {
+            log.warn("2B B3 workflow 任务进度回写失败 (不阻断保存): planId={}, processOrder={}, err={}",
+                    planId, req.getProcessOrder(), e.getMessage());
         }
     }
 

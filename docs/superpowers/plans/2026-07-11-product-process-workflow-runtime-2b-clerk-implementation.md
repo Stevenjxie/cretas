@@ -173,6 +173,25 @@ and the workflow config UI (editor → publish → activate → plan → 过程�
 
 ---
 
+## Adversarial review (fable diff-hunt) — findings + resolution (2026-07-11)
+
+A read-only fable diff-hunt of the 2B increment found the increment did not survive its own
+acceptance script. Resolution:
+
+| # | Finding | Sev | Resolution |
+|---|---|---|---|
+| F1 | FE `buildRequest` derived `finished` from the name-keyword archetype (`processCode==='qidiao'`), not the workflow port → the finishing row 409'd on B3's kind check → clerk dead-ends, no `FinishedGoodsBatch`. | BLOCKING | **Fixed (FE):** `buildRequest` sources `finished` from `workflowContext.output.finished`; `mapWorkflowProcesses` forces the finished-goods archetype when the port output is finished. |
+| F2 | FE hardcoded output `unit` (`'kg'`/`'盒'`) → any non-kg semi (or non-盒 finished) port 409'd on B3's unit check. | BLOCKING | **Fixed (FE):** `buildRequest` sources the output `unit` from `workflowContext.output.unit`. |
+| F3 | B3 dropped the planned task-stamp → workflow `WorkProcessTask`s stay PENDING forever (runtime view never reflects clerk progress). | HIGH | **Fixed (B3):** fail-soft `stampWorkflowTaskIfApplicable` marks the task COMPLETED + writes actualQuantity after a workflow row produces output; never blocks the save. |
+| F4 | B3 fail-open `catch` could hit Spring's rollback-only trap if the new `ProductWorkProcess` finder threw `IncorrectResultSizeDataAccessException` on duplicates. | HIGH | **No fix needed (verified):** `product_work_processes` has a `@UniqueConstraint`/DB unique index on `(factory_id, product_type_id, work_process_id)` → duplicates are impossible → the `Optional` finder never throws that. Fable's "no unique constraint" premise was incorrect. |
+| F5 | A multi-output instance materialized *before* the guard would 409 at sheet-read (→ silent legacy fallback) but also 409 every save. | MED | **Accepted (theoretical):** nothing is deployed yet and the activation+materialize guards block all new multi-output instances; documented deploy-window edge. |
+| F6 | A first process whose input is SEMI (non-keyword name) maps to the raw-intake archetype → only the raw picker shows. | MED | **Deferred to 2B.2:** F006 real flows start from RAW (natural case); documented. Full archetype-by-port-structure is 2B.2. |
+| F7 | Branching (split) workflows render as a fake linear clerk chain. | MED | **Deferred to 2B.2:** adding a linear guard risks regressing 2A's supported branch/merge behavior; the F006 E2E uses a linear single-output workflow; documented as a clerk-MVP limitation. |
+
+Confirmed sound by the review: B1 guard correctness, projection plumbing, legacy fallback (byte-identical),
+skuId resolution + factory-scoping + deleted-SKU degradation, and guard completeness (only
+`materializeIfActive` writes instances/ports; guard fires before persist).
+
 ## Ship-gate boundary
 
 - 🔒 areas: activation guard, saveRow inventory-adjacent validation, projection. Opus keystone on B3;
