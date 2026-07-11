@@ -106,12 +106,15 @@ const kindMark = computed(() => ({
   box-shadow: 0 2px 12px rgba(27, 101, 168, 0.08);
 }
 .material-node.selected { box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.28); }
+/* 原料=蓝灰, 半成品=绿(默认), 成品=紫 */
+.material-node.kind-raw_material { border-left-color: #6b7c93; }
 .material-node.kind-finished_good { border-left-color: #8b5cf6; }
 .node-heading { display: flex; align-items: flex-start; gap: 8px; }
 .kind-mark {
   display: grid; place-items: center; width: 28px; height: 28px; flex: 0 0 auto;
   border-radius: 7px; color: #2f8a3d; background: #edf9e8; font-weight: 700;
 }
+.kind-raw_material .kind-mark { color: #4a5b73; background: #eef1f6; }
 .kind-finished_good .kind-mark { color: #7141d8; background: #f2ecff; }
 .node-heading > div { min-width: 0; flex: 1; }
 .kind-label { color: #7a8599; font-size: 11px; }

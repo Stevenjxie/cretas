@@ -51,7 +51,7 @@
     <section class="port-section">
       <div class="section-title">
         <span>投入物料</span>
-        <el-button v-if="canWrite" text size="small" type="primary" class="nodrag" @click="emit('addInput')">+ 投入</el-button>
+        <el-button v-if="canWrite" text size="small" type="primary" class="nodrag" @click="emit('addInput')">+ 来源 Cell（合流）</el-button>
       </div>
       <div v-for="port in inputPorts" :key="port.id" class="port-row">
         <el-input
@@ -75,7 +75,7 @@
           class="nodrag"
           data-testid="add-output-inline"
           @click.stop="emit('addOutput')"
-        >+ 产出</el-button>
+        >+ 产出 Cell（分流）</el-button>
       </div>
       <div v-for="port in outputPorts" :key="port.id" class="port-row output-row">
         <el-input
