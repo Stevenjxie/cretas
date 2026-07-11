@@ -99,6 +99,17 @@ public class ProcessSheetRowRequest {
      */
     private Map<String, Object> customFields;
 
+    /**
+     * 2B.2 多产出 (fan-out): 一道工序一次报工同时产出多个产品 (如熟成鸡装箱同产 350g/400g,
+     * 筛选同产 合格半成品+不合格损耗)。size>1 触发多产出分解 (见 ProcessSheetServiceImpl.saveRow):
+     * 共享投入按各产出 {@link OutputLine#getQuantity() 产出数量} 自动拆分成 N 份 (物理默认, 非成本分摊配置),
+     * 每份走一次普通单产出物料化 → 落 N 行, 下游小结/撤销逐行复用不变。工序只记录结构+数量+批次, 不处理成本分摊。
+     *
+     * <p>为空 / size==1 → 走原单产出路径 (向后兼容, F006 现有流不受影响)。多产出时顶层
+     * {@link #outputQuantity} 仅为满足 @NotNull (建议传 Σquantity), 实际逐 output 用各自 quantity。
+     */
+    private List<OutputLine> outputs;
+
     /** 原料领料行: 消耗的原料 MaterialBatch + 投料量。 */
     @Data
     public static class RawInput {
@@ -106,6 +117,27 @@ public class ProcessSheetRowRequest {
         private String materialBatchId;
         @NotNull
         private BigDecimal quantity;
+    }
+
+    /**
+     * 2B.2 多产出行: 一个产出 = 一个产品 + 数量 (+ 分摊权重)。分解后每个 OutputLine 合成一条普通单产出行。
+     */
+    @Data
+    public static class OutputLine {
+        /** 产出产品 (半成品/成品 ProductType)。 */
+        @NotBlank
+        private String productTypeId;
+        /** 对应 workflow 产出端口 id (B3 逐产出对齐端口类型/单位)。可空 (非 workflow 计划)。 */
+        private String workflowPortId;
+        /** 产出数量 (产出单位, 如 盒/kg) → 直接作为该产出的入库量。 */
+        @NotNull
+        private BigDecimal quantity;
+        /** 产出单位。 */
+        private String unit;
+        /** 产出是否成品 (true → FG, false → 半成品 SFI)。 */
+        private boolean finished;
+        /** 可选成品重(kg): 若设则 FG 按 kg 入库 (同顶层 productWeight 语义); 多数多产出场景留空按 quantity 入库。 */
+        private BigDecimal productWeight;
     }
 
     /** 混锅上游引用: 上游 WIP 的持久化 batchNumber + 投料量 (kg)。 */

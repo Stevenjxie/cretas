@@ -170,6 +170,12 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         assertFinishedGoodsSourceAllowed(factoryId, req);
         assertExternalFeedUnitSupported(req);
 
+        // 2B.2 多产出 (fan-out) 分解: 一次报工 N 个产出 → N 个单产出物料化, 共享投入按产出权重拆分,
+        //   落 N 行 (clientRowId#i)。下方单产出路径完全不改 (F006 现有流不受影响); 下游小结/撤销/成本逐行复用。
+        if (req.getOutputs() != null && req.getOutputs().size() > 1) {
+            return saveMultiOutputRow(factoryId, planId, req, userId, warnings);
+        }
+
         // 3. 解析上游消耗边 (factory-scoped, 🔒)
         List<ResolvedEdge> edges = resolveEdges(factoryId, planId, req);
 
@@ -344,6 +350,279 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         } catch (Exception e) {
             log.warn("2B B3 workflow 任务进度回写失败 (不阻断保存): planId={}, processOrder={}, err={}",
                     planId, req.getProcessOrder(), e.getMessage());
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 2B.2 多产出 (fan-out) 分解 —— 一次报工 N 个产出 → N 个单产出物料化, 共享投入按权重拆分, 落 N 行
+    // ─────────────────────────────────────────────────────────────
+
+    private record OneOutputOutcome(Long batchId, String batchNumber, BigDecimal rowTotalCost) {}
+
+    /**
+     * 多产出报工分解 (🔒 keystone)。共享投入 (rawMaterialInputs/upstreamSources) 按各产出的分摊权重
+     * (allocationWeight 全填则用之, 否则按 quantity) 拆成 N 份 (最后一份吃余数保证 Σ 精确无漂移),
+     * 每份合成一条普通单产出行走 {@link #materializeOneOutput} 物化 → 落 N 行 (clientRowId#i)。
+     *
+     * <p>工序不处理成本分摊 (per Steve): 共享投入按<b>产出数量</b>自动拆分 (物理默认, 非成本分摊配置/字段),
+     * 人工/调料仅计在首产出 (共享工序成本, 计一次不双计, 总额守恒)。下游小结/撤销逐行复用不变。
+     */
+    private ProcessSheetRowResult saveMultiOutputRow(String factoryId, String planId,
+            ProcessSheetRowRequest req, Long userId, List<String> warnings) {
+        List<ProcessSheetRowRequest.OutputLine> outs = req.getOutputs();
+
+        // 1. 逐产出校验 (禁止降级: 缺产品/量<=0 明确报错)
+        for (ProcessSheetRowRequest.OutputLine o : outs) {
+            if (o.getProductTypeId() == null || o.getProductTypeId().isBlank()) {
+                throw new BusinessException(400, "多产出存在缺少产品的产出行")
+                        .withCode("PROCESS_SHEET_OUTPUT_PRODUCT_REQUIRED")
+                        .withHint("请为每个产出选择产品");
+            }
+            if (o.getQuantity() == null || o.getQuantity().signum() <= 0) {
+                throw new BusinessException(400, "多产出的每条产出数量必须大于0")
+                        .withCode("PROCESS_SHEET_OUTPUT_QUANTITY_INVALID")
+                        .withHint("请填写各产出的产出数量");
+            }
+        }
+
+        // 2. B3 逐产出对齐 workflow 端口 (workflow 计划; legacy/未注入 → 跳过)
+        validateMultiOutputAgainstWorkflow(factoryId, planId, req);
+
+        // 3. 共享投入按产出数量拆分 (物理默认, 不涉成本分摊配置)。同单位场景 (Steve 例子 A 全盒 / D 全 kg) 天然合理。
+        List<BigDecimal> weights = outs.stream()
+                .map(ProcessSheetRowRequest.OutputLine::getQuantity)
+                .toList();
+        BigDecimal totalWeight = weights.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (totalWeight.signum() <= 0) {
+            throw new BusinessException(400, "多产出数量合计必须大于0")
+                    .withCode("PROCESS_SHEET_OUTPUT_QUANTITY_ZERO");
+        }
+
+        int n = outs.size();
+        List<BigDecimal> rawTotals = req.getRawMaterialInputs() == null ? List.of()
+                : req.getRawMaterialInputs().stream()
+                        .map(ProcessSheetRowRequest.RawInput::getQuantity).toList();
+        List<BigDecimal> upTotals = req.getUpstreamSources() == null ? List.of()
+                : req.getUpstreamSources().stream()
+                        .map(ProcessSheetRowRequest.UpstreamRef::getFeedQuantityKg).toList();
+        List<List<BigDecimal>> rawSplit = splitAcrossOutputs(rawTotals, weights, totalWeight, n);
+        List<List<BigDecimal>> upSplit = splitAcrossOutputs(upTotals, weights, totalWeight, n);
+
+        // 4. 逐产出物化 (每份是一条带分数投入的普通单产出行)
+        List<ProcessSheetRowResult.OutputResult> outputResults = new ArrayList<>(n);
+        BigDecimal aggCost = BigDecimal.ZERO;
+        boolean costKnown = true;
+        for (int i = 0; i < n; i++) {
+            ProcessSheetRowRequest.OutputLine o = outs.get(i);
+            ProcessSheetRowRequest one = synthesizeOutputRequest(req, o, i, rawSplit, upSplit);
+            // 人工/调料只计在首产出 (共享工序成本, 计一次; 其余产出只承担材料分摊)。总额守恒不双计。
+            if (i != 0) {
+                one.setLaborSegments(null);
+                one.setSeasoningStep(false);
+            }
+            OneOutputOutcome outcome = materializeOneOutput(factoryId, planId, one, userId, warnings);
+            logChange(factoryId, planId, one, "CREATE", null, one, userId);
+            if (outcome.rowTotalCost() != null) {
+                aggCost = aggCost.add(outcome.rowTotalCost());
+            } else {
+                costKnown = false; // 诚实 null: 任一产出成本未知 → 汇总标未知
+            }
+            ProcessSheetRowResult.OutputResult or = new ProcessSheetRowResult.OutputResult();
+            or.setClientRowId(one.getClientRowId());
+            or.setProductTypeId(o.getProductTypeId());
+            or.setBatchId(outcome.batchId());
+            or.setBatchNumber(outcome.batchNumber());
+            or.setQuantity(o.getQuantity());
+            or.setUnit(one.getUnit());
+            or.setRowTotalCost(outcome.rowTotalCost());
+            outputResults.add(or);
+        }
+
+        // 5. workflow 任务进度回写一次 (整道工序完成)
+        stampWorkflowTaskIfApplicable(factoryId, planId, req);
+
+        // 6. 汇总结果: 首产出批为代表 + 全部产出明细 (FE 重载过程单会拿到 N 行)
+        ProcessSheetRowResult.OutputResult first = outputResults.get(0);
+        ProcessSheetRowResult result = buildResult(req, first.getBatchId(), first.getBatchNumber(),
+                null, costKnown ? aggCost : null, null, false, true, warnings);
+        result.setOutputs(outputResults);
+        return result;
+    }
+
+    /**
+     * 单个产出物化 (仅供多产出分解调用; 单产出主路径不走此方法, 保持 F006 现有流一字不改)。
+     * 复刻 saveRow 单产出的 pure-SFI / WIP-FG 两分支决策 + 物化 + 落行, 返回批次/成本。
+     */
+    private OneOutputOutcome materializeOneOutput(String factoryId, String planId,
+            ProcessSheetRowRequest one, Long userId, List<String> warnings) {
+        assertExternalFeedUnitSupported(one);
+        List<ResolvedEdge> edges = resolveEdges(factoryId, planId, one);
+        // 纯半成品(SFI)喂的非成品中间道 → 产出直接入 SFI 库 (同单产出路径 option F)
+        if (!one.isFinished() && isPureStockFed(one)) {
+            String anchor = postSfiOutput(factoryId, planId, one, warnings);
+            persistRow(factoryId, planId, one, null, anchor, ProcessSheetRow.STATUS_SAVED_SFI);
+            return new OneOutputOutcome(null, anchor, null);
+        }
+        String rawMaterialTypeId = resolveRawMaterialTypeId(one, edges);
+        StepEntry step = buildStepEntry(factoryId, one);
+        MaterializeContext ctx = new MaterializeContext(
+                factoryId,
+                one.isFinished() ? planId : null,
+                one.getProductTypeId(),
+                one.getBatchNumber(),
+                one.isFinished(),
+                clerkService.resolveLaborRate(factoryId, warnings),
+                clerkService.resolveWarehouseId(factoryId, WarehouseCodes.WH_WKS, warnings),
+                rawMaterialTypeId,
+                userId);
+        MaterializedBatch mat = clerkService.materializeBatch(ctx, List.of(step), edges, warnings);
+        persistRow(factoryId, planId, one, mat.getProductionBatchId(), mat.getBatchNumber(), "SAVED");
+        return new OneOutputOutcome(mat.getProductionBatchId(), mat.getBatchNumber(), mat.getRowTotalCost());
+    }
+
+    /**
+     * 把每条投入总量按各产出权重拆成 N 份, 最后一份 = 总量 − 前面之和 (吃余数, 保证 Σ 精确无精度漂移)。
+     * 返回 outer=每条投入, inner=该投入在各产出上的分量。
+     */
+    private List<List<BigDecimal>> splitAcrossOutputs(List<BigDecimal> totals,
+            List<BigDecimal> weights, BigDecimal totalWeight, int n) {
+        List<List<BigDecimal>> result = new ArrayList<>(totals.size());
+        for (BigDecimal total : totals) {
+            BigDecimal base = total == null ? BigDecimal.ZERO : total;
+            List<BigDecimal> parts = new ArrayList<>(n);
+            BigDecimal allocated = BigDecimal.ZERO;
+            for (int i = 0; i < n; i++) {
+                BigDecimal part;
+                if (i == n - 1) {
+                    part = base.subtract(allocated); // 余数, 保证 Σ == 原总量
+                } else {
+                    part = base.multiply(weights.get(i))
+                            .divide(totalWeight, 6, java.math.RoundingMode.HALF_UP);
+                    allocated = allocated.add(part);
+                }
+                parts.add(part);
+            }
+            result.add(parts);
+        }
+        return result;
+    }
+
+    /** 合成第 i 个产出的单产出行 (复制 base + 覆盖产出字段 + 使用拆分后的投入分量)。 */
+    private ProcessSheetRowRequest synthesizeOutputRequest(ProcessSheetRowRequest base,
+            ProcessSheetRowRequest.OutputLine o, int i,
+            List<List<BigDecimal>> rawSplit, List<List<BigDecimal>> upSplit) {
+        ProcessSheetRowRequest one = new ProcessSheetRowRequest();
+        one.setClientRowId(base.getClientRowId() + "#" + i);
+        one.setProcessCode(base.getProcessCode());
+        one.setProcessOrder(base.getProcessOrder());
+        one.setProcessName(base.getProcessName());
+        one.setProcessDate(base.getProcessDate());
+        one.setProductTypeId(o.getProductTypeId());
+        one.setBatchNumber(null); // 每产出独立系统批号
+        one.setFinished(o.isFinished());
+        one.setOutputQuantity(o.getQuantity());
+        String outUnit = firstNonBlank(o.getUnit(), base.getOutputUnit(), base.getUnit());
+        one.setUnit(outUnit);
+        one.setOutputUnit(outUnit);
+        one.setInputUnit(base.getInputUnit());
+        one.setProductWeight(o.getProductWeight());
+        one.setPotCount(base.getPotCount());
+        one.setSeasoningStep(base.isSeasoningStep());
+        one.setLaborSegments(base.getLaborSegments());
+        one.setCustomFields(base.getCustomFields());
+        if (base.getRawMaterialInputs() != null) {
+            List<ProcessSheetRowRequest.RawInput> raws = new ArrayList<>();
+            for (int k = 0; k < base.getRawMaterialInputs().size(); k++) {
+                ProcessSheetRowRequest.RawInput br = base.getRawMaterialInputs().get(k);
+                ProcessSheetRowRequest.RawInput nr = new ProcessSheetRowRequest.RawInput();
+                nr.setMaterialBatchId(br.getMaterialBatchId());
+                nr.setQuantity(rawSplit.get(k).get(i));
+                raws.add(nr);
+            }
+            one.setRawMaterialInputs(raws);
+        }
+        if (base.getUpstreamSources() != null) {
+            List<ProcessSheetRowRequest.UpstreamRef> ups = new ArrayList<>();
+            for (int m = 0; m < base.getUpstreamSources().size(); m++) {
+                ProcessSheetRowRequest.UpstreamRef bu = base.getUpstreamSources().get(m);
+                ProcessSheetRowRequest.UpstreamRef nu = new ProcessSheetRowRequest.UpstreamRef();
+                nu.setSourceBatchNumber(bu.getSourceBatchNumber());
+                nu.setFeedQuantityKg(upSplit.get(m).get(i));
+                nu.setSemiFinished(bu.isSemiFinished());
+                nu.setFinishedGoods(bu.isFinishedGoods());
+                ups.add(nu);
+            }
+            one.setUpstreamSources(ups);
+        }
+        return one;
+    }
+
+    /**
+     * 2B.2 B3: 多产出逐产出对齐 workflow 端口 (finished 类型 + 单位)。workflow 计划才校验;
+     * legacy/未注入/该道不在图中 → 放行。产出按 workflowPortId 匹配端口 (缺则按序)。
+     */
+    private void validateMultiOutputAgainstWorkflow(String factoryId, String planId,
+            ProcessSheetRowRequest req) {
+        if (workflowClerkSheetService == null) {
+            return;
+        }
+        com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO config;
+        try {
+            config = workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId);
+        } catch (BusinessException be) {
+            throw be;
+        } catch (Exception e) {
+            log.warn("2B.2 多产出 workflow 校验读取配置失败, 跳过 (不阻断): planId={}, err={}",
+                    planId, e.getMessage());
+            return;
+        }
+        if (config == null || config.getProcesses() == null) {
+            return; // legacy
+        }
+        com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.ProcessDescriptor desc =
+                config.getProcesses().stream()
+                        .filter(p -> p.getProcessOrder() != null
+                                && p.getProcessOrder().equals(req.getProcessOrder()))
+                        .findFirst()
+                        .orElse(null);
+        if (desc == null || desc.getOutputs() == null || desc.getOutputs().isEmpty()) {
+            return; // 该道不在 workflow 图中 (不硬阻断)
+        }
+        Map<String, com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor> byPortId =
+                new HashMap<>();
+        for (com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor p : desc.getOutputs()) {
+            if (p.getWorkflowPortId() != null) {
+                byPortId.put(p.getWorkflowPortId(), p);
+            }
+        }
+        List<ProcessSheetRowRequest.OutputLine> outs = req.getOutputs();
+        for (int i = 0; i < outs.size(); i++) {
+            ProcessSheetRowRequest.OutputLine o = outs.get(i);
+            com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor port =
+                    o.getWorkflowPortId() != null ? byPortId.get(o.getWorkflowPortId())
+                            : (i < desc.getOutputs().size() ? desc.getOutputs().get(i) : null);
+            if (port == null) {
+                continue; // 无法定位端口 → 不硬阻断 (MVP, 同单产出 B3 宽松)
+            }
+            boolean expectFinished = Boolean.TRUE.equals(port.getFinished());
+            if (o.isFinished() != expectFinished) {
+                throw new BusinessException(409, "产出「"
+                        + (port.getMaterialName() != null ? port.getMaterialName() : "")
+                        + "」应为" + (expectFinished ? "成品" : "半成品") + ", 当前产出类型不符")
+                        .withCode("WORKFLOW_ROW_OUTPUT_KIND_MISMATCH")
+                        .withHint("请按 Workflow 配置的产出类型录入");
+            }
+            String expectUnit = port.getUnit();
+            String actualUnit = firstNonBlank(o.getUnit(), req.getUnit());
+            if (expectUnit != null && !expectUnit.isBlank()
+                    && actualUnit != null && !actualUnit.isBlank()
+                    && !expectUnit.equals(actualUnit)) {
+                throw new BusinessException(409, "产出「"
+                        + (port.getMaterialName() != null ? port.getMaterialName() : "")
+                        + "」单位应为「" + expectUnit + "」, 当前为「" + actualUnit + "」")
+                        .withCode("WORKFLOW_ROW_OUTPUT_UNIT_MISMATCH")
+                        .withHint("请按 Workflow 配置的单位录入产出");
+            }
         }
     }
 
