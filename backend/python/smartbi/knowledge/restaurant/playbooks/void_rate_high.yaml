@@ -1,0 +1,77 @@
+# 撤单率偏高 — 操作建议手册
+
+diagnosis_code: void_rate_high
+trigger_metric: void_rate
+trigger_condition: "actual > range_high"
+display_name: "撤单率偏高"
+
+severity_levels:
+  moderate:
+    condition: "actual - range_high <= 3"
+    label: "略高"
+  severe:
+    condition: "actual - range_high > 3"
+    label: "严重偏高(流程/培训问题)"
+
+action_plans:
+  - id: 1
+    name: "撤单原因盘点"
+    priority: "P0"
+    actions:
+      - "按撤单原因分类统计(点菜误操作/客人退菜/开重桌/用户申请取消/客人有事走了)"
+      - "点菜误操作/开重桌占比高 → 收银/点菜培训 + 点单确认二次核对流程"
+      - "用户申请取消/客人退菜占比高 → 检查出餐速度/菜品质量/外卖平台履约时效"
+    expected_impact: "撤单率降低1-3个百分点"
+
+  - id: 2
+    name: "操作人稽核"
+    priority: "P0"
+    actions:
+      - "按操作人统计撤单次数, 定位撤单集中的班次/门店/收银员"
+      - "高频撤单操作人一对一沟通, 排查是否为流程不熟或异常操作"
+      - "撤单需二次确认(店长/收银主管)而非收银员自行操作, 降低误操作和虚报风险"
+    expected_impact: "异常撤单(误操作/虚报)减少, 撤单率降低0.5-1.5个百分点"
+
+  - id: 3
+    name: "外卖渠道撤单专项"
+    priority: "P1"
+    actions:
+      - "外卖平台撤单(京东外卖/美团外卖/饿了么)时间差通常较长(超时未处理订单)"
+      - "检查外卖接单-出餐-配送链路是否存在系统性延迟"
+      - "设置订单超时预警, 避免因超时撤单导致的客诉+平台处罚"
+    expected_impact: "外卖超时撤单减少, 平台评分/曝光量提升"
+
+# ── 结构化处方行动 ─────────────────────────
+rx_actions:
+  - id: VR-A01
+    title: 按撤单原因分类稽核, 锁定主因
+    description: 拉取近1个月撤单明细, 按撤单原因(点菜误操作/客退/开重桌/用户取消)分类计数, 找出占比最高的原因作为优先整改对象。
+    owner: 店长
+    timeframe: 1 周
+    priority: P0
+    effort: low
+    expected_impact: 明确撤单主因, 为后续整改提供依据
+
+  - id: VR-A02
+    title: 撤单二次确认流程
+    description: 撤单操作由收银员发起改为需店长/主管二次确认(尤其金额较大或撤单时间差较长的订单), 降低误操作和虚报空间。
+    owner: 店长
+    timeframe: 2 周
+    priority: P0
+    effort: medium
+    expected_impact: 撤单率降低0.5-1.5个百分点, 减少异常撤单风险
+
+  - id: VR-A03
+    title: 高频撤单操作人培训
+    description: 按操作人统计撤单次数排名, 对撤单次数明显高于同岗位平均值的收银员进行一对一培训/沟通, 排查流程理解问题。
+    owner: 运营经理
+    timeframe: 2 周
+    priority: P1
+    effort: medium
+    expected_impact: 培训后该操作人撤单次数下降
+
+sub_sector_notes:
+  火锅:
+    - "火锅门店高峰期点菜密集, 点菜误操作型撤单占比通常偏高, 建议点菜设备/流程优化优先"
+  快餐:
+    - "快餐外卖占比高, 撤单多来自平台超时/用户取消, 优先排查出餐速度与配送时效"

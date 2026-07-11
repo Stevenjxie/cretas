@@ -109,14 +109,71 @@
         </div>
         <el-empty v-else description="暂无堂食/外卖数据" :image-size="60" />
       </el-card>
+
+      <!-- 撤单率 (新增维度, greenfield) — KPI tile. 独立加载 (voidLoading/voidError),
+           void 500 不连累其它 3 卡. voidRate 为 null 时: 未上传→"未上传撤单数据",
+           样本不足→显示后端 note; 绝不伪造 0.00%。 -->
+      <el-card class="rgg-card" shadow="never">
+        <template #header>
+          <div class="rgg-card-header"><el-icon><WarningFilled /></el-icon><span>撤单率</span></div>
+        </template>
+        <el-skeleton v-if="voidLoading" :rows="3" animated />
+        <div v-else-if="voidError" class="rgg-void-inline-error">撤单数据加载失败: {{ voidError }}</div>
+        <div v-else-if="voidRate !== null" class="rgg-void-kpi">
+          <div class="rgg-void-rate">
+            <span class="rgg-void-rate-val">{{ formatPct(voidRate) }}</span>
+            <span class="rgg-void-rate-label">撤单率</span>
+          </div>
+          <div class="rgg-void-subs">
+            <div class="rgg-void-sub"><span class="rgg-void-sub-label">撤单数</span><span class="rgg-void-sub-val">{{ voidCount }}</span></div>
+            <div class="rgg-void-sub"><span class="rgg-void-sub-label">开单总数</span><span class="rgg-void-sub-val">{{ voidBillCount.toLocaleString() }}</span></div>
+          </div>
+        </div>
+        <!-- 未上传撤单数据 或 样本不足 — 诚实 empty-state, 不显示 0.00% -->
+        <el-empty
+          v-else
+          :description="voidDataAvailable ? (voidNote || '订单样本不足，暂不计算撤单率') : '未上传撤单数据'"
+          :image-size="60"
+        />
+      </el-card>
     </div>
+
+    <!-- 撤单稽核 (操作人 × 门店, 按每百单撤单率排序) — full-width row below the grid.
+         与 KPI 共用同一次 getVoidRate() 请求. 按 staff_id 分组(非同名合并) +
+         每百单撤单率(非撤单总数)排序, 避免冤枉授权量大的收银主管/店长。 -->
+    <el-card v-if="!voidError && voidBreakdown.length" class="rgg-audit-card" shadow="never">
+      <template #header>
+        <div class="rgg-card-header"><el-icon><Search /></el-icon><span>撤单稽核 · 操作人 Top {{ voidBreakdown.length }} (按每百单撤单率)</span></div>
+      </template>
+      <el-skeleton v-if="voidLoading" :rows="4" animated />
+      <template v-else>
+        <el-table :data="voidBreakdown" size="small" stripe>
+          <el-table-column prop="staffName" label="操作人" width="140" />
+          <el-table-column prop="storeName" label="门店" min-width="140" show-overflow-tooltip />
+          <el-table-column label="主要原因" width="130">
+            <template #default="{ row }">
+              <span v-if="row.topReason">{{ row.topReason }}</span>
+              <span v-else class="rgg-void-unlabeled">未标注</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="voidCount" label="撤单次数" width="90" align="right" />
+          <el-table-column label="每百单撤单" width="110" align="right">
+            <template #default="{ row }">
+              <span v-if="row.voidsPer100Bills !== null">{{ formatPct(row.voidsPer100Bills) }}</span>
+              <span v-else class="rgg-void-unlabeled" title="该操作人无经手订单记录，无法计算率">—</span>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div class="rgg-void-caveat">{{ voidCaveat }}</div>
+      </template>
+    </el-card>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { Refresh, Sell, PieChart, KnifeFork, MagicStick, InfoFilled } from '@element-plus/icons-vue';
-import { getFinanceSummary, getChannelBreakdown, getOrderTypeMix } from '@/api/smartbi/gold';
+import { Refresh, Sell, PieChart, KnifeFork, MagicStick, InfoFilled, WarningFilled, Search } from '@element-plus/icons-vue';
+import { getFinanceSummary, getChannelBreakdown, getOrderTypeMix, getVoidRate } from '@/api/smartbi/gold';
 import { formatNumber } from '@/utils/format-number';
 import { buildRevenueInsight } from './revenueInsight';
 import type { ChartWithMeta } from './chartInsight';
@@ -144,6 +201,27 @@ const orderTypes = ref<Array<{ orderType: string; revenue: number | null; billCo
 // 前端必须诚实转述这个降级说明, 不能悄悄当精确值展示 (fool-proof-design 跨规则铁律)。
 const orderTypeEstimated = ref(false);
 const orderTypeEstimationNote = ref<string | null>(null);
+
+// 撤单率 / 撤单稽核 (新增维度, greenfield). void_count/void_rate/bill_count 皆非金额,
+// 不含 "revenue" 子串 → RBAC price-strip 不置空; voidRate 为 null 时(未上传/样本不足)
+// 显示诚实 empty-state 而非伪造 0%。独立于上方 3 卡加载 (MUST-FIX 2): void 500 只
+// 降级本区域, 不连累 finance/channel/order-type 卡。
+const voidLoading = ref(false);
+const voidError = ref('');
+const voidRate = ref<number | null>(null);
+const voidCount = ref(0);
+const voidBillCount = ref(0);
+const voidDataAvailable = ref(false);
+const voidNote = ref<string | null>(null);
+const voidBreakdown = ref<Array<{
+  staffName: string;
+  storeName: string;
+  voidCount: number;
+  billsHandled: number;
+  voidsPer100Bills: number | null;
+  topReason: string | null;
+}>>([]);
+const voidCaveat = ref('');
 
 const dateLabel = computed(() =>
   props.dateRange ? `${props.dateRange[0]} 至 ${props.dateRange[1]}` : '全部数据',
@@ -262,6 +340,11 @@ async function load() {
   const [startDate, endDate] = props.dateRange;
   const capturedFactoryId = props.factoryId;
   try {
+    // 撤单率 is a NEW dimension whose Gold table (agg_daily_void) may not exist
+    // yet if web-admin deploys before the Python migration runs → /void-rate 500s.
+    // It MUST NOT be in this Promise.all — a void 500 would reject the whole batch
+    // and blank the finance/channel/order-type cards too. Loaded separately below
+    // so a void failure degrades ONLY the void tile/table.
     const [fin, chan, mix] = await Promise.all([
       getFinanceSummary({ factoryId: capturedFactoryId, startDate, endDate, topNStores: 10 }),
       getChannelBreakdown({ factoryId: capturedFactoryId, startDate, endDate }),
@@ -279,6 +362,28 @@ async function load() {
     loadError.value = e instanceof Error ? e.message : '请求失败';
   } finally {
     loading.value = false;
+  }
+
+  // 撤单率/撤单稽核 — isolated so a 500 (e.g. migration not yet applied) degrades
+  // ONLY the void surface to an honest error state, leaving the 3 cards above intact.
+  voidLoading.value = true;
+  voidError.value = '';
+  try {
+    const voids = await getVoidRate({ factoryId: capturedFactoryId, startDate, endDate, topN: 8 });
+    voidRate.value = voids.voidRate ?? null;
+    voidCount.value = voids.voidCount ?? 0;
+    voidBillCount.value = voids.billCount ?? 0;
+    voidDataAvailable.value = voids.dataAvailable ?? false;
+    voidNote.value = voids.note ?? null;
+    voidBreakdown.value = voids.breakdown ?? [];
+    voidCaveat.value = voids.caveat ?? '';
+  } catch (e) {
+    voidError.value = e instanceof Error ? e.message : '撤单数据加载失败';
+    voidRate.value = null;
+    voidDataAvailable.value = false;
+    voidBreakdown.value = [];
+  } finally {
+    voidLoading.value = false;
   }
 }
 
@@ -329,6 +434,20 @@ watch(
 .rgg-rank-pct { width: 48px; text-align: right; color: #606266; flex-shrink: 0; }
 .rgg-rank-val { width: 96px; text-align: right; font-weight: 600; color: #303133; flex-shrink: 0; }
 .rgg-rank-bills { width: 56px; text-align: right; color: #909399; font-size: 12px; flex-shrink: 0; }
+/* 撤单率 KPI tile */
+.rgg-void-kpi { display: flex; flex-direction: column; gap: 14px; }
+.rgg-void-rate { display: flex; align-items: baseline; gap: 8px; }
+.rgg-void-rate-val { font-size: 30px; font-weight: 700; color: #e6a23c; }
+.rgg-void-rate-label { font-size: 13px; color: #909399; }
+.rgg-void-subs { display: flex; gap: 24px; }
+.rgg-void-sub { display: flex; flex-direction: column; gap: 2px; }
+.rgg-void-sub-label { font-size: 12px; color: #909399; }
+.rgg-void-sub-val { font-size: 16px; font-weight: 600; color: #303133; }
+.rgg-void-inline-error { color: #f56c6c; font-size: 13px; padding: 8px 0; }
+/* 撤单稽核 full-width table */
+.rgg-audit-card { margin-top: 16px; }
+.rgg-void-unlabeled { color: #909399; }
+.rgg-void-caveat { margin-top: 8px; font-size: 12px; color: #909399; line-height: 1.5; }
 .rgg-est-note {
   display: flex;
   align-items: flex-start;
