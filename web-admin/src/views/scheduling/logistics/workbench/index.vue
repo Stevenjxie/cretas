@@ -131,6 +131,14 @@ async function next(): Promise<void> {
 
 <template>
   <main class="workbench-page">
+    <div v-if="state.analyzing.value" data-testid="ai-analyzing" class="ai-analyzing-overlay">
+      <div class="ai-analyzing-card">
+        <div class="ai-spark">🧠</div>
+        <p class="ai-title">AI 智能分析排班中…</p>
+        <p class="ai-sub">正在综合门店位置、货量、车辆容量、司机区域与路线距离生成推荐方案</p>
+        <el-progress :percentage="state.analyzeProgress.value" :stroke-width="12" :duration="0" />
+      </div>
+    </div>
     <header class="page-header"><div><h1>配送排程</h1><p>按订单、路线、确认和导出完成当天排程。</p></div><el-tag v-if="state.batch.value" effect="plain" type="success">批次 {{ state.batch.value.batchNumber }}</el-tag></header>
     <LogisticsStepBar :active-step="state.activeStep.value" />
     <el-alert v-if="hasExceptions" data-testid="assignment-issue" title="需要处理" :description="exceptionDescription" type="warning" :closable="false" show-icon />
@@ -197,7 +205,7 @@ async function next(): Promise<void> {
 </template>
 
 <style scoped lang="scss">
-.workbench-page { display: grid; gap: 20px; max-width: 1440px; min-height: 100%; padding: 24px; margin: 0 auto; background: #f8fafc; }
+.workbench-page { display: grid; gap: 20px; max-width: 1440px; min-height: 100%; padding: 24px; margin: 0 auto; background: #f8fafc; } .ai-analyzing-overlay { position: fixed; inset: 0; z-index: 3000; display: grid; place-items: center; background: rgba(16, 24, 40, 0.55); backdrop-filter: blur(2px); } .ai-analyzing-card { width: min(460px, 90vw); padding: 32px 28px; text-align: center; background: #fff; border-radius: 16px; box-shadow: 0 12px 40px rgba(0,0,0,0.25); } .ai-spark { font-size: 40px; animation: ai-pulse 1.1s ease-in-out infinite; } @keyframes ai-pulse { 0%,100% { transform: scale(1); opacity: 0.85; } 50% { transform: scale(1.18); opacity: 1; } } .ai-title { margin: 12px 0 6px; color: #101828; font-size: 18px; font-weight: 750; } .ai-sub { margin: 0 0 18px; color: #667085; font-size: 13px; line-height: 1.5; }
 .page-header, .map-heading, .action-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; } h1,h2 { margin: 0; color: #101828; } .page-header p, .map-heading p { margin: 6px 0 0; color: #667085; } .map-step { display: grid; gap: 16px; } .map-heading label { display: grid; grid-template-columns: auto minmax(150px, 260px); align-items: center; gap: 12px; color: #344054; font-size: 14px; font-weight: 650; } .map-controls { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; } .map-heading .opt-mode { grid-template-columns: auto auto; } .route-settings { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding: 12px 16px; background: #f4f6f9; border: 1px solid #edf2f7; border-radius: 10px; } .route-settings .settings-title { color: #101828; font-weight: 700; font-size: 14px; } .route-settings label { display: grid; grid-template-columns: auto auto; align-items: center; gap: 10px; color: #344054; font-size: 14px; font-weight: 650; } .route-settings .load-ctl { grid-template-columns: auto minmax(120px, 200px); } .route-settings .generate-button { margin-left: auto; padding: 8px 16px; } .generate-button, .next-button { width: fit-content; padding: 10px 18px; color: #fff; font: inherit; font-weight: 650; background: #1b65a8; border: 0; border-radius: 6px; cursor: pointer; } .action-bar { position: sticky; bottom: 0; z-index: 20; padding: 14px 0; background: linear-gradient(to bottom, transparent, #f8fafc 28%); }
 .unresolved-panel { display: grid; gap: 8px; padding: 16px 20px; background: #fffaeb; border: 1px solid #fef0c7; border-radius: 10px; } .unresolved-panel strong { color: #b54708; } .unresolved-panel ul { display: grid; gap: 4px; margin: 0; padding-left: 20px; color: #93370d; font-size: 13px; } .unresolved-panel a { width: fit-content; color: #1b65a8; font-weight: 650; }
 @media (max-width: 720px) { .workbench-page { padding: 16px; } .page-header,.map-heading { align-items: flex-start; flex-direction: column; } .map-heading label { width: 100%; } }

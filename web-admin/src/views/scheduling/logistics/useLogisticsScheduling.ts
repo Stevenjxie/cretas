@@ -197,6 +197,9 @@ const planError = ref<string | null>(null);
 const targetLoadPct = ref(88);
 // 排线优化目标：路程最短(默认) / 时间最快
 const optimizeMode = ref<RouteOptimizeMode>('DISTANCE');
+// 「AI 分析排班中」进度动画状态（上传订单后生成路线时）
+const analyzing = ref(false);
+const analyzeProgress = ref(0);
 
 // 调度记录
 const planHistory = ref<PageResponse<LogisticsPlan> | null>(null);
@@ -452,14 +455,28 @@ async function generateRoutes(): Promise<void> {
   if (!batch.value) return;
   planLoading.value = true;
   planError.value = null;
+  // 「AI 分析排班中」进度动画 —— 上传订单后生成路线时给用户明确的智能分析反馈 (至少 2.5s)。
+  analyzing.value = true;
+  analyzeProgress.value = 0;
+  const startedAt = Date.now();
+  const MIN_MS = 2600;
+  const timer = window.setInterval(() => {
+    if (analyzeProgress.value < 92) analyzeProgress.value = Math.min(92, analyzeProgress.value + 4);
+  }, 90);
   try {
     const factoryId = requireFactoryId();
     const res = await apiGeneratePlan(factoryId, batch.value.id, targetLoadPct.value, optimizeMode.value);
+    const elapsed = Date.now() - startedAt;
+    if (elapsed < MIN_MS) await new Promise((r) => setTimeout(r, MIN_MS - elapsed));
+    analyzeProgress.value = 100;
+    await new Promise((r) => setTimeout(r, 280)); // 让 100% 停留片刻
     applyPlanSnapshot(res.data);
     activeStep.value = 'map';
   } catch (err) {
     planError.value = errorMessage(err);
   } finally {
+    window.clearInterval(timer);
+    analyzing.value = false;
     planLoading.value = false;
   }
 }
@@ -794,6 +811,8 @@ const state = {
   targetLoadPct,
   optimizeMode,
   setOptimizeMode,
+  analyzing,
+  analyzeProgress,
   scheduleResult,
   activeTrip,
   exportRows,
