@@ -7,6 +7,7 @@ Date: 2026-07-11 (Asia/Singapore)
 PASS. The product-process Workflow migration and configuration persistence path were verified on a real local PostgreSQL 17 instance.
 
 - PostgreSQL test result: **3 tests, 0 failures, 0 errors, 0 skipped** (`39.11 s`)
+- Datasource-target guard result: **5 tests, 0 failures, 0 errors, 0 skipped**
 - Environment gate result without opt-in: **3 tests, 3 skipped, 0 failures, 0 errors**
 - Product code changes required: **none**
 - Remote hosts, shared tenant databases, SSH, deploy, push, and merge: **not used**
@@ -30,6 +31,23 @@ Test class:
 `backend/java/cretas-api/src/test/java/com/cretas/aims/integration/ProductProcessWorkflowPostgresIntegrationTest.java`
 
 The test uses a real PostgreSQL datasource, actual `ProductProcessWorkflowRepository`, actual `ProductProcessWorkflowServiceImpl`, actual structural validator, actual controller, and `MockMvc`. Product ownership and publish catalog lookup are mocked so the test remains focused on Workflow configuration persistence rather than requiring the full product/work-process catalog fixture graph.
+
+Before Spring registers the datasource URL, `DisposablePostgresTargetGuard` parses and validates it. It permits only:
+
+- the exact `jdbc:postgresql` scheme;
+- host `localhost` or `127.0.0.1`;
+- one plain database path segment whose name starts with `cretas_workflow_verify_` and has a non-empty safe suffix;
+- an optional valid TCP port.
+
+It rejects remote/private-network hosts, IPv6, userinfo, query parameters, fragments, encoded paths, path traversal, extra path segments, a wrong database prefix, malformed URLs, and whitespace padding. Username remains configurable and nonblank for portability; isolation is enforced by the validated local URL and disposable database prefix.
+
+Pure guard test:
+
+```powershell
+mvn -q -Dtest=DisposablePostgresTargetGuardTest test
+```
+
+Observed result: `5` tests, `0` failures, `0` errors, `0` skipped.
 
 It is disabled unless this explicit opt-in is present:
 

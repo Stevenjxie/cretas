@@ -76,7 +76,9 @@ class ProductProcessWorkflowPostgresIntegrationTest {
 
     @DynamicPropertySource
     static void postgresProperties(DynamicPropertyRegistry registry) {
-        registry.add("spring.datasource.url", () -> requiredEnv("CRETAS_WORKFLOW_PG_URL"));
+        String safeUrl = DisposablePostgresTargetGuard.requireSafeUrl(
+                requiredEnv("CRETAS_WORKFLOW_PG_URL"));
+        registry.add("spring.datasource.url", () -> safeUrl);
         registry.add("spring.datasource.username", () -> requiredEnv("CRETAS_WORKFLOW_PG_USER"));
         registry.add("spring.datasource.password",
                 () -> System.getenv().getOrDefault("CRETAS_WORKFLOW_PG_PASSWORD", ""));
