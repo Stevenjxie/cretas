@@ -114,6 +114,8 @@ function toStoreOrderView(order: LogisticsDeliveryOrder): StoreOrder {
     volumeCbm: order.volumeCbm,
     window: formatWindow(order.windowStart, order.windowEnd),
     mapAnchor: point,
+    lng: order.longitude as number,
+    lat: order.latitude as number,
   };
 }
 

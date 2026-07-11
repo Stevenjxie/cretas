@@ -11,6 +11,9 @@ export interface StoreOrder {
   volumeCbm: number;
   window: string;
   mapAnchor: MapPoint;
+  /** 真实经纬度（高德地图底图用；SVG 示意图用 mapAnchor）。 */
+  lng: number;
+  lat: number;
 }
 
 export interface Vehicle {
