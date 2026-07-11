@@ -134,6 +134,36 @@ export interface VoidRate {
   caveat: string;
 }
 
+/** /api/smartbi/gold/zone-efficiency response (camelCased) — 区域坪效
+ * (in-store dining-zone revenue/efficiency). */
+export interface ZoneEfficiency {
+  factoryId: string;
+  startDate: string | null;
+  endDate: string | null;
+  // false = tenant has NO zone-sales data at all (未上传区域销售数据) —
+  // distinct from a genuine zero-revenue window. Card shows the honest
+  // empty state, not a fabricated 0.
+  dataAvailable: boolean;
+  note: string | null; // explains why there's no data, if applicable
+  // RBAC price-strip (backend smartbi_compat/_rbac_strip.py) nulls any leaf
+  // key whose name contains "revenue" for roles outside PRICE_VIEW_ROLES —
+  // this also matches "revenuePct" (substring match on the field name, not
+  // just the raw amount fields), so every revenue-named field here must be
+  // treated as nullable (mirrors OrderTypeMix's comment).
+  totalRevenue: number | null;
+  totalItemQty: number; // never money — not RBAC-stripped
+  zones: Array<{
+    zoneName: string; // 区域名称 — dining zone OR, for some real values, a delivery-channel label (see caveat)
+    revenue: number | null;
+    itemQty: number;
+    revenuePct: number | null; // 0-100; null when totalRevenue is 0
+  }>;
+  // Honest disclaimer: (1) this is a revenue/item_qty PROXY, not a true
+  // revenue-per-square-meter 坪效 (source has no floor-area column); (2)
+  // some zone_name values are delivery-channel labels, not physical space.
+  caveat: string;
+}
+
 export interface KpiSummary {
   factoryId: string;
   startDate: string;
@@ -258,6 +288,12 @@ export async function getVoidRate(args: DateRangeQuery & { topN?: number }): Pro
   return (await pythonFetch(`/api/smartbi/gold/void-rate?${_q(args)}`, {
     timeoutMs: PYTHON_LLM_TIMEOUT_MS,
   })) as VoidRate;
+}
+
+export async function getZoneEfficiency(args: DateRangeQuery & { topN?: number }): Promise<ZoneEfficiency> {
+  return (await pythonFetch(`/api/smartbi/gold/zone-efficiency?${_q(args)}`, {
+    timeoutMs: PYTHON_LLM_TIMEOUT_MS,
+  })) as ZoneEfficiency;
 }
 
 export async function getKpiSummary(args: OptionalDateRangeQuery): Promise<KpiSummary> {
