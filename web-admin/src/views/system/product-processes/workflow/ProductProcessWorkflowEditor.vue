@@ -1952,29 +1952,56 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
         productName: props.productName || identity.productTypeId,
         timestamp: nextGraphIdSeed(),
       });
-      // 用规格里的产出名/kind 覆盖首产出 Cell
-      const firstOut = step.outputs?.[0];
+      const outputs = Array.isArray(step.outputs) && step.outputs.length ? step.outputs : [{}];
+      // 首产出: 用规格覆盖 createProcessBranch 建的产出 Cell 名/kind
+      const firstOut = outputs[0];
       const outData = { ...toPlainWorkflowValue(branch.outputNode.data) } as Record<string, unknown>;
       if (firstOut?.name) outData.name = firstOut.name;
       if (firstOut?.kind === 'FINISHED_GOOD' || firstOut?.kind === 'SEMI_FINISHED') outData.kind = firstOut.kind;
-      nodes.push({
-        id: branch.processNode.id,
-        type: 'process',
-        position: branch.processNode.position,
-        data: { ...toPlainWorkflowValue(branch.processNode.data), kind: branch.processNode.kind },
-      });
       const outputNode: Node = {
         id: branch.outputNode.id,
         type: 'material',
         position: branch.outputNode.position,
         data: { ...outData, kind: String(outData.kind || branch.outputNode.kind) },
       };
-      nodes.push(outputNode);
+      // 收集 process 端口 (首产出端口来自 createProcessBranch, 多产出再追加)
+      const processData = {
+        ...toPlainWorkflowValue(branch.processNode.data),
+        kind: branch.processNode.kind,
+      } as ProcessNodeData & { kind: 'PROCESS' };
       edges.push(...branch.edges.map((edge) => ({
         ...edge,
         markerEnd: MarkerType.ArrowClosed,
         style: { stroke: '#1b65a8', strokeWidth: 2 },
       })));
+      // 多产出/分流: 其余产出各建一个物料 Cell + OUTPUT 端口 + 边 (复用 attachOutputBinding 端口结构)
+      outputs.slice(1).forEach((extra, extraIdx) => {
+        const kind = extra?.kind === 'FINISHED_GOOD' ? 'FINISHED_GOOD' : 'SEMI_FINISHED';
+        const unit = extra?.unit || String(processData.outputUnit || 'kg');
+        const matId = `material:output:${nextGraphIdSeed()}`;
+        const portId = `output:${nextGraphIdSeed()}`;
+        nodes.push({
+          id: matId,
+          type: 'material',
+          position: { x: outputNode.position.x, y: outputNode.position.y + (extraIdx + 1) * 160 },
+          data: { kind, name: extra?.name || `产出 ${extraIdx + 2}`, skuId: '', skuCode: '待选择或现场创建 SKU', bound: false, baseUnit: unit },
+        });
+        processData.ports = [
+          ...processData.ports,
+          {
+            id: portId, direction: 'OUTPUT', materialNodeId: matId, materialKind: kind, unit,
+            ordinal: processData.ports.filter((p) => p.direction === 'OUTPUT').length,
+          },
+        ];
+        edges.push({
+          ...flowEdge(branch.processNode.id, portId, matId, 'input'),
+          markerEnd: MarkerType.ArrowClosed,
+          style: { stroke: '#1b65a8', strokeWidth: 2 },
+        });
+      });
+      nodes.push({ id: branch.processNode.id, type: 'process', position: branch.processNode.position, data: processData });
+      nodes.push(outputNode);
+      // 主链沿首产出继续 (多产出的其余分支是终端支流)
       prevMaterial = serializeFlowNode(outputNode);
     });
     flowNodes.value = nodes;
