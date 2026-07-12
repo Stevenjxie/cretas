@@ -21,7 +21,7 @@
  * web-admin/src/api/logistics.ts —— 不改 types.ts（避免与既有前端 fixture 类型churn），
  * 不接线到任何 .vue / useLogisticsDemoState.ts（下一阶段任务）。
  */
-import { get, post, put } from './request';
+import { get, post, put, del } from './request';
 import request from './request';
 import type { ApiResponse, PageResponse } from '@/types/api';
 import type { MapPoint } from '@/views/scheduling/logistics/types';
@@ -257,6 +257,47 @@ export function updateDriver(factoryId: string, driverId: string, driver: Partia
 /** PUT /vehicles/{vehicleId}/drivers — 整体替换该车辆的司机绑定集合（支持一车 2-3 个司机） */
 export function setVehicleDrivers(factoryId: string, vehicleId: string, bindings: LogisticsVehicleDriverBinding[]) {
   return put<LogisticsVehicle>(`/${factoryId}/logistics/vehicles/${vehicleId}/drivers`, { bindings });
+}
+
+// ==================== 按天可用性覆盖 ====================
+
+export type AvailabilityResourceType = 'DRIVER' | 'VEHICLE';
+
+/** 某司机/车辆在某一天的可用性覆盖 — 无记录=按固定资料默认可用；有记录则以此为准。 */
+export interface DailyAvailability {
+  id: string;
+  resourceType: AvailabilityResourceType;
+  resourceId: string;
+  availDate: string; // YYYY-MM-DD
+  available: boolean;
+  shiftStart: string | null;
+  shiftEnd: string | null;
+  version: number;
+}
+
+/** upsert 请求体（完整状态替换，非 partial patch）。 */
+export interface DailyAvailabilityUpsert {
+  resourceType: AvailabilityResourceType;
+  resourceId: string;
+  availDate: string;
+  available: boolean;
+  shiftStart?: string | null;
+  shiftEnd?: string | null;
+}
+
+/** GET /logistics/daily-availability?date= — 只返回该日期存在覆盖的记录。 */
+export function listDailyAvailability(factoryId: string, date: string) {
+  return get<DailyAvailability[]>(`/${factoryId}/logistics/daily-availability`, { params: { date } });
+}
+
+/** PUT /logistics/daily-availability — upsert（按 resourceType+resourceId+availDate 幂等）。 */
+export function upsertDailyAvailability(factoryId: string, body: DailyAvailabilityUpsert) {
+  return put<DailyAvailability>(`/${factoryId}/logistics/daily-availability`, body);
+}
+
+/** DELETE /logistics/daily-availability/{id} — 软删除，恢复该资源当天默认可用。 */
+export function deleteDailyAvailability(factoryId: string, id: string) {
+  return del<void>(`/${factoryId}/logistics/daily-availability/${id}`);
 }
 
 // ==================== 排线计划 ====================

@@ -2,6 +2,8 @@
 import { computed, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import type {
+  AvailabilityResourceType,
+  DailyAvailability,
   DriverInput,
   LogisticsDriver,
   LogisticsVehicle,
@@ -10,6 +12,12 @@ import type {
   VehicleProfileUpdate,
   VehicleSourceCode,
 } from '@/api/logistics';
+import {
+  deleteDailyAvailability,
+  listDailyAvailability,
+  upsertDailyAvailability,
+} from '@/api/logistics';
+import { useAuthStore } from '@/store/modules/auth';
 import { useLogisticsScheduling } from '../useLogisticsScheduling';
 
 type ResourceFilter = 'all' | 'owned' | 'outsourced';
@@ -23,8 +31,9 @@ const filteredVehicles = computed(() => state.vehicles.value.filter((vehicle) =>
   || (filter.value === 'outsourced' && vehicle.source === 'OUTSOURCED')
 )));
 
-onMounted(() => {
-  void state.loadResources();
+onMounted(async () => {
+  await state.loadResources();
+  await loadAvailability(); // 依赖 vehicles/drivers 已加载 → 合并覆盖生成可编辑行
 });
 
 function sourceLabel(source: VehicleSourceCode): string {
@@ -170,6 +179,154 @@ async function saveDriverForm(): Promise<void> {
     driverDialogVisible.value = false;
   }
 }
+
+// ==================== 按天可用性录入 ====================
+// 排班前，调度员在此标记「今天谁请假 / 哪辆车维修 / 谁临时换班次」。
+// 排线算法会读取当天覆盖：不可用的司机/车辆不进算法，班次覆盖替换固定时段。
+// 无记录 = 按固定资料默认可用（引入本功能前行为完全不变）。
+
+const authStore = useAuthStore();
+
+/** YYYY-MM-DD（本地时区），默认今天。 */
+function todayStr(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+const availDate = ref<string>(todayStr());
+const availLoading = ref(false);
+/** 当天的覆盖记录，按 `${resourceType}:${resourceId}` 索引。 */
+const overrideMap = ref<Record<string, DailyAvailability>>({});
+
+interface AvailRow {
+  key: string;
+  resourceType: AvailabilityResourceType;
+  resourceId: string;
+  name: string;
+  sub: string; // 车牌下的车厢 / 司机的电话
+  fixedShift: string; // 固定资料时段（作为默认参考）
+  available: boolean;
+  shiftStart: string; // 覆盖班次起（空=用固定）
+  shiftEnd: string;
+  overrideId: string | null; // 有覆盖记录时的记录 id（用于删除恢复默认）
+}
+
+const availRows = ref<AvailRow[]>([]);
+
+function fmtFixedShift(from?: string | null, to?: string | null): string {
+  if (from && to) return `${from}–${to}`;
+  if (from) return `${from}起`;
+  if (to) return `至${to}`;
+  return '全天';
+}
+
+/** 合并「所有车辆 + 所有司机」与当天覆盖记录，生成一行一资源的可编辑视图。 */
+function rebuildAvailRows(): void {
+  const rows: AvailRow[] = [];
+  for (const v of state.vehicles.value) {
+    const key = `VEHICLE:${v.id}`;
+    const ov = overrideMap.value[key];
+    rows.push({
+      key,
+      resourceType: 'VEHICLE',
+      resourceId: v.id,
+      name: v.plateNumber,
+      sub: v.bodyType || `${v.capacityCbm} m³`,
+      fixedShift: fmtFixedShift(v.availableFrom, v.availableTo),
+      available: ov ? ov.available : true,
+      shiftStart: ov?.shiftStart ?? '',
+      shiftEnd: ov?.shiftEnd ?? '',
+      overrideId: ov?.id ?? null,
+    });
+  }
+  for (const d of state.drivers.value) {
+    const key = `DRIVER:${d.id}`;
+    const ov = overrideMap.value[key];
+    rows.push({
+      key,
+      resourceType: 'DRIVER',
+      resourceId: d.id,
+      name: d.name,
+      sub: d.phone || '—',
+      fixedShift: fmtFixedShift(d.availableFrom, d.availableTo),
+      available: ov ? ov.available : true,
+      shiftStart: ov?.shiftStart ?? '',
+      shiftEnd: ov?.shiftEnd ?? '',
+      overrideId: ov?.id ?? null,
+    });
+  }
+  availRows.value = rows;
+}
+
+async function loadAvailability(): Promise<void> {
+  const factoryId = authStore.factoryId;
+  if (!factoryId) return;
+  availLoading.value = true;
+  try {
+    const res = await listDailyAvailability(factoryId, availDate.value);
+    const map: Record<string, DailyAvailability> = {};
+    for (const r of res.data ?? []) {
+      map[`${r.resourceType}:${r.resourceId}`] = r;
+    }
+    overrideMap.value = map;
+    rebuildAvailRows();
+  } catch {
+    ElMessage.error('加载当天可用性失败');
+  } finally {
+    availLoading.value = false;
+  }
+}
+
+/** 标记「请假/维修」或恢复可用 —— 立即写后端，让排班读到最新状态。 */
+async function toggleAvailable(row: AvailRow, available: boolean): Promise<void> {
+  const factoryId = authStore.factoryId;
+  if (!factoryId) return;
+  try {
+    // 恢复可用 且 无班次覆盖 → 删除覆盖记录，回归默认（保持表干净）。
+    if (available && !row.shiftStart && !row.shiftEnd && row.overrideId) {
+      await deleteDailyAvailability(factoryId, row.overrideId);
+      ElMessage.success(`${row.name} 已恢复默认可用`);
+    } else {
+      await upsertDailyAvailability(factoryId, {
+        resourceType: row.resourceType,
+        resourceId: row.resourceId,
+        availDate: availDate.value,
+        available,
+        shiftStart: row.shiftStart || null,
+        shiftEnd: row.shiftEnd || null,
+      });
+      ElMessage.success(available ? `${row.name} 已标记可用` : `${row.name} 当天已标记不可用`);
+    }
+    await loadAvailability();
+  } catch {
+    ElMessage.error('保存失败，请重试');
+    await loadAvailability(); // 回滚 UI 到后端真实状态
+  }
+}
+
+/** 保存临时班次覆盖（起止时段任意一个填了即写覆盖）。 */
+async function saveShiftOverride(row: AvailRow): Promise<void> {
+  const factoryId = authStore.factoryId;
+  if (!factoryId) return;
+  try {
+    await upsertDailyAvailability(factoryId, {
+      resourceType: row.resourceType,
+      resourceId: row.resourceId,
+      availDate: availDate.value,
+      available: row.available,
+      shiftStart: row.shiftStart || null,
+      shiftEnd: row.shiftEnd || null,
+    });
+    ElMessage.success(`${row.name} 班次已更新`);
+    await loadAvailability();
+  } catch {
+    ElMessage.error('保存失败，请重试');
+    await loadAvailability();
+  }
+}
+
+const unavailableCount = computed(() => availRows.value.filter((r) => !r.available).length);
 </script>
 
 <template>
@@ -221,6 +378,65 @@ async function saveDriverForm(): Promise<void> {
         <el-table-column label="状态" min-width="90"><template #default="{ row }"><el-tag :type="row.active ? 'success' : 'info'" effect="plain">{{ row.active ? '启用' : '停用' }}</el-tag></template></el-table-column>
         <el-table-column label="操作" min-width="90" fixed="right">
           <template #default="{ row }"><el-button link type="primary" @click="openEditDriver(row)">编辑</el-button></template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
+    <el-card shadow="never" class="avail-card">
+      <header class="section-header">
+        <div>
+          <h2>按天可用性</h2>
+          <p class="section-hint">
+            排班前标记「今天谁请假 / 哪辆车维修 / 谁临时换班次」。
+            不可用的司机/车辆当天不进排线；未标记的按固定资料默认可用。
+          </p>
+        </div>
+        <div class="avail-toolbar">
+          <el-date-picker
+            v-model="availDate"
+            type="date"
+            value-format="YYYY-MM-DD"
+            :clearable="false"
+            placeholder="选择日期"
+            style="width: 150px"
+            @change="loadAvailability"
+          />
+          <el-tag v-if="unavailableCount" type="warning" effect="plain">当天 {{ unavailableCount }} 个不可用</el-tag>
+          <el-tag v-else type="success" effect="plain">当天全部可用</el-tag>
+        </div>
+      </header>
+      <el-table v-loading="availLoading" :data="availRows" stripe row-key="key" size="small">
+        <el-table-column label="类型" min-width="70">
+          <template #default="{ row }">
+            <el-tag :type="row.resourceType === 'VEHICLE' ? 'primary' : 'info'" effect="plain" size="small">
+              {{ row.resourceType === 'VEHICLE' ? '车辆' : '司机' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="名称" min-width="120">
+          <template #default="{ row }"><strong>{{ row.name }}</strong><span class="row-sub">{{ row.sub }}</span></template>
+        </el-table-column>
+        <el-table-column label="固定时段" min-width="100"><template #default="{ row }">{{ row.fixedShift }}</template></el-table-column>
+        <el-table-column label="当天可用" min-width="120">
+          <template #default="{ row }">
+            <el-switch
+              v-model="row.available"
+              active-text="可用"
+              inactive-text="请假/维修"
+              inline-prompt
+              @change="(val: boolean) => toggleAvailable(row, val)"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column label="临时班次（可选，覆盖固定时段）" min-width="220">
+          <template #default="{ row }">
+            <div class="shift-cell" :class="{ disabled: !row.available }">
+              <el-input v-model="row.shiftStart" placeholder="起 08:00" :disabled="!row.available" style="width: 84px" />
+              <span>至</span>
+              <el-input v-model="row.shiftEnd" placeholder="止 18:00" :disabled="!row.available" style="width: 84px" />
+              <el-button link type="primary" :disabled="!row.available" @click="saveShiftOverride(row)">保存班次</el-button>
+            </div>
+          </template>
         </el-table-column>
       </el-table>
     </el-card>
@@ -306,6 +522,12 @@ async function saveDriverForm(): Promise<void> {
 .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }.page-header h1 { margin: 0; color: #101828; font-size: 24px; }.page-header p { margin: 8px 0 0; color: #667085; }
 .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; } .section-header h2 { margin: 0; color: #101828; font-size: 18px; }
 .dialog-hint { margin: 0 0 12px; color: #667085; font-size: 13px; }
+.section-hint { margin: 6px 0 0; max-width: 640px; color: #667085; font-size: 12.5px; line-height: 1.5; }
+.avail-toolbar { display: flex; align-items: center; gap: 12px; }
+.avail-card .section-header { align-items: flex-start; }
+.row-sub { margin-left: 8px; color: #98a2b3; font-size: 12px; }
+.shift-cell { display: flex; align-items: center; gap: 6px; }
+.shift-cell.disabled { opacity: 0.5; }
 .binding-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .time-range { display: flex; align-items: center; gap: 8px; }
 @media (max-width: 720px) { .support-page { padding: 16px; }.page-header { flex-direction: column; } }
