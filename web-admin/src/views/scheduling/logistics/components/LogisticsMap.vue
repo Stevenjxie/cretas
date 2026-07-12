@@ -272,11 +272,13 @@ function routeStyle(index: number): Record<string, string> {
 
 <template>
   <div class="map-stage" :style="useAmap ? 'aspect-ratio: 16 / 10' : 'aspect-ratio: 1917 / 1165'">
-    <div v-if="useAmap" ref="mapEl" data-testid="amap-el" class="amap-el" />
-    <div v-if="useAmap && !mapReady" class="amap-loading" data-testid="amap-loading" aria-hidden="true">
-      <span class="amap-spinner" />
-      <span class="amap-loading-txt">地图加载中…</span>
-    </div>
+    <template v-if="useAmap">
+      <div ref="mapEl" data-testid="amap-el" class="amap-el" />
+      <div v-if="!mapReady" class="amap-loading" data-testid="amap-loading" aria-hidden="true">
+        <span class="amap-spinner" />
+        <span class="amap-loading-txt">地图加载中…</span>
+      </div>
+    </template>
 
     <template v-else>
       <img
