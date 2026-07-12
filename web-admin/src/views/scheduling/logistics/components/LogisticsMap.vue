@@ -34,10 +34,14 @@ const DEPOT_LNGLAT: [number, number] = [120.62, 31.3];
 // 高德真实地图（有 VITE_AMAP_JS_KEY 时启用；加载失败回落下方 SVG 示意图）
 // ============================================================
 const useAmap = ref(Boolean(getAmapKey()));
+// 底图瓦片就绪前显示「地图加载中…」遮罩，避免展示空白网格看着像坏了。
+const mapReady = ref(false);
 const mapEl = ref<HTMLDivElement>();
 let amap: AMapNamespace | null = null;
 let map: AMapInstance | null = null;
 let overlays: AMapOverlay[] = [];
+let ro: ResizeObserver | null = null;
+let readyTimer: number | undefined;
 // 每次重绘自增；异步驾车路径回调用它判断自己是否已过期（避免旧回调把线画到新一轮上）。
 let renderToken = 0;
 
@@ -200,7 +204,16 @@ onMounted(async () => {
       center: DEPOT_LNGLAT,
       viewMode: '2D',
       lang: 'zh_cn',
+      resizeEnable: true,
     });
+    // 瓦片渲染完成 → 撤 loading 遮罩。
+    map.on('complete', () => { mapReady.value = true; });
+    // 容器尺寸变化（两栏 flex 布局在挂载后才定高 / 视图切换）后强制 resize，
+    // 修复「构造时容器高度为 0 → 瓦片一直不画 → 白色网格」的经典高德 bug。
+    ro = new ResizeObserver(() => { if (map) map.resize(); });
+    ro.observe(mapEl.value);
+    // 兜底：极端情况下 complete 未触发（缓存等），4s 后也撤遮罩，避免永久转圈。
+    readyTimer = window.setTimeout(() => { mapReady.value = true; }, 4000);
     renderOverlays();
     // 基础地图已出来后，后台懒加载驾车规划插件（不阻塞首屏）——供极少数缺 roadPath 车次实时补线兜底。
     void ensureDriving().then((ok) => { if (ok && map) renderOverlays(); });
@@ -223,6 +236,8 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  if (ro) { ro.disconnect(); ro = null; }
+  if (readyTimer) { window.clearTimeout(readyTimer); readyTimer = undefined; }
   clearOverlays();
   if (map) {
     map.destroy();
@@ -258,6 +273,10 @@ function routeStyle(index: number): Record<string, string> {
 <template>
   <div class="map-stage" :style="useAmap ? 'aspect-ratio: 16 / 10' : 'aspect-ratio: 1917 / 1165'">
     <div v-if="useAmap" ref="mapEl" data-testid="amap-el" class="amap-el" />
+    <div v-if="useAmap && !mapReady" class="amap-loading" data-testid="amap-loading" aria-hidden="true">
+      <span class="amap-spinner" />
+      <span class="amap-loading-txt">地图加载中…</span>
+    </div>
 
     <template v-else>
       <img
@@ -364,6 +383,38 @@ function routeStyle(index: number): Record<string, string> {
   inset: 0;
   width: 100%;
   height: 100%;
+}
+
+.amap-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: #f4f6f9;
+  color: #667085;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.amap-spinner {
+  width: 26px;
+  height: 26px;
+  border: 3px solid rgba(27, 101, 168, 0.2);
+  border-top-color: #1b65a8;
+  border-radius: 50%;
+  animation: amap-spin 0.8s linear infinite;
+}
+
+@keyframes amap-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .amap-spinner { animation-duration: 1.6s; }
 }
 
 .base-map,

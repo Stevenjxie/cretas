@@ -48,6 +48,8 @@ export interface AMapInstance {
   add(overlays: AMapOverlay[]): void;
   remove(overlays: AMapOverlay[]): void;
   setFitView(overlays: AMapOverlay[] | null, immediately?: boolean, avoid?: number[]): void;
+  on(event: string, handler: () => void): void;
+  resize(): void;
   destroy(): void;
 }
 
