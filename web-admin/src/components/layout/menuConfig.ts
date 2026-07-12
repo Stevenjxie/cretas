@@ -255,6 +255,8 @@ const rawMenuConfig: MenuItem[] = [
         hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
       { path: '/scheduling/logistics/resources', title: '车辆与司机', icon: '', module: 'scheduling',
         hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
+      { path: '/scheduling/logistics/stores', title: '门店库', icon: '', module: 'scheduling',
+        hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
       { path: '/scheduling/overview', title: '调度中心', icon: '', module: 'scheduling', groupLabel: '工厂智能调度',
         hideForFactoryTypes: ['LOGISTICS'] },
       { path: '/scheduling/plans', title: '调度计划', icon: '', module: 'scheduling',

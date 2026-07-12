@@ -2,6 +2,8 @@
 import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { vReveal } from '@/composables/useReveal';
+import { listStoreMaster } from '@/api/logistics';
+import { useAuthStore } from '@/store/modules/auth';
 import type { ManualOrderRow, OrderBatch, PreviewResult } from '@/api/logistics';
 
 const props = defineProps<{
@@ -46,12 +48,16 @@ function resetFileInput(): void {
 // 防呆: 门店名称 + 配送地址必填; 件数/箱数/重量/体积至少填一项帮助配载(不强制).
 // 提交前逐行本地校验 → 高亮缺失; 后端再次校验并逐行返回错误(与文件导入同一套).
 
+// 字段与 Excel 导入模板一一对应（业务日期在表格上方单选，经纬度由地理编码补全不手填）。
 interface ManualRowForm {
+  storeCode: string; // 订单号（Excel 模板同名列）——留空后端自动生成
   storeName: string;
   address: string;
   pieces: string;
+  boxes: string;
   weightKg: string;
   volumeCbm: string;
+  areaCode: string; // 区域
   windowStart: string;
   windowEnd: string;
 }
@@ -62,6 +68,29 @@ const FIELD_LABELS: Record<string, string> = {
   storeName: '门店名称', address: '配送地址', pieces: '件数', weightKg: '重量kg', volumeCbm: '体积m³',
 };
 
+// 门店名自动匹配 —— 输入即从门店主数据(记忆)里推测门店，选中后自动带出地址/区域(可再改)，
+// 坐标由后端按门店名从主数据复用，不再重复地理编码 (客户"录一次"核心诉求)。
+interface StoreSuggestion { storeName: string; address: string | null; areaCode: string | null; }
+const authStore = useAuthStore();
+
+async function queryStoreSuggestions(query: string, cb: (results: StoreSuggestion[]) => void): Promise<void> {
+  const factoryId = authStore.factoryId;
+  const kw = (query || '').trim();
+  if (!factoryId || kw.length < 1) { cb([]); return; }
+  try {
+    const res = await listStoreMaster(factoryId, { page: 0, size: 8, keyword: kw });
+    cb((res.data?.content ?? []).map((s) => ({ storeName: s.storeName, address: s.address, areaCode: s.areaCode })));
+  } catch {
+    cb([]); // 记忆库不可用时静默不打断录入
+  }
+}
+
+/** 选中历史门店 → 自动带出地址/区域(覆盖当前值, 仍可手工再改)。坐标由后端按名复用。 */
+function onStorePicked(row: ManualRowForm, item: StoreSuggestion): void {
+  if (item.address) row.address = item.address;
+  if (item.areaCode) row.areaCode = item.areaCode;
+}
+
 function todayStr(): string {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, '0');
@@ -69,7 +98,7 @@ function todayStr(): string {
 }
 
 function emptyRow(): ManualRowForm {
-  return { storeName: '', address: '', pieces: '', weightKg: '', volumeCbm: '', windowStart: '', windowEnd: '' };
+  return { storeCode: '', storeName: '', address: '', pieces: '', boxes: '', weightKg: '', volumeCbm: '', areaCode: '', windowStart: '', windowEnd: '' };
 }
 
 const manualDate = ref<string>(todayStr());
@@ -86,8 +115,9 @@ function removeManualRow(index: number): void {
 
 /** 一行是否"开始填了"(任一字段非空) —— 用于判定该行是否要提交/校验。 */
 function rowTouched(r: ManualRowForm): boolean {
-  return Boolean(r.storeName.trim() || r.address.trim() || r.pieces.trim() || r.weightKg.trim()
-    || r.volumeCbm.trim() || r.windowStart.trim() || r.windowEnd.trim());
+  return Boolean(r.storeCode.trim() || r.storeName.trim() || r.address.trim() || r.pieces.trim()
+    || r.boxes.trim() || r.weightKg.trim() || r.volumeCbm.trim() || r.areaCode.trim()
+    || r.windowStart.trim() || r.windowEnd.trim());
 }
 
 /** 已填行里，缺少任一必填字段的行号(1-based) —— 防呆预校验。 */
@@ -123,12 +153,15 @@ function submitManual(): void {
     return;
   }
   const rows: ManualOrderRow[] = manualRows.value.filter(rowTouched).map((r) => ({
-    // 订单号(storeCode)留空 → 后端防呆自动生成, 调度员不需要凭空编号。
+    // 订单号(storeCode)留空 → 后端防呆自动生成; 箱数留空 → 后端默认 0。字段与 Excel 模板一致。
+    storeCode: r.storeCode.trim() || null,
     storeName: r.storeName.trim(),
     address: r.address.trim(),
     pieces: r.pieces.trim() || null,
+    boxes: r.boxes.trim() || null,
     weightKg: r.weightKg.trim() || null,
     volumeCbm: r.volumeCbm.trim() || null,
+    areaCode: r.areaCode.trim() || null,
     windowStart: r.windowStart.trim() || null,
     windowEnd: r.windowEnd.trim() || null,
   }));
@@ -211,14 +244,30 @@ watch(() => props.batch?.id, (id, prev) => {
           placeholder="选择日期"
           style="width: 150px"
         />
-        <span class="manual-hint">门店名称、配送地址、件数、重量、体积必填（订单号系统自动生成，无需填写）。</span>
+        <span class="manual-hint">字段与 Excel 模板一致。门店名称、配送地址、件数、重量、体积必填；订单号留空自动生成，箱数留空按 0。</span>
       </div>
 
       <el-table :data="manualRows" size="small" border class="manual-table">
-        <el-table-column type="index" label="#" width="46" />
-        <el-table-column label="门店名称 *" min-width="150">
+        <el-table-column type="index" label="#" width="42" />
+        <el-table-column label="订单号" width="128">
+          <template #default="{ row }"><el-input v-model="row.storeCode" placeholder="留空自动生成" /></template>
+        </el-table-column>
+        <el-table-column label="门店名称 *" min-width="170">
           <template #default="{ row }">
-            <el-input v-model="row.storeName" placeholder="如：永辉园区店" :class="{ 'missing': isRowMissing(row, 'storeName') }" />
+            <el-autocomplete
+              v-model="row.storeName"
+              :fetch-suggestions="queryStoreSuggestions"
+              placeholder="输入门店名，自动匹配历史门店"
+              :trigger-on-focus="false"
+              value-key="storeName"
+              class="store-name-input"
+              :class="{ 'missing': isRowMissing(row, 'storeName') }"
+              @select="(item: StoreSuggestion) => onStorePicked(row, item)"
+            >
+              <template #default="{ item }">
+                <div class="store-sug"><strong>{{ item.storeName }}</strong><span v-if="item.address">{{ item.address }}</span></div>
+              </template>
+            </el-autocomplete>
           </template>
         </el-table-column>
         <el-table-column label="配送地址 *" min-width="220">
@@ -226,16 +275,22 @@ watch(() => props.batch?.id, (id, prev) => {
             <el-input v-model="row.address" placeholder="如：苏州工业园区xx路1号" :class="{ 'missing': isRowMissing(row, 'address') }" />
           </template>
         </el-table-column>
-        <el-table-column label="件数 *" width="90">
+        <el-table-column label="件数 *" width="82">
           <template #default="{ row }"><el-input v-model="row.pieces" placeholder="10" :class="{ 'missing': isRowMissing(row, 'pieces') }" /></template>
         </el-table-column>
-        <el-table-column label="重量kg *" width="98">
+        <el-table-column label="箱数" width="76">
+          <template #default="{ row }"><el-input v-model="row.boxes" placeholder="0" /></template>
+        </el-table-column>
+        <el-table-column label="重量kg *" width="90">
           <template #default="{ row }"><el-input v-model="row.weightKg" placeholder="80" :class="{ 'missing': isRowMissing(row, 'weightKg') }" /></template>
         </el-table-column>
-        <el-table-column label="体积m³ *" width="98">
+        <el-table-column label="体积m³ *" width="90">
           <template #default="{ row }"><el-input v-model="row.volumeCbm" placeholder="1.5" :class="{ 'missing': isRowMissing(row, 'volumeCbm') }" /></template>
         </el-table-column>
-        <el-table-column label="送达时间窗" min-width="180">
+        <el-table-column label="区域" width="110">
+          <template #default="{ row }"><el-input v-model="row.areaCode" placeholder="如：园区" /></template>
+        </el-table-column>
+        <el-table-column label="送达时间窗" min-width="170">
           <template #default="{ row }">
             <div class="win-cell">
               <el-input v-model="row.windowStart" placeholder="08:00" style="width: 74px" />
@@ -315,6 +370,10 @@ watch(() => props.batch?.id, (id, prev) => {
 .manual-hint { color: #98a2b3; font-size: 12.5px; }
 .manual-table { width: 100%; }
 .batch-card, .validation-card, .manual-table :deep(input), .win-cell { font-variant-numeric: tabular-nums; }
+.store-name-input { width: 100%; }
+.store-sug { display: flex; flex-direction: column; line-height: 1.35; padding: 2px 0; }
+.store-sug strong { color: #101828; font-size: 13px; }
+.store-sug span { color: #98a2b3; font-size: 12px; }
 .manual-table :deep(.missing .el-input__wrapper) { box-shadow: 0 0 0 1px #f04438 inset; }
 .win-cell { display: flex; align-items: center; gap: 6px; }
 .manual-actions { display: flex; align-items: center; gap: 14px; }

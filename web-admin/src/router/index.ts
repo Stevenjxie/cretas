@@ -1630,6 +1630,12 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '车辆与司机', module: 'scheduling', mockDemo: true, hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
           },
           {
+            path: 'logistics/stores',
+            name: 'LogisticsSchedulingStores',
+            component: () => import('@/views/scheduling/logistics/stores/index.vue'),
+            meta: { requiresAuth: true, title: '门店库', module: 'scheduling', mockDemo: true, hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
+          },
+          {
             path: 'logistics-demo',
             redirect: '/scheduling/logistics/workbench',
             meta: { hidden: true, mockDemo: true },

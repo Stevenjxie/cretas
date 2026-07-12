@@ -321,6 +321,40 @@ export function deleteDailyAvailability(factoryId: string, id: string) {
   return del<void>(`/${factoryId}/logistics/daily-availability/${id}`);
 }
 
+// ==================== 门店主数据 (store master) ====================
+
+/** 门店主数据 —— 按门店名记忆坐标，导入/录入时复用，不必每天重新地理编码。 */
+export interface StoreMaster {
+  id: string;
+  storeName: string;
+  address: string | null;
+  areaCode: string | null;
+  longitude: number | null;
+  latitude: number | null;
+  locationStatus: string;
+  source: string; // GEOCODED | MANUAL | IMPORT
+  version: number;
+}
+
+/** GET /logistics/stores — 分页 + 按名模糊搜索（供手动录入自动匹配 + 门店库页）。 */
+export function listStoreMaster(factoryId: string, params?: PageParams & { keyword?: string }) {
+  return get<PageResponse<StoreMaster>>(`/${factoryId}/logistics/stores`, { params });
+}
+
+/** PUT /logistics/stores/{id} — 手工修正坐标/区域/地址（source=MANUAL，永久生效）。 */
+export function updateStoreMaster(
+  factoryId: string,
+  id: string,
+  body: { longitude?: number | null; latitude?: number | null; areaCode?: string | null; address?: string | null; version?: number },
+) {
+  return put<StoreMaster>(`/${factoryId}/logistics/stores/${id}`, body);
+}
+
+/** DELETE /logistics/stores/{id} — 软删除一条门店主数据。 */
+export function deleteStoreMaster(factoryId: string, id: string) {
+  return del<void>(`/${factoryId}/logistics/stores/${id}`);
+}
+
 // ==================== 排线计划 ====================
 
 export type PlanStatus = 'DRAFT' | 'NEEDS_ACTION' | 'CONFIRMED' | 'EXPORTED' | 'CANCELLED';

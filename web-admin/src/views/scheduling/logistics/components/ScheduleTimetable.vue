@@ -101,7 +101,7 @@ function tripColorIndex(trip: RouteTrip): number {
         </div>
       </div>
 
-      <div v-for="(row, i) in rows" :key="row.vehicleId" v-reveal="i" class="tt-row" data-testid="tt-vehicle-row">
+      <div v-for="(row, i) in rows" :key="row.vehicleId" v-reveal="Math.min(i, 8)" class="tt-row" data-testid="tt-vehicle-row">
         <div class="tt-rowlabel"><strong>{{ row.plate }}</strong><span>{{ row.trips.length }} 趟</span></div>
         <div class="tt-track">
           <span v-for="m in ticks" :key="'g'+m" class="tt-grid" :style="{ left: `${leftPct(m)}%` }" />

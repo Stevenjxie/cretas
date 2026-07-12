@@ -121,7 +121,7 @@ function etaTitleFor(tripId: string, i: number): string {
     <article
       v-for="(trip, index) in trips"
       :key="trip.id"
-      v-reveal="index"
+      v-reveal="Math.min(index, 8)"
       data-testid="route-card"
       :data-trip-id="trip.id"
       :class="['route-card', { selected: trip.id === selectedTripId }]"
