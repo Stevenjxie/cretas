@@ -27,34 +27,27 @@
       placeholder="选择入口原料 SKU"
       filterable
       size="small"
+      :filter-method="handleRawFilter"
+      @visible-change="handleRawVisibleChange"
       @change="(value: string) => emit('selectRawSku', value)"
     >
       <el-option
-        v-for="option in rawMaterialOptions"
+        v-for="option in filteredRawMaterialOptions"
         :key="option.id"
         :label="`${option.name} · ${option.unit || '-'}`"
         :value="option.id"
       />
     </el-select>
 
-    <el-select
+    <WorkflowSkuPicker
       v-if="(kind === 'SEMI_FINISHED' || kind === 'FINISHED_GOOD') && canWrite"
-      class="nodrag nowheel sku-selector"
-      data-testid="material-sku-select"
+      class="sku-selector"
+      test-id="material-sku-select"
       :model-value="data.skuId"
-      placeholder="选择或现场创建 SKU"
-      filterable
-      size="small"
-      @change="(value: string) => emit('selectSku', value)"
-    >
-      <el-option class="create-option" label="＋ 现场创建半成品 SKU" value="__CREATE__" />
-      <el-option
-        v-for="option in skuOptions"
-        :key="option.id"
-        :label="`${option.name} · ${option.unit || '-'}`"
-        :value="option.id"
-      />
-    </el-select>
+      :semi-options="semiOptions"
+      :finished-options="finishedOptions"
+      @change="(value) => emit('selectSku', value)"
+    />
 
     <div v-if="kind !== 'FINISHED_GOOD' && canWrite" class="node-actions nodrag">
       <el-button size="small" text type="primary" @click="emit('addNext')">+ 后续工序</el-button>
@@ -63,8 +56,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
+import { matchesSearchText } from './pinyinInitials';
+import WorkflowSkuPicker, { type WorkflowSkuPickerOption } from './WorkflowSkuPicker.vue';
 import type { MaterialNodeData, ProductProcessNodeKind } from './types';
 
 const props = defineProps<{
@@ -73,7 +68,8 @@ const props = defineProps<{
   selected?: boolean;
   canWrite: boolean;
   rawMaterialOptions: Array<{ id: string; name: string; unit?: string }>;
-  skuOptions: Array<{ id: string; name: string; unit?: string }>;
+  semiOptions: WorkflowSkuPickerOption[];
+  finishedOptions: WorkflowSkuPickerOption[];
 }>();
 
 const emit = defineEmits<{
@@ -81,6 +77,24 @@ const emit = defineEmits<{
   selectRawSku: [skuId: string];
   selectSku: [skuId: string];
 }>();
+
+// 原料下拉的拼音首字母搜索：filter-method 只负责生成过滤后的候选列表，
+// 不像 el-cascader/el-select 默认 filterable 那样只能按 label 原文匹配。
+const rawFilterQuery = ref('');
+
+function handleRawFilter(query: string): void {
+  rawFilterQuery.value = query || '';
+}
+
+function handleRawVisibleChange(visible: boolean): void {
+  if (!visible) rawFilterQuery.value = '';
+}
+
+const filteredRawMaterialOptions = computed(() => {
+  const query = rawFilterQuery.value.trim();
+  if (!query) return props.rawMaterialOptions;
+  return props.rawMaterialOptions.filter((option) => matchesSearchText(query, option.name));
+});
 
 const kindLabel = computed(() => ({
   RAW_MATERIAL: '原料 Cell',
@@ -126,6 +140,5 @@ const kindMark = computed(() => ({
 .identity-row strong { overflow: hidden; color: #344054; text-overflow: ellipsis; white-space: nowrap; }
 .specification { margin-top: 6px; color: #7a8599; font-size: 11px; }
 .raw-selector, .sku-selector { width: 100%; margin-top: 8px; }
-.create-option { color: #409eff; font-weight: 600; }
 .node-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
 </style>

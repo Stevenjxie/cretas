@@ -15,8 +15,13 @@ import type {
 const GRID_SIZE = 16;
 // 自动布局间距: 层间(横向)须清得过最宽的工序 Cell(~390px), 同层(纵向)须清得过 Cell 高度,
 // 否则多产出/多分支时 Cell 会叠成一坨(挤在一起)。放宽后各 Cell 有呼吸空间。
+// BRANCH_GAP=480: 工序 Cell 是同层里最高的盒子——heading + 系统研判提示 + 投入/产出两个
+// port-section + 数量关系 + 报工开关叠起来, 常规 1~2 端口场景下实测约 400~450px 高,
+// 320 明显不够(相邻两行会视觉重叠), 480 留出安全余量。这是"够用的固定常量", 不是按
+// 每个 Cell 实际 DOM 高度动态计算——极端多端口(4+ 入/出)场景仍可能偏紧, 需要时再引入
+// 运行时测量。
 const LAYER_GAP = 440;
-const BRANCH_GAP = 320;
+const BRANCH_GAP = 480;
 const CANVAS_ORIGIN = 32;
 
 /**
@@ -249,13 +254,18 @@ export function autoLayoutWorkflow(
     const layer = depth.get(node.id) ?? 0;
     layers.set(layer, [...(layers.get(layer) ?? []), node]);
   });
+  // 每层各自独立起跑一个"行计数器"(rowInLayer), 不用跨层的全局 index——否则两个不同层、
+  // 但恰好都是该层第 0 个节点的 Cell 会拿到同一个 y, 同层内任意两个 Cell 的 position
+  // 就永远不会重合/重叠。
   layers.forEach((layerNodes, layer) => {
     layerNodes.sort((a, b) => a.id.localeCompare(b.id));
-    layerNodes.forEach((node, index) => {
+    let rowInLayer = 0;
+    layerNodes.forEach((node) => {
       node.position = snapPosition({
         x: CANVAS_ORIGIN + layer * LAYER_GAP,
-        y: CANVAS_ORIGIN + index * BRANCH_GAP,
+        y: CANVAS_ORIGIN + rowInLayer * BRANCH_GAP,
       });
+      rowInLayer += 1;
     });
   });
   return result;

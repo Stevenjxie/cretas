@@ -78,18 +78,22 @@
         >+ 产出 Cell（分流）</el-button>
       </div>
       <div v-for="port in outputPorts" :key="port.id" class="port-row output-row">
-        <el-input
+        <WorkflowSkuPicker
           class="nodrag"
-          :model-value="port.materialName || '产出物料待在右侧产出 Cell 选择 SKU'"
-          readonly
-          size="small"
+          test-id="output-sku-select"
+          :model-value="port.skuId || ''"
+          :semi-options="semiOptions"
+          :finished-options="finishedOptions"
+          :disabled="!canWrite"
+          placeholder="选择或现场创建产出 SKU"
+          @change="(skuId) => emit('selectOutput', port.id, skuId)"
         />
         <span class="unit-chip" data-testid="output-unit-chip">{{ port.unit }}</span>
       </div>
     </section>
 
     <section class="conversion-section">
-      <div class="section-title"><span>投入产出数量关系（可人工调整）</span></div>
+      <div class="section-title"><span>投入产出数量关系</span></div>
       <div class="conversion-row">
         <el-select
           class="nodrag nowheel"
@@ -114,8 +118,7 @@
           @input="(expression: string) => emit('update', { conversionRule: { ...data.conversionRule, expression } })"
         />
       </div>
-      <div class="conversion-sentence" data-testid="conversion-sentence">{{ semanticSentence }}</div>
-      <div class="conversion-example" data-testid="conversion-sample">{{ sampleLine }}</div>
+      <div class="conversion-hint" data-testid="conversion-sentence">{{ conversionHint }}</div>
     </section>
 
     <div class="reporting-row nodrag">
@@ -136,18 +139,22 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
+import WorkflowSkuPicker, { type WorkflowSkuPickerOption } from './WorkflowSkuPicker.vue';
 import type { ConversionMode, ProcessNodeData, ProcessPort } from './types';
 
 const props = defineProps<{
   data: ProcessNodeData;
   selected?: boolean;
   canWrite: boolean;
+  semiOptions: WorkflowSkuPickerOption[];
+  finishedOptions: WorkflowSkuPickerOption[];
 }>();
 
 const emit = defineEmits<{
   update: [patch: Partial<ProcessNodeData>];
   addInput: [];
   addOutput: [];
+  selectOutput: [portId: string, skuId: string];
 }>();
 
 const processNodeStyle = { minHeight: '96px' } as const;
@@ -180,40 +187,21 @@ const conversionPlaceholder = computed(() => {
   return '例：自定义公式，如 (产出1 + 产出2) * 0.95';
 });
 
-// 语义句：把 mode + 真实投入/产出物料名 + 用户填写的 expression 组成一句可读的关系描述（只读展示，非表单）
-const semanticSentence = computed(() => {
+// 精简后的一行提示：只说明当前模式在做什么 / 展示用户填写的公式，
+// 不再重复投入产出物料名和单位（这些已经在上面的端口行里显示过），
+// 也不再额外渲染一行「样例」说明（trim 需求：去掉 Σ/→ 符号和大段解释文字）。
+const conversionHint = computed(() => {
   const { mode, expression } = props.data.conversionRule;
   if (mode === 'ACTUAL_WEIGHT') {
-    const inName = portDisplayName(inputPorts.value[0], '（投入由上游带入）');
-    const inUnit = inputPorts.value[0]?.unit || props.data.inputUnit || '-';
-    const outName = portDisplayName(outputPorts.value[0], '（产出待选 SKU）');
-    const outUnit = outputPorts.value[0]?.unit || props.data.outputUnit || '-';
-    return `按实际称重 —— 投入 ${inName}（${inUnit}）→ 产出 ${outName}（${outUnit}），报工记录实际投入/产出`;
+    return '按实际称重录入，无需设置比例或公式';
   }
   if (mode === 'FIXED_RATIO') {
     return `固定比例：${expression || '待填，例：1 只 = 1 只 / 100:90'}`;
   }
   if (mode === 'SUM_OUTPUTS') {
-    if (outputPorts.value.length === 0) {
-      return '投入 = 各产出之和（暂无产出 Cell）';
-    }
-    const names = outputPorts.value.map((port, index) => portDisplayName(port, `产出${index + 1}`));
-    return `投入 = ${names.join(' + ')}（多产出按各自实际数量）`;
+    return '投入 = 各产出数量之和';
   }
   return `自定义：${expression || '待填公式'}`;
-});
-
-// 样例：只读的说明性示例, 用真实物料名/单位举例, 不是可编辑输入
-const sampleLine = computed(() => {
-  const isMultiOutput = props.data.conversionRule.mode === 'SUM_OUTPUTS' || outputPorts.value.length > 1;
-  if (isMultiOutput) {
-    return '样例：投入 = Σ 各产出（如 242kg = 36kg + 200kg）';
-  }
-  const inName = portDisplayName(inputPorts.value[0], '投入物料');
-  const inUnit = inputPorts.value[0]?.unit || props.data.inputUnit || '-';
-  const outName = portDisplayName(outputPorts.value[0], '产出物料');
-  const outUnit = outputPorts.value[0]?.unit || props.data.outputUnit || '-';
-  return `样例：投入 ${inName} 200${inUnit} → 产出 ${outName} ~180${outUnit}（实际称重）`;
 });
 </script>
 
@@ -237,8 +225,7 @@ const sampleLine = computed(() => {
 .port-row { display: grid; grid-template-columns: minmax(0, 1fr) 76px; gap: 6px; margin-top: 6px; }
 .output-row { grid-template-columns: minmax(0, 1fr) 70px; }
 .conversion-row { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 6px; }
-.conversion-sentence { margin-top: 8px; color: #475467; font-size: 12px; line-height: 1.5; }
-.conversion-example { margin-top: 4px; color: #8a95a8; font-size: 11px; }
+.conversion-hint { margin-top: 8px; color: #8a95a8; font-size: 11px; line-height: 1.4; }
 .reporting-row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; color: #667085; font-size: 12px; }
 .unit-chip {
   display: flex;

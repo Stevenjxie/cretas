@@ -89,7 +89,8 @@
               :selected="slotProps.selected"
               :can-write="canEdit"
               :raw-material-options="rawMaterialOptions"
-              :sku-options="outputSkuOptions"
+              :semi-options="semiFinishedSkuOptions"
+              :finished-options="finishedGoodSkuOptions"
               @add-next="openAddProcess(slotProps.id)"
               @select-raw-sku="(skuId) => selectRawSku(slotProps.id, skuId)"
               @select-sku="(skuId) => selectMaterialSku(slotProps.id, skuId)"
@@ -101,9 +102,12 @@
               :data="slotProps.data"
               :selected="slotProps.selected"
               :can-write="canEdit"
+              :semi-options="semiFinishedSkuOptions"
+              :finished-options="finishedGoodSkuOptions"
               @update="(patch) => updateProcessData(slotProps.id, patch)"
               @add-input="addInputToProcess(slotProps.id)"
               @add-output="addOutputToProcess(slotProps.id)"
+              @select-output="(portId, skuId) => selectOutputSku(slotProps.id, portId, skuId)"
             />
           </template>
         </VueFlow>
@@ -306,6 +310,14 @@ const skuOptions = ref<SkuOption[]>([]);
 const rawMaterialOptions = ref<RawMaterialOption[]>([]);
 const outputSkuOptions = computed(() => skuOptions.value.filter(
   (option) => classifyOutputSkuCategory(option.productCategory) !== null,
+));
+// 两级选择器用：把可作产出的 SKU 按分类拆成「半成品」「成品」两组，供物料 Cell 和
+// 工序 Cell 产出行共用同一份数据源（WorkflowSkuPicker 组件负责渲染两级分组 UI）。
+const semiFinishedSkuOptions = computed(() => skuOptions.value.filter(
+  (option) => classifyOutputSkuCategory(option.productCategory) === 'SEMI_FINISHED',
+));
+const finishedGoodSkuOptions = computed(() => skuOptions.value.filter(
+  (option) => classifyOutputSkuCategory(option.productCategory) === 'FINISHED_GOOD',
 ));
 
 const processDialogVisible = ref(false);
