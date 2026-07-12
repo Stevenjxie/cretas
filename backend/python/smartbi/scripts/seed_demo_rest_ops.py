@@ -190,6 +190,22 @@ def seed(dsn: str, end_day: date, dry_run: bool) -> None:
             return
 
         with conn.cursor() as cur:
+            # Full-replace: clear this seeder's previous demo rows first so daily
+            # reruns (e.g. cron with a rolling --end) don't accumulate orphaned
+            # rows. IDs are date-stamped (demo_rest_wst_<date>_<n> /
+            # demo_rest_stk_<date>_<n>), so ON CONFLICT UPDATE alone would leave
+            # rows for dates that fall out of the rolling window. Scoped to
+            # DEMO_REST + this seeder's id prefix — never touches real data.
+            cur.execute(
+                "DELETE FROM wastage_records "
+                "WHERE factory_id = %s AND id LIKE 'demo_rest_wst_%%'",
+                (TARGET_FACTORY,),
+            )
+            cur.execute(
+                "DELETE FROM stocktaking_records "
+                "WHERE factory_id = %s AND id LIKE 'demo_rest_stk_%%'",
+                (TARGET_FACTORY,),
+            )
             execute_values(
                 cur,
                 """
