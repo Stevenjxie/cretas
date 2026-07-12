@@ -1,46 +1,130 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { ElMessageBox } from 'element-plus';
+import type { ManualOrderRow } from '@/api/logistics';
 import ExportConfirmStep from '../components/ExportConfirmStep.vue';
 import LogisticsMap from '../components/LogisticsMap.vue';
 import LogisticsStepBar from '../components/LogisticsStepBar.vue';
 import ManualConfirmStep from '../components/ManualConfirmStep.vue';
 import OrderImportStep from '../components/OrderImportStep.vue';
 import RouteCards from '../components/RouteCards.vue';
+import ScheduleTimetable from '../components/ScheduleTimetable.vue';
 import StoreDetailDrawer from '../components/StoreDetailDrawer.vue';
-import { useLogisticsDemoState } from '../useLogisticsDemoState';
+import { useLogisticsScheduling } from '../useLogisticsScheduling';
 
-const state = useLogisticsDemoState();
-const assignmentIssue = ref('');
-const exportConfirmed = ref(false);
+const state = useLogisticsScheduling();
+// 查看路线步的视图切换：地图 / 调度时间表(甘特图)
+const mapView = ref<'map' | 'timetable'>('map');
+const route = useRoute();
+const router = useRouter();
+
+// 导出预览是一个纯前端"我已经看过预览"门槛（只要还有车次待匹配车辆，就不能正式确认排程）,
+// 不是后端状态，随重新生成/离开导出步重置。
 const exportPreviewConfirmed = ref(false);
+
 const canConfirmSchedule = computed(() => state.scheduleResult.value.trips.length > 0
   && state.scheduleResult.value.unassignedStoreIds.length === 0
   && state.scheduleResult.value.trips.every((trip) => trip.status === 'confirmed'));
 
+const exportConfirmed = computed(() => state.plan.value?.status === 'CONFIRMED' || state.plan.value?.status === 'EXPORTED');
+
 const hasExceptions = computed(() => {
   const trips = state.scheduleResult.value.trips;
-  const assignedVehicles = trips.filter((trip) => trip.vehicleId).map((trip) => trip.vehicleId);
-  const assignedDrivers = trips.filter((trip) => trip.driverId).map((trip) => trip.driverId);
-  const hasConflict = new Set(assignedVehicles).size !== assignedVehicles.length
-    || new Set(assignedDrivers).size !== assignedDrivers.length;
-  return Boolean(assignmentIssue.value)
+  return Boolean(state.planError.value)
+    || Boolean(state.importError.value)
     || state.scheduleResult.value.unassignedStoreIds.length > 0
-    || trips.some((trip) => trip.status === 'needs_vehicle' || trip.status === 'needs_route_data')
-    || hasConflict;
+    || state.unresolvedOrders.value.length > 0
+    || trips.some((trip) => trip.status === 'needs_vehicle' || trip.status === 'needs_driver' || trip.status === 'needs_route_data');
 });
 
+const exceptionDescription = computed(() => {
+  if (state.planError.value) return state.planError.value;
+  if (state.importError.value) return state.importError.value;
+  if (state.unresolvedOrders.value.length > 0) {
+    return `${state.unresolvedOrders.value.length} 家门店尚未定位，请到「门店与订单」补录经纬度后再生成路线。`;
+  }
+  if (state.scheduleResult.value.unassignedStoreIds.length > 0) {
+    return `${state.scheduleResult.value.unassignedStoreIds.length} 家门店超出所有车辆容量，未分配到任何车次。`;
+  }
+  return undefined;
+});
+
+onMounted(async () => {
+  await Promise.all([state.loadVehicles(), state.loadDrivers()]);
+  const planIdFromQuery = typeof route.query.planId === 'string' ? route.query.planId : null;
+  await state.restore(planIdFromQuery);
+});
+
+// 生成/恢复计划后把 planId 写回 URL，刷新页面时可据此恢复（handoff §12.3）。
+watch(() => state.plan.value?.id, (planId) => {
+  if (planId && route.query.planId !== planId) {
+    router.replace({ query: { ...route.query, planId } });
+  }
+});
+
+async function downloadTemplate(): Promise<void> {
+  await state.downloadTemplate();
+}
+
+async function uploadFile(file: File): Promise<void> {
+  await state.uploadPreview(file);
+}
+
+async function commitImport(): Promise<void> {
+  await state.commitImport();
+}
+
+async function submitManual(payload: { businessDate: string | null; rows: ManualOrderRow[] }): Promise<void> {
+  await state.submitManualOrders(payload.businessDate, payload.rows);
+}
+
+/** 开始新一天排线：清空当前视图回到第一步录入。当前计划已存库，可随时从计划列表恢复（防呆确认）。 */
+async function startNewSchedule(): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      '将清空当前排线视图，回到第一步录入新一天的订单。当前计划已保存到系统，可随时恢复。',
+      '新建排线',
+      { confirmButtonText: '开始录入', cancelButtonText: '取消', type: 'info' },
+    );
+  } catch {
+    return; // 用户取消
+  }
+  state.reset();
+  await router.replace({ query: {} }); // 清掉 URL 里的 planId，避免刷新又恢复旧计划
+  await Promise.all([state.loadVehicles(), state.loadDrivers()]);
+}
+
 function handleTargetLoad(value: number): void {
-  state.setTargetLoad(value);
+  void state.setTargetLoad(value);
 }
 
-function importSampleOrders(): void {
-  state.importOrders();
-  exportConfirmed.value = false;
-  exportPreviewConfirmed.value = false;
+function handleOptimizeMode(mode: 'TIME' | 'DISTANCE'): void {
+  void state.setOptimizeMode(mode);
 }
 
-function confirmSchedule(): void {
-  if (state.confirmSchedule()) exportConfirmed.value = true;
+async function assignVehicle(vehicleId: string | null): Promise<void> {
+  await state.assignVehicle(vehicleId);
+}
+
+async function assignDriver(driverId: string | null): Promise<void> {
+  await state.assignDriver(driverId);
+}
+
+async function handleMoveStore(storeId: string, direction: -1 | 1): Promise<void> {
+  await state.moveStore(storeId, direction);
+}
+
+async function handleMoveToTrip(storeId: string, targetTripId: string | null): Promise<void> {
+  await state.moveStoreToTrip(storeId, targetTripId);
+}
+
+async function confirmTrip(): Promise<void> {
+  await state.confirmTrip();
+}
+
+async function confirmSchedule(): Promise<void> {
+  if (await state.confirmSchedule()) exportPreviewConfirmed.value = false;
 }
 
 function confirmExportPreview(): void {
@@ -48,44 +132,23 @@ function confirmExportPreview(): void {
   state.activeStep.value = 'export';
 }
 
-function assignVehicle(vehicleId: string | null): void {
-  const issue = state.getVehicleAssignmentIssue(vehicleId);
-  if (issue) {
-    assignmentIssue.value = issue;
-    return;
-  }
-  if (state.assignVehicle(vehicleId)) assignmentIssue.value = '';
+async function exportCsv(): Promise<void> {
+  await state.exportCsv();
 }
 
-function assignDriver(driverId: string | null): void {
-  const issue = state.getDriverAssignmentIssue(driverId);
-  if (issue) {
-    assignmentIssue.value = issue;
-    return;
-  }
-  if (state.assignDriver(driverId)) assignmentIssue.value = '';
-}
-
-function handleMoveStore(storeId: string, direction: -1 | 1): void {
-  if (!state.moveStore(storeId, direction)) {
-    assignmentIssue.value = '当前门店顺序缺少可用道路数据，未调整配送顺序。';
-    return;
-  }
-  assignmentIssue.value = '';
+async function exportXlsx(): Promise<void> {
+  await state.exportXlsx();
 }
 
 function back(): void {
   const steps = ['import', 'map', 'confirm', 'export'] as const;
   const index = steps.indexOf(state.activeStep.value);
   if (index > 0) state.activeStep.value = steps[index - 1];
-  if (state.activeStep.value !== 'export') {
-    exportConfirmed.value = false;
-    exportPreviewConfirmed.value = false;
-  }
+  if (state.activeStep.value !== 'export') exportPreviewConfirmed.value = false;
 }
 
-function next(): void {
-  if (state.activeStep.value === 'import') state.generateRoutes();
+async function next(): Promise<void> {
+  if (state.activeStep.value === 'import') await state.generateRoutes();
   else if (state.activeStep.value === 'map') state.activeStep.value = 'confirm';
   else if (state.activeStep.value === 'confirm') state.previewExport();
 }
@@ -93,28 +156,96 @@ function next(): void {
 
 <template>
   <main class="workbench-page">
-    <header class="page-header"><div><h1>配送排程</h1><p>按订单、路线、确认和导出完成当天排程。</p></div><el-tag effect="plain" type="info">演示数据</el-tag></header>
+    <div v-if="state.analyzing.value" data-testid="ai-analyzing" class="ai-analyzing-overlay">
+      <div class="ai-analyzing-card">
+        <div class="ai-spark">🧠</div>
+        <p class="ai-title">AI 智能分析排班中…</p>
+        <p class="ai-sub">正在综合门店位置、货量、车辆容量、司机区域与路线距离生成推荐方案</p>
+        <el-progress :percentage="state.analyzeProgress.value" :stroke-width="12" :duration="0" />
+      </div>
+    </div>
+    <header class="page-header">
+      <div><h1>配送排程</h1><p>按订单、路线、确认和导出完成当天排程。</p></div>
+      <div class="header-actions">
+        <el-tag v-if="state.batch.value" effect="plain" type="success">批次 {{ state.batch.value.batchNumber }}</el-tag>
+        <el-button
+          v-if="state.batch.value || state.plan.value"
+          type="primary"
+          plain
+          @click="startNewSchedule"
+        >+ 新建排线</el-button>
+      </div>
+    </header>
     <LogisticsStepBar :active-step="state.activeStep.value" />
-    <el-alert v-if="hasExceptions" data-testid="assignment-issue" title="需要处理" :description="assignmentIssue || undefined" type="warning" :closable="false" show-icon />
+    <el-alert v-if="hasExceptions" data-testid="assignment-issue" title="需要处理" :description="exceptionDescription" type="warning" :closable="false" show-icon />
 
-    <OrderImportStep v-if="state.activeStep.value === 'import'" :stores="state.stores.value" :imported="state.imported.value" @import-sample="importSampleOrders" />
+    <OrderImportStep
+      v-if="state.activeStep.value === 'import'"
+      :preview="state.preview.value"
+      :batch="state.batch.value"
+      :uploading="state.uploading.value"
+      :committing="state.committing.value"
+      :error="state.importError.value"
+      @download-template="downloadTemplate"
+      @upload-file="uploadFile"
+      @commit="commitImport"
+      @submit-manual="submitManual"
+    />
 
     <section v-else-if="state.activeStep.value === 'map'" data-testid="map-step" class="map-step">
-      <header class="map-heading"><div><p>第二步</p><h2>查看路线</h2></div><label>目标装载率 <el-slider :model-value="state.targetLoadPct.value" :min="50" :max="100" :show-tooltip="true" @update:model-value="handleTargetLoad" /></label></header>
-      <LogisticsMap :stores="state.stores.value" :trips="state.scheduleResult.value.trips" :selected-trip-id="state.selectedTripId.value" :selected-store-id="state.selectedStoreId.value" @select-trip="state.selectTrip" @select-store="state.selectStore" />
+      <header class="map-heading"><div><p>第二步</p><h2>查看路线</h2></div></header>
+      <div class="route-settings" data-testid="route-settings">
+        <span class="settings-title">排线设置</span>
+        <label class="view-toggle">视图 <el-radio-group :model-value="mapView" size="small" @update:model-value="(v: 'map'|'timetable') => (mapView = v)"><el-radio-button label="map">地图</el-radio-button><el-radio-button label="timetable">调度时间表</el-radio-button></el-radio-group></label>
+        <label class="opt-mode">优化目标 <el-radio-group :model-value="state.optimizeMode.value" size="small" @update:model-value="handleOptimizeMode"><el-radio-button label="DISTANCE">路程最短</el-radio-button><el-radio-button label="TIME">时间最快</el-radio-button></el-radio-group></label>
+        <label class="load-ctl">目标装载率 <el-slider :model-value="state.targetLoadPct.value" :min="50" :max="100" :show-tooltip="true" @update:model-value="handleTargetLoad" /></label>
+        <button data-testid="generate-routes" class="generate-button" type="button" @click="state.regeneratePlanAction">重新生成路线</button>
+      </div>
+      <LogisticsMap v-show="mapView === 'map'" :stores="state.stores.value" :trips="state.scheduleResult.value.trips" :selected-trip-id="state.selectedTripId.value" :selected-store-id="state.selectedStoreId.value" @select-trip="state.selectTrip" @select-store="state.selectStore" />
+      <ScheduleTimetable v-if="mapView === 'timetable'" :trips="state.scheduleResult.value.trips" :selected-trip-id="state.selectedTripId.value" @select-trip="state.selectTrip" />
       <RouteCards :stores="state.stores.value" :trips="state.scheduleResult.value.trips" :selected-trip-id="state.selectedTripId.value" :selected-store-id="state.selectedStoreId.value" @select-trip="state.selectTrip" @select-store="state.selectStore" />
       <StoreDetailDrawer :stores="state.stores.value" :selected-store-id="state.selectedStoreId.value" @select-store="state.selectStore" />
-      <button data-testid="generate-routes" class="generate-button" type="button" @click="state.generateRoutes">重新生成路线</button>
+      <section v-if="state.unresolvedOrders.value.length" data-testid="unresolved-stores" class="unresolved-panel">
+        <strong>{{ state.unresolvedOrders.value.length }} 家门店待定位</strong>
+        <ul>
+          <li v-for="order in state.unresolvedOrders.value" :key="order.id">{{ order.storeName }} · {{ order.address }}</li>
+        </ul>
+        <router-link to="/scheduling/logistics/orders">前往「门店与订单」补录经纬度</router-link>
+      </section>
     </section>
 
-    <ManualConfirmStep v-else-if="state.activeStep.value === 'confirm'" :trip="state.activeTrip.value" :stores="state.stores.value" :vehicles="state.vehicles.value" @move-store="handleMoveStore" @assign-vehicle="assignVehicle" @assign-driver="assignDriver" @confirm-trip="state.confirmTrip" />
-    <ExportConfirmStep v-else :rows="state.exportRows.value" :confirmed="exportConfirmed" :preview-confirmed="exportPreviewConfirmed" :can-confirm-schedule="canConfirmSchedule" @confirm-schedule="confirmSchedule" @confirm-preview="confirmExportPreview" />
+    <ManualConfirmStep
+      v-else-if="state.activeStep.value === 'confirm'"
+      :trip="state.activeTrip.value"
+      :stores="state.stores.value"
+      :vehicles="state.vehiclesView.value"
+      :trips="state.scheduleResult.value.trips"
+      @move-store="handleMoveStore"
+      @move-to-trip="handleMoveToTrip"
+      @assign-vehicle="assignVehicle"
+      @assign-driver="assignDriver"
+      @confirm-trip="confirmTrip"
+    />
+    <ExportConfirmStep
+      v-else
+      :rows="state.exportRows.value"
+      :confirmed="exportConfirmed"
+      :preview-confirmed="exportPreviewConfirmed"
+      :can-confirm-schedule="canConfirmSchedule"
+      :plan-id="state.plan.value?.id ?? null"
+      @confirm-schedule="confirmSchedule"
+      @confirm-preview="confirmExportPreview"
+      @export-csv="exportCsv"
+      @export-xlsx="exportXlsx"
+    />
 
     <footer class="action-bar"><el-button :disabled="state.activeStep.value === 'import'" @click="back">上一步</el-button><button v-if="state.activeStep.value !== 'export'" data-testid="finish-schedule" class="next-button" type="button" @click="next">{{ state.activeStep.value === 'confirm' ? '查看导出预览' : '下一步' }}</button></footer>
   </main>
 </template>
 
 <style scoped lang="scss">
-.workbench-page { display: grid; gap: 20px; max-width: 1440px; min-height: 100%; padding: 24px; margin: 0 auto; background: #f8fafc; }
-.page-header, .map-heading, .action-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; } h1,h2 { margin: 0; color: #101828; } .page-header p, .map-heading p { margin: 6px 0 0; color: #667085; } .map-step { display: grid; gap: 16px; } .map-heading label { display: grid; grid-template-columns: auto minmax(150px, 260px); align-items: center; gap: 12px; color: #344054; font-size: 14px; font-weight: 650; } .generate-button, .next-button { width: fit-content; padding: 10px 18px; color: #fff; font: inherit; font-weight: 650; background: #1b65a8; border: 0; border-radius: 6px; cursor: pointer; } .action-bar { position: sticky; bottom: 0; z-index: 20; padding: 14px 0; background: linear-gradient(to bottom, transparent, #f8fafc 28%); } @media (max-width: 720px) { .workbench-page { padding: 16px; } .page-header,.map-heading { align-items: flex-start; flex-direction: column; } .map-heading label { width: 100%; } }
+.workbench-page { display: grid; gap: 20px; max-width: 1440px; min-height: 100%; padding: 24px; margin: 0 auto; background: #f8fafc; } .ai-analyzing-overlay { position: fixed; inset: 0; z-index: 3000; display: grid; place-items: center; background: rgba(16, 24, 40, 0.55); backdrop-filter: blur(2px); } .ai-analyzing-card { width: min(460px, 90vw); padding: 32px 28px; text-align: center; background: #fff; border-radius: 16px; box-shadow: 0 12px 40px rgba(0,0,0,0.25); } .ai-spark { font-size: 40px; animation: ai-pulse 1.1s ease-in-out infinite; } @keyframes ai-pulse { 0%,100% { transform: scale(1); opacity: 0.85; } 50% { transform: scale(1.18); opacity: 1; } } .ai-title { margin: 12px 0 6px; color: #101828; font-size: 18px; font-weight: 750; } .ai-sub { margin: 0 0 18px; color: #667085; font-size: 13px; line-height: 1.5; }
+.page-header, .map-heading, .action-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; } .header-actions { display: flex; align-items: center; gap: 12px; } h1,h2 { margin: 0; color: #101828; } .page-header p, .map-heading p { margin: 6px 0 0; color: #667085; } .map-step { display: grid; gap: 16px; } .map-heading label { display: grid; grid-template-columns: auto minmax(150px, 260px); align-items: center; gap: 12px; color: #344054; font-size: 14px; font-weight: 650; } .map-controls { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; } .map-heading .opt-mode { grid-template-columns: auto auto; } .route-settings { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding: 12px 16px; background: #f4f6f9; border: 1px solid #edf2f7; border-radius: 10px; } .route-settings .settings-title { color: #101828; font-weight: 700; font-size: 14px; } .route-settings label { display: grid; grid-template-columns: auto auto; align-items: center; gap: 10px; color: #344054; font-size: 14px; font-weight: 650; } .route-settings .load-ctl { grid-template-columns: auto minmax(120px, 200px); } .route-settings .view-toggle { grid-template-columns: auto auto; } .route-settings .generate-button { margin-left: auto; padding: 8px 16px; } .generate-button, .next-button { width: fit-content; padding: 10px 18px; color: #fff; font: inherit; font-weight: 650; background: #1b65a8; border: 0; border-radius: 6px; cursor: pointer; } .action-bar { position: sticky; bottom: 0; z-index: 20; padding: 14px 0; background: linear-gradient(to bottom, transparent, #f8fafc 28%); }
+.unresolved-panel { display: grid; gap: 8px; padding: 16px 20px; background: #fffaeb; border: 1px solid #fef0c7; border-radius: 10px; } .unresolved-panel strong { color: #b54708; } .unresolved-panel ul { display: grid; gap: 4px; margin: 0; padding-left: 20px; color: #93370d; font-size: 13px; } .unresolved-panel a { width: fit-content; color: #1b65a8; font-weight: 650; }
+@media (max-width: 720px) { .workbench-page { padding: 16px; } .page-header,.map-heading { align-items: flex-start; flex-direction: column; } .map-heading label { width: 100%; } }
 </style>

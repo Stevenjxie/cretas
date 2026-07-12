@@ -65,6 +65,10 @@ public class MobileAuthServiceImpl implements MobileAuthService {
     private String demoFactoryFactoryId;
     @Value("${cretas.demo.factory.username:demo_factory}")
     private String demoFactoryUsername;
+    @Value("${cretas.demo.logistics.factory-id:DEMO_LOGISTICS}")
+    private String demoLogisticsFactoryId;
+    @Value("${cretas.demo.logistics.username:dispatcher_demo_logistics}")
+    private String demoLogisticsUsername;
 
     @Override
     @Transactional
@@ -135,8 +139,12 @@ public class MobileAuthServiceImpl implements MobileAuthService {
     }
 
     /**
-     * 演示账号免密登录 (路演扫码演示用). 不验证密码 — 只能登录配置死的两个 demo 账号
-     * (DEMO_REST / DEMO_FACTORY), 由 cretas.demo.enabled 开关控制. 写操作由 DemoReadOnlyInterceptor 拦截.
+     * 演示账号免密登录 (路演扫码演示用). 不验证密码 — 只能登录配置死的三个 demo 账号
+     * (DEMO_REST / DEMO_FACTORY / DEMO_LOGISTICS), 由 cretas.demo.enabled 开关控制.
+     * DEMO_REST / DEMO_FACTORY 写操作由 DemoReadOnlyInterceptor 拦截只读锁定;
+     * DEMO_LOGISTICS 不在 cretas.demo.factory-ids 只读锁名单内 (调度员需在自己租户内
+     * 创建/调整/确认排线计划), 隔离仅靠 JwtAuthInterceptor 的 JWT factoryId 锁定
+     * (无法跨工厂访问其他 factoryId 路径).
      */
     @Override
     @Transactional
@@ -152,8 +160,11 @@ public class MobileAuthServiceImpl implements MobileAuthService {
         } else if ("factory".equalsIgnoreCase(tenant)) {
             factoryId = demoFactoryFactoryId;
             username = demoFactoryUsername;
+        } else if ("logistics".equalsIgnoreCase(tenant)) {
+            factoryId = demoLogisticsFactoryId;
+            username = demoLogisticsUsername;
         } else {
-            throw new BusinessException(400, "无效的演示类型 (应为 rest 或 factory)");
+            throw new BusinessException(400, "无效的演示类型 (应为 rest / factory / logistics)");
         }
         log.info("演示登录: tenant={}, factoryId={}, username={}", tenant, factoryId, username);
         User user = userRepository.findByFactoryIdAndUsername(factoryId, username)

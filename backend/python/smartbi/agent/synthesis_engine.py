@@ -90,12 +90,15 @@ from smartbi.agent.budget_tracker import AgentBudgetTracker
 from smartbi.agent.factbook import (
     FactBook,
     NOTE_COMPLAINT_DISPUTE,
+    NOTE_DISH_MARGIN_ABSENT,
     NOTE_DISH_TAG_NOT_NAME,
     NOTE_LOW_STAR_SMALL_SAMPLE,
     NOTE_REVIEW_ABSENT_NEXTACTION,
+    NOTE_SUPPLIER_ANOMALY_ABSENT,
     NOTE_VIP_SIGNAL,
     compute_store_attribution,
     factbook_to_dataframe,
+    _money,
 )
 from smartbi.agent.narrative_cache import (
     NarrativeCacheService,
@@ -113,7 +116,6 @@ from smartbi.gold import (
     channel_breakdown,
     daily_trend,
     discount_summary,
-    dish_margin,
     discount_breakdown,
     finance_summary,
     meal_period_breakdown,
@@ -128,7 +130,8 @@ from smartbi.gold import (
     review_vip,
     top_products,
 )
-from smartbi.gold.queries import weather_daily
+from smartbi.gold.price_anomaly import detect_price_anomalies
+from smartbi.gold.queries import period_comparison, weather_daily
 from smartbi.gold.restaurant_intent_promotion import classify_question_family
 from smartbi.services.distillation_capture import persist_distillation_sample
 from smartbi.services.insight_dimensions import (
@@ -410,6 +413,11 @@ class SynthesisResponse:
     tokens_cap: int
     elapsed_ms: int
     charts: List[Dict[str, Any]] = field(default_factory=list)
+    # 🔒 反回扣(anti-kickback) alerts — derived ONLY from grounded FactBook
+    # signals (supplier_anomaly / period_comparison.cost_ratio). See
+    # ComprehensiveSynthesisEngine.collect_alerts. Never fabricated: empty
+    # list when neither signal is present in this window.
+    alerts: List[Dict[str, Any]] = field(default_factory=list)
     plan: Optional[Dict[str, Any]] = None
     factbook_text: Optional[str] = None
     insight_summary: Optional[str] = None
@@ -424,6 +432,7 @@ class SynthesisResponse:
             "tokens_cap": self.tokens_cap,
             "elapsed_ms": self.elapsed_ms,
             "charts": self.charts,
+            "alerts": self.alerts,
             "plan": self.plan,
             "factbook_text": self.factbook_text,
             "insight_summary": self.insight_summary,
@@ -608,13 +617,18 @@ class ComprehensiveSynthesisEngine:
             hit = await self._cache.get(factory_id, q_hash)
             if hit is not None:
                 budget = await self._budget.check_budget(factory_id)
-                charts = (hit.get("chart_config") or {}).get("charts") or [] \
-                    if isinstance(hit.get("chart_config"), dict) else []
+                hit_cfg = hit.get("chart_config") if isinstance(hit.get("chart_config"), dict) else {}
+                charts = hit_cfg.get("charts") or []
+                # 🔒 alerts are persisted alongside charts in the same JSON blob
+                # (no schema migration — chart_config is a free-form JSON column)
+                # so a cached answer still carries the 反回扣 alerts that were
+                # true when it was computed.
+                alerts = hit_cfg.get("alerts") or []
                 return SynthesisResponse(
                     answer=hit["answer"], source=RESULT_SOURCE_CACHE, tokens=0,
                     tokens_used_today=budget.tokens_used, tokens_cap=budget.tokens_cap,
                     elapsed_ms=int((time.monotonic() - t0) * 1000),
-                    charts=charts,
+                    charts=charts, alerts=alerts,
                 )
 
         # 2. Budget check.
@@ -655,13 +669,14 @@ class ComprehensiveSynthesisEngine:
             if q_emb is not None:
                 sem = await self._cache.get_semantic(factory_id, q_emb, window_key, plan_key)
                 if sem is not None:
-                    sem_charts = (sem.get("chart_config") or {}).get("charts") or [] \
-                        if isinstance(sem.get("chart_config"), dict) else []
+                    sem_cfg = sem.get("chart_config") if isinstance(sem.get("chart_config"), dict) else {}
+                    sem_charts = sem_cfg.get("charts") or []
+                    sem_alerts = sem_cfg.get("alerts") or []
                     return SynthesisResponse(
                         answer=sem["answer"], source=RESULT_SOURCE_SEMANTIC_CACHE, tokens=0,
                         tokens_used_today=budget.tokens_used, tokens_cap=budget.tokens_cap,
                         elapsed_ms=int((time.monotonic() - t0) * 1000),
-                        charts=sem_charts, plan=plan,
+                        charts=sem_charts, alerts=sem_alerts, plan=plan,
                     )
 
         # 4. Build FactBook (parallel deterministic pulls per plan).
@@ -688,20 +703,26 @@ class ComprehensiveSynthesisEngine:
             if thin_answer is not None:
                 thin_answer, fc_meta = self._reconciler.reconcile(thin_answer, factbook)
                 charts = self.collect_charts(factbook, plan)
+                alerts = self.collect_alerts(factbook)
                 post_budget = await self._budget.consume(factory_id, thin_tokens)
                 await self._capture_distillation(
                     question, factbook, thin_answer, fc_meta, plan, factory_id)
                 if not conversation_history:
+                    cache_cfg = {}
+                    if charts:
+                        cache_cfg["charts"] = charts
+                    if alerts:
+                        cache_cfg["alerts"] = alerts
                     await self._cache.put(
                         factory_id, q_hash, thin_answer,
-                        chart_config={"charts": charts} if charts else None,
+                        chart_config=cache_cfg or None,
                         tokens=thin_tokens, ttl_hours=cache_ttl_hours,
                         question_embedding=q_emb, window_key=window_key, plan_key=plan_key)
                 return SynthesisResponse(
                     answer=thin_answer, source=RESULT_SOURCE_THIN_RESTATE, tokens=thin_tokens,
                     tokens_used_today=post_budget.tokens_used, tokens_cap=post_budget.tokens_cap,
                     elapsed_ms=int((time.monotonic() - t0) * 1000),
-                    charts=charts, plan=plan, factbook_text=factbook.to_prompt_text(),
+                    charts=charts, alerts=alerts, plan=plan, factbook_text=factbook.to_prompt_text(),
                     insight_summary=insight_summary, fact_check=fc_meta)
 
         # 6. LLM grounded narrative — inside RedactionScope (P0 数据主权).
@@ -723,17 +744,24 @@ class ComprehensiveSynthesisEngine:
         # 7. Grounding hard-check (backfill真值 + flag fabricated names).
         answer, fc_meta = self._reconciler.reconcile(answer, factbook)
 
-        # 8. Charts (gated by plan).
+        # 8. Charts + 🔒 反回扣 alerts (both gated by plan/factbook; alerts derive
+        # solely from grounded FactBook signals — see collect_alerts).
         charts = self.collect_charts(factbook, plan)
+        alerts = self.collect_alerts(factbook)
 
         # 9. Bookkeeping. Cache write skipped for history-bearing turns — a
         # context-resolved answer must not be replayed as the generic cached
         # answer for that literal question text (see synthesize docstring).
         post_budget = await self._budget.consume(factory_id, tokens)
         if not conversation_history:
+            cache_cfg = {}
+            if charts:
+                cache_cfg["charts"] = charts
+            if alerts:
+                cache_cfg["alerts"] = alerts
             await self._cache.put(
                 factory_id, q_hash, answer,
-                chart_config={"charts": charts} if charts else None,
+                chart_config=cache_cfg or None,
                 tokens=tokens, ttl_hours=cache_ttl_hours,
                 question_embedding=q_emb, window_key=window_key, plan_key=plan_key,
             )
@@ -753,7 +781,7 @@ class ComprehensiveSynthesisEngine:
             answer=answer, source=RESULT_SOURCE_LLM, tokens=tokens,
             tokens_used_today=post_budget.tokens_used, tokens_cap=post_budget.tokens_cap,
             elapsed_ms=int((time.monotonic() - t0) * 1000),
-            charts=charts, plan=plan, factbook_text=factbook.to_prompt_text(),
+            charts=charts, alerts=alerts, plan=plan, factbook_text=factbook.to_prompt_text(),
             insight_summary=insight_summary, fact_check=fc_meta,
         )
 
@@ -774,21 +802,29 @@ class ComprehensiveSynthesisEngine:
         """
         ql = (q or "").lower()
         plan = {"review": False, "finance": False, "sales": False,
-                "dish_margin": False, "attribution": False, "weather": False,
+                "dish_margin_asked": False, "attribution": False, "weather": False,
                 "channel": False, "meal_period": False, "discount": False,
+                "period_comparison": False, "supplier_anomaly": False,
                 "cross": []}
         if any(k in ql for k in ("评价", "口碑", "星级", "好评", "差评", "vip", "投诉", "满意")):
             plan["review"] = True
-        if any(k in ql for k in ("营收", "营业额", "经营", "财务", "客单价", "收入", "业绩")):
+        if any(k in ql for k in ("营收", "营业额", "经营", "财务", "客单价", "收入", "业绩", "毛利", "利润")):
             plan["finance"] = True
         if any(k in ql for k in ("菜品", "商品", "销量", "畅销", "渠道", "折扣", "套餐")):
             plan["sales"] = True
+        # 2026-07-10 (P1.1): 中餐单品毛利本身不可靠 (各菜用量难固定核算) — the
+        # dish-level dimension is REMOVED (see NOTE_DISH_MARGIN_ABSENT). A
+        # 毛利/单品成本 question is redirected to the finance dimension's
+        # 加权毛利率/总毛利率 (real cost, real since PR#1315); we still remember
+        # the trigger fired (`dish_margin_asked`) so _build_factbook can attach
+        # the honest degradation note instead of silently dropping the ask.
         _wants_dish_margin = any(k in ql for k in (
             "毛利", "成本构成", "单份成本", "哪道菜", "菜品成本", "单品成本",
             "dish margin", "gross margin",
         )) and any(k in ql for k in ("菜", "菜品", "单品", "sku", "商品"))
         if _wants_dish_margin:
-            plan["dish_margin"] = True
+            plan["dish_margin_asked"] = True
+            plan["finance"] = True
             plan["sales"] = True
         # 渠道(点餐方式 堂食/外卖/自提) — NOT the payment-channel breakdown
         # already embedded in "sales" (微信/美团); this is service-mode split.
@@ -811,6 +847,18 @@ class ComprehensiveSynthesisEngine:
         _wants_discount = any(k in ql for k in ("折扣", "优惠", "满减", "打折"))
         if _wants_discount:
             plan["discount"] = True
+        # 供应商价格异常 (反回扣: 采购端偷涨价威慑, 零理论依赖 — spec P2.1)
+        if any(k in ql for k in (
+                "供应商", "进货", "采购", "进价", "涨价", "回扣", "偷偷", "猫腻", "吃差价")):
+            plan["supplier_anomaly"] = True
+        # 同比环比 (趋势): 经营/营收类问题或显式趋势词 → 带同比环比 (spec P1.3)
+        if any(k in ql for k in (
+                "营收", "营业额", "经营", "财务", "收入", "业绩", "生意", "赚钱", "利润",
+                "成本", "成本率", "用料", "领料", "漏",
+                "同比", "环比", "趋势", "增长", "涨了", "降了", "比上月", "比上周",
+                "比去年", "去年同期")):
+            plan["period_comparison"] = True
+            plan["finance"] = True  # F2: pc 的绝对值(营收/加权毛利率)必须由 finance 维度 grounded
         # Store 拖后腿 attribution — the per-store 客流×客单价 decomposition. Needs
         # a store reference AND either a lag cue or a traffic/ticket cue, so a
         # generic "门店营收" question stays on the plain finance path.
@@ -880,8 +928,9 @@ class ComprehensiveSynthesisEngine:
         # explicit dimensions too — a pure "满减花了多少" / "外卖单多不多" must
         # NOT trip open-all (token bloat, I3).
         if not (plan["review"] or plan["finance"] or plan["sales"]
-                or plan["dish_margin"] or plan["attribution"] or plan["weather"]
-                or plan["channel"] or plan["meal_period"] or plan["discount"]):
+                or plan["attribution"] or plan["weather"]
+                or plan["channel"] or plan["meal_period"] or plan["discount"]
+                or plan["supplier_anomaly"] or plan["period_comparison"]):
             plan["review"] = plan["finance"] = plan["sales"] = True
         return plan
 
@@ -900,8 +949,9 @@ class ComprehensiveSynthesisEngine:
             fid_up = (factory_id or "").upper()
             biz_type = "factory" if (fid_up.startswith("F") and len(fid_up) <= 6) else "restaurant"
             has_data = any([factbook.review, factbook.finance, factbook.sales,
-                            factbook.dish_margin, factbook.attribution,
-                            factbook.channel, factbook.meal_period, factbook.discount])
+                            factbook.period_comparison, factbook.supplier_anomaly,
+                            factbook.attribution, factbook.channel,
+                            factbook.meal_period, factbook.discount])
             quality = 2 if not has_data else (4 if grounded_clean else 3)
             q_capped = (question or "")[:500]
             await persist_distillation_sample(
@@ -1022,9 +1072,18 @@ class ComprehensiveSynthesisEngine:
             tasks["finance"] = _safe(
                 finance_summary(self._pool, factory_id, date_range, top_n_stores=5), "finance",
             )
-        if plan.get("dish_margin"):
-            tasks["dish_margin"] = _safe(
-                dish_margin(self._pool, factory_id, top_n=10), "dish_margin",
+        if plan.get("period_comparison"):
+            _pc_s, _pc_e = (
+                (date_range[0], date_range[1])
+                if isinstance(date_range, (tuple, list))
+                else (getattr(date_range, "start", None), getattr(date_range, "end", None))
+            )
+            tasks["period_comparison"] = _safe(
+                period_comparison(self._pool, factory_id, _pc_s, _pc_e), "period_comparison",
+            )
+        if plan.get("supplier_anomaly"):
+            tasks["supplier_anomaly"] = _safe(
+                detect_price_anomalies(self._pool, factory_id), "supplier_anomaly",
             )
         if plan.get("attribution"):
             # store_comparison returns ALL stores (no top-N) — needed for the
@@ -1106,13 +1165,28 @@ class ComprehensiveSynthesisEngine:
             else:
                 plan["finance"] = False
 
-        # ---- assemble dish margin ----
-        if plan.get("dish_margin"):
-            dm = results.get("dish_margin")
-            if dm and dm.get("dish_count"):
-                fb.dish_margin = dm
+        # ---- P1.1: 中餐单品毛利已停用; 用户问单品毛利 → 诚实降级 NOTE
+        # (plan_dimensions 已把该问法重定向到 finance 维度的 加权毛利率)
+        if plan.get("dish_margin_asked"):
+            notes.append(NOTE_DISH_MARGIN_ABSENT)
+
+        # ---- assemble 同比环比 (营收+加权毛利率) ----
+        if plan.get("period_comparison"):
+            pc = results.get("period_comparison")
+            if pc and (pc.get("revenue") or {}).get("available"):
+                fb.period_comparison = pc
             else:
-                plan["dish_margin"] = False
+                plan["period_comparison"] = False
+
+        # ---- assemble 供应商价格异常 (威慑非处罚) ----
+        if plan.get("supplier_anomaly"):
+            anomalies = results.get("supplier_anomaly")
+            if anomalies:  # non-empty list of anomalies
+                fb.supplier_anomaly = {"anomalies": anomalies}
+            else:
+                # 诚实降级: 无采购价格数据 / 无异常 → NOTE, 不编造
+                plan["supplier_anomaly"] = False
+                notes.append(NOTE_SUPPLIER_ANOMALY_ABSENT)
 
         # ---- assemble attribution (客流×客单价 拖后腿拆解) ----
         if plan.get("attribution"):
@@ -1414,3 +1488,80 @@ class ComprehensiveSynthesisEngine:
             })
 
         return charts
+
+    # =====================================================================
+    # 🔒 反回扣(anti-kickback) alerts — P2.1 web-admin parity
+    # =====================================================================
+    _RISK_LEVEL_TO_ALERT: Dict[str, str] = {"HIGH": "high", "MEDIUM": "medium"}
+    _DIRECTION_LABEL: Dict[str, str] = {"UP": "涨", "DOWN": "降"}
+    _RISK_LABEL: Dict[str, str] = {"high": "高风险", "medium": "中风险"}
+    # mom_pct (领料成本率环比, 百分点) at/above this threshold escalates the
+    # cost_ratio_rising alert from medium → high (mirrors the supplier
+    # anomaly HIGH/MEDIUM split; no equivalent "连续三次" signal exists for
+    # cost_ratio so a fixed point-threshold is used instead).
+    _COST_RATIO_HIGH_THRESHOLD_POINTS = 1.0
+
+    def collect_alerts(self, factbook: FactBook) -> List[Dict[str, Any]]:
+        """Derive 反回扣 alerts SOLELY from grounded FactBook signals.
+
+        Never fabricates: an empty list is returned when neither
+        ``factbook.supplier_anomaly`` nor a rising
+        ``factbook.period_comparison['cost_ratio']`` is present for this
+        window — no invented alert, no accusation without a real signal
+        behind it (🔒 an incorrect alert would falsely accuse a supplier or
+        implicate kickback/theft).
+
+        Each alert: ``{"type", "level", "title", "detail"}``.
+          - type="supplier_price_anomaly": one per anomaly in
+            ``factbook.supplier_anomaly["anomalies"]`` (already computed by
+            ``detect_price_anomalies`` — 威慑非处罚, HIGH = 连续三次同向异常).
+          - type="cost_ratio_rising": at most one, when 领料成本率 environmental
+            (mom) comparison is available and rising (mom_pct > 0).
+        """
+        alerts: List[Dict[str, Any]] = []
+
+        sa = factbook.supplier_anomaly or {}
+        for a in (sa.get("anomalies") or []):
+            level = self._RISK_LEVEL_TO_ALERT.get(a.get("riskLevel") or "")
+            if level is None:
+                continue  # unknown/absent riskLevel — skip rather than guess
+            name = a.get("ingredientName") or a.get("normalizedName") or "未知物料"
+            supplier = a.get("supplierName") or "未知供应商"
+            direction = self._DIRECTION_LABEL.get(a.get("direction") or "", "")
+            delta = a.get("deltaPct")
+            # F4: deltaPct 是相对"近期均价"(trailing avg) 而非 old→new; 措辞照实说 +
+            # round 到 1 位 (避免 12.3456%)。
+            delta_text = f"{round(abs(float(delta)), 1)}%" if delta is not None else "异常"
+            old_price, new_price = a.get("oldPrice"), a.get("newPrice")
+            alerts.append({
+                "type": "supplier_price_anomaly",
+                "level": level,
+                "title": f"供应商采购价异常：{name}",
+                "detail": (
+                    f"{supplier}的{name}最新采购价¥{_money(new_price)}"
+                    f"（较近期均价{direction}{delta_text}，上次¥{_money(old_price)}），"
+                    f"{self._RISK_LABEL[level]}。记录趋势要求解释，非处罚。"
+                ),
+            })
+
+        pc = factbook.period_comparison or {}
+        cr = pc.get("cost_ratio") or {}
+        mom_pct = cr.get("mom_pct")
+        # F3 dead-band: 领料按申请时点 lumpy, +0.1pt 抖动不该拉警报 (免 crying wolf);
+        # 仅环比上升 ≥0.3 个百分点才报, ≥1.0 高风险。
+        if cr.get("mom_available") and mom_pct is not None and mom_pct >= 0.3:
+            level = "high" if mom_pct >= self._COST_RATIO_HIGH_THRESHOLD_POINTS else "medium"
+            current = cr.get("current")
+            current_text = f"（当前{current}%）" if current is not None else ""
+            alerts.append({
+                "type": "cost_ratio_rising",
+                "level": level,
+                "title": "领料成本率环比上升",
+                "detail": (
+                    f"领料成本率环比+{mom_pct}个百分点{current_text}，"
+                    "疑似用料增加/漏损/回扣，建议核查物料用量与供应商。"
+                    "口径：领料申请估算（仅含已提交/已审批），非配方理论COGS，非盘点rollforward。"
+                ),
+            })
+
+        return alerts

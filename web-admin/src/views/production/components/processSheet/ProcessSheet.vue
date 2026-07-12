@@ -1,11 +1,15 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
-import { getInventory, getRows, type ProcessSheetInventoryItem, type ProcessSheetRowView } from '@/api/processSheet';
+import {
+  getInventory, getRows, getWorkflowSheetConfig,
+  type ProcessSheetInventoryItem, type ProcessSheetRowView, type WorkflowProcessDescriptor,
+} from '@/api/processSheet';
 import { getProductWorkProcesses, type ProcessSheetCustomFieldDef } from '@/api/processProduction';
 import { PROCESS_SHEET_CONFIG } from './PROCESS_SHEET_CONFIG';
 import ProcessDataTable from './ProcessDataTable.vue';
 import InventoryTable from './InventoryTable.vue';
 import YieldCardTable from './YieldCardTable.vue';
+import { formatPlannedOutput } from '@/utils/processSheetUnits';
 
 // -------------------------------------------------------------------------
 // View mode: 'grid' (电子表格) | 'card' (卡片)
@@ -34,6 +38,7 @@ const props = defineProps<{
   productTypeId: string;
   productName?: string;
   plannedQuantity?: number;
+  plannedUnit?: string | null;
 }>();
 const emit = defineEmits<{
   (e: 'submitted'): void;
@@ -59,6 +64,15 @@ type ProcEntry = {
   customFieldSchema: ProcessSheetCustomFieldDef[] | null;
   /** 5988: 本工序是否允许成品库存作投料来源 (透传给 ProcessDataTable 的 allowFinishedGoodsSource prop)。 */
   allowFinishedGoodsSource: boolean;
+  /** 本工序配置的投入/产出单位。产出单位为空时由表格沿用投入单位。 */
+  inputUnit: string;
+  outputUnit: string | null;
+  /**
+   * 2B Task F1 (additive): 该道工序对应的 workflow 端口上下文 (计划产出 SKU/单位 + 所需原料类型),
+   * 仅 workflow-activated 计划有值; legacy 计划恒为 undefined/null。透传给 ProcessDataTable 作
+   * 只读展示 (fool-proof Rule 2/3 — 告诉文员要产什么, 不给自由类型选择), 不改变 saveRow 请求形状。
+   */
+  workflowContext?: WorkflowProcessDescriptor | null;
 };
 
 /** 唯一工序 key = 链内唯一 processOrder 的字符串形式 (不用 code, code 会碰撞)。 */
@@ -92,9 +106,9 @@ function nameToConfigCode(processName: string): string | undefined {
 
 // 回退切片 (动态解析失败/无可映射工序时, 保持现状, 零回归)
 const FALLBACK_PROCESSES: ProcEntry[] = [
-  { code: 'xiuyou',   order: 1, label: '修油', allowInjection: false, allowMultipleUpstreamSources: false, isFirstProcess: true,  customFieldSchema: null, allowFinishedGoodsSource: false },
-  { code: 'chaoshui', order: 2, label: '焯水', allowInjection: false, allowMultipleUpstreamSources: false, isFirstProcess: false, customFieldSchema: null, allowFinishedGoodsSource: false },
-  { code: 'shuzhi',   order: 3, label: '熟制', allowInjection: false, allowMultipleUpstreamSources: true,  isFirstProcess: false, customFieldSchema: null, allowFinishedGoodsSource: false },
+  { code: 'xiuyou',   order: 1, label: '修油', allowInjection: false, allowMultipleUpstreamSources: false, isFirstProcess: true,  customFieldSchema: null, allowFinishedGoodsSource: false, inputUnit: 'kg', outputUnit: null },
+  { code: 'chaoshui', order: 2, label: '焯水', allowInjection: false, allowMultipleUpstreamSources: false, isFirstProcess: false, customFieldSchema: null, allowFinishedGoodsSource: false, inputUnit: 'kg', outputUnit: null },
+  { code: 'shuzhi',   order: 3, label: '熟制', allowInjection: false, allowMultipleUpstreamSources: true,  isFirstProcess: false, customFieldSchema: null, allowFinishedGoodsSource: false, inputUnit: 'kg', outputUnit: null },
 ];
 
 const PROCESSES = ref<ProcEntry[]>([...FALLBACK_PROCESSES]);
@@ -110,9 +124,89 @@ const upstreamKeyOf = computed<Record<string, string | null>>(() => {
 });
 
 /**
- * 动态解析产品工序链 (G0 + SP-G A 真自由配置):
+ * 2B Task F1 (additive): workflow 快照 (WorkflowProcessDescriptor[]) → ProcEntry[]。
  *
- * 取该产品 ProductWorkProcess (按 processOrder), 两阶段映射:
+ * 镜像下方 legacy 分支的 archetype 映射逻辑 (同一 ROLE_TO_ARCHETYPE / 关键词回退规则), 但
+ * 独立成一份函数 —— 不改动、不复用 legacy 分支任何一行代码, 保证 legacy 路径字节不变。
+ *
+ * `customFieldSchema` 后端按 Object 原样返回 (与 WorkProcess.customFieldSchema 同源 JSON);
+ * 仅当运行时确实是数组时才当 ProcessSheetCustomFieldDef[] 使用, 否则按 null 处理 (不用
+ * `as any`, 用运行时 Array.isArray 收窄类型)。
+ */
+function mapWorkflowProcesses(descriptors: WorkflowProcessDescriptor[]): ProcEntry[] {
+  const sorted = [...descriptors].sort((a, b) => a.processOrder - b.processOrder);
+  const hasRoles = sorted.some((p) => p.defaultCostCategory != null);
+
+  return sorted
+    .map((proc, idx) => {
+      let code: string;
+      if (hasRoles) {
+        code = proc.defaultCostCategory != null
+          ? (ROLE_TO_ARCHETYPE[proc.defaultCostCategory] ?? 'chaoshui')
+          : 'chaoshui';
+      } else {
+        const kw = proc.processName ? nameToConfigCode(proc.processName) : undefined;
+        if (idx === 0) {
+          code = (kw && kw !== 'xiuyou') ? kw : 'xiuyou';
+        } else {
+          code = (kw && kw !== 'xiuyou') ? kw : 'chaoshui';
+        }
+      }
+      // BLOCKING fix (Part B): the archetype `code` drives which entry form renders AND (via
+      // ProcessDataTable's buildRequest) the name-keyword `finished`/`unit` heuristic. It must
+      // agree with the workflow port's actual output kind, not just the role/keyword guess above
+      // — otherwise a workflow whose finishing process name isn't literally "气调" never gets the
+      // finished-goods form, and every save 409s against
+      // ProcessSheetServiceImpl#validateWorkflowRowIfApplicable (WORKFLOW_ROW_OUTPUT_KIND_MISMATCH),
+      // dead-ending the clerk after they've entered every semi row. A finished output always gets
+      // the finished-goods ('qidiao') archetype; a semi output must never be forced into it even
+      // if role/keyword mapping happened to land there (e.g. a PACKAGING-role or "气调"-named
+      // process whose actual port output is semi-finished) — fall back to the semi-capable
+      // 'chaoshui' archetype instead.
+      const workflowOutputFinished = proc.output?.finished === true;
+      if (workflowOutputFinished) {
+        code = 'qidiao';
+      } else if (code === 'qidiao') {
+        code = 'chaoshui';
+      }
+      // allowInjection: 计划产出为半成品/成品作投料来源(即客户显式开启 allowFinishedGoodsSource),
+      // 或本工序自身的 inputs 里已声明半成品/成品端口 (说明该道设计上就吃半成品/成品投料)。
+      const hasUpstreamMaterialInput = proc.inputs.some(
+        (p) => p.materialKind === 'SEMI_FINISHED' || p.materialKind === 'FINISHED_GOOD',
+      );
+      const rawSchema = proc.customFieldSchema;
+      const customFieldSchema = Array.isArray(rawSchema)
+        ? (rawSchema as ProcessSheetCustomFieldDef[])
+        : null;
+      const entry: ProcEntry = {
+        code,
+        order: proc.processOrder,
+        label: proc.processName || `工序${proc.processOrder}`,
+        allowInjection: proc.allowFinishedGoodsSource === true || hasUpstreamMaterialInput,
+        allowMultipleUpstreamSources: proc.allowMultipleUpstreamSources === true,
+        isFirstProcess: idx === 0,
+        customFieldSchema,
+        allowFinishedGoodsSource: proc.allowFinishedGoodsSource === true,
+        // origin/main 合并: config-driven 投入/产出单位。workflow 计划从端口单位取
+        // (投入=首个输入端口单位, 产出=输出端口单位)，与 workflowContext 展示/校验一致。
+        inputUnit: proc.inputs?.[0]?.unit?.trim() || 'kg',
+        outputUnit: proc.output?.unit?.trim() || null,
+        workflowContext: proc,
+      };
+      return entry;
+    })
+    .filter((p): p is ProcEntry => !!PROCESS_SHEET_CONFIG[p.code]);
+}
+
+/**
+ * 动态解析产品工序链 (G0 + SP-G A 真自由配置 + 2B Task F1 workflow-awareness):
+ *
+ * 0. Workflow-awareness (2B Task F1, additive): 先探 workflow-config 端点 —— 该计划若绑定
+ *    workflow 批次 (`GET .../process-sheet/workflow-config` 返回非 null), 优先用 workflow
+ *    快照的 ProcessDescriptor[] 建 tabs (见 mapWorkflowProcesses), **不触发**下方 legacy 逻辑。
+ *    探测失败 / 返回 null / 无 processes → 原样落入 legacy 分支 (下方逻辑字节不变)。
+ *
+ * legacy 分支 —— 取该产品 ProductWorkProcess (按 processOrder), 两阶段映射:
  *
  * 1. Role mode (SP-G A): 若本产品任意工序有非 null 的 defaultCostCategory,
  *    则对每道工序用 ROLE_TO_ARCHETYPE[defaultCostCategory] 映射; 未登记的
@@ -128,6 +222,22 @@ const upstreamKeyOf = computed<Record<string, string | null>>(() => {
  * 失败或 <1 道可录 → 回退切片.
  */
 async function resolveProcesses() {
+  // Step 0 (2B Task F1, additive): workflow-config probe. Independent try/catch so a
+  // failure here always falls through to the untouched legacy branch below.
+  try {
+    const wfResp = await getWorkflowSheetConfig(props.factoryId, props.planId);
+    const wfConfig = wfResp.data;
+    if (wfConfig && Array.isArray(wfConfig.processes) && wfConfig.processes.length > 0) {
+      const mapped = mapWorkflowProcesses(wfConfig.processes);
+      if (mapped.length >= 1) {
+        PROCESSES.value = mapped;
+        return;
+      }
+    }
+  } catch (e) {
+    console.warn('[ProcessSheet] getWorkflowSheetConfig 失败, 回退 legacy 工序解析', e);
+  }
+
   try {
     const resp = await getProductWorkProcesses(props.factoryId, props.productTypeId);
     const items = resp.data || [];
@@ -176,6 +286,8 @@ async function resolveProcesses() {
           isFirstProcess: idx === 0,
           customFieldSchema: it.customFieldSchema ?? null,
           allowFinishedGoodsSource: it.allowFinishedGoodsSource === true,
+          inputUnit: it.unitOverride?.trim() || it.defaultUnit?.trim() || 'kg',
+          outputUnit: it.defaultOutputUnit?.trim() || null,
         };
       })
       // Role mode: code always valid. Name mode: code is always 'xiuyou'|'chaoshui'|known keyword.
@@ -319,7 +431,12 @@ defineExpose({ hasUnsavedRows });
         <div style="font-size:15px;font-weight:600;color:#303133">
           逐工序电子表格
           <span v-if="productName" style="font-weight:400;color:#606266;margin-left:8px">{{ productName }}</span>
-          <span v-if="plannedQuantity" style="font-size:12px;color:#909399;margin-left:8px">计划 {{ plannedQuantity }} kg</span>
+          <span v-if="plannedQuantity" style="font-size:12px;color:#909399;margin-left:8px">
+            {{ formatPlannedOutput(plannedQuantity, plannedUnit) }}
+            <el-tooltip content="计划成品数量按产品单位记录；首道投料数量以逐工序报工和配方出成率为准" placement="top">
+              <span style="margin-left:3px;cursor:help">?</span>
+            </el-tooltip>
+          </span>
         </div>
         <div style="font-size:12px;color:#909399;margin-top:4px">
           每行独立保存 · 保存后自动生成批次号 · 可随时追加
@@ -371,6 +488,9 @@ defineExpose({ hasUnsavedRows });
             :is-first-process="proc.isFirstProcess"
             :custom-field-schema="proc.customFieldSchema"
             :allow-finished-goods-source="proc.allowFinishedGoodsSource"
+            :input-unit="proc.inputUnit"
+            :output-unit="proc.outputUnit"
+            :workflow-context="proc.workflowContext ?? null"
             :upstream-process-label="upstreamLabelOf(proc)"
             :product-type-id="productTypeId"
             :upstream-items="upstreamItems(proc)"

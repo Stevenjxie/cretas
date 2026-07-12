@@ -11,6 +11,9 @@ export interface StoreOrder {
   volumeCbm: number;
   window: string;
   mapAnchor: MapPoint;
+  /** 真实经纬度（高德地图底图用；SVG 示意图用 mapAnchor）。 */
+  lng: number;
+  lat: number;
 }
 
 export interface Vehicle {
@@ -47,11 +50,23 @@ export interface RouteTrip {
   storeIds: string[];
   segmentKeys: string[];
   geometry: MapPoint[];
+  /** 后端存好的沿实际道路 polyline (GCJ-02 {lng,lat})；有则地图直接画、免实时调地图 API。 */
+  roadPath?: Array<{ lng: number; lat: number }>;
+  /** 总行驶时长 (分钟)。 */
+  durationMin?: number;
+  /** 多车次: 计划出发时刻 (分钟, 480=08:00)。 */
+  plannedDepartMin?: number;
+  /** 多车次: 预计返仓时刻 (分钟)。 */
+  returnToDepotMin?: number;
+  /** 多车次: 迟到回仓 (晚于司机班次/车可用截止)。 */
+  lateReturn?: boolean;
+  /** 多车次: 同车当天第几趟 (1-based)。 */
+  vehicleTripSeq?: number;
   segmentDistances: number[];
   totalDistanceKm: number;
   totalVolumeCbm: number;
   loadRate: number;
-  status: 'draft' | 'needs_vehicle' | 'needs_route_data' | 'confirmed';
+  status: 'draft' | 'needs_vehicle' | 'needs_driver' | 'needs_route_data' | 'confirmed';
 }
 
 export interface ScheduleResult {

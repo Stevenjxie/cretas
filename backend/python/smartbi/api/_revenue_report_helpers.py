@@ -204,7 +204,17 @@ async def _log_audit(
 ) -> None:
     """Best-effort insert into smart_bi_report_audit_log. Logs on failure
     but never raises — audit shouldn't break the user-visible path.
+
+    Demo tenants are skipped: the public no-login demo hands a DEMO_REST JWT
+    (role factory_super_admin) to any anonymous visitor, so an unauthenticated
+    caller could loop prepare/generate and grow this audit table without bound.
+    Their activity has no audit value anyway (not a real operator). This keeps
+    the demo revenue-report path a genuine read-only compute (no persistent
+    write), matching the DEMO_WRITE_ALLOW_SUFFIXES rationale in auth_middleware.
     """
+    from auth_middleware import DEMO_FACTORY_IDS  # authority for demo tenant set
+    if params.factory_id in DEMO_FACTORY_IDS:
+        return
     try:
         params_snapshot = {
             "store_ids": params.store_ids,

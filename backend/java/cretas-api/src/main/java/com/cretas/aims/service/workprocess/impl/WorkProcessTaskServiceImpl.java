@@ -16,6 +16,7 @@ import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.workprocess.WorkProcessTaskService;
+import com.cretas.aims.service.workflow.ProductProcessWorkflowRuntimeService;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,6 +51,7 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
     private final UserRepository userRepository;
     private final ProductionBatchRepository productionBatchRepository;
     private final ProductTypeRepository productTypeRepository;
+    private final ProductProcessWorkflowRuntimeService workflowRuntimeService;
 
     /**
      * Fable 审计修复 (2026-06-11 — 问题2): retry spawn 路径 (HTTP / AI) 需读计划的 skipProcessReporting,
@@ -191,17 +193,29 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
                     .collect(Collectors.toList());
         }
 
+        if (Boolean.TRUE.equals(skipProcessReporting)) {
+            return spawnBatchLevelTwoPointTasks(
+                    factoryId, productionBatchId, productTypeId,
+                    materialResponsibleId, outputResponsibleId, false);
+        }
+
+        java.util.Optional<List<WorkProcessTaskDTO>> workflow =
+                workflowRuntimeService.materializeIfActive(
+                        factoryId, productionBatchId, productTypeId);
+        if (workflow.isPresent()) {
+            return workflow.get();
+        }
+
         List<ProductWorkProcess> templates = productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, productTypeId);
 
         // 计划级免工序报工模式判定 (六扇门 Wave2 升级, V20261017_01):
         //   skip=true 显式选择 OR 产品未配任何工序 (工序 optional) → 走批次级两点报工 spawn。
         //   这两种情形都不再 422 阻塞 (旧逐道路径才在 0 工序时报 422)。
-        boolean skip = Boolean.TRUE.equals(skipProcessReporting);
-        if (skip || templates.isEmpty()) {
+        if (templates.isEmpty()) {
             return spawnBatchLevelTwoPointTasks(
                     factoryId, productionBatchId, productTypeId,
-                    materialResponsibleId, outputResponsibleId, templates.isEmpty());
+                    materialResponsibleId, outputResponsibleId, true);
         }
 
         // 一次性查所有 WorkProcess 定义, 用作 unit 默认值 fallback

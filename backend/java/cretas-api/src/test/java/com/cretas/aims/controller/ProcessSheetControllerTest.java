@@ -2,8 +2,10 @@ package com.cretas.aims.controller;
 
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
+import com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO;
 import com.cretas.aims.exception.GlobalExceptionHandler;
 import com.cretas.aims.service.processentry.ProcessSheetService;
+import com.cretas.aims.service.workflow.WorkflowClerkSheetService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -17,12 +19,14 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.validation.beanvalidation.LocalValidatorFactoryBean;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -43,6 +47,9 @@ class ProcessSheetControllerTest {
     @Mock
     private ProcessSheetService service;
 
+    @Mock
+    private WorkflowClerkSheetService workflowClerkSheetService;
+
     private MockMvc mockMvc;
     private ObjectMapper objectMapper;
 
@@ -54,6 +61,9 @@ class ProcessSheetControllerTest {
             "/api/mobile/" + FACTORY_ID + "/production-plans/" + PLAN_ID + "/process-sheet/row";
     private static final String DELETE_ROW_URL =
             "/api/mobile/" + FACTORY_ID + "/production-plans/" + PLAN_ID + "/process-sheet/row/ROW-001";
+    private static final String WORKFLOW_CONFIG_URL =
+            "/api/mobile/" + FACTORY_ID + "/production-plans/" + PLAN_ID
+                    + "/process-sheet/workflow-config";
 
     @BeforeEach
     void setUp() {
@@ -63,7 +73,7 @@ class ProcessSheetControllerTest {
         validator.afterPropertiesSet();
 
         mockMvc = MockMvcBuilders
-                .standaloneSetup(new ProcessSheetController(service))
+                .standaloneSetup(new ProcessSheetController(service, workflowClerkSheetService))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setValidator(validator)
                 .build();
@@ -113,5 +123,67 @@ class ProcessSheetControllerTest {
                 .andExpect(jsonPath("$.success").value(true));
 
         verify(service).deleteRow(eq(FACTORY_ID), eq(PLAN_ID), eq("ROW-001"), eq(USER_ID));
+    }
+
+    @Test
+    @DisplayName("GET /workflow-config → workflow 计划返回投影配置")
+    void getWorkflowConfig_workflowPlan_returnsProjection() throws Exception {
+        WorkflowClerkSheetConfigDTO.PortDescriptor output =
+                WorkflowClerkSheetConfigDTO.PortDescriptor.builder()
+                        .workflowPortId("trim-out")
+                        .materialKind("SEMI_FINISHED")
+                        .skuId("PT-SEMI")
+                        .materialName("去骨腿肉半成品")
+                        .unit("kg")
+                        .required(true)
+                        .skuResolved(true)
+                        .finished(false)
+                        .build();
+        WorkflowClerkSheetConfigDTO.ProcessDescriptor process =
+                WorkflowClerkSheetConfigDTO.ProcessDescriptor.builder()
+                        .workflowNodeId("trim")
+                        .workProcessId("TRIM")
+                        .processName("修整")
+                        .processOrder(1)
+                        .plannedUnit("kg")
+                        .allowMultipleUpstreamSources(false)
+                        .allowFinishedGoodsSource(false)
+                        .inputs(List.of())
+                        .output(output)
+                        .build();
+        WorkflowClerkSheetConfigDTO config = WorkflowClerkSheetConfigDTO.builder()
+                .workflowBatchId(901L)
+                .workflowInstanceId(501L)
+                .productTypeId("PT-PIG")
+                .processes(List.of(process))
+                .build();
+        when(workflowClerkSheetService.getWorkflowSheetConfig(FACTORY_ID, PLAN_ID))
+                .thenReturn(config);
+
+        mockMvc.perform(get(WORKFLOW_CONFIG_URL))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.workflowBatchId").value(901))
+                .andExpect(jsonPath("$.data.workflowInstanceId").value(501))
+                .andExpect(jsonPath("$.data.productTypeId").value("PT-PIG"))
+                .andExpect(jsonPath("$.data.processes[0].workflowNodeId").value("trim"))
+                .andExpect(jsonPath("$.data.processes[0].output.materialName").value("去骨腿肉半成品"))
+                .andExpect(jsonPath("$.data.processes[0].output.skuResolved").value(true));
+
+        verify(workflowClerkSheetService).getWorkflowSheetConfig(FACTORY_ID, PLAN_ID);
+    }
+
+    @Test
+    @DisplayName("GET /workflow-config → legacy 计划 data:null (FE 回落原路径)")
+    void getWorkflowConfig_legacyPlan_returnsNullData() throws Exception {
+        when(workflowClerkSheetService.getWorkflowSheetConfig(FACTORY_ID, PLAN_ID))
+                .thenReturn(null);
+
+        mockMvc.perform(get(WORKFLOW_CONFIG_URL))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data").doesNotExist());
+
+        verify(workflowClerkSheetService).getWorkflowSheetConfig(FACTORY_ID, PLAN_ID);
     }
 }

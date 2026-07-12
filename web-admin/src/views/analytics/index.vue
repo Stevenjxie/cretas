@@ -438,15 +438,6 @@ function formatPercent(num: number): string {
         </router-link>
       </el-col>
       <el-col :span="8">
-        <router-link to="/analytics/ai-reports" class="nav-card">
-          <el-card shadow="hover">
-            <el-icon size="32"><DataAnalysis /></el-icon>
-            <h3>AI分析报告</h3>
-            <p>数据分析报告和异常检测</p>
-          </el-card>
-        </router-link>
-      </el-col>
-      <el-col :span="8">
         <router-link to="/analytics/kpi" class="nav-card">
           <el-card shadow="hover">
             <el-icon size="32"><Histogram /></el-icon>

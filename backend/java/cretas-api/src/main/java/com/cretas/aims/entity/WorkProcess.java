@@ -1,5 +1,6 @@
 package com.cretas.aims.entity;
 
+import com.cretas.aims.entity.enums.WorkProcessOutputMaterialKind;
 import io.hypersistence.utils.hibernate.type.json.JsonType;
 import lombok.*;
 import jakarta.persistence.*;
@@ -70,6 +71,16 @@ public class WorkProcess extends BaseEntity {
     /** 产出单位 (kg→盒; 为空沿用 unit) */
     @Column(name = "output_unit", length = 20)
     private String outputUnit;
+
+    @Enumerated(EnumType.STRING)
+    @Column(
+            name = "default_output_material_kind",
+            nullable = false,
+            length = 32,
+            columnDefinition = "VARCHAR(32) DEFAULT 'SEMI_FINISHED' "
+                    + "CHECK (default_output_material_kind IN ('SEMI_FINISHED', 'FINISHED_GOOD'))"
+    )
+    private WorkProcessOutputMaterialKind defaultOutputMaterialKind;
 
     /** 标准时薪 (元/小时; null=未配置, 用于逐道人工成本计算, 绝不默认 0) */
     @Column(name = "standard_hourly_rate", precision = 8, scale = 2)

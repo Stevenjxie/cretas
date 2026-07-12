@@ -6,6 +6,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { ElMessageBox, ElMessage } from 'element-plus';
 import { Fold, Expand, User, SwitchButton, Refresh, Moon, Sunny } from '@element-plus/icons-vue';
 import ReminderBell from '@/components/notifications/ReminderBell.vue';
+import AlertNotificationBell from '@/components/notifications/AlertNotificationBell.vue';
 
 const router = useRouter();
 const route = useRoute();
@@ -89,6 +90,9 @@ async function handleLogout() {
           <Sunny v-else />
         </el-icon>
       </el-tooltip>
+
+      <!-- 2026-07-11: 站内通知 bell (含餐饮经营体检预警/反回扣推送) -->
+      <AlertNotificationBell />
 
       <!-- Sprint 4 W2 S-REMIND-1: 我的提醒 bell badge -->
       <ReminderBell />
@@ -176,6 +180,14 @@ async function handleLogout() {
     padding: 8px;
     border-radius: var(--radius-sm, 6px);
     transition: all 0.2s;
+
+    // 修复: flex 布局下 el-icon 的 svg 只继承到 height:1em, width 塌成 ~2px → 图标不可见 (但可点/hover)。
+    //   显式锁定 1em×1em 方形, 保证铃铛/刷新/主题图标真实可见。
+    :deep(svg) {
+      width: 1em;
+      height: 1em;
+      flex-shrink: 0;
+    }
 
     &:hover {
       background-color: var(--color-bg-hover, #EDF2F7);

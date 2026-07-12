@@ -100,7 +100,15 @@ class AgentBudgetTracker:
                 INSERT INTO agent_budget_daily (factory_id, date, tokens_cap)
                 VALUES ($1, $2, $3)
                 ON CONFLICT (factory_id, date) DO UPDATE
-                    SET updated_at = NOW()
+                    SET updated_at = NOW(),
+                        -- Refresh the cap from the freshly-resolved value so a
+                        -- mid-day agent_tenant_config.custom_cap_override change
+                        -- (or tier change) takes effect the same day instead of
+                        -- being stuck at whatever cap the row was first created
+                        -- with. Without this, ON CONFLICT only bumped updated_at
+                        -- and the daily row kept its original cap until the next
+                        -- UTC day rolled over a fresh row.
+                        tokens_cap = EXCLUDED.tokens_cap
                 RETURNING tokens_used, tokens_cap, blocked
                 """,
                 factory_id, today, cap,

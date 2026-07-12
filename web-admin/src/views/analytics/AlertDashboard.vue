@@ -2,6 +2,11 @@
 /**
  * 生产异常预警看板
  * 提供告警汇总、筛选、确认/解决操作和 AI 根因分析详情
+ *
+ * 餐饮租户 (isRestaurant): 站立式/主动预警看板, 直接调用真实 14 指标阈值引擎
+ * (DiagnosticsEngine, 经 GET /health-check-report), 不是聊天问答, 也不是硬编码
+ * 3 条规则. 复用 HealthReportView.vue 的同款 API client + DiagnosisCard 渲染,
+ * 首屏自动加载上月报告 (fool-proof-design Rule 1 — 主动触达, 不需用户先问).
  */
 import { ref, onMounted, computed } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
@@ -11,102 +16,51 @@ import { useAuthStore } from '@/store/modules/auth'
 import { ElMessage } from 'element-plus'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { pythonFetch } from '@/api/smartbi/common'
-import { useRouter } from 'vue-router'
+import { isAxiosError } from 'axios'
+import {
+  fetchHealthCheckReport,
+  type HealthCheckReport,
+} from '@/api/smartbi/healthCheck'
+import DiagnosisCard from '@/views/smart-bi/components/health/DiagnosisCard.vue'
 
 const authStore = useAuthStore()
-const router = useRouter()
 const factoryId = computed(() => authStore.factoryId)
-// Apr 24 Plan C Phase 7: restaurant tenants get Gold-derived alerts
+// Apr 24 Plan C Phase 7: restaurant tenants get Gold-derived alerts.
+// Jul 11 2026: 硬编码 3 条阈值规则 → 换成真实 14 指标 DiagnosticsEngine (G4
+// health-check-report), engine-backed 站立式预警 (见 module docstring).
 const isRestaurant = computed(() => authStore.factoryType === 'RESTAURANT')
 
-interface RestaurantAlert {
-  level: 'CRITICAL' | 'WARNING' | 'INFO'
-  kind: string
-  title: string
-  value: string
-  threshold: string
-  action: string
-  link: string
-  icon: string
-}
-const restaurantAlerts = ref<RestaurantAlert[]>([])
+const healthReport = ref<HealthCheckReport | null>(null)
+const healthReportLoading = ref(false)
+const healthReportError = ref('')
+
+const healthDiagnoses = computed(() => healthReport.value?.diagnoses ?? [])
+const healthSummary = computed(() => healthReport.value?.summary ?? null)
+const healthMeta = computed(() => healthReport.value?.reportMeta ?? null)
+const healthAllClear = computed(
+  () => !healthReportLoading.value && healthReport.value != null && healthDiagnoses.value.length === 0,
+)
 
 async function loadRestaurantAlerts() {
   if (!factoryId.value) return
+  healthReportLoading.value = true
+  healthReportError.value = ''
   try {
-    const res = await pythonFetch('/api/smartbi/restaurant-ops/summary?days=30') as {
-      success: boolean
-      data?: { totals?: Record<string, number> }
+    const res = await fetchHealthCheckReport(factoryId.value)
+    if (!res.success || !res.data) {
+      throw new Error(res.message || '预警看板加载失败')
     }
-    if (!res.success || !res.data?.totals) return
-    const t = res.data.totals
-    const reqCost = t.totalReqCost || 0
-    const reqQty = t.totalReqQty || 0
-    const wastageCost = t.totalWastageCost || 0
-    const shortage = t.totalShortage || 0
-    const alerts: RestaurantAlert[] = []
-    // Rule 1: 损耗率 > 5% — CRITICAL; > 2% — WARNING
-    if (reqCost > 0) {
-      const rate = wastageCost / reqCost
-      if (rate > 0.05) {
-        alerts.push({
-          level: 'CRITICAL', kind: 'wastage_rate',
-          title: '损耗率过高',
-          value: `${(rate * 100).toFixed(2)}%`,
-          threshold: '> 5%',
-          action: '检查过期/变质食材管理',
- link: '/restaurant/wastage', icon: '',
-        })
-      } else if (rate > 0.02) {
-        alerts.push({
-          level: 'WARNING', kind: 'wastage_rate',
-          title: '损耗率偏高',
-          value: `${(rate * 100).toFixed(2)}%`,
-          threshold: '> 2%',
-          action: '关注损耗趋势',
- link: '/restaurant/wastage', icon: '',
-        })
-      }
-    }
-    // Rule 2: 盘亏率 > 3% — WARNING; > 5% — CRITICAL
-    if (reqQty > 0) {
-      const rate = shortage / reqQty
-      if (rate > 0.05) {
-        alerts.push({
-          level: 'CRITICAL', kind: 'shortage_rate',
-          title: '盘亏率严重',
-          value: `${(rate * 100).toFixed(2)}%`,
-          threshold: '> 5%',
-          action: '立即核查库存管理流程',
- link: '/restaurant/stocktaking', icon: '',
-        })
-      } else if (rate > 0.03) {
-        alerts.push({
-          level: 'WARNING', kind: 'shortage_rate',
-          title: '盘亏率偏高',
-          value: `${(rate * 100).toFixed(2)}%`,
-          threshold: '> 3%',
-          action: '加强盘点频率',
- link: '/restaurant/stocktaking', icon: '',
-        })
-      }
-    }
-    // Rule 3: 活动天数 < 5 / 30 — INFO (低频使用)
-    const activeDays = t.activeDays || 0
-    if (activeDays > 0 && activeDays < 5) {
-      alerts.push({
-        level: 'INFO', kind: 'low_activity',
-        title: '运营记录频次低',
-        value: `${activeDays} 天`,
-        threshold: '近30天',
-        action: '建议日常录入领料/损耗',
- link: '/restaurant/requisitions', icon: '',
-      })
-    }
-    restaurantAlerts.value = alerts
+    healthReport.value = res.data
   } catch (e) {
-    console.error('[alerts] restaurant load failed:', e)
+    const msg = isAxiosError(e)
+      ? (e.response?.data?.message ?? '请求失败')
+      : (e instanceof Error ? e.message : String(e))
+    healthReportError.value = msg
+    healthReport.value = null
+    ElMessage({ message: msg, type: 'error', duration: 0, showClose: true })
+    console.error('[alerts] restaurant health-check load failed:', e)
+  } finally {
+    healthReportLoading.value = false
   }
 }
 
@@ -375,27 +329,81 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- Apr 24 P1+ Plan C: restaurant Gold-derived alerts -->
-    <div v-if="isRestaurant" class="restaurant-alerts" style="margin-bottom:20px">
-      <el-empty v-if="restaurantAlerts.length === 0" description="近 30 天无运营异常,经营状况良好" style="padding:30px 0" />
-      <template v-else>
-        <div v-for="(a, idx) in restaurantAlerts" :key="idx" :class="['r-alert', `r-alert--${a.level.toLowerCase()}`]">
-          <div class="r-alert-icon">{{ a.icon }}</div>
-          <div class="r-alert-body">
-            <div class="r-alert-title">{{ a.title }} <span class="r-alert-badge">{{ a.level }}</span></div>
-            <div class="r-alert-meta">
-              当前值 <b>{{ a.value }}</b>, 阈值 {{ a.threshold }}. 建议: {{ a.action }}
-            </div>
+    <!-- Jul 11 2026: restaurant engine-backed standing alert dashboard.
+         Replaces the 3 hardcoded client-side rules with the real 14-metric
+         DiagnosticsEngine (via GET /health-check-report) — same data/engine
+         as HealthReportView.vue's AI 经营体检, rendered here as alerts. -->
+    <div v-if="isRestaurant" class="restaurant-alerts" style="margin-bottom:20px" data-test="restaurant-alert-panel">
+      <!-- 加载中 -->
+      <div v-if="healthReportLoading" v-loading="true" element-loading-text="正在检测经营异常..." style="height:160px" />
+
+      <!-- 错误 (4-位一体: sticky toast 已在 loadRestaurantAlerts 内触发, 这里再显式展示) -->
+      <el-alert
+        v-else-if="healthReportError"
+        :title="healthReportError"
+        type="error"
+        :closable="false"
+        show-icon
+        data-test="restaurant-alert-error"
+      />
+
+      <template v-else-if="healthReport">
+        <!-- 摘要徽章 -->
+        <div class="summary-row-restaurant" data-test="restaurant-summary-row">
+          <div class="summary-card critical">
+            <div class="summary-count">{{ healthSummary?.criticalCount ?? 0 }}</div>
+            <div class="summary-label">严重</div>
           </div>
-          <el-button size="small" @click="router.push(a.link)">查看</el-button>
+          <div class="summary-card warning">
+            <div class="summary-count">{{ healthSummary?.warningCount ?? 0 }}</div>
+            <div class="summary-label">预警</div>
+          </div>
+          <div class="summary-card resolved">
+            <div class="summary-count">{{ healthSummary?.checkedCount ?? 0 }}</div>
+            <div class="summary-label">已检查指标</div>
+          </div>
+          <el-tooltip
+            v-if="healthSummary?.coverageNote"
+            :content="healthSummary.coverageNote"
+            placement="bottom"
+            data-test="restaurant-coverage-tooltip"
+          >
+            <span class="coverage-hint">数据覆盖说明</span>
+          </el-tooltip>
+        </div>
+
+        <!-- 全部健康 — 诚实空态, 不编造告警 -->
+        <el-empty
+          v-if="healthAllClear"
+          description="本期无越界预警,经营指标均在正常范围"
+          style="padding:30px 0"
+          data-test="restaurant-all-clear"
+        />
+
+        <!-- 诊断卡片墙 (复用 AI 经营体检同款 DiagnosisCard) -->
+        <div v-else class="card-wall">
+          <DiagnosisCard
+            v-for="(d, idx) in healthDiagnoses"
+            :key="d.metricKey"
+            :diagnosis="d"
+            :default-expanded="d.severity === 'critical' && idx < 3"
+          />
+        </div>
+
+        <div v-if="healthMeta" class="restaurant-report-footer">
+          周期: {{ healthMeta.period }} · 业态: {{ healthMeta.subSector }} · 快照: {{ healthMeta.snapshotAt }}
+          <span v-if="healthMeta.cacheHit"> · (缓存)</span>
         </div>
       </template>
+
       <el-alert type="info" :closable="false" style="margin-top:16px" show-icon>
-        <template #title>关于规则</template>
+        <template #title>关于本看板</template>
         <div style="font-size:12px;line-height:1.7">
-          损耗率 = 损耗金额 / 领料金额 — 行业良好水平 &lt;2%, 超 5% 需立即排查.
-          盘亏率 = 盘亏数量 / 领料数量 — 良好水平 &lt;1%, 超 3% 提示流程漏洞.
-          数据来自 <b>Gold 聚合层</b> (近 30 天滚动窗口), 每小时自动刷新.
+          预警来自真实 14 指标经营诊断引擎 (食材成本率/人力成本率/折扣率/外卖依赖度/
+          渠道收款率/评分趋势/食材损耗率/客单价达标率 等), 与"AI 经营体检"共用同一套
+          行业基准阈值, 不是聊天问答也不是固定硬编码规则. 部分指标(如翻台率/充卡赠送
+          依赖度/菜品毛利率)因暂无可靠数据来源而诚实跳过, 不编造数值 — 详见"数据覆盖
+          说明".
         </div>
       </el-alert>
     </div>
@@ -572,28 +580,34 @@ onMounted(() => {
 
 <style lang="scss" scoped>
 .restaurant-alerts {
-  .r-alert {
+  .summary-row-restaurant {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 14px 18px;
-    border-radius: 8px;
-    margin-bottom: 10px;
-    border-left: 4px solid;
-    background: #fafafa;
-    &--critical { border-left-color: #f56c6c; background: #fef0f0; }
-    &--warning  { border-left-color: #e6a23c; background: #fdf6ec; }
-    &--info     { border-left-color: #409eff; background: #ecf5ff; }
-    .r-alert-icon { font-size: 24px; }
-    .r-alert-body { flex: 1; }
-    .r-alert-title {
-      font-weight: 600; font-size: 15px; color: #303133;
-      .r-alert-badge {
-        margin-left: 8px; font-size: 11px; font-weight: normal;
-        padding: 2px 8px; border-radius: 3px; background: rgba(0,0,0,0.08);
-      }
+    gap: 16px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+
+    .summary-card {
+      min-width: 100px;
+      padding: 14px 20px;
     }
-    .r-alert-meta { font-size: 13px; color: #606266; margin-top: 4px; }
+  }
+  .coverage-hint {
+    font-size: 13px;
+    color: #909399;
+    cursor: help;
+    text-decoration: underline dotted;
+  }
+  .card-wall {
+    margin-top: 8px;
+  }
+  .restaurant-report-footer {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid #ebeef5;
+    font-size: 12px;
+    color: #c0c4cc;
+    text-align: center;
   }
 }
 .alert-dashboard {

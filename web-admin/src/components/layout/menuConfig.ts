@@ -286,7 +286,7 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/restaurant/price-anomaly', title: '价格异常预警', icon: '', module: 'restaurant',
         roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager'] },
       { path: '/restaurant/analytics/stores', title: '门店对比', icon: '', module: 'restaurant' },
-      { path: '/restaurant/analytics/platform', title: '大众点评口碑', icon: 'ChatDotRound', module: 'restaurant' },
+      { path: '/restaurant/analytics/platform', title: '平台分析', icon: 'ChatDotRound', module: 'restaurant' },
       // -- 日常录入 (写侧) — 配方置顶 (喂养分析层成本) --
       { path: '/restaurant/recipes', title: '配方管理', icon: '', module: 'restaurant', groupLabel: '日常录入' },
       { path: '/restaurant/supplier-delivery', title: '供应商进货录入', icon: '', module: 'dashboard',
@@ -349,6 +349,30 @@ const rawMenuConfig: MenuItem[] = [
         roles: ['platform_admin', 'permission_admin', 'factory_super_admin'] },
       { path: '/smart-bi/calibration', title: '行为校准监控', icon: 'Aim', module: 'analytics', roles: ['platform_admin'] },
     ]
+  },
+  {
+    // CRM P0「会员与营销」(2026-07-11): 首个 top-level 入口, 会员分析 (RFM 客群分层 +
+    // 三维散点 + 生命周期 + 会员画像). Scope-minimal: 只加这一个新顶级组, 不重排其它模块
+    // (完整 5-模块 IA 重构是后续 follow-up)。仅餐饮/demo 租户可见 — 与 revenue-report /
+    // health-report 同一套 hideForFactoryTypes + roles 白名单 (会员储值/消费金额敏感)。
+    path: '/crm', title: '会员与营销', icon: 'User', module: 'analytics',
+    hideForFactoryTypes: ['FACTORY'],
+    roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'finance_manager', 'restaurant_manager'],
+    children: [
+      { path: '/crm/member-analysis', title: '会员分析', icon: '', module: 'analytics' },
+    ]
+  },
+  {
+    // 运营分析 (2026-07-12): 撤单稽核 + 区域坪效, 从 经营驾驶舱(RestaurantGoldGrid)
+    // 迁出的独立顶级组 (驾驶舱瘦身)。与 /crm 同一批 hybrid bullet-point analysis
+    // pattern (确定性 bullets + AI 解读 + 整页分析面板), 同一套门控 (会员储值/
+    // 撤单金额同样敏感)。Scope-minimal: 只加这一个新顶级组, 不重排其它模块。
+    path: '/ops', title: '运营分析', icon: 'Operation', module: 'analytics',
+    hideForFactoryTypes: ['FACTORY'],
+    roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'finance_manager', 'restaurant_manager'],
+    children: [
+      { path: '/ops/operations-analysis', title: '运营分析', icon: '', module: 'analytics' },
+    ]
   }
 ];
 
@@ -367,6 +391,8 @@ const TOP_LEVEL_FLOW_ORDER: Record<string, number> = {
   '/hr': 120,
   '/equipment': 130,
   '/restaurant': 140,
+  '/ops': 143,
+  '/crm': 145,
 };
 
 function sortTopLevelMenu(items: MenuItem[]): MenuItem[] {

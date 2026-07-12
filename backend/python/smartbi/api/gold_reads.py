@@ -30,6 +30,8 @@ from smartbi.gold import (
     discount_breakdown,
     finance_summary,
     kpi_summary,
+    member_profile,
+    member_rfm,
     order_type_mix,
     review_city_ranking,
     review_complaints,
@@ -48,9 +50,12 @@ from smartbi.gold import (
     store_review_vs_revenue,
     top_products,
     trend_bundle,
+    void_audit,
+    void_rate,
+    zone_efficiency,
 )
 from smartbi.gold.gold_read_cache import GoldReadCache, compute_cache_key
-from smartbi.tenant_ctx import INTERNAL_SENTINEL, get_factory_id
+from smartbi.tenant_ctx import INTERNAL_SENTINEL, get_factory_id, set_factory_id
 from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES, strip_price_for_role
 
 logger = logging.getLogger(__name__)
@@ -82,6 +87,20 @@ _GOLD_EXTRA_MONEY_KEYS: frozenset[str] = frozenset({
     # not matched by the shared _MONEY_PATTERN, so strip them here too.
     "weekdayAvg",
     "weekendAvg",
+    # member-profile (会员储值+画像) 储值余额/充值本金/赠送金 — "balance" /
+    # "principal" / "bonus" aren't matched by the shared _MONEY_PATTERN
+    # (which targets price/amount/revenue/cost/... substrings), so strip
+    # them here too. member_count / tier / birth_month are NOT money and
+    # stay visible.
+    "total_balance",
+    "principal",
+    "bonus",
+    # member-rfm (CRM P0 会员 RFM) 累计消费金额 — "total_cum_spend" /
+    # "avg_cum_spend" aren't matched by the shared _MONEY_PATTERN either
+    # (no "amount"/"spend"+"ing" substring), so strip them here too.
+    # avg_spend_interval is a day-count, NOT money, and stays visible.
+    "total_cum_spend",
+    "avg_cum_spend",
 })
 
 
@@ -146,7 +165,22 @@ def _resolve_tenant(factory_id: Optional[str]) -> str:
             status_code=403,
             detail=f"factory_id query param {fid!r} doesn't match JWT tenant {tenant!r}",
         )
-    return DEMO_GOLD_TENANT_ALIASES.get(fid, fid)
+    resolved = DEMO_GOLD_TENANT_ALIASES.get(fid, fid)
+    # 🔒 RLS chokepoint fix (2026-07-11): the alias remap rewrites the query's
+    # WHERE factory_id = resolved, but the RLS GUC (app.factory_id) is applied by
+    # the pool setup callback from the ContextVar, which still held the un-remapped
+    # JWT tenant (DEMO_REST). RLS policy `factory_id = current_setting('app.factory_id')`
+    # then filtered out every resolved-tenant row → zero results on kpi-summary /
+    # finance-summary / trend-bundle / daily-trend / data-range / review-*.
+    # store-kpi-dashboard escaped only because compute_store_kpi_dashboard re-set
+    # the ContextVar itself. Re-point the RLS context to the resolved tenant HERE,
+    # at the single chokepoint, so every downstream pool.acquire() sees the matching
+    # GUC. Safe: the JWT-match guard above already ran; `resolved` is either the same
+    # JWT tenant (non-demo → no-op) or the whitelisted DEMO_REST→RES_3101_009 demo
+    # elevation. Per-task ContextVar; middleware resets on request unwind → no leak.
+    if resolved != tenant:
+        set_factory_id(resolved)
+    return resolved
 
 
 def _resolve_tiered_tenant(factory_id: Optional[str]) -> str:
@@ -399,6 +433,121 @@ async def get_staff_ranking(
         return _apply_rbac_strip(result, _get_role(request))
     except Exception as e:
         logger.exception("staff-ranking failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
+
+
+@router.get("/void-rate")
+async def get_void_rate(
+    request: Request,
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    factory_id: Optional[str] = Query(None),
+    top_n: int = Query(10, ge=1, le=50),
+):
+    """撤单率 + 撤单稽核(操作人/原因 Top N) — order void rate + staff audit.
+
+    New restaurant analytics dimension (greenfield). Combines void_rate()
+    (void_count/bill_count) and void_audit() (staff+reason breakdown) into
+    one response so the frontend card can render both the KPI and the audit
+    table from a single request. No monetary fields — RBAC strip is a no-op
+    here but applied for consistency with every other Gold read endpoint."""
+    fid = _resolve_tenant(factory_id)
+    start, end = _parse_range(start_date, end_date)
+    pool = await get_pg_pool()
+    try:
+        rate_result = await void_rate(pool, fid, (start, end))
+        audit_result = await void_audit(pool, fid, (start, end), top_n=top_n)
+        combined = {**rate_result, **audit_result}
+        return _apply_rbac_strip(combined, _get_role(request))
+    except Exception as e:
+        logger.exception("void-rate failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
+
+
+@router.get("/zone-efficiency")
+async def get_zone_efficiency(
+    request: Request,
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    factory_id: Optional[str] = Query(None),
+    top_n: int = Query(10, ge=1, le=50),
+):
+    """区域坪效 (in-store dining-zone revenue/efficiency) — revenue + item
+    quantity ranked by 区域名称 (dining zone: 大厅/小桌/中桌/大桌/... — some
+    real-world values are delivery-channel labels, see the query's caveat).
+
+    New restaurant analytics dimension (greenfield). ⚠️ Proxy metric: the
+    source export has no floor-area/seat-count column, so this is revenue +
+    item quantity per named zone, NOT a true revenue-per-square-meter 坪效
+    — see zone_efficiency()'s docstring. revenue/revenue_pct are RBAC
+    price-stripped for roles outside PRICE_VIEW_ROLES (contain "revenue")."""
+    fid = _resolve_tenant(factory_id)
+    start, end = _parse_range(start_date, end_date)
+    pool = await get_pg_pool()
+    try:
+        result = await zone_efficiency(pool, fid, (start, end), top_n=top_n)
+        return _apply_rbac_strip(result, _get_role(request))
+    except Exception as e:
+        logger.exception("zone-efficiency failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
+
+
+@router.get("/member-profile")
+async def get_member_profile(
+    request: Request,
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史 (仅影响充值趋势, 等级/生日月份分布为全量快照)"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD inclusive; 省略=全部历史"),
+    factory_id: Optional[str] = Query(None),
+):
+    """会员储值 + 画像 — member stored-value + demographic profile.
+
+    New restaurant analytics dimension (greenfield). NOT full RFM — the
+    source (卡详情/卡充值 exports) has no per-member consumption event, so
+    recency/frequency cannot be computed; only stored-value totals + tier/
+    birth-month distribution (snapshot) + recharge trend (date-ranged) are
+    available. See member_profile()'s docstring for the full caveat.
+
+    🔒 Aggregate-only response — every field here is a count/sum, never an
+    individual member row (no card_no/name/phone/birthdate ever returned)."""
+    fid = _resolve_tenant(factory_id)
+    start, end = _parse_range(start_date, end_date)
+    pool = await get_pg_pool()
+    try:
+        result = await member_profile(pool, fid, (start, end))
+        return _apply_rbac_strip(result, _get_role(request))
+    except Exception as e:
+        logger.exception("member-profile failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
+
+
+@router.get("/member-rfm")
+async def get_member_rfm(
+    request: Request,
+    factory_id: Optional[str] = Query(None),
+):
+    """会员 RFM 分析 (CRM P0) — Recency/Frequency/Monetary, full RFM.
+
+    New restaurant analytics dimension (greenfield, 有滋有味 cohort). UNLIKE
+    /member-profile (whose source has no per-member consumption event, so
+    is explicitly NOT RFM), this dimension's source (卡消费排行) IS a
+    per-card cumulative-consumption snapshot, so R/F/M are computed
+    directly. See member_rfm()'s docstring for the full field shape.
+
+    No date range: these three Gold tables are a current-state snapshot
+    (no per-row event date in the source), and recency-derived fields are
+    recomputed against CURRENT_DATE at MATERIALIZATION time (not query
+    time) — see materialized_analytics/member_rfm.py's module docstring.
+
+    🔒 Aggregate-only response — every field here is a count/sum/bucket,
+    never an individual member row (no card_no/member_name ever returned).
+    """
+    fid = _resolve_tenant(factory_id)
+    pool = await get_pg_pool()
+    try:
+        result = await member_rfm(pool, fid)
+        return _apply_rbac_strip(result, _get_role(request))
+    except Exception as e:
+        logger.exception("member-rfm failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Gold query failed: {e}")
 
 

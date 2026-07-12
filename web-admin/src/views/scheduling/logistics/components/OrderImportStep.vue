@@ -1,99 +1,321 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import type { StoreOrder } from '../types';
+import { computed, ref, watch } from 'vue';
+import { ElMessage } from 'element-plus';
+import type { ManualOrderRow, OrderBatch, PreviewResult } from '@/api/logistics';
 
-const props = defineProps<{ stores: StoreOrder[]; imported: boolean }>();
-const emit = defineEmits<{ (event: 'import-sample'): void }>();
+const props = defineProps<{
+  preview: PreviewResult | null;
+  batch: OrderBatch | null;
+  uploading: boolean;
+  committing: boolean;
+  error: string | null;
+}>();
 
-const validStoreCount = computed(() => props.stores.filter((store) => store.name && store.address && store.window).length);
-const importValidation = ref('可选择 CSV 文件进行本地字段校验。');
+const emit = defineEmits<{
+  (event: 'download-template'): void;
+  (event: 'upload-file', file: File): void;
+  (event: 'commit'): void;
+  (event: 'submit-manual', payload: { businessDate: string | null; rows: ManualOrderRow[] }): void;
+}>();
 
-const requiredHeaders = ['门店编号', '门店名称', '配送地址', '时间窗'];
+type EntryMode = 'file' | 'manual';
+const mode = ref<EntryMode>('file');
 
-function parseCsvLine(line: string): string[] {
-  const values: string[] = [];
-  let value = '';
-  let quoted = false;
-  for (let index = 0; index < line.length; index += 1) {
-    const character = line[index];
-    if (character === '"') {
-      if (quoted && line[index + 1] === '"') {
-        value += '"';
-        index += 1;
-      } else {
-        quoted = !quoted;
-      }
-    } else if (character === ',' && !quoted) {
-      values.push(value.trim());
-      value = '';
-    } else {
-      value += character;
-    }
-  }
-  values.push(value.trim());
-  return values;
-}
+// ==================== 文件导入 ====================
 
-async function validateCsv(event: Event): Promise<void> {
+const fileInput = ref<HTMLInputElement | null>(null);
+const selectedFileName = ref('');
+
+const canCommit = computed(() => Boolean(props.preview) && props.preview!.validRows > 0 && !props.committing);
+const rowErrorPreview = computed(() => (props.preview?.rowErrors ?? []).slice(0, 20));
+
+function handleFileChange(event: Event): void {
   const file = (event.target as HTMLInputElement).files?.[0];
   if (!file) return;
-  if (!file.name.toLowerCase().endsWith('.csv')) {
-    importValidation.value = '请选择 CSV 文件；当前页面仅在浏览器内校验文件。';
-    return;
-  }
-  const lines = (await file.text()).replace(/^\uFEFF/, '').split(/\r?\n/).filter(Boolean);
-  const headers = lines[0] ? parseCsvLine(lines[0]) : [];
-  const missing = requiredHeaders.filter((header) => !headers.includes(header));
-  if (missing.length) {
-    importValidation.value = `缺少必填列：${missing.join('、')}`;
-    return;
-  }
-  const rowCount = Math.max(lines.length - 1, 0);
-  const missingValue = lines.slice(1).findIndex((line) => {
-    const values = parseCsvLine(line);
-    return requiredHeaders.some((header) => !values[headers.indexOf(header)]);
-  });
-  if (missingValue >= 0) {
-    const values = parseCsvLine(lines[missingValue + 1]);
-    const missingHeader = requiredHeaders.find((header) => !values[headers.indexOf(header)]);
-    importValidation.value = `第 ${missingValue + 2} 行缺少${missingHeader}`;
-    return;
-  }
-  importValidation.value = rowCount > 0 ? `已读取 ${rowCount} 行，字段校验通过。` : '文件没有可导入的数据行。';
+  selectedFileName.value = file.name;
+  emit('upload-file', file);
 }
 
-function downloadTemplate(): void {
-  const content = '门店编号,门店名称,配送地址,时间窗\nS-001,示例门店,苏州市,09:00-12:00\n';
-  const anchor = document.createElement('a');
-  anchor.href = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8' }));
-  anchor.download = '配送订单导入模板.csv';
-  anchor.click();
-  URL.revokeObjectURL(anchor.href);
+function resetFileInput(): void {
+  selectedFileName.value = '';
+  if (fileInput.value) fileInput.value.value = '';
 }
+
+// ==================== 手动录入 ====================
+// 防呆: 门店名称 + 配送地址必填; 件数/箱数/重量/体积至少填一项帮助配载(不强制).
+// 提交前逐行本地校验 → 高亮缺失; 后端再次校验并逐行返回错误(与文件导入同一套).
+
+interface ManualRowForm {
+  storeName: string;
+  address: string;
+  pieces: string;
+  weightKg: string;
+  volumeCbm: string;
+  windowStart: string;
+  windowEnd: string;
+}
+
+/** 后端必填字段(除自动生成的订单号/系统给的业务日期外) —— 防呆: 缺任一项高亮 + 禁用提交。 */
+const REQUIRED_FIELDS: Array<keyof ManualRowForm> = ['storeName', 'address', 'pieces', 'weightKg', 'volumeCbm'];
+const FIELD_LABELS: Record<string, string> = {
+  storeName: '门店名称', address: '配送地址', pieces: '件数', weightKg: '重量kg', volumeCbm: '体积m³',
+};
+
+function todayStr(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function emptyRow(): ManualRowForm {
+  return { storeName: '', address: '', pieces: '', weightKg: '', volumeCbm: '', windowStart: '', windowEnd: '' };
+}
+
+const manualDate = ref<string>(todayStr());
+const manualRows = ref<ManualRowForm[]>([emptyRow(), emptyRow()]);
+
+function addManualRow(): void {
+  manualRows.value = [...manualRows.value, emptyRow()];
+}
+
+function removeManualRow(index: number): void {
+  manualRows.value = manualRows.value.filter((_, i) => i !== index);
+  if (!manualRows.value.length) manualRows.value = [emptyRow()];
+}
+
+/** 一行是否"开始填了"(任一字段非空) —— 用于判定该行是否要提交/校验。 */
+function rowTouched(r: ManualRowForm): boolean {
+  return Boolean(r.storeName.trim() || r.address.trim() || r.pieces.trim() || r.weightKg.trim()
+    || r.volumeCbm.trim() || r.windowStart.trim() || r.windowEnd.trim());
+}
+
+/** 已填行里，缺少任一必填字段的行号(1-based) —— 防呆预校验。 */
+const invalidRowNumbers = computed(() => {
+  const bad: number[] = [];
+  manualRows.value.forEach((r, i) => {
+    if (rowTouched(r) && REQUIRED_FIELDS.some((f) => !r[f].trim())) bad.push(i + 1);
+  });
+  return bad;
+});
+
+/** 第一处缺失字段的中文名(用于 tooltip 提示具体缺什么)。 */
+const firstMissingHint = computed(() => {
+  for (let i = 0; i < manualRows.value.length; i++) {
+    const r = manualRows.value[i];
+    if (!rowTouched(r)) continue;
+    const miss = REQUIRED_FIELDS.find((f) => !r[f].trim());
+    if (miss) return `第 ${i + 1} 行缺少「${FIELD_LABELS[miss]}」`;
+  }
+  return '';
+});
+
+const filledRowCount = computed(() => manualRows.value.filter(rowTouched).length);
+const canSubmitManual = computed(() => filledRowCount.value > 0 && invalidRowNumbers.value.length === 0 && !props.committing);
+
+function isRowMissing(r: ManualRowForm, field: keyof ManualRowForm): boolean {
+  return rowTouched(r) && !r[field].trim();
+}
+
+function submitManual(): void {
+  if (invalidRowNumbers.value.length) {
+    ElMessage.warning(firstMissingHint.value || `第 ${invalidRowNumbers.value.join('、')} 行有必填项未填`);
+    return;
+  }
+  const rows: ManualOrderRow[] = manualRows.value.filter(rowTouched).map((r) => ({
+    // 订单号(storeCode)留空 → 后端防呆自动生成, 调度员不需要凭空编号。
+    storeName: r.storeName.trim(),
+    address: r.address.trim(),
+    pieces: r.pieces.trim() || null,
+    weightKg: r.weightKg.trim() || null,
+    volumeCbm: r.volumeCbm.trim() || null,
+    windowStart: r.windowStart.trim() || null,
+    windowEnd: r.windowEnd.trim() || null,
+  }));
+  if (!rows.length) {
+    ElMessage.warning('请至少录入一行订单');
+    return;
+  }
+  emit('submit-manual', { businessDate: manualDate.value || null, rows });
+}
+
+function switchMode(next: EntryMode): void {
+  mode.value = next;
+  resetFileInput();
+}
+
+// 手动录入成功(批次创建, batchId 变化)后清空表格, 防止误重复提交造成重复批次(防呆 Rule 4)。
+watch(() => props.batch?.id, (id, prev) => {
+  if (id && id !== prev && mode.value === 'manual') {
+    manualRows.value = [emptyRow(), emptyRow()];
+  }
+});
 </script>
 
 <template>
   <section data-testid="import-step" class="step-panel">
     <div class="panel-heading">
-      <div><p>第一步</p><h2>导入配送订单</h2><span>核对订单字段与配送地址后开始排程。</span></div>
-      <el-button plain @click="downloadTemplate">下载导入模板</el-button>
+      <div>
+        <p>第一步</p>
+        <h2>录入配送订单</h2>
+        <span>上传当天订单文件，或直接在表格里填写；系统校验后写入，空白时地图与线路保持空白，不使用示例数据。</span>
+      </div>
+      <el-button plain @click="emit('download-template')">下载导入模板</el-button>
     </div>
-    <div class="validation-card">
-      <strong>{{ validStoreCount }} / {{ stores.length }} 家门店信息完整</strong>
-      <span>{{ validStoreCount === 13 ? '13 家门店的订单字段与配送地址已通过校验。' : '请补全缺失的门店信息。' }}</span>
+
+    <el-radio-group :model-value="mode" class="mode-toggle" @update:model-value="switchMode">
+      <el-radio-button value="file">📄 文件导入</el-radio-button>
+      <el-radio-button value="manual">✏️ 手动录入</el-radio-button>
+    </el-radio-group>
+
+    <div v-if="batch" class="batch-card" data-testid="import-batch-summary">
+      <strong>✓ 已录入批次 {{ batch.batchNumber }}</strong>
+      <span>{{ batch.validRows }} / {{ batch.totalRows }} 行有效，业务日期 {{ batch.businessDate }}。点下方「下一步」生成排线。</span>
     </div>
-    <label class="file-input">选择 CSV 文件<input data-testid="csv-input" type="file" accept=".csv,text/csv" @change="validateCsv"></label>
-    <p data-testid="import-validation" class="import-validation">{{ importValidation }}</p>
-    <p class="persistence-note">文件只在当前浏览器中校验，不会持久化或替换排程数据。</p>
-    <button data-testid="import-orders" class="primary-button" type="button" @click="emit('import-sample')">{{ imported ? '重新导入示例订单' : '导入示例订单' }}</button>
+
+    <!-- ============ 文件导入 ============ -->
+    <template v-if="mode === 'file'">
+      <label class="file-input">选择订单文件（CSV / Excel）
+        <input
+          ref="fileInput"
+          data-testid="csv-input"
+          type="file"
+          accept=".csv,text/csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          :disabled="uploading"
+          @change="handleFileChange"
+        >
+      </label>
+      <p v-if="selectedFileName" class="selected-file">已选择：{{ selectedFileName }}</p>
+      <p v-if="uploading" data-testid="import-uploading" class="import-status">正在解析文件…</p>
+
+      <button
+        data-testid="commit-import"
+        class="primary-button"
+        type="button"
+        :disabled="!canCommit"
+        @click="emit('commit'); resetFileInput()"
+      >
+        {{ committing ? '正在提交…' : '提交导入' }}
+      </button>
+    </template>
+
+    <!-- ============ 手动录入 ============ -->
+    <template v-else>
+      <div class="manual-toolbar">
+        <span class="field-label">业务日期</span>
+        <el-date-picker
+          v-model="manualDate"
+          type="date"
+          value-format="YYYY-MM-DD"
+          :clearable="false"
+          placeholder="选择日期"
+          style="width: 150px"
+        />
+        <span class="manual-hint">门店名称、配送地址、件数、重量、体积必填（订单号系统自动生成，无需填写）。</span>
+      </div>
+
+      <el-table :data="manualRows" size="small" border class="manual-table">
+        <el-table-column type="index" label="#" width="46" />
+        <el-table-column label="门店名称 *" min-width="150">
+          <template #default="{ row }">
+            <el-input v-model="row.storeName" placeholder="如：永辉园区店" :class="{ 'missing': isRowMissing(row, 'storeName') }" />
+          </template>
+        </el-table-column>
+        <el-table-column label="配送地址 *" min-width="220">
+          <template #default="{ row }">
+            <el-input v-model="row.address" placeholder="如：苏州工业园区xx路1号" :class="{ 'missing': isRowMissing(row, 'address') }" />
+          </template>
+        </el-table-column>
+        <el-table-column label="件数 *" width="90">
+          <template #default="{ row }"><el-input v-model="row.pieces" placeholder="10" :class="{ 'missing': isRowMissing(row, 'pieces') }" /></template>
+        </el-table-column>
+        <el-table-column label="重量kg *" width="98">
+          <template #default="{ row }"><el-input v-model="row.weightKg" placeholder="80" :class="{ 'missing': isRowMissing(row, 'weightKg') }" /></template>
+        </el-table-column>
+        <el-table-column label="体积m³ *" width="98">
+          <template #default="{ row }"><el-input v-model="row.volumeCbm" placeholder="1.5" :class="{ 'missing': isRowMissing(row, 'volumeCbm') }" /></template>
+        </el-table-column>
+        <el-table-column label="送达时间窗" min-width="180">
+          <template #default="{ row }">
+            <div class="win-cell">
+              <el-input v-model="row.windowStart" placeholder="08:00" style="width: 74px" />
+              <span>–</span>
+              <el-input v-model="row.windowEnd" placeholder="10:00" style="width: 74px" />
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="64" fixed="right">
+          <template #default="{ $index }">
+            <el-button link type="danger" @click="removeManualRow($index)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div class="manual-actions">
+        <el-button plain @click="addManualRow">+ 添加一行</el-button>
+        <span v-if="filledRowCount" class="filled-count">已填 {{ filledRowCount }} 行</span>
+        <el-tooltip
+          :disabled="canSubmitManual || props.committing"
+          :content="invalidRowNumbers.length ? (firstMissingHint || `第 ${invalidRowNumbers.join('、')} 行有必填项未填`) : '请至少录入一行订单'"
+          placement="top"
+        >
+          <span>
+            <button
+              data-testid="submit-manual"
+              class="primary-button"
+              type="button"
+              :disabled="!canSubmitManual"
+              @click="submitManual"
+            >
+              {{ committing ? '正在录入…' : '提交录入' }}
+            </button>
+          </span>
+        </el-tooltip>
+      </div>
+    </template>
+
+    <!-- ============ 校验结果(文件+手动共用) ============ -->
+    <div v-if="preview" data-testid="import-preview" class="validation-card">
+      <strong>{{ preview.validRows }} / {{ preview.totalRows }} 行校验通过</strong>
+      <span v-if="preview.errorRows > 0">{{ preview.errorRows }} 行存在字段错误，仅写入有效行——请修正后重试。</span>
+      <span v-else>全部行校验通过。</span>
+      <ul v-if="rowErrorPreview.length" data-testid="import-row-errors" class="row-error-list">
+        <li v-for="(rowError, index) in rowErrorPreview" :key="`${rowError.rowNumber}-${rowError.column}-${index}`">
+          第 {{ rowError.rowNumber }} 行 · {{ rowError.column }}：{{ rowError.message }}
+        </li>
+      </ul>
+      <p v-if="preview.rowErrors.length > rowErrorPreview.length" class="row-error-more">
+        还有 {{ preview.rowErrors.length - rowErrorPreview.length }} 条错误未显示。
+      </p>
+    </div>
+
+    <p v-if="error" data-testid="import-error" class="import-error">{{ error }}</p>
+    <p v-if="!preview && !batch && !uploading && mode === 'file'" class="empty-hint">
+      尚未导入任何订单文件——下方地图与线路将保持空白，不会使用示例数据。
+    </p>
   </section>
 </template>
 
 <style scoped lang="scss">
-.step-panel { display: grid; gap: 20px; min-height: 340px; padding: 28px; background: #fff; border: 1px solid #eaecf0; border-radius: 12px; }
+.step-panel { display: grid; gap: 18px; min-height: 340px; padding: 28px; background: #fff; border: 1px solid #eaecf0; border-radius: 12px; }
 .panel-heading { display: flex; justify-content: space-between; gap: 20px; } p { margin: 0 0 6px; color: #1b65a8; font-size: 13px; font-weight: 750; } h2 { margin: 0; color: #101828; } span { color: #667085; line-height: 1.6; }
+.mode-toggle { width: fit-content; }
+.batch-card { display: grid; gap: 4px; padding: 16px 20px; background: #ecfdf3; border-radius: 10px; } .batch-card strong { color: #027a48; font-size: 15px; }
 .validation-card { display: grid; gap: 6px; padding: 20px; background: #f0f7ff; border-radius: 10px; } strong { color: #101828; font-size: 18px; }
+.row-error-list { display: grid; gap: 4px; margin: 6px 0 0; padding-left: 20px; color: #b42318; font-size: 13px; }
+.row-error-more { margin: 0; color: #b42318; font-size: 13px; }
 .primary-button { width: fit-content; padding: 10px 18px; color: #fff; font: inherit; font-weight: 650; background: #1b65a8; border: 0; border-radius: 6px; cursor: pointer; }
+.primary-button:disabled { background: #98a2b3; cursor: not-allowed; }
 .file-input { display: grid; gap: 8px; width: fit-content; color: #344054; font-size: 14px; font-weight: 650; }
-.import-validation, .persistence-note { margin: 0; color: #475467; font-size: 14px; }
+.selected-file, .import-status, .empty-hint { margin: 0; color: #475467; font-size: 14px; }
+.import-error { margin: 0; padding: 10px 12px; color: #b42318; background: #fef3f2; border-radius: 8px; font-size: 14px; }
+/* 手动录入 */
+.manual-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.field-label { color: #344054; font-size: 13px; font-weight: 650; }
+.manual-hint { color: #98a2b3; font-size: 12.5px; }
+.manual-table { width: 100%; }
+.manual-table :deep(.missing .el-input__wrapper) { box-shadow: 0 0 0 1px #f04438 inset; }
+.win-cell { display: flex; align-items: center; gap: 6px; }
+.manual-actions { display: flex; align-items: center; gap: 14px; }
+.filled-count { color: #475467; font-size: 13px; }
+@media (max-width: 720px) { .step-panel { padding: 18px; } .panel-heading { flex-direction: column; } }
 </style>

@@ -27,4 +27,21 @@ public interface NotificationService {
      * 系统级广播 (所有用户, 谨慎使用).
      */
     void broadcastFactory(String factoryId, String title, String body);
+
+    /**
+     * 当前 impl 是否真的能发短信 (凭证 + 签名 + 模板都配置完整).
+     *
+     * <p>{@code false} 时调用 {@link #notifyRole} / {@link #notifyUser} 仍会
+     * 正常持久化站内通知, 只是不会真发短信 — 调用方 (如
+     * {@code AlertEventNotificationListener}) 用此方法判断是否需要额外记一条
+     * "短信网关未配置" 的 honest 审计日志, 而不是假装发送成功.
+     *
+     * <p>默认 {@code false} (logging-only impl). {@code AliyunSmsNotificationServiceImpl}
+     * 覆盖为真实 smsEnabled 状态.
+     *
+     * @since 2026-07-11 (餐饮经营体检预警推送)
+     */
+    default boolean isSmsAvailable() {
+        return false;
+    }
 }

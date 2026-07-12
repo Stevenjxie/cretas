@@ -50,6 +50,8 @@ class GlobalExceptionHandlerOptimisticLockTest {
 
         // Preserved contract
         assertEquals((Integer) 409, body.getCode(), "HTTP 409 Conflict preserved");
+        assertEquals("OPTIMISTIC_LOCK_CONFLICT", body.getErrorCode(),
+                "semantic errorCode lets an owning editor recover without status-only branching");
         assertEquals(Boolean.FALSE, body.getSuccess());
         assertNotNull(body.getMessage(), "user-facing message present");
         assertTrue(body.getMessage().contains("数据已被其他用户修改"),
@@ -75,6 +77,7 @@ class GlobalExceptionHandlerOptimisticLockTest {
         ApiResponse<?> body = handler.handleOptimisticLockException(ex);
 
         assertEquals((Integer) 409, body.getCode());
+        assertEquals("OPTIMISTIC_LOCK_CONFLICT", body.getErrorCode());
         assertEquals(Boolean.FALSE, body.getSuccess());
         assertTrue(body.getMessage().contains("数据已被其他用户修改"));
         assertEquals("请刷新页面查看最新数据后再编辑", body.getActionHint());

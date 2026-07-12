@@ -1,8 +1,17 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import mapImage from '@/assets/logistics/suzhou-logistics-map.png';
 import { DEPOT_POINT } from '../mockData';
 import type { MapPoint, RouteTrip, StoreOrder } from '../types';
+import {
+  getAmapKey,
+  loadAmap,
+  type AMapDriving,
+  type AMapInstance,
+  type AMapLngLat,
+  type AMapNamespace,
+  type AMapOverlay,
+} from '../amapLoader';
 
 const props = defineProps<{
   stores: StoreOrder[];
@@ -18,6 +27,221 @@ const emit = defineEmits<{
 
 const routeColors = ['#1B65A8', '#7C3AED', '#C2410C', '#047857', '#BE185D', '#0E7490'];
 
+// 配送中心真实经纬度（与后端 logistics.depot.lng/lat 默认一致）。
+const DEPOT_LNGLAT: [number, number] = [120.62, 31.3];
+
+// ============================================================
+// 高德真实地图（有 VITE_AMAP_JS_KEY 时启用；加载失败回落下方 SVG 示意图）
+// ============================================================
+const useAmap = ref(Boolean(getAmapKey()));
+const mapEl = ref<HTMLDivElement>();
+let amap: AMapNamespace | null = null;
+let map: AMapInstance | null = null;
+let driving: AMapDriving | null = null;
+let overlays: AMapOverlay[] = [];
+// 每次重绘自增；异步驾车路径回调用它判断自己是否已过期（避免旧回调把线画到新一轮上）。
+let renderToken = 0;
+
+function compactStoreName(name: string): string {
+  return name.replace('配送门店 ', '门店 ');
+}
+
+function esc(s: string): string {
+  return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+}
+
+function depotContent(): string {
+  return `<div class="amap-depot"><span class="amap-depot-dot"></span><span class="amap-lbl">配送中心</span></div>`;
+}
+
+function storeContent(store: StoreOrder, seq: number | undefined, selected: boolean, labeled: boolean): string {
+  const badge = seq != null ? `<span class="amap-seq">${seq}</span>` : '<span class="amap-store-dot"></span>';
+  // labeled=false（非选中线路的门店）：只显小灰点，不显名字标签，避免全图挤满店名
+  const label = labeled ? `<span class="amap-lbl">${esc(compactStoreName(store.name))}</span>` : '';
+  return `<div class="amap-store${selected ? ' selected' : ''}${labeled ? '' : ' dim'}">${badge}${label}</div>`;
+}
+
+function clearOverlays(): void {
+  if (map && overlays.length) {
+    map.remove(overlays);
+  }
+  overlays = [];
+}
+
+function renderOverlays(): void {
+  if (!map || !amap) return;
+  const AMapRef = amap;
+  clearOverlays();
+  const token = ++renderToken; // 本轮标识；异步驾车回调据此判断是否过期
+
+  const seqByStore = new Map<string, number>();
+  const selectedTrip = props.trips.find((t) => t.id === props.selectedTripId);
+  if (selectedTrip) {
+    selectedTrip.storeIds.forEach((sid, i) => seqByStore.set(sid, i + 1));
+  }
+  const storeById = new Map(props.stores.map((s) => [s.id, s]));
+
+  // 配送中心 marker
+  const depot = new AMapRef.Marker({
+    position: DEPOT_LNGLAT,
+    content: depotContent(),
+    offset: new AMapRef.Pixel(-9, -9),
+    zIndex: 200,
+  });
+  overlays.push(depot);
+
+  // 门店 marker —— 只有「选中线路的门店」或「被点选的门店」才显示名字标签，其余缩成小灰点，避免全图挤满店名
+  const selectedStoreSet = new Set(selectedTrip?.storeIds ?? []);
+  props.stores.forEach((store) => {
+    if (!Number.isFinite(store.lng) || !Number.isFinite(store.lat)) return;
+    const labeled = selectedStoreSet.has(store.id) || store.id === props.selectedStoreId;
+    const marker = new AMapRef.Marker({
+      position: [store.lng, store.lat],
+      content: storeContent(store, seqByStore.get(store.id), store.id === props.selectedStoreId, labeled),
+      offset: new AMapRef.Pixel(-9, -9),
+      zIndex: labeled ? 160 : 90,
+    });
+    marker.on('click', () => emit('select-store', store.id));
+    overlays.push(marker);
+  });
+
+  map.add(overlays);
+  map.setFitView(overlays, false, [48, 48, 48, 48]);
+
+  // 路线：逐车次用高德驾车路径规划画「沿实际道路」的线（异步，失败诚实回落虚线直线）
+  props.trips.forEach((trip, index) => {
+    const storePts: [number, number][] = [];
+    trip.storeIds.forEach((sid) => {
+      const s = storeById.get(sid);
+      if (s && Number.isFinite(s.lng) && Number.isFinite(s.lat)) {
+        storePts.push([s.lng, s.lat]);
+      }
+    });
+    if (!storePts.length) return;
+    drawTripRoute(trip.id, index, storePts, token, trip.roadPath);
+  });
+}
+
+/**
+ * 单条车次路线：
+ * 1) 后端存好的 roadPath(GCJ-02 沿路 polyline) → 直接画，不调地图 API(缓存命中，回看零调用)。
+ * 2) 否则实时调高德驾车路径规划(旧路径)；未就绪/失败 → 虚线直线兜底(诚实标示非实际道路)。
+ */
+function drawTripRoute(
+  tripId: string,
+  index: number,
+  storePts: [number, number][],
+  token: number,
+  roadPath?: Array<{ lng: number; lat: number }>,
+): void {
+  if (!map || !amap) return;
+  const AMapRef = amap;
+  const selected = tripId === props.selectedTripId;
+  const anySelected = props.selectedTripId != null;
+  const color = routeColors[index % routeColors.length];
+
+  const addLine = (path: [number, number][] | AMapLngLat[], dashed: boolean): void => {
+    if (token !== renderToken || !map) return; // 已被新一轮重绘取代，丢弃
+    // 有选中线路时，非选中线路淡化让选中的一目了然
+    const line = new AMapRef.Polyline({
+      path,
+      strokeColor: color,
+      strokeWeight: selected ? 7 : anySelected ? 3 : 4,
+      strokeOpacity: selected ? 1 : anySelected ? 0.22 : 0.6,
+      strokeStyle: dashed ? 'dashed' : 'solid',
+      showDir: selected, // 选中线路画行驶方向箭头（配送中心→①→②→…），一眼看清先后与方向
+      lineJoin: 'round',
+      lineCap: 'round',
+      cursor: 'pointer',
+      zIndex: selected ? 90 : 50,
+    });
+    line.on('click', () => emit('select-trip', tripId));
+    overlays.push(line);
+    map.add([line]);
+  };
+
+  // 缓存命中：后端已存沿路 roadPath → 直接画，不调地图 driving API（回看旧计划零调用，省额度）
+  if (roadPath && roadPath.length >= 2) {
+    addLine(roadPath.map((p) => [p.lng, p.lat] as [number, number]), false);
+    return;
+  }
+
+  const straight: [number, number][] = [DEPOT_LNGLAT, ...storePts];
+  if (!driving) {
+    addLine(straight, true);
+    return;
+  }
+
+  const origin = new AMapRef.LngLat(DEPOT_LNGLAT[0], DEPOT_LNGLAT[1]);
+  const last = storePts[storePts.length - 1];
+  const dest = new AMapRef.LngLat(last[0], last[1]);
+  const waypoints = storePts.slice(0, -1).map(([lng, lat]) => new AMapRef.LngLat(lng, lat));
+
+  driving.search(origin, dest, { waypoints }, (status, result) => {
+    if (token !== renderToken) return; // 过期回调丢弃
+    const steps = result?.routes?.[0]?.steps;
+    if (status === 'complete' && steps && steps.length) {
+      const path: AMapLngLat[] = [];
+      steps.forEach((st) => {
+        if (st.path) path.push(...st.path);
+      });
+      if (path.length >= 2) {
+        addLine(path, false);
+        return;
+      }
+    }
+    addLine(straight, true); // 驾车规划失败 → 诚实回落虚线直线
+  });
+}
+
+onMounted(async () => {
+  if (!useAmap.value || !mapEl.value) return;
+  try {
+    amap = await loadAmap();
+    map = new amap.Map(mapEl.value, {
+      zoom: 11,
+      center: DEPOT_LNGLAT,
+      viewMode: '2D',
+      lang: 'zh_cn',
+    });
+    // 驾车路径规划器（不传 map → 不自动渲染它自己的起终点/路线 UI，我们手绘彩色 polyline）
+    try {
+      driving = new amap.Driving({
+        policy: (amap.DrivingPolicy && amap.DrivingPolicy.LEAST_DISTANCE) || 0,
+      });
+    } catch {
+      driving = null; // 插件不可用 → drawTripRoute 走虚线直线兜底
+    }
+    renderOverlays();
+  } catch (e) {
+    // 无 key / 域名未白名单 / 网络失败 → 诚实回落 SVG 示意图，不阻塞工作台
+    // eslint-disable-next-line no-console
+    console.warn('[LogisticsMap] 高德地图加载失败，回落示意图：', e);
+    useAmap.value = false;
+    amap = null;
+    map = null;
+  }
+});
+
+watch(
+  () => [props.stores, props.trips, props.selectedTripId, props.selectedStoreId],
+  () => {
+    if (map) renderOverlays();
+  },
+  { deep: true },
+);
+
+onBeforeUnmount(() => {
+  clearOverlays();
+  if (map) {
+    map.destroy();
+    map = null;
+  }
+});
+
+// ============================================================
+// SVG 示意图 fallback（测试环境 / 无 key / 加载失败）
+// ============================================================
 const storesById = computed(() => new Map(props.stores.map((store) => [store.id, store])));
 const selectedStops = computed(() => {
   const selectedTrip = props.trips.find((trip) => trip.id === props.selectedTripId);
@@ -38,98 +262,98 @@ function hasRouteGeometry(trip: RouteTrip): boolean {
 function routeStyle(index: number): Record<string, string> {
   return { '--route-color': routeColors[index % routeColors.length] };
 }
-
-function compactStoreName(name: string): string {
-  return name.replace('配送门店 ', '门店 ');
-}
 </script>
 
 <template>
-  <div class="map-stage" style="aspect-ratio: 1917 / 1165">
-    <img
-      data-testid="base-map"
-      class="base-map"
-      :src="mapImage"
-      alt=""
-      aria-hidden="true"
-    >
-    <svg
-      data-testid="map-image"
-      class="map-overlay"
-      viewBox="0 0 1917 1165"
-      preserveAspectRatio="xMidYMid meet"
-      role="group"
-      aria-label="配送路线与门店"
-    >
-      <g class="route-layer">
-        <template v-for="(trip, index) in trips" :key="trip.id">
-          <template v-if="hasRouteGeometry(trip)">
-            <polyline
-              :class="['route-casing', { selected: trip.id === selectedTripId }]"
-              :style="routeStyle(index)"
-              :points="points(trip.geometry)"
-            />
-            <polyline
-              data-testid="route-path"
-              :data-trip-id="trip.id"
-              :class="['route-line', { selected: trip.id === selectedTripId }]"
-              :style="routeStyle(index)"
-              :points="points(trip.geometry)"
-              role="button"
-              tabindex="0"
-              :aria-label="`选择线路 ${index + 1}`"
-              @click.stop="emit('select-trip', trip.id)"
-              @keydown.enter.prevent="emit('select-trip', trip.id)"
-              @keydown.space.prevent="emit('select-trip', trip.id)"
-            />
+  <div class="map-stage" :style="useAmap ? 'aspect-ratio: 16 / 10' : 'aspect-ratio: 1917 / 1165'">
+    <div v-if="useAmap" ref="mapEl" data-testid="amap-el" class="amap-el" />
+
+    <template v-else>
+      <img
+        data-testid="base-map"
+        class="base-map"
+        :src="mapImage"
+        alt=""
+        aria-hidden="true"
+      >
+      <svg
+        data-testid="map-image"
+        class="map-overlay"
+        viewBox="0 0 1917 1165"
+        preserveAspectRatio="xMidYMid meet"
+        role="group"
+        aria-label="配送路线与门店"
+      >
+        <g class="route-layer">
+          <template v-for="(trip, index) in trips" :key="trip.id">
+            <template v-if="hasRouteGeometry(trip)">
+              <polyline
+                :class="['route-casing', { selected: trip.id === selectedTripId }]"
+                :style="routeStyle(index)"
+                :points="points(trip.geometry)"
+              />
+              <polyline
+                data-testid="route-path"
+                :data-trip-id="trip.id"
+                :class="['route-line', { selected: trip.id === selectedTripId }]"
+                :style="routeStyle(index)"
+                :points="points(trip.geometry)"
+                role="button"
+                tabindex="0"
+                :aria-label="`选择线路 ${index + 1}`"
+                @click.stop="emit('select-trip', trip.id)"
+                @keydown.enter.prevent="emit('select-trip', trip.id)"
+                @keydown.space.prevent="emit('select-trip', trip.id)"
+              />
+            </template>
           </template>
-        </template>
-      </g>
-
-      <g class="store-layer">
-        <g class="depot-anchor" :transform="`translate(${DEPOT_POINT.x} ${DEPOT_POINT.y})`">
-          <circle class="depot-halo" r="22" />
-          <circle class="depot-dot" r="12" />
-          <rect class="anchor-label-bg" x="18" y="-18" width="112" height="36" rx="10" />
-          <text class="depot-label" x="30" y="6">配送中心</text>
         </g>
 
-        <g
-          v-for="store in stores"
-          :key="store.id"
-          data-testid="store-anchor"
-          :data-store-id="store.id"
-          :class="['store-anchor', { selected: store.id === selectedStoreId }]"
-          :transform="`translate(${store.mapAnchor.x} ${store.mapAnchor.y})`"
-          role="button"
-          tabindex="0"
-          :aria-label="`查看${store.name}`"
-          @click.stop="emit('select-store', store.id)"
-          @keydown.enter.prevent="emit('select-store', store.id)"
-          @keydown.space.prevent="emit('select-store', store.id)"
-        >
-          <circle class="store-halo" r="20" />
-          <circle class="store-dot" r="10" />
-          <rect class="anchor-label-bg" x="16" y="-17" width="108" height="34" rx="10" />
-          <text class="store-label" x="27" y="6">{{ compactStoreName(store.name) }}</text>
-        </g>
-      </g>
+        <g class="store-layer">
+          <g class="depot-anchor" :transform="`translate(${DEPOT_POINT.x} ${DEPOT_POINT.y})`">
+            <circle class="depot-halo" r="22" />
+            <circle class="depot-dot" r="12" />
+            <rect class="anchor-label-bg" x="18" y="-18" width="112" height="36" rx="10" />
+            <text class="depot-label" x="30" y="6">配送中心</text>
+          </g>
 
-      <g class="sequence-layer">
-        <g
-          v-for="(store, index) in selectedStops"
-          :key="store.id"
-          data-testid="selected-stop-number"
-          :data-store-id="store.id"
-          class="sequence-badge"
-          :transform="`translate(${store.mapAnchor.x} ${store.mapAnchor.y})`"
-          aria-hidden="true"
-        >
-          <circle r="18" />
-          <text y="1">{{ index + 1 }}</text>
+          <g
+            v-for="store in stores"
+            :key="store.id"
+            data-testid="store-anchor"
+            :data-store-id="store.id"
+            :class="['store-anchor', { selected: store.id === selectedStoreId }]"
+            :transform="`translate(${store.mapAnchor.x} ${store.mapAnchor.y})`"
+            role="button"
+            tabindex="0"
+            :aria-label="`查看${store.name}`"
+            @click.stop="emit('select-store', store.id)"
+            @keydown.enter.prevent="emit('select-store', store.id)"
+            @keydown.space.prevent="emit('select-store', store.id)"
+          >
+            <circle class="store-halo" r="20" />
+            <circle class="store-dot" r="10" />
+            <rect class="anchor-label-bg" x="16" y="-17" width="108" height="34" rx="10" />
+            <text class="store-label" x="27" y="6">{{ compactStoreName(store.name) }}</text>
+          </g>
         </g>
-      </g>
-    </svg>
+
+        <g class="sequence-layer">
+          <g
+            v-for="(store, index) in selectedStops"
+            :key="store.id"
+            data-testid="selected-stop-number"
+            :data-store-id="store.id"
+            class="sequence-badge"
+            :transform="`translate(${store.mapAnchor.x} ${store.mapAnchor.y})`"
+            aria-hidden="true"
+          >
+            <circle r="18" />
+            <text y="1">{{ index + 1 }}</text>
+          </g>
+        </g>
+      </svg>
+    </template>
   </div>
 </template>
 
@@ -142,6 +366,13 @@ function compactStoreName(name: string): string {
   border: 1px solid #edf2f7;
   border-radius: 10px;
   box-shadow: 0 2px 12px rgba(27, 101, 168, 0.06);
+}
+
+.amap-el {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
 }
 
 .base-map,
@@ -274,5 +505,77 @@ function compactStoreName(name: string): string {
   .store-label {
     font-size: 24px;
   }
+}
+</style>
+
+<!-- 高德 marker content 是脱离 scoped 作用域的独立 DOM，样式必须全局 -->
+<style lang="scss">
+.amap-depot,
+.amap-store {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 700;
+  color: #101828;
+}
+
+.amap-depot .amap-lbl,
+.amap-store .amap-lbl {
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid #edf2f7;
+  border-radius: 8px;
+  padding: 1px 6px;
+  box-shadow: 0 1px 4px rgba(27, 101, 168, 0.14);
+}
+
+.amap-depot-dot,
+.amap-store-dot,
+.amap-seq {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 3px solid #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  flex: 0 0 auto;
+}
+
+.amap-depot-dot {
+  background: #1a2332;
+}
+
+.amap-store-dot {
+  background: #1b65a8;
+}
+
+.amap-seq {
+  background: #1b65a8;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.amap-store.selected .amap-store-dot,
+.amap-store.selected .amap-seq {
+  outline: 2px solid #1b65a8;
+  outline-offset: 1px;
+}
+
+.amap-store.selected .amap-lbl {
+  border-color: #1b65a8;
+  color: #1b65a8;
+}
+
+/* 非选中线路的门店：无名字标签，小灰点，弱化避免全图混乱 */
+.amap-store.dim .amap-store-dot {
+  width: 11px;
+  height: 11px;
+  background: #94a3b8;
+  border-width: 2px;
+  opacity: 0.85;
 }
 </style>

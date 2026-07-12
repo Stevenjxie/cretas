@@ -11,6 +11,8 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.Type;
+import org.hibernate.annotations.Generated;
+import org.hibernate.generator.EventType;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.*;
 import java.math.BigDecimal;
@@ -69,6 +71,30 @@ public class ProductionBatch extends BaseEntity {
     @NotBlank(message = "产品类型ID不能为空")
     @Column(name = "product_type_id", nullable = false, length = 100)
     private String productTypeId;
+
+    public enum WorkflowSelectionMode {
+        LEGACY,
+        WORKFLOW
+    }
+
+    /** Immutable creation-time decision populated atomically by the PostgreSQL insert trigger. */
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    @Generated(event = EventType.INSERT)
+    @Enumerated(EnumType.STRING)
+    @Column(name = "workflow_selection_mode", insertable = false, updatable = false, length = 16)
+    private WorkflowSelectionMode workflowSelectionMode;
+
+    /** Exact published Workflow selected when this batch row was inserted. */
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    @Generated(event = EventType.INSERT)
+    @Column(name = "selected_workflow_id", insertable = false, updatable = false)
+    private Long selectedWorkflowId;
+
+    /** Exact definition version selected when this batch row was inserted. */
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    @Generated(event = EventType.INSERT)
+    @Column(name = "selected_workflow_version", insertable = false, updatable = false)
+    private Integer selectedWorkflowVersion;
      /**
       * 产品名称
       */
@@ -202,7 +228,7 @@ public class ProductionBatch extends BaseEntity {
      /**
       * 良品率
       */
-    @Column(name = "yield_rate", precision = 5, scale = 2)
+    @Column(name = "yield_rate", precision = 12, scale = 2)
     private BigDecimal yieldRate;
      /**
       * 效率（实际产量/计划产量）

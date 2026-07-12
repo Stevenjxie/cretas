@@ -13,6 +13,7 @@ import com.cretas.aims.entity.enums.FactoryType;
 public final class BusinessDomainUtils {
     public static final String FACTORY = "FACTORY";
     public static final String RESTAURANT = "RESTAURANT";
+    public static final String LOGISTICS = "LOGISTICS";
 
     private BusinessDomainUtils() {
     }
@@ -20,6 +21,9 @@ public final class BusinessDomainUtils {
     public static String resolveDomain(FactoryType factoryType) {
         if (factoryType == FactoryType.RESTAURANT || factoryType == FactoryType.BRANCH) {
             return RESTAURANT;
+        }
+        if (factoryType == FactoryType.LOGISTICS) {
+            return LOGISTICS;
         }
         return FACTORY;
     }

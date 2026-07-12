@@ -39,6 +39,7 @@ public class ProductionPlanMapper {
                 .planNumber(plan.getPlanNumber())
                 .productTypeId(plan.getProductTypeId())
                 .plannedQuantity(plan.getPlannedQuantity())
+                .plannedUnit(plan.getPlannedUnit() != null ? plan.getPlannedUnit() : "kg")
                 .actualQuantity(plan.getActualQuantity())
                 // W-07 fix (Round 9): prefer the real plannedDate column; fall back to
                 // startTime-derived date for legacy rows created before the column was restored.
@@ -160,6 +161,7 @@ public class ProductionPlanMapper {
         plan.setPlanNumber(generatePlanNumber());
         plan.setProductTypeId(request.getProductTypeId());
         plan.setPlannedQuantity(request.getPlannedQuantity());
+        plan.setPlannedUnit(request.getPlannedUnit() != null ? request.getPlannedUnit() : "kg");
         // W-07 fix (Round 9): plannedDate column restored; map it on create
         plan.setPlannedDate(request.getPlannedDate());
         plan.setStatus(ProductionPlanStatus.PENDING);
@@ -244,6 +246,9 @@ public class ProductionPlanMapper {
         }
         if (request.getPlannedQuantity() != null) {
             plan.setPlannedQuantity(request.getPlannedQuantity());
+        }
+        if (request.getPlannedUnit() != null) {
+            plan.setPlannedUnit(request.getPlannedUnit());
         }
         // W-07 fix (Round 9): plannedDate column restored; map on update too
         if (request.getPlannedDate() != null) {

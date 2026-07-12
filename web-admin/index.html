@@ -4,6 +4,9 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- 高德地图 key 运行时注入 (nginx 从 dist 外稳定位置 serve, 部署不覆盖 → key 独立于构建,
+         并发/别的 worktree 部署不再冲掉地图 key)。加载失败(文件不存在)静默, 回落 build-time env。 -->
+    <script src="/amap-config.js"></script>
     <!-- Google Fonts removed: blocked in China, causes page render delay -->
     <!-- Fallback: system Chinese fonts (PingFang SC, Microsoft YaHei, Noto Sans SC if installed locally) -->
     <style>

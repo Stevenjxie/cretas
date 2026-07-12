@@ -59,10 +59,15 @@ def test_gold_extra_keys_documented():
     """Document the contract: these camelCase/underscored money fields are
     the ones the shared ``_MONEY_PATTERN`` doesn't catch in current Gold
     responses (``avg_bill_value`` / ``avg_per_capita`` + the /trend-bundle
-    weekday/weekend average-revenue keys). Adding a new money key to Gold
-    responses requires also updating this set."""
+    weekday/weekend average-revenue keys + the /member-profile 储值/充值
+    money keys + the /member-rfm CRM P0 累计消费 money keys). Adding a new
+    money key to Gold responses requires also updating this set."""
     assert _GOLD_EXTRA_MONEY_KEYS == frozenset(
-        {"avg_bill_value", "avg_per_capita", "weekdayAvg", "weekendAvg"}
+        {
+            "avg_bill_value", "avg_per_capita", "weekdayAvg", "weekendAvg",
+            "total_balance", "principal", "bonus",
+            "total_cum_spend", "avg_cum_spend",
+        }
     )
 
 
@@ -446,3 +451,56 @@ def test_restaurant_chef_revenue_still_stripped():
     _apply_rbac_strip(body, "restaurant_chef")
     assert body["revenue"] is None
     assert body["bill_count"] == 80
+
+
+# ============================================================
+# /member-rfm (CRM P0) response shape — total_cum_spend / avg_cum_spend
+# are money (must strip); avg_spend_interval is a day-count (must NOT strip)
+# ============================================================
+
+
+def test_member_rfm_shape_warehouse_nulls_spend_but_keeps_interval_and_counts():
+    body = {
+        "factory_id": "RES_3101_009",
+        "data_available": True,
+        "member_count": 7477,
+        "rfm_tier_distribution": [
+            {
+                "rfm_tier": "Champions",
+                "member_count": 320,
+                "total_cum_spend": 1_250_000.0,
+                "avg_spend_interval": 12.5,
+            },
+        ],
+        "lifecycle_distribution": [
+            {"lifecycle_stage": "活跃", "member_count": 5000, "total_balance": 300_000.0},
+        ],
+        "rfm_scatter": [
+            {"r_score": 5, "f_score": 5, "m_score": 5, "member_count": 100, "avg_cum_spend": 8000.0},
+        ],
+        "rfm_scatter_suppressed_count": 3,
+    }
+    _apply_rbac_strip(body, "warehouse_manager")
+    tier = body["rfm_tier_distribution"][0]
+    assert tier["total_cum_spend"] is None, "total_cum_spend is money — must be stripped"
+    assert tier["avg_spend_interval"] == 12.5, "avg_spend_interval is a day-count, not money"
+    assert tier["member_count"] == 320
+    assert body["lifecycle_distribution"][0]["total_balance"] is None
+    assert body["lifecycle_distribution"][0]["member_count"] == 5000
+    assert body["rfm_scatter"][0]["avg_cum_spend"] is None, "avg_cum_spend is money — must be stripped"
+    assert body["rfm_scatter"][0]["member_count"] == 100
+    assert body["member_count"] == 7477  # headcount is not money
+
+
+def test_member_rfm_shape_restaurant_owner_keeps_spend():
+    body = {
+        "rfm_tier_distribution": [
+            {"rfm_tier": "Champions", "member_count": 320, "total_cum_spend": 1_250_000.0, "avg_spend_interval": 12.5},
+        ],
+        "rfm_scatter": [
+            {"r_score": 5, "f_score": 5, "m_score": 5, "member_count": 100, "avg_cum_spend": 8000.0},
+        ],
+    }
+    _apply_rbac_strip(body, "restaurant_owner")
+    assert body["rfm_tier_distribution"][0]["total_cum_spend"] == 1_250_000.0
+    assert body["rfm_scatter"][0]["avg_cum_spend"] == 8000.0

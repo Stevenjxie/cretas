@@ -7,7 +7,9 @@ import com.cretas.aims.dto.processentry.ProcessSheetRowHistoryView;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
 import com.cretas.aims.dto.processentry.ProcessSheetRowView;
+import com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO;
 import com.cretas.aims.service.processentry.ProcessSheetService;
+import com.cretas.aims.service.workflow.WorkflowClerkSheetService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
@@ -26,6 +28,7 @@ import java.util.List;
 public class ProcessSheetController {
 
     private final ProcessSheetService service;
+    private final WorkflowClerkSheetService workflowClerkSheetService;
 
     @RequirePermission({"production:read_write"})
     @PostMapping("/row")
@@ -117,5 +120,21 @@ public class ProcessSheetController {
             @PathVariable @NotBlank String clientRowId,
             @RequestParam @NotBlank String process) {
         return ApiResponse.success(service.getRowHistory(factoryId, planId, process, clientRowId));
+    }
+
+    /**
+     * 2B Task B2: 该计划关联的 workflow 批次快照投影 (供文员过程单 {@code resolveProcesses()} 消费)。
+     *
+     * <p>URL 示例: GET /api/mobile/{factoryId}/production-plans/{planId}/process-sheet/workflow-config
+     *
+     * <p>计划没有 workflow 批次 (legacy 计划) 时 {@code data} 为 {@code null}, FE 据此回落原
+     * {@code getProductWorkProcesses} 路径 — additive, 不改变 legacy 行为。
+     */
+    @RequirePermission({"production:read"})
+    @GetMapping("/workflow-config")
+    public ApiResponse<WorkflowClerkSheetConfigDTO> getWorkflowConfig(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String planId) {
+        return ApiResponse.success(workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId));
     }
 }

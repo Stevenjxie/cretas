@@ -28,6 +28,8 @@ public class WorkProcessTaskDTO {
     private String factoryId;
     private Long productionBatchId;
     private Long productWorkProcessId;
+    private Long workflowInstanceId;
+    private String workflowNodeId;
     private String workProcessId;
     private String productTypeId;
     private Integer processOrder;

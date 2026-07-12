@@ -41,4 +41,13 @@ public interface AlertEventRepository extends JpaRepository<AlertEvent, UUID> {
     List<AlertEvent> findByRuleIdAndBusinessEntityIdAndStatusInAndCreatedAtAfter(
             UUID ruleId, String businessEntityId, List<AlertEventStatus> statuses,
             LocalDateTime since);
+
+    /**
+     * Standing-alert sweep query (餐饮经营体检预警推送, 2026-07-11) — 找一个规则当前
+     * 全部未消解 (OPEN/ACKNOWLEDGED) 的事件, 不带时间窗限制 (跟上面的 60 分钟 dedup
+     * 查询不同: 这是"当前敞开的标准告警集合", 用于跟本次 sweep 的诊断结果对比,
+     * 决定哪些该保持 / 该自动 resolve).
+     */
+    List<AlertEvent> findByFactoryIdAndRuleIdAndStatusIn(
+            String factoryId, UUID ruleId, List<AlertEventStatus> statuses);
 }

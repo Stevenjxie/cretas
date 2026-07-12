@@ -96,6 +96,7 @@ class ProductionPlanCancelConcurrencyTest {
     @Mock private SalesOrderRepository salesOrderRepository;
     @Mock private SalesOrderItemRepository salesOrderItemRepository;
     @Mock private BomService bomService;
+    @Mock private com.cretas.aims.service.workprocess.WorkProcessTaskService workProcessTaskService;
 
     // Field-injected (@Autowired(required=false)) — reflection-set per existing pattern.
     @Mock private WorkProcessTaskRepository workProcessTaskRepository;
@@ -115,6 +116,7 @@ class ProductionPlanCancelConcurrencyTest {
         ReflectionTestUtils.setField(service, "workProcessTaskRepository", workProcessTaskRepository);
         ReflectionTestUtils.setField(service, "productionReportRepository", productionReportRepository);
         ReflectionTestUtils.setField(service, "wipInventoryService", wipInventoryService);
+        ReflectionTestUtils.setField(service, "workProcessTaskService", workProcessTaskService);
 
         lenient().when(productionPlanRepository.save(any(ProductionPlan.class)))
                 .thenAnswer(inv -> inv.getArgument(0));

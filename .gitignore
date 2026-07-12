@@ -53,6 +53,9 @@ temp*
 !**/Template*.vue
 !**/Template*.java
 !**/Template*.ts
+# Negation: 防止 Windows case-insensitive 误杀 Temperature* 类文件 (logistics domain,
+# TemperatureMode.java 被 temp* 静默排除, git status 显示 clean 但文件从未入库)
+!**/Temperature*.java
 !**/template_engine*.go
 !backend/python/smartbi/shared/temporal_comparator.py
 !backend/python/smartbi/services/restaurant/sections/temporal_comparison.py
@@ -234,6 +237,9 @@ frontend/CretasFoodTrace/android/app/src/main/assets/
 # Claude Code runtime locks
 .claude/scheduled_tasks.lock
 
+# Superpowers visual brainstorming sessions (local mockups, state, and access tokens)
+.superpowers/
+
 # Transient debug/batch artifacts (ad-hoc shell output)
 /p1_batch*.txt
 /p1_all.txt
@@ -284,3 +290,8 @@ data/imports/_index.json
 六扇门工厂数据/
 产品信息_*.xlsx
 产品信息_*.zip
+
+# 演示 ETL 中间产物 — extract_shift_*.py 生成的 JSONL 由真实客户数据 (青花椒等)
+# 时移派生, 含 member-grain / bill-grain 记录, 绝不提交到 public repo (F1, PII 防泄漏).
+# 覆盖 member (卡详情/卡充值) + void (撤单) + billgrain (POS) 等所有 demo ops JSONL.
+backend/python/smartbi/scripts/_demo_rest_*.jsonl

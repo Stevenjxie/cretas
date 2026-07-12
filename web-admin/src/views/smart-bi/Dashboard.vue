@@ -10,6 +10,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
 import { getGoldDataRange } from '@/api/smartbi/dataRange';
+import { getKpiSummary, getTrendBundle } from '@/api/smartbi/gold';
 import { ElMessage } from 'element-plus';
 import {
   TrendCharts,
@@ -59,7 +60,8 @@ import type {
   AIInsightResponse,
   DashboardChartConfig as ChartConfig,
   ChartConfig as AnyChartConfig,
-  DashboardResponse
+  DashboardResponse,
+  KPICard
 } from '@/types/smartbi';
 
 // 前端使用的部门排行数据
@@ -978,6 +980,85 @@ async function tryFallbackRanges(): Promise<boolean> {
   return false;
 }
 
+// WS-restaurant-coherence: 餐饮租户 (RESTAURANT) 直接从 Python Gold 层聚合
+// (kpi-summary + trend-bundle), 不依赖 Java `/smart-bi/dashboard/executive` 的
+// kpiCards (该路径对餐饮租户经常返回空 kpiCards, 因为它是制造业 xlsx 上传口径)。
+// 复用现有 gold-mode KPI 映射 (kpiData computed 已按 total_revenue/bill_count/
+// avg_bill_value/store_count key 识别) + 现有 initCharts 图表渲染管线 (sales_trend
+// key 已被 initTrendChart 识别)。rankings 留空 → 部门/区域排行区块自然不渲染
+// (无需额外制造业排行数据)。
+async function loadGoldDashboardData() {
+  if (!factoryId.value) return;
+  try {
+    const range = dateRange.value;
+    const args = range
+      ? { factoryId: factoryId.value, startDate: range[0], endDate: range[1] }
+      : { factoryId: factoryId.value };
+
+    const [kpi, trend] = await Promise.all([
+      getKpiSummary(args),
+      getTrendBundle(args),
+    ]);
+
+    // Honest empty state — 无真实数据时不伪造零值, 交给 hasData/SmartBIEmptyState 处理。
+    const hasRealData = kpi.dayCount > 0 && (kpi.revenue > 0 || kpi.billCount > 0);
+    if (!hasRealData) {
+      dashboardData.value = null;
+      return;
+    }
+
+    const kpiCards: KPICard[] = [
+      { key: 'total_revenue', title: '总营收', rawValue: kpi.revenue, trend: 'flat' },
+      { key: 'bill_count', title: '订单数', rawValue: kpi.billCount, trend: 'flat' },
+      { key: 'avg_bill_value', title: '客单价', rawValue: kpi.avgBillValue ?? 0, trend: 'flat' },
+      { key: 'store_count', title: '门店数', rawValue: kpi.storeCount, trend: 'flat' },
+    ];
+
+    const dailyPoints = trend.dailyTrend || [];
+    const charts: Record<string, ChartConfig> = {};
+    if (dailyPoints.length > 0) {
+      charts['sales_trend'] = {
+        chartType: 'line',
+        title: '销售趋势',
+        xAxis: { data: dailyPoints.map(p => p.date) },
+        series: [{
+          name: '营收',
+          type: 'line',
+          data: dailyPoints.map(p => p.revenue ?? 0),
+        }],
+      };
+    }
+
+    const goldData: DashboardResponse = {
+      period: 'gold',
+      startDate: kpi.startDate,
+      endDate: kpi.endDate,
+      kpiCards,
+      rankings: {},
+      charts,
+      aiInsights: [],
+      alerts: [],
+      generatedAt: new Date().toISOString(),
+    };
+
+    dashboardData.value = goldData;
+    if (factoryId.value) putCached(factoryId.value, 'system', goldData);
+    fallbackRangeLabel.value = '';
+    fallbackDateRange.value = null;
+
+    // Async load LLM insights (best-effort, non-blocking — same as factory path).
+    loadLLMInsights();
+  } catch (error) {
+    console.error('加载餐饮 Gold 驾驶舱数据失败:', error);
+    hasError.value = true;
+    errorMessage.value = error instanceof Error ? error.message : '加载数据失败，请稍后重试';
+    ElMessage.error(errorMessage.value);
+    dashboardData.value = null;
+  } finally {
+    loading.value = false;
+  }
+}
+
 async function loadDashboardData() {
   if (!factoryId.value) {
     ElMessage.warning('未获取到工厂ID，请重新登录');
@@ -989,6 +1070,13 @@ async function loadDashboardData() {
   loading.value = true;
   hasError.value = false;
   errorMessage.value = '';
+
+  // 餐饮租户: 走 Gold 层直连, 不进入下方制造业 Java executive 路径
+  // (工厂租户行为完全不变 — 提前 return 之前不触碰任何既有逻辑)。
+  if (isRestaurantTenant.value) {
+    await loadGoldDashboardData();
+    return;
+  }
 
   try {
     // If user picked a custom date range, route through /executive/custom
@@ -1830,7 +1918,7 @@ onUnmounted(() => {
 
     <!-- 排行榜区 -->
     <el-row :gutter="16" class="ranking-section" v-loading="loading" aria-label="排行榜">
-      <el-col v-if="departmentRanking.length > 0" :xs="24" :md="regionRanking.length > 0 ? 12 : 24">
+      <el-col v-if="!isRestaurantTenant && departmentRanking.length > 0" :xs="24" :md="regionRanking.length > 0 ? 12 : 24">
         <CapabilityGate card-id="dashboard_dept_ranking" :requires="['staff_name', 'net_amount']">
         <el-card class="ranking-card">
           <template #header>
@@ -1862,7 +1950,7 @@ onUnmounted(() => {
       </el-col>
       <!-- P2-18: 区域销售分布空时整个 col 隐藏, 部门排行 col 自动扩宽到 24. 避免大片"暂无区域销售数据" 占屏 -->
       <el-col
-        v-if="regionRanking.length > 0"
+        v-if="!isRestaurantTenant && regionRanking.length > 0"
         :xs="24"
         :md="departmentRanking.length > 0 ? 12 : 24"
       >

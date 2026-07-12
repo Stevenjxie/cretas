@@ -1187,6 +1187,146 @@ async def finance_summary(
     return result
 
 
+async def period_comparison(pool, factory_id, start, end):
+    """同比(去年同期)/环比(前一等长周期) for 营收 + 加权毛利率, over agg_daily(+agg_daily_cost).
+
+    加权毛利 = 营收 - 食材成本 (镜像 finance_summary.gross_profit); 加权毛利率 = 该值/营收*100。
+    餐饮口径: 这是聚合的加权毛利率, 非单品毛利 (中餐单品用量难固定, 单品不可靠)。
+
+    诚实降级 (禁降级处理): 对比期无营业数据 → available=False, pct=None
+    (绝不返回伪造的 0/100%)。毛利率对比额外要求两侧成本非空 (agg_daily_cost 真租户可能 NULL)。
+
+    营收同比/环比 = 增长率 (%); 毛利率同比/环比 = 百分点差 (个百分点, 从30%到34%=+4)。
+
+    返回:
+      {"revenue": {"current", "yoy_pct", "mom_pct", "yoy_available", "mom_available"},
+       "gross_margin_pct": {同上键, "current" 可能 None}}
+    """
+    if factory_id is None or factory_id == "":
+        raise ValueError(f"period_comparison: factory_id required (got {factory_id!r})")
+    if start is None or end is None:
+        raise ValueError(f"period_comparison: start/end required (got {start}, {end})")
+    from datetime import timedelta
+
+    def _shift_year(d, years):
+        try:
+            return d.replace(year=d.year - years)
+        except ValueError:  # Feb 29 → 365天近似回退
+            return d - timedelta(days=365 * years)
+
+    span = end - start
+    windows = {
+        "current": (start, end),
+        "mom": (start - timedelta(days=1) - span, start - timedelta(days=1)),
+        "yoy": (_shift_year(start, 1), _shift_year(end, 1)),
+    }
+
+    async def _agg(conn, s, e):
+        row = await conn.fetchrow(
+            """
+            SELECT COALESCE(SUM(a.net_amount), 0)::numeric(18,2) AS revenue,
+                   SUM(c.material_cost)::numeric(18,2)           AS material_cost,
+                   COUNT(c.material_cost)                         AS cost_n,
+                   COUNT(*)                                       AS n_rows
+              FROM agg_daily a
+              LEFT JOIN agg_daily_cost c USING (factory_id, date, store_id)
+             WHERE a.factory_id = $1 AND a.date BETWEEN $2 AND $3
+            """,
+            factory_id, s, e,
+        )
+        # 领料成本 — 直接查 silver fact_restaurant_requisition 并 status 过滤
+        # (Fable F1/F2: gold agg_restaurant_daily_totals 被 wastage/stocktaking 日
+        # 污染[req_cost=0 行]且含 DRAFT/REJECTED → 会造 0%-base 假上升+误告; 这里
+        # 只取 SUBMITTED/APPROVED 领料行, 天然 requisition-only 无污染)。
+        # 按 factory-date 聚合, 不与 agg_daily per-store 行 JOIN (否则按门店翻倍)。
+        req_row = await conn.fetchrow(
+            """
+            SELECT SUM(est_cost)::numeric(18,2)  AS req_cost,
+                   COUNT(DISTINCT date)          AS req_n
+              FROM fact_restaurant_requisition
+             WHERE factory_id = $1 AND date BETWEEN $2 AND $3
+               AND status IN ('SUBMITTED', 'APPROVED')
+            """,
+            factory_id, s, e,
+        )
+        rev = Decimal(row["revenue"] or 0)
+        n = int(row["n_rows"] or 0)
+        cost_n = int(row["cost_n"] or 0)
+        mat = row["material_cost"]
+        gm = None
+        # F5: 仅当成本覆盖满窗 (cost_n == n) 才算毛利率 — 全窗营收÷部分窗成本会虚高。
+        if n > 0 and mat is not None and rev != 0 and cost_n == n:
+            gm = (((rev - Decimal(mat)) / rev) * Decimal("100")).quantize(
+                Decimal("0.1"), rounding=ROUND_HALF_UP)
+        # 领料成本率 = 领料成本 ÷ 营收 * 100 (真实际用料, 反回扣核心信号; 上升=漏损/回扣)。
+        req_cost = req_row["req_cost"] if req_row else None
+        req_n = int(req_row["req_n"] or 0) if req_row else 0
+        cost_ratio = None
+        if n > 0 and req_cost is not None and req_n > 0 and rev != 0:
+            cost_ratio = ((Decimal(req_cost) / rev) * Decimal("100")).quantize(
+                Decimal("0.1"), rounding=ROUND_HALF_UP)
+        return {"n": n, "revenue": rev, "gross_margin_pct": gm, "cost_ratio": cost_ratio}
+
+    async with pool.acquire() as conn:
+        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        # 领料数据采集的全局日期范围 → 判断窗口是否被领料完整覆盖 (窗口跨越采集起点会
+        # undercount 领料成本 → 假的成本率变化 = 反回扣误告; F5-analog for 领料)。
+        req_span = await conn.fetchrow(
+            "SELECT MIN(date) AS d0, MAX(date) AS d1 FROM fact_restaurant_requisition "
+            "WHERE factory_id = $1 AND status IN ('SUBMITTED', 'APPROVED')", factory_id)
+        agg = {k: await _agg(conn, s, e) for k, (s, e) in windows.items()}
+    req_d0 = req_span["d0"] if req_span else None
+    req_d1 = req_span["d1"] if req_span else None
+    # 领料成本率仅在窗口完全落在采集区间内才有效, 否则 None (禁 undercount 误告)。
+    for _k, (_ws, _we) in windows.items():
+        if not (req_d0 is not None and req_d1 is not None and req_d0 <= _ws and _we <= req_d1):
+            agg[_k]["cost_ratio"] = None
+
+    def _growth(cur, base):
+        if base is None or base == 0:
+            return None
+        return float((((cur - base) / abs(base)) * Decimal("100")).quantize(
+            Decimal("0.1"), rounding=ROUND_HALF_UP))
+
+    cur = agg["current"]
+    cur_available = cur["n"] > 0
+    rev_mom = cur_available and agg["mom"]["n"] > 0
+    rev_yoy = cur_available and agg["yoy"]["n"] > 0
+    cur_gm = cur["gross_margin_pct"]
+    gm_mom = cur_gm is not None and agg["mom"]["gross_margin_pct"] is not None
+    gm_yoy = cur_gm is not None and agg["yoy"]["gross_margin_pct"] is not None
+    cur_cr = cur["cost_ratio"]
+    cr_mom = cur_cr is not None and agg["mom"]["cost_ratio"] is not None
+    cr_yoy = cur_cr is not None and agg["yoy"]["cost_ratio"] is not None
+    return {
+        "revenue": {
+            # F1: current 窗无数据 → available False + current None (禁伪造 ¥0)
+            "current": float(cur["revenue"]) if cur_available else None,
+            "available": cur_available,
+            "mom_pct": _growth(cur["revenue"], agg["mom"]["revenue"]) if rev_mom else None,
+            "yoy_pct": _growth(cur["revenue"], agg["yoy"]["revenue"]) if rev_yoy else None,
+            "mom_available": rev_mom,
+            "yoy_available": rev_yoy,
+        },
+        "gross_margin_pct": {
+            "current": float(cur_gm) if cur_gm is not None else None,
+            "mom_pct": round(float(cur_gm) - float(agg["mom"]["gross_margin_pct"]), 1) if gm_mom else None,
+            "yoy_pct": round(float(cur_gm) - float(agg["yoy"]["gross_margin_pct"]), 1) if gm_yoy else None,
+            "mom_available": gm_mom,
+            "yoy_available": gm_yoy,
+        },
+        "cost_ratio": {
+            # 领料成本率 = 领料成本 ÷ 营收 (真实际用料口径, 独立于 POS×配方理论);
+            # 同比/环比 = 百分点差。成本率上升 = 用料/漏损/回扣信号 → 去查 (邓总核心)。
+            "current": float(cur_cr) if cur_cr is not None else None,
+            "mom_pct": round(float(cur_cr) - float(agg["mom"]["cost_ratio"]), 1) if cr_mom else None,
+            "yoy_pct": round(float(cur_cr) - float(agg["yoy"]["cost_ratio"]), 1) if cr_yoy else None,
+            "mom_available": cr_mom,
+            "yoy_available": cr_yoy,
+        },
+    }
+
+
 def _as_decimal(value: Any) -> Optional[Decimal]:
     if value is None:
         return None
@@ -2084,4 +2224,787 @@ async def alert_preview(
         "config_exists": True,
         "timeline": timeline,
         "summary": summary,
+    }
+
+
+# ── void_rate / void_audit (撤单率 / 撤单稽核) ──────────────────────
+# New restaurant analytics dimension (greenfield). Source: agg_daily_void
+# (materialized from fact_pos_void, see
+# smartbi/services/materialized_analytics/daily_void.py). void_rate reads
+# agg_daily's bill_count as the denominator (same Gold table finance_summary
+# / order_type_mix already read for bill totals).
+
+# Min bills in the window before we'll report a 撤单率. Below this, a couple
+# of voids swing the % wildly and could falsely trip "撤单率过高 critical" on a
+# partial/tiny bill load. Skip honestly instead. (Mirrored, deliberately
+# duplicated, in health_check_metrics.py's _VOID_MIN_BILLS — two independent
+# modules, not worth cross-importing a single int.)
+_VOID_MIN_BILLS = 50
+
+
+async def void_rate(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[Optional[date], Optional[date]],
+) -> Dict[str, Any]:
+    """撤单率 = void_count / bill_count over the given date range.
+
+    Honesty guards (never fabricate a 0% "healthy" for a tenant with no void
+    data):
+      - data_available=False (tenant has ZERO agg_daily_void rows at all) →
+        void_rate=None, note="未上传撤单数据". Distinguishes "never uploaded a
+        撤单报表" from a genuine 0 voids in the window.
+      - bill_count < _VOID_MIN_BILLS → void_rate=None, note explains the
+        sample is too small (avoids a false "撤单率过高" off a couple voids).
+
+    Returns:
+      - void_count, bill_count (raw totals)
+      - void_rate: percentage (0-100 scale, matches discount_rate's scale),
+        None when a guard fires
+      - data_available: bool — whether the tenant has any void data at all
+      - note: explains why void_rate is None, if applicable
+    """
+    start, end = date_range
+    _validate_range(start, end)
+    conds = ["factory_id = $1"]
+    params: list = [factory_id]
+    if start is not None:
+        params.append(start)
+        conds.append(f"date >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        conds.append(f"date <= ${len(params)}")
+    where = " AND ".join(conds)
+
+    async with pool.acquire() as conn:
+        # All-history availability (NOT date-filtered): does this tenant have
+        # ANY void data? Separates "未上传撤单数据" from "0 voids this window".
+        avail_row = await conn.fetchrow(
+            "SELECT EXISTS(SELECT 1 FROM agg_daily_void WHERE factory_id = $1) AS has_data",
+            factory_id,
+        )
+        void_row = await conn.fetchrow(
+            f"SELECT COALESCE(SUM(void_count), 0) AS void_count FROM agg_daily_void WHERE {where}",
+            *params,
+        )
+        bill_row = await conn.fetchrow(
+            f"SELECT COALESCE(SUM(bill_count), 0) AS bill_count FROM agg_daily WHERE {where}",
+            *params,
+        )
+
+    data_available = bool(avail_row["has_data"]) if avail_row else False
+    void_count = int(void_row["void_count"] or 0) if void_row else 0
+    bill_count = int(bill_row["bill_count"] or 0) if bill_row else 0
+
+    rate: Optional[Decimal] = None
+    note: Optional[str] = None
+    if not data_available:
+        note = "未上传撤单数据"
+    elif bill_count < _VOID_MIN_BILLS:
+        note = f"订单样本不足(<{_VOID_MIN_BILLS}单)，撤单率不稳定，暂不计算。"
+    else:
+        rate = (Decimal(void_count) / Decimal(bill_count) * Decimal(100)).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+
+    return {
+        "factory_id": factory_id,
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
+        "void_count": void_count,
+        "bill_count": bill_count,
+        "void_rate": float(rate) if rate is not None else None,
+        "data_available": data_available,
+        "note": note,
+    }
+
+
+async def void_audit(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[Optional[date], Optional[date]],
+    *,
+    top_n: int = 10,
+) -> Dict[str, Any]:
+    """撤单稽核: per-(staff, store) void breakdown, top N by void RATE.
+
+    ⚠️ This NAMES employees to the boss — treated as a red-line surface.
+    Two anti-false-accusation designs (per Fable gate SHOULD-FIX 4):
+
+    (a) GROUP BY staff_id (the real surrogate key), NOT the display name.
+        Two different 张伟 at two stores have distinct staff_ids; grouping by
+        the shared display name would MERGE their voids into one inflated row
+        falsely blaming one person. We also surface store_name so a named row
+        is anchored to a specific store.
+
+    (b) Rank by voids-per-100-bills-handled (a RATE), not raw 撤单笔数. Raw
+        count structurally tops whoever AUTHORIZES the most voids (收银主管/
+        店长) — that's authority, not misconduct. Normalizing by each staff's
+        own handled-bill volume (fact_pos_transaction bill count for that
+        staff_id at that store) makes it a fair rate. Unattributed voids
+        (staff_id=0) have no matching bills → rate None → sorted last.
+
+    Data source note: agg_daily_void.staff_id is the POS operator who
+    processed the void, NOT necessarily who caused it — hence the caveat.
+
+    Returns:
+      - total_void_count: sum across the WHOLE range (not just top N)
+      - breakdown: list of {staff_name, store_name, void_count, bills_handled,
+        voids_per_100_bills (None if bills_handled=0), top_reason (None when
+        the '未标注' sentinel is the dominant reason)} ranked by rate desc.
+      - caveat: honest disclaimer about data meaning
+    """
+    start, end = date_range
+    _validate_range(start, end)
+    # Bare column WHERE (no table alias) — reused verbatim inside each CTE,
+    # each of which selects from a single table, so factory_id/date/staff_id
+    # are unambiguous.
+    conds: list = ["factory_id = $1"]
+    params: list = [factory_id]
+    if start is not None:
+        params.append(start)
+        conds.append(f"date >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        conds.append(f"date <= ${len(params)}")
+    where = " AND ".join(conds)
+
+    params_top = list(params)
+    params_top.append(int(top_n))
+    limit_ph = f"${len(params_top)}"
+
+    async with pool.acquire() as conn:
+        total_row = await conn.fetchrow(
+            f"SELECT COALESCE(SUM(void_count), 0) AS total FROM agg_daily_void WHERE {where}",
+            *params,
+        )
+        rows = await conn.fetch(
+            f"""
+            WITH ssr AS (   -- voids per (staff, store, reason)
+                SELECT staff_id, store_id, void_reason, SUM(void_count) AS vc
+                  FROM agg_daily_void
+                 WHERE {where}
+                 GROUP BY staff_id, store_id, void_reason
+            ),
+            ss AS (         -- collapse to (staff, store): total voids + dominant reason
+                SELECT staff_id, store_id,
+                       SUM(vc)                                    AS void_count,
+                       (array_agg(void_reason ORDER BY vc DESC))[1] AS top_reason
+                  FROM ssr
+                 GROUP BY staff_id, store_id
+            ),
+            handled AS (    -- bills each staff handled at each store (rate denominator)
+                SELECT staff_id, store_id, COUNT(*) AS bills
+                  FROM fact_pos_transaction
+                 WHERE {where} AND staff_id IS NOT NULL
+                 GROUP BY staff_id, store_id
+            )
+            SELECT CASE WHEN ss.staff_id = 0 THEN '未知'
+                        ELSE COALESCE(st.name, ss.staff_id::text) END AS staff_name,
+                   COALESCE(ds.name, ss.store_id::text)               AS store_name,
+                   ss.void_count                                       AS void_count,
+                   ss.top_reason                                       AS top_reason,
+                   COALESCE(h.bills, 0)                                AS bills
+              FROM ss
+              LEFT JOIN dim_staff st ON st.staff_id = ss.staff_id AND st.factory_id = $1
+              LEFT JOIN dim_store ds ON ds.store_id = ss.store_id AND ds.factory_id = $1
+              LEFT JOIN handled  h  ON h.staff_id  = ss.staff_id AND h.store_id  = ss.store_id
+             ORDER BY CASE WHEN COALESCE(h.bills, 0) > 0
+                           THEN ss.void_count::numeric / h.bills
+                           ELSE -1 END DESC,
+                      ss.void_count DESC
+             LIMIT {limit_ph}
+            """,
+            *params_top,
+        )
+
+    breakdown = []
+    for r in rows:
+        bills = int(r["bills"] or 0)
+        vc = int(r["void_count"])
+        rate = (
+            float((Decimal(vc) / Decimal(bills) * Decimal(100)).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP))
+            if bills > 0 else None
+        )
+        breakdown.append({
+            "staff_name": r["staff_name"],
+            "store_name": r["store_name"],
+            "void_count": vc,
+            "bills_handled": bills,
+            "voids_per_100_bills": rate,
+            "top_reason": r["top_reason"] if r["top_reason"] != "未标注" else None,
+        })
+
+    return {
+        "factory_id": factory_id,
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
+        "total_void_count": int(total_row["total"] or 0) if total_row else 0,
+        "breakdown": breakdown,
+        "caveat": (
+            "撤单按 POS 操作人记账(非顾客本人/服务员撤单原因确认); 操作人缺失时归为「未知」。"
+            "「每百单撤单」= 撤单次数 ÷ 该操作人经手订单数 × 100，用于剔除授权量差异"
+            "(收银主管/店长授权撤单本就多，不等于违规); 应按此率而非撤单总数判断。"
+        ),
+    }
+
+
+# ── zone_efficiency (区域坪效) ──────────────────────────────────────
+# New restaurant analytics dimension (greenfield). Source: agg_daily_zone
+# (materialized from fact_zone_sales, see
+# smartbi/services/materialized_analytics/daily_zone.py).
+
+
+async def zone_efficiency(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[Optional[date], Optional[date]],
+    *,
+    top_n: int = 10,
+) -> Dict[str, Any]:
+    """区域坪效 (in-store dining-zone revenue/efficiency) — revenue + item
+    quantity ranked by 区域名称 (dining zone: 大厅/小桌/中桌/大桌/... or, in
+    the real source data, delivery-channel labels — see caveat below).
+
+    ⚠️ Honesty guard: literal 坪效 (revenue per unit FLOOR AREA, 元/平米) is
+    NOT computable — the 二维火 "区域销售报表" export carries no floor-area
+    or seat-count column for any zone. This returns revenue + item quantity
+    per zone as an EFFICIENCY PROXY (which zones generate the most revenue /
+    turn the most items), never a fabricated per-square-meter figure.
+
+    Honesty guards (never fabricate zeros for a tenant with no zone data):
+      - data_available=False (tenant has ZERO agg_daily_zone rows at all) →
+        note="未上传区域销售数据". Distinguishes "never uploaded a 区域销售
+        报表" from a genuine zero-revenue window.
+
+    Returns:
+      - data_available: bool — whether the tenant has any zone-sales data
+        at all
+      - total_revenue / total_item_qty: sums across the WHOLE range (not
+        just top N)
+      - zones: list of {zone_name, revenue, item_qty, revenue_pct} ranked
+        by revenue desc (revenue_pct is null when total_revenue is 0 —
+        avoids a divide-by-zero fabricated 0%)
+      - note: explains why the tenant has no data, if applicable
+      - caveat: honest disclaimer (proxy metric + delivery-channel-labeled
+        zone names)
+    """
+    start, end = date_range
+    _validate_range(start, end)
+    conds = ["factory_id = $1"]
+    params: list = [factory_id]
+    if start is not None:
+        params.append(start)
+        conds.append(f"date >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        conds.append(f"date <= ${len(params)}")
+    where = " AND ".join(conds)
+
+    params_top = list(params)
+    params_top.append(int(top_n))
+    limit_ph = f"${len(params_top)}"
+
+    async with pool.acquire() as conn:
+        # All-history availability (NOT date-filtered): does this tenant have
+        # ANY zone-sales data? Separates "未上传区域销售数据" from "0 revenue
+        # this window".
+        avail_row = await conn.fetchrow(
+            "SELECT EXISTS(SELECT 1 FROM agg_daily_zone WHERE factory_id = $1) AS has_data",
+            factory_id,
+        )
+        total_row = await conn.fetchrow(
+            f"SELECT COALESCE(SUM(revenue), 0) AS total_revenue, "
+            f"COALESCE(SUM(item_qty), 0) AS total_item_qty "
+            f"FROM agg_daily_zone WHERE {where}",
+            *params,
+        )
+        rows = await conn.fetch(
+            f"""
+            SELECT zone_name,
+                   SUM(revenue)  AS revenue,
+                   SUM(item_qty) AS item_qty
+              FROM agg_daily_zone
+             WHERE {where}
+             GROUP BY zone_name
+             ORDER BY SUM(revenue) DESC
+             LIMIT {limit_ph}
+            """,
+            *params_top,
+        )
+
+    data_available = bool(avail_row["has_data"]) if avail_row else False
+    total_revenue = Decimal(total_row["total_revenue"] or 0) if total_row else Decimal(0)
+    total_item_qty = Decimal(total_row["total_item_qty"] or 0) if total_row else Decimal(0)
+
+    zones = []
+    for r in rows:
+        rev = Decimal(r["revenue"] or 0)
+        qty = Decimal(r["item_qty"] or 0)
+        pct = (
+            (rev / total_revenue * Decimal(100)).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+            if total_revenue > 0
+            else None
+        )
+        zones.append({
+            "zone_name": r["zone_name"],
+            "revenue": float(rev),
+            "item_qty": float(qty),
+            "revenue_pct": float(pct) if pct is not None else None,
+        })
+
+    note: Optional[str] = None if data_available else "未上传区域销售数据"
+
+    return {
+        "factory_id": factory_id,
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
+        "data_available": data_available,
+        "note": note,
+        "total_revenue": float(total_revenue),
+        "total_item_qty": float(total_item_qty),
+        "zones": zones,
+        "caveat": (
+            "坪效为营收/数量代理指标：源数据无场地面积字段，无法计算真实的元/平米坪效；"
+            "部分区域名称代表外卖渠道（无桌位(美团外卖)/无桌位(饿了么外卖)/无桌位(京东外卖)/"
+            "外卖/京东/饿了么等），并非实体大厅/包间，对比时请结合门店实际场地情况参考。"
+        ),
+    }
+
+
+# ── member_profile (会员储值 + 画像) ──────────────────────────────
+# New restaurant analytics dimension (greenfield). Source: agg_member_tier +
+# agg_member_gender + agg_member_birth_month (snapshot, materialized from
+# dim_member) + agg_member_recharge_daily (daily, materialized from
+# fact_member_recharge). See smartbi/services/materialized_analytics/
+# member_profile.py.
+#
+# ⛔ NOT FULL RFM: the source (二维火 卡详情一览 + 卡充值统计 exports) has no
+# per-member consumption event — no per-order timestamp tied to a card_no —
+# so recency/frequency cannot be computed. Only stored-value (储值余额/
+# 充值趋势) and demographic profile (等级/性别/生日月份分布) are available.
+# member_rfm.py (smartbi/services/restaurant/member_rfm.py) is a SEPARATE,
+# unrelated analyzer that operates on POS order-level data when a caller
+# supplies it directly — this query does not feed it and does not claim RFM.
+#
+# 🔒 All source tables are aggregate-only by construction (no card_no/name/
+# phone/full-birthdate column exists anywhere in dim_member or
+# fact_member_recharge — see V20261007_01's header note). On TOP of that,
+# this query enforces k-anonymity (k=5): any tier/gender cohort smaller than
+# 5 is merged into an 其他 bucket, and no balance is ever attributable to a
+# cohort < 5 — so a future tenant's 1-member exclusive-tier VIP can't have
+# their exact balance read off the API.
+
+# k-anonymity threshold. Cohorts (tier / gender / birth-month bucket) smaller
+# than this never surface an individually-attributable count or balance.
+_MEMBER_K_ANON = 5
+
+
+def _k_anon_merge_categorical(
+    rows: list,
+    *,
+    label_key: str,
+    other_label: str = "其他",
+    with_balance: bool = False,
+) -> list:
+    """Merge any categorical bucket with member_count < _MEMBER_K_ANON into a
+    single ``其他`` bucket (summing counts, and balances when with_balance).
+
+    If the merged ``其他`` bucket is itself still < k, its total_balance is
+    nulled (belt-and-suspenders: a balance is NEVER attributable to a cohort
+    smaller than k — the count alone, on a generic ``其他`` label, is not
+    individually identifying). Buckets >= k pass through unchanged.
+    Returns big buckets (original order) followed by the ``其他`` bucket, if any.
+    """
+    big: list = []
+    small_count = 0
+    small_balance = 0.0
+    for r in rows:
+        cnt = int(r["member_count"] or 0)
+        entry: Dict[str, Any] = {label_key: r[label_key], "member_count": cnt}
+        if with_balance:
+            entry["total_balance"] = float(r["total_balance"] or 0)
+        if cnt >= _MEMBER_K_ANON:
+            big.append(entry)
+        else:
+            small_count += cnt
+            if with_balance:
+                small_balance += float(r["total_balance"] or 0)
+    if small_count > 0:
+        other: Dict[str, Any] = {label_key: other_label, "member_count": small_count}
+        if with_balance:
+            # If even the merged 其他 bucket is < k, suppress the balance.
+            other["total_balance"] = (
+                small_balance if small_count >= _MEMBER_K_ANON else None
+            )
+        big.append(other)
+    return big
+
+
+async def member_profile(
+    pool: asyncpg.Pool,
+    factory_id: str,
+    date_range: Tuple[Optional[date], Optional[date]],
+) -> Dict[str, Any]:
+    """会员储值 + 画像: tier / gender / birth-month distribution + stored-value
+    totals (snapshot) + recharge trend (date-ranged).
+
+    Honesty guard: data_available=False when the tenant has ZERO
+    agg_member_tier rows (never uploaded 卡详情/卡充值 data) → all snapshot
+    fields are empty/zero and note explains why, rather than a fabricated
+    empty distribution indistinguishable from "uploaded but genuinely no
+    members".
+
+    k-anonymity (k=5): tier_distribution / gender_distribution merge sub-5
+    cohorts into 其他 (and never expose a balance for a sub-5 cohort);
+    birth_month_distribution drops sub-5 month buckets (counted honestly in
+    birth_month_suppressed_count) so no tiny cohort is individually exposed.
+
+    Returns:
+      - data_available: bool — whether the tenant has any member data at all
+      - member_count: snapshot total across all tiers/stores
+      - total_balance: snapshot balance total (nulled if member_count < k)
+      - tier_distribution: [{tier, member_count, total_balance}, ...] (k-anon)
+      - gender_distribution: [{gender, member_count}, ...] (k-anon; 性别画像)
+      - birth_month_distribution: [{birth_month (1-12), member_count}, ...]
+        (k-anon: only buckets >= 5; 生日营销 targeting list)
+      - birth_month_unknown_count: members whose 生日 was blank in the source
+      - birth_month_suppressed_count: members in sub-5 month buckets dropped
+        from the list (for honest coverage math — see below)
+      - birth_month_coverage_pct: % of members with a known birth month
+        (0-100, null when there are no members) — F4 honesty disclosure
+      - recharge_trend: [{month "YYYY-MM", principal, bonus}, ...] over range
+      - recharge_store_count: distinct stores with recharge data in the window
+        (the demo source only has recharge for 1 store — surfaced so the
+        card can disclose "仅部分门店有充值记录")
+      - note: explains why data_available is False, if applicable
+    """
+    start, end = date_range
+    _validate_range(start, end)
+    conds = ["factory_id = $1"]
+    params: list = [factory_id]
+    if start is not None:
+        params.append(start)
+        conds.append(f"date >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        conds.append(f"date <= ${len(params)}")
+    where = " AND ".join(conds)
+
+    async with pool.acquire() as conn:
+        avail_row = await conn.fetchrow(
+            "SELECT EXISTS(SELECT 1 FROM agg_member_tier WHERE factory_id = $1) AS has_data",
+            factory_id,
+        )
+        tier_rows = await conn.fetch(
+            """
+            SELECT tier,
+                   SUM(member_count)  AS member_count,
+                   SUM(total_balance) AS total_balance
+              FROM agg_member_tier
+             WHERE factory_id = $1
+             GROUP BY tier
+             ORDER BY SUM(member_count) DESC
+            """,
+            factory_id,
+        )
+        gender_rows = await conn.fetch(
+            """
+            SELECT gender, member_count
+              FROM agg_member_gender
+             WHERE factory_id = $1
+             ORDER BY member_count DESC
+            """,
+            factory_id,
+        )
+        # NO birth_month filter here — we need the 0 (unknown) bucket too, for
+        # the coverage disclosure (F4). Split known vs unknown in Python.
+        birth_rows = await conn.fetch(
+            """
+            SELECT birth_month, member_count
+              FROM agg_member_birth_month
+             WHERE factory_id = $1
+             ORDER BY birth_month
+            """,
+            factory_id,
+        )
+        recharge_rows = await conn.fetch(
+            f"""
+            SELECT to_char(date, 'YYYY-MM') AS month,
+                   SUM(principal) AS principal,
+                   SUM(bonus)     AS bonus
+              FROM agg_member_recharge_daily
+             WHERE {where}
+             GROUP BY to_char(date, 'YYYY-MM')
+             ORDER BY month
+            """,
+            *params,
+        )
+        recharge_store_row = await conn.fetchrow(
+            f"SELECT COUNT(DISTINCT store_id) AS n FROM agg_member_recharge_daily WHERE {where}",
+            *params,
+        )
+
+    data_available = bool(avail_row["has_data"]) if avail_row else False
+
+    # Tier (with balance) + gender — k-anon merge sub-5 cohorts into 其他.
+    tier_distribution = _k_anon_merge_categorical(
+        tier_rows, label_key="tier", with_balance=True
+    )
+    gender_distribution = _k_anon_merge_categorical(
+        gender_rows, label_key="gender", with_balance=False
+    )
+
+    # Birth month: separate the 0 (unknown) sentinel from real months (1-12),
+    # then k-anon-drop sub-5 month buckets (counted in suppressed_count).
+    birth_month_unknown_count = 0
+    known_month_total = 0
+    birth_month_distribution: list = []
+    birth_month_suppressed_count = 0
+    for r in birth_rows:
+        bm = int(r["birth_month"])
+        cnt = int(r["member_count"] or 0)
+        if bm == 0:
+            birth_month_unknown_count += cnt
+            continue
+        known_month_total += cnt
+        if cnt >= _MEMBER_K_ANON:
+            birth_month_distribution.append({"birth_month": bm, "member_count": cnt})
+        else:
+            birth_month_suppressed_count += cnt
+    birth_month_distribution.sort(key=lambda x: x["birth_month"])
+
+    total_birth_members = birth_month_unknown_count + known_month_total
+    birth_month_coverage_pct: Optional[float] = (
+        round(known_month_total / total_birth_members * 100, 1)
+        if total_birth_members > 0
+        else None
+    )
+
+    recharge_trend = [
+        {
+            "month": r["month"],
+            "principal": float(r["principal"] or 0),
+            "bonus": float(r["bonus"] or 0),
+        }
+        for r in recharge_rows
+    ]
+    recharge_store_count = int(recharge_store_row["n"] or 0) if recharge_store_row else 0
+
+    # Top-level totals: sum from the RAW tier rows (pre-merge) so member_count
+    # is the true grand total (the 其他 merge doesn't change the sum).
+    member_count = sum(int(r["member_count"] or 0) for r in tier_rows)
+    raw_total_balance = sum(float(r["total_balance"] or 0) for r in tier_rows)
+    # k-anon on the grand total too: a tenant with < k total members would
+    # otherwise expose the aggregate balance of a tiny cohort.
+    total_balance: Optional[float] = (
+        raw_total_balance if member_count >= _MEMBER_K_ANON else None
+    )
+
+    note: Optional[str] = None if data_available else "未上传会员数据"
+
+    return {
+        "factory_id": factory_id,
+        "start_date": start.isoformat() if start is not None else None,
+        "end_date": end.isoformat() if end is not None else None,
+        "data_available": data_available,
+        "member_count": member_count,
+        "total_balance": total_balance,
+        "tier_distribution": tier_distribution,
+        "gender_distribution": gender_distribution,
+        "birth_month_distribution": birth_month_distribution,
+        "birth_month_unknown_count": birth_month_unknown_count,
+        "birth_month_suppressed_count": birth_month_suppressed_count,
+        "birth_month_coverage_pct": birth_month_coverage_pct,
+        "recharge_trend": recharge_trend,
+        "recharge_store_count": recharge_store_count,
+        "note": note,
+        "caveat": (
+            "本维度为会员储值与画像统计(非完整 RFM): 数据源(卡详情/卡充值报表)不含"
+            "逐笔消费记录，无法计算复购间隔(Recency)与消费频次(Frequency)，仅覆盖"
+            "储值余额、等级/性别/生日月份分布与充值趋势。为保护会员隐私，人数少于 5 "
+            "的分组已合并入「其他」或不单独展示。"
+        ),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# member_rfm — FULL RFM (Recency/Frequency/Monetary), CRM P0.
+#
+# Unlike member_profile() above (whose source has no per-member consumption
+# event — explicitly NOT RFM), this dimension's source (二维火 "卡消费排行")
+# IS a per-card cumulative-consumption snapshot, so R/F/M are computed
+# directly from fact_member_consumption (V20261008_01) and rolled up by
+# smartbi/services/materialized_analytics/member_rfm.py into
+# agg_member_rfm_segment / agg_member_rfm_tier / agg_member_lifecycle
+# (V20261008_02).
+#
+# 🔒 k-anonymity (k=5), same threshold/constant as member_profile()
+# (_MEMBER_K_ANON, defined above): rfm_tier_distribution and
+# lifecycle_distribution merge sub-5 cohorts into 其他 (nulling any money
+# field for the merged bucket if it's STILL sub-5); rfm_scatter drops
+# (does not merge) sub-5 (r,f,m) buckets entirely — merging a 3D scatter
+# point into a generic "其他" location wouldn't correspond to any real
+# position on the chart, so those members are counted honestly in
+# rfm_scatter_suppressed_count instead (mirrors member_profile()'s
+# birth_month_suppressed_count pattern).
+# ─────────────────────────────────────────────────────────────────────────
+
+
+async def member_rfm(pool: asyncpg.Pool, factory_id: str) -> Dict[str, Any]:
+    """会员 RFM 分析 — full RFM tier distribution + lifecycle + 3D scatter.
+
+    Honesty guard: data_available=False when the tenant has ZERO
+    agg_member_rfm_tier rows (never uploaded 卡消费排行 data) → all fields
+    are empty/zero and note explains why, rather than a fabricated empty
+    distribution indistinguishable from "uploaded but genuinely no members".
+
+    No date_range parameter: like member_profile()'s tier/gender/
+    birth-month dimensions, these three Gold tables are a current-state
+    snapshot (fact_member_consumption has no per-row event date to bucket
+    by — only cumulative R/F/M fields as of the source export). Recency-
+    derived fields (avg_spend_interval, lifecycle_stage) are recomputed
+    against CURRENT_DATE at MATERIALIZATION time, not query time — calling
+    this query again without re-materializing will NOT re-age members.
+
+    Returns:
+      - data_available: bool — whether the tenant has any RFM data at all
+      - member_count: snapshot total across all tiers (pre k-anon-merge sum,
+        same convention as member_profile()'s grand total)
+      - rfm_tier_distribution: [{rfm_tier, member_count, total_cum_spend,
+        avg_spend_interval}, ...] (k-anon; avg_spend_interval for a merged
+        其他 bucket is a member_count-weighted average across the underlying
+        sub-5 tiers, not a naive average-of-averages)
+      - lifecycle_distribution: [{lifecycle_stage, member_count,
+        total_balance}, ...] (k-anon)
+      - rfm_scatter: [{r_score, f_score, m_score, member_count,
+        avg_cum_spend}, ...] — only buckets with member_count >= k
+      - rfm_scatter_suppressed_count: members in sub-5 (r,f,m) buckets
+        dropped from rfm_scatter (honest coverage math, not silently lost)
+      - note: explains why data_available is False, if applicable
+      - caveat: explains this dimension IS full RFM (contrast with
+        member_profile()'s "NOT full RFM" caveat) + the k-anon disclosure
+    """
+    async with pool.acquire() as conn:
+        avail_row = await conn.fetchrow(
+            "SELECT EXISTS(SELECT 1 FROM agg_member_rfm_tier WHERE factory_id = $1) AS has_data",
+            factory_id,
+        )
+        # NOTE: unlike member_profile()'s agg_member_tier (PK includes
+        # store_id, so a SUM/GROUP BY is needed to roll stores up into a
+        # tenant total), all three RFM Gold tables here have NO store
+        # dimension in their PK — (factory_id, rfm_tier) /
+        # (factory_id, lifecycle_stage) / (factory_id, r_score, f_score,
+        # m_score) are each already exactly one row per bucket. Plain
+        # SELECTs, no aggregation needed.
+        tier_rows = await conn.fetch(
+            """
+            SELECT rfm_tier, member_count, total_cum_spend, avg_spend_interval
+              FROM agg_member_rfm_tier
+             WHERE factory_id = $1
+             ORDER BY member_count DESC
+            """,
+            factory_id,
+        )
+        lifecycle_rows = await conn.fetch(
+            """
+            SELECT lifecycle_stage, member_count, total_balance
+              FROM agg_member_lifecycle
+             WHERE factory_id = $1
+             ORDER BY member_count DESC
+            """,
+            factory_id,
+        )
+        scatter_rows = await conn.fetch(
+            """
+            SELECT r_score, f_score, m_score, member_count, avg_cum_spend
+              FROM agg_member_rfm_segment
+             WHERE factory_id = $1
+             ORDER BY r_score, f_score, m_score
+            """,
+            factory_id,
+        )
+
+    data_available = bool(avail_row["has_data"]) if avail_row else False
+
+    # rfm_tier_distribution: k-anon merge, weighted-average avg_spend_interval
+    # (a naive average-of-averages would misweight tiers of different size).
+    rfm_tier_distribution: list = []
+    small_tier_count = 0
+    small_tier_spend = 0.0
+    small_tier_interval_weighted = 0.0
+    for r in tier_rows:
+        cnt = int(r["member_count"] or 0)
+        if cnt >= _MEMBER_K_ANON:
+            rfm_tier_distribution.append({
+                "rfm_tier": r["rfm_tier"],
+                "member_count": cnt,
+                "total_cum_spend": float(r["total_cum_spend"] or 0),
+                "avg_spend_interval": (
+                    round(float(r["avg_spend_interval"]), 1)
+                    if r["avg_spend_interval"] is not None else None
+                ),
+            })
+        else:
+            small_tier_count += cnt
+            small_tier_spend += float(r["total_cum_spend"] or 0)
+            if r["avg_spend_interval"] is not None:
+                small_tier_interval_weighted += float(r["avg_spend_interval"]) * cnt
+    if small_tier_count > 0:
+        rfm_tier_distribution.append({
+            "rfm_tier": "其他",
+            "member_count": small_tier_count,
+            "total_cum_spend": (
+                small_tier_spend if small_tier_count >= _MEMBER_K_ANON else None
+            ),
+            "avg_spend_interval": (
+                round(small_tier_interval_weighted / small_tier_count, 1)
+                if small_tier_count >= _MEMBER_K_ANON else None
+            ),
+        })
+
+    lifecycle_distribution = _k_anon_merge_categorical(
+        lifecycle_rows, label_key="lifecycle_stage", with_balance=True
+    )
+
+    # rfm_scatter: DROP (not merge) sub-5 (r,f,m) buckets — no sensible
+    # "其他" position exists on a 3D scatter, so suppressed members are
+    # counted honestly instead of silently vanishing.
+    rfm_scatter: list = []
+    rfm_scatter_suppressed_count = 0
+    for r in scatter_rows:
+        cnt = int(r["member_count"] or 0)
+        if cnt >= _MEMBER_K_ANON:
+            rfm_scatter.append({
+                "r_score": int(r["r_score"]),
+                "f_score": int(r["f_score"]),
+                "m_score": int(r["m_score"]),
+                "member_count": cnt,
+                "avg_cum_spend": float(r["avg_cum_spend"] or 0),
+            })
+        else:
+            rfm_scatter_suppressed_count += cnt
+
+    member_count = sum(int(r["member_count"] or 0) for r in tier_rows)
+    note: Optional[str] = None if data_available else "未上传会员消费(RFM)数据"
+
+    return {
+        "factory_id": factory_id,
+        "data_available": data_available,
+        "member_count": member_count,
+        "rfm_tier_distribution": rfm_tier_distribution,
+        "lifecycle_distribution": lifecycle_distribution,
+        "rfm_scatter": rfm_scatter,
+        "rfm_scatter_suppressed_count": rfm_scatter_suppressed_count,
+        "note": note,
+        "caveat": (
+            "本维度为完整 RFM 分析(Recency/Frequency/Monetary): 数据源(卡消费排行)"
+            "为逐卡累计消费快照，R=最近消费距今天数，F=累计消费次数，M=累计消费金额，"
+            "按五分位打分(1-5)后映射为 7 大客群标签(Champions/Loyal/Potential/New/"
+            "At Risk/Hibernating/Lost)。为保护会员隐私，人数少于 5 的分组已合并入"
+            "「其他」(客群/生命周期分布)或不单独展示(RFM 散点分布)。"
+        ),
     }

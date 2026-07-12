@@ -37,6 +37,7 @@ byte-strict; dict-eq is sufficient — no Java parity contract).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional
 
 try:  # pandas only needed for factbook_to_dataframe; keep import soft for unit tests.
@@ -52,6 +53,14 @@ NOTE_VIP_SIGNAL = "VIP 评分低于非VIP 是真实数据信号；因果归因(�
 NOTE_COMPLAINT_DISPUTE = "投诉类型为商家申诉口径，样本小，不等于客诉总量。"
 NOTE_REVIEW_ABSENT_NEXTACTION = (
     "评价数据暂未接入，当前分析基于经营数据。上传大众点评/美团评价导出后可补充口碑维度。"
+)
+# 中餐单品毛利不可靠 (各菜用量难固定核算) → 单品维度停用, 问到时降级到聚合加权毛利率。
+NOTE_DISH_MARGIN_ABSENT = (
+    "中餐各菜用量难固定核算，单品毛利算不准；已按总毛利率/加权毛利率（营收−食材成本，聚合口径）分析。"
+)
+# 供应商价格异常: 无数据或无异常时的诚实标注 (威慑非处罚)。
+NOTE_SUPPLIER_ANOMALY_ABSENT = (
+    "本期未发现供应商采购价格异常；如采购价格数据尚未接入（进货单/OCR），接入后可持续监控异常涨价（威慑非处罚）。"
 )
 
 
@@ -74,6 +83,18 @@ def _num(v: Any) -> Optional[float]:
         return None
 
 
+def _pct1(v: Any) -> Optional[float]:
+    """Round to 1 decimal HALF_UP — parity with gold.period_comparison's quantize
+    (F4: Python round() is banker's, so 加权毛利率 would render/index two different
+    values at a .x5 boundary → false reconciler deviation)."""
+    if v is None:
+        return None
+    try:
+        return float(Decimal(str(float(v))).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
+    except (TypeError, ValueError, ArithmeticError):
+        return None
+
+
 @dataclass
 class FactBook:
     """Deterministic metric汇总. LLM/analyzer read here, never self-compute."""
@@ -81,7 +102,11 @@ class FactBook:
     review: Optional[Dict[str, Any]] = None
     finance: Optional[Dict[str, Any]] = None
     sales: Optional[Dict[str, Any]] = None
-    dish_margin: Optional[Dict[str, Any]] = None
+    dish_margin: Optional[Dict[str, Any]] = None  # 停用 (中餐单品毛利不可靠); 不再 populate/render/index
+    # 同比(去年同期)/环比(前一等长周期) for 营收+加权毛利率 — gold.period_comparison.
+    period_comparison: Optional[Dict[str, Any]] = None
+    # 供应商采购价格异常 (威慑非处罚) — gold.detect_price_anomalies, wrapped {"anomalies": [...]}.
+    supplier_anomaly: Optional[Dict[str, Any]] = None
     # Per-store 客流(bills)×客单价(avg_ticket) 拖后腿归因 — laggard + effect
     # decomposition. Populated when the plan flags `attribution` (store-lag /
     # traffic-vs-ticket question). See ``compute_store_attribution``.
@@ -115,13 +140,14 @@ class FactBook:
 
         self._render_review(lines)
         self._render_finance(lines)
+        self._render_period_comparison(lines)
         self._render_weather(lines)
         self._render_attribution(lines)
-        self._render_dish_margin(lines)
         self._render_sales(lines)
         self._render_channel(lines)
         self._render_meal_period(lines)
         self._render_discount(lines)
+        self._render_supplier_anomaly(lines)
         self._render_cross(lines)
 
         if self.notes:
@@ -218,6 +244,13 @@ class FactBook:
                 f"/其他¥{_money(fin.get('overhead_cost'))}）；"
                 f"净利润 ¥{_money(fin.get('net_profit'))}，净利率 {fin.get('net_margin_pct')}%"
             )
+            gp = _num(fin.get("gross_profit"))
+            rev_f = _num(revenue)
+            if gp is not None and rev_f:
+                lines.append(
+                    f"- 加权毛利率（营收−食材成本，聚合口径，非单品毛利）"
+                    f"{_pct1(gp / rev_f * 100)}%（加权毛利 ¥{_money(gp)}）"
+                )
         if avg_bill is not None:
             lines.append(f"- 客单价 ¥{_money(avg_bill)}")
         stores = fin.get("top_stores") or []
@@ -237,7 +270,7 @@ class FactBook:
         buckets = {b.get("cond"): b for b in (weather.get("buckets") or [])}
         sunny = buckets.get("晴天")
         rainy = buckets.get("雨天")
-        lines.append("## 天气×营收（internal_seed_weather，相关≠因果）")
+        lines.append("## 天气×营收（演示用合成天气数据 internal_seed_weather，相关≠因果）")
         pct = weather.get("rain_vs_sunny_pct")
         if sunny and rainy and pct is not None:  # audit P3 F3: skip "%" line when pct is None
             direction = "低" if pct < 0 else "高"
@@ -358,6 +391,79 @@ class FactBook:
                     f"单份成本 ¥{_money(item.get('unit_cost'))}，毛利 ¥{_money(item.get('gross_profit'))}，"
                     f"毛利率 {item.get('gross_margin_pct')}%"
                 )
+        lines.append("")
+
+    def _render_period_comparison(self, lines: List[str]) -> None:
+        pc = self.period_comparison
+        if not pc:
+            return
+        rev = pc.get("revenue") or {}
+        if not rev.get("available"):  # F1: no current data → no fabricated ¥0 render
+            return
+        gm = pc.get("gross_margin_pct") or {}
+
+        def _seg(avail, pct, unit):
+            if not avail or pct is None:
+                return None
+            sign = "+" if pct >= 0 else ""
+            return f"{sign}{pct}{unit}"
+
+        # F2: render ONLY the deltas (grounded via facts_index 营收同比/环比增长率 等);
+        # 绝对值(营收/加权毛利率)由 finance 维度呈现 (pc 触发时 finance 必开) — 避免
+        # 未 grounded 的绝对数字重复出现。
+        lines.append("## 同比环比（gold agg_daily；绝对值见「经营」）")
+        yoy = _seg(rev.get("yoy_available"), rev.get("yoy_pct"), "%")
+        mom = _seg(rev.get("mom_available"), rev.get("mom_pct"), "%")
+        lines.append("- 营收增速：" + "，".join([
+            f"同比 {yoy}" if yoy else "同比 去年同期无数据",
+            f"环比 {mom}" if mom else "环比 无上一周期数据",
+        ]))
+        if gm.get("current") is not None:
+            gy = _seg(gm.get("yoy_available"), gm.get("yoy_pct"), "个百分点")
+            gm_ = _seg(gm.get("mom_available"), gm.get("mom_pct"), "个百分点")
+            lines.append("- 加权毛利率变化：" + "，".join([
+                f"同比 {gy}" if gy else "同比 去年同期无数据",
+                f"环比 {gm_}" if gm_ else "环比 无上一周期数据",
+            ]))
+        # 领料成本率(真实际用料口径, 反回扣核心) — 有它自己的绝对值(无别处呈现), 故显示
+        # 当前值+变化; 诚实标注口径(领料÷营收/factory级/非盘点rollforward)。
+        cr = pc.get("cost_ratio") or {}
+        if cr.get("current") is not None:
+            cy = _seg(cr.get("yoy_available"), cr.get("yoy_pct"), "个百分点")
+            cm = _seg(cr.get("mom_available"), cr.get("mom_pct"), "个百分点")
+            lines.append(
+                f"- 领料成本率 {cr.get('current')}%（领料成本÷营收，领料申请量×当前单价估算，"
+                "仅含已提交/已审批，与配方理论COGS不同、factory级非逐店、非盘点rollforward）："
+                + "，".join([
+                    f"同比 {cy}" if cy else "同比 去年同期无数据",
+                    f"环比 {cm}" if cm else "环比 无上一周期数据",
+                ])
+                + "。成本率上升=用料/漏损/回扣信号，需查物料与供应商，记录趋势非处罚。"
+            )
+        lines.append("")
+
+    def _render_supplier_anomaly(self, lines: List[str]) -> None:
+        sa = self.supplier_anomaly
+        if not sa:
+            return
+        anomalies = sa.get("anomalies") or []
+        if not anomalies:
+            return
+        _DIR = {"UP": "涨", "DOWN": "降"}
+        _RISK = {"HIGH": "高风险", "MEDIUM": "中风险"}
+        lines.append("## 供应商价格异常（威慑非处罚：只记录异常趋势、要求供应商解释，不处罚）")
+        for a in anomalies[:8]:
+            name = a.get("ingredientName") or a.get("normalizedName") or "未知物料"
+            supplier = a.get("supplierName") or "未知供应商"
+            delta = a.get("deltaPct")
+            direction = _DIR.get(a.get("direction"), a.get("direction") or "")
+            risk = _RISK.get(a.get("riskLevel"), a.get("riskLevel") or "")
+            dtxt = f"{abs(float(delta))}%" if delta is not None else "?"
+            lines.append(
+                f"- {name}（{supplier}）采购价{direction} {dtxt}"
+                f"（¥{_money(a.get('oldPrice'))}→¥{_money(a.get('newPrice'))}），{risk}"
+            )
+        lines.append("- 口径：连续同向多次异常为高风险；记录趋势要求解释，非处罚。")
         lines.append("")
 
     def _render_service_mode(
@@ -493,19 +599,49 @@ class FactBook:
             if v is not None:
                 idx[label] = v
 
-        dm = self.dish_margin or {}
-        top_items = dm.get("top_margin") or []
-        if top_items:
-            top = top_items[0]
-            for label, key in (
-                ("单品最高售价", "selling_price"),
-                ("单品最高成本", "unit_cost"),
-                ("单品最高毛利", "gross_profit"),
-                ("单品最高毛利率", "gross_margin_pct"),
-            ):
-                v = _num(top.get(key))
-                if v is not None:
-                    idx[label] = v
+        # 加权毛利/加权毛利率 (聚合口径) — label 焊死 "加权", 绝不用裸 "毛利率"
+        # (中餐单品毛利是虚构; the qualified label IS the grounding contract, per
+        # Fable gate: FactReconciler checks numbers not qualifiers).
+        gp = _num(fin.get("gross_profit"))
+        rev_f = _num(fin.get("total_revenue"))
+        if gp is not None:
+            idx["加权毛利"] = gp
+        if gp is not None and rev_f:
+            _gm = _pct1(gp / rev_f * 100)
+            if _gm is not None:
+                idx["加权毛利率"] = _gm
+
+        # 同比环比 (营收增长率% + 加权毛利率百分点差) — grounded so the reconciler
+        # backstops the growth numbers the LLM restates.
+        pc = self.period_comparison or {}
+        pcr = pc.get("revenue") or {}
+        if pcr.get("yoy_available") and pcr.get("yoy_pct") is not None:
+            idx["营收同比增长率"] = float(pcr["yoy_pct"])
+        if pcr.get("mom_available") and pcr.get("mom_pct") is not None:
+            idx["营收环比增长率"] = float(pcr["mom_pct"])
+        pcg = pc.get("gross_margin_pct") or {}
+        if pcg.get("yoy_available") and pcg.get("yoy_pct") is not None:
+            idx["加权毛利率同比"] = float(pcg["yoy_pct"])
+        if pcg.get("mom_available") and pcg.get("mom_pct") is not None:
+            idx["加权毛利率环比"] = float(pcg["mom_pct"])
+        pcc = pc.get("cost_ratio") or {}
+        if pcc.get("current") is not None:
+            idx["领料成本率"] = float(pcc["current"])
+        if pcc.get("yoy_available") and pcc.get("yoy_pct") is not None:
+            idx["领料成本率同比"] = float(pcc["yoy_pct"])
+        if pcc.get("mom_available") and pcc.get("mom_pct") is not None:
+            idx["领料成本率环比"] = float(pcc["mom_pct"])
+
+        # 供应商价格异常涨幅 — each anomaly's deltaPct grounded per material name.
+        sa = self.supplier_anomaly or {}
+        for a in (sa.get("anomalies") or []):
+            nm = a.get("ingredientName") or a.get("normalizedName")
+            sup = a.get("supplierName") or a.get("supplierId") or ""
+            v = _num(a.get("deltaPct"))
+            if nm and v is not None:
+                # F3 collision-safe: detect groups by (food, supplier); ingredient-only
+                # key would let two suppliers' deltas overwrite (last-wins) + mis-correct.
+                idx[f"{nm}（{sup}）采购价涨幅"] = v
 
         att = self.attribution or {}
         if att and not att.get("no_data"):

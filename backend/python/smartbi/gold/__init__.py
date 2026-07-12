@@ -35,6 +35,8 @@ from smartbi.gold.queries import (
     finance_summary,
     kpi_summary,
     meal_period_breakdown,
+    member_profile,
+    member_rfm,
     menu_quadrant,
     order_type_breakdown,
     order_type_mix,
@@ -42,6 +44,9 @@ from smartbi.gold.queries import (
     store_comparison,
     top_products,
     trend_bundle,
+    void_audit,
+    void_rate,
+    zone_efficiency,
 )
 from smartbi.gold.review_queries import (
     review_city_ranking,
@@ -90,6 +95,8 @@ __all__ = [
     "ingest_and_materialize",
     "kpi_summary",
     "meal_period_breakdown",
+    "member_profile",
+    "member_rfm",
     "menu_quadrant",
     "order_type_breakdown",
     "order_type_mix",
@@ -111,6 +118,9 @@ __all__ = [
     "store_review_vs_revenue",
     "top_products",
     "trend_bundle",
+    "void_audit",
+    "void_rate",
+    "zone_efficiency",
     "run_silver_dual_write",
     "silver_dual_write_enabled",
 ]

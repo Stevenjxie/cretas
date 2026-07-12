@@ -125,6 +125,14 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     @Autowired(required = false)
     private com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository requisitionRepository;
 
+    /**
+     * 2B B3 (clerk-path workflow 联通) — 若计划关联 workflow 批次, 用 workflow 端口投影校验本行产出 (防呆:
+     * 产出类型 半成品/成品 与单位必须对齐 workflow 配置, 不对则 loud-fail)。required=false: 单测/未注入 → 跳过,
+     * legacy (非 workflow) 计划 service 返回 null → 不校验, 现有 clerk 路径行为不变 (additive)。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.workflow.WorkflowClerkSheetService workflowClerkSheetService;
+
     @Override
     @Transactional
     public ProcessSheetRowResult saveRow(String factoryId, String planId,
@@ -138,9 +146,21 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             throw new BusinessException(403, "无权访问该计划");
         }
 
+        // 2B.2 多产出分支 (前置于单产出校验/upsert): 多产出用自己的逐产出校验 + 分组 upsert/删除,
+        //   顶层 finished/unit/outputQuantity 只是 @NotNull 占位, 不能拿去跑单产出 B3/单位归一化 (否则误 409)。
+        if (req.getOutputs() != null && req.getOutputs().size() > 1) {
+            return saveMultiOutputRow(factoryId, planId, req, userId);
+        }
+
         // 1.5 G2: 自定义字段 key 白名单校验 (WorkProcess.customFieldSchema 配置驱动)。
         //     覆盖 create + re-save 两条路径 (resaveRow 由本方法下方委托调用, 早于任何写入)。
+        normalizeConfiguredUnits(factoryId, planId, req);
         validateCustomFields(factoryId, req);
+
+        // 1.6 2B B3: workflow 批次行防呆校验 (产出类型/单位对齐 workflow 端口)。
+        //     与 validateCustomFields 同置于 upsert 查重之前 → 覆盖 create + re-save 两条路径, 早于任何写入。
+        //     legacy 计划 (无 workflow 批次) → getWorkflowSheetConfig 返回 null → 直接放行, 现有路径不变。
+        validateWorkflowRowIfApplicable(factoryId, planId, req);
 
         // 2. upsert 键查重: 已存在 → 委托 re-save (Task 1.6 stub)
         Optional<ProcessSheetRow> existing = rowRepo
@@ -154,6 +174,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         List<String> warnings = new ArrayList<>();
 
         assertFinishedGoodsSourceAllowed(factoryId, req);
+        assertExternalFeedUnitSupported(req);
 
         // 3. 解析上游消耗边 (factory-scoped, 🔒)
         List<ResolvedEdge> edges = resolveEdges(factoryId, planId, req);
@@ -180,6 +201,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             String anchor = postSfiOutput(factoryId, planId, req, warnings);
             persistRow(factoryId, planId, req, null, anchor, ProcessSheetRow.STATUS_SAVED_SFI);
             logChange(factoryId, planId, req, "CREATE", null, req, userId);
+            stampWorkflowTaskIfApplicable(factoryId, planId, req); // 2B B3 F3: 回写 workflow 任务进度 (fail-soft)
             // materialized=true: 产出已入 SFI 库 (下游可选); yieldRate 可算; 成本诚实 (投入未知 → null)。
             return buildResult(req, null, anchor, yieldRate(req), null, null, false, true, warnings);
         }
@@ -207,11 +229,383 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // 8. 写 process_sheet_rows (try/catch UK 冲突 → 409; 完整并发测在 Task 1.7)
         persistRow(factoryId, planId, req, mat.getProductionBatchId(), mat.getBatchNumber(), "SAVED");
         logChange(factoryId, planId, req, "CREATE", null, req, userId);
+        stampWorkflowTaskIfApplicable(factoryId, planId, req); // 2B B3 F3: 回写 workflow 任务进度 (fail-soft)
 
         // 9. 组装结果
         return buildResult(req, mat.getProductionBatchId(), mat.getBatchNumber(),
                 yieldRate(req), mat.getRowTotalCost(),
                 unitPrice(mat.getRowTotalCost(), req.getOutputQuantity()), false, true, warnings);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 2B B3: workflow 批次行防呆校验 (clerk-path 报工联通)
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * 若该计划关联一个 workflow 批次, 用 workflow 端口投影校验本行产出对齐 (防呆, 禁止降级):
+     * <ul>
+     *   <li>产出类型 半成品/成品 必须与 workflow 输出端口一致 (finished 标志)</li>
+     *   <li>产出单位 必须与端口单位一致 (两侧都有值时)</li>
+     * </ul>
+     * legacy 计划 (service 返回 null) / 未注入 (单测) / DRAFT 行 (无产出) → 放行, 现有路径不变。
+     * 产出 SKU (productType) 的严格对齐留待 FE 产出 SKU 回填经 E2E 确认后再收紧, 避免误阻断 (MVP)。
+     */
+    private void validateWorkflowRowIfApplicable(String factoryId, String planId, ProcessSheetRowRequest req) {
+        if (workflowClerkSheetService == null) {
+            return; // 单测/未注入
+        }
+        // DRAFT 行 (产出<=0) 尚无产出, 不校验产出类型/单位
+        if (req.getOutputQuantity() == null || req.getOutputQuantity().signum() <= 0) {
+            return;
+        }
+        com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO config;
+        try {
+            config = workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId);
+        } catch (BusinessException be) {
+            throw be; // e.g. WORKFLOW_MULTI_OUTPUT_UNSUPPORTED — 必须 surface, 不静默降级
+        } catch (Exception e) {
+            log.warn("2B B3 workflow 行校验读取配置失败, 跳过校验 (不阻断保存): planId={}, err={}",
+                    planId, e.getMessage());
+            return;
+        }
+        if (config == null || config.getProcesses() == null) {
+            return; // legacy 计划 — 不校验
+        }
+        com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.ProcessDescriptor desc =
+                config.getProcesses().stream()
+                        .filter(p -> p.getProcessOrder() != null
+                                && p.getProcessOrder().equals(req.getProcessOrder()))
+                        .findFirst()
+                        .orElse(null);
+        if (desc == null || desc.getOutput() == null) {
+            return; // 该道不在 workflow 图中 (不硬阻断; FE 只暴露 workflow 工序)
+        }
+        com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor out = desc.getOutput();
+        String processName = desc.getProcessName() != null ? desc.getProcessName() : "";
+        String outputName = out.getMaterialName() != null ? out.getMaterialName() : "";
+
+        boolean expectFinished = Boolean.TRUE.equals(out.getFinished());
+        if (req.isFinished() != expectFinished) {
+            throw new BusinessException(409, "本工序【" + processName + "】应产出"
+                    + (expectFinished ? "成品" : "半成品") + "「" + outputName + "」，当前产出类型不符")
+                    .withCode("WORKFLOW_ROW_OUTPUT_KIND_MISMATCH")
+                    .withHint(expectFinished
+                            ? "请在成品道录入产出，或回 Workflow 配置核对本道产出类型"
+                            : "本道产出应为半成品，请勿按成品录入");
+        }
+
+        String expectUnit = out.getUnit();
+        String actualUnit = req.getUnit();
+        if (expectUnit != null && !expectUnit.isBlank()
+                && actualUnit != null && !actualUnit.isBlank()
+                && !expectUnit.equals(actualUnit)) {
+            throw new BusinessException(409, "本工序【" + processName + "】产出单位应为「"
+                    + expectUnit + "」，当前为「" + actualUnit + "」")
+                    .withCode("WORKFLOW_ROW_OUTPUT_UNIT_MISMATCH")
+                    .withHint("请按 Workflow 配置的单位录入产出数量");
+        }
+    }
+
+    /**
+     * 2B B3 (F3 回写): workflow 批次行产出后, 把对应 workflow 工序任务 (WorkProcessTask) 标记为 COMPLETED
+     * 并回写实际产量, 使 workflow 运行时视图反映文员逐道录入的进度 (否则任务永远 PENDING)。
+     *
+     * <p><b>fail-soft</b>: 任何异常只记 warn, 绝不阻断已完成的行保存/物化/库存写入 (进度回写非关键路径)。
+     * legacy 计划 / 未注入 / 找不到对应任务 → 静默跳过。仅在行确有产出 (SAVED / SAVED_SFI) 后调用。
+     */
+    private void stampWorkflowTaskIfApplicable(String factoryId, String planId, ProcessSheetRowRequest req) {
+        if (workflowClerkSheetService == null || taskRepo == null) {
+            return;
+        }
+        try {
+            com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO config =
+                    workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId);
+            if (config == null || config.getProcesses() == null || config.getWorkflowInstanceId() == null) {
+                return; // legacy 计划
+            }
+            com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.ProcessDescriptor desc =
+                    config.getProcesses().stream()
+                            .filter(p -> p.getProcessOrder() != null
+                                    && p.getProcessOrder().equals(req.getProcessOrder()))
+                            .findFirst()
+                            .orElse(null);
+            if (desc == null || desc.getWorkflowNodeId() == null) {
+                return;
+            }
+            List<com.cretas.aims.entity.workprocess.WorkProcessTask> tasks =
+                    taskRepo.findByFactoryIdAndWorkflowInstanceIdOrderByProcessOrderAsc(
+                            factoryId, config.getWorkflowInstanceId());
+            com.cretas.aims.entity.workprocess.WorkProcessTask task = tasks.stream()
+                    .filter(t -> desc.getWorkflowNodeId().equals(t.getWorkflowNodeId()))
+                    .findFirst()
+                    .orElse(null);
+            if (task == null) {
+                return;
+            }
+            if (req.getOutputQuantity() != null) {
+                task.setActualQuantity(req.getOutputQuantity());
+            }
+            task.setStatus(com.cretas.aims.entity.workprocess.WorkProcessTask.Status.COMPLETED);
+            taskRepo.save(task);
+        } catch (Exception e) {
+            log.warn("2B B3 workflow 任务进度回写失败 (不阻断保存): planId={}, processOrder={}, err={}",
+                    planId, req.getProcessOrder(), e.getMessage());
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 2B.2 多产出 (fan-out) 分解 —— 一次报工 N 个产出 → N 个单产出物料化, 共享投入按权重拆分, 落 N 行
+    // ─────────────────────────────────────────────────────────────
+
+    private record OneOutputOutcome(Long batchId, String batchNumber, BigDecimal rowTotalCost) {}
+
+    /**
+     * 多产出报工分解 (🔒 keystone)。input allocations (rawMaterialInputs/upstreamSources) + output lines
+     * (req.outputs) 两组独立事实。首产出行 (base#0, carryInputs) 承载全部实际投入 → 一次全量扣减 (不拆分);
+     * 其余产出行 (base#i) 仅按各自 output line 入库。血缘经同一份工序报工关联。工序不处理成本 (多产出行成本诚实 null)。
+     *
+     * <p>整组 (base#*) 生命周期: 单行删除级联整组 (防幻库存); 重存先删旧组再建 (见 deleteRow / 组前置删除)。
+     */
+    private ProcessSheetRowResult saveMultiOutputRow(String factoryId, String planId,
+            ProcessSheetRowRequest req, Long userId) {
+        List<String> warnings = new ArrayList<>();
+        List<ProcessSheetRowRequest.OutputLine> outs = req.getOutputs();
+
+        // 1. 逐产出校验 (禁止降级: 缺产品/量<=0 明确报错)
+        for (ProcessSheetRowRequest.OutputLine o : outs) {
+            if (o.getProductTypeId() == null || o.getProductTypeId().isBlank()) {
+                throw new BusinessException(400, "多产出存在缺少产品的产出行")
+                        .withCode("PROCESS_SHEET_OUTPUT_PRODUCT_REQUIRED")
+                        .withHint("请为每个产出选择产品");
+            }
+            if (o.getQuantity() == null || o.getQuantity().signum() <= 0) {
+                throw new BusinessException(400, "多产出的每条产出数量必须大于0")
+                        .withCode("PROCESS_SHEET_OUTPUT_QUANTITY_INVALID")
+                        .withHint("请填写各产出的产出数量");
+            }
+        }
+
+        // 1b. H3 loud-fail: 多产出报工必须有实际投入 (否则等于凭空产出 → 幻库存)。禁止降级。
+        boolean hasRaw = req.getRawMaterialInputs() != null && !req.getRawMaterialInputs().isEmpty();
+        boolean hasUpstream = req.getUpstreamSources() != null && !req.getUpstreamSources().isEmpty();
+        if (!hasRaw && !hasUpstream) {
+            throw new BusinessException(400, "多产出报工必须有实际投入 (原料或上游半成品), 不能凭空产出")
+                    .withCode("PROCESS_SHEET_MULTI_OUTPUT_NO_INPUT")
+                    .withHint("请先录入本道工序的投入 (领料或上游半成品)");
+        }
+
+        // 1c. 自定义字段校验 (单产出路径在前置做; 多产出这里补做一次, 同 process 同 schema)
+        validateCustomFields(factoryId, req);
+
+        // 1d. 重存 (B2): base#* 组已存在 → 先删旧组 (级联反物化), 再建新组。整组无小结/无下游消耗才可删。
+        deleteMultiOutputGroupIfPresent(factoryId, planId, req.getClientRowId(), userId);
+
+        // 2. B3 逐产出对齐 workflow 端口 (workflow 计划; legacy/未注入 → 跳过)
+        validateMultiOutputAgainstWorkflow(factoryId, planId, req);
+
+        // 3. 分解 (per Steve — 不推断投入-产出比例, 不拆分投入):
+        //    input allocations (req.rawMaterialInputs/upstreamSources) 作为独立事实, 由首产出行承载 → 一次全量扣减;
+        //    每条 output line 各自入库 (其余产出行不带投入, 只产出)。所有产出行同 (plan, processCode, processOrder)
+        //    归属同一份工序报工 → 血缘经该报工把每个产出批次关联到全部实际投入批次 (无按重量/数量的比例分配)。
+        //    工序不处理成本 (人工/调料随投入落在首产出行, 计一次不双计)。
+        int n = outs.size();
+        List<ProcessSheetRowResult.OutputResult> outputResults = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) {
+            ProcessSheetRowRequest.OutputLine o = outs.get(i);
+            boolean carryInputs = (i == 0); // 首产出行承载全部实际投入 + 人工/调料
+            ProcessSheetRowRequest one = synthesizeOutputRequest(req, o, i, carryInputs);
+            OneOutputOutcome outcome = materializeOneOutput(factoryId, planId, one, userId, warnings);
+            logChange(factoryId, planId, one, "CREATE", null, one, userId);
+            ProcessSheetRowResult.OutputResult or = new ProcessSheetRowResult.OutputResult();
+            or.setClientRowId(one.getClientRowId());
+            or.setWorkflowPortId(o.getWorkflowPortId());
+            or.setMaterialNodeId(o.getMaterialNodeId());
+            or.setProductTypeId(o.getProductTypeId());
+            or.setBatchId(outcome.batchId());        // generatedBatchId
+            or.setBatchNumber(outcome.batchNumber());
+            or.setQuantity(o.getQuantity());
+            or.setUnit(one.getUnit());
+            or.setRowTotalCost(outcome.rowTotalCost());
+            outputResults.add(or);
+        }
+
+        // 4. workflow 任务进度回写一次 (整道工序完成)
+        stampWorkflowTaskIfApplicable(factoryId, planId, req);
+
+        // 5. 汇总结果: 首产出批为代表 + 全部产出明细 (FE 重载过程单会拿到 N 行)。工序不处理成本 → 顶层成本 null。
+        ProcessSheetRowResult.OutputResult first = outputResults.get(0);
+        ProcessSheetRowResult result = buildResult(req, first.getBatchId(), first.getBatchNumber(),
+                null, null, null, false, true, warnings);
+        result.setOutputs(outputResults);
+        return result;
+    }
+
+    /**
+     * 单个产出物化 (仅供多产出分解调用; 单产出主路径不走此方法, 保持 F006 现有流一字不改)。
+     * 复刻 saveRow 单产出的 pure-SFI / WIP-FG 两分支决策 + 物化 + 落行, 返回批次/成本。
+     */
+    private OneOutputOutcome materializeOneOutput(String factoryId, String planId,
+            ProcessSheetRowRequest one, Long userId, List<String> warnings) {
+        assertExternalFeedUnitSupported(one);
+        List<ResolvedEdge> edges = resolveEdges(factoryId, planId, one);
+        // 半成品且 (纯 SFI 喂 或 无真实投入[非首产出行]) → 产出直接入 SFI 库 (product 维度, 无需 material_type_id)。
+        //   多产出: 非首产出行不带投入 (edges 空), 半成品产出走此路径; 成品产出走下方 FG 路径。
+        if (!one.isFinished() && (isPureStockFed(one) || edges.isEmpty())) {
+            String anchor = postSfiOutput(factoryId, planId, one, warnings);
+            persistRow(factoryId, planId, one, null, anchor, ProcessSheetRow.STATUS_SAVED_SFI);
+            return new OneOutputOutcome(null, anchor, null);
+        }
+        // 成品不建 WIP → 无需 material_type_id; 半成品(有投入)从投入派生。
+        String rawMaterialTypeId = one.isFinished() ? null : resolveRawMaterialTypeId(one, edges);
+        StepEntry step = buildStepEntry(factoryId, one);
+        MaterializeContext ctx = new MaterializeContext(
+                factoryId,
+                one.isFinished() ? planId : null,
+                one.getProductTypeId(),
+                one.getBatchNumber(),
+                one.isFinished(),
+                clerkService.resolveLaborRate(factoryId, warnings),
+                clerkService.resolveWarehouseId(factoryId, WarehouseCodes.WH_WKS, warnings),
+                rawMaterialTypeId,
+                userId);
+        MaterializedBatch mat = clerkService.materializeBatch(ctx, List.of(step), edges, warnings);
+        persistRow(factoryId, planId, one, mat.getProductionBatchId(), mat.getBatchNumber(), "SAVED");
+        return new OneOutputOutcome(mat.getProductionBatchId(), mat.getBatchNumber(), mat.getRowTotalCost());
+    }
+
+    /**
+     * 合成第 i 个产出的单产出行 (复制 base + 覆盖产出字段)。
+     *
+     * <p>{@code carryInputs}=true (首产出行): 原样携带全部实际投入 (rawMaterialInputs/upstreamSources) +
+     * 人工/调料 → 一次全量扣减 + 工时计一次。false (其余产出行): 不带投入, 仅产出入库 (投入已由首行承载,
+     * 不重复扣减、不按比例拆分)。血缘经同一 (plan, processCode, processOrder) 报工关联。
+     */
+    private ProcessSheetRowRequest synthesizeOutputRequest(ProcessSheetRowRequest base,
+            ProcessSheetRowRequest.OutputLine o, int i, boolean carryInputs) {
+        ProcessSheetRowRequest one = new ProcessSheetRowRequest();
+        one.setClientRowId(base.getClientRowId() + "#" + i);
+        one.setProcessCode(base.getProcessCode());
+        one.setProcessOrder(base.getProcessOrder());
+        one.setProcessName(base.getProcessName());
+        one.setProcessDate(base.getProcessDate());
+        one.setProductTypeId(o.getProductTypeId());
+        one.setBatchNumber(null); // 每产出独立系统批号
+        one.setFinished(o.isFinished());
+        one.setOutputQuantity(o.getQuantity());
+        String outUnit = firstNonBlank(o.getUnit(), base.getOutputUnit(), base.getUnit());
+        one.setUnit(outUnit);
+        one.setOutputUnit(outUnit);
+        one.setInputUnit(base.getInputUnit());
+        one.setProductWeight(o.getProductWeight());
+        one.setCustomFields(base.getCustomFields());
+        // 2B.2 标记 (整组删除/重存级联) + 产出端口身份 (供 FE 重载映射, Workflow 不碰成本)。
+        one.setMultiOutputMember(Boolean.TRUE);
+        one.setMultiOutputBaseRowId(base.getClientRowId());
+        one.setWorkflowPortId(o.getWorkflowPortId());
+        one.setMaterialNodeId(o.getMaterialNodeId());
+        if (carryInputs) {
+            // 首产出行承载全部实际投入 (原样, 不拆分) + 人工/调料/逐锅原料/副产/留样/包装明细 (随投入落在首行, 计一次)。
+            one.setInputQuantity(base.getInputQuantity());
+            one.setPotCount(base.getPotCount());
+            one.setPotRawKgs(base.getPotRawKgs());
+            one.setSeasoningStep(base.isSeasoningStep());
+            one.setLaborSegments(base.getLaborSegments());
+            one.setRawMaterialInputs(base.getRawMaterialInputs());
+            one.setUpstreamSources(base.getUpstreamSources());
+            one.setByproducts(base.getByproducts());
+            one.setSampleRetainQuantity(base.getSampleRetainQuantity());
+            one.setPackagingDetail(base.getPackagingDetail());
+        }
+        return one;
+    }
+
+    /**
+     * 2B.2 B1/B2: 若多产出组 (base#*) 已存在 → 级联删除整组 (供重存前清理)。整组任一行已小结/被下游消耗 →
+     * deleteRow 抛 409 (禁止降级)。base#* 定位: 同 (factory, plan) 下 clientRowId == base 或以 base# 开头。
+     */
+    private void deleteMultiOutputGroupIfPresent(String factoryId, String planId,
+            String baseClientRowId, Long userId) {
+        List<ProcessSheetRow> group = rowRepo.findByFactoryIdAndPlanId(factoryId, planId).stream()
+                .filter(r -> r.getClientRowId() != null
+                        && (r.getClientRowId().equals(baseClientRowId)
+                        || r.getClientRowId().startsWith(baseClientRowId + "#")))
+                .toList();
+        if (group.isEmpty()) {
+            return;
+        }
+        // 逐行走 deleteOneRow 反物化 (含小结/下游消耗守卫 + SFI 冲销), 保证扣减/入库精确反冲。
+        for (ProcessSheetRow r : group) {
+            deleteOneRow(factoryId, planId, r, userId);
+        }
+    }
+
+    /**
+     * 2B.2 B3: 多产出逐产出对齐 workflow 端口 (finished 类型 + 单位)。workflow 计划才校验;
+     * legacy/未注入/该道不在图中 → 放行。产出按 workflowPortId 匹配端口 (缺则按序)。
+     */
+    private void validateMultiOutputAgainstWorkflow(String factoryId, String planId,
+            ProcessSheetRowRequest req) {
+        if (workflowClerkSheetService == null) {
+            return;
+        }
+        com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO config;
+        try {
+            config = workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId);
+        } catch (BusinessException be) {
+            throw be;
+        } catch (Exception e) {
+            log.warn("2B.2 多产出 workflow 校验读取配置失败, 跳过 (不阻断): planId={}, err={}",
+                    planId, e.getMessage());
+            return;
+        }
+        if (config == null || config.getProcesses() == null) {
+            return; // legacy
+        }
+        com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.ProcessDescriptor desc =
+                config.getProcesses().stream()
+                        .filter(p -> p.getProcessOrder() != null
+                                && p.getProcessOrder().equals(req.getProcessOrder()))
+                        .findFirst()
+                        .orElse(null);
+        if (desc == null || desc.getOutputs() == null || desc.getOutputs().isEmpty()) {
+            return; // 该道不在 workflow 图中 (不硬阻断)
+        }
+        Map<String, com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor> byPortId =
+                new HashMap<>();
+        for (com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor p : desc.getOutputs()) {
+            if (p.getWorkflowPortId() != null) {
+                byPortId.put(p.getWorkflowPortId(), p);
+            }
+        }
+        List<ProcessSheetRowRequest.OutputLine> outs = req.getOutputs();
+        for (int i = 0; i < outs.size(); i++) {
+            ProcessSheetRowRequest.OutputLine o = outs.get(i);
+            com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor port =
+                    o.getWorkflowPortId() != null ? byPortId.get(o.getWorkflowPortId())
+                            : (i < desc.getOutputs().size() ? desc.getOutputs().get(i) : null);
+            if (port == null) {
+                continue; // 无法定位端口 → 不硬阻断 (MVP, 同单产出 B3 宽松)
+            }
+            boolean expectFinished = Boolean.TRUE.equals(port.getFinished());
+            if (o.isFinished() != expectFinished) {
+                throw new BusinessException(409, "产出「"
+                        + (port.getMaterialName() != null ? port.getMaterialName() : "")
+                        + "」应为" + (expectFinished ? "成品" : "半成品") + ", 当前产出类型不符")
+                        .withCode("WORKFLOW_ROW_OUTPUT_KIND_MISMATCH")
+                        .withHint("请按 Workflow 配置的产出类型录入");
+            }
+            String expectUnit = port.getUnit();
+            String actualUnit = firstNonBlank(o.getUnit(), req.getUnit());
+            if (expectUnit != null && !expectUnit.isBlank()
+                    && actualUnit != null && !actualUnit.isBlank()
+                    && !expectUnit.equals(actualUnit)) {
+                throw new BusinessException(409, "产出「"
+                        + (port.getMaterialName() != null ? port.getMaterialName() : "")
+                        + "」单位应为「" + expectUnit + "」, 当前为「" + actualUnit + "」")
+                        .withCode("WORKFLOW_ROW_OUTPUT_UNIT_MISMATCH")
+                        .withHint("请按 Workflow 配置的单位录入产出");
+            }
+        }
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -467,48 +861,66 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             throw new BusinessException(404, "工序行不存在");
         }
 
-        for (ProcessSheetRow row : rows) {
-            // 🔒 G3 防双扣 (同 resaveRow): 已小结入库的行不可删除。删除会逆向物化(软删已扣减的消耗边)
-            // 而原料 usedQuantity 扣减从未反冲 → 账面超扣。完整撤销小结属 Phase 3。
-            if (row.getInterimSettledAt() != null) {
-                throw new BusinessException(409, "该行已小结入库,不可删除;如需更正请走撤销小结(功能开发中)")
-                        .withCode("ROW_INTERIM_SETTLED")
-                        .withHint("已小结入库的工序行不可删除,请通过撤销小结更正")
-                        .withSeverity("BLOCKING");
-            }
-            if (row.getBatchId() != null) {
-                // 查既有 WIP 产出批
-                Optional<MaterialBatch> wipOpt = materialBatchRepo
-                        .findByFactoryIdAndSourceDocTypeAndSourceDocId(
-                                factoryId, "PRODUCTION_BATCH", row.getBatchId().toString());
-
-                // 下游消耗守卫 (🔒): 谁消耗了本批的 WIP? 非空 → 拒绝
-                if (wipOpt.isPresent()) {
-                    List<MaterialConsumption> downstream = consumptionRepo
-                            .findByFactoryIdAndBatchId(factoryId, wipOpt.get().getId());
-                    if (!downstream.isEmpty()) {
-                        throw new BusinessException(409,
-                                "该批已被下游 " + downstream.size() + " 行消耗，请先删除下游行再改");
-                    }
-                }
-
-                // 逆向物化 (软删边/报工/WIP/ProductionBatch)
-                reverseMaterialization(factoryId, row.getBatchId(), wipOpt);
-            } else if (ProcessSheetRow.STATUS_SAVED_SFI.equals(row.getRowStatus())) {
-                // #1252 中段起步: SAVED_SFI 行 (batchId==null) 的产出已在保存时 SFI IN 入库 → 删除须冲销该入库
-                //   (reverseClerkOutput; 下游已消耗则 409 SFI_DOWNSTREAM_CONSUMED 拒绝), 否则删行后 SFI 库存虚高 (幽灵)。
-                reverseSfiOutput(factoryId, planId, tryDeserialize(row.getRowPayload()));
-            }
-
-            // SP-G P3: DELETE 操作记录 (before = 被删行 payload, after = null)。
-            ProcessSheetRowRequest beforeReq = tryDeserialize(row.getRowPayload());
-            logChange(factoryId, planId, beforeReq, "DELETE", beforeReq, null, userId,
-                    row.getProcessCode(), row.getClientRowId());
-
-            // 软删行本身
-            row.softDelete();
-            rowRepo.save(row);
+        // 2B.2 B1: 目标若为多产出组成员 → 级联删除整组 (base#*)。防单行删除留幻库存 (投入只在 base#0,
+        //   单删产出行 → 投入反冲但同组其它产出仍在 → 凭空库存)。整组任一行已小结/被下游消耗 → deleteOneRow 抛 409。
+        String baseRowId = multiOutputBaseOf(rows.get(0));
+        List<ProcessSheetRow> targets = (baseRowId != null)
+                ? rowRepo.findByFactoryIdAndPlanId(factoryId, planId).stream()
+                        .filter(r -> r.getClientRowId() != null
+                                && (r.getClientRowId().equals(baseRowId)
+                                || r.getClientRowId().startsWith(baseRowId + "#")))
+                        .toList()
+                : rows;
+        for (ProcessSheetRow row : targets) {
+            deleteOneRow(factoryId, planId, row, userId);
         }
+    }
+
+    /** 返回该行所属多产出组的 base clientRowId; 非多产出行返 null。 */
+    private String multiOutputBaseOf(ProcessSheetRow row) {
+        ProcessSheetRowRequest req = tryDeserialize(row.getRowPayload());
+        if (req != null && Boolean.TRUE.equals(req.getMultiOutputMember())) {
+            String base = req.getMultiOutputBaseRowId();
+            if (base != null && !base.isBlank()) {
+                return base;
+            }
+            String cid = row.getClientRowId();
+            int idx = cid == null ? -1 : cid.lastIndexOf('#');
+            return idx > 0 ? cid.substring(0, idx) : cid;
+        }
+        return null;
+    }
+
+    /** 单行删除内部体 (无级联; 供 deleteRow 级联 + deleteMultiOutputGroupIfPresent 复用)。 */
+    private void deleteOneRow(String factoryId, String planId, ProcessSheetRow row, Long userId) {
+        // 🔒 G3 防双扣: 已小结入库的行不可删除 (usedQuantity 扣减从未反冲 → 账面超扣)。完整撤销走撤销小结。
+        if (row.getInterimSettledAt() != null) {
+            throw new BusinessException(409, "该行已小结入库,不可删除;如需更正请走撤销小结(功能开发中)")
+                    .withCode("ROW_INTERIM_SETTLED")
+                    .withHint("已小结入库的工序行不可删除,请通过撤销小结更正")
+                    .withSeverity("BLOCKING");
+        }
+        if (row.getBatchId() != null) {
+            Optional<MaterialBatch> wipOpt = materialBatchRepo
+                    .findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                            factoryId, "PRODUCTION_BATCH", row.getBatchId().toString());
+            if (wipOpt.isPresent()) {
+                List<MaterialConsumption> downstream = consumptionRepo
+                        .findByFactoryIdAndBatchId(factoryId, wipOpt.get().getId());
+                if (!downstream.isEmpty()) {
+                    throw new BusinessException(409,
+                            "该批已被下游 " + downstream.size() + " 行消耗，请先删除下游行再改");
+                }
+            }
+            reverseMaterialization(factoryId, row.getBatchId(), wipOpt);
+        } else if (ProcessSheetRow.STATUS_SAVED_SFI.equals(row.getRowStatus())) {
+            reverseSfiOutput(factoryId, planId, tryDeserialize(row.getRowPayload()));
+        }
+        ProcessSheetRowRequest beforeReq = tryDeserialize(row.getRowPayload());
+        logChange(factoryId, planId, beforeReq, "DELETE", beforeReq, null, userId,
+                row.getProcessCode(), row.getClientRowId());
+        row.softDelete();
+        rowRepo.save(row);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -1431,6 +1843,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         .findByIdAndFactoryId(ri.getMaterialBatchId(), factoryId)
                         .orElseThrow(() -> new BusinessException(404,
                                 "原料批次不存在: " + ri.getMaterialBatchId()));
+                assertSourceUnit(rawMb, requestInputUnit(req), "原料批次");
                 ensureRawMaterialWarehouse(factoryId, planId, rawMb);
                 edges.add(new ResolvedEdge(rawMb, nz(ri.getQuantity()), "RAW_MATERIAL"));
             }
@@ -1484,11 +1897,171 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 if (!factoryId.equals(srcMb.getFactoryId())) {
                     throw new BusinessException(403, "无权访问上游批次 " + ur.getSourceBatchNumber());
                 }
+                assertSourceUnit(srcMb, requestInputUnit(req), "上游批次");
                 edges.add(new ResolvedEdge(srcMb, nz(ur.getFeedQuantityKg()), "SEMI_FINISHED"));
             }
         }
 
         return edges;
+    }
+
+    private void normalizeConfiguredUnits(String factoryId, String planId, ProcessSheetRowRequest req) {
+        Optional<ProductWorkProcess> configured = productWorkProcessRepo
+                .findByFactoryIdAndProductTypeIdAndProcessOrder(
+                        factoryId, req.getProductTypeId(), req.getProcessOrder());
+        if (configured.isEmpty()) {
+            // 2B (clerk-path workflow 联通): workflow 计划的产品(尤其成品)没有 legacy ProductWorkProcess 配置,
+            // 单位以 workflow 端口投影为准。命中 workflow 描述符即用其投入/产出单位归一化(支持 kg→盒 双单位),
+            // 不再因"未配置工序"拒绝。产出单位/类型另由 validateWorkflowRowIfApplicable(B3) 对齐端口。
+            if (applyWorkflowConfiguredUnits(factoryId, planId, req)) {
+                return;
+            }
+            // Legacy clients only sent one `unit` field. Preserve that established single-unit
+            // contract, but do not allow a new dual-unit payload to bypass configuration.
+            if (req.getInputUnit() == null && req.getOutputUnit() == null) {
+                String legacyUnit = firstNonBlank(req.getUnit(), "kg");
+                req.setInputUnit(legacyUnit);
+                req.setOutputUnit(legacyUnit);
+                req.setUnit(legacyUnit);
+                return;
+            }
+            throw new BusinessException(400, "产品未配置该工序，不能报工")
+                    .withCode("PROCESS_SHEET_PROCESS_NOT_CONFIGURED")
+                    .withHint("请先在产品工序配置中维护本道工序和单位")
+                    .withHintTarget("工序配置");
+        }
+        ProductWorkProcess pwp = configured.get();
+        WorkProcess process = processRepo.findByFactoryIdAndId(factoryId, pwp.getWorkProcessId())
+                .orElseThrow(() -> new BusinessException(409, "工序配置不存在，不能报工")
+                        .withCode("PROCESS_SHEET_WORK_PROCESS_NOT_FOUND")
+                        .withHint("请检查产品工序配置后重试")
+                        .withHintTarget("工序配置"));
+        normalizeConfiguredUnits(req, pwp, process);
+    }
+
+    /**
+     * 2B (clerk-path workflow 联通): workflow 计划的产品(尤其成品)没有 legacy ProductWorkProcess 配置,
+     * 但报工单位需要以 workflow 端口投影为准 —— 例如成品包装工序 kg(半成品) → 盒(成品) 的换算行。
+     *
+     * <p>命中当前 processOrder 的 workflow 描述符即用其投入/产出端口单位归一化 req, 返回 {@code true}
+     * (跳过"未配置工序"拒绝)。非 workflow 计划 / 该工序无描述符 → 返回 {@code false}, 交回 legacy/未配置
+     * 分支处理。产出 kind/unit 另由 {@link #validateWorkflowRowIfApplicable} (B3) 对齐端口。
+     */
+    private boolean applyWorkflowConfiguredUnits(String factoryId, String planId, ProcessSheetRowRequest req) {
+        if (workflowClerkSheetService == null || planId == null || req.getProcessOrder() == null) {
+            return false;
+        }
+        com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO config;
+        try {
+            config = workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId);
+        } catch (BusinessException be) {
+            // workflow 端口/SKU 失效等明确业务错误应上抛让文员看到, 不静默降级到 legacy。
+            throw be;
+        } catch (Exception e) {
+            log.warn("[2B] applyWorkflowConfiguredUnits 读取 workflow 配置失败, 回落 legacy 分支: "
+                    + "factory={} plan={} err={}", factoryId, planId, e.getMessage());
+            return false;
+        }
+        if (config == null || config.getProcesses() == null) {
+            return false; // 非 workflow 计划 → legacy 分支
+        }
+        com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.ProcessDescriptor descriptor = config.getProcesses().stream()
+                .filter(p -> req.getProcessOrder().equals(p.getProcessOrder()))
+                .findFirst()
+                .orElse(null);
+        if (descriptor == null || descriptor.getOutput() == null) {
+            return false; // workflow 计划但本道工序无产出描述符 → legacy 分支
+        }
+        String outputUnit = firstNonBlank(descriptor.getOutput().getUnit(),
+                descriptor.getPlannedUnit(), req.getOutputUnit(), req.getUnit(), "kg");
+        String inputUnit = firstNonBlank(
+                (descriptor.getInputs() != null && !descriptor.getInputs().isEmpty())
+                        ? descriptor.getInputs().get(0).getUnit() : null,
+                req.getInputUnit(), outputUnit);
+
+        // 与 ProductWorkProcess 路径同语义: 请求单位若提供则必须匹配端口, 否则按端口单位归一化。
+        assertConfiguredUnit(req.getInputUnit(), inputUnit, "投入");
+        assertConfiguredUnit(req.getOutputUnit(), outputUnit, "产出");
+        assertConfiguredUnit(req.getUnit(), outputUnit, "产出");
+
+        req.setInputUnit(inputUnit);
+        req.setOutputUnit(outputUnit);
+        req.setUnit(outputUnit);
+        return true;
+    }
+
+    /**
+     * The client may omit legacy unit fields, but it may not override product-process
+     * and work-process configuration. This boundary runs before stock and cost writes.
+     */
+    static void normalizeConfiguredUnits(ProcessSheetRowRequest req,
+                                         ProductWorkProcess productProcess,
+                                         WorkProcess workProcess) {
+        String inputUnit = firstNonBlank(productProcess.getUnitOverride(), workProcess.getUnit(), "kg");
+        String outputUnit = firstNonBlank(workProcess.getOutputUnit(), inputUnit);
+
+        assertConfiguredUnit(req.getInputUnit(), inputUnit, "投入");
+        assertConfiguredUnit(req.getOutputUnit(), outputUnit, "产出");
+        assertConfiguredUnit(req.getUnit(), outputUnit, "产出");
+
+        req.setInputUnit(inputUnit);
+        req.setOutputUnit(outputUnit);
+        req.setUnit(outputUnit);
+    }
+
+    private static void assertConfiguredUnit(String suppliedUnit, String configuredUnit, String side) {
+        if (suppliedUnit == null || suppliedUnit.isBlank()
+                || suppliedUnit.trim().equalsIgnoreCase(configuredUnit)) {
+            return;
+        }
+        throw new BusinessException(409, "请求" + side + "单位为“" + suppliedUnit
+                + "”，与工序配置单位“" + configuredUnit + "”不一致")
+                .withCode("PROCESS_SHEET_UNIT_MISMATCH")
+                .withHint("请刷新工序表后按配置单位录入；单位变更请在产品工序配置中维护")
+                .withSeverity("BLOCKING")
+                .withHintTarget("工序配置");
+    }
+
+    /**
+     * The existing SFI/FG services consume feedQuantityKg and only implement kg-to-count
+     * conversion. Arbitrary count-unit feeds must not be silently treated as kilograms.
+     */
+    private static void assertExternalFeedUnitSupported(ProcessSheetRowRequest req) {
+        if (req.getUpstreamSources() == null || req.getUpstreamSources().isEmpty()) {
+            return;
+        }
+        boolean usesExternalStock = req.getUpstreamSources().stream()
+                .anyMatch(ref -> ref.isSemiFinished() || ref.isFinishedGoods());
+        if (usesExternalStock && !"kg".equalsIgnoreCase(requestInputUnit(req))) {
+            throw new BusinessException(409, "常驻半成品/成品库存投料当前只支持 kg 投入单位")
+                    .withCode("PROCESS_SHEET_EXTERNAL_FEED_UNIT_UNSUPPORTED")
+                    .withHint("请先通过配置为 kg 投入单位的换算工序转换后，再使用半成品或成品库存投料")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("inputUnit");
+        }
+    }
+
+    /**
+     * 逐工序表格的 RAW / 同计划 WIP 扣减没有通用跨单位换算表；若来源和本道投入单位不同，
+     * 继续以数量相乘会把“只/袋”当 kg，直接污染库存与成本。因此这里明确阻断。
+     * SFI/FG 来源沿用各自既有的严格换算/校验路径，不走这个 MaterialBatch 分支。
+     */
+    private void assertSourceUnit(MaterialBatch source, String expectedUnit, String sourceLabel) {
+        String actualUnit = source == null ? null : source.getQuantityUnit();
+        if (actualUnit == null || actualUnit.isBlank() || expectedUnit == null || expectedUnit.isBlank()
+                || actualUnit.trim().equalsIgnoreCase(expectedUnit.trim())) {
+            return;
+        }
+        throw new BusinessException(409, sourceLabel + "单位为“" + actualUnit + "”，不能按本道投入单位“"
+                + expectedUnit + "”扣减")
+                .withCode("PROCESS_SHEET_SOURCE_UNIT_MISMATCH")
+                .withHint("请将工序投入单位设为来源批次单位，或先完成明确的单位换算")
+                .withSeverity("BLOCKING")
+                .withHintTarget("inputUnit");
+    }
+
+    private static String requestInputUnit(ProcessSheetRowRequest req) {
+        return firstNonBlank(req.getInputUnit(), req.getUnit(), "kg");
     }
 
     private void ensureRawMaterialWarehouse(String factoryId, String planId, MaterialBatch rawMb) {
@@ -1835,7 +2408,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         st.setInputQuantity(req.getInputQuantity());
         st.setOutputQuantity(req.getOutputQuantity());
         st.setProductWeight(req.getProductWeight());
-        st.setUnit(req.getUnit() != null ? req.getUnit() : "kg");
+        String outputUnit = firstNonBlank(req.getOutputUnit(), req.getUnit(), "kg");
+        st.setInputUnit(firstNonBlank(req.getInputUnit(), req.getUnit(), outputUnit));
+        st.setOutputUnit(outputUnit);
+        st.setUnit(outputUnit);
         st.setPotCount(req.getPotCount());
         st.setPotRawKgs(req.getPotRawKgs());
         // 多时段工时 (materializeBatch 优先用此求和)
@@ -1965,6 +2541,15 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         r.setMaterialized(materialized);
         r.setWarnings(warnings);
         return r;
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+        return null;
     }
 
     private static BigDecimal nz(BigDecimal v) {

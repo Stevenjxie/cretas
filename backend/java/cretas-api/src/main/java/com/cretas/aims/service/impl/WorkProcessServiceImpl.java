@@ -3,6 +3,7 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.dto.WorkProcessDTO;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.WorkProcess;
+import com.cretas.aims.entity.enums.WorkProcessOutputMaterialKind;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.WorkProcessRepository;
@@ -78,6 +79,9 @@ public class WorkProcessServiceImpl implements WorkProcessService {
                 .standardYieldMax(dto.getStandardYieldMax())
                 .needsInput(dto.getNeedsInput() != null ? dto.getNeedsInput() : true)
                 .outputUnit(dto.getOutputUnit())
+                .defaultOutputMaterialKind(dto.getDefaultOutputMaterialKind() != null
+                        ? dto.getDefaultOutputMaterialKind()
+                        : WorkProcessOutputMaterialKind.SEMI_FINISHED)
                 .semiFinishedOutputCode(blankToNull(dto.getSemiFinishedOutputCode()))
                 .standardHourlyRate(dto.getStandardHourlyRate())
                 .expectedByproducts(dto.getExpectedByproducts())
@@ -137,6 +141,9 @@ public class WorkProcessServiceImpl implements WorkProcessService {
         if (dto.getStandardYieldMax() != null) entity.setStandardYieldMax(dto.getStandardYieldMax());
         if (dto.getNeedsInput() != null) entity.setNeedsInput(dto.getNeedsInput());
         if (dto.getOutputUnit() != null) entity.setOutputUnit(dto.getOutputUnit());
+        if (dto.getDefaultOutputMaterialKind() != null) {
+            entity.setDefaultOutputMaterialKind(dto.getDefaultOutputMaterialKind());
+        }
         if (dto.isSemiFinishedOutputCodeSpecified()) {
             entity.setSemiFinishedOutputCode(blankToNull(dto.getSemiFinishedOutputCode()));
         }
@@ -241,6 +248,7 @@ public class WorkProcessServiceImpl implements WorkProcessService {
                 .standardYieldMax(entity.getStandardYieldMax())
                 .needsInput(entity.getNeedsInput())
                 .outputUnit(entity.getOutputUnit())
+                .defaultOutputMaterialKind(entity.getDefaultOutputMaterialKind())
                 .semiFinishedOutputCode(entity.getSemiFinishedOutputCode())
                 .standardHourlyRate(entity.getStandardHourlyRate())
                 .expectedByproducts(entity.getExpectedByproducts())

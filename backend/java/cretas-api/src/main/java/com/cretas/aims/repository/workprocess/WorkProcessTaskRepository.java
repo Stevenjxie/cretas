@@ -25,6 +25,9 @@ public interface WorkProcessTaskRepository extends JpaRepository<WorkProcessTask
     List<WorkProcessTask> findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(
             String factoryId, Long productionBatchId);
 
+    List<WorkProcessTask> findByFactoryIdAndWorkflowInstanceIdOrderByProcessOrderAsc(
+            String factoryId, Long workflowInstanceId);
+
     /**
      * 列出某批次某状态的工序任务 (按 processOrder 升序).
      */
