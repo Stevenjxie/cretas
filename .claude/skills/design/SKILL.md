@@ -11,11 +11,38 @@ description: "统一设计 Skill — 智能路由到正确的设计工作流。�
 
 | 用户说的 | 检测信号 | 路由 |
 |----------|---------|------|
-| "做一个xx页面"、"加个表单"、"写个列表页" | 涉及具体业务功能 | **→ 业务页面** |
-| "做一个landing page"、"展示页"、"海报"、"酷一点" | 强调视觉/创意/独立页 | **→ 创意设计** |
+| "做一个xx页面"、"加个表单"、"写个列表页" | 涉及具体业务功能 | **→ 业务页面** (Route 1，本 skill 权威) |
+| "做一个landing page"、"展示页"、"海报"、"酷一点" | 强调视觉/创意/独立页 | **→ 创意设计** (Route 2) |
 | "照着这个截图做"、"参考这个设计" | 提供了截图/参考图 | **→ 截图提取** (调 `ui-designer` 插件) |
 | "审查UI"、"检查设计"、"accessibility" | 审查/检查类动词 | **→ UI审查** (调 `web-design-guidelines`) |
+| "优化动画"、"加动效"、"滚动动画"、"入场动画"、"parallax" | 动画/动效需求 | **→ 委派 `gsap-*`** (见下方外部委派) |
+| "配色建议"、"字体搭配"、"这个品类该长啥样"、"UI不够专业" | 设计灵感/情报 | **→ 委派 `ui-ux-pro-max`** (只读情报库) |
+| "做Logo"、"CIP"、"icon"、"社媒图"、"banner"、"品牌"、"pitch deck/演示" | 品牌/营销物料 | **→ 委派 `promax-design`/`banner-design`/`brand`/`slides`** |
 | 不确定 | — | 问用户："你要做业务页面还是创意展示页？" |
+
+---
+
+## 外部 skill 委派地图 (2026-07 融合 gsap-skills + ui-ux-pro-max)
+
+本 skill 是**设计工作的唯一入口/枢纽**，按需委派给外部 skill。**核心边界铁律见下。**
+
+| 需求 | 委派给 | 说明 |
+|------|--------|------|
+| 动画 / 动效 / 滚动动画 / 时间线 | `gsap-core` `gsap-timeline` `gsap-scrolltrigger` `gsap-plugins` `gsap-utils` `gsap-performance` `gsap-react` `gsap-frameworks` | 官方 GSAP 实现参考。Vue 用 `gsap-frameworks`，RN/vanilla 用 `gsap-core`。⚠️ 引入 gsap 依赖前先确认要采用（现有 `useCountUp` 是手写 RAF） |
+| 设计灵感 / 配色 / 字体 / 品类风格 / UX 指南 | `ui-ux-pro-max` | 只读情报库（84风格/161配色/73字体）。**只出建议，不替代 Route 1 三端规范** |
+| Logo / CIP / icon / 社媒图 (生成) | `promax-design` | 55风格Logo/50件CIP/SVG icon/社媒图。search/brief 独立可用；**AI 出图脚本 (`generate.py`) 需 Gemini `ai-multimodal`（未装）→ 缺则降级为规范/brief 建议** |
+| Logo / 品牌 / voice (规范) | `brand` | 品牌 voice/一致性规范 |
+| Banner / 社媒图 / web hero | `banner-design` | 尺寸/风格参考可用（AI 出图需 Gemini） |
+| Pitch deck / 演示 / BP 配图 | `slides` `design-system` | 配合项目 `bp-creator` skill 用 |
+| Token 架构 / CSS 变量体系 | `design-system` | 仅 greenfield，不改你现有三端 token |
+| shadcn/ui + Tailwind 组件 | `ui-styling` | ⚠️ **仅限 greenfield React web / HTML showcase / Artifacts** |
+
+### ⛔ 边界铁律 (防错栈污染)
+
+1. **Route 1 三端业务页 (Vue Element Plus / RN Paper / 小程序 WXSS) 永远走本 skill 的 references，绝不委派给 `ui-styling` / `ui-ux-pro-max` 的栈建议。** shadcn/ui 是 React+DOM，你三端都装不了；ui-ux-pro-max 的配色/组件建议是通用绿地，会违反「不发明新样式」原则 + `fool-proof-design.md` 防呆规范。
+2. `ui-styling` (shadcn/Tailwind) **只在新起 React web 展示页 / 静态 HTML showcase / claude.ai Artifacts 时用**。
+3. `ui-ux-pro-max` 在 Route 2 创意页当**灵感来源**（"这个品类该什么调性/配色"），落地实现仍回本 skill 的平台规范。
+4. 防呆 (`fool-proof-design.md`) + `ux-flow` 门是 Route 1 的强制前置，外部 skill 不覆盖它们。
 
 ---
 
