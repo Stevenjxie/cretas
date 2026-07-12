@@ -447,6 +447,8 @@ const selectedEdgeId = ref('');
 const canvasRef = ref<HTMLElement | null>(null);
 let gsapCtx: gsap.Context | null = null;
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
+// #11 fix: 每次本地改动 +1; 保存时对比, 若 PUT 往返期间有新改动则不 hydrate 覆盖 (防丢在途编辑)
+let editSeq = 0;
 // #10: BOM 配置抽屉 (右侧滑出, 不跳转页面, 关闭即回工序配置, 避免丢失未保存草稿)
 const bomDrawerVisible = ref(false);
 const BomUnifiedPanel = defineAsyncComponent(() => import('@/views/production/bom-unified/index.vue'));
@@ -454,7 +456,6 @@ const BomUnifiedPanel = defineAsyncComponent(() => import('@/views/production/bo
 const versionDrawerVisible = ref(false);
 const versionList = ref<WorkflowVersionSummary[]>([]);
 const versionLoading = ref(false);
-const previewingVersion = ref<number | null>(null);
 const history = ref<ProductProcessWorkflowDefinition[]>([]);
 const future = ref<ProductProcessWorkflowDefinition[]>([]);
 const dragStartSnapshot = ref<ProductProcessWorkflowDefinition | null>(null);
@@ -558,10 +559,13 @@ let activationLoadGeneration = 0;
 let activationMutationGeneration = 0;
 
 const productTypeId = computed(() => props.productTypeId);
+// #12b 预览历史版本标志 (非空=正在只读预览某历史版本); 提前声明供 canEdit 引用
+const previewingVersion = ref<number | null>(null);
 const canEdit = computed(() => (
   props.canWrite
   && !loading.value
   && !catalogLoading.value
+  && previewingVersion.value === null   // #12b 预览历史版本时整个画布只读 (不可拖/存/发布, 防止旧版本被当草稿保存发布)
   && loadedCatalogFactoryId.value === props.factoryId
   && loadedDefinitionIdentity.value?.factoryId === props.factoryId
   && loadedDefinitionIdentity.value?.productTypeId === props.productTypeId
@@ -615,13 +619,18 @@ onUnmounted(() => {
 const AUTO_SAVE_DELAY = 2500;
 function scheduleAutoSave(): void {
   if (autoSaveTimer) clearTimeout(autoSaveTimer);
-  autoSaveTimer = setTimeout(() => {
+  autoSaveTimer = setTimeout(async () => {
     autoSaveTimer = null;
-    // 预览历史版本时绝不自动保存 (否则会把旧版本写回覆盖当前草稿)
-    if (!dirty.value || saving.value || !canEdit.value || previewingVersion.value !== null) return;
-    void saveDraft({ silent: true, preserveHistory: true });
+    // 只读预览 / 不可编辑 → 不存也不重排 (退出预览/恢复编辑后由 mutate 重新排)
+    if (previewingVersion.value !== null || !canEdit.value) return;
+    if (!dirty.value) return;                                 // 没有未保存改动
+    if (saving.value) { scheduleAutoSave(); return; }         // 正在存 → 稍后重试, 不丢
+    const ok = await saveDraft({ silent: true, preserveHistory: true });
+    if (!ok && dirty.value) scheduleAutoSave();               // 存失败但仍有改动 → 重排 (一次失败不永久停摆)
   }, AUTO_SAVE_DELAY);
 }
+// 每次改动 (dirty 置 true) 都重排防抖定时器 —— 定时器 2.5s 后从"最后一次改动"起算,
+// 不再依赖 dirty 的 false→true 一次性 transition (那样一次跳过/失败就永久停摆)。
 watch(dirty, (isDirty) => { if (isDirty) scheduleAutoSave(); });
 
 // #10: 打开 BOM 配置抽屉; 关闭时刷新本产品 BOM (原料分组 + 提示随即更新)
@@ -677,6 +686,7 @@ function restorePreviewAsDraft(): void {
 
 watch(() => [props.factoryId, props.productTypeId] as const, async (next, previous) => {
   if (next[0] === previous[0] && next[1] === previous[1]) return;
+  previewingVersion.value = null;   // #12b fix: 切产品必退出历史版本预览 (否则横幅粘住 + 新产品自动保存被抑制)
   if (next[0] !== previous[0]) {
     await Promise.all([loadCatalogs(), loadDefinition(), loadActivation(), loadProductBom()]);
     return;
@@ -983,7 +993,9 @@ function mutate(action: () => void): void {
   remember();
   action();
   refreshPortMaterialMetadata();
+  editSeq += 1;
   dirty.value = true;
+  scheduleAutoSave();   // #11: 每次改动都重排防抖 (即使 dirty 已是 true, watch transition 不会触发)
 }
 
 function undo(): void {
@@ -1019,13 +1031,17 @@ function onNodeDragStop({ node }: { node: Node }): void {
   dragStartSnapshot.value = null;
   const target = flowNodes.value.find((candidate) => candidate.id === node.id);
   if (target) target.position = snapPosition(node.position);
+  editSeq += 1;
   dirty.value = true;
+  scheduleAutoSave();
 }
 
 function onViewportChangeEnd(viewport: ViewportTransform): void {
   if (!definition.value || !canEdit.value) return;
   definition.value.viewport = { x: viewport.x, y: viewport.y, zoom: viewport.zoom };
+  editSeq += 1;
   dirty.value = true;
+  scheduleAutoSave();
 }
 
 // ── 手动拖拽连线 (#8) ────────────────────────────────────────────────
@@ -1569,6 +1585,7 @@ async function saveDraft(options: { silent?: boolean; preserveHistory?: boolean 
     return false;
   }
   const generation = ++saveGeneration;
+  const seqAtRequest = editSeq;   // 记录发请求时的本地改动序号, 用于检测 PUT 往返期间是否又改了
   saving.value = true;
   try {
     const response = await saveProductProcessWorkflowDraft(
@@ -1582,6 +1599,14 @@ async function saveDraft(options: { silent?: boolean; preserveHistory?: boolean 
       return false;
     }
     if (!definitionMatchesIdentity(response.data, identity)) return false;
+    if (editSeq !== seqAtRequest) {
+      // #11 fix: PUT 往返期间用户又改了 → 绝不 hydrate 覆盖 (会丢新编辑)。只把服务端 envelope
+      // (lockVersion/id/version) 更新到 definition 供下次保存, 本地节点保留, dirty 保持 true, 重排补存。
+      definition.value = toPlainWorkflowValue(response.data);
+      if (!options.silent) ElMessage.success('Workflow 草稿已独立保存');
+      scheduleAutoSave();
+      return true;
+    }
     hydrate(response.data);
     dirty.value = false;
     // 自动保存保留 undo/redo 历史 (否则每 2-3s 自动存就把撤销栈清空了)
@@ -1651,17 +1676,24 @@ async function publishWorkflow(): Promise<void> {
     dirty.value = false;
     // #12a: 发布即启用当前版本 (一步完成), 不再需要单独的「启用版本」按钮
     const publishedId = response.data.id;
+    let activated = false;
     if (publishedId) {
       try {
         const actResp = await activateProductProcessWorkflow(identity.factoryId, publishedId);
         if (actResp.success && actResp.data && activationMatchesIdentity(actResp.data, identity)) {
           activation.value = actResp.data;
+          activated = true;
         }
       } catch (actErr) {
         console.error('[ProductProcessWorkflow] publish→activate failed', actErr);
       }
     }
-    ElMessage.success('Workflow 版本已发布并启用');
+    // #12a fix: 只有真启用成功才说"已启用"; 启用失败如实提示 (别撒谎让用户以为已生效)
+    if (activated) {
+      ElMessage.success('Workflow 版本已发布并启用');
+    } else {
+      ElMessage.warning('Workflow 版本已发布，但自动启用失败——请在版本记录里手动启用');
+    }
   } catch (error) {
     if (generation !== publishGeneration || !isLoadedIdentityCurrent(identity)) return;
     if (isWorkflowConflict(error)) {
@@ -1953,11 +1985,21 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
         timestamp: nextGraphIdSeed(),
       });
       const outputs = Array.isArray(step.outputs) && step.outputs.length ? step.outputs : [{}];
+      const isLastStep = i === steps.length - 1;
       // 首产出: 用规格覆盖 createProcessBranch 建的产出 Cell 名/kind
       const firstOut = outputs[0];
       const outData = { ...toPlainWorkflowValue(branch.outputNode.data) } as Record<string, unknown>;
       if (firstOut?.name) outData.name = firstOut.name;
-      if (firstOut?.kind === 'FINISHED_GOOD' || firstOut?.kind === 'SEMI_FINISHED') outData.kind = firstOut.kind;
+      // 中链步骤的"续链产出"必须是半成品: 成品 Cell 无 output handle → 下游会断链, 且
+      // createProcessBranch 会把成品 Cell 误绑成产品 SKU。只有末步产出才可为成品。
+      if (!isLastStep) {
+        outData.kind = 'SEMI_FINISHED';
+        outData.skuId = '';
+        outData.bound = false;
+        outData.skuCode = '待选择或现场创建 SKU';
+      } else if (firstOut?.kind === 'FINISHED_GOOD' || firstOut?.kind === 'SEMI_FINISHED') {
+        outData.kind = firstOut.kind;
+      }
       const outputNode: Node = {
         id: branch.outputNode.id,
         type: 'material',
