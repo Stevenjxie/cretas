@@ -312,9 +312,15 @@ const bomProcesses = ref<string[]>([]);
 const productWorkProcessList = ref<TableRow[]>([]);
 // Wave2: 当前产品是否已配置工序 (0工序→强制两点, 开关 disabled 锁定勾选)
 const hasProcesses = computed(() => productWorkProcessList.value.length > 0);
-// 报工模式开关只在「已选产品且该产品 0 工序」时锁死(强制免工序);
-// 未选产品 或 产品有工序 时均可自由切换 — 避免空表单时被误锁在工厂默认值上(防呆 Rule 5: 不制造 dead-end)
-const reportModeLocked = computed(() => !!planForm.value.productTypeId && !hasProcesses.value);
+// raw-centric 多SKU (2026-07-13): 产品由「产品工序 Workflow」驱动 (有 enabled activation) →
+// 逐道报工经 workflow materialize, 没有 legacy PWP 也不能强制两点 (否则 spawnTasks 走两点绕过 materialize → 逐道抽屉空)。
+const hasActiveWorkflow = ref(false);
+// 报工模式开关锁死条件:
+//   - workflow 驱动 → 锁在「逐道报工」(skip=false), 防误切两点绕过 materialize
+//   - 已选产品且 0 legacy 工序且无 workflow → 锁在「免工序」(强制两点)
+//   - 其余(未选产品 / 有 legacy 工序)可自由切换 (防呆 Rule 5: 不制造 dead-end)
+const reportModeLocked = computed(() =>
+  !!planForm.value.productTypeId && (hasActiveWorkflow.value || !hasProcesses.value));
 const customers = ref<TableRow[]>([]);
 
 // A5: today helper
@@ -568,10 +574,21 @@ async function loadCustomers() {
 }
 
 async function loadBomProcesses(productTypeId: string) {
+  hasActiveWorkflow.value = false;
   if (!factoryId.value || !productTypeId) {
     bomProcesses.value = [];
     productWorkProcessList.value = [];
     return;
+  }
+  // raw-centric 多SKU (2026-07-13): 先探产品是否由 Workflow 驱动 (有 enabled activation)。
+  // workflow 产品逐道报工经 materialize, 即便没有 legacy PWP 也必须 skip=false, 否则
+  // spawnTasks 走两点报工绕过 materializeIfActive → 逐道抽屉空。诚实降级: 探测失败视为无 workflow。
+  try {
+    const act = await get<{ enabled?: boolean } | null>(
+      `/${factoryId.value}/product-process-workflows/${productTypeId}/activation`);
+    hasActiveWorkflow.value = !!(act.success && act.data && act.data.enabled === true);
+  } catch {
+    hasActiveWorkflow.value = false;
   }
   try {
     // B1 fix (2026-05-10): 工序下拉应读"产品工序配置"(ProductWorkProcess),
@@ -586,22 +603,24 @@ async function loadBomProcesses(productTypeId: string) {
       // T135 ITEM #4 (BLOCKING): wire all process names into planForm.processName so the
       // CUSTOMER_ORDER backend validation (processName required) passes.
       // Backend checks: request.getProcessName() != null && !isBlank().
-      planForm.value.processName = names.length > 0 ? names.join('、') : '两点报工';
-      // Wave2 防呆: 0 工序产品 → 后端强制两点, 前端锁定开关为 true (Rule 5 no dead-end)
-      if (res.data.length === 0) {
-        planForm.value.skipProcessReporting = true;
-      }
+      planForm.value.processName = names.length > 0
+        ? names.join('、')
+        : (hasActiveWorkflow.value ? 'Workflow 逐道报工' : '两点报工');
     } else {
       bomProcesses.value = [];
       productWorkProcessList.value = [];
-      planForm.value.processName = '';
-      // Wave2: 产品无工序 → 强制锁定为两点报工
-      planForm.value.skipProcessReporting = true;
+      planForm.value.processName = hasActiveWorkflow.value ? 'Workflow 逐道报工' : '';
     }
   } catch {
     bomProcesses.value = [];
     productWorkProcessList.value = [];
-    planForm.value.processName = '';
+    planForm.value.processName = hasActiveWorkflow.value ? 'Workflow 逐道报工' : '';
+  }
+  // 最终报工模式: workflow 驱动 → 逐道 (skip=false, 让 materialize 生效);
+  // 否则 0 legacy 工序 → 强制两点 (skip=true); 有 legacy 工序 → 保留当前选择。
+  if (hasActiveWorkflow.value) {
+    planForm.value.skipProcessReporting = false;
+  } else if (productWorkProcessList.value.length === 0) {
     planForm.value.skipProcessReporting = true;
   }
 }
@@ -672,6 +691,7 @@ function handleCreate() {
     skipProcessReporting: skipReportingFactoryDefault.value,
   };
   productWorkProcessList.value = [];
+  hasActiveWorkflow.value = false;
   // T135 ITEM #1: 默认 CUSTOMER_ORDER — 预加载可选销售订单列表
   if (selectableSalesOrders.value.length === 0) loadSelectableSalesOrders();
   dialogVisible.value = true;
@@ -3237,7 +3257,10 @@ function handleAiFill(params: TableRow) {
               <template v-else>
                 操作员逐道工序报工
               </template>
-              <template v-if="!hasProcesses && planForm.productTypeId">
+              <template v-if="hasActiveWorkflow">
+                （本产品由工序 Workflow 驱动，逐道报工按图逐工序执行）
+              </template>
+              <template v-else-if="!hasProcesses && planForm.productTypeId">
                 （产品未配置工序，只能走免工序报工）
               </template>
             </span>
@@ -3247,6 +3270,11 @@ function handleAiFill(params: TableRow) {
         <el-form-item v-if="!planForm.skipProcessReporting" label="工序">
           <template v-if="!planForm.productTypeId">
             <span style="color: var(--text-color-secondary, #909399); font-size: 13px;">请先选择产品类型</span>
+          </template>
+          <template v-else-if="hasActiveWorkflow">
+            <span style="color: var(--el-color-success, #67c23a); font-size: 13px;">
+              本产品由「产品工序 Workflow」驱动，逐道报工按图逐工序执行（含分支/多产出）。转批次后在逐道录入抽屉逐道保存。
+            </span>
           </template>
           <template v-else-if="productWorkProcessList.length === 0">
             <span style="color: var(--el-color-warning, #e6a23c); font-size: 13px;">
