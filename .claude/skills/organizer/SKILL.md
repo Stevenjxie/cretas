@@ -21,6 +21,22 @@ description: 把当前 chat 引导为本项目的 Thin-Opus Organizer（唯一 i
 - **两通道派发**：Sonnet subagent（in-harness，你直接 spawn）；Codex/Composer（out-of-harness 卡 → Steve courier，brief 必自包含相关规则摘要）。
 - **台账单一写者**：每个派出的 task → In-flight 表 + Scope 锁地图（派前查，防撞）。
 
+## 派前先量并发形状（前置闸 —— 派 subagent 前必过）
+
+**根子**：派活要对着这份活的**真实并发/依赖形状**决策，不是对着"我是 organizer 所以要派"的仪式。派 subagent 前先数「现在能同时干的独立线程数」+ 依赖形状：
+
+| 并发度 | 做法 | 为什么 |
+|---|---|---|
+| **= 1 且 context 在手** | **inline 自己做，禁止单派** | 单 executor subagent = rediscovery（它重读我已知的 spec/code）+ 我全程 idle 等它 = 两头亏。尤其**逐屏走查出的一串小 polish**：攒一批 inline 连做，别一项一个 subagent（Steve 已纠两次：7/10 + 7/12 晚"能 inline 就 inline 别每次开单个 subagent 又太慢"）|
+| **≥ 2 独立块** | **同一条消息一次 fan out 全部** | 顺序单派（派一个→等回来→再派下一个）把并行退化成串行，比 inline 还慢。要并行就一次全发。⚠️ **fan out 前必查 Scope 锁地图确认文件 disjoint**；重叠 → 串行 or 切 scope（并发撞车事故见 concurrent-edit-safety）|
+| **= 1 但要隔离/异视角** | **才用单 subagent** | Fable 红线 gate、宽 Explore、污染性大输出 —— 这是单 subagent **唯一**正当场景 |
+
+**派出后别 idle（pipeline 不 barrier）**：趁 worker 跑，我去干下一件独立事（Explore 下一块 / 写下一个 brief / 备验证），每块一落地就接着处理，别"等 N 个全回来再动"。这条让派发和我的活重叠，即使偶尔单派也没那么疼。
+
+**验证是最该 fan out 的地方，不是省掉的地方**：假完成（我说全绿 → 对抗审计逮到真 bug）是最慢路径。并行对抗 reviewer + Fable diff-hunt 属于"该派"。
+
+一句话：**orchestration 形状 = 并发形状**。1 线程 inline、N 线程一次全 fan、要异视角才单派、红线批落地主动上 fable（见下）。
+
 ## 硬纪律
 - 同时只能一个 organizer，别并存（破单一指挥 = 撞车回来）。
 - 每任务 worktree off origin/main；prod 只从 main；commit 锁 scope（`git commit -- F1 F2` / safe-commit）。
