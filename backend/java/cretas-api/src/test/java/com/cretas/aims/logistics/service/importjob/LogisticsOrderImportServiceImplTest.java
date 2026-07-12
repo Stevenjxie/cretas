@@ -10,6 +10,7 @@ import com.cretas.aims.logistics.entity.enums.LocationStatus;
 import com.cretas.aims.logistics.entity.enums.OrderBatchStatus;
 import com.cretas.aims.logistics.repository.LogisticsDeliveryOrderRepository;
 import com.cretas.aims.logistics.repository.LogisticsOrderBatchRepository;
+import com.cretas.aims.logistics.repository.LogisticsStoreMasterRepository;
 import com.cretas.aims.logistics.service.importjob.impl.LogisticsOrderImportServiceImpl;
 import com.cretas.aims.logistics.service.routing.AmapClient;
 import com.cretas.aims.utils.ExcelUtil;
@@ -72,6 +73,7 @@ class LogisticsOrderImportServiceImplTest {
 
     @Autowired private LogisticsOrderBatchRepository batchRepo;
     @Autowired private LogisticsDeliveryOrderRepository orderRepo;
+    @Autowired private LogisticsStoreMasterRepository storeMasterRepo;
 
     private final ExcelUtil excelUtil = new ExcelUtil(); // real impl, exercises real EasyExcel read/write
     // mocked — never hit the real Amap API in tests (per python-java-port.md style mocking convention)
@@ -80,7 +82,7 @@ class LogisticsOrderImportServiceImplTest {
 
     private LogisticsOrderImportServiceImpl service() {
         if (service == null) {
-            service = new LogisticsOrderImportServiceImpl(batchRepo, orderRepo, excelUtil, amapClient);
+            service = new LogisticsOrderImportServiceImpl(batchRepo, orderRepo, excelUtil, amapClient, storeMasterRepo);
         }
         return service;
     }

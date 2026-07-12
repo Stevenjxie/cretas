@@ -5,8 +5,12 @@ import com.cretas.aims.logistics.dto.resource.DailyAvailabilityUpsertRequest;
 import com.cretas.aims.logistics.dto.resource.DriverInputRequest;
 import com.cretas.aims.logistics.dto.resource.LogisticsDriverDto;
 import com.cretas.aims.logistics.dto.resource.LogisticsVehicleDto;
+import com.cretas.aims.logistics.dto.resource.StoreMasterDto;
+import com.cretas.aims.logistics.dto.resource.StoreMasterUpdateRequest;
 import com.cretas.aims.logistics.dto.resource.VehicleDriverBindingDto;
 import com.cretas.aims.logistics.dto.resource.VehicleProfileUpdateRequest;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -51,4 +55,23 @@ public interface LogisticsResourceService {
 
     /** DELETE /daily-availability/{id} — 软删除，恢复该资源当天默认可用。 */
     void deleteDailyAvailability(String factoryId, String id);
+
+    // ==================== 门店主数据 (store master) ====================
+
+    /**
+     * GET /logistics/stores?page=&size=&keyword= — 门店主数据管理列表（门店名称升序分页，
+     * {@code keyword} 非空时按门店名称模糊搜索）。{@link com.cretas.aims.logistics.entity.LogisticsStoreMaster}
+     * 是坐标"解析一次, 逐日复用"的落点 —— 见类注释。
+     */
+    Page<StoreMasterDto> listStoreMasters(String factoryId, String keyword, Pageable pageable);
+
+    /**
+     * PUT /logistics/stores/{id} — 调度员永久修正门店坐标/地址/区域（partial update + 乐观锁）。
+     * 坐标同时提供时置 {@code source=MANUAL, locationStatus=RESOLVED}（人工修正是最终事实来源，
+     * 后续导入不再覆盖）。
+     */
+    StoreMasterDto updateStoreMaster(String factoryId, String id, StoreMasterUpdateRequest request);
+
+    /** DELETE /logistics/stores/{id} — 软删除。 */
+    void deleteStoreMaster(String factoryId, String id);
 }

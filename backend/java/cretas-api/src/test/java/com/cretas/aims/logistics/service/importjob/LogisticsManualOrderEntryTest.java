@@ -7,6 +7,7 @@ import com.cretas.aims.logistics.dto.importjob.PreviewResultDto;
 import com.cretas.aims.logistics.entity.enums.OrderBatchStatus;
 import com.cretas.aims.logistics.repository.LogisticsDeliveryOrderRepository;
 import com.cretas.aims.logistics.repository.LogisticsOrderBatchRepository;
+import com.cretas.aims.logistics.repository.LogisticsStoreMasterRepository;
 import com.cretas.aims.logistics.service.importjob.impl.LogisticsOrderImportServiceImpl;
 import com.cretas.aims.logistics.service.routing.AmapClient;
 import com.cretas.aims.utils.ExcelUtil;
@@ -46,6 +47,7 @@ class LogisticsManualOrderEntryTest {
 
     @Autowired private LogisticsOrderBatchRepository batchRepo;
     @Autowired private LogisticsDeliveryOrderRepository orderRepo;
+    @Autowired private LogisticsStoreMasterRepository storeMasterRepo;
 
     private final ExcelUtil excelUtil = new ExcelUtil();
     private final AmapClient amapClient = mock(AmapClient.class); // never hit real Amap API in tests
@@ -53,7 +55,7 @@ class LogisticsManualOrderEntryTest {
 
     private LogisticsOrderImportServiceImpl service() {
         if (service == null) {
-            service = new LogisticsOrderImportServiceImpl(batchRepo, orderRepo, excelUtil, amapClient);
+            service = new LogisticsOrderImportServiceImpl(batchRepo, orderRepo, excelUtil, amapClient, storeMasterRepo);
         }
         return service;
     }

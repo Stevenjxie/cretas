@@ -2,29 +2,38 @@ package com.cretas.aims.logistics.service.impl;
 
 import com.cretas.aims.entity.Vehicle;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.logistics.dto.resource.DailyAvailabilityDto;
 import com.cretas.aims.logistics.dto.resource.DailyAvailabilityUpsertRequest;
 import com.cretas.aims.logistics.dto.resource.DriverInputRequest;
 import com.cretas.aims.logistics.dto.resource.LogisticsDriverDto;
 import com.cretas.aims.logistics.dto.resource.LogisticsVehicleDto;
+import com.cretas.aims.logistics.dto.resource.StoreMasterDto;
+import com.cretas.aims.logistics.dto.resource.StoreMasterUpdateRequest;
 import com.cretas.aims.logistics.dto.resource.VehicleDriverBindingDto;
 import com.cretas.aims.logistics.dto.resource.VehicleProfileUpdateRequest;
 import com.cretas.aims.logistics.entity.LogisticsDailyAvailability;
 import com.cretas.aims.logistics.entity.LogisticsDriver;
+import com.cretas.aims.logistics.entity.LogisticsStoreMaster;
 import com.cretas.aims.logistics.entity.LogisticsVehicleDriver;
 import com.cretas.aims.logistics.entity.LogisticsVehicleProfile;
 import com.cretas.aims.logistics.entity.enums.AvailabilityResourceType;
 import com.cretas.aims.logistics.entity.enums.DriverRole;
+import com.cretas.aims.logistics.entity.enums.LocationStatus;
 import com.cretas.aims.logistics.entity.enums.OwnershipType;
+import com.cretas.aims.logistics.entity.enums.StoreMasterSource;
 import com.cretas.aims.logistics.entity.enums.TemperatureMode;
 import com.cretas.aims.logistics.repository.LogisticsDailyAvailabilityRepository;
 import com.cretas.aims.logistics.repository.LogisticsDriverRepository;
+import com.cretas.aims.logistics.repository.LogisticsStoreMasterRepository;
 import com.cretas.aims.logistics.repository.LogisticsVehicleDriverRepository;
 import com.cretas.aims.logistics.repository.LogisticsVehicleProfileRepository;
 import com.cretas.aims.logistics.service.LogisticsResourceService;
 import com.cretas.aims.repository.VehicleRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -54,6 +63,7 @@ public class LogisticsResourceServiceImpl implements LogisticsResourceService {
     private final LogisticsDriverRepository driverRepo;
     private final LogisticsVehicleDriverRepository vehicleDriverRepo;
     private final LogisticsDailyAvailabilityRepository dailyAvailabilityRepo;
+    private final LogisticsStoreMasterRepository storeMasterRepo;
 
     // ==================== 车辆 ====================
 
@@ -292,6 +302,72 @@ public class LogisticsResourceServiceImpl implements LogisticsResourceService {
                 .orElseThrow(() -> new BusinessException(404, "可用性覆盖记录不存在: " + id)
                         .withHint("请检查记录 ID 是否正确"));
         dailyAvailabilityRepo.delete(record); // @SQLDelete → 软删除
+    }
+
+    // ==================== 门店主数据 (store master) ====================
+
+    @Override
+    public Page<StoreMasterDto> listStoreMasters(String factoryId, String keyword, Pageable pageable) {
+        Page<LogisticsStoreMaster> page = (keyword != null && !keyword.isBlank())
+                ? storeMasterRepo.searchByFactoryIdAndKeyword(factoryId, keyword.trim(), pageable)
+                : storeMasterRepo.findByFactoryIdAndDeletedAtIsNullOrderByStoreNameAsc(factoryId, pageable);
+        return page.map(this::toStoreMasterDto);
+    }
+
+    @Override
+    @Transactional
+    public StoreMasterDto updateStoreMaster(String factoryId, String id, StoreMasterUpdateRequest request) {
+        LogisticsStoreMaster store = storeMasterRepo.findByIdAndFactoryId(id, factoryId)
+                .orElseThrow(() -> new BusinessException(404, "门店主数据不存在: " + id)
+                        .withHint("请检查门店 ID 是否正确"));
+        if (request.getVersion() != null && !request.getVersion().equals(store.getVersion())) {
+            throw new BusinessException(409, "门店信息已被其他人修改，请刷新后重试")
+                    .withCode("VERSION_CONFLICT")
+                    .withHint("刷新页面获取最新数据后重试");
+        }
+
+        if (request.getAddress() != null) store.setAddress(request.getAddress());
+        if (request.getAreaCode() != null) store.setAreaCode(request.getAreaCode());
+        // 经纬度必须同时提供才当作一次坐标修正 (与 LogisticsOrderImportService#updateLocation
+        // 一致的 XOR 防呆) —— 调度员在此永久修正一次, 之后所有导入直接复用, 不再回落 geocode。
+        boolean lonPresent = request.getLongitude() != null;
+        boolean latPresent = request.getLatitude() != null;
+        if (lonPresent != latPresent) {
+            throw new BusinessException(400, "经度和纬度必须同时提供")
+                    .withHintTarget(lonPresent ? "latitude" : "longitude");
+        }
+        if (lonPresent) {
+            store.setLongitude(request.getLongitude());
+            store.setLatitude(request.getLatitude());
+            store.setSource(StoreMasterSource.MANUAL);
+            store.setLocationStatus(LocationStatus.RESOLVED);
+        }
+
+        LogisticsStoreMaster saved = storeMasterRepo.save(store);
+        return toStoreMasterDto(saved);
+    }
+
+    @Override
+    @Transactional
+    public void deleteStoreMaster(String factoryId, String id) {
+        LogisticsStoreMaster store = storeMasterRepo.findByIdAndFactoryId(id, factoryId)
+                .orElseThrow(() -> new BusinessException(404, "门店主数据不存在: " + id)
+                        .withHint("请检查门店 ID 是否正确"));
+        storeMasterRepo.delete(store); // @SQLDelete → 软删除
+    }
+
+    private StoreMasterDto toStoreMasterDto(LogisticsStoreMaster m) {
+        return StoreMasterDto.builder()
+                .id(m.getId())
+                .storeName(m.getStoreName())
+                .address(m.getAddress())
+                .areaCode(m.getAreaCode())
+                .longitude(m.getLongitude())
+                .latitude(m.getLatitude())
+                .locationStatus(m.getLocationStatus())
+                .source(m.getSource())
+                .version(m.getVersion())
+                .build();
     }
 
     private DailyAvailabilityDto toDailyAvailabilityDto(LogisticsDailyAvailability r) {

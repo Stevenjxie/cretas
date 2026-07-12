@@ -11,11 +11,14 @@ import com.cretas.aims.logistics.dto.importjob.PreviewResultDto;
 import com.cretas.aims.logistics.dto.importjob.RowErrorDto;
 import com.cretas.aims.logistics.entity.LogisticsDeliveryOrder;
 import com.cretas.aims.logistics.entity.LogisticsOrderBatch;
+import com.cretas.aims.logistics.entity.LogisticsStoreMaster;
 import com.cretas.aims.logistics.entity.enums.DeliveryOrderStatus;
 import com.cretas.aims.logistics.entity.enums.LocationStatus;
 import com.cretas.aims.logistics.entity.enums.OrderBatchStatus;
+import com.cretas.aims.logistics.entity.enums.StoreMasterSource;
 import com.cretas.aims.logistics.repository.LogisticsDeliveryOrderRepository;
 import com.cretas.aims.logistics.repository.LogisticsOrderBatchRepository;
+import com.cretas.aims.logistics.repository.LogisticsStoreMasterRepository;
 import com.cretas.aims.logistics.service.importjob.LogisticsOrderImportService;
 import com.cretas.aims.logistics.service.routing.AmapClient;
 import com.cretas.aims.utils.ExcelUtil;
@@ -68,6 +71,7 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
     private final LogisticsDeliveryOrderRepository deliveryOrderRepo;
     private final ExcelUtil excelUtil;
     private final AmapClient amapClient;
+    private final LogisticsStoreMasterRepository storeMasterRepo;
 
     private static final String SHEET_NAME = "物流订单导入模板";
     private static final int WINDOW_MAX_LEN = 8;
@@ -460,47 +464,134 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
         // status == PREVIEWED
         batch.setStatus(OrderBatchStatus.COMMITTED);
         LogisticsOrderBatch saved = batchRepo.save(batch);
-        geocodeUnresolvedOrders(factoryId, saved.getId());
+        resolveOrderCoordinates(factoryId, saved.getId());
         log.info("[LogisticsOrderImport] commit factory={} jobId={} → COMMITTED (validRows={})",
                 factoryId, jobId, saved.getValidRows());
         return toDto(saved);
     }
 
     /**
-     * 提交时自动地理编码 — 对该批次内有地址但缺经纬度的订单调用高德 geocode, 成功即置
-     * {@code RESOLVED}; 失败 (key 未配置 / 地址无法解析 / 超出单次上限) 一律保持
-     * {@code UNRESOLVED}, 绝不伪造坐标 (对齐 {@link AmapClient} 类头诚实降级铁律)。
+     * 提交时解析该批次内缺经纬度的订单坐标 —— "解析一次, 逐日复用" (客户第一诉求): 每家门店的
+     * 坐标只应该被解析/修正一次, 而不是天天对同一批 ~200 家门店重新 geocode。逐单两段式:
+     *
+     * <ol>
+     *   <li><b>复用 {@link LogisticsStoreMaster}(免费, 不占 {@link #GEOCODE_ON_COMMIT_CAP})</b>
+     *       —— 按 (factoryId, 归一化门店名称) 查主数据, 命中且已有坐标直接复制给订单, 一分钟省一次
+     *       高德调用。</li>
+     *   <li><b>否则回落地理编码</b>(占用每次 commit 的调用上限) —— 成功即置 {@code RESOLVED} 并
+     *       upsert 门店主数据 (source=GEOCODED), 下次同名门店导入即可直接命中第一步; 失败
+     *       (key 未配置 / 地址无法解析 / 超出单次上限) 一律保持 {@code UNRESOLVED}, 绝不伪造坐标
+     *       (对齐 {@link AmapClient} 类头诚实降级铁律)。</li>
+     * </ol>
+     *
+     * <p>订单本身导入时就自带坐标 (文件行提供 / 手动录入表单填写) 的场景不进入上述两段 ——
+     * 直接用订单自带坐标播种/更新门店主数据 (source=IMPORT), 同样不占用预算。
+     *
+     * <p>预算上限只约束"实际发起的地理编码调用次数"; 命中主数据复用的订单不计入, 也不会因为
+     * 上限触发而提前 {@code break} 整个循环 (后面还没处理到的订单里可能有能免费复用主数据的)。
      */
-    private void geocodeUnresolvedOrders(String factoryId, String batchId) {
+    private void resolveOrderCoordinates(String factoryId, String batchId) {
         List<LogisticsDeliveryOrder> orders = deliveryOrderRepo.findByFactoryIdAndBatchId(factoryId, batchId);
-        int attempted = 0;
-        int resolved = 0;
+        int geocodeAttempted = 0;
+        int geocodeResolved = 0;
+        int reusedFromMaster = 0;
         for (LogisticsDeliveryOrder order : orders) {
+            String normalizedName = normalizeStoreName(order.getStoreName());
+
             if (order.getLongitude() != null && order.getLatitude() != null) {
-                continue; // 已有坐标（导入时提供 / 之前已解析）
+                // 已有坐标（导入时提供 / 之前已解析）—— 用这份坐标播种/更新门店主数据，
+                // 让下次同名门店即使缺坐标也能直接复用，不必等它触发地理编码。
+                upsertStoreMasterCoords(factoryId, normalizedName, order.getAddress(), order.getAreaCode(),
+                        order.getLongitude(), order.getLatitude(), StoreMasterSource.IMPORT);
+                continue;
             }
+
+            // 1) 免费复用：门店主数据已有该门店的已解析坐标
+            Optional<LogisticsStoreMaster> master = (normalizedName == null)
+                    ? Optional.empty()
+                    : storeMasterRepo.findByFactoryIdAndStoreNameAndDeletedAtIsNull(factoryId, normalizedName);
+            if (master.isPresent() && master.get().getLongitude() != null && master.get().getLatitude() != null) {
+                LogisticsStoreMaster m = master.get();
+                order.setLongitude(m.getLongitude());
+                order.setLatitude(m.getLatitude());
+                order.setLocationStatus(LocationStatus.RESOLVED);
+                deliveryOrderRepo.save(order);
+                reusedFromMaster++;
+                continue;
+            }
+
+            // 2) 未命中主数据 —— 回落地理编码（占用预算）
             if (order.getAddress() == null || order.getAddress().isBlank()) {
                 continue; // 无地址可解析
             }
-            if (attempted >= GEOCODE_ON_COMMIT_CAP) {
-                break; // 单次 commit 预算保护, 剩余诚实保留 UNRESOLVED
+            if (geocodeAttempted >= GEOCODE_ON_COMMIT_CAP) {
+                continue; // 单次 commit 预算保护；诚实保留 UNRESOLVED，不阻断后续订单的免费复用检查
             }
-            attempted++;
+            geocodeAttempted++;
             Optional<double[]> coord = amapClient.geocode(order.getAddress());
             if (coord.isEmpty()) {
-                continue; // 诚实降级: 保持 UNRESOLVED, 不猜测坐标
+                continue; // 诚实降级: 保持 UNRESOLVED, 不猜测坐标, 也不污染门店主数据
             }
             double[] lngLat = coord.get();
-            order.setLongitude(BigDecimal.valueOf(lngLat[0]));
-            order.setLatitude(BigDecimal.valueOf(lngLat[1]));
+            BigDecimal longitude = BigDecimal.valueOf(lngLat[0]);
+            BigDecimal latitude = BigDecimal.valueOf(lngLat[1]);
+            order.setLongitude(longitude);
+            order.setLatitude(latitude);
             order.setLocationStatus(LocationStatus.RESOLVED);
             deliveryOrderRepo.save(order);
-            resolved++;
+            geocodeResolved++;
+            upsertStoreMasterCoords(factoryId, normalizedName, order.getAddress(), order.getAreaCode(),
+                    longitude, latitude, StoreMasterSource.GEOCODED);
         }
-        if (attempted > 0) {
-            log.info("[LogisticsOrderImport] geocode-on-commit factory={} batch={} attempted={} resolved={}",
-                    factoryId, batchId, attempted, resolved);
+        if (geocodeAttempted > 0 || reusedFromMaster > 0) {
+            log.info("[LogisticsOrderImport] resolve-coordinates factory={} batch={} reusedFromStoreMaster={} "
+                            + "geocodeAttempted={} geocodeResolved={}",
+                    factoryId, batchId, reusedFromMaster, geocodeAttempted, geocodeResolved);
         }
+    }
+
+    /**
+     * 创建/更新门店主数据的坐标 —— 按 (factoryId, 归一化门店名称) upsert。
+     *
+     * <p>调度员手工修正 ({@code source=MANUAL}, 见
+     * {@code LogisticsResourceServiceImpl#updateStoreMaster}) 是"改一次以后就不用管了"的最终事实
+     * 来源：自动路径 (GEOCODED / IMPORT) 绝不静默覆盖已有的 MANUAL 记录，否则次日导入携带旧/错
+     * 坐标会把调度员刚修好的门店重新带偏 (fool-proof-design "改一次以后就不用管了" 的反面)。
+     */
+    private void upsertStoreMasterCoords(String factoryId, String normalizedName, String address, String areaCode,
+            BigDecimal longitude, BigDecimal latitude, StoreMasterSource source) {
+        if (normalizedName == null) {
+            return; // 无门店名称可归档 (理论上店名必填, 防御)
+        }
+        Optional<LogisticsStoreMaster> existing =
+                storeMasterRepo.findByFactoryIdAndStoreNameAndDeletedAtIsNull(factoryId, normalizedName);
+        if (existing.isPresent() && existing.get().getSource() == StoreMasterSource.MANUAL) {
+            return; // 保护调度员的手工修正，不被自动路径覆盖
+        }
+        LogisticsStoreMaster master = existing.orElseGet(() -> LogisticsStoreMaster.builder()
+                .factoryId(factoryId)
+                .storeName(normalizedName)
+                .build());
+        master.setLongitude(longitude);
+        master.setLatitude(latitude);
+        master.setLocationStatus(LocationStatus.RESOLVED);
+        master.setSource(source);
+        if (address != null && !address.isBlank()) {
+            master.setAddress(address);
+        }
+        if (areaCode != null && !areaCode.isBlank()) {
+            master.setAreaCode(areaCode);
+        }
+        storeMasterRepo.save(master);
+    }
+
+    /** trim + 折叠内部空白, 不 lowercase (中文场景) —— 门店主数据查重键归一化, 见 {@link LogisticsStoreMaster} 类注释。 */
+    private static String normalizeStoreName(String name) {
+        if (name == null) {
+            return null;
+        }
+        String trimmed = name.trim().replaceAll("\\s+", " ");
+        return trimmed.isBlank() ? null : trimmed;
     }
 
     // ==================== 查询 ====================

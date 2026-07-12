@@ -8,12 +8,16 @@ import com.cretas.aims.logistics.dto.resource.DriverInputRequest;
 import com.cretas.aims.logistics.dto.resource.LogisticsDriverDto;
 import com.cretas.aims.logistics.dto.resource.LogisticsVehicleDto;
 import com.cretas.aims.logistics.dto.resource.SetVehicleDriversRequest;
+import com.cretas.aims.logistics.dto.resource.StoreMasterDto;
+import com.cretas.aims.logistics.dto.resource.StoreMasterUpdateRequest;
 import com.cretas.aims.logistics.dto.resource.VehicleProfileUpdateRequest;
 import com.cretas.aims.logistics.service.LogisticsResourceService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.*;
 
@@ -115,6 +119,40 @@ public class LogisticsResourceController {
             @PathVariable String factoryId,
             @PathVariable String id) {
         resourceService.deleteDailyAvailability(factoryId, id);
+        return ApiResponse.success("已删除", null);
+    }
+
+    // ==================== 门店主数据 (store master) ====================
+
+    @GetMapping("/stores")
+    @Operation(summary = "门店主数据列表", description = "分页 + 可选门店名称关键词搜索; 坐标'解析一次, 逐日复用', 见导入自动地理编码集成")
+    public ApiResponse<Page<StoreMasterDto>> listStoreMasters(
+            @PathVariable String factoryId,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        int safeSize = Math.min(Math.max(size, 1), 200);
+        return ApiResponse.success(
+                resourceService.listStoreMasters(factoryId, keyword, PageRequest.of(Math.max(page, 0), safeSize)));
+    }
+
+    @RequireModule("scheduling")
+    @PutMapping("/stores/{id}")
+    @Operation(summary = "修正门店坐标/地址/区域", description = "调度员永久修正; 坐标同时提供时 source=MANUAL 且 locationStatus=RESOLVED, 之后导入直接复用不再重新地理编码")
+    public ApiResponse<StoreMasterDto> updateStoreMaster(
+            @PathVariable String factoryId,
+            @PathVariable String id,
+            @RequestBody StoreMasterUpdateRequest request) {
+        return ApiResponse.success("门店信息已更新", resourceService.updateStoreMaster(factoryId, id, request));
+    }
+
+    @RequireModule("scheduling")
+    @DeleteMapping("/stores/{id}")
+    @Operation(summary = "删除门店主数据", description = "软删除")
+    public ApiResponse<Void> deleteStoreMaster(
+            @PathVariable String factoryId,
+            @PathVariable String id) {
+        resourceService.deleteStoreMaster(factoryId, id);
         return ApiResponse.success("已删除", null);
     }
 }
