@@ -17,8 +17,11 @@ import { useLogisticsScheduling } from '../useLogisticsScheduling';
 const state = useLogisticsScheduling();
 // 查看路线步的视图切换：地图 / 调度时间表(甘特图)
 const mapView = ref<'map' | 'timetable'>('map');
-// 排线设置功能栏可折叠 —— 折叠后腾出竖向空间给地图/线路(调度员多数时间只看图不改设置)。
+// 排线设置功能栏可折叠 —— 折叠后连同「查看路线」标题、车次总览条一起收起, 腾出竖向空间给地图/线路
+// (调度员多数时间只看图不改设置)。
 const settingsCollapsed = ref(false);
+// 配送线路侧栏可隐藏 —— 隐藏后地图占满整行(核对整体分布时想要更大的图)。与设置折叠相互独立。
+const routesHidden = ref(false);
 
 // 地图/线路行的高度按「它在文档里的真实起点」算, 让整个查看路线步恰好铺满一屏、不再整页滚动
 // (之前用 CSS 100vh 减固定值猜, 猜少了 → 地图溢出屏幕, 用户被迫滚动/浏览器缩到 80%)。
@@ -164,24 +167,40 @@ function handleOptimizeMode(mode: 'TIME' | 'DISTANCE'): void {
   void state.setOptimizeMode(mode);
 }
 
-async function assignVehicle(vehicleId: string | null): Promise<void> {
+// 人工确认页现在一次展示全部车次, 每个操作都带 tripId —— 先把该车次设为当前, 再走原子写回。
+// (state 里的写操作按 activeTrip 定位; selectTrip 同步设置 selectedTripId, activeTrip 是 computed, 立即生效。)
+async function assignVehicle(tripId: string, vehicleId: string | null): Promise<void> {
+  state.selectTrip(tripId);
   await state.assignVehicle(vehicleId);
 }
 
-async function assignDriver(driverId: string | null): Promise<void> {
+async function assignDriver(tripId: string, driverId: string | null): Promise<void> {
+  state.selectTrip(tripId);
   await state.assignDriver(driverId);
 }
 
-async function handleMoveStore(storeId: string, direction: -1 | 1): Promise<void> {
+async function handleMoveStore(tripId: string, storeId: string, direction: -1 | 1): Promise<void> {
+  state.selectTrip(tripId);
   await state.moveStore(storeId, direction);
 }
 
-async function handleMoveToTrip(storeId: string, targetTripId: string | null): Promise<void> {
+async function handleMoveToTrip(tripId: string, storeId: string, targetTripId: string | null): Promise<void> {
+  state.selectTrip(tripId);
   await state.moveStoreToTrip(storeId, targetTripId);
 }
 
-async function confirmTrip(): Promise<void> {
+async function confirmTrip(tripId: string): Promise<void> {
+  state.selectTrip(tripId);
   await state.confirmTrip();
+}
+
+/** 一键确认全部草稿车次 —— 串行确认, 每步拿最新 snapshot 避免版本冲突; 任一失败即停留提示。 */
+async function confirmAllTrips(): Promise<void> {
+  const draftIds = state.scheduleResult.value.trips.filter((t) => t.status === 'draft').map((t) => t.id);
+  for (const id of draftIds) {
+    state.selectTrip(id);
+    if (!(await state.confirmTrip())) break;
+  }
 }
 
 async function confirmSchedule(): Promise<void> {
@@ -255,8 +274,8 @@ async function next(): Promise<void> {
     />
 
     <section v-else-if="state.activeStep.value === 'map'" data-testid="map-step" class="map-step">
-      <header class="map-heading"><div><p>第二步</p><h2>查看路线</h2></div></header>
-      <div v-if="totalTripCount > 0" v-reveal="0" class="route-summary" data-testid="route-summary">
+      <header v-show="!settingsCollapsed" class="map-heading"><div><p>第二步</p><h2>查看路线</h2></div></header>
+      <div v-if="totalTripCount > 0" v-show="!settingsCollapsed" v-reveal="0" class="route-summary" data-testid="route-summary">
         <div class="rs-item"><span class="rs-value">{{ totalTripCount }}</span><span class="rs-label">车次</span></div>
         <div class="rs-sep" />
         <div class="rs-item"><span class="rs-value">{{ totalStopCount }}</span><span class="rs-label">配送门店</span></div>
@@ -266,8 +285,8 @@ async function next(): Promise<void> {
       <div class="route-settings" :class="{ collapsed: settingsCollapsed }" data-testid="route-settings">
         <span class="settings-title">排线设置</span>
         <button data-testid="generate-routes" class="generate-button" type="button" @click="state.regeneratePlanAction">重新生成路线</button>
+        <label class="view-toggle">视图 <el-radio-group :model-value="mapView" size="small" @update:model-value="(v: 'map'|'timetable') => (mapView = v)"><el-radio-button label="map">地图</el-radio-button><el-radio-button label="timetable">调度时间表</el-radio-button></el-radio-group></label>
         <template v-if="!settingsCollapsed">
-          <label class="view-toggle">视图 <el-radio-group :model-value="mapView" size="small" @update:model-value="(v: 'map'|'timetable') => (mapView = v)"><el-radio-button label="map">地图</el-radio-button><el-radio-button label="timetable">调度时间表</el-radio-button></el-radio-group></label>
           <label class="opt-mode">优化目标 <el-radio-group :model-value="state.optimizeMode.value" size="small" @update:model-value="handleOptimizeMode"><el-radio-button label="DISTANCE">路程最短</el-radio-button><el-radio-button label="TIME">时间最快</el-radio-button></el-radio-group></label>
           <label class="load-ctl">目标装载率 <el-slider :model-value="state.targetLoadPct.value" :min="50" :max="100" :show-tooltip="true" @update:model-value="handleTargetLoad" /></label>
         </template>
@@ -278,16 +297,26 @@ async function next(): Promise<void> {
           :aria-expanded="!settingsCollapsed"
           @click="settingsCollapsed = !settingsCollapsed"
         >
-          <span class="settings-chevron">{{ settingsCollapsed ? '展开 ▾' : '收起 ▴' }}</span>
+          <span class="settings-chevron">{{ settingsCollapsed ? '展开设置 ▾' : '收起设置 ▴' }}</span>
         </button>
       </div>
-      <div ref="mapRowRef" class="map-and-routes" :class="{ 'bar-collapsed': settingsCollapsed }" :style="mapRowStyle">
+      <div ref="mapRowRef" class="map-and-routes" :class="{ 'bar-collapsed': settingsCollapsed, 'routes-hidden': routesHidden }" :style="mapRowStyle">
         <div class="mr-map">
           <LogisticsMap v-show="mapView === 'map'" :stores="state.stores.value" :trips="state.scheduleResult.value.trips" :selected-trip-id="state.selectedTripId.value" :selected-store-id="state.selectedStoreId.value" @select-trip="state.selectTrip" @select-store="state.selectStore" />
           <ScheduleTimetable v-if="mapView === 'timetable'" :trips="state.scheduleResult.value.trips" :selected-trip-id="state.selectedTripId.value" @select-trip="state.selectTrip" />
+          <button
+            v-show="routesHidden"
+            class="routes-reopen"
+            type="button"
+            data-testid="show-routes"
+            @click="routesHidden = false"
+          >◂ 配送线路 <span v-if="totalTripCount">{{ totalTripCount }}</span></button>
         </div>
-        <div class="mr-routes" data-testid="routes-pane">
-          <div class="mr-routes-title">配送线路 <span>{{ totalTripCount }} 车次 · 下滑查看全部</span></div>
+        <div v-show="!routesHidden" class="mr-routes" data-testid="routes-pane">
+          <div class="mr-routes-title">
+            <span class="mrt-label">配送线路 <span class="mrt-sub">{{ totalTripCount }} 车次 · 下滑查看全部</span></span>
+            <button class="routes-hide" type="button" data-testid="hide-routes" @click="routesHidden = true">隐藏 ▸</button>
+          </div>
           <RouteCards :stores="state.stores.value" :trips="state.scheduleResult.value.trips" :selected-trip-id="state.selectedTripId.value" :selected-store-id="state.selectedStoreId.value" @select-trip="state.selectTrip" @select-store="state.selectStore" />
         </div>
       </div>
@@ -303,15 +332,17 @@ async function next(): Promise<void> {
 
     <ManualConfirmStep
       v-else-if="state.activeStep.value === 'confirm'"
-      :trip="state.activeTrip.value"
+      :trips="state.scheduleResult.value.trips"
       :stores="state.stores.value"
       :vehicles="state.vehiclesView.value"
-      :trips="state.scheduleResult.value.trips"
+      :selected-trip-id="state.selectedTripId.value"
+      @select-trip="state.selectTrip"
       @move-store="handleMoveStore"
       @move-to-trip="handleMoveToTrip"
       @assign-vehicle="assignVehicle"
       @assign-driver="assignDriver"
       @confirm-trip="confirmTrip"
+      @confirm-all="confirmAllTrips"
     />
     <ExportConfirmStep
       v-else
@@ -336,16 +367,21 @@ async function next(): Promise<void> {
 .route-summary { display: flex; align-items: center; gap: 20px; padding: 14px 20px; background: linear-gradient(180deg, #ffffff, #f8fafc); border: 1px solid #e2e8f0; border-radius: 10px; } .route-summary .rs-item { display: flex; flex-direction: column; gap: 2px; } .route-summary .rs-value { color: #0f172a; font-size: 22px; font-weight: 750; line-height: 1.1; font-variant-numeric: tabular-nums; } .route-summary .rs-label { color: #667085; font-size: 12.5px; } .route-summary .rs-sep { width: 1px; height: 28px; background: #e2e8f0; }
 /* 左地图 + 右线路(可下滑) 两栏布局 —— 高度跟随视口填满可用竖向空间(而非固定 640) */
 /* 高度由 JS(recomputeMapRowHeight)按文档真实起点算, 精确铺满一屏; 下面 clamp 只是 JS 生效前的首帧兜底 */
-.map-and-routes { display: flex; gap: 16px; height: clamp(440px, calc(100vh - 460px), 900px); transition: height 0.2s ease; }
-.mr-map { flex: 1 1 auto; min-width: 0; height: 100%; overflow: hidden; }
+/* 地图为主 + 配送线路侧栏(可隐藏)。整行贴屏幕右边缘(抵消 workbench-page 的右内边距)让地图更大。 */
+.map-and-routes { display: flex; gap: 16px; height: clamp(440px, calc(100vh - 460px), 900px); margin-right: -24px; transition: height 0.2s ease; }
+.mr-map { position: relative; flex: 1 1 auto; min-width: 0; height: 100%; overflow: hidden; border-radius: 12px; }
 .mr-map :deep(.map-stage) { aspect-ratio: auto !important; height: 100% !important; }
-.mr-routes { flex: 0 0 420px; height: 100%; display: flex; flex-direction: column; overflow: hidden; }
-.mr-routes-title { flex: 0 0 auto; display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; color: #101828; font-size: 15px; font-weight: 700; } .mr-routes-title span { color: #98a2b3; font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.mr-routes { flex: 0 0 400px; height: 100%; display: flex; flex-direction: column; overflow: hidden; padding-right: 24px; }
+.mr-routes-title { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; color: #101828; font-size: 15px; font-weight: 700; }
+.mrt-label { display: inline-flex; align-items: baseline; gap: 8px; } .mrt-sub { color: #98a2b3; font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.routes-hide { flex: 0 0 auto; padding: 4px 10px; color: #475569; font: inherit; font-size: 12px; font-weight: 650; background: #f4f6f9; border: 1px solid #dbe3ec; border-radius: 6px; cursor: pointer; } .routes-hide:hover { background: #e8edf3; }
+/* 隐藏后地图行内右侧贴一条竖向"◂ 配送线路"重开条 */
+.routes-reopen { position: absolute; top: 50%; right: 0; z-index: 5; display: inline-flex; align-items: center; gap: 6px; padding: 10px 8px; color: #1b65a8; font: inherit; font-size: 13px; font-weight: 700; writing-mode: vertical-rl; background: #ffffff; border: 1px solid #dbe3ec; border-right: 0; border-radius: 8px 0 0 8px; box-shadow: -2px 0 10px rgba(16,24,40,0.08); cursor: pointer; transform: translateY(-50%); } .routes-reopen:hover { background: #f0f6fc; } .routes-reopen span { font-variant-numeric: tabular-nums; }
 .mr-routes :deep(.route-cards) { grid-template-columns: 1fr; overflow-y: auto; flex: 1 1 auto; padding-right: 6px; align-content: start; }
 @media (max-width: 1180px) {
-  .map-and-routes { flex-direction: column; height: auto; }
+  .map-and-routes { flex-direction: column; height: auto; margin-right: 0; }
   .mr-map { height: 520px; }
-  .mr-routes { flex-basis: auto; width: 100%; height: auto; }
+  .mr-routes { flex-basis: auto; width: 100%; height: auto; padding-right: 0; }
   .mr-routes :deep(.route-cards) { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); max-height: 420px; }
 } h1,h2 { margin: 0; color: #101828; } .page-header p, .map-heading p { margin: 6px 0 0; color: #667085; } .map-step { display: grid; gap: 16px; } .map-heading label { display: grid; grid-template-columns: auto minmax(150px, 260px); align-items: center; gap: 12px; color: #344054; font-size: 14px; font-weight: 650; } .map-controls { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; } .map-heading .opt-mode { grid-template-columns: auto auto; } .route-settings { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding: 12px 16px; background: #f4f6f9; border: 1px solid #edf2f7; border-radius: 10px; } .route-settings.collapsed { padding: 6px 12px; } .route-settings .settings-title { color: #101828; font-weight: 700; font-size: 14px; }
 .settings-toggle { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; padding: 4px 10px; background: transparent; border: 1px solid #dbe3ec; border-radius: 6px; cursor: pointer; font: inherit; color: #475569; } .settings-toggle:hover { background: #e8edf3; } .settings-chevron { color: #1b65a8; font-size: 12px; font-weight: 650; } .route-settings label { display: grid; grid-template-columns: auto auto; align-items: center; gap: 10px; color: #344054; font-size: 14px; font-weight: 650; } .route-settings .load-ctl { grid-template-columns: auto minmax(120px, 200px); } .route-settings .view-toggle { grid-template-columns: auto auto; } .route-settings .generate-button { padding: 8px 16px; } .generate-button, .next-button { width: fit-content; padding: 10px 18px; color: #fff; font: inherit; font-weight: 650; background: #1b65a8; border: 0; border-radius: 6px; cursor: pointer; } .action-bar { position: sticky; bottom: 0; z-index: 20; padding: 14px 0; background: linear-gradient(to bottom, transparent, #f8fafc 28%); }
