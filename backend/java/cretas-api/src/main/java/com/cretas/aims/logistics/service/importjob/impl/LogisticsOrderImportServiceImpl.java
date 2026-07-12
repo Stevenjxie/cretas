@@ -145,11 +145,19 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
         }
 
         String businessDate = trim(request.getBusinessDate());
+        // 手动录入的 订单号(storeCode) 防呆自动生成: 调度员不需要凭空编订单号 (fool-proof-design —
+        // "你告诉他这个东西你要收多少就行了")。留空时按 SM-{紧凑业务日期}-{行号} 确定性生成 (同内容重复
+        // 提交生成相同编号 → 幂等语义不破; 行号保证批内唯一, 通过 seenStoreCodes 去重校验)。
+        String compactDate = businessDate == null ? "NA" : businessDate.replaceAll("[^0-9]", "");
+        if (compactDate.isBlank()) compactDate = "NA";
         List<LogisticsOrderImportRow> rawRows = new ArrayList<>(request.getRows().size());
+        int seq = 0;
         for (ManualOrderRow r : request.getRows()) {
+            seq++;
             LogisticsOrderImportRow row = new LogisticsOrderImportRow();
             row.setBusinessDate(businessDate);
-            row.setStoreCode(r.getStoreCode());
+            String storeCode = trim(r.getStoreCode());
+            row.setStoreCode(isBlank(storeCode) ? "SM-" + compactDate + "-" + seq : storeCode);
             row.setStoreName(r.getStoreName());
             row.setAddress(r.getAddress());
             row.setPieces(r.getPieces());

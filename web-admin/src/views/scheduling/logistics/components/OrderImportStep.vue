@@ -48,12 +48,18 @@ function resetFileInput(): void {
 interface ManualRowForm {
   storeName: string;
   address: string;
-  boxes: string;
+  pieces: string;
   weightKg: string;
   volumeCbm: string;
   windowStart: string;
   windowEnd: string;
 }
+
+/** 后端必填字段(除自动生成的订单号/系统给的业务日期外) —— 防呆: 缺任一项高亮 + 禁用提交。 */
+const REQUIRED_FIELDS: Array<keyof ManualRowForm> = ['storeName', 'address', 'pieces', 'weightKg', 'volumeCbm'];
+const FIELD_LABELS: Record<string, string> = {
+  storeName: '门店名称', address: '配送地址', pieces: '件数', weightKg: '重量kg', volumeCbm: '体积m³',
+};
 
 function todayStr(): string {
   const d = new Date();
@@ -62,7 +68,7 @@ function todayStr(): string {
 }
 
 function emptyRow(): ManualRowForm {
-  return { storeName: '', address: '', boxes: '', weightKg: '', volumeCbm: '', windowStart: '', windowEnd: '' };
+  return { storeName: '', address: '', pieces: '', weightKg: '', volumeCbm: '', windowStart: '', windowEnd: '' };
 }
 
 const manualDate = ref<string>(todayStr());
@@ -79,35 +85,47 @@ function removeManualRow(index: number): void {
 
 /** 一行是否"开始填了"(任一字段非空) —— 用于判定该行是否要提交/校验。 */
 function rowTouched(r: ManualRowForm): boolean {
-  return Boolean(r.storeName.trim() || r.address.trim() || r.boxes.trim() || r.weightKg.trim()
+  return Boolean(r.storeName.trim() || r.address.trim() || r.pieces.trim() || r.weightKg.trim()
     || r.volumeCbm.trim() || r.windowStart.trim() || r.windowEnd.trim());
 }
 
-/** 已填行里，门店名称或地址缺失的行号(1-based) —— 防呆预校验。 */
+/** 已填行里，缺少任一必填字段的行号(1-based) —— 防呆预校验。 */
 const invalidRowNumbers = computed(() => {
   const bad: number[] = [];
   manualRows.value.forEach((r, i) => {
-    if (rowTouched(r) && (!r.storeName.trim() || !r.address.trim())) bad.push(i + 1);
+    if (rowTouched(r) && REQUIRED_FIELDS.some((f) => !r[f].trim())) bad.push(i + 1);
   });
   return bad;
+});
+
+/** 第一处缺失字段的中文名(用于 tooltip 提示具体缺什么)。 */
+const firstMissingHint = computed(() => {
+  for (let i = 0; i < manualRows.value.length; i++) {
+    const r = manualRows.value[i];
+    if (!rowTouched(r)) continue;
+    const miss = REQUIRED_FIELDS.find((f) => !r[f].trim());
+    if (miss) return `第 ${i + 1} 行缺少「${FIELD_LABELS[miss]}」`;
+  }
+  return '';
 });
 
 const filledRowCount = computed(() => manualRows.value.filter(rowTouched).length);
 const canSubmitManual = computed(() => filledRowCount.value > 0 && invalidRowNumbers.value.length === 0 && !props.committing);
 
-function isRowMissing(r: ManualRowForm, field: 'storeName' | 'address'): boolean {
+function isRowMissing(r: ManualRowForm, field: keyof ManualRowForm): boolean {
   return rowTouched(r) && !r[field].trim();
 }
 
 function submitManual(): void {
   if (invalidRowNumbers.value.length) {
-    ElMessage.warning(`第 ${invalidRowNumbers.value.join('、')} 行缺少门店名称或配送地址`);
+    ElMessage.warning(firstMissingHint.value || `第 ${invalidRowNumbers.value.join('、')} 行有必填项未填`);
     return;
   }
   const rows: ManualOrderRow[] = manualRows.value.filter(rowTouched).map((r) => ({
+    // 订单号(storeCode)留空 → 后端防呆自动生成, 调度员不需要凭空编号。
     storeName: r.storeName.trim(),
     address: r.address.trim(),
-    boxes: r.boxes.trim() || null,
+    pieces: r.pieces.trim() || null,
     weightKg: r.weightKg.trim() || null,
     volumeCbm: r.volumeCbm.trim() || null,
     windowStart: r.windowStart.trim() || null,
@@ -192,7 +210,7 @@ watch(() => props.batch?.id, (id, prev) => {
           placeholder="选择日期"
           style="width: 150px"
         />
-        <span class="manual-hint">门店名称、配送地址必填；件数/重量/体积至少填一项帮助配载。</span>
+        <span class="manual-hint">门店名称、配送地址、件数、重量、体积必填（订单号系统自动生成，无需填写）。</span>
       </div>
 
       <el-table :data="manualRows" size="small" border class="manual-table">
@@ -207,14 +225,14 @@ watch(() => props.batch?.id, (id, prev) => {
             <el-input v-model="row.address" placeholder="如：苏州工业园区xx路1号" :class="{ 'missing': isRowMissing(row, 'address') }" />
           </template>
         </el-table-column>
-        <el-table-column label="箱数" width="88">
-          <template #default="{ row }"><el-input v-model="row.boxes" placeholder="0" /></template>
+        <el-table-column label="件数 *" width="90">
+          <template #default="{ row }"><el-input v-model="row.pieces" placeholder="10" :class="{ 'missing': isRowMissing(row, 'pieces') }" /></template>
         </el-table-column>
-        <el-table-column label="重量kg" width="96">
-          <template #default="{ row }"><el-input v-model="row.weightKg" placeholder="0" /></template>
+        <el-table-column label="重量kg *" width="98">
+          <template #default="{ row }"><el-input v-model="row.weightKg" placeholder="80" :class="{ 'missing': isRowMissing(row, 'weightKg') }" /></template>
         </el-table-column>
-        <el-table-column label="体积m³" width="96">
-          <template #default="{ row }"><el-input v-model="row.volumeCbm" placeholder="0" /></template>
+        <el-table-column label="体积m³ *" width="98">
+          <template #default="{ row }"><el-input v-model="row.volumeCbm" placeholder="1.5" :class="{ 'missing': isRowMissing(row, 'volumeCbm') }" /></template>
         </el-table-column>
         <el-table-column label="送达时间窗" min-width="180">
           <template #default="{ row }">
@@ -237,7 +255,7 @@ watch(() => props.batch?.id, (id, prev) => {
         <span v-if="filledRowCount" class="filled-count">已填 {{ filledRowCount }} 行</span>
         <el-tooltip
           :disabled="canSubmitManual || props.committing"
-          :content="invalidRowNumbers.length ? `第 ${invalidRowNumbers.join('、')} 行缺少门店名称或配送地址` : '请至少录入一行订单'"
+          :content="invalidRowNumbers.length ? (firstMissingHint || `第 ${invalidRowNumbers.join('、')} 行有必填项未填`) : '请至少录入一行订单'"
           placement="top"
         >
           <span>
