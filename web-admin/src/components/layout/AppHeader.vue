@@ -181,6 +181,14 @@ async function handleLogout() {
     border-radius: var(--radius-sm, 6px);
     transition: all 0.2s;
 
+    // 修复: flex 布局下 el-icon 的 svg 只继承到 height:1em, width 塌成 ~2px → 图标不可见 (但可点/hover)。
+    //   显式锁定 1em×1em 方形, 保证铃铛/刷新/主题图标真实可见。
+    :deep(svg) {
+      width: 1em;
+      height: 1em;
+      flex-shrink: 0;
+    }
+
     &:hover {
       background-color: var(--color-bg-hover, #EDF2F7);
       color: var(--color-primary, #1B65A8);

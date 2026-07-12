@@ -56,6 +56,12 @@ onBeforeUnmount(() => {
   padding: 8px;
   border-radius: var(--radius-sm, 6px);
   transition: all 0.2s;
+  // 修复铃铛图标 svg 宽度塌成 ~2px 不可见 (同 AppHeader.header-action)。
+  :deep(svg) {
+    width: 1em;
+    height: 1em;
+    flex-shrink: 0;
+  }
   &:hover {
     background-color: var(--color-bg-hover, #EDF2F7);
     color: var(--color-primary, #1B65A8);
