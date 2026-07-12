@@ -1,11 +1,14 @@
 package com.cretas.aims.logistics.service;
 
+import com.cretas.aims.logistics.dto.resource.DailyAvailabilityDto;
+import com.cretas.aims.logistics.dto.resource.DailyAvailabilityUpsertRequest;
 import com.cretas.aims.logistics.dto.resource.DriverInputRequest;
 import com.cretas.aims.logistics.dto.resource.LogisticsDriverDto;
 import com.cretas.aims.logistics.dto.resource.LogisticsVehicleDto;
 import com.cretas.aims.logistics.dto.resource.VehicleDriverBindingDto;
 import com.cretas.aims.logistics.dto.resource.VehicleProfileUpdateRequest;
 
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -33,4 +36,19 @@ public interface LogisticsResourceService {
 
     /** PUT /vehicles/{vehicleId}/drivers — 整体替换绑定集合（支持一车 2-3 个司机）。 */
     LogisticsVehicleDto setVehicleDrivers(String factoryId, String vehicleId, List<VehicleDriverBindingDto> bindings);
+
+    /**
+     * GET /daily-availability?date=YYYY-MM-DD — 只返回该日期存在覆盖的记录；未出现的司机/车辆
+     * 当天按其固定资料默认可用（诚实默认，见 {@link com.cretas.aims.logistics.entity.LogisticsDailyAvailability}）。
+     */
+    List<DailyAvailabilityDto> listDailyAvailability(String factoryId, LocalDate date);
+
+    /**
+     * PUT /daily-availability — upsert（按 resourceType+resourceId+availDate 幂等，完整状态替换
+     * 语义见 {@link DailyAvailabilityUpsertRequest}）。
+     */
+    DailyAvailabilityDto upsertDailyAvailability(String factoryId, DailyAvailabilityUpsertRequest request);
+
+    /** DELETE /daily-availability/{id} — 软删除，恢复该资源当天默认可用。 */
+    void deleteDailyAvailability(String factoryId, String id);
 }

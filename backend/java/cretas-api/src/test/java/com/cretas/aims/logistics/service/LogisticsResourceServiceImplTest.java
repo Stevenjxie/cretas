@@ -13,6 +13,7 @@ import com.cretas.aims.logistics.entity.LogisticsVehicleProfile;
 import com.cretas.aims.logistics.entity.enums.DriverRole;
 import com.cretas.aims.logistics.entity.enums.OwnershipType;
 import com.cretas.aims.logistics.entity.enums.TemperatureMode;
+import com.cretas.aims.logistics.repository.LogisticsDailyAvailabilityRepository;
 import com.cretas.aims.logistics.repository.LogisticsDriverRepository;
 import com.cretas.aims.logistics.repository.LogisticsVehicleDriverRepository;
 import com.cretas.aims.logistics.repository.LogisticsVehicleProfileRepository;
@@ -65,12 +66,13 @@ class LogisticsResourceServiceImplTest {
     @Mock private LogisticsVehicleProfileRepository vehicleProfileRepo;
     @Mock private LogisticsDriverRepository driverRepo;
     @Mock private LogisticsVehicleDriverRepository vehicleDriverRepo;
+    @Mock private LogisticsDailyAvailabilityRepository dailyAvailabilityRepo;
 
     private LogisticsResourceServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        service = new LogisticsResourceServiceImpl(vehicleRepo, vehicleProfileRepo, driverRepo, vehicleDriverRepo);
+        service = new LogisticsResourceServiceImpl(vehicleRepo, vehicleProfileRepo, driverRepo, vehicleDriverRepo, dailyAvailabilityRepo);
     }
 
     private Vehicle vehicle(String id, String plate) {

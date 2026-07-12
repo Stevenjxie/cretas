@@ -1,6 +1,7 @@
 package com.cretas.aims.logistics.service.routing;
 
 import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.logistics.entity.LogisticsDailyAvailability;
 import com.cretas.aims.logistics.entity.LogisticsDeliveryOrder;
 import com.cretas.aims.logistics.entity.LogisticsDistanceEdge;
 import com.cretas.aims.logistics.entity.LogisticsDriver;
@@ -10,11 +11,13 @@ import com.cretas.aims.logistics.entity.LogisticsStop;
 import com.cretas.aims.logistics.entity.LogisticsTrip;
 import com.cretas.aims.logistics.entity.LogisticsVehicleDriver;
 import com.cretas.aims.logistics.entity.LogisticsVehicleProfile;
+import com.cretas.aims.logistics.entity.enums.AvailabilityResourceType;
 import com.cretas.aims.logistics.entity.enums.DeliveryOrderStatus;
 import com.cretas.aims.logistics.entity.enums.DistanceEdgeSource;
 import com.cretas.aims.logistics.entity.enums.PlanStatus;
 import com.cretas.aims.logistics.entity.enums.RouteOptimizeMode;
 import com.cretas.aims.logistics.entity.enums.TripStatus;
+import com.cretas.aims.logistics.repository.LogisticsDailyAvailabilityRepository;
 import com.cretas.aims.logistics.repository.LogisticsDeliveryOrderRepository;
 import com.cretas.aims.logistics.repository.LogisticsDistanceEdgeRepository;
 import com.cretas.aims.logistics.repository.LogisticsDriverRepository;
@@ -66,6 +69,7 @@ public class LogisticsRoutingService {
     private final LogisticsVehicleProfileRepository vehicleProfileRepository;
     private final LogisticsDriverRepository driverRepository;
     private final LogisticsVehicleDriverRepository vehicleDriverRepository;
+    private final LogisticsDailyAvailabilityRepository dailyAvailabilityRepository;
     private final LogisticsDistanceEdgeRepository distanceEdgeRepository;
     private final LogisticsPlanRepository planRepository;
     private final LogisticsTripRepository tripRepository;
@@ -177,8 +181,23 @@ public class LogisticsRoutingService {
         Map<String, LogisticsDeliveryOrder> orderById = orders.stream()
                 .collect(Collectors.toMap(LogisticsDeliveryOrder::getId, o -> o));
 
+        // ---- 按日可用性覆盖 (V20261028_57) — 无记录的资源默认可用, 行为与引入前完全一致 ----
+        Map<String, LogisticsDailyAvailability> vehicleAvailByVehicleId = new HashMap<>();
+        Map<String, LogisticsDailyAvailability> driverAvailByDriverId = new HashMap<>();
+        for (LogisticsDailyAvailability av : dailyAvailabilityRepository
+                .findByFactoryIdAndAvailDateAndDeletedAtIsNull(factoryId, plan.getPlanDate())) {
+            if (av.getResourceType() == AvailabilityResourceType.VEHICLE) {
+                vehicleAvailByVehicleId.put(av.getResourceId(), av);
+            } else if (av.getResourceType() == AvailabilityResourceType.DRIVER) {
+                driverAvailByDriverId.put(av.getResourceId(), av);
+            }
+        }
+
         List<LogisticsVehicleProfile> vehicleProfiles =
-                vehicleProfileRepository.findByFactoryIdAndActiveTrueAndDeletedAtIsNull(factoryId);
+                vehicleProfileRepository.findByFactoryIdAndActiveTrueAndDeletedAtIsNull(factoryId).stream()
+                        // 当天标记不可用(请假/维修)的车辆不提供给算法 — 该车当天订单诚实落 NEEDS_VEHICLE / 转其它车
+                        .filter(vp -> isResourceAvailable(vehicleAvailByVehicleId.get(vp.getVehicleId())))
+                        .toList();
 
         Map<String, List<LogisticsVehicleDriver>> bindingsByVehicleId = new HashMap<>();
         for (LogisticsVehicleProfile vp : vehicleProfiles) {
@@ -205,18 +224,30 @@ public class LogisticsRoutingService {
                 .toList();
 
         List<LogisticsRoutingAlgorithm.VehicleInput> vehicleInputs = vehicleProfiles.stream()
-                .map(vp -> new LogisticsRoutingAlgorithm.VehicleInput(
-                        vp.getVehicleId(), nvl(vp.getCapacityCbm()), nvl(vp.getMaxWeightKg()),
-                        parseServiceAreas(vp.getServiceAreas()), vp.getAvailableFrom(), vp.getAvailableTo()))
+                .map(vp -> {
+                    LogisticsDailyAvailability av = vehicleAvailByVehicleId.get(vp.getVehicleId());
+                    String availableFrom = av != null && av.getShiftStart() != null ? av.getShiftStart() : vp.getAvailableFrom();
+                    String availableTo = av != null && av.getShiftEnd() != null ? av.getShiftEnd() : vp.getAvailableTo();
+                    return new LogisticsRoutingAlgorithm.VehicleInput(
+                            vp.getVehicleId(), nvl(vp.getCapacityCbm()), nvl(vp.getMaxWeightKg()),
+                            parseServiceAreas(vp.getServiceAreas()), availableFrom, availableTo);
+                })
                 .toList();
 
         Map<String, List<LogisticsRoutingAlgorithm.DriverBindingInput>> driverBindingsByVehicleId = new HashMap<>();
         for (Map.Entry<String, List<LogisticsVehicleDriver>> entry : bindingsByVehicleId.entrySet()) {
             List<LogisticsRoutingAlgorithm.DriverBindingInput> bindings = entry.getValue().stream()
                     .filter(LogisticsVehicleDriver::getActive)
-                    .map(b -> new LogisticsRoutingAlgorithm.DriverBindingInput(
-                            b.getDriverId(), b.getRole(), b.getShiftStart(), b.getShiftEnd(),
-                            b.getPriority() == null ? 0 : b.getPriority()))
+                    // 当天标记不可用(请假)的司机不提供给算法 — 该车当天诚实回落到其它绑定司机 / NEEDS_DRIVER
+                    .filter(b -> isResourceAvailable(driverAvailByDriverId.get(b.getDriverId())))
+                    .map(b -> {
+                        LogisticsDailyAvailability av = driverAvailByDriverId.get(b.getDriverId());
+                        String shiftStart = av != null && av.getShiftStart() != null ? av.getShiftStart() : b.getShiftStart();
+                        String shiftEnd = av != null && av.getShiftEnd() != null ? av.getShiftEnd() : b.getShiftEnd();
+                        return new LogisticsRoutingAlgorithm.DriverBindingInput(
+                                b.getDriverId(), b.getRole(), shiftStart, shiftEnd,
+                                b.getPriority() == null ? 0 : b.getPriority());
+                    })
                     .toList();
             driverBindingsByVehicleId.put(entry.getKey(), bindings);
         }
@@ -549,6 +580,11 @@ public class LogisticsRoutingService {
 
     private static BigDecimal nvl(BigDecimal value) {
         return value == null ? BigDecimal.ZERO : value;
+    }
+
+    /** 无覆盖记录 (null) = 诚实默认可用; 有记录则按 {@code available} 字段判定。 */
+    private static boolean isResourceAvailable(LogisticsDailyAvailability availability) {
+        return availability == null || Boolean.TRUE.equals(availability.getAvailable());
     }
 
     /** {@code service_areas} 列是逗号分隔字符串 (e.g. "姑苏,相城") — 见 V20261028_02 demo seed。 */

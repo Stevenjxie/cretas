@@ -2,17 +2,22 @@ package com.cretas.aims.logistics.service.impl;
 
 import com.cretas.aims.entity.Vehicle;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.logistics.dto.resource.DailyAvailabilityDto;
+import com.cretas.aims.logistics.dto.resource.DailyAvailabilityUpsertRequest;
 import com.cretas.aims.logistics.dto.resource.DriverInputRequest;
 import com.cretas.aims.logistics.dto.resource.LogisticsDriverDto;
 import com.cretas.aims.logistics.dto.resource.LogisticsVehicleDto;
 import com.cretas.aims.logistics.dto.resource.VehicleDriverBindingDto;
 import com.cretas.aims.logistics.dto.resource.VehicleProfileUpdateRequest;
+import com.cretas.aims.logistics.entity.LogisticsDailyAvailability;
 import com.cretas.aims.logistics.entity.LogisticsDriver;
 import com.cretas.aims.logistics.entity.LogisticsVehicleDriver;
 import com.cretas.aims.logistics.entity.LogisticsVehicleProfile;
+import com.cretas.aims.logistics.entity.enums.AvailabilityResourceType;
 import com.cretas.aims.logistics.entity.enums.DriverRole;
 import com.cretas.aims.logistics.entity.enums.OwnershipType;
 import com.cretas.aims.logistics.entity.enums.TemperatureMode;
+import com.cretas.aims.logistics.repository.LogisticsDailyAvailabilityRepository;
 import com.cretas.aims.logistics.repository.LogisticsDriverRepository;
 import com.cretas.aims.logistics.repository.LogisticsVehicleDriverRepository;
 import com.cretas.aims.logistics.repository.LogisticsVehicleProfileRepository;
@@ -24,6 +29,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -47,6 +53,7 @@ public class LogisticsResourceServiceImpl implements LogisticsResourceService {
     private final LogisticsVehicleProfileRepository vehicleProfileRepo;
     private final LogisticsDriverRepository driverRepo;
     private final LogisticsVehicleDriverRepository vehicleDriverRepo;
+    private final LogisticsDailyAvailabilityRepository dailyAvailabilityRepo;
 
     // ==================== 车辆 ====================
 
@@ -221,6 +228,83 @@ public class LogisticsResourceServiceImpl implements LogisticsResourceService {
         LogisticsVehicleProfile profile = vehicleProfileRepo.findByVehicleIdAndDeletedAtIsNull(vehicleId).orElse(null);
         Map<String, String> driverNameById = driverNameMap(factoryId, saved);
         return toVehicleDto(vehicle, profile, saved, driverNameById);
+    }
+
+    // ==================== 按日可用性覆盖 ====================
+
+    @Override
+    public List<DailyAvailabilityDto> listDailyAvailability(String factoryId, LocalDate date) {
+        List<DailyAvailabilityDto> result = new ArrayList<>();
+        for (LogisticsDailyAvailability r : dailyAvailabilityRepo.findByFactoryIdAndAvailDateAndDeletedAtIsNull(factoryId, date)) {
+            result.add(toDailyAvailabilityDto(r));
+        }
+        return result;
+    }
+
+    @Override
+    @Transactional
+    public DailyAvailabilityDto upsertDailyAvailability(String factoryId, DailyAvailabilityUpsertRequest request) {
+        if (request.getResourceType() == null) {
+            throw new BusinessException(400, "资源类型必填 (DRIVER/VEHICLE)").withHintTarget("resourceType");
+        }
+        if (request.getResourceId() == null || request.getResourceId().isBlank()) {
+            throw new BusinessException(400, "资源 ID 必填").withHintTarget("resourceId");
+        }
+        if (request.getAvailDate() == null) {
+            throw new BusinessException(400, "日期必填").withHintTarget("availDate");
+        }
+
+        // 校验资源存在且属于该工厂 —— 防呆: 不允许给不存在的司机/车辆挂可用性覆盖 (fool-proof-design Rule 1)
+        if (request.getResourceType() == AvailabilityResourceType.DRIVER) {
+            driverRepo.findByIdAndFactoryId(request.getResourceId(), factoryId)
+                    .orElseThrow(() -> new BusinessException(404, "司机不存在: " + request.getResourceId())
+                            .withHint("请检查司机 ID 是否正确"));
+        } else {
+            vehicleRepo.findByIdAndFactoryId(request.getResourceId(), factoryId)
+                    .orElseThrow(() -> new BusinessException(404, "车辆不存在: " + request.getResourceId())
+                            .withHint("请检查车辆 ID 是否正确"));
+        }
+
+        LogisticsDailyAvailability record = dailyAvailabilityRepo
+                .findByFactoryIdAndResourceTypeAndResourceIdAndAvailDateAndDeletedAtIsNull(
+                        factoryId, request.getResourceType(), request.getResourceId(), request.getAvailDate())
+                .orElseGet(() -> LogisticsDailyAvailability.builder()
+                        .factoryId(factoryId)
+                        .resourceType(request.getResourceType())
+                        .resourceId(request.getResourceId())
+                        .availDate(request.getAvailDate())
+                        .build());
+
+        // 完整状态替换 (幂等 PUT 语义, 见 DailyAvailabilityUpsertRequest 类注释) —
+        // available 为 null 时默认可用 (等价"只覆盖班次不标记不可用"场景)。
+        record.setAvailable(request.getAvailable() != null ? request.getAvailable() : Boolean.TRUE);
+        record.setShiftStart(request.getShiftStart());
+        record.setShiftEnd(request.getShiftEnd());
+
+        LogisticsDailyAvailability saved = dailyAvailabilityRepo.save(record);
+        return toDailyAvailabilityDto(saved);
+    }
+
+    @Override
+    @Transactional
+    public void deleteDailyAvailability(String factoryId, String id) {
+        LogisticsDailyAvailability record = dailyAvailabilityRepo.findByIdAndFactoryId(id, factoryId)
+                .orElseThrow(() -> new BusinessException(404, "可用性覆盖记录不存在: " + id)
+                        .withHint("请检查记录 ID 是否正确"));
+        dailyAvailabilityRepo.delete(record); // @SQLDelete → 软删除
+    }
+
+    private DailyAvailabilityDto toDailyAvailabilityDto(LogisticsDailyAvailability r) {
+        return DailyAvailabilityDto.builder()
+                .id(r.getId())
+                .resourceType(r.getResourceType())
+                .resourceId(r.getResourceId())
+                .availDate(r.getAvailDate())
+                .available(Boolean.TRUE.equals(r.getAvailable()))
+                .shiftStart(r.getShiftStart())
+                .shiftEnd(r.getShiftEnd())
+                .version(r.getVersion())
+                .build();
     }
 
     // ==================== Helpers ====================

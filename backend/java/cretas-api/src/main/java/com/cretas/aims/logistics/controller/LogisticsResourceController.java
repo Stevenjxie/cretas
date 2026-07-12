@@ -2,6 +2,8 @@ package com.cretas.aims.logistics.controller;
 
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.logistics.dto.resource.DailyAvailabilityDto;
+import com.cretas.aims.logistics.dto.resource.DailyAvailabilityUpsertRequest;
 import com.cretas.aims.logistics.dto.resource.DriverInputRequest;
 import com.cretas.aims.logistics.dto.resource.LogisticsDriverDto;
 import com.cretas.aims.logistics.dto.resource.LogisticsVehicleDto;
@@ -12,8 +14,10 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -82,5 +86,35 @@ public class LogisticsResourceController {
             @RequestBody SetVehicleDriversRequest request) {
         return ApiResponse.success("司机绑定已更新",
                 resourceService.setVehicleDrivers(factoryId, vehicleId, request.getBindings()));
+    }
+
+    // ==================== 按日可用性覆盖 ====================
+
+    @GetMapping("/daily-availability")
+    @Operation(summary = "按日可用性覆盖列表", description = "只返回该日期存在覆盖的记录; 未出现的司机/车辆当天按固定资料默认可用")
+    public ApiResponse<List<DailyAvailabilityDto>> listDailyAvailability(
+            @PathVariable String factoryId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
+        return ApiResponse.success(resourceService.listDailyAvailability(factoryId, date));
+    }
+
+    @RequireModule("scheduling")
+    @PutMapping("/daily-availability")
+    @Operation(summary = "更新按日可用性覆盖", description = "upsert (按 resourceType+resourceId+availDate 幂等); 请求体是完整覆盖状态, 非 partial patch")
+    public ApiResponse<DailyAvailabilityDto> upsertDailyAvailability(
+            @PathVariable String factoryId,
+            @RequestBody DailyAvailabilityUpsertRequest request) {
+        return ApiResponse.success("可用性已更新",
+                resourceService.upsertDailyAvailability(factoryId, request));
+    }
+
+    @RequireModule("scheduling")
+    @DeleteMapping("/daily-availability/{id}")
+    @Operation(summary = "删除按日可用性覆盖", description = "软删除, 恢复该资源当天默认可用")
+    public ApiResponse<Void> deleteDailyAvailability(
+            @PathVariable String factoryId,
+            @PathVariable String id) {
+        resourceService.deleteDailyAvailability(factoryId, id);
+        return ApiResponse.success("已删除", null);
     }
 }
