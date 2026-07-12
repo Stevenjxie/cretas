@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessageBox } from 'element-plus';
 import { vReveal } from '@/composables/useReveal';
@@ -19,6 +19,23 @@ const state = useLogisticsScheduling();
 const mapView = ref<'map' | 'timetable'>('map');
 // 排线设置功能栏可折叠 —— 折叠后腾出竖向空间给地图/线路(调度员多数时间只看图不改设置)。
 const settingsCollapsed = ref(false);
+
+// 地图/线路行的高度按「它在文档里的真实起点」算, 让整个查看路线步恰好铺满一屏、不再整页滚动
+// (之前用 CSS 100vh 减固定值猜, 猜少了 → 地图溢出屏幕, 用户被迫滚动/浏览器缩到 80%)。
+const mapRowRef = ref<HTMLElement>();
+const mapRowHeight = ref(0); // 0 = 让 CSS 接管(窄屏堆叠 / 首帧兜底)
+const mapRowStyle = computed(() => (mapRowHeight.value > 0 ? { height: `${mapRowHeight.value}px` } : {}));
+
+function recomputeMapRowHeight(): void {
+  const el = mapRowRef.value;
+  if (!el) return;
+  // 窄屏(≤1180)走 CSS 的竖向堆叠 + auto 高度, 不锁死高度
+  if (window.innerWidth <= 1180) { mapRowHeight.value = 0; return; }
+  // 文档绝对起点 = 视口内 top + 已滚动量, 与当前是否滚动无关(稳定, 不会自激振荡)
+  const docTop = el.getBoundingClientRect().top + window.scrollY;
+  const reserve = 96; // 底部「上一步/下一步」sticky 条 + 页面下内边距 + 一点呼吸
+  mapRowHeight.value = Math.max(440, Math.round(window.innerHeight - docTop - reserve));
+}
 const route = useRoute();
 const router = useRouter();
 
@@ -66,7 +83,20 @@ onMounted(async () => {
   if (stepFromQuery && (WORKBENCH_STEPS as readonly string[]).includes(stepFromQuery)) {
     state.activeStep.value = stepFromQuery as WorkbenchStep;
   }
+  await nextTick();
+  recomputeMapRowHeight();
+  window.addEventListener('resize', recomputeMapRowHeight);
 });
+
+onUnmounted(() => {
+  window.removeEventListener('resize', recomputeMapRowHeight);
+});
+
+// 影响地图行起点/可用高度的因素变化后重算(功能栏折叠改变上方高度、切步骤、异常条出现、车次数变化)。
+watch(
+  () => [settingsCollapsed.value, mapView.value, state.activeStep.value, hasExceptions.value, state.scheduleResult.value.trips.length],
+  () => { void nextTick(recomputeMapRowHeight); },
+);
 
 // 步骤切换写回 URL，刷新后停在同一步（不再强制跳到「查看路线」）。
 watch(() => state.activeStep.value, (step) => {
@@ -243,7 +273,7 @@ async function next(): Promise<void> {
           <button data-testid="generate-routes" class="generate-button" type="button" @click="state.regeneratePlanAction">重新生成路线</button>
         </template>
       </div>
-      <div class="map-and-routes" :class="{ 'bar-collapsed': settingsCollapsed }">
+      <div ref="mapRowRef" class="map-and-routes" :class="{ 'bar-collapsed': settingsCollapsed }" :style="mapRowStyle">
         <div class="mr-map">
           <LogisticsMap v-show="mapView === 'map'" :stores="state.stores.value" :trips="state.scheduleResult.value.trips" :selected-trip-id="state.selectedTripId.value" :selected-store-id="state.selectedStoreId.value" @select-trip="state.selectTrip" @select-store="state.selectStore" />
           <ScheduleTimetable v-if="mapView === 'timetable'" :trips="state.scheduleResult.value.trips" :selected-trip-id="state.selectedTripId.value" @select-trip="state.selectTrip" />
@@ -297,9 +327,8 @@ async function next(): Promise<void> {
 .page-header, .map-heading, .action-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; } .header-actions { display: flex; align-items: center; gap: 12px; }
 .route-summary { display: flex; align-items: center; gap: 20px; padding: 14px 20px; background: linear-gradient(180deg, #ffffff, #f8fafc); border: 1px solid #e2e8f0; border-radius: 10px; } .route-summary .rs-item { display: flex; flex-direction: column; gap: 2px; } .route-summary .rs-value { color: #0f172a; font-size: 22px; font-weight: 750; line-height: 1.1; font-variant-numeric: tabular-nums; } .route-summary .rs-label { color: #667085; font-size: 12.5px; } .route-summary .rs-sep { width: 1px; height: 28px; background: #e2e8f0; }
 /* 左地图 + 右线路(可下滑) 两栏布局 —— 高度跟随视口填满可用竖向空间(而非固定 640) */
-.map-and-routes { display: flex; gap: 16px; height: clamp(600px, calc(100vh - 300px), 960px); transition: height 0.2s ease; }
-/* 折叠功能栏后腾出的竖向空间给地图/线路 */
-.map-and-routes.bar-collapsed { height: clamp(600px, calc(100vh - 236px), 1040px); }
+/* 高度由 JS(recomputeMapRowHeight)按文档真实起点算, 精确铺满一屏; 下面 clamp 只是 JS 生效前的首帧兜底 */
+.map-and-routes { display: flex; gap: 16px; height: clamp(440px, calc(100vh - 460px), 900px); transition: height 0.2s ease; }
 .mr-map { flex: 1 1 auto; min-width: 0; height: 100%; overflow: hidden; }
 .mr-map :deep(.map-stage) { aspect-ratio: auto !important; height: 100% !important; }
 .mr-routes { flex: 0 0 420px; height: 100%; display: flex; flex-direction: column; overflow: hidden; }
