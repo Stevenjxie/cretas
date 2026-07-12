@@ -135,6 +135,27 @@ export function commitOrderImport(factoryId: string, jobId: string) {
   return post<OrderBatch>(`/${factoryId}/logistics/order-import/${jobId}/commit`);
 }
 
+/** 手动录入的一行订单（数字/坐标用字符串，与文件导入同样的宽松解析+逐行报错）。 */
+export interface ManualOrderRow {
+  storeCode?: string | null;
+  storeName: string;
+  address: string;
+  pieces?: string | null;
+  boxes?: string | null;
+  weightKg?: string | null;
+  volumeCbm?: string | null;
+  windowStart?: string | null;
+  windowEnd?: string | null;
+  longitude?: string | null;
+  latitude?: string | null;
+  areaCode?: string | null;
+}
+
+/** POST /order-import/manual — 从表单结构化行创建订单（非文件），复用文件导入的校验流程，返回同 preview 的 jobId 供 commit。 */
+export function createOrdersManual(factoryId: string, businessDate: string | null, rows: ManualOrderRow[]) {
+  return post<PreviewResult>(`/${factoryId}/logistics/order-import/manual`, { businessDate, rows });
+}
+
 export function listOrderBatches(factoryId: string, params?: PageParams) {
   return get<PageResponse<OrderBatch>>(`/${factoryId}/logistics/order-batches`, { params });
 }

@@ -24,6 +24,7 @@ import { ApiError } from '@/types/api';
 import type { PageResponse } from '@/types/api';
 import {
   commitOrderImport,
+  createOrdersManual,
   confirmPlan as apiConfirmPlan,
   confirmTrip as apiConfirmTrip,
   createDriver as apiCreateDriver,
@@ -56,6 +57,7 @@ import type {
   LogisticsPlan,
   LogisticsVehicle,
   LogisticsVehicleDriverBinding,
+  ManualOrderRow,
   OrderBatch,
   PlanSnapshot,
   PreviewResult,
@@ -288,6 +290,33 @@ async function commitImport(): Promise<boolean> {
   } catch (err) {
     importError.value = errorMessage(err);
     return false;
+  } finally {
+    committing.value = false;
+  }
+}
+
+/**
+ * 手动录入订单（非文件）：结构化行 → 后端复用文件导入校验（返回 preview + jobId）→ 直接 commit 写库。
+ * 返回 preview（含逐行错误）供 UI 展示；若有有效行则 batch 已创建。
+ */
+async function submitManualOrders(businessDate: string | null, rows: ManualOrderRow[]): Promise<PreviewResult | null> {
+  importError.value = null;
+  committing.value = true;
+  try {
+    const factoryId = requireFactoryId();
+    const res = await createOrdersManual(factoryId, businessDate, rows);
+    preview.value = res.data;
+    // 有有效行才落库（与文件导入一致：无有效行只回报错误，不建空批次上下文）。
+    if (res.data.validRows > 0) {
+      const committed = await commitOrderImport(factoryId, res.data.jobId);
+      batch.value = committed.data;
+      preview.value = null;
+      await loadOrders(committed.data.id);
+    }
+    return res.data;
+  } catch (err) {
+    importError.value = errorMessage(err);
+    return null;
   } finally {
     committing.value = false;
   }
@@ -835,6 +864,7 @@ const state = {
   downloadTemplate,
   uploadPreview,
   commitImport,
+  submitManualOrders,
   loadBatches,
   loadOrders,
   loadOrdersPage,

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import type { ManualOrderRow } from '@/api/logistics';
 import ExportConfirmStep from '../components/ExportConfirmStep.vue';
 import LogisticsMap from '../components/LogisticsMap.vue';
 import LogisticsStepBar from '../components/LogisticsStepBar.vue';
@@ -71,6 +72,10 @@ async function uploadFile(file: File): Promise<void> {
 
 async function commitImport(): Promise<void> {
   await state.commitImport();
+}
+
+async function submitManual(payload: { businessDate: string | null; rows: ManualOrderRow[] }): Promise<void> {
+  await state.submitManualOrders(payload.businessDate, payload.rows);
 }
 
 function handleTargetLoad(value: number): void {
@@ -156,6 +161,7 @@ async function next(): Promise<void> {
       @download-template="downloadTemplate"
       @upload-file="uploadFile"
       @commit="commitImport"
+      @submit-manual="submitManual"
     />
 
     <section v-else-if="state.activeStep.value === 'map'" data-testid="map-step" class="map-step">
