@@ -101,6 +101,7 @@
               @add-next="openAddProcess(slotProps.id)"
               @select-raw-sku="(skuId) => selectRawSku(slotProps.id, skuId)"
               @select-sku="(skuId) => selectMaterialSku(slotProps.id, skuId)"
+              @delete="removeNode(slotProps.id)"
             />
           </template>
 
@@ -116,9 +117,17 @@
               @add-input="addInputToProcess(slotProps.id)"
               @add-output="addOutputToProcess(slotProps.id)"
               @select-output="(portId, skuId) => selectOutputSku(slotProps.id, portId, skuId)"
+              @delete="removeNode(slotProps.id)"
             />
           </template>
         </VueFlow>
+
+        <!-- #9: 选中连线时浮出可见删除入口 (不只靠 Delete 键; 防呆) -->
+        <div v-if="selectedEdgeId && canEdit" class="edge-delete-bar">
+          <span>已选中一条连线</span>
+          <el-button size="small" type="danger" @click="removeEdgeById(selectedEdgeId)">删除连线</el-button>
+          <el-button size="small" text @click="selectedEdgeId = ''">取消</el-button>
+        </div>
 
         <div v-if="productTypeId && flowNodes.length === 0 && !loading" class="empty-canvas-action">
           <el-empty description="该产品还没有工序图">
@@ -912,12 +921,49 @@ function removeEdgeById(edgeId: string): void {
   selectedEdgeId.value = '';
 }
 
+// #9 删除一个 Cell (节点): 连带删掉它的所有连线, 并解绑引用它的工序端口 (模型一致)。
+function removeNode(nodeId: string): void {
+  if (!canEdit.value) return;
+  const node = flowNodes.value.find((n) => n.id === nodeId);
+  if (!node) return;
+  const data = node.data as { name?: string; processName?: string } | undefined;
+  const label = data?.name || data?.processName || '该 Cell';
+  const touching = flowEdges.value.filter((e) => e.source === nodeId || e.target === nodeId).length;
+  const doRemove = (): void => {
+    mutate(() => {
+      if (nodeKind(node) !== 'PROCESS') {
+        // 物料 Cell: 删掉所有以它为 materialNodeId 的工序端口
+        flowNodes.value.forEach((n) => {
+          if (nodeKind(n) !== 'PROCESS') return;
+          const d = n.data as ProcessNodeData;
+          d.ports = d.ports.filter((p) => p.materialNodeId !== nodeId);
+        });
+      }
+      flowNodes.value = flowNodes.value.filter((n) => n.id !== nodeId);
+      flowEdges.value = flowEdges.value.filter((e) => e.source !== nodeId && e.target !== nodeId);
+    });
+    if (selectedNodeId.value === nodeId) selectedNodeId.value = '';
+  };
+  // 有连线才二次确认 (防呆: 别误删一整条链路); 孤立 Cell 直接删。
+  if (touching > 0) {
+    ElMessageBox.confirm(`删除「${label}」及其 ${touching} 条连线？删除后可用「撤销」恢复。`, '删除 Cell', {
+      type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消',
+    }).then(doRemove).catch(() => { /* 取消 */ });
+  } else {
+    doRemove();
+  }
+}
+
 function onEditorKeydown(event: KeyboardEvent): void {
-  if ((event.key === 'Delete' || event.key === 'Backspace') && selectedEdgeId.value) {
-    const tag = (event.target as HTMLElement | null)?.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA') return; // 输入框里删字不误删边
+  if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+  const tag = (event.target as HTMLElement | null)?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return; // 输入框里删字不误删
+  if (selectedEdgeId.value) {
     event.preventDefault();
     removeEdgeById(selectedEdgeId.value);
+  } else if (selectedNodeId.value) {
+    event.preventDefault();
+    removeNode(selectedNodeId.value);
   }
 }
 
@@ -1592,6 +1638,24 @@ function toggleAI(): void {
   stroke-width: 3 !important;
 }
 .canvas-shell.is-connecting { cursor: crosshair; }
+/* #9: 选中连线的浮动删除条 */
+.edge-delete-bar {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: #fff;
+  border: 1px solid #f0d0d0;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  font-size: 13px;
+  color: #606266;
+}
 
 /* 画布尽量占满视口高度(放大画布), 兼容列表落到页面最下方 */
 .workflow-editor { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 12px; min-height: calc(100vh - 200px); }

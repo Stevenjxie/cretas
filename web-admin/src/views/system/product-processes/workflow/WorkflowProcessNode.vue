@@ -26,6 +26,15 @@
     <button
       v-if="canWrite && (selected || hovered)"
       type="button"
+      class="cell-delete nodrag"
+      title="删除此工序 Cell"
+      data-testid="delete-process-cell"
+      @click.stop="emit('delete')"
+    >✕ 删除</button>
+
+    <button
+      v-if="canWrite && (selected || hovered)"
+      type="button"
       class="edge-output-add nodrag"
       data-testid="add-output-edge"
       aria-label="添加一个产出 Cell"
@@ -187,6 +196,7 @@ const emit = defineEmits<{
   addInput: [];
   addOutput: [];
   selectOutput: [portId: string, skuId: string];
+  delete: [];
 }>();
 
 const processNodeStyle = { minHeight: '96px' } as const;
@@ -281,6 +291,14 @@ const conversionHint = computed(() => {
 @media (prefers-reduced-motion: reduce) {
   .process-node, .process-node :deep(.vue-flow__handle) { transition: none; }
 }
+/* #9 删除 Cell 按钮 (选中/悬停时出现, 右上角) */
+.cell-delete {
+  position: absolute; top: -10px; right: -10px; z-index: 5;
+  padding: 2px 8px; font-size: 12px; line-height: 1.4;
+  color: #fff; background: #f56c6c; border: none; border-radius: 12px;
+  cursor: pointer; box-shadow: 0 2px 6px rgba(245, 108, 108, 0.4);
+}
+.cell-delete:hover { background: #f23c3c; }
 
 .process-node {
   position: relative;

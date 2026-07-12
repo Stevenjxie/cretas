@@ -6,6 +6,15 @@
     <Handle v-if="kind !== 'RAW_MATERIAL'" type="target" :position="Position.Left" id="input" />
     <Handle v-if="kind !== 'FINISHED_GOOD'" type="source" :position="Position.Right" id="output" />
 
+    <button
+      v-if="canWrite && selected"
+      type="button"
+      class="cell-delete nodrag"
+      title="删除此 Cell"
+      data-testid="delete-material-cell"
+      @click.stop="emit('delete')"
+    >✕ 删除</button>
+
     <div class="node-heading">
       <span class="kind-mark">{{ kindMark }}</span>
       <div>
@@ -117,6 +126,7 @@ const emit = defineEmits<{
   addNext: [];
   selectRawSku: [skuId: string];
   selectSku: [skuId: string];
+  delete: [];
 }>();
 
 // #3 原料 Cell = BOM 原料优先、可加其他 (soft 约束，Steve 定：BOM 优先但不硬
@@ -175,6 +185,14 @@ const kindMark = computed(() => ({
 @media (prefers-reduced-motion: reduce) {
   .material-node, .material-node :deep(.vue-flow__handle) { transition: none; }
 }
+/* #9 删除 Cell 按钮 (选中时出现, 右上角) */
+.cell-delete {
+  position: absolute; top: -10px; right: -10px; z-index: 5;
+  padding: 2px 8px; font-size: 12px; line-height: 1.4;
+  color: #fff; background: #f56c6c; border: none; border-radius: 12px;
+  cursor: pointer; box-shadow: 0 2px 6px rgba(245, 108, 108, 0.4);
+}
+.cell-delete:hover { background: #f23c3c; }
 
 .material-node {
   width: 210px;
