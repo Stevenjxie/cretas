@@ -42,13 +42,15 @@ class LogisticsRoutingCrossTripOptimizerTest {
 
     private static final double[] DEPOT = {120.00, 31.00};
 
-    // 东簇 (DEPOT 以东) / 西簇 (DEPOT 以西) — 折返场景的两个不相邻地理簇
+    // 东簇 (DEPOT 以东) / 西簇 (DEPOT 以西) — 折返场景的两个不相邻地理簇。
+    // 簇距 DEPOT ±0.80°(≈76km): 一车吃两簇的折返 vs 拆成两车, 里程差 ≈60km > 单车固定成本当量(40km, T3),
+    // 故拆分在经济上划算 → 优化器应拆 (若簇很近, 省的里程 < 单车当量, T3 会保留 1 辆更满的车, 见算法 VEHICLE_FIXED_COST_KM)。
     private static final Map<String, double[]> STORE_COORDS = Map.of(
             "DEPOT", DEPOT,
-            "S-A1", new double[] {120.10, 31.00},
-            "S-A2", new double[] {120.12, 31.00},
-            "S-B1", new double[] {119.90, 31.00},
-            "S-B2", new double[] {119.88, 31.00});
+            "S-A1", new double[] {120.80, 31.00},
+            "S-A2", new double[] {120.82, 31.00},
+            "S-B1", new double[] {119.20, 31.00},
+            "S-B2", new double[] {119.18, 31.00});
 
     // ============================================================
     // 1. 折返拆分 — 整段搬到空闲车
