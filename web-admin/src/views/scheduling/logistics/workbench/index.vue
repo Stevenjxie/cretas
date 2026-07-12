@@ -51,10 +51,23 @@ const exceptionDescription = computed(() => {
   return undefined;
 });
 
+const WORKBENCH_STEPS = ['import', 'map', 'confirm', 'export'] as const;
+type WorkbenchStep = (typeof WORKBENCH_STEPS)[number];
+
 onMounted(async () => {
   await Promise.all([state.loadVehicles(), state.loadDrivers()]);
   const planIdFromQuery = typeof route.query.planId === 'string' ? route.query.planId : null;
   await state.restore(planIdFromQuery);
+  // 恢复刷新前所在步骤 —— 否则 restore 总把用户带到「查看路线」，明明还在第一步录入却被跳走。
+  const stepFromQuery = route.query.step;
+  if (typeof stepFromQuery === 'string' && (WORKBENCH_STEPS as readonly string[]).includes(stepFromQuery)) {
+    state.activeStep.value = stepFromQuery as WorkbenchStep;
+  }
+});
+
+// 步骤切换写回 URL，刷新后停在同一步（不再强制跳到「查看路线」）。
+watch(() => state.activeStep.value, (step) => {
+  if (route.query.step !== step) router.replace({ query: { ...route.query, step } });
 });
 
 // 生成/恢复计划后把 planId 写回 URL，刷新页面时可据此恢复（handoff §12.3）。
@@ -197,6 +210,7 @@ async function next(): Promise<void> {
       @upload-file="uploadFile"
       @commit="commitImport"
       @submit-manual="submitManual"
+      @clear-batch="startNewSchedule"
     />
 
     <section v-else-if="state.activeStep.value === 'map'" data-testid="map-step" class="map-step">
@@ -265,7 +279,7 @@ async function next(): Promise<void> {
 </template>
 
 <style scoped lang="scss">
-.workbench-page { display: grid; gap: 20px; max-width: 1440px; min-height: 100%; padding: 24px; margin: 0 auto; background: #f8fafc; } .ai-analyzing-overlay { position: fixed; inset: 0; z-index: 3000; display: grid; place-items: center; background: rgba(16, 24, 40, 0.55); backdrop-filter: blur(2px); } .ai-analyzing-card { width: min(460px, 90vw); padding: 32px 28px; text-align: center; background: #fff; border-radius: 16px; box-shadow: 0 12px 40px rgba(0,0,0,0.25); } .ai-spark { font-size: 40px; animation: ai-pulse 1.1s ease-in-out infinite; } @keyframes ai-pulse { 0%,100% { transform: scale(1); opacity: 0.85; } 50% { transform: scale(1.18); opacity: 1; } } .ai-title { margin: 12px 0 6px; color: #101828; font-size: 18px; font-weight: 750; } .ai-sub { margin: 0 0 18px; color: #667085; font-size: 13px; line-height: 1.5; }
+.workbench-page { display: grid; gap: 20px; max-width: 2200px; min-height: 100%; padding: 24px; margin: 0 auto; background: #f8fafc; } .ai-analyzing-overlay { position: fixed; inset: 0; z-index: 3000; display: grid; place-items: center; background: rgba(16, 24, 40, 0.55); backdrop-filter: blur(2px); } .ai-analyzing-card { width: min(460px, 90vw); padding: 32px 28px; text-align: center; background: #fff; border-radius: 16px; box-shadow: 0 12px 40px rgba(0,0,0,0.25); } .ai-spark { font-size: 40px; animation: ai-pulse 1.1s ease-in-out infinite; } @keyframes ai-pulse { 0%,100% { transform: scale(1); opacity: 0.85; } 50% { transform: scale(1.18); opacity: 1; } } .ai-title { margin: 12px 0 6px; color: #101828; font-size: 18px; font-weight: 750; } .ai-sub { margin: 0 0 18px; color: #667085; font-size: 13px; line-height: 1.5; }
 .page-header, .map-heading, .action-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; } .header-actions { display: flex; align-items: center; gap: 12px; }
 .route-summary { display: flex; align-items: center; gap: 20px; padding: 14px 20px; background: linear-gradient(180deg, #ffffff, #f8fafc); border: 1px solid #e2e8f0; border-radius: 10px; } .route-summary .rs-item { display: flex; flex-direction: column; gap: 2px; } .route-summary .rs-value { color: #0f172a; font-size: 22px; font-weight: 750; line-height: 1.1; font-variant-numeric: tabular-nums; } .route-summary .rs-label { color: #667085; font-size: 12.5px; } .route-summary .rs-sep { width: 1px; height: 28px; background: #e2e8f0; }
 /* 左地图 + 右线路(可下滑) 两栏布局 */

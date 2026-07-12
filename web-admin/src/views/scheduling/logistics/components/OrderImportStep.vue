@@ -19,6 +19,7 @@ const emit = defineEmits<{
   (event: 'upload-file', file: File): void;
   (event: 'commit'): void;
   (event: 'submit-manual', payload: { businessDate: string | null; rows: ManualOrderRow[] }): void;
+  (event: 'clear-batch'): void;
 }>();
 
 type EntryMode = 'file' | 'manual';
@@ -256,7 +257,10 @@ watch(() => props.batch?.id, (id, prev) => {
     </el-radio-group>
 
     <div v-if="batch" v-reveal="0" class="batch-card" data-testid="import-batch-summary">
-      <strong>✓ 已录入批次 {{ batch.batchNumber }}</strong>
+      <div class="batch-card-head">
+        <strong>✓ 已录入批次 {{ batch.batchNumber }}</strong>
+        <el-button link type="danger" size="small" data-testid="clear-batch" @click="emit('clear-batch')">✕ 清除，重新导入</el-button>
+      </div>
       <span>{{ batch.validRows }} / {{ batch.totalRows }} 行有效，业务日期 {{ batch.businessDate }}。点下方「下一步」生成排线。</span>
     </div>
 
@@ -419,6 +423,7 @@ watch(() => props.batch?.id, (id, prev) => {
 .panel-heading { display: flex; justify-content: space-between; gap: 20px; } p { margin: 0 0 6px; color: #1b65a8; font-size: 13px; font-weight: 750; } h2 { margin: 0; color: #101828; } span { color: #667085; line-height: 1.6; }
 .mode-toggle { width: fit-content; }
 .batch-card { display: grid; gap: 4px; padding: 16px 20px; background: #ecfdf3; border-radius: 10px; } .batch-card strong { color: #027a48; font-size: 15px; }
+.batch-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .validation-card { display: grid; gap: 6px; padding: 20px; background: #f0f7ff; border-radius: 10px; } strong { color: #101828; font-size: 18px; }
 .row-error-list { display: grid; gap: 4px; margin: 6px 0 0; padding-left: 20px; color: #b42318; font-size: 13px; }
 .row-error-more { margin: 0; color: #b42318; font-size: 13px; }
