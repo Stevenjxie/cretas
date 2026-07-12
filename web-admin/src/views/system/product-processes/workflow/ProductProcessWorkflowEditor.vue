@@ -163,12 +163,19 @@
       </div>
     </aside>
 
-    <el-dialog v-model="processDialogVisible" title="增加后续工序" width="460px" destroy-on-close>
+    <el-dialog v-model="processDialogVisible" title="增加后续工序" width="480px" destroy-on-close>
       <el-form label-width="90px">
         <el-form-item label="上游物料">
           <el-tag>{{ sourceMaterialLabel }}</el-tag>
         </el-form-item>
-        <el-form-item label="选择工序" required>
+        <el-form-item label="工序来源">
+          <el-radio-group v-model="processCreateMode">
+            <el-radio-button label="existing">选择已有工序</el-radio-button>
+            <el-radio-button label="create">现场创建工序</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+
+        <el-form-item v-if="processCreateMode === 'existing'" label="选择工序" required>
           <el-select
             v-model="selectedWorkProcessId"
             filterable
@@ -185,15 +192,70 @@
             />
           </el-select>
         </el-form-item>
+
+        <template v-else>
+          <el-form-item label="工序名称" required>
+            <el-input v-model="newProcessForm.name" placeholder="例：真空封口" data-testid="new-process-name" />
+          </el-form-item>
+          <!-- #13 相似检测防重: 有相似工序时提示复用, 不硬禁创建 -->
+          <el-alert
+            v-if="similarProcesses.length"
+            type="warning"
+            :closable="false"
+            show-icon
+            data-testid="similar-process-warn"
+            class="similar-proc-alert"
+          >
+            <div style="margin-bottom: 4px;">已有相似工序，避免重复创建：</div>
+            <div class="similar-proc-list">
+              <el-button
+                v-for="p in similarProcesses"
+                :key="p.id"
+                link
+                type="primary"
+                size="small"
+                @click="reuseSimilarProcess(p)"
+              >复用「{{ p.processName }}」</el-button>
+            </div>
+          </el-alert>
+          <el-form-item label="投入单位" required>
+            <el-select v-model="newProcessForm.unit" style="width: 100%">
+              <el-option v-for="u in unitOptions" :key="u" :label="u" :value="u" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="产出单位">
+            <el-select v-model="newProcessForm.outputUnit" style="width: 100%">
+              <el-option v-for="u in unitOptions" :key="u" :label="u" :value="u" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="产出类型">
+            <el-radio-group v-model="newProcessForm.outputKind">
+              <el-radio-button label="SEMI_FINISHED">半成品</el-radio-button>
+              <el-radio-button label="FINISHED_GOOD">成品</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+        </template>
       </el-form>
       <el-alert
         type="info"
         :closable="false"
-        title="确认后会根据工序主数据的默认产出类型，自动生成工序 Cell、产出 Cell 和两条连接。"
+        title="确认后会根据工序的默认产出类型，自动生成工序 Cell、产出 Cell 和两条连接。"
       />
       <template #footer>
         <el-button @click="processDialogVisible = false">取消</el-button>
-        <el-button type="primary" :disabled="!selectedWorkProcessId" @click="confirmAddProcess">确认增加</el-button>
+        <el-button
+          v-if="processCreateMode === 'existing'"
+          type="primary"
+          :disabled="!selectedWorkProcessId"
+          @click="confirmAddProcess"
+        >确认增加</el-button>
+        <el-button
+          v-else
+          type="primary"
+          :loading="creatingProcess"
+          :disabled="!newProcessForm.name.trim()"
+          @click="confirmCreateAndAddProcess"
+        >创建并增加</el-button>
       </template>
     </el-dialog>
 
@@ -254,6 +316,7 @@ import { Controls } from '@vue-flow/controls';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { get, post } from '@/api/request';
 import {
+  createWorkProcess,
   getActiveWorkProcesses,
   getProductWorkProcesses,
   type WorkProcessItem,
@@ -389,6 +452,60 @@ const finishedGoodSkuOptions = computed(() => skuOptions.value.filter(
 const processDialogVisible = ref(false);
 const processSourceMaterialId = ref('');
 const selectedWorkProcessId = ref('');
+
+// #13: 现场创建工序 (类似现场创建 SKU) + 相似检测防重复建。最小必填=名称+单位。
+const processCreateMode = ref<'existing' | 'create'>('existing');
+const creatingProcess = ref(false);
+const newProcessForm = ref<{ name: string; unit: string; outputUnit: string; outputKind: 'SEMI_FINISHED' | 'FINISHED_GOOD' }>(
+  { name: '', unit: 'kg', outputUnit: 'kg', outputKind: 'SEMI_FINISHED' },
+);
+function normProcessName(s: string): string { return s.replace(/\s+/g, ''); } // 中文不 lowercase
+// 相似 = 同名 / 一个包含另一个 / 共享 >=2 连续字 → 提示复用避免重复建。
+const similarProcesses = computed<WorkProcessItem[]>(() => {
+  const q = normProcessName(newProcessForm.value.name);
+  if (q.length < 2) return [];
+  return workProcessOptions.value.filter((p) => {
+    const name = normProcessName(p.processName || '');
+    if (!name) return false;
+    if (name === q || name.includes(q) || q.includes(name)) return true;
+    for (let i = 0; i + 2 <= q.length; i += 1) {
+      if (name.includes(q.slice(i, i + 2))) return true;
+    }
+    return false;
+  }).slice(0, 6);
+});
+function reuseSimilarProcess(p: WorkProcessItem): void {
+  processCreateMode.value = 'existing';
+  selectedWorkProcessId.value = p.id;
+}
+async function confirmCreateAndAddProcess(): Promise<void> {
+  const identity = currentLoadedIdentity();
+  const name = newProcessForm.value.name.trim();
+  if (!identity || !name || creatingProcess.value) return;
+  creatingProcess.value = true;
+  try {
+    const payload: Partial<WorkProcessItem> = {
+      processName: name,
+      unit: newProcessForm.value.unit,
+      outputUnit: newProcessForm.value.outputUnit || newProcessForm.value.unit,
+      defaultOutputMaterialKind: newProcessForm.value.outputKind,
+      isActive: true,
+    };
+    const response = await createWorkProcess(identity.factoryId, payload);
+    if (!response.success || !response.data) {
+      ElMessage.error(response.message || '工序创建失败');
+      return;
+    }
+    workProcessOptions.value = [response.data, ...workProcessOptions.value];
+    selectedWorkProcessId.value = response.data.id;
+    ElMessage.success(`工序「${name}」已创建`);
+    confirmAddProcess(); // 用刚建好的工序直接增加后续工序
+  } catch (error) {
+    console.error('[createWorkProcess] failed', error);
+  } finally {
+    creatingProcess.value = false;
+  }
+}
 // #2: 「增加后续工序」dialog 里的工序选择支持拼音首字母搜索 (复用 usePinyinFilter)。
 const workProcessFilter = usePinyinFilter(
   () => workProcessOptions.value,
@@ -1041,6 +1158,8 @@ function openAddProcess(materialNodeId: string): void {
   if (!canEdit.value) return;
   processSourceMaterialId.value = materialNodeId;
   selectedWorkProcessId.value = '';
+  processCreateMode.value = 'existing';
+  newProcessForm.value = { name: '', unit: 'kg', outputUnit: 'kg', outputKind: 'SEMI_FINISHED' };
   processDialogVisible.value = true;
 }
 
