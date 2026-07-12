@@ -42,6 +42,7 @@ import IndicatorCenterDashboard from '@/views/indicator-center/IndicatorCenterDa
 import { resolveBusinessAnalysisTab, type BusinessAnalysisTab } from './businessAnalysisTab';
 import ChartInsights from './components/analysis/ChartInsights.vue';
 import AnalysisChatPanel from './components/analysis/AnalysisChatPanel.vue';
+import { vReveal } from '@/composables/useReveal';
 import {
   financeOverviewBullets,
   financeOverviewSummary,
@@ -231,7 +232,7 @@ function focusChart(key: string) {
           以下概览为全部历史数据的简要口径，独立于下方各标签页内的时间范围筛选，仅供 AI 分析面板参考。
         </div>
         <div class="bah-overview-grid">
-          <el-card shadow="never" class="bah-overview-card">
+          <el-card v-reveal="0" shadow="never" class="bah-overview-card">
             <template #header><div class="bah-overview-header">财务概览</div></template>
             <el-skeleton v-if="financeLoading" :rows="2" animated />
             <div v-else-if="financeError" class="bah-inline-error">{{ financeError }}</div>
@@ -244,7 +245,7 @@ function focusChart(key: string) {
               @focus="focusChart"
             />
           </el-card>
-          <el-card shadow="never" class="bah-overview-card">
+          <el-card v-reveal="1" shadow="never" class="bah-overview-card">
             <template #header><div class="bah-overview-header">销售概览</div></template>
             <el-skeleton v-if="salesLoading" :rows="2" animated />
             <div v-else-if="salesError" class="bah-inline-error">{{ salesError }}</div>
@@ -257,7 +258,7 @@ function focusChart(key: string) {
               @focus="focusChart"
             />
           </el-card>
-          <el-card shadow="never" class="bah-overview-card">
+          <el-card v-reveal="2" shadow="never" class="bah-overview-card">
             <template #header><div class="bah-overview-header">趋势概览</div></template>
             <el-skeleton v-if="trendLoading" :rows="2" animated />
             <div v-else-if="trendError" class="bah-inline-error">{{ trendError }}</div>
@@ -270,7 +271,7 @@ function focusChart(key: string) {
               @focus="focusChart"
             />
           </el-card>
-          <el-card shadow="never" class="bah-overview-card">
+          <el-card v-reveal="3" shadow="never" class="bah-overview-card">
             <template #header><div class="bah-overview-header">KPI 概览</div></template>
             <el-skeleton v-if="kpiLoading" :rows="2" animated />
             <div v-else-if="kpiError" class="bah-inline-error">{{ kpiError }}</div>

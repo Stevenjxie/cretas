@@ -30,7 +30,7 @@
 
     <div v-if="!loadError" class="rgg-grid">
       <!-- 门店营收排行 -->
-      <el-card class="rgg-card" shadow="never">
+      <el-card v-reveal="0" class="rgg-card" shadow="never">
         <template #header>
           <div class="rgg-card-header"><el-icon><Sell /></el-icon><span>门店营收排行</span></div>
         </template>
@@ -55,7 +55,7 @@
       </el-card>
 
       <!-- 堂食 / 外卖 / 渠道占比 -->
-      <el-card class="rgg-card" shadow="never">
+      <el-card v-reveal="1" class="rgg-card" shadow="never">
         <template #header>
           <div class="rgg-card-header"><el-icon><PieChart /></el-icon><span>支付渠道占比</span></div>
         </template>
@@ -80,7 +80,7 @@
       </el-card>
 
       <!-- 堂食 / 外卖占比 (order_type mix, 独立于上面的支付渠道) -->
-      <el-card class="rgg-card" shadow="never">
+      <el-card v-reveal="2" class="rgg-card" shadow="never">
         <template #header>
           <div class="rgg-card-header"><el-icon><KnifeFork /></el-icon><span>堂食外卖占比</span></div>
         </template>
@@ -123,6 +123,7 @@ import type { ChartWithMeta } from './chartInsight';
 import { usePermissionStore } from '@/store/modules/permission';
 import ChartInsight from './ChartInsight.vue';
 import { useChartInsight } from '@/composables/useChartInsight';
+import { vReveal } from '@/composables/useReveal';
 
 const permissionStore = usePermissionStore();
 
