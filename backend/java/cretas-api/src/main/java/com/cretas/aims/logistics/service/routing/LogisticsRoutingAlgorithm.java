@@ -417,6 +417,19 @@ public final class LogisticsRoutingAlgorithm {
     private static final double EPS = 1e-9;
 
     /**
+     * 一辆车(车次)的固定成本, 折算成「里程当量(km)」—— 车数 vs 里程 的最优权衡钮 (T3)。
+     * <p><b>不是「车越少越好」</b>: 合并两个车次省一辆车, 只有当因此多开的行驶 ≤ 这个当量时才划算
+     * (省一辆车的油/司机/折旧固定成本 ≈ 开 {@code VEHICLE_FIXED_COST_KM} 公里)。若合并要多绕
+     * 远于此当量 → 得不偿失, 保留两辆车。目标函数与合并判定都用这把同一尺子, 保证权衡一致。
+     * 业务量级可调 (调大 → 更激进压车数; 调小 → 更看重短路线)。
+     */
+    private static final double VEHICLE_FIXED_COST_KM = 40.0;
+    /** DISTANCE 模式目标(平面度)下的车辆固定成本当量。类名限定 KM_PER_DEGREE 以绕过 JLS 简单名前向引用限制。 */
+    private static final double VEHICLE_PENALTY_DEG = VEHICLE_FIXED_COST_KM / LogisticsRoutingAlgorithm.KM_PER_DEGREE;
+    /** TIME 模式目标(分钟)下的车辆固定成本当量 (按城市均速折算)。 */
+    private static final double VEHICLE_PENALTY_MIN = VEHICLE_FIXED_COST_KM / LogisticsRoutingAlgorithm.URBAN_SPEED_KMH * 60.0;
+
+    /**
      * 档2 跨车次优化 — 在 seed 组合 (Step A/B/C 贪心) 之上做确定性 best-improvement 局部搜索,
      * 打破「区域→首个匹配车辆」硬绑定造成的宽幅折返车次 (一车吃两个不相邻区域):
      * <ul>
@@ -485,6 +498,60 @@ public final class LogisticsRoutingAlgorithm {
             }
             anyMove = true;
         }
+
+        // ---------------- T3: Savings 式整箱合并 (放在 relocate/swap 精修之后, 不被其撤销) --------------
+        // 把一整箱并入另一辆能「整体接住」(硬容量/重量/区域/时窗, 复用 matchesVehicle) 的车, 消灭一个车次。
+        // 最优权衡: 只在「省一辆车的固定成本当量 vehPenalty」严格大于「合并后多开的行驶」时才合并 (delta<0),
+        // 每轮择最划算的一对做, 直到没有划算的合并为止 (不是"能并就并"—— 绕远超过省车当量则保留两辆车)。
+        // 箱内顺序由 finalizeTrips 的 NN+2-opt 重排; 新相邻若暂缺距离边 → 诚实降级 NEEDS_ROUTE_DATA (既有先例)。
+        double vehPenalty = mode == RouteOptimizeMode.TIME ? VEHICLE_PENALTY_MIN : VEHICLE_PENALTY_DEG;
+        for (int guard = 0; guard < MAX_CROSS_TRIP_MOVES; guard++) {
+            int bestFrom = -1;
+            int bestTo = -1;
+            double bestDelta = -EPS; // 只接受严格划算 (delta < -EPS) 的合并
+            for (int i = 0; i < boxes.size(); i++) {
+                WorkBox from = boxes.get(i);
+                if (!from.participates() || from.orders.isEmpty()) {
+                    continue;
+                }
+                double fromCost = boxRouteCost(from.orders, coords, depot, mode);
+                for (int j = 0; j < boxes.size(); j++) {
+                    if (j == i) {
+                        continue;
+                    }
+                    WorkBox to = boxes.get(j);
+                    if (!to.participates() || to.orders.isEmpty()) {
+                        continue;
+                    }
+                    List<OrderInput> combined = new ArrayList<>(to.orders);
+                    combined.addAll(from.orders);
+                    if (!matchesVehicle(to.vehicle, combined)) {
+                        continue; // to 的车整体接不住 → 不可合并
+                    }
+                    double before = boxRouteCost(to.orders, coords, depot, mode) + fromCost;
+                    double after = boxRouteCost(combined, coords, depot, mode);
+                    double delta = (after - before) - vehPenalty; // 多开的行驶 − 省一辆车的当量
+                    if (delta < bestDelta) {
+                        bestDelta = delta; // 平手保留先找到的 (i,j 升序) → 确定性
+                        bestFrom = i;
+                        bestTo = j;
+                    }
+                }
+            }
+            if (bestFrom < 0) {
+                break; // 无划算合并 → 收敛
+            }
+            WorkBox from = boxes.get(bestFrom);
+            WorkBox to = boxes.get(bestTo);
+            to.orders.addAll(from.orders);
+            to.volume = to.volume.add(from.volume);
+            to.weight = to.weight.add(from.weight);
+            from.orders.clear();
+            from.volume = BigDecimal.ZERO;
+            from.weight = BigDecimal.ZERO;
+            anyMove = true;
+        }
+
         if (!anyMove) {
             return null;
         }
@@ -759,12 +826,58 @@ public final class LogisticsRoutingAlgorithm {
         return optimizedObjective < seedObjective - EPS ? optimized : seed;
     }
 
-    /** 按生效模式的全局目标 — DISTANCE: 平面总里程 (度, 相对比较); TIME: 行驶时间+迟到惩罚 (分钟)。 */
+    /**
+     * 按生效模式的全局目标 — DISTANCE: 平面总里程 (度); TIME: 行驶时间+迟到惩罚 (分钟)。
+     * <p>T3: 叠加「车辆固定成本」= 使用车次数 × 单车当量。这样 pickBetterHonestly 不再只看里程, 而是
+     * 在「车数 × 固定成本」与「里程/时间」之间做<b>最优权衡</b> —— 省一辆车但绕远超过其当量则不划算,
+     * 会被本目标判为更差而回退。车数持平时该项抵消 → 退化为原纯里程/时间比较 (既有行为不变)。
+     */
     private static double globalObjective(Result result, Input input) {
-        if (input.effectiveOptimizeBy() == RouteOptimizeMode.TIME) {
-            return timeObjective(result, input);
+        return rawObjective(result, input) + vehicleFixedCost(result, input);
+    }
+
+    /** 纯里程/时间目标 (不含车辆固定成本)。用于「获救多趟」比较 —— 那里两侧服务的订单集合不同,
+     *  叠加车辆固定成本会错误地把「多派一趟救回溢出单」判成更差 (救单必然多一趟), 故只比里程/时间。 */
+    private static double rawObjective(Result result, Input input) {
+        return input.effectiveOptimizeBy() == RouteOptimizeMode.TIME
+                ? timeObjective(result, input)
+                : planarObjective(result, input);
+    }
+
+    /** 车辆固定成本项 = 使用车次数 × 单车当量 (与生效目标同尺)。仅在「服务订单集合相同」的比较里叠加
+     *  (pickBetterHonestly 的 seed vs 跨车优化) —— 那里差异纯是「同样的单、用几辆车」, 权衡才成立。 */
+    private static double vehicleFixedCost(Result result, Input input) {
+        double per = input.effectiveOptimizeBy() == RouteOptimizeMode.TIME ? VEHICLE_PENALTY_MIN : VEHICLE_PENALTY_DEG;
+        return per * usedVehicleCount(result);
+    }
+
+    /** 使用了车辆的车次数 (vehicleId != null; NEEDS_VEHICLE 车次不计) —— 车辆固定成本的计数口径。 */
+    private static long usedVehicleCount(Result result) {
+        return result.trips().stream().filter(t -> t.vehicleId() != null).count();
+    }
+
+    /**
+     * 一个箱 (车次) 的路线成本, 与生效目标同尺 (DISTANCE=平面开放路径度; TIME=行驶+迟到分钟)。
+     * 顺序用与 finalizeTrips 一致的 NN+2-opt 重排后再计, 使合并判定的估算贴近最终真实结果。
+     * 空箱成本 0。仅在坐标齐全的优化路径调用 (optimizeAcrossTrips 已守卫)。
+     */
+    private static double boxRouteCost(List<OrderInput> orders, Map<String, double[]> coords,
+            double[] depot, RouteOptimizeMode mode) {
+        if (orders.isEmpty()) {
+            return 0.0;
         }
-        return planarObjective(result, input);
+        List<OrderInput> ordered = optimizeRouteOrder(orders, coords, depot[0], depot[1], mode);
+        if (mode == RouteOptimizeMode.TIME) {
+            return tripTimeCost(ordered, coords, depot);
+        }
+        double total = 0.0;
+        double[] prev = depot;
+        for (OrderInput o : ordered) {
+            double[] cur = coords.get(o.orderId());
+            total += planarDist(prev, cur);
+            prev = cur;
+        }
+        return total;
     }
 
     private static long countStatus(Result result, TripStatus status) {
@@ -1287,7 +1400,8 @@ public final class LogisticsRoutingAlgorithm {
                 return base; // 非获救车次丢司机 → 回退
             }
         }
-        if (globalObjective(multiTrip, input) > globalObjective(base, input) + EPS) {
+        // 用纯里程/时间 (不含车辆固定成本) 比较: 救回溢出单必然多派一趟, 叠加车辆固定成本会错杀救援。
+        if (rawObjective(multiTrip, input) > rawObjective(base, input) + EPS) {
             return base;
         }
         if (input.effectiveOptimizeBy() == RouteOptimizeMode.TIME
