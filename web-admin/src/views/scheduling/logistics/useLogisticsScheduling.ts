@@ -169,6 +169,7 @@ function toRouteTripView(trip: PlanSnapshot['trips'][number]): RouteTrip {
     totalVolumeCbm: trip.totalVolumeCbm,
     loadRate: trip.loadRate,
     status: trip.status,
+    version: trip.version,
   };
 }
 
@@ -565,7 +566,7 @@ async function moveStore(storeId: string, direction: -1 | 1): Promise<boolean> {
 
   try {
     const factoryId = requireFactoryId();
-    const res = await apiReorderStops(factoryId, plan.value.id, trip.id, storeIds, plan.value.version);
+    const res = await apiReorderStops(factoryId, plan.value.id, trip.id, storeIds, trip.version);
     applyPlanSnapshot(res.data);
     planError.value = null;
     return true;
@@ -590,7 +591,7 @@ async function moveStoreToTrip(storeId: string, targetTripId: string | null): Pr
       deliveryOrderId: storeId,
       targetTripId,
       targetIndex,
-      version: plan.value.version,
+      version: sourceTrip.version,
     });
     applyPlanSnapshot(res.data);
     planError.value = null;
@@ -607,7 +608,7 @@ async function assignVehicle(vehicleId: string | null): Promise<boolean> {
   if (!trip || !plan.value) return false;
   try {
     const factoryId = requireFactoryId();
-    const res = await apiSetTripVehicle(factoryId, plan.value.id, trip.id, vehicleId, plan.value.version);
+    const res = await apiSetTripVehicle(factoryId, plan.value.id, trip.id, vehicleId, trip.version);
     applyPlanSnapshot(res.data);
     planError.value = null;
     return true;
@@ -623,7 +624,7 @@ async function assignDriver(driverId: string | null): Promise<boolean> {
   if (!trip || !plan.value) return false;
   try {
     const factoryId = requireFactoryId();
-    const res = await apiSetTripDriver(factoryId, plan.value.id, trip.id, driverId, plan.value.version);
+    const res = await apiSetTripDriver(factoryId, plan.value.id, trip.id, driverId, trip.version);
     applyPlanSnapshot(res.data);
     planError.value = null;
     return true;
@@ -639,7 +640,7 @@ async function confirmTrip(): Promise<boolean> {
   if (!trip || !plan.value) return false;
   try {
     const factoryId = requireFactoryId();
-    const res = await apiConfirmTrip(factoryId, plan.value.id, trip.id, plan.value.version);
+    const res = await apiConfirmTrip(factoryId, plan.value.id, trip.id, trip.version);
     applyPlanSnapshot(res.data);
     activeStep.value = 'confirm';
     planError.value = null;

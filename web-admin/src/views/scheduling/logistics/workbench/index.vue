@@ -26,6 +26,7 @@ const routesHidden = ref(false);
 // 地图/线路行的高度按「它在文档里的真实起点」算, 让整个查看路线步恰好铺满一屏、不再整页滚动
 // (之前用 CSS 100vh 减固定值猜, 猜少了 → 地图溢出屏幕, 用户被迫滚动/浏览器缩到 80%)。
 const mapRowRef = ref<HTMLElement>();
+const actionBarRef = ref<HTMLElement>();
 const mapRowHeight = ref(0); // 0 = 让 CSS 接管(窄屏堆叠 / 首帧兜底)
 const mapRowStyle = computed(() => (mapRowHeight.value > 0 ? { height: `${mapRowHeight.value}px` } : {}));
 
@@ -34,14 +35,13 @@ function recomputeMapRowHeight(): void {
   if (!el) return;
   // 窄屏(≤1180)走 CSS 的竖向堆叠 + auto 高度, 不锁死高度
   if (window.innerWidth <= 1180) { mapRowHeight.value = 0; return; }
-  const scroller = document.scrollingElement || document.documentElement;
-  const rect = el.getBoundingClientRect();
-  // 文档绝对起点 = 视口内 top + 已滚动量, 与当前是否滚动无关(稳定, 不会自激振荡)
-  const docTop = rect.top + window.scrollY;
-  // 地图行下方实际占用的像素(gap + 上一步/下一步条 + 页面下内边距) —— 直接量而不是猜死数,
-  // 自校准任何浏览器/缩放/工具栏差异。这些元素在地图行之后, 高度与地图行高无关, 故稳定。
-  const below = Math.max(0, scroller.scrollHeight - (docTop + rect.height));
-  mapRowHeight.value = Math.max(440, Math.round(window.innerHeight - docTop - below));
+  const rect = el.getBoundingClientRect(); // 视口内位置; 地图行上方元素不受地图高度影响, 故 rect.top 稳定
+  // 地图行下方只需预留「底部操作条(上一步/下一步) + 页面下内边距 + 间距」。
+  // ⚠️ 不能用 scrollHeight 反推 below —— workbench-page 有 min-height:100%, 内容不足一屏时
+  // scrollHeight≈视口高, 会让 below 自我参照 → 地图永远只保持当前高度、填不满下方空白(收起/隐藏后尤甚)。
+  const barH = actionBarRef.value?.getBoundingClientRect().height ?? 64;
+  const reserve = barH + 24 /*页面下 padding*/ + 20 /*grid gap*/;
+  mapRowHeight.value = Math.max(440, Math.round(window.innerHeight - rect.top - reserve));
 }
 const route = useRoute();
 const router = useRouter();
@@ -105,7 +105,7 @@ onUnmounted(() => {
 
 // 影响地图行起点/可用高度的因素变化后重算(功能栏折叠改变上方高度、切步骤、异常条出现、车次数变化)。
 watch(
-  () => [settingsCollapsed.value, mapView.value, state.activeStep.value, hasExceptions.value, state.scheduleResult.value.trips.length],
+  () => [settingsCollapsed.value, routesHidden.value, mapView.value, state.activeStep.value, hasExceptions.value, state.scheduleResult.value.trips.length],
   () => { void nextTick(recomputeMapRowHeight); },
 );
 
@@ -352,7 +352,7 @@ async function next(): Promise<void> {
       @export-xlsx="exportXlsx"
     />
 
-    <footer class="action-bar"><el-button :disabled="state.activeStep.value === 'import'" @click="back">上一步</el-button><button v-if="state.activeStep.value !== 'export'" data-testid="finish-schedule" class="next-button" type="button" @click="next">{{ state.activeStep.value === 'confirm' ? '查看排班预览' : '下一步' }}</button></footer>
+    <footer ref="actionBarRef" class="action-bar"><el-button :disabled="state.activeStep.value === 'import'" @click="back">上一步</el-button><button v-if="state.activeStep.value !== 'export'" data-testid="finish-schedule" class="next-button" type="button" @click="next">{{ state.activeStep.value === 'confirm' ? '查看排班预览' : '下一步' }}</button></footer>
   </main>
 </template>
 

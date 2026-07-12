@@ -28,7 +28,7 @@ const canExport = computed(() => Boolean(props.rows.length && props.planId));
 <template>
   <section data-testid="export-step" class="export-step"><header><p>第四步</p><h2>确认排班调度</h2><span class="sub">核对当天各车次的车辆、司机、门店顺序，确认后即为当天正式排班。可另存 CSV / Excel 发给司机。</span></header>
     <p v-if="confirmed" data-testid="export-confirmed" class="confirmed-row">当天排班已正式确认。</p>
-    <p v-else-if="previewConfirmed" data-testid="export-preview-confirmed" class="preview-row">已核对排班预览；仍有待匹配车辆的车次，补车后才能正式确认。</p>
+    <p v-else-if="previewConfirmed" data-testid="export-preview-confirmed" class="preview-row">已核对排班预览；仍有未确认或待匹配车辆的车次，请回到「人工确认」逐一确认后再正式确认当天排班。</p>
     <p v-if="pendingRows.length" data-testid="pending-export-row" class="pending-row">待匹配车辆：{{ pendingRows.map((row) => row.tripLabel).join('、') }}</p>
     <el-table :data="previewRows" stripe><el-table-column prop="tripLabel" label="车次" width="180" /><el-table-column prop="vehicle" label="车辆" /><el-table-column prop="driver" label="司机" /><el-table-column prop="storeOrder" label="门店顺序" min-width="260" /><el-table-column prop="volume" label="准备体积" /><el-table-column prop="loadRate" label="装载率" /><el-table-column prop="distance" label="配送里程" /></el-table>
     <div class="actions">

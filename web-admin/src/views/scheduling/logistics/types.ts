@@ -67,6 +67,9 @@ export interface RouteTrip {
   totalVolumeCbm: number;
   loadRate: number;
   status: 'draft' | 'needs_vehicle' | 'needs_driver' | 'needs_route_data' | 'confirmed';
+  /** 该车次的乐观锁版本 —— 车次级写操作(改序/换车/换司机/确认)必须回传这个, 不是 plan.version。
+   *  后端 assertTripVersion 校验的是 trip.version; 用 plan.version 会在第一次改动后就 409。 */
+  version: number;
 }
 
 export interface ScheduleResult {
