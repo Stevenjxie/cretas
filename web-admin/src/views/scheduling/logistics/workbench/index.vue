@@ -17,6 +17,8 @@ import { useLogisticsScheduling } from '../useLogisticsScheduling';
 const state = useLogisticsScheduling();
 // 查看路线步的视图切换：地图 / 调度时间表(甘特图)
 const mapView = ref<'map' | 'timetable'>('map');
+// 排线设置功能栏可折叠 —— 折叠后腾出竖向空间给地图/线路(调度员多数时间只看图不改设置)。
+const settingsCollapsed = ref(false);
 const route = useRoute();
 const router = useRouter();
 
@@ -223,14 +225,25 @@ async function next(): Promise<void> {
         <div class="rs-sep" />
         <div class="rs-item"><span class="rs-value">{{ totalKm.toFixed(1) }}</span><span class="rs-label">总里程 km</span></div>
       </div>
-      <div class="route-settings" data-testid="route-settings">
-        <span class="settings-title">排线设置</span>
-        <label class="view-toggle">视图 <el-radio-group :model-value="mapView" size="small" @update:model-value="(v: 'map'|'timetable') => (mapView = v)"><el-radio-button label="map">地图</el-radio-button><el-radio-button label="timetable">调度时间表</el-radio-button></el-radio-group></label>
-        <label class="opt-mode">优化目标 <el-radio-group :model-value="state.optimizeMode.value" size="small" @update:model-value="handleOptimizeMode"><el-radio-button label="DISTANCE">路程最短</el-radio-button><el-radio-button label="TIME">时间最快</el-radio-button></el-radio-group></label>
-        <label class="load-ctl">目标装载率 <el-slider :model-value="state.targetLoadPct.value" :min="50" :max="100" :show-tooltip="true" @update:model-value="handleTargetLoad" /></label>
-        <button data-testid="generate-routes" class="generate-button" type="button" @click="state.regeneratePlanAction">重新生成路线</button>
+      <div class="route-settings" :class="{ collapsed: settingsCollapsed }" data-testid="route-settings">
+        <button
+          class="settings-toggle"
+          type="button"
+          data-testid="toggle-settings"
+          :aria-expanded="!settingsCollapsed"
+          @click="settingsCollapsed = !settingsCollapsed"
+        >
+          <span class="settings-title">排线设置</span>
+          <span class="settings-chevron">{{ settingsCollapsed ? '展开 ▾' : '收起 ▴' }}</span>
+        </button>
+        <template v-if="!settingsCollapsed">
+          <label class="view-toggle">视图 <el-radio-group :model-value="mapView" size="small" @update:model-value="(v: 'map'|'timetable') => (mapView = v)"><el-radio-button label="map">地图</el-radio-button><el-radio-button label="timetable">调度时间表</el-radio-button></el-radio-group></label>
+          <label class="opt-mode">优化目标 <el-radio-group :model-value="state.optimizeMode.value" size="small" @update:model-value="handleOptimizeMode"><el-radio-button label="DISTANCE">路程最短</el-radio-button><el-radio-button label="TIME">时间最快</el-radio-button></el-radio-group></label>
+          <label class="load-ctl">目标装载率 <el-slider :model-value="state.targetLoadPct.value" :min="50" :max="100" :show-tooltip="true" @update:model-value="handleTargetLoad" /></label>
+          <button data-testid="generate-routes" class="generate-button" type="button" @click="state.regeneratePlanAction">重新生成路线</button>
+        </template>
       </div>
-      <div class="map-and-routes">
+      <div class="map-and-routes" :class="{ 'bar-collapsed': settingsCollapsed }">
         <div class="mr-map">
           <LogisticsMap v-show="mapView === 'map'" :stores="state.stores.value" :trips="state.scheduleResult.value.trips" :selected-trip-id="state.selectedTripId.value" :selected-store-id="state.selectedStoreId.value" @select-trip="state.selectTrip" @select-store="state.selectStore" />
           <ScheduleTimetable v-if="mapView === 'timetable'" :trips="state.scheduleResult.value.trips" :selected-trip-id="state.selectedTripId.value" @select-trip="state.selectTrip" />
@@ -284,7 +297,9 @@ async function next(): Promise<void> {
 .page-header, .map-heading, .action-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; } .header-actions { display: flex; align-items: center; gap: 12px; }
 .route-summary { display: flex; align-items: center; gap: 20px; padding: 14px 20px; background: linear-gradient(180deg, #ffffff, #f8fafc); border: 1px solid #e2e8f0; border-radius: 10px; } .route-summary .rs-item { display: flex; flex-direction: column; gap: 2px; } .route-summary .rs-value { color: #0f172a; font-size: 22px; font-weight: 750; line-height: 1.1; font-variant-numeric: tabular-nums; } .route-summary .rs-label { color: #667085; font-size: 12.5px; } .route-summary .rs-sep { width: 1px; height: 28px; background: #e2e8f0; }
 /* 左地图 + 右线路(可下滑) 两栏布局 —— 高度跟随视口填满可用竖向空间(而非固定 640) */
-.map-and-routes { display: flex; gap: 16px; height: clamp(600px, calc(100vh - 300px), 960px); }
+.map-and-routes { display: flex; gap: 16px; height: clamp(600px, calc(100vh - 300px), 960px); transition: height 0.2s ease; }
+/* 折叠功能栏后腾出的竖向空间给地图/线路 */
+.map-and-routes.bar-collapsed { height: clamp(600px, calc(100vh - 236px), 1040px); }
 .mr-map { flex: 1 1 auto; min-width: 0; height: 100%; overflow: hidden; }
 .mr-map :deep(.map-stage) { aspect-ratio: auto !important; height: 100% !important; }
 .mr-routes { flex: 0 0 420px; height: 100%; display: flex; flex-direction: column; overflow: hidden; }
@@ -295,7 +310,8 @@ async function next(): Promise<void> {
   .mr-map { height: 520px; }
   .mr-routes { flex-basis: auto; width: 100%; height: auto; }
   .mr-routes :deep(.route-cards) { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); max-height: 420px; }
-} h1,h2 { margin: 0; color: #101828; } .page-header p, .map-heading p { margin: 6px 0 0; color: #667085; } .map-step { display: grid; gap: 16px; } .map-heading label { display: grid; grid-template-columns: auto minmax(150px, 260px); align-items: center; gap: 12px; color: #344054; font-size: 14px; font-weight: 650; } .map-controls { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; } .map-heading .opt-mode { grid-template-columns: auto auto; } .route-settings { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding: 12px 16px; background: #f4f6f9; border: 1px solid #edf2f7; border-radius: 10px; } .route-settings .settings-title { color: #101828; font-weight: 700; font-size: 14px; } .route-settings label { display: grid; grid-template-columns: auto auto; align-items: center; gap: 10px; color: #344054; font-size: 14px; font-weight: 650; } .route-settings .load-ctl { grid-template-columns: auto minmax(120px, 200px); } .route-settings .view-toggle { grid-template-columns: auto auto; } .route-settings .generate-button { margin-left: auto; padding: 8px 16px; } .generate-button, .next-button { width: fit-content; padding: 10px 18px; color: #fff; font: inherit; font-weight: 650; background: #1b65a8; border: 0; border-radius: 6px; cursor: pointer; } .action-bar { position: sticky; bottom: 0; z-index: 20; padding: 14px 0; background: linear-gradient(to bottom, transparent, #f8fafc 28%); }
+} h1,h2 { margin: 0; color: #101828; } .page-header p, .map-heading p { margin: 6px 0 0; color: #667085; } .map-step { display: grid; gap: 16px; } .map-heading label { display: grid; grid-template-columns: auto minmax(150px, 260px); align-items: center; gap: 12px; color: #344054; font-size: 14px; font-weight: 650; } .map-controls { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; } .map-heading .opt-mode { grid-template-columns: auto auto; } .route-settings { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding: 12px 16px; background: #f4f6f9; border: 1px solid #edf2f7; border-radius: 10px; } .route-settings.collapsed { padding: 6px 12px; } .route-settings .settings-title { color: #101828; font-weight: 700; font-size: 14px; }
+.settings-toggle { display: inline-flex; align-items: center; gap: 8px; padding: 4px 8px; margin: -2px 0; background: transparent; border: 0; border-radius: 6px; cursor: pointer; font: inherit; } .settings-toggle:hover { background: #e8edf3; } .settings-chevron { color: #1b65a8; font-size: 12px; font-weight: 650; } .route-settings label { display: grid; grid-template-columns: auto auto; align-items: center; gap: 10px; color: #344054; font-size: 14px; font-weight: 650; } .route-settings .load-ctl { grid-template-columns: auto minmax(120px, 200px); } .route-settings .view-toggle { grid-template-columns: auto auto; } .route-settings .generate-button { margin-left: auto; padding: 8px 16px; } .generate-button, .next-button { width: fit-content; padding: 10px 18px; color: #fff; font: inherit; font-weight: 650; background: #1b65a8; border: 0; border-radius: 6px; cursor: pointer; } .action-bar { position: sticky; bottom: 0; z-index: 20; padding: 14px 0; background: linear-gradient(to bottom, transparent, #f8fafc 28%); }
 .unresolved-panel { display: grid; gap: 8px; padding: 16px 20px; background: #fffaeb; border: 1px solid #fef0c7; border-radius: 10px; } .unresolved-panel strong { color: #b54708; } .unresolved-panel ul { display: grid; gap: 4px; margin: 0; padding-left: 20px; color: #93370d; font-size: 13px; } .unresolved-panel a { width: fit-content; color: #1b65a8; font-weight: 650; }
 @media (max-width: 720px) { .workbench-page { padding: 16px; } .page-header,.map-heading { align-items: flex-start; flex-direction: column; } .map-heading label { width: 100%; } }
 </style>
