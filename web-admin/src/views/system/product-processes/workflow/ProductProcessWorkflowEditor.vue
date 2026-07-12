@@ -102,6 +102,7 @@
               @select-raw-sku="(skuId) => selectRawSku(slotProps.id, skuId)"
               @select-sku="(skuId) => selectMaterialSku(slotProps.id, skuId)"
               @delete="removeNode(slotProps.id)"
+              @config-bom="openBomDrawer"
             />
           </template>
 
@@ -220,11 +221,23 @@
         <el-button type="primary" :loading="creatingSku" @click="confirmCreateSku">确认并绑定</el-button>
       </template>
     </el-dialog>
+
+    <!-- #10: BOM 原辅料配置抽屉 (右侧滑出, 不跳转页面; 关闭即回工序配置, 工序草稿不丢) -->
+    <el-drawer
+      v-model="bomDrawerVisible"
+      title="BOM / 配方配置"
+      direction="rtl"
+      size="72%"
+      destroy-on-close
+      @closed="onBomDrawerClosed"
+    >
+      <BomUnifiedPanel v-if="bomDrawerVisible" />
+    </el-drawer>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import gsap from 'gsap';
 import { prefersReducedMotion } from '@/utils/motion/prefersReducedMotion';
 import {
@@ -347,6 +360,10 @@ const connectingFromKind = ref<'' | 'MATERIAL' | 'PROCESS'>('');
 const selectedEdgeId = ref('');
 const canvasRef = ref<HTMLElement | null>(null);
 let gsapCtx: gsap.Context | null = null;
+let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
+// #10: BOM 配置抽屉 (右侧滑出, 不跳转页面, 关闭即回工序配置, 避免丢失未保存草稿)
+const bomDrawerVisible = ref(false);
+const BomUnifiedPanel = defineAsyncComponent(() => import('@/views/production/bom-unified/index.vue'));
 const history = ref<ProductProcessWorkflowDefinition[]>([]);
 const future = ref<ProductProcessWorkflowDefinition[]>([]);
 const dragStartSnapshot = ref<ProductProcessWorkflowDefinition | null>(null);
@@ -443,9 +460,31 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onEditorKeydown);
+  if (autoSaveTimer) clearTimeout(autoSaveTimer);
   gsapCtx?.revert();
   gsapCtx = null;
 });
+
+// #11: 每次操作后防抖 ~2.5s 自动保存 (静默 + 保留撤销栈)。用户停手 2.5s 即存;
+// 连续操作只会在最后一次后触发。saving 中 / 校验暂时非法则跳过, 下次改动再排。
+const AUTO_SAVE_DELAY = 2500;
+function scheduleAutoSave(): void {
+  if (autoSaveTimer) clearTimeout(autoSaveTimer);
+  autoSaveTimer = setTimeout(() => {
+    autoSaveTimer = null;
+    if (!dirty.value || saving.value || !canEdit.value) return;
+    void saveDraft({ silent: true, preserveHistory: true });
+  }, AUTO_SAVE_DELAY);
+}
+watch(dirty, (isDirty) => { if (isDirty) scheduleAutoSave(); });
+
+// #10: 打开 BOM 配置抽屉; 关闭时刷新本产品 BOM (原料分组 + 提示随即更新)
+function openBomDrawer(): void {
+  bomDrawerVisible.value = true;
+}
+async function onBomDrawerClosed(): Promise<void> {
+  await loadProductBom();
+}
 
 watch(() => [props.factoryId, props.productTypeId] as const, async (next, previous) => {
   if (next[0] === previous[0] && next[1] === previous[1]) return;
@@ -1328,13 +1367,14 @@ async function fitCanvas(): Promise<void> {
   await fitView({ padding: 0.16, duration: 300, maxZoom: 1.1 });
 }
 
-async function saveDraft(): Promise<boolean> {
+async function saveDraft(options: { silent?: boolean; preserveHistory?: boolean } = {}): Promise<boolean> {
   const identity = currentLoadedIdentity();
   if (!identity || !canEdit.value) return false;
   const nextDefinition = currentDefinition();
   const errors = validateWorkflow(nextDefinition, 'draft');
   if (errors.length > 0) {
-    ElMessage.error(errors[0].message);
+    // 自动保存(silent)时不弹错——用户可能正编到一半暂时非法, 等下次改动再存
+    if (!options.silent) ElMessage.error(errors[0].message);
     return false;
   }
   const generation = ++saveGeneration;
@@ -1353,9 +1393,12 @@ async function saveDraft(): Promise<boolean> {
     if (!definitionMatchesIdentity(response.data, identity)) return false;
     hydrate(response.data);
     dirty.value = false;
-    history.value = [];
-    future.value = [];
-    ElMessage.success('Workflow 草稿已独立保存');
+    // 自动保存保留 undo/redo 历史 (否则每 2-3s 自动存就把撤销栈清空了)
+    if (!options.preserveHistory) {
+      history.value = [];
+      future.value = [];
+    }
+    if (!options.silent) ElMessage.success('Workflow 草稿已独立保存');
     return true;
   } catch (error) {
     if (generation !== saveGeneration || !isLoadedIdentityCurrent(identity)) return false;

@@ -84,7 +84,7 @@ describe('WorkflowMaterialNode raw material picker — BOM priority grouping (#3
     expect(otherOption?.props('disabled')).toBeFalsy();
   });
 
-  it('shows a single "全部原料" group (no BOM/other split) and a configure-BOM hint with a next-action link when the product has no BOM configured', () => {
+  it('shows a single "全部原料" group (no BOM/other split) and a configure-BOM hint with a next-action link when the product has no BOM configured', async () => {
     const wrapper = mountNode({ bomRawMaterialIds: [] });
 
     const groups = wrapper.findAllComponents(ElOptionGroup);
@@ -94,7 +94,10 @@ describe('WorkflowMaterialNode raw material picker — BOM priority grouping (#3
 
     const hint = wrapper.get('[data-testid="bom-hint"]');
     expect(hint.text()).toContain('该产品尚未配置原辅料 BOM，建议先去配置');
-    expect(hint.find('.router-link-stub').exists()).toBe(true);
+    // #10: 「去配置」不再跳转页面, 改成按钮触发 configBom (父组件在右侧抽屉里打开 BOM 配置)
+    const configBtn = hint.get('.bom-hint-link');
+    await configBtn.trigger('click');
+    expect(wrapper.emitted('configBom')).toBeTruthy();
   });
 
   it('filters both groups by pinyin-initial match, keeping BOM priority grouping intact while searching', async () => {

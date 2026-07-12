@@ -66,7 +66,8 @@
       data-testid="bom-hint"
     >
       <span>该产品尚未配置原辅料 BOM，建议先去配置</span>
-      <router-link to="/production/bom" target="_blank" class="bom-hint-link">去配置 →</router-link>
+      <!-- #10: 不跳转页面 (会丢工序草稿), 改在右侧抽屉内打开 BOM 配置, 关闭即回本页 -->
+      <button type="button" class="bom-hint-link nodrag" @click.stop="emit('configBom')">去配置 →</button>
     </div>
 
     <WorkflowSkuPicker
@@ -127,6 +128,7 @@ const emit = defineEmits<{
   selectRawSku: [skuId: string];
   selectSku: [skuId: string];
   delete: [];
+  configBom: [];
 }>();
 
 // #3 原料 Cell = BOM 原料优先、可加其他 (soft 约束，Steve 定：BOM 优先但不硬
@@ -230,6 +232,9 @@ const kindMark = computed(() => ({
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px;
   padding: 6px 8px; border-radius: 7px; background: #fdf6ec; color: #b88230; font-size: 11px; line-height: 1.4;
 }
-.bom-hint-link { color: #1b65a8; font-weight: 650; text-decoration: none; cursor: pointer; }
+.bom-hint-link {
+  color: #1b65a8; font-weight: 650; text-decoration: none; cursor: pointer;
+  background: none; border: none; padding: 0; font-size: inherit; font-family: inherit;
+}
 .bom-hint-link:hover { text-decoration: underline; }
 </style>
