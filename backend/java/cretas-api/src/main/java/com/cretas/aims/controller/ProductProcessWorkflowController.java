@@ -4,6 +4,7 @@ import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
+import com.cretas.aims.dto.ProductProcessWorkflowVersionSummaryDTO;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.workflow.ProductProcessWorkflowActivationDTO;
 import com.cretas.aims.service.ProductProcessWorkflowService;
@@ -23,6 +24,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/mobile/{factoryId}/product-process-workflows")
@@ -51,6 +54,23 @@ public class ProductProcessWorkflowController {
             @PathVariable String factoryId,
             @PathVariable String productTypeId) {
         return ApiResponse.success(service.getEditorDefinition(factoryId, productTypeId).orElse(null));
+    }
+
+    @GetMapping("/{productTypeId}/versions")
+    @Operation(summary = "读取某产品的全部 Workflow 版本历史(DRAFT + PUBLISHED), 按版本号倒序")
+    public ApiResponse<List<ProductProcessWorkflowVersionSummaryDTO>> listVersions(
+            @PathVariable String factoryId,
+            @PathVariable String productTypeId) {
+        return ApiResponse.success(service.listVersions(factoryId, productTypeId));
+    }
+
+    @GetMapping("/{productTypeId}/versions/{version}")
+    @Operation(summary = "只读: 读取某产品指定 definitionVersion 的完整 Workflow 图定义")
+    public ApiResponse<ProductProcessWorkflowDTO> getVersion(
+            @PathVariable String factoryId,
+            @PathVariable String productTypeId,
+            @PathVariable Integer version) {
+        return ApiResponse.success(service.getVersion(factoryId, productTypeId, version));
     }
 
     @RequirePermission({"production:read_write"})

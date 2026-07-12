@@ -32,6 +32,8 @@ vi.mock('../workflowApi', () => ({
   saveProductProcessWorkflowDraft: apiMocks.saveProductProcessWorkflowDraft,
   activateProductProcessWorkflow: apiMocks.activateProductProcessWorkflow,
   deactivateProductProcessWorkflow: apiMocks.deactivateProductProcessWorkflow,
+  listProductProcessWorkflowVersions: vi.fn().mockResolvedValue({ success: true, data: [] }),
+  getProductProcessWorkflowVersion: vi.fn().mockResolvedValue({ success: true, data: null }),
 }));
 vi.mock('@vue-flow/core', async () => {
   const { defineComponent } = await import('vue');
@@ -80,7 +82,7 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     });
   });
 
-  it('publishing never activates and activation requires its own future-batches confirmation', async () => {
+  it('#12a: 发布即启用当前版本 (一步), 不再有单独的「启用版本」按钮', async () => {
     const wrapper = mountEditor();
     await flushPromises();
 
@@ -88,18 +90,12 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     await flushPromises();
 
     expect(apiMocks.publishProductProcessWorkflow).toHaveBeenCalledTimes(1);
-    expect(apiMocks.activateProductProcessWorkflow).not.toHaveBeenCalled();
-    expect(wrapper.get('[data-testid="activate-workflow"]').text()).toContain('启用版本 v2');
-
-    await wrapper.get('[data-testid="activate-workflow"]').trigger('click');
-    await flushPromises();
-
-    expect(ElMessageBox.confirm).toHaveBeenLastCalledWith(
-      expect.stringContaining('只影响之后新建的生产批次；正在生产的批次不会变化。'),
-      expect.any(String),
-      expect.any(Object),
-    );
+    // 发布成功后自动用发布出的版本 (id 44) 启用, 无需用户再点一次
     expect(apiMocks.activateProductProcessWorkflow).toHaveBeenCalledWith('F006', 44);
+    // 单独的「启用版本」按钮已移除
+    expect(wrapper.find('[data-testid="activate-workflow"]').exists()).toBe(false);
+    // 版本记录浏览按钮存在 (#12b)
+    expect(wrapper.find('[data-testid="browse-versions"]').exists()).toBe(true);
   });
 
   it('treats no activation as normal and ignores a stale activation response after product switch', async () => {
@@ -128,34 +124,8 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     expect(wrapper.get('[data-testid="activation-status"]').text()).not.toContain('v3');
   });
 
-  it('clears mutation loading when switching products before the old activation finishes', async () => {
-    const staleActivation = deferred<{
-      success: true;
-      data: ProductProcessWorkflowActivation;
-    }>();
-    apiMocks.getProductProcessWorkflow.mockImplementation(
-      (_factoryId: string, productTypeId: string) => Promise.resolve({
-        success: true,
-        data: definition(productTypeId, 'PUBLISHED', productTypeId === 'PT-A' ? 3 : 4,
-          productTypeId === 'PT-A' ? 43 : 44),
-      }),
-    );
-    apiMocks.activateProductProcessWorkflow.mockReturnValueOnce(staleActivation.promise);
-    const wrapper = mountEditor();
-    await flushPromises();
-
-    await wrapper.get('[data-testid="activate-workflow"]').trigger('click');
-    await flushPromises();
-    expect(wrapper.get('[data-testid="activate-workflow"]').attributes('loading')).toBe('true');
-
-    await wrapper.setProps({ productTypeId: 'PT-B', productName: 'Product B' });
-    await flushPromises();
-    staleActivation.resolve({ success: true, data: activation('PT-A', 43, 3) });
-    await flushPromises();
-
-    expect(wrapper.get('[data-testid="activate-workflow"]').text()).toContain('启用版本 v4');
-    expect(wrapper.get('[data-testid="activate-workflow"]').attributes('loading')).toBe('false');
-  });
+  // (移除) 旧「启用版本」独立按钮的 loading/generation 测试 —— #12a 已把启用并入发布,
+  // 不再有独立启用按钮, 该 UI 路径不存在。发布→启用的一步行为由上面第一个测试覆盖。
 });
 
 function mountEditor() {

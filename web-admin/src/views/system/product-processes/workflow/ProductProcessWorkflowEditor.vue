@@ -26,22 +26,18 @@
             type="primary"
             :disabled="!canEdit || !dirty"
             :loading="saving"
-            @click="saveDraft"
+            @click="() => saveDraft()"
           >保存草稿</el-button>
+          <!-- #12a: 发布版本 = 发布并启用当前版本 (一步); 不再有单独「启用版本」按钮 -->
           <el-button
             data-testid="publish-workflow"
             type="success"
             :disabled="!canEdit || flowNodes.length === 0"
             :loading="publishing"
             @click="publishWorkflow"
-          >发布版本</el-button>
-          <el-button
-            data-testid="activate-workflow"
-            type="primary"
-            :disabled="!canEdit || definition?.status !== 'PUBLISHED' || !definition?.id"
-            :loading="activationChanging"
-            @click="activateWorkflow"
-          >启用版本 v{{ definition?.version ?? '-' }}</el-button>
+          >发布并启用</el-button>
+          <!-- #12b: 版本浏览 (查看之前发布过的版本) -->
+          <el-button data-testid="browse-versions" :disabled="!productTypeId" @click="openVersionDrawer">版本记录</el-button>
           <el-button
             v-if="activation?.enabled"
             data-testid="deactivate-workflow"
@@ -55,6 +51,12 @@
       </div>
 
       <div ref="canvasRef" class="canvas-shell" :class="{ 'is-connecting': !!connectingFromKind }" v-loading="loading">
+        <!-- #12b: 历史版本预览横幅 (只读, 不会自动保存覆盖草稿) -->
+        <div v-if="previewingVersion !== null" class="version-preview-bar" data-testid="version-preview-bar">
+          <span>正在预览历史版本 <strong>v{{ previewingVersion }}</strong>（只读，不会覆盖当前草稿）</span>
+          <el-button size="small" type="primary" @click="restorePreviewAsDraft">恢复为当前草稿</el-button>
+          <el-button size="small" @click="exitVersionPreview">退出预览</el-button>
+        </div>
         <el-empty v-if="!productTypeId" description="请先选择产品" :image-size="90" />
         <VueFlow
           v-else
@@ -295,6 +297,24 @@
     >
       <BomUnifiedPanel v-if="bomDrawerVisible" />
     </el-drawer>
+
+    <!-- #12b: 版本记录抽屉 (只读浏览之前发布过的版本) -->
+    <el-drawer v-model="versionDrawerVisible" title="版本记录" direction="rtl" size="440px">
+      <div v-loading="versionLoading" class="version-list">
+        <el-empty v-if="!versionList.length && !versionLoading" description="暂无版本记录" :image-size="80" />
+        <div v-for="v in versionList" :key="v.definitionVersion" class="version-row" data-testid="version-row">
+          <div class="version-meta">
+            <span class="version-num">v{{ v.definitionVersion }}</span>
+            <el-tag size="small" :type="v.status === 'PUBLISHED' ? 'success' : 'info'">
+              {{ v.status === 'PUBLISHED' ? '已发布' : '草稿' }}
+            </el-tag>
+            <el-tag v-if="v.active" size="small" type="warning">已启用</el-tag>
+            <span class="version-time">{{ (v.updatedAt || '').replace('T', ' ').slice(0, 16) }}</span>
+          </div>
+          <el-button size="small" @click="previewVersion(v)">查看</el-button>
+        </div>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -331,8 +351,11 @@ import {
   deactivateProductProcessWorkflow,
   getProductProcessWorkflow,
   getProductProcessWorkflowActivation,
+  getProductProcessWorkflowVersion,
+  listProductProcessWorkflowVersions,
   publishProductProcessWorkflow,
   saveProductProcessWorkflowDraft,
+  type WorkflowVersionSummary,
 } from './workflowApi';
 import {
   applyWorkflowPatches,
@@ -427,6 +450,11 @@ let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
 // #10: BOM 配置抽屉 (右侧滑出, 不跳转页面, 关闭即回工序配置, 避免丢失未保存草稿)
 const bomDrawerVisible = ref(false);
 const BomUnifiedPanel = defineAsyncComponent(() => import('@/views/production/bom-unified/index.vue'));
+// #12b: 版本记录浏览 (只读查看之前发布过的版本); previewingVersion 非空时 = 正在预览历史版本
+const versionDrawerVisible = ref(false);
+const versionList = ref<WorkflowVersionSummary[]>([]);
+const versionLoading = ref(false);
+const previewingVersion = ref<number | null>(null);
 const history = ref<ProductProcessWorkflowDefinition[]>([]);
 const future = ref<ProductProcessWorkflowDefinition[]>([]);
 const dragStartSnapshot = ref<ProductProcessWorkflowDefinition | null>(null);
@@ -589,7 +617,8 @@ function scheduleAutoSave(): void {
   if (autoSaveTimer) clearTimeout(autoSaveTimer);
   autoSaveTimer = setTimeout(() => {
     autoSaveTimer = null;
-    if (!dirty.value || saving.value || !canEdit.value) return;
+    // 预览历史版本时绝不自动保存 (否则会把旧版本写回覆盖当前草稿)
+    if (!dirty.value || saving.value || !canEdit.value || previewingVersion.value !== null) return;
     void saveDraft({ silent: true, preserveHistory: true });
   }, AUTO_SAVE_DELAY);
 }
@@ -601,6 +630,49 @@ function openBomDrawer(): void {
 }
 async function onBomDrawerClosed(): Promise<void> {
   await loadProductBom();
+}
+
+// #12b: 版本记录浏览
+async function openVersionDrawer(): Promise<void> {
+  const identity = currentLoadedIdentity();
+  if (!identity) return;
+  versionDrawerVisible.value = true;
+  versionLoading.value = true;
+  try {
+    const resp = await listProductProcessWorkflowVersions(identity.factoryId, identity.productTypeId);
+    versionList.value = resp.success && Array.isArray(resp.data) ? resp.data : [];
+  } catch (error) {
+    console.error('[ProductProcessWorkflow] listVersions failed', error);
+    versionList.value = [];
+  } finally {
+    versionLoading.value = false;
+  }
+}
+async function previewVersion(v: WorkflowVersionSummary): Promise<void> {
+  const identity = currentLoadedIdentity();
+  if (!identity) return;
+  try {
+    const resp = await getProductProcessWorkflowVersion(identity.factoryId, identity.productTypeId, v.definitionVersion);
+    if (!resp.success || !resp.data) { ElMessage.error('加载该版本失败'); return; }
+    hydrate(resp.data);
+    previewingVersion.value = v.definitionVersion;
+    dirty.value = false; // 预览历史版本不算改动, 不触发自动保存 (否则会把旧版覆盖当前草稿)
+    versionDrawerVisible.value = false;
+    await fitCanvas();
+  } catch (error) {
+    console.error('[ProductProcessWorkflow] getVersion failed', error);
+  }
+}
+async function exitVersionPreview(): Promise<void> {
+  previewingVersion.value = null;
+  await loadDefinition(); // 回到当前草稿/最新版本
+  await fitCanvas();
+}
+function restorePreviewAsDraft(): void {
+  // 把正在预览的历史版本内容作为新草稿 (标 dirty → 自动保存写回 draft)
+  previewingVersion.value = null;
+  dirty.value = true;
+  ElMessage.success('已将该历史版本恢复为当前草稿，正在自动保存');
 }
 
 watch(() => [props.factoryId, props.productTypeId] as const, async (next, previous) => {
@@ -1577,7 +1649,19 @@ async function publishWorkflow(): Promise<void> {
     if (!definitionMatchesIdentity(response.data, identity)) return;
     hydrate(response.data);
     dirty.value = false;
-    ElMessage.success('Workflow 版本已发布');
+    // #12a: 发布即启用当前版本 (一步完成), 不再需要单独的「启用版本」按钮
+    const publishedId = response.data.id;
+    if (publishedId) {
+      try {
+        const actResp = await activateProductProcessWorkflow(identity.factoryId, publishedId);
+        if (actResp.success && actResp.data && activationMatchesIdentity(actResp.data, identity)) {
+          activation.value = actResp.data;
+        }
+      } catch (actErr) {
+        console.error('[ProductProcessWorkflow] publish→activate failed', actErr);
+      }
+    }
+    ElMessage.success('Workflow 版本已发布并启用');
   } catch (error) {
     if (generation !== publishGeneration || !isLoadedIdentityCurrent(identity)) return;
     if (isWorkflowConflict(error)) {
@@ -1800,6 +1884,21 @@ function toggleAI(): void {
   stroke-width: 3 !important;
 }
 .canvas-shell.is-connecting { cursor: crosshair; }
+/* #12b: 历史版本预览横幅 + 版本列表行 */
+.version-preview-bar {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 30;
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 16px; background: #fdf6ec; border-bottom: 1px solid #f5dab1;
+  font-size: 13px; color: #b88230;
+}
+.version-list { display: flex; flex-direction: column; gap: 8px; }
+.version-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px; border: 1px solid #ebeef5; border-radius: 8px;
+}
+.version-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.version-num { font-weight: 700; color: #1a2332; }
+.version-time { font-size: 12px; color: #909399; }
 /* #9: 选中连线的浮动删除条 */
 .edge-delete-bar {
   position: absolute;

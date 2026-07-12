@@ -4,8 +4,11 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
+import com.cretas.aims.dto.ProductProcessWorkflowVersionSummaryDTO;
 import com.cretas.aims.entity.ProductProcessWorkflow;
+import com.cretas.aims.entity.ProductProcessWorkflowActivation;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.ProductProcessWorkflowActivationRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.ProductProcessWorkflowService;
@@ -17,12 +20,14 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
 public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflowService {
 
     private final ProductProcessWorkflowRepository repository;
+    private final ProductProcessWorkflowActivationRepository activationRepository;
     private final ObjectMapper objectMapper;
     private final ProductProcessWorkflowValidator validator;
     private final ProductProcessWorkflowCatalogValidator catalogValidator;
@@ -88,6 +93,47 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         catalogValidator.validateForPublish(factoryId, productTypeId, definition);
         draft.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
         return toDTO(repository.saveAndFlush(draft));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ProductProcessWorkflowVersionSummaryDTO> listVersions(String factoryId, String productTypeId) {
+        requireOwningProduct(factoryId, productTypeId);
+        Optional<ProductProcessWorkflowActivation> activation = activationRepository
+                .findByFactoryIdAndProductTypeId(factoryId, productTypeId);
+        List<ProductProcessWorkflow> rows = repository
+                .findByFactoryIdAndProductTypeIdOrderByDefinitionVersionDesc(factoryId, productTypeId);
+        return rows.stream()
+                .map(row -> toVersionSummaryDTO(row, activation))
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ProductProcessWorkflowDTO getVersion(String factoryId, String productTypeId, Integer definitionVersion) {
+        requireOwningProduct(factoryId, productTypeId);
+        ProductProcessWorkflow row = repository
+                .findFirstByFactoryIdAndProductTypeIdAndDefinitionVersion(factoryId, productTypeId, definitionVersion)
+                .orElseThrow(() -> new BusinessException(
+                                404, "该产品不存在 Workflow 版本: " + definitionVersion)
+                        .withCode("PRODUCT_PROCESS_WORKFLOW_VERSION_NOT_FOUND")
+                        .withHint("请从版本历史列表中选择一个存在的版本号")
+                        .withSeverity("warning"));
+        return toDTO(row);
+    }
+
+    private ProductProcessWorkflowVersionSummaryDTO toVersionSummaryDTO(
+            ProductProcessWorkflow row,
+            Optional<ProductProcessWorkflowActivation> activation) {
+        boolean active = activation
+                .filter(a -> Boolean.TRUE.equals(a.getEnabled()))
+                .map(a -> row.getId().equals(a.getActiveWorkflowId()))
+                .orElse(false);
+        return new ProductProcessWorkflowVersionSummaryDTO(
+                row.getDefinitionVersion(),
+                row.getStatus().name(),
+                row.getUpdatedAt(),
+                active);
     }
 
     private Optional<ProductProcessWorkflow> find(

@@ -41,6 +41,30 @@ export function publishProductProcessWorkflow(
   );
 }
 
+// #12: 版本历史 (只读浏览之前版本)。历史已作为多行持久化 (每次发布留一 PUBLISHED 行)。
+export interface WorkflowVersionSummary {
+  definitionVersion: number;
+  status: 'DRAFT' | 'PUBLISHED';
+  updatedAt: string | null;
+  active: boolean;
+}
+
+export function listProductProcessWorkflowVersions(factoryId: string, productTypeId: string) {
+  return get<WorkflowVersionSummary[]>(
+    `/${factoryId}/product-process-workflows/${productTypeId}/versions`,
+  );
+}
+
+export function getProductProcessWorkflowVersion(
+  factoryId: string,
+  productTypeId: string,
+  version: number,
+) {
+  return get<ProductProcessWorkflowDefinition>(
+    `/${factoryId}/product-process-workflows/${productTypeId}/versions/${version}`,
+  );
+}
+
 export function getProductProcessWorkflowActivation(
   factoryId: string,
   productTypeId: string,
