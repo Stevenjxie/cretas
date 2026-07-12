@@ -176,6 +176,12 @@ onBeforeUnmount(() => {
   padding: 8px;
   border-radius: var(--radius-sm, 6px);
   transition: all 0.2s;
+  // 修复: flex 布局下 el-icon 的 svg 只继承 height:1em, width 塌成 ~2px → 图标不可见 (同 AppHeader/ReminderBell)。
+  :deep(svg) {
+    width: 1em;
+    height: 1em;
+    flex-shrink: 0;
+  }
   &:hover {
     background-color: var(--color-bg-hover, #EDF2F7);
     color: var(--color-primary, #1B65A8);
