@@ -195,10 +195,21 @@ function drawTripRoute(
   });
 }
 
+// 首次 loadAmap 失败(瞬时网络抖动 / 快速刷新打断脚本请求)时等一下重试一次, 再决定回落 SVG,
+// 避免偶发失败就永久掉到示意图(loadAmap 内部失败已置空缓存, 可重试)。
+async function loadAmapWithRetry(): Promise<AMapNamespace> {
+  try {
+    return await loadAmap();
+  } catch {
+    await new Promise((r) => setTimeout(r, 600));
+    return await loadAmap();
+  }
+}
+
 onMounted(async () => {
   if (!useAmap.value || !mapEl.value) return;
   try {
-    amap = await loadAmap();
+    amap = await loadAmapWithRetry();
     map = new amap.Map(mapEl.value, {
       zoom: 11,
       center: DEPOT_LNGLAT,
@@ -212,8 +223,9 @@ onMounted(async () => {
     // 修复「构造时容器高度为 0 → 瓦片一直不画 → 白色网格」的经典高德 bug。
     ro = new ResizeObserver(() => { if (map) map.resize(); });
     ro.observe(mapEl.value);
-    // 兜底：极端情况下 complete 未触发（缓存等），4s 后也撤遮罩，避免永久转圈。
-    readyTimer = window.setTimeout(() => { mapReady.value = true; }, 4000);
+    // 兜底：瓦片慢或 complete 未触发时，2.5s 后也撤遮罩，先露出(可能部分加载的)真实地图，
+    // 别让加载遮罩一直挡着显得卡。
+    readyTimer = window.setTimeout(() => { mapReady.value = true; }, 2500);
     renderOverlays();
     // 基础地图已出来后，后台懒加载驾车规划插件（不阻塞首屏）——供极少数缺 roadPath 车次实时补线兜底。
     void ensureDriving().then((ok) => { if (ok && map) renderOverlays(); });

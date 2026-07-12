@@ -86,6 +86,10 @@ onMounted(async () => {
   await state.restore(planIdFromQuery);
   if (stepFromQuery && (WORKBENCH_STEPS as readonly string[]).includes(stepFromQuery)) {
     state.activeStep.value = stepFromQuery as WorkbenchStep;
+  } else if (!planIdFromQuery) {
+    // 默认打开(无 URL step 且非 planId 深链): 从第一步「导入订单」开始, 不因自动恢复了最近计划
+    // 就直接跳到第二步「查看路线」。刷新时 URL 带 step → 上面分支停在原步。
+    state.activeStep.value = 'import';
   }
   await nextTick();
   recomputeMapRowHeight();
