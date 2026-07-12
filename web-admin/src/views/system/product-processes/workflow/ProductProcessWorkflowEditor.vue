@@ -54,7 +54,7 @@
         </div>
       </div>
 
-      <div class="canvas-shell" v-loading="loading">
+      <div ref="canvasRef" class="canvas-shell" :class="{ 'is-connecting': !!connectingFromKind }" v-loading="loading">
         <el-empty v-if="!productTypeId" description="请先选择产品" :image-size="90" />
         <VueFlow
           v-else
@@ -71,10 +71,15 @@
           :nodes-connectable="canEdit"
           :snap-to-grid="true"
           :snap-grid="[16, 16]"
+          :connection-radius="32"
+          :is-valid-connection="isValidConnection"
           :default-viewport="definition?.viewport || { x: 0, y: 0, zoom: 1 }"
           @connect="onConnect"
+          @connect-start="onConnectStart"
+          @connect-end="onConnectEnd"
+          @edge-click="onEdgeClick"
           @node-click="onNodeClick"
-          @pane-click="selectedNodeId = ''"
+          @pane-click="selectedNodeId = ''; selectedEdgeId = ''"
           @node-drag-start="onNodeDragStart"
           @node-drag-stop="onNodeDragStop"
           @viewport-change-end="onViewportChangeEnd"
@@ -88,6 +93,7 @@
               :data="slotProps.data"
               :selected="slotProps.selected"
               :can-write="canEdit"
+              :connecting-from-kind="connectingFromKind"
               :raw-material-options="rawMaterialOptions"
               :bom-raw-material-ids="bomRawMaterialIdList"
               :semi-options="semiFinishedSkuOptions"
@@ -103,6 +109,7 @@
               :data="slotProps.data"
               :selected="slotProps.selected"
               :can-write="canEdit"
+              :connecting-from-kind="connectingFromKind"
               :semi-options="semiFinishedSkuOptions"
               :finished-options="finishedGoodSkuOptions"
               @update="(patch) => updateProcessData(slotProps.id, patch)"
@@ -208,7 +215,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import gsap from 'gsap';
+import { prefersReducedMotion } from '@/utils/motion/prefersReducedMotion';
 import {
   MarkerType,
   VueFlow,
@@ -245,6 +254,7 @@ import {
   autoLayoutWorkflow,
   createProcessBranch,
   createWorkflowFromLegacy,
+  evaluateWorkflowConnection,
   snapPosition,
   toPlainWorkflowValue,
   validateWorkflow,
@@ -323,6 +333,11 @@ const publishing = ref(false);
 const activationChanging = ref(false);
 const dirty = ref(false);
 const selectedNodeId = ref('');
+// #8 拖拽连线态: connectingFromKind 驱动画布上非法目标 cell 灰化; selectedEdgeId 支持连错删边
+const connectingFromKind = ref<'' | 'MATERIAL' | 'PROCESS'>('');
+const selectedEdgeId = ref('');
+const canvasRef = ref<HTMLElement | null>(null);
+let gsapCtx: gsap.Context | null = null;
 const history = ref<ProductProcessWorkflowDefinition[]>([]);
 const future = ref<ProductProcessWorkflowDefinition[]>([]);
 const dragStartSnapshot = ref<ProductProcessWorkflowDefinition | null>(null);
@@ -411,7 +426,16 @@ const sourceMaterialLabel = computed(() => {
 
 onMounted(async () => {
   aiCollapsed.value = localStorage.getItem(aiStorageKey.value) === 'true';
+  // #8: GSAP context 作用域化 (吸附脉冲), 卸载时 revert; 键盘删边监听
+  gsapCtx = gsap.context(() => {}, canvasRef.value || undefined);
+  window.addEventListener('keydown', onEditorKeydown);
   await Promise.all([loadCatalogs(), loadDefinition(), loadActivation(), loadProductBom()]);
+});
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', onEditorKeydown);
+  gsapCtx?.revert();
+  gsapCtx = null;
 });
 
 watch(() => [props.factoryId, props.productTypeId] as const, async (next, previous) => {
@@ -767,17 +791,145 @@ function onViewportChangeEnd(viewport: ViewportTransform): void {
   dirty.value = true;
 }
 
+// ── 手动拖拽连线 (#8) ────────────────────────────────────────────────
+// 拖线不是"加一条边"就完事——必须和「+来源/+产出」按钮产出一致的
+// 端口↔物料模型 (process.ports 带 direction + materialNodeId, 边 anchor 到
+// port.id), 否则序列化/hydrate/报工会错。物料→工序 = 新增 INPUT 端口 (合流);
+// 工序→物料 = 新增 OUTPUT 端口 (产出)。均绑定"已存在"的物料 Cell, 不新建物料。
+
+function nodeKind(node: Node | undefined): string {
+  return String((node?.data as { kind?: string } | undefined)?.kind || '');
+}
+
+/** 校验一条待建连接是否合法 (Vue Flow 拖拽时实时调用, 非法则不允许落下)。
+ *  类型规则委托给纯函数 evaluateWorkflowConnection (workflowModel, 已单测)。 */
+function isValidConnection(connection: Connection): boolean {
+  const source = flowNodes.value.find((n) => n.id === connection.source);
+  const target = flowNodes.value.find((n) => n.id === connection.target);
+  if (!source || !target) return false;
+  return evaluateWorkflowConnection(nodeKind(source), nodeKind(target), source.id === target.id).valid;
+}
+
+function attachInputBinding(process: Node, material: Node): boolean {
+  const data = process.data as ProcessNodeData & { kind: 'PROCESS' };
+  if (data.ports.some((p) => p.direction === 'INPUT' && p.materialNodeId === material.id)) return false;
+  const inputCount = data.ports.filter((p) => p.direction === 'INPUT').length;
+  const portId = `input:${nextGraphIdSeed()}`;
+  const unit = String((material.data as { baseUnit?: string })?.baseUnit || data.inputUnit);
+  data.ports = [...data.ports, { id: portId, direction: 'INPUT', materialNodeId: material.id, unit, ordinal: inputCount }];
+  flowEdges.value.push(flowEdge(material.id, 'output', process.id, portId));
+  return true;
+}
+
+function attachOutputBinding(process: Node, material: Node): boolean {
+  const data = process.data as ProcessNodeData & { kind: 'PROCESS' };
+  if (data.ports.some((p) => p.direction === 'OUTPUT' && p.materialNodeId === material.id)) return false;
+  const outputCount = data.ports.filter((p) => p.direction === 'OUTPUT').length;
+  const portId = `output:${nextGraphIdSeed()}`;
+  const materialKind = nodeKind(material) as Exclude<ProductProcessNodeKind, 'PROCESS'>;
+  const unit = String((material.data as { baseUnit?: string })?.baseUnit || data.outputUnit);
+  data.ports = [
+    ...data.ports,
+    { id: portId, direction: 'OUTPUT', materialNodeId: material.id, materialKind, unit, ordinal: outputCount },
+  ];
+  flowEdges.value.push(flowEdge(process.id, portId, material.id, 'input'));
+  return true;
+}
+
 function onConnect(connection: Connection): void {
-  if (!canEdit.value || !connection.source || !connection.target) return;
+  if (!canEdit.value || !isValidConnection(connection)) return;
+  const source = flowNodes.value.find((n) => n.id === connection.source);
+  const target = flowNodes.value.find((n) => n.id === connection.target);
+  if (!source || !target) return;
+  const materialToProcess = nodeKind(source) !== 'PROCESS';
+  const process = materialToProcess ? target : source;
+  const material = materialToProcess ? source : target;
+  // 先判重, 避免空 history 记录
+  const dataPorts = (process.data as ProcessNodeData).ports;
+  const dir = materialToProcess ? 'INPUT' : 'OUTPUT';
+  if (dataPorts.some((p) => p.direction === dir && p.materialNodeId === material.id)) {
+    ElMessage.info(materialToProcess ? '该物料已是本工序的投入' : '该物料已是本工序的产出');
+    return;
+  }
+  let boundPortId = '';
   mutate(() => {
-    flowEdges.value.push({
-      id: `edge:${connection.source}:${connection.sourceHandle || 'output'}:${connection.target}:${connection.targetHandle || 'input'}:${nextGraphIdSeed()}`,
-      source: connection.source,
-      target: connection.target,
-      sourceHandle: connection.sourceHandle || 'output',
-      targetHandle: connection.targetHandle || 'input',
-      markerEnd: MarkerType.ArrowClosed,
-      style: { stroke: '#1b65a8', strokeWidth: 2 },
+    if (materialToProcess) attachInputBinding(process, material);
+    else attachOutputBinding(process, material);
+    const ports = (process.data as ProcessNodeData).ports;
+    boundPortId = ports[ports.length - 1]?.id || '';
+  });
+  connectionMadeThisDrag = true;
+  pulseHandle(process.id, boundPortId);
+}
+
+let connectingFromNodeId = '';
+let connectionMadeThisDrag = false;
+
+function onConnectStart(params: { nodeId?: string | null } | undefined): void {
+  const node = flowNodes.value.find((n) => n.id === params?.nodeId);
+  connectingFromKind.value = nodeKind(node) === 'PROCESS' ? 'PROCESS' : node ? 'MATERIAL' : '';
+  connectingFromNodeId = params?.nodeId || '';
+  connectionMadeThisDrag = false;
+}
+
+// 8d: 从物料 Cell 拖到「空白画布」松手 = 想接着往下做 → 引导"增加后续工序"
+// (复用现有 dialog, 用户仍要选工序, 不盲目创建)。保守触发:
+//  - 只在真的落在空白 pane (不是落在某个 cell 上, 哪怕非法) 才触发;
+//  - 只处理 物料→空白 这个"续链"手势; 工序→空白 不自动建 (风险高, 有 +产出按钮兜底)。
+function onConnectEnd(event?: MouseEvent | TouchEvent): void {
+  const fromKind = connectingFromKind.value;
+  const fromId = connectingFromNodeId;
+  const made = connectionMadeThisDrag;
+  connectingFromKind.value = '';
+  connectingFromNodeId = '';
+  if (made || !canEdit.value || !fromId || fromKind !== 'MATERIAL') return;
+  const target = event?.target as HTMLElement | null;
+  if (target?.closest?.('.vue-flow__node')) return; // 落在 cell 上(非法目标) 不触发续链
+  openAddProcess(fromId);
+}
+
+// ── 连错可删 ────────────────────────────────────────────────
+function onEdgeClick({ edge }: { edge: Edge }): void {
+  selectedEdgeId.value = edge.id;
+}
+
+/** 删除一条边, 并同步解绑对应的工序端口 (保持模型一致, 反向于 attach) */
+function removeEdgeById(edgeId: string): void {
+  if (!canEdit.value) return;
+  const edge = flowEdges.value.find((e) => e.id === edgeId);
+  if (!edge) return;
+  mutate(() => {
+    // 找到该边连的工序端 + 端口 id (INPUT: 边的 targetHandle=portId; OUTPUT: sourceHandle=portId)
+    const processNode = flowNodes.value.find((n) => nodeKind(n) === 'PROCESS' && (n.id === edge.source || n.id === edge.target));
+    if (processNode) {
+      const isOutput = processNode.id === edge.source;
+      const portId = isOutput ? edge.sourceHandle : edge.targetHandle;
+      const data = processNode.data as ProcessNodeData;
+      data.ports = data.ports.filter((p) => p.id !== portId);
+    }
+    flowEdges.value = flowEdges.value.filter((e) => e.id !== edgeId);
+  });
+  selectedEdgeId.value = '';
+}
+
+function onEditorKeydown(event: KeyboardEvent): void {
+  if ((event.key === 'Delete' || event.key === 'Backspace') && selectedEdgeId.value) {
+    const tag = (event.target as HTMLElement | null)?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return; // 输入框里删字不误删边
+    event.preventDefault();
+    removeEdgeById(selectedEdgeId.value);
+  }
+}
+
+/** 连接成功后对新端口 handle 做一次 scale 脉冲 (咬合反馈), 尊重 reduced-motion */
+function pulseHandle(processId: string, portId: string): void {
+  if (!portId || prefersReducedMotion() || !canvasRef.value) return;
+  nextTick(() => {
+    const el = canvasRef.value?.querySelector(`[data-nodeid="${processId}"] [data-handleid="${portId}"]`)
+      || canvasRef.value?.querySelector(`.vue-flow__handle[data-handleid="${portId}"]`);
+    if (!el) return;
+    gsapCtx?.add(() => {
+      gsap.fromTo(el, { scale: 1 }, { scale: 1.35, duration: 0.15, yoyo: true, repeat: 1, ease: 'power1.out', transformOrigin: 'center' });
     });
   });
 }
@@ -1434,6 +1586,13 @@ function toggleAI(): void {
 </script>
 
 <style scoped>
+/* #8: 选中的边高亮 (提示可按 Delete 删除) + 连线中光标 */
+.canvas-shell :deep(.vue-flow__edge.selected .vue-flow__edge-path) {
+  stroke: #f56c6c !important;
+  stroke-width: 3 !important;
+}
+.canvas-shell.is-connecting { cursor: crosshair; }
+
 /* 画布尽量占满视口高度(放大画布), 兼容列表落到页面最下方 */
 .workflow-editor { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 12px; min-height: calc(100vh - 200px); }
 .workflow-editor.ai-collapsed { grid-template-columns: minmax(0, 1fr) 44px; }

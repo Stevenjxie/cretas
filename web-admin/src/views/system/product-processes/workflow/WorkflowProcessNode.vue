@@ -1,7 +1,7 @@
 <template>
   <div
     class="process-node"
-    :class="{ selected }"
+    :class="{ selected, 'wf-dim': isConnectDimmed, 'wf-valid': isValidConnectTarget }"
     :style="processNodeStyle"
     @mouseenter="hovered = true"
     @mouseleave="hovered = false"
@@ -171,9 +171,16 @@ const props = defineProps<{
   data: ProcessNodeData;
   selected?: boolean;
   canWrite: boolean;
+  /** #8: 拖拽连线中源 cell 的类型；用于给非法目标 cell 灰化 */
+  connectingFromKind?: '' | 'MATERIAL' | 'PROCESS';
   semiOptions: WorkflowSkuPickerOption[];
   finishedOptions: WorkflowSkuPickerOption[];
 }>();
+
+// #8: 工序 Cell 只有在「物料拖向工序(投入)」时才是合法目标；「工序拖向物料」时
+// 工序互相之间非法 → 灰化。
+const isValidConnectTarget = computed(() => props.connectingFromKind === 'MATERIAL');
+const isConnectDimmed = computed(() => !!props.connectingFromKind && !isValidConnectTarget.value);
 
 const emit = defineEmits<{
   update: [patch: Partial<ProcessNodeData>];
@@ -260,6 +267,21 @@ const conversionHint = computed(() => {
 </script>
 
 <style scoped>
+/* #8 拖拽连线视觉: 灰化非法目标 / 高亮合法目标 / handle 悬停显现. 仅 opacity/transform. */
+.process-node { transition: opacity 150ms ease, box-shadow 150ms ease; }
+.process-node.wf-dim { opacity: 0.4; cursor: not-allowed; }
+.process-node.wf-valid { box-shadow: 0 0 0 2px #1b65a8, 0 0 12px rgba(27, 101, 168, 0.35); }
+.process-node :deep(.vue-flow__handle) {
+  width: 12px; height: 12px; opacity: 0.35;
+  transition: opacity 150ms ease, transform 120ms ease;
+}
+.process-node:hover :deep(.vue-flow__handle),
+.process-node.wf-valid :deep(.vue-flow__handle) { opacity: 1; }
+.process-node :deep(.vue-flow__handle):hover { transform: scale(1.3); cursor: crosshair; }
+@media (prefers-reduced-motion: reduce) {
+  .process-node, .process-node :deep(.vue-flow__handle) { transition: none; }
+}
+
 .process-node {
   position: relative;
   width: 390px; padding: 14px; border: 1px solid #b9d8f4; border-left: 4px solid #409eff;

@@ -1,5 +1,8 @@
 <template>
-  <div class="material-node" :class="[`kind-${kind.toLowerCase()}`, { selected }]">
+  <div
+    class="material-node"
+    :class="[`kind-${kind.toLowerCase()}`, { selected, 'wf-dim': isConnectDimmed, 'wf-valid': isValidConnectTarget }]"
+  >
     <Handle v-if="kind !== 'RAW_MATERIAL'" type="target" :position="Position.Left" id="input" />
     <Handle v-if="kind !== 'FINISHED_GOOD'" type="source" :position="Position.Right" id="output" />
 
@@ -85,6 +88,8 @@ const props = withDefaults(defineProps<{
   data: MaterialNodeData;
   selected?: boolean;
   canWrite: boolean;
+  /** #8: 拖拽连线中源 cell 的类型；用于给非法目标 cell 灰化 */
+  connectingFromKind?: '' | 'MATERIAL' | 'PROCESS';
   rawMaterialOptions: Array<{ id: string; name: string; unit?: string }>;
   /**
    * #3 (Steve 定: BOM 原料优先、可加其他): 该产品 BOM 原辅料清单里出现过的
@@ -98,8 +103,15 @@ const props = withDefaults(defineProps<{
   semiOptions: WorkflowSkuPickerOption[];
   finishedOptions: WorkflowSkuPickerOption[];
 }>(), {
+  connectingFromKind: '',
   bomRawMaterialIds: () => [],
 });
+
+// #8: 物料 Cell 只有在「工序拖向物料(产出)」且自身是半成品/成品时才是合法目标；
+// 「物料拖向工序」时物料互相之间都非法 → 灰化。
+const isValidConnectTarget = computed(() => props.connectingFromKind === 'PROCESS'
+  && (props.kind === 'SEMI_FINISHED' || props.kind === 'FINISHED_GOOD'));
+const isConnectDimmed = computed(() => !!props.connectingFromKind && !isValidConnectTarget.value);
 
 const emit = defineEmits<{
   addNext: [];
@@ -149,6 +161,21 @@ const kindMark = computed(() => ({
 </script>
 
 <style scoped>
+/* #8 拖拽连线视觉: 灰化非法目标 / 高亮合法目标 / handle 悬停显现. 仅 opacity/transform. */
+.material-node { transition: opacity 150ms ease, box-shadow 150ms ease; }
+.material-node.wf-dim { opacity: 0.4; cursor: not-allowed; }
+.material-node.wf-valid { box-shadow: 0 0 0 2px #1b65a8, 0 0 12px rgba(27, 101, 168, 0.35); }
+.material-node :deep(.vue-flow__handle) {
+  width: 12px; height: 12px; opacity: 0.35;
+  transition: opacity 150ms ease, transform 120ms ease;
+}
+.material-node:hover :deep(.vue-flow__handle),
+.material-node.wf-valid :deep(.vue-flow__handle) { opacity: 1; }
+.material-node :deep(.vue-flow__handle):hover { transform: scale(1.3); cursor: crosshair; }
+@media (prefers-reduced-motion: reduce) {
+  .material-node, .material-node :deep(.vue-flow__handle) { transition: none; }
+}
+
 .material-node {
   width: 210px;
   padding: 12px;

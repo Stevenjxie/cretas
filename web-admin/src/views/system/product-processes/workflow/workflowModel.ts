@@ -756,3 +756,30 @@ function hasCycle(definition: ProductProcessWorkflowDefinition): boolean {
   }
   return visited !== definition.nodes.length;
 }
+
+// ── #8 手动拖拽连线: 类型规则 (纯函数, 可单测) ──────────────────────────
+// 二分图: 物料 Cell(原料/半成品/成品) 与 工序 Cell 交替。合法连接只有两向:
+//   物料 → 工序 (作投入/合流)  ·  工序 → 物料(半成品/成品, 作产出)。
+// 物料↔物料、工序↔工序、自环、工序→原料 全部非法。
+export type WorkflowConnectionDirection = 'MATERIAL_TO_PROCESS' | 'PROCESS_TO_MATERIAL' | null;
+
+export interface WorkflowConnectionEval {
+  valid: boolean;
+  direction: WorkflowConnectionDirection;
+}
+
+export function evaluateWorkflowConnection(
+  sourceKind: string,
+  targetKind: string,
+  sameNode = false,
+): WorkflowConnectionEval {
+  if (sameNode || !sourceKind || !targetKind) return { valid: false, direction: null };
+  const materialToProcess = sourceKind !== 'PROCESS' && targetKind === 'PROCESS';
+  const processToMaterial = sourceKind === 'PROCESS' && targetKind !== 'PROCESS';
+  if (materialToProcess) return { valid: true, direction: 'MATERIAL_TO_PROCESS' };
+  if (processToMaterial) {
+    const canBeOutput = targetKind === 'SEMI_FINISHED' || targetKind === 'FINISHED_GOOD';
+    return { valid: canBeOutput, direction: canBeOutput ? 'PROCESS_TO_MATERIAL' : null };
+  }
+  return { valid: false, direction: null };
+}
