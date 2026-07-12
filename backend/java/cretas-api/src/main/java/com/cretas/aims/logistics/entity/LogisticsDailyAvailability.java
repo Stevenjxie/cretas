@@ -8,6 +8,7 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 import lombok.experimental.SuperBuilder;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import java.time.LocalDate;
@@ -25,6 +26,10 @@ import java.util.UUID;
  * <p>Maps to table {@code logistics_daily_availability} (V20261028_57)。同厂+同资源类型+同资源+
  * 同日期只允许一条覆盖记录 (DB {@code uq_lda_resource_date}, 部分索引 WHERE deleted_at IS NULL —
  * JPA 侧约束语义略严, 见 {@link LogisticsOrderBatch} 类注释同类说明)。
+ *
+ * <p>软删除: {@code deleted_at IS NULL} via @Where + @SQLDelete (per {@code BaseEntity} R68 note,
+ * @SQLDelete on @MappedSuperclass 不可靠传播, 需在每个子类显式声明, 否则 {@code repository.delete()}
+ * 会做物理硬删除, 跟 @Where 过滤 + 部分唯一索引的软删除语义不一致)。
  */
 @Entity
 @Table(name = "logistics_daily_availability",
@@ -35,6 +40,7 @@ import java.util.UUID;
         indexes = {
                 @Index(name = "idx_lda_factory_date", columnList = "factory_id, avail_date")
         })
+@SQLDelete(sql = "UPDATE logistics_daily_availability SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 @Data
 @EqualsAndHashCode(callSuper = true)

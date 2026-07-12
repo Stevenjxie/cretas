@@ -3,6 +3,8 @@ package com.cretas.aims.logistics.service.importjob.impl;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.logistics.dto.importjob.DeliveryOrderDto;
 import com.cretas.aims.logistics.dto.importjob.LogisticsOrderImportRow;
+import com.cretas.aims.logistics.dto.importjob.ManualOrderCreateRequest;
+import com.cretas.aims.logistics.dto.importjob.ManualOrderRow;
 import com.cretas.aims.logistics.dto.importjob.OrderBatchDto;
 import com.cretas.aims.logistics.dto.importjob.OrderImportPreviewRowDto;
 import com.cretas.aims.logistics.dto.importjob.PreviewResultDto;
@@ -124,6 +126,88 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
                     .withHint("请下载模板并至少填写一行订单");
         }
 
+        return buildPreviewFromRawRows(factoryId, rawRows, file.getOriginalFilename(), fingerprint, userId);
+    }
+
+    // ==================== Preview: manual (non-file) entry ====================
+
+    /**
+     * POST /order-import/manual — 前端表单收集的结构化行，映射为
+     * {@link LogisticsOrderImportRow} 后复用与 xlsx/csv 上传完全相同的
+     * {@link #buildPreviewFromRawRows} 流程 (逐行校验 + 批次/订单创建)，不重复实现校验逻辑。
+     */
+    @Override
+    @Transactional
+    public PreviewResultDto previewManual(String factoryId, ManualOrderCreateRequest request, Long userId) {
+        if (request == null || request.getRows() == null || request.getRows().isEmpty()) {
+            throw new BusinessException(400, "至少录入一行订单")
+                    .withHint("请至少填写一行订单信息后提交");
+        }
+
+        String businessDate = trim(request.getBusinessDate());
+        List<LogisticsOrderImportRow> rawRows = new ArrayList<>(request.getRows().size());
+        for (ManualOrderRow r : request.getRows()) {
+            LogisticsOrderImportRow row = new LogisticsOrderImportRow();
+            row.setBusinessDate(businessDate);
+            row.setStoreCode(r.getStoreCode());
+            row.setStoreName(r.getStoreName());
+            row.setAddress(r.getAddress());
+            row.setPieces(r.getPieces());
+            row.setBoxes(r.getBoxes());
+            row.setWeightKg(r.getWeightKg());
+            row.setVolumeCbm(r.getVolumeCbm());
+            row.setWindowStart(r.getWindowStart());
+            row.setWindowEnd(r.getWindowEnd());
+            row.setLongitude(r.getLongitude());
+            row.setLatitude(r.getLatitude());
+            row.setAreaCode(r.getAreaCode());
+            rawRows.add(row);
+        }
+
+        String fingerprint = manualFingerprint(businessDate, rawRows);
+        return buildPreviewFromRawRows(factoryId, rawRows, "手动录入", fingerprint, userId);
+    }
+
+    /**
+     * {@code sha256(businessDate + 逐行逐列拼接)} —— manual 路径没有文件字节可指纹，
+     * 用与 {@link #preview} 相同精神的"内容指纹"复刻幂等语义 (相同内容重复提交 →
+     * 复用既有 PREVIEWED 批次，见 {@link #buildPreviewFromRawRows})。
+     */
+    private static String manualFingerprint(String businessDate, List<LogisticsOrderImportRow> rows) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(nz(businessDate));
+        for (LogisticsOrderImportRow r : rows) {
+            sb.append('|')
+                    .append(nz(r.getStoreCode())).append(',')
+                    .append(nz(r.getStoreName())).append(',')
+                    .append(nz(r.getAddress())).append(',')
+                    .append(nz(r.getPieces())).append(',')
+                    .append(nz(r.getBoxes())).append(',')
+                    .append(nz(r.getWeightKg())).append(',')
+                    .append(nz(r.getVolumeCbm())).append(',')
+                    .append(nz(r.getWindowStart())).append(',')
+                    .append(nz(r.getWindowEnd())).append(',')
+                    .append(nz(r.getLongitude())).append(',')
+                    .append(nz(r.getLatitude())).append(',')
+                    .append(nz(r.getAreaCode()));
+        }
+        return sha256Hex(sb.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
+    // ==================== Preview: shared core (xlsx/csv + manual) ====================
+
+    /**
+     * xlsx/csv 上传与手动录入共享的核心流程：逐行校验 → 幂等 upsert 批次(PREVIEWED) →
+     * 落库有效行 → 返回 {@link PreviewResultDto}。两条入口路径在此之前各自产出
+     * {@code rawRows} + {@code fingerprint} 的方式不同 (文件字节 sha256 vs 内容拼接
+     * sha256)，此后逻辑必须完全一致，不允许分叉 (spec §8.2 / handoff §11.1 两条路径
+     * 校验规则/批次字段/返回 DTO 形状一致)。
+     *
+     * @param sourceLabel 批次 {@code sourceFilename} 字段的值 —— 文件路径传原始文件名，
+     *                    manual 路径传 "手动录入" 固定标签。
+     */
+    private PreviewResultDto buildPreviewFromRawRows(String factoryId, List<LogisticsOrderImportRow> rawRows,
+            String sourceLabel, String fingerprint, Long userId) {
         // ---- 逐行校验 ----
         Set<String> seenStoreCodes = new HashSet<>();
         Set<String> seenFullRows = new HashSet<>();
@@ -266,7 +350,7 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
                     .factoryId(factoryId)
                     .businessDate(resolvedBusinessDate)
                     .batchNumber(generateBatchNumber(factoryId, resolvedBusinessDate))
-                    .sourceFilename(file.getOriginalFilename())
+                    .sourceFilename(sourceLabel)
                     .sourceFingerprint(fingerprint)
                     .status(OrderBatchStatus.PREVIEWED)
                     .totalRows(totalRows)
@@ -280,7 +364,7 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
             batch.setTotalRows(totalRows);
             batch.setValidRows(validRows);
             batch.setErrorRows(errorRows);
-            batch.setSourceFilename(file.getOriginalFilename());
+            batch.setSourceFilename(sourceLabel);
             List<LogisticsDeliveryOrder> existingOrders =
                     deliveryOrderRepo.findByFactoryIdAndBatchId(factoryId, batch.getId());
             if (!existingOrders.isEmpty()) {
@@ -335,7 +419,7 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
         return PreviewResultDto.builder()
                 .jobId(batch.getId())
                 .businessDate(resolvedBusinessDate.toString())
-                .sourceFilename(file.getOriginalFilename())
+                .sourceFilename(sourceLabel)
                 .totalRows(totalRows)
                 .validRows(validRows)
                 .errorRows(errorRows)

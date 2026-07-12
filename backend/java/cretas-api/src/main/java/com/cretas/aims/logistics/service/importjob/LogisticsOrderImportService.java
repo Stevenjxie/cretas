@@ -1,6 +1,7 @@
 package com.cretas.aims.logistics.service.importjob;
 
 import com.cretas.aims.logistics.dto.importjob.DeliveryOrderDto;
+import com.cretas.aims.logistics.dto.importjob.ManualOrderCreateRequest;
 import com.cretas.aims.logistics.dto.importjob.OrderBatchDto;
 import com.cretas.aims.logistics.dto.importjob.PreviewResultDto;
 import org.springframework.data.domain.Page;
@@ -28,6 +29,14 @@ public interface LogisticsOrderImportService {
      * 不静默双写 (spec §2 决策 7)。
      */
     PreviewResultDto preview(String factoryId, MultipartFile file, Long userId);
+
+    /**
+     * POST /order-import/manual — 与 {@link #preview} 复用同一套逐行校验 + 批次/订单创建
+     * 流程，唯一差异是行来自前端表单 JSON 而非文件解析。返回值与 {@link #preview} 同形状
+     * ({@link PreviewResultDto})，同样需要随后调用 {@link #commit} 才会转为 COMMITTED
+     * 并触发地理编码。
+     */
+    PreviewResultDto previewManual(String factoryId, ManualOrderCreateRequest request, Long userId);
 
     /** POST /order-import/{jobId}/commit — 幂等状态翻转 PREVIEWED→COMMITTED。 */
     OrderBatchDto commit(String factoryId, String jobId);

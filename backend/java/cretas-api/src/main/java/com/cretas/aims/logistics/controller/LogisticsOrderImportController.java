@@ -3,6 +3,7 @@ package com.cretas.aims.logistics.controller;
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.logistics.dto.importjob.DeliveryOrderDto;
+import com.cretas.aims.logistics.dto.importjob.ManualOrderCreateRequest;
 import com.cretas.aims.logistics.dto.importjob.OrderBatchDto;
 import com.cretas.aims.logistics.dto.importjob.PreviewResultDto;
 import com.cretas.aims.logistics.dto.importjob.UpdateLocationRequest;
@@ -63,6 +64,18 @@ public class LogisticsOrderImportController {
         log.info("[LogisticsOrderImport] preview 请求 factory={} filename={} size={}",
                 factoryId, file != null ? file.getOriginalFilename() : null, file != null ? file.getSize() : 0);
         return ApiResponse.success("预检完成", importService.preview(factoryId, file, userId));
+    }
+
+    @RequireModule("scheduling")
+    @PostMapping("/order-import/manual")
+    @Operation(summary = "手动录入订单(非文件)", description = "从表单结构化行创建订单批次, 复用文件导入的校验+提交+地理编码流程; 返回同 preview 的 jobId 供 commit")
+    public ApiResponse<PreviewResultDto> previewManual(
+            @PathVariable String factoryId,
+            @RequestBody ManualOrderCreateRequest request) {
+        Long userId = SecurityUtils.getCurrentUserId();
+        log.info("[LogisticsOrderImport] previewManual 请求 factory={} rows={}",
+                factoryId, request != null && request.getRows() != null ? request.getRows().size() : 0);
+        return ApiResponse.success("录入完成", importService.previewManual(factoryId, request, userId));
     }
 
     @RequireModule("scheduling")
