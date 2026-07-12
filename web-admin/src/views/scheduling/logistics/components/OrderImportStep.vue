@@ -64,11 +64,16 @@ interface ManualRowForm {
   latitude: string; // 纬度
 }
 
-/** 后端必填字段(除自动生成的订单号/系统给的业务日期外) —— 防呆: 缺任一项高亮 + 禁用提交。 */
-const REQUIRED_FIELDS: Array<keyof ManualRowForm> = ['storeName', 'address', 'pieces', 'weightKg', 'volumeCbm'];
+/** 后端必填字段(除自动生成的订单号/系统给的业务日期/二选一的数量外) —— 防呆: 缺任一项高亮 + 禁用提交。 */
+const REQUIRED_FIELDS: Array<keyof ManualRowForm> = ['storeName', 'address', 'weightKg', 'volumeCbm'];
 const FIELD_LABELS: Record<string, string> = {
-  storeName: '门店名称', address: '配送地址', pieces: '件数', weightKg: '重量kg', volumeCbm: '体积m³',
+  storeName: '门店名称', address: '配送地址', weightKg: '重量kg', volumeCbm: '体积m³',
 };
+
+/** 数量 = 件数 / 箱数 二选一（门店下单数量通常就是"多少箱货"）——两个都空才算缺。 */
+function qtyMissing(r: ManualRowForm): boolean {
+  return !r.pieces.trim() && !r.boxes.trim();
+}
 
 // 门店名自动匹配 —— 输入即从门店主数据(记忆)里推测门店，选中后自动带出地址/区域(可再改)，
 // 坐标由后端按门店名从主数据复用，不再重复地理编码 (客户"录一次"核心诉求)。
@@ -162,11 +167,11 @@ function rowTouched(r: ManualRowForm): boolean {
     || r.windowStart.trim() || r.windowEnd.trim());
 }
 
-/** 已填行里，缺少任一必填字段的行号(1-based) —— 防呆预校验。 */
+/** 已填行里，缺少任一必填字段（或件数/箱数都空）的行号(1-based) —— 防呆预校验。 */
 const invalidRowNumbers = computed(() => {
   const bad: number[] = [];
   manualRows.value.forEach((r, i) => {
-    if (rowTouched(r) && REQUIRED_FIELDS.some((f) => !r[f].trim())) bad.push(i + 1);
+    if (rowTouched(r) && (REQUIRED_FIELDS.some((f) => !r[f].trim()) || qtyMissing(r))) bad.push(i + 1);
   });
   return bad;
 });
@@ -178,6 +183,7 @@ const firstMissingHint = computed(() => {
     if (!rowTouched(r)) continue;
     const miss = REQUIRED_FIELDS.find((f) => !r[f].trim());
     if (miss) return `第 ${i + 1} 行缺少「${FIELD_LABELS[miss]}」`;
+    if (qtyMissing(r)) return `第 ${i + 1} 行「件数、箱数」至少填一项`;
   }
   return '';
 });
@@ -301,7 +307,7 @@ watch(() => props.batch?.id, (id, prev) => {
           placeholder="选择日期"
           style="width: 150px"
         />
-        <span class="manual-hint">字段与 Excel 模板一致。门店名称、配送地址、件数、重量、体积必填；订单号留空自动生成，箱数留空按 0。</span>
+        <span class="manual-hint">门店名称、配送地址、重量、体积必填；件数 / 箱数至少填一项（门店下单数量，通常填箱数）；订单号留空自动生成。</span>
       </div>
 
       <el-table :data="manualRows" size="small" border class="manual-table">
@@ -332,11 +338,11 @@ watch(() => props.batch?.id, (id, prev) => {
             <el-input v-model="row.address" placeholder="如：苏州工业园区xx路1号" :class="{ 'missing': isRowMissing(row, 'address') }" />
           </template>
         </el-table-column>
-        <el-table-column label="件数 *" width="82">
-          <template #default="{ row }"><el-input v-model="row.pieces" placeholder="10" :class="{ 'missing': isRowMissing(row, 'pieces') }" /></template>
+        <el-table-column label="件数" width="82">
+          <template #default="{ row }"><el-input v-model="row.pieces" placeholder="件数" :class="{ 'missing': rowTouched(row) && qtyMissing(row) }" /></template>
         </el-table-column>
-        <el-table-column label="箱数" width="76">
-          <template #default="{ row }"><el-input v-model="row.boxes" placeholder="0" /></template>
+        <el-table-column label="箱数(数量) *" width="98">
+          <template #default="{ row }"><el-input v-model="row.boxes" placeholder="下单箱数" :class="{ 'missing': rowTouched(row) && qtyMissing(row) }" /></template>
         </el-table-column>
         <el-table-column label="重量kg *" width="90">
           <template #default="{ row }"><el-input v-model="row.weightKg" placeholder="80" :class="{ 'missing': isRowMissing(row, 'weightKg') }" /></template>

@@ -164,10 +164,9 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
             row.setStoreCode(isBlank(storeCode) ? "SM-" + compactDate + "-" + seq : storeCode);
             row.setStoreName(r.getStoreName());
             row.setAddress(r.getAddress());
+            // 数量：件数 / 箱数 二选一，直接透传，由 buildPreviewFromRawRows 统一校验（至少填一项）。
             row.setPieces(r.getPieces());
-            // 箱数与件数同为计数, 手动录入只要求填件数 → 箱数留空防呆默认 0 (减少重复录入负荷)。
-            String boxes = trim(r.getBoxes());
-            row.setBoxes(isBlank(boxes) ? "0" : boxes);
+            row.setBoxes(r.getBoxes());
             row.setWeightKg(r.getWeightKg());
             row.setVolumeCbm(r.getVolumeCbm());
             row.setWindowStart(r.getWindowStart());
@@ -255,8 +254,17 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
             String address = trim(raw.getAddress());
             if (isBlank(address)) errors.add(err(rowNumber, "配送地址", "必填字段为空"));
 
-            Integer pieces = parseNonNegativeInt(raw.getPieces(), rowNumber, "件数", errors);
-            Integer boxes = parseNonNegativeInt(raw.getBoxes(), rowNumber, "箱数", errors);
+            // 数量：件数 / 箱数 二选一（门店下单的数量通常就是"多少箱货"）——至少填一个即可，
+            // 另一个留空按 0。都留空才报错。填了的那个仍校验非负整数。
+            boolean piecesBlank = isBlank(raw.getPieces());
+            boolean boxesBlank = isBlank(raw.getBoxes());
+            // 注意用 Integer.valueOf(0) 而非字面量 0：三元 `cond ? 0 : Integer` 会把 Integer 分支拆箱成 int，
+            // 非数字时 parseNonNegativeInt 返回 null → 拆箱 NPE。装箱后保持 Integer，null 安全传递给校验。
+            Integer pieces = piecesBlank ? Integer.valueOf(0) : parseNonNegativeInt(raw.getPieces(), rowNumber, "件数", errors);
+            Integer boxes = boxesBlank ? Integer.valueOf(0) : parseNonNegativeInt(raw.getBoxes(), rowNumber, "箱数", errors);
+            if (piecesBlank && boxesBlank) {
+                errors.add(err(rowNumber, "数量", "件数、箱数至少填一项"));
+            }
             BigDecimal weightKg = parsePositiveDecimal(raw.getWeightKg(), rowNumber, "重量kg", errors);
             BigDecimal volumeCbm = parsePositiveDecimal(raw.getVolumeCbm(), rowNumber, "体积m³", errors);
 
