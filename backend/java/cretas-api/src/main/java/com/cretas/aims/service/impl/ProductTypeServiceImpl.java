@@ -3,6 +3,7 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.producttype.ProductTypeDTO;
+import com.cretas.aims.dto.producttype.ProductTypeOptionDTO;
 import com.cretas.aims.dto.producttype.ProductTypeSuggestionDTO;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.enums.TaxRate;
@@ -62,7 +63,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
 
     @Override
     @Transactional
-    @CacheEvict(value = "productTypes", key = "#factoryId")
+    @CacheEvict(value = {"productTypes", "productTypeOptions"}, key = "#factoryId")
     public ProductTypeDTO createProductType(String factoryId, ProductTypeDTO dto) {
         // T149 Part A: 区分「自动生成编号」与「用户手输编号」.
         // - 用户手输 (manual): 提前检查存在性 → 友好 409, 不重试 (用户本就该换一个).
@@ -228,7 +229,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
 
     @Override
     @Transactional
-    @CacheEvict(value = "productTypes", key = "#factoryId")
+    @CacheEvict(value = {"productTypes", "productTypeOptions"}, key = "#factoryId")
     public ProductTypeDTO updateProductType(String factoryId, String id, ProductTypeDTO dto) {
         log.info("更新产品类型: factoryId={}, id={}", factoryId, id);
 
@@ -309,7 +310,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
 
     @Override
     @Transactional
-    @CacheEvict(value = "productTypes", key = "#factoryId")
+    @CacheEvict(value = {"productTypes", "productTypeOptions"}, key = "#factoryId")
     public void deleteProductType(String factoryId, String id) {
         log.info("删除产品类型: factoryId={}, id={}", factoryId, id);
 
@@ -391,6 +392,14 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                 pageRequest.getSize(),
                 page.getTotalElements()
         );
+    }
+
+    @Override
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    @Cacheable(value = "productTypeOptions", key = "#factoryId")
+    public List<ProductTypeOptionDTO> getProductTypeOptions(String factoryId) {
+        log.info("获取产品类型选项列表 (精简): factoryId={}", factoryId);
+        return productTypeRepository.findOptionsByFactoryId(factoryId);
     }
 
     @Override

@@ -339,8 +339,10 @@ async function loadProducts() {
   productsLoading.value = true;
   try {
     const { get } = await import('@/api/request');
+    // 精简「选项」端点 (id/name/... 7 字段 + @Cacheable) — 避开重 DTO 的 ~3s/422KB 全量加载。
+    // 返回 {content} 信封与旧 size=1000 调用一致, 读法不变。
     const res = await get<{ content: Array<{ id: string; name: string }> }>(
-      `/${factoryId.value}/product-types`, { params: { page: 1, size: 1000 } }
+      `/${factoryId.value}/product-types/options`
     );
     if (res.success && res.data?.content) {
       products.value = res.data.content;

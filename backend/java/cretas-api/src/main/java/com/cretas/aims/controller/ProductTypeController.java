@@ -6,6 +6,7 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.producttype.ProductTypeDTO;
+import com.cretas.aims.dto.producttype.ProductTypeOptionDTO;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.ProductTypeService;
@@ -192,6 +193,26 @@ public class ProductTypeController {
         pageRequest.setSize(size);
         PageResponse<ProductTypeDTO> result = productTypeService.getProductTypes(
                 factoryId, productCategory, keyword, pageRequest);
+        return ApiResponse.success(result);
+    }
+
+    /**
+     * 获取产品类型「选项」精简列表 (下拉/SKU picker 专用, 高性能)。
+     *
+     * <p>产品-工序配置页顶部选择器 + workflow 编辑器 SKU picker 原本各拉一次
+     * {@code GET ?size=1000} 的重 DTO (47 字段 + 4 处 JSON 解析, F006 382 个 → 422KB / ~3s ×2)。
+     * 本端点用构造器投影只取 7 个标量字段 + {@code @Cacheable}, 加载从 ~3s 降到几百毫秒 (缓存命中更快)。
+     *
+     * <p>返回 {@link PageResponse} 单页全量, 保持与旧调用方 {@code res.data.content} 读法一致, 前端零改动读形状。
+     */
+    @GetMapping("/options")
+    @Operation(summary = "获取产品选项列表 (精简, 下拉专用)", description = "仅返回 id/name/code/unit/specification/productCategory/isActive, @Cacheable, 供选择器高速加载")
+    public ApiResponse<PageResponse<ProductTypeOptionDTO>> getProductTypeOptions(
+            @PathVariable @Parameter(description = "工厂ID") String factoryId) {
+        List<ProductTypeOptionDTO> options = productTypeService.getProductTypeOptions(factoryId);
+        // 保持 {content, totalElements} 信封, 与旧 size=1000 调用方读法一致 (单页全量)。
+        PageResponse<ProductTypeOptionDTO> result = PageResponse.of(
+                options, 1, Math.max(1, options.size()), (long) options.size());
         return ApiResponse.success(result);
     }
 

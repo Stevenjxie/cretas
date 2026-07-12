@@ -39,6 +39,18 @@ public interface ProductTypeRepository extends JpaRepository<ProductType, String
      * 分页查找工厂的产品类型
       */
     Page<ProductType> findByFactoryId(String factoryId, Pageable pageable);
+
+    /**
+     * 精简「选项」投影 —— 仅供下拉/SKU picker。构造器投影只 SELECT 需要的标量列,
+     * 不 hydrate 实体、不解析 JSON 字段, 单查询即可返回全量, 避免重 DTO 的 ~3s/422KB 开销。
+     * 排序与旧列表页一致 (createdAt DESC), 保证选择器里最近创建的产品在前。
+     * 字段顺序必须与 {@link com.cretas.aims.dto.producttype.ProductTypeOptionDTO} 构造器一致。
+     */
+    @Query("SELECT new com.cretas.aims.dto.producttype.ProductTypeOptionDTO(" +
+           "p.id, p.code, p.name, p.unit, p.specification, p.productCategory, p.isActive) " +
+           "FROM ProductType p WHERE p.factoryId = :factoryId ORDER BY p.createdAt DESC")
+    List<com.cretas.aims.dto.producttype.ProductTypeOptionDTO> findOptionsByFactoryId(
+            @Param("factoryId") String factoryId);
      /**
      * 根据类别查找产品类型
       */

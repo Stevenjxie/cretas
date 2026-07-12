@@ -118,6 +118,7 @@ public class CacheConfig {
         cacheConfigurations.put("alertStats", defaultConfig.entryTtl(Duration.ofMinutes(5)));
         cacheConfigurations.put("equipmentStats", defaultConfig.entryTtl(Duration.ofMinutes(30)));
         cacheConfigurations.put("productTypes", defaultConfig.entryTtl(Duration.ofHours(4)));
+        cacheConfigurations.put("productTypeOptions", defaultConfig.entryTtl(Duration.ofHours(4)));
         cacheConfigurations.put("materialTypes", defaultConfig.entryTtl(Duration.ofHours(6)));
         cacheConfigurations.put("equipmentList", defaultConfig.entryTtl(Duration.ofHours(2)));
         cacheConfigurations.put("customerList", defaultConfig.entryTtl(Duration.ofHours(2)));
@@ -161,7 +162,7 @@ public class CacheConfig {
                 "allIntents", "intentsByCategory", "intentCategories", "intentsBySensitivity",
                 "allIntents_legacy", "intentsByCategory_legacy", "intentCategories_legacy",
                 "qualityStats", "shipmentStats", "customerStats", "alertStats",
-                "equipmentStats", "productTypes", "materialTypes", "equipmentList", "customerList",
+                "equipmentStats", "productTypes", "productTypeOptions", "materialTypes", "equipmentList", "customerList",
                 "dailySummary", "weeklySummary", "aiToolResult",
                 "realtimeReport", "oeeReport", "kpiMetrics", "costVarianceReport",
                 "capacityUtilization", "onTimeDelivery", "productionByProduct",

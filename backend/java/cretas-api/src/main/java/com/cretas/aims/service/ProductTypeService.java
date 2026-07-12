@@ -3,6 +3,7 @@ package com.cretas.aims.service;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.producttype.ProductTypeDTO;
+import com.cretas.aims.dto.producttype.ProductTypeOptionDTO;
 import com.cretas.aims.dto.producttype.ProductTypeSuggestionDTO;
 import java.util.List;
 /**
@@ -45,6 +46,12 @@ public interface ProductTypeService {
      */
     PageResponse<ProductTypeDTO> getProductTypes(String factoryId, String productCategory,
                                                   String keyword, PageRequest pageRequest);
+
+    /**
+     * 获取产品类型「选项」精简列表 —— 仅 id/name/code/unit/specification/productCategory/isActive,
+     * 供下拉选择器 / workflow SKU picker 使用。绕开重 DTO (47 字段 + 4 处 JSON 解析), 且 @Cacheable。
+     */
+    List<ProductTypeOptionDTO> getProductTypeOptions(String factoryId);
 
     /**
      * 获取所有激活的产品类型

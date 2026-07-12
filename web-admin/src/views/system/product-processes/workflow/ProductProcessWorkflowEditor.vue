@@ -707,7 +707,9 @@ async function loadCatalogs(): Promise<void> {
   try {
     const [processResponse, productResponse, rawResponse] = await Promise.all([
       getActiveWorkProcesses(factoryId),
-      get<{ content: SkuOption[] }>(`/${factoryId}/product-types`, { params: { page: 1, size: 1000 } }),
+      // 精简「选项」端点 (7 字段: id/name/code/unit/specification/productCategory/isActive + @Cacheable) —
+      // SkuOption 只需这些字段; 避开重 DTO 的 ~3s/422KB 全量加载 (顶部选择器已先命中缓存, 这里秒回)。
+      get<{ content: SkuOption[] }>(`/${factoryId}/product-types/options`),
       get<RawMaterialOption[]>(`/${factoryId}/raw-material-types/active`),
     ]);
     if (!isCurrentCatalogLoad(generation, factoryId)) return;
