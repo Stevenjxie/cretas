@@ -4,9 +4,11 @@ import mapImage from '@/assets/logistics/suzhou-logistics-map.png';
 import { DEPOT_POINT } from '../mockData';
 import type { MapPoint, RouteTrip, StoreOrder } from '../types';
 import {
+  ensureDriving,
   getAmapKey,
   loadAmap,
   type AMapInstance,
+  type AMapLngLat,
   type AMapNamespace,
   type AMapOverlay,
 } from '../amapLoader';
@@ -137,7 +139,7 @@ function drawTripRoute(
   const anySelected = props.selectedTripId != null;
   const color = routeColors[index % routeColors.length];
 
-  const addLine = (path: [number, number][], dashed: boolean): void => {
+  const addLine = (path: [number, number][] | AMapLngLat[], dashed: boolean): void => {
     if (token !== renderToken || !map) return; // 已被新一轮重绘取代，丢弃
     // 有选中线路时，非选中线路淡化让选中的一目了然
     const line = new AMapRef.Polyline({
@@ -163,9 +165,29 @@ function drawTripRoute(
     return;
   }
 
-  // roadPath 缺失（极少：后端已可靠为每条车次持久化 roadPath；仅 NEEDS_ROUTE_DATA 等异常态才没有）
-  // → 画诚实虚线直线标示"非实际道路"。不再实时调高德驾车规划（那需要内联 Driving 插件，拖慢地图加载 ~9s）。
-  addLine([DEPOT_LNGLAT, ...storePts], true);
+  // roadPath 缺失（极少：后端已可靠为每条车次持久化 roadPath；仅 NEEDS_ROUTE_DATA 等异常态才没有）。
+  // 驾车插件由 onMounted 后台懒加载（不阻塞首屏）：已就绪则实时规划画沿路线，未就绪则先画诚实虚线直线。
+  const straight: [number, number][] = [DEPOT_LNGLAT, ...storePts];
+  const AMapDrive = AMapRef as AMapNamespace & { Driving?: new (opts: Record<string, unknown>) => { search: (o: AMapLngLat, d: AMapLngLat, opt: { waypoints?: AMapLngLat[] }, cb: (status: string, result: { routes?: Array<{ steps?: Array<{ path?: AMapLngLat[] }> }> }) => void) => void } } };
+  if (!AMapDrive.Driving) {
+    addLine(straight, true);
+    return;
+  }
+  const driving = new AMapDrive.Driving({ policy: (AMapRef.DrivingPolicy && AMapRef.DrivingPolicy.LEAST_DISTANCE) || 0 });
+  const origin = new AMapRef.LngLat(DEPOT_LNGLAT[0], DEPOT_LNGLAT[1]);
+  const last = storePts[storePts.length - 1];
+  const dest = new AMapRef.LngLat(last[0], last[1]);
+  const waypoints = storePts.slice(0, -1).map(([lng, lat]) => new AMapRef.LngLat(lng, lat));
+  driving.search(origin, dest, { waypoints }, (status, result) => {
+    if (token !== renderToken) return; // 过期回调丢弃
+    const steps = result?.routes?.[0]?.steps;
+    if (status === 'complete' && steps && steps.length) {
+      const path: AMapLngLat[] = [];
+      steps.forEach((st) => { if (st.path) path.push(...st.path); });
+      if (path.length >= 2) { addLine(path, false); return; }
+    }
+    addLine(straight, true); // 驾车规划失败 → 诚实回落虚线直线
+  });
 }
 
 onMounted(async () => {
@@ -179,6 +201,8 @@ onMounted(async () => {
       lang: 'zh_cn',
     });
     renderOverlays();
+    // 基础地图已出来后，后台懒加载驾车规划插件（不阻塞首屏）——供极少数缺 roadPath 车次实时补线兜底。
+    void ensureDriving().then((ok) => { if (ok && map) renderOverlays(); });
   } catch (e) {
     // 无 key / 域名未白名单 / 网络失败 → 诚实回落 SVG 示意图，不阻塞工作台
     // eslint-disable-next-line no-console

@@ -75,6 +75,38 @@ function getAmapSecurityCode(): string | undefined {
   return code && code.trim() ? code.trim() : undefined;
 }
 
+let drivingPromise: Promise<boolean> | null = null;
+
+/**
+ * 按需懒加载 AMap.Driving 驾车规划插件（不阻塞基础地图首屏）。
+ *
+ * 用法：地图挂载后 / "AI 计算中" loading 期间在后台 `void ensureDriving()` 预热，
+ * 到真正需要实时驾车规划兜底（某车次缺后端 roadPath）时插件已就绪。
+ * resolve(true)=插件可用；resolve(false)=加载失败（调用方回落虚线直线，不阻断）。
+ */
+export function ensureDriving(): Promise<boolean> {
+  const w = window as unknown as { AMap?: AMapNamespace & { plugin?: (names: string[], cb: () => void) => void } };
+  if (w.AMap && w.AMap.Driving) return Promise.resolve(true);
+  if (drivingPromise) return drivingPromise;
+  drivingPromise = loadAmap()
+    .then(
+      () =>
+        new Promise<boolean>((resolve) => {
+          const amap = w.AMap as (AMapNamespace & { plugin?: (names: string[], cb: () => void) => void }) | undefined;
+          if (!amap || typeof amap.plugin !== 'function') {
+            resolve(false);
+            return;
+          }
+          amap.plugin(['AMap.Driving'], () => resolve(Boolean(w.AMap && w.AMap.Driving)));
+        }),
+    )
+    .catch(() => {
+      drivingPromise = null; // 允许下次重试
+      return false;
+    });
+  return drivingPromise;
+}
+
 export function loadAmap(): Promise<AMapNamespace> {
   const w = window as unknown as { AMap?: AMapNamespace; _AMapSecurityConfig?: unknown };
   if (w.AMap) {

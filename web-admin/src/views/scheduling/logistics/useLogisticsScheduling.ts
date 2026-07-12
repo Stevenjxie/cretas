@@ -491,6 +491,8 @@ async function generateRoutes(): Promise<void> {
   // 「AI 分析排班中」进度动画 —— 上传订单后生成路线时给用户明确的智能分析反馈 (至少 2.5s)。
   analyzing.value = true;
   analyzeProgress.value = 0;
+  // 借这段 loading 在后台预热高德地图 SDK + 驾车插件，等切到地图步时已就绪、秒出（不阻塞生成）。
+  void import('./amapLoader').then((m) => m.loadAmap().then(() => m.ensureDriving())).catch(() => {});
   const startedAt = Date.now();
   const MIN_MS = 2600;
   const timer = window.setInterval(() => {
