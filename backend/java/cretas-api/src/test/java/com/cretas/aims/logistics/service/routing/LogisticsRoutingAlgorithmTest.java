@@ -265,8 +265,8 @@ class LogisticsRoutingAlgorithmTest {
     // ============================================================
 
     @Test
-    @DisplayName("gate #4 — targetLoad 70 vs 88/98 产生不同车次数")
-    void targetLoadPercentageAffectsTripCount() {
+    @DisplayName("装载率目标不硬拆同车多趟 — 单车必送负载恒装到硬容量最少箱数 (Steve 2026-07-13)")
+    void targetLoadPercentageDoesNotForceExtraSameVehicleTrips() {
         Map<String, BigDecimal> registry = new LinkedHashMap<>();
         registry.put("DEPOT->S-001", bd("5"));
         registry.put("S-001->S-002", bd("3"));
@@ -295,15 +295,16 @@ class LogisticsRoutingAlgorithmTest {
         Result at88 = LogisticsRoutingAlgorithm.run(new Input(orders, vehicles, bindings, Map.of(), lookup(registry), bd("88")));
         Result at98 = LogisticsRoutingAlgorithm.run(new Input(orders, vehicles, bindings, Map.of(), lookup(registry), bd("98")));
 
-        assertEquals(3, at70.trips().size(), "70% target packs tighter → more trips");
+        // 装载率目标不再硬拆同车多趟 (Steve 2026-07-13): 6×2.5=15m³ 必送, V1 cap 10 → 硬容量最少箱数
+        // = ceil(15/10) = 2, 与装载率目标无关。旧行为 70% 软目标把它硬拆成 3 趟 —— 那正是被修掉的空趟浪费。
+        assertEquals(2, at70.trips().size(), "装载率目标不再强制多开箱: 15m³/10m³ 恒 2 趟 (旧 70% 曾拆 3 趟)");
         assertEquals(2, at88.trips().size());
         assertEquals(2, at98.trips().size());
-        assertNotEquals(at70.trips().size(), at88.trips().size(), "targetLoadPct must verifiably change trip count");
-        // Even where trip *count* coincides (88 vs 98), box membership still differs (98% packs 4+1, 88% packs 4+1 too here,
-        // so assert against 70% instead — the count-level distinction is the gate requirement).
-        assertNotEquals(
+        assertEquals(at70.trips().size(), at88.trips().size(), "趟数不再随装载率目标变");
+        assertEquals(
                 at70.trips().stream().map(TripResult::orderIdsInOrder).toList(),
-                at98.trips().stream().map(TripResult::orderIdsInOrder).toList());
+                at98.trips().stream().map(TripResult::orderIdsInOrder).toList(),
+                "同一必送负载装到最少箱数 → 装箱结果与装载率目标无关");
     }
 
     @Test
@@ -379,9 +380,11 @@ class LogisticsRoutingAlgorithmTest {
     @Test
     @DisplayName("TS parity: does not assign an overflow trip to a matching vehicle with insufficient capacity")
     void tsParity_overflowVehicleWithInsufficientCapacityStaysUnassignedVehicle() {
+        // 硬容量真溢出: A+B=14m³ > V1 cap 10 → 必然 2 箱; 溢出箱 6m³ 找不到能整体接住的车 (V2 cap 3 < 6)
+        // → 诚实落 NEEDS_VEHICLE (无坐标 → 档4 不救)。(装载率目标不再是拆箱原因 — 这里是硬容量真的不够。)
         Map<String, BigDecimal> registry = Map.of("DEPOT->A", bd("10"), "DEPOT->B", bd("14"), "A->B", bd("12"));
         Input input = new Input(
-                List.of(order("A", "A", "吴中", "6", "600"), order("B", "B", "吴中", "4", "400")),
+                List.of(order("A", "A", "吴中", "8", "800"), order("B", "B", "吴中", "6", "600")),
                 List.of(vehicle("V1", "10", "3000", "吴中"), vehicle("V2", "3", "3000", "吴中")),
                 Map.of(
                         "V1", List.of(new DriverBindingInput("D1", DriverRole.PRIMARY, null, null, 0)),
@@ -391,7 +394,7 @@ class LogisticsRoutingAlgorithmTest {
         Result result = LogisticsRoutingAlgorithm.run(input);
 
         assertEquals(Arrays.asList("V1", null), result.trips().stream().map(TripResult::vehicleId).toList());
-        assertEquals(0, result.trips().get(1).totalVolumeCbm().compareTo(bd("4")));
+        assertEquals(0, result.trips().get(1).totalVolumeCbm().compareTo(bd("6")));
     }
 
     @Test
