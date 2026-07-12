@@ -168,12 +168,13 @@ function drawTripRoute(
   // roadPath 缺失（极少：后端已可靠为每条车次持久化 roadPath；仅 NEEDS_ROUTE_DATA 等异常态才没有）。
   // 驾车插件由 onMounted 后台懒加载（不阻塞首屏）：已就绪则实时规划画沿路线，未就绪则先画诚实虚线直线。
   const straight: [number, number][] = [DEPOT_LNGLAT, ...storePts];
-  const AMapDrive = AMapRef as AMapNamespace & { Driving?: new (opts: Record<string, unknown>) => { search: (o: AMapLngLat, d: AMapLngLat, opt: { waypoints?: AMapLngLat[] }, cb: (status: string, result: { routes?: Array<{ steps?: Array<{ path?: AMapLngLat[] }> }> }) => void) => void } } };
-  if (!AMapDrive.Driving) {
+  if (!(AMapRef as { Driving?: unknown }).Driving) {
     addLine(straight, true);
     return;
   }
-  const driving = new AMapDrive.Driving({ policy: (AMapRef.DrivingPolicy && AMapRef.DrivingPolicy.LEAST_DISTANCE) || 0 });
+  const driving = new AMapRef.Driving({
+    policy: (AMapRef.DrivingPolicy && AMapRef.DrivingPolicy.LEAST_DISTANCE) || 0,
+  });
   const origin = new AMapRef.LngLat(DEPOT_LNGLAT[0], DEPOT_LNGLAT[1]);
   const last = storePts[storePts.length - 1];
   const dest = new AMapRef.LngLat(last[0], last[1]);
