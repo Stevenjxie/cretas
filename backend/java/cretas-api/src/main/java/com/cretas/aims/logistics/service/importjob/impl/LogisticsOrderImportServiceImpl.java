@@ -161,7 +161,9 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
             row.setStoreName(r.getStoreName());
             row.setAddress(r.getAddress());
             row.setPieces(r.getPieces());
-            row.setBoxes(r.getBoxes());
+            // 箱数与件数同为计数, 手动录入只要求填件数 → 箱数留空防呆默认 0 (减少重复录入负荷)。
+            String boxes = trim(r.getBoxes());
+            row.setBoxes(isBlank(boxes) ? "0" : boxes);
             row.setWeightKg(r.getWeightKg());
             row.setVolumeCbm(r.getVolumeCbm());
             row.setWindowStart(r.getWindowStart());
