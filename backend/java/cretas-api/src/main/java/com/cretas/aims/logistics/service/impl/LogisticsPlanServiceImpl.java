@@ -3,6 +3,7 @@ package com.cretas.aims.logistics.service.impl;
 import com.cretas.aims.entity.Vehicle;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.logistics.dto.plan.CapacityDiagnosisDto;
 import com.cretas.aims.logistics.dto.plan.MoveStopRequest;
 import com.cretas.aims.logistics.dto.plan.PlanDto;
 import com.cretas.aims.logistics.dto.plan.PlanSnapshotDto;
@@ -13,6 +14,7 @@ import com.cretas.aims.logistics.entity.LogisticsPlan;
 import com.cretas.aims.logistics.entity.LogisticsStop;
 import com.cretas.aims.logistics.entity.LogisticsTrip;
 import com.cretas.aims.logistics.entity.LogisticsVehicleProfile;
+import com.cretas.aims.logistics.util.CapacityDiagnosis;
 import com.cretas.aims.logistics.entity.enums.DeliveryOrderStatus;
 import com.cretas.aims.logistics.entity.enums.PlanStatus;
 import com.cretas.aims.logistics.entity.enums.RouteOptimizeMode;
@@ -728,7 +730,18 @@ public class LogisticsPlanServiceImpl implements LogisticsPlanService {
                 : driverRepository.findAllById(driverIds).stream()
                         .collect(Collectors.toMap(LogisticsDriver::getId, d -> d));
 
-        return mapper.toSnapshot(plan, trips, stopsByTripId, orderById, vehicleById, driverById, unassignedIds);
+        PlanSnapshotDto snapshot =
+                mapper.toSnapshot(plan, trips, stopsByTripId, orderById, vehicleById, driverById, unassignedIds);
+
+        // 运力诊断（够/不够 + next action）— 现算现填，独立于 LogisticsPlanMapper（纯映射不查库）
+        // 和 service/routing 排线算法包，见 CapacityDiagnosis 类头注释。
+        List<LogisticsVehicleProfile> activeFleet =
+                vehicleProfileRepository.findByFactoryIdAndActiveTrueAndDeletedAtIsNull(factoryId);
+        CapacityDiagnosisDto diagnosis =
+                CapacityDiagnosis.diagnose(orderById.values(), trips, activeFleet, unassignedIds.size());
+        snapshot.setCapacityDiagnosis(diagnosis);
+
+        return snapshot;
     }
 
     private PlanDto toPlanDto(LogisticsPlan p) {

@@ -51,6 +51,7 @@ import {
   updateVehicleProfile as apiUpdateVehicleProfile,
 } from '@/api/logistics';
 import type {
+  CapacityDiagnosis,
   DriverInput,
   LogisticsDeliveryOrder,
   LogisticsDriver,
@@ -241,6 +242,12 @@ const scheduleResult = computed<ScheduleResult>(() => ({
   assignedVehicleCount: plan.value?.assignedVehicleCount ?? 0,
   additionalVehicleCount: plan.value?.additionalVehicleCount ?? 0,
 }));
+
+/**
+ * 运力诊断（够/不够 + next action）—— 后端 buildSnapshot 现算现返，挂在 plan 上；
+ * 老数据/异常路径可能缺失，独立于 ScheduleResult（后者是既有共享类型，不为了一个字段改它）。
+ */
+const capacityDiagnosis = computed<CapacityDiagnosis | null>(() => plan.value?.capacityDiagnosis ?? null);
 
 const activeTrip = computed<RouteTrip | null>(() => scheduleResult.value.trips.find((trip) => trip.id === selectedTripId.value) ?? null);
 const exportRows = computed<ExportRow[]>(() => {
@@ -865,6 +872,7 @@ const state = {
   analyzing,
   analyzeProgress,
   scheduleResult,
+  capacityDiagnosis,
   activeTrip,
   exportRows,
 

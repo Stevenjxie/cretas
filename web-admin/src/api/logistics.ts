@@ -435,6 +435,28 @@ export interface LogisticsPlan {
   version: number;
 }
 
+/** 运力诊断结论：SUFFICIENT=够送完，INSUFFICIENT=够排但要跑多趟，UNSERVABLE=有单排不进任何车次。 */
+export type CapacityVerdict = 'SUFFICIENT' | 'INSUFFICIENT' | 'UNSERVABLE';
+
+/**
+ * 运力诊断 —— 生成/查看计划时后端现算现返，回答「当前车队单轮运力够不够送完本批订单」
+ * （fool-proof-design Rule 1: 预先显示边界 + 具体数字 + next action）。
+ * 后端 `CapacityDiagnosisDto` 镜像；nullable（旧数据/异常路径可能缺失，前端需判空降级）。
+ */
+export interface CapacityDiagnosis {
+  verdict: CapacityVerdict;
+  totalDemandCbm: number;
+  totalDemandKg: number;
+  fleetSingleRoundCbm: number;
+  fleetSingleRoundKg: number;
+  vehicleCount: number;
+  usedTripCount: number;
+  multiTripVehicleCount: number;
+  unassignedCount: number;
+  suggestedAddCbm: number;
+  message: string;
+}
+
 /**
  * 完整计划快照 — plan + trips + 未分配门店，前端地图/线路卡/人工调整/导出均应
  * 使用同一份 PlanSnapshot（避免多接口拼装出不一致的视图，见 handoff §12.3）。
@@ -445,6 +467,8 @@ export interface PlanSnapshot extends LogisticsPlan {
   unassignedStoreIds: string[];
   assignedVehicleCount: number;
   additionalVehicleCount: number;
+  /** 运力诊断（够/不够 + next action）— 老数据/异常路径可能为 null，前端需判空。 */
+  capacityDiagnosis?: CapacityDiagnosis | null;
 }
 
 /** 排线优化目标：TIME=时间最快，DISTANCE=路程最短。后端据此选地图 direction strategy。 */
