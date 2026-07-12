@@ -54,6 +54,37 @@ public class CanvasAIController {
             Selected node id: %s
             """;
 
+    // 长久方案 (弃补丁): LLM 只出「语义规格」(rawMaterials + steps), 不再拼底层图补丁。
+    // 前端确定性编译器 (复用 createProcessBranch) 把规格建成合法图 —— LLM 再也不碰 node/edge/id。
+    private static final String PRODUCT_PROCESS_WORKFLOW_SPEC_PROMPT = """
+            You are a product-process Workflow planning assistant. From the user's natural-language
+            description, output ONLY a JSON object describing the workflow at a SEMANTIC level.
+            Do NOT output graph nodes / edges / ids / patches. Never call tools, save, publish, or
+            change data. The frontend deterministically builds the graph from your JSON.
+
+            Output shape (JSON only, no prose):
+            {
+              "rawMaterials": ["<entry raw material name>", ...],
+              "steps": [
+                {
+                  "process": "<work process name, e.g. 清洗/卤制/切片装盒>",
+                  "outputs": [
+                    { "kind": "SEMI_FINISHED"|"FINISHED_GOOD", "name": "<output product name>", "unit": "<kg/盒/只/...>" }
+                  ]
+                }
+              ]
+            }
+            Rules:
+            - steps are ordered; each step consumes the previous step's first output
+              (step 1 consumes the rawMaterials).
+            - a step with multiple outputs = 分流/多产出 (one process yields several products).
+            - the LAST step output is usually FINISHED_GOOD; intermediate outputs are SEMI_FINISHED.
+            - use the user's own wording for process/output names. Keep it minimal, valid JSON only.
+
+            Current definition (context, may be empty): %s
+            Selected node id: %s
+            """;
+
     // D3: narrow route for work-process catalog (create/update work-process master data)
     private static final String WORK_PROCESS_CATALOG_MODULE = "work_process_catalog";
     private static final String WORK_PROCESS_CATALOG_TOOL = "canvas_work_process_catalog";
@@ -194,55 +225,31 @@ public class CanvasAIController {
                 ? requestParams.get("selectedNodeId")
                 : nestedContext.get("selectedNodeId");
 
-        String prompt = PRODUCT_PROCESS_WORKFLOW_SYSTEM_PROMPT.formatted(
+        // 弃补丁: 让 LLM 只产出语义规格 (rawMaterials + steps), 前端确定性编译成图。
+        String prompt = PRODUCT_PROCESS_WORKFLOW_SPEC_PROMPT.formatted(
                 objectMapper.writeValueAsString(definition),
                 Objects.toString(selectedNodeId, "null"));
         String llmResponse = dashScopeClient.chatLowTemp(prompt, request.getMessage());
-        List<Map<String, Object>> generatedPatches;
+        Map<String, Object> spec;
         try {
-            generatedPatches = objectMapper.readValue(
-                    extractJson(llmResponse), new TypeReference<List<Map<String, Object>>>() {});
+            spec = objectMapper.readValue(
+                    extractJson(llmResponse), new TypeReference<Map<String, Object>>() {});
         } catch (Exception parseError) {
-            return workflowPatchFailureResponse();
+            return workflowSpecFailureResponse();
         }
-        if (generatedPatches.isEmpty()) {
-            return workflowPatchFailureResponse();
-        }
-
-        Map<String, Object> toolArguments = new LinkedHashMap<>();
-        toolArguments.put("message", request.getMessage());
-        toolArguments.put("definition", definition);
-        toolArguments.put("selectedNodeId", selectedNodeId);
-        toolArguments.put("patches", generatedPatches);
-        ToolCall toolCall = ToolCall.of(
-                "workflow-preview-" + System.currentTimeMillis(),
-                PRODUCT_PROCESS_WORKFLOW_TOOL,
-                objectMapper.writeValueAsString(toolArguments));
-
-        String rawPreview = executor.preview(toolCall, toolContext);
-        Map<String, Object> previewEnvelope = objectMapper.readValue(
-                rawPreview, new TypeReference<Map<String, Object>>() {});
-        if (!Boolean.TRUE.equals(previewEnvelope.get("success"))) {
-            AIResponse errorResponse = new AIResponse();
-            errorResponse.setApplied(false);
-            errorResponse.setReply(Objects.toString(
-                    previewEnvelope.get("error"), "Workflow patch 校验失败"));
-            errorResponse.setDiffs(List.of());
-            return errorResponse;
+        // 只校验规格 shape (steps 非空); 图的合法性由前端编译器保证 (端口/边/id 全代码生成)。
+        if (!(spec.get("steps") instanceof List<?> stepList) || stepList.isEmpty()) {
+            return workflowSpecFailureResponse();
         }
 
-        Map<String, Object> validatedPreview = readStringObjectMap(previewEnvelope.get("data"));
-        Object patches = validatedPreview.get("patches") instanceof List<?>
-                ? validatedPreview.get("patches")
-                : List.of();
         Map<String, Object> diffParams = new LinkedHashMap<>();
-        diffParams.put("patches", patches);
+        diffParams.put("spec", spec);
 
         AIResponse response = new AIResponse();
         response.setApplied(false);
         response.setReply(PRODUCT_PROCESS_WORKFLOW_REPLY);
         response.setDiffs(List.of(Map.of(
-                "type", "PRODUCT_PROCESS_WORKFLOW_PATCH",
+                "type", "PRODUCT_PROCESS_WORKFLOW_SPEC",
                 "tool", PRODUCT_PROCESS_WORKFLOW_TOOL,
                 "params", diffParams,
                 "description", PRODUCT_PROCESS_WORKFLOW_REPLY)));
@@ -254,6 +261,14 @@ public class CanvasAIController {
         response.setApplied(false);
         response.setDiffs(List.of());
         response.setReply("AI 未返回可审核的 Workflow 补丁，请调整描述后重试");
+        return response;
+    }
+
+    private AIResponse workflowSpecFailureResponse() {
+        AIResponse response = new AIResponse();
+        response.setApplied(false);
+        response.setDiffs(List.of());
+        response.setReply("AI 未能从描述里解析出可用的工序步骤，请把每一步的工序名和产出说清楚后重试");
         return response;
     }
 

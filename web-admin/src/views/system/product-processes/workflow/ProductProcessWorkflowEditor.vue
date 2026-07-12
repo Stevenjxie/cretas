@@ -1837,8 +1837,13 @@ async function applyWorkflowAIDraft(
     || !sourceIdentity
     || !identitiesMatch(identity, sourceIdentity)
     || !canEdit.value) return;
+  // 长久方案: AI 返回「语义规格」时走确定性编译器建图 (弃补丁)。旧的 patch 路径保留兜底。
+  if (payload.spec && typeof payload.spec === 'object') {
+    await buildWorkflowFromSpec(payload.spec as WorkflowSpec, identity);
+    return;
+  }
   if (!Array.isArray(payload.patches)) {
-    ElMessage.warning('AI 没有返回合法的 Workflow 补丁');
+    ElMessage.warning('AI 没有返回合法的 Workflow 描述');
     return;
   }
   const proposed = applyWorkflowPatches(currentDefinition(), payload.patches);
@@ -1864,6 +1869,120 @@ async function applyWorkflowAIDraft(
   hydrate(proposed.definition);
   dirty.value = true;
   await fitCanvas();
+}
+
+interface WorkflowSpecOutput { kind?: string; name?: string; unit?: string }
+interface WorkflowSpecStep { process?: string; outputs?: WorkflowSpecOutput[] }
+interface WorkflowSpec { rawMaterials?: string[]; steps?: WorkflowSpecStep[] }
+
+/**
+ * 长久方案确定性编译器 (#7 弃补丁): 把 LLM 的「语义规格」建成合法图, 复用 createProcessBranch /
+ * createWorkProcess —— LLM 不产任何 node/edge/id, 图 100% 自洽, 不会再"整批被拒"。
+ * MVP: 线性链 + 每步首产出 (多产出/分流 后续迭代)。工序匹配不到就现场创建 (复用 #13 逻辑);
+ * 产出 SKU 先不自动建, 留待用户绑定 (安全)。
+ */
+async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdentity): Promise<void> {
+  const steps = Array.isArray(spec.steps)
+    ? spec.steps.filter((s) => s && (s.process || '').trim())
+    : [];
+  if (!steps.length) { ElMessage.warning('AI 规格里没有可用的工序步骤'); return; }
+
+  // 1) 预解析每步工序 (匹配已有 / 现场创建), async 先做完再建图
+  const resolved: WorkProcessItem[] = [];
+  for (const step of steps) {
+    const name = (step.process || '').trim();
+    let wp = workProcessOptions.value.find((p) => normProcessName(p.processName || '') === normProcessName(name));
+    if (!wp) {
+      wp = workProcessOptions.value.find((p) => {
+        const pn = normProcessName(p.processName || '');
+        const q = normProcessName(name);
+        return !!pn && !!q && (pn.includes(q) || q.includes(pn));
+      });
+    }
+    if (!wp) {
+      const outKind = step.outputs?.[0]?.kind === 'FINISHED_GOOD' ? 'FINISHED_GOOD' : 'SEMI_FINISHED';
+      const unit = step.outputs?.[0]?.unit || 'kg';
+      try {
+        const resp = await createWorkProcess(identity.factoryId, {
+          processName: name, unit, outputUnit: unit,
+          defaultOutputMaterialKind: outKind as WorkProcessItem['defaultOutputMaterialKind'],
+          isActive: true,
+        });
+        if (resp.success && resp.data) {
+          wp = resp.data;
+          workProcessOptions.value = [resp.data, ...workProcessOptions.value];
+        }
+      } catch (error) {
+        console.error('[buildWorkflowFromSpec] createWorkProcess failed', error);
+      }
+    }
+    if (!wp) { ElMessage.error(`工序「${name}」无法匹配或创建，AI 建流程中止`); return; }
+    resolved.push(wp);
+  }
+
+  // 2) 会替换当前画布 → 二次确认
+  if (flowNodes.value.length > 0) {
+    try {
+      await ElMessageBox.confirm(
+        `将按 AI 描述生成 ${steps.length} 道工序的流程图，替换当前画布内容（可撤销）。继续？`,
+        'AI 生成工序流程', { type: 'warning', confirmButtonText: '生成并替换' },
+      );
+    } catch { return; }
+  }
+  if (!isLoadedIdentityCurrent(identity) || !canEdit.value) return;
+
+  // 3) 确定性建图 (sync in mutate, 复用 createProcessBranch): 入口原料 → 逐步 工序+产出
+  mutate(() => {
+    const nodes: Node[] = [];
+    const edges: Edge[] = [];
+    const rawName = (spec.rawMaterials?.[0] || '入口原料').trim();
+    const rawNode: Node = {
+      id: `material:raw:${nextGraphIdSeed()}`,
+      type: 'material',
+      position: { x: 32, y: 32 },
+      data: { kind: 'RAW_MATERIAL', name: rawName, skuId: '', skuCode: '待绑定原料 SKU', bound: false, baseUnit: 'kg' },
+    };
+    nodes.push(rawNode);
+    let prevMaterial = serializeFlowNode(rawNode);
+    steps.forEach((step, i) => {
+      const branch = createProcessBranch({
+        source: prevMaterial,
+        workProcess: resolved[i],
+        productTypeId: identity.productTypeId,
+        productName: props.productName || identity.productTypeId,
+        timestamp: nextGraphIdSeed(),
+      });
+      // 用规格里的产出名/kind 覆盖首产出 Cell
+      const firstOut = step.outputs?.[0];
+      const outData = { ...toPlainWorkflowValue(branch.outputNode.data) } as Record<string, unknown>;
+      if (firstOut?.name) outData.name = firstOut.name;
+      if (firstOut?.kind === 'FINISHED_GOOD' || firstOut?.kind === 'SEMI_FINISHED') outData.kind = firstOut.kind;
+      nodes.push({
+        id: branch.processNode.id,
+        type: 'process',
+        position: branch.processNode.position,
+        data: { ...toPlainWorkflowValue(branch.processNode.data), kind: branch.processNode.kind },
+      });
+      const outputNode: Node = {
+        id: branch.outputNode.id,
+        type: 'material',
+        position: branch.outputNode.position,
+        data: { ...outData, kind: String(outData.kind || branch.outputNode.kind) },
+      };
+      nodes.push(outputNode);
+      edges.push(...branch.edges.map((edge) => ({
+        ...edge,
+        markerEnd: MarkerType.ArrowClosed,
+        style: { stroke: '#1b65a8', strokeWidth: 2 },
+      })));
+      prevMaterial = serializeFlowNode(outputNode);
+    });
+    flowNodes.value = nodes;
+    flowEdges.value = edges;
+  });
+  await nextTick();
+  await handleAutoLayout();
+  ElMessage.success(`已按 AI 描述生成 ${steps.length} 道工序流程，请检查并绑定产出 SKU 后保存`);
 }
 
 function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boolean {
