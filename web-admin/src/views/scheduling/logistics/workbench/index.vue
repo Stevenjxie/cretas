@@ -31,10 +31,14 @@ function recomputeMapRowHeight(): void {
   if (!el) return;
   // 窄屏(≤1180)走 CSS 的竖向堆叠 + auto 高度, 不锁死高度
   if (window.innerWidth <= 1180) { mapRowHeight.value = 0; return; }
+  const scroller = document.scrollingElement || document.documentElement;
+  const rect = el.getBoundingClientRect();
   // 文档绝对起点 = 视口内 top + 已滚动量, 与当前是否滚动无关(稳定, 不会自激振荡)
-  const docTop = el.getBoundingClientRect().top + window.scrollY;
-  const reserve = 140; // 地图行下方: 步内 gap + 页面 grid gap + 「上一步/下一步」条 + 下内边距(实测 ~134)
-  mapRowHeight.value = Math.max(440, Math.round(window.innerHeight - docTop - reserve));
+  const docTop = rect.top + window.scrollY;
+  // 地图行下方实际占用的像素(gap + 上一步/下一步条 + 页面下内边距) —— 直接量而不是猜死数,
+  // 自校准任何浏览器/缩放/工具栏差异。这些元素在地图行之后, 高度与地图行高无关, 故稳定。
+  const below = Math.max(0, scroller.scrollHeight - (docTop + rect.height));
+  mapRowHeight.value = Math.max(440, Math.round(window.innerHeight - docTop - below));
 }
 const route = useRoute();
 const router = useRouter();
