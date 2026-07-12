@@ -18,6 +18,7 @@ import {
   upsertDailyAvailability,
 } from '@/api/logistics';
 import { useAuthStore } from '@/store/modules/auth';
+import { vReveal } from '@/composables/useReveal';
 import { useLogisticsScheduling } from '../useLogisticsScheduling';
 
 type ResourceFilter = 'all' | 'owned' | 'outsourced';
@@ -345,7 +346,7 @@ const unavailableCount = computed(() => availRows.value.filter((r) => !r.availab
 
     <el-alert v-if="state.resourcesError.value" type="error" :closable="false" :title="state.resourcesError.value" show-icon />
 
-    <el-card shadow="never">
+    <el-card v-reveal="0" shadow="never">
       <el-table v-loading="state.resourcesLoading.value" :data="filteredVehicles" stripe>
         <el-table-column prop="plateNumber" label="车牌号" min-width="130" />
         <el-table-column label="容量" min-width="90"><template #default="{ row }">{{ row.capacityCbm }} m³</template></el-table-column>
@@ -365,7 +366,7 @@ const unavailableCount = computed(() => availRows.value.filter((r) => !r.availab
       </el-table>
     </el-card>
 
-    <el-card shadow="never">
+    <el-card v-reveal="1" shadow="never">
       <header class="section-header">
         <h2>司机</h2>
         <el-button type="primary" @click="openAddDriver">新增司机</el-button>
@@ -382,7 +383,7 @@ const unavailableCount = computed(() => availRows.value.filter((r) => !r.availab
       </el-table>
     </el-card>
 
-    <el-card shadow="never" class="avail-card">
+    <el-card v-reveal="2" shadow="never" class="avail-card">
       <header class="section-header">
         <div>
           <h2>按天可用性</h2>
@@ -528,6 +529,8 @@ const unavailableCount = computed(() => availRows.value.filter((r) => !r.availab
 .row-sub { margin-left: 8px; color: #98a2b3; font-size: 12px; }
 .shift-cell { display: flex; align-items: center; gap: 6px; }
 .shift-cell.disabled { opacity: 0.5; }
+/* 等宽数字 —— 固定时段/临时班次时刻对齐不跳动。 */
+.avail-card :deep(.el-table__body td), .avail-card .shift-cell, .avail-card .row-sub { font-variant-numeric: tabular-nums; }
 .binding-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .time-range { display: flex; align-items: center; gap: 8px; }
 @media (max-width: 720px) { .support-page { padding: 16px; }.page-header { flex-direction: column; } }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
+import { vReveal } from '@/composables/useReveal';
 import type { ManualOrderRow, OrderBatch, PreviewResult } from '@/api/logistics';
 
 const props = defineProps<{
@@ -167,7 +168,7 @@ watch(() => props.batch?.id, (id, prev) => {
       <el-radio-button value="manual">✏️ 手动录入</el-radio-button>
     </el-radio-group>
 
-    <div v-if="batch" class="batch-card" data-testid="import-batch-summary">
+    <div v-if="batch" v-reveal="0" class="batch-card" data-testid="import-batch-summary">
       <strong>✓ 已录入批次 {{ batch.batchNumber }}</strong>
       <span>{{ batch.validRows }} / {{ batch.totalRows }} 行有效，业务日期 {{ batch.businessDate }}。点下方「下一步」生成排线。</span>
     </div>
@@ -274,7 +275,7 @@ watch(() => props.batch?.id, (id, prev) => {
     </template>
 
     <!-- ============ 校验结果(文件+手动共用) ============ -->
-    <div v-if="preview" data-testid="import-preview" class="validation-card">
+    <div v-if="preview" v-reveal="0" data-testid="import-preview" class="validation-card">
       <strong>{{ preview.validRows }} / {{ preview.totalRows }} 行校验通过</strong>
       <span v-if="preview.errorRows > 0">{{ preview.errorRows }} 行存在字段错误，仅写入有效行——请修正后重试。</span>
       <span v-else>全部行校验通过。</span>
@@ -313,6 +314,7 @@ watch(() => props.batch?.id, (id, prev) => {
 .field-label { color: #344054; font-size: 13px; font-weight: 650; }
 .manual-hint { color: #98a2b3; font-size: 12.5px; }
 .manual-table { width: 100%; }
+.batch-card, .validation-card, .manual-table :deep(input), .win-cell { font-variant-numeric: tabular-nums; }
 .manual-table :deep(.missing .el-input__wrapper) { box-shadow: 0 0 0 1px #f04438 inset; }
 .win-cell { display: flex; align-items: center; gap: 6px; }
 .manual-actions { display: flex; align-items: center; gap: 14px; }

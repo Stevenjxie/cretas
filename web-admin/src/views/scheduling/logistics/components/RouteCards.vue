@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { vReveal } from '@/composables/useReveal';
 import type { RouteTrip, StoreOrder } from '../types';
 
 const props = defineProps<{
@@ -120,6 +121,7 @@ function etaTitleFor(tripId: string, i: number): string {
     <article
       v-for="(trip, index) in trips"
       :key="trip.id"
+      v-reveal="index"
       data-testid="route-card"
       :data-trip-id="trip.id"
       :class="['route-card', { selected: trip.id === selectedTripId }]"
@@ -236,6 +238,12 @@ function etaTitleFor(tripId: string, i: number): string {
     border-color: #1b65a8;
     box-shadow: 0 0 0 2px rgba(27, 101, 168, 0.12), 0 6px 18px rgba(27, 101, 168, 0.12);
   }
+}
+
+/* 等宽数字 —— 里程/时长/装载率/出发返仓时刻不因字宽跳动，数据表更整齐专业。 */
+.route-title, .sched-item, .chip-eta, .trip-seq, .route-metrics dd {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
 }
 
 .card-header,

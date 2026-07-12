@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessageBox } from 'element-plus';
+import { vReveal } from '@/composables/useReveal';
 import type { ManualOrderRow } from '@/api/logistics';
 import ExportConfirmStep from '../components/ExportConfirmStep.vue';
 import LogisticsMap from '../components/LogisticsMap.vue';
@@ -62,6 +63,12 @@ watch(() => state.plan.value?.id, (planId) => {
     router.replace({ query: { ...route.query, planId } });
   }
 });
+
+// 路线视图当天总览（车次/配送门店/总里程）—— 给调度员一眼看清当天工作量。
+const summaryTrips = computed(() => state.scheduleResult.value.trips);
+const totalTripCount = computed(() => summaryTrips.value.length);
+const totalStopCount = computed(() => summaryTrips.value.reduce((sum, t) => sum + t.storeIds.length, 0));
+const totalKm = computed(() => summaryTrips.value.reduce((sum, t) => sum + (t.totalDistanceKm || 0), 0));
 
 async function downloadTemplate(): Promise<void> {
   await state.downloadTemplate();
@@ -194,6 +201,13 @@ async function next(): Promise<void> {
 
     <section v-else-if="state.activeStep.value === 'map'" data-testid="map-step" class="map-step">
       <header class="map-heading"><div><p>第二步</p><h2>查看路线</h2></div></header>
+      <div v-if="totalTripCount > 0" v-reveal="0" class="route-summary" data-testid="route-summary">
+        <div class="rs-item"><span class="rs-value">{{ totalTripCount }}</span><span class="rs-label">车次</span></div>
+        <div class="rs-sep" />
+        <div class="rs-item"><span class="rs-value">{{ totalStopCount }}</span><span class="rs-label">配送门店</span></div>
+        <div class="rs-sep" />
+        <div class="rs-item"><span class="rs-value">{{ totalKm.toFixed(1) }}</span><span class="rs-label">总里程 km</span></div>
+      </div>
       <div class="route-settings" data-testid="route-settings">
         <span class="settings-title">排线设置</span>
         <label class="view-toggle">视图 <el-radio-group :model-value="mapView" size="small" @update:model-value="(v: 'map'|'timetable') => (mapView = v)"><el-radio-button label="map">地图</el-radio-button><el-radio-button label="timetable">调度时间表</el-radio-button></el-radio-group></label>
@@ -245,7 +259,8 @@ async function next(): Promise<void> {
 
 <style scoped lang="scss">
 .workbench-page { display: grid; gap: 20px; max-width: 1440px; min-height: 100%; padding: 24px; margin: 0 auto; background: #f8fafc; } .ai-analyzing-overlay { position: fixed; inset: 0; z-index: 3000; display: grid; place-items: center; background: rgba(16, 24, 40, 0.55); backdrop-filter: blur(2px); } .ai-analyzing-card { width: min(460px, 90vw); padding: 32px 28px; text-align: center; background: #fff; border-radius: 16px; box-shadow: 0 12px 40px rgba(0,0,0,0.25); } .ai-spark { font-size: 40px; animation: ai-pulse 1.1s ease-in-out infinite; } @keyframes ai-pulse { 0%,100% { transform: scale(1); opacity: 0.85; } 50% { transform: scale(1.18); opacity: 1; } } .ai-title { margin: 12px 0 6px; color: #101828; font-size: 18px; font-weight: 750; } .ai-sub { margin: 0 0 18px; color: #667085; font-size: 13px; line-height: 1.5; }
-.page-header, .map-heading, .action-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; } .header-actions { display: flex; align-items: center; gap: 12px; } h1,h2 { margin: 0; color: #101828; } .page-header p, .map-heading p { margin: 6px 0 0; color: #667085; } .map-step { display: grid; gap: 16px; } .map-heading label { display: grid; grid-template-columns: auto minmax(150px, 260px); align-items: center; gap: 12px; color: #344054; font-size: 14px; font-weight: 650; } .map-controls { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; } .map-heading .opt-mode { grid-template-columns: auto auto; } .route-settings { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding: 12px 16px; background: #f4f6f9; border: 1px solid #edf2f7; border-radius: 10px; } .route-settings .settings-title { color: #101828; font-weight: 700; font-size: 14px; } .route-settings label { display: grid; grid-template-columns: auto auto; align-items: center; gap: 10px; color: #344054; font-size: 14px; font-weight: 650; } .route-settings .load-ctl { grid-template-columns: auto minmax(120px, 200px); } .route-settings .view-toggle { grid-template-columns: auto auto; } .route-settings .generate-button { margin-left: auto; padding: 8px 16px; } .generate-button, .next-button { width: fit-content; padding: 10px 18px; color: #fff; font: inherit; font-weight: 650; background: #1b65a8; border: 0; border-radius: 6px; cursor: pointer; } .action-bar { position: sticky; bottom: 0; z-index: 20; padding: 14px 0; background: linear-gradient(to bottom, transparent, #f8fafc 28%); }
+.page-header, .map-heading, .action-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; } .header-actions { display: flex; align-items: center; gap: 12px; }
+.route-summary { display: flex; align-items: center; gap: 20px; padding: 14px 20px; background: linear-gradient(180deg, #ffffff, #f8fafc); border: 1px solid #e2e8f0; border-radius: 10px; } .route-summary .rs-item { display: flex; flex-direction: column; gap: 2px; } .route-summary .rs-value { color: #0f172a; font-size: 22px; font-weight: 750; line-height: 1.1; font-variant-numeric: tabular-nums; } .route-summary .rs-label { color: #667085; font-size: 12.5px; } .route-summary .rs-sep { width: 1px; height: 28px; background: #e2e8f0; } h1,h2 { margin: 0; color: #101828; } .page-header p, .map-heading p { margin: 6px 0 0; color: #667085; } .map-step { display: grid; gap: 16px; } .map-heading label { display: grid; grid-template-columns: auto minmax(150px, 260px); align-items: center; gap: 12px; color: #344054; font-size: 14px; font-weight: 650; } .map-controls { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; } .map-heading .opt-mode { grid-template-columns: auto auto; } .route-settings { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding: 12px 16px; background: #f4f6f9; border: 1px solid #edf2f7; border-radius: 10px; } .route-settings .settings-title { color: #101828; font-weight: 700; font-size: 14px; } .route-settings label { display: grid; grid-template-columns: auto auto; align-items: center; gap: 10px; color: #344054; font-size: 14px; font-weight: 650; } .route-settings .load-ctl { grid-template-columns: auto minmax(120px, 200px); } .route-settings .view-toggle { grid-template-columns: auto auto; } .route-settings .generate-button { margin-left: auto; padding: 8px 16px; } .generate-button, .next-button { width: fit-content; padding: 10px 18px; color: #fff; font: inherit; font-weight: 650; background: #1b65a8; border: 0; border-radius: 6px; cursor: pointer; } .action-bar { position: sticky; bottom: 0; z-index: 20; padding: 14px 0; background: linear-gradient(to bottom, transparent, #f8fafc 28%); }
 .unresolved-panel { display: grid; gap: 8px; padding: 16px 20px; background: #fffaeb; border: 1px solid #fef0c7; border-radius: 10px; } .unresolved-panel strong { color: #b54708; } .unresolved-panel ul { display: grid; gap: 4px; margin: 0; padding-left: 20px; color: #93370d; font-size: 13px; } .unresolved-panel a { width: fit-content; color: #1b65a8; font-weight: 650; }
 @media (max-width: 720px) { .workbench-page { padding: 16px; } .page-header,.map-heading { align-items: flex-start; flex-direction: column; } .map-heading label { width: 100%; } }
 </style>

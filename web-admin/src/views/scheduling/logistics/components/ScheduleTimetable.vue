@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { vReveal } from '@/composables/useReveal';
 import type { RouteTrip } from '../types';
 import { fmtHm } from '../routeEta';
 
@@ -100,7 +101,7 @@ function tripColorIndex(trip: RouteTrip): number {
         </div>
       </div>
 
-      <div v-for="row in rows" :key="row.vehicleId" class="tt-row" data-testid="tt-vehicle-row">
+      <div v-for="(row, i) in rows" :key="row.vehicleId" v-reveal="i" class="tt-row" data-testid="tt-vehicle-row">
         <div class="tt-rowlabel"><strong>{{ row.plate }}</strong><span>{{ row.trips.length }} 趟</span></div>
         <div class="tt-track">
           <span v-for="m in ticks" :key="'g'+m" class="tt-grid" :style="{ left: `${leftPct(m)}%` }" />
@@ -138,7 +139,8 @@ function tripColorIndex(trip: RouteTrip): number {
 .tt-rowlabel span { color: #667085; font-size: 11px; }
 .tt-track { position: relative; height: 34px; min-width: 640px; }
 .tt-axis .tt-track { height: 22px; }
-.tt-tick { position: absolute; top: 0; transform: translateX(-50%); color: #98a2b3; font-size: 11px; white-space: nowrap; }
+.tt-tick { position: absolute; top: 0; transform: translateX(-50%); color: #98a2b3; font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tt-bar-label, .tt-rowlabel span { font-variant-numeric: tabular-nums; }
 .tt-grid { position: absolute; top: 0; bottom: 0; width: 1px; background: #f1f3f5; }
 .tt-row { border-top: 1px dashed #eef1f4; }
 .tt-bar { position: absolute; top: 5px; height: 24px; display: flex; align-items: center; padding: 0 6px; color: #fff; font-size: 11px; font-weight: 700; background: var(--bar-color); border: 2px solid transparent; border-radius: 6px; cursor: pointer; overflow: hidden; white-space: nowrap; box-shadow: 0 1px 3px rgba(0,0,0,0.18); }
