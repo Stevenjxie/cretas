@@ -19,26 +19,26 @@
       </el-button>
     </header>
 
-    <!-- 总览条 -->
+    <!-- 总览条 (数字 GSAP count-up: 首次加载一次性从 0 数到目标值, 刷新时瞬时更新不重播) -->
     <div class="cma-overview">
       <div class="cma-kpi">
-        <span class="cma-kpi-val">{{ memberCount.toLocaleString() }}</span>
+        <span class="cma-kpi-val">{{ memberCountDisplay }}</span>
         <span class="cma-kpi-label">会员总数</span>
       </div>
       <div class="cma-kpi">
-        <span class="cma-kpi-val cma-kpi-active">{{ activeCount != null ? activeCount.toLocaleString() : '—' }}</span>
+        <span class="cma-kpi-val cma-kpi-active">{{ activeCountDisplay }}</span>
         <span class="cma-kpi-label">活跃</span>
       </div>
       <div class="cma-kpi">
-        <span class="cma-kpi-val cma-kpi-dormant">{{ dormantCount != null ? dormantCount.toLocaleString() : '—' }}</span>
+        <span class="cma-kpi-val cma-kpi-dormant">{{ dormantCountDisplay }}</span>
         <span class="cma-kpi-label">沉睡</span>
       </div>
       <div class="cma-kpi">
-        <span class="cma-kpi-val cma-kpi-churned">{{ churnedCount != null ? churnedCount.toLocaleString() : '—' }}</span>
+        <span class="cma-kpi-val cma-kpi-churned">{{ churnedCountDisplay }}</span>
         <span class="cma-kpi-label">流失</span>
       </div>
       <div class="cma-kpi">
-        <span class="cma-kpi-val">{{ avgSpendIntervalLabel }}</span>
+        <span class="cma-kpi-val">{{ avgSpendIntervalDisplay }}</span>
         <span class="cma-kpi-label">平均消费间隔</span>
       </div>
     </div>
@@ -46,7 +46,7 @@
     <div class="cma-layout">
       <div class="cma-main">
         <!-- RFM 客群分层 (hero) -->
-        <el-card class="cma-card cma-hero" shadow="never">
+        <el-card v-reveal="0" class="cma-card cma-hero" shadow="never">
           <template #header>
             <div class="cma-card-header">
               <span class="cma-card-header-left"><el-icon><TrendCharts /></el-icon><span>RFM 客群分层</span></span>
@@ -74,7 +74,7 @@
         </el-card>
 
         <!-- RFM 三维散点 (hero) -->
-        <el-card class="cma-card cma-hero" shadow="never">
+        <el-card v-reveal="1" class="cma-card cma-hero" shadow="never">
           <template #header>
             <div class="cma-card-header">
               <span class="cma-card-header-left"><el-icon><Grid /></el-icon><span>RFM 三维分布 (R × F × M)</span></span>
@@ -104,7 +104,7 @@
         <div v-if="!rfmError && rfmDataAvailable && rfmCaveat" class="cma-caveat">{{ rfmCaveat }}</div>
 
         <!-- 会员生命周期 -->
-        <el-card class="cma-card" shadow="never">
+        <el-card v-reveal="2" class="cma-card" shadow="never">
           <template #header>
             <div class="cma-card-header">
               <span class="cma-card-header-left"><el-icon><PieChart /></el-icon><span>会员生命周期</span></span>
@@ -139,7 +139,7 @@
         </el-card>
 
         <!-- 会员画像 (从 经营驾驶舱 迁移过来 — 等级/性别/生日/充值) -->
-        <el-card class="cma-card" shadow="never">
+        <el-card v-reveal="3" class="cma-card" shadow="never">
           <template #header>
             <div class="cma-card-header">
               <span class="cma-card-header-left"><el-icon><User /></el-icon><span>会员画像</span></span>
@@ -268,6 +268,8 @@ import { getMemberRfm, getMemberProfile, type MemberRfm, type MemberProfile } fr
 import { formatNumber } from '@/utils/format-number';
 import ChartInsights from '@/views/smart-bi/components/analysis/ChartInsights.vue';
 import AnalysisChatPanel from '@/views/smart-bi/components/analysis/AnalysisChatPanel.vue';
+import { useCountUp } from '@/composables/useCountUp';
+import { vReveal } from '@/composables/useReveal';
 import {
   memberRfmTierBullets,
   memberRfmTierSummary,
@@ -359,6 +361,33 @@ const avgSpendIntervalOverall = computed<number | null>(() => {
 const avgSpendIntervalLabel = computed(() => {
   const v = avgSpendIntervalOverall.value;
   return v == null ? '—' : `${v.toFixed(0)}天`;
+});
+
+// ============================================================
+// 总览条 KPI count-up (GSAP, once on first RFM load — not on 刷新 refetch)
+// Gated on rfmLoading (not memberCount's raw value) because memberCount/等
+// default to ref(0) pre-fetch — watching "first non-null" alone would treat
+// that placeholder 0 as "data arrived" and burn the once-only animation.
+// ============================================================
+const { display: memberCountDisplay } = useCountUp(memberCount, {
+  loading: rfmLoading,
+  formatter: (v) => Math.round(v).toLocaleString(),
+});
+const { display: activeCountDisplay } = useCountUp(activeCount, {
+  loading: rfmLoading,
+  formatter: (v) => Math.round(v).toLocaleString(),
+});
+const { display: dormantCountDisplay } = useCountUp(dormantCount, {
+  loading: rfmLoading,
+  formatter: (v) => Math.round(v).toLocaleString(),
+});
+const { display: churnedCountDisplay } = useCountUp(churnedCount, {
+  loading: rfmLoading,
+  formatter: (v) => Math.round(v).toLocaleString(),
+});
+const { display: avgSpendIntervalDisplay } = useCountUp(avgSpendIntervalOverall, {
+  loading: rfmLoading,
+  formatter: (v) => `${Math.round(v)}天`,
 });
 
 // 规则洞察 (0 LLM) — 从真实 RFM 数字算一句话; 数据不足返 null (不编)。

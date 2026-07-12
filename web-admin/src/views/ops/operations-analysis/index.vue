@@ -20,26 +20,26 @@
       </el-button>
     </header>
 
-    <!-- 总览条 -->
+    <!-- 总览条 (数字 GSAP count-up: 首次加载一次性从 0 数到目标值, 刷新时瞬时更新不重播) -->
     <div class="opa-overview">
       <div class="opa-kpi">
-        <span class="opa-kpi-val">{{ voidRateVal != null ? formatPct(voidRateVal) : '—' }}</span>
+        <span class="opa-kpi-val">{{ voidRateDisplay }}</span>
         <span class="opa-kpi-label">撤单率</span>
       </div>
       <div class="opa-kpi">
-        <span class="opa-kpi-val">{{ voidCount.toLocaleString() }}</span>
+        <span class="opa-kpi-val">{{ voidCountDisplay }}</span>
         <span class="opa-kpi-label">撤单数</span>
       </div>
       <div class="opa-kpi">
-        <span class="opa-kpi-val">{{ voidBillCount.toLocaleString() }}</span>
+        <span class="opa-kpi-val">{{ voidBillCountDisplay }}</span>
         <span class="opa-kpi-label">开单总数</span>
       </div>
       <div class="opa-kpi">
-        <span class="opa-kpi-val">{{ formatMoney(zoneTotalRevenue) }}</span>
+        <span class="opa-kpi-val">{{ zoneTotalRevenueDisplay }}</span>
         <span class="opa-kpi-label">区域营收合计</span>
       </div>
       <div class="opa-kpi">
-        <span class="opa-kpi-val">{{ zoneTotalItemQty.toLocaleString() }}</span>
+        <span class="opa-kpi-val">{{ zoneTotalItemQtyDisplay }}</span>
         <span class="opa-kpi-label">区域销量合计</span>
       </div>
     </div>
@@ -47,7 +47,7 @@
     <div class="opa-layout">
       <div class="opa-main">
         <!-- 撤单稽核 -->
-        <el-card class="opa-card opa-hero" shadow="never">
+        <el-card v-reveal="0" class="opa-card opa-hero" shadow="never">
           <template #header>
             <div class="opa-card-header">
               <span class="opa-card-header-left"><el-icon><WarningFilled /></el-icon><span>撤单稽核</span></span>
@@ -111,7 +111,7 @@
         </el-card>
 
         <!-- 区域坪效 -->
-        <el-card class="opa-card" shadow="never">
+        <el-card v-reveal="1" class="opa-card" shadow="never">
           <template #header>
             <div class="opa-card-header">
               <span class="opa-card-header-left"><el-icon><Grid /></el-icon><span>区域坪效</span></span>
@@ -173,6 +173,8 @@ import {
   zoneEfficiencySummary,
   type AnalysisChartContext,
 } from '@/views/smart-bi/components/analysis/analysisBullets';
+import { useCountUp } from '@/composables/useCountUp';
+import { vReveal } from '@/composables/useReveal';
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId || '');
@@ -256,6 +258,34 @@ const zoneTotalRevenue = ref<number | null>(null);
 const zoneTotalItemQty = ref(0);
 const zones = ref<ZoneEfficiency['zones']>([]);
 const zoneCaveat = ref('');
+
+// ============================================================
+// 总览条 KPI count-up (GSAP, once on first load — not on 刷新 refetch)
+// Gated on voidLoading/zoneLoading (not the raw ref) because voidCount/
+// voidBillCount/zoneTotalItemQty default to ref(0) pre-fetch — watching
+// "first non-null" alone would treat that placeholder 0 as "data arrived".
+// ============================================================
+const { display: voidRateDisplay } = useCountUp(voidRateVal, {
+  loading: voidLoading,
+  decimals: 2,
+  formatter: (v) => v.toFixed(2) + '%',
+});
+const { display: voidCountDisplay } = useCountUp(voidCount, {
+  loading: voidLoading,
+  formatter: (v) => Math.round(v).toLocaleString(),
+});
+const { display: voidBillCountDisplay } = useCountUp(voidBillCount, {
+  loading: voidLoading,
+  formatter: (v) => Math.round(v).toLocaleString(),
+});
+const { display: zoneTotalRevenueDisplay } = useCountUp(zoneTotalRevenue, {
+  loading: zoneLoading,
+  formatter: (v) => '¥' + formatNumber(v),
+});
+const { display: zoneTotalItemQtyDisplay } = useCountUp(zoneTotalItemQty, {
+  loading: zoneLoading,
+  formatter: (v) => Math.round(v).toLocaleString(),
+});
 
 async function loadZone() {
   if (!factoryId.value || !dateRange.value) return;

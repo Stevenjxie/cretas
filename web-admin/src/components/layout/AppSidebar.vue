@@ -404,6 +404,23 @@ function handleSelect(path: string) {
       background-color: rgba(255, 255, 255, 0.06) !important;
       color: #fff !important;
     }
+
+    // Icon micro-interaction: subtle scale + 1px lift on hover. Plain CSS
+    // transition (not GSAP) — this is a pure :hover state with no JS-driven
+    // sequencing/stagger/cleanup logic needed, so CSS is cheaper and simpler
+    // than spinning up a GSAP hover handler for every one of ~20 menu items.
+    // GSAP is reserved for useCountUp/vReveal where it earns its keep
+    // (once-only mount tweens, formatted-value tweening). Scale/duration
+    // values intentionally mirror ICON_HOVER_SCALE/ICON_HOVER_DURATION_S in
+    // src/utils/motion/constants.ts so the sidebar reads as the same motion
+    // vocabulary as the rest of the app.
+    .el-icon {
+      transition: transform 0.15s ease-out;
+    }
+
+    &:hover .el-icon {
+      transform: scale(1.12) translateY(-1px);
+    }
   }
 
   .el-menu-item.is-active {
@@ -427,6 +444,20 @@ function handleSelect(path: string) {
     margin: 1px 4px;
     border-radius: 6px;
     padding-left: 48px !important;
+  }
+
+  // Reduced motion: no icon transform at all, even instantly on hover —
+  // background/color hover feedback (above) still works, just no motion.
+  @media (prefers-reduced-motion: reduce) {
+    .el-menu-item .el-icon,
+    .el-sub-menu__title .el-icon {
+      transition: none;
+    }
+
+    .el-menu-item:hover .el-icon,
+    .el-sub-menu__title:hover .el-icon {
+      transform: none;
+    }
   }
 }
 
