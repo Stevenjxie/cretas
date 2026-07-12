@@ -242,7 +242,10 @@ const scheduleResult = computed<ScheduleResult>(() => ({
 }));
 
 const activeTrip = computed<RouteTrip | null>(() => scheduleResult.value.trips.find((trip) => trip.id === selectedTripId.value) ?? null);
-const exportRows = computed<ExportRow[]>(() => buildExportRows(scheduleResult.value));
+const exportRows = computed<ExportRow[]>(() => {
+  const nameById = new Map(stores.value.map((s) => [s.id, s.name]));
+  return buildExportRows(scheduleResult.value, (id) => nameById.get(id) ?? id);
+});
 
 // ==================== 动作：订单导入 ====================
 

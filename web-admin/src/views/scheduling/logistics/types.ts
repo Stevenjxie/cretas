@@ -78,6 +78,8 @@ export interface ScheduleResult {
 
 export interface ExportRow {
   tripId: string;
+  /** 可读车次号(线路序号 + 该车第几趟), 给确认/导出表展示, 不显 UUID。 */
+  tripLabel: string;
   vehicle: string;
   driver: string;
   storeIds: string[];

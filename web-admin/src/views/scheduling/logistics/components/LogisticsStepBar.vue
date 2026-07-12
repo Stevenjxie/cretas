@@ -7,7 +7,7 @@ const steps: Array<{ id: LogisticsStep; label: string }> = [
   { id: 'import', label: '导入订单' },
   { id: 'map', label: '查看路线' },
   { id: 'confirm', label: '人工确认' },
-  { id: 'export', label: '导出排程' },
+  { id: 'export', label: '确认排班' },
 ];
 </script>
 

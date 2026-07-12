@@ -132,25 +132,27 @@ function moveToTrip(trip: RouteTrip, storeId: string, event: Event): void {
               ⚠️ {{ lateCount(trip.id) }} 家门店预计晚于配送时间（下方标红）。可上移/下移调整，或移至其他车次。
             </p>
             <ol>
-              <li v-for="(storeId, i) in trip.storeIds" :key="storeId" :class="{ late: etaAt(trip.id, i)?.late }">
-                <span class="seq-no">{{ i + 1 }}</span>
-                <span class="store-info">
+              <li v-for="(storeId, i) in trip.storeIds" :key="storeId" class="stop" :class="{ late: etaAt(trip.id, i)?.late }">
+                <div class="stop-main">
+                  <span class="seq-no">{{ i + 1 }}</span>
                   <span class="store-name">{{ storeName(storeId) }}</span>
                   <span v-if="etaAt(trip.id, i)?.etaMin != null" class="store-eta">{{ etaLabel(etaAt(trip.id, i)) }}<span v-if="etaAt(trip.id, i)?.late"> · 迟到</span></span>
-                </span>
-                <el-button text size="small" :disabled="i === 0" @click.stop="emit('move-store', trip.id, storeId, -1)">上移</el-button>
-                <el-button text size="small" :disabled="i === trip.storeIds.length - 1" @click.stop="emit('move-store', trip.id, storeId, 1)">下移</el-button>
-                <select
-                  v-if="otherTrips(trip).length"
-                  class="move-to-trip-select"
-                  aria-label="移至其他车次"
-                  @click.stop
-                  @change="moveToTrip(trip, storeId, $event)"
-                >
-                  <option value="">移至其他车次…</option>
-                  <option v-for="c in otherTrips(trip)" :key="c.id" :value="c.id">第 {{ c.tripNo }} 趟</option>
-                  <option value="__new__">新建待匹配车次</option>
-                </select>
+                </div>
+                <div class="stop-actions">
+                  <el-button text size="small" :disabled="i === 0" @click.stop="emit('move-store', trip.id, storeId, -1)">上移</el-button>
+                  <el-button text size="small" :disabled="i === trip.storeIds.length - 1" @click.stop="emit('move-store', trip.id, storeId, 1)">下移</el-button>
+                  <select
+                    v-if="otherTrips(trip).length"
+                    class="move-to-trip-select"
+                    aria-label="移至其他车次"
+                    @click.stop
+                    @change="moveToTrip(trip, storeId, $event)"
+                  >
+                    <option value="">移至其他车次…</option>
+                    <option v-for="c in otherTrips(trip)" :key="c.id" :value="c.id">第 {{ c.tripNo }} 趟</option>
+                    <option value="__new__">新建待匹配车次</option>
+                  </select>
+                </div>
               </li>
             </ol>
           </section>
@@ -240,17 +242,20 @@ function moveToTrip(trip: RouteTrip, storeId: string, event: Event): void {
 .trip-card-body { display: grid; grid-template-columns: 1.4fr 1fr; gap: 18px; }
 .tc-col h4 { margin: 0 0 10px; color: #101828; font-size: 13.5px; font-weight: 700; }
 
+/* 每个停靠点两行: 第一行门店名(整行, 不被按钮挤成一字一行), 第二行操作 —— 修中文逐字竖排错乱 */
 .tc-sequence ol { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.tc-sequence li { display: flex; align-items: center; gap: 8px; color: #344054; }
-.seq-no { display: grid; width: 22px; height: 22px; place-items: center; color: #fff; font-size: 12px; background: #1b65a8; border-radius: 50%; flex: 0 0 auto; }
-.store-info { display: grid; gap: 1px; flex: 1 1 auto; min-width: 0; }
-.store-name { color: #344054; font-size: 13.5px; }
-.store-eta { font-size: 11px; font-weight: 600; color: #667085; }
-li.late .store-name { color: #b42318; font-weight: 700; }
-li.late .store-eta { color: #b42318; font-weight: 700; }
-li.late .seq-no { background: #b42318; }
+.stop { display: grid; gap: 6px; padding: 8px 10px; background: #f9fafb; border: 1px solid #eef1f4; border-radius: 8px; }
+.stop.late { background: #fef3f2; border-color: #fecdca; }
+.stop-main { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.seq-no { align-self: center; display: grid; width: 22px; height: 22px; place-items: center; color: #fff; font-size: 12px; background: #1b65a8; border-radius: 50%; flex: 0 0 auto; }
+.store-name { flex: 1 1 auto; min-width: 0; color: #344054; font-size: 13.5px; font-weight: 600; overflow-wrap: anywhere; line-height: 1.35; }
+.store-eta { flex: 0 0 auto; font-size: 11px; font-weight: 600; color: #667085; white-space: nowrap; }
+.stop.late .store-name { color: #b42318; font-weight: 700; }
+.stop.late .store-eta { color: #b42318; font-weight: 700; }
+.stop.late .seq-no { background: #b42318; }
+.stop-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding-left: 30px; }
 .late-warning { margin: 0 0 10px; padding: 8px 10px; color: #b42318; font-size: 12.5px; font-weight: 650; background: #fef3f2; border: 1px solid #fecdca; border-radius: 8px; }
-.move-to-trip-select { max-width: 120px; padding: 4px 6px; color: #344054; font-size: 12px; background: #f9fafb; border: 1px solid #eaecf0; border-radius: 6px; }
+.move-to-trip-select { max-width: 130px; padding: 4px 6px; color: #344054; font-size: 12px; background: #fff; border: 1px solid #eaecf0; border-radius: 6px; }
 
 .tc-assign label { display: grid; gap: 6px; margin-bottom: 12px; color: #344054; font-size: 13.5px; font-weight: 650; }
 .tc-assign .backup { margin: 0 0 12px; padding: 8px 10px; color: #475467; font-size: 12.5px; background: #f9fafb; border-radius: 8px; }

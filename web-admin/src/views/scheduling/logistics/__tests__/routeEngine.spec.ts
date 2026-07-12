@@ -144,6 +144,6 @@ describe('deterministic grouping and trip operations', () => {
     const result = generateSchedule({ stores, vehicles, roadSegments: segments, targetLoadPct: 88 });
     const rows = buildExportRows(result);
     expect(rows).toHaveLength(result.trips.length);
-    expect(rows[0]).toMatchObject({ vehicle: '苏E·TEST', driver: '赵明', storeOrder: 'A, B', volume: '8.00', loadRate: '80%', distance: '22.00 km' });
+    expect(rows[0]).toMatchObject({ vehicle: '苏E·TEST', driver: '赵明', storeOrder: 'A → B', volume: '8.00', loadRate: '80%', distance: '22.00 km' });
   });
 });

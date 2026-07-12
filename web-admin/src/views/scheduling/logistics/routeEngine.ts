@@ -156,13 +156,20 @@ export function reorderTrip({ trip, storeIds, roadSegments }: ReorderTripInput):
   };
 }
 
-export function buildExportRows(result: ScheduleResult): ExportRow[] {
-  return result.trips.map((trip) => ({
+/**
+ * 构建确认/导出表行。
+ * @param storeName storeId → 门店名解析器(不传则回退 id, 供纯算法测试用)。
+ *   确认/导出页必须传, 否则「门店顺序」列会显 UUID (nonsense)。
+ */
+export function buildExportRows(result: ScheduleResult, storeName?: (id: string) => string): ExportRow[] {
+  const nameOf = storeName ?? ((id: string) => id);
+  return result.trips.map((trip, index) => ({
     tripId: trip.id,
+    tripLabel: `线路 ${String(index + 1).padStart(2, '0')}${trip.vehicleTripSeq && trip.vehicleTripSeq > 1 ? ` · 该车第 ${trip.vehicleTripSeq} 趟` : ''}`,
     vehicle: trip.vehiclePlate ?? trip.vehicleId ?? '',
     driver: trip.driverName ?? trip.driverId ?? '',
     storeIds: [...trip.storeIds],
-    storeOrder: trip.storeIds.join(', '),
+    storeOrder: trip.storeIds.map((id) => nameOf(id)).join(' → '),
     volume: trip.totalVolumeCbm.toFixed(2),
     loadRate: `${Math.round(trip.loadRate * 100)}%`,
     distance: `${trip.totalDistanceKm.toFixed(2)} km`,
