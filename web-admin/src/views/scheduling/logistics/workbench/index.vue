@@ -33,7 +33,7 @@ function recomputeMapRowHeight(): void {
   if (window.innerWidth <= 1180) { mapRowHeight.value = 0; return; }
   // 文档绝对起点 = 视口内 top + 已滚动量, 与当前是否滚动无关(稳定, 不会自激振荡)
   const docTop = el.getBoundingClientRect().top + window.scrollY;
-  const reserve = 96; // 底部「上一步/下一步」sticky 条 + 页面下内边距 + 一点呼吸
+  const reserve = 140; // 地图行下方: 步内 gap + 页面 grid gap + 「上一步/下一步」条 + 下内边距(实测 ~134)
   mapRowHeight.value = Math.max(440, Math.round(window.innerHeight - docTop - reserve));
 }
 const route = useRoute();
