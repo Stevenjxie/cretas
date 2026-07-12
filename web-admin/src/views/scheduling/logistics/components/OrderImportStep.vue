@@ -60,6 +60,8 @@ interface ManualRowForm {
   areaCode: string; // 区域
   windowStart: string;
   windowEnd: string;
+  longitude: string; // 经度（文件导入带入时保留，避免重复地理编码；表格不展示，随提交透传）
+  latitude: string; // 纬度
 }
 
 /** 后端必填字段(除自动生成的订单号/系统给的业务日期外) —— 防呆: 缺任一项高亮 + 禁用提交。 */
@@ -98,10 +100,50 @@ function todayStr(): string {
 }
 
 function emptyRow(): ManualRowForm {
-  return { storeCode: '', storeName: '', address: '', pieces: '', boxes: '', weightKg: '', volumeCbm: '', areaCode: '', windowStart: '', windowEnd: '' };
+  return { storeCode: '', storeName: '', address: '', pieces: '', boxes: '', weightKg: '', volumeCbm: '', areaCode: '', windowStart: '', windowEnd: '', longitude: '', latitude: '' };
 }
 
 const manualDate = ref<string>(todayStr());
+
+// ==================== 文件导入 → 载入可编辑表格 ====================
+// 上传 Excel/CSV 后端解析出的每一行（含错误行）→ 灌进上面的可编辑表格，用户直接改完再提交。
+// 让文件导入和手动录入用同一张表：文件只是"批量填表"，导入后可继续手动修改内容（客户诉求）。
+const fromFileImport = ref(false);
+const importedFileName = ref('');
+
+function numToStr(v: number | null | undefined): string {
+  return v == null ? '' : String(v);
+}
+
+/** 把后端 preview 的解析行（含无效行）映射为可编辑表格行。 */
+function loadPreviewIntoTable(): void {
+  const p = props.preview;
+  if (!p || !p.rows?.length) return;
+  manualRows.value = p.rows.map((r) => ({
+    storeCode: r.storeCode ?? '',
+    storeName: r.storeName ?? '',
+    address: r.address ?? '',
+    pieces: numToStr(r.pieces),
+    boxes: numToStr(r.boxes),
+    weightKg: numToStr(r.weightKg),
+    volumeCbm: numToStr(r.volumeCbm),
+    areaCode: r.areaCode ?? '',
+    windowStart: r.windowStart ?? '',
+    windowEnd: r.windowEnd ?? '',
+    longitude: numToStr(r.longitude),
+    latitude: numToStr(r.latitude),
+  }));
+  if (p.businessDate) manualDate.value = p.businessDate;
+  importedFileName.value = p.sourceFilename || selectedFileName.value;
+  fromFileImport.value = true;
+  mode.value = 'manual'; // 切到可编辑表格
+}
+
+// 文件上传 → preview 到达（file 模式下）→ 载入表格。手动提交返回的 preview 不触发（那时已是 manual 模式）。
+watch(
+  () => props.preview,
+  (p) => { if (p && p.rows?.length && mode.value === 'file') loadPreviewIntoTable(); },
+);
 const manualRows = ref<ManualRowForm[]>([emptyRow(), emptyRow()]);
 
 function addManualRow(): void {
@@ -164,6 +206,9 @@ function submitManual(): void {
     areaCode: r.areaCode.trim() || null,
     windowStart: r.windowStart.trim() || null,
     windowEnd: r.windowEnd.trim() || null,
+    // 文件导入带入的坐标透传，避免重复地理编码（经纬度须同时有效才透传）。
+    longitude: r.longitude.trim() || null,
+    latitude: r.latitude.trim() || null,
   }));
   if (!rows.length) {
     ElMessage.warning('请至少录入一行订单');
@@ -175,12 +220,15 @@ function submitManual(): void {
 function switchMode(next: EntryMode): void {
   mode.value = next;
   resetFileInput();
+  if (next === 'file') fromFileImport.value = false; // 手动切回文件模式 → 清掉"来自文件"标记
 }
 
 // 手动录入成功(批次创建, batchId 变化)后清空表格, 防止误重复提交造成重复批次(防呆 Rule 4)。
 watch(() => props.batch?.id, (id, prev) => {
   if (id && id !== prev && mode.value === 'manual') {
     manualRows.value = [emptyRow(), emptyRow()];
+    fromFileImport.value = false;
+    importedFileName.value = '';
   }
 });
 </script>
@@ -234,6 +282,15 @@ watch(() => props.batch?.id, (id, prev) => {
 
     <!-- ============ 手动录入 ============ -->
     <template v-else>
+      <el-alert
+        v-if="fromFileImport"
+        type="success"
+        :closable="false"
+        show-icon
+        class="from-file-banner"
+        :title="`已从「${importedFileName || '文件'}」读入 ${manualRows.length} 行，可在下表直接修改后提交`"
+        description="标红的必填项请补齐；也可用门店名自动匹配历史门店。改完点「提交录入」写入。"
+      />
       <div class="manual-toolbar">
         <span class="field-label">业务日期</span>
         <el-date-picker
@@ -365,6 +422,7 @@ watch(() => props.batch?.id, (id, prev) => {
 .selected-file, .import-status, .empty-hint { margin: 0; color: #475467; font-size: 14px; }
 .import-error { margin: 0; padding: 10px 12px; color: #b42318; background: #fef3f2; border-radius: 8px; font-size: 14px; }
 /* 手动录入 */
+.from-file-banner { margin-bottom: 4px; }
 .manual-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .field-label { color: #344054; font-size: 13px; font-weight: 650; }
 .manual-hint { color: #98a2b3; font-size: 12.5px; }
