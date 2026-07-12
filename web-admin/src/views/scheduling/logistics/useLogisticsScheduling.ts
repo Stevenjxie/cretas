@@ -567,8 +567,8 @@ async function moveStore(storeId: string, direction: -1 | 1): Promise<boolean> {
     planError.value = null;
     return true;
   } catch (err) {
+    if (await handlePlanConflict(err)) return false;
     planError.value = errorMessage(err);
-    if (isOptimisticLockConflict(err)) await reloadPlan();
     return false;
   }
 }
@@ -593,8 +593,8 @@ async function moveStoreToTrip(storeId: string, targetTripId: string | null): Pr
     planError.value = null;
     return true;
   } catch (err) {
+    if (await handlePlanConflict(err)) return false;
     planError.value = errorMessage(err);
-    if (isOptimisticLockConflict(err)) await reloadPlan();
     return false;
   }
 }
@@ -609,8 +609,8 @@ async function assignVehicle(vehicleId: string | null): Promise<boolean> {
     planError.value = null;
     return true;
   } catch (err) {
+    if (await handlePlanConflict(err)) return false;
     planError.value = errorMessage(err);
-    if (isOptimisticLockConflict(err)) await reloadPlan();
     return false;
   }
 }
@@ -625,8 +625,8 @@ async function assignDriver(driverId: string | null): Promise<boolean> {
     planError.value = null;
     return true;
   } catch (err) {
+    if (await handlePlanConflict(err)) return false;
     planError.value = errorMessage(err);
-    if (isOptimisticLockConflict(err)) await reloadPlan();
     return false;
   }
 }
@@ -642,8 +642,8 @@ async function confirmTrip(): Promise<boolean> {
     planError.value = null;
     return true;
   } catch (err) {
+    if (await handlePlanConflict(err)) return false;
     planError.value = errorMessage(err);
-    if (isOptimisticLockConflict(err)) await reloadPlan();
     return false;
   }
 }
@@ -658,8 +658,8 @@ async function confirmSchedule(): Promise<boolean> {
     planError.value = null;
     return true;
   } catch (err) {
+    if (await handlePlanConflict(err)) return false;
     planError.value = errorMessage(err);
-    if (isOptimisticLockConflict(err)) await reloadPlan();
     return false;
   }
 }
@@ -699,6 +699,17 @@ function planSignature(trips: PlanSnapshot['trips']): string {
   return trips.map((t) => `${t.vehicleId ?? '-'}:${t.storeIds.join(',')}`).join('|');
 }
 
+/**
+ * 乐观锁冲突（计划被另一处并发修改，版本号对不上 → 后端 409「数据已被其他用户修改」）自愈：
+ * 自动拉取最新计划刷新本地版本，用户重试即可成功——不设 planError 横幅、不额外堆 toast
+ * （全局请求拦截器已弹一条 grouping 去重的提示）。返回 true = 已作为冲突处理，调用方直接 return。
+ */
+async function handlePlanConflict(err: unknown): Promise<boolean> {
+  if (!isOptimisticLockConflict(err) || !plan.value) return false;
+  await reloadPlan();
+  return true;
+}
+
 async function regeneratePlanAction(): Promise<void> {
   if (!plan.value) return;
   planLoading.value = true;
@@ -723,6 +734,7 @@ async function regeneratePlanAction(): Promise<void> {
       ElMessage({ message: `已按「${modeLabel}」重新生成路线`, type: 'success', duration: 3000 });
     }
   } catch (err) {
+    if (await handlePlanConflict(err)) return;
     planError.value = errorMessage(err);
   } finally {
     planLoading.value = false;

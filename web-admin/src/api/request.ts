@@ -44,6 +44,9 @@ const showMessage = async (message: string, type: 'success' | 'error' | 'warning
     type,
     duration: type === 'error' ? 0 : 3000,
     showClose: type === 'error',
+    // 相同文案合并成一条(带计数)，避免并发/重试时同一错误(如乐观锁 409「数据已被其他用户修改」)
+    // 反复弹、把屏幕右侧堆满一摞一样的 sticky toast。
+    grouping: true,
   });
 };
 
