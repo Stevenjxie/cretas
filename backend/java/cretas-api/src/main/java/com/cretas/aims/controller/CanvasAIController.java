@@ -232,8 +232,9 @@ public class CanvasAIController {
         String llmResponse = dashScopeClient.chatLowTemp(prompt, request.getMessage());
         Map<String, Object> spec;
         try {
+            // 规格是 JSON 对象 {...} 不是数组, 必须用 extractJsonObject (extractJson 只抓 [...] 数组)。
             spec = objectMapper.readValue(
-                    extractJson(llmResponse), new TypeReference<Map<String, Object>>() {});
+                    extractJsonObject(llmResponse), new TypeReference<Map<String, Object>>() {});
         } catch (Exception parseError) {
             return workflowSpecFailureResponse();
         }
@@ -594,5 +595,28 @@ public class CanvasAIController {
             return trimmed.substring(start, end + 1);
         }
         return "[]";
+    }
+
+    /** 抽取 JSON 对象 {...} (语义规格用; extractJson 只抓数组 [...])。 */
+    private String extractJsonObject(String response) {
+        if (response == null) {
+            return "{}";
+        }
+        String trimmed = response.trim();
+        if (trimmed.startsWith("```json")) {
+            trimmed = trimmed.substring(7);
+        } else if (trimmed.startsWith("```")) {
+            trimmed = trimmed.substring(3);
+        }
+        if (trimmed.endsWith("```")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 3);
+        }
+        trimmed = trimmed.trim();
+        int start = trimmed.indexOf('{');
+        int end = trimmed.lastIndexOf('}');
+        if (start >= 0 && end > start) {
+            return trimmed.substring(start, end + 1);
+        }
+        return "{}";
     }
 }
