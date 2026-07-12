@@ -344,7 +344,7 @@ import {
 import WorkProcessAIChatPanel from '@/views/system/components/WorkProcessAIChatPanel.vue';
 import WorkflowMaterialNode from './WorkflowMaterialNode.vue';
 import WorkflowProcessNode from './WorkflowProcessNode.vue';
-import { classifyOutputSkuCategory } from './outputSkuClassification';
+import { classifyOutputSkuCategory, matchOutputSkuByName } from './outputSkuClassification';
 import { usePinyinFilter } from './pinyinInitials';
 import {
   activateProductProcessWorkflow,
@@ -1906,7 +1906,8 @@ async function applyWorkflowAIDraft(
 }
 
 interface WorkflowSpecOutput { kind?: string; name?: string; unit?: string }
-interface WorkflowSpecStep { process?: string; outputs?: WorkflowSpecOutput[] }
+// #4 合流 (N→1): inputs = 本步除主链上游外**额外**投入的原料名 (混批/拼装). 每个建一个 RAW cell + INPUT 端口。
+interface WorkflowSpecStep { process?: string; inputs?: string[]; outputs?: WorkflowSpecOutput[] }
 interface WorkflowSpec { rawMaterials?: string[]; steps?: WorkflowSpecStep[] }
 
 /**
@@ -1966,6 +1967,8 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
   if (!isLoadedIdentityCurrent(identity) || !canEdit.value) return;
 
   // 3) 确定性建图 (sync in mutate, 复用 createProcessBranch): 入口原料 → 逐步 工序+产出
+  let autoBoundCount = 0;   // #5 自动绑定成功的产出 SKU 数
+  let mergeInputCount = 0;  // #4 合流额外投入原料端口数
   mutate(() => {
     const nodes: Node[] = [];
     const edges: Edge[] = [];
@@ -2002,6 +2005,19 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
       } else if (firstOut?.kind === 'FINISHED_GOOD' || firstOut?.kind === 'SEMI_FINISHED') {
         outData.kind = firstOut.kind;
       }
+      // #5 自动绑定产出 SKU: 按产出名在对应 kind 池里查唯一精确同名 (无/歧义则留待用户绑定, 防呆)。
+      const firstKind = String(outData.kind || branch.outputNode.kind) === 'FINISHED_GOOD'
+        ? 'FINISHED_GOOD' : 'SEMI_FINISHED';
+      const firstSku = matchOutputSkuByName(outData.name as string, firstKind, outputSkuOptions.value);
+      if (firstSku) {
+        outData.kind = firstKind;
+        outData.skuId = firstSku.id;
+        outData.skuCode = firstSku.code || firstSku.id;
+        outData.specification = firstSku.specification;
+        outData.baseUnit = firstSku.unit || outData.baseUnit;
+        outData.bound = true;
+        autoBoundCount += 1;
+      }
       const outputNode: Node = {
         id: branch.outputNode.id,
         type: 'material',
@@ -2013,6 +2029,20 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
         ...toPlainWorkflowValue(branch.processNode.data),
         kind: branch.processNode.kind,
       } as ProcessNodeData & { kind: 'PROCESS' };
+      // #5 首产出若已自动绑定, 同步写工序 OUTPUT 端口 (端口↔物料一致, 同 bindOutputSku 语义)。
+      if (firstSku) {
+        const firstPort = processData.ports.find(
+          (p) => p.direction === 'OUTPUT' && p.materialNodeId === branch.outputNode.id,
+        );
+        if (firstPort) {
+          Object.assign(firstPort, {
+            skuId: firstSku.id,
+            materialName: firstSku.name,
+            materialKind: firstKind,
+            unit: firstSku.unit || firstPort.unit,
+          });
+        }
+      }
       edges.push(...branch.edges.map((edge) => ({
         ...edge,
         markerEnd: MarkerType.ArrowClosed,
@@ -2024,16 +2054,23 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
         const unit = extra?.unit || String(processData.outputUnit || 'kg');
         const matId = `material:output:${nextGraphIdSeed()}`;
         const portId = `output:${nextGraphIdSeed()}`;
+        // #5 分流产出同样尝试自动绑定 SKU (唯一精确同名; 否则留待用户绑定)。
+        const extraSku = matchOutputSkuByName(extra?.name, kind, outputSkuOptions.value);
+        if (extraSku) autoBoundCount += 1;
         nodes.push({
           id: matId,
           type: 'material',
           position: { x: outputNode.position.x, y: outputNode.position.y + (extraIdx + 1) * 160 },
-          data: { kind, name: extra?.name || `产出 ${extraIdx + 2}`, skuId: '', skuCode: '待选择或现场创建 SKU', bound: false, baseUnit: unit },
+          data: extraSku
+            ? { kind, name: extraSku.name, skuId: extraSku.id, skuCode: extraSku.code || extraSku.id, specification: extraSku.specification, bound: true, baseUnit: extraSku.unit || unit }
+            : { kind, name: extra?.name || `产出 ${extraIdx + 2}`, skuId: '', skuCode: '待选择或现场创建 SKU', bound: false, baseUnit: unit },
         });
         processData.ports = [
           ...processData.ports,
           {
-            id: portId, direction: 'OUTPUT', materialNodeId: matId, materialKind: kind, unit,
+            id: portId, direction: 'OUTPUT', materialNodeId: matId, materialKind: kind,
+            unit: extraSku?.unit || unit,
+            ...(extraSku ? { skuId: extraSku.id, materialName: extraSku.name } : {}),
             ordinal: processData.ports.filter((p) => p.direction === 'OUTPUT').length,
           },
         ];
@@ -2042,6 +2079,34 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
           markerEnd: MarkerType.ArrowClosed,
           style: { stroke: '#1b65a8', strokeWidth: 2 },
         });
+      });
+      // #4 合流 (N→1): 本步声明的额外投入原料 → 各建 RAW cell + INPUT 端口 + 边 (混批/拼装分装)。
+      // 主链上游 (prevMaterial) 仍是首个 INPUT (createProcessBranch 已建), 这里只追加额外投入。
+      const extraInputs = Array.isArray(step.inputs)
+        ? step.inputs.map((s) => (s || '').trim()).filter(Boolean)
+        : [];
+      extraInputs.forEach((inName, inIdx) => {
+        const rawId = `material:raw:${nextGraphIdSeed()}`;
+        const inPortId = `input:${nextGraphIdSeed()}`;
+        nodes.push({
+          id: rawId,
+          type: 'material',
+          position: { x: branch.processNode.position.x - 220, y: branch.processNode.position.y + (inIdx + 1) * 140 },
+          data: { kind: 'RAW_MATERIAL', name: inName, skuId: '', skuCode: '待绑定原料 SKU', bound: false, baseUnit: 'kg' },
+        });
+        processData.ports = [
+          ...processData.ports,
+          {
+            id: inPortId, direction: 'INPUT', materialNodeId: rawId, unit: 'kg',
+            ordinal: processData.ports.filter((p) => p.direction === 'INPUT').length,
+          },
+        ];
+        edges.push({
+          ...flowEdge(rawId, 'output', branch.processNode.id, inPortId),
+          markerEnd: MarkerType.ArrowClosed,
+          style: { stroke: '#1b65a8', strokeWidth: 2 },
+        });
+        mergeInputCount += 1;
       });
       nodes.push({ id: branch.processNode.id, type: 'process', position: branch.processNode.position, data: processData });
       nodes.push(outputNode);
@@ -2053,7 +2118,11 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
   });
   await nextTick();
   await handleAutoLayout();
-  ElMessage.success(`已按 AI 描述生成 ${steps.length} 道工序流程，请检查并绑定产出 SKU 后保存`);
+  const parts = [`已按 AI 描述生成 ${steps.length} 道工序流程`];
+  if (mergeInputCount > 0) parts.push(`含 ${mergeInputCount} 处合流投入原料 (待绑定原料 SKU)`);
+  if (autoBoundCount > 0) parts.push(`已自动绑定 ${autoBoundCount} 个产出 SKU`);
+  parts.push('请检查并绑定剩余产出/原料 SKU 后保存');
+  ElMessage.success(parts.join('，'));
 }
 
 function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boolean {

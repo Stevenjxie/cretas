@@ -68,6 +68,7 @@ public class CanvasAIController {
               "steps": [
                 {
                   "process": "<work process name, e.g. 清洗/卤制/切片装盒>",
+                  "inputs": ["<extra raw material name>", ...],
                   "outputs": [
                     { "kind": "SEMI_FINISHED"|"FINISHED_GOOD", "name": "<output product name>", "unit": "<kg/盒/只/...>" }
                   ]
@@ -78,8 +79,13 @@ public class CanvasAIController {
             - steps are ordered; each step consumes the previous step's first output
               (step 1 consumes the rawMaterials).
             - a step with multiple outputs = 分流/多产出 (one process yields several products).
+            - "inputs" (optional) = 合流/混批: EXTRA raw materials this step也投入, on TOP of
+              the previous step's output. Use it when the user says several ingredients/materials
+              are combined/mixed/assembled into one process (e.g. 拼装/分装/调配/混合). Omit or []
+              when the step只沿主链 consumes the upstream output. Do NOT list the previous step's
+              output here — only NEW raw materials entering at this step.
             - the LAST step output is usually FINISHED_GOOD; intermediate outputs are SEMI_FINISHED.
-            - use the user's own wording for process/output names. Keep it minimal, valid JSON only.
+            - use the user's own wording for process/output/material names. Keep it minimal, valid JSON only.
 
             Current definition (context, may be empty): %s
             Selected node id: %s
