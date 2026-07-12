@@ -1727,7 +1727,7 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'analytics/platform',
             name: 'RestaurantPlatform',
             component: () => import('@/views/restaurant/analytics/platform.vue'),
-            meta: { requiresAuth: true, title: '大众点评口碑', module: 'restaurant' }
+            meta: { requiresAuth: true, title: '平台分析', module: 'restaurant' }
           },
           {
             // IA v2: 旧四象限 → 菜品分析 quadrant tab (保留 query)

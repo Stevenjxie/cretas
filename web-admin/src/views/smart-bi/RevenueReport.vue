@@ -86,7 +86,7 @@ const uploadPurposeOptions = [
     value: 'review-data',
     title: '顾客评价/平台口碑',
     desc: '大众点评、美团评价、评分、评论文本等口碑数据；demo 已内置 19,845 条口碑样本。',
-    action: '前往大众点评口碑分析',
+    action: '前往平台分析',
   },
 ] as const;
 
@@ -520,13 +520,13 @@ function showStickyWarning(message: string) {
 
     <section class="review-entry">
       <div>
-        <div class="review-entry__title">顾客评价与大众点评口碑</div>
+        <div class="review-entry__title">顾客评价与平台分析</div>
         <div class="review-entry__desc">
           demo 已接入大众点评 / 美团评价样本，可查看平台评价量、好评关键词、门店口碑排名和评价趋势。
         </div>
       </div>
       <el-button type="primary" plain @click="router.push('/restaurant/analytics/platform')">
-        查看大众点评口碑
+        查看平台分析
       </el-button>
     </section>
 

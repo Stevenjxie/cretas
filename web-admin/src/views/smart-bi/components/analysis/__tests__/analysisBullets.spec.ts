@@ -22,6 +22,22 @@ import {
   voidRateSummary,
   zoneEfficiencyBullets,
   zoneEfficiencySummary,
+  platformOverviewBullets,
+  platformOverviewSummary,
+  platformCompareBullets,
+  platformCompareSummary,
+  storeRankingBullets,
+  storeRankingSummary,
+  reviewTrendBullets,
+  reviewTrendSummary,
+  financeOverviewBullets,
+  financeOverviewSummary,
+  salesOverviewBullets,
+  salesOverviewSummary,
+  trendOverviewBullets,
+  trendOverviewSummary,
+  kpiOverviewBullets,
+  kpiOverviewSummary,
   splitMarkdownBullets,
 } from '../analysisBullets';
 
@@ -236,6 +252,190 @@ describe('zoneEfficiencyBullets / zoneEfficiencySummary', () => {
     expect(bullets.join(' ')).not.toContain('¥0');
     expect(bullets.join(' ')).not.toContain('营收最高');
     expect(bullets.some((b) => b.includes('A区') && b.includes('数量最高'))).toBe(true);
+  });
+});
+
+describe('platformOverviewBullets / platformOverviewSummary', () => {
+  it('zero totalReviews → []/暂无数据', () => {
+    const empty = { totalReviews: 0, storeCount: 0, cityCount: 0, lowStarCount: 0, scoreCards: [], goodTags: [] };
+    expect(platformOverviewBullets(empty)).toEqual([]);
+    expect(platformOverviewSummary(empty)).toBe('暂无数据');
+  });
+
+  it('reports totals + top score dimension + low-star warning + top tag', () => {
+    const input = {
+      totalReviews: 19845,
+      storeCount: 12,
+      cityCount: 3,
+      lowStarCount: 421,
+      scoreCards: [
+        { name: '星级', value: 4.6 },
+        { name: '服务', value: 4.8 },
+        { name: '环境', value: 4.5 },
+      ],
+      goodTags: [
+        { tag: '味道好', count: 3200 },
+        { tag: '分量足', count: 1800 },
+      ],
+    };
+    const bullets = platformOverviewBullets(input);
+    expect(bullets.some((b) => b.includes('19,845') || b.includes('19845'))).toBe(true);
+    expect(bullets.some((b) => b.includes('服务') && b.includes('4.80'))).toBe(true); // highest dimension wins
+    expect(bullets.some((b) => b.includes('421'))).toBe(true);
+    expect(bullets.some((b) => b.includes('味道好'))).toBe(true);
+
+    const summary = platformOverviewSummary(input);
+    expect(summary).toContain('19845');
+    expect(summary).toContain('味道好(3200)');
+  });
+});
+
+describe('platformCompareBullets / platformCompareSummary', () => {
+  it('empty → []/暂无数据', () => {
+    expect(platformCompareBullets([])).toEqual([]);
+    expect(platformCompareSummary([])).toBe('暂无数据');
+  });
+
+  it('highlights the highest-volume platform and the star-rating gap', () => {
+    const rows = [
+      { platform: '大众点评', reviewCount: 12000, avgStar: 4.5 },
+      { platform: '美团', reviewCount: 7845, avgStar: 4.8 },
+    ];
+    const bullets = platformCompareBullets(rows);
+    expect(bullets.some((b) => b.includes('大众点评') && b.includes('12,000'))).toBe(true);
+    expect(bullets.some((b) => b.includes('美团') && b.includes('4.80'))).toBe(true);
+
+    const summary = platformCompareSummary(rows);
+    expect(summary).toContain('大众点评:12000条(4.50分)');
+  });
+});
+
+describe('storeRankingBullets / storeRankingSummary', () => {
+  it('empty → []/暂无数据', () => {
+    expect(storeRankingBullets([])).toEqual([]);
+    expect(storeRankingSummary([])).toBe('暂无数据');
+  });
+
+  it('reports the best store, the weakest store, and the most-low-star store', () => {
+    const rows = [
+      { store: '门店A', reviewCount: 5000, avgStar: 4.9, lowStarCount: 20 },
+      { store: '门店B', reviewCount: 3000, avgStar: 4.1, lowStarCount: 150 },
+    ];
+    const bullets = storeRankingBullets(rows);
+    expect(bullets.some((b) => b.includes('门店A') && b.includes('4.90'))).toBe(true);
+    expect(bullets.some((b) => b.includes('门店B') && b.includes('补课对象'))).toBe(true);
+    expect(bullets.some((b) => b.includes('门店B') && b.includes('150'))).toBe(true);
+  });
+});
+
+describe('reviewTrendBullets / reviewTrendSummary', () => {
+  it('empty → []/暂无数据', () => {
+    expect(reviewTrendBullets([])).toEqual([]);
+    expect(reviewTrendSummary([])).toBe('暂无数据');
+  });
+
+  it('reports the score delta between first/last month and the peak month', () => {
+    const rows = [
+      { month: '2026-01', reviewCount: 800, avgStar: 4.4 },
+      { month: '2026-02', reviewCount: 1200, avgStar: 4.6 },
+    ];
+    const bullets = reviewTrendBullets(rows);
+    expect(bullets.some((b) => b.includes('提升') && b.includes('0.20'))).toBe(true);
+    expect(bullets.some((b) => b.includes('2026-02') && b.includes('1,200'))).toBe(true);
+  });
+});
+
+describe('financeOverviewBullets / financeOverviewSummary', () => {
+  it('zero billCount → []/暂无数据', () => {
+    const empty = { totalRevenue: null, billCount: 0, avgBillValue: null, storeCount: 0, topStores: [] };
+    expect(financeOverviewBullets(empty)).toEqual([]);
+    expect(financeOverviewSummary(empty)).toBe('暂无数据');
+  });
+
+  it('reports total revenue + avg bill value + top store', () => {
+    const input = {
+      totalRevenue: 5000000,
+      billCount: 12000,
+      avgBillValue: 83.5,
+      storeCount: 8,
+      topStores: [
+        { storeName: '旗舰店', revenue: 1200000, billCount: 3000 },
+        { storeName: '分店A', revenue: 800000, billCount: 2000 },
+      ],
+    };
+    const bullets = financeOverviewBullets(input);
+    expect(bullets.some((b) => b.includes('12,000') && b.includes('8'))).toBe(true);
+    expect(bullets.some((b) => b.includes('旗舰店'))).toBe(true);
+
+    const summary = financeOverviewSummary(input);
+    expect(summary).toContain('12000单');
+  });
+});
+
+describe('salesOverviewBullets / salesOverviewSummary', () => {
+  it('empty → []/暂无数据', () => {
+    expect(salesOverviewBullets({ topProducts: [] })).toEqual([]);
+    expect(salesOverviewSummary({ topProducts: [] })).toBe('暂无数据');
+  });
+
+  it('reports top-qty product and a distinct top-revenue product', () => {
+    const input = {
+      topProducts: [
+        { productName: '招牌鱼', qtySold: 4000, revenue: 200000, billCount: 3000 },
+        { productName: '龙虾套餐', qtySold: 500, revenue: 250000, billCount: 400 },
+      ],
+    };
+    const bullets = salesOverviewBullets(input);
+    expect(bullets.some((b) => b.includes('招牌鱼') && b.includes('4,000'))).toBe(true);
+    expect(bullets.some((b) => b.includes('龙虾套餐'))).toBe(true);
+  });
+});
+
+describe('trendOverviewBullets / trendOverviewSummary', () => {
+  it('empty → []/暂无数据', () => {
+    const empty = { dailyTrend: [], monthlyTrend: [], weekdayWeekend: { weekdayAvg: null, weekendAvg: null, weekdayDays: 0, weekendDays: 0 } };
+    expect(trendOverviewBullets(empty)).toEqual([]);
+    expect(trendOverviewSummary(empty)).toBe('暂无数据');
+  });
+
+  it('reports monthly growth, weekday/weekend split, and daily peak', () => {
+    const input = {
+      dailyTrend: [
+        { date: '2026-06-01', revenue: 10000, billCount: 100 },
+        { date: '2026-06-15', revenue: 25000, billCount: 220 },
+      ],
+      monthlyTrend: [
+        { month: '2026-05', revenue: 400000 },
+        { month: '2026-06', revenue: 480000 },
+      ],
+      weekdayWeekend: { weekdayAvg: 8000, weekendAvg: 15000, weekdayDays: 20, weekendDays: 10 },
+    };
+    const bullets = trendOverviewBullets(input);
+    expect(bullets.some((b) => b.includes('增长'))).toBe(true);
+    expect(bullets.some((b) => b.includes('周末明显更高'))).toBe(true);
+    expect(bullets.some((b) => b.includes('2026-06-15'))).toBe(true);
+  });
+});
+
+describe('kpiOverviewBullets / kpiOverviewSummary', () => {
+  it('zero billCount → []/暂无数据', () => {
+    const empty = {
+      revenue: 0, billCount: 0, itemCount: 0, customerCount: 0, storeCount: 0,
+      avgBillValue: null, itemsPerBill: null, avgPerCapita: null,
+    };
+    expect(kpiOverviewBullets(empty)).toEqual([]);
+    expect(kpiOverviewSummary(empty)).toBe('暂无数据');
+  });
+
+  it('reports revenue + avg bill value + per-capita + items-per-bill', () => {
+    const input = {
+      revenue: 5000000, billCount: 12000, itemCount: 30000, customerCount: 8000, storeCount: 8,
+      avgBillValue: 83.5, itemsPerBill: 2.5, avgPerCapita: 42.3,
+    };
+    const bullets = kpiOverviewBullets(input);
+    expect(bullets.some((b) => b.includes('83.5') || b.includes('¥83.5'))).toBe(true);
+    expect(bullets.some((b) => b.includes('42.3'))).toBe(true);
+    expect(bullets.some((b) => b.includes('2.5'))).toBe(true);
   });
 });
 

@@ -10,6 +10,19 @@ import { buildPlatformReviewVM } from './platformReviewGold'
 import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight'
 import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue'
 import { useChartInsight } from '@/composables/useChartInsight'
+import ChartInsights from '@/views/smart-bi/components/analysis/ChartInsights.vue'
+import AnalysisChatPanel from '@/views/smart-bi/components/analysis/AnalysisChatPanel.vue'
+import {
+  platformOverviewBullets,
+  platformOverviewSummary,
+  platformCompareBullets,
+  platformCompareSummary,
+  storeRankingBullets,
+  storeRankingSummary,
+  reviewTrendBullets,
+  reviewTrendSummary,
+  type AnalysisChartContext,
+} from '@/views/smart-bi/components/analysis/analysisBullets'
 
 const router = useRouter()
 function goUpload() { router.push('/smart-bi/upload') }
@@ -164,15 +177,56 @@ const { insight: reviewTrendInsight, loading: reviewTrendInsightLoading } = useC
   platformPerms,
   { factoryId: () => factoryId, autoTier2: true },
 )
+
+// ============================================================
+// 混合式图表分析(bullets + AI 解读 + 整页 AI 分析面板) — 2026-07-12
+// 与 CRM 会员分析 / 运营分析同一套 pattern: 确定性 bullets (analysisBullets.ts,
+// 0 LLM) + ChartInsights.vue 承载的按需 AI 解读 + 页面级 AnalysisChatPanel。
+// 这套是全新的, 与上面已有的 ChartInsight(单数)/useChartInsight 旧系统并存,
+// 纯新增, 不影响旧系统的 Tier1/Tier2 行为。
+// ============================================================
+const platformOverviewBulletsInput = computed(() => ({
+  totalReviews: vm.value.totalReviews,
+  storeCount: vm.value.summary?.storeCount ?? 0,
+  cityCount: vm.value.summary?.cityCount ?? 0,
+  lowStarCount: vm.value.summary?.lowStarCount ?? 0,
+  scoreCards: vm.value.scoreCards,
+  goodTags: vm.value.goodTags,
+}))
+const platformOverviewBulletsComputed = computed(() => platformOverviewBullets(platformOverviewBulletsInput.value))
+const platformOverviewSummaryStr = computed(() => platformOverviewSummary(platformOverviewBulletsInput.value))
+
+const platformCompareBulletsComputed = computed(() => platformCompareBullets(vm.value.platforms))
+const platformCompareSummaryStr = computed(() => platformCompareSummary(vm.value.platforms))
+
+const storeRankingBulletsComputed = computed(() => storeRankingBullets(vm.value.storeRanking))
+const storeRankingSummaryStr = computed(() => storeRankingSummary(vm.value.storeRanking))
+
+const reviewTrendBulletsComputed = computed(() => reviewTrendBullets(vm.value.trend))
+const reviewTrendSummaryStr = computed(() => reviewTrendSummary(vm.value.trend))
+
+const analysisContexts = computed<AnalysisChartContext[]>(() => [
+  { key: 'platform-overview', title: '口碑总览', dataSummary: platformOverviewSummaryStr.value },
+  { key: 'platform-compare', title: '平台评价量对比', dataSummary: platformCompareSummaryStr.value },
+  { key: 'store-ranking', title: '门店口碑排名', dataSummary: storeRankingSummaryStr.value },
+  { key: 'review-trend', title: '评价趋势', dataSummary: reviewTrendSummaryStr.value },
+])
+
+const analysisChatPanelRef = ref<InstanceType<typeof AnalysisChatPanel> | null>(null)
+function focusChart(key: string) {
+  analysisChatPanelRef.value?.setFocus(key)
+}
 </script>
 
 <template>
   <div class="restaurant-platform" ref="containerRef">
+    <div class="platform-layout">
+    <div class="platform-main">
     <el-card class="page-card" shadow="never">
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <span class="page-title">平台口碑分析（大众点评）</span>
+            <span class="page-title">平台分析（美团 / 点评 / 抖音）</span>
             <el-tag v-if="!vm.isEmpty" size="small" type="info">
               来源: 大众点评 / 美团 导出，共 {{ vm.totalReviews.toLocaleString() }} 条点评
             </el-tag>
@@ -218,6 +272,15 @@ const { insight: reviewTrendInsight, loading: reviewTrendInsightLoading } = useC
           <el-col :xs="8" :sm="6"><div class="mini-card warn"><span>低星(≤3)</span><b>{{ vm.summary.lowStarCount.toLocaleString() }}</b></div></el-col>
         </el-row>
 
+        <!-- 口碑总览: 确定性 bullets + 按需 AI 解读 (新增, 与上面卡片同批数据) -->
+        <ChartInsights
+          :bullets="platformOverviewBulletsComputed"
+          chart-key="platform-overview"
+          chart-title="口碑总览"
+          :data-summary="platformOverviewSummaryStr"
+          @focus="focusChart"
+        />
+
         <el-card shadow="hover" class="section-card benchmark-section" v-if="vm.benchmarkCards.length">
           <template #header>
             <div class="section-title">多维对标分析：不只看店内，还看平台、连锁、产品、商圈和成本</div>
@@ -252,6 +315,13 @@ const { insight: reviewTrendInsight, loading: reviewTrendInsightLoading } = useC
           <div id="chart-platform-compare" style="height: 280px" />
           <!-- U6: useChartInsight — Tier1 instant, Tier2 auto on null (飞轮接通) -->
           <ChartInsight :insight="platformCompareInsight" :loading="platformCompareInsightLoading" depth="detailed" />
+          <ChartInsights
+            :bullets="platformCompareBulletsComputed"
+            chart-key="platform-compare"
+            chart-title="平台评价量对比"
+            :data-summary="platformCompareSummaryStr"
+            @focus="focusChart"
+          />
         </el-card>
 
         <!-- Top good tags -->
@@ -291,6 +361,13 @@ const { insight: reviewTrendInsight, loading: reviewTrendInsightLoading } = useC
               </template>
             </el-table-column>
           </el-table>
+          <ChartInsights
+            :bullets="storeRankingBulletsComputed"
+            chart-key="store-ranking"
+            chart-title="门店口碑排名"
+            :data-summary="storeRankingSummaryStr"
+            @focus="focusChart"
+          />
         </el-card>
 
         <!-- Review trend -->
@@ -299,9 +376,22 @@ const { insight: reviewTrendInsight, loading: reviewTrendInsightLoading } = useC
           <div id="chart-review-trend" style="height: 300px" />
           <!-- U6: useChartInsight — Tier1 instant, Tier2 auto on null (飞轮接通) -->
           <ChartInsight :insight="reviewTrendInsight" :loading="reviewTrendInsightLoading" depth="detailed" />
+          <ChartInsights
+            :bullets="reviewTrendBulletsComputed"
+            chart-key="review-trend"
+            chart-title="评价趋势"
+            :data-summary="reviewTrendSummaryStr"
+            @focus="focusChart"
+          />
         </el-card>
       </template>
     </el-card>
+    </div>
+
+    <div class="platform-side">
+      <AnalysisChatPanel ref="analysisChatPanelRef" :contexts="analysisContexts" page-title="平台分析" />
+    </div>
+    </div>
   </div>
 </template>
 
@@ -311,6 +401,13 @@ const { insight: reviewTrendInsight, loading: reviewTrendInsightLoading } = useC
 .card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
 .header-left { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .page-title { font-size: 16px; font-weight: 600; }
+
+/* 主列(原有内容) + 侧列(AI 分析面板) 响应式布局 (mirrors CRM member-analysis / 运营分析) */
+.platform-layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: start; }
+@media (max-width: 1280px) { .platform-layout { grid-template-columns: 1fr; } }
+.platform-main { min-width: 0; }
+.platform-side { position: sticky; top: 16px; }
+@media (max-width: 1280px) { .platform-side { position: static; } }
 
 .score-row { margin-top: 4px; }
 .score-card {

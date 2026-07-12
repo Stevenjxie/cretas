@@ -483,3 +483,352 @@ export function zoneEfficiencySummary(input: ZoneEfficiencyBulletsInput): string
     })
     .join(' / ');
 }
+
+// ============================================================
+// 平台分析 (原 大众点评口碑) — review-summary/review-platform/
+// review-good-tags/review-store-ranking/review-trend — platform.vue (2026-07-12)
+// ============================================================
+
+export interface PlatformOverviewBulletsInput {
+  totalReviews: number;
+  storeCount: number;
+  cityCount: number;
+  lowStarCount: number;
+  scoreCards: Array<{ name: string; value: number | null }>;
+  goodTags: Array<{ tag: string; count: number }>;
+}
+
+export function platformOverviewBullets(input: PlatformOverviewBulletsInput): string[] {
+  if (input.totalReviews <= 0) return [];
+  const bullets: string[] = [];
+
+  bullets.push(
+    `平台点评合计 ${input.totalReviews.toLocaleString()} 条，覆盖 ${input.storeCount} 家门店、${input.cityCount} 个城市`,
+  );
+
+  const scored = (input.scoreCards ?? []).filter((c) => c.value != null);
+  if (scored.length) {
+    const top = [...scored].sort((a, b) => (b.value as number) - (a.value as number))[0];
+    bullets.push(`${top.name}分最高，达 ${(top.value as number).toFixed(2)} 分`);
+  }
+
+  if (input.lowStarCount > 0) {
+    bullets.push(`低星(≤3分)评价共 ${input.lowStarCount.toLocaleString()} 条，建议优先归因处理`);
+  }
+
+  const tags = (input.goodTags ?? []).filter((t) => t.count > 0);
+  if (tags.length) {
+    const top = [...tags].sort((a, b) => b.count - a.count)[0];
+    bullets.push(`好评标签中「${top.tag}」提及最多，共 ${top.count.toLocaleString()} 次`);
+  }
+
+  return bullets;
+}
+
+export function platformOverviewSummary(input: PlatformOverviewBulletsInput): string {
+  if (input.totalReviews <= 0) return '暂无数据';
+  const parts = [`合计${input.totalReviews}条/${input.storeCount}店/${input.cityCount}城`];
+
+  const scored = (input.scoreCards ?? []).filter((c) => c.value != null);
+  if (scored.length) {
+    parts.push(scored.map((c) => `${c.name}${(c.value as number).toFixed(2)}`).join('/'));
+  }
+  if (input.lowStarCount > 0) parts.push(`低星${input.lowStarCount}条`);
+
+  const tags = (input.goodTags ?? [])
+    .filter((t) => t.count > 0)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
+  if (tags.length) parts.push('好评标签: ' + tags.map((t) => `${t.tag}(${t.count})`).join('/'));
+
+  return parts.join('；');
+}
+
+export interface PlatformCompareRow {
+  platform: string;
+  reviewCount: number;
+  avgStar: number | null;
+}
+
+export function platformCompareBullets(platforms: PlatformCompareRow[] | null | undefined): string[] {
+  const valid = (platforms ?? []).filter((p) => p.reviewCount > 0);
+  if (!valid.length) return [];
+  const bullets: string[] = [];
+
+  const byCount = [...valid].sort((a, b) => b.reviewCount - a.reviewCount);
+  const top = byCount[0];
+  bullets.push(`${top.platform}评价量最多，共 ${top.reviewCount.toLocaleString()} 条`);
+
+  const scored = valid.filter((p) => p.avgStar != null);
+  if (scored.length >= 2) {
+    const byStar = [...scored].sort((a, b) => (b.avgStar as number) - (a.avgStar as number));
+    const best = byStar[0];
+    const worst = byStar[byStar.length - 1];
+    if (best.platform !== worst.platform) {
+      bullets.push(
+        `${best.platform}平均星级最高(${(best.avgStar as number).toFixed(2)}分)，${worst.platform}最低(${(worst.avgStar as number).toFixed(2)}分)`,
+      );
+    }
+  }
+
+  return bullets;
+}
+
+export function platformCompareSummary(platforms: PlatformCompareRow[] | null | undefined): string {
+  const valid = (platforms ?? []).filter((p) => p.reviewCount > 0).sort((a, b) => b.reviewCount - a.reviewCount);
+  if (!valid.length) return '暂无数据';
+  return valid
+    .map((p) => `${p.platform}:${p.reviewCount}条${p.avgStar != null ? `(${p.avgStar.toFixed(2)}分)` : ''}`)
+    .join(' / ');
+}
+
+export interface StoreRankingRow {
+  store: string;
+  reviewCount: number;
+  avgStar: number | null;
+  lowStarCount: number;
+}
+
+export function storeRankingBullets(stores: StoreRankingRow[] | null | undefined): string[] {
+  const valid = (stores ?? []).filter((s) => s.reviewCount > 0);
+  if (!valid.length) return [];
+  const bullets: string[] = [];
+
+  const scored = valid.filter((s) => s.avgStar != null);
+  if (scored.length) {
+    const byStar = [...scored].sort((a, b) => (b.avgStar as number) - (a.avgStar as number));
+    const best = byStar[0];
+    bullets.push(`${best.store}口碑最高，均 ${(best.avgStar as number).toFixed(2)} 星`);
+    if (byStar.length > 1) {
+      const weakest = byStar[byStar.length - 1];
+      if (weakest.store !== best.store) {
+        bullets.push(`${weakest.store}口碑暂时最弱，均 ${(weakest.avgStar as number).toFixed(2)} 星，是补课对象`);
+      }
+    }
+  }
+
+  const lowStarRanked = valid.filter((s) => s.lowStarCount > 0).sort((a, b) => b.lowStarCount - a.lowStarCount);
+  if (lowStarRanked.length) {
+    const top = lowStarRanked[0];
+    bullets.push(`${top.store}低星评价最多，共 ${top.lowStarCount.toLocaleString()} 条`);
+  }
+
+  return bullets;
+}
+
+export function storeRankingSummary(stores: StoreRankingRow[] | null | undefined): string {
+  const valid = (stores ?? []).filter((s) => s.reviewCount > 0).sort((a, b) => (b.avgStar ?? 0) - (a.avgStar ?? 0));
+  if (!valid.length) return '暂无数据';
+  return valid
+    .slice(0, 8)
+    .map((s) => `${s.store}:${s.avgStar != null ? `${s.avgStar.toFixed(2)}星` : '—'}(${s.reviewCount}条/低星${s.lowStarCount})`)
+    .join(' / ');
+}
+
+export interface ReviewTrendRow {
+  month: string;
+  reviewCount: number;
+  avgStar: number | null;
+}
+
+export function reviewTrendBullets(trend: ReviewTrendRow[] | null | undefined): string[] {
+  const valid = (trend ?? []).filter((t) => t.reviewCount > 0 || t.avgStar != null);
+  if (!valid.length) return [];
+  const bullets: string[] = [];
+
+  if (valid.length >= 2) {
+    const first = valid[0];
+    const last = valid[valid.length - 1];
+    if (first.avgStar != null && last.avgStar != null) {
+      const delta = last.avgStar - first.avgStar;
+      bullets.push(
+        `评分自 ${first.month} 到 ${last.month} ${delta >= 0 ? '提升' : '下降'} ${Math.abs(delta).toFixed(2)} 分`,
+      );
+    }
+  }
+
+  const byCount = [...valid].sort((a, b) => b.reviewCount - a.reviewCount);
+  const peak = byCount[0];
+  if (peak.reviewCount > 0) {
+    bullets.push(`${peak.month}评价量最高，达 ${peak.reviewCount.toLocaleString()} 条`);
+  }
+
+  return bullets;
+}
+
+export function reviewTrendSummary(trend: ReviewTrendRow[] | null | undefined): string {
+  const valid = (trend ?? []).filter((t) => t.reviewCount > 0 || t.avgStar != null);
+  if (!valid.length) return '暂无数据';
+  return valid
+    .map((t) => `${t.month}:${t.reviewCount}条${t.avgStar != null ? `(${t.avgStar.toFixed(2)}星)` : ''}`)
+    .join(' / ');
+}
+
+// ============================================================
+// 经营分析 Hub (BusinessAnalysisHub.vue) — 财务/销售/趋势/KPI 全历史概览
+// (2026-07-12)
+//
+// Hub 独立请求 gold.ts 现成的、后端已按角色 RBAC 脱敏的 summary 端点
+// (getFinanceSummary/getTopProducts/getTrendBundle/getKpiSummary), 不深入
+// FinancialDashboardPBI/SalesAnalysis/TrendsView/KpiView 各自数千行的内部
+// 状态、日期选择器和 tier/capability gate 逻辑 (侵入式改造那 4 个大文件
+// 风险高, 见 BusinessAnalysisHub.vue 顶部说明)。这里只做全历史粗粒度概览,
+// 供 Hub 侧 AI 面板 grounding, 与各 tab 内可自定义时间范围的图表相互独立。
+// ============================================================
+
+export interface FinanceOverviewBulletsInput {
+  totalRevenue: number | null;
+  billCount: number;
+  avgBillValue: number | null;
+  storeCount: number;
+  topStores: Array<{ storeName: string; revenue: number; billCount: number }>;
+}
+
+export function financeOverviewBullets(input: FinanceOverviewBulletsInput): string[] {
+  if (input.billCount <= 0 || input.totalRevenue == null) return [];
+  const bullets: string[] = [];
+
+  bullets.push(
+    `全部历史营收合计 ${fmtMoney(input.totalRevenue)}，共 ${input.billCount.toLocaleString()} 单，覆盖 ${input.storeCount} 家门店`,
+  );
+  if (input.avgBillValue != null) {
+    bullets.push(`平均客单价 ${fmtMoney(input.avgBillValue)}`);
+  }
+
+  const stores = (input.topStores ?? []).filter((s) => s.revenue > 0);
+  if (stores.length) {
+    const top = [...stores].sort((a, b) => b.revenue - a.revenue)[0];
+    bullets.push(`${top.storeName}营收最高，达 ${fmtMoney(top.revenue)}（${top.billCount.toLocaleString()} 单）`);
+  }
+
+  return bullets;
+}
+
+export function financeOverviewSummary(input: FinanceOverviewBulletsInput): string {
+  if (input.billCount <= 0 || input.totalRevenue == null) return '暂无数据';
+  const parts = [`全部历史营收${fmtMoney(input.totalRevenue)}(${input.billCount}单/${input.storeCount}店)`];
+  if (input.avgBillValue != null) parts.push(`客单价${fmtMoney(input.avgBillValue)}`);
+
+  const stores = (input.topStores ?? [])
+    .filter((s) => s.revenue > 0)
+    .sort((a, b) => b.revenue - a.revenue)
+    .slice(0, 5);
+  if (stores.length) parts.push('门店: ' + stores.map((s) => `${s.storeName}${fmtMoney(s.revenue)}`).join('/'));
+
+  return parts.join('；');
+}
+
+export interface SalesOverviewBulletsInput {
+  topProducts: Array<{ productName: string; qtySold: number; revenue: number; billCount: number }>;
+}
+
+export function salesOverviewBullets(input: SalesOverviewBulletsInput): string[] {
+  const valid = (input.topProducts ?? []).filter((p) => p.qtySold > 0 || p.revenue > 0);
+  if (!valid.length) return [];
+  const bullets: string[] = [];
+
+  const byQty = [...valid].sort((a, b) => b.qtySold - a.qtySold);
+  const topQty = byQty[0];
+  bullets.push(`${topQty.productName}销量最高，共 ${topQty.qtySold.toLocaleString()} 份`);
+
+  const byRevenue = [...valid].sort((a, b) => b.revenue - a.revenue);
+  const topRevenue = byRevenue[0];
+  if (topRevenue.productName !== topQty.productName) {
+    bullets.push(`${topRevenue.productName}销售额最高，达 ${fmtMoney(topRevenue.revenue) ?? '—'}`);
+  }
+
+  return bullets;
+}
+
+export function salesOverviewSummary(input: SalesOverviewBulletsInput): string {
+  const valid = (input.topProducts ?? [])
+    .filter((p) => p.qtySold > 0 || p.revenue > 0)
+    .sort((a, b) => b.qtySold - a.qtySold);
+  if (!valid.length) return '暂无数据';
+  return valid.slice(0, 8).map((p) => `${p.productName}:${p.qtySold}份/${fmtMoney(p.revenue) ?? '—'}`).join(' / ');
+}
+
+export interface TrendOverviewBulletsInput {
+  dailyTrend: Array<{ date: string; revenue: number | null; billCount: number }>;
+  monthlyTrend: Array<{ month: string; revenue: number | null }>;
+  weekdayWeekend: { weekdayAvg: number | null; weekendAvg: number | null; weekdayDays: number; weekendDays: number };
+}
+
+export function trendOverviewBullets(input: TrendOverviewBulletsInput): string[] {
+  const bullets: string[] = [];
+
+  const monthly = (input.monthlyTrend ?? []).filter((m) => m.revenue != null);
+  if (monthly.length >= 2) {
+    const first = monthly[0];
+    const last = monthly[monthly.length - 1];
+    const delta = (last.revenue as number) - (first.revenue as number);
+    bullets.push(
+      `月度营收自 ${first.month} 到 ${last.month} ${delta >= 0 ? '增长' : '下降'} ${fmtMoney(Math.abs(delta)) ?? '—'}`,
+    );
+  }
+
+  const ww = input.weekdayWeekend;
+  if (ww && ww.weekdayAvg != null && ww.weekendAvg != null) {
+    const weekendHigher = ww.weekendAvg > ww.weekdayAvg;
+    bullets.push(
+      `工作日日均营收 ${fmtMoney(ww.weekdayAvg)}，周末日均营收 ${fmtMoney(ww.weekendAvg)}${weekendHigher ? '，周末明显更高' : ''}`,
+    );
+  }
+
+  const daily = (input.dailyTrend ?? []).filter((d) => d.revenue != null);
+  if (daily.length) {
+    const peak = [...daily].sort((a, b) => (b.revenue as number) - (a.revenue as number))[0];
+    bullets.push(`单日营收峰值出现在 ${peak.date}，达 ${fmtMoney(peak.revenue)}`);
+  }
+
+  return bullets;
+}
+
+export function trendOverviewSummary(input: TrendOverviewBulletsInput): string {
+  const monthly = (input.monthlyTrend ?? []).filter((m) => m.revenue != null);
+  if (!monthly.length) return '暂无数据';
+  const parts = [monthly.slice(-6).map((m) => `${m.month}:${fmtMoney(m.revenue)}`).join(' / ')];
+
+  const ww = input.weekdayWeekend;
+  if (ww && ww.weekdayAvg != null && ww.weekendAvg != null) {
+    parts.push(`工作日均${fmtMoney(ww.weekdayAvg)}/周末均${fmtMoney(ww.weekendAvg)}`);
+  }
+
+  return parts.join('；');
+}
+
+export interface KpiOverviewBulletsInput {
+  revenue: number;
+  billCount: number;
+  itemCount: number;
+  customerCount: number;
+  storeCount: number;
+  avgBillValue: number | null;
+  itemsPerBill: number | null;
+  avgPerCapita: number | null;
+}
+
+export function kpiOverviewBullets(input: KpiOverviewBulletsInput): string[] {
+  if (input.billCount <= 0) return [];
+  const bullets: string[] = [];
+
+  bullets.push(
+    `全部历史营收 ${fmtMoney(input.revenue) ?? '—'}，共 ${input.billCount.toLocaleString()} 单，覆盖 ${input.storeCount} 家门店`,
+  );
+  if (input.avgBillValue != null) bullets.push(`平均客单价 ${fmtMoney(input.avgBillValue)}`);
+  if (input.avgPerCapita != null) bullets.push(`人均消费 ${fmtMoney(input.avgPerCapita)}`);
+  if (input.itemsPerBill != null) bullets.push(`每单平均 ${input.itemsPerBill.toFixed(1)} 件商品`);
+
+  return bullets;
+}
+
+export function kpiOverviewSummary(input: KpiOverviewBulletsInput): string {
+  if (input.billCount <= 0) return '暂无数据';
+  const parts = [
+    `营收${fmtMoney(input.revenue) ?? '—'}(${input.billCount}单/${input.storeCount}店/${input.customerCount}客)`,
+  ];
+  if (input.avgBillValue != null) parts.push(`客单价${fmtMoney(input.avgBillValue)}`);
+  if (input.avgPerCapita != null) parts.push(`人均${fmtMoney(input.avgPerCapita)}`);
+
+  return parts.join('；');
+}
