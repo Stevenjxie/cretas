@@ -117,3 +117,24 @@ export async function listPriceAnomalyAcks(ingredient?: string): Promise<PriceAn
   if (!resp.success) throw new Error(resp.message || '已确认列表加载失败');
   return resp.data || [];
 }
+
+/** 一个进价趋势点 (供应商采购单价随时间)。 */
+export interface SupplierPricePoint {
+  deliveryDate: string | null; // YYYY-MM-DD
+  unitPrice: number | null; // RBAC: 非 price-view 角色为 null
+  supplierName: string | null;
+  quantity: number | null;
+}
+
+/**
+ * 单个食材的进价趋势 — [{deliveryDate, unitPrice, supplierName}] ASC by date。
+ * 用于价格异常页的采购单价趋势曲线 (把异常点放回时间序列看得见涨跌)。
+ */
+export async function getSupplierPriceTrend(ingredient: string, days = 90): Promise<SupplierPricePoint[]> {
+  const qs = `?ingredient=${encodeURIComponent(ingredient)}&days=${days}`;
+  const resp = (await pythonFetch(`/api/smartbi/gold/supplier-price/trend${qs}`, {
+    timeoutMs: PYTHON_LLM_TIMEOUT_MS,
+  })) as Envelope<SupplierPricePoint[]>;
+  if (!resp.success) throw new Error(resp.message || '进价趋势加载失败');
+  return resp.data || [];
+}

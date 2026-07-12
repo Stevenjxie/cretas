@@ -30,7 +30,32 @@
         style="margin-bottom: 16px"
       />
 
-      <el-table :data="anomalies" v-loading="loading" stripe style="width: 100%">
+      <!-- 采购单价趋势曲线: 把异常点放回时间序列, 涨跌一眼看得见 -->
+      <div v-if="anomalies.length" class="trend-section">
+        <div class="trend-head">
+          <span class="trend-title">采购单价趋势</span>
+          <el-select
+            v-model="trendIngredient"
+            size="small"
+            style="width: 200px"
+            placeholder="选择食材"
+            @change="loadTrend"
+          >
+            <el-option v-for="ing in trendIngredients" :key="ing" :label="ing" :value="ing" />
+          </el-select>
+        </div>
+        <div ref="trendChartEl" v-loading="trendLoading" class="trend-chart"></div>
+        <p class="trend-hint muted">红点为本次检出的异常点 · 虚线为近 90 天移动均价基线</p>
+      </div>
+
+      <el-table
+        :data="anomalies"
+        v-loading="loading"
+        stripe
+        style="width: 100%"
+        highlight-current-row
+        @row-click="onRowClick"
+      >
         <el-table-column label="风险" width="90" fixed="left">
           <template #default="{ row }">
             <el-tag :type="row.riskLevel === 'HIGH' ? 'danger' : 'warning'" size="small" effect="dark">
@@ -172,10 +197,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
+import echarts from '@/utils/echarts';
 import { usePermissionStore } from '@/store/modules/permission';
 import { getErrorMessage } from '@/utils/errorToast';
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
@@ -183,6 +209,7 @@ import {
   detectPriceAnomalies,
   ackPriceAnomaly,
   listPriceAnomalyAcks,
+  getSupplierPriceTrend,
   REASON_OPTIONS,
   type PriceAnomaly,
   type PriceAnomalyAck,
@@ -199,6 +226,107 @@ const anomalies = ref<PriceAnomaly[]>([]);
 const acks = ref<PriceAnomalyAck[]>([]);
 const epsilonPct = ref(5);
 const BASELINE_WINDOW_DAYS = 90;
+
+// ---- 采购单价趋势曲线 ----
+const trendChartEl = ref<HTMLDivElement | null>(null);
+const trendLoading = ref(false);
+const trendIngredient = ref(''); // 存 normalizedName (endpoint 按 normalized 匹配)
+let trendChart: echarts.ECharts | null = null;
+
+// 唯一食材下拉 (按 normalizedName 去重, label 显友好名)
+const trendIngredients = computed(() => {
+  const seen = new Map<string, string>();
+  for (const a of anomalies.value) {
+    if (a.normalizedName && !seen.has(a.normalizedName)) {
+      seen.set(a.normalizedName, a.ingredientName || a.normalizedName);
+    }
+  }
+  return Array.from(seen, ([value, label]) => ({ value, label }));
+});
+
+async function loadTrend() {
+  if (!trendIngredient.value) return;
+  trendLoading.value = true;
+  try {
+    const points = await getSupplierPriceTrend(trendIngredient.value, BASELINE_WINDOW_DAYS);
+    await nextTick();
+    renderTrend(points);
+  } catch (e) {
+    ElMessage({ message: getErrorMessage(e, '进价趋势加载失败'), type: 'error', duration: 0, showClose: true });
+  } finally {
+    trendLoading.value = false;
+  }
+}
+
+function renderTrend(points: import('@/api/smartbi/priceAnomaly').SupplierPricePoint[]) {
+  if (!trendChartEl.value) return;
+  if (!trendChart) trendChart = echarts.init(trendChartEl.value);
+
+  const valid = points.filter((p) => p.deliveryDate != null && p.unitPrice != null);
+  const dates = valid.map((p) => p.deliveryDate as string);
+  const prices = valid.map((p) => p.unitPrice as number);
+
+  // 本食材当前异常 (标红点 + 基线)
+  const anomaly = anomalies.value.find((a) => a.normalizedName === trendIngredient.value);
+  const markData =
+    anomaly && anomaly.anomalyDeliveryDate && anomaly.newPrice != null
+      ? [{ name: '异常点', coord: [anomaly.anomalyDeliveryDate, anomaly.newPrice], value: anomaly.newPrice }]
+      : [];
+  const baseline = anomaly && anomaly.trailingAvg != null ? anomaly.trailingAvg : null;
+
+  trendChart.setOption(
+    {
+      grid: { left: 48, right: 24, top: 24, bottom: 32 },
+      tooltip: {
+        trigger: 'axis',
+        valueFormatter: (v: number) => (v == null ? '—' : `¥${v}`),
+      },
+      xAxis: { type: 'category', data: dates, boundaryGap: false },
+      yAxis: { type: 'value', scale: true, axisLabel: { formatter: '¥{value}' } },
+      series: [
+        {
+          name: '采购单价',
+          type: 'line',
+          smooth: true,
+          showSymbol: true,
+          symbolSize: 6,
+          data: prices,
+          lineStyle: { width: 2 },
+          areaStyle: { opacity: 0.08 },
+          markPoint: {
+            symbol: 'pin',
+            symbolSize: 46,
+            itemStyle: { color: '#F56C6C' },
+            label: { color: '#fff', fontSize: 11, formatter: '异常' },
+            data: markData,
+          },
+          markLine: baseline
+            ? {
+                silent: true,
+                symbol: 'none',
+                lineStyle: { type: 'dashed', color: '#E6A23C' },
+                label: { formatter: `均价 ¥${baseline}`, position: 'insideEndTop', fontSize: 11 },
+                data: [{ yAxis: baseline }],
+              }
+            : undefined,
+        },
+      ],
+    },
+    true,
+  );
+  trendChart.resize();
+}
+
+function onRowClick(row: PriceAnomaly) {
+  if (row.normalizedName && row.normalizedName !== trendIngredient.value) {
+    trendIngredient.value = row.normalizedName;
+    loadTrend();
+  }
+}
+
+function handleTrendResize() {
+  trendChart?.resize();
+}
 
 const explainVisible = ref(false);
 const current = ref<PriceAnomaly | null>(null);
@@ -245,6 +373,14 @@ async function loadAnomalies() {
     ]);
     anomalies.value = det;
     acks.value = ackList;
+    // 默认选第一条异常的食材, 画出它的进价趋势曲线
+    if (det.length) {
+      const first = det[0].normalizedName;
+      if (first && !trendIngredients.value.some((o) => o.value === trendIngredient.value)) {
+        trendIngredient.value = first;
+      }
+      if (trendIngredient.value) await loadTrend();
+    }
   } catch (e) {
     // pythonFetch errors carry the backend message (no axios interceptor here),
     // so surface it directly + sticky for流程依赖错误 (fool-proof 4位一体).
@@ -302,7 +438,15 @@ function goSupplierDelivery() {
   router.push({ name: 'SupplierDeliveryNoteList' });
 }
 
-onMounted(loadAnomalies);
+onMounted(() => {
+  loadAnomalies();
+  window.addEventListener('resize', handleTrendResize);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleTrendResize);
+  trendChart?.dispose();
+  trendChart = null;
+});
 </script>
 
 <style scoped lang="scss">
@@ -351,6 +495,32 @@ onMounted(loadAnomalies);
 .empty-state {
   padding: 24px 0;
   text-align: center;
+}
+.trend-section {
+  margin-bottom: 16px;
+  padding: 12px 16px 8px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  background: var(--el-bg-color);
+}
+.trend-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.trend-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+.trend-chart {
+  width: 100%;
+  height: 260px;
+}
+.trend-hint {
+  margin: 4px 0 0;
+  font-size: 12px;
 }
 .acks-section {
   margin-top: 24px;
