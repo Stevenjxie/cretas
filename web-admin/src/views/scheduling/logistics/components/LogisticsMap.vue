@@ -6,9 +6,7 @@ import type { MapPoint, RouteTrip, StoreOrder } from '../types';
 import {
   getAmapKey,
   loadAmap,
-  type AMapDriving,
   type AMapInstance,
-  type AMapLngLat,
   type AMapNamespace,
   type AMapOverlay,
 } from '../amapLoader';
@@ -37,7 +35,6 @@ const useAmap = ref(Boolean(getAmapKey()));
 const mapEl = ref<HTMLDivElement>();
 let amap: AMapNamespace | null = null;
 let map: AMapInstance | null = null;
-let driving: AMapDriving | null = null;
 let overlays: AMapOverlay[] = [];
 // 每次重绘自增；异步驾车路径回调用它判断自己是否已过期（避免旧回调把线画到新一轮上）。
 let renderToken = 0;
@@ -140,7 +137,7 @@ function drawTripRoute(
   const anySelected = props.selectedTripId != null;
   const color = routeColors[index % routeColors.length];
 
-  const addLine = (path: [number, number][] | AMapLngLat[], dashed: boolean): void => {
+  const addLine = (path: [number, number][], dashed: boolean): void => {
     if (token !== renderToken || !map) return; // 已被新一轮重绘取代，丢弃
     // 有选中线路时，非选中线路淡化让选中的一目了然
     const line = new AMapRef.Polyline({
@@ -160,38 +157,15 @@ function drawTripRoute(
     map.add([line]);
   };
 
-  // 缓存命中：后端已存沿路 roadPath → 直接画，不调地图 driving API（回看旧计划零调用，省额度）
+  // 缓存命中（常态）：后端已存沿路 roadPath → 直接画，零地图 API 调用。
   if (roadPath && roadPath.length >= 2) {
     addLine(roadPath.map((p) => [p.lng, p.lat] as [number, number]), false);
     return;
   }
 
-  const straight: [number, number][] = [DEPOT_LNGLAT, ...storePts];
-  if (!driving) {
-    addLine(straight, true);
-    return;
-  }
-
-  const origin = new AMapRef.LngLat(DEPOT_LNGLAT[0], DEPOT_LNGLAT[1]);
-  const last = storePts[storePts.length - 1];
-  const dest = new AMapRef.LngLat(last[0], last[1]);
-  const waypoints = storePts.slice(0, -1).map(([lng, lat]) => new AMapRef.LngLat(lng, lat));
-
-  driving.search(origin, dest, { waypoints }, (status, result) => {
-    if (token !== renderToken) return; // 过期回调丢弃
-    const steps = result?.routes?.[0]?.steps;
-    if (status === 'complete' && steps && steps.length) {
-      const path: AMapLngLat[] = [];
-      steps.forEach((st) => {
-        if (st.path) path.push(...st.path);
-      });
-      if (path.length >= 2) {
-        addLine(path, false);
-        return;
-      }
-    }
-    addLine(straight, true); // 驾车规划失败 → 诚实回落虚线直线
-  });
+  // roadPath 缺失（极少：后端已可靠为每条车次持久化 roadPath；仅 NEEDS_ROUTE_DATA 等异常态才没有）
+  // → 画诚实虚线直线标示"非实际道路"。不再实时调高德驾车规划（那需要内联 Driving 插件，拖慢地图加载 ~9s）。
+  addLine([DEPOT_LNGLAT, ...storePts], true);
 }
 
 onMounted(async () => {
@@ -204,14 +178,6 @@ onMounted(async () => {
       viewMode: '2D',
       lang: 'zh_cn',
     });
-    // 驾车路径规划器（不传 map → 不自动渲染它自己的起终点/路线 UI，我们手绘彩色 polyline）
-    try {
-      driving = new amap.Driving({
-        policy: (amap.DrivingPolicy && amap.DrivingPolicy.LEAST_DISTANCE) || 0,
-      });
-    } catch {
-      driving = null; // 插件不可用 → drawTripRoute 走虚线直线兜底
-    }
     renderOverlays();
   } catch (e) {
     // 无 key / 域名未白名单 / 网络失败 → 诚实回落 SVG 示意图，不阻塞工作台

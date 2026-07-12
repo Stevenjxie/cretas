@@ -96,8 +96,10 @@ export function loadAmap(): Promise<AMapNamespace> {
 
   amapPromise = new Promise<AMapNamespace>((resolve, reject) => {
     const script = document.createElement('script');
-    // plugin=AMap.Driving —— 驾车路径规划，画沿实际道路的导航路线（非直线连点）
-    script.src = `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(key)}&plugin=AMap.Driving`;
+    // 只加载基础地图，不内联 AMap.Driving 插件 —— 后端已可靠持久化每条车次的 roadPath(沿路折线)，
+    // 前端画线零调用驾车 API；内联插件曾让脚本加载慢到 ~9s。缺 roadPath 的极少数车次画诚实虚线直线。
+    // (若将来确需实时驾车规划，用 AMap.plugin(['AMap.Driving'], cb) 按需懒加载，别塞回基础脚本。)
+    script.src = `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(key)}`;
     script.async = true;
     script.onerror = () => {
       amapPromise = null; // 允许下次重试

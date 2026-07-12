@@ -4,6 +4,11 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- 预连接高德地图域名 —— 提前握手 DNS/TLS，缩短进入排线地图后 AMap SDK 首次加载的等待。 -->
+    <link rel="preconnect" href="https://webapi.amap.com" crossorigin />
+    <link rel="preconnect" href="https://jsapi.amap.com" crossorigin />
+    <link rel="preconnect" href="https://restapi.amap.com" crossorigin />
+    <link rel="dns-prefetch" href="https://o4.amap.com" />
     <!-- 高德地图 key 运行时注入 (nginx 从 dist 外稳定位置 serve, 部署不覆盖 → key 独立于构建,
          并发/别的 worktree 部署不再冲掉地图 key)。加载失败(文件不存在)静默, 回落 build-time env。 -->
     <script src="/amap-config.js"></script>
