@@ -1424,34 +1424,43 @@ public final class LogisticsRoutingAlgorithm {
         BigDecimal targetCap = primaryVehicle.capacityCbm()
                 .multiply(targetLoadPct)
                 .divide(HUNDRED, 6, RoundingMode.HALF_UP);
+        BigDecimal hardVol = primaryVehicle.capacityCbm();
+        BigDecimal hardWeight = primaryVehicle.maxWeightKg();
+
+        // First-Fit-Decreasing 装箱 (替代原 next-fit)：
+        //  1) 大件先放 —— 体积降序 (稳定排序: 同体积保持原「区域+编码」顺序, 输出仍确定)。
+        //  2) 每件塞进「第一个装得下 (在软目标容量内, 且不超硬容量/载重) 的已开箱」, 装不下才开新箱。
+        // 原 next-fit 只往当前箱塞、一超阈值就封箱不回头 → 后面的小件无法回填前面箱的余量, 结构性产生低载尾箱。
+        // FFD 让小件回填前箱余量, 箱更少更满, 直接压低「20%/25% 尾箱」的出现。软目标容量语义保持不变
+        // (仍以 targetLoadPct 为每箱填充上限; 单件独占新箱时只受硬容量约束, 与原行为一致)。
+        List<OrderInput> sorted = new ArrayList<>(groupOrders);
+        sorted.sort(Comparator.comparing(OrderInput::volumeCbm).reversed());
 
         List<List<OrderInput>> packed = new ArrayList<>();
-        List<OrderInput> current = new ArrayList<>();
-        BigDecimal cumVolume = BigDecimal.ZERO;
-        BigDecimal cumWeight = BigDecimal.ZERO;
+        List<BigDecimal> boxVolume = new ArrayList<>();
+        List<BigDecimal> boxWeight = new ArrayList<>();
 
-        for (OrderInput order : groupOrders) {
-            BigDecimal nextVolume = cumVolume.add(order.volumeCbm());
-            BigDecimal nextWeight = cumWeight.add(order.weightKg());
-
-            boolean overHardCap = !current.isEmpty()
-                    && (nextVolume.compareTo(primaryVehicle.capacityCbm()) > 0
-                        || nextWeight.compareTo(primaryVehicle.maxWeightKg()) > 0);
-            boolean overSoftTarget = !current.isEmpty() && !overHardCap
-                    && nextVolume.compareTo(targetCap) > 0;
-
-            if (overHardCap || overSoftTarget) {
-                packed.add(current);
-                current = new ArrayList<>();
-                cumVolume = BigDecimal.ZERO;
-                cumWeight = BigDecimal.ZERO;
+        for (OrderInput order : sorted) {
+            int target = -1;
+            for (int i = 0; i < packed.size(); i++) {
+                BigDecimal nextVolume = boxVolume.get(i).add(order.volumeCbm());
+                BigDecimal nextWeight = boxWeight.get(i).add(order.weightKg());
+                boolean fitsHard = nextVolume.compareTo(hardVol) <= 0 && nextWeight.compareTo(hardWeight) <= 0;
+                boolean fitsSoft = nextVolume.compareTo(targetCap) <= 0;
+                if (fitsHard && fitsSoft) {
+                    target = i;
+                    break;
+                }
             }
-            current.add(order);
-            cumVolume = cumVolume.add(order.volumeCbm());
-            cumWeight = cumWeight.add(order.weightKg());
-        }
-        if (!current.isEmpty()) {
-            packed.add(current);
+            if (target < 0) {
+                packed.add(new ArrayList<>(List.of(order)));
+                boxVolume.add(order.volumeCbm());
+                boxWeight.add(order.weightKg());
+            } else {
+                packed.get(target).add(order);
+                boxVolume.set(target, boxVolume.get(target).add(order.volumeCbm()));
+                boxWeight.set(target, boxWeight.get(target).add(order.weightKg()));
+            }
         }
         return packed;
     }
