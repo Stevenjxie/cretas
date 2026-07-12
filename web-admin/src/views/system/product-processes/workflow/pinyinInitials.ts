@@ -163,3 +163,71 @@ export function matchesSearchText(query: string, text: string): boolean {
   if (text.toLowerCase().includes(normalizedQuery)) return true;
   return pinyinInitials(text).toLowerCase().includes(normalizedQuery);
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// 全局共享模块 (#2)：把 el-select `filter-method` 场景下反复手写的
+// "filterQuery ref + handleFilter + filteredOptions computed" 样板代码抽成一个
+// composable，供本编辑器内任意 filterable select 复用（WorkflowSkuPicker /
+// WorkflowMaterialNode 原料选择器 / 工序选择 dialog 均改用这份实现）。
+//
+// 之所以是 composable 而不是纯函数 `pinyinFilterMethod(...)`：el-select 的
+// filter-method 只接收 query 字符串、不接收/不使用返回值——真正的过滤结果必须
+// 由调用方自己维护一份 `computed` 并喂给 `v-for`（详见下方 v-pinyin 指令文件里
+// 对 el-plus 源码 `useSelect.mjs` 的走查结论）。composable 把"记 query + 按
+// query 算 filtered 列表"这两件事打包成一份可复用实现，调用方只需要提供数据源
+// 和取文本字段的方式。
+// ─────────────────────────────────────────────────────────────────────────
+import { computed, ref, type ComputedRef, type Ref } from 'vue';
+
+export interface PinyinFilterHandle<T> {
+  /** 当前过滤关键字（v-model 意义上供调用方按需读取，一般不需要直接用） */
+  query: Ref<string>;
+  /** 挂给 el-select 的 `:filter-method` */
+  handleFilter: (value: string) => void;
+  /** 挂给 el-select 的 `@visible-change`：收起下拉时清空过滤关键字 */
+  handleVisibleChange: (visible: boolean) => void;
+  /** 按当前 query 过滤后的候选项列表，喂给 `v-for` */
+  filtered: ComputedRef<T[]>;
+}
+
+/**
+ * @param source 候选项来源。用 getter（`() => T[]`）而不是直接传 `Ref<T[]>`，
+ *   这样调用方可以传一个 computed 表达式（如 "排除已绑定 id 之后的列表"）而不需要
+ *   先物化成一个新 ref。
+ * @param textOf 从候选项里取出参与匹配的一个或多个文本字段（如 name / code）。
+ *   任意一个字段命中字面子串或拼音首字母即算匹配。
+ */
+export function usePinyinFilter<T>(
+  source: (() => T[]) | Ref<T[]>,
+  textOf: (item: T) => Array<string | null | undefined>,
+): PinyinFilterHandle<T> {
+  const query = ref('');
+  const readSource = (): T[] => (typeof source === 'function' ? source() : source.value);
+
+  function handleFilter(value: string): void {
+    query.value = value || '';
+  }
+
+  function handleVisibleChange(visible: boolean): void {
+    if (!visible) query.value = '';
+  }
+
+  const filtered = computed(() => {
+    const items = readSource();
+    const trimmed = query.value.trim();
+    if (!trimmed) return items;
+    return items.filter((item) => textOf(item).some((text) => matchesSearchText(trimmed, text || '')));
+  });
+
+  return { query, handleFilter, handleVisibleChange, filtered };
+}
+
+/**
+ * 无状态版本：给一次性/非 composable 场景用（如需要在同一个 handler 里同时驱动
+ * 好几个候选数组，参见 WorkflowMaterialNode 的 BOM 优先分组）。直接返回一个
+ * 布尔判定函数，不维护自己的 query 状态——query 状态仍由调用方的
+ * `usePinyinFilter` 或自有 ref 管理。
+ */
+export function pinyinFilterMethod(query: string, text: string): boolean {
+  return matchesSearchText(query, text);
+}

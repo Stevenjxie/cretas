@@ -32,8 +32,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import { matchesSearchText } from './pinyinInitials';
+import { usePinyinFilter } from './pinyinInitials';
 
 /**
  * 半成品/成品两级产品选择器，供「物料 Cell」和「工序 Cell 产出行」共用一套组件，
@@ -69,31 +68,35 @@ const emit = defineEmits<{
   change: [skuId: string];
 }>();
 
-const filterQuery = ref('');
+// 拼音首字母搜索：复用全局共享的 usePinyinFilter composable (#2)，两组各自独立
+// 过滤，但共用同一个 query（半成品/成品是同一个搜索框驱动的两个分组）。
+const semiFilter = usePinyinFilter(
+  () => props.semiOptions,
+  (option) => [option.name, option.code],
+);
+const finishedFilter = usePinyinFilter(
+  () => props.finishedOptions,
+  (option) => [option.name, option.code],
+);
 
 function handleFilter(query: string): void {
-  filterQuery.value = query || '';
+  semiFilter.handleFilter(query);
+  finishedFilter.handleFilter(query);
 }
 
 function handleVisibleChange(visible: boolean): void {
-  if (!visible) filterQuery.value = '';
+  semiFilter.handleVisibleChange(visible);
+  finishedFilter.handleVisibleChange(visible);
 }
 
 function optionLabel(option: WorkflowSkuPickerOption): string {
   return `${option.name} · ${option.unit || '-'}`;
 }
 
-function filterOptions(options: WorkflowSkuPickerOption[]): WorkflowSkuPickerOption[] {
-  const query = filterQuery.value.trim();
-  if (!query) return options;
-  return options.filter((option) => matchesSearchText(query, option.name)
-    || matchesSearchText(query, option.code || ''));
-}
-
 // 现场创建入口固定放在「半成品」分组第一位，不参与过滤（搜索时也始终可见，
 // 保证找不到匹配 SKU 时仍有创建出口，符合 fool-proof-design Rule 5：不留死胡同）。
-const filteredSemiOptions = computed(() => filterOptions(props.semiOptions));
-const filteredFinishedOptions = computed(() => filterOptions(props.finishedOptions));
+const filteredSemiOptions = semiFilter.filtered;
+const filteredFinishedOptions = finishedFilter.filtered;
 </script>
 
 <style scoped>

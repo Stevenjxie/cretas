@@ -31,13 +31,31 @@
       @visible-change="handleRawVisibleChange"
       @change="(value: string) => emit('selectRawSku', value)"
     >
-      <el-option
-        v-for="option in filteredRawMaterialOptions"
-        :key="option.id"
-        :label="`${option.name} · ${option.unit || '-'}`"
-        :value="option.id"
-      />
+      <el-option-group v-if="bomRawOptions.length > 0" label="本产品 BOM 原料" data-testid="bom-raw-group">
+        <el-option
+          v-for="option in filteredBomRawOptions"
+          :key="option.id"
+          :label="`${option.name} · ${option.unit || '-'}`"
+          :value="option.id"
+        />
+      </el-option-group>
+      <el-option-group :label="otherRawGroupLabel" data-testid="other-raw-group">
+        <el-option
+          v-for="option in filteredOtherRawOptions"
+          :key="option.id"
+          :label="`${option.name} · ${option.unit || '-'}`"
+          :value="option.id"
+        />
+      </el-option-group>
     </el-select>
+    <div
+      v-if="kind === 'RAW_MATERIAL' && canWrite && bomRawOptions.length === 0"
+      class="bom-hint nodrag"
+      data-testid="bom-hint"
+    >
+      <span>该产品尚未配置原辅料 BOM，建议先去配置</span>
+      <router-link to="/production/bom" target="_blank" class="bom-hint-link">去配置 →</router-link>
+    </div>
 
     <WorkflowSkuPicker
       v-if="(kind === 'SEMI_FINISHED' || kind === 'FINISHED_GOOD') && canWrite"
@@ -56,21 +74,32 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
-import { matchesSearchText } from './pinyinInitials';
+import { usePinyinFilter } from './pinyinInitials';
 import WorkflowSkuPicker, { type WorkflowSkuPickerOption } from './WorkflowSkuPicker.vue';
 import type { MaterialNodeData, ProductProcessNodeKind } from './types';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   kind: Exclude<ProductProcessNodeKind, 'PROCESS'>;
   data: MaterialNodeData;
   selected?: boolean;
   canWrite: boolean;
   rawMaterialOptions: Array<{ id: string; name: string; unit?: string }>;
+  /**
+   * #3 (Steve 定: BOM 原料优先、可加其他): 该产品 BOM 原辅料清单里出现过的
+   * 原料 SKU id 集合 (RawMaterialType.id，与 BomItem.materialTypeId 同一业务
+   * 键)。由父组件 ProductProcessWorkflowEditor 调用
+   * GET /{factoryId}/bom/items/{productTypeId} 拿到后传下来 —— 该端口在
+   * BomController 中已确认存在 (com.cretas.aims.controller.BomController
+   * #getBomItems)，不需要走"接口缺失降级"分支。
+   */
+  bomRawMaterialIds?: string[];
   semiOptions: WorkflowSkuPickerOption[];
   finishedOptions: WorkflowSkuPickerOption[];
-}>();
+}>(), {
+  bomRawMaterialIds: () => [],
+});
 
 const emit = defineEmits<{
   addNext: [];
@@ -78,23 +107,33 @@ const emit = defineEmits<{
   selectSku: [skuId: string];
 }>();
 
-// 原料下拉的拼音首字母搜索：filter-method 只负责生成过滤后的候选列表，
-// 不像 el-cascader/el-select 默认 filterable 那样只能按 label 原文匹配。
-const rawFilterQuery = ref('');
+// #3 原料 Cell = BOM 原料优先、可加其他 (soft 约束，Steve 定：BOM 优先但不硬
+// 禁其它)。把候选原料拆成「本产品 BOM 原料」+「其它原料」两组，BOM 组置顶,
+// 两组各自独立跑拼音首字母搜索 (#2，复用 usePinyinFilter 共享 composable)。
+const bomRawMaterialIdSet = computed(() => new Set(props.bomRawMaterialIds));
+const bomRawOptions = computed(() => props.rawMaterialOptions
+  .filter((option) => bomRawMaterialIdSet.value.has(option.id)));
+const otherRawOptions = computed(() => props.rawMaterialOptions
+  .filter((option) => !bomRawMaterialIdSet.value.has(option.id)));
+// BOM 为空时不硬禁选其它原料 (fool-proof-design Rule 5: 不留死胡同)，只是不再
+// 有"其它"和"BOM"的区分，组名相应改成「全部原料」避免暗示一个空的 BOM 分组。
+const otherRawGroupLabel = computed(() => (bomRawOptions.value.length > 0 ? '其它原料' : '全部原料'));
+
+const bomRawFilter = usePinyinFilter(() => bomRawOptions.value, (option) => [option.name]);
+const otherRawFilter = usePinyinFilter(() => otherRawOptions.value, (option) => [option.name]);
 
 function handleRawFilter(query: string): void {
-  rawFilterQuery.value = query || '';
+  bomRawFilter.handleFilter(query);
+  otherRawFilter.handleFilter(query);
 }
 
 function handleRawVisibleChange(visible: boolean): void {
-  if (!visible) rawFilterQuery.value = '';
+  bomRawFilter.handleVisibleChange(visible);
+  otherRawFilter.handleVisibleChange(visible);
 }
 
-const filteredRawMaterialOptions = computed(() => {
-  const query = rawFilterQuery.value.trim();
-  if (!query) return props.rawMaterialOptions;
-  return props.rawMaterialOptions.filter((option) => matchesSearchText(query, option.name));
-});
+const filteredBomRawOptions = bomRawFilter.filtered;
+const filteredOtherRawOptions = otherRawFilter.filtered;
 
 const kindLabel = computed(() => ({
   RAW_MATERIAL: '原料 Cell',
@@ -141,4 +180,11 @@ const kindMark = computed(() => ({
 .specification { margin-top: 6px; color: #7a8599; font-size: 11px; }
 .raw-selector, .sku-selector { width: 100%; margin-top: 8px; }
 .node-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
+/* #3 BOM 为空时的提示 (fool-proof-design Rule 5: 不留死胡同, 给出下一步动作) */
+.bom-hint {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px;
+  padding: 6px 8px; border-radius: 7px; background: #fdf6ec; color: #b88230; font-size: 11px; line-height: 1.4;
+}
+.bom-hint-link { color: #1b65a8; font-weight: 650; text-decoration: none; cursor: pointer; }
+.bom-hint-link:hover { text-decoration: underline; }
 </style>

@@ -89,6 +89,7 @@
               :selected="slotProps.selected"
               :can-write="canEdit"
               :raw-material-options="rawMaterialOptions"
+              :bom-raw-material-ids="bomRawMaterialIdList"
               :semi-options="semiFinishedSkuOptions"
               :finished-options="finishedGoodSkuOptions"
               @add-next="openAddProcess(slotProps.id)"
@@ -151,9 +152,16 @@
           <el-tag>{{ sourceMaterialLabel }}</el-tag>
         </el-form-item>
         <el-form-item label="选择工序" required>
-          <el-select v-model="selectedWorkProcessId" filterable placeholder="选择工序" style="width: 100%">
+          <el-select
+            v-model="selectedWorkProcessId"
+            filterable
+            placeholder="选择工序（支持拼音首字母搜索）"
+            style="width: 100%"
+            :filter-method="handleWorkProcessFilter"
+            @visible-change="handleWorkProcessVisibleChange"
+          >
             <el-option
-              v-for="process in workProcessOptions"
+              v-for="process in filteredWorkProcessOptions"
               :key="process.id"
               :label="`${process.processName} · ${process.unit}${process.outputUnit ? ` → ${process.outputUnit}` : ''}`"
               :value="process.id"
@@ -223,6 +231,7 @@ import WorkProcessAIChatPanel from '@/views/system/components/WorkProcessAIChatP
 import WorkflowMaterialNode from './WorkflowMaterialNode.vue';
 import WorkflowProcessNode from './WorkflowProcessNode.vue';
 import { classifyOutputSkuCategory } from './outputSkuClassification';
+import { usePinyinFilter } from './pinyinInitials';
 import {
   activateProductProcessWorkflow,
   deactivateProductProcessWorkflow,
@@ -271,6 +280,18 @@ interface RawMaterialOption {
   unit?: string;
 }
 
+/**
+ * #3: 后端 BomItem 实体的精简形状 (只取本编辑器需要的字段)。
+ * 对应 GET /{factoryId}/bom/items/{productTypeId}
+ * (com.cretas.aims.controller.BomController#getBomItems, 已确认存在)。
+ */
+interface BomItemOption {
+  materialTypeId: string;
+  materialName?: string;
+  unit?: string;
+  materialCategory?: string;
+}
+
 interface WorkflowIdentity {
   factoryId: string;
   productTypeId: string;
@@ -308,6 +329,10 @@ const dragStartSnapshot = ref<ProductProcessWorkflowDefinition | null>(null);
 const workProcessOptions = ref<WorkProcessItem[]>([]);
 const skuOptions = ref<SkuOption[]>([]);
 const rawMaterialOptions = ref<RawMaterialOption[]>([]);
+// #3: 该产品 BOM 原辅料清单 (per-product, 随 productTypeId 变化而重新加载,
+// 与 loadCatalogs 的"全厂字典"缓存粒度不同, 单独一个 ref + 单独一个 loader)。
+const productBomItems = ref<BomItemOption[]>([]);
+const bomRawMaterialIdList = computed(() => productBomItems.value.map((item) => item.materialTypeId));
 const outputSkuOptions = computed(() => skuOptions.value.filter(
   (option) => classifyOutputSkuCategory(option.productCategory) !== null,
 ));
@@ -323,6 +348,14 @@ const finishedGoodSkuOptions = computed(() => skuOptions.value.filter(
 const processDialogVisible = ref(false);
 const processSourceMaterialId = ref('');
 const selectedWorkProcessId = ref('');
+// #2: 「增加后续工序」dialog 里的工序选择支持拼音首字母搜索 (复用 usePinyinFilter)。
+const workProcessFilter = usePinyinFilter(
+  () => workProcessOptions.value,
+  (process) => [process.processName],
+);
+const handleWorkProcessFilter = workProcessFilter.handleFilter;
+const handleWorkProcessVisibleChange = workProcessFilter.handleVisibleChange;
+const filteredWorkProcessOptions = workProcessFilter.filtered;
 const skuDialogVisible = ref(false);
 const creatingSku = ref(false);
 const skuBindingTarget = ref<SkuBindingTarget | null>(null);
@@ -332,6 +365,7 @@ let lastGraphIdSeed = 0;
 let catalogGeneration = 0;
 let createSkuGeneration = 0;
 let loadGeneration = 0;
+let bomLoadGeneration = 0;
 let saveGeneration = 0;
 let publishGeneration = 0;
 let activationLoadGeneration = 0;
@@ -377,16 +411,16 @@ const sourceMaterialLabel = computed(() => {
 
 onMounted(async () => {
   aiCollapsed.value = localStorage.getItem(aiStorageKey.value) === 'true';
-  await Promise.all([loadCatalogs(), loadDefinition(), loadActivation()]);
+  await Promise.all([loadCatalogs(), loadDefinition(), loadActivation(), loadProductBom()]);
 });
 
 watch(() => [props.factoryId, props.productTypeId] as const, async (next, previous) => {
   if (next[0] === previous[0] && next[1] === previous[1]) return;
   if (next[0] !== previous[0]) {
-    await Promise.all([loadCatalogs(), loadDefinition(), loadActivation()]);
+    await Promise.all([loadCatalogs(), loadDefinition(), loadActivation(), loadProductBom()]);
     return;
   }
-  await Promise.all([loadDefinition(), loadActivation()]);
+  await Promise.all([loadDefinition(), loadActivation(), loadProductBom()]);
 });
 
 watch(aiStorageKey, () => {
@@ -557,6 +591,36 @@ async function loadActivation(): Promise<void> {
     if (generation !== activationLoadGeneration || !propsMatchIdentity(identity)) return;
     console.error('[ProductProcessWorkflow] activation loading failed', error);
     activation.value = null;
+  }
+}
+
+/**
+ * #3: 拉该产品的 BOM 原辅料清单，供原料 Cell picker 做「BOM 原料优先」分组。
+ * Per-product (随 productTypeId 变化), 与 loadCatalogs 的全厂字典缓存粒度不同,
+ * 所以是独立的 loader, 复用 loadDefinition/loadActivation 同款的 generation 防
+ * race 写法。BOM 为空是正常业务状态 (产品尚未配置 BOM), 不当错误处理; 只有请求
+ * 本身失败才 console.error + 保持空列表 (picker 会退化成"全部原料一组", 不阻断
+ * 编辑器其它功能)。
+ */
+async function loadProductBom(): Promise<void> {
+  const generation = ++bomLoadGeneration;
+  const factoryId = props.factoryId;
+  const productTypeId = props.productTypeId;
+  productBomItems.value = [];
+  if (!factoryId || !productTypeId) return;
+  try {
+    const response = await get<BomItemOption[]>(`/${factoryId}/bom/items/${productTypeId}`);
+    if (generation !== bomLoadGeneration
+      || props.factoryId !== factoryId
+      || props.productTypeId !== productTypeId) return;
+    if (response.success && Array.isArray(response.data)) {
+      productBomItems.value = response.data;
+    }
+  } catch (error) {
+    if (generation !== bomLoadGeneration
+      || props.factoryId !== factoryId
+      || props.productTypeId !== productTypeId) return;
+    console.error('[ProductProcessWorkflow] BOM items loading failed (raw material picker falls back to a single unsorted group)', error);
   }
 }
 
@@ -1001,9 +1065,23 @@ function isCreateSkuOperationCurrent(
 }
 
 function refreshPortMaterialMetadata(): void {
+  // 单位以「所绑定 SKU 的主数据单位」为准：历史保存的 baseUnit 可能是工序默认单位
+  // (如 kg)，而实际绑定的成品/半成品单位是「盒」。在此按 SKU 主数据回填，自愈旧数据，
+  // 保证产出单位 chip 与所选 SKU 一致 (Steve: 盒 SKU 不能还显示 kg)。
+  const unitBySkuId = new Map<string, string>();
+  skuOptions.value.forEach((o) => { if (o.unit) unitBySkuId.set(o.id, o.unit); });
+  rawMaterialOptions.value.forEach((o) => { if (o.unit) unitBySkuId.set(o.id, o.unit); });
   const materialById = new Map(flowNodes.value
     .filter((node) => node.data?.kind !== 'PROCESS')
     .map((node) => [node.id, node]));
+  // 先把绑定了 SKU 的物料 Cell 的 baseUnit 对齐 SKU 主数据单位。
+  materialById.forEach((node) => {
+    const skuId = node.data?.skuId ? String(node.data.skuId) : '';
+    const skuUnit = skuId ? unitBySkuId.get(skuId) : undefined;
+    if (skuUnit && node.data.baseUnit !== skuUnit) {
+      node.data = { ...node.data, baseUnit: skuUnit };
+    }
+  });
   flowNodes.value.forEach((node) => {
     if (node.data?.kind !== 'PROCESS') return;
     const data = node.data as ProcessNodeData & { kind: 'PROCESS' };

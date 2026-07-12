@@ -66,6 +66,13 @@ async function bootstrap() {
     console.warn('[cretas] ElMessage.error monkey-patch failed:', e);
   }
 
+  // 2.5 注册全局拼音首字母搜索指令 (v-pinyin)。当前在实测环境下探测私有 el-plus
+  // 内部结构会静默降级 (见 directives/pinyin.ts 头部说明 + 单测)，本轮实际业务
+  // select 改走同文件导出的 usePinyinFilter composable，此处仍注册以便未来
+  // el-plus 升级后重新验证可用性、以及给简单静态 select 场景保留零改动接入选项。
+  const { pinyin } = await import('./directives/pinyin');
+  app.directive('pinyin', pinyin);
+
   // 3. 注册 Element Plus 图标
   const ElementPlusIconsVue = await import('@element-plus/icons-vue');
   for (const [key, component] of Object.entries(ElementPlusIconsVue)) {

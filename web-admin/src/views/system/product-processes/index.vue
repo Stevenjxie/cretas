@@ -22,6 +22,7 @@ import {
 } from '@/api/processProduction';
 import { getOperatorUsers } from '@/api/factory';
 import ProductProcessWorkflowEditor from './workflow/ProductProcessWorkflowEditor.vue';
+import { usePinyinFilter } from './workflow/pinyinInitials';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -33,6 +34,12 @@ const canWrite = computed(() => permissionStore.canWrite('system'));
 const products = ref<Array<{ id: string; name: string }>>([]);
 const selectedProductId = ref('');
 const productsLoading = ref(false);
+
+// #2: 顶部产品选择器拼音首字母搜索 (复用 pinyinInitials.ts 的共享 usePinyinFilter composable)。
+const topProductFilter = usePinyinFilter(() => products.value, (p) => [p.name]);
+const handleTopProductFilter = topProductFilter.handleFilter;
+const handleTopProductVisibleChange = topProductFilter.handleVisibleChange;
+const filteredTopProducts = topProductFilter.filtered;
 
 // 服务端已关联工序（source of truth from backend）
 const linkedProcesses = ref<ProductWorkProcessItem[]>([]);
@@ -1064,13 +1071,15 @@ async function saveCustomFieldConfig() {
           <el-tag type="info">{{ factoryId }}</el-tag>
           <el-select
             v-model="selectedProductId"
-            placeholder="选择要配置的产品"
+            placeholder="选择要配置的产品（支持拼音首字母搜索）"
             filterable
             style="width: 320px"
             :loading="productsLoading"
+            :filter-method="handleTopProductFilter"
+            @visible-change="handleTopProductVisibleChange"
             @change="handleProductChange"
           >
-            <el-option v-for="p in products" :key="p.id" :label="p.name" :value="p.id" />
+            <el-option v-for="p in filteredTopProducts" :key="p.id" :label="p.name" :value="p.id" />
           </el-select>
         </div>
         <div class="toolbar-right">

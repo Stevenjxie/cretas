@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { matchesSearchText, pinyinInitials } from '../pinyinInitials';
+import { nextTick, ref } from 'vue';
+import { matchesSearchText, pinyinInitials, usePinyinFilter } from '../pinyinInitials';
 
 describe('workflow pinyin initials search', () => {
   it('computes upper-case pinyin initials for known food/process characters', () => {
@@ -31,5 +32,54 @@ describe('workflow pinyin initials search', () => {
     // 表里没收录的生僻字不贡献首字母, 但不应报错, 也不应该凭空产生匹配。
     expect(() => pinyinInitials('鼗')).not.toThrow();
     expect(matchesSearchText('zzzz', '鼗')).toBe(false);
+  });
+});
+
+// #2: 全局共享模块 (usePinyinFilter composable) —— WorkflowSkuPicker /
+// WorkflowMaterialNode 原料选择器 / 顶部产品选择器 / 工序选择 dialog 均复用这份实现。
+describe('usePinyinFilter composable', () => {
+  const ITEMS = [
+    { id: 'PIG', name: '五香去骨猪蹄半成品', code: 'FG-PIG' },
+    { id: 'CHICKEN', name: '干式熟成鸡半成品', code: 'FG-CHK' },
+  ];
+
+  it('returns every item unfiltered when the query is empty', () => {
+    const { filtered } = usePinyinFilter(() => ITEMS, (item) => [item.name]);
+    expect(filtered.value).toEqual(ITEMS);
+  });
+
+  it('filters reactively by pinyin initials across the configured text fields', () => {
+    const { handleFilter, filtered } = usePinyinFilter(() => ITEMS, (item) => [item.name, item.code]);
+
+    handleFilter('zt');
+    expect(filtered.value.map((item) => item.id)).toEqual(['PIG']);
+  });
+
+  it('matches on any of the multiple text fields supplied by textOf', () => {
+    const { handleFilter, filtered } = usePinyinFilter(() => ITEMS, (item) => [item.name, item.code]);
+
+    handleFilter('fg-chk');
+    expect(filtered.value.map((item) => item.id)).toEqual(['CHICKEN']);
+  });
+
+  it('clears the query (shows everything again) when handleVisibleChange(false) fires', () => {
+    const { handleFilter, handleVisibleChange, filtered } = usePinyinFilter(() => ITEMS, (item) => [item.name]);
+
+    handleFilter('zt');
+    expect(filtered.value).toHaveLength(1);
+
+    handleVisibleChange(false);
+    expect(filtered.value).toEqual(ITEMS);
+  });
+
+  it('re-derives filtered results when the underlying reactive source changes (matches real usage: getter reads a ref/prop, not a plain snapshot)', async () => {
+    const source = ref([...ITEMS]);
+    const { handleFilter, filtered } = usePinyinFilter(() => source.value, (item) => [item.name]);
+    handleFilter('zt');
+    expect(filtered.value).toHaveLength(1);
+
+    source.value = [];
+    await nextTick();
+    expect(filtered.value).toHaveLength(0);
   });
 });
