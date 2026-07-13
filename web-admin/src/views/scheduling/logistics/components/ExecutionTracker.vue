@@ -10,8 +10,9 @@ import type { RouteTrip } from '../types';
 
 /**
  * 排线后处理(执行跟踪)—— 调度确认后, 按车次逐门店标记「已送达 / 异常」。
- * 异常走防呆两段引导对话框(原因 → 处置), 单一维度只改 deliveryStatus, 不动规划路线。
- * 使用者是物流调度员(文化素质参差): 明确告诉能做什么(fool-proof Rule 2/3/5)。
+ * 视觉对齐 scratchpad/execution-module-mockup.html: exec-head(进度+完成本次调度) +
+ * 圆角车次卡(圆形序号图标 + 逐门店 + 一键全部送达)。异常走防呆两段引导对话框(原因→处置)。
+ * 执行态只改 deliveryStatus 单一维度, 不动规划路线(fool-proof Rule 2/3/5)。
  */
 const props = defineProps<{
   trips: RouteTrip[];
@@ -22,8 +23,10 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'deliver', orderId: string): void;
+  (e: 'deliver-all', orderIds: string[]): void;
   (e: 'exception', payload: { orderId: string; reason: ExceptionReason; disposition: ExceptionDisposition; note: string | null }): void;
   (e: 'reset', orderId: string): void;
+  (e: 'complete'): void;
 }>();
 
 const REASONS: { value: ExceptionReason; label: string }[] = [
@@ -50,12 +53,21 @@ const orderById = computed(() => {
 
 const execOf = (o?: LogisticsDeliveryOrder | null): DeliveryExecutionStatus => o?.deliveryStatus || 'PENDING';
 
-/** 每车次一组，按 storeIds 顺序取订单（缺失的订单跳过，诚实不伪造）。 */
+/** "2026-07-14T08:12:34.1" → "08:12"; 空/异常返空。 */
+function fmtTime(iso?: string | null): string {
+  if (!iso) return '';
+  const t = iso.split('T')[1];
+  return t ? t.slice(0, 5) : '';
+}
+
+/** 每车次一组，按 storeIds 顺序取订单(缺失跳过，诚实不伪造) + 该车次送达计数。 */
 const groups = computed(() =>
-  props.trips.map((t) => ({
-    trip: t,
-    orders: t.storeIds.map((id) => orderById.value.get(id)).filter((o): o is LogisticsDeliveryOrder => !!o),
-  })),
+  props.trips.map((t) => {
+    const os = t.storeIds.map((id) => orderById.value.get(id)).filter((o): o is LogisticsDeliveryOrder => !!o);
+    const delivered = os.filter((o) => execOf(o) === 'DELIVERED').length;
+    const pendingIds = os.filter((o) => execOf(o) === 'PENDING').map((o) => o.id);
+    return { trip: t, orders: os, delivered, total: os.length, pendingIds };
+  }),
 );
 
 /** 全计划进度汇总。 */
@@ -68,8 +80,19 @@ const summary = computed(() => {
     else pending++;
   }
   const total = delivered + exception + pending;
-  return { delivered, exception, pending, total, donePct: total ? Math.round(((delivered + exception) / total) * 100) : 0 };
+  const done = delivered + exception;
+  return {
+    delivered, exception, pending, total, done,
+    donePct: total ? Math.round((done / total) * 100) : 0,
+    status: total === 0 || done === 0 ? 'PENDING' : (done < total ? 'RUNNING' : 'DONE'),
+  };
 });
+const statusBadge = computed(() => {
+  if (summary.value.status === 'DONE') return { cls: 'b-done', text: '已完成' };
+  if (summary.value.status === 'RUNNING') return { cls: 'b-running', text: '执行中' };
+  return { cls: 'b-pending', text: '待执行' };
+});
+const allDone = computed(() => summary.value.total > 0 && summary.value.pending === 0);
 
 // ===== 异常上报对话框(两段引导) =====
 const dialogOpen = ref(false);
@@ -78,7 +101,6 @@ const exReason = ref<ExceptionReason | null>(null);
 const exDisposition = ref<ExceptionDisposition | null>(null);
 const exNote = ref('');
 
-// note 何时必填: 原因=其他, 或 处置=改派(要写清改派到哪个车次)
 const noteRequired = computed(() => exReason.value === 'OTHER' || exDisposition.value === 'REASSIGN');
 const notePlaceholder = computed(() =>
   exDisposition.value === 'REASSIGN' ? '改派到哪个车次 / 线路？(必填)'
@@ -87,10 +109,11 @@ const notePlaceholder = computed(() =>
 const canSubmit = computed(() =>
   !!exReason.value && !!exDisposition.value && (!noteRequired.value || exNote.value.trim().length > 0));
 
-function openException(o: LogisticsDeliveryOrder): void {
+/** preselectReassign=true 时(点「改派」快捷入口)预选改派处置。 */
+function openException(o: LogisticsDeliveryOrder, preselectReassign = false): void {
   dialogOrder.value = o;
   exReason.value = (o.exceptionReason as ExceptionReason) || null;
-  exDisposition.value = (o.exceptionDisposition as ExceptionDisposition) || null;
+  exDisposition.value = (o.exceptionDisposition as ExceptionDisposition) || (preselectReassign ? 'REASSIGN' : null);
   exNote.value = o.exceptionNote || '';
   dialogOpen.value = true;
 }
@@ -109,58 +132,73 @@ function submitException(): void {
 
 <template>
   <div class="exec-tracker">
-    <!-- 进度汇总 -->
-    <div class="et-summary">
-      <div class="et-progress">
-        <div class="et-bar"><span :style="{ width: summary.donePct + '%' }" /></div>
-        <span class="et-pct">{{ summary.donePct }}%</span>
+    <!-- exec-head: 进度汇总 + 完成本次调度 -->
+    <div class="exec-head">
+      <div class="eh-left">
+        <span class="eh-title"><b>今日执行</b><span>{{ trips.length }} 车次 · {{ summary.total }} 门店</span></span>
+        <span class="badge" :class="statusBadge.cls">{{ statusBadge.text }}</span>
       </div>
-      <div class="et-counts">
-        <span class="et-c ok"><b>{{ summary.delivered }}</b> 已送达</span>
-        <span class="et-c warn"><b>{{ summary.exception }}</b> 异常</span>
-        <span class="et-c pend"><b>{{ summary.pending }}</b> 待送达</span>
-        <span class="et-c total">共 {{ summary.total }} 家</span>
+      <div class="eh-prog">
+        <div class="bar"><div class="fill" :style="{ width: summary.donePct + '%' }" /></div>
+        <span class="txt">{{ summary.done }} / {{ summary.total }} 已送达</span>
       </div>
+      <el-button
+        v-if="!readonly"
+        class="eh-done-btn" :disabled="!allDone" @click="emit('complete')"
+      >完成本次调度</el-button>
     </div>
 
-    <!-- 逐车次逐门店 -->
-    <div v-for="g in groups" :key="g.trip.id" class="et-group">
-      <div class="et-ghead">
-        <span class="et-veh">{{ g.trip.vehiclePlate || '待分配车辆' }}</span>
-        <span v-if="g.trip.driverName" class="et-drv">{{ g.trip.driverName }}</span>
-        <span class="et-tno">第 {{ g.trip.tripNo }} 车 · {{ g.orders.length }} 家门店</span>
+    <!-- 逐车次卡 -->
+    <div v-for="g in groups" :key="g.trip.id" class="trip-card">
+      <div class="tc-head">
+        <div class="tc-h-left">
+          <b>线路 {{ String(g.trip.tripNo).padStart(2, '0') }}<template v-if="g.trip.vehicleTripSeq"> · 第 {{ g.trip.vehicleTripSeq }} 趟</template></b>
+          <span class="tc-veh">🚚 {{ g.trip.vehiclePlate || '待分配车辆' }}<template v-if="g.trip.driverName"> · 👤 {{ g.trip.driverName }}</template></span>
+        </div>
+        <div class="tc-h-right">
+          <span class="tc-count" :class="{ done: g.delivered === g.total && g.total > 0 }">{{ g.delivered }} / {{ g.total }} 已送达</span>
+          <button
+            v-if="!readonly && g.pendingIds.length > 0"
+            class="tc-all-btn" @click="emit('deliver-all', g.pendingIds)"
+          >一键全部送达</button>
+        </div>
       </div>
-      <ul class="et-stores">
-        <li v-for="(o, i) in g.orders" :key="o.id" class="et-store" :class="execOf(o).toLowerCase()">
-          <span class="et-seq">{{ i + 1 }}</span>
-          <div class="et-info">
-            <div class="et-name">{{ o.storeName }}</div>
-            <div class="et-addr">{{ o.address }}</div>
-            <div v-if="execOf(o) === 'EXCEPTION'" class="et-exc">
-              {{ reasonLabel(o.exceptionReason) }} → {{ dispositionLabel(o.exceptionDisposition) }}
-              <span v-if="o.exceptionNote" class="et-note">「{{ o.exceptionNote }}」</span>
+      <div class="stops">
+        <div
+          v-for="(o, i) in g.orders" :key="o.id"
+          class="stop" :class="{ done: execOf(o) === 'DELIVERED', exc: execOf(o) === 'EXCEPTION' }"
+        >
+          <span class="st-ic" :class="execOf(o).toLowerCase()">
+            <template v-if="execOf(o) === 'DELIVERED'">✓</template>
+            <template v-else-if="execOf(o) === 'EXCEPTION'">!</template>
+            <template v-else>{{ i + 1 }}</template>
+          </span>
+          <div class="st-body">
+            <div class="st-name">{{ o.storeName }}</div>
+            <div v-if="execOf(o) === 'DELIVERED'" class="st-meta ok">已送达<template v-if="fmtTime(o.deliveredAt)"> {{ fmtTime(o.deliveredAt) }}</template></div>
+            <div v-else-if="execOf(o) === 'EXCEPTION'" class="st-meta exc">
+              异常 · {{ reasonLabel(o.exceptionReason) }} → {{ dispositionLabel(o.exceptionDisposition) }}
+              <template v-if="o.exceptionNote">「{{ o.exceptionNote }}」</template>
             </div>
+            <div v-else class="st-meta wait">待送达<template v-if="o.windowStart"> · {{ o.windowStart }}<template v-if="o.windowEnd">-{{ o.windowEnd }}</template></template></div>
           </div>
-          <div class="et-actions">
-            <template v-if="execOf(o) === 'PENDING'">
-              <template v-if="!readonly">
-                <el-button type="success" size="small" :loading="busyId === o.id" @click="emit('deliver', o.id)">已送达</el-button>
-                <el-button type="warning" size="small" plain :disabled="busyId === o.id" @click="openException(o)">异常</el-button>
-              </template>
-              <el-tag v-else type="info" effect="plain">待送达</el-tag>
+          <div class="st-ops">
+            <template v-if="readonly" />
+            <template v-else-if="execOf(o) === 'PENDING'">
+              <el-button class="st-btn done" :loading="busyId === o.id" @click="emit('deliver', o.id)">✓ 已送达</el-button>
+              <button class="st-btn exc" :disabled="busyId === o.id" @click="openException(o)">标异常</button>
+              <button class="st-btn edit" :disabled="busyId === o.id" @click="openException(o, true)">改派</button>
             </template>
             <template v-else-if="execOf(o) === 'DELIVERED'">
-              <el-tag type="success" effect="dark">已送达</el-tag>
-              <el-button v-if="!readonly" link type="info" :loading="busyId === o.id" @click="emit('reset', o.id)">撤销</el-button>
+              <span class="st-undo" :class="{ disabled: busyId === o.id }" @click="busyId !== o.id && emit('reset', o.id)">撤销</span>
             </template>
             <template v-else>
-              <el-tag type="danger" effect="dark">异常</el-tag>
-              <el-button v-if="!readonly" link type="info" :loading="busyId === o.id" @click="openException(o)">改</el-button>
-              <el-button v-if="!readonly" link type="info" :loading="busyId === o.id" @click="emit('reset', o.id)">撤销</el-button>
+              <button class="st-btn edit" :disabled="busyId === o.id" @click="openException(o)">查看 / 改</button>
+              <span class="st-undo" :class="{ disabled: busyId === o.id }" @click="busyId !== o.id && emit('reset', o.id)">撤销</span>
             </template>
           </div>
-        </li>
-      </ul>
+        </div>
+      </div>
     </div>
 
     <!-- 异常上报: 两段引导(原因 → 处置), 门店名/地址常显(fool-proof Rule 2) -->
@@ -170,22 +208,18 @@ function submitException(): void {
           <div class="ex-store">{{ dialogOrder.storeName }}</div>
           <div class="ex-addr">{{ dialogOrder.address }}</div>
         </div>
-
         <div class="ex-step">
           <div class="ex-label"><span class="ex-num">1</span>异常原因</div>
           <el-radio-group v-model="exReason" class="ex-radios">
             <el-radio v-for="r in REASONS" :key="r.value" :value="r.value" border>{{ r.label }}</el-radio>
           </el-radio-group>
         </div>
-
         <div class="ex-step" :class="{ disabled: !exReason }">
           <div class="ex-label"><span class="ex-num">2</span>怎么处置</div>
           <div class="ex-disp">
             <label
-              v-for="d in DISPOSITIONS"
-              :key="d.value"
-              class="ex-dcard"
-              :class="{ active: exDisposition === d.value }"
+              v-for="d in DISPOSITIONS" :key="d.value"
+              class="ex-dcard" :class="{ active: exDisposition === d.value }"
             >
               <input type="radio" :value="d.value" :checked="exDisposition === d.value" :disabled="!exReason" @change="exDisposition = d.value" />
               <span class="ex-dlabel">{{ d.label }}</span>
@@ -193,15 +227,9 @@ function submitException(): void {
             </label>
           </div>
         </div>
-
         <el-input
-          v-model="exNote"
-          type="textarea"
-          :rows="2"
-          :placeholder="notePlaceholder"
-          maxlength="200"
-          show-word-limit
-          class="ex-note-input"
+          v-model="exNote" type="textarea" :rows="2"
+          :placeholder="notePlaceholder" maxlength="200" show-word-limit class="ex-note-input"
         />
       </div>
       <template #footer>
@@ -214,34 +242,56 @@ function submitException(): void {
 
 <style scoped lang="scss">
 .exec-tracker { display: flex; flex-direction: column; gap: 14px; }
-/* 进度汇总 */
-.et-summary { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; background: linear-gradient(180deg,#fff,#f8fafc); border: 1px solid #e2e8f0; border-radius: 10px; }
-.et-progress { display: flex; align-items: center; gap: 10px; }
-.et-bar { flex: 1 1 auto; height: 8px; background: #eef2f6; border-radius: 6px; overflow: hidden; }
-.et-bar span { display: block; height: 100%; background: linear-gradient(90deg,#1B65A8,#3a86d4); border-radius: 6px; transition: width .3s ease; }
-.et-pct { flex: 0 0 auto; color: #1B65A8; font-weight: 700; font-variant-numeric: tabular-nums; }
-.et-counts { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; color: #667085; }
-.et-c b { font-size: 16px; font-variant-numeric: tabular-nums; margin-right: 3px; }
-.et-c.ok b { color: #16a34a; } .et-c.warn b { color: #dc2626; } .et-c.pend b { color: #64748b; }
-.et-c.total { margin-left: auto; color: #98a2b3; }
-/* 车次分组 */
-.et-group { border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; }
-.et-ghead { display: flex; align-items: center; gap: 10px; padding: 9px 14px; background: #f1f5f9; border-bottom: 1px solid #e2e8f0; }
-.et-veh { color: #0f172a; font-weight: 700; font-size: 14px; }
-.et-drv { color: #475569; font-size: 12.5px; }
-.et-tno { margin-left: auto; color: #94a3b8; font-size: 12px; }
-.et-stores { list-style: none; margin: 0; padding: 0; }
-.et-store { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid #f1f5f9; }
-.et-store:last-child { border-bottom: none; }
-.et-store.delivered { background: #f0fdf4; } .et-store.exception { background: #fef2f2; }
-.et-seq { flex: 0 0 24px; width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; background: #e2e8f0; color: #475569; font-size: 12.5px; font-weight: 700; }
-.et-store.delivered .et-seq { background: #16a34a; color: #fff; } .et-store.exception .et-seq { background: #dc2626; color: #fff; }
-.et-info { flex: 1 1 auto; min-width: 0; }
-.et-name { color: #101828; font-weight: 650; font-size: 14px; }
-.et-addr { color: #94a3b8; font-size: 12px; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.et-exc { color: #dc2626; font-size: 12px; margin-top: 3px; }
-.et-note { color: #b45309; }
-.et-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
+
+/* 状态徽章 */
+.badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.b-pending { color: #475467; background: #f2f4f7; }
+.b-running { color: #175cd3; background: #eff8ff; }
+.b-done { color: #027a48; background: #ecfdf3; }
+
+/* exec-head */
+.exec-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; background: linear-gradient(180deg,#fff,#f8fafc); border: 1px solid #E2E8F0; border-radius: 10px; padding: 12px 18px; }
+.eh-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.eh-title b { font-size: 15px; color: #101828; } .eh-title span { font-size: 11.5px; color: #98a2b3; margin-left: 6px; }
+.eh-prog { display: flex; align-items: center; gap: 10px; min-width: 260px; flex: 1 1 260px; }
+.eh-prog .bar { flex: 1; height: 8px; background: #eef2f7; border-radius: 999px; overflow: hidden; }
+.eh-prog .fill { height: 100%; background: #12b76a; border-radius: 999px; transition: width .3s ease; }
+.eh-prog .txt { font-size: 12.5px; font-weight: 700; color: #101828; font-variant-numeric: tabular-nums; }
+.eh-done-btn { padding: 8px 16px; color: #fff; background: #027a48; border: 0; border-radius: 7px; font-size: 13px; font-weight: 650; }
+.eh-done-btn:not(.is-disabled):hover { background: #04663d; color: #fff; }
+.eh-done-btn.is-disabled { background: #cbd5e1; color: #fff; cursor: not-allowed; }
+
+/* 车次卡 */
+.trip-card { background: #fff; border: 1px solid #EDF2F7; border-radius: 12px; overflow: hidden; }
+.tc-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 16px; background: #fafbfc; border-bottom: 1px solid #EDF2F7; }
+.tc-h-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; } .tc-h-left b { font-size: 14px; color: #101828; }
+.tc-veh { font-size: 12.5px; color: #475467; font-weight: 600; }
+.tc-h-right { display: flex; align-items: center; gap: 10px; }
+.tc-count { font-size: 12.5px; font-weight: 700; color: #175cd3; font-variant-numeric: tabular-nums; } .tc-count.done { color: #027a48; }
+.tc-all-btn { font-size: 12px; padding: 5px 11px; color: #1B65A8; background: #eff6fd; border: 1px solid #cfe3fb; border-radius: 7px; cursor: pointer; font-weight: 600; }
+.tc-all-btn:hover { background: #dbeafe; }
+
+/* 停靠卡 */
+.stops { padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
+.stop { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid #EDF2F7; border-radius: 9px; }
+.stop.done { background: #f6fef9; border-color: #a6f4c5; } .stop.exc { background: #fef3f2; border-color: #fecdca; }
+.st-ic { width: 22px; height: 22px; flex: none; display: grid; place-items: center; border-radius: 50%; font-size: 12px; font-weight: 800; }
+.st-ic.pending { color: #98a2b3; background: #f2f4f7; border: 1.5px solid #d0d5dd; }
+.st-ic.delivered { color: #fff; background: #12b76a; } .st-ic.exception { color: #fff; background: #f04438; }
+.st-body { flex: 1; min-width: 0; } .st-name { color: #101828; font-size: 13px; font-weight: 650; }
+.st-meta { font-size: 11.5px; margin-top: 1px; } .st-meta.ok { color: #027a48; } .st-meta.wait { color: #98a2b3; } .st-meta.exc { color: #b42318; }
+.st-ops { flex: none; display: flex; align-items: center; gap: 6px; }
+.st-btn { font-size: 12px; padding: 5px 10px; border-radius: 6px; cursor: pointer; font-weight: 600; border: 1px solid #dbe3ec; background: #fff; color: #475569; height: auto; }
+.st-btn:disabled { opacity: .55; cursor: not-allowed; }
+.st-btn.done { color: #fff; background: #12b76a; border-color: #12b76a; }
+.st-btn.done:not(.is-disabled):hover { background: #0e9f5b; color: #fff; border-color: #0e9f5b; }
+.st-btn.exc { color: #b42318; background: #fff; border-color: #fecdca; }
+.st-btn.exc:hover { background: #fef3f2; }
+.st-btn.edit { color: #1b65a8; border-color: #cfe3fb; background: #eff6fd; }
+.st-btn.edit:hover { background: #dbeafe; }
+.st-undo { font-size: 11.5px; color: #98a2b3; cursor: pointer; text-decoration: underline; }
+.st-undo.disabled { opacity: .5; cursor: not-allowed; }
+
 /* 异常对话框 */
 .ex-dialog { display: flex; flex-direction: column; gap: 16px; }
 .ex-ctx { padding: 10px 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; }

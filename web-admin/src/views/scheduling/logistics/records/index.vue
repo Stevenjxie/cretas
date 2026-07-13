@@ -25,14 +25,18 @@ const detailConfirmed = computed(() =>
   detailPlan.value?.status === 'CONFIRMED' || detailPlan.value?.status === 'EXPORTED',
 );
 
-// 列表「执行进度」列展示
-function execMeta(row: LogisticsPlan): { text: string; type: 'info' | 'success' | 'warning'; done: number; total: number } | null {
+// 列表「执行进度」列展示(对齐 mockup rt-prog: 徽章 + 进度条 + X/Y 已送达)
+function execMeta(row: LogisticsPlan): {
+  text: string; badgeCls: string; done: number; total: number; delivered: number; pct: number; fill: string;
+} | null {
   if (!row.executionStatus) return null;
   const total = row.totalOrders ?? 0;
-  const done = (row.deliveredCount ?? 0) + (row.exceptionCount ?? 0);
-  if (row.executionStatus === 'COMPLETED') return { text: '已完成', type: 'success', done, total };
-  if (row.executionStatus === 'IN_PROGRESS') return { text: `执行中 ${done}/${total}`, type: 'warning', done, total };
-  return { text: '未开始', type: 'info', done, total };
+  const delivered = row.deliveredCount ?? 0;
+  const done = delivered + (row.exceptionCount ?? 0);
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  if (row.executionStatus === 'COMPLETED') return { text: '已完成', badgeCls: 'b-done', done, total, delivered, pct, fill: '#12b76a' };
+  if (row.executionStatus === 'IN_PROGRESS') return { text: '执行中', badgeCls: 'b-running', done, total, delivered, pct, fill: '#175cd3' };
+  return { text: '待执行', badgeCls: 'b-pending', done, total, delivered, pct, fill: '#12b76a' };
 }
 
 const statusMeta: Record<PlanStatus, { label: string; type: 'info' | 'success' | 'warning' | 'danger' }> = {
@@ -90,6 +94,20 @@ async function onException(p: { orderId: string; reason: ExceptionReason; dispos
 }
 async function onResetDelivery(orderId: string): Promise<void> {
   if (await state.resetStoreDelivery(orderId)) syncDetailProgress();
+}
+// 一键全部送达: 逐单串行标记(每单独立, 后端无 trip 级乐观锁), 完成后刷新进度。
+async function onDeliverAll(orderIds: string[]): Promise<void> {
+  for (const id of orderIds) {
+    const ok = await state.markStoreDelivered(id);
+    if (!ok) break; // 出错停止(错误已由 planError 展示), 已标的保留
+  }
+  syncDetailProgress();
+}
+// 完成本次调度: 全部门店已处理后的收口(执行态已逐单持久化, 此处仅提示 + 收起抽屉)。
+async function onComplete(): Promise<void> {
+  const { ElMessage } = await import('element-plus');
+  ElMessage({ message: '本次调度已完成，全部门店处理完毕', type: 'success' });
+  detailOpen.value = false;
 }
 // 标记后同步刷新列表行的进度数字(从当前 orders 现算, 免整列表重拉)。
 function syncDetailProgress(): void {
@@ -162,12 +180,16 @@ async function reExportXlsx(plan: LogisticsPlan): Promise<void> {
         <el-table-column label="状态" min-width="100">
           <template #default="{ row }"><el-tag :type="statusMeta[row.status as PlanStatus].type" effect="plain">{{ statusMeta[row.status as PlanStatus].label }}</el-tag></template>
         </el-table-column>
-        <el-table-column label="执行进度" min-width="150">
+        <el-table-column label="执行进度" min-width="180">
           <template #default="{ row }">
-            <template v-if="execMeta(row)">
-              <el-tag :type="execMeta(row)!.type" effect="light" size="small">{{ execMeta(row)!.text }}</el-tag>
-              <span v-if="(row.exceptionCount ?? 0) > 0" class="rec-exc">异常 {{ row.exceptionCount }}</span>
-            </template>
+            <div v-if="execMeta(row)" class="rt-prog">
+              <span class="ex-badge" :class="execMeta(row)!.badgeCls">{{ execMeta(row)!.text }}</span>
+              <div class="rt-bar"><div class="rt-fill" :style="{ width: execMeta(row)!.pct + '%', background: execMeta(row)!.fill }" /></div>
+              <span class="rt-txt">
+                {{ execMeta(row)!.delivered }} / {{ execMeta(row)!.total }} 已送达
+                <span v-if="(row.exceptionCount ?? 0) > 0" class="rec-exc">· 异常 {{ row.exceptionCount }}</span>
+              </span>
+            </div>
             <span v-else class="rec-dash">—</span>
           </template>
         </el-table-column>
@@ -258,8 +280,10 @@ async function reExportXlsx(plan: LogisticsPlan): Promise<void> {
             :orders="state.orders.value"
             :busy-id="state.executionBusyId.value"
             @deliver="onDeliver"
+            @deliver-all="onDeliverAll"
             @exception="onException"
             @reset="onResetDelivery"
+            @complete="onComplete"
           />
         </div>
 
@@ -293,8 +317,17 @@ async function reExportXlsx(plan: LogisticsPlan): Promise<void> {
 .rd-note { padding: 10px 14px; color: #175cd3; font-size: 12.5px; background: #eff8ff; border: 1px solid #b2ddff; border-radius: 8px; }
 .rd-viewswitch { align-self: flex-start; }
 .rd-exec { display: flex; flex-direction: column; }
-.rec-exc { margin-left: 8px; color: #dc2626; font-size: 12px; }
+.rec-exc { color: #b42318; font-size: 11px; }
 .rec-dash { color: #cbd5e1; }
+/* 列表执行进度列(对齐 mockup rt-prog) */
+.rt-prog { display: flex; flex-direction: column; gap: 4px; }
+.ex-badge { align-self: flex-start; display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 700; }
+.ex-badge.b-pending { color: #475467; background: #f2f4f7; }
+.ex-badge.b-running { color: #175cd3; background: #eff8ff; }
+.ex-badge.b-done { color: #027a48; background: #ecfdf3; }
+.rt-bar { height: 6px; background: #eef2f7; border-radius: 999px; overflow: hidden; }
+.rt-fill { height: 100%; border-radius: 999px; transition: width .3s ease; }
+.rt-txt { font-size: 11px; color: #667085; font-variant-numeric: tabular-nums; }
 @media (max-width: 980px) { .rd-main { flex-direction: column; height: auto; } .rd-map { height: 360px; } .rd-routes { flex-basis: auto; } .rd-routes :deep(.route-cards) { max-height: 400px; } }
 @media (max-width: 720px) { .support-page { padding: 16px; } }
 </style>
