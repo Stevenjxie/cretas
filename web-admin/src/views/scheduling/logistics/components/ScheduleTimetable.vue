@@ -130,7 +130,7 @@ function tripColorIndex(trip: RouteTrip): number {
 <style scoped lang="scss">
 .timetable { width: 100%; padding: 12px 14px; background: #fff; border: 1px solid #edf2f7; border-radius: 10px; overflow-x: auto; }
 /* scrollable: 车辆行内部滚动(图例在外, 时间轴 sticky 固定), 车多时不撑高地图 */
-.tt-scroll.scroll { max-height: 168px; overflow-y: auto; }
+.tt-scroll.scroll { max-height: 320px; overflow-y: auto; }
 .tt-scroll.scroll::-webkit-scrollbar { width: 8px; } .tt-scroll.scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
 .tt-axis.sticky { position: sticky; top: 0; z-index: 2; background: #fff; }
 .empty { padding: 28px; color: #667085; text-align: center; }
@@ -145,13 +145,13 @@ function tripColorIndex(trip: RouteTrip): number {
 .tt-axis { height: 22px; margin-bottom: 4px; }
 .tt-rowlabel { display: flex; flex-direction: column; padding-right: 10px; color: #101828; font-size: 13px; }
 .tt-rowlabel span { color: #667085; font-size: 11px; }
-.tt-track { position: relative; height: 34px; min-width: 640px; }
+.tt-track { position: relative; height: 46px; min-width: 640px; }
 .tt-axis .tt-track { height: 22px; }
 .tt-tick { position: absolute; top: 0; transform: translateX(-50%); color: #98a2b3; font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .tt-bar-label, .tt-rowlabel span { font-variant-numeric: tabular-nums; }
 .tt-grid { position: absolute; top: 0; bottom: 0; width: 1px; background: #f1f3f5; }
 .tt-row { border-top: 1px dashed #eef1f4; }
-.tt-bar { position: absolute; top: 5px; height: 24px; display: flex; align-items: center; padding: 0 6px; color: #fff; font-size: 11px; font-weight: 700; background: var(--bar-color); border: 2px solid transparent; border-radius: 6px; cursor: pointer; overflow: hidden; white-space: nowrap; box-shadow: 0 1px 3px rgba(0,0,0,0.18); }
+.tt-bar { position: absolute; top: 11px; height: 24px; display: flex; align-items: center; padding: 0 6px; color: #fff; font-size: 11px; font-weight: 700; background: var(--bar-color); border: 2px solid transparent; border-radius: 6px; cursor: pointer; overflow: hidden; white-space: nowrap; box-shadow: 0 1px 3px rgba(0,0,0,0.18); }
 .tt-bar:hover { filter: brightness(1.06); }
 .tt-bar.selected { border-color: #101828; box-shadow: 0 0 0 2px rgba(16,24,40,0.15); z-index: 2; }
 .tt-bar.late { outline: 2px solid #b42318; outline-offset: 1px; }

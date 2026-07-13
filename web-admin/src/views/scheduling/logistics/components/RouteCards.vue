@@ -185,7 +185,7 @@ function etaTitleFor(tripId: string, i: number): string {
               class="chip-eta"
             >{{ etaTitleFor(trip.id, storeIndex) }}<span v-if="etaAt(trip.id, storeIndex)?.late"> · 迟到</span></span>
           </button>
-          <span v-if="storeIndex < trip.storeIds.length - 1" class="chain-arrow" aria-hidden="true">→</span>
+          <span v-if="storeIndex < trip.storeIds.length - 1" class="chain-arrow" aria-hidden="true">↓</span>
         </template>
       </div>
 
@@ -372,12 +372,12 @@ function etaTitleFor(tripId: string, i: number): string {
   border: 1px solid #fecdca;
 }
 
+/* 竖向门店列表：每站一行(门店名左 / 预计到达右)，站间用向下箭头 ↓ 表示配送先后。 */
 .store-chain {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  min-height: 68px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
   margin: 14px 0;
   padding: 10px;
   background: #f4f6f9;
@@ -385,16 +385,19 @@ function etaTitleFor(tripId: string, i: number): string {
 }
 
 .store-chip {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 1px;
-  padding: 4px 7px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
   color: #344054;
   font: inherit;
   font-size: 13px;
   font-weight: 650;
   line-height: 1.35;
+  text-align: left;
   background: #ffffff;
   border: 1px solid #edf2f7;
   border-radius: 8px;
@@ -415,7 +418,15 @@ function etaTitleFor(tripId: string, i: number): string {
   }
 }
 
+.chip-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: #101828;
+}
+
 .chip-eta {
+  flex: 0 0 auto;
+  white-space: nowrap;
   font-size: 11px;
   font-weight: 600;
   color: #667085;
@@ -438,8 +449,11 @@ function etaTitleFor(tripId: string, i: number): string {
 }
 
 .chain-arrow {
-  color: #344054;
+  text-align: center;
+  color: #98a2b3;
+  font-size: 12px;
   font-weight: 800;
+  line-height: 1;
 }
 
 .route-metrics {
