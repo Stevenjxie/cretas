@@ -7,6 +7,8 @@ import { fmtHm } from '../routeEta';
 const props = defineProps<{
   trips: RouteTrip[];
   selectedTripId: string | null;
+  /** 车辆行内部滚动(图例/时间轴固定)—— 车多时不撑高，用于查看路线页左列常显甘特。 */
+  scrollable?: boolean;
 }>();
 
 const emit = defineEmits<{ (event: 'select-trip', tripId: string): void }>();
@@ -94,29 +96,31 @@ function tripColorIndex(trip: RouteTrip): number {
         <span class="tip">横向 = 当天时间；每行一辆车，条 = 一趟配送（含返仓）。多条 = 回仓补货多车次。</span>
       </div>
 
-      <div class="tt-axis">
-        <div class="tt-rowlabel" />
-        <div class="tt-track">
-          <span v-for="m in ticks" :key="m" class="tt-tick" :style="{ left: `${leftPct(m)}%` }">{{ fmtHm(m) }}</span>
+      <div class="tt-scroll" :class="{ scroll: scrollable }">
+        <div class="tt-axis" :class="{ sticky: scrollable }">
+          <div class="tt-rowlabel" />
+          <div class="tt-track">
+            <span v-for="m in ticks" :key="m" class="tt-tick" :style="{ left: `${leftPct(m)}%` }">{{ fmtHm(m) }}</span>
+          </div>
         </div>
-      </div>
 
-      <div v-for="(row, i) in rows" :key="row.vehicleId" v-reveal="Math.min(i, 8)" class="tt-row" data-testid="tt-vehicle-row">
-        <div class="tt-rowlabel"><strong>{{ row.plate }}</strong><span>{{ row.trips.length }} 趟</span></div>
-        <div class="tt-track">
-          <span v-for="m in ticks" :key="'g'+m" class="tt-grid" :style="{ left: `${leftPct(m)}%` }" />
-          <button
-            v-for="trip in row.trips"
-            :key="trip.id"
-            type="button"
-            class="tt-bar"
-            :class="{ selected: trip.id === selectedTripId, late: trip.lateReturn }"
-            :style="barStyle(trip, tripColorIndex(trip))"
-            :title="`第${trip.vehicleTripSeq ?? '?'}趟 · ${trip.storeIds.length}店 · 出发${fmtHm(trip.plannedDepartMin!)}→返仓${fmtHm(trip.returnToDepotMin!)}${trip.lateReturn ? ' · 迟到回仓' : ''}`"
-            @click="emit('select-trip', trip.id)"
-          >
-            <span class="tt-bar-label">第{{ trip.vehicleTripSeq ?? '?' }}趟 · {{ trip.storeIds.length }}店</span>
-          </button>
+        <div v-for="(row, i) in rows" :key="row.vehicleId" v-reveal="Math.min(i, 8)" class="tt-row" data-testid="tt-vehicle-row">
+          <div class="tt-rowlabel"><strong>{{ row.plate }}</strong><span>{{ row.trips.length }} 趟</span></div>
+          <div class="tt-track">
+            <span v-for="m in ticks" :key="'g'+m" class="tt-grid" :style="{ left: `${leftPct(m)}%` }" />
+            <button
+              v-for="trip in row.trips"
+              :key="trip.id"
+              type="button"
+              class="tt-bar"
+              :class="{ selected: trip.id === selectedTripId, late: trip.lateReturn }"
+              :style="barStyle(trip, tripColorIndex(trip))"
+              :title="`第${trip.vehicleTripSeq ?? '?'}趟 · ${trip.storeIds.length}店 · 出发${fmtHm(trip.plannedDepartMin!)}→返仓${fmtHm(trip.returnToDepotMin!)}${trip.lateReturn ? ' · 迟到回仓' : ''}`"
+              @click="emit('select-trip', trip.id)"
+            >
+              <span class="tt-bar-label">第{{ trip.vehicleTripSeq ?? '?' }}趟 · {{ trip.storeIds.length }}店</span>
+            </button>
+          </div>
         </div>
       </div>
     </template>
@@ -125,6 +129,10 @@ function tripColorIndex(trip: RouteTrip): number {
 
 <style scoped lang="scss">
 .timetable { width: 100%; padding: 12px 14px; background: #fff; border: 1px solid #edf2f7; border-radius: 10px; overflow-x: auto; }
+/* scrollable: 车辆行内部滚动(图例在外, 时间轴 sticky 固定), 车多时不撑高地图 */
+.tt-scroll.scroll { max-height: 168px; overflow-y: auto; }
+.tt-scroll.scroll::-webkit-scrollbar { width: 8px; } .tt-scroll.scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+.tt-axis.sticky { position: sticky; top: 0; z-index: 2; background: #fff; }
 .empty { padding: 28px; color: #667085; text-align: center; }
 .tt-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-bottom: 12px; color: #475467; font-size: 12.5px; }
 .tt-legend .lg { display: inline-flex; align-items: center; gap: 5px; font-weight: 650; }
