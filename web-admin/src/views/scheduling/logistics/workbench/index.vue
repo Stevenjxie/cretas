@@ -296,20 +296,22 @@ async function next(): Promise<void> {
           @click="routesHidden = !routesHidden"
         >{{ routesHidden ? '显示配送线路 ◂' : '隐藏配送线路 ▸' }}</button>
       </div>
+      <!-- 统计 + 排线设置合并成一行（统计左 / 控件右）—— 省纵向空间, 把高度还给地图。
+           「查看路线」标题不再重复(顶部步骤条已标 2 查看路线)。 -->
       <template v-if="!settingsCollapsed">
-        <header class="map-heading"><div><p>第二步</p><h2>查看路线</h2></div></header>
-        <div v-if="totalTripCount > 0" v-reveal="0" class="route-summary" data-testid="route-summary">
-          <div class="rs-item"><span class="rs-value">{{ totalTripCount }}</span><span class="rs-label">车次</span></div>
-          <div class="rs-sep" />
-          <div class="rs-item"><span class="rs-value">{{ totalStopCount }}</span><span class="rs-label">配送门店</span></div>
-          <div class="rs-sep" />
-          <div class="rs-item"><span class="rs-value">{{ totalKm.toFixed(1) }}</span><span class="rs-label">总里程 km</span></div>
-        </div>
-        <div class="route-settings" data-testid="route-settings">
-          <span class="settings-title">排线设置</span>
-          <button data-testid="generate-routes" class="generate-button" type="button" @click="state.regeneratePlanAction">重新生成路线</button>
-          <label class="view-toggle">视图 <el-radio-group :model-value="mapView" size="small" @update:model-value="(v: 'map'|'timetable') => (mapView = v)"><el-radio-button label="map">地图</el-radio-button><el-radio-button label="timetable">调度时间表</el-radio-button></el-radio-group></label>
-          <label class="opt-mode">优化目标 <el-radio-group :model-value="state.optimizeMode.value" size="small" @update:model-value="handleOptimizeMode"><el-radio-button label="DISTANCE">路程最短</el-radio-button><el-radio-button label="TIME">时间最快</el-radio-button></el-radio-group></label>
+        <div class="route-controlbar">
+          <div v-if="totalTripCount > 0" v-reveal="0" class="rc-summary" data-testid="route-summary">
+            <span class="rc-stat"><strong>{{ totalTripCount }}</strong>车次</span>
+            <span class="rc-dot">·</span>
+            <span class="rc-stat"><strong>{{ totalStopCount }}</strong>门店</span>
+            <span class="rc-dot">·</span>
+            <span class="rc-stat"><strong>{{ totalKm.toFixed(1) }}</strong>km</span>
+          </div>
+          <div class="rc-controls route-settings" data-testid="route-settings">
+            <button data-testid="generate-routes" class="generate-button" type="button" @click="state.regeneratePlanAction">重新生成路线</button>
+            <label class="view-toggle">视图 <el-radio-group :model-value="mapView" size="small" @update:model-value="(v: 'map'|'timetable') => (mapView = v)"><el-radio-button label="map">地图</el-radio-button><el-radio-button label="timetable">调度时间表</el-radio-button></el-radio-group></label>
+            <label class="opt-mode">优化目标 <el-radio-group :model-value="state.optimizeMode.value" size="small" @update:model-value="handleOptimizeMode"><el-radio-button label="DISTANCE">路程最短</el-radio-button><el-radio-button label="TIME">时间最快</el-radio-button></el-radio-group></label>
+          </div>
         </div>
       </template>
       <div ref="mapRowRef" class="map-and-routes" :class="{ 'routes-hidden': routesHidden }" :style="mapRowStyle">
@@ -367,7 +369,11 @@ async function next(): Promise<void> {
 <style scoped lang="scss">
 .workbench-page { display: grid; gap: 20px; max-width: 2560px; min-height: 100%; padding: 24px; margin: 0 auto; background: #f8fafc; } .ai-analyzing-overlay { position: fixed; inset: 0; z-index: 3000; display: grid; place-items: center; background: rgba(16, 24, 40, 0.55); backdrop-filter: blur(2px); } .ai-analyzing-card { width: min(460px, 90vw); padding: 32px 28px; text-align: center; background: #fff; border-radius: 16px; box-shadow: 0 12px 40px rgba(0,0,0,0.25); } .ai-spark { font-size: 40px; animation: ai-pulse 1.1s ease-in-out infinite; } @keyframes ai-pulse { 0%,100% { transform: scale(1); opacity: 0.85; } 50% { transform: scale(1.18); opacity: 1; } } .ai-title { margin: 12px 0 6px; color: #101828; font-size: 18px; font-weight: 750; } .ai-sub { margin: 0 0 18px; color: #667085; font-size: 13px; line-height: 1.5; }
 .page-header, .map-heading, .action-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; } .header-actions { display: flex; align-items: center; gap: 12px; }
-.route-summary { display: flex; align-items: center; gap: 20px; padding: 14px 20px; background: linear-gradient(180deg, #ffffff, #f8fafc); border: 1px solid #e2e8f0; border-radius: 10px; } .route-summary .rs-item { display: flex; flex-direction: column; gap: 2px; } .route-summary .rs-value { color: #0f172a; font-size: 22px; font-weight: 750; line-height: 1.1; font-variant-numeric: tabular-nums; } .route-summary .rs-label { color: #667085; font-size: 12.5px; } .route-summary .rs-sep { width: 1px; height: 28px; background: #e2e8f0; }
+/* 统计 + 排线设置合并的单行控制条(统计左 / 控件右)—— 省纵向空间, 把高度还给地图 */
+.route-controlbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 10px 16px; background: linear-gradient(180deg, #ffffff, #f8fafc); border: 1px solid #e2e8f0; border-radius: 10px; }
+.route-controlbar .route-settings { padding: 0; background: transparent; border: 0; border-radius: 0; }
+.rc-summary { display: flex; align-items: baseline; gap: 8px; color: #667085; font-size: 13px; }
+.rc-summary .rc-stat { color: #667085; } .rc-summary .rc-stat strong { margin-right: 4px; color: #0f172a; font-size: 19px; font-weight: 750; font-variant-numeric: tabular-nums; } .rc-summary .rc-dot { color: #cbd5e1; }
 /* 左地图 + 右线路(可下滑) 两栏布局 —— 高度跟随视口填满可用竖向空间(而非固定 640) */
 /* 高度由 JS(recomputeMapRowHeight)按文档真实起点算, 精确铺满一屏; 下面 clamp 只是 JS 生效前的首帧兜底 */
 /* 顶部控制条: 展开/收起设置 + 显示/隐藏配送线路 —— 两个开关放同一处 */
@@ -375,7 +381,7 @@ async function next(): Promise<void> {
 .view-controls button { display: inline-flex; align-items: center; padding: 7px 14px; color: #475569; font: inherit; font-size: 13px; font-weight: 650; background: #fff; border: 1px solid #dbe3ec; border-radius: 8px; cursor: pointer; transition: background 0.15s ease; }
 .view-controls button:hover { background: #f0f4f8; }
 /* 地图(主) + 配送线路(独立成卡, 跳出地图模块)。隐藏线路后地图占满整行。 */
-.map-and-routes { display: flex; gap: 16px; height: clamp(440px, calc(100vh - 460px), 900px); transition: height 0.2s ease; }
+.map-and-routes { display: flex; gap: 16px; height: clamp(440px, calc(100vh - 360px), 900px); transition: height 0.2s ease; }
 .mr-map { position: relative; flex: 1 1 auto; min-width: 0; height: 100%; overflow: hidden; border-radius: 12px; }
 .mr-map :deep(.map-stage) { aspect-ratio: auto !important; height: 100% !important; }
 .mr-routes { flex: 0 0 400px; height: 100%; display: flex; flex-direction: column; overflow: hidden; padding: 14px 16px; background: #fff; border: 1px solid #e6eaf0; border-radius: 12px; box-shadow: 0 2px 12px rgba(16,24,40,0.05); }
