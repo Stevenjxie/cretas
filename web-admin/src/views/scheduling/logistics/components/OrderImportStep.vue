@@ -23,14 +23,7 @@ const emit = defineEmits<{
   (event: 'commit'): void;
   (event: 'submit-manual', payload: { businessDate: string | null; rows: ManualOrderRow[] }): void;
   (event: 'clear-batch'): void;
-  (event: 'load-scenario', batchId: string): void;
 }>();
-
-// 演示场景（demo 专用一键测试导入）—— 数据常驻后端，随时切换「够 / 不够」两套场景对比。
-const DEMO_SCENARIOS: Array<{ key: string; label: string; sub: string; batchId: string; type: 'warning' | 'success' }> = [
-  { key: 'insufficient', label: '不够场景', sub: '21 单 · 车队不足', batchId: 'ad9279e7-63f7-4c38-9107-79e2af817251', type: 'warning' },
-  { key: 'saturation', label: '饱和场景', sub: '100 单 · 运力充足', batchId: 'DEMOSAT-BATCH-100', type: 'success' },
-];
 
 type EntryMode = 'file' | 'paste' | 'manual';
 const mode = ref<EntryMode>('file');
@@ -307,24 +300,6 @@ watch(() => props.batch?.id, (id, prev) => {
       <el-button plain @click="emit('download-template')">下载导入模板</el-button>
     </div>
 
-    <!-- 一键测试导入（演示场景，数据常驻，切换「够 / 不够」对比） -->
-    <div class="scenario-import" data-testid="scenario-import">
-      <span class="scenario-label">🧪 测试导入</span>
-      <el-button
-        v-for="s in DEMO_SCENARIOS"
-        :key="s.key"
-        :type="s.type"
-        plain
-        :disabled="committing"
-        :data-testid="`scenario-${s.key}`"
-        class="scenario-btn"
-        @click="emit('load-scenario', s.batchId)"
-      >
-        {{ s.label }}<em>{{ s.sub }}</em>
-      </el-button>
-      <span class="scenario-hint">一键载入整套演示订单 → 下方列出明细 → 点「下一步」生成排线。</span>
-    </div>
-
     <el-radio-group :model-value="mode" class="mode-toggle" @update:model-value="switchMode">
       <el-radio-button value="file">📄 文件导入</el-radio-button>
       <el-radio-button value="paste">📋 粘贴导入</el-radio-button>
@@ -597,11 +572,6 @@ watch(() => props.batch?.id, (id, prev) => {
 .win-cell { display: flex; align-items: center; gap: 6px; }
 .manual-actions { display: flex; align-items: center; gap: 14px; }
 .filled-count { color: #475467; font-size: 13px; }
-/* 测试导入（演示场景） */
-.scenario-import { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 14px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 10px; }
-.scenario-label { color: #334155; font-size: 13px; font-weight: 750; }
-.scenario-btn :deep(em), .scenario-btn em { margin-left: 6px; font-style: normal; font-size: 11.5px; opacity: 0.72; }
-.scenario-hint { color: #94a3b8; font-size: 12px; }
 /* 已导入订单明细表 */
 .imported-detail { display: grid; gap: 8px; }
 .detail-head { display: flex; align-items: baseline; gap: 10px; }

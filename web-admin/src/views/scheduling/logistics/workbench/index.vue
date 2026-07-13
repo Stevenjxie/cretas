@@ -148,11 +148,6 @@ async function submitManual(payload: { businessDate: string | null; rows: Manual
   await state.submitManualOrders(payload.businessDate, payload.rows);
 }
 
-/** 测试导入：一键载入一个演示场景批次（够/不够），停在第一步展示明细，用户再点「下一步」生成。 */
-async function onLoadScenario(batchId: string): Promise<void> {
-  await state.loadScenarioBatch(batchId);
-}
-
 /** 开始新一天排线：清空当前视图回到第一步录入。当前计划已存库，可随时从计划列表恢复（防呆确认）。 */
 async function startNewSchedule(): Promise<void> {
   try {
@@ -284,7 +279,6 @@ async function next(): Promise<void> {
       @commit="commitImport"
       @submit-manual="submitManual"
       @clear-batch="startNewSchedule"
-      @load-scenario="onLoadScenario"
     />
 
     <section v-else-if="state.activeStep.value === 'map'" data-testid="map-step" class="map-step">
