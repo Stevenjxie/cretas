@@ -64,6 +64,32 @@ class LogisticsRoutingLooseAreaTest {
                 "小排头 V1(5m³) 不应被用 (大车足够且更省趟)");
     }
 
+    @Test
+    void emptyAreaOrders_dispatchableByAnyVehicle() {
+        // 客户真实文件常不填「区域」→ order.areaCode 为空。车辆固定区域是别的区(如苏州「姑苏」)。
+        // 修复前: 空 areaCode → findFirstServiceAreaMatch 返 null → 整批 unassigned(32 单常州/无锡 0 车次)。
+        // 修复后: 空区域不做约束, 按容量派任意车。
+        List<OrderInput> orders = new ArrayList<>();
+        Map<String, double[]> stores = new HashMap<>();
+        stores.put("DEPOT", DEPOT);
+        for (int i = 1; i <= 5; i++) {
+            String code = String.format("S-%02d", i);
+            orders.add(new OrderInput(code, code, null, new BigDecimal("2.0"), new BigDecimal("100"), null, null));
+            stores.put(code, new double[] {120.60 + i * 0.02, 31.30});
+        }
+        List<VehicleInput> vehicles = List.of(vehicle("V1", "20", Set.of("姑苏")));
+
+        Input input = new Input(orders, vehicles, Map.of(), Map.of(),
+                planarKmLookup(stores), new BigDecimal("88"),
+                coordsFor(orders, stores), DEPOT[0], DEPOT[1], RouteOptimizeMode.DISTANCE);
+        Result r = LogisticsRoutingAlgorithm.run(input);
+
+        org.junit.jupiter.api.Assertions.assertEquals(0, r.unassignedOrderIds().size(),
+                "订单未填区域时应能派给任意车(区域是选填), 不该整批无法派送");
+        org.junit.jupiter.api.Assertions.assertTrue(r.trips().stream().anyMatch(t -> t.vehicleId() != null),
+                "空区域订单应分配到车");
+    }
+
     private static VehicleInput vehicle(String id, String cap, Set<String> areas) {
         return new VehicleInput(id, new BigDecimal(cap), new BigDecimal("9000"),
                 new LinkedHashSet<>(areas), null, null);
