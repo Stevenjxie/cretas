@@ -4,11 +4,12 @@ import { ElMessage } from 'element-plus';
 import { vReveal } from '@/composables/useReveal';
 import { listStoreMaster } from '@/api/logistics';
 import { useAuthStore } from '@/store/modules/auth';
-import type { ManualOrderRow, OrderBatch, PreviewResult } from '@/api/logistics';
+import type { LogisticsDeliveryOrder, ManualOrderRow, OrderBatch, PreviewResult } from '@/api/logistics';
 
 const props = defineProps<{
   preview: PreviewResult | null;
   batch: OrderBatch | null;
+  orders: LogisticsDeliveryOrder[];
   uploading: boolean;
   committing: boolean;
   error: string | null;
@@ -20,7 +21,14 @@ const emit = defineEmits<{
   (event: 'commit'): void;
   (event: 'submit-manual', payload: { businessDate: string | null; rows: ManualOrderRow[] }): void;
   (event: 'clear-batch'): void;
+  (event: 'load-scenario', batchId: string): void;
 }>();
+
+// 演示场景（demo 专用一键测试导入）—— 数据常驻后端，随时切换「够 / 不够」两套场景对比。
+const DEMO_SCENARIOS: Array<{ key: string; label: string; sub: string; batchId: string; type: 'warning' | 'success' }> = [
+  { key: 'insufficient', label: '不够场景', sub: '21 单 · 车队不足', batchId: 'ad9279e7-63f7-4c38-9107-79e2af817251', type: 'warning' },
+  { key: 'saturation', label: '饱和场景', sub: '100 单 · 运力充足', batchId: 'DEMOSAT-BATCH-100', type: 'success' },
+];
 
 type EntryMode = 'file' | 'manual';
 const mode = ref<EntryMode>('file');
@@ -251,6 +259,24 @@ watch(() => props.batch?.id, (id, prev) => {
       <el-button plain @click="emit('download-template')">下载导入模板</el-button>
     </div>
 
+    <!-- 一键测试导入（演示场景，数据常驻，切换「够 / 不够」对比） -->
+    <div class="scenario-import" data-testid="scenario-import">
+      <span class="scenario-label">🧪 测试导入</span>
+      <el-button
+        v-for="s in DEMO_SCENARIOS"
+        :key="s.key"
+        :type="s.type"
+        plain
+        :disabled="committing"
+        :data-testid="`scenario-${s.key}`"
+        class="scenario-btn"
+        @click="emit('load-scenario', s.batchId)"
+      >
+        {{ s.label }}<em>{{ s.sub }}</em>
+      </el-button>
+      <span class="scenario-hint">一键载入整套演示订单 → 下方列出明细 → 点「下一步」生成排线。</span>
+    </div>
+
     <el-radio-group :model-value="mode" class="mode-toggle" @update:model-value="switchMode">
       <el-radio-button value="file">📄 文件导入</el-radio-button>
       <el-radio-button value="manual">✏️ 手动录入</el-radio-button>
@@ -262,6 +288,27 @@ watch(() => props.batch?.id, (id, prev) => {
         <el-button link type="danger" size="small" data-testid="clear-batch" @click="emit('clear-batch')">✕ 清除，重新导入</el-button>
       </div>
       <span>{{ batch.validRows }} / {{ batch.totalRows }} 行有效，业务日期 {{ batch.businessDate }}。点下方「下一步」生成排线。</span>
+    </div>
+
+    <!-- 已导入订单明细表（打开批次即列出，供核对；文件 / 手动 / 测试导入统一在此可见） -->
+    <div v-if="orders.length" v-reveal="0" class="imported-detail" data-testid="imported-detail">
+      <div class="detail-head">
+        <strong>已导入 {{ orders.length }} 单</strong>
+        <span>明细如下，核对无误后点「下一步」生成排线</span>
+      </div>
+      <el-table :data="orders" size="small" border max-height="360" class="detail-table">
+        <el-table-column type="index" label="#" width="46" />
+        <el-table-column prop="storeCode" label="订单号" width="120" show-overflow-tooltip />
+        <el-table-column prop="storeName" label="门店" min-width="140" show-overflow-tooltip />
+        <el-table-column prop="areaCode" label="区域" width="88" />
+        <el-table-column prop="pieces" label="件数" width="66" align="right" />
+        <el-table-column prop="boxes" label="箱数" width="66" align="right" />
+        <el-table-column prop="weightKg" label="重量kg" width="92" align="right" />
+        <el-table-column prop="volumeCbm" label="体积m³" width="92" align="right" />
+        <el-table-column label="送达时间窗" min-width="128">
+          <template #default="{ row }">{{ row.windowStart || '—' }} – {{ row.windowEnd || '—' }}</template>
+        </el-table-column>
+      </el-table>
     </div>
 
     <!-- ============ 文件导入 ============ -->
@@ -447,5 +494,15 @@ watch(() => props.batch?.id, (id, prev) => {
 .win-cell { display: flex; align-items: center; gap: 6px; }
 .manual-actions { display: flex; align-items: center; gap: 14px; }
 .filled-count { color: #475467; font-size: 13px; }
+/* 测试导入（演示场景） */
+.scenario-import { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 14px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 10px; }
+.scenario-label { color: #334155; font-size: 13px; font-weight: 750; }
+.scenario-btn :deep(em), .scenario-btn em { margin-left: 6px; font-style: normal; font-size: 11.5px; opacity: 0.72; }
+.scenario-hint { color: #94a3b8; font-size: 12px; }
+/* 已导入订单明细表 */
+.imported-detail { display: grid; gap: 8px; }
+.detail-head { display: flex; align-items: baseline; gap: 10px; }
+.detail-head strong { color: #027a48; font-size: 15px; } .detail-head span { color: #667085; font-size: 13px; }
+.detail-table { width: 100%; } .detail-table :deep(.cell) { font-variant-numeric: tabular-nums; }
 @media (max-width: 720px) { .step-panel { padding: 18px; } .panel-heading { flex-direction: column; } }
 </style>

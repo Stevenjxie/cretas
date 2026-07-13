@@ -790,6 +790,32 @@ async function openPlan(planId: string): Promise<boolean> {
 }
 
 /**
+ * 「测试导入」加载一个已存在的演示批次（够/不够场景）——拉批次 + 全量订单明细，停在第一步展示，
+ * 清掉旧计划状态。用户随后点「下一步」按当前批次生成排线（generateRoutes 用 batch.id）。
+ */
+async function loadScenarioBatch(batchId: string): Promise<boolean> {
+  ordersLoading.value = true;
+  importError.value = null;
+  try {
+    const factoryId = requireFactoryId();
+    const batchRes = await getOrderBatch(factoryId, batchId);
+    batch.value = batchRes.data;
+    plan.value = null;
+    preview.value = null;
+    selectedTripId.value = null;
+    selectedStoreId.value = null;
+    await loadOrders(batchId);
+    activeStep.value = 'import';
+    return true;
+  } catch (err) {
+    importError.value = errorMessage(err);
+    return false;
+  } finally {
+    ordersLoading.value = false;
+  }
+}
+
+/**
  * 页面刷新/重新进入后的状态恢复（handoff §12.3）。
  * 优先用 URL 中的 planId；否则尝试恢复最近一个未取消的计划（"最新草稿"）。
  * 找不到任何历史计划时静默留空（这是合法的初始空态，不弹错误）。
@@ -922,6 +948,7 @@ const state = {
 
   loadPlanHistory,
   openPlan,
+  loadScenarioBatch,
   restore,
   reset,
 };
