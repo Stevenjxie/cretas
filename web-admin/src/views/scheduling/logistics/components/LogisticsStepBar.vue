@@ -1,14 +1,18 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import type { LogisticsStep } from '../useLogisticsDemoState';
 
-defineProps<{ activeStep: LogisticsStep }>();
+// hideImport: 从「调度记录」查看已归档(已确认/已导出)计划时, 隐藏第 1 步「导入订单」并重新编号,
+// 只留 查看并确认路线 + 确认排班 —— 防止从记录退回导入、改到别的订单撞记录(隔绝)。
+const props = defineProps<{ activeStep: LogisticsStep; hideImport?: boolean }>();
 
 // 「查看路线」与「人工确认」已合并为一步(边看图边派车/确认), 4 步 → 3 步。
-const steps: Array<{ id: LogisticsStep; label: string }> = [
+const allSteps: Array<{ id: LogisticsStep; label: string }> = [
   { id: 'import', label: '导入订单' },
   { id: 'map', label: '查看并确认路线' },
   { id: 'export', label: '确认排班' },
 ];
+const steps = computed(() => (props.hideImport ? allSteps.filter((s) => s.id !== 'import') : allSteps));
 </script>
 
 <template>
