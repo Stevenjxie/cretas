@@ -51,4 +51,13 @@ public class PlanSnapshotDto {
     private List<String> unassignedStoreIds;
     private Integer assignedVehicleCount;
     private Integer additionalVehicleCount;
+    /**
+     * 运力诊断（够/不够 + next action）— 每次 buildSnapshot 现算现填（见
+     * {@code LogisticsPlanServiceImpl#buildSnapshot}，计算逻辑在
+     * {@link com.cretas.aims.logistics.util.CapacityDiagnosis}）。Nullable：
+     * 理论上恒有值（buildSnapshot 总会算），标 nullable 只是防御旧序列化路径 /
+     * 未来测试 mock 遗漏时前端不因缺字段崩溃（fool-proof-design：宁可前端不显示，
+     * 不能因为一个诊断字段让整个计划页面报错）。
+     */
+    private CapacityDiagnosisDto capacityDiagnosis;
 }

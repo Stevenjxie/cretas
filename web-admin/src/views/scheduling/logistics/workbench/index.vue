@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { ElMessageBox } from 'element-plus';
 import { vReveal } from '@/composables/useReveal';
 import type { ManualOrderRow } from '@/api/logistics';
+import CapacityDiagnosisBanner from '../components/CapacityDiagnosisBanner.vue';
 import ExportConfirmStep from '../components/ExportConfirmStep.vue';
 import LogisticsMap from '../components/LogisticsMap.vue';
 import LogisticsStepBar from '../components/LogisticsStepBar.vue';
@@ -163,6 +164,11 @@ function handleTargetLoad(value: number): void {
   void state.setTargetLoad(value);
 }
 
+/** 运力诊断条「去管理车辆」next action（fool-proof-design Rule 5：不留 dead-end）—— 跳到车辆资源页补运力/补区域覆盖。 */
+function goManageVehicles(): void {
+  void router.push('/scheduling/logistics/resources');
+}
+
 function handleOptimizeMode(mode: 'TIME' | 'DISTANCE'): void {
   void state.setOptimizeMode(mode);
 }
@@ -257,6 +263,7 @@ async function next(): Promise<void> {
       </div>
     </header>
     <LogisticsStepBar :active-step="state.activeStep.value" />
+    <CapacityDiagnosisBanner :diagnosis="state.capacityDiagnosis.value" @manage-vehicles="goManageVehicles" />
     <el-alert v-if="hasExceptions" data-testid="assignment-issue" title="需要处理" :description="exceptionDescription" type="warning" :closable="false" show-icon />
 
     <OrderImportStep

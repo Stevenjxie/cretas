@@ -268,7 +268,7 @@ public final class LogisticsRoutingAlgorithm {
         List<BoxAssign> seedBoxes = new ArrayList<>();
         for (Map.Entry<String, List<OrderInput>> entry : groups.entrySet()) {
             VehicleInput primaryVehicle = vehicleById.get(entry.getKey());
-            List<List<OrderInput>> packed = packGroup(entry.getValue(), primaryVehicle, targetLoadPct);
+            List<List<OrderInput>> packed = packGroup(entry.getValue(), primaryVehicle);
             for (int boxIndex = 0; boxIndex < packed.size(); boxIndex++) {
                 List<OrderInput> boxOrders = packed.get(boxIndex);
                 VehicleInput vehicle;
@@ -1209,7 +1209,10 @@ public final class LogisticsRoutingAlgorithm {
                 if (!areasOk) {
                     continue;
                 }
-                if (sumVolume(box.orders()).compareTo(softTargetCap(host, input.targetLoadPct())) > 0
+                // 硬容量/载重约束 (Steve 2026-07-13): 用<b>硬容量</b> (非软目标) —— 装载率目标不阻断
+                // 把一个已分箱的溢出趟挂回有硬容量余量的车。软目标曾把 14.2m³ 的 V-02 第 2 趟 (>13.2 软,
+                // ≤15 硬) 判不可挂 → 该箱被晾成 NEEDS_VEHICLE (线上 8 趟里的空趟根因之一)。
+                if (sumVolume(box.orders()).compareTo(host.capacityCbm()) > 0
                         || sumWeight(box.orders()).compareTo(host.maxWeightKg()) > 0) {
                     continue;
                 }
@@ -1531,22 +1534,37 @@ public final class LogisticsRoutingAlgorithm {
     }
 
     // ============================================================
-    // Step B — 稳定装箱 (硬容量优先, 软目标居次; 体积+重量双硬约束)
+    // Step B — 稳定装箱 (最少箱数: 硬容量装箱, 装载率目标不强制多趟)
     // ============================================================
 
-    private static List<List<OrderInput>> packGroup(List<OrderInput> groupOrders, VehicleInput primaryVehicle, BigDecimal targetLoadPct) {
-        BigDecimal targetCap = primaryVehicle.capacityCbm()
-                .multiply(targetLoadPct)
-                .divide(HUNDRED, 6, RoundingMode.HALF_UP);
+    /**
+     * 单车组装箱 —— 一律装到<b>硬容量下的最少箱数</b>。
+     *
+     * <p><b>装载率目标 (targetLoadPct) 不再作为「开新箱的天花板」</b> (Steve 2026-07-13):
+     * 那会把一辆车的<b>必送</b>负载硬拆成额外的同车车次 (实测 demo: 9.9m³ 的 V-01 被 88% 目标拆成
+     * 2 趟, 29.1m³ 的 V-02 拆成 3 趟 —— 8 趟 vs 物理可行的 6 趟, 纯浪费一趟一趟的空跑里程)。
+     * 一辆车把自己必送的负载拆成更多趟永远不会更优, 故装箱只受硬容量/载重约束; 装载率目标只在
+     * <b>跨车分摊</b>层面 (Step A / C2) 起偏好作用, 不在单车装箱里强制多趟。
+     *
+     * <p>两种到硬容量的装箱各跑一遍, 取<b>箱数更少</b>者 (= 更少车次); 箱数相同 → 取「顺序装箱」
+     * (相邻门店同箱, 里程更友好), <b>只有 FFD 能真正少一箱时才用 FFD</b> —— 否则 FFD 按体积把
+     * 远门店混进一箱只会拖长里程却省不了趟 (Steve: 「省不了车时以短路线为主」)。
+     */
+    private static List<List<OrderInput>> packGroup(List<OrderInput> groupOrders, VehicleInput primaryVehicle) {
         BigDecimal hardVol = primaryVehicle.capacityCbm();
         BigDecimal hardWeight = primaryVehicle.maxWeightKg();
+        List<List<OrderInput>> ffd = packFirstFitDecreasing(groupOrders, hardVol, hardWeight);
+        List<List<OrderInput>> seq = packSequential(groupOrders, hardVol, hardWeight);
+        // 严格更少箱才用 FFD 的「大件紧凑装」; 平手用顺序装箱 (距离友好, 退回 T2 之前的短路线基线)。
+        return ffd.size() < seq.size() ? ffd : seq;
+    }
 
-        // First-Fit-Decreasing 装箱 (替代原 next-fit)：
-        //  1) 大件先放 —— 体积降序 (稳定排序: 同体积保持原「区域+编码」顺序, 输出仍确定)。
-        //  2) 每件塞进「第一个装得下 (在软目标容量内, 且不超硬容量/载重) 的已开箱」, 装不下才开新箱。
-        // 原 next-fit 只往当前箱塞、一超阈值就封箱不回头 → 后面的小件无法回填前面箱的余量, 结构性产生低载尾箱。
-        // FFD 让小件回填前箱余量, 箱更少更满, 直接压低「20%/25% 尾箱」的出现。软目标容量语义保持不变
-        // (仍以 targetLoadPct 为每箱填充上限; 单件独占新箱时只受硬容量约束, 与原行为一致)。
+    /**
+     * First-Fit-Decreasing 装箱到硬容量 —— 大件优先 + 小件回填前箱余量, 追求最少箱数 (bin-packing 近优,
+     * 渐进最坏 ~11/9·OPT)。稳定: 同体积保持原「区域+编码」顺序 → 输出确定。
+     */
+    private static List<List<OrderInput>> packFirstFitDecreasing(
+            List<OrderInput> groupOrders, BigDecimal hardVol, BigDecimal hardWeight) {
         List<OrderInput> sorted = new ArrayList<>(groupOrders);
         sorted.sort(Comparator.comparing(OrderInput::volumeCbm).reversed());
 
@@ -1559,9 +1577,7 @@ public final class LogisticsRoutingAlgorithm {
             for (int i = 0; i < packed.size(); i++) {
                 BigDecimal nextVolume = boxVolume.get(i).add(order.volumeCbm());
                 BigDecimal nextWeight = boxWeight.get(i).add(order.weightKg());
-                boolean fitsHard = nextVolume.compareTo(hardVol) <= 0 && nextWeight.compareTo(hardWeight) <= 0;
-                boolean fitsSoft = nextVolume.compareTo(targetCap) <= 0;
-                if (fitsHard && fitsSoft) {
+                if (nextVolume.compareTo(hardVol) <= 0 && nextWeight.compareTo(hardWeight) <= 0) {
                     target = i;
                     break;
                 }
@@ -1575,6 +1591,37 @@ public final class LogisticsRoutingAlgorithm {
                 boxVolume.set(target, boxVolume.get(target).add(order.volumeCbm()));
                 boxWeight.set(target, boxWeight.get(target).add(order.weightKg()));
             }
+        }
+        return packed;
+    }
+
+    /**
+     * 顺序 (区域+编码) next-fit 装箱到硬容量 —— 相邻门店留同箱, 距离友好。等价于 T2 (FFD) 之前的
+     * 距离最优基线, 但以硬容量为封箱阈值 (不再用装载率目标, 故不会硬拆出额外空趟)。
+     */
+    private static List<List<OrderInput>> packSequential(
+            List<OrderInput> groupOrders, BigDecimal hardVol, BigDecimal hardWeight) {
+        List<List<OrderInput>> packed = new ArrayList<>();
+        List<OrderInput> current = new ArrayList<>();
+        BigDecimal cumVolume = BigDecimal.ZERO;
+        BigDecimal cumWeight = BigDecimal.ZERO;
+
+        for (OrderInput order : groupOrders) {
+            boolean over = !current.isEmpty()
+                    && (cumVolume.add(order.volumeCbm()).compareTo(hardVol) > 0
+                        || cumWeight.add(order.weightKg()).compareTo(hardWeight) > 0);
+            if (over) {
+                packed.add(current);
+                current = new ArrayList<>();
+                cumVolume = BigDecimal.ZERO;
+                cumWeight = BigDecimal.ZERO;
+            }
+            current.add(order);
+            cumVolume = cumVolume.add(order.volumeCbm());
+            cumWeight = cumWeight.add(order.weightKg());
+        }
+        if (!current.isEmpty()) {
+            packed.add(current);
         }
         return packed;
     }
