@@ -73,6 +73,17 @@ type ProcEntry = {
    * 只读展示 (fool-proof Rule 2/3 — 告诉文员要产什么, 不给自由类型选择), 不改变 saveRow 请求形状。
    */
   workflowContext?: WorkflowProcessDescriptor | null;
+  /**
+   * Slice C (调料配方按工序): 真实 WorkProcess.processCategory (工序类别, 如 前处理/加工/包装/熟制)。
+   * 与 defaultCostCategory (成本桶枚举 RAW_MATERIAL/SEASONING/PACKAGING/AUXILIARY/OTHER, 见
+   * ROLE_TO_ARCHETYPE) 是不同字段 —— 不要混用。仅 legacy(非 workflow)分支能取到 (来自
+   * ProductWorkProcessItem.processCategory); workflow 分支恒为 null, 因为
+   * WorkflowClerkSheetConfigDTO.ProcessDescriptor (后端 DTO) 目前不含 processCategory,
+   * 只有 defaultCostCategory —— 需要后端补充该字段才能让 workflow-activated 计划也按
+   * processCategory==='熟制' 显示锅数 (后端改动超出本次前端 Slice C 范围, 此处诚实留 null,
+   * 不假装有数据; workflow 计划仍可通过 isShuZhi archetype 兜底显示锅数)。
+   */
+  processCategory?: string | null;
 };
 
 /** 唯一工序 key = 链内唯一 processOrder 的字符串形式 (不用 code, code 会碰撞)。 */
@@ -192,6 +203,10 @@ function mapWorkflowProcesses(descriptors: WorkflowProcessDescriptor[]): ProcEnt
         inputUnit: proc.inputs?.[0]?.unit?.trim() || 'kg',
         outputUnit: proc.output?.unit?.trim() || null,
         workflowContext: proc,
+        // Slice C: WorkflowProcessDescriptor 只带 defaultCostCategory (成本桶), 不带真实
+        // WorkProcess.processCategory —— 后端 DTO 缺该字段 (见 ProcEntry 类型注释), 诚实留 null。
+        // needsPotCount 对 workflow 计划仍靠 isShuZhi archetype 兜底。
+        processCategory: null,
       };
       return entry;
     })
@@ -249,7 +264,7 @@ async function resolveProcesses() {
     const sorted = [...items].sort((a, b) => a.processOrder - b.processOrder);
 
     const mapped: ProcEntry[] = sorted
-      .map((it, idx) => {
+      .map((it, idx): ProcEntry => {
         let code: string;
         if (hasRoles) {
           // Role mode: map via defaultCostCategory; unknown roles fall back to 'chaoshui'
@@ -288,6 +303,9 @@ async function resolveProcesses() {
           allowFinishedGoodsSource: it.allowFinishedGoodsSource === true,
           inputUnit: it.unitOverride?.trim() || it.defaultUnit?.trim() || 'kg',
           outputUnit: it.defaultOutputUnit?.trim() || null,
+          // Slice C: 真实 WorkProcess.processCategory (ProductWorkProcessItem 已带此字段),
+          // 供 ProcessDataTable needsPotCount 判定 processCategory === '熟制'。
+          processCategory: it.processCategory ?? null,
         };
       })
       // Role mode: code always valid. Name mode: code is always 'xiuyou'|'chaoshui'|known keyword.
@@ -491,6 +509,7 @@ defineExpose({ hasUnsavedRows });
             :input-unit="proc.inputUnit"
             :output-unit="proc.outputUnit"
             :workflow-context="proc.workflowContext ?? null"
+            :process-category="proc.processCategory ?? null"
             :upstream-process-label="upstreamLabelOf(proc)"
             :product-type-id="productTypeId"
             :upstream-items="upstreamItems(proc)"
