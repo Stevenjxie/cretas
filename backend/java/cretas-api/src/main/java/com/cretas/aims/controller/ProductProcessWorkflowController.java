@@ -7,8 +7,10 @@ import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.dto.ProductProcessWorkflowVersionSummaryDTO;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.workflow.ProductProcessWorkflowActivationDTO;
+import com.cretas.aims.dto.workflow.WorkflowOutputResolutionDTO;
 import com.cretas.aims.service.ProductProcessWorkflowService;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowActivationService;
+import com.cretas.aims.service.workflow.ProductWorkflowResolutionService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -35,17 +37,26 @@ public class ProductProcessWorkflowController {
 
     private final ProductProcessWorkflowService service;
     private final ProductProcessWorkflowActivationService activationService;
+    private final ProductWorkflowResolutionService resolutionService;
 
     @Autowired
     public ProductProcessWorkflowController(
             ProductProcessWorkflowService service,
-            ProductProcessWorkflowActivationService activationService) {
+            ProductProcessWorkflowActivationService activationService,
+            ProductWorkflowResolutionService resolutionService) {
         this.service = service;
         this.activationService = activationService;
+        this.resolutionService = resolutionService;
     }
 
     public ProductProcessWorkflowController(ProductProcessWorkflowService service) {
-        this(service, null);
+        this(service, null, null);
+    }
+
+    public ProductProcessWorkflowController(
+            ProductProcessWorkflowService service,
+            ProductProcessWorkflowActivationService activationService) {
+        this(service, activationService, null);
     }
 
     @GetMapping("/{productTypeId}")
@@ -54,6 +65,19 @@ public class ProductProcessWorkflowController {
             @PathVariable String factoryId,
             @PathVariable String productTypeId) {
         return ApiResponse.success(service.getEditorDefinition(factoryId, productTypeId).orElse(null));
+    }
+
+    /**
+     * raw-centric 多成品 (2026-07-13): 按一组终端成品解析可覆盖它们的已启用 Workflow。
+     * 单选优先成品自有图 (SELF_WORKFLOW); 多选只匹配以原料为锚、终端覆盖所选全部成品的图 (RAW_OWNED)。
+     * 字面量段 /resolve-by-outputs 与 GET /{productTypeId} 不冲突 (Spring 字面量优先)。
+     */
+    @PostMapping("/resolve-by-outputs")
+    @Operation(summary = "按一组终端成品解析可覆盖它们的已启用 Workflow(单选优先成品自有图, 多选匹配原料 owner 图)")
+    public ApiResponse<WorkflowOutputResolutionDTO> resolveByOutputs(
+            @PathVariable String factoryId,
+            @Valid @RequestBody WorkflowOutputResolutionDTO.Request request) {
+        return ApiResponse.success(resolutionService.resolveForOutputs(factoryId, request.getProductTypeIds()));
     }
 
     @GetMapping("/{productTypeId}/versions")

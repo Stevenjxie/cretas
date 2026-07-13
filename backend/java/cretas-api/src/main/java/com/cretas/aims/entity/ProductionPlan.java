@@ -209,6 +209,15 @@ public class ProductionPlan extends BaseEntity {
     private java.util.List<String> sourceOrderIds = new java.util.ArrayList<>();
 
     /**
+     * raw-centric 多成品计划 (2026-07-13): 本计划要产的终端成品 productTypeId 列表。
+     * 计划锚定原料 owner (product_type_id=raw), 这里记录该原料图要产的哪几个成品 SKU (展示/校验用,
+     * 不裁剪 workflow 图 —— materialize 仍走全图)。默认 null (区别遗留/单产品计划, 不 new ArrayList)。
+     */
+    @Type(io.hypersistence.utils.hibernate.type.json.JsonBinaryType.class)
+    @Column(name = "target_finished_good_ids", columnDefinition = "jsonb")
+    private java.util.List<String> targetFinishedGoodIds;
+
+    /**
      * 关联销售订单行ID (P0-12 字段粒度修正)
      * 客户原话 4216s: "关联销售订单产品" — 关联到行项目而非订单主表
      */

@@ -126,6 +126,9 @@ public class CreateProductionPlanRequest {
     @Schema(description = "SP5 合并工单覆盖的全部销售订单ID列表 (多SO合并建单; 单SO场景可不传, 服务层自动回填)")
     private List<String> sourceOrderIds;
 
+    @Schema(description = "raw-centric 多成品: 本计划要产的终端成品 productTypeId 列表; 传值时 productTypeId 必须是解析出的 workflow owner(原料)")
+    private List<String> targetFinishedGoodIds;
+
     @Schema(description = "关联销售订单行ID (P0-12 字段粒度修正; CUSTOMER_ORDER 必填)")
     @Size(max = 50, message = "关联销售订单行ID不能超过50个字符")
     private String sourceOrderItemId;

@@ -99,6 +99,8 @@ public class ProductionPlanMapper {
         dto.setSourceOrderId(plan.getSourceOrderId());
         // SP5 多 SO 合并: 输出 sourceOrderIds 列表 (null/空 → 遗留数据返空 list)
         dto.setSourceOrderIds(plan.getSourceOrderIds() != null ? plan.getSourceOrderIds() : new java.util.ArrayList<>());
+        // raw-centric 多成品: null=非多成品计划, 原样透传 (前端据 null/空判断是否显示成品 chips)
+        dto.setTargetFinishedGoodIds(plan.getTargetFinishedGoodIds());
         dto.setSourceOrderItemId(plan.getSourceOrderItemId());
         dto.setSourceCustomerName(plan.getSourceCustomerName());
         dto.setProcessName(plan.getProcessName());
@@ -194,6 +196,10 @@ public class ProductionPlanMapper {
         plan.setSourceOrderIds(request.getSourceOrderIds() != null
                 ? new java.util.ArrayList<>(request.getSourceOrderIds())
                 : new java.util.ArrayList<>());
+        // raw-centric 多成品: 默认 null (区别遗留/单产品), 不 new ArrayList
+        plan.setTargetFinishedGoodIds(request.getTargetFinishedGoodIds() != null
+                ? new java.util.ArrayList<>(request.getTargetFinishedGoodIds())
+                : null);
         plan.setSourceOrderItemId(request.getSourceOrderItemId());
         plan.setSourceCustomerName(request.getSourceCustomerName());
         plan.setProcessName(request.getProcessName());
@@ -311,6 +317,10 @@ public class ProductionPlanMapper {
         // SP5 多 SO 合并: 显式传非空列表时才覆盖 (null = 保留原值; 空列表 = 清空)
         if (request.getSourceOrderIds() != null) {
             plan.setSourceOrderIds(new java.util.ArrayList<>(request.getSourceOrderIds()));
+        }
+        // raw-centric 多成品: 显式传值才覆盖 (null = 保留原值)
+        if (request.getTargetFinishedGoodIds() != null) {
+            plan.setTargetFinishedGoodIds(new java.util.ArrayList<>(request.getTargetFinishedGoodIds()));
         }
         if (request.getSourceCustomerName() != null) {
             plan.setSourceCustomerName(request.getSourceCustomerName());

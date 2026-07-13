@@ -197,6 +197,9 @@ public class ProductionPlanDTO {
     @Schema(description = "SP5 合并工单覆盖的全部销售订单ID列表 (多SO合并; 单SO=[sourceOrderId])")
     private List<String> sourceOrderIds;
 
+    @Schema(description = "raw-centric 多成品: 本计划要产的终端成品 productTypeId 列表 (null=非多成品计划)")
+    private List<String> targetFinishedGoodIds;
+
     @Schema(description = "关联销售订单行ID (P0-12)")
     private String sourceOrderItemId;
 

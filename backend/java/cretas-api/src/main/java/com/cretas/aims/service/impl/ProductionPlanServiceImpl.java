@@ -184,6 +184,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Autowired
     private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
 
+    /** raw-centric 多成品: 建计划/转批次守卫 —— 断言 owner 启用 workflow 终端覆盖所选成品. required=false 兼容单测. */
+    @Autowired(required = false)
+    private com.cretas.aims.service.workflow.ProductWorkflowResolutionService workflowResolutionService;
+
     /** 以销定产批量建计划: 取产品工序名拼 processName (镜像前端 loadBomProcesses). required=false 兼容单测. */
     @Autowired(required = false)
     private com.cretas.aims.service.ProductWorkProcessService productWorkProcessService;
@@ -871,6 +875,26 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 throw new BusinessException(400, "客户订单来源的生产计划必须填写批次日期")
                         .withHint("请选择批次日期").withHintTarget("batchDate");
             }
+        }
+
+        // raw-centric 多成品 (2026-07-13): 多选成品 → 计划锚定原料 owner (request.productTypeId=原料)。
+        //   服务端权威复解析 (不信前端): 断言 owner 当前启用 workflow 的终端覆盖所选全部成品, 否则 409。
+        //   且 workflow 计划必须逐道 —— skipProcessReporting=true 会短路 materializeIfActive
+        //   (WorkProcessTaskServiceImpl.spawnTasks 两点分支, F006 工厂默认恰是 true) → 逐道抽屉空。
+        //   本块以 targetFinishedGoodIds 非空为闸, 不触碰既有单产品/legacy 路径一行。
+        if (workflowResolutionService != null
+                && request.getTargetFinishedGoodIds() != null
+                && !request.getTargetFinishedGoodIds().isEmpty()) {
+            workflowResolutionService.assertActiveWorkflowCoversOutputs(
+                    factoryId, request.getProductTypeId(), request.getTargetFinishedGoodIds());
+            if (Boolean.TRUE.equals(request.getSkipProcessReporting())) {
+                throw new BusinessException(400, "多成品 workflow 计划必须使用逐道报工")
+                        .withCode("WORKFLOW_PLAN_REQUIRES_STEPWISE")
+                        .withHint("请把报工模式切换为「逐道报工」后再创建")
+                        .withHintTarget("skipProcessReporting");
+            }
+            // null 也强制 false, 不落工厂默认 (F006=true) → 保证 materialize 生效。
+            request.setSkipProcessReporting(Boolean.FALSE);
         }
 
         // Fable 审计修复 (2026-06-11 — 多租户安全红线):
@@ -4035,6 +4059,15 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (plan.getStatus() != ProductionPlanStatus.PENDING) {
             throw new BusinessException(409, "只有待处理的计划可以转为批次")
                     .withHint("请刷新生产计划列表查看最新状态");
+        }
+
+        // raw-centric 多成品 (2026-07-13): 建计划 → 转批次窗口期 activation 可能被切到不覆盖这些成品的图,
+        //   触发器会照 pin (batch.product_type_id=原料 owner) → materialize 出错图。转批次前复核一次 (Rule 1 提前拦)。
+        if (workflowResolutionService != null
+                && plan.getTargetFinishedGoodIds() != null
+                && !plan.getTargetFinishedGoodIds().isEmpty()) {
+            workflowResolutionService.assertActiveWorkflowCoversOutputs(
+                    factoryId, plan.getProductTypeId(), plan.getTargetFinishedGoodIds());
         }
 
         // N1 (2026-06-12): 转批次=开工不再受原料库存预检阻断; 缺料只记录预警。

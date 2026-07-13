@@ -3,6 +3,7 @@ package com.cretas.aims.repository;
 import com.cretas.aims.entity.ProductProcessWorkflowActivation;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.util.List;
 import java.util.Optional;
 
 public interface ProductProcessWorkflowActivationRepository
@@ -11,4 +12,7 @@ public interface ProductProcessWorkflowActivationRepository
     Optional<ProductProcessWorkflowActivation> findByFactoryIdAndProductTypeId(
             String factoryId,
             String productTypeId);
+
+    /** raw-centric 多成品解析: 取工厂内全部启用的 activation (再按 owner 分类过滤原料图)。 */
+    List<ProductProcessWorkflowActivation> findByFactoryIdAndEnabledTrue(String factoryId);
 }
