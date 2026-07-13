@@ -79,15 +79,17 @@ const productExtendedFields = computed<FieldConfig[]>(() => [
   // ---- 规格信息 (成品/原料均显示) ----
   // T148: level1Unit + boxConversionCoefficient 已移为内联行 (见模板中「装箱换算」el-form-item)
   // T146 Fix4: gramsPerUnit placeholder 动态替换二级单位名 (如 "每盒多少克")
-  { key: 'gramsPerUnit', label: '标准克重', type: 'decimal', group: '规格信息', precision: 2, suffix: '克', order: 3,
+  // T157 (2026-07-13) 双模式表单瘦身: 组重打 —— 克重=规格; 出成率/单锅产能=产能; 研发人工=成本。
+  //   驱动模板里「规格 section (标准克重内联)」+「高级设置」下的 成本/产能/库存 分组渲染。
+  { key: 'gramsPerUnit', label: '标准克重', type: 'decimal', group: '规格', precision: 2, suffix: '克', order: 3,
     placeholder: gramsPerUnitPlaceholder.value },
-  { key: 'wipToFgYield', label: '半成品出成率', type: 'decimal', group: '规格信息', precision: 4, order: 4,
+  { key: 'wipToFgYield', label: '半成品出成率', type: 'decimal', group: '产能', precision: 4, order: 4,
     placeholder: '0~1，如 0.55=55%（留空按 1:1）' },
   // 六扇门 配料单 (配料员按锅配料): 单锅产能 = 1 锅产出数量 (同计划产量单位); 配料单据此算锅数 = ceil(计划量/单锅产能)
-  { key: 'singlePotCapacity', label: '单锅产能', type: 'decimal', group: '规格信息', precision: 3, order: 6,
+  { key: 'singlePotCapacity', label: '单锅产能', type: 'decimal', group: '产能', precision: 3, order: 6,
     placeholder: '1 锅产出数量(同计划产量单位), 配料单算锅数用; 留空则配料单不计每锅量' },
   // SP9-M1: 研发预估人工成本 (quotedLaborCost); 供人效双口径对比用; 成品才有意义, 原辅料留空即可
-  { key: 'quotedLaborCostPerKg', label: '研发人工成本(元/kg)', type: 'decimal', group: '规格信息', precision: 4, order: 5,
+  { key: 'quotedLaborCostPerKg', label: '研发人工成本(元/kg)', type: 'decimal', group: '成本', precision: 4, order: 5,
     suffix: '元/kg', placeholder: '研发预估人工, 不填则双口径对比中报价列显示"-"' },
   // ---- 商务信息 (成品隐藏, 原辅料显示) ----
   { key: 'brand', label: '品牌', type: 'text', group: '商务信息', order: 1 },
@@ -662,6 +664,13 @@ const visibleExtendedFields = computed<FieldConfig[]>(() => {
   // SP4-A8: taxRate 与 taxIncludedUnitPrice 均属价格敏感信息, 无 canViewPrice 时隐藏
   return canViewPrice.value ? base : base.filter(f => f.key !== 'taxIncludedUnitPrice' && f.key !== 'taxRate');
 });
+
+// T157 (2026-07-13) 双模式表单瘦身: 按组分渲染 —— 规格 section(标准克重) / 高级设置内 成本·产能·库存。
+// 多个 DynamicEntityForm 共享 :model-value=formData + @update=handleExtendedFormUpdate(Object.assign 合并) 安全。
+const specExtendedFields = computed(() => visibleExtendedFields.value.filter(f => f.group === '规格'));
+const costExtendedFields = computed(() => visibleExtendedFields.value.filter(f => f.group === '成本' || f.group === '商务信息'));
+const capacityExtendedFields = computed(() => visibleExtendedFields.value.filter(f => f.group === '产能'));
+const inventoryExtendedFields = computed(() => visibleExtendedFields.value.filter(f => f.group === '库存采购'));
 
 // 客户下拉列表
 const customers = ref<{ id: string; name: string }[]>([]);
@@ -1427,208 +1436,138 @@ async function handleAiProductCreate() {
             />
           </el-select>
         </el-form-item>
-        <!-- T137: 二级单位(unit) 改为字典下拉, filterable + allow-create 兼容手输 -->
-        <el-form-item label="单位" prop="unit">
+        <!-- ========== 规格 section (T157 双模式表单瘦身): 基本单位 + 标准克重 + 装箱换算 + 规格(只读自动) ========== -->
+        <el-divider content-position="left">规格</el-divider>
+        <!-- 基本单位(unit) = 最小计量/售卖单位 (成品如 盒/包; 原料如 kg) -->
+        <el-form-item label="基本单位" prop="unit">
           <el-select
             v-model="formData.unit"
-            placeholder="选择或输入二级单位（如 盒、份、kg）"
-            filterable
-            allow-create
-            clearable
-            style="width: 100%"
+            placeholder="选择或输入基本单位（如 盒、包、kg）"
+            filterable allow-create clearable style="width: 100%"
             @change="markUnitEdited"
           >
-            <el-option
-              v-for="opt in unitSelectOptions"
-              :key="opt.value"
-              :label="opt.label"
-              :value="opt.value"
-            />
+            <el-option v-for="opt in unitSelectOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
           </el-select>
-          <div class="form-tip">二级单位 = 最小计量（如「盒」120克/盒）；大包装一级单位（如「筐」1筐=20盒）在下方「规格信息」中配置</div>
+          <div class="form-tip">基本单位 = 最小计量/售卖单位（成品如「盒」，原料如「kg」）；下面按此填每单位含量与装箱换算，只填数字</div>
         </el-form-item>
-        <el-form-item label="规格" prop="specification">
-          <el-input v-model="formData.specification" placeholder="请输入规格（如：310g*42袋/箱）"
-            @input="markSpecificationEdited" />
-        </el-form-item>
-        <!-- T147 Fix1: 关联客户改「下拉」(el-select filterable + allow-create) — 既是客户下拉, 也可手输新客户名.
-             选中已有客户同步 customerId(entity link); 手输新名清空 customerId (保留 T123 双绑行为) -->
-        <el-form-item label="关联客户" prop="relatedCustomer">
-          <el-select
-            v-model="formData.relatedCustomer"
-            placeholder="选择客户（可输入新客户名）"
-            filterable
-            allow-create
-            default-first-option
-            clearable
-            style="width: 100%"
-            @change="handleCustomerChange"
-          >
-            <el-option
-              v-for="c in customers"
-              :key="c.id"
-              :label="c.name"
-              :value="c.name"
-            />
-          </el-select>
-          <div v-if="formData.customerId" class="form-tip" style="color:#67c23a;">已绑定客户ID: {{ formData.customerId }}</div>
-          <div v-else-if="formData.relatedCustomer" class="form-tip">新客户（仅记录名称，未绑定客户档案）</div>
-        </el-form-item>
-        <!-- T123: 产品基础名 (名称分离) — 如"好食光卤猪蹄"，RN 优先显示此字段 -->
-        <el-form-item label="基础名称">
-          <el-autocomplete
-            v-model="formData.baseProductName"
-            :fetch-suggestions="queryBaseProductName"
-            placeholder="如: 好食光卤猪蹄（RN优先显示，留空用产品名）"
-            clearable
-            style="width: 100%"
-            @input="markBaseProductNameEdited"
-            @select="markBaseProductNameEdited"
-          />
-          <div class="form-tip">仅含产品本身名称，不含客户/规格后缀；RN 展示优先用此字段，为空则回退到产品名称</div>
-        </el-form-item>
-        <el-form-item label="温区" prop="temperatureZone">
-          <el-select v-model="formData.temperatureZone" placeholder="请选择温区" clearable style="width: 100%"
-            @change="markTemperatureZoneEdited">
-            <el-option label="常温" value="常温" />
-            <el-option label="冷藏" value="冷藏" />
-            <el-option label="冷冻" value="冷冻" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="产品图片" prop="imageUrl">
-          <el-input v-model="formData.imageUrl" placeholder="请输入图片URL" />
-          <div v-if="formData.imageUrl" class="image-preview">
-            <el-image
-              :src="formData.imageUrl"
-              fit="contain"
-              style="width: 100px; height: 100px; margin-top: 8px;"
-            >
-              <template #error>
-                <div class="image-error">图片加载失败</div>
-              </template>
-            </el-image>
-          </div>
-        </el-form-item>
-        <el-form-item label="备注" prop="notes">
-          <el-input
-            v-model="formData.notes"
-            type="textarea"
-            :rows="3"
-            placeholder="请输入备注信息"
-          />
-        </el-form-item>
-
-        <!-- 扩展字段 (动态渲染，添加新字段只需修改 productExtendedFields 数组) -->
-        <el-divider content-position="left">扩展信息</el-divider>
-
-        <!-- T148: 规格信息 — 装箱换算内联行「1 [一级单位▼] ＝ [换算数] [二级单位▼]」始终显示
-             二级单位下拉 v-model 绑 formData.unit (同顶部「单位」字段, 单一事实源, 双向同步)
-             一级单位 → formData.level1Unit; 换算数 → formData.boxConversionCoefficient -->
+        <!-- 标准克重 (每 {基本单位} 多少克) — 结构化, 只填数字, 单位系统显示 -->
+        <DynamicEntityForm
+          v-if="specExtendedFields.length"
+          :fields="specExtendedFields"
+          :model-value="formData as TableRow"
+          @update:model-value="handleExtendedFormUpdate"
+          :columns="1"
+          label-width="120px"
+        />
+        <!-- 装箱换算内联行「1 [大包装单位] ＝ [换算数] [基本单位]」— 只填数字, 单位从下拉选 -->
         <el-form-item label="装箱换算" label-width="120px">
           <div class="spec-conversion-row">
             <span class="spec-conversion-one">1</span>
-            <el-select
-              v-model="formData.level1Unit"
-              placeholder="一级单位"
-              filterable
-              allow-create
-              clearable
-              class="spec-unit-select"
-              @change="markLevel1UnitEdited"
-            >
-              <el-option
-                v-for="opt in unitSelectOptions"
-                :key="opt.value"
-                :label="opt.label"
-                :value="opt.value"
-              />
+            <el-select v-model="formData.level1Unit" placeholder="大包装单位" filterable allow-create clearable
+              class="spec-unit-select" @change="markLevel1UnitEdited">
+              <el-option v-for="opt in unitSelectOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
             </el-select>
             <span class="spec-conversion-eq">＝</span>
-            <el-input-number
-              v-model="formData.boxConversionCoefficient"
-              :min="0"
-              :precision="4"
-              :controls="false"
-              placeholder="换算数"
-              class="spec-coef-input"
-              @change="markBoxCoefEdited"
-            />
-            <el-select
-              v-model="formData.unit"
-              placeholder="二级单位"
-              filterable
-              allow-create
-              clearable
-              class="spec-unit-select"
-              @change="markUnitEdited"
-            >
-              <el-option
-                v-for="opt in unitSelectOptions"
-                :key="opt.value"
-                :label="opt.label"
-                :value="opt.value"
-              />
+            <el-input-number v-model="formData.boxConversionCoefficient" :min="0" :precision="4" :controls="false"
+              placeholder="换算数" class="spec-coef-input" @change="markBoxCoefEdited" />
+            <el-select v-model="formData.unit" placeholder="基本单位" filterable allow-create clearable
+              class="spec-unit-select" @change="markUnitEdited">
+              <el-option v-for="opt in unitSelectOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
             </el-select>
           </div>
-          <!-- T146 守卫: 一级=二级 警告 -->
           <div v-if="specRelationSummary.warn" class="spec-same-warn">
-            ⚠️ 一级单位应与二级单位不同（一级是大包装如「筐」，二级是最小单位如「盒」）
+            ⚠️ 大包装单位应与基本单位不同（大包装如「箱」，基本如「盒」）
           </div>
-          <!-- 换算完整时给出确认回显 -->
-          <div v-else-if="specRelationSummary.hasConversion" class="spec-echo">
-            = {{ specRelationSummary.conversionText }}
-          </div>
-          <div class="form-tip">如 1 筐 = 20 盒；二级单位与上方「单位」字段同步</div>
+          <div v-else-if="specRelationSummary.hasConversion" class="spec-echo">= {{ specRelationSummary.conversionText }}</div>
+          <div class="form-tip">如 1 箱 = 42 盒；只填数字，单位从下拉选</div>
+        </el-form-item>
+        <!-- 规格 = 上面结构化字段自动拼 (只读, 不再手输文字+数字混排) -->
+        <el-form-item label="规格">
+          <el-input v-model="formData.specification" readonly placeholder="由上方「标准克重 + 装箱换算」自动生成" />
+          <div class="form-tip">规格由上面结构化字段自动生成，无需手填（如「310克/盒，1箱=42盒」）</div>
         </el-form-item>
 
-        <template v-if="canEditMarginRedline">
-          <el-divider content-position="left">毛利红线</el-divider>
-          <el-alert
-            class="margin-redline-tip"
-            type="info"
-            :closable="false"
-            show-icon
-            title="用于销售低价拦截：最低售价 = 标准成本 ÷ (1 - 目标毛利率)。留空则产品级配置不生效。"
-          />
-          <el-row :gutter="16">
-            <el-col :xs="24" :sm="12">
-              <el-form-item label="标准成本">
-                <el-input-number
-                  v-model="formData.standardCost"
-                  :min="0"
-                  :precision="4"
-                  :controls="false"
-                  placeholder="例如 12.5000，留空跳过产品红线"
-                  style="width: 100%"
-                />
-                <div class="form-tip">单位成本，范围 ≥ 0；保存后会作为毛利红线成本基准。</div>
-              </el-form-item>
-            </el-col>
-            <el-col :xs="24" :sm="12">
-              <el-form-item label="目标毛利率">
-                <el-input-number
-                  v-model="formData.targetGrossMarginPercent"
-                  :min="0"
-                  :max="99.99"
-                  :precision="2"
-                  :controls="false"
-                  placeholder="例如 10 表示 10%"
-                  style="width: 100%"
-                />
-                <div class="form-tip">请输入百分比 0-99.99，提交后按小数存储，例如 10% 存为 0.10。</div>
-              </el-form-item>
-            </el-col>
-          </el-row>
-        </template>
+        <el-form-item label="备注" prop="notes">
+          <el-input v-model="formData.notes" type="textarea" :rows="3" placeholder="请输入备注信息" />
+        </el-form-item>
 
-        <!-- T150: @update 改用 handleExtendedFormUpdate 以追踪 gramsPerUnit/wipToFgYield 手动编辑标志 -->
-        <DynamicEntityForm
-          :fields="visibleExtendedFields"
-          :model-value="formData as TableRow"
-          @update:model-value="handleExtendedFormUpdate"
-          :columns="2"
-          label-width="120px"
-        />
+        <!-- ========== 高级设置 (T157): 非必要项收起, 内分 关联客户/温区/图片 + 成本 + 产能 + 库存 ========== -->
+        <el-collapse class="product-advanced">
+          <el-collapse-item name="advanced">
+            <template #title>
+              <span style="font-weight:600">高级设置（关联客户 / 温区 / 图片 / 成本 / 产能 / 库存 — 可选）</span>
+            </template>
+
+            <el-form-item label="关联客户" prop="relatedCustomer">
+              <el-select v-model="formData.relatedCustomer" placeholder="选择客户（可输入新客户名）"
+                filterable allow-create default-first-option clearable style="width: 100%" @change="handleCustomerChange">
+                <el-option v-for="c in customers" :key="c.id" :label="c.name" :value="c.name" />
+              </el-select>
+              <div v-if="formData.customerId" class="form-tip" style="color:#67c23a;">已绑定客户ID: {{ formData.customerId }}</div>
+              <div v-else-if="formData.relatedCustomer" class="form-tip">新客户（仅记录名称，未绑定客户档案）</div>
+            </el-form-item>
+            <el-form-item label="基础名称">
+              <el-autocomplete v-model="formData.baseProductName" :fetch-suggestions="queryBaseProductName"
+                placeholder="如: 好食光卤猪蹄（RN优先显示，留空用产品名）" clearable style="width: 100%"
+                @input="markBaseProductNameEdited" @select="markBaseProductNameEdited" />
+              <div class="form-tip">仅含产品本身名称，不含客户/规格后缀；RN 展示优先用此字段</div>
+            </el-form-item>
+            <el-form-item label="温区" prop="temperatureZone">
+              <el-select v-model="formData.temperatureZone" placeholder="请选择温区" clearable style="width: 100%" @change="markTemperatureZoneEdited">
+                <el-option label="常温" value="常温" />
+                <el-option label="冷藏" value="冷藏" />
+                <el-option label="冷冻" value="冷冻" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="产品图片" prop="imageUrl">
+              <el-input v-model="formData.imageUrl" placeholder="请输入图片URL" />
+              <div v-if="formData.imageUrl" class="image-preview">
+                <el-image :src="formData.imageUrl" fit="contain" style="width: 100px; height: 100px; margin-top: 8px;">
+                  <template #error><div class="image-error">图片加载失败</div></template>
+                </el-image>
+              </div>
+            </el-form-item>
+
+            <!-- 成本 -->
+            <el-divider content-position="left">成本</el-divider>
+            <template v-if="canEditMarginRedline">
+              <el-alert class="margin-redline-tip" type="info" :closable="false" show-icon
+                title="用于销售低价拦截：最低售价 = 标准成本 ÷ (1 - 目标毛利率)。留空则产品级配置不生效。" />
+              <el-row :gutter="16">
+                <el-col :xs="24" :sm="12">
+                  <el-form-item label="标准成本">
+                    <el-input-number v-model="formData.standardCost" :min="0" :precision="4" :controls="false"
+                      placeholder="例如 12.5000，留空跳过产品红线" style="width: 100%" />
+                    <div class="form-tip">单位成本，范围 ≥ 0；作为毛利红线成本基准。</div>
+                  </el-form-item>
+                </el-col>
+                <el-col :xs="24" :sm="12">
+                  <el-form-item label="目标毛利率">
+                    <el-input-number v-model="formData.targetGrossMarginPercent" :min="0" :max="99.99" :precision="2" :controls="false"
+                      placeholder="例如 10 表示 10%" style="width: 100%" />
+                    <div class="form-tip">百分比 0-99.99，提交按小数存储（10% 存 0.10）。</div>
+                  </el-form-item>
+                </el-col>
+              </el-row>
+            </template>
+            <DynamicEntityForm v-if="costExtendedFields.length" :fields="costExtendedFields"
+              :model-value="formData as TableRow" @update:model-value="handleExtendedFormUpdate" :columns="2" label-width="120px" />
+
+            <!-- 产能 -->
+            <template v-if="capacityExtendedFields.length">
+              <el-divider content-position="left">产能</el-divider>
+              <DynamicEntityForm :fields="capacityExtendedFields" :model-value="formData as TableRow"
+                @update:model-value="handleExtendedFormUpdate" :columns="2" label-width="120px" />
+            </template>
+
+            <!-- 库存采购 -->
+            <template v-if="inventoryExtendedFields.length">
+              <el-divider content-position="left">库存采购</el-divider>
+              <DynamicEntityForm :fields="inventoryExtendedFields" :model-value="formData as TableRow"
+                @update:model-value="handleExtendedFormUpdate" :columns="2" label-width="120px" />
+            </template>
+          </el-collapse-item>
+        </el-collapse>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
