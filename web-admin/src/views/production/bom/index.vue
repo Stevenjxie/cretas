@@ -153,6 +153,23 @@ const selectedProductName = computed(() => {
   return String(product?.name || '');
 });
 
+// Phase 1: 配方头产出规格改为从 SKU (ProductType) 只读带入，不再让用户手填。
+// 产出单位 ← SKU.unit（份/盒/…）；每单位产出量 ← SKU.gramsPerUnit（标准克重，克）。
+const selectedProductMeta = ref<Record<string, unknown> | null>(null);
+const skuOutputUnit = computed(() => {
+  const u = selectedProductMeta.value?.unit;
+  return u ? String(u) : '份';
+});
+const skuGramsPerUnit = computed<number | null>(() => {
+  const g = selectedProductMeta.value?.gramsPerUnit;
+  if (g == null || g === '') return null;
+  const n = Number(g);
+  return Number.isFinite(n) && n > 0 ? n : null;
+});
+
+// Phase 1: 添加原辅料「高级选项」折叠状态（默认收起）
+const showAdvancedBomFields = ref<string[]>([]);
+
 interface RecipeHeaderForm {
   outputQuantityPerUnit: number | null;
   outputUnit: string;
@@ -527,18 +544,26 @@ function handleEditRecipeHeader(recipe: BomRecipeSummary) {
 
 async function submitRecipeHeaderForm() {
   if (!factoryId.value || !selectedProductTypeId.value) return;
-  const outputQuantityPerUnit = Number(recipeForm.value.outputQuantityPerUnit);
-  const outputUnit = recipeForm.value.outputUnit.trim();
+  // Phase 1: 产出规格从 SKU 只读带入，不再读手填字段
+  const outputUnit = skuOutputUnit.value;
+  const gramsPerUnit = skuGramsPerUnit.value;
   const overallYieldRate = Number(recipeForm.value.overallYieldRate);
 
-  if (!(outputQuantityPerUnit > 0)) {
-    ElMessage.warning('每单位产出量必须大于 0');
+  // 防呆 (Rule 5): SKU 未填标准克重 → 无法确定每单位产出量，引导去补，不静默传 0
+  if (gramsPerUnit == null) {
+    try {
+      await ElMessageBox.confirm(
+        '该产品尚未在 SKU 里填写标准克重，无法生成配方头。是否现在去补录？',
+        '缺少标准克重',
+        { confirmButtonText: '去 SKU 补克重', cancelButtonText: '稍后', type: 'warning' },
+      );
+      goFillSkuWeight();
+    } catch {
+      // 留在弹窗
+    }
     return;
   }
-  if (!outputUnit) {
-    ElMessage.warning('请填写产出单位，例如 g、kg、份、盒');
-    return;
-  }
+  const outputQuantityPerUnit = gramsPerUnit;
   if (!(overallYieldRate > 0 && overallYieldRate <= 100)) {
     ElMessage.warning('整体出成率必须在 0.01 到 100 之间');
     return;
@@ -817,11 +842,13 @@ onMounted(async () => {
 
 watch(selectedProductTypeId, async (newVal) => {
   if (newVal) {
+    await loadSelectedProductMeta(newVal);
     await loadBomItems();
     await loadLaborCosts();
     await loadCostSummary();
     await loadBomRecipes();
   } else {
+    selectedProductMeta.value = null;
     bomItems.value = [];
     laborCosts.value = [];
     costSummary.value = null;
@@ -890,6 +917,17 @@ async function fetchProductTypeOptions(keyword: string) {
   }
 }
 
+/**
+ * Phase 1 fix: remote + filterable el-select 选中后会保留已选项 label 作为残留搜索词，
+ * 重新聚焦时只剩已选那一个可见（Element Plus remote-select 经典坑，误以为"只能选一个产品"）。
+ * 打开下拉时用空关键词重拉首页候选，让用户先看到完整成品列表，再输入名称远程搜索其余。
+ */
+function onProductSelectVisibleChange(visible: boolean) {
+  if (visible) {
+    fetchProductTypeOptions('');
+  }
+}
+
 /** el-select remote-method — 防抖 300ms 再请求，避免每敲一个字就打后端。 */
 function handleProductTypeRemoteSearch(query: string) {
   if (productSearchDebounceTimer) clearTimeout(productSearchDebounceTimer);
@@ -920,6 +958,36 @@ async function selectProductFromRoute(productTypeId: string) {
     const err = error as { actionHint?: string };
     if (!err?.actionHint) ElMessage.warning('未找到指定产品，请手动搜索选择');
   }
+}
+
+/**
+ * Phase 1: 取当前选中成品(SKU)的详情，供配方头只读带入产出单位/标准克重。
+ * 详情端点稳定含 gramsPerUnit / unit / specification（列表投影可能不含）。
+ */
+async function loadSelectedProductMeta(productTypeId: string) {
+  if (!factoryId.value || !productTypeId) {
+    selectedProductMeta.value = null;
+    return;
+  }
+  try {
+    const response = await get<Record<string, unknown>>(`/${factoryId.value}/product-types/${productTypeId}`);
+    selectedProductMeta.value = response.success && response.data ? response.data : null;
+  } catch {
+    selectedProductMeta.value = null;
+  }
+}
+
+/**
+ * Phase 1 防呆 (Rule 5 dead-end→导航): SKU 未填标准克重时，引导去产品维护补录。
+ */
+function goFillSkuWeight() {
+  router.push({
+    path: '/system/products',
+    query: {
+      _returnTo: route.fullPath,
+      ...(selectedProductName.value ? { keyword: selectedProductName.value } : {}),
+    },
+  });
 }
 
 async function loadMaterialTypes() {
@@ -1039,17 +1107,22 @@ function buildLegacyBomItemPayload() {
 
 async function submitBomForm() {
   // fool-proof Rule 1: 字段级校验, 不静默丢给后端报晦涩 400.
-  if (!bomForm.value.materialName) {
-    ElMessage.warning('请输入物料名称');
-    return;
-  }
   if (!bomForm.value.materialCategory) {
     ElMessage.warning('请选择物料类别');
+    return;
+  }
+  // Phase 1: 物料名称已改为从「关联原料」自动带入，校验改为要求选中关联原料
+  if (!bomForm.value.materialTypeId) {
+    ElMessage.warning('请选择关联原料（物料名称将自动带入）');
     return;
   }
   if (bomForm.value.standardQuantity == null || Number(bomForm.value.standardQuantity) <= 0) {
     ElMessage.warning('成品用量必须大于 0');
     return;
+  }
+  // Phase 1: 辅料/包材无出成率折算，固定 100 满足后端 yield_rate NOT NULL；原料保留 null=待评估
+  if (bomForm.value.materialCategory !== 'RAW') {
+    bomForm.value.yieldRate = 100;
   }
   if (!(await confirmBomUnitCompatibility())) return;
   bomDialogLoading.value = true;
@@ -1852,9 +1925,9 @@ async function handleAdjustConfirm() {
             style="width: 280px; margin-left: 20px;"
             filterable
             remote
-            reserve-keyword
             :remote-method="handleProductTypeRemoteSearch"
             :loading="productSearchLoading"
+            @visible-change="onProductSelectVisibleChange"
           >
             <el-option
               v-for="product in productTypes"
@@ -2254,7 +2327,7 @@ async function handleAdjustConfirm() {
         style="margin-bottom: 12px;"
       >
         <template #title>
-          这里维护 BomRecipe 配方头，不是原辅料行项目
+          这里维护配方头（产出规格 + 整体出成率），原辅料明细在下方表格维护
         </template>
         <template #default>
           创建配方头会使用当前原辅料明细生成草稿配方；编辑配方头只修改每单位产出量、产出单位和整体出成率。
@@ -2264,25 +2337,25 @@ async function handleAdjustConfirm() {
         <el-form-item label="产品">
           <el-input :model-value="selectedProductName || selectedProductTypeId" disabled />
         </el-form-item>
-        <el-form-item label="每单位产出量" required>
-          <el-input-number
-            v-model="recipeForm.outputQuantityPerUnit"
-            :min="0.0001"
-            :precision="4"
-            :step="1"
-            placeholder="例：1 或 200"
-            style="width: 100%"
-          />
-          <div class="form-tip">BomRecipe.outputQuantityPerUnit，必须大于 0；例如 1 份、200 g、0.5 kg。</div>
+        <el-form-item label="产出单位">
+          <el-input :model-value="skuOutputUnit" disabled />
+          <div class="form-tip">从 SKU 单位带入，如需修改请到产品(SKU)维护</div>
         </el-form-item>
-        <el-form-item label="产出单位" required>
-          <el-input
-            v-model="recipeForm.outputUnit"
-            maxlength="20"
-            show-word-limit
-            placeholder="例：份 / g / kg / 盒"
-          />
-          <div class="form-tip">BomRecipe.outputUnit，用于嵌套 BOM 成本、营养标签和添加剂合规换算。</div>
+        <el-form-item label="每单位产出量">
+          <template v-if="skuGramsPerUnit != null">
+            <el-input :model-value="`${skuGramsPerUnit} 克 / ${skuOutputUnit}`" disabled />
+            <div class="form-tip">从 SKU 标准克重带入（1 {{ skuOutputUnit }} = {{ skuGramsPerUnit }} 克）</div>
+          </template>
+          <template v-else>
+            <el-alert
+              type="warning"
+              :closable="false"
+              show-icon
+              title="该产品尚未在 SKU 里填写标准克重，无法确定每单位产出量"
+              style="margin-bottom: 6px;"
+            />
+            <el-button link type="primary" @click="goFillSkuWeight">去 SKU 补标准克重</el-button>
+          </template>
         </el-form-item>
         <el-form-item label="整体出成率%" required>
           <el-input-number
@@ -2294,7 +2367,7 @@ async function handleAdjustConfirm() {
             placeholder="默认 100"
             style="width: 100%"
           />
-          <div class="form-tip">BomRecipe.overallYieldRate，范围 0.01–100；行项目出成率仍在原辅料弹窗维护。</div>
+          <div class="form-tip">整体出成率，范围 0.01–100；单行出成率在原辅料弹窗里维护</div>
         </el-form-item>
         <el-form-item label="备注">
           <el-input
@@ -2309,7 +2382,7 @@ async function handleAdjustConfirm() {
       </el-form>
       <div v-if="!isRecipeEdit" class="recipe-create-hint">
         <el-icon><InfoFilled /></el-icon>
-        <span>创建时会把当前原辅料明细作为 CreateBomRecipeRequest.items；请先确认每行已关联原料类型且成品含量大于 0。</span>
+        <span>创建时会把上方原辅料明细一起存为草稿配方；请先确认每行已关联原料且成品用量大于 0</span>
       </div>
       <template #footer>
         <el-button @click="recipeDialogVisible = false">取消</el-button>
@@ -2322,9 +2395,6 @@ async function handleAdjustConfirm() {
     <!-- BOM Item Dialog -->
     <el-dialog v-model="bomDialogVisible" :title="isBomEdit ? '编辑原辅料' : '添加原辅料'" width="580px">
       <el-form :model="bomForm" label-width="110px">
-        <el-form-item label="物料名称" required>
-          <el-input v-model="bomForm.materialName" placeholder="请输入物料名称" />
-        </el-form-item>
         <el-form-item label="物料类别" required>
           <el-select v-model="bomForm.materialCategory" style="width: 100%" @change="onBomCategoryChange">
             <el-option label="原料" value="RAW" />
@@ -2363,6 +2433,34 @@ async function handleAdjustConfirm() {
           </div>
           <div class="form-tip">
             {{ bomQuantityHelpText() }}
+          </div>
+        </el-form-item>
+        <el-form-item label="计量单位">
+          <el-select v-model="bomForm.unit" placeholder="选择单位" style="width: 100%">
+            <el-option label="克 (g)" value="g" />
+            <el-option label="千克 (kg)" value="kg" />
+            <el-option label="毫升 (mL)" value="mL" />
+            <el-option label="升 (L)" value="L" />
+            <el-option label="只" value="只" />
+            <el-option label="个" value="个" />
+            <el-option label="件 (pcs)" value="pcs" />
+            <el-option
+              v-if="selectedMaterialUnit() && !['g','kg','mL','L','只','个','pcs'].includes(selectedMaterialUnit())"
+              :label="selectedMaterialUnit()"
+              :value="selectedMaterialUnit()"
+            />
+          </el-select>
+          <div v-if="bomUnitCompatibilityWarning()" class="form-tip form-tip--warning">
+            <span>{{ bomUnitCompatibilityWarning() }}</span>
+            <el-button link type="warning" size="small" @click="goMaterialUnitConfigFromBom">
+              去核对单位配置
+            </el-button>
+          </div>
+          <div v-else-if="bomUnitIsCounting" class="form-tip">
+            计数型原料按成品件数核算；例如 0.5 只/袋，400 袋会核算 200 只。
+          </div>
+          <div v-else class="form-tip">
+            重量型原料建议使用 g，系统调拨/库存校验会自动按 g ↔ kg 换算。
           </div>
         </el-form-item>
         <!-- Phase B: 评估按钮 (RAW 类别时显示) -->
@@ -2424,9 +2522,9 @@ async function handleAdjustConfirm() {
             </div>
           </div>
         </el-form-item>
-        <!-- 出成率输入 (在评估按钮之后, 成品含量之后) -->
+        <!-- 出成率输入 (仅原料; 辅料/包材无出成率折算) -->
         <!-- GAP F3: 无客户端 ≤100 校验, 增重工序 (保水/腌制) 出成率合法超 100% -->
-        <el-form-item label="出成率%">
+        <el-form-item v-if="bomForm.materialCategory === 'RAW'" label="出成率%">
           <el-input-number
             v-model="bomForm.yieldRate"
             :min="0"
@@ -2444,9 +2542,9 @@ async function handleAdjustConfirm() {
           </div>
           <div v-else class="form-tip">输入百分比数值，如 61 表示 61%</div>
         </el-form-item>
-        <!-- D2: 实时显示实际原料用量 (考虑出成率) -->
+        <!-- D2: 实时显示实际原料用量 (仅原料, 考虑出成率) -->
         <!-- GAP F7: yieldRate null → 显示「待评估」, 不显示误导性数字 -->
-        <el-form-item label="实际原料用量">
+        <el-form-item v-if="bomForm.materialCategory === 'RAW'" label="实际原料用量">
           <div :class="computedActualQuantity == null ? 'bom-computed-quantity bom-computed-quantity--pending' : 'bom-computed-quantity'">
             <template v-if="computedActualQuantity == null">
               <el-tag type="warning" size="small" disable-transitions>待评估</el-tag>
@@ -2459,34 +2557,6 @@ async function handleAdjustConfirm() {
           </div>
           <div class="form-tip">
             {{ actualQuantityHelpText() }}
-          </div>
-        </el-form-item>
-        <el-form-item label="计量单位">
-          <el-select v-model="bomForm.unit" placeholder="选择单位" style="width: 100%">
-            <el-option label="克 (g)" value="g" />
-            <el-option label="千克 (kg)" value="kg" />
-            <el-option label="毫升 (mL)" value="mL" />
-            <el-option label="升 (L)" value="L" />
-            <el-option label="只" value="只" />
-            <el-option label="个" value="个" />
-            <el-option label="件 (pcs)" value="pcs" />
-            <el-option
-              v-if="selectedMaterialUnit() && !['g','kg','mL','L','只','个','pcs'].includes(selectedMaterialUnit())"
-              :label="selectedMaterialUnit()"
-              :value="selectedMaterialUnit()"
-            />
-          </el-select>
-          <div v-if="bomUnitCompatibilityWarning()" class="form-tip form-tip--warning">
-            <span>{{ bomUnitCompatibilityWarning() }}</span>
-            <el-button link type="warning" size="small" @click="goMaterialUnitConfigFromBom">
-              去核对单位配置
-            </el-button>
-          </div>
-          <div v-else-if="bomUnitIsCounting" class="form-tip">
-            计数型原料按成品件数核算；例如 0.5 只/袋，400 袋会核算 200 只。
-          </div>
-          <div v-else class="form-tip">
-            重量型原料建议使用 g，系统调拨/库存校验会自动按 g ↔ kg 换算。
           </div>
         </el-form-item>
         <!-- #759: 包材每产品单位用量 (PACKAGING 专属, 配置后 BOM 标准用量可自动推算) -->
@@ -2515,11 +2585,14 @@ async function handleAdjustConfirm() {
         <el-form-item label="备注">
           <el-input v-model="bomForm.notes" type="textarea" :rows="2" />
         </el-form-item>
+        <!-- Phase 1: 高级字段默认收起，功能不删 -->
+        <el-collapse v-model="showAdvancedBomFields" class="bom-advanced-collapse">
+          <el-collapse-item name="adv" title="高级选项（可选料 / 替代料 / 按份数投料 / 半成品引用 / 嵌套子产品）">
         <el-form-item label="可选料">
           <el-checkbox v-model="bomForm.isOptional">
             可选原辅料，不作为生产计划完整性硬要求
           </el-checkbox>
-          <div class="form-tip">对应 BomRecipeItemDTO.isOptional，适用于装饰菜、可省略配料等。</div>
+          <div class="form-tip">适用于装饰菜、可省略配料等</div>
         </el-form-item>
         <el-form-item label="替代料分组">
           <el-input
@@ -2528,7 +2601,7 @@ async function handleAdjustConfirm() {
             show-word-limit
             placeholder="例：MEAT_BASE / SAUCE_ALT，同组物料可互相替代"
           />
-          <div class="form-tip">对应 BomRecipeItemDTO.substituteGroup；相同分组表示互为替代料。</div>
+          <div class="form-tip">相同分组的物料可互相替代</div>
         </el-form-item>
         <!-- SP4-8: 按份数投料 -->
         <el-form-item label="按份数投料">
@@ -2577,6 +2650,8 @@ async function handleAdjustConfirm() {
           </el-select>
           <div class="form-tip">SP1 嵌套 BOM：非空时成本引用子产品 BOM 总成本，不用本行单价。配合"半成品引用"支持"先做后用"移动均价。</div>
         </el-form-item>
+          </el-collapse-item>
+        </el-collapse>
       </el-form>
       <template #footer>
         <el-button @click="bomDialogVisible = false">取消</el-button>
