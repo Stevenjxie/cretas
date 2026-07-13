@@ -628,6 +628,36 @@ public class MaterialBatchController {
     }
 
     /**
+     * 续入到已有批次 (方案A 严格匹配续入, 六扇门 F006 采购补货场景).
+     *
+     * <p>把本次到货并进指定批次 (沿用其单价/保质期/供应商), 而不是新建批次 —— 解决同一原料
+     * 多次入库"批次散着列看着重复"的痛点。仅支持可用且未过期批次, 否则 409 引导新建。
+     */
+    @RequirePermission({"warehouse:read_write", "inventory:read_write"})
+    @RequireModule("warehouse")
+    @PostMapping("/{batchId}/replenish")
+    @Operation(summary = "续入到已有批次")
+    public ApiResponse<MaterialBatchDTO> replenishExistingBatch(
+            @Parameter(description = "工厂ID", example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "批次ID", example = "MB-2025-001")
+            @PathVariable @NotBlank String batchId,
+            @Parameter(description = "访问令牌")
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody ReplenishMaterialBatchRequest request) {
+
+        String token = TokenUtils.extractToken(authorization);
+        Long userId = mobileService.getUserFromToken(token).getId();
+
+        log.info("续入到已有批次: factoryId={}, batchId={}, addQuantity={}, sourceDoc={}#{}",
+                factoryId, batchId, request.getAddQuantity(), request.getSourceDocType(), request.getSourceDocId());
+        MaterialBatchDTO batch = materialBatchService.replenishExistingBatch(
+                factoryId, batchId, request.getAddQuantity(),
+                request.getSourceDocType(), request.getSourceDocId(), request.getNote(), userId);
+        return ApiResponse.success("续入成功", batch);
+    }
+
+    /**
      * 更新批次状态
      */
     @RequirePermission({"warehouse:read_write", "inventory:read_write"})

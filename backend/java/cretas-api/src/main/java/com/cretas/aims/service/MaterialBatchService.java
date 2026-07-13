@@ -256,6 +256,28 @@ public interface MaterialBatchService {
       */
     MaterialBatchDTO adjustBatchQuantity(String factoryId, String batchId, BigDecimal newQuantity, String reason, Long adjustedBy);
      /**
+     * 续入到已有批次 (方案A 严格匹配续入, 六扇门 F006 采购补货场景).
+     *
+     * <p>把本次到货的数量直接并进指定的已有批次, 而不是新建一个批次 —— 解决"同一原料入很多次
+     * 一堆独立批次散着列"的痛点。为避免污染 🔒 成本口径与溯源, 采取最保守做法:
+     * <ul>
+     *   <li><b>沿用</b>目标批次的单价/保质期/供应商/产地等批次级单值字段 (不重算, 不覆盖) —
+     *       调用方 UI 必须已明示"本次续入沿用该批次单价 X 保质期 Y", 新到货口径不同时应改为新建批次。</li>
+     *   <li>只允许续入到 status=AVAILABLE 且未过保质期的批次 (否则 409, 引导新建)。</li>
+     *   <li>receiptQuantity += addQuantity, 写一条 {@link MaterialBatchAdjustment} (type=REPLENISH,
+     *       reason 含本次发起单信息), 发库存变更事件让下游 (未来计划自动匹配) 感知。</li>
+     * </ul>
+     * 加权平均/不同保质期合并 (方案B) 涉及 🔒🔒 成本重算 + 新流水表, 不在本方法范围。
+     *
+     * @param addQuantity   本次续入数量 (必须 > 0)
+     * @param sourceDocType 本次到货发起单类型 (记入 adjustment.reason, 供溯源)
+     * @param sourceDocId   本次到货发起单ID
+     * @param note          备注 (可空)
+     * @param adjustedBy    操作人用户ID
+      */
+    MaterialBatchDTO replenishExistingBatch(String factoryId, String batchId, BigDecimal addQuantity,
+                                            String sourceDocType, String sourceDocId, String note, Long adjustedBy);
+     /**
      * 更新批次状态
       */
     MaterialBatchDTO updateBatchStatus(String factoryId, String batchId, MaterialBatchStatus status);
