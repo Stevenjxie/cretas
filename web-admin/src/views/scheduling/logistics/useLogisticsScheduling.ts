@@ -736,7 +736,7 @@ async function regeneratePlanAction(): Promise<void> {
     const { ElMessage } = await import('element-plus');
     if (planSignature(res.data.trips) === before) {
       ElMessage({
-        message: `已按「${modeLabel}」重新生成 —— 当前已是最优方案，路线无变化。如需改变，可调整目标装载率/优化目标，或在「人工确认」手动调整。`,
+        message: `已按「${modeLabel}」重新生成 —— 当前已是最优方案，路线无变化。如需改变，可切换优化目标，或在「人工确认」手动调整。`,
         type: 'info',
         duration: 6000,
         showClose: true,
