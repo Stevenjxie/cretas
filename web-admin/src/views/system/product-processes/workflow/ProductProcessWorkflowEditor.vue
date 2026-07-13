@@ -425,6 +425,9 @@ const props = defineProps<{
   productTypeId: string;
   productName: string;
   canWrite: boolean;
+  // raw-centric 双模式: owner 是原料 → 允许多终端成品 (分支/扇出); 成品 → 单终端成品。
+  // 前端提示为主, 硬约束在后端发布校验 (按 owner 分类校验终端 FINISHED_GOOD 数)。
+  rawOwnerMode?: boolean;
 }>();
 
 const { fitView, getViewport, setViewport } = useVueFlow('product-process-workflow');

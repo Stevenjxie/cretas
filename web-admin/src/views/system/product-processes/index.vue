@@ -31,15 +31,41 @@ const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('system'));
 
 // 产品列表（从后端获取）
-const products = ref<Array<{ id: string; name: string }>>([]);
+const products = ref<Array<{ id: string; name: string; productCategory?: string | null }>>([]);
 const selectedProductId = ref('');
 const productsLoading = ref(false);
 
+// raw-centric 双模式 (2026-07-13): 一级分类 = workflow 锚点 = 成品 or 原料。
+//   成品模式 = 锚成品 = 单终端成品图 (现状)。原料模式 = 锚原料 = 多终端成品图 (raw-centric)。
+//   模式只看"终端成品 SKU 数量", 这里的一级选择决定 owner 产品的候选范围 (成品分类 vs 原料分类)。
+const FINISHED_OWNER_CATEGORIES = new Set([
+  'FINISHED_PRODUCT', 'CONTRACT_MANUFACTURING', 'CUSTOMER_MATERIAL', 'DISH', 'COMBO',
+]);
+const ownerMode = ref<'FINISHED' | 'RAW'>('FINISHED');
+const productsByMode = computed(() => products.value.filter((p) => {
+  const cat = p.productCategory || '';
+  return ownerMode.value === 'RAW' ? cat === 'RAW_MATERIAL' : FINISHED_OWNER_CATEGORIES.has(cat);
+}));
+/** 当前选中 owner 产品的分类是否为原料 → 传给编辑器决定是否放开多终端产出。 */
+const isRawOwnerMode = computed(() => {
+  const p = products.value.find((x) => x.id === selectedProductId.value);
+  return (p?.productCategory || '') === 'RAW_MATERIAL';
+});
+
 // #2: 顶部产品选择器拼音首字母搜索 (复用 pinyinInitials.ts 的共享 usePinyinFilter composable)。
-const topProductFilter = usePinyinFilter(() => products.value, (p) => [p.name]);
+//     raw-centric: 过滤范围 = 当前模式的产品子集 (成品/原料), 不是全量。
+const topProductFilter = usePinyinFilter(() => productsByMode.value, (p) => [p.name]);
 const handleTopProductFilter = topProductFilter.handleFilter;
 const handleTopProductVisibleChange = topProductFilter.handleVisibleChange;
 const filteredTopProducts = topProductFilter.filtered;
+
+// 切换成品/原料模式: 选中项若不在新模式子集里, 重置为该模式第一个产品 (防呆: 不留空/不留跨模式脏值)。
+function onOwnerModeChange() {
+  const list = productsByMode.value;
+  if (!list.some((p) => p.id === selectedProductId.value)) {
+    selectedProductId.value = list.length ? list[0].id : '';
+  }
+}
 
 // 服务端已关联工序（source of truth from backend）
 const linkedProcesses = ref<ProductWorkProcessItem[]>([]);
@@ -341,16 +367,20 @@ async function loadProducts() {
     const { get } = await import('@/api/request');
     // 精简「选项」端点 (id/name/... 7 字段 + @Cacheable) — 避开重 DTO 的 ~3s/422KB 全量加载。
     // 返回 {content} 信封与旧 size=1000 调用一致, 读法不变。
-    const res = await get<{ content: Array<{ id: string; name: string }> }>(
+    const res = await get<{ content: Array<{ id: string; name: string; productCategory?: string | null }> }>(
       `/${factoryId.value}/product-types/options`
     );
     if (res.success && res.data?.content) {
       products.value = res.data.content;
       if (products.value.length > 0 && !selectedProductId.value) {
         const preferredProductId = routeQueryString(route.query.productTypeId);
-        const preferredExists = preferredProductId && products.value.some(p => p.id === preferredProductId);
+        const preferred = preferredProductId ? products.value.find(p => p.id === preferredProductId) : undefined;
+        // 深链到某产品时: 若它是原料, 自动切原料模式 (否则它不在成品子集里会被过滤掉选不中)。
+        if (preferred && (preferred.productCategory || '') === 'RAW_MATERIAL') {
+          ownerMode.value = 'RAW';
+        }
         suppressNextWatch = true;
-        selectedProductId.value = preferredExists ? preferredProductId : products.value[0].id;
+        selectedProductId.value = preferred ? preferred.id : (productsByMode.value[0]?.id || products.value[0].id);
       }
     }
   } catch (e) {
@@ -1071,9 +1101,15 @@ async function saveCustomFieldConfig() {
         <div class="toolbar-left">
           <h2 style="margin: 0">产品-工序配置</h2>
           <el-tag type="info">{{ factoryId }}</el-tag>
+          <!-- raw-centric 双模式 (2026-07-13): 一级 = workflow 锚点。
+               成品 = 单终端成品图 (一个成品一张图); 原料 = 多终端成品图 (一原料→多成品 SKU)。 -->
+          <el-radio-group v-model="ownerMode" size="default" @change="onOwnerModeChange">
+            <el-radio-button label="FINISHED">成品</el-radio-button>
+            <el-radio-button label="RAW">原料</el-radio-button>
+          </el-radio-group>
           <el-select
             v-model="selectedProductId"
-            placeholder="选择要配置的产品（支持拼音首字母搜索）"
+            :placeholder="ownerMode === 'RAW' ? '选择原料（一原料可产多个成品 SKU）' : '选择成品（支持拼音首字母搜索）'"
             filterable
             style="width: 320px"
             :loading="productsLoading"
@@ -1083,6 +1119,9 @@ async function saveCustomFieldConfig() {
           >
             <el-option v-for="p in filteredTopProducts" :key="p.id" :label="p.name" :value="p.id" />
           </el-select>
+          <el-text v-if="ownerMode === 'RAW'" type="warning" size="small">
+            原料模式：这张图可产出多个成品 SKU（分支/扇出）
+          </el-text>
         </div>
         <div class="toolbar-right">
           <!-- C4 status indicator + save button -->
@@ -1115,6 +1154,7 @@ async function saveCustomFieldConfig() {
       :product-type-id="selectedProductId"
       :product-name="selectedProductName"
       :can-write="canWrite"
+      :raw-owner-mode="isRawOwnerMode"
     />
 
     <el-collapse class="legacy-compatibility">
