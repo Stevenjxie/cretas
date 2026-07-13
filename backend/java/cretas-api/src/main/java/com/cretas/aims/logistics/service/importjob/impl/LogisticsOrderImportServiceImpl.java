@@ -31,8 +31,17 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.alibaba.excel.annotation.ExcelProperty;
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.CellType;
+import org.apache.poi.ss.usermodel.DataFormatter;
+import org.apache.poi.ss.usermodel.DateUtil;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.ss.usermodel.WorkbookFactory;
 
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.lang.reflect.Field;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -74,6 +83,8 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
     private final LogisticsStoreMasterRepository storeMasterRepo;
 
     private static final String SHEET_NAME = "物流订单导入模板";
+    /** 模板第 2 行示例的哨兵订单号 —— 导入时按此精确匹配自动跳过示例行，用户不必删除，系统自动识别忽略。 */
+    private static final String EXAMPLE_STORE_CODE = "示例数据·系统自动忽略此行";
     private static final int WINDOW_MAX_LEN = 8;
     /**
      * 单次 commit 内自动地理编码的最大调用数上限 (spec: ≤ ~50) — 保护
@@ -94,7 +105,23 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
 
     @Override
     public byte[] downloadTemplate() {
-        return excelUtil.generateTemplate(LogisticsOrderImportRow.class, SHEET_NAME);
+        // 模板 = 表头 + 第 2 行填好的示例，让用户照着填。示例订单号带「系统自动忽略」标注，
+        // preview 会自动跳过这行 —— 用户不必删除，系统自动识别忽略。
+        LogisticsOrderImportRow example = new LogisticsOrderImportRow();
+        example.setBusinessDate("2026-07-13");      // 选填：留空默认当天；格式 2026-07-13 或 2026/7/13 均可
+        example.setStoreCode(EXAMPLE_STORE_CODE);   // 哨兵：导入时自动跳过本行
+        example.setStoreName("沃尔玛浦东店");
+        example.setAddress("上海市浦东新区世纪大道100号");
+        example.setPieces("10");
+        example.setBoxes("2");
+        example.setWeightKg("250");
+        example.setVolumeCbm("1.5");
+        example.setWindowStart("08:00");
+        example.setWindowEnd("18:00");
+        example.setLongitude("");                   // 选填：留空自动定位（经纬度须成对填写）
+        example.setLatitude("");
+        example.setAreaCode("浦东");
+        return excelUtil.exportToExcel(List.of(example), LogisticsOrderImportRow.class, SHEET_NAME);
     }
 
     // ==================== Preview ====================
@@ -126,6 +153,11 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
             throw new BusinessException(400, "文件解析失败: " + e.getMessage())
                     .withHint("请确认使用后端下载的模板，且未破坏表头（支持 .xlsx / .csv）");
         }
+
+        // 跳过模板自带的示例行（哨兵订单号）—— 用户不必删除，系统自动识别忽略。
+        rawRows = rawRows.stream()
+                .filter(r -> !EXAMPLE_STORE_CODE.equals(trim(r.getStoreCode())))
+                .toList();
 
         if (rawRows.isEmpty()) {
             throw new BusinessException(400, "文件不包含任何数据行")
@@ -776,7 +808,9 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
         if (lower.endsWith(".csv")) {
             return parseCsv(bytes);
         }
-        return excelUtil.importFromExcel(new ByteArrayInputStream(bytes), LogisticsOrderImportRow.class);
+        // xlsx 也走「读原始表格 → 规范化表头匹配」（与 CSV 同一套），容忍表头带换行/空格（如「重量\nkg」）、
+        // 列顺序不同 —— 客户真实文件表头常不规范，EasyExcel 精确匹配会整列漏读（曾导致「重量」全空）。
+        return parseTable(readXlsxRaw(bytes));
     }
 
     /**
@@ -788,33 +822,37 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
         if (content.startsWith("﻿")) {
             content = content.substring(1); // strip UTF-8 BOM
         }
-        List<List<String>> table = splitCsv(content);
+        return parseTable(splitCsv(content));
+    }
+
+    /**
+     * 原始二维表格（第 0 行表头 + 其余数据行）→ {@code LogisticsOrderImportRow} 列表。
+     * 表头按 {@link ExcelProperty} 标签匹配字段，列序可变；表头做规范化（去掉所有空白含换行）后再比对，
+     * 容忍客户文件的「重量\nkg」「重量 kg」等表头变体 —— 否则整列漏读（曾导致「重量」全空）。
+     */
+    private static List<LogisticsOrderImportRow> parseTable(List<List<String>> table) {
         if (table.isEmpty()) {
             return new ArrayList<>();
         }
-
-        // @ExcelProperty 标签 -> 字段
         Map<String, Field> labelToField = new HashMap<>();
         for (Field f : LogisticsOrderImportRow.class.getDeclaredFields()) {
             ExcelProperty ep = f.getAnnotation(ExcelProperty.class);
             if (ep != null && ep.value().length > 0 && !ep.value()[0].isBlank()) {
                 f.setAccessible(true);
-                labelToField.put(ep.value()[0].trim(), f);
+                labelToField.put(normKey(ep.value()[0]), f);
             }
         }
-        // 列序号 -> 字段
         List<String> header = table.get(0);
         Map<Integer, Field> colToField = new HashMap<>();
         for (int c = 0; c < header.size(); c++) {
-            String h = header.get(c) == null ? "" : header.get(c).trim();
-            Field f = labelToField.get(h);
+            Field f = labelToField.get(normKey(header.get(c)));
             if (f != null) {
                 colToField.put(c, f);
             }
         }
         if (colToField.isEmpty()) {
-            throw new BusinessException(400, "CSV 表头无法识别")
-                    .withHint("请使用后端下载的模板表头（业务日期/订单号/门店名称/... ），或改用 .xlsx");
+            throw new BusinessException(400, "表头无法识别")
+                    .withHint("请使用后端下载的模板表头（业务日期/订单号/门店名称/... ）");
         }
 
         List<LogisticsOrderImportRow> rows = new ArrayList<>();
@@ -837,6 +875,58 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
             rows.add(row);
         }
         return rows;
+    }
+
+    /** 表头规范化：去掉所有空白（含换行/制表符/全半角空格）后比对，容忍表头单元格的换行/空格变体。 */
+    private static String normKey(String s) {
+        return s == null ? "" : s.replaceAll("[\\s\\u3000]+", "");
+    }
+
+    /** 用 POI 把 xlsx 读成原始二维表格（每格转字符串），交给 {@link #parseTable} 统一匹配。 */
+    private static List<List<String>> readXlsxRaw(byte[] bytes) {
+        List<List<String>> table = new ArrayList<>();
+        try (Workbook wb = WorkbookFactory.create(new ByteArrayInputStream(bytes))) {
+            Sheet sheet = wb.getNumberOfSheets() > 0 ? wb.getSheetAt(0) : null;
+            if (sheet == null) {
+                return table;
+            }
+            DataFormatter fmt = new DataFormatter();
+            for (Row row : sheet) {
+                List<String> cells = new ArrayList<>();
+                short last = row.getLastCellNum();
+                for (int c = 0; c < last; c++) {
+                    Cell cell = row.getCell(c, Row.MissingCellPolicy.CREATE_NULL_AS_BLANK);
+                    cells.add(cellToString(cell, fmt));
+                }
+                table.add(cells);
+            }
+        } catch (IOException | RuntimeException e) {
+            throw new BusinessException(400, "Excel 解析失败: " + e.getMessage())
+                    .withHint("请确认是有效的 .xlsx 文件（或改用后端下载的模板）");
+        }
+        return table;
+    }
+
+    /** POI 单元格 → 字符串：数值不带科学计数/多余小数，日期转 yyyy-MM-dd，公式取计算结果。 */
+    private static String cellToString(Cell cell, DataFormatter fmt) {
+        if (cell == null) {
+            return "";
+        }
+        return switch (cell.getCellType()) {
+            case STRING -> cell.getStringCellValue().trim();
+            case NUMERIC -> {
+                if (DateUtil.isCellDateFormatted(cell)) {
+                    yield new java.text.SimpleDateFormat("yyyy-MM-dd").format(cell.getDateCellValue());
+                }
+                double d = cell.getNumericCellValue();
+                yield (d == Math.rint(d) && !Double.isInfinite(d))
+                        ? String.valueOf((long) d)
+                        : BigDecimal.valueOf(d).toPlainString();
+            }
+            case BOOLEAN -> String.valueOf(cell.getBooleanCellValue());
+            case FORMULA -> fmt.formatCellValue(cell);
+            default -> "";
+        };
     }
 
     /**

@@ -43,8 +43,6 @@ public class AmapClient implements DrivingRouteProvider {
     private static final String GEOCODE_URL = "https://restapi.amap.com/v3/geocode/geo";
     private static final String DISTANCE_URL = "https://restapi.amap.com/v3/distance";
     private static final String DIRECTION_URL = "https://restapi.amap.com/v3/direction/driving";
-    /** 默认查询城市 — 一加物流当前服务范围 (苏州)，缩小地理编码歧义。 */
-    private static final String DEFAULT_CITY = "苏州";
     private static final long TIMEOUT_SECONDS = 8;
     private static final String STATUS_OK = "1";
 
@@ -92,10 +90,11 @@ public class AmapClient implements DrivingRouteProvider {
         if (parsedBase == null) {
             return Optional.empty();
         }
+        // 暂不限定城市 —— 全国范围解析。地址通常含完整省市（如「江苏省常州市…」），高德据此即可准确定位；
+        // 不再硬编码「苏州」city，否则常州/无锡等外地门店会被限制在苏州范围内搜而全部解析失败（44 家待定位）。
         HttpUrl url = parsedBase.newBuilder()
                 .addQueryParameter("key", apiKey)
                 .addQueryParameter("address", address)
-                .addQueryParameter("city", DEFAULT_CITY)
                 .build();
         Request request = new Request.Builder().url(url).get().build();
 

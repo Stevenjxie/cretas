@@ -278,6 +278,33 @@ class LogisticsOrderImportServiceImplTest {
                 .noneSatisfy(e -> assertThat(e.getColumn()).isEqualTo("业务日期"));
     }
 
+    @Test
+    @DisplayName("preview — 模板示例行（哨兵订单号）自动跳过，不当真订单")
+    void previewSkipsExampleRow() {
+        LogisticsOrderImportRow example = row("2026-07-13", "示例数据·系统自动忽略此行", "沃尔玛浦东店",
+                "上海市浦东新区世纪大道100号", "10", "2", "250", "1.5", "08:00", "18:00", null, null, "浦东");
+        LogisticsOrderImportRow real = validRow("S100", "真实门店");
+        PreviewResultDto result = service().preview(F1, buildFile(List.of(example, real)), 1L);
+        // 示例行按哨兵订单号被跳过 → 只剩 1 行真实订单
+        assertThat(result.getRows()).hasSize(1);
+        assertThat(result.getRows().get(0).getStoreCode()).isEqualTo("S100");
+    }
+
+    @Test
+    @DisplayName("preview — 表头带空格（重量 kg）仍规范化匹配，重量列不漏读")
+    void previewToleratesHeaderWhitespace() {
+        // 客户真实文件表头常带空格/换行（如「重量 kg」），规范化后应匹配 DTO 的「重量kg」，不漏读整列。
+        String csv = "业务日期,订单号,门店名称,配送地址,件数,箱数,重量 kg,体积m³\n"
+                + "2026-07-13,S200,店200,地址200,,5,250,1.5\n";
+        var file = new MockMultipartFile("file", "orders.csv", "text/csv",
+                csv.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        PreviewResultDto result = service().preview(F1, file, 1L);
+        assertThat(result.getRows()).hasSize(1);
+        var r = result.getRows().get(0);
+        assertThat(r.getWeightKg()).isNotNull();   // 表头「重量 kg」带空格也能读到重量
+        assertThat(r.isValid()).isTrue();
+    }
+
     // ==================== preview: idempotency ====================
 
     @Test
