@@ -620,6 +620,10 @@ async function loadBomProcesses(productTypeId: string) {
   // 否则 0 legacy 工序 → 强制两点 (skip=true); 有 legacy 工序 → 保留当前选择。
   if (hasActiveWorkflow.value) {
     planForm.value.skipProcessReporting = false;
+    // 存货生产 + workflow: 数量字段刚显现, 给个正默认值 (el-input-number min=1), 供转批次。
+    if (!planForm.value.plannedQuantity || planForm.value.plannedQuantity < 1) {
+      planForm.value.plannedQuantity = 1;
+    }
   } else if (productWorkProcessList.value.length === 0) {
     planForm.value.skipProcessReporting = true;
   }
@@ -775,8 +779,13 @@ async function submitPlan() {
     ElMessage.warning('请选择产品类型');
     return;
   }
-  if (!planForm.value.plannedQuantity && planForm.value.sourceType !== 'SAFETY_STOCK') {
-    ElMessage.warning('请输入计划数量');
+  // raw-centric 多SKU: 存货生产常规无需数量, 但 workflow 驱动产品必须 (转批次 create-batch 要求 >0)。
+  const needQty = planForm.value.sourceType !== 'SAFETY_STOCK'
+    || (planForm.value.sourceType === 'SAFETY_STOCK' && hasActiveWorkflow.value);
+  if (!planForm.value.plannedQuantity && needQty) {
+    ElMessage.warning(hasActiveWorkflow.value && planForm.value.sourceType === 'SAFETY_STOCK'
+      ? '本产品由 Workflow 驱动，请输入计划投料数量'
+      : '请输入计划数量');
     return;
   }
   dialogLoading.value = true;
@@ -829,7 +838,29 @@ function isStepwise(row: any): boolean {
   return row.skipProcessReporting === false;
 }
 
-function openProcessEntry(row: any) {
+async function openProcessEntry(row: any) {
+  // raw-centric 多SKU (2026-07-13): workflow 驱动的计划逐道报工需先 materialize 批次
+  // (逐道抽屉只读 workflow-config, 无批次 → 返空 → 落回 legacy archetype tab)。
+  // 存货生产(SAFETY_STOCK)无「转批次」按钮, 手动/预测虽有但用户也可能直接点逐道录入 →
+  // 这里对「PENDING + 产品有 active workflow」的计划自动 create-batch, 使逐道抽屉直接出全工序。
+  // 非 workflow 或已转批次(IN_PROGRESS)计划不受影响 (跳过, 保持原行为)。
+  try {
+    const isPending = String(row?.status || '').toUpperCase() === 'PENDING';
+    if (row?.id && row?.productTypeId && isPending && factoryId.value) {
+      const act = await get<{ enabled?: boolean } | null>(
+        `/${factoryId.value}/product-process-workflows/${row.productTypeId}/activation`);
+      if (act.success && act.data && act.data.enabled === true) {
+        const br = await post(`/${factoryId.value}/production-plans/${row.id}/create-batch`);
+        if (br.success) {
+          row.status = 'IN_PROGRESS';
+          loadData();
+        }
+      }
+    }
+  } catch {
+    // 诚实降级: create-batch 失败(如数量为0) → 仍打开抽屉, ProcessSheet 自行探 workflow-config,
+    // 拿不到就落 legacy; 后端错误消息由 interceptor sticky toast 展示。
+  }
   entryRow.value = row;
   entryDrawerVisible.value = true;
 }
@@ -3324,6 +3355,19 @@ function handleAiFill(params: TableRow) {
           <el-input-number v-model="planForm.plannedQuantity" :min="1" style="width: 100%" />
           <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 2px;">
             按产品成品单位填写；首道投料数量以逐工序报工和配方出成率为准
+          </div>
+        </el-form-item>
+        <!-- raw-centric 多SKU (2026-07-13): 存货生产 + 产品由 Workflow 驱动 → 需设投料数量,
+             供转批次 (create-batch 要求 >0, 否则 400 数量必须大于0)。非 workflow 的存货生产仍
+             按实际小结累计不填数量 (不回归)。 -->
+        <el-form-item
+          v-if="planForm.sourceType === 'SAFETY_STOCK' && hasActiveWorkflow"
+          label="计划投料数量"
+          required
+        >
+          <el-input-number v-model="planForm.plannedQuantity" :min="1" style="width: 100%" />
+          <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 2px;">
+            本产品由「产品工序 Workflow」驱动分支生产；填首道投料原料数量（如猪蹄 kg）。转批次后按图逐道报工，各终端成品各自入库。可多次小结增量入库。
           </div>
         </el-form-item>
         <el-form-item label="计划生产日" required>
