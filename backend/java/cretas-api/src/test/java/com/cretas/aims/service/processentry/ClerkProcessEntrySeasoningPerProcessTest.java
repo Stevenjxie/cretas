@@ -192,4 +192,29 @@ class ClerkProcessEntrySeasoningPerProcessTest {
         assertNull(computePerProcess(step("熟制"), List.of(new BigDecimal("100")), new ArrayList<>()),
                 "无 BOM → per-工序 返 null, 走原路径");
     }
+
+    @Test
+    @DisplayName("F2: 整-SKU 回退只用未迁移(work_process_id NULL)明细, 不碰已迁移明细")
+    void fallback_usesWorkProcessIdIsNullOnly() throws Exception {
+        // 一个未配 per-工序 的调味步 → per-工序 返 null → computeSeasoningCost 落整-SKU 回退。
+        // 只 stub IS NULL 版查询 (不 stub 旧 findByRecipeIdOrderBySeqAsc) → 若代码错用旧查询会返空→0,
+        // 得到 100 即证明回退走的是 work_process_id IS NULL 分区 (F2 修复生效, 已迁移明细被排除)。
+        when(workProcessRepository.findByFactoryIdAndProcessName(F, "老卤汁")).thenReturn(List.of());
+        stubRecipe();
+        when(bomSeasoningItemRepo.findByRecipeIdAndWorkProcessIdIsNullOrderBySeqAsc(RECIPE))
+                .thenReturn(List.of(line("COOKING", "1000", "2"))); // 未迁移桶: cookPerKg=2.0
+        StepEntry st = step("老卤汁");
+        st.setInputQuantity(new BigDecimal("50")); // N=1 单锅=整批投入 50kg → 50×2×1 = 100
+
+        BigDecimal cost = (BigDecimal) computeSeasoningCostMethod().invoke(service, F, PT, st, new ArrayList<String>());
+        assertEquals(0, new BigDecimal("100.0000").compareTo(cost),
+                "回退按 work_process_id IS NULL 明细算 = 50×2.0");
+    }
+
+    private Method computeSeasoningCostMethod() throws Exception {
+        Method m = ClerkProcessEntryServiceImpl.class.getDeclaredMethod(
+                "computeSeasoningCost", String.class, String.class, StepEntry.class, List.class);
+        m.setAccessible(true);
+        return m;
+    }
 }

@@ -141,6 +141,12 @@
 
 ---
 
+## Slice B 必做(re-audit 2026-07-13 发现,Slice A 未做)
+
+- **🔒 孤儿调料配置守卫**:一个 `WorkProcess` 被删除后,`bom_seasoning_items`/`bom_process_seasoning` 里挂它 `work_process_id` 的调料配置会成孤儿 —— per-工序 路径(没步解析到该 wpId)和整-SKU 回退(排除非空 wpId)**两边都读不到** → 该部分调料成本**静默变 0 无告警**(比 F3 更隐蔽)。Slice B 建配置生命周期时,加**删工序前守卫**:`WorkProcessServiceImpl.delete()` 若 `bom_seasoning_items`/`bom_process_seasoning` 有引用该 wpId 的行 → 409 阻断"请先移除调料配方引用"。(Slice A 未做:此洞需 Slice B 的配置 UI 先存在才可能触发,且需给 `WorkProcessServiceImpl` 注入两个 bom repo + 加 `existsByWorkProcessId` finder。)
+- **F4 补测**:`WorkProcessServiceImplTest` 补一条改名撞名 → 409 的用例(现仅由"未破坏既有测试"间接推断)。
+- **已知 pre-existing(非本次引入,可选修)**:同一 SKU 若有**多个名字命中调味正则但都未配 per-工序** 的步(如都叫"卤水冲洗"),旧整-SKU 回退会各算一遍 NULL 桶 → 重复计(code 注释自陈的老坑)。Slice B/后续可考虑整-SKU 回退在一次报工内去重。
+
 ## 明确不做(边界)
 
 - **不迁移到 ProcessMaterialRecipe**(丢锅序数学);它继续服务 operator yield 路径不动。
