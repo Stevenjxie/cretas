@@ -1519,13 +1519,26 @@ public final class LogisticsRoutingAlgorithm {
     // Step A helper
     // ============================================================
 
+    /**
+     * 选一个区域的「主车」(组 primary) —— 服务该区域的车里挑<b>容量最大</b>者 (并列取 vehicleId 最小)。
+     *
+     * <p><b>Task 1 (Steve 2026-07-13, 松区域趟数最优)</b>: 原按 vehicleId 字典序取<b>第一辆</b>能服务该区域的车,
+     * 在多车共服一区 (松区域/区域重叠) 时会把整区订单堆给「排头」车 —— 若排头是小车, packGroup 便用小车容量
+     * 装箱 (大车被晾着), 车次数暴涨 (实测 30m³ 全堆 5m³ 小排头 → 4 趟, 而 V2(20)+V3(20) 只需 2 趟)。
+     * 改「容量最大优先」让主车 = 能吃下最多的车, 装箱到大容量 → 趟数最少。
+     *
+     * <p><b>为何不回归 demo (6 趟护栏)</b>: demo 里唯一多车共服的区是「吴中」(V2 15m³ + V4 12m³),
+     * 容量最大 = V2 = 原字典序首匹配 (V2 &lt; V4), 结果不变。其余区各仅一辆车服务, 不受影响。
+     * 等容量车队 (多数既有单测夹具) 并列回退 vehicleId 最小 = 与原行为逐字段一致。
+     */
     private static VehicleInput findFirstServiceAreaMatch(List<VehicleInput> vehiclesSorted, String areaCode) {
         if (areaCode == null || areaCode.isBlank()) {
             return null;
         }
         return vehiclesSorted.stream()
                 .filter(v -> areaMatches(v.serviceAreas(), areaCode))
-                .findFirst()
+                .min(Comparator.comparing(VehicleInput::capacityCbm, Comparator.reverseOrder())
+                        .thenComparing(VehicleInput::vehicleId))
                 .orElse(null);
     }
 
