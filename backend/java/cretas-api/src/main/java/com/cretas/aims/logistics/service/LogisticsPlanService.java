@@ -72,6 +72,9 @@ public interface LogisticsPlanService {
     /** POST /plans/{planId}/trips/{tripId}/confirm — 车次必须无 NEEDS_* 态才能确认。 */
     PlanSnapshotDto confirmTrip(String factoryId, String planId, String tripId, Long version, Long userId);
 
+    /** POST /plans/{planId}/trips/confirm-all — 一次性确认全部就绪(DRAFT)车次(实时, 前端不再逐个串行)。 */
+    PlanSnapshotDto confirmAllTrips(String factoryId, String planId, Long userId);
+
     /** POST /plans/{planId}/confirm — 全部车次 CONFIRMED 且零未分配门店才能确认。 */
     PlanSnapshotDto confirmPlan(String factoryId, String planId, Long version, Long userId);
 }

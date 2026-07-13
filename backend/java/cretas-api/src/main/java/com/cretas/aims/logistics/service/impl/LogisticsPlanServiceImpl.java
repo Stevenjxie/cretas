@@ -427,6 +427,25 @@ public class LogisticsPlanServiceImpl implements LogisticsPlanService {
 
     @Override
     @Transactional
+    public PlanSnapshotDto confirmAllTrips(String factoryId, String planId, Long userId) {
+        LogisticsPlan plan = loadPlan(factoryId, planId);
+        assertPlanNotConfirmed(plan);
+        // 一次性确认全部就绪(DRAFT)车次 —— 前端一键确认改调本接口(1 次请求), 不再逐个串行确认(N 次请求慢)。
+        // NEEDS_VEHICLE/DRIVER/ROUTE_DATA 未就绪的跳过(不阻断其余), 已 CONFIRMED 的幂等跳过。
+        List<LogisticsTrip> trips = tripRepository.findByPlanIdAndDeletedAtIsNull(planId);
+        for (LogisticsTrip trip : trips) {
+            if (trip.getStatus() == TripStatus.DRAFT) {
+                trip.setStatus(TripStatus.CONFIRMED);
+                tripRepository.save(trip);
+            }
+        }
+        recomputePlanTotals(factoryId, plan);
+        planRepository.save(plan);
+        return buildSnapshot(factoryId, plan);
+    }
+
+    @Override
+    @Transactional
     public PlanSnapshotDto confirmPlan(String factoryId, String planId, Long version, Long userId) {
         LogisticsPlan plan = loadPlan(factoryId, planId);
         if (plan.getStatus() == PlanStatus.CONFIRMED || plan.getStatus() == PlanStatus.EXPORTED) {

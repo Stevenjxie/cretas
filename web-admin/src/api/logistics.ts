@@ -553,6 +553,11 @@ export function confirmTrip(factoryId: string, planId: string, tripId: string, v
   return post<PlanSnapshot>(`/${factoryId}/logistics/plans/${planId}/trips/${tripId}/confirm`, { version });
 }
 
+/** 一键确认全部就绪车次 —— 后端一次性确认(实时), 前端不再逐个串行。 */
+export function confirmAllTrips(factoryId: string, planId: string) {
+  return post<PlanSnapshot>(`/${factoryId}/logistics/plans/${planId}/trips/confirm-all`, {});
+}
+
 export function confirmPlan(factoryId: string, planId: string, version?: number) {
   return post<PlanSnapshot>(`/${factoryId}/logistics/plans/${planId}/confirm`, { version });
 }

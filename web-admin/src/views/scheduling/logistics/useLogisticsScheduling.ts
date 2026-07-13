@@ -25,6 +25,7 @@ import type { PageResponse } from '@/types/api';
 import {
   commitOrderImport,
   createOrdersManual,
+  confirmAllTrips as apiConfirmAllTrips,
   confirmPlan as apiConfirmPlan,
   confirmTrip as apiConfirmTrip,
   createDriver as apiCreateDriver,
@@ -645,14 +646,39 @@ async function assignDriver(driverId: string | null): Promise<boolean> {
 async function confirmTrip(): Promise<boolean> {
   const trip = activeTrip.value;
   if (!trip || !plan.value) return false;
+  const factoryId = requireFactoryId();
+  // 乐观更新：立即本地把该车次标 confirmed，UI 瞬间响应（不等后端往返）；后端返回后再以权威结果校正。
+  const target = plan.value.trips.find((t) => t.id === trip.id);
+  const prevStatus = target?.status;
+  if (target) target.status = 'confirmed';
   try {
-    const factoryId = requireFactoryId();
     const res = await apiConfirmTrip(factoryId, plan.value.id, trip.id, trip.version);
     applyPlanSnapshot(res.data);
     activeStep.value = 'confirm';
     planError.value = null;
     return true;
   } catch (err) {
+    if (target && prevStatus) target.status = prevStatus; // 失败回滚
+    if (await handlePlanConflict(err)) return false;
+    planError.value = errorMessage(err);
+    return false;
+  }
+}
+
+/** 一键确认：后端一次性确认全部就绪车次（实时，不再逐个串行）；前端乐观立即全标 confirmed，失败回滚。 */
+async function confirmAllTrips(): Promise<boolean> {
+  if (!plan.value) return false;
+  const factoryId = requireFactoryId();
+  const prev = plan.value.trips.map((t) => ({ id: t.id, status: t.status }));
+  plan.value.trips.forEach((t) => { if (t.status === 'draft') t.status = 'confirmed'; });
+  try {
+    const res = await apiConfirmAllTrips(factoryId, plan.value.id);
+    applyPlanSnapshot(res.data);
+    planError.value = null;
+    return true;
+  } catch (err) {
+    const byId = new Map(prev.map((p) => [p.id, p.status]));
+    plan.value?.trips.forEach((t) => { const s = byId.get(t.id); if (s) t.status = s; });
     if (await handlePlanConflict(err)) return false;
     planError.value = errorMessage(err);
     return false;
@@ -943,6 +969,7 @@ const state = {
   assignVehicle,
   assignDriver,
   confirmTrip,
+  confirmAllTrips,
   confirmSchedule,
   previewExport,
   exportCsv,

@@ -139,6 +139,15 @@ public class LogisticsPlanController {
         return ApiResponse.success("车次已确认", planService.confirmTrip(factoryId, planId, tripId, version, userId));
     }
 
+    @PostMapping("/plans/{planId}/trips/confirm-all")
+    @Operation(summary = "一键确认全部车次", description = "一次性确认全部就绪(DRAFT)车次; NEEDS_* 未就绪跳过, 已确认幂等")
+    public ApiResponse<PlanSnapshotDto> confirmAllTrips(
+            @PathVariable String factoryId,
+            @PathVariable String planId) {
+        Long userId = SecurityUtils.getCurrentUserId();
+        return ApiResponse.success("已确认全部车次", planService.confirmAllTrips(factoryId, planId, userId));
+    }
+
     @PostMapping("/plans/{planId}/confirm")
     @Operation(summary = "正式确认计划", description = "全部车次已确认且零未分配门店才能确认；重复确认幂等")
     public ApiResponse<PlanSnapshotDto> confirmPlan(

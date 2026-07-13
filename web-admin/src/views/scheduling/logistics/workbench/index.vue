@@ -201,13 +201,9 @@ async function confirmTrip(tripId: string): Promise<void> {
   await state.confirmTrip();
 }
 
-/** 一键确认全部草稿车次 —— 串行确认, 每步拿最新 snapshot 避免版本冲突; 任一失败即停留提示。 */
+/** 一键确认全部车次 —— 后端一次性确认(实时, 乐观更新立即全标已确认), 不再逐个串行请求。 */
 async function confirmAllTrips(): Promise<void> {
-  const draftIds = state.scheduleResult.value.trips.filter((t) => t.status === 'draft').map((t) => t.id);
-  for (const id of draftIds) {
-    state.selectTrip(id);
-    if (!(await state.confirmTrip())) break;
-  }
+  await state.confirmAllTrips();
 }
 
 async function confirmSchedule(): Promise<void> {
