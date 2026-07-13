@@ -138,6 +138,7 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                 .workflowNodeId(task.getWorkflowNodeId())
                 .workProcessId(task.getWorkProcessId())
                 .processName(workProcess != null ? workProcess.getProcessName() : null)
+                .processCategory(workProcess != null ? workProcess.getProcessCategory() : null)
                 .defaultCostCategory(
                         productWorkProcess != null ? productWorkProcess.getDefaultCostCategory() : null)
                 .processOrder(task.getProcessOrder())

@@ -35,6 +35,8 @@ public class WorkflowClerkSheetConfigDTO {
         private String workflowNodeId;
         private String workProcessId;
         private String processName;
+        /** 工序类别 (WorkProcess.processCategory, 如 熟制/注射/加工) — 调料配方按工序: 报工据此驱动锅数录入。 */
+        private String processCategory;
         private String defaultCostCategory;
         private Integer processOrder;
         private String plannedUnit;

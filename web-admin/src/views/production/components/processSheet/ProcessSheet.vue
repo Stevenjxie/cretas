@@ -203,10 +203,9 @@ function mapWorkflowProcesses(descriptors: WorkflowProcessDescriptor[]): ProcEnt
         inputUnit: proc.inputs?.[0]?.unit?.trim() || 'kg',
         outputUnit: proc.output?.unit?.trim() || null,
         workflowContext: proc,
-        // Slice C: WorkflowProcessDescriptor 只带 defaultCostCategory (成本桶), 不带真实
-        // WorkProcess.processCategory —— 后端 DTO 缺该字段 (见 ProcEntry 类型注释), 诚实留 null。
-        // needsPotCount 对 workflow 计划仍靠 isShuZhi archetype 兜底。
-        processCategory: null,
+        // Slice C: 后端 WorkflowClerkSheetConfigDTO.ProcessDescriptor 已带真实 WorkProcess.processCategory
+        // (熟制/注射) → workflow 计划的熟制工序也能按类别驱动锅数录入 (不再只靠 isShuZhi archetype)。
+        processCategory: proc.processCategory ?? null,
       };
       return entry;
     })

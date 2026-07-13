@@ -429,6 +429,8 @@ export interface WorkflowProcessDescriptor {
   workflowNodeId: string;
   workProcessId: string;
   processName: string | null;
+  /** 工序类别 (WorkProcess.processCategory, 熟制/注射/…) — Slice C: workflow 计划报工据此驱动锅数录入。 */
+  processCategory: string | null;
   defaultCostCategory: string | null;
   processOrder: number;
   plannedUnit: string | null;
