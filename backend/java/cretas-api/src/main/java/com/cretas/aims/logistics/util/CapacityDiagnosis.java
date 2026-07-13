@@ -12,6 +12,7 @@ import java.math.RoundingMode;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -52,7 +53,18 @@ public final class CapacityDiagnosis {
         BigDecimal totalDemandKg = activeOrders.stream()
                 .map(o -> nvl(o.getWeightKg())).reduce(BigDecimal.ZERO, BigDecimal::add);
 
-        Collection<LogisticsVehicleProfile> fleet = fleetVehicles == null ? List.of() : fleetVehicles;
+        // 只统计「服务本批订单所在区域」的车队 —— 与本批完全不相关区域的车不算进运力
+        // (否则同一 factory 下服务别的区域的车会虚增"车队容量", 让"够/不够"判定失真;
+        //  同一系统里可并存"够"和"不够"两套场景各自诊断准确)。
+        // 订单无区域信息时诚实退化: 不过滤, 用全部在册车 (与本改动前行为逐字段一致)。
+        Set<String> orderAreas = activeOrders.stream()
+                .map(LogisticsDeliveryOrder::getAreaCode)
+                .filter(a -> a != null && !a.isBlank())
+                .collect(Collectors.toSet());
+        Collection<LogisticsVehicleProfile> fleetAll = fleetVehicles == null ? List.of() : fleetVehicles;
+        Collection<LogisticsVehicleProfile> fleet = orderAreas.isEmpty()
+                ? fleetAll
+                : fleetAll.stream().filter(v -> servesAnyArea(v.getServiceAreas(), orderAreas)).toList();
         BigDecimal fleetSingleRoundCbm = fleet.stream()
                 .map(v -> nvl(v.getCapacityCbm())).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal fleetSingleRoundKg = fleet.stream()
@@ -116,7 +128,7 @@ public final class CapacityDiagnosis {
                     "运力充足 — %d 辆车一轮可送完 %d 店 / %sm³。",
                     vehicleCount, totalStores, demandCbm.toPlainString());
             case INSUFFICIENT -> String.format(
-                    "车队单轮运力不足 — 本批 %sm³ 超过在册车队单轮 %sm³，需跑 %d 趟（有车回仓补货再出发）。"
+                    "车队单轮运力不足 — 本批 %sm³ 超过可服务本批区域的车队单轮 %sm³，需跑 %d 趟（有车回仓补货再出发）。"
                             + "建议增补约 %sm³ 运力可减少回仓趟次。",
                     demandCbm.toPlainString(), fleetCbm.toPlainString(), usedTripCount,
                     suggestedAddCbm.toPlainString());
@@ -124,6 +136,19 @@ public final class CapacityDiagnosis {
                     "%d 单暂无法派送 — 所在区域无车覆盖，或单件体积/重量超最大车。请为相应区域增派车辆或联系管理员。",
                     unassignedCount);
         };
+    }
+
+    /** 车辆 service_areas (逗号分隔) 是否服务本批任一订单区域。无区域配置的车不算服务任何区域。 */
+    private static boolean servesAnyArea(String serviceAreasCsv, Set<String> orderAreas) {
+        if (serviceAreasCsv == null || serviceAreasCsv.isBlank()) {
+            return false;
+        }
+        for (String a : serviceAreasCsv.split(",")) {
+            if (orderAreas.contains(a.trim())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static BigDecimal nvl(BigDecimal value) {

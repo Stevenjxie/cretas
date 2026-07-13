@@ -125,7 +125,39 @@ class CapacityDiagnosisTest {
         assertThat(result.getVerdict()).isEqualTo(CapacityVerdict.SUFFICIENT);
     }
 
+    @Test
+    @DisplayName("只统计服务本批区域的车队 — 别的区域的车不虚增运力（够/不够两场景可并存）")
+    void onlyCountsVehiclesServingOrderAreas() {
+        List<LogisticsDeliveryOrder> orders = List.of(
+                orderInArea("o1", "5.0", "1200", "A"),
+                orderInArea("o2", "4.0", "900", "A"));
+        // V-A 服务 A（相关）；V-B cap100 但只服务 B（与本批无关，不该算进运力）。
+        List<LogisticsVehicleProfile> fleet = List.of(
+                vehicleInAreas("V-A", "10", "3200", "A"),
+                vehicleInAreas("V-B", "100", "9999", "B"));
+        List<LogisticsTrip> trips = List.of(trip("t1", "V-A"));
+
+        CapacityDiagnosisDto result = CapacityDiagnosis.diagnose(orders, trips, fleet, 0);
+
+        // 车队容量只算 V-A 的 10（不含 V-B 的 100），需求 9 ≤ 10，1 趟 → SUFFICIENT。
+        assertThat(result.getFleetSingleRoundCbm()).isEqualByComparingTo("10.0");
+        assertThat(result.getVerdict()).isEqualTo(CapacityVerdict.SUFFICIENT);
+    }
+
     // ---- fixtures ----
+
+    private static LogisticsDeliveryOrder orderInArea(String id, String volumeCbm, String weightKg, String area) {
+        LogisticsDeliveryOrder o = order(id, volumeCbm, weightKg);
+        o.setAreaCode(area);
+        return o;
+    }
+
+    private static LogisticsVehicleProfile vehicleInAreas(String vehicleId, String capacityCbm,
+            String maxWeightKg, String areasCsv) {
+        LogisticsVehicleProfile v = vehicle(vehicleId, capacityCbm, maxWeightKg);
+        v.setServiceAreas(areasCsv);
+        return v;
+    }
 
     private static LogisticsDeliveryOrder order(String id, String volumeCbm, String weightKg) {
         return LogisticsDeliveryOrder.builder()
