@@ -10,7 +10,7 @@ import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { Plus, Search, Refresh } from '@element-plus/icons-vue';
-import { formatDateTimeCell } from '@/utils/tableFormatters';
+import { formatDateTimeCell, fmtQty, formatAmount } from '@/utils/tableFormatters';
 import type { FormInstance } from 'element-plus';
 import type { TableRow } from '@/types/api';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
@@ -27,6 +27,93 @@ const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 10, total: 0 });
 const searchKeyword = ref('');
+
+// ==================== 按物料汇总 / 按批次明细 切换 ====================
+// F006 六膳门客户原话痛点: 同一原料入库多次 → 一堆散批次看着重复。
+// 汇总模式按 materialTypeId 把当前搜索条件下的全部批次聚合成一行/物料 (合计量 + 批次数),
+// 点开可展开看具体批次。纯前端聚合 (不新增后端端点) — 复用现有分页列表接口, 汇总时改用大 size
+// 一次拉全量 (而非当前页 10 条), 避免"只汇总当前页"造成误导性小计。
+interface MaterialSummaryGroup {
+  materialTypeId: string;
+  materialName: string;
+  unit: string;
+  totalQuantity: number;
+  totalValue: number | null;
+  batchCount: number;
+  batches: TableRow[];
+}
+
+const viewMode = ref<'detail' | 'summary'>('detail');
+const summaryLoading = ref(false);
+const summaryRows = ref<TableRow[]>([]);
+const summaryTruncated = ref(false);
+// 汇总一次拉取的上限 — F006 规模下批次总数远小于此; 若真的超过, summaryTruncated 会提示用户缩小搜索范围
+// 而不是静默漏算 (防呆: 不返回看似完整实则不全的假汇总)。
+const SUMMARY_FETCH_SIZE = 2000;
+
+async function loadSummaryData() {
+  if (!factoryId.value) return;
+  summaryLoading.value = true;
+  summaryTruncated.value = false;
+  try {
+    const response = await get(`/${factoryId.value}/material-batches`, {
+      params: {
+        page: 1,
+        size: SUMMARY_FETCH_SIZE,
+        keyword: searchKeyword.value || undefined,
+      },
+    });
+    if (response.success && response.data) {
+      summaryRows.value = response.data.content || [];
+      const total = Number(response.data.totalElements) || 0;
+      summaryTruncated.value = total > summaryRows.value.length;
+    } else if (response.success === false) {
+      ElMessage.error(response.message || '加载按物料汇总数据失败');
+      summaryRows.value = [];
+    }
+  } catch (error) {
+    console.error('加载汇总失败:', error);
+    ElMessage.error('加载按物料汇总数据失败，请重试');
+    summaryRows.value = [];
+  } finally {
+    summaryLoading.value = false;
+  }
+}
+
+const groupedSummary = computed<MaterialSummaryGroup[]>(() => {
+  const map = new Map<string, MaterialSummaryGroup>();
+  for (const row of summaryRows.value) {
+    const key = String(row.materialTypeId || row.materialName || row.materialTypeName || 'unknown');
+    const qty = Number(row.currentQuantity ?? row.quantity ?? row.receiptQuantity ?? 0) || 0;
+    const unit = String(row.quantityUnit || row.unit || '-');
+    const name = String(row.materialName || row.materialTypeName || '未命名物料');
+    let group = map.get(key);
+    if (!group) {
+      group = {
+        materialTypeId: key,
+        materialName: name,
+        unit,
+        totalQuantity: 0,
+        totalValue: canViewPrice.value ? 0 : null,
+        batchCount: 0,
+        batches: [],
+      };
+      map.set(key, group);
+    }
+    group.totalQuantity += qty;
+    if (group.totalValue !== null) {
+      group.totalValue += Number(row.totalValue) || 0;
+    }
+    group.batchCount += 1;
+    group.batches.push(row);
+  }
+  return Array.from(map.values()).sort((a, b) => a.materialName.localeCompare(b.materialName, 'zh-CN'));
+});
+
+function handleViewModeChange(mode: string | number | boolean) {
+  viewMode.value = mode as 'detail' | 'summary';
+  if (viewMode.value === 'summary') loadSummaryData();
+}
 
 const materialTypes = ref<TableRow[]>([]);
 const suppliers = ref<TableRow[]>([]);
@@ -92,13 +179,21 @@ async function loadData() {
 
 function handleSearch() {
   pagination.value.page = 1;
-  loadData();
+  if (viewMode.value === 'summary') {
+    loadSummaryData();
+  } else {
+    loadData();
+  }
 }
 
 function handleRefresh() {
   searchKeyword.value = '';
   pagination.value.page = 1;
-  loadData();
+  if (viewMode.value === 'summary') {
+    loadSummaryData();
+  } else {
+    loadData();
+  }
 }
 
 function handlePageChange(page: number) {
@@ -308,6 +403,7 @@ async function handleFormSubmit() {
       ElMessage.success(editingId.value ? '更新成功' : '入库登记成功');
       formDialogVisible.value = false;
       loadData();
+      if (viewMode.value === 'summary') loadSummaryData();
     } else {
       ElMessage.error(response.message || '操作失败');
     }
@@ -389,6 +485,10 @@ async function handleGenerateLabel(row: TableRow) {
       </template>
 
       <div class="search-bar">
+        <el-radio-group v-model="viewMode" @change="handleViewModeChange">
+          <el-radio-button label="detail">按批次明细</el-radio-button>
+          <el-radio-button label="summary">按物料汇总</el-radio-button>
+        </el-radio-group>
         <el-input
           v-model="searchKeyword"
           placeholder="搜索批次号/原料名称"
@@ -401,7 +501,76 @@ async function handleGenerateLabel(row: TableRow) {
         <el-button :icon="Refresh" @click="handleRefresh">重置</el-button>
       </div>
 
-      <el-table :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
+      <!-- 按物料汇总视图 (F006 客户原话痛点: 同一原料入库多次, 看着一堆散批次) -->
+      <template v-if="viewMode === 'summary'">
+        <div class="summary-hint">
+          <span>共 <strong>{{ groupedSummary.length }}</strong> 种原料在库</span>
+          <span v-if="summaryTruncated" class="summary-warning">
+            数据量较大, 当前汇总仅基于前 {{ summaryRows.length }} 条批次记录, 如有遗漏请缩小搜索范围重新汇总
+          </span>
+        </div>
+        <el-table
+          :data="groupedSummary"
+          v-loading="summaryLoading"
+          empty-text="暂无库存数据"
+          stripe
+          border
+          row-key="materialTypeId"
+          style="width: 100%"
+        >
+          <el-table-column type="expand">
+            <template #default="{ row }">
+              <el-table :data="row.batches" size="small" border stripe class="nested-batch-table">
+                <el-table-column prop="batchNumber" label="批次号" width="160" />
+                <el-table-column prop="supplierName" label="供应商" min-width="140" show-overflow-tooltip />
+                <el-table-column label="数量" width="120" align="right">
+                  <template #default="{ row: b }">
+                    {{ b.quantity ?? b.currentQuantity ?? b.receiptQuantity ?? '-' }} {{ b.quantityUnit || b.unit || '' }}
+                  </template>
+                </el-table-column>
+                <el-table-column label="状态" width="100" align="center">
+                  <template #default="{ row: b }">
+                    <el-tag :type="getStatusType(b.status)" size="small">{{ getStatusText(b.status) }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="expiryDate" label="过期日期" width="120" />
+                <el-table-column prop="createdAt" label="入库时间" width="180" :formatter="formatDateTimeCell" />
+                <el-table-column label="操作" width="180" fixed="right" align="center">
+                  <template #default="{ row: b }">
+                    <el-button type="primary" link size="small" @click="handleView(b)">查看</el-button>
+                    <el-button v-if="canWrite" type="primary" link size="small" @click="handleEdit(b)">编辑</el-button>
+                    <el-button
+                      v-if="canWrite"
+                      type="success"
+                      link
+                      size="small"
+                      :loading="labelGenerating === String(b.id)"
+                      @click="handleGenerateLabel(b)"
+                    >生成标签</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </template>
+          </el-table-column>
+          <el-table-column label="原料名称" min-width="180" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.materialName }}</template>
+          </el-table-column>
+          <el-table-column label="合计可用量" width="150" align="right">
+            <template #default="{ row }"><strong>{{ fmtQty(row.totalQuantity) }}</strong></template>
+          </el-table-column>
+          <el-table-column label="单位" width="90" align="center">
+            <template #default="{ row }">{{ row.unit }}</template>
+          </el-table-column>
+          <el-table-column v-if="canViewPrice" label="合计价值" width="140" align="right">
+            <template #default="{ row }">{{ formatAmount(row.totalValue) }}</template>
+          </el-table-column>
+          <el-table-column label="批次数" width="120" align="right">
+            <template #default="{ row }">{{ row.batchCount }} 个批次</template>
+          </el-table-column>
+        </el-table>
+      </template>
+
+      <el-table v-else :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
         <el-table-column prop="batchNumber" label="批次号" width="160" />
         <el-table-column label="原料类型" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">{{ row.materialTypeName || row.materialName || '-' }}</template>
@@ -453,7 +622,7 @@ async function handleGenerateLabel(row: TableRow) {
         </el-table-column>
       </el-table>
 
-      <div class="pagination-wrapper">
+      <div v-if="viewMode === 'detail'" class="pagination-wrapper">
         <el-pagination
           v-model:current-page="pagination.page"
           v-model:page-size="pagination.size"
@@ -663,6 +832,25 @@ async function handleGenerateLabel(row: TableRow) {
   gap: 12px;
   margin-bottom: 16px;
   flex-wrap: wrap;
+  align-items: center;
+}
+
+.summary-hint {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: var(--text-color-secondary, #909399);
+}
+
+.summary-warning {
+  color: var(--el-color-warning, #e6a23c);
+}
+
+.nested-batch-table {
+  width: calc(100% - 48px);
+  margin-left: 48px;
 }
 
 .el-table {
