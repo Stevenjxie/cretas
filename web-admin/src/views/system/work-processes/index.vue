@@ -36,7 +36,7 @@ const formRef = ref();
 const submitting = ref(false);
 
 const CATEGORIES = [
-  '前处理', '加工', '包装', '灭菌', '质检', '存储', '配送', '其他'
+  '前处理', '加工', '熟制', '注射', '包装', '灭菌', '质检', '存储', '配送', '其他'
 ];
 
 type WorkProcessForm = Partial<WorkProcessItem>;
