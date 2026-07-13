@@ -1532,9 +1532,8 @@ public final class LogisticsRoutingAlgorithm {
      * 等容量车队 (多数既有单测夹具) 并列回退 vehicleId 最小 = 与原行为逐字段一致。
      */
     private static VehicleInput findFirstServiceAreaMatch(List<VehicleInput> vehiclesSorted, String areaCode) {
-        if (areaCode == null || areaCode.isBlank()) {
-            return null;
-        }
+        // 区域是可选偏好：订单空区域 / 车辆空服务区 都由 areaMatches 放行（见其注释），
+        // 空区域时按「容量最大优先、并列 vehicleId 最小」选任意车，不再整批无法派送。
         return vehiclesSorted.stream()
                 .filter(v -> areaMatches(v.serviceAreas(), areaCode))
                 .min(Comparator.comparing(VehicleInput::capacityCbm, Comparator.reverseOrder())
@@ -1543,7 +1542,14 @@ public final class LogisticsRoutingAlgorithm {
     }
 
     private static boolean areaMatches(Set<String> serviceAreas, String areaCode) {
-        return serviceAreas != null && !serviceAreas.isEmpty() && serviceAreas.contains(areaCode);
+        // 区域约束放宽（否则客户不填区域就整批无法派送 — 区域本是选填），三条统一在此，供所有调用方一致：
+        // - 订单未填区域 → 不约束，任意车可服务；
+        // - 车辆未设服务区域 → 服务全部区域；
+        // - 否则车辆服务区须包含订单区域。
+        if (areaCode == null || areaCode.isBlank()) {
+            return true;
+        }
+        return serviceAreas == null || serviceAreas.isEmpty() || serviceAreas.contains(areaCode);
     }
 
     // ============================================================
@@ -1866,7 +1872,9 @@ public final class LogisticsRoutingAlgorithm {
             // 司机未配置专属区域限制 → 沿用车辆层已校验过的区域覆盖 (spec §4 Step D 增强, 无额外限制)
             return true;
         }
-        return boxOrders.stream().allMatch(o -> driverServiceAreas.contains(o.areaCode()));
+        // 订单未填区域 → 不约束该单（与 areaMatches 一致，区域是选填）；否则须在司机服务区内。
+        return boxOrders.stream().allMatch(o ->
+                o.areaCode() == null || o.areaCode().isBlank() || driverServiceAreas.contains(o.areaCode()));
     }
 
     // ============================================================
