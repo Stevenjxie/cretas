@@ -42,6 +42,7 @@ import {
   listVehicles as apiListVehicles,
   moveStop as apiMoveStop,
   previewOrderImport,
+  previewOrderImportPaste,
   regeneratePlan as apiRegeneratePlan,
   reorderStops as apiReorderStops,
   setTripDriver as apiSetTripDriver,
@@ -271,12 +272,28 @@ async function downloadTemplate(): Promise<void> {
   }
 }
 
-async function uploadPreview(file: File): Promise<void> {
+async function uploadPreview(file: File, columnMapping?: Record<number, string>): Promise<void> {
   importError.value = null;
   uploading.value = true;
   try {
     const factoryId = requireFactoryId();
-    const res = await previewOrderImport(factoryId, file);
+    const res = await previewOrderImport(factoryId, file, columnMapping);
+    preview.value = res.data;
+  } catch (err) {
+    importError.value = errorMessage(err);
+    preview.value = null;
+  } finally {
+    uploading.value = false;
+  }
+}
+
+/** 粘贴导入：从 Excel 连表头复制的文本 → 后端字典识别 + 校验（返回 preview + columnMapping，供映射确认面板核对）。 */
+async function pastePreview(payload: { rawText: string; businessDate: string | null; columnMapping?: Record<number, string> }): Promise<void> {
+  importError.value = null;
+  uploading.value = true;
+  try {
+    const factoryId = requireFactoryId();
+    const res = await previewOrderImportPaste(factoryId, payload);
     preview.value = res.data;
   } catch (err) {
     importError.value = errorMessage(err);
@@ -945,6 +962,7 @@ const state = {
   // 动作
   downloadTemplate,
   uploadPreview,
+  pastePreview,
   commitImport,
   submitManualOrders,
   loadBatches,

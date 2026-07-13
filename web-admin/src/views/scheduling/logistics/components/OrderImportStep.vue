@@ -5,6 +5,7 @@ import { vReveal } from '@/composables/useReveal';
 import { listStoreMaster } from '@/api/logistics';
 import { useAuthStore } from '@/store/modules/auth';
 import type { LogisticsDeliveryOrder, ManualOrderRow, OrderBatch, PreviewResult } from '@/api/logistics';
+import ColumnMappingConfirm from './ColumnMappingConfirm.vue';
 
 const props = defineProps<{
   preview: PreviewResult | null;
@@ -17,7 +18,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'download-template'): void;
-  (event: 'upload-file', file: File): void;
+  (event: 'upload-file', file: File, columnMapping?: Record<number, string>): void;
+  (event: 'preview-paste', payload: { rawText: string; businessDate: string | null; columnMapping?: Record<number, string> }): void;
   (event: 'commit'): void;
   (event: 'submit-manual', payload: { businessDate: string | null; rows: ManualOrderRow[] }): void;
   (event: 'clear-batch'): void;
@@ -30,13 +32,16 @@ const DEMO_SCENARIOS: Array<{ key: string; label: string; sub: string; batchId: 
   { key: 'saturation', label: '饱和场景', sub: '100 单 · 运力充足', batchId: 'DEMOSAT-BATCH-100', type: 'success' },
 ];
 
-type EntryMode = 'file' | 'manual';
+type EntryMode = 'file' | 'paste' | 'manual';
 const mode = ref<EntryMode>('file');
+// 用户在映射面板改了映射并点确认 → 带覆盖重新预览，回来后要载入表格（而非再弹面板）。
+const awaitingLoad = ref(false);
 
 // ==================== 文件导入 ====================
 
 const fileInput = ref<HTMLInputElement | null>(null);
 const selectedFileName = ref('');
+const lastFile = ref<File | null>(null); // 保留最近上传的文件, 供映射确认后带覆盖重新预览
 
 const canCommit = computed(() => Boolean(props.preview) && props.preview!.validRows > 0 && !props.committing);
 const rowErrorPreview = computed(() => (props.preview?.rowErrors ?? []).slice(0, 20));
@@ -45,12 +50,51 @@ function handleFileChange(event: Event): void {
   const file = (event.target as HTMLInputElement).files?.[0];
   if (!file) return;
   selectedFileName.value = file.name;
-  emit('upload-file', file);
+  lastFile.value = file;
+  awaitingLoad.value = false;
+  emit('upload-file', file); // 首次不带覆盖映射 → 后端自动识别
 }
 
 function resetFileInput(): void {
   selectedFileName.value = '';
   if (fileInput.value) fileInput.value.value = '';
+}
+
+// ==================== 粘贴导入（从 Excel 连表头复制） ====================
+
+const pasteText = ref('');
+const pasteDate = ref<string>('');
+const lastPaste = ref<{ rawText: string; businessDate: string | null } | null>(null);
+
+const pasteRowCount = computed(() => pasteText.value.split(/\r?\n/).filter((l) => l.trim()).length);
+
+function submitPaste(): void {
+  const text = pasteText.value;
+  if (!text.trim()) { ElMessage.warning('请先从 Excel 连表头复制并粘贴到框里'); return; }
+  const businessDate = pasteDate.value || null;
+  lastPaste.value = { rawText: text, businessDate };
+  awaitingLoad.value = false;
+  emit('preview-paste', { rawText: text, businessDate }); // 首次不带覆盖映射
+}
+
+// ==================== 映射确认（文件 + 粘贴共用） ====================
+
+// 有列映射结果 + 处于文件/粘贴模式 + 不在等待重新预览载入时 → 显示映射确认面板（不自动进表格）。
+const showMappingPanel = computed(() =>
+  Boolean(props.preview?.columnMapping) && (mode.value === 'file' || mode.value === 'paste') && !awaitingLoad.value,
+);
+
+function onMappingConfirm(override: Record<number, string>, dirty: boolean): void {
+  if (!dirty) {
+    loadPreviewIntoTable(); // 未改映射 → 直接用现有预览载入可编辑表格
+    return;
+  }
+  awaitingLoad.value = true; // 改了映射 → 带覆盖重新预览
+  if (mode.value === 'paste' && lastPaste.value) {
+    emit('preview-paste', { ...lastPaste.value, columnMapping: override });
+  } else if (lastFile.value) {
+    emit('upload-file', lastFile.value, override);
+  }
 }
 
 // ==================== 手动录入 ====================
@@ -153,10 +197,13 @@ function loadPreviewIntoTable(): void {
   mode.value = 'manual'; // 切到可编辑表格
 }
 
-// 文件上传 → preview 到达（file 模式下）→ 载入表格。手动提交返回的 preview 不触发（那时已是 manual 模式）。
+// 预览到达：只在「用户已在映射面板点确认 → 带覆盖重新预览返回」时载入可编辑表格。
+// 首次识别到达不自动进表格 —— 先弹映射确认面板给用户核对（见 showMappingPanel）。
 watch(
   () => props.preview,
-  (p) => { if (p && p.rows?.length && mode.value === 'file') loadPreviewIntoTable(); },
+  (p) => {
+    if (p && awaitingLoad.value) { awaitingLoad.value = false; loadPreviewIntoTable(); }
+  },
 );
 const manualRows = ref<ManualRowForm[]>([emptyRow(), emptyRow()]);
 
@@ -235,6 +282,7 @@ function submitManual(): void {
 function switchMode(next: EntryMode): void {
   mode.value = next;
   resetFileInput();
+  awaitingLoad.value = false;
   if (next === 'file') fromFileImport.value = false; // 手动切回文件模式 → 清掉"来自文件"标记
 }
 
@@ -279,6 +327,7 @@ watch(() => props.batch?.id, (id, prev) => {
 
     <el-radio-group :model-value="mode" class="mode-toggle" @update:model-value="switchMode">
       <el-radio-button value="file">📄 文件导入</el-radio-button>
+      <el-radio-button value="paste">📋 粘贴导入</el-radio-button>
       <el-radio-button value="manual">✏️ 手动录入</el-radio-button>
     </el-radio-group>
 
@@ -323,10 +372,12 @@ watch(() => props.batch?.id, (id, prev) => {
           @change="handleFileChange"
         >
       </label>
+      <p class="file-hint">支持任意表头的 Excel/CSV —— 系统会自动识别列（如「客户」「数量」也认得），上传后核对一下即可。</p>
       <p v-if="selectedFileName" class="selected-file">已选择：{{ selectedFileName }}</p>
       <p v-if="uploading" data-testid="import-uploading" class="import-status">正在解析文件…</p>
 
       <button
+        v-if="!showMappingPanel"
         data-testid="commit-import"
         class="primary-button"
         type="button"
@@ -335,6 +386,44 @@ watch(() => props.batch?.id, (id, prev) => {
       >
         {{ committing ? '正在提交…' : '提交导入' }}
       </button>
+    </template>
+
+    <!-- ============ 粘贴导入（从 Excel 连表头复制） ============ -->
+    <template v-else-if="mode === 'paste'">
+      <div class="manual-toolbar">
+        <span class="field-label">业务日期</span>
+        <el-date-picker
+          v-model="pasteDate"
+          type="date"
+          value-format="YYYY-MM-DD"
+          clearable
+          placeholder="选填，粘贴无日期列时用"
+          style="width: 200px"
+        />
+        <span class="manual-hint">从 Excel 选中「含表头」的区域，Ctrl+C 复制，粘贴到下方框里 —— 系统自动识别各列。</span>
+      </div>
+      <el-input
+        v-model="pasteText"
+        type="textarea"
+        :rows="8"
+        resize="vertical"
+        data-testid="paste-textarea"
+        class="paste-textarea"
+        placeholder="从 Excel 连同表头一起复制，粘贴到这里，例如：&#10;门店名称	配送地址	箱数	重量kg	体积m³&#10;大润发苏州店	苏州工业园区xx路1号	10	50	1.5"
+      />
+      <div class="paste-actions">
+        <span v-if="pasteRowCount" class="filled-count">检测到 {{ pasteRowCount }} 行（含表头）</span>
+        <button
+          v-if="!showMappingPanel"
+          class="primary-button"
+          type="button"
+          data-testid="paste-preview-btn"
+          :disabled="!pasteText.trim() || uploading"
+          @click="submitPaste"
+        >
+          {{ uploading ? '识别中…' : '识别并预览' }}
+        </button>
+      </div>
     </template>
 
     <!-- ============ 手动录入 ============ -->
@@ -443,8 +532,18 @@ watch(() => props.batch?.id, (id, prev) => {
       </div>
     </template>
 
+    <!-- ============ 映射确认面板（文件 + 粘贴，识别后先核对列→字段）============ -->
+    <ColumnMappingConfirm
+      v-if="showMappingPanel"
+      v-reveal="0"
+      :columns="preview!.columnMapping!.columns"
+      :auto-confident="preview!.columnMapping!.autoConfident"
+      :busy="uploading"
+      @confirm="onMappingConfirm"
+    />
+
     <!-- ============ 校验结果(文件+手动共用) ============ -->
-    <div v-if="preview" v-reveal="0" data-testid="import-preview" class="validation-card">
+    <div v-if="preview && !showMappingPanel" v-reveal="0" data-testid="import-preview" class="validation-card">
       <strong>{{ preview.validRows }} / {{ preview.totalRows }} 行校验通过</strong>
       <span v-if="preview.errorRows > 0">{{ preview.errorRows }} 行存在字段错误，仅写入有效行——请修正后重试。</span>
       <span v-else>全部行校验通过。</span>
@@ -459,8 +558,8 @@ watch(() => props.batch?.id, (id, prev) => {
     </div>
 
     <p v-if="error" data-testid="import-error" class="import-error">{{ error }}</p>
-    <p v-if="!preview && !batch && !uploading && mode === 'file'" class="empty-hint">
-      尚未导入任何订单文件——下方地图与线路将保持空白，不会使用示例数据。
+    <p v-if="!preview && !batch && !uploading && (mode === 'file' || mode === 'paste')" class="empty-hint">
+      尚未导入任何订单——下方地图与线路将保持空白，不会使用示例数据。
     </p>
   </section>
 </template>
@@ -477,7 +576,11 @@ watch(() => props.batch?.id, (id, prev) => {
 .primary-button { width: fit-content; padding: 10px 18px; color: #fff; font: inherit; font-weight: 650; background: #1b65a8; border: 0; border-radius: 6px; cursor: pointer; }
 .primary-button:disabled { background: #98a2b3; cursor: not-allowed; }
 .file-input { display: grid; gap: 8px; width: fit-content; color: #344054; font-size: 14px; font-weight: 650; }
+.file-hint { margin: 0; color: #98a2b3; font-size: 12.5px; }
 .selected-file, .import-status, .empty-hint { margin: 0; color: #475467; font-size: 14px; }
+/* 粘贴导入 */
+.paste-textarea :deep(textarea) { font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 13px; line-height: 1.5; }
+.paste-actions { display: flex; align-items: center; gap: 14px; }
 .import-error { margin: 0; padding: 10px 12px; color: #b42318; background: #fef3f2; border-radius: 8px; font-size: 14px; }
 /* 手动录入 */
 .from-file-banner { margin-bottom: 4px; }

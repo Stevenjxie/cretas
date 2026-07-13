@@ -132,8 +132,12 @@ async function downloadTemplate(): Promise<void> {
   await state.downloadTemplate();
 }
 
-async function uploadFile(file: File): Promise<void> {
-  await state.uploadPreview(file);
+async function uploadFile(file: File, columnMapping?: Record<number, string>): Promise<void> {
+  await state.uploadPreview(file, columnMapping);
+}
+
+async function pasteImport(payload: { rawText: string; businessDate: string | null; columnMapping?: Record<number, string> }): Promise<void> {
+  await state.pastePreview(payload);
 }
 
 async function commitImport(): Promise<void> {
@@ -276,6 +280,7 @@ async function next(): Promise<void> {
       :error="state.importError.value"
       @download-template="downloadTemplate"
       @upload-file="uploadFile"
+      @preview-paste="pasteImport"
       @commit="commitImport"
       @submit-manual="submitManual"
       @clear-batch="startNewSchedule"

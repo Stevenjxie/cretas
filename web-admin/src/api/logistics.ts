@@ -63,6 +63,25 @@ export interface OrderImportPreviewRow {
   errors: RowError[];
 }
 
+/** 单个源列的识别结果（任意 Excel / 粘贴导入 → 映射确认面板逐列渲染）。 */
+export interface ColumnMapping {
+  index: number;
+  header: string;
+  sampleValue?: string | null;
+  /** LogisticsOrderImportRow 字段名（storeName/address/…），null=未识别。 */
+  mappedField?: string | null;
+  confidence: number;
+  ambiguous: boolean;
+}
+
+/** 表头识别整体结果。autoConfident=true 时前端可折叠成一行一键确认。 */
+export interface ColumnMappingResult {
+  columns: ColumnMapping[];
+  /** 未覆盖的必填字段名；件数/箱数都缺用伪 id "quantity"（标签「件数或箱数」）。 */
+  unmappedRequiredFields: string[];
+  autoConfident: boolean;
+}
+
 /** POST /order-import/preview 响应体 — 不写业务订单，仅解析+校验 */
 export interface PreviewResult {
   jobId: string;
@@ -73,6 +92,8 @@ export interface PreviewResult {
   errorRows: number;
   rowErrors: RowError[];
   rows: OrderImportPreviewRow[];
+  /** 任意 Excel / 粘贴导入的表头识别结果；手动录入为 undefined。 */
+  columnMapping?: ColumnMappingResult;
 }
 
 export interface OrderBatch {
@@ -123,11 +144,27 @@ export function getImportTemplate(factoryId: string) {
   });
 }
 
-/** POST /order-import/preview — multipart 上传，仅解析+校验，不写库 */
-export function previewOrderImport(factoryId: string, file: File) {
+/**
+ * POST /order-import/preview — multipart 上传，任意 Excel 表头字典自动识别，仅解析+校验不写库。
+ * columnMapping（列索引→字段名）为用户在映射确认面板修正后的覆盖映射，首次上传可不传（用自动识别）。
+ */
+export function previewOrderImport(factoryId: string, file: File, columnMapping?: Record<number, string>) {
   const formData = new FormData();
   formData.append('file', file);
+  if (columnMapping) formData.append('columnMapping', JSON.stringify(columnMapping));
   return post<PreviewResult>(`/${factoryId}/logistics/order-import/preview`, formData);
+}
+
+/** 从 Excel 复制一段文本直接预检的入参（连表头，默认 TSV）。 */
+export interface PastePreviewPayload {
+  rawText: string;
+  businessDate?: string | null;
+  columnMapping?: Record<number, string>;
+}
+
+/** POST /order-import/preview-paste — 从 Excel 连表头复制的文本直接预检，与文件上传同一套识别+校验。 */
+export function previewOrderImportPaste(factoryId: string, payload: PastePreviewPayload) {
+  return post<PreviewResult>(`/${factoryId}/logistics/order-import/preview-paste`, payload);
 }
 
 /** POST /order-import/{jobId}/commit — 用 preview 返回的 jobId 提交，写入订单批次和有效订单（幂等） */
