@@ -339,6 +339,7 @@ async function next(): Promise<void> {
       :stores="state.stores.value"
       :vehicles="state.vehiclesView.value"
       :selected-trip-id="state.selectedTripId.value"
+      :error="state.planError.value"
       @select-trip="state.selectTrip"
       @move-store="handleMoveStore"
       @move-to-trip="handleMoveToTrip"
