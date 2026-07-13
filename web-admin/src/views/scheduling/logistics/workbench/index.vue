@@ -16,8 +16,6 @@ import StoreDetailDrawer from '../components/StoreDetailDrawer.vue';
 import { useLogisticsScheduling } from '../useLogisticsScheduling';
 
 const state = useLogisticsScheduling();
-// 查看路线步的视图切换：地图 / 调度时间表(甘特图)
-const mapView = ref<'map' | 'timetable'>('map');
 // 排线设置功能栏可折叠 —— 折叠后连同「查看路线」标题、车次总览条一起收起, 腾出竖向空间给地图/线路
 // (调度员多数时间只看图不改设置)。
 const settingsCollapsed = ref(false);
@@ -28,6 +26,7 @@ const routesHidden = ref(false);
 // (之前用 CSS 100vh 减固定值猜, 猜少了 → 地图溢出屏幕, 用户被迫滚动/浏览器缩到 80%)。
 const mapRowRef = ref<HTMLElement>();
 const actionBarRef = ref<HTMLElement>();
+const timetableBandRef = ref<HTMLElement>(); // 调度时间表常显 band, 高度计入地图预留(同屏都看得见)
 const mapRowHeight = ref(0); // 0 = 让 CSS 接管(窄屏堆叠 / 首帧兜底)
 const mapRowStyle = computed(() => (mapRowHeight.value > 0 ? { height: `${mapRowHeight.value}px` } : {}));
 
@@ -41,8 +40,10 @@ function recomputeMapRowHeight(): void {
   // ⚠️ 不能用 scrollHeight 反推 below —— workbench-page 有 min-height:100%, 内容不足一屏时
   // scrollHeight≈视口高, 会让 below 自我参照 → 地图永远只保持当前高度、填不满下方空白(收起/隐藏后尤甚)。
   const barH = actionBarRef.value?.getBoundingClientRect().height ?? 64;
-  const reserve = barH + 24 /*页面下 padding*/ + 20 /*grid gap*/;
-  mapRowHeight.value = Math.max(440, Math.round(window.innerHeight - rect.top - reserve));
+  // 时间表 band 常显在地图下方 —— 把它的实际高度让出来, 地图 + 时间表同屏都看得见(band 独立于地图高度, 无循环)。
+  const bandH = timetableBandRef.value?.getBoundingClientRect().height ?? 0;
+  const reserve = barH + bandH + (bandH > 0 ? 20 /*band 与地图间距*/ : 0) + 24 /*页面下 padding*/ + 20 /*grid gap*/;
+  mapRowHeight.value = Math.max(400, Math.round(window.innerHeight - rect.top - reserve));
 }
 const route = useRoute();
 const router = useRouter();
@@ -106,7 +107,7 @@ onUnmounted(() => {
 
 // 影响地图行起点/可用高度的因素变化后重算(功能栏折叠改变上方高度、切步骤、异常条出现、车次数变化)。
 watch(
-  () => [settingsCollapsed.value, routesHidden.value, mapView.value, state.activeStep.value, hasExceptions.value, state.scheduleResult.value.trips.length],
+  () => [settingsCollapsed.value, routesHidden.value, state.activeStep.value, hasExceptions.value, state.scheduleResult.value.trips.length],
   () => { void nextTick(recomputeMapRowHeight); },
 );
 
@@ -309,21 +310,25 @@ async function next(): Promise<void> {
           </div>
           <div class="rc-controls route-settings" data-testid="route-settings">
             <button data-testid="generate-routes" class="generate-button" type="button" @click="state.regeneratePlanAction">重新生成路线</button>
-            <label class="view-toggle">视图 <el-radio-group :model-value="mapView" size="small" @update:model-value="(v: 'map'|'timetable') => (mapView = v)"><el-radio-button label="map">地图</el-radio-button><el-radio-button label="timetable">调度时间表</el-radio-button></el-radio-group></label>
             <label class="opt-mode">优化目标 <el-radio-group :model-value="state.optimizeMode.value" size="small" @update:model-value="handleOptimizeMode"><el-radio-button label="DISTANCE">路程最短</el-radio-button><el-radio-button label="TIME">时间最快</el-radio-button></el-radio-group></label>
           </div>
         </div>
       </template>
       <div ref="mapRowRef" class="map-and-routes" :class="{ 'routes-hidden': routesHidden }" :style="mapRowStyle">
         <div class="mr-map">
-          <LogisticsMap v-show="mapView === 'map'" :stores="state.stores.value" :trips="state.scheduleResult.value.trips" :selected-trip-id="state.selectedTripId.value" :selected-store-id="state.selectedStoreId.value" @select-trip="state.selectTrip" @select-store="state.selectStore" />
-          <ScheduleTimetable v-if="mapView === 'timetable'" :trips="state.scheduleResult.value.trips" :selected-trip-id="state.selectedTripId.value" @select-trip="state.selectTrip" />
+          <LogisticsMap :stores="state.stores.value" :trips="state.scheduleResult.value.trips" :selected-trip-id="state.selectedTripId.value" :selected-store-id="state.selectedStoreId.value" @select-trip="state.selectTrip" @select-store="state.selectStore" />
         </div>
         <div v-show="!routesHidden" class="mr-routes" data-testid="routes-pane">
           <div class="mr-routes-title">配送线路 <span class="mrt-sub">{{ totalTripCount }} 车次 · 下滑查看全部</span></div>
           <RouteCards :stores="state.stores.value" :trips="state.scheduleResult.value.trips" :selected-trip-id="state.selectedTripId.value" :selected-store-id="state.selectedStoreId.value" @select-trip="state.selectTrip" @select-store="state.selectStore" />
         </div>
       </div>
+
+      <!-- 调度时间表常显在地图下方(不再与地图二选一切换)—— 甘特图, 每车按趟的出发/返仓时间。 -->
+      <section v-if="totalTripCount > 0" ref="timetableBandRef" class="timetable-band" data-testid="timetable-band">
+        <div class="tb-title">调度时间表 <span class="tb-sub">每辆车按趟的出发 / 返仓时间</span></div>
+        <ScheduleTimetable :trips="state.scheduleResult.value.trips" :selected-trip-id="state.selectedTripId.value" @select-trip="state.selectTrip" />
+      </section>
       <StoreDetailDrawer :stores="state.stores.value" :selected-store-id="state.selectedStoreId.value" @select-store="state.selectStore" />
       <section v-if="state.unresolvedOrders.value.length" data-testid="unresolved-stores" class="unresolved-panel">
         <strong>{{ state.unresolvedOrders.value.length }} 家门店待定位</strong>
@@ -381,7 +386,11 @@ async function next(): Promise<void> {
 .view-controls button { display: inline-flex; align-items: center; padding: 7px 14px; color: #475569; font: inherit; font-size: 13px; font-weight: 650; background: #fff; border: 1px solid #dbe3ec; border-radius: 8px; cursor: pointer; transition: background 0.15s ease; }
 .view-controls button:hover { background: #f0f4f8; }
 /* 地图(主) + 配送线路(独立成卡, 跳出地图模块)。隐藏线路后地图占满整行。 */
-.map-and-routes { display: flex; gap: 16px; height: clamp(440px, calc(100vh - 360px), 900px); transition: height 0.2s ease; }
+.map-and-routes { display: flex; gap: 16px; height: clamp(400px, calc(100vh - 560px), 820px); transition: height 0.2s ease; }
+/* 调度时间表常显 band(地图下方) */
+.timetable-band { display: grid; gap: 8px; }
+.timetable-band .tb-title { display: flex; align-items: baseline; gap: 10px; color: #101828; font-size: 14px; font-weight: 700; }
+.timetable-band .tb-sub { color: #98a2b3; font-size: 12px; font-weight: 400; }
 .mr-map { position: relative; flex: 1 1 auto; min-width: 0; height: 100%; overflow: hidden; border-radius: 12px; }
 .mr-map :deep(.map-stage) { aspect-ratio: auto !important; height: 100% !important; }
 .mr-routes { flex: 0 0 400px; height: 100%; display: flex; flex-direction: column; overflow: hidden; padding: 14px 16px; background: #fff; border: 1px solid #e6eaf0; border-radius: 12px; box-shadow: 0 2px 12px rgba(16,24,40,0.05); }
