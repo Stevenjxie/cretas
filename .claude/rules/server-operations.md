@@ -37,6 +37,11 @@
 
 ## 双环境 (生产 + 测试)
 
+> ⚠️ **2026-07-13 更新: 47 上的 test 环境已下线 (Steve 决定)。** `cretas-backend-test` (10011) 已 `systemctl stop + disable` (不再自启), test Python (8084, 本就 nohup 非 systemd) 也已停。**当前 47 只跑 prod (10010 Java / 8083 Python)**。Steve 后期会用**单独一台服务器**做 test 环境。
+> - 下线原因: 47 内存紧张, prod Java 在 2.56G 堆下被并发压力 OOM 崩过 (2026-07-13); 停 test 腾出 ~1.5G 给 prod。
+> - **Prod JVM 堆已 2.56G→3G** (`cretas-backend.service` ExecStart `-Xmx3g`, 备份 `.bak.20260713_*`)。`-XX:+HeapDumpOnOutOfMemoryError` 已开, 下次 OOM 自动 dump 到 `/www/wwwroot/cretas/logs/`。
+> - **下方"双环境"「test」相关内容暂留作历史参考**, 但 47 上已不适用: `deploy-backend.sh --env test` / 部 prod 后的"防御性 ping test 10011" 会警告 test 不通 (**不阻塞部署**, 忽略即可)。schema drift 对比等 test 操作在新 test 服务器就位前不适用。
+
 同一台服务器运行两套独立环境，共享 JAR 和 Python 代码，通过环境变量区分数据库。
 
 | 服务 | 生产端口 | 测试端口 |
