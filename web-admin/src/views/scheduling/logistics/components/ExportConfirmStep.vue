@@ -32,7 +32,8 @@ const canExport = computed(() => Boolean(props.rows.length && props.planId));
     <p v-if="pendingRows.length" data-testid="pending-export-row" class="pending-row">待匹配车辆：{{ pendingRows.map((row) => row.tripLabel).join('、') }}</p>
     <el-table :data="previewRows" stripe><el-table-column prop="tripLabel" label="车次" width="180" /><el-table-column prop="vehicle" label="车辆" /><el-table-column prop="driver" label="司机" /><el-table-column prop="storeOrder" label="门店顺序" min-width="260" /><el-table-column prop="volume" label="准备体积" /><el-table-column prop="loadRate" label="装载率" /><el-table-column prop="distance" label="配送里程" /></el-table>
     <div class="actions">
-      <el-button v-if="canConfirmSchedule" data-testid="confirm-schedule" type="primary" size="large" @click="emit('confirm-schedule')">确认当天排班</el-button>
+      <el-button v-if="confirmed" data-testid="confirm-schedule-done" type="success" size="large" disabled>✓ 已确认当天排班</el-button>
+      <el-button v-else-if="canConfirmSchedule" data-testid="confirm-schedule" type="primary" size="large" @click="emit('confirm-schedule')">确认当天排班</el-button>
       <el-button v-else data-testid="confirm-export-preview" type="primary" size="large" @click="emit('confirm-preview')">确认排班预览</el-button>
       <span class="export-hint">另存：</span>
       <el-button data-testid="export-csv" :disabled="!canExport" @click="emit('export-csv')">下载 CSV</el-button>

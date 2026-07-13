@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { vReveal } from '@/composables/useReveal';
 import type { RouteTrip, StoreOrder, Vehicle } from '../types';
 import { etaLabel, parseWindow, tripEtas, type StopEta } from '../routeEta';
@@ -66,6 +66,19 @@ const confirmedCount = computed(() => props.trips.filter((t) => t.status === 'co
 const unmatchedCount = computed(() => props.trips.filter((t) => !t.vehicleId || !t.driverId).length);
 // 还有「可确认但未确认」的草稿车次时, 才显示一键确认
 const confirmableTrips = computed(() => props.trips.filter((t) => t.status === 'draft'));
+
+// 逐车次确认的即时反馈：点击后按钮立即转 loading（避免后端返回慢时用户以为没响应），
+// 直到该车次 status 变 confirmed（新 snapshot 到达）后自动清除。
+const confirmingId = ref<string | null>(null);
+function onConfirmTrip(tripId: string): void {
+  confirmingId.value = tripId;
+  emit('confirm-trip', tripId);
+}
+watch(() => props.trips, (trips) => {
+  if (!confirmingId.value) return;
+  const t = trips.find((x) => x.id === confirmingId.value);
+  if (!t || t.status === 'confirmed') confirmingId.value = null;
+}, { deep: true });
 
 function otherTrips(trip: RouteTrip): RouteTrip[] {
   return props.trips.filter((c) => c.id !== trip.id);
@@ -192,9 +205,10 @@ function moveToTrip(trip: RouteTrip, storeId: string, event: Event): void {
               type="primary"
               :plain="trip.status === 'confirmed'"
               data-testid="confirm-trip"
-              :disabled="trip.status !== 'draft'"
-              @click.stop="emit('confirm-trip', trip.id)"
-            >{{ trip.status === 'confirmed' ? '✓ 已确认' : '确认该车次' }}</el-button>
+              :loading="confirmingId === trip.id"
+              :disabled="trip.status !== 'draft' || confirmingId === trip.id"
+              @click.stop="onConfirmTrip(trip.id)"
+            >{{ trip.status === 'confirmed' ? '✓ 已确认' : (confirmingId === trip.id ? '确认中…' : '确认该车次') }}</el-button>
           </section>
         </div>
       </article>

@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import type { LogisticsPlan, PlanStatus } from '@/api/logistics';
 import { useLogisticsScheduling } from '../useLogisticsScheduling';
 
 const state = useLogisticsScheduling();
-const detailPlanId = ref<string | null>(null);
+const router = useRouter();
 const currentPage = ref(1);
 const pageSize = ref(20);
 
@@ -18,7 +19,6 @@ const statusMeta: Record<PlanStatus, { label: string; type: 'info' | 'success' |
 
 const records = computed(() => state.planHistory.value?.content ?? []);
 const total = computed(() => state.planHistory.value?.totalElements ?? 0);
-const detailPlan = computed(() => (state.plan.value?.id === detailPlanId.value ? state.plan.value : null));
 
 onMounted(() => {
   void state.loadPlanHistory(0, pageSize.value);
@@ -30,8 +30,8 @@ async function handlePageChange(nextPage: number): Promise<void> {
 }
 
 async function showDetails(plan: LogisticsPlan): Promise<void> {
-  const ok = await state.openPlan(plan.id);
-  if (ok) detailPlanId.value = plan.id;
+  // 跳到排线工作台并加载该计划，直接看地图 + 路线（workbench 支持 ?planId=&step= 深链）。
+  await router.push({ path: '/scheduling/logistics/workbench', query: { planId: plan.id, step: 'map' } });
 }
 
 async function ensurePlanLoaded(plan: LogisticsPlan): Promise<boolean> {
@@ -97,13 +97,6 @@ async function reExportXlsx(plan: LogisticsPlan): Promise<void> {
       </div>
     </el-card>
 
-    <el-alert
-      v-if="detailPlan"
-      :title="`${detailPlan.planNumber}：${detailPlan.totalStores} 家门店对应 ${detailPlan.totalTrips} 个车次，共 ${detailPlan.totalDistanceKm.toFixed(1)} km`"
-      type="info"
-      :closable="false"
-      show-icon
-    />
   </main>
 </template>
 

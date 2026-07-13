@@ -83,9 +83,11 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
      */
     private static final int GEOCODE_ON_COMMIT_CAP = 50;
 
+    // 容忍常见 Excel 日期格式：横杠/斜杠 + 有无前导零。客户真实下单文件常见 2026/7/13（月/日无前导零）。
+    // "M"/"d" 单字母 pattern 同时接受 1 位和 2 位（"7" 与 "07" 均可），故已覆盖 yyyy-MM-dd / yyyy/MM/dd。
     private static final List<DateTimeFormatter> DATE_FORMATTERS = List.of(
-            DateTimeFormatter.ofPattern("yyyy-MM-dd"),
-            DateTimeFormatter.ofPattern("yyyy/MM/dd"),
+            DateTimeFormatter.ofPattern("yyyy-M-d"),
+            DateTimeFormatter.ofPattern("yyyy/M/d"),
             DateTimeFormatter.ofPattern("yyyyMMdd"));
 
     // ==================== 模板 ====================
@@ -234,14 +236,14 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
             LogisticsOrderImportRow raw = rawRows.get(i);
             List<RowErrorDto> errors = new ArrayList<>();
 
+            // 业务日期【选填】：客户下单文件常不带日期。留空不报错，整批都没有效日期时在下方兜底用当天
+            // （一次导入 = 当天排线）。填了则容忍横杠/斜杠、有无前导零（如 2026-07-13 / 2026/7/13）。
             String businessDateRaw = trim(raw.getBusinessDate());
             LocalDate businessDate = null;
-            if (isBlank(businessDateRaw)) {
-                errors.add(err(rowNumber, "业务日期", "必填字段为空"));
-            } else {
+            if (!isBlank(businessDateRaw)) {
                 businessDate = parseDate(businessDateRaw);
                 if (businessDate == null) {
-                    errors.add(err(rowNumber, "业务日期", "日期格式无效，应为 yyyy-MM-dd"));
+                    errors.add(err(rowNumber, "业务日期", "日期格式无效，示例：2026-07-13 或 2026/7/13"));
                 }
             }
 
@@ -354,10 +356,9 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
         // businessDate 决定批次归属；即便某些有效行不是必需相同日期，MVP 用第一条有效行的日期
         // 作为批次日期（一次上传=一天排线，符合客户"每天订单不同"的使用场景）。
         if (resolvedBusinessDate == null) {
-            // 没有任何一行给出可用日期 —— 不能建批次（NOT NULL 约束），诚实报错而非猜测/伪造日期。
-            throw new BusinessException(400, "无法识别业务日期，文件中每一行『业务日期』均缺失或格式无效")
-                    .withHint("请检查『业务日期』列，格式应为 yyyy-MM-dd")
-                    .withHintTarget("业务日期");
+            // 业务日期【选填】：整批都没填有效日期时，默认用当天（一次导入 = 当天排线，符合客户
+            // "日期列可以不填" 的诉求）。不再因缺日期整批拒收。
+            resolvedBusinessDate = LocalDate.now();
         }
 
         // ---- 幂等 upsert 批次 ----

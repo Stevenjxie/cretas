@@ -256,13 +256,26 @@ class LogisticsOrderImportServiceImplTest {
     }
 
     @Test
-    @DisplayName("preview — 全部行业务日期缺失 → 400 (无法确定批次归属日)")
+    @DisplayName("preview — 全部行业务日期缺失 → 选填，兜底当天（不再拒收）")
     void previewAllRowsMissingBusinessDate() {
-        LogisticsOrderImportRow bad = row(null, "S050", "门店50", "地址50",
+        LogisticsOrderImportRow noDate = row(null, "S050", "门店50", "地址50",
                 "5", "1", "10", "1.0", null, null, null, null, null);
-        assertThatThrownBy(() -> service().preview(F1, buildFile(List.of(bad)), 1L))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("业务日期");
+        PreviewResultDto result = service().preview(F1, buildFile(List.of(noDate)), 1L);
+        // 业务日期【选填】：客户可不填，不再 400；该行其它字段齐全 → 有效，且无「业务日期」列错误。
+        assertThat(result.getRows().get(0).isValid()).isTrue();
+        assertThat(result.getRows().get(0).getErrors())
+                .noneSatisfy(e -> assertThat(e.getColumn()).isEqualTo("业务日期"));
+    }
+
+    @Test
+    @DisplayName("preview — 业务日期斜杠/无前导零 2026/7/13（客户真实格式）可解析")
+    void previewSlashDateAccepted() {
+        LogisticsOrderImportRow r = row("2026/7/13", "S060", "门店60", "地址60",
+                "5", "1", "10", "1.0", null, null, null, null, null);
+        PreviewResultDto result = service().preview(F1, buildFile(List.of(r)), 1L);
+        assertThat(result.getRows().get(0).isValid()).isTrue();
+        assertThat(result.getRows().get(0).getErrors())
+                .noneSatisfy(e -> assertThat(e.getColumn()).isEqualTo("业务日期"));
     }
 
     // ==================== preview: idempotency ====================
