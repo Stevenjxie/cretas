@@ -1,15 +1,21 @@
 #!/bin/bash
-# web-admin 部署脚本 v2.0 — Vite build + 原子目录交换 + 旧 assets 清理 + test/prod 分离
+# web-admin 部署脚本 v2.1 — Vite build + 原子目录交换 + 旧 assets 有限期延续 + test/prod 分离
 #
 # 为什么要做原子交换:
 #   Vite 用 content-hash 命名 chunk (e.g. DynamicModulePage-DZGo_ThO.js)。每次 deploy
 #   会产生新 hash 的 chunk 文件。如果只做 overlay (tar 解压到现有目录),老 chunk 文件
-#   会无限累积 — 最后 /assets/ 会塞满几千个过期文件。浏览器 tab 如果长时间不刷新,
-#   还会加载旧 chunk 的 URL (已经修过 bug 的旧版本代码) → 404 日志噪音。
+#   会无限累积 — 最后 /assets/ 会塞满几千个过期文件。
 #
-#   原子交换: 部署到 .staging → mv 旧目录到 .bak.TS → mv .staging 到目标路径。
-#   瞬间完成,old chunks 被一次性清理。代价是: 未刷新的老 tab 在导航时会 chunk load
-#   fail → 用户被迫刷新。这是正确的行为,stale tab 不应该继续运行。
+#   原子交换: 部署到 .staging → mv 旧目录到 .bak.TS → mv .staging 到目标路径。瞬间完成。
+#
+# v2.1 (Jul 13 2026) — stale-tab 404 修复:
+#   v2.0 每次交换整个目录, 旧 hash 的 chunk 文件立刻消失。未刷新的老 tab 导航到
+#   懒加载路由时请求旧 chunk URL → 404 → 用户被迫刷新。
+#   现在原子交换前, 把仍在保留窗口内 (默认 24h, `--asset-retention-hours` 可调,
+#   传 0 退回 v2.0 行为) 的旧 chunk 用 `cp -np` (no-clobber + 保留原 mtime) 延续进新
+#   assets/ 目录 — 保留窗口从 chunk 首次构建时算起, 不会因反复部署被续期到无限累积,
+#   过期后自然被下次部署淘汰。代价是 assets/ 目录在窗口期内比纯替换略大, 换来老 tab
+#   在窗口期内导航不 404。
 #
 # v2.0 (Apr 18 2026) — Bug #30 fix:
 #   之前 REMOTE_PATH 硬编码 /www/wwwroot/web-admin (prod), 运行 script 就直接上 prod,
@@ -33,6 +39,7 @@ set -e
 # ==================== 参数解析 ====================
 ENV="test"   # 默认 test (Bug #30 fix, 之前默认 prod 导致误操作)
 DRY_RUN=0
+ASSET_RETENTION_HOURS=24   # 旧 chunk 延续窗口(小时); 0 = 退回 v2.0 纯原子替换
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -48,9 +55,17 @@ while [ $# -gt 0 ]; do
             DRY_RUN=1
             shift
             ;;
+        --asset-retention-hours)
+            ASSET_RETENTION_HOURS="$2"
+            shift 2
+            ;;
+        --asset-retention-hours=*)
+            ASSET_RETENTION_HOURS="${1#*=}"
+            shift
+            ;;
         *)
             echo "❌ 未知参数: $1"
-            echo "用法: $0 [--env test|prod|all] [--dry-run]"
+            echo "用法: $0 [--env test|prod|all] [--dry-run] [--asset-retention-hours N]"
             exit 1
             ;;
     esac
@@ -63,6 +78,11 @@ case "$ENV" in
         exit 1
         ;;
 esac
+
+if ! [[ "$ASSET_RETENTION_HOURS" =~ ^[0-9]+$ ]]; then
+    echo "❌ --asset-retention-hours 必须是非负整数 (你传了: $ASSET_RETENTION_HOURS)"
+    exit 1
+fi
 
 # ==================== 配置 ====================
 GATEWAY="root@139.196.165.140"
@@ -147,7 +167,20 @@ if [ -d "\$CURRENT/assets" ]; then
     OLD_ASSET_COUNT=\$(find "\$CURRENT/assets" -type f 2>/dev/null | wc -l)
 fi
 NEW_ASSET_COUNT=\$(find "\$STAGING/assets" -type f 2>/dev/null | wc -l)
-echo "   旧 assets: \$OLD_ASSET_COUNT → 新 assets: \$NEW_ASSET_COUNT"
+
+# stale-tab 保留期延续: 把仍在窗口内 (mtime < ${ASSET_RETENTION_HOURS}h) 的旧 chunk
+# 用 cp -np (no-clobber, 保留原 mtime) 延续进新 assets/。窗口从 chunk 首次构建时算起
+# (mtime 不因本次延续被刷新),所以不会因反复部署无限累积 — 过期后下次部署自然不再延续。
+# ASSET_RETENTION_HOURS=0 时整段跳过, 退回 v2.0 纯原子替换。
+CARRIED_COUNT=0
+if [ $(( ASSET_RETENTION_HOURS )) -gt 0 ] && [ -d "\$CURRENT/assets" ]; then
+    mkdir -p "\$STAGING/assets"
+    while IFS= read -r -d '' f; do
+        cp -np "\$f" "\$STAGING/assets/" 2>/dev/null && CARRIED_COUNT=\$((CARRIED_COUNT + 1))
+    done < <(find "\$CURRENT/assets" -type f -mmin -$(( ASSET_RETENTION_HOURS * 60 )) -print0 2>/dev/null)
+fi
+
+echo "   旧 assets: \$OLD_ASSET_COUNT → 新 assets: \$NEW_ASSET_COUNT (+ \$CARRIED_COUNT 个保留期内旧 chunk 延续, 窗口 ${ASSET_RETENTION_HOURS}h)"
 
 # 原子交换 (备份旧版 + mv)
 if [ -e "\$CURRENT" ]; then
