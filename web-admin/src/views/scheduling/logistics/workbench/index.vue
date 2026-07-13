@@ -21,6 +21,8 @@ const routesHidden = ref(false);
 const ganttHidden = ref(false);
 // 有车次进入门店编辑态 → 右列(配送线路)加宽, 放得下 上移/下移 + 移至 控件(地图相应缩)。
 const routesEditing = ref(false);
+// 路线「脏」标记: 用户调了门店顺序/移了车次后, 显示的路线/距离/ETA 已失效, 必须先「重新生成路线」重算才能进下一步。
+const routeDirty = ref(false);
 // 运力充足(SUFFICIENT) → 控制条内绿 pill; 不足/不可服务 → 顶部完整 banner(带「去管理车辆」动作)。
 const capacityOk = computed(() => state.capacityDiagnosis.value?.verdict === 'SUFFICIENT');
 
@@ -191,11 +193,19 @@ async function assignDriver(tripId: string, driverId: string | null): Promise<vo
 async function handleMoveStore(tripId: string, storeId: string, direction: -1 | 1): Promise<void> {
   state.selectTrip(tripId);
   await state.moveStore(storeId, direction);
+  routeDirty.value = true; // 改了门店顺序 → 路线/距离/ETA 失效, 进下一步前须重算
 }
 
 async function handleMoveToTrip(tripId: string, storeId: string, targetTripId: string | null): Promise<void> {
   state.selectTrip(tripId);
   await state.moveStoreToTrip(storeId, targetTripId);
+  routeDirty.value = true; // 移了车次 → 两条线路都变, 进下一步前须重算
+}
+
+/** 重新生成路线 —— 重算后清除脏标记(路线/距离/ETA 已刷新)。 */
+async function regenerateRoutes(): Promise<void> {
+  await state.regeneratePlanAction();
+  routeDirty.value = false;
 }
 
 async function confirmTrip(tripId: string): Promise<void> {
@@ -236,9 +246,18 @@ function back(): void {
 }
 
 async function next(): Promise<void> {
-  if (state.activeStep.value === 'import') await state.generateRoutes();
-  // 「查看并确认路线」→ 确认排班预览(原 map→confirm→export 两步已合并为一步)
-  else if (state.activeStep.value === 'map') state.previewExport();
+  if (state.activeStep.value === 'import') {
+    await state.generateRoutes();
+    routeDirty.value = false; // 新生成的计划路线是最新的
+  } else if (state.activeStep.value === 'map') {
+    // 脏闸: 改过门店/车次但没重算 → 阻止进下一步(路线/距离/ETA 会不准)
+    if (routeDirty.value) {
+      ElMessage.warning('已调整门店顺序 / 车次，请先点「重新生成路线」重算后再进入下一步');
+      return;
+    }
+    // 「查看并确认路线」→ 确认排班预览(原 map→confirm→export 两步已合并为一步)
+    state.previewExport();
+  }
 }
 </script>
 
@@ -302,7 +321,7 @@ async function next(): Promise<void> {
         <div class="rc-right route-settings" data-testid="route-settings">
           <button v-if="confirmableTripCount > 0 && unmatchedTripCount === 0" type="button" class="confirm-all-btn" data-testid="confirm-all-trips" @click="confirmAllTrips">✓ 一键确认全部（{{ confirmableTripCount }}）</button>
           <label class="opt-mode">优化目标 <el-radio-group :model-value="state.optimizeMode.value" size="small" @update:model-value="handleOptimizeMode"><el-radio-button label="DISTANCE">路程最短</el-radio-button><el-radio-button label="TIME">时间最快</el-radio-button></el-radio-group></label>
-          <button data-testid="generate-routes" class="generate-button" type="button" @click="state.regeneratePlanAction">重新生成路线</button>
+          <button data-testid="generate-routes" class="generate-button" :class="{ 'dirty-pulse': routeDirty }" type="button" @click="regenerateRoutes">{{ routeDirty ? '⚠ 重新生成路线' : '重新生成路线' }}</button>
         </div>
       </div>
 
@@ -368,7 +387,13 @@ async function next(): Promise<void> {
       @export-xlsx="exportXlsx"
     />
 
-    <footer ref="actionBarRef" class="action-bar"><el-button :disabled="state.activeStep.value === 'import'" @click="back">上一步</el-button><button v-if="state.activeStep.value !== 'export'" data-testid="finish-schedule" class="next-button" type="button" @click="next">{{ state.activeStep.value === 'map' ? '查看排班预览' : '下一步' }}</button></footer>
+    <footer ref="actionBarRef" class="action-bar">
+      <el-button :disabled="state.activeStep.value === 'import'" @click="back">上一步</el-button>
+      <div class="ab-right">
+        <span v-if="state.activeStep.value === 'map' && routeDirty" class="dirty-hint" data-testid="route-dirty-hint">已调整门店 / 车次，请先「重新生成路线」重算</span>
+        <button v-if="state.activeStep.value !== 'export'" data-testid="finish-schedule" class="next-button" type="button" :disabled="state.activeStep.value === 'map' && routeDirty" @click="next">{{ state.activeStep.value === 'map' ? '查看排班预览' : '下一步' }}</button>
+      </div>
+    </footer>
   </main>
 </template>
 
@@ -385,6 +410,13 @@ async function next(): Promise<void> {
 .cfm-pill { font-size: 12.5px; color: #175cd3; background: #eff8ff; border: 1px solid #b2ddff; padding: 3px 11px; border-radius: 20px; font-weight: 650; white-space: nowrap; }
 .confirm-all-btn { padding: 8px 15px; color: #fff; font: inherit; font-size: 13px; font-weight: 650; background: #027a48; border: 0; border-radius: 6px; cursor: pointer; transition: background 0.15s ease; white-space: nowrap; }
 .confirm-all-btn:hover { background: #026a3e; }
+/* 路线脏闸: 改了门店/车次未重算时, 高亮「重新生成路线」+ 禁用「下一步」+ 提示 */
+.ab-right { display: flex; align-items: center; gap: 12px; }
+.dirty-hint { color: #b54708; font-size: 12.5px; font-weight: 600; }
+.next-button:disabled { background: #98a2b3; cursor: not-allowed; }
+.generate-button.dirty-pulse { background: #f79009; animation: dirty-pulse 1.2s ease-in-out infinite; }
+.generate-button.dirty-pulse:hover { background: #dc7a06; }
+@keyframes dirty-pulse { 0% { box-shadow: 0 0 0 0 rgba(247,144,9,0.5); } 70% { box-shadow: 0 0 0 8px rgba(247,144,9,0); } 100% { box-shadow: 0 0 0 0 rgba(247,144,9,0); } }
 
 /* 主体行: 左(地图 + 甘特) | 竖向 knob 手柄 | 右(配送线路)。高度由 JS 铺满一屏; clamp 是首帧兜底。 */
 .rv-body { display: flex; gap: 10px; height: clamp(420px, calc(100vh - 300px), 900px); transition: height 0.2s ease; }
