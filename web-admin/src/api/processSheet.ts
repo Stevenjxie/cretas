@@ -483,6 +483,8 @@ export function getWorkflowSheetConfig(
 export interface RawMaterialBatchOption {
   id: string;
   batchNumber: string | null;
+  /** 原料类型 id (raw_material_types.id, 后端 AVAILABLE 端点返回)。workflow 逐道报工按此过滤到本道所需原料。 */
+  materialTypeId?: string | null;
   materialName: string | null;
   materialTypeName: string | null;
   warehouseId?: string | null;

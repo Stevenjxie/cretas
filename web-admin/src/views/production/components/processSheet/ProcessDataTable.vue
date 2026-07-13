@@ -408,13 +408,25 @@ async function loadRawBatches() {
       rawBatchOptions.value = [];
       return;
     }
-    // 工厂全仓拉一次 (不限单仓), 再按可领用仓集合过滤 → 同时覆盖原料仓 + 生产仓, 排除成品/质检等其它仓。
-    const resp = await getAvailableRawBatches(props.factoryId, {
-      productTypeId: props.productTypeId,
-    });
+    // raw-centric 多SKU (2026-07-13): workflow 计划的 productTypeId 是"影子"锚点产品 (如 raw-centric
+    // 的原料猪蹄run), 无 BOM → 按 productTypeId 查 AVAILABLE 返 0 → 下拉空 "暂无可用原料批次"。
+    // workflow 模式改按本道 workflow 声明的原料类型 (workflowContext.inputs RAW_MATERIAL 的 skuId=
+    // raw_material_types.id) 过滤: 不传 productTypeId 拉全仓可用原料, 再客户端筛到本道所需原料类型。
+    // legacy 计划 (无 workflowContext) 保持原按 productTypeId 查 BOM 原料的行为 (不回归)。
+    const wfRawTypeIds = new Set(
+      workflowRawInputs.value.map((p) => p.skuId).filter((id): id is string => !!id),
+    );
+    const useWorkflowRaw = wfRawTypeIds.size > 0;
+    const resp = await getAvailableRawBatches(
+      props.factoryId,
+      useWorkflowRaw ? {} : { productTypeId: props.productTypeId },
+    );
     if (seq !== rawBatchLoadSeq) return;
     const allowed = new Set(warehouseIds);
-    const candidates = extractRawBatches(resp.data).filter((b) => rawBatchAvailable(b) > 0);
+    const candidates = extractRawBatches(resp.data)
+      .filter((b) => rawBatchAvailable(b) > 0)
+      // workflow 模式: 只保留本道声明的原料类型 (防呆 Rule 3: 收敛选择, 不让操作员选错原料)。
+      .filter((b) => !useWorkflowRaw || (b.materialTypeId != null && wfRawTypeIds.has(b.materialTypeId)));
     // 后端 ensureRawMaterialWarehouse 强制要求非空 warehouseId 且属于 RAW/LOGISTICS/WORKSHOP,
     // 否则保存必 409 "只能从原料仓/物流仓/生产仓领用"。不落仓(null warehouseId)的批次一律
     // 不提供选择 —— 提供了也是选完就被后端拒绝的死路 (fool-proof-design Rule 5: 不做 dead-end)。
