@@ -828,9 +828,13 @@ async function restore(planIdFromQuery?: string | null): Promise<void> {
   if (plan.value) return; // 内存中已有状态（同一 SPA 会话内在模块间切换），无需重新拉取
   try {
     const factoryId = requireFactoryId();
-    const res = await apiListPlans(factoryId, { page: 0, size: 1 });
-    const latest = res.data.content[0];
-    if (latest && latest.status !== 'CANCELLED') {
+    // 恢复最近一个「非演示、未取消」的计划；演示计划(测试导入生成, planNumber 含「演示/DEMO」)不自动带出，
+    // 避免打开工作台默认就是演示数据(用户已手动导入真实订单时尤其困扰)。没有真实计划则留空。
+    const res = await apiListPlans(factoryId, { page: 0, size: 10 });
+    const latest = res.data.content.find(
+      (p) => p.status !== 'CANCELLED' && !/演示|DEMO/i.test(p.planNumber ?? ''),
+    );
+    if (latest) {
       await openPlan(latest.id);
     }
   } catch (err) {
