@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ElMessageBox } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { vReveal } from '@/composables/useReveal';
 import type { ManualOrderRow } from '@/api/logistics';
 import CapacityDiagnosisBanner from '../components/CapacityDiagnosisBanner.vue';
@@ -215,7 +215,10 @@ async function confirmAllTrips(): Promise<void> {
 }
 
 async function confirmSchedule(): Promise<void> {
-  if (await state.confirmSchedule()) exportPreviewConfirmed.value = false;
+  if (await state.confirmSchedule()) {
+    exportPreviewConfirmed.value = false;
+    ElMessage.success('当天排班已确认，可下载 CSV / Excel 发给司机');
+  }
 }
 
 function confirmExportPreview(): void {
