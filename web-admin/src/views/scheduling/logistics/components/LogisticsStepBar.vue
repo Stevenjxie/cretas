@@ -3,10 +3,10 @@ import type { LogisticsStep } from '../useLogisticsDemoState';
 
 defineProps<{ activeStep: LogisticsStep }>();
 
+// 「查看路线」与「人工确认」已合并为一步(边看图边派车/确认), 4 步 → 3 步。
 const steps: Array<{ id: LogisticsStep; label: string }> = [
   { id: 'import', label: '导入订单' },
-  { id: 'map', label: '查看路线' },
-  { id: 'confirm', label: '人工确认' },
+  { id: 'map', label: '查看并确认路线' },
   { id: 'export', label: '确认排班' },
 ];
 </script>
@@ -24,7 +24,7 @@ const steps: Array<{ id: LogisticsStep; label: string }> = [
 
 <style scoped lang="scss">
 .step-bar { overflow-x: auto; }
-ol { display: flex; min-width: 560px; margin: 0; padding: 0; list-style: none; }
+ol { display: flex; min-width: 460px; margin: 0; padding: 0; list-style: none; }
 li { display: flex; flex: 1; align-items: center; gap: 8px; color: #667085; font-size: 14px; font-weight: 650; }
 li:not(:last-child)::after { flex: 1; height: 1px; margin: 0 12px; background: #d0d5dd; content: ''; }
 span { display: grid; width: 24px; height: 24px; place-items: center; color: #667085; background: #f2f4f7; border-radius: 999px; }

@@ -8,7 +8,6 @@ import CapacityDiagnosisBanner from '../components/CapacityDiagnosisBanner.vue';
 import ExportConfirmStep from '../components/ExportConfirmStep.vue';
 import LogisticsMap from '../components/LogisticsMap.vue';
 import LogisticsStepBar from '../components/LogisticsStepBar.vue';
-import ManualConfirmStep from '../components/ManualConfirmStep.vue';
 import OrderImportStep from '../components/OrderImportStep.vue';
 import RouteCards from '../components/RouteCards.vue';
 import ScheduleTimetable from '../components/ScheduleTimetable.vue';
@@ -76,7 +75,7 @@ const exceptionDescription = computed(() => {
   return undefined;
 });
 
-const WORKBENCH_STEPS = ['import', 'map', 'confirm', 'export'] as const;
+const WORKBENCH_STEPS = ['import', 'map', 'export'] as const;
 type WorkbenchStep = (typeof WORKBENCH_STEPS)[number];
 
 onMounted(async () => {
@@ -125,6 +124,10 @@ const summaryTrips = computed(() => state.scheduleResult.value.trips);
 const totalTripCount = computed(() => summaryTrips.value.length);
 const totalStopCount = computed(() => summaryTrips.value.reduce((sum, t) => sum + t.storeIds.length, 0));
 const totalKm = computed(() => summaryTrips.value.reduce((sum, t) => sum + (t.totalDistanceKm || 0), 0));
+// 确认进度(原「人工确认」步的顶部计数, 合并后放查看路线控制条)
+const confirmedTripCount = computed(() => summaryTrips.value.filter((t) => t.status === 'confirmed').length);
+const unmatchedTripCount = computed(() => summaryTrips.value.filter((t) => !t.vehicleId || !t.driverId).length);
+const confirmableTripCount = computed(() => summaryTrips.value.filter((t) => t.status === 'draft').length);
 
 async function downloadTemplate(): Promise<void> {
   await state.downloadTemplate();
@@ -224,16 +227,16 @@ async function exportXlsx(): Promise<void> {
 }
 
 function back(): void {
-  const steps = ['import', 'map', 'confirm', 'export'] as const;
-  const index = steps.indexOf(state.activeStep.value);
+  const steps = ['import', 'map', 'export'] as const;
+  const index = steps.indexOf(state.activeStep.value as typeof steps[number]);
   if (index > 0) state.activeStep.value = steps[index - 1];
   if (state.activeStep.value !== 'export') exportPreviewConfirmed.value = false;
 }
 
 async function next(): Promise<void> {
   if (state.activeStep.value === 'import') await state.generateRoutes();
-  else if (state.activeStep.value === 'map') state.activeStep.value = 'confirm';
-  else if (state.activeStep.value === 'confirm') state.previewExport();
+  // 「查看并确认路线」→ 确认排班预览(原 map→confirm→export 两步已合并为一步)
+  else if (state.activeStep.value === 'map') state.previewExport();
 }
 </script>
 
@@ -292,8 +295,10 @@ async function next(): Promise<void> {
             <span class="rc-stat"><strong>{{ totalKm.toFixed(1) }}</strong>km</span>
           </div>
           <span v-if="capacityOk && state.capacityDiagnosis.value" class="cap-pill" data-testid="capacity-pill">✓ {{ state.capacityDiagnosis.value.message }}</span>
+          <span v-if="totalTripCount > 0" class="cfm-pill" data-testid="confirm-progress">已确认 {{ confirmedTripCount }}/{{ totalTripCount }}<template v-if="unmatchedTripCount > 0"> · 待匹配 {{ unmatchedTripCount }}</template></span>
         </div>
         <div class="rc-right route-settings" data-testid="route-settings">
+          <button v-if="confirmableTripCount > 0 && unmatchedTripCount === 0" type="button" class="confirm-all-btn" data-testid="confirm-all-trips" @click="confirmAllTrips">✓ 一键确认全部（{{ confirmableTripCount }}）</button>
           <label class="opt-mode">优化目标 <el-radio-group :model-value="state.optimizeMode.value" size="small" @update:model-value="handleOptimizeMode"><el-radio-button label="DISTANCE">路程最短</el-radio-button><el-radio-button label="TIME">时间最快</el-radio-button></el-radio-group></label>
           <button data-testid="generate-routes" class="generate-button" type="button" @click="state.regeneratePlanAction">重新生成路线</button>
         </div>
@@ -320,8 +325,21 @@ async function next(): Promise<void> {
           <div class="knob-v"><span>{{ routesHidden ? '‹' : '›' }}</span><em>{{ routesHidden ? '展开线路' : '配送线路' }}</em></div>
         </div>
         <div v-show="!routesHidden" class="rv-right" data-testid="routes-pane">
-          <div class="mr-routes-title">配送线路 <span class="mrt-sub">{{ totalTripCount }} 车次 · 下滑查看全部</span></div>
-          <RouteCards :stores="state.stores.value" :trips="state.scheduleResult.value.trips" :selected-trip-id="state.selectedTripId.value" :selected-store-id="state.selectedStoreId.value" @select-trip="state.selectTrip" @select-store="state.selectStore" />
+          <div class="mr-routes-title">配送线路 · 派车与确认 <span class="mrt-sub">{{ totalTripCount }} 车次 · 逐条或一键确认</span></div>
+          <RouteCards
+            :stores="state.stores.value"
+            :trips="state.scheduleResult.value.trips"
+            :vehicles="state.vehiclesView.value"
+            :selected-trip-id="state.selectedTripId.value"
+            :selected-store-id="state.selectedStoreId.value"
+            @select-trip="state.selectTrip"
+            @select-store="state.selectStore"
+            @assign-vehicle="assignVehicle"
+            @assign-driver="assignDriver"
+            @confirm-trip="confirmTrip"
+            @move-store="handleMoveStore"
+            @move-to-trip="handleMoveToTrip"
+          />
         </div>
       </div>
       <StoreDetailDrawer :stores="state.stores.value" :selected-store-id="state.selectedStoreId.value" @select-store="state.selectStore" />
@@ -334,21 +352,6 @@ async function next(): Promise<void> {
       </section>
     </section>
 
-    <ManualConfirmStep
-      v-else-if="state.activeStep.value === 'confirm'"
-      :trips="state.scheduleResult.value.trips"
-      :stores="state.stores.value"
-      :vehicles="state.vehiclesView.value"
-      :selected-trip-id="state.selectedTripId.value"
-      :error="state.planError.value"
-      @select-trip="state.selectTrip"
-      @move-store="handleMoveStore"
-      @move-to-trip="handleMoveToTrip"
-      @assign-vehicle="assignVehicle"
-      @assign-driver="assignDriver"
-      @confirm-trip="confirmTrip"
-      @confirm-all="confirmAllTrips"
-    />
     <ExportConfirmStep
       v-else
       :rows="state.exportRows.value"
@@ -362,7 +365,7 @@ async function next(): Promise<void> {
       @export-xlsx="exportXlsx"
     />
 
-    <footer ref="actionBarRef" class="action-bar"><el-button :disabled="state.activeStep.value === 'import'" @click="back">上一步</el-button><button v-if="state.activeStep.value !== 'export'" data-testid="finish-schedule" class="next-button" type="button" @click="next">{{ state.activeStep.value === 'confirm' ? '查看排班预览' : '下一步' }}</button></footer>
+    <footer ref="actionBarRef" class="action-bar"><el-button :disabled="state.activeStep.value === 'import'" @click="back">上一步</el-button><button v-if="state.activeStep.value !== 'export'" data-testid="finish-schedule" class="next-button" type="button" @click="next">{{ state.activeStep.value === 'map' ? '查看排班预览' : '下一步' }}</button></footer>
   </main>
 </template>
 
@@ -376,6 +379,9 @@ async function next(): Promise<void> {
 .rc-summary { display: flex; align-items: baseline; gap: 8px; color: #667085; font-size: 13px; }
 .rc-summary .rc-stat { color: #667085; } .rc-summary .rc-stat strong { margin-right: 4px; color: #0f172a; font-size: 19px; font-weight: 750; font-variant-numeric: tabular-nums; } .rc-summary .rc-dot { color: #cbd5e1; }
 .cap-pill { font-size: 12px; color: #027a48; background: #ecfdf3; border: 1px solid #a6f4c5; padding: 3px 10px; border-radius: 20px; white-space: nowrap; }
+.cfm-pill { font-size: 12.5px; color: #175cd3; background: #eff8ff; border: 1px solid #b2ddff; padding: 3px 11px; border-radius: 20px; font-weight: 650; white-space: nowrap; }
+.confirm-all-btn { padding: 8px 15px; color: #fff; font: inherit; font-size: 13px; font-weight: 650; background: #027a48; border: 0; border-radius: 6px; cursor: pointer; transition: background 0.15s ease; white-space: nowrap; }
+.confirm-all-btn:hover { background: #026a3e; }
 
 /* 主体行: 左(地图 + 甘特) | 竖向 knob 手柄 | 右(配送线路)。高度由 JS 铺满一屏; clamp 是首帧兜底。 */
 .rv-body { display: flex; gap: 10px; height: clamp(420px, calc(100vh - 300px), 900px); transition: height 0.2s ease; }

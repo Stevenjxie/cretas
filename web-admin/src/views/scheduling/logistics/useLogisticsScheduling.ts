@@ -671,7 +671,7 @@ async function confirmTrip(): Promise<boolean> {
   try {
     const res = await apiConfirmTrip(factoryId, plan.value.id, trip.id, trip.version);
     applyPlanSnapshot(res.data);
-    activeStep.value = 'confirm';
+    activeStep.value = 'map'; // 确认在「查看并确认路线」步内进行, 停留本步(不再跳到已合并的 confirm 步)
     planError.value = null;
     return true;
   } catch (err) {

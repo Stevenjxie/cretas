@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { vReveal } from '@/composables/useReveal';
-import type { RouteTrip, StoreOrder } from '../types';
+import type { RouteTrip, StoreOrder, Vehicle } from '../types';
 
 const props = defineProps<{
   stores: StoreOrder[];
   trips: RouteTrip[];
+  vehicles: Vehicle[];
   selectedTripId: string | null;
   selectedStoreId: string | null;
 }>();
@@ -13,7 +14,69 @@ const props = defineProps<{
 const emit = defineEmits<{
   (event: 'select-trip', tripId: string): void;
   (event: 'select-store', storeId: string): void;
+  (event: 'assign-vehicle', tripId: string, vehicleId: string | null): void;
+  (event: 'assign-driver', tripId: string, driverId: string | null): void;
+  (event: 'confirm-trip', tripId: string): void;
+  (event: 'move-store', tripId: string, storeId: string, direction: -1 | 1): void;
+  (event: 'move-to-trip', tripId: string, storeId: string, targetTripId: string | null): void;
 }>();
+
+// ========== 派车 / 司机 / 确认 / 门店编辑(原「人工确认」步合并进来) ==========
+/** 某车次可选司机 = 该车辆自身绑定的司机(车辆↔司机在车辆主数据里)。 */
+function driverOptions(trip: RouteTrip): Vehicle[] {
+  return props.vehicles.filter((v) => v.id === trip.vehicleId && v.driverId);
+}
+
+/** 逐车确认的即时反馈: 点击后按钮立即 loading, 直到该车次 status 变 confirmed(新 snapshot 到达)后清除。 */
+const confirmingIds = ref<Set<string>>(new Set());
+function onConfirmTrip(tripId: string): void {
+  const next = new Set(confirmingIds.value);
+  next.add(tripId);
+  confirmingIds.value = next;
+  emit('confirm-trip', tripId);
+}
+watch(() => props.trips, (trips) => {
+  if (!confirmingIds.value.size) return;
+  const next = new Set(confirmingIds.value);
+  let changed = false;
+  for (const id of next) {
+    const t = trips.find((x) => x.id === id);
+    if (!t || t.status === 'confirmed') { next.delete(id); changed = true; }
+  }
+  if (changed) confirmingIds.value = next;
+}, { deep: true });
+
+/** 门店顺序编辑态(防呆闸): 点「调整门店顺序」才进编辑态, 才出现上移/下移 + 移至其他车次。 */
+const editingIds = ref<Set<string>>(new Set());
+function isEditing(tripId: string): boolean {
+  return editingIds.value.has(tripId);
+}
+function toggleEdit(tripId: string): void {
+  const next = new Set(editingIds.value);
+  if (next.has(tripId)) next.delete(tripId); else next.add(tripId);
+  editingIds.value = next;
+}
+
+/** 固定「线路 NN」编号(按 trips 原始顺序), 移至下拉里标目标车次用。 */
+const lineNoById = computed(() => {
+  const m = new Map<string, string>();
+  props.trips.forEach((t, i) => m.set(t.id, String(i + 1).padStart(2, '0')));
+  return m;
+});
+function lineNo(tripId: string): string {
+  return lineNoById.value.get(tripId) ?? '--';
+}
+
+function otherTrips(trip: RouteTrip): RouteTrip[] {
+  return props.trips.filter((c) => c.id !== trip.id);
+}
+function onMoveToTrip(trip: RouteTrip, storeId: string, event: Event): void {
+  const select = event.target as HTMLSelectElement;
+  const value = select.value;
+  select.value = ''; // 重置回占位项, 避免下拉停留在"已选中"错觉
+  if (!value) return;
+  emit('move-to-trip', trip.id, storeId, value === '__new__' ? null : value);
+}
 
 const storesById = computed(() => new Map(props.stores.map((store) => [store.id, store])));
 
@@ -27,10 +90,6 @@ const statusLabels: Record<RouteTrip['status'], string> = {
 
 function storeName(storeId: string): string {
   return storesById.value.get(storeId)?.name ?? storeId;
-}
-
-function vehicleLabel(trip: RouteTrip): string {
-  return trip.vehiclePlate ?? trip.vehicleId ?? '待匹配车辆';
 }
 
 function selectTrip(tripId: string): void {
@@ -145,10 +204,35 @@ function etaTitleFor(tripId: string, i: number): string {
         </span>
       </header>
 
-      <div class="vehicle-row">
-        <span class="field-label">车辆</span>
-        <strong>{{ vehicleLabel(trip) }}</strong>
-        <span v-if="trip.vehicleTripSeq && trip.vehicleTripSeq > 1" class="trip-seq" data-testid="trip-seq">该车第 {{ trip.vehicleTripSeq }} 趟 · 回仓补货</span>
+      <div class="assign-row" @click.stop>
+        <div class="assign-fld">
+          <span class="field-label">车辆</span>
+          <el-select
+            :model-value="trip.vehicleId"
+            clearable
+            size="small"
+            placeholder="待匹配车辆"
+            data-testid="confirm-vehicle-select"
+            @update:model-value="emit('assign-vehicle', trip.id, $event)"
+          >
+            <el-option v-for="v in vehicles" :key="v.id" :label="`${v.plate} · ${v.capacityCbm}m³`" :value="v.id" />
+          </el-select>
+        </div>
+        <div class="assign-fld">
+          <span class="field-label">司机</span>
+          <el-select
+            :model-value="trip.driverId"
+            clearable
+            size="small"
+            placeholder="请选择司机"
+            :disabled="!trip.vehicleId"
+            data-testid="confirm-driver-select"
+            @update:model-value="emit('assign-driver', trip.id, $event)"
+          >
+            <el-option v-for="v in driverOptions(trip)" :key="v.driverId ?? ''" :label="v.driverName" :value="v.driverId" />
+          </el-select>
+        </div>
+        <span v-if="trip.vehicleTripSeq && trip.vehicleTripSeq > 1" class="trip-seq" data-testid="trip-seq">该车第 {{ trip.vehicleTripSeq }} 趟</span>
       </div>
 
       <div v-if="trip.plannedDepartMin != null" class="schedule-row" data-testid="trip-schedule">
@@ -166,7 +250,45 @@ function etaTitleFor(tripId: string, i: number): string {
         ⚠️ {{ tripLateCount(trip) }} 家门店预计晚于配送时间（预计到达为估算）。可在「人工确认」拖动调整门店顺序，或为其改派车辆。
       </p>
 
-      <div class="store-chain" :aria-label="`线路 ${index + 1} 门店顺序`">
+      <div class="chain-head">
+        <span class="chain-title">门店顺序（{{ trip.storeIds.length }}）</span>
+        <button
+          v-if="!isEditing(trip.id)"
+          type="button"
+          class="edit-btn"
+          data-testid="edit-stops"
+          @click.stop="toggleEdit(trip.id)"
+        >✎ 调整门店顺序</button>
+        <button v-else type="button" class="done-btn" data-testid="edit-stops-done" @click.stop="toggleEdit(trip.id)">完成</button>
+      </div>
+
+      <!-- 编辑态: 上移/下移 + 移至其他车次(防呆闸: 点「调整门店顺序」才出现) -->
+      <div v-if="isEditing(trip.id)" class="store-chain edit" @click.stop>
+        <template v-for="(storeId, storeIndex) in trip.storeIds" :key="storeId">
+          <div class="estop" :class="{ late: etaAt(trip.id, storeIndex)?.late }">
+            <span class="estop-nm">{{ storeIndex + 1 }}. {{ storeName(storeId) }}</span>
+            <span v-if="etaAt(trip.id, storeIndex)?.etaMin != null" class="estop-eta">{{ etaTitleFor(trip.id, storeIndex) }}</span>
+            <span class="estop-ops">
+              <button type="button" class="mv-btn" :disabled="storeIndex === 0" title="上移" @click="emit('move-store', trip.id, storeId, -1)">▲</button>
+              <button type="button" class="mv-btn" :disabled="storeIndex === trip.storeIds.length - 1" title="下移" @click="emit('move-store', trip.id, storeId, 1)">▼</button>
+              <select
+                v-if="otherTrips(trip).length"
+                class="move-sel"
+                aria-label="移至其他车次"
+                @change="onMoveToTrip(trip, storeId, $event)"
+              >
+                <option value="">移至…</option>
+                <option v-for="c in otherTrips(trip)" :key="c.id" :value="c.id">线路 {{ lineNo(c.id) }} · {{ c.vehiclePlate ?? '待匹配' }}</option>
+                <option value="__new__">新建待匹配车次</option>
+              </select>
+            </span>
+          </div>
+          <span v-if="storeIndex < trip.storeIds.length - 1" class="chain-arrow" aria-hidden="true">↓</span>
+        </template>
+      </div>
+
+      <!-- 只读态: 竖向门店列表(名左/预计右), 站间向下箭头 -->
+      <div v-else class="store-chain" :aria-label="`线路 ${index + 1} 门店顺序`">
         <template v-for="(storeId, storeIndex) in trip.storeIds" :key="storeId">
           <button
             type="button"
@@ -203,6 +325,18 @@ function etaTitleFor(tripId: string, i: number): string {
           <dd>{{ trip.totalVolumeCbm.toFixed(1) }} m³ · {{ Math.round(trip.loadRate * 100) }}%</dd>
         </div>
       </dl>
+
+      <!-- 确认此线路(原「人工确认」的逐条确认): 待匹配车/司机则禁用并提示, 已确认则灰化 -->
+      <div class="card-confirm" @click.stop>
+        <button
+          type="button"
+          class="confirm-btn"
+          :class="{ done: trip.status === 'confirmed' }"
+          data-testid="confirm-trip"
+          :disabled="trip.status !== 'draft' || confirmingIds.has(trip.id)"
+          @click="onConfirmTrip(trip.id)"
+        >{{ trip.status === 'confirmed' ? '✓ 已确认' : (confirmingIds.has(trip.id) ? '确认中…' : (trip.status === 'draft' ? '✓ 确认此线路' : statusLabels[trip.status])) }}</button>
+      </div>
     </article>
   </section>
 </template>
@@ -481,6 +615,36 @@ function etaTitleFor(tripId: string, i: number): string {
     white-space: nowrap;
   }
 }
+
+/* ===== 合并进来的「派车 / 确认 / 门店编辑」 ===== */
+.assign-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin: 4px 0 2px; }
+.assign-fld { display: flex; flex-direction: column; gap: 3px; flex: 1 1 120px; min-width: 0; }
+.assign-fld .field-label { color: #667085; font-size: 11px; font-weight: 600; }
+.assign-fld :deep(.el-select) { width: 100%; }
+
+.chain-head { display: flex; align-items: center; justify-content: space-between; margin: 12px 0 4px; }
+.chain-title { color: #344054; font-size: 12.5px; font-weight: 650; }
+.edit-btn { font-size: 11px; color: #1b65a8; background: #fff; border: 1px solid #cfe3fb; border-radius: 6px; padding: 3px 9px; cursor: pointer; font-weight: 600; }
+.edit-btn:hover { background: #eff6fd; }
+.done-btn { font-size: 11px; color: #fff; background: #1b65a8; border: 0; border-radius: 6px; padding: 4px 12px; cursor: pointer; font-weight: 600; }
+
+.store-chain.edit { flex-direction: column; align-items: stretch; }
+.estop { display: flex; align-items: center; gap: 8px; background: #fff; border: 1px solid #edf2f7; border-radius: 8px; padding: 6px 9px; }
+.estop.late { background: #fef3f2; border-color: #fecdca; }
+.estop-nm { flex: 1 1 auto; min-width: 0; color: #101828; font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.estop-eta { flex: 0 0 auto; color: #98a2b3; font-size: 11px; }
+.estop-ops { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; }
+.mv-btn { width: 22px; height: 22px; display: grid; place-items: center; color: #475569; background: #fff; border: 1px solid #dbe3ec; border-radius: 5px; cursor: pointer; font-size: 10px; }
+.mv-btn:hover:not(:disabled) { background: #eef4fc; color: #1b65a8; }
+.mv-btn:disabled { color: #cbd5e1; cursor: not-allowed; }
+.move-sel { max-width: 112px; padding: 3px 5px; color: #344054; font-size: 11.5px; background: #fff; border: 1px solid #dbe3ec; border-radius: 6px; cursor: pointer; }
+
+.card-confirm { margin-top: 12px; }
+.confirm-btn { width: 100%; padding: 9px; color: #fff; font: inherit; font-size: 13px; font-weight: 650; background: #1b65a8; border: 0; border-radius: 8px; cursor: pointer; transition: background 0.15s ease; }
+.confirm-btn:hover:not(:disabled) { background: #14507f; }
+.confirm-btn:disabled { cursor: not-allowed; }
+.confirm-btn.done { color: #027a48; background: #f0fdf6; border: 1px solid #a6f4c5; }
+.confirm-btn:disabled:not(.done) { color: #fff; background: #98a2b3; }
 
 @media (max-width: 720px) {
   .route-cards {
