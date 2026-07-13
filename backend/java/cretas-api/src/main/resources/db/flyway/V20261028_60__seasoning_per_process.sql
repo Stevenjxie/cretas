@@ -15,7 +15,12 @@ CREATE TABLE IF NOT EXISTS bom_process_seasoning (
   notes                VARCHAR(500),
   created_at           TIMESTAMP    NOT NULL DEFAULT NOW(),
   updated_at           TIMESTAMP    NOT NULL DEFAULT NOW(),
-  deleted_at           TIMESTAMP    NULL,
-  CONSTRAINT uq_bps_recipe_wp UNIQUE (recipe_id, work_process_id)
+  deleted_at           TIMESTAMP    NULL
 );
+-- 唯一性用 PARTIAL index (WHERE deleted_at IS NULL), 对齐 bom_seasoning_items 惯例。
+-- ⚠️ 不能用普通 UNIQUE(recipe_id, work_process_id): saveSeasoning 走"软删旧行+插新行"全量替换,
+--    软删只置 deleted_at 不清 recipe_id/work_process_id → 普通唯一约束下第二次保存必撞 duplicate key
+--    (软删的旧行仍占用键) → 409 回滚。partial index 只约束未删行, 软删行不参与 → 反复保存 OK。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bps_recipe_wp
+    ON bom_process_seasoning(recipe_id, work_process_id) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_bps_factory_recipe ON bom_process_seasoning(factory_id, recipe_id);

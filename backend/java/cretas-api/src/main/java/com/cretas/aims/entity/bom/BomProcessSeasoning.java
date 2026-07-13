@@ -22,10 +22,9 @@ import java.math.BigDecimal;
     name = "bom_process_seasoning",
     indexes = {
         @Index(name = "idx_bps_factory_recipe", columnList = "factory_id, recipe_id")
-    },
-    uniqueConstraints = {
-        @UniqueConstraint(name = "uq_bps_recipe_wp", columnNames = {"recipe_id", "work_process_id"})
     }
+    // 唯一性由 Flyway partial unique index (uq_bps_recipe_wp WHERE deleted_at IS NULL) 保证 —
+    // 不用 @UniqueConstraint (会在 ddl-auto=update 的 dev 环境生成普通全表唯一约束, 与软删全量替换冲突)。
 )
 @Data
 @SuperBuilder
