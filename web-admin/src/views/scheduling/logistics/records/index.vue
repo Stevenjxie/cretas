@@ -31,7 +31,8 @@ async function handlePageChange(nextPage: number): Promise<void> {
 
 async function showDetails(plan: LogisticsPlan): Promise<void> {
   // 跳到排线工作台并加载该计划，直接看地图 + 路线（workbench 支持 ?planId=&step= 深链）。
-  await router.push({ path: '/scheduling/logistics/workbench', query: { planId: plan.id, step: 'map' } });
+  // from=record: 标记「从调度记录查看」→ 工作台隔绝为 2 步(查看并确认路线 + 确认排班), 隐藏导入、退不回导入。
+  await router.push({ path: '/scheduling/logistics/workbench', query: { planId: plan.id, step: 'map', from: 'record' } });
 }
 
 async function ensurePlanLoaded(plan: LogisticsPlan): Promise<boolean> {

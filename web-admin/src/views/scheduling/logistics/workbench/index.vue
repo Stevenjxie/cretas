@@ -57,9 +57,9 @@ const canConfirmSchedule = computed(() => state.scheduleResult.value.trips.lengt
   && state.scheduleResult.value.trips.every((trip) => trip.status === 'confirmed'));
 
 const exportConfirmed = computed(() => state.plan.value?.status === 'CONFIRMED' || state.plan.value?.status === 'EXPORTED');
-// 已归档记录 = 计划已确认/已导出。从「调度记录」查看这类计划时隔绝: 隐藏第 1 步导入、不能退回导入,
-// 防止改到别的订单撞记录。新建流程里未确认(DRAFT/NEEDS_ACTION)则正常显示导入步。
-const isArchivedRecord = computed(() => exportConfirmed.value);
+// 记录模式 = 从「调度记录」查看详情进来(URL from=record)。此时隔绝为 2 步: 隐藏第 1 步导入、不能退回导入,
+// 防止改到别的订单撞记录。普通排线工作台(新建流程)from≠record → 正常 3 步, 与计划状态无关。
+const recordsMode = computed(() => route.query.from === 'record');
 
 const hasExceptions = computed(() => {
   const trips = state.scheduleResult.value.trips;
@@ -121,7 +121,7 @@ watch(() => state.activeStep.value, (step) => {
 
 // 隔绝: 已归档记录(已确认/已导出)不允许停在「导入订单」步(URL 手写 step=import 等) → 强制到查看并确认路线,
 // 防止从调度记录退回导入、改到别的订单撞记录。
-watch([isArchivedRecord, () => state.activeStep.value], ([archived, step]) => {
+watch([recordsMode, () => state.activeStep.value], ([archived, step]) => {
   if (archived && step === 'import') state.activeStep.value = 'map';
 }, { immediate: true });
 
@@ -249,7 +249,7 @@ async function exportXlsx(): Promise<void> {
 
 function back(): void {
   // 归档记录里 map 是首步(无导入步), 不能退回导入 —— 隔绝, 防止改到别的订单撞记录。
-  const steps: string[] = isArchivedRecord.value ? ['map', 'export'] : ['import', 'map', 'export'];
+  const steps: string[] = recordsMode.value ? ['map', 'export'] : ['import', 'map', 'export'];
   const index = steps.indexOf(state.activeStep.value);
   if (index > 0) state.activeStep.value = steps[index - 1] as typeof state.activeStep.value;
   if (state.activeStep.value !== 'export') exportPreviewConfirmed.value = false;
@@ -293,7 +293,7 @@ async function next(): Promise<void> {
         >+ 新建排线</el-button>
       </div>
     </header>
-    <LogisticsStepBar :active-step="state.activeStep.value" :hide-import="isArchivedRecord" />
+    <LogisticsStepBar :active-step="state.activeStep.value" :hide-import="recordsMode" />
     <!-- 运力充足(SUFFICIENT) 挪进查看路线控制条的绿 pill; 这里只在「不足/不可服务」时显示完整 banner(带动作)。 -->
     <CapacityDiagnosisBanner v-if="!capacityOk" :diagnosis="state.capacityDiagnosis.value" @manage-vehicles="goManageVehicles" />
     <el-alert v-if="hasExceptions" data-testid="assignment-issue" title="需要处理" :description="exceptionDescription" type="warning" :closable="false" show-icon />
@@ -398,7 +398,7 @@ async function next(): Promise<void> {
     />
 
     <footer ref="actionBarRef" class="action-bar">
-      <el-button :disabled="state.activeStep.value === 'import' || (isArchivedRecord && state.activeStep.value === 'map')" @click="back">上一步</el-button>
+      <el-button :disabled="state.activeStep.value === 'import' || (recordsMode && state.activeStep.value === 'map')" @click="back">上一步</el-button>
       <div class="ab-right">
         <span v-if="state.activeStep.value === 'map' && routeDirty" class="dirty-hint" data-testid="route-dirty-hint">已调整门店 / 车次，请先「重新生成路线」重算</span>
         <button v-if="state.activeStep.value !== 'export'" data-testid="finish-schedule" class="next-button" type="button" :disabled="state.activeStep.value === 'map' && routeDirty" @click="next">{{ state.activeStep.value === 'map' ? '查看排班预览' : '下一步' }}</button>
