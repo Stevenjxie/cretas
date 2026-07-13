@@ -39,13 +39,32 @@ const lastFile = ref<File | null>(null); // 保留最近上传的文件, 供映�
 const canCommit = computed(() => Boolean(props.preview) && props.preview!.validRows > 0 && !props.committing);
 const rowErrorPreview = computed(() => (props.preview?.rowErrors ?? []).slice(0, 20));
 
-function handleFileChange(event: Event): void {
-  const file = (event.target as HTMLInputElement).files?.[0];
-  if (!file) return;
+/** 接收一个订单文件(点击选中 / 拖入 共用) → 校验扩展名 → 预检上传。 */
+function acceptFile(file: File): void {
+  if (!/\.(csv|xlsx|xls)$/i.test(file.name)) {
+    ElMessage.warning('请选择 .xlsx / .xls / .csv 订单文件');
+    return;
+  }
   selectedFileName.value = file.name;
   lastFile.value = file;
   awaitingLoad.value = false;
   emit('upload-file', file); // 首次不带覆盖映射 → 后端自动识别
+}
+
+function handleFileChange(event: Event): void {
+  const file = (event.target as HTMLInputElement).files?.[0];
+  if (file) acceptFile(file);
+}
+
+// 拖入上传
+const isDragging = ref(false);
+function onDragOver(): void { if (!props.uploading) isDragging.value = true; }
+function onDragLeave(): void { isDragging.value = false; }
+function onDrop(event: DragEvent): void {
+  isDragging.value = false;
+  if (props.uploading) return;
+  const file = event.dataTransfer?.files?.[0];
+  if (file) acceptFile(file);
 }
 
 function resetFileInput(): void {
@@ -335,19 +354,29 @@ watch(() => props.batch?.id, (id, prev) => {
       </el-table>
     </div>
 
-    <!-- ============ 文件导入 ============ -->
+    <!-- ============ 文件导入(点击选中 或 拖入) ============ -->
     <template v-if="mode === 'file'">
-      <label class="file-input">选择订单文件（CSV / Excel）
+      <label
+        class="drop-zone"
+        :class="{ dragover: isDragging, disabled: uploading }"
+        @dragover.prevent="onDragOver"
+        @dragenter.prevent="onDragOver"
+        @dragleave.prevent="onDragLeave"
+        @drop.prevent="onDrop"
+      >
         <input
           ref="fileInput"
           data-testid="csv-input"
           type="file"
+          class="dz-input"
           accept=".csv,text/csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           :disabled="uploading"
           @change="handleFileChange"
         >
+        <div class="dz-icon">⬆️</div>
+        <div class="dz-main">{{ isDragging ? '松开鼠标即可上传' : '点击选择文件 · 或把文件拖到这里' }}</div>
+        <div class="dz-sub">支持任意表头的 Excel / CSV（.xlsx / .xls / .csv）—— 系统自动识别列（如「客户」「数量」也认得）</div>
       </label>
-      <p class="file-hint">支持任意表头的 Excel/CSV —— 系统会自动识别列（如「客户」「数量」也认得），上传后核对一下即可。</p>
       <p v-if="selectedFileName" class="selected-file">已选择：{{ selectedFileName }}</p>
       <p v-if="uploading" data-testid="import-uploading" class="import-status">正在解析文件…</p>
 
@@ -550,8 +579,15 @@ watch(() => props.batch?.id, (id, prev) => {
 .row-error-more { margin: 0; color: #b42318; font-size: 13px; }
 .primary-button { width: fit-content; padding: 10px 18px; color: #fff; font: inherit; font-weight: 650; background: #1b65a8; border: 0; border-radius: 6px; cursor: pointer; }
 .primary-button:disabled { background: #98a2b3; cursor: not-allowed; }
-.file-input { display: grid; gap: 8px; width: fit-content; color: #344054; font-size: 14px; font-weight: 650; }
-.file-hint { margin: 0; color: #98a2b3; font-size: 12.5px; }
+/* 拖放上传区(点击选中 或 拖入) */
+.drop-zone { position: relative; display: grid; justify-items: center; gap: 6px; padding: 28px 20px; text-align: center; background: #f8fafc; border: 2px dashed #cbd5e1; border-radius: 12px; cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease; }
+.drop-zone:hover { border-color: #1b65a8; background: #f4f8fd; }
+.drop-zone.dragover { border-color: #1b65a8; background: #eaf3fc; box-shadow: 0 0 0 3px rgba(27,101,168,0.12) inset; }
+.drop-zone.disabled { opacity: 0.6; cursor: not-allowed; }
+.dz-input { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); border: 0; }
+.dz-icon { font-size: 26px; }
+.dz-main { color: #344054; font-size: 15px; font-weight: 700; }
+.dz-sub { color: #98a2b3; font-size: 12.5px; }
 .selected-file, .import-status, .empty-hint { margin: 0; color: #475467; font-size: 14px; }
 /* 粘贴导入 */
 .paste-textarea :deep(textarea) { font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 13px; line-height: 1.5; }
