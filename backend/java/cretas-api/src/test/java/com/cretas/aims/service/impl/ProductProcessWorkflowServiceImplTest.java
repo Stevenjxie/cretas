@@ -49,6 +49,9 @@ class ProductProcessWorkflowServiceImplTest {
     private ProductProcessWorkflowRepository repository;
 
     @Mock
+    private com.cretas.aims.repository.ProductProcessWorkflowActivationRepository activationRepository;
+
+    @Mock
     private ProductProcessWorkflowCatalogValidator catalogValidator;
 
     @Mock
@@ -62,7 +65,7 @@ class ProductProcessWorkflowServiceImplTest {
         ObjectMapper objectMapper = new ObjectMapper();
         validator = new ProductProcessWorkflowValidator();
         service = new ProductProcessWorkflowServiceImpl(
-                repository, objectMapper, validator, catalogValidator, productTypeRepository);
+                repository, activationRepository, objectMapper, validator, catalogValidator, productTypeRepository);
         ProductType owner = new ProductType();
         owner.setId(PRODUCT_ID);
         owner.setFactoryId(FACTORY_ID);
@@ -351,7 +354,7 @@ class ProductProcessWorkflowServiceImplTest {
         ProductProcessWorkflowCatalogValidator realCatalogValidator =
                 new ProductProcessWorkflowCatalogValidator(workProcessRepository, productTypeRepository);
         ProductProcessWorkflowServiceImpl realService = new ProductProcessWorkflowServiceImpl(
-                repository, new ObjectMapper(), validator, realCatalogValidator, productTypeRepository);
+                repository, activationRepository, new ObjectMapper(), validator, realCatalogValidator, productTypeRepository);
 
         BusinessException error = assertThrows(BusinessException.class,
                 () -> realService.publish(FACTORY_ID, PRODUCT_ID, 3L));

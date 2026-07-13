@@ -529,6 +529,16 @@ class InventoryPostingIntegrityTest {
                 return batchDtoForFake(batchId, newQty);
             }
 
+            @Override
+            public com.cretas.aims.dto.material.MaterialBatchDTO replenishExistingBatch(
+                    String factoryId, String batchId, BigDecimal addQuantity,
+                    String sourceDocType, String sourceDocId, String note, Long adjustedBy) {
+                BigDecimal current = balances.getOrDefault(batchId, BigDecimal.ZERO);
+                BigDecimal updated = current.add(addQuantity == null ? BigDecimal.ZERO : addQuantity);
+                balances.put(batchId, updated);
+                return batchDtoForFake(batchId, updated);
+            }
+
             // ── Unused interface methods (not called by the posting service) ──
 
             @Override public com.cretas.aims.dto.material.MaterialBatchDTO
