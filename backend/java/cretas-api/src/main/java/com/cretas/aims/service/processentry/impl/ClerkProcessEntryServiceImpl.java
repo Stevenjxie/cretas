@@ -924,14 +924,36 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
      * 跨 legacy/workflow 两模式都 work; 解析不到时回退原名字正则/SEASONING/potCount 兜底 (零回归)。
      */
     private boolean isSeasoningStep(String factoryId, String productTypeId, StepEntry st) {
-        WorkProcess wp = resolveStepWorkProcess(factoryId, productTypeId, st);
-        if (wp != null) {
-            String cat = wp.getProcessCategory();
-            if (SeasoningProcessCategory.COOKING.equals(cat) || SeasoningProcessCategory.INJECTION.equals(cat)) {
-                return true;
-            }
+        // audit Finding 1 修复: 仅当该步"真配了 per-工序 调料"才按新路径认调味步。
+        // ⛔ 不能单凭工序类别=熟制/注射 就认 —— 那会让一个"被重新归类为熟制"的共享工序(未配调料)
+        //    误触发下方旧整-SKU 回退, 把整个 SKU 调料成本再算一遍 → double-count(无配置即触发)。
+        //    有配置的步 → computePerProcessSeasoningCost 返非 null 独占核算, 不碰旧回退。
+        if (hasPerProcessSeasoningConfig(factoryId, productTypeId, st)) {
+            return true;
         }
         return isSeasoningStep(st);
+    }
+
+    /**
+     * 该报工步是否已配 per-工序 调料 (该工序名下有调料明细 或 锅序/注射参数)。
+     * 决定是否走 per-工序 路径; 未配则不因工序类别误触发旧整-SKU 回退 (防 double-count)。
+     */
+    private boolean hasPerProcessSeasoningConfig(String factoryId, String productTypeId, StepEntry st) {
+        if (bomRecipeRepo == null || bomSeasoningItemRepo == null || bomProcessSeasoningRepository == null) {
+            return false;
+        }
+        WorkProcess wp = resolveStepWorkProcess(factoryId, productTypeId, st);
+        if (wp == null || wp.getId() == null) return false;
+        Optional<BomRecipe> bomOpt = bomRecipeRepo
+                .findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, productTypeId);
+        if (bomOpt.isEmpty()) return false;
+        String recipeId = bomOpt.get().getId();
+        String wpId = wp.getId();
+        if (!bomSeasoningItemRepo.findByRecipeIdAndWorkProcessIdOrderBySeqAsc(recipeId, wpId).isEmpty()) {
+            return true;
+        }
+        return bomProcessSeasoningRepository
+                .findByRecipeIdAndWorkProcessIdAndDeletedAtIsNull(recipeId, wpId).isPresent();
     }
 
     /**
@@ -1003,7 +1025,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
      * 各工序只读自己 workProcessId 名下的调料明细 → 天然不跨工序重复计。
      */
     private BigDecimal computePerProcessSeasoningCost(String factoryId, String productTypeId,
-                                                      StepEntry st, List<BigDecimal> potRawKgs) {
+                                                      StepEntry st, List<BigDecimal> potRawKgs,
+                                                      List<String> warnings) {
         if (bomRecipeRepo == null || bomSeasoningItemRepo == null || bomProcessSeasoningRepository == null) {
             return null; // 测试 @InjectMocks 未注入 → 走原整-SKU 路径
         }
@@ -1027,7 +1050,11 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             // 注射: 绝对注射量 × 注射内容每kg单价; potRawKgs=null → 熟制段成本 0
             BigDecimal injectionAmountKg = paramOpt.map(BomProcessSeasoning::getInjectionAmountKg).orElse(null);
             if (injectionAmountKg == null) {
-                return BigDecimal.ZERO; // 配了明细但没填注射量 → 无法按绝对量算, 诚实 0 (不静默用生料重)
+                // audit Finding 3 修复: 配了注射内容但没填注射量 → 不静默 0, 明确 warning 指向配置位置
+                String pn = st.getProcessName() == null ? String.valueOf(st.getProcessOrder()) : st.getProcessName();
+                warnings.add("注射工序「" + pn + "」已配注射内容但未填注射量(kg)，注射调料成本暂记 0；"
+                        + "请在「生产 → BOM 配方 → 调料配方」补该工序注射量。");
+                return BigDecimal.ZERO;
             }
             SeasoningCost sc = RecipeCostCalculator.compute((BigDecimal) null, lines, injectionAmountKg, null);
             return sc.getTotal();
@@ -1047,7 +1074,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         // ── 调料配方按工序 (2026-07-13): 纯加法路径. 仅当该报工步能解析到工序 且 该工序配了
         //    per-工序 调料明细/参数 时, 按工序算并 early-return; 否则落到下方原整-SKU +
         //    product_recipes 逻辑 (一字不动, 零回归; 也避免老代码"一个 SKU 多个调味步会重复计"的坑)。
-        BigDecimal perProcess = computePerProcessSeasoningCost(factoryId, productTypeId, st, potRawKgs);
+        BigDecimal perProcess = computePerProcessSeasoningCost(factoryId, productTypeId, st, potRawKgs, warnings);
         if (perProcess != null) {
             return perProcess;
         }
@@ -1066,8 +1093,10 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             Optional<BomRecipe> bomOpt = bomRecipeRepo
                     .findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, productTypeId);
             if (bomOpt.isPresent()) {
+                // audit Finding 2 修复: 整-SKU 回退只取未迁移(work_process_id 为 NULL)的明细;
+                // 已按工序迁移的明细归 per-工序 路径独占核算, 避免部分迁移期 double-count。
                 List<BomSeasoningItem> bomSeasoning =
-                        bomSeasoningItemRepo.findByRecipeIdOrderBySeqAsc(bomOpt.get().getId());
+                        bomSeasoningItemRepo.findByRecipeIdAndWorkProcessIdIsNullOrderBySeqAsc(bomOpt.get().getId());
                 if (!bomSeasoning.isEmpty()) {
                     SeasoningCost sc = RecipeCostCalculator.compute(
                             bomOpt.get().getSubsequentPotRatio(), bomSeasoning, injectionRawKg, potRawKgs);

@@ -22,6 +22,12 @@ public interface BomSeasoningItemRepository extends JpaRepository<BomSeasoningIt
     /** 取某 BOM 配方在指定工序下的调料明细, 按 seq 升序 (调料配方按工序, 2026-07-13). */
     List<BomSeasoningItem> findByRecipeIdAndWorkProcessIdOrderBySeqAsc(String recipeId, String workProcessId);
 
+    /**
+     * 调料配方按工序 (2026-07-13): 整-SKU 回退路径只取"未迁移"(work_process_id 为 NULL) 的明细,
+     * 已按工序迁移的明细归 per-工序 路径独占核算 → 避免部分迁移期 double-count (audit Finding 2)。
+     */
+    List<BomSeasoningItem> findByRecipeIdAndWorkProcessIdIsNullOrderBySeqAsc(String recipeId);
+
     /** 幂等迁移用: 判断该 BOM 是否已有调料 (已迁移则跳过). */
     boolean existsByRecipeId(String recipeId);
 

@@ -125,6 +125,16 @@ public class WorkProcessServiceImpl implements WorkProcessService {
         WorkProcess entity = workProcessRepository.findByFactoryIdAndId(factoryId, id)
                 .orElseThrow(() -> new ResourceNotFoundException("WorkProcess", "id", id));
 
+        // audit Finding 4 修复: 改名时防重名 —— 调料配方按工序靠工序名跨模式(legacy/workflow)定位,
+        // 两个同名工序会让报工成本读错工序的调料/锅序参数。create() 已有唯一性校验, update() 之前缺。
+        if (dto.getProcessName() != null && !dto.getProcessName().equals(entity.getProcessName())) {
+            boolean clash = workProcessRepository.findByFactoryIdAndProcessName(factoryId, dto.getProcessName())
+                    .stream().anyMatch(w -> !id.equals(w.getId()));
+            if (clash) {
+                throw new BusinessException(409, "工序名称已存在: " + dto.getProcessName())
+                        .withHint("请使用其他工序名称").withHintTarget("processName");
+            }
+        }
         if (dto.getProcessName() != null) entity.setProcessName(dto.getProcessName());
         if (dto.getProcessCategory() != null) entity.setProcessCategory(dto.getProcessCategory());
         if (dto.getUnit() != null) entity.setUnit(dto.getUnit());
