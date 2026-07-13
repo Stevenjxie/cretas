@@ -1,13 +1,22 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import { useRouter } from 'vue-router';
 import type { LogisticsPlan, PlanStatus } from '@/api/logistics';
 import { useLogisticsScheduling } from '../useLogisticsScheduling';
+import LogisticsMap from '../components/LogisticsMap.vue';
+import RouteCards from '../components/RouteCards.vue';
 
 const state = useLogisticsScheduling();
-const router = useRouter();
 const currentPage = ref(1);
 const pageSize = ref(20);
+
+// 调度记录「查看排线」= 在本模块内打开只读详情抽屉(自己的地图 + 路线 + 状态), 不跳排线工作台
+// (避免复用工作台导致一会 2 步一会 3 步来回撞)。
+const detailOpen = ref(false);
+const detailLoading = ref(false);
+const detailPlan = ref<LogisticsPlan | null>(null);
+const detailTotalKm = computed(() =>
+  state.scheduleResult.value.trips.reduce((sum, t) => sum + (t.totalDistanceKm || 0), 0),
+);
 
 const statusMeta: Record<PlanStatus, { label: string; type: 'info' | 'success' | 'warning' | 'danger' }> = {
   DRAFT: { label: '草稿', type: 'info' },
@@ -30,9 +39,12 @@ async function handlePageChange(nextPage: number): Promise<void> {
 }
 
 async function showDetails(plan: LogisticsPlan): Promise<void> {
-  // 跳到排线工作台并加载该计划，直接看地图 + 路线（workbench 支持 ?planId=&step= 深链）。
-  // from=record: 标记「从调度记录查看」→ 工作台隔绝为 2 步(查看并确认路线 + 确认排班), 隐藏导入、退不回导入。
-  await router.push({ path: '/scheduling/logistics/workbench', query: { planId: plan.id, step: 'map', from: 'record' } });
+  // 在调度记录模块内打开只读详情抽屉(自己的地图 + 路线 + 状态), 不跳排线工作台。
+  detailPlan.value = plan;
+  detailOpen.value = true;
+  detailLoading.value = true;
+  await state.openPlan(plan.id); // 载入 stores + trips 到共享 state, 供抽屉里的地图/路线只读展示
+  detailLoading.value = false;
 }
 
 async function ensurePlanLoaded(plan: LogisticsPlan): Promise<boolean> {
@@ -98,6 +110,52 @@ async function reExportXlsx(plan: LogisticsPlan): Promise<void> {
       </div>
     </el-card>
 
+    <!-- 调度记录详情(只读)—— 自己的地图 + 路线 + 状态, 不跳排线工作台 -->
+    <el-drawer
+      v-model="detailOpen"
+      :title="`调度记录 · ${detailPlan?.planNumber ?? ''}`"
+      size="82%"
+      direction="rtl"
+      destroy-on-close
+    >
+      <div v-loading="detailLoading" class="rd-body">
+        <div class="rd-status">
+          <span class="rd-stat"><strong>{{ state.scheduleResult.value.trips.length }}</strong>车次</span>
+          <span class="rd-dot">·</span>
+          <span class="rd-stat"><strong>{{ detailPlan?.totalStores ?? 0 }}</strong>门店</span>
+          <span class="rd-dot">·</span>
+          <span class="rd-stat"><strong>{{ detailTotalKm.toFixed(1) }}</strong>km</span>
+          <el-tag v-if="detailPlan" :type="statusMeta[detailPlan.status as PlanStatus].type" effect="plain" style="margin-left:8px">{{ statusMeta[detailPlan.status as PlanStatus].label }}</el-tag>
+          <span class="rd-date">{{ detailPlan?.planDate }}</span>
+        </div>
+        <div class="rd-main">
+          <div class="rd-map">
+            <LogisticsMap
+              :stores="state.stores.value"
+              :trips="state.scheduleResult.value.trips"
+              :selected-trip-id="state.selectedTripId.value"
+              :selected-store-id="state.selectedStoreId.value"
+              @select-trip="state.selectTrip"
+              @select-store="state.selectStore"
+            />
+          </div>
+          <div class="rd-routes">
+            <div class="rd-routes-title">配送线路 <span>{{ state.scheduleResult.value.trips.length }} 车次</span></div>
+            <RouteCards
+              readonly
+              :stores="state.stores.value"
+              :trips="state.scheduleResult.value.trips"
+              :selected-trip-id="state.selectedTripId.value"
+              :selected-store-id="state.selectedStoreId.value"
+              @select-trip="state.selectTrip"
+              @select-store="state.selectStore"
+            />
+          </div>
+        </div>
+        <div class="rd-note">💡 送达跟踪 / 异常处理(执行处理)即将上线 —— 届时可在此逐单标记送达情况、改派或标异常。</div>
+      </div>
+    </el-drawer>
+
   </main>
 </template>
 
@@ -107,5 +165,18 @@ async function reExportXlsx(plan: LogisticsPlan): Promise<void> {
 .page-header p { margin: 8px 0 0; color: #667085; }
 .empty-card { display: grid; gap: 12px; padding: 20px; text-align: center; }
 .pagination-wrapper { display: flex; justify-content: flex-end; margin-top: 12px; }
+/* 调度记录详情抽屉(只读地图 + 路线 + 状态) */
+.rd-body { display: flex; flex-direction: column; gap: 12px; }
+.rd-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 14px; background: linear-gradient(180deg,#fff,#f8fafc); border: 1px solid #e2e8f0; border-radius: 10px; font-size: 13px; color: #667085; }
+.rd-stat strong { color: #0f172a; font-size: 18px; margin-right: 3px; font-variant-numeric: tabular-nums; } .rd-dot { color: #cbd5e1; }
+.rd-date { margin-left: auto; color: #98a2b3; font-size: 12.5px; }
+.rd-main { display: flex; gap: 12px; height: 62vh; min-height: 380px; }
+.rd-map { flex: 1 1 auto; min-width: 0; position: relative; border-radius: 10px; overflow: hidden; border: 1px solid #e2e8f0; }
+.rd-map :deep(.map-stage) { height: 100% !important; aspect-ratio: auto !important; }
+.rd-routes { flex: 0 0 380px; display: flex; flex-direction: column; overflow: hidden; }
+.rd-routes-title { flex: 0 0 auto; margin-bottom: 8px; color: #101828; font-size: 14px; font-weight: 700; } .rd-routes-title span { color: #98a2b3; font-size: 12px; font-weight: 400; margin-left: 6px; }
+.rd-routes :deep(.route-cards) { grid-template-columns: 1fr; overflow-y: auto; flex: 1 1 auto; padding-right: 6px; align-content: start; }
+.rd-note { padding: 10px 14px; color: #175cd3; font-size: 12.5px; background: #eff8ff; border: 1px solid #b2ddff; border-radius: 8px; }
+@media (max-width: 980px) { .rd-main { flex-direction: column; height: auto; } .rd-map { height: 360px; } .rd-routes { flex-basis: auto; } .rd-routes :deep(.route-cards) { max-height: 400px; } }
 @media (max-width: 720px) { .support-page { padding: 16px; } }
 </style>

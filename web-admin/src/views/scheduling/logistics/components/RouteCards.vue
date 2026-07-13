@@ -6,9 +6,11 @@ import type { RouteTrip, StoreOrder, Vehicle } from '../types';
 const props = defineProps<{
   stores: StoreOrder[];
   trips: RouteTrip[];
-  vehicles: Vehicle[];
+  vehicles?: Vehicle[];
   selectedTripId: string | null;
   selectedStoreId: string | null;
+  /** 只读展示(调度记录详情视图): 隐藏派车/司机下拉、确认按钮、门店编辑, 车辆/司机以文字显示。 */
+  readonly?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -26,7 +28,7 @@ const emit = defineEmits<{
 // ========== 派车 / 司机 / 确认 / 门店编辑(原「人工确认」步合并进来) ==========
 /** 某车次可选司机 = 该车辆自身绑定的司机(车辆↔司机在车辆主数据里)。 */
 function driverOptions(trip: RouteTrip): Vehicle[] {
-  return props.vehicles.filter((v) => v.id === trip.vehicleId && v.driverId);
+  return (props.vehicles ?? []).filter((v) => v.id === trip.vehicleId && v.driverId);
 }
 
 /** 逐车确认的即时反馈: 点击后按钮立即 loading, 直到该车次 status 变 confirmed(新 snapshot 到达)后清除。 */
@@ -208,7 +210,16 @@ function etaTitleFor(tripId: string, i: number): string {
         </span>
       </header>
 
-      <div class="assign-row" @click.stop>
+      <!-- 只读展示(调度记录详情): 车辆/司机以文字显示 -->
+      <div v-if="readonly" class="vehicle-row">
+        <span class="field-label">车辆</span>
+        <strong>{{ trip.vehiclePlate ?? '—' }}</strong>
+        <span class="field-label">司机</span>
+        <strong>{{ trip.driverName ?? '—' }}</strong>
+        <span v-if="trip.vehicleTripSeq && trip.vehicleTripSeq > 1" class="trip-seq">该车第 {{ trip.vehicleTripSeq }} 趟</span>
+      </div>
+      <!-- 可编辑(排线工作台): 派车/司机下拉 -->
+      <div v-else class="assign-row" @click.stop>
         <div class="assign-fld">
           <span class="field-label">车辆</span>
           <el-select
@@ -219,7 +230,7 @@ function etaTitleFor(tripId: string, i: number): string {
             data-testid="confirm-vehicle-select"
             @update:model-value="emit('assign-vehicle', trip.id, $event)"
           >
-            <el-option v-for="v in vehicles" :key="v.id" :label="`${v.plate} · ${v.capacityCbm}m³`" :value="v.id" />
+            <el-option v-for="v in (vehicles ?? [])" :key="v.id" :label="`${v.plate} · ${v.capacityCbm}m³`" :value="v.id" />
           </el-select>
         </div>
         <div class="assign-fld">
@@ -256,14 +267,16 @@ function etaTitleFor(tripId: string, i: number): string {
 
       <div class="chain-head">
         <span class="chain-title">门店顺序（{{ trip.storeIds.length }}）</span>
-        <button
-          v-if="!isEditing(trip.id)"
-          type="button"
-          class="edit-btn"
-          data-testid="edit-stops"
-          @click.stop="toggleEdit(trip.id)"
-        >✎ 调整门店顺序</button>
-        <button v-else type="button" class="done-btn" data-testid="edit-stops-done" @click.stop="toggleEdit(trip.id)">完成</button>
+        <template v-if="!readonly">
+          <button
+            v-if="!isEditing(trip.id)"
+            type="button"
+            class="edit-btn"
+            data-testid="edit-stops"
+            @click.stop="toggleEdit(trip.id)"
+          >✎ 调整门店顺序</button>
+          <button v-else type="button" class="done-btn" data-testid="edit-stops-done" @click.stop="toggleEdit(trip.id)">完成</button>
+        </template>
       </div>
 
       <!-- 编辑态: 上移/下移 + 移至其他车次(防呆闸: 点「调整门店顺序」才出现) -->
@@ -330,8 +343,8 @@ function etaTitleFor(tripId: string, i: number): string {
         </div>
       </dl>
 
-      <!-- 确认此线路(原「人工确认」的逐条确认): 待匹配车/司机则禁用并提示, 已确认则灰化 -->
-      <div class="card-confirm" @click.stop>
+      <!-- 确认此线路(原「人工确认」的逐条确认): 待匹配车/司机则禁用并提示, 已确认则灰化。只读视图不显示。 -->
+      <div v-if="!readonly" class="card-confirm" @click.stop>
         <button
           type="button"
           class="confirm-btn"
