@@ -33,6 +33,9 @@ public class BomSeasoningResponse {
     /** 注射率. */
     private BigDecimal injectionRate;
 
-    /** 调料明细, 按 seq ASC. */
+    /** 调料明细, 按 seq ASC. (每条含 workProcessId, 前端按工序分组) */
     private List<BomSeasoningItem> seasoningItems;
+
+    /** 调料配方按工序 (2026-07-13): 每道工序的锅序/注射量参数 (bom_process_seasoning)。 */
+    private List<ProcessSeasoningParamDTO> processParams;
 }

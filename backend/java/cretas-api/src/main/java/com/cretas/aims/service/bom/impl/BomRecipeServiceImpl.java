@@ -16,6 +16,9 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
+import com.cretas.aims.repository.bom.BomProcessSeasoningRepository;
+import com.cretas.aims.entity.bom.BomProcessSeasoning;
+import com.cretas.aims.dto.bom.ProcessSeasoningParamDTO;
 import com.cretas.aims.service.bom.BomRecipeService;
 import com.cretas.aims.service.bom.NestedBomCostService;
 import com.cretas.aims.service.uom.MaterialUomConverter;
@@ -67,6 +70,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     private final NestedBomCostService nestedBomCostService;
     /** U5: BOM 调料明细 repo (BOM 统管配方+锅序, 2026-06-24). */
     private final BomSeasoningItemRepository seasoningItemRepo;
+    private final BomProcessSeasoningRepository bomProcessSeasoningRepo;
 
     @Override
     @Transactional
@@ -245,9 +249,24 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             cs.setPriceSource2(s.getPriceSource2());
             cs.setCountInSeasoning(s.getCountInSeasoning());
             cs.setRemark(s.getRemark());
+            cs.setWorkProcessId(s.getWorkProcessId()); // 调料配方按工序 (2026-07-13): 保工序分配
             clonedSeasoning.add(cs);
         }
         seasoningItemRepo.saveAll(clonedSeasoning);
+
+        // 调料配方按工序 (2026-07-13): 克隆 per-工序 参数, 否则新 DRAFT 丢锅序/注射量
+        List<BomProcessSeasoning> clonedParams = new ArrayList<>();
+        for (BomProcessSeasoning p : bomProcessSeasoningRepo.findByRecipeIdAndDeletedAtIsNull(source.getId())) {
+            BomProcessSeasoning cp = new BomProcessSeasoning();
+            cp.setRecipeId(clone.getId());
+            cp.setFactoryId(factoryId);
+            cp.setWorkProcessId(p.getWorkProcessId());
+            cp.setSubsequentPotRatio(p.getSubsequentPotRatio());
+            cp.setInjectionAmountKg(p.getInjectionAmountKg());
+            cp.setNotes(p.getNotes());
+            clonedParams.add(cp);
+        }
+        bomProcessSeasoningRepo.saveAll(clonedParams);
 
         recomputeMaterialCost(clone);
         return recipeRepo.save(clone);
@@ -459,10 +478,47 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                 si.setPriceSource2(dto.getPriceSource2());
                 si.setCountInSeasoning(dto.getCountInSeasoning() != null ? dto.getCountInSeasoning() : Boolean.TRUE);
                 si.setRemark(dto.getRemark());
+                si.setWorkProcessId(dto.getWorkProcessId()); // 调料配方按工序 (2026-07-13)
                 newItems.add(si);
             }
         }
         seasoningItemRepo.saveAll(newItems);
+
+        // 调料配方按工序 (2026-07-13): 全量替换该 recipe 的 per-工序 参数 (bom_process_seasoning)。
+        List<ProcessSeasoningParamDTO> params = req.getProcessParams();
+        if (params != null) {
+            java.util.Set<String> seenWp = new java.util.HashSet<>();
+            for (ProcessSeasoningParamDTO p : params) {
+                if (p.getWorkProcessId() == null || p.getWorkProcessId().isBlank()) {
+                    throw new BusinessException(400, "工序参数缺 workProcessId")
+                            .withHint("每道工序的锅序/注射量参数必须带 workProcessId");
+                }
+                if (!seenWp.add(p.getWorkProcessId())) {
+                    throw new BusinessException(400, "同一工序的调料参数重复: " + p.getWorkProcessId())
+                            .withHint("每道工序只能有一行锅序/注射量参数");
+                }
+            }
+        }
+        List<BomProcessSeasoning> oldParams = bomProcessSeasoningRepo.findByRecipeIdAndDeletedAtIsNull(recipeId);
+        for (BomProcessSeasoning old : oldParams) {
+            old.softDelete();
+        }
+        bomProcessSeasoningRepo.saveAll(oldParams);
+        List<BomProcessSeasoning> newParams = new ArrayList<>();
+        if (params != null) {
+            for (ProcessSeasoningParamDTO p : params) {
+                BomProcessSeasoning bps = new BomProcessSeasoning();
+                bps.setRecipeId(recipeId);
+                bps.setFactoryId(factoryId);
+                bps.setWorkProcessId(p.getWorkProcessId());
+                bps.setSubsequentPotRatio(p.getSubsequentPotRatio());
+                bps.setInjectionAmountKg(p.getInjectionAmountKg());
+                bps.setNotes(p.getNotes());
+                newParams.add(bps);
+            }
+        }
+        bomProcessSeasoningRepo.saveAll(newParams);
+
         recipeRepo.save(recipe);
 
         return buildSeasoningResponse(recipe, newItems);
@@ -478,6 +534,17 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         resp.setSubsequentPotRatio(recipe.getSubsequentPotRatio());
         resp.setInjectionRate(recipe.getInjectionRate());
         resp.setSeasoningItems(seasoningItems);
+        // 调料配方按工序 (2026-07-13): 带上 per-工序 锅序/注射量参数
+        List<ProcessSeasoningParamDTO> params = new ArrayList<>();
+        for (BomProcessSeasoning bps : bomProcessSeasoningRepo.findByRecipeIdAndDeletedAtIsNull(recipe.getId())) {
+            ProcessSeasoningParamDTO dto = new ProcessSeasoningParamDTO();
+            dto.setWorkProcessId(bps.getWorkProcessId());
+            dto.setSubsequentPotRatio(bps.getSubsequentPotRatio());
+            dto.setInjectionAmountKg(bps.getInjectionAmountKg());
+            dto.setNotes(bps.getNotes());
+            params.add(dto);
+        }
+        resp.setProcessParams(params);
         return resp;
     }
 

@@ -51,6 +51,12 @@ class WorkProcessServiceImplTest {
     @Mock
     private WorkProcessRepository workProcessRepository;
 
+    @Mock
+    private com.cretas.aims.repository.bom.BomSeasoningItemRepository bomSeasoningItemRepository;
+
+    @Mock
+    private com.cretas.aims.repository.bom.BomProcessSeasoningRepository bomProcessSeasoningRepository;
+
     @InjectMocks
     private WorkProcessServiceImpl service;
 
@@ -487,6 +493,20 @@ class WorkProcessServiceImplTest {
             // Assert
             verify(workProcessRepository).findByFactoryIdAndId(FACTORY_ID, WP_ID);
             verify(workProcessRepository).delete(existing);
+        }
+
+        @Test
+        @DisplayName("UT-WP-06c: 工序被调料配方引用 → 409 阻断, 不删 (孤儿守卫)")
+        void testDeleteBlockedWhenReferencedBySeasoning() {
+            WorkProcess existing = buildDefaultWorkProcess();
+            when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WP_ID))
+                    .thenReturn(Optional.of(existing));
+            when(bomSeasoningItemRepository.existsByWorkProcessId(WP_ID)).thenReturn(true);
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.delete(FACTORY_ID, WP_ID));
+            assertEquals(409, ex.getCode());
+            verify(workProcessRepository, never()).delete(any());
         }
 
         @Test

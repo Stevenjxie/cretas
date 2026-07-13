@@ -34,6 +34,13 @@ public class BomSeasoningSaveRequest {
     private List<SeasoningItemDTO> seasoningItems = new ArrayList<>();
 
     /**
+     * 调料配方按工序 (2026-07-13): 每道工序的锅序/注射量参数 (全量替换 bom_process_seasoning)。
+     * 熟制工序填 subsequentPotRatio; 注射工序填 injectionAmountKg。新 UI 写此, 不再写上面 header 三参数。
+     */
+    @Valid
+    private List<ProcessSeasoningParamDTO> processParams = new ArrayList<>();
+
+    /**
      * 单条调料 DTO (注射段/熟制段原料行).
      */
     @Data
@@ -42,6 +49,9 @@ public class BomSeasoningSaveRequest {
         /** INJECTION | COOKING. */
         @NotBlank(message = "section 不可为空")
         private String section;
+
+        /** 调料配方按工序 (2026-07-13): 该明细归属工序 (work_processes.id)。per-工序 UI 下必填; 兼容期可空。 */
+        private String workProcessId;
 
         /** 段内排序序号 (从 0 起). */
         private Integer seq;

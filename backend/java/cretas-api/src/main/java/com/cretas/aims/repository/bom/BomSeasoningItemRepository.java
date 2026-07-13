@@ -28,6 +28,9 @@ public interface BomSeasoningItemRepository extends JpaRepository<BomSeasoningIt
      */
     List<BomSeasoningItem> findByRecipeIdAndWorkProcessIdIsNullOrderBySeqAsc(String recipeId);
 
+    /** 孤儿守卫 (2026-07-13): 是否有任何调料明细挂在该工序上 (删工序前检查)。 */
+    boolean existsByWorkProcessId(String workProcessId);
+
     /** 幂等迁移用: 判断该 BOM 是否已有调料 (已迁移则跳过). */
     boolean existsByRecipeId(String recipeId);
 

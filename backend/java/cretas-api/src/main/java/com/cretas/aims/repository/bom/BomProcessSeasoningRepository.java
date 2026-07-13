@@ -23,4 +23,7 @@ public interface BomProcessSeasoningRepository extends JpaRepository<BomProcessS
     /** 取某 BOM 配方在指定工序上的调料参数 (recipe_id + work_process_id 唯一). */
     Optional<BomProcessSeasoning> findByRecipeIdAndWorkProcessIdAndDeletedAtIsNull(
             String recipeId, String workProcessId);
+
+    /** 孤儿守卫 (2026-07-13): 是否有任何工序参数挂在该工序上 (删工序前检查)。 */
+    boolean existsByWorkProcessId(String workProcessId);
 }
