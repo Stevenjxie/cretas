@@ -3,6 +3,7 @@ package com.cretas.aims.logistics.controller;
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.logistics.dto.plan.ConfirmRequest;
+import com.cretas.aims.logistics.dto.plan.DeliveryExceptionRequest;
 import com.cretas.aims.logistics.dto.plan.GeneratePlanRequest;
 import com.cretas.aims.logistics.dto.plan.MoveStopRequest;
 import com.cretas.aims.logistics.dto.plan.PlanDto;
@@ -159,5 +160,36 @@ public class LogisticsPlanController {
         Long version = request == null ? null : request.getVersion();
         Long userId = SecurityUtils.getCurrentUserId();
         return ApiResponse.success("计划已确认", planService.confirmPlan(factoryId, planId, version, userId));
+    }
+
+    // ===== 执行跟踪(排线确认后, 逐门店送达/异常) =====
+
+    @PostMapping("/plans/{planId}/orders/{orderId}/deliver")
+    @Operation(summary = "标记门店已送达", description = "执行阶段: 某门店送达成功(幂等); 计划须已确认")
+    public ApiResponse<PlanSnapshotDto> markDelivered(
+            @PathVariable String factoryId,
+            @PathVariable String planId,
+            @PathVariable String orderId) {
+        return ApiResponse.success("已标记送达", planService.markDelivered(factoryId, planId, orderId));
+    }
+
+    @PostMapping("/plans/{planId}/orders/{orderId}/exception")
+    @Operation(summary = "上报门店配送异常", description = "reason 原因 + disposition 处置(明日再送/改派/退回仓库/取消该单) + note 备注")
+    public ApiResponse<PlanSnapshotDto> markException(
+            @PathVariable String factoryId,
+            @PathVariable String planId,
+            @PathVariable String orderId,
+            @RequestBody DeliveryExceptionRequest request) {
+        return ApiResponse.success("已记录异常", planService.markException(
+                factoryId, planId, orderId, request.getReason(), request.getDisposition(), request.getNote()));
+    }
+
+    @PostMapping("/plans/{planId}/orders/{orderId}/reset")
+    @Operation(summary = "撤销执行标记", description = "把某门店的送达/异常标记撤回到待送达(幂等)")
+    public ApiResponse<PlanSnapshotDto> resetDelivery(
+            @PathVariable String factoryId,
+            @PathVariable String planId,
+            @PathVariable String orderId) {
+        return ApiResponse.success("已撤销", planService.resetDelivery(factoryId, planId, orderId));
     }
 }

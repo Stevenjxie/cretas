@@ -113,6 +113,12 @@ export interface OrderBatch {
 
 export type LocationStatus = 'RESOLVED' | 'UNRESOLVED' | 'OUT_OF_BOUNDS';
 export type DeliveryOrderStatus = 'IMPORTED' | 'PLANNED' | 'CONFIRMED' | 'CANCELLED';
+/** 执行态(排线确认后送达跟踪): 待送达 / 已送达 / 异常。 */
+export type DeliveryExecutionStatus = 'PENDING' | 'DELIVERED' | 'EXCEPTION';
+/** 异常原因。 */
+export type ExceptionReason = 'STORE_CLOSED' | 'REJECTED' | 'UNREACHABLE' | 'DAMAGED' | 'OTHER';
+/** 异常处置: 明日再送 / 改派 / 退回仓库 / 取消该单。 */
+export type ExceptionDisposition = 'RESCHEDULE' | 'REASSIGN' | 'RETURN' | 'CANCEL';
 
 /** 单个门店/门店订单（后端持久化形态；与前端 fixture StoreOrder 字段不同，见 types.ts 注释） */
 export interface LogisticsDeliveryOrder {
@@ -133,6 +139,12 @@ export interface LogisticsDeliveryOrder {
   latitude?: number;
   locationStatus: LocationStatus;
   status: DeliveryOrderStatus;
+  /** 执行态(送达跟踪); 老数据/未确认计划可能为空, 前端按 PENDING 处理。 */
+  deliveryStatus?: DeliveryExecutionStatus | null;
+  deliveredAt?: string | null;
+  exceptionReason?: string | null;
+  exceptionDisposition?: string | null;
+  exceptionNote?: string | null;
   sourceRowNumber: number;
   version: number;
 }
@@ -470,6 +482,13 @@ export interface LogisticsPlan {
   confirmedBy?: number;
   confirmedAt?: string;
   version: number;
+  // ---- 执行进度(仅已确认/已导出计划有值; 其余 undefined) ----
+  /** NOT_STARTED 未开始 / IN_PROGRESS 执行中 / COMPLETED 已完成; 未确认计划无。 */
+  executionStatus?: 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED' | null;
+  deliveredCount?: number | null;
+  exceptionCount?: number | null;
+  pendingCount?: number | null;
+  totalOrders?: number | null;
 }
 
 /** 运力诊断结论：SUFFICIENT=够送完，INSUFFICIENT=够排但要跑多趟，UNSERVABLE=有单排不进任何车次。 */
@@ -600,6 +619,28 @@ export function confirmAllTrips(factoryId: string, planId: string) {
 
 export function confirmPlan(factoryId: string, planId: string, version?: number) {
   return post<PlanSnapshot>(`/${factoryId}/logistics/plans/${planId}/confirm`, { version });
+}
+
+// ==================== 执行跟踪(排线确认后, 逐门店送达/异常) ====================
+
+/** POST /plans/{planId}/orders/{orderId}/deliver — 标记某门店已送达（返回最新快照）。 */
+export function markDelivered(factoryId: string, planId: string, orderId: string) {
+  return post<PlanSnapshot>(`/${factoryId}/logistics/plans/${planId}/orders/${orderId}/deliver`, {});
+}
+
+/** POST /plans/{planId}/orders/{orderId}/exception — 上报门店配送异常（原因 + 处置 + 备注）。 */
+export function markDeliveryException(
+  factoryId: string,
+  planId: string,
+  orderId: string,
+  body: { reason: ExceptionReason; disposition: ExceptionDisposition; note?: string | null },
+) {
+  return post<PlanSnapshot>(`/${factoryId}/logistics/plans/${planId}/orders/${orderId}/exception`, body);
+}
+
+/** POST /plans/{planId}/orders/{orderId}/reset — 撤销送达/异常标记，回到待送达。 */
+export function resetDelivery(factoryId: string, planId: string, orderId: string) {
+  return post<PlanSnapshot>(`/${factoryId}/logistics/plans/${planId}/orders/${orderId}/reset`, {});
 }
 
 /** GET /plans/{planId}/export.csv — 返回 Blob，内容须与计划详情逐字段一致（handoff §16.1 验收项） */

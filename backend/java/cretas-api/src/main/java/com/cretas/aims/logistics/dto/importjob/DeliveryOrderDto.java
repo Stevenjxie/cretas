@@ -1,5 +1,6 @@
 package com.cretas.aims.logistics.dto.importjob;
 
+import com.cretas.aims.logistics.entity.enums.DeliveryExecutionStatus;
 import com.cretas.aims.logistics.entity.enums.DeliveryOrderStatus;
 import com.cretas.aims.logistics.entity.enums.LocationStatus;
 import lombok.AllArgsConstructor;
@@ -36,6 +37,12 @@ public class DeliveryOrderDto {
     private BigDecimal latitude;
     private LocationStatus locationStatus;
     private DeliveryOrderStatus status;
+    // 执行态(送达跟踪)
+    private DeliveryExecutionStatus deliveryStatus;
+    private String deliveredAt;
+    private String exceptionReason;
+    private String exceptionDisposition;
+    private String exceptionNote;
     private Integer sourceRowNumber;
     private Long version;
 }

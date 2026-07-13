@@ -78,4 +78,22 @@ public interface LogisticsPlanService {
 
     /** POST /plans/{planId}/confirm — 全部车次 CONFIRMED 且零未分配门店才能确认。 */
     PlanSnapshotDto confirmPlan(String factoryId, String planId, Long version, Long userId);
+
+    // ===== 执行跟踪(排线确认后, 逐门店送达/异常标记) =====
+
+    /** POST /plans/{planId}/orders/{orderId}/deliver — 标记某门店已送达(幂等)。 */
+    PlanSnapshotDto markDelivered(String factoryId, String planId, String orderId);
+
+    /**
+     * POST /plans/{planId}/orders/{orderId}/exception — 标记某门店异常未送达。
+     *
+     * @param reason      异常原因(STORE_CLOSED/REJECTED/UNREACHABLE/DAMAGED/OTHER)
+     * @param disposition 处置(RESCHEDULE 明日再送 / REASSIGN 改派 / RETURN 退回仓库 / CANCEL 取消该单)
+     * @param note        备注(改派目标车次名 / 其他原因说明); CANCEL 时同时软取消该订单
+     */
+    PlanSnapshotDto markException(String factoryId, String planId, String orderId,
+            String reason, String disposition, String note);
+
+    /** POST /plans/{planId}/orders/{orderId}/reset — 撤销执行标记, 回到待送达(幂等)。 */
+    PlanSnapshotDto resetDelivery(String factoryId, String planId, String orderId);
 }

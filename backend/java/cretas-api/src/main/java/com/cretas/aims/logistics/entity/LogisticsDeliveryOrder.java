@@ -1,6 +1,7 @@
 package com.cretas.aims.logistics.entity;
 
 import com.cretas.aims.entity.BaseEntity;
+import com.cretas.aims.logistics.entity.enums.DeliveryExecutionStatus;
 import com.cretas.aims.logistics.entity.enums.DeliveryOrderStatus;
 import com.cretas.aims.logistics.entity.enums.LocationStatus;
 import jakarta.persistence.*;
@@ -69,6 +70,9 @@ public class LogisticsDeliveryOrder extends BaseEntity {
         if (status == null) {
             status = DeliveryOrderStatus.IMPORTED;
         }
+        if (deliveryStatus == null) {
+            deliveryStatus = DeliveryExecutionStatus.PENDING;
+        }
     }
 
     @Column(name = "factory_id", length = 64, nullable = false)
@@ -121,6 +125,27 @@ public class LogisticsDeliveryOrder extends BaseEntity {
     @Enumerated(EnumType.STRING)
     @Column(name = "status", length = 24, nullable = false)
     private DeliveryOrderStatus status;
+
+    // ===== 执行态(排线确认后的送达跟踪, 与规划态 status 独立) =====
+    @Enumerated(EnumType.STRING)
+    @Column(name = "delivery_status", length = 24, nullable = false)
+    private DeliveryExecutionStatus deliveryStatus;
+
+    /** 送达时间(标记已送达时写)。 */
+    @Column(name = "delivered_at")
+    private java.time.LocalDateTime deliveredAt;
+
+    /** 异常原因(STORE_CLOSED/REJECTED/UNREACHABLE/DAMAGED/OTHER)。 */
+    @Column(name = "exception_reason", length = 32)
+    private String exceptionReason;
+
+    /** 异常处置(RESCHEDULE 明日再送 / REASSIGN 改派 / RETURN 退回 / CANCEL 取消)。 */
+    @Column(name = "exception_disposition", length = 32)
+    private String exceptionDisposition;
+
+    /** 异常备注(改派目标车次名 / 其他原因说明等)。 */
+    @Column(name = "exception_note", length = 500)
+    private String exceptionNote;
 
     @Column(name = "source_row_number")
     private Integer sourceRowNumber;

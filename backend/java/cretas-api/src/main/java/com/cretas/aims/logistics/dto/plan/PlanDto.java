@@ -41,4 +41,12 @@ public class PlanDto {
     private String confirmedBy;
     private LocalDateTime confirmedAt;
     private Long version;
+
+    // ---- 执行进度(仅已确认/已导出计划有值; 其余为 null) ----
+    /** 执行态: NOT_STARTED 未开始 / IN_PROGRESS 执行中 / COMPLETED 已完成; 未确认计划为 null。 */
+    private String executionStatus;
+    private Integer deliveredCount;
+    private Integer exceptionCount;
+    private Integer pendingCount;
+    private Integer totalOrders;
 }

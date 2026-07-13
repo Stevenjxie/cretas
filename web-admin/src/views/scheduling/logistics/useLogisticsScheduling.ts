@@ -40,7 +40,10 @@ import {
   listOrders,
   listPlans as apiListPlans,
   listVehicles as apiListVehicles,
+  markDelivered as apiMarkDelivered,
+  markDeliveryException as apiMarkDeliveryException,
   moveStop as apiMoveStop,
+  resetDelivery as apiResetDelivery,
   previewOrderImport,
   previewOrderImportPaste,
   regeneratePlan as apiRegeneratePlan,
@@ -55,6 +58,8 @@ import {
 import type {
   CapacityDiagnosis,
   DriverInput,
+  ExceptionDisposition,
+  ExceptionReason,
   LogisticsDeliveryOrder,
   LogisticsDriver,
   LogisticsPlan,
@@ -718,6 +723,81 @@ async function confirmSchedule(): Promise<boolean> {
   }
 }
 
+// ==================== 执行跟踪(排线确认后, 逐门店送达/异常) ====================
+
+/** 当前正在提交执行标记的订单 id（供按钮 loading，避免整页 loading）。 */
+const executionBusyId = ref<string | null>(null);
+
+/** 用后端返回的最新快照同步 orders 中每个订单的执行态（snapshot.trips[].stops[].order 内嵌）。 */
+function syncOrdersFromSnapshot(snapshot: PlanSnapshot): void {
+  const byId = new Map<string, LogisticsDeliveryOrder>();
+  for (const trip of snapshot.trips) {
+    for (const stop of trip.stops ?? []) {
+      if (stop.order) byId.set(stop.order.id, stop.order);
+    }
+  }
+  orders.value = orders.value.map((o) => byId.get(o.id) ?? o);
+}
+
+async function markStoreDelivered(orderId: string): Promise<boolean> {
+  if (!plan.value) return false;
+  executionBusyId.value = orderId;
+  try {
+    const factoryId = requireFactoryId();
+    const res = await apiMarkDelivered(factoryId, plan.value.id, orderId);
+    applyPlanSnapshot(res.data);
+    syncOrdersFromSnapshot(res.data);
+    planError.value = null;
+    return true;
+  } catch (err) {
+    planError.value = errorMessage(err);
+    return false;
+  } finally {
+    executionBusyId.value = null;
+  }
+}
+
+async function markStoreException(
+  orderId: string,
+  reason: ExceptionReason,
+  disposition: ExceptionDisposition,
+  note?: string | null,
+): Promise<boolean> {
+  if (!plan.value) return false;
+  executionBusyId.value = orderId;
+  try {
+    const factoryId = requireFactoryId();
+    const res = await apiMarkDeliveryException(factoryId, plan.value.id, orderId, { reason, disposition, note });
+    applyPlanSnapshot(res.data);
+    syncOrdersFromSnapshot(res.data);
+    planError.value = null;
+    return true;
+  } catch (err) {
+    planError.value = errorMessage(err);
+    return false;
+  } finally {
+    executionBusyId.value = null;
+  }
+}
+
+async function resetStoreDelivery(orderId: string): Promise<boolean> {
+  if (!plan.value) return false;
+  executionBusyId.value = orderId;
+  try {
+    const factoryId = requireFactoryId();
+    const res = await apiResetDelivery(factoryId, plan.value.id, orderId);
+    applyPlanSnapshot(res.data);
+    syncOrdersFromSnapshot(res.data);
+    planError.value = null;
+    return true;
+  } catch (err) {
+    planError.value = errorMessage(err);
+    return false;
+  } finally {
+    executionBusyId.value = null;
+  }
+}
+
 function previewExport(): boolean {
   if (!plan.value || plan.value.trips.length === 0) return false;
   activeStep.value = 'export';
@@ -1005,6 +1085,13 @@ const state = {
   confirmTrip,
   confirmAllTrips,
   confirmSchedule,
+
+  // 执行跟踪
+  executionBusyId,
+  markStoreDelivered,
+  markStoreException,
+  resetStoreDelivery,
+
   previewExport,
   exportCsv,
   exportXlsx,

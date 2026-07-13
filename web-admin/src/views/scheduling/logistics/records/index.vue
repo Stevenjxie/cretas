@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import type { LogisticsPlan, PlanStatus } from '@/api/logistics';
+import type { LogisticsPlan, PlanStatus, ExceptionReason, ExceptionDisposition } from '@/api/logistics';
 import { useLogisticsScheduling } from '../useLogisticsScheduling';
 import LogisticsMap from '../components/LogisticsMap.vue';
 import RouteCards from '../components/RouteCards.vue';
+import ExecutionTracker from '../components/ExecutionTracker.vue';
 
 const state = useLogisticsScheduling();
 const currentPage = ref(1);
@@ -14,9 +15,25 @@ const pageSize = ref(20);
 const detailOpen = ref(false);
 const detailLoading = ref(false);
 const detailPlan = ref<LogisticsPlan | null>(null);
+// 抽屉内视图: 路线(只读地图+线路) / 执行(送达跟踪, 仅已确认计划)
+const detailView = ref<'route' | 'execution'>('route');
 const detailTotalKm = computed(() =>
   state.scheduleResult.value.trips.reduce((sum, t) => sum + (t.totalDistanceKm || 0), 0),
 );
+// 计划是否进入执行阶段(已确认/已导出才能标送达)
+const detailConfirmed = computed(() =>
+  detailPlan.value?.status === 'CONFIRMED' || detailPlan.value?.status === 'EXPORTED',
+);
+
+// 列表「执行进度」列展示
+function execMeta(row: LogisticsPlan): { text: string; type: 'info' | 'success' | 'warning'; done: number; total: number } | null {
+  if (!row.executionStatus) return null;
+  const total = row.totalOrders ?? 0;
+  const done = (row.deliveredCount ?? 0) + (row.exceptionCount ?? 0);
+  if (row.executionStatus === 'COMPLETED') return { text: '已完成', type: 'success', done, total };
+  if (row.executionStatus === 'IN_PROGRESS') return { text: `执行中 ${done}/${total}`, type: 'warning', done, total };
+  return { text: '未开始', type: 'info', done, total };
+}
 
 const statusMeta: Record<PlanStatus, { label: string; type: 'info' | 'success' | 'warning' | 'danger' }> = {
   DRAFT: { label: '草稿', type: 'info' },
@@ -53,13 +70,40 @@ async function onDateChange(): Promise<void> {
   await reload(0);
 }
 
-async function showDetails(plan: LogisticsPlan): Promise<void> {
-  // 在调度记录模块内打开只读详情抽屉(自己的地图 + 路线 + 状态), 不跳排线工作台。
+async function showDetails(plan: LogisticsPlan, view: 'route' | 'execution' = 'route'): Promise<void> {
+  // 在调度记录模块内打开只读详情抽屉(自己的地图 + 路线 + 状态 + 执行跟踪), 不跳排线工作台。
   detailPlan.value = plan;
+  // 执行视图仅对已确认/已导出计划有意义, 否则回落路线视图
+  detailView.value = (view === 'execution' && (plan.status === 'CONFIRMED' || plan.status === 'EXPORTED')) ? 'execution' : 'route';
   detailOpen.value = true;
   detailLoading.value = true;
-  await state.openPlan(plan.id); // 载入 stores + trips 到共享 state, 供抽屉里的地图/路线只读展示
+  await state.openPlan(plan.id); // 载入 stores + trips + orders 到共享 state, 供抽屉里的地图/路线/执行只读展示
   detailLoading.value = false;
+}
+
+// 执行跟踪: 逐门店标送达/异常/撤销(改后刷新 detailPlan 的进度)。
+async function onDeliver(orderId: string): Promise<void> {
+  if (await state.markStoreDelivered(orderId)) syncDetailProgress();
+}
+async function onException(p: { orderId: string; reason: ExceptionReason; disposition: ExceptionDisposition; note: string | null }): Promise<void> {
+  if (await state.markStoreException(p.orderId, p.reason, p.disposition, p.note)) syncDetailProgress();
+}
+async function onResetDelivery(orderId: string): Promise<void> {
+  if (await state.resetStoreDelivery(orderId)) syncDetailProgress();
+}
+// 标记后同步刷新列表行的进度数字(从当前 orders 现算, 免整列表重拉)。
+function syncDetailProgress(): void {
+  if (!detailPlan.value) return;
+  const os = state.orders.value;
+  const delivered = os.filter((o) => o.deliveryStatus === 'DELIVERED').length;
+  const exception = os.filter((o) => o.deliveryStatus === 'EXCEPTION').length;
+  const total = os.length;
+  const done = delivered + exception;
+  detailPlan.value.deliveredCount = delivered;
+  detailPlan.value.exceptionCount = exception;
+  detailPlan.value.pendingCount = total - done;
+  detailPlan.value.totalOrders = total;
+  detailPlan.value.executionStatus = done === 0 ? 'NOT_STARTED' : (done < total ? 'IN_PROGRESS' : 'COMPLETED');
 }
 
 async function ensurePlanLoaded(plan: LogisticsPlan): Promise<boolean> {
@@ -118,8 +162,21 @@ async function reExportXlsx(plan: LogisticsPlan): Promise<void> {
         <el-table-column label="状态" min-width="100">
           <template #default="{ row }"><el-tag :type="statusMeta[row.status as PlanStatus].type" effect="plain">{{ statusMeta[row.status as PlanStatus].label }}</el-tag></template>
         </el-table-column>
-        <el-table-column label="操作" min-width="220" fixed="right">
+        <el-table-column label="执行进度" min-width="150">
           <template #default="{ row }">
+            <template v-if="execMeta(row)">
+              <el-tag :type="execMeta(row)!.type" effect="light" size="small">{{ execMeta(row)!.text }}</el-tag>
+              <span v-if="(row.exceptionCount ?? 0) > 0" class="rec-exc">异常 {{ row.exceptionCount }}</span>
+            </template>
+            <span v-else class="rec-dash">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" min-width="280" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              v-if="row.status === 'CONFIRMED' || row.status === 'EXPORTED'"
+              link type="primary" @click="showDetails(row, 'execution')"
+            >执行处理</el-button>
             <el-button link type="primary" @click="showDetails(row)">查看详情</el-button>
             <el-button link type="primary" @click="reExportCsv(row)">导出 CSV</el-button>
             <el-button link type="primary" @click="reExportXlsx(row)">导出 Excel</el-button>
@@ -157,7 +214,15 @@ async function reExportXlsx(plan: LogisticsPlan): Promise<void> {
           <el-tag v-if="detailPlan" :type="statusMeta[detailPlan.status as PlanStatus].type" effect="plain" style="margin-left:8px">{{ statusMeta[detailPlan.status as PlanStatus].label }}</el-tag>
           <span class="rd-date">{{ detailPlan?.planDate }}</span>
         </div>
-        <div class="rd-main">
+
+        <!-- 路线 / 执行 视图切换(执行仅已确认计划) -->
+        <el-radio-group v-if="detailConfirmed" v-model="detailView" size="small" class="rd-viewswitch">
+          <el-radio-button value="route">配送路线</el-radio-button>
+          <el-radio-button value="execution">执行跟踪</el-radio-button>
+        </el-radio-group>
+
+        <!-- 路线视图 -->
+        <div v-show="detailView === 'route'" class="rd-main">
           <div class="rd-map">
             <LogisticsMap
               :stores="state.stores.value"
@@ -181,7 +246,24 @@ async function reExportXlsx(plan: LogisticsPlan): Promise<void> {
             />
           </div>
         </div>
-        <div class="rd-note">💡 送达跟踪 / 异常处理(执行处理)即将上线 —— 届时可在此逐单标记送达情况、改派或标异常。</div>
+
+        <!-- 执行跟踪视图: 逐门店标送达/异常 -->
+        <div v-if="detailConfirmed" v-show="detailView === 'execution'" class="rd-exec">
+          <el-alert
+            v-if="state.planError.value"
+            :title="state.planError.value" type="error" :closable="false" show-icon style="margin-bottom:10px"
+          />
+          <ExecutionTracker
+            :trips="state.scheduleResult.value.trips"
+            :orders="state.orders.value"
+            :busy-id="state.executionBusyId.value"
+            @deliver="onDeliver"
+            @exception="onException"
+            @reset="onResetDelivery"
+          />
+        </div>
+
+        <div v-if="!detailConfirmed" class="rd-note">💡 该计划尚未确认排班，确认后即可在此逐门店标记送达 / 异常。</div>
       </div>
     </el-drawer>
 
@@ -209,6 +291,10 @@ async function reExportXlsx(plan: LogisticsPlan): Promise<void> {
 .rd-routes-title { flex: 0 0 auto; margin-bottom: 8px; color: #101828; font-size: 14px; font-weight: 700; } .rd-routes-title span { color: #98a2b3; font-size: 12px; font-weight: 400; margin-left: 6px; }
 .rd-routes :deep(.route-cards) { grid-template-columns: 1fr; overflow-y: auto; flex: 1 1 auto; padding-right: 6px; align-content: start; }
 .rd-note { padding: 10px 14px; color: #175cd3; font-size: 12.5px; background: #eff8ff; border: 1px solid #b2ddff; border-radius: 8px; }
+.rd-viewswitch { align-self: flex-start; }
+.rd-exec { display: flex; flex-direction: column; }
+.rec-exc { margin-left: 8px; color: #dc2626; font-size: 12px; }
+.rec-dash { color: #cbd5e1; }
 @media (max-width: 980px) { .rd-main { flex-direction: column; height: auto; } .rd-map { height: 360px; } .rd-routes { flex-basis: auto; } .rd-routes :deep(.route-cards) { max-height: 400px; } }
 @media (max-width: 720px) { .support-page { padding: 16px; } }
 </style>

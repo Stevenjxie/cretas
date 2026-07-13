@@ -173,6 +173,11 @@ public class LogisticsPlanMapper {
                 .latitude(order.getLatitude())
                 .locationStatus(order.getLocationStatus())
                 .status(order.getStatus())
+                .deliveryStatus(order.getDeliveryStatus())
+                .deliveredAt(order.getDeliveredAt() == null ? null : order.getDeliveredAt().toString())
+                .exceptionReason(order.getExceptionReason())
+                .exceptionDisposition(order.getExceptionDisposition())
+                .exceptionNote(order.getExceptionNote())
                 .sourceRowNumber(order.getSourceRowNumber())
                 .version(order.getVersion())
                 .build();

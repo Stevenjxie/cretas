@@ -15,6 +15,7 @@ import com.cretas.aims.logistics.entity.LogisticsStop;
 import com.cretas.aims.logistics.entity.LogisticsTrip;
 import com.cretas.aims.logistics.entity.LogisticsVehicleProfile;
 import com.cretas.aims.logistics.util.CapacityDiagnosis;
+import com.cretas.aims.logistics.entity.enums.DeliveryExecutionStatus;
 import com.cretas.aims.logistics.entity.enums.DeliveryOrderStatus;
 import com.cretas.aims.logistics.entity.enums.PlanStatus;
 import com.cretas.aims.logistics.entity.enums.RouteOptimizeMode;
@@ -486,6 +487,85 @@ public class LogisticsPlanServiceImpl implements LogisticsPlanService {
     }
 
     // ============================================================
+    // 执行跟踪(排线确认后, 逐门店送达/异常)—— 只动 deliveryStatus 单一维度,
+    // 不碰规划态 status / trip / stop / snapshot 计算 (additive, 零风险)。
+    // ============================================================
+
+    private static final java.util.Set<String> EXCEPTION_DISPOSITIONS =
+            java.util.Set.of("RESCHEDULE", "REASSIGN", "RETURN", "CANCEL");
+
+    @Override
+    @Transactional
+    public PlanSnapshotDto markDelivered(String factoryId, String planId, String orderId) {
+        LogisticsPlan plan = loadPlan(factoryId, planId);
+        assertPlanConfirmedForExecution(plan);
+        LogisticsDeliveryOrder order = loadExecutionOrder(factoryId, plan, orderId);
+        order.setDeliveryStatus(DeliveryExecutionStatus.DELIVERED);
+        order.setDeliveredAt(LocalDateTime.now());
+        order.setExceptionReason(null);
+        order.setExceptionDisposition(null);
+        order.setExceptionNote(null);
+        orderRepository.save(order);
+        return buildSnapshot(factoryId, plan);
+    }
+
+    @Override
+    @Transactional
+    public PlanSnapshotDto markException(String factoryId, String planId, String orderId,
+            String reason, String disposition, String note) {
+        LogisticsPlan plan = loadPlan(factoryId, planId);
+        assertPlanConfirmedForExecution(plan);
+        if (reason == null || reason.isBlank()) {
+            throw new BusinessException(400, "请选择异常原因").withHintTarget("reason");
+        }
+        if (disposition == null || !EXCEPTION_DISPOSITIONS.contains(disposition)) {
+            throw new BusinessException(400, "请选择处置方式（明日再送 / 改派 / 退回仓库 / 取消该单）")
+                    .withHintTarget("disposition");
+        }
+        LogisticsDeliveryOrder order = loadExecutionOrder(factoryId, plan, orderId);
+        order.setDeliveryStatus(DeliveryExecutionStatus.EXCEPTION);
+        order.setDeliveredAt(null);
+        order.setExceptionReason(reason.trim());
+        order.setExceptionDisposition(disposition);
+        order.setExceptionNote(note == null || note.isBlank() ? null : note.trim());
+        orderRepository.save(order);
+        return buildSnapshot(factoryId, plan);
+    }
+
+    @Override
+    @Transactional
+    public PlanSnapshotDto resetDelivery(String factoryId, String planId, String orderId) {
+        LogisticsPlan plan = loadPlan(factoryId, planId);
+        LogisticsDeliveryOrder order = loadExecutionOrder(factoryId, plan, orderId);
+        order.setDeliveryStatus(DeliveryExecutionStatus.PENDING);
+        order.setDeliveredAt(null);
+        order.setExceptionReason(null);
+        order.setExceptionDisposition(null);
+        order.setExceptionNote(null);
+        orderRepository.save(order);
+        return buildSnapshot(factoryId, plan);
+    }
+
+    /** 执行阶段只在计划正式确认后开放(未确认时门店/车次仍可能变动, 谈不上"送达")。 */
+    private void assertPlanConfirmedForExecution(LogisticsPlan plan) {
+        if (plan.getStatus() != PlanStatus.CONFIRMED && plan.getStatus() != PlanStatus.EXPORTED) {
+            throw new BusinessException(409, "计划尚未确认，暂不能标记配送执行")
+                    .withCode("PLAN_NOT_CONFIRMED").withHint("请先在排线工作台确认排班后再执行配送跟踪");
+        }
+    }
+
+    /** 载入某执行订单并校验它确属本计划批次(租户 + 批次双重隔离)。 */
+    private LogisticsDeliveryOrder loadExecutionOrder(String factoryId, LogisticsPlan plan, String orderId) {
+        LogisticsDeliveryOrder order = orderRepository.findByIdAndFactoryId(orderId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("LogisticsDeliveryOrder", "id", orderId));
+        if (!plan.getOrderBatchId().equals(order.getBatchId())) {
+            throw new BusinessException(400, "该门店订单不属于本计划，无法标记")
+                    .withHintTarget("orderId");
+        }
+        return order;
+    }
+
+    // ============================================================
     // 内部：加载 + 校验 helper
     // ============================================================
 
@@ -768,7 +848,7 @@ public class LogisticsPlanServiceImpl implements LogisticsPlanService {
     }
 
     private PlanDto toPlanDto(LogisticsPlan p) {
-        return PlanDto.builder()
+        PlanDto.PlanDtoBuilder b = PlanDto.builder()
                 .id(p.getId())
                 .factoryId(p.getFactoryId())
                 .orderBatchId(p.getOrderBatchId())
@@ -784,8 +864,23 @@ public class LogisticsPlanServiceImpl implements LogisticsPlanService {
                 .createdBy(p.getCreatedBy())
                 .confirmedBy(p.getConfirmedBy())
                 .confirmedAt(p.getConfirmedAt())
-                .version(p.getVersion())
-                .build();
+                .version(p.getVersion());
+        // 执行进度仅对已确认/已导出计划有意义(此前门店/车次仍可能变动)。
+        if (p.getStatus() == PlanStatus.CONFIRMED || p.getStatus() == PlanStatus.EXPORTED) {
+            List<LogisticsDeliveryOrder> orders = orderRepository.findByBatchIdAndDeletedAtIsNull(p.getOrderBatchId());
+            int total = orders.size();
+            int delivered = 0, exception = 0;
+            for (LogisticsDeliveryOrder o : orders) {
+                DeliveryExecutionStatus ds = o.getDeliveryStatus();
+                if (ds == DeliveryExecutionStatus.DELIVERED) delivered++;
+                else if (ds == DeliveryExecutionStatus.EXCEPTION) exception++;
+            }
+            int done = delivered + exception;
+            String exec = done == 0 ? "NOT_STARTED" : (done < total ? "IN_PROGRESS" : "COMPLETED");
+            b.executionStatus(exec).deliveredCount(delivered).exceptionCount(exception)
+                    .pendingCount(total - done).totalOrders(total);
+        }
+        return b.build();
     }
 
     private Map<String, LogisticsDeliveryOrder> loadOrdersForBatch(String factoryId, String batchId) {
