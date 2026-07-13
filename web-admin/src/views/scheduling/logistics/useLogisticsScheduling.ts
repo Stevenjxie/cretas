@@ -869,6 +869,11 @@ async function restore(planIdFromQuery?: string | null): Promise<void> {
     return;
   }
   if (plan.value) return; // 内存中已有状态（同一 SPA 会话内在模块间切换），无需重新拉取
+  // 用户显式点过「清除，重新导入 / 新建排线」→ 停在第一步录入, 不自动捞最近计划(否则切走再回来又把旧批次
+  // 捞回来 + 跳到第二步, 严重影响录入新订单体验)。首次进入(未清除)才自动带出最近计划。
+  let suppressed = false;
+  try { suppressed = sessionStorage.getItem('logi_suppress_auto_restore') === '1'; } catch { /* sessionStorage 不可用忽略 */ }
+  if (suppressed) return;
   try {
     const factoryId = requireFactoryId();
     // 恢复最近一个「非演示、未取消」的计划；演示计划(测试导入生成, planNumber 含「演示/DEMO」)不自动带出，
@@ -887,6 +892,8 @@ async function restore(planIdFromQuery?: string | null): Promise<void> {
 }
 
 function reset(): void {
+  // 显式清除/新建 → 抑制下次「无 planId 时自动捞最近计划」, 让录入新订单从空白第一步开始且切走回来不复原。
+  try { sessionStorage.setItem('logi_suppress_auto_restore', '1'); } catch { /* sessionStorage 不可用忽略 */ }
   batch.value = null;
   batches.value = [];
   preview.value = null;
