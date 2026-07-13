@@ -458,16 +458,24 @@ function moveToTrip(trip: RouteTrip, storeId: string, event: Event): void {
 
 .tt-grid { display: grid; grid-template-columns: 28px 128px 56px 76px 64px 1fr 150px 140px 96px 108px; align-items: center; gap: 10px; }
 
-.tt-head { padding: 10px 16px; color: #7a8599; font-size: 11.5px; font-weight: 650; background: #fafbfc; border-bottom: 1px solid #edf2f7; }
+.tt-head { padding: 11px 16px; color: #475467; font-size: 11.5px; font-weight: 700; background: #f4f7fa; border-bottom: 2px solid #dfe4ea; }
 
-.trip-row { border-bottom: 1px solid #edf2f7; }
+.trip-row { border-bottom: 1px solid #e4e8ee; }
 .trip-row:last-child { border-bottom: none; }
+/* 斑马纹: 隔行浅底, 让每一行边界分明 */
+.trip-row:nth-child(even) .tt-row-main { background: #f8fafc; }
 .trip-row.selected { background: #ecf5ff; }
+.trip-row.selected .tt-row-main { background: transparent; }
 .trip-row.confirmed .tt-route-label { color: #1e8449; }
 
-.tt-row-main { padding: 10px 16px; cursor: pointer; transition: background-color 0.15s ease; }
-.tt-row-main:hover { background: #fafbfc; }
-.trip-row.selected .tt-row-main:hover { background: #ecf5ff; }
+.tt-row-main { padding: 12px 16px; cursor: pointer; transition: background-color 0.15s ease; }
+.tt-row-main:hover { background: #eef4fc; }
+.trip-row.selected .tt-row-main:hover { background: #e3eefb; }
+
+/* 列竖线: 各列之间加浅分隔线, 让列边界清晰(表头 + 数据行都加) */
+.tt-grid > * { position: relative; }
+.tt-grid > *:not(:last-child)::after { content: ''; position: absolute; top: -12px; bottom: -12px; right: -5px; width: 1px; background: #eef1f5; }
+.tt-head .tt-grid > *:not(:last-child)::after { top: -11px; bottom: -11px; }
 
 .tt-cell { min-width: 0; color: #1a2332; font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .tt-cell .el-select { width: 100%; }
