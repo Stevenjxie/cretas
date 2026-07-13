@@ -77,6 +77,10 @@ public class BomSeasoningItem extends BaseEntity implements SeasoningLine {
     @Column(name = "remark", length = 500)
     private String remark;
 
+    /** FK -> work_processes.id (nullable, 迁移期兼容) — 该调料明细归属的工序. */
+    @Column(name = "work_process_id", length = 50)
+    private String workProcessId;
+
     /** Back-ref to parent recipe; insertable/updatable=false because recipeId column drives FK. */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "recipe_id", insertable = false, updatable = false)

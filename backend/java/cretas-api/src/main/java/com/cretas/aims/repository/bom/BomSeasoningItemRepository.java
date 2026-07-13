@@ -19,6 +19,9 @@ public interface BomSeasoningItemRepository extends JpaRepository<BomSeasoningIt
     /** 取某 BOM 配方的全部调料明细, 按 seq 升序 (镜像 ingredientRepo.findByRecipeIdOrderBySeqAsc). */
     List<BomSeasoningItem> findByRecipeIdOrderBySeqAsc(String recipeId);
 
+    /** 取某 BOM 配方在指定工序下的调料明细, 按 seq 升序 (调料配方按工序, 2026-07-13). */
+    List<BomSeasoningItem> findByRecipeIdAndWorkProcessIdOrderBySeqAsc(String recipeId, String workProcessId);
+
     /** 幂等迁移用: 判断该 BOM 是否已有调料 (已迁移则跳过). */
     boolean existsByRecipeId(String recipeId);
 
