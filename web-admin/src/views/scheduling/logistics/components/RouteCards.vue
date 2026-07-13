@@ -19,6 +19,8 @@ const emit = defineEmits<{
   (event: 'confirm-trip', tripId: string): void;
   (event: 'move-store', tripId: string, storeId: string, direction: -1 | 1): void;
   (event: 'move-to-trip', tripId: string, storeId: string, targetTripId: string | null): void;
+  /** 有任意车次进入门店编辑态 → 父级把右列加宽以放下编辑控件。 */
+  (event: 'editing-change', editing: boolean): void;
 }>();
 
 // ========== 派车 / 司机 / 确认 / 门店编辑(原「人工确认」步合并进来) ==========
@@ -56,6 +58,8 @@ function toggleEdit(tripId: string): void {
   if (next.has(tripId)) next.delete(tripId); else next.add(tripId);
   editingIds.value = next;
 }
+// 编辑态开合 → 通知父级加宽/还原右列(放下 上移/下移 + 移至 控件)
+watch(() => editingIds.value.size, (n) => emit('editing-change', n > 0));
 
 /** 固定「线路 NN」编号(按 trips 原始顺序), 移至下拉里标目标车次用。 */
 const lineNoById = computed(() => {

@@ -19,6 +19,8 @@ const state = useLogisticsScheduling();
 const routesHidden = ref(false);
 // 调度时间表(甘特, 左列下方)可隐藏 —— 用地图/甘特之间的横向 knob 手柄折叠, 隐藏后地图向下变高。
 const ganttHidden = ref(false);
+// 有车次进入门店编辑态 → 右列(配送线路)加宽, 放得下 上移/下移 + 移至 控件(地图相应缩)。
+const routesEditing = ref(false);
 // 运力充足(SUFFICIENT) → 控制条内绿 pill; 不足/不可服务 → 顶部完整 banner(带「去管理车辆」动作)。
 const capacityOk = computed(() => state.capacityDiagnosis.value?.verdict === 'SUFFICIENT');
 
@@ -305,7 +307,7 @@ async function next(): Promise<void> {
       </div>
 
       <!-- 主体: 左(地图 + 甘特) | 竖向 knob 手柄 | 右(配送线路)。折叠任一侧, 地图响应式变大。 -->
-      <div ref="mapRowRef" class="rv-body" :class="{ 'routes-hidden': routesHidden }" :style="mapRowStyle">
+      <div ref="mapRowRef" class="rv-body" :class="{ 'routes-hidden': routesHidden, 'routes-editing': routesEditing }" :style="mapRowStyle">
         <div class="rv-left">
           <div class="mr-map">
             <LogisticsMap :stores="state.stores.value" :trips="state.scheduleResult.value.trips" :selected-trip-id="state.selectedTripId.value" :selected-store-id="state.selectedStoreId.value" @select-trip="state.selectTrip" @select-store="state.selectStore" />
@@ -339,6 +341,7 @@ async function next(): Promise<void> {
             @confirm-trip="confirmTrip"
             @move-store="handleMoveStore"
             @move-to-trip="handleMoveToTrip"
+            @editing-change="routesEditing = $event"
           />
         </div>
       </div>
@@ -405,7 +408,8 @@ async function next(): Promise<void> {
 .v-handle:hover .knob-v { background: #1b65a8; border-color: #1b65a8; color: #fff; box-shadow: 0 4px 14px rgba(27,101,168,0.32); } .v-handle:hover .knob-v em { color: #eaf2fb; }
 
 /* 右列: 配送线路, 占满全高, 卡片内部滚动 */
-.rv-right { flex: 0 0 360px; height: 100%; display: flex; flex-direction: column; overflow: hidden; padding: 14px 16px; background: #fff; border: 1px solid #e6eaf0; border-radius: 12px; box-shadow: 0 2px 12px rgba(16,24,40,0.05); }
+.rv-right { flex: 0 0 360px; height: 100%; display: flex; flex-direction: column; overflow: hidden; padding: 14px 16px; background: #fff; border: 1px solid #e6eaf0; border-radius: 12px; box-shadow: 0 2px 12px rgba(16,24,40,0.05); transition: flex-basis 0.22s ease; }
+.rv-body.routes-editing .rv-right { flex-basis: 560px; }
 .mr-routes-title { flex: 0 0 auto; display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; color: #101828; font-size: 15px; font-weight: 700; }
 .mrt-sub { color: #98a2b3; font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
 .rv-right :deep(.route-cards) { grid-template-columns: 1fr; overflow-y: auto; flex: 1 1 auto; padding-right: 6px; align-content: start; }
