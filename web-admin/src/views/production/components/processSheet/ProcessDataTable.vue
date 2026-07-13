@@ -1665,7 +1665,9 @@ function onPotCountChange(row: SheetRow, val: number) {
 }
 
 watch(
-  () => [props.factoryId, props.processCode, props.productTypeId, props.allowSemiFinishedInjection, props.allowFinishedGoodsSource] as const,
+  () => [props.factoryId, props.processCode, props.productTypeId, props.allowSemiFinishedInjection, props.allowFinishedGoodsSource,
+    // raw-centric: workflow 原料类型到位后必须重跑 loadRawBatches (否则 workflowRawInputs 尚空 → 误按 productTypeId 查空)。
+    workflowRawInputs.value.map((p) => p.skuId).join(',')] as const,
   () => {
     rawBatchOptions.value = [];
     consumableWarehouseIds.value = [];
