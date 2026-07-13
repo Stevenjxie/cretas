@@ -29,4 +29,10 @@ public class PreviewResultDto {
     private int errorRows;
     private List<RowErrorDto> rowErrors;
     private List<OrderImportPreviewRowDto> rows;
+
+    /**
+     * 任意 Excel / 粘贴导入的表头识别结果 —— 供前端渲染「映射确认面板」。
+     * 文件/粘贴路径返回；手动录入路径为 null（结构化行不需要列映射）。
+     */
+    private ColumnMappingResult columnMapping;
 }

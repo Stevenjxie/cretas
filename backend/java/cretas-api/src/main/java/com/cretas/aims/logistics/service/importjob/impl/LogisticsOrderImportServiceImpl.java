@@ -1,6 +1,7 @@
 package com.cretas.aims.logistics.service.importjob.impl;
 
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.logistics.dto.importjob.ColumnMappingResult;
 import com.cretas.aims.logistics.dto.importjob.DeliveryOrderDto;
 import com.cretas.aims.logistics.dto.importjob.LogisticsOrderImportRow;
 import com.cretas.aims.logistics.dto.importjob.LogisticsOrderTemplateRow;
@@ -8,8 +9,10 @@ import com.cretas.aims.logistics.dto.importjob.ManualOrderCreateRequest;
 import com.cretas.aims.logistics.dto.importjob.ManualOrderRow;
 import com.cretas.aims.logistics.dto.importjob.OrderBatchDto;
 import com.cretas.aims.logistics.dto.importjob.OrderImportPreviewRowDto;
+import com.cretas.aims.logistics.dto.importjob.PastePreviewRequest;
 import com.cretas.aims.logistics.dto.importjob.PreviewResultDto;
 import com.cretas.aims.logistics.dto.importjob.RowErrorDto;
+import com.cretas.aims.logistics.service.importjob.LogisticsHeaderMatcher;
 import com.cretas.aims.logistics.entity.LogisticsDeliveryOrder;
 import com.cretas.aims.logistics.entity.LogisticsOrderBatch;
 import com.cretas.aims.logistics.entity.LogisticsStoreMaster;
@@ -31,7 +34,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
-import com.alibaba.excel.annotation.ExcelProperty;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.DataFormatter;
@@ -43,7 +45,6 @@ import org.apache.poi.ss.usermodel.WorkbookFactory;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -52,7 +53,7 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -125,7 +126,7 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
 
     @Override
     @Transactional
-    public PreviewResultDto preview(String factoryId, MultipartFile file, Long userId) {
+    public PreviewResultDto preview(String factoryId, MultipartFile file, Map<Integer, String> columnMapping, Long userId) {
         if (file == null || file.isEmpty()) {
             throw new BusinessException(400, "请上传订单文件").withHint("请选择一个 .xlsx 或 .csv 文件后重试");
         }
@@ -137,18 +138,61 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
             throw new BusinessException(400, "文件读取失败: " + e.getMessage())
                     .withHint("请重新选择文件后重试");
         }
+        // 幂等指纹用文件字节 sha256（与映射覆盖无关：相同文件重复上传复用批次，spec §2 决策 7）。
         String fingerprint = sha256Hex(bytes);
 
-        List<LogisticsOrderImportRow> rawRows;
+        List<List<String>> table;
         try {
-            rawRows = parseRows(file, bytes);
+            table = parseRawTable(file, bytes);
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {
             log.error("[LogisticsOrderImport] 文件解析失败 factory={} filename={}",
                     factoryId, file.getOriginalFilename(), e);
             throw new BusinessException(400, "文件解析失败: " + e.getMessage())
-                    .withHint("请确认使用后端下载的模板，且未破坏表头（支持 .xlsx / .csv）");
+                    .withHint("请确认是有效的 .xlsx / .csv 文件");
+        }
+
+        return previewFromTable(factoryId, table, null, columnMapping,
+                file.getOriginalFilename(), fingerprint, userId);
+    }
+
+    // ==================== Preview: paste (copy from Excel) ====================
+
+    @Override
+    @Transactional
+    public PreviewResultDto previewPaste(String factoryId, PastePreviewRequest request, Long userId) {
+        if (request == null || isBlank(request.getRawText())) {
+            throw new BusinessException(400, "请粘贴订单内容")
+                    .withHint("从 Excel 选中含表头的区域，Ctrl+C 复制后粘贴到文本框");
+        }
+        List<List<String>> table = parsePastedText(request.getRawText());
+        // 指纹：业务日期 + 粘贴原文（相同内容重复粘贴复用批次，与文件路径同精神）。
+        String fingerprint = sha256Hex((nz(request.getBusinessDate()) + "" + request.getRawText())
+                .getBytes(StandardCharsets.UTF_8));
+        return previewFromTable(factoryId, table, trim(request.getBusinessDate()),
+                request.getColumnMapping(), "复制粘贴", fingerprint, userId);
+    }
+
+    /**
+     * 文件上传与粘贴共享的识别核心：字典识别表头（回给前端确认面板）→ 按映射(可含用户覆盖)把
+     * 每行 2D → {@link LogisticsOrderImportRow} → 跳过示例行 → 复用 {@link #buildPreviewFromRawRows}。
+     *
+     * @param fallbackBusinessDate 粘贴路径的兜底业务日期（无「业务日期」列时填给各行）；文件路径传 null。
+     */
+    private PreviewResultDto previewFromTable(String factoryId, List<List<String>> table,
+            String fallbackBusinessDate, Map<Integer, String> columnMapping,
+            String sourceLabel, String fingerprint, Long userId) {
+        ColumnMappingResult mapping = LogisticsHeaderMatcher.detect(table);
+        List<LogisticsOrderImportRow> rawRows = LogisticsHeaderMatcher.applyMapping(table, columnMapping);
+
+        // 兜底业务日期：粘贴内容无日期列时，用对话框里选的日期填给没有日期的行（不覆盖行内已有日期）。
+        if (!isBlank(fallbackBusinessDate)) {
+            for (LogisticsOrderImportRow r : rawRows) {
+                if (isBlank(trim(r.getBusinessDate()))) {
+                    r.setBusinessDate(fallbackBusinessDate);
+                }
+            }
         }
 
         // 跳过模板自带的示例行（哨兵订单号）—— 用户不必删除，系统自动识别忽略。
@@ -157,11 +201,29 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
                 .toList();
 
         if (rawRows.isEmpty()) {
-            throw new BusinessException(400, "文件不包含任何数据行")
-                    .withHint("请下载模板并至少填写一行订单");
+            throw new BusinessException(400, "不包含任何数据行")
+                    .withHint("请在表头下方至少填写一行订单（连同表头一起上传/粘贴）");
         }
 
-        return buildPreviewFromRawRows(factoryId, rawRows, file.getOriginalFilename(), fingerprint, userId);
+        // 订单号【防呆自动生成】：任意 Excel / 粘贴常无「订单号」列，留空按 SM-{紧凑业务日期}-{行号}
+        // 确定性生成（与手动录入 previewManual 一致）—— 调度员不需要凭空编订单号 (fool-proof-design)。
+        // 已填的订单号不动（重复检测/幂等语义不破）。
+        int seq = 0;
+        for (LogisticsOrderImportRow r : rawRows) {
+            seq++;
+            if (isBlank(trim(r.getStoreCode()))) {
+                String d = trim(r.getBusinessDate());
+                String compact = (d == null) ? "NA" : d.replaceAll("[^0-9]", "");
+                if (compact.isBlank()) {
+                    compact = "NA";
+                }
+                r.setStoreCode("SM-" + compact + "-" + seq);
+            }
+        }
+
+        PreviewResultDto dto = buildPreviewFromRawRows(factoryId, rawRows, sourceLabel, fingerprint, userId);
+        dto.setColumnMapping(mapping);
+        return dto;
     }
 
     // ==================== Preview: manual (non-file) entry ====================
@@ -793,93 +855,49 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
         return s == null ? "" : s;
     }
 
-    // ==================== 文件解析 (.xlsx / .csv) ====================
+    // ==================== 原始表格解析 (.xlsx / .csv / 粘贴文本) ====================
 
     /**
-     * 按文件扩展名分发解析：{@code .csv} 走内置 quote-aware CSV 解析，其余(默认 {@code .xlsx})走 EasyExcel。
-     * 两条路径都产出同一份 {@link LogisticsOrderImportRow} 列表，后续校验/落库逻辑与格式无关。
+     * 按文件扩展名把上传文件读成原始二维表格（第 0 行表头 + 数据行）：{@code .csv} 走内置
+     * quote-aware CSV 解析，其余(默认 {@code .xlsx})用 POI 读原始格。列→字段的识别交给
+     * {@link LogisticsHeaderMatcher}（字典 + 归一化），容忍任意客户表头 / 列序 / 换行空格变体。
      */
-    private List<LogisticsOrderImportRow> parseRows(MultipartFile file, byte[] bytes) {
+    private List<List<String>> parseRawTable(MultipartFile file, byte[] bytes) {
         String name = file.getOriginalFilename();
         String lower = name == null ? "" : name.toLowerCase(Locale.ROOT);
         if (lower.endsWith(".csv")) {
-            return parseCsv(bytes);
+            String content = new String(bytes, StandardCharsets.UTF_8);
+            if (content.startsWith("﻿")) {
+                content = content.substring(1); // strip UTF-8 BOM
+            }
+            return splitCsv(content);
         }
-        // xlsx 也走「读原始表格 → 规范化表头匹配」（与 CSV 同一套），容忍表头带换行/空格（如「重量\nkg」）、
-        // 列顺序不同 —— 客户真实文件表头常不规范，EasyExcel 精确匹配会整列漏读（曾导致「重量」全空）。
-        return parseTable(readXlsxRaw(bytes));
+        return readXlsxRaw(bytes);
     }
 
     /**
-     * CSV → {@code List<LogisticsOrderImportRow>}。表头按 {@link ExcelProperty} 标签匹配字段(与 Excel 模板
-     * 表头一致、列序可变)，未识别的列忽略。UTF-8(容忍 BOM)，支持带引号字段(内含逗号/换行/双引号转义)。
+     * 从 Excel 复制的一段文本 → 原始二维表格（第 0 行表头 + 数据行）。Excel 剪贴板默认制表符(TSV)
+     * 分隔；含制表符即按 TSV 逐行拆，否则退回 CSV（{@link #splitCsv} RFC-4180）。整行空白跳过。
      */
-    private static List<LogisticsOrderImportRow> parseCsv(byte[] bytes) {
-        String content = new String(bytes, StandardCharsets.UTF_8);
-        if (content.startsWith("﻿")) {
-            content = content.substring(1); // strip UTF-8 BOM
+    private static List<List<String>> parsePastedText(String rawText) {
+        String text = rawText == null ? "" : rawText;
+        if (text.startsWith("﻿")) {
+            text = text.substring(1); // strip UTF-8 BOM
         }
-        return parseTable(splitCsv(content));
-    }
-
-    /**
-     * 原始二维表格（第 0 行表头 + 其余数据行）→ {@code LogisticsOrderImportRow} 列表。
-     * 表头按 {@link ExcelProperty} 标签匹配字段，列序可变；表头做规范化（去掉所有空白含换行）后再比对，
-     * 容忍客户文件的「重量\nkg」「重量 kg」等表头变体 —— 否则整列漏读（曾导致「重量」全空）。
-     */
-    private static List<LogisticsOrderImportRow> parseTable(List<List<String>> table) {
-        if (table.isEmpty()) {
-            return new ArrayList<>();
-        }
-        Map<String, Field> labelToField = new HashMap<>();
-        for (Field f : LogisticsOrderImportRow.class.getDeclaredFields()) {
-            ExcelProperty ep = f.getAnnotation(ExcelProperty.class);
-            if (ep != null && ep.value().length > 0 && !ep.value()[0].isBlank()) {
-                f.setAccessible(true);
-                labelToField.put(normKey(ep.value()[0]), f);
-            }
-        }
-        List<String> header = table.get(0);
-        Map<Integer, Field> colToField = new HashMap<>();
-        for (int c = 0; c < header.size(); c++) {
-            Field f = labelToField.get(normKey(header.get(c)));
-            if (f != null) {
-                colToField.put(c, f);
-            }
-        }
-        if (colToField.isEmpty()) {
-            throw new BusinessException(400, "表头无法识别")
-                    .withHint("请使用后端下载的模板表头（业务日期/订单号/门店名称/... ）");
-        }
-
-        List<LogisticsOrderImportRow> rows = new ArrayList<>();
-        for (int r = 1; r < table.size(); r++) {
-            List<String> cols = table.get(r);
-            if (cols.stream().allMatch(s -> s == null || s.isBlank())) {
-                continue; // 跳过整行空白
-            }
-            LogisticsOrderImportRow row = new LogisticsOrderImportRow();
-            for (Map.Entry<Integer, Field> e : colToField.entrySet()) {
-                int idx = e.getKey();
-                if (idx < cols.size()) {
-                    try {
-                        e.getValue().set(row, cols.get(idx));
-                    } catch (IllegalAccessException ignore) {
-                        // setAccessible(true) 已放开，理论不可达
-                    }
+        if (text.indexOf('\t') >= 0) {
+            List<List<String>> table = new ArrayList<>();
+            for (String line : text.split("\r\n|\r|\n", -1)) {
+                if (line.isBlank()) {
+                    continue;
                 }
+                table.add(new ArrayList<>(Arrays.asList(line.split("\t", -1))));
             }
-            rows.add(row);
+            return table;
         }
-        return rows;
+        return splitCsv(text);
     }
 
-    /** 表头规范化：去掉所有空白（含换行/制表符/全半角空格）后比对，容忍表头单元格的换行/空格变体。 */
-    private static String normKey(String s) {
-        return s == null ? "" : s.replaceAll("[\\s\\u3000]+", "");
-    }
-
-    /** 用 POI 把 xlsx 读成原始二维表格（每格转字符串），交给 {@link #parseTable} 统一匹配。 */
+    /** 用 POI 把 xlsx 读成原始二维表格（每格转字符串），交给 {@link LogisticsHeaderMatcher} 识别。 */
     private static List<List<String>> readXlsxRaw(byte[] bytes) {
         List<List<String>> table = new ArrayList<>();
         try (Workbook wb = WorkbookFactory.create(new ByteArrayInputStream(bytes))) {

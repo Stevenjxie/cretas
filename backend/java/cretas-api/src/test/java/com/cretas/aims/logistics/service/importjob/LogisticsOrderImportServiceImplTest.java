@@ -2,9 +2,11 @@ package com.cretas.aims.logistics.service.importjob;
 
 import com.alibaba.excel.EasyExcel;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.logistics.dto.importjob.ColumnMappingResult;
 import com.cretas.aims.logistics.dto.importjob.DeliveryOrderDto;
 import com.cretas.aims.logistics.dto.importjob.LogisticsOrderImportRow;
 import com.cretas.aims.logistics.dto.importjob.OrderBatchDto;
+import com.cretas.aims.logistics.dto.importjob.PastePreviewRequest;
 import com.cretas.aims.logistics.dto.importjob.PreviewResultDto;
 import com.cretas.aims.logistics.entity.enums.LocationStatus;
 import com.cretas.aims.logistics.entity.enums.OrderBatchStatus;
@@ -30,6 +32,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -491,5 +494,89 @@ class LogisticsOrderImportServiceImplTest {
 
         assertThatThrownBy(() -> service().getBatch("F-OTHER", p2.getJobId()))
                 .isInstanceOf(BusinessException.class);
+    }
+
+    // ==================== 任意 Excel 自动识别 + 复制粘贴 ====================
+
+    /** 任意表头 CSV（客户/收货地址/数量/重量/体积，无订单号列）→ MockMultipartFile。 */
+    private MultipartFile csvFile(String csv) {
+        return new MockMultipartFile("file", "orders.csv", "text/csv",
+                csv.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    @Test
+    @DisplayName("preview — 任意客户表头(客户/收货地址/数量/重量/体积)字典识别，返回 columnMapping 且落值正确")
+    void previewArbitraryHeadersAutoRecognized() {
+        String csv = "客户,收货地址,数量,重量,体积\n"
+                + "大润发苏州店,苏州工业园区A1,10,50.5,1.2\n";
+        PreviewResultDto result = service().preview(F1, csvFile(csv), 1L);
+
+        ColumnMappingResult mapping = result.getColumnMapping();
+        assertThat(mapping).isNotNull();
+        assertThat(mapping.isAutoConfident()).isTrue();
+        assertThat(mapping.getUnmappedRequiredFields()).isEmpty();
+
+        assertThat(result.getRows()).hasSize(1);
+        var r = result.getRows().get(0);
+        assertThat(r.isValid()).isTrue();               // 无订单号列 → 自动生成，校验通过
+        assertThat(r.getStoreName()).isEqualTo("大润发苏州店");
+        assertThat(r.getWeightKg()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("preview — columnMapping 覆盖：把未识别的「摘要」列手动指到 门店名称")
+    void previewWithColumnMappingOverride() {
+        // 「摘要」自动识别不到 → 无覆盖时门店名称缺失；override 把列 0 指到 storeName。
+        String csv = "摘要,收货地址,箱数,重量,体积\n"
+                + "沃尔玛无锡店,无锡新区B2,5,40,0.9\n";
+        PreviewResultDto noOverride = service().preview(F1, csvFile(csv), 1L);
+        assertThat(noOverride.getColumnMapping().getUnmappedRequiredFields()).contains("storeName");
+        assertThat(noOverride.getRows().get(0).isValid()).isFalse();
+
+        Map<Integer, String> override = Map.of(0, "storeName");
+        PreviewResultDto withOverride = service().preview(F1, csvFile(csv), override, 1L);
+        var r = withOverride.getRows().get(0);
+        assertThat(r.getStoreName()).isEqualTo("沃尔玛无锡店");
+        assertThat(r.isValid()).isTrue();
+    }
+
+    @Test
+    @DisplayName("previewPaste — TSV(连表头)自动识别 + 自动生成订单号，落库有效行")
+    void previewPasteTsv() {
+        PastePreviewRequest req = new PastePreviewRequest();
+        req.setRawText("门店名称\t配送地址\t箱数\t重量kg\t体积m³\n"
+                + "常州华润店\t常州钟楼区C3\t6\t45\t1.1\n");
+        req.setBusinessDate("2026-07-13");
+
+        PreviewResultDto result = service().previewPaste(F1, req, 1L);
+        assertThat(result.getColumnMapping()).isNotNull();
+        assertThat(result.getColumnMapping().isAutoConfident()).isTrue();
+        assertThat(result.getRows()).hasSize(1);
+        var r = result.getRows().get(0);
+        assertThat(r.isValid()).isTrue();
+        assertThat(r.getStoreName()).isEqualTo("常州华润店");
+    }
+
+    @Test
+    @DisplayName("previewPaste — 空文本 → 400")
+    void previewPasteBlankRejected() {
+        PastePreviewRequest req = new PastePreviewRequest();
+        req.setRawText("   ");
+        assertThatThrownBy(() -> service().previewPaste(F1, req, 1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("请粘贴订单内容");
+    }
+
+    @Test
+    @DisplayName("previewPaste — 无日期列时用对话框业务日期兜底")
+    void previewPasteBusinessDateFallback() {
+        PastePreviewRequest req = new PastePreviewRequest();
+        req.setRawText("门店名称\t配送地址\t箱数\t重量kg\t体积m³\n"
+                + "无锡欧尚店\t无锡滨湖区D4\t8\t55\t1.5\n");
+        req.setBusinessDate("2026-07-20");
+
+        PreviewResultDto result = service().previewPaste(F1, req, 1L);
+        assertThat(result.getBusinessDate()).isEqualTo("2026-07-20");
+        assertThat(result.getRows().get(0).isValid()).isTrue();
     }
 }

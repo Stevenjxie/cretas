@@ -2,13 +2,17 @@ package com.cretas.aims.logistics.controller;
 
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.logistics.dto.importjob.DeliveryOrderDto;
 import com.cretas.aims.logistics.dto.importjob.ManualOrderCreateRequest;
 import com.cretas.aims.logistics.dto.importjob.OrderBatchDto;
+import com.cretas.aims.logistics.dto.importjob.PastePreviewRequest;
 import com.cretas.aims.logistics.dto.importjob.PreviewResultDto;
 import com.cretas.aims.logistics.dto.importjob.UpdateLocationRequest;
 import com.cretas.aims.logistics.service.importjob.LogisticsOrderImportService;
 import com.cretas.aims.utils.SecurityUtils;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -23,6 +27,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 
 /**
  * 物流订单导入 (handoff §11.1) — 模板下载 / 两段式预检+提交 / 批次+订单查询 / 定位补录。
@@ -40,6 +45,7 @@ import java.nio.charset.StandardCharsets;
 public class LogisticsOrderImportController {
 
     private final LogisticsOrderImportService importService;
+    private final ObjectMapper objectMapper;
 
     @GetMapping("/order-import/template")
     @Operation(summary = "下载订单导入模板", description = "后端唯一模板事实源，字段见 handoff §8.1")
@@ -56,14 +62,44 @@ public class LogisticsOrderImportController {
 
     @RequireModule("scheduling")
     @PostMapping(value = "/order-import/preview", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @Operation(summary = "预检订单文件", description = "解析+逐行校验，不写业务订单为 live 数据；返回 jobId 供 commit 使用")
+    @Operation(summary = "预检订单文件", description = "任意 Excel 表头字典自动识别，返回列映射供前端确认；columnMapping 为用户修正后的覆盖映射(JSON)。返回 jobId 供 commit")
     public ApiResponse<PreviewResultDto> preview(
             @PathVariable String factoryId,
-            @RequestParam("file") MultipartFile file) {
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "columnMapping", required = false) String columnMappingJson) {
         Long userId = SecurityUtils.getCurrentUserId();
-        log.info("[LogisticsOrderImport] preview 请求 factory={} filename={} size={}",
-                factoryId, file != null ? file.getOriginalFilename() : null, file != null ? file.getSize() : 0);
-        return ApiResponse.success("预检完成", importService.preview(factoryId, file, userId));
+        Map<Integer, String> columnMapping = parseColumnMapping(columnMappingJson);
+        log.info("[LogisticsOrderImport] preview 请求 factory={} filename={} size={} overrideMapping={}",
+                factoryId, file != null ? file.getOriginalFilename() : null, file != null ? file.getSize() : 0,
+                columnMapping != null);
+        return ApiResponse.success("预检完成", importService.preview(factoryId, file, columnMapping, userId));
+    }
+
+    @RequireModule("scheduling")
+    @PostMapping("/order-import/preview-paste")
+    @Operation(summary = "预检粘贴订单(非文件)", description = "从 Excel 连表头复制的一段文本直接预检，与文件上传共用识别+校验+提交流程；返回同 preview 的 jobId 供 commit")
+    public ApiResponse<PreviewResultDto> previewPaste(
+            @PathVariable String factoryId,
+            @RequestBody PastePreviewRequest request) {
+        Long userId = SecurityUtils.getCurrentUserId();
+        log.info("[LogisticsOrderImport] previewPaste 请求 factory={} textLen={} overrideMapping={}",
+                factoryId,
+                request != null && request.getRawText() != null ? request.getRawText().length() : 0,
+                request != null && request.getColumnMapping() != null);
+        return ApiResponse.success("预检完成", importService.previewPaste(factoryId, request, userId));
+    }
+
+    /** 解析 multipart 里的 columnMapping JSON（{@code {"0":"storeName",...}}）→ Map；空则 null，格式错抛 400。 */
+    private Map<Integer, String> parseColumnMapping(String json) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(json, new TypeReference<Map<Integer, String>>() {});
+        } catch (Exception e) {
+            throw new BusinessException(400, "列映射格式无效: " + e.getMessage())
+                    .withHint("columnMapping 应为 {列索引: 字段名} 的 JSON");
+        }
     }
 
     @RequireModule("scheduling")
