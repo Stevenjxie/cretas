@@ -343,3 +343,51 @@ export function listReversalRequests(
 export function stopProduction(factoryId: string, planId: string) {
   return post<Record<string, unknown>>(`/${factoryId}/production-plans/${planId}/stop-production`)
 }
+
+/**
+ * 生产计划「多选成品 → 解析共用 raw workflow」(raw-centric 多SKU, 2026-07-13)
+ * 终端产出 DTO — 某 workflow owner 图谱上标记 kind=FINISHED_GOOD 的产出节点。
+ */
+export interface WorkflowResolutionTerminal {
+  productTypeId: string
+  productName: string
+  unit: string
+}
+
+/**
+ * 工序图解析候选 — 覆盖所选成品集合的 workflow 及其 owner 信息。
+ */
+export interface WorkflowResolutionCandidate {
+  workflowId: number
+  definitionVersion: number
+  ownerProductTypeId: string
+  ownerProductName: string
+  ownerProductCategory: string
+  ownerUnit: string
+  terminalOutputs: WorkflowResolutionTerminal[]
+  exactMatch: boolean
+}
+
+/**
+ * POST /product-process-workflows/resolve-by-outputs 响应体。
+ * resolutionMode:
+ *   - SELF_WORKFLOW: 单选且该成品自己就有 enabled workflow (自有图, 优先)
+ *   - RAW_OWNED: 由某原料/半成品拥有的 workflow 的终端产出覆盖所选成品集合
+ *   - NONE: 无候选覆盖 (需先去产品工序配置)
+ */
+export interface WorkflowOutputResolution {
+  requestedProductTypeIds: string[]
+  resolutionMode: 'SELF_WORKFLOW' | 'RAW_OWNED' | 'NONE'
+  candidates: WorkflowResolutionCandidate[]
+}
+
+/**
+ * 按所选「生产成品」集合解析可用的工序图 (Workflow) 候选。
+ * POST /{factoryId}/product-process-workflows/resolve-by-outputs
+ */
+export function resolveWorkflowByOutputs(factoryId: string, productTypeIds: string[]) {
+  return post<WorkflowOutputResolution>(
+    `/${factoryId}/product-process-workflows/resolve-by-outputs`,
+    { productTypeIds }
+  )
+}

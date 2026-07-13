@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick } from 'vue';
+import { ref, computed, onMounted, nextTick, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
@@ -31,11 +31,13 @@ import {
   listReversalRequests,
   type InterimSettleReversalRequest,
   stopProduction,
+  resolveWorkflowByOutputs,
 } from '@/api/productionPlan';
 import type {
   ProductionPlanMaterialAdvisory,
   ProductionSettlementStatus,
   WipInventoryItem,
+  WorkflowResolutionCandidate,
 } from '@/api/productionPlan';
 import { getProductWorkProcesses } from '@/api/processProduction';
 import type { ProductWorkProcessItem } from '@/api/processProduction';
@@ -305,8 +307,24 @@ const planForm = ref({
   customFields: {} as TableRow,
   // Wave2 六扇门: 免工序报工开关 (null→后端默认 true, 新建默认 true = 两点报工)
   skipProcessReporting: true as boolean | null,
+  // raw-centric 多SKU (2026-07-13): 多选「生产成品」→ 解析共用 raw workflow。
+  // 非 CUSTOMER_ORDER 来源专用; SO 来源沿用 sourceOrderItemIds 多产品逻辑不变。
+  targetFinishedGoodIds: [] as string[],
+  resolvedCandidates: [] as WorkflowResolutionCandidate[],
+  selectedCandidateOwnerId: '' as string,
+  resolutionMode: '' as '' | 'SELF_WORKFLOW' | 'RAW_OWNED' | 'NONE',
 });
 const productTypes = ref<TableRow[]>([]);
+// raw-centric 多SKU: 「生产成品」多选下拉只列成品/半成品, 过滤掉原料/包材/调味品。
+// null/空 category 视为遗留产品, 保留可选 (不因缺 category 而被误伤隐藏)。
+const RAW_WORKFLOW_EXCLUDED_CATEGORIES = new Set(['RAW_MATERIAL', 'PACKAGING', 'SEASONING']);
+const finishedGoodProductTypes = computed(() =>
+  productTypes.value.filter((p: TableRow) => {
+    const cat = p.productCategory;
+    if (cat === null || cat === undefined || cat === '') return true;
+    return !RAW_WORKFLOW_EXCLUDED_CATEGORIES.has(String(cat));
+  })
+);
 const bomProcesses = ref<string[]>([]);
 // A3: full work-process objects for read-only display (ordered by processOrder)
 const productWorkProcessList = ref<TableRow[]>([]);
@@ -322,6 +340,14 @@ const hasActiveWorkflow = ref(false);
 const reportModeLocked = computed(() =>
   !!planForm.value.productTypeId && (hasActiveWorkflow.value || !hasProcesses.value));
 const customers = ref<TableRow[]>([]);
+
+// raw-centric 多SKU: 当前已锁定的工序图候选 (SELF_WORKFLOW 自动锁定的自身 / RAW_OWNED 单候选自动锁定 / 多候选用户手选)。
+const resolvedOwnerCandidate = computed<WorkflowResolutionCandidate | undefined>(() =>
+  planForm.value.resolvedCandidates.find(
+    (c) => c.ownerProductTypeId === planForm.value.selectedCandidateOwnerId
+  )
+);
+const hasResolvedWorkflowCandidate = computed(() => !!resolvedOwnerCandidate.value);
 
 // A5: today helper
 function todayStr(): string {
@@ -647,6 +673,119 @@ function handleProductChange(productTypeId: string) {
   loadBomProcesses(productTypeId);
 }
 
+// ========== raw-centric 多SKU (2026-07-13): 多选「生产成品」→ 解析共用 raw workflow ==========
+// 非 CUSTOMER_ORDER 来源专用 (设计文档 §13)。
+const resolvingWorkflow = ref(false);
+let workflowResolveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+// 防竞态: 快速切换选中集时, 老的 in-flight 请求可能比新请求晚回, 用单调递增代
+// (generation) 丢弃过期响应, 避免旧结果覆盖新选择的解析结果。
+let workflowResolveGeneration = 0;
+
+function resetWorkflowResolutionState() {
+  planForm.value.resolutionMode = '';
+  planForm.value.resolvedCandidates = [];
+  planForm.value.selectedCandidateOwnerId = '';
+}
+
+// 命中候选 (SELF_WORKFLOW 或 RAW_OWNED 已选定 owner): 复用既有 loadBomProcesses 逻辑
+// (探测 activation + 工序列表), 使 hasActiveWorkflow/reportModeLocked/skipProcessReporting
+// 自动联动 — 不新增平行状态, 与本 session 已加的 workflow-aware 报工模式共存。
+async function applyResolvedCandidateOwner(ownerId: string) {
+  planForm.value.productTypeId = ownerId;
+  await loadBomProcesses(ownerId);
+}
+
+function handleWorkflowCandidateSelect(ownerId: string) {
+  planForm.value.selectedCandidateOwnerId = ownerId;
+  void applyResolvedCandidateOwner(ownerId);
+}
+
+async function resolveTargetFinishedGoods(ids: string[]) {
+  if (!factoryId.value || ids.length === 0) return;
+  const myGeneration = ++workflowResolveGeneration;
+  resolvingWorkflow.value = true;
+  try {
+    const res = await resolveWorkflowByOutputs(factoryId.value, ids);
+    if (myGeneration !== workflowResolveGeneration) return; // 已被更新的选择取代, 丢弃过期响应
+    if (!res.success || !res.data) {
+      handleCatchError(new Error(res.message || '解析工序图失败'), '解析工序图失败');
+      return;
+    }
+    const data = res.data;
+    planForm.value.resolutionMode = data.resolutionMode;
+    planForm.value.resolvedCandidates = data.candidates || [];
+    if (data.resolutionMode === 'SELF_WORKFLOW') {
+      const owner = data.candidates[0];
+      if (owner) {
+        planForm.value.selectedCandidateOwnerId = owner.ownerProductTypeId;
+        await applyResolvedCandidateOwner(owner.ownerProductTypeId);
+      }
+    } else if (data.resolutionMode === 'RAW_OWNED') {
+      if (data.candidates.length === 1) {
+        planForm.value.selectedCandidateOwnerId = data.candidates[0].ownerProductTypeId;
+        await applyResolvedCandidateOwner(data.candidates[0].ownerProductTypeId);
+      } else {
+        // 多候选: 等用户手选 (未选时提交按钮 disabled, 见 nonSoSubmitBlocked)
+        planForm.value.selectedCandidateOwnerId = '';
+        planForm.value.productTypeId = '';
+        hasActiveWorkflow.value = false;
+        productWorkProcessList.value = [];
+      }
+    } else {
+      // NONE
+      if (ids.length === 1) {
+        // 维持现状 (设计 §13): 单选且无 workflow 覆盖 → 走既有单产品手填逻辑,
+        // 不传 targetFinishedGoodIds (submitPlan 里按此判断)。
+        planForm.value.productTypeId = ids[0];
+        handleProductChange(ids[0]);
+      } else {
+        // 多选且无候选覆盖: 禁提交 (Rule 5: 不留死胡同, 引导去产品工序配置)
+        planForm.value.productTypeId = '';
+        hasActiveWorkflow.value = false;
+        productWorkProcessList.value = [];
+      }
+    }
+  } catch (e) {
+    if (myGeneration === workflowResolveGeneration) handleCatchError(e, '解析工序图失败');
+  } finally {
+    if (myGeneration === workflowResolveGeneration) resolvingWorkflow.value = false;
+  }
+}
+
+watch(
+  () => planForm.value.targetFinishedGoodIds.join(','),
+  () => {
+    if (workflowResolveDebounceTimer) clearTimeout(workflowResolveDebounceTimer);
+    resetWorkflowResolutionState();
+    const ids = planForm.value.targetFinishedGoodIds.slice();
+    if (ids.length === 0) {
+      planForm.value.productTypeId = '';
+      hasActiveWorkflow.value = false;
+      productWorkProcessList.value = [];
+      return;
+    }
+    workflowResolveDebounceTimer = setTimeout(() => {
+      void resolveTargetFinishedGoods(ids);
+    }, 300);
+  }
+);
+
+// raw-centric 多SKU: RAW_OWNED 多候选未选 owner / NONE 多选无覆盖 → 禁提交
+// (fool-proof-design Rule 1: 预先显示边界, 不要事后报错)。仅作用于非 SO 来源。
+const nonSoSubmitBlocked = computed(() => {
+  if (planForm.value.sourceType === 'CUSTOMER_ORDER') return false;
+  const ids = planForm.value.targetFinishedGoodIds;
+  if (ids.length === 0) return false;
+  if (planForm.value.resolutionMode === 'NONE' && ids.length >= 2) return true;
+  if (
+    planForm.value.resolutionMode === 'RAW_OWNED'
+    && planForm.value.resolvedCandidates.length > 1
+    && !planForm.value.selectedCandidateOwnerId
+  ) return true;
+  return false;
+});
+// ========== /raw-centric 多SKU ==========
+
 function handleSearch() {
   pagination.value.page = 1;
   loadData();
@@ -693,9 +832,15 @@ function handleCreate() {
     // Fable 审计修复 (问题1 — 多租户安全): 默认值取工厂配置 (F006=true 两点 / 其他=false 逐道),
     // 不再全系统硬编码 true。产品加载后若 0 工序仍自动锁定为 true (loadBomProcesses)。
     skipProcessReporting: skipReportingFactoryDefault.value,
+    // raw-centric 多SKU (2026-07-13): 重置多选成品 + 工序图解析状态。
+    targetFinishedGoodIds: [],
+    resolvedCandidates: [],
+    selectedCandidateOwnerId: '',
+    resolutionMode: '',
   };
   productWorkProcessList.value = [];
   hasActiveWorkflow.value = false;
+  resolvingWorkflow.value = false;
   // T135 ITEM #1: 默认 CUSTOMER_ORDER — 预加载可选销售订单列表
   if (selectableSalesOrders.value.length === 0) loadSelectableSalesOrders();
   dialogVisible.value = true;
@@ -774,9 +919,19 @@ async function submitPlan() {
     return;
   }
 
-  // 非 SO 来源 (MANUAL / AI_FORECAST / SAFETY_STOCK): 单产品手填 (原逻辑不变)
-  if (!planForm.value.productTypeId) {
-    ElMessage.warning('请选择产品类型');
+  // 非 SO 来源 (MANUAL / AI_FORECAST / SAFETY_STOCK): 手选「生产成品」+ 解析共用 raw workflow
+  if (planForm.value.targetFinishedGoodIds.length === 0 || !planForm.value.productTypeId) {
+    ElMessage.warning('请选择生产成品');
+    return;
+  }
+  // raw-centric 多SKU: RAW_OWNED 多候选未选定 / NONE 多选无覆盖 → 提交按钮已 disabled,
+  // 这里是双保险 (Rule 1: 提交前也要挡, 不只是点击那一刻)。
+  if (nonSoSubmitBlocked.value) {
+    ElMessage.warning(
+      planForm.value.resolutionMode === 'NONE'
+        ? '所选成品没有对应的通用(原料)工序配置，请先配置'
+        : '请先选择使用哪个工序图'
+    );
     return;
   }
   // raw-centric 多SKU: 存货生产常规无需数量, 但 workflow 驱动产品必须 (转批次 create-batch 要求 >0)。
@@ -790,7 +945,20 @@ async function submitPlan() {
   }
   dialogLoading.value = true;
   try {
-    const payload = { ...planForm.value };
+    const {
+      resolvedCandidates: _resolvedCandidates,
+      selectedCandidateOwnerId: _selectedCandidateOwnerId,
+      resolutionMode,
+      targetFinishedGoodIds,
+      ...rest
+    } = planForm.value;
+    // 命中 workflow 候选 (SELF_WORKFLOW / RAW_OWNED 已选定 owner) 才带 targetFinishedGoodIds;
+    // NONE 单选走既有单产品路径, 不传该字段 (维持现状, 设计 §13)。
+    const hitWorkflowCandidate = resolutionMode === 'SELF_WORKFLOW' || resolutionMode === 'RAW_OWNED';
+    const payload: Record<string, unknown> = { ...rest };
+    if (hitWorkflowCandidate) {
+      payload.targetFinishedGoodIds = targetFinishedGoodIds;
+    }
     const response = await post(`/${factoryId.value}/production-plans`, payload);
     if (response.success) {
       ElMessage.success('创建成功');
@@ -799,9 +967,22 @@ async function submitPlan() {
     } else {
       ElMessage.error(response.message || '创建失败');
     }
-  } catch (error: any) {
-    // Interceptor shows specific toast; dedupe fallback
-    console.error('[失败]', error);
+  } catch (error: unknown) {
+    // 409 WORKFLOW_RESOLUTION_NOT_COVERED: 双保险 — interceptor 已弹 sticky toast,
+    // 这里额外给「去产品工序配置」跳转按钮 (Rule 5: 不留死胡同)。
+    const err = error as { status?: number; code?: string; message?: string };
+    if (err?.status === 409 && err?.code === 'WORKFLOW_RESOLUTION_NOT_COVERED') {
+      ElMessageBox.confirm(
+        err.message || '所选成品没有对应的通用(原料)工序配置，请先配置',
+        '工序图未覆盖',
+        { confirmButtonText: '去产品工序配置', cancelButtonText: '取消', type: 'warning' }
+      ).then(() => {
+        router.push('/system/product-processes');
+      }).catch(() => { /* 用户取消, 静默 */ });
+    } else {
+      // Interceptor shows specific toast; dedupe fallback
+      console.error('[失败]', error);
+    }
   } finally {
     dialogLoading.value = false;
   }
@@ -2438,6 +2619,16 @@ function formatPlannedQuantity(v: number | null | undefined, unit?: string | nul
   return unit ? `${v} ${unit}` : String(v);
 }
 
+// raw-centric 多SKU (2026-07-13): 计划的 targetFinishedGoodIds → 产品名 (列表/详情共用)。
+// 查不到 (产品已删除) 时兜底显示 id + 「已删除」提示, 不静默丢字段。
+function targetFinishedGoodNames(ids: unknown): string[] {
+  if (!Array.isArray(ids)) return [];
+  return ids.map((id) => {
+    const pt = productTypes.value.find((p: TableRow) => String(p.id) === String(id));
+    return pt ? String(pt.name) : `${id}（已删除）`;
+  });
+}
+
 // ==================== View Plan ====================
 const viewDialogVisible = ref(false);
 const viewPlan = ref<TableRow | null>(null);
@@ -2574,7 +2765,8 @@ function isPlanFormDirty(): boolean {
     f.sourceCustomerName ||
     f.processName ||
     f.sourceOrderId ||
-    f.sourceOrderItemId
+    f.sourceOrderItemId ||
+    (f.targetFinishedGoodIds && f.targetFinishedGoodIds.length > 0)
   );
 }
 
@@ -2621,6 +2813,12 @@ function handleAiFill(params: TableRow) {
     extraSourceOrderIds: [] as string[],
     customFields: {} as TableRow,
     skipProcessReporting: true as boolean | null,
+    // raw-centric 多SKU (2026-07-13): AI 填单命中的单产品同步进多选成品字段,
+    // 保持「生产成品」下拉与 productTypeId 一致 (触发 watch → 解析工序图)。
+    targetFinishedGoodIds: matched ? [String(matched.id)] : [],
+    resolvedCandidates: [],
+    selectedCandidateOwnerId: '',
+    resolutionMode: '',
   };
   dialogVisible.value = true;
 }
@@ -2761,8 +2959,19 @@ function handleAiFill(params: TableRow) {
       >
         <el-table-column type="selection" width="45" />
         <el-table-column prop="planNumber" label="计划编号" width="160" />
-        <el-table-column label="产品类型" min-width="150" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.productTypeName || row.productName || row.productTypeId || '-' }}</template>
+        <el-table-column label="产品类型" min-width="200" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span>{{ row.productTypeName || row.productName || row.productTypeId || '-' }}</span>
+            <!-- raw-centric 多SKU: 多选成品建的计划, 后缀显示各终端成品 chips -->
+            <template v-if="Array.isArray(row.targetFinishedGoodIds) && row.targetFinishedGoodIds.length > 0">
+              <el-tag
+                v-for="(name, idx) in targetFinishedGoodNames(row.targetFinishedGoodIds)"
+                :key="idx"
+                size="small"
+                style="margin-left: 4px;"
+              >→ {{ name }}</el-tag>
+            </template>
+          </template>
         </el-table-column>
         <el-table-column prop="sourceCustomerName" label="客户" min-width="120" show-overflow-tooltip />
         <el-table-column prop="processName" label="工序" width="120" show-overflow-tooltip />
@@ -3047,7 +3256,17 @@ function handleAiFill(params: TableRow) {
           <div class="detail-section-title">基本信息</div>
           <el-descriptions :column="2" border size="small">
             <el-descriptions-item label="计划编号">{{ viewPlan.planNumber }}</el-descriptions-item>
-            <el-descriptions-item label="产品类型">{{ viewPlan.productTypeName || viewPlan.productName || viewPlan.productTypeId || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="产品类型">
+              {{ viewPlan.productTypeName || viewPlan.productName || viewPlan.productTypeId || '-' }}
+              <template v-if="Array.isArray(viewPlan?.targetFinishedGoodIds) && viewPlan.targetFinishedGoodIds.length > 0">
+                <el-tag
+                  v-for="(name, idx) in targetFinishedGoodNames(viewPlan.targetFinishedGoodIds)"
+                  :key="idx"
+                  size="small"
+                  style="margin-left: 4px;"
+                >→ {{ name }}</el-tag>
+              </template>
+            </el-descriptions-item>
             <el-descriptions-item label="客户">{{ viewPlan.sourceCustomerName || '-' }}</el-descriptions-item>
             <el-descriptions-item label="指派主管">{{ viewPlan.assignedSupervisorName || '-' }}</el-descriptions-item>
             <el-descriptions-item label="计划成品">{{ formatPlannedQuantity(viewPlan.plannedQuantity, viewPlan.plannedUnit || 'kg') }}</el-descriptions-item>
@@ -3250,21 +3469,102 @@ function handleAiFill(params: TableRow) {
           />
         </el-form-item>
         <!-- 以销定产 (2026-06-24): 来源=销售订单时, 产品/数量按所选产品行各自取, 不再手选单产品 → 隐藏 -->
-        <el-form-item v-if="planForm.sourceType !== 'CUSTOMER_ORDER'" label="产品类型" required>
+        <!-- raw-centric 多SKU (2026-07-13): 多选生产成品, 自动解析共用 raw workflow (工序图)。
+             单选且无 workflow 覆盖时维持既有单产品手填逻辑 (兼容旧行为)。 -->
+        <el-form-item v-if="planForm.sourceType !== 'CUSTOMER_ORDER'" label="生产成品" required>
           <el-select
-            v-model="planForm.productTypeId"
-            placeholder="选择产品类型"
+            v-model="planForm.targetFinishedGoodIds"
+            multiple
             filterable
+            placeholder="选择本次生产的成品 (可多选)"
             style="width: 100%"
-            @change="handleProductChange"
           >
             <el-option
-              v-for="item in productTypes"
+              v-for="item in finishedGoodProductTypes"
               :key="item.id"
               :label="item.name"
               :value="item.id"
             />
           </el-select>
+          <div v-if="resolvingWorkflow" style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 4px;">
+            正在解析工序图…
+          </div>
+          <template v-else-if="planForm.targetFinishedGoodIds.length > 0">
+            <!-- SELF_WORKFLOW: 该成品自己就有工序图 -->
+            <div v-if="planForm.resolutionMode === 'SELF_WORKFLOW'" style="margin-top: 8px;">
+              <el-tag type="info" size="small">使用该成品自己的工序图</el-tag>
+            </div>
+            <!-- RAW_OWNED 唯一候选: 自动选定 + 摘要卡 -->
+            <div
+              v-else-if="planForm.resolutionMode === 'RAW_OWNED' && planForm.resolvedCandidates.length === 1"
+              style="margin-top: 8px; padding: 10px; border: 1px solid var(--el-border-color, #dcdfe6); border-radius: 4px;"
+            >
+              <div style="font-weight: 600;">{{ planForm.resolvedCandidates[0].ownerProductName }}</div>
+              <div style="margin: 6px 0;">
+                <el-tag
+                  v-for="t in planForm.resolvedCandidates[0].terminalOutputs"
+                  :key="t.productTypeId"
+                  size="small"
+                  style="margin-right: 4px; margin-bottom: 4px;"
+                >→ {{ t.productName }}</el-tag>
+              </div>
+              <el-tag :type="planForm.resolvedCandidates[0].exactMatch ? 'success' : 'warning'" size="small">
+                {{ planForm.resolvedCandidates[0].exactMatch ? '精确匹配' : '含额外成品' }}
+              </el-tag>
+            </div>
+            <!-- RAW_OWNED 多候选: 用户手选 owner, 未选禁提交 -->
+            <div v-else-if="planForm.resolutionMode === 'RAW_OWNED' && planForm.resolvedCandidates.length > 1" style="margin-top: 8px;">
+              <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-bottom: 6px;">
+                该组成品有多个通用工序图候选，请选择使用哪一个:
+              </div>
+              <el-radio-group
+                v-model="planForm.selectedCandidateOwnerId"
+                style="width: 100%; display: flex; flex-direction: column; gap: 8px;"
+                @change="handleWorkflowCandidateSelect"
+              >
+                <el-radio
+                  v-for="c in planForm.resolvedCandidates"
+                  :key="c.workflowId"
+                  :label="c.ownerProductTypeId"
+                  border
+                  style="height: auto; width: 100%; margin: 0; padding: 10px; white-space: normal;"
+                >
+                  <div style="font-weight: 600;">{{ c.ownerProductName }}</div>
+                  <div style="margin: 6px 0;">
+                    <el-tag
+                      v-for="t in c.terminalOutputs"
+                      :key="t.productTypeId"
+                      size="small"
+                      style="margin-right: 4px; margin-bottom: 4px;"
+                    >→ {{ t.productName }}</el-tag>
+                  </div>
+                  <el-tag :type="c.exactMatch ? 'success' : 'warning'" size="small">
+                    {{ c.exactMatch ? '精确匹配' : '含额外成品' }}
+                  </el-tag>
+                </el-radio>
+              </el-radio-group>
+            </div>
+            <!-- NONE + 多选: 无候选覆盖, 引导去配置, 禁提交 -->
+            <el-alert
+              v-else-if="planForm.resolutionMode === 'NONE' && planForm.targetFinishedGoodIds.length > 1"
+              type="error"
+              show-icon
+              :closable="false"
+              style="margin-top: 8px;"
+            >
+              <template #title>所选成品没有对应的通用(原料)工序配置，请先配置</template>
+              <div style="display: flex; gap: 8px; margin-top: 8px;">
+                <el-button
+                  size="small"
+                  type="primary"
+                  @click="router.push(planForm.targetFinishedGoodIds[0] ? `/system/product-processes?productTypeId=${planForm.targetFinishedGoodIds[0]}` : '/system/product-processes')"
+                >去产品工序配置</el-button>
+                <el-button size="small" @click="ElMessage.info('请将「生产成品」改为只选 1 个成品，分别建计划')">
+                  改为单成品分别建计划
+                </el-button>
+              </div>
+            </el-alert>
+          </template>
         </el-form-item>
         <el-form-item label="客户名称">
           <el-input v-model="planForm.sourceCustomerName" placeholder="选择产品后自动填充，也可手动输入" />
@@ -3349,20 +3649,25 @@ function handleAiFill(params: TableRow) {
         <!-- 存货生产(SAFETY_STOCK): 无计划数量, 按实际小结累计 → 同样隐藏 -->
         <el-form-item
           v-if="planForm.sourceType !== 'CUSTOMER_ORDER' && planForm.sourceType !== 'SAFETY_STOCK'"
-          label="计划成品数量"
+          :label="hasResolvedWorkflowCandidate ? `计划投料数量（${resolvedOwnerCandidate?.ownerUnit || 'kg'}）` : '计划成品数量'"
           required
         >
           <el-input-number v-model="planForm.plannedQuantity" :min="1" style="width: 100%" />
           <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 2px;">
-            按产品成品单位填写；首道投料数量以逐工序报工和配方出成率为准
+            <template v-if="hasResolvedWorkflowCandidate">
+              本次生产由「产品工序 Workflow」驱动分支生产；填首道投料原料数量。转批次后按图逐道报工，各终端成品各自入库。
+            </template>
+            <template v-else>
+              按产品成品单位填写；首道投料数量以逐工序报工和配方出成率为准
+            </template>
           </div>
         </el-form-item>
-        <!-- raw-centric 多SKU (2026-07-13): 存货生产 + 产品由 Workflow 驱动 → 需设投料数量,
-             供转批次 (create-batch 要求 >0, 否则 400 数量必须大于0)。非 workflow 的存货生产仍
-             按实际小结累计不填数量 (不回归)。 -->
+        <!-- raw-centric 多SKU (2026-07-13): 存货生产 + 产品由 Workflow 驱动 (自有图或所选成品命中
+             raw-owned 候选) → 需设投料数量, 供转批次 (create-batch 要求 >0, 否则 400 数量必须大于0)。
+             非 workflow 的存货生产仍按实际小结累计不填数量 (不回归)。 -->
         <el-form-item
-          v-if="planForm.sourceType === 'SAFETY_STOCK' && hasActiveWorkflow"
-          label="计划投料数量"
+          v-if="planForm.sourceType === 'SAFETY_STOCK' && (hasActiveWorkflow || hasResolvedWorkflowCandidate)"
+          :label="`计划投料数量（${resolvedOwnerCandidate?.ownerUnit || 'kg'}）`"
           required
         >
           <el-input-number v-model="planForm.plannedQuantity" :min="1" style="width: 100%" />
@@ -3395,7 +3700,7 @@ function handleAiFill(params: TableRow) {
       </el-form>
       <template #footer>
         <el-button @click="handleDialogClose">取消</el-button>
-        <el-button type="primary" :loading="dialogLoading" @click="submitPlan">确定</el-button>
+        <el-button type="primary" :loading="dialogLoading" :disabled="nonSoSubmitBlocked" @click="submitPlan">确定</el-button>
       </template>
     </el-dialog>
 
