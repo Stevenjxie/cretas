@@ -797,12 +797,21 @@ async function regeneratePlanAction(): Promise<void> {
 
 // ==================== 动作：调度记录 / 恢复 ====================
 
-async function loadPlanHistory(page = 0, size = 20): Promise<void> {
+async function loadPlanHistory(
+  page = 0,
+  size = 20,
+  dateRange?: { startDate?: string; endDate?: string },
+): Promise<void> {
   recordsLoading.value = true;
   recordsError.value = null;
   try {
     const factoryId = requireFactoryId();
-    const res = await apiListPlans(factoryId, { page, size });
+    const res = await apiListPlans(factoryId, {
+      page,
+      size,
+      startDate: dateRange?.startDate,
+      endDate: dateRange?.endDate,
+    });
     planHistory.value = res.data;
   } catch (err) {
     recordsError.value = errorMessage(err);

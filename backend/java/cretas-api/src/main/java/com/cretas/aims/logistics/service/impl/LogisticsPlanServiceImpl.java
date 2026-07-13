@@ -43,6 +43,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
@@ -100,11 +101,14 @@ public class LogisticsPlanServiceImpl implements LogisticsPlanService {
     }
 
     @Override
-    public Page<PlanDto> listPlans(String factoryId, PlanStatus status, Pageable pageable) {
+    public Page<PlanDto> listPlans(String factoryId, PlanStatus status, LocalDate startDate, LocalDate endDate, Pageable pageable) {
         List<LogisticsPlan> all = planRepository.findByFactoryIdOrderByPlanDateDesc(factoryId);
-        List<LogisticsPlan> filtered = status == null
-                ? all
-                : all.stream().filter(p -> p.getStatus() == status).toList();
+        List<LogisticsPlan> filtered = all.stream()
+                .filter(p -> status == null || p.getStatus() == status)
+                // 按业务日期区间过滤(startDate/endDate 任一为空表示该端不限)
+                .filter(p -> startDate == null || (p.getPlanDate() != null && !p.getPlanDate().isBefore(startDate)))
+                .filter(p -> endDate == null || (p.getPlanDate() != null && !p.getPlanDate().isAfter(endDate)))
+                .toList();
 
         int total = filtered.size();
         int start = Math.min((int) pageable.getOffset(), total);

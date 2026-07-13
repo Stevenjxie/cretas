@@ -57,11 +57,13 @@ public class LogisticsPlanController {
     public ApiResponse<Page<PlanDto>> listPlans(
             @PathVariable String factoryId,
             @RequestParam(required = false) PlanStatus status,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate startDate,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate endDate,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         int safeSize = Math.min(Math.max(size, 1), 100);
         return ApiResponse.success(
-                planService.listPlans(factoryId, status, PageRequest.of(Math.max(page, 0), safeSize)));
+                planService.listPlans(factoryId, status, startDate, endDate, PageRequest.of(Math.max(page, 0), safeSize)));
     }
 
     @GetMapping("/plans/{planId}")

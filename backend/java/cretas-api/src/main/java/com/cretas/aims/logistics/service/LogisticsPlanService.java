@@ -38,7 +38,8 @@ public interface LogisticsPlanService {
             RouteOptimizeMode optimizeBy);
 
     /** GET /plans — 工厂内计划列表，最新业务日期在前；{@code status} 可选过滤。 */
-    Page<PlanDto> listPlans(String factoryId, PlanStatus status, Pageable pageable);
+    Page<PlanDto> listPlans(String factoryId, PlanStatus status, java.time.LocalDate startDate,
+            java.time.LocalDate endDate, Pageable pageable);
 
     /** GET /plans/{planId} — 完整计划快照。 */
     PlanSnapshotDto getPlan(String factoryId, String planId);

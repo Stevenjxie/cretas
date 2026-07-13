@@ -29,13 +29,28 @@ const statusMeta: Record<PlanStatus, { label: string; type: 'info' | 'success' |
 const records = computed(() => state.planHistory.value?.content ?? []);
 const total = computed(() => state.planHistory.value?.totalElements ?? 0);
 
+// 按业务日期区间搜索调度记录(el-date-picker daterange, value-format YYYY-MM-DD)
+const dateRange = ref<[string, string] | null>(null);
+function dateParams(): { startDate?: string; endDate?: string } | undefined {
+  return dateRange.value ? { startDate: dateRange.value[0], endDate: dateRange.value[1] } : undefined;
+}
+
+async function reload(page = 0): Promise<void> {
+  currentPage.value = page + 1;
+  await state.loadPlanHistory(page, pageSize.value, dateParams());
+}
+
 onMounted(() => {
-  void state.loadPlanHistory(0, pageSize.value);
+  void reload(0);
 });
 
 async function handlePageChange(nextPage: number): Promise<void> {
-  currentPage.value = nextPage;
-  await state.loadPlanHistory(nextPage - 1, pageSize.value);
+  await reload(nextPage - 1);
+}
+
+// 日期区间变化 → 回到第一页重新查
+async function onDateChange(): Promise<void> {
+  await reload(0);
 }
 
 async function showDetails(plan: LogisticsPlan): Promise<void> {
@@ -67,6 +82,20 @@ async function reExportXlsx(plan: LogisticsPlan): Promise<void> {
       <div>
         <h1>调度记录</h1>
         <p>查看每次排线计划的门店、车次和里程，可重新查看或导出。</p>
+      </div>
+      <div class="rec-filters">
+        <span class="rf-label">按日期</span>
+        <el-date-picker
+          v-model="dateRange"
+          type="daterange"
+          value-format="YYYY-MM-DD"
+          range-separator="至"
+          start-placeholder="开始日期"
+          end-placeholder="结束日期"
+          clearable
+          data-testid="records-date-range"
+          @change="onDateChange"
+        />
       </div>
     </header>
 
@@ -161,8 +190,11 @@ async function reExportXlsx(plan: LogisticsPlan): Promise<void> {
 
 <style scoped lang="scss">
 .support-page { display: grid; gap: 20px; max-width: 1440px; min-height: 100%; padding: 24px; margin: 0 auto; background: #f8fafc; }
+.page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .page-header h1 { margin: 0; color: #101828; font-size: 24px; }
 .page-header p { margin: 8px 0 0; color: #667085; }
+.rec-filters { display: flex; align-items: center; gap: 10px; }
+.rf-label { color: #344054; font-size: 13px; font-weight: 650; }
 .empty-card { display: grid; gap: 12px; padding: 20px; text-align: center; }
 .pagination-wrapper { display: flex; justify-content: flex-end; margin-top: 12px; }
 /* 调度记录详情抽屉(只读地图 + 路线 + 状态) */

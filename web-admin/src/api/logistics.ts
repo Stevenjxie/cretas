@@ -538,7 +538,10 @@ export function generatePlan(
   } as GeneratePlanRequest);
 }
 
-export function listPlans(factoryId: string, params?: PageParams & { status?: PlanStatus }) {
+export function listPlans(
+  factoryId: string,
+  params?: PageParams & { status?: PlanStatus; startDate?: string; endDate?: string },
+) {
   return get<PageResponse<LogisticsPlan>>(`/${factoryId}/logistics/plans`, { params });
 }
 
