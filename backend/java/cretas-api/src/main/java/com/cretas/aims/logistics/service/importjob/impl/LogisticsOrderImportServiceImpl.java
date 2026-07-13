@@ -3,6 +3,7 @@ package com.cretas.aims.logistics.service.importjob.impl;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.logistics.dto.importjob.DeliveryOrderDto;
 import com.cretas.aims.logistics.dto.importjob.LogisticsOrderImportRow;
+import com.cretas.aims.logistics.dto.importjob.LogisticsOrderTemplateRow;
 import com.cretas.aims.logistics.dto.importjob.ManualOrderCreateRequest;
 import com.cretas.aims.logistics.dto.importjob.ManualOrderRow;
 import com.cretas.aims.logistics.dto.importjob.OrderBatchDto;
@@ -107,21 +108,17 @@ public class LogisticsOrderImportServiceImpl implements LogisticsOrderImportServ
     public byte[] downloadTemplate() {
         // 模板 = 表头 + 第 2 行填好的示例，让用户照着填。示例订单号带「系统自动忽略」标注，
         // preview 会自动跳过这行 —— 用户不必删除，系统自动识别忽略。
-        LogisticsOrderImportRow example = new LogisticsOrderImportRow();
-        example.setBusinessDate("2026-07-13");      // 选填：留空默认当天；格式 2026-07-13 或 2026/7/13 均可
+        // 仅保留最必要的 6 列（订单号/门店名称/配送地址/箱数/重量kg/体积m³）。业务日期/件数/配送时间/
+        // 经纬度/区域是选填，不放进下载模板避免客户困惑；导入解析仍用全列 LogisticsOrderImportRow，
+        // 客户文件带这些额外列也能读。示例订单号带哨兵，preview 自动跳过本行。
+        LogisticsOrderTemplateRow example = new LogisticsOrderTemplateRow();
         example.setStoreCode(EXAMPLE_STORE_CODE);   // 哨兵：导入时自动跳过本行
         example.setStoreName("沃尔玛浦东店");
         example.setAddress("上海市浦东新区世纪大道100号");
-        example.setPieces("10");
         example.setBoxes("2");
         example.setWeightKg("250");
         example.setVolumeCbm("1.5");
-        example.setWindowStart("08:00");
-        example.setWindowEnd("18:00");
-        example.setLongitude("");                   // 选填：留空自动定位（经纬度须成对填写）
-        example.setLatitude("");
-        example.setAreaCode("浦东");
-        return excelUtil.exportToExcel(List.of(example), LogisticsOrderImportRow.class, SHEET_NAME);
+        return excelUtil.exportToExcel(List.of(example), LogisticsOrderTemplateRow.class, SHEET_NAME);
     }
 
     // ==================== Preview ====================

@@ -259,33 +259,6 @@ watch(() => props.batch?.id, (id, prev) => {
       <el-button plain @click="emit('download-template')">下载导入模板</el-button>
     </div>
 
-    <!-- 字段填写说明（必填/选填 + 格式；防呆：预先告诉用户怎么填，减少导入失败） -->
-    <div class="field-guide" data-testid="field-guide">
-      <div class="fg-head">📋 模板字段说明<em>下载模板按此填写；列顺序可变，但表头名称请勿修改</em></div>
-      <div class="fg-body">
-        <div class="fg-col">
-          <span class="fg-tag fg-req">必填</span>
-          <ul>
-            <li><b>订单号</b><i>文本，文件内唯一</i></li>
-            <li><b>门店名称</b><i>文本</i></li>
-            <li><b>配送地址</b><i>越详细定位越准</i></li>
-            <li><b>重量kg</b><i>正数，如 250 / 390.74</i></li>
-            <li><b>体积m³</b><i>正数，如 1.073</i></li>
-            <li><b>件数 / 箱数</b><i>至少填一项（正整数）</i></li>
-          </ul>
-        </div>
-        <div class="fg-col">
-          <span class="fg-tag fg-opt">选填</span>
-          <ul>
-            <li><b>业务日期</b><i>2026-07-13 或 2026/7/13；不填=当天</i></li>
-            <li><b>配送开始 / 结束时间</b><i>如 08:00 / 18:00</i></li>
-            <li><b>经度 / 纬度</b><i>数字，须成对；不填自动定位</i></li>
-            <li><b>区域</b><i>如 浦东 / 常州</i></li>
-          </ul>
-        </div>
-      </div>
-    </div>
-
     <!-- 一键测试导入（演示场景，数据常驻，切换「够 / 不够」对比） -->
     <div class="scenario-import" data-testid="scenario-import">
       <span class="scenario-label">🧪 测试导入</span>
@@ -521,19 +494,6 @@ watch(() => props.batch?.id, (id, prev) => {
 .win-cell { display: flex; align-items: center; gap: 6px; }
 .manual-actions { display: flex; align-items: center; gap: 14px; }
 .filled-count { color: #475467; font-size: 13px; }
-/* 字段填写说明 */
-.field-guide { padding: 12px 14px; background: #fbfdff; border: 1px solid #e3ecf6; border-radius: 10px; }
-.fg-head { color: #1b65a8; font-size: 13px; font-weight: 750; margin-bottom: 8px; }
-.fg-head em { margin-left: 8px; font-style: normal; font-weight: 400; font-size: 12px; color: #98a2b3; }
-.fg-body { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 24px; }
-.fg-col { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; }
-.fg-tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; height: fit-content; }
-.fg-req { color: #b42318; background: #fef3f2; }
-.fg-opt { color: #475467; background: #f2f4f7; }
-.fg-col ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; }
-.fg-col li { font-size: 12.5px; color: #475467; }
-.fg-col li b { color: #101828; font-weight: 650; }
-.fg-col li i { margin-left: 6px; font-style: normal; color: #98a2b3; }
 /* 测试导入（演示场景） */
 .scenario-import { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 14px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 10px; }
 .scenario-label { color: #334155; font-size: 13px; font-weight: 750; }

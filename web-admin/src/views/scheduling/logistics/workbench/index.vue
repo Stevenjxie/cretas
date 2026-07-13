@@ -165,10 +165,6 @@ async function startNewSchedule(): Promise<void> {
   await Promise.all([state.loadVehicles(), state.loadDrivers()]);
 }
 
-function handleTargetLoad(value: number): void {
-  void state.setTargetLoad(value);
-}
-
 /** 运力诊断条「去管理车辆」next action（fool-proof-design Rule 5：不留 dead-end）—— 跳到车辆资源页补运力/补区域覆盖。 */
 function goManageVehicles(): void {
   void router.push('/scheduling/logistics/resources');
@@ -319,7 +315,6 @@ async function next(): Promise<void> {
           <button data-testid="generate-routes" class="generate-button" type="button" @click="state.regeneratePlanAction">重新生成路线</button>
           <label class="view-toggle">视图 <el-radio-group :model-value="mapView" size="small" @update:model-value="(v: 'map'|'timetable') => (mapView = v)"><el-radio-button label="map">地图</el-radio-button><el-radio-button label="timetable">调度时间表</el-radio-button></el-radio-group></label>
           <label class="opt-mode">优化目标 <el-radio-group :model-value="state.optimizeMode.value" size="small" @update:model-value="handleOptimizeMode"><el-radio-button label="DISTANCE">路程最短</el-radio-button><el-radio-button label="TIME">时间最快</el-radio-button></el-radio-group></label>
-          <label class="load-ctl">目标装载率 <el-slider :model-value="state.targetLoadPct.value" :min="50" :max="100" :show-tooltip="true" @update:model-value="handleTargetLoad" /></label>
         </div>
       </template>
       <div ref="mapRowRef" class="map-and-routes" :class="{ 'routes-hidden': routesHidden }" :style="mapRowStyle">
@@ -397,7 +392,7 @@ async function next(): Promise<void> {
   .mr-routes { flex-basis: auto; width: 100%; height: auto; }
   .mr-routes :deep(.route-cards) { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); max-height: 420px; }
 } h1,h2 { margin: 0; color: #101828; } .page-header p, .map-heading p { margin: 6px 0 0; color: #667085; } .map-step { display: grid; gap: 16px; } .map-heading label { display: grid; grid-template-columns: auto minmax(150px, 260px); align-items: center; gap: 12px; color: #344054; font-size: 14px; font-weight: 650; } .map-controls { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; } .map-heading .opt-mode { grid-template-columns: auto auto; } .route-settings { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding: 12px 16px; background: #f4f6f9; border: 1px solid #edf2f7; border-radius: 10px; } .route-settings.collapsed { padding: 6px 12px; } .route-settings .settings-title { color: #101828; font-weight: 700; font-size: 14px; }
-.settings-toggle { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; padding: 4px 10px; background: transparent; border: 1px solid #dbe3ec; border-radius: 6px; cursor: pointer; font: inherit; color: #475569; } .settings-toggle:hover { background: #e8edf3; } .settings-chevron { color: #1b65a8; font-size: 12px; font-weight: 650; } .route-settings label { display: grid; grid-template-columns: auto auto; align-items: center; gap: 10px; color: #344054; font-size: 14px; font-weight: 650; } .route-settings .load-ctl { grid-template-columns: auto minmax(120px, 200px); } .route-settings .view-toggle { grid-template-columns: auto auto; } .route-settings .generate-button { padding: 8px 16px; } .generate-button, .next-button { width: fit-content; padding: 10px 18px; color: #fff; font: inherit; font-weight: 650; background: #1b65a8; border: 0; border-radius: 6px; cursor: pointer; } .action-bar { position: sticky; bottom: 0; z-index: 20; padding: 14px 0; background: linear-gradient(to bottom, transparent, #f8fafc 28%); }
+.settings-toggle { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; padding: 4px 10px; background: transparent; border: 1px solid #dbe3ec; border-radius: 6px; cursor: pointer; font: inherit; color: #475569; } .settings-toggle:hover { background: #e8edf3; } .settings-chevron { color: #1b65a8; font-size: 12px; font-weight: 650; } .route-settings label { display: grid; grid-template-columns: auto auto; align-items: center; gap: 10px; color: #344054; font-size: 14px; font-weight: 650; } .route-settings .view-toggle { grid-template-columns: auto auto; } .route-settings .generate-button { padding: 8px 16px; } .generate-button, .next-button { width: fit-content; padding: 10px 18px; color: #fff; font: inherit; font-weight: 650; background: #1b65a8; border: 0; border-radius: 6px; cursor: pointer; } .action-bar { position: sticky; bottom: 0; z-index: 20; padding: 14px 0; background: linear-gradient(to bottom, transparent, #f8fafc 28%); }
 .unresolved-panel { display: grid; gap: 8px; padding: 16px 20px; background: #fffaeb; border: 1px solid #fef0c7; border-radius: 10px; } .unresolved-panel strong { color: #b54708; } .unresolved-panel ul { display: grid; gap: 4px; margin: 0; padding-left: 20px; color: #93370d; font-size: 13px; } .unresolved-panel a { width: fit-content; color: #1b65a8; font-weight: 650; }
 @media (max-width: 720px) { .workbench-page { padding: 16px; } .page-header,.map-heading { align-items: flex-start; flex-direction: column; } .map-heading label { width: 100%; } }
 </style>
