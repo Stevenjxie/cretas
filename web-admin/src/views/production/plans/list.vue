@@ -3655,13 +3655,18 @@ function handleAiFill(params: TableRow) {
         <!-- 存货生产(SAFETY_STOCK): 无计划数量, 按实际小结累计 → 同样隐藏 -->
         <el-form-item
           v-if="planForm.sourceType !== 'CUSTOMER_ORDER' && planForm.sourceType !== 'SAFETY_STOCK'"
-          :label="hasResolvedWorkflowCandidate ? `计划投料数量（${resolvedOwnerCandidate?.ownerUnit || '单位未配置'}）` : '计划成品数量'"
+          :label="hasResolvedWorkflowCandidate
+            ? `${planForm.resolutionMode === 'RAW_OWNED' ? '计划投料数量' : '计划成品数量'}（${resolvedOwnerCandidate?.plannedUnit || '单位未配置'}）`
+            : '计划成品数量'"
           required
         >
           <el-input-number v-model="planForm.plannedQuantity" :min="1" style="width: 100%" />
           <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 2px;">
-            <template v-if="hasResolvedWorkflowCandidate">
+            <template v-if="hasResolvedWorkflowCandidate && planForm.resolutionMode === 'RAW_OWNED'">
               本次生产由「产品工序 Workflow」驱动分支生产；填首道投料原料数量。转批次后按图逐道报工，各终端成品各自入库。
+            </template>
+            <template v-else-if="hasResolvedWorkflowCandidate">
+              按 Workflow 终端成品输出端口单位填写；各工序继续按自己的端口单位报工。
             </template>
             <template v-else>
               按产品成品单位填写；首道投料数量以逐工序报工和配方出成率为准
@@ -3673,12 +3678,17 @@ function handleAiFill(params: TableRow) {
              非 workflow 的存货生产仍按实际小结累计不填数量 (不回归)。 -->
         <el-form-item
           v-if="planForm.sourceType === 'SAFETY_STOCK' && (hasActiveWorkflow || hasResolvedWorkflowCandidate)"
-          :label="`计划投料数量（${resolvedOwnerCandidate?.ownerUnit || '单位未配置'}）`"
+          :label="`${planForm.resolutionMode === 'RAW_OWNED' ? '计划投料数量' : '计划成品数量'}（${resolvedOwnerCandidate?.plannedUnit || '单位未配置'}）`"
           required
         >
           <el-input-number v-model="planForm.plannedQuantity" :min="1" style="width: 100%" />
           <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 2px;">
-            本产品由「产品工序 Workflow」驱动分支生产；填首道投料原料数量（如猪蹄 kg）。转批次后按图逐道报工，各终端成品各自入库。可多次小结增量入库。
+            <template v-if="planForm.resolutionMode === 'RAW_OWNED'">
+              填 Workflow 原料入口端口的投料数量。转批次后按图逐道报工，各终端成品各自入库。
+            </template>
+            <template v-else>
+              填 Workflow 终端成品输出端口的计划数量；逐道报工仍使用各工序端口单位。
+            </template>
           </div>
         </el-form-item>
         <el-form-item label="计划生产日" required>

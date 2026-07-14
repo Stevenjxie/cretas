@@ -27,7 +27,8 @@ class ProductWorkflowResolutionUnitAdmissionTest {
         ProductProcessWorkflowRepository workflows = mock(ProductProcessWorkflowRepository.class);
         ProductTypeRepository products = mock(ProductTypeRepository.class);
         ProductWorkflowResolutionService service = new ProductWorkflowResolutionServiceImpl(
-                activations, workflows, products, new ObjectMapper());
+                activations, workflows, products, new ObjectMapper(),
+                mock(com.cretas.aims.service.unit.UnitContractService.class));
 
         ProductProcessWorkflowActivation activation = new ProductProcessWorkflowActivation();
         activation.setFactoryId("F006");

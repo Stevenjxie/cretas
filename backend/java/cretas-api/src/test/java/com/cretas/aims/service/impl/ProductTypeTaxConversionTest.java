@@ -43,7 +43,8 @@ class ProductTypeTaxConversionTest {
     @BeforeEach
     void setUp() {
         service = new ProductTypeServiceImpl(productTypeRepository, new ObjectMapper(), customerRepository,
-                org.mockito.Mockito.mock(com.cretas.aims.service.workflow.WorkflowUnitReviewService.class));
+                org.mockito.Mockito.mock(com.cretas.aims.service.workflow.WorkflowUnitReviewService.class),
+                org.mockito.Mockito.mock(com.cretas.aims.service.unit.ProductSpecificationConversionSyncService.class));
     }
 
     // ──────────────── TaxRate enum 换算验证 ────────────────

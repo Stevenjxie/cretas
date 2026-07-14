@@ -333,6 +333,50 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         return resolvePlannedOutputUnit(productUnit);
     }
 
+    private PlanUnitAuthority resolvePlanUnitAuthority(
+            String factoryId, String productTypeId, List<String> targetFinishedGoodIds) {
+        if (workflowResolutionService != null) {
+            Optional<com.cretas.aims.service.workflow.WorkflowPlanOutputContract> contract =
+                    workflowResolutionService.resolveActivePlanOutputContract(
+                            factoryId, productTypeId, targetFinishedGoodIds);
+            if (contract.isPresent()) {
+                var value = contract.get();
+                return new PlanUnitAuthority(value.plannedUnit(),
+                        ProductionBatch.WorkflowSelectionMode.WORKFLOW,
+                        value.workflowId(), value.definitionVersion());
+            }
+        }
+        return new PlanUnitAuthority(resolvePlannedOutputUnitForProduct(productTypeId),
+                ProductionBatch.WorkflowSelectionMode.LEGACY, null, null);
+    }
+
+    private void applyPlanUnitAuthority(ProductionPlan plan, PlanUnitAuthority authority) {
+        plan.setPlannedUnit(authority.unit());
+        plan.setWorkflowSelectionMode(authority.mode());
+        plan.setSelectedWorkflowId(authority.workflowId());
+        plan.setSelectedWorkflowVersion(authority.workflowVersion());
+    }
+
+    private record PlanUnitAuthority(
+            String unit,
+            ProductionBatch.WorkflowSelectionMode mode,
+            Long workflowId,
+            Integer workflowVersion) {
+    }
+
+    private boolean sameTargetSelection(List<String> left, List<String> right) {
+        return normalizedTargetSelection(left).equals(normalizedTargetSelection(right));
+    }
+
+    private Set<String> normalizedTargetSelection(List<String> values) {
+        if (values == null) return Set.of();
+        return values.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
+
     @Override
     @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public boolean getSkipProcessReportingDefault(String factoryId) {
@@ -911,10 +955,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             request.setSkipProcessReporting(resolveSkipProcessReportingDefault(factoryId));
         }
 
-        request.setPlannedUnit(resolvePlannedOutputUnitForProduct(request.getProductTypeId()));
+        PlanUnitAuthority planUnitAuthority = resolvePlanUnitAuthority(
+                factoryId, request.getProductTypeId(), request.getTargetFinishedGoodIds());
+        request.setPlannedUnit(planUnitAuthority.unit());
 
         // 创建生产计划
         ProductionPlan plan = productionPlanMapper.toEntity(request, factoryId, userId.longValue());
+        applyPlanUnitAuthority(plan, planUnitAuthority);
 
         // SP5 多 SO 合并: 规范化 sourceOrderIds — 确保 sourceOrderId 也在列表中,
         // 并校验追加的每个 SO 属于本工厂且已财审 (向后兼容: 单 SO 场景 sourceOrderIds 为空时自动补填)。
@@ -1216,13 +1263,25 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         boolean productChanged = request.getProductTypeId() != null
                 && !request.getProductTypeId().equals(plan.getProductTypeId());
-        request.setPlannedUnit(productChanged || plan.getPlannedUnit() == null
-                ? resolvePlannedOutputUnitForProduct(
-                        request.getProductTypeId() != null ? request.getProductTypeId() : plan.getProductTypeId())
-                : plan.getPlannedUnit());
+        boolean targetsChanged = request.getTargetFinishedGoodIds() != null
+                && !sameTargetSelection(
+                        request.getTargetFinishedGoodIds(), plan.getTargetFinishedGoodIds());
+        PlanUnitAuthority updatedAuthority = null;
+        if (productChanged || targetsChanged || plan.getPlannedUnit() == null
+                || plan.getWorkflowSelectionMode() == null) {
+            String effectiveProductId = request.getProductTypeId() != null
+                    ? request.getProductTypeId() : plan.getProductTypeId();
+            List<String> effectiveTargets = request.getTargetFinishedGoodIds() != null
+                    ? request.getTargetFinishedGoodIds() : plan.getTargetFinishedGoodIds();
+            updatedAuthority = resolvePlanUnitAuthority(factoryId, effectiveProductId, effectiveTargets);
+            request.setPlannedUnit(updatedAuthority.unit());
+        } else {
+            request.setPlannedUnit(plan.getPlannedUnit());
+        }
 
         // 更新计划信息
         productionPlanMapper.updateEntity(plan, request);
+        if (updatedAuthority != null) applyPlanUnitAuthority(plan, updatedAuthority);
         plan = productionPlanRepository.save(plan);
 
         log.info("更新生产计划成功: planId={}", planId);
@@ -1286,7 +1345,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // 复制业务字段
         newPlan.setProductTypeId(source.getProductTypeId());
         newPlan.setPlannedQuantity(source.getPlannedQuantity());
-        newPlan.setPlannedUnit(resolvePlannedOutputUnitForProduct(source.getProductTypeId()));
+        newPlan.setTargetFinishedGoodIds(source.getTargetFinishedGoodIds() == null ? null
+                : new ArrayList<>(source.getTargetFinishedGoodIds()));
+        applyPlanUnitAuthority(newPlan, resolvePlanUnitAuthority(
+                factoryId, source.getProductTypeId(), source.getTargetFinishedGoodIds()));
         newPlan.setPlannedDate(source.getPlannedDate());
         newPlan.setExpectedCompletionDate(source.getExpectedCompletionDate());
         newPlan.setPlanType(source.getPlanType());
@@ -4320,7 +4382,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         plan.setPlanNumber(planNumber);
         plan.setProductTypeId(productTypeId);
         plan.setPlannedQuantity(quantity);
-        plan.setPlannedUnit(resolvePlannedOutputUnitForProduct(productTypeId));
+        applyPlanUnitAuthority(plan, resolvePlanUnitAuthority(factoryId, productTypeId, null));
         plan.setPlannedDate(plannedDate != null ? plannedDate : java.time.LocalDate.now());
         plan.setStatus(ProductionPlanStatus.PENDING);
         plan.setCreatedBy(submittedBy);

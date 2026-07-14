@@ -40,6 +40,8 @@ public class WorkflowOutputResolutionDTO {
         private String ownerProductCategory;
         /** owner 单位 (原料通常 kg) —— 前端投料量输入框单位提示。 */
         private String ownerUnit;
+        /** 该 Workflow 下生产计划数量应使用的端口单位。 */
+        private String plannedUnit;
         /** 该图全部终端成品。 */
         private List<TerminalOutput> terminalOutputs;
         /** 终端集合是否恰好等于所选集合。 */

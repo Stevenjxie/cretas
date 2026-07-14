@@ -118,10 +118,24 @@ function reconcilePort(
   }
 
   const reportUnit = portUnit;
-  const conversion = product.conversions.find((candidate) =>
+  let conversion = product.conversions.find((candidate) =>
     candidate.id === port.conversionRefId
       && candidate.version === port.conversionVersion
       && candidate.productTypeId === product.productTypeId);
+  if (!conversion && !port.conversionRefId && reportUnit) {
+    const applicable = product.conversions.filter((candidate) => {
+      if (candidate.productTypeId !== product.productTypeId) return false;
+      const from = normalizeUnit(candidate.fromUnitCode, aliases);
+      const to = normalizeUnit(candidate.toUnitCode, aliases);
+      return (from === reportUnit && to === targetUnit)
+        || (to === reportUnit && from === targetUnit);
+    });
+    if (applicable.length === 1) {
+      [conversion] = applicable;
+      port.conversionRefId = conversion.id;
+      port.conversionVersion = conversion.version;
+    }
+  }
   if (!conversion) {
     errors.push({
       code: port.conversionRefId ? 'CONVERSION_STALE' : 'CONVERSION_REQUIRED',
