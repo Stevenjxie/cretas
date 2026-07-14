@@ -1,45 +1,69 @@
 package com.cretas.aims.service.unit.impl;
 
 import com.cretas.aims.entity.config.UnitOfMeasurement;
+import com.cretas.aims.entity.unit.ProductUnitConversion;
 import com.cretas.aims.repository.config.UnitOfMeasurementRepository;
+import com.cretas.aims.repository.unit.ProductUnitConversionRepository;
 import com.cretas.aims.service.unit.CanonicalUnit;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitConversionContext;
 import com.cretas.aims.service.unit.UnitConversionResult;
 import com.cretas.aims.service.unit.UnitConversionStatus;
+import com.cretas.aims.service.unit.UnitConversionStep;
 import com.cretas.aims.service.unit.UnitDimension;
 import com.cretas.aims.service.unit.UnitNormalizationResult;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.math.MathContext;
+import java.time.LocalDateTime;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Queue;
 import java.util.Set;
+import java.util.TreeMap;
 
 @Service
 public class UnitContractServiceImpl implements UnitContractService {
 
     private static final Map<String, CanonicalUnit> SYSTEM_UNITS = systemUnits();
     private static final Map<String, String> SYSTEM_ALIASES = systemAliases();
+    private static final MathContext FACTOR_CONTEXT = MathContext.DECIMAL128;
+    private static final int MAX_GRAPH_HOPS = 16;
+    private static final int MAX_GRAPH_STATES = 10_000;
+    private static final int MAX_GRAPH_RELATIONS = 1_000;
 
     private final UnitOfMeasurementRepository unitRepository;
+    private final ProductUnitConversionRepository conversionRepository;
 
-    public UnitContractServiceImpl(UnitOfMeasurementRepository unitRepository) {
+    public UnitContractServiceImpl(
+            UnitOfMeasurementRepository unitRepository,
+            ProductUnitConversionRepository conversionRepository) {
         this.unitRepository = unitRepository;
+        this.conversionRepository = conversionRepository;
     }
 
     @Override
     public UnitNormalizationResult normalize(String factoryId, String rawUnit) {
+        return normalize(rawUnit, factoryCatalog(factoryId));
+    }
+
+    private UnitNormalizationResult normalize(String rawUnit, Catalog catalog) {
         String key = key(rawUnit);
         if (key == null) {
             return new UnitNormalizationResult(rawUnit, null, null);
         }
 
-        Catalog catalog = factoryCatalog(factoryId);
         if (catalog.conflicts().contains(key)) {
             return new UnitNormalizationResult(rawUnit, null, null);
         }
@@ -73,31 +97,134 @@ public class UnitContractServiceImpl implements UnitContractService {
     @Override
     public UnitConversionResult convert(BigDecimal quantity, UnitConversionContext context) {
         if (context == null) {
-            return result(UnitConversionStatus.UNKNOWN_UNIT, quantity, null, null, List.of(), "单位换算上下文不能为空");
+            return result(
+                    UnitConversionStatus.UNKNOWN_UNIT,
+                    quantity,
+                    null,
+                    null,
+                    List.of(),
+                    List.of(),
+                    "单位换算上下文不能为空");
         }
 
-        UnitNormalizationResult from = normalize(context.factoryId(), context.fromUnit());
-        UnitNormalizationResult to = normalize(context.factoryId(), context.toUnit());
+        Catalog catalog = factoryCatalog(context.factoryId());
+        UnitNormalizationResult from = normalize(context.fromUnit(), catalog);
+        UnitNormalizationResult to = normalize(context.toUnit(), catalog);
         if (!from.recognized() || !to.recognized()) {
-            return result(UnitConversionStatus.UNKNOWN_UNIT, quantity, from.code(), to.code(), List.of(), "存在未知单位");
+            return result(
+                    UnitConversionStatus.UNKNOWN_UNIT,
+                    quantity,
+                    from.code(),
+                    to.code(),
+                    List.of(),
+                    List.of(),
+                    "存在未知单位");
         }
         if (from.code().equals(to.code())) {
-            return result(UnitConversionStatus.IDENTITY, quantity, from.code(), to.code(), List.of(from.code()), null);
+            return result(
+                    UnitConversionStatus.IDENTITY,
+                    quantity,
+                    from.code(),
+                    to.code(),
+                    List.of(from.code()),
+                    List.of(),
+                    null);
         }
-        if (!isIntrinsicConvertible(from.unit(), to.unit())) {
+
+        if (isIntrinsicConvertible(from.unit(), to.unit())) {
+            BigDecimal factor = from.unit().factorToBase()
+                    .divide(to.unit().factorToBase(), FACTOR_CONTEXT);
+            BigDecimal converted = quantity == null ? null : quantity.multiply(factor, FACTOR_CONTEXT);
+            return result(
+                    UnitConversionStatus.CONVERTED,
+                    converted,
+                    from.code(),
+                    to.code(),
+                    List.of(from.code(), to.code()),
+                    List.of(new UnitConversionStep(from.code(), to.code(), factor, null, null)),
+                    null
+            );
+        }
+
+        if (!hasText(context.factoryId()) || !hasText(context.productTypeId()) || context.at() == null) {
             return result(
                     UnitConversionStatus.PRODUCT_CONVERSION_MISSING,
                     quantity,
                     from.code(),
                     to.code(),
                     List.of(from.code(), to.code()),
-                    "仅支持系统固有质量和体积换算；产品或包装换算尚未配置"
+                    List.of(),
+                    "产品专属换算需要 factoryId、productTypeId 和业务时间"
             );
         }
 
-        BigDecimal converted = quantity == null ? null
-                : quantity.multiply(from.unit().factorToBase()).divide(to.unit().factorToBase());
-        return result(UnitConversionStatus.CONVERTED, converted, from.code(), to.code(), List.of(from.code(), to.code()), null);
+        List<ProductUnitConversion> conversions = conversionRepository
+                .findEffectiveByFactoryIdAndProductTypeIdAt(
+                        context.factoryId(), context.productTypeId(), context.at());
+        ConversionGraph graph = buildGraph(conversions, catalog);
+        PathSearchResult search = findShortestPaths(graph, from.code(), to.code());
+        if (search.limitExceeded()) {
+            return result(
+                    UnitConversionStatus.AMBIGUOUS_CONVERSION,
+                    quantity,
+                    from.code(),
+                    to.code(),
+                    List.of(from.code(), to.code()),
+                    List.of(),
+                    "产品换算图搜索超过安全上限"
+            );
+        }
+        if (search.paths().isEmpty()) {
+            return result(
+                    UnitConversionStatus.PRODUCT_CONVERSION_MISSING,
+                    quantity,
+                    from.code(),
+                    to.code(),
+                    List.of(from.code(), to.code()),
+                    List.of(),
+                    "未找到产品有效换算关系"
+            );
+        }
+
+        Set<FactorRatio> products = new HashSet<>();
+        search.paths().forEach(path -> products.add(path.factor()));
+        if (products.size() > 1) {
+            return result(
+                    UnitConversionStatus.AMBIGUOUS_CONVERSION,
+                    quantity,
+                    from.code(),
+                    to.code(),
+                    List.of(from.code(), to.code()),
+                    List.of(),
+                    "多个最短路径得到不同换算乘积"
+            );
+        }
+
+        ConversionPath selected = search.paths().get(0);
+        BigDecimal converted = quantity == null ? null : selected.factor().apply(quantity);
+        return result(
+                UnitConversionStatus.CONVERTED,
+                converted,
+                from.code(),
+                to.code(),
+                selected.units(),
+                selected.steps(),
+                null
+        );
+    }
+
+    @Override
+    public List<String> validateConversionGraph(
+            String factoryId,
+            String productTypeId,
+            LocalDateTime at) {
+        if (!hasText(factoryId) || !hasText(productTypeId) || at == null) {
+            return List.of("换算图校验需要 factoryId、productTypeId 和业务时间");
+        }
+
+        List<ProductUnitConversion> conversions = conversionRepository
+                .findEffectiveByFactoryIdAndProductTypeIdAt(factoryId, productTypeId, at);
+        return buildGraph(conversions, factoryCatalog(factoryId)).errors();
     }
 
     private UnitConversionResult result(
@@ -106,8 +233,21 @@ public class UnitContractServiceImpl implements UnitContractService {
             String fromUnit,
             String toUnit,
             List<String> path,
+            List<UnitConversionStep> steps,
             String message) {
-        return new UnitConversionResult(status, quantity, fromUnit, toUnit, path, null, null, message);
+        UnitConversionStep direct = steps.size() == 1 && steps.get(0).conversionRefId() != null
+                ? steps.get(0)
+                : null;
+        return new UnitConversionResult(
+                status,
+                quantity,
+                fromUnit,
+                toUnit,
+                path,
+                direct == null ? null : direct.conversionRefId(),
+                direct == null ? null : direct.conversionVersion(),
+                message,
+                steps);
     }
 
     private boolean isIntrinsicConvertible(CanonicalUnit from, CanonicalUnit to) {
@@ -115,6 +255,206 @@ public class UnitContractServiceImpl implements UnitContractService {
                 && (from.dimension() == UnitDimension.MASS || from.dimension() == UnitDimension.VOLUME)
                 && from.factorToBase() != null
                 && to.factorToBase() != null;
+    }
+
+    private ConversionGraph buildGraph(
+            List<ProductUnitConversion> conversions,
+            Catalog catalog) {
+        List<ProductUnitConversion> effective = conversions == null ? List.of() : conversions;
+        Set<String> errors = new LinkedHashSet<>();
+        if (effective.size() > MAX_GRAPH_RELATIONS) {
+            errors.add("有效产品换算关系超过安全上限 " + MAX_GRAPH_RELATIONS);
+            return new ConversionGraph(Map.of(), List.copyOf(errors));
+        }
+
+        Map<String, List<GraphEdge>> adjacency = new TreeMap<>();
+        Map<LogicalUnitPair, String> logicalRelations = new HashMap<>();
+        List<String> relationIds = new ArrayList<>();
+
+        for (ProductUnitConversion conversion : effective) {
+            if (conversion == null) {
+                errors.add("产品换算关系不能为空");
+                continue;
+            }
+
+            String relationId = hasText(conversion.getId()) ? conversion.getId() : "<unknown>";
+            relationIds.add(relationId);
+            UnitNormalizationResult from = normalize(conversion.getFromUnitCode(), catalog);
+            UnitNormalizationResult to = normalize(conversion.getToUnitCode(), catalog);
+            if (!from.recognized() || !to.recognized()) {
+                errors.add("关系 " + relationId + " 包含未知单位");
+                continue;
+            }
+            if (conversion.getFactor() == null || conversion.getFactor().signum() <= 0) {
+                errors.add("关系 " + relationId + " 的换算因子必须大于 0");
+                continue;
+            }
+
+            FactorRatio factor = FactorRatio.of(conversion.getFactor());
+            if (from.code().equals(to.code())) {
+                if (!factor.equals(FactorRatio.ONE)) {
+                    errors.add("关系 " + relationId + " 构成乘积不为 1 的自闭环");
+                }
+                continue;
+            }
+
+            LogicalUnitPair pair = LogicalUnitPair.of(from.code(), to.code());
+            String previousId = logicalRelations.putIfAbsent(pair, relationId);
+            if (previousId != null) {
+                errors.add("重复产品换算关系 " + previousId + " 与 " + relationId
+                        + " 连接 " + pair.left() + " / " + pair.right());
+            }
+
+            addEdge(adjacency, new GraphEdge(
+                    to.code(),
+                    factor,
+                    new UnitConversionStep(
+                            from.code(),
+                            to.code(),
+                            conversion.getFactor(),
+                            conversion.getId(),
+                            conversion.getVersion())));
+            FactorRatio inverse = factor.inverse();
+            addEdge(adjacency, new GraphEdge(
+                    from.code(),
+                    inverse,
+                    new UnitConversionStep(
+                            to.code(),
+                            from.code(),
+                            inverse.toBigDecimal(),
+                            conversion.getId(),
+                            conversion.getVersion())));
+        }
+
+        Comparator<GraphEdge> edgeOrder = Comparator
+                .comparing(GraphEdge::toUnit)
+                .thenComparing(edge -> String.valueOf(edge.step().conversionRefId()))
+                .thenComparing(edge -> edge.factor().numerator())
+                .thenComparing(edge -> edge.factor().denominator());
+        Map<String, List<GraphEdge>> orderedAdjacency = new LinkedHashMap<>();
+        adjacency.forEach((unit, edges) -> {
+            edges.sort(edgeOrder);
+            orderedAdjacency.put(unit, List.copyOf(edges));
+        });
+
+        relationIds.sort(String::compareTo);
+        errors.addAll(findInconsistentCycles(orderedAdjacency, relationIds));
+        return new ConversionGraph(
+                Map.copyOf(orderedAdjacency),
+                List.copyOf(errors));
+    }
+
+    private static void addEdge(Map<String, List<GraphEdge>> adjacency, GraphEdge edge) {
+        adjacency.computeIfAbsent(edge.step().fromUnit(), ignored -> new ArrayList<>()).add(edge);
+        adjacency.computeIfAbsent(edge.toUnit(), ignored -> new ArrayList<>());
+    }
+
+    private static List<String> findInconsistentCycles(
+            Map<String, List<GraphEdge>> adjacency,
+            List<String> relationIds) {
+        Set<String> errors = new LinkedHashSet<>();
+        Map<String, FactorRatio> factorsFromRoot = new HashMap<>();
+
+        for (String root : adjacency.keySet()) {
+            if (factorsFromRoot.containsKey(root)) {
+                continue;
+            }
+            factorsFromRoot.put(root, FactorRatio.ONE);
+            Queue<String> queue = new ArrayDeque<>();
+            queue.add(root);
+
+            while (!queue.isEmpty()) {
+                String current = queue.remove();
+                FactorRatio currentFactor = factorsFromRoot.get(current);
+                for (GraphEdge edge : adjacency.getOrDefault(current, List.of())) {
+                    FactorRatio expected = currentFactor.multiply(edge.factor());
+                    FactorRatio existing = factorsFromRoot.putIfAbsent(edge.toUnit(), expected);
+                    if (existing == null) {
+                        queue.add(edge.toUnit());
+                    } else if (!existing.equals(expected)) {
+                        errors.add("检测到乘积不为 1 的换算闭环，涉及关系: "
+                                + String.join(", ", relationIds));
+                    }
+                }
+            }
+        }
+        return List.copyOf(errors);
+    }
+
+    private static PathSearchResult findShortestPaths(
+            ConversionGraph graph,
+            String fromUnit,
+            String toUnit) {
+        Queue<SearchState> queue = new ArrayDeque<>();
+        queue.add(new SearchState(
+                fromUnit,
+                FactorRatio.ONE,
+                List.of(fromUnit),
+                List.of(),
+                Set.of(fromUnit)));
+
+        List<ConversionPath> matches = new ArrayList<>();
+        int targetDepth = Integer.MAX_VALUE;
+        int generatedStates = 1;
+        boolean hopLimitReached = false;
+
+        while (!queue.isEmpty()) {
+            SearchState current = queue.remove();
+            int currentDepth = current.steps().size();
+            if (currentDepth >= targetDepth) {
+                continue;
+            }
+            if (currentDepth >= MAX_GRAPH_HOPS) {
+                hopLimitReached = true;
+                continue;
+            }
+
+            for (GraphEdge edge : graph.adjacency().getOrDefault(current.unit(), List.of())) {
+                if (current.visitedUnits().contains(edge.toUnit())) {
+                    continue;
+                }
+                if (++generatedStates > MAX_GRAPH_STATES) {
+                    return new PathSearchResult(List.of(), true);
+                }
+
+                List<String> units = appended(current.units(), edge.toUnit());
+                List<UnitConversionStep> steps = appended(current.steps(), edge.step());
+                FactorRatio factor = current.factor().multiply(edge.factor());
+                int depth = steps.size();
+                if (edge.toUnit().equals(toUnit)) {
+                    if (depth < targetDepth) {
+                        matches.clear();
+                        targetDepth = depth;
+                    }
+                    if (depth == targetDepth) {
+                        matches.add(new ConversionPath(factor, units, steps));
+                    }
+                    continue;
+                }
+
+                Set<String> visited = new LinkedHashSet<>(current.visitedUnits());
+                visited.add(edge.toUnit());
+                queue.add(new SearchState(
+                        edge.toUnit(),
+                        factor,
+                        units,
+                        steps,
+                        Set.copyOf(visited)));
+            }
+        }
+
+        return new PathSearchResult(List.copyOf(matches), matches.isEmpty() && hopLimitReached);
+    }
+
+    private static <T> List<T> appended(List<T> source, T value) {
+        List<T> copy = new ArrayList<>(source.size() + 1);
+        copy.addAll(source);
+        copy.add(value);
+        return List.copyOf(copy);
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     private Catalog factoryCatalog(String factoryId) {
@@ -273,6 +613,92 @@ public class UnitContractServiceImpl implements UnitContractService {
     private static void alias(Map<String, String> aliases, String code, String... values) {
         for (String value : values) {
             aliases.put(key(value), code);
+        }
+    }
+
+    private record GraphEdge(
+            String toUnit,
+            FactorRatio factor,
+            UnitConversionStep step) {
+    }
+
+    private record ConversionGraph(
+            Map<String, List<GraphEdge>> adjacency,
+            List<String> errors) {
+    }
+
+    private record SearchState(
+            String unit,
+            FactorRatio factor,
+            List<String> units,
+            List<UnitConversionStep> steps,
+            Set<String> visitedUnits) {
+    }
+
+    private record ConversionPath(
+            FactorRatio factor,
+            List<String> units,
+            List<UnitConversionStep> steps) {
+    }
+
+    private record PathSearchResult(List<ConversionPath> paths, boolean limitExceeded) {
+    }
+
+    private record LogicalUnitPair(String left, String right) {
+
+        private static LogicalUnitPair of(String first, String second) {
+            return first.compareTo(second) <= 0
+                    ? new LogicalUnitPair(first, second)
+                    : new LogicalUnitPair(second, first);
+        }
+    }
+
+    private record FactorRatio(BigInteger numerator, BigInteger denominator) {
+
+        private static final FactorRatio ONE = new FactorRatio(BigInteger.ONE, BigInteger.ONE);
+
+        private FactorRatio {
+            if (denominator.signum() == 0) {
+                throw new IllegalArgumentException("denominator cannot be zero");
+            }
+            if (denominator.signum() < 0) {
+                numerator = numerator.negate();
+                denominator = denominator.negate();
+            }
+            BigInteger divisor = numerator.gcd(denominator);
+            numerator = numerator.divide(divisor);
+            denominator = denominator.divide(divisor);
+        }
+
+        private static FactorRatio of(BigDecimal value) {
+            BigDecimal normalized = value.stripTrailingZeros();
+            BigInteger numerator = normalized.unscaledValue();
+            int scale = normalized.scale();
+            if (scale < 0) {
+                return new FactorRatio(
+                        numerator.multiply(BigInteger.TEN.pow(-scale)),
+                        BigInteger.ONE);
+            }
+            return new FactorRatio(numerator, BigInteger.TEN.pow(scale));
+        }
+
+        private FactorRatio multiply(FactorRatio other) {
+            return new FactorRatio(
+                    numerator.multiply(other.numerator),
+                    denominator.multiply(other.denominator));
+        }
+
+        private FactorRatio inverse() {
+            return new FactorRatio(denominator, numerator);
+        }
+
+        private BigDecimal apply(BigDecimal quantity) {
+            return quantity.multiply(new BigDecimal(numerator), FACTOR_CONTEXT)
+                    .divide(new BigDecimal(denominator), FACTOR_CONTEXT);
+        }
+
+        private BigDecimal toBigDecimal() {
+            return new BigDecimal(numerator).divide(new BigDecimal(denominator), FACTOR_CONTEXT);
         }
     }
 

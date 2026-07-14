@@ -1,6 +1,8 @@
 package com.cretas.aims.service.unit;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 public interface UnitContractService {
@@ -14,4 +16,9 @@ public interface UnitContractService {
     UnitConversionResult convert(UnitConversionContext context);
 
     UnitConversionResult convert(BigDecimal quantity, UnitConversionContext context);
+
+    List<String> validateConversionGraph(
+            String factoryId,
+            String productTypeId,
+            LocalDateTime at);
 }
