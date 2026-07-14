@@ -5,6 +5,7 @@ import com.cretas.aims.entity.bom.BomRecipe.Status;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -66,6 +67,20 @@ public interface BomRecipeRepository extends JpaRepository<BomRecipe, String> {
            "AND br.recipeCode LIKE :prefix")
     long countByRecipeCodePrefix(@Param("factoryId") String factoryId,
                                   @Param("prefix") String prefix);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(value = """
+            UPDATE bom_recipes
+               SET seasoning_revision = seasoning_revision + 1
+             WHERE id = :recipeId
+               AND factory_id = :factoryId
+               AND status = 'DRAFT'
+               AND seasoning_revision = :expectedRevision
+               AND deleted_at IS NULL
+            """, nativeQuery = true)
+    int claimSeasoningRevision(@Param("recipeId") String recipeId,
+                               @Param("factoryId") String factoryId,
+                               @Param("expectedRevision") Long expectedRevision);
 
     boolean existsByFactoryIdAndRecipeCode(String factoryId, String recipeCode);
 }

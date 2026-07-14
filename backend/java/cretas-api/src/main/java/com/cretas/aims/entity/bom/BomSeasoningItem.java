@@ -85,6 +85,9 @@ public class BomSeasoningItem extends BaseEntity implements SeasoningLine {
     @Column(name = "work_process_id", length = 50)
     private String workProcessId;
 
+    @Column(name = "subsequent_pot_ratio", precision = 8, scale = 4)
+    private BigDecimal subsequentPotRatio;
+
     /** Back-ref to parent recipe; insertable/updatable=false because recipeId column drives FK. */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "recipe_id", insertable = false, updatable = false)
