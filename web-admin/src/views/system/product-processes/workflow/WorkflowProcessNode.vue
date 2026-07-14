@@ -70,6 +70,23 @@
           size="small"
         />
         <span class="unit-chip" data-testid="input-unit-chip">{{ port.unit }}</span>
+        <el-select
+          v-if="conversionOptions(port.skuId).length"
+          class="nodrag conversion-select"
+          :model-value="port.conversionRefId || ''"
+          :disabled="!canWrite"
+          size="small"
+          placeholder="选择单位换算"
+          clearable
+          @change="(id: string) => emit('selectConversion', port.id, id || '')"
+        >
+          <el-option
+            v-for="conversion in conversionOptions(port.skuId)"
+            :key="conversion.id || `${conversion.fromUnitCode}:${conversion.toUnitCode}`"
+            :label="`${conversion.fromUnitCode} × ${conversion.factor} = ${conversion.toUnitCode}`"
+            :value="conversion.id"
+          />
+        </el-select>
       </div>
     </section>
 
@@ -98,6 +115,23 @@
           @change="(skuId) => emit('selectOutput', port.id, skuId)"
         />
         <span class="unit-chip" data-testid="output-unit-chip">{{ port.unit }}</span>
+        <el-select
+          v-if="conversionOptions(port.skuId).length"
+          class="nodrag conversion-select"
+          :model-value="port.conversionRefId || ''"
+          :disabled="!canWrite"
+          size="small"
+          placeholder="选择单位换算"
+          clearable
+          @change="(id: string) => emit('selectConversion', port.id, id || '')"
+        >
+          <el-option
+            v-for="conversion in conversionOptions(port.skuId)"
+            :key="conversion.id || `${conversion.fromUnitCode}:${conversion.toUnitCode}`"
+            :label="`${conversion.fromUnitCode} × ${conversion.factor} = ${conversion.toUnitCode}`"
+            :value="conversion.id"
+          />
+        </el-select>
       </div>
     </section>
 
@@ -174,6 +208,7 @@
 import { computed, ref } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
 import WorkflowSkuPicker, { type WorkflowSkuPickerOption } from './WorkflowSkuPicker.vue';
+import type { ProductUnitConversion } from '@/api/unitContract';
 import type { ConversionMode, ProcessNodeData } from './types';
 
 const props = defineProps<{
@@ -184,6 +219,7 @@ const props = defineProps<{
   connectingFromKind?: '' | 'MATERIAL' | 'PROCESS';
   semiOptions: WorkflowSkuPickerOption[];
   finishedOptions: WorkflowSkuPickerOption[];
+  unitConversions: Record<string, ProductUnitConversion[]>;
 }>();
 
 // #8: 工序 Cell 只有在「物料拖向工序(投入)」时才是合法目标；「工序拖向物料」时
@@ -196,6 +232,7 @@ const emit = defineEmits<{
   addInput: [];
   addOutput: [];
   selectOutput: [portId: string, skuId: string];
+  selectConversion: [portId: string, conversionId: string];
   delete: [];
 }>();
 
@@ -204,6 +241,17 @@ const edgeOutputStyle = { top: '12px', right: '-14px' } as const;
 const hovered = ref(false);
 const inputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'INPUT'));
 const outputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'OUTPUT'));
+
+function conversionOptions(skuId?: string | null): ProductUnitConversion[] {
+  if (!skuId) return [];
+  const now = Date.now();
+  return (props.unitConversions[skuId] || []).filter((item) => (
+    Boolean(item.id)
+      && typeof item.version === 'number'
+      && (!item.effectiveFrom || new Date(item.effectiveFrom).getTime() <= now)
+      && (!item.effectiveTo || new Date(item.effectiveTo).getTime() > now)
+  ));
+}
 
 function handleStyle(index: number, count: number): Record<string, string> {
   return { top: `${((index + 1) / (count + 1)) * 100}%` };

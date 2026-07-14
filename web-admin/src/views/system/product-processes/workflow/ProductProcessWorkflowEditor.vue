@@ -100,6 +100,7 @@
               :bom-raw-material-ids="bomRawMaterialIdList"
               :semi-options="semiFinishedSkuOptions"
               :finished-options="finishedGoodSkuOptions"
+              :unit-conversions="unitConversionsByProduct"
               @add-next="openAddProcess(slotProps.id)"
               @select-raw-sku="(skuId) => selectRawSku(slotProps.id, skuId)"
               @select-sku="(skuId) => selectMaterialSku(slotProps.id, skuId)"
@@ -120,6 +121,7 @@
               @add-input="addInputToProcess(slotProps.id)"
               @add-output="addOutputToProcess(slotProps.id)"
               @select-output="(portId, skuId) => selectOutputSku(slotProps.id, portId, skuId)"
+              @select-conversion="(portId, conversionId) => selectPortConversion(slotProps.id, portId, conversionId)"
               @delete="removeNode(slotProps.id)"
             />
           </template>
@@ -784,6 +786,8 @@ function unitContext(): WorkflowUnitContext {
       conversions: (unitConversionsByProduct.value[option.id] || [])
         .filter((item): item is ProductUnitConversion & { id: string; version: number } => (
           Boolean(item.id) && typeof item.version === 'number'
+            && (!item.effectiveFrom || new Date(item.effectiveFrom).getTime() <= Date.now())
+            && (!item.effectiveTo || new Date(item.effectiveTo).getTime() > Date.now())
         ))
         .map((item) => ({
           id: item.id,
@@ -825,9 +829,9 @@ async function ensureUnitConversions(
 async function reconcileLoadedUnits(): Promise<void> {
   const identity = currentLoadedIdentity();
   if (!identity || loadedCatalogFactoryId.value !== identity.factoryId || !definition.value) return;
-  const current = currentDefinition();
-  if (!(await ensureUnitConversions(current, identity))) return;
+  if (!(await ensureUnitConversions(currentDefinition(), identity))) return;
   if (!isLoadedIdentityCurrent(identity)) return;
+  const current = currentDefinition();
   const result = reconcileWorkflowUnits(current, unitContext());
   if (definition.value.status === 'PUBLISHED') {
     if (result.errors.length > 0) showUnitIssues(result.errors);
@@ -843,8 +847,17 @@ async function reconcileForPersistence(
   identity: WorkflowIdentity,
   showErrors: boolean,
 ): Promise<ProductProcessWorkflowDefinition | null> {
-  const current = currentDefinition();
-  if (!(await ensureUnitConversions(current, identity)) || !isLoadedIdentityCurrent(identity)) return null;
+  let current = currentDefinition();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const seq = editSeq;
+    if (!(await ensureUnitConversions(current, identity)) || !isLoadedIdentityCurrent(identity)) return null;
+    current = currentDefinition();
+    if (seq === editSeq) break;
+    if (attempt === 2) {
+      if (showErrors) ElMessage.warning('单位校验期间内容仍在变化，请停止编辑后重试');
+      return null;
+    }
+  }
   const result = reconcileWorkflowUnits(current, unitContext());
   if (result.errors.length > 0) {
     if (showErrors) showUnitIssues(result.errors);
@@ -1573,6 +1586,20 @@ function bindOutputSku(processId: string, portId: string, option: SkuOption): bo
     };
   });
   return true;
+}
+
+function selectPortConversion(processId: string, portId: string, conversionId: string): void {
+  const process = flowNodes.value.find((node) => node.id === processId);
+  if (!process || process.data?.kind !== 'PROCESS') return;
+  const data = process.data as ProcessNodeData & { kind: 'PROCESS' };
+  const port = data.ports.find((candidate) => candidate.id === portId);
+  if (!port) return;
+  const conversion = (unitConversionsByProduct.value[port.skuId || ''] || [])
+    .find((candidate) => candidate.id === conversionId);
+  mutate(() => {
+    port.conversionRefId = conversion?.id || null;
+    port.conversionVersion = conversion?.version ?? null;
+  });
 }
 
 async function confirmCreateSku(): Promise<void> {
