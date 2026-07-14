@@ -12,11 +12,13 @@ import com.cretas.aims.service.unit.UnitNormalizationResult;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 @Service
 public class UnitContractServiceImpl implements UnitContractService {
@@ -37,8 +39,11 @@ public class UnitContractServiceImpl implements UnitContractService {
             return new UnitNormalizationResult(rawUnit, null, null);
         }
 
-        Map<String, CanonicalUnit> catalog = factoryCatalog(factoryId);
-        CanonicalUnit catalogUnit = catalog.get(key);
+        Catalog catalog = factoryCatalog(factoryId);
+        if (catalog.conflicts().contains(key)) {
+            return new UnitNormalizationResult(rawUnit, null, null);
+        }
+        CanonicalUnit catalogUnit = catalog.units().get(key);
         if (catalogUnit != null) {
             return new UnitNormalizationResult(rawUnit, catalogUnit.code(), catalogUnit);
         }
@@ -112,25 +117,59 @@ public class UnitContractServiceImpl implements UnitContractService {
                 && to.factorToBase() != null;
     }
 
-    private Map<String, CanonicalUnit> factoryCatalog(String factoryId) {
+    private Catalog factoryCatalog(String factoryId) {
         if (factoryId == null || factoryId.isBlank()) {
-            return Map.of();
+            return new Catalog(Map.of(), Set.of());
         }
 
         Map<String, CanonicalUnit> catalog = new LinkedHashMap<>();
+        Set<String> conflicts = new HashSet<>();
         for (UnitOfMeasurement unit : unitRepository.findAllByFactoryId(factoryId)) {
             CanonicalUnit canonical = canonicalize(unit);
             if (canonical == null) {
                 continue;
             }
-            catalog.putIfAbsent(key(unit.getUnitCode()), canonical);
-            catalog.putIfAbsent(key(unit.getUnitName()), canonical);
-            catalog.putIfAbsent(key(unit.getUnitSymbol()), canonical);
+            registerCatalogAlias(catalog, conflicts, unit.getUnitCode(), canonical);
+            registerCatalogAlias(catalog, conflicts, unit.getUnitName(), canonical);
+            registerCatalogAlias(catalog, conflicts, unit.getUnitSymbol(), canonical);
             if (unit.getAliasesJson() != null) {
-                unit.getAliasesJson().forEach(alias -> catalog.putIfAbsent(key(alias), canonical));
+                unit.getAliasesJson().forEach(alias -> registerCatalogAlias(catalog, conflicts, alias, canonical));
             }
         }
-        return catalog;
+        return new Catalog(Map.copyOf(catalog), Set.copyOf(conflicts));
+    }
+
+    private static void registerCatalogAlias(
+            Map<String, CanonicalUnit> catalog,
+            Set<String> conflicts,
+            String rawAlias,
+            CanonicalUnit unit) {
+        String alias = key(rawAlias);
+        if (alias == null || conflicts.contains(alias)) {
+            return;
+        }
+
+        CanonicalUnit systemUnit = systemUnitFor(alias);
+        if (systemUnit != null && !sameUnit(systemUnit, unit)) {
+            catalog.remove(alias);
+            conflicts.add(alias);
+            return;
+        }
+
+        CanonicalUnit existing = catalog.putIfAbsent(alias, unit);
+        if (existing != null && !sameUnit(existing, unit)) {
+            catalog.remove(alias);
+            conflicts.add(alias);
+        }
+    }
+
+    private static CanonicalUnit systemUnitFor(String alias) {
+        String code = SYSTEM_ALIASES.get(alias);
+        return code == null ? null : SYSTEM_UNITS.get(code);
+    }
+
+    private static boolean sameUnit(CanonicalUnit left, CanonicalUnit right) {
+        return left.code().equals(right.code()) && left.dimension() == right.dimension();
     }
 
     private CanonicalUnit canonicalize(UnitOfMeasurement unit) {
@@ -235,5 +274,8 @@ public class UnitContractServiceImpl implements UnitContractService {
         for (String value : values) {
             aliases.put(key(value), code);
         }
+    }
+
+    private record Catalog(Map<String, CanonicalUnit> units, Set<String> conflicts) {
     }
 }

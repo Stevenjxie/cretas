@@ -93,6 +93,46 @@ class UnitContractServiceTest {
         assertThat(service.areEquivalent(FACTORY_ID, "筐", "盒")).isFalse();
     }
 
+    @Test
+    void rejectsFactoryAliasThatMasqueradesAsSystemBox() {
+        UnitOfMeasurement kilogram = catalogUnit("kg", "MASS", "box");
+        when(unitRepository.findAllByFactoryId(FACTORY_ID)).thenReturn(List.of(kilogram));
+
+        assertThat(service.normalize(FACTORY_ID, "box").recognized()).isFalse();
+        assertThat(service.convert(new BigDecimal("1"), context("box", "g")).status())
+                .isEqualTo(UnitConversionStatus.UNKNOWN_UNIT);
+    }
+
+    @Test
+    void rejectsDuplicateAliasAcrossFactoryAndGlobalCatalogEntries() {
+        UnitOfMeasurement crate = catalogUnit("crate", "PACKAGE", "周转容器");
+        UnitOfMeasurement pallet = catalogUnit("pallet", "PACKAGE", "周转容器");
+        when(unitRepository.findAllByFactoryId(FACTORY_ID)).thenReturn(List.of(crate, pallet));
+
+        assertThat(service.normalize(FACTORY_ID, "周转容器").recognized()).isFalse();
+    }
+
+    @Test
+    void rejectsFactoryAliasThatConflictsWithSystemAlias() {
+        UnitOfMeasurement crate = catalogUnit("crate", "PACKAGE", "公斤");
+        when(unitRepository.findAllByFactoryId(FACTORY_ID)).thenReturn(List.of(crate));
+
+        assertThat(service.normalize(FACTORY_ID, "公斤").recognized()).isFalse();
+    }
+
+    private UnitOfMeasurement catalogUnit(String code, String category, String alias) {
+        return UnitOfMeasurement.builder()
+                .factoryId(FACTORY_ID)
+                .unitCode(code)
+                .unitName(code)
+                .unitSymbol(code)
+                .baseUnit(code)
+                .category(category)
+                .aliasesJson(List.of(alias))
+                .isActive(true)
+                .build();
+    }
+
     private UnitConversionContext context(String fromUnit, String toUnit) {
         return new UnitConversionContext(
                 FACTORY_ID,
