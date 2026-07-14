@@ -700,6 +700,49 @@ function handleWorkflowCandidateSelect(ownerId: string) {
   void applyResolvedCandidateOwner(ownerId);
 }
 
+// raw-centric 多SKU (2026-07-14): NONE 多选无候选覆盖时, 「去产品工序配置」不能带成品 id
+// 跳转 (target 页会误停在"成品"模式选中该成品, 而真正要配的是原料 workflow)。
+// 改为按各成品当前生效 BOM 的 subProductTypeId 取交集, 若交集恰好 1 个候选原料,
+// 直接深链 ?productTypeId=<该原料> (target 页已有逻辑: 命中原料分类自动切"原料"模式并选中)。
+// 交集为空/多个(无法唯一判定) → 退化为 ?ownerMode=RAW 只切 tab, 不瞎猜选中哪个。
+const resolvingRawMaterialLink = ref(false);
+async function goToRawMaterialProcessConfig(finishedGoodIds: string[]) {
+  if (!factoryId.value || finishedGoodIds.length === 0) {
+    router.push('/system/product-processes');
+    return;
+  }
+  resolvingRawMaterialLink.value = true;
+  try {
+    const results = await Promise.all(
+      finishedGoodIds.map((id) =>
+        get<{ items?: Array<{ subProductTypeId?: string | null }> }>(
+          `/${factoryId.value}/bom/recipes/by-product/${id}/current`
+        ).catch(() => null)
+      )
+    );
+    const materialSets = results
+      .filter((r): r is { success: boolean; data?: { items?: Array<{ subProductTypeId?: string | null }> } } => !!r?.success)
+      .map((r) => new Set(
+        (r.data?.items || [])
+          .map((item) => item.subProductTypeId)
+          .filter((id): id is string => !!id)
+      ));
+    let commonRawMaterialId = '';
+    if (materialSets.length === finishedGoodIds.length && materialSets.length > 0) {
+      const [first, ...rest] = materialSets;
+      const common = [...first].filter((id) => rest.every((set) => set.has(id)));
+      if (common.length === 1) commonRawMaterialId = common[0];
+    }
+    router.push(
+      commonRawMaterialId
+        ? `/system/product-processes?productTypeId=${commonRawMaterialId}`
+        : '/system/product-processes?ownerMode=RAW'
+    );
+  } finally {
+    resolvingRawMaterialLink.value = false;
+  }
+}
+
 async function resolveTargetFinishedGoods(ids: string[]) {
   if (!factoryId.value || ids.length === 0) return;
   const myGeneration = ++workflowResolveGeneration;
@@ -977,7 +1020,7 @@ async function submitPlan() {
         '工序图未覆盖',
         { confirmButtonText: '去产品工序配置', cancelButtonText: '取消', type: 'warning' }
       ).then(() => {
-        router.push('/system/product-processes');
+        void goToRawMaterialProcessConfig(planForm.value.targetFinishedGoodIds);
       }).catch(() => { /* 用户取消, 静默 */ });
     } else {
       // Interceptor shows specific toast; dedupe fallback
@@ -3563,7 +3606,8 @@ function handleAiFill(params: TableRow) {
                 <el-button
                   size="small"
                   type="primary"
-                  @click="router.push(planForm.targetFinishedGoodIds[0] ? `/system/product-processes?productTypeId=${planForm.targetFinishedGoodIds[0]}` : '/system/product-processes')"
+                  :loading="resolvingRawMaterialLink"
+                  @click="goToRawMaterialProcessConfig(planForm.targetFinishedGoodIds)"
                 >去产品工序配置</el-button>
                 <el-button size="small" @click="ElMessage.info('请将「生产成品」改为只选 1 个成品，分别建计划')">
                   改为单成品分别建计划
