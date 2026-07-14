@@ -38,7 +38,7 @@ const ProcessDataTableStub = {
   props: [
     'factoryId', 'planId', 'processCode', 'processOrder', 'productTypeId', 'processLabel',
     'allowSemiFinishedInjection', 'allowMultipleUpstreamSources', 'isFirstProcess',
-    'customFieldSchema', 'allowFinishedGoodsSource', 'workflowContext',
+    'customFieldSchema', 'allowFinishedGoodsSource', 'workflowContext', 'inputUnit', 'outputUnit',
     'upstreamProcessLabel', 'upstreamItems', 'ownInventoryItems', 'initialRows', 'viewMode',
   ],
   template: '<div class="stub-process-data-table" />',
@@ -89,7 +89,7 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
             processName: '修油',
             defaultCostCategory: 'RAW_MATERIAL',
             processOrder: 1,
-            plannedUnit: 'kg',
+            plannedUnit: '计划单位不应生效',
             allowMultipleUpstreamSources: false,
             allowFinishedGoodsSource: false,
             customFieldSchema: null,
@@ -103,6 +103,10 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
               workflowPortId: 'OUT1', materialKind: 'SEMI_FINISHED', skuId: 'PT-SEMI-1',
               materialName: '修油半成品', unit: 'kg', required: true, skuResolved: true, finished: false,
             },
+            outputs: [{
+              workflowPortId: 'OUT1', materialKind: 'SEMI_FINISHED', skuId: 'PT-SEMI-1',
+              materialName: '修油半成品', unit: 'kg', required: true, skuResolved: true, finished: false,
+            }],
           },
           {
             workflowNodeId: 'N2',
@@ -114,12 +118,18 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
             allowMultipleUpstreamSources: false,
             allowFinishedGoodsSource: false,
             customFieldSchema: null,
-            inputs: [],
+            inputs: [{
+              workflowPortId: 'IN2', materialKind: 'SEMI_FINISHED', skuId: 'PT-SEMI-1',
+              materialName: '修油半成品', unit: 'kg', required: true, skuResolved: true, finished: false,
+            }],
             output: {
               workflowPortId: 'OUT2', materialKind: 'FINISHED_GOOD', skuId: 'PT-FIN-1',
-              // Deleted/unresolved SKU: materialName/unit null, skuResolved false — must not crash.
-              materialName: null, unit: null, required: true, skuResolved: false, finished: true,
+              materialName: '气调成品', unit: '盒', required: true, skuResolved: true, finished: true,
             },
+            outputs: [{
+              workflowPortId: 'OUT2', materialKind: 'FINISHED_GOOD', skuId: 'PT-FIN-1',
+              materialName: '气调成品', unit: '盒', required: true, skuResolved: true, finished: true,
+            }],
           },
         ],
       },
@@ -142,6 +152,8 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
     expect(p1.processLabel).toBe('修油');
     expect(p1.isFirstProcess).toBe(true);
     expect(p1.workflowContext).toBeTruthy();
+    expect(p1.inputUnit).toBe('kg');
+    expect(p1.outputUnit).toBe('kg');
     expect((p1.workflowContext as { output: { materialName: string } }).output.materialName).toBe('修油半成品');
 
     const p2 = tables[1].props();
@@ -150,8 +162,8 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
     expect(p2.processLabel).toBe('气调包装');
     expect(p2.isFirstProcess).toBe(false);
     const p2Output = (p2.workflowContext as { output: { skuResolved: boolean; materialName: string | null } }).output;
-    expect(p2Output.skuResolved).toBe(false);
-    expect(p2Output.materialName).toBeNull();
+    expect(p2Output.skuResolved).toBe(true);
+    expect(p2Output.materialName).toBe('气调成品');
 
     // Inventory/rows still get fetched per-tab keyed off the derived archetype code.
     expect(getInventory).toHaveBeenCalledWith('F006', 'PLAN-WF-1', 'xiuyou', 1);
@@ -202,7 +214,7 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
     expect(tables[1].props().workflowContext).toBeNull();
   });
 
-  it('workflow-config probe throws: still falls through to the legacy path (defensive, matches existing try/catch pattern)', async () => {
+  it('workflow-config reject blocks the sheet, offers retry, and never calls the legacy endpoint', async () => {
     getWorkflowSheetConfig.mockRejectedValue(new Error('network down'));
     getProductWorkProcesses.mockResolvedValue({
       success: true,
@@ -222,10 +234,74 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
     await flushPromises();
     await flushPromises();
 
+    expect(getProductWorkProcesses).not.toHaveBeenCalled();
+    expect(wrapper.findAllComponents(ProcessDataTableStub)).toHaveLength(0);
+    expect(wrapper.text()).toContain('Workflow 配置加载失败');
+    expect(wrapper.text()).toContain('重试');
+
+    getWorkflowSheetConfig.mockResolvedValue({ success: true, data: null });
+    const retry = wrapper.findAll('button').find((button) => button.text().includes('重试'));
+    if (!retry) throw new Error('找不到重试按钮');
+    await retry.trigger('click');
+    await flushPromises();
+    await flushPromises();
+
+    expect(getWorkflowSheetConfig).toHaveBeenCalledTimes(2);
     expect(getProductWorkProcesses).toHaveBeenCalledWith('F006', 'PT-1');
-    const tables = wrapper.findAllComponents(ProcessDataTableStub);
-    expect(tables).toHaveLength(1);
-    expect(tables[0].props().workflowContext).toBeNull();
+    expect(wrapper.findAllComponents(ProcessDataTableStub)).toHaveLength(1);
+  });
+
+  it.each([
+    ['non-success response', { success: false, data: null }],
+    ['malformed response', { success: true, data: { workflowBatchId: 1, processes: 'bad' } }],
+    ['empty workflow processes', { success: true, data: { workflowBatchId: 1, processes: [] } }],
+    ['missing workflow port unit', {
+      success: true,
+      data: {
+        workflowBatchId: 1,
+        workflowInstanceId: 2,
+        productTypeId: 'PT-1',
+        processes: [{
+          workflowNodeId: 'N1', workProcessId: 'WP1', processName: '装件', processCategory: null,
+          defaultCostCategory: null, processOrder: 1, plannedUnit: '件',
+          allowMultipleUpstreamSources: false, allowFinishedGoodsSource: false, customFieldSchema: null,
+          inputs: [{ workflowPortId: 'IN1', materialKind: 'RAW_MATERIAL', skuId: 'RM-1', materialName: '原料', unit: null, required: true, skuResolved: true, finished: false }],
+          output: { workflowPortId: 'OUT1', materialKind: 'FINISHED_GOOD', skuId: 'PT-1', materialName: '成品', unit: '件', required: true, skuResolved: true, finished: true },
+          outputs: [{ workflowPortId: 'OUT1', materialKind: 'FINISHED_GOOD', skuId: 'PT-1', materialName: '成品', unit: '件', required: true, skuResolved: true, finished: true }],
+        }],
+      },
+    }],
+    ['heterogeneous workflow input units', {
+      success: true,
+      data: {
+        workflowBatchId: 1,
+        workflowInstanceId: 2,
+        productTypeId: 'PT-1',
+        processes: [{
+          workflowNodeId: 'N1', workProcessId: 'WP1', processName: '混料', processCategory: null,
+          defaultCostCategory: null, processOrder: 1, plannedUnit: '件',
+          allowMultipleUpstreamSources: true, allowFinishedGoodsSource: false, customFieldSchema: null,
+          inputs: [
+            { workflowPortId: 'IN1', materialKind: 'RAW_MATERIAL', skuId: 'RM-1', materialName: '粉料', unit: 'g', required: true, skuResolved: true, finished: false },
+            { workflowPortId: 'IN2', materialKind: 'RAW_MATERIAL', skuId: 'RM-2', materialName: '液料', unit: 'ml', required: true, skuResolved: true, finished: false },
+          ],
+          output: { workflowPortId: 'OUT1', materialKind: 'FINISHED_GOOD', skuId: 'PT-1', materialName: '成品', unit: '件', required: true, skuResolved: true, finished: true },
+          outputs: [{ workflowPortId: 'OUT1', materialKind: 'FINISHED_GOOD', skuId: 'PT-1', materialName: '成品', unit: '件', required: true, skuResolved: true, finished: true }],
+        }],
+      },
+    }],
+  ])('%s blocks without invoking legacy', async (_name, response) => {
+    getWorkflowSheetConfig.mockResolvedValue(response);
+    getProductWorkProcesses.mockResolvedValue({ success: true, data: [] });
+
+    const wrapper = mountSheet();
+    await flushPromises();
+    await flushPromises();
+
+    expect(getProductWorkProcesses).not.toHaveBeenCalled();
+    expect(wrapper.findAllComponents(ProcessDataTableStub)).toHaveLength(0);
+    expect(wrapper.text()).toContain('Workflow 配置加载失败');
+    expect(wrapper.text()).toContain('重试');
   });
 
   it('(3) mapWorkflowProcesses maps a finished output to the qidiao archetype, and forces a semi output away from qidiao even when keyword/position mapping would have picked it (BLOCKING fix, Part B)', async () => {
@@ -242,11 +318,13 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
             workflowNodeId: 'N1', workProcessId: 'WP1', processName: '领料',
             defaultCostCategory: null, processOrder: 1, plannedUnit: 'kg',
             allowMultipleUpstreamSources: false, allowFinishedGoodsSource: false,
-            customFieldSchema: null, inputs: [],
+            customFieldSchema: null,
+            inputs: [{ workflowPortId: 'IN1', materialKind: 'RAW_MATERIAL', skuId: 'RM-1', materialName: '原料', unit: 'kg', required: true, skuResolved: true, finished: false }],
             output: {
               workflowPortId: 'OUT1', materialKind: 'SEMI_FINISHED', skuId: 'PT-SEMI-1',
               materialName: '领料半成品', unit: 'kg', required: true, skuResolved: true, finished: false,
             },
+            outputs: [{ workflowPortId: 'OUT1', materialKind: 'SEMI_FINISHED', skuId: 'PT-SEMI-1', materialName: '领料半成品', unit: 'kg', required: true, skuResolved: true, finished: false }],
           },
           {
             // 关键词 "气调" 命中本会映射到 'qidiao' archetype, 但该道 workflow 端口产出实际是半成品
@@ -255,11 +333,13 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
             workflowNodeId: 'N2', workProcessId: 'WP2', processName: '气调',
             defaultCostCategory: null, processOrder: 2, plannedUnit: 'kg',
             allowMultipleUpstreamSources: false, allowFinishedGoodsSource: false,
-            customFieldSchema: null, inputs: [],
+            customFieldSchema: null,
+            inputs: [{ workflowPortId: 'IN2', materialKind: 'SEMI_FINISHED', skuId: 'PT-SEMI-1', materialName: '领料半成品', unit: 'kg', required: true, skuResolved: true, finished: false }],
             output: {
               workflowPortId: 'OUT2', materialKind: 'SEMI_FINISHED', skuId: 'PT-SEMI-2',
               materialName: '气调半成品(实际未完工)', unit: 'kg', required: true, skuResolved: true, finished: false,
             },
+            outputs: [{ workflowPortId: 'OUT2', materialKind: 'SEMI_FINISHED', skuId: 'PT-SEMI-2', materialName: '气调半成品(实际未完工)', unit: 'kg', required: true, skuResolved: true, finished: false }],
           },
           {
             // 无关键词命中 + 非首道 -> 关键词/位置回退本会映射到 'chaoshui', 但该道 workflow 端口
@@ -269,11 +349,13 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
             workflowNodeId: 'N3', workProcessId: 'WP3', processName: '装箱',
             defaultCostCategory: null, processOrder: 3, plannedUnit: '盒',
             allowMultipleUpstreamSources: false, allowFinishedGoodsSource: false,
-            customFieldSchema: null, inputs: [],
+            customFieldSchema: null,
+            inputs: [{ workflowPortId: 'IN3', materialKind: 'SEMI_FINISHED', skuId: 'PT-SEMI-2', materialName: '气调半成品', unit: 'kg', required: true, skuResolved: true, finished: false }],
             output: {
               workflowPortId: 'OUT3', materialKind: 'FINISHED_GOOD', skuId: 'PT-FIN-1',
               materialName: '装箱成品', unit: '盒', required: true, skuResolved: true, finished: true,
             },
+            outputs: [{ workflowPortId: 'OUT3', materialKind: 'FINISHED_GOOD', skuId: 'PT-FIN-1', materialName: '装箱成品', unit: '盒', required: true, skuResolved: true, finished: true }],
           },
         ],
       },

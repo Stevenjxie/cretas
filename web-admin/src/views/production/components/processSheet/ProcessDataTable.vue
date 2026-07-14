@@ -29,6 +29,7 @@ import {
   formatProcessOutput,
   formatSourceFeedSummary,
   resolveProcessSheetUnits,
+  resolveWorkflowProcessSheetUnits,
   withProcessSheetUnits,
 } from '@/utils/processSheetUnits';
 
@@ -124,6 +125,7 @@ interface MultiOutputLine {
   materialName: string;
   unit: string;
   finished: boolean;
+  required: boolean;
   quantity: number | null;
   /** 保存后系统生成的产出批次号 (重载回显); 未保存为 null。 */
   batchNumber: string | null;
@@ -198,12 +200,14 @@ function isCustomFieldCol(key: string): boolean {
   return customFieldKeySet.value.has(key);
 }
 /** G2: 已知 archetype 无列定义时的通用兜底 (真正自定义命名、未映射的新工序); 追加已启用的自定义字段列。 */
-const processUnits = computed(() => resolveProcessSheetUnits({
-  defaultUnit: props.inputUnit,
-  defaultOutputUnit: props.outputUnit,
-  // 老气调配置未填 outputUnit 时，保持既有 kg → 盒口径；显式配置优先。
-  fallbackOutputUnit: props.processCode === 'qidiao' ? '盒' : undefined,
-}));
+const processUnits = computed(() => props.workflowContext
+  ? resolveWorkflowProcessSheetUnits(props.workflowContext)
+  : resolveProcessSheetUnits({
+    defaultUnit: props.inputUnit,
+    defaultOutputUnit: props.outputUnit,
+    // 老气调配置未填 outputUnit 时，保持既有 kg → 盒口径；显式配置优先。
+    fallbackOutputUnit: props.processCode === 'qidiao' ? '盒' : undefined,
+  }));
 const cols = computed(() => [
   ...withProcessSheetUnits(PROCESS_SHEET_CONFIG[props.processCode] || GENERIC_FALLBACK_COLS, processUnits.value),
   ...customFieldCols.value,
@@ -516,6 +520,7 @@ function initMultiOutputs(): MultiOutputLine[] {
     materialName: p.materialName || `(未命名 SKU: ${p.skuId})`,
     unit: p.unit || '',
     finished: p.finished === true,
+    required: p.required === true,
     quantity: null,
     batchNumber: null,
   }));
@@ -665,6 +670,7 @@ function multiOutputLineFromView(view: ProcessSheetRowView): MultiOutputLine {
     materialName: port?.materialName || p.productTypeId,
     unit: port?.unit || p.unit || p.outputUnit || '',
     finished: port ? port.finished === true : p.finished === true,
+    required: port?.required ?? true,
     quantity: p.outputQuantity ?? null,
     batchNumber: view.batchNumber,
   };
@@ -1050,11 +1056,10 @@ function saveDisabledReason(row: SheetRow): string | null {
       if (!isMultiOutput.value && calcSumBoxes(row) <= 0) return '请填写入库/留样/剩余/领用至少一项(实际生产需>0)';
     }
   }
-  // 2B.2 多产出: 每个产出端口都必须填数量 (>0) —— 产品/单位由端口固定, 操作员唯一要做的事
-  // 就是填数量, 未填即明确提示 (fool-proof Rule 1: 预先显示边界, 不是保存后才报错)。
+  // 2B.2 多产出: required 端口必须填数量；可选端口允许留空且不会发送。
   if (isMultiOutput.value) {
     if (row.multiOutputs.length === 0) return '本工序 workflow 未配置产出端口, 无法录入';
-    const missing = row.multiOutputs.find((o) => o.quantity == null || o.quantity <= 0);
+    const missing = row.multiOutputs.find((o) => o.required && (o.quantity == null || o.quantity <= 0));
     if (missing) return `请填写「${missing.materialName}」的产出数量`;
   }
   // 🔒 防呆 Rule 1 — 超投/单位不匹配 must-fix 不是 advisory: upstreamWarning() 命中时同样 disable 保存,
@@ -1080,7 +1085,7 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     clientRowId: row.clientRowId,
     processCode: props.processCode,
     processOrder: props.processOrder,
-    productTypeId: props.productTypeId,
+    productTypeId: wfOutput?.skuId || props.productTypeId,
     batchNumber: row.batchNumber ?? undefined,
     // ⭐ 气调成品批 (legacy archetype heuristic) — overridden below by the workflow port when present.
     finished: wfOutput ? wfOutput.finished === true : props.processCode === 'qidiao',
@@ -1238,14 +1243,12 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     base.customFields = customFields;
   }
 
-  // 2B (BLOCKING fix, cont'd): the workflow port's unit is authoritative for the row's
-  // produced-output unit — override whatever the archetype branch above hardcoded ('kg'/'盒')
-  // ONLY when the port declares a non-blank unit. Applied last so it always wins over every
-  // archetype branch's `base.unit = 'kg' | '盒'` assignment above, and only touches the single
-  // top-level `unit` field (the produced-output unit checked by backend B3) — never any
-  // input-side quantity/unit fields inside row_payload.
+  // Workflow 端口在所有 archetype 分支之后再次覆盖，确保请求的 SKU 与三处单位只有一个来源。
   if (wfOutput?.unit) {
-    base.unit = wfOutput.unit;
+    base.productTypeId = wfOutput.skuId;
+    base.inputUnit = processUnits.value.inputUnit;
+    base.outputUnit = processUnits.value.outputUnit;
+    base.unit = processUnits.value.outputUnit;
   }
 
   // 2B.2 多产出 (fan-out): 产品/端口由 workflow 产出端口固定 (只读), 操作员只填数量 — 覆盖
@@ -1255,7 +1258,8 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
   // 输入侧分配 (rawMaterialInputs/upstreamSources/inputQuantity/laborSegments 等, 上面各 archetype
   // 分支已按原逻辑填好) 原样发送不变 —— 后端首产出行(#0)承载全部实际投入, 一次全量扣减。
   if (isMultiOutput.value) {
-    base.outputs = row.multiOutputs.map((o) => ({
+    const submittedOutputs = row.multiOutputs.filter((o) => o.quantity != null && o.quantity > 0);
+    base.outputs = submittedOutputs.map((o) => ({
       productTypeId: o.productTypeId,
       workflowPortId: o.workflowPortId || undefined,
       materialNodeId: o.materialNodeId || undefined,
@@ -1263,7 +1267,10 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
       unit: o.unit || undefined,
       finished: o.finished,
     }));
-    base.outputQuantity = row.multiOutputs.reduce((sum, o) => sum + (o.quantity || 0), 0);
+    // 顶层实际产量只代表 Workflow 主产出，不能把不同单位的产出相加。
+    base.outputQuantity = submittedOutputs.find(
+      (o) => o.workflowPortId === props.workflowContext?.output?.workflowPortId,
+    )?.quantity ?? 0;
   }
 
   return base;

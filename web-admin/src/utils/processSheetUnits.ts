@@ -10,6 +10,18 @@ type UnitConfig = {
   fallbackOutputUnit?: string;
 };
 
+type WorkflowUnitPort = {
+  workflowPortId?: string | null;
+  unit?: string | null;
+};
+
+type WorkflowUnitConfig = {
+  processName?: string | null;
+  inputs?: readonly WorkflowUnitPort[] | null;
+  output?: WorkflowUnitPort | null;
+  outputs?: readonly WorkflowUnitPort[] | null;
+};
+
 type LabelColumn = { key: string; label: string };
 
 const INPUT_KEYS = new Set(['outWeight', 'feedWeight', 'before', 'input', 'remain']);
@@ -26,6 +38,44 @@ export function resolveProcessSheetUnits(config: UnitConfig): ProcessSheetUnits 
     ?? nonBlank(config.fallbackOutputUnit)
     ?? inputUnit;
   return { inputUnit, outputUnit };
+}
+
+/**
+ * Workflow 报工的单位只认端口快照，不接受 plannedUnit、产品单位或 kg 默认值。
+ * 当前保存请求只有一个 inputUnit，因此多投入必须同单位；异单位不能静默取第一个。
+ */
+export function resolveWorkflowProcessSheetUnits(config: WorkflowUnitConfig): ProcessSheetUnits {
+  const processLabel = nonBlank(config.processName) ?? '未命名工序';
+  if (!Array.isArray(config.inputs) || config.inputs.length === 0) {
+    throw new Error(`工序「${processLabel}」未配置投入端口，无法确定投入单位`);
+  }
+
+  const inputUnits = config.inputs.map((port, index) => {
+    const unit = nonBlank(port.unit);
+    if (!unit) {
+      const portLabel = nonBlank(port.workflowPortId) ?? `#${index + 1}`;
+      throw new Error(`工序「${processLabel}」投入端口 ${portLabel} 缺少单位`);
+    }
+    return unit;
+  });
+  const distinctInputUnits = [...new Set(inputUnits)];
+  if (distinctInputUnits.length !== 1) {
+    throw new Error(`工序「${processLabel}」投入端口单位不一致：${distinctInputUnits.join('、')}`);
+  }
+
+  const outputUnit = nonBlank(config.output?.unit);
+  if (!outputUnit) {
+    const portLabel = nonBlank(config.output?.workflowPortId) ?? '未配置';
+    throw new Error(`工序「${processLabel}」产出端口 ${portLabel} 缺少单位`);
+  }
+  config.outputs?.forEach((port, index) => {
+    if (!nonBlank(port.unit)) {
+      const portLabel = nonBlank(port.workflowPortId) ?? `#${index + 1}`;
+      throw new Error(`工序「${processLabel}」产出端口 ${portLabel} 缺少单位`);
+    }
+  });
+
+  return { inputUnit: distinctInputUnits[0], outputUnit };
 }
 
 export function formatPlannedOutput(quantity: number | null | undefined, unit: string | null | undefined): string {

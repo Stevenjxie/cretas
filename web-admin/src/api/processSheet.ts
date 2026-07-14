@@ -464,7 +464,7 @@ export interface WorkflowClerkSheetConfig {
  * 2B Task B2: 该计划关联的 workflow 批次快照投影 (供 ProcessSheet.vue `resolveProcesses()` 消费).
  * GET /{factoryId}/production-plans/{planId}/process-sheet/workflow-config
  *
- * data 为 null = legacy (非 workflow) 计划 — 调用方应回落 `getProductWorkProcesses` 路径不变。
+ * 只有 success=true 且 data=null 才表示 legacy 计划；请求失败或 Workflow 快照损坏必须阻断，禁止回落。
  */
 export function getWorkflowSheetConfig(
   factoryId: string,

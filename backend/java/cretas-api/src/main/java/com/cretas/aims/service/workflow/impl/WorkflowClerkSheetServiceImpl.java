@@ -9,6 +9,7 @@ import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.workflow.ProductionWorkflowInstance;
 import com.cretas.aims.entity.workflow.WorkflowTaskPort;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
@@ -63,13 +64,22 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                 .findByFactoryIdAndProductionBatchId(factoryId, workflowBatch.getId())
                 .orElse(null);
         if (instance == null) {
-            // Batch is pinned to WORKFLOW mode but has not been materialized yet
-            // (e.g. spawnTasks has not run) — nothing to project, fall back to legacy.
-            return null;
+            throw new BusinessException(409, "生产批次已锁定 Workflow，但运行时快照尚未生成")
+                    .withCode("WORKFLOW_RUNTIME_NOT_MATERIALIZED")
+                    .withHint("请重新生成该批次的 Workflow 工序任务后再报工")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
         }
 
         List<WorkProcessTask> tasks = taskRepository
                 .findByFactoryIdAndWorkflowInstanceIdOrderByProcessOrderAsc(factoryId, instance.getId());
+        if (tasks == null || tasks.isEmpty()) {
+            throw new BusinessException(409, "Workflow 运行时快照没有工序任务")
+                    .withCode("WORKFLOW_RUNTIME_TASKS_MISSING")
+                    .withHint("请重新生成该批次的 Workflow 工序任务后再报工")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
+        }
         List<WorkflowTaskPort> ports = portRepository
                 .findByFactoryIdAndWorkflowInstanceId(factoryId, instance.getId());
 
@@ -93,11 +103,19 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
     }
 
     private ProductionBatch findWorkflowBatch(String factoryId, String planId) {
-        return productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId).stream()
+        List<ProductionBatch> workflowBatches = productionBatchRepository
+                .findByFactoryIdAndProductionPlanId(factoryId, planId).stream()
                 .filter(batch -> batch.getWorkflowSelectionMode()
                         == ProductionBatch.WorkflowSelectionMode.WORKFLOW)
-                .findFirst()
-                .orElse(null);
+                .toList();
+        if (workflowBatches.size() > 1) {
+            throw new BusinessException(409, "该生产计划关联了多个 Workflow 批次，无法唯一确定报工快照")
+                    .withCode("WORKFLOW_RUNTIME_BATCH_AMBIGUOUS")
+                    .withHint("请从具体生产批次进入逐道报工，或清理重复批次")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
+        }
+        return workflowBatches.isEmpty() ? null : workflowBatches.get(0);
     }
 
     private WorkflowClerkSheetConfigDTO.ProcessDescriptor buildDescriptor(
@@ -118,6 +136,13 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                 .thenComparing(WorkflowTaskPort::getWorkflowPortId));
         List<WorkflowClerkSheetConfigDTO.PortDescriptor> outputDescriptors =
                 outputs.stream().map(port -> toPortDescriptor(factoryId, port)).toList();
+        if (outputDescriptors.isEmpty()) {
+            throw new BusinessException(409, "Workflow 工序缺少产出端口")
+                    .withCode("WORKFLOW_RUNTIME_OUTPUT_PORT_MISSING")
+                    .withHint("请修复 Workflow 后为新批次重新生成运行时快照")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
+        }
 
         WorkProcess workProcess = workProcessRepository
                 .findByFactoryIdAndId(factoryId, task.getWorkProcessId())
@@ -155,15 +180,21 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
     private WorkflowClerkSheetConfigDTO.PortDescriptor toPortDescriptor(
             String factoryId, WorkflowTaskPort port) {
         SkuLookup lookup = resolveSku(factoryId, port.getMaterialKind(), port.getSkuId());
-        String unit = (port.getUnit() != null && !port.getUnit().isBlank())
-                ? port.getUnit() : lookup.unit();
+        String unit = port.getUnit();
+        if (unit == null || unit.isBlank()) {
+            throw new BusinessException(409, "Workflow 运行时端口缺少快照单位")
+                    .withCode("WORKFLOW_RUNTIME_PORT_UNIT_MISSING")
+                    .withHint("请修复 Workflow 后为新批次重新生成运行时快照")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
+        }
         return WorkflowClerkSheetConfigDTO.PortDescriptor.builder()
                 .workflowPortId(port.getWorkflowPortId())
                 .materialNodeId(port.getMaterialNodeId())
                 .materialKind(port.getMaterialKind())
                 .skuId(port.getSkuId())
                 .materialName(lookup.name())
-                .unit(unit)
+                .unit(unit.trim())
                 .required(port.getRequired())
                 .skuResolved(lookup.resolved())
                 .finished(FINISHED_GOOD.equals(port.getMaterialKind()))

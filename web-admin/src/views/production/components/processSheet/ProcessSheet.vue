@@ -9,7 +9,7 @@ import { PROCESS_SHEET_CONFIG } from './PROCESS_SHEET_CONFIG';
 import ProcessDataTable from './ProcessDataTable.vue';
 import InventoryTable from './InventoryTable.vue';
 import YieldCardTable from './YieldCardTable.vue';
-import { formatPlannedOutput } from '@/utils/processSheetUnits';
+import { formatPlannedOutput, resolveWorkflowProcessSheetUnits } from '@/utils/processSheetUnits';
 
 // -------------------------------------------------------------------------
 // View mode: 'grid' (电子表格) | 'card' (卡片)
@@ -198,10 +198,9 @@ function mapWorkflowProcesses(descriptors: WorkflowProcessDescriptor[]): ProcEnt
         isFirstProcess: idx === 0,
         customFieldSchema,
         allowFinishedGoodsSource: proc.allowFinishedGoodsSource === true,
-        // origin/main 合并: config-driven 投入/产出单位。workflow 计划从端口单位取
-        // (投入=首个输入端口单位, 产出=输出端口单位)，与 workflowContext 展示/校验一致。
-        inputUnit: proc.inputs?.[0]?.unit?.trim() || 'kg',
-        outputUnit: proc.output?.unit?.trim() || null,
+        // Workflow 单位只来自端口快照。严格 resolver 会阻断缺单位或多投入异单位，
+        // 不允许 plannedUnit / 产品单位 / kg 默认值掩盖坏配置。
+        ...resolveWorkflowProcessSheetUnits(proc),
         workflowContext: proc,
         // Slice C: 后端 WorkflowClerkSheetConfigDTO.ProcessDescriptor 已带真实 WorkProcess.processCategory
         // (熟制/注射) → workflow 计划的熟制工序也能按类别驱动锅数录入 (不再只靠 isShuZhi archetype)。
@@ -218,7 +217,8 @@ function mapWorkflowProcesses(descriptors: WorkflowProcessDescriptor[]): ProcEnt
  * 0. Workflow-awareness (2B Task F1, additive): 先探 workflow-config 端点 —— 该计划若绑定
  *    workflow 批次 (`GET .../process-sheet/workflow-config` 返回非 null), 优先用 workflow
  *    快照的 ProcessDescriptor[] 建 tabs (见 mapWorkflowProcesses), **不触发**下方 legacy 逻辑。
- *    探测失败 / 返回 null / 无 processes → 原样落入 legacy 分支 (下方逻辑字节不变)。
+ *    只有请求成功且 data===null 才进入 legacy。其余失败/畸形/空工序/端口单位错误均抛出，
+ *    由 loadAll 显示阻断态并允许重试。
  *
  * legacy 分支 —— 取该产品 ProductWorkProcess (按 processOrder), 两阶段映射:
  *
@@ -236,22 +236,55 @@ function mapWorkflowProcesses(descriptors: WorkflowProcessDescriptor[]): ProcEnt
  * 失败或 <1 道可录 → 回退切片.
  */
 async function resolveProcesses() {
-  // Step 0 (2B Task F1, additive): workflow-config probe. Independent try/catch so a
-  // failure here always falls through to the untouched legacy branch below.
+  // Step 0: workflow-config 是计划是否走 workflow 的唯一权威探针。
+  // 只有明确的 success:true + data:null 才可进入 legacy，任何不确定状态都必须阻断。
+  let wfResp: Awaited<ReturnType<typeof getWorkflowSheetConfig>>;
   try {
-    const wfResp = await getWorkflowSheetConfig(props.factoryId, props.planId);
-    const wfConfig = wfResp.data;
-    if (wfConfig && Array.isArray(wfConfig.processes) && wfConfig.processes.length > 0) {
-      const mapped = mapWorkflowProcesses(wfConfig.processes);
-      if (mapped.length >= 1) {
-        PROCESSES.value = mapped;
-        return;
-      }
-    }
+    wfResp = await getWorkflowSheetConfig(props.factoryId, props.planId);
   } catch (e) {
-    console.warn('[ProcessSheet] getWorkflowSheetConfig 失败, 回退 legacy 工序解析', e);
+    const detail = e instanceof Error ? e.message : '未知错误';
+    throw new Error(`Workflow 配置请求失败：${detail}`);
   }
 
+  if (!wfResp || typeof wfResp !== 'object' || wfResp.success !== true || !('data' in wfResp)) {
+    throw new Error('Workflow 配置响应畸形或未成功');
+  }
+
+  const wfConfig = wfResp.data;
+  if (wfConfig !== null) {
+    if (!wfConfig || typeof wfConfig !== 'object' || !Array.isArray(wfConfig.processes)) {
+      throw new Error('Workflow 配置响应缺少 processes 数组');
+    }
+    if (wfConfig.processes.length === 0) {
+      throw new Error('Workflow 配置没有可报工工序');
+    }
+    if (wfConfig.processes.some((proc) =>
+      !proc || !Array.isArray(proc.inputs) || !Array.isArray(proc.outputs) || !proc.output
+    )) {
+      throw new Error('Workflow 配置工序端口结构畸形');
+    }
+    if (wfConfig.processes.some((proc) =>
+      !proc.output?.skuId || proc.output.skuResolved === false
+      || proc.outputs.some((port) => !port.skuId || port.skuResolved === false)
+    )) {
+      throw new Error('Workflow 配置包含已失效或未绑定产品的产出端口');
+    }
+
+    let mapped: ProcEntry[];
+    try {
+      mapped = mapWorkflowProcesses(wfConfig.processes);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : '未知端口错误';
+      throw new Error(`Workflow 配置无效：${detail}`);
+    }
+    if (mapped.length !== wfConfig.processes.length || mapped.length === 0) {
+      throw new Error('Workflow 配置包含无法映射的工序');
+    }
+    PROCESSES.value = mapped;
+    return;
+  }
+
+  // 唯一 legacy 入口：workflow-config 明确成功返回 data:null。
   try {
     const resp = await getProductWorkProcesses(props.factoryId, props.productTypeId);
     const items = resp.data || [];
@@ -324,6 +357,10 @@ async function resolveProcesses() {
 // 不用 code —— 否则同 archetype 多工序 tab/库存/行/refs 全碰撞。
 const activeTab = ref<string>(procKey(FALLBACK_PROCESSES[0]));
 const loading = ref(false);
+const loadError = ref<string | null>(null);
+const loadErrorTitle = computed(() => loadError.value?.startsWith('Workflow 配置')
+  ? 'Workflow 配置加载失败'
+  : '工序数据加载失败');
 
 // inventory/rows/refs per process: procKey(order) → ... (动态填充, 键随 PROCESSES 变)
 const inventoryMap = ref<Record<string, ProcessSheetInventoryItem[]>>({});
@@ -342,6 +379,7 @@ async function loadAll() {
   if (!props.factoryId || !props.planId) return;
   const seq = ++loadAllSeq;
   loading.value = true;
+  loadError.value = null;
   try {
     // G0: 先解析本产品工序链 (动态), 再加载各道库存/行
     await resolveProcesses();
@@ -366,6 +404,10 @@ async function loadAll() {
   } catch (e) {
     if (seq !== loadAllSeq) return;
     console.error('[ProcessSheet] loadAll error', e);
+    const detail = e instanceof Error ? e.message : '未知错误';
+    loadError.value = detail.startsWith('Workflow 配置')
+      ? `${detail}。请检查 Workflow 配置后重试。`
+      : `工序数据加载失败：${detail}。请重试。`;
   } finally {
     if (seq === loadAllSeq) loading.value = false;
   }
@@ -469,18 +511,30 @@ defineExpose({ hasUnsavedRows });
       />
     </div>
 
-    <!-- F006 双出成率总览 — 全工序汇总 (对上工序 / 对原料), 默认展开, 可折叠腾空间 -->
-    <el-collapse v-model="yieldOverviewActive" style="flex-shrink:0;margin-bottom:8px">
+    <div v-if="loadError" class="workflow-load-error" style="padding:16px 4px">
+      <el-alert
+        :title="loadErrorTitle"
+        :description="loadError"
+        type="error"
+        :closable="false"
+        show-icon
+      />
+      <el-button type="primary" style="margin-top:12px" @click="loadAll">重试</el-button>
+    </div>
+
+    <template v-else>
+      <!-- F006 双出成率总览 — 全工序汇总 (对上工序 / 对原料), 默认展开, 可折叠腾空间 -->
+      <el-collapse v-model="yieldOverviewActive" style="flex-shrink:0;margin-bottom:8px">
       <el-collapse-item name="yield">
         <template #title>
           <span style="font-size:12px;font-weight:600;color:#606266">双出成率总览 — 全工序（对上工序 / 对原料）</span>
         </template>
         <YieldCardTable ref="yieldCardRef" :factory-id="factoryId" :plan-id="planId" />
       </el-collapse-item>
-    </el-collapse>
+      </el-collapse>
 
     <!-- Tabs -->
-    <el-tabs v-model="activeTab" style="flex:1;overflow:hidden;display:flex;flex-direction:column" tab-position="top">
+      <el-tabs v-model="activeTab" style="flex:1;overflow:hidden;display:flex;flex-direction:column" tab-position="top">
       <!-- SP-F role-mode fix: tab :key/:name 用唯一 procKey(order), 不用 code (同 archetype 会碰撞);
            per-process map 取值一律 procKey(proc); process-code 仍传 archetype 给列定义+后端。 -->
       <el-tab-pane
@@ -533,6 +587,7 @@ defineExpose({ hasUnsavedRows });
           </div>
         </div>
       </el-tab-pane>
-    </el-tabs>
+      </el-tabs>
+    </template>
   </div>
 </template>

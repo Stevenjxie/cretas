@@ -5,6 +5,7 @@ import {
   formatProcessOutput,
   formatSourceFeedSummary,
   resolveProcessSheetUnits,
+  resolveWorkflowProcessSheetUnits,
   withProcessSheetUnits,
 } from '../processSheetUnits';
 
@@ -12,6 +13,54 @@ describe('processSheetUnits', () => {
   it('uses the product-process override as input and the process output unit as output', () => {
     expect(resolveProcessSheetUnits({ unitOverride: '只', defaultUnit: 'kg', defaultOutputUnit: '袋' }))
       .toEqual({ inputUnit: '只', outputUnit: '袋' });
+  });
+
+  it('uses workflow port units as the sole authority', () => {
+    expect(resolveWorkflowProcessSheetUnits({
+      processName: '装件',
+      inputs: [{ workflowPortId: 'IN-1', unit: ' g ' }],
+      output: { workflowPortId: 'OUT-1', unit: ' 件 ' },
+    })).toEqual({ inputUnit: 'g', outputUnit: '件' });
+  });
+
+  it.each([
+    {
+      name: 'missing input port unit',
+      config: { processName: '清洗', inputs: [{ workflowPortId: 'IN-1', unit: null }], output: { workflowPortId: 'OUT-1', unit: '件' } },
+      message: '投入端口',
+    },
+    {
+      name: 'missing output port unit',
+      config: { processName: '清洗', inputs: [{ workflowPortId: 'IN-1', unit: 'g' }], output: { workflowPortId: 'OUT-1', unit: ' ' } },
+      message: '产出端口',
+    },
+    {
+      name: 'missing secondary output port unit',
+      config: {
+        processName: '分装',
+        inputs: [{ workflowPortId: 'IN-1', unit: 'g' }],
+        output: { workflowPortId: 'OUT-1', unit: '件' },
+        outputs: [
+          { workflowPortId: 'OUT-1', unit: '件' },
+          { workflowPortId: 'OUT-2', unit: null },
+        ],
+      },
+      message: '产出端口 OUT-2 缺少单位',
+    },
+    {
+      name: 'heterogeneous input port units',
+      config: {
+        processName: '混料',
+        inputs: [
+          { workflowPortId: 'IN-1', unit: 'g' },
+          { workflowPortId: 'IN-2', unit: 'ml' },
+        ],
+        output: { workflowPortId: 'OUT-1', unit: '件' },
+      },
+      message: '投入端口单位不一致',
+    },
+  ])('fails loudly for $name', ({ config, message }) => {
+    expect(() => resolveWorkflowProcessSheetUnits(config)).toThrow(message);
   });
 
   it('changes only quantity labels, keeping weight-specific fields in kg', () => {

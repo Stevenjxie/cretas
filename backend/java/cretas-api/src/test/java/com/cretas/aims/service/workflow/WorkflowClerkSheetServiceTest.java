@@ -84,14 +84,30 @@ class WorkflowClerkSheetServiceTest {
     }
 
     @Test
-    void returnsNullWhenWorkflowBatchHasNotBeenMaterializedYet() {
+    void rejectsAmbiguousMultipleWorkflowBatches() {
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId("F006", "PLAN-1"))
+                .thenReturn(List.of(
+                        batch(901L, ProductionBatch.WorkflowSelectionMode.WORKFLOW),
+                        batch(902L, ProductionBatch.WorkflowSelectionMode.WORKFLOW)));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.getWorkflowSheetConfig("F006", "PLAN-1"));
+
+        assertEquals("WORKFLOW_RUNTIME_BATCH_AMBIGUOUS", error.getErrorCode());
+    }
+
+    @Test
+    void rejectsWorkflowBatchThatHasNotBeenMaterializedYet() {
         ProductionBatch workflowBatch = batch(901L, ProductionBatch.WorkflowSelectionMode.WORKFLOW);
         when(productionBatchRepository.findByFactoryIdAndProductionPlanId("F006", "PLAN-1"))
                 .thenReturn(List.of(workflowBatch));
         when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
                 .thenReturn(Optional.empty());
 
-        assertNull(service.getWorkflowSheetConfig("F006", "PLAN-1"));
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.getWorkflowSheetConfig("F006", "PLAN-1"));
+
+        assertEquals("WORKFLOW_RUNTIME_NOT_MATERIALIZED", error.getErrorCode());
     }
 
     @Test
@@ -212,7 +228,7 @@ class WorkflowClerkSheetServiceTest {
     }
 
     @Test
-    void rejectsNodeWithMultipleOutputPortsDefensivelyEvenIfPersisted() {
+    void projectsMultipleOutputPortsFromPinnedRuntimeSnapshot() {
         ProductionBatch workflowBatch = batch(901L, ProductionBatch.WorkflowSelectionMode.WORKFLOW);
         ProductionWorkflowInstance instance = instance(501L);
         when(productionBatchRepository.findByFactoryIdAndProductionPlanId("F006", "PLAN-1"))
@@ -231,10 +247,12 @@ class WorkflowClerkSheetServiceTest {
         when(portRepository.findByFactoryIdAndWorkflowInstanceId("F006", 501L))
                 .thenReturn(List.of(outA, outB));
 
-        BusinessException error = assertThrows(BusinessException.class,
-                () -> service.getWorkflowSheetConfig("F006", "PLAN-1"));
+        WorkflowClerkSheetConfigDTO result = service.getWorkflowSheetConfig("F006", "PLAN-1");
 
-        assertEquals("WORKFLOW_MULTI_OUTPUT_UNSUPPORTED", error.getErrorCode());
+        assertEquals(2, result.getProcesses().get(0).getOutputs().size());
+        assertEquals("trim-out-a", result.getProcesses().get(0).getOutputs().get(0).getWorkflowPortId());
+        assertEquals("trim-out-b", result.getProcesses().get(0).getOutputs().get(1).getWorkflowPortId());
+        assertEquals("trim-out-a", result.getProcesses().get(0).getOutput().getWorkflowPortId());
     }
 
     @Test

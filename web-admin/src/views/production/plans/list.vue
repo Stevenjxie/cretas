@@ -1038,9 +1038,11 @@ async function openProcessEntry(row: any) {
         }
       }
     }
-  } catch {
-    // 诚实降级: create-batch 失败(如数量为0) → 仍打开抽屉, ProcessSheet 自行探 workflow-config,
-    // 拿不到就落 legacy; 后端错误消息由 interceptor sticky toast 展示。
+  } catch (error) {
+    // 无法确认/物化 Workflow 时不能打开 legacy 逐道录入，否则同一计划会混用两套工序单位。
+    console.error('[production-plan] Workflow 批次物化失败，阻止逐道录入', error);
+    ElMessage.error('Workflow 批次尚未准备完成，暂不能逐道录入。请修复提示问题后重试。');
+    return;
   }
   entryRow.value = row;
   entryDrawerVisible.value = true;

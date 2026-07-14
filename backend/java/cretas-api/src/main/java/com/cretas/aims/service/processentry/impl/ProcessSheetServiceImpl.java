@@ -148,7 +148,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
         // 2B.2 多产出分支 (前置于单产出校验/upsert): 多产出用自己的逐产出校验 + 分组 upsert/删除,
         //   顶层 finished/unit/outputQuantity 只是 @NotNull 占位, 不能拿去跑单产出 B3/单位归一化 (否则误 409)。
-        if (req.getOutputs() != null && req.getOutputs().size() > 1) {
+        if (req.getOutputs() != null && !req.getOutputs().isEmpty()) {
             return saveMultiOutputRow(factoryId, planId, req, userId);
         }
 
@@ -264,12 +264,22 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         } catch (BusinessException be) {
             throw be; // e.g. WORKFLOW_MULTI_OUTPUT_UNSUPPORTED — 必须 surface, 不静默降级
         } catch (Exception e) {
-            log.warn("2B B3 workflow 行校验读取配置失败, 跳过校验 (不阻断保存): planId={}, err={}",
-                    planId, e.getMessage());
-            return;
+            log.error("Workflow 产出校验配置读取失败: factory={}, plan={}", factoryId, planId, e);
+            throw new BusinessException(409, "Workflow 运行时配置读取失败，不能校验报工产出")
+                    .withCode("PROCESS_SHEET_WORKFLOW_CONFIG_UNAVAILABLE")
+                    .withHint("请刷新后重试；若仍失败，请重新物化该生产批次的 Workflow")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
         }
-        if (config == null || config.getProcesses() == null) {
-            return; // legacy 计划 — 不校验
+        if (config == null) {
+            return; // 明确 legacy 计划 — 不校验
+        }
+        if (config.getProcesses() == null || config.getProcesses().isEmpty()) {
+            throw new BusinessException(409, "Workflow 运行时没有可报工工序")
+                    .withCode("PROCESS_SHEET_WORKFLOW_PROCESSES_MISSING")
+                    .withHint("请重新物化该生产批次的 Workflow")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
         }
         com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.ProcessDescriptor desc =
                 config.getProcesses().stream()
@@ -277,8 +287,19 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                                 && p.getProcessOrder().equals(req.getProcessOrder()))
                         .findFirst()
                         .orElse(null);
-        if (desc == null || desc.getOutput() == null) {
-            return; // 该道不在 workflow 图中 (不硬阻断; FE 只暴露 workflow 工序)
+        if (desc == null) {
+            throw new BusinessException(409, "请求工序不在该批次锁定的 Workflow 中")
+                    .withCode("PROCESS_SHEET_WORKFLOW_PROCESS_NOT_FOUND")
+                    .withHint("请刷新逐道录入页面，按 Workflow 中的工序报工")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
+        }
+        if (desc.getOutput() == null) {
+            throw new BusinessException(409, "Workflow 工序缺少产出端口，不能报工")
+                    .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_MISSING")
+                    .withHint("请修复并重新发布 Workflow 后创建新批次")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
         }
         com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor out = desc.getOutput();
         String processName = desc.getProcessName() != null ? desc.getProcessName() : "";
@@ -294,11 +315,25 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                             : "本道产出应为半成品，请勿按成品录入");
         }
 
-        String expectUnit = out.getUnit();
+        if (out.getSkuId() == null || out.getSkuId().isBlank()) {
+            throw new BusinessException(409, "Workflow 产出端口缺少产品绑定，不能报工")
+                    .withCode("WORKFLOW_ROW_OUTPUT_SKU_MISSING")
+                    .withHint("请修复并重新发布 Workflow 后创建新批次")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
+        }
+        if (!out.getSkuId().equals(req.getProductTypeId())) {
+            throw new BusinessException(409, "本工序【" + processName + "】产出产品与 Workflow 端口不一致")
+                    .withCode("WORKFLOW_ROW_OUTPUT_SKU_MISMATCH")
+                    .withHint("请刷新逐道录入页面后重新填写")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
+        }
+
+        String expectUnit = requireWorkflowPortUnit(out.getUnit(), "产出");
         String actualUnit = req.getUnit();
-        if (expectUnit != null && !expectUnit.isBlank()
-                && actualUnit != null && !actualUnit.isBlank()
-                && !expectUnit.equals(actualUnit)) {
+        if (actualUnit != null && !actualUnit.isBlank()
+                && !expectUnit.equalsIgnoreCase(actualUnit.trim())) {
             throw new BusinessException(409, "本工序【" + processName + "】产出单位应为「"
                     + expectUnit + "」，当前为「" + actualUnit + "」")
                     .withCode("WORKFLOW_ROW_OUTPUT_UNIT_MISMATCH")
@@ -397,11 +432,12 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // 1c. 自定义字段校验 (单产出路径在前置做; 多产出这里补做一次, 同 process 同 schema)
         validateCustomFields(factoryId, req);
 
-        // 1d. 重存 (B2): base#* 组已存在 → 先删旧组 (级联反物化), 再建新组。整组无小结/无下游消耗才可删。
-        deleteMultiOutputGroupIfPresent(factoryId, planId, req.getClientRowId(), userId);
-
-        // 2. B3 逐产出对齐 workflow 端口 (workflow 计划; legacy/未注入 → 跳过)
+        // 2. 写入前先按 Workflow 快照逐产出对齐端口。WORKFLOW 模式任何异常都 fail-closed，
+        // 不能删完旧组后才发现单位/端口错误。
         validateMultiOutputAgainstWorkflow(factoryId, planId, req);
+
+        // 2b. 重存 (B2): base#* 组已存在 → 先删旧组 (级联反物化), 再建新组。整组无小结/无下游消耗才可删。
+        deleteMultiOutputGroupIfPresent(factoryId, planId, req.getClientRowId(), userId);
 
         // 3. 分解 (per Steve — 不推断投入-产出比例, 不拆分投入):
         //    input allocations (req.rawMaterialInputs/upstreamSources) 作为独立事实, 由首产出行承载 → 一次全量扣减;
@@ -540,8 +576,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     }
 
     /**
-     * 2B.2 B3: 多产出逐产出对齐 workflow 端口 (finished 类型 + 单位)。workflow 计划才校验;
-     * legacy/未注入/该道不在图中 → 放行。产出按 workflowPortId 匹配端口 (缺则按序)。
+     * 2B.2 B3: 多产出逐产出对齐 workflow 端口 (finished 类型 + 单位)。
+     * 只有明确 legacy 计划放行；WORKFLOW 模式必须按 workflowPortId 精确匹配，不按序号或请求单位兜底。
      */
     private void validateMultiOutputAgainstWorkflow(String factoryId, String planId,
             ProcessSheetRowRequest req) {
@@ -554,12 +590,22 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         } catch (BusinessException be) {
             throw be;
         } catch (Exception e) {
-            log.warn("2B.2 多产出 workflow 校验读取配置失败, 跳过 (不阻断): planId={}, err={}",
-                    planId, e.getMessage());
-            return;
+            log.error("Workflow 多产出配置读取失败: factory={}, plan={}", factoryId, planId, e);
+            throw new BusinessException(409, "Workflow 运行时配置读取失败，不能保存多产出报工")
+                    .withCode("PROCESS_SHEET_WORKFLOW_CONFIG_UNAVAILABLE")
+                    .withHint("请刷新后重试；若仍失败，请重新物化该生产批次的 Workflow")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
         }
-        if (config == null || config.getProcesses() == null) {
-            return; // legacy
+        if (config == null) {
+            return; // 明确 legacy
+        }
+        if (config.getProcesses() == null || config.getProcesses().isEmpty()) {
+            throw new BusinessException(409, "Workflow 运行时没有可报工工序")
+                    .withCode("PROCESS_SHEET_WORKFLOW_PROCESSES_MISSING")
+                    .withHint("请重新物化该生产批次的 Workflow")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
         }
         com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.ProcessDescriptor desc =
                 config.getProcesses().stream()
@@ -567,24 +613,67 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                                 && p.getProcessOrder().equals(req.getProcessOrder()))
                         .findFirst()
                         .orElse(null);
-        if (desc == null || desc.getOutputs() == null || desc.getOutputs().isEmpty()) {
-            return; // 该道不在 workflow 图中 (不硬阻断)
+        if (desc == null) {
+            throw new BusinessException(409, "请求工序不在该批次锁定的 Workflow 中")
+                    .withCode("PROCESS_SHEET_WORKFLOW_PROCESS_NOT_FOUND")
+                    .withHint("请刷新逐道录入页面，按 Workflow 中的工序报工")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
         }
+        if (desc.getOutputs() == null || desc.getOutputs().isEmpty()) {
+            throw new BusinessException(409, "Workflow 工序缺少产出端口，不能报工")
+                    .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_MISSING")
+                    .withHint("请修复并重新发布 Workflow 后创建新批次")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
+        }
+        String inputUnit = workflowInputUnit(desc);
+        assertConfiguredUnit(req.getInputUnit(), inputUnit, "投入");
+        req.setInputUnit(inputUnit);
+
         Map<String, com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor> byPortId =
                 new HashMap<>();
         for (com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor p : desc.getOutputs()) {
-            if (p.getWorkflowPortId() != null) {
-                byPortId.put(p.getWorkflowPortId(), p);
+            if (p.getWorkflowPortId() == null || p.getWorkflowPortId().isBlank()) {
+                throw new BusinessException(409, "Workflow 产出端口缺少稳定标识")
+                        .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_ID_MISSING")
+                        .withHint("请修复并重新发布 Workflow 后创建新批次")
+                        .withSeverity("BLOCKING")
+                        .withHintTarget("Workflow");
+            }
+            if (byPortId.put(p.getWorkflowPortId(), p) != null) {
+                throw new BusinessException(409, "Workflow 存在重复的产出端口标识")
+                        .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_DUPLICATE")
+                        .withHint("请修复并重新发布 Workflow 后创建新批次")
+                        .withSeverity("BLOCKING")
+                        .withHintTarget("Workflow");
             }
         }
         List<ProcessSheetRowRequest.OutputLine> outs = req.getOutputs();
-        for (int i = 0; i < outs.size(); i++) {
-            ProcessSheetRowRequest.OutputLine o = outs.get(i);
+        java.util.Set<String> submittedPortIds = new java.util.HashSet<>();
+        for (ProcessSheetRowRequest.OutputLine o : outs) {
+            if (o.getWorkflowPortId() == null || o.getWorkflowPortId().isBlank()) {
+                throw new BusinessException(409, "多产出报工必须指定 Workflow 产出端口")
+                        .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_REQUIRED")
+                        .withHint("请刷新逐道录入页面后重新填写")
+                        .withSeverity("BLOCKING")
+                        .withHintTarget("Workflow");
+            }
+            if (!submittedPortIds.add(o.getWorkflowPortId())) {
+                throw new BusinessException(409, "同一 Workflow 产出端口不能重复报工")
+                        .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_REPEATED")
+                        .withHint("请合并重复的产出行")
+                        .withSeverity("BLOCKING")
+                        .withHintTarget("Workflow");
+            }
             com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor port =
-                    o.getWorkflowPortId() != null ? byPortId.get(o.getWorkflowPortId())
-                            : (i < desc.getOutputs().size() ? desc.getOutputs().get(i) : null);
+                    byPortId.get(o.getWorkflowPortId());
             if (port == null) {
-                continue; // 无法定位端口 → 不硬阻断 (MVP, 同单产出 B3 宽松)
+                throw new BusinessException(409, "请求包含不属于该 Workflow 工序的产出端口")
+                        .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_NOT_FOUND")
+                        .withHint("请刷新逐道录入页面后重新填写")
+                        .withSeverity("BLOCKING")
+                        .withHintTarget("Workflow");
             }
             boolean expectFinished = Boolean.TRUE.equals(port.getFinished());
             if (o.isFinished() != expectFinished) {
@@ -594,18 +683,54 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         .withCode("WORKFLOW_ROW_OUTPUT_KIND_MISMATCH")
                         .withHint("请按 Workflow 配置的产出类型录入");
             }
-            String expectUnit = port.getUnit();
+            if (port.getSkuId() == null || port.getSkuId().isBlank()
+                    || !port.getSkuId().equals(o.getProductTypeId())) {
+                throw new BusinessException(409, "产出「"
+                        + (port.getMaterialName() != null ? port.getMaterialName() : "")
+                        + "」产品与 Workflow 端口绑定不一致")
+                        .withCode("WORKFLOW_ROW_OUTPUT_SKU_MISMATCH")
+                        .withHint("请刷新逐道录入页面后重新填写")
+                        .withSeverity("BLOCKING")
+                        .withHintTarget("Workflow");
+            }
+            String expectUnit = requireWorkflowPortUnit(port.getUnit(), "产出");
             String actualUnit = firstNonBlank(o.getUnit(), req.getUnit());
-            if (expectUnit != null && !expectUnit.isBlank()
-                    && actualUnit != null && !actualUnit.isBlank()
-                    && !expectUnit.equals(actualUnit)) {
+            if (actualUnit != null && !actualUnit.isBlank()
+                    && !expectUnit.equalsIgnoreCase(actualUnit.trim())) {
                 throw new BusinessException(409, "产出「"
                         + (port.getMaterialName() != null ? port.getMaterialName() : "")
                         + "」单位应为「" + expectUnit + "」, 当前为「" + actualUnit + "」")
                         .withCode("WORKFLOW_ROW_OUTPUT_UNIT_MISMATCH")
                         .withHint("请按 Workflow 配置的单位录入产出");
             }
+            o.setUnit(expectUnit);
         }
+        for (com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor port : desc.getOutputs()) {
+            if (Boolean.TRUE.equals(port.getRequired())
+                    && !submittedPortIds.contains(port.getWorkflowPortId())) {
+                throw new BusinessException(409, "缺少 Workflow 必填产出端口「"
+                        + (port.getMaterialName() != null ? port.getMaterialName() : port.getWorkflowPortId()) + "」")
+                        .withCode("PROCESS_SHEET_WORKFLOW_REQUIRED_OUTPUT_MISSING")
+                        .withHint("请补全所有必填产出后再保存")
+                        .withSeverity("BLOCKING")
+                        .withHintTarget("Workflow");
+            }
+        }
+        // WorkProcessTask.actualQuantity 只记录主产出数量。禁止把不同单位的多产出直接求和
+        // （例如 8件 + 500g = 508），主产出由 descriptor.output 明确定义。
+        String primaryPortId = desc.getOutput() != null ? desc.getOutput().getWorkflowPortId() : null;
+        ProcessSheetRowRequest.OutputLine primaryOutput = outs.stream()
+                .filter(line -> primaryPortId != null && primaryPortId.equals(line.getWorkflowPortId()))
+                .findFirst()
+                .orElse(null);
+        if (primaryOutput == null || primaryOutput.getQuantity() == null) {
+            throw new BusinessException(409, "缺少 Workflow 主产出，不能完成本道报工")
+                    .withCode("PROCESS_SHEET_WORKFLOW_PRIMARY_OUTPUT_MISSING")
+                    .withHint("请填写主产出数量后再保存")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
+        }
+        req.setOutputQuantity(primaryOutput.getQuantity());
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -1906,16 +2031,16 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     }
 
     private void normalizeConfiguredUnits(String factoryId, String planId, ProcessSheetRowRequest req) {
+        // Workflow 批次的运行时端口是唯一单位事实源。即使该产品仍保留 legacy
+        // ProductWorkProcess，也不能让旧配置抢先覆盖批次已锁定的端口快照。
+        if (applyWorkflowConfiguredUnits(factoryId, planId, req)) {
+            return;
+        }
+
         Optional<ProductWorkProcess> configured = productWorkProcessRepo
                 .findByFactoryIdAndProductTypeIdAndProcessOrder(
                         factoryId, req.getProductTypeId(), req.getProcessOrder());
         if (configured.isEmpty()) {
-            // 2B (clerk-path workflow 联通): workflow 计划的产品(尤其成品)没有 legacy ProductWorkProcess 配置,
-            // 单位以 workflow 端口投影为准。命中 workflow 描述符即用其投入/产出单位归一化(支持 kg→盒 双单位),
-            // 不再因"未配置工序"拒绝。产出单位/类型另由 validateWorkflowRowIfApplicable(B3) 对齐端口。
-            if (applyWorkflowConfiguredUnits(factoryId, planId, req)) {
-                return;
-            }
             // Legacy clients only sent one `unit` field. Preserve that established single-unit
             // contract, but do not allow a new dual-unit payload to bypass configuration.
             if (req.getInputUnit() == null && req.getOutputUnit() == null) {
@@ -1943,9 +2068,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
      * 2B (clerk-path workflow 联通): workflow 计划的产品(尤其成品)没有 legacy ProductWorkProcess 配置,
      * 但报工单位需要以 workflow 端口投影为准 —— 例如成品包装工序 kg(半成品) → 盒(成品) 的换算行。
      *
-     * <p>命中当前 processOrder 的 workflow 描述符即用其投入/产出端口单位归一化 req, 返回 {@code true}
-     * (跳过"未配置工序"拒绝)。非 workflow 计划 / 该工序无描述符 → 返回 {@code false}, 交回 legacy/未配置
-     * 分支处理。产出 kind/unit 另由 {@link #validateWorkflowRowIfApplicable} (B3) 对齐端口。
+     * <p>命中当前 processOrder 的 workflow 描述符即用其投入/产出端口单位归一化 req, 返回 {@code true}。
+     * 只有服务明确返回 {@code null}（计划没有 WORKFLOW 批次）才返回 {@code false} 并进入 legacy。
+     * WORKFLOW 批次的快照、工序或端口异常一律阻断，禁止静默降级。
      */
     private boolean applyWorkflowConfiguredUnits(String factoryId, String planId, ProcessSheetRowRequest req) {
         if (workflowClerkSheetService == null || planId == null || req.getProcessOrder() == null) {
@@ -1955,29 +2080,52 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         try {
             config = workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId);
         } catch (BusinessException be) {
-            // workflow 端口/SKU 失效等明确业务错误应上抛让文员看到, 不静默降级到 legacy。
             throw be;
         } catch (Exception e) {
-            log.warn("[2B] applyWorkflowConfiguredUnits 读取 workflow 配置失败, 回落 legacy 分支: "
-                    + "factory={} plan={} err={}", factoryId, planId, e.getMessage());
-            return false;
+            log.error("Workflow 单位配置读取失败: factory={}, plan={}", factoryId, planId, e);
+            throw new BusinessException(409, "Workflow 运行时配置读取失败，不能按旧工序配置报工")
+                    .withCode("PROCESS_SHEET_WORKFLOW_CONFIG_UNAVAILABLE")
+                    .withHint("请刷新后重试；若仍失败，请重新物化该生产批次的 Workflow")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
         }
-        if (config == null || config.getProcesses() == null) {
-            return false; // 非 workflow 计划 → legacy 分支
+        if (config == null) {
+            return false; // 明确非 workflow 计划 → legacy 分支
+        }
+        if (config.getProcesses() == null || config.getProcesses().isEmpty()) {
+            throw new BusinessException(409, "Workflow 运行时没有可报工工序")
+                    .withCode("PROCESS_SHEET_WORKFLOW_PROCESSES_MISSING")
+                    .withHint("请重新物化该生产批次的 Workflow")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
         }
         com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.ProcessDescriptor descriptor = config.getProcesses().stream()
                 .filter(p -> req.getProcessOrder().equals(p.getProcessOrder()))
                 .findFirst()
                 .orElse(null);
-        if (descriptor == null || descriptor.getOutput() == null) {
-            return false; // workflow 计划但本道工序无产出描述符 → legacy 分支
+        if (descriptor == null) {
+            throw new BusinessException(409, "请求工序不在该批次锁定的 Workflow 中")
+                    .withCode("PROCESS_SHEET_WORKFLOW_PROCESS_NOT_FOUND")
+                    .withHint("请刷新逐道录入页面，按 Workflow 中的工序报工")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
         }
-        String outputUnit = firstNonBlank(descriptor.getOutput().getUnit(),
-                descriptor.getPlannedUnit(), req.getOutputUnit(), req.getUnit(), "kg");
-        String inputUnit = firstNonBlank(
-                (descriptor.getInputs() != null && !descriptor.getInputs().isEmpty())
-                        ? descriptor.getInputs().get(0).getUnit() : null,
-                req.getInputUnit(), outputUnit);
+        if (descriptor.getOutput() == null) {
+            throw new BusinessException(409, "Workflow 工序缺少产出端口，不能报工")
+                    .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_MISSING")
+                    .withHint("请修复并重新发布 Workflow 后创建新批次")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
+        }
+        if (descriptor.getOutputs() != null && descriptor.getOutputs().size() > 1) {
+            throw new BusinessException(409, "Workflow 本道工序包含多个产出，必须按端口逐项报工")
+                    .withCode("PROCESS_SHEET_WORKFLOW_MULTI_OUTPUT_REQUIRED")
+                    .withHint("请刷新逐道录入页面，填写各产出端口数量")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
+        }
+        String outputUnit = requireWorkflowPortUnit(descriptor.getOutput().getUnit(), "产出");
+        String inputUnit = workflowInputUnit(descriptor);
 
         // 与 ProductWorkProcess 路径同语义: 请求单位若提供则必须匹配端口, 否则按端口单位归一化。
         assertConfiguredUnit(req.getInputUnit(), inputUnit, "投入");
@@ -1988,6 +2136,40 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         req.setOutputUnit(outputUnit);
         req.setUnit(outputUnit);
         return true;
+    }
+
+    private static String workflowInputUnit(
+            com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.ProcessDescriptor descriptor) {
+        if (descriptor.getInputs() == null || descriptor.getInputs().isEmpty()) {
+            throw new BusinessException(409, "Workflow 工序缺少投入端口，不能确定投入单位")
+                    .withCode("PROCESS_SHEET_WORKFLOW_INPUT_PORT_MISSING")
+                    .withHint("请修复并重新发布 Workflow 后创建新批次")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
+        }
+        List<String> units = descriptor.getInputs().stream()
+                .map(port -> requireWorkflowPortUnit(port.getUnit(), "投入"))
+                .distinct()
+                .toList();
+        if (units.size() != 1) {
+            throw new BusinessException(409, "Workflow 本道工序包含不同投入单位，当前逐道录入无法安全合并")
+                    .withCode("PROCESS_SHEET_WORKFLOW_MIXED_INPUT_UNITS")
+                    .withHint("请拆分工序，或将同一道工序的投入端口统一为相同单位")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
+        }
+        return units.get(0);
+    }
+
+    private static String requireWorkflowPortUnit(String unit, String side) {
+        if (unit != null && !unit.isBlank()) {
+            return unit.trim();
+        }
+        throw new BusinessException(409, "Workflow " + side + "端口缺少单位，不能报工")
+                .withCode("PROCESS_SHEET_WORKFLOW_PORT_UNIT_MISSING")
+                .withHint("请修复并重新发布 Workflow 后创建新批次")
+                .withSeverity("BLOCKING")
+                .withHintTarget("Workflow");
     }
 
     /**

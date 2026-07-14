@@ -186,10 +186,13 @@ describe('ProcessDataTable.vue workflow-planned-output banner (2B Task F2)', () 
       allowMultipleUpstreamSources: true,
       allowFinishedGoodsSource: false,
       customFieldSchema: null,
-      inputs: [],
+      inputs: [{
+        workflowPortId: 'IN1', materialKind: 'RAW_MATERIAL', skuId: 'RM-1',
+        materialName: '原料', unit: 'kg', required: true, skuResolved: true, finished: false,
+      }],
       output: {
         workflowPortId: 'OUT1', materialKind: 'FINISHED_GOOD', skuId: 'PT-DELETED',
-        materialName: null, unit: null, required: true, skuResolved: false, finished: true,
+        materialName: null, unit: 'kg', required: true, skuResolved: false, finished: true,
       },
     });
     await flushPromises();
@@ -236,7 +239,10 @@ describe('ProcessDataTable.vue buildRequest sources finished/unit from the workf
         allowMultipleUpstreamSources: false,
         allowFinishedGoodsSource: false,
         customFieldSchema: null,
-        inputs: [],
+        inputs: [{
+          workflowPortId: 'IN1', materialKind: 'SEMI_FINISHED', skuId: 'PT-UP-1',
+          materialName: '上游半成品', unit: 'kg', required: true, skuResolved: true, finished: false,
+        }],
         output: {
           workflowPortId: 'OUT1', materialKind: 'FINISHED_GOOD', skuId: 'PT-FIN-1',
           materialName: '卤猪蹄成品', unit: '盒', required: true, skuResolved: true, finished: true,
@@ -248,7 +254,7 @@ describe('ProcessDataTable.vue buildRequest sources finished/unit from the workf
     await clickAddRow(wrapper);
     await selectUpstreamSource(wrapper, 'wip::WIP-UP-1');
     await setNumberField(wrapper, '投入(kg)', 10);
-    await setNumberField(wrapper, '产出(kg)', 8);
+    await setNumberField(wrapper, '产出(盒)', 8);
     await clickSave(wrapper);
 
     expect(saveRow).toHaveBeenCalledTimes(1);
@@ -272,7 +278,10 @@ describe('ProcessDataTable.vue buildRequest sources finished/unit from the workf
         allowMultipleUpstreamSources: false,
         allowFinishedGoodsSource: false,
         customFieldSchema: null,
-        inputs: [],
+        inputs: [{
+          workflowPortId: 'IN1', materialKind: 'SEMI_FINISHED', skuId: 'PT-UP-1',
+          materialName: '上游半成品', unit: 'kg', required: true, skuResolved: true, finished: false,
+        }],
         output: {
           workflowPortId: 'OUT1', materialKind: 'SEMI_FINISHED', skuId: 'PT-SEMI-1',
           materialName: '焯水半成品', unit: '只', required: true, skuResolved: true, finished: false,
@@ -284,13 +293,52 @@ describe('ProcessDataTable.vue buildRequest sources finished/unit from the workf
     await clickAddRow(wrapper);
     await selectUpstreamSource(wrapper, 'wip::WIP-UP-1');
     await setNumberField(wrapper, '投入(kg)', 5);
-    await setNumberField(wrapper, '产出(kg)', 4);
+    await setNumberField(wrapper, '产出(只)', 4);
     await clickSave(wrapper);
 
     expect(saveRow).toHaveBeenCalledTimes(1);
     const [, , req] = saveRow.mock.calls[0] as [string, string, Record<string, unknown>];
     expect(req.finished).toBe(false);
     expect(req.unit).toBe('只');
+  });
+
+  it('workflow g → 件 uses one authoritative resolver for inputUnit/outputUnit/unit and ignores plannedUnit', async () => {
+    const wrapper = mountChaoshuiTable({
+      workflowContext: {
+        workflowNodeId: 'N1',
+        workProcessId: 'WP1',
+        processName: '称重装件',
+        defaultCostCategory: null,
+        processOrder: 2,
+        plannedUnit: 'kg',
+        allowMultipleUpstreamSources: false,
+        allowFinishedGoodsSource: false,
+        customFieldSchema: null,
+        inputs: [{
+          workflowPortId: 'IN1', materialKind: 'SEMI_FINISHED', skuId: 'PT-UP-1',
+          materialName: '称重半成品', unit: 'g', required: true, skuResolved: true, finished: false,
+        }],
+        output: {
+          workflowPortId: 'OUT1', materialKind: 'FINISHED_GOOD', skuId: 'PT-FIN-1',
+          materialName: '独立装件成品', unit: '件', required: true, skuResolved: true, finished: true,
+        },
+      },
+    });
+    await flushPromises();
+
+    await clickAddRow(wrapper);
+    await selectUpstreamSource(wrapper, 'wip::WIP-UP-1');
+    await setNumberField(wrapper, '投入(g)', 500);
+    await setNumberField(wrapper, '产出(件)', 8);
+    await clickSave(wrapper);
+
+    expect(saveRow).toHaveBeenCalledTimes(1);
+    const [, , req] = saveRow.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(req.inputUnit).toBe('g');
+    expect(req.outputUnit).toBe('件');
+    expect(req.unit).toBe('件');
+    expect(req.outputUnit).toBe(req.unit);
+    expect(req.productTypeId).toBe('PT-FIN-1');
   });
 
   it('(4) legacy (workflowContext null): buildRequest is byte-identical to the pre-fix archetype heuristic (finished:false, unit:"kg" for a non-qidiao archetype)', async () => {

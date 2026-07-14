@@ -5,6 +5,8 @@ import com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO;
 import com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor;
 import com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.ProcessDescriptor;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.ProductWorkProcessRepository;
+import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.service.processentry.impl.ProcessSheetServiceImpl;
 import com.cretas.aims.service.workflow.WorkflowClerkSheetService;
 import org.junit.jupiter.api.DisplayName;
@@ -55,6 +57,17 @@ class ProcessSheetWorkflowUnitNormalizationTest {
         m.setAccessible(true);
         try {
             return (boolean) m.invoke(impl, FACTORY_ID, PLAN_ID, req);
+        } catch (InvocationTargetException e) {
+            throw e.getCause();
+        }
+    }
+
+    private void normalize(ProcessSheetServiceImpl impl, ProcessSheetRowRequest req) throws Throwable {
+        Method m = ProcessSheetServiceImpl.class.getDeclaredMethod(
+                "normalizeConfiguredUnits", String.class, String.class, ProcessSheetRowRequest.class);
+        m.setAccessible(true);
+        try {
+            m.invoke(impl, FACTORY_ID, PLAN_ID, req);
         } catch (InvocationTargetException e) {
             throw e.getCause();
         }
@@ -124,6 +137,31 @@ class ProcessSheetWorkflowUnitNormalizationTest {
     }
 
     @Test
+    @DisplayName("Workflow 与 legacy 同时存在时只认 Workflow 端口单位")
+    void workflowPortsWinEvenWhenLegacyProcessExists() throws Throwable {
+        WorkflowClerkSheetService svc = mock(WorkflowClerkSheetService.class);
+        when(svc.getWorkflowSheetConfig(FACTORY_ID, PLAN_ID)).thenReturn(config(2, true, "g", "件"));
+
+        ProductWorkProcessRepository legacyRepo = mock(ProductWorkProcessRepository.class);
+        WorkProcessRepository workProcessRepo = mock(WorkProcessRepository.class);
+        ProcessSheetServiceImpl impl = new ProcessSheetServiceImpl(
+                null, null, null, null, null, null, null, null,
+                null, null, null, workProcessRepo, legacyRepo, null, null, null, null);
+        Field workflowField = ProcessSheetServiceImpl.class.getDeclaredField("workflowClerkSheetService");
+        workflowField.setAccessible(true);
+        workflowField.set(impl, svc);
+
+        ProcessSheetRowRequest req = row(2, "件", "g", "件");
+        req.setProductTypeId("PT-product");
+        normalize(impl, req);
+
+        assertEquals("g", req.getInputUnit());
+        assertEquals("件", req.getOutputUnit());
+        assertEquals("件", req.getUnit());
+        verifyNoInteractions(legacyRepo, workProcessRepo);
+    }
+
+    @Test
     @DisplayName("legacy 计划 (config null) → 返回 false, 交回 legacy 分支")
     void legacyPlan_returnsFalse() throws Throwable {
         WorkflowClerkSheetService svc = mock(WorkflowClerkSheetService.class);
@@ -147,6 +185,18 @@ class ProcessSheetWorkflowUnitNormalizationTest {
     }
 
     @Test
+    @DisplayName("Workflow 工序缺少投入端口 → 阻断, 不用产出单位猜测投入单位")
+    void missingInputPort_throws() throws Throwable {
+        WorkflowClerkSheetService svc = mock(WorkflowClerkSheetService.class);
+        when(svc.getWorkflowSheetConfig(FACTORY_ID, PLAN_ID)).thenReturn(config(3, true, null, "件"));
+        ProcessSheetServiceImpl impl = newImpl(svc);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> apply(impl, row(3, "件", null, "件")));
+        assertEquals("PROCESS_SHEET_WORKFLOW_INPUT_PORT_MISSING", ex.getErrorCode());
+    }
+
+    @Test
     @DisplayName("请求产出单位与端口不符 (端口=盒, 请求=只) → 409 UNIT_MISMATCH")
     void outputUnitMismatch_throws() throws Throwable {
         WorkflowClerkSheetService svc = mock(WorkflowClerkSheetService.class);
@@ -158,11 +208,50 @@ class ProcessSheetWorkflowUnitNormalizationTest {
     }
 
     @Test
-    @DisplayName("该 processOrder 无描述符 → 返回 false, 交回 legacy 分支")
-    void processOrderNotInWorkflow_returnsFalse() throws Throwable {
+    @DisplayName("Workflow 中缺少本道工序 → 明确阻断, 不回退 legacy")
+    void processOrderNotInWorkflow_throwsWithoutLegacyFallback() throws Throwable {
         WorkflowClerkSheetService svc = mock(WorkflowClerkSheetService.class);
         when(svc.getWorkflowSheetConfig(FACTORY_ID, PLAN_ID)).thenReturn(config(1, false, "kg", "kg"));
         ProcessSheetServiceImpl impl = newImpl(svc);
-        assertFalse(apply(impl, row(9, "盒", "kg", "盒")));
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> apply(impl, row(9, "盒", "kg", "盒")));
+        assertEquals("PROCESS_SHEET_WORKFLOW_PROCESS_NOT_FOUND", ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("Workflow 多产出工序不能使用单产出请求绕过端口校验")
+    void multiOutputWorkflow_rejectsSingleOutputRequest() throws Throwable {
+        WorkflowClerkSheetService svc = mock(WorkflowClerkSheetService.class);
+        WorkflowClerkSheetConfigDTO workflow = config(4, true, "g", "件");
+        ProcessDescriptor descriptor = workflow.getProcesses().get(0);
+        PortDescriptor secondary = PortDescriptor.builder()
+                .workflowPortId("out-secondary")
+                .materialKind("SEMI_FINISHED")
+                .skuId("PT-secondary")
+                .materialName("副产物")
+                .unit("g")
+                .required(false)
+                .skuResolved(true)
+                .finished(false)
+                .build();
+        descriptor.setOutputs(List.of(descriptor.getOutput(), secondary));
+        when(svc.getWorkflowSheetConfig(FACTORY_ID, PLAN_ID)).thenReturn(workflow);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> apply(newImpl(svc), row(4, "件", "g", "件")));
+        assertEquals("PROCESS_SHEET_WORKFLOW_MULTI_OUTPUT_REQUIRED", ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("Workflow 配置读取异常 → 明确阻断, 不回退 legacy")
+    void workflowLookupFailure_throwsWithoutLegacyFallback() throws Throwable {
+        WorkflowClerkSheetService svc = mock(WorkflowClerkSheetService.class);
+        when(svc.getWorkflowSheetConfig(FACTORY_ID, PLAN_ID))
+                .thenThrow(new IllegalStateException("runtime snapshot unavailable"));
+        ProcessSheetServiceImpl impl = newImpl(svc);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> apply(impl, row(1, "kg", "kg", "kg")));
+        assertEquals("PROCESS_SHEET_WORKFLOW_CONFIG_UNAVAILABLE", ex.getErrorCode());
     }
 }
