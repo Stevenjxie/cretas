@@ -73,7 +73,7 @@ const rawMenuConfig: MenuItem[] = [
         hideForFactoryTypes: ['RESTAURANT'] },
       { path: '/system/product-processes', title: '产品-工序配置', icon: '', module: 'production',
         hideForFactoryTypes: ['RESTAURANT'] },
-      // 配方维护已并入 /production/bom 的「调料配方」tab; 路由仍保留以支持深链
+      // 调料维护已并入 /production/bom 的「原辅料配方 > 辅料」工序视图；旧路由仅作兼容重定向
       // T125: 转换率配置菜单入口已隐藏 — 后端 API/表/fallback 仍保留 (F001等老工厂 BomExpansionService 依赖)
       // 维护路径: /production/bom → bom-unified 「转换率」tab (高级维护用)
       { path: '/production/bom', title: 'BOM/配方维护', icon: '', module: 'production' },

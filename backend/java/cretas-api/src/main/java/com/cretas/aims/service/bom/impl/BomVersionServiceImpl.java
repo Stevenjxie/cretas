@@ -2,11 +2,13 @@ package com.cretas.aims.service.bom.impl;
 
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.entity.bom.BomProcessSeasoning;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.entity.bom.BomVersion;
 import com.cretas.aims.entity.bom.BomVersion.VersionStatus;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.bom.BomProcessSeasoningRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.repository.bom.BomVersionRepository;
 import com.cretas.aims.service.bom.BomVersionService;
@@ -38,6 +40,7 @@ public class BomVersionServiceImpl implements BomVersionService {
     private final BomVersionRepository versionRepo;
     private final BomRecipeRepository recipeRepo;
     private final BomSeasoningItemRepository seasoningItemRepo;
+    private final BomProcessSeasoningRepository processSeasoningRepo;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -220,6 +223,7 @@ public class BomVersionServiceImpl implements BomVersionService {
         // BOM 统管配方+锅序 (2026-06-24): 折叠进 BOM 的配方也纳入版本快照 → 配方改动走版本/ECN (decision 3).
         snapshot.put("cookingPotBaseKg", recipe.getCookingPotBaseKg());
         snapshot.put("subsequentPotRatio", recipe.getSubsequentPotRatio());
+        snapshot.put("seasoningRevision", recipe.getSeasoningRevision());
         snapshot.put("injectionRate", recipe.getInjectionRate());
 
         List<Map<String, Object>> seasoning = new ArrayList<>();
@@ -228,17 +232,34 @@ public class BomVersionServiceImpl implements BomVersionService {
         for (BomSeasoningItem si : seasoningItems) {
             Map<String, Object> snap = new LinkedHashMap<>();
             snap.put("id", si.getId());
+            snap.put("materialTypeId", si.getMaterialTypeId());
+            snap.put("workProcessId", si.getWorkProcessId());
             snap.put("section", si.getSection());
             snap.put("seq", si.getSeq());
             snap.put("name", si.getName());
             snap.put("dosagePerKgG", si.getDosagePerKgG());
             snap.put("priceSource1", si.getPriceSource1());
             snap.put("priceSource2", si.getPriceSource2());
+            snap.put("subsequentPotRatio", si.getSubsequentPotRatio());
             snap.put("countInSeasoning", si.getCountInSeasoning());
             snap.put("remark", si.getRemark());
             seasoning.add(snap);
         }
         snapshot.put("seasoningItems", seasoning);
+
+        List<Map<String, Object>> processSeasoning = new ArrayList<>();
+        if (processSeasoningRepo != null) {
+            for (BomProcessSeasoning process : processSeasoningRepo
+                    .findByRecipeIdAndDeletedAtIsNull(recipe.getId())) {
+                Map<String, Object> snap = new LinkedHashMap<>();
+                snap.put("workProcessId", process.getWorkProcessId());
+                snap.put("subsequentPotRatio", process.getSubsequentPotRatio());
+                snap.put("injectionAmountKg", process.getInjectionAmountKg());
+                snap.put("notes", process.getNotes());
+                processSeasoning.add(snap);
+            }
+        }
+        snapshot.put("processSeasoning", processSeasoning);
 
         List<Map<String, Object>> items = new ArrayList<>();
         List<BomRecipeItem> recipeItems = recipe.getItems();

@@ -7,7 +7,7 @@
  * Base URL is /api/mobile (set in request.ts baseURL).
  * Endpoint prefix: /{factoryId}/bom/recipes/{recipeId}/...
  */
-import { get, post, put } from './request';
+import { del, get, post, put } from './request';
 
 // =========================================================================
 // BOM Recipe — status types + activate API
@@ -371,7 +371,119 @@ export const bomSeasoningApi = {
       `${seasoningBase(factoryId)}/${recipeId}/activate`,
       null,
     ),
+
+  getWorkspace: (factoryId: string, recipeId: string) =>
+    get<SeasoningWorkspace>(`${seasoningBase(factoryId)}/${recipeId}/seasoning/workspace`),
+
+  createBinding: (
+    factoryId: string,
+    recipeId: string,
+    workProcessId: string,
+    payload: SeasoningBindingMutation,
+  ) => post<SeasoningBindingMutationResponse>(
+    `${seasoningBase(factoryId)}/${recipeId}/seasoning/processes/${workProcessId}/bindings`,
+    payload,
+  ),
+
+  updateBinding: (
+    factoryId: string,
+    recipeId: string,
+    bindingId: number,
+    payload: SeasoningBindingMutation,
+  ) => put<SeasoningBindingMutationResponse>(
+    `${seasoningBase(factoryId)}/${recipeId}/seasoning/bindings/${bindingId}`,
+    payload,
+  ),
+
+  deleteBinding: (
+    factoryId: string,
+    recipeId: string,
+    bindingId: number,
+    expectedRevision: number,
+  ) => del<SeasoningBindingMutationResponse>(
+    `${seasoningBase(factoryId)}/${recipeId}/seasoning/bindings/${bindingId}`,
+    { params: { expectedRevision } },
+  ),
 };
+
+export interface SeasoningBindingView {
+  id: number;
+  workProcessId: string;
+  materialTypeId: string | null;
+  name: string;
+  /** Defensive alias for future aggregate DTOs; current backend entity serializes `name`. */
+  materialName?: string;
+  materialCode?: string | null;
+  unit?: string | null;
+  dosagePerKgG: number;
+  subsequentPotRatio: number | null;
+  countInSeasoning: boolean;
+  priceSnapshot?: number | null;
+  priceSource1?: number | null;
+  remark?: string | null;
+}
+
+export interface SeasoningProcessView {
+  workProcessId: string;
+  processOrder: number;
+  processName: string;
+  processCategory?: string | null;
+  bindings: SeasoningBindingView[];
+}
+
+export interface SeasoningMaterialUsage {
+  bindingId?: number;
+  workProcessId: string;
+  processOrder: number;
+  processName: string;
+  dosagePerKgG: number;
+  subsequentPotRatio: number | null;
+  countInSeasoning: boolean;
+}
+
+export interface SeasoningMaterialSummary {
+  materialTypeId: string;
+  materialName: string;
+  materialCode?: string | null;
+  unit?: string | null;
+  priceSnapshot?: number | null;
+  usages?: SeasoningMaterialUsage[];
+  processUsages?: SeasoningMaterialUsage[];
+}
+
+export interface SeasoningAnomaly {
+  code: string;
+  message: string;
+  bindingId?: number | null;
+  materialTypeId?: string | null;
+  workProcessId?: string | null;
+}
+
+export interface SeasoningWorkspace {
+  recipeId: string;
+  productTypeId: string;
+  productName: string;
+  status: BomRecipeStatus;
+  editable: boolean;
+  seasoningRevision: number;
+  processes: SeasoningProcessView[];
+  materialSummaries: SeasoningMaterialSummary[];
+  anomalies: SeasoningAnomaly[];
+}
+
+export interface SeasoningBindingMutation {
+  materialTypeId: string;
+  dosagePerKgG: number;
+  subsequentPotRatio: number | null;
+  countInSeasoning: boolean;
+  remark?: string | null;
+  expectedRevision: number;
+}
+
+export interface SeasoningBindingMutationResponse {
+  seasoningRevision: number;
+  binding: SeasoningBindingView;
+}
 
 // =========================================================================
 // BOM Batch Import — Excel 导入原辅料行

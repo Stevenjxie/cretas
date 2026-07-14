@@ -3,7 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put, del } from '@/api/request';
-import { bomYieldEstimateApi, bomRecipeApi, batchImportBomItems } from '@/api/bom';
+import { bomYieldEstimateApi, bomRecipeApi, bomSeasoningApi, batchImportBomItems } from '@/api/bom';
 import type {
   YieldEstimateResponse,
   RecalculatePreviewRow,
@@ -24,6 +24,7 @@ import { useRoute, useRouter } from 'vue-router';
 import BomChangeLog from './BomChangeLog.vue'
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue'
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue'
+import BomAuxiliaryWorkspace from './seasoning/BomAuxiliaryWorkspace.vue'
 import type { TableRow } from '@/types/api';
 // 客户张权反馈 (2026-07-02): "辅料 添加剂全混在一起了" — 「添加原辅料」对话框的「关联原料」
 // 下拉需按上方「物料类别」筛选, 归类逻辑复用 procurement/receives/list.vue 同款共享工具。
@@ -57,10 +58,15 @@ const recipeStatusLabel: Record<BomRecipeStatus, string> = {
 const bomRecipes = ref<BomRecipeSummary[]>([]);
 const bomRecipesLoading = ref(false);
 const activatingRecipeId = ref<string | null>(null);
+const selectedRecipeId = ref<string>('');
+const selectedRecipe = computed(() =>
+  bomRecipes.value.find((recipe) => recipe.id === selectedRecipeId.value) ?? null,
+);
 
-async function loadBomRecipes() {
+async function loadBomRecipes(preferredRecipeId?: string) {
   if (!factoryId.value || !selectedProductTypeId.value) {
     bomRecipes.value = [];
+    selectedRecipeId.value = '';
     return;
   }
   bomRecipesLoading.value = true;
@@ -74,6 +80,14 @@ async function loadBomRecipes() {
       bomRecipes.value = all.filter(
         (r) => r.productTypeId === selectedProductTypeId.value,
       );
+      const preferred = preferredRecipeId
+        ? bomRecipes.value.find((recipe) => recipe.id === preferredRecipeId)
+        : undefined;
+      const draft = bomRecipes.value.find((recipe) => recipe.status === 'DRAFT');
+      const currentActive = bomRecipes.value.find(
+        (recipe) => recipe.status === 'ACTIVE' && recipe.isCurrent,
+      );
+      selectedRecipeId.value = (preferred || draft || currentActive || bomRecipes.value[0])?.id || '';
     }
   } catch (error: unknown) {
     const err = error as { actionHint?: string };
@@ -84,6 +98,31 @@ async function loadBomRecipes() {
   } finally {
     bomRecipesLoading.value = false;
   }
+}
+
+async function handleCloneSelectedRecipe() {
+  if (!factoryId.value || !selectedRecipe.value) return;
+  try {
+    await ElMessageBox.confirm(
+      `当前选择的是${recipeStatusLabel[selectedRecipe.value.status]}版本。克隆后会生成新的草稿供编辑，原版本不受影响。`,
+      '克隆 BOM 版本',
+      { confirmButtonText: '克隆为草稿', cancelButtonText: '取消', type: 'info' },
+    );
+  } catch {
+    return;
+  }
+  try {
+    const response = await bomSeasoningApi.clone(factoryId.value, selectedRecipe.value.id);
+    if (!response.success || !response.data) throw new Error(response.message || '克隆失败');
+    await loadBomRecipes(response.data.id);
+    ElMessage.success('已克隆为新草稿，可开始编辑工序调料');
+  } catch (error: unknown) {
+    ElMessage.error((error as { message?: string }).message || '克隆 BOM 版本失败');
+  }
+}
+
+async function handleSeasoningWorkspaceChanged() {
+  await Promise.all([loadBomRecipes(selectedRecipeId.value), loadCostSummary()]);
 }
 
 async function handleActivateRecipe(recipe: BomRecipeSummary) {
@@ -825,6 +864,7 @@ async function handleApplyRecalc() {
 }
 
 onMounted(async () => {
+  syncCategoryFromRoute();
   await loadProductTypes(); // 只用来抽取「半成品」列表 (semiFinishedRefCode 下拉)
   await fetchProductTypeOptions(''); // 主产品下拉默认展示前 N 个成品
   // 防呆 #1236 系列: 从「产品新建」页跳过来带 ?productTypeId= 时直接定位到该产品,
@@ -853,6 +893,7 @@ watch(selectedProductTypeId, async (newVal) => {
     laborCosts.value = [];
     costSummary.value = null;
     bomRecipes.value = [];
+    selectedRecipeId.value = '';
   }
 });
 
@@ -1515,6 +1556,13 @@ const hasMultipleCategories = computed(() => groupedBomItems.value.length > 1);
 
 // P0-14: Tab filtering by materialCategory (RAW/AUXILIARY/PACKAGING)
 const activeCategoryTab = ref<'RAW' | 'AUXILIARY' | 'PACKAGING'>('RAW');
+function syncCategoryFromRoute() {
+  const category = String(route.query.category || '').toUpperCase();
+  if (category === 'RAW' || category === 'AUXILIARY' || category === 'PACKAGING') {
+    activeCategoryTab.value = category;
+  }
+}
+watch(() => route.query.category, syncCategoryFromRoute);
 function matchCategory(row: TableRow, code: 'RAW' | 'AUXILIARY' | 'PACKAGING') {
   const c = String(row.materialCategory || row.category || '').toUpperCase();
   if (code === 'RAW') return c === 'RAW' || c === '原材料' || c === '' || c === '其他';
@@ -2114,8 +2162,8 @@ async function handleAdjustConfirm() {
       <el-card class="table-card" shadow="never">
         <template #header>
           <div class="table-header">
-            <span class="table-title">原辅料需求明细表</span>
-            <div class="table-actions">
+            <span class="table-title">{{ activeCategoryTab === 'AUXILIARY' ? '工序调料与辅料汇总' : '原辅料需求明细表' }}</span>
+            <div v-if="activeCategoryTab !== 'AUXILIARY'" class="table-actions">
               <el-button v-if="canWrite" type="primary" size="small" :icon="Plus" @click="handleAddBomItem">
                 添加
               </el-button>
@@ -2135,7 +2183,58 @@ async function handleAdjustConfirm() {
           <el-tab-pane name="AUXILIARY" :label="`辅料 (${auxiliaryItems.length})`" />
           <el-tab-pane name="PACKAGING" :label="`包材 (${packagingItems.length})`" />
         </el-tabs>
-        <el-table empty-text="暂无数据" :data="currentTabItems" v-loading="loading" stripe border size="small" style="width: 100%"
+
+        <div v-if="activeCategoryTab === 'AUXILIARY'" data-testid="bom-auxiliary-integration" class="auxiliary-integration">
+          <el-alert
+            v-if="auxiliaryItems.length > 0"
+            type="warning"
+            show-icon
+            :closable="false"
+            :title="`存在 ${auxiliaryItems.length} 条历史普通辅料，待绑定工序 / 可能重复计成本`"
+            class="legacy-auxiliary-alert"
+          >
+            <template #default>
+              <span>系统不会自动转换或删除历史数据。迁移接口尚未开放，请先保留原记录并逐项核对。</span>
+              <el-button size="small" disabled>批量绑定工序（暂不可用）</el-button>
+            </template>
+          </el-alert>
+
+          <div v-if="bomRecipes.length > 0" class="seasoning-version-context">
+            <span>配置版本</span>
+            <el-select v-model="selectedRecipeId" style="width: 320px;" placeholder="选择 BOM 版本">
+              <el-option
+                v-for="recipe in bomRecipes"
+                :key="recipe.id"
+                :label="`${recipe.productName} v${recipe.version} · ${recipeStatusLabel[recipe.status]}`"
+                :value="recipe.id"
+              />
+            </el-select>
+            <el-tag v-if="selectedRecipe" :type="recipeStatusTagType[selectedRecipe.status]">
+              {{ recipeStatusLabel[selectedRecipe.status] }}
+            </el-tag>
+          </div>
+
+          <BomAuxiliaryWorkspace
+            v-if="selectedRecipe && factoryId"
+            :key="selectedRecipe.id"
+            :factory-id="factoryId"
+            :product-type-id="selectedProductTypeId"
+            :recipe-id="selectedRecipe.id"
+            :recipe-status="selectedRecipe.status"
+            :can-write="canWrite"
+            @request-clone="handleCloneSelectedRecipe"
+            @changed="handleSeasoningWorkspaceChanged"
+          />
+          <el-empty
+            v-else
+            description="请先为当前 SKU 创建 BOM 配方，再配置工序调料"
+            :image-size="64"
+          >
+            <el-button v-if="canWrite && selectedProductTypeId" type="primary" @click="handleAddRecipeHeader">创建配方</el-button>
+          </el-empty>
+        </div>
+
+        <el-table v-else empty-text="暂无数据" :data="currentTabItems" v-loading="loading" stripe border size="small" style="width: 100%"
           :row-class-name="({ row }: { row: TableRow }) => row._isCategoryHeader ? 'category-header-row' : (row.yieldRate == null ? 'yield-pending-row' : '')">
           <!-- Issue 12: Show material category column -->
           <el-table-column prop="materialCategory" label="类型" width="70" align="center">
@@ -2217,7 +2316,7 @@ async function handleAdjustConfirm() {
             </template>
           </el-table-column>
         </el-table>
-        <div v-if="canViewPrice" class="table-footer">
+        <div v-if="canViewPrice && activeCategoryTab !== 'AUXILIARY'" class="table-footer">
           <span class="total-label">原料成本合计:</span>
           <span class="total-value">{{ materialCostTotal.toFixed(2) }} 元</span>
         </div>
@@ -2398,7 +2497,6 @@ async function handleAdjustConfirm() {
         <el-form-item label="物料类别" required>
           <el-select v-model="bomForm.materialCategory" style="width: 100%" @change="onBomCategoryChange">
             <el-option label="原料" value="RAW" />
-            <el-option label="辅料" value="AUXILIARY" />
             <el-option label="包材" value="PACKAGING" />
           </el-select>
         </el-form-item>
@@ -3291,6 +3389,38 @@ async function handleAdjustConfirm() {
     color: #909399;
     flex-shrink: 0;
   }
+}
+
+.auxiliary-integration {
+  padding-top: 4px;
+}
+
+.legacy-auxiliary-alert {
+  margin-bottom: 12px;
+}
+
+.legacy-auxiliary-alert :deep(.el-alert__content) {
+  width: 100%;
+}
+
+.legacy-auxiliary-alert :deep(.el-alert__description) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.seasoning-version-context {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  background: var(--el-fill-color-extra-light);
+  color: var(--el-text-color-regular);
+  font-size: 13px;
 }
 
 .recipe-create-hint {

@@ -148,6 +148,10 @@ public class BomRecipe extends BaseEntity {
     @Column(name = "subsequent_pot_ratio", precision = 8, scale = 4)
     private BigDecimal subsequentPotRatio;
 
+    @Column(name = "seasoning_revision", nullable = false)
+    @Builder.Default
+    private Long seasoningRevision = 0L;
+
     /** 注射率, 如 0.20. 折叠自 product_recipes.injection_rate. */
     @Column(name = "injection_rate", precision = 8, scale = 4)
     private BigDecimal injectionRate;

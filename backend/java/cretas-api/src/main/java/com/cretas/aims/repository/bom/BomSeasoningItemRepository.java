@@ -7,6 +7,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
  * BOM 调料明细 repo. BOM 统管配方+锅序 (2026-06-24).
@@ -21,6 +22,11 @@ public interface BomSeasoningItemRepository extends JpaRepository<BomSeasoningIt
 
     /** 取某 BOM 配方在指定工序下的调料明细, 按 seq 升序 (调料配方按工序, 2026-07-13). */
     List<BomSeasoningItem> findByRecipeIdAndWorkProcessIdOrderBySeqAsc(String recipeId, String workProcessId);
+
+    Optional<BomSeasoningItem> findByIdAndRecipeId(Long id, String recipeId);
+
+    Optional<BomSeasoningItem> findByRecipeIdAndWorkProcessIdAndMaterialTypeId(
+            String recipeId, String workProcessId, String materialTypeId);
 
     /**
      * 调料配方按工序 (2026-07-13): 整-SKU 回退路径只取"未迁移"(work_process_id 为 NULL) 的明细,
