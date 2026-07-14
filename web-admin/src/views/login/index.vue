@@ -59,12 +59,6 @@ async function handleLogin() {
     }
   });
 }
-
-// 快捷登录 (开发用)
-function quickLogin(username: string) {
-  loginForm.username = username;
-  loginForm.password = '123456';
-}
 </script>
 
 <template>
@@ -139,35 +133,6 @@ function quickLogin(username: string) {
           </el-popover>
         </div>
       </el-form>
-
-      <!-- 快捷登录 (开发环境) -->
-      <div class="quick-login">
-        <p class="quick-title">快捷登录 (测试账号，密码均为 123456)</p>
-        <div class="quick-buttons">
-          <el-button size="small" type="danger" @click="quickLogin('factory_admin1')">
-            工厂总监
-          </el-button>
-          <el-button size="small" type="primary" @click="quickLogin('hr_admin1')">
-            人事经理
-          </el-button>
-          <el-button size="small" type="success" @click="quickLogin('dispatcher1')">
-            调度
-          </el-button>
-          <el-button size="small" type="warning" @click="quickLogin('warehouse_mgr1')">
-            仓储经理
-          </el-button>
-          <el-button size="small" type="info" @click="quickLogin('finance_mgr1')">
-            财务经理
-          </el-button>
-          <el-button size="small" @click="quickLogin('viewer1')">
-            访客
-          </el-button>
-          <el-button size="small" style="background: #FF5630; color: #fff; border-color: #FF5630" @click="quickLogin('restaurant_admin1')">
-            餐饮管理
-          </el-button>
-        </div>
-        <p class="quick-note">* 一线员工 (operator1) 仅限移动端登录</p>
-      </div>
 
       <!-- 底部信息 -->
       <div class="login-footer">
@@ -306,33 +271,6 @@ function quickLogin(username: string) {
   &:hover {
     color: #1B65A8;
     text-decoration: underline;
-  }
-}
-
-.quick-login {
-  margin-top: 28px;
-  padding-top: 24px;
-  border-top: 1px solid var(--border-color-light, #EDF2F7);
-
-  .quick-title {
-    font-size: 12px;
-    color: var(--color-text-secondary, #7A8599);
-    text-align: center;
-    margin: 0 0 12px;
-  }
-
-  .quick-buttons {
-    display: flex;
-    gap: 8px;
-    justify-content: center;
-    flex-wrap: wrap;
-  }
-
-  .quick-note {
-    font-size: 11px;
-    color: var(--color-text-placeholder, #A0AEC0);
-    text-align: center;
-    margin: 12px 0 0;
   }
 }
 
