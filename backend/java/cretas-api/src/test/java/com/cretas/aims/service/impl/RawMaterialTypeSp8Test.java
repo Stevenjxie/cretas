@@ -54,7 +54,8 @@ class RawMaterialTypeSp8Test {
                 conversionRepository,
                 packagingRepository,
                 materialCodeSegmentRepository,
-                excelUtil);
+                excelUtil,
+                org.mockito.Mockito.mock(com.cretas.aims.service.workflow.WorkflowUnitReviewService.class));
     }
 
     private RawMaterialType savedMaterial(String id, String code, String primaryCode) {

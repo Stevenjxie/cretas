@@ -56,9 +56,13 @@ public class ProductionWorkflowRuntimeDTO {
         private String skuId;
         private String unit;
         private String unitCode;
+        private String materialPrimaryUnitCode;
         private String conversionRefId;
         private Long conversionVersion;
+        private String conversionFromUnitCode;
+        private String conversionToUnitCode;
         private BigDecimal conversionFactorSnapshot;
+        private BigDecimal portToPrimaryFactorSnapshot;
         private Boolean required;
         private String conversionMode;
         private String conversionExpression;

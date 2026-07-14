@@ -147,6 +147,7 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
                 .findByIdAndFactoryId(act.getActiveWorkflowId(), factoryId).orElse(null);
         if (wf == null
                 || wf.getStatus() != ProductProcessWorkflow.Status.PUBLISHED
+                || Boolean.TRUE.equals(wf.getUnitReviewRequired())
                 || !java.util.Objects.equals(act.getActiveDefinitionVersion(), wf.getDefinitionVersion())) {
             return null;
         }

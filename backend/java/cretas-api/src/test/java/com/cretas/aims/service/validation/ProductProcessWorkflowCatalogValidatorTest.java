@@ -498,7 +498,7 @@ class ProductProcessWorkflowCatalogValidatorTest {
         new ProductProcessWorkflowValidator().validateForPublish(definition);
         BusinessException error = assertThrows(BusinessException.class,
                 () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
-        assertEquals("PRODUCT_PROCESS_WORKFLOW_TERMINAL_COUNT_INVALID", error.getErrorCode());
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_TERMINAL_COUNT_MISMATCH", error.getErrorCode());
     }
 
     private ProductProcessWorkflowDTO workflowWithPrimaryOutput(

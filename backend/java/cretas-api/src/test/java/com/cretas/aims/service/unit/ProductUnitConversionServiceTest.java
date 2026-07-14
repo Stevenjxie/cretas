@@ -30,6 +30,7 @@ class ProductUnitConversionServiceTest {
     @Mock ProductUnitConversionRepository repository;
     @Mock ProductTypeRepository productTypeRepository;
     @Mock UnitContractService unitContractService;
+    @Mock com.cretas.aims.service.workflow.WorkflowUnitReviewService workflowUnitReviewService;
 
     private ProductUnitConversionServiceImpl service;
     private ProductType product;
@@ -37,7 +38,8 @@ class ProductUnitConversionServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new ProductUnitConversionServiceImpl(repository, productTypeRepository, unitContractService);
+        service = new ProductUnitConversionServiceImpl(
+                repository, productTypeRepository, unitContractService, workflowUnitReviewService);
         product = new ProductType();
         product.setId("P1");
         product.setFactoryId("F1");
@@ -72,6 +74,7 @@ class ProductUnitConversionServiceTest {
         assertEquals("g", result.toUnitCode());
         assertEquals(0, new BigDecimal("200").compareTo(product.getGramsPerUnit()));
         verify(productTypeRepository).save(product);
+        verify(workflowUnitReviewService).markPublishedWorkflowsForReview("F1");
     }
 
     @Test

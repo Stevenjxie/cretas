@@ -13,6 +13,7 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
@@ -32,13 +33,6 @@ public class ProductProcessWorkflowRuntimeCompiler {
         this.objectMapper = objectMapper;
         this.validator = validator;
         this.unitContractService = unitContractService;
-    }
-
-    /** Backward-compatible constructor for isolated structural compiler tests. */
-    public ProductProcessWorkflowRuntimeCompiler(
-            ObjectMapper objectMapper,
-            ProductProcessWorkflowValidator validator) {
-        this(objectMapper, validator, null);
     }
 
     public CompiledProductProcessWorkflow compile(ProductProcessWorkflowDTO definition) {
@@ -87,7 +81,8 @@ public class ProductProcessWorkflowRuntimeCompiler {
         }
 
         return new CompiledProductProcessWorkflow(
-                serializeRuntimeNodes(topologicalNodeIds, nodesById),
+                serializeRuntimeNodes(
+                        definition.getFactoryId(), topologicalNodeIds, nodesById, parsedExecutionData),
                 serialize(definition.getEdges()),
                 tasks,
                 ports);
@@ -150,8 +145,9 @@ public class ProductProcessWorkflowRuntimeCompiler {
         if (data == null) {
             throw runtimeInvalid(node.getId(), "data", "must be an object");
         }
-        return new MaterialNodeData(requiredString(
-                data.get("skuId"), node.getId(), "data.skuId"));
+        return new MaterialNodeData(
+                requiredString(data.get("skuId"), node.getId(), "data.skuId"),
+                requiredString(data.get("baseUnit"), node.getId(), "data.baseUnit"));
     }
 
     private ConversionRule parseConversionRule(Object rawValue, String nodeId) {
@@ -331,6 +327,8 @@ public class ProductProcessWorkflowRuntimeCompiler {
                     materialData.skuId(),
                     canonical(factoryId, declaredPort.unit(), workflowNodeId,
                             "data.ports[" + index + "].unit"),
+                    canonical(factoryId, materialData.baseUnit(), materialNode.getId(),
+                            "data.baseUnit"),
                     declaredPort.conversionRefId(),
                     declaredPort.conversionVersion(),
                     null,
@@ -341,13 +339,50 @@ public class ProductProcessWorkflowRuntimeCompiler {
     }
 
     private String serializeRuntimeNodes(
+            String factoryId,
             List<String> topologicalNodeIds,
-            Map<String, ProductProcessWorkflowDTO.Node> nodesById) {
+            Map<String, ProductProcessWorkflowDTO.Node> nodesById,
+            ParsedExecutionData parsedExecutionData) {
         List<RuntimeNode> runtimeNodes = topologicalNodeIds.stream()
                 .map(nodesById::get)
-                .map(node -> new RuntimeNode(node.getId(), node.getKind(), node.getData()))
+                .map(node -> new RuntimeNode(
+                        node.getId(), node.getKind(),
+                        canonicalRuntimeData(factoryId, node, parsedExecutionData)))
                 .toList();
         return serialize(runtimeNodes);
+    }
+
+    private Map<String, Object> canonicalRuntimeData(
+            String factoryId,
+            ProductProcessWorkflowDTO.Node node,
+            ParsedExecutionData parsedExecutionData) {
+        Map<String, Object> snapshot = new LinkedHashMap<>(node.getData());
+        MaterialNodeData materialData = parsedExecutionData.materialNodes().get(node.getId());
+        if (materialData != null) {
+            snapshot.put("baseUnit", canonical(
+                    factoryId, materialData.baseUnit(), node.getId(), "data.baseUnit"));
+            return snapshot;
+        }
+        ProcessNodeData processData = parsedExecutionData.processNodes().get(node.getId());
+        if (processData == null) return snapshot;
+
+        snapshot.put("outputUnit", canonical(
+                factoryId, processData.outputUnit(), node.getId(), "data.outputUnit"));
+        List<Map<String, Object>> canonicalPorts = new ArrayList<>();
+        Object rawPorts = node.getData().get("ports");
+        List<?> rawPortList = rawPorts instanceof List<?> list ? list : List.of();
+        for (int index = 0; index < processData.ports().size(); index++) {
+            DeclaredPort port = processData.ports().get(index);
+            Map<String, Object> portSnapshot = new LinkedHashMap<>();
+            if (index < rawPortList.size() && rawPortList.get(index) instanceof Map<?, ?> rawPort) {
+                rawPort.forEach((key, value) -> portSnapshot.put(String.valueOf(key), value));
+            }
+            portSnapshot.put("unit", canonical(
+                    factoryId, port.unit(), node.getId(), "data.ports[" + index + "].unit"));
+            canonicalPorts.add(portSnapshot);
+        }
+        snapshot.put("ports", canonicalPorts);
+        return snapshot;
     }
 
     private String serialize(Object value) {
@@ -370,7 +405,6 @@ public class ProductProcessWorkflowRuntimeCompiler {
         if (rawUnit == null || rawUnit.isBlank()) {
             throw runtimeInvalid(nodeId, fieldPath, "unit is required");
         }
-        if (unitContractService == null) return rawUnit;
         var normalized = unitContractService.normalize(factoryId, rawUnit);
         if (!normalized.recognized()) {
             throw runtimeInvalid(nodeId, fieldPath, "unit is unknown or ambiguous: " + rawUnit);
@@ -421,7 +455,8 @@ public class ProductProcessWorkflowRuntimeCompiler {
     }
 
     private record MaterialNodeData(
-            String skuId) {
+            String skuId,
+            String baseUnit) {
     }
 
     private record ConversionRule(

@@ -10,6 +10,7 @@ import com.cretas.aims.service.unit.CanonicalUnit;
 import com.cretas.aims.service.unit.ProductUnitConversionService;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitNormalizationResult;
+import com.cretas.aims.service.workflow.WorkflowUnitReviewService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,6 +28,7 @@ public class ProductUnitConversionServiceImpl implements ProductUnitConversionSe
     private final ProductUnitConversionRepository repository;
     private final ProductTypeRepository productTypeRepository;
     private final UnitContractService unitContractService;
+    private final WorkflowUnitReviewService workflowUnitReviewService;
 
     @Override
     @Transactional(readOnly = true)
@@ -50,6 +52,7 @@ public class ProductUnitConversionServiceImpl implements ProductUnitConversionSe
         if (isLegacyNetContent(product, entity) && isEffectiveAt(entity, LocalDateTime.now())) {
             refreshLegacyNetContent(product);
         }
+        markWorkflowUnitReview(factoryId);
         return toDto(factoryId, entity);
     }
 
@@ -69,6 +72,7 @@ public class ProductUnitConversionServiceImpl implements ProductUnitConversionSe
                 || (isLegacyNetContent(product, entity) && isEffectiveAt(entity, LocalDateTime.now()))) {
             refreshLegacyNetContent(product);
         }
+        markWorkflowUnitReview(factoryId);
         return toDto(factoryId, entity);
     }
 
@@ -84,6 +88,11 @@ public class ProductUnitConversionServiceImpl implements ProductUnitConversionSe
         repository.saveAndFlush(entity);
         validateGraph(factoryId, productTypeId);
         if (previouslyProjected) refreshLegacyNetContent(product);
+        markWorkflowUnitReview(factoryId);
+    }
+
+    private void markWorkflowUnitReview(String factoryId) {
+        workflowUnitReviewService.markPublishedWorkflowsForReview(factoryId);
     }
 
     private void apply(

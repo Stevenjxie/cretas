@@ -90,10 +90,15 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
     @Transactional
     public ProductProcessWorkflowDTO publish(String factoryId, String productTypeId, Long lockVersion) {
         requireOwningProduct(factoryId, productTypeId);
-        ProductProcessWorkflow draft = find(factoryId, productTypeId, ProductProcessWorkflow.Status.DRAFT)
+        ProductProcessWorkflow candidate = find(factoryId, productTypeId, ProductProcessWorkflow.Status.DRAFT)
                 .orElseThrow(() -> new BusinessException(409, "没有可发布的 Workflow 草稿")
                         .withCode("PRODUCT_PROCESS_WORKFLOW_DRAFT_MISSING")
                         .withHint("请先保存草稿，再发布版本")
+                        .withSeverity("warning"));
+        ProductProcessWorkflow draft = repository.lockByIdAndFactoryId(candidate.getId(), factoryId)
+                .filter(row -> row.getStatus() == ProductProcessWorkflow.Status.DRAFT)
+                .orElseThrow(() -> new BusinessException(409, "Workflow 草稿状态已变化，请刷新后重试")
+                        .withCode("PRODUCT_PROCESS_WORKFLOW_CONFLICT")
                         .withSeverity("warning"));
         assertCurrentVersion(lockVersion, draft);
         ProductProcessWorkflowDTO definition = toDTO(draft);
@@ -101,6 +106,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         catalogValidator.validateForPublish(factoryId, productTypeId, definition);
         unitValidator.validateForPublish(factoryId, definition);
         draft.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
+        draft.setUnitReviewRequired(false);
         return toDTO(repository.saveAndFlush(draft));
     }
 

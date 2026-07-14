@@ -141,6 +141,9 @@ class ProductProcessWorkflowRuntimePostgresIntegrationTest {
     @MockBean private WorkProcessRepository workProcessRepository;
     @MockBean private UserRepository userRepository;
     @MockBean private ProductProcessWorkflowCatalogValidator catalogValidator;
+    @MockBean private com.cretas.aims.repository.unit.ProductUnitConversionRepository conversionRepository;
+    @MockBean private com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator unitValidator;
+    @MockBean private com.cretas.aims.service.unit.UnitContractService unitContractService;
 
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
@@ -262,6 +265,36 @@ class ProductProcessWorkflowRuntimePostgresIntegrationTest {
                     VALUES ('F', 20, 30, NULL, 'INPUT', 0, 'raw', 'RAW_MATERIAL', 'SKU', 'kg')
                     """));
             assertEquals("23502", invalidPort.getSQLState());
+
+            statement.execute("""
+                    INSERT INTO workflow_task_ports
+                      (factory_id, workflow_instance_id, task_id, workflow_port_id, direction,
+                       ordinal, material_node_id, material_kind, sku_id, unit)
+                    VALUES ('F', 20, 30, 'legacy-port', 'INPUT', 0,
+                            'raw', 'RAW_MATERIAL', 'SKU', repeat('x', 32))
+                    """);
+            ScriptUtils.executeSqlScript(connection,
+                    new ClassPathResource(
+                            "db/flyway/V20261028_63__workflow_port_unit_conversion_snapshot.sql"));
+            assertEquals(32, scalarInt(connection, """
+                    SELECT character_maximum_length FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'workflow_task_ports'
+                      AND column_name = 'unit_code'
+                    """));
+            assertEquals(32, scalarInt(connection, """
+                    SELECT length(unit_code) FROM workflow_task_ports
+                    WHERE workflow_port_id = 'legacy-port'
+                    """));
+            assertEquals(5, scalarInt(connection, """
+                    SELECT count(*) FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'workflow_task_ports'
+                      AND column_name IN (
+                        'material_primary_unit_code', 'conversion_from_unit_code',
+                        'conversion_to_unit_code', 'conversion_factor_snapshot',
+                        'port_to_primary_factor_snapshot')
+                    """));
         } finally {
             dropSchema(schema);
         }

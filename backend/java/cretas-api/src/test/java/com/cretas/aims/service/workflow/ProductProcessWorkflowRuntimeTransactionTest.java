@@ -74,6 +74,9 @@ class ProductProcessWorkflowRuntimeTransactionTest {
     @MockBean private ProductTypeRepository productTypeRepository;
     @MockBean private ProductProcessWorkflowActivationRepository activationRepository;
     @MockBean private ProductProcessWorkflowRepository workflowRepository;
+    @MockBean private com.cretas.aims.repository.unit.ProductUnitConversionRepository conversionRepository;
+    @MockBean private com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator unitValidator;
+    @MockBean private com.cretas.aims.service.unit.UnitContractService unitContractService;
 
     @Autowired private ProductProcessWorkflowRuntimeService runtimeService;
     @Autowired private ProductionWorkflowInstanceRepository instanceRepository;
@@ -125,7 +128,7 @@ class ProductProcessWorkflowRuntimeTransactionTest {
                 .thenReturn(Optional.of(batch));
         when(productTypeRepository.findByIdAndFactoryId("TX-PIG", "TX-F001"))
                 .thenReturn(Optional.of(mock(ProductType.class)));
-        when(workflowRepository.findByIdAndFactoryId(7701L, "TX-F001"))
+        when(workflowRepository.lockByIdAndFactoryId(7701L, "TX-F001"))
                 .thenReturn(Optional.of(workflow));
     }
 

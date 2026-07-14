@@ -74,7 +74,8 @@ class RawMaterialTypeCodeGenTest {
                 conversionRepository,
                 packagingRepository,
                 materialCodeSegmentRepository,
-                excelUtil);
+                excelUtil,
+                org.mockito.Mockito.mock(com.cretas.aims.service.workflow.WorkflowUnitReviewService.class));
     }
 
     // =========================================================

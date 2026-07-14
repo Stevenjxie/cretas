@@ -3,8 +3,11 @@ package com.cretas.aims.service.workflow;
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitNormalizationResult;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -16,13 +19,27 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class ProductProcessWorkflowRuntimeCompilerTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final ProductProcessWorkflowRuntimeCompiler compiler =
-            new ProductProcessWorkflowRuntimeCompiler(
-                    objectMapper, new ProductProcessWorkflowValidator());
+    private final UnitContractService unitContractService = mock(UnitContractService.class);
+    private ProductProcessWorkflowRuntimeCompiler compiler;
+
+    @BeforeEach
+    void setUpCompiler() {
+        when(unitContractService.normalize(any(), anyString())).thenAnswer(invocation -> {
+            String raw = invocation.getArgument(1);
+            String code = "公斤".equals(raw) ? "kg" : raw;
+            return new UnitNormalizationResult(raw, code, mock(com.cretas.aims.service.unit.CanonicalUnit.class));
+        });
+        compiler = new ProductProcessWorkflowRuntimeCompiler(
+                objectMapper, new ProductProcessWorkflowValidator(), unitContractService);
+    }
 
     @Test
     void compilesRepeatedProcessBranchesAndPortsWithoutCanvasFields() throws Exception {
@@ -98,6 +115,21 @@ class ProductProcessWorkflowRuntimeCompilerTest {
 
         assertEquals("conv-200g", compiled.conversionRefId());
         assertEquals(7L, compiled.conversionVersion());
+    }
+
+    @Test
+    void snapshotsCanonicalMaterialProcessAndPortUnitsInNodesJson() throws Exception {
+        ProductProcessWorkflowDTO definition = linearWorkflow();
+        materialData(definition, "raw").put("baseUnit", "公斤");
+        processData(definition, "cut").put("outputUnit", "公斤");
+        processPorts(definition, "cut").forEach(port -> port.put("unit", "公斤"));
+
+        JsonNode nodes = objectMapper.readTree(compiler.compile(definition).nodesJson());
+
+        assertEquals("kg", runtimeNode(nodes, "raw").path("data").path("baseUnit").asText());
+        assertEquals("kg", runtimeNode(nodes, "cut").path("data").path("outputUnit").asText());
+        assertTrue(runtimeNode(nodes, "cut").path("data").path("ports").findValues("unit")
+                .stream().allMatch(unit -> "kg".equals(unit.asText())));
     }
 
     @Test
@@ -251,20 +283,20 @@ class ProductProcessWorkflowRuntimeCompilerTest {
     private ProductProcessWorkflowDTO repeatedBranchedWorkflow() {
         ProductProcessWorkflowDTO definition = workflow();
         definition.setNodes(new ArrayList<>(List.of(
-                material("raw", "RAW_MATERIAL", "SKU-RAW"),
+                material("raw", "RAW_MATERIAL", "SKU-RAW", "kg"),
                 process("cook-b", "COOK", "kg", 20, true, List.of(
                         port("in-raw", "INPUT", "raw", "RAW_MATERIAL", "kg", 0),
                         port("out-cooked", "OUTPUT", "cooked-b", "SEMI_FINISHED", "kg", 0))),
-                material("cooked-b", "SEMI_FINISHED", "SKU-COOKED-B"),
+                material("cooked-b", "SEMI_FINISHED", "SKU-COOKED-B", "kg"),
                 process("cook-a", "COOK", "kg", 20, true, List.of(
                         port("in-raw", "INPUT", "raw", "RAW_MATERIAL", "kg", 0),
                         port("out-cooked", "OUTPUT", "cooked-a", "SEMI_FINISHED", "kg", 0))),
-                material("cooked-a", "SEMI_FINISHED", "SKU-COOKED-A"),
+                material("cooked-a", "SEMI_FINISHED", "SKU-COOKED-A", "kg"),
                 process("pack", "PACK", "box", 5, true, List.of(
                         port("in-a", "INPUT", "cooked-a", "SEMI_FINISHED", "kg", 0),
                         port("in-b", "INPUT", "cooked-b", "SEMI_FINISHED", "kg", 1),
                         port("out", "OUTPUT", "finished", "FINISHED_GOOD", "box", 0))),
-                material("finished", "FINISHED_GOOD", "SKU-FINISHED"))));
+                material("finished", "FINISHED_GOOD", "SKU-FINISHED", "box"))));
         definition.setEdges(new ArrayList<>(List.of(
                 edge("raw-a", "raw", "output", "cook-a", "in-raw"),
                 edge("a-out", "cook-a", "out-cooked", "cooked-a", "input"),
@@ -279,15 +311,15 @@ class ProductProcessWorkflowRuntimeCompilerTest {
     private ProductProcessWorkflowDTO linearWorkflow() {
         ProductProcessWorkflowDTO definition = workflow();
         definition.setNodes(new ArrayList<>(List.of(
-                material("raw", "RAW_MATERIAL", "SKU-RAW"),
+                material("raw", "RAW_MATERIAL", "SKU-RAW", "kg"),
                 process("cut", "CUT", "kg", 12, true, List.of(
                         port("cut-in", "INPUT", "raw", "RAW_MATERIAL", "kg", 0),
                         port("cut-out", "OUTPUT", "semi", "SEMI_FINISHED", "kg", 0))),
-                material("semi", "SEMI_FINISHED", "SKU-SEMI"),
+                material("semi", "SEMI_FINISHED", "SKU-SEMI", "kg"),
                 process("pack", "PACK", "box", 5, true, List.of(
                         port("pack-in", "INPUT", "semi", "SEMI_FINISHED", "kg", 0),
                         port("pack-out", "OUTPUT", "finished", "FINISHED_GOOD", "box", 0))),
-                material("finished", "FINISHED_GOOD", "SKU-FINISHED"))));
+                material("finished", "FINISHED_GOOD", "SKU-FINISHED", "box"))));
         definition.setEdges(new ArrayList<>(List.of(
                 edge("raw-cut", "raw", "output", "cut", "cut-in"),
                 edge("cut-out", "cut", "cut-out", "semi", "input"),
@@ -299,15 +331,15 @@ class ProductProcessWorkflowRuntimeCompilerTest {
     private ProductProcessWorkflowDTO multiInputOutputWorkflow() {
         ProductProcessWorkflowDTO definition = workflow();
         definition.setNodes(new ArrayList<>(List.of(
-                material("raw-a", "RAW_MATERIAL", "SKU-A"),
-                material("raw-b", "RAW_MATERIAL", "SKU-B"),
+                material("raw-a", "RAW_MATERIAL", "SKU-A", "kg"),
+                material("raw-b", "RAW_MATERIAL", "SKU-B", "kg"),
                 process("mix", "MIX", "kg", 30, true, List.of(
                         port("in-a", "INPUT", "raw-a", "RAW_MATERIAL", "kg", 0),
                         port("in-b", "INPUT", "raw-b", "RAW_MATERIAL", "kg", 1),
                         port("out-main", "OUTPUT", "finished", "FINISHED_GOOD", "kg", 0),
                         port("out-side", "OUTPUT", "side", "SEMI_FINISHED", "kg", 1))),
-                material("finished", "FINISHED_GOOD", "SKU-MAIN"),
-                material("side", "SEMI_FINISHED", "SKU-SIDE"))));
+                material("finished", "FINISHED_GOOD", "SKU-MAIN", "kg"),
+                material("side", "SEMI_FINISHED", "SKU-SIDE", "kg"))));
         definition.setEdges(new ArrayList<>(List.of(
                 edge("a-mix", "raw-a", "output", "mix", "in-a"),
                 edge("b-mix", "raw-b", "output", "mix", "in-b"),
@@ -322,11 +354,13 @@ class ProductProcessWorkflowRuntimeCompilerTest {
         return definition;
     }
 
-    private ProductProcessWorkflowDTO.Node material(String id, String kind, String skuId) {
+    private ProductProcessWorkflowDTO.Node material(
+            String id, String kind, String skuId, String baseUnit) {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("name", id);
         data.put("skuId", skuId);
         data.put("skuCode", "CODE-" + skuId);
+        data.put("baseUnit", baseUnit);
         return new ProductProcessWorkflowDTO.Node(
                 id, kind, new ProductProcessWorkflowDTO.Position(10D, 20D), data);
     }

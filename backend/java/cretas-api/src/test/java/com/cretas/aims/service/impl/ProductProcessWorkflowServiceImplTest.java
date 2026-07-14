@@ -77,6 +77,9 @@ class ProductProcessWorkflowServiceImplTest {
                 .thenReturn(Optional.of(owner));
         lenient().when(unitValidator.validate(any(), any()))
                 .thenReturn(new com.cretas.aims.dto.workflow.WorkflowUnitValidationResult(List.of(), List.of()));
+        lenient().when(repository.lockByIdAndFactoryId(1L, FACTORY_ID)).thenAnswer(invocation ->
+                repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                        FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT));
     }
 
     @Test
@@ -256,6 +259,8 @@ class ProductProcessWorkflowServiceImplTest {
         ProductProcessWorkflowDTO published = service.publish(FACTORY_ID, PRODUCT_ID, 3L);
 
         assertEquals(ProductProcessWorkflow.Status.PUBLISHED.name(), published.getStatus());
+        assertFalse(published.getUnitReviewRequired());
+        assertFalse(draft.getUnitReviewRequired());
         assertEquals(1, published.getVersion());
         assertEquals(4L, published.getLockVersion());
         verify(catalogValidator).validateForPublish(eq(FACTORY_ID), eq(PRODUCT_ID), any());

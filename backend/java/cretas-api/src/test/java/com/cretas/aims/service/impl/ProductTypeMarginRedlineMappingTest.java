@@ -31,7 +31,8 @@ class ProductTypeMarginRedlineMappingTest {
 
     @BeforeEach
     void setUp() {
-        service = new ProductTypeServiceImpl(productTypeRepository, new ObjectMapper(), customerRepository);
+        service = new ProductTypeServiceImpl(productTypeRepository, new ObjectMapper(), customerRepository,
+                org.mockito.Mockito.mock(com.cretas.aims.service.workflow.WorkflowUnitReviewService.class));
     }
 
     @Test

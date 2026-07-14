@@ -66,8 +66,11 @@ public class WorkflowTaskPort extends BaseEntity {
     @Column(name = "unit", nullable = false, length = 32)
     private String unit;
 
-    @Column(name = "unit_code", nullable = false, length = 20)
+    @Column(name = "unit_code", nullable = false, length = 32)
     private String unitCode;
+
+    @Column(name = "material_primary_unit_code", length = 32)
+    private String materialPrimaryUnitCode;
 
     @Column(name = "conversion_ref_id", length = 36)
     private String conversionRefId;
@@ -75,8 +78,18 @@ public class WorkflowTaskPort extends BaseEntity {
     @Column(name = "conversion_version")
     private Long conversionVersion;
 
+    @Column(name = "conversion_from_unit_code", length = 20)
+    private String conversionFromUnitCode;
+
+    @Column(name = "conversion_to_unit_code", length = 20)
+    private String conversionToUnitCode;
+
     @Column(name = "conversion_factor_snapshot", precision = 20, scale = 8)
     private BigDecimal conversionFactorSnapshot;
+
+    /** Immutable factor oriented as: quantity in port unit * factor = quantity in material primary unit. */
+    @Column(name = "port_to_primary_factor_snapshot", precision = 20, scale = 8)
+    private BigDecimal portToPrimaryFactorSnapshot;
 
     @Column(name = "required", nullable = false)
     private Boolean required = true;

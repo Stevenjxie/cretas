@@ -18,6 +18,7 @@ import com.cretas.aims.repository.MaterialPackagingHierarchyRepository;
 import com.cretas.aims.repository.material.MaterialCodeSegmentRepository;
 import com.cretas.aims.entity.MaterialPackagingHierarchy;
 import com.cretas.aims.service.RawMaterialTypeService;
+import com.cretas.aims.service.workflow.WorkflowUnitReviewService;
 import com.cretas.aims.utils.ExcelUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -55,6 +56,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
     private final MaterialPackagingHierarchyRepository packagingRepository;  // C-6: enrich getById with packaging
     private final MaterialCodeSegmentRepository materialCodeSegmentRepository; // SP8: 16位分段字典
     private final ExcelUtil excelUtil;
+    private final WorkflowUnitReviewService workflowUnitReviewService;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -168,6 +170,8 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         RawMaterialType materialType = materialTypeRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("原材料类型不存在: " + id));
 
+        String previousUnit = materialType.getUnit();
+
         if (!materialType.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权限操作此原材料类型")
                     .withHint("当前原材料类型不属于该工厂, 无法操作");
@@ -221,6 +225,10 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
 
         materialType.setUpdatedAt(LocalDateTime.now());
         materialType = materialTypeRepository.save(materialType);
+
+        if (!Objects.equals(previousUnit, materialType.getUnit())) {
+            workflowUnitReviewService.markPublishedWorkflowsForReview(factoryId);
+        }
 
         log.info("原材料类型更新成功: id={}", materialType.getId());
         return convertToDTO(materialType);

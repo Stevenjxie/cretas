@@ -12,6 +12,7 @@ import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.ProductTypeService;
+import com.cretas.aims.service.workflow.WorkflowUnitReviewService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -32,6 +33,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
@@ -49,13 +51,16 @@ public class ProductTypeServiceImpl implements ProductTypeService {
     private final ProductTypeRepository productTypeRepository;
     private final ObjectMapper objectMapper;
     private final CustomerRepository customerRepository;
+    private final WorkflowUnitReviewService workflowUnitReviewService;
 
     // Manual constructor (Lombok @RequiredArgsConstructor not working)
     public ProductTypeServiceImpl(ProductTypeRepository productTypeRepository, ObjectMapper objectMapper,
-                                  CustomerRepository customerRepository) {
+                                  CustomerRepository customerRepository,
+                                  WorkflowUnitReviewService workflowUnitReviewService) {
         this.productTypeRepository = productTypeRepository;
         this.objectMapper = objectMapper;
         this.customerRepository = customerRepository;
+        this.workflowUnitReviewService = workflowUnitReviewService;
     }
 
     /** T149 Part A: 自动生成编号撞 UNIQUE 约束时的重试次数 (并发/竞态防御). */
@@ -236,6 +241,9 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         ProductType productType = productTypeRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("产品类型不存在: " + id));
 
+        String previousUnit = productType.getUnit();
+        BigDecimal previousGramsPerUnit = productType.getGramsPerUnit();
+
         if (!productType.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权限操作此产品类型")
                     .withHint("当前产品类型不属于该工厂, 无法操作");
@@ -306,8 +314,20 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         productType.setUpdatedAt(LocalDateTime.now());
         productType = productTypeRepository.save(productType);
 
+        if (!Objects.equals(previousUnit, productType.getUnit())
+                || !sameDecimal(previousGramsPerUnit, productType.getGramsPerUnit())) {
+            workflowUnitReviewService.markPublishedWorkflowsForReview(factoryId);
+        }
+
         log.info("产品类型更新成功: id={}", productType.getId());
         return convertToDTO(productType);
+    }
+
+    private boolean sameDecimal(BigDecimal left, BigDecimal right) {
+        if (left == null || right == null) {
+            return left == right;
+        }
+        return left.compareTo(right) == 0;
     }
 
     @Override

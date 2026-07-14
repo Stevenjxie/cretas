@@ -48,6 +48,7 @@ public record CompiledProductProcessWorkflow(
             String materialKind,
             String skuId,
             String unit,
+            String materialPrimaryUnitCode,
             String conversionRefId,
             Long conversionVersion,
             BigDecimal conversionFactorSnapshot,
@@ -68,7 +69,7 @@ public record CompiledProductProcessWorkflow(
                 String conversionMode,
                 String conversionExpression) {
             this(workflowNodeId, workflowPortId, direction, ordinal, materialNodeId, materialKind,
-                    skuId, unit, null, null, null, required, conversionMode, conversionExpression);
+                    skuId, unit, unit, null, null, null, required, conversionMode, conversionExpression);
         }
     }
 }

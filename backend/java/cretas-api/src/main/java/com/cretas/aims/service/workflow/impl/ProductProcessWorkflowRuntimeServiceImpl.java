@@ -18,6 +18,7 @@ import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.repository.unit.ProductUnitConversionRepository;
 import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
+import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.workflow.CompiledProductProcessWorkflow;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowRuntimeCompiler;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowRuntimeService;
@@ -29,6 +30,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -51,6 +54,7 @@ public class ProductProcessWorkflowRuntimeServiceImpl
     private final ObjectMapper objectMapper;
     private final ProductUnitConversionRepository conversionRepository;
     private final ProductProcessWorkflowUnitValidator unitValidator;
+    private final UnitContractService unitContractService;
 
     @Autowired
     public ProductProcessWorkflowRuntimeServiceImpl(
@@ -64,7 +68,8 @@ public class ProductProcessWorkflowRuntimeServiceImpl
             ProductProcessWorkflowRuntimeCompiler compiler,
             ObjectMapper objectMapper,
             ProductUnitConversionRepository conversionRepository,
-            ProductProcessWorkflowUnitValidator unitValidator) {
+            ProductProcessWorkflowUnitValidator unitValidator,
+            UnitContractService unitContractService) {
         this.factoryRepository = factoryRepository;
         this.batchRepository = batchRepository;
         this.productTypeRepository = productTypeRepository;
@@ -76,21 +81,7 @@ public class ProductProcessWorkflowRuntimeServiceImpl
         this.objectMapper = objectMapper;
         this.conversionRepository = conversionRepository;
         this.unitValidator = unitValidator;
-    }
-
-    /** Backward-compatible constructor for isolated runtime tests. */
-    public ProductProcessWorkflowRuntimeServiceImpl(
-            FactoryRepository factoryRepository,
-            ProductionBatchRepository batchRepository,
-            ProductTypeRepository productTypeRepository,
-            ProductProcessWorkflowRepository workflowRepository,
-            ProductionWorkflowInstanceRepository instanceRepository,
-            WorkProcessTaskRepository taskRepository,
-            WorkflowTaskPortRepository portRepository,
-            ProductProcessWorkflowRuntimeCompiler compiler,
-            ObjectMapper objectMapper) {
-        this(factoryRepository, batchRepository, productTypeRepository, workflowRepository,
-                instanceRepository, taskRepository, portRepository, compiler, objectMapper, null, null);
+        this.unitContractService = unitContractService;
     }
 
     @Override
@@ -119,7 +110,7 @@ public class ProductProcessWorkflowRuntimeServiceImpl
                     "The batch Workflow selection is incomplete");
         }
         ProductProcessWorkflow workflow = workflowRepository
-                .findByIdAndFactoryId(batch.getSelectedWorkflowId(), factoryId)
+                .lockByIdAndFactoryId(batch.getSelectedWorkflowId(), factoryId)
                 .filter(candidate -> candidate.getStatus() == ProductProcessWorkflow.Status.PUBLISHED)
                 .filter(candidate -> productTypeId.equals(candidate.getProductTypeId()))
                 .filter(candidate -> batch.getSelectedWorkflowVersion()
@@ -127,11 +118,15 @@ public class ProductProcessWorkflowRuntimeServiceImpl
                 .orElseThrow(() -> conflict(
                         "WORKFLOW_BATCH_SELECTION_TARGET_INVALID",
                         "The batch no longer references the exact published factory/product version"));
-
+        if (Boolean.TRUE.equals(workflow.getUnitReviewRequired())) {
+            throw conflict(
+                    "WORKFLOW_UNIT_REVIEW_REQUIRED",
+                    "The selected Workflow unit contract changed and must be reviewed before new materialization");
+        }
         // 2B.2: 多产出已放开 — 编译产出的全部 OUTPUT 端口都会被持久化 (下方 portsFor 循环),
         // clerk 报工侧按端口分解为 N 个单产出物料化 (原 B1 single-output guard 移除)。
         ProductProcessWorkflowDTO runtimeDefinition = toDefinition(workflow);
-        if (unitValidator != null) unitValidator.validateForPublish(factoryId, runtimeDefinition);
+        unitValidator.validateForPublish(factoryId, runtimeDefinition);
         CompiledProductProcessWorkflow compiled = compiler.compile(runtimeDefinition);
         ProductionWorkflowInstance instance = instanceRepository.save(
                 ProductionWorkflowInstance.create(
@@ -291,24 +286,28 @@ public class ProductProcessWorkflowRuntimeServiceImpl
         port.setSkuId(compiled.skuId());
         port.setUnit(compiled.unit());
         port.setUnitCode(compiled.unit());
+        port.setMaterialPrimaryUnitCode(compiled.materialPrimaryUnitCode());
         port.setConversionRefId(compiled.conversionRefId());
         port.setConversionVersion(compiled.conversionVersion());
-        port.setConversionFactorSnapshot(resolveConversionFactor(factoryId, compiled));
+        ConversionSnapshot snapshot = resolveConversionSnapshot(factoryId, compiled);
+        port.setConversionFromUnitCode(snapshot.fromUnitCode());
+        port.setConversionToUnitCode(snapshot.toUnitCode());
+        port.setConversionFactorSnapshot(snapshot.storedFactor());
+        port.setPortToPrimaryFactorSnapshot(snapshot.portToPrimaryFactor());
         port.setRequired(compiled.required());
         port.setConversionMode(compiled.conversionMode());
         port.setConversionExpression(compiled.conversionExpression());
         return port;
     }
 
-    private java.math.BigDecimal resolveConversionFactor(
+    private ConversionSnapshot resolveConversionSnapshot(
             String factoryId,
             CompiledProductProcessWorkflow.CompiledPort compiled) {
-        if (compiled.conversionRefId() == null) return null;
-        if (conversionRepository == null) {
-            throw new BusinessException(500, "Workflow unit conversion repository is unavailable")
-                    .withCode("WORKFLOW_UNIT_SNAPSHOT_UNAVAILABLE")
-                    .withHint("Retry after the unit conversion service is available")
-                    .withSeverity("error");
+        if (compiled.conversionRefId() == null) {
+            if (!compiled.unit().equals(compiled.materialPrimaryUnitCode())) {
+                throw staleConversion("Workflow port unit differs from material primary unit without conversion");
+            }
+            return new ConversionSnapshot(null, null, null, BigDecimal.ONE);
         }
         var conversion = conversionRepository.findById(compiled.conversionRefId())
                 .orElseThrow(() -> new BusinessException(409, "Workflow unit conversion no longer exists")
@@ -327,7 +326,36 @@ public class ProductProcessWorkflowRuntimeServiceImpl
                     .withHint("Clone and republish the Workflow with the current conversion version")
                     .withSeverity("warning");
         }
-        return conversion.getFactor();
+        BigDecimal factor = conversion.getFactor();
+        if (factor == null || factor.signum() <= 0) {
+            throw staleConversion("Workflow unit conversion factor must be positive");
+        }
+        String from = canonicalConversionEndpoint(factoryId, conversion.getFromUnitCode());
+        String to = canonicalConversionEndpoint(factoryId, conversion.getToUnitCode());
+        BigDecimal oriented;
+        if (compiled.unit().equals(from) && compiled.materialPrimaryUnitCode().equals(to)) {
+            oriented = factor;
+        } else if (compiled.unit().equals(to) && compiled.materialPrimaryUnitCode().equals(from)) {
+            oriented = BigDecimal.ONE.divide(factor, 8, RoundingMode.HALF_UP);
+        } else {
+            throw staleConversion("Workflow unit conversion endpoints no longer match the port and material units");
+        }
+        return new ConversionSnapshot(from, to, factor, oriented);
+    }
+
+    private String canonicalConversionEndpoint(String factoryId, String rawUnit) {
+        var normalized = unitContractService.normalize(factoryId, rawUnit);
+        if (!normalized.recognized()) {
+            throw staleConversion("Workflow unit conversion endpoint is unknown or ambiguous: " + rawUnit);
+        }
+        return normalized.code();
+    }
+
+    private BusinessException staleConversion(String message) {
+        return new BusinessException(409, message)
+                .withCode("WORKFLOW_PORT_UNIT_STALE")
+                .withHint("Clone and republish the Workflow with the current conversion version")
+                .withSeverity("warning");
     }
 
     private WorkProcessTaskDTO toTaskDTO(WorkProcessTask task) {
@@ -374,9 +402,13 @@ public class ProductProcessWorkflowRuntimeServiceImpl
                 .skuId(port.getSkuId())
                 .unit(port.getUnit())
                 .unitCode(port.getUnitCode())
+                .materialPrimaryUnitCode(port.getMaterialPrimaryUnitCode())
                 .conversionRefId(port.getConversionRefId())
                 .conversionVersion(port.getConversionVersion())
+                .conversionFromUnitCode(port.getConversionFromUnitCode())
+                .conversionToUnitCode(port.getConversionToUnitCode())
                 .conversionFactorSnapshot(port.getConversionFactorSnapshot())
+                .portToPrimaryFactorSnapshot(port.getPortToPrimaryFactorSnapshot())
                 .required(port.getRequired())
                 .conversionMode(port.getConversionMode())
                 .conversionExpression(port.getConversionExpression())
@@ -395,5 +427,12 @@ public class ProductProcessWorkflowRuntimeServiceImpl
                 .withCode(code)
                 .withHint("Refresh the activation and retry with the exact published version")
                 .withSeverity("warning");
+    }
+
+    private record ConversionSnapshot(
+            String fromUnitCode,
+            String toUnitCode,
+            BigDecimal storedFactor,
+            BigDecimal portToPrimaryFactor) {
     }
 }

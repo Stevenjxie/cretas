@@ -57,7 +57,8 @@ class PackagingRdFinishGapTest {
     @BeforeEach
     void setUp() {
         svc = new RawMaterialTypeServiceImpl(
-                repo, batchRepo, convRepo, packRepo, codeSegRepo, excelUtil);
+                repo, batchRepo, convRepo, packRepo, codeSegRepo, excelUtil,
+                org.mockito.Mockito.mock(com.cretas.aims.service.workflow.WorkflowUnitReviewService.class));
     }
 
     // ─────────────────────────── helpers ───────────────────────────

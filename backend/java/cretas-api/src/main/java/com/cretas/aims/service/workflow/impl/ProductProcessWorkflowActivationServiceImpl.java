@@ -50,6 +50,9 @@ public class ProductProcessWorkflowActivationServiceImpl
         if (workflow.getStatus() != ProductProcessWorkflow.Status.PUBLISHED) {
             throw notPublished();
         }
+        if (Boolean.TRUE.equals(workflow.getUnitReviewRequired())) {
+            throw unitReviewRequired();
+        }
 
         ProductProcessWorkflowDTO definition = toDefinition(workflow);
         validator.validateForPublish(definition);
@@ -177,6 +180,13 @@ public class ProductProcessWorkflowActivationServiceImpl
         return new BusinessException(400, "Workflow activation does not belong to this factory and product")
                 .withCode("WORKFLOW_ACTIVATION_PRODUCT_MISMATCH")
                 .withHint("Reload workflows for the current factory and product, then retry")
+                .withSeverity("warning");
+    }
+
+    private BusinessException unitReviewRequired() {
+        return new BusinessException(409, "Workflow unit contract requires review")
+                .withCode("WORKFLOW_UNIT_REVIEW_REQUIRED")
+                .withHint("Open this Workflow, reconcile its units and conversions, then publish a new version")
                 .withSeverity("warning");
     }
 

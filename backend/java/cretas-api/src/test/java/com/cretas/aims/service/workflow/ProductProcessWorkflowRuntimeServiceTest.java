@@ -19,6 +19,9 @@ import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.repository.unit.ProductUnitConversionRepository;
 import com.cretas.aims.entity.unit.ProductUnitConversion;
 import com.cretas.aims.service.workflow.impl.ProductProcessWorkflowRuntimeServiceImpl;
+import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitNormalizationResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -58,6 +61,8 @@ class ProductProcessWorkflowRuntimeServiceTest {
     @Mock private WorkflowTaskPortRepository portRepository;
     @Mock private ProductProcessWorkflowRuntimeCompiler compiler;
     @Mock private ProductUnitConversionRepository conversionRepository;
+    @Mock private ProductProcessWorkflowUnitValidator unitValidator;
+    @Mock private UnitContractService unitContractService;
 
     private ProductProcessWorkflowRuntimeService service;
     private final List<ProductionWorkflowInstance> savedInstances = new ArrayList<>();
@@ -77,7 +82,13 @@ class ProductProcessWorkflowRuntimeServiceTest {
                 compiler,
                 new ObjectMapper(),
                 conversionRepository,
-                null);
+                unitValidator,
+                unitContractService);
+        org.mockito.Mockito.lenient().when(unitContractService.normalize(any(), any())).thenAnswer(invocation -> {
+            String raw = invocation.getArgument(1);
+            return new UnitNormalizationResult(raw, raw,
+                    org.mockito.Mockito.mock(com.cretas.aims.service.unit.CanonicalUnit.class));
+        });
     }
 
     @Test
@@ -116,6 +127,8 @@ class ProductProcessWorkflowRuntimeServiceTest {
         conversion.setFactoryId("F006");
         conversion.setProductTypeId("SKU-trim-1-in");
         conversion.setVersion(7L);
+        conversion.setFromUnitCode("pcs");
+        conversion.setToUnitCode("g");
         conversion.setFactor(new java.math.BigDecimal("200"));
         conversion.setEffectiveFrom(java.time.LocalDateTime.now().minusDays(1));
         when(conversionRepository.findById("conv-200g")).thenReturn(Optional.of(conversion));
@@ -123,7 +136,7 @@ class ProductProcessWorkflowRuntimeServiceTest {
         var first = base.ports().getFirst();
         var converted = new CompiledProductProcessWorkflow.CompiledPort(
                 first.workflowNodeId(), first.workflowPortId(), first.direction(), first.ordinal(),
-                first.materialNodeId(), first.materialKind(), first.skuId(), "pcs",
+                first.materialNodeId(), first.materialKind(), first.skuId(), "pcs", "g",
                 "conv-200g", 7L, null, first.required(), first.conversionMode(), first.conversionExpression());
         List<CompiledProductProcessWorkflow.CompiledPort> ports = new ArrayList<>(base.ports());
         ports.set(0, converted);
@@ -138,7 +151,44 @@ class ProductProcessWorkflowRuntimeServiceTest {
         assertEquals("pcs", saved.getUnitCode());
         assertEquals("conv-200g", saved.getConversionRefId());
         assertEquals(7L, saved.getConversionVersion());
+        assertEquals("g", saved.getMaterialPrimaryUnitCode());
+        assertEquals("pcs", saved.getConversionFromUnitCode());
+        assertEquals("g", saved.getConversionToUnitCode());
         assertEquals(0, saved.getConversionFactorSnapshot().compareTo(new java.math.BigDecimal("200")));
+        assertEquals(0, saved.getPortToPrimaryFactorSnapshot().compareTo(new java.math.BigDecimal("200")));
+    }
+
+    @Test
+    void snapshotsReverseConversionAsPortToPrimaryFactor() {
+        givenValidOwnedBatch();
+        givenEnabledPublishedWorkflow();
+        givenFreshRuntimePersistence(true);
+        ProductUnitConversion conversion = new ProductUnitConversion();
+        conversion.setId("conv-g-pcs");
+        conversion.setFactoryId("F006");
+        conversion.setProductTypeId("SKU-trim-1-in");
+        conversion.setVersion(4L);
+        conversion.setFromUnitCode("g");
+        conversion.setToUnitCode("pcs");
+        conversion.setFactor(new java.math.BigDecimal("0.005"));
+        conversion.setEffectiveFrom(java.time.LocalDateTime.now().minusDays(1));
+        when(conversionRepository.findById("conv-g-pcs")).thenReturn(Optional.of(conversion));
+        CompiledProductProcessWorkflow base = compiledWorkflow();
+        var first = base.ports().getFirst();
+        var converted = new CompiledProductProcessWorkflow.CompiledPort(
+                first.workflowNodeId(), first.workflowPortId(), first.direction(), first.ordinal(),
+                first.materialNodeId(), first.materialKind(), first.skuId(), "pcs", "g",
+                "conv-g-pcs", 4L, null, first.required(), first.conversionMode(), first.conversionExpression());
+        List<CompiledProductProcessWorkflow.CompiledPort> ports = new ArrayList<>(base.ports());
+        ports.set(0, converted);
+        when(compiler.compile(any())).thenReturn(new CompiledProductProcessWorkflow(
+                base.nodesJson(), base.edgesJson(), base.processTasks(), ports));
+
+        service.materializeIfActive("F006", 901L, "PT-PIG");
+
+        WorkflowTaskPort saved = savedPorts.getFirst();
+        assertEquals(0, saved.getConversionFactorSnapshot().compareTo(new java.math.BigDecimal("0.005")));
+        assertEquals(0, saved.getPortToPrimaryFactorSnapshot().compareTo(new java.math.BigDecimal("200.00000000")));
     }
 
     @Test
@@ -150,6 +200,22 @@ class ProductProcessWorkflowRuntimeServiceTest {
 
         verifyNoInteractions(batchRepository, productTypeRepository, instanceRepository,
                 activationRepository, workflowRepository, compiler, taskRepository, portRepository);
+    }
+
+    @Test
+    void unitReviewRequiredIsRejectedAfterTakingWorkflowAdmissionLock() {
+        givenValidOwnedBatch();
+        ProductProcessWorkflow workflow = workflow();
+        workflow.setUnitReviewRequired(true);
+        givenActivationTarget(workflow);
+
+        com.cretas.aims.exception.BusinessException error = assertThrows(
+                com.cretas.aims.exception.BusinessException.class,
+                () -> service.materializeIfActive("F006", 901L, "PT-PIG"));
+
+        assertEquals("WORKFLOW_UNIT_REVIEW_REQUIRED", error.getErrorCode());
+        verify(workflowRepository).lockByIdAndFactoryId(44L, "F006");
+        verifyNoInteractions(compiler, taskRepository, portRepository);
     }
 
     @Test
@@ -327,7 +393,7 @@ class ProductProcessWorkflowRuntimeServiceTest {
         changed.setDefinitionVersion(4);
         when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
                 .thenReturn(Optional.empty());
-        when(workflowRepository.findByIdAndFactoryId(44L, "F006"))
+        when(workflowRepository.lockByIdAndFactoryId(44L, "F006"))
                 .thenReturn(Optional.of(changed));
 
         assertThrows(RuntimeException.class,
@@ -410,14 +476,14 @@ class ProductProcessWorkflowRuntimeServiceTest {
     private void givenEnabledPublishedWorkflow() {
         when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
                 .thenReturn(Optional.empty());
-        when(workflowRepository.findByIdAndFactoryId(44L, "F006"))
+        when(workflowRepository.lockByIdAndFactoryId(44L, "F006"))
                 .thenReturn(Optional.of(workflow()));
     }
 
     private void givenActivationTarget(ProductProcessWorkflow workflow) {
         when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
                 .thenReturn(Optional.empty());
-        when(workflowRepository.findByIdAndFactoryId(44L, "F006"))
+        when(workflowRepository.lockByIdAndFactoryId(44L, "F006"))
                 .thenReturn(Optional.of(workflow));
     }
 
