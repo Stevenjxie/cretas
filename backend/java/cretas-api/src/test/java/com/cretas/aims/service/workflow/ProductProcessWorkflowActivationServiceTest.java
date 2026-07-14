@@ -8,6 +8,7 @@ import com.cretas.aims.repository.ProductProcessWorkflowActivationRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
+import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,6 +32,7 @@ class ProductProcessWorkflowActivationServiceTest {
     @Mock private ProductProcessWorkflowRepository workflowRepository;
     @Mock private ProductProcessWorkflowValidator validator;
     @Mock private ProductProcessWorkflowCatalogValidator catalogValidator;
+    @Mock private ProductProcessWorkflowUnitValidator unitValidator;
     @Mock private ProductProcessWorkflowRuntimeCompiler compiler;
 
     private ProductProcessWorkflowActivationService service;
@@ -38,7 +40,7 @@ class ProductProcessWorkflowActivationServiceTest {
     @BeforeEach
     void setUp() {
         service = new com.cretas.aims.service.workflow.impl.ProductProcessWorkflowActivationServiceImpl(
-                activationRepository, workflowRepository, validator, catalogValidator, compiler,
+                activationRepository, workflowRepository, validator, catalogValidator, unitValidator, compiler,
                 new ObjectMapper());
     }
 

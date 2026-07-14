@@ -9,6 +9,7 @@ import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.impl.ProductProcessWorkflowServiceImpl;
 import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
+import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
@@ -128,6 +129,7 @@ class ProductProcessWorkflowPostgresIntegrationTest {
                 objectMapper,
                 new ProductProcessWorkflowValidator(),
                 catalogValidator,
+                mock(ProductProcessWorkflowUnitValidator.class),
                 productTypeRepository);
 
         mockMvc = MockMvcBuilders

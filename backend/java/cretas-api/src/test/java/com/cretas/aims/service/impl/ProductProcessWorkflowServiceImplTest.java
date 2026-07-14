@@ -10,6 +10,7 @@ import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
+import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -57,6 +58,9 @@ class ProductProcessWorkflowServiceImplTest {
     @Mock
     private ProductTypeRepository productTypeRepository;
 
+    @Mock
+    private ProductProcessWorkflowUnitValidator unitValidator;
+
     private ProductProcessWorkflowValidator validator;
     private ProductProcessWorkflowServiceImpl service;
 
@@ -65,12 +69,14 @@ class ProductProcessWorkflowServiceImplTest {
         ObjectMapper objectMapper = new ObjectMapper();
         validator = new ProductProcessWorkflowValidator();
         service = new ProductProcessWorkflowServiceImpl(
-                repository, activationRepository, objectMapper, validator, catalogValidator, productTypeRepository);
+                repository, activationRepository, objectMapper, validator, catalogValidator, unitValidator, productTypeRepository);
         ProductType owner = new ProductType();
         owner.setId(PRODUCT_ID);
         owner.setFactoryId(FACTORY_ID);
         lenient().when(productTypeRepository.findByIdAndFactoryId(PRODUCT_ID, FACTORY_ID))
                 .thenReturn(Optional.of(owner));
+        lenient().when(unitValidator.validate(any(), any()))
+                .thenReturn(new com.cretas.aims.dto.workflow.WorkflowUnitValidationResult(List.of(), List.of()));
     }
 
     @Test
@@ -354,7 +360,7 @@ class ProductProcessWorkflowServiceImplTest {
         ProductProcessWorkflowCatalogValidator realCatalogValidator =
                 new ProductProcessWorkflowCatalogValidator(workProcessRepository, productTypeRepository);
         ProductProcessWorkflowServiceImpl realService = new ProductProcessWorkflowServiceImpl(
-                repository, activationRepository, new ObjectMapper(), validator, realCatalogValidator, productTypeRepository);
+                repository, activationRepository, new ObjectMapper(), validator, realCatalogValidator, unitValidator, productTypeRepository);
 
         BusinessException error = assertThrows(BusinessException.class,
                 () -> realService.publish(FACTORY_ID, PRODUCT_ID, 3L));

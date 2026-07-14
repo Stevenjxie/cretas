@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import com.cretas.aims.dto.workflow.WorkflowUnitIssueDTO;
 
 /**
  * 产品工序 Workflow 图定义。
@@ -31,6 +32,8 @@ public class ProductProcessWorkflowDTO {
     private String status;
     private Integer version;
     private Long lockVersion;
+
+    private List<WorkflowUnitIssueDTO> unitWarnings = new ArrayList<>();
 
     @Valid
     @NotNull

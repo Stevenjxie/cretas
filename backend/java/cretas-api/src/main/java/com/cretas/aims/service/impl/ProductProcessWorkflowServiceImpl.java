@@ -14,6 +14,7 @@ import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.ProductProcessWorkflowService;
 import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
+import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,6 +32,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
     private final ObjectMapper objectMapper;
     private final ProductProcessWorkflowValidator validator;
     private final ProductProcessWorkflowCatalogValidator catalogValidator;
+    private final ProductProcessWorkflowUnitValidator unitValidator;
     private final ProductTypeRepository productTypeRepository;
 
     @Override
@@ -40,9 +42,9 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
             String productTypeId) {
         Optional<ProductProcessWorkflow> draft = find(factoryId, productTypeId, ProductProcessWorkflow.Status.DRAFT);
         if (draft.isPresent()) {
-            return draft.map(this::toDTO);
+            return draft.map(this::toDTOWithUnitWarnings);
         }
-        return find(factoryId, productTypeId, ProductProcessWorkflow.Status.PUBLISHED).map(this::toDTO);
+        return find(factoryId, productTypeId, ProductProcessWorkflow.Status.PUBLISHED).map(this::toDTOWithUnitWarnings);
     }
 
     @Override
@@ -53,6 +55,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
             ProductProcessWorkflowDTO definition) {
         requireOwningProduct(factoryId, productTypeId);
         validator.validateForDraft(definition);
+        definition.setUnitWarnings(unitValidator.validate(factoryId, definition).errors());
         Optional<ProductProcessWorkflow> existingDraft = find(
                 factoryId, productTypeId, ProductProcessWorkflow.Status.DRAFT);
 
@@ -75,7 +78,9 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         entity.setNodesJson(writeJson(definition.getNodes()));
         entity.setEdgesJson(writeJson(definition.getEdges()));
         entity.setViewportJson(writeJson(definition.getViewport()));
-        return toDTO(repository.saveAndFlush(entity));
+        ProductProcessWorkflowDTO saved = toDTO(repository.saveAndFlush(entity));
+        saved.setUnitWarnings(definition.getUnitWarnings());
+        return saved;
     }
 
     @Override
@@ -91,6 +96,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         ProductProcessWorkflowDTO definition = toDTO(draft);
         validator.validateForPublish(definition);
         catalogValidator.validateForPublish(factoryId, productTypeId, definition);
+        unitValidator.validateForPublish(factoryId, definition);
         draft.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
         return toDTO(repository.saveAndFlush(draft));
     }
@@ -183,6 +189,12 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
                 entity.getViewportJson(),
                 new TypeReference<ProductProcessWorkflowDTO.Viewport>() {},
                 "viewport"));
+        return dto;
+    }
+
+    private ProductProcessWorkflowDTO toDTOWithUnitWarnings(ProductProcessWorkflow entity) {
+        ProductProcessWorkflowDTO dto = toDTO(entity);
+        dto.setUnitWarnings(unitValidator.validate(entity.getFactoryId(), dto).errors());
         return dto;
     }
 

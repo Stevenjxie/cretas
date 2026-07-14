@@ -9,6 +9,7 @@ import com.cretas.aims.repository.ProductProcessWorkflowActivationRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
+import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
 import com.cretas.aims.service.workflow.CompiledProductProcessWorkflow;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowActivationService;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowRuntimeCompiler;
@@ -34,6 +35,7 @@ public class ProductProcessWorkflowActivationServiceImpl
     private final ProductProcessWorkflowRepository workflowRepository;
     private final ProductProcessWorkflowValidator validator;
     private final ProductProcessWorkflowCatalogValidator catalogValidator;
+    private final ProductProcessWorkflowUnitValidator unitValidator;
     private final ProductProcessWorkflowRuntimeCompiler compiler;
     private final ObjectMapper objectMapper;
 
@@ -52,6 +54,7 @@ public class ProductProcessWorkflowActivationServiceImpl
         ProductProcessWorkflowDTO definition = toDefinition(workflow);
         validator.validateForPublish(definition);
         catalogValidator.validateForPublish(factoryId, workflow.getProductTypeId(), definition);
+        unitValidator.validateForPublish(factoryId, definition);
 
         // 2B.2: 多产出已放开 (原 B1 single-output guard 移除)。仍编译一次校验发布版本可编译,
         // 编译失败即拒绝激活 (禁止降级处理)。
