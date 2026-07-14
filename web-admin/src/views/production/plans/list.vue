@@ -1286,6 +1286,10 @@ const completePlannedQuantity = computed(() => {
   if (!r) return 0;
   return Number(r.plannedQuantity || 0);
 });
+const completePlannedUnit = computed(() => {
+  const r = completeRow.value;
+  return r?.plannedUnit ? String(r.plannedUnit) : null;
+});
 const completeActualQuantity = computed(() => Number(completeForm.value.actualQuantity || 0));
 const completeSemiFinishedOutputQuantity = computed(() => Number(completeForm.value.semiFinishedOutputQuantity || 0));
 const completeIsOverPlan = computed(() => {
@@ -1315,7 +1319,7 @@ function materialBatchAvailable(batch: MaterialBatchOption | null): number {
 }
 
 function materialBatchUnit(batch: MaterialBatchOption | null): string {
-  return String(batch?.quantityUnit || batch?.unit || 'kg');
+  return String(batch?.quantityUnit || batch?.unit || '（单位未配置）');
 }
 
 function materialBatchLabel(batch: MaterialBatchOption): string {
@@ -2618,7 +2622,7 @@ function getStatusText(status: string) {
 // 明确区分"没有这个字段"(—) 与"真实数量为 0"(理论不会出现于 UI，但同样降级显示避免误读)。
 function formatPlannedQuantity(v: number | null | undefined, unit?: string | null): string {
   if (v == null || v === 0) return '—';
-  return unit ? `${v} ${unit}` : String(v);
+  return unit ? `${v} ${unit}` : `${v}（单位未配置）`;
 }
 
 // raw-centric 多SKU (2026-07-13): 计划的 targetFinishedGoodIds → 产品名 (列表/详情共用)。
@@ -2979,7 +2983,7 @@ function handleAiFill(params: TableRow) {
         <el-table-column prop="processName" label="工序" width="120" show-overflow-tooltip />
         <el-table-column prop="batchDate" label="批次日期" width="120" />
         <el-table-column label="计划成品" width="110" align="right">
-          <template #default="{ row }">{{ formatPlannedQuantity(row.plannedQuantity, row.plannedUnit || 'kg') }}</template>
+          <template #default="{ row }">{{ formatPlannedQuantity(row.plannedQuantity, row.plannedUnit) }}</template>
         </el-table-column>
         <el-table-column prop="actualQuantity" label="实际数量" width="100" align="right" />
         <el-table-column prop="plannedDate" label="计划日期" width="120" />
@@ -3271,7 +3275,7 @@ function handleAiFill(params: TableRow) {
             </el-descriptions-item>
             <el-descriptions-item label="客户">{{ viewPlan.sourceCustomerName || '-' }}</el-descriptions-item>
             <el-descriptions-item label="指派主管">{{ viewPlan.assignedSupervisorName || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="计划成品">{{ formatPlannedQuantity(viewPlan.plannedQuantity, viewPlan.plannedUnit || 'kg') }}</el-descriptions-item>
+            <el-descriptions-item label="计划成品">{{ formatPlannedQuantity(viewPlan.plannedQuantity, viewPlan.plannedUnit) }}</el-descriptions-item>
             <el-descriptions-item label="实际数量">{{ viewPlan.actualQuantity || '-' }}</el-descriptions-item>
             <el-descriptions-item label="状态">
               <el-tag :type="getStatusType(viewPlan.status as string)" size="small">{{ getStatusText(viewPlan.status as string) }}</el-tag>
@@ -3651,7 +3655,7 @@ function handleAiFill(params: TableRow) {
         <!-- 存货生产(SAFETY_STOCK): 无计划数量, 按实际小结累计 → 同样隐藏 -->
         <el-form-item
           v-if="planForm.sourceType !== 'CUSTOMER_ORDER' && planForm.sourceType !== 'SAFETY_STOCK'"
-          :label="hasResolvedWorkflowCandidate ? `计划投料数量（${resolvedOwnerCandidate?.ownerUnit || 'kg'}）` : '计划成品数量'"
+          :label="hasResolvedWorkflowCandidate ? `计划投料数量（${resolvedOwnerCandidate?.ownerUnit || '单位未配置'}）` : '计划成品数量'"
           required
         >
           <el-input-number v-model="planForm.plannedQuantity" :min="1" style="width: 100%" />
@@ -3669,7 +3673,7 @@ function handleAiFill(params: TableRow) {
              非 workflow 的存货生产仍按实际小结累计不填数量 (不回归)。 -->
         <el-form-item
           v-if="planForm.sourceType === 'SAFETY_STOCK' && (hasActiveWorkflow || hasResolvedWorkflowCandidate)"
-          :label="`计划投料数量（${resolvedOwnerCandidate?.ownerUnit || 'kg'}）`"
+          :label="`计划投料数量（${resolvedOwnerCandidate?.ownerUnit || '单位未配置'}）`"
           required
         >
           <el-input-number v-model="planForm.plannedQuantity" :min="1" style="width: 100%" />
@@ -3797,7 +3801,7 @@ function handleAiFill(params: TableRow) {
           </div>
           <div>
             <div class="settlement-context-label">计划数量</div>
-            <div class="settlement-context-value">{{ formatPlannedQuantity(completePlannedQuantity) }}</div>
+            <div class="settlement-context-value">{{ formatPlannedQuantity(completePlannedQuantity, completePlannedUnit) }}</div>
           </div>
         </div>
         <el-divider content-position="left">产出核对</el-divider>
@@ -3810,7 +3814,7 @@ function handleAiFill(params: TableRow) {
           />
           <!-- 防呆 Rule 1: 有计划数量时软性参考提示; 存货生产等无计划数量 (=0/null) 跳过, 不误导 -->
           <div v-if="completePlannedQuantity > 0" class="settlement-help">
-            参考: 计划 {{ completePlannedQuantity }} kg。计划数量只是参考，超出时系统预警并要求原因，不硬拦。
+            参考: 计划 {{ formatPlannedQuantity(completePlannedQuantity, completePlannedUnit) }}。计划数量只是参考，超出时系统预警并要求原因，不硬拦。
           </div>
         </el-form-item>
         <el-alert
@@ -4520,7 +4524,7 @@ function handleAiFill(params: TableRow) {
         :product-type-id="String(entryRow?.productTypeId || '')"
         :product-name="entryRow?.productTypeName || entryRow?.productName"
         :planned-quantity="Number(entryRow?.plannedQuantity || 0)"
-        :planned-unit="entryRow?.plannedUnit || 'kg'"
+        :planned-unit="entryRow?.plannedUnit || null"
         @submitted="onEntrySubmitted"
       />
     </el-drawer>

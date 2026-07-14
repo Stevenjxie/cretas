@@ -15,6 +15,13 @@ describe('processSheetUnits', () => {
       .toEqual({ inputUnit: '只', outputUnit: '袋' });
   });
 
+  it.each([
+    [{ defaultUnit: null, defaultOutputUnit: 'g' }, '投入单位'],
+    [{ defaultUnit: 'g', defaultOutputUnit: null }, '产出单位'],
+  ])('legacy process units fail closed when %s unit is missing', (config, expected) => {
+    expect(() => resolveProcessSheetUnits(config)).toThrow(expected);
+  });
+
   it('uses workflow port units as the sole authority', () => {
     expect(resolveWorkflowProcessSheetUnits({
       processName: '装件',
@@ -76,6 +83,13 @@ describe('processSheetUnits', () => {
   it('labels plan quantity as finished-product output and keeps its explicit unit', () => {
     expect(formatPlannedOutput(10, 'kg')).toBe('计划成品 10 kg');
     expect(formatPlannedOutput(10, '包')).toBe('计划成品 10 包');
+  });
+
+  it('renders missing units as unconfigured instead of kilograms', () => {
+    expect(formatPlannedOutput(10, null)).toContain('未配置');
+    expect(formatProcessOutput(10, null)).toContain('未配置');
+    expect(formatSourceFeedSummary(2, 10, null)).toContain('未配置');
+    expect(formatFeedPlaceholder(null)).toContain('未配置');
   });
 
   it('renders process summaries and feed prompts using configured units', () => {

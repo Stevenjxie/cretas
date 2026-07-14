@@ -319,7 +319,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * from a sales-order line.
      */
     static String resolvePlannedOutputUnit(String productUnit) {
-        return productUnit != null && !productUnit.isBlank() ? productUnit.trim() : "kg";
+        if (productUnit == null || productUnit.isBlank()) {
+            throw new BusinessException(422, "产品主单位未配置，无法创建生产计划")
+                    .withCode("PRODUCTION_UNIT_NOT_CONFIGURED")
+                    .withHint("请先在成品 SKU 中配置主单位，再创建或复制生产计划");
+        }
+        return productUnit.trim();
     }
 
     private String resolvePlannedOutputUnitForProduct(String productTypeId) {
@@ -1281,7 +1286,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // 复制业务字段
         newPlan.setProductTypeId(source.getProductTypeId());
         newPlan.setPlannedQuantity(source.getPlannedQuantity());
-        newPlan.setPlannedUnit(source.getPlannedUnit() != null ? source.getPlannedUnit() : "kg");
+        newPlan.setPlannedUnit(resolvePlannedOutputUnitForProduct(source.getProductTypeId()));
         newPlan.setPlannedDate(source.getPlannedDate());
         newPlan.setExpectedCompletionDate(source.getExpectedCompletionDate());
         newPlan.setPlanType(source.getPlanType());
@@ -2062,13 +2067,20 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         "rawMaterialConsumptions"));
                 continue;
             }
+            String quantityUnit = trimToNull(batch.getQuantityUnit());
+            if (quantityUnit == null) {
+                issues.add(issue("RAW_BATCH_UNIT_MISSING",
+                        "原料批次 " + safeBatchRef(batch) + " 未配置计量单位, 未自动带入; 请先修正批次单位。",
+                        "rawMaterialConsumptions"));
+                continue;
+            }
             lines.add(ProductionSettlementRequest.ConsumptionLine.builder()
                     .materialBatchId(batchId)
                     .productTypeId(productTypeId)
                     .materialTypeId(trimToNull(batch.getMaterialTypeId()))
                     .batchNumber(trimToNull(batch.getBatchNumber()))
                     .quantity(qty)
-                    .unit(firstNonBlank(batch.getQuantityUnit(), "kg"))
+                    .unit(quantityUnit)
                     .warehouseId(trimToNull(batch.getWarehouseId()))
                     .note("自动带入自逐道电子表格")
                     .build());
@@ -4095,7 +4107,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .productName(productName)
                 .plannedQuantity(plan.getPlannedQuantity())
                 .quantity(plan.getPlannedQuantity())
-                .unit("kg")
+                .unit(requireProductionUnit(plan.getPlannedUnit(), "生产计划 " + plan.getPlanNumber()))
                 // GAP 3/4 (F006): 转批次=开始生产, 批次直接 IN_PROGRESS + 设 startTime,
                 // 使逐道报工 YieldBatchSelect (筛 status=IN_PROGRESS) 立刻可见.
                 .status(ProductionBatchStatus.IN_PROGRESS)
@@ -4179,7 +4191,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .plannedQuantity(firstPositive(workTask.getPlannedQuantity(), batch.getPlannedQuantity(), batch.getQuantity()))
                     .completedQuantity(BigDecimal.ZERO)
                     .pendingQuantity(BigDecimal.ZERO)
-                    .unit(firstNonBlank(workTask.getOutputUnit(), workTask.getPlannedUnit(), batch.getUnit(), "kg"))
+                    .unit(requireProductionUnit(
+                            firstNonBlank(workTask.getOutputUnit(), workTask.getPlannedUnit(), batch.getUnit()),
+                            "工序任务 " + workTask.getId()))
                     .startDate(LocalDate.now())
                     .expectedEndDate(plan.getExpectedCompletionDate())
                     .status(ProcessTaskStatus.PENDING)
@@ -4197,6 +4211,15 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             }
         }
         return BigDecimal.ONE;
+    }
+
+    private static String requireProductionUnit(String unit, String context) {
+        if (unit == null || unit.isBlank()) {
+            throw new BusinessException(422, context + " 缺少单位，不能生成生产任务")
+                    .withCode("PRODUCTION_UNIT_NOT_CONFIGURED")
+                    .withHint("请修复产品、Workflow 或工序的单位配置后重试");
+        }
+        return unit.trim();
     }
 
     private static String firstNonBlank(String... values) {

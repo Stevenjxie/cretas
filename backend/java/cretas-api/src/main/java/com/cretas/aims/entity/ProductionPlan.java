@@ -57,7 +57,7 @@ public class ProductionPlan extends BaseEntity {
     private BigDecimal plannedQuantity;
     /** Unit snapshot of planned finished-product output quantity. */
     @Column(name = "planned_unit", nullable = false, length = 32)
-    private String plannedUnit = "kg";
+    private String plannedUnit;
     @Column(name = "actual_quantity", precision = 10, scale = 2)
     private BigDecimal actualQuantity;
     // W-07 fix (Round 9): restored as nullable column (was commented out - DB didn't have it,

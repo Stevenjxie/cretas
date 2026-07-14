@@ -7,6 +7,7 @@ type UnitConfig = {
   unitOverride?: string | null;
   defaultUnit?: string | null;
   defaultOutputUnit?: string | null;
+  /** @deprecated Kept only for call-site compatibility; fail-closed resolution ignores it. */
   fallbackOutputUnit?: string;
 };
 
@@ -33,10 +34,10 @@ function nonBlank(value: string | null | undefined): string | undefined {
 }
 
 export function resolveProcessSheetUnits(config: UnitConfig): ProcessSheetUnits {
-  const inputUnit = nonBlank(config.unitOverride) ?? nonBlank(config.defaultUnit) ?? 'kg';
-  const outputUnit = nonBlank(config.defaultOutputUnit)
-    ?? nonBlank(config.fallbackOutputUnit)
-    ?? inputUnit;
+  const inputUnit = nonBlank(config.unitOverride) ?? nonBlank(config.defaultUnit);
+  if (!inputUnit) throw new Error('legacy 工序投入单位未配置');
+  const outputUnit = nonBlank(config.defaultOutputUnit);
+  if (!outputUnit) throw new Error('legacy 工序产出单位未配置');
   return { inputUnit, outputUnit };
 }
 
@@ -80,22 +81,22 @@ export function resolveWorkflowProcessSheetUnits(config: WorkflowUnitConfig): Pr
 
 export function formatPlannedOutput(quantity: number | null | undefined, unit: string | null | undefined): string {
   if (quantity == null || quantity === 0) return '计划成品 —';
-  const normalizedUnit = nonBlank(unit) ?? 'kg';
+  const normalizedUnit = nonBlank(unit) ?? '（单位未配置）';
   return `计划成品 ${quantity} ${normalizedUnit}`;
 }
 
 export function formatProcessOutput(quantity: number | null | undefined, unit: string | null | undefined): string {
   if (quantity == null) return '—';
-  return `产出 ${Number(quantity).toFixed(2)} ${nonBlank(unit) ?? 'kg'}`;
+  return `产出 ${Number(quantity).toFixed(2)} ${nonBlank(unit) ?? '（单位未配置）'}`;
 }
 
 export function formatSourceFeedSummary(sourceCount: number, quantity: number, unit: string | null | undefined): string {
   if (sourceCount === 0) return '+ 来源批';
-  return `${sourceCount}批 · ${Number(quantity).toFixed(1)}${nonBlank(unit) ?? 'kg'}`;
+  return `${sourceCount}批 · ${Number(quantity).toFixed(1)}${nonBlank(unit) ?? '（单位未配置）'}`;
 }
 
 export function formatFeedPlaceholder(unit: string | null | undefined): string {
-  return `投料${nonBlank(unit) ?? 'kg'}`;
+  return `投料${nonBlank(unit) ?? '（单位未配置）'}`;
 }
 
 export function withProcessSheetUnits<T extends LabelColumn>(

@@ -9,7 +9,7 @@ import { PROCESS_SHEET_CONFIG } from './PROCESS_SHEET_CONFIG';
 import ProcessDataTable from './ProcessDataTable.vue';
 import InventoryTable from './InventoryTable.vue';
 import YieldCardTable from './YieldCardTable.vue';
-import { formatPlannedOutput, resolveWorkflowProcessSheetUnits } from '@/utils/processSheetUnits';
+import { formatPlannedOutput, resolveProcessSheetUnits, resolveWorkflowProcessSheetUnits } from '@/utils/processSheetUnits';
 
 // -------------------------------------------------------------------------
 // View mode: 'grid' (电子表格) | 'card' (卡片)
@@ -64,7 +64,7 @@ type ProcEntry = {
   customFieldSchema: ProcessSheetCustomFieldDef[] | null;
   /** 5988: 本工序是否允许成品库存作投料来源 (透传给 ProcessDataTable 的 allowFinishedGoodsSource prop)。 */
   allowFinishedGoodsSource: boolean;
-  /** 本工序配置的投入/产出单位。产出单位为空时由表格沿用投入单位。 */
+  /** 本工序配置的投入/产出单位。legacy 缺失时阻断，不猜测。 */
   inputUnit: string;
   outputUnit: string | null;
   /**
@@ -115,14 +115,8 @@ function nameToConfigCode(processName: string): string | undefined {
   return kw ? PROCESS_NAME_TO_CODE[kw] : undefined;
 }
 
-// 回退切片 (动态解析失败/无可映射工序时, 保持现状, 零回归)
-const FALLBACK_PROCESSES: ProcEntry[] = [
-  { code: 'xiuyou',   order: 1, label: '修油', allowInjection: false, allowMultipleUpstreamSources: false, isFirstProcess: true,  customFieldSchema: null, allowFinishedGoodsSource: false, inputUnit: 'kg', outputUnit: null },
-  { code: 'chaoshui', order: 2, label: '焯水', allowInjection: false, allowMultipleUpstreamSources: false, isFirstProcess: false, customFieldSchema: null, allowFinishedGoodsSource: false, inputUnit: 'kg', outputUnit: null },
-  { code: 'shuzhi',   order: 3, label: '熟制', allowInjection: false, allowMultipleUpstreamSources: true,  isFirstProcess: false, customFieldSchema: null, allowFinishedGoodsSource: false, inputUnit: 'kg', outputUnit: null },
-];
-
-const PROCESSES = ref<ProcEntry[]>([...FALLBACK_PROCESSES]);
+// 未解析到真实配置时保持空列表；loadAll 会展示可重试错误，不生成虚构工序/单位。
+const PROCESSES = ref<ProcEntry[]>([]);
 
 // upstream chain: 链中前一道工序 (按 PROCESSES 顺序; 第一道 → null)。
 // SP-F role-mode fix: 键改用唯一 procKey (order), 不再用 code (会碰撞)。
@@ -324,6 +318,11 @@ async function resolveProcesses() {
         // G1: idx===0 (排序后链内第一道) → isFirstProcess=true, 作 supportsUpstreamSources 的
         // config-driven 主判据 (archetype 硬编码仍作兜底, 见 ProcessDataTable 内注释)。
         // G2: customFieldSchema 直接透传 (join 只读字段, 未开启则 null)。
+        const units = resolveProcessSheetUnits({
+          unitOverride: it.unitOverride,
+          defaultUnit: it.defaultUnit,
+          defaultOutputUnit: it.defaultOutputUnit,
+        });
         return {
           code,
           order: it.processOrder,
@@ -333,8 +332,8 @@ async function resolveProcesses() {
           isFirstProcess: idx === 0,
           customFieldSchema: it.customFieldSchema ?? null,
           allowFinishedGoodsSource: it.allowFinishedGoodsSource === true,
-          inputUnit: it.unitOverride?.trim() || it.defaultUnit?.trim() || 'kg',
-          outputUnit: it.defaultOutputUnit?.trim() || null,
+          inputUnit: units.inputUnit,
+          outputUnit: units.outputUnit,
           // Slice C: 真实 WorkProcess.processCategory (ProductWorkProcessItem 已带此字段),
           // 供 ProcessDataTable needsPotCount 判定 processCategory === '熟制'。
           processCategory: it.processCategory ?? null,
@@ -346,7 +345,8 @@ async function resolveProcesses() {
 
     if (mapped.length >= 1) PROCESSES.value = mapped;
   } catch (e) {
-    console.warn('[ProcessSheet] resolveProcesses 失败, 回退切片', e);
+    PROCESSES.value = [];
+    throw e;
   }
 }
 
@@ -355,7 +355,7 @@ async function resolveProcesses() {
 // -------------------------------------------------------------------------
 // SP-F role-mode fix: activeTab + 所有 per-process map 一律用唯一 procKey (order),
 // 不用 code —— 否则同 archetype 多工序 tab/库存/行/refs 全碰撞。
-const activeTab = ref<string>(procKey(FALLBACK_PROCESSES[0]));
+const activeTab = ref<string>('');
 const loading = ref(false);
 const loadError = ref<string | null>(null);
 const loadErrorTitle = computed(() => loadError.value?.startsWith('Workflow 配置')
@@ -385,7 +385,7 @@ async function loadAll() {
     await resolveProcesses();
     if (seq !== loadAllSeq) return;
     if (!PROCESSES.value.some((p) => procKey(p) === activeTab.value)) {
-      activeTab.value = PROCESSES.value[0] ? procKey(PROCESSES.value[0]) : procKey(FALLBACK_PROCESSES[0]);
+      activeTab.value = PROCESSES.value[0] ? procKey(PROCESSES.value[0]) : '';
     }
     await Promise.all(
       PROCESSES.value.map(async (proc) => {

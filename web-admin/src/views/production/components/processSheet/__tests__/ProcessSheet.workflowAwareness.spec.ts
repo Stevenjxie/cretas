@@ -182,7 +182,7 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
         {
           id: 1, productTypeId: 'PT-1', workProcessId: 'WP-L1', processOrder: 1,
           unitOverride: null, estimatedMinutesOverride: null, processName: '修油',
-          processCategory: 'RAW_MATERIAL', defaultUnit: 'kg', defaultEstimatedMinutes: null,
+          processCategory: 'RAW_MATERIAL', defaultUnit: 'kg', defaultOutputUnit: 'kg', defaultEstimatedMinutes: null,
           defaultCostCategory: null, allowSemiFinishedInjection: false,
           allowMultipleUpstreamSources: false, allowFinishedGoodsSource: false,
           customFieldSchema: null,
@@ -190,7 +190,7 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
         {
           id: 2, productTypeId: 'PT-1', workProcessId: 'WP-L2', processOrder: 2,
           unitOverride: null, estimatedMinutesOverride: null, processName: '焯水',
-          processCategory: 'PROCESSING', defaultUnit: 'kg', defaultEstimatedMinutes: null,
+          processCategory: 'PROCESSING', defaultUnit: 'kg', defaultOutputUnit: 'kg', defaultEstimatedMinutes: null,
           defaultCostCategory: null, allowSemiFinishedInjection: false,
           allowMultipleUpstreamSources: false, allowFinishedGoodsSource: false,
           customFieldSchema: null,
@@ -214,6 +214,36 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
     expect(tables[1].props().workflowContext).toBeNull();
   });
 
+  it('legacy plan with a missing configured unit blocks instead of silently using kg', async () => {
+    getWorkflowSheetConfig.mockResolvedValue({ success: true, data: null });
+    getProductWorkProcesses.mockResolvedValue({
+      success: true,
+      data: [{
+        id: 1,
+        productTypeId: 'PT-1',
+        workProcessId: 'WP-L1',
+        processOrder: 1,
+        unitOverride: null,
+        defaultUnit: null,
+        defaultOutputUnit: 'g',
+        processName: 'legacy-step',
+        processCategory: 'PROCESSING',
+        defaultCostCategory: null,
+        allowSemiFinishedInjection: false,
+        allowMultipleUpstreamSources: false,
+        allowFinishedGoodsSource: false,
+        customFieldSchema: null,
+      }],
+    });
+
+    const wrapper = mountSheet();
+    await flushPromises();
+    await flushPromises();
+
+    expect(wrapper.findAllComponents(ProcessDataTableStub)).toHaveLength(0);
+    expect(wrapper.text()).toContain('单位');
+  });
+
   it('workflow-config reject blocks the sheet, offers retry, and never calls the legacy endpoint', async () => {
     getWorkflowSheetConfig.mockRejectedValue(new Error('network down'));
     getProductWorkProcesses.mockResolvedValue({
@@ -222,7 +252,7 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
         {
           id: 1, productTypeId: 'PT-1', workProcessId: 'WP-L1', processOrder: 1,
           unitOverride: null, estimatedMinutesOverride: null, processName: '修油',
-          processCategory: 'RAW_MATERIAL', defaultUnit: 'kg', defaultEstimatedMinutes: null,
+          processCategory: 'RAW_MATERIAL', defaultUnit: 'kg', defaultOutputUnit: 'kg', defaultEstimatedMinutes: null,
           defaultCostCategory: null, allowSemiFinishedInjection: false,
           allowMultipleUpstreamSources: false, allowFinishedGoodsSource: false,
           customFieldSchema: null,

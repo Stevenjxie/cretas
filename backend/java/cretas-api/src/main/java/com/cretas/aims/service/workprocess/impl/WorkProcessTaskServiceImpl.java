@@ -238,6 +238,9 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
                     String unit = template.getUnitOverride() != null
                             ? template.getUnitOverride()
                             : (def != null ? def.getUnit() : null);
+                    unit = requireConfiguredUnit(unit, template.getWorkProcessId(), "input");
+                    requireConfiguredUnit(def != null ? def.getOutputUnit() : null,
+                            template.getWorkProcessId(), "output");
                     Integer estMinutes = template.getEstimatedMinutesOverride() != null
                             ? template.getEstimatedMinutesOverride()
                             : (def != null ? def.getEstimatedMinutes() : null);
@@ -307,6 +310,14 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
             boolean zeroProcessFallback) {
 
         LocalDateTime now = LocalDateTime.now();
+        String batchUnit = productionBatchRepository.findById(productionBatchId)
+                .map(com.cretas.aims.entity.ProductionBatch::getUnit)
+                .map(String::trim)
+                .filter(unit -> !unit.isEmpty())
+                .orElseThrow(() -> new BusinessException(422,
+                        "production batch unit is not configured: " + productionBatchId)
+                        .withCode("PRODUCTION_UNIT_NOT_CONFIGURED")
+                        .withHint("请先配置计划/批次单位，再生成领料与产出任务"));
 
         WorkProcessTask materialTask = WorkProcessTask.builder()
                 .factoryId(factoryId)
@@ -316,7 +327,7 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
                 .productTypeId(productTypeId)
                 .processOrder(0)
                 .status(Status.PENDING)
-                .plannedUnit("kg")          // 领料量默认 kg (原料称重口径); OUTPUT 单位报工时自定
+                .plannedUnit(batchUnit)
                 .assignedTo(materialResponsibleId)
                 .createdAt(now)
                 .updatedAt(now)
@@ -330,6 +341,7 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
                 .productTypeId(productTypeId)
                 .processOrder(WorkProcessTaskService.SENTINEL_OUTPUT_ORDER)
                 .status(Status.PENDING)
+                .plannedUnit(batchUnit)
                 .assignedTo(outputResponsibleId)
                 .createdAt(now)
                 .updatedAt(now)
@@ -345,6 +357,16 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
                 .map(t -> toDTO(t, null,
                         t.getAssignedTo() != null ? nameMap.get(t.getAssignedTo()) : null))
                 .collect(Collectors.toList());
+    }
+
+    private String requireConfiguredUnit(String unit, String workProcessId, String unitRole) {
+        if (unit == null || unit.isBlank()) {
+            throw new BusinessException(422,
+                    "legacy process " + unitRole + " unit is not configured: " + workProcessId)
+                    .withCode("PRODUCTION_UNIT_NOT_CONFIGURED")
+                    .withHint("请在产品工序配置中填写投入单位，或改用已发布 Workflow 的端口单位");
+        }
+        return unit.trim();
     }
 
     /** 哨兵 work_process_id → 友好报工名 (RN/web 展示); 非哨兵返 null。 */

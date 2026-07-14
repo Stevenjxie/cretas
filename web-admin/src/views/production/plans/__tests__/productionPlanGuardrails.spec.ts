@@ -5,6 +5,10 @@ import { describe, expect, it } from 'vitest';
 const source = readFileSync(resolve(__dirname, '../list.vue'), 'utf8');
 
 describe('production plan operator guardrails', () => {
+  it('does not invent kilograms when a production plan unit is missing', () => {
+    expect(source).not.toContain("|| 'kg'");
+    expect(source).toContain('单位未配置');
+  });
   it('shows production loss evidence guidance in settlement', () => {
     expect(source).toContain('生产报损/损耗留证');
     expect(source).toContain('报损原因选择“生产损耗”');

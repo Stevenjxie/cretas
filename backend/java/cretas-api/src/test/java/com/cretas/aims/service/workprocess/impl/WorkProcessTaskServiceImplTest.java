@@ -82,11 +82,57 @@ class WorkProcessTaskServiceImplTest {
                 service, "productionPlanRepository", productionPlanRepository);
         lenient().when(workflowRuntimeService.materializeIfActive(any(), any(), any()))
                 .thenReturn(Optional.empty());
+        lenient().when(productionBatchRepository.findById(
+                org.mockito.ArgumentMatchers.anyLong())).thenAnswer(invocation -> {
+            Long batchId = invocation.getArgument(0);
+            return Optional.of(ProductionBatch.builder()
+                    .id(batchId)
+                    .factoryId(FACTORY_ID)
+                    .unit("g")
+                    .build());
+        });
     }
 
     private static final String FACTORY_ID = "F001";
     private static final String WP_ID = "wp-1";
     private static final Long TASK_ID = 100L;
+
+    @Test
+    @DisplayName("legacy spawn fails closed when the configured process unit is missing")
+    void spawnTasks_missingLegacyUnit_failsClosed() {
+        String productTypeId = "PT-NO-UNIT";
+        Long batchId = 991L;
+        ProductWorkProcess template = ProductWorkProcess.builder()
+                .id(991L)
+                .factoryId(FACTORY_ID)
+                .productTypeId(productTypeId)
+                .workProcessId(WP_ID)
+                .processOrder(1)
+                .isActive(true)
+                .reportingRequired(true)
+                .build();
+        WorkProcess definition = WorkProcess.builder()
+                .id(WP_ID)
+                .factoryId(FACTORY_ID)
+                .processName("legacy-step")
+                .unit(null)
+                .outputUnit("g")
+                .build();
+
+        when(taskRepository.existsByFactoryIdAndProductionBatchIdAndProductTypeId(
+                FACTORY_ID, batchId, productTypeId)).thenReturn(false);
+        when(productWorkProcessRepository.findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(
+                FACTORY_ID, productTypeId)).thenReturn(List.of(template));
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of(WP_ID)))
+                .thenReturn(List.of(definition));
+
+        com.cretas.aims.exception.BusinessException error = assertThrows(
+                com.cretas.aims.exception.BusinessException.class,
+                () -> service.spawnTasks(FACTORY_ID, batchId, productTypeId));
+
+        assertTrue(error.getMessage().contains("unit") || error.getMessage().contains("单位"));
+        verify(taskRepository, never()).saveAll(any());
+    }
 
     @Test
     @DisplayName("getById: definition 配了 standardYieldMin/Max → DTO 透出区间")
@@ -305,12 +351,16 @@ class WorkProcessTaskServiceImplTest {
                 .id(wpId1)
                 .factoryId(FACTORY_ID)
                 .processName("滚揉")
+                .unit("g")
+                .outputUnit("g")
                 .build();
 
         WorkProcess def2 = WorkProcess.builder()
                 .id(wpId2)
                 .factoryId(FACTORY_ID)
                 .processName("包装")
+                .unit("g")
+                .outputUnit("g")
                 .build();
 
         when(taskRepository.existsByFactoryIdAndProductionBatchIdAndProductTypeId(FACTORY_ID, batchId, productTypeId))
@@ -367,7 +417,8 @@ class WorkProcessTaskServiceImplTest {
         when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of(template));
-        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of());
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
+                .thenAnswer(invocation -> configuredProcesses(invocation.getArgument(1)));
         lenient().when(userRepository.findByIdIn(any())).thenReturn(List.of());
 
         @SuppressWarnings("unchecked")
@@ -404,7 +455,8 @@ class WorkProcessTaskServiceImplTest {
         when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of(t1, t2));
-        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of());
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
+                .thenAnswer(invocation -> configuredProcesses(invocation.getArgument(1)));
         lenient().when(userRepository.findByIdIn(any())).thenReturn(List.of());
 
         @SuppressWarnings("unchecked")
@@ -449,7 +501,8 @@ class WorkProcessTaskServiceImplTest {
         when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of(pickup, cut, blanch, pack, output));
-        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of());
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
+                .thenAnswer(invocation -> configuredProcesses(invocation.getArgument(1)));
         lenient().when(userRepository.findByIdIn(any())).thenReturn(List.of());
 
         @SuppressWarnings("unchecked")
@@ -490,7 +543,8 @@ class WorkProcessTaskServiceImplTest {
         when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of(a, b));
-        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of());
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
+                .thenAnswer(invocation -> configuredProcesses(invocation.getArgument(1)));
 
         com.cretas.aims.exception.BusinessException ex = assertThrows(
                 com.cretas.aims.exception.BusinessException.class,
@@ -596,7 +650,8 @@ class WorkProcessTaskServiceImplTest {
         when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of(p1, p2));
-        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of());
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
+                .thenAnswer(invocation -> configuredProcesses(invocation.getArgument(1)));
         lenient().when(userRepository.findByIdIn(any())).thenReturn(List.of());
 
         @SuppressWarnings("unchecked")
@@ -629,7 +684,8 @@ class WorkProcessTaskServiceImplTest {
         when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of(p1));
-        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of());
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
+                .thenAnswer(invocation -> configuredProcesses(invocation.getArgument(1)));
         lenient().when(userRepository.findByIdIn(any())).thenReturn(List.of());
 
         @SuppressWarnings("unchecked")
@@ -686,7 +742,8 @@ class WorkProcessTaskServiceImplTest {
         when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of(p1));
-        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of());
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
+                .thenAnswer(invocation -> configuredProcesses(invocation.getArgument(1)));
         lenient().when(userRepository.findByIdIn(any())).thenReturn(List.of());
 
         @SuppressWarnings("unchecked")
@@ -952,7 +1009,19 @@ class WorkProcessTaskServiceImplTest {
                 .factoryId(FACTORY_ID)
                 .productTypeId(productTypeId)
                 .productionPlanId(planId)
+                .unit("g")
                 .build();
+    }
+
+    private List<WorkProcess> configuredProcesses(List<String> ids) {
+        return ids.stream()
+                .map(id -> WorkProcess.builder()
+                        .id(id)
+                        .factoryId(FACTORY_ID)
+                        .unit("g")
+                        .outputUnit("g")
+                        .build())
+                .toList();
     }
 
     private com.cretas.aims.entity.ProductionPlan plan(String planId, Boolean skip, Long supervisorId) {
@@ -1027,7 +1096,8 @@ class WorkProcessTaskServiceImplTest {
         when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of(p1, p2));
-        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of());
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
+                .thenAnswer(invocation -> configuredProcesses(invocation.getArgument(1)));
         lenient().when(userRepository.findByIdIn(any())).thenReturn(List.of());
 
         @SuppressWarnings("unchecked")
@@ -1062,7 +1132,8 @@ class WorkProcessTaskServiceImplTest {
         when(productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, productTypeId))
                 .thenReturn(List.of(p1));
-        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any())).thenReturn(List.of());
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
+                .thenAnswer(invocation -> configuredProcesses(invocation.getArgument(1)));
         lenient().when(userRepository.findByIdIn(any())).thenReturn(List.of());
 
         @SuppressWarnings("unchecked")
