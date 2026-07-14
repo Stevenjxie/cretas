@@ -64,10 +64,13 @@ function depotContent(): string {
   return `<div class="amap-depot"><span class="amap-depot-dot"></span><span class="amap-lbl">配送中心</span></div>`;
 }
 
-function storeContent(store: StoreOrder, seq: number | undefined, selected: boolean, labeled: boolean): string {
-  const badge = seq != null ? `<span class="amap-seq">${seq}</span>` : '<span class="amap-store-dot"></span>';
+function storeContent(store: StoreOrder, seq: number | undefined, selected: boolean, labeled: boolean, color?: string): string {
+  // color = 所属线路的颜色（与 polyline 同色），编号圆点/标签描边跟随，一眼分清节点归属哪条线（客户要求）
+  const badgeStyle = color ? ` style="background:${color}"` : '';
+  const badge = seq != null ? `<span class="amap-seq"${badgeStyle}>${seq}</span>` : `<span class="amap-store-dot"${badgeStyle}></span>`;
   // labeled=false（非选中线路的门店）：只显小灰点，不显名字标签，避免全图挤满店名
-  const label = labeled ? `<span class="amap-lbl">${esc(compactStoreName(store.name))}</span>` : '';
+  const lblStyle = color ? ` style="border-color:${color};color:${color}"` : '';
+  const label = labeled ? `<span class="amap-lbl"${lblStyle}>${esc(compactStoreName(store.name))}</span>` : '';
   return `<div class="amap-store${selected ? ' selected' : ''}${labeled ? '' : ' dim'}">${badge}${label}</div>`;
 }
 
@@ -85,12 +88,22 @@ function renderOverlays(): void {
   const token = ++renderToken; // 本轮标识；异步驾车回调据此判断是否过期
 
   const seqByStore = new Map<string, number>();
+  // 节点颜色跟随所属线路 polyline 颜色（客户要求，颜色区分节点归属）
+  const colorByStore = new Map<string, string>();
   const selectedTrip = props.trips.find((t) => t.id === props.selectedTripId);
+  const selectedTripIndex = props.trips.findIndex((t) => t.id === props.selectedTripId);
   if (showAllRoutes.value) {
     // 显示全部线路时：每条线路的门店都编号(各自线路内 1..n)，让所有送达点都可见(客户要求)
-    props.trips.forEach((t) => t.storeIds.forEach((sid, i) => seqByStore.set(sid, i + 1)));
+    props.trips.forEach((t, ti) => t.storeIds.forEach((sid, i) => {
+      seqByStore.set(sid, i + 1);
+      colorByStore.set(sid, routeColors[ti % routeColors.length]);
+    }));
   } else if (selectedTrip) {
-    selectedTrip.storeIds.forEach((sid, i) => seqByStore.set(sid, i + 1));
+    const c = routeColors[selectedTripIndex % routeColors.length];
+    selectedTrip.storeIds.forEach((sid, i) => {
+      seqByStore.set(sid, i + 1);
+      colorByStore.set(sid, c);
+    });
   }
   const storeById = new Map(props.stores.map((s) => [s.id, s]));
 
@@ -110,7 +123,8 @@ function renderOverlays(): void {
     const labeled = showAllRoutes.value || selectedStoreSet.has(store.id) || store.id === props.selectedStoreId;
     const marker = new AMapRef.Marker({
       position: [store.lng, store.lat],
-      content: storeContent(store, seqByStore.get(store.id), store.id === props.selectedStoreId, labeled),
+      content: storeContent(store, seqByStore.get(store.id), store.id === props.selectedStoreId, labeled,
+        colorByStore.get(store.id)),
       offset: new AMapRef.Pixel(-9, -9),
       zIndex: labeled ? 160 : 90,
     });
