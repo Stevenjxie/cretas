@@ -18,6 +18,28 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 class FgQuantityUnitConverterTest {
 
     @Test
+    @DisplayName("箱规快照: 2箱(24盒/箱)换算为48盒")
+    void convertsOuterPackageToBaseUnit() {
+        BigDecimal result = FgQuantityUnitConverter.convertWithPackaging(
+                new BigDecimal("2"), "箱", "盒", null,
+                "箱", "盒", new BigDecimal("24"),
+                null, null, null);
+
+        assertEquals(0, new BigDecimal("48").compareTo(result));
+    }
+
+    @Test
+    @DisplayName("不同箱规: 2箱(24盒/箱)等于4箱(12盒/箱)")
+    void convertsBetweenTwoPackagingSpecs() {
+        BigDecimal result = FgQuantityUnitConverter.convertWithPackaging(
+                new BigDecimal("2"), "箱", "箱", null,
+                "箱", "盒", new BigDecimal("24"),
+                "箱", "盒", new BigDecimal("12"));
+
+        assertEquals(0, new BigDecimal("4.0000").compareTo(result));
+    }
+
+    @Test
     @DisplayName("同单位(字符串相等) → 原样返回, 不换算")
     void sameUnit_returnsAsIs() {
         BigDecimal qty = new BigDecimal("4454.5");

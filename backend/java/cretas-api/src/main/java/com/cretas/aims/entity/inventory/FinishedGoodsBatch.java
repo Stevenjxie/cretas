@@ -94,6 +94,22 @@ public class FinishedGoodsBatch extends BaseEntity {
     @Column(name = "unit", nullable = false, length = 20)
     private String unit;
 
+    /** Manual/opening inbound packaging selection and immutable conversion snapshot. */
+    @Column(name = "packaging_spec_id", length = 36)
+    private String packagingSpecId;
+
+    @Column(name = "packaging_spec_name", length = 60)
+    private String packagingSpecName;
+
+    @Column(name = "packaging_unit", length = 20)
+    private String packagingUnit;
+
+    @Column(name = "packaging_base_unit", length = 20)
+    private String packagingBaseUnit;
+
+    @Column(name = "packaging_factor", precision = 20, scale = 8)
+    private BigDecimal packagingFactor;
+
     @Column(name = "unit_price", precision = 15, scale = 4)
     private BigDecimal unitPrice;
 

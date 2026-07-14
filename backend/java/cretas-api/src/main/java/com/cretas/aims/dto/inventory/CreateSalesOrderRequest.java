@@ -113,6 +113,10 @@ public class CreateSalesOrderRequest {
 
         private BigDecimal boxQuantity;
 
+        /** Required when this SKU has multiple active specs for the selected packaging unit. */
+        @Size(max = 36, message = "包装规格ID长度不能超过36个字符")
+        private String packagingSpecId;
+
         // ==================== P3 多仓字段 ====================
 
         /**

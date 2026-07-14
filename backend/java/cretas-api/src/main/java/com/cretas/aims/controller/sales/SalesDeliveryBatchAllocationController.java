@@ -58,12 +58,14 @@ public class SalesDeliveryBatchAllocationController {
                     + "(如同产品一批 kg 一批盒)统一换算为该单位比较/推荐; 缺省回落产品默认单位.")
     public ApiResponse<List<Map<String, Object>>> recommendFifo(
             @PathVariable String factoryId,
+            @PathVariable String deliveryItemId,
             @RequestParam String productTypeId,
             @RequestParam BigDecimal requiredQty,
             @RequestParam(required = false) String unit,
             @RequestParam(required = false) String sourceWarehouseCode) {
         return ApiResponse.success("FIFO 推荐 (按生产日期升序)",
-                service.recommendFifo(factoryId, productTypeId, requiredQty, unit, sourceWarehouseCode));
+                service.recommendFifo(
+                        factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode));
     }
 
     @GetMapping("/stock-warehouses")

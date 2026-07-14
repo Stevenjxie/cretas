@@ -21,6 +21,7 @@ export interface FgOpeningRequest {
   batchNumber: string;
   producedQuantity: number;
   unit: string;
+  packagingSpecId?: string;
   productionDate: string; // ISO date string (YYYY-MM-DD)
   remark?: string;
 }
@@ -34,6 +35,11 @@ export interface FgBatch {
   shippedQuantity: number;
   reservedQuantity: number;
   unit: string;
+  packagingSpecId?: string;
+  packagingSpecName?: string;
+  packagingUnit?: string;
+  packagingBaseUnit?: string;
+  packagingFactor?: number;
   productionDate?: string;
   expireDate?: string;
   storageLocation?: string;

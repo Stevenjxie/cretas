@@ -591,6 +591,20 @@ interface OrderItem {
   taxRate: number;
   specification?: string;
   boxQuantity?: number | null;
+  packagingSpecId?: string;
+  packagingSpecName?: string;
+  packagingUnit?: string;
+  packagingBaseUnit?: string;
+  packagingFactor?: number;
+  packagingSpecs?: Array<{
+    id: string;
+    name: string;
+    packageUnit: string;
+    baseUnit: string;
+    conversionFactor: number;
+    defaultSpec: boolean;
+    active: boolean;
+  }>;
   // T4-D1 (issue #525): source warehouse code per line. Persists to sales_order_items.source_warehouse_code.
   // Optional/empty for legacy rows + drafts. UI label via utils/warehouse.ts:warehouseDisplayLabel.
   sourceWarehouseCode?: string;
@@ -734,6 +748,8 @@ function emptyOrderItem(): OrderItem {
     taxRate: 13,
     specification: '',
     boxQuantity: null,
+    packagingSpecId: '',
+    packagingSpecs: [],
     sourceWarehouseCode: getRememberedWarehouse(),
     priceMemoryHint: null,
     contractPriceHint: null,
@@ -927,6 +943,7 @@ function onProductSelect(item: TableRow, productId: string) {
     // P1-3: spec 自动填后立即调 calcBox, 抄码品会清空 boxQuantity (内部判断).
     // T130: calcBox 现支持两分支 (份→qty/coeff, 箱→qty), 总是重算箱数 (只读列).
     calcBox(item);
+    void loadPackagingSpecs(item as OrderItem, productId);
   } else {
     // T130 Feature A — 用户清空产品 → 该行变回空行; 收口尾部空行, 不累积重复空行.
     ensureTrailingEmptyRow();
@@ -939,6 +956,58 @@ function onProductSelect(item: TableRow, productId: string) {
   fetchPriceMemory(item, productId);
   // T130 Feature A — 选好产品后保证末尾仍有空行可继续录入.
   if (productId) ensureTrailingEmptyRow();
+}
+
+async function loadPackagingSpecs(item: OrderItem, productId: string) {
+  item.packagingSpecId = item.packagingSpecId || '';
+  const historicalSpec = item.packagingSpecId && item.packagingUnit
+      && item.packagingBaseUnit && Number(item.packagingFactor) > 0
+    ? {
+        id: item.packagingSpecId,
+        name: item.packagingSpecName || '历史箱规',
+        packageUnit: item.packagingUnit,
+        baseUnit: item.packagingBaseUnit,
+        conversionFactor: Number(item.packagingFactor),
+        defaultSpec: false,
+        active: true,
+      }
+    : null;
+  item.packagingSpecs = [];
+  if (!factoryId.value || !productId) return;
+  try {
+    const response = await get<OrderItem['packagingSpecs']>(
+      `/${factoryId.value}/product-types/${productId}/packaging-specs`,
+      { _silent: true } as never,
+    );
+    item.packagingSpecs = response.success && Array.isArray(response.data)
+      ? response.data.filter((spec) => spec.active !== false)
+      : [];
+    if (historicalSpec && !item.packagingSpecs.some((spec) => spec.id === historicalSpec.id)) {
+      item.packagingSpecs.push(historicalSpec);
+    }
+    onOrderUnitChange(item);
+  } catch {
+    item.packagingSpecs = [];
+  }
+}
+
+function packagingOptions(item: OrderItem) {
+  return (item.packagingSpecs || []).filter((spec) => spec.packageUnit === item.unit);
+}
+
+function requiresPackagingSelection(item: OrderItem): boolean {
+  return packagingOptions(item).length > 1;
+}
+
+function packagingOptionLabel(spec: NonNullable<OrderItem['packagingSpecs']>[number]): string {
+  return `1${spec.packageUnit}=${Number(spec.conversionFactor)}${spec.baseUnit}`;
+}
+
+function onOrderUnitChange(item: OrderItem) {
+  const options = packagingOptions(item);
+  if (options.length === 1) item.packagingSpecId = options[0].id;
+  else if (!options.some((spec) => spec.id === item.packagingSpecId)) item.packagingSpecId = '';
+  calcBox(item as TableRow);
 }
 
 /**
@@ -1055,7 +1124,11 @@ function calcBox(item: TableRow) {
     item.boxQuantity = null;
     return;
   }
-  const coeff = Number(p.boxConversionCoefficient);
+  const selectedSpec = (item.packagingSpecs as OrderItem['packagingSpecs'] | undefined)
+    ?.find((spec) => spec.id === item.packagingSpecId);
+  const coeff = selectedSpec
+    ? Number(selectedSpec.conversionFactor)
+    : Number(p.boxConversionCoefficient);
   const qty = Number(item.quantity || 0);
   if (qty <= 0) return;
   // T130 Feature D — 两分支口径:
@@ -1065,7 +1138,7 @@ function calcBox(item: TableRow) {
   const pu = String(p.unit || '份');
   if (!unit || unit === pu || unit === '份') {
     item.boxQuantity = Math.round((qty / coeff) * 100) / 100;
-  } else if (unit === '箱') {
+  } else if (unit === String(selectedSpec?.packageUnit || p.level1Unit || '箱')) {
     item.boxQuantity = qty;
   }
   // 其他单位 → 不动 (defensive)
@@ -1090,7 +1163,10 @@ function specDisplay(item: TableRow): string {
 function unitOptions(item: TableRow): string[] {
   const p = products.value.find((x: TableRow) => x.id === item.productTypeId);
   const opts = ['份'];
-  if (p && Number(p.boxConversionCoefficient) > 0) opts.push('箱');
+  if (p && Number(p.boxConversionCoefficient) > 0) opts.push(String(p.level1Unit || '箱'));
+  for (const spec of ((item.packagingSpecs || []) as NonNullable<OrderItem['packagingSpecs']>)) {
+    if (spec.packageUnit && !opts.includes(spec.packageUnit)) opts.push(spec.packageUnit);
+  }
   return opts;
 }
 
@@ -1137,6 +1213,18 @@ function handleQuantityTab(e: KeyboardEvent, idx: number) {
   }
 }
 
+function toOrderItemPayload(items: OrderItem[]): OrderItem[] {
+  return items.map((item) => {
+    const payload = { ...item };
+    delete payload.packagingSpecs;
+    delete payload.packagingSpecName;
+    delete payload.packagingUnit;
+    delete payload.packagingBaseUnit;
+    delete payload.packagingFactor;
+    return payload;
+  });
+}
+
 async function handleCreate() {
   if (!form.value.customerId) return ElMessage.warning('请选择客户');
   // T130 Feature A — 只校验/提交"已选产品"的行, 忽略末尾自动空行 (不再因尾部空行报"请为所有明细选择产品").
@@ -1146,6 +1234,9 @@ async function handleCreate() {
   if (selectedItems.some((i) => !i.quantity || Number(i.quantity) <= 0)) return ElMessage.warning('产品数量必须大于0');
   // 单位校验
   if (selectedItems.some((i) => !i.unit)) return ElMessage.warning('请填写所有明细的单位');
+  if (selectedItems.some((i) => requiresPackagingSelection(i) && !i.packagingSpecId)) {
+    return ElMessage.warning('存在多种装箱规格，请为对应产品选择本次使用的箱规');
+  }
   // 销售单价校验
   if (selectedItems.some((i) => i.unitPrice == null || Number(i.unitPrice) < 0)) return ElMessage.warning('请填写所有明细的销售单价');
   // SKU 重复校验 (只看已选行)
@@ -1153,7 +1244,10 @@ async function handleCreate() {
   if (new Set(productIds).size !== productIds.length) return ElMessage.warning('同一订单不能添加重复的产品');
   try {
     // 提交体只带已选行, 末尾空行永不发后端.
-    const res = await post(`/${factoryId.value}/sales/orders`, { ...form.value, items: selectedItems });
+    const res = await post(`/${factoryId.value}/sales/orders`, {
+      ...form.value,
+      items: toOrderItemPayload(selectedItems),
+    });
     if (res.success) { ElMessage.success('创建成功'); dialogVisible.value = false; loadData(); }
     else { ElMessage.error(res.message || '创建失败'); }
   } catch (e: unknown) {
@@ -1607,6 +1701,12 @@ function handleEdit(row: TableRow) {
           // 抄码品识别 + 箱数自动算依赖这两字段, 不能丢.
           specification: String(item.specification || ''),
           boxQuantity: item.boxQuantity != null ? Number(item.boxQuantity) : null,
+          packagingSpecId: String(item.packagingSpecId || ''),
+          packagingSpecName: String(item.packagingSpecName || ''),
+          packagingUnit: String(item.packagingUnit || ''),
+          packagingBaseUnit: String(item.packagingBaseUnit || ''),
+          packagingFactor: item.packagingFactor != null ? Number(item.packagingFactor) : undefined,
+          packagingSpecs: [] as NonNullable<OrderItem['packagingSpecs']>,
           taxRate: item.taxRate != null ? Number(item.taxRate) : 13,
           // T130 Feature C / F9 fix (issue #525): handleEdit 之前漏带 sourceWarehouseCode,
           // 编辑现有订单后提交会把来源仓库覆盖为空 → 补回(保留原值,不再强制回 WH-LOG).
@@ -1624,7 +1724,10 @@ function handleEdit(row: TableRow) {
   // 故业务员保留订单原值; 显式标 touched 防止后续误覆盖.
   salespersonTouched.value = true;
   // T130 Feature A — 编辑态也追加一个尾部空行, 便于继续加品. calcBox 重算已有行箱数 (只读列).
-  form.value.items.forEach((it) => calcBox(it));
+  form.value.items.forEach((it) => {
+    calcBox(it);
+    if (it.productTypeId) void loadPackagingSpecs(it, it.productTypeId);
+  });
   ensureTrailingEmptyRow();
   dialogVisible.value = true;
 }
@@ -1638,11 +1741,17 @@ async function handleSave() {
     if (selectedItems.length === 0) return ElMessage.warning('请至少添加一个订单明细');
     if (selectedItems.some((i) => !i.quantity || Number(i.quantity) <= 0)) return ElMessage.warning('产品数量必须大于0');
     if (selectedItems.some((i) => !i.unit)) return ElMessage.warning('请填写所有明细的单位');
+    if (selectedItems.some((i) => requiresPackagingSelection(i) && !i.packagingSpecId)) {
+      return ElMessage.warning('存在多种装箱规格，请为对应产品选择本次使用的箱规');
+    }
     if (selectedItems.some((i) => i.unitPrice == null || Number(i.unitPrice) < 0)) return ElMessage.warning('请填写所有明细的销售单价');
     const editProductIds = selectedItems.map((i) => i.productTypeId).filter(Boolean);
     if (new Set(editProductIds).size !== editProductIds.length) return ElMessage.warning('同一订单不能添加重复的产品');
     try {
-      const res = await put(`/${factoryId.value}/sales/orders/${editingOrderId.value}`, { ...form.value, items: selectedItems });
+      const res = await put(`/${factoryId.value}/sales/orders/${editingOrderId.value}`, {
+        ...form.value,
+        items: toOrderItemPayload(selectedItems),
+      });
       if (res.success) { ElMessage.success('保存成功'); dialogVisible.value = false; editingOrderId.value = null; loadData(); }
       else { ElMessage.error(res.message || '保存失败'); }
     } catch (err) {
@@ -1760,10 +1869,12 @@ async function handleQuickDelivery(row: TableRow) {
     items = row.items
       .filter((item: TableRow) => item.productTypeId || item.productType?.id)
       .map((item: TableRow) => ({
+        salesOrderItemId: item.id,
         productTypeId: item.productTypeId || item.productType?.id,
         productName: item.productName || item.productType?.name,
         deliveredQuantity: item.quantity || 0,
         unit: item.unit || 'kg',
+        packagingSpecId: item.packagingSpecId,
         unitPrice: Number(item.unitPrice || 0),
       }));
   }
@@ -2443,6 +2554,7 @@ function handleMergePurchase() {
           <span style="width: 120px">规格</span>
           <span style="width: 130px">下单数量</span>
           <span style="width: 80px">单位</span>
+          <span style="width: 150px">包装规格</span>
           <span style="width: 130px">单价 (未税)</span>
           <!-- E-FP-1 Rule2: 含税单价/含税小计派生只读，用户填未税+税率，此列自动显示 -->
           <span style="width: 130px">含税单价</span>
@@ -2470,9 +2582,24 @@ function handleMergePurchase() {
             @keydown.tab="(e: KeyboardEvent) => handleQuantityTab(e, idx)"
           />
           <!-- T130 Feature D — 单位下拉: 份 + (产品配箱规才给 箱). NO allow-create. 默认 份. -->
-          <el-select v-model="item.unit" filterable style="width: 80px" @change="() => calcBox(item)">
+          <el-select v-model="item.unit" filterable style="width: 80px" @change="() => onOrderUnitChange(item)">
             <el-option v-for="u in unitOptions(item)" :key="u" :label="u" :value="u" />
           </el-select>
+          <el-select
+            v-if="packagingOptions(item).length > 0"
+            v-model="item.packagingSpecId"
+            :placeholder="requiresPackagingSelection(item) ? '请选择箱规' : '默认箱规'"
+            style="width: 150px"
+            @change="() => calcBox(item)"
+          >
+            <el-option
+              v-for="spec in packagingOptions(item)"
+              :key="spec.id"
+              :label="packagingOptionLabel(spec)"
+              :value="spec.id"
+            />
+          </el-select>
+          <el-text v-else type="info" size="small" style="width: 150px; text-align: center;">不涉及</el-text>
           <!-- Sprint 4 W2 S-PRICE-1 R1: unitPrice + 上次成交价 hint chip (一键采纳) -->
           <!-- Issue #793: 客户协议价 hint (CUSTOMER 自动覆盖, GLOBAL 仅提示) -->
           <div class="unit-price-wrap">

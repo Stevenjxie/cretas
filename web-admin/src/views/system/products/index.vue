@@ -142,6 +142,18 @@ const PRODUCT_TABS = PRODUCT_CATEGORIES.filter(
 
 type ProductCategory = typeof PRODUCT_CATEGORIES[number]['value'];
 
+interface PackagingSpec {
+  id?: string;
+  name: string;
+  packageUnit: string;
+  baseUnit: string;
+  conversionFactor?: number;
+  defaultSpec: boolean;
+  active: boolean;
+  sortOrder: number;
+  version?: number;
+}
+
 // 产品类型接口
 interface ProductType {
   id: string;
@@ -168,6 +180,7 @@ interface ProductType {
   targetGrossMargin?: number | null; // SP5: 0-1 decimal from backend
   targetGrossMarginPercent?: number | null; // UI-only percent input
   level1Unit?: string;     // T123: 一级单位 (如 筐, 箱) 与 boxConversionCoefficient 联用
+  packagingSpecs?: PackagingSpec[];
   baseProductName?: string; // T123: 产品基础名 (名称分离), RN 展示优先使用, 无则 fallback 到 name
   inventoryWarningThreshold?: number;
   minimumOrderQuantity?: number;
@@ -307,33 +320,39 @@ const formData = reactive<Partial<ProductType>>({
   notes: ''
 });
 
-// T147 Fix4: 规格信息组的「关系摘要」— 把 二级单位(=顶部单位, 只读回显) / 标准克重 / 一级单位+换算
-// 三者摆在一起, 让 "1 筐 = 20 盒, 每盒 120 克" 的关系一目了然.
-// 二级单位 不另建可编辑绑定, 只 read-only echo 顶部「单位」字段 (单一事实源).
-const specRelationSummary = computed<{
-  l2: string; l1: string; coef: string; grams: string;
-  conversionText: string; hasConversion: boolean; warn: boolean;
-}>(() => {
-  const l2 = formData.unit?.trim() || '';
-  const l1 = (formData.level1Unit as string | undefined)?.trim() || '';
-  const coefRaw = formData.boxConversionCoefficient;
-  const coefNum = typeof coefRaw === 'number' ? coefRaw : parseFloat(String(coefRaw ?? ''));
-  const grams = formData.gramsPerUnit != null && String(formData.gramsPerUnit) !== ''
-    ? String(formData.gramsPerUnit) : '';
-  const warn = !!(l1 && l2 && l1 === l2); // T146 守卫: 一级=二级 是废话
-  let conversionText = '';
-  let hasConversion = false;
-  if (!warn && l1 && l2 && !isNaN(coefNum) && coefNum > 0) {
-    conversionText = `1 ${l1} = ${coefNum} ${l2}`;
-    hasConversion = true;
-  }
+const packagingSpecs = ref<PackagingSpec[]>([]);
+
+function blankPackagingSpec(index = 0): PackagingSpec {
   return {
-    l2, l1,
-    coef: !isNaN(coefNum) && coefNum > 0 ? String(coefNum) : '',
-    grams,
-    conversionText, hasConversion, warn,
+    name: index === 0 ? '默认箱规' : `箱规${index + 1}`,
+    packageUnit: '箱',
+    baseUnit: formData.unit?.trim() || '',
+    conversionFactor: undefined,
+    defaultSpec: index === 0,
+    active: true,
+    sortOrder: index,
   };
-});
+}
+
+function addPackagingSpec() {
+  packagingSpecs.value.push(blankPackagingSpec(packagingSpecs.value.length));
+}
+
+function removePackagingSpec(index: number) {
+  if (index === 0) return;
+  packagingSpecs.value.splice(index, 1);
+  packagingSpecs.value.forEach((spec, idx) => {
+    spec.defaultSpec = idx === 0;
+    spec.sortOrder = idx;
+    spec.name = idx === 0 ? '默认箱规' : `箱规${idx + 1}`;
+  });
+}
+
+function packagingSpecText(spec: PackagingSpec): string {
+  const factor = Number(spec.conversionFactor);
+  if (!spec.packageUnit || !spec.baseUnit || !Number.isFinite(factor) || factor <= 0) return '';
+  return `1 ${spec.packageUnit} = ${factor} ${spec.baseUnit}`;
+}
 
 // T123: baseProductName autocomplete 建议 (从已加载产品名/baseProductName 去重)
 const baseProductNameSuggestions = ref<{ value: string }[]>([]);
@@ -623,9 +642,6 @@ watch(() => formData.name, () => {
 function composeSpecification(): string {
   const grams = formData.gramsPerUnit;
   const l2 = formData.unit?.trim() || '';
-  const coefRaw = formData.boxConversionCoefficient;
-  const coefNum = typeof coefRaw === 'number' ? coefRaw : parseFloat(String(coefRaw ?? ''));
-  const l1 = (formData.level1Unit as string | undefined)?.trim() || '';
 
   const parts: string[] = [];
   // 克重段: 需要 克重 + 二级单位 (如 "80g/盒")
@@ -633,26 +649,37 @@ function composeSpecification(): string {
   if (!isNaN(gramsNum) && gramsNum > 0 && l2) {
     parts.push(`${gramsNum}g/${l2}`);
   }
-  // 装箱段: 需要 装箱系数 + 二级单位 + 一级单位 (如 "20盒/框")
-  if (!isNaN(coefNum) && coefNum > 0 && l2 && l1 && l1 !== l2) {
-    parts.push(`${coefNum}${l2}/${l1}`);
+  // 装箱段: 同一 SKU 可有多条箱规，但标准克重仍只有一条。
+  for (const spec of packagingSpecs.value) {
+    const factor = Number(spec.conversionFactor);
+    if (Number.isFinite(factor) && factor > 0 && spec.baseUnit && spec.packageUnit
+        && spec.baseUnit !== spec.packageUnit) {
+      parts.push(`${factor}${spec.baseUnit}/${spec.packageUnit}`);
+    }
   }
   return parts.join(' ');
 }
 
 // 监听结构化字段 → 自动重拼规格 (仅新增, 非覆盖)
 watch(
-  () => [formData.gramsPerUnit, formData.unit, formData.boxConversionCoefficient, formData.level1Unit],
+  [() => formData.gramsPerUnit, () => formData.unit, packagingSpecs],
   () => {
     if (!dialogVisible.value) return;
-    // 用户手动改过规格 → 停止自动拼 (尊重用户输入)
-    if (specificationManuallyEdited.value) return;
+    packagingSpecs.value.forEach((spec, index) => {
+      spec.baseUnit = formData.unit?.trim() || '';
+      spec.defaultSpec = index === 0;
+      spec.sortOrder = index;
+    });
+    const first = packagingSpecs.value[0];
+    formData.level1Unit = first?.packageUnit || undefined;
+    formData.boxConversionCoefficient = first?.conversionFactor;
     const composed = composeSpecification();
     // T154: cascade 清空结构化字段后 composed 为空串 → 也清掉规格 (不保留旧自动拼结果)
     if (formData.specification !== composed) {
       formData.specification = composed;
     }
   },
+  { deep: true },
 );
 
 // ==================== T153 Fix B1: 基础名称从「产品名称 - 客户前缀 - 规格后缀」自动推导 ====================
@@ -833,6 +860,7 @@ function resetForm() {
   formData.standardCost = null;
   formData.targetGrossMargin = null;
   formData.targetGrossMarginPercent = null;
+  packagingSpecs.value = [blankPackagingSpec(0)];
 }
 
 function handleAdd() {
@@ -847,7 +875,7 @@ function handleAdd() {
   refreshCodePreview();
 }
 
-function handleEdit(row: ProductType) {
+async function handleEdit(row: ProductType) {
   dialogTitle.value = '编辑产品';
   isEditing.value = true;
   formData.id = row.id;
@@ -870,10 +898,33 @@ function handleEdit(row: ProductType) {
   // T148: 装箱换算内联行字段 — 编辑时从 row 回填
   formData.level1Unit = row.level1Unit ?? undefined;
   formData.boxConversionCoefficient = row.boxConversionCoefficient ?? undefined;
+  try {
+    const response = await get<PackagingSpec[]>(`/${factoryId.value}/product-types/${row.id}/packaging-specs`);
+    packagingSpecs.value = response.success && Array.isArray(response.data) && response.data.length > 0
+      ? response.data.map((spec, index) => ({
+          ...spec,
+          name: spec.name || (index === 0 ? '默认箱规' : `箱规${index + 1}`),
+          baseUnit: spec.baseUnit || row.unit,
+          defaultSpec: index === 0,
+          active: spec.active !== false,
+          sortOrder: index,
+        }))
+      : [{
+          ...blankPackagingSpec(0),
+          packageUnit: row.level1Unit || '箱',
+          baseUnit: row.unit,
+          conversionFactor: row.boxConversionCoefficient,
+        }];
+  } catch {
+    // 多箱规加载失败时不能退回旧单箱规继续编辑，否则保存会误删其余箱规。
+    ElMessage.error('包装规格加载失败，请重试后再编辑产品');
+    isEditing.value = false;
+    return;
+  }
   // T153: 编辑模式下, 已有规格视为「用户已设置」→ 改结构化字段不覆盖既有规格 (仅用户清空后才自动重拼).
   //       基础名称推导本就跳过编辑模式 (watch isEditing 守卫), 此处显式置标志保持一致.
   resetSuggestFlags();
-  specificationManuallyEdited.value = !!(row.specification && row.specification.trim());
+  specificationManuallyEdited.value = false;
   baseProductNameManuallyEdited.value = true;
   dialogVisible.value = true;
 }
@@ -912,7 +963,30 @@ async function handleSubmit() {
 
   try {
     await formRef.value.validate();
+    const partiallyConfigured = packagingSpecs.value.some((spec) => {
+      const hasAny = spec.conversionFactor != null && String(spec.conversionFactor) !== '';
+      const complete = !!spec.packageUnit && !!formData.unit && Number(spec.conversionFactor) > 0;
+      return hasAny && !complete;
+    });
+    if (partiallyConfigured) {
+      ElMessage.warning('请完整填写每条包装规格的包装单位和换算数量');
+      return;
+    }
     submitting.value = true;
+
+    const submittedPackagingSpecs = packagingSpecs.value
+      .filter((spec) => spec.packageUnit && Number(spec.conversionFactor) > 0)
+      .map((spec, index) => ({
+        id: spec.id,
+        name: index === 0 ? '默认箱规' : `箱规${index + 1}`,
+        packageUnit: spec.packageUnit,
+        baseUnit: formData.unit,
+        conversionFactor: Number(spec.conversionFactor),
+        defaultSpec: index === 0,
+        active: true,
+        sortOrder: index,
+        version: spec.version,
+      }));
 
     const payload: TableRow = {
       code: formData.code,
@@ -934,6 +1008,7 @@ async function handleSubmit() {
       //   但仍需随产品提交 — 显式追加 (后者覆盖前者同名 key 优先级: 上方 Object.fromEntries 无这两key 所以无冲突)
       level1Unit: formData.level1Unit ?? null,
       boxConversionCoefficient: formData.boxConversionCoefficient ?? null,
+      packagingSpecs: submittedPackagingSpecs,
     };
     if (canEditMarginRedline.value) {
       const marginPercent = nullableNumber(formData.targetGrossMarginPercent);
@@ -1535,27 +1610,32 @@ async function handleAiProductCreate() {
           :columns="1"
           label-width="120px"
         />
-        <!-- 装箱换算内联行「1 [大包装单位] ＝ [换算数] [基本单位]」— 只填数字, 单位从下拉选 -->
+        <!-- 同一 SKU 允许多条装箱换算；标准克重仍保持唯一。第一条是默认箱规。 -->
         <el-form-item label="装箱换算" label-width="120px">
-          <div class="spec-conversion-row">
-            <span class="spec-conversion-one">1</span>
-            <el-select v-model="formData.level1Unit" placeholder="大包装单位" filterable allow-create clearable
-              class="spec-unit-select" @change="markLevel1UnitEdited">
-              <el-option v-for="opt in unitSelectOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-            </el-select>
-            <span class="spec-conversion-eq">＝</span>
-            <el-input-number v-model="formData.boxConversionCoefficient" :min="0" :precision="4" :controls="false"
-              placeholder="换算数" class="spec-coef-input" @change="markBoxCoefEdited" />
-            <el-select v-model="formData.unit" placeholder="基本单位" filterable allow-create clearable
-              class="spec-unit-select" @change="markUnitEdited">
-              <el-option v-for="opt in unitSelectOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-            </el-select>
+          <div class="packaging-spec-list">
+            <div v-for="(spec, index) in packagingSpecs" :key="spec.id || index" class="packaging-spec-item">
+              <div class="spec-conversion-row">
+                <el-tag v-if="index === 0" size="small" type="success">默认</el-tag>
+                <span v-else class="packaging-spec-index">规格 {{ index + 1 }}</span>
+                <span class="spec-conversion-one">1</span>
+                <el-select v-model="spec.packageUnit" placeholder="大包装单位" filterable allow-create clearable
+                  class="spec-unit-select" @change="markLevel1UnitEdited">
+                  <el-option v-for="opt in unitSelectOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+                </el-select>
+                <span class="spec-conversion-eq">＝</span>
+                <el-input-number v-model="spec.conversionFactor" :min="0" :precision="4" :controls="false"
+                  placeholder="换算数" class="spec-coef-input" @change="markBoxCoefEdited" />
+                <el-input :model-value="formData.unit" disabled placeholder="基本单位" class="spec-unit-select" />
+                <el-button v-if="index > 0" link type="danger" @click="removePackagingSpec(index)">删除</el-button>
+              </div>
+              <div v-if="spec.packageUnit && formData.unit && spec.packageUnit === formData.unit" class="spec-same-warn">
+                ⚠️ 大包装单位应与基本单位不同（大包装如「箱」，基本如「盒」）
+              </div>
+              <div v-else-if="packagingSpecText(spec)" class="spec-echo">= {{ packagingSpecText(spec) }}</div>
+            </div>
+            <el-button type="primary" link @click="addPackagingSpec">+ 添加多包装规格</el-button>
           </div>
-          <div v-if="specRelationSummary.warn" class="spec-same-warn">
-            ⚠️ 大包装单位应与基本单位不同（大包装如「箱」，基本如「盒」）
-          </div>
-          <div v-else-if="specRelationSummary.hasConversion" class="spec-echo">= {{ specRelationSummary.conversionText }}</div>
-          <div class="form-tip">如 1 箱 = 42 盒；只填数字，单位从下拉选</div>
+          <div class="form-tip">同一 SKU 只能有一个标准克重，但可维护多种装箱数量，如 1箱=12盒、1箱=24盒</div>
         </el-form-item>
         <!-- 规格 = 上面结构化字段自动拼 (只读, 不再手输文字+数字混排) -->
         <el-form-item label="规格">
@@ -2051,6 +2131,26 @@ async function handleAiProductCreate() {
   align-items: center;
   gap: 6px;
   flex-wrap: nowrap;
+}
+
+.packaging-spec-list {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.packaging-spec-item {
+  padding: 10px 12px;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.packaging-spec-index {
+  min-width: 48px;
+  color: #606266;
+  font-size: 12px;
 }
 
 .spec-conversion-one {

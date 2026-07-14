@@ -76,4 +76,49 @@ public final class FgQuantityUnitConverter {
         return qty.multiply(BigDecimal.valueOf(1000))
                 .divide(gramsPerUnit, COUNT_SCALE, RoundingMode.HALF_UP);
     }
+
+    /**
+     * Converts through optional per-transaction packaging snapshots before applying the existing
+     * count/weight conversion. This keeps two carton choices for the same SKU unambiguous:
+     * source cartons are expanded with the source snapshot, while target cartons are collapsed
+     * with the target snapshot.
+     */
+    public static BigDecimal convertWithPackaging(
+            BigDecimal qty,
+            String fromUnit,
+            String toUnit,
+            BigDecimal gramsPerUnit,
+            String fromPackagingUnit,
+            String fromPackagingBaseUnit,
+            BigDecimal fromPackagingFactor,
+            String toPackagingUnit,
+            String toPackagingBaseUnit,
+            BigDecimal toPackagingFactor) {
+        if (qty == null) return null;
+
+        BigDecimal workingQty = qty;
+        String workingFrom = fromUnit;
+        if (isPackagingMatch(fromUnit, fromPackagingUnit, fromPackagingBaseUnit, fromPackagingFactor)) {
+            workingQty = workingQty.multiply(fromPackagingFactor);
+            workingFrom = fromPackagingBaseUnit;
+        }
+
+        boolean targetIsPackaging = isPackagingMatch(
+                toUnit, toPackagingUnit, toPackagingBaseUnit, toPackagingFactor);
+        String workingTo = targetIsPackaging ? toPackagingBaseUnit : toUnit;
+        BigDecimal converted = convert(workingQty, workingFrom, workingTo, gramsPerUnit);
+        if (converted == null) return null;
+        if (!targetIsPackaging) return converted;
+        return converted.divide(toPackagingFactor, 4, RoundingMode.HALF_UP);
+    }
+
+    private static boolean isPackagingMatch(
+            String actualUnit, String packagingUnit, String baseUnit, BigDecimal factor) {
+        return actualUnit != null
+                && actualUnit.equals(packagingUnit)
+                && baseUnit != null
+                && !baseUnit.isBlank()
+                && factor != null
+                && factor.signum() > 0;
+    }
 }

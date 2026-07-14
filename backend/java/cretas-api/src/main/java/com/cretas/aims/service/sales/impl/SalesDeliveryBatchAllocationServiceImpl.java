@@ -141,8 +141,8 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                     .subtract(batch.getReservedQuantity() == null ? BigDecimal.ZERO : batch.getReservedQuantity());
             // 🔴 C1: convert batch-native available into the delivery line's unit before comparing
             // against dto.getAllocatedQty() (always item.getUnit()).
-            BigDecimal available = FgQuantityUnitConverter.convert(
-                    availableNative, batch.getUnit(), item.getUnit(), gramsPerUnit);
+            BigDecimal available = convertBatchToDeliveryUnit(
+                    availableNative, batch, item, item.getUnit(), gramsPerUnit);
             if (available == null) {
                 throw new BusinessException(409, "成品批次 " + batch.getBatchNumber()
                         + " 的单位（" + batch.getUnit() + "）与发货单位（" + item.getUnit() + "）不一致, 且缺少产品「每盒/份克重」配置无法换算")
@@ -193,7 +193,9 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
     }
 
     @Override
-    public List<Map<String, Object>> recommendFifo(String factoryId, String productTypeId, BigDecimal requiredQty, String unit, String sourceWarehouseCode) {
+    public List<Map<String, Object>> recommendFifo(
+            String factoryId, String deliveryItemId, String productTypeId, BigDecimal requiredQty,
+            String unit, String sourceWarehouseCode) {
         if (factoryId == null || factoryId.isBlank()) {
             throw new BusinessException(400, "factoryId 不能为空")
                     .withHint("请重新登录获取有效的工厂上下文").withHintTarget("factoryId");
@@ -217,6 +219,19 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                 ? unit
                 : (productType != null ? productType.getUnit() : null);
         BigDecimal gramsPerUnit = productType != null ? productType.getGramsPerUnit() : null;
+        SalesDeliveryItem deliveryItem = null;
+        if (deliveryItemId != null && !deliveryItemId.isBlank()) {
+            try {
+                deliveryItem = deliveryItemRepository.findById(Long.valueOf(deliveryItemId)).orElse(null);
+            } catch (NumberFormatException ignored) {
+                throw new BusinessException(400, "非法的 deliveryItemId: " + deliveryItemId)
+                        .withHintTarget("deliveryItemId");
+            }
+            if (deliveryItem != null && !productTypeId.equals(deliveryItem.getProductTypeId())) {
+                throw new BusinessException(400, "发货行与产品不匹配")
+                        .withCode("DELIVERY_ITEM_PRODUCT_MISMATCH");
+            }
+        }
 
         // T4-D5 (#572) + 🔴 G1 (2026-07-03): warehouse discovery.
         //   - EXPLICIT sourceWarehouseCode → FIFO within that warehouse (respect explicit choice).
@@ -249,7 +264,8 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
             // silently mixed into the FEFO math.
             BigDecimal availableInTargetUnit = targetUnit == null
                     ? availableNative // 目标单位未知(极端: 产品无默认单位且调用方未传) — 向后兼容, 不换算
-                    : FgQuantityUnitConverter.convert(availableNative, batch.getUnit(), targetUnit, gramsPerUnit);
+                    : convertBatchToDeliveryUnit(
+                            availableNative, batch, deliveryItem, targetUnit, gramsPerUnit);
             if (availableInTargetUnit == null) {
                 skippedUnitMismatch++;
                 log.warn("FIFO 推荐跳过批次(单位不可换算): factoryId={}, batchId={}, batchUnit={}, targetUnit={}, gramsPerUnit={}",
@@ -280,6 +296,25 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                 remaining.compareTo(BigDecimal.ZERO) <= 0);
 
         return result;
+    }
+
+    private BigDecimal convertBatchToDeliveryUnit(
+            BigDecimal quantity,
+            FinishedGoodsBatch batch,
+            SalesDeliveryItem deliveryItem,
+            String targetUnit,
+            BigDecimal gramsPerUnit) {
+        return FgQuantityUnitConverter.convertWithPackaging(
+                quantity,
+                batch.getUnit(),
+                targetUnit,
+                gramsPerUnit,
+                batch.getPackagingUnit(),
+                batch.getPackagingBaseUnit(),
+                batch.getPackagingFactor(),
+                deliveryItem != null ? deliveryItem.getPackagingUnit() : null,
+                deliveryItem != null ? deliveryItem.getPackagingBaseUnit() : null,
+                deliveryItem != null ? deliveryItem.getPackagingFactor() : null);
     }
 
     @Override

@@ -56,7 +56,16 @@ public interface SalesDeliveryBatchAllocationService {
      * product's default unit; a batch whose native unit can't be converted to the target unit
      * is skipped from the recommendation (honest-null, never silently mixed in).
      */
-    List<Map<String, Object>> recommendFifo(String factoryId, String productTypeId, BigDecimal requiredQty, String unit, String sourceWarehouseCode);
+    List<Map<String, Object>> recommendFifo(
+            String factoryId, String deliveryItemId, String productTypeId,
+            BigDecimal requiredQty, String unit, String sourceWarehouseCode);
+
+    /** Backward-compatible overload for isolated callers without delivery-line context. */
+    default List<Map<String, Object>> recommendFifo(
+            String factoryId, String productTypeId, BigDecimal requiredQty,
+            String unit, String sourceWarehouseCode) {
+        return recommendFifo(factoryId, null, productTypeId, requiredQty, unit, sourceWarehouseCode);
+    }
 
     /**
      * 🔴 G1 (2026-07-03): 该产品当前有可用成品库存的仓库 code 清单 (去重, 排除研发/中试库)。

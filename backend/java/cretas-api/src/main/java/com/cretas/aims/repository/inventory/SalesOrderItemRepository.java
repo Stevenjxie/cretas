@@ -107,9 +107,12 @@ public interface SalesOrderItemRepository extends JpaRepository<SalesOrderItem, 
      */
     @Query("SELECT i.productTypeId AS productTypeId, " +
            "MIN(i.productName) AS productName, " +
-           "MIN(i.unit) AS minUnit, " +
-           "MAX(i.unit) AS maxUnit, " +
-           "SUM(i.quantity) AS demand " +
+           "MIN(CASE WHEN i.packagingFactor IS NOT NULL AND i.unit = i.packagingUnit " +
+           "THEN i.packagingBaseUnit ELSE i.unit END) AS minUnit, " +
+           "MAX(CASE WHEN i.packagingFactor IS NOT NULL AND i.unit = i.packagingUnit " +
+           "THEN i.packagingBaseUnit ELSE i.unit END) AS maxUnit, " +
+           "SUM(CASE WHEN i.packagingFactor IS NOT NULL AND i.unit = i.packagingUnit " +
+           "THEN i.quantity * i.packagingFactor ELSE i.quantity END) AS demand " +
            "FROM SalesOrderItem i " +
            "WHERE i.salesOrder.factoryId = :factoryId " +
            "AND i.salesOrder.requiredDeliveryDate = :date " +
@@ -137,9 +140,12 @@ public interface SalesOrderItemRepository extends JpaRepository<SalesOrderItem, 
            "MIN(i.productName) AS productName, " +
            "COALESCE(i.destWarehouseCode, '未分仓') AS destWarehouseCode, " +
            "MIN(i.destWarehouseName) AS destWarehouseName, " +
-           "MIN(i.unit) AS minUnit, " +
-           "MAX(i.unit) AS maxUnit, " +
-           "SUM(i.quantity) AS demand " +
+           "MIN(CASE WHEN i.packagingFactor IS NOT NULL AND i.unit = i.packagingUnit " +
+           "THEN i.packagingBaseUnit ELSE i.unit END) AS minUnit, " +
+           "MAX(CASE WHEN i.packagingFactor IS NOT NULL AND i.unit = i.packagingUnit " +
+           "THEN i.packagingBaseUnit ELSE i.unit END) AS maxUnit, " +
+           "SUM(CASE WHEN i.packagingFactor IS NOT NULL AND i.unit = i.packagingUnit " +
+           "THEN i.quantity * i.packagingFactor ELSE i.quantity END) AS demand " +
            "FROM SalesOrderItem i " +
            "WHERE i.salesOrder.factoryId = :factoryId " +
            "AND i.salesOrder.requiredDeliveryDate = :date " +

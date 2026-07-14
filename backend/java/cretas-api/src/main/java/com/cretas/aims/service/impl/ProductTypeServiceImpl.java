@@ -12,6 +12,7 @@ import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.ProductTypeService;
+import com.cretas.aims.service.product.ProductPackagingSpecService;
 import com.cretas.aims.service.unit.ProductSpecificationConversionSyncService;
 import com.cretas.aims.service.workflow.WorkflowUnitReviewService;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -54,17 +55,30 @@ public class ProductTypeServiceImpl implements ProductTypeService {
     private final CustomerRepository customerRepository;
     private final WorkflowUnitReviewService workflowUnitReviewService;
     private final ProductSpecificationConversionSyncService specificationConversionSyncService;
+    private final ProductPackagingSpecService productPackagingSpecService;
 
     // Manual constructor (Lombok @RequiredArgsConstructor not working)
+    @org.springframework.beans.factory.annotation.Autowired
     public ProductTypeServiceImpl(ProductTypeRepository productTypeRepository, ObjectMapper objectMapper,
                                   CustomerRepository customerRepository,
                                   WorkflowUnitReviewService workflowUnitReviewService,
-                                  ProductSpecificationConversionSyncService specificationConversionSyncService) {
+                                  ProductSpecificationConversionSyncService specificationConversionSyncService,
+                                  ProductPackagingSpecService productPackagingSpecService) {
         this.productTypeRepository = productTypeRepository;
         this.objectMapper = objectMapper;
         this.customerRepository = customerRepository;
         this.workflowUnitReviewService = workflowUnitReviewService;
         this.specificationConversionSyncService = specificationConversionSyncService;
+        this.productPackagingSpecService = productPackagingSpecService;
+    }
+
+    /** Legacy isolated-test constructor. Spring production wiring uses the six-argument constructor. */
+    public ProductTypeServiceImpl(ProductTypeRepository productTypeRepository, ObjectMapper objectMapper,
+                                  CustomerRepository customerRepository,
+                                  WorkflowUnitReviewService workflowUnitReviewService,
+                                  ProductSpecificationConversionSyncService specificationConversionSyncService) {
+        this(productTypeRepository, objectMapper, customerRepository, workflowUnitReviewService,
+                specificationConversionSyncService, null);
     }
 
     /** T149 Part A: 自动生成编号撞 UNIQUE 约束时的重试次数 (并发/竞态防御). */
@@ -108,6 +122,11 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                     .withHint("请使用其他产品编号，或留空由系统自动生成").withHintTarget("code");
         }
         log.info("产品类型创建成功: id={}", productType.getId());
+        if (productPackagingSpecService != null && dto.getPackagingSpecs() != null) {
+            productPackagingSpecService.replace(productType, dto.getPackagingSpecs());
+        } else if (productPackagingSpecService != null) {
+            productPackagingSpecService.synchronizeLegacyDefault(productType);
+        }
         specificationConversionSyncService.synchronize(productType);
         return convertToDTO(productType);
     }
@@ -318,6 +337,14 @@ public class ProductTypeServiceImpl implements ProductTypeService {
 
         productType.setUpdatedAt(LocalDateTime.now());
         productType = productTypeRepository.save(productType);
+        if (productPackagingSpecService != null && dto.getPackagingSpecs() != null) {
+            productPackagingSpecService.replace(productType, dto.getPackagingSpecs());
+        } else if (productPackagingSpecService != null
+                && (!Objects.equals(previousUnit, productType.getUnit())
+                || !Objects.equals(previousLevel1Unit, productType.getLevel1Unit())
+                || !sameDecimal(previousBoxConversionCoefficient, productType.getBoxConversionCoefficient()))) {
+            productPackagingSpecService.synchronizeLegacyDefault(productType);
+        }
         boolean conversionChanged = specificationConversionSyncService.synchronize(productType);
 
         if (!Objects.equals(previousUnit, productType.getUnit())
