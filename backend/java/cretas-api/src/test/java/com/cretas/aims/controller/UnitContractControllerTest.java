@@ -6,6 +6,7 @@ import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitConversionContext;
 import com.cretas.aims.service.unit.UnitConversionResult;
 import com.cretas.aims.service.unit.UnitConversionStatus;
+import com.cretas.aims.service.unit.UnitGovernanceAuditService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -25,11 +26,12 @@ class UnitContractControllerTest {
 
     @Mock UnitContractService unitContractService;
     @Mock ProductUnitConversionService productUnitConversionService;
+    @Mock UnitGovernanceAuditService unitGovernanceAuditService;
 
     @Test
     void convertPassesFactoryAndProductContextToAuthority() {
         UnitContractController controller = new UnitContractController(
-                unitContractService, productUnitConversionService);
+                unitContractService, productUnitConversionService, unitGovernanceAuditService);
         UnitConversionResult converted = new UnitConversionResult(
                 UnitConversionStatus.CONVERTED, new BigDecimal("0.2"), "pcs", "kg",
                 List.of("pcs", "g", "kg"), null, null, null, List.of());
@@ -48,12 +50,24 @@ class UnitContractControllerTest {
     @Test
     void listIsStrictlyFactoryAndProductScoped() {
         UnitContractController controller = new UnitContractController(
-                unitContractService, productUnitConversionService);
+                unitContractService, productUnitConversionService, unitGovernanceAuditService);
         when(productUnitConversionService.list("F1", "P1")).thenReturn(List.of());
 
         var response = controller.list("F1", "P1");
 
         assertTrue(response.getBody().getData().isEmpty());
         verify(productUnitConversionService).list("F1", "P1");
+    }
+
+    @Test
+    void conflictsIsStrictlyFactoryScoped() {
+        UnitContractController controller = new UnitContractController(
+                unitContractService, productUnitConversionService, unitGovernanceAuditService);
+        when(unitGovernanceAuditService.scan("F1")).thenReturn(List.of());
+
+        var response = controller.conflicts("F1");
+
+        assertTrue(response.getBody().getData().isEmpty());
+        verify(unitGovernanceAuditService).scan("F1");
     }
 }

@@ -3,12 +3,14 @@ package com.cretas.aims.controller;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.unit.ProductUnitConversionDTO;
+import com.cretas.aims.dto.unit.UnitGovernanceConflictDTO;
 import com.cretas.aims.dto.unit.UnitCatalogItemDTO;
 import com.cretas.aims.dto.unit.UnitConversionRequest;
 import com.cretas.aims.service.unit.ProductUnitConversionService;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitConversionContext;
 import com.cretas.aims.service.unit.UnitConversionResult;
+import com.cretas.aims.service.unit.UnitGovernanceAuditService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -33,6 +35,13 @@ public class UnitContractController {
 
     private final UnitContractService unitContractService;
     private final ProductUnitConversionService productUnitConversionService;
+    private final UnitGovernanceAuditService unitGovernanceAuditService;
+
+    @GetMapping("/unit-governance/conflicts")
+    public ResponseEntity<ApiResponse<List<UnitGovernanceConflictDTO>>> conflicts(
+            @PathVariable String factoryId) {
+        return ResponseEntity.ok(ApiResponse.success(unitGovernanceAuditService.scan(factoryId)));
+    }
 
     @GetMapping("/units/catalog")
     public ResponseEntity<ApiResponse<List<UnitCatalogItemDTO>>> catalog(@PathVariable String factoryId) {

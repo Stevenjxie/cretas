@@ -23,6 +23,8 @@ public interface ProductProcessWorkflowRepository extends JpaRepository<ProductP
             String factoryId,
             String productTypeId);
 
+    List<ProductProcessWorkflow> findByFactoryIdOrderByProductTypeIdAscDefinitionVersionDesc(String factoryId);
+
     Optional<ProductProcessWorkflow> findFirstByFactoryIdAndProductTypeIdAndDefinitionVersion(
             String factoryId,
             String productTypeId,

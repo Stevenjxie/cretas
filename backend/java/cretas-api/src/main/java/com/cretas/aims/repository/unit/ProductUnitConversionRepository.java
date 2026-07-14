@@ -16,6 +16,8 @@ public interface ProductUnitConversionRepository extends JpaRepository<ProductUn
     List<ProductUnitConversion> findByFactoryIdAndProductTypeIdOrderByCreatedAtAsc(
             String factoryId, String productTypeId);
 
+    List<ProductUnitConversion> findByFactoryIdOrderByProductTypeIdAscCreatedAtAsc(String factoryId);
+
     Optional<ProductUnitConversion> findByIdAndFactoryIdAndProductTypeId(
             String id, String factoryId, String productTypeId);
 
