@@ -83,42 +83,112 @@ public class AmapClient implements DrivingRouteProvider {
         if (!isEnabled() || address == null || address.isBlank()) {
             return Optional.empty();
         }
-        if (!tryConsumeBudget()) {
+        // 从地址里抽出「预期城市」（如「江苏省常州市新北区…」→「常州」）。用于杜绝跨城市漂移：
+        // 高德对含 POI 后缀 / 模糊门牌的地址偶尔会 fuzzy-match 到别的城市（客户实测「渝八两常州新北万达店」
+        // 被解析到昆山、「延陵地铁商业街」被解析到常熟）。抽到城市后做「返回城市一致性校验」。
+        String expectedCity = extractCity(address);
+
+        // 第一次：全国范围解析（对齐地址即精确，通常直接命中且城市匹配）。
+        GeoResult first = doGeocode(address, null);
+        if (first == null) {
             return Optional.empty();
+        }
+        if (expectedCity == null || cityMatches(expectedCity, first.city())) {
+            return first.coord();
+        }
+
+        // 城市不一致 → 疑似跨城市漂移。第二次：限定城市重试（把搜索锁死在预期城市内，
+        // 高德要么在城内找到正确点，要么返回空）。
+        log.warn("Amap geocode city mismatch: address={} expected={} got={} → retry constrained",
+                address, expectedCity, first.city());
+        GeoResult retry = doGeocode(address, expectedCity);
+        if (retry != null && cityMatches(expectedCity, retry.city())) {
+            return retry.coord();
+        }
+        // 仍不一致 / 城内无匹配 → 诚实降级为 UNRESOLVED（宁可让调度员手动补点，也绝不落一个错城市的坐标）。
+        log.warn("Amap geocode rejected (city still mismatch) for address={} expected={}", address, expectedCity);
+        return Optional.empty();
+    }
+
+    /** 单次调用高德地理编码（{@code city} 为 null 则全国搜）。返回坐标 + 高德判定的城市。 */
+    private GeoResult doGeocode(String address, String city) {
+        if (!tryConsumeBudget()) {
+            return null;
         }
         HttpUrl parsedBase = HttpUrl.parse(GEOCODE_URL);
         if (parsedBase == null) {
-            return Optional.empty();
+            return null;
         }
-        // 暂不限定城市 —— 全国范围解析。地址通常含完整省市（如「江苏省常州市…」），高德据此即可准确定位；
-        // 不再硬编码「苏州」city，否则常州/无锡等外地门店会被限制在苏州范围内搜而全部解析失败（44 家待定位）。
-        HttpUrl url = parsedBase.newBuilder()
+        HttpUrl.Builder b = parsedBase.newBuilder()
                 .addQueryParameter("key", apiKey)
-                .addQueryParameter("address", address)
-                .build();
-        Request request = new Request.Builder().url(url).get().build();
-
+                .addQueryParameter("address", address);
+        if (city != null && !city.isBlank()) {
+            b.addQueryParameter("city", city);
+        }
+        Request request = new Request.Builder().url(b.build()).get().build();
         try (Response response = http.newCall(request).execute()) {
             if (!response.isSuccessful() || response.body() == null) {
                 log.warn("Amap geocode HTTP {} for address={}", response.code(), address);
-                return Optional.empty();
+                return null;
             }
             Map<String, Object> parsed = readJsonObject(response.body().string());
             if (parsed == null || !STATUS_OK.equals(String.valueOf(parsed.get("status")))) {
                 log.warn("Amap geocode non-success for address={}: {}", address, parsed == null ? null : parsed.get("info"));
-                return Optional.empty();
+                return null;
             }
             Object geocodesObj = parsed.get("geocodes");
             if (!(geocodesObj instanceof List<?> geocodes) || geocodes.isEmpty()
                     || !(geocodes.get(0) instanceof Map<?, ?> geocodeMap)) {
-                return Optional.empty();
+                return null;
             }
-            Object locationObj = geocodeMap.get("location");
-            return parseLngLat(locationObj);
+            Optional<double[]> coord = parseLngLat(geocodeMap.get("location"));
+            if (coord.isEmpty()) {
+                return null;
+            }
+            return new GeoResult(coord, cityFieldToString(geocodeMap.get("city")));
         } catch (IOException e) {
             log.warn("Amap geocode failed for address={}: {}", address, e.getMessage());
-            return Optional.empty();
+            return null;
         }
+    }
+
+    private record GeoResult(Optional<double[]> coord, String city) {
+    }
+
+    /** 高德返回的 {@code city} 字段：城市为 String（如「常州市」），直辖市/无值时是空数组 []。 */
+    private static String cityFieldToString(Object city) {
+        if (city instanceof String s && !s.isBlank()) {
+            return s;
+        }
+        return null; // 空数组（直辖市等）→ 无法据此校验，视为不校验
+    }
+
+    /**
+     * 从地址抽取地级市名（去「市」后缀，便于宽松比较）。取第一个「XX市」（跳过「省」）。
+     * 抽不到（无「市」字 / 纯 POI 名）→ null，此时不做城市校验（回落原全国搜行为）。
+     */
+    static String extractCity(String address) {
+        if (address == null) {
+            return null;
+        }
+        java.util.regex.Matcher m = CITY_PATTERN.matcher(address);
+        if (m.find()) {
+            String city = m.group(1);
+            return city.endsWith("市") ? city.substring(0, city.length() - 1) : city;
+        }
+        return null;
+    }
+
+    private static final java.util.regex.Pattern CITY_PATTERN =
+            java.util.regex.Pattern.compile("([\\u4e00-\\u9fa5]{2,4}市)");
+
+    /** 宽松城市匹配：高德返回城市（可能空/带「市」）与预期城市互相包含即算一致。 */
+    private static boolean cityMatches(String expected, String returned) {
+        if (returned == null || returned.isBlank()) {
+            return true; // 高德没给城市（直辖市等）→ 无法否证，放行（不误杀）
+        }
+        String r = returned.endsWith("市") ? returned.substring(0, returned.length() - 1) : returned;
+        return r.contains(expected) || expected.contains(r);
     }
 
     /**
