@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import mapImage from '@/assets/logistics/suzhou-logistics-map.png';
 import { DEPOT_POINT } from '../mockData';
+import { DEPOT_LNGLAT } from '../mapDepot';
 import type { MapPoint, RouteTrip, StoreOrder } from '../types';
 import {
   ensureDriving,
@@ -26,9 +27,6 @@ const emit = defineEmits<{
 }>();
 
 const routeColors = ['#1B65A8', '#7C3AED', '#C2410C', '#047857', '#BE185D', '#0E7490'];
-
-// 配送中心真实经纬度（一加物流仓库：苏州相城区望亭海亭路197号沐井供应链；与后端 logistics.depot.lng/lat 一致）。
-const DEPOT_LNGLAT: [number, number] = [120.476894, 31.437014];
 
 // 「显示全部线路」开关（客户要求）：默认单条线路突出、其余淡化；开启后所有线路满不透明度同时展示。
 const showAllRoutes = ref(false);
