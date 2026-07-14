@@ -6,6 +6,10 @@ import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.bom.BomRecipeMigrationReport;
 import com.cretas.aims.dto.bom.BomSeasoningResponse;
 import com.cretas.aims.dto.bom.BomSeasoningSaveRequest;
+import com.cretas.aims.dto.bom.BomSeasoningWorkspaceResponse;
+import com.cretas.aims.dto.bom.SeasoningBindingCreateRequest;
+import com.cretas.aims.dto.bom.SeasoningBindingMutationResponse;
+import com.cretas.aims.dto.bom.SeasoningBindingUpdateRequest;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest.BomRecipeItemDTO;
 import com.cretas.aims.dto.bom.UpdateBomRecipeRequest;
@@ -14,6 +18,7 @@ import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.service.bom.BomRecipeMigrationService;
 import com.cretas.aims.service.bom.BomRecipeService;
+import com.cretas.aims.service.bom.BomSeasoningWorkspaceService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -51,6 +56,7 @@ public class BomRecipeController {
 
     private final BomRecipeService recipeService;
     private final BomRecipeMigrationService migrationService;
+    private final BomSeasoningWorkspaceService seasoningWorkspaceService;
 
     // ========== List / detail ==========
 
@@ -221,6 +227,50 @@ public class BomRecipeController {
             @PathVariable String recipeId,
             @Valid @RequestBody BomSeasoningSaveRequest request) {
         return ApiResponse.success(recipeService.saveSeasoning(factoryId, recipeId, request));
+    }
+
+    @GetMapping("/{recipeId}/seasoning/workspace")
+    @Operation(summary = "获取工序优先的调料配置工作区")
+    public ApiResponse<BomSeasoningWorkspaceResponse> getSeasoningWorkspace(
+            @PathVariable String factoryId,
+            @PathVariable String recipeId) {
+        return ApiResponse.success(seasoningWorkspaceService.getWorkspace(factoryId, recipeId));
+    }
+
+    @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
+    @PostMapping("/{recipeId}/seasoning/processes/{workProcessId}/bindings")
+    @Operation(summary = "向指定工序新增调料绑定")
+    public ApiResponse<SeasoningBindingMutationResponse> createSeasoningBinding(
+            @PathVariable String factoryId,
+            @PathVariable String recipeId,
+            @PathVariable String workProcessId,
+            @Valid @RequestBody SeasoningBindingCreateRequest request) {
+        return ApiResponse.success(seasoningWorkspaceService.createBinding(
+                factoryId, recipeId, workProcessId, request));
+    }
+
+    @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
+    @PutMapping("/{recipeId}/seasoning/bindings/{bindingId}")
+    @Operation(summary = "修改单条工序调料绑定")
+    public ApiResponse<SeasoningBindingMutationResponse> updateSeasoningBinding(
+            @PathVariable String factoryId,
+            @PathVariable String recipeId,
+            @PathVariable Long bindingId,
+            @Valid @RequestBody SeasoningBindingUpdateRequest request) {
+        return ApiResponse.success(seasoningWorkspaceService.updateBinding(
+                factoryId, recipeId, bindingId, request));
+    }
+
+    @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
+    @DeleteMapping("/{recipeId}/seasoning/bindings/{bindingId}")
+    @Operation(summary = "删除单条工序调料绑定")
+    public ApiResponse<SeasoningBindingMutationResponse> deleteSeasoningBinding(
+            @PathVariable String factoryId,
+            @PathVariable String recipeId,
+            @PathVariable Long bindingId,
+            @RequestParam Long expectedRevision) {
+        return ApiResponse.success(seasoningWorkspaceService.deleteBinding(
+                factoryId, recipeId, bindingId, expectedRevision));
     }
 
     // ========== U3: product_recipes → BOM 一次性迁移 (BOM 统管配方+锅序合并) ==========
