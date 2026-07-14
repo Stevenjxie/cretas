@@ -7,12 +7,14 @@ import org.springframework.jdbc.datasource.init.ScriptUtils;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Opt-in PostgreSQL proof for the Flyway-only partial unique index.
@@ -39,6 +41,7 @@ class ProductUnitConversionPostgresIntegrationTest {
             statement.execute("CREATE TABLE unit_of_measurements (id VARCHAR(36) PRIMARY KEY)");
             ScriptUtils.executeSqlScript(connection,
                     new ClassPathResource("db/flyway/V20261028_62__product_unit_conversions.sql"));
+            assertEquals("jsonb", aliasesJsonDataType(statement));
 
             insertActiveConversion(statement, "first");
             SQLException duplicate = assertThrows(SQLException.class,
@@ -58,6 +61,19 @@ class ProductUnitConversionPostgresIntegrationTest {
                   (id, factory_id, product_type_id, from_unit_code, to_unit_code, factor, source_type)
                 VALUES ('%s', 'F-UNIT', 'P-UNIT', 'box', 'kg', 12.50000000, 'PACKAGING')
                 """.formatted(id));
+    }
+
+    private static String aliasesJsonDataType(Statement statement) throws SQLException {
+        try (ResultSet resultSet = statement.executeQuery("""
+                SELECT data_type
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'unit_of_measurements'
+                  AND column_name = 'aliases_json'
+                """)) {
+            assertTrue(resultSet.next(), "aliases_json column must exist");
+            return resultSet.getString("data_type");
+        }
     }
 
     private static void dropSchema(String schema) throws SQLException {

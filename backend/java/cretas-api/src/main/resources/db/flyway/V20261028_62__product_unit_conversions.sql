@@ -23,4 +23,4 @@ CREATE UNIQUE INDEX uq_puc_active_direction
   WHERE deleted_at IS NULL AND effective_to IS NULL;
 
 ALTER TABLE unit_of_measurements
-  ADD COLUMN aliases_json TEXT;
+  ADD COLUMN aliases_json JSONB;

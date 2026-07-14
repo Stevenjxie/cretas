@@ -33,7 +33,7 @@ class ProductUnitConversionSchemaContractTest {
         assertContains(sql, "ON product_unit_conversions(factory_id, product_type_id, from_unit_code, to_unit_code)");
         assertContains(sql, "WHERE deleted_at IS NULL AND effective_to IS NULL");
         assertContains(sql, "ALTER TABLE unit_of_measurements");
-        assertContains(sql, "ADD COLUMN aliases_json TEXT");
+        assertContains(sql, "ADD COLUMN aliases_json JSONB");
 
         assertTrue(Files.exists(ENTITY), "Task 2 product conversion entity must exist");
         String entity = Files.readString(ENTITY);
