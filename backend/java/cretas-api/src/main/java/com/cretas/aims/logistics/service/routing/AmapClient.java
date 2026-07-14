@@ -41,6 +41,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class AmapClient implements DrivingRouteProvider {
 
     private static final String GEOCODE_URL = "https://restapi.amap.com/v3/geocode/geo";
+    private static final String POI_URL = "https://restapi.amap.com/v3/place/text";
     private static final String DISTANCE_URL = "https://restapi.amap.com/v3/distance";
     private static final String DIRECTION_URL = "https://restapi.amap.com/v3/direction/driving";
     private static final long TIMEOUT_SECONDS = 8;
@@ -83,31 +84,102 @@ public class AmapClient implements DrivingRouteProvider {
         if (!isEnabled() || address == null || address.isBlank()) {
             return Optional.empty();
         }
-        // 从地址里抽出「预期城市」（如「江苏省常州市新北区…」→「常州」）。用于杜绝跨城市漂移：
-        // 高德对含 POI 后缀 / 模糊门牌的地址偶尔会 fuzzy-match 到别的城市（客户实测「渝八两常州新北万达店」
-        // 被解析到昆山、「延陵地铁商业街」被解析到常熟）。抽到城市后做「返回城市一致性校验」。
+        // 从地址里抽出「预期城市 + 预期区县」（如「江苏省无锡市梁溪区…」→ 城市=无锡, 区=梁溪区）。
+        // 用于杜绝漂移: 高德对含 POI 后缀 / 小区简称 / 模糊门牌的地址会 fuzzy-match 到别处的同名 POI —
+        //   跨城市: 「渝八两常州新北万达店」→昆山、「延陵地铁商业街」→常熟 (城市校验拦);
+        //   同城跨区: 「无锡市梁溪区凤凰城20-6」→江阴市的「凤凰城」小区 (区级校验拦, 2026-07-14 客户实测)。
         String expectedCity = extractCity(address);
+        String expectedDistrict = extractDistrict(address);
 
-        // 第一次：全国范围解析（对齐地址即精确，通常直接命中且城市匹配）。
+        // 第一次：全国范围解析（地址规范即精确，通常直接命中且城市/区匹配）。
         GeoResult first = doGeocode(address, null);
-        if (first == null) {
+        GeoResult candidate = null;
+        if (first != null && (expectedCity == null || cityMatches(expectedCity, first.city()))) {
+            candidate = first;
+        } else if (first != null) {
+            // 城市不一致 → 疑似跨城市漂移。第二次：限定城市重试。
+            log.warn("Amap geocode city mismatch: address={} expected={} got={} → retry constrained",
+                    address, expectedCity, first.city());
+            GeoResult retry = doGeocode(address, expectedCity);
+            if (retry != null && cityMatches(expectedCity, retry.city())) {
+                candidate = retry;
+            }
+        }
+
+        // 区级校验: 城市对了但落在别的区/县级市(高德 city 参数拦不住县级市, 如江阴属无锡) → 不能直接用。
+        if (candidate != null && areaMatchesLoose(expectedDistrict, candidate.district())) {
+            return candidate.coord();
+        }
+        if (candidate != null) {
+            log.warn("Amap geocode district mismatch: address={} expected={} got={} → POI fallback",
+                    address, expectedDistrict, candidate.district());
+        }
+
+        // POI 兜底 (geocode 无结果 / 城市不符 / 区不符): 用地址核心词(去省市区前缀+门牌尾巴)在预期城市内
+        // 搜 POI, 只取落在预期区的第一个 (实测「凤凰城」→ 命中梁溪区「华仁·凤凰城」而非江阴「凤凰城」)。
+        if (expectedCity != null && expectedDistrict != null) {
+            Optional<double[]> poi = poiSearchInDistrict(address, expectedCity, expectedDistrict);
+            if (poi.isPresent()) {
+                return poi;
+            }
+        }
+        // 全部失败 → 诚实降级为 UNRESOLVED（宁可让调度员手动补点，也绝不落一个错区/错城市的坐标）。
+        log.warn("Amap geocode rejected (no result matching expected area) for address={} city={} district={}",
+                address, expectedCity, expectedDistrict);
+        return Optional.empty();
+    }
+
+    /**
+     * POI 关键词搜索兜底 — 限定城市 + 只接受落在预期区县的结果。
+     * geocode 对「小区简称/品牌名」类地址常匹配错同名 POI, 而 POI 搜索返回多个候选带各自区县
+     * ({@code adname}), 可按预期区过滤出正确的那一个。找不到 → empty (诚实)。
+     */
+    private Optional<double[]> poiSearchInDistrict(String address, String city, String district) {
+        String keywords = deriveKeywords(address);
+        if (keywords == null || keywords.length() < 2 || !tryConsumeBudget()) {
             return Optional.empty();
         }
-        if (expectedCity == null || cityMatches(expectedCity, first.city())) {
-            return first.coord();
+        HttpUrl parsedBase = HttpUrl.parse(POI_URL);
+        if (parsedBase == null) {
+            return Optional.empty();
         }
-
-        // 城市不一致 → 疑似跨城市漂移。第二次：限定城市重试（把搜索锁死在预期城市内，
-        // 高德要么在城内找到正确点，要么返回空）。
-        log.warn("Amap geocode city mismatch: address={} expected={} got={} → retry constrained",
-                address, expectedCity, first.city());
-        GeoResult retry = doGeocode(address, expectedCity);
-        if (retry != null && cityMatches(expectedCity, retry.city())) {
-            return retry.coord();
+        HttpUrl url = parsedBase.newBuilder()
+                .addQueryParameter("key", apiKey)
+                .addQueryParameter("keywords", keywords)
+                .addQueryParameter("city", city)
+                .addQueryParameter("citylimit", "true")
+                .addQueryParameter("offset", "10")
+                .build();
+        Request request = new Request.Builder().url(url).get().build();
+        try (Response response = http.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                return Optional.empty();
+            }
+            Map<String, Object> parsed = readJsonObject(response.body().string());
+            if (parsed == null || !STATUS_OK.equals(String.valueOf(parsed.get("status")))
+                    || !(parsed.get("pois") instanceof List<?> pois)) {
+                return Optional.empty();
+            }
+            for (Object poiObj : pois) {
+                if (!(poiObj instanceof Map<?, ?> poi)) {
+                    continue;
+                }
+                String adname = textFieldToString(poi.get("adname"));
+                if (!areaMatchesLoose(district, adname) || adname == null) {
+                    continue; // adname 为空也跳过 — POI 兜底必须确证落在预期区, 不放行未知
+                }
+                Optional<double[]> coord = parseLngLat(poi.get("location"));
+                if (coord.isPresent()) {
+                    log.info("Amap POI fallback hit: address={} keywords={} → poi={} ({})",
+                            address, keywords, poi.get("name"), adname);
+                    return coord;
+                }
+            }
+            return Optional.empty();
+        } catch (IOException e) {
+            log.warn("Amap POI search failed for keywords={}: {}", keywords, e.getMessage());
+            return Optional.empty();
         }
-        // 仍不一致 / 城内无匹配 → 诚实降级为 UNRESOLVED（宁可让调度员手动补点，也绝不落一个错城市的坐标）。
-        log.warn("Amap geocode rejected (city still mismatch) for address={} expected={}", address, expectedCity);
-        return Optional.empty();
     }
 
     /** 单次调用高德地理编码（{@code city} 为 null 则全国搜）。返回坐标 + 高德判定的城市。 */
@@ -145,42 +217,82 @@ public class AmapClient implements DrivingRouteProvider {
             if (coord.isEmpty()) {
                 return null;
             }
-            return new GeoResult(coord, cityFieldToString(geocodeMap.get("city")));
+            return new GeoResult(coord, textFieldToString(geocodeMap.get("city")),
+                    textFieldToString(geocodeMap.get("district")));
         } catch (IOException e) {
             log.warn("Amap geocode failed for address={}: {}", address, e.getMessage());
             return null;
         }
     }
 
-    private record GeoResult(Optional<double[]> coord, String city) {
+    private record GeoResult(Optional<double[]> coord, String city, String district) {
     }
 
-    /** 高德返回的 {@code city} 字段：城市为 String（如「常州市」），直辖市/无值时是空数组 []。 */
-    private static String cityFieldToString(Object city) {
-        if (city instanceof String s && !s.isBlank()) {
+    /** 高德返回的文本字段（city/district/adname）：有值是 String，无值时是空数组 [] 或空串。 */
+    private static String textFieldToString(Object v) {
+        if (v instanceof String s && !s.isBlank()) {
             return s;
         }
-        return null; // 空数组（直辖市等）→ 无法据此校验，视为不校验
+        return null; // 空数组/空串（直辖市等）→ 无法据此校验，视为不校验
     }
 
     /**
-     * 从地址抽取地级市名（去「市」后缀，便于宽松比较）。取第一个「XX市」（跳过「省」）。
-     * 抽不到（无「市」字 / 纯 POI 名）→ null，此时不做城市校验（回落原全国搜行为）。
+     * 从地址抽取地级市名（去「市」后缀，便于宽松比较）。
+     * 优先匹配「省XX市」（锚定在「省」之后，避免贪婪把「省」字本身吞进城市名——
+     * 曾踩坑：对"江苏省常州市…"贪婪匹配成"苏省常州"而非"常州"，只是被下游 cityMatches
+     * 的宽松 contains 判断掩盖，未真正影响生产行为，但破坏本函数自身的精确性）；
+     * 地址无「省」（如直辖市地址"上海市…"）→ 回落锚定字符串开头的「^XX市」。
+     * 两者都抽不到（无「市」字 / 纯 POI 名）→ null，此时不做城市校验（回落原全国搜行为）。
      */
     static String extractCity(String address) {
         if (address == null) {
             return null;
         }
-        java.util.regex.Matcher m = CITY_PATTERN.matcher(address);
-        if (m.find()) {
-            String city = m.group(1);
-            return city.endsWith("市") ? city.substring(0, city.length() - 1) : city;
+        java.util.regex.Matcher afterProvince = CITY_AFTER_PROVINCE_PATTERN.matcher(address);
+        if (afterProvince.find()) {
+            return afterProvince.group(1);
+        }
+        java.util.regex.Matcher fromStart = CITY_FROM_START_PATTERN.matcher(address);
+        if (fromStart.find()) {
+            return fromStart.group(1);
         }
         return null;
     }
 
-    private static final java.util.regex.Pattern CITY_PATTERN =
-            java.util.regex.Pattern.compile("([\\u4e00-\\u9fa5]{2,4}市)");
+    private static final java.util.regex.Pattern CITY_AFTER_PROVINCE_PATTERN =
+            java.util.regex.Pattern.compile("省([\\u4e00-\\u9fa5]{2,4})市");
+    private static final java.util.regex.Pattern CITY_FROM_START_PATTERN =
+            java.util.regex.Pattern.compile("^([\\u4e00-\\u9fa5]{2,4})市");
+
+    /**
+     * 从地址抽取区/县名（「XX市」后紧跟的「XX区/XX县」，如「无锡市梁溪区…」→「梁溪区」）。
+     * 保守：抽不到（无区县 / 县级市结尾「市」）→ null，此时不做区级校验（回落城市级行为）。
+     */
+    static String extractDistrict(String address) {
+        if (address == null) {
+            return null;
+        }
+        java.util.regex.Matcher m = DISTRICT_PATTERN.matcher(address);
+        return m.find() ? m.group(1) : null;
+    }
+
+    private static final java.util.regex.Pattern DISTRICT_PATTERN =
+            java.util.regex.Pattern.compile("市([\\u4e00-\\u9fa5]{1,5}?(?:区|县))");
+
+    /**
+     * 地址核心词（POI 兜底搜索用）：去掉省/市/区县前缀 + 门牌号尾巴。
+     * 「江苏省无锡市梁溪区凤凰城20-6」→「凤凰城」。
+     */
+    static String deriveKeywords(String address) {
+        if (address == null) {
+            return null;
+        }
+        // 去省市区县前缀（贪婪 → 取最后一个行政区划分隔点之后的部分）
+        String core = address.replaceFirst("^.*(?:区|县|市)(?=[^区县市])", "");
+        // 去门牌号尾巴（数字/连字符/号栋幢室楼层/括号注释）
+        core = core.replaceAll("[0-9０-９\\-－—~～·、,，.。()（）a-zA-Z号栋幢室楼层 ]+$", "");
+        return core.isBlank() ? null : core;
+    }
 
     /** 宽松城市匹配：高德返回城市（可能空/带「市」）与预期城市互相包含即算一致。 */
     private static boolean cityMatches(String expected, String returned) {
@@ -189,6 +301,17 @@ public class AmapClient implements DrivingRouteProvider {
         }
         String r = returned.endsWith("市") ? returned.substring(0, returned.length() - 1) : returned;
         return r.contains(expected) || expected.contains(r);
+    }
+
+    /** 宽松区县匹配：预期区为 null（地址没写区）或返回区为空 → 无法否证，放行；否则互相包含即一致。 */
+    private static boolean areaMatchesLoose(String expectedDistrict, String returned) {
+        if (expectedDistrict == null) {
+            return true;
+        }
+        if (returned == null || returned.isBlank()) {
+            return true;
+        }
+        return returned.contains(expectedDistrict) || expectedDistrict.contains(returned);
     }
 
     /**
