@@ -86,7 +86,10 @@ function renderOverlays(): void {
 
   const seqByStore = new Map<string, number>();
   const selectedTrip = props.trips.find((t) => t.id === props.selectedTripId);
-  if (selectedTrip) {
+  if (showAllRoutes.value) {
+    // 显示全部线路时：每条线路的门店都编号(各自线路内 1..n)，让所有送达点都可见(客户要求)
+    props.trips.forEach((t) => t.storeIds.forEach((sid, i) => seqByStore.set(sid, i + 1)));
+  } else if (selectedTrip) {
     selectedTrip.storeIds.forEach((sid, i) => seqByStore.set(sid, i + 1));
   }
   const storeById = new Map(props.stores.map((s) => [s.id, s]));
@@ -104,7 +107,7 @@ function renderOverlays(): void {
   const selectedStoreSet = new Set(selectedTrip?.storeIds ?? []);
   props.stores.forEach((store) => {
     if (!Number.isFinite(store.lng) || !Number.isFinite(store.lat)) return;
-    const labeled = selectedStoreSet.has(store.id) || store.id === props.selectedStoreId;
+    const labeled = showAllRoutes.value || selectedStoreSet.has(store.id) || store.id === props.selectedStoreId;
     const marker = new AMapRef.Marker({
       position: [store.lng, store.lat],
       content: storeContent(store, seqByStore.get(store.id), store.id === props.selectedStoreId, labeled),
