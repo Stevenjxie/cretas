@@ -27,8 +27,8 @@ const emit = defineEmits<{
 
 const routeColors = ['#1B65A8', '#7C3AED', '#C2410C', '#047857', '#BE185D', '#0E7490'];
 
-// 配送中心真实经纬度（与后端 logistics.depot.lng/lat 默认一致）。
-const DEPOT_LNGLAT: [number, number] = [120.62, 31.3];
+// 配送中心真实经纬度（一加物流仓库：苏州相城区望亭海亭路197号沐井供应链；与后端 logistics.depot.lng/lat 一致）。
+const DEPOT_LNGLAT: [number, number] = [120.476894, 31.437014];
 
 // ============================================================
 // 高德真实地图（有 VITE_AMAP_JS_KEY 时启用；加载失败回落下方 SVG 示意图）
