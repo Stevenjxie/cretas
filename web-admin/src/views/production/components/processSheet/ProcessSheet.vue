@@ -5,6 +5,8 @@ import {
   type ProcessSheetInventoryItem, type ProcessSheetRowView, type WorkflowProcessDescriptor,
 } from '@/api/processSheet';
 import { getProductWorkProcesses, type ProcessSheetCustomFieldDef } from '@/api/processProduction';
+import { bomSeasoningApi } from '@/api/bom';
+import { isNotFoundError } from '@/api/notFound';
 import { PROCESS_SHEET_CONFIG } from './PROCESS_SHEET_CONFIG';
 import ProcessDataTable from './ProcessDataTable.vue';
 import InventoryTable from './InventoryTable.vue';
@@ -52,6 +54,7 @@ const emit = defineEmits<{
 // (产品工序链内唯一) 作唯一 key, code 仅用于①查列定义 PROCESS_SHEET_CONFIG[code]
 // ②透传给后端作 process_code 列 + 双键过滤的 archetype 分量。
 type ProcEntry = {
+  workProcessId: string;
   code: string;
   order: number;
   label: string;
@@ -73,17 +76,12 @@ type ProcEntry = {
    * 只读展示 (fool-proof Rule 2/3 — 告诉文员要产什么, 不给自由类型选择), 不改变 saveRow 请求形状。
    */
   workflowContext?: WorkflowProcessDescriptor | null;
-  /**
-   * Slice C (调料配方按工序): 真实 WorkProcess.processCategory (工序类别, 如 前处理/加工/包装/熟制)。
-   * 与 defaultCostCategory (成本桶枚举 RAW_MATERIAL/SEASONING/PACKAGING/AUXILIARY/OTHER, 见
-   * ROLE_TO_ARCHETYPE) 是不同字段 —— 不要混用。仅 legacy(非 workflow)分支能取到 (来自
-   * ProductWorkProcessItem.processCategory); workflow 分支恒为 null, 因为
-   * WorkflowClerkSheetConfigDTO.ProcessDescriptor (后端 DTO) 目前不含 processCategory,
-   * 只有 defaultCostCategory —— 需要后端补充该字段才能让 workflow-activated 计划也按
-   * processCategory==='熟制' 显示锅数 (后端改动超出本次前端 Slice C 范围, 此处诚实留 null,
-   * 不假装有数据; workflow 计划仍可通过 isShuZhi archetype 兜底显示锅数)。
-   */
+  /** 真实工序类别；不用于猜测锅序配置。 */
   processCategory?: string | null;
+  /** 调料配方显式开启锅序；不再从工序名/类别猜测。 */
+  seasoningPotEnabled: boolean;
+  /** 该工序存在调料明细；用于按 kg 传递投入量，不代表需要填写锅数。 */
+  seasoningConfigured: boolean;
 };
 
 /** 唯一工序 key = 链内唯一 processOrder 的字符串形式 (不用 code, code 会碰撞)。 */
@@ -184,6 +182,7 @@ function mapWorkflowProcesses(descriptors: WorkflowProcessDescriptor[]): ProcEnt
         ? (rawSchema as ProcessSheetCustomFieldDef[])
         : null;
       const entry: ProcEntry = {
+        workProcessId: proc.workProcessId,
         code,
         order: proc.processOrder,
         label: proc.processName || `工序${proc.processOrder}`,
@@ -196,9 +195,10 @@ function mapWorkflowProcesses(descriptors: WorkflowProcessDescriptor[]): ProcEnt
         // 不允许 plannedUnit / 产品单位 / kg 默认值掩盖坏配置。
         ...resolveWorkflowProcessSheetUnits(proc),
         workflowContext: proc,
-        // Slice C: 后端 WorkflowClerkSheetConfigDTO.ProcessDescriptor 已带真实 WorkProcess.processCategory
-        // (熟制/注射) → workflow 计划的熟制工序也能按类别驱动锅数录入 (不再只靠 isShuZhi archetype)。
+        // 锅数另由 BOM 调料 processParams 显式驱动，不使用该类别猜测。
         processCategory: proc.processCategory ?? null,
+        seasoningPotEnabled: false,
+        seasoningConfigured: false,
       };
       return entry;
     })
@@ -324,6 +324,7 @@ async function resolveProcesses() {
           defaultOutputUnit: it.defaultOutputUnit,
         });
         return {
+          workProcessId: it.workProcessId,
           code,
           order: it.processOrder,
           label: it.processName,
@@ -334,9 +335,10 @@ async function resolveProcesses() {
           allowFinishedGoodsSource: it.allowFinishedGoodsSource === true,
           inputUnit: units.inputUnit,
           outputUnit: units.outputUnit,
-          // Slice C: 真实 WorkProcess.processCategory (ProductWorkProcessItem 已带此字段),
-          // 供 ProcessDataTable needsPotCount 判定 processCategory === '熟制'。
+          // 保留真实工序类别；锅数由 BOM 调料 processParams 显式驱动。
           processCategory: it.processCategory ?? null,
+          seasoningPotEnabled: false,
+          seasoningConfigured: false,
         };
       })
       // Role mode: code always valid. Name mode: code is always 'xiuyou'|'chaoshui'|known keyword.
@@ -347,6 +349,28 @@ async function resolveProcesses() {
   } catch (e) {
     PROCESSES.value = [];
     throw e;
+  }
+}
+
+async function resolveSeasoningProcesses(): Promise<{ configured: Set<string>; potEnabled: Set<string> }> {
+  try {
+    const response = await bomSeasoningApi.getByProduct(props.factoryId, props.productTypeId);
+    if (!response || response.success !== true || !response.data || !Array.isArray(response.data.processParams)) {
+      if (isNotFoundError(response)) return { configured: new Set(), potEnabled: new Set() };
+      throw new Error('调料配方响应异常');
+    }
+    return {
+      configured: new Set((response.data.seasoningItems || []).map((item) => item.workProcessId)),
+      potEnabled: new Set(
+        response.data.processParams
+          .filter((param) => param.subsequentPotRatio != null)
+          .map((param) => param.workProcessId),
+      ),
+    };
+  } catch (error) {
+    if (isNotFoundError(error)) return { configured: new Set(), potEnabled: new Set() };
+    const detail = error instanceof Error ? error.message : '未知错误';
+    throw new Error(`调料锅序配置加载失败：${detail}`);
   }
 }
 
@@ -384,6 +408,13 @@ async function loadAll() {
     // G0: 先解析本产品工序链 (动态), 再加载各道库存/行
     await resolveProcesses();
     if (seq !== loadAllSeq) return;
+    const seasoningProcesses = await resolveSeasoningProcesses();
+    if (seq !== loadAllSeq) return;
+    PROCESSES.value = PROCESSES.value.map((process) => ({
+      ...process,
+      seasoningPotEnabled: seasoningProcesses.potEnabled.has(process.workProcessId),
+      seasoningConfigured: seasoningProcesses.configured.has(process.workProcessId),
+    }));
     if (!PROCESSES.value.some((p) => procKey(p) === activeTab.value)) {
       activeTab.value = PROCESSES.value[0] ? procKey(PROCESSES.value[0]) : '';
     }
@@ -563,6 +594,8 @@ defineExpose({ hasUnsavedRows });
             :output-unit="proc.outputUnit"
             :workflow-context="proc.workflowContext ?? null"
             :process-category="proc.processCategory ?? null"
+            :seasoning-pot-enabled="proc.seasoningPotEnabled"
+            :seasoning-configured="proc.seasoningConfigured"
             :upstream-process-label="upstreamLabelOf(proc)"
             :product-type-id="productTypeId"
             :upstream-items="upstreamItems(proc)"

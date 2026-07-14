@@ -47,6 +47,10 @@ public class BomSeasoningItem extends BaseEntity implements SeasoningLine {
     @Column(name = "factory_id", nullable = false, length = 50)
     private String factoryId;
 
+    /** 关联物料档案；历史调料行允许为 null，新保存行必须由服务层校验。 */
+    @Column(name = "material_type_id", length = 191)
+    private String materialTypeId;
+
     /** {@link SeasoningLine#getSection()}: INJECTION | COOKING. */
     @Column(name = "section", nullable = false, length = 20)
     private String section;

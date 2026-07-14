@@ -32,6 +32,7 @@ import {
   resolveWorkflowProcessSheetUnits,
   withProcessSheetUnits,
 } from '@/utils/processSheetUnits';
+import { buildEqualPotWeightsKg } from './potAllocation';
 
 // -------------------------------------------------------------------------
 // Props & emits
@@ -87,16 +88,12 @@ const props = withDefaults(defineProps<{
    * 计划恒为 null/undefined。只读展示用 —— 不改变 saveRow 请求形状, 不影响任何现有 picker。
    */
   workflowContext?: WorkflowProcessDescriptor | null;
-  /**
-   * Slice C (调料配方按工序): 本工序真实 WorkProcess.processCategory (工序类别, 如 前处理/加工/
-   * 包装/熟制 —— 与 workflowContext.defaultCostCategory 不是同一字段, 后者是成本桶枚举
-   * RAW_MATERIAL/SEASONING/PACKAGING/AUXILIARY/OTHER)。仅 legacy(非 workflow)计划的父组件
-   * 能透传 (来自 ProductWorkProcessItem.processCategory); workflow-activated 计划恒为
-   * null/undefined (WorkflowClerkSheetConfigDTO.ProcessDescriptor 目前不含此字段, 见
-   * ProcessSheet.vue mapWorkflowProcesses 注释)。用于 needsPotCount 判定: 任何
-   * processCategory === '熟制' 的工序都应显示锅数录入, 不再局限于 'shuzhi' archetype。
-   */
+  /** 真实工序类别，仅作其他工序语义展示；锅数由 seasoningPotEnabled 唯一驱动。 */
   processCategory?: string | null;
+  /** BOM 调料配方是否对本工序显式开启锅序计算。 */
+  seasoningPotEnabled?: boolean;
+  /** BOM 调料配方是否对本工序配置了调料明细。 */
+  seasoningConfigured?: boolean;
 }>(), {
   allowSemiFinishedInjection: false,
   allowMultipleUpstreamSources: false,
@@ -216,13 +213,9 @@ const firstProcessInputLabel = computed(() =>
   cols.value.find((col) => col.key === 'outWeight')?.label || `出库数量(${processUnits.value.inputUnit})`,
 );
 const isShuZhi = computed(() => props.processCode === 'shuzhi');
-/**
- * Slice C: 锅数(potCount)录入的显示判据 —— 不再仅限 'shuzhi' archetype。任何工序若其
- * 真实 WorkProcess.processCategory === '熟制' 也需要显示锅数 + 逐锅原料录入 (让多锅
- * 熟制成本按锅摊算)。只用于 ONLY 三处锅数相关站点 (卡片区 v-if / seasoningStep payload /
- * 锅数校验) —— 其余 isShuZhi 用法驱动字段形状/上游逻辑, 保持 archetype-only 不变。
- */
-const needsPotCount = computed(() => isShuZhi.value || props.processCategory === '熟制');
+/** 锅数录入只由 BOM 调料配方的显式工序参数驱动，不再猜测工序名或类别。 */
+const needsPotCount = computed(() => props.seasoningPotEnabled === true);
+const needsSeasoningInputKg = computed(() => props.seasoningConfigured === true);
 const isXiuYou = computed(() => props.processCode === 'xiuyou');
 /** 单上游 WIP 工序: 焯水 + 滚揉. 两者结构完全相同 (before/after 字段, 单 upstream). */
 const isSingleUpstream = computed(() =>
@@ -832,6 +825,19 @@ function singleSourceUsage(row: SheetRow): number {
   return 0;
 }
 
+/** Mirrors the inputQuantity selected by buildRequest, for pre-save pot validation/preview. */
+function potInputQuantity(row: SheetRow): number {
+  if (isXiuYou.value) return row.rawBatchQty ?? 0;
+  if (isMultiSource.value) {
+    const totalFeed = row.upstreamSources.reduce((sum, source) => sum + (source.feedQuantityKg || 0), 0);
+    if (isSingleUpstream.value) return (row.fields['before'] as number) ?? totalFeed;
+    if (isQuSheTou.value) return calcReverseInput(row) ?? totalFeed;
+    if (isShuZhi.value || isGenericUpstream.value) return (row.fields['input'] as number) ?? totalFeed;
+    if (isQidiao.value) return (row.fields['usedWeight'] as number) ?? totalFeed;
+  }
+  return singleSourceUsage(row);
+}
+
 function calcYield(row: SheetRow): number | null {
   let input: number | null = null;
   let output: number | null = null;
@@ -1029,10 +1035,6 @@ function saveDisabledReason(row: SheetRow): string | null {
       }
     } else if (isShuZhi.value || isGenericUpstream.value) {
       if (!isMultiOutput.value && (row.fields['output'] as number) == null) return '请填写产出数量';
-      if (needsPotCount.value && row.potCount > 1) {
-        const filled = row.potRawKgs.filter((v) => v != null && v > 0);
-        if (filled.length < row.potCount) return `请填写所有 ${row.potCount} 锅的原料重量`;
-      }
     } else if (isQidiao.value) {
       if ((row.fields['usedWeight'] as number) == null) return '请填写使用重量';
       if (!isMultiOutput.value && calcSumBoxes(row) <= 0) return '请填写入库/留样/剩余/领用至少一项(实际生产需>0)';
@@ -1061,6 +1063,17 @@ function saveDisabledReason(row: SheetRow): string | null {
     if (row.multiOutputs.length === 0) return '本工序 workflow 未配置产出端口, 无法录入';
     const missing = row.multiOutputs.find((o) => o.required && (o.quantity == null || o.quantity <= 0));
     if (missing) return `请填写「${missing.materialName}」的产出数量`;
+  }
+  if (needsSeasoningInputKg.value) {
+    try {
+      buildEqualPotWeightsKg(
+        potInputQuantity(row),
+        processUnits.value.inputUnit,
+        needsPotCount.value ? row.potCount : 1,
+      );
+    } catch (error) {
+      return error instanceof Error ? error.message : '锅数配置无效';
+    }
   }
   // 🔒 防呆 Rule 1 — 超投/单位不匹配 must-fix 不是 advisory: upstreamWarning() 命中时同样 disable 保存,
   // 不能只在提示区显示警告文字却仍放行保存(2026-07-02 GATE-HANDBACK 阻断项②)。
@@ -1093,10 +1106,8 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     inputUnit: processUnits.value.inputUnit,
     outputUnit: processUnits.value.outputUnit,
     unit: processUnits.value.outputUnit,
-    seasoningStep: needsPotCount.value,
+    seasoningStep: needsSeasoningInputKg.value,
     laborSegments: row.laborSegments.length ? row.laborSegments : undefined,
-    potCount: row.potCount > 1 ? row.potCount : undefined,
-    potRawKgs: row.potCount > 1 ? (row.potRawKgs.filter(Boolean) as number[]) : undefined,
   };
 
   // Append daterange fields so the backend stores them in row_payload JSON.
@@ -1271,6 +1282,16 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     base.outputQuantity = submittedOutputs.find(
       (o) => o.workflowPortId === props.workflowContext?.output?.workflowPortId,
     )?.quantity ?? 0;
+  }
+
+  if (needsSeasoningInputKg.value) {
+    const inputQuantity = Number(base.inputQuantity);
+    base.potCount = needsPotCount.value ? row.potCount : 1;
+    base.potRawKgs = buildEqualPotWeightsKg(
+      inputQuantity,
+      processUnits.value.inputUnit,
+      needsPotCount.value ? row.potCount : 1,
+    );
   }
 
   return base;
@@ -1685,7 +1706,15 @@ function srcRemainingLabel(src: UpstreamRef): string {
 // -------------------------------------------------------------------------
 function onPotCountChange(row: SheetRow, val: number) {
   row.potCount = val;
-  row.potRawKgs = Array.from({ length: val }, (_, i) => row.potRawKgs[i] ?? null);
+}
+
+function potSplitHint(row: SheetRow): string {
+  try {
+    const weights = buildEqualPotWeightsKg(potInputQuantity(row), processUnits.value.inputUnit, row.potCount);
+    return `系统将投入量等分为 ${row.potCount} 锅，每锅 ${weights[0].toFixed(2)} kg`;
+  } catch (error) {
+    return error instanceof Error ? error.message : '请先填写投入量';
+  }
 }
 
 watch(
@@ -2042,27 +2071,25 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               <div v-if="row.upstreamSources.length === 0" style="color:#909399;font-size:12px;margin:4px 0">
                 暂无来源批，点击 + 来源批 添加
               </div>
-              <!-- Pot count (熟制 archetype OR processCategory === '熟制') -->
-              <template v-if="needsPotCount">
-              <div style="margin-top:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                <span style="font-size:12px;font-weight:600;color:#303133">锅数:</span>
-                <el-input-number
-                  :model-value="row.potCount"
-                  @update:model-value="(v: number) => onPotCountChange(row, v)"
-                  :min="1" :precision="0" size="small" style="width:80px" />
-                <template v-if="row.potCount > 1">
-                  <div v-for="pi in row.potCount" :key="pi"
-                       style="display:flex;align-items:center;gap:4px">
-                    <span style="font-size:12px;color:#606266">第{{ pi }}锅({{ processUnits.inputUnit }}):</span>
-                    <el-input-number
-                      v-model="row.potRawKgs[pi - 1]"
-                      :min="0" :precision="2" size="small" style="width:100px" />
-                  </div>
-                </template>
-              </div>
-              </template>
             </div>
           </template>
+
+          <div
+            v-if="needsPotCount"
+            data-testid="seasoning-pot-count"
+            class="sp-card-field sp-card-field-full sp-card-expand-section"
+          >
+            <label class="sp-card-label">锅数</label>
+            <el-input-number
+              :model-value="row.potCount"
+              @update:model-value="(v: number) => onPotCountChange(row, v)"
+              :min="1"
+              :precision="0"
+              size="small"
+              style="width:100px"
+            />
+            <span style="font-size:12px;color:#606266">{{ potSplitHint(row) }}</span>
+          </div>
 
           <!-- Generic columns from config (skip special-cased keys) -->
           <template v-for="col in cols" :key="col.key">
@@ -2234,6 +2261,8 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             <template v-else-if="isMultiSource">
               <th class="sp-th">{{ sourceTitle }}</th>
             </template>
+
+            <th v-if="needsPotCount" class="sp-th sp-th-num">锅数（系统等分）</th>
 
             <!-- Generic cols from config (skip special-cased keys) -->
             <template v-for="col in cols" :key="col.key">
@@ -2458,6 +2487,20 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                   </el-button>
                 </td>
               </template>
+
+              <td v-if="needsPotCount" data-testid="seasoning-pot-count" class="sp-td sp-td-num">
+                <el-input-number
+                  :model-value="row.potCount"
+                  @update:model-value="(v: number) => onPotCountChange(row, v)"
+                  :min="1"
+                  :precision="0"
+                  size="small"
+                  style="width:80px"
+                />
+                <div style="margin-top:3px;font-size:11px;color:#606266;white-space:nowrap">
+                  {{ potSplitHint(row) }}
+                </div>
+              </td>
 
               <!-- ---- Generic columns from config ---- -->
               <template v-for="col in cols" :key="col.key">
@@ -2688,23 +2731,6 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     暂无来源批，点击 + 来源批 添加
                   </div>
 
-                  <!-- Pot count -->
-                  <div style="margin-top:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                    <span style="font-size:12px;font-weight:600;color:#303133">锅数:</span>
-                    <el-input-number
-                      :model-value="row.potCount"
-                      @update:model-value="(v: number) => onPotCountChange(row, v)"
-                      :min="1" :precision="0" size="small" style="width:80px" />
-                    <template v-if="row.potCount > 1">
-                      <div v-for="pi in row.potCount" :key="pi"
-                           style="display:flex;align-items:center;gap:4px">
-                        <span style="font-size:12px;color:#606266">第{{ pi }}锅({{ processUnits.inputUnit }}):</span>
-                        <el-input-number
-                          v-model="row.potRawKgs[pi - 1]"
-                          :min="0" :precision="2" size="small" style="width:100px" />
-                      </div>
-                    </template>
-                  </div>
                 </div>
               </td>
             </tr>

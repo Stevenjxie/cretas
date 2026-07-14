@@ -53,11 +53,13 @@ public class BomSeasoningSaveRequest {
         /** 调料配方按工序 (2026-07-13): 该明细归属工序 (work_processes.id)。per-工序 UI 下必填; 兼容期可空。 */
         private String workProcessId;
 
+        /** 关联原辅料档案 ID；名称与价格由后端以物料档案为准。 */
+        private String materialTypeId;
+
         /** 段内排序序号 (从 0 起). */
         private Integer seq;
 
         /** 调料名称. */
-        @NotBlank(message = "name 不可为空")
         private String name;
 
         /** 每 kg 原料用量 (g), 不可为 null. */

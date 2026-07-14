@@ -60,6 +60,8 @@ function mountTable(workflowContext: unknown) {
       initialRows: [],
       viewMode: 'card',
       workflowContext,
+      inputUnit: 'kg',
+      outputUnit: 'kg',
     },
     global: {
       plugins: [ElementPlus],
@@ -75,9 +77,21 @@ function mountTable(workflowContext: unknown) {
 // source → fill before/after → click save) rather than reaching into private component internals,
 // mirroring how ProcessSheet.vue actually drives ProcessDataTable in production.
 // -----------------------------------------------------------------------
-type MountOpts = { workflowContext?: unknown };
+type MountOpts = {
+  workflowContext?: unknown;
+  seasoningPotEnabled?: boolean;
+  seasoningConfigured?: boolean;
+  inputUnit?: string;
+  processCategory?: string | null;
+};
 
-function mountChaoshuiTable({ workflowContext = null }: MountOpts = {}) {
+function mountChaoshuiTable({
+  workflowContext = null,
+  seasoningPotEnabled = false,
+  seasoningConfigured = seasoningPotEnabled,
+  inputUnit = 'kg',
+  processCategory = null,
+}: MountOpts = {}) {
   return mount(ProcessDataTable, {
     props: {
       factoryId: 'F006',
@@ -92,12 +106,24 @@ function mountChaoshuiTable({ workflowContext = null }: MountOpts = {}) {
       initialRows: [],
       viewMode: 'card',
       workflowContext,
+      seasoningPotEnabled,
+      seasoningConfigured,
+      inputUnit,
+      outputUnit: 'kg',
+      processCategory,
     },
     global: {
       plugins: [ElementPlus],
       stubs: { teleport: true, transition: false },
     },
   });
+}
+
+async function setPotCount(wrapper: ReturnType<typeof mountChaoshuiTable>, value: number) {
+  const field = wrapper.find('[data-testid="seasoning-pot-count"]');
+  if (!field.exists()) throw new Error('找不到锅数字段');
+  field.findComponent({ name: 'ElInputNumber' }).vm.$emit('update:model-value', value);
+  await flushPromises();
 }
 
 async function clickAddRow(wrapper: ReturnType<typeof mountChaoshuiTable>) {
@@ -359,5 +385,77 @@ describe('ProcessDataTable.vue buildRequest sources finished/unit from the workf
     expect(req.unit).toBe('kg');
     expect(req.inputQuantity).toBe(10);
     expect(req.outputQuantity).toBe(8);
+  });
+
+  it('shows pot count only from explicit seasoning config and serializes an equal kg split', async () => {
+    const wrapper = mountChaoshuiTable({
+      seasoningPotEnabled: true,
+      processCategory: 'PROCESSING',
+    });
+    await flushPromises();
+
+    await clickAddRow(wrapper);
+    expect(wrapper.find('[data-testid="seasoning-pot-count"]').exists()).toBe(true);
+    expect(wrapper.text()).not.toContain('第1锅');
+    await selectUpstreamSource(wrapper, 'wip::WIP-UP-1');
+    await setNumberField(wrapper, '投入(kg)', 300);
+    await setNumberField(wrapper, '产出(kg)', 280);
+    await setPotCount(wrapper, 3);
+    expect(wrapper.text()).toContain('每锅 100.00 kg');
+    await clickSave(wrapper);
+
+    const [, , req] = saveRow.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(req.seasoningStep).toBe(true);
+    expect(req.potCount).toBe(3);
+    expect(req.potRawKgs).toEqual([100, 100, 100]);
+  });
+
+  it('does not show pot count for an unconfigured 熟制 category', async () => {
+    const wrapper = mountChaoshuiTable({
+      seasoningPotEnabled: false,
+      processCategory: '熟制',
+    });
+    await flushPromises();
+    await clickAddRow(wrapper);
+    expect(wrapper.find('[data-testid="seasoning-pot-count"]').exists()).toBe(false);
+  });
+
+  it('serializes one kg-normalized seasoning input for a configured non-pot process', async () => {
+    const wrapper = mountChaoshuiTable({
+      seasoningConfigured: true,
+      seasoningPotEnabled: false,
+      inputUnit: 'g',
+    });
+    await flushPromises();
+
+    await clickAddRow(wrapper);
+    expect(wrapper.find('[data-testid="seasoning-pot-count"]').exists()).toBe(false);
+    await selectUpstreamSource(wrapper, 'wip::WIP-UP-1');
+    await setNumberField(wrapper, '投入(g)', 2500);
+    await setNumberField(wrapper, '产出(kg)', 2);
+    await clickSave(wrapper);
+
+    const [, , req] = saveRow.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(req.seasoningStep).toBe(true);
+    expect(req.potCount).toBe(1);
+    expect(req.potRawKgs).toEqual([2.5]);
+  });
+
+  it('converts configured g input to equal backend kg pot weights', async () => {
+    const wrapper = mountChaoshuiTable({
+      seasoningPotEnabled: true,
+      inputUnit: 'g',
+    });
+    await flushPromises();
+
+    await clickAddRow(wrapper);
+    await selectUpstreamSource(wrapper, 'wip::WIP-UP-1');
+    await setNumberField(wrapper, '投入(g)', 300_000);
+    await setNumberField(wrapper, '产出(kg)', 280);
+    await setPotCount(wrapper, 3);
+    await clickSave(wrapper);
+
+    const [, , req] = saveRow.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(req.potRawKgs).toEqual([100, 100, 100]);
   });
 });

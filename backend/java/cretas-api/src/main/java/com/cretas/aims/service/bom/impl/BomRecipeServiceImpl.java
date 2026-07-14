@@ -13,6 +13,7 @@ import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
@@ -35,8 +36,10 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * BomRecipeService implementation (Track D1 / M-BOM-1).
@@ -65,6 +68,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     private final BomRecipeRepository recipeRepo;
     private final BomRecipeItemRepository itemRepo;
     private final RawMaterialTypeRepository materialTypeRepo;
+    private final ProductWorkProcessRepository productWorkProcessRepo;
     private final MaterialUomConverter materialUomConverter;
     /** SP1: 嵌套 BOM 成本聚合 (组合装/先做后用). */
     private final NestedBomCostService nestedBomCostService;
@@ -241,6 +245,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             BomSeasoningItem cs = new BomSeasoningItem();
             cs.setRecipeId(clone.getId());
             cs.setFactoryId(factoryId);
+            cs.setMaterialTypeId(s.getMaterialTypeId());
             cs.setSection(s.getSection());
             cs.setSeq(s.getSeq());
             cs.setName(s.getName());
@@ -435,8 +440,10 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                     + ", 请克隆为新版本后再改");
         }
 
-        // Validate sections before any write.
+        // Validate sections and resolve authoritative material snapshots before any write.
         List<SeasoningItemDTO> items = req.getSeasoningItems();
+        List<RawMaterialType> resolvedMaterials = new ArrayList<>();
+        Set<String> processMaterialKeys = new HashSet<>();
         if (items != null) {
             for (SeasoningItemDTO dto : items) {
                 if (!"INJECTION".equals(dto.getSection()) && !"COOKING".equals(dto.getSection())) {
@@ -444,6 +451,52 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                             "调料 section 只允许 INJECTION 或 COOKING, 收到: " + dto.getSection())
                             .withHint("请将 section 改为 INJECTION(注射段) 或 COOKING(熟制段)")
                             .withHintTarget("section");
+                }
+                validateProductWorkProcess(factoryId, recipe, dto.getWorkProcessId());
+                if (dto.getMaterialTypeId() == null || dto.getMaterialTypeId().isBlank()) {
+                    throw new BusinessException(400, "调料必须关联物料档案")
+                            .withHint("请从原辅料档案中选择调料")
+                            .withHintTarget("materialTypeId");
+                }
+                RawMaterialType material = materialTypeRepo.findById(dto.getMaterialTypeId())
+                        .orElseThrow(() -> new BusinessException(400,
+                                "调料关联的物料不存在: " + dto.getMaterialTypeId())
+                                .withHint("请重新选择有效的原辅料")
+                                .withHintTarget("materialTypeId"));
+                if (!factoryId.equals(material.getFactoryId())) {
+                    throw new BusinessException(400, "调料物料不属于当前工厂: " + dto.getMaterialTypeId())
+                            .withHint("只能选择当前工厂的原辅料")
+                            .withHintTarget("materialTypeId");
+                }
+                if (!Boolean.TRUE.equals(material.getIsActive())) {
+                    throw new BusinessException(400, "调料物料已停用: " + material.getName())
+                            .withHint("请启用该物料或选择其他原辅料")
+                            .withHintTarget("materialTypeId");
+                }
+                if (material.getMovingAvgPrice() == null) {
+                    throw new BusinessException(400, "调料物料缺少移动平均价: " + material.getName())
+                            .withHint("请先完成该物料的采购入库或维护移动平均价")
+                            .withHintTarget("materialTypeId");
+                }
+                String processKey = (dto.getWorkProcessId() == null ? "" : dto.getWorkProcessId())
+                        + "\u0000" + dto.getMaterialTypeId();
+                if (!processMaterialKeys.add(processKey)) {
+                    throw new BusinessException(400, "该工序已添加该调料: " + material.getName())
+                            .withHint("同一工序内同一种调料只能添加一次")
+                            .withHintTarget("materialTypeId");
+                }
+                resolvedMaterials.add(material);
+            }
+        }
+
+        List<ProcessSeasoningParamDTO> params = req.getProcessParams();
+        if (params != null) {
+            Set<String> seenWp = new HashSet<>();
+            for (ProcessSeasoningParamDTO p : params) {
+                validateProductWorkProcess(factoryId, recipe, p.getWorkProcessId());
+                if (!seenWp.add(p.getWorkProcessId())) {
+                    throw new BusinessException(400, "同一工序的调料参数重复: " + p.getWorkProcessId())
+                            .withHint("每道工序只能有一行锅序/注射量参数");
                 }
             }
         }
@@ -466,16 +519,19 @@ public class BomRecipeServiceImpl implements BomRecipeService {
 
         List<BomSeasoningItem> newItems = new ArrayList<>();
         if (items != null) {
-            for (SeasoningItemDTO dto : items) {
+            for (int i = 0; i < items.size(); i++) {
+                SeasoningItemDTO dto = items.get(i);
+                RawMaterialType material = resolvedMaterials.get(i);
                 BomSeasoningItem si = new BomSeasoningItem();
                 si.setRecipeId(recipeId);
                 si.setFactoryId(factoryId);
+                si.setMaterialTypeId(material.getId());
                 si.setSection(dto.getSection());
                 si.setSeq(dto.getSeq() != null ? dto.getSeq() : 0);
-                si.setName(dto.getName());
+                si.setName(material.getName());
                 si.setDosagePerKgG(dto.getDosagePerKgG());
-                si.setPriceSource1(dto.getPriceSource1());
-                si.setPriceSource2(dto.getPriceSource2());
+                si.setPriceSource1(material.getMovingAvgPrice());
+                si.setPriceSource2(null);
                 si.setCountInSeasoning(dto.getCountInSeasoning() != null ? dto.getCountInSeasoning() : Boolean.TRUE);
                 si.setRemark(dto.getRemark());
                 si.setWorkProcessId(dto.getWorkProcessId()); // 调料配方按工序 (2026-07-13)
@@ -485,20 +541,6 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         seasoningItemRepo.saveAll(newItems);
 
         // 调料配方按工序 (2026-07-13): 全量替换该 recipe 的 per-工序 参数 (bom_process_seasoning)。
-        List<ProcessSeasoningParamDTO> params = req.getProcessParams();
-        if (params != null) {
-            java.util.Set<String> seenWp = new java.util.HashSet<>();
-            for (ProcessSeasoningParamDTO p : params) {
-                if (p.getWorkProcessId() == null || p.getWorkProcessId().isBlank()) {
-                    throw new BusinessException(400, "工序参数缺 workProcessId")
-                            .withHint("每道工序的锅序/注射量参数必须带 workProcessId");
-                }
-                if (!seenWp.add(p.getWorkProcessId())) {
-                    throw new BusinessException(400, "同一工序的调料参数重复: " + p.getWorkProcessId())
-                            .withHint("每道工序只能有一行锅序/注射量参数");
-                }
-            }
-        }
         List<BomProcessSeasoning> oldParams = bomProcessSeasoningRepo.findByRecipeIdAndDeletedAtIsNull(recipeId);
         for (BomProcessSeasoning old : oldParams) {
             old.softDelete();
@@ -522,6 +564,20 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         recipeRepo.save(recipe);
 
         return buildSeasoningResponse(recipe, newItems);
+    }
+
+    private void validateProductWorkProcess(String factoryId, BomRecipe recipe, String workProcessId) {
+        if (workProcessId == null || workProcessId.isBlank()) {
+            throw new BusinessException(400, "调料必须选择工序")
+                    .withHint("请选择该 SKU 配置的有效工序")
+                    .withHintTarget("workProcessId");
+        }
+        if (!productWorkProcessRepo.existsByFactoryIdAndProductTypeIdAndWorkProcessId(
+                factoryId, recipe.getProductTypeId(), workProcessId)) {
+            throw new BusinessException(400, "所选工序不是该 SKU 的有效工序: " + workProcessId)
+                    .withHint("请重新选择该 SKU 工序路线中的工序")
+                    .withHintTarget("workProcessId");
+        }
     }
 
     private BomSeasoningResponse buildSeasoningResponse(BomRecipe recipe, List<BomSeasoningItem> seasoningItems) {
