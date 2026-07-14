@@ -13,7 +13,6 @@ import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.UnitConversionService;
 import com.cretas.aims.repository.inventory.InternalTransferRepository;
 import com.cretas.aims.service.inventory.TransferService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,7 +33,6 @@ import java.util.List;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class ProductionWorkflowOrchestrator {
 
     private final BomExpansionService bomExpansionService;
@@ -42,6 +40,35 @@ public class ProductionWorkflowOrchestrator {
     private final ProductionPlanService productionPlanService;
     private final RawMaterialTypeRepository rawMaterialTypeRepository;
     private final InternalTransferRepository transferRepository;
+    private final UnitConversionService unitConversionService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ProductionWorkflowOrchestrator(
+            BomExpansionService bomExpansionService,
+            TransferService transferService,
+            ProductionPlanService productionPlanService,
+            RawMaterialTypeRepository rawMaterialTypeRepository,
+            InternalTransferRepository transferRepository,
+            UnitConversionService unitConversionService) {
+        this.bomExpansionService = bomExpansionService;
+        this.transferService = transferService;
+        this.productionPlanService = productionPlanService;
+        this.rawMaterialTypeRepository = rawMaterialTypeRepository;
+        this.transferRepository = transferRepository;
+        this.unitConversionService = unitConversionService;
+    }
+
+    /** Backward-compatible constructor for legacy unit tests. */
+    @Deprecated(forRemoval = true)
+    public ProductionWorkflowOrchestrator(
+            BomExpansionService bomExpansionService,
+            TransferService transferService,
+            ProductionPlanService productionPlanService,
+            RawMaterialTypeRepository rawMaterialTypeRepository,
+            InternalTransferRepository transferRepository) {
+        this(bomExpansionService, transferService, productionPlanService,
+                rawMaterialTypeRepository, transferRepository, new UnitConversionService());
+    }
 
     /**
      * T143: 物料单位换算器. 字段注入 (required=false) 不破坏 @RequiredArgsConstructor 与
@@ -263,9 +290,7 @@ public class ProductionWorkflowOrchestrator {
      * @return 换算后的值, 不支持的换算返 null
      */
     private BigDecimal convertUnit(BigDecimal value, String fromUnit, String toUnit) {
-        return UNIT_CONVERSION.convert(value, fromUnit, toUnit);
+        return unitConversionService.convert(value, fromUnit, toUnit);
     }
 
-    /** B7 collapse: 共享换算逻辑 (无状态), 取代原 private 1:1000 硬编码副本. */
-    private static final UnitConversionService UNIT_CONVERSION = new UnitConversionService();
 }

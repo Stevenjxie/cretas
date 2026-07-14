@@ -6,6 +6,9 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.config.SystemEnumRepository;
 import com.cretas.aims.repository.config.UnitOfMeasurementRepository;
 import com.cretas.aims.service.SystemEnumService;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitConversionContext;
+import com.cretas.aims.service.unit.UnitConversionResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CacheEvict;
@@ -38,6 +41,17 @@ public class SystemEnumServiceImpl implements SystemEnumService {
 
     private final SystemEnumRepository systemEnumRepository;
     private final UnitOfMeasurementRepository unitOfMeasurementRepository;
+    private final UnitContractService unitContractService;
+
+    /** Backward-compatible constructor for CRUD-only unit tests. */
+    @Deprecated(forRemoval = true)
+    public SystemEnumServiceImpl(
+            SystemEnumRepository systemEnumRepository,
+            UnitOfMeasurementRepository unitOfMeasurementRepository) {
+        this.systemEnumRepository = systemEnumRepository;
+        this.unitOfMeasurementRepository = unitOfMeasurementRepository;
+        this.unitContractService = null;
+    }
 
     // ==================== 枚举查询 ====================
 
@@ -211,24 +225,17 @@ public class SystemEnumServiceImpl implements SystemEnumService {
 
     @Override
     public BigDecimal convertUnit(String factoryId, BigDecimal value, String fromUnit, String toUnit) {
-        if (value == null || fromUnit.equals(toUnit)) {
-            return value;
+        if (unitContractService == null) {
+            throw new IllegalStateException("UnitContractService is required for unit conversion");
         }
-
-        UnitOfMeasurement from = getUnit(factoryId, fromUnit)
-                .orElseThrow(() -> new com.cretas.aims.exception.ResourceNotFoundException("计量单位", "unitCode", fromUnit));
-        UnitOfMeasurement to = getUnit(factoryId, toUnit)
-                .orElseThrow(() -> new com.cretas.aims.exception.ResourceNotFoundException("计量单位", "unitCode", toUnit));
-
-        if (!from.getBaseUnit().equals(to.getBaseUnit())) {
-            throw new BusinessException(400, "不同分类的单位不能互相转换: " + fromUnit + " -> " + toUnit)
-                    .withHint("源单位与目标单位必须属于同一基础单位 (如重量类: g/kg/t)")
+        UnitConversionResult result = unitContractService.convert(value, new UnitConversionContext(
+                factoryId, null, fromUnit, toUnit, LocalDateTime.now(), null, 6, RoundingMode.HALF_UP));
+        if (!result.succeeded()) {
+            throw new BusinessException(400, result.message() == null ? "单位无法换算" : result.message())
+                    .withCode(result.status().name())
                     .withHintTarget("toUnit");
         }
-
-        // 先转为基础单位，再转为目标单位
-        BigDecimal baseValue = from.toBaseUnit(value);
-        return to.fromBaseUnit(baseValue);
+        return result.quantity();
     }
 
     @Override

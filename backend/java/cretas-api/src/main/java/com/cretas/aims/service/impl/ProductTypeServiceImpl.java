@@ -265,13 +265,15 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         if (dto.getImageUrl() != null) productType.setImageUrl(dto.getImageUrl());
         if (dto.getProductCategory() != null) productType.setProductCategory(dto.getProductCategory());
         if (dto.getTemperatureZone() != null) productType.setTemperatureZone(dto.getTemperatureZone());
-        if (dto.getGramsPerUnit() != null) productType.setGramsPerUnit(dto.getGramsPerUnit());
+        if (dto.isGramsPerUnitPresent()) productType.setGramsPerUnit(dto.getGramsPerUnit());
         if (dto.getWipToFgYield() != null) productType.setWipToFgYield(dto.getWipToFgYield());
         if (dto.getQuotedLaborCostPerKg() != null) productType.setQuotedLaborCostPerKg(dto.getQuotedLaborCostPerKg()); // SP9-M1
         if (dto.isStandardCostPresent()) productType.setStandardCost(dto.getStandardCost());
         if (dto.isTargetGrossMarginPresent()) productType.setTargetGrossMargin(dto.getTargetGrossMargin());
         if (dto.getLevel1Unit() != null) productType.setLevel1Unit(dto.getLevel1Unit());
-        if (dto.getBoxConversionCoefficient() != null) productType.setBoxConversionCoefficient(dto.getBoxConversionCoefficient());
+        if (dto.isBoxConversionCoefficientPresent()) {
+            productType.setBoxConversionCoefficient(dto.getBoxConversionCoefficient());
+        }
 
         // Sprint 2 S2-1: Form Template Association
         if (dto.getFormTemplateId() != null) productType.setFormTemplateId(dto.getFormTemplateId());

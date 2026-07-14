@@ -54,6 +54,14 @@ public class UnitContractServiceImpl implements UnitContractService {
     }
 
     @Override
+    public List<CanonicalUnit> catalog(String factoryId) {
+        return factoryCatalog(factoryId).units().values().stream()
+                .distinct()
+                .sorted(Comparator.comparing(CanonicalUnit::code))
+                .toList();
+    }
+
+    @Override
     public UnitNormalizationResult normalize(String factoryId, String rawUnit) {
         return normalize(rawUnit, factoryCatalog(factoryId));
     }

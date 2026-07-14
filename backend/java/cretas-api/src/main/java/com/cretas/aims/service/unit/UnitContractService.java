@@ -7,6 +7,8 @@ import java.util.Optional;
 
 public interface UnitContractService {
 
+    List<CanonicalUnit> catalog(String factoryId);
+
     UnitNormalizationResult normalize(String factoryId, String rawUnit);
 
     Optional<CanonicalUnit> describe(String factoryId, String rawUnit);

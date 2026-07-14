@@ -2,6 +2,12 @@ package com.cretas.aims.service;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitConversionContext;
+import com.cretas.aims.service.unit.UnitConversionResult;
+import com.cretas.aims.service.unit.UnitDimension;
+
+import java.time.LocalDateTime;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -37,6 +43,18 @@ import java.math.RoundingMode;
 @Slf4j
 @Service
 public class UnitConversionService {
+
+    private final UnitContractService unitContractService;
+
+    public UnitConversionService(UnitContractService unitContractService) {
+        this.unitContractService = unitContractService;
+    }
+
+    /** Test-only source compatibility; production beans always receive UnitContractService. */
+    @Deprecated(forRemoval = true)
+    public UnitConversionService() {
+        this.unitContractService = null;
+    }
 
     private static final BigDecimal THOUSAND = new BigDecimal("1000");
 
@@ -75,6 +93,14 @@ public class UnitConversionService {
      */
     public BigDecimal convert(BigDecimal value, String fromUnit, String toUnit) {
         if (value == null || fromUnit == null || toUnit == null) return null;
+
+        if (unitContractService != null) {
+            UnitConversionResult result = unitContractService.convert(value, new UnitConversionContext(
+                    null, null, fromUnit, toUnit, LocalDateTime.now(), null, 6, RoundingMode.HALF_UP));
+            return result.succeeded() && result.quantity() != null
+                    ? result.quantity().setScale(6, RoundingMode.HALF_UP)
+                    : null;
+        }
 
         String from = fromUnit.trim().toLowerCase();
         String to = toUnit.trim().toLowerCase();
@@ -117,6 +143,9 @@ public class UnitConversionService {
      */
     public BigDecimal toKg(BigDecimal value, String unit) {
         if (value == null || unit == null) return null;
+        if (unitContractService != null) {
+            return convert(value, unit, "kg");
+        }
         BigDecimal factor = WEIGHT_TO_KG.get(unit.trim().toLowerCase());
         if (factor == null) return null;          // 非重量单位: 不归一
         if (BigDecimal.ONE.compareTo(factor) == 0) return value;   // 已是 kg, 透传
@@ -125,6 +154,11 @@ public class UnitConversionService {
 
     /** 该单位是否为可归一到 kg 的重量单位 (kg/g/mg/斤/吨/克/公斤/千克/t). */
     public boolean isWeightUnit(String unit) {
+        if (unitContractService != null) {
+            return unitContractService.describe(null, unit)
+                    .map(canonical -> canonical.dimension() == UnitDimension.MASS)
+                    .orElse(false);
+        }
         return unit != null && WEIGHT_TO_KG.containsKey(unit.trim().toLowerCase());
     }
 
@@ -144,6 +178,11 @@ public class UnitConversionService {
      */
     public boolean isSupported(String fromUnit, String toUnit) {
         if (fromUnit == null || toUnit == null) return false;
+        if (unitContractService != null) {
+            UnitConversionResult result = unitContractService.convert(BigDecimal.ONE, new UnitConversionContext(
+                    null, null, fromUnit, toUnit, LocalDateTime.now(), null, 6, RoundingMode.HALF_UP));
+            return result.succeeded();
+        }
         String from = fromUnit.trim().toLowerCase();
         String to = toUnit.trim().toLowerCase();
         if (from.equals(to)) return true;

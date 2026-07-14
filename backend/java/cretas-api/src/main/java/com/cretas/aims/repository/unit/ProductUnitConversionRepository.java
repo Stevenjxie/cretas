@@ -8,9 +8,16 @@ import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface ProductUnitConversionRepository extends JpaRepository<ProductUnitConversion, String> {
+
+    List<ProductUnitConversion> findByFactoryIdAndProductTypeIdOrderByCreatedAtAsc(
+            String factoryId, String productTypeId);
+
+    Optional<ProductUnitConversion> findByIdAndFactoryIdAndProductTypeId(
+            String id, String factoryId, String productTypeId);
 
     @Query("""
             SELECT p FROM ProductUnitConversion p

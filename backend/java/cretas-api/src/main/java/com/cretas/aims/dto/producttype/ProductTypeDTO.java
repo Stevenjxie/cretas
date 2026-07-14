@@ -60,6 +60,9 @@ public class ProductTypeDTO {
     @Schema(description = "P0-2 标准克重: 1 份/盒 = X 克 (报工末道折算/成品入库换算用; null=无标准)")
     private BigDecimal gramsPerUnit;
 
+    @JsonIgnore
+    private boolean gramsPerUnitPresent;
+
     @Schema(description = "T133 半成品→成品出成率 (0~1 乘数; null=备货看板按 1.0 即偏乐观; 如 0.55 表示 55% 出成率)")
     private BigDecimal wipToFgYield;
 
@@ -84,6 +87,9 @@ public class ProductTypeDTO {
 
     @Schema(description = "装箱换算: 1 一级单位 = N 二级单位 (如 1筐=20盒 → 20)")
     private BigDecimal boxConversionCoefficient;
+
+    @JsonIgnore
+    private boolean boxConversionCoefficientPresent;
 
     // ==================== 商务/税务字段 ====================
 
@@ -227,6 +233,16 @@ public class ProductTypeDTO {
         this.targetGrossMarginPresent = true;
     }
 
+    public void setGramsPerUnit(BigDecimal gramsPerUnit) {
+        this.gramsPerUnit = gramsPerUnit;
+        this.gramsPerUnitPresent = true;
+    }
+
+    public void setBoxConversionCoefficient(BigDecimal boxConversionCoefficient) {
+        this.boxConversionCoefficient = boxConversionCoefficient;
+        this.boxConversionCoefficientPresent = true;
+    }
+
     @JsonIgnore
     public void markStandardCostPresent() {
         this.standardCostPresent = true;
@@ -235,6 +251,16 @@ public class ProductTypeDTO {
     @JsonIgnore
     public void markTargetGrossMarginPresent() {
         this.targetGrossMarginPresent = true;
+    }
+
+    @JsonIgnore
+    public void markGramsPerUnitPresent() {
+        this.gramsPerUnitPresent = true;
+    }
+
+    @JsonIgnore
+    public void markBoxConversionCoefficientPresent() {
+        this.boxConversionCoefficientPresent = true;
     }
 
     // ==================== Inner DTOs ====================
