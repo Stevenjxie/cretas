@@ -5,7 +5,10 @@ import lombok.*;
 
 import jakarta.persistence.*;
 import java.math.BigDecimal;
+import java.util.List;
 import org.hibernate.annotations.Where;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /**
  * 计量单位配置实体
@@ -129,6 +132,13 @@ public class UnitOfMeasurement extends BaseEntity {
     @Column(name = "sort_order")
     @Builder.Default
     private Integer sortOrder = 0;
+
+    /**
+     * 工厂级单位别名，用于将输入归一到 unitCode；不表示包装换算关系。
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "aliases_json", columnDefinition = "jsonb")
+    private List<String> aliasesJson;
 
     /**
      * 判断是否为全局配置

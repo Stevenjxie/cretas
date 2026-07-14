@@ -58,7 +58,8 @@ public interface UnitOfMeasurementRepository extends JpaRepository<UnitOfMeasure
            "WHERE u.factoryId IN (:factoryId, '*') " +
            "AND u.isActive = true " +
            "AND u.deletedAt IS NULL " +
-           "ORDER BY u.category ASC, u.sortOrder ASC")
+           "ORDER BY CASE WHEN u.factoryId = :factoryId THEN 1 ELSE 2 END, " +
+           "u.category ASC, u.sortOrder ASC")
     List<UnitOfMeasurement> findAllByFactoryId(@Param("factoryId") String factoryId);
 
     /**
