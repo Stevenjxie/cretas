@@ -316,7 +316,8 @@ async function reExportXlsx(plan: LogisticsPlan): Promise<void> {
 .rd-routes :deep(.route-cards) { grid-template-columns: 1fr; overflow-y: auto; flex: 1 1 auto; padding-right: 6px; align-content: start; }
 .rd-note { padding: 10px 14px; color: #175cd3; font-size: 12.5px; background: #eff8ff; border: 1px solid #b2ddff; border-radius: 8px; }
 .rd-viewswitch { align-self: flex-start; }
-.rd-exec { display: flex; flex-direction: column; }
+/* 执行视图放在浅灰面板上, 让内部白卡片浮起来(对齐 mockup frame 的 #F4F6F9 底) */
+.rd-exec { display: flex; flex-direction: column; background: #F4F6F9; padding: 16px; border-radius: 12px; border: 1px solid #e8edf3; }
 .rec-exc { color: #b42318; font-size: 11px; }
 .rec-dash { color: #cbd5e1; }
 /* 列表执行进度列(对齐 mockup rt-prog) */

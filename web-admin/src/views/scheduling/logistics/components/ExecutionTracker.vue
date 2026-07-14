@@ -142,10 +142,10 @@ function submitException(): void {
         <div class="bar"><div class="fill" :style="{ width: summary.donePct + '%' }" /></div>
         <span class="txt">{{ summary.done }} / {{ summary.total }} 已送达</span>
       </div>
-      <el-button
+      <button
         v-if="!readonly"
         class="eh-done-btn" :disabled="!allDone" @click="emit('complete')"
-      >完成本次调度</el-button>
+      >完成本次调度</button>
     </div>
 
     <!-- 逐车次卡 -->
@@ -175,7 +175,7 @@ function submitException(): void {
           </span>
           <div class="st-body">
             <div class="st-name">{{ o.storeName }}</div>
-            <div v-if="execOf(o) === 'DELIVERED'" class="st-meta ok">已送达<template v-if="fmtTime(o.deliveredAt)"> {{ fmtTime(o.deliveredAt) }}</template></div>
+            <div v-if="execOf(o) === 'DELIVERED'" class="st-meta ok">已送达 {{ fmtTime(o.deliveredAt) }}</div>
             <div v-else-if="execOf(o) === 'EXCEPTION'" class="st-meta exc">
               异常 · {{ reasonLabel(o.exceptionReason) }} → {{ dispositionLabel(o.exceptionDisposition) }}
               <template v-if="o.exceptionNote">「{{ o.exceptionNote }}」</template>
@@ -185,7 +185,7 @@ function submitException(): void {
           <div class="st-ops">
             <template v-if="readonly" />
             <template v-else-if="execOf(o) === 'PENDING'">
-              <el-button class="st-btn done" :loading="busyId === o.id" @click="emit('deliver', o.id)">✓ 已送达</el-button>
+              <button class="st-btn done" :disabled="busyId === o.id" @click="emit('deliver', o.id)">✓ 已送达</button>
               <button class="st-btn exc" :disabled="busyId === o.id" @click="openException(o)">标异常</button>
               <button class="st-btn edit" :disabled="busyId === o.id" @click="openException(o, true)">改派</button>
             </template>
@@ -250,19 +250,19 @@ function submitException(): void {
 .b-done { color: #027a48; background: #ecfdf3; }
 
 /* exec-head */
-.exec-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; background: linear-gradient(180deg,#fff,#f8fafc); border: 1px solid #E2E8F0; border-radius: 10px; padding: 12px 18px; }
+.exec-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; background: linear-gradient(180deg,#fff,#f8fafc); border: 1px solid #E2E8F0; border-radius: 10px; padding: 12px 18px; box-shadow: 0 1px 3px rgba(16,24,40,.04); }
 .eh-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .eh-title b { font-size: 15px; color: #101828; } .eh-title span { font-size: 11.5px; color: #98a2b3; margin-left: 6px; }
 .eh-prog { display: flex; align-items: center; gap: 10px; min-width: 260px; flex: 1 1 260px; }
 .eh-prog .bar { flex: 1; height: 8px; background: #eef2f7; border-radius: 999px; overflow: hidden; }
 .eh-prog .fill { height: 100%; background: #12b76a; border-radius: 999px; transition: width .3s ease; }
 .eh-prog .txt { font-size: 12.5px; font-weight: 700; color: #101828; font-variant-numeric: tabular-nums; }
-.eh-done-btn { padding: 8px 16px; color: #fff; background: #027a48; border: 0; border-radius: 7px; font-size: 13px; font-weight: 650; }
-.eh-done-btn:not(.is-disabled):hover { background: #04663d; color: #fff; }
-.eh-done-btn.is-disabled { background: #cbd5e1; color: #fff; cursor: not-allowed; }
+.eh-done-btn { padding: 8px 16px; color: #fff; background: #027a48; border: 0; border-radius: 7px; font-size: 13px; font-weight: 650; cursor: pointer; }
+.eh-done-btn:hover:not(:disabled) { background: #04663d; }
+.eh-done-btn:disabled { background: #cbd5e1; cursor: not-allowed; }
 
 /* 车次卡 */
-.trip-card { background: #fff; border: 1px solid #EDF2F7; border-radius: 12px; overflow: hidden; }
+.trip-card { background: #fff; border: 1px solid #E6EBF1; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(16,24,40,.04); }
 .tc-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 16px; background: #fafbfc; border-bottom: 1px solid #EDF2F7; }
 .tc-h-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; } .tc-h-left b { font-size: 14px; color: #101828; }
 .tc-veh { font-size: 12.5px; color: #475467; font-weight: 600; }
@@ -273,7 +273,7 @@ function submitException(): void {
 
 /* 停靠卡 */
 .stops { padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
-.stop { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid #EDF2F7; border-radius: 9px; }
+.stop { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #E4E9F0; border-radius: 9px; background: #fff; }
 .stop.done { background: #f6fef9; border-color: #a6f4c5; } .stop.exc { background: #fef3f2; border-color: #fecdca; }
 .st-ic { width: 22px; height: 22px; flex: none; display: grid; place-items: center; border-radius: 50%; font-size: 12px; font-weight: 800; }
 .st-ic.pending { color: #98a2b3; background: #f2f4f7; border: 1.5px solid #d0d5dd; }
@@ -284,7 +284,7 @@ function submitException(): void {
 .st-btn { font-size: 12px; padding: 5px 10px; border-radius: 6px; cursor: pointer; font-weight: 600; border: 1px solid #dbe3ec; background: #fff; color: #475569; height: auto; }
 .st-btn:disabled { opacity: .55; cursor: not-allowed; }
 .st-btn.done { color: #fff; background: #12b76a; border-color: #12b76a; }
-.st-btn.done:not(.is-disabled):hover { background: #0e9f5b; color: #fff; border-color: #0e9f5b; }
+.st-btn.done:hover:not(:disabled) { background: #0e9f5b; border-color: #0e9f5b; }
 .st-btn.exc { color: #b42318; background: #fff; border-color: #fecdca; }
 .st-btn.exc:hover { background: #fef3f2; }
 .st-btn.edit { color: #1b65a8; border-color: #cfe3fb; background: #eff6fd; }
