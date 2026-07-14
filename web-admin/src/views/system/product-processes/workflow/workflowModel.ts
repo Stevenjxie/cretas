@@ -509,6 +509,8 @@ function isProcessPort(value: unknown): boolean {
   return optionalString(value.materialNodeId)
     && optionalString(value.materialName)
     && optionalString(value.skuId)
+    && optionalNullableString(value.conversionRefId)
+    && optionalNullableInteger(value.conversionVersion)
     && (value.materialKind === undefined
       || (typeof value.materialKind === 'string' && materialNodeKinds.has(value.materialKind)));
 }
@@ -560,6 +562,10 @@ function optionalNullableString(value: unknown): boolean {
 
 function optionalNullableFiniteNumber(value: unknown): boolean {
   return value === undefined || value === null || isFiniteNumber(value);
+}
+
+function optionalNullableInteger(value: unknown): boolean {
+  return value === undefined || value === null || Number.isInteger(value);
 }
 
 function optionalBoolean(value: unknown): boolean {

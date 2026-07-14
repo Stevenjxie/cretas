@@ -89,6 +89,14 @@ export function reconcileWorkflowUnits(
     });
   });
 
+  processNodes.forEach((processNode) => {
+    const process = processNode.data as ProcessNodeData;
+    const primaryInput = primaryPort(process.ports, 'INPUT');
+    const primaryOutput = primaryPort(process.ports, 'OUTPUT');
+    if (primaryInput) process.inputUnit = primaryInput.unit;
+    if (primaryOutput) process.outputUnit = primaryOutput.unit;
+  });
+
   return { definition, errors, warnings };
 }
 
@@ -101,18 +109,15 @@ function reconcilePort(
   aliases: Record<string, string>,
   errors: WorkflowUnitIssue[],
 ): void {
-  const hintKey = port.direction === 'OUTPUT' ? 'outputUnit' : 'inputUnit';
-  const hintUnit = normalizeUnit(process[hintKey], aliases);
   const portUnit = normalizeUnit(port.unit, aliases);
-  if (hintUnit === targetUnit) {
-    process[hintKey] = targetUnit;
+  if (portUnit === targetUnit) {
     port.unit = targetUnit;
     delete port.conversionRefId;
     delete port.conversionVersion;
     return;
   }
 
-  const reportUnit = hintUnit || portUnit;
+  const reportUnit = portUnit;
   const conversion = product.conversions.find((candidate) =>
     candidate.id === port.conversionRefId
       && candidate.version === port.conversionVersion
@@ -140,8 +145,12 @@ function reconcilePort(
     });
     return;
   }
-  process[hintKey] = reportUnit;
   port.unit = reportUnit;
+}
+
+function primaryPort(ports: ProcessPort[], direction: 'INPUT' | 'OUTPUT'): ProcessPort | undefined {
+  return ports.filter((port) => port.direction === direction)
+    .sort((left, right) => left.ordinal - right.ordinal)[0];
 }
 
 function normalizedAliases(custom?: Record<string, string>): Record<string, string> {
