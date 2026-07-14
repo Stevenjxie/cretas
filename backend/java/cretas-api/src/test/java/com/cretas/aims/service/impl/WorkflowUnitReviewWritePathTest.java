@@ -29,7 +29,8 @@ class WorkflowUnitReviewWritePathTest {
         ProductTypeRepository repository = mock(ProductTypeRepository.class);
         WorkflowUnitReviewService reviewService = mock(WorkflowUnitReviewService.class);
         ProductTypeServiceImpl service = new ProductTypeServiceImpl(
-                repository, new ObjectMapper(), mock(CustomerRepository.class), reviewService);
+                repository, new ObjectMapper(), mock(CustomerRepository.class), reviewService,
+                mock(com.cretas.aims.service.unit.ProductSpecificationConversionSyncService.class));
         ProductType product = new ProductType();
         product.setId("P1");
         product.setFactoryId("F1");

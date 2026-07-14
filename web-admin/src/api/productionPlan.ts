@@ -364,6 +364,7 @@ export interface WorkflowResolutionCandidate {
   ownerProductName: string
   ownerProductCategory: string
   ownerUnit: string
+  plannedUnit: string | null
   terminalOutputs: WorkflowResolutionTerminal[]
   exactMatch: boolean
 }

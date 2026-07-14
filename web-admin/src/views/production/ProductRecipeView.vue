@@ -31,6 +31,16 @@ import { isNotFoundError } from '@/api/notFound';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Refresh, Delete, InfoFilled } from '@element-plus/icons-vue';
 import type { TableRow } from '@/types/api';
+import {
+  applySeasoningMaterial,
+  filterSeasoningMaterials,
+  isPotSequencingEnabled,
+  percentToRatio,
+  ratioToPercent,
+  validatePotRatio,
+  validateSeasoningRows,
+  type SeasoningMaterialOption,
+} from './seasoning/seasoningForm';
 
 // =========================================================================
 // Auth + composables
@@ -83,10 +93,15 @@ async function loadProductTypes() {
 // 工序链 (ProductWorkProcess) — 调料配方分组锚点
 // =========================================================================
 const workProcesses = ref<ProductWorkProcessItem[]>([]);
+const selectedWorkProcessId = ref('');
 
 /** 按 processOrder 排序展示 */
 const sortedWorkProcesses = computed(() =>
   workProcesses.value.slice().sort((a, b) => a.processOrder - b.processOrder),
+);
+
+const currentWorkProcess = computed(() =>
+  sortedWorkProcesses.value.find((wp) => wp.workProcessId === selectedWorkProcessId.value) ?? null,
 );
 
 function categoryOf(wp: ProductWorkProcessItem): '熟制' | '注射' | '普通' {
@@ -136,7 +151,7 @@ const processParamsMap = ref<Record<string, ProcessParamForm>>({});
 
 function defaultParamFor(category: '熟制' | '注射' | '普通'): ProcessParamForm {
   return {
-    subsequentPotRatio: category === '熟制' ? 0.3333 : null,
+    subsequentPotRatio: null,
     injectionAmountKg: null,
     notes: null,
   };
@@ -162,6 +177,23 @@ function initProcessParams(loadedParams: ProcessSeasoningParam[]) {
 const isReadOnly = computed(
   () => current.value !== null && current.value.status !== 'DRAFT',
 );
+
+const seasoningMaterials = ref<SeasoningMaterialOption[]>([]);
+const materialsLoading = ref(false);
+
+async function loadSeasoningMaterials() {
+  if (!factoryId.value) return;
+  materialsLoading.value = true;
+  try {
+    const res = await get<SeasoningMaterialOption[]>(`/${factoryId.value}/raw-material-types/active`);
+    const data = res.success && res.data ? res.data : [];
+    seasoningMaterials.value = filterSeasoningMaterials(Array.isArray(data) ? data : []);
+  } catch {
+    ElMessage({ message: '加载辅料档案失败，请刷新重试', type: 'error', duration: 0, showClose: true });
+  } finally {
+    materialsLoading.value = false;
+  }
+}
 
 /** Apply loaded response to local form state */
 function applyToForm(data: BomSeasoningResponse) {
@@ -193,6 +225,9 @@ async function loadSeasoning() {
       // fool-proof Rule 5: 无工序链 → EmptyState 引导去配置, 不继续加载 BOM
       loadState.value = 'NO_PROCESS';
       return;
+    }
+    if (!workProcesses.value.some((wp) => wp.workProcessId === selectedWorkProcessId.value)) {
+      selectedWorkProcessId.value = sortedWorkProcesses.value[0]?.workProcessId ?? '';
     }
 
     // pin 时按 recipeId 取 (克隆出的非当前草稿); 否则按产品取当前 BOM.
@@ -228,11 +263,12 @@ watch(selectedProductTypeId, () => {
     current.value = null;
     formItems.value = [];
     workProcesses.value = [];
+    selectedWorkProcessId.value = '';
   }
 });
 
 onMounted(async () => {
-  await loadProductTypes();
+  await Promise.all([loadProductTypes(), loadSeasoningMaterials()]);
   if (selectedProductTypeId.value) await loadSeasoning();
 });
 
@@ -256,6 +292,33 @@ const unconfiguredProcessCount = computed(
   () => workProcesses.value.filter((wp) => itemsForProcess(wp.workProcessId).length === 0).length,
 );
 
+const currentItems = computed(() =>
+  selectedWorkProcessId.value ? itemsForProcess(selectedWorkProcessId.value) : [],
+);
+
+const currentProcessParam = computed(() =>
+  selectedWorkProcessId.value ? processParamsMap.value[selectedWorkProcessId.value] : undefined,
+);
+
+const currentPotEnabled = computed({
+  get: () => isPotSequencingEnabled(currentProcessParam.value?.subsequentPotRatio),
+  set: (enabled: boolean) => {
+    if (!currentProcessParam.value) return;
+    currentProcessParam.value.subsequentPotRatio = enabled
+      ? (currentProcessParam.value.subsequentPotRatio ?? 0.5)
+      : null;
+  },
+});
+
+const currentPotPercent = computed({
+  get: () => ratioToPercent(currentProcessParam.value?.subsequentPotRatio),
+  set: (percent: number | null) => {
+    if (currentProcessParam.value) {
+      currentProcessParam.value.subsequentPotRatio = percentToRatio(percent);
+    }
+  },
+});
+
 function nextSeq(workProcessId: string): number {
   const existing = itemsForProcess(workProcessId);
   return existing.length > 0 ? Math.max(...existing.map((i) => i.seq)) + 1 : 1;
@@ -266,6 +329,7 @@ function addIngredient(wp: ProductWorkProcessItem) {
   const workProcessId = wp.workProcessId;
   formItems.value.push({
     workProcessId,
+    materialTypeId: null,
     section: sectionOf(wp),
     seq: nextSeq(workProcessId),
     name: '',
@@ -275,6 +339,15 @@ function addIngredient(wp: ProductWorkProcessItem) {
     countInSeasoning: true,
     remark: '',
   });
+}
+
+function onMaterialChange(item: BomSeasoningItem) {
+  const material = seasoningMaterials.value.find((option) => option.id === item.materialTypeId);
+  if (material) Object.assign(item, applySeasoningMaterial(material));
+}
+
+function displayUnit(item: BomSeasoningItem): string {
+  return item.unit || seasoningMaterials.value.find((option) => option.id === item.materialTypeId)?.unit || 'g';
 }
 
 function removeIngredient(item: BomSeasoningItem) {
@@ -294,19 +367,18 @@ async function save() {
     return;
   }
 
-  // fool-proof Rule 1: pre-validate before sending
-  const blankNames = formItems.value.filter((i) => !i.name.trim());
-  if (blankNames.length > 0) {
-    ElMessage.warning('存在未填名称的调料行，请补充');
+  const rowErrors = validateSeasoningRows(formItems.value);
+  if (rowErrors.length > 0) {
+    ElMessage.warning(rowErrors[0]);
     return;
   }
-  // fool-proof Rule 1: 后端 dosagePerKgG @NotNull, 提前拦住空值避免 400 (audit R2 Issue 2)
-  const nullDosage = formItems.value.filter(
-    (i) => i.dosagePerKgG === null || i.dosagePerKgG === undefined,
-  );
-  if (nullDosage.length > 0) {
-    ElMessage.warning('存在未填「每 kg 用量」的调料行，请补充后再保存');
-    return;
+  for (const wp of workProcesses.value) {
+    const ratio = processParamsMap.value[wp.workProcessId]?.subsequentPotRatio;
+    const ratioError = validatePotRatio(isPotSequencingEnabled(ratio), ratioToPercent(ratio));
+    if (ratioError) {
+      ElMessage.warning(`${wp.processName}：${ratioError}`);
+      return;
+    }
   }
 
   saving.value = true;
@@ -319,6 +391,7 @@ async function save() {
       const seq = (seqCounters[key] = (seqCounters[key] ?? 0) + 1);
       return {
         workProcessId: item.workProcessId,
+        materialTypeId: item.materialTypeId as string,
         section: item.section,
         seq,
         name: item.name.trim(),
@@ -330,19 +403,24 @@ async function save() {
       };
     });
 
-    // 每个 熟制/注射 工序各出一条 processParams (普通工序不需要, 无锅序/注射量概念)
+    // 每道工序都可显式启用锅序；注射工序同时保留绝对注射量语义。
     const processParams: ProcessSeasoningParam[] = workProcesses.value
-      .filter((wp) => categoryOf(wp) === '熟制' || categoryOf(wp) === '注射')
       .map((wp) => {
         const category = categoryOf(wp);
         const p = processParamsMap.value[wp.workProcessId] ?? defaultParamFor(category);
         return {
           workProcessId: wp.workProcessId,
-          subsequentPotRatio: category === '熟制' ? p.subsequentPotRatio : null,
+          subsequentPotRatio: p.subsequentPotRatio,
           injectionAmountKg: category === '注射' ? p.injectionAmountKg : null,
           notes: p.notes ?? null,
         };
-      });
+      })
+      // 不为“完全未配置”的工序创建空参数行；否则后端会把空行误认成该工序已启用调料核算。
+      .filter((param) =>
+        param.subsequentPotRatio != null ||
+        param.injectionAmountKg != null ||
+        (param.notes != null && param.notes.trim() !== ''),
+      );
 
     const res = await bomSeasoningApi.save(factoryId.value, current.value.bomRecipeId, {
       // legacy header 字段: 新 UI 不提供编辑入口, 原样透传已加载值 (不清空, 向后兼容)
@@ -666,229 +744,168 @@ function goConfigureProcess() {
         style="margin: 12px 0;"
       />
 
-      <!-- 兜底: 未能匹配到现存工序的调料行 (工序被删除等边界情况) — 保留展示避免保存时静默丢失数据 -->
-      <el-card v-if="orphanItems.length > 0" shadow="never" style="margin-bottom: 16px; border-color: #f56c6c;">
-        <template #header>
-          <div style="display:flex; align-items:center; gap:8px;">
-            <span style="font-size: 14px; font-weight: 600; color: #f56c6c;">未识别工序的调料行</span>
-            <el-tooltip content="这些调料行绑定的工序在当前工序链中不存在（可能工序已被删除），请确认后调整或删除，否则保存时仍会原样保留" placement="top">
-              <el-icon style="color: #909399;"><InfoFilled /></el-icon>
-            </el-tooltip>
+      <el-alert
+        v-if="orphanItems.length > 0"
+        type="error"
+        :closable="false"
+        show-icon
+        title="存在已删除工序下的历史调料。请删除这些记录后再保存，避免数据错配。"
+        class="recipe-view__orphan-alert"
+      >
+        <template #default>
+          <div v-for="row in orphanItems" :key="row.id || `${row.workProcessId}-${row.seq}`" class="orphan-row">
+            <span>{{ row.name || '未命名调料' }}</span>
+            <el-tag v-if="!row.materialTypeId" type="danger" size="small">历史数据，需重新选择物料</el-tag>
+            <el-button v-if="!isReadOnly" link type="danger" :icon="Delete" @click="removeIngredient(row)">删除</el-button>
           </div>
         </template>
-        <el-table :data="orphanItems" size="small" border>
-          <el-table-column label="段" width="90">
-            <template #default="{ row }">
-              <el-tag size="small" :type="row.section === 'INJECTION' ? 'primary' : 'warning'">{{ row.section === 'INJECTION' ? '注射' : '熟制' }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="料名" min-width="120">
-            <template #default="{ row }">
-              <el-input v-if="!isReadOnly" v-model="row.name" size="small" />
-              <span v-else>{{ row.name }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="每 kg 原料用量 g" width="150" align="right">
-            <template #default="{ row }">
-              <el-input-number
-                v-if="!isReadOnly"
-                v-model="row.dosagePerKgG"
-                size="small"
-                :controls="false"
-                :precision="2"
-                :min="0"
-                style="width: 110px;"
-              />
-              <span v-else>{{ row.dosagePerKgG ?? '—' }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="单价1" width="120" align="right">
-            <template #default="{ row }">
-              <el-input-number
-                v-if="!isReadOnly"
-                v-model="row.priceSource1"
-                size="small"
-                :controls="false"
-                :precision="2"
-                :min="0"
-                style="width: 90px;"
-              />
-              <span v-else>{{ row.priceSource1 ?? '—' }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column v-if="!isReadOnly" label="操作" width="70" align="center">
-            <template #default="{ row }">
-              <el-button link type="danger" :icon="Delete" @click="removeIngredient(row)" />
-            </template>
-          </el-table-column>
-        </el-table>
-      </el-card>
+      </el-alert>
 
-      <!-- 逐工序卡片 (核心重构): 每道工序按其 category 渲染对应表单 -->
-      <el-card
-        v-for="wp in sortedWorkProcesses"
-        :key="wp.workProcessId"
-        shadow="never"
-        style="margin-bottom: 16px;"
-      >
-        <template #header>
-          <div style="display:flex; justify-content:space-between; align-items:center;">
-            <div style="display:flex; align-items:center; gap:8px;">
-              <span
-                style="font-size: 14px; font-weight: 600; padding-left: 8px; border-left: 3px solid"
-                :style="{
-                  borderLeftColor:
-                    categoryOf(wp) === '熟制' ? '#e6a23c' : categoryOf(wp) === '注射' ? '#409eff' : '#909399',
-                }"
-              >{{ wp.processOrder }}. {{ wp.processName }}</span>
-              <el-tag
-                size="small"
-                :type="categoryOf(wp) === '熟制' ? 'warning' : categoryOf(wp) === '注射' ? 'primary' : 'info'"
-                disable-transitions
-              >{{ wp.processCategory || '普通' }}</el-tag>
+      <div class="seasoning-workspace">
+        <aside data-testid="seasoning-process-nav" class="process-nav">
+          <div class="process-nav__title">工序导航</div>
+          <button
+            v-for="process in sortedWorkProcesses"
+            :key="process.workProcessId"
+            type="button"
+            class="process-nav__item"
+            :class="{ 'is-active': selectedWorkProcessId === process.workProcessId }"
+            @click="selectedWorkProcessId = process.workProcessId"
+          >
+            <span class="process-nav__order">{{ process.processOrder }}</span>
+            <span class="process-nav__content">
+              <strong>{{ process.processName }}</strong>
+              <small>{{ itemsForProcess(process.workProcessId).length }} 种调料</small>
+            </span>
+            <el-tag
+              v-if="isPotSequencingEnabled(processParamsMap[process.workProcessId]?.subsequentPotRatio)"
+              type="warning"
+              size="small"
+            >锅序</el-tag>
+          </button>
+        </aside>
+
+        <section v-if="currentWorkProcess" data-testid="seasoning-current-process" class="process-editor">
+          <header class="process-editor__header">
+            <div>
+              <div class="process-editor__eyebrow">当前工序</div>
+              <h3>{{ currentWorkProcess.processOrder }}. {{ currentWorkProcess.processName }}</h3>
+              <p>每条用量均按每投入 1 kg 本工序半成品计算。</p>
             </div>
             <el-button
               v-if="!isReadOnly"
-              size="small"
+              type="primary"
               :icon="Plus"
-              @click="addIngredient(wp)"
-            >{{ categoryOf(wp) === '注射' ? '添加注射料' : categoryOf(wp) === '熟制' ? '添加卤料' : '添加调料' }}</el-button>
+              @click="addIngredient(currentWorkProcess)"
+            >添加调料</el-button>
+          </header>
+
+          <div class="process-settings">
+            <div class="setting-row">
+              <div>
+                <strong>锅序调料</strong>
+                <p>开启后，报工时填写锅数；第一锅 100%，之后每锅按固定比例。</p>
+              </div>
+              <el-switch v-model="currentPotEnabled" :disabled="isReadOnly" />
+            </div>
+            <div v-if="currentPotEnabled" class="setting-row setting-row--nested">
+              <span>后续锅占第一锅</span>
+              <el-input-number
+                v-model="currentPotPercent"
+                :min="0"
+                :max="100"
+                :precision="2"
+                :disabled="isReadOnly"
+              />
+              <span>%</span>
+            </div>
+            <div v-if="categoryOf(currentWorkProcess) === '注射' && currentProcessParam" class="setting-row setting-row--nested">
+              <span>绝对注射量</span>
+              <el-input-number
+                v-model="currentProcessParam.injectionAmountKg"
+                :min="0"
+                :precision="3"
+                :disabled="isReadOnly"
+              />
+              <span>kg</span>
+              <el-tooltip content="保留注射工序现有语义：该值是本工序一次注射的绝对用量。" placement="top">
+                <el-icon><InfoFilled /></el-icon>
+              </el-tooltip>
+            </div>
           </div>
-        </template>
 
-        <!-- 熟制: 第二锅起比例 (老汤锅) -->
-        <el-form
-          v-if="categoryOf(wp) === '熟制' && processParamsMap[wp.workProcessId]"
-          :inline="true"
-          label-width="auto"
-          size="default"
-          style="margin-bottom: 8px;"
-        >
-          <el-form-item label="第二锅起比例">
-            <el-input-number
-              v-model="processParamsMap[wp.workProcessId].subsequentPotRatio"
-              :precision="4"
-              :min="0.0001"
-              :max="1"
-              :disabled="isReadOnly"
-              placeholder="如 0.3333"
-            />
-            <el-tooltip content="第二锅及之后相比第一锅的调料用量比例 (老汤锅)" placement="top">
-              <el-icon style="margin-left: 6px; color: #909399;"><InfoFilled /></el-icon>
-            </el-tooltip>
-          </el-form-item>
-        </el-form>
-
-        <!-- 注射: 绝对注射量(kg) -->
-        <el-form
-          v-else-if="categoryOf(wp) === '注射' && processParamsMap[wp.workProcessId]"
-          :inline="true"
-          label-width="auto"
-          size="default"
-          style="margin-bottom: 8px;"
-        >
-          <el-form-item label="绝对注射量 (kg)">
-            <el-input-number
-              v-model="processParamsMap[wp.workProcessId].injectionAmountKg"
-              :precision="3"
-              :min="0"
-              :disabled="isReadOnly"
-              placeholder="如 5.000"
-            />
-            <el-tooltip content="本工序一次注射的绝对用量 (kg), 不再按比例换算" placement="top">
-              <el-icon style="margin-left: 6px; color: #909399;"><InfoFilled /></el-icon>
-            </el-tooltip>
-          </el-form-item>
-        </el-form>
-
-        <!-- 明细表 — 三类工序共用, 仅「计入调料」列在 注射 段隐藏 (成本引擎对注射段恒计入) -->
-        <el-table :data="itemsForProcess(wp.workProcessId)" size="small" border>
-          <el-table-column label="料名" min-width="120">
-            <template #default="{ row }">
-              <el-input v-if="!isReadOnly" v-model="row.name" size="small" />
-              <span v-else>{{ row.name }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="每 kg 原料用量 g" width="150" align="right">
-            <template #default="{ row }">
-              <el-input-number
-                v-if="!isReadOnly"
-                v-model="row.dosagePerKgG"
-                size="small"
-                :controls="false"
-                :precision="2"
-                :min="0"
-                style="width: 110px;"
-              />
-              <span v-else>{{ row.dosagePerKgG ?? '—' }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="单价1" width="120" align="right">
-            <template #default="{ row }">
-              <el-input-number
-                v-if="!isReadOnly"
-                v-model="row.priceSource1"
-                size="small"
-                :controls="false"
-                :precision="2"
-                :min="0"
-                style="width: 90px;"
-              />
-              <span v-else>{{ row.priceSource1 ?? '—' }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="单价2" width="120" align="right">
-            <template #default="{ row }">
-              <el-input-number
-                v-if="!isReadOnly"
-                v-model="row.priceSource2"
-                size="small"
-                :controls="false"
-                :precision="2"
-                :min="0"
-                style="width: 90px;"
-              />
-              <span v-else>{{ row.priceSource2 ?? '—' }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column
-            v-if="categoryOf(wp) !== '注射'"
-            label="计入调料"
-            width="90"
-            align="center"
-          >
-            <template #default="{ row }">
-              <el-switch
-                v-if="!isReadOnly"
-                v-model="row.countInSeasoning"
-                size="small"
-              />
-              <el-tag
-                v-else
-                :type="row.countInSeasoning ? 'success' : 'info'"
-                size="small"
-                disable-transitions
-              >{{ row.countInSeasoning ? '是' : '否' }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="备注" min-width="120">
-            <template #default="{ row }">
-              <el-input v-if="!isReadOnly" v-model="row.remark" size="small" />
-              <span v-else>{{ row.remark || '—' }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column v-if="!isReadOnly" label="操作" width="70" align="center">
-            <template #default="{ row }">
-              <el-button link type="danger" :icon="Delete" @click="removeIngredient(row)" />
-            </template>
-          </el-table-column>
-        </el-table>
-        <el-empty
-          v-if="itemsForProcess(wp.workProcessId).length === 0"
-          :description="categoryOf(wp) === '注射' ? '暂无注射料' : categoryOf(wp) === '熟制' ? '暂无卤料' : '暂无调料'"
-          :image-size="60"
-        />
-      </el-card>
+          <el-table :data="currentItems" size="small" border class="seasoning-table">
+            <el-table-column label="辅料 / 调料" min-width="230">
+              <template #default="{ row }">
+                <el-select
+                  v-if="!isReadOnly"
+                  v-model="row.materialTypeId"
+                  filterable
+                  :loading="materialsLoading"
+                  placeholder="从辅料档案选择"
+                  style="width: 100%;"
+                  @change="onMaterialChange(row)"
+                >
+                  <el-option
+                    v-for="material in seasoningMaterials"
+                    :key="material.id"
+                    :label="material.name"
+                    :value="material.id"
+                  >
+                    <span>{{ material.name }}</span>
+                    <span class="material-option-meta">{{ material.unit || 'g' }} · {{ material.movingAvgPrice == null ? '保存时自动带入' : `¥${material.movingAvgPrice}` }}</span>
+                  </el-option>
+                </el-select>
+                <span v-else>{{ row.name }}</span>
+                <el-tag v-if="!row.materialTypeId" type="danger" size="small" class="legacy-tag">历史数据，需重新选择物料</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="每 1 kg 本工序投入用量" width="210" align="right">
+              <template #default="{ row }">
+                <el-input-number
+                  v-if="!isReadOnly"
+                  v-model="row.dosagePerKgG"
+                  :controls="false"
+                  :precision="2"
+                  :min="0"
+                  style="width: 130px;"
+                />
+                <span v-else>{{ row.dosagePerKgG ?? '—' }}</span>
+                <span class="unit-label">g</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="单位" width="80" align="center">
+              <template #default="{ row }">{{ displayUnit(row) }}</template>
+            </el-table-column>
+            <el-table-column label="移动均价" width="130" align="right">
+              <template #default="{ row }">
+                <span v-if="row.priceSource1 != null">¥{{ Number(row.priceSource1).toFixed(4) }}</span>
+                <el-tag v-else type="info" size="small">保存时自动带入</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column v-if="categoryOf(currentWorkProcess) !== '注射'" label="计入调料" width="90" align="center">
+              <template #default="{ row }">
+                <el-switch v-if="!isReadOnly" v-model="row.countInSeasoning" size="small" />
+                <span v-else>{{ row.countInSeasoning ? '是' : '否' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="备注" min-width="140">
+              <template #default="{ row }">
+                <el-input v-if="!isReadOnly" v-model="row.remark" size="small" placeholder="选填" />
+                <span v-else>{{ row.remark || '—' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column v-if="!isReadOnly" label="操作" width="64" align="center">
+              <template #default="{ row }">
+                <el-button link type="danger" :icon="Delete" @click="removeIngredient(row)" />
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-empty v-if="currentItems.length === 0" description="本工序暂未配置调料" :image-size="56">
+            <el-button v-if="!isReadOnly" type="primary" plain :icon="Plus" @click="addIngredient(currentWorkProcess)">添加第一种调料</el-button>
+          </el-empty>
+        </section>
+      </div>
 
       <!-- Footer actions (sticky: 长表单滚动时保存/激活常驻底部) -->
       <div class="recipe-view__footer">
@@ -925,6 +942,197 @@ function goConfigureProcess() {
   display: flex;
   align-items: center;
   margin-bottom: 16px;
+}
+
+.recipe-view__orphan-alert {
+  margin: 12px 0;
+}
+
+.orphan-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.seasoning-workspace {
+  display: grid;
+  grid-template-columns: minmax(190px, 230px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+  margin-top: 12px;
+}
+
+.process-nav,
+.process-editor {
+  border: 1px solid var(--el-border-color-light, #e4e7ed);
+  border-radius: 8px;
+  background: var(--el-bg-color, #fff);
+}
+
+.process-nav {
+  position: sticky;
+  top: 12px;
+  overflow: hidden;
+}
+
+.process-nav__title {
+  padding: 11px 12px;
+  color: var(--el-text-color-secondary, #606266);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  background: var(--el-fill-color-light, #f5f7fa);
+  border-bottom: 1px solid var(--el-border-color-lighter, #ebeef5);
+}
+
+.process-nav__item {
+  width: 100%;
+  min-height: 58px;
+  padding: 9px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--el-border-color-extra-light, #f2f3f5);
+  background: transparent;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-align: left;
+  color: var(--el-text-color-primary, #303133);
+  cursor: pointer;
+  transition: background-color .15s ease, box-shadow .15s ease;
+}
+
+.process-nav__item:hover {
+  background: var(--el-fill-color-light, #f5f7fa);
+}
+
+.process-nav__item.is-active {
+  background: var(--el-color-primary-light-9, #ecf5ff);
+  box-shadow: inset 3px 0 0 var(--el-color-primary, #409eff);
+}
+
+.process-nav__order {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: var(--el-color-primary, #409eff);
+  background: var(--el-color-primary-light-9, #ecf5ff);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.process-nav__content {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.process-nav__content strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.process-nav__content small {
+  color: var(--el-text-color-secondary, #909399);
+  font-size: 11px;
+}
+
+.process-editor {
+  min-width: 0;
+  padding: 14px;
+}
+
+.process-editor__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.process-editor__header h3 {
+  margin: 2px 0 3px;
+  font-size: 17px;
+}
+
+.process-editor__header p,
+.setting-row p {
+  margin: 0;
+  color: var(--el-text-color-secondary, #909399);
+  font-size: 12px;
+}
+
+.process-editor__eyebrow {
+  color: var(--el-color-primary, #409eff);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.process-settings {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color-lighter, #ebeef5);
+  border-radius: 6px;
+  background: var(--el-fill-color-extra-light, #fafafa);
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.setting-row--nested {
+  justify-content: flex-start;
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px dashed var(--el-border-color, #dcdfe6);
+}
+
+.material-option-meta {
+  float: right;
+  margin-left: 18px;
+  color: var(--el-text-color-secondary, #909399);
+  font-size: 12px;
+}
+
+.legacy-tag {
+  margin-top: 5px;
+}
+
+.unit-label {
+  margin-left: 5px;
+  color: var(--el-text-color-secondary, #909399);
+}
+
+.seasoning-table :deep(.el-table__cell) {
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+
+@media (max-width: 960px) {
+  .seasoning-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .process-nav {
+    position: static;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .process-nav__title {
+    grid-column: 1 / -1;
+  }
 }
 
 /* sticky 底栏: 长配方表单滚动时, 保存/激活/克隆 常驻底部可见 */

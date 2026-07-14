@@ -477,11 +477,14 @@ public class UnitContractServiceImpl implements UnitContractService {
             if (canonical == null) {
                 continue;
             }
-            registerCatalogAlias(catalog, conflicts, unit.getUnitCode(), canonical);
-            registerCatalogAlias(catalog, conflicts, unit.getUnitName(), canonical);
-            registerCatalogAlias(catalog, conflicts, unit.getUnitSymbol(), canonical);
+            boolean legacyGlobalSystemUnit = "*".equals(unit.getFactoryId())
+                    && Boolean.TRUE.equals(unit.getIsSystem());
+            registerCatalogAlias(catalog, conflicts, unit.getUnitCode(), canonical, legacyGlobalSystemUnit);
+            registerCatalogAlias(catalog, conflicts, unit.getUnitName(), canonical, legacyGlobalSystemUnit);
+            registerCatalogAlias(catalog, conflicts, unit.getUnitSymbol(), canonical, legacyGlobalSystemUnit);
             if (unit.getAliasesJson() != null) {
-                unit.getAliasesJson().forEach(alias -> registerCatalogAlias(catalog, conflicts, alias, canonical));
+                unit.getAliasesJson().forEach(alias -> registerCatalogAlias(
+                        catalog, conflicts, alias, canonical, legacyGlobalSystemUnit));
             }
         }
         return new Catalog(Map.copyOf(catalog), Set.copyOf(conflicts));
@@ -491,7 +494,8 @@ public class UnitContractServiceImpl implements UnitContractService {
             Map<String, CanonicalUnit> catalog,
             Set<String> conflicts,
             String rawAlias,
-            CanonicalUnit unit) {
+            CanonicalUnit unit,
+            boolean legacyGlobalSystemUnit) {
         String alias = key(rawAlias);
         if (alias == null || conflicts.contains(alias)) {
             return;
@@ -499,6 +503,13 @@ public class UnitContractServiceImpl implements UnitContractService {
 
         CanonicalUnit systemUnit = systemUnitFor(alias);
         if (systemUnit != null && !sameUnit(systemUnit, unit)) {
+            // The pre-unit-contract global dictionary used a few overloaded codes
+            // (notably box=箱), while the canonical contract distinguishes 盒/箱.
+            // Keep the built-in canonical alias authoritative, but continue to
+            // fail closed for tenant-defined aliases that masquerade as a system unit.
+            if (legacyGlobalSystemUnit) {
+                return;
+            }
             catalog.remove(alias);
             conflicts.add(alias);
             return;
@@ -580,7 +591,14 @@ public class UnitContractServiceImpl implements UnitContractService {
         add(units, "box", UnitDimension.PACKAGE, "box", null, "盒", 0);
         add(units, "case", UnitDimension.PACKAGE, "case", null, "箱", 0);
         add(units, "bag", UnitDimension.PACKAGE, "bag", null, "袋", 0);
+        add(units, "pack", UnitDimension.PACKAGE, "pack", null, "包", 0);
         add(units, "bottle", UnitDimension.PACKAGE, "bottle", null, "瓶", 0);
+        add(units, "can", UnitDimension.PACKAGE, "can", null, "罐", 0);
+        add(units, "crate", UnitDimension.PACKAGE, "crate", null, "框", 0);
+        add(units, "pail", UnitDimension.PACKAGE, "pail", null, "桶", 0);
+        add(units, "roll", UnitDimension.PACKAGE, "roll", null, "卷", 0);
+        add(units, "slice", UnitDimension.COUNT, "slice", null, "片", 0);
+        add(units, "item", UnitDimension.COUNT, "item", null, "项", 0);
         return Map.copyOf(units);
     }
 
@@ -616,7 +634,14 @@ public class UnitContractServiceImpl implements UnitContractService {
         alias(aliases, "box", "box", "盒");
         alias(aliases, "case", "case", "箱");
         alias(aliases, "bag", "bag", "袋");
+        alias(aliases, "pack", "pack", "包");
         alias(aliases, "bottle", "bottle", "瓶");
+        alias(aliases, "can", "can", "罐");
+        alias(aliases, "crate", "crate", "框", "筐");
+        alias(aliases, "pail", "pail", "桶");
+        alias(aliases, "roll", "roll", "卷");
+        alias(aliases, "slice", "slice", "片");
+        alias(aliases, "item", "item", "项");
         return Map.copyOf(aliases);
     }
 

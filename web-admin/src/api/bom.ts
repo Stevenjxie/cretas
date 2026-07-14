@@ -250,6 +250,10 @@ export interface BomSeasoningItem {
   factoryId?: string | null;
   /** 该调料所属工序 (ProductWorkProcess.workProcessId) — 调料配方按工序分组的锚点键 */
   workProcessId: string;
+  /** 物料主数据引用；历史自由文本行可能为空，新保存行必须提供。 */
+  materialTypeId?: string | null;
+  /** 仅用于前端展示，保存时后端以物料主数据为准。 */
+  unit?: string | null;
   /** INJECTION = 注射段; COOKING = 熟制段 */
   section: 'INJECTION' | 'COOKING';
   seq: number;
@@ -304,6 +308,7 @@ export interface BomSeasoningSaveRequest {
   injectionRate: number | null;
   seasoningItems: Array<{
     workProcessId: string;
+    materialTypeId: string;
     section: 'INJECTION' | 'COOKING';
     seq: number;
     name: string;

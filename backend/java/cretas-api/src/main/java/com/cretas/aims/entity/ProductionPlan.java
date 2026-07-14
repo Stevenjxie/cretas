@@ -58,6 +58,17 @@ public class ProductionPlan extends BaseEntity {
     /** Unit snapshot of planned finished-product output quantity. */
     @Column(name = "planned_unit", nullable = false, length = 32)
     private String plannedUnit;
+
+    /** Workflow/legacy authority fixed when the plan is created. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "workflow_selection_mode", length = 16)
+    private ProductionBatch.WorkflowSelectionMode workflowSelectionMode;
+
+    @Column(name = "selected_workflow_id")
+    private Long selectedWorkflowId;
+
+    @Column(name = "selected_workflow_version")
+    private Integer selectedWorkflowVersion;
     @Column(name = "actual_quantity", precision = 10, scale = 2)
     private BigDecimal actualQuantity;
     // W-07 fix (Round 9): restored as nullable column (was commented out - DB didn't have it,

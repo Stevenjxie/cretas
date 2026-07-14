@@ -39,6 +39,31 @@ describe('reconcileWorkflowUnits', () => {
     expect(result.errors).toEqual([]);
   });
 
+  it('automatically binds the only applicable product conversion', () => {
+    const input = definitionWith('g', '件', '件');
+    const result = reconcileWorkflowUnits(input, context('g', [{
+      id: 'C1', version: 3, productTypeId: 'P1', fromUnitCode: 'pcs', toUnitCode: 'g',
+    }]));
+
+    expect(processData(result.definition).ports[0]).toMatchObject({
+      unit: 'pcs',
+      conversionRefId: 'C1',
+      conversionVersion: 3,
+    });
+    expect(result.errors).toEqual([]);
+  });
+
+  it('does not guess when multiple applicable conversions exist', () => {
+    const input = definitionWith('g', '件', '件');
+    const result = reconcileWorkflowUnits(input, context('g', [
+      { id: 'C1', version: 1, productTypeId: 'P1', fromUnitCode: 'pcs', toUnitCode: 'g' },
+      { id: 'C2', version: 2, productTypeId: 'P1', fromUnitCode: 'g', toUnitCode: 'pcs' },
+    ]));
+
+    expect(processData(result.definition).ports[0].conversionRefId).toBeUndefined();
+    expect(result.errors.map((error) => error.code)).toEqual(['CONVERSION_REQUIRED']);
+  });
+
   it('warns instead of guessing for an unbound material', () => {
     const input = definitionWith('件', '件', '件');
     const data = input.nodes[0].data as { skuId: string; bound: boolean };

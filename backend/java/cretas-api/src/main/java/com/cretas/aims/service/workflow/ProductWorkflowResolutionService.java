@@ -3,6 +3,7 @@ package com.cretas.aims.service.workflow;
 import com.cretas.aims.dto.workflow.WorkflowOutputResolutionDTO;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
  * raw-centric 多成品 (2026-07-13): 生产计划「多选成品 → 解析共用 raw workflow」。
@@ -27,4 +28,8 @@ public interface ProductWorkflowResolutionService {
      */
     void assertActiveWorkflowCoversOutputs(String factoryId, String ownerProductTypeId,
                                            List<String> targetFinishedGoodIds);
+
+    /** Resolve and pin the active workflow's terminal reporting-unit contract for a plan. */
+    Optional<WorkflowPlanOutputContract> resolveActivePlanOutputContract(
+            String factoryId, String ownerProductTypeId, List<String> targetFinishedGoodIds);
 }

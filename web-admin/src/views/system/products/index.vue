@@ -1507,6 +1507,13 @@ async function handleAiProductCreate() {
         </el-form-item>
         <!-- ========== 规格 section (T157 双模式表单瘦身): 基本单位 + 标准克重 + 装箱换算 + 规格(只读自动) ========== -->
         <el-divider content-position="left">规格</el-divider>
+        <el-alert
+          class="spec-authority-tip"
+          type="info"
+          :closable="false"
+          show-icon
+          title="这里定义库存/销售规格；保存后系统会自动生成明确的单位换算，Workflow 可直接绑定。工序报工单位仍以 Workflow 端口为准。"
+        />
         <!-- 基本单位(unit) = 最小计量/售卖单位 (成品如 盒/包; 原料如 kg) -->
         <el-form-item label="基本单位" prop="unit">
           <el-select

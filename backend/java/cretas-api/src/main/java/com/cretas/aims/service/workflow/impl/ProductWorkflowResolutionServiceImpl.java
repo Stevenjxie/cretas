@@ -11,6 +11,8 @@ import com.cretas.aims.repository.ProductProcessWorkflowActivationRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.workflow.ProductWorkflowResolutionService;
+import com.cretas.aims.service.workflow.WorkflowPlanOutputContract;
+import com.cretas.aims.service.unit.UnitContractService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -27,6 +29,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Optional;
+import java.util.LinkedHashMap;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -40,6 +44,7 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
     private final ProductProcessWorkflowRepository workflowRepository;
     private final ProductTypeRepository productTypeRepository;
     private final ObjectMapper objectMapper;
+    private final UnitContractService unitContractService;
 
     @Override
     @Transactional(readOnly = true)
@@ -139,6 +144,154 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
         }
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<WorkflowPlanOutputContract> resolveActivePlanOutputContract(
+            String factoryId, String ownerProductTypeId, List<String> targetFinishedGoodIds) {
+        ProductProcessWorkflowActivation activation = activationRepository
+                .findByFactoryIdAndProductTypeId(factoryId, ownerProductTypeId)
+                .filter(row -> Boolean.TRUE.equals(row.getEnabled()))
+                .orElse(null);
+        if (activation == null) return Optional.empty();
+
+        ResolvedWorkflow resolved = loadResolved(factoryId, activation);
+        if (resolved == null) {
+            throw new BusinessException(409, "已启用的工序 Workflow 版本无效或等待单位复核")
+                    .withCode("WORKFLOW_PLAN_CONTRACT_INVALID");
+        }
+        List<String> targets = dedupeNonBlank(targetFinishedGoodIds);
+        if (targets.isEmpty()) {
+            if (resolved.terminalSkuIds.contains(ownerProductTypeId)) {
+                targets = List.of(ownerProductTypeId);
+            } else if (resolved.terminalSkuIds.size() == 1) {
+                targets = List.copyOf(resolved.terminalSkuIds);
+            } else {
+                throw new BusinessException(409, "该 Workflow 有多个成品出口，请明确选择计划成品")
+                        .withCode("WORKFLOW_PLAN_OUTPUT_AMBIGUOUS");
+            }
+        }
+        Map<String, List<String>> unitsBySku = parseTerminalOutputUnits(factoryId, resolved.workflow);
+        Map<String, String> selected = new LinkedHashMap<>();
+        for (String target : targets) {
+            List<String> units = unitsBySku.getOrDefault(target, List.of());
+            if (units.isEmpty()) {
+                throw new BusinessException(409, "Workflow 缺少成品 " + target + " 的产出端口")
+                        .withCode("WORKFLOW_PLAN_OUTPUT_NOT_FOUND");
+            }
+            if (units.size() != 1) {
+                throw new BusinessException(409, "成品 " + target + " 绑定了多个产出端口")
+                        .withCode("WORKFLOW_PLAN_OUTPUT_DUPLICATE");
+            }
+            selected.put(target, units.get(0));
+        }
+        String plannedUnit;
+        if (resolved.terminalSkuIds.contains(ownerProductTypeId)) {
+            Set<String> distinctUnits = new LinkedHashSet<>(selected.values());
+            if (distinctUnits.size() != 1) {
+                throw new BusinessException(409, "所选成品的 Workflow 产出单位不一致，不能合并为一个计划数量")
+                        .withCode("WORKFLOW_PLAN_OUTPUT_UNIT_AMBIGUOUS");
+            }
+            plannedUnit = distinctUnits.iterator().next();
+        } else {
+            Set<String> ownerInputUnits = parseOwnerInputUnits(
+                    factoryId, resolved.workflow, ownerProductTypeId);
+            if (ownerInputUnits.size() != 1) {
+                throw new BusinessException(409, "原料中心 Workflow 必须为计划原料提供唯一入口单位")
+                        .withCode("WORKFLOW_PLAN_INPUT_UNIT_AMBIGUOUS");
+            }
+            plannedUnit = ownerInputUnits.iterator().next();
+        }
+        return Optional.of(new WorkflowPlanOutputContract(
+                resolved.workflow.getId(), resolved.workflow.getDefinitionVersion(),
+                Map.copyOf(selected), plannedUnit));
+    }
+
+    private Set<String> parseOwnerInputUnits(
+            String factoryId, ProductProcessWorkflow workflow, String ownerProductTypeId) {
+        try {
+            List<ProductProcessWorkflowDTO.Node> nodes = objectMapper.readValue(
+                    workflow.getNodesJson(), new TypeReference<List<ProductProcessWorkflowDTO.Node>>() { });
+            Set<String> ownerMaterialNodeIds = new HashSet<>();
+            for (ProductProcessWorkflowDTO.Node node : nodes) {
+                if (node == null || node.getData() == null || "PROCESS".equals(node.getKind())) continue;
+                if (ownerProductTypeId.equals(node.getData().get("skuId"))) {
+                    ownerMaterialNodeIds.add(node.getId());
+                }
+            }
+            Set<String> result = new LinkedHashSet<>();
+            for (ProductProcessWorkflowDTO.Node node : nodes) {
+                if (node == null || !"PROCESS".equals(node.getKind()) || node.getData() == null) continue;
+                Object portsValue = node.getData().get("ports");
+                if (!(portsValue instanceof List<?> ports)) continue;
+                for (Object value : ports) {
+                    if (!(value instanceof Map<?, ?> port)
+                            || !"INPUT".equals(String.valueOf(port.get("direction")))
+                            || !ownerMaterialNodeIds.contains(String.valueOf(port.get("materialNodeId")))) {
+                        continue;
+                    }
+                    Object rawUnit = port.get("unit");
+                    var normalized = unitContractService.normalize(
+                            factoryId, rawUnit == null ? null : String.valueOf(rawUnit));
+                    if (!normalized.recognized()) {
+                        throw new BusinessException(409, "Workflow 原料入口端口存在未知单位")
+                                .withCode("WORKFLOW_PLAN_INPUT_UNIT_UNKNOWN");
+                    }
+                    result.add(normalized.code());
+                }
+            }
+            return result;
+        } catch (BusinessException error) {
+            throw error;
+        } catch (Exception error) {
+            throw new BusinessException(409, "Workflow 原料入口端口无法解析")
+                    .withCode("WORKFLOW_PLAN_CONTRACT_INVALID");
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, List<String>> parseTerminalOutputUnits(
+            String factoryId, ProductProcessWorkflow workflow) {
+        try {
+            List<ProductProcessWorkflowDTO.Node> nodes = objectMapper.readValue(
+                    workflow.getNodesJson(), new TypeReference<List<ProductProcessWorkflowDTO.Node>>() { });
+            Map<String, String> skuByMaterialNode = new HashMap<>();
+            for (ProductProcessWorkflowDTO.Node node : nodes) {
+                if (node != null && FINISHED_GOOD.equals(node.getKind()) && node.getData() != null) {
+                    Object skuId = node.getData().get("skuId");
+                    if (skuId instanceof String value && !value.isBlank()) {
+                        skuByMaterialNode.put(node.getId(), value);
+                    }
+                }
+            }
+            Map<String, List<String>> result = new LinkedHashMap<>();
+            for (ProductProcessWorkflowDTO.Node node : nodes) {
+                if (node == null || !"PROCESS".equals(node.getKind()) || node.getData() == null) continue;
+                Object portsValue = node.getData().get("ports");
+                if (!(portsValue instanceof List<?> ports)) continue;
+                for (Object value : ports) {
+                    if (!(value instanceof Map<?, ?> port)) continue;
+                    if (!"OUTPUT".equals(String.valueOf(port.get("direction")))) continue;
+                    String skuId = skuByMaterialNode.get(String.valueOf(port.get("materialNodeId")));
+                    if (skuId == null) continue;
+                    Object rawUnit = port.get("unit");
+                    var normalized = unitContractService.normalize(
+                            factoryId, rawUnit == null ? null : String.valueOf(rawUnit));
+                    if (!normalized.recognized()) {
+                        throw new BusinessException(409, "Workflow 成品产出端口存在未知单位")
+                                .withCode("WORKFLOW_PLAN_OUTPUT_UNIT_UNKNOWN");
+                    }
+                    result.computeIfAbsent(skuId, ignored -> new ArrayList<>()).add(normalized.code());
+                }
+            }
+            return result;
+        } catch (BusinessException error) {
+            throw error;
+        } catch (Exception error) {
+            throw new BusinessException(409, "Workflow 产出端口无法解析")
+                    .withCode("WORKFLOW_PLAN_CONTRACT_INVALID");
+        }
+    }
+
     // ---- 内部 ----
 
     /** 从 activation 精确取 PUBLISHED workflow + 解析终端成品 skuId; 版本不符/坏图返 null (只读侧不瘫全厂)。 */
@@ -181,12 +334,14 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
     private WorkflowOutputResolutionDTO.Candidate buildCandidate(
             String factoryId, ProductType owner, ResolvedWorkflow rw, Set<String> requestedSet) {
         List<WorkflowOutputResolutionDTO.TerminalOutput> terminals = new ArrayList<>();
+        Map<String, List<String>> workflowOutputUnits = parseTerminalOutputUnits(factoryId, rw.workflow);
         for (String skuId : rw.terminalSkuIds) {
             ProductType t = productTypeRepository.findByIdAndFactoryId(skuId, factoryId).orElse(null);
+            List<String> portUnits = workflowOutputUnits.getOrDefault(skuId, List.of());
             terminals.add(WorkflowOutputResolutionDTO.TerminalOutput.builder()
                     .productTypeId(skuId)
                     .productName(t != null ? t.getName() : skuId)
-                    .unit(t != null ? t.getUnit() : null)
+                    .unit(portUnits.size() == 1 ? portUnits.get(0) : null)
                     .build());
         }
         return WorkflowOutputResolutionDTO.Candidate.builder()
@@ -196,9 +351,21 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
                 .ownerProductName(owner.getName())
                 .ownerProductCategory(owner.getProductCategory())
                 .ownerUnit(owner.getUnit())
+                .plannedUnit(resolveCandidatePlanUnit(factoryId, owner.getId(), rw))
                 .terminalOutputs(terminals)
                 .exactMatch(rw.terminalSkuIds.size() == requestedSet.size())
                 .build();
+    }
+
+    private String resolveCandidatePlanUnit(
+            String factoryId, String ownerProductTypeId, ResolvedWorkflow workflow) {
+        if (workflow.terminalSkuIds.contains(ownerProductTypeId)) {
+            List<String> units = parseTerminalOutputUnits(factoryId, workflow.workflow)
+                    .getOrDefault(ownerProductTypeId, List.of());
+            return units.size() == 1 ? units.get(0) : null;
+        }
+        Set<String> units = parseOwnerInputUnits(factoryId, workflow.workflow, ownerProductTypeId);
+        return units.size() == 1 ? units.iterator().next() : null;
     }
 
     private Map<String, ProductType> batchOwners(

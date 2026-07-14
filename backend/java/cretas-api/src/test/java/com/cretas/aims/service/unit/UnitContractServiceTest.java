@@ -47,7 +47,8 @@ class UnitContractServiceTest {
     @CsvSource({
             "克,g", "g,g", "公斤,kg", "千克,kg", "KG,kg",
             "毫升,ml", "mL,ml", "升,l", "件,pcs", "个,pcs", "只,pcs",
-            "份,portion", "盒,box", "箱,case", "袋,bag", "瓶,bottle"
+            "份,portion", "盒,box", "箱,case", "袋,bag", "包,pack", "瓶,bottle",
+            "罐,can", "框,crate", "筐,crate", "桶,pail", "卷,roll", "片,slice", "项,item"
     })
     void normalizeKnownAliases(String raw, String expected) {
         assertThat(service.normalize(FACTORY_ID, raw).code()).isEqualTo(expected);
@@ -168,6 +169,25 @@ class UnitContractServiceTest {
         when(unitRepository.findAllByFactoryId(FACTORY_ID)).thenReturn(List.of(crate));
 
         assertThat(service.normalize(FACTORY_ID, "公斤").recognized()).isFalse();
+    }
+
+    @Test
+    void legacyGlobalSystemDictionaryCannotOverrideCanonicalBoxAndCaseAliases() {
+        UnitOfMeasurement legacyBox = UnitOfMeasurement.builder()
+                .factoryId("*")
+                .unitCode("box")
+                .unitName("箱")
+                .unitSymbol("箱")
+                .baseUnit("pcs")
+                .category("COUNT")
+                .isSystem(true)
+                .isActive(true)
+                .build();
+        when(unitRepository.findAllByFactoryId(FACTORY_ID)).thenReturn(List.of(legacyBox));
+
+        assertThat(service.normalize(FACTORY_ID, "盒").code()).isEqualTo("box");
+        assertThat(service.normalize(FACTORY_ID, "箱").code()).isEqualTo("case");
+        assertThat(service.normalize(FACTORY_ID, "box").code()).isEqualTo("box");
     }
 
     private UnitOfMeasurement catalogUnit(String code, String category, String alias) {
