@@ -323,7 +323,15 @@ const businessRoutes: RouteRecordRaw[] = [
             // SP-A: 配方维护 (注射段 + 熟制段, 1 SKU 1 配方)
             path: 'product-recipes',
             name: 'ProductRecipes',
-            component: () => import('@/views/production/ProductRecipeView.vue'),
+            redirect: (to) => ({
+              path: '/production/bom',
+              query: {
+                ...to.query,
+                tab: 'materials',
+                category: 'AUXILIARY',
+                auxView: 'process',
+              },
+            }),
             meta: { requiresAuth: true, title: '配方维护', module: 'production' },
           }
         ]
