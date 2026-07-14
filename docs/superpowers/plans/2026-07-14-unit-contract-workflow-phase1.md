@@ -24,13 +24,17 @@
 **Files:**
 
 - Create: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/unit/UnitDimension.java`
+- Create: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/unit/UnitUsageScene.java`
 - Create: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/unit/CanonicalUnit.java`
+- Create: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/unit/UnitNormalizationResult.java`
 - Create: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/unit/UnitConversionStatus.java`
 - Create: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/unit/UnitConversionContext.java`
 - Create: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/unit/UnitConversionResult.java`
 - Create: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/unit/UnitContractService.java`
 - Create: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/unit/impl/UnitContractServiceImpl.java`
 - Create: `backend/java/cretas-api/src/test/java/com/cretas/aims/service/unit/UnitContractServiceTest.java`
+- Modify: `backend/java/cretas-api/src/main/java/com/cretas/aims/entity/config/UnitOfMeasurement.java`
+- Modify: `backend/java/cretas-api/src/main/java/com/cretas/aims/repository/config/UnitOfMeasurementRepository.java`
 
 - [ ] **Step 1: 写失败测试固定别名、量纲和失败语义**
 
@@ -70,6 +74,11 @@ public record CanonicalUnit(
     String code, UnitDimension dimension, String baseCode,
     BigDecimal factorToBase, String displayName, int displayScale) {}
 
+public record UnitConversionContext(
+    String factoryId, String productTypeId, String fromUnit, String toUnit,
+    LocalDateTime at, UnitUsageScene scene,
+    Integer scale, RoundingMode roundingMode) {}
+
 public record UnitConversionResult(
     UnitConversionStatus status, BigDecimal quantity,
     String fromUnit, String toUnit, List<String> path,
@@ -81,7 +90,7 @@ public record UnitConversionResult(
 }
 ```
 
-系统固有换算仅允许 MASS 内 `mg/g/kg/t`、VOLUME 内 `ml/l`；COUNT/PACKAGE 无产品上下文时只能同规范代码透传。核心计算不按展示精度舍入。
+`normalize/describe/areEquivalent` 都必须接收 `factoryId`，因为 `unit_of_measurements` 支持工厂级目录覆盖；migration 62 为该表增加 `aliases_json`。系统固有换算仅允许 MASS 内 `mg/g/kg/t`、VOLUME 内 `ml/l`；COUNT/PACKAGE 无产品上下文时只能同规范代码透传。核心计算不按展示精度舍入。
 
 - [ ] **Step 4: 运行测试并提交**
 
@@ -133,9 +142,12 @@ CREATE TABLE product_unit_conversions (
 CREATE UNIQUE INDEX uq_puc_active_direction
   ON product_unit_conversions(factory_id, product_type_id, from_unit_code, to_unit_code)
   WHERE deleted_at IS NULL AND effective_to IS NULL;
+
+ALTER TABLE unit_of_measurements
+  ADD COLUMN aliases_json TEXT;
 ```
 
-Repository 提供按 factory/product/at 查询有效关系；实体继承 `BaseEntity`，使用 `@Version`。
+Repository 提供按 factory/product/at 查询有效关系；实体继承 `BaseEntity`，使用 `@Version`。partial unique index 只解决“无限有效”重复，Service 还必须在事务内检查任意两个有效期区间是否重叠。
 
 - [ ] **Step 3: PostgreSQL 集成测试**
 
@@ -202,6 +214,10 @@ Commit: `feat(unit): 支持 SKU 显式单位换算图`
 - Create: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/unit/ProductUnitConversionService.java`
 - Create: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/unit/impl/ProductUnitConversionServiceImpl.java`
 - Modify: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/ProductTypeServiceImpl.java`
+- Modify: `backend/java/cretas-api/src/main/java/com/cretas/aims/dto/producttype/ProductTypeDTO.java`
+- Modify: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/SystemEnumServiceImpl.java`
+- Modify: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/UnitConversionService.java`
+- Modify: `backend/java/cretas-api/src/main/java/com/cretas/aims/controller/SystemConfigController.java`
 - Create: `backend/java/cretas-api/src/test/java/com/cretas/aims/controller/UnitContractControllerTest.java`
 - Create: `backend/java/cretas-api/src/test/java/com/cretas/aims/service/unit/ProductUnitConversionServiceTest.java`
 
@@ -221,6 +237,8 @@ DELETE /api/mobile/{factoryId}/product-types/{productTypeId}/unit-conversions/{i
 - [ ] **Step 2: 实现 CRUD 防线**
 
 校验 factory/product 归属、规范化 from/to、factor > 0、转换图一致、乐观锁和软删除。响应同时返回 code/label/dimension，不返回伪造数值。
+
+旧 `/system-config/units/convert` 和 `UnitConversionService` 改为委托 `UnitContractService` 的兼容适配器，不能继续维护第二套重量/体积换算真值。
 
 - [ ] **Step 3: 兼容 gramsPerUnit**
 
@@ -362,7 +380,14 @@ Commit: `feat(workflow): 编辑器接入统一单位契约`
 
 - Modify: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/validation/ProductProcessWorkflowValidator.java`
 - Modify: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/validation/ProductProcessWorkflowCatalogValidator.java`
+- Create: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/validation/ProductProcessWorkflowUnitValidator.java`
+- Create: `backend/java/cretas-api/src/main/java/com/cretas/aims/dto/workflow/WorkflowUnitIssueDTO.java`
+- Create: `backend/java/cretas-api/src/main/java/com/cretas/aims/dto/workflow/WorkflowUnitValidationResult.java`
 - Modify: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/ProductProcessWorkflowServiceImpl.java`
+- Modify: `backend/java/cretas-api/src/main/java/com/cretas/aims/dto/ProductProcessWorkflowDTO.java`
+- Modify: `backend/java/cretas-api/src/main/java/com/cretas/aims/entity/ProductProcessWorkflow.java`
+- Modify: `backend/java/cretas-api/src/main/java/com/cretas/aims/repository/ProductProcessWorkflowRepository.java`
+- Modify: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/workflow/impl/ProductProcessWorkflowActivationServiceImpl.java`
 - Modify: `backend/java/cretas-api/src/test/java/com/cretas/aims/service/validation/ProductProcessWorkflowValidatorTest.java`
 - Modify: `backend/java/cretas-api/src/test/java/com/cretas/aims/service/validation/ProductProcessWorkflowCatalogValidatorTest.java`
 - Modify: `backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/ProductProcessWorkflowServiceImplTest.java`
@@ -373,7 +398,7 @@ Commit: `feat(workflow): 编辑器接入统一单位契约`
 
 - [ ] **Step 2: 分层校验**
 
-纯图结构留在 `ProductProcessWorkflowValidator`；依赖 SKU/转换库的校验放 `ProductProcessWorkflowCatalogValidator`。错误码使用 `WORKFLOW_PORT_UNIT_STALE` 并带 nodeId/portId/current/expected。
+纯图结构留在 `ProductProcessWorkflowValidator`；依赖 SKU/转换库的单位规则集中到 `ProductProcessWorkflowUnitValidator`，由 `ProductProcessWorkflowCatalogValidator` 调用。草稿返回 `unitWarnings`；产品单位或换算关系变化后，将引用它的 PUBLISHED Workflow 标记 `unitReviewRequired=true`，activation 必须阻断，直到克隆新版本并通过校验。错误码使用 `WORKFLOW_PORT_UNIT_STALE` 并带 nodeId/portId/current/expected。
 
 - [ ] **Step 3: 固定发布顺序**
 
@@ -417,6 +442,9 @@ ALTER TABLE workflow_task_ports
 
 UPDATE workflow_task_ports SET unit_code = unit WHERE unit_code IS NULL;
 ALTER TABLE workflow_task_ports ALTER COLUMN unit_code SET NOT NULL;
+
+ALTER TABLE product_process_workflows
+  ADD COLUMN unit_review_required BOOLEAN NOT NULL DEFAULT FALSE;
 ```
 
 保留旧 `unit` 字段作为兼容镜像，写入时与 `unit_code` 相同。
@@ -485,7 +513,15 @@ Expected: all selected tests PASS.
 
 - [ ] **Step 2: PostgreSQL 集成回归**
 
-Run: `mvn -q -Dtest=ProductUnitConversionPostgresIntegrationTest,ProductProcessWorkflowPostgresIntegrationTest,ProductProcessWorkflowRuntimePostgresIntegrationTest test`
+Run:
+
+```powershell
+$env:CRETAS_WORKFLOW_PG_VERIFY = "true"
+$env:CRETAS_WORKFLOW_PG_URL = "<disposable-postgres-url>"
+$env:CRETAS_WORKFLOW_PG_USER = "<user>"
+$env:CRETAS_WORKFLOW_PG_PASSWORD = "<password>"
+mvn -q "-Dtest=ProductUnitConversionPostgresIntegrationTest,ProductProcessWorkflowPostgresIntegrationTest,ProductProcessWorkflowRuntimePostgresIntegrationTest" test
+```
 
 Expected: Flyway 62/63 clean; constraints and snapshot tests PASS.
 
