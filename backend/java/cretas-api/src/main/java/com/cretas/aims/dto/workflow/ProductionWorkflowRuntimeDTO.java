@@ -9,6 +9,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+import java.math.BigDecimal;
 import java.util.List;
 
 @Data
@@ -54,6 +55,10 @@ public class ProductionWorkflowRuntimeDTO {
         private String materialKind;
         private String skuId;
         private String unit;
+        private String unitCode;
+        private String conversionRefId;
+        private Long conversionVersion;
+        private BigDecimal conversionFactorSnapshot;
         private Boolean required;
         private String conversionMode;
         private String conversionExpression;

@@ -3,9 +3,11 @@ package com.cretas.aims.service.workflow;
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
+import com.cretas.aims.service.unit.UnitContractService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -20,12 +22,23 @@ public class ProductProcessWorkflowRuntimeCompiler {
 
     private final ObjectMapper objectMapper;
     private final ProductProcessWorkflowValidator validator;
+    private final UnitContractService unitContractService;
 
+    @Autowired
+    public ProductProcessWorkflowRuntimeCompiler(
+            ObjectMapper objectMapper,
+            ProductProcessWorkflowValidator validator,
+            UnitContractService unitContractService) {
+        this.objectMapper = objectMapper;
+        this.validator = validator;
+        this.unitContractService = unitContractService;
+    }
+
+    /** Backward-compatible constructor for isolated structural compiler tests. */
     public ProductProcessWorkflowRuntimeCompiler(
             ObjectMapper objectMapper,
             ProductProcessWorkflowValidator validator) {
-        this.objectMapper = objectMapper;
-        this.validator = validator;
+        this(objectMapper, validator, null);
     }
 
     public CompiledProductProcessWorkflow compile(ProductProcessWorkflowDTO definition) {
@@ -45,16 +58,16 @@ public class ProductProcessWorkflowRuntimeCompiler {
             }
             processOrder++;
             ProcessNodeData processData = parsedExecutionData.processNodes().get(nodeId);
-            String plannedUnit = processData.outputUnit();
-            if (plannedUnit == null || plannedUnit.isBlank()) {
-                plannedUnit = processData.ports().stream()
-                        .filter(port -> "OUTPUT".equals(port.direction()))
-                        .map(DeclaredPort::unit)
-                        .findFirst()
-                        .orElseThrow(() -> runtimeInvalid(
-                                nodeId,
-                                "data.outputUnit",
-                                "no output unit is available"));
+            DeclaredPort primaryOutput = processData.ports().stream()
+                    .filter(port -> "OUTPUT".equals(port.direction()))
+                    .min(Comparator.comparingInt(DeclaredPort::ordinal))
+                    .orElseThrow(() -> runtimeInvalid(nodeId, "data.ports", "no output port is available"));
+            String plannedUnit = canonical(definition.getFactoryId(), primaryOutput.unit(), nodeId,
+                    "data.ports[" + primaryOutput.ordinal() + "].unit");
+            String declaredOutputUnit = canonical(definition.getFactoryId(), processData.outputUnit(), nodeId,
+                    "data.outputUnit");
+            if (!plannedUnit.equals(declaredOutputUnit)) {
+                throw runtimeInvalid(nodeId, "data.outputUnit", "must match the primary output port unit");
             }
             boolean reportingRequired = !Boolean.FALSE.equals(processData.reportingRequired());
             tasks.add(new CompiledProductProcessWorkflow.CompiledTask(
@@ -65,6 +78,7 @@ public class ProductProcessWorkflowRuntimeCompiler {
                     processData.standardTime(),
                     reportingRequired));
             appendPorts(
+                    definition.getFactoryId(),
                     nodeId,
                     processData,
                     nodesById,
@@ -170,6 +184,8 @@ public class ProductProcessWorkflowRuntimeCompiler {
                     requiredString(
                             port.get("materialNodeId"), nodeId, path + ".materialNodeId"),
                     requiredString(port.get("unit"), nodeId, path + ".unit"),
+                    optionalString(port.get("conversionRefId"), nodeId, path + ".conversionRefId"),
+                    optionalLong(port.get("conversionVersion"), nodeId, path + ".conversionVersion"),
                     requiredInteger(port.get("ordinal"), nodeId, path + ".ordinal")));
         }
         return List.copyOf(ports);
@@ -208,6 +224,14 @@ public class ProductProcessWorkflowRuntimeCompiler {
             return null;
         }
         return strictInteger(value, nodeId, fieldPath);
+    }
+
+    private Long optionalLong(Object value, String nodeId, String fieldPath) {
+        if (value == null) return null;
+        if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
+            return ((Number) value).longValue();
+        }
+        throw runtimeInvalid(nodeId, fieldPath, "must be an integral number");
     }
 
     private Integer requiredInteger(Object value, String nodeId, String fieldPath) {
@@ -274,6 +298,7 @@ public class ProductProcessWorkflowRuntimeCompiler {
     }
 
     private void appendPorts(
+            String factoryId,
             String workflowNodeId,
             ProcessNodeData processData,
             Map<String, ProductProcessWorkflowDTO.Node> nodesById,
@@ -304,7 +329,11 @@ public class ProductProcessWorkflowRuntimeCompiler {
                     declaredPort.materialNodeId(),
                     materialNode.getKind(),
                     materialData.skuId(),
-                    declaredPort.unit(),
+                    canonical(factoryId, declaredPort.unit(), workflowNodeId,
+                            "data.ports[" + index + "].unit"),
+                    declaredPort.conversionRefId(),
+                    declaredPort.conversionVersion(),
+                    null,
                     true,
                     conversionRule.mode(),
                     conversionRule.expression()));
@@ -335,6 +364,18 @@ public class ProductProcessWorkflowRuntimeCompiler {
             String fieldPath,
             String reason) {
         return runtimeInvalid(nodeId, fieldPath, reason, null);
+    }
+
+    private String canonical(String factoryId, String rawUnit, String nodeId, String fieldPath) {
+        if (rawUnit == null || rawUnit.isBlank()) {
+            throw runtimeInvalid(nodeId, fieldPath, "unit is required");
+        }
+        if (unitContractService == null) return rawUnit;
+        var normalized = unitContractService.normalize(factoryId, rawUnit);
+        if (!normalized.recognized()) {
+            throw runtimeInvalid(nodeId, fieldPath, "unit is unknown or ambiguous: " + rawUnit);
+        }
+        return normalized.code();
     }
 
     private BusinessException runtimeInvalid(
@@ -374,6 +415,8 @@ public class ProductProcessWorkflowRuntimeCompiler {
             String direction,
             String materialNodeId,
             String unit,
+            String conversionRefId,
+            Long conversionVersion,
             Integer ordinal) {
     }
 

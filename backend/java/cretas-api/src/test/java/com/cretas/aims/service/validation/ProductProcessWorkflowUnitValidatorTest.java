@@ -87,7 +87,7 @@ class ProductProcessWorkflowUnitValidatorTest {
     @Test
     void acceptsExactCurrentConversionReference() {
         ProductUnitConversion conversion = conversion(7L);
-        when(conversionRepository.findById("conv-1")).thenReturn(Optional.of(conversion));
+        when(conversionRepository.findAllById(any())).thenReturn(List.of(conversion));
 
         var result = validator.validate("F006", workflow("g", "pcs", "pcs", "conv-1", 7L));
 
@@ -97,7 +97,7 @@ class ProductProcessWorkflowUnitValidatorTest {
     @Test
     void rejectsStaleConversionVersion() {
         ProductUnitConversion conversion = conversion(8L);
-        when(conversionRepository.findById("conv-1")).thenReturn(Optional.of(conversion));
+        when(conversionRepository.findAllById(any())).thenReturn(List.of(conversion));
 
         var result = validator.validate("F006", workflow("g", "pcs", "pcs", "conv-1", 7L));
 

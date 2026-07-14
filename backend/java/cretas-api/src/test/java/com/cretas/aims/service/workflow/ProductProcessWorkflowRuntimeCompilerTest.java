@@ -72,6 +72,35 @@ class ProductProcessWorkflowRuntimeCompilerTest {
     }
 
     @Test
+    void derivesPlannedUnitFromPrimaryOutputAndRejectsConflictingSummaryUnit() {
+        ProductProcessWorkflowDTO definition = linearWorkflow();
+        processData(definition, "cut").put("outputUnit", "box");
+
+        BusinessException error = assertThrows(BusinessException.class, () -> compiler.compile(definition));
+
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_RUNTIME_INVALID", error.getErrorCode());
+        assertTrue(error.getMessage().contains("primary output port"));
+    }
+
+    @Test
+    void carriesConversionReferenceAndVersionIntoCompiledPort() {
+        ProductProcessWorkflowDTO definition = linearWorkflow();
+        Map<String, Object> output = processPorts(definition, "pack").stream()
+                .filter(port -> "OUTPUT".equals(port.get("direction")))
+                .findFirst().orElseThrow();
+        output.put("conversionRefId", "conv-200g");
+        output.put("conversionVersion", 7L);
+
+        CompiledProductProcessWorkflow.CompiledPort compiled = compiler.compile(definition)
+                .portsFor("pack").stream()
+                .filter(port -> "OUTPUT".equals(port.direction()))
+                .findFirst().orElseThrow();
+
+        assertEquals("conv-200g", compiled.conversionRefId());
+        assertEquals(7L, compiled.conversionVersion());
+    }
+
+    @Test
     void compilesMergeWithMultipleInputsAndOutputs() {
         ProductProcessWorkflowDTO definition = multiInputOutputWorkflow();
 

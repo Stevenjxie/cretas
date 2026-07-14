@@ -131,6 +131,7 @@ public class ProductProcessWorkflowActivationServiceImpl
         dto.setStatus(workflow.getStatus().name());
         dto.setVersion(workflow.getDefinitionVersion());
         dto.setLockVersion(workflow.getLockVersion());
+        dto.setUnitReviewRequired(workflow.getUnitReviewRequired());
         dto.setNodes(readJson(workflow.getNodesJson(),
                 new TypeReference<List<ProductProcessWorkflowDTO.Node>>() {}, "nodes"));
         dto.setEdges(readJson(workflow.getEdgesJson(),

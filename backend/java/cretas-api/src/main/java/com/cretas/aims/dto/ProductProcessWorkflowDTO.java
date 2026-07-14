@@ -34,6 +34,7 @@ public class ProductProcessWorkflowDTO {
     private Long lockVersion;
 
     private List<WorkflowUnitIssueDTO> unitWarnings = new ArrayList<>();
+    private Boolean unitReviewRequired = false;
 
     @Valid
     @NotNull

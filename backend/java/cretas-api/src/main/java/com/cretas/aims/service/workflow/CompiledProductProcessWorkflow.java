@@ -1,5 +1,6 @@
 package com.cretas.aims.service.workflow;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 public record CompiledProductProcessWorkflow(
@@ -47,8 +48,27 @@ public record CompiledProductProcessWorkflow(
             String materialKind,
             String skuId,
             String unit,
+            String conversionRefId,
+            Long conversionVersion,
+            BigDecimal conversionFactorSnapshot,
             boolean required,
             String conversionMode,
             String conversionExpression) {
+
+        public CompiledPort(
+                String workflowNodeId,
+                String workflowPortId,
+                String direction,
+                int ordinal,
+                String materialNodeId,
+                String materialKind,
+                String skuId,
+                String unit,
+                boolean required,
+                String conversionMode,
+                String conversionExpression) {
+            this(workflowNodeId, workflowPortId, direction, ordinal, materialNodeId, materialKind,
+                    skuId, unit, null, null, null, required, conversionMode, conversionExpression);
+        }
     }
 }

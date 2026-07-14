@@ -55,7 +55,10 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
             ProductProcessWorkflowDTO definition) {
         requireOwningProduct(factoryId, productTypeId);
         validator.validateForDraft(definition);
-        definition.setUnitWarnings(unitValidator.validate(factoryId, definition).errors());
+        var unitValidation = unitValidator.validate(factoryId, definition);
+        definition.setUnitWarnings(java.util.stream.Stream.concat(
+                        unitValidation.errors().stream(), unitValidation.warnings().stream())
+                .toList());
         Optional<ProductProcessWorkflow> existingDraft = find(
                 factoryId, productTypeId, ProductProcessWorkflow.Status.DRAFT);
 
@@ -177,6 +180,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         dto.setStatus(entity.getStatus().name());
         dto.setVersion(entity.getDefinitionVersion());
         dto.setLockVersion(entity.getLockVersion());
+        dto.setUnitReviewRequired(entity.getUnitReviewRequired());
         dto.setNodes(readJson(
                 entity.getNodesJson(),
                 new TypeReference<List<ProductProcessWorkflowDTO.Node>>() {},

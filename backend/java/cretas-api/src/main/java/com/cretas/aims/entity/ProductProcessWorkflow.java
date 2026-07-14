@@ -60,6 +60,9 @@ public class ProductProcessWorkflow extends BaseEntity {
     @Column(name = "viewport_json", nullable = false, columnDefinition = "jsonb")
     private String viewportJson = "{\"x\":0,\"y\":0,\"zoom\":1}";
 
+    @Column(name = "unit_review_required", nullable = false)
+    private Boolean unitReviewRequired = false;
+
     @Version
     @Column(name = "lock_version", nullable = false)
     private Long lockVersion = 0L;

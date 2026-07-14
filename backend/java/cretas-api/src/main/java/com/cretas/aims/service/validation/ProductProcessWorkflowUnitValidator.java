@@ -23,6 +23,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.math.BigInteger;
 
 /** Server-side authority for Workflow material/port/reporting unit contracts. */
 @Component
@@ -55,11 +56,12 @@ public class ProductProcessWorkflowUnitValidator {
         }
 
         Map<String, String> primaryUnits = loadPrimaryUnits(factoryId, productIds, rawIds);
+        Map<String, ProductUnitConversion> conversionsById = loadReferencedConversions(definition);
         LocalDateTime now = LocalDateTime.now();
         for (ProductProcessWorkflowDTO.Node material : materials.values()) {
             String skuId = text(data(material).get("skuId"));
             if (blank(skuId)) continue;
-            String expected = primaryUnits.get(skuId);
+            String expected = primaryUnits.get(primaryKey(material.getKind(), skuId));
             if (expected == null) {
                 errors.add(issue("SKU_UNIT_UNKNOWN", "绑定的物料不存在、跨工厂或缺少主单位", material.getId(), null, null, null));
                 continue;
@@ -83,7 +85,7 @@ public class ProductProcessWorkflowUnitValidator {
             validatePrimaryHint(factoryId, process, ports, "INPUT", "inputUnit", errors);
             validatePrimaryHint(factoryId, process, ports, "OUTPUT", "outputUnit", errors);
             for (Map<?, ?> port : ports) {
-                validatePort(factoryId, process, port, materials, primaryUnits, now, errors);
+                validatePort(factoryId, process, port, materials, primaryUnits, conversionsById, now, errors);
             }
         }
         for (String productId : productIds) {
@@ -98,7 +100,12 @@ public class ProductProcessWorkflowUnitValidator {
         WorkflowUnitValidationResult result = validate(factoryId, definition);
         if (result.valid()) return;
         WorkflowUnitIssueDTO first = result.errors().getFirst();
-        throw new BusinessException(400, first.message())
+        String location = (first.nodeId() == null ? "" : " node=" + first.nodeId())
+                + (first.portId() == null ? "" : " port=" + first.portId());
+        String units = first.currentUnit() == null && first.expectedUnit() == null
+                ? ""
+                : " current=" + first.currentUnit() + " expected=" + first.expectedUnit();
+        throw new BusinessException(400, first.message() + location + units)
                 .withCode("WORKFLOW_PORT_UNIT_STALE")
                 .withHint("请在 Workflow 中重新绑定 SKU 单位或选择有效的换算关系后再发布")
                 .withSeverity("warning");
@@ -110,13 +117,14 @@ public class ProductProcessWorkflowUnitValidator {
             Map<?, ?> port,
             Map<String, ProductProcessWorkflowDTO.Node> materials,
             Map<String, String> primaryUnits,
+            Map<String, ProductUnitConversion> conversionsById,
             LocalDateTime now,
             List<WorkflowUnitIssueDTO> errors) {
         String portId = text(port.get("id"));
         ProductProcessWorkflowDTO.Node material = materials.get(text(port.get("materialNodeId")));
         if (material == null) return;
         String skuId = text(data(material).get("skuId"));
-        String expectedRaw = primaryUnits.get(skuId);
+        String expectedRaw = primaryUnits.get(primaryKey(material.getKind(), skuId));
         String expected = canonical(factoryId, expectedRaw);
         String current = canonical(factoryId, text(port.get("unit")));
         if (current == null || expected == null) {
@@ -132,7 +140,7 @@ public class ProductProcessWorkflowUnitValidator {
                     process.getId(), portId, current, expected));
             return;
         }
-        ProductUnitConversion conversion = conversionRepository.findById(refId).orElse(null);
+        ProductUnitConversion conversion = conversionsById.get(refId);
         if (conversion == null
                 || !factoryId.equals(conversion.getFactoryId())
                 || !skuId.equals(conversion.getProductTypeId())
@@ -174,12 +182,32 @@ public class ProductProcessWorkflowUnitValidator {
     private Map<String, String> loadPrimaryUnits(String factoryId, Set<String> productIds, Set<String> rawIds) {
         Map<String, String> result = new HashMap<>();
         for (ProductType row : productTypeRepository.findByIdIn(productIds)) {
-            if (factoryId.equals(row.getFactoryId())) result.put(row.getId(), row.getUnit());
+            if (factoryId.equals(row.getFactoryId())) result.put(primaryKey("PRODUCT", row.getId()), row.getUnit());
         }
         for (RawMaterialType row : rawMaterialTypeRepository.findAllById(rawIds)) {
-            if (factoryId.equals(row.getFactoryId())) result.put(row.getId(), row.getUnit());
+            if (factoryId.equals(row.getFactoryId())) result.put(primaryKey("RAW_MATERIAL", row.getId()), row.getUnit());
         }
         return result;
+    }
+
+    private Map<String, ProductUnitConversion> loadReferencedConversions(ProductProcessWorkflowDTO definition) {
+        Set<String> ids = new LinkedHashSet<>();
+        for (ProductProcessWorkflowDTO.Node node : definition.getNodes()) {
+            if (!"PROCESS".equals(node.getKind())) continue;
+            for (Map<?, ?> port : ports(node)) {
+                String id = text(port.get("conversionRefId"));
+                if (!blank(id)) ids.add(id);
+            }
+        }
+        Map<String, ProductUnitConversion> result = new HashMap<>();
+        for (ProductUnitConversion row : conversionRepository.findAllById(ids)) {
+            result.put(row.getId(), row);
+        }
+        return result;
+    }
+
+    private String primaryKey(String kind, String id) {
+        return ("RAW_MATERIAL".equals(kind) ? "RAW:" : "PRODUCT:") + id;
     }
 
     private List<Map<?, ?>> ports(ProductProcessWorkflowDTO.Node node) {
@@ -207,7 +235,15 @@ public class ProductProcessWorkflowUnitValidator {
     }
 
     private String text(Object value) { return value instanceof String text ? text : null; }
-    private Long number(Object value) { return value instanceof Number number ? number.longValue() : null; }
+    private Long number(Object value) {
+        if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
+            return ((Number) value).longValue();
+        }
+        if (value instanceof BigInteger integer && integer.bitLength() < Long.SIZE) {
+            return integer.longValue();
+        }
+        return null;
+    }
     private int integer(Object value) { return value instanceof Number number ? number.intValue() : Integer.MAX_VALUE; }
     private boolean blank(String value) { return value == null || value.isBlank(); }
 }

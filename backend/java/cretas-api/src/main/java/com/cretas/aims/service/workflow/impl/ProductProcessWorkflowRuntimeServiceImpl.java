@@ -16,6 +16,8 @@ import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository;
 import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
+import com.cretas.aims.repository.unit.ProductUnitConversionRepository;
+import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
 import com.cretas.aims.service.workflow.CompiledProductProcessWorkflow;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowRuntimeCompiler;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowRuntimeService;
@@ -23,6 +25,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
@@ -46,7 +49,36 @@ public class ProductProcessWorkflowRuntimeServiceImpl
     private final WorkflowTaskPortRepository portRepository;
     private final ProductProcessWorkflowRuntimeCompiler compiler;
     private final ObjectMapper objectMapper;
+    private final ProductUnitConversionRepository conversionRepository;
+    private final ProductProcessWorkflowUnitValidator unitValidator;
 
+    @Autowired
+    public ProductProcessWorkflowRuntimeServiceImpl(
+            FactoryRepository factoryRepository,
+            ProductionBatchRepository batchRepository,
+            ProductTypeRepository productTypeRepository,
+            ProductProcessWorkflowRepository workflowRepository,
+            ProductionWorkflowInstanceRepository instanceRepository,
+            WorkProcessTaskRepository taskRepository,
+            WorkflowTaskPortRepository portRepository,
+            ProductProcessWorkflowRuntimeCompiler compiler,
+            ObjectMapper objectMapper,
+            ProductUnitConversionRepository conversionRepository,
+            ProductProcessWorkflowUnitValidator unitValidator) {
+        this.factoryRepository = factoryRepository;
+        this.batchRepository = batchRepository;
+        this.productTypeRepository = productTypeRepository;
+        this.workflowRepository = workflowRepository;
+        this.instanceRepository = instanceRepository;
+        this.taskRepository = taskRepository;
+        this.portRepository = portRepository;
+        this.compiler = compiler;
+        this.objectMapper = objectMapper;
+        this.conversionRepository = conversionRepository;
+        this.unitValidator = unitValidator;
+    }
+
+    /** Backward-compatible constructor for isolated runtime tests. */
     public ProductProcessWorkflowRuntimeServiceImpl(
             FactoryRepository factoryRepository,
             ProductionBatchRepository batchRepository,
@@ -57,15 +89,8 @@ public class ProductProcessWorkflowRuntimeServiceImpl
             WorkflowTaskPortRepository portRepository,
             ProductProcessWorkflowRuntimeCompiler compiler,
             ObjectMapper objectMapper) {
-        this.factoryRepository = factoryRepository;
-        this.batchRepository = batchRepository;
-        this.productTypeRepository = productTypeRepository;
-        this.workflowRepository = workflowRepository;
-        this.instanceRepository = instanceRepository;
-        this.taskRepository = taskRepository;
-        this.portRepository = portRepository;
-        this.compiler = compiler;
-        this.objectMapper = objectMapper;
+        this(factoryRepository, batchRepository, productTypeRepository, workflowRepository,
+                instanceRepository, taskRepository, portRepository, compiler, objectMapper, null, null);
     }
 
     @Override
@@ -105,7 +130,9 @@ public class ProductProcessWorkflowRuntimeServiceImpl
 
         // 2B.2: 多产出已放开 — 编译产出的全部 OUTPUT 端口都会被持久化 (下方 portsFor 循环),
         // clerk 报工侧按端口分解为 N 个单产出物料化 (原 B1 single-output guard 移除)。
-        CompiledProductProcessWorkflow compiled = compiler.compile(toDefinition(workflow));
+        ProductProcessWorkflowDTO runtimeDefinition = toDefinition(workflow);
+        if (unitValidator != null) unitValidator.validateForPublish(factoryId, runtimeDefinition);
+        CompiledProductProcessWorkflow compiled = compiler.compile(runtimeDefinition);
         ProductionWorkflowInstance instance = instanceRepository.save(
                 ProductionWorkflowInstance.create(
                         factoryId,
@@ -263,10 +290,44 @@ public class ProductProcessWorkflowRuntimeServiceImpl
         port.setMaterialKind(compiled.materialKind());
         port.setSkuId(compiled.skuId());
         port.setUnit(compiled.unit());
+        port.setUnitCode(compiled.unit());
+        port.setConversionRefId(compiled.conversionRefId());
+        port.setConversionVersion(compiled.conversionVersion());
+        port.setConversionFactorSnapshot(resolveConversionFactor(factoryId, compiled));
         port.setRequired(compiled.required());
         port.setConversionMode(compiled.conversionMode());
         port.setConversionExpression(compiled.conversionExpression());
         return port;
+    }
+
+    private java.math.BigDecimal resolveConversionFactor(
+            String factoryId,
+            CompiledProductProcessWorkflow.CompiledPort compiled) {
+        if (compiled.conversionRefId() == null) return null;
+        if (conversionRepository == null) {
+            throw new BusinessException(500, "Workflow unit conversion repository is unavailable")
+                    .withCode("WORKFLOW_UNIT_SNAPSHOT_UNAVAILABLE")
+                    .withHint("Retry after the unit conversion service is available")
+                    .withSeverity("error");
+        }
+        var conversion = conversionRepository.findById(compiled.conversionRefId())
+                .orElseThrow(() -> new BusinessException(409, "Workflow unit conversion no longer exists")
+                        .withCode("WORKFLOW_PORT_UNIT_STALE")
+                        .withHint("Clone and republish the Workflow with a current conversion")
+                        .withSeverity("warning"));
+        LocalDateTime now = LocalDateTime.now();
+        if (compiled.conversionVersion() == null
+                || !compiled.conversionVersion().equals(conversion.getVersion())
+                || !factoryId.equals(conversion.getFactoryId())
+                || !compiled.skuId().equals(conversion.getProductTypeId())
+                || conversion.getEffectiveFrom().isAfter(now)
+                || (conversion.getEffectiveTo() != null && !conversion.getEffectiveTo().isAfter(now))) {
+            throw new BusinessException(409, "Workflow unit conversion version is stale")
+                    .withCode("WORKFLOW_PORT_UNIT_STALE")
+                    .withHint("Clone and republish the Workflow with the current conversion version")
+                    .withSeverity("warning");
+        }
+        return conversion.getFactor();
     }
 
     private WorkProcessTaskDTO toTaskDTO(WorkProcessTask task) {
@@ -312,6 +373,10 @@ public class ProductProcessWorkflowRuntimeServiceImpl
                 .materialKind(port.getMaterialKind())
                 .skuId(port.getSkuId())
                 .unit(port.getUnit())
+                .unitCode(port.getUnitCode())
+                .conversionRefId(port.getConversionRefId())
+                .conversionVersion(port.getConversionVersion())
+                .conversionFactorSnapshot(port.getConversionFactorSnapshot())
                 .required(port.getRequired())
                 .conversionMode(port.getConversionMode())
                 .conversionExpression(port.getConversionExpression())

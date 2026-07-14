@@ -16,6 +16,8 @@ import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository;
 import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
+import com.cretas.aims.repository.unit.ProductUnitConversionRepository;
+import com.cretas.aims.entity.unit.ProductUnitConversion;
 import com.cretas.aims.service.workflow.impl.ProductProcessWorkflowRuntimeServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -55,6 +57,7 @@ class ProductProcessWorkflowRuntimeServiceTest {
     @Mock private WorkProcessTaskRepository taskRepository;
     @Mock private WorkflowTaskPortRepository portRepository;
     @Mock private ProductProcessWorkflowRuntimeCompiler compiler;
+    @Mock private ProductUnitConversionRepository conversionRepository;
 
     private ProductProcessWorkflowRuntimeService service;
     private final List<ProductionWorkflowInstance> savedInstances = new ArrayList<>();
@@ -72,7 +75,9 @@ class ProductProcessWorkflowRuntimeServiceTest {
                 taskRepository,
                 portRepository,
                 compiler,
-                new ObjectMapper());
+                new ObjectMapper(),
+                conversionRepository,
+                null);
     }
 
     @Test
@@ -99,6 +104,41 @@ class ProductProcessWorkflowRuntimeServiceTest {
                 .map(WorkProcessTaskDTO::getWorkflowNodeId).toList());
         assertTrue(result.orElseThrow().stream()
                 .allMatch(task -> task.getWorkflowInstanceId().equals(501L)));
+    }
+
+    @Test
+    void snapshotsUnitConversionVersionAndFactorWhenMaterializing() {
+        givenValidOwnedBatch();
+        givenEnabledPublishedWorkflow();
+        givenFreshRuntimePersistence(true);
+        ProductUnitConversion conversion = new ProductUnitConversion();
+        conversion.setId("conv-200g");
+        conversion.setFactoryId("F006");
+        conversion.setProductTypeId("SKU-trim-1-in");
+        conversion.setVersion(7L);
+        conversion.setFactor(new java.math.BigDecimal("200"));
+        conversion.setEffectiveFrom(java.time.LocalDateTime.now().minusDays(1));
+        when(conversionRepository.findById("conv-200g")).thenReturn(Optional.of(conversion));
+        CompiledProductProcessWorkflow base = compiledWorkflow();
+        var first = base.ports().getFirst();
+        var converted = new CompiledProductProcessWorkflow.CompiledPort(
+                first.workflowNodeId(), first.workflowPortId(), first.direction(), first.ordinal(),
+                first.materialNodeId(), first.materialKind(), first.skuId(), "pcs",
+                "conv-200g", 7L, null, first.required(), first.conversionMode(), first.conversionExpression());
+        List<CompiledProductProcessWorkflow.CompiledPort> ports = new ArrayList<>(base.ports());
+        ports.set(0, converted);
+        when(compiler.compile(any())).thenReturn(new CompiledProductProcessWorkflow(
+                base.nodesJson(), base.edgesJson(), base.processTasks(), ports));
+
+        service.materializeIfActive("F006", 901L, "PT-PIG");
+
+        WorkflowTaskPort saved = savedPorts.stream()
+                .filter(port -> "trim-1-in".equals(port.getWorkflowPortId()))
+                .findFirst().orElseThrow();
+        assertEquals("pcs", saved.getUnitCode());
+        assertEquals("conv-200g", saved.getConversionRefId());
+        assertEquals(7L, saved.getConversionVersion());
+        assertEquals(0, saved.getConversionFactorSnapshot().compareTo(new java.math.BigDecimal("200")));
     }
 
     @Test
@@ -298,19 +338,18 @@ class ProductProcessWorkflowRuntimeServiceTest {
     }
 
     @Test
-    void materializeRejectsWorkflowWithNodeHavingMultipleOutputPortsAndPersistsNothing() {
+    void materializesWorkflowWithMultipleOutputPorts() {
         givenValidOwnedBatch();
         givenEnabledPublishedWorkflow();
+        givenFreshRuntimePersistence(true);
         when(compiler.compile(any())).thenReturn(multiOutputCompiledWorkflow());
 
-        com.cretas.aims.exception.BusinessException error = assertThrows(
-                com.cretas.aims.exception.BusinessException.class,
-                () -> service.materializeIfActive("F006", 901L, "PT-PIG"));
+        service.materializeIfActive("F006", 901L, "PT-PIG");
 
-        assertEquals("WORKFLOW_MULTI_OUTPUT_UNSUPPORTED", error.getErrorCode());
-        verify(instanceRepository, never()).save(any());
-        verify(taskRepository, never()).save(any());
-        verify(portRepository, never()).save(any());
+        assertEquals(3, savedPorts.size());
+        assertEquals(2, savedPorts.stream()
+                .filter(port -> port.getDirection() == WorkflowTaskPort.Direction.OUTPUT)
+                .count());
     }
 
     @Test

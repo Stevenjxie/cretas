@@ -14,6 +14,8 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 import org.hibernate.annotations.Where;
 
+import java.math.BigDecimal;
+
 @Data
 @EqualsAndHashCode(callSuper = true)
 @Entity
@@ -63,6 +65,18 @@ public class WorkflowTaskPort extends BaseEntity {
 
     @Column(name = "unit", nullable = false, length = 32)
     private String unit;
+
+    @Column(name = "unit_code", nullable = false, length = 20)
+    private String unitCode;
+
+    @Column(name = "conversion_ref_id", length = 36)
+    private String conversionRefId;
+
+    @Column(name = "conversion_version")
+    private Long conversionVersion;
+
+    @Column(name = "conversion_factor_snapshot", precision = 20, scale = 8)
+    private BigDecimal conversionFactorSnapshot;
 
     @Column(name = "required", nullable = false)
     private Boolean required = true;
