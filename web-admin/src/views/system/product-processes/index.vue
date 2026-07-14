@@ -1105,7 +1105,33 @@ async function saveCustomFieldConfig() {
                成品 = 单终端成品图 (一个成品一张图); 原料 = 多终端成品图 (一原料→多成品 SKU)。 -->
           <el-radio-group v-model="ownerMode" size="default" @change="onOwnerModeChange">
             <el-radio-button label="FINISHED">成品</el-radio-button>
+            <el-tooltip trigger="click" placement="bottom">
+              <template #content>
+                成品 workflow：以单个成品作为产出目标，支持多个原料投入。<br />
+                质检围绕该成品的生产过程与最终成品放行。
+              </template>
+              <el-icon
+                class="workflow-mode-hint"
+                role="button"
+                tabindex="0"
+                aria-label="成品质检说明"
+                @click.stop
+              ><QuestionFilled /></el-icon>
+            </el-tooltip>
             <el-radio-button label="RAW">原料</el-radio-button>
+            <el-tooltip trigger="click" placement="bottom">
+              <template #content>
+                原料 workflow：以单个原料作为产出目标，支持多个成品产出。<br />
+                质检围绕同一原料批次，分别追踪各成品分支的质量结果。
+              </template>
+              <el-icon
+                class="workflow-mode-hint"
+                role="button"
+                tabindex="0"
+                aria-label="原料质检说明"
+                @click.stop
+              ><QuestionFilled /></el-icon>
+            </el-tooltip>
           </el-radio-group>
           <el-select
             v-model="selectedProductId"
@@ -1548,6 +1574,8 @@ async function saveCustomFieldConfig() {
 .toolbar { display: flex; justify-content: space-between; align-items: center; }
 .toolbar-left { display: flex; align-items: center; gap: 12px; }
 .toolbar-right { display: flex; align-items: center; gap: 8px; }
+.workflow-mode-hint { margin: 0 6px 0 4px; color: #909399; cursor: pointer; vertical-align: middle; }
+.workflow-mode-hint:hover, .workflow-mode-hint:focus { color: #409eff; outline: none; }
 .workflow-section { margin-top: 12px; }
 .legacy-compatibility { margin-top: 12px; border: 1px solid #edf2f7; border-radius: 10px; background: #fff; }
 .legacy-compatibility :deep(.el-collapse-item__header) { padding: 0 16px; border-radius: 10px; }
