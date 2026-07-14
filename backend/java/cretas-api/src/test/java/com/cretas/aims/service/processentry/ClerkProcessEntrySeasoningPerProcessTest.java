@@ -126,6 +126,30 @@ class ClerkProcessEntrySeasoningPerProcessTest {
 
     @Test
     @DisplayName("注射工序: 绝对注射量 × 内容每kg单价 (不用报工生料重)")
+    void cookingStep_usesPerBindingPotRatioAndFullInputForNullRatio() throws Exception {
+        WorkProcess cook = wp("WP-COOK", "cooking", "COOKING");
+        when(workProcessRepository.findByFactoryIdAndProcessName(F, "cooking")).thenReturn(List.of(cook));
+        stubRecipe();
+        BomSeasoningItem chili = line("COOKING", "10", "1000");
+        chili.setMaterialTypeId("MAT-CHILI");
+        chili.setSubsequentPotRatio(new BigDecimal("0.5"));
+        BomSeasoningItem salt = line("COOKING", "10", "1000");
+        salt.setMaterialTypeId("MAT-SALT");
+        when(bomSeasoningItemRepo.findByRecipeIdAndWorkProcessIdOrderBySeqAsc(RECIPE, "WP-COOK"))
+                .thenReturn(List.of(chili, salt));
+        BomProcessSeasoning legacyProcessParam = new BomProcessSeasoning();
+        legacyProcessParam.setSubsequentPotRatio(new BigDecimal("0.2"));
+        when(bomProcessSeasoningRepository.findByRecipeIdAndWorkProcessIdAndDeletedAtIsNull(RECIPE, "WP-COOK"))
+                .thenReturn(Optional.of(legacyProcessParam));
+
+        BigDecimal cost = computePerProcess(step("cooking"),
+                List.of(new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100")),
+                new ArrayList<>());
+        assertEquals(0, new BigDecimal("5000.0000").compareTo(cost));
+    }
+
+    @Test
+    @DisplayName("注射工序仍按绝对注射量计算")
     void injectionStep_absoluteAmount() throws Exception {
         WorkProcess inj = wp("WP-INJ", "注射", "注射");
         when(workProcessRepository.findByFactoryIdAndProcessName(F, "注射")).thenReturn(List.of(inj));

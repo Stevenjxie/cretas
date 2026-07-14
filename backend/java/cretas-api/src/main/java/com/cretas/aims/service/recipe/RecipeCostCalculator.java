@@ -1,5 +1,6 @@
 package com.cretas.aims.service.recipe;
 
+import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.entity.recipe.ProductRecipe;
 import com.cretas.aims.entity.recipe.RecipeIngredient;
 import com.cretas.aims.entity.recipe.SeasoningLine;
@@ -76,6 +77,56 @@ public final class RecipeCostCalculator {
 
         BigDecimal total = injectionTotal.add(cookingTotal).setScale(SCALE, RoundingMode.HALF_UP);
         return new SeasoningCost(injPerKg, cookPerKg, injectionTotal, cookingTotal, total);
+    }
+
+    /**
+     * Calculate cooking cost with a pot rule attached to each BOM seasoning binding.
+     * The first pot is always 100%; every later pot uses the same (non-compounding)
+     * binding ratio. A modern binding with a null ratio is applied to the full process
+     * input once. Only historical rows without a material binding may use the legacy
+     * process-level ratio as a compatibility fallback.
+     */
+    public static SeasoningCost computeBindingPotRules(BigDecimal legacyProcessRatio,
+                                                       List<BomSeasoningItem> ingredients,
+                                                       List<BigDecimal> potRawKgs) {
+        BigDecimal cookPerKg = perKg(ingredients, RecipeIngredient.SECTION_COOKING, true);
+        BigDecimal totalRawKg = BigDecimal.ZERO;
+        if (potRawKgs != null) {
+            for (BigDecimal potRawKg : potRawKgs) {
+                totalRawKg = totalRawKg.add(nz(potRawKg));
+            }
+        }
+        int potCount = potRawKgs == null || potRawKgs.isEmpty() ? 0 : potRawKgs.size();
+        BigDecimal equalPotRawKg = potCount == 0
+                ? BigDecimal.ZERO
+                : totalRawKg.divide(BigDecimal.valueOf(potCount), 8, RoundingMode.HALF_UP);
+
+        BigDecimal cookingTotal = BigDecimal.ZERO;
+        if (ingredients != null) {
+            for (BomSeasoningItem item : ingredients) {
+                if (!RecipeIngredient.SECTION_COOKING.equals(item.getSection())
+                        || !Boolean.TRUE.equals(item.getCountInSeasoning())) {
+                    continue;
+                }
+                BigDecimal ratio = item.getSubsequentPotRatio();
+                if (ratio == null && item.getMaterialTypeId() == null) {
+                    ratio = legacyProcessRatio;
+                }
+                BigDecimal effectiveRawKg = totalRawKg;
+                if (ratio != null && potCount > 0) {
+                    BigDecimal factor = BigDecimal.ONE.add(
+                            BigDecimal.valueOf(potCount - 1L).multiply(ratio));
+                    effectiveRawKg = equalPotRawKg.multiply(factor);
+                }
+                BigDecimal itemPerKg = nz(item.getDosagePerKgG())
+                        .divide(G_PER_KG, 8, RoundingMode.HALF_UP)
+                        .multiply(maxPrice(item));
+                cookingTotal = cookingTotal.add(effectiveRawKg.multiply(itemPerKg));
+            }
+        }
+        cookingTotal = cookingTotal.setScale(SCALE, RoundingMode.HALF_UP);
+        BigDecimal zero = BigDecimal.ZERO.setScale(SCALE, RoundingMode.HALF_UP);
+        return new SeasoningCost(zero, cookPerKg, zero, cookingTotal, cookingTotal);
     }
 
     /** Σ section 明细: dosage_g/1000 × max(p1,p2); applyCountInSeasoning 时跳过 countInSeasoning=false 的行. */

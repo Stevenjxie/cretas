@@ -255,6 +255,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             cs.setCountInSeasoning(s.getCountInSeasoning());
             cs.setRemark(s.getRemark());
             cs.setWorkProcessId(s.getWorkProcessId()); // 调料配方按工序 (2026-07-13): 保工序分配
+            cs.setSubsequentPotRatio(s.getSubsequentPotRatio());
             clonedSeasoning.add(cs);
         }
         seasoningItemRepo.saveAll(clonedSeasoning);

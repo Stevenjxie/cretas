@@ -1062,7 +1062,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         // 熟制 (及其它需调料的工序): 报工锅数 + 该工序第二锅比例 (缺则回退 header 比例); 注射基准 0
         BigDecimal ratio = paramOpt.map(BomProcessSeasoning::getSubsequentPotRatio)
                 .orElse(bomOpt.get().getSubsequentPotRatio());
-        SeasoningCost sc = RecipeCostCalculator.compute(ratio, lines, BigDecimal.ZERO, potRawKgs);
+        SeasoningCost sc = RecipeCostCalculator.computeBindingPotRules(ratio, lines, potRawKgs);
         return sc.getTotal();
     }
 
