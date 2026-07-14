@@ -392,7 +392,8 @@ const processDataKeys = new Set([
   'allowFinishedGoodsSource',
 ]);
 const portKeys = new Set([
-  'id', 'direction', 'materialNodeId', 'materialName', 'skuId', 'materialKind', 'unit', 'ordinal',
+  'id', 'direction', 'materialNodeId', 'materialName', 'skuId', 'materialKind', 'unit',
+  'conversionRefId', 'conversionVersion', 'ordinal',
 ]);
 const fieldPaths = new Set([
   'name', 'skuId', 'skuCode', 'specification', 'ports', 'conversionRule',

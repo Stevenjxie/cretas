@@ -33,6 +33,8 @@ export interface ProcessPort {
   skuId?: string;
   materialKind?: Exclude<ProductProcessNodeKind, 'PROCESS'>;
   unit: string;
+  conversionRefId?: string | null;
+  conversionVersion?: number | null;
   ordinal: number;
 }
 
