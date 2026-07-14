@@ -45,6 +45,8 @@ function mountShuZhiTable() {
       processCode: 'shuzhi', // 熟制 (multi-source 混锅)
       processOrder: 2,
       processLabel: '熟制',
+      inputUnit: 'kg',
+      outputUnit: 'kg',
       allowSemiFinishedInjection: true,
       allowFinishedGoodsSource: true,
       productTypeId: 'PT-1',
@@ -153,6 +155,8 @@ describe('ProcessDataTable.refreshSharedInventories — 修油(xiuyou) also refr
         processCode: 'xiuyou',
         processOrder: 1,
         processLabel: '修油',
+        inputUnit: 'kg',
+        outputUnit: 'kg',
         productTypeId: 'PT-1',
         upstreamItems: [],
         ownInventoryItems: [],

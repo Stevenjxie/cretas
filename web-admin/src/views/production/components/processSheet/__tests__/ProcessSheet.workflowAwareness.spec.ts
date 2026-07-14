@@ -29,6 +29,13 @@ vi.mock('@/api/processProduction', () => ({
   getProductWorkProcesses: (...args: unknown[]) => getProductWorkProcesses(...args),
 }));
 
+const getSeasoningByProduct = vi.fn();
+vi.mock('@/api/bom', () => ({
+  bomSeasoningApi: {
+    getByProduct: (...args: unknown[]) => getSeasoningByProduct(...args),
+  },
+}));
+
 import ProcessSheet from '../ProcessSheet.vue';
 
 /** Minimal stub that records every prop ProcessSheet.vue passes down, so this spec can assert
@@ -40,6 +47,8 @@ const ProcessDataTableStub = {
     'allowSemiFinishedInjection', 'allowMultipleUpstreamSources', 'isFirstProcess',
     'customFieldSchema', 'allowFinishedGoodsSource', 'workflowContext', 'inputUnit', 'outputUnit',
     'upstreamProcessLabel', 'upstreamItems', 'ownInventoryItems', 'initialRows', 'viewMode',
+    'seasoningPotEnabled',
+    'seasoningConfigured',
   ],
   template: '<div class="stub-process-data-table" />',
 };
@@ -71,8 +80,100 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
     getRows.mockReset();
     getWorkflowSheetConfig.mockReset();
     getProductWorkProcesses.mockReset();
+    getSeasoningByProduct.mockReset();
     getInventory.mockResolvedValue({ success: true, data: [] });
     getRows.mockResolvedValue({ success: true, data: [] });
+    getSeasoningByProduct.mockResolvedValue({
+      success: true,
+      data: { processParams: [], seasoningItems: [] },
+    });
+  });
+
+  it('maps explicit seasoning pot configuration by workProcessId instead of process category/name', async () => {
+    getWorkflowSheetConfig.mockResolvedValue({ success: true, data: null });
+    getProductWorkProcesses.mockResolvedValue({
+      success: true,
+      data: [
+        {
+          id: 1, productTypeId: 'PT-1', workProcessId: 'WP-CONFIGURED', processOrder: 1,
+          unitOverride: null, processName: '普通混料', processCategory: 'PROCESSING',
+          defaultUnit: 'kg', defaultOutputUnit: 'kg', defaultCostCategory: null,
+          allowSemiFinishedInjection: false, allowMultipleUpstreamSources: false,
+          allowFinishedGoodsSource: false, customFieldSchema: null,
+        },
+        {
+          id: 2, productTypeId: 'PT-1', workProcessId: 'WP-UNCONFIGURED', processOrder: 2,
+          unitOverride: null, processName: '熟制', processCategory: '熟制',
+          defaultUnit: 'kg', defaultOutputUnit: 'kg', defaultCostCategory: null,
+          allowSemiFinishedInjection: false, allowMultipleUpstreamSources: false,
+          allowFinishedGoodsSource: false, customFieldSchema: null,
+        },
+      ],
+    });
+    getSeasoningByProduct.mockResolvedValue({
+      success: true,
+      data: {
+        seasoningItems: [{ workProcessId: 'WP-CONFIGURED' }],
+        processParams: [
+          { workProcessId: 'WP-CONFIGURED', subsequentPotRatio: 0.5, injectionAmountKg: null },
+        ],
+      },
+    });
+
+    const wrapper = mountSheet();
+    await flushPromises();
+    await flushPromises();
+
+    expect(getSeasoningByProduct).toHaveBeenCalledWith('F006', 'PT-1');
+    const tables = wrapper.findAllComponents(ProcessDataTableStub);
+    expect(tables).toHaveLength(2);
+    expect(tables[0].props().seasoningPotEnabled).toBe(true);
+    expect(tables[0].props().seasoningConfigured).toBe(true);
+    expect(tables[1].props().seasoningPotEnabled).toBe(false);
+    expect(tables[1].props().seasoningConfigured).toBe(false);
+  });
+
+  it('treats a missing BOM seasoning config as no pot config but blocks and retries other failures', async () => {
+    getWorkflowSheetConfig.mockResolvedValue({ success: true, data: null });
+    getProductWorkProcesses.mockResolvedValue({
+      success: true,
+      data: [{
+        id: 1, productTypeId: 'PT-1', workProcessId: 'WP-1', processOrder: 1,
+        unitOverride: null, processName: '领料', processCategory: 'RAW_MATERIAL',
+        defaultUnit: 'kg', defaultOutputUnit: 'kg', defaultCostCategory: null,
+        allowSemiFinishedInjection: false, allowMultipleUpstreamSources: false,
+        allowFinishedGoodsSource: false, customFieldSchema: null,
+      }],
+    });
+    getSeasoningByProduct.mockRejectedValueOnce(Object.assign(new Error('missing'), { status: 404 }));
+
+    const wrapper = mountSheet();
+    await flushPromises();
+    await flushPromises();
+    expect(wrapper.findAllComponents(ProcessDataTableStub)).toHaveLength(1);
+    expect(wrapper.findComponent(ProcessDataTableStub).props().seasoningPotEnabled).toBe(false);
+    expect(wrapper.findComponent(ProcessDataTableStub).props().seasoningConfigured).toBe(false);
+
+    getSeasoningByProduct.mockRejectedValueOnce(new Error('调料服务不可用'));
+    // First load succeeded, so trigger a prop change to force the non-404 branch.
+    await wrapper.setProps({ productTypeId: 'PT-2' });
+    await flushPromises();
+    await flushPromises();
+    expect(wrapper.findAllComponents(ProcessDataTableStub)).toHaveLength(0);
+    expect(wrapper.text()).toContain('调料服务不可用');
+    expect(wrapper.text()).toContain('重试');
+
+    getSeasoningByProduct.mockResolvedValueOnce({
+      success: true,
+      data: { processParams: [], seasoningItems: [] },
+    });
+    const retry = wrapper.findAll('button').find((button) => button.text().includes('重试'));
+    if (!retry) throw new Error('找不到重试按钮');
+    await retry.trigger('click');
+    await flushPromises();
+    await flushPromises();
+    expect(getSeasoningByProduct).toHaveBeenCalledTimes(3);
+    expect(wrapper.findAllComponents(ProcessDataTableStub)).toHaveLength(1);
   });
 
   it('workflow config present: builds tabs from the workflow snapshot with planned-output threaded to ProcessDataTable, and never calls the legacy endpoint', async () => {

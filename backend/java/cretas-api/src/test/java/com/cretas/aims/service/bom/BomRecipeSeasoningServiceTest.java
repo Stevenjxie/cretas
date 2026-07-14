@@ -3,18 +3,23 @@ package com.cretas.aims.service.bom;
 import com.cretas.aims.dto.bom.BomSeasoningResponse;
 import com.cretas.aims.dto.bom.BomSeasoningSaveRequest;
 import com.cretas.aims.dto.bom.BomSeasoningSaveRequest.SeasoningItemDTO;
+import com.cretas.aims.dto.bom.ProcessSeasoningParamDTO;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.bom.BomProcessSeasoningRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.service.bom.NestedBomCostService;
 import com.cretas.aims.service.bom.impl.BomRecipeServiceImpl;
 import com.cretas.aims.service.uom.MaterialUomConverter;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -43,7 +48,9 @@ class BomRecipeSeasoningServiceTest {
     @Mock BomRecipeRepository recipeRepo;
     @Mock BomRecipeItemRepository itemRepo;
     @Mock BomSeasoningItemRepository seasoningItemRepo;
+    @Mock BomProcessSeasoningRepository bomProcessSeasoningRepo;
     @Mock RawMaterialTypeRepository materialTypeRepo;
+    @Mock ProductWorkProcessRepository productWorkProcessRepo;
     @Mock MaterialUomConverter materialUomConverter;
     @Mock NestedBomCostService nestedBomCostService;
 
@@ -53,6 +60,14 @@ class BomRecipeSeasoningServiceTest {
     private static final String OTHER_F  = "F999";
     private static final String RECIPE_ID = "bom-uuid-1";
     private static final String PRODUCT  = "PT-卤猪蹄";
+    private static final String SALT_ID = "material-salt";
+    private static final String SOUP_ID = "material-soup";
+
+    @BeforeEach
+    void allowConfiguredProductProcessesByDefault() {
+        lenient().when(productWorkProcessRepo.existsByFactoryIdAndProductTypeIdAndWorkProcessId(
+                anyString(), anyString(), anyString())).thenReturn(true);
+    }
 
     /** 工厂匹配的 DRAFT BOM. */
     private BomRecipe draftRecipe() {
@@ -72,6 +87,17 @@ class BomRecipeSeasoningServiceTest {
         return r;
     }
 
+    private RawMaterialType material(String id, String factoryId, String name,
+                                     boolean active, BigDecimal movingAvgPrice) {
+        RawMaterialType material = new RawMaterialType();
+        material.setId(id);
+        material.setFactoryId(factoryId);
+        material.setName(name);
+        material.setIsActive(active);
+        material.setMovingAvgPrice(movingAvgPrice);
+        return material;
+    }
+
     /** 构建合法 saveSeasoning 请求 (一行 INJECTION + 一行 COOKING). */
     private BomSeasoningSaveRequest validRequest() {
         BomSeasoningSaveRequest req = new BomSeasoningSaveRequest();
@@ -81,6 +107,8 @@ class BomRecipeSeasoningServiceTest {
 
         SeasoningItemDTO inj = new SeasoningItemDTO();
         inj.setSection("INJECTION");
+        inj.setMaterialTypeId(SALT_ID);
+        inj.setWorkProcessId("wp-injection");
         inj.setSeq(0);
         inj.setName("盐水");
         inj.setDosagePerKgG(new BigDecimal("1200.0000"));
@@ -88,6 +116,8 @@ class BomRecipeSeasoningServiceTest {
 
         SeasoningItemDTO cook = new SeasoningItemDTO();
         cook.setSection("COOKING");
+        cook.setMaterialTypeId(SOUP_ID);
+        cook.setWorkProcessId("wp-cooking");
         cook.setSeq(1);
         cook.setName("老汤");
         cook.setDosagePerKgG(new BigDecimal("2000.0000"));
@@ -106,6 +136,10 @@ class BomRecipeSeasoningServiceTest {
     void saveSeasoning_draft_replacesItemsAndSetsPotParams() {
         BomRecipe recipe = draftRecipe();
         when(recipeRepo.findById(RECIPE_ID)).thenReturn(Optional.of(recipe));
+        when(materialTypeRepo.findById(SALT_ID)).thenReturn(Optional.of(
+                material(SALT_ID, FACTORY, "食盐", true, new BigDecimal("2.3500"))));
+        when(materialTypeRepo.findById(SOUP_ID)).thenReturn(Optional.of(
+                material(SOUP_ID, FACTORY, "老汤物料", true, new BigDecimal("8.1200"))));
 
         // 模拟已有 1 条旧调料行
         BomSeasoningItem oldItem = new BomSeasoningItem();
@@ -139,8 +173,13 @@ class BomRecipeSeasoningServiceTest {
             assertEquals(FACTORY,   si.getFactoryId());
         });
         BomSeasoningItem oldSoup = newBatch.stream()
-                .filter(s -> "老汤".equals(s.getName())).findFirst().orElseThrow();
+                .filter(s -> SOUP_ID.equals(s.getMaterialTypeId())).findFirst().orElseThrow();
         assertEquals(Boolean.FALSE, oldSoup.getCountInSeasoning(), "老汤 countInSeasoning=false 必须保留");
+        BomSeasoningItem salt = newBatch.stream()
+                .filter(s -> SALT_ID.equals(s.getMaterialTypeId())).findFirst().orElseThrow();
+        assertEquals("食盐", salt.getName(), "名称必须以物料档案为准");
+        assertEquals(new BigDecimal("2.3500"), salt.getPriceSource1(), "价格必须取移动平均价快照");
+        assertNull(salt.getPriceSource2(), "第二价格源不再接受前端输入");
 
         // 响应字段
         assertEquals(RECIPE_ID, resp.getBomRecipeId());
@@ -222,5 +261,164 @@ class BomRecipeSeasoningServiceTest {
 
         assertTrue(result.isEmpty());
         verify(seasoningItemRepo, never()).findByRecipeIdOrderBySeqAsc(any());
+    }
+
+    @Test
+    @DisplayName("saveSeasoning: 物料不存在时明确拒绝")
+    void saveSeasoning_missingMaterial_throwsBusinessException() {
+        when(recipeRepo.findById(RECIPE_ID)).thenReturn(Optional.of(draftRecipe()));
+        when(materialTypeRepo.findById(SALT_ID)).thenReturn(Optional.empty());
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.saveSeasoning(FACTORY, RECIPE_ID, requestWithOnlySalt()));
+
+        assertTrue(ex.getMessage().contains("不存在"));
+        verify(seasoningItemRepo, never()).saveAll(any());
+    }
+
+    @Test
+    @DisplayName("saveSeasoning: 跨工厂物料时明确拒绝")
+    void saveSeasoning_crossFactoryMaterial_throwsBusinessException() {
+        when(recipeRepo.findById(RECIPE_ID)).thenReturn(Optional.of(draftRecipe()));
+        when(materialTypeRepo.findById(SALT_ID)).thenReturn(Optional.of(
+                material(SALT_ID, OTHER_F, "外厂盐", true, BigDecimal.ONE)));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.saveSeasoning(FACTORY, RECIPE_ID, requestWithOnlySalt()));
+
+        assertTrue(ex.getMessage().contains("工厂"));
+    }
+
+    @Test
+    @DisplayName("saveSeasoning: 停用物料时明确拒绝")
+    void saveSeasoning_inactiveMaterial_throwsBusinessException() {
+        when(recipeRepo.findById(RECIPE_ID)).thenReturn(Optional.of(draftRecipe()));
+        when(materialTypeRepo.findById(SALT_ID)).thenReturn(Optional.of(
+                material(SALT_ID, FACTORY, "停用盐", false, BigDecimal.ONE)));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.saveSeasoning(FACTORY, RECIPE_ID, requestWithOnlySalt()));
+
+        assertTrue(ex.getMessage().contains("停用"));
+    }
+
+    @Test
+    @DisplayName("saveSeasoning: 物料无移动平均价时明确拒绝")
+    void saveSeasoning_materialWithoutMovingAveragePrice_throwsBusinessException() {
+        when(recipeRepo.findById(RECIPE_ID)).thenReturn(Optional.of(draftRecipe()));
+        when(materialTypeRepo.findById(SALT_ID)).thenReturn(Optional.of(
+                material(SALT_ID, FACTORY, "无价盐", true, null)));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.saveSeasoning(FACTORY, RECIPE_ID, requestWithOnlySalt()));
+
+        assertTrue(ex.getMessage().contains("移动平均价"));
+    }
+
+    @Test
+    @DisplayName("saveSeasoning: 同一工序重复添加同一调料时拒绝")
+    void saveSeasoning_duplicateMaterialInSameProcess_throwsBusinessException() {
+        when(recipeRepo.findById(RECIPE_ID)).thenReturn(Optional.of(draftRecipe()));
+        when(materialTypeRepo.findById(SALT_ID)).thenReturn(Optional.of(
+                material(SALT_ID, FACTORY, "食盐", true, BigDecimal.ONE)));
+        BomSeasoningSaveRequest req = requestWithOnlySalt();
+        SeasoningItemDTO duplicate = new SeasoningItemDTO();
+        duplicate.setSection("COOKING");
+        duplicate.setMaterialTypeId(SALT_ID);
+        duplicate.setWorkProcessId("wp-injection");
+        duplicate.setName("前端伪造名称");
+        duplicate.setDosagePerKgG(BigDecimal.TEN);
+        req.setSeasoningItems(List.of(req.getSeasoningItems().get(0), duplicate));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.saveSeasoning(FACTORY, RECIPE_ID, req));
+
+        assertTrue(ex.getMessage().contains("已添加"));
+        verify(seasoningItemRepo, never()).saveAll(any());
+    }
+
+    @Test
+    @DisplayName("cloneRecipe: 调料物料关联随 BOM 版本复制")
+    void cloneRecipe_copiesSeasoningMaterialTypeId() {
+        BomRecipe source = draftRecipe();
+        source.setRecipeCode("BOM-SOURCE");
+        source.setVersion(1);
+        BomSeasoningItem sourceItem = new BomSeasoningItem();
+        sourceItem.setRecipeId(RECIPE_ID);
+        sourceItem.setFactoryId(FACTORY);
+        sourceItem.setMaterialTypeId(SALT_ID);
+        sourceItem.setSection("COOKING");
+        sourceItem.setSeq(0);
+        sourceItem.setName("食盐");
+        sourceItem.setDosagePerKgG(BigDecimal.TEN);
+        sourceItem.setPriceSource1(BigDecimal.ONE);
+
+        when(recipeRepo.findById(RECIPE_ID)).thenReturn(Optional.of(source));
+        when(recipeRepo.findMaxVersion(FACTORY, PRODUCT)).thenReturn(1);
+        when(recipeRepo.save(any(BomRecipe.class))).thenAnswer(inv -> {
+            BomRecipe saved = inv.getArgument(0);
+            if (saved.getId() == null) saved.setId("clone-recipe-id");
+            return saved;
+        });
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc(RECIPE_ID)).thenReturn(List.of());
+        when(seasoningItemRepo.findByRecipeIdOrderBySeqAsc(RECIPE_ID)).thenReturn(List.of(sourceItem));
+
+        service.cloneRecipe(FACTORY, RECIPE_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<BomSeasoningItem>> captor = ArgumentCaptor.forClass(List.class);
+        verify(seasoningItemRepo).saveAll(captor.capture());
+        assertEquals(SALT_ID, captor.getValue().get(0).getMaterialTypeId());
+    }
+
+    @Test
+    @DisplayName("saveSeasoning: 未选择工序时明确拒绝")
+    void saveSeasoning_missingWorkProcess_throwsBusinessException() {
+        when(recipeRepo.findById(RECIPE_ID)).thenReturn(Optional.of(draftRecipe()));
+        BomSeasoningSaveRequest req = requestWithOnlySalt();
+        req.getSeasoningItems().get(0).setWorkProcessId(" ");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.saveSeasoning(FACTORY, RECIPE_ID, req));
+
+        assertTrue(ex.getMessage().contains("工序"));
+    }
+
+    @Test
+    @DisplayName("saveSeasoning: 非该 SKU 工序时明确拒绝")
+    void saveSeasoning_workProcessNotAssignedToProduct_throwsBusinessException() {
+        when(recipeRepo.findById(RECIPE_ID)).thenReturn(Optional.of(draftRecipe()));
+        when(productWorkProcessRepo.existsByFactoryIdAndProductTypeIdAndWorkProcessId(
+                FACTORY, PRODUCT, "wp-injection")).thenReturn(false);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.saveSeasoning(FACTORY, RECIPE_ID, requestWithOnlySalt()));
+
+        assertTrue(ex.getMessage().contains("有效工序"));
+    }
+
+    @Test
+    @DisplayName("saveSeasoning: 工序参数引用非该 SKU 工序时明确拒绝")
+    void saveSeasoning_processParamWorkProcessNotAssignedToProduct_throwsBusinessException() {
+        when(recipeRepo.findById(RECIPE_ID)).thenReturn(Optional.of(draftRecipe()));
+        when(productWorkProcessRepo.existsByFactoryIdAndProductTypeIdAndWorkProcessId(
+                FACTORY, PRODUCT, "wp-not-on-product")).thenReturn(false);
+        BomSeasoningSaveRequest req = new BomSeasoningSaveRequest();
+        ProcessSeasoningParamDTO param = new ProcessSeasoningParamDTO();
+        param.setWorkProcessId("wp-not-on-product");
+        param.setSubsequentPotRatio(new BigDecimal("0.5000"));
+        req.setProcessParams(List.of(param));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.saveSeasoning(FACTORY, RECIPE_ID, req));
+
+        assertTrue(ex.getMessage().contains("有效工序"));
+        verify(seasoningItemRepo, never()).saveAll(any());
+    }
+
+    private BomSeasoningSaveRequest requestWithOnlySalt() {
+        BomSeasoningSaveRequest req = validRequest();
+        req.setSeasoningItems(List.of(req.getSeasoningItems().get(0)));
+        return req;
     }
 }
