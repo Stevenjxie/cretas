@@ -471,7 +471,7 @@ class ProductProcessWorkflowCatalogValidatorTest {
     }
 
     @Test
-    void acceptsSemiFinishedMaterialFeedingMultipleDownstreamProcesses() {
+    void rejectsMultipleTerminalFinishedGoodsWhenWorkflowOwnerIsFinishedProduct() {
         ProductProcessWorkflowDTO definition = validTwoProcessChain();
         definition.getNodes().add(processNodeWithInput(
                 "process:quality", "WP-QUALITY", "in-quality",
@@ -496,7 +496,9 @@ class ProductProcessWorkflowCatalogValidatorTest {
                         product("FG-QUALITY", FACTORY_ID, ProductCategory.FINISHED_PRODUCT)));
 
         new ProductProcessWorkflowValidator().validateForPublish(definition);
-        assertDoesNotThrow(() -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_TERMINAL_COUNT_INVALID", error.getErrorCode());
     }
 
     private ProductProcessWorkflowDTO workflowWithPrimaryOutput(

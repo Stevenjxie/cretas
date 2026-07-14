@@ -51,7 +51,7 @@ export function createProcessBranch(input: ProcessBranchInput): {
   const outputId = `material:${outputKind === 'FINISHED_GOOD' ? 'finished' : 'semi'}:${timestamp}`;
   const inputPortId = `input:${timestamp}`;
   const outputPortId = `output:${timestamp}`;
-  const inputUnit = String(source.data.baseUnit || workProcess.unit || 'kg');
+  const inputUnit = String(source.data.baseUnit || workProcess.unit || '');
   const outputUnit = workProcess.outputUnit || workProcess.unit || inputUnit;
 
   const processNode: ProductProcessWorkflowNode = {
@@ -709,7 +709,7 @@ export function validateWorkflow(
 }
 
 function processUnit(process?: LegacyProductWorkProcess): string {
-  return process?.unitOverride || process?.defaultUnit || 'kg';
+  return process?.unitOverride || process?.defaultUnit || '';
 }
 
 function setNestedValue(target: Record<string, unknown>, path: string, value: unknown): void {

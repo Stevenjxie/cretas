@@ -143,21 +143,26 @@ class ProductProcessWorkflowActivationServiceTest {
     }
 
     @Test
-    void activateRejectsWorkflowWithNodeHavingMultipleOutputPortsAndNeverPersists() {
+    void activateAcceptsWorkflowWithMultipleOutputPorts() {
         ProductProcessWorkflow workflow = publishedWorkflow(44L, "F006", "PT-PIG", 3);
         when(workflowRepository.findByIdAndFactoryId(44L, "F006"))
                 .thenReturn(Optional.of(workflow));
         when(compiler.compile(any())).thenReturn(multiOutputCompiledWorkflow());
+        when(activationRepository.findByFactoryIdAndProductTypeId("F006", "PT-PIG"))
+                .thenReturn(Optional.empty());
+        when(activationRepository.saveAndFlush(any())).thenAnswer(invocation -> {
+            ProductProcessWorkflowActivation activation = invocation.getArgument(0);
+            activation.setId(91L);
+            activation.setLockVersion(0L);
+            return activation;
+        });
 
-        BusinessException error = assertThrows(BusinessException.class,
-                () -> service.activate("F006", 44L, 7001L));
+        ProductProcessWorkflowActivationDTO result = service.activate("F006", 44L, 7001L);
 
-        assertEquals(409, error.getCode());
-        assertEquals("WORKFLOW_MULTI_OUTPUT_UNSUPPORTED", error.getErrorCode());
-        assertNotNull(error.getActionHint());
+        assertEquals(44L, result.getActiveWorkflowId());
         verify(validator).validateForPublish(any());
         verify(catalogValidator).validateForPublish(eq("F006"), eq("PT-PIG"), any());
-        verifyNoInteractions(activationRepository);
+        verify(activationRepository).saveAndFlush(any());
     }
 
     @Test

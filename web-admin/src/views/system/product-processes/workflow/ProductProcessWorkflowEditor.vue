@@ -100,7 +100,6 @@
               :bom-raw-material-ids="bomRawMaterialIdList"
               :semi-options="semiFinishedSkuOptions"
               :finished-options="finishedGoodSkuOptions"
-              :unit-conversions="unitConversionsByProduct"
               @add-next="openAddProcess(slotProps.id)"
               @select-raw-sku="(skuId) => selectRawSku(slotProps.id, skuId)"
               @select-sku="(skuId) => selectMaterialSku(slotProps.id, skuId)"
@@ -117,6 +116,7 @@
               :connecting-from-kind="connectingFromKind"
               :semi-options="semiFinishedSkuOptions"
               :finished-options="finishedGoodSkuOptions"
+              :unit-conversions="unitConversionsByProduct"
               @update="(patch) => updateProcessData(slotProps.id, patch)"
               @add-input="addInputToProcess(slotProps.id)"
               @add-output="addOutputToProcess(slotProps.id)"
@@ -504,7 +504,7 @@ const selectedWorkProcessId = ref('');
 const processCreateMode = ref<'existing' | 'create'>('existing');
 const creatingProcess = ref(false);
 const newProcessForm = ref<{ name: string; unit: string; outputUnit: string; outputKind: 'SEMI_FINISHED' | 'FINISHED_GOOD' }>(
-  { name: '', unit: 'kg', outputUnit: 'kg', outputKind: 'SEMI_FINISHED' },
+  { name: '', unit: '', outputUnit: '', outputKind: 'SEMI_FINISHED' },
 );
 function normProcessName(s: string): string { return s.replace(/\s+/g, ''); } // 中文不 lowercase
 // 相似 = 同名 / 一个包含另一个 / 共享 >=2 连续字 → 提示复用避免重复建。
@@ -564,7 +564,7 @@ const filteredWorkProcessOptions = workProcessFilter.filtered;
 const skuDialogVisible = ref(false);
 const creatingSku = ref(false);
 const skuBindingTarget = ref<SkuBindingTarget | null>(null);
-const skuForm = ref({ name: '', unit: 'kg', specification: '' });
+const skuForm = ref({ name: '', unit: '', specification: '' });
 const unitOptions = computed(() => unitCatalog.value.map((unit) => unit.code));
 let lastGraphIdSeed = 0;
 let catalogGeneration = 0;
@@ -1379,7 +1379,7 @@ function openAddProcess(materialNodeId: string): void {
   processSourceMaterialId.value = materialNodeId;
   selectedWorkProcessId.value = '';
   processCreateMode.value = 'existing';
-  newProcessForm.value = { name: '', unit: 'kg', outputUnit: 'kg', outputKind: 'SEMI_FINISHED' };
+  newProcessForm.value = { name: '', unit: '', outputUnit: '', outputKind: 'SEMI_FINISHED' };
   processDialogVisible.value = true;
 }
 
@@ -1499,7 +1499,7 @@ function selectRawSku(materialNodeId: string, skuId: string): void {
       name: option.name,
       skuId: option.id,
       skuCode: option.code || option.id,
-      baseUnit: option.unit || material.data?.baseUnit || 'kg',
+      baseUnit: option.unit || material.data?.baseUnit || '',
       bound: true,
     };
   });
@@ -1536,7 +1536,7 @@ function selectOutputSku(processId: string, portId: string, skuId: string): void
     skuBindingTarget.value = { processId, portId };
     skuForm.value = {
       name: port?.materialName || `${data?.processName || '工序'}后半成品`,
-      unit: port?.unit || data?.outputUnit || 'kg',
+      unit: port?.unit || data?.outputUnit || '',
       specification: '',
     };
     skuDialogVisible.value = true;
@@ -2076,7 +2076,7 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
     }
     if (!wp) {
       const outKind = step.outputs?.[0]?.kind === 'FINISHED_GOOD' ? 'FINISHED_GOOD' : 'SEMI_FINISHED';
-      const unit = step.outputs?.[0]?.unit || 'kg';
+      const unit = step.outputs?.[0]?.unit || '';
       try {
         const resp = await createWorkProcess(identity.factoryId, {
           processName: name, unit, outputUnit: unit,
@@ -2117,7 +2117,7 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
       id: `material:raw:${nextGraphIdSeed()}`,
       type: 'material',
       position: { x: 32, y: 32 },
-      data: { kind: 'RAW_MATERIAL', name: rawName, skuId: '', skuCode: '待绑定原料 SKU', bound: false, baseUnit: 'kg' },
+      data: { kind: 'RAW_MATERIAL', name: rawName, skuId: '', skuCode: '待绑定原料 SKU', bound: false, baseUnit: '' },
     };
     nodes.push(rawNode);
     let prevMaterial = serializeFlowNode(rawNode);
@@ -2191,7 +2191,7 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
       // 多产出/分流: 其余产出各建一个物料 Cell + OUTPUT 端口 + 边 (复用 attachOutputBinding 端口结构)
       outputs.slice(1).forEach((extra, extraIdx) => {
         const kind = extra?.kind === 'FINISHED_GOOD' ? 'FINISHED_GOOD' : 'SEMI_FINISHED';
-        const unit = extra?.unit || String(processData.outputUnit || 'kg');
+        const unit = extra?.unit || String(processData.outputUnit || '');
         const matId = `material:output:${nextGraphIdSeed()}`;
         const portId = `output:${nextGraphIdSeed()}`;
         // #5 分流产出同样尝试自动绑定 SKU (唯一精确同名; 否则留待用户绑定)。
@@ -2232,12 +2232,12 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
           id: rawId,
           type: 'material',
           position: { x: branch.processNode.position.x - 220, y: branch.processNode.position.y + (inIdx + 1) * 140 },
-          data: { kind: 'RAW_MATERIAL', name: inName, skuId: '', skuCode: '待绑定原料 SKU', bound: false, baseUnit: 'kg' },
+          data: { kind: 'RAW_MATERIAL', name: inName, skuId: '', skuCode: '待绑定原料 SKU', bound: false, baseUnit: '' },
         });
         processData.ports = [
           ...processData.ports,
           {
-            id: inPortId, direction: 'INPUT', materialNodeId: rawId, unit: 'kg',
+            id: inPortId, direction: 'INPUT', materialNodeId: rawId, unit: '',
             ordinal: processData.ports.filter((p) => p.direction === 'INPUT').length,
           },
         ];
