@@ -336,6 +336,12 @@ import { Controls } from '@vue-flow/controls';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { get, post } from '@/api/request';
 import {
+  getUnitCatalog,
+  listProductUnitConversions,
+  type ProductUnitConversion,
+  type UnitCatalogItem,
+} from '@/api/unitContract';
+import {
   createWorkProcess,
   getActiveWorkProcesses,
   getProductWorkProcesses,
@@ -367,6 +373,11 @@ import {
   toPlainWorkflowValue,
   validateWorkflow,
 } from './workflowModel';
+import {
+  reconcileWorkflowUnits,
+  type WorkflowUnitContext,
+  type WorkflowUnitIssue,
+} from './workflowUnits';
 import type {
   MaterialNodeData,
   ProductProcessWorkflowActivation,
@@ -465,6 +476,8 @@ const dragStartSnapshot = ref<ProductProcessWorkflowDefinition | null>(null);
 const workProcessOptions = ref<WorkProcessItem[]>([]);
 const skuOptions = ref<SkuOption[]>([]);
 const rawMaterialOptions = ref<RawMaterialOption[]>([]);
+const unitCatalog = ref<UnitCatalogItem[]>([]);
+const unitConversionsByProduct = ref<Record<string, ProductUnitConversion[]>>({});
 // #3: 该产品 BOM 原辅料清单 (per-product, 随 productTypeId 变化而重新加载,
 // 与 loadCatalogs 的"全厂字典"缓存粒度不同, 单独一个 ref + 单独一个 loader)。
 const productBomItems = ref<BomItemOption[]>([]);
@@ -550,7 +563,7 @@ const skuDialogVisible = ref(false);
 const creatingSku = ref(false);
 const skuBindingTarget = ref<SkuBindingTarget | null>(null);
 const skuForm = ref({ name: '', unit: 'kg', specification: '' });
-const unitOptions = ['kg', 'g', '只', '半只', '盒', '袋', '箱', '筐'];
+const unitOptions = computed(() => unitCatalog.value.map((unit) => unit.code));
 let lastGraphIdSeed = 0;
 let catalogGeneration = 0;
 let createSkuGeneration = 0;
@@ -560,6 +573,7 @@ let saveGeneration = 0;
 let publishGeneration = 0;
 let activationLoadGeneration = 0;
 let activationMutationGeneration = 0;
+let unitContractGeneration = 0;
 
 const productTypeId = computed(() => props.productTypeId);
 // #12b 预览历史版本标志 (非空=正在只读预览某历史版本); 提前声明供 canEdit 引用
@@ -708,12 +722,13 @@ async function loadCatalogs(): Promise<void> {
   if (!factoryId) return;
   catalogLoading.value = true;
   try {
-    const [processResponse, productResponse, rawResponse] = await Promise.all([
+    const [processResponse, productResponse, rawResponse, unitResponse] = await Promise.all([
       getActiveWorkProcesses(factoryId),
       // 精简「选项」端点 (7 字段: id/name/code/unit/specification/productCategory/isActive + @Cacheable) —
       // SkuOption 只需这些字段; 避开重 DTO 的 ~3s/422KB 全量加载 (顶部选择器已先命中缓存, 这里秒回)。
       get<{ content: SkuOption[] }>(`/${factoryId}/product-types/options`),
       get<RawMaterialOption[]>(`/${factoryId}/raw-material-types/active`),
+      getUnitCatalog(factoryId),
     ]);
     if (!isCurrentCatalogLoad(generation, factoryId)) return;
     if (!processResponse.success
@@ -721,13 +736,17 @@ async function loadCatalogs(): Promise<void> {
       || !productResponse.success
       || !Array.isArray(productResponse.data?.content)
       || !rawResponse.success
-      || !Array.isArray(rawResponse.data)) {
+      || !Array.isArray(rawResponse.data)
+      || !unitResponse.success
+      || !Array.isArray(unitResponse.data)) {
       throw new Error('Workflow catalog response is incomplete');
     }
     workProcessOptions.value = processResponse.data;
     skuOptions.value = productResponse.data.content;
     rawMaterialOptions.value = rawResponse.data;
+    unitCatalog.value = unitResponse.data;
     loadedCatalogFactoryId.value = factoryId;
+    void reconcileLoadedUnits();
   } catch (error) {
     if (!isCurrentCatalogLoad(generation, factoryId)) return;
     invalidateCatalogs();
@@ -746,10 +765,104 @@ function invalidateCatalogs(): void {
   workProcessOptions.value = [];
   skuOptions.value = [];
   rawMaterialOptions.value = [];
+  unitCatalog.value = [];
+  unitConversionsByProduct.value = {};
+  unitContractGeneration += 1;
 }
 
 function isCurrentCatalogLoad(generation: number, factoryId: string): boolean {
   return generation === catalogGeneration && factoryId === props.factoryId;
+}
+
+function unitContext(): WorkflowUnitContext {
+  const products: WorkflowUnitContext['products'] = {};
+  [...skuOptions.value, ...rawMaterialOptions.value].forEach((option) => {
+    if (!option.id || !option.unit) return;
+    products[option.id] = {
+      productTypeId: option.id,
+      primaryUnit: option.unit,
+      conversions: (unitConversionsByProduct.value[option.id] || [])
+        .filter((item): item is ProductUnitConversion & { id: string; version: number } => (
+          Boolean(item.id) && typeof item.version === 'number'
+        ))
+        .map((item) => ({
+          id: item.id,
+          version: item.version,
+          productTypeId: item.productTypeId || option.id,
+          fromUnitCode: item.fromUnitCode,
+          toUnitCode: item.toUnitCode,
+        })),
+    };
+  });
+  return { products };
+}
+
+async function ensureUnitConversions(
+  nextDefinition: ProductProcessWorkflowDefinition,
+  identity: WorkflowIdentity,
+): Promise<boolean> {
+  const productIds = [...new Set(nextDefinition.nodes
+    .filter((node) => node.kind !== 'PROCESS')
+    .map((node) => String((node.data as MaterialNodeData).skuId || ''))
+    .filter((id) => id && skuOptions.value.some((option) => option.id === id)))];
+  const missing = productIds.filter((id) => !(id in unitConversionsByProduct.value));
+  if (missing.length === 0) return true;
+  const generation = ++unitContractGeneration;
+  const responses = await Promise.all(missing.map(async (id) => ({
+    id,
+    response: await listProductUnitConversions(identity.factoryId, id),
+  })));
+  if (generation !== unitContractGeneration || !isLoadedIdentityCurrent(identity)) return false;
+  const next = { ...unitConversionsByProduct.value };
+  for (const { id, response } of responses) {
+    if (!response.success || !Array.isArray(response.data)) return false;
+    next[id] = response.data;
+  }
+  unitConversionsByProduct.value = next;
+  return true;
+}
+
+async function reconcileLoadedUnits(): Promise<void> {
+  const identity = currentLoadedIdentity();
+  if (!identity || loadedCatalogFactoryId.value !== identity.factoryId || !definition.value) return;
+  const current = currentDefinition();
+  if (!(await ensureUnitConversions(current, identity))) return;
+  if (!isLoadedIdentityCurrent(identity)) return;
+  const result = reconcileWorkflowUnits(current, unitContext());
+  if (definition.value.status === 'PUBLISHED') {
+    if (result.errors.length > 0) showUnitIssues(result.errors);
+    return;
+  }
+  if (JSON.stringify(result.definition) !== JSON.stringify(current)) {
+    hydrate(result.definition);
+    dirty.value = true;
+  }
+}
+
+async function reconcileForPersistence(
+  identity: WorkflowIdentity,
+  showErrors: boolean,
+): Promise<ProductProcessWorkflowDefinition | null> {
+  const current = currentDefinition();
+  if (!(await ensureUnitConversions(current, identity)) || !isLoadedIdentityCurrent(identity)) return null;
+  const result = reconcileWorkflowUnits(current, unitContext());
+  if (result.errors.length > 0) {
+    if (showErrors) showUnitIssues(result.errors);
+    return null;
+  }
+  if (JSON.stringify(result.definition) !== JSON.stringify(current)) {
+    hydrate(result.definition);
+    dirty.value = true;
+  }
+  return result.definition;
+}
+
+function showUnitIssues(issues: WorkflowUnitIssue[]): void {
+  void ElMessageBox.alert(
+    issues.slice(0, 8).map((issue) => `• ${issue.message}`).join('\n'),
+    'Workflow 单位契约未通过',
+    { type: 'warning' },
+  );
 }
 
 async function loadDefinition(): Promise<void> {
@@ -786,6 +899,7 @@ async function loadDefinition(): Promise<void> {
     hydrate(nextDefinition);
     loadedDefinitionIdentity.value = identity;
     dirty.value = !nextDefinition.id;
+    void reconcileLoadedUnits();
     await nextTick();
     if (!isCurrentLoad(generation, identity)) return;
     if (nextDefinition.id) {
@@ -1431,13 +1545,22 @@ function bindOutputSku(processId: string, portId: string, option: SkuOption): bo
   const port = data.ports.find((candidate) => candidate.id === portId);
   const material = flowNodes.value.find((node) => node.id === port?.materialNodeId);
   if (!port || !material) return false;
+  const primaryOutputPort = data.ports
+    .filter((candidate) => candidate.direction === 'OUTPUT')
+    .sort((left, right) => left.ordinal - right.ordinal)[0];
+  const nextUnit = option.unit || port.unit;
   mutate(() => {
     Object.assign(port, {
       skuId: option.id,
       materialName: option.name,
       materialKind: kind,
-      unit: option.unit || port.unit,
+      unit: nextUnit,
+      conversionRefId: null,
+      conversionVersion: null,
     });
+    if (primaryOutputPort?.id === port.id) {
+      data.outputUnit = nextUnit;
+    }
     material.data = {
       ...material.data,
       kind,
@@ -1445,7 +1568,7 @@ function bindOutputSku(processId: string, portId: string, option: SkuOption): bo
       skuId: option.id,
       skuCode: option.code || option.id,
       specification: option.specification,
-      baseUnit: option.unit || port.unit,
+      baseUnit: nextUnit,
       bound: true,
     };
   });
@@ -1514,23 +1637,9 @@ function isCreateSkuOperationCurrent(
 }
 
 function refreshPortMaterialMetadata(): void {
-  // 单位以「所绑定 SKU 的主数据单位」为准：历史保存的 baseUnit 可能是工序默认单位
-  // (如 kg)，而实际绑定的成品/半成品单位是「盒」。在此按 SKU 主数据回填，自愈旧数据，
-  // 保证产出单位 chip 与所选 SKU 一致 (Steve: 盒 SKU 不能还显示 kg)。
-  const unitBySkuId = new Map<string, string>();
-  skuOptions.value.forEach((o) => { if (o.unit) unitBySkuId.set(o.id, o.unit); });
-  rawMaterialOptions.value.forEach((o) => { if (o.unit) unitBySkuId.set(o.id, o.unit); });
   const materialById = new Map(flowNodes.value
     .filter((node) => node.data?.kind !== 'PROCESS')
     .map((node) => [node.id, node]));
-  // 先把绑定了 SKU 的物料 Cell 的 baseUnit 对齐 SKU 主数据单位。
-  materialById.forEach((node) => {
-    const skuId = node.data?.skuId ? String(node.data.skuId) : '';
-    const skuUnit = skuId ? unitBySkuId.get(skuId) : undefined;
-    if (skuUnit && node.data.baseUnit !== skuUnit) {
-      node.data = { ...node.data, baseUnit: skuUnit };
-    }
-  });
   flowNodes.value.forEach((node) => {
     if (node.data?.kind !== 'PROCESS') return;
     const data = node.data as ProcessNodeData & { kind: 'PROCESS' };
@@ -1541,7 +1650,6 @@ function refreshPortMaterialMetadata(): void {
         materialName: String(material?.data?.name || port.materialName || ''),
         skuId: String(material?.data?.skuId || port.skuId || ''),
         materialKind: (material?.data?.kind || port.materialKind) as ProcessPort['materialKind'],
-        unit: String(material?.data?.baseUnit || port.unit || 'kg'),
       };
     });
   });
@@ -1582,7 +1690,8 @@ async function fitCanvas(): Promise<void> {
 async function saveDraft(options: { silent?: boolean; preserveHistory?: boolean } = {}): Promise<boolean> {
   const identity = currentLoadedIdentity();
   if (!identity || !canEdit.value) return false;
-  const nextDefinition = currentDefinition();
+  const nextDefinition = await reconcileForPersistence(identity, !options.silent);
+  if (!nextDefinition) return false;
   const errors = validateWorkflow(nextDefinition, 'draft');
   if (errors.length > 0) {
     // 自动保存(silent)时不弹错——用户可能正编到一半暂时非法, 等下次改动再存
@@ -1639,6 +1748,7 @@ async function saveDraft(options: { silent?: boolean; preserveHistory?: boolean 
 async function publishWorkflow(): Promise<void> {
   let identity = currentLoadedIdentity();
   if (!identity || !canEdit.value) return;
+  if (!(await reconcileForPersistence(identity, true))) return;
   if (dirty.value && !(await saveDraft())) return;
   identity = currentLoadedIdentity();
   if (!identity || !canEdit.value) return;
