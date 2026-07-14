@@ -209,6 +209,12 @@ public class ExpenseRequestServiceImpl implements ExpenseRequestService {
 
     @Override
     @Transactional(readOnly = true)
+    public Page<ExpenseRequest> listAll(String factoryId, ExpenseCategory category, HrRequestStatus status, Pageable pageable) {
+        return repository.findByFiltersAll(factoryId, category, status, pageable);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public Map<ExpenseCategory, BigDecimal> summarizeMonth(String factoryId, String yearMonth) {
         YearMonth ym = YearMonth.parse(yearMonth);
         LocalDate start = ym.atDay(1);

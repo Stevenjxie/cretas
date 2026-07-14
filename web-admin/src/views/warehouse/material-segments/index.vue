@@ -232,7 +232,6 @@ onMounted(loadTree);
         <el-table-column prop="parentCode" label="上级编码" width="140">
           <template #default="{ row }">{{ row.parentCode || '-' }}</template>
         </el-table-column>
-        <el-table-column prop="sortOrder" label="排序" width="100" />
         <el-table-column label="状态" width="100">
           <template #default="{ row }">
             <el-tag :type="row.isActive === false ? 'info' : 'success'" size="small">

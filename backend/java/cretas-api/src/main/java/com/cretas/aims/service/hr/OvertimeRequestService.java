@@ -39,6 +39,10 @@ public interface OvertimeRequestService {
 
     Page<OvertimeRequest> listAll(String factoryId, Pageable pageable);
 
+    /** HR: 全部, 按类型/补偿方式/状态过滤 (2026-07-14 web-admin filter audit, 均可空). */
+    Page<OvertimeRequest> listAll(String factoryId, OvertimeType overtimeType,
+                                  CompensationType compensationType, HrRequestStatus status, Pageable pageable);
+
     /** 工厂月度: compensationType → 总小时数 (APPROVED only). */
     Map<CompensationType, BigDecimal> summarizeMonth(String factoryId, String yearMonth);
 }

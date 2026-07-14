@@ -396,10 +396,16 @@ public class InvoiceServiceImpl implements InvoiceService {
 
     @Override
     public Page<InvoiceRecord> listInvoices(String factoryId, InvoiceStatus status, Pageable pageable) {
-        if (status != null) {
-            return invoiceRecordRepository.findByFactoryIdAndStatusAndDeletedAtIsNull(factoryId, status, pageable);
-        }
-        return invoiceRecordRepository.findByFactoryIdAndDeletedAtIsNull(factoryId, pageable);
+        return listInvoices(factoryId, status, null, pageable);
+    }
+
+    @Override
+    public Page<InvoiceRecord> listInvoices(String factoryId, InvoiceStatus status, InvoiceType invoiceType, Pageable pageable) {
+        return invoiceRecordRepository.searchInvoices(
+                factoryId,
+                status != null ? status.name() : null,
+                invoiceType != null ? invoiceType.name() : null,
+                pageable);
     }
 
     @Override

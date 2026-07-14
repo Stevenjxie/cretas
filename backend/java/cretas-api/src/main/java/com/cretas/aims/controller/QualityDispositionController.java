@@ -433,13 +433,14 @@ public class QualityDispositionController {
     @GetMapping("/pending")
     @Operation(summary = "获取待处置列表", description = "获取所有待处理的质检处置请求")
     public ApiResponse<List<PendingDispositionDTO>> getPendingDispositions(
-            @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId) {
+            @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
+            @RequestParam(required = false) @Parameter(description = "按处置动作筛选(RELEASE/CONDITIONAL_RELEASE/REWORK/SCRAP/SPECIAL_APPROVAL/HOLD)") String decisionMade) {
 
-        log.info("获取待处置列表 - factoryId={}", factoryId);
+        log.info("获取待处置列表 - factoryId={}, decisionMade={}", factoryId, decisionMade);
 
-        // 使用专门的查询方法获取质检待审批列表
+        // 使用专门的查询方法获取质检待审批列表 (可选按处置动作过滤, 新重载不影响其他调用方)
         List<DecisionAuditLog> pendingLogs = decisionAuditLogRepository
-                .findQualityPendingApprovals(factoryId);
+                .findQualityPendingApprovals(factoryId, decisionMade);
 
         // 优化：批量查询质检记录避免 N+1 问题
         Set<String> entityIds = pendingLogs.stream()

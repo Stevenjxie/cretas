@@ -11,9 +11,11 @@ import {
   voidVoucher,
   VOUCHER_STATUS_LABEL,
   VOUCHER_TYPE_LABEL,
+  SOURCE_BUSINESS_TYPE_LABEL,
   type Voucher,
   type VoucherStatus,
   type VoucherType,
+  type SourceBusinessType,
   type VoucherBatchPostResponse,
 } from '@/api/voucher';
 import { formatAmount } from '@/utils/tableFormatters';
@@ -32,6 +34,7 @@ const pagination = ref({ page: 1, size: 20, total: 0 });
 
 const filterStatus = ref<VoucherStatus | ''>('');
 const filterType = ref<VoucherType | ''>('');
+const filterSourceBusinessType = ref<SourceBusinessType | ''>('');
 const filterVoucherNumber = ref('');
 
 const voidDialogVisible = ref(false);
@@ -68,6 +71,7 @@ async function loadData() {
     const result = await listVouchers(factoryId.value, {
       status: filterStatus.value || undefined,
       type: filterType.value || undefined,
+      sourceBusinessType: filterSourceBusinessType.value || undefined,
       page: pagination.value.page,
       size: pagination.value.size,
     });
@@ -104,6 +108,7 @@ function handleSearch() {
 function handleReset() {
   filterStatus.value = '';
   filterType.value = '';
+  filterSourceBusinessType.value = '';
   filterVoucherNumber.value = '';
   handleSearch();
 }
@@ -242,7 +247,7 @@ onMounted(() => loadData());
       <template #header>
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
           <span style="font-size:16px;font-weight:600">凭证列表</span>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <div class="filter-bar" style="margin-bottom:0">
             <el-input
               v-model="filterVoucherNumber"
               placeholder="搜索凭证字号 / 来源单号"
@@ -273,6 +278,20 @@ onMounted(() => loadData());
             >
               <el-option
                 v-for="(label, k) in VOUCHER_TYPE_LABEL"
+                :key="k"
+                :label="label"
+                :value="k"
+              />
+            </el-select>
+            <el-select
+              v-model="filterSourceBusinessType"
+              placeholder="全部来源业务"
+              clearable
+              style="width:140px"
+              @change="handleSearch"
+            >
+              <el-option
+                v-for="(label, k) in SOURCE_BUSINESS_TYPE_LABEL"
                 :key="k"
                 :label="label"
                 :value="k"
@@ -471,3 +490,7 @@ onMounted(() => loadData());
     </el-dialog>
   </div>
 </template>
+
+<style scoped>
+.filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+</style>

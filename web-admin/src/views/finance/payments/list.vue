@@ -31,6 +31,10 @@ const tableData = ref<TableRow[]>([]);
 // making 收款确认 (verify) impossible → SO stuck UNPAID.
 const pagination = ref({ page: 0, size: 20, total: 0 });
 const statusFilter = ref('');
+// 2026-07-14: paymentMethod 动态筛选下拉 (mirror system/logs/index.vue filter-bar 模式).
+// PaymentMethod 是后端固定业务枚举 (entity/enums/PaymentMethod.java), 数据无上限故不做
+// "从数据里动态派生选项", 直接硬编码 (复用下方已有 methodMap 作为下拉选项来源).
+const paymentMethodFilter = ref('');
 
 const statusMap: Record<string, { text: string; type: string }> = {
   PENDING: { text: '待确认', type: 'warning' },
@@ -81,6 +85,7 @@ async function loadData() {
   try {
     const params: TableRow = { page: pagination.value.page, size: pagination.value.size };
     if (statusFilter.value) params.status = statusFilter.value;
+    if (paymentMethodFilter.value) params.paymentMethod = paymentMethodFilter.value;
     const res = await get(`/${factoryId.value}/finance/payments`, { params });
     if (res.success) {
       let rows = res.data.content || [];
@@ -108,7 +113,15 @@ async function loadData() {
 // Apr 20 Bug BR-12 fix: keyword state
 const searchKeyword = ref('');
 function handleSearch() { pagination.value.page = 0; loadData(); }
-function handleReset() { searchKeyword.value = ''; statusFilter.value = ''; handleSearch(); }
+function handleReset() {
+  searchKeyword.value = '';
+  statusFilter.value = '';
+  paymentMethodFilter.value = '';
+  handleSearch();
+}
+// 筛选下拉变化: 重置回第一页再加载 (原 statusFilter @change="loadData" 漏了 page 重置,
+// 一并修正; mirror system/logs/index.vue filter-bar 规范: 换筛选条件必回第一页).
+function handleFilterChange() { pagination.value.page = 0; loadData(); }
 
 async function handleVerify(id: string) {
   try {
@@ -211,18 +224,23 @@ async function handleRecordSubmit() {
       <template #header>
         <div style="display:flex;justify-content:space-between;align-items:center">
           <span style="font-size:16px;font-weight:600">收款管理</span>
-          <div style="display:flex;gap:8px">
-            <!-- Apr 20 Bug BR-12 fix: 加 keyword 搜索 (客户 / 收款单号 / 发票号) -->
-            <el-input v-model="searchKeyword" placeholder="搜索 客户/收款单号/发票号" clearable style="width:220px" @keyup.enter="handleSearch" />
-            <el-select v-model="statusFilter" placeholder="全部状态" clearable style="width:140px" @change="loadData">
-              <el-option v-for="(v,k) in statusMap" :key="k" :label="v.text" :value="k" />
-            </el-select>
-            <el-button type="primary" @click="handleSearch">搜索</el-button>
-            <el-button @click="handleReset">重置</el-button>
-            <el-button v-if="canWrite && canViewPrice" type="primary" @click="openRecordDialog">录入收款</el-button>
-          </div>
+          <el-button v-if="canWrite && canViewPrice" type="primary" @click="openRecordDialog">录入收款</el-button>
         </div>
       </template>
+
+      <!-- 2026-07-14: filter-bar (mirror system/logs/index.vue) — 状态 + 支付方式 动态筛选下拉. -->
+      <div class="filter-bar">
+        <!-- Apr 20 Bug BR-12 fix: 加 keyword 搜索 (客户 / 收款单号 / 发票号) -->
+        <el-input v-model="searchKeyword" placeholder="搜索 客户/收款单号/发票号" clearable style="width:220px" @keyup.enter="handleSearch" />
+        <el-select v-model="statusFilter" placeholder="全部状态" clearable style="width:140px" @change="handleFilterChange">
+          <el-option v-for="(v,k) in statusMap" :key="k" :label="v.text" :value="k" />
+        </el-select>
+        <el-select v-model="paymentMethodFilter" placeholder="全部支付方式" clearable style="width:140px" @change="handleFilterChange">
+          <el-option v-for="(v,k) in methodMap" :key="k" :label="v" :value="k" />
+        </el-select>
+        <el-button type="primary" @click="handleSearch">搜索</el-button>
+        <el-button @click="handleReset">重置</el-button>
+      </div>
 
       <el-table :data="tableData" border stripe>
         <el-table-column prop="paymentNumber" label="收款编号" width="180" />
@@ -393,4 +411,6 @@ async function handleRecordSubmit() {
 :deep(.over-limit-input .el-input__wrapper) {
   box-shadow: 0 0 0 1px #f56c6c inset;
 }
+/* 2026-07-14: filter-bar (mirror system/logs/index.vue) */
+.filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
 </style>

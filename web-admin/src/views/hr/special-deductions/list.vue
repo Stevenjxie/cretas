@@ -58,6 +58,17 @@ const filterUserId = ref<number | null>(null);
 const filterStatus = ref<DeductionStatus | ''>('');
 const filterType = ref<DeductionType | ''>('');
 
+// 2026-07-14 web-admin filter audit (对齐 leave-requests/list.vue 已完成的 filter-bar 模式):
+// 重置按钮显式重置 page + reload (watch([filterUserId, filterStatus, filterType]) 通常也会
+// 触发同一逻辑, 但若 filter 已处于默认值则 watch 不会 fire, 这里显式调用保底).
+function handleFilterReset() {
+  filterUserId.value = null;
+  filterStatus.value = '';
+  filterType.value = '';
+  pagination.value.page = 1;
+  loadList();
+}
+
 // ============= dialog: create / edit =============
 const dialogVisible = ref(false);
 const dialogMode = ref<'create' | 'edit'>('create');
@@ -313,8 +324,8 @@ async function handleDelete(row: SalarySpecialDeduction) {
         </div>
       </div>
 
-      <!-- 列表 filter -->
-      <el-form inline style="margin-bottom: 12px;">
+      <!-- 列表 filter (R3 防呆: 类型/状态复用已有固定业务枚举 dropdown, 不自由文本) -->
+      <el-form inline class="filter-bar" style="margin-bottom: 12px;">
         <el-form-item label="员工 userId">
           <el-input-number
             v-model="filterUserId"
@@ -342,10 +353,16 @@ async function handleDelete(row: SalarySpecialDeduction) {
         </el-form-item>
         <el-form-item label="状态">
           <el-select v-model="filterStatus" placeholder="全部" clearable style="width: 140px;">
-            <el-option label="生效中" value="ACTIVE" />
-            <el-option label="已过期" value="EXPIRED" />
-            <el-option label="已撤销" value="CANCELLED" />
+            <el-option
+              v-for="(label, value) in STATUS_LABEL"
+              :key="value"
+              :label="label"
+              :value="value"
+            />
           </el-select>
+        </el-form-item>
+        <el-form-item>
+          <el-button :icon="Refresh" @click="handleFilterReset">重置</el-button>
         </el-form-item>
       </el-form>
 
@@ -561,5 +578,11 @@ async function handleDelete(row: SalarySpecialDeduction) {
 <style scoped>
 .special-deductions-page {
   min-height: 100%;
+}
+.filter-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
 }
 </style>

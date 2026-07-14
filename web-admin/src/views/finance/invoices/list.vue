@@ -42,6 +42,7 @@ const tableData = ref<TableRow[]>([]);
 // whenever total<=size (pagination control hidden → unreachable).
 const pagination = ref({ page: 0, size: 20, total: 0 });
 const statusFilter = ref('');
+const invoiceTypeFilter = ref('');
 
 const statusMap: Record<string, { text: string; type: string }> = {
   REQUESTED: { text: '待审核', type: 'warning' },
@@ -49,6 +50,17 @@ const statusMap: Record<string, { text: string; type: string }> = {
   ISSUED: { text: '已开具', type: 'success' },
   REJECTED: { text: '已驳回', type: 'danger' },
   CANCELLED: { text: '已取消', type: 'info' },
+};
+
+// 发票类型是固定业务枚举 (backend InvoiceType.java), 与 status 同款硬编码下拉,
+// 不做动态派生 (invoice_records 无上限增长, 不能全量拉取再取值).
+const typeMap: Record<string, string> = {
+  NORMAL: '普通发票',
+  SPECIAL: '增值税专票',
+  DIGITAL: '数电票',
+  RECEIPT: '收据',
+  NONE: '不开票',
+  OTHER: '其他',
 };
 
 onMounted(() => {
@@ -65,6 +77,7 @@ async function loadData() {
   try {
     const params: TableRow = { page: pagination.value.page, size: pagination.value.size };
     if (statusFilter.value) params.status = statusFilter.value;
+    if (invoiceTypeFilter.value) params.invoiceType = invoiceTypeFilter.value;
     const res = await get(`/${factoryId.value}/finance/invoices`, { params });
     if (res.success) {
       let rows = res.data.content || [];
@@ -88,7 +101,14 @@ async function loadData() {
 // Apr 20 Bug BR-11 fix: keyword state
 const searchKeyword = ref('');
 function handleSearch() { pagination.value.page = 0; loadData(); }
-function handleReset() { searchKeyword.value = ''; statusFilter.value = ''; handleSearch(); }
+function handleReset() {
+  searchKeyword.value = '';
+  statusFilter.value = '';
+  invoiceTypeFilter.value = '';
+  handleSearch();
+}
+// 筛选下拉 change 时同 handleSearch 一样把 page 归零 (system/logs/index.vue 同款 filter-bar 模式)
+function handleFilterChange() { pagination.value.page = 0; loadData(); }
 
 // Apr 21 2026: load invoiceable sales orders so FE can offer a dropdown
 // instead of asking users to hand-copy 订单号 like SO-20260420-0001.
@@ -321,11 +341,14 @@ async function handleRequestSubmit() {
       <template #header>
         <div style="display:flex;justify-content:space-between;align-items:center">
           <span style="font-size:16px;font-weight:600">开票管理</span>
-          <div style="display:flex;gap:8px">
+          <div class="filter-bar">
             <!-- Apr 20 Bug BR-11 fix: 加 keyword 搜索 (客户 / 发票号 / 订单号) -->
             <el-input v-model="searchKeyword" placeholder="搜索 客户/发票号/订单号" clearable style="width:220px" @keyup.enter="handleSearch" />
-            <el-select v-model="statusFilter" placeholder="全部状态" clearable style="width:140px" @change="loadData">
+            <el-select v-model="statusFilter" placeholder="全部状态" clearable style="width:140px" @change="handleFilterChange">
               <el-option v-for="(v,k) in statusMap" :key="k" :label="v.text" :value="k" />
+            </el-select>
+            <el-select v-model="invoiceTypeFilter" placeholder="全部类型" clearable style="width:140px" @change="handleFilterChange">
+              <el-option v-for="(label,k) in typeMap" :key="k" :label="label" :value="k" />
             </el-select>
             <el-button type="primary" @click="handleSearch">搜索</el-button>
             <el-button @click="handleReset">重置</el-button>
@@ -341,7 +364,7 @@ async function handleRequestSubmit() {
           <template #default="{ row }">{{ formatAmount(row.totalAmount) }}</template>
         </el-table-column>
         <el-table-column prop="invoiceType" label="类型" width="90" align="center">
-          <template #default="{ row }">{{ row.invoiceType === 'SPECIAL' ? '专票' : '普票' }}</template>
+          <template #default="{ row }">{{ typeMap[row.invoiceType as string] || row.invoiceType || '-' }}</template>
         </el-table-column>
         <el-table-column prop="status" label="状态" width="100" align="center">
           <template #default="{ row }">
@@ -560,6 +583,7 @@ async function handleRequestSubmit() {
 </template>
 
 <style scoped>
+.filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
 /* fool-proof-design Rule 1: 开票超限提示 (与 sales/orders/detail.vue 收款对话框同款,
    不用 el-input-number :max 静默 clamp — 显式红框 + 红字 + 禁用提交). */
 .over-limit-hint {

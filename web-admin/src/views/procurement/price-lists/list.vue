@@ -15,7 +15,7 @@ const canWrite = computed(() => permissionStore.canWrite('procurement'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 
 const loading = ref(false);
-const tableData = ref<TableRow[]>([]);
+const allData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 10, total: 0 });
 const dialogVisible = ref(false);
 const searchKeyword = ref('');
@@ -25,6 +25,45 @@ const priceTypeMap: Record<string, string> = {
   SELLING_PRICE: '销售价',
   TRANSFER_PRICE: '调拨价',
 };
+
+// 筛选 (实时按当前数据里实际存在的 类型/状态 生成选项, 非固定枚举; 目录条目有限, 客户端筛选/分页)
+const filterPriceType = ref('');
+const filterActive = ref<'' | 'ACTIVE' | 'INACTIVE'>('');
+
+const priceTypeOptions = computed(() => {
+  const set = new Set(allData.value.map(r => r.priceType).filter((v): v is string => !!v));
+  return Array.from(set).sort();
+});
+const activeOptions = computed(() => {
+  const opts: Array<{ value: 'ACTIVE' | 'INACTIVE'; label: string }> = [];
+  const hasActive = allData.value.some(r => r.isActive);
+  const hasInactive = allData.value.some(r => !r.isActive);
+  if (hasActive) opts.push({ value: 'ACTIVE', label: '生效中' });
+  if (hasInactive) opts.push({ value: 'INACTIVE', label: '未生效' });
+  return opts;
+});
+
+const filteredData = computed(() => allData.value.filter(row => {
+  if (filterPriceType.value && row.priceType !== filterPriceType.value) return false;
+  if (filterActive.value === 'ACTIVE' && !row.isActive) return false;
+  if (filterActive.value === 'INACTIVE' && row.isActive) return false;
+  return true;
+}));
+
+const tableData = computed(() => {
+  const start = (pagination.value.page - 1) * pagination.value.size;
+  return filteredData.value.slice(start, start + pagination.value.size);
+});
+
+function handleFilterChange() {
+  pagination.value.page = 1;
+}
+
+function handleFilterReset() {
+  filterPriceType.value = '';
+  filterActive.value = '';
+  pagination.value.page = 1;
+}
 
 const form = ref({
   name: '',
@@ -40,13 +79,15 @@ async function loadData() {
   if (!factoryId.value) return;
   loading.value = true;
   try {
-    const params: TableRow = { page: pagination.value.page, size: pagination.value.size };
+    // 全量拉取 (价格表目录条目数有限, 非高基数表) 供筛选下拉的"当前有的"选项 + 客户端筛选/分页用。
+    const params: TableRow = { page: 1, size: 500 };
     const kw = searchKeyword.value.trim();
     if (kw) params.keyword = kw;
     const res = await get(`/${factoryId.value}/price-lists`, { params });
     if (res.success && res.data) {
-      tableData.value = res.data.content || [];
+      allData.value = res.data.content || [];
       pagination.value.total = res.data.totalElements || 0;
+      pagination.value.page = 1;
     } else if (res.success === false) {
       ElMessage.error(res.message || '加载价格表失败');
     }
@@ -89,8 +130,8 @@ async function handleDelete(id: string) {
   } catch (error) { /* axios interceptor handles API errors; cancel from MessageBox is silent */ }
 }
 
-function handlePageChange(page: number) { pagination.value.page = page; loadData(); }
-function handleSizeChange(size: number) { pagination.value.size = size; pagination.value.page = 1; loadData(); }
+function handlePageChange(page: number) { pagination.value.page = page; }
+function handleSizeChange(size: number) { pagination.value.size = size; pagination.value.page = 1; }
 function handleSearch() { pagination.value.page = 1; loadData(); }
 function handleSearchClear() { searchKeyword.value = ''; handleSearch(); }
 </script>
@@ -121,6 +162,29 @@ function handleSearchClear() { searchKeyword.value = ''; handleSearch(); }
       </template>
 
       <template v-if="canViewPrice">
+        <!-- 筛选: 按当前数据里实际存在的 类型/状态 生成选项, 非固定枚举 -->
+        <div class="filter-bar">
+          <el-select
+            v-model="filterPriceType"
+            placeholder="全部类型"
+            clearable
+            style="width: 140px"
+            @change="handleFilterChange"
+          >
+            <el-option v-for="pt in priceTypeOptions" :key="pt" :label="priceTypeMap[pt] || pt" :value="pt" />
+          </el-select>
+          <el-select
+            v-model="filterActive"
+            placeholder="全部状态"
+            clearable
+            style="width: 140px"
+            @change="handleFilterChange"
+          >
+            <el-option v-for="opt in activeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+          </el-select>
+          <el-button :icon="Refresh" @click="handleFilterReset">重置</el-button>
+        </div>
+
         <el-table :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border row-key="id" style="width: 100%">
           <el-table-column type="expand">
             <template #default="{ row }">
@@ -163,7 +227,7 @@ function handleSearchClear() { searchKeyword.value = ''; handleSearch(); }
 
         <div class="pagination-wrapper">
           <el-pagination v-model:current-page="pagination.page" v-model:page-size="pagination.size"
-            :page-sizes="[10, 20, 50]" :total="pagination.total"
+            :page-sizes="[10, 20, 50]" :total="filteredData.length"
             layout="total, sizes, prev, pager, next, jumper"
             @current-change="handlePageChange" @size-change="handleSizeChange" />
         </div>
@@ -223,6 +287,7 @@ function handleSearchClear() { searchKeyword.value = ''; handleSearch(); }
   }
 }
 .pagination-wrapper { display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #ebeef5; margin-top: 16px; }
+.filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
 .item-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
 .item-header { font-size: 13px; color: #606266; font-weight: 500; margin-bottom: 4px; }
 .req-star { color: #f56c6c; margin-right: 2px; }

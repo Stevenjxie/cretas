@@ -2,10 +2,10 @@ package com.cretas.aims.controller.finance;
 
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.entity.enums.InvoiceStatus;
+import com.cretas.aims.entity.enums.InvoiceType;
 import com.cretas.aims.service.finance.InvoiceService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -128,11 +128,15 @@ public class InvoiceController {
     public ResponseEntity<?> list(
             @PathVariable String factoryId,
             @RequestParam(required = false) String status,
+            @RequestParam(required = false) String invoiceType,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         InvoiceStatus s = status != null ? InvoiceStatus.valueOf(status) : null;
-        var result = invoiceService.listInvoices(factoryId, s,
-                PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt")));
+        InvoiceType t = invoiceType != null ? InvoiceType.valueOf(invoiceType) : null;
+        // Native query (InvoiceRecordRepository.searchInvoices) hardcodes ORDER BY created_at DESC
+        // itself — matches SystemLogRepository.searchLogs pattern; don't also pass a Sort here
+        // (native query + Pageable Sort combo is untested and risks duplicate/invalid ORDER BY).
+        var result = invoiceService.listInvoices(factoryId, s, t, PageRequest.of(page, size));
         return ResponseEntity.ok(Map.of("success", true, "data", result));
     }
 

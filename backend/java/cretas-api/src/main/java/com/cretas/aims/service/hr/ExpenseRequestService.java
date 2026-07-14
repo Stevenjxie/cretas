@@ -46,6 +46,9 @@ public interface ExpenseRequestService {
 
     Page<ExpenseRequest> listAll(String factoryId, Pageable pageable);
 
+    /** HR: 全部, 按类目/状态过滤 (2026-07-14 web-admin filter audit, 均可空). */
+    Page<ExpenseRequest> listAll(String factoryId, ExpenseCategory category, HrRequestStatus status, Pageable pageable);
+
     /** 工厂月度: category → 总金额 (APPROVED + PAID). */
     Map<ExpenseCategory, BigDecimal> summarizeMonth(String factoryId, String yearMonth);
 }

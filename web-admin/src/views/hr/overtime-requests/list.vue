@@ -52,6 +52,22 @@ const pagination = ref({ page: 1, size: 10, total: 0 });
 const summaryData = ref<Record<string, number>>({});
 const summaryYearMonth = ref<string>(currentYearMonth());
 
+// 筛选 (仅"全部"tab 支持, 后端 /hr/overtime-requests 已加 overtimeType/compensationType/status 可选参数)
+const filterOvertimeType = ref('');
+const filterCompensationType = ref('');
+const filterStatus = ref('');
+function handleFilterChange() {
+  pagination.value.page = 1;
+  loadData();
+}
+function handleFilterReset() {
+  filterOvertimeType.value = '';
+  filterCompensationType.value = '';
+  filterStatus.value = '';
+  pagination.value.page = 1;
+  loadData();
+}
+
 // Create dialog
 const createDialogVisible = ref(false);
 const createSubmitting = ref(false);
@@ -110,7 +126,17 @@ async function loadData() {
         ? `/${factoryId.value}/hr/overtime-requests/pending`
         : `/${factoryId.value}/hr/overtime-requests`;
     const res = await get(endpoint, {
-      params: { page: pagination.value.page - 1, size: pagination.value.size }
+      params: {
+        page: pagination.value.page - 1,
+        size: pagination.value.size,
+        ...(activeTab.value === 'all'
+          ? {
+              overtimeType: filterOvertimeType.value || undefined,
+              compensationType: filterCompensationType.value || undefined,
+              status: filterStatus.value || undefined,
+            }
+          : {})
+      }
     });
     if (res.success && res.data) {
       const data = res.data as { content?: OvtRow[]; totalElements?: number };
@@ -286,6 +312,20 @@ async function cancelRow(row: OvtRow) {
       </div>
 
       <div v-else>
+        <!-- 筛选 (仅"全部"tab, 类型/补偿方式/状态均为固定业务枚举) -->
+        <div v-if="activeTab === 'all'" class="filter-bar">
+          <el-select v-model="filterOvertimeType" placeholder="全部类型" clearable style="width: 160px" @change="handleFilterChange">
+            <el-option v-for="t in OVT_TYPES" :key="t.value" :label="t.label" :value="t.value" />
+          </el-select>
+          <el-select v-model="filterCompensationType" placeholder="全部补偿方式" clearable style="width: 150px" @change="handleFilterChange">
+            <el-option v-for="(label, value) in COMP_LABEL" :key="value" :label="label" :value="value" />
+          </el-select>
+          <el-select v-model="filterStatus" placeholder="全部状态" clearable style="width: 130px" @change="handleFilterChange">
+            <el-option v-for="(label, value) in STATUS_LABEL" :key="value" :label="label" :value="value" />
+          </el-select>
+          <el-button :icon="Refresh" @click="handleFilterReset">重置</el-button>
+        </div>
+
         <el-table :data="tableData" v-loading="loading" stripe>
           <el-table-column prop="overtimeType" label="加班类型" width="120">
             <template #default="{ row }">{{ OVT_TYPE_LABEL[row.overtimeType] }}</template>
@@ -395,3 +435,7 @@ async function cancelRow(row: OvtRow) {
     </el-dialog>
   </div>
 </template>
+
+<style scoped>
+.filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+</style>

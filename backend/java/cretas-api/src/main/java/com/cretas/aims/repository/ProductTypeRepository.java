@@ -47,7 +47,7 @@ public interface ProductTypeRepository extends JpaRepository<ProductType, String
      * 字段顺序必须与 {@link com.cretas.aims.dto.producttype.ProductTypeOptionDTO} 构造器一致。
      */
     @Query("SELECT new com.cretas.aims.dto.producttype.ProductTypeOptionDTO(" +
-           "p.id, p.code, p.name, p.unit, p.specification, p.productCategory, p.isActive) " +
+           "p.id, p.code, p.name, p.unit, p.specification, p.productCategory, p.isActive, p.temperatureZone) " +
            "FROM ProductType p WHERE p.factoryId = :factoryId ORDER BY p.createdAt DESC")
     List<com.cretas.aims.dto.producttype.ProductTypeOptionDTO> findOptionsByFactoryId(
             @Param("factoryId") String factoryId);
@@ -94,6 +94,26 @@ public interface ProductTypeRepository extends JpaRepository<ProductType, String
                                                           @Param("productCategory") String productCategory,
                                                           @Param("keyword") String keyword,
                                                           Pageable pageable);
+
+    /**
+     * 成品/SKU 管理页 单位/温区 筛选 (2026-07-14) — category/keyword/unit/temperatureZone 均可空。
+     * 每个参数用 CAST(:param AS string) IS NULL 做类型 hint (PostgreSQL 严格类型推断,
+     * 裸 ":param IS NULL" 在参数恒为 null 时无法推断 ? 占位符类型, 见 database-entity-sync.md)。
+     * 仅当 Service 层判定 unit/temperatureZone 至少一个非空时才调用本查询, 不影响上面 4 条老查询路径。
+     */
+    @Query("SELECT p FROM ProductType p WHERE p.factoryId = :factoryId " +
+           "AND (CAST(:productCategory AS string) IS NULL OR p.productCategory = :productCategory) " +
+           "AND (CAST(:keyword AS string) IS NULL OR " +
+           "     LOWER(p.name) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
+           "     LOWER(p.code) LIKE LOWER(CONCAT(:keyword, '%')) ESCAPE '\\') " +
+           "AND (CAST(:unit AS string) IS NULL OR p.unit = :unit) " +
+           "AND (CAST(:temperatureZone AS string) IS NULL OR p.temperatureZone = :temperatureZone)")
+    Page<ProductType> findByFiltersWithUnitAndTemperatureZone(@Param("factoryId") String factoryId,
+                                                              @Param("productCategory") String productCategory,
+                                                              @Param("keyword") String keyword,
+                                                              @Param("unit") String unit,
+                                                              @Param("temperatureZone") String temperatureZone,
+                                                              Pageable pageable);
      /**
      * 检查产品代码是否存在
       */

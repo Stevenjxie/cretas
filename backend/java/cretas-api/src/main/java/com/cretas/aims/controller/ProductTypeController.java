@@ -179,20 +179,22 @@ public class ProductTypeController {
      * 完全忽略前端传的 productCategory 参数, 4 个 tab 共享同一份数据.
      */
     @GetMapping
-    @Operation(summary = "获取产品类型列表", description = "分页获取产品类型列表, 支持按大类和关键词过滤")
+    @Operation(summary = "获取产品类型列表", description = "分页获取产品类型列表, 支持按大类/关键词/单位/温区过滤")
     public ApiResponse<PageResponse<ProductTypeDTO>> getProductTypes(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @RequestParam(required = false) @Parameter(description = "产品大类: FINISHED_PRODUCT/RAW_MATERIAL/PACKAGING/SEASONING/CUSTOMER_MATERIAL") String productCategory,
             @RequestParam(required = false) @Parameter(description = "关键词 (搜索 name/code)") String keyword,
+            @RequestParam(required = false) @Parameter(description = "单位精确过滤 (2026-07-14 成品/SKU 筛选)") String unit,
+            @RequestParam(required = false) @Parameter(description = "温区精确过滤 (2026-07-14 成品/SKU 筛选)") String temperatureZone,
             @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码必须大于0") @Parameter(description = "页码 (1-indexed)") Integer page,
             @RequestParam(defaultValue = "20") @Min(value = 1, message = "每页大小必须大于0") @Parameter(description = "每页大小") Integer size) {
-        log.info("获取产品类型列表: factoryId={}, productCategory={}, keyword={}, page={}, size={}",
-                factoryId, productCategory, keyword, page, size);
+        log.info("获取产品类型列表: factoryId={}, productCategory={}, keyword={}, unit={}, temperatureZone={}, page={}, size={}",
+                factoryId, productCategory, keyword, unit, temperatureZone, page, size);
         PageRequest pageRequest = new PageRequest();
         pageRequest.setPage(page);
         pageRequest.setSize(size);
         PageResponse<ProductTypeDTO> result = productTypeService.getProductTypes(
-                factoryId, productCategory, keyword, pageRequest);
+                factoryId, productCategory, keyword, unit, temperatureZone, pageRequest);
         return ApiResponse.success(result);
     }
 

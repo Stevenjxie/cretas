@@ -28,6 +28,7 @@ public class SystemLogController {
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(required = false) String logType,
             @RequestParam(required = false) String logLevel,
+            @RequestParam(required = false) String username,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) String startDate,
             @RequestParam(required = false) String endDate) {
@@ -37,9 +38,10 @@ public class SystemLogController {
         String kw = (keyword != null && !keyword.trim().isEmpty()) ? keyword.trim() : null;
         String lt = (logType != null && !logType.trim().isEmpty()) ? logType.trim() : null;
         String ll = (logLevel != null && !logLevel.trim().isEmpty()) ? logLevel.trim() : null;
+        String un = (username != null && !username.trim().isEmpty()) ? username.trim() : null;
 
         Page<SystemLog> result = systemLogRepository.searchLogs(
-                factoryId, lt, ll, kw, start, end,
+                factoryId, lt, ll, un, kw, start, end,
                 PageRequest.of(page, size));
 
         Map<String, Object> data = new LinkedHashMap<>();

@@ -18,7 +18,6 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -33,7 +32,7 @@ import java.util.Optional;
  * Voucher REST API. Sprint3-E F-VFLAG-1.
  *
  * Endpoints:
- *   GET  /                       - page query (filter: status, type)
+ *   GET  /                       - page query (filter: status, type, sourceBusinessType)
  *   GET  /{id}                   - detail
  *   GET  /by-business/{type}/{id} - lookup by source business (idempotent check from UI)
  *   POST /generate                - single generate (idempotent)
@@ -61,6 +60,7 @@ public class VoucherController {
             @PathVariable String factoryId,
             @RequestParam(value = "status", required = false) VoucherStatus status,
             @RequestParam(value = "type", required = false) VoucherType type,
+            @RequestParam(value = "sourceBusinessType", required = false) String sourceBusinessType,
             @RequestParam(value = "page", defaultValue = "1") int page,
             @RequestParam(value = "size", defaultValue = "20") int size) {
         // Issues #815/#816 fix (2026-05-17): unify on UI 1-idx convention to match
@@ -76,19 +76,16 @@ public class VoucherController {
             return ResponseEntity.badRequest().body(
                     Map.of("success", false, "message", "每页大小必须大于0", "code", "INVALID_SIZE"));
         }
-        PageRequest pageable = PageRequest.of(page - 1, size, Sort.by(Sort.Direction.DESC, "voucherDate", "createdAt"));
-        Page<Voucher> result;
-        if (status != null && type != null) {
-            // 修复: status + type 同传时 type 不再被静默忽略
-            result = voucherRepo.findByFactoryIdAndStatusAndVoucherTypeAndDeletedAtIsNull(
-                    factoryId, status, type, pageable);
-        } else if (status != null) {
-            result = voucherRepo.findByFactoryIdAndStatusAndDeletedAtIsNull(factoryId, status, pageable);
-        } else if (type != null) {
-            result = voucherRepo.findByFactoryIdAndVoucherTypeAndDeletedAtIsNull(factoryId, type, pageable);
-        } else {
-            result = voucherRepo.findByFactoryIdAndDeletedAtIsNull(factoryId, pageable);
-        }
+        // Filter-bar 三维筛选 (status / type / sourceBusinessType) 通过一条 native query 处理任意子集组合
+        // (VoucherRepository#searchVouchers, CAST(:param AS text) IS NULL 模式, 与 SystemLogRepository.searchLogs
+        // 同一套 unbounded 财务台账筛选写法). ORDER BY 已内联在 native SQL 里, 这里传不带 Sort 的 Pageable。
+        String statusStr = status != null ? status.name() : null;
+        String typeStr = type != null ? type.name() : null;
+        String sourceBusinessTypeParam =
+                (sourceBusinessType != null && !sourceBusinessType.isBlank()) ? sourceBusinessType.trim() : null;
+        PageRequest pageable = PageRequest.of(page - 1, size);
+        Page<Voucher> result = voucherRepo.searchVouchers(
+                factoryId, statusStr, typeStr, sourceBusinessTypeParam, pageable);
         return ResponseEntity.ok(Map.of("success", true, "data", result));
     }
 

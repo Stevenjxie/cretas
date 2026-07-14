@@ -200,6 +200,13 @@ public class OvertimeRequestServiceImpl implements OvertimeRequestService {
 
     @Override
     @Transactional(readOnly = true)
+    public Page<OvertimeRequest> listAll(String factoryId, OvertimeType overtimeType,
+                                         CompensationType compensationType, HrRequestStatus status, Pageable pageable) {
+        return repository.findByFiltersAll(factoryId, overtimeType, compensationType, status, pageable);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public Map<CompensationType, BigDecimal> summarizeMonth(String factoryId, String yearMonth) {
         YearMonth ym = YearMonth.parse(yearMonth);
         LocalDateTime start = ym.atDay(1).atStartOfDay();

@@ -7,7 +7,6 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.finance.PaymentRecordService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -113,11 +112,16 @@ public class PaymentRecordController {
     public ResponseEntity<?> list(
             @PathVariable String factoryId,
             @RequestParam(required = false) String status,
+            // 2026-07-14: 加 paymentMethod 动态筛选下拉 (前端 web-admin/src/views/finance/payments/list.vue).
+            @RequestParam(required = false) String paymentMethod,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         PaymentRecordStatus s = status != null ? PaymentRecordStatus.valueOf(status) : null;
-        var result = paymentRecordService.listPayments(factoryId, s,
-                PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt")));
+        PaymentMethod m = paymentMethod != null ? PaymentMethod.valueOf(paymentMethod) : null;
+        // ORDER BY created_at DESC 已硬编码在 PaymentRecordRepository.searchPayments 原生查询里
+        // (mirror SystemLogRepository.searchLogs 模式) — 此处不再传 Sort, 否则 Spring Data 会
+        // 尝试对原生查询追加第二个 ORDER BY 造成 SQL 语法错误。
+        var result = paymentRecordService.listPayments(factoryId, s, m, PageRequest.of(page, size));
         return ResponseEntity.ok(Map.of("success", true, "data", result));
     }
 

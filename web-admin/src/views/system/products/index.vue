@@ -194,6 +194,43 @@ const pagination = ref({ page: 1, size: 10, total: 0 });
 const searchKeyword = ref('');
 const activeTab = ref<ProductCategory>('FINISHED_PRODUCT');
 
+// 筛选: 单位 / 温区 (实时按当前大类下实际存在的值生成选项, 非固定枚举)
+const filterUnit = ref('');
+const filterTemperatureZone = ref('');
+// 精简选项端点 (@Cacheable, 全量, 供筛选下拉动态取值用) — 与主列表分页查询独立, 避免重复拉重 DTO
+const filterOptionsSource = ref<Array<{ unit?: string | null; temperatureZone?: string | null; productCategory?: string | null }>>([]);
+
+async function loadFilterOptionsSource() {
+  if (!factoryId.value) return;
+  try {
+    const res = await get<{ content: Array<{ unit?: string | null; temperatureZone?: string | null; productCategory?: string | null }> }>(
+      `/${factoryId.value}/product-types/options`
+    );
+    if (res.success && res.data?.content) {
+      filterOptionsSource.value = res.data.content;
+    }
+  } catch { /* silent — 筛选选项加载失败不影响主列表 */ }
+}
+
+const unitFilterOptions = computed(() => {
+  const set = new Set(
+    filterOptionsSource.value
+      .filter(p => (p.productCategory || '') === activeTab.value)
+      .map(p => p.unit)
+      .filter((v): v is string => !!v)
+  );
+  return Array.from(set).sort();
+});
+const temperatureZoneFilterOptions = computed(() => {
+  const set = new Set(
+    filterOptionsSource.value
+      .filter(p => (p.productCategory || '') === activeTab.value)
+      .map(p => p.temperatureZone)
+      .filter((v): v is string => !!v)
+  );
+  return Array.from(set).sort();
+});
+
 // SKU组装
 const skuDialogVisible = ref(false);
 const skuLoading = ref(false);
@@ -707,6 +744,7 @@ onMounted(() => {
   loadData();
   loadCustomers();
   loadUnitDict(); // T137: 计量单位字典 (供一级/二级单位下拉)
+  loadFilterOptionsSource(); // 筛选下拉动态取值源
 });
 
 async function loadData() {
@@ -719,7 +757,9 @@ async function loadData() {
         page: pagination.value.page,
         size: pagination.value.size,
         keyword: searchKeyword.value || undefined,
-        productCategory: activeTab.value
+        productCategory: activeTab.value,
+        unit: filterUnit.value || undefined,
+        temperatureZone: filterTemperatureZone.value || undefined
       }
     });
     if (response.success && response.data) {
@@ -738,6 +778,10 @@ async function loadData() {
 
 function handleTabChange(tab: ProductCategory) {
   activeTab.value = tab;
+  // 大类切换后单位/温区候选集不同 (unitFilterOptions/temperatureZoneFilterOptions 按 activeTab 过滤),
+  // 旧选中值可能不在新大类里 → 清空, 避免筛选出"看似选中但其实不存在于当前 tab"的死值。
+  filterUnit.value = '';
+  filterTemperatureZone.value = '';
   pagination.value.page = 1;
   loadData();
 }
@@ -747,8 +791,15 @@ function handleSearch() {
   loadData();
 }
 
+function handleFilterChange() {
+  pagination.value.page = 1;
+  loadData();
+}
+
 function handleRefresh() {
   searchKeyword.value = '';
+  filterUnit.value = '';
+  filterTemperatureZone.value = '';
   pagination.value.page = 1;
   loadData();
 }
@@ -1297,6 +1348,24 @@ async function handleAiProductCreate() {
           style="width: 300px"
           @keyup.enter="handleSearch"
         />
+        <el-select
+          v-model="filterUnit"
+          placeholder="全部单位"
+          clearable
+          style="width: 120px"
+          @change="handleFilterChange"
+        >
+          <el-option v-for="u in unitFilterOptions" :key="u" :label="u" :value="u" />
+        </el-select>
+        <el-select
+          v-model="filterTemperatureZone"
+          placeholder="全部温区"
+          clearable
+          style="width: 120px"
+          @change="handleFilterChange"
+        >
+          <el-option v-for="tz in temperatureZoneFilterOptions" :key="tz" :label="tz" :value="tz" />
+        </el-select>
         <el-button type="primary" :icon="Search" @click="handleSearch">
           搜索
         </el-button>

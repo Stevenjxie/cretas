@@ -6,6 +6,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
@@ -22,6 +23,27 @@ public interface InvoiceRecordRepository extends JpaRepository<InvoiceRecord, St
             String factoryId, String customerId, Pageable pageable);
 
     Page<InvoiceRecord> findByFactoryIdAndStatusAndDeletedAtIsNull(String factoryId, InvoiceStatus status, Pageable pageable);
+
+    /**
+     * 发票列表筛选 — status + invoiceType 均可选 (前端下拉).
+     * invoice_records 是不设上限持续增长的财务台账, 与 SystemLogRepository.searchLogs 同款
+     * CAST(:param AS text) IS NULL 写法 (PG 严格类型推断下 untyped 占位符会报
+     * "could not determine data type of parameter", 见 database-entity-sync.md).
+     */
+    @Query(value = "SELECT * FROM invoice_records i WHERE i.factory_id = :factoryId " +
+            "AND i.deleted_at IS NULL " +
+            "AND (CAST(:status AS text) IS NULL OR i.status = CAST(:status AS text)) " +
+            "AND (CAST(:invoiceType AS text) IS NULL OR i.invoice_type = CAST(:invoiceType AS text)) " +
+            "ORDER BY i.created_at DESC",
+            countQuery = "SELECT COUNT(*) FROM invoice_records i WHERE i.factory_id = :factoryId " +
+            "AND i.deleted_at IS NULL " +
+            "AND (CAST(:status AS text) IS NULL OR i.status = CAST(:status AS text)) " +
+            "AND (CAST(:invoiceType AS text) IS NULL OR i.invoice_type = CAST(:invoiceType AS text))",
+            nativeQuery = true)
+    Page<InvoiceRecord> searchInvoices(@Param("factoryId") String factoryId,
+                                        @Param("status") String status,
+                                        @Param("invoiceType") String invoiceType,
+                                        Pageable pageable);
 
     List<InvoiceRecord> findBySalesOrderIdAndDeletedAtIsNull(String salesOrderId);
 

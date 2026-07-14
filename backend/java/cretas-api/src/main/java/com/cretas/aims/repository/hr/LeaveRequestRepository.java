@@ -30,6 +30,18 @@ public interface LeaveRequestRepository extends JpaRepository<LeaveRequest, Stri
     Page<LeaveRequest> findByFactoryId(String factoryId, Pageable pageable);
 
     /**
+     * 「全部」列表页 类型/状态 筛选 (2026-07-14, web-admin filter audit) — 两个参数均可空。
+     * CAST(:param AS string) IS NULL 类型 hint (PostgreSQL 严格类型推断, 见 database-entity-sync.md)。
+     */
+    @Query("SELECT r FROM LeaveRequest r WHERE r.factoryId = :factoryId " +
+           "AND (CAST(:leaveType AS string) IS NULL OR r.leaveType = :leaveType) " +
+           "AND (CAST(:status AS string) IS NULL OR r.status = :status)")
+    Page<LeaveRequest> findByFiltersAll(@Param("factoryId") String factoryId,
+                                        @Param("leaveType") LeaveType leaveType,
+                                        @Param("status") HrRequestStatus status,
+                                        Pageable pageable);
+
+    /**
      * R4 防呆: 同 user 同期间已有 DRAFT/SUBMITTED 申请 (避免重复提交).
      * 返回 list, 调用方取 first 显示 existingId.
      */

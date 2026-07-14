@@ -7,6 +7,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
@@ -25,6 +26,28 @@ public interface VoucherRepository extends JpaRepository<Voucher, String> {
     /** 同时按 status + type 过滤 (修复 status/type 同传时 type 被静默忽略). */
     Page<Voucher> findByFactoryIdAndStatusAndVoucherTypeAndDeletedAtIsNull(
             String factoryId, VoucherStatus status, VoucherType type, Pageable pageable);
+
+    /**
+     * 凭证列表动态筛选 (status / voucherType / sourceBusinessType 均可选, 任意子集组合).
+     * 凭证表是只增不减的财务台账 (unbounded), 与 SystemLogRepository.searchLogs 同一 CAST(:param AS text)
+     * IS NULL 模式 — 未传的参数条件恒真, 避免为每种筛选组合各写一个 derived-query 方法
+     * (原有 status/type 组合已经需要 4 个方法, 加一维 sourceBusinessType 会翻倍到 8 个)。
+     */
+    @Query(value = "SELECT * FROM vouchers v WHERE v.factory_id = :factoryId AND v.deleted_at IS NULL " +
+           "AND (CAST(:status AS text) IS NULL OR v.status = CAST(:status AS text)) " +
+           "AND (CAST(:voucherType AS text) IS NULL OR v.voucher_type = CAST(:voucherType AS text)) " +
+           "AND (CAST(:sourceBusinessType AS text) IS NULL OR v.source_business_type = CAST(:sourceBusinessType AS text)) " +
+           "ORDER BY v.voucher_date DESC, v.created_at DESC",
+           countQuery = "SELECT COUNT(*) FROM vouchers v WHERE v.factory_id = :factoryId AND v.deleted_at IS NULL " +
+           "AND (CAST(:status AS text) IS NULL OR v.status = CAST(:status AS text)) " +
+           "AND (CAST(:voucherType AS text) IS NULL OR v.voucher_type = CAST(:voucherType AS text)) " +
+           "AND (CAST(:sourceBusinessType AS text) IS NULL OR v.source_business_type = CAST(:sourceBusinessType AS text))",
+           nativeQuery = true)
+    Page<Voucher> searchVouchers(@Param("factoryId") String factoryId,
+                                  @Param("status") String status,
+                                  @Param("voucherType") String voucherType,
+                                  @Param("sourceBusinessType") String sourceBusinessType,
+                                  Pageable pageable);
 
     /** Factory-scoped lookup — enforces tenant isolation. */
     Optional<Voucher> findByIdAndFactoryIdAndDeletedAtIsNull(String id, String factoryId);

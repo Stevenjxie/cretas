@@ -206,6 +206,12 @@ public class LeaveRequestServiceImpl implements LeaveRequestService {
 
     @Override
     @Transactional(readOnly = true)
+    public Page<LeaveRequest> listAll(String factoryId, LeaveType leaveType, HrRequestStatus status, Pageable pageable) {
+        return repository.findByFiltersAll(factoryId, leaveType, status, pageable);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public Map<LeaveType, BigDecimal> summarizeMonth(String factoryId, String yearMonth) {
         YearMonth ym = YearMonth.parse(yearMonth);
         LocalDate start = ym.atDay(1);

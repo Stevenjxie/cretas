@@ -221,10 +221,19 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
 
     @Override
     public Page<PaymentRecord> listPayments(String factoryId, PaymentRecordStatus status, Pageable pageable) {
-        if (status != null) {
-            return paymentRecordRepository.findByFactoryIdAndStatusAndDeletedAtIsNull(factoryId, status, pageable);
-        }
-        return paymentRecordRepository.findByFactoryIdAndDeletedAtIsNull(factoryId, pageable);
+        return listPayments(factoryId, status, null, pageable);
+    }
+
+    // 2026-07-14: paymentMethod 筛选 overload (前端过滤下拉). CAST(:param AS text) IS NULL
+    // 原生查询模式 (searchPayments) 一条查询覆盖 无筛选/单筛选/双筛选 全组合。
+    @Override
+    public Page<PaymentRecord> listPayments(String factoryId, PaymentRecordStatus status,
+                                             PaymentMethod method, Pageable pageable) {
+        return paymentRecordRepository.searchPayments(
+                factoryId,
+                status != null ? status.name() : null,
+                method != null ? method.name() : null,
+                pageable);
     }
 
     @Override

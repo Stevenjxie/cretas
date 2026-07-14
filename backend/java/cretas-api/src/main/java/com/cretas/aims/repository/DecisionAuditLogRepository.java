@@ -89,6 +89,21 @@ public interface DecisionAuditLogRepository extends JpaRepository<DecisionAuditL
     List<DecisionAuditLog> findQualityPendingApprovals(@Param("factoryId") String factoryId);
 
     /**
+     * 查询质检特批待审批列表 (可选按处置动作过滤)
+     * 新增重载: 保留上面无过滤版本给既有调用方 (controller 默认路径 + SpecialApprovalServiceImpl),
+     * 本重载供 /quality-disposition/pending 列表页新增的"处置动作"筛选下拉使用。
+     * PG-safe: CAST(:decisionMade AS string) 让 Hibernate 在参数为 null 时也能推断类型 (database-entity-sync.md)。
+     */
+    @Query("SELECT d FROM DecisionAuditLog d WHERE d.factoryId = :factoryId " +
+           "AND d.entityType = 'QualityInspection' " +
+           "AND d.requiresApproval = true AND d.approvalStatus = 'PENDING' " +
+           "AND (CAST(:decisionMade AS string) IS NULL OR d.decisionMade = :decisionMade) " +
+           "ORDER BY d.createdAt DESC")
+    List<DecisionAuditLog> findQualityPendingApprovals(
+            @Param("factoryId") String factoryId,
+            @Param("decisionMade") String decisionMade);
+
+    /**
      * 查询我的特批申请
      */
     @Query("SELECT d FROM DecisionAuditLog d WHERE d.factoryId = :factoryId " +

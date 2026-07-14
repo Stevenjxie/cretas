@@ -224,11 +224,41 @@ async function submitDisposition() {
 const approvalLoading = ref(false);
 const approvalRows = ref<PendingDispositionDTO[]>([]);
 
+// 筛选: 处置动作 (decisionMade) 是固定业务枚举 (RELEASE/CONDITIONAL_RELEASE/REWORK/SCRAP/
+// SPECIAL_APPROVAL/HOLD), 复用已从后端加载的 actionOptions 元数据, 走服务端筛选(新 Repository
+// 重载, 见后端 DecisionAuditLogRepository#findQualityPendingApprovals(factoryId, decisionMade))。
+// 触发规则 (ruleConfigName) 是质检规则配置的自由文本名称 (可增删配置, 非固定枚举), 按当前已加载
+// 数据动态生成选项 + 前端本地过滤, 对齐 system/work-processes/index.vue 的 categoryOptions 模式。
+const filterDecisionMade = ref<DispositionActionCode | ''>('');
+const filterRuleConfigName = ref('');
+
+const ruleConfigNameOptions = computed(() => {
+  const set = new Set(approvalRows.value.map(r => r.ruleConfigName).filter((v): v is string => !!v));
+  return Array.from(set).sort();
+});
+
+const filteredApprovalRows = computed(() => approvalRows.value.filter(row => {
+  if (filterRuleConfigName.value && row.ruleConfigName !== filterRuleConfigName.value) return false;
+  return true;
+}));
+
+function handleApprovalFilterChange() {
+  loadPendingApprovals();
+}
+
+function handleApprovalFilterReset() {
+  filterDecisionMade.value = '';
+  filterRuleConfigName.value = '';
+  loadPendingApprovals();
+}
+
 async function loadPendingApprovals() {
   if (!factoryId.value) return;
   approvalLoading.value = true;
   try {
-    approvalRows.value = await getPendingDispositions(factoryId.value);
+    approvalRows.value = await getPendingDispositions(factoryId.value, {
+      decisionMade: filterDecisionMade.value || undefined,
+    });
   } catch (error) {
     console.error('加载待审批处置列表失败:', error);
   } finally {
@@ -366,8 +396,36 @@ onMounted(() => {
             待审批处置
             <el-badge v-if="approvalRows.length" :value="approvalRows.length" class="tab-badge" />
           </template>
+
+          <!-- 筛选: 处置动作(服务端) + 触发规则(按当前已加载数据动态生成, 前端本地过滤) -->
+          <div class="filter-bar">
+            <el-select
+              v-model="filterDecisionMade"
+              placeholder="全部处置动作"
+              clearable
+              style="width: 160px"
+              @change="handleApprovalFilterChange"
+            >
+              <el-option
+                v-for="opt in actionOptions"
+                :key="opt.actionCode"
+                :label="opt.actionName"
+                :value="opt.actionCode"
+              />
+            </el-select>
+            <el-select
+              v-model="filterRuleConfigName"
+              placeholder="全部触发规则"
+              clearable
+              style="width: 180px"
+            >
+              <el-option v-for="name in ruleConfigNameOptions" :key="name" :label="name" :value="name" />
+            </el-select>
+            <el-button :icon="Refresh" @click="handleApprovalFilterReset">重置</el-button>
+          </div>
+
           <el-table
-            :data="approvalRows"
+            :data="filteredApprovalRows"
             v-loading="approvalLoading"
             empty-text="暂无待审批的处置申请"
             stripe
@@ -581,6 +639,13 @@ onMounted(() => {
   :deep(.el-badge__content) {
     transform: translateY(-2px);
   }
+}
+
+.filter-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
 }
 
 .disposition-context {

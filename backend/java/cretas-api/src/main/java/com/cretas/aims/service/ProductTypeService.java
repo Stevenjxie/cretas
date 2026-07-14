@@ -48,6 +48,15 @@ public interface ProductTypeService {
                                                   String keyword, PageRequest pageRequest);
 
     /**
+     * 获取产品类型列表 — 额外支持按 单位 / 温区 过滤 (成品/SKU 管理页筛选, 2026-07-14)。
+     * unit / temperatureZone 均为可空精确匹配; 传入其一即走新的组合过滤查询, 否则退化为老逻辑
+     * (零行为变化, 见 {@link #getProductTypes(String, String, String, PageRequest)})。
+     */
+    PageResponse<ProductTypeDTO> getProductTypes(String factoryId, String productCategory,
+                                                  String keyword, String unit, String temperatureZone,
+                                                  PageRequest pageRequest);
+
+    /**
      * 获取产品类型「选项」精简列表 —— 仅 id/name/code/unit/specification/productCategory/isActive,
      * 供下拉选择器 / workflow SKU picker 使用。绕开重 DTO (47 字段 + 4 处 JSON 解析), 且 @Cacheable。
      */

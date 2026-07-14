@@ -36,6 +36,30 @@ const factoryId = computed(() => authStore.factoryId);
 const loading = ref(false);
 const tableData = ref<WipRow[]>([]);
 
+// 筛选: 产品类型 / 状态 (实时按当前数据里实际存在的值生成选项, 非固定枚举)
+const filterProductType = ref('');
+const filterStatus = ref('');
+
+const productTypeOptions = computed(() => {
+  const set = new Set(tableData.value.map(r => r.productTypeName || r.productTypeId).filter((v): v is string => !!v));
+  return Array.from(set).sort();
+});
+const statusOptions = computed(() => {
+  const set = new Set(tableData.value.map(r => r.status).filter((v): v is string => !!v));
+  return Array.from(set).map(v => ({ value: v, label: statusLabel(v) }));
+});
+
+const filteredData = computed(() => tableData.value.filter(row => {
+  if (filterProductType.value && (row.productTypeName || row.productTypeId) !== filterProductType.value) return false;
+  if (filterStatus.value && row.status !== filterStatus.value) return false;
+  return true;
+}));
+
+function handleFilterReset() {
+  filterProductType.value = '';
+  filterStatus.value = '';
+}
+
 onMounted(() => {
   loadData();
 });
@@ -91,8 +115,19 @@ function formatKg(val: number | null | undefined): string {
       </div>
     </div>
 
+    <!-- 筛选: 按当前数据里实际存在的 产品类型/状态 生成选项, 非固定枚举 -->
+    <div class="filter-bar">
+      <el-select v-model="filterProductType" placeholder="全部产品类型" clearable style="width: 180px">
+        <el-option v-for="pt in productTypeOptions" :key="pt" :label="pt" :value="pt" />
+      </el-select>
+      <el-select v-model="filterStatus" placeholder="全部状态" clearable style="width: 140px">
+        <el-option v-for="opt in statusOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+      </el-select>
+      <el-button :icon="Refresh" @click="handleFilterReset">重置</el-button>
+    </div>
+
     <el-table
-      :data="tableData"
+      :data="filteredData"
       v-loading="loading"
       border
       stripe
@@ -164,6 +199,9 @@ function formatKg(val: number | null | undefined): string {
     <div v-if="!loading && tableData.length === 0" class="empty-tip">
       暂无半成品库存记录
     </div>
+    <div v-else-if="!loading && filteredData.length === 0" class="empty-tip">
+      没有符合筛选条件的记录
+    </div>
   </div>
 </template>
 
@@ -182,6 +220,13 @@ function formatKg(val: number | null | undefined): string {
 .page-header h2 {
   margin: 0;
   font-size: 20px;
+}
+
+.filter-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
 }
 
 .mono {

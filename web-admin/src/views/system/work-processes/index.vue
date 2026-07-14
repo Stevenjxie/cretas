@@ -24,9 +24,59 @@ const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('system'));
 
 const loading = ref(false);
-const tableData = ref<WorkProcessItem[]>([]);
+const allData = ref<WorkProcessItem[]>([]);
 const pagination = ref({ page: 1, size: 20, total: 0 });
 const searchKeyword = ref('');
+
+// 筛选 (实时按当前数据里实际存在的 类别/单位/默认产出类型 生成选项, 非固定枚举)
+const filterCategory = ref('');
+const filterUnit = ref('');
+const filterOutputKind = ref<'' | 'SEMI' | 'FINISHED'>('');
+
+const categoryOptions = computed(() => {
+  const set = new Set(allData.value.map(r => r.processCategory).filter((v): v is string => !!v));
+  return Array.from(set).sort();
+});
+const unitOptions = computed(() => {
+  const set = new Set(allData.value.map(r => r.unit).filter((v): v is string => !!v));
+  return Array.from(set).sort();
+});
+// 产出类型本质二元 (半成品/成品), 但仍按"当前数据里实际存在哪种"决定要不要显示该选项
+const outputKindOptions = computed(() => {
+  const opts: Array<{ value: 'SEMI' | 'FINISHED'; label: string }> = [];
+  const hasSemi = allData.value.some(r => usesSemiFinishedCode(normalizeOutputMaterialKind(r.defaultOutputMaterialKind)));
+  const hasFinished = allData.value.some(r => !usesSemiFinishedCode(normalizeOutputMaterialKind(r.defaultOutputMaterialKind)));
+  if (hasSemi) opts.push({ value: 'SEMI', label: '半成品' });
+  if (hasFinished) opts.push({ value: 'FINISHED', label: '成品' });
+  return opts;
+});
+
+const filteredData = computed(() => allData.value.filter(row => {
+  if (filterCategory.value && row.processCategory !== filterCategory.value) return false;
+  if (filterUnit.value && row.unit !== filterUnit.value) return false;
+  if (filterOutputKind.value) {
+    const isSemi = usesSemiFinishedCode(normalizeOutputMaterialKind(row.defaultOutputMaterialKind));
+    if (filterOutputKind.value === 'SEMI' && !isSemi) return false;
+    if (filterOutputKind.value === 'FINISHED' && isSemi) return false;
+  }
+  return true;
+}));
+
+const tableData = computed(() => {
+  const start = (pagination.value.page - 1) * pagination.value.size;
+  return filteredData.value.slice(start, start + pagination.value.size);
+});
+
+function handleFilterChange() {
+  pagination.value.page = 1;
+}
+
+function handleFilterReset() {
+  filterCategory.value = '';
+  filterUnit.value = '';
+  filterOutputKind.value = '';
+  pagination.value.page = 1;
+}
 
 // Dialog
 const dialogVisible = ref(false);
@@ -166,15 +216,16 @@ async function loadData() {
   if (!factoryId.value) return;
   loading.value = true;
   try {
+    // 全量拉取 (工序目录条目数有限, 非高基数表) 供筛选下拉的"当前有的"选项 + 客户端筛选/分页用。
     const response = await getWorkProcesses(factoryId.value, {
-      page: pagination.value.page,
-      size: pagination.value.size,
+      page: 1,
+      size: 1000,
       sortBy: 'sortOrder',
       sortDirection: 'ASC'
     });
     if (response.success && response.data) {
-      tableData.value = response.data.content || [];
-      pagination.value.total = response.data.totalElements || 0;
+      allData.value = response.data.content || [];
+      pagination.value.page = 1;
     }
   } catch (e) {
     // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
@@ -273,7 +324,6 @@ async function handleToggle(row: WorkProcessItem) {
 
 function handlePageChange(page: number) {
   pagination.value.page = page;
-  loadData();
 }
 
 function semiOutputCodeOf(row: WorkProcessItem): string | null {
@@ -376,6 +426,38 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
     </el-card>
 
     <el-card style="margin-top: 16px">
+      <!-- 筛选: 按当前数据里实际存在的 类别/单位/默认产出类型 生成选项, 非固定枚举 -->
+      <div class="filter-bar">
+        <el-select
+          v-model="filterCategory"
+          placeholder="全部类别"
+          clearable
+          style="width: 140px"
+          @change="handleFilterChange"
+        >
+          <el-option v-for="cat in categoryOptions" :key="cat" :label="cat" :value="cat" />
+        </el-select>
+        <el-select
+          v-model="filterUnit"
+          placeholder="全部单位"
+          clearable
+          style="width: 120px"
+          @change="handleFilterChange"
+        >
+          <el-option v-for="u in unitOptions" :key="u" :label="u" :value="u" />
+        </el-select>
+        <el-select
+          v-model="filterOutputKind"
+          placeholder="全部产出类型"
+          clearable
+          style="width: 140px"
+          @change="handleFilterChange"
+        >
+          <el-option v-for="opt in outputKindOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+        </el-select>
+        <el-button :icon="Refresh" @click="handleFilterReset">重置</el-button>
+      </div>
+
       <el-table :data="tableData" v-loading="loading" stripe>
         <el-table-column prop="processName" label="工序名称" min-width="120" />
         <el-table-column prop="processCategory" label="类别" width="100">
@@ -404,7 +486,6 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
             {{ row.estimatedMinutes ?? '-' }}
           </template>
         </el-table-column>
-        <el-table-column prop="sortOrder" label="排序" width="70" />
         <el-table-column prop="isActive" label="状态" width="80">
           <template #default="{ row }">
             <el-tag :type="row.isActive ? 'success' : 'info'" size="small">
@@ -424,11 +505,11 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
       </el-table>
 
       <el-pagination
-        v-if="pagination.total > 0"
+        v-if="filteredData.length > 0"
         style="margin-top: 16px; justify-content: flex-end"
         :current-page="pagination.page"
         :page-size="pagination.size"
-        :total="pagination.total"
+        :total="filteredData.length"
         layout="total, prev, pager, next"
         @current-change="handlePageChange"
       />
@@ -516,6 +597,7 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
 .toolbar { display: flex; justify-content: space-between; align-items: center; }
 .toolbar-left { display: flex; align-items: center; gap: 12px; }
 .toolbar-right { display: flex; gap: 8px; }
+.filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
 .text-muted { color: #909399; }
 .form-hint { font-size: 12px; color: #909399; margin-left: 4px; }
 /* C5: duplicate panel */

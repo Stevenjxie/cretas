@@ -30,6 +30,18 @@ public interface ExpenseRequestRepository extends JpaRepository<ExpenseRequest, 
 
     Page<ExpenseRequest> findByFactoryId(String factoryId, Pageable pageable);
 
+    /**
+     * 「全部」列表页 类目/状态 筛选 (2026-07-14, web-admin filter audit) — 两个参数均可空。
+     * CAST(:param AS string) IS NULL 类型 hint (PostgreSQL 严格类型推断, 见 database-entity-sync.md)。
+     */
+    @Query("SELECT r FROM ExpenseRequest r WHERE r.factoryId = :factoryId " +
+           "AND (CAST(:category AS string) IS NULL OR r.category = :category) " +
+           "AND (CAST(:status AS string) IS NULL OR r.status = :status)")
+    Page<ExpenseRequest> findByFiltersAll(@Param("factoryId") String factoryId,
+                                          @Param("category") ExpenseCategory category,
+                                          @Param("status") HrRequestStatus status,
+                                          Pageable pageable);
+
     Optional<ExpenseRequest> findByFactoryIdAndPaymentRecordId(
             String factoryId, String paymentRecordId);
 

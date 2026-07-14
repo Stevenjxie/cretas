@@ -53,6 +53,7 @@ public interface SystemLogRepository extends JpaRepository<SystemLog, Long> {
     @Query(value = "SELECT * FROM system_logs s WHERE s.factory_id = :factoryId " +
            "AND (CAST(:logType AS text) IS NULL OR s.log_type = CAST(:logType AS text)) " +
            "AND (CAST(:logLevel AS text) IS NULL OR s.log_level = CAST(:logLevel AS text)) " +
+           "AND (CAST(:username AS text) IS NULL OR s.username ILIKE '%' || CAST(:username AS text) || '%' ESCAPE '\\') " +
            "AND (CAST(:keyword AS text) IS NULL OR s.message LIKE '%' || CAST(:keyword AS text) || '%' ESCAPE '\\') " +
            "AND (CAST(:start AS timestamp) IS NULL OR s.created_at >= CAST(:start AS timestamp)) " +
            "AND (CAST(:end AS timestamp) IS NULL OR s.created_at <= CAST(:end AS timestamp)) " +
@@ -60,6 +61,7 @@ public interface SystemLogRepository extends JpaRepository<SystemLog, Long> {
            countQuery = "SELECT COUNT(*) FROM system_logs s WHERE s.factory_id = :factoryId " +
            "AND (CAST(:logType AS text) IS NULL OR s.log_type = CAST(:logType AS text)) " +
            "AND (CAST(:logLevel AS text) IS NULL OR s.log_level = CAST(:logLevel AS text)) " +
+           "AND (CAST(:username AS text) IS NULL OR s.username ILIKE '%' || CAST(:username AS text) || '%' ESCAPE '\\') " +
            "AND (CAST(:keyword AS text) IS NULL OR s.message LIKE '%' || CAST(:keyword AS text) || '%' ESCAPE '\\') " +
            "AND (CAST(:start AS timestamp) IS NULL OR s.created_at >= CAST(:start AS timestamp)) " +
            "AND (CAST(:end AS timestamp) IS NULL OR s.created_at <= CAST(:end AS timestamp))",
@@ -67,6 +69,7 @@ public interface SystemLogRepository extends JpaRepository<SystemLog, Long> {
     Page<SystemLog> searchLogs(@Param("factoryId") String factoryId,
                                @Param("logType") String logType,
                                @Param("logLevel") String logLevel,
+                               @Param("username") String username,
                                @Param("keyword") String keyword,
                                @Param("start") LocalDateTime start,
                                @Param("end") LocalDateTime end,

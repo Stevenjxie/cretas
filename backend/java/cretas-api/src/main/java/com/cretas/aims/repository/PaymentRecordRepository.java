@@ -6,6 +6,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
@@ -41,4 +42,26 @@ public interface PaymentRecordRepository extends JpaRepository<PaymentRecord, St
             + "AND p.deletedAt IS NULL AND p.createdAt >= ?4 ORDER BY p.createdAt DESC")
     List<PaymentRecord> findRecentDuplicatePayments(String factoryId, String salesOrderId,
             BigDecimal amount, java.time.LocalDateTime cutoff);
+
+    /**
+     * 收款列表 动态筛选 (status / paymentMethod 均可选).
+     *
+     * payment_records 是不断增长的财务台账 (无上限), 沿用 SystemLogRepository.searchLogs
+     * 同款 CAST(:param AS text) IS NULL 模式 — 单条原生 SQL 覆盖 "无筛选/单筛选/双筛选" 全组合,
+     * 避免为每种筛选组合各写一个 derived-query 方法。ORDER BY 已硬编码在查询里 (对齐旧
+     * PageRequest.of(page, size, Sort.by(DESC,"createdAt")) 行为), 调用方须传入 unsorted
+     * Pageable, 否则 Spring Data 会尝试对原生查询追加第二个 ORDER BY 导致 SQL 语法错误。
+     */
+    @Query(value = "SELECT * FROM payment_records p WHERE p.factory_id = :factoryId AND p.deleted_at IS NULL " +
+           "AND (CAST(:status AS text) IS NULL OR p.status = CAST(:status AS text)) " +
+           "AND (CAST(:paymentMethod AS text) IS NULL OR p.payment_method = CAST(:paymentMethod AS text)) " +
+           "ORDER BY p.created_at DESC",
+           countQuery = "SELECT COUNT(*) FROM payment_records p WHERE p.factory_id = :factoryId AND p.deleted_at IS NULL " +
+           "AND (CAST(:status AS text) IS NULL OR p.status = CAST(:status AS text)) " +
+           "AND (CAST(:paymentMethod AS text) IS NULL OR p.payment_method = CAST(:paymentMethod AS text))",
+           nativeQuery = true)
+    Page<PaymentRecord> searchPayments(@Param("factoryId") String factoryId,
+                                        @Param("status") String status,
+                                        @Param("paymentMethod") String paymentMethod,
+                                        Pageable pageable);
 }

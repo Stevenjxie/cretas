@@ -185,9 +185,14 @@ export async function executeDisposition(
   return res.data;
 }
 
-/** 获取待审批处置列表. */
-export async function getPendingDispositions(factoryId: string): Promise<PendingDispositionDTO[]> {
-  const res = await get<PendingDispositionDTO[]>(`${basePath(factoryId)}/pending`);
+/** 获取待审批处置列表 (可选按处置动作 decisionMade 筛选, 后端新重载不影响不传筛选的旧调用方). */
+export async function getPendingDispositions(
+  factoryId: string,
+  filters?: { decisionMade?: DispositionActionCode | string }
+): Promise<PendingDispositionDTO[]> {
+  const res = await get<PendingDispositionDTO[]>(`${basePath(factoryId)}/pending`, {
+    params: { decisionMade: filters?.decisionMade || undefined },
+  });
   return res.success && res.data ? res.data : [];
 }
 

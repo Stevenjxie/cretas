@@ -2,6 +2,7 @@ package com.cretas.aims.service.finance;
 
 import com.cretas.aims.entity.finance.InvoiceRecord;
 import com.cretas.aims.entity.enums.InvoiceStatus;
+import com.cretas.aims.entity.enums.InvoiceType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.web.multipart.MultipartFile;
@@ -42,6 +43,9 @@ public interface InvoiceService {
     InvoiceRecord issueInvoice(String factoryId, String invoiceId, MultipartFile pdfFile, Long issuedBy);
 
     Page<InvoiceRecord> listInvoices(String factoryId, InvoiceStatus status, Pageable pageable);
+
+    /** 发票列表页 — 同时按 status + invoiceType 筛选 (前端下拉, 两者均可选). */
+    Page<InvoiceRecord> listInvoices(String factoryId, InvoiceStatus status, InvoiceType invoiceType, Pageable pageable);
 
     InvoiceRecord getInvoice(String factoryId, String invoiceId);
 

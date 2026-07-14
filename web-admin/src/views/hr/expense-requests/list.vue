@@ -52,6 +52,20 @@ const activeTab = ref<'mine' | 'pending' | 'all' | 'summary'>('mine');
 const loading = ref(false);
 const tableData = ref<ExpenseRow[]>([]);
 const pagination = ref({ page: 1, size: 10, total: 0 });
+
+// 筛选 (仅"全部"tab 支持, 后端 /hr/expense-requests 已加 category/status 可选参数)
+const filterCategory = ref('');
+const filterStatus = ref('');
+function handleFilterChange() {
+  pagination.value.page = 1;
+  loadData();
+}
+function handleFilterReset() {
+  filterCategory.value = '';
+  filterStatus.value = '';
+  pagination.value.page = 1;
+  loadData();
+}
 const summaryData = ref<Record<string, number>>({});
 const summaryYearMonth = ref<string>(currentYearMonth());
 
@@ -100,7 +114,13 @@ async function loadData() {
         ? `/${factoryId.value}/hr/expense-requests/pending`
         : `/${factoryId.value}/hr/expense-requests`;
     const res = await get(endpoint, {
-      params: { page: pagination.value.page - 1, size: pagination.value.size }
+      params: {
+        page: pagination.value.page - 1,
+        size: pagination.value.size,
+        ...(activeTab.value === 'all'
+          ? { category: filterCategory.value || undefined, status: filterStatus.value || undefined }
+          : {})
+      }
     });
     if (res.success && res.data) {
       const data = res.data as { content?: ExpenseRow[]; totalElements?: number };
@@ -301,6 +321,17 @@ async function confirmMarkPaid() {
       </div>
 
       <div v-else>
+        <!-- 筛选 (仅"全部"tab, 类目/状态均为固定业务枚举) -->
+        <div v-if="activeTab === 'all'" class="filter-bar">
+          <el-select v-model="filterCategory" placeholder="全部类目" clearable style="width: 160px" @change="handleFilterChange">
+            <el-option v-for="c in CATEGORIES" :key="c.value" :label="c.label" :value="c.value" />
+          </el-select>
+          <el-select v-model="filterStatus" placeholder="全部状态" clearable style="width: 130px" @change="handleFilterChange">
+            <el-option v-for="(label, value) in STATUS_LABEL" :key="value" :label="label" :value="value" />
+          </el-select>
+          <el-button :icon="Refresh" @click="handleFilterReset">重置</el-button>
+        </div>
+
         <el-table :data="tableData" v-loading="loading" stripe>
           <el-table-column prop="category" label="类目" width="120">
             <template #default="{ row }">{{ CATEGORY_LABEL[row.category] || row.category }}</template>
@@ -419,3 +450,7 @@ async function confirmMarkPaid() {
     </el-dialog>
   </div>
 </template>
+
+<style scoped>
+.filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+</style>

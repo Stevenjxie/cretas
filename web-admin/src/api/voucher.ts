@@ -51,6 +51,21 @@ export interface VoucherEntry {
   auxiliaryEntityId?: string | null;
 }
 
+/**
+ * 凭证来源业务类型 — 固定枚举 (对齐后端各 VoucherGenerator.BUSINESS_TYPE 常量 +
+ * 期末结转两类: ProfitLossClosingServiceImpl/CostCarryoverServiceImpl). 凭证表是
+ * 只增不减的财务台账 (unbounded), 不能像小目录页那样全量拉取再动态取值, 按固定枚举给下拉选项。
+ */
+export type SourceBusinessType =
+  | 'SALES_ORDER'
+  | 'PURCHASE_ORDER'
+  | 'RETURN_ORDER'
+  | 'INTERNAL_TRANSFER'
+  | 'WASTAGE_RECORD'
+  | 'PAYROLL_RECORD'
+  | 'PL_CLOSING'
+  | 'COST_CARRYOVER';
+
 export interface Voucher {
   id: string;
   factoryId: string;
@@ -258,6 +273,17 @@ export const VOUCHER_TYPE_LABEL: Record<VoucherType, string> = {
   DEPRECATION: '折旧',
 };
 
+export const SOURCE_BUSINESS_TYPE_LABEL: Record<SourceBusinessType, string> = {
+  SALES_ORDER: '销售订单',
+  PURCHASE_ORDER: '采购订单',
+  RETURN_ORDER: '退货单',
+  INTERNAL_TRANSFER: '库存调拨',
+  WASTAGE_RECORD: '报废/损耗',
+  PAYROLL_RECORD: '工资发放',
+  PL_CLOSING: '损益结转',
+  COST_CARRYOVER: '成本结转',
+};
+
 export const AUXILIARY_TYPE_LABEL: Record<AuxiliaryType, string> = {
   CUSTOMER: '客户',
   SUPPLIER: '供应商',
@@ -289,6 +315,7 @@ export function isBalanced(entries: VoucherEntry[]): boolean {
 export interface VoucherListParams {
   status?: VoucherStatus;
   type?: VoucherType;
+  sourceBusinessType?: SourceBusinessType | string;
   page?: number;
   size?: number;
 }
@@ -308,6 +335,7 @@ export async function listVouchers(
   const query = new URLSearchParams();
   if (params.status) query.set('status', params.status);
   if (params.type) query.set('type', params.type);
+  if (params.sourceBusinessType) query.set('sourceBusinessType', params.sourceBusinessType);
   query.set('page', String(params.page ?? 1));
   query.set('size', String(params.size ?? 20));
   const res = await get<PagedResult<Voucher>>(

@@ -161,9 +161,11 @@ public class LeaveRequestController {
     @GetMapping
     @RequirePermission({"hr:read_write"})
     public ResponseEntity<?> all(@PathVariable String factoryId,
+                                 @RequestParam(required = false) LeaveType leaveType,
+                                 @RequestParam(required = false) HrRequestStatus status,
                                  @RequestParam(defaultValue = "0") int page,
                                  @RequestParam(defaultValue = "20") int size) {
-        Page<LeaveRequest> p = service.listAll(factoryId,
+        Page<LeaveRequest> p = service.listAll(factoryId, leaveType, status,
                 PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt")));
         return ResponseEntity.ok(Map.of("success", true, "data", p));
     }

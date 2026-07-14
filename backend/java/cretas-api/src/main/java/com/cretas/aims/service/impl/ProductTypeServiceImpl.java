@@ -378,8 +378,17 @@ public class ProductTypeServiceImpl implements ProductTypeService {
     @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public PageResponse<ProductTypeDTO> getProductTypes(String factoryId, String productCategory,
                                                          String keyword, PageRequest pageRequest) {
-        log.info("获取产品类型列表: factoryId={}, productCategory={}, keyword={}, page={}, size={}",
-                factoryId, productCategory, keyword, pageRequest.getPage(), pageRequest.getSize());
+        // 兼容老调用 — 不传 unit / temperatureZone (零行为变化, 走下方 else 分支老查询)
+        return getProductTypes(factoryId, productCategory, keyword, null, null, pageRequest);
+    }
+
+    @Override
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    public PageResponse<ProductTypeDTO> getProductTypes(String factoryId, String productCategory,
+                                                         String keyword, String unit, String temperatureZone,
+                                                         PageRequest pageRequest) {
+        log.info("获取产品类型列表: factoryId={}, productCategory={}, keyword={}, unit={}, temperatureZone={}, page={}, size={}",
+                factoryId, productCategory, keyword, unit, temperatureZone, pageRequest.getPage(), pageRequest.getSize());
 
         org.springframework.data.domain.PageRequest pageable = org.springframework.data.domain.PageRequest.of(
                 pageRequest.getPage() - 1,
@@ -390,10 +399,22 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         // V3 P0-2 修复 — 按 productCategory 真正隔离查询
         boolean hasCategory = productCategory != null && !productCategory.trim().isEmpty();
         boolean hasKeyword = keyword != null && !keyword.trim().isEmpty();
+        boolean hasUnit = unit != null && !unit.trim().isEmpty();
+        boolean hasTemperatureZone = temperatureZone != null && !temperatureZone.trim().isEmpty();
 
         String safeKeyword = hasKeyword ? com.cretas.aims.util.SqlLikeEscaper.escape(keyword) : keyword;
         Page<ProductType> page;
-        if (hasCategory && hasKeyword) {
+        if (hasUnit || hasTemperatureZone) {
+            // 成品/SKU 管理页 单位/温区 筛选 (2026-07-14) — 组合查询覆盖 category/keyword 均可空的场景,
+            // 不改动下方既有 4 条老查询路径的行为 (unit/temperatureZone 均为空时永远不走这条分支)。
+            page = productTypeRepository.findByFiltersWithUnitAndTemperatureZone(
+                    factoryId,
+                    hasCategory ? productCategory : null,
+                    hasKeyword ? safeKeyword : null,
+                    hasUnit ? unit : null,
+                    hasTemperatureZone ? temperatureZone : null,
+                    pageable);
+        } else if (hasCategory && hasKeyword) {
             page = productTypeRepository.searchByFactoryIdAndProductCategory(
                     factoryId, productCategory, safeKeyword, pageable);
         } else if (hasCategory) {

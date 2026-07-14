@@ -149,9 +149,12 @@ public class OvertimeRequestController {
     @GetMapping
     @RequirePermission({"hr:read_write"})
     public ResponseEntity<?> all(@PathVariable String factoryId,
+                                 @RequestParam(required = false) OvertimeType overtimeType,
+                                 @RequestParam(required = false) CompensationType compensationType,
+                                 @RequestParam(required = false) HrRequestStatus status,
                                  @RequestParam(defaultValue = "0") int page,
                                  @RequestParam(defaultValue = "20") int size) {
-        Page<OvertimeRequest> p = service.listAll(factoryId,
+        Page<OvertimeRequest> p = service.listAll(factoryId, overtimeType, compensationType, status,
                 PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt")));
         return ResponseEntity.ok(Map.of("success", true, "data", p));
     }

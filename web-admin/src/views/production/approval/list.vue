@@ -17,9 +17,50 @@ const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('production'));
 
 const loading = ref(false);
-const tableData = ref<ApprovalItem[]>([]);
-const pagination = ref({ page: 1, size: 20, total: 0 });
+const allData = ref<ApprovalItem[]>([]);
+const pagination = ref({ page: 1, size: 20 });
 const selectedIds = ref<number[]>([]);
+
+// 筛选: 报工模式/报工阶段/工序 (实时按当前待审批队列里实际存在的值生成选项, 非固定枚举)
+const filterReportMode = ref('');
+const filterReportKind = ref('');
+const filterProcessCategory = ref('');
+
+const reportModeOptions = computed(() => {
+  const set = new Set(allData.value.map(r => r.reportMode).filter((v): v is string => !!v));
+  return Array.from(set).map(v => ({ value: v, label: reportModeLabel(v) }));
+});
+const reportKindOptions = computed(() => {
+  const set = new Set(allData.value.map(r => r.reportKind).filter((v): v is string => !!v));
+  return Array.from(set).map(v => ({ value: v, label: reportKindLabel(v) }));
+});
+const processCategoryOptions = computed(() => {
+  const set = new Set(allData.value.map(r => r.processCategory).filter((v): v is string => !!v));
+  return Array.from(set).sort();
+});
+
+const filteredData = computed(() => allData.value.filter(row => {
+  if (filterReportMode.value && row.reportMode !== filterReportMode.value) return false;
+  if (filterReportKind.value && row.reportKind !== filterReportKind.value) return false;
+  if (filterProcessCategory.value && row.processCategory !== filterProcessCategory.value) return false;
+  return true;
+}));
+
+const tableData = computed(() => {
+  const start = (pagination.value.page - 1) * pagination.value.size;
+  return filteredData.value.slice(start, start + pagination.value.size);
+});
+
+function handleFilterChange() {
+  pagination.value.page = 1;
+}
+
+function handleFilterReset() {
+  filterReportMode.value = '';
+  filterReportKind.value = '';
+  filterProcessCategory.value = '';
+  pagination.value.page = 1;
+}
 
 // P2-6: Auto-refresh every 30 seconds
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
@@ -35,13 +76,13 @@ async function loadData() {
   if (!factoryId.value) return;
   loading.value = true;
   try {
+    // 全量拉取待审批队列 (审批后即离队, 队列体量天然有界) 供筛选下拉的"当前有的"选项 + 客户端筛选/分页用。
     const response = await getPendingApprovals(factoryId.value, {
-      page: pagination.value.page,
-      size: pagination.value.size
+      page: 1,
+      size: 500
     });
     if (response.success && response.data) {
-      tableData.value = (response.data.content || []) as ApprovalItem[];
-      pagination.value.total = response.data.totalElements || 0;
+      allData.value = (response.data.content || []) as ApprovalItem[];
     }
   } catch (e) {
     // UX polish (2026-05-20): interceptor toast already covers 4xx/5xx.
@@ -168,7 +209,6 @@ function handleSelectionChange(rows: ApprovalItem[]) {
 
 function handlePageChange(page: number) {
   pagination.value.page = page;
-  loadData();
 }
 
 function formatDate(dateStr: string | null) {
@@ -324,7 +364,7 @@ function evidenceImageIndex(urls: string[], url: string): number {
       <div class="toolbar">
         <div class="toolbar-left">
           <h2 style="margin: 0">报工审批</h2>
-          <el-tag type="warning">待审批 {{ pagination.total }}</el-tag>
+          <el-tag type="warning">待审批 {{ allData.length }}</el-tag>
         </div>
         <div class="toolbar-right">
           <el-button :icon="Refresh" @click="loadData" />
@@ -343,6 +383,20 @@ function evidenceImageIndex(urls: string[], url: string): number {
     </el-card>
 
     <el-card style="margin-top: 16px">
+      <!-- 筛选: 按当前待审批队列里实际存在的 报工模式/报工阶段/工序 生成选项, 非固定枚举 -->
+      <div class="filter-bar">
+        <el-select v-model="filterReportMode" placeholder="全部报工模式" clearable style="width: 140px" @change="handleFilterChange">
+          <el-option v-for="opt in reportModeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+        </el-select>
+        <el-select v-model="filterReportKind" placeholder="全部报工阶段" clearable style="width: 140px" @change="handleFilterChange">
+          <el-option v-for="opt in reportKindOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+        </el-select>
+        <el-select v-model="filterProcessCategory" placeholder="全部工序" clearable style="width: 140px" @change="handleFilterChange">
+          <el-option v-for="cat in processCategoryOptions" :key="cat" :label="cat" :value="cat" />
+        </el-select>
+        <el-button :icon="Refresh" @click="handleFilterReset">重置</el-button>
+      </div>
+
       <el-table
         :data="tableData"
         v-loading="loading"
@@ -514,11 +568,11 @@ function evidenceImageIndex(urls: string[], url: string): number {
       </el-table>
 
       <el-pagination
-        v-if="pagination.total > 0"
+        v-if="filteredData.length > 0"
         style="margin-top: 16px; justify-content: flex-end"
         :current-page="pagination.page"
         :page-size="pagination.size"
-        :total="pagination.total"
+        :total="filteredData.length"
         layout="total, prev, pager, next"
         @current-change="handlePageChange"
       />
@@ -597,6 +651,7 @@ function evidenceImageIndex(urls: string[], url: string): number {
 .toolbar { display: flex; justify-content: space-between; align-items: center; }
 .toolbar-left { display: flex; align-items: center; gap: 12px; }
 .toolbar-right { display: flex; gap: 8px; }
+.filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
 .text-warning { color: #e6a23c; font-weight: 600; }
 .report-detail {
   padding: 12px 24px 18px 24px;

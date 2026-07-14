@@ -15,9 +15,47 @@ const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('procurement'));
 
 const loading = ref(false);
-const tableData = ref<TableRow[]>([]);
+// 供应商为有界主数据(公司供应商列表不会像流水表一样无限增长), 采用一次性全量拉取 + 前端筛选/分页
+// (镜像 web-admin/src/views/system/work-processes/index.vue 的既有模式), 不加后端筛选参数。
+const allData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 10, total: 0 });
 const searchKeyword = ref('');
+
+// 筛选: 状态 (复用既有 isActive() 二元判定, 与下方 getStatusType/getStatusText 保持一致, 不重复定义新枚举)
+const filterStatus = ref<'' | 'ACTIVE' | 'INACTIVE'>('');
+const statusOptions = [
+  { value: 'ACTIVE' as const, label: '合作中' },
+  { value: 'INACTIVE' as const, label: '已停用' },
+];
+
+const filteredData = computed(() => allData.value.filter(row => {
+  if (filterStatus.value) {
+    const active = isActive(row);
+    if (filterStatus.value === 'ACTIVE' && !active) return false;
+    if (filterStatus.value === 'INACTIVE' && active) return false;
+  }
+  const kw = searchKeyword.value.trim().toLowerCase();
+  if (kw) {
+    const name = String(row.name || '').toLowerCase();
+    const code = String(row.supplierCode || '').toLowerCase();
+    if (!name.includes(kw) && !code.includes(kw)) return false;
+  }
+  return true;
+}));
+
+const tableData = computed(() => {
+  const start = (pagination.value.page - 1) * pagination.value.size;
+  return filteredData.value.slice(start, start + pagination.value.size);
+});
+
+function handleFilterChange() {
+  pagination.value.page = 1;
+}
+
+function handleFilterReset() {
+  filterStatus.value = '';
+  pagination.value.page = 1;
+}
 
 // Dialog state
 const dialogVisible = ref(false);
@@ -74,16 +112,16 @@ async function loadData() {
 
   loading.value = true;
   try {
+    // 全量拉取(供应商目录条目数有限, 非高基数流水表), 供筛选下拉的"当前有的"选项 + 前端筛选/分页用。
     const response = await get(`/${factoryId.value}/suppliers`, {
       params: {
-        page: pagination.value.page,
-        size: pagination.value.size,
-        keyword: searchKeyword.value || undefined
+        page: 1,
+        size: 500,
       }
     });
     if (response.success && response.data) {
-      tableData.value = response.data.content || [];
-      pagination.value.total = response.data.totalElements || 0;
+      allData.value = response.data.content || [];
+      pagination.value.page = 1;
     } else if (response.success === false) {
       ElMessage.error(response.message || '加载数据失败');
     }
@@ -97,24 +135,22 @@ async function loadData() {
 
 function handleSearch() {
   pagination.value.page = 1;
-  loadData();
 }
 
 function handleRefresh() {
   searchKeyword.value = '';
+  filterStatus.value = '';
   pagination.value.page = 1;
   loadData();
 }
 
 function handlePageChange(page: number) {
   pagination.value.page = page;
-  loadData();
 }
 
 function handleSizeChange(size: number) {
   pagination.value.size = size;
   pagination.value.page = 1;
-  loadData();
 }
 
 function isActive(row: TableRow) {
@@ -310,7 +346,7 @@ async function handleDelete(row: TableRow) {
         <div class="card-header">
           <div class="header-left">
             <span class="page-title">供应商管理</span>
-            <span class="data-count">共 {{ pagination.total }} 条记录</span>
+            <span class="data-count">共 {{ filteredData.length }} 条记录</span>
           </div>
           <div class="header-right">
             <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleCreate">
@@ -336,6 +372,20 @@ async function handleDelete(row: TableRow) {
         <el-button :icon="Refresh" @click="handleRefresh">
           重置
         </el-button>
+      </div>
+
+      <!-- 筛选: 状态 -->
+      <div class="filter-bar">
+        <el-select
+          v-model="filterStatus"
+          placeholder="全部状态"
+          clearable
+          style="width: 140px"
+          @change="handleFilterChange"
+        >
+          <el-option v-for="opt in statusOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+        </el-select>
+        <el-button :icon="Refresh" @click="handleFilterReset">重置筛选</el-button>
       </div>
 
       <!-- 数据表格 -->
@@ -377,7 +427,7 @@ async function handleDelete(row: TableRow) {
           v-model:current-page="pagination.page"
           v-model:page-size="pagination.size"
           :page-sizes="[10, 20, 50, 100]"
-          :total="pagination.total"
+          :total="filteredData.length"
           layout="total, sizes, prev, pager, next, jumper"
           @current-change="handlePageChange"
           @size-change="handleSizeChange"
@@ -543,6 +593,13 @@ async function handleDelete(row: TableRow) {
 .search-bar {
   display: flex;
   gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.filter-bar {
+  display: flex;
+  gap: 8px;
   margin-bottom: 16px;
   flex-wrap: wrap;
 }

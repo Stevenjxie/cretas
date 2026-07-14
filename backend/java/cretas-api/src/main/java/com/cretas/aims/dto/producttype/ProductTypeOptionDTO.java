@@ -32,4 +32,6 @@ public class ProductTypeOptionDTO {
     private String specification;
     private String productCategory;
     private Boolean isActive;
+    /** 温区 (2026-07-14 追加, 供成品/SKU 管理页动态筛选下拉用) */
+    private String temperatureZone;
 }

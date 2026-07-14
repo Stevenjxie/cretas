@@ -47,6 +47,9 @@ public interface LeaveRequestService {
     /** HR: 全部. */
     Page<LeaveRequest> listAll(String factoryId, Pageable pageable);
 
+    /** HR: 全部, 按类型/状态过滤 (2026-07-14 web-admin filter audit, 均可空). */
+    Page<LeaveRequest> listAll(String factoryId, LeaveType leaveType, HrRequestStatus status, Pageable pageable);
+
     /** 工厂月度: leaveType → 总小时数 (APPROVED only). */
     Map<LeaveType, BigDecimal> summarizeMonth(String factoryId, String yearMonth);
 }

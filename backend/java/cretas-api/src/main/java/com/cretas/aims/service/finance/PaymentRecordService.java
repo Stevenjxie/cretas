@@ -39,6 +39,13 @@ public interface PaymentRecordService {
 
     Page<PaymentRecord> listPayments(String factoryId, PaymentRecordStatus status, Pageable pageable);
 
+    /**
+     * 收款列表 动态筛选 overload — 加 paymentMethod (2026-07-14, 前端过滤下拉).
+     * 不删旧 3 参方法 (避免破坏既有调用方), 旧方法内部委派本方法 (method=null).
+     */
+    Page<PaymentRecord> listPayments(String factoryId, PaymentRecordStatus status,
+                                      PaymentMethod method, Pageable pageable);
+
     /** 按工厂作用域加载收款记录 (跨租户校验: 记录须属于该工厂)。 */
     PaymentRecord getPayment(String factoryId, String paymentId);
 
