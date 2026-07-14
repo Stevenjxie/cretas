@@ -30,6 +30,13 @@ const routeColors = ['#1B65A8', '#7C3AED', '#C2410C', '#047857', '#BE185D', '#0E
 // 配送中心真实经纬度（一加物流仓库：苏州相城区望亭海亭路197号沐井供应链；与后端 logistics.depot.lng/lat 一致）。
 const DEPOT_LNGLAT: [number, number] = [120.476894, 31.437014];
 
+// 「显示全部线路」开关（客户要求）：默认单条线路突出、其余淡化；开启后所有线路满不透明度同时展示。
+const showAllRoutes = ref(false);
+function toggleAllRoutes(): void {
+  showAllRoutes.value = !showAllRoutes.value;
+  if (map) renderOverlays();
+}
+
 // ============================================================
 // 高德真实地图（有 VITE_AMAP_JS_KEY 时启用；加载失败回落下方 SVG 示意图）
 // ============================================================
@@ -146,11 +153,13 @@ function drawTripRoute(
   const addLine = (path: [number, number][] | AMapLngLat[], dashed: boolean): void => {
     if (token !== renderToken || !map) return; // 已被新一轮重绘取代，丢弃
     // 有选中线路时，非选中线路淡化让选中的一目了然
+    const showAll = showAllRoutes.value;
     const line = new AMapRef.Polyline({
       path,
       strokeColor: color,
-      strokeWeight: selected ? 7 : anySelected ? 3 : 4,
-      strokeOpacity: selected ? 1 : anySelected ? 0.22 : 0.6,
+      // 显示全部时：所有线路都清晰(选中略粗)；否则保持「选中突出、其余淡化」。
+      strokeWeight: showAll ? (selected ? 6 : 4) : selected ? 7 : anySelected ? 3 : 4,
+      strokeOpacity: showAll ? (selected ? 1 : 0.82) : selected ? 1 : anySelected ? 0.22 : 0.6,
       strokeStyle: dashed ? 'dashed' : 'solid',
       showDir: selected, // 选中线路画行驶方向箭头（配送中心→①→②→…），一眼看清先后与方向
       lineJoin: 'round',
@@ -290,6 +299,15 @@ function routeStyle(index: number): Record<string, string> {
         <span class="amap-spinner" />
         <span class="amap-loading-txt">地图加载中…</span>
       </div>
+      <!-- 显示全部线路开关（客户要求）：一键在「单条突出」与「全部同时展示」间切换 -->
+      <button
+        v-if="mapReady && props.trips.length > 1"
+        type="button"
+        class="map-allroutes-btn"
+        :class="{ active: showAllRoutes }"
+        data-testid="map-show-all-routes"
+        @click="toggleAllRoutes"
+      >{{ showAllRoutes ? '✓ 全部线路' : '显示全部线路' }}</button>
     </template>
 
     <template v-else>
@@ -398,6 +416,26 @@ function routeStyle(index: number): Record<string, string> {
   width: 100%;
   height: 100%;
 }
+
+/* 显示全部线路开关（客户要求）—— 浮在地图右上角 */
+.map-allroutes-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 210;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 650;
+  color: #1b65a8;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid #cfe0f2;
+  border-radius: 8px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(27, 101, 168, 0.14);
+  transition: all 0.15s;
+}
+.map-allroutes-btn:hover { background: #fff; border-color: #1b65a8; }
+.map-allroutes-btn.active { color: #fff; background: #1b65a8; border-color: #1b65a8; }
 
 .amap-loading {
   position: absolute;
