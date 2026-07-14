@@ -58,6 +58,17 @@ function mountWorkspace(status: 'DRAFT' | 'ACTIVE' = 'DRAFT') {
 describe('BomAuxiliaryWorkspace', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('keeps the process editor and compact auxiliary summary visible as a two-column workspace', async () => {
+    const wrapper = mountWorkspace('DRAFT');
+    await flushPromises();
+
+    const layout = wrapper.get('[data-testid="seasoning-two-column-layout"]');
+    expect(layout.get('[data-testid="seasoning-editor-column"]').exists()).toBe(true);
+    const compactSummary = layout.get('[data-testid="seasoning-compact-summary"]');
+    expect(compactSummary.text()).toContain('辣椒粉');
+    expect(compactSummary.text()).toContain('用于 2 个工序');
+  });
+
   it('allows DRAFT editing, locks the dialog to the card process, and allows cross-process reuse', async () => {
     const wrapper = mountWorkspace('DRAFT');
     await flushPromises();
