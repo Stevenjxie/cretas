@@ -78,10 +78,10 @@ public class LogisticsRoutingService {
     private final RouteProviderChain routeProviderChain;
 
     /** 车场 (DEPOT) 坐标 — 用于补齐 NEEDS_ROUTE_DATA 车次的 DEPOT->首站 距离 (Phase 4, 2026-07-11)。 */
-    @Value("${logistics.depot.lng:120.62}")
+    @Value("${logistics.depot.lng:120.476894}")
     private BigDecimal depotLng;
 
-    @Value("${logistics.depot.lat:31.30}")
+    @Value("${logistics.depot.lat:31.437014}")
     private BigDecimal depotLat;
 
     /**

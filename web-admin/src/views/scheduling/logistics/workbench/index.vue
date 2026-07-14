@@ -4,8 +4,10 @@ import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { vReveal } from '@/composables/useReveal';
 import type { ManualOrderRow } from '@/api/logistics';
+import type { LogisticsDeliveryOrder } from '@/api/logistics';
 import CapacityDiagnosisBanner from '../components/CapacityDiagnosisBanner.vue';
 import ExportConfirmStep from '../components/ExportConfirmStep.vue';
+import LocationPicker from '../components/LocationPicker.vue';
 import LogisticsMap from '../components/LogisticsMap.vue';
 import LogisticsStepBar from '../components/LogisticsStepBar.vue';
 import OrderImportStep from '../components/OrderImportStep.vue';
@@ -192,6 +194,28 @@ async function assignDriver(tripId: string, driverId: string | null): Promise<vo
   await state.assignDriver(driverId);
 }
 
+// 待定位门店 —— 定位面板(搜索联想 + 拖拽 pin, 仿导航 app), 客户要求放在「查看并确认路线」这一步,
+// 复用本步已渲染的地图上下文。确认坐标后: 若路线已生成过, 标脏(routeDirty)提示需重新生成路线才能纳入这家门店。
+const locationPickerOpen = ref(false);
+const locationPickerOrder = ref<LogisticsDeliveryOrder | null>(null);
+
+function openLocationPicker(order: LogisticsDeliveryOrder): void {
+  locationPickerOrder.value = order;
+  locationPickerOpen.value = true;
+}
+
+async function confirmLocation(payload: { orderId: string; longitude: number; latitude: number }): Promise<void> {
+  const ok = await state.updateLocation(payload.orderId, payload.longitude, payload.latitude);
+  locationPickerOpen.value = false;
+  if (!ok) return;
+  if (totalTripCount.value > 0) {
+    routeDirty.value = true; // 已有路线 → 这家门店的坐标变了, 必须重新生成路线才能把它纳入排线
+    ElMessage.success('定位已更新，请点击「重新生成路线」把这家门店纳入排线');
+  } else {
+    ElMessage.success('定位已更新');
+  }
+}
+
 async function handleMoveStore(tripId: string, storeId: string, direction: -1 | 1): Promise<void> {
   state.selectTrip(tripId);
   await state.moveStore(storeId, direction);
@@ -371,10 +395,13 @@ async function next(): Promise<void> {
       <section v-if="state.unresolvedOrders.value.length" data-testid="unresolved-stores" class="unresolved-panel">
         <strong>{{ state.unresolvedOrders.value.length }} 家门店待定位</strong>
         <ul>
-          <li v-for="order in state.unresolvedOrders.value" :key="order.id">{{ order.storeName }} · {{ order.address }}</li>
+          <li v-for="order in state.unresolvedOrders.value" :key="order.id">
+            <span class="up-store">{{ order.storeName }} · {{ order.address }}</span>
+            <button type="button" class="up-locate-btn" data-testid="locate-store" @click="openLocationPicker(order)">📍 定位</button>
+          </li>
         </ul>
-        <router-link to="/scheduling/logistics/orders">前往「门店与订单」补录经纬度</router-link>
       </section>
+      <LocationPicker v-model="locationPickerOpen" :order="locationPickerOrder" @confirm="confirmLocation" />
     </section>
 
     <ExportConfirmStep
@@ -457,6 +484,10 @@ async function next(): Promise<void> {
   .rv-right :deep(.route-cards) { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); max-height: 420px; }
 } h1,h2 { margin: 0; color: #101828; } .page-header p, .map-heading p { margin: 4px 0 0; color: #667085; } .map-step { display: grid; gap: 12px; } .map-heading label { display: grid; grid-template-columns: auto minmax(150px, 260px); align-items: center; gap: 12px; color: #344054; font-size: 14px; font-weight: 650; } .map-controls { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; } .map-heading .opt-mode { grid-template-columns: auto auto; } .route-settings { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding: 12px 16px; background: #f4f6f9; border: 1px solid #edf2f7; border-radius: 10px; } .route-settings.collapsed { padding: 6px 12px; } .route-settings .settings-title { color: #101828; font-weight: 700; font-size: 14px; }
 .settings-toggle { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; padding: 4px 10px; background: transparent; border: 1px solid #dbe3ec; border-radius: 6px; cursor: pointer; font: inherit; color: #475569; } .settings-toggle:hover { background: #e8edf3; } .settings-chevron { color: #1b65a8; font-size: 12px; font-weight: 650; } .route-settings label { display: grid; grid-template-columns: auto auto; align-items: center; gap: 10px; color: #344054; font-size: 14px; font-weight: 650; } .route-settings .view-toggle { grid-template-columns: auto auto; } .route-settings .generate-button { padding: 8px 16px; } .generate-button, .next-button { width: fit-content; padding: 10px 18px; color: #fff; font: inherit; font-weight: 650; background: #1b65a8; border: 0; border-radius: 6px; cursor: pointer; } .action-bar { position: sticky; bottom: 0; z-index: 20; padding: 14px 0; background: linear-gradient(to bottom, transparent, #f8fafc 28%); }
-.unresolved-panel { display: grid; gap: 8px; padding: 16px 20px; background: #fffaeb; border: 1px solid #fef0c7; border-radius: 10px; } .unresolved-panel strong { color: #b54708; } .unresolved-panel ul { display: grid; gap: 4px; margin: 0; padding-left: 20px; color: #93370d; font-size: 13px; } .unresolved-panel a { width: fit-content; color: #1b65a8; font-weight: 650; }
+.unresolved-panel { display: grid; gap: 8px; padding: 16px 20px; background: #fffaeb; border: 1px solid #fef0c7; border-radius: 10px; } .unresolved-panel strong { color: #b54708; } .unresolved-panel ul { display: grid; gap: 6px; margin: 0; padding-left: 0; list-style: none; color: #93370d; font-size: 13px; }
+.unresolved-panel li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 10px; background: #fff; border: 1px solid #fef0c7; border-radius: 8px; }
+.up-store { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.up-locate-btn { flex: none; padding: 5px 12px; color: #b54708; background: #fffaeb; border: 1px solid #f6c343; border-radius: 6px; font-size: 12.5px; font-weight: 650; cursor: pointer; }
+.up-locate-btn:hover { background: #fef0c7; }
 @media (max-width: 720px) { .workbench-page { padding: 16px; } .page-header,.map-heading { align-items: flex-start; flex-direction: column; } .map-heading label { width: 100%; } }
 </style>

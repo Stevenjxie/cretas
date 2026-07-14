@@ -4,6 +4,7 @@ import type { LogisticsPlan, PlanStatus, ExceptionReason, ExceptionDisposition }
 import { useLogisticsScheduling } from '../useLogisticsScheduling';
 import LogisticsMap from '../components/LogisticsMap.vue';
 import RouteCards from '../components/RouteCards.vue';
+import ScheduleTimetable from '../components/ScheduleTimetable.vue';
 import ExecutionTracker from '../components/ExecutionTracker.vue';
 
 const state = useLogisticsScheduling();
@@ -17,6 +18,9 @@ const detailLoading = ref(false);
 const detailPlan = ref<LogisticsPlan | null>(null);
 // 抽屉内视图: 路线(只读地图+线路) / 执行(送达跟踪, 仅已确认计划)
 const detailView = ref<'route' | 'execution'>('route');
+// 与排线工作台一致的折叠手柄(甘特/线路)
+const ganttHidden = ref(false);
+const routesHidden = ref(false);
 const detailTotalKm = computed(() =>
   state.scheduleResult.value.trips.reduce((sum, t) => sum + (t.totalDistanceKm || 0), 0),
 );
@@ -243,19 +247,32 @@ async function reExportXlsx(plan: LogisticsPlan): Promise<void> {
           <el-radio-button value="execution">执行跟踪</el-radio-button>
         </el-radio-group>
 
-        <!-- 路线视图 -->
-        <div v-show="detailView === 'route'" class="rd-main">
-          <div class="rd-map">
-            <LogisticsMap
-              :stores="state.stores.value"
-              :trips="state.scheduleResult.value.trips"
-              :selected-trip-id="state.selectedTripId.value"
-              :selected-store-id="state.selectedStoreId.value"
-              @select-trip="state.selectTrip"
-              @select-store="state.selectStore"
-            />
+        <!-- 路线视图 —— 布局与排线工作台一致: 左=地图+调度时间表(甘特), 右=配送线路贴到底, 同款 knob 折叠手柄 -->
+        <div v-show="detailView === 'route'" class="rd-main" :class="{ 'routes-hidden': routesHidden }">
+          <div class="rv-left">
+            <div class="rd-map">
+              <LogisticsMap
+                :stores="state.stores.value"
+                :trips="state.scheduleResult.value.trips"
+                :selected-trip-id="state.selectedTripId.value"
+                :selected-store-id="state.selectedStoreId.value"
+                @select-trip="state.selectTrip"
+                @select-store="state.selectStore"
+              />
+            </div>
+            <template v-if="state.scheduleResult.value.trips.length > 0">
+              <div class="h-handle" :title="ganttHidden ? '展开调度时间表' : '收起调度时间表'" @click="ganttHidden = !ganttHidden">
+                <div class="knob-h"><span>{{ ganttHidden ? '▴' : '▾' }}</span><em>调度时间表</em></div>
+              </div>
+              <div v-show="!ganttHidden" class="gantt-body">
+                <ScheduleTimetable :trips="state.scheduleResult.value.trips" :selected-trip-id="state.selectedTripId.value" scrollable @select-trip="state.selectTrip" />
+              </div>
+            </template>
           </div>
-          <div class="rd-routes">
+          <div class="v-handle" :title="routesHidden ? '展开配送线路' : '隐藏配送线路'" @click="routesHidden = !routesHidden">
+            <div class="knob-v"><span>{{ routesHidden ? '‹' : '›' }}</span><em>{{ routesHidden ? '展开线路' : '配送线路' }}</em></div>
+          </div>
+          <div v-show="!routesHidden" class="rd-routes">
             <div class="rd-routes-title">配送线路 <span>{{ state.scheduleResult.value.trips.length }} 车次</span></div>
             <RouteCards
               readonly
@@ -308,10 +325,26 @@ async function reExportXlsx(plan: LogisticsPlan): Promise<void> {
 .rd-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 14px; background: linear-gradient(180deg,#fff,#f8fafc); border: 1px solid #e2e8f0; border-radius: 10px; font-size: 13px; color: #667085; }
 .rd-stat strong { color: #0f172a; font-size: 18px; margin-right: 3px; font-variant-numeric: tabular-nums; } .rd-dot { color: #cbd5e1; }
 .rd-date { margin-left: auto; color: #98a2b3; font-size: 12.5px; }
-.rd-main { display: flex; gap: 12px; height: 62vh; min-height: 380px; }
-.rd-map { flex: 1 1 auto; min-width: 0; position: relative; border-radius: 10px; overflow: hidden; border: 1px solid #e2e8f0; }
+/* 布局与排线工作台 rv-body 一致: 左=地图+甘特, 右=配送线路贴到底 */
+.rd-main { display: flex; gap: 10px; height: clamp(420px, calc(100vh - 210px), 1400px); }
+.rv-left { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.rd-map { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; border-radius: 12px; border: 1px solid #e2e8f0; }
 .rd-map :deep(.map-stage) { height: 100% !important; aspect-ratio: auto !important; }
-.rd-routes { flex: 0 0 380px; display: flex; flex-direction: column; overflow: hidden; }
+.gantt-body { flex: none; }
+/* 甘特横向 knob 折叠手柄(与工作台统一样式) */
+.h-handle { flex: none; position: relative; height: 22px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.h-handle::before { content: ''; position: absolute; left: 6px; right: 6px; top: 50%; height: 2px; transform: translateY(-50%); background: #dbe3ec; border-radius: 2px; }
+.knob-h { position: relative; display: flex; align-items: center; gap: 8px; padding: 5px 16px; background: #fff; border: 1px solid #cdd9e8; border-radius: 10px; color: #1b65a8; box-shadow: 0 3px 10px rgba(27,101,168,0.16); transition: all 0.15s ease; }
+.knob-h span { font-size: 14px; font-weight: 800; line-height: 1; } .knob-h em { font-style: normal; font-size: 12.5px; font-weight: 650; color: #5a6b80; }
+.h-handle:hover .knob-h { background: #1b65a8; border-color: #1b65a8; color: #fff; } .h-handle:hover .knob-h em { color: #eaf2fb; }
+/* 竖向 knob 折叠手柄(地图/甘特 与 配送线路 之间) */
+.v-handle { flex: none; width: 26px; position: relative; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.v-handle::before { content: ''; position: absolute; top: 8px; bottom: 8px; left: 50%; width: 2px; transform: translateX(-50%); background: #dbe3ec; border-radius: 2px; }
+.knob-v { position: relative; display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 12px 0; width: 24px; background: #fff; border: 1px solid #cdd9e8; border-radius: 10px; color: #1b65a8; box-shadow: 0 3px 10px rgba(27,101,168,0.16); transition: all 0.15s ease; }
+.knob-v span { font-size: 15px; font-weight: 800; line-height: 1; } .knob-v em { font-style: normal; font-size: 11px; font-weight: 600; writing-mode: vertical-rl; letter-spacing: 2px; color: #5a6b80; }
+.v-handle:hover .knob-v { background: #1b65a8; border-color: #1b65a8; color: #fff; box-shadow: 0 4px 14px rgba(27,101,168,0.32); } .v-handle:hover .knob-v em { color: #eaf2fb; }
+/* 右列: 配送线路占满全高(贴到底), 卡片内部滚动 —— 同工作台 rv-right */
+.rd-routes { flex: 0 0 360px; height: 100%; display: flex; flex-direction: column; overflow: hidden; padding: 14px 16px; background: #fff; border: 1px solid #e6eaf0; border-radius: 12px; box-shadow: 0 2px 12px rgba(16,24,40,0.05); }
 .rd-routes-title { flex: 0 0 auto; margin-bottom: 8px; color: #101828; font-size: 14px; font-weight: 700; } .rd-routes-title span { color: #98a2b3; font-size: 12px; font-weight: 400; margin-left: 6px; }
 .rd-routes :deep(.route-cards) { grid-template-columns: 1fr; overflow-y: auto; flex: 1 1 auto; padding-right: 6px; align-content: start; }
 .rd-note { padding: 10px 14px; color: #175cd3; font-size: 12.5px; background: #eff8ff; border: 1px solid #b2ddff; border-radius: 8px; }
@@ -329,6 +362,6 @@ async function reExportXlsx(plan: LogisticsPlan): Promise<void> {
 .rt-bar { height: 6px; background: #eef2f7; border-radius: 999px; overflow: hidden; }
 .rt-fill { height: 100%; border-radius: 999px; transition: width .3s ease; }
 .rt-txt { font-size: 11px; color: #667085; font-variant-numeric: tabular-nums; }
-@media (max-width: 980px) { .rd-main { flex-direction: column; height: auto; } .rd-map { height: 360px; } .rd-routes { flex-basis: auto; } .rd-routes :deep(.route-cards) { max-height: 400px; } }
+@media (max-width: 980px) { .rd-main { flex-direction: column; height: auto; } .rv-left { gap: 8px; } .rd-map { height: 360px; } .v-handle { display: none; } .rd-routes { flex-basis: auto; height: auto; } .rd-routes :deep(.route-cards) { max-height: 400px; } }
 @media (max-width: 720px) { .support-page { padding: 16px; } }
 </style>

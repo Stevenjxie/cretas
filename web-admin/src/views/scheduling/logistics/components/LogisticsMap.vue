@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import mapImage from '@/assets/logistics/suzhou-logistics-map.png';
 import { DEPOT_POINT } from '../mockData';
+import { DEPOT_LNGLAT } from '../mapDepot';
 import type { MapPoint, RouteTrip, StoreOrder } from '../types';
 import {
   ensureDriving,
@@ -27,8 +28,12 @@ const emit = defineEmits<{
 
 const routeColors = ['#1B65A8', '#7C3AED', '#C2410C', '#047857', '#BE185D', '#0E7490'];
 
-// 配送中心真实经纬度（与后端 logistics.depot.lng/lat 默认一致）。
-const DEPOT_LNGLAT: [number, number] = [120.62, 31.3];
+// 「显示全部线路」开关（客户要求）：默认单条线路突出、其余淡化；开启后所有线路满不透明度同时展示。
+const showAllRoutes = ref(false);
+function toggleAllRoutes(): void {
+  showAllRoutes.value = !showAllRoutes.value;
+  if (map) renderOverlays();
+}
 
 // ============================================================
 // 高德真实地图（有 VITE_AMAP_JS_KEY 时启用；加载失败回落下方 SVG 示意图）
@@ -57,10 +62,13 @@ function depotContent(): string {
   return `<div class="amap-depot"><span class="amap-depot-dot"></span><span class="amap-lbl">配送中心</span></div>`;
 }
 
-function storeContent(store: StoreOrder, seq: number | undefined, selected: boolean, labeled: boolean): string {
-  const badge = seq != null ? `<span class="amap-seq">${seq}</span>` : '<span class="amap-store-dot"></span>';
+function storeContent(store: StoreOrder, seq: number | undefined, selected: boolean, labeled: boolean, color?: string): string {
+  // color = 所属线路的颜色（与 polyline 同色），编号圆点/标签描边跟随，一眼分清节点归属哪条线（客户要求）
+  const badgeStyle = color ? ` style="background:${color}"` : '';
+  const badge = seq != null ? `<span class="amap-seq"${badgeStyle}>${seq}</span>` : `<span class="amap-store-dot"${badgeStyle}></span>`;
   // labeled=false（非选中线路的门店）：只显小灰点，不显名字标签，避免全图挤满店名
-  const label = labeled ? `<span class="amap-lbl">${esc(compactStoreName(store.name))}</span>` : '';
+  const lblStyle = color ? ` style="border-color:${color};color:${color}"` : '';
+  const label = labeled ? `<span class="amap-lbl"${lblStyle}>${esc(compactStoreName(store.name))}</span>` : '';
   return `<div class="amap-store${selected ? ' selected' : ''}${labeled ? '' : ' dim'}">${badge}${label}</div>`;
 }
 
@@ -78,9 +86,22 @@ function renderOverlays(): void {
   const token = ++renderToken; // 本轮标识；异步驾车回调据此判断是否过期
 
   const seqByStore = new Map<string, number>();
+  // 节点颜色跟随所属线路 polyline 颜色（客户要求，颜色区分节点归属）
+  const colorByStore = new Map<string, string>();
   const selectedTrip = props.trips.find((t) => t.id === props.selectedTripId);
-  if (selectedTrip) {
-    selectedTrip.storeIds.forEach((sid, i) => seqByStore.set(sid, i + 1));
+  const selectedTripIndex = props.trips.findIndex((t) => t.id === props.selectedTripId);
+  if (showAllRoutes.value) {
+    // 显示全部线路时：每条线路的门店都编号(各自线路内 1..n)，让所有送达点都可见(客户要求)
+    props.trips.forEach((t, ti) => t.storeIds.forEach((sid, i) => {
+      seqByStore.set(sid, i + 1);
+      colorByStore.set(sid, routeColors[ti % routeColors.length]);
+    }));
+  } else if (selectedTrip) {
+    const c = routeColors[selectedTripIndex % routeColors.length];
+    selectedTrip.storeIds.forEach((sid, i) => {
+      seqByStore.set(sid, i + 1);
+      colorByStore.set(sid, c);
+    });
   }
   const storeById = new Map(props.stores.map((s) => [s.id, s]));
 
@@ -97,10 +118,11 @@ function renderOverlays(): void {
   const selectedStoreSet = new Set(selectedTrip?.storeIds ?? []);
   props.stores.forEach((store) => {
     if (!Number.isFinite(store.lng) || !Number.isFinite(store.lat)) return;
-    const labeled = selectedStoreSet.has(store.id) || store.id === props.selectedStoreId;
+    const labeled = showAllRoutes.value || selectedStoreSet.has(store.id) || store.id === props.selectedStoreId;
     const marker = new AMapRef.Marker({
       position: [store.lng, store.lat],
-      content: storeContent(store, seqByStore.get(store.id), store.id === props.selectedStoreId, labeled),
+      content: storeContent(store, seqByStore.get(store.id), store.id === props.selectedStoreId, labeled,
+        colorByStore.get(store.id)),
       offset: new AMapRef.Pixel(-9, -9),
       zIndex: labeled ? 160 : 90,
     });
@@ -146,11 +168,13 @@ function drawTripRoute(
   const addLine = (path: [number, number][] | AMapLngLat[], dashed: boolean): void => {
     if (token !== renderToken || !map) return; // 已被新一轮重绘取代，丢弃
     // 有选中线路时，非选中线路淡化让选中的一目了然
+    const showAll = showAllRoutes.value;
     const line = new AMapRef.Polyline({
       path,
       strokeColor: color,
-      strokeWeight: selected ? 7 : anySelected ? 3 : 4,
-      strokeOpacity: selected ? 1 : anySelected ? 0.22 : 0.6,
+      // 显示全部时：所有线路都清晰(选中略粗)；否则保持「选中突出、其余淡化」。
+      strokeWeight: showAll ? (selected ? 6 : 4) : selected ? 7 : anySelected ? 3 : 4,
+      strokeOpacity: showAll ? (selected ? 1 : 0.82) : selected ? 1 : anySelected ? 0.22 : 0.6,
       strokeStyle: dashed ? 'dashed' : 'solid',
       showDir: selected, // 选中线路画行驶方向箭头（配送中心→①→②→…），一眼看清先后与方向
       lineJoin: 'round',
@@ -290,6 +314,15 @@ function routeStyle(index: number): Record<string, string> {
         <span class="amap-spinner" />
         <span class="amap-loading-txt">地图加载中…</span>
       </div>
+      <!-- 显示全部线路开关（客户要求）：一键在「单条突出」与「全部同时展示」间切换 -->
+      <button
+        v-if="mapReady && props.trips.length > 1"
+        type="button"
+        class="map-allroutes-btn"
+        :class="{ active: showAllRoutes }"
+        data-testid="map-show-all-routes"
+        @click="toggleAllRoutes"
+      >{{ showAllRoutes ? '✓ 全部线路' : '显示全部线路' }}</button>
     </template>
 
     <template v-else>
@@ -398,6 +431,26 @@ function routeStyle(index: number): Record<string, string> {
   width: 100%;
   height: 100%;
 }
+
+/* 显示全部线路开关（客户要求）—— 浮在地图右上角 */
+.map-allroutes-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 210;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 650;
+  color: #1b65a8;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid #cfe0f2;
+  border-radius: 8px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(27, 101, 168, 0.14);
+  transition: all 0.15s;
+}
+.map-allroutes-btn:hover { background: #fff; border-color: #1b65a8; }
+.map-allroutes-btn.active { color: #fff; background: #1b65a8; border-color: #1b65a8; }
 
 .amap-loading {
   position: absolute;

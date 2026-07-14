@@ -13,13 +13,38 @@ let amapPromise: Promise<AMapNamespace> | null = null;
 /** 高德 JS API 命名空间（局部弱类型即可，避免引入完整 @amap/amap-jsapi-types 依赖）。 */
 export type AMapNamespace = {
   Map: new (container: HTMLElement, opts: Record<string, unknown>) => AMapInstance;
-  Marker: new (opts: Record<string, unknown>) => AMapOverlay;
+  Marker: new (opts: Record<string, unknown>) => AMapMarker;
   Polyline: new (opts: Record<string, unknown>) => AMapOverlay;
   Pixel: new (x: number, y: number) => unknown;
   LngLat: new (lng: number, lat: number) => AMapLngLat;
   Driving: new (opts: Record<string, unknown>) => AMapDriving;
   DrivingPolicy?: Record<string, number>;
+  AutoComplete?: new (opts: Record<string, unknown>) => AMapAutoComplete;
+  Geocoder?: new (opts?: Record<string, unknown>) => AMapGeocoder;
+  plugin?: (names: string[], cb: () => void) => void;
 };
+
+/** 输入提示（AMap.AutoComplete）—— 门店定位搜索框用，仿导航 app 输入联想。 */
+export interface AMapAutoComplete {
+  search(keyword: string, callback: (status: string, result: AMapAutoCompleteResult) => void): void;
+}
+export interface AMapAutoCompleteTip {
+  name: string;
+  district?: string;
+  address?: string;
+  location?: AMapLngLat | { lng: number; lat: number };
+}
+export interface AMapAutoCompleteResult {
+  tips?: AMapAutoCompleteTip[];
+}
+
+/** 地理编码（AMap.Geocoder）—— 打开定位面板时对地址做一次初始猜测定位, 供用户在此基础上拖拽/搜索修正。 */
+export interface AMapGeocoder {
+  getLocation(
+    address: string,
+    callback: (status: string, result: { geocodes?: Array<{ location: AMapLngLat }> }) => void,
+  ): void;
+}
 
 export interface AMapLngLat {
   getLng(): number;
@@ -41,14 +66,22 @@ export interface AMapDrivingResult {
 }
 
 export interface AMapOverlay {
-  on(event: string, handler: () => void): void;
+  on(event: string, handler: (e: unknown) => void): void;
+}
+
+/** 可拖拽定位用 Marker（继承基础 Marker，加 position 读写 —— LocationPicker 拖拽取经纬度用）。 */
+export interface AMapMarker extends AMapOverlay {
+  setPosition(pos: [number, number] | AMapLngLat): void;
+  getPosition(): AMapLngLat;
+  setDraggable?(draggable: boolean): void;
+  setMap?(map: AMapInstance | null): void;
 }
 
 export interface AMapInstance {
   add(overlays: AMapOverlay[]): void;
   remove(overlays: AMapOverlay[]): void;
   setFitView(overlays: AMapOverlay[] | null, immediately?: boolean, avoid?: number[]): void;
-  on(event: string, handler: () => void): void;
+  on(event: string, handler: (e: unknown) => void): void;
   resize(): void;
   destroy(): void;
 }
@@ -107,6 +140,37 @@ export function ensureDriving(): Promise<boolean> {
       return false;
     });
   return drivingPromise;
+}
+
+let pickerPluginsPromise: Promise<boolean> | null = null;
+
+/**
+ * 按需懒加载 AMap.AutoComplete + AMap.Geocoder 插件（门店定位面板用：搜索联想 + 地址初始猜测定位）。
+ * 用法与 {@link ensureDriving} 一致：打开定位面板时调用一次，resolve(true)=均可用；
+ * resolve(false)=加载失败，调用方回落「无搜索建议 / 手动拖拽」，不阻断定位面板打开。
+ */
+export function ensurePicker(): Promise<boolean> {
+  const w = window as unknown as { AMap?: AMapNamespace };
+  if (w.AMap && w.AMap.AutoComplete && w.AMap.Geocoder) return Promise.resolve(true);
+  if (pickerPluginsPromise) return pickerPluginsPromise;
+  pickerPluginsPromise = loadAmap()
+    .then(
+      () =>
+        new Promise<boolean>((resolve) => {
+          const amap = w.AMap;
+          if (!amap || typeof amap.plugin !== 'function') {
+            resolve(false);
+            return;
+          }
+          amap.plugin(['AMap.AutoComplete', 'AMap.Geocoder'], () =>
+            resolve(Boolean(w.AMap && w.AMap.AutoComplete && w.AMap.Geocoder)));
+        }),
+    )
+    .catch(() => {
+      pickerPluginsPromise = null; // 允许下次重试
+      return false;
+    });
+  return pickerPluginsPromise;
 }
 
 export function loadAmap(): Promise<AMapNamespace> {
