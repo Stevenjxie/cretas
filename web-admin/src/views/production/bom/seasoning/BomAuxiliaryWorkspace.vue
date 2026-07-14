@@ -180,19 +180,58 @@ onMounted(() => Promise.all([loadWorkspace(), loadMaterials()]));
     </el-result>
     <el-empty v-else-if="!processes.length" description="该 SKU 尚未配置 workflow 工序" :image-size="64" />
 
-    <div v-else-if="activeView === 'process'" data-testid="process-seasoning-view">
-      <ProcessSeasoningCard
-        v-for="process in processes"
-        :key="process.workProcessId"
-        :process="process"
-        :processes="processes"
-        :expanded="expandedWorkProcessId === process.workProcessId"
-        :editable="editable"
-        @toggle="expandedWorkProcessId = expandedWorkProcessId === process.workProcessId ? '' : process.workProcessId"
-        @add="openAdd"
-        @edit="openEdit"
-        @delete="removeBinding"
-      />
+    <div
+      v-else-if="activeView === 'process'"
+      data-testid="process-seasoning-view"
+    >
+      <div data-testid="seasoning-two-column-layout" class="process-layout">
+        <div data-testid="seasoning-editor-column" class="process-column">
+          <ProcessSeasoningCard
+            v-for="process in processes"
+            :key="process.workProcessId"
+            :process="process"
+            :processes="processes"
+            :expanded="expandedWorkProcessId === process.workProcessId"
+            :editable="editable"
+            @toggle="expandedWorkProcessId = expandedWorkProcessId === process.workProcessId ? '' : process.workProcessId"
+            @add="openAdd"
+            @edit="openEdit"
+            @delete="removeBinding"
+          />
+        </div>
+
+        <aside data-testid="seasoning-compact-summary" class="compact-summary">
+          <div class="compact-summary__header">
+            <div>
+              <strong>辅料汇总</strong>
+              <p>按物料去重，快速核对跨工序使用</p>
+            </div>
+            <el-button link type="primary" @click="activeView = 'summary'">查看完整汇总</el-button>
+          </div>
+
+          <el-empty v-if="!summaries.length" description="暂未配置辅料" :image-size="48" />
+          <div v-else class="compact-summary__list">
+            <article v-for="item in summaries" :key="item.materialTypeId" class="compact-summary__item">
+              <div class="compact-summary__material">
+                <strong>{{ item.materialName }}</strong>
+                <el-tag size="small" type="info">用于 {{ item.usages.length }} 个工序</el-tag>
+              </div>
+              <div class="compact-summary__usages">
+                <button
+                  v-for="usage in item.usages"
+                  :key="usage.bindingId"
+                  type="button"
+                  class="compact-summary__usage"
+                  @click="locateProcess(usage.workProcessId)"
+                >
+                  <span>{{ usage.processOrder }}. {{ usage.processName }}</span>
+                  <strong>{{ Number(usage.dosagePerKgG).toFixed(4) }} g/kg</strong>
+                </button>
+              </div>
+            </article>
+          </div>
+        </aside>
+      </div>
     </div>
 
     <div v-else data-testid="seasoning-summary-view">
@@ -246,7 +285,27 @@ onMounted(() => Promise.all([loadWorkspace(), loadMaterials()]));
 .workspace-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .workspace-stats { color: var(--el-text-color-secondary); font-size: 12px; }
 .compact-loading { min-height: 140px; }
+.process-layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; align-items: start; gap: 14px; }
+.process-column { min-width: 0; }
+.compact-summary { position: sticky; top: 12px; overflow: hidden; border: 1px solid var(--el-border-color-light); border-radius: 6px; background: var(--el-bg-color); box-shadow: var(--el-box-shadow-lighter); }
+.compact-summary__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 14px; border-bottom: 1px solid var(--el-border-color-lighter); background: var(--el-fill-color-extra-light); }
+.compact-summary__header p { margin: 4px 0 0; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.4; }
+.compact-summary__list { max-height: calc(100vh - 270px); overflow-y: auto; padding: 0 12px; }
+.compact-summary__item { padding: 12px 0; border-bottom: 1px solid var(--el-border-color-lighter); }
+.compact-summary__item:last-child { border-bottom: 0; }
+.compact-summary__material { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.compact-summary__material strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compact-summary__usages { display: grid; gap: 5px; }
+.compact-summary__usage { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 4px; background: var(--el-fill-color-light); color: var(--el-text-color-regular); cursor: pointer; text-align: left; }
+.compact-summary__usage:hover { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
+.compact-summary__usage strong { flex: none; font-size: 12px; }
 .summary-detail { padding: 8px 48px; }
 .summary-usage { display: grid; grid-template-columns: minmax(120px, 1fr) 120px minmax(160px, 1fr) 80px; align-items: center; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--el-border-color-lighter); }
 .usage-tag { margin: 2px 4px 2px 0; }
+
+@media (max-width: 1180px) {
+  .process-layout { grid-template-columns: 1fr; }
+  .compact-summary { position: static; }
+  .compact-summary__list { max-height: none; }
+}
 </style>
