@@ -85,7 +85,7 @@ class BomRecipeServiceImplUomGuardTest {
                 mock(com.cretas.aims.repository.MaterialPackagingHierarchyRepository.class);
         when(packagingRepo.findByMaterialTypeId(anyString())).thenReturn(Optional.empty());
         realUomConverter = new MaterialUomConverter(packagingRepo, materialTypeRepo,
-                new com.cretas.aims.service.UnitConversionService());
+                com.cretas.aims.service.unit.TestUnitContractFactory.legacyFacade());
         // Replace @InjectMocks placeholder mock with real converter
         ReflectionTestUtils.setField(service, "materialUomConverter", realUomConverter);
 

@@ -571,6 +571,7 @@ public class UnitContractServiceImpl implements UnitContractService {
         add(units, "mg", UnitDimension.MASS, "g", "0.001", "毫克", 3);
         add(units, "g", UnitDimension.MASS, "g", "1", "克", 3);
         add(units, "kg", UnitDimension.MASS, "g", "1000", "公斤", 3);
+        add(units, "jin", UnitDimension.MASS, "g", "500", "斤", 3);
         add(units, "t", UnitDimension.MASS, "g", "1000000", "吨", 6);
         add(units, "ml", UnitDimension.VOLUME, "ml", "1", "毫升", 3);
         add(units, "l", UnitDimension.VOLUME, "ml", "1000", "升", 3);
@@ -606,6 +607,7 @@ public class UnitContractServiceImpl implements UnitContractService {
         alias(aliases, "mg", "mg", "毫克");
         alias(aliases, "g", "g", "克");
         alias(aliases, "kg", "kg", "公斤", "千克");
+        alias(aliases, "jin", "jin", "斤");
         alias(aliases, "t", "t", "吨");
         alias(aliases, "ml", "ml", "毫升");
         alias(aliases, "l", "l", "升");

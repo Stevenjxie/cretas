@@ -58,17 +58,6 @@ public class ProductionWorkflowOrchestrator {
         this.unitConversionService = unitConversionService;
     }
 
-    /** Backward-compatible constructor for legacy unit tests. */
-    @Deprecated(forRemoval = true)
-    public ProductionWorkflowOrchestrator(
-            BomExpansionService bomExpansionService,
-            TransferService transferService,
-            ProductionPlanService productionPlanService,
-            RawMaterialTypeRepository rawMaterialTypeRepository,
-            InternalTransferRepository transferRepository) {
-        this(bomExpansionService, transferService, productionPlanService,
-                rawMaterialTypeRepository, transferRepository, new UnitConversionService());
-    }
 
     /**
      * T143: 物料单位换算器. 字段注入 (required=false) 不破坏 @RequiredArgsConstructor 与

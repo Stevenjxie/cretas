@@ -18,6 +18,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -32,6 +33,7 @@ class ProductUnitConversionServiceTest {
 
     private ProductUnitConversionServiceImpl service;
     private ProductType product;
+    private AtomicReference<ProductUnitConversion> lastSaved;
 
     @BeforeEach
     void setUp() {
@@ -40,8 +42,20 @@ class ProductUnitConversionServiceTest {
         product.setId("P1");
         product.setFactoryId("F1");
         product.setUnit("件");
+        lastSaved = new AtomicReference<>();
         lenient().when(productTypeRepository.findByIdAndFactoryId("P1", "F1"))
                 .thenReturn(Optional.of(product));
+        lenient().when(repository.findByFactoryIdAndProductTypeIdOrderByCreatedAtAsc("F1", "P1"))
+                .thenAnswer(invocation -> lastSaved.get() == null ? List.of() : List.of(lastSaved.get()));
+        lenient().when(repository.findEffectiveByFactoryIdAndProductTypeIdAt(eq("F1"), eq("P1"), any()))
+                .thenAnswer(invocation -> lastSaved.get() == null ? List.of() : List.of(lastSaved.get()));
+        lenient().when(repository.saveAndFlush(any())).thenAnswer(invocation -> {
+            ProductUnitConversion entity = invocation.getArgument(0);
+            if (entity.getId() == null) entity.setId("C1");
+            if (entity.getVersion() == null) entity.setVersion(0L);
+            lastSaved.set(entity);
+            return entity;
+        });
     }
 
     @Test
@@ -50,12 +64,6 @@ class ProductUnitConversionServiceTest {
         canonical("g", "g", UnitDimension.MASS);
         when(unitContractService.validateConversionGraph(eq("F1"), eq("P1"), any()))
                 .thenReturn(List.of());
-        when(repository.saveAndFlush(any())).thenAnswer(invocation -> {
-            ProductUnitConversion entity = invocation.getArgument(0);
-            entity.setId("C1");
-            entity.setVersion(0L);
-            return entity;
-        });
 
         ProductUnitConversionDTO result = service.create("F1", "P1", request(
                 "件", "g", "200", ProductUnitConversion.SourceType.NET_CONTENT, null));
@@ -73,12 +81,6 @@ class ProductUnitConversionServiceTest {
         canonical("g", "g", UnitDimension.MASS);
         when(unitContractService.validateConversionGraph(eq("F1"), eq("P1"), any()))
                 .thenReturn(List.of());
-        when(repository.saveAndFlush(any())).thenAnswer(invocation -> {
-            ProductUnitConversion entity = invocation.getArgument(0);
-            entity.setId("C1");
-            entity.setVersion(0L);
-            return entity;
-        });
 
         service.create("F1", "P1", request(
                 "件", "g", "200", ProductUnitConversion.SourceType.NET_CONTENT, null));
@@ -103,6 +105,54 @@ class ProductUnitConversionServiceTest {
 
         assertEquals("STALE_UNIT_CONVERSION", error.getErrorCode());
         verify(repository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void futureNetContentDoesNotChangeCurrentLegacyGrams() {
+        product.setGramsPerUnit(new BigDecimal("200"));
+        canonical("件", "pcs", UnitDimension.COUNT);
+        canonical("g", "g", UnitDimension.MASS);
+        when(unitContractService.validateConversionGraph(eq("F1"), eq("P1"), any()))
+                .thenReturn(List.of());
+        LocalDateTime tomorrow = LocalDateTime.now().plusDays(1);
+        ProductUnitConversionDTO future = new ProductUnitConversionDTO(
+                null, "P1", "件", null, null, "g", null, null,
+                new BigDecimal("250"), ProductUnitConversion.SourceType.NET_CONTENT,
+                false, tomorrow, null, null);
+
+        service.create("F1", "P1", future);
+
+        assertEquals(0, new BigDecimal("200").compareTo(product.getGramsPerUnit()));
+        verify(unitContractService).validateConversionGraph("F1", "P1", tomorrow);
+        verify(productTypeRepository, never()).save(product);
+    }
+
+    @Test
+    void updateAwayFromNetContentClearsLegacyProjection() {
+        product.setGramsPerUnit(new BigDecimal("200"));
+        canonical("件", "pcs", UnitDimension.COUNT);
+        canonical("pcs", "pcs", UnitDimension.COUNT);
+        canonical("g", "g", UnitDimension.MASS);
+        ProductUnitConversion existing = new ProductUnitConversion();
+        existing.setId("C1");
+        existing.setFactoryId("F1");
+        existing.setProductTypeId("P1");
+        existing.setFromUnitCode("pcs");
+        existing.setToUnitCode("g");
+        existing.setFactor(new BigDecimal("200"));
+        existing.setSourceType(ProductUnitConversion.SourceType.NET_CONTENT);
+        existing.setEffectiveFrom(LocalDateTime.now().minusDays(1));
+        existing.setVersion(4L);
+        when(repository.findByIdAndFactoryIdAndProductTypeId("C1", "F1", "P1"))
+                .thenReturn(Optional.of(existing));
+        when(unitContractService.validateConversionGraph(eq("F1"), eq("P1"), any()))
+                .thenReturn(List.of());
+
+        service.update("F1", "P1", "C1", request(
+                "pcs", "g", "200", ProductUnitConversion.SourceType.MANUAL, 4L));
+
+        assertNull(product.getGramsPerUnit());
+        verify(productTypeRepository).save(product);
     }
 
     @Test

@@ -44,7 +44,8 @@ class MaterialUomConverterTest {
         packagingRepo = mock(MaterialPackagingHierarchyRepository.class);
         materialRepo = mock(RawMaterialTypeRepository.class);
         // UnitConversionService 无状态, 用真实实例 (验证真实 g↔kg 算术)
-        converter = new MaterialUomConverter(packagingRepo, materialRepo, new UnitConversionService());
+        converter = new MaterialUomConverter(packagingRepo, materialRepo,
+                com.cretas.aims.service.unit.TestUnitContractFactory.legacyFacade());
 
         // 默认: 物料查不到 (各 case 覆写)
         when(materialRepo.findById(anyString())).thenReturn(Optional.empty());

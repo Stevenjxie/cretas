@@ -17,6 +17,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
@@ -45,7 +47,9 @@ public class ProductUnitConversionServiceImpl implements ProductUnitConversionSe
         apply(factoryId, entity, request);
         entity = repository.saveAndFlush(entity);
         validateGraph(factoryId, productTypeId);
-        syncLegacyNetContent(product, entity);
+        if (isLegacyNetContent(product, entity) && isEffectiveAt(entity, LocalDateTime.now())) {
+            refreshLegacyNetContent(product);
+        }
         return toDto(factoryId, entity);
     }
 
@@ -56,10 +60,15 @@ public class ProductUnitConversionServiceImpl implements ProductUnitConversionSe
         ProductType product = requireProduct(factoryId, productTypeId);
         ProductUnitConversion entity = requireConversion(factoryId, productTypeId, id);
         requireVersion(request.version(), entity.getVersion());
+        boolean previouslyProjected = isLegacyNetContent(product, entity)
+                && isEffectiveAt(entity, LocalDateTime.now());
         apply(factoryId, entity, request);
         entity = repository.saveAndFlush(entity);
         validateGraph(factoryId, productTypeId);
-        syncLegacyNetContent(product, entity);
+        if (previouslyProjected
+                || (isLegacyNetContent(product, entity) && isEffectiveAt(entity, LocalDateTime.now()))) {
+            refreshLegacyNetContent(product);
+        }
         return toDto(factoryId, entity);
     }
 
@@ -69,15 +78,12 @@ public class ProductUnitConversionServiceImpl implements ProductUnitConversionSe
         ProductType product = requireProduct(factoryId, productTypeId);
         ProductUnitConversion entity = requireConversion(factoryId, productTypeId, id);
         requireVersion(version, entity.getVersion());
-        boolean clearsLegacy = isLegacyNetContent(product, entity)
-                && product.getGramsPerUnit() != null
-                && product.getGramsPerUnit().compareTo(entity.getFactor()) == 0;
+        boolean previouslyProjected = isLegacyNetContent(product, entity)
+                && isEffectiveAt(entity, LocalDateTime.now());
         entity.softDelete();
         repository.saveAndFlush(entity);
-        if (clearsLegacy) {
-            product.setGramsPerUnit(null);
-            productTypeRepository.save(product);
-        }
+        validateGraph(factoryId, productTypeId);
+        if (previouslyProjected) refreshLegacyNetContent(product);
     }
 
     private void apply(
@@ -108,10 +114,20 @@ public class ProductUnitConversionServiceImpl implements ProductUnitConversionSe
     }
 
     private void validateGraph(String factoryId, String productTypeId) {
-        List<String> errors = unitContractService.validateConversionGraph(
-                factoryId, productTypeId, LocalDateTime.now());
-        if (!errors.isEmpty()) {
-            throw new BusinessException(409, String.join("；", errors)).withCode("INCONSISTENT_UNIT_GRAPH");
+        List<ProductUnitConversion> relations = repository
+                .findByFactoryIdAndProductTypeIdOrderByCreatedAtAsc(factoryId, productTypeId);
+        Set<LocalDateTime> boundaries = new LinkedHashSet<>();
+        boundaries.add(LocalDateTime.now());
+        for (ProductUnitConversion relation : relations) {
+            if (relation.getEffectiveFrom() != null) boundaries.add(relation.getEffectiveFrom());
+            if (relation.getEffectiveTo() != null) boundaries.add(relation.getEffectiveTo());
+        }
+        for (LocalDateTime boundary : boundaries) {
+            List<String> errors = unitContractService.validateConversionGraph(factoryId, productTypeId, boundary);
+            if (!errors.isEmpty()) {
+                throw new BusinessException(409, String.join("；", errors))
+                        .withCode("INCONSISTENT_UNIT_GRAPH");
+            }
         }
     }
 
@@ -135,11 +151,21 @@ public class ProductUnitConversionServiceImpl implements ProductUnitConversionSe
         }
     }
 
-    private void syncLegacyNetContent(ProductType product, ProductUnitConversion entity) {
-        if (isLegacyNetContent(product, entity)) {
-            product.setGramsPerUnit(entity.getFactor());
-            productTypeRepository.save(product);
+    private void refreshLegacyNetContent(ProductType product) {
+        LocalDateTime now = LocalDateTime.now();
+        List<ProductUnitConversion> candidates = repository
+                .findEffectiveByFactoryIdAndProductTypeIdAt(product.getFactoryId(), product.getId(), now)
+                .stream()
+                .filter(entity -> isLegacyNetContent(product, entity))
+                .toList();
+        BigDecimal projected = candidates.size() == 1 ? candidates.get(0).getFactor() : null;
+        if ((product.getGramsPerUnit() == null && projected == null)
+                || (product.getGramsPerUnit() != null && projected != null
+                && product.getGramsPerUnit().compareTo(projected) == 0)) {
+            return;
         }
+        product.setGramsPerUnit(projected);
+        productTypeRepository.save(product);
     }
 
     private boolean isLegacyNetContent(ProductType product, ProductUnitConversion entity) {
@@ -151,6 +177,13 @@ public class ProductUnitConversionServiceImpl implements ProductUnitConversionSe
         return productUnit.recognized()
                 && List.of("pcs", "portion", "box").contains(productUnit.code())
                 && productUnit.code().equals(entity.getFromUnitCode());
+    }
+
+    private boolean isEffectiveAt(ProductUnitConversion entity, LocalDateTime at) {
+        return entity.getDeletedAt() == null
+                && entity.getEffectiveFrom() != null
+                && !entity.getEffectiveFrom().isAfter(at)
+                && (entity.getEffectiveTo() == null || entity.getEffectiveTo().isAfter(at));
     }
 
     private ProductUnitConversionDTO toDto(String factoryId, ProductUnitConversion entity) {

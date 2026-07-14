@@ -21,7 +21,7 @@ class UnitConversionServiceWeightTest {
 
     @BeforeEach
     void setUp() {
-        service = new UnitConversionService();
+        service = com.cretas.aims.service.unit.TestUnitContractFactory.legacyFacade();
     }
 
     // ---------- toKg: 边界归一到 kg 基准 ----------

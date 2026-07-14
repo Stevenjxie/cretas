@@ -46,7 +46,8 @@ class MaterialUomConverterWriteCompatTest {
     void setUp() {
         packagingRepo = mock(MaterialPackagingHierarchyRepository.class);
         materialRepo = mock(RawMaterialTypeRepository.class);
-        converter = new MaterialUomConverter(packagingRepo, materialRepo, new UnitConversionService());
+        converter = new MaterialUomConverter(packagingRepo, materialRepo,
+                com.cretas.aims.service.unit.TestUnitContractFactory.legacyFacade());
 
         // Default: material not found
         when(materialRepo.findById(anyString())).thenReturn(Optional.empty());

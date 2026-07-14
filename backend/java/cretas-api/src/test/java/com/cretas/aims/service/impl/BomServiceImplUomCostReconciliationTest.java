@@ -52,7 +52,8 @@ class BomServiceImplUomCostReconciliationTest {
     void setUp() {
         service = new BomServiceImpl(bomItemRepository, laborCostConfigRepository, overheadCostConfigRepository);
         // 注入两个可选依赖 (真实 UnitConversionService, mock repository)
-        ReflectionTestUtils.setField(service, "unitConversionService", new UnitConversionService());
+        ReflectionTestUtils.setField(service, "unitConversionService",
+                com.cretas.aims.service.unit.TestUnitContractFactory.legacyFacade());
         ReflectionTestUtils.setField(service, "rawMaterialTypeRepository", rawMaterialTypeRepository);
 
         // 无人工/均摊 (聚焦原料成本)

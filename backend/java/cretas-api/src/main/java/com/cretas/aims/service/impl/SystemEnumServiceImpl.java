@@ -9,7 +9,6 @@ import com.cretas.aims.service.SystemEnumService;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitConversionContext;
 import com.cretas.aims.service.unit.UnitConversionResult;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
@@ -36,12 +35,21 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class SystemEnumServiceImpl implements SystemEnumService {
 
     private final SystemEnumRepository systemEnumRepository;
     private final UnitOfMeasurementRepository unitOfMeasurementRepository;
     private final UnitContractService unitContractService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public SystemEnumServiceImpl(
+            SystemEnumRepository systemEnumRepository,
+            UnitOfMeasurementRepository unitOfMeasurementRepository,
+            UnitContractService unitContractService) {
+        this.systemEnumRepository = systemEnumRepository;
+        this.unitOfMeasurementRepository = unitOfMeasurementRepository;
+        this.unitContractService = unitContractService;
+    }
 
     /** Backward-compatible constructor for CRUD-only unit tests. */
     @Deprecated(forRemoval = true)

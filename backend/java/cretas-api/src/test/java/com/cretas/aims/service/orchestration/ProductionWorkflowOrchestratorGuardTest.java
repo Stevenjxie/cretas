@@ -43,7 +43,8 @@ class ProductionWorkflowOrchestratorGuardTest {
     private ProductionWorkflowOrchestrator newOrchestrator() {
         // 只用到前 3 个依赖; 其余传 null (守卫在触碰它们之前就抛异常).
         return new ProductionWorkflowOrchestrator(
-                bomExpansionService, transferService, productionPlanService, null, null);
+                bomExpansionService, transferService, productionPlanService, null, null,
+                com.cretas.aims.service.unit.TestUnitContractFactory.legacyFacade());
     }
 
     private ProductionPlanDTO plan(BigDecimal plannedQty) {
