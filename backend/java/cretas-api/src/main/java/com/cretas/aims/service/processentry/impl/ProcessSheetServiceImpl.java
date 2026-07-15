@@ -10,6 +10,7 @@ import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
 import com.cretas.aims.dto.processentry.ProcessSheetRowView;
 import com.cretas.aims.dto.processentry.ResolvedEdge;
+import com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionBatch;
@@ -17,6 +18,7 @@ import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.processentry.ProcessSheetRowChangeLog;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.event.WorkflowTaskProgressRequestedEvent;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.WorkProcess;
@@ -47,6 +49,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -133,6 +136,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     @Autowired(required = false)
     private com.cretas.aims.service.workflow.WorkflowClerkSheetService workflowClerkSheetService;
 
+    /** Workflow progress is projected only after the process-sheet transaction commits. */
+    @Autowired(required = false)
+    private ApplicationEventPublisher applicationEventPublisher;
+
     @Override
     @Transactional
     public ProcessSheetRowResult saveRow(String factoryId, String planId,
@@ -160,7 +167,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // 1.6 2B B3: workflow 批次行防呆校验 (产出类型/单位对齐 workflow 端口)。
         //     与 validateCustomFields 同置于 upsert 查重之前 → 覆盖 create + re-save 两条路径, 早于任何写入。
         //     legacy 计划 (无 workflow 批次) → getWorkflowSheetConfig 返回 null → 直接放行, 现有路径不变。
-        validateWorkflowRowIfApplicable(factoryId, planId, req);
+        WorkflowClerkSheetConfigDTO workflowConfig =
+                validateWorkflowRowIfApplicable(factoryId, planId, req);
 
         // 2. upsert 键查重: 已存在 → 委托 re-save (Task 1.6 stub)
         Optional<ProcessSheetRow> existing = rowRepo
@@ -168,7 +176,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         factoryId, planId, req.getProcessCode(), req.getClientRowId());
         if (existing.isPresent()) {
             // TODO(Task 1.6): re-save = update-in-place 保 id (校验无下游消耗 + 重写边/报工)。
-            return resaveRow(factoryId, planId, req, userId, existing.get());
+            return resaveRow(factoryId, planId, req, userId, existing.get(), workflowConfig);
         }
 
         List<String> warnings = new ArrayList<>();
@@ -201,7 +209,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             String anchor = postSfiOutput(factoryId, planId, req, warnings);
             persistRow(factoryId, planId, req, null, anchor, ProcessSheetRow.STATUS_SAVED_SFI);
             logChange(factoryId, planId, req, "CREATE", null, req, userId);
-            stampWorkflowTaskIfApplicable(factoryId, planId, req); // 2B B3 F3: 回写 workflow 任务进度 (fail-soft)
+            stampWorkflowTaskIfApplicable(factoryId, planId, req, workflowConfig);
             // materialized=true: 产出已入 SFI 库 (下游可选); yieldRate 可算; 成本诚实 (投入未知 → null)。
             return buildResult(req, null, anchor, yieldRate(req), null, null, false, true, warnings);
         }
@@ -224,12 +232,13 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 rawMaterialTypeId,
                 userId);
 
-        MaterializedBatch mat = clerkService.materializeBatch(ctx, List.of(step), edges, warnings);
+        MaterializedBatch mat = materializeSheetBatch(
+                ctx, List.of(step), edges, warnings, workflowConfig);
 
         // 8. 写 process_sheet_rows (try/catch UK 冲突 → 409; 完整并发测在 Task 1.7)
         persistRow(factoryId, planId, req, mat.getProductionBatchId(), mat.getBatchNumber(), "SAVED");
         logChange(factoryId, planId, req, "CREATE", null, req, userId);
-        stampWorkflowTaskIfApplicable(factoryId, planId, req); // 2B B3 F3: 回写 workflow 任务进度 (fail-soft)
+        stampWorkflowTaskIfApplicable(factoryId, planId, req, workflowConfig);
 
         // 9. 组装结果
         return buildResult(req, mat.getProductionBatchId(), mat.getBatchNumber(),
@@ -250,13 +259,14 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
      * legacy 计划 (service 返回 null) / 未注入 (单测) / DRAFT 行 (无产出) → 放行, 现有路径不变。
      * 产出 SKU (productType) 的严格对齐留待 FE 产出 SKU 回填经 E2E 确认后再收紧, 避免误阻断 (MVP)。
      */
-    private void validateWorkflowRowIfApplicable(String factoryId, String planId, ProcessSheetRowRequest req) {
+    private WorkflowClerkSheetConfigDTO validateWorkflowRowIfApplicable(
+            String factoryId, String planId, ProcessSheetRowRequest req) {
         if (workflowClerkSheetService == null) {
-            return; // 单测/未注入
+            return null; // 单测/未注入
         }
         // DRAFT 行 (产出<=0) 尚无产出, 不校验产出类型/单位
         if (req.getOutputQuantity() == null || req.getOutputQuantity().signum() <= 0) {
-            return;
+            return null;
         }
         com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO config;
         try {
@@ -272,7 +282,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withHintTarget("Workflow");
         }
         if (config == null) {
-            return; // 明确 legacy 计划 — 不校验
+            return null; // 明确 legacy 计划 — 不校验
         }
         if (config.getProcesses() == null || config.getProcesses().isEmpty()) {
             throw new BusinessException(409, "Workflow 运行时没有可报工工序")
@@ -339,53 +349,77 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withCode("WORKFLOW_ROW_OUTPUT_UNIT_MISMATCH")
                     .withHint("请按 Workflow 配置的单位录入产出数量");
         }
+        return config;
     }
 
     /**
      * 2B B3 (F3 回写): workflow 批次行产出后, 把对应 workflow 工序任务 (WorkProcessTask) 标记为 COMPLETED
      * 并回写实际产量, 使 workflow 运行时视图反映文员逐道录入的进度 (否则任务永远 PENDING)。
      *
-     * <p><b>fail-soft</b>: 任何异常只记 warn, 绝不阻断已完成的行保存/物化/库存写入 (进度回写非关键路径)。
-     * legacy 计划 / 未注入 / 找不到对应任务 → 静默跳过。仅在行确有产出 (SAVED / SAVED_SFI) 后调用。
+     * <p><b>fail-soft</b>: 主事务只发布携带精确 Workflow 快照的事件；提交后再用独立事务回写任务进度。
+     * 回写异常由监听器隔离，绝不反向回滚已保存的逐道行、物化批次或库存。
+     * legacy 计划 / 未注入 / 找不到对应工序描述 → 静默跳过。仅在行确有产出后调用。
      */
-    private void stampWorkflowTaskIfApplicable(String factoryId, String planId, ProcessSheetRowRequest req) {
-        if (workflowClerkSheetService == null || taskRepo == null) {
+    private void stampWorkflowTaskIfApplicable(
+            String factoryId,
+            String planId,
+            ProcessSheetRowRequest req,
+            WorkflowClerkSheetConfigDTO config) {
+        if (applicationEventPublisher == null || config == null
+                || config.getProcesses() == null || config.getWorkflowInstanceId() == null) {
             return;
         }
-        try {
-            com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO config =
-                    workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId);
-            if (config == null || config.getProcesses() == null || config.getWorkflowInstanceId() == null) {
-                return; // legacy 计划
-            }
-            com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.ProcessDescriptor desc =
-                    config.getProcesses().stream()
-                            .filter(p -> p.getProcessOrder() != null
-                                    && p.getProcessOrder().equals(req.getProcessOrder()))
-                            .findFirst()
-                            .orElse(null);
-            if (desc == null || desc.getWorkflowNodeId() == null) {
-                return;
-            }
-            List<com.cretas.aims.entity.workprocess.WorkProcessTask> tasks =
-                    taskRepo.findByFactoryIdAndWorkflowInstanceIdOrderByProcessOrderAsc(
-                            factoryId, config.getWorkflowInstanceId());
-            com.cretas.aims.entity.workprocess.WorkProcessTask task = tasks.stream()
-                    .filter(t -> desc.getWorkflowNodeId().equals(t.getWorkflowNodeId()))
-                    .findFirst()
-                    .orElse(null);
-            if (task == null) {
-                return;
-            }
-            if (req.getOutputQuantity() != null) {
-                task.setActualQuantity(req.getOutputQuantity());
-            }
-            task.setStatus(com.cretas.aims.entity.workprocess.WorkProcessTask.Status.COMPLETED);
-            taskRepo.save(task);
-        } catch (Exception e) {
-            log.warn("2B B3 workflow 任务进度回写失败 (不阻断保存): planId={}, processOrder={}, err={}",
-                    planId, req.getProcessOrder(), e.getMessage());
+        WorkflowClerkSheetConfigDTO.ProcessDescriptor desc = config.getProcesses().stream()
+                .filter(p -> p.getProcessOrder() != null
+                        && p.getProcessOrder().equals(req.getProcessOrder()))
+                .findFirst()
+                .orElse(null);
+        if (desc == null || desc.getWorkflowNodeId() == null) {
+            return;
         }
+        applicationEventPublisher.publishEvent(new WorkflowTaskProgressRequestedEvent(
+                factoryId,
+                planId,
+                config.getWorkflowInstanceId(),
+                desc.getWorkflowNodeId(),
+                req.getProcessOrder(),
+                req.getOutputQuantity()));
+    }
+
+    /**
+     * Workflow plans already own one canonical runtime ProductionBatch. A finished process-sheet row must
+     * materialize into that batch; creating another plan-linked batch makes the runtime snapshot ambiguous.
+     */
+    private MaterializedBatch materializeSheetBatch(
+            MaterializeContext ctx,
+            List<StepEntry> steps,
+            List<ResolvedEdge> edges,
+            List<String> warnings,
+            WorkflowClerkSheetConfigDTO workflowConfig) {
+        if (!ctx.isFinished() || workflowConfig == null || workflowConfig.getWorkflowBatchId() == null) {
+            return clerkService.materializeBatch(ctx, steps, edges, warnings);
+        }
+        ProductionBatch runtimeBatch = productionBatchRepo
+                .findByIdAndFactoryId(workflowConfig.getWorkflowBatchId(), ctx.getFactoryId())
+                .orElseThrow(() -> new BusinessException(409, "Workflow 运行批次不存在，不能保存成品道报工")
+                        .withCode("WORKFLOW_RUNTIME_BATCH_MISSING")
+                        .withHint("请刷新后重试；若仍失败，请重新生成该计划的生产批次")
+                        .withSeverity("BLOCKING")
+                        .withHintTarget("Workflow"));
+        if (!Objects.equals(runtimeBatch.getProductTypeId(), ctx.getProductTypeId())) {
+            // A non-primary finished byproduct owns its own batch; only the Workflow primary product reuses runtime.
+            return clerkService.materializeBatch(ctx, steps, edges, warnings);
+        }
+        if (!rowRepo.findByFactoryIdAndBatchId(ctx.getFactoryId(), runtimeBatch.getId()).isEmpty()) {
+            throw new BusinessException(409, "Workflow 运行批次已关联其他逐道录入行")
+                    .withCode("WORKFLOW_RUNTIME_BATCH_ALREADY_REPORTED")
+                    .withHint("请刷新逐道录入页面，编辑已有成品道记录")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
+        }
+        ctx.setBatchNumber(runtimeBatch.getBatchNumber());
+        return clerkService.rematerializeInPlace(
+                ctx, runtimeBatch.getId(), null, steps, edges, warnings);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -434,7 +468,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
         // 2. 写入前先按 Workflow 快照逐产出对齐端口。WORKFLOW 模式任何异常都 fail-closed，
         // 不能删完旧组后才发现单位/端口错误。
-        validateMultiOutputAgainstWorkflow(factoryId, planId, req);
+        WorkflowClerkSheetConfigDTO workflowConfig =
+                validateMultiOutputAgainstWorkflow(factoryId, planId, req);
 
         // 2b. 重存 (B2): base#* 组已存在 → 先删旧组 (级联反物化), 再建新组。整组无小结/无下游消耗才可删。
         deleteMultiOutputGroupIfPresent(factoryId, planId, req.getClientRowId(), userId);
@@ -450,7 +485,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             ProcessSheetRowRequest.OutputLine o = outs.get(i);
             boolean carryInputs = (i == 0); // 首产出行承载全部实际投入 + 人工/调料
             ProcessSheetRowRequest one = synthesizeOutputRequest(req, o, i, carryInputs);
-            OneOutputOutcome outcome = materializeOneOutput(factoryId, planId, one, userId, warnings);
+            OneOutputOutcome outcome = materializeOneOutput(
+                    factoryId, planId, one, userId, warnings, workflowConfig);
             logChange(factoryId, planId, one, "CREATE", null, one, userId);
             ProcessSheetRowResult.OutputResult or = new ProcessSheetRowResult.OutputResult();
             or.setClientRowId(one.getClientRowId());
@@ -466,7 +502,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         }
 
         // 4. workflow 任务进度回写一次 (整道工序完成)
-        stampWorkflowTaskIfApplicable(factoryId, planId, req);
+        stampWorkflowTaskIfApplicable(factoryId, planId, req, workflowConfig);
 
         // 5. 汇总结果: 首产出批为代表 + 全部产出明细 (FE 重载过程单会拿到 N 行)。工序不处理成本 → 顶层成本 null。
         ProcessSheetRowResult.OutputResult first = outputResults.get(0);
@@ -481,7 +517,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
      * 复刻 saveRow 单产出的 pure-SFI / WIP-FG 两分支决策 + 物化 + 落行, 返回批次/成本。
      */
     private OneOutputOutcome materializeOneOutput(String factoryId, String planId,
-            ProcessSheetRowRequest one, Long userId, List<String> warnings) {
+            ProcessSheetRowRequest one, Long userId, List<String> warnings,
+            WorkflowClerkSheetConfigDTO workflowConfig) {
         assertExternalFeedUnitSupported(one);
         List<ResolvedEdge> edges = resolveEdges(factoryId, planId, one);
         // 半成品且 (纯 SFI 喂 或 无真实投入[非首产出行]) → 产出直接入 SFI 库 (product 维度, 无需 material_type_id)。
@@ -504,7 +541,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 clerkService.resolveWarehouseId(factoryId, WarehouseCodes.WH_WKS, warnings),
                 rawMaterialTypeId,
                 userId);
-        MaterializedBatch mat = clerkService.materializeBatch(ctx, List.of(step), edges, warnings);
+        MaterializedBatch mat = materializeSheetBatch(
+                ctx, List.of(step), edges, warnings, workflowConfig);
         persistRow(factoryId, planId, one, mat.getProductionBatchId(), mat.getBatchNumber(), "SAVED");
         return new OneOutputOutcome(mat.getProductionBatchId(), mat.getBatchNumber(), mat.getRowTotalCost());
     }
@@ -579,10 +617,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
      * 2B.2 B3: 多产出逐产出对齐 workflow 端口 (finished 类型 + 单位)。
      * 只有明确 legacy 计划放行；WORKFLOW 模式必须按 workflowPortId 精确匹配，不按序号或请求单位兜底。
      */
-    private void validateMultiOutputAgainstWorkflow(String factoryId, String planId,
+    private WorkflowClerkSheetConfigDTO validateMultiOutputAgainstWorkflow(String factoryId, String planId,
             ProcessSheetRowRequest req) {
         if (workflowClerkSheetService == null) {
-            return;
+            return null;
         }
         com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO config;
         try {
@@ -598,7 +636,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withHintTarget("Workflow");
         }
         if (config == null) {
-            return; // 明确 legacy
+            return null; // 明确 legacy
         }
         if (config.getProcesses() == null || config.getProcesses().isEmpty()) {
             throw new BusinessException(409, "Workflow 运行时没有可报工工序")
@@ -731,6 +769,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withHintTarget("Workflow");
         }
         req.setOutputQuantity(primaryOutput.getQuantity());
+        return config;
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -834,7 +873,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
      */
     private ProcessSheetRowResult resaveRow(String factoryId, String planId,
                                             ProcessSheetRowRequest req, Long userId,
-                                            ProcessSheetRow existing) {
+                                            ProcessSheetRow existing,
+                                            WorkflowClerkSheetConfigDTO workflowConfig) {
         // 🔒 G3 防双扣: 已小结入库的行不可直接编辑。
         // 否则 CASE B2 会软删旧消耗边 + 重建 interim_settled_at=NULL 的新边 (下次小结再次扣减原料,
         // 原扣减从未反冲 → usedQuantity 超扣), 且行仍带戳 → 更正后的产出永不重新过账。
@@ -889,9 +929,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 String anchor = postSfiOutput(factoryId, planId, req, warnings);
                 updateRowInPlace(existing, req, null, anchor, ProcessSheetRow.STATUS_SAVED_SFI);
                 logChange(factoryId, planId, req, "UPDATE", beforeReq, req, userId);
+                stampWorkflowTaskIfApplicable(factoryId, planId, req, workflowConfig);
                 return buildResult(req, null, anchor, yieldRate(req), null, null, true, true, warnings);
             }
-            // DRAFT → 物化: 像 create 一样新建批次 (DRAFT 之前无批, 无 id 可保)。
+            // DRAFT → 物化: legacy 计划新建批次；Workflow 成品道复用计划已有运行批次。
             String rawMaterialTypeId = resolveRawMaterialTypeId(req, edges);
             StepEntry step = buildStepEntry(factoryId, req);
             MaterializeContext ctx = new MaterializeContext(
@@ -904,9 +945,11 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     clerkService.resolveWarehouseId(factoryId, WarehouseCodes.WH_WKS, warnings),
                     rawMaterialTypeId,
                     userId);
-            MaterializedBatch mat = clerkService.materializeBatch(ctx, List.of(step), edges, warnings);
+            MaterializedBatch mat = materializeSheetBatch(
+                    ctx, List.of(step), edges, warnings, workflowConfig);
             updateRowInPlace(existing, req, mat.getProductionBatchId(), mat.getBatchNumber(), "SAVED");
             logChange(factoryId, planId, req, "UPDATE", beforeReq, req, userId);
+            stampWorkflowTaskIfApplicable(factoryId, planId, req, workflowConfig);
             return buildResult(req, mat.getProductionBatchId(), mat.getBatchNumber(),
                     yieldRate(req), mat.getRowTotalCost(), unitPrice(mat.getRowTotalCost(), newOutput),
                     true, true, warnings);
@@ -961,6 +1004,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // batchId/batchNumber 不变; 仅刷新 payload + status。
         updateRowInPlace(existing, req, existing.getBatchId(), existing.getBatchNumber(), "SAVED");
         logChange(factoryId, planId, req, "UPDATE", beforeReq, req, userId);
+        stampWorkflowTaskIfApplicable(factoryId, planId, req, workflowConfig);
         return buildResult(req, existing.getBatchId(), existing.getBatchNumber(),
                 yieldRate(req), mat.getRowTotalCost(), unitPrice(mat.getRowTotalCost(), newOutput),
                 true, true, warnings);
