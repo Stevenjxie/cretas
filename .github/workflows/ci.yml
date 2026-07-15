@@ -92,6 +92,19 @@ jobs:
           psql -h localhost -U cretas_user -d cretas_db             -c "CREATE EXTENSION IF NOT EXISTS vector;"
           psql -h localhost -U cretas_user -d cretas_r10_it_test    -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
+      # Fast, explicit startup gate for declared Repository JPQL/HQL.
+      # Mockito service tests never instantiate Repository proxies, so invalid
+      # queries otherwise survive compilation and fail only when Spring starts.
+      # The naming convention is enforced by AGENTS.md for all new query tests.
+      - name: JPA repository query startup gate
+        working-directory: backend/java/cretas-api
+        timeout-minutes: 15
+        run: >-
+          mvn -B test
+          -Dspring.profiles.active=test
+          -Dtest='*RepositoryQueryValidationTest'
+          -Dsurefire.failIfNoSpecifiedTests=false
+
       - name: Maven compile and test
         working-directory: backend/java/cretas-api
         # clean 去掉: 全新 runner 无 target 可清, clean 是 no-op 反而拖时间。
