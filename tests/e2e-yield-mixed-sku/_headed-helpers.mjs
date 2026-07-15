@@ -352,9 +352,9 @@ async function selectBomProduct(page, product) {
   if (!(await option.isVisible().catch(() => false))) {
     throw new Error(`BOM product option not visible for ${product.name}`);
   }
-  await option.dispatchEvent('mousedown').catch(() => null);
-  await option.dispatchEvent('mouseup').catch(() => null);
-  await option.dispatchEvent('click').catch(() => null);
+  // Element Plus updates its model from the real pointer/click path. Raw DOM
+  // dispatchEvent calls can leave the dropdown open without firing the BOM watcher.
+  await option.click({ force: true });
   let response = await waitForTargetLoad;
   if (!response) {
     await input.click();

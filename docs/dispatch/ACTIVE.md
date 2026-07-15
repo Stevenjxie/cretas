@@ -8,6 +8,7 @@
 
 | ID | Base SHA | Scope 锁 | Owner | Mode | Worktree/PR | Status | Blocker | Next action |
 |---|---|---|---|---|---|---|---|---|
+| GOVERNANCE-E2E-SALVAGE-20260715 | `190167767` | `AGENTS.md`; `scripts/deploy/verify-release.sh`; `scripts/maintenance/worktree-report.sh`; `scripts/tests/**`; `tests/e2e-yield-mixed-sku/{_headed-helpers,headed-workflow-clerk}.mjs`; 本任务 dispatch 归档 | root | implementation | `C:\Users\Steve\cretas-governance-e2e-salvage` | in-progress | 无 | 移植、修正并执行目标测试 |
 
 ## 阻塞项
 
