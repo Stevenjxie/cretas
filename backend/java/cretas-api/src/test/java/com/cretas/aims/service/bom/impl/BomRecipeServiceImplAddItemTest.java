@@ -140,7 +140,8 @@ class BomRecipeServiceImplAddItemTest {
         staleActive.setIsCurrent(false);
 
         when(recipeRepo.findById(recipe.getId())).thenReturn(Optional.of(recipe));
-        when(recipeRepo.findCompetingVersionsForActivation("F006", "SKU-001", recipe.getId()))
+        when(recipeRepo.findCompetingVersionsForActivation(
+                "F006", "SKU-001", recipe.getId(), BomRecipe.Status.ACTIVE))
                 .thenReturn(List.of(oldCurrent, staleActive));
         when(recipeRepo.save(any(BomRecipe.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
