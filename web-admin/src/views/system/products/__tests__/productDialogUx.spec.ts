@@ -18,4 +18,19 @@ describe('SKU editor dialog UX', () => {
     expect(source).toContain("1 {{ formData.unit || '基本单位' }} =");
     expect(source).not.toContain('标准单位换算（1${formData.unit');
   });
+
+  it('keeps semi-finished base units editable and exposes a real preview-first import flow', () => {
+    expect(source).toContain('if (!formData.unit) formData.unit = \'kg\'');
+    expect(source).not.toContain(':disabled="isSemiFinishedSku"');
+    expect(source).toContain('v-model="importDialogVisible"');
+    expect(source).toContain('/product-types/import/template');
+    expect(source).toContain('/product-types/import/preview');
+    expect(source).toContain('/product-types/import/confirm');
+    expect(source).toContain('/upload/product-image');
+    expect(source).toContain("formData.append('imageMappings', JSON.stringify(allMappings))");
+    expect(source).toContain('accept=".xlsx"');
+    expect(source).not.toContain('accept=".xlsx,.xls"');
+    expect(source).toContain('prop="specification" label="生成规格"');
+    expect(source).toContain("{{ row.specification || '—' }}");
+  });
 });

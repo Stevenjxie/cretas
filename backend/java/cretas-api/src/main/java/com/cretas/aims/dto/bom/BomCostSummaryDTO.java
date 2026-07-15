@@ -80,6 +80,13 @@ public class BomCostSummaryDTO {
 
     private String caliberHint;
 
+    /** Current BOM estimate, never a rewrite of historical actual cost. */
+    @Builder.Default
+    private String costNature = "CURRENT_ESTIMATE";
+
+    /** Finished-product display caliber, e.g. 元/kg, 元/盒 or 元/基本单位. */
+    private String costUnit;
+
     // ============ B-BUG-1: 缺价完整性标记 (2026-06-21 transcript-e2e R1) ============
 
     /**
@@ -158,6 +165,15 @@ public class BomCostSummaryDTO {
         private String unitPriceCaliber;
 
         private String caliberHint;
+
+        /** Display-ready unit-price caliber: 元/kg or 元/基本单位. */
+        private String unitPriceUnit;
+
+        /** CURRENT_MOVING_AVERAGE or BOM_SNAPSHOT_FALLBACK. */
+        private String priceSource;
+
+        @Builder.Default
+        private boolean estimatedPrice = true;
 
         /**
          * 税率 (%)

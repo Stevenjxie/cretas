@@ -446,7 +446,8 @@ const isSemiFinishedSku = computed(() => formData.productCategory === 'SEMI_FINI
 
 function applyCategoryUnitContract(): void {
   if (!isSemiFinishedSku.value) return;
-  formData.unit = 'kg';
+  // 半成品可按实际 SKU 定义基本单位；仅重量型 SKU 在 Workflow/报工层统一折算为 kg。
+  if (!formData.unit) formData.unit = 'kg';
   formData.gramsPerUnit = undefined;
   formData.wipToFgYield = undefined;
   formData.level1Unit = undefined;
@@ -1136,8 +1137,223 @@ function handleExport() {
   ElMessage.success('导出成功');
 }
 
+interface SkuImportIssue {
+  sheetName?: string;
+  rowNumber?: number;
+  field?: string;
+  code?: string;
+  message: string;
+}
+interface SkuImportPreviewRow {
+  sheetName: string;
+  rowNumber: number;
+  skuCategory?: string;
+  skuCode?: string;
+  name?: string;
+  unit?: string;
+  specification?: string;
+  imageUrl?: string;
+  imageFileName?: string;
+  matchedImageName?: string;
+  status: 'VALID' | 'INVALID' | 'SKIPPED_EXAMPLE';
+  errors?: SkuImportIssue[];
+}
+interface SkuImportPreview {
+  previewToken: string;
+  fileSha256: string;
+  totalRows: number;
+  validRows: number;
+  invalidRows: number;
+  rows: SkuImportPreviewRow[];
+  errors: SkuImportIssue[];
+}
+interface ImageMapping { skuCode: string; fileName?: string; url: string }
+
+const importDialogVisible = ref(false);
+const importExcelFile = ref<File | null>(null);
+const importImageFiles = ref<File[]>([]);
+const importImageUrlText = ref('');
+const importPreview = ref<SkuImportPreview | null>(null);
+const importPreviewing = ref(false);
+const importConfirming = ref(false);
+const importDownloading = ref(false);
+const importImageUploading = ref(false);
+const duplicateImageCodes = computed(() => {
+  const counts = new Map<string, number>();
+  importImageFiles.value.forEach((file) => {
+    const code = file.name.replace(/\.[^.]+$/, '').trim();
+    counts.set(code, (counts.get(code) || 0) + 1);
+  });
+  return new Set([...counts.entries()].filter(([, count]) => count > 1).map(([code]) => code));
+});
+
 function handleImport() {
-  ElMessage.info('请使用 Excel 上传功能批量导入产品');
+  importExcelFile.value = null;
+  importImageFiles.value = [];
+  importImageUrlText.value = '';
+  importPreview.value = null;
+  importDialogVisible.value = true;
+}
+
+function handleImportExcelChange(file: { raw?: File }) {
+  importExcelFile.value = file.raw || null;
+  importPreview.value = null;
+}
+
+function handleImportImagesChange(_file: unknown, files: Array<{ raw?: File }>) {
+  importImageFiles.value = files.map((item) => item.raw).filter((file): file is File => !!file);
+  importPreview.value = null;
+}
+
+function validImportImage(file: File): boolean {
+  return ['image/jpeg', 'image/png'].includes(file.type) && file.size <= 5 * 1024 * 1024;
+}
+
+function parseImageUrlMappings(): ImageMapping[] | null {
+  const mappings: ImageMapping[] = [];
+  const codes = new Set<string>();
+  for (const [index, raw] of importImageUrlText.value.split(/\r?\n/).entries()) {
+    const line = raw.trim();
+    if (!line) continue;
+    const comma = line.indexOf(',');
+    const skuCode = (comma >= 0 ? line.slice(0, comma) : '').trim();
+    const url = (comma >= 0 ? line.slice(comma + 1) : '').trim();
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      ElMessage.warning(`图片 URL 第 ${index + 1} 行格式错误，请使用“SKU编号,https://...”`);
+      return null;
+    }
+    if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+      ElMessage.warning(`图片 URL 第 ${index + 1} 行必须使用 http 或 https`);
+      return null;
+    }
+    if (codes.has(skuCode)) {
+      ElMessage.warning(`图片 URL 中 SKU 编号 ${skuCode} 重复`);
+      return null;
+    }
+    codes.add(skuCode);
+    mappings.push({ skuCode, url });
+  }
+  return mappings;
+}
+
+function importRowErrorText(row: SkuImportPreviewRow): string {
+  return row.errors?.map((item) => item.message).join('；') || '—';
+}
+
+async function uploadImportImages(): Promise<ImageMapping[] | null> {
+  if (duplicateImageCodes.value.size > 0) {
+    ElMessage.warning(`存在重复图片编号：${[...duplicateImageCodes.value].join('、')}`);
+    return null;
+  }
+  const invalid = importImageFiles.value.find((file) => !validImportImage(file));
+  if (invalid) {
+    ElMessage.warning(`图片 ${invalid.name} 不是 5MB 以内的 JPG/PNG`);
+    return null;
+  }
+  importImageUploading.value = importImageFiles.value.length > 0;
+  try {
+    return await Promise.all(importImageFiles.value.map(async (file) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const response = await post<{ url: string }>(`/${factoryId.value}/upload/product-image`, formData);
+      if (!response.success || !response.data?.url) throw new Error(`${file.name} 上传失败`);
+      return {
+        skuCode: file.name.replace(/\.[^.]+$/, '').trim(),
+        fileName: file.name,
+        url: response.data.url,
+      };
+    }));
+  } finally {
+    importImageUploading.value = false;
+  }
+}
+
+async function downloadSkuImportTemplate() {
+  if (!factoryId.value || importDownloading.value) return;
+  importDownloading.value = true;
+  try {
+    const response = await get<Blob>(`/${factoryId.value}/product-types/import/template`, { responseType: 'blob' });
+    const blob = response instanceof Blob ? response : response.data;
+    if (!(blob instanceof Blob)) throw new Error('模板文件响应无效');
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'SKU批量导入模板.xlsx';
+    anchor.click();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    handleCatchError(error, '下载 SKU 导入模板失败');
+  } finally {
+    importDownloading.value = false;
+  }
+}
+
+async function previewSkuImport() {
+  if (!factoryId.value || !importExcelFile.value) {
+    ElMessage.warning('请先选择 Excel 文件');
+    return;
+  }
+  if (!importExcelFile.value.name.toLowerCase().endsWith('.xlsx')) {
+    ElMessage.warning('仅支持后端模板生成的 .xlsx 文件');
+    return;
+  }
+  if (importExcelFile.value.size > 10 * 1024 * 1024) {
+    ElMessage.warning('Excel 文件不能超过 10MB');
+    return;
+  }
+  const urlMappings = parseImageUrlMappings();
+  if (urlMappings == null) return;
+  const fileCodes = new Set(importImageFiles.value.map((file) => file.name.replace(/\.[^.]+$/, '').trim()));
+  const overlapping = urlMappings.find((mapping) => fileCodes.has(mapping.skuCode));
+  if (overlapping) {
+    ElMessage.warning(`SKU 编号 ${overlapping.skuCode} 同时配置了图片 URL 和本地图片，请保留一种来源`);
+    return;
+  }
+  importPreviewing.value = true;
+  try {
+    const uploadedMappings = await uploadImportImages();
+    if (uploadedMappings == null) return;
+    const allMappings = [...urlMappings, ...uploadedMappings];
+    const duplicate = allMappings.find((mapping, index) => (
+      allMappings.findIndex((candidate) => candidate.skuCode === mapping.skuCode) !== index
+    ));
+    if (duplicate) {
+      ElMessage.warning(`SKU 编号 ${duplicate.skuCode} 同时配置了多张图片，请保留一种来源`);
+      return;
+    }
+    const formData = new FormData();
+    formData.append('file', importExcelFile.value);
+    if (allMappings.length) formData.append('imageMappings', JSON.stringify(allMappings));
+    const response = await post<SkuImportPreview>(`/${factoryId.value}/product-types/import/preview`, formData);
+    if (!response.success || !response.data) throw new Error(response.message || '导入预览失败');
+    importPreview.value = response.data;
+  } catch (error) {
+    handleCatchError(error, 'SKU 导入预览失败');
+  } finally {
+    importPreviewing.value = false;
+  }
+}
+
+async function confirmSkuImport() {
+  if (!factoryId.value || !importPreview.value || importPreview.value.invalidRows > 0) return;
+  importConfirming.value = true;
+  try {
+    const response = await post<{ totalRows: number; createdCount: number }>(
+      `/${factoryId.value}/product-types/import/confirm`,
+      { previewToken: importPreview.value.previewToken },
+    );
+    if (!response.success || !response.data) throw new Error(response.message || '确认导入失败');
+    ElMessage.success(`导入完成：成功创建 ${response.data.createdCount} 个 SKU`);
+    importDialogVisible.value = false;
+    await loadData();
+  } catch (error) {
+    handleCatchError(error, '确认导入 SKU 失败');
+  } finally {
+    importConfirming.value = false;
+  }
 }
 
 function getCategoryLabel(value?: string) {
@@ -1609,12 +1825,11 @@ async function handleAiProductCreate() {
             v-model="formData.unit"
             placeholder="选择或输入基本单位（如 盒、包、kg）"
             filterable allow-create clearable style="width: 100%"
-            :disabled="isSemiFinishedSku"
             @change="markUnitEdited"
           >
             <el-option v-for="opt in unitSelectOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
           </el-select>
-          <div class="form-tip" v-if="isSemiFinishedSku">半成品库存与报工单位固定为 kg，不维护标准克重或装箱规格</div>
+          <div class="form-tip" v-if="isSemiFinishedSku">半成品只维护基本单位；g/kg 等重量单位在生产报工时统一按 kg，非重量单位（如只、件）保留 SKU 单位</div>
           <div class="form-tip" v-else>基本单位 = 最小计量/售卖单位（成品如「盒」「袋」）；修改后会同步标准克重和所有装箱换算右侧单位</div>
         </el-form-item>
         <!-- 标准单位换算明确展示完整等式，避免动态长标签在窄弹窗中折行。 -->
@@ -1753,6 +1968,124 @@ async function handleAiProductCreate() {
         <el-button type="primary" :loading="submitting" @click="handleSubmit">
           确定
         </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="importDialogVisible"
+      title="批量导入 SKU"
+      width="920px"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <el-alert type="info" :closable="false" show-icon style="margin-bottom: 12px">
+        <template #title>使用后端提供的四工作表模板</template>
+        <template #default>
+          模板包含成品、半成品、客户自带原料加工、纯代工。先预览校验，确认后才会原子写入；示例行不会导入。
+        </template>
+      </el-alert>
+      <div class="import-actions">
+        <el-button :icon="Download" :loading="importDownloading" @click="downloadSkuImportTemplate">下载 Excel 模板</el-button>
+        <el-upload
+          accept=".xlsx"
+          :auto-upload="false"
+          :limit="1"
+          :show-file-list="true"
+          :on-change="handleImportExcelChange"
+          :on-remove="() => { importExcelFile = null; importPreview = null; }"
+        >
+          <el-button :icon="Upload" type="primary">选择 Excel</el-button>
+        </el-upload>
+      </div>
+      <el-divider content-position="left">SKU 图片（可选）</el-divider>
+      <el-row :gutter="16">
+        <el-col :span="12">
+          <el-form-item label="图片 URL">
+            <el-input
+              v-model="importImageUrlText"
+              type="textarea"
+              :rows="5"
+              placeholder="每行：SKU编号,https://example.com/image.jpg"
+              @input="importPreview = null"
+            />
+          </el-form-item>
+        </el-col>
+        <el-col :span="12">
+          <el-form-item label="批量图片匹配">
+            <el-upload
+              accept="image/jpeg,image/png"
+              multiple
+              :auto-upload="false"
+              :show-file-list="true"
+              :on-change="handleImportImagesChange"
+              :on-remove="handleImportImagesChange"
+            >
+              <el-button :icon="Picture">选择 JPG / PNG</el-button>
+            </el-upload>
+            <div class="form-tip">图片文件名（不含扩展名）必须等于 SKU 编号；单张不超过 5MB。</div>
+            <el-alert
+              v-if="duplicateImageCodes.size"
+              type="error"
+              :closable="false"
+              :title="`重复编号：${[...duplicateImageCodes].join('、')}`"
+            />
+          </el-form-item>
+        </el-col>
+      </el-row>
+      <div class="import-preview-action">
+        <el-button
+          type="primary"
+          :loading="importPreviewing || importImageUploading"
+          :disabled="!importExcelFile"
+          @click="previewSkuImport"
+        >上传并预览</el-button>
+      </div>
+      <template v-if="importPreview">
+        <el-divider content-position="left">导入预览</el-divider>
+        <div class="import-summary">
+          <el-tag>总计 {{ importPreview.totalRows }}</el-tag>
+          <el-tag type="success">有效 {{ importPreview.validRows }}</el-tag>
+          <el-tag :type="importPreview.invalidRows ? 'danger' : 'info'">错误 {{ importPreview.invalidRows }}</el-tag>
+        </div>
+        <el-table :data="importPreview.rows" border stripe size="small" max-height="340">
+          <el-table-column prop="sheetName" label="工作表" width="130" />
+          <el-table-column prop="rowNumber" label="行" width="60" align="center" />
+          <el-table-column prop="skuCode" label="SKU 编号" width="140" show-overflow-tooltip />
+          <el-table-column prop="name" label="名称" min-width="140" show-overflow-tooltip />
+          <el-table-column prop="unit" label="单位" width="70" />
+          <el-table-column prop="specification" label="生成规格" min-width="180" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.specification || '—' }}</template>
+          </el-table-column>
+          <el-table-column label="图片" width="130" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.matchedImageName || row.imageUrl || '未匹配' }}</template>
+          </el-table-column>
+          <el-table-column label="状态" width="100" align="center">
+            <template #default="{ row }">
+              <el-tag :type="row.status === 'VALID' ? 'success' : row.status === 'INVALID' ? 'danger' : 'info'">
+                {{ row.status === 'VALID' ? '可导入' : row.status === 'INVALID' ? '有错误' : '示例行跳过' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="错误" min-width="220" show-overflow-tooltip>
+            <template #default="{ row }">{{ importRowErrorText(row) }}</template>
+          </el-table-column>
+        </el-table>
+        <el-alert
+          v-if="importPreview.errors.length"
+          type="error"
+          :closable="false"
+          style="margin-top: 10px"
+          :title="`请先修正 ${importPreview.invalidRows} 行错误后重新预览`"
+        />
+      </template>
+      <template #footer>
+        <el-button @click="importDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="importConfirming"
+          :disabled="!importPreview || importPreview.invalidRows > 0 || importPreview.validRows === 0"
+          @click="confirmSkuImport"
+        >确认导入 {{ importPreview?.validRows || 0 }} 个 SKU</el-button>
       </template>
     </el-dialog>
 
@@ -2136,6 +2469,16 @@ async function handleAiProductCreate() {
     border: 1px dashed #dcdfe6;
   }
 }
+
+.import-actions,
+.import-preview-action,
+.import-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.import-preview-action { justify-content: flex-end; margin-top: 12px; }
+.import-summary { margin-bottom: 10px; }
 
 .form-tip {
   font-size: 12px;

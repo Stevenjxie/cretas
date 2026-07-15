@@ -47,8 +47,9 @@ const recipeStatusTagType: Record<BomRecipeStatus, '' | 'success' | 'info' | 'wa
 const recipeStatusLabel: Record<BomRecipeStatus, string> = {
   DRAFT: '草稿',
   ACTIVE: '已生效',
-  ARCHIVED: '已归档',
+  ARCHIVED: '历史 / 未生效',
 };
+const MAX_RECIPE_VERSIONS = 10;
 
 /** All BOM recipes for the currently selected product (newest first) */
 const bomRecipes = ref<BomRecipeSummary[]>([]);
@@ -61,6 +62,13 @@ const historicalYieldLoadFailed = ref(false);
 const selectedRecipe = computed(() =>
   bomRecipes.value.find((recipe) => recipe.id === selectedRecipeId.value) ?? null,
 );
+const recipeVersionLimitReached = computed(() => bomRecipes.value.length >= MAX_RECIPE_VERSIONS);
+
+function formatFriendlyNumber(value: unknown, maxDecimals = 4): string {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '—';
+  return number.toFixed(maxDecimals).replace(/\.?0+$/, '');
+}
 
 async function loadBomRecipes(preferredRecipeId?: string) {
   if (!factoryId.value || !selectedProductTypeId.value) {
@@ -125,12 +133,12 @@ async function handleCloneSelectedRecipe() {
 }
 
 async function handleDeleteRecipe(recipe: BomRecipeSummary) {
-  if (!factoryId.value || recipe.status !== 'DRAFT') return;
+  if (!factoryId.value || recipe.status === 'ACTIVE') return;
   try {
     await ElMessageBox.confirm(
-      `确认删除草稿 ${recipe.productName} v${recipe.version}？删除后不可恢复。`,
-      '删除 BOM 草稿',
-      { confirmButtonText: '删除草稿', cancelButtonText: '取消', type: 'warning' },
+      `确认删除${recipe.status === 'DRAFT' ? '草稿' : '历史版本'} ${recipe.productName} v${recipe.version}？删除后不可恢复。`,
+      '删除 BOM 版本',
+      { confirmButtonText: '确认删除', cancelButtonText: '取消', type: 'warning' },
     );
   } catch {
     return;
@@ -139,10 +147,10 @@ async function handleDeleteRecipe(recipe: BomRecipeSummary) {
   try {
     const response = await bomRecipeApi.removeDraft(factoryId.value, recipe.id);
     if (!response.success) throw new Error(response.message || '删除失败');
-    ElMessage.success('草稿版本已删除');
+    ElMessage.success('BOM 版本已删除');
     await loadBomRecipes();
   } catch (error: unknown) {
-    ElMessage.error((error as { message?: string }).message || '删除 BOM 草稿失败');
+    ElMessage.error((error as { message?: string }).message || '删除 BOM 版本失败');
   } finally {
     deletingRecipeId.value = null;
   }
@@ -171,7 +179,7 @@ async function handleActivateRecipe(recipe: BomRecipeSummary) {
   if (!factoryId.value) return;
   try {
     await ElMessageBox.confirm(
-      `激活后此 BOM（${recipe.productName} v${recipe.version}）成为产品当前生效配方，原有生效配方将自动归档。确认激活？`,
+      `激活后 ${recipe.productName} v${recipe.version} 将成为唯一生效 BOM。仅之后新建的生产计划采用此版本；已有生产计划快照和已激活 Workflow 不受影响。确认激活？`,
       '激活 BOM 配方',
       {
         confirmButtonText: '激活',
@@ -228,7 +236,14 @@ const selectedProductTypeId = ref<string>('');
 // 触发它重新求值, 导致选中态生效但下拉框标签显示空白 (同款坑见 ReferenceSelector.vue)。
 const bomProductSelectKey = ref(0);
 const productTypes = ref<TableRow[]>([]);
-const costSummary = ref<TableRow | null>(null);
+interface BomCostSummaryView {
+  materialCostTotal?: number | null;
+  laborCostTotal?: number | null;
+  overheadCostTotal?: number | null;
+  totalCost?: number | null;
+  costUnit?: string | null;
+}
+const costSummary = ref<BomCostSummaryView | null>(null);
 const selectedProductName = computed(() => {
   const product = productTypes.value.find((item) => item.id === selectedProductTypeId.value);
   return String(product?.name || '');
@@ -561,6 +576,10 @@ function resetRecipeForm(recipe?: BomRecipeSummary) {
 function handleAddRecipeHeader() {
   if (!selectedProductTypeId.value) {
     ElMessage.warning('请先选择产品，再创建配方头');
+    return;
+  }
+  if (recipeVersionLimitReached.value) {
+    ElMessage.warning('该 SKU 已达到 10 个 BOM 版本，请先删除无用草稿或历史版本');
     return;
   }
   isRecipeEdit.value = false;
@@ -1326,7 +1345,7 @@ async function handleDeleteOverheadCost(row: TableRow) {
 async function loadCostSummary() {
   if (!factoryId.value || !selectedProductTypeId.value) return;
   try {
-    const response = await get(`/${factoryId.value}/bom/cost-summary/${selectedProductTypeId.value}`);
+    const response = await get<BomCostSummaryView>(`/${factoryId.value}/bom/cost-summary/${selectedProductTypeId.value}`);
     if (response.success && response.data) {
       costSummary.value = response.data;
     }
@@ -1360,6 +1379,23 @@ const overheadCostTotal = computed(() => {
 
 const totalCost = computed(() => {
   return materialCostTotal.value + laborCostTotal.value + overheadCostTotal.value;
+});
+function summaryNumber(value: unknown, fallback: number): number {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+const costDisplayUnit = computed(() => {
+  const value = costSummary.value?.costUnit?.trim();
+  return value || '元/基本单位';
+});
+const estimatedMaterialCost = computed(() => summaryNumber(costSummary.value?.materialCostTotal, materialCostTotal.value));
+const estimatedLaborCost = computed(() => summaryNumber(costSummary.value?.laborCostTotal, laborCostTotal.value));
+const estimatedOverheadCost = computed(() => summaryNumber(costSummary.value?.overheadCostTotal, overheadCostTotal.value));
+const costPerSkuUnit = computed(() => summaryNumber(costSummary.value?.totalCost, totalCost.value));
+const costPerKg = computed<number | null>(() => {
+  if (costDisplayUnit.value === '元/kg' || skuGramsPerUnit.value == null) return null;
+  const value = costPerSkuUnit.value / (skuGramsPerUnit.value / 1000);
+  return Number.isFinite(value) ? value : null;
 });
 
 // Issue 12: Group BOM items by material category
@@ -1769,8 +1805,8 @@ async function handleAdjustConfirm() {
         BOM 已对接生产计划, 录入即生效
       </template>
       <template #default>
-        原料、包材和各工序辅料保存后立即被生产计划使用；物料单位与价格从档案自动带入，
-        历史出成率由正式报工批次自动统计。
+        原料、包材和各工序辅料先保存到配方版本；激活后仅供之后新建的生产计划使用，
+        已有生产计划快照与已激活 Workflow 不受影响。物料价格从档案带入，历史出成率由正式报工自动统计。
       </template>
     </el-alert>
     <ConceptDisambiguationAlert
@@ -1811,7 +1847,7 @@ async function handleAdjustConfirm() {
             type="primary"
             :icon="Plus"
             style="margin-left: 12px;"
-            :disabled="!selectedProductTypeId"
+            :disabled="!selectedProductTypeId || recipeVersionLimitReached"
             @click="handleAddRecipeHeader"
           >创建配方</el-button>
         </div>
@@ -1820,19 +1856,22 @@ async function handleAdjustConfirm() {
             <div class="cost-summary">
               <div class="cost-item">
                 <span class="cost-label">原料成本:</span>
-                <span class="cost-value">{{ materialCostTotal.toFixed(2) }}</span>
+                <span class="cost-value">{{ formatFriendlyNumber(estimatedMaterialCost, 2) }} {{ costDisplayUnit }}</span>
               </div>
               <div class="cost-item">
                 <span class="cost-label">人工成本:</span>
-                <span class="cost-value">{{ laborCostTotal.toFixed(2) }}</span>
+                <span class="cost-value">{{ formatFriendlyNumber(estimatedLaborCost, 2) }} {{ costDisplayUnit }}</span>
               </div>
               <div class="cost-item">
                 <span class="cost-label">均摊费用:</span>
-                <span class="cost-value">{{ overheadCostTotal.toFixed(2) }}</span>
+                <span class="cost-value">{{ formatFriendlyNumber(estimatedOverheadCost, 2) }} {{ costDisplayUnit }}</span>
               </div>
               <div class="cost-item total">
                 <span class="cost-label">总成本:</span>
-                <span class="cost-value">{{ totalCost.toFixed(2) }} 元/kg</span>
+                <span class="cost-value">{{ formatFriendlyNumber(costPerSkuUnit, 2) }} {{ costDisplayUnit }}</span>
+                <span v-if="costPerKg != null" class="cost-secondary">
+                  {{ formatFriendlyNumber(costPerKg, 2) }} 元/kg
+                </span>
               </div>
             </div>
           </el-card>
@@ -1850,7 +1889,10 @@ async function handleAdjustConfirm() {
         <div class="table-header">
           <span class="table-title">BOM 配方版本</span>
           <div class="table-actions">
-            <el-button v-if="canWrite" type="primary" size="small" :icon="Plus" @click="handleAddRecipeHeader">
+            <el-tag size="small" :type="recipeVersionLimitReached ? 'warning' : 'info'">
+              已用 {{ bomRecipes.length }}/{{ MAX_RECIPE_VERSIONS }} 个版本
+            </el-tag>
+            <el-button v-if="canWrite" type="primary" size="small" :icon="Plus" :disabled="recipeVersionLimitReached" @click="handleAddRecipeHeader">
               创建配方
             </el-button>
             <el-button size="small" :icon="Refresh" :loading="bomRecipesLoading" @click="loadBomRecipes">
@@ -1901,7 +1943,7 @@ async function handleAdjustConfirm() {
         <el-table-column label="每单位产出" width="130" align="right">
           <template #default="{ row }">
             <span v-if="row.outputQuantityPerUnit != null">
-              {{ Number(row.outputQuantityPerUnit).toFixed(4) }} {{ row.outputUnit || '' }}
+              {{ formatFriendlyNumber(row.outputQuantityPerUnit) }} {{ row.outputUnit || '' }}
             </span>
             <span v-else class="text-secondary">—</span>
           </template>
@@ -1919,10 +1961,16 @@ async function handleAdjustConfirm() {
             <span v-else class="text-secondary">待积累（{{ historicalYield?.sampleCount ?? 0 }}/3 批）</span>
           </template>
         </el-table-column>
+        <el-table-column prop="notes" label="备注" min-width="150" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.notes || '—' }}</template>
+        </el-table-column>
         <el-table-column label="总成本" width="100" align="right">
           <template #default="{ row }">
             <span v-if="canViewPrice && row.totalCost != null">
-              {{ Number(row.totalCost).toFixed(2) }}
+              <div>{{ formatFriendlyNumber(row.totalCost, 2) }} 元/{{ row.outputUnit || skuOutputUnit }}</div>
+              <div v-if="skuGramsPerUnit != null" class="cost-secondary">
+                {{ formatFriendlyNumber(Number(row.totalCost) / (skuGramsPerUnit / 1000), 2) }} 元/kg
+              </div>
             </span>
             <span v-else class="text-secondary">—</span>
           </template>
@@ -1944,11 +1992,12 @@ async function handleAdjustConfirm() {
               link
               size="small"
               @click="handleCloneRecipe(row)"
+              :disabled="recipeVersionLimitReached"
             >
               复制编辑
             </el-button>
             <el-button
-              v-if="canWrite && row.status === 'DRAFT'"
+              v-if="canWrite && row.status !== 'ACTIVE'"
               type="danger"
               link
               size="small"
@@ -1958,7 +2007,7 @@ async function handleAdjustConfirm() {
               删除
             </el-button>
             <el-button
-              v-if="canWrite && row.status === 'DRAFT'"
+              v-if="canWrite && !row.isCurrent"
               type="success"
               size="small"
               :loading="activatingRecipeId === row.id"
@@ -1971,7 +2020,7 @@ async function handleAdjustConfirm() {
       </el-table>
       <div class="recipe-status-hint">
         <el-icon><InfoFilled /></el-icon>
-        <span>仅 <strong>草稿 (DRAFT)</strong> 配方可激活；激活后同产品其他配方自动归档。</span>
+        <span>草稿和历史正式版本都可激活；同一 SKU 始终只有一个生效版本。生效版本不可删除，达到 10 个版本后请先删除无用草稿或历史版本。</span>
       </div>
     </el-card>
 
@@ -2063,18 +2112,18 @@ async function handleAdjustConfirm() {
           </el-table-column>
           <el-table-column v-if="activeCategoryTab === 'PACKAGING'" prop="standardQuantity" label="每成品用量" width="120" align="right">
             <template #default="{ row }">
-              {{ (row.standardQuantity || 0).toFixed(4) }} {{ row.unit || '' }}
+              {{ formatFriendlyNumber(row.standardQuantity) }} {{ row.unit || '' }}
             </template>
           </el-table-column>
           <el-table-column prop="unit" label="计量单位" width="90" align="center" />
           <el-table-column v-if="canViewPrice" prop="unitPrice" label="自动单价" width="100" align="right">
             <template #default="{ row }">
-              {{ (row.unitPrice || 0).toFixed(2) }}
+              {{ formatFriendlyNumber(row.unitPrice, 4) }} 元/{{ row.unit || '单位' }}
             </template>
           </el-table-column>
           <el-table-column v-if="canViewPrice" label="小计" width="90" align="right">
             <template #default="{ row }">
-              {{ (((row.standardQuantity || 0) / ((row.yieldRate != null ? row.yieldRate : 100) / 100)) * (row.unitPrice || 0)).toFixed(2) }}
+              {{ formatFriendlyNumber(((row.standardQuantity || 0) / ((row.yieldRate != null ? row.yieldRate : 100) / 100)) * (row.unitPrice || 0), 4) }} 元
             </template>
           </el-table-column>
           <el-table-column label="操作" width="100" fixed="right" align="center">
@@ -2086,7 +2135,7 @@ async function handleAdjustConfirm() {
         </el-table>
         <div v-if="canViewPrice && activeCategoryTab !== 'AUXILIARY'" class="table-footer">
           <span class="total-label">原料成本合计:</span>
-          <span class="total-value">{{ materialCostTotal.toFixed(2) }} 元</span>
+          <span class="total-value">{{ formatFriendlyNumber(estimatedMaterialCost, 2) }} {{ costDisplayUnit }}</span>
         </div>
       </el-card>
 
@@ -2736,6 +2785,16 @@ async function handleAdjustConfirm() {
     }
   }
 }
+
+.cost-secondary {
+  display: block;
+  color: var(--el-text-color-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.cost-summary .cost-secondary { color: rgba(255, 255, 255, 0.82); }
 
 .tables-container {
   flex: 1;

@@ -67,6 +67,8 @@ public interface BomRecipeRepository extends JpaRepository<BomRecipe, String> {
     Integer findMaxVersion(@Param("factoryId") String factoryId,
                            @Param("productTypeId") String productTypeId);
 
+    long countByFactoryIdAndProductTypeId(String factoryId, String productTypeId);
+
     /** 当日 recipeCode 序号 (用于 BOM-YYYYMMDD-NNN 自动生成). */
     @Query("SELECT COUNT(br) FROM BomRecipe br " +
            "WHERE br.factoryId = :factoryId " +

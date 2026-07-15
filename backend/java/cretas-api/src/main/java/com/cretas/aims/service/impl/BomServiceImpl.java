@@ -91,6 +91,10 @@ public class BomServiceImpl implements BomService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
 
+    /** Read-only finished-product master lookup for an explicit summary cost unit. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.ProductTypeRepository productTypeRepository;
+
     /** Write-time unit guard shared by BOM / stock write paths. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.uom.MaterialUomConverter materialUomConverter;
@@ -615,15 +619,25 @@ public class BomServiceImpl implements BomService {
 
         for (BomItem item : bomItems) {
             BigDecimal actualQuantity = calculateActualQuantity(factoryId, item.getStandardQuantity(), item.getYieldRate());
+            com.cretas.aims.entity.RawMaterialType currentMaterial =
+                    loadRawMaterialTypeSafely(item.getMaterialTypeId());
+            BigDecimal currentMovingAverage = currentMaterial != null
+                    ? currentMaterial.getMovingAvgPrice() : null;
+            BigDecimal estimateUnitPrice = currentMovingAverage != null
+                    ? currentMovingAverage : item.getUnitPrice();
+            String pricingUnit = firstNonBlank(
+                    currentMaterial != null ? currentMaterial.getUnit() : null,
+                    item.getUnit(),
+                    "基本单位");
             // R13: 价-量口径对齐. unitPrice 按物料主数据单位计价 (auto-fill 自
             //   RawMaterialType.unitPrice), 但 BOM 行用量可能按"斤"等其他重量单位录入.
             //   计价用量须先折算到主数据单位 (e.g. 斤→kg), 否则 斤量×kg价 翻倍/折半失真.
             BigDecimal pricingQuantity = reconcileQuantityForPricing(actualQuantity, item);
-            BigDecimal subtotal = calculateMaterialCost(factoryId, pricingQuantity, item.getUnitPrice());
+            BigDecimal subtotal = calculateMaterialCost(factoryId, pricingQuantity, estimateUnitPrice);
             if (item.getTaxRate() == null) {
                 hasMissingTaxRate = true;
             }
-            boolean missingPrice = item.getUnitPrice() == null;
+            boolean missingPrice = estimateUnitPrice == null;
             if (missingPrice) {
                 missingPriceMaterials.add(
                     item.getMaterialName() != null ? item.getMaterialName()
@@ -637,9 +651,14 @@ public class BomServiceImpl implements BomService {
                 .yieldRate(item.getYieldRate())
                 .actualQuantity(actualQuantity)
                 .unit(item.getUnit())
-                .unitPrice(item.getUnitPrice())
+                .unitPrice(estimateUnitPrice)
                 .unitPriceCaliber(COST_CALIBER_PRE_TAX)
-                .caliberHint(materialCaliberHint(item.getTaxRate()))
+                .caliberHint(materialCaliberHint(item.getTaxRate())
+                        + " 当前估算优先采用物料主数据移动平均价，不改写 BOM 快照或历史实际成本。")
+                .unitPriceUnit(costDisplayUnit(pricingUnit))
+                .priceSource(currentMovingAverage != null
+                        ? "CURRENT_MOVING_AVERAGE" : "BOM_SNAPSHOT_FALLBACK")
+                .estimatedPrice(true)
                 .taxRate(item.getTaxRate())
                 .subtotal(subtotal)
                 .missingPrice(missingPrice)
@@ -712,6 +731,8 @@ public class BomServiceImpl implements BomService {
             .totalCost(totalCost)
             .costCaliber(COST_CALIBER_PRE_TAX)
             .caliberHint(summaryCaliberHint(hasMissingTaxRate, hasMissingPrice, missingPriceMaterials.size()))
+            .costNature("CURRENT_ESTIMATE")
+            .costUnit(resolveSummaryCostUnit(factoryId, productTypeId))
             // B-BUG-1: 缺价完整性标记
             .hasMissingPrice(hasMissingPrice)
             .missingPriceCount(missingPriceMaterials.size())
@@ -721,6 +742,42 @@ public class BomServiceImpl implements BomService {
 
         log.info("产品成本计算完成: productTypeId={}, totalCost={}", productTypeId, totalCost);
         return summary;
+    }
+
+    private String costDisplayUnit(String unit) {
+        String normalized = trimToNull(unit);
+        if (normalized == null) {
+            return "元/基本单位";
+        }
+        if ("kg".equalsIgnoreCase(normalized)
+                || "公斤".equals(normalized)
+                || "千克".equals(normalized)) {
+            return "元/kg";
+        }
+        return "元/基本单位（" + normalized + "）";
+    }
+
+    private String resolveSummaryCostUnit(String factoryId, String productTypeId) {
+        if (productTypeRepository == null) {
+            return "元/基本单位";
+        }
+        try {
+            String unit = productTypeRepository.findByIdAndFactoryId(productTypeId, factoryId)
+                    .map(com.cretas.aims.entity.ProductType::getUnit)
+                    .map(BomServiceImpl::trimToNull)
+                    .orElse(null);
+            if (unit == null) {
+                return "元/基本单位";
+            }
+            if ("kg".equalsIgnoreCase(unit) || "公斤".equals(unit) || "千克".equals(unit)) {
+                return "元/kg";
+            }
+            return "元/" + unit;
+        } catch (Exception e) {
+            log.warn("[BOM-COST] product unit lookup failed factory={} product={}: {}",
+                    factoryId, productTypeId, e.getMessage());
+            return "元/基本单位";
+        }
     }
 
     @Override

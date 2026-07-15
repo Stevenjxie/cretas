@@ -12,6 +12,10 @@ import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.ProductTypeService;
 import com.cretas.aims.service.product.ProductPackagingSpecService;
+import com.cretas.aims.service.productimport.SkuImportService;
+import com.cretas.aims.dto.producttype.importing.SkuImportConfirmRequest;
+import com.cretas.aims.dto.producttype.importing.SkuImportConfirmResultDTO;
+import com.cretas.aims.dto.producttype.importing.SkuImportPreviewDTO;
 import com.cretas.aims.service.SkuAssemblyService;
 import com.cretas.aims.utils.TokenUtils;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -23,6 +27,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.multipart.MultipartFile;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
@@ -53,6 +61,42 @@ public class ProductTypeController {
     private final SkuAssemblyService skuAssemblyService;
     private final ProductWorkProcessRecommendTool productWorkProcessRecommendTool;
     private final ProductPackagingSpecService productPackagingSpecService;
+    private final SkuImportService skuImportService;
+
+    @RequirePermission({"production:read_write", "rd:read_write"})
+    @GetMapping("/import/template")
+    @Operation(summary = "下载四工作表SKU导入模板")
+    public ResponseEntity<byte[]> downloadImportTemplate(@PathVariable String factoryId) {
+        byte[] content = skuImportService.createTemplate();
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename*=UTF-8''SKU%E6%89%B9%E9%87%8F%E5%AF%BC%E5%85%A5%E6%A8%A1%E6%9D%BF.xlsx")
+                .body(content);
+    }
+
+    @RequirePermission({"production:read_write", "rd:read_write"})
+    @PostMapping(value = "/import/preview", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "校验并预览SKU导入（不写数据库）")
+    public ApiResponse<SkuImportPreviewDTO> previewImport(
+            @PathVariable String factoryId,
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "imageMappings", required = false) String imageMappings,
+            @RequestHeader("Authorization") String authorization) {
+        Long userId = mobileService.getUserFromToken(TokenUtils.extractToken(authorization)).getId();
+        return ApiResponse.success(skuImportService.preview(factoryId, userId, file, imageMappings));
+    }
+
+    @RequirePermission({"production:read_write", "rd:read_write"})
+    @PostMapping("/import/confirm")
+    @Operation(summary = "原子确认SKU导入")
+    public ApiResponse<SkuImportConfirmResultDTO> confirmImport(
+            @PathVariable String factoryId,
+            @RequestBody @Valid SkuImportConfirmRequest request,
+            @RequestHeader("Authorization") String authorization) {
+        Long userId = mobileService.getUserFromToken(TokenUtils.extractToken(authorization)).getId();
+        return ApiResponse.success(skuImportService.confirm(factoryId, userId, request.getPreviewToken()));
+    }
 
     /**
      * SKU组装: 产品模板 + 客户 + 配方 → 独立SKU

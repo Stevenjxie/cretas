@@ -2,8 +2,10 @@ package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.bom.BomCostSummaryDTO;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.bom.BomItem;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.bom.BomItemRepository;
 import com.cretas.aims.repository.bom.LaborCostConfigRepository;
 import com.cretas.aims.repository.bom.OverheadCostConfigRepository;
@@ -43,6 +45,7 @@ class BomServiceImplUomCostReconciliationTest {
     @Mock private LaborCostConfigRepository laborCostConfigRepository;
     @Mock private OverheadCostConfigRepository overheadCostConfigRepository;
     @Mock private RawMaterialTypeRepository rawMaterialTypeRepository;
+    @Mock private ProductTypeRepository productTypeRepository;
 
     private BomServiceImpl service;
 
@@ -55,6 +58,7 @@ class BomServiceImplUomCostReconciliationTest {
         ReflectionTestUtils.setField(service, "unitConversionService",
                 com.cretas.aims.service.unit.TestUnitContractFactory.legacyFacade());
         ReflectionTestUtils.setField(service, "rawMaterialTypeRepository", rawMaterialTypeRepository);
+        ReflectionTestUtils.setField(service, "productTypeRepository", productTypeRepository);
 
         // 无人工/均摊 (聚焦原料成本)
         lenient().when(laborCostConfigRepository
@@ -73,6 +77,14 @@ class BomServiceImplUomCostReconciliationTest {
         m.setId(id);
         m.setUnit(unit);
         return m;
+    }
+
+    private ProductType product(String id, String unit) {
+        ProductType product = new ProductType();
+        product.setId(id);
+        product.setFactoryId(F);
+        product.setUnit(unit);
+        return product;
     }
 
     private BomItem item(String productTypeId, String materialTypeId, String qty, String unit, String price) {
@@ -124,6 +136,61 @@ class BomServiceImplUomCostReconciliationTest {
         BomCostSummaryDTO result = service.calculateProductCost(F, p);
 
         assertThat(result.getMaterialCostTotal()).isEqualByComparingTo("100");
+    }
+
+    @Test
+    @DisplayName("成本估算优先使用当前移动平均价且不改写 BOM 快照价")
+    void currentMovingAverageOverridesSnapshotOnlyInResponse() {
+        String p = "P-CURRENT-AVG";
+        BomItem it = item(p, "RM-KG", "2", "kg", "10");
+        RawMaterialType master = material("RM-KG", "kg");
+        master.setMovingAvgPrice(new BigDecimal("12.50"));
+        when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(F, p))
+                .thenReturn(List.of(it));
+        when(rawMaterialTypeRepository.findById("RM-KG")).thenReturn(Optional.of(master));
+
+        BomCostSummaryDTO result = service.calculateProductCost(F, p);
+
+        assertThat(result.getCostNature()).isEqualTo("CURRENT_ESTIMATE");
+        assertThat(result.getCostUnit()).isEqualTo("元/基本单位");
+        assertThat(result.getMaterialCostTotal()).isEqualByComparingTo("25.00");
+        assertThat(result.getMaterialCosts()).singleElement().satisfies(line -> {
+            assertThat(line.getUnitPrice()).isEqualByComparingTo("12.50");
+            assertThat(line.getUnitPriceUnit()).isEqualTo("元/kg");
+            assertThat(line.getPriceSource()).isEqualTo("CURRENT_MOVING_AVERAGE");
+            assertThat(line.isEstimatedPrice()).isTrue();
+        });
+        assertThat(it.getUnitPrice()).isEqualByComparingTo("10");
+    }
+
+    @Test
+    @DisplayName("重量型成品汇总成本明确显示元/kg")
+    void summaryCostUnitUsesKgProductUnit() {
+        String p = "P-OUTPUT-KG";
+        BomItem it = item(p, "RM-KG", "1", "kg", "10");
+        when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(F, p))
+                .thenReturn(List.of(it));
+        when(rawMaterialTypeRepository.findById("RM-KG"))
+                .thenReturn(Optional.of(material("RM-KG", "kg")));
+        when(productTypeRepository.findByIdAndFactoryId(p, F))
+                .thenReturn(Optional.of(product(p, "kg")));
+
+        assertThat(service.calculateProductCost(F, p).getCostUnit()).isEqualTo("元/kg");
+    }
+
+    @Test
+    @DisplayName("计数型成品汇总成本显示实际基本单位")
+    void summaryCostUnitUsesCountProductUnit() {
+        String p = "P-OUTPUT-BOX";
+        BomItem it = item(p, "RM-KG", "1", "kg", "10");
+        when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(F, p))
+                .thenReturn(List.of(it));
+        when(rawMaterialTypeRepository.findById("RM-KG"))
+                .thenReturn(Optional.of(material("RM-KG", "kg")));
+        when(productTypeRepository.findByIdAndFactoryId(p, F))
+                .thenReturn(Optional.of(product(p, "盒")));
+
+        assertThat(service.calculateProductCost(F, p).getCostUnit()).isEqualTo("元/盒");
     }
 
     @Test

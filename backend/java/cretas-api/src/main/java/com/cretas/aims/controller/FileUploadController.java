@@ -17,6 +17,11 @@ import org.springframework.web.multipart.MultipartFile;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
+import java.io.ByteArrayInputStream;
+import java.util.Iterator;
 
 /**
  * 文件上传 Controller — 通用文件/图片 OSS 上传入口
@@ -50,6 +55,69 @@ public class FileUploadController {
             "application/msword",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     );
+
+    @RequirePermission({"production:read_write", "rd:read_write"})
+    @PostMapping(value = "/product-image", consumes = "multipart/form-data")
+    @Operation(summary = "上传SKU产品图片", description = "JPEG/PNG，最大5MB；返回可供SKU导入映射使用的工厂归属URL")
+    public ApiResponse<Map<String, String>> uploadProductImage(
+            @PathVariable @NotBlank String factoryId,
+            @RequestParam("file") MultipartFile file) {
+        if (!factoryId.matches("[A-Za-z0-9_-]{1,64}")) {
+            throw new BusinessException(400, "工厂ID格式无效");
+        }
+        if (file.isEmpty()) {
+            throw new BusinessException(400, "产品图片不能为空");
+        }
+        if (file.getSize() > MAX_SIGNATURE_PHOTO_SIZE) {
+            throw new BusinessException(400, "产品图片不能超过5MB");
+        }
+        String contentType = normalizeContentType(file.getContentType());
+        if (!ALLOWED_PHOTO_TYPES.contains(contentType)) {
+            throw new BusinessException(400, "产品图片仅支持JPEG/PNG格式");
+        }
+        try {
+            byte[] bytes = file.getBytes();
+            boolean jpeg = bytes.length >= 3 && (bytes[0] & 0xff) == 0xff
+                    && (bytes[1] & 0xff) == 0xd8 && (bytes[2] & 0xff) == 0xff;
+            boolean png = bytes.length >= 8 && (bytes[0] & 0xff) == 0x89
+                    && bytes[1] == 0x50 && bytes[2] == 0x4e && bytes[3] == 0x47
+                    && bytes[4] == 0x0d && bytes[5] == 0x0a && bytes[6] == 0x1a && bytes[7] == 0x0a;
+            if (!jpeg && !png) {
+                throw new BusinessException(400, "文件内容不是JPEG/PNG图片");
+            }
+            try (ImageInputStream imageInput = ImageIO.createImageInputStream(new ByteArrayInputStream(bytes))) {
+                Iterator<ImageReader> readers = ImageIO.getImageReaders(imageInput);
+                if (!readers.hasNext()) {
+                    throw new BusinessException(400, "文件内容不是有效的JPEG/PNG图片");
+                }
+                ImageReader reader = readers.next();
+                try {
+                    reader.setInput(imageInput, true, true);
+                    String format = reader.getFormatName().toLowerCase(Locale.ROOT);
+                    if (!("jpeg".equals(format) || "jpg".equals(format) || "png".equals(format))) {
+                        throw new BusinessException(400, "文件内容不是JPEG/PNG图片");
+                    }
+                    int width = reader.getWidth(0);
+                    int height = reader.getHeight(0);
+                    long pixels = (long) width * height;
+                    if (width <= 0 || height <= 0 || width > 12000 || height > 12000 || pixels > 40_000_000L) {
+                        throw new BusinessException(400, "产品图片尺寸过大，请压缩到4000万像素以内");
+                    }
+                } finally {
+                    reader.dispose();
+                }
+            }
+            String url = ossService.uploadImage(file, "product-images", factoryId);
+            return ApiResponse.success("上传成功", Map.of(
+                    "url", url,
+                    "fileName", file.getOriginalFilename() == null ? "" : file.getOriginalFilename()));
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("产品图片上传失败: factoryId={}", factoryId, e);
+            throw new BusinessException(500, "产品图片上传失败: " + ErrorSanitizer.sanitize(e), e);
+        }
+    }
 
     private String normalizeContentType(String contentType) {
         return contentType == null ? "" : contentType.toLowerCase(Locale.ROOT);

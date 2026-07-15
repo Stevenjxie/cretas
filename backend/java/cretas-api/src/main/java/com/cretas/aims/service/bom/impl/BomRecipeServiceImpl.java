@@ -64,6 +64,7 @@ import java.util.Set;
 public class BomRecipeServiceImpl implements BomRecipeService {
 
     private static final DateTimeFormatter CODE_DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
+    private static final int MAX_VERSIONS_PER_PRODUCT = 10;
 
     private final BomRecipeRepository recipeRepo;
     private final BomRecipeItemRepository itemRepo;
@@ -82,6 +83,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         log.info("Creating BOM recipe: factory={}, product={}, items={}",
                 factoryId, req.getProductTypeId(), req.getItems().size());
 
+        assertVersionCapacity(factoryId, req.getProductTypeId());
         BomRecipe recipe = new BomRecipe();
         recipe.setFactoryId(factoryId);
         recipe.setRecipeCode(generateRecipeCode(factoryId));
@@ -157,9 +159,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Transactional
     public BomRecipe activateRecipe(String factoryId, String recipeId, Long operatorId) {
         BomRecipe recipe = loadRecipe(factoryId, recipeId);
-        if (recipe.getStatus() != BomRecipe.Status.DRAFT) {
-            throw new IllegalStateException(
-                    "只有 DRAFT 状态可激活; 当前 status=" + recipe.getStatus());
+        if (recipe.getStatus() == BomRecipe.Status.ACTIVE && Boolean.TRUE.equals(recipe.getIsCurrent())) {
+            throw new IllegalStateException("当前 BOM 已经生效，无需重复激活");
         }
 
         // 同一 SKU 只能有一个 ACTIVE/current 版本。历史脏数据可能 ACTIVE 但 current=false，
@@ -189,6 +190,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Transactional
     public BomRecipe cloneRecipe(String factoryId, String recipeId) {
         BomRecipe source = loadRecipe(factoryId, recipeId);
+        assertVersionCapacity(factoryId, source.getProductTypeId());
         Integer maxVersion = recipeRepo.findMaxVersion(factoryId, source.getProductTypeId());
 
         BomRecipe clone = new BomRecipe();
@@ -297,13 +299,21 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Transactional
     public void deleteRecipe(String factoryId, String recipeId) {
         BomRecipe recipe = loadRecipe(factoryId, recipeId);
-        if (recipe.getStatus() != BomRecipe.Status.DRAFT) {
-            throw new IllegalStateException(
-                    "只有 DRAFT 状态可删除; 当前 status=" + recipe.getStatus()
-                    + ", 用 archive 替代");
+        if (recipe.getStatus() == BomRecipe.Status.ACTIVE) {
+            throw new IllegalStateException("当前生效的 BOM 不能删除，请先激活其他版本");
         }
         recipe.softDelete();
         recipeRepo.save(recipe);
+    }
+
+    private void assertVersionCapacity(String factoryId, String productTypeId) {
+        long versionCount = recipeRepo.countByFactoryIdAndProductTypeId(factoryId, productTypeId);
+        if (versionCount >= MAX_VERSIONS_PER_PRODUCT) {
+            throw new BusinessException(409, "每个 SKU 最多保留 10 个 BOM 版本，请删除不再需要的草稿或历史版本后重试")
+                    .withCode("BOM_VERSION_LIMIT_REACHED")
+                    .withHint("当前未删除版本数为 " + versionCount + "，上限为 " + MAX_VERSIONS_PER_PRODUCT)
+                    .withHintTarget("bomVersions");
+        }
     }
 
     @Override
