@@ -102,6 +102,30 @@ fi
 # 注: source 引入 common 的 log() (双参数 LEVEL msg); 本脚本下方重新定义单参数 log() 覆盖之.
 # check_git_sync 在覆盖前调用, 用的是 common log; 之后的 log "..." 用本脚本单参数版.
 
+ensure_web_admin_dependencies() {
+    local web_admin_dir="$PROJECT_ROOT/web-admin"
+    local vite_bin="$web_admin_dir/node_modules/.bin/vite"
+    local vite_cmd="$web_admin_dir/node_modules/.bin/vite.cmd"
+
+    if [ -x "$vite_bin" ] || [ -f "$vite_cmd" ]; then
+        log "✓ 本地 Vite 依赖已就绪，跳过 npm ci"
+        return 0
+    fi
+
+    log "📦 本地 Vite 依赖缺失，执行 npm ci --legacy-peer-deps --prefer-offline..."
+    if ! (cd "$web_admin_dir" && npm ci --legacy-peer-deps --prefer-offline); then
+        log "❌ Web 依赖恢复失败 — 拒绝确认或构建部署"
+        return 1
+    fi
+
+    if [ ! -x "$vite_bin" ] && [ ! -f "$vite_cmd" ]; then
+        log "❌ npm ci 完成后仍未找到本地 Vite 可执行文件 — 拒绝继续部署"
+        return 1
+    fi
+
+    log "✓ Web 依赖恢复完成"
+}
+
 # ==================== Git Sync Pre-check ====================
 # 防 stale-local-deploy (May 11 2026 bug fix; per feedback_organizer_must_git_pull_before_deploy.md):
 # deploy 从本地工作树 build Vite dist, 本地落后 origin/main → ship stale code.
@@ -113,6 +137,14 @@ if [[ "$ENV" =~ ^(prod|all)$ ]]; then
     GIT_SYNC_STRICT="1"
 fi
 check_git_sync "$PROJECT_ROOT" "[0/4] Git sync pre-check..." "$GIT_SYNC_STRICT"
+
+log() {
+    echo "[$(date '+%H:%M:%S')] $*"
+}
+
+# 依赖门禁放在 prod 确认和构建之前：干净 worktree 没有 node_modules 时先自动恢复，
+# 避免用户确认生产部署后才因 vite 缺失中断。每个 worktree 独立安装，禁止 junction 共享。
+ensure_web_admin_dependencies
 
 # 根据 --env 决定目标路径
 if [ "$ENV" = "prod" ]; then
@@ -136,10 +168,6 @@ else
     REMOTE_PATH="/www/wwwroot/web-admin-test"
     echo "🧪 TEST 部署 (默认): $REMOTE_PATH (139:8097)"
 fi
-
-log() {
-    echo "[$(date '+%H:%M:%S')] $*"
-}
 
 # 原子交换部署: 远端解压 tarball 到 staging → 备份旧版 → mv staging→current → 清理旧 backup.
 # 用 staging+mv 实现原子替换 (避免 nginx 读到新旧 chunk 混合的半成品).

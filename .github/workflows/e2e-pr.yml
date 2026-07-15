@@ -78,11 +78,23 @@ jobs:
           cache: 'maven'
           cache-dependency-path: backend/java/cretas-api/pom.xml
 
+      # ── Backend startup ──────────────────────────────────────────────────────
+      # Start Maven/Spring before Node setup so dependency installation and the
+      # Playwright browser download overlap the slow Java bootstrap/migrations.
+      - name: Start Java backend (background)
+        working-directory: backend/java/cretas-api
+        run: |
+          nohup mvn spring-boot:run \
+            -Dspring-boot.run.jvmArguments="-DDB_PASSWORD=${DB_PASSWORD} -DPOSTGRES_SMARTBI_PASSWORD=${POSTGRES_SMARTBI_PASSWORD} -DJWT_SECRET=${JWT_SECRET}" \
+            -Dspring-boot.run.profiles=pg \
+            > /tmp/backend.log 2>&1 &
+          echo "backend_pid=$!" >> $GITHUB_ENV
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      # ── Dependencies (parallel-friendly caching) ─────────────────────────────
+      # ── Dependencies (overlapped with background Java startup) ────────────────
       - name: Install web-admin deps
         working-directory: web-admin
         run: npm ci --no-audit --no-fund --legacy-peer-deps
@@ -95,29 +107,14 @@ jobs:
         working-directory: tests/v1-e2e
         run: npx playwright install --with-deps chromium
 
-      # ── Backend startup ──────────────────────────────────────────────────────
-      - name: Start Java backend (background)
-        working-directory: backend/java/cretas-api
-        run: |
-          nohup mvn spring-boot:run \
-            -Dspring-boot.run.jvmArguments="-DDB_PASSWORD=${DB_PASSWORD} -DPOSTGRES_SMARTBI_PASSWORD=${POSTGRES_SMARTBI_PASSWORD} -DJWT_SECRET=${JWT_SECRET}" \
-            -Dspring-boot.run.profiles=pg \
-            > /tmp/backend.log 2>&1 &
-          echo "backend_pid=$!" >> $GITHUB_ENV
-
       - name: Wait for backend health (up to 4 min)
-        continue-on-error: true  # Defensive — backend bootstrap occasionally still flaky on CI runner; should be green now that pgvector ext is enabled on cretas_db
-        run: bash tests/v1-e2e/scripts/wait-for-health.sh http://localhost:10010/api/mobile/health 240
-
-      - name: Wait-for-health result
-        run: |
-          curl -sf http://localhost:10010/api/mobile/health && echo OK || echo "Backend skipped (see /tmp/backend.log); downstream steps may fail cleanly"
+        run: bash tests/v1-e2e/scripts/wait-for-health.sh http://localhost:10010/api/mobile/health 240 "$backend_pid"
 
       # Diagnose backend startup failures: logback redirects all post-config logs to
       # backend/java/cretas-api/logs/*.log (not /tmp/backend.log). Cat them when health
       # check fails so root cause is visible in CI output.
       - name: Diagnose backend on health failure
-        if: always()
+        if: failure()
         run: |
           echo "=== /tmp/backend.log (mvn stdout — usually only logback init + Spring banner) ==="
           tail -200 /tmp/backend.log || echo "(no /tmp/backend.log)"
