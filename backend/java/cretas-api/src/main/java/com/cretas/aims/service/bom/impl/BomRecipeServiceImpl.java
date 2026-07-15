@@ -165,7 +165,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         // 同一 SKU 只能有一个 ACTIVE/current 版本。历史脏数据可能 ACTIVE 但 current=false，
         // 也必须在同一事务中归档，确保状态文案与真实生效语义一致。
         List<BomRecipe> others = recipeRepo.findCompetingVersionsForActivation(
-                factoryId, recipe.getProductTypeId(), recipe.getId());
+                factoryId, recipe.getProductTypeId(), recipe.getId(), BomRecipe.Status.ACTIVE);
         for (BomRecipe other : others) {
             other.setStatus(BomRecipe.Status.ARCHIVED);
             other.setIsCurrent(false);

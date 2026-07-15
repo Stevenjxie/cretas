@@ -53,12 +53,13 @@ public interface BomRecipeRepository extends JpaRepository<BomRecipe, String> {
     @Query("SELECT br FROM BomRecipe br " +
            "WHERE br.factoryId = :factoryId " +
            "AND br.productTypeId = :productTypeId " +
-           "AND (br.isCurrent = true OR br.status = com.cretas.aims.entity.bom.BomRecipe.Status.ACTIVE) " +
+           "AND (br.isCurrent = true OR br.status = :activeStatus) " +
            "AND br.id <> :excludeId")
     List<BomRecipe> findCompetingVersionsForActivation(
             @Param("factoryId") String factoryId,
             @Param("productTypeId") String productTypeId,
-            @Param("excludeId") String excludeId);
+            @Param("excludeId") String excludeId,
+            @Param("activeStatus") Status activeStatus);
 
     /** 取产品最大 version (clone 时 +1 生成新版本). */
     @Query("SELECT COALESCE(MAX(br.version), 0) FROM BomRecipe br " +
