@@ -27,33 +27,49 @@ vi.mock('@/api/smartbi/dataRange', () => ({
   getGoldDataRange: (...a: unknown[]) => getGoldDataRangeMock(...a),
 }));
 
-// ── HTTP gateway (gold dashboard payload) ────────────────────
-// loadDashboardData() hits get('/<f>/smart-bi/dashboard/executive/custom?...').
-// loadLLMInsights() hits the .../insights endpoint — return empty for that.
-const goldDashboardPayload = {
-  code: 200,
-  kpiCards: [
-    { key: 'total_revenue', title: '总营收', rawValue: 43210000, displayValue: '4321万', changeRate: null },
-    { key: 'bill_count', title: '订单数', rawValue: 128456, displayValue: '12.8万', changeRate: null },
-    { key: 'avg_bill_value', title: '客单价', rawValue: 336.5, displayValue: '336.5', changeRate: null },
-    { key: 'store_count', title: '门店数', rawValue: 7, displayValue: '7', changeRate: null },
-  ],
-  charts: {
-    sales_trend: { type: 'line', series: [{ data: [1, 2, 3] }], xAxis: { data: ['a', 'b', 'c'] } },
-  },
-  rankings: {},
-  aiInsights: [],
-};
-const getMock = vi.fn(async (url: string) => {
-  if (url.includes('/insights')) {
-    return { success: true, data: { data: [] } };
-  }
-  // executive / executive/custom dashboard payload
-  return { success: true, data: goldDashboardPayload };
-});
+// Restaurant dashboards load KPI and trend data directly from the Python Gold API.
+const getKpiSummaryMock = vi.fn(async (_args: unknown) => ({
+  factoryId: 'RES_3101_009',
+  startDate: '2025-01-01',
+  endDate: '2026-04-30',
+  revenue: 43210000,
+  billCount: 128456,
+  itemCount: 0,
+  customerCount: 0,
+  storeCount: 7,
+  dayCount: 485,
+  avgBillValue: 336.5,
+  itemsPerBill: null,
+  avgPerCapita: null,
+}));
+const getTrendBundleMock = vi.fn(async (_args: unknown) => ({
+  factoryId: 'RES_3101_009',
+  startDate: '2025-01-01',
+  endDate: '2026-04-30',
+  dailyTrend: [],
+}));
+vi.mock('@/api/smartbi/gold', () => ({
+  getKpiSummary: (...a: unknown[]) => getKpiSummaryMock(...(a as [unknown])),
+  getTrendBundle: (...a: unknown[]) => getTrendBundleMock(...(a as [unknown])),
+}));
+
+// loadLLMInsights() still uses the Java HTTP gateway; keep it empty and non-blocking.
+const getMock = vi.fn(async (_url: string) => ({ success: true, data: { data: [] } }));
 vi.mock('@/api/request', () => ({
   get: (...a: unknown[]) => getMock(...(a as [string])),
 }));
+
+// Keep the non-blocking insights stream inside jsdom instead of issuing a real relative fetch.
+const insightsStream = [
+  'data: {"type":"delta","text":"ok"}',
+  '',
+  'data: {"type":"done"}',
+  '',
+].join('\n');
+vi.stubGlobal('fetch', vi.fn(async () => new Response(insightsStream, {
+  status: 200,
+  headers: { 'Content-Type': 'text/event-stream' },
+})));
 
 // ── smartbi API: upload-history list + dynamic analysis (must NOT drive view) ──
 const getUploadHistoryMock = vi.fn(async () => ({ success: true, data: [] }));
@@ -156,6 +172,8 @@ const globalStubs = {
   'el-alert': { props: ['title'], template: '<div class="el-alert">{{ title }}<slot /></div>' },
   'el-empty': { props: ['description'], template: '<div class="el-empty">{{ description }}<slot /></div>' },
   'el-skeleton': { template: '<div class="el-skeleton" />' },
+  'el-radio-group': { template: '<div class="el-radio-group"><slot /></div>' },
+  'el-radio-button': { template: '<button class="el-radio-button"><slot /></button>' },
   // these two are the data-source picker controls; render so text would surface IF present
   'el-select': {
     props: ['modelValue', 'placeholder'],
@@ -169,7 +187,12 @@ const globalStubs = {
 };
 
 async function mountDashboard() {
-  const wrapper = mount(Dashboard, { global: { stubs: globalStubs } });
+  const wrapper = mount(Dashboard, {
+    global: {
+      stubs: globalStubs,
+      directives: { loading: () => undefined },
+    },
+  });
   await flushPromises();
   await flushPromises();
   return wrapper;
@@ -178,6 +201,8 @@ async function mountDashboard() {
 describe('Dashboard WS2 — data-source picker removed, gold default', () => {
   beforeEach(() => {
     getGoldDataRangeMock.mockClear();
+    getKpiSummaryMock.mockClear();
+    getTrendBundleMock.mockClear();
     getMock.mockClear();
     getUploadHistoryMock.mockClear();
     getDynamicAnalysisMock.mockClear();
@@ -194,32 +219,36 @@ describe('Dashboard WS2 — data-source picker removed, gold default', () => {
     expect(dsSelect).toBeUndefined();
   });
 
-  it('loads from the gold path (executive endpoint), never the upload dynamic analysis', async () => {
+  it('loads from the direct Gold API, never the legacy executive or upload paths', async () => {
     await mountDashboard();
-    // gold dashboard fetch happened
-    const dashCalls = getMock.mock.calls.map((c) => c[0] as string);
-    expect(dashCalls.some((u) => u.includes('/smart-bi/dashboard/executive'))).toBe(true);
-    // upload-based dynamic analysis NEVER called
+    expect(getKpiSummaryMock).toHaveBeenCalledOnce();
+    expect(getTrendBundleMock).toHaveBeenCalledOnce();
+    const legacyDashboardCalls = getMock.mock.calls.filter((call) => {
+      const url = String(call[0]);
+      return url.includes('/smart-bi/dashboard/executive') && !url.includes('/insights');
+    });
+    expect(legacyDashboardCalls).toEqual([]);
     expect(getDynamicAnalysisMock).not.toHaveBeenCalled();
   });
 
   it('defaults the date range to ALL history [minDate, maxDate] from getGoldDataRange', async () => {
     await mountDashboard();
     expect(getGoldDataRangeMock).toHaveBeenCalled();
-    // the executive/custom call must span the full [minDate, maxDate] window,
-    // NOT just the latest year (old behaviour was [2026-01-01, maxDate]).
-    const customCall = getMock.mock.calls
-      .map((c) => c[0] as string)
-      .find((u) => u.includes('/executive/custom'));
-    expect(customCall).toBeTruthy();
-    expect(customCall).toContain('startDate=2025-01-01');
-    expect(customCall).toContain('endDate=2026-04-30');
+    const expectedRange = {
+      factoryId: 'RES_3101_009',
+      startDate: '2025-01-01',
+      endDate: '2026-04-30',
+    };
+    expect(getKpiSummaryMock).toHaveBeenCalledWith(expectedRange);
+    expect(getTrendBundleMock).toHaveBeenCalledWith(expectedRange);
   });
 });
 
 describe('Dashboard WS2 — KPI cards always gold (no 需上传 placeholder)', () => {
   beforeEach(() => {
     getGoldDataRangeMock.mockClear();
+    getKpiSummaryMock.mockClear();
+    getTrendBundleMock.mockClear();
     getMock.mockClear();
     getUploadHistoryMock.mockClear();
     getDynamicAnalysisMock.mockClear();

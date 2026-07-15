@@ -709,7 +709,7 @@ watch(() => [props.factoryId, props.productTypeId] as const, async (next, previo
 });
 
 watch(aiStorageKey, () => {
-  aiCollapsed.value = localStorage.getItem(aiStorageKey.value) === 'true';
+  aiCollapsed.value = localStorage.getItem(aiStorageKey.value) !== 'false';
 });
 
 async function loadCatalogs(): Promise<void> {
