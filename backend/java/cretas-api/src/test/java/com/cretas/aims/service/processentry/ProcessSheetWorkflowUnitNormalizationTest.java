@@ -4,8 +4,10 @@ import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO;
 import com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor;
 import com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.ProcessDescriptor;
+import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.service.processentry.impl.ProcessSheetServiceImpl;
 import com.cretas.aims.service.workflow.WorkflowClerkSheetService;
@@ -18,6 +20,7 @@ import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -101,6 +104,7 @@ class ProcessSheetWorkflowUnitNormalizationTest {
                 .skuId("PT-out-" + processOrder)
                 .materialName(outFinished ? "成品" : "半成品")
                 .unit(outUnit)
+                .gramsPerUnit(outFinished ? new BigDecimal("200") : null)
                 .required(true)
                 .skuResolved(true)
                 .finished(outFinished)
@@ -126,7 +130,9 @@ class ProcessSheetWorkflowUnitNormalizationTest {
     @DisplayName("成品换算行 (input kg → output 盒) → 端口单位归一化, 不抛 PROCESS_NOT_CONFIGURED")
     void finishedConversionRow_normalizesFromPorts() throws Throwable {
         WorkflowClerkSheetService svc = mock(WorkflowClerkSheetService.class);
-        when(svc.getWorkflowSheetConfig(FACTORY_ID, PLAN_ID)).thenReturn(config(3, true, "kg", "盒"));
+        WorkflowClerkSheetConfigDTO workflow = config(3, true, "kg", "盒");
+        workflow.getProcesses().getFirst().getOutput().setGramsPerUnit(new BigDecimal("200"));
+        when(svc.getWorkflowSheetConfig(FACTORY_ID, PLAN_ID)).thenReturn(workflow);
         ProcessSheetServiceImpl impl = newImpl(svc);
 
         ProcessSheetRowRequest req = row(3, "盒", "kg", "盒");
@@ -134,6 +140,22 @@ class ProcessSheetWorkflowUnitNormalizationTest {
         assertEquals("kg", req.getInputUnit());
         assertEquals("盒", req.getOutputUnit());
         assertEquals("盒", req.getUnit());
+        assertEquals(0, new BigDecimal("2").compareTo(req.getProductWeight()));
+    }
+
+    @Test
+    @DisplayName("计数型成品缺少净重快照时阻止报工")
+    void finishedCountOutputRequiresNetWeightSnapshot() throws Throwable {
+        WorkflowClerkSheetService svc = mock(WorkflowClerkSheetService.class);
+        WorkflowClerkSheetConfigDTO workflow = config(3, true, "kg", "盒");
+        workflow.getProcesses().getFirst().getOutput().setGramsPerUnit(null);
+        when(svc.getWorkflowSheetConfig(FACTORY_ID, PLAN_ID)).thenReturn(workflow);
+        ProcessSheetServiceImpl impl = newImpl(svc);
+
+        ProcessSheetRowRequest req = row(3, "盒", "kg", "盒");
+        assertThatThrownBy(() -> apply(impl, req))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        error -> assertEquals("FINISHED_SKU_NET_WEIGHT_SNAPSHOT_MISSING", error.getErrorCode()));
     }
 
     @Test
@@ -159,6 +181,35 @@ class ProcessSheetWorkflowUnitNormalizationTest {
         assertEquals("件", req.getOutputUnit());
         assertEquals("件", req.getUnit());
         verifyNoInteractions(legacyRepo, workProcessRepo);
+    }
+
+    @Test
+    @DisplayName("legacy 成品重量由计划快照覆盖，忽略客户端伪造值")
+    void legacyFinishedWeightComesFromPlanSnapshot() throws Throwable {
+        ProductionPlanRepository planRepo = mock(ProductionPlanRepository.class);
+        ProductWorkProcessRepository legacyRepo = mock(ProductWorkProcessRepository.class);
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId(PLAN_ID);
+        plan.setFactoryId(FACTORY_ID);
+        plan.setProductTypeId("PT-product");
+        plan.setPlannedUnit("盒");
+        plan.setPlannedNetWeightGrams(new BigDecimal("200"));
+        when(planRepo.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(java.util.Optional.of(plan));
+        when(legacyRepo.findByFactoryIdAndProductTypeIdAndProcessOrder(
+                FACTORY_ID, "PT-product", 3)).thenReturn(java.util.Optional.empty());
+
+        ProcessSheetServiceImpl impl = new ProcessSheetServiceImpl(
+                null, null, null, null, null, null, planRepo, null,
+                null, null, null, null, legacyRepo, null, null, null, null);
+        ProcessSheetRowRequest req = row(3, "盒", null, null);
+        req.setProductTypeId("PT-product");
+        req.setFinished(true);
+        req.setOutputQuantity(new BigDecimal("50"));
+        req.setProductWeight(new BigDecimal("999"));
+
+        normalize(impl, req);
+
+        assertEquals(0, new BigDecimal("10").compareTo(req.getProductWeight()));
     }
 
     @Test

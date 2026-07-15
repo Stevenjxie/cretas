@@ -32,6 +32,7 @@ import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.inventory.SalesService;
+import com.cretas.aims.service.product.ProductPackagingSpecService;
 import com.cretas.aims.utils.TokenUtils;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -79,6 +80,7 @@ public class SalesController {
     // 改价留痕 + 审批
     private final SalesPriceAdjustmentService priceAdjustmentService;
     private final MaterialBatchService materialBatchService;
+    private final ProductPackagingSpecService productPackagingSpecService;
 
     /** Sprint 5 Track C-2 — owner_type / target_type literal pinned to SalesOrder. */
     private static final String SO_ENTITY_TYPE = "SALES_ORDER";
@@ -169,6 +171,16 @@ public class SalesController {
         batch.setShippedQuantity(BigDecimal.ZERO);
         batch.setReservedQuantity(BigDecimal.ZERO);
         batch.setUnit(request.unit());
+        ProductPackagingSpecService.PackagingSelection packagingSelection =
+                productPackagingSpecService.resolveSelection(
+                        factoryId, request.productTypeId(), request.unit(), request.packagingSpecId());
+        if (packagingSelection.spec() != null) {
+            batch.setPackagingSpecId(packagingSelection.spec().getId());
+            batch.setPackagingSpecName(packagingSelection.spec().getName());
+            batch.setPackagingUnit(packagingSelection.spec().getPackageUnit());
+            batch.setPackagingBaseUnit(packagingSelection.spec().getBaseUnit());
+            batch.setPackagingFactor(packagingSelection.spec().getConversionFactor());
+        }
         batch.setProductionDate(request.productionDate());
         batch.setRemark(request.remark());
         // 气调货标称/划单留痕 (null 时为普通入库, 不影响现有路径)
@@ -889,6 +901,7 @@ public class SalesController {
             @NotBlank String batchNumber,
             @NotNull @Positive BigDecimal producedQuantity,
             @NotBlank String unit,
+            String packagingSpecId,
             @NotNull LocalDate productionDate,
             String remark,
             // 气调货入库 (六扇门: "一托36放37, 对方划单"). 以下三项全可选, 留 null = 普通入库.

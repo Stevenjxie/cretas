@@ -58,6 +58,7 @@ function createTrip(
   const status = route.missing.length ? 'needs_route_data' : vehicle ? 'draft' : 'needs_vehicle';
   return {
     id: `${routeGroupId}-trip-${tripNo}`,
+    version: 0,
     routeGroupId,
     tripNo,
     vehicleId: vehicle?.id ?? null,

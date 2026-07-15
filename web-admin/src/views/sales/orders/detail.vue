@@ -629,10 +629,12 @@ function openDeliveryDialog() {
     deliveryAddress: order.value.deliveryAddress || '',
     logisticsCompany: '',
     items: (order.value.items as TableRow[]).map((it) => ({
+      salesOrderItemId: it.id,
       productTypeId: it.productTypeId,
       productName: it.productName,
       deliveredQuantity: it.quantity - (it.deliveredQuantity || 0),
       unit: it.unit,
+      packagingSpecId: it.packagingSpecId,
       unitPrice: it.unitPrice,
       // T4-D5 (issue #553): propagate per-line source warehouse code from the
       // sales order item. Backend SalesServiceImpl.createDeliveryRecord stores

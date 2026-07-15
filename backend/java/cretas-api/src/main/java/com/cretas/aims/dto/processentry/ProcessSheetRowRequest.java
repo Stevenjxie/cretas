@@ -64,6 +64,13 @@ public class ProcessSheetRowRequest {
     /** 领料 (修油首道): 消耗原料 MaterialBatch。 */
     private List<RawInput> rawMaterialInputs;
 
+    /**
+     * 新报工契约：操作员只填写每种原料的实际投料总量，不选择来源批次。
+     * 正式提交时由后端从生产库按 FEFO 自动分摊为 {@link RawInput}；草稿阶段不分摊、不占用库存。
+     * 为空时继续兼容旧客户端显式提交 {@code rawMaterialInputs} 的路径。
+     */
+    private List<MaterialInputTotal> materialInputTotals;
+
     /** 混锅: 按真实持久化 batchNumber 引用上游 WIP。 */
     private List<UpstreamRef> upstreamSources;
 
@@ -142,6 +149,18 @@ public class ProcessSheetRowRequest {
         private String skuId;
     }
 
+    /** 操作员录入的原料投料总量；数量单位当前只接受 kg。 */
+    @Data
+    public static class MaterialInputTotal {
+        @NotBlank
+        private String materialTypeId;
+        @NotNull
+        private BigDecimal quantity;
+        private String unit;
+        private String workflowPortId;
+        private String materialNodeId;
+    }
+
     /**
      * 2B.2 多产出行: 一个产出 = 一个产品 + 数量 (+ 分摊权重)。分解后每个 OutputLine 合成一条普通单产出行。
      */
@@ -163,6 +182,8 @@ public class ProcessSheetRowRequest {
         private String materialNodeId;
         /** 可选成品重(kg): 若设则 FG 按 kg 入库 (同顶层 productWeight 语义); 多数多产出场景留空按 quantity 入库。 */
         private BigDecimal productWeight;
+        /** Retained samples for this output SKU; inventory equals quantity minus this value. */
+        private Integer sampleRetainQuantity;
     }
 
     /** 混锅上游引用: 上游 WIP 的持久化 batchNumber + 投料量 (kg)。 */

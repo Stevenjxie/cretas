@@ -242,6 +242,23 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
                                                             @Param("warehouseId") String warehouseId);
 
     /**
+     * 正式报工自动分摊专用：锁定生产库候选批次，串行化并发分配。
+     * 生产库中的 batch 是调拨入库时新生成，createdAt 即不可变的转入顺序。
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
+           "AND m.materialTypeId = :materialTypeId " +
+           "AND m.warehouseId = :warehouseId " +
+           "AND m.status = 'AVAILABLE' " +
+           "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "ORDER BY m.createdAt ASC, m.id ASC")
+    List<MaterialBatch> findAvailableBatchesFEFOByWarehouseForUpdate(
+            @Param("factoryId") String factoryId,
+            @Param("materialTypeId") String materialTypeId,
+            @Param("warehouseId") String warehouseId);
+
+    /**
      * 查找 warehouse 内所有可用批次（不限 materialType，排除 PRODUCTION_BATCH 来源）。
      * D1 反向调拨触发 (PR #309 A3=A, 2026-05-10 spec)。SP-D Fix 1b.
      *

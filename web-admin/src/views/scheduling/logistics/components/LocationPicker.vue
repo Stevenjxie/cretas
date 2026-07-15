@@ -72,7 +72,6 @@ function placeMarker(lng: number, lat: number, recenter = true): void {
 async function initPanel(): Promise<void> {
   mapReady.value = false;
   pluginsReady.value = false;
-  suggestions.value = [];
   searchKeyword.value = '';
   pickedCoord.value = null;
   await nextTick();

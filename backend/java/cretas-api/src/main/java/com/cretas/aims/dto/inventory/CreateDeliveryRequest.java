@@ -62,6 +62,9 @@ public class CreateDeliveryRequest {
     @AllArgsConstructor
     public static class DeliveryItemDTO {
 
+        /** Linked sales-order line. Used to preserve the exact packaging snapshot. */
+        private Long salesOrderItemId;
+
         @NotBlank(message = "产品ID不能为空")
         @Size(max = 191, message = "产品ID长度不能超过191个字符")
         private String productTypeId;
@@ -76,6 +79,10 @@ public class CreateDeliveryRequest {
         @NotBlank(message = "单位不能为空")
         @Size(max = 20, message = "单位长度不能超过20个字符")
         private String unit;
+
+        /** Required for standalone delivery when one SKU has multiple specs for the same package unit. */
+        @Size(max = 36, message = "包装规格ID长度不能超过36")
+        private String packagingSpecId;
 
         private BigDecimal unitPrice;
 

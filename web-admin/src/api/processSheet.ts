@@ -37,6 +37,15 @@ export interface RawInput {
   skuId?: string;
 }
 
+/** 新报工契约：按物料汇总的实际投料量，正式提交时由后端自动分摊生产库批次。 */
+export interface MaterialInputTotal {
+  materialTypeId: string;
+  quantity: number;
+  unit: 'kg';
+  workflowPortId?: string;
+  materialNodeId?: string;
+}
+
 /** 上游混锅来源引用, 按真实 batchNumber (mirrors ProcessSheetRowRequest.UpstreamRef) */
 export interface UpstreamRef {
   sourceBatchNumber: string;
@@ -115,6 +124,8 @@ export interface ProcessSheetRowRequest {
   laborSegments?: LaborSegment[];
   /** 原料领料 (修油首道): 消耗原料 MaterialBatch */
   rawMaterialInputs?: RawInput[];
+  /** 新路径只传总量，不传来源批次；旧 rawMaterialInputs 继续兼容。 */
+  materialInputTotals?: MaterialInputTotal[];
   /** 混锅来源 (熟制): 多个上游焯水批按 batchNumber 引用 */
   upstreamSources?: UpstreamRef[];
   potCount?: number;
@@ -186,6 +197,17 @@ export interface ProcessSheetRowResult {
    * (成本相关字段 rowTotalCost/unitPrice/yieldRate 顶层为 null — 工序不处理成本分摊)。
    */
   outputs?: OutputResult[] | null;
+  submissionStatus?: 'DRAFT' | 'SUBMITTED';
+  inputAllocations?: ProductionInputAllocation[];
+}
+
+export interface ProductionInputAllocation {
+  materialTypeId: string;
+  materialBatchId: string;
+  batchNumber: string | null;
+  quantity: number;
+  unit: string;
+  allocationOrder: number;
 }
 
 /** 单个产出的物化结果 (mirrors ProcessSheetRowResult.OutputResult Java DTO)。 */
@@ -304,6 +326,7 @@ export interface ProcessSheetRowView {
   /** DRAFT = outputQty<=0 未物化; SAVED = 已物化 */
   rowStatus: 'SAVED' | 'DRAFT';
   materialized: boolean;
+  submissionStatus?: 'DRAFT' | 'SUBMITTED' | null;
   /** 原始录入 payload (row_payload JSON 原样回读) */
   payload: ProcessSheetRowRequest;
   /**
@@ -330,6 +353,26 @@ export function saveRow(
   body: ProcessSheetRowRequest,
 ): Promise<ApiResponse<ProcessSheetRowResult>> {
   return post<ProcessSheetRowResult>(`${sheetBase(factoryId, planId)}/row`, body);
+}
+
+/** 只保存草稿，不解析或占用生产库批次。 */
+export function saveDraftRow(
+  factoryId: string,
+  planId: string,
+  body: ProcessSheetRowRequest,
+): Promise<ApiResponse<ProcessSheetRowResult>> {
+  return post<ProcessSheetRowResult>(`${sheetBase(factoryId, planId)}/row/draft`, body);
+}
+
+/** 正式报工；后端锁定生产库并按 FEFO 自动分摊来源批次。 */
+export function submitRow(
+  factoryId: string,
+  planId: string,
+  body: ProcessSheetRowRequest,
+): Promise<ApiResponse<ProcessSheetRowResult>> {
+  return post<ProcessSheetRowResult>(`${sheetBase(factoryId, planId)}/row/submit`, body, {
+    _handledErrorCodes: ['PRODUCTION_STOCK_SHORTAGE'],
+  });
 }
 
 /**
@@ -414,6 +457,8 @@ export interface WorkflowPortDescriptor {
   skuId: string;
   materialName: string | null;
   unit: string | null;
+  /** 固定包装成品的 SKU 单位净重（克/基本单位）；缺失时前端不得猜测重量换算。 */
+  gramsPerUnit?: number | null;
   required: boolean;
   /** false = skuId 已无法解析 (物料/产品被删除)。 */
   skuResolved: boolean;

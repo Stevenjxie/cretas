@@ -168,8 +168,23 @@ export interface ProductType {
   shelfLifeDays?: number;
   /** 包装规格 */
   packageSpec?: string;
+  level1Unit?: string;
+  boxConversionCoefficient?: number;
+  gramsPerUnit?: number;
   /** 自定义 Schema 覆盖配置 (JSON 格式，按 entityType 分组) */
   customSchemaOverrides?: Record<string, unknown>;
+}
+
+export interface ProductPackagingSpec {
+  id: string;
+  name: string;
+  packageUnit: string;
+  baseUnit: string;
+  conversionFactor: number;
+  defaultSpec: boolean;
+  active: boolean;
+  sortOrder: number;
+  version?: number;
 }
 
 /**
@@ -245,6 +260,13 @@ class ProductTypeApiClient {
 
   async getActiveProductTypes(factoryId?: string): Promise<ProductType[]> {
     const response = await apiClient.get<ApiResponse<ProductType[]>>(`${this.getPath(factoryId)}/active`);
+    return response.data || [];
+  }
+
+  async getPackagingSpecs(id: string, factoryId?: string): Promise<ProductPackagingSpec[]> {
+    const response = await apiClient.get<ApiResponse<ProductPackagingSpec[]>>(
+      `${this.getPath(factoryId)}/${id}/packaging-specs`
+    );
     return response.data || [];
   }
 

@@ -53,10 +53,13 @@ public class ProductionPlanDTO {
 
     @Schema(description = "计划成品单位快照")
     private String plannedUnit;
+    private BigDecimal plannedNetWeightGrams;
 
     private String workflowSelectionMode;
     private Long selectedWorkflowId;
     private Integer selectedWorkflowVersion;
+    private String selectedBomRecipeId;
+    private Integer selectedBomVersion;
 
     @Schema(description = "实际数量")
     private BigDecimal actualQuantity;

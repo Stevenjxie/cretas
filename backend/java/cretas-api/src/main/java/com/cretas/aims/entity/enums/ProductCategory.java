@@ -50,7 +50,15 @@ public final class ProductCategory {
      */
     public static boolean isSellable(String category) {
         return FINISHED_PRODUCT.equals(category) || DISH.equals(category)
-                || COMBO.equals(category) || SEMI_FINISHED.equals(category)
+                || COMBO.equals(category)
+                || CONTRACT_MANUFACTURING.equals(category)
+                || CUSTOMER_MATERIAL.equals(category);
+    }
+
+    /** SKU 管理目录范围；原料、包材、调味料仍由物料字典管理。 */
+    public static boolean isSku(String category) {
+        return FINISHED_PRODUCT.equals(category)
+                || SEMI_FINISHED.equals(category)
                 || CONTRACT_MANUFACTURING.equals(category)
                 || CUSTOMER_MATERIAL.equals(category);
     }

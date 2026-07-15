@@ -14,6 +14,7 @@ import com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.processentry.ProcessSheetRowChangeLog;
@@ -41,6 +42,7 @@ import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.processentry.ClerkProcessEntryService;
 import com.cretas.aims.service.processentry.ProcessSheetService;
+import com.cretas.aims.service.processentry.ProductionStockAllocationService;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -139,6 +141,182 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     /** Workflow progress is projected only after the process-sheet transaction commits. */
     @Autowired(required = false)
     private ApplicationEventPublisher applicationEventPublisher;
+
+    /** 新正式提交入口的生产库批次自动分摊器；旧 saveRow 路径不依赖它。 */
+    @Autowired(required = false)
+    private ProductionStockAllocationService productionStockAllocationService;
+
+    @Override
+    @Transactional
+    public ProcessSheetRowResult saveDraft(String factoryId, String planId,
+                                            ProcessSheetRowRequest req, Long userId) {
+        assertAuthenticatedPlan(factoryId, planId, userId);
+        // Drafts may be intentionally incomplete. Formal submission validates the
+        // Workflow ports and derives every authoritative unit/weight before writing stock.
+        validateCustomFields(factoryId, req);
+
+        Optional<ProcessSheetRow> existing = rowRepo
+                .findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
+                        factoryId, planId, req.getProcessCode(), req.getClientRowId());
+        ProcessSheetRowRequest before = existing.map(row -> tryDeserialize(row.getRowPayload())).orElse(null);
+        if (existing.isPresent()) {
+            ProcessSheetRow row = existing.get();
+            if (row.getInterimSettledAt() != null
+                    || ProcessSheetRow.SUBMISSION_SUBMITTED.equals(row.getSubmissionStatus())
+                    || row.getBatchId() != null
+                    || ProcessSheetRow.STATUS_SAVED_SFI.equals(row.getRowStatus())) {
+                throw new BusinessException(409, "已正式提交或已物化的报工不能覆盖为草稿")
+                        .withCode("PROCESS_SHEET_DRAFT_OVERWRITE_FORBIDDEN")
+                        .withHint("请新建草稿；已提交记录需按既有撤销流程处理")
+                        .withSeverity("BLOCKING");
+            }
+            updateRowInPlace(row, req, null, null, "DRAFT");
+            row.setSubmissionStatus(ProcessSheetRow.SUBMISSION_DRAFT);
+            rowRepo.save(row);
+            logChange(factoryId, planId, req, "UPDATE", before, req, userId);
+        } else {
+            persistRow(factoryId, planId, req, null, null, "DRAFT");
+            ProcessSheetRow row = rowRepo
+                    .findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
+                            factoryId, planId, req.getProcessCode(), req.getClientRowId())
+                    .orElseThrow(() -> new BusinessException(500, "草稿保存后未能读取工序行")
+                            .withCode("PROCESS_SHEET_DRAFT_PERSIST_FAILED"));
+            row.setSubmissionStatus(ProcessSheetRow.SUBMISSION_DRAFT);
+            rowRepo.save(row);
+            logChange(factoryId, planId, req, "CREATE", null, req, userId);
+        }
+
+        ProcessSheetRowResult result = buildResult(
+                req, null, null, null, null, null, existing.isPresent(), false, List.of());
+        result.setSubmissionStatus(ProcessSheetRow.SUBMISSION_DRAFT);
+        result.setInputAllocations(List.of());
+        return result;
+    }
+
+    @Override
+    @Transactional
+    public ProcessSheetRowResult submitRow(String factoryId, String planId,
+                                            ProcessSheetRowRequest req, Long userId) {
+        assertAuthenticatedPlan(factoryId, planId, userId);
+        boolean hasSingleOutput = req.getOutputQuantity() != null
+                && req.getOutputQuantity().signum() > 0;
+        boolean hasMultiOutput = req.getOutputs() != null
+                && !req.getOutputs().isEmpty()
+                && req.getOutputs().stream().allMatch(output ->
+                        output.getQuantity() != null && output.getQuantity().signum() > 0);
+        if (!hasSingleOutput && !hasMultiOutput) {
+            throw new BusinessException(400, "正式提交必须填写大于 0 的实际产出数量")
+                    .withCode("PROCESS_SHEET_OUTPUT_REQUIRED")
+                    .withHint("当前记录仍可保存为草稿，补充实际产出后再正式提交")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("实际生产");
+        }
+        Optional<ProcessSheetRow> existing = rowRepo
+                .findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
+                        factoryId, planId, req.getProcessCode(), req.getClientRowId());
+        if (existing.isPresent()
+                && ProcessSheetRow.SUBMISSION_SUBMITTED.equals(existing.get().getSubmissionStatus())) {
+            throw new BusinessException(409, "该报工行已经正式提交")
+                    .withCode("PROCESS_SHEET_ROW_ALREADY_SUBMITTED")
+                    .withHint("请勿重复提交；如需更正请走撤销流程")
+                    .withSeverity("BLOCKING");
+        }
+
+        List<ProductionStockAllocationService.PlannedAllocation> allocations = List.of();
+        if (req.getMaterialInputTotals() != null && !req.getMaterialInputTotals().isEmpty()) {
+            if (productionStockAllocationService == null) {
+                throw new BusinessException(500, "生产库自动分摊服务未启用，不能正式提交")
+                        .withCode("PRODUCTION_STOCK_ALLOCATION_UNAVAILABLE")
+                        .withHint("请联系管理员检查生产库分摊服务配置")
+                        .withSeverity("BLOCKING");
+            }
+            allocations = productionStockAllocationService.plan(factoryId, req.getMaterialInputTotals());
+            req.setRawMaterialInputs(productionStockAllocationService.toRawInputs(allocations));
+            if (req.getInputQuantity() == null) {
+                req.setInputQuantity(req.getMaterialInputTotals().stream()
+                        .map(ProcessSheetRowRequest.MaterialInputTotal::getQuantity)
+                        .filter(Objects::nonNull)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add));
+            }
+            req.setInputUnit("kg");
+        } else if (req.getRawMaterialInputs() != null && !req.getRawMaterialInputs().isEmpty()) {
+            if (productionStockAllocationService == null) {
+                throw new BusinessException(500, "生产库批次锁定服务未启用，不能正式提交")
+                        .withCode("PRODUCTION_STOCK_ALLOCATION_UNAVAILABLE")
+                        .withSeverity("BLOCKING");
+            }
+            allocations = productionStockAllocationService.planExplicit(
+                    factoryId, req.getRawMaterialInputs());
+            req.setRawMaterialInputs(productionStockAllocationService.toRawInputs(allocations));
+            if (req.getInputQuantity() == null) {
+                req.setInputQuantity(allocations.stream()
+                        .map(ProductionStockAllocationService.PlannedAllocation::quantity)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add));
+            }
+            req.setInputUnit("kg");
+        }
+
+        boolean producesFinishedGoods = req.isFinished()
+                || (req.getOutputs() != null && req.getOutputs().stream()
+                        .anyMatch(ProcessSheetRowRequest.OutputLine::isFinished));
+        if (producesFinishedGoods
+                && (req.getInputQuantity() == null || req.getInputQuantity().signum() <= 0)) {
+            throw new BusinessException(409, "成品报工缺少可追溯的实际投入量，不能正式提交")
+                    .withCode("FINISHED_REPORT_INPUT_REQUIRED")
+                    .withHint("请刷新上游库存后重试；系统无法确定投入时只能保存草稿")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("实际投入");
+        }
+
+        ProcessSheetRowResult result = saveRow(factoryId, planId, req, userId);
+        List<ProcessSheetRow> submittedRows = resolveSubmittedRows(factoryId, planId, req, result);
+        if (submittedRows.isEmpty()) {
+            throw new BusinessException(500, "正式提交后未能读取工序行")
+                    .withCode("PROCESS_SHEET_SUBMIT_PERSIST_FAILED");
+        }
+        for (ProcessSheetRow row : submittedRows) {
+            row.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+            rowRepo.save(row);
+        }
+        if (!allocations.isEmpty()) {
+            productionStockAllocationService.persist(
+                    factoryId, planId, submittedRows.get(0).getId(), userId, allocations);
+        }
+        result.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        result.setInputAllocations(productionStockAllocationService == null
+                ? List.of()
+                : productionStockAllocationService.toResult(allocations));
+        return result;
+    }
+
+    private void assertAuthenticatedPlan(String factoryId, String planId, Long userId) {
+        if (userId == null) {
+            throw new BusinessException(401, "未登录，无法保存工序行");
+        }
+        if (productionPlanRepository.findByIdAndFactoryId(planId, factoryId).isEmpty()) {
+            throw new BusinessException(403, "无权访问该计划");
+        }
+    }
+
+    private List<ProcessSheetRow> resolveSubmittedRows(
+            String factoryId,
+            String planId,
+            ProcessSheetRowRequest req,
+            ProcessSheetRowResult result) {
+        LinkedHashMap<Long, ProcessSheetRow> rows = new LinkedHashMap<>();
+        if (result.getOutputs() != null) {
+            for (ProcessSheetRowResult.OutputResult output : result.getOutputs()) {
+                if (output.getClientRowId() == null) continue;
+                rowRepo.findByFactoryIdAndPlanIdAndClientRowId(factoryId, planId, output.getClientRowId())
+                        .forEach(row -> rows.put(row.getId(), row));
+            }
+        }
+        if (rows.isEmpty()) {
+            rowRepo.findByFactoryIdAndPlanIdAndClientRowId(factoryId, planId, req.getClientRowId())
+                    .forEach(row -> rows.put(row.getId(), row));
+        }
+        return List.copyOf(rows.values());
+    }
 
     @Override
     @Transactional
@@ -519,6 +697,17 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     private OneOutputOutcome materializeOneOutput(String factoryId, String planId,
             ProcessSheetRowRequest one, Long userId, List<String> warnings,
             WorkflowClerkSheetConfigDTO workflowConfig) {
+        if (workflowConfig == null && one.isFinished()) {
+            ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+                    .orElseThrow(() -> new BusinessException(403, "无权访问该计划"));
+            if (!Objects.equals(plan.getProductTypeId(), one.getProductTypeId())) {
+                throw new BusinessException(409, "旧版计划没有附加成品 SKU 的单位快照")
+                        .withCode("LEGACY_MULTI_OUTPUT_SNAPSHOT_MISSING")
+                        .withHint("请使用已发布 Workflow 创建新计划后再报多产出")
+                        .withSeverity("BLOCKING");
+            }
+            applyLegacyFinishedWeight(factoryId, planId, one);
+        }
         assertExternalFeedUnitSupported(one);
         List<ResolvedEdge> edges = resolveEdges(factoryId, planId, one);
         // 半成品且 (纯 SFI 喂 或 无真实投入[非首产出行]) → 产出直接入 SFI 库 (product 维度, 无需 material_type_id)。
@@ -577,6 +766,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         one.setMultiOutputBaseRowId(base.getClientRowId());
         one.setWorkflowPortId(o.getWorkflowPortId());
         one.setMaterialNodeId(o.getMaterialNodeId());
+        one.setSampleRetainQuantity(o.getSampleRetainQuantity());
         if (carryInputs) {
             // 首产出行承载全部实际投入 (原样, 不拆分) + 人工/调料/逐锅原料/副产/留样/包装明细 (随投入落在首行, 计一次)。
             one.setInputQuantity(base.getInputQuantity());
@@ -587,7 +777,6 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             one.setRawMaterialInputs(base.getRawMaterialInputs());
             one.setUpstreamSources(base.getUpstreamSources());
             one.setByproducts(base.getByproducts());
-            one.setSampleRetainQuantity(base.getSampleRetainQuantity());
             one.setPackagingDetail(base.getPackagingDetail());
         }
         return one;
@@ -742,6 +931,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         .withHint("请按 Workflow 配置的单位录入产出");
             }
             o.setUnit(expectUnit);
+            applyAuthoritativeFinishedWeight(o, port);
         }
         for (com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor port : desc.getOutputs()) {
             if (Boolean.TRUE.equals(port.getRequired())
@@ -875,6 +1065,12 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                                             ProcessSheetRowRequest req, Long userId,
                                             ProcessSheetRow existing,
                                             WorkflowClerkSheetConfigDTO workflowConfig) {
+        if (ProcessSheetRow.SUBMISSION_SUBMITTED.equals(existing.getSubmissionStatus())) {
+            throw new BusinessException(409, "已正式提交的报工不能直接修改")
+                    .withCode("PROCESS_SHEET_SUBMITTED_IMMUTABLE")
+                    .withHint("如需更正请走撤销流程")
+                    .withSeverity("BLOCKING");
+        }
         // 🔒 G3 防双扣: 已小结入库的行不可直接编辑。
         // 否则 CASE B2 会软删旧消耗边 + 重建 interim_settled_at=NULL 的新边 (下次小结再次扣减原料,
         // 原扣减从未反冲 → usedQuantity 超扣), 且行仍带戳 → 更正后的产出永不重新过账。
@@ -1062,6 +1258,12 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
     /** 单行删除内部体 (无级联; 供 deleteRow 级联 + deleteMultiOutputGroupIfPresent 复用)。 */
     private void deleteOneRow(String factoryId, String planId, ProcessSheetRow row, Long userId) {
+        if (ProcessSheetRow.SUBMISSION_SUBMITTED.equals(row.getSubmissionStatus())) {
+            throw new BusinessException(409, "已正式提交的报工不能直接删除")
+                    .withCode("PROCESS_SHEET_SUBMITTED_IMMUTABLE")
+                    .withHint("如需更正请走撤销流程")
+                    .withSeverity("BLOCKING");
+        }
         // 🔒 G3 防双扣: 已小结入库的行不可删除 (usedQuantity 扣减从未反冲 → 账面超扣)。完整撤销走撤销小结。
         if (row.getInterimSettledAt() != null) {
             throw new BusinessException(409, "该行已小结入库,不可删除;如需更正请走撤销小结(功能开发中)")
@@ -1826,13 +2028,14 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 : rowRepo.findByFactoryIdAndPlanIdAndProcessCode(factoryId, planId, processCode);
         return rows.stream()
                 .map(row -> new ProcessSheetRowView(
-                        row.getClientRowId(),
-                        row.getBatchNumber(),
-                        row.getBatchId(),
-                        row.getRowStatus(),
-                        row.getBatchId() != null,
-                        deserializePayload(row.getRowPayload()),
-                        row.getInterimSettledAt()))
+                    row.getClientRowId(),
+                    row.getBatchNumber(),
+                    row.getBatchId(),
+                    row.getRowStatus(),
+                    row.getSubmissionStatus(),
+                    row.getBatchId() != null,
+                    deserializePayload(row.getRowPayload()),
+                    row.getInterimSettledAt()))
                 .toList();
     }
 
@@ -2092,6 +2295,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 req.setInputUnit(legacyUnit);
                 req.setOutputUnit(legacyUnit);
                 req.setUnit(legacyUnit);
+                applyLegacyFinishedWeight(factoryId, planId, req);
                 return;
             }
             throw new BusinessException(400, "产品未配置该工序，不能报工")
@@ -2106,6 +2310,23 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         .withHint("请检查产品工序配置后重试")
                         .withHintTarget("工序配置"));
         normalizeConfiguredUnits(req, pwp, process);
+        applyLegacyFinishedWeight(factoryId, planId, req);
+    }
+
+    private void applyLegacyFinishedWeight(
+            String factoryId, String planId, ProcessSheetRowRequest req) {
+        if (!req.isFinished() || req.getOutputQuantity() == null) return;
+        ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+                .orElseThrow(() -> new BusinessException(403, "无权访问该计划"));
+        String outputUnit = firstNonBlank(req.getOutputUnit(), req.getUnit(), plan.getPlannedUnit());
+        if (plan.getPlannedUnit() != null
+                && !plan.getPlannedUnit().equalsIgnoreCase(outputUnit)) {
+            throw new BusinessException(409, "成品报工单位与计划快照不一致")
+                    .withCode("PROCESS_SHEET_PLAN_UNIT_MISMATCH")
+                    .withSeverity("BLOCKING");
+        }
+        req.setProductWeight(authoritativeFinishedWeight(
+                req.getOutputQuantity(), outputUnit, plan.getPlannedNetWeightGrams()));
     }
 
     /**
@@ -2179,7 +2400,43 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         req.setInputUnit(inputUnit);
         req.setOutputUnit(outputUnit);
         req.setUnit(outputUnit);
+        applyAuthoritativeFinishedWeight(req, descriptor.getOutput());
         return true;
+    }
+
+    private static void applyAuthoritativeFinishedWeight(
+            ProcessSheetRowRequest req,
+            com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor port) {
+        if (!Boolean.TRUE.equals(port.getFinished()) || req.getOutputQuantity() == null) return;
+        req.setProductWeight(authoritativeFinishedWeight(
+                req.getOutputQuantity(), port.getUnit(), port.getGramsPerUnit()));
+    }
+
+    private static void applyAuthoritativeFinishedWeight(
+            ProcessSheetRowRequest.OutputLine output,
+            com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor port) {
+        if (!Boolean.TRUE.equals(port.getFinished()) || output.getQuantity() == null) return;
+        output.setProductWeight(authoritativeFinishedWeight(
+                output.getQuantity(), port.getUnit(), port.getGramsPerUnit()));
+    }
+
+    private static BigDecimal authoritativeFinishedWeight(
+            BigDecimal quantity, String unit, BigDecimal gramsPerUnit) {
+        String normalized = unit == null ? "" : unit.trim().toLowerCase(java.util.Locale.ROOT);
+        if ("kg".equals(normalized) || "千克".equals(normalized) || "公斤".equals(normalized)) {
+            return quantity;
+        }
+        if ("g".equals(normalized) || "克".equals(normalized)) {
+            return quantity.divide(BigDecimal.valueOf(1000));
+        }
+        if (gramsPerUnit == null || gramsPerUnit.signum() <= 0) {
+            throw new BusinessException(409, "成品缺少单位净重快照，不能计算成品重量")
+                    .withCode("FINISHED_SKU_NET_WEIGHT_SNAPSHOT_MISSING")
+                    .withHint("请在 SKU 管理中补齐标准单位换算，并创建带完整快照的新计划")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("标准单位换算");
+        }
+        return quantity.multiply(gramsPerUnit).divide(BigDecimal.valueOf(1000));
     }
 
     private static String workflowInputUnit(
@@ -2766,6 +3023,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         r.setUpdated(updated);
         r.setMaterialized(materialized);
         r.setWarnings(warnings);
+        r.setSubmissionStatus(ProcessSheetRow.SUBMISSION_LEGACY);
         return r;
     }
 

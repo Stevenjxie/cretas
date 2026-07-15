@@ -7,9 +7,11 @@ import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.producttype.ProductTypeDTO;
 import com.cretas.aims.dto.producttype.ProductTypeOptionDTO;
+import com.cretas.aims.dto.producttype.ProductPackagingSpecDTO;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.ProductTypeService;
+import com.cretas.aims.service.product.ProductPackagingSpecService;
 import com.cretas.aims.service.SkuAssemblyService;
 import com.cretas.aims.utils.TokenUtils;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -50,6 +52,7 @@ public class ProductTypeController {
     private final MobileService mobileService;
     private final SkuAssemblyService skuAssemblyService;
     private final ProductWorkProcessRecommendTool productWorkProcessRecommendTool;
+    private final ProductPackagingSpecService productPackagingSpecService;
 
     /**
      * SKU组装: 产品模板 + 客户 + 配方 → 独立SKU
@@ -155,6 +158,14 @@ public class ProductTypeController {
         log.info("获取产品类型详情: factoryId={}, id={}", factoryId, id);
         ProductTypeDTO result = productTypeService.getProductTypeById(factoryId, id);
         return ApiResponse.success(result);
+    }
+
+    @GetMapping("/{id}/packaging-specs")
+    @Operation(summary = "获取 SKU 多包装规格")
+    public ApiResponse<List<ProductPackagingSpecDTO>> getPackagingSpecs(
+            @PathVariable String factoryId,
+            @PathVariable String id) {
+        return ApiResponse.success(productPackagingSpecService.list(factoryId, id));
     }
 
     @GetMapping("/{id}/work-process-recommendation")

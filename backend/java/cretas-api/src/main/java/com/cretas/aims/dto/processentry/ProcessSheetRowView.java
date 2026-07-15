@@ -25,6 +25,9 @@ public class ProcessSheetRowView {
     /** 行状态: "SAVED" | "DRAFT"。 */
     private String rowStatus;
 
+    /** LEGACY / DRAFT / SUBMITTED。 */
+    private String submissionStatus;
+
     /** batchId != null → true (已物化)。 */
     private boolean materialized;
 

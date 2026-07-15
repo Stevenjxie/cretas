@@ -140,18 +140,21 @@ class InterimSettleReversalRequestServiceTest {
                 .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("INTERIM_REVERSE_REQUEST_PENDING"));
     }
 
-    // ── 非 SAFETY_STOCK → 400 ──
+    // ── 客户订单/代工等计划与存货计划统一使用撤销小结 ──
     @Test
-    @DisplayName("非存货生产计划申请撤销 → 400")
-    void requestNonStockPlan() {
+    @DisplayName("客户订单计划也可申请撤销小结")
+    void requestCustomerOrderPlan() {
         ProductionPlan byOrder = new ProductionPlan();
         byOrder.setId(PLAN_ID);
         byOrder.setFactoryId(FACTORY);
         byOrder.setSourceType(PlanSourceType.CUSTOMER_ORDER);
         when(planRepository.findByIdAndFactoryId(PLAN_ID, FACTORY)).thenReturn(Optional.of(byOrder));
-        assertThatThrownBy(() -> service.requestReverse(FACTORY, PLAN_ID, 1, "x", 7L))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("仅存货生产计划");
+        stubSettlement(1, LocalDateTime.now().minusHours(1));
+
+        InterimSettleReversalRequestDTO dto = service.requestReverse(
+                FACTORY, PLAN_ID, 1, "录入错误", 7L);
+
+        assertThat(dto.getStatus()).isEqualTo("PENDING_APPROVAL");
     }
 
     // ── ③ 审批通过 → 执行逆转 + EXECUTED + affectedBatchNumbers 快照 ──

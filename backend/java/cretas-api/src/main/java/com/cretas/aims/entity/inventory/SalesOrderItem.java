@@ -117,6 +117,22 @@ public class SalesOrderItem extends BaseEntity {
     @Column(name = "box_quantity", precision = 15, scale = 2)
     private BigDecimal boxQuantity;
 
+    /** Selected packaging specification and immutable conversion snapshot. */
+    @Column(name = "packaging_spec_id", length = 36)
+    private String packagingSpecId;
+
+    @Column(name = "packaging_spec_name", length = 60)
+    private String packagingSpecName;
+
+    @Column(name = "packaging_unit", length = 20)
+    private String packagingUnit;
+
+    @Column(name = "packaging_base_unit", length = 20)
+    private String packagingBaseUnit;
+
+    @Column(name = "packaging_factor", precision = 20, scale = 8)
+    private BigDecimal packagingFactor;
+
     // ==================== P3 多仓订单字段 (V20260915_01) ====================
 
     /**

@@ -4,7 +4,6 @@ import com.cretas.aims.dto.production.InterimSettleReversalRequestDTO;
 import com.cretas.aims.entity.InterimSettleReversalRequest;
 import com.cretas.aims.entity.ProductionInterimSettlement;
 import com.cretas.aims.entity.ProductionPlan;
-import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.exception.BusinessException;
@@ -79,10 +78,6 @@ public class InterimSettleReversalRequestServiceImpl implements InterimSettleRev
                                                           String reason, Long userId) {
         ProductionPlan plan = planRepository.findByIdAndFactoryId(planId, factoryId)
                 .orElseThrow(() -> new BusinessException(404, "生产计划不存在: " + planId));
-        if (plan.getSourceType() != PlanSourceType.SAFETY_STOCK) {
-            throw new BusinessException(400, "仅存货生产计划可撤销小结, 当前来源类型: " + plan.getSourceType())
-                    .withHintTarget("撤销小结");
-        }
         if (reason == null || reason.isBlank()) {
             throw new BusinessException(400, "撤销原因必填")
                     .withCode("INTERIM_REVERSE_REASON_REQUIRED")

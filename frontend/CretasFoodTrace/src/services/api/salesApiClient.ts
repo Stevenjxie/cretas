@@ -54,6 +54,11 @@ export interface SalesOrderItem {
   lockedQty?: number;
   reservedQty?: number;
   shortageQty?: number;
+  packagingSpecId?: string;
+  packagingSpecName?: string;
+  packagingUnit?: string;
+  packagingBaseUnit?: string;
+  packagingFactor?: number;
 }
 
 export interface SalesDeliveryRecord {
@@ -72,6 +77,11 @@ export interface SalesDeliveryItem {
   productTypeName?: string;
   deliveredQuantity: number;
   unit: string;
+  packagingSpecId?: string;
+  packagingSpecName?: string;
+  packagingUnit?: string;
+  packagingBaseUnit?: string;
+  packagingFactor?: number;
   batchNumber?: string;
 }
 
@@ -85,6 +95,11 @@ export interface FinishedGoodsBatch {
   availableQuantity: number;
   reservedQuantity: number;
   unit: string;
+  packagingSpecId?: string;
+  packagingSpecName?: string;
+  packagingUnit?: string;
+  packagingBaseUnit?: string;
+  packagingFactor?: number;
   productionDate: string;
   expiryDate?: string;
   unitCost?: number;
@@ -105,6 +120,7 @@ export interface CreateSalesOrderRequest {
     unitPrice: number;
     unit: string;
     taxRate?: number;
+    packagingSpecId?: string;
   }[];
 }
 
@@ -121,10 +137,12 @@ export interface CreateDeliveryRequest {
 }
 
 export interface CreateDeliveryItemRequest {
+  salesOrderItemId?: number;
   productTypeId: string;
   productName?: string;
   deliveredQuantity: number;
   unit: string;
+  packagingSpecId?: string;
   unitPrice?: number;
   remark?: string;
 }

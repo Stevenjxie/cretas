@@ -121,6 +121,30 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
         verify(allocationRepository).saveAll(anyList());
     }
 
+    @Test
+    void allocateBatches_convertsBaseInventoryUsingSelectedPackagingSnapshot() {
+        SalesDeliveryItem item = deliveryItem("WH-WKS", new BigDecimal("2"));
+        item.setProductTypeId(PRODUCT_ID);
+        item.setUnit("箱");
+        item.setPackagingSpecId("spec-24");
+        item.setPackagingUnit("箱");
+        item.setPackagingBaseUnit("盒");
+        item.setPackagingFactor(new BigDecimal("24"));
+        when(deliveryItemRepository.findById(42L)).thenReturn(Optional.of(item));
+        when(warehouseResolver.resolveId(FID, "WH-WKS")).thenReturn(WH_WKS_ID);
+
+        FinishedGoodsBatch boxBatch = batch("b1", WH_WKS_ID, new BigDecimal("48"));
+        boxBatch.setUnit("盒");
+        when(finishedGoodsBatchRepository.findById("b1")).thenReturn(Optional.of(boxBatch));
+
+        BatchAllocationDTO dto = new BatchAllocationDTO();
+        dto.setFinishedGoodsBatchId("b1");
+        dto.setAllocatedQty(new BigDecimal("2"));
+
+        assertDoesNotThrow(() -> service.allocateBatches(FID, ITEM_ID, List.of(dto)));
+        verify(allocationRepository).saveAll(anyList());
+    }
+
     // 🔴 G1: blank source → accept a batch from ANY non-RD warehouse (previously 409'd WH-WKS batch).
     @Test
     void allocateBatches_blankSource_acceptsBatchFromAnyNonRdWarehouse() {

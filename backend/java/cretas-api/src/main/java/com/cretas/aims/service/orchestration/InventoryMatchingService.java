@@ -7,9 +7,12 @@ import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
+import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
+import com.cretas.aims.service.inventory.FgQuantityUnitConverter;
 import com.cretas.aims.service.inventory.FgReservationLedgerService;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -44,6 +47,12 @@ public class InventoryMatchingService {
     private final FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     private final WarehouseResolver warehouseResolver;
     private final FgReservationLedgerService reservationLedgerService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private SalesOrderItemRepository salesOrderItemRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ProductTypeRepository productTypeRepository;
 
     /**
      * A5 集团联销 feature flag (PR #309 A5=C, 2026-05-10).
@@ -87,31 +96,60 @@ public class InventoryMatchingService {
                 continue;
             }
 
+            String matchingUnit = item.getUnit();
+            BigDecimal required = pending;
+            if (isPackagingLine(item)) {
+                matchingUnit = item.getPackagingBaseUnit();
+                required = pending.multiply(item.getPackagingFactor());
+            }
+
             // D1: warehouse strategy per PR #310 §5 — sales from WH-LOG fixed (D5 销售从总仓出货).
             // D5 (2026-05-11 PR #316): cross-factory branch also enforces WH-LOG filter.
             //   - flag=false (default): SO.factoryId + WH-LOG (single-factory + total warehouse).
             //   - flag=true (A5):       all factories + WH-LOG (group pool, still total warehouse only).
             //   WH-WKS (鲜棉仓, 当天清仓) 从不参与销售匹配.
             BigDecimal available;
-            if (crossFactoryEnabled) {
-                available = finishedGoodsBatchRepository
-                        .sumAvailableQuantityByProductTypeAllFactoriesAndWarehouseCode(
-                                item.getProductTypeId(), WarehouseCodes.WH_LOG);
+            if (productTypeRepository == null) {
+                // Legacy isolated tests use the original aggregate query path.
+                if (crossFactoryEnabled) {
+                    available = finishedGoodsBatchRepository
+                            .sumAvailableQuantityByProductTypeAllFactoriesAndWarehouseCode(
+                                    item.getProductTypeId(), WarehouseCodes.WH_LOG);
+                } else {
+                    String warehouseId = warehouseResolver.resolveLogisticsId(factoryId);
+                    available = finishedGoodsBatchRepository
+                            .sumAvailableQuantityByProductTypeAndWarehouse(
+                                    factoryId, item.getProductTypeId(), warehouseId);
+                }
             } else {
-                String warehouseId = warehouseResolver.resolveLogisticsId(factoryId);
-                available = finishedGoodsBatchRepository
-                        .sumAvailableQuantityByProductTypeAndWarehouse(
-                                factoryId, item.getProductTypeId(), warehouseId);
+                List<FinishedGoodsBatch> candidateBatches;
+                if (crossFactoryEnabled) {
+                    candidateBatches = finishedGoodsBatchRepository
+                            .findAvailableBatchesAllFactoriesByWarehouseCode(
+                                    item.getProductTypeId(), WarehouseCodes.WH_LOG);
+                } else {
+                    String warehouseId = warehouseResolver.resolveLogisticsId(factoryId);
+                    candidateBatches = finishedGoodsBatchRepository
+                            .findAvailableBatchesByWarehouse(factoryId, item.getProductTypeId(), warehouseId);
+                }
+                BigDecimal gramsPerUnit = productTypeRepository.findById(item.getProductTypeId())
+                        .map(com.cretas.aims.entity.ProductType::getGramsPerUnit).orElse(null);
+                available = BigDecimal.ZERO;
+                for (FinishedGoodsBatch batch : candidateBatches) {
+                    BigDecimal converted = convertBatchToUnit(
+                            batch.getAvailableQuantity(), batch, matchingUnit, gramsPerUnit);
+                    if (converted != null) available = available.add(converted);
+                }
             }
 
             // 缺口 = max(待发 - 可用, 0)；若可用充足则缺口为负（富余），isFullySatisfied() 返回 true
-            BigDecimal shortfall = pending.subtract(available).max(BigDecimal.ZERO);
+            BigDecimal shortfall = required.subtract(available).max(BigDecimal.ZERO);
 
             LineItemMatch match = new LineItemMatch();
             match.setSalesOrderItemId(item.getId() != null ? String.valueOf(item.getId()) : null);
             match.setProductTypeId(item.getProductTypeId());
             match.setProductTypeName(item.getProductName());
-            match.setRequiredQuantity(pending);
+            match.setRequiredQuantity(required);
             match.setAvailableQuantity(available);
             match.setShortfallQuantity(shortfall);
             matches.add(match);
@@ -174,27 +212,55 @@ public class InventoryMatchingService {
                     .findAvailableBatchesByWarehouse(factoryId, productTypeId, warehouseId);
         }
 
+        SalesOrderItem sourceOrderItem = null;
+        if (salesOrderItemRepository != null && salesOrderItemId != null) {
+            try {
+                sourceOrderItem = salesOrderItemRepository.findById(Long.valueOf(salesOrderItemId)).orElse(null);
+            } catch (NumberFormatException ignored) {
+                sourceOrderItem = null;
+            }
+        }
+        String reservationUnit = sourceOrderItem == null
+                ? null
+                : (isPackagingLine(sourceOrderItem)
+                        ? sourceOrderItem.getPackagingBaseUnit()
+                        : sourceOrderItem.getUnit());
+        BigDecimal gramsPerUnit = productTypeRepository == null
+                ? null
+                : productTypeRepository.findById(productTypeId)
+                        .map(com.cretas.aims.entity.ProductType::getGramsPerUnit).orElse(null);
+
         BigDecimal remaining = quantity;
         for (FinishedGoodsBatch batch : batches) {
             if (remaining.compareTo(BigDecimal.ZERO) <= 0) {
                 break;
             }
 
-            BigDecimal available = batch.getAvailableQuantity();
+            BigDecimal availableNative = batch.getAvailableQuantity();
+            BigDecimal available = reservationUnit == null
+                    ? availableNative
+                    : convertBatchToUnit(availableNative, batch, reservationUnit, gramsPerUnit);
+            if (available == null) continue;
             BigDecimal reserve = remaining.min(available);
             if (reserve.compareTo(BigDecimal.ZERO) <= 0) {
                 continue;
             }
+            BigDecimal reserveNative = reservationUnit == null
+                    ? reserve
+                    : convertUnitToBatch(reserve, reservationUnit, batch, gramsPerUnit);
+            if (reserveNative == null || reserveNative.signum() <= 0) continue;
+            reserveNative = reserveNative.min(availableNative);
 
             if (salesOrderId != null) {
                 // reserved += reserve 且建 ACTIVE 台账行 (原子一致)。
-                reservationLedgerService.reserve(factoryId, salesOrderId, salesOrderItemId, batch, reserve);
+                reservationLedgerService.reserve(
+                        factoryId, salesOrderId, salesOrderItemId, batch, reserveNative);
             } else {
                 // legacy 匿名路径 — 仅累加 reserved, 不建台账。
                 BigDecimal currentReserved = batch.getReservedQuantity() != null
                         ? batch.getReservedQuantity()
                         : BigDecimal.ZERO;
-                batch.setReservedQuantity(currentReserved.add(reserve));
+                batch.setReservedQuantity(currentReserved.add(reserveNative));
                 finishedGoodsBatchRepository.save(batch);
             }
             remaining = remaining.subtract(reserve);
@@ -206,5 +272,46 @@ public class InventoryMatchingService {
         if (remaining.compareTo(BigDecimal.ZERO) > 0) {
             log.warn("库存预留不完全: SO={}, productType={}, 仍需={}", salesOrderId, productTypeId, remaining);
         }
+    }
+
+    private boolean isPackagingLine(SalesOrderItem item) {
+        return item != null
+                && item.getUnit() != null
+                && item.getUnit().equals(item.getPackagingUnit())
+                && item.getPackagingBaseUnit() != null
+                && item.getPackagingFactor() != null
+                && item.getPackagingFactor().signum() > 0;
+    }
+
+    private BigDecimal convertBatchToUnit(
+            BigDecimal quantity,
+            FinishedGoodsBatch batch,
+            String targetUnit,
+            BigDecimal gramsPerUnit) {
+        return FgQuantityUnitConverter.convertWithPackaging(
+                quantity,
+                batch.getUnit(),
+                targetUnit,
+                gramsPerUnit,
+                batch.getPackagingUnit(),
+                batch.getPackagingBaseUnit(),
+                batch.getPackagingFactor(),
+                null, null, null);
+    }
+
+    private BigDecimal convertUnitToBatch(
+            BigDecimal quantity,
+            String sourceUnit,
+            FinishedGoodsBatch batch,
+            BigDecimal gramsPerUnit) {
+        return FgQuantityUnitConverter.convertWithPackaging(
+                quantity,
+                sourceUnit,
+                batch.getUnit(),
+                gramsPerUnit,
+                null, null, null,
+                batch.getPackagingUnit(),
+                batch.getPackagingBaseUnit(),
+                batch.getPackagingFactor());
     }
 }

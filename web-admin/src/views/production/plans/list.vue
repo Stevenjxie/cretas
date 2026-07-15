@@ -717,11 +717,11 @@ async function goToRawMaterialProcessConfig(finishedGoodIds: string[]) {
       finishedGoodIds.map((id) =>
         get<{ items?: Array<{ subProductTypeId?: string | null }> }>(
           `/${factoryId.value}/bom/recipes/by-product/${id}/current`
-        ).catch(() => null)
+        ).catch((): null => null)
       )
     );
     const materialSets = results
-      .filter((r): r is { success: boolean; data?: { items?: Array<{ subProductTypeId?: string | null }> } } => !!r?.success)
+      .filter((r): r is NonNullable<typeof r> => r != null && r.success)
       .map((r) => new Set(
         (r.data?.items || [])
           .map((item) => item.subProductTypeId)
@@ -743,7 +743,7 @@ async function goToRawMaterialProcessConfig(finishedGoodIds: string[]) {
   }
 }
 
-async function resolveTargetFinishedGoods(ids: string[]) {
+async function resolveTargetFinishedGoods(ids: string[]): Promise<void> {
   if (!factoryId.value || ids.length === 0) return;
   const myGeneration = ++workflowResolveGeneration;
   resolvingWorkflow.value = true;

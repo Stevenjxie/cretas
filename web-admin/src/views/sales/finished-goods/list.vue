@@ -90,8 +90,23 @@ function openPriceHistory(row: TableRow) {
 // ---------- 期初入库 dialog ----------
 const openingDialogVisible = ref(false);
 const openingSubmitting = ref(false);
-const productTypes = ref<Array<{ id: string; name: string; code?: string }>>([]);
+interface OpeningProductType {
+  id: string;
+  name: string;
+  code?: string;
+  unit?: string;
+}
+interface OpeningPackagingSpec {
+  id: string;
+  name: string;
+  packageUnit: string;
+  baseUnit: string;
+  conversionFactor: number;
+  active: boolean;
+}
+const productTypes = ref<OpeningProductType[]>([]);
 const productTypesLoading = ref(false);
+const openingPackagingSpecs = ref<OpeningPackagingSpec[]>([]);
 
 const openingForm = ref<FgOpeningRequest>({
   productTypeId: '',
@@ -106,7 +121,7 @@ async function loadProductTypes() {
   if (!factoryId.value || productTypes.value.length > 0) return;
   productTypesLoading.value = true;
   try {
-    const res = await get<Array<{ id: string; name: string; code?: string }>>(
+    const res = await get<OpeningProductType[]>(
       `/${factoryId.value}/product-types/active`
     );
     if (res.success && res.data) {
@@ -119,6 +134,44 @@ async function loadProductTypes() {
   }
 }
 
+const openingUnitOptions = computed(() => {
+  const selectedProduct = productTypes.value.find((product) => product.id === openingForm.value.productTypeId);
+  return Array.from(new Set([
+    selectedProduct?.unit,
+    ...openingPackagingSpecs.value.map((spec) => spec.packageUnit),
+  ].filter((unit): unit is string => !!unit)));
+});
+
+const openingPackagingOptions = computed(() => openingPackagingSpecs.value
+  .filter((spec) => spec.active !== false && spec.packageUnit === openingForm.value.unit));
+
+function onOpeningUnitChange() {
+  const options = openingPackagingOptions.value;
+  if (options.length === 1) openingForm.value.packagingSpecId = options[0].id;
+  else if (!options.some((spec) => spec.id === openingForm.value.packagingSpecId)) {
+    openingForm.value.packagingSpecId = undefined;
+  }
+}
+
+async function onOpeningProductChange(productTypeId: string) {
+  const selectedProduct = productTypes.value.find((product) => product.id === productTypeId);
+  openingForm.value.unit = selectedProduct?.unit || 'kg';
+  openingForm.value.packagingSpecId = undefined;
+  openingPackagingSpecs.value = [];
+  if (!factoryId.value || !productTypeId) return;
+  try {
+    const res = await get<OpeningPackagingSpec[]>(
+      `/${factoryId.value}/product-types/${productTypeId}/packaging-specs`
+    );
+    openingPackagingSpecs.value = res.success && Array.isArray(res.data)
+      ? res.data.filter((spec) => spec.active !== false)
+      : [];
+    onOpeningUnitChange();
+  } catch {
+    ElMessage.error('包装规格加载失败，请重试后再入库');
+  }
+}
+
 function openOpeningDialog() {
   openingForm.value = {
     productTypeId: '',
@@ -128,6 +181,7 @@ function openOpeningDialog() {
     productionDate: '',
     remark: '',
   };
+  openingPackagingSpecs.value = [];
   openingDialogVisible.value = true;
   void loadProductTypes();
 }
@@ -140,6 +194,9 @@ async function submitOpening() {
     ElMessage.warning('请输入有效的期初数量'); return;
   }
   if (!openingForm.value.unit.trim()) { ElMessage.warning('请输入单位'); return; }
+  if (openingPackagingOptions.value.length > 1 && !openingForm.value.packagingSpecId) {
+    ElMessage.warning('该产品有多个装箱规格，请选择本次入库使用的箱规'); return;
+  }
   if (!openingForm.value.productionDate) { ElMessage.warning('请选择生产日期'); return; }
 
   openingSubmitting.value = true;
@@ -548,6 +605,7 @@ function statusLabel(row: TableRow) {
             clearable
             :loading="productTypesLoading"
             style="width: 100%"
+            @change="onOpeningProductChange"
           >
             <el-option
               v-for="pt in productTypes"
@@ -571,11 +629,30 @@ function statusLabel(row: TableRow) {
             :precision="2"
             style="width: 160px;"
           />
-          <el-input
+          <el-select
             v-model="openingForm.unit"
             placeholder="单位"
-            style="width: 80px; margin-left: 8px;"
-          />
+            style="width: 100px; margin-left: 8px;"
+            @change="onOpeningUnitChange"
+          >
+            <el-option v-for="unit in openingUnitOptions" :key="unit" :label="unit" :value="unit" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="openingPackagingOptions.length > 0" label="包装规格"
+          :required="openingPackagingOptions.length > 1">
+          <el-select
+            v-model="openingForm.packagingSpecId"
+            :placeholder="openingPackagingOptions.length > 1 ? '请选择本次箱规' : '默认箱规'"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="spec in openingPackagingOptions"
+              :key="spec.id"
+              :label="`1${spec.packageUnit}=${Number(spec.conversionFactor)}${spec.baseUnit}`"
+              :value="spec.id"
+            />
+          </el-select>
+          <div class="form-tip">同一 SKU 有多种装箱数量时，本次按哪一种入库必须明确选择</div>
         </el-form-item>
         <el-form-item label="生产日期" required>
           <el-date-picker

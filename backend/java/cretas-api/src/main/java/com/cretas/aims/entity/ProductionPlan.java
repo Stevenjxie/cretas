@@ -59,6 +59,10 @@ public class ProductionPlan extends BaseEntity {
     @Column(name = "planned_unit", nullable = false, length = 32)
     private String plannedUnit;
 
+    /** Finished SKU net-weight snapshot captured with the planned unit. */
+    @Column(name = "planned_net_weight_grams", precision = 20, scale = 6)
+    private BigDecimal plannedNetWeightGrams;
+
     /** Workflow/legacy authority fixed when the plan is created. */
     @Enumerated(EnumType.STRING)
     @Column(name = "workflow_selection_mode", length = 16)
@@ -69,6 +73,13 @@ public class ProductionPlan extends BaseEntity {
 
     @Column(name = "selected_workflow_version")
     private Integer selectedWorkflowVersion;
+
+    /** BOM authority fixed when this plan is created; later BOM edits do not rewrite the plan. */
+    @Column(name = "selected_bom_recipe_id", length = 191)
+    private String selectedBomRecipeId;
+
+    @Column(name = "selected_bom_version")
+    private Integer selectedBomVersion;
     @Column(name = "actual_quantity", precision = 10, scale = 2)
     private BigDecimal actualQuantity;
     // W-07 fix (Round 9): restored as nullable column (was commented out - DB didn't have it,

@@ -32,7 +32,8 @@ vi.mock('@/api/processSheet', async () => {
     getSemiFinishedInventory: (...args: unknown[]) => getSemiFinishedInventory(...args),
     getFinishedGoodsInventory: (...args: unknown[]) => getFinishedGoodsInventory(...args),
     getAvailableRawBatches: (...args: unknown[]) => getAvailableRawBatches(...args),
-    saveRow: (...args: unknown[]) => saveRow(...args),
+    saveDraftRow: (...args: unknown[]) => saveRow(...args),
+    submitRow: (...args: unknown[]) => saveRow(...args),
     deleteRow: vi.fn(),
     getRowHistory: vi.fn().mockResolvedValue({ success: true, data: [] }),
   };
@@ -150,8 +151,8 @@ async function setNumberField(wrapper: ReturnType<typeof mountChaoshuiTable>, la
 }
 
 async function clickSave(wrapper: ReturnType<typeof mountChaoshuiTable>) {
-  const btn = wrapper.findAll('button').find((b) => b.text().trim() === '保存');
-  if (!btn) throw new Error('找不到「保存」按钮 (saveDisabledReason 未清空?)');
+  const btn = wrapper.findAll('button').find((b) => b.text().trim() === '正式报工');
+  if (!btn) throw new Error('找不到「正式报工」按钮 (saveDisabledReason 未清空?)');
   await btn.trigger('click');
   await flushPromises();
 }

@@ -5,6 +5,7 @@ import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -87,6 +88,10 @@ public class ProductTypeDTO {
 
     @Schema(description = "装箱换算: 1 一级单位 = N 二级单位 (如 1筐=20盒 → 20)")
     private BigDecimal boxConversionCoefficient;
+
+    @Schema(description = "同一 SKU 的可选装箱规格；标准克重仍由 gramsPerUnit 唯一定义")
+    @Valid
+    private List<ProductPackagingSpecDTO> packagingSpecs;
 
     @JsonIgnore
     private boolean boxConversionCoefficientPresent;

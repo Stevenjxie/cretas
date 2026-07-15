@@ -4,6 +4,7 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionInterimSettlement;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.ProductionInputAllocation;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
@@ -15,6 +16,7 @@ import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ProductionInterimSettlementRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.ProductionInputAllocationRepository;
 import com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository;
 import com.cretas.aims.service.inventory.FinishedGoodsFeedService;
 import com.cretas.aims.service.wip.WipInventoryService;
@@ -70,6 +72,7 @@ class InterimSettleReversalServiceTest {
     @Mock private ProcessSheetRowRepository rowRepository;
     @Mock private WipInventoryService wipInventoryService;
     @Mock private FinishedGoodsFeedService finishedGoodsFeedService;
+    @Mock private ProductionInputAllocationRepository inputAllocationRepository;
 
     private InterimSettleReversalServiceImpl service;
 
@@ -78,6 +81,7 @@ class InterimSettleReversalServiceTest {
         service = new InterimSettleReversalServiceImpl(
                 planRepository, settlementRepository, consumptionRepository,
                 materialBatchRepository, rowRepository, wipInventoryService, finishedGoodsFeedService);
+        ReflectionTestUtils.setField(service, "inputAllocationRepository", inputAllocationRepository);
 
         ProductionPlan plan = new ProductionPlan();
         plan.setId(PLAN_ID);
@@ -95,6 +99,8 @@ class InterimSettleReversalServiceTest {
         when(consumptionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(materialBatchRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(rowRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(inputAllocationRepository.findByFactoryIdAndProcessSheetRowIdOrderByAllocationOrderAsc(any(), any()))
+                .thenReturn(new ArrayList<>());
     }
 
     // ── (a) SFI-output 行撤销 → reverseClerkOutput 逆转 + 清行戳 + 硬删 ──
@@ -109,6 +115,11 @@ class InterimSettleReversalServiceTest {
         stubTarget(1, s);
 
         ProcessSheetRow settledRow = settledRow(3L, postedAt);
+        settledRow.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        ProductionInputAllocation allocation = new ProductionInputAllocation();
+        allocation.setId(11L);
+        when(inputAllocationRepository.findByFactoryIdAndProcessSheetRowIdOrderByAllocationOrderAsc(
+                FACTORY, 3L)).thenReturn(new ArrayList<>(List.of(allocation)));
         when(rowRepository.findByFactoryIdAndPlanIdAndInterimSettledAt(FACTORY, PLAN_ID, postedAt))
                 .thenReturn(new ArrayList<>(List.of(settledRow)));
 
@@ -118,11 +129,14 @@ class InterimSettleReversalServiceTest {
                 eq(FACTORY), eq(ANCHOR), eq(new BigDecimal("60")), eq(new BigDecimal("900")), eq(7L));
         // 行恢复未结 (可再编辑)
         assertThat(settledRow.getInterimSettledAt()).isNull();
+        assertThat(settledRow.getSubmissionStatus()).isEqualTo(ProcessSheetRow.SUBMISSION_DRAFT);
+        assertThat(allocation.getDeletedAt()).isNotNull();
         // 硬删小结 (物理释放 seq)
         verify(settlementRepository, times(1)).hardDeleteById("s1");
         assertThat(r.get("reversedSessionSeq")).isEqualTo(1);
         assertThat(r.get("sfiInReversed")).isEqualTo(1);
         assertThat(r.get("rowsUnstamped")).isEqualTo(1);
+        assertThat(r.get("inputAllocationsReleased")).isEqualTo(1);
     }
 
     // ── (a') totalCost null (诚实): 当时成本未知 → reverseClerkOutput 收 null ──
@@ -381,10 +395,10 @@ class InterimSettleReversalServiceTest {
         verify(settlementRepository, never()).hardDeleteById(any());
     }
 
-    // ── 非 SAFETY_STOCK → 400 ──
+    // ── 客户订单/代工等计划与存货计划统一使用撤销小结 ──
     @Test
-    @DisplayName("非存货生产计划撤销小结 → 400")
-    void rejectsNonStockPlan() {
+    @DisplayName("客户订单计划不会被来源类型守卫拦截")
+    void customerOrderPlanUsesSameReversalPath() {
         ProductionPlan byOrder = new ProductionPlan();
         byOrder.setId(PLAN_ID);
         byOrder.setFactoryId(FACTORY);
@@ -393,7 +407,7 @@ class InterimSettleReversalServiceTest {
 
         assertThatThrownBy(() -> service.reverseInterimSettle(FACTORY, PLAN_ID, 1, 7L))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("仅存货生产计划可撤销小结");
+                .hasMessageNotContaining("仅存货生产计划可撤销小结");
     }
 
     // ── 🔴🔒🔒 sister #4 (settlement-级交叠, 收窄 #1215 plan-级误伤): 撤销的小结消耗命中「已关单领料单划平的

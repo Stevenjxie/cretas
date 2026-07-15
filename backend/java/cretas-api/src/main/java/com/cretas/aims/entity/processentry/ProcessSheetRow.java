@@ -23,6 +23,10 @@ import jakarta.persistence.*;
 @Where(clause = "deleted_at IS NULL")
 public class ProcessSheetRow extends BaseEntity {
 
+    public static final String SUBMISSION_LEGACY = "LEGACY";
+    public static final String SUBMISSION_DRAFT = "DRAFT";
+    public static final String SUBMISSION_SUBMITTED = "SUBMITTED";
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -76,6 +80,10 @@ public class ProcessSheetRow extends BaseEntity {
 
     @Column(name = "row_status", nullable = false)
     private String rowStatus = "SAVED";
+
+    /** 独立于 rowStatus 物化语义的新报工提交状态。 */
+    @Column(name = "submission_status", nullable = false, length = 16)
+    private String submissionStatus = SUBMISSION_LEGACY;
 
     /**
      * BY_STOCK 小结 (interim-settle) 产出过账标记 (Task 3 / V20261027_21)。

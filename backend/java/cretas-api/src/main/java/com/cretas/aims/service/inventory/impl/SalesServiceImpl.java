@@ -37,6 +37,7 @@ import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.SalesService;
 import com.cretas.aims.service.inventory.FgQuantityUnitConverter;
+import com.cretas.aims.service.product.ProductPackagingSpecService;
 import com.cretas.aims.service.rules.annotation.RuleEvaluate;
 import com.cretas.aims.service.workflow.ApprovalWorkflowExecutor;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
@@ -69,6 +70,7 @@ public class SalesServiceImpl implements SalesService {
     private final ProductTypeRepository productTypeRepository;
     private final com.cretas.aims.service.finance.ArApService arApService;
     private final ApplicationEventPublisher applicationEventPublisher;
+    private final ProductPackagingSpecService productPackagingSpecService;
 
     /** D1 双仓流转 (2026-05-10 spec, PR #309 A1=A) — sales 只从 WH-LOG 出. */
     @org.springframework.beans.factory.annotation.Autowired
@@ -235,6 +237,7 @@ public class SalesServiceImpl implements SalesService {
     @jakarta.persistence.PersistenceContext
     private jakarta.persistence.EntityManager entityManager;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public SalesServiceImpl(SalesOrderRepository salesOrderRepository,
                             SalesOrderItemRepository salesOrderItemRepository,
                             SalesDeliveryRecordRepository deliveryRecordRepository,
@@ -242,7 +245,8 @@ public class SalesServiceImpl implements SalesService {
                             CustomerRepository customerRepository,
                             ProductTypeRepository productTypeRepository,
                             com.cretas.aims.service.finance.ArApService arApService,
-                            ApplicationEventPublisher applicationEventPublisher) {
+                            ApplicationEventPublisher applicationEventPublisher,
+                            ProductPackagingSpecService productPackagingSpecService) {
         this.salesOrderRepository = salesOrderRepository;
         this.salesOrderItemRepository = salesOrderItemRepository;
         this.deliveryRecordRepository = deliveryRecordRepository;
@@ -251,6 +255,21 @@ public class SalesServiceImpl implements SalesService {
         this.productTypeRepository = productTypeRepository;
         this.arApService = arApService;
         this.applicationEventPublisher = applicationEventPublisher;
+        this.productPackagingSpecService = productPackagingSpecService;
+    }
+
+    /** Legacy unit-test constructor. Spring production wiring uses the required 9-argument constructor. */
+    public SalesServiceImpl(SalesOrderRepository salesOrderRepository,
+                            SalesOrderItemRepository salesOrderItemRepository,
+                            SalesDeliveryRecordRepository deliveryRecordRepository,
+                            FinishedGoodsBatchRepository finishedGoodsBatchRepository,
+                            CustomerRepository customerRepository,
+                            ProductTypeRepository productTypeRepository,
+                            com.cretas.aims.service.finance.ArApService arApService,
+                            ApplicationEventPublisher applicationEventPublisher) {
+        this(salesOrderRepository, salesOrderItemRepository, deliveryRecordRepository,
+                finishedGoodsBatchRepository, customerRepository, productTypeRepository,
+                arApService, applicationEventPublisher, null);
     }
 
     // ==================== 销售订单 ====================
@@ -394,6 +413,7 @@ public class SalesServiceImpl implements SalesService {
             item.setProductName(productName);
             item.setQuantity(itemDTO.getQuantity());
             item.setUnit(itemDTO.getUnit());
+            applyPackagingSelection(factoryId, itemDTO, item);
             // Issue #793: auto-apply 客户协议价 when caller did not provide explicit unitPrice.
             // Resolution: customer-specific selling price → global selling price → caller's value.
             // User-provided price always wins (per May 7 part2 L284-303 — manual override allowed).
@@ -1917,6 +1937,11 @@ public class SalesServiceImpl implements SalesService {
         if (request.getItems() != null && !request.getItems().isEmpty()) {
             // 删除旧行项
             List<SalesOrderItem> oldItems = salesOrderItemRepository.findBySalesOrderId(order.getId());
+            Map<String, SalesOrderItem> oldItemsByProduct = oldItems.stream()
+                    .collect(Collectors.toMap(
+                            SalesOrderItem::getProductTypeId,
+                            item -> item,
+                            (first, ignored) -> first));
             salesOrderItemRepository.deleteAll(oldItems);
 
             // 创建新行项 + 重算总金额
@@ -1934,6 +1959,17 @@ public class SalesServiceImpl implements SalesService {
                 item.setProductName(productName);
                 item.setQuantity(itemDTO.getQuantity());
                 item.setUnit(itemDTO.getUnit());
+                SalesOrderItem previous = oldItemsByProduct.get(itemDTO.getProductTypeId());
+                if (previous != null
+                        && previous.getPackagingSpecId() != null
+                        && Objects.equals(previous.getPackagingSpecId(), itemDTO.getPackagingSpecId())) {
+                    copyPackagingSnapshot(previous, item);
+                    if (itemDTO.getQuantity() != null && previous.getPackagingSpecId() != null) {
+                        item.setBoxQuantity(itemDTO.getQuantity());
+                    }
+                } else {
+                    applyPackagingSelection(factoryId, itemDTO, item);
+                }
                 item.setUnitPrice(itemDTO.getUnitPrice());
                 item.setDiscountRate(itemDTO.getDiscountRate() != null ? itemDTO.getDiscountRate() : BigDecimal.ZERO);
                 // SP4 updateSalesOrder: 同 createSalesOrder 三层 default 链 — item 显式 > SO.defaultTaxRate > 0
@@ -2092,6 +2128,11 @@ public class SalesServiceImpl implements SalesService {
             newItem.setRemark(srcItem.getRemark());
             newItem.setSpecification(srcItem.getSpecification());
             newItem.setBoxQuantity(srcItem.getBoxQuantity());
+            newItem.setPackagingSpecId(srcItem.getPackagingSpecId());
+            newItem.setPackagingSpecName(srcItem.getPackagingSpecName());
+            newItem.setPackagingUnit(srcItem.getPackagingUnit());
+            newItem.setPackagingBaseUnit(srcItem.getPackagingBaseUnit());
+            newItem.setPackagingFactor(srcItem.getPackagingFactor());
             newItem.setSourceWarehouseCode(srcItem.getSourceWarehouseCode());
             // deliveredQuantity / lockedQty / reservedQty 默认 ZERO — 不复制状态量
             newItems.add(newItem);
@@ -2167,6 +2208,8 @@ public class SalesServiceImpl implements SalesService {
     @Override
     @Transactional
     public SalesDeliveryRecord createDeliveryRecord(String factoryId, CreateDeliveryRequest request, Long userId) {
+        Map<Long, SalesOrderItem> sourceOrderItemsById = new HashMap<>();
+        Map<String, List<SalesOrderItem>> sourceOrderItemsByProduct = new HashMap<>();
         // Round 9 Fix (R8-α Gap #1 template): Canvas validation rules now fire for
         // delivery creation. Customer-configured rules like "冷链商品必填运输温度" /
         // "发货金额 > 5万自动预警" / "物流公司必填" take effect here. Context
@@ -2205,6 +2248,12 @@ public class SalesServiceImpl implements SalesService {
                 throw new BusinessException(409, "只有财务已批准/已确认/处理中/部分发货状态的订单可以创建发货单")
                         .withHint("请刷新订单列表查看最新状态");
             }
+            salesOrderItemRepository.findBySalesOrderId(request.getSalesOrderId()).forEach(item -> {
+                sourceOrderItemsById.put(item.getId(), item);
+                sourceOrderItemsByProduct
+                        .computeIfAbsent(item.getProductTypeId(), ignored -> new ArrayList<>())
+                        .add(item);
+            });
 
             // Issue #739 idempotency: if an in-progress draft already exists for this SO,
             // return it instead of creating a duplicate (六扇门 客户手测 2026-05-17: SO-20260511-0001
@@ -2255,6 +2304,28 @@ public class SalesServiceImpl implements SalesService {
             item.setProductName(itemDTO.getProductName());
             item.setDeliveredQuantity(itemDTO.getDeliveredQuantity());
             item.setUnit(itemDTO.getUnit());
+            SalesOrderItem sourceOrderItem = resolveDeliverySourceOrderItem(
+                    itemDTO, sourceOrderItemsById, sourceOrderItemsByProduct,
+                    request.getSalesOrderId() != null && !request.getSalesOrderId().isBlank());
+            if (sourceOrderItem != null && !Objects.equals(sourceOrderItem.getUnit(), itemDTO.getUnit())) {
+                throw new BusinessException(400, "发货单位与销售订单行不一致")
+                        .withCode("SALES_ORDER_ITEM_UNIT_MISMATCH")
+                        .withHintTarget("unit");
+            }
+            if (sourceOrderItem != null && sourceOrderItem.getPackagingSpecId() != null) {
+                if (itemDTO.getPackagingSpecId() != null
+                        && !itemDTO.getPackagingSpecId().isBlank()
+                        && !Objects.equals(itemDTO.getPackagingSpecId(), sourceOrderItem.getPackagingSpecId())) {
+                    throw new BusinessException(400, "发货箱规与销售订单行不一致")
+                            .withCode("PACKAGING_SPEC_ORDER_LINE_MISMATCH")
+                            .withHintTarget("packagingSpecId");
+                }
+                copyPackagingSnapshot(sourceOrderItem, item);
+            } else {
+                applyPackagingSelection(
+                        factoryId, itemDTO.getProductTypeId(), itemDTO.getUnit(),
+                        itemDTO.getPackagingSpecId(), item);
+            }
             item.setUnitPrice(itemDTO.getUnitPrice());
             // T4-D5 (issue #553): propagate source warehouse code from the request DTO.
             // Inventory allocation logic does NOT yet filter by this column — that's
@@ -2967,8 +3038,8 @@ public class SalesServiceImpl implements SalesService {
             if (remaining.compareTo(BigDecimal.ZERO) <= 0) break;
             BigDecimal availableNative = batch.getAvailableQuantity();
             if (availableNative.compareTo(BigDecimal.ZERO) <= 0) continue;
-            BigDecimal availableInTargetUnit = com.cretas.aims.service.inventory.FgQuantityUnitConverter
-                    .convert(availableNative, batch.getUnit(), targetUnit, gramsPerUnit);
+            BigDecimal availableInTargetUnit = convertBatchToDeliveryUnit(
+                    availableNative, batch, item, gramsPerUnit);
             if (availableInTargetUnit == null) {
                 log.warn("发货扣减跳过批次(单位不可换算): factoryId={}, batchId={}, batchUnit={}, targetUnit={}, gramsPerUnit={}",
                         factoryId, batch.getId(), batch.getUnit(), targetUnit, gramsPerUnit);
@@ -2976,7 +3047,8 @@ public class SalesServiceImpl implements SalesService {
             }
             if (availableInTargetUnit.compareTo(BigDecimal.ZERO) <= 0) continue;
             BigDecimal deductInTargetUnit = remaining.min(availableInTargetUnit);
-            BigDecimal deductNative = toNativeDeductAmount(deductInTargetUnit, targetUnit, batch.getUnit(), gramsPerUnit, availableNative);
+            BigDecimal deductNative = toNativeDeductAmount(
+                    deductInTargetUnit, item, batch, gramsPerUnit, availableNative);
             if (deductNative == null || deductNative.compareTo(BigDecimal.ZERO) <= 0) continue;
             applyShipment(batch, deductNative, BigDecimal.ZERO);  // 不释放预留 (扣的是未预留部分)
             recordDeductedBatch(item, batch);
@@ -2995,8 +3067,8 @@ public class SalesServiceImpl implements SalesService {
                 // 本批可从预留中发出的物理量 = min(reserved, 物理未发量)
                 BigDecimal fromReservedNative = reserved.min(physicalUnshipped);
                 if (fromReservedNative.compareTo(BigDecimal.ZERO) <= 0) continue;
-                BigDecimal fromReservedInTargetUnit = com.cretas.aims.service.inventory.FgQuantityUnitConverter
-                        .convert(fromReservedNative, batch.getUnit(), targetUnit, gramsPerUnit);
+                BigDecimal fromReservedInTargetUnit = convertBatchToDeliveryUnit(
+                        fromReservedNative, batch, item, gramsPerUnit);
                 if (fromReservedInTargetUnit == null) {
                     log.warn("发货扣减(预留)跳过批次(单位不可换算): factoryId={}, batchId={}, batchUnit={}, targetUnit={}, gramsPerUnit={}",
                             factoryId, batch.getId(), batch.getUnit(), targetUnit, gramsPerUnit);
@@ -3004,7 +3076,8 @@ public class SalesServiceImpl implements SalesService {
                 }
                 if (fromReservedInTargetUnit.compareTo(BigDecimal.ZERO) <= 0) continue;
                 BigDecimal deductInTargetUnit = remaining.min(fromReservedInTargetUnit);
-                BigDecimal deductNative = toNativeDeductAmount(deductInTargetUnit, targetUnit, batch.getUnit(), gramsPerUnit, fromReservedNative);
+                BigDecimal deductNative = toNativeDeductAmount(
+                        deductInTargetUnit, item, batch, gramsPerUnit, fromReservedNative);
                 if (deductNative == null || deductNative.compareTo(BigDecimal.ZERO) <= 0) continue;
                 applyShipment(batch, deductNative, deductNative);  // 发 deduct 同时释放 deduct 预留 (预留转已发)
                 // 台账镜像: applyShipment 已把 batch.reserved 减了 deductNative, 这里同步削掉本 SO
@@ -3079,8 +3152,8 @@ public class SalesServiceImpl implements SalesService {
             }
             // 批次可用量 (与 FIFO Pass1 同口径: produced − shipped − reserved)。
             BigDecimal availableNative = batch.getAvailableQuantity();
-            BigDecimal availableInTarget = FgQuantityUnitConverter
-                    .convert(availableNative, batch.getUnit(), targetUnit, gramsPerUnit);
+            BigDecimal availableInTarget = convertBatchToDeliveryUnit(
+                    availableNative, batch, item, gramsPerUnit);
             if (availableInTarget == null) {
                 throw new BusinessException(409, "成品批次 " + batch.getBatchNumber()
                         + " 单位(" + batch.getUnit() + ")与发货单位(" + targetUnit + ")不可换算")
@@ -3097,7 +3170,8 @@ public class SalesServiceImpl implements SalesService {
             }
             // 实发 = min(分配量, 可用量): 漂移在容差内时 clamp 到可用, 不超发。
             BigDecimal shipInTarget = allocQtyInTarget.min(availableInTarget);
-            BigDecimal shipNative = toNativeDeductAmount(shipInTarget, targetUnit, batch.getUnit(), gramsPerUnit, availableNative);
+            BigDecimal shipNative = toNativeDeductAmount(
+                    shipInTarget, item, batch, gramsPerUnit, availableNative);
             if (shipNative == null || shipNative.compareTo(BigDecimal.ZERO) <= 0) {
                 continue;
             }
@@ -3128,14 +3202,45 @@ public class SalesServiceImpl implements SalesService {
      *
      * @return 原生单位下的扣减量; 换算失败 (缺 gramsPerUnit / 单位不兼容) 返回 {@code null}
      */
-    private BigDecimal toNativeDeductAmount(BigDecimal deductInTargetUnit, String targetUnit,
-                                             String nativeUnit, BigDecimal gramsPerUnit, BigDecimal nativeCap) {
-        BigDecimal deductNative = com.cretas.aims.service.inventory.FgQuantityUnitConverter
-                .convert(deductInTargetUnit, targetUnit, nativeUnit, gramsPerUnit);
+    private BigDecimal toNativeDeductAmount(
+            BigDecimal deductInTargetUnit,
+            SalesDeliveryItem item,
+            FinishedGoodsBatch batch,
+            BigDecimal gramsPerUnit,
+            BigDecimal nativeCap) {
+        BigDecimal deductNative = FgQuantityUnitConverter.convertWithPackaging(
+                deductInTargetUnit,
+                item.getUnit(),
+                batch.getUnit(),
+                gramsPerUnit,
+                item.getPackagingUnit(),
+                item.getPackagingBaseUnit(),
+                item.getPackagingFactor(),
+                batch.getPackagingUnit(),
+                batch.getPackagingBaseUnit(),
+                batch.getPackagingFactor());
         if (deductNative == null) {
             return null;
         }
         return deductNative.min(nativeCap);
+    }
+
+    private BigDecimal convertBatchToDeliveryUnit(
+            BigDecimal quantity,
+            FinishedGoodsBatch batch,
+            SalesDeliveryItem item,
+            BigDecimal gramsPerUnit) {
+        return FgQuantityUnitConverter.convertWithPackaging(
+                quantity,
+                batch.getUnit(),
+                item.getUnit(),
+                gramsPerUnit,
+                batch.getPackagingUnit(),
+                batch.getPackagingBaseUnit(),
+                batch.getPackagingFactor(),
+                item.getPackagingUnit(),
+                item.getPackagingBaseUnit(),
+                item.getPackagingFactor());
     }
 
     /**
@@ -3266,7 +3371,7 @@ public class SalesServiceImpl implements SalesService {
                     String allocUnit = alloc.getUnit() != null ? alloc.getUnit() : item.getUnit();
                     BigDecimal allocQtyInItemUnit = FgQuantityUnitConverter
                             .convert(alloc.getAllocatedQty(), allocUnit, item.getUnit(), gramsPerUnit);
-                    BigDecimal costPerItemUnit = convertBatchUnitCost(batch, item.getUnit(), gramsPerUnit);
+                    BigDecimal costPerItemUnit = convertBatchUnitCost(batch, item, gramsPerUnit);
                     if (allocQtyInItemUnit == null || costPerItemUnit == null
                             || allocQtyInItemUnit.signum() <= 0) {
                         continue;
@@ -3284,16 +3389,26 @@ public class SalesServiceImpl implements SalesService {
             return null;
         }
         return finishedGoodsBatchRepository.findById(item.getFinishedGoodsBatchId())
-                .map(batch -> convertBatchUnitCost(batch, item.getUnit(), gramsPerUnit))
+                .map(batch -> convertBatchUnitCost(batch, item, gramsPerUnit))
                 .orElse(null);
     }
 
-    private BigDecimal convertBatchUnitCost(FinishedGoodsBatch batch, String targetUnit, BigDecimal gramsPerUnit) {
-        if (batch == null || batch.getUnitCost() == null || targetUnit == null) {
+    private BigDecimal convertBatchUnitCost(
+            FinishedGoodsBatch batch, SalesDeliveryItem item, BigDecimal gramsPerUnit) {
+        if (batch == null || batch.getUnitCost() == null || item == null || item.getUnit() == null) {
             return null;
         }
-        BigDecimal nativeQtyPerTargetUnit = FgQuantityUnitConverter
-                .convert(BigDecimal.ONE, targetUnit, batch.getUnit(), gramsPerUnit);
+        BigDecimal nativeQtyPerTargetUnit = FgQuantityUnitConverter.convertWithPackaging(
+                BigDecimal.ONE,
+                item.getUnit(),
+                batch.getUnit(),
+                gramsPerUnit,
+                item.getPackagingUnit(),
+                item.getPackagingBaseUnit(),
+                item.getPackagingFactor(),
+                batch.getPackagingUnit(),
+                batch.getPackagingBaseUnit(),
+                batch.getPackagingFactor());
         if (nativeQtyPerTargetUnit == null || nativeQtyPerTargetUnit.signum() <= 0) {
             return null;
         }
@@ -3315,6 +3430,100 @@ public class SalesServiceImpl implements SalesService {
         return existingCostUnitPrice.multiply(prevQty)
                 .add(deliveryCostUnitPrice.multiply(newQty))
                 .divide(totalQty, 4, java.math.RoundingMode.HALF_UP);
+    }
+
+    private void applyPackagingSelection(
+            String factoryId,
+            CreateSalesOrderRequest.SalesOrderItemDTO request,
+            SalesOrderItem item) {
+        // The eight-argument constructor is retained solely for older isolated unit tests.
+        // Spring production wiring always injects this required service.
+        if (productPackagingSpecService == null) return;
+        ProductPackagingSpecService.PackagingSelection selection =
+                productPackagingSpecService.resolveSelection(
+                        factoryId, request.getProductTypeId(), request.getUnit(), request.getPackagingSpecId());
+        if (selection.spec() == null) return;
+        item.setPackagingSpecId(selection.spec().getId());
+        item.setPackagingSpecName(selection.spec().getName());
+        item.setPackagingUnit(selection.spec().getPackageUnit());
+        item.setPackagingBaseUnit(selection.spec().getBaseUnit());
+        item.setPackagingFactor(selection.spec().getConversionFactor());
+        if (request.getQuantity() != null) item.setBoxQuantity(request.getQuantity());
+    }
+
+    private void applyPackagingSelection(
+            String factoryId,
+            String productTypeId,
+            String unit,
+            String packagingSpecId,
+            SalesDeliveryItem item) {
+        if (productPackagingSpecService == null) return;
+        ProductPackagingSpecService.PackagingSelection selection =
+                productPackagingSpecService.resolveSelection(factoryId, productTypeId, unit, packagingSpecId);
+        if (selection.spec() == null) return;
+        item.setPackagingSpecId(selection.spec().getId());
+        item.setPackagingSpecName(selection.spec().getName());
+        item.setPackagingUnit(selection.spec().getPackageUnit());
+        item.setPackagingBaseUnit(selection.spec().getBaseUnit());
+        item.setPackagingFactor(selection.spec().getConversionFactor());
+    }
+
+    private void copyPackagingSnapshot(SalesOrderItem source, SalesDeliveryItem target) {
+        target.setPackagingSpecId(source.getPackagingSpecId());
+        target.setPackagingSpecName(source.getPackagingSpecName());
+        target.setPackagingUnit(source.getPackagingUnit());
+        target.setPackagingBaseUnit(source.getPackagingBaseUnit());
+        target.setPackagingFactor(source.getPackagingFactor());
+    }
+
+    private void copyPackagingSnapshot(SalesOrderItem source, SalesOrderItem target) {
+        target.setPackagingSpecId(source.getPackagingSpecId());
+        target.setPackagingSpecName(source.getPackagingSpecName());
+        target.setPackagingUnit(source.getPackagingUnit());
+        target.setPackagingBaseUnit(source.getPackagingBaseUnit());
+        target.setPackagingFactor(source.getPackagingFactor());
+    }
+
+    private SalesOrderItem resolveDeliverySourceOrderItem(
+            CreateDeliveryRequest.DeliveryItemDTO request,
+            Map<Long, SalesOrderItem> sourceById,
+            Map<String, List<SalesOrderItem>> sourceByProduct,
+            boolean linkedOrder) {
+        if (!linkedOrder) return null;
+        if (request.getSalesOrderItemId() != null) {
+            SalesOrderItem exact = sourceById.get(request.getSalesOrderItemId());
+            if (exact == null || !Objects.equals(exact.getProductTypeId(), request.getProductTypeId())) {
+                throw new BusinessException(400, "发货明细未关联到当前销售订单行")
+                        .withCode("SALES_ORDER_ITEM_INVALID")
+                        .withHintTarget("salesOrderItemId");
+            }
+            return exact;
+        }
+
+        List<SalesOrderItem> candidates = sourceByProduct
+                .getOrDefault(request.getProductTypeId(), List.of());
+        if (request.getPackagingSpecId() != null && !request.getPackagingSpecId().isBlank()) {
+            return candidates.stream()
+                    .filter(item -> Objects.equals(item.getPackagingSpecId(), request.getPackagingSpecId()))
+                    .findFirst()
+                    .orElseThrow(() -> new BusinessException(400, "发货箱规不属于当前销售订单明细")
+                            .withCode("PACKAGING_SPEC_ORDER_LINE_MISMATCH")
+                            .withHintTarget("packagingSpecId"));
+        }
+        if (candidates.isEmpty()) {
+            throw new BusinessException(400, "发货产品不属于当前销售订单")
+                    .withCode("SALES_ORDER_ITEM_INVALID")
+                    .withHintTarget("productTypeId");
+        }
+        Set<String> packagingIds = candidates.stream()
+                .map(item -> item.getPackagingSpecId() == null ? "" : item.getPackagingSpecId())
+                .collect(Collectors.toSet());
+        if (packagingIds.size() > 1) {
+            throw new BusinessException(400, "该 SKU 在销售订单中使用了多个箱规，请选择具体订单行")
+                    .withCode("PACKAGING_SPEC_REQUIRED")
+                    .withHintTarget("salesOrderItemId");
+        }
+        return candidates.get(0);
     }
 
     // ==================== T3: 业务员双字段过渡 ====================

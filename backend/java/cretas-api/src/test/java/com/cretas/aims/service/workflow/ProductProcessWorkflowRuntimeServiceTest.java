@@ -5,6 +5,7 @@ import com.cretas.aims.dto.workflow.ProductionWorkflowRuntimeDTO;
 import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.ProductProcessWorkflowActivation;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.workflow.ProductionWorkflowInstance;
 import com.cretas.aims.entity.workflow.WorkflowTaskPort;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
@@ -115,6 +116,34 @@ class ProductProcessWorkflowRuntimeServiceTest {
                 .map(WorkProcessTaskDTO::getWorkflowNodeId).toList());
         assertTrue(result.orElseThrow().stream()
                 .allMatch(task -> task.getWorkflowInstanceId().equals(501L)));
+    }
+
+    @Test
+    void snapshotsFinishedSkuNetWeightWhenMaterializing() {
+        givenValidOwnedBatch();
+        givenEnabledPublishedWorkflow();
+        givenFreshRuntimePersistence(true);
+        CompiledProductProcessWorkflow base = compiledWorkflow();
+        List<CompiledProductProcessWorkflow.CompiledPort> ports = new ArrayList<>(base.ports());
+        ports.set(ports.size() - 1, new CompiledProductProcessWorkflow.CompiledPort(
+                "pack", "pack-out", "OUTPUT", 2, "material-pack-out",
+                "FINISHED_GOOD", "PT-FG", "盒", true, null, null));
+        when(compiler.compile(any())).thenReturn(new CompiledProductProcessWorkflow(
+                base.nodesJson(), base.edgesJson(), base.processTasks(), ports));
+        ProductType finishedSku = new ProductType();
+        finishedSku.setId("PT-FG");
+        finishedSku.setFactoryId("F006");
+        finishedSku.setGramsPerUnit(new java.math.BigDecimal("200"));
+        when(productTypeRepository.findByIdAndFactoryId("PT-FG", "F006"))
+                .thenReturn(Optional.of(finishedSku));
+
+        service.materializeIfActive("F006", 901L, "PT-PIG");
+
+        WorkflowTaskPort finishedPort = savedPorts.stream()
+                .filter(port -> "pack-out".equals(port.getWorkflowPortId()))
+                .findFirst().orElseThrow();
+        assertEquals(0, new java.math.BigDecimal("200")
+                .compareTo(finishedPort.getNetWeightGramsSnapshot()));
     }
 
     @Test

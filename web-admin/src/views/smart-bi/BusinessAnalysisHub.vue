@@ -122,7 +122,7 @@ async function loadSalesOverview() {
   salesError.value = '';
   try {
     // getTopProducts 要求具体日期区间 (非 optional) — 探测全部历史窗, 绝不回退"近30天"。
-    const dr = await getGoldDataRange(factoryId.value).catch(() => null);
+    const dr = await getGoldDataRange(factoryId.value).catch((): null => null);
     const [startDate, endDate] = resolveAllHistoryRange(dr);
     salesData.value = await getTopProducts({ factoryId: factoryId.value, startDate, endDate, topN: 5 });
   } catch (e) {
@@ -136,7 +136,7 @@ async function loadSalesOverview() {
 const trendLoading = ref(false);
 const trendError = ref('');
 const trendData = ref<TrendBundle | null>(null);
-async function loadTrendOverview() {
+async function loadTrendOverview(): Promise<void> {
   if (!factoryId.value) return;
   trendLoading.value = true;
   trendError.value = '';

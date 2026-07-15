@@ -69,6 +69,10 @@ public class WorkflowTaskPort extends BaseEntity {
     @Column(name = "unit_code", nullable = false, length = 32)
     private String unitCode;
 
+    /** 固定包装成品的每基本单位净重快照；运行中 SKU 变更不得改写历史任务。 */
+    @Column(name = "net_weight_grams_snapshot", precision = 20, scale = 6)
+    private BigDecimal netWeightGramsSnapshot;
+
     @Column(name = "material_primary_unit_code", length = 32)
     private String materialPrimaryUnitCode;
 

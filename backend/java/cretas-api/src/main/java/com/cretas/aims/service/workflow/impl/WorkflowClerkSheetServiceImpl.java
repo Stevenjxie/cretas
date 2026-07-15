@@ -195,6 +195,7 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                 .skuId(port.getSkuId())
                 .materialName(lookup.name())
                 .unit(unit.trim())
+                .gramsPerUnit(port.getNetWeightGramsSnapshot())
                 .required(port.getRequired())
                 .skuResolved(lookup.resolved())
                 .finished(FINISHED_GOOD.equals(port.getMaterialKind()))

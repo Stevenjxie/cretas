@@ -391,16 +391,27 @@ public class InterimSettleServiceImpl implements InterimSettleService {
             if (!ur.req.isFinished()) {
                 continue;
             }
-            BigDecimal productWeight = ur.req.getProductWeight();
-            boolean useWeight = productWeight != null && productWeight.signum() > 0;
-            BigDecimal qty = useWeight ? productWeight : nz(ur.req.getOutputQuantity());
-            if (qty.signum() <= 0) {
+            // Inventory is expressed in the finished SKU's output unit.  The
+            // authoritative productWeight is only a derived reconciliation metric.
+            BigDecimal producedQty = nz(ur.req.getOutputQuantity());
+            BigDecimal sampleQty = ur.req.getSampleRetainQuantity() == null
+                    ? BigDecimal.ZERO
+                    : BigDecimal.valueOf(ur.req.getSampleRetainQuantity());
+            if (sampleQty.signum() < 0 || sampleQty.compareTo(producedQty) > 0) {
+                throw new BusinessException(409, "留样数量不能大于实际生产数量")
+                        .withCode("FINISHED_SAMPLE_QUANTITY_INVALID")
+                        .withHint("请核对实际生产数量和留样数量后重试")
+                        .withSeverity("BLOCKING")
+                        .withHintTarget("留样数量");
+            }
+            BigDecimal qty = producedQty.subtract(sampleQty);
+            if (qty.signum() == 0) {
                 continue;
             }
-            String unit = useWeight ? "kg" : (ur.req.getUnit() != null ? ur.req.getUnit() : "kg");
+            String unit = ur.req.getUnit() != null ? ur.req.getUnit() : "kg";
             // 🔴 成本传导 (逐行): 本行单位成本 = (本道 ProductionBatch 成本[原料+调料+人工] + SFI/FG 投料成本) / 本行入库量。
             //   诚实 null: 任一投料 unitCost 未知 → 本行成本 null。聚合时任一行 null → 整批 null (不伪造 ¥0)。
-            BigDecimal rowUnitCost = computeOutputUnitCost(factoryId, ur, qty, laborRate);
+            BigDecimal rowUnitCost = computeOutputUnitCost(factoryId, ur, producedQty, laborRate);
             // 分组键 = productTypeId (null/blank 亦成组 → createFinishedGoodsForInterim 统一 loud-fail, 同旧逐行行为)。
             FinishedAgg agg = finishedByProduct.computeIfAbsent(ur.req.getProductTypeId(),
                     k -> new FinishedAgg(unit));

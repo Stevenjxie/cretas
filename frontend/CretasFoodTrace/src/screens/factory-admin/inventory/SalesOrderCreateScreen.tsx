@@ -17,7 +17,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FAManagementStackParamList } from '../../../types/navigation';
 import { salesApiClient, CreateSalesOrderRequest, SalesOrder } from '../../../services/api/salesApiClient';
 import { customerApiClient, Customer } from '../../../services/api/customerApiClient';
-import { productTypeApiClient, ProductType } from '../../../services/api/productTypeApiClient';
+import { productTypeApiClient, ProductPackagingSpec, ProductType } from '../../../services/api/productTypeApiClient';
 import { useAuthStore } from '../../../store/authStore';
 import { formatNumberWithCommas } from '../../../utils/formatters';
 
@@ -30,6 +30,8 @@ interface DraftItem {
   quantity: string;
   unitPrice: string;
   unit: string;
+  packagingSpecId: string;
+  packagingSpecs: ProductPackagingSpec[];
 }
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
@@ -47,6 +49,8 @@ const blankItem = (): DraftItem => ({
   quantity: '',
   unitPrice: '',
   unit: '',
+  packagingSpecId: '',
+  packagingSpecs: [],
 });
 
 export default function SalesOrderCreateScreen() {
@@ -61,7 +65,7 @@ export default function SalesOrderCreateScreen() {
   const [requiredDeliveryDate, setRequiredDeliveryDate] = useState(tomorrowIso());
   const [remark, setRemark] = useState('');
   const [items, setItems] = useState<DraftItem[]>([blankItem()]);
-  const [openMenuFor, setOpenMenuFor] = useState<{ kind: 'customer' | 'product'; key?: string } | null>(null);
+  const [openMenuFor, setOpenMenuFor] = useState<{ kind: 'customer' | 'product' | 'packaging'; key?: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [createdOrder, setCreatedOrder] = useState<SalesOrder | null>(null);
@@ -105,6 +109,36 @@ export default function SalesOrderCreateScreen() {
     setItems((prev) => (prev.length === 1 ? prev : prev.filter((item) => item.key !== key)));
   };
 
+  const packagingOptions = (item: DraftItem) =>
+    item.packagingSpecs.filter((spec) => spec.active !== false && spec.packageUnit === item.unit);
+
+  const handleUnitChange = (item: DraftItem, unit: string) => {
+    const options = item.packagingSpecs.filter((spec) => spec.active !== false && spec.packageUnit === unit);
+    updateItem(item.key, {
+      unit,
+      packagingSpecId: options.length === 1 ? options[0]!.id : '',
+    });
+  };
+
+  const selectProduct = async (item: DraftItem, product: ProductType) => {
+    updateItem(item.key, {
+      productTypeId: product.id,
+      productName: product.name,
+      unit: product.unit || 'kg',
+      unitPrice: product.unitPrice != null ? String(product.unitPrice) : item.unitPrice,
+      packagingSpecId: '',
+      packagingSpecs: [],
+    });
+    setOpenMenuFor(null);
+    try {
+      const specs = await productTypeApiClient.getPackagingSpecs(product.id, factoryId);
+      updateItem(item.key, { packagingSpecs: specs });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '包装规格加载失败';
+      Alert.alert('错误', message);
+    }
+  };
+
   const validate = (): DraftItem[] | null => {
     if (!customerId) {
       Alert.alert('提示', '请选择客户');
@@ -133,6 +167,14 @@ export default function SalesOrderCreateScreen() {
       return null;
     }
 
+    const missingPackaging = cleanedItems.find(
+      (item) => packagingOptions(item).length > 1 && !item.packagingSpecId
+    );
+    if (missingPackaging) {
+      Alert.alert('提示', `${missingPackaging.productName || '产品'}有多个装箱规格，请选择本次使用的箱规`);
+      return null;
+    }
+
     return cleanedItems;
   };
 
@@ -157,6 +199,7 @@ export default function SalesOrderCreateScreen() {
         unitPrice: Number(item.unitPrice),
         unit: item.unit,
         taxRate: 0,
+        packagingSpecId: item.packagingSpecId || undefined,
       })),
     };
 
@@ -315,15 +358,7 @@ export default function SalesOrderCreateScreen() {
                       key={product.id}
                       testID={`sales-create-product-option-${product.id}`}
                       title={`${product.name}${product.productCode ? ` (${product.productCode})` : ''}`}
-                      onPress={() => {
-                        updateItem(item.key, {
-                          productTypeId: product.id,
-                          productName: product.name,
-                          unit: product.unit || 'kg',
-                          unitPrice: product.unitPrice != null ? String(product.unitPrice) : item.unitPrice,
-                        });
-                        setOpenMenuFor(null);
-                      }}
+                      onPress={() => { void selectProduct(item, product); }}
                     />
                   ))}
                   {products.length === 0 && <Menu.Item title="暂无可用产品" disabled />}
@@ -346,7 +381,7 @@ export default function SalesOrderCreateScreen() {
                     <TextInput
                       testID={`sales-create-unit-${index}`}
                       value={item.unit}
-                      onChangeText={(value) => updateItem(item.key, { unit: value })}
+                      onChangeText={(value) => handleUnitChange(item, value)}
                       mode="outlined"
                       style={styles.input}
                     />
@@ -363,6 +398,42 @@ export default function SalesOrderCreateScreen() {
                     />
                   </View>
                 </View>
+                {packagingOptions(item).length > 0 && (
+                  <Menu
+                    visible={openMenuFor?.kind === 'packaging' && openMenuFor.key === item.key}
+                    onDismiss={() => setOpenMenuFor(null)}
+                    anchor={
+                      <View style={styles.selectorBlock}>
+                        <Text style={styles.fieldLabel}>包装规格</Text>
+                        <Button
+                          mode="outlined"
+                          icon="chevron-down"
+                          contentStyle={styles.selectorContent}
+                          labelStyle={styles.selectorLabel}
+                          onPress={() => setOpenMenuFor({ kind: 'packaging', key: item.key })}
+                        >
+                          {packagingOptions(item).find((spec) => spec.id === item.packagingSpecId)
+                            ? (() => {
+                                const spec = packagingOptions(item).find((entry) => entry.id === item.packagingSpecId)!;
+                                return `1${spec.packageUnit}=${spec.conversionFactor}${spec.baseUnit}`;
+                              })()
+                            : packagingOptions(item).length > 1 ? '请选择本次箱规' : '默认箱规'}
+                        </Button>
+                      </View>
+                    }
+                  >
+                    {packagingOptions(item).map((spec) => (
+                      <Menu.Item
+                        key={spec.id}
+                        title={`1${spec.packageUnit}=${spec.conversionFactor}${spec.baseUnit}`}
+                        onPress={() => {
+                          updateItem(item.key, { packagingSpecId: spec.id });
+                          setOpenMenuFor(null);
+                        }}
+                      />
+                    ))}
+                  </Menu>
+                )}
               </View>
             ))}
           </Card.Content>

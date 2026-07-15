@@ -5,7 +5,6 @@ import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionInterimSettlement;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
-import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
@@ -63,16 +62,16 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository requisitionRepository;
 
+    /** New submit allocations are released when a settlement is reversed. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.ProductionInputAllocationRepository inputAllocationRepository;
+
     @Override
     @Transactional
     public Map<String, Object> reverseInterimSettle(String factoryId, String planId,
                                                     Integer sessionSeq, Long userId) {
         ProductionPlan plan = planRepository.findByIdAndFactoryId(planId, factoryId)
                 .orElseThrow(() -> new BusinessException(404, "生产计划不存在: " + planId));
-        if (plan.getSourceType() != PlanSourceType.SAFETY_STOCK) {
-            throw new BusinessException(400, "仅存货生产计划可撤销小结, 当前来源类型: " + plan.getSourceType())
-                    .withHintTarget("撤销小结");
-        }
 
         // ── 定位目标小结 (指定 seq / 默认最近一次); 已撤销 (硬删) → empty → 双撤幂等拒绝 ──
         ProductionInterimSettlement resolved = (sessionSeq != null
@@ -247,8 +246,19 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
         List<ProcessSheetRow> rows = rowRepository
                 .findByFactoryIdAndPlanIdAndInterimSettledAt(factoryId, planId, postedAt);
         int rowsUnstamped = 0;
+        int allocationsReleased = 0;
         for (ProcessSheetRow row : rows) {
             row.setInterimSettledAt(null);
+            row.setSubmissionStatus(ProcessSheetRow.SUBMISSION_DRAFT);
+            if (inputAllocationRepository != null) {
+                var allocations = inputAllocationRepository
+                        .findByFactoryIdAndProcessSheetRowIdOrderByAllocationOrderAsc(factoryId, row.getId());
+                for (var allocation : allocations) {
+                    allocation.softDelete();
+                }
+                inputAllocationRepository.saveAll(allocations);
+                allocationsReleased += allocations.size();
+            }
             rowRepository.save(row);
             rowsUnstamped++;
         }
@@ -264,6 +274,7 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
         result.put("fgFeedRestored", fgFeedRestored);
         result.put("rawRestored", rawRestored);
         result.put("rowsUnstamped", rowsUnstamped);
+        result.put("inputAllocationsReleased", allocationsReleased);
         result.put("affectedBatchNumbers", new java.util.ArrayList<>(affected));  // 供治理层盘点告警快照
         // #1214 缺口修复: 连带冲销同厂调拨记录的操作提示 (物理货物需人工核实/退回); 无连带冲销 → 空列表。
         result.put("transferReconcileHints", transferReconcileHints);

@@ -206,12 +206,12 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     expect(badge.text()).toContain('3 出（同时多产出）');
   });
 
-  it('keeps the conversion mode select present and editable', () => {
+  it('does not expose a manual conversion mode selector', () => {
     const wrapper = mountNode();
 
-    const select = wrapper.get('.conversion-row .el-select');
-    expect(select.exists()).toBe(true);
-    expect(select.classes()).not.toContain('is-disabled');
+    expect(wrapper.find('.conversion-row .el-select').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="quantity-rule-note"]').text())
+      .toContain('单位由 SKU 自动带入');
   });
 
   it('#5: shows a read-only multi-output auto-note (投入 = 各产出之和) instead of a selectable mode when there is more than one output', () => {
@@ -225,16 +225,15 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
       conversionRule: { mode: 'SUM_OUTPUTS', expression: null },
     }));
 
-    expect(wrapper.get('[data-testid="conversion-multi-output-auto"]').text())
-      .toBe('本道多产出：投入 = 各产出之和（系统自动核对）');
-    // 多产出时不再展示模式下拉 / 数量关系 free-form 输入——隐性核对, 不可选。
+    expect(wrapper.get('[data-testid="quantity-rule-note"]').text())
+      .toContain('多产出分别按各自 SKU 单位报工');
     expect(wrapper.find('.conversion-row .el-select').exists()).toBe(false);
     expect(wrapper.find('[data-testid="fixed-ratio-row"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="legacy-mode-hint"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="conversion-sentence"]').exists()).toBe(false);
   });
 
-  it('#6: only offers 按实际称重/固定比例 as selectable conversion modes (产出相加/自定义公式 removed from the dropdown)', () => {
+  it('does not offer fixed-ratio, formula or packaging conversion options', () => {
     const wrapper = mountNode();
 
     const modeOptionValues = wrapper.findAllComponents(ElOption)
@@ -243,10 +242,11 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
         typeof value === 'string' && ['ACTUAL_WEIGHT', 'FIXED_RATIO', 'SUM_OUTPUTS', 'FORMULA'].includes(value)
       ));
 
-    expect(modeOptionValues.sort()).toEqual(['ACTUAL_WEIGHT', 'FIXED_RATIO']);
+    expect(modeOptionValues).toEqual([]);
+    expect(wrapper.find('.conversion-select').exists()).toBe(false);
   });
 
-  it('renders a trimmed ACTUAL_WEIGHT hint without repeating material names/units already shown in the port rows', () => {
+  it('renders a read-only reporting note without repeating material names', () => {
     const ports: ProcessPort[] = [
       { id: 'in-1', direction: 'INPUT', materialName: '整猪', unit: 'kg', ordinal: 0 },
       { id: 'out-1', direction: 'OUTPUT', materialName: '分割肉', unit: 'kg', ordinal: 0 },
@@ -256,29 +256,29 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
       conversionRule: { mode: 'ACTUAL_WEIGHT' },
     }));
 
-    const sentence = wrapper.get('[data-testid="conversion-sentence"]').text();
-    expect(sentence).toContain('按实际称重');
-    // 精简后不再重复投入/产出物料名和单位 (已在上面的端口行展示), 也不再含 Σ/→ 符号。
+    const sentence = wrapper.get('[data-testid="quantity-rule-note"]').text();
+    expect(sentence).toContain('实际出成率由历史报工自动计算');
     expect(sentence).not.toContain('整猪');
     expect(sentence).not.toContain('分割肉');
     expect(sentence).not.toContain('→');
     expect(sentence).not.toContain('Σ');
   });
 
-  it('renders the FIXED_RATIO semantic sentence from the user expression, with a fallback hint when empty', () => {
+  it('ignores legacy FIXED_RATIO configuration in the editable UI', () => {
     const withExpr = mountNode(true, withPorts({
       conversionRule: { mode: 'FIXED_RATIO', expression: '1 只 = 1 只' },
     }));
-    expect(withExpr.get('[data-testid="conversion-sentence"]').text()).toBe('固定比例：1 只 = 1 只');
+    expect(withExpr.find('[data-testid="conversion-sentence"]').exists()).toBe(false);
+    expect(withExpr.find('[data-testid="fixed-ratio-row"]').exists()).toBe(false);
 
     const withoutExpr = mountNode(true, withPorts({
       conversionRule: { mode: 'FIXED_RATIO', expression: null },
     }));
-    expect(withoutExpr.get('[data-testid="conversion-sentence"]').text()).toContain('固定比例');
-    expect(withoutExpr.get('[data-testid="conversion-sentence"]').text()).toContain('待填');
+    expect(withoutExpr.find('[data-testid="conversion-sentence"]').exists()).toBe(false);
+    expect(withoutExpr.get('[data-testid="quantity-rule-note"]').text()).toContain('SKU');
   });
 
-  it('#4: FIXED_RATIO renders a structured [investment unit] [number] = [output unit] row with auto-filled read-only units', () => {
+  it('never renders a structured fixed-ratio editor', () => {
     const ports: ProcessPort[] = [
       { id: 'in-1', direction: 'INPUT', materialName: '整猪', unit: '只', ordinal: 0 },
       {
@@ -290,30 +290,17 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
       conversionRule: { mode: 'FIXED_RATIO', expression: '1 只 = 2 半只' },
     }));
 
-    const row = wrapper.get('[data-testid="fixed-ratio-row"]');
-    expect(row.get('[data-testid="fixed-ratio-input-unit"]').text()).toBe('只');
-    expect(row.get('[data-testid="fixed-ratio-output-unit"]').text()).toBe('半只');
-    // 单位是自动带入的只读 chip，不是可编辑输入框——round-trip 解析出的比例系数
-    // 预填进 el-input-number，用户只填数字本身。
-    const numberInput = row.getComponent({ name: 'ElInputNumber' });
-    expect(numberInput.props('modelValue')).toBe(2);
-    expect(row.find('input[readonly]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="fixed-ratio-row"]').exists()).toBe(false);
+    expect(wrapper.findComponent({ name: 'ElInputNumber' }).exists()).toBe(false);
   });
 
-  it('#4: FIXED_RATIO round-trips its canonical expression when the ratio changes via the number input', async () => {
+  it('does not emit conversion changes for legacy fixed-ratio data', () => {
     const wrapper = mountNode(true, withPorts({
       conversionRule: { mode: 'FIXED_RATIO', expression: null },
     }));
 
-    const numberInput = wrapper.get('[data-testid="fixed-ratio-row"]').getComponent({ name: 'ElInputNumber' });
-    // 未填时数字输入框留空 (不假装有个"看起来正确"的默认值)。
-    expect(numberInput.props('modelValue')).toBeNull();
-
-    await numberInput.vm.$emit('update:modelValue', 1.5);
-
-    expect(wrapper.emitted('update')).toEqual([[{
-      conversionRule: { mode: 'FIXED_RATIO', expression: '1 kg = 1.5 kg' },
-    }]]);
+    expect(wrapper.find('[data-testid="fixed-ratio-row"]').exists()).toBe(false);
+    expect(wrapper.emitted('update')).toBeUndefined();
   });
 
   it('#4: gracefully leaves the ratio unset (returns null, does not crash) for legacy free-text expressions that are not the canonical shape', () => {
@@ -324,30 +311,27 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     // 旧自由文本里第一个 "1<unit>=<n><unit>" 片段仍然可能被解析出一个数字
     // (best-effort 前向兼容), 但绝不能抛错、也不会静默改写原始存量 expression
     // (只有用户真的动了数字输入框才会写回新的规范格式)。
-    expect(() => wrapper.get('[data-testid="fixed-ratio-row"]').getComponent({ name: 'ElInputNumber' })).not.toThrow();
+    expect(wrapper.find('[data-testid="fixed-ratio-row"]').exists()).toBe(false);
     expect(wrapper.emitted('update')).toBeUndefined();
   });
 
-  it('#6: FORMULA (legacy, off-dropdown) renders read-only with a migrate-away hint instead of an editable expression field', () => {
+  it('does not expose legacy FORMULA configuration', () => {
     const wrapper = mountNode(true, withPorts({
       conversionRule: { mode: 'FORMULA', expression: '(产出1 + 产出2) * 0.95' },
     }));
 
-    const hint = wrapper.get('[data-testid="legacy-mode-hint"]');
-    expect(hint.text()).toContain('自定义公式（只读）：(产出1 + 产出2) * 0.95');
-    expect(hint.text()).toContain('此模式已下线，请改选按实际称重/固定比例');
+    expect(wrapper.find('[data-testid="legacy-mode-hint"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="fixed-ratio-row"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="conversion-expression-input"]').exists()).toBe(false);
   });
 
-  it('#6: SUM_OUTPUTS stored on legacy single-output data (edge case) also renders via the same read-only legacy hint, not a broken dropdown state', () => {
+  it('does not expose legacy SUM_OUTPUTS configuration', () => {
     const wrapper = mountNode(true, withPorts({
       conversionRule: { mode: 'SUM_OUTPUTS', expression: null },
     }));
 
-    const hint = wrapper.get('[data-testid="legacy-mode-hint"]');
-    expect(hint.text()).toContain('产出相加（只读）：未填写');
-    expect(hint.text()).toContain('此模式已下线');
+    expect(wrapper.find('[data-testid="legacy-mode-hint"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="quantity-rule-note"]').text()).toContain('SKU');
   });
 
   it('no longer renders a separate 样例 example line (trimmed per config-driven UX simplification)', () => {
