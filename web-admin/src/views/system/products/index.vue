@@ -875,48 +875,50 @@ function handleAdd() {
 
 async function handleEdit(row: ProductType) {
   dialogTitle.value = '编辑产品';
-  isEditing.value = true;
-  formData.id = row.id;
-  formData.code = row.code;
-  formData.name = row.name;
-  formData.productCategory = row.productCategory || activeTab.value;
-  formData.unit = row.unit;
-  formData.specification = row.specification || '';
-  formData.relatedCustomer = row.relatedCustomer || '';
-  formData.customerId = row.customerId || '';        // T123
-  formData.baseProductName = row.baseProductName || ''; // T123
-  formData.temperatureZone = row.temperatureZone || '';
-  formData.imageUrl = row.imageUrl || '';
-  formData.notes = row.notes || '';
-  formData.standardCost = row.standardCost ?? null;
-  formData.targetGrossMargin = row.targetGrossMargin ?? null;
-  formData.targetGrossMarginPercent = row.targetGrossMargin != null
-    ? Number((Number(row.targetGrossMargin) * 100).toFixed(2))
-    : null;
-  // T148: 装箱换算内联行字段 — 编辑时从 row 回填
-  formData.level1Unit = row.level1Unit ?? undefined;
-  formData.boxConversionCoefficient = row.boxConversionCoefficient ?? undefined;
   try {
-    const response = await get<PackagingSpec[]>(`/${factoryId.value}/product-types/${row.id}/packaging-specs`);
-    packagingSpecs.value = response.success && Array.isArray(response.data) && response.data.length > 0
-      ? response.data.map((spec, index) => ({
+    const [detailResponse, packagingResponse] = await Promise.all([
+      get<ProductType>(`/${factoryId.value}/product-types/${row.id}`),
+      get<PackagingSpec[]>(`/${factoryId.value}/product-types/${row.id}/packaging-specs`),
+    ]);
+    if (!detailResponse.success || !detailResponse.data
+      || !packagingResponse.success || !Array.isArray(packagingResponse.data)) {
+      throw new Error('incomplete SKU edit payload');
+    }
+
+    const product = detailResponse.data;
+    resetForm();
+    isEditing.value = true;
+    Object.assign(formData, product);
+    formData.productCategory = product.productCategory || activeTab.value;
+    formData.gramsPerUnit = product.gramsPerUnit ?? undefined;
+    formData.standardCost = product.standardCost ?? null;
+    formData.targetGrossMargin = product.targetGrossMargin ?? null;
+    formData.targetGrossMarginPercent = product.targetGrossMargin != null
+      ? Number((Number(product.targetGrossMargin) * 100).toFixed(2))
+      : null;
+    formData.level1Unit = product.level1Unit ?? undefined;
+    formData.boxConversionCoefficient = product.boxConversionCoefficient ?? undefined;
+
+    packagingSpecs.value = packagingResponse.data.length > 0
+      ? packagingResponse.data.map((spec, index) => ({
           ...spec,
           name: spec.name || (index === 0 ? '默认箱规' : `箱规${index + 1}`),
-          baseUnit: spec.baseUnit || row.unit,
+          baseUnit: spec.baseUnit || product.unit,
           defaultSpec: index === 0,
           active: spec.active !== false,
           sortOrder: index,
         }))
       : [{
           ...blankPackagingSpec(0),
-          packageUnit: row.level1Unit || '箱',
-          baseUnit: row.unit,
-          conversionFactor: row.boxConversionCoefficient,
+          packageUnit: product.level1Unit || '箱',
+          baseUnit: product.unit,
+          conversionFactor: product.boxConversionCoefficient,
         }];
   } catch {
-    // 多箱规加载失败时不能退回旧单箱规继续编辑，否则保存会误删其余箱规。
-    ElMessage.error('包装规格加载失败，请重试后再编辑产品');
+    // 详情或多箱规加载失败时不能用分页行的残缺字段继续编辑，否则保存会覆盖权威数据。
+    ElMessage.error('产品详情或包装规格加载失败，请重试后再编辑产品');
     isEditing.value = false;
+    dialogVisible.value = false;
     return;
   }
   // T153: 编辑模式下, 已有规格视为「用户已设置」→ 改结构化字段不覆盖既有规格 (仅用户清空后才自动重拼).
