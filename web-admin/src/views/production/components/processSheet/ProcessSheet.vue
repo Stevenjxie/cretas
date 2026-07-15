@@ -11,7 +11,7 @@ import { PROCESS_SHEET_CONFIG } from './PROCESS_SHEET_CONFIG';
 import ProcessDataTable from './ProcessDataTable.vue';
 import InventoryTable from './InventoryTable.vue';
 import YieldCardTable from './YieldCardTable.vue';
-import { formatPlannedOutput, resolveProcessSheetUnits, resolveWorkflowProcessSheetUnits } from '@/utils/processSheetUnits';
+import { formatWorkflowPlannedOutput, resolveProcessSheetUnits, resolveWorkflowProcessSheetUnits } from '@/utils/processSheetUnits';
 
 // -------------------------------------------------------------------------
 // View mode: 'grid' (电子表格) | 'card' (卡片)
@@ -115,6 +115,10 @@ function nameToConfigCode(processName: string): string | undefined {
 
 // 未解析到真实配置时保持空列表；loadAll 会展示可重试错误，不生成虚构工序/单位。
 const PROCESSES = ref<ProcEntry[]>([]);
+const terminalWorkflowOutput = computed(() => {
+  const processes = PROCESSES.value;
+  return processes.length > 0 ? processes[processes.length - 1].workflowContext?.output ?? null : null;
+});
 
 // upstream chain: 链中前一道工序 (按 PROCESSES 顺序; 第一道 → null)。
 // SP-F role-mode fix: 键改用唯一 procKey (order), 不再用 code (会碰撞)。
@@ -522,7 +526,7 @@ defineExpose({ hasUnsavedRows });
           逐工序电子表格
           <span v-if="productName" style="font-weight:400;color:#606266;margin-left:8px">{{ productName }}</span>
           <span v-if="plannedQuantity" style="font-size:12px;color:#909399;margin-left:8px">
-            {{ formatPlannedOutput(plannedQuantity, plannedUnit) }}
+            {{ formatWorkflowPlannedOutput(plannedQuantity, plannedUnit, terminalWorkflowOutput) }}
             <el-tooltip content="计划成品数量按产品单位记录；首道投料数量以逐工序报工和配方出成率为准" placement="top">
               <span style="margin-left:3px;cursor:help">?</span>
             </el-tooltip>

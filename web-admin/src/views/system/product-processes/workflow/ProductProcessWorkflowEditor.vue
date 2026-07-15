@@ -109,6 +109,7 @@
               :bom-raw-material-ids="bomRawMaterialIdList"
               :semi-options="semiFinishedSkuOptions"
               :finished-options="finishedGoodSkuOptions"
+              :unit-error="unitIssueForNode(slotProps.id)"
               @add-next="openAddProcess(slotProps.id)"
               @select-raw-sku="(skuId) => selectRawSku(slotProps.id, skuId)"
               @select-sku="(skuId) => selectMaterialSku(slotProps.id, skuId)"
@@ -149,8 +150,14 @@
       </div>
     </div>
 
-    <aside class="ai-sidebar">
-      <button class="ai-collapse-button" type="button" @click="toggleAI">
+    <aside id="workflow-ai-panel" class="ai-sidebar">
+      <button
+        class="ai-collapse-button"
+        type="button"
+        :aria-expanded="!aiCollapsed"
+        aria-controls="workflow-ai-panel"
+        @click="toggleAI"
+      >
         {{ aiCollapsed ? 'AI' : '收起 AI' }}
       </button>
       <div v-if="!aiCollapsed" class="ai-content">
@@ -566,6 +573,7 @@ const productTypeId = computed(() => props.productTypeId);
 // #12b 预览历史版本标志 (非空=正在只读预览某历史版本); 提前声明供 canEdit 引用
 const previewingVersion = ref<number | null>(null);
 const unitReviewPending = ref(false);
+const unitIssues = ref<WorkflowUnitIssue[]>([]);
 const canEdit = computed(() => (
   props.canWrite
   && !loading.value
@@ -576,7 +584,7 @@ const canEdit = computed(() => (
   && loadedDefinitionIdentity.value?.productTypeId === props.productTypeId
 ));
 const aiStorageKey = computed(() => `product-process-workflow:ai-collapsed:${props.factoryId}`);
-const aiCollapsed = ref(false);
+const aiCollapsed = ref(true);
 const aiQuickPrompts = [
   '检查当前 Workflow 的 SKU 上下游承接',
   '检查投入与产出单位、数量换算是否完整',
@@ -605,7 +613,8 @@ const sourceMaterialLabel = computed(() => {
 });
 
 onMounted(async () => {
-  aiCollapsed.value = localStorage.getItem(aiStorageKey.value) === 'true';
+  // 画布是主任务，AI 只在用户明确展开后占用侧栏宽度；历史没有偏好时默认折叠。
+  aiCollapsed.value = localStorage.getItem(aiStorageKey.value) !== 'false';
   // #8: GSAP context 作用域化 (吸附脉冲), 卸载时 revert; 键盘删边监听
   gsapCtx = gsap.context(() => {}, canvasRef.value || undefined);
   window.addEventListener('keydown', onEditorKeydown);
@@ -768,12 +777,21 @@ function unitContext(): WorkflowUnitContext {
   return { products };
 }
 
+function unitIssueForNode(nodeId: string): string | undefined {
+  return unitIssues.value.find((issue) => issue.nodeId === nodeId)?.message;
+}
+
+function rememberUnitIssues(issues: WorkflowUnitIssue[]): void {
+  unitIssues.value = issues;
+}
+
 async function reconcileLoadedUnits(): Promise<void> {
   const identity = currentLoadedIdentity();
   if (!identity || loadedCatalogFactoryId.value !== identity.factoryId || !definition.value) return;
   if (!isLoadedIdentityCurrent(identity)) return;
   const current = currentDefinition();
   const result = reconcileWorkflowUnits(current, unitContext());
+  rememberUnitIssues(result.errors);
   if (definition.value.status === 'PUBLISHED') {
     if (result.errors.length > 0) showUnitIssues(result.errors);
     if (!unitReviewPending.value || result.errors.length > 0) return;
@@ -804,6 +822,7 @@ async function reconcileForPersistence(
     }
   }
   const result = reconcileWorkflowUnits(current, unitContext());
+  rememberUnitIssues(result.errors);
   if (result.errors.length > 0) {
     if (showErrors) showUnitIssues(result.errors);
     return null;
@@ -883,6 +902,7 @@ function invalidateLoadedDefinition(invalidatePersistence = true): void {
   loadedDefinitionIdentity.value = null;
   definition.value = null;
   unitReviewPending.value = false;
+  unitIssues.value = [];
   flowNodes.value = [];
   flowEdges.value = [];
   dirty.value = false;
@@ -2258,9 +2278,13 @@ function toggleAI(): void {
   color: #606266;
 }
 
-/* 画布尽量占满视口高度(放大画布), 兼容列表落到页面最下方 */
-.workflow-editor { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 12px; min-height: calc(100vh - 200px); }
-.workflow-editor.ai-collapsed { grid-template-columns: minmax(0, 1fr) 44px; }
+/* 画布始终使用完整宽度；AI 是按需覆盖层，展开时不会重新挤压/缩放流程图。 */
+.workflow-editor {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: calc(100vh - 200px);
+}
 .workflow-main { min-width: 0; display: flex; flex-direction: column; }
 .workflow-toolbar {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -2279,9 +2303,12 @@ function toggleAI(): void {
 .empty-canvas-action { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
 .empty-canvas-action :deep(.el-button) { pointer-events: auto; }
 .ai-sidebar {
-  position: relative; min-width: 0; overflow: hidden; border: 1px solid #edf2f7;
-  border-radius: 10px; background: #fff; transition: width 0.2s ease;
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: 40;
+  width: 320px; min-width: 0; overflow: hidden; border: 1px solid #dbe7f3;
+  border-radius: 10px; background: #fff; box-shadow: -8px 0 24px rgb(31 62 92 / 14%);
+  transition: width 0.2s ease;
 }
+.workflow-editor.ai-collapsed .ai-sidebar { width: 44px; box-shadow: none; }
 .ai-collapse-button {
   width: 100%; min-height: 44px; border: 0; border-bottom: 1px solid #edf2f7;
   color: #1b65a8; background: #f4f9ff; cursor: pointer; font-weight: 650;

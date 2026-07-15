@@ -197,7 +197,7 @@ export interface ProcessSheetRowResult {
    * (成本相关字段 rowTotalCost/unitPrice/yieldRate 顶层为 null — 工序不处理成本分摊)。
    */
   outputs?: OutputResult[] | null;
-  submissionStatus?: 'DRAFT' | 'SUBMITTED';
+  submissionStatus?: 'DRAFT' | 'SUBMITTED' | 'LEGACY';
   inputAllocations?: ProductionInputAllocation[];
 }
 
@@ -326,7 +326,7 @@ export interface ProcessSheetRowView {
   /** DRAFT = outputQty<=0 未物化; SAVED = 已物化 */
   rowStatus: 'SAVED' | 'DRAFT';
   materialized: boolean;
-  submissionStatus?: 'DRAFT' | 'SUBMITTED' | null;
+  submissionStatus?: 'DRAFT' | 'SUBMITTED' | 'LEGACY' | null;
   /** 原始录入 payload (row_payload JSON 原样回读) */
   payload: ProcessSheetRowRequest;
   /**

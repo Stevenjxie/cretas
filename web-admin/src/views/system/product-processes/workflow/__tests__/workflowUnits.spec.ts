@@ -79,6 +79,17 @@ describe('reconcileWorkflowUnits', () => {
     expect(materialUnit(result.definition)).toBe('件');
   });
 
+  it('blocks persistence when a bound SKU has no authoritative unit contract', () => {
+    const input = definitionWith('g', 'g', 'g');
+    const result = reconcileWorkflowUnits(input, { products: {} });
+
+    expect(result.errors).toEqual([expect.objectContaining({
+      code: 'SKU_UNIT_UNKNOWN',
+      nodeId: 'material:finished',
+    })]);
+    expect(result.errors[0].message).toContain('缺少规范主单位');
+  });
+
   it('derives the shared process hint from the smallest output ordinal', () => {
     const input = definitionWith('g', 'g', 'box');
     input.nodes.splice(1, 0, {

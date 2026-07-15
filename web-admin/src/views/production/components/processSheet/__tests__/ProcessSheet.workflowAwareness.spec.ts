@@ -53,13 +53,14 @@ const ProcessDataTableStub = {
   template: '<div class="stub-process-data-table" />',
 };
 
-function mountSheet() {
+function mountSheet(plan: { plannedQuantity?: number; plannedUnit?: string | null } = {}) {
   return mount(ProcessSheet, {
     props: {
       factoryId: 'F006',
       planId: 'PLAN-WF-1',
       productTypeId: 'PT-1',
       productName: '猪蹄',
+      ...plan,
     },
     global: {
       plugins: [ElementPlus],
@@ -197,16 +198,16 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
             inputs: [
               {
                 workflowPortId: 'IN1', materialKind: 'RAW_MATERIAL', skuId: 'RM-1',
-                materialName: '猪蹄', unit: 'kg', required: true, skuResolved: true, finished: false,
+                materialName: '猪蹄', unit: 'g', required: true, skuResolved: true, finished: false,
               },
             ],
             output: {
               workflowPortId: 'OUT1', materialKind: 'SEMI_FINISHED', skuId: 'PT-SEMI-1',
-              materialName: '修油半成品', unit: 'kg', required: true, skuResolved: true, finished: false,
+              materialName: '修油半成品', unit: 'g', required: true, skuResolved: true, finished: false,
             },
             outputs: [{
               workflowPortId: 'OUT1', materialKind: 'SEMI_FINISHED', skuId: 'PT-SEMI-1',
-              materialName: '修油半成品', unit: 'kg', required: true, skuResolved: true, finished: false,
+              materialName: '修油半成品', unit: 'g', required: true, skuResolved: true, finished: false,
             }],
           },
           {
@@ -221,22 +222,22 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
             customFieldSchema: null,
             inputs: [{
               workflowPortId: 'IN2', materialKind: 'SEMI_FINISHED', skuId: 'PT-SEMI-1',
-              materialName: '修油半成品', unit: 'kg', required: true, skuResolved: true, finished: false,
+              materialName: '修油半成品', unit: 'g', required: true, skuResolved: true, finished: false,
             }],
             output: {
               workflowPortId: 'OUT2', materialKind: 'FINISHED_GOOD', skuId: 'PT-FIN-1',
-              materialName: '气调成品', unit: '盒', required: true, skuResolved: true, finished: true,
+              materialName: '气调成品', unit: '盒', gramsPerUnit: 200, required: true, skuResolved: true, finished: true,
             },
             outputs: [{
               workflowPortId: 'OUT2', materialKind: 'FINISHED_GOOD', skuId: 'PT-FIN-1',
-              materialName: '气调成品', unit: '盒', required: true, skuResolved: true, finished: true,
+              materialName: '气调成品', unit: '盒', gramsPerUnit: 200, required: true, skuResolved: true, finished: true,
             }],
           },
         ],
       },
     });
 
-    const wrapper = mountSheet();
+    const wrapper = mountSheet({ plannedQuantity: 100_000, plannedUnit: 'g' });
     await flushPromises();
     await flushPromises();
 
@@ -265,6 +266,8 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
     const p2Output = (p2.workflowContext as { output: { skuResolved: boolean; materialName: string | null } }).output;
     expect(p2Output.skuResolved).toBe(true);
     expect(p2Output.materialName).toBe('气调成品');
+    expect(p2.outputUnit).toBe('盒');
+    expect(wrapper.text()).toContain('计划成品 500 盒');
 
     // Inventory/rows still get fetched per-tab keyed off the derived archetype code.
     expect(getInventory).toHaveBeenCalledWith('F006', 'PLAN-WF-1', 'xiuyou', 1);

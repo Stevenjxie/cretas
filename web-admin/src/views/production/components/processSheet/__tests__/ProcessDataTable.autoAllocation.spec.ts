@@ -44,12 +44,12 @@ const workflowContext = {
   }],
 };
 
-function mountTable() {
+function mountTable(initialRows: Record<string, unknown>[] = []) {
   return mount(ProcessDataTable, {
     props: {
       factoryId: 'F006', planId: 'PLAN-1', processCode: 'xiuyou', processOrder: 1,
       processLabel: '修切', productTypeId: 'SEMI-BEEF', inputUnit: 'kg', outputUnit: 'kg',
-      isFirstProcess: true, initialRows: [], upstreamItems: [], ownInventoryItems: [],
+      isFirstProcess: true, initialRows, upstreamItems: [], ownInventoryItems: [],
       viewMode: 'card', workflowContext,
     },
     global: { plugins: [ElementPlus], stubs: { teleport: true, transition: false } },
@@ -125,5 +125,27 @@ describe('ProcessDataTable production-store automatic allocation', () => {
 
     expect(wrapper.text()).toContain('当前只能保存草稿，生产库中投料量不足，请联系仓管补料');
     expect(wrapper.text()).toContain('保存草稿');
+  });
+
+  it('keeps materialized LEGACY rows read-only while every new row uses workflow material totals', async () => {
+    const wrapper = mountTable([{
+      clientRowId: 'legacy-row-1', batchNumber: 'WIP-LEGACY-1', batchId: 1,
+      rowStatus: 'SAVED', submissionStatus: 'LEGACY', materialized: true,
+      payload: {
+        clientRowId: 'legacy-row-1', processCode: 'xiuyou', processOrder: 1,
+        rawMaterialInputs: [{ materialBatchId: 'RAW-BATCH-1', quantity: 12 }],
+        outputQuantity: 10,
+      },
+    }]);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('历史数据（只读）');
+    expect(wrapper.find('[data-testid="legacy-raw-batch-picker"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="legacy-readonly-row"]').exists()).toBe(true);
+    expect(wrapper.text()).not.toContain('保存草稿');
+
+    await addRow(wrapper);
+    expect(wrapper.findAll('[data-testid="material-input-total"]')).toHaveLength(1);
+    expect(wrapper.find('[data-testid="legacy-raw-batch-picker"]').exists()).toBe(false);
   });
 });

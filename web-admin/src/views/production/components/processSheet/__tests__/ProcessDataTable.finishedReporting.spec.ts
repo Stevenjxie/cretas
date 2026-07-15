@@ -53,12 +53,17 @@ const workflowContext = {
   }],
 };
 
-function mountTable(context: unknown = workflowContext, upstreamItems: unknown[] = []) {
+const availableUpstream = [{
+  batchNumber: 'WIP-AVAILABLE-1', produced: 12, used: 0, remaining: 12,
+  status: 'ACTIVE', unit: 'kg', productTypeName: '羊排熟制半成品',
+}];
+
+function mountTable(context: unknown = workflowContext, upstreamItems: unknown[] = availableUpstream) {
   return mount(ProcessDataTable, {
     props: {
       factoryId: 'F006', planId: 'PLAN-1', processCode: 'qidiao', processOrder: 2,
       processLabel: '冷冻', productTypeId: 'SKU-1', inputUnit: 'kg', outputUnit: '盒',
-      isFirstProcess: true, upstreamItems, ownInventoryItems: [], initialRows: [],
+      isFirstProcess: false, upstreamItems, ownInventoryItems: [], initialRows: [],
       viewMode: 'card', workflowContext: context,
     },
     global: { plugins: [ElementPlus], stubs: { teleport: true, transition: false } },
@@ -155,5 +160,15 @@ describe('ProcessDataTable finished-goods reporting contract', () => {
 
     expect(submitRow).not.toHaveBeenCalled();
     expect(wrapper.text()).toContain('无法从所选上游库存确定实际投入量');
+  });
+
+  it('disables add-row when a downstream workflow step has no available source inventory', async () => {
+    const wrapper = mountTable(workflowContext, []);
+    await flushPromises();
+
+    const addButton = wrapper.find('[data-testid="add-process-row"]');
+    expect(addButton.attributes('disabled')).toBeDefined();
+    expect(wrapper.text()).toContain('暂无可用上游库存');
+    expect(wrapper.text()).toContain('请先完成上游报工或联系仓管补料');
   });
 });

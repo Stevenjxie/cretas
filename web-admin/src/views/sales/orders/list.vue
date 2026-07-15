@@ -596,6 +596,7 @@ interface OrderItem {
   packagingUnit?: string;
   packagingBaseUnit?: string;
   packagingFactor?: number;
+  packagingLoadError?: boolean;
   packagingSpecs?: Array<{
     id: string;
     name: string;
@@ -614,6 +615,8 @@ interface OrderItem {
   // source: 'CUSTOMER' (客户专属, 会自动覆盖 unitPrice) | 'GLOBAL' (全局价, 仅提示)
   contractPriceHint?: { price: number; source: string; priceListName: string } | null;
 }
+
+const packagingRequestSequence = new WeakMap<OrderItem, number>();
 
 const form = ref({
   customerId: '',
@@ -750,6 +753,7 @@ function emptyOrderItem(): OrderItem {
     boxQuantity: null,
     packagingSpecId: '',
     packagingSpecs: [],
+    packagingLoadError: false,
     sourceWarehouseCode: getRememberedWarehouse(),
     priceMemoryHint: null,
     contractPriceHint: null,
@@ -933,10 +937,9 @@ function onProductSelect(item: TableRow, productId: string) {
   const p = products.value.find((x: TableRow) => x.id === productId);
   if (p) {
     item.specification = p.specification || p.packageSpec || '';
-    // T130 Feature D — 单位口径: 份=下单主单位, 盒=包装形态(F006 1份=1盒).
-    // 产品字典若标 '盒' → 规范成 '份' (否则单位 el-select 没 '盒' 选项会显空白).
+    // 销售单位继承 SKU 基本单位。包装单位（箱等）是额外可选换算，不能把「盒」改写为「份」。
     const pu = String(p.unit || '份');
-    item.unit = pu === '盒' ? '份' : (pu || item.unit || '份');
+    item.unit = pu || item.unit || '份';
     if (p.unitPrice != null && (item.unitPrice == null || item.unitPrice === 0)) {
       item.unitPrice = Number(p.unitPrice);
     }
@@ -959,7 +962,10 @@ function onProductSelect(item: TableRow, productId: string) {
 }
 
 async function loadPackagingSpecs(item: OrderItem, productId: string) {
+  const requestSequence = (packagingRequestSequence.get(item) || 0) + 1;
+  packagingRequestSequence.set(item, requestSequence);
   item.packagingSpecId = item.packagingSpecId || '';
+  item.packagingLoadError = false;
   const historicalSpec = item.packagingSpecId && item.packagingUnit
       && item.packagingBaseUnit && Number(item.packagingFactor) > 0
     ? {
@@ -979,20 +985,29 @@ async function loadPackagingSpecs(item: OrderItem, productId: string) {
       `/${factoryId.value}/product-types/${productId}/packaging-specs`,
       { _silent: true } as never,
     );
-    item.packagingSpecs = response.success && Array.isArray(response.data)
-      ? response.data.filter((spec) => spec.active !== false)
-      : [];
+    if (packagingRequestSequence.get(item) !== requestSequence
+      || item.productTypeId !== productId) return;
+    if (!response.success || !Array.isArray(response.data)) {
+      throw new Error(response.message || '包装规格加载失败');
+    }
+    item.packagingSpecs = response.data.filter((spec) => spec.active !== false);
     if (historicalSpec && !item.packagingSpecs.some((spec) => spec.id === historicalSpec.id)) {
       item.packagingSpecs.push(historicalSpec);
     }
     onOrderUnitChange(item);
   } catch {
+    if (packagingRequestSequence.get(item) !== requestSequence
+      || item.productTypeId !== productId) return;
     item.packagingSpecs = [];
+    item.packagingLoadError = true;
+    ElMessage({ message: '包装规格加载失败，请重试后再创建订单', type: 'error', duration: 0, showClose: true });
   }
 }
 
 function packagingOptions(item: OrderItem) {
-  return (item.packagingSpecs || []).filter((spec) => spec.packageUnit === item.unit);
+  return (item.packagingSpecs || []).filter((spec) => (
+    spec.packageUnit === item.unit || spec.baseUnit === item.unit
+  ));
 }
 
 function requiresPackagingSelection(item: OrderItem): boolean {
@@ -1159,11 +1174,15 @@ function specDisplay(item: TableRow): string {
   return String(p?.specification || p?.packageSpec || '');
 }
 
-// T130 Feature D — 单位下拉选项: 份 + (产品配了箱规才给 箱).
+// 单位下拉先使用 SKU 基本单位，再追加该 SKU 的包装单位；仅未选 SKU 时保留旧的「份」占位。
 function unitOptions(item: TableRow): string[] {
   const p = products.value.find((x: TableRow) => x.id === item.productTypeId);
-  const opts = ['份'];
-  if (p && Number(p.boxConversionCoefficient) > 0) opts.push(String(p.level1Unit || '箱'));
+  const baseUnit = String(p?.unit || item.unit || '份');
+  const opts = [baseUnit];
+  if (p && Number(p.boxConversionCoefficient) > 0) {
+    const legacyPackageUnit = String(p.level1Unit || '箱');
+    if (!opts.includes(legacyPackageUnit)) opts.push(legacyPackageUnit);
+  }
   for (const spec of ((item.packagingSpecs || []) as NonNullable<OrderItem['packagingSpecs']>)) {
     if (spec.packageUnit && !opts.includes(spec.packageUnit)) opts.push(spec.packageUnit);
   }
@@ -1221,6 +1240,7 @@ function toOrderItemPayload(items: OrderItem[]): OrderItem[] {
     delete payload.packagingUnit;
     delete payload.packagingBaseUnit;
     delete payload.packagingFactor;
+    delete payload.packagingLoadError;
     return payload;
   });
 }
@@ -1234,6 +1254,9 @@ async function handleCreate() {
   if (selectedItems.some((i) => !i.quantity || Number(i.quantity) <= 0)) return ElMessage.warning('产品数量必须大于0');
   // 单位校验
   if (selectedItems.some((i) => !i.unit)) return ElMessage.warning('请填写所有明细的单位');
+  if (selectedItems.some((i) => i.packagingLoadError)) {
+    return ElMessage.warning('包装规格加载失败，请重试后再创建订单');
+  }
   if (selectedItems.some((i) => requiresPackagingSelection(i) && !i.packagingSpecId)) {
     return ElMessage.warning('存在多种装箱规格，请为对应产品选择本次使用的箱规');
   }
@@ -2549,11 +2572,13 @@ function handleMergePurchase() {
         </el-form-item>
         <CanvasDynamicFields v-model="form.customFields" module-code="sales_order" />
         <el-divider>{{ label('product') }}明细</el-divider>
+        <div class="order-items-scroll" role="region" aria-label="产品明细，可横向滚动查看全部字段" tabindex="0">
+          <div class="order-items-grid">
         <div class="item-row item-header">
-          <span style="width: 200px">品名</span>
-          <span style="width: 120px">规格</span>
-          <span style="width: 130px">下单数量</span>
-          <span style="width: 80px">单位</span>
+          <span class="sticky-col sticky-product" style="width: 200px">品名</span>
+          <span class="sticky-col sticky-spec" style="width: 120px">规格</span>
+          <span class="sticky-col sticky-quantity" style="width: 130px">下单数量</span>
+          <span class="sticky-col sticky-unit" style="width: 80px">单位</span>
           <span style="width: 150px">包装规格</span>
           <span style="width: 130px">单价 (未税)</span>
           <!-- E-FP-1 Rule2: 含税单价/含税小计派生只读，用户填未税+税率，此列自动显示 -->
@@ -2567,14 +2592,15 @@ function handleMergePurchase() {
           <span style="width: 40px">操作</span>
         </div>
         <div v-for="(item, idx) in form.items" :key="idx" class="item-row">
-          <el-select v-model="item.productTypeId" placeholder="选择产品" filterable clearable style="width: 200px" @change="(v: string) => onProductSelect(item, v)">
+          <el-select v-model="item.productTypeId" class="sticky-col sticky-product" placeholder="选择产品" filterable clearable style="width: 200px" @change="(v: string) => onProductSelect(item, v)">
             <el-option v-for="p in products" :key="p.id" :label="productOptionLabel(p)" :value="p.id" />
           </el-select>
           <!-- T130 Feature D — 规格只读: 取产品字典 specification/packageSpec, 抄码品由 onProductSelect 识别. -->
-          <el-input :model-value="specDisplay(item)" placeholder="规格" style="width: 120px" disabled />
+          <el-input :model-value="specDisplay(item)" class="sticky-col sticky-spec" placeholder="规格" style="width: 120px" disabled />
           <!-- T130 Feature D6 — 下单数量纳入 Tab 链; Tab/Shift+Tab 跨行跳, 末行 Tab → 创建按钮. -->
           <el-input-number
             v-model="item.quantity"
+            class="sticky-col sticky-quantity"
             :min="0"
             :ref="(el: any) => { quantityRefs[idx] = el; }"
             style="width: 130px"
@@ -2582,11 +2608,16 @@ function handleMergePurchase() {
             @keydown.tab="(e: KeyboardEvent) => handleQuantityTab(e, idx)"
           />
           <!-- T130 Feature D — 单位下拉: 份 + (产品配箱规才给 箱). NO allow-create. 默认 份. -->
-          <el-select v-model="item.unit" filterable style="width: 80px" @change="() => onOrderUnitChange(item)">
+          <el-select v-model="item.unit" class="sticky-col sticky-unit" filterable style="width: 80px" @change="() => onOrderUnitChange(item)">
             <el-option v-for="u in unitOptions(item)" :key="u" :label="u" :value="u" />
           </el-select>
+          <div v-if="item.packagingLoadError" style="width: 150px; text-align: center;">
+            <el-button type="danger" link size="small" @click="loadPackagingSpecs(item, item.productTypeId)">
+              箱规加载失败，重试
+            </el-button>
+          </div>
           <el-select
-            v-if="packagingOptions(item).length > 0"
+            v-else-if="packagingOptions(item).length > 0"
             v-model="item.packagingSpecId"
             :placeholder="requiresPackagingSelection(item) ? '请选择箱规' : '默认箱规'"
             style="width: 150px"
@@ -2697,6 +2728,8 @@ function handleMergePurchase() {
           <el-button type="danger" link @click="removeItem(idx)" :disabled="form.items.length <= 1">删除</el-button>
         </div>
         <el-button style="width: 100%; margin-top: 8px" @click="addItem">+ 添加行</el-button>
+          </div>
+        </div>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -2929,7 +2962,25 @@ function handleMergePurchase() {
   .bulk-bar-count { font-size: 13px; color: #606266; margin-right: 4px; strong { color: #409eff; } }
 }
 .pagination-wrapper { display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #ebeef5; margin-top: 16px; }
+.order-items-scroll {
+  width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  padding-bottom: 8px;
+  scrollbar-gutter: stable;
+}
+.order-items-scroll:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 2px;
+}
+.order-items-grid { min-width: 1580px; }
 .item-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.sticky-col { position: sticky; z-index: 3; flex-shrink: 0; background: var(--el-bg-color, #fff); }
+.sticky-product { left: 0; }
+.sticky-spec { left: 208px; }
+.sticky-quantity { left: 336px; }
+.sticky-unit { left: 474px; box-shadow: 8px 0 10px -10px rgb(32 46 66 / 45%); }
+.item-header .sticky-col { z-index: 4; background: var(--el-fill-color-light, #f5f7fa); }
 /* Sprint 4 W2 S-PRICE-1 R1: unitPrice + 上次成交价 chip 垂直堆 */
 .unit-price-wrap { display: flex; flex-direction: column; gap: 2px; align-items: stretch; }
 .price-memory-chip { cursor: pointer; font-size: 11px; line-height: 1.2; padding: 1px 4px; }

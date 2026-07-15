@@ -142,7 +142,8 @@ interface SheetRow {
   clientRowId: string;
   batchNumber: string | null;
   rowStatus: 'SAVED' | 'DRAFT' | 'UNSAVED';
-  submissionStatus: 'DRAFT' | 'SUBMITTED' | null;
+  submissionStatus: 'DRAFT' | 'SUBMITTED' | 'LEGACY' | null;
+  materialized: boolean;
   blockingMessage: string | null;
   /** 已小结时间 (ISO-8601); null = 未小结，可编辑 */
   interimSettledAt: string | null;
@@ -494,6 +495,7 @@ function blankRow(): SheetRow {
     batchNumber: null,
     rowStatus: 'UNSAVED',
     submissionStatus: null,
+    materialized: false,
     blockingMessage: null,
     interimSettledAt: null,
     saving: false,
@@ -550,6 +552,7 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
   row.batchNumber = view.batchNumber;
   row.rowStatus = view.rowStatus;
   row.submissionStatus = view.submissionStatus ?? null;
+  row.materialized = view.materialized === true;
   row.interimSettledAt = view.interimSettledAt ?? null;
 
   if (isXiuYou.value) {
@@ -782,6 +785,10 @@ watch(
 );
 
 function addRow() {
+  if (addRowBlockedReason.value) {
+    ElMessage({ message: addRowBlockedReason.value, type: 'warning', duration: 0, showClose: true });
+    return;
+  }
   rows.value.push(blankRow());
 }
 
@@ -791,8 +798,16 @@ function addRow() {
 
 /** 已小结 (interimSettledAt != null): 只读，默认折叠。 */
 const settledRows = computed(() => rows.value.filter((r) => r.interimSettledAt != null));
+function isReadOnlyRow(row: SheetRow): boolean {
+  return row.submissionStatus === 'LEGACY' || row.materialized;
+}
+const historicalRows = computed(() => rows.value.filter((r) =>
+  r.interimSettledAt == null && isReadOnlyRow(r),
+));
 /** 未小结 (interimSettledAt == null): 正常可编辑。 */
-const activeRows  = computed(() => rows.value.filter((r) => r.interimSettledAt == null));
+const activeRows  = computed(() => rows.value.filter((r) =>
+  r.interimSettledAt == null && !isReadOnlyRow(r),
+));
 
 /** 已小结区块展开状态 (默认折叠 → 操作员看到干净的录入界面)。 */
 const settledExpanded = ref(false);
@@ -1119,6 +1134,7 @@ function upstreamWarning(row: SheetRow): string | null {
 // Save-disabled reason (fool-proof gate)
 // -------------------------------------------------------------------------
 function saveDisabledReason(row: SheetRow): string | null {
+  if (isReadOnlyRow(row)) return '已入账或历史数据只读，不能直接修改';
   if (row.submissionStatus === 'SUBMITTED') return '该行已正式报工，不能直接修改';
   // 2B.2 多产出: 单产出字段(下方 'output'/'after'/'usedWeight'+sumBoxes 等)已被「多产出」录入块
   // 取代、不再渲染 —— 下方 `&& !isMultiOutput.value` 跳过那些"填了单产出输出吗"检查(它们永远
@@ -1487,6 +1503,10 @@ async function handleSave(row: SheetRow, action: 'draft' | 'submit') {
 }
 
 async function handleDelete(row: SheetRow) {
+  if (isReadOnlyRow(row)) {
+    ElMessage({ message: '已入账或历史数据只读，不能删除', type: 'error', duration: 0, showClose: true });
+    return;
+  }
   if (row.rowStatus === 'UNSAVED') {
     rows.value = rows.value.filter((r) => r !== row);
     return;
@@ -1588,6 +1608,15 @@ let sfiLoadSeq = 0;
 const fgOptions = ref<FinishedGoodsStockItem[]>([]);
 const fgLoading = ref(false);
 let fgLoadSeq = 0;
+
+const addRowBlockedReason = computed(() => {
+  if (!props.workflowContext || props.isFirstProcess || !supportsUpstreamSources.value) return null;
+  if (sfiLoading.value || fgLoading.value) return '正在加载可用上游库存，请稍候';
+  const hasSource = props.upstreamItems.some((item) => item.remaining > 0)
+    || sfiOptions.value.length > 0
+    || fgOptions.value.length > 0;
+  return hasSource ? null : '暂无可用上游库存，请先完成上游报工或联系仓管补料';
+});
 
 /**
  * 是否提供「半成品库存(SFI)」投料选项。
@@ -1989,6 +2018,27 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
         </template>
       </div>
 
+      <div v-if="historicalRows.length > 0" class="sp-settled-section" data-testid="legacy-readonly-row">
+        <div class="sp-settled-header">
+          <span>已入账/历史数据（只读） · {{ historicalRows.length }} 行</span>
+          <el-tag type="info" size="small" style="margin-left:8px">不可修改</el-tag>
+        </div>
+        <div v-for="row in historicalRows" :key="row.clientRowId" class="sp-card sp-card-settled">
+          <div class="sp-card-header">
+            <el-tag type="info" size="small">历史记录</el-tag>
+            <span v-if="row.batchNumber" class="sp-card-batchnum">{{ row.batchNumber }}</span>
+            <span class="sp-settled-summary">{{ settledRowSummary(row) }}</span>
+            <div style="flex:1" />
+            <el-button
+              v-if="hasHistory(row)"
+              link size="small" :icon="Clock"
+              title="查看操作记录"
+              aria-label="查看操作记录"
+              @click="openHistory(row)" />
+          </div>
+        </div>
+      </div>
+
       <div v-for="(row, ri) in activeRows" :key="row.clientRowId" class="sp-card"
            :class="{ 'sp-card-saved': row.rowStatus === 'SAVED', 'sp-card-draft': row.rowStatus === 'DRAFT' }">
 
@@ -2024,13 +2074,16 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
           <el-button
             v-if="hasHistory(row)"
             link size="small" :icon="Clock"
-            title="操作记录"
+            title="查看操作记录"
+            aria-label="查看操作记录"
             @click="openHistory(row)"
             style="margin-left:4px" />
           <el-button
             v-if="row.submissionStatus !== 'SUBMITTED'"
             type="danger" link size="small" :icon="Delete"
             :loading="row.deleting"
+            title="删除本行"
+            aria-label="删除本行"
             @click="handleDelete(row)"
             style="margin-left:4px" />
         </div>
@@ -2402,7 +2455,22 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 
       <!-- Add row button (card mode) -->
       <div style="margin-top:8px">
-        <el-button :icon="Plus" @click="addRow" style="width:100%" plain>+ 新增行</el-button>
+        <el-alert
+          v-if="addRowBlockedReason && !sfiLoading && !fgLoading"
+          :title="addRowBlockedReason"
+          type="warning"
+          :closable="false"
+          show-icon
+          style="margin-bottom:8px"
+        />
+        <el-button
+          data-testid="add-process-row"
+          :icon="Plus"
+          :disabled="!!addRowBlockedReason"
+          :title="addRowBlockedReason || '新增报工行'"
+          @click="addRow"
+          style="width:100%"
+          plain>+ 新增行</el-button>
       </div>
     </template>
 
@@ -2509,6 +2577,25 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               </td>
             </tr>
           </template>
+        </tbody>
+
+        <tbody v-if="historicalRows.length > 0" data-testid="legacy-readonly-row">
+          <tr class="sp-settled-banner">
+            <td :colspan="999">已入账/历史数据（只读） · {{ historicalRows.length }} 行，不可修改</td>
+          </tr>
+          <tr v-for="row in historicalRows" :key="row.clientRowId" class="sp-tr sp-tr-settled">
+            <td class="sp-td"><el-tag type="info" size="small">历史记录</el-tag></td>
+            <td class="sp-td">{{ settledRowSummary(row) }}</td>
+            <td class="sp-td sp-td-batch"><span class="sp-readonly sp-batch-num">{{ row.batchNumber || '—' }}</span></td>
+            <td class="sp-td" :colspan="999">
+              <el-button
+                v-if="hasHistory(row)"
+                link size="small" :icon="Clock"
+                title="查看操作记录"
+                aria-label="查看操作记录"
+                @click="openHistory(row)" />
+            </td>
+          </tr>
         </tbody>
 
         <tbody>
@@ -2824,13 +2911,16 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 <el-button
                   v-if="hasHistory(row)"
                   link size="small" :icon="Clock"
-                  title="操作记录"
+                  title="查看操作记录"
+                  aria-label="查看操作记录"
                   @click="openHistory(row)"
                   style="margin-left:4px" />
                 <el-button
                   v-if="row.submissionStatus !== 'SUBMITTED'"
                   type="danger" link size="small" :icon="Delete"
                   :loading="row.deleting"
+                  title="删除本行"
+                  aria-label="删除本行"
                   @click="handleDelete(row)"
                   style="margin-left:4px" />
               </td>
@@ -3028,7 +3118,22 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 
     <!-- Add row button (grid mode) -->
     <div style="margin-top:8px">
-      <el-button :icon="Plus" @click="addRow" style="width:100%" plain>
+      <el-alert
+        v-if="addRowBlockedReason && !sfiLoading && !fgLoading"
+        :title="addRowBlockedReason"
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom:8px"
+      />
+      <el-button
+        data-testid="add-process-row"
+        :icon="Plus"
+        :disabled="!!addRowBlockedReason"
+        :title="addRowBlockedReason || '新增报工行'"
+        @click="addRow"
+        style="width:100%"
+        plain>
         + 新增行
       </el-button>
     </div>

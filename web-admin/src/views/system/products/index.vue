@@ -82,7 +82,7 @@ const productExtendedFields = computed<FieldConfig[]>(() => [
   // T146 Fix4: gramsPerUnit placeholder 动态替换二级单位名 (如 "每盒多少克")
   // T157 (2026-07-13) 双模式表单瘦身: 组重打 —— 克重=规格; 出成率/单锅产能=产能; 研发人工=成本。
   //   驱动模板里「规格 section (标准克重内联)」+「高级设置」下的 成本/产能/库存 分组渲染。
-  { key: 'gramsPerUnit', label: `标准单位换算（1${formData.unit || '基本单位'}）`, type: 'decimal', group: '规格', precision: 3, suffix: '克', order: 3,
+  { key: 'gramsPerUnit', label: '标准单位换算', type: 'decimal', group: '系统', precision: 3, suffix: '克', order: 3,
     placeholder: gramsPerUnitPlaceholder.value },
   // 六扇门 配料单 (配料员按锅配料): 单锅产能 = 1 锅产出数量 (同计划产量单位); 配料单据此算锅数 = ceil(计划量/单锅产能)
   { key: 'singlePotCapacity', label: '单锅产能', type: 'decimal', group: '产能', precision: 3, order: 6,
@@ -728,7 +728,6 @@ const visibleExtendedFields = computed<FieldConfig[]>(() => {
 
 // T157 (2026-07-13) 双模式表单瘦身: 按组分渲染 —— 规格 section(标准克重) / 高级设置内 成本·产能·库存。
 // 多个 DynamicEntityForm 共享 :model-value=formData + @update=handleExtendedFormUpdate(Object.assign 合并) 安全。
-const specExtendedFields = computed(() => visibleExtendedFields.value.filter(f => f.group === '规格'));
 const costExtendedFields = computed(() => visibleExtendedFields.value.filter(f => f.group === '成本' || f.group === '商务信息'));
 const capacityExtendedFields = computed(() => visibleExtendedFields.value.filter(f => f.group === '产能'));
 const inventoryExtendedFields = computed(() => visibleExtendedFields.value.filter(f => f.group === '库存采购'));
@@ -1552,13 +1551,15 @@ async function handleAiProductCreate() {
       v-model="dialogVisible"
       :title="dialogTitle"
       width="600px"
+      class="product-edit-dialog"
+      :modal-class="'product-edit-modal'"
       :close-on-click-modal="false"
     >
       <el-form
         ref="formRef"
         :model="formData"
         :rules="formRules"
-        label-width="100px"
+        label-width="120px"
         label-position="right"
       >
         <!-- T147 Fix2: 新增模式下实时预览将生成的编号并回填 (用户可手输覆盖); 编辑模式显示既有编号(禁用) -->
@@ -1616,15 +1617,22 @@ async function handleAiProductCreate() {
           <div class="form-tip" v-if="isSemiFinishedSku">半成品库存与报工单位固定为 kg，不维护标准克重或装箱规格</div>
           <div class="form-tip" v-else>基本单位 = 最小计量/售卖单位（成品如「盒」「袋」）；修改后会同步标准克重和所有装箱换算右侧单位</div>
         </el-form-item>
-        <!-- 标准克重 (每 {基本单位} 多少克) — 结构化, 只填数字, 单位系统显示 -->
-        <DynamicEntityForm
-          v-if="!isSemiFinishedSku && specExtendedFields.length"
-          :fields="specExtendedFields"
-          :model-value="formData as TableRow"
-          @update:model-value="handleExtendedFormUpdate"
-          :columns="1"
-          label-width="120px"
-        />
+        <!-- 标准单位换算明确展示完整等式，避免动态长标签在窄弹窗中折行。 -->
+        <el-form-item v-if="!isSemiFinishedSku" label="标准单位换算" label-width="120px">
+          <div class="standard-weight-row">
+            <span class="standard-weight-unit">1 {{ formData.unit || '基本单位' }} =</span>
+            <el-input-number
+              v-model="formData.gramsPerUnit"
+              :min="0"
+              :precision="3"
+              :controls="false"
+              :placeholder="gramsPerUnitPlaceholder"
+              @change="gramsPerUnitManuallyEdited = true"
+            />
+            <span>克</span>
+          </div>
+          <div class="form-tip">只填写数字；规格和每箱总重会按此换算并自动以 g/kg 展示</div>
+        </el-form-item>
         <!-- 同一 SKU 允许多条装箱换算；标准克重仍保持唯一。第一条是默认箱规。 -->
         <el-form-item v-if="!isSemiFinishedSku" label="装箱换算" label-width="120px">
           <div class="packaging-spec-list">
@@ -1971,9 +1979,9 @@ async function handleAiProductCreate() {
                 </div>
               </div>
               <div class="linked-actions">
-                <el-button :icon="Rank" link size="small" :disabled="idx === 0" @click="handleMoveProcess(idx, 'up')" title="上移" />
-                <el-button :icon="Rank" link size="small" :disabled="idx === linkedProcesses.length - 1" @click="handleMoveProcess(idx, 'down')" title="下移" />
-                <el-button :icon="DeleteIcon" link size="small" type="danger" @click="handleRemoveProcess(item)" />
+                <el-button :icon="Rank" link size="small" :disabled="idx === 0" @click="handleMoveProcess(idx, 'up')" title="上移" aria-label="上移工序" />
+                <el-button :icon="Rank" link size="small" :disabled="idx === linkedProcesses.length - 1" @click="handleMoveProcess(idx, 'down')" title="下移" aria-label="下移工序" />
+                <el-button :icon="DeleteIcon" link size="small" type="danger" title="移除" aria-label="移除工序" @click="handleRemoveProcess(item)" />
               </div>
             </div>
           </div>
@@ -2153,6 +2161,34 @@ async function handleAiProductCreate() {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.standard-weight-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.standard-weight-unit {
+  min-width: 54px;
+  color: var(--el-text-color-primary, #303133);
+  font-weight: 500;
+}
+
+:global(.product-edit-modal .el-dialog__body) {
+  max-height: calc(100vh - 190px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+:global(.product-edit-modal .el-dialog__footer) {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  padding-top: 12px;
+  background: var(--el-bg-color, #fff);
+  border-top: 1px solid var(--el-border-color-lighter, #ebeef5);
 }
 
 .packaging-spec-item {

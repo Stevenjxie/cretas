@@ -94,9 +94,9 @@ export function reconcileWorkflowUnits(
     const product = context.products[material.skuId];
     const targetUnit = workflowReportingUnit(materialNode.kind, product?.primaryUnit, context.aliases);
     if (!targetUnit) {
-      warnings.push({
+      errors.push({
         code: 'SKU_UNIT_UNKNOWN',
-        message: `SKU ${material.skuId} 缺少规范主单位`,
+        message: `SKU ${material.skuId} 缺少规范主单位，请先维护 SKU 单位后再发布`,
         nodeId: materialNode.id,
       });
       return;

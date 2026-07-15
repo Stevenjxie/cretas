@@ -76,6 +76,20 @@ class ProcessSheetWorkflowUnitNormalizationTest {
         }
     }
 
+    private BigDecimal toStorageQuantity(
+            BigDecimal reportingQuantity, String reportingUnit, String storageUnit) throws Throwable {
+        Method method = ProcessSheetServiceImpl.class.getDeclaredMethod(
+                "convertReportingQuantityToStorage",
+                BigDecimal.class, String.class, String.class, String.class);
+        method.setAccessible(true);
+        try {
+            return (BigDecimal) method.invoke(
+                    null, reportingQuantity, reportingUnit, storageUnit, "原料批次");
+        } catch (InvocationTargetException e) {
+            throw e.getCause();
+        }
+    }
+
     private ProcessSheetRowRequest row(int processOrder, String unit, String inputUnit, String outputUnit) {
         ProcessSheetRowRequest req = new ProcessSheetRowRequest();
         req.setProcessOrder(processOrder);
@@ -304,5 +318,31 @@ class ProcessSheetWorkflowUnitNormalizationTest {
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> apply(impl, row(1, "kg", "kg", "kg")));
         assertEquals("PROCESS_SHEET_WORKFLOW_CONFIG_UNAVAILABLE", ex.getErrorCode());
+    }
+
+    @Test
+    void kgReportingQuantityConvertsToLegacyGramStorageAtDeductionBoundary() throws Throwable {
+        assertEquals(0, new BigDecimal("1250").compareTo(
+                toStorageQuantity(new BigDecimal("1.25"), "kg", "g")));
+    }
+
+    @Test
+    void gramReportingQuantityConvertsToKgStorageAtDeductionBoundary() throws Throwable {
+        assertEquals(0, new BigDecimal("1.25").compareTo(
+                toStorageQuantity(new BigDecimal("1250"), "g", "kg")));
+    }
+
+    @Test
+    void nonMassStorageMismatchStillFailsClosed() {
+        assertThatThrownBy(() -> toStorageQuantity(new BigDecimal("2"), "kg", "盒"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        error -> assertEquals("PROCESS_SHEET_SOURCE_UNIT_MISMATCH", error.getErrorCode()));
+    }
+
+    @Test
+    void missingStorageUnitFailsClosed() {
+        assertThatThrownBy(() -> toStorageQuantity(new BigDecimal("2"), "kg", null))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        error -> assertEquals("PROCESS_SHEET_SOURCE_UNIT_MISMATCH", error.getErrorCode()));
     }
 }

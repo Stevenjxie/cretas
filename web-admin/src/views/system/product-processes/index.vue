@@ -372,18 +372,13 @@ async function loadProducts() {
     );
     if (res.success && res.data?.content) {
       products.value = res.data.content;
-      if (products.value.length > 0 && !selectedProductId.value) {
-        const preferredProductId = routeQueryString(route.query.productTypeId);
-        const preferred = preferredProductId ? products.value.find(p => p.id === preferredProductId) : undefined;
-        // 深链到某产品时: 若它是原料, 自动切原料模式 (否则它不在成品子集里会被过滤掉选不中)。
-        // ?ownerMode=RAW: 未能唯一判定具体原料时的兜底深链 (存货生产「去产品工序配置」防呆),
-        // 只切"原料"模式让用户从该子集里选, 不瞎猜选中哪个。
-        if ((preferred && (preferred.productCategory || '') === 'RAW_MATERIAL')
-          || routeQueryString(route.query.ownerMode) === 'RAW') {
-          ownerMode.value = 'RAW';
+      if (products.value.length > 0) {
+        const selectedFromRoute = applyRouteProductSelection(route.query.productTypeId, true);
+        if (!selectedFromRoute && !selectedProductId.value) {
+          if (routeQueryString(route.query.ownerMode) === 'RAW') ownerMode.value = 'RAW';
+          suppressNextWatch = true;
+          selectedProductId.value = productsByMode.value[0]?.id || products.value[0].id;
         }
-        suppressNextWatch = true;
-        selectedProductId.value = preferred ? preferred.id : (productsByMode.value[0]?.id || products.value[0].id);
       }
     }
   } catch (e) {
@@ -399,6 +394,27 @@ function routeQueryString(value: unknown): string {
   }
   return typeof value === 'string' ? value : '';
 }
+
+/**
+ * URL 中的 productTypeId 是页面选择的权威来源。既处理首次加载，也处理 SPA 内从 SKU
+ * 列表再次进入同一路由时组件未卸载的情况，避免沿用上一次选择。
+ */
+function applyRouteProductSelection(value: unknown, suppressReload = false): boolean {
+  const preferredProductId = routeQueryString(value);
+  if (!preferredProductId) return false;
+  const preferred = products.value.find((product) => product.id === preferredProductId);
+  if (!preferred) return false;
+  ownerMode.value = (preferred.productCategory || '') === 'RAW_MATERIAL' ? 'RAW' : 'FINISHED';
+  if (selectedProductId.value !== preferred.id) {
+    suppressNextWatch = suppressReload;
+    selectedProductId.value = preferred.id;
+  }
+  return true;
+}
+
+watch(() => route.query.productTypeId, (value) => {
+  if (products.value.length > 0) applyRouteProductSelection(value);
+});
 
 async function loadAllProcesses() {
   if (!factoryId.value) return;

@@ -65,6 +65,28 @@ class ProductionStockAllocationServiceTest {
     }
 
     @Test
+    void allocatesLegacyGramStockUsingKgReportingQuantity() {
+        ProcessSheetRowRequest.MaterialInputTotal input = total("RAW-1", "2");
+        MaterialBatch grams = batch("B1", "RAW-1", "WKS-1", "5000", LocalDate.of(2026, 7, 20));
+        grams.setQuantityUnit("g");
+
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
+                "F006", "RAW-1", "WKS-1"))
+                .thenReturn(List.of(grams));
+        when(allocationRepository.sumPendingQuantityByMaterialBatchId("F006", "B1"))
+                .thenReturn(new BigDecimal("1"));
+
+        List<ProductionStockAllocationService.PlannedAllocation> result =
+                service.plan("F006", List.of(input));
+
+        assertThat(result).singleElement().satisfies(allocation -> {
+            assertThat(allocation.quantity()).isEqualByComparingTo("2");
+            assertThat(allocation.unit()).isEqualTo("kg");
+        });
+    }
+
+    @Test
     void rejectsFormalSubmissionWithStructuredShortageAndExactOperatorMessage() {
         ProcessSheetRowRequest.MaterialInputTotal input = total("RAW-1", "10");
         MaterialBatch only = batch("B1", "RAW-1", "WKS-1", "7", LocalDate.of(2026, 7, 20));
@@ -123,6 +145,29 @@ class ProductionStockAllocationServiceTest {
                     assertThat(error.getShortage().getRequired()).isEqualByComparingTo("5");
                     assertThat(error.getShortage().getAvailable()).isEqualByComparingTo("4");
                     assertThat(error.getShortage().getShortage()).isEqualByComparingTo("1");
+                });
+    }
+
+    @Test
+    void legacyExplicitGramBatchIsComparedAndReservedInKg() {
+        MaterialBatch grams = batch("B1", "RAW-1", "WKS-1", "5000", LocalDate.of(2026, 7, 20));
+        grams.setQuantityUnit("g");
+        ProcessSheetRowRequest.RawInput input = new ProcessSheetRowRequest.RawInput();
+        input.setMaterialBatchId("B1");
+        input.setSkuId("RAW-1");
+        input.setQuantity(new BigDecimal("2"));
+
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        when(materialBatchRepository.findByIdAndFactoryIdForUpdate("B1", "F006"))
+                .thenReturn(java.util.Optional.of(grams));
+        when(allocationRepository.sumPendingQuantityByMaterialBatchId("F006", "B1"))
+                .thenReturn(new BigDecimal("1"));
+
+        assertThat(service.planExplicit("F006", List.of(input)))
+                .singleElement()
+                .satisfies(allocation -> {
+                    assertThat(allocation.quantity()).isEqualByComparingTo("2");
+                    assertThat(allocation.unit()).isEqualTo("kg");
                 });
     }
 
