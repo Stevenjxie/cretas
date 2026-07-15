@@ -8,6 +8,7 @@ MIGRATION="$ROOT_DIR/backend/java/cretas-api/src/main/resources/db/flyway/V20261
 WAIT_FOR_HEALTH="$ROOT_DIR/tests/v1-e2e/scripts/wait-for-health.sh"
 AGENTS_FILE="$ROOT_DIR/AGENTS.md"
 DEPLOY_SKILL="$ROOT_DIR/.agents/skills/deploy-backend/SKILL.md"
+L1_SMOKE="$ROOT_DIR/tests/v1-e2e/web/l1-smoke.spec.ts"
 
 assert_contains() {
     local file=$1
@@ -44,6 +45,7 @@ assert_contains "$DEPLOY_SKILL" 'feature-head == <pr-head>'
 assert_contains "$DEPLOY_SKILL" 'git merge-base --is-ancestor <merge-commit> origin/main'
 assert_contains "$DEPLOY_SKILL" 'git diff --quiet "$feature-head" <merge-commit>'
 assert_contains "$DEPLOY_SKILL" 'git switch --detach origin/main'
+assert_contains "$L1_SMOKE" '/\b401\b|Unauthorized|500 Internal|NoResourceFoundException/i'
 
 # A dead backend must fail immediately instead of consuming the full timeout.
 set +e

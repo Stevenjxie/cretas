@@ -149,7 +149,9 @@ test.describe('L1 Smoke — 主菜单导航 @pr-gate', () => {
       expect(
         bodyText,
         `"${menu.name}" 页面包含 HTTP 错误文字`
-      ).not.toMatch(/401|Unauthorized|500 Internal|NoResourceFoundException/i);
+      // Match an HTTP status token, not digits embedded in business IDs such
+      // as material batch `E2E-...-92236401`.
+      ).not.toMatch(/\b401\b|Unauthorized|500 Internal|NoResourceFoundException/i);
     });
   }
 });
