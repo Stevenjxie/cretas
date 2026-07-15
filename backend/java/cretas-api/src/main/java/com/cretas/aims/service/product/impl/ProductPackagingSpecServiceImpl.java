@@ -201,6 +201,12 @@ public class ProductPackagingSpecServiceImpl implements ProductPackagingSpecServ
                 throw new BusinessException(400, "包装规格的基础单位必须与产品基本单位一致")
                         .withCode("PACKAGING_SPEC_BASE_UNIT_MISMATCH");
             }
+            if (spec.conversionFactor().stripTrailingZeros().scale() > 0) {
+                throw new BusinessException(400, "装箱换算数量必须是正整数")
+                        .withCode("PACKAGING_SPEC_FACTOR_NOT_INTEGER")
+                        .withHint("请填写完整基础单位数量，例如 1箱=10袋")
+                        .withHintTarget("conversionFactor");
+            }
             String identity = from + "->" + to + "@" + spec.conversionFactor().stripTrailingZeros();
             if (!identities.add(identity)) {
                 throw new BusinessException(409, "存在重复的包装规格")
@@ -224,7 +230,7 @@ public class ProductPackagingSpecServiceImpl implements ProductPackagingSpecServ
         List<String> parts = new ArrayList<>();
         BigDecimal grams = positive(product.getGramsPerUnit());
         if (grams != null && !baseUnit.isBlank()) {
-            parts.add(decimalText(grams) + "克/" + baseUnit);
+            parts.add(massText(grams) + "/" + baseUnit);
         }
         for (ProductPackagingSpec spec : active) {
             BigDecimal factor = positive(spec.getConversionFactor());
@@ -232,6 +238,9 @@ public class ProductPackagingSpecServiceImpl implements ProductPackagingSpecServ
             if (factor != null && !baseUnit.isBlank() && !packageUnit.isBlank()
                     && !baseUnit.equals(packageUnit)) {
                 parts.add(decimalText(factor) + baseUnit + "/" + packageUnit);
+                if (grams != null) {
+                    parts.add(massText(grams.multiply(factor)) + "/" + packageUnit);
+                }
             }
         }
         return String.join(" ", parts);
@@ -239,6 +248,13 @@ public class ProductPackagingSpecServiceImpl implements ProductPackagingSpecServ
 
     private String decimalText(BigDecimal value) {
         return value.stripTrailingZeros().toPlainString();
+    }
+
+    private String massText(BigDecimal grams) {
+        if (grams.compareTo(BigDecimal.valueOf(1000)) >= 0) {
+            return decimalText(grams.divide(BigDecimal.valueOf(1000))) + "kg";
+        }
+        return decimalText(grams) + "g";
     }
 
     private String normalizedCode(String factoryId, String unit) {

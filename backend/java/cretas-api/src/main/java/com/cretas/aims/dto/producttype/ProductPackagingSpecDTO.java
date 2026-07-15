@@ -1,6 +1,7 @@
 package com.cretas.aims.dto.producttype;
 
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
@@ -11,7 +12,8 @@ public record ProductPackagingSpecDTO(
         String name,
         @NotBlank String packageUnit,
         @NotBlank String baseUnit,
-        @NotNull @DecimalMin(value = "0", inclusive = false) BigDecimal conversionFactor,
+        @NotNull @DecimalMin(value = "0", inclusive = false)
+        @Digits(integer = 20, fraction = 0) BigDecimal conversionFactor,
         Boolean defaultSpec,
         Boolean active,
         Integer sortOrder,

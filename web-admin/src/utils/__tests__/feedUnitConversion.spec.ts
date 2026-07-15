@@ -10,11 +10,15 @@ import {
 
 describe('feedUnitConversion — 盒⇄kg 折算 (逐道投料防呆)', () => {
   describe('isCountUnit', () => {
-    it('识别计数单位 盒/个/件/只', () => {
+    it('识别常用成品计数单位', () => {
       expect(isCountUnit('盒')).toBe(true);
+      expect(isCountUnit('袋')).toBe(true);
+      expect(isCountUnit('包')).toBe(true);
       expect(isCountUnit('个')).toBe(true);
       expect(isCountUnit('件')).toBe(true);
       expect(isCountUnit('只')).toBe(true);
+      expect(isCountUnit('份')).toBe(true);
+      expect(isCountUnit('瓶')).toBe(true);
     });
     it('kg/重量单位/空 → 非计数', () => {
       expect(isCountUnit('kg')).toBe(false);

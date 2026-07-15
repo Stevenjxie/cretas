@@ -3,7 +3,6 @@ import type {
   ProcessNodeData,
   ProcessPort,
   ProductProcessWorkflowDefinition,
-  ProductProcessWorkflowNode,
 } from './types';
 import { toPlainWorkflowValue } from './workflowModel';
 
@@ -47,6 +46,31 @@ const SYSTEM_ALIASES: Record<string, string> = {
   bottle: 'bottle', '瓶': 'bottle',
 };
 
+const CHINESE_UNIT_LABELS: Record<string, string> = {
+  pcs: '件', portion: '份', box: '盒', case: '箱', bag: '袋', bottle: '瓶',
+};
+
+export function forkWorkflowUnitReviewDraft(
+  published: ProductProcessWorkflowDefinition,
+): ProductProcessWorkflowDefinition {
+  const draft = toPlainWorkflowValue(published);
+  delete draft.id;
+  delete draft.lockVersion;
+  draft.status = 'DRAFT';
+  draft.version = published.version + 1;
+  draft.unitReviewRequired = false;
+  return draft;
+}
+
+export function workflowReportingUnit(
+  materialKind: 'RAW_MATERIAL' | 'SEMI_FINISHED' | 'FINISHED_GOOD',
+  skuBaseUnit?: string | null,
+  customAliases?: Record<string, string>,
+): string {
+  if (materialKind === 'RAW_MATERIAL' || materialKind === 'SEMI_FINISHED') return 'kg';
+  return displayUnit(skuBaseUnit, normalizedAliases(customAliases));
+}
+
 export function reconcileWorkflowUnits(
   input: ProductProcessWorkflowDefinition,
   context: WorkflowUnitContext,
@@ -54,10 +78,10 @@ export function reconcileWorkflowUnits(
   const definition = toPlainWorkflowValue(input);
   const errors: WorkflowUnitIssue[] = [];
   const warnings: WorkflowUnitIssue[] = [];
-  const aliases = normalizedAliases(context.aliases);
   const processNodes = definition.nodes.filter((node) => node.kind === 'PROCESS');
 
-  definition.nodes.filter((node) => node.kind !== 'PROCESS').forEach((materialNode) => {
+  definition.nodes.forEach((materialNode) => {
+    if (materialNode.kind === 'PROCESS') return;
     const material = materialNode.data as MaterialNodeData;
     if (!material.skuId || material.bound === false) {
       warnings.push({
@@ -68,8 +92,8 @@ export function reconcileWorkflowUnits(
       return;
     }
     const product = context.products[material.skuId];
-    const targetUnit = normalizeUnit(product?.primaryUnit, aliases);
-    if (!product || !targetUnit) {
+    const targetUnit = workflowReportingUnit(materialNode.kind, product?.primaryUnit, context.aliases);
+    if (!targetUnit) {
       warnings.push({
         code: 'SKU_UNIT_UNKNOWN',
         message: `SKU ${material.skuId} 缺少规范主单位`,
@@ -83,7 +107,9 @@ export function reconcileWorkflowUnits(
       const process = processNode.data as ProcessNodeData;
       process.ports.forEach((port) => {
         if (port.materialNodeId === materialNode.id) {
-          reconcilePort(processNode, process, port, product, targetUnit, aliases, errors);
+          port.unit = targetUnit;
+          delete port.conversionRefId;
+          delete port.conversionVersion;
         }
       });
     });
@@ -98,68 +124,6 @@ export function reconcileWorkflowUnits(
   });
 
   return { definition, errors, warnings };
-}
-
-function reconcilePort(
-  processNode: ProductProcessWorkflowNode,
-  process: ProcessNodeData,
-  port: ProcessPort,
-  product: WorkflowSkuUnitContract,
-  targetUnit: string,
-  aliases: Record<string, string>,
-  errors: WorkflowUnitIssue[],
-): void {
-  const portUnit = normalizeUnit(port.unit, aliases);
-  if (portUnit === targetUnit) {
-    port.unit = targetUnit;
-    delete port.conversionRefId;
-    delete port.conversionVersion;
-    return;
-  }
-
-  const reportUnit = portUnit;
-  let conversion = product.conversions.find((candidate) =>
-    candidate.id === port.conversionRefId
-      && candidate.version === port.conversionVersion
-      && candidate.productTypeId === product.productTypeId);
-  if (!conversion && !port.conversionRefId && reportUnit) {
-    const applicable = product.conversions.filter((candidate) => {
-      if (candidate.productTypeId !== product.productTypeId) return false;
-      const from = normalizeUnit(candidate.fromUnitCode, aliases);
-      const to = normalizeUnit(candidate.toUnitCode, aliases);
-      return (from === reportUnit && to === targetUnit)
-        || (to === reportUnit && from === targetUnit);
-    });
-    if (applicable.length === 1) {
-      [conversion] = applicable;
-      port.conversionRefId = conversion.id;
-      port.conversionVersion = conversion.version;
-    }
-  }
-  if (!conversion) {
-    errors.push({
-      code: port.conversionRefId ? 'CONVERSION_STALE' : 'CONVERSION_REQUIRED',
-      message: `工序「${process.processName}」单位 ${reportUnit || port.unit} 与 SKU 主单位 ${targetUnit} 不一致，且无有效换算关系`,
-      nodeId: processNode.id,
-      portId: port.id,
-    });
-    return;
-  }
-
-  const from = normalizeUnit(conversion.fromUnitCode, aliases);
-  const to = normalizeUnit(conversion.toUnitCode, aliases);
-  const connectsUnits = reportUnit != null
-    && ((from === reportUnit && to === targetUnit) || (to === reportUnit && from === targetUnit));
-  if (!connectsUnits) {
-    errors.push({
-      code: 'CONVERSION_STALE',
-      message: `换算关系 ${conversion.id} 不适用于 ${reportUnit || port.unit} 与 ${targetUnit}`,
-      nodeId: processNode.id,
-      portId: port.id,
-    });
-    return;
-  }
-  port.unit = reportUnit;
 }
 
 function primaryPort(ports: ProcessPort[], direction: 'INPUT' | 'OUTPUT'): ProcessPort | undefined {
@@ -179,6 +143,12 @@ function normalizeUnit(value: string | null | undefined, aliases: Record<string,
   if (!value?.trim()) return null;
   const normalized = key(value);
   return aliases[normalized] || normalized;
+}
+
+function displayUnit(value: string | null | undefined, aliases: Record<string, string>): string {
+  const code = normalizeUnit(value, aliases);
+  if (!code) return '';
+  return CHINESE_UNIT_LABELS[code] || code;
 }
 
 function key(value: string): string {

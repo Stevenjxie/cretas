@@ -34,6 +34,14 @@ public interface ProcessSheetService {
     ProcessSheetRowResult saveRow(String factoryId, String planId,
                                   ProcessSheetRowRequest req, Long userId);
 
+    /** 新入口：只保存草稿，不解析来源批次、不物化、不占用库存。 */
+    ProcessSheetRowResult saveDraft(String factoryId, String planId,
+                                    ProcessSheetRowRequest req, Long userId);
+
+    /** 新入口：正式提交；总投料量由系统按生产库 FEFO 自动分摊。 */
+    ProcessSheetRowResult submitRow(String factoryId, String planId,
+                                    ProcessSheetRowRequest req, Long userId);
+
     /**
      * 删除一行 (SP-F Task 1.8)。
      *

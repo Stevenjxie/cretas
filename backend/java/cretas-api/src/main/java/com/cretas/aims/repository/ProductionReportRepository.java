@@ -451,6 +451,59 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
             @Param("batchId") Long batchId,
             @Param("refJson") String refJson);
 
+    /**
+     * 按正式半成品 SKU 聚合全部已小结的逐道录入。
+     *
+     * <p>ProductionReport.productTypeId 在文员逐道路径不是稳定的半成品 SKU 身份，
+     * semiCode 也是历史业务编码，因此不做猜测。process_sheet_rows.row_payload
+     * 同时保存了产出 ProductType ID、投入/产出量和单位，interim_settled_at
+     * 是已小结事实；撤销小结会清除该标记，因而自动退出统计。
+     */
+    @Query(value = """
+        WITH raw_rows AS (
+            SELECT
+                CAST(NULLIF(row_payload ->> 'inputQuantity', '') AS DECIMAL(20,6)) AS input_quantity,
+                CAST(NULLIF(row_payload ->> 'outputQuantity', '') AS DECIMAL(20,6)) AS output_quantity,
+                LOWER(COALESCE(NULLIF(row_payload ->> 'inputUnit', ''),
+                               NULLIF(row_payload ->> 'unit', ''), 'kg')) AS input_unit,
+                LOWER(COALESCE(NULLIF(row_payload ->> 'outputUnit', ''),
+                               NULLIF(row_payload ->> 'unit', ''), 'kg')) AS output_unit,
+                COALESCE(CAST(batch_id AS TEXT), NULLIF(batch_number, ''), CAST(id AS TEXT)) AS batch_key
+            FROM process_sheet_rows
+            WHERE factory_id = :factoryId
+              AND interim_settled_at IS NOT NULL
+              AND deleted_at IS NULL
+              AND row_status <> 'DRAFT'
+              AND row_payload ->> 'productTypeId' = :semiFinishedSkuId
+              AND row_payload ->> 'finished' = 'false'
+        ), valid_rows AS (
+            SELECT
+                CASE WHEN input_unit IN ('g', '克') THEN input_quantity / 1000
+                     ELSE input_quantity END AS input_kg,
+                CASE WHEN output_unit IN ('g', '克') THEN output_quantity / 1000
+                     ELSE output_quantity END AS output_kg,
+                batch_key
+            FROM raw_rows
+            WHERE input_quantity > 0
+              AND output_quantity > 0
+              AND input_unit IN ('kg', '千克', '公斤', 'g', '克')
+              AND output_unit IN ('kg', '千克', '公斤', 'g', '克')
+        )
+        SELECT COALESCE(SUM(input_kg), 0) AS "totalInputKg",
+               COALESCE(SUM(output_kg), 0) AS "totalOutputKg",
+               COUNT(DISTINCT batch_key) AS "batchCount"
+        FROM valid_rows
+        """, nativeQuery = true)
+    SemiFinishedYieldAggregate aggregateSettledSemiFinishedYield(
+            @Param("factoryId") String factoryId,
+            @Param("semiFinishedSkuId") String semiFinishedSkuId);
+
+    interface SemiFinishedYieldAggregate {
+        BigDecimal getTotalInputKg();
+        BigDecimal getTotalOutputKg();
+        Long getBatchCount();
+    }
+
     // ==================== 单元2: 厂级工序聚合 ====================
 
     /**

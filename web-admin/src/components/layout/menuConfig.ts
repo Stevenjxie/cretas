@@ -68,7 +68,7 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/production/material-returns', title: '退料记录', icon: '', module: 'production' },
       // 这3项是「生产管理」下的生产配置项 (虽路由在 /system/*), module 归 'production' 而非 'system' —
       // 否则会被 demo 策展 DEMO_HIDE_MODULES_BY_TYPE['FACTORY'] 的 'system' 规则连带隐藏 (本意只藏系统管理顶级组)。
-      { path: '/system/products', title: '成品 / SKU', icon: '', module: 'production', groupLabel: '生产配置' },
+      { path: '/system/products', title: 'SKU 管理', icon: '', module: 'production', groupLabel: '生产配置' },
       { path: '/system/work-processes', title: '工序管理', icon: '', module: 'production',
         hideForFactoryTypes: ['RESTAURANT'] },
       { path: '/system/product-processes', title: '产品-工序配置', icon: '', module: 'production',

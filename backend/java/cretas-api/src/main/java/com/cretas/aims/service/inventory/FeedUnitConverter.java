@@ -31,7 +31,9 @@ public final class FeedUnitConverter {
         if (unit == null) {
             return false;
         }
-        return unit.contains("盒") || unit.contains("个") || unit.contains("件") || unit.contains("只");
+        return unit.contains("盒") || unit.contains("袋") || unit.contains("包")
+                || unit.contains("个") || unit.contains("件") || unit.contains("只")
+                || unit.contains("份") || unit.contains("瓶") || unit.contains("罐");
     }
 
     /**

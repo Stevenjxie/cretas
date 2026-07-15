@@ -82,10 +82,8 @@ const productExtendedFields = computed<FieldConfig[]>(() => [
   // T146 Fix4: gramsPerUnit placeholder 动态替换二级单位名 (如 "每盒多少克")
   // T157 (2026-07-13) 双模式表单瘦身: 组重打 —— 克重=规格; 出成率/单锅产能=产能; 研发人工=成本。
   //   驱动模板里「规格 section (标准克重内联)」+「高级设置」下的 成本/产能/库存 分组渲染。
-  { key: 'gramsPerUnit', label: '标准克重', type: 'decimal', group: '规格', precision: 2, suffix: '克', order: 3,
+  { key: 'gramsPerUnit', label: `标准单位换算（1${formData.unit || '基本单位'}）`, type: 'decimal', group: '规格', precision: 3, suffix: '克', order: 3,
     placeholder: gramsPerUnitPlaceholder.value },
-  { key: 'wipToFgYield', label: '半成品出成率', type: 'decimal', group: '产能', precision: 4, order: 4,
-    placeholder: '0~1，如 0.55=55%（留空按 1:1）' },
   // 六扇门 配料单 (配料员按锅配料): 单锅产能 = 1 锅产出数量 (同计划产量单位); 配料单据此算锅数 = ceil(计划量/单锅产能)
   { key: 'singlePotCapacity', label: '单锅产能', type: 'decimal', group: '产能', precision: 3, order: 6,
     placeholder: '1 锅产出数量(同计划产量单位), 配料单算锅数用; 留空则配料单不计每锅量' },
@@ -132,13 +130,15 @@ const PRODUCT_CATEGORIES = [
   { value: 'PACKAGING', label: '包辅材' },
   { value: 'SEASONING', label: '调味品' },
   { value: 'CUSTOMER_MATERIAL', label: '客户自带原料加工' },
-  { value: 'CONTRACT_MANUFACTURING', label: '纯代工' }
+  { value: 'CONTRACT_MANUFACTURING', label: '纯代工' },
+  { value: 'SEMI_FINISHED', label: '半成品' }
 ] as const;
 
 // 产品管理只展示"产出类"(成品/纯代工/客供料). 原料/包辅材/调味品 属物料(投入), 归"原料类型字典"页管理,
 // 不在产品里录 —— 产品是产品, 产品"用"原料(经 BOM 关联), 二者不混。
 const PRODUCT_TABS = PRODUCT_CATEGORIES.filter(
-  c => c.value === 'FINISHED_PRODUCT' || c.value === 'CONTRACT_MANUFACTURING' || c.value === 'CUSTOMER_MATERIAL'
+  c => c.value === 'FINISHED_PRODUCT' || c.value === 'CONTRACT_MANUFACTURING'
+    || c.value === 'CUSTOMER_MATERIAL' || c.value === 'SEMI_FINISHED'
 );
 
 type ProductCategory = typeof PRODUCT_CATEGORIES[number]['value'];
@@ -438,7 +438,21 @@ function handleCodeInput() {
 function handleCategoryChange() {
   // T149: 用户手动改大类 → 标记, 智能填充不再覆盖大类
   categoryManuallyEdited.value = true;
+  applyCategoryUnitContract();
   refreshCodePreview();
+}
+
+const isSemiFinishedSku = computed(() => formData.productCategory === 'SEMI_FINISHED');
+
+function applyCategoryUnitContract(): void {
+  if (!isSemiFinishedSku.value) return;
+  formData.unit = 'kg';
+  formData.gramsPerUnit = undefined;
+  formData.wipToFgYield = undefined;
+  formData.level1Unit = undefined;
+  formData.boxConversionCoefficient = undefined;
+  formData.specification = '';
+  packagingSpecs.value = [];
 }
 
 // ==================== T149: SKU 智能防呆填充 (名称→大类/单位/装箱 历史记忆) ====================
@@ -844,11 +858,12 @@ function resetForm() {
   formData.targetGrossMargin = null;
   formData.targetGrossMarginPercent = null;
   packagingSpecs.value = [blankPackagingSpec(0)];
+  applyCategoryUnitContract();
 }
 
 function handleAdd() {
   resetForm();
-  dialogTitle.value = '新增产品';
+  dialogTitle.value = '新增 SKU';
   isEditing.value = false;
   // T147 Fix2: 重置编号预览状态, 大类已由 resetForm 默认为当前 tab (Fix3) → 触发预览
   codePreview.value = '';
@@ -948,6 +963,7 @@ async function handleSubmit() {
 
   try {
     await formRef.value.validate();
+    applyCategoryUnitContract();
     // 提交前再次收敛，保证 API 永远收到规范文本和与基本单位一致的包装右侧单位。
     synchronizeSpecificationFields();
     const partiallyConfigured = packagingSpecs.value.some((spec) => {
@@ -957,6 +973,14 @@ async function handleSubmit() {
     });
     if (partiallyConfigured) {
       ElMessage.warning('请完整填写每条包装规格的包装单位和换算数量');
+      return;
+    }
+    const fractionalPackage = packagingSpecs.value.some((spec) => {
+      const factor = Number(spec.conversionFactor);
+      return Number.isFinite(factor) && factor > 0 && !Number.isInteger(factor);
+    });
+    if (fractionalPackage) {
+      ElMessage.warning('装箱换算数量必须是正整数，例如 1箱=10袋');
       return;
     }
     submitting.value = true;
@@ -1352,7 +1376,7 @@ async function handleAiProductCreate() {
 <template>
   <div class="page-wrapper">
     <ConceptDisambiguationAlert
-      here-name="成品 / SKU"
+      here-name="SKU 管理"
       here="本厂自己生产的成品（如「叮咚好食光卤猪蹄 200g」）"
       other-name="仓储管理 → 原料 / 物料 (采购入库)"
       other="采购入库的原料 / 包材（如「冻猪蹄」「吸塑盒」）"
@@ -1364,7 +1388,7 @@ async function handleAiProductCreate() {
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <span class="page-title">成品 / SKU 管理 (本厂生产)</span>
+            <span class="page-title">SKU 管理（成品 / 半成品）</span>
             <span class="data-count">共 {{ pagination.total }} 条记录</span>
           </div>
           <div class="header-right">
@@ -1382,7 +1406,7 @@ async function handleAiProductCreate() {
               AI 智能建产品
             </el-button>
             <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleAdd">
-              新增产品
+              新增 SKU
             </el-button>
           </div>
         </div>
@@ -1582,15 +1606,17 @@ async function handleAiProductCreate() {
             v-model="formData.unit"
             placeholder="选择或输入基本单位（如 盒、包、kg）"
             filterable allow-create clearable style="width: 100%"
+            :disabled="isSemiFinishedSku"
             @change="markUnitEdited"
           >
             <el-option v-for="opt in unitSelectOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
           </el-select>
-          <div class="form-tip">基本单位 = 最小计量/售卖单位（成品如「盒」，原料如「kg」）；修改后会同步标准克重和所有装箱换算右侧单位</div>
+          <div class="form-tip" v-if="isSemiFinishedSku">半成品库存与报工单位固定为 kg，不维护标准克重或装箱规格</div>
+          <div class="form-tip" v-else>基本单位 = 最小计量/售卖单位（成品如「盒」「袋」）；修改后会同步标准克重和所有装箱换算右侧单位</div>
         </el-form-item>
         <!-- 标准克重 (每 {基本单位} 多少克) — 结构化, 只填数字, 单位系统显示 -->
         <DynamicEntityForm
-          v-if="specExtendedFields.length"
+          v-if="!isSemiFinishedSku && specExtendedFields.length"
           :fields="specExtendedFields"
           :model-value="formData as TableRow"
           @update:model-value="handleExtendedFormUpdate"
@@ -1598,7 +1624,7 @@ async function handleAiProductCreate() {
           label-width="120px"
         />
         <!-- 同一 SKU 允许多条装箱换算；标准克重仍保持唯一。第一条是默认箱规。 -->
-        <el-form-item label="装箱换算" label-width="120px">
+        <el-form-item v-if="!isSemiFinishedSku" label="装箱换算" label-width="120px">
           <div class="packaging-spec-list">
             <div v-for="(spec, index) in packagingSpecs" :key="spec.id || index" class="packaging-spec-item">
               <div class="spec-conversion-row">
@@ -1610,7 +1636,7 @@ async function handleAiProductCreate() {
                   <el-option v-for="opt in unitSelectOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
                 </el-select>
                 <span class="spec-conversion-eq">＝</span>
-                <el-input-number v-model="spec.conversionFactor" :min="0" :precision="4" :controls="false"
+                <el-input-number v-model="spec.conversionFactor" :min="1" :precision="0" :controls="false"
                   placeholder="换算数" class="spec-coef-input" @change="markBoxCoefEdited" />
                 <el-input :model-value="formData.unit" disabled placeholder="基本单位" class="spec-unit-select" />
                 <el-button v-if="index > 0" link type="danger" @click="removePackagingSpec(index)">删除</el-button>
@@ -1625,9 +1651,9 @@ async function handleAiProductCreate() {
           <div class="form-tip">同一 SKU 只能有一个标准克重，但可维护多种装箱数量，如 1箱=12盒、1箱=24盒</div>
         </el-form-item>
         <!-- 规格 = 上面结构化字段自动拼 (只读, 不再手输文字+数字混排) -->
-        <el-form-item label="规格">
+        <el-form-item v-if="!isSemiFinishedSku" label="规格">
           <el-input v-model="formData.specification" readonly placeholder="由上方「标准克重 + 装箱换算」自动生成" />
-          <div class="form-tip">规格由上面结构化字段自动生成，无需手填（如「310克/盒 42盒/箱」）</div>
+          <div class="form-tip">规格由上面结构化字段自动生成，无需手填（如「200g/袋 10袋/箱 2kg/箱」）</div>
         </el-form-item>
 
         <el-form-item label="备注" prop="notes">

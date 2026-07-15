@@ -7,12 +7,15 @@ import com.cretas.aims.dto.processentry.ProcessSheetRowHistoryView;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
 import com.cretas.aims.dto.processentry.ProcessSheetRowView;
+import com.cretas.aims.dto.processentry.ProductionStockShortageDTO;
 import com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO;
 import com.cretas.aims.service.processentry.ProcessSheetService;
+import com.cretas.aims.service.processentry.ProductionStockShortageException;
 import com.cretas.aims.service.workflow.WorkflowClerkSheetService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -38,6 +41,39 @@ public class ProcessSheetController {
             @RequestAttribute("userId") Long userId,
             @Valid @RequestBody ProcessSheetRowRequest req) {
         return ApiResponse.success("保存成功", service.saveRow(factoryId, planId, req, userId));
+    }
+
+    /** 新报工契约：草稿保存永不分摊或扣减生产库。 */
+    @RequirePermission({"production:read_write"})
+    @PostMapping("/row/draft")
+    public ApiResponse<ProcessSheetRowResult> saveDraft(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String planId,
+            @RequestAttribute("userId") Long userId,
+            @Valid @RequestBody ProcessSheetRowRequest req) {
+        return ApiResponse.success("草稿保存成功", service.saveDraft(factoryId, planId, req, userId));
+    }
+
+    /** 新报工契约：正式提交并自动分摊生产库批次。 */
+    @RequirePermission({"production:read_write"})
+    @PostMapping("/row/submit")
+    public ResponseEntity<ApiResponse<?>> submitRow(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String planId,
+            @RequestAttribute("userId") Long userId,
+            @Valid @RequestBody ProcessSheetRowRequest req) {
+        try {
+            return ResponseEntity.ok(ApiResponse.success(
+                    "正式提交成功", service.submitRow(factoryId, planId, req, userId)));
+        } catch (ProductionStockShortageException error) {
+            ApiResponse<ProductionStockShortageDTO> response = ApiResponse.of(
+                    409, error.getMessage(), error.getShortage());
+            response.setErrorCode(error.getErrorCode());
+            response.setActionHint(error.getActionHint());
+            response.setSeverity(error.getSeverity());
+            response.setHintTarget(error.getHintTarget());
+            return ResponseEntity.status(409).body(response);
+        }
     }
 
     @RequirePermission({"production:read_write"})

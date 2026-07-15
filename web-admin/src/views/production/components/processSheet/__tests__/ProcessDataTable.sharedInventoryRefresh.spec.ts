@@ -24,7 +24,8 @@ vi.mock('@/api/processSheet', async () => {
     getSemiFinishedInventory: (...args: unknown[]) => getSemiFinishedInventory(...args),
     getFinishedGoodsInventory: (...args: unknown[]) => getFinishedGoodsInventory(...args),
     getAvailableRawBatches: (...args: unknown[]) => getAvailableRawBatches(...args),
-    saveRow: vi.fn(),
+    saveDraftRow: vi.fn(),
+    submitRow: vi.fn(),
     deleteRow: vi.fn(),
     getRowHistory: vi.fn().mockResolvedValue({ success: true, data: [] }),
   };

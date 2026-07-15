@@ -94,6 +94,7 @@ export interface ProductProcessWorkflowDefinition {
   status: WorkflowStatus;
   version: number;
   lockVersion?: number;
+  unitReviewRequired?: boolean;
   nodes: ProductProcessWorkflowNode[];
   edges: ProductProcessWorkflowEdge[];
   viewport: WorkflowViewport;

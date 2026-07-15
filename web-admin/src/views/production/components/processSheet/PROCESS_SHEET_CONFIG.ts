@@ -43,12 +43,13 @@ export type ColType = 'dropdown' | 'number' | 'date' | 'daterange' | 'auto' | 'r
  * - remaining    : 剩余量 — 派生自后端库存端点 (§5), 前端只读展示, 不本地计算.
  * - totalHours   : 总工时 = Σ (时段时长 × 人数), 来自工时子表 laborSegments.
  * - reverseInput : 反推投入量 = scrap + output (去舌苔). G2 新增.
- * - sumBoxes           : 实际生产(盒) = 入库 + 留样 + 剩余 + 领用. G3b 气调.
- * - sumWeight          : 总重量(kg) = 成品重 + 料头. G3b 气调.
- * - yieldByProductWeight: 出成率(%) = 成品重 / 使用重量 × 100. G3b 气调.
- * - laborPerBox        : 每盒人工费 = workerPrice × 总工时 / 实际生产. G3b 气调.
+ * - finishedInbound      : 成品入库 = 实际生产 - 留样.
+ * - finishedRemaining    : 成品初始剩余 = 入库.
+ * - finishedWeight       : 成品重量 = 实际生产 × SKU 单位净重.
+ * - finishedInboundWeight: 入库重量 = 入库数量 × SKU 单位净重.
  */
-export type AutoCalc = 'yield' | 'remaining' | 'totalHours' | 'reverseInput' | 'sumBoxes' | 'sumWeight' | 'yieldByProductWeight' | 'laborPerBox';
+export type AutoCalc = 'yield' | 'remaining' | 'totalHours' | 'reverseInput'
+  | 'finishedInbound' | 'finishedRemaining' | 'finishedWeight' | 'finishedInboundWeight';
 
 /**
  * 单列描述符.
@@ -180,29 +181,20 @@ export const PROCESS_SHEET_CONFIG: Record<string, ColDef[]> = {
 
   // -----------------------------------------------------------------------
   // 气调 (qidiao) — 第 6 道, 成品批 (finished=true)
-  //   upstreamBatch 多选 (同熟制混锅) → upstreamSources[]; usedWeight → inputQuantity
-  //   outputQuantity = actualProd (盒数!), NOT kg.
-  //   byproducts=[料头]; sampleRetainQuantity=留样盒数
-  //   SP-G G3b (2026-06-24)
+  //   操作员只录实际生产与留样；入库、初始剩余、成品重量和入库重量均由 SKU 快照派生。
+  //   多包装规格属于仓储/销售，不进入生产报工。
   // -----------------------------------------------------------------------
   qidiao: [
     { key: 'upstreamBatch', type: 'dropdown', upstream: 'shuzhi', label: '上游批次' }, // 熟制批次, 多选
     { key: 'batch',         type: 'readonly',                      label: '订单批次' }, // 系统生成
     { key: 'date',          type: 'daterange',                     label: '生产日期' },
-    { key: 'storage',       type: 'number',                        label: '入库(盒)' },
-    { key: 'sample',        type: 'number',                        label: '留样(盒)' },
-    { key: 'remainBox',     type: 'number',                        label: '剩余(盒)' }, // 不用 'remain' (已被 remaining autoCalc 占用)
-    { key: 'claim',         type: 'number',                        label: '领用(盒)' },
-    { key: 'actualProd',    type: 'auto',     autoCalc: 'sumBoxes',             label: '实际生产(盒)' }, // ⭐ → outputQuantity
-    { key: 'productWeight', type: 'number',                        label: '成品重(kg)' },
-    { key: 'trimmings',     type: 'number',                        label: '料头(kg)' },
-    { key: 'totalWeight',   type: 'auto',     autoCalc: 'sumWeight',            label: '总重量(kg)' },
-    { key: 'usedWeight',    type: 'number',                        label: '使用重量(kg)' }, // → inputQuantity
-    { key: 'yieldRate',     type: 'auto',     autoCalc: 'yieldByProductWeight', label: '出成率(%)' },
-    { key: 'boxWeight',     type: 'number',                        label: '单盒克重(g)' },
-    { key: 'workerPrice',   type: 'number',                        label: '工时单价(元/h)' }, // 工厂成本设置里的单价, 前端手录供预览
-    { key: 'totalHours',    type: 'auto',     autoCalc: 'totalHours',           label: '总工时(h)' },
-    { key: 'laborPerBox',   type: 'auto',     autoCalc: 'laborPerBox',          label: '每盒人工费(元)' },
+    { key: 'actualProd',    type: 'number',                        label: '实际生产(kg)' },
+    { key: 'sample',        type: 'number',                        label: '留样(kg)' },
+    { key: 'storage',       type: 'auto', autoCalc: 'finishedInbound',       label: '入库(kg)' },
+    { key: 'remainBox',     type: 'auto', autoCalc: 'finishedRemaining',     label: '剩余(kg)' },
+    { key: 'productWeight', type: 'auto', autoCalc: 'finishedWeight',        label: '成品重量(kg)' },
+    { key: 'inboundWeight', type: 'auto', autoCalc: 'finishedInboundWeight', label: '入库重量(kg)' },
+    { key: 'totalHours',    type: 'auto', autoCalc: 'totalHours',            label: '总工时(h)' },
   ],
 };
 

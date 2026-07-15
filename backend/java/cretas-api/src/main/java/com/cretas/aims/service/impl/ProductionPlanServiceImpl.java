@@ -342,23 +342,46 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             if (contract.isPresent()) {
                 var value = contract.get();
                 return new PlanUnitAuthority(value.plannedUnit(),
+                        resolveNetWeightGramsForProduct(factoryId, productTypeId),
                         ProductionBatch.WorkflowSelectionMode.WORKFLOW,
                         value.workflowId(), value.definitionVersion());
             }
         }
         return new PlanUnitAuthority(resolvePlannedOutputUnitForProduct(productTypeId),
+                resolveNetWeightGramsForProduct(factoryId, productTypeId),
                 ProductionBatch.WorkflowSelectionMode.LEGACY, null, null);
+    }
+
+    private BigDecimal resolveNetWeightGramsForProduct(String factoryId, String productTypeId) {
+        if (productTypeId == null) return null;
+        return productTypeRepository.findByIdAndFactoryId(productTypeId, factoryId)
+                .map(ProductType::getGramsPerUnit)
+                .orElse(null);
     }
 
     private void applyPlanUnitAuthority(ProductionPlan plan, PlanUnitAuthority authority) {
         plan.setPlannedUnit(authority.unit());
+        plan.setPlannedNetWeightGrams(authority.netWeightGrams());
         plan.setWorkflowSelectionMode(authority.mode());
         plan.setSelectedWorkflowId(authority.workflowId());
         plan.setSelectedWorkflowVersion(authority.workflowVersion());
+        if (bomRecipeRepository == null) {
+            return;
+        }
+        bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(
+                        plan.getFactoryId(), plan.getProductTypeId())
+                .ifPresentOrElse(recipe -> {
+                    plan.setSelectedBomRecipeId(recipe.getId());
+                    plan.setSelectedBomVersion(recipe.getVersion());
+                }, () -> {
+                    plan.setSelectedBomRecipeId(null);
+                    plan.setSelectedBomVersion(null);
+                });
     }
 
     private record PlanUnitAuthority(
             String unit,
+            BigDecimal netWeightGrams,
             ProductionBatch.WorkflowSelectionMode mode,
             Long workflowId,
             Integer workflowVersion) {

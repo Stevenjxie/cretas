@@ -286,6 +286,12 @@ public class ProductProcessWorkflowRuntimeServiceImpl
         port.setSkuId(compiled.skuId());
         port.setUnit(compiled.unit());
         port.setUnitCode(compiled.unit());
+        if ("FINISHED_GOOD".equals(compiled.materialKind())) {
+            port.setNetWeightGramsSnapshot(productTypeRepository
+                    .findByIdAndFactoryId(compiled.skuId(), factoryId)
+                    .map(com.cretas.aims.entity.ProductType::getGramsPerUnit)
+                    .orElse(null));
+        }
         port.setMaterialPrimaryUnitCode(compiled.materialPrimaryUnitCode());
         port.setConversionRefId(compiled.conversionRefId());
         port.setConversionVersion(compiled.conversionVersion());

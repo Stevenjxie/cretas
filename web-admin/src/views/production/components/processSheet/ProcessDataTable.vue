@@ -3,7 +3,7 @@ import { ref, computed, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Delete, Check, Warning, ArrowDown, ArrowRight, Clock, Loading, QuestionFilled } from '@element-plus/icons-vue';
 import {
-  saveRow, deleteRow, getAvailableRawBatches, getRowHistory, getSemiFinishedInventory,
+  saveDraftRow, submitRow, deleteRow, getAvailableRawBatches, getRowHistory, getSemiFinishedInventory,
   getFinishedGoodsInventory,
   type ProcessSheetInventoryItem,
   type LaborSegment,
@@ -17,13 +17,13 @@ import {
   type FinishedGoodsStockItem,
   type WorkflowProcessDescriptor,
   type WorkflowPortDescriptor,
+  type MaterialInputTotal,
 } from '@/api/processSheet';
 import { listWarehouses, type FactoryWarehouse } from '@/api/factoryWarehouse';
 import type { ProcessSheetCustomFieldDef } from '@/api/processProduction';
 import { PROCESS_SHEET_CONFIG, GENERIC_FALLBACK_COLS, genClientRowId, type ColDef } from './PROCESS_SHEET_CONFIG';
 import WorkHoursTable from './WorkHoursTable.vue';
-import { calculateLaborPerBox } from '@/utils/processSheetLaborCost';
-import { isCountUnit, countUnitFeedWarning, countUnitLabelSuffix } from '@/utils/feedUnitConversion';
+import { boxAvailableKg, isCountUnit, countUnitFeedWarning, countUnitLabelSuffix } from '@/utils/feedUnitConversion';
 import {
   formatFeedPlaceholder,
   formatProcessOutput,
@@ -121,11 +121,18 @@ interface MultiOutputLine {
   /** 只读展示品名; 端口 SKU 已失效时兜底显 productTypeId, 不崩溃。 */
   materialName: string;
   unit: string;
+  /** SKU 单位净重；计数型成品缺失时只展示明确错误，不猜重量。 */
+  gramsPerUnit: number | null;
   finished: boolean;
   required: boolean;
   quantity: number | null;
   /** 保存后系统生成的产出批次号 (重载回显); 未保存为 null。 */
   batchNumber: string | null;
+}
+
+interface MaterialInputTotalLine extends Omit<MaterialInputTotal, 'quantity'> {
+  materialName: string;
+  quantity: number | null;
 }
 
 // -------------------------------------------------------------------------
@@ -135,6 +142,8 @@ interface SheetRow {
   clientRowId: string;
   batchNumber: string | null;
   rowStatus: 'SAVED' | 'DRAFT' | 'UNSAVED';
+  submissionStatus: 'DRAFT' | 'SUBMITTED' | null;
+  blockingMessage: string | null;
   /** 已小结时间 (ISO-8601); null = 未小结，可编辑 */
   interimSettledAt: string | null;
   saving: boolean;
@@ -145,6 +154,10 @@ interface SheetRow {
   rawBatchId: string;
   /** 修油: out-weight (kg) → rawMaterialInputs[0].quantity */
   rawBatchQty: number | null;
+  /** 新报工路径：只录各原料总投料量，由后端正式提交时自动分摊生产库批次。 */
+  materialInputTotals: MaterialInputTotalLine[];
+  /** 已存在显式原料批次的旧行保持原选择器，不能在回显时改写为新契约。 */
+  legacyExplicitRawInput: boolean;
   /** 焯水: single upstream WIP batch number (WIP batchNumber 或 SFI intermediateBatchNo) */
   upstreamBatch: string;
   /**
@@ -308,8 +321,7 @@ const MULTI_OUTPUT_HIDDEN_KEYS_BY_ARCHETYPE: Record<string, string[]> = {
   qushetou: ['scrap', 'output', 'input', 'yieldRate'],
   shuzhi: ['output', 'yieldRate'],
   qidiao: [
-    'storage', 'sample', 'remainBox', 'claim', 'actualProd', 'productWeight',
-    'trimmings', 'totalWeight', 'yieldRate', 'boxWeight', 'workerPrice', 'laborPerBox',
+    'actualProd', 'sample', 'storage', 'remainBox', 'productWeight', 'inboundWeight',
   ],
 };
 /** 通用兜底 (isGenericUpstream, 结构同熟制) 的产出列。 */
@@ -481,12 +493,23 @@ function blankRow(): SheetRow {
     clientRowId: genClientRowId(props.processCode),
     batchNumber: null,
     rowStatus: 'UNSAVED',
+    submissionStatus: null,
+    blockingMessage: null,
     interimSettledAt: null,
     saving: false,
     deleting: false,
     fields: { ...daterangeDefaults },
     rawBatchId: '',
     rawBatchQty: null,
+    materialInputTotals: workflowRawInputs.value.map((port): MaterialInputTotalLine => ({
+      materialTypeId: port.skuId,
+      materialName: port.materialName || port.skuId,
+      quantity: null,
+      unit: 'kg',
+      workflowPortId: port.workflowPortId || undefined,
+      materialNodeId: port.materialNodeId || undefined,
+    })),
+    legacyExplicitRawInput: false,
     upstreamBatch: '',
     upstreamSemiFinished: false,
     upstreamFinishedGoods: false,
@@ -512,6 +535,7 @@ function initMultiOutputs(): MultiOutputLine[] {
     productTypeId: p.skuId,
     materialName: p.materialName || `(未命名 SKU: ${p.skuId})`,
     unit: p.unit || '',
+    gramsPerUnit: p.gramsPerUnit ?? null,
     finished: p.finished === true,
     required: p.required === true,
     quantity: null,
@@ -525,11 +549,26 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
   row.clientRowId = view.clientRowId;
   row.batchNumber = view.batchNumber;
   row.rowStatus = view.rowStatus;
+  row.submissionStatus = view.submissionStatus ?? null;
   row.interimSettledAt = view.interimSettledAt ?? null;
 
   if (isXiuYou.value) {
-    row.rawBatchId = p.rawMaterialInputs?.[0]?.materialBatchId ?? '';
-    row.rawBatchQty = p.rawMaterialInputs?.[0]?.quantity ?? null;
+    const explicitRaw = p.rawMaterialInputs?.[0];
+    row.legacyExplicitRawInput = explicitRaw != null && !(p.materialInputTotals?.length);
+    row.rawBatchId = explicitRaw?.materialBatchId ?? '';
+    row.rawBatchQty = explicitRaw?.quantity ?? null;
+    if (p.materialInputTotals?.length) {
+      row.materialInputTotals = p.materialInputTotals.map((item) => {
+        const port = workflowRawInputs.value.find((candidate) =>
+          candidate.workflowPortId === item.workflowPortId || candidate.skuId === item.materialTypeId,
+        );
+        return {
+          ...item,
+          materialName: port?.materialName || item.materialTypeId,
+          unit: 'kg',
+        };
+      });
+    }
     row.fields['output'] = p.outputQuantity ?? null;
     // SP-G G3c: 副产 hydrate (修油)
     const bp0 = p.byproducts?.[0];
@@ -586,17 +625,9 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
       row.upstreamSemiFinished = p.upstreamSources?.[0]?.semiFinished ?? false;
       row.upstreamFinishedGoods = p.upstreamSources?.[0]?.finishedGoods ?? false;
     }
-    row.fields['usedWeight'] = p.inputQuantity ?? null;
-    // outputQuantity = actualProd (盒数); restored from payload into auto-calc fields
-    const payloadFields = p as unknown as Record<string, unknown>;
-    row.fields['storage']       = payloadFields['storage']       as number ?? null;
-    row.fields['sample']        = payloadFields['sample']        as number ?? null;
-    row.fields['remainBox']     = payloadFields['remainBox']     as number ?? null;
-    row.fields['claim']         = payloadFields['claim']         as number ?? null;
-    row.fields['productWeight'] = payloadFields['productWeight'] as number ?? null;
-    row.fields['trimmings']     = payloadFields['trimmings']     as number ?? null;
-    row.fields['boxWeight']     = payloadFields['boxWeight']     as number ?? null;
-    row.fields['workerPrice']   = payloadFields['workerPrice']   as number ?? null;
+    // 成品报工只恢复两项事实；入库、剩余和重量始终重新派生，禁止把历史手填字段当真值。
+    row.fields['actualProd'] = p.outputQuantity ?? null;
+    row.fields['sample'] = p.sampleRetainQuantity ?? 0;
   }
   row.laborSegments = (p.laborSegments ?? []).map((s) => ({ ...s }));
 
@@ -662,6 +693,7 @@ function multiOutputLineFromView(view: ProcessSheetRowView): MultiOutputLine {
     productTypeId: p.productTypeId,
     materialName: port?.materialName || p.productTypeId,
     unit: port?.unit || p.unit || p.outputUnit || '',
+    gramsPerUnit: port?.gramsPerUnit ?? null,
     finished: port ? port.finished === true : p.finished === true,
     required: port?.required ?? true,
     quantity: p.outputQuantity ?? null,
@@ -800,8 +832,8 @@ function settledRowSummary(row: SheetRow): string {
     return formatProcessOutput(out as number | null, processUnits.value.outputUnit);
   }
   if (isQidiao.value) {
-    const n = calcSumBoxes(row);
-    return `实产 ${n} 盒`;
+    const n = finishedActualQuantity(row);
+    return `实产 ${n ?? '—'} ${processUnits.value.outputUnit}`;
   }
   return '—';
 }
@@ -821,19 +853,58 @@ function singleSourceUsage(row: SheetRow): number {
   if (isSingleUpstream.value) return (row.fields['before'] as number) ?? 0;
   if (isQuSheTou.value) return calcReverseInput(row) ?? 0;
   if (isShuZhi.value || isGenericUpstream.value) return (row.fields['input'] as number) ?? 0;
-  if (isQidiao.value) return (row.fields['usedWeight'] as number) ?? 0;
+  if (isQidiao.value) return resolvedFinishedInputKg(row) ?? 0;
   return 0;
+}
+
+/**
+ * 成品工序不再要求操作员重复填写「使用重量」。选中的上游来源本身就是本次要结转的
+ * WIP/SFI/FG 库存，因此以该来源当前可用量作为实际投入；计数单位只有在 SKU 已配置
+ * 标准克重时才允许折算。任何无法可靠解析的来源均返回 null，由正式报工入口 fail-closed。
+ */
+function sourceAvailableKg(
+  quantity: number,
+  unit: string | null | undefined,
+  gramsPerUnit?: number | null,
+): number | null {
+  if (!Number.isFinite(quantity) || quantity <= 0) return null;
+  const normalized = (unit || processUnits.value.inputUnit).trim().toLowerCase();
+  if (normalized === 'kg' || normalized === '千克') return quantity;
+  if (normalized === 'g' || normalized === '克') return quantity / 1000;
+  if (isCountUnit(unit)) return boxAvailableKg(quantity, gramsPerUnit);
+  return null;
+}
+
+function resolvedFinishedInputKg(row: SheetRow): number | null {
+  if (!row.upstreamBatch) return null;
+  if (row.upstreamFinishedGoods) {
+    const source = fgOptions.value.find((item) => item.batchNumber === row.upstreamBatch);
+    return source ? sourceAvailableKg(fgAvailable(source), source.unit, source.gramsPerUnit) : null;
+  }
+  if (row.upstreamSemiFinished) {
+    const source = sfiOptions.value.find((item) => item.intermediateBatchNo === row.upstreamBatch);
+    return source ? sourceAvailableKg(sfiAvailable(source), source.unit, source.gramsPerUnit) : null;
+  }
+  const source = props.upstreamItems.find((item) => item.batchNumber === row.upstreamBatch);
+  return source ? sourceAvailableKg(source.remaining, source.unit) : null;
+}
+
+function formalSubmitBlockedReason(row: SheetRow): string | null {
+  if (!isQidiao.value || isMultiSource.value) return null;
+  const inputKg = resolvedFinishedInputKg(row);
+  if (inputKg != null && inputKg > 0) return null;
+  return '无法从所选上游库存确定实际投入量，请刷新库存或重新选择上游批次后再正式报工';
 }
 
 /** Mirrors the inputQuantity selected by buildRequest, for pre-save pot validation/preview. */
 function potInputQuantity(row: SheetRow): number {
-  if (isXiuYou.value) return row.rawBatchQty ?? 0;
+  if (isXiuYou.value) return usesAutoMaterialTotals(row) ? materialInputTotalKg(row) : (row.rawBatchQty ?? 0);
   if (isMultiSource.value) {
     const totalFeed = row.upstreamSources.reduce((sum, source) => sum + (source.feedQuantityKg || 0), 0);
     if (isSingleUpstream.value) return (row.fields['before'] as number) ?? totalFeed;
     if (isQuSheTou.value) return calcReverseInput(row) ?? totalFeed;
     if (isShuZhi.value || isGenericUpstream.value) return (row.fields['input'] as number) ?? totalFeed;
-    if (isQidiao.value) return (row.fields['usedWeight'] as number) ?? totalFeed;
+    if (isQidiao.value) return totalFeed;
   }
   return singleSourceUsage(row);
 }
@@ -843,13 +914,11 @@ function calcYield(row: SheetRow): number | null {
   let output: number | null = null;
 
   if (isXiuYou.value) {
-    input = row.rawBatchQty;
+    input = usesAutoMaterialTotals(row) ? materialInputTotalKg(row) : row.rawBatchQty;
     output = (row.fields['output'] as number) ?? null;
   } else if (isMultiSource.value) {
     input = row.upstreamSources.reduce((sum, src) => sum + (src.feedQuantityKg || 0), 0);
-    output = isQidiao.value
-      ? ((row.fields['productWeight'] as number) ?? null)
-      : ((row.fields['output'] as number) ?? null);
+    output = (row.fields['output'] as number) ?? null;
   } else if (isSingleUpstream.value) {
     // 焯水 + 滚揉: before/after 字段
     input = (row.fields['before'] as number) ?? null;
@@ -871,8 +940,9 @@ function calcTotalHours(row: SheetRow): number {
     if (!seg.startTime || !seg.endTime) return sum;
     const [sh, sm] = seg.startTime.split(':').map(Number);
     const [eh, em] = seg.endTime.split(':').map(Number);
-    const mins = (eh * 60 + em) - (sh * 60 + sm);
-    return sum + Math.max(0, mins / 60) * (seg.workerCount || 0);
+    const rawMinutes = (eh * 60 + em) - (sh * 60 + sm);
+    const minutes = rawMinutes < 0 ? rawMinutes + 24 * 60 : rawMinutes;
+    return sum + (minutes / 60) * (seg.workerCount || 0);
   }, 0);
 }
 
@@ -900,48 +970,84 @@ function calcRemaining(row: SheetRow): number | null {
 }
 
 // -------------------------------------------------------------------------
-// 气调 AutoCalc helpers (SP-G G3b)
+// 成品报工派生值：SKU/Workflow 单位与净重是唯一真值。
 // -------------------------------------------------------------------------
 
-/** 实际生产(盒) = 入库 + 留样 + 剩余 + 领用 */
-function calcSumBoxes(row: SheetRow): number {
-  return ((row.fields['storage'] as number) || 0)
-    + ((row.fields['sample'] as number) || 0)
-    + ((row.fields['remainBox'] as number) || 0)
-    + ((row.fields['claim'] as number) || 0);
+const finishedOutputPort = computed(() => {
+  const port = props.workflowContext?.output ?? null;
+  return port?.finished ? port : null;
+});
+
+function finishedActualQuantity(row: SheetRow): number | null {
+  const value = row.fields['actualProd'];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
-/** 总重量(kg) = 成品重 + 料头 */
-function calcSumWeight(row: SheetRow): number {
-  return ((row.fields['productWeight'] as number) || 0)
-    + ((row.fields['trimmings'] as number) || 0);
+function finishedSampleQuantity(row: SheetRow): number {
+  const value = row.fields['sample'];
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
-/** 出成率(%) = 成品重 / 使用重量 × 100 */
-function calcYieldByProductWeight(row: SheetRow): number | null {
-  const usedWeight = (row.fields['usedWeight'] as number) ?? 0;
-  const productWeight = (row.fields['productWeight'] as number) ?? 0;
-  if (!usedWeight) return null;
-  return Math.round((productWeight / usedWeight) * 10000) / 100;
+function finishedInboundQuantity(row: SheetRow): number | null {
+  const actual = finishedActualQuantity(row);
+  if (actual == null) return null;
+  return Math.max(0, actual - finishedSampleQuantity(row));
 }
 
-/** Per-box labor preview = worker-hours * hourly rate * box kg / allocated kg. */
-function calcLaborPerBox(row: SheetRow): number | null {
-  const productWeight = (row.fields['productWeight'] as number) ?? 0;
-  const totalWeight = calcSumWeight(row);
-  const actualBoxes = calcSumBoxes(row);
-  const boxWeightGrams = (row.fields['boxWeight'] as number) ?? null;
-  const estimatedWeightFromBoxes = boxWeightGrams && actualBoxes
-    ? (boxWeightGrams / 1000) * actualBoxes
-    : null;
+function quantityWeightKg(quantity: number | null, unit: string, gramsPerUnit: number | null): number | null {
+  if (quantity == null) return null;
+  if (unit.trim().toLowerCase() === 'kg' || unit.trim() === '千克') return quantity;
+  if (gramsPerUnit == null || gramsPerUnit <= 0) return null;
+  return quantity * gramsPerUnit / 1000;
+}
 
-  return calculateLaborPerBox({
-    hourlyRate: (row.fields['workerPrice'] as number) ?? null,
-    totalHours: calcTotalHours(row),
-    boxWeightGrams,
-    allocationWeightKg: productWeight || totalWeight || estimatedWeightFromBoxes,
-    actualBoxes,
-  });
+function finishedWeightKg(row: SheetRow, inbound = false): number | null {
+  const quantity = inbound ? finishedInboundQuantity(row) : finishedActualQuantity(row);
+  return quantityWeightKg(
+    quantity,
+    processUnits.value.outputUnit,
+    finishedOutputPort.value?.gramsPerUnit ?? null,
+  );
+}
+
+function formattedWeight(value: number | null): string {
+  if (value == null) return '未配置单位净重，无法计算成品重量';
+  return `${Number(value.toFixed(6))} kg`;
+}
+
+function unitNetWeightText(): string {
+  const unit = processUnits.value.outputUnit;
+  if (unit.trim().toLowerCase() === 'kg' || unit.trim() === '千克') return '单位净重：按 kg 记账';
+  const grams = finishedOutputPort.value?.gramsPerUnit;
+  return grams != null && grams > 0 ? `单位净重：${Number(grams.toFixed(3))}g/${unit}` : '单位净重：未配置';
+}
+
+function outputLineWeightKg(line: MultiOutputLine): number | null {
+  return quantityWeightKg(line.quantity, line.unit, line.gramsPerUnit);
+}
+
+function outputLinePrecision(line: MultiOutputLine): number {
+  return line.finished && line.unit.trim().toLowerCase() !== 'kg' && line.unit.trim() !== '千克' ? 0 : 6;
+}
+
+function fieldPrecision(key: string): number {
+  if (!isQidiao.value || (key !== 'actualProd' && key !== 'sample')) return 2;
+  const unit = processUnits.value.outputUnit.trim().toLowerCase();
+  return unit === 'kg' || unit === '千克' ? 6 : 0;
+}
+
+function usesAutoMaterialTotals(row: SheetRow): boolean {
+  return isXiuYou.value && workflowRawInputs.value.length > 0 && !row.legacyExplicitRawInput;
+}
+
+function submittedMaterialInputTotals(row: SheetRow): MaterialInputTotal[] {
+  return row.materialInputTotals
+    .filter((item) => item.quantity != null && item.quantity > 0)
+    .map(({ materialName: _materialName, quantity, ...item }) => ({ ...item, quantity: quantity! }));
+}
+
+function materialInputTotalKg(row: SheetRow): number {
+  return submittedMaterialInputTotals(row).reduce((sum, item) => sum + item.quantity, 0);
 }
 
 function upstreamWarning(row: SheetRow): string | null {
@@ -1013,13 +1119,19 @@ function upstreamWarning(row: SheetRow): string | null {
 // Save-disabled reason (fool-proof gate)
 // -------------------------------------------------------------------------
 function saveDisabledReason(row: SheetRow): string | null {
+  if (row.submissionStatus === 'SUBMITTED') return '该行已正式报工，不能直接修改';
   // 2B.2 多产出: 单产出字段(下方 'output'/'after'/'usedWeight'+sumBoxes 等)已被「多产出」录入块
   // 取代、不再渲染 —— 下方 `&& !isMultiOutput.value` 跳过那些"填了单产出输出吗"检查(它们永远
   // 是 null, 会永久卡住保存), 改用本函数末尾的多产出专属检查。输入侧完整性检查(上游批次/原料
   // 批次/投入重量等)照常执行, 不受影响 —— 多产出的投入分配方式与单产出完全一致。
   if (isXiuYou.value) {
-    if (!row.rawBatchId) return '请选择原料批次';
-    if (row.rawBatchQty == null) return '请填写出库重量';
+    if (usesAutoMaterialTotals(row)) {
+      const missing = row.materialInputTotals.find((item) => item.quantity == null || item.quantity <= 0);
+      if (missing) return `请填写「${missing.materialName}」的投料总量`;
+    } else {
+      if (!row.rawBatchId) return '请选择原料批次';
+      if (row.rawBatchQty == null) return '请填写出库重量';
+    }
     if (!isMultiOutput.value && (row.fields['output'] as number) == null) return '请填写产出数量';
   } else if (isMultiSource.value) {
     if (row.upstreamSources.length === 0) return '请添加上游来源批';
@@ -1036,8 +1148,10 @@ function saveDisabledReason(row: SheetRow): string | null {
     } else if (isShuZhi.value || isGenericUpstream.value) {
       if (!isMultiOutput.value && (row.fields['output'] as number) == null) return '请填写产出数量';
     } else if (isQidiao.value) {
-      if ((row.fields['usedWeight'] as number) == null) return '请填写使用重量';
-      if (!isMultiOutput.value && calcSumBoxes(row) <= 0) return '请填写入库/留样/剩余/领用至少一项(实际生产需>0)';
+      if (!isMultiOutput.value && (finishedActualQuantity(row) ?? 0) <= 0) return '请填写实际生产数量';
+      if (!isMultiOutput.value && finishedSampleQuantity(row) > (finishedActualQuantity(row) ?? 0)) {
+        return '留样数量不能大于实际生产数量';
+      }
     }
   } else if (isSingleSource.value) {
     if (!row.upstreamBatch) return `请选择${upstreamProcessName.value}批次`;
@@ -1054,8 +1168,10 @@ function saveDisabledReason(row: SheetRow): string | null {
       if ((row.fields['input'] as number) == null) return '请填写投入重量';
       if (!isMultiOutput.value && (row.fields['output'] as number) == null) return '请填写产出数量';
     } else if (isQidiao.value) {
-      if ((row.fields['usedWeight'] as number) == null) return '请填写使用重量';
-      if (!isMultiOutput.value && calcSumBoxes(row) <= 0) return '请填写入库/留样/剩余/领用至少一项(实际生产需>0)';
+      if (!isMultiOutput.value && (finishedActualQuantity(row) ?? 0) <= 0) return '请填写实际生产数量';
+      if (!isMultiOutput.value && finishedSampleQuantity(row) > (finishedActualQuantity(row) ?? 0)) {
+        return '留样数量不能大于实际生产数量';
+      }
     }
   }
   // 2B.2 多产出: required 端口必须填数量；可选端口允许留空且不会发送。
@@ -1127,8 +1243,14 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
   }
 
   if (isXiuYou.value) {
-    base.rawMaterialInputs = [{ materialBatchId: row.rawBatchId, quantity: row.rawBatchQty! }];
-    base.inputQuantity = row.rawBatchQty ?? undefined;
+    if (usesAutoMaterialTotals(row)) {
+      const totals = submittedMaterialInputTotals(row);
+      base.materialInputTotals = totals.length ? totals : undefined;
+      base.inputQuantity = totals.length ? materialInputTotalKg(row) : undefined;
+    } else {
+      base.rawMaterialInputs = [{ materialBatchId: row.rawBatchId, quantity: row.rawBatchQty! }];
+      base.inputQuantity = row.rawBatchQty ?? undefined;
+    }
     base.outputQuantity = (row.fields['output'] as number) ?? 0;
     // SP-G G3c: 副产 (修油 — 肥油等)
     const bpQty = (row.fields['byproductQty'] as number) ?? 0;
@@ -1158,20 +1280,19 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
       base.inputQuantity = (row.fields['input'] as number) ?? totalFeed;
       base.outputQuantity = (row.fields['output'] as number) ?? 0;
     } else if (isQidiao.value) {
-      const actualProd = calcSumBoxes(row);
-      base.inputQuantity = (row.fields['usedWeight'] as number) ?? totalFeed;
+      const actualProd = finishedActualQuantity(row) ?? 0;
+      base.inputQuantity = totalFeed || undefined;
       base.outputQuantity = actualProd;
-      const trimmings = (row.fields['trimmings'] as number) ?? 0;
-      if (trimmings > 0) {
-        base.byproducts = [{ name: '料头', quantity: trimmings, unit: 'kg' }];
-      }
-      const sample = (row.fields['sample'] as number) ?? 0;
+      const sample = finishedSampleQuantity(row);
       if (sample > 0) {
         base.sampleRetainQuantity = Math.round(sample);
       }
-      for (const key of ['storage', 'sample', 'remainBox', 'claim', 'productWeight', 'trimmings', 'usedWeight', 'boxWeight', 'workerPrice'] as const) {
-        base[key] = row.fields[key] ?? null;
-      }
+      base.actualProd = actualProd;
+      base.sample = sample;
+      base.storage = finishedInboundQuantity(row);
+      base.remainBox = finishedInboundQuantity(row);
+      base.productWeight = finishedWeightKg(row);
+      base.inboundWeight = finishedWeightKg(row, true);
     }
   } else if (isSingleUpstream.value) {
     // 焯水 + 滚揉: 结构相同. feedQuantityKg = before (领用量 = 投入量).
@@ -1207,31 +1328,28 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     base.inputQuantity = inputQty;
     base.outputQuantity = (row.fields['output'] as number) ?? 0;
   } else if (isQidiao.value) {
-    // ⭐ outputQuantity = 盒数 (actualProd), NOT kg
-    const actualProd = calcSumBoxes(row);
-    const inputQty = (row.fields['usedWeight'] as number) ?? 0;
+    const actualProd = finishedActualQuantity(row) ?? 0;
+    const inputKg = resolvedFinishedInputKg(row);
     base.upstreamSources = [{
       sourceBatchNumber: row.upstreamBatch,
-      feedQuantityKg: inputQty,
+      // 操作员不重复填写“使用重量”；由所选上游库存的实时可用量自动带入。
+      // 正式报工前 formalSubmitBlockedReason 会保证这里绝不以 0/null 提交。
+      feedQuantityKg: inputKg ?? 0,
       semiFinished: row.upstreamSemiFinished,
       finishedGoods: row.upstreamFinishedGoods,
     }];
-    base.inputQuantity = (row.fields['usedWeight'] as number) ?? undefined;
-    base.outputQuantity = actualProd;            // ⭐⭐ 盒数!
-    // 副产品: 料头
-    const trimmings = (row.fields['trimmings'] as number) ?? 0;
-    if (trimmings > 0) {
-      base.byproducts = [{ name: '料头', quantity: trimmings, unit: 'kg' }];
-    }
-    // 留样盒数 (Integer)
-    const sample = (row.fields['sample'] as number) ?? 0;
+    base.inputQuantity = inputKg ?? undefined;
+    base.outputQuantity = actualProd;
+    const sample = finishedSampleQuantity(row);
     if (sample > 0) {
       base.sampleRetainQuantity = Math.round(sample);
     }
-    // Persist numeric fields into payload JSON (backend stores row_payload)
-    for (const key of ['storage', 'sample', 'remainBox', 'claim', 'productWeight', 'trimmings', 'usedWeight', 'boxWeight', 'workerPrice'] as const) {
-      base[key] = row.fields[key] ?? null;
-    }
+    base.actualProd = actualProd;
+    base.sample = sample;
+    base.storage = finishedInboundQuantity(row);
+    base.remainBox = finishedInboundQuantity(row);
+    base.productWeight = finishedWeightKg(row);
+    base.inboundWeight = finishedWeightKg(row, true);
   }
 
   // G2 自定义字段: 收集**启用**字段进 customFields map。后端按 WorkProcess.customFieldSchema
@@ -1270,14 +1388,18 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
   // 分支已按原逻辑填好) 原样发送不变 —— 后端首产出行(#0)承载全部实际投入, 一次全量扣减。
   if (isMultiOutput.value) {
     const submittedOutputs = row.multiOutputs.filter((o) => o.quantity != null && o.quantity > 0);
-    base.outputs = submittedOutputs.map((o) => ({
-      productTypeId: o.productTypeId,
-      workflowPortId: o.workflowPortId || undefined,
-      materialNodeId: o.materialNodeId || undefined,
-      quantity: o.quantity ?? 0,
-      unit: o.unit || undefined,
-      finished: o.finished,
-    }));
+    base.outputs = submittedOutputs.map((o) => {
+      const productWeight = o.finished ? outputLineWeightKg(o) : null;
+      return {
+        productTypeId: o.productTypeId,
+        workflowPortId: o.workflowPortId || undefined,
+        materialNodeId: o.materialNodeId || undefined,
+        quantity: o.quantity ?? 0,
+        unit: o.unit || undefined,
+        finished: o.finished,
+        ...(productWeight != null ? { productWeight } : {}),
+      };
+    });
     // 顶层实际产量只代表 Workflow 主产出，不能把不同单位的产出相加。
     base.outputQuantity = submittedOutputs.find(
       (o) => o.workflowPortId === props.workflowContext?.output?.workflowPortId,
@@ -1300,7 +1422,7 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
 // -------------------------------------------------------------------------
 // Save / delete handlers
 // -------------------------------------------------------------------------
-async function handleSave(row: SheetRow) {
+async function handleSave(row: SheetRow, action: 'draft' | 'submit') {
   if (row.saving) return;
   const reason = saveDisabledReason(row);
   if (reason) {
@@ -1308,10 +1430,21 @@ async function handleSave(row: SheetRow) {
     ElMessage({ message: reason, type: 'error', duration: 0, showClose: true });
     return;
   }
+  if (action === 'submit') {
+    const formalReason = formalSubmitBlockedReason(row);
+    if (formalReason) {
+      row.blockingMessage = formalReason;
+      ElMessage({ message: formalReason, type: 'error', duration: 0, showClose: true });
+      return;
+    }
+  }
   row.saving = true;
+  if (action === 'submit') row.blockingMessage = null;
   try {
     const req = buildRequest(row);
-    const resp = await saveRow(props.factoryId, props.planId, req);
+    const resp = action === 'draft'
+      ? await saveDraftRow(props.factoryId, props.planId, req)
+      : await submitRow(props.factoryId, props.planId, req);
     const result = resp.data;
     if (result?.batchNumber) row.batchNumber = result.batchNumber;
     // 2B.2 多产出: 逐产出批次号回填 (按 workflowPortId 对齐; 缺失时按序号兜底, 理论不出现)。
@@ -1322,20 +1455,28 @@ async function handleSave(row: SheetRow) {
         return matched ? { ...o, batchNumber: matched.batchNumber } : o;
       });
     }
-    row.rowStatus = result?.materialized ? 'SAVED' : 'DRAFT';
+    row.submissionStatus = result?.submissionStatus ?? (action === 'submit' ? 'SUBMITTED' : 'DRAFT');
+    row.rowStatus = action === 'submit' && result?.materialized ? 'SAVED' : 'DRAFT';
     if (result?.warnings?.length) {
-      ElMessage({ message: '已保存(含提示): ' + result.warnings.join('; '), type: 'warning', duration: 0, showClose: true });
+      ElMessage({ message: `${action === 'draft' ? '草稿已保存' : '正式报工成功'}(含提示): ` + result.warnings.join('; '), type: 'warning', duration: 0, showClose: true });
     } else {
-      ElMessage.success(`已保存${row.batchNumber ? ' — ' + row.batchNumber : ''}`);
+      ElMessage.success(`${action === 'draft' ? '草稿已保存' : '正式报工成功'}${row.batchNumber ? ' — ' + row.batchNumber : ''}`);
     }
     emit('row-saved');
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : '保存失败';
+    const msg = e instanceof Error ? e.message : (action === 'draft' ? '草稿保存失败' : '正式报工失败');
+    const code = typeof e === 'object' && e != null && 'code' in e ? String((e as { code?: unknown }).code ?? '') : '';
+    if (action === 'submit' && code === 'PRODUCTION_STOCK_SHORTAGE') {
+      row.blockingMessage = msg || '当前只能保存草稿，生产库中投料量不足，请联系仓管补料';
+      ElMessage({ message: row.blockingMessage, type: 'error', duration: 0, showClose: true });
+      return;
+    }
     // 并发双提交/慢响应重试: 行已被首个请求保存成功(后端 409 + 回滚 loser), 幂等当成功处理,
     // 不给用户看错误 (fool-proof Rule 4 幂等防重复)。刷新本行状态即可。
     if (/该行已存在|并发提交/.test(msg)) {
       row.rowStatus = 'SAVED';
-      ElMessage.success('已保存');
+      row.submissionStatus = action === 'submit' ? 'SUBMITTED' : 'DRAFT';
+      ElMessage.success(action === 'submit' ? '正式报工成功' : '草稿已保存');
       emit('row-saved');
     } else {
       ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
@@ -1855,9 +1996,9 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
         <div class="sp-card-header">
           <span class="sp-card-idx">#{{ ri + 1 }}</span>
           <el-tag
-            :type="row.rowStatus === 'SAVED' ? 'success' : row.rowStatus === 'DRAFT' ? 'warning' : 'info'"
+            :type="row.submissionStatus === 'SUBMITTED' ? 'success' : row.rowStatus === 'DRAFT' ? 'warning' : 'info'"
             size="small" style="white-space:nowrap">
-            {{ row.rowStatus === 'SAVED' ? '已物化' : row.rowStatus === 'DRAFT' ? '草稿' : '新建' }}
+            {{ row.submissionStatus === 'SUBMITTED' ? '已正式报工' : row.rowStatus === 'DRAFT' ? '草稿' : '新建' }}
           </el-tag>
           <el-tooltip v-if="upstreamWarning(row)" :content="upstreamWarning(row)!" placement="top">
             <el-icon style="color:#e6a23c;cursor:pointer"><Warning /></el-icon>
@@ -1867,12 +2008,19 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
           <div style="flex:1" />
           <!-- Actions -->
           <el-button
+            size="small"
+            :loading="row.saving"
+            :disabled="!!saveDisabledReason(row) || row.saving"
+            :title="saveDisabledReason(row) || '只保存草稿，不占用生产库库存'"
+            @click="handleSave(row, 'draft')"
+            style="padding:3px 8px">保存草稿</el-button>
+          <el-button
             type="primary" size="small" :icon="Check"
             :loading="row.saving"
             :disabled="!!saveDisabledReason(row) || row.saving"
-            :title="saveDisabledReason(row) || '保存此行'"
-            @click="handleSave(row)"
-            style="padding:3px 8px">保存</el-button>
+            :title="saveDisabledReason(row) || '正式报工并由系统自动分摊生产库批次'"
+            @click="handleSave(row, 'submit')"
+            style="padding:3px 8px">正式报工</el-button>
           <el-button
             v-if="hasHistory(row)"
             link size="small" :icon="Clock"
@@ -1880,18 +2028,48 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             @click="openHistory(row)"
             style="margin-left:4px" />
           <el-button
+            v-if="row.submissionStatus !== 'SUBMITTED'"
             type="danger" link size="small" :icon="Delete"
             :loading="row.deleting"
             @click="handleDelete(row)"
             style="margin-left:4px" />
         </div>
 
+        <el-alert
+          v-if="row.blockingMessage"
+          :title="row.blockingMessage"
+          type="error"
+          :closable="false"
+          show-icon
+          style="margin:8px 12px 0"
+        />
+
         <!-- Card body: field grid -->
         <div class="sp-card-body">
 
           <!-- 修油: raw-material batch dropdown + out-weight -->
           <template v-if="isXiuYou">
-            <div class="sp-card-field">
+            <template v-if="usesAutoMaterialTotals(row)">
+              <div
+                v-for="item in row.materialInputTotals"
+                :key="item.workflowPortId || item.materialTypeId"
+                data-testid="material-input-total"
+                class="sp-card-field"
+              >
+                <label class="sp-card-label">{{ item.materialName }} · 投料总量(kg)</label>
+                <el-input-number
+                  v-model="item.quantity"
+                  :min="0"
+                  :precision="6"
+                  controls-position="right"
+                  style="width:160px"
+                  size="small"
+                />
+                <span style="font-size:11px;color:#909399">来源批次由系统按生产库入库顺序自动分摊</span>
+              </div>
+            </template>
+            <template v-else>
+            <div data-testid="legacy-raw-batch-picker" class="sp-card-field">
               <label class="sp-card-label">原料批次</label>
               <el-select
                 v-model="row.rawBatchId"
@@ -1932,6 +2110,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 controls-position="right"
                 style="width:160px" size="small" />
             </div>
+            </template>
           </template>
 
           <!-- 单来源上游: 含半成品库存(SFI)/成品库存(FG)选项 -->
@@ -2109,7 +2288,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 v-if="col.type === 'number'"
                 :model-value="(row.fields[col.key] as number) ?? undefined"
                 @update:model-value="(v: number) => row.fields[col.key] = v"
-                :min="0" :precision="2"
+                :min="0" :precision="fieldPrecision(col.key)"
                 controls-position="right"
                 style="width:160px" size="small" />
 
@@ -2148,24 +2327,21 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               <!-- totalHours shown in the labor expander below; skip inline -->
               <span v-else-if="col.type === 'auto' && col.autoCalc === 'totalHours'" />
 
-              <!-- auto: sumBoxes (气调: 实际生产=入库+留样+剩余+领用) -->
-              <span v-else-if="col.type === 'auto' && col.autoCalc === 'sumBoxes'" class="sp-readonly">
-                {{ calcSumBoxes(row) }}
+              <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedInbound'" class="sp-readonly">
+                {{ finishedInboundQuantity(row) ?? '—' }} {{ processUnits.outputUnit }}
               </span>
 
-              <!-- auto: sumWeight (气调: 总重量=成品重+料头) -->
-              <span v-else-if="col.type === 'auto' && col.autoCalc === 'sumWeight'" class="sp-readonly">
-                {{ calcSumWeight(row).toFixed(2) }}
+              <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedRemaining'" class="sp-readonly">
+                {{ finishedInboundQuantity(row) ?? '—' }} {{ processUnits.outputUnit }}
               </span>
 
-              <!-- auto: yieldByProductWeight (气调: 出成率=成品重/使用重量×100) -->
-              <span v-else-if="col.type === 'auto' && col.autoCalc === 'yieldByProductWeight'" class="sp-readonly">
-                {{ calcYieldByProductWeight(row) != null ? calcYieldByProductWeight(row)!.toFixed(2) + '%' : '—' }}
+              <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedWeight'" class="sp-readonly">
+                {{ formattedWeight(finishedWeightKg(row)) }}
+                <small style="display:block;color:#909399">{{ unitNetWeightText() }}</small>
               </span>
 
-              <!-- auto: laborPerBox (气调: 每盒人工费=工时单价×总工时/实际生产) -->
-              <span v-else-if="col.type === 'auto' && col.autoCalc === 'laborPerBox'" class="sp-readonly">
-                {{ calcLaborPerBox(row) != null ? '¥' + calcLaborPerBox(row)!.toFixed(4) : '—' }}
+              <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedInboundWeight'" class="sp-readonly">
+                {{ formattedWeight(finishedWeightKg(row, true)) }}
               </span>
 
               <span v-else-if="col.type === 'readonly' || col.type === 'text'" class="sp-readonly">
@@ -2193,10 +2369,13 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               </span>
               <el-input-number
                 v-model="o.quantity"
-                :min="0" :precision="2"
+                :min="0" :precision="outputLinePrecision(o)"
                 controls-position="right"
                 size="small" style="width:150px" />
               <span style="font-size:12px;color:#909399">{{ o.unit }}</span>
+              <span v-if="o.finished" style="font-size:12px;color:#606266">
+                {{ outputLineWeightKg(o) == null ? '未配置单位净重，无法计算成品重量' : `成品重量 ${formattedWeight(outputLineWeightKg(o))}` }}
+              </span>
               <span v-if="o.batchNumber" class="sp-readonly sp-batch-num" style="font-size:11px">
                 {{ o.batchNumber }}
               </span>
@@ -2243,8 +2422,8 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 
             <!-- 修油: raw batch + out-weight cols appear before generic cols -->
             <template v-if="isXiuYou">
-              <th class="sp-th">原料批次</th>
-              <th class="sp-th sp-th-num">{{ firstProcessInputLabel }}</th>
+              <th class="sp-th">{{ workflowRawInputs.length ? '投料物料' : '原料批次' }}</th>
+              <th class="sp-th sp-th-num">{{ workflowRawInputs.length ? '投料总量(kg)' : firstProcessInputLabel }}</th>
             </template>
 
             <!-- 单来源上游 -->
@@ -2342,9 +2521,9 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               <!-- Status tag -->
               <td class="sp-td sp-td-status">
                 <el-tag
-                  :type="row.rowStatus === 'SAVED' ? 'success' : row.rowStatus === 'DRAFT' ? 'warning' : 'info'"
+                  :type="row.submissionStatus === 'SUBMITTED' ? 'success' : row.rowStatus === 'DRAFT' ? 'warning' : 'info'"
                   size="small" style="white-space:nowrap">
-                  {{ row.rowStatus === 'SAVED' ? '已物化' : row.rowStatus === 'DRAFT' ? '草稿' : '新建' }}
+                  {{ row.submissionStatus === 'SUBMITTED' ? '已正式报工' : row.rowStatus === 'DRAFT' ? '草稿' : '新建' }}
                 </el-tag>
                 <el-tooltip v-if="upstreamWarning(row)" :content="upstreamWarning(row)!" placement="top">
                   <el-icon style="color:#e6a23c;margin-left:3px;cursor:pointer"><Warning /></el-icon>
@@ -2353,8 +2532,35 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 
               <!-- ---- 修油: raw-material batch dropdown ---- -->
               <template v-if="isXiuYou">
+                <template v-if="usesAutoMaterialTotals(row)">
+                  <td class="sp-td">
+                    <div v-for="item in row.materialInputTotals" :key="item.workflowPortId || item.materialTypeId">
+                      {{ item.materialName }}
+                    </div>
+                  </td>
+                  <td class="sp-td sp-td-num">
+                    <div
+                      v-for="item in row.materialInputTotals"
+                      :key="item.workflowPortId || item.materialTypeId"
+                      data-testid="material-input-total"
+                      style="display:flex;align-items:center;gap:4px;margin-bottom:4px"
+                    >
+                      <el-input-number
+                        v-model="item.quantity"
+                        :min="0"
+                        :precision="6"
+                        controls-position="right"
+                        style="width:110px"
+                        size="small"
+                      />
+                      <span>kg</span>
+                    </div>
+                  </td>
+                </template>
+                <template v-else>
                 <td class="sp-td">
                   <el-select
+                    data-testid="legacy-raw-batch-picker"
                     v-model="row.rawBatchId"
                     :loading="rawBatchLoading"
                     placeholder="选原料批次"
@@ -2397,6 +2603,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     controls-position="right"
                     style="width:110px" size="small" />
                 </td>
+                </template>
               </template>
 
               <!-- ---- 单来源上游 dropdown — 含半成品库存(SFI)/成品库存(FG) ---- -->
@@ -2518,7 +2725,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     v-if="col.type === 'number'"
                     :model-value="(row.fields[col.key] as number) ?? undefined"
                     @update:model-value="(v: number) => row.fields[col.key] = v"
-                    :min="0" :precision="2"
+                    :min="0" :precision="fieldPrecision(col.key)"
                     controls-position="right"
                     style="width:110px" size="small" />
 
@@ -2561,24 +2768,21 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                   <!-- auto: totalHours — shown in dedicated labor column instead -->
                   <span v-else-if="col.type === 'auto' && col.autoCalc === 'totalHours'" />
 
-                  <!-- auto: sumBoxes (气调: 实际生产=入库+留样+剩余+领用) -->
-                  <span v-else-if="col.type === 'auto' && col.autoCalc === 'sumBoxes'" class="sp-readonly">
-                    {{ calcSumBoxes(row) }}
+                  <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedInbound'" class="sp-readonly">
+                    {{ finishedInboundQuantity(row) ?? '—' }} {{ processUnits.outputUnit }}
                   </span>
 
-                  <!-- auto: sumWeight (气调: 总重量=成品重+料头) -->
-                  <span v-else-if="col.type === 'auto' && col.autoCalc === 'sumWeight'" class="sp-readonly">
-                    {{ calcSumWeight(row).toFixed(2) }}
+                  <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedRemaining'" class="sp-readonly">
+                    {{ finishedInboundQuantity(row) ?? '—' }} {{ processUnits.outputUnit }}
                   </span>
 
-                  <!-- auto: yieldByProductWeight (气调: 出成率=成品重/使用重量×100) -->
-                  <span v-else-if="col.type === 'auto' && col.autoCalc === 'yieldByProductWeight'" class="sp-readonly">
-                    {{ calcYieldByProductWeight(row) != null ? calcYieldByProductWeight(row)!.toFixed(2) + '%' : '—' }}
+                  <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedWeight'" class="sp-readonly">
+                    {{ formattedWeight(finishedWeightKg(row)) }}
+                    <small style="display:block;color:#909399">{{ unitNetWeightText() }}</small>
                   </span>
 
-                  <!-- auto: laborPerBox (气调: 每盒人工费=工时单价×总工时/实际生产) -->
-                  <span v-else-if="col.type === 'auto' && col.autoCalc === 'laborPerBox'" class="sp-readonly">
-                    {{ calcLaborPerBox(row) != null ? '¥' + calcLaborPerBox(row)!.toFixed(4) : '—' }}
+                  <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedInboundWeight'" class="sp-readonly">
+                    {{ formattedWeight(finishedWeightKg(row, true)) }}
                   </span>
 
                   <!-- readonly / text -->
@@ -2604,12 +2808,19 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               <!-- Row actions -->
               <td class="sp-td sp-td-actions">
                 <el-button
+                  size="small"
+                  :loading="row.saving"
+                  :disabled="!!saveDisabledReason(row) || row.saving"
+                  :title="saveDisabledReason(row) || '只保存草稿，不占用生产库库存'"
+                  @click="handleSave(row, 'draft')"
+                  style="padding:3px 6px">保存草稿</el-button>
+                <el-button
                   type="primary" size="small" :icon="Check"
                   :loading="row.saving"
                   :disabled="!!saveDisabledReason(row) || row.saving"
-                  :title="saveDisabledReason(row) || '保存此行'"
-                  @click="handleSave(row)"
-                  style="padding:3px 8px">保存</el-button>
+                  :title="saveDisabledReason(row) || '正式报工并自动分摊生产库批次'"
+                  @click="handleSave(row, 'submit')"
+                  style="padding:3px 6px;margin-left:4px">正式报工</el-button>
                 <el-button
                   v-if="hasHistory(row)"
                   link size="small" :icon="Clock"
@@ -2617,10 +2828,17 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                   @click="openHistory(row)"
                   style="margin-left:4px" />
                 <el-button
+                  v-if="row.submissionStatus !== 'SUBMITTED'"
                   type="danger" link size="small" :icon="Delete"
                   :loading="row.deleting"
                   @click="handleDelete(row)"
                   style="margin-left:4px" />
+              </td>
+            </tr>
+
+            <tr v-if="row.blockingMessage" :key="row.clientRowId + '-blocking'" class="sp-tr-expand">
+              <td :colspan="999" class="sp-td-expand">
+                <el-alert :title="row.blockingMessage" type="error" :closable="false" show-icon />
               </td>
             </tr>
 
@@ -2644,10 +2862,13 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     </span>
                     <el-input-number
                       v-model="o.quantity"
-                      :min="0" :precision="2"
+                      :min="0" :precision="outputLinePrecision(o)"
                       controls-position="right"
                       size="small" style="width:150px" />
                     <span style="font-size:12px;color:#909399">{{ o.unit }}</span>
+                    <span v-if="o.finished" style="font-size:12px;color:#606266">
+                      {{ outputLineWeightKg(o) == null ? '未配置单位净重，无法计算成品重量' : `成品重量 ${formattedWeight(outputLineWeightKg(o))}` }}
+                    </span>
                     <span v-if="o.batchNumber" class="sp-readonly sp-batch-num" style="font-size:11px">
                       {{ o.batchNumber }}
                     </span>

@@ -9,9 +9,9 @@
  * 后端对应: FeedUnitConverter (盒 = kg × 1000 / gramsPerUnit) + consumeForFeedStrict / consumeClerkSemiStrict。
  */
 
-/** 计数单位判定 (与后端 FeedUnitConverter.isCountUnit 同口径: 盒/个/件/只)。 */
+/** 计数单位判定，与后端 FeedUnitConverter.isCountUnit 保持同口径。 */
 export function isCountUnit(unit: string | null | undefined): boolean {
-  return !!unit && /盒|个|件|只/.test(unit);
+  return !!unit && /盒|袋|包|个|件|只|份|瓶|罐/.test(unit);
 }
 
 /** 每盒克重是否有效 (>0)。诚实: null/0/负 → 无法折算。 */

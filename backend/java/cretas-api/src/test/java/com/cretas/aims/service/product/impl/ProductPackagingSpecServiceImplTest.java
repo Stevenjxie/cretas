@@ -111,10 +111,24 @@ class ProductPackagingSpecServiceImplTest {
                 .containsExactly("spec-12", "spec-24");
         assertThat(product.getLevel1Unit()).isEqualTo("箱");
         assertThat(product.getBoxConversionCoefficient()).isEqualByComparingTo("12");
-        assertThat(product.getSpecification()).isEqualTo("200克/盒 12盒/箱 24盒/箱");
+        assertThat(product.getSpecification()).isEqualTo("200g/盒 12盒/箱 2.4kg/箱 24盒/箱 4.8kg/箱");
         assertThat(twelve.getDeletedAt()).isNull();
         assertThat(twentyFour.getDeletedAt()).isNull();
         verify(productTypeRepository).save(product);
+    }
+
+    @Test
+    void rejectsFractionalCountInPackagingSpec() {
+        ProductType product = new ProductType();
+        product.setId(PRODUCT_ID);
+        product.setFactoryId(FACTORY_ID);
+        product.setUnit("盒");
+
+        assertThatThrownBy(() -> service.replace(product, List.of(
+                dto(null, "半箱", "10.5", 0L))))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getErrorCode())
+                                .isEqualTo("PACKAGING_SPEC_FACTOR_NOT_INTEGER"));
     }
 
     private ProductPackagingSpecDTO dto(String id, String name, String factor, long version) {

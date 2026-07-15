@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.util.List;
+import java.math.BigDecimal;
 
 /**
  * 2B Task B2: 把 workflow 快照投影成文员逐工序过程单 (clerk 过程单) 可消费的结构。
@@ -66,6 +67,8 @@ public class WorkflowClerkSheetConfigDTO {
         private String skuId;
         private String materialName;
         private String unit;
+        /** Workflow 运行时物化时锁定的 SKU 每基本单位净重（克）。 */
+        private BigDecimal gramsPerUnit;
         private Boolean required;
         /** false 时 skuId 已无法解析 (物料/产品被删除) — FE 应显示 "SKU 已失效, 请回 Workflow 配置" 提示。 */
         private Boolean skuResolved;

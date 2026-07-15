@@ -57,6 +57,14 @@ class FgQuantityUnitConverterTest {
     }
 
     @Test
+    @DisplayName("袋装 SKU 也是计数单位: 10袋×200g=2kg")
+    void bagCountToKg() {
+        BigDecimal result = FgQuantityUnitConverter.convert(
+                new BigDecimal("10"), "袋", "kg", new BigDecimal("200"));
+        assertEquals(0, new BigDecimal("2.0000").compareTo(result));
+    }
+
+    @Test
     @DisplayName("kg → 计数单位(盒): qty × 1000 / gramsPerUnit")
     void kgToCount() {
         // gramsPerUnit=120g/盒 → 0.45kg = 450g / 120g = 3.75 盒

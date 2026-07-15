@@ -37,6 +37,22 @@ public class ProcessSheetRowResult {
     /** 调料配方缺失 / 超量软预警 / labor rate fallback 等。 */
     private List<String> warnings;
 
+    /** DRAFT / SUBMITTED；旧 saveRow 路径未显式提交时保持原有语义。 */
+    private String submissionStatus;
+
+    /** 正式提交时由生产库自动生成的批次分摊明细。 */
+    private List<InputAllocation> inputAllocations;
+
+    @Data
+    public static class InputAllocation {
+        private String materialTypeId;
+        private String materialBatchId;
+        private String batchNumber;
+        private BigDecimal quantity;
+        private String unit;
+        private Integer allocationOrder;
+    }
+
     /**
      * 2B.2 多产出: 本次报工分解出的各产出批次明细 (单产出时为 null)。FE 重载过程单会拿到 N 行,
      * 此处仅为即时反馈。顶层 batchId/batchNumber 取首产出为代表。

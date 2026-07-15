@@ -276,8 +276,8 @@ class InterimSettleServiceTest {
         ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
         verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
         FinishedGoodsBatch fg = fgCap.getValue();
-        assertThat(fg.getProducedQuantity()).isEqualByComparingTo("9");
-        assertThat(fg.getUnit()).isEqualTo("kg");
+        assertThat(fg.getProducedQuantity()).isEqualByComparingTo("50");
+        assertThat(fg.getUnit()).isEqualTo("盒");
         assertThat(fg.getWarehouseId()).isEqualTo("WH-FG");
         assertThat(fg.getBatchNumber()).isEqualTo("FG-PP-001-S2-PT1"); // 含 productType8 (PT1)
         // 小结2 无新 SFI IN (道4 是成品), postClerkOutput 仍累计 1 次 (来自小结1)
@@ -345,8 +345,8 @@ class InterimSettleServiceTest {
         // 成品道 → FG 入库 (productWeight 6kg)
         ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
         verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
-        assertThat(fgCap.getValue().getProducedQuantity()).isEqualByComparingTo("6");
-        assertThat(fgCap.getValue().getUnit()).isEqualTo("kg");
+        assertThat(fgCap.getValue().getProducedQuantity()).isEqualByComparingTo("40");
+        assertThat(fgCap.getValue().getUnit()).isEqualTo("盒");
 
         // 成品道不入 SFI (postClerkOutput 不被调用)
         verify(wipInventoryService, never()).postClerkOutput(any(), any(), any(), any(), any(), any(), any(), any());
@@ -378,7 +378,7 @@ class InterimSettleServiceTest {
         ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
         verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
         assertThat(fgCap.getValue().getStatus()).isEqualTo("DEFECTIVE");
-        assertThat(fgCap.getValue().getProducedQuantity()).isEqualByComparingTo("6");
+        assertThat(fgCap.getValue().getProducedQuantity()).isEqualByComparingTo("40");
     }
 
     @Test
@@ -448,7 +448,7 @@ class InterimSettleServiceTest {
         // 成品道 → FG 入库 (productWeight 6kg)
         ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
         verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
-        assertThat(fgCap.getValue().getProducedQuantity()).isEqualByComparingTo("6");
+        assertThat(fgCap.getValue().getProducedQuantity()).isEqualByComparingTo("40");
         // 成品道不入 SFI
         verify(wipInventoryService, never()).postClerkOutput(any(), any(), any(), any(), any(), any(), any(), any());
         assertThat(rX.getInterimSettledAt()).isNotNull();
@@ -477,7 +477,7 @@ class InterimSettleServiceTest {
         verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
         FinishedGoodsBatch fg = fgCap.getValue();
         assertThat(fg.getUnitCost()).isNotNull();
-        assertThat(fg.getUnitCost()).isEqualByComparingTo("64"); // (40 + 30×20) / 10
+        assertThat(fg.getUnitCost()).isEqualByComparingTo("12.8"); // (40 + 30×20) / 50 boxes
     }
 
     @Test
@@ -504,7 +504,7 @@ class InterimSettleServiceTest {
 
         ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
         verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
-        assertThat(fgCap.getValue().getUnitCost()).isEqualByComparingTo("24"); // (40 + 10盒×20) / 10
+        assertThat(fgCap.getValue().getUnitCost()).isEqualByComparingTo("4.8"); // (40 + 10盒×20) / 50 boxes
     }
 
     @Test
@@ -705,9 +705,9 @@ class InterimSettleServiceTest {
         ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
         verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
         FinishedGoodsBatch fg = fgCap.getValue();
-        assertThat(fg.getProducedQuantity()).isEqualByComparingTo("10");
+        assertThat(fg.getProducedQuantity()).isEqualByComparingTo("50");
         assertThat(fg.getUnitCost()).isNotNull();
-        assertThat(fg.getUnitCost()).isEqualByComparingTo("54"); // (40 + 80×6.25) / 10
+        assertThat(fg.getUnitCost()).isEqualByComparingTo("10.8"); // (40 + 80×6.25) / 50 boxes
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -775,10 +775,10 @@ class InterimSettleServiceTest {
         verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
         FinishedGoodsBatch saved = fgCap.getValue();
         assertThat(saved.getId()).isEqualTo("fg-corpse-1");                       // 复用尸体行 (不新建撞唯一约束)
-        assertThat(saved.getProducedQuantity()).isEqualByComparingTo("8");        // 真实产量, 非留 0
+        assertThat(saved.getProducedQuantity()).isEqualByComparingTo("50");       // SKU quantity, not productWeight
         assertThat(saved.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE); // 可售, 非 REVERSED
         // summary.finishedQuantity 与实际 FG 一致 (不再假报产量却无货)
-        assertThat(s.get("finishedQuantity")).isEqualTo(new BigDecimal("8"));
+        assertThat(s.get("finishedQuantity")).isEqualTo(new BigDecimal("50"));
         // fgCreated 明细记录 → 本次小结可再次撤销 (可逆性保持)
         @SuppressWarnings("unchecked")
         Map<String, Object> rd = (Map<String, Object>) s.get("reversalDetail");
@@ -920,20 +920,38 @@ class InterimSettleServiceTest {
     }
 
     @Test
-    @DisplayName("🔴 多成品行同产品混计量单位 (kg vs 盒) → loud-fail (禁止降级, 不静默相加异构口径)")
-    void multipleSameProductRowsUnitConflictLoudFails() {
-        // 行1 用成品重 (productWeight → kg), 行2 用盒 (outputQuantity) → 同产品 PT1 单位冲突 → 整个小结 loud-fail
+    @DisplayName("多成品行始终按 SKU 数量单位聚合，productWeight 不得改变库存口径")
+    void multipleSameProductRowsIgnoreWeightForInventoryQuantity() {
         ProcessSheetRow r1 = row(340L, 1, "WIP-UC-1",
-                reqFinished(1, "WIP-UC-1", new BigDecimal("10"), new BigDecimal("5"), null)); // productWeight → kg
+                reqFinished(1, "WIP-UC-1", new BigDecimal("10"), new BigDecimal("5"), null));
         ProcessSheetRow r2 = row(341L, 2, "WIP-UC-2",
-                reqFinished(2, "WIP-UC-2", new BigDecimal("20"), null, null));                // 盒
+                reqFinished(2, "WIP-UC-2", new BigDecimal("20"), null, null));
         when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(r1, r2));
 
-        assertThatThrownBy(() -> service.interimSettle(FACTORY, PLAN_ID, 7L))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("计量单位不一致");
-        // loud-fail → @Transactional 回滚 → 不产生任何 FG (无 phantom)
-        verify(finishedGoodsBatchRepository, never()).save(any());
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(finishedGoodsBatchRepository).save(fgCap.capture());
+        assertThat(fgCap.getValue().getProducedQuantity()).isEqualByComparingTo("30");
+        assertThat(fgCap.getValue().getUnit()).isEqualTo("盒");
+    }
+
+    @Test
+    @DisplayName("固定包装成品留样从入库数量扣除，重量仅用于核对")
+    void finishedSampleIsExcludedFromInventoryButNotProductionWeight() {
+        ProcessSheetRowRequest request = reqFinished(
+                1, "WIP-SAMPLE-1", new BigDecimal("50"), new BigDecimal("10"), null);
+        request.setSampleRetainQuantity(2);
+        ProcessSheetRow row = row(350L, 1, "WIP-SAMPLE-1", request);
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(row));
+
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(finishedGoodsBatchRepository).save(fgCap.capture());
+        assertThat(fgCap.getValue().getProducedQuantity()).isEqualByComparingTo("48");
+        assertThat(fgCap.getValue().getUnit()).isEqualTo("盒");
+        assertThat(request.getProductWeight()).isEqualByComparingTo("10");
     }
 
     // ─────────────────────────────────────────────────────────────

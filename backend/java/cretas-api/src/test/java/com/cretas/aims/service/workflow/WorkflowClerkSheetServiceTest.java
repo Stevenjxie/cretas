@@ -26,6 +26,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDateTime;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -132,6 +133,7 @@ class WorkflowClerkSheetServiceTest {
                 1, "SEMI_FINISHED", "PT-SEMI", "kg", true);
         WorkflowTaskPort packOut = port(802L, "pack-out", WorkflowTaskPort.Direction.OUTPUT,
                 2, "FINISHED_GOOD", "PT-FG", "box", true);
+        packOut.setNetWeightGramsSnapshot(new BigDecimal("200"));
         when(portRepository.findByFactoryIdAndWorkflowInstanceId("F006", 501L))
                 .thenReturn(List.of(trimIn, trimOut, packIn, packOut));
 
@@ -192,6 +194,7 @@ class WorkflowClerkSheetServiceTest {
         assertEquals("卤猪蹄成品", packDescriptor.getOutput().getMaterialName());
         assertTrue(packDescriptor.getOutput().getFinished());
         assertEquals("box", packDescriptor.getOutput().getUnit());
+        assertEquals(0, new BigDecimal("200").compareTo(packDescriptor.getOutput().getGramsPerUnit()));
     }
 
     @Test
