@@ -14,7 +14,9 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Superseded PR revisions may stop; every main push must finish so its exact-
+  # commit release artifact cannot be cancelled by a later docs-only merge.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # ---- 变更探测: 按路径决定哪些重 job 在 PR 上需要跑 (push 到 main 不受影响, 全跑) ----

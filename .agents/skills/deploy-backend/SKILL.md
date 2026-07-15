@@ -27,6 +27,16 @@ For one commit, perform one final full release build:
 - `SKIP_BUILD=1` is allowed only when the existing artifact has a manifest tying it to the exact deployed commit and its hash has been verified. A recent mtime or filename is not provenance.
 - Until CI artifacts carry that manifest, let the deployment script perform the single trusted release build.
 
+## Reuse A Merged Feature Worktree
+
+Avoid creating a second release worktree when the reviewed feature worktree is clean and its PR is already merged:
+
+1. Require an empty `git status --porcelain`, then fetch `origin`.
+2. Record `feature-head=$(git rev-parse HEAD)`, then use merged PR metadata to obtain its head and merge commits. Require `feature-head == <pr-head>`, `git merge-base --is-ancestor <merge-commit> origin/main`, and `git diff --quiet "$feature-head" <merge-commit>` to pass. Do not infer a squash merge from feature-branch ancestry.
+3. Run `git switch --detach origin/main`, then require both an empty status and `HEAD == origin/main` before any production build or deploy.
+
+If any condition fails, create a fresh clean release worktree from `origin/main`. Never discard uncommitted work to enter this fast path.
+
 ## Java Blue-Green Deploy
 
 1. Require a clean release worktree whose `HEAD` equals `origin/main`.

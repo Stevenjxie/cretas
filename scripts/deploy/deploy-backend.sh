@@ -273,10 +273,52 @@ fi
 # 临时目录
 UPLOAD_STATUS_DIR="/tmp/jar-upload-$$"
 mkdir -p "$UPLOAD_STATUS_DIR"
+UPLOAD_PIDS=()
+
+# 只终止本次部署记录的进程树，避免上传竞速结束后 scp/rsync 子进程继续传输。
+# Git Bash 通常没有 pgrep/pkill，且 `$!` 是 MSYS PID、不能直接传给
+# taskkill /PID。统一从进程表按 PPID 递归结束后代，再结束父进程。
+terminate_process_tree() {
+    local pid="$1"
+    local child_pids=""
+    local child_pid
+
+    case "$pid" in
+        ''|*[!0-9]*) return 0 ;;
+    esac
+    kill -0 "$pid" 2>/dev/null || return 0
+
+    if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* || "${OSTYPE:-}" == win32* ]]; then
+        # Git Bash `ps -e` columns start with PID PPID PGID WINPID. Native
+        # scp/rsync/ssh children launched by Bash are included with an MSYS PID.
+        child_pids=$(ps -e 2>/dev/null | awk -v parent="$pid" 'NR > 1 && $2 == parent {print $1}')
+    elif command -v pgrep >/dev/null 2>&1; then
+        child_pids=$(pgrep -P "$pid" 2>/dev/null || true)
+    elif ps -eo pid=,ppid= >/dev/null 2>&1; then
+        child_pids=$(ps -eo pid=,ppid= 2>/dev/null | awk -v parent="$pid" '$2 == parent {print $1}')
+    fi
+    for child_pid in $child_pids; do
+        terminate_process_tree "$child_pid"
+    done
+    kill -TERM "$pid" 2>/dev/null || true
+    sleep 0.05
+    kill -KILL "$pid" 2>/dev/null || true
+}
+
+terminate_upload_tasks() {
+    local pid
+    for pid in "${UPLOAD_PIDS[@]}"; do
+        terminate_process_tree "$pid"
+    done
+    for pid in "${UPLOAD_PIDS[@]}"; do
+        wait "$pid" 2>/dev/null || true
+    done
+    UPLOAD_PIDS=()
+}
 
 cleanup() {
+    terminate_upload_tasks
     rm -rf "$UPLOAD_STATUS_DIR"
-    jobs -p | xargs -r kill 2>/dev/null || true
     # R43 fix: 也清 deploy lock — 否则 trap cleanup 会覆盖 acquire_deploy_lock
     # 注册的 lock cleanup trap, 导致 stale lock leak. 反复出现"另一deploy进程在跑".
     rm -f /tmp/cretas-backend-deploy.lock 2>/dev/null || true
@@ -407,17 +449,30 @@ deploy_jar() {
     if [ ! -d "$FLYWAY_SRC_DIR" ]; then
         echo "   ⚠️  $FLYWAY_SRC_DIR 不存在 — 跳过 Flyway 预检 (非典型 build context)"
     else
+        # `find -exec basename` 在 Windows Git Bash 会为每个 migration 启动一次
+        # basename 进程。一次扫描生成路径/文件名清单，后续门禁全部复用。
+        SRC_FLY_PATHS=$(find "$FLYWAY_SRC_DIR" -type f -name 'V*.sql' -print 2>/dev/null | LC_ALL=C sort)
+        SRC_FLY_SORTED=""
+        if [ -n "$SRC_FLY_PATHS" ]; then
+            SRC_FLY_SORTED=$(printf '%s\n' "$SRC_FLY_PATHS" | sed 's#^.*/##' | LC_ALL=C sort)
+        fi
+
         # Gate 1: Flyway version duplicate detection (committed + uncommitted on disk)
-        # `find ... | sort | uniq -d` lists versions that appear ≥2 times.
+        # The cached filename manifest lists versions that appear ≥2 times.
         # mvn package will copy ALL of them into JAR → Spring Flyway boot fails with
         # "Found more than one migration with version X".
-        DUPS=$(find "$FLYWAY_SRC_DIR" -name 'V*.sql' -exec basename {} \; 2>/dev/null \
-            | awk -F'__' '{print $1}' | sort | uniq -d)
+        DUPS=$(printf '%s\n' "$SRC_FLY_SORTED" | awk -F'__' '{print $1}' | uniq -d)
         if [ -n "$DUPS" ]; then
             echo "   ❌ FATAL: Flyway version collision detected:"
             while IFS= read -r v; do
                 echo "      Version $v duplicated in:"
-                find "$FLYWAY_SRC_DIR" -name "${v}__*.sql" -exec echo "        {}" \;
+                printf '%s\n' "$SRC_FLY_PATHS" | awk -v version="$v" '
+                    {
+                        name = $0
+                        sub(/^.*\//, "", name)
+                        if (index(name, version "__") == 1) print "        " $0
+                    }
+                '
             done <<< "$DUPS"
             echo ""
             echo "   Resolution: rename later-merged file to next free version"
@@ -459,8 +514,8 @@ deploy_jar() {
         # Spring Flyway boot fails. Strike #4 in 2026-05-20 marathon.
         # Auto-fix: rm -rf the target Flyway dir → mvn re-copies fresh on next package.
         if [ -d "$FLYWAY_TGT_DIR" ]; then
-            SRC_FLY_SORTED=$(find "$FLYWAY_SRC_DIR" -name 'V*.sql' -exec basename {} \; 2>/dev/null | sort)
-            TGT_FLY_SORTED=$(find "$FLYWAY_TGT_DIR" -name 'V*.sql' -exec basename {} \; 2>/dev/null | sort)
+            TGT_FLY_SORTED=$(find "$FLYWAY_TGT_DIR" -type f -name 'V*.sql' -print 2>/dev/null \
+                | sed 's#^.*/##' | LC_ALL=C sort)
             if [ -n "$TGT_FLY_SORTED" ] && [ "$SRC_FLY_SORTED" != "$TGT_FLY_SORTED" ]; then
                 echo "   ⚠️  target/classes/db/flyway 与 src/ 不一致 — 存在 orphan 残留"
                 echo "   Auto-fix: rm -rf $FLYWAY_TGT_DIR (mvn package will re-populate)"
@@ -860,12 +915,8 @@ deploy_jar() {
         echo ""
         echo "   [阶段2] GitHub 超时，启动 Fallback 方式..."
 
-        # 终止 GitHub 相关进程
-        for pid in "${UPLOAD_PIDS[@]}"; do
-            kill -9 "$pid" 2>/dev/null || true
-            pkill -9 -P "$pid" 2>/dev/null || true
-        done
-        UPLOAD_PIDS=()
+        # 终止 GitHub 相关进程及其子进程，避免远程下载继续占用链路。
+        terminate_upload_tasks
 
         # 杀掉服务器上残留的 GitHub 下载 curl 进程
         ssh -o ConnectTimeout=5 $SERVER "pkill -f 'curl.*$JAR_NAME' 2>/dev/null; true" 2>/dev/null || true
@@ -912,31 +963,14 @@ deploy_jar() {
     UPLOAD_END_TIME=$(date +%s)
     UPLOAD_DURATION=$((UPLOAD_END_TIME - UPLOAD_START_TIME))
 
-    # 强制终止所有后台进程及其子进程
+    # 强制终止本次竞速记录的所有后台进程及其子进程。
     echo "   终止其他上传任务..."
+    terminate_upload_tasks
 
-    # 方法1: 终止记录的 PID 及其所有子进程
-    for pid in "${UPLOAD_PIDS[@]}"; do
-        if kill -0 "$pid" 2>/dev/null; then
-            # 获取该进程的所有子进程并终止
-            pkill -9 -P "$pid" 2>/dev/null || true
-            kill -9 "$pid" 2>/dev/null || true
-        fi
-    done
-
-    # 方法2: 终止可能残留的 ossutil/aws 进程
-    pkill -9 -f "ossutil.*$JAR_NAME" 2>/dev/null || true
-    pkill -9 -f "aws.*$JAR_NAME" 2>/dev/null || true
-    pkill -9 -f "aws s3 cp.*cretas" 2>/dev/null || true
-
-    # 方法3: 终止当前脚本的所有后台任务
-    jobs -p 2>/dev/null | xargs -r kill -9 2>/dev/null || true
-
-    # 方法4: 杀掉服务器上残留的 curl/wget (防止 orphan 覆盖 winner 文件)
+    # 杀掉服务器上本次 JAR 的残留 curl/wget (防止 orphan 覆盖 winner 文件)
     ssh -o ConnectTimeout=5 $SERVER "pkill -f 'curl.*$JAR_NAME' 2>/dev/null; true" 2>/dev/null || true
 
     sleep 1
-    wait 2>/dev/null || true
 
     # 重新读取 winner 文件 (subshell-scope fix):
     # upload_r2 / upload_rsync 等在后台 subshell 里 echo "$METHOD" > winner,
