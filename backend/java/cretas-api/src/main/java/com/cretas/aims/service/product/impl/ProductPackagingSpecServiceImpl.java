@@ -215,7 +215,30 @@ public class ProductPackagingSpecServiceImpl implements ProductPackagingSpecServ
                 .findFirst().orElse(active.isEmpty() ? null : active.get(0));
         product.setLevel1Unit(defaultSpec == null ? null : defaultSpec.getPackageUnit());
         product.setBoxConversionCoefficient(defaultSpec == null ? null : defaultSpec.getConversionFactor());
+        product.setSpecification(composeCanonicalSpecification(product, active));
         productTypeRepository.save(product);
+    }
+
+    private String composeCanonicalSpecification(ProductType product, List<ProductPackagingSpec> active) {
+        String baseUnit = product.getUnit() == null ? "" : product.getUnit().trim();
+        List<String> parts = new ArrayList<>();
+        BigDecimal grams = positive(product.getGramsPerUnit());
+        if (grams != null && !baseUnit.isBlank()) {
+            parts.add(decimalText(grams) + "克/" + baseUnit);
+        }
+        for (ProductPackagingSpec spec : active) {
+            BigDecimal factor = positive(spec.getConversionFactor());
+            String packageUnit = spec.getPackageUnit() == null ? "" : spec.getPackageUnit().trim();
+            if (factor != null && !baseUnit.isBlank() && !packageUnit.isBlank()
+                    && !baseUnit.equals(packageUnit)) {
+                parts.add(decimalText(factor) + baseUnit + "/" + packageUnit);
+            }
+        }
+        return String.join(" ", parts);
+    }
+
+    private String decimalText(BigDecimal value) {
+        return value.stripTrailingZeros().toPlainString();
     }
 
     private String normalizedCode(String factoryId, String unit) {

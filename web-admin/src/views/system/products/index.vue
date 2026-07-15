@@ -12,6 +12,7 @@ import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue';
 import { PRODUCT_CONFIG } from '@/components/ai-entry/types';
 import DynamicEntityForm from '@/components/DynamicEntityForm.vue';
 import type { FieldConfig } from '@/config/entityFieldConfigs';
+import { composeProductSpecification } from '@/utils/productSpecification';
 
 // T137: 计量单位字典 — 从 /system-config/units 加载, 供一级单位/二级单位下拉用
 const unitDictOptions = ref<{ label: string; value: string }[]>([]);
@@ -636,48 +637,30 @@ watch(() => formData.name, () => {
 
 // ==================== T153 Fix A: 规格 (specification) 由结构化字段自动拼 ====================
 // 结构化字段是单一事实源, 规格只是展示文字, 从「标准克重 + 二级单位 + 装箱系数 + 一级单位」拼出.
-// 格式: {克重}g/{二级单位} {装箱系数}{二级单位}/{一级单位} → 如 "80g/盒 20盒/框".
-// 只拼存在的部分: 仅克重→"80g/盒"; 仅装箱→"20盒/框"; 都有→两段空格相连; 都无→空串.
-// 非覆盖: 用户手动改过规格 (specificationManuallyEdited) 后停止自动拼, 用户始终可覆盖.
+// 格式: {克重}克/{基本单位} {装箱系数}{基本单位}/{包装单位} → 如 "80克/盒 20盒/框".
+// 产品基本单位是唯一权威；包装行里残留的旧 baseUnit 不得污染展示规格。
 function composeSpecification(): string {
-  const grams = formData.gramsPerUnit;
-  const l2 = formData.unit?.trim() || '';
-
-  const parts: string[] = [];
-  // 克重段: 需要 克重 + 二级单位 (如 "80g/盒")
-  const gramsNum = grams != null && String(grams) !== '' ? Number(grams) : NaN;
-  if (!isNaN(gramsNum) && gramsNum > 0 && l2) {
-    parts.push(`${gramsNum}g/${l2}`);
-  }
-  // 装箱段: 同一 SKU 可有多条箱规，但标准克重仍只有一条。
-  for (const spec of packagingSpecs.value) {
-    const factor = Number(spec.conversionFactor);
-    if (Number.isFinite(factor) && factor > 0 && spec.baseUnit && spec.packageUnit
-        && spec.baseUnit !== spec.packageUnit) {
-      parts.push(`${factor}${spec.baseUnit}/${spec.packageUnit}`);
-    }
-  }
-  return parts.join(' ');
+  return composeProductSpecification(formData.gramsPerUnit, formData.unit, packagingSpecs.value);
 }
 
-// 监听结构化字段 → 自动重拼规格 (仅新增, 非覆盖)
+function synchronizeSpecificationFields(): void {
+  packagingSpecs.value.forEach((spec, index) => {
+    spec.baseUnit = formData.unit?.trim() || '';
+    spec.defaultSpec = index === 0;
+    spec.sortOrder = index;
+  });
+  const first = packagingSpecs.value[0];
+  formData.level1Unit = first?.packageUnit || undefined;
+  formData.boxConversionCoefficient = first?.conversionFactor;
+  const composed = composeSpecification();
+  if (formData.specification !== composed) formData.specification = composed;
+}
+
+// 监听结构化字段 → 自动重拼规格；基本单位变化会同步所有装箱换算右侧单位。
 watch(
   [() => formData.gramsPerUnit, () => formData.unit, packagingSpecs],
   () => {
-    if (!dialogVisible.value) return;
-    packagingSpecs.value.forEach((spec, index) => {
-      spec.baseUnit = formData.unit?.trim() || '';
-      spec.defaultSpec = index === 0;
-      spec.sortOrder = index;
-    });
-    const first = packagingSpecs.value[0];
-    formData.level1Unit = first?.packageUnit || undefined;
-    formData.boxConversionCoefficient = first?.conversionFactor;
-    const composed = composeSpecification();
-    // T154: cascade 清空结构化字段后 composed 为空串 → 也清掉规格 (不保留旧自动拼结果)
-    if (formData.specification !== composed) {
-      formData.specification = composed;
-    }
+    if (dialogVisible.value) synchronizeSpecificationFields();
   },
   { deep: true },
 );
@@ -926,6 +909,8 @@ async function handleEdit(row: ProductType) {
   resetSuggestFlags();
   specificationManuallyEdited.value = false;
   baseProductNameManuallyEdited.value = true;
+  // 打开旧数据时立即按结构化字段纠正规格，不能等用户再次触碰输入框。
+  synchronizeSpecificationFields();
   dialogVisible.value = true;
 }
 
@@ -963,6 +948,8 @@ async function handleSubmit() {
 
   try {
     await formRef.value.validate();
+    // 提交前再次收敛，保证 API 永远收到规范文本和与基本单位一致的包装右侧单位。
+    synchronizeSpecificationFields();
     const partiallyConfigured = packagingSpecs.value.some((spec) => {
       const hasAny = spec.conversionFactor != null && String(spec.conversionFactor) !== '';
       const complete = !!spec.packageUnit && !!formData.unit && Number(spec.conversionFactor) > 0;
@@ -1599,7 +1586,7 @@ async function handleAiProductCreate() {
           >
             <el-option v-for="opt in unitSelectOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
           </el-select>
-          <div class="form-tip">基本单位 = 最小计量/售卖单位（成品如「盒」，原料如「kg」）；下面按此填每单位含量与装箱换算，只填数字</div>
+          <div class="form-tip">基本单位 = 最小计量/售卖单位（成品如「盒」，原料如「kg」）；修改后会同步标准克重和所有装箱换算右侧单位</div>
         </el-form-item>
         <!-- 标准克重 (每 {基本单位} 多少克) — 结构化, 只填数字, 单位系统显示 -->
         <DynamicEntityForm
@@ -1640,7 +1627,7 @@ async function handleAiProductCreate() {
         <!-- 规格 = 上面结构化字段自动拼 (只读, 不再手输文字+数字混排) -->
         <el-form-item label="规格">
           <el-input v-model="formData.specification" readonly placeholder="由上方「标准克重 + 装箱换算」自动生成" />
-          <div class="form-tip">规格由上面结构化字段自动生成，无需手填（如「310克/盒，1箱=42盒」）</div>
+          <div class="form-tip">规格由上面结构化字段自动生成，无需手填（如「310克/盒 42盒/箱」）</div>
         </el-form-item>
 
         <el-form-item label="备注" prop="notes">

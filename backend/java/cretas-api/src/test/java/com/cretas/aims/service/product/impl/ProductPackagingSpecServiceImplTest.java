@@ -91,6 +91,7 @@ class ProductPackagingSpecServiceImplTest {
         product.setId(PRODUCT_ID);
         product.setFactoryId(FACTORY_ID);
         product.setUnit("盒");
+        product.setGramsPerUnit(new BigDecimal("200"));
 
         ProductPackagingSpec twelve = spec("spec-12", "12盒/箱", "箱", "盒", "12", 3L);
         ProductPackagingSpec twentyFour = spec("spec-24", "24盒/箱", "箱", "盒", "24", 4L);
@@ -110,6 +111,7 @@ class ProductPackagingSpecServiceImplTest {
                 .containsExactly("spec-12", "spec-24");
         assertThat(product.getLevel1Unit()).isEqualTo("箱");
         assertThat(product.getBoxConversionCoefficient()).isEqualByComparingTo("12");
+        assertThat(product.getSpecification()).isEqualTo("200克/盒 12盒/箱 24盒/箱");
         assertThat(twelve.getDeletedAt()).isNull();
         assertThat(twentyFour.getDeletedAt()).isNull();
         verify(productTypeRepository).save(product);
