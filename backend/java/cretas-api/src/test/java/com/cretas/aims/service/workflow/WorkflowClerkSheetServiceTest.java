@@ -37,6 +37,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.lenient;
 
 @ExtendWith(MockitoExtension.class)
 class WorkflowClerkSheetServiceTest {
@@ -49,11 +50,18 @@ class WorkflowClerkSheetServiceTest {
     @Mock private ProductWorkProcessRepository productWorkProcessRepository;
     @Mock private RawMaterialTypeRepository rawMaterialTypeRepository;
     @Mock private ProductTypeRepository productTypeRepository;
+    @Mock private WorkflowReportingUnitResolver reportingUnitResolver;
 
     private WorkflowClerkSheetService service;
 
     @BeforeEach
     void setUp() {
+        lenient().when(reportingUnitResolver.resolve(
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyString()))
+                .thenAnswer(invocation -> invocation.getArgument(3));
         service = new WorkflowClerkSheetServiceImpl(
                 productionBatchRepository,
                 instanceRepository,
@@ -62,7 +70,8 @@ class WorkflowClerkSheetServiceTest {
                 workProcessRepository,
                 productWorkProcessRepository,
                 rawMaterialTypeRepository,
-                productTypeRepository);
+                productTypeRepository,
+                reportingUnitResolver);
     }
 
     @Test
@@ -256,6 +265,42 @@ class WorkflowClerkSheetServiceTest {
         assertEquals("trim-out-a", result.getProcesses().get(0).getOutputs().get(0).getWorkflowPortId());
         assertEquals("trim-out-b", result.getProcesses().get(0).getOutputs().get(1).getWorkflowPortId());
         assertEquals("trim-out-a", result.getProcesses().get(0).getOutput().getWorkflowPortId());
+    }
+
+    @Test
+    void projectsLegacyGramPortsForPendingTaskFromAuthoritativeReportingUnits() {
+        ProductionBatch workflowBatch = batch(901L, ProductionBatch.WorkflowSelectionMode.WORKFLOW);
+        ProductionWorkflowInstance instance = instance(501L);
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId("F006", "PLAN-1"))
+                .thenReturn(List.of(workflowBatch));
+        when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
+                .thenReturn(Optional.of(instance));
+
+        WorkProcessTask pack = task(802L, 501L, "pack", "PACK", 2, "g");
+        when(taskRepository.findByFactoryIdAndWorkflowInstanceIdOrderByProcessOrderAsc("F006", 501L))
+                .thenReturn(List.of(pack));
+        WorkflowTaskPort packIn = port(802L, "pack-in", WorkflowTaskPort.Direction.INPUT,
+                1, "SEMI_FINISHED", "PT-SEMI", "g", true);
+        WorkflowTaskPort packOut = port(802L, "pack-out", WorkflowTaskPort.Direction.OUTPUT,
+                2, "FINISHED_GOOD", "PT-FG", "g", true);
+        packOut.setNetWeightGramsSnapshot(new BigDecimal("200"));
+        when(portRepository.findByFactoryIdAndWorkflowInstanceId("F006", 501L))
+                .thenReturn(List.of(packIn, packOut));
+        when(productTypeRepository.findByIdAndFactoryId("PT-SEMI", "F006"))
+                .thenReturn(Optional.of(productType("PT-SEMI", "F006", "撒料后半成品", "g")));
+        when(productTypeRepository.findByIdAndFactoryId("PT-FG", "F006"))
+                .thenReturn(Optional.of(productType("PT-FG", "F006", "香辣孜然牛排", "盒")));
+        when(reportingUnitResolver.resolve("F006", "SEMI_FINISHED", "PT-SEMI", "g"))
+                .thenReturn("kg");
+        when(reportingUnitResolver.resolve("F006", "FINISHED_GOOD", "PT-FG", "g"))
+                .thenReturn("盒");
+
+        WorkflowClerkSheetConfigDTO result = service.getWorkflowSheetConfig("F006", "PLAN-1");
+
+        WorkflowClerkSheetConfigDTO.ProcessDescriptor descriptor = result.getProcesses().getFirst();
+        assertEquals("kg", descriptor.getInputs().getFirst().getUnit());
+        assertEquals("盒", descriptor.getOutput().getUnit());
+        assertEquals("盒", descriptor.getPlannedUnit());
     }
 
     @Test

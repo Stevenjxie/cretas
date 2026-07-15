@@ -4,6 +4,7 @@ import {
   formatPlannedOutput,
   formatProcessOutput,
   formatSourceFeedSummary,
+  formatWorkflowPlannedOutput,
   resolveProcessSheetUnits,
   resolveWorkflowProcessSheetUnits,
   withProcessSheetUnits,
@@ -22,12 +23,23 @@ describe('processSheetUnits', () => {
     expect(() => resolveProcessSheetUnits(config)).toThrow(expected);
   });
 
-  it('uses workflow port units as the sole authority', () => {
+  it('projects raw/semi workflow mass units to kg and keeps the finished SKU descriptor unit', () => {
     expect(resolveWorkflowProcessSheetUnits({
       processName: '装件',
-      inputs: [{ workflowPortId: 'IN-1', unit: ' g ' }],
-      output: { workflowPortId: 'OUT-1', unit: ' 件 ' },
-    })).toEqual({ inputUnit: 'g', outputUnit: '件' });
+      inputs: [{ workflowPortId: 'IN-1', materialKind: 'SEMI_FINISHED', unit: ' g ' }],
+      output: { workflowPortId: 'OUT-1', materialKind: 'FINISHED_GOOD', finished: true, unit: ' 件 ' },
+    })).toEqual({ inputUnit: 'kg', outputUnit: '件' });
+  });
+
+  it('treats mixed g/kg raw inputs as one kg reporting unit and projects semi output to kg', () => {
+    expect(resolveWorkflowProcessSheetUnits({
+      processName: '混料',
+      inputs: [
+        { workflowPortId: 'IN-1', materialKind: 'RAW_MATERIAL', unit: 'g' },
+        { workflowPortId: 'IN-2', materialKind: 'RAW_MATERIAL', unit: 'kg' },
+      ],
+      output: { workflowPortId: 'OUT-1', materialKind: 'SEMI_FINISHED', unit: 'g' },
+    })).toEqual({ inputUnit: 'kg', outputUnit: 'kg' });
   });
 
   it.each([
@@ -83,6 +95,15 @@ describe('processSheetUnits', () => {
   it('labels plan quantity as finished-product output and keeps its explicit unit', () => {
     expect(formatPlannedOutput(10, 'kg')).toBe('计划成品 10 kg');
     expect(formatPlannedOutput(10, '包')).toBe('计划成品 10 包');
+  });
+
+  it('formats a legacy mass plan using the terminal finished-SKU descriptor', () => {
+    expect(formatWorkflowPlannedOutput(100_000, 'g', {
+      materialKind: 'FINISHED_GOOD', finished: true, unit: '盒', gramsPerUnit: 200,
+    })).toBe('计划成品 500 盒');
+    expect(formatWorkflowPlannedOutput(2_000, 'g', {
+      materialKind: 'SEMI_FINISHED', finished: false, unit: 'g',
+    })).toBe('计划成品 2 kg');
   });
 
   it('renders missing units as unconfigured instead of kilograms', () => {

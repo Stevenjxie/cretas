@@ -24,15 +24,18 @@ public class ProductProcessWorkflowRuntimeCompiler {
     private final ObjectMapper objectMapper;
     private final ProductProcessWorkflowValidator validator;
     private final UnitContractService unitContractService;
+    private final WorkflowReportingUnitResolver reportingUnitResolver;
 
     @Autowired
     public ProductProcessWorkflowRuntimeCompiler(
             ObjectMapper objectMapper,
             ProductProcessWorkflowValidator validator,
-            UnitContractService unitContractService) {
+            UnitContractService unitContractService,
+            WorkflowReportingUnitResolver reportingUnitResolver) {
         this.objectMapper = objectMapper;
         this.validator = validator;
         this.unitContractService = unitContractService;
+        this.reportingUnitResolver = reportingUnitResolver;
     }
 
     public CompiledProductProcessWorkflow compile(ProductProcessWorkflowDTO definition) {
@@ -56,13 +59,21 @@ public class ProductProcessWorkflowRuntimeCompiler {
                     .filter(port -> "OUTPUT".equals(port.direction()))
                     .min(Comparator.comparingInt(DeclaredPort::ordinal))
                     .orElseThrow(() -> runtimeInvalid(nodeId, "data.ports", "no output port is available"));
-            String plannedUnit = canonical(definition.getFactoryId(), primaryOutput.unit(), nodeId,
+            String declaredPrimaryUnit = canonical(definition.getFactoryId(), primaryOutput.unit(), nodeId,
                     "data.ports[" + primaryOutput.ordinal() + "].unit");
             String declaredOutputUnit = canonical(definition.getFactoryId(), processData.outputUnit(), nodeId,
                     "data.outputUnit");
-            if (!plannedUnit.equals(declaredOutputUnit)) {
+            if (!declaredPrimaryUnit.equals(declaredOutputUnit)) {
                 throw runtimeInvalid(nodeId, "data.outputUnit", "must match the primary output port unit");
             }
+            ProductProcessWorkflowDTO.Node primaryMaterialNode =
+                    nodesById.get(primaryOutput.materialNodeId());
+            MaterialNodeData primaryMaterial =
+                    parsedExecutionData.materialNodes().get(primaryOutput.materialNodeId());
+            String plannedUnit = reportingUnit(
+                    definition.getFactoryId(), primaryMaterialNode, primaryMaterial,
+                    primaryOutput.unit(), nodeId,
+                    "data.ports[" + primaryOutput.ordinal() + "].unit");
             boolean reportingRequired = !Boolean.FALSE.equals(processData.reportingRequired());
             tasks.add(new CompiledProductProcessWorkflow.CompiledTask(
                     nodeId,
@@ -98,13 +109,15 @@ public class ProductProcessWorkflowRuntimeCompiler {
     private ParsedExecutionData parseExecutionData(ProductProcessWorkflowDTO definition) {
         Map<String, ProcessNodeData> processNodes = new HashMap<>();
         Map<String, MaterialNodeData> materialNodes = new HashMap<>();
+        Map<String, ProductProcessWorkflowDTO.Node> nodesById = new HashMap<>();
         if (definition == null || definition.getNodes() == null) {
-            return new ParsedExecutionData(processNodes, materialNodes);
+            return new ParsedExecutionData(processNodes, materialNodes, nodesById);
         }
         for (ProductProcessWorkflowDTO.Node node : definition.getNodes()) {
             if (node == null || node.getId() == null || node.getKind() == null) {
                 continue;
             }
+            nodesById.put(node.getId(), node);
             if ("PROCESS".equals(node.getKind())) {
                 processNodes.put(node.getId(), parseProcessNode(node));
             } else if (List.of("RAW_MATERIAL", "SEMI_FINISHED", "FINISHED_GOOD")
@@ -112,7 +125,7 @@ public class ProductProcessWorkflowRuntimeCompiler {
                 materialNodes.put(node.getId(), parseMaterialNode(node));
             }
         }
-        return new ParsedExecutionData(processNodes, materialNodes);
+        return new ParsedExecutionData(processNodes, materialNodes, nodesById);
     }
 
     private ProcessNodeData parseProcessNode(ProductProcessWorkflowDTO.Node node) {
@@ -325,10 +338,10 @@ public class ProductProcessWorkflowRuntimeCompiler {
                     declaredPort.materialNodeId(),
                     materialNode.getKind(),
                     materialData.skuId(),
-                    canonical(factoryId, declaredPort.unit(), workflowNodeId,
-                            "data.ports[" + index + "].unit"),
-                    canonical(factoryId, materialData.baseUnit(), materialNode.getId(),
-                            "data.baseUnit"),
+                    reportingUnit(factoryId, materialNode, materialData, declaredPort.unit(),
+                            workflowNodeId, "data.ports[" + index + "].unit"),
+                    reportingUnit(factoryId, materialNode, materialData, materialData.baseUnit(),
+                            materialNode.getId(), "data.baseUnit"),
                     declaredPort.conversionRefId(),
                     declaredPort.conversionVersion(),
                     null,
@@ -359,15 +372,26 @@ public class ProductProcessWorkflowRuntimeCompiler {
         Map<String, Object> snapshot = new LinkedHashMap<>(node.getData());
         MaterialNodeData materialData = parsedExecutionData.materialNodes().get(node.getId());
         if (materialData != null) {
-            snapshot.put("baseUnit", canonical(
-                    factoryId, materialData.baseUnit(), node.getId(), "data.baseUnit"));
+            snapshot.put("baseUnit", reportingUnit(
+                    factoryId, node, materialData, materialData.baseUnit(),
+                    node.getId(), "data.baseUnit"));
             return snapshot;
         }
         ProcessNodeData processData = parsedExecutionData.processNodes().get(node.getId());
         if (processData == null) return snapshot;
 
-        snapshot.put("outputUnit", canonical(
-                factoryId, processData.outputUnit(), node.getId(), "data.outputUnit"));
+        DeclaredPort primaryOutput = processData.ports().stream()
+                .filter(port -> "OUTPUT".equals(port.direction()))
+                .min(Comparator.comparingInt(DeclaredPort::ordinal))
+                .orElseThrow(() -> runtimeInvalid(node.getId(), "data.ports",
+                        "no output port is available"));
+        ProductProcessWorkflowDTO.Node primaryMaterialNode =
+                parsedExecutionData.nodesById().get(primaryOutput.materialNodeId());
+        MaterialNodeData primaryMaterial =
+                parsedExecutionData.materialNodes().get(primaryOutput.materialNodeId());
+        snapshot.put("outputUnit", reportingUnit(
+                factoryId, primaryMaterialNode, primaryMaterial, processData.outputUnit(),
+                node.getId(), "data.outputUnit"));
         List<Map<String, Object>> canonicalPorts = new ArrayList<>();
         Object rawPorts = node.getData().get("ports");
         List<?> rawPortList = rawPorts instanceof List<?> list ? list : List.of();
@@ -377,8 +401,13 @@ public class ProductProcessWorkflowRuntimeCompiler {
             if (index < rawPortList.size() && rawPortList.get(index) instanceof Map<?, ?> rawPort) {
                 rawPort.forEach((key, value) -> portSnapshot.put(String.valueOf(key), value));
             }
-            portSnapshot.put("unit", canonical(
-                    factoryId, port.unit(), node.getId(), "data.ports[" + index + "].unit"));
+            ProductProcessWorkflowDTO.Node materialNode =
+                    parsedExecutionData.nodesById().get(port.materialNodeId());
+            MaterialNodeData portMaterial =
+                    parsedExecutionData.materialNodes().get(port.materialNodeId());
+            portSnapshot.put("unit", reportingUnit(
+                    factoryId, materialNode, portMaterial, port.unit(),
+                    node.getId(), "data.ports[" + index + "].unit"));
             canonicalPorts.add(portSnapshot);
         }
         snapshot.put("ports", canonicalPorts);
@@ -410,6 +439,21 @@ public class ProductProcessWorkflowRuntimeCompiler {
             throw runtimeInvalid(nodeId, fieldPath, "unit is unknown or ambiguous: " + rawUnit);
         }
         return normalized.code();
+    }
+
+    private String reportingUnit(
+            String factoryId,
+            ProductProcessWorkflowDTO.Node materialNode,
+            MaterialNodeData materialData,
+            String declaredUnit,
+            String nodeId,
+            String fieldPath) {
+        if (materialNode == null || materialData == null) {
+            throw runtimeInvalid(nodeId, fieldPath, "references missing material data");
+        }
+        String resolved = reportingUnitResolver.resolve(
+                factoryId, materialNode.getKind(), materialData.skuId(), declaredUnit);
+        return canonical(factoryId, resolved, nodeId, fieldPath);
     }
 
     private BusinessException runtimeInvalid(
@@ -466,6 +510,7 @@ public class ProductProcessWorkflowRuntimeCompiler {
 
     private record ParsedExecutionData(
             Map<String, ProcessNodeData> processNodes,
-            Map<String, MaterialNodeData> materialNodes) {
+            Map<String, MaterialNodeData> materialNodes,
+            Map<String, ProductProcessWorkflowDTO.Node> nodesById) {
     }
 }

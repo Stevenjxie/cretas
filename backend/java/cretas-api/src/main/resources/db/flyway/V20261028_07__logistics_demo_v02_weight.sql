@@ -9,6 +9,12 @@ SET max_weight_kg = 3800, updated_at = NOW()
 WHERE factory_id = 'DEMO_LOGISTICS' AND vehicle_id = 'V-02';
 
 -- base vehicles.capacity 是 kg 载重语义 (方数在 profiles.capacity_cbm), 同步保持一致 (仅显示用, 算法读 profile)。
-UPDATE vehicles
-SET capacity = 3800, updated_at = NOW()
-WHERE factory_id = 'DEMO_LOGISTICS' AND id = 'V-02';
+-- Fresh Flyway databases reach this migration before Hibernate creates vehicles.
+DO $$
+BEGIN
+    IF to_regclass('public.vehicles') IS NOT NULL THEN
+        UPDATE vehicles
+        SET capacity = 3800, updated_at = NOW()
+        WHERE factory_id = 'DEMO_LOGISTICS' AND id = 'V-02';
+    END IF;
+END $$;

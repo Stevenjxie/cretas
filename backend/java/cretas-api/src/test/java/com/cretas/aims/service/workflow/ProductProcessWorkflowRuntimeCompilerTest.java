@@ -28,6 +28,8 @@ class ProductProcessWorkflowRuntimeCompilerTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final UnitContractService unitContractService = mock(UnitContractService.class);
+    private final WorkflowReportingUnitResolver reportingUnitResolver =
+            mock(WorkflowReportingUnitResolver.class);
     private ProductProcessWorkflowRuntimeCompiler compiler;
 
     @BeforeEach
@@ -37,8 +39,11 @@ class ProductProcessWorkflowRuntimeCompilerTest {
             String code = "公斤".equals(raw) ? "kg" : raw;
             return new UnitNormalizationResult(raw, code, mock(com.cretas.aims.service.unit.CanonicalUnit.class));
         });
+        when(reportingUnitResolver.resolve(any(), anyString(), anyString(), anyString()))
+                .thenAnswer(invocation -> invocation.getArgument(3));
         compiler = new ProductProcessWorkflowRuntimeCompiler(
-                objectMapper, new ProductProcessWorkflowValidator(), unitContractService);
+                objectMapper, new ProductProcessWorkflowValidator(), unitContractService,
+                reportingUnitResolver);
     }
 
     @Test
@@ -130,6 +135,34 @@ class ProductProcessWorkflowRuntimeCompilerTest {
         assertEquals("kg", runtimeNode(nodes, "cut").path("data").path("outputUnit").asText());
         assertTrue(runtimeNode(nodes, "cut").path("data").path("ports").findValues("unit")
                 .stream().allMatch(unit -> "kg".equals(unit.asText())));
+    }
+
+    @Test
+    void projectsLegacyGraphUnitsToAuthoritativeReportingUnits() throws Exception {
+        ProductProcessWorkflowDTO definition = linearWorkflow();
+        materialData(definition, "raw").put("baseUnit", "g");
+        materialData(definition, "semi").put("baseUnit", "g");
+        processData(definition, "cut").put("outputUnit", "g");
+        processPorts(definition, "cut").forEach(port -> port.put("unit", "g"));
+        processPorts(definition, "pack").getFirst().put("unit", "g");
+        when(reportingUnitResolver.resolve(any(), anyString(), anyString(), anyString()))
+                .thenAnswer(invocation -> switch ((String) invocation.getArgument(1)) {
+                    case "RAW_MATERIAL", "SEMI_FINISHED" -> "kg";
+                    case "FINISHED_GOOD" -> "盒";
+                    default -> invocation.getArgument(3);
+                });
+
+        CompiledProductProcessWorkflow compiled = compiler.compile(definition);
+
+        assertEquals("kg", compiled.reportableTasks().getFirst().plannedUnit());
+        assertEquals("盒", compiled.reportableTasks().getLast().plannedUnit());
+        assertEquals(List.of("kg", "kg", "kg", "盒"), compiled.ports().stream()
+                .map(CompiledProductProcessWorkflow.CompiledPort::unit)
+                .toList());
+        JsonNode nodes = objectMapper.readTree(compiled.nodesJson());
+        assertEquals("kg", runtimeNode(nodes, "raw").path("data").path("baseUnit").asText());
+        assertEquals("kg", runtimeNode(nodes, "semi").path("data").path("baseUnit").asText());
+        assertEquals("盒", runtimeNode(nodes, "finished").path("data").path("baseUnit").asText());
     }
 
     @Test

@@ -107,12 +107,18 @@ interface OpeningPackagingSpec {
 const productTypes = ref<OpeningProductType[]>([]);
 const productTypesLoading = ref(false);
 const openingPackagingSpecs = ref<OpeningPackagingSpec[]>([]);
+const openingPackagingLoadFailed = ref(false);
+let openingPackagingLoadSeq = 0;
 
-const openingForm = ref<FgOpeningRequest>({
+type OpeningFormState = Omit<FgOpeningRequest, 'producedQuantity'> & {
+  producedQuantity: number | null;
+};
+
+const openingForm = ref<OpeningFormState>({
   productTypeId: '',
   batchNumber: '',
-  producedQuantity: 0,
-  unit: 'kg',
+  producedQuantity: null,
+  unit: '',
   productionDate: '',
   remark: '',
 });
@@ -143,7 +149,10 @@ const openingUnitOptions = computed(() => {
 });
 
 const openingPackagingOptions = computed(() => openingPackagingSpecs.value
-  .filter((spec) => spec.active !== false && spec.packageUnit === openingForm.value.unit));
+  .filter((spec) => spec.active !== false && (
+    spec.packageUnit === openingForm.value.unit
+    || spec.baseUnit === openingForm.value.unit
+  )));
 
 function onOpeningUnitChange() {
   const options = openingPackagingOptions.value;
@@ -154,20 +163,28 @@ function onOpeningUnitChange() {
 }
 
 async function onOpeningProductChange(productTypeId: string) {
+  const requestSeq = ++openingPackagingLoadSeq;
   const selectedProduct = productTypes.value.find((product) => product.id === productTypeId);
-  openingForm.value.unit = selectedProduct?.unit || 'kg';
+  openingForm.value.unit = selectedProduct?.unit || '';
   openingForm.value.packagingSpecId = undefined;
   openingPackagingSpecs.value = [];
+  openingPackagingLoadFailed.value = false;
   if (!factoryId.value || !productTypeId) return;
   try {
     const res = await get<OpeningPackagingSpec[]>(
       `/${factoryId.value}/product-types/${productTypeId}/packaging-specs`
     );
-    openingPackagingSpecs.value = res.success && Array.isArray(res.data)
-      ? res.data.filter((spec) => spec.active !== false)
-      : [];
+    if (requestSeq !== openingPackagingLoadSeq
+      || openingForm.value.productTypeId !== productTypeId) return;
+    if (!res.success || !Array.isArray(res.data)) {
+      throw new Error(res.message || 'packaging specifications failed to load');
+    }
+    openingPackagingSpecs.value = res.data.filter((spec) => spec.active !== false);
     onOpeningUnitChange();
   } catch {
+    if (requestSeq !== openingPackagingLoadSeq
+      || openingForm.value.productTypeId !== productTypeId) return;
+    openingPackagingLoadFailed.value = true;
     ElMessage.error('包装规格加载失败，请重试后再入库');
   }
 }
@@ -176,12 +193,13 @@ function openOpeningDialog() {
   openingForm.value = {
     productTypeId: '',
     batchNumber: '',
-    producedQuantity: 0,
-    unit: 'kg',
+    producedQuantity: null,
+    unit: '',
     productionDate: '',
     remark: '',
   };
   openingPackagingSpecs.value = [];
+  openingPackagingLoadFailed.value = false;
   openingDialogVisible.value = true;
   void loadProductTypes();
 }
@@ -194,6 +212,9 @@ async function submitOpening() {
     ElMessage.warning('请输入有效的期初数量'); return;
   }
   if (!openingForm.value.unit.trim()) { ElMessage.warning('请输入单位'); return; }
+  if (openingPackagingLoadFailed.value) {
+    ElMessage.warning('包装规格加载失败，请重试后再入库'); return;
+  }
   if (openingPackagingOptions.value.length > 1 && !openingForm.value.packagingSpecId) {
     ElMessage.warning('该产品有多个装箱规格，请选择本次入库使用的箱规'); return;
   }
@@ -203,6 +224,7 @@ async function submitOpening() {
   try {
     const res = await createOpeningFgBatch(factoryId.value, {
       ...openingForm.value,
+      producedQuantity: Number(openingForm.value.producedQuantity),
       batchNumber: openingForm.value.batchNumber.trim(),
       unit: openingForm.value.unit.trim(),
       remark: openingForm.value.remark?.trim() || undefined,
@@ -627,17 +649,28 @@ function statusLabel(row: TableRow) {
             v-model="openingForm.producedQuantity"
             :min="0.01"
             :precision="2"
+            :disabled="!openingForm.productTypeId"
             style="width: 160px;"
           />
           <el-select
             v-model="openingForm.unit"
             placeholder="单位"
+            :disabled="!openingForm.productTypeId"
             style="width: 100px; margin-left: 8px;"
             @change="onOpeningUnitChange"
           >
             <el-option v-for="unit in openingUnitOptions" :key="unit" :label="unit" :value="unit" />
           </el-select>
         </el-form-item>
+        <el-alert
+          v-if="openingPackagingLoadFailed"
+          title="包装规格加载失败，请重试后再入库"
+          type="error"
+          :closable="false"
+          show-icon
+        >
+          <el-button link type="primary" @click="onOpeningProductChange(openingForm.productTypeId)">重新加载包装规格</el-button>
+        </el-alert>
         <el-form-item v-if="openingPackagingOptions.length > 0" label="包装规格"
           :required="openingPackagingOptions.length > 1">
           <el-select

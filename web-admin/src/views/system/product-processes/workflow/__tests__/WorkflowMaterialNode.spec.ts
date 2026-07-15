@@ -38,6 +38,7 @@ const RAW_DATA: MaterialNodeData = {
 function mountNode(overrides: {
   bomRawMaterialIds?: string[];
   data?: MaterialNodeData;
+  unitError?: string;
 } = {}) {
   return mount(WorkflowMaterialNode, {
     props: {
@@ -48,6 +49,7 @@ function mountNode(overrides: {
       bomRawMaterialIds: overrides.bomRawMaterialIds ?? [],
       semiOptions: [],
       finishedOptions: [],
+      unitError: overrides.unitError,
     },
     global: {
       plugins: [ElementPlus],
@@ -129,5 +131,12 @@ describe('WorkflowMaterialNode raw material picker — BOM priority grouping (#3
     await select.vm.$emit('change', 'RM-PIG');
 
     expect(wrapper.emitted('selectRawSku')).toEqual([['RM-PIG']]);
+  });
+
+  it('shows the unit-contract error on the affected material cell', () => {
+    const wrapper = mountNode({ unitError: 'SKU RM-PIG 缺少规范主单位，请先维护 SKU 单位' });
+
+    expect(wrapper.classes()).toContain('unit-error');
+    expect(wrapper.get('[data-testid="unit-error"]').text()).toContain('缺少规范主单位');
   });
 });

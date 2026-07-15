@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS bom_seasoning_items (
     price_source1      NUMERIC(14,4),
     price_source2      NUMERIC(14,4),
     count_in_seasoning BOOLEAN      NOT NULL DEFAULT TRUE,  -- 老汤/高汤 = false (不计入调料)
+    material_type_id   VARCHAR(191),
     remark             VARCHAR(500),
     created_at         TIMESTAMP    DEFAULT NOW(),
     updated_at         TIMESTAMP    DEFAULT NOW(),
@@ -41,5 +42,25 @@ CREATE TABLE IF NOT EXISTS bom_seasoning_items (
 
 CREATE INDEX IF NOT EXISTS idx_bsi_recipe  ON bom_seasoning_items (recipe_id, seq)        WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_bsi_factory ON bom_seasoning_items (factory_id, recipe_id) WHERE deleted_at IS NULL;
+
+-- Converge databases where bom_seasoning_items existed before this migration.
+ALTER TABLE bom_seasoning_items
+    ADD COLUMN IF NOT EXISTS material_type_id VARCHAR(191);
+
+CREATE INDEX IF NOT EXISTS idx_bsi_material_type
+    ON bom_seasoning_items (factory_id, material_type_id)
+    WHERE deleted_at IS NULL AND material_type_id IS NOT NULL;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'fk_bsi_material_type'
+    ) THEN
+        ALTER TABLE bom_seasoning_items
+            ADD CONSTRAINT fk_bsi_material_type
+            FOREIGN KEY (material_type_id) REFERENCES raw_material_types(id)
+            ON DELETE RESTRICT;
+    END IF;
+END $$;
 
 COMMENT ON TABLE bom_seasoning_items IS 'BOM 调料 ingredient (注射段+熟制段), 折叠自 recipe_ingredients. SKU 级挂 bom_recipes.id, 版本化由 bom_versions snapshot 承载.';

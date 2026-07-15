@@ -2215,9 +2215,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         .findByIdAndFactoryId(ri.getMaterialBatchId(), factoryId)
                         .orElseThrow(() -> new BusinessException(404,
                                 "原料批次不存在: " + ri.getMaterialBatchId()));
-                assertSourceUnit(rawMb, requestInputUnit(req), "原料批次");
+                BigDecimal storageQuantity = convertReportingQuantityToStorage(
+                        nz(ri.getQuantity()), requestInputUnit(req), rawMb.getQuantityUnit(), "原料批次");
                 ensureRawMaterialWarehouse(factoryId, planId, rawMb);
-                edges.add(new ResolvedEdge(rawMb, nz(ri.getQuantity()), "RAW_MATERIAL"));
+                edges.add(new ResolvedEdge(rawMb, storageQuantity, "RAW_MATERIAL"));
             }
         }
 
@@ -2269,8 +2270,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 if (!factoryId.equals(srcMb.getFactoryId())) {
                     throw new BusinessException(403, "无权访问上游批次 " + ur.getSourceBatchNumber());
                 }
-                assertSourceUnit(srcMb, requestInputUnit(req), "上游批次");
-                edges.add(new ResolvedEdge(srcMb, nz(ur.getFeedQuantityKg()), "SEMI_FINISHED"));
+                BigDecimal storageQuantity = convertReportingQuantityToStorage(
+                        nz(ur.getFeedQuantityKg()), requestInputUnit(req), srcMb.getQuantityUnit(), "上游批次");
+                edges.add(new ResolvedEdge(srcMb, storageQuantity, "SEMI_FINISHED"));
             }
         }
 
@@ -2525,22 +2527,54 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     }
 
     /**
-     * 逐工序表格的 RAW / 同计划 WIP 扣减没有通用跨单位换算表；若来源和本道投入单位不同，
-     * 继续以数量相乘会把“只/袋”当 kg，直接污染库存与成本。因此这里明确阻断。
-     * SFI/FG 来源沿用各自既有的严格换算/校验路径，不走这个 MaterialBatch 分支。
+     * g 与 kg 在库存扣减边界显式换算；其他单位不能猜测，否则会把“只/袋”当 kg，
+     * 直接污染库存与成本。SFI/FG 来源沿用各自既有的严格换算/校验路径。
      */
-    private void assertSourceUnit(MaterialBatch source, String expectedUnit, String sourceLabel) {
-        String actualUnit = source == null ? null : source.getQuantityUnit();
-        if (actualUnit == null || actualUnit.isBlank() || expectedUnit == null || expectedUnit.isBlank()
-                || actualUnit.trim().equalsIgnoreCase(expectedUnit.trim())) {
-            return;
+    private static BigDecimal convertReportingQuantityToStorage(
+            BigDecimal reportingQuantity,
+            String reportingUnit,
+            String storageUnit,
+            String sourceLabel) {
+        if (reportingQuantity == null) {
+            return reportingQuantity;
         }
-        throw new BusinessException(409, sourceLabel + "单位为“" + actualUnit + "”，不能按本道投入单位“"
-                + expectedUnit + "”扣减")
+        if (reportingUnit == null || reportingUnit.isBlank()
+                || storageUnit == null || storageUnit.isBlank()) {
+            throw sourceUnitMismatch(reportingUnit, storageUnit, sourceLabel);
+        }
+        String reportingCode = massUnitCode(reportingUnit);
+        String storageCode = massUnitCode(storageUnit);
+        if (reportingCode.equals(storageCode)) {
+            return reportingQuantity;
+        }
+        if ("kg".equals(reportingCode) && "g".equals(storageCode)) {
+            return reportingQuantity.movePointRight(3);
+        }
+        if ("g".equals(reportingCode) && "kg".equals(storageCode)) {
+            return reportingQuantity.movePointLeft(3);
+        }
+        throw sourceUnitMismatch(reportingUnit, storageUnit, sourceLabel);
+    }
+
+    private static BusinessException sourceUnitMismatch(
+            String reportingUnit, String storageUnit, String sourceLabel) {
+        return new BusinessException(409, sourceLabel + "存储单位为“" + storageUnit + "”，不能按报工单位“"
+                + reportingUnit + "”扣减")
                 .withCode("PROCESS_SHEET_SOURCE_UNIT_MISMATCH")
-                .withHint("请将工序投入单位设为来源批次单位，或先完成明确的单位换算")
+                .withHint("当前仅支持 g 与 kg 的显式质量换算；其他单位请先配置确定的单位换算")
                 .withSeverity("BLOCKING")
                 .withHintTarget("inputUnit");
+    }
+
+    private static String massUnitCode(String unit) {
+        String normalized = unit.trim().toLowerCase(java.util.Locale.ROOT);
+        if ("kg".equals(normalized) || "千克".equals(normalized) || "公斤".equals(normalized)) {
+            return "kg";
+        }
+        if ("g".equals(normalized) || "克".equals(normalized)) {
+            return "g";
+        }
+        return normalized;
     }
 
     private static String requestInputUnit(ProcessSheetRowRequest req) {

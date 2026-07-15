@@ -102,7 +102,10 @@ function mountChaoshuiTable({
       processLabel: '焯水',
       allowMultipleUpstreamSources: false,
       productTypeId: 'PT-1',
-      upstreamItems: [],
+      upstreamItems: [{
+        batchNumber: 'WIP-UP-1', produced: 1_000_000, used: 0, remaining: 1_000_000,
+        status: 'ACTIVE', unit: 'kg', productTypeName: '上游半成品',
+      }],
       ownInventoryItems: [],
       initialRows: [],
       viewMode: 'card',
@@ -355,13 +358,13 @@ describe('ProcessDataTable.vue buildRequest sources finished/unit from the workf
 
     await clickAddRow(wrapper);
     await selectUpstreamSource(wrapper, 'wip::WIP-UP-1');
-    await setNumberField(wrapper, '投入(g)', 500);
+    await setNumberField(wrapper, '投入(kg)', 0.5);
     await setNumberField(wrapper, '产出(件)', 8);
     await clickSave(wrapper);
 
     expect(saveRow).toHaveBeenCalledTimes(1);
     const [, , req] = saveRow.mock.calls[0] as [string, string, Record<string, unknown>];
-    expect(req.inputUnit).toBe('g');
+    expect(req.inputUnit).toBe('kg');
     expect(req.outputUnit).toBe('件');
     expect(req.unit).toBe('件');
     expect(req.outputUnit).toBe(req.unit);

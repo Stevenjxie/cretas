@@ -19,6 +19,7 @@ const schedule = generateSchedule({
 const mapProps = () => ({
   stores: MOCK_STORES,
   trips: schedule.trips,
+  vehicles: MOCK_VEHICLES,
   selectedTripId: schedule.trips[0].id,
   selectedStoreId: null,
 });
@@ -125,20 +126,23 @@ describe('LogisticsMap', () => {
 });
 
 describe('RouteCards', () => {
-  it('renders ordered store chains, vehicle fallback, distance, and load', () => {
+  it('renders ordered store chains, assignment controls, distance, and load', () => {
     const wrapper = mount(RouteCards, { props: mapProps() });
     const cards = wrapper.findAll('[data-testid="route-card"]');
     const pendingCard = cards.find((card) => card.attributes('data-trip-id') === schedule.trips[3].id);
+    const assignedVehicle = cards[0].get('[data-testid="confirm-vehicle-select"]');
+    const assignedDriver = cards[0].get('[data-testid="confirm-driver-select"]');
 
     expect(cards).toHaveLength(schedule.trips.length);
     expect(cards[0].findAll('[data-testid="route-store"]').map((store) => store.text())).toEqual([
       '配送门店 01', '配送门店 03', '配送门店 04',
     ]);
     expect(cards[0].findAll('.chain-arrow')).toHaveLength(2);
-    expect(cards[0].text()).toContain(schedule.trips[0].vehiclePlate);
+    expect(assignedVehicle.attributes('model-value')).toBe(schedule.trips[0].vehicleId);
+    expect(assignedDriver.attributes('model-value')).toBe(schedule.trips[0].driverId);
     expect(cards[0].text()).toContain(`${schedule.trips[0].totalDistanceKm.toFixed(1)} km`);
     expect(cards[0].text()).toContain(`${Math.round(schedule.trips[0].loadRate * 100)}%`);
-    expect(pendingCard?.text()).toContain('待匹配车辆');
+    expect(pendingCard?.get('[data-testid="confirm-vehicle-select"]').attributes('placeholder')).toBe('待匹配车辆');
   });
 
   it('emits exact card and store selection events', async () => {

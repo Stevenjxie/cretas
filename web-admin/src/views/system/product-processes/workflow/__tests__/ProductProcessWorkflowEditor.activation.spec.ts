@@ -62,7 +62,11 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
     apiMocks.get.mockImplementation((url: string) => Promise.resolve({
       success: true,
-      data: url.includes('/product-types') ? { content: [] } : [],
+      data: url.includes('/product-types')
+        ? { content: [productOption('PT-A'), productOption('PT-B')] }
+        : url.includes('/raw-material-types')
+          ? [productOption('RAW')]
+          : [],
     }));
     apiMocks.post.mockResolvedValue({ success: true, data: null });
     apiMocks.getActiveWorkProcesses.mockResolvedValue({ success: true, data: [] });
@@ -137,6 +141,10 @@ function mountEditor() {
       canWrite: true,
     },
   });
+}
+
+function productOption(id: string) {
+  return { id, name: id, unit: 'kg', productCategory: 'FINISHED_GOOD', isActive: true };
 }
 
 function definition(

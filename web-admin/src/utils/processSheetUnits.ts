@@ -14,6 +14,9 @@ type UnitConfig = {
 type WorkflowUnitPort = {
   workflowPortId?: string | null;
   unit?: string | null;
+  materialKind?: 'RAW_MATERIAL' | 'SEMI_FINISHED' | 'FINISHED_GOOD' | null;
+  finished?: boolean | null;
+  gramsPerUnit?: number | null;
 };
 
 type WorkflowUnitConfig = {
@@ -31,6 +34,25 @@ const OUTPUT_KEYS = new Set(['output', 'after', 'storage', 'sample', 'remainBox'
 function nonBlank(value: string | null | undefined): string | undefined {
   const unit = value?.trim();
   return unit || undefined;
+}
+
+function isMassUnit(unit: string): boolean {
+  const normalized = unit.trim().toLowerCase();
+  return normalized === 'g' || normalized === 'kg' || normalized === '克' || normalized === '千克';
+}
+
+function reportingUnit(port: WorkflowUnitPort, unit: string): string {
+  if ((port.materialKind === 'RAW_MATERIAL' || port.materialKind === 'SEMI_FINISHED') && isMassUnit(unit)) {
+    return 'kg';
+  }
+  return unit;
+}
+
+function massQuantityInGrams(quantity: number, unit: string): number | null {
+  const normalized = unit.trim().toLowerCase();
+  if (normalized === 'g' || normalized === '克') return quantity;
+  if (normalized === 'kg' || normalized === '千克') return quantity * 1000;
+  return null;
 }
 
 export function resolveProcessSheetUnits(config: UnitConfig): ProcessSheetUnits {
@@ -57,26 +79,51 @@ export function resolveWorkflowProcessSheetUnits(config: WorkflowUnitConfig): Pr
       const portLabel = nonBlank(port.workflowPortId) ?? `#${index + 1}`;
       throw new Error(`工序「${processLabel}」投入端口 ${portLabel} 缺少单位`);
     }
-    return unit;
+    return reportingUnit(port, unit);
   });
   const distinctInputUnits = [...new Set(inputUnits)];
   if (distinctInputUnits.length !== 1) {
     throw new Error(`工序「${processLabel}」投入端口单位不一致：${distinctInputUnits.join('、')}`);
   }
 
-  const outputUnit = nonBlank(config.output?.unit);
+  const rawOutputUnit = nonBlank(config.output?.unit);
+  const outputUnit = rawOutputUnit && config.output ? reportingUnit(config.output, rawOutputUnit) : undefined;
   if (!outputUnit) {
     const portLabel = nonBlank(config.output?.workflowPortId) ?? '未配置';
     throw new Error(`工序「${processLabel}」产出端口 ${portLabel} 缺少单位`);
   }
   config.outputs?.forEach((port, index) => {
-    if (!nonBlank(port.unit)) {
+    const unit = nonBlank(port.unit);
+    if (!unit) {
       const portLabel = nonBlank(port.workflowPortId) ?? `#${index + 1}`;
       throw new Error(`工序「${processLabel}」产出端口 ${portLabel} 缺少单位`);
     }
   });
 
   return { inputUnit: distinctInputUnits[0], outputUnit };
+}
+
+export function formatWorkflowPlannedOutput(
+  quantity: number | null | undefined,
+  plannedUnit: string | null | undefined,
+  terminalOutput: WorkflowUnitPort | null | undefined,
+): string {
+  if (quantity == null || quantity === 0 || !terminalOutput) return formatPlannedOutput(quantity, plannedUnit);
+  const sourceUnit = nonBlank(plannedUnit);
+  const targetUnit = nonBlank(terminalOutput.unit);
+  if (!sourceUnit || !targetUnit) return formatPlannedOutput(quantity, plannedUnit);
+
+  const grams = massQuantityInGrams(quantity, sourceUnit);
+  if ((terminalOutput.finished === true || terminalOutput.materialKind === 'FINISHED_GOOD') && grams != null) {
+    const gramsPerUnit = terminalOutput.gramsPerUnit;
+    if (gramsPerUnit != null && gramsPerUnit > 0 && !isMassUnit(targetUnit)) {
+      return formatPlannedOutput(Number((grams / gramsPerUnit).toFixed(6)), targetUnit);
+    }
+  }
+  if ((terminalOutput.materialKind === 'RAW_MATERIAL' || terminalOutput.materialKind === 'SEMI_FINISHED') && grams != null) {
+    return formatPlannedOutput(Number((grams / 1000).toFixed(6)), 'kg');
+  }
+  return formatPlannedOutput(quantity, targetUnit);
 }
 
 export function formatPlannedOutput(quantity: number | null | undefined, unit: string | null | undefined): string {

@@ -19,6 +19,7 @@ import com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository;
 import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.workflow.WorkflowClerkSheetService;
+import com.cretas.aims.service.workflow.WorkflowReportingUnitResolver;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -51,6 +52,7 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
     private final ProductWorkProcessRepository productWorkProcessRepository;
     private final RawMaterialTypeRepository rawMaterialTypeRepository;
     private final ProductTypeRepository productTypeRepository;
+    private final WorkflowReportingUnitResolver reportingUnitResolver;
 
     @Override
     @Transactional(readOnly = true)
@@ -120,6 +122,7 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
 
     private WorkflowClerkSheetConfigDTO.ProcessDescriptor buildDescriptor(
             String factoryId, WorkProcessTask task, List<WorkflowTaskPort> taskPorts) {
+        boolean projectReportingUnits = task.getStatus() == null || !task.getStatus().isTerminal();
         List<WorkflowTaskPort> inputs = new ArrayList<>();
         List<WorkflowTaskPort> outputs = new ArrayList<>();
         for (WorkflowTaskPort port : taskPorts) {
@@ -135,7 +138,9 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
         outputs.sort(Comparator.comparing(WorkflowTaskPort::getOrdinal)
                 .thenComparing(WorkflowTaskPort::getWorkflowPortId));
         List<WorkflowClerkSheetConfigDTO.PortDescriptor> outputDescriptors =
-                outputs.stream().map(port -> toPortDescriptor(factoryId, port)).toList();
+                outputs.stream()
+                        .map(port -> toPortDescriptor(factoryId, port, projectReportingUnits))
+                        .toList();
         if (outputDescriptors.isEmpty()) {
             throw new BusinessException(409, "Workflow 工序缺少产出端口")
                     .withCode("WORKFLOW_RUNTIME_OUTPUT_PORT_MISSING")
@@ -167,18 +172,22 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                 .defaultCostCategory(
                         productWorkProcess != null ? productWorkProcess.getDefaultCostCategory() : null)
                 .processOrder(task.getProcessOrder())
-                .plannedUnit(task.getPlannedUnit())
+                .plannedUnit(projectReportingUnits
+                        ? outputDescriptors.getFirst().getUnit()
+                        : task.getPlannedUnit())
                 .allowMultipleUpstreamSources(upstreamInputCount > 1)
                 .allowFinishedGoodsSource(allowFinishedGoodsSource)
                 .customFieldSchema(workProcess != null ? workProcess.getCustomFieldSchema() : null)
-                .inputs(inputs.stream().map(port -> toPortDescriptor(factoryId, port)).toList())
+                .inputs(inputs.stream()
+                        .map(port -> toPortDescriptor(factoryId, port, projectReportingUnits))
+                        .toList())
                 .output(outputDescriptors.isEmpty() ? null : outputDescriptors.get(0)) // 向后兼容单产出 FE
                 .outputs(outputDescriptors)
                 .build();
     }
 
     private WorkflowClerkSheetConfigDTO.PortDescriptor toPortDescriptor(
-            String factoryId, WorkflowTaskPort port) {
+            String factoryId, WorkflowTaskPort port, boolean projectReportingUnit) {
         SkuLookup lookup = resolveSku(factoryId, port.getMaterialKind(), port.getSkuId());
         String unit = port.getUnit();
         if (unit == null || unit.isBlank()) {
@@ -187,6 +196,11 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                     .withHint("请修复 Workflow 后为新批次重新生成运行时快照")
                     .withSeverity("BLOCKING")
                     .withHintTarget("Workflow");
+        }
+        if (projectReportingUnit
+                && (lookup.resolved() || !FINISHED_GOOD.equals(port.getMaterialKind()))) {
+            unit = reportingUnitResolver.resolve(
+                    factoryId, port.getMaterialKind(), port.getSkuId(), unit);
         }
         return WorkflowClerkSheetConfigDTO.PortDescriptor.builder()
                 .workflowPortId(port.getWorkflowPortId())

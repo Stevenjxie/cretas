@@ -1,7 +1,7 @@
 <template>
   <div
     class="material-node"
-    :class="[`kind-${kind.toLowerCase()}`, { selected, 'wf-dim': isConnectDimmed, 'wf-valid': isValidConnectTarget }]"
+    :class="[`kind-${kind.toLowerCase()}`, { selected, 'wf-dim': isConnectDimmed, 'wf-valid': isValidConnectTarget, 'unit-error': !!unitError }]"
   >
     <Handle v-if="kind !== 'RAW_MATERIAL'" type="target" :position="Position.Left" id="input" />
     <Handle v-if="kind !== 'FINISHED_GOOD'" type="source" :position="Position.Right" id="output" />
@@ -31,6 +31,9 @@
       <strong>{{ data.skuCode || data.skuId || '尚未选择' }}</strong>
     </div>
     <div v-if="data.specification" class="specification">{{ data.specification }}</div>
+    <div v-if="unitError" class="unit-error-message" data-testid="unit-error">
+      {{ unitError }}
+    </div>
 
     <el-select
       v-if="kind === 'RAW_MATERIAL' && canWrite"
@@ -112,6 +115,7 @@ const props = withDefaults(defineProps<{
   bomRawMaterialIds?: string[];
   semiOptions: WorkflowSkuPickerOption[];
   finishedOptions: WorkflowSkuPickerOption[];
+  unitError?: string;
 }>(), {
   connectingFromKind: '',
   bomRawMaterialIds: () => [],
@@ -177,6 +181,17 @@ const kindMark = computed(() => ({
 .material-node { transition: opacity 150ms ease, box-shadow 150ms ease; }
 .material-node.wf-dim { opacity: 0.4; cursor: not-allowed; }
 .material-node.wf-valid { box-shadow: 0 0 0 2px #1b65a8, 0 0 12px rgba(27, 101, 168, 0.35); }
+.material-node.unit-error { box-shadow: 0 0 0 2px #f56c6c; }
+.unit-error-message {
+  margin: 8px 0;
+  padding: 6px 8px;
+  color: #b42318;
+  background: #fef3f2;
+  border: 1px solid #fecdca;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+}
 .material-node :deep(.vue-flow__handle) {
   width: 12px; height: 12px; opacity: 0.35;
   transition: opacity 150ms ease, transform 120ms ease;

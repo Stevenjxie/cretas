@@ -67,13 +67,12 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             BigDecimal remaining = required;
             BigDecimal availableForInput = BigDecimal.ZERO;
             for (MaterialBatch batch : batches) {
-                if (!KG.equalsIgnoreCase(normalizeUnit(batch.getQuantityUnit()))) {
-                    continue;
-                }
                 BigDecimal available = availableByBatch.computeIfAbsent(batch.getId(), ignored -> {
                     BigDecimal pending = nz(allocationRepository
                             .sumPendingQuantityByMaterialBatchId(factoryId, batch.getId()));
-                    return nz(batch.getCurrentQuantity()).subtract(pending).max(BigDecimal.ZERO);
+                    BigDecimal stockKg = storageQuantityToKg(
+                            nz(batch.getCurrentQuantity()), batch.getQuantityUnit(), batch.getBatchNumber());
+                    return stockKg.subtract(pending).max(BigDecimal.ZERO);
                 });
                 if (available.signum() <= 0) {
                     continue;
@@ -181,7 +180,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                         .withCode("PRODUCTION_INPUT_BATCH_NOT_IN_WORKSHOP")
                         .withSeverity("BLOCKING");
             }
-            if (!KG.equalsIgnoreCase(normalizeUnit(batch.getQuantityUnit()))) {
+            if (!isMassStorageUnit(batch.getQuantityUnit())) {
                 throw new BusinessException(409, "所选投料批次不是 kg 计量，不能直接报工")
                         .withCode("PRODUCTION_INPUT_BATCH_UNIT_INVALID")
                         .withSeverity("BLOCKING");
@@ -194,7 +193,9 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             }
             BigDecimal pending = nz(allocationRepository
                     .sumPendingQuantityByMaterialBatchId(factoryId, batchId));
-            BigDecimal available = nz(batch.getCurrentQuantity()).subtract(pending).max(BigDecimal.ZERO);
+            BigDecimal available = storageQuantityToKg(
+                    nz(batch.getCurrentQuantity()), batch.getQuantityUnit(), batch.getBatchNumber())
+                    .subtract(pending).max(BigDecimal.ZERO);
             if (batch.getStatus() != com.cretas.aims.entity.enums.MaterialBatchStatus.AVAILABLE
                     || available.compareTo(required) < 0) {
                 shortageItems.add(new ProductionStockShortageDTO.Item(
@@ -325,6 +326,37 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
 
     private String normalizeUnit(String unit) {
         return unit == null || unit.isBlank() ? KG : unit.trim();
+    }
+
+    private boolean isMassStorageUnit(String unit) {
+        if (unit == null || unit.isBlank()) return false;
+        String normalized = unit.trim().toLowerCase(java.util.Locale.ROOT);
+        return "kg".equals(normalized) || "g".equals(normalized)
+                || "千克".equals(normalized) || "公斤".equals(normalized) || "克".equals(normalized);
+    }
+
+    /**
+     * Allocations and pending reservations use reporting kg even when an older inventory batch
+     * is stored in g. The process-sheet edge resolver converts the eventual deduction back to
+     * the batch storage unit.
+     */
+    private BigDecimal storageQuantityToKg(BigDecimal quantity, String storageUnit, String batchNumber) {
+        if (!isMassStorageUnit(storageUnit)) {
+            throw invalidBatchUnit(batchNumber, storageUnit);
+        }
+        String normalized = storageUnit.trim().toLowerCase(java.util.Locale.ROOT);
+        if ("g".equals(normalized) || "克".equals(normalized)) {
+            return quantity.movePointLeft(3);
+        }
+        return quantity;
+    }
+
+    private BusinessException invalidBatchUnit(String batchNumber, String unit) {
+        return new BusinessException(409,
+                "生产库批次 " + batchNumber + " 的库存单位“" + unit + "”不能换算为 kg")
+                .withCode("PRODUCTION_INPUT_BATCH_UNIT_INVALID")
+                .withHint("仅支持 g 与 kg 的质量换算；请先补全或修正库存批次单位")
+                .withSeverity("BLOCKING");
     }
 
     private BigDecimal nz(BigDecimal value) {

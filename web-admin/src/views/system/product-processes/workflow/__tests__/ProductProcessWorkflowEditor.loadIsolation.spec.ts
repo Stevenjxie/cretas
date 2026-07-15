@@ -83,11 +83,14 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
-    apiMocks.get.mockImplementation((url: string) => Promise.resolve(
-      url.includes('/product-types')
-        ? { success: true, data: { content: [] } }
-        : { success: true, data: [] },
-    ));
+    apiMocks.get.mockImplementation((url: string) => Promise.resolve({
+      success: true,
+      data: url.includes('/product-types')
+        ? { content: [testSku('PT-A'), testSku('PT-B')] }
+        : url.includes('/raw-material-types')
+          ? [testSku('SKU-RAW'), testSku('SKU:PT-A'), testSku('SKU:PT-B')]
+          : [],
+    }));
     apiMocks.getActiveWorkProcesses.mockResolvedValue({ success: true, data: [] });
     apiMocks.getProductWorkProcesses.mockResolvedValue({ success: true, data: [] });
     apiMocks.saveProductProcessWorkflowDraft.mockImplementation(
