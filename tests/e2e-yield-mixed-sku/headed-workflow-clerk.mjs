@@ -90,7 +90,7 @@ console.log(`Processes: ${(setup.processes || []).map((p) => `${p.processOrder}:
 
 const ctx = await startHeaded(OUT);
 const { page, api, shot, helpers, consoleErrors } = ctx;
-const { selectByText, fillNum, waitSaved } = helpers;
+const { selectByText, selectByKeyboard, fillNum, waitSaved } = helpers;
 const drawer = () => page.locator('.el-drawer__body');
 const activePane = () => drawer().locator('.el-tab-pane:visible').first();
 
@@ -193,7 +193,9 @@ try {
     await pane.locator('button').filter({ hasText: /新增行/ }).first().click().catch(() => null);
     await page.waitForTimeout(800);
     const row = pane.locator('table.sp-grid tbody tr.sp-tr').last();
-    await selectByText(row.locator('.el-select').first(), setup.rawMaterial.batch.batchNumber);
+    // F006 has enough available batches that the target option may not be in the
+    // initial rendered set. Type to filter before choosing the batch.
+    await selectByKeyboard(row.locator('.el-select').first(), setup.rawMaterial.batch.batchNumber);
     const nums = row.locator('.el-input-number');
     // nums[0]=出库重量(kg) (outWeight -> rawInput.quantity), nums[1]=产出数量(kg) (output -> outputQuantity)
     await fillNum(nums.nth(0), 1.0);
