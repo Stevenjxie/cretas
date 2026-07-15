@@ -303,6 +303,46 @@ deploy_git() {
 deploy_jar() {
     local VERSION="${1:-v$(date +%Y%m%d_%H%M%S)}"
 
+    # Reuse the already-verified CI JAR only when its artifact, commit manifest,
+    # and SHA-256 all match the exact local commit. Any lookup/validation failure
+    # is deliberately non-fatal: the normal clean Maven build remains the safe fallback.
+    reuse_exact_ci_artifact() {
+        local HEAD_SHA ARTIFACT_NAME DOWNLOAD_URL TMP_DIR ARTIFACT_JAR ARTIFACT_DIR
+        HEAD_SHA=$(git rev-parse HEAD 2>/dev/null) || return 1
+        ARTIFACT_NAME="cretas-java-$HEAD_SHA"
+
+        [ "$HAS_GH" = "true" ] || return 1
+        DOWNLOAD_URL=$(GH_HTTP_TIMEOUT=15 gh api \
+            "repos/$REPO/actions/artifacts?name=$ARTIFACT_NAME&per_page=10" \
+            --jq ".artifacts[] | select(.expired == false and .workflow_run.head_branch == \"main\" and .workflow_run.head_sha == \"$HEAD_SHA\") | .archive_download_url" \
+            2>/dev/null | head -1) || return 1
+        [ -n "$DOWNLOAD_URL" ] || return 1
+
+        TMP_DIR="$UPLOAD_STATUS_DIR/ci-artifact"
+        rm -rf "$TMP_DIR"
+        mkdir -p "$TMP_DIR" || return 1
+        if ! GH_HTTP_TIMEOUT=30 gh api "$DOWNLOAD_URL" > "$TMP_DIR/artifact.zip" 2>/dev/null \
+            || ! unzip -q "$TMP_DIR/artifact.zip" -d "$TMP_DIR/extracted"; then
+            rm -rf "$TMP_DIR"
+            return 1
+        fi
+
+        ARTIFACT_JAR=$(find "$TMP_DIR/extracted" -type f -name "$JAR_NAME" -print -quit)
+        [ -n "$ARTIFACT_JAR" ] || { rm -rf "$TMP_DIR"; return 1; }
+        ARTIFACT_DIR=$(dirname "$ARTIFACT_JAR")
+        if [ "$(tr -d '\r\n' < "$ARTIFACT_DIR/$JAR_NAME.commit" 2>/dev/null)" != "$HEAD_SHA" ] \
+            || ! (cd "$ARTIFACT_DIR" && sha256sum -c "$JAR_NAME.sha256" >/dev/null 2>&1); then
+            rm -rf "$TMP_DIR"
+            return 1
+        fi
+
+        mkdir -p "backend/java/cretas-api/target"
+        cp "$ARTIFACT_JAR" "backend/java/cretas-api/target/$JAR_NAME"
+        rm -rf "$TMP_DIR"
+        echo "   ✓ 复用 CI 已验证 JAR: $ARTIFACT_NAME (commit + SHA-256 已核验)"
+        return 0
+    }
+
     # 统计可用方式
     local METHODS=()
     # 上传策略 (Steve 2026-05-28): rsync 优先 (更长久更快) → scp 兜底
@@ -440,7 +480,19 @@ deploy_jar() {
     # R25: 默认 `clean package` 强制全量重编, 防 incremental cache 漏新 Controller/DTO 签名 (R24 事故教训)
     # 如需保留 incremental build (快, 但不安全), 传 SKIP_CLEAN=1
     echo ""
-    if [ -n "$SKIP_BUILD" ] && [ -f "backend/java/cretas-api/target/$JAR_NAME" ]; then
+    CI_ARTIFACT_REUSED=false
+    if [ -z "$SKIP_BUILD" ] && [ -z "$SKIP_CLEAN" ]; then
+        echo "📦 [1/4] 查找当前 commit 的 CI 已验证 JAR..."
+        if reuse_exact_ci_artifact; then
+            CI_ARTIFACT_REUSED=true
+        else
+            echo "   ℹ️  无可用的精确 SHA CI 制品，回退本地 clean package"
+        fi
+    fi
+
+    if [ "$CI_ARTIFACT_REUSED" = "true" ]; then
+        :
+    elif [ -n "$SKIP_BUILD" ] && [ -f "backend/java/cretas-api/target/$JAR_NAME" ]; then
         echo "📦 [1/4] 跳过 Maven 打包 (SKIP_BUILD=1, 使用已有 JAR)"
     else
         MVN_GOALS="clean package"
@@ -1023,6 +1075,15 @@ deploy_jar() {
             fi
 
             # [BG 1/4] 启动 idle service (它会读取刚部署的新 jar)
+            STARTUP_RESTART_LIMIT="${STARTUP_RESTART_LIMIT:-2}"
+            case "$STARTUP_RESTART_LIMIT" in
+                ''|*[!0-9]*|0)
+                    echo "   ⚠️  STARTUP_RESTART_LIMIT='$STARTUP_RESTART_LIMIT' 非正整数，使用安全默认值 2"
+                    STARTUP_RESTART_LIMIT=2
+                    ;;
+            esac
+            IDLE_RESTART_BASELINE=$(ssh $SERVER "systemctl show $IDLE_SERVICE -p NRestarts --value 2>/dev/null || echo 0" 2>/dev/null)
+            [[ "$IDLE_RESTART_BASELINE" =~ ^[0-9]+$ ]] || IDLE_RESTART_BASELINE=0
             echo "   [BG 1/4] 启动 $IDLE_COLOR ($IDLE_SERVICE)..."
             if ! ssh $SERVER "systemctl restart $IDLE_SERVICE"; then
                 echo "   ❌ 无法启动 $IDLE_SERVICE, 中止切换"
@@ -1034,6 +1095,7 @@ deploy_jar() {
             echo "   [BG 2/4] 等待 $IDLE_COLOR 健康 (远端 loop, 最多 150s)..."
             BG_T0=$(date +%s)
             IDLE_HEALTHY=false
+            set +e
             BG_RESULT=$(ssh -o ConnectTimeout=10 -o ServerAliveInterval=15 $SERVER "
                 for i in \$(seq 1 150); do
                     STATUS=\$(curl -s -o /dev/null --max-time 2 -w '%{http_code}' http://localhost:$IDLE_PORT/api/mobile/health 2>/dev/null)
@@ -1041,12 +1103,26 @@ deploy_jar() {
                         echo \"UP:\${i}\"
                         exit 0
                     fi
+                    RESTARTS=\$(systemctl show $IDLE_SERVICE -p NRestarts --value 2>/dev/null || echo 0)
+                    case \"\$RESTARTS\" in ''|*[!0-9]*) RESTARTS=0 ;; esac
+                    if [ \"\$RESTARTS\" -lt '$IDLE_RESTART_BASELINE' ]; then
+                        RESTART_DELTA=\$RESTARTS
+                    else
+                        RESTART_DELTA=\$((RESTARTS - $IDLE_RESTART_BASELINE))
+                    fi
+                    if [ \"\$RESTART_DELTA\" -ge '$STARTUP_RESTART_LIMIT' ]; then
+                        ACTIVE_STATE=\$(systemctl is-active $IDLE_SERVICE 2>/dev/null || true)
+                        UNIT_RESULT=\$(systemctl show $IDLE_SERVICE -p Result --value 2>/dev/null || true)
+                        echo \"RESTART_LIMIT:\${RESTART_DELTA}:\${ACTIVE_STATE}:\${UNIT_RESULT}\"
+                        exit 2
+                    fi
                     sleep 1
                 done
                 echo 'TIMEOUT'
                 exit 1
             " 2>/dev/null)
             BG_EXIT=$?
+            set -e
             BG_ELAPSED=$(( $(date +%s) - BG_T0 ))
 
             if [ "$BG_EXIT" = "0" ] && [[ "$BG_RESULT" == UP:* ]]; then
@@ -1055,6 +1131,9 @@ deploy_jar() {
             else
                 echo "   ❌ $IDLE_COLOR 健康检查失败 (${BG_ELAPSED}s elapsed, result: '$BG_RESULT')"
                 echo "   保持原 active 不切换, 停止 idle"
+                echo "   ---- $IDLE_SERVICE 最近日志（只读，最多 80 行）----"
+                ssh $SERVER "journalctl -u $IDLE_SERVICE -n 80 --no-pager -o short-iso" 2>/dev/null || true
+                echo "   ---- 日志结束 ----"
                 ssh $SERVER "systemctl stop $IDLE_SERVICE" 2>/dev/null || true
                 exit 1
             fi
@@ -1315,7 +1394,11 @@ deploy_jar() {
     echo "  方式: $WINNER"
     echo "  MD5: $LOCAL_MD5"
     echo "  上传耗时: ${UPLOAD_DURATION}s (${SPEED_MBPS} MB/s)"
-    [ "$HAS_GH" = "true" ] && echo "  Release: https://github.com/$REPO/releases/tag/$VERSION"
+    if [ "$HAS_GH" = "true" ] && GH_HTTP_TIMEOUT=10 gh release view "$VERSION" --repo "$REPO" >/dev/null 2>&1; then
+        echo "  Release: https://github.com/$REPO/releases/tag/$VERSION"
+    else
+        echo "  GitHub Release: 未创建（本次通过 $WINNER 上传）"
+    fi
     echo "=========================================="
 }
 
