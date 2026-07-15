@@ -30,6 +30,11 @@ type LabelColumn = { key: string; label: string };
 
 const INPUT_KEYS = new Set(['outWeight', 'feedWeight', 'before', 'input', 'remain']);
 const OUTPUT_KEYS = new Set(['output', 'after', 'storage', 'sample', 'remainBox', 'claim', 'actualProd']);
+const DISPLAY_UNIT_ALIASES: Record<string, string> = {
+  box: '盒', case: '箱', bag: '袋', pcs: '件', each: '件', piece: '件', portion: '份', bottle: '瓶',
+  '盒': '盒', '箱': '箱', '袋': '袋', '件': '件', '份': '份', '瓶': '瓶',
+  g: 'g', '克': 'g', kg: 'kg', '千克': 'kg', '公斤': 'kg',
+};
 
 function nonBlank(value: string | null | undefined): string | undefined {
   const unit = value?.trim();
@@ -46,6 +51,32 @@ function reportingUnit(port: WorkflowUnitPort, unit: string): string {
     return 'kg';
   }
   return unit;
+}
+
+export function displayProcessUnit(unit: string | null | undefined): string {
+  const value = nonBlank(unit);
+  if (!value) return '';
+  return DISPLAY_UNIT_ALIASES[value.toLowerCase()] || value;
+}
+
+export function workflowPortDisplayUnit(port: WorkflowUnitPort | null | undefined): string {
+  const unit = nonBlank(port?.unit);
+  if (!port || !unit) return '';
+  return displayProcessUnit(reportingUnit(port, unit));
+}
+
+/** 只转换显示值；持久化快照保持原样。 */
+export function normalizeMassQuantityForReporting(
+  quantity: number,
+  unit: string | null | undefined,
+): { quantity: number; unit: string } {
+  const source = nonBlank(unit);
+  if (!source) return { quantity, unit: '' };
+  const normalized = source.toLowerCase();
+  if (normalized === 'g' || normalized === '克') {
+    return { quantity: Number((quantity / 1000).toFixed(6)), unit: 'kg' };
+  }
+  return { quantity, unit: displayProcessUnit(source) };
 }
 
 function massQuantityInGrams(quantity: number, unit: string): number | null {
@@ -128,22 +159,22 @@ export function formatWorkflowPlannedOutput(
 
 export function formatPlannedOutput(quantity: number | null | undefined, unit: string | null | undefined): string {
   if (quantity == null || quantity === 0) return '计划成品 —';
-  const normalizedUnit = nonBlank(unit) ?? '（单位未配置）';
+  const normalizedUnit = displayProcessUnit(unit) || '（单位未配置）';
   return `计划成品 ${quantity} ${normalizedUnit}`;
 }
 
 export function formatProcessOutput(quantity: number | null | undefined, unit: string | null | undefined): string {
   if (quantity == null) return '—';
-  return `产出 ${Number(quantity).toFixed(2)} ${nonBlank(unit) ?? '（单位未配置）'}`;
+  return `产出 ${Number(quantity).toFixed(2)} ${displayProcessUnit(unit) || '（单位未配置）'}`;
 }
 
 export function formatSourceFeedSummary(sourceCount: number, quantity: number, unit: string | null | undefined): string {
   if (sourceCount === 0) return '+ 来源批';
-  return `${sourceCount}批 · ${Number(quantity).toFixed(1)}${nonBlank(unit) ?? '（单位未配置）'}`;
+  return `${sourceCount}批 · ${Number(quantity).toFixed(1)}${displayProcessUnit(unit) || '（单位未配置）'}`;
 }
 
 export function formatFeedPlaceholder(unit: string | null | undefined): string {
-  return `投料${nonBlank(unit) ?? '（单位未配置）'}`;
+  return `投料${displayProcessUnit(unit) || '（单位未配置）'}`;
 }
 
 export function withProcessSheetUnits<T extends LabelColumn>(

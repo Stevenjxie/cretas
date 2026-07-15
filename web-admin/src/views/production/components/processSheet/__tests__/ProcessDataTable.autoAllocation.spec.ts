@@ -134,7 +134,9 @@ describe('ProcessDataTable production-store automatic allocation', () => {
       payload: {
         clientRowId: 'legacy-row-1', processCode: 'xiuyou', processOrder: 1,
         rawMaterialInputs: [{ materialBatchId: 'RAW-BATCH-1', quantity: 12 }],
-        outputQuantity: 10,
+        outputQuantity: 100_000,
+        outputUnit: 'g',
+        unit: 'g',
       },
     }]);
     await flushPromises();
@@ -142,6 +144,8 @@ describe('ProcessDataTable production-store automatic allocation', () => {
     expect(wrapper.text()).toContain('历史数据（只读）');
     expect(wrapper.find('[data-testid="legacy-raw-batch-picker"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="legacy-readonly-row"]').exists()).toBe(true);
+    expect(wrapper.text()).toContain('产出 100.00 kg');
+    expect(wrapper.text()).not.toContain('产出 100000.00 kg');
     expect(wrapper.text()).not.toContain('保存草稿');
 
     await addRow(wrapper);

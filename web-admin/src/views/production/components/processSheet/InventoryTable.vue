@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { getInventory, type ProcessSheetInventoryItem } from '@/api/processSheet';
+import { normalizeMassQuantityForReporting } from '@/utils/processSheetUnits';
 
 const props = defineProps<{
   factoryId: string;
@@ -14,6 +15,23 @@ const rows = ref<ProcessSheetInventoryItem[]>([]);
 const loading = ref(false);
 const errorMessage = ref('');
 let refreshSeq = 0;
+
+const displayRows = computed(() => rows.value.map((row) => {
+  const produced = normalizeMassQuantityForReporting(Number(row.produced), row.unit);
+  const used = normalizeMassQuantityForReporting(Number(row.used), row.unit);
+  const remaining = normalizeMassQuantityForReporting(Number(row.remaining), row.unit);
+  const sourceUnit = row.unit?.trim().toLowerCase();
+  return {
+    ...row,
+    produced: produced.quantity,
+    used: used.quantity,
+    remaining: remaining.quantity,
+    unit: produced.unit,
+    unitPrice: row.unitPrice == null
+      ? row.unitPrice
+      : ((sourceUnit === 'g' || sourceUnit === '克') ? row.unitPrice * 1000 : row.unitPrice),
+  };
+}));
 
 async function refresh() {
   if (!props.factoryId || !props.planId) return;
@@ -55,7 +73,7 @@ defineExpose({ refresh });
     </template>
   </el-alert>
   <el-table
-    :data="rows"
+    :data="displayRows"
     v-loading="loading"
     size="small"
     border

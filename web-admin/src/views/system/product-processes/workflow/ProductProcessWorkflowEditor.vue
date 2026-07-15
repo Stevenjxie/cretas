@@ -792,12 +792,18 @@ async function reconcileLoadedUnits(): Promise<void> {
   const current = currentDefinition();
   const result = reconcileWorkflowUnits(current, unitContext());
   rememberUnitIssues(result.errors);
+  const unitsChanged = JSON.stringify(result.definition) !== JSON.stringify(current);
   if (definition.value.status === 'PUBLISHED') {
     if (result.errors.length > 0) showUnitIssues(result.errors);
-    if (!unitReviewPending.value || result.errors.length > 0) return;
+    if (result.errors.length > 0) return;
+    // 旧版本可能早于 unitReviewRequired 标记，或 SKU 数据曾通过导入/迁移更新。
+    // 只要当前 SKU 契约与发布图不一致，前端也必须主动进入待复核草稿，不能继续把 g/box
+    // 当作当前报工单位展示。发布版本本身仍保持不可变，重新发布后才影响新计划。
+    if (!unitReviewPending.value && !unitsChanged) return;
+    unitReviewPending.value = true;
   }
   const needsReviewDraft = definition.value.status === 'PUBLISHED' && unitReviewPending.value;
-  if (JSON.stringify(result.definition) !== JSON.stringify(current) || needsReviewDraft) {
+  if (unitsChanged || needsReviewDraft) {
     const reconciled = needsReviewDraft
       ? forkWorkflowUnitReviewDraft(result.definition)
       : result.definition;
@@ -2285,7 +2291,12 @@ function toggleAI(): void {
   grid-template-columns: minmax(0, 1fr);
   min-height: calc(100vh - 200px);
 }
-.workflow-main { min-width: 0; display: flex; flex-direction: column; }
+.workflow-main {
+  width: calc(100% - 44px);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
 .workflow-toolbar {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   min-height: 52px; padding: 8px 12px; border: 1px solid #edf2f7; border-radius: 10px 10px 0 0; background: #fff;

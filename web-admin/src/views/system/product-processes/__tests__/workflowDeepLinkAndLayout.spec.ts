@@ -21,5 +21,6 @@ describe('workflow deep link and workspace layout', () => {
     expect(editorSource).toContain('aria-controls="workflow-ai-panel"');
     expect(editorSource).toContain('grid-template-columns: minmax(0, 1fr);');
     expect(editorSource).toContain('position: absolute;');
+    expect(editorSource).toContain('width: calc(100% - 44px);');
   });
 });

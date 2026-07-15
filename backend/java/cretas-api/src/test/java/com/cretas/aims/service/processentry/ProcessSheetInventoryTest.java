@@ -119,6 +119,7 @@ class ProcessSheetInventoryTest {
         plan.setPlanNumber("INV-PN-" + System.currentTimeMillis() % 100000);
         plan.setProductTypeId(PRODUCT_TYPE);
         plan.setPlannedQuantity(new BigDecimal("200"));
+        plan.setPlannedUnit("kg");
         plan.setStatus(ProductionPlanStatus.PENDING);
         plan.setCreatedBy(operatorId);
         plan.setIsLocked(false);
@@ -225,6 +226,7 @@ class ProcessSheetInventoryTest {
         assertThat(item.getUsed()).isEqualByComparingTo("30");
         assertThat(item.getRemaining()).isEqualByComparingTo("50");
         assertThat(item.getStatus()).isEqualTo("ACTIVE");
+        assertThat(item.getUnit()).isEqualTo("kg");
         // unitPrice = rowTotalCost/output = (100×10)/80 = 12.5
         assertThat(item.getUnitPrice()).isEqualByComparingTo("12.5");
     }
@@ -275,6 +277,7 @@ class ProcessSheetInventoryTest {
         other.setPlanNumber("INV-OPN-" + System.currentTimeMillis() % 100000);
         other.setProductTypeId(PRODUCT_TYPE);
         other.setPlannedQuantity(new BigDecimal("100"));
+        other.setPlannedUnit("kg");
         other.setStatus(ProductionPlanStatus.PENDING);
         other.setCreatedBy(operatorId);
         other.setIsLocked(false);
