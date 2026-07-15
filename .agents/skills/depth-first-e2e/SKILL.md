@@ -34,6 +34,25 @@ If prerequisite data is missing and the test silently skips verification, downgr
 5. A deep test that finds a real bug requires a same-cause sweep before claiming the fix is complete.
 6. A committed branch is not delivered. Track push, PR/merge path, deployment plan, backlog tickets, and CI status before calling a round delivery-complete.
 7. Avoid "next round will handle it" unless there is a concrete tracked ticket, owner, and test design.
+8. Repeating the same full suite does not increase coverage depth. Count new assertions and states, not executions.
+9. After a combined production release, run one final read-only acceptance suite. Additional full reruns require a new deployment or changed shared prerequisite.
+
+## Risk-First Order And Rerun Budget
+
+Within a round, execute in this order:
+
+1. The highest-risk persisted legacy state related to the change, such as old `g/box/case` snapshots or historical rows.
+2. The focused regression for the changed workflow.
+3. Broader page and cross-module coverage only after the focused scenario passes.
+
+Classify a failure before deciding what to rerun:
+
+- **Harness failure:** fix the locator, fixture, or stale expectation and rerun that scenario.
+- **Product failure:** add a focused failing assertion, fix the root cause, complete the same-cause sweep, and rerun affected scenarios.
+- **Shared prerequisite failure:** if login, seed data, backend bootstrap, or deployment version changed, rerun the full dependent suite.
+- **New deployment:** run the final production read-only acceptance once against the combined released versions.
+
+Do not rerun a full browser suite merely to obtain a cleaner screenshot or replace a result that already proves the same behavior. Add a focused visual check instead.
 
 ## Deep Test Checklist
 

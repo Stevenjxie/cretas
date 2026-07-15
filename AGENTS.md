@@ -23,7 +23,7 @@ This file provides guidance to Codex when working with this repository.
 | Service | Port | URL |
 |---------|------|-----|
 | React Native | 3010 | `http://localhost:3010` |
-| Cretas 后端 (Java) | 10010 | `http://localhost:10010` via SSH tunnel; public direct access to `47.100.235.168:10010` is closed |
+| Cretas 后端 (Java) | 10010 / 10020 | prod 蓝绿槽交替使用；开发机经 SSH tunnel 访问，public direct access is closed |
 | Python 服务 | 8083 | `http://localhost:8083` |
 | Embedding 服务 | 9090 | gRPC |
 | Mall 后端 | 8080 | `http://139.196.165.140:8080` |
@@ -67,7 +67,7 @@ uvicorn main:app --port 8083     # 启动服务
 ### 部署到服务器
 ```bash
 # 方式1: JAR 部署 (推荐，默认)
-./scripts/deploy/deploy-backend.sh              # 本地打包 → GitHub Release → 服务器拉取
+./scripts/deploy/deploy-backend.sh              # 默认执行本次发布唯一一次 clean package → 上传 → 蓝绿切换
 
 # 方式2: Git 部署 (旧方式)
 ./scripts/deploy/deploy-backend.sh --git        # git push → 服务器编译
@@ -210,6 +210,14 @@ frontend/CretasFoodTrace/src/
 3. **统一响应格式** - `{ success, data, message }`
 4. **Tool-Skill Only** - AI 意图处理只用 Tool/Skill，禁止创建 IntentHandler（已废弃）
 
+### 发布与 E2E 去重复
+
+1. **唯一发布构建** - 同一提交的最终 JAR/Web 制品只完整构建一次。若部署脚本会构建，部署前不得再机械执行一次完整 package/build；只有具备同一 commit、哈希和制品清单的可信制品时才可跳过脚本构建并复用。
+2. **蓝绿槽位交替** - prod Java 的 `10010` 与 `10020` 都是可用槽位，会交替成为 active。部署前必须读取 `139.196.165.140:/www/server/panel/vhost/nginx/_upstream_cretas.conf`，禁止假设某个槽永久停用。
+3. **问题前移** - SKU、Workflow、报工单位或历史快照改动，合并前必须覆盖生产形态数据，包括旧 `g/box/case`、中文基本单位和多包装规格。
+4. **一次生产验收** - 后端与 Web 都部署完成后执行一次 F006 只读 E2E，业务写请求必须为 0。脚本/选择器失败与产品失败分开记录；共享前置条件未变化时只重跑失败场景，不机械重跑全套。
+5. **全量 CI 分层** - 改动相关目标测试和必需门禁必须通过；已确认的全量测试基线噪声应单独治理，不得用重复本地全量构建代替，也不得隐瞒其状态。
+
 ### UX Flow Gate（低技术素养用户屏幕）
 
 任何涉及以下角色/路径/功能的 RN 屏幕设计，**brainstorming 阶段必须在 propose approaches 之前先 invoke `ux-flow` skill**：
@@ -236,14 +244,15 @@ frontend/CretasFoodTrace/src/
 
 ### 健康检查
 ```bash
-ssh root@47.100.235.168 "curl -s http://localhost:10010/api/mobile/health"
+ssh root@139.196.165.140 "cat /www/server/panel/vhost/nginx/_upstream_cretas.conf"
+ssh root@47.100.235.168 "curl -s http://localhost:10010/api/mobile/health; curl -s http://localhost:10020/api/mobile/health"
 ssh root@47.100.235.168 "curl -s http://localhost:8083/health"
-lsof -i :10010
+lsof -i :10010 -i :10020
 ```
 
-开发机访问 Java 后端请先开 SSH tunnel：
+开发机访问 Java 后端请先读取 upstream，再把本地 `10010` 映射到当前 active 槽；例如 active 为 `10020`：
 ```bash
-ssh -L 10010:localhost:10010 root@47.100.235.168
+ssh -L 10010:localhost:10020 root@47.100.235.168
 ```
 
 ### 缓存问题

@@ -33,6 +33,17 @@ curl -s http://localhost:10010/api/mobile/health
 
 Confirm the target URL responds. If a dev server must be started, follow the project command and report the URL.
 
+## Production-Shaped Unit Gate
+
+Before merging changes to SKU specifications, Workflow ports, process reporting, inventory receipt, or sales packaging, test production-shaped legacy state rather than only newly-created rows:
+
+- Stored `g`, `box`, and `case` snapshots must render through the current `kg` or Chinese SKU-unit contract.
+- Raw materials and mass-based semi-finished reporting must use `kg`; finished outputs must inherit the finished SKU base unit such as `盒` or `袋`.
+- One SKU may have one standard weight and multiple packaging conversions; inventory and sales must require a packaging choice when more than one applies.
+- Include at least one old persisted row and one new editable row. A test using only a fresh row is insufficient for compatibility changes.
+
+Run this gate before production deployment so a compatibility defect does not force a second release cycle.
+
 ## Execution Preference
 
 Prefer a standalone Node Playwright script using `chromium.launch()`:
@@ -48,6 +59,28 @@ await browser.close();
 ```
 
 Use `.agents/skills/agent-browser` or available browser tools for exploratory inspection. Treat `.mcp.json` as historical MCP configuration, not as a guarantee that MCP tools are available in Codex.
+
+## Production Read-Only Acceptance
+
+After the final backend and Web versions are both live, run one F006 production read-only suite covering the changed paths. For the SKU/unit workflow, cover SKU edit, Workflow, process-sheet reporting, finished-goods opening inventory, and sales order entry.
+
+The suite must:
+
+- Use F006 only unless the user explicitly opens another tenant.
+- Record every `POST`, `PUT`, `PATCH`, and `DELETE`; allow only authentication and documented read-only query POSTs. Business mutation count must be zero.
+- Never save, publish, create, settle, or submit. Discard local unsaved UI rows before exit.
+- Assert zero page errors, zero console errors, and zero unexpected HTTP responses `>=400`.
+- Capture screenshots for unit labels, packaging selectors, horizontal overflow, sticky actions, and Workflow overlay/fit behavior.
+
+Classify failures before changing product code:
+
+| Failure class | Action |
+|---|---|
+| Product/API defect | Reproduce with a focused assertion, fix, then rerun the affected path |
+| Locator or stale test expectation | Fix the harness; do not report it as a product defect |
+| Shared auth/bootstrap/deployment failure | Repair the shared prerequisite, then rerun the full suite |
+
+If shared prerequisites and deployed artifacts did not change, rerun only the failed scenario. Run the full suite again only after a new deployment or a shared setup change.
 
 ## Test Layers
 
@@ -98,7 +131,8 @@ Target:
 Depth/layer:
 Result: PASS | FAIL | WARN | UNVERIFIED
 Evidence:
-Failure cause:
+Failure class and cause:
+Business mutation count, for production read-only runs:
 Files changed, if --fix was requested:
 Retest command:
 ```
