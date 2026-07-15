@@ -383,7 +383,13 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         if (!ProductCategory.SEMI_FINISHED.equals(productType.getProductCategory())) {
             return;
         }
-        productType.setUnit("kg");
+        // 半成品只定义基本单位；保留用户选择的重量或计数单位，不再强制改写为 kg。
+        if (productType.getUnit() != null) {
+            String normalized = productType.getUnit().trim();
+            if ("公斤".equals(normalized) || "千克".equals(normalized)) normalized = "kg";
+            if ("克".equals(normalized)) normalized = "g";
+            productType.setUnit(normalized);
+        }
         productType.setGramsPerUnit(null);
         productType.setWipToFgYield(null);
         productType.setLevel1Unit(null);
@@ -401,13 +407,11 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                 && !Objects.equals(requestedCategory, existing.getProductCategory())) {
             throw migrationRequired("SKU 大类");
         }
-        if (dto.getUnit() != null && !Objects.equals(dto.getUnit().trim(),
+        if (dto.getUnit() != null
+                && !ProductCategory.SEMI_FINISHED.equals(existing.getProductCategory())
+                && !Objects.equals(dto.getUnit().trim(),
                 existing.getUnit() == null ? null : existing.getUnit().trim())) {
             throw migrationRequired("基本单位");
-        }
-        if (ProductCategory.SEMI_FINISHED.equals(existing.getProductCategory())
-                && !"kg".equalsIgnoreCase(existing.getUnit())) {
-            throw migrationRequired("旧半成品单位");
         }
     }
 

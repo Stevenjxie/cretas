@@ -157,6 +157,55 @@ class BomRecipeServiceImplAddItemTest {
     }
 
     @Test
+    @DisplayName("历史 BOM 可以重新激活，且不创建新版本")
+    void archivedVersionCanBeReactivated() {
+        recipe.setProductTypeId("SKU-001");
+        recipe.setStatus(BomRecipe.Status.ARCHIVED);
+        recipe.setIsCurrent(false);
+        when(recipeRepo.findCompetingVersionsForActivation(
+                "F006", "SKU-001", recipe.getId(), BomRecipe.Status.ACTIVE))
+                .thenReturn(List.of());
+
+        BomRecipe activated = service.activateRecipe("F006", recipe.getId(), 8L);
+
+        assertThat(activated.getId()).isEqualTo("RECIPE-ORPHAN-TEST");
+        assertThat(activated.getStatus()).isEqualTo(BomRecipe.Status.ACTIVE);
+        assertThat(activated.getIsCurrent()).isTrue();
+        verify(recipeRepo, never()).findMaxVersion(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("历史 BOM 可删除，当前生效 BOM 不可删除")
+    void deleteAllowsHistoryButRejectsActive() {
+        recipe.setStatus(BomRecipe.Status.ARCHIVED);
+        service.deleteRecipe("F006", recipe.getId());
+        assertThat(recipe.getDeletedAt()).isNotNull();
+
+        BomRecipe active = new BomRecipe();
+        active.setId("ACTIVE-1");
+        active.setFactoryId("F006");
+        active.setStatus(BomRecipe.Status.ACTIVE);
+        when(recipeRepo.findById("ACTIVE-1")).thenReturn(Optional.of(active));
+        assertThatThrownBy(() -> service.deleteRecipe("F006", "ACTIVE-1"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("不能删除");
+    }
+
+    @Test
+    @DisplayName("每个 SKU 最多保留十个未删除 BOM 版本")
+    void cloneRejectsEleventhVersion() {
+        recipe.setProductTypeId("SKU-001");
+        when(recipeRepo.countByFactoryIdAndProductTypeId("F006", "SKU-001")).thenReturn(10L);
+
+        assertThatThrownBy(() -> service.cloneRecipe("F006", recipe.getId()))
+                .isInstanceOfSatisfying(BusinessException.class, ex -> {
+                    assertThat(ex.getCode()).isEqualTo(409);
+                    assertThat(ex.getErrorCode()).isEqualTo("BOM_VERSION_LIMIT_REACHED");
+                });
+        verify(recipeRepo, never()).save(argThat(candidate -> candidate != recipe));
+    }
+
+    @Test
     @DisplayName("addItem: collection reference stays the same instance after call (no setItems replacement)")
     void addItem_keepsOriginalCollectionInstance() {
         BomRecipeItem newItem = new BomRecipeItem();

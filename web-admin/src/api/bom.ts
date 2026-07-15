@@ -116,13 +116,13 @@ export const bomRecipeApi = {
   clone: (factoryId: string, recipeId: string) =>
     post<BomRecipeSummary>(`${recipeBase(factoryId)}/${recipeId}/clone`, null),
 
-  /** 删除草稿版本；生效/归档版本由后端拒绝以保留审计历史。 */
+  /** 删除草稿或历史未生效版本；当前 ACTIVE 版本由后端拒绝。 */
   removeDraft: (factoryId: string, recipeId: string) =>
     del<void>(`${recipeBase(factoryId)}/${recipeId}`),
 
   /**
-   * 激活 BOM 配方 (DRAFT → ACTIVE).
-   * 同产品其他 ACTIVE/current 配方自动归档。
+   * 激活草稿或任意历史正式版本，使其成为唯一 ACTIVE/current 配方。
+   * 原生效版本转为历史未生效；仅之后新建计划读取新快照。
    * 对应: POST /api/mobile/{factoryId}/bom/recipes/{recipeId}/activate
    */
   activate: (factoryId: string, recipeId: string, operatorId?: number | null) =>

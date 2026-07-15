@@ -41,7 +41,7 @@ class ProductTypeSemiFinishedContractTest {
     }
 
     @Test
-    void createSemiFinishedCanonicalizesToKgAndClearsFinishedGoodsSpecification() {
+    void createSemiFinishedPreservesEditableBasicUnitAndClearsFinishedGoodsSpecification() {
         when(productTypeRepository.save(any(ProductType.class))).thenAnswer(invocation -> invocation.getArgument(0));
         ProductTypeDTO dto = ProductTypeDTO.builder()
                 .code("SFI-001")
@@ -57,7 +57,7 @@ class ProductTypeSemiFinishedContractTest {
 
         ProductTypeDTO result = service.createProductType("F006", dto);
 
-        assertThat(result.getUnit()).isEqualTo("kg");
+        assertThat(result.getUnit()).isEqualTo("g");
         assertThat(result.getGramsPerUnit()).isNull();
         assertThat(result.getWipToFgYield()).isNull();
         assertThat(result.getLevel1Unit()).isNull();
@@ -67,25 +67,25 @@ class ProductTypeSemiFinishedContractTest {
     }
 
     @Test
-    void editingLegacyGramSemiFinishedRequiresControlledMigration() {
+    void editingSemiFinishedBasicUnitIsAllowed() {
         ProductType existing = new ProductType();
         existing.setId("SFI-LEGACY");
         existing.setFactoryId("F006");
         existing.setProductCategory(ProductCategory.SEMI_FINISHED);
         existing.setUnit("g");
         when(productTypeRepository.findById("SFI-LEGACY")).thenReturn(java.util.Optional.of(existing));
+        when(productTypeRepository.save(any(ProductType.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         ProductTypeDTO update = ProductTypeDTO.builder()
                 .name("更新名称")
-                .unit("g")
+                .unit("只")
                 .productCategory(ProductCategory.SEMI_FINISHED)
                 .build();
 
-        assertThatThrownBy(() -> service.updateProductType("F006", "SFI-LEGACY", update))
-                .isInstanceOfSatisfying(com.cretas.aims.exception.BusinessException.class,
-                        error -> assertThat(error.getErrorCode())
-                                .isEqualTo("SKU_UNIT_MIGRATION_REQUIRED"));
-        assertThat(existing.getUnit()).isEqualTo("g");
+        ProductTypeDTO result = service.updateProductType("F006", "SFI-LEGACY", update);
+
+        assertThat(result.getUnit()).isEqualTo("只");
+        assertThat(existing.getUnit()).isEqualTo("只");
     }
 
     @Test

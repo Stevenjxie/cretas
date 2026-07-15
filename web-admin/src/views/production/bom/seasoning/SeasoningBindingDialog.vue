@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, reactive, watch } from 'vue';
-import { ElMessage } from 'element-plus';
+import { computed, reactive, ref, watch } from 'vue';
+import { ElMessage, ElNotification } from 'element-plus';
+import { useRoute, useRouter } from 'vue-router';
 import { bomSeasoningApi, type SeasoningBindingView, type SeasoningProcessView } from '@/api/bom';
+import { get } from '@/api/request';
 import { findDuplicateBinding } from './seasoningModel';
 
 export interface SeasoningMaterialOption {
@@ -27,6 +29,8 @@ const emit = defineEmits<{
   saved: [];
   conflict: [];
 }>();
+const router = useRouter();
+const route = useRoute();
 
 const form = reactive({
   materialTypeId: '',
@@ -37,17 +41,38 @@ const form = reactive({
   remark: '',
 });
 const saving = reactive({ value: false });
+const dosageUnit = ref<'g' | 'kg'>('g');
 const selectedMaterial = computed(() => props.materials.find((item) => item.id === form.materialTypeId));
+const refreshedMovingAvgPrice = ref<number | null | undefined>(undefined);
+const effectiveMovingAvgPrice = computed(() => (
+  refreshedMovingAvgPrice.value === undefined
+    ? selectedMaterial.value?.movingAvgPrice
+    : refreshedMovingAvgPrice.value
+));
+const missingMovingAvgPrice = computed(() => (
+  selectedMaterial.value != null
+  && (effectiveMovingAvgPrice.value == null || Number(effectiveMovingAvgPrice.value) <= 0)
+));
+const dosageDisplayValue = computed<number | null>({
+  get: () => form.dosagePerKgG == null
+    ? null
+    : dosageUnit.value === 'kg' ? form.dosagePerKgG / 1000 : form.dosagePerKgG,
+  set: (value) => {
+    form.dosagePerKgG = value == null ? null : value * (dosageUnit.value === 'kg' ? 1000 : 1);
+  },
+});
 
 watch(() => [props.modelValue, props.binding] as const, () => {
   if (!props.modelValue) return;
   form.materialTypeId = props.binding?.materialTypeId || '';
   form.dosagePerKgG = props.binding?.dosagePerKgG ?? null;
+  dosageUnit.value = (props.binding?.dosagePerKgG ?? 0) >= 1000 ? 'kg' : 'g';
   form.potEnabled = props.binding?.subsequentPotRatio != null;
   form.subsequentPercent = props.binding?.subsequentPotRatio == null ? 50 : props.binding.subsequentPotRatio * 100;
   form.countInSeasoning = props.binding?.countInSeasoning ?? true;
   form.remark = props.binding?.remark || '';
 }, { immediate: true });
+watch(() => form.materialTypeId, () => { refreshedMovingAvgPrice.value = undefined; });
 
 function isRevisionConflict(error: unknown): boolean {
   const candidate = error as { response?: { status?: number }; status?: number; code?: string };
@@ -63,6 +88,14 @@ async function submit() {
   }
   const duplicate = findDuplicateBinding(props.process, form.materialTypeId, props.binding?.id);
   if (duplicate) return ElMessage.warning('该调料已在本工序配置');
+  if (missingMovingAvgPrice.value) {
+    ElNotification({
+      title: '该调料尚无移动平均价',
+      message: '表单内容已保留。请点击下方“去配置价格”在新标签页补充价格，完成后回到本页即可继续保存。',
+      type: 'warning', duration: 0, showClose: true,
+    });
+    return;
+  }
 
   saving.value = true;
   try {
@@ -92,6 +125,30 @@ async function submit() {
     saving.value = false;
   }
 }
+
+function goConfigureMaterialPrice() {
+  const keyword = selectedMaterial.value?.name || '';
+  const target = router.resolve({
+    path: '/warehouse/material-types',
+    query: { _returnTo: route.fullPath, ...(keyword ? { keyword } : {}) },
+  }).href;
+  window.open(target, '_blank', 'noopener');
+  window.addEventListener('focus', refreshSelectedMaterialPrice, { once: true });
+}
+
+async function refreshSelectedMaterialPrice() {
+  if (!form.materialTypeId) return;
+  try {
+    const response = await get<SeasoningMaterialOption[]>(`/${props.factoryId}/raw-material-types/active`);
+    const material = response.success && Array.isArray(response.data)
+      ? response.data.find((item) => item.id === form.materialTypeId)
+      : undefined;
+    refreshedMovingAvgPrice.value = material?.movingAvgPrice ?? null;
+    if (!missingMovingAvgPrice.value) ElMessage.success('移动平均价已更新，可继续保存');
+  } catch {
+    ElMessage.warning('价格读取失败，请稍后点击“重新读取价格”');
+  }
+}
 </script>
 
 <template>
@@ -106,9 +163,16 @@ async function submit() {
           <el-option v-for="material in materials" :key="material.id" :label="material.name" :value="material.id" />
         </el-select>
       </el-form-item>
-      <el-form-item label="每 1 kg 本工序投入" required>
-        <el-input-number v-model="form.dosagePerKgG" :min="0" :precision="4" style="width: 100%" />
-        <div class="form-tip">单位：g/kg，本工序半成品为计算基数。</div>
+      <el-form-item label="投入数量" required>
+        <div class="dosage-sentence" data-testid="seasoning-dosage-sentence">
+          <span>每生产 1 kg 本工序半成品，需要投入</span>
+          <el-input-number v-model="dosageDisplayValue" :min="0" :precision="4" :controls="false" />
+          <el-select v-model="dosageUnit" style="width: 84px">
+            <el-option label="g" value="g" />
+            <el-option label="kg" value="kg" />
+          </el-select>
+        </div>
+        <div class="form-tip">保存时系统统一换算为 g/kg，显示可自由切换 g 或 kg。</div>
       </el-form-item>
       <el-form-item label="按锅序计算"><el-switch v-model="form.potEnabled" /></el-form-item>
       <template v-if="form.potEnabled">
@@ -118,8 +182,21 @@ async function submit() {
         </el-form-item>
       </template>
       <el-form-item label="自动单价">
-        <el-input :model-value="selectedMaterial?.movingAvgPrice == null ? '保存时由后端自动带入' : `¥${selectedMaterial.movingAvgPrice}`" disabled />
+        <el-input :model-value="missingMovingAvgPrice ? '保存前需先配置移动平均价' : `¥${effectiveMovingAvgPrice}`" disabled />
       </el-form-item>
+      <el-alert
+        v-if="missingMovingAvgPrice"
+        type="warning"
+        :closable="false"
+        show-icon
+        title="该调料缺少移动平均价，暂不能保存"
+      >
+        <template #default>
+          <span>当前表单会保留。</span>
+          <el-button link type="primary" data-testid="configure-seasoning-price" @click="goConfigureMaterialPrice">去配置价格</el-button>
+          <el-button link type="primary" data-testid="refresh-seasoning-price" @click="refreshSelectedMaterialPrice">重新读取价格</el-button>
+        </template>
+      </el-alert>
       <el-form-item label="成本核算"><el-switch v-model="form.countInSeasoning" active-text="计入" inactive-text="不计入" /></el-form-item>
       <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="2" /></el-form-item>
     </el-form>
@@ -133,4 +210,6 @@ async function submit() {
 <style scoped>
 .form-tip { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.4; }
 .suffix { margin-left: 6px; }
+.dosage-sentence { display: flex; align-items: center; gap: 8px; width: 100%; flex-wrap: wrap; }
+.dosage-sentence :deep(.el-input-number) { width: 130px; }
 </style>
