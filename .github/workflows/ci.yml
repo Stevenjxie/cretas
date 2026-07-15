@@ -109,6 +109,26 @@ jobs:
         working-directory: backend/java/cretas-api
         # clean 去掉: 全新 runner 无 target 可清, clean 是 no-op 反而拖时间。
         run: mvn -B verify -Dspring.profiles.active=test -pl .
+      - name: Prepare exact-commit deploy artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        working-directory: backend/java/cretas-api/target
+        run: |
+          JAR=cretas-backend-system-1.0.0.jar
+          test -f "$JAR"
+          sha256sum "$JAR" > "$JAR.sha256"
+          printf '%s\n' "$GITHUB_SHA" > "$JAR.commit"
+      - name: Upload exact-commit deploy artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cretas-java-${{ github.sha }}
+          path: |
+            backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar
+            backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar.sha256
+            backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar.commit
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
