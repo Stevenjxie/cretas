@@ -1,6 +1,7 @@
 package com.cretas.aims.service.bom.impl;
 
 import com.cretas.aims.entity.bom.BomPriceAdjustmentAudit;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.bom.BomPriceAdjustmentProposal;
 import com.cretas.aims.entity.bom.BomPriceAdjustmentProposal.SourceType;
 import com.cretas.aims.entity.bom.BomPriceAdjustmentProposal.Status;
@@ -14,6 +15,7 @@ import com.cretas.aims.repository.bom.BomPriceAdjustmentAuditRepository;
 import com.cretas.aims.repository.bom.BomPriceAdjustmentProposalRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.service.bom.BomPriceAdjustmentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -41,6 +43,7 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
     private final BomRecipeRepository recipeRepository;
     private final BomPriceAdjustmentProposalRepository proposalRepository;
     private final BomPriceAdjustmentAuditRepository auditRepository;
+    private final RawMaterialTypeRepository materialRepository;
 
     @Override
     @Transactional
@@ -177,8 +180,19 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
         }
 
         BigDecimal beforePrice = scaleMoney(item.getUnitPrice());
-        BigDecimal afterPrice = scaleMoney(proposal.getProposedUnitPrice());
+        RawMaterialType material = materialRepository.findById(item.getMaterialTypeId())
+                .filter(found -> factoryId.equals(found.getFactoryId()) && found.getDeletedAt() == null)
+                .orElseThrow(() -> new ResourceNotFoundException("物料档案不存在: " + item.getMaterialTypeId()));
+        BigDecimal masterPrice = material.getMovingAvgPrice() != null
+                ? material.getMovingAvgPrice()
+                : material.getUnitPrice();
+        if (masterPrice == null || masterPrice.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(400, "物料档案未配置有效价格: " + item.getMaterialTypeId());
+        }
+        BigDecimal afterPrice = scaleMoney(masterPrice);
         item.setUnitPrice(afterPrice);
+        item.setTaxRate(material.getTaxRate() == null ? null
+                : material.getTaxRate().getRate().multiply(BigDecimal.valueOf(100)));
         item.setItemCost(item.computeItemCost());
         itemRepository.save(item);
 
@@ -187,6 +201,7 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
         proposal.setApprovedBy(approverId);
         proposal.setApprovedAt(now);
         proposal.setApprovalComment(comment);
+        proposal.setProposedUnitPrice(afterPrice);
         proposal.setAppliedAt(now);
 
         BomPriceAdjustmentAudit audit = new BomPriceAdjustmentAudit();

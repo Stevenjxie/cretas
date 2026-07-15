@@ -75,11 +75,17 @@ public class BomBatchOperationServiceImpl implements BomBatchOperationService {
             Map<String, Object> snapshot = buildSnapshotMap(recipe, items, item -> {
                 if (req.getMaterialId().equals(item.getMaterialTypeId())) {
                     Map<String, Object> patched = new LinkedHashMap<>(itemToMap(item));
-                    patched.put("standardQuantity", req.getNewStandardQuantity());
+                    boolean raw = "RAW".equalsIgnoreCase(item.getMaterialCategory());
+                    if (!raw && (req.getNewStandardQuantity() == null
+                            || req.getNewStandardQuantity().compareTo(BigDecimal.ZERO) <= 0)) {
+                        throw new IllegalArgumentException("非原料 BOM 的每成品用量必须大于 0");
+                    }
+                    patched.put("standardQuantity", raw ? null : req.getNewStandardQuantity());
+                    if (raw) patched.put("yieldRate", new BigDecimal("100.00"));
                     if (req.getNewUnit() != null) patched.put("unit", req.getNewUnit());
                     // Recompute actualQuantity if yieldRate present.
                     BigDecimal yieldRate = item.getYieldRate();
-                    BigDecimal qty = req.getNewStandardQuantity();
+                    BigDecimal qty = raw ? null : req.getNewStandardQuantity();
                     if (qty != null && yieldRate != null
                             && yieldRate.compareTo(BigDecimal.ZERO) > 0) {
                         BigDecimal ratio = yieldRate.divide(new BigDecimal("100"), 6, RoundingMode.HALF_UP);
@@ -122,11 +128,9 @@ public class BomBatchOperationServiceImpl implements BomBatchOperationService {
         List<BomRecipe> recipes = resolveScope(req.getFactoryId(), req.getOldMaterialId(),
                 req.isAllInFactory(), req.getRecipeIds());
 
-        RawMaterialType newMat = materialRepo.findById(req.getNewMaterialId()).orElse(null);
+        RawMaterialType newMat = materialRepo.findById(req.getNewMaterialId())
+                .orElseThrow(() -> new IllegalArgumentException("newMaterial not found: " + req.getNewMaterialId()));
         List<String> warnings = new ArrayList<>();
-        if (newMat == null) {
-            warnings.add("newMaterial not found: " + req.getNewMaterialId() + " — proceeding with id-only swap");
-        }
 
         BatchResult.BatchResultBuilder result = BatchResult.builder().operation("REPLACE");
         Map<String, String> drafts = new LinkedHashMap<>();
@@ -144,10 +148,9 @@ public class BomBatchOperationServiceImpl implements BomBatchOperationService {
                 if (req.getOldMaterialId().equals(item.getMaterialTypeId())) {
                     Map<String, Object> patched = new LinkedHashMap<>(itemToMap(item));
                     patched.put("materialTypeId", req.getNewMaterialId());
-                    if (newMat != null) {
-                        patched.put("materialName", newMat.getName());
-                        patched.put("unitPrice", newMat.getUnitPrice());
-                    }
+                    patched.put("materialName", newMat.getName());
+                    patched.put("unitPrice", masterPrice(newMat));
+                    patched.put("taxRate", masterTaxPercent(newMat));
                     return patched;
                 }
                 return itemToMap(item);
@@ -243,15 +246,16 @@ public class BomBatchOperationServiceImpl implements BomBatchOperationService {
                     "batchAdd requires allInFactory=true OR explicit recipeIds list");
         }
 
-        RawMaterialType material = materialRepo.findById(req.getMaterialId()).orElse(null);
+        RawMaterialType material = materialRepo.findById(req.getMaterialId())
+                .orElseThrow(() -> new IllegalArgumentException("material not found: " + req.getMaterialId()));
         List<String> warnings = new ArrayList<>();
-        if (material == null) {
-            warnings.add("material not found: " + req.getMaterialId() + " — item will be added with id only, no name/price denormalize");
-        }
-
-        BigDecimal yieldRate = req.getYieldRate() != null
-                ? req.getYieldRate() : new BigDecimal("100.00");
         String category = req.getMaterialCategory() != null ? req.getMaterialCategory() : "RAW";
+        boolean raw = "RAW".equalsIgnoreCase(category);
+        BigDecimal standardQuantity = raw ? null : req.getStandardQuantity();
+        if (!raw && (standardQuantity == null || standardQuantity.compareTo(BigDecimal.ZERO) <= 0)) {
+            throw new IllegalArgumentException("非原料 BOM 的每成品用量必须大于 0");
+        }
+        BigDecimal yieldRate = new BigDecimal("100.00");
 
         BatchResult.BatchResultBuilder result = BatchResult.builder().operation("ADD");
         Map<String, String> drafts = new LinkedHashMap<>();
@@ -278,16 +282,17 @@ public class BomBatchOperationServiceImpl implements BomBatchOperationService {
             Map<String, Object> newItem = new LinkedHashMap<>();
             newItem.put("id", null);
             newItem.put("materialTypeId", req.getMaterialId());
-            newItem.put("materialName", material == null ? null : material.getName());
-            newItem.put("standardQuantity", req.getStandardQuantity());
+            newItem.put("materialName", material.getName());
+            newItem.put("standardQuantity", standardQuantity);
             newItem.put("yieldRate", yieldRate);
             BigDecimal ratio = yieldRate.divide(new BigDecimal("100"), 6, RoundingMode.HALF_UP);
             newItem.put("actualQuantity",
                     ratio.compareTo(BigDecimal.ZERO) > 0
-                            ? req.getStandardQuantity().divide(ratio, 6, RoundingMode.HALF_UP)
-                            : req.getStandardQuantity());
+                            ? (standardQuantity == null ? null : standardQuantity.divide(ratio, 6, RoundingMode.HALF_UP))
+                            : standardQuantity);
             newItem.put("unit", req.getUnit());
-            newItem.put("unitPrice", material == null ? null : material.getUnitPrice());
+            newItem.put("unitPrice", masterPrice(material));
+            newItem.put("taxRate", masterTaxPercent(material));
             newItem.put("itemCost", null);
             newItem.put("materialCategory", category);
             newItem.put("sortOrder", maxSort + 10);
@@ -311,9 +316,7 @@ public class BomBatchOperationServiceImpl implements BomBatchOperationService {
                 req.getEcnReason(), req.getEcnReasonDetail(), req.getEffectiveDate(),
                 req.getCreatedBy(),
                 buildBatchImpactScope("ADD", req.getMaterialId(), affected,
-                        Map.of("standardQuantity", req.getStandardQuantity(),
-                                "unit", req.getUnit(),
-                                "materialCategory", category)));
+                        batchAddImpact(standardQuantity, req.getUnit(), category)));
 
         result.ecnId(ecn.getId()).ecnNumber(ecn.getEcnNumber())
                 .affectedRecipeIds(affected)
@@ -327,6 +330,23 @@ public class BomBatchOperationServiceImpl implements BomBatchOperationService {
     }
 
     // ========== helpers ==========
+
+    private BigDecimal masterPrice(RawMaterialType material) {
+        return material.getMovingAvgPrice() != null ? material.getMovingAvgPrice() : material.getUnitPrice();
+    }
+
+    private BigDecimal masterTaxPercent(RawMaterialType material) {
+        return material.getTaxRate() == null ? null
+                : material.getTaxRate().getRate().multiply(BigDecimal.valueOf(100));
+    }
+
+    private Map<String, Object> batchAddImpact(BigDecimal quantity, String unit, String category) {
+        Map<String, Object> impact = new LinkedHashMap<>();
+        impact.put("standardQuantity", quantity);
+        impact.put("unit", unit);
+        impact.put("materialCategory", category);
+        return impact;
+    }
 
     /**
      * Resolve recipe scope: either explicit ids or all-in-factory filtered to recipes containing

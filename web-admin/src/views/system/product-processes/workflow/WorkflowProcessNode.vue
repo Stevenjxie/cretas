@@ -103,8 +103,31 @@
 
     <section class="quantity-rule-section">
       <div class="section-title"><span>投入产出数量关系</span></div>
-      <div class="quantity-rule-note" data-testid="quantity-rule-note">
-        单位由 SKU 自动带入；{{ isMultiOutput ? '多产出分别按各自 SKU 单位报工；' : '' }}实际出成率由历史报工自动计算。
+      <div v-if="requiresFixedRatio" class="fixed-ratio-editor" data-testid="fixed-ratio-row">
+        <el-input-number
+          :model-value="fixedRatio.inputQuantity"
+          :min="0.0001"
+          :precision="4"
+          :controls="false"
+          :disabled="!canWrite"
+          aria-label="投入数量"
+          @change="(value: number | undefined) => updateFixedRatio('input', value)"
+        />
+        <span>{{ primaryInput?.unit }}</span>
+        <span>=</span>
+        <el-input-number
+          :model-value="fixedRatio.outputQuantity"
+          :min="0.0001"
+          :precision="4"
+          :controls="false"
+          :disabled="!canWrite"
+          aria-label="产出数量"
+          @change="(value: number | undefined) => updateFixedRatio('output', value)"
+        />
+        <span>{{ primaryOutput?.unit }}</span>
+      </div>
+      <div v-else class="quantity-rule-note" data-testid="quantity-rule-note">
+        重量单位统一按 kg 报工；{{ isMultiOutput ? '多产出分别按各自 SKU 单位报工；' : '' }}实际出成率由历史报工自动计算。
       </div>
     </section>
 
@@ -128,6 +151,7 @@ import { computed, ref } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
 import WorkflowSkuPicker, { type WorkflowSkuPickerOption } from './WorkflowSkuPicker.vue';
 import type { ProcessNodeData } from './types';
+import { isWorkflowWeightUnit, parseFixedRatioQuantities } from './workflowUnits';
 
 const props = defineProps<{
   data: ProcessNodeData;
@@ -157,6 +181,26 @@ const edgeOutputStyle = { top: '12px', right: '-14px' } as const;
 const hovered = ref(false);
 const inputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'INPUT'));
 const outputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'OUTPUT'));
+const primaryInput = computed(() => [...inputPorts.value].sort((a, b) => a.ordinal - b.ordinal)[0]);
+const primaryOutput = computed(() => [...outputPorts.value].sort((a, b) => a.ordinal - b.ordinal)[0]);
+const requiresFixedRatio = computed(() => !!primaryInput.value && !!primaryOutput.value
+  && (!isWorkflowWeightUnit(primaryInput.value.unit) || !isWorkflowWeightUnit(primaryOutput.value.unit)));
+const fixedRatio = computed(() => {
+  return parseFixedRatioQuantities(props.data.conversionRule.expression)
+    || { inputQuantity: 1, outputQuantity: 1 };
+});
+
+function updateFixedRatio(side: 'input' | 'output', value: number | undefined): void {
+  if (!primaryInput.value || !primaryOutput.value || !value || value <= 0) return;
+  const inputQuantity = side === 'input' ? value : fixedRatio.value.inputQuantity;
+  const outputQuantity = side === 'output' ? value : fixedRatio.value.outputQuantity;
+  emit('update', {
+    conversionRule: {
+      mode: 'FIXED_RATIO',
+      expression: `${inputQuantity} ${primaryInput.value.unit} = ${outputQuantity} ${primaryOutput.value.unit}`,
+    },
+  });
+}
 
 function handleStyle(index: number, count: number): Record<string, string> {
   return { top: `${((index + 1) / (count + 1)) * 100}%` };
@@ -214,6 +258,15 @@ const isMultiOutput = computed(() => outputPorts.value.length > 1);
   padding: 8px 10px; border-radius: 7px; background: #eef6ff; color: #1b65a8;
   font-size: 12px; font-weight: 600; line-height: 1.4;
 }
+.fixed-ratio-editor {
+  display: grid;
+  grid-template-columns: minmax(88px, 1fr) auto auto minmax(88px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  color: #475467;
+  font-size: 12px;
+}
+.fixed-ratio-editor :deep(.el-input-number) { width: 100%; }
 .reporting-row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; color: #667085; font-size: 12px; }
 .unit-chip {
   display: flex;

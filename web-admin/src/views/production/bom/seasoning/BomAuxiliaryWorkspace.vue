@@ -26,13 +26,17 @@ const materials = ref<SeasoningMaterialOption[]>([]);
 const loading = ref(false);
 const loadError = ref('');
 const activeView = ref<'process' | 'summary'>('process');
-const expandedWorkProcessId = ref('');
+const expandedWorkProcessIds = ref<string[]>([]);
 const dialogVisible = ref(false);
 const dialogProcess = ref<SeasoningProcessView | null>(null);
 const dialogBinding = ref<SeasoningBindingView | null>(null);
 
 const processes = computed(() => [...(workspace.value?.processes || [])].sort((a, b) => a.processOrder - b.processOrder));
 const summaries = computed(() => buildMaterialSummaries(processes.value));
+const allProcessesExpanded = computed(() => (
+  processes.value.length > 0
+  && processes.value.every((process) => expandedWorkProcessIds.value.includes(process.workProcessId))
+));
 const editable = computed(() => Boolean(
   props.canWrite
   && props.recipeStatus === 'DRAFT'
@@ -48,9 +52,11 @@ async function loadWorkspace() {
     const response = await bomSeasoningApi.getWorkspace(props.factoryId, props.recipeId);
     if (!response.success || !response.data) throw new Error(response.message || '工序调料响应为空');
     workspace.value = response.data;
-    if (!processes.value.some((process) => process.workProcessId === expandedWorkProcessId.value)) {
-      expandedWorkProcessId.value = processes.value[0]?.workProcessId || '';
-    }
+    const validIds = new Set(processes.value.map((process) => process.workProcessId));
+    const retained = expandedWorkProcessIds.value.filter((id) => validIds.has(id));
+    expandedWorkProcessIds.value = retained.length
+      ? retained
+      : (processes.value[0] ? [processes.value[0].workProcessId] : []);
   } catch (error: unknown) {
     loadError.value = (error as { message?: string }).message || '工序调料加载失败';
   } finally {
@@ -130,7 +136,21 @@ async function handleConflict() {
 
 function locateProcess(workProcessId: string) {
   activeView.value = 'process';
-  expandedWorkProcessId.value = workProcessId;
+  if (!expandedWorkProcessIds.value.includes(workProcessId)) {
+    expandedWorkProcessIds.value = [...expandedWorkProcessIds.value, workProcessId];
+  }
+}
+
+function toggleProcess(workProcessId: string) {
+  expandedWorkProcessIds.value = expandedWorkProcessIds.value.includes(workProcessId)
+    ? expandedWorkProcessIds.value.filter((id) => id !== workProcessId)
+    : [...expandedWorkProcessIds.value, workProcessId];
+}
+
+function toggleAllProcesses() {
+  expandedWorkProcessIds.value = allProcessesExpanded.value
+    ? []
+    : processes.value.map((process) => process.workProcessId);
 }
 
 watch(() => props.recipeId, async () => {
@@ -171,7 +191,15 @@ onMounted(() => Promise.all([loadWorkspace(), loadMaterials()]));
         <el-radio-button value="process">工序编排</el-radio-button>
         <el-radio-button value="summary">辅料汇总</el-radio-button>
       </el-radio-group>
-      <span v-if="workspace" class="workspace-stats">{{ summaries.length }} 种辅料 · {{ processes.reduce((sum, process) => sum + process.bindings.length, 0) }} 条工序绑定</span>
+      <div class="workspace-toolbar__right">
+        <el-button
+          v-if="activeView === 'process' && processes.length"
+          data-testid="toggle-all-processes"
+          size="small"
+          @click="toggleAllProcesses"
+        >{{ allProcessesExpanded ? '全部收起' : '全部展开' }}</el-button>
+        <span v-if="workspace" class="workspace-stats">{{ summaries.length }} 种辅料 · {{ processes.reduce((sum, process) => sum + process.bindings.length, 0) }} 条工序绑定</span>
+      </div>
     </div>
 
     <div v-if="loading" v-loading="true" class="compact-loading" />
@@ -191,9 +219,9 @@ onMounted(() => Promise.all([loadWorkspace(), loadMaterials()]));
             :key="process.workProcessId"
             :process="process"
             :processes="processes"
-            :expanded="expandedWorkProcessId === process.workProcessId"
+            :expanded="expandedWorkProcessIds.includes(process.workProcessId)"
             :editable="editable"
-            @toggle="expandedWorkProcessId = expandedWorkProcessId === process.workProcessId ? '' : process.workProcessId"
+            @toggle="toggleProcess(process.workProcessId)"
             @add="openAdd"
             @edit="openEdit"
             @delete="removeBinding"
@@ -283,6 +311,7 @@ onMounted(() => Promise.all([loadWorkspace(), loadMaterials()]));
 .auxiliary-workspace { min-height: 180px; }
 .state-alert { margin-bottom: 10px; }
 .workspace-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.workspace-toolbar__right { display: flex; align-items: center; gap: 10px; }
 .workspace-stats { color: var(--el-text-color-secondary); font-size: 12px; }
 .compact-loading { min-height: 140px; }
 .process-layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; align-items: start; gap: 14px; }

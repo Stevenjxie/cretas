@@ -19,7 +19,7 @@ import com.cretas.aims.service.yield.YieldReportService;
 import com.cretas.aims.dto.yield.BatchYieldDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.context.request.RequestAttributes;
@@ -40,7 +40,7 @@ import java.util.stream.Collectors;
  *
  * <p><b>核心算法</b>:
  * <ul>
- *   <li>查询该产品最近 N={@link #MAX_SAMPLE_BATCHES} 个已完成批次 (factoryId 隔离)</li>
+ *   <li>查询该产品在同工厂下全部已完成正式批次 (factoryId 隔离)</li>
  *   <li>每批次调用 {@link YieldReportService#getYield} 取 cumulativeYieldRate (0~1 小数)</li>
  *   <li>cumulativeYieldRate 为 null 的批次排除 (跨单位/无克重数据)</li>
  *   <li>有效样本 ≥ {@link #MIN_SAMPLES} 时取 P50 中位数 ×100, 精度 2dp HALF_UP (无上限, 保水工序可合法超 100%)</li>
@@ -54,9 +54,6 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class BomYieldEstimateServiceImpl implements BomYieldEstimateService {
-
-    /** 最多取最近 N 个已完成批次作为样本 */
-    static final int MAX_SAMPLE_BATCHES = 10;
 
     /** 需要 ≥ 3 个有效样本才给出 suggestedYieldRate */
     static final int MIN_SAMPLES = 3;
@@ -348,14 +345,13 @@ public class BomYieldEstimateServiceImpl implements BomYieldEstimateService {
     // ─── Internal helpers ─────────────────────────────────────────────────────
 
     /**
-     * 取最近 MAX_SAMPLE_BATCHES 个已完成批次的有效 cumulativeYieldRate (0~1).
+     * 取同工厂、同 SKU 的全部已完成正式批次有效 cumulativeYieldRate (0~1).
      * cumulativeYieldRate 为 null 的批次排除 (跨单位/无克重).
      */
     List<BigDecimal> collectYieldSamples(String factoryId, String productTypeId) {
         List<ProductionBatch> batches = productionBatchRepository
                 .findRecentCompletedByFactoryAndProductType(
-                        factoryId, productTypeId,
-                        PageRequest.of(0, MAX_SAMPLE_BATCHES));
+                        factoryId, productTypeId, Pageable.unpaged());
 
         List<BigDecimal> samples = new ArrayList<>();
         for (ProductionBatch batch : batches) {

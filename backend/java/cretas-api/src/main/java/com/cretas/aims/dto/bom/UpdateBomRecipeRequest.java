@@ -24,9 +24,7 @@ public class UpdateBomRecipeRequest {
     @Size(max = 200)
     private String productName;
 
-    @Schema(description = "整产品级出成率")
-    @DecimalMin(value = "0.01")
-    @DecimalMax(value = "100")
+    @Schema(description = "已废弃：整体出成率由正式批次历史自动计算，人工传值会被忽略", deprecated = true)
     private BigDecimal overallYieldRate;
 
     @Schema(description = "单份成品量")

@@ -205,14 +205,17 @@ public class BomServiceImpl implements BomService {
         // 之前 entity / canvas validator 都未拦截 standardQuantity=0, 产生无意义 BOM 行.
         // 服务端 hard-rule 拒绝, 比依赖 canvas data-driven 规则更可靠 (validationRuleEvaluator
         // 可能未配置, 此处确保所有 factory 都有保护).
-        if (bomItem.getStandardQuantity() == null
-                || bomItem.getStandardQuantity().compareTo(java.math.BigDecimal.ZERO) <= 0) {
+        boolean rawMaterialLink = "RAW".equalsIgnoreCase(bomItem.getMaterialCategory());
+        if ((!rawMaterialLink && bomItem.getStandardQuantity() == null)
+                || (bomItem.getStandardQuantity() != null
+                    && bomItem.getStandardQuantity().compareTo(java.math.BigDecimal.ZERO) <= 0)) {
             throw new com.cretas.aims.exception.BusinessException(400,
-                    "成品克数必须大于 0 (当前: "
+                    "非原料 BOM 的每成品用量必须大于 0 (当前: "
                             + (bomItem.getStandardQuantity() == null ? "null" : bomItem.getStandardQuantity())
                             + ")");
         }
 
+        applyMaterialMasterSnapshot(bomItem);
         validateBomItemUnitCompatibility(bomItem);
 
         // Canvas V2: DB-driven validation (runs before defaults so rules like "#yieldRate > 0" can catch invalid user input)
@@ -265,6 +268,37 @@ public class BomServiceImpl implements BomService {
                 oldSnapshot == null ? BomChangeLog.ChangeType.CREATE : BomChangeLog.ChangeType.UPDATE);
 
         return saved;
+    }
+
+    /**
+     * BOM 行只保存物料主数据/库存移动均价快照，不接受页面重复维护单价和税率。
+     * 移动均价优先；尚无入库均价时回退物料字典未税价。
+     */
+    private void applyMaterialMasterSnapshot(BomItem bomItem) {
+        // The repository is optional only for legacy 3-arg unit-test construction.
+        // Spring production wiring always provides it; keep the old isolated tests focused
+        // on their original validation/cost concern instead of fabricating master data.
+        if (rawMaterialTypeRepository == null) {
+            return;
+        }
+        com.cretas.aims.entity.RawMaterialType material = rawMaterialTypeRepository
+                .findById(bomItem.getMaterialTypeId())
+                .orElseThrow(() -> new com.cretas.aims.exception.BusinessException(400, "请选择有效的关联物料")
+                        .withHint("BOM 原料、辅料和包材必须从物料字典选择"));
+        if (material.getDeletedAt() != null) {
+            throw new com.cretas.aims.exception.BusinessException(400, "请选择有效的关联物料")
+                    .withHint("BOM 原料、辅料和包材必须从物料字典选择");
+        }
+        if (!bomItem.getFactoryId().equals(material.getFactoryId())) {
+            throw new com.cretas.aims.exception.BusinessException(403, "关联物料不属于当前工厂");
+        }
+        bomItem.setMaterialName(material.getName());
+        bomItem.setUnitPrice(material.getMovingAvgPrice() != null
+                ? material.getMovingAvgPrice()
+                : material.getUnitPrice());
+        bomItem.setTaxRate(material.getTaxRate() == null
+                ? null
+                : material.getTaxRate().getRate().multiply(java.math.BigDecimal.valueOf(100)));
     }
 
     /**
@@ -360,14 +394,16 @@ public class BomServiceImpl implements BomService {
                     mtId = matches.get(0).getId();
                     if (matName == null || matName.isBlank()) matName = matches.get(0).getName();
                 }
-                if (r.getStandardQuantity() == null || r.getStandardQuantity().signum() <= 0) {
-                    throw new com.cretas.aims.exception.BusinessException(400, "成品含量 (standardQuantity) 必须 > 0");
-                }
                 String cat = (r.getMaterialCategory() == null || r.getMaterialCategory().isBlank())
                         ? "RAW" : r.getMaterialCategory().trim().toUpperCase();
                 if (!java.util.Set.of("RAW", "AUXILIARY", "PACKAGING").contains(cat)) {
                     throw new com.cretas.aims.exception.BusinessException(400,
                             "物料类别须为 RAW/AUXILIARY/PACKAGING (当前: " + cat + ")");
+                }
+                BigDecimal standardQuantity = "RAW".equals(cat) ? null : r.getStandardQuantity();
+                if (!"RAW".equals(cat)
+                        && (standardQuantity == null || standardQuantity.signum() <= 0)) {
+                    throw new com.cretas.aims.exception.BusinessException(400, "非原料的每成品用量必须 > 0");
                 }
                 String unit = (r.getUnit() == null || r.getUnit().isBlank())
                         ? ("PACKAGING".equals(cat) ? "pcs" : "g") : r.getUnit().trim();
@@ -375,8 +411,8 @@ public class BomServiceImpl implements BomService {
                         .productTypeId(productTypeId)
                         .materialTypeId(mtId)
                         .materialName(matName)
-                        .standardQuantity(r.getStandardQuantity())
-                        .yieldRate(r.getYieldRate())
+                        .standardQuantity(standardQuantity)
+                        .yieldRate("RAW".equals(cat) ? null : r.getYieldRate())
                         .unit(unit)
                         .materialCategory(cat)
                         .sortOrder(idx - 1)

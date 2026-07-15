@@ -33,9 +33,7 @@ public class CreateBomRecipeRequest {
     @Size(max = 200, message = "产品名称长度不能超过200个字符")
     private String productName;
 
-    @Schema(description = "整产品级出成率 (0-100), 默认 100", defaultValue = "100")
-    @DecimalMin(value = "0.01", message = "出成率必须 > 0")
-    @DecimalMax(value = "100", message = "出成率必须 <= 100")
+    @Schema(description = "已废弃：整体出成率由正式批次历史自动计算，人工传值会被忽略", deprecated = true)
     private BigDecimal overallYieldRate;
 
     @Schema(description = "单份成品克数/件数 (客户: 200g/份)", required = true)
@@ -73,28 +71,24 @@ public class CreateBomRecipeRequest {
         @Size(max = 191)
         private String materialTypeId;
 
-        @Schema(description = "标准用量 (每单位成品所需)", required = true)
-        @NotNull(message = "标准用量不能为空")
-        @DecimalMin(value = "0.0001", message = "标准用量必须 > 0")
+        @Schema(description = "每成品用量；RAW 只建立物料关联时可空，其他类别必须 > 0")
         private BigDecimal standardQuantity;
 
-        @Schema(description = "出成率 (0-100), 默认 100", defaultValue = "100")
-        @DecimalMin(value = "0.01", message = "出成率必须 > 0")
-        @DecimalMax(value = "100", message = "出成率必须 <= 100")
+        @Schema(description = "已废弃：单行出成率不由 BOM 人工维护，传值会被忽略", deprecated = true)
         private BigDecimal yieldRate;
 
-        @Schema(description = "计量单位 (限定 g/kg/mg/ml/L/个/袋/箱/瓶/盒/斤)", required = true)
+        @Schema(description = "计量单位 (限定 g/kg/mg/ml/L/个/只/件/pcs/袋/箱/瓶/盒/斤)", required = true)
         @NotBlank(message = "单位不能为空")
         // TODO(R13): 1斤=0.5kg 换算引擎待做, 当前斤为独立计量标签
-        @Pattern(regexp = "^(g|kg|mg|ml|L|个|袋|箱|瓶|盒|斤)$",
-                 message = "单位必须是 g/kg/mg/ml/L/个/袋/箱/瓶/盒/斤 之一")
+        @Pattern(regexp = "^(g|kg|mg|ml|L|个|只|件|pcs|袋|箱|瓶|盒|斤)$",
+                 message = "单位必须是 g/kg/mg/ml/L/个/只/件/pcs/袋/箱/瓶/盒/斤 之一")
         private String unit;
 
-        @Schema(description = "未税单价 (可选, 含税采购价需先在物料主数据入口按税率换算税前; 仅有 procurement:price:view 权限的角色可见)")
+        @Schema(description = "已废弃：BOM 单价从物料档案/移动均价继承，传值会被忽略", deprecated = true)
         @PositiveOrZero(message = "单价必须 >= 0")
         private BigDecimal unitPrice;
 
-        @Schema(description = "税率 (百分比); 未配置保持 null, 不默认 0")
+        @Schema(description = "已废弃：BOM 税率从物料档案继承，传值会被忽略", deprecated = true)
         @PositiveOrZero
         private BigDecimal taxRate;
 

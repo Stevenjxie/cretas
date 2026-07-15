@@ -62,6 +62,7 @@ interface EditorVm {
   selectOutputSku: (processId: string, portId: string, skuId: string) => void;
   selectMaterialSku: (materialNodeId: string, skuId: string) => void;
   confirmCreateSku: () => Promise<void>;
+  skuForm: { name: string; unit: string };
 }
 
 interface TestPort {
@@ -70,6 +71,7 @@ interface TestPort {
   materialNodeId?: string;
   materialKind?: string;
   skuId?: string;
+  unit?: string;
   ordinal: number;
 }
 
@@ -91,6 +93,8 @@ interface SkuOption {
 
 const SKU_OPTIONS: SkuOption[] = [
   { id: 'SKU-SEMI', name: 'Semi output', unit: 'kg', productCategory: 'SEMI_FINISHED' },
+  { id: 'SKU-COUNT', name: 'Count output', unit: '只', productCategory: 'SEMI_FINISHED' },
+  { id: 'SKU-COUNT-PIECE', name: 'Piece output', unit: '件', productCategory: 'SEMI_FINISHED' },
   { id: 'SKU-FINISHED', name: 'Finished output', unit: 'kg', productCategory: 'FINISHED_PRODUCT' },
   { id: 'SKU-CONTRACT', name: 'Contract output', unit: 'kg', productCategory: 'CONTRACT_MANUFACTURING' },
   { id: 'SKU-CUSTOMER', name: 'Customer output', unit: 'kg', productCategory: 'CUSTOMER_MATERIAL' },
@@ -243,6 +247,8 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
 
     expect(vm.outputSkuOptions.map((option) => option.id)).toEqual([
       'SKU-SEMI',
+      'SKU-COUNT',
+      'SKU-COUNT-PIECE',
       'SKU-FINISHED',
       'SKU-CONTRACT',
       'SKU-CUSTOMER',
@@ -284,6 +290,67 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
       kind: 'SEMI_FINISHED',
       bound: true,
     });
+  });
+
+  it('sends the selected onsite semi-finished base unit to the product API', async () => {
+    apiMocks.post.mockResolvedValueOnce({
+      success: true,
+      data: {
+        id: 'SKU-CREATED-COUNT', name: 'Created count semi', unit: '只', productCategory: 'SEMI_FINISHED',
+      },
+    });
+    const vm = await mountEditor();
+    const { process, port } = addSecondOutput(vm);
+
+    vm.selectOutputSku(process.id, port.id, '__CREATE__');
+    vm.skuForm.name = 'Created count semi';
+    vm.skuForm.unit = '只';
+    await vm.confirmCreateSku();
+
+    expect(apiMocks.post).toHaveBeenCalledWith('/F006/product-types', expect.objectContaining({
+      name: 'Created count semi', unit: '只', productCategory: 'SEMI_FINISHED',
+    }));
+    expect(port.unit).toBe('只');
+  });
+
+  it('refreshes every downstream input port immediately when an output SKU unit changes', async () => {
+    const vm = await mountEditor();
+    const { process, port, material } = addSecondOutput(vm);
+    vm.flowNodes.push({
+      id: 'process:downstream',
+      position: { x: 900, y: 160 },
+      data: {
+        kind: 'PROCESS', workProcessId: 'WP-NEXT', processName: 'Next', inputUnit: 'kg', outputUnit: 'kg',
+        ports: [{
+          id: 'input:downstream', direction: 'INPUT', materialNodeId: material.id, unit: 'kg', ordinal: 0,
+        }, {
+          id: 'output:downstream', direction: 'OUTPUT', unit: 'kg', ordinal: 0,
+        }],
+        conversionRule: { mode: 'ACTUAL_WEIGHT' }, reportingRequired: true,
+      },
+    });
+    vm.selectOutputSku(process.id, port.id, 'SKU-COUNT');
+
+    const downstream = vm.flowNodes.find((node) => node.id === 'process:downstream');
+    expect(downstream?.data.inputUnit).toBe('只');
+    expect(downstream?.data.ports?.[0].unit).toBe('只');
+    expect((downstream?.data.conversionRule as { mode?: string })?.mode).toBe('FIXED_RATIO');
+  });
+
+  it('rewrites a fixed-ratio expression to the newly rebound SKU unit without losing quantities', async () => {
+    const vm = await mountEditor();
+    vm.openAddProcess('raw');
+    vm.selectedWorkProcessId = 'WP-PACK';
+    vm.confirmAddProcess();
+    const process = vm.flowNodes.find((node) => node.data.kind === 'PROCESS');
+    const port = process?.data.ports?.find((candidate) => candidate.direction === 'OUTPUT' && candidate.ordinal === 0);
+    if (!process || !port) throw new Error('Expected primary process output');
+    vm.selectOutputSku(process.id, port.id, 'SKU-COUNT');
+    process.data.conversionRule = { mode: 'FIXED_RATIO', expression: '3 kg = 6 只' };
+
+    vm.selectOutputSku(process.id, port.id, 'SKU-COUNT-PIECE');
+
+    expect(process.data.conversionRule).toEqual({ mode: 'FIXED_RATIO', expression: '3 kg = 6 件' });
   });
 
   it('keeps rapid output node, port, and edge IDs unique within one millisecond', async () => {

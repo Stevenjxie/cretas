@@ -206,12 +206,12 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     expect(badge.text()).toContain('3 出（同时多产出）');
   });
 
-  it('does not expose a manual conversion mode selector', () => {
+  it('keeps weight-based quantity relations automatic', () => {
     const wrapper = mountNode();
 
     expect(wrapper.find('.conversion-row .el-select').exists()).toBe(false);
     expect(wrapper.get('[data-testid="quantity-rule-note"]').text())
-      .toContain('单位由 SKU 自动带入');
+      .toContain('实际出成率由历史报工自动计算');
   });
 
   it('#5: shows a read-only multi-output auto-note (投入 = 各产出之和) instead of a selectable mode when there is more than one output', () => {
@@ -233,7 +233,7 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     expect(wrapper.find('[data-testid="conversion-sentence"]').exists()).toBe(false);
   });
 
-  it('does not offer fixed-ratio, formula or packaging conversion options', () => {
+  it('does not offer a generic conversion mode selector', () => {
     const wrapper = mountNode();
 
     const modeOptionValues = wrapper.findAllComponents(ElOption)
@@ -264,21 +264,7 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     expect(sentence).not.toContain('Σ');
   });
 
-  it('ignores legacy FIXED_RATIO configuration in the editable UI', () => {
-    const withExpr = mountNode(true, withPorts({
-      conversionRule: { mode: 'FIXED_RATIO', expression: '1 只 = 1 只' },
-    }));
-    expect(withExpr.find('[data-testid="conversion-sentence"]').exists()).toBe(false);
-    expect(withExpr.find('[data-testid="fixed-ratio-row"]').exists()).toBe(false);
-
-    const withoutExpr = mountNode(true, withPorts({
-      conversionRule: { mode: 'FIXED_RATIO', expression: null },
-    }));
-    expect(withoutExpr.find('[data-testid="conversion-sentence"]').exists()).toBe(false);
-    expect(withoutExpr.get('[data-testid="quantity-rule-note"]').text()).toContain('SKU');
-  });
-
-  it('never renders a structured fixed-ratio editor', () => {
+  it('renders a structured fixed-ratio editor for non-weight SKU units', () => {
     const ports: ProcessPort[] = [
       { id: 'in-1', direction: 'INPUT', materialName: '整猪', unit: '只', ordinal: 0 },
       {
@@ -290,17 +276,51 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
       conversionRule: { mode: 'FIXED_RATIO', expression: '1 只 = 2 半只' },
     }));
 
-    expect(wrapper.find('[data-testid="fixed-ratio-row"]').exists()).toBe(false);
-    expect(wrapper.findComponent({ name: 'ElInputNumber' }).exists()).toBe(false);
+    expect(wrapper.find('[data-testid="fixed-ratio-row"]').exists()).toBe(true);
+    expect(wrapper.findAllComponents({ name: 'ElInputNumber' })).toHaveLength(2);
+    expect(wrapper.text()).toContain('只');
+    expect(wrapper.text()).toContain('半只');
   });
 
-  it('does not emit conversion changes for legacy fixed-ratio data', () => {
+  it('emits a canonical fixed-ratio rule when a quantity changes', async () => {
     const wrapper = mountNode(true, withPorts({
+      ports: [
+        { id: 'in-1', direction: 'INPUT', unit: '只', ordinal: 0 },
+        { id: 'out-1', direction: 'OUTPUT', unit: '件', ordinal: 0 },
+      ],
       conversionRule: { mode: 'FIXED_RATIO', expression: null },
     }));
 
-    expect(wrapper.find('[data-testid="fixed-ratio-row"]').exists()).toBe(false);
-    expect(wrapper.emitted('update')).toBeUndefined();
+    wrapper.findAllComponents({ name: 'ElInputNumber' })[1].vm.$emit('change', 2);
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.emitted('update')).toEqual([[{
+      conversionRule: { mode: 'FIXED_RATIO', expression: '1 只 = 2 件' },
+    }]]);
+  });
+
+  it('preserves the other side across consecutive fixed-ratio edits', async () => {
+    const data = withPorts({
+      ports: [
+        { id: 'in-1', direction: 'INPUT', unit: '只', ordinal: 0 },
+        { id: 'out-1', direction: 'OUTPUT', unit: '件', ordinal: 0 },
+      ],
+      conversionRule: { mode: 'FIXED_RATIO', expression: '1 只 = 2 件' },
+    });
+    const wrapper = mountNode(true, data);
+
+    wrapper.findAllComponents({ name: 'ElInputNumber' })[0].vm.$emit('change', 3);
+    const firstRule = wrapper.emitted('update')?.[0]?.[0] as Partial<ProcessNodeData>;
+    expect(firstRule.conversionRule?.expression).toBe('3 只 = 2 件');
+
+    await wrapper.setProps({
+      data: { ...data, conversionRule: firstRule.conversionRule as ProcessNodeData['conversionRule'] },
+    });
+    wrapper.findAllComponents({ name: 'ElInputNumber' })[1].vm.$emit('change', 4);
+
+    expect(wrapper.emitted('update')?.[1]).toEqual([{
+      conversionRule: { mode: 'FIXED_RATIO', expression: '3 只 = 4 件' },
+    }]);
   });
 
   it('#4: gracefully leaves the ratio unset (returns null, does not crash) for legacy free-text expressions that are not the canonical shape', () => {
@@ -331,7 +351,7 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     }));
 
     expect(wrapper.find('[data-testid="legacy-mode-hint"]').exists()).toBe(false);
-    expect(wrapper.get('[data-testid="quantity-rule-note"]').text()).toContain('SKU');
+    expect(wrapper.get('[data-testid="quantity-rule-note"]').text()).toContain('实际出成率');
   });
 
   it('no longer renders a separate 样例 example line (trimmed per config-driven UX simplification)', () => {

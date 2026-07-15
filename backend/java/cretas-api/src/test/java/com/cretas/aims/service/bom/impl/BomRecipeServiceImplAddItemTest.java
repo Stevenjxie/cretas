@@ -2,6 +2,7 @@ package com.cretas.aims.service.bom.impl;
 
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest.BomRecipeItemDTO;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.enums.TaxRate;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.exception.BusinessException;
@@ -27,6 +28,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
@@ -107,11 +109,50 @@ class BomRecipeServiceImplAddItemTest {
         mt.setUnit("kg");
         mt.setFactoryId("F006");
         mt.setPrimaryCode("001");
+        mt.setTaxRate(TaxRate.TAX_9);
+        mt.setUnitPrice(new BigDecimal("10.0000"));
+        mt.setMovingAvgPrice(new BigDecimal("12.0000"));
         when(materialTypeRepo.findById("MT-001")).thenReturn(Optional.of(mt));
         when(materialTypeRepo.findById("MT-002")).thenReturn(Optional.of(newMt("MT-002", "包材A", "g", "002")));
 
         // uom converter: allow write unit (service calls isWriteUnitCompatible)
         when(materialUomConverter.isWriteUnitCompatible(anyString(), anyString())).thenReturn(true);
+    }
+
+    @Test
+    @DisplayName("激活新版本时旧 ACTIVE 版本必须同时归档并取消 current")
+    void activateArchivesEveryCompetingActiveVersion() {
+        recipe.setProductTypeId("SKU-001");
+        recipe.setIsCurrent(false);
+
+        BomRecipe oldCurrent = new BomRecipe();
+        oldCurrent.setId("RECIPE-V2");
+        oldCurrent.setFactoryId("F006");
+        oldCurrent.setProductTypeId("SKU-001");
+        oldCurrent.setStatus(BomRecipe.Status.ACTIVE);
+        oldCurrent.setIsCurrent(true);
+
+        BomRecipe staleActive = new BomRecipe();
+        staleActive.setId("RECIPE-V1");
+        staleActive.setFactoryId("F006");
+        staleActive.setProductTypeId("SKU-001");
+        staleActive.setStatus(BomRecipe.Status.ACTIVE);
+        staleActive.setIsCurrent(false);
+
+        when(recipeRepo.findById(recipe.getId())).thenReturn(Optional.of(recipe));
+        when(recipeRepo.findCompetingVersionsForActivation("F006", "SKU-001", recipe.getId()))
+                .thenReturn(List.of(oldCurrent, staleActive));
+        when(recipeRepo.save(any(BomRecipe.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        BomRecipe activated = service.activateRecipe("F006", recipe.getId(), 7L);
+
+        assertThat(activated.getStatus()).isEqualTo(BomRecipe.Status.ACTIVE);
+        assertThat(activated.getIsCurrent()).isTrue();
+        assertThat(oldCurrent.getStatus()).isEqualTo(BomRecipe.Status.ARCHIVED);
+        assertThat(oldCurrent.getIsCurrent()).isFalse();
+        assertThat(staleActive.getStatus()).isEqualTo(BomRecipe.Status.ARCHIVED);
+        assertThat(staleActive.getIsCurrent()).isFalse();
+        verify(recipeRepo).flush();
     }
 
     @Test
@@ -147,8 +188,8 @@ class BomRecipeServiceImplAddItemTest {
 
     // ── F6: taxRate 未传 → 保持 null (不默认 0%), 成本侧诚实标缺 ──────────────
     @Test
-    @DisplayName("F6: addItem 未传 taxRate → 保持 null (不默认 0%)")
-    void addItem_taxRateNotProvided_staysNull() {
+    @DisplayName("addItem 未传价格税率时从物料档案继承")
+    void addItem_pricingNotProvided_inheritsMaterialMaster() {
         org.mockito.ArgumentCaptor<BomRecipeItem> captor =
                 org.mockito.ArgumentCaptor.forClass(BomRecipeItem.class);
         when(itemRepo.save(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
@@ -159,14 +200,13 @@ class BomRecipeServiceImplAddItemTest {
         BomRecipeItemDTO dto = buildDto("MT-002", BigDecimal.valueOf(50), "g", "PACKAGING");
         service.addItem("F006", "RECIPE-ORPHAN-TEST", dto);
 
-        assertThat(captor.getValue().getTaxRate())
-                .as("未传 taxRate 必须保持 null, 不默认 0% (诚实标缺)")
-                .isNull();
+        assertThat(captor.getValue().getTaxRate()).isEqualByComparingTo("9.00");
+        assertThat(captor.getValue().getUnitPrice()).isEqualByComparingTo("12.0000");
     }
 
     @Test
-    @DisplayName("F6: addItem 显式传 taxRate → 保留传入值")
-    void addItem_taxRateProvided_preserved() {
+    @DisplayName("addItem 忽略页面价格税率，以物料档案为真值")
+    void addItem_payloadPricingIgnored_materialMasterWins() {
         org.mockito.ArgumentCaptor<BomRecipeItem> captor =
                 org.mockito.ArgumentCaptor.forClass(BomRecipeItem.class);
         when(itemRepo.save(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
@@ -175,9 +215,38 @@ class BomRecipeServiceImplAddItemTest {
 
         BomRecipeItemDTO dto = buildDto("MT-002", BigDecimal.valueOf(50), "g", "PACKAGING");
         ReflectionTestUtils.setField(dto, "taxRate", new BigDecimal("13.00"));
+        ReflectionTestUtils.setField(dto, "unitPrice", new BigDecimal("999.00"));
+        ReflectionTestUtils.setField(dto, "yieldRate", new BigDecimal("55.00"));
         service.addItem("F006", "RECIPE-ORPHAN-TEST", dto);
 
-        assertThat(captor.getValue().getTaxRate()).isEqualByComparingTo("13.00");
+        assertThat(captor.getValue().getTaxRate()).isEqualByComparingTo("9.00");
+        assertThat(captor.getValue().getUnitPrice()).isEqualByComparingTo("12.0000");
+        assertThat(captor.getValue().getYieldRate()).isEqualByComparingTo("100.00");
+    }
+
+    @Test
+    @DisplayName("RAW BOM 可只建立物料关联，不填每成品用量")
+    void addRawItem_standardQuantityMayBeNull() {
+        when(itemRepo.save(any(BomRecipeItem.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-ORPHAN-TEST"))
+                .thenReturn(List.of(existingItem));
+
+        BomRecipeItemDTO dto = buildDto("MT-001", null, "kg", "RAW");
+        BomRecipeItem saved = service.addItem("F006", "RECIPE-ORPHAN-TEST", dto);
+
+        assertThat(saved.getStandardQuantity()).isNull();
+        assertThat(saved.getActualQuantity()).isNull();
+        assertThat(saved.getItemCost()).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    @Test
+    @DisplayName("包材 BOM 仍必须填每成品用量")
+    void addPackagingItem_standardQuantityRequired() {
+        BomRecipeItemDTO dto = buildDto("MT-002", null, "g", "PACKAGING");
+
+        assertThatThrownBy(() -> service.addItem("F006", "RECIPE-ORPHAN-TEST", dto))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("每成品用量");
     }
 
     @Test
@@ -264,6 +333,9 @@ class BomRecipeServiceImplAddItemTest {
         mt.setUnit(unit);
         mt.setFactoryId("F006");
         mt.setPrimaryCode(primaryCode);
+        mt.setTaxRate(TaxRate.TAX_9);
+        mt.setUnitPrice(new BigDecimal("10.0000"));
+        mt.setMovingAvgPrice(new BigDecimal("12.0000"));
         return mt;
     }
 }

@@ -4,18 +4,16 @@ import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.bom.BomItem;
 import com.cretas.aims.entity.bom.BomRecipe;
-import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomYieldSuggestion;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.bom.BomItemRepository;
-import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomYieldSuggestionRepository;
 import com.cretas.aims.service.bom.BomYieldSuggestionService;
 import com.cretas.aims.service.yield.YieldReportService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,7 +31,6 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class BomYieldSuggestionServiceImpl implements BomYieldSuggestionService {
 
-    static final int MAX_SAMPLE_BATCHES = 10;
     static final int MIN_SAMPLES = 3;
     static final BigDecimal MAX_OFFSET_PERCENTAGE_POINTS = new BigDecimal("30.00");
     static final BigDecimal AUTO_APPLY_MAX_RELATIVE_CHANGE = new BigDecimal("0.30");
@@ -43,7 +40,6 @@ public class BomYieldSuggestionServiceImpl implements BomYieldSuggestionService 
     private final ProductionBatchRepository productionBatchRepository;
     private final BomItemRepository bomItemRepository;
     private final BomRecipeRepository bomRecipeRepository;
-    private final BomRecipeItemRepository bomRecipeItemRepository;
     private final BomYieldSuggestionRepository bomYieldSuggestionRepository;
     private final YieldReportService yieldReportService;
 
@@ -138,21 +134,23 @@ public class BomYieldSuggestionServiceImpl implements BomYieldSuggestionService 
         if (suggestion.getSampleCount() == null || suggestion.getSampleCount() < MIN_SAMPLES) {
             return;
         }
-        if (!isPositive(suggestion.getPreviousYieldRate()) || !isPositive(suggestion.getSuggestedYieldRate())) {
+        if (!isPositive(suggestion.getSuggestedYieldRate())) {
             log.warn("[BomYieldSuggestion] auto-apply skipped: invalid rates factoryId={}, productTypeId={}, previous={}, suggested={}",
                     suggestion.getFactoryId(), suggestion.getProductTypeId(),
                     suggestion.getPreviousYieldRate(), suggestion.getSuggestedYieldRate());
             return;
         }
-        BigDecimal relativeChange = suggestion.getSuggestedYieldRate()
-                .subtract(suggestion.getPreviousYieldRate())
-                .abs()
-                .divide(suggestion.getPreviousYieldRate(), 6, RoundingMode.HALF_UP);
-        if (relativeChange.compareTo(AUTO_APPLY_MAX_RELATIVE_CHANGE) > 0) {
-            log.info("[BomYieldSuggestion] auto-apply left pending: relative change over guard factoryId={}, productTypeId={}, previous={}, suggested={}, relative={}",
-                    suggestion.getFactoryId(), suggestion.getProductTypeId(),
-                    suggestion.getPreviousYieldRate(), suggestion.getSuggestedYieldRate(), relativeChange);
-            return;
+        if (isPositive(suggestion.getPreviousYieldRate())) {
+            BigDecimal relativeChange = suggestion.getSuggestedYieldRate()
+                    .subtract(suggestion.getPreviousYieldRate())
+                    .abs()
+                    .divide(suggestion.getPreviousYieldRate(), 6, RoundingMode.HALF_UP);
+            if (relativeChange.compareTo(AUTO_APPLY_MAX_RELATIVE_CHANGE) > 0) {
+                log.info("[BomYieldSuggestion] auto-apply left pending: relative change over guard factoryId={}, productTypeId={}, previous={}, suggested={}, relative={}",
+                        suggestion.getFactoryId(), suggestion.getProductTypeId(),
+                        suggestion.getPreviousYieldRate(), suggestion.getSuggestedYieldRate(), relativeChange);
+                return;
+            }
         }
         BomRecipe recipe = currentRecipe.orElse(null);
         if (recipe == null) {
@@ -160,16 +158,6 @@ public class BomYieldSuggestionServiceImpl implements BomYieldSuggestionService 
                     suggestion.getFactoryId(), suggestion.getProductTypeId());
             return;
         }
-        List<BomRecipeItem> items = bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(recipe.getId());
-        long mainMaterialCount = items.stream()
-                .filter(this::isMainMaterialCandidate)
-                .count();
-        if (mainMaterialCount != 1) {
-            log.warn("[BomYieldSuggestion] auto-apply left pending: expected one main material, got {} factoryId={}, productTypeId={}, recipeId={}",
-                    mainMaterialCount, suggestion.getFactoryId(), suggestion.getProductTypeId(), recipe.getId());
-            return;
-        }
-
         BigDecimal appliedRate = suggestion.getSuggestedYieldRate().setScale(2, RoundingMode.HALF_UP);
         recipe.setOverallYieldRate(appliedRate);
         bomRecipeRepository.save(recipe);
@@ -182,19 +170,13 @@ public class BomYieldSuggestionServiceImpl implements BomYieldSuggestionService 
                 suggestion.getPreviousYieldRate(), appliedRate);
     }
 
-    private boolean isMainMaterialCandidate(BomRecipeItem item) {
-        return item != null
-                && item.getYieldRate() != null
-                && item.getYieldRate().compareTo(new BigDecimal("100.00")) != 0;
-    }
-
     private boolean isPositive(BigDecimal value) {
         return value != null && value.compareTo(BigDecimal.ZERO) > 0;
     }
 
     private List<BigDecimal> collectYieldPercentSamples(String factoryId, String productTypeId) {
         List<ProductionBatch> batches = productionBatchRepository.findRecentCompletedByFactoryAndProductType(
-                factoryId, productTypeId, PageRequest.of(0, MAX_SAMPLE_BATCHES));
+                factoryId, productTypeId, Pageable.unpaged());
         List<BigDecimal> samples = new ArrayList<>();
         for (ProductionBatch batch : batches) {
             try {
