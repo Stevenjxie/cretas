@@ -38,6 +38,11 @@ export interface WorkflowUnitReconciliationResult {
   warnings: WorkflowUnitIssue[];
 }
 
+export interface FixedRatioQuantities {
+  inputQuantity: number;
+  outputQuantity: number;
+}
+
 const SYSTEM_ALIASES: Record<string, string> = {
   mg: 'mg', '毫克': 'mg', g: 'g', '克': 'g', kg: 'kg', '公斤': 'kg', '千克': 'kg',
   t: 't', '吨': 't', jin: 'jin', '斤': 'jin', ml: 'ml', '毫升': 'ml', l: 'l', '升': 'l',
@@ -67,8 +72,30 @@ export function workflowReportingUnit(
   skuBaseUnit?: string | null,
   customAliases?: Record<string, string>,
 ): string {
-  if (materialKind === 'RAW_MATERIAL' || materialKind === 'SEMI_FINISHED') return 'kg';
-  return displayUnit(skuBaseUnit, normalizedAliases(customAliases));
+  const aliases = normalizedAliases(customAliases);
+  if ((materialKind === 'RAW_MATERIAL' || materialKind === 'SEMI_FINISHED')
+    && isWorkflowWeightUnit(skuBaseUnit, aliases)) return 'kg';
+  return displayUnit(skuBaseUnit, aliases);
+}
+
+/** Weight-based production is reported in kg. Count/package units must keep the SKU unit verbatim. */
+export function isWorkflowWeightUnit(
+  unit: string | null | undefined,
+  aliases: Record<string, string> = normalizedAliases(),
+): boolean {
+  const code = normalizeUnit(unit, aliases);
+  return code !== null && ['mg', 'g', 'kg', 't', 'jin'].includes(code);
+}
+
+/** Reads only the two quantities from the canonical “N unit = N unit” expression. */
+export function parseFixedRatioQuantities(expression: string | null | undefined): FixedRatioQuantities | null {
+  if (!expression) return null;
+  const sides = expression.split('=');
+  if (sides.length !== 2) return null;
+  const inputQuantity = leadingPositiveNumber(sides[0]);
+  const outputQuantity = leadingPositiveNumber(sides[1]);
+  if (inputQuantity === null || outputQuantity === null) return null;
+  return { inputQuantity, outputQuantity };
 }
 
 export function reconcileWorkflowUnits(
@@ -148,9 +175,19 @@ function normalizeUnit(value: string | null | undefined, aliases: Record<string,
 function displayUnit(value: string | null | undefined, aliases: Record<string, string>): string {
   const code = normalizeUnit(value, aliases);
   if (!code) return '';
+  const original = value?.trim() || '';
+  // Preserve an authoritative Chinese SKU label such as “只”; only translate canonical codes.
+  if (original && /[^\x00-\x7F]/.test(original)) return original;
   return CHINESE_UNIT_LABELS[code] || code;
 }
 
 function key(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function leadingPositiveNumber(value: string): number | null {
+  const match = value.match(/^\s*([0-9]+(?:\.[0-9]+)?)(?:\s+|$)/);
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }

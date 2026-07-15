@@ -4,6 +4,7 @@ import com.cretas.aims.dto.material.RawMaterialTypeDTO;
 import com.cretas.aims.entity.MaterialPackagingHierarchy;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.TaxRate;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ConversionRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialPackagingHierarchyRepository;
@@ -23,6 +24,7 @@ import java.math.RoundingMode;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
@@ -158,15 +160,11 @@ class RawMaterialTypeServiceTaxRateTest {
 
     @Test
     @DisplayName("T2-S3: create 无taxRate → unitPrice保持null不被覆盖")
-    void create_noTaxRate_unitPriceRemainsNull() {
-        stubForCreate();
+    void create_noTaxRate_rejected() {
         RawMaterialTypeDTO dto = buildCreateDto(null, null);
-        // No taxRate, no taxIncludedUnitPrice
-        RawMaterialTypeDTO result = service.createMaterialType(FACTORY_ID, dto);
-        assertThat(result).isNotNull();
-        // taxRate and taxIncludedUnitPrice should both be null in the result DTO
-        assertThat(result.getTaxRate()).isNull();
-        assertThat(result.getTaxIncludedUnitPrice()).isNull();
+        assertThatThrownBy(() -> service.createMaterialType(FACTORY_ID, dto))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("税率不能为空");
     }
 
     // =========================================================================
@@ -175,14 +173,11 @@ class RawMaterialTypeServiceTaxRateTest {
 
     @Test
     @DisplayName("T2-S4: create 有taxRate无taxIncludedUnitPrice → 不换算")
-    void create_taxRateWithoutIncludedPrice_noConversion() {
-        stubForCreate();
+    void create_taxRateWithoutIncludedPrice_rejected() {
         RawMaterialTypeDTO dto = buildCreateDto(TaxRate.TAX_9, null);
-        // taxRate set but taxIncludedUnitPrice null → service should NOT call preTaxPrice
-        RawMaterialTypeDTO result = service.createMaterialType(FACTORY_ID, dto);
-        assertThat(result).isNotNull();
-        assertThat(result.getTaxRate()).isEqualTo(TaxRate.TAX_9);
-        assertThat(result.getTaxIncludedUnitPrice()).isNull();
+        assertThatThrownBy(() -> service.createMaterialType(FACTORY_ID, dto))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("含税单价必须大于0");
     }
 
     // =========================================================================
@@ -240,8 +235,7 @@ class RawMaterialTypeServiceTaxRateTest {
 
     @Test
     @DisplayName("T2-S7: update不传税率字段 → entity既有unitPrice不变")
-    void update_noTaxFields_unitPriceUnchanged() {
-        stubForUpdate();
+    void update_legacyUnpricedWithoutTaxFields_rejected() {
         BigDecimal existingUnitPrice = new BigDecimal("50.0000");
         // Entity has NO taxRate (null), so condition `taxRate != null && taxIncludedUnitPrice != null` is false
         RawMaterialType existingEntity = buildExistingEntity(null, null, existingUnitPrice);
@@ -252,12 +246,9 @@ class RawMaterialTypeServiceTaxRateTest {
         dto.setNotes("test update");
         // No taxRate, no taxIncludedUnitPrice in dto
 
-        RawMaterialTypeDTO result = service.updateMaterialType(FACTORY_ID, MATERIAL_ID, dto);
-
-        assertThat(result).isNotNull();
-        // unitPrice should be unchanged; taxRate/taxIncludedUnitPrice should stay null
-        assertThat(result.getTaxRate()).isNull();
-        assertThat(result.getTaxIncludedUnitPrice()).isNull();
+        assertThatThrownBy(() -> service.updateMaterialType(FACTORY_ID, MATERIAL_ID, dto))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("税率不能为空");
     }
 
     // =========================================================================

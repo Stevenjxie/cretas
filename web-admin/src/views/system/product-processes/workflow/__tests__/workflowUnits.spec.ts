@@ -3,11 +3,20 @@ import type { ProcessNodeData, ProductProcessWorkflowDefinition } from '../types
 import { applyWorkflowPatches } from '../workflowModel';
 import {
   forkWorkflowUnitReviewDraft,
+  parseFixedRatioQuantities,
   reconcileWorkflowUnits,
   type WorkflowUnitContext,
 } from '../workflowUnits';
 
 describe('reconcileWorkflowUnits', () => {
+  it('parses both canonical fixed-ratio quantities when the output unit ends the expression', () => {
+    expect(parseFixedRatioQuantities('1.5 只 = 2.25 件')).toEqual({
+      inputQuantity: 1.5,
+      outputQuantity: 2.25,
+    });
+    expect(parseFixedRatioQuantities('1 只 = 2 件 ')).toEqual({ inputQuantity: 1, outputQuantity: 2 });
+  });
+
   it('forks a reviewed published definition into a new unsaved draft version', () => {
     const published = definitionWith('g', 'g', 'g');
     published.id = 42;
@@ -37,18 +46,28 @@ describe('reconcileWorkflowUnits', () => {
     expect(materialUnit(input)).toBe('克');
   });
 
-  it('normalizes semi-finished input and output units to kg without a conversion selection', () => {
+  it('keeps a non-weight semi-finished SKU unit instead of forcing kg', () => {
     const input = definitionWith('g', '件', '件', 'SEMI_FINISHED');
     processData(input).ports[0].conversionRefId = 'STALE-CONVERSION';
     processData(input).ports[0].conversionVersion = 3;
 
     const result = reconcileWorkflowUnits(input, context('件'));
 
-    expect(materialUnit(result.definition)).toBe('kg');
-    expect(processData(result.definition).outputUnit).toBe('kg');
-    expect(processData(result.definition).ports[0]).toMatchObject({ unit: 'kg' });
+    expect(materialUnit(result.definition)).toBe('件');
+    expect(processData(result.definition).outputUnit).toBe('件');
+    expect(processData(result.definition).ports[0]).toMatchObject({ unit: '件' });
     expect(processData(result.definition).ports[0].conversionRefId).toBeUndefined();
     expect(processData(result.definition).ports[0].conversionVersion).toBeUndefined();
+    expect(result.errors).toEqual([]);
+  });
+
+  it('keeps a count-based raw-material unit such as 只 on every connected input port', () => {
+    const input = definitionWith('kg', 'kg', 'kg', 'RAW_MATERIAL', 'INPUT');
+    const result = reconcileWorkflowUnits(input, context('只'));
+
+    expect(materialUnit(result.definition)).toBe('只');
+    expect(processData(result.definition).inputUnit).toBe('只');
+    expect(processData(result.definition).ports[0].unit).toBe('只');
     expect(result.errors).toEqual([]);
   });
 

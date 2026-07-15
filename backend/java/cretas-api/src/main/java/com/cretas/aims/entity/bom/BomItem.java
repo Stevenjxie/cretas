@@ -66,7 +66,7 @@ public class BomItem extends BaseEntity {
     /**
      * 成品含量/标准用量 (每单位成品所需原料量)
      */
-    @Column(name = "standard_quantity", nullable = false, precision = 15, scale = 4)
+    @Column(name = "standard_quantity", precision = 15, scale = 4)
     private BigDecimal standardQuantity;
 
     /**
@@ -151,6 +151,9 @@ public class BomItem extends BaseEntity {
      */
     @Transient
     public BigDecimal getActualQuantity() {
+        if (standardQuantity == null) {
+            return null;
+        }
         if (yieldRate == null || yieldRate.compareTo(BigDecimal.ZERO) == 0) {
             return standardQuantity;
         }
@@ -166,7 +169,7 @@ public class BomItem extends BaseEntity {
      */
     @Transient
     public BigDecimal calculateCost() {
-        if (unitPrice == null) {
+        if (unitPrice == null || standardQuantity == null) {
             return BigDecimal.ZERO;
         }
         return getActualQuantity().multiply(unitPrice).setScale(4, BigDecimal.ROUND_HALF_UP);

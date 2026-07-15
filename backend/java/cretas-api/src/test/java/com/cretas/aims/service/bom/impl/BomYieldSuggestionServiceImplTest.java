@@ -4,11 +4,9 @@ import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.bom.BomItem;
 import com.cretas.aims.entity.bom.BomRecipe;
-import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomYieldSuggestion;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.bom.BomItemRepository;
-import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomYieldSuggestionRepository;
 import com.cretas.aims.service.yield.YieldReportService;
@@ -19,6 +17,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Pageable;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -45,8 +44,6 @@ class BomYieldSuggestionServiceImplTest {
     @Mock
     private BomRecipeRepository bomRecipeRepository;
     @Mock
-    private BomRecipeItemRepository bomRecipeItemRepository;
-    @Mock
     private BomYieldSuggestionRepository bomYieldSuggestionRepository;
     @Mock
     private YieldReportService yieldReportService;
@@ -65,8 +62,6 @@ class BomYieldSuggestionServiceImplTest {
         BomRecipe recipe = recipe(new BigDecimal("80.00"));
         when(bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
                 FACTORY, PRODUCT, BomRecipe.Status.ACTIVE)).thenReturn(Optional.of(recipe));
-        when(bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc("recipe-1"))
-                .thenReturn(List.of(recipeItem("60.00")));
         when(productionBatchRepository.findRecentCompletedByFactoryAndProductType(eq(FACTORY), eq(PRODUCT), any()))
                 .thenReturn(List.of(batch(1L), batch(2L), batch(3L)));
         when(yieldReportService.getYield(FACTORY, 1L)).thenReturn(yieldDto("0.58"));
@@ -90,6 +85,13 @@ class BomYieldSuggestionServiceImplTest {
         assertThat(suggestion.get().getAppliedAt()).isNotNull();
         assertThat(recipe.getOverallYieldRate()).isEqualByComparingTo(new BigDecimal("60.00"));
         assertThat(legacyRaw.getYieldRate()).isEqualByComparingTo(new BigDecimal("80.00"));
+
+        ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
+        verify(productionBatchRepository).findRecentCompletedByFactoryAndProductType(
+                eq(FACTORY), eq(PRODUCT), pageableCaptor.capture());
+        assertThat(pageableCaptor.getValue().isPaged())
+                .as("系统历史出成率必须覆盖全部正式批次")
+                .isFalse();
 
         verify(bomItemRepository, never()).save(any());
         verify(bomRecipeRepository).save(recipe);
@@ -128,8 +130,8 @@ class BomYieldSuggestionServiceImplTest {
     }
 
     @Test
-    @DisplayName("multiple non-100 main materials keep suggestion pending for human review")
-    void reportingCompletedBatch_multipleMainMaterials_staysPending() {
+    @DisplayName("多原料 SKU 也自动写入产品级历史出成率")
+    void reportingCompletedBatch_multipleMainMaterials_autoAppliesProductYield() {
         when(bomYieldSuggestionRepository.existsByFactoryIdAndProductTypeIdAndSourceEventTypeAndSourceEventIdAndDeletedAtIsNull(
                 FACTORY, PRODUCT, "BATCH_COMPLETED", "batch-3")).thenReturn(false);
         when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(FACTORY, PRODUCT))
@@ -137,8 +139,6 @@ class BomYieldSuggestionServiceImplTest {
         BomRecipe recipe = recipe(new BigDecimal("80.00"));
         when(bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
                 FACTORY, PRODUCT, BomRecipe.Status.ACTIVE)).thenReturn(Optional.of(recipe));
-        when(bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc("recipe-1"))
-                .thenReturn(List.of(recipeItem("80.00"), recipeItem("90.00")));
         when(productionBatchRepository.findRecentCompletedByFactoryAndProductType(eq(FACTORY), eq(PRODUCT), any()))
                 .thenReturn(List.of(batch(1L), batch(2L), batch(3L)));
         when(yieldReportService.getYield(FACTORY, 1L)).thenReturn(yieldDto("0.78"));
@@ -151,9 +151,9 @@ class BomYieldSuggestionServiceImplTest {
                 service.generateForProduct(FACTORY, PRODUCT, "BATCH_COMPLETED", "batch-3");
 
         assertThat(suggestion).isPresent();
-        assertThat(suggestion.get().getStatus()).isEqualTo(BomYieldSuggestion.Status.PENDING);
+        assertThat(suggestion.get().getStatus()).isEqualTo(BomYieldSuggestion.Status.APPLIED);
         assertThat(recipe.getOverallYieldRate()).isEqualByComparingTo(new BigDecimal("80.00"));
-        verify(bomRecipeRepository, never()).save(any());
+        verify(bomRecipeRepository).save(recipe);
     }
 
     @Test
@@ -244,14 +244,4 @@ class BomYieldSuggestionServiceImplTest {
         return recipe;
     }
 
-    private BomRecipeItem recipeItem(String yieldRate) {
-        BomRecipeItem item = new BomRecipeItem();
-        item.setRecipeId("recipe-1");
-        item.setFactoryId(FACTORY);
-        item.setMaterialTypeId("RM-" + yieldRate);
-        item.setMaterialCategory("RAW");
-        item.setStandardQuantity(BigDecimal.ONE);
-        item.setYieldRate(new BigDecimal(yieldRate));
-        return item;
-    }
 }

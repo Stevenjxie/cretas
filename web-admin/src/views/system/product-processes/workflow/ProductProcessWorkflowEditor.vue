@@ -273,8 +273,17 @@
         <el-form-item label="半成品名称" required>
           <el-input v-model="skuForm.name" placeholder="例：红烧熟制后猪蹄" />
         </el-form-item>
-        <el-form-item label="基本单位">
-          <el-input model-value="kg" readonly />
+        <el-form-item label="基本单位" required>
+          <el-select
+            v-model="skuForm.unit"
+            filterable
+            allow-create
+            default-first-option
+            placeholder="选择或输入基本单位"
+            style="width: 100%"
+          >
+            <el-option v-for="unit in onsiteSkuUnitOptions" :key="unit" :label="unit" :value="unit" />
+          </el-select>
         </el-form-item>
       </el-form>
       <el-alert
@@ -371,6 +380,8 @@ import {
 } from './workflowModel';
 import {
   forkWorkflowUnitReviewDraft,
+  isWorkflowWeightUnit,
+  parseFixedRatioQuantities,
   reconcileWorkflowUnits,
   workflowReportingUnit,
   type WorkflowUnitContext,
@@ -558,7 +569,8 @@ const filteredWorkProcessOptions = workProcessFilter.filtered;
 const skuDialogVisible = ref(false);
 const creatingSku = ref(false);
 const skuBindingTarget = ref<SkuBindingTarget | null>(null);
-const skuForm = ref({ name: '' });
+const onsiteSkuUnitOptions = ['kg', 'g', '只', '件', '个', '盒', '袋', '瓶', '箱', '份'];
+const skuForm = ref({ name: '', unit: 'kg' });
 let lastGraphIdSeed = 0;
 let catalogGeneration = 0;
 let createSkuGeneration = 0;
@@ -1467,19 +1479,23 @@ function selectRawSku(materialNodeId: string, skuId: string): void {
   const material = flowNodes.value.find((node) => node.id === materialNodeId);
   const option = rawMaterialOptions.value.find((item) => item.id === skuId);
   if (!material || !option) return;
+  const nextUnit = workflowReportingUnit(
+    'RAW_MATERIAL',
+    option.unit || String(material.data?.baseUnit || 'kg'),
+  );
   mutate(() => {
     material.data = {
       ...material.data,
       name: option.name,
       skuId: option.id,
       skuCode: option.code || option.id,
-      baseUnit: 'kg',
+      baseUnit: nextUnit,
       bound: true,
     };
     flowNodes.value.filter((node) => node.data?.kind === 'PROCESS').forEach((node) => {
       const data = node.data as ProcessNodeData & { kind: 'PROCESS' };
       data.ports.forEach((port) => {
-        if (port.materialNodeId === materialNodeId) port.unit = 'kg';
+        if (port.materialNodeId === materialNodeId) port.unit = nextUnit;
       });
       const primaryInput = data.ports.filter((port) => port.direction === 'INPUT')
         .sort((left, right) => left.ordinal - right.ordinal)[0];
@@ -1519,6 +1535,7 @@ function selectOutputSku(processId: string, portId: string, skuId: string): void
     skuBindingTarget.value = { processId, portId };
     skuForm.value = {
       name: port?.materialName || `${data?.processName || '工序'}后半成品`,
+      unit: port?.unit || 'kg',
     };
     skuDialogVisible.value = true;
     return;
@@ -1574,9 +1591,13 @@ async function confirmCreateSku(): Promise<void> {
   const bindingTarget = skuBindingTarget.value ? { ...skuBindingTarget.value } : null;
   if (!identity || !bindingTarget || !canEdit.value) return;
   const name = skuForm.value.name.trim();
-  const unit = 'kg';
+  const unit = skuForm.value.unit.trim();
   if (!name) {
     ElMessage.warning('请填写半成品名称');
+    return;
+  }
+  if (!unit) {
+    ElMessage.warning('请选择或输入基本单位');
     return;
   }
   const duplicate = skuOptions.value.find((item) => item.name.trim() === name);
@@ -1638,14 +1659,38 @@ function refreshPortMaterialMetadata(): void {
     const data = node.data as ProcessNodeData & { kind: 'PROCESS' };
     data.ports = data.ports.map((port) => {
       const material = port.materialNodeId ? materialById.get(port.materialNodeId) : undefined;
+      const materialUnit = String(material?.data?.baseUnit || '').trim();
       return {
         ...port,
         materialName: String(material?.data?.name || port.materialName || ''),
         skuId: String(material?.data?.skuId || port.skuId || ''),
         materialKind: (material?.data?.kind || port.materialKind) as ProcessPort['materialKind'],
+        unit: materialUnit || port.unit,
       };
     });
+    const primaryInput = data.ports.filter((port) => port.direction === 'INPUT')
+      .sort((left, right) => left.ordinal - right.ordinal)[0];
+    const primaryOutput = data.ports.filter((port) => port.direction === 'OUTPUT')
+      .sort((left, right) => left.ordinal - right.ordinal)[0];
+    if (primaryInput) data.inputUnit = primaryInput.unit;
+    if (primaryOutput) data.outputUnit = primaryOutput.unit;
+    if (primaryInput && primaryOutput) {
+      const fixedRatioRequired = !isWorkflowWeightUnit(primaryInput.unit)
+        || !isWorkflowWeightUnit(primaryOutput.unit);
+      if (fixedRatioRequired) {
+        const quantities = parseFixedRatioQuantities(data.conversionRule.expression);
+        data.conversionRule = {
+          mode: 'FIXED_RATIO',
+          expression: `${quantities?.inputQuantity || 1} ${primaryInput.unit} = ${quantities?.outputQuantity || 1} ${primaryOutput.unit}`,
+        };
+      } else if (!fixedRatioRequired && data.conversionRule.mode === 'FIXED_RATIO') {
+        data.conversionRule = { mode: 'ACTUAL_WEIGHT', expression: null };
+      }
+    }
+    // Vue Flow can cache nested data references. Replacing data makes all connected Cell chips refresh now.
+    node.data = { ...data, ports: [...data.ports], conversionRule: { ...data.conversionRule } };
   });
+  flowNodes.value = [...flowNodes.value];
 }
 
 function flowEdge(source: string, sourceHandle: string, target: string, targetHandle: string): Edge {

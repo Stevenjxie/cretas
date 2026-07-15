@@ -1,6 +1,8 @@
 package com.cretas.aims.service.bom.impl;
 
 import com.cretas.aims.entity.bom.BomPriceAdjustmentAudit;
+import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.enums.TaxRate;
 import com.cretas.aims.entity.bom.BomPriceAdjustmentProposal;
 import com.cretas.aims.entity.bom.BomPriceAdjustmentProposal.SourceType;
 import com.cretas.aims.entity.bom.BomPriceAdjustmentProposal.Status;
@@ -12,6 +14,7 @@ import com.cretas.aims.repository.bom.BomPriceAdjustmentAuditRepository;
 import com.cretas.aims.repository.bom.BomPriceAdjustmentProposalRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -45,13 +48,15 @@ class BomPriceAdjustmentServiceImplTest {
     private BomPriceAdjustmentProposalRepository proposalRepository;
     @Mock
     private BomPriceAdjustmentAuditRepository auditRepository;
+    @Mock
+    private RawMaterialTypeRepository materialRepository;
 
     private BomPriceAdjustmentServiceImpl service;
 
     @BeforeEach
     void setUp() {
         service = new BomPriceAdjustmentServiceImpl(
-                itemRepository, recipeRepository, proposalRepository, auditRepository);
+                itemRepository, recipeRepository, proposalRepository, auditRepository, materialRepository);
         when(proposalRepository.save(any(BomPriceAdjustmentProposal.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
         when(auditRepository.save(any(BomPriceAdjustmentAudit.class)))
@@ -172,8 +177,8 @@ class BomPriceAdjustmentServiceImplTest {
     }
 
     @Test
-    @DisplayName("approval applies proposed pre-tax price to BOM item and writes before/after audit")
-    void approveSuggestion_updatesBomItemAndWritesAudit() {
+    @DisplayName("approval refreshes BOM from current material master price, never proposal price")
+    void approveSuggestion_refreshesMaterialMasterPriceAndWritesAudit() {
         BomRecipeItem bomItem = recipeItem(101L, "R-1", "RM-BEEF", "10.0000", "2.0000");
         BomPriceAdjustmentProposal proposal = new BomPriceAdjustmentProposal();
         proposal.setId(77L);
@@ -185,6 +190,7 @@ class BomPriceAdjustmentServiceImplTest {
 
         when(proposalRepository.findByIdAndFactoryId(77L, "F006")).thenReturn(java.util.Optional.of(proposal));
         when(itemRepository.findByIdForUpdate(101L)).thenReturn(java.util.Optional.of(bomItem));
+        when(materialRepository.findById("RM-BEEF")).thenReturn(java.util.Optional.of(material("15.0000")));
         when(itemRepository.save(any(BomRecipeItem.class))).thenAnswer(inv -> inv.getArgument(0));
 
         BomPriceAdjustmentProposal approved = service.approve("F006", 77L, 9L, "price checked");
@@ -192,8 +198,9 @@ class BomPriceAdjustmentServiceImplTest {
         assertThat(approved.getStatus()).isEqualTo(Status.APPROVED);
         assertThat(approved.getApprovedBy()).isEqualTo(9L);
         assertThat(approved.getApprovalComment()).isEqualTo("price checked");
-        assertThat(bomItem.getUnitPrice()).isEqualByComparingTo("12.5000");
-        assertThat(bomItem.getItemCost()).isEqualByComparingTo("25.0000");
+        assertThat(bomItem.getUnitPrice()).isEqualByComparingTo("15.0000");
+        assertThat(bomItem.getItemCost()).isEqualByComparingTo("30.0000");
+        assertThat(bomItem.getTaxRate()).isEqualByComparingTo("9.00");
 
         ArgumentCaptor<BomPriceAdjustmentAudit> auditCaptor =
                 ArgumentCaptor.forClass(BomPriceAdjustmentAudit.class);
@@ -202,7 +209,7 @@ class BomPriceAdjustmentServiceImplTest {
             assertThat(audit.getProposalId()).isEqualTo(77L);
             assertThat(audit.getRecipeItemId()).isEqualTo(101L);
             assertThat(audit.getBeforeUnitPrice()).isEqualByComparingTo("10.0000");
-            assertThat(audit.getAfterUnitPrice()).isEqualByComparingTo("12.5000");
+            assertThat(audit.getAfterUnitPrice()).isEqualByComparingTo("15.0000");
             assertThat(audit.getApprovedBy()).isEqualTo(9L);
         });
         verify(itemRepository).findByIdForUpdate(101L);
@@ -219,12 +226,13 @@ class BomPriceAdjustmentServiceImplTest {
         when(proposalRepository.findByIdAndFactoryId(88L, "F006")).thenReturn(java.util.Optional.of(first));
         when(proposalRepository.findByIdAndFactoryId(89L, "F006")).thenReturn(java.util.Optional.of(second));
         when(itemRepository.findByIdForUpdate(101L)).thenReturn(java.util.Optional.of(bomItem));
+        when(materialRepository.findById("RM-BEEF")).thenReturn(java.util.Optional.of(material("14.0000")));
         when(itemRepository.save(any(BomRecipeItem.class))).thenAnswer(inv -> inv.getArgument(0));
 
         service.approve("F006", 88L, 9L, "first");
         service.approve("F006", 89L, 10L, "second");
 
-        assertThat(bomItem.getUnitPrice()).isEqualByComparingTo("12.0000");
+        assertThat(bomItem.getUnitPrice()).isEqualByComparingTo("14.0000");
         verify(itemRepository, times(2)).findByIdForUpdate(101L);
         verify(itemRepository, never()).findById(101L);
     }
@@ -265,5 +273,15 @@ class BomPriceAdjustmentServiceImplTest {
         recipe.setStatus(BomRecipe.Status.ACTIVE);
         recipe.setIsCurrent(true);
         return recipe;
+    }
+
+    private RawMaterialType material(String movingAvgPrice) {
+        RawMaterialType material = new RawMaterialType();
+        material.setId("RM-BEEF");
+        material.setFactoryId("F006");
+        material.setMovingAvgPrice(new BigDecimal(movingAvgPrice));
+        material.setUnitPrice(new BigDecimal("13.0000"));
+        material.setTaxRate(TaxRate.TAX_9);
+        return material;
     }
 }

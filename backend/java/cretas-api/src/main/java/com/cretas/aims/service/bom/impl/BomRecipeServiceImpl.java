@@ -87,10 +87,11 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         recipe.setRecipeCode(generateRecipeCode(factoryId));
         recipe.setProductTypeId(req.getProductTypeId());
         recipe.setProductName(req.getProductName() != null ? req.getProductName() : req.getProductTypeId());
-        recipe.setVersion(1);
-        recipe.setIsCurrent(true);
-        recipe.setOverallYieldRate(req.getOverallYieldRate() != null
-                ? req.getOverallYieldRate() : new BigDecimal("100.00"));
+        recipe.setVersion(recipeRepo.findMaxVersion(factoryId, req.getProductTypeId()) + 1);
+        // 草稿不占用“当前生效”槽位；只有 activateRecipe 能设置 isCurrent=true。
+        recipe.setIsCurrent(false);
+        // 整体出成率由正式批次报工历史自动学习，配方头不接收人工初始值。
+        recipe.setOverallYieldRate(null);
         recipe.setOutputQuantityPerUnit(req.getOutputQuantityPerUnit());
         recipe.setOutputUnit(req.getOutputUnit());
         recipe.setStatus(BomRecipe.Status.DRAFT);
@@ -125,7 +126,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         }
 
         if (req.getProductName() != null) recipe.setProductName(req.getProductName());
-        if (req.getOverallYieldRate() != null) recipe.setOverallYieldRate(req.getOverallYieldRate());
+        // overallYieldRate 是系统学习字段，草稿编辑不可人工覆盖。
         if (req.getOutputQuantityPerUnit() != null) recipe.setOutputQuantityPerUnit(req.getOutputQuantityPerUnit());
         if (req.getOutputUnit() != null) recipe.setOutputUnit(req.getOutputUnit());
         if (req.getNotes() != null) recipe.setNotes(req.getNotes());
@@ -161,10 +162,12 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                     "只有 DRAFT 状态可激活; 当前 status=" + recipe.getStatus());
         }
 
-        // Clear is_current=true on other versions of same product.
-        List<BomRecipe> others = recipeRepo.findCurrentVersionsExcluding(
+        // 同一 SKU 只能有一个 ACTIVE/current 版本。历史脏数据可能 ACTIVE 但 current=false，
+        // 也必须在同一事务中归档，确保状态文案与真实生效语义一致。
+        List<BomRecipe> others = recipeRepo.findCompetingVersionsForActivation(
                 factoryId, recipe.getProductTypeId(), recipe.getId());
         for (BomRecipe other : others) {
+            other.setStatus(BomRecipe.Status.ARCHIVED);
             other.setIsCurrent(false);
             recipeRepo.save(other);
         }
@@ -387,7 +390,11 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         if (mt != null) {
             applyPrimaryCode(dto, item, mt);
         }
+        validateItemQuantity(dto);
         applyDtoToItem(dto, item);
+        if (mt != null) {
+            applyMaterialMasterPricing(item, mt);
+        }
         item = itemRepo.save(item);
         refreshItemsInPlace(recipe);
         recomputeMaterialCost(recipe);
@@ -663,8 +670,30 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         // 手填优先 (dto.standardQuantity != null) — 向后兼容, 不破坏已有手填包材 BOM.
         applyPackagingSpecAutoInfer(dto, mt.get());
 
+        validateItemQuantity(dto);
         applyDtoToItem(dto, item);
+        applyMaterialMasterPricing(item, mt.get());
         return item;
+    }
+
+    private void validateItemQuantity(BomRecipeItemDTO dto) {
+        String category = dto.getMaterialCategory() == null ? "RAW" : dto.getMaterialCategory();
+        BigDecimal quantity = dto.getStandardQuantity();
+        if ((quantity == null && !"RAW".equalsIgnoreCase(category))
+                || (quantity != null && quantity.compareTo(BigDecimal.ZERO) <= 0)) {
+            throw new IllegalArgumentException("非原料 BOM 的每成品用量必须大于 0");
+        }
+    }
+
+    /** BOM 价格只读继承物料主数据/库存移动均价，禁止形成第二套人工价格真值。 */
+    private void applyMaterialMasterPricing(BomRecipeItem item, RawMaterialType material) {
+        BigDecimal price = material.getMovingAvgPrice() != null
+                ? material.getMovingAvgPrice()
+                : material.getUnitPrice();
+        item.setUnitPrice(price);
+        item.setTaxRate(material.getTaxRate() == null
+                ? null
+                : material.getTaxRate().getRate().multiply(BigDecimal.valueOf(100)));
     }
 
     /**
@@ -718,7 +747,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     /** Apply DTO fields to entity (used by add + update). */
     private void applyDtoToItem(BomRecipeItemDTO dto, BomRecipeItem item) {
         item.setStandardQuantity(dto.getStandardQuantity());
-        item.setYieldRate(dto.getYieldRate() != null ? dto.getYieldRate() : new BigDecimal("100.00"));
+        // 出成率是同工厂、同 SKU 正式批次的系统统计，不再让 BOM 单行人工反推。
+        // 旧列保留 100% 中性值，以兼容存量成本公式和 NOT NULL 约束。
+        item.setYieldRate(new BigDecimal("100.00"));
         item.setUnit(dto.getUnit());
         item.setUnitPrice(dto.getUnitPrice());
         // F6 诚实 null: taxRate 未传 → 保持 null (不默认 0%). 默认 0% 会把"未配置税率"静默当

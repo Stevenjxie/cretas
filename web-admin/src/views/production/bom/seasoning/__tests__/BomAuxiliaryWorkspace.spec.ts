@@ -69,6 +69,29 @@ describe('BomAuxiliaryWorkspace', () => {
     expect(compactSummary.text()).toContain('用于 2 个工序');
   });
 
+  it('supports independent multi-expand plus one-click expand and collapse all', async () => {
+    const wrapper = mountWorkspace('DRAFT');
+    await flushPromises();
+    const expandedLabels = () => wrapper.findAll('.process-card__chevron').map((label) => label.text());
+
+    expect(expandedLabels()).toEqual(['收起', '展开']);
+    await wrapper.get('[data-testid="toggle-all-processes"]').trigger('click');
+    await flushPromises();
+    expect(expandedLabels()).toEqual(['收起', '收起']);
+    expect(wrapper.get('[data-testid="toggle-all-processes"]').text()).toContain('全部收起');
+
+    await wrapper.get('[data-testid="seasoning-process-ROLL"] .process-card__header').trigger('click');
+    await flushPromises();
+    expect(expandedLabels()).toEqual(['展开', '收起']);
+
+    await wrapper.get('[data-testid="toggle-all-processes"]').trigger('click');
+    await flushPromises();
+    expect(expandedLabels()).toEqual(['收起', '收起']);
+    await wrapper.get('[data-testid="toggle-all-processes"]').trigger('click');
+    await flushPromises();
+    expect(expandedLabels()).toEqual(['展开', '展开']);
+  });
+
   it('allows DRAFT editing, locks the dialog to the card process, and allows cross-process reuse', async () => {
     const wrapper = mountWorkspace('DRAFT');
     await flushPromises();

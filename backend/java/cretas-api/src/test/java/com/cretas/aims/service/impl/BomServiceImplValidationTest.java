@@ -54,6 +54,7 @@ class BomServiceImplValidationTest {
                 .factoryId("F001")
                 .productTypeId("P_TEST")
                 .materialTypeId("M_TEST")
+                .materialCategory("PACKAGING")
                 .standardQuantity(new BigDecimal("100"))
                 .yieldRate(new BigDecimal("90"))
                 .build();
@@ -70,7 +71,7 @@ class BomServiceImplValidationTest {
 
         assertEquals(400, ex.getCode(), "标准 BusinessException code = 400");
         assertNotNull(ex.getMessage());
-        assertTrue(ex.getMessage().contains("成品克数必须大于 0"),
+        assertTrue(ex.getMessage().contains("每成品用量必须大于 0"),
                 "错误消息应明确说明 standardQuantity 必须 > 0, 实际: " + ex.getMessage());
         // 关键: 验证未进入持久化层
         verify(bomItemRepository, never()).save(any());
@@ -86,7 +87,7 @@ class BomServiceImplValidationTest {
                 () -> service.saveBomItem(item));
 
         assertEquals(400, ex.getCode());
-        assertTrue(ex.getMessage().contains("成品克数必须大于 0"));
+        assertTrue(ex.getMessage().contains("每成品用量必须大于 0"));
         verify(bomItemRepository, never()).save(any());
     }
 
@@ -121,7 +122,21 @@ class BomServiceImplValidationTest {
                 () -> service.saveBomItem(item));
 
         assertEquals(400, ex.getCode());
-        assertTrue(ex.getMessage().contains("成品克数必须大于 0"));
+        assertTrue(ex.getMessage().contains("每成品用量必须大于 0"));
         verify(bomItemRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("RAW BOM 只建立物料关联时 standardQuantity 可为 null")
+    void rawMaterialLink_nullStandardQuantity_passesThrough() {
+        BomItem item = newValidItem();
+        item.setMaterialCategory("RAW");
+        item.setStandardQuantity(null);
+        when(bomItemRepository.save(any(BomItem.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        BomItem saved = service.saveBomItem(item);
+
+        assertNull(saved.getStandardQuantity());
+        assertEquals(0, saved.calculateCost().compareTo(BigDecimal.ZERO));
     }
 }

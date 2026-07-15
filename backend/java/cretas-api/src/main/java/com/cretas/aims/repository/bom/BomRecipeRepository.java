@@ -44,13 +44,18 @@ public interface BomRecipeRepository extends JpaRepository<BomRecipe, String> {
     /** 工厂级所有 BOM (含 archived), 默认按 product_type_id 排序. */
     Page<BomRecipe> findByFactoryId(String factoryId, Pageable pageable);
 
-    /** 找同产品其他 ACTIVE 版本 (激活新版本时把他们置为 is_current=false). */
+    /**
+     * 找同产品其他仍占用生效语义的版本。
+     *
+     * <p>历史数据可能出现 {@code status=ACTIVE, isCurrent=false}。激活新版本时必须同时
+     * 收口 status 与 isCurrent，不能只清 current 标记后留下多个“已生效”版本。
+     */
     @Query("SELECT br FROM BomRecipe br " +
            "WHERE br.factoryId = :factoryId " +
            "AND br.productTypeId = :productTypeId " +
-           "AND br.isCurrent = true " +
+           "AND (br.isCurrent = true OR br.status = com.cretas.aims.entity.bom.BomRecipe.Status.ACTIVE) " +
            "AND br.id <> :excludeId")
-    List<BomRecipe> findCurrentVersionsExcluding(
+    List<BomRecipe> findCompetingVersionsForActivation(
             @Param("factoryId") String factoryId,
             @Param("productTypeId") String productTypeId,
             @Param("excludeId") String excludeId);

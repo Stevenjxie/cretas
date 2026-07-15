@@ -6,9 +6,6 @@ import { get, post, put, del } from '@/api/request';
 import { bomYieldEstimateApi, bomRecipeApi, bomSeasoningApi, batchImportBomItems } from '@/api/bom';
 import type {
   YieldEstimateResponse,
-  RecalculatePreviewRow,
-  RecalculateApplyItem,
-  RecalculateApplyStaleResponse,
   BomRecipeSummary,
   BomRecipeStatus,
   BomRecipeItemPayload,
@@ -16,10 +13,9 @@ import type {
   UpdateBomRecipeRequest,
   BomImportRow,
 } from '@/api/bom';
-import { isAxiosError } from 'axios';
 import * as XLSX from 'xlsx';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Edit, Delete, Download, Refresh, MagicStick, InfoFilled } from '@element-plus/icons-vue';
+import { Plus, Edit, Delete, Download, Refresh, InfoFilled } from '@element-plus/icons-vue';
 import { useRoute, useRouter } from 'vue-router';
 import BomChangeLog from './BomChangeLog.vue'
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue'
@@ -58,7 +54,10 @@ const recipeStatusLabel: Record<BomRecipeStatus, string> = {
 const bomRecipes = ref<BomRecipeSummary[]>([]);
 const bomRecipesLoading = ref(false);
 const activatingRecipeId = ref<string | null>(null);
+const deletingRecipeId = ref<string | null>(null);
 const selectedRecipeId = ref<string>('');
+const historicalYield = ref<YieldEstimateResponse | null>(null);
+const historicalYieldLoadFailed = ref(false);
 const selectedRecipe = computed(() =>
   bomRecipes.value.find((recipe) => recipe.id === selectedRecipeId.value) ?? null,
 );
@@ -100,11 +99,11 @@ async function loadBomRecipes(preferredRecipeId?: string) {
   }
 }
 
-async function handleCloneSelectedRecipe() {
-  if (!factoryId.value || !selectedRecipe.value) return;
+async function handleCloneRecipe(recipe: BomRecipeSummary) {
+  if (!factoryId.value) return;
   try {
     await ElMessageBox.confirm(
-      `当前选择的是${recipeStatusLabel[selectedRecipe.value.status]}版本。克隆后会生成新的草稿供编辑，原版本不受影响。`,
+      `将 ${recipe.productName} v${recipe.version} 复制为新草稿后编辑，原版本和历史记录不受影响。`,
       '克隆 BOM 版本',
       { confirmButtonText: '克隆为草稿', cancelButtonText: '取消', type: 'info' },
     );
@@ -112,12 +111,55 @@ async function handleCloneSelectedRecipe() {
     return;
   }
   try {
-    const response = await bomSeasoningApi.clone(factoryId.value, selectedRecipe.value.id);
+    const response = await bomRecipeApi.clone(factoryId.value, recipe.id);
     if (!response.success || !response.data) throw new Error(response.message || '克隆失败');
     await loadBomRecipes(response.data.id);
-    ElMessage.success('已克隆为新草稿，可开始编辑工序调料');
+    ElMessage.success('已复制为新草稿，可编辑配方和工序辅料');
   } catch (error: unknown) {
     ElMessage.error((error as { message?: string }).message || '克隆 BOM 版本失败');
+  }
+}
+
+async function handleCloneSelectedRecipe() {
+  if (selectedRecipe.value) await handleCloneRecipe(selectedRecipe.value);
+}
+
+async function handleDeleteRecipe(recipe: BomRecipeSummary) {
+  if (!factoryId.value || recipe.status !== 'DRAFT') return;
+  try {
+    await ElMessageBox.confirm(
+      `确认删除草稿 ${recipe.productName} v${recipe.version}？删除后不可恢复。`,
+      '删除 BOM 草稿',
+      { confirmButtonText: '删除草稿', cancelButtonText: '取消', type: 'warning' },
+    );
+  } catch {
+    return;
+  }
+  deletingRecipeId.value = recipe.id;
+  try {
+    const response = await bomRecipeApi.removeDraft(factoryId.value, recipe.id);
+    if (!response.success) throw new Error(response.message || '删除失败');
+    ElMessage.success('草稿版本已删除');
+    await loadBomRecipes();
+  } catch (error: unknown) {
+    ElMessage.error((error as { message?: string }).message || '删除 BOM 草稿失败');
+  } finally {
+    deletingRecipeId.value = null;
+  }
+}
+
+async function loadHistoricalYield() {
+  historicalYieldLoadFailed.value = false;
+  if (!factoryId.value || !selectedProductTypeId.value) {
+    historicalYield.value = null;
+    return;
+  }
+  try {
+    const response = await bomYieldEstimateApi.getEstimate(factoryId.value, selectedProductTypeId.value, 'RAW');
+    historicalYield.value = response.success && response.data ? response.data : null;
+  } catch {
+    historicalYield.value = null;
+    historicalYieldLoadFailed.value = true;
   }
 }
 
@@ -212,7 +254,6 @@ const showAdvancedBomFields = ref<string[]>([]);
 interface RecipeHeaderForm {
   outputQuantityPerUnit: number | null;
   outputUnit: string;
-  overallYieldRate: number | null;
   notes: string;
 }
 
@@ -223,7 +264,6 @@ const editingRecipeId = ref<string | null>(null);
 const recipeForm = ref<RecipeHeaderForm>({
   outputQuantityPerUnit: 1,
   outputUnit: '份',
-  overallYieldRate: 100,
   notes: '',
 });
 
@@ -233,7 +273,7 @@ interface BomItemRow {
   productTypeId?: string;
   materialTypeId?: string;
   materialName?: string;
-  standardQuantity?: number;
+  standardQuantity?: number | null;
   yieldRate?: number | null;
   unit?: string;
   unitPrice?: number;
@@ -283,7 +323,7 @@ const bomForm = ref({
   materialTypeId: '',
   materialName: '',
   materialCategory: 'RAW',
-  standardQuantity: 0,
+  standardQuantity: null as number | null,
   // Phase A side-effect: 默认 null, 保存时 null = 出成率待评估 (后端用 standardQuantity 原样)
   yieldRate: null as number | null,
   unit: 'g',
@@ -304,10 +344,6 @@ const bomForm = ref({
 
 // SP8: 半成品产品类型列表 (用于 semiFinishedRefCode 下拉)
 const semiFinishedTypes = ref<TableRow[]>([]);
-
-// Phase B: 弹窗评估按钮状态
-const estimateLoading = ref(false);
-const estimateResult = ref<YieldEstimateResponse | null>(null);
 
 const COUNTING_UNIT_ALIASES = new Set(['个', '只', '件', 'pcs', 'pc', 'pce', 'piece', 'pieces']);
 const WEIGHT_UNIT_ALIASES = new Set(['g', '克', 'kg', '千克', '公斤', '斤']);
@@ -356,29 +392,7 @@ function bomUnitLabel(unit?: unknown): string {
 }
 
 const bomFormUnitLabel = computed(() => bomUnitLabel(bomForm.value.unit));
-const bomUnitIsWeight = computed(() => isWeightUnit(bomForm.value.unit));
-const bomUnitIsVolume = computed(() => isVolumeUnit(bomForm.value.unit));
 const bomUnitIsCounting = computed(() => isCountingUnit(bomForm.value.unit));
-
-function bomQuantityHelpText(): string {
-  if (bomUnitIsCounting.value) {
-    return `成品用量 = 每份成品需要该物料多少${bomForm.value.unit || '个'}。例：半只鸡填 0.5 只，400 袋自动核算 200 只`;
-  }
-  if (bomUnitIsVolume.value) {
-    return `成品用量 = 每份成品需要该物料多少${bomForm.value.unit || 'mL'}`;
-  }
-  return '成品含量 = 每份成品中该物料的克数（来自产品标准克重）';
-}
-
-function actualQuantityHelpText(): string {
-  if (bomUnitIsCounting.value) {
-    return '= 成品用量；计数型原料不按出成率折算重量';
-  }
-  if (bomUnitIsVolume.value) {
-    return '= 成品用量 ÷ (出成率/100)';
-  }
-  return '= 成品含量 ÷ (出成率/100) | 示例: 200g 成品 × 58% 出成率 → 自动算原料 344.83g';
-}
 
 function knownUnitFamily(unit: unknown): 'weight' | 'volume' | 'count' | null {
   if (isWeightUnit(unit)) return 'weight';
@@ -440,18 +454,6 @@ async function confirmBomUnitCompatibility(): Promise<boolean> {
   return false;
 }
 
-// D2 (2026-05-10 客户会议): 实时计算实际原料用量 = 成品含量 / (出成率/100)
-// 镜像后端 BomItem.getActualQuantity()
-// GAP F7: 出成率为 null (待评估) 时返回 null, 不用 100% 兜底 (防止 sq/1.0=sq 误导为真实 100%)
-const computedActualQuantity = computed<number | null>(() => {
-  const sq = Number(bomForm.value.standardQuantity) || 0;
-  if (bomUnitIsCounting.value) return Number(sq.toFixed(4));
-  if (bomForm.value.yieldRate == null) return null;
-  const yr = Number(bomForm.value.yieldRate) / 100;
-  if (yr <= 0 || sq <= 0) return 0;
-  return Number((sq / yr).toFixed(4));
-});
-
 function normalizeRecipeMaterialCategory(value: unknown): 'RAW' | 'AUXILIARY' | 'PACKAGING' {
   const category = String(value || '').toUpperCase();
   if (category === 'PACKAGING' || category === '包材') return 'PACKAGING';
@@ -496,9 +498,12 @@ function buildRecipeItemPayloads(): BomRecipeItemPayload[] | null {
   const items = bomItems.value.map((item, index) => {
     const materialTypeId = String(item.materialTypeId || '').trim();
     const materialName = String(item.materialName || `第 ${index + 1} 行`);
-    const standardQuantity = Number(item.standardQuantity);
+    const materialCategory = normalizeRecipeMaterialCategory(item.materialCategory || item.category);
+    const standardQuantity = item.standardQuantity == null ? null : Number(item.standardQuantity);
     if (!materialTypeId) missingMaterialRows.push(materialName);
-    if (!(standardQuantity > 0)) invalidQuantityRows.push(materialName);
+    if (materialCategory !== 'RAW' && !(standardQuantity != null && standardQuantity > 0)) {
+      invalidQuantityRows.push(materialName);
+    }
 
     const substituteGroup = String(item.substituteGroup || '').trim();
     const remark = String(item.notes || item.remark || '').trim();
@@ -509,9 +514,7 @@ function buildRecipeItemPayloads(): BomRecipeItemPayload[] | null {
       standardQuantity,
       yieldRate: item.yieldRate == null ? undefined : Number(item.yieldRate),
       unit,
-      unitPrice: item.unitPrice == null ? undefined : Number(item.unitPrice),
-      taxRate: item.taxRate == null ? undefined : Number(item.taxRate),
-      materialCategory: normalizeRecipeMaterialCategory(item.materialCategory || item.category),
+      materialCategory,
       sortOrder: item.sortOrder == null ? index : Number(item.sortOrder),
       isOptional: Boolean(item.isOptional),
       substituteGroup: substituteGroup || undefined,
@@ -534,7 +537,7 @@ function buildRecipeItemPayloads(): BomRecipeItemPayload[] | null {
 
   if (invalidQuantityRows.length > 0) {
     ElMessage({
-      message: `创建配方头前，请确认这些行的成品含量大于 0：${invalidQuantityRows.join('、')}`,
+      message: `创建配方头前，这些行缺少系统计划基准量：${invalidQuantityRows.join('、')}`,
       type: 'warning',
       duration: 0,
       showClose: true,
@@ -551,9 +554,6 @@ function resetRecipeForm(recipe?: BomRecipeSummary) {
       ? Number(recipe.outputQuantityPerUnit)
       : 1,
     outputUnit: recipe?.outputUnit || '份',
-    overallYieldRate: recipe?.overallYieldRate != null
-      ? Number(recipe.overallYieldRate)
-      : 100,
     notes: recipe?.notes || '',
   };
 }
@@ -586,7 +586,6 @@ async function submitRecipeHeaderForm() {
   // Phase 1: 产出规格从 SKU 只读带入，不再读手填字段
   const outputUnit = skuOutputUnit.value;
   const gramsPerUnit = skuGramsPerUnit.value;
-  const overallYieldRate = Number(recipeForm.value.overallYieldRate);
 
   // 防呆 (Rule 5): SKU 未填标准克重 → 无法确定每单位产出量，引导去补，不静默传 0
   if (gramsPerUnit == null) {
@@ -603,11 +602,6 @@ async function submitRecipeHeaderForm() {
     return;
   }
   const outputQuantityPerUnit = gramsPerUnit;
-  if (!(overallYieldRate > 0 && overallYieldRate <= 100)) {
-    ElMessage.warning('整体出成率必须在 0.01 到 100 之间');
-    return;
-  }
-
   recipeDialogLoading.value = true;
   try {
     let response;
@@ -615,7 +609,6 @@ async function submitRecipeHeaderForm() {
       productName: selectedProductName.value || null,
       outputQuantityPerUnit,
       outputUnit,
-      overallYieldRate,
       notes: recipeForm.value.notes.trim() || null,
     };
 
@@ -636,7 +629,7 @@ async function submitRecipeHeaderForm() {
 
     if (response.success) {
       ElMessage.success(
-        `${isRecipeEdit.value ? '配方头已更新' : '配方草稿已创建'}：每单位产出 ${outputQuantityPerUnit} ${outputUnit}，整体出成率 ${overallYieldRate}%`,
+        `${isRecipeEdit.value ? '配方头已更新' : '配方草稿已创建'}：每单位产出 ${outputQuantityPerUnit} ${outputUnit}；历史出成率由系统自动统计`,
       );
       recipeDialogVisible.value = false;
       await loadBomRecipes();
@@ -663,56 +656,6 @@ async function submitRecipeHeaderForm() {
     }
   } finally {
     recipeDialogLoading.value = false;
-  }
-}
-
-// Phase B: 弹窗评估按钮 handler
-async function handleEstimate() {
-  if (!factoryId.value || !selectedProductTypeId.value) return;
-  estimateLoading.value = true;
-  estimateResult.value = null;
-  try {
-    const res = await bomYieldEstimateApi.getEstimate(
-      factoryId.value,
-      selectedProductTypeId.value,
-      bomForm.value.materialCategory || 'RAW',
-    );
-    if (res.success && res.data) {
-      const data = res.data;
-      estimateResult.value = data;
-
-      // 自动回填建议值 (可被用户覆盖)
-      if (data.suggestedStandardQuantity != null) {
-        bomForm.value.standardQuantity = data.suggestedStandardQuantity;
-      }
-      if (data.suggestedYieldRate != null) {
-        bomForm.value.yieldRate = data.suggestedYieldRate;
-      } else {
-        // 无出成率建议 → 清空, 显示 actionHint
-        bomForm.value.yieldRate = null;
-        if (data.actionHint) {
-          ElMessage({
-            message: data.actionHint,
-            type: 'warning',
-            duration: 0,
-            showClose: true,
-          });
-        }
-      }
-    }
-  } catch (error: unknown) {
-    // error toast 由 request interceptor 统一处理
-    const err = error as { actionHint?: string };
-    if (!err?.actionHint) {
-      ElMessage({
-        message: '获取出成率评估失败',
-        type: 'error',
-        duration: 0,
-        showClose: true,
-      });
-    }
-  } finally {
-    estimateLoading.value = false;
   }
 }
 
@@ -752,116 +695,11 @@ const overheadForm = ref({
 // Raw material types for dropdown
 const materialTypes = ref<TableRow[]>([]);
 
-// Per-serving cost calculation
-const standardServingWeight = ref<number>(0.5); // kg per serving, user-adjustable
-
 // Process categories for dropdown
 const processCategories = ['通用工序', '分割工序', '包装工序', '质检工序', '冷藏工序'];
 
 // Overhead categories for dropdown
 const overheadCategories = ['房租', '水电', '燃气', '设备折旧', '后端毛利', '其他'];
-
-// Phase C: 一键重算出成率状态
-const recalcPreviewVisible = ref(false);
-const recalcPreviewLoading = ref(false);
-const recalcApplyLoading = ref(false);
-const recalcPreviewRows = ref<RecalculatePreviewRow[]>([]);
-// 用户勾选的行 (bomItemId)
-const recalcSelectedIds = ref<number[]>([]);
-
-/** 打开预览抽屉, 先 POST recalculate-preview */
-async function handleOpenRecalcPreview() {
-  if (!factoryId.value) return;
-  recalcPreviewVisible.value = true;
-  recalcPreviewLoading.value = true;
-  recalcPreviewRows.value = [];
-  recalcSelectedIds.value = [];
-  try {
-    const res = await bomYieldEstimateApi.recalculatePreview(factoryId.value);
-    if (res.success && res.data) {
-      recalcPreviewRows.value = res.data;
-      // 默认勾选所有 UPDATABLE 行
-      recalcSelectedIds.value = res.data
-        .filter((r) => r.status === 'UPDATABLE')
-        .map((r) => r.bomItemId);
-    }
-  } catch (error: unknown) {
-    const err = error as { actionHint?: string };
-    if (!err?.actionHint) {
-      ElMessage({
-        message: '获取出成率重算预览失败',
-        type: 'error',
-        duration: 0,
-        showClose: true,
-      });
-    }
-    recalcPreviewVisible.value = false;
-  } finally {
-    recalcPreviewLoading.value = false;
-  }
-}
-
-/** 应用勾选行的建议出成率 */
-async function handleApplyRecalc() {
-  if (!factoryId.value) return;
-  // GAP M10: 同时发送 expectedCurrentYieldRate (乐观锁), 后端检测是否 stale
-  const items: RecalculateApplyItem[] = recalcPreviewRows.value
-    .filter((r) => recalcSelectedIds.value.includes(r.bomItemId) && r.status === 'UPDATABLE' && r.suggestedYieldRate != null)
-    .map((r) => ({
-      bomItemId: r.bomItemId,
-      yieldRate: r.suggestedYieldRate as number,
-      expectedCurrentYieldRate: r.currentYieldRate, // null 表示预览时就是未填
-    }));
-
-  if (items.length === 0) {
-    ElMessage.warning('没有可应用的行');
-    return;
-  }
-
-  recalcApplyLoading.value = true;
-  try {
-    const res = await bomYieldEstimateApi.recalculateApply(factoryId.value, items);
-    if (res.success && res.data) {
-      ElMessage.success(`已更新 ${res.data.applied} 条 BOM 出成率`);
-      recalcPreviewVisible.value = false;
-      // 刷新当前产品的 BOM 明细
-      await loadBomItems();
-      await loadCostSummary();
-    } else {
-      ElMessage({
-        message: res.message || '应用失败',
-        type: 'error',
-        duration: 0,
-        showClose: true,
-      });
-    }
-  } catch (error: unknown) {
-    // GAP M10: 409 乐观锁冲突 — 数据已变化, 提示重新预览
-    if (isAxiosError(error) && error.response?.status === 409) {
-      const body = error.response.data as RecalculateApplyStaleResponse;
-      ElMessage({
-        message: body?.message || '数据已变化，请重新评估',
-        type: 'error',
-        duration: 0,
-        showClose: true,
-      });
-      // 关闭抽屉让用户重新打开预览 (Rule 5: dead-end 改导航)
-      recalcPreviewVisible.value = false;
-      return;
-    }
-    const err = error as { actionHint?: string };
-    if (!err?.actionHint) {
-      ElMessage({
-        message: '应用出成率更新失败',
-        type: 'error',
-        duration: 0,
-        showClose: true,
-      });
-    }
-  } finally {
-    recalcApplyLoading.value = false;
-  }
-}
 
 onMounted(async () => {
   syncCategoryFromRoute();
@@ -887,6 +725,7 @@ watch(selectedProductTypeId, async (newVal) => {
     await loadLaborCosts();
     await loadCostSummary();
     await loadBomRecipes();
+    await loadHistoricalYield();
   } else {
     selectedProductMeta.value = null;
     bomItems.value = [];
@@ -894,6 +733,8 @@ watch(selectedProductTypeId, async (newVal) => {
     costSummary.value = null;
     bomRecipes.value = [];
     selectedRecipeId.value = '';
+    historicalYield.value = null;
+    historicalYieldLoadFailed.value = false;
   }
 });
 
@@ -1054,16 +895,14 @@ function onMaterialLink(materialTypeId: string) {
   if (material) {
     if (material.name) bomForm.value.materialName = String(material.name);
     bomForm.value.unit = recipeUnitForMaterial(material, bomForm.value.materialCategory);
+    const autoPrice = Number(material.movingAvgPrice ?? material.unitPrice ?? 0);
+    bomForm.value.unitPrice = Number.isFinite(autoPrice) ? autoPrice : 0;
+    const taxRate = String(material.taxRate || '');
+    bomForm.value.taxRate = taxRate === 'TAX_9' ? 9 : taxRate === 'TAX_13' ? 13 : 0;
+    if (bomForm.value.materialCategory === 'PACKAGING' && material.packQtyPerProduct != null) {
+      bomForm.value.standardQuantity = Number(material.packQtyPerProduct);
+    }
   }
-}
-
-function onBomCategoryChange(category: string) {
-  const material = materialTypes.value.find((m: Record<string, unknown>) => m.id === bomForm.value.materialTypeId);
-  if (material) {
-    bomForm.value.unit = recipeUnitForMaterial(material, category);
-    return;
-  }
-  bomForm.value.unit = category === 'PACKAGING' ? 'pcs' : 'g';
 }
 
 // ========== BOM Items ==========
@@ -1085,7 +924,6 @@ async function loadBomItems() {
 
 function handleAddBomItem() {
   isBomEdit.value = false;
-  estimateResult.value = null;
   // D3: 新建 BOM 默认单位为 g (克), 后台调拨时自动换算为 kg (千克)
   // Phase A side-effect: yieldRate 默认 null (出成率待评估), 不是 100
   bomForm.value = {
@@ -1094,7 +932,7 @@ function handleAddBomItem() {
     materialTypeId: '',
     materialName: '',
     materialCategory: activeCategoryTab.value,
-    standardQuantity: 0,
+    standardQuantity: null,
     yieldRate: null,
     unit: 'g',
     unitPrice: 0,
@@ -1113,7 +951,6 @@ function handleAddBomItem() {
 
 function handleEditBomItem(row: TableRow) {
   isBomEdit.value = true;
-  estimateResult.value = null;
   bomForm.value = {
     id: row.id,
     productTypeId: row.productTypeId,
@@ -1147,18 +984,19 @@ function buildLegacyBomItemPayload() {
 }
 
 async function submitBomForm() {
-  // fool-proof Rule 1: 字段级校验, 不静默丢给后端报晦涩 400.
-  if (!bomForm.value.materialCategory) {
-    ElMessage.warning('请选择物料类别');
-    return;
-  }
+  // 类别由当前分区锁定，不让用户在弹窗里重复选择。
+  bomForm.value.materialCategory = activeCategoryTab.value;
   // Phase 1: 物料名称已改为从「关联原料」自动带入，校验改为要求选中关联原料
   if (!bomForm.value.materialTypeId) {
-    ElMessage.warning('请选择关联原料（物料名称将自动带入）');
+    ElMessage.warning(`请选择${activeCategoryTab.value === 'PACKAGING' ? '包材' : '原料'}（名称将自动带入）`);
     return;
   }
-  if (bomForm.value.standardQuantity == null || Number(bomForm.value.standardQuantity) <= 0) {
-    ElMessage.warning('成品用量必须大于 0');
+  if (bomForm.value.materialCategory === 'RAW') {
+    // 原料只建立物料关联；实际投料由操作员填写并以仓储出库记录为真值。
+    bomForm.value.standardQuantity = null;
+    bomForm.value.yieldRate = null;
+  } else if (bomForm.value.standardQuantity == null || Number(bomForm.value.standardQuantity) <= 0) {
+    ElMessage.warning('请填写每个成品需要的包材数量');
     return;
   }
   // Phase 1: 辅料/包材无出成率折算，固定 100 满足后端 yield_rate NOT NULL；原料保留 null=待评估
@@ -1579,25 +1417,6 @@ const currentTabItems = computed(() => {
   return packagingItems.value;
 });
 
-// Issue 11: Cost per serving
-const costPerServing = computed(() => {
-  if (standardServingWeight.value <= 0) return 0;
-  return totalCost.value * standardServingWeight.value;
-});
-
-// Phase C: 预览表中是否有可应用的 UPDATABLE 行
-const recalcUpdatableCount = computed(() =>
-  recalcPreviewRows.value.filter((r) => r.status === 'UPDATABLE').length
-);
-const recalcSelectedCount = computed(() =>
-  recalcSelectedIds.value.length
-);
-
-// Phase C: el-table selection handler
-function handleRecalcSelectionChange(rows: RecalculatePreviewRow[]) {
-  recalcSelectedIds.value = rows.map((r) => r.bomItemId);
-}
-
 // ========== Export ==========
 function exportToExcel(type: string) {
   let headers: string[];
@@ -1641,6 +1460,7 @@ function refreshData() {
   loadOverheadCosts();
   loadCostSummary();
   loadBomRecipes();
+  loadHistoricalYield();
 }
 
 // ========== Excel 导入 ==========
@@ -1949,17 +1769,17 @@ async function handleAdjustConfirm() {
         BOM 已对接生产计划, 录入即生效
       </template>
       <template #default>
-        本页录入的 BOM 配方 (含成品含量 + 出成率% + 单位) 保存后立即被生产计划自动展开使用,
-        无需再同步「转换率配置」(RPF)。RPF 表保留作为老工厂数据的 fallback。
+        原料、包材和各工序辅料保存后立即被生产计划使用；物料单位与价格从档案自动带入，
+        历史出成率由正式报工批次自动统计。
       </template>
     </el-alert>
     <ConceptDisambiguationAlert
       here-name="BOM 成本管理"
-      here="一个成品需要哪些原料、各多少量、成本如何拆分（多对多结构 + 成本核算）"
+      here="一个成品关联哪些原料、包材和工序辅料，以及系统如何汇总成本"
       other-name="生产管理 → 转换率配置"
-      other="单一原料 → 单一成品的「出成率」（如 1kg 冻猪蹄 → 600g 卤猪蹄，60%）"
+      other="旧工厂遗留的单一原料到单一成品转换关系"
       other-path="/production/conversions"
-      consequence="复杂配方用 BOM，简单出成率用转换率"
+      consequence="新配方统一在 BOM 与 Workflow 中维护；实际出成率只从正式报工历史计算"
     />
     <!-- Header -->
     <el-card class="header-card" shadow="never">
@@ -1994,20 +1814,6 @@ async function handleAdjustConfirm() {
             :disabled="!selectedProductTypeId"
             @click="handleAddRecipeHeader"
           >创建配方</el-button>
-          <!-- Phase C: 一键重算出成率按钮 (gated on production:read_write) -->
-          <el-button
-            v-if="canWrite"
-            :icon="MagicStick"
-            style="margin-left: 12px;"
-            @click="handleOpenRecalcPreview"
-          >一键重算出成率</el-button>
-          <el-button
-            v-if="canWrite"
-            type="warning"
-            style="margin-left: 12px;"
-            :disabled="!selectedProductTypeId"
-            @click="handleOpenAdjustDialog"
-          >对话微调</el-button>
         </div>
         <div v-if="canViewPrice" class="header-right">
           <el-card class="cost-summary-card" shadow="never">
@@ -2027,17 +1833,6 @@ async function handleAdjustConfirm() {
               <div class="cost-item total">
                 <span class="cost-label">总成本:</span>
                 <span class="cost-value">{{ totalCost.toFixed(2) }} 元/kg</span>
-              </div>
-              <!-- Issue 11: Per-serving cost -->
-              <div class="cost-item serving">
-                <el-input-number
-                  v-model="standardServingWeight"
-                  :min="0.01" :max="100" :precision="2" :step="0.1"
-                  size="small"
-                  style="width: 90px;"
-                />
-                <span class="cost-label" style="margin-left: 4px;">kg/份</span>
-                <span class="cost-value" style="margin-left: 8px;">{{ costPerServing.toFixed(2) }} 元/份</span>
               </div>
             </div>
           </el-card>
@@ -2111,10 +1906,17 @@ async function handleAdjustConfirm() {
             <span v-else class="text-secondary">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="整体出成率" width="110" align="right">
-          <template #default="{ row }">
-            <span v-if="row.overallYieldRate != null">{{ Number(row.overallYieldRate).toFixed(2) }}%</span>
-            <span v-else class="text-secondary">—</span>
+        <el-table-column label="系统历史出成率" width="150" align="right">
+          <template #default>
+            <el-tooltip
+              v-if="historicalYield?.suggestedYieldRate != null"
+              :content="`同工厂、同 SKU 的 ${historicalYield.sampleCount} 个正式批次自动统计，不可手改`"
+              placement="top"
+            >
+              <span>{{ historicalYield.suggestedYieldRate.toFixed(2) }}%</span>
+            </el-tooltip>
+            <span v-else-if="historicalYieldLoadFailed" class="text-danger">统计加载失败</span>
+            <span v-else class="text-secondary">待积累（{{ historicalYield?.sampleCount ?? 0 }}/3 批）</span>
           </template>
         </el-table-column>
         <el-table-column label="总成本" width="100" align="right">
@@ -2125,7 +1927,7 @@ async function handleAdjustConfirm() {
             <span v-else class="text-secondary">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="150" fixed="right" align="center">
+        <el-table-column label="操作" width="260" fixed="right" align="center">
           <template #default="{ row }">
             <el-button
               v-if="canWrite && row.status === 'DRAFT'"
@@ -2137,6 +1939,25 @@ async function handleAdjustConfirm() {
               编辑
             </el-button>
             <el-button
+              v-else-if="canWrite"
+              type="primary"
+              link
+              size="small"
+              @click="handleCloneRecipe(row)"
+            >
+              复制编辑
+            </el-button>
+            <el-button
+              v-if="canWrite && row.status === 'DRAFT'"
+              type="danger"
+              link
+              size="small"
+              :loading="deletingRecipeId === row.id"
+              @click="handleDeleteRecipe(row)"
+            >
+              删除
+            </el-button>
+            <el-button
               v-if="canWrite && row.status === 'DRAFT'"
               type="success"
               size="small"
@@ -2145,8 +1966,6 @@ async function handleAdjustConfirm() {
             >
               激活
             </el-button>
-            <span v-else-if="row.status === 'ACTIVE'" class="recipe-active-label">已生效</span>
-            <span v-else class="text-secondary">—</span>
           </template>
         </el-table-column>
       </el-table>
@@ -2162,19 +1981,12 @@ async function handleAdjustConfirm() {
       <el-card class="table-card" shadow="never">
         <template #header>
           <div class="table-header">
-            <span class="table-title">{{ activeCategoryTab === 'AUXILIARY' ? '工序调料与辅料汇总' : '原辅料需求明细表' }}</span>
+            <span class="table-title">{{ activeCategoryTab === 'AUXILIARY' ? '工序辅料明细' : activeCategoryTab === 'PACKAGING' ? '包材需求明细' : '原料需求明细' }}</span>
             <div v-if="activeCategoryTab !== 'AUXILIARY'" class="table-actions">
               <el-button v-if="canWrite" type="primary" size="small" :icon="Plus" @click="handleAddBomItem">
-                添加
+                {{ activeCategoryTab === 'PACKAGING' ? '添加包材' : '添加原料' }}
               </el-button>
               <el-button size="small" :icon="Download" @click="exportToExcel('material')">导出</el-button>
-              <el-button
-                v-if="canWrite"
-                size="small"
-                :disabled="!selectedProductTypeId"
-                @click="handleImportClick"
-              >Excel 导入</el-button>
-              <el-button size="small" @click="downloadBomTemplate">下载模板</el-button>
             </div>
           </div>
         </template>
@@ -2236,14 +2048,6 @@ async function handleAdjustConfirm() {
 
         <el-table v-else empty-text="暂无数据" :data="currentTabItems" v-loading="loading" stripe border size="small" style="width: 100%"
           :row-class-name="({ row }: { row: TableRow }) => row._isCategoryHeader ? 'category-header-row' : (row.yieldRate == null ? 'yield-pending-row' : '')">
-          <!-- Issue 12: Show material category column -->
-          <el-table-column prop="materialCategory" label="类型" width="70" align="center">
-            <template #default="{ row }">
-              <el-tag size="small" :type="row.materialCategory === '原材料' ? '' : row.materialCategory === '包材' ? 'warning' : 'info'" disable-transitions>
-                {{ row.materialCategory || row.category || '-' }}
-              </el-tag>
-            </template>
-          </el-table-column>
           <el-table-column prop="materialName" label="物料名称" min-width="120" show-overflow-tooltip />
           <el-table-column label="可选" width="70" align="center">
             <template #default="{ row }">
@@ -2257,51 +2061,15 @@ async function handleAdjustConfirm() {
               <span v-else class="text-secondary">—</span>
             </template>
           </el-table-column>
-          <el-table-column prop="standardQuantity" label="成品用量" width="120" align="right">
+          <el-table-column v-if="activeCategoryTab === 'PACKAGING'" prop="standardQuantity" label="每成品用量" width="120" align="right">
             <template #default="{ row }">
               {{ (row.standardQuantity || 0).toFixed(4) }} {{ row.unit || '' }}
             </template>
           </el-table-column>
-          <!-- Phase A: yieldRate null → 显示待评估 badge -->
-          <!-- GAP F3: 出成率 >100 (保水/腌制等增重工序) 合法, 带 tooltip 说明 -->
-          <el-table-column prop="yieldRate" label="出成率%" width="110" align="right">
-            <template #default="{ row }">
-              <el-tag v-if="row.yieldRate == null" type="warning" size="small" disable-transitions>待评估</el-tag>
-              <template v-else>
-                <el-tooltip
-                  v-if="(row.yieldRate as number) > 100"
-                  content="增重工序（如保水）出成率可超过100%"
-                  placement="top"
-                >
-                  <span class="yield-over100">{{ (row.yieldRate as number).toFixed(2) }}%</span>
-                </el-tooltip>
-                <span v-else>{{ (row.yieldRate as number).toFixed(2) }}%</span>
-              </template>
-            </template>
-          </el-table-column>
-          <!-- Issue 13: Conversion rate inline -->
-          <el-table-column label="转换率" width="80" align="right">
-            <template #default="{ row }">
-              {{ row.conversionRate ? row.conversionRate.toFixed(4) : '-' }}
-            </template>
-          </el-table-column>
-          <el-table-column label="原料投量/份" width="120" align="right">
-            <template #default="{ row }">
-              {{ row.conversionRate
-                ? ((row.standardQuantity || 0) / row.conversionRate).toFixed(4)
-                : ((row.standardQuantity || 0) / ((row.yieldRate != null ? row.yieldRate : 100) / 100)).toFixed(4) }}
-              {{ row.unit || '' }}
-            </template>
-          </el-table-column>
-          <el-table-column prop="unit" label="单位" width="60" align="center" />
-          <el-table-column v-if="canViewPrice" prop="unitPrice" label="单价(含税)" width="90" align="right">
+          <el-table-column prop="unit" label="计量单位" width="90" align="center" />
+          <el-table-column v-if="canViewPrice" prop="unitPrice" label="自动单价" width="100" align="right">
             <template #default="{ row }">
               {{ (row.unitPrice || 0).toFixed(2) }}
-            </template>
-          </el-table-column>
-          <el-table-column v-if="canViewPrice" prop="taxRate" label="税率%" width="70" align="right">
-            <template #default="{ row }">
-              {{ (row.taxRate || 0).toFixed(0) }}%
             </template>
           </el-table-column>
           <el-table-column v-if="canViewPrice" label="小计" width="90" align="right">
@@ -2426,10 +2194,10 @@ async function handleAdjustConfirm() {
         style="margin-bottom: 12px;"
       >
         <template #title>
-          这里维护配方头（产出规格 + 整体出成率），原辅料明细在下方表格维护
+          这里维护配方版本说明，产出规格由 SKU 自动带入
         </template>
         <template #default>
-          创建配方头会使用当前原辅料明细生成草稿配方；编辑配方头只修改每单位产出量、产出单位和整体出成率。
+          整体出成率由系统根据同工厂、同 SKU 的全部正式批次自动统计，只读且不需要人工预估。
         </template>
       </el-alert>
       <el-form :model="recipeForm" label-width="130px">
@@ -2456,18 +2224,6 @@ async function handleAdjustConfirm() {
             <el-button link type="primary" @click="goFillSkuWeight">去 SKU 补标准克重</el-button>
           </template>
         </el-form-item>
-        <el-form-item label="整体出成率%" required>
-          <el-input-number
-            v-model="recipeForm.overallYieldRate"
-            :min="0.01"
-            :max="100"
-            :precision="2"
-            :step="1"
-            placeholder="默认 100"
-            style="width: 100%"
-          />
-          <div class="form-tip">整体出成率，范围 0.01–100；单行出成率在原辅料弹窗里维护</div>
-        </el-form-item>
         <el-form-item label="备注">
           <el-input
             v-model="recipeForm.notes"
@@ -2481,7 +2237,7 @@ async function handleAdjustConfirm() {
       </el-form>
       <div v-if="!isRecipeEdit" class="recipe-create-hint">
         <el-icon><InfoFilled /></el-icon>
-        <span>创建时会把上方原辅料明细一起存为草稿配方；请先确认每行已关联原料且成品用量大于 0</span>
+        <span>创建时会把上方明细一起存为草稿配方；原料只需关联物料，包材还需填写每成品基本单位用量。</span>
       </div>
       <template #footer>
         <el-button @click="recipeDialogVisible = false">取消</el-button>
@@ -2492,20 +2248,17 @@ async function handleAdjustConfirm() {
     </el-dialog>
 
     <!-- BOM Item Dialog -->
-    <el-dialog v-model="bomDialogVisible" :title="isBomEdit ? '编辑原辅料' : '添加原辅料'" width="580px">
+    <el-dialog
+      v-model="bomDialogVisible"
+      :title="`${isBomEdit ? '编辑' : '添加'}${bomForm.materialCategory === 'PACKAGING' ? '包材' : '原料'}`"
+      width="580px"
+    >
       <el-form :model="bomForm" label-width="110px">
-        <el-form-item label="物料类别" required>
-          <el-select v-model="bomForm.materialCategory" style="width: 100%" @change="onBomCategoryChange">
-            <el-option label="原料" value="RAW" />
-            <el-option label="包材" value="PACKAGING" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="关联原料">
+        <el-form-item :label="bomForm.materialCategory === 'PACKAGING' ? '选择包材' : '选择原料'" required>
           <el-select
             v-model="bomForm.materialTypeId"
-            placeholder="输入名称筛选，或按上方物料类别自动筛选"
+            :placeholder="bomForm.materialCategory === 'PACKAGING' ? '请选择包材' : '请选择原料'"
             filterable
-            clearable
             style="width: 100%"
             @change="onMaterialLink"
           >
@@ -2516,9 +2269,9 @@ async function handleAdjustConfirm() {
               :value="item.id"
             />
           </el-select>
-          <div class="form-tip">已按当前「物料类别」筛选，切换类别后可选项会跟着变</div>
+          <div class="form-tip">列表已按当前页签筛选，所选物料为必填。</div>
         </el-form-item>
-        <el-form-item label="成品用量" required>
+        <el-form-item v-if="bomForm.materialCategory === 'PACKAGING'" label="每成品用量" required>
           <div style="display: flex; align-items: center; gap: 8px; width: 100%;">
             <el-input-number
               v-model="bomForm.standardQuantity"
@@ -2529,25 +2282,10 @@ async function handleAdjustConfirm() {
             />
             <span class="unit-suffix">{{ bomFormUnitLabel }}</span>
           </div>
-          <div class="form-tip">
-            {{ bomQuantityHelpText() }}
-          </div>
+          <div class="form-tip">每 1 个成品基本单位需要的包材数量。</div>
         </el-form-item>
         <el-form-item label="计量单位">
-          <el-select v-model="bomForm.unit" placeholder="选择单位" style="width: 100%">
-            <el-option label="克 (g)" value="g" />
-            <el-option label="千克 (kg)" value="kg" />
-            <el-option label="毫升 (mL)" value="mL" />
-            <el-option label="升 (L)" value="L" />
-            <el-option label="只" value="只" />
-            <el-option label="个" value="个" />
-            <el-option label="件 (pcs)" value="pcs" />
-            <el-option
-              v-if="selectedMaterialUnit() && !['g','kg','mL','L','只','个','pcs'].includes(selectedMaterialUnit())"
-              :label="selectedMaterialUnit()"
-              :value="selectedMaterialUnit()"
-            />
-          </el-select>
+          <el-input :model-value="bomForm.unit || '选择物料后自动带入'" disabled />
           <div v-if="bomUnitCompatibilityWarning()" class="form-tip form-tip--warning">
             <span>{{ bomUnitCompatibilityWarning() }}</span>
             <el-button link type="warning" size="small" @click="goMaterialUnitConfigFromBom">
@@ -2558,103 +2296,7 @@ async function handleAdjustConfirm() {
             计数型原料按成品件数核算；例如 0.5 只/袋，400 袋会核算 200 只。
           </div>
           <div v-else class="form-tip">
-            重量型原料建议使用 g，系统调拨/库存校验会自动按 g ↔ kg 换算。
-          </div>
-        </el-form-item>
-        <!-- Phase B: 评估按钮 (RAW 类别时显示) -->
-        <el-form-item
-          v-if="bomForm.materialCategory === 'RAW' && bomUnitIsWeight"
-          label="出成率评估"
-        >
-          <div style="width: 100%;">
-            <el-button
-              :loading="estimateLoading"
-              :disabled="!selectedProductTypeId"
-              @click="handleEstimate"
-            >
-              评估建议出成率
-            </el-button>
-            <!-- 评估结果展示 -->
-            <div v-if="estimateResult" class="estimate-result">
-              <template v-if="estimateResult.reason === 'NO_GRAMS_PER_UNIT'">
-                <el-alert
-                  type="warning"
-                  :closable="false"
-                  show-icon
-                  :title="estimateResult.actionHint || '请先在生产管理→成品 / SKU填写标准克重'"
-                  style="margin-top: 8px;"
-                />
-              </template>
-              <template v-else-if="estimateResult.suggestedYieldRate != null">
-                <div class="estimate-detail">
-                  <el-tag type="success" size="small">建议出成率: {{ estimateResult.suggestedYieldRate.toFixed(2) }}%</el-tag>
-                  <span v-if="estimateResult.source === 'BATCH_REPORTING'" class="estimate-source">
-                    基于最近 {{ estimateResult.sampleCount }} 批报工
-                    <template v-if="estimateResult.yieldMin != null && estimateResult.yieldMax != null">
-                      (范围 {{ estimateResult.yieldMin.toFixed(1) }}%–{{ estimateResult.yieldMax.toFixed(1) }}%)
-                    </template>
-                  </span>
-                  <span v-else-if="estimateResult.source === 'STANDARD_WEIGHT_ONLY'" class="estimate-source">
-                    仅带入标准克重 (暂无批次报工数据)
-                  </span>
-                </div>
-              </template>
-              <template v-else-if="estimateResult.reason === 'INSUFFICIENT_SAMPLES'">
-                <el-alert
-                  type="info"
-                  :closable="false"
-                  show-icon
-                  title="样本数据不足，暂无出成率建议"
-                  style="margin-top: 8px;"
-                />
-              </template>
-              <template v-else>
-                <el-alert
-                  type="info"
-                  :closable="false"
-                  show-icon
-                  title="暂无出成率建议数据"
-                  style="margin-top: 8px;"
-                />
-              </template>
-            </div>
-          </div>
-        </el-form-item>
-        <!-- 出成率输入 (仅原料; 辅料/包材无出成率折算) -->
-        <!-- GAP F3: 无客户端 ≤100 校验, 增重工序 (保水/腌制) 出成率合法超 100% -->
-        <el-form-item v-if="bomForm.materialCategory === 'RAW'" label="出成率%">
-          <el-input-number
-            v-model="bomForm.yieldRate"
-            :min="0"
-            :max="999"
-            :precision="2"
-            :step="1"
-            :placeholder="bomForm.yieldRate == null ? '出成率待评估' : ''"
-            style="width: 100%"
-          />
-          <div v-if="bomForm.yieldRate == null" class="form-tip form-tip--warning">
-            出成率为空时保存后显示「待评估」，后端使用标准克重原样展开
-          </div>
-          <div v-else-if="bomForm.yieldRate > 100" class="form-tip form-tip--over100">
-            增重工序（如保水、腌制）出成率可超过100%，属正常情况
-          </div>
-          <div v-else class="form-tip">输入百分比数值，如 61 表示 61%</div>
-        </el-form-item>
-        <!-- D2: 实时显示实际原料用量 (仅原料, 考虑出成率) -->
-        <!-- GAP F7: yieldRate null → 显示「待评估」, 不显示误导性数字 -->
-        <el-form-item v-if="bomForm.materialCategory === 'RAW'" label="实际原料用量">
-          <div :class="computedActualQuantity == null ? 'bom-computed-quantity bom-computed-quantity--pending' : 'bom-computed-quantity'">
-            <template v-if="computedActualQuantity == null">
-              <el-tag type="warning" size="small" disable-transitions>待评估</el-tag>
-              <span class="bom-computed-quantity__hint"> (出成率未填，暂无法计算)</span>
-            </template>
-            <template v-else>
-              {{ computedActualQuantity.toFixed(4) }}
-              <span> {{ bomForm.unit }}</span>
-            </template>
-          </div>
-          <div class="form-tip">
-            {{ actualQuantityHelpText() }}
+            单位从物料字典自动带入；如不正确，请先修改物料档案。
           </div>
         </el-form-item>
         <!-- #759: 包材每产品单位用量 (PACKAGING 专属, 配置后 BOM 标准用量可自动推算) -->
@@ -2674,12 +2316,13 @@ async function handleAdjustConfirm() {
             例：吸塑盒 1 个/成品填 1；外箱 20 盒/箱填 0.05。留空则手填成品含量
           </div>
         </el-form-item>
-        <el-form-item v-if="canViewPrice" label="单价（含税）">
-          <el-input-number v-model="bomForm.unitPrice" :min="0" :precision="4" :step="0.1" style="width: 100%" />
-        </el-form-item>
-        <el-form-item v-if="canViewPrice" label="税率%">
-          <el-input-number v-model="bomForm.taxRate" :min="0" :max="100" :precision="0" :step="1" style="width: 100%" />
-        </el-form-item>
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          title="单价与税率从物料档案自动带入，BOM 中无需重复填写。原料历史出成率由正式报工自动统计。"
+          style="margin-bottom: 12px;"
+        />
         <el-form-item label="备注">
           <el-input v-model="bomForm.notes" type="textarea" :rows="2" />
         </el-form-item>
@@ -2895,93 +2538,6 @@ async function handleAdjustConfirm() {
 
     <!-- BOM Change Log Drawer (P1-9) -->
     <BomChangeLog v-model:visible="changeLogVisible" :factory-id="factoryId" :product-type-id="selectedProductTypeId" />
-
-    <!-- Phase C: 一键重算出成率 预览抽屉 -->
-    <el-drawer
-      v-model="recalcPreviewVisible"
-      title="一键重算 BOM 出成率 — 预览"
-      size="780px"
-      :destroy-on-close="true"
-    >
-      <div v-loading="recalcPreviewLoading" class="recalc-drawer">
-        <el-empty
-          v-if="!recalcPreviewLoading && recalcPreviewRows.length === 0"
-          description="暂无可更新的 BOM 出成率数据"
-        />
-        <template v-else-if="!recalcPreviewLoading">
-          <div class="recalc-hint">
-            共 {{ recalcPreviewRows.length }} 条，{{ recalcUpdatableCount }} 条可更新，已勾选 {{ recalcSelectedCount }} 条。
-            状态「数据不足」和「跳过」不可勾选。
-          </div>
-          <el-table
-            :data="recalcPreviewRows"
-            stripe
-            border
-            size="small"
-            style="width: 100%;"
-            @selection-change="handleRecalcSelectionChange"
-          >
-            <el-table-column type="selection" width="44" :selectable="(row: RecalculatePreviewRow) => row.status === 'UPDATABLE'" />
-            <el-table-column prop="productName" label="产品" min-width="110" show-overflow-tooltip />
-            <el-table-column prop="materialName" label="主原料" min-width="110" show-overflow-tooltip />
-            <!-- GAP F3: >100 带 tooltip 说明 -->
-            <el-table-column label="当前出成率%" width="110" align="right">
-              <template #default="{ row }">
-                <el-tag v-if="row.currentYieldRate == null" type="warning" size="small" disable-transitions>待评估</el-tag>
-                <template v-else>
-                  <el-tooltip
-                    v-if="(row.currentYieldRate as number) > 100"
-                    content="增重工序（如保水）出成率可超过100%"
-                    placement="top"
-                  >
-                    <span class="yield-over100">{{ (row.currentYieldRate as number).toFixed(2) }}%</span>
-                  </el-tooltip>
-                  <span v-else>{{ (row.currentYieldRate as number).toFixed(2) }}%</span>
-                </template>
-              </template>
-            </el-table-column>
-            <el-table-column label="建议出成率%" width="120" align="right">
-              <template #default="{ row }">
-                <template v-if="row.suggestedYieldRate != null">
-                  <el-tooltip
-                    v-if="(row.suggestedYieldRate as number) > 100"
-                    content="增重工序（如保水）出成率可超过100%"
-                    placement="top"
-                  >
-                    <span class="yield-suggested yield-over100">{{ (row.suggestedYieldRate as number).toFixed(2) }}%</span>
-                  </el-tooltip>
-                  <span v-else class="yield-suggested">{{ (row.suggestedYieldRate as number).toFixed(2) }}%</span>
-                </template>
-                <span v-else class="yield-na">—</span>
-              </template>
-            </el-table-column>
-            <el-table-column prop="sampleCount" label="样本数" width="70" align="right" />
-            <el-table-column label="状态" width="90" align="center">
-              <template #default="{ row }">
-                <el-tag
-                  :type="row.status === 'UPDATABLE' ? 'success' : row.status === 'INSUFFICIENT_SAMPLES' ? 'info' : 'warning'"
-                  size="small"
-                  disable-transitions
-                >
-                  {{ row.status === 'UPDATABLE' ? '可更新' : row.status === 'INSUFFICIENT_SAMPLES' ? '数据不足' : '跳过' }}
-                </el-tag>
-              </template>
-            </el-table-column>
-          </el-table>
-        </template>
-      </div>
-      <template #footer>
-        <el-button @click="recalcPreviewVisible = false">取消</el-button>
-        <el-button
-          type="primary"
-          :loading="recalcApplyLoading"
-          :disabled="recalcSelectedCount === 0"
-          @click="handleApplyRecalc"
-        >
-          确认应用 ({{ recalcSelectedCount }} 条)
-        </el-button>
-      </template>
-    </el-drawer>
 
     <!-- 对话微调 Dialog -->
     <el-dialog

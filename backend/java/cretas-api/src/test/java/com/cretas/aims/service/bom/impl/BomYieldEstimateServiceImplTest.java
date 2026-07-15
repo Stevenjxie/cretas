@@ -22,6 +22,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Pageable;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -264,6 +265,12 @@ class BomYieldEstimateServiceImplTest {
         assertThat(dto.getReason()).isNull();
         assertThat(dto.getYieldMin()).isEqualByComparingTo(new BigDecimal("50.00"));
         assertThat(dto.getYieldMax()).isEqualByComparingTo(new BigDecimal("70.00"));
+        ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
+        verify(productionBatchRepository).findRecentCompletedByFactoryAndProductType(
+                eq(FACTORY), eq(PRODUCT_A), pageableCaptor.capture());
+        assertThat(pageableCaptor.getValue().isPaged())
+                .as("历史出成率必须统计全部正式批次，不能只取最近 10 条")
+                .isFalse();
     }
 
     // ─── recalculatePreview: writes nothing ──────────────────────────────────

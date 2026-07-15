@@ -9,6 +9,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Positive;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 /**
@@ -84,15 +85,16 @@ public class RawMaterialTypeDTO {
     /**
      * SP4-A8: 采购税率枚举 (TAX_9 / TAX_13).
      * 创建/更新时传入此值 + taxIncludedUnitPrice → service 自动换算 unitPrice (未税).
-     * null = 未配置, 不触发换算.
+     * 新建/编辑物料时必填，BOM 仅继承，不重复维护。
      */
     private TaxRate taxRate;
 
     /**
      * SP4-A8: 含税单价 (发票价). Price-sensitive: 同 unitPrice.
      * service 层在 taxRate 非 null 时自动换算 → unitPrice (未税).
-     */
+    */
     @PriceSensitive
+    @Positive(message = "含税单价必须大于0")
     private BigDecimal taxIncludedUnitPrice;
 
     // ========== SP8: 16位分段编码 ==========

@@ -59,7 +59,7 @@ public class BomRecipeItem extends BaseEntity {
     @Column(name = "material_name", length = 200)
     private String materialName;
 
-    @Column(name = "standard_quantity", nullable = false, precision = 15, scale = 4)
+    @Column(name = "standard_quantity", precision = 15, scale = 4)
     private BigDecimal standardQuantity;
 
     /** 该原料出成率 (0-100%), 默认 100 (无损耗). */
@@ -178,6 +178,9 @@ public class BomRecipeItem extends BaseEntity {
      */
     @Transient
     public BigDecimal calculateActualQuantity() {
+        if (standardQuantity == null) {
+            return null;
+        }
         if (yieldRate == null || yieldRate.compareTo(BigDecimal.ZERO) == 0) {
             return standardQuantity;
         }
@@ -194,6 +197,9 @@ public class BomRecipeItem extends BaseEntity {
     @Transient
     @PriceSensitive
     public BigDecimal computeItemCost() {
+        if (standardQuantity == null) {
+            return BigDecimal.ZERO;
+        }
         return CostRollupUtil.calcItemCost(calculateActualQuantity(), unitPrice);
     }
 }

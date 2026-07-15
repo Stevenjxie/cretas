@@ -80,12 +80,11 @@ public class BomRecipe extends BaseEntity {
 
     @Column(name = "is_current", nullable = false)
     @Builder.Default
-    private Boolean isCurrent = true;
+    private Boolean isCurrent = false;
 
-    /** 整产品级出成率 0-100%. */
+    /** 系统根据正式批次历史自动学习的整产品级出成率；无足够样本时为 null。 */
     @Column(name = "overall_yield_rate", precision = 6, scale = 2)
-    @Builder.Default
-    private BigDecimal overallYieldRate = new BigDecimal("100.00");
+    private BigDecimal overallYieldRate;
 
     /** 单份成品克数/件数 (200g/份, 1个/份). */
     @Column(name = "output_quantity_per_unit", nullable = false, precision = 15, scale = 4)

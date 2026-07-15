@@ -25,8 +25,8 @@ import java.util.regex.Pattern;
 /**
  * BOM 对话式微调工具 —— "对话调偏差"。
  *
- * <p>自然语言改产品某原料的 用量/损耗/单价, 如 "把冷冻猪舌用量改成120" / "猪舌损耗改成90%" /
- * "冷冻猪舌单价改成 12"。返回更新后的整张 BOM 表 (前端可直接渲染成表格)。preview 先展示
+ * <p>自然语言仅调整非 RAW 的数量类字段。出成率由正式报工历史统计，价格由物料档案维护，
+ * 对话工具不得直接覆盖。返回更新后的整张 BOM 表。preview 先展示
  * 旧→新值 (防呆), 确认后才落库。
  *
  * <p>范围: BOM 原料/辅料/包材 (bom_items)。调料配方 (bom_seasoning) 微调需配方 clone 流程, 后续增量。
@@ -54,9 +54,7 @@ public class BomAdjustTool extends AbstractBusinessTool {
 
     @Override
     public String getDescription() {
-        return "对话式微调产品配方: 改某原料(BOM)或调料的 用量/损耗/单价。例: '把冷冻猪舌用量改成120'、" +
-                "'猪舌损耗改成90%'、'卤料包单价改成20'、'盐用量改成12'。BOM 原辅料/包材支持 用量/损耗/单价; " +
-                "调料配方支持 用量(每kg用量)/单价。返回更新后的配方表。";
+        return "对话式调整 BOM 非原料数量或调料每kg用量。出成率只读，价格请在物料档案维护。";
     }
 
     @Override
@@ -115,6 +113,7 @@ public class BomAdjustTool extends AbstractBusinessTool {
         String fieldWord = m.group(2);
         BigDecimal value = new BigDecimal(m.group(3));
         String field = mapField(fieldWord);
+        rejectSystemManagedField(field);
 
         // 3. 匹配 BOM 行
         List<BomItem> bom = bomService.getBomItemsByProduct(factoryId, productTypeId);
@@ -133,6 +132,9 @@ public class BomAdjustTool extends AbstractBusinessTool {
             throw new BusinessException(400, "原料 '" + name + "' 匹配到多条, 请说更具体的原料名");
         }
         BomItem target = matches.get(0);
+        if ("RAW".equalsIgnoreCase(target.getMaterialCategory()) && "standardQuantity".equals(field)) {
+            throw new BusinessException(400, "原料 BOM 只建立物料关联，不人工填每成品用量");
+        }
 
         // 4. 旧→新
         BigDecimal oldVal = readField(target, field);
@@ -178,11 +180,18 @@ public class BomAdjustTool extends AbstractBusinessTool {
         }
     }
 
+    private void rejectSystemManagedField(String field) {
+        if ("yieldRate".equals(field)) {
+            throw new BusinessException(400, "出成率由同工厂、同 SKU 的正式报工历史自动统计，不允许人工修改");
+        }
+        if ("unitPrice".equals(field)) {
+            throw new BusinessException(400, "BOM 价格从物料档案和入库移动均价继承，请到物料档案维护");
+        }
+    }
+
     private void applyField(BomItem b, String field, BigDecimal v) {
         switch (field) {
             case "standardQuantity": b.setStandardQuantity(v); break;
-            case "yieldRate": b.setYieldRate(v); break;
-            case "unitPrice": b.setUnitPrice(v); break;
             default: throw new BusinessException(400, "不支持的字段: " + field);
         }
     }

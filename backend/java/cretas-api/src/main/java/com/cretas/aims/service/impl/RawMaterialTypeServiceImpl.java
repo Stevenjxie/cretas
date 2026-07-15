@@ -34,6 +34,7 @@ import org.springframework.transaction.annotation.Transactional;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import java.io.InputStream;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -93,6 +94,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
     @Transactional
     @CacheEvict(value = "materialTypes", key = "#factoryId")
     public RawMaterialTypeDTO createMaterialType(String factoryId, RawMaterialTypeDTO dto) {
+        validateRequiredPricing(dto.getTaxRate(), dto.getTaxIncludedUnitPrice());
         // T159-B-codegen: auto-generate code when caller does not provide one.
         // SP8: if segmentCode is provided (10-digit), use 16-digit generator; else fallback SP4 flat.
         if (dto.getCode() == null || dto.getCode().trim().isEmpty()) {
@@ -204,6 +206,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         if (materialType.getTaxRate() != null && materialType.getTaxIncludedUnitPrice() != null) {
             materialType.setUnitPrice(materialType.getTaxRate().preTaxPrice(materialType.getTaxIncludedUnitPrice()));
         }
+        validateRequiredPricing(materialType.getTaxRate(), materialType.getTaxIncludedUnitPrice());
 
         // SP8: primaryCode null-guard 更新
         if (dto.getPrimaryCode() != null) {
@@ -232,6 +235,18 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
 
         log.info("原材料类型更新成功: id={}", materialType.getId());
         return convertToDTO(materialType);
+    }
+
+    private void validateRequiredPricing(com.cretas.aims.entity.enums.TaxRate taxRate,
+                                         BigDecimal taxIncludedUnitPrice) {
+        if (taxRate == null) {
+            throw new BusinessException(400, "税率不能为空")
+                    .withHint("请在物料字典维护采购税率，BOM 将自动继承");
+        }
+        if (taxIncludedUnitPrice == null || taxIncludedUnitPrice.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(400, "含税单价必须大于0")
+                    .withHint("请在物料字典维护含税单价，BOM 不再重复录入价格");
+        }
     }
 
     @Override

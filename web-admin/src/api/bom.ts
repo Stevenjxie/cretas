@@ -45,7 +45,8 @@ export interface BomRecipeSummary {
 
 export interface BomRecipeItemPayload {
   materialTypeId: string;
-  standardQuantity: number;
+  /** RAW 仅建立物料关联时为空；包材/辅料仍需提供计划基准量。 */
+  standardQuantity: number | null;
   yieldRate?: number | null;
   unit: string;
   unitPrice?: number | null;
@@ -111,9 +112,17 @@ export const bomRecipeApi = {
   update: (factoryId: string, recipeId: string, req: UpdateBomRecipeRequest) =>
     put<BomRecipeSummary>(`${recipeBase(factoryId)}/${recipeId}`, req),
 
+  /** 克隆任意历史版本为可编辑草稿。 */
+  clone: (factoryId: string, recipeId: string) =>
+    post<BomRecipeSummary>(`${recipeBase(factoryId)}/${recipeId}/clone`, null),
+
+  /** 删除草稿版本；生效/归档版本由后端拒绝以保留审计历史。 */
+  removeDraft: (factoryId: string, recipeId: string) =>
+    del<void>(`${recipeBase(factoryId)}/${recipeId}`),
+
   /**
    * 激活 BOM 配方 (DRAFT → ACTIVE).
-   * 同产品其他 is_current 配方自动降级。
+   * 同产品其他 ACTIVE/current 配方自动归档。
    * 对应: POST /api/mobile/{factoryId}/bom/recipes/{recipeId}/activate
    */
   activate: (factoryId: string, recipeId: string, operatorId?: number | null) =>

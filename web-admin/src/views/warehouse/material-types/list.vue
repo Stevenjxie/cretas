@@ -599,6 +599,14 @@ async function handleSave() {
   if (!form.value.category) return ElMessage.warning('请选择类别');
   if (!form.value.unit) return ElMessage.warning('请选择单位');
   if (!form.value.storageType) return ElMessage.warning('请选择储存类型');
+  if (canViewPrice.value) {
+    if (!form.value.taxRate) return ElMessage.warning('请选择税率');
+    if (form.value.taxIncludedUnitPrice == null || Number(form.value.taxIncludedUnitPrice) <= 0) {
+      return ElMessage.warning('请填写大于 0 的含税单价');
+    }
+  } else if (!editingId.value) {
+    return ElMessage.warning('新建物料必须配置含税单价，请联系有价格权限的人员创建');
+  }
   if (!editingId.value && segmentTree.value.length > 0 && !segmentL3.value) {
     return ElMessage.error('本工厂启用 16 位编码，请先选择 L1类型、L2部位、L3品类后保存');
   }
@@ -908,20 +916,19 @@ function handleSizeChange(size: number) {
 
         <!-- SP4: 税率 + 含税/未税单价 (canViewPrice 门控) -->
         <template v-if="canViewPrice">
-          <el-form-item label="税率">
-            <el-select v-model="form.taxRate" placeholder="未配置" clearable style="width: 100%">
-              <el-option label="未配置" value="" />
+          <el-form-item label="税率" required>
+            <el-select v-model="form.taxRate" placeholder="请选择税率" style="width: 100%">
               <el-option label="9% (农产品等)" value="TAX_9" />
               <el-option label="13% (标准税率)" value="TAX_13" />
             </el-select>
           </el-form-item>
-          <el-form-item label="含税单价 (元)">
+          <el-form-item label="含税单价 (元)" required>
             <el-input-number
               v-model="form.taxIncludedUnitPrice"
-              :min="0"
+              :min="0.0001"
               :precision="4"
               :controls="false"
-              placeholder="含税单价（可选）"
+              placeholder="请输入含税单价"
               style="width: 100%"
             />
           </el-form-item>

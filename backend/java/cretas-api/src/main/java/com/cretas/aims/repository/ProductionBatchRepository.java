@@ -403,15 +403,18 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
      * 查询工厂下某产品最近 N 个已完成批次 (按 endTime 倒序, endTime null 降最后).
      *
      * <p>BOM 出成率评估服务 ({@link com.cretas.aims.service.bom.impl.BomYieldEstimateServiceImpl})
-     * 用此方法取最近 10 个批次计算 P50 中位数建议出成率.
+     * 用此方法取同工厂、同 SKU 的正式已完成批次。查询不限 Workflow，试产批次和
+     * CLERK_WIP 内部中间批次不纳入系统历史出成率.</p>
      *
      * @param factoryId     工厂 ID (租户隔离)
      * @param productTypeId 产品类型 ID
-     * @param pageable      分页 (通常 PageRequest.of(0, 10))
+     * @param pageable      分页；历史出成率传 {@code Pageable.unpaged()} 取全部正式批次
      * @return 已完成批次列表, 按 endTime DESC NULLS LAST
      */
     @Query("SELECT b FROM ProductionBatch b WHERE b.factoryId = :factoryId "
             + "AND b.productTypeId = :productTypeId AND b.status = 'COMPLETED' "
+            + "AND (b.isTrial IS NULL OR b.isTrial = false) "
+            + "AND (b.batchType IS NULL OR b.batchType <> 'CLERK_WIP') "
             + "ORDER BY b.endTime DESC NULLS LAST")
     java.util.List<ProductionBatch> findRecentCompletedByFactoryAndProductType(
             @Param("factoryId") String factoryId,
