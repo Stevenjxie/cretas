@@ -11,6 +11,7 @@
  */
 import { computed, ref, watch } from 'vue';
 import { getInventoryYieldCard, type ProcessSheetInventoryItem } from '@/api/processSheet';
+import { normalizeMassQuantityForReporting } from '@/utils/processSheetUnits';
 
 const props = defineProps<{
   factoryId: string;
@@ -44,6 +45,17 @@ function fmtQty(v: number | null | undefined, digits?: number): string {
 function fmtPrice(v: number | null | undefined): string {
   if (v == null) return '—';
   return v.toFixed(2);
+}
+
+function reportingQuantity(row: ProcessSheetInventoryItem, field: 'produced' | 'used' | 'remaining'): string {
+  const normalized = normalizeMassQuantityForReporting(Number(row[field] ?? 0), row.unit);
+  return `${fmtQty(normalized.quantity)}${normalized.unit ? ` ${normalized.unit}` : ''}`;
+}
+
+function reportingUnitPrice(row: ProcessSheetInventoryItem): number | null | undefined {
+  if (row.unitPrice == null) return row.unitPrice;
+  const unit = row.unit?.trim().toLowerCase();
+  return unit === 'g' || unit === '克' ? row.unitPrice * 1000 : row.unitPrice;
 }
 
 function fmtDate(v: string | null | undefined): string {
@@ -136,6 +148,9 @@ defineExpose({ refresh });
       </template>
     </el-alert>
   </div>
+  <div v-if="rows.length > 0" class="yield-card-scroll-hint">
+    表格可左右滑动查看完整字段 →
+  </div>
   <el-table
     :data="rows"
     v-loading="loading"
@@ -179,18 +194,18 @@ defineExpose({ refresh });
     </el-table-column>
     <el-table-column label="产出" width="80" align="right">
       <template #default="{ row }">
-        {{ fmtQty(row.produced) }}{{ row.unit ? ' ' + row.unit : '' }}
+        {{ reportingQuantity(row, 'produced') }}
       </template>
     </el-table-column>
     <el-table-column label="已用" width="80" align="right">
       <template #default="{ row }">
-        {{ fmtQty(row.used) }}
+        {{ reportingQuantity(row, 'used') }}
       </template>
     </el-table-column>
     <el-table-column label="剩余" width="80" align="right">
       <template #default="{ row }">
         <span :style="{ color: (row.remaining ?? 0) <= 0 ? '#f56c6c' : '#67c23a' }">
-          {{ fmtQty(row.remaining) }}
+          {{ reportingQuantity(row, 'remaining') }}
         </span>
       </template>
     </el-table-column>
@@ -201,7 +216,7 @@ defineExpose({ refresh });
     </el-table-column>
     <el-table-column label="单价(¥)" width="86" align="right">
       <template #default="{ row }">
-        {{ fmtPrice(row.unitPrice) }}
+        {{ fmtPrice(reportingUnitPrice(row)) }}
       </template>
     </el-table-column>
     <el-table-column label="对上工序出成" width="110" align="right">
@@ -237,6 +252,13 @@ defineExpose({ refresh });
   flex-direction: column;
   gap: 6px;
   margin-bottom: 8px;
+}
+
+.yield-card-scroll-hint {
+  margin: 0 0 6px;
+  color: var(--el-text-color-secondary, #909399);
+  font-size: 12px;
+  text-align: right;
 }
 
 .yield-card-error {

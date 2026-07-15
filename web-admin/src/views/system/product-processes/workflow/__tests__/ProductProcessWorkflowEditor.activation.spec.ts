@@ -128,6 +128,26 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     expect(wrapper.get('[data-testid="activation-status"]').text()).not.toContain('v3');
   });
 
+  it('detects stale units in a published workflow even when the backend review flag is missing', async () => {
+    apiMocks.get.mockImplementation((url: string) => Promise.resolve({
+      success: true,
+      data: url.includes('/product-types')
+        ? { content: [productOption('PT-A', '盒'), productOption('PT-B')] }
+        : url.includes('/raw-material-types')
+          ? [productOption('RAW')]
+          : [],
+    }));
+    const stale = definition('PT-A', 'PUBLISHED', 4, 44);
+    stale.unitReviewRequired = false;
+    apiMocks.getProductProcessWorkflow.mockResolvedValue({ success: true, data: stale });
+
+    const wrapper = mountEditor();
+    await flushPromises();
+
+    expect(wrapper.get('.unit-review-alert').attributes('title')).toContain('SKU 单位已变化');
+    expect(wrapper.text()).toContain('草稿 v5');
+  });
+
   // (移除) 旧「启用版本」独立按钮的 loading/generation 测试 —— #12a 已把启用并入发布,
   // 不再有独立启用按钮, 该 UI 路径不存在。发布→启用的一步行为由上面第一个测试覆盖。
 });
@@ -143,8 +163,8 @@ function mountEditor() {
   });
 }
 
-function productOption(id: string) {
-  return { id, name: id, unit: 'kg', productCategory: 'FINISHED_GOOD', isActive: true };
+function productOption(id: string, unit = 'kg') {
+  return { id, name: id, unit, productCategory: 'FINISHED_GOOD', isActive: true };
 }
 
 function definition(

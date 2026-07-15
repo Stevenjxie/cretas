@@ -82,4 +82,21 @@ describe('InventoryTable', () => {
     expect(wrapper.text()).toContain('CLK-W-RECOVERED');
     expect(wrapper.text()).not.toContain('\u534a\u6210\u54c1\u5e93\u5b58\u52a0\u8f7d\u5931\u8d25');
   });
+
+  it('converts legacy gram inventory snapshots to kg for display', async () => {
+    getInventory.mockResolvedValue({ data: [{
+      batchNumber: 'CLK-W-GRAMS', produced: 100_000, used: 50_000, remaining: 50_000,
+      unit: 'g', unitPrice: 0.1, status: 'ACTIVE',
+    }] });
+    const wrapper = mount(InventoryTable, {
+      props: { factoryId: 'F006', planId: 'PLAN-001', processCode: 'mix', processOrder: 1 },
+      global: { plugins: [ElementPlus], stubs: { teleport: true, transition: false } },
+    });
+    await flushPromises();
+    await nextTick();
+
+    expect(wrapper.text()).toContain('CLK-W-GRAMS');
+    expect(wrapper.text()).toContain('100');
+    expect(wrapper.text()).not.toContain('100000');
+  });
 });

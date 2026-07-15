@@ -4,6 +4,9 @@ import {
   formatPlannedOutput,
   formatProcessOutput,
   formatSourceFeedSummary,
+  displayProcessUnit,
+  normalizeMassQuantityForReporting,
+  workflowPortDisplayUnit,
   formatWorkflowPlannedOutput,
   resolveProcessSheetUnits,
   resolveWorkflowProcessSheetUnits,
@@ -106,6 +109,24 @@ describe('processSheetUnits', () => {
     })).toBe('计划成品 2 kg');
   });
 
+  it('renders persisted English packaging aliases with Chinese business labels', () => {
+    expect(displayProcessUnit('box')).toBe('盒');
+    expect(displayProcessUnit('case')).toBe('箱');
+    expect(displayProcessUnit('bag')).toBe('袋');
+    expect(formatPlannedOutput(500, 'box')).toBe('计划成品 500 盒');
+  });
+
+  it('normalizes legacy g quantities to kg for reporting without changing the stored value', () => {
+    expect(normalizeMassQuantityForReporting(100_000, 'g')).toEqual({ quantity: 100, unit: 'kg' });
+    expect(normalizeMassQuantityForReporting(50, '克')).toEqual({ quantity: 0.05, unit: 'kg' });
+    expect(normalizeMassQuantityForReporting(10, 'box')).toEqual({ quantity: 10, unit: '盒' });
+  });
+
+  it('uses kg for raw and semi-finished workflow ports and Chinese SKU units for finished ports', () => {
+    expect(workflowPortDisplayUnit({ materialKind: 'SEMI_FINISHED', unit: 'g' })).toBe('kg');
+    expect(workflowPortDisplayUnit({ materialKind: 'FINISHED_GOOD', finished: true, unit: 'box' })).toBe('盒');
+  });
+
   it('renders missing units as unconfigured instead of kilograms', () => {
     expect(formatPlannedOutput(10, null)).toContain('未配置');
     expect(formatProcessOutput(10, null)).toContain('未配置');
@@ -114,8 +135,8 @@ describe('processSheetUnits', () => {
   });
 
   it('renders process summaries and feed prompts using configured units', () => {
-    expect(formatProcessOutput(400, 'bag')).toBe('产出 400.00 bag');
-    expect(formatSourceFeedSummary(2, 200, 'each')).toBe('2批 · 200.0each');
-    expect(formatFeedPlaceholder('each')).toBe('投料each');
+    expect(formatProcessOutput(400, 'bag')).toBe('产出 400.00 袋');
+    expect(formatSourceFeedSummary(2, 200, 'each')).toBe('2批 · 200.0件');
+    expect(formatFeedPlaceholder('each')).toBe('投料件');
   });
 });

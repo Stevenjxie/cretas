@@ -133,6 +133,29 @@ describe('YieldCardTable', () => {
     expect(text).toContain('有 1 行成本未显示');
   });
 
+  it('shows legacy gram snapshots as kg and exposes the horizontal-scroll hint', async () => {
+    getInventoryYieldCard.mockResolvedValue({
+      data: [{
+        batchNumber: 'CLK-W-LEGACY-G', produced: 100_000, used: 50_000, remaining: 50_000,
+        status: 'ACTIVE', unit: 'g', unitPrice: 0.1, rowTotalCost: 10_000,
+        stepYieldRate: 100, cumulativeYieldRate: 100,
+      }],
+    });
+
+    const wrapper = mount(YieldCardTable, {
+      props: { factoryId: 'F006', planId: 'PLAN-001' },
+      global: { plugins: [ElementPlus], stubs: { teleport: true, transition: false } },
+    });
+    await flushPromises();
+    await nextTick();
+
+    const text = wrapper.text();
+    expect(text).toContain('100 kg');
+    expect(text).toContain('50 kg');
+    expect(text).not.toContain('100000 g');
+    expect(text).toContain('表格可左右滑动查看完整字段');
+  });
+
   it('explains a genuinely empty plan-wide yield card', async () => {
     getInventoryYieldCard.mockResolvedValue({ data: [] });
 

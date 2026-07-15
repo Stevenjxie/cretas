@@ -28,8 +28,10 @@ import {
   formatFeedPlaceholder,
   formatProcessOutput,
   formatSourceFeedSummary,
+  normalizeMassQuantityForReporting,
   resolveProcessSheetUnits,
   resolveWorkflowProcessSheetUnits,
+  workflowPortDisplayUnit,
   withProcessSheetUnits,
 } from '@/utils/processSheetUnits';
 import { buildEqualPotWeightsKg } from './potAllocation';
@@ -144,6 +146,8 @@ interface SheetRow {
   rowStatus: 'SAVED' | 'DRAFT' | 'UNSAVED';
   submissionStatus: 'DRAFT' | 'SUBMITTED' | 'LEGACY' | null;
   materialized: boolean;
+  /** 历史行保存时的真实产出单位；仅用于只读显示换算，不改写 payload。 */
+  persistedOutputUnit: string;
   blockingMessage: string | null;
   /** 已小结时间 (ISO-8601); null = 未小结，可编辑 */
   interimSettledAt: string | null;
@@ -270,7 +274,8 @@ const workflowOutputLabel = computed(() => {
   const out = workflowOutput.value;
   if (!out) return '';
   const name = out.materialName || `(未命名 SKU: ${out.skuId})`;
-  return out.unit ? `${name}（${out.unit}）` : name;
+  const unit = workflowPortDisplayUnit(out);
+  return unit ? `${name}（${unit}）` : name;
 });
 /** 需要原料类型摘要文字 (供领料 picker 旁提示)。 */
 const workflowRawInputsLabel = computed(() =>
@@ -279,7 +284,11 @@ const workflowRawInputsLabel = computed(() =>
 /** 2B.2 多产出横幅摘要文字: "{品名1}（{单位1}） + {品名2}（{单位2}）..."。 */
 const workflowOutputsLabel = computed(() =>
   outputPorts.value
-    .map((p) => (p.unit ? `${p.materialName || `(未命名 SKU: ${p.skuId})`}（${p.unit}）` : (p.materialName || `(未命名 SKU: ${p.skuId})`)))
+    .map((p) => {
+      const name = p.materialName || `(未命名 SKU: ${p.skuId})`;
+      const unit = workflowPortDisplayUnit(p);
+      return unit ? `${name}（${unit}）` : name;
+    })
     .join(' + '),
 );
 
@@ -496,6 +505,7 @@ function blankRow(): SheetRow {
     rowStatus: 'UNSAVED',
     submissionStatus: null,
     materialized: false,
+    persistedOutputUnit: processUnits.value.outputUnit,
     blockingMessage: null,
     interimSettledAt: null,
     saving: false,
@@ -553,6 +563,7 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
   row.rowStatus = view.rowStatus;
   row.submissionStatus = view.submissionStatus ?? null;
   row.materialized = view.materialized === true;
+  row.persistedOutputUnit = p.outputUnit || p.unit || processUnits.value.outputUnit;
   row.interimSettledAt = view.interimSettledAt ?? null;
 
   if (isXiuYou.value) {
@@ -832,25 +843,35 @@ function settledRowSummary(row: SheetRow): string {
   }
   if (isXiuYou.value) {
     const out = row.fields['output'];
-    return formatProcessOutput(out as number | null, processUnits.value.outputUnit);
+    return formatHistoricalProcessOutput(out as number | null, row);
   }
   if (isSingleUpstream.value) {
     const after = row.fields['after'];
-    return formatProcessOutput(after as number | null, processUnits.value.outputUnit);
+    return formatHistoricalProcessOutput(after as number | null, row);
   }
   if (isQuSheTou.value) {
     const out = row.fields['output'];
-    return formatProcessOutput(out as number | null, processUnits.value.outputUnit);
+    return formatHistoricalProcessOutput(out as number | null, row);
   }
   if (isShuZhi.value) {
     const out = row.fields['output'];
-    return formatProcessOutput(out as number | null, processUnits.value.outputUnit);
+    return formatHistoricalProcessOutput(out as number | null, row);
   }
   if (isQidiao.value) {
     const n = finishedActualQuantity(row);
     return `实产 ${n ?? '—'} ${processUnits.value.outputUnit}`;
   }
   return '—';
+}
+
+function formatHistoricalProcessOutput(quantity: number | null, row: SheetRow): string {
+  if (quantity == null) return '—';
+  const target = processUnits.value.outputUnit.trim().toLowerCase();
+  if (target === 'kg' || target === '千克' || target === '公斤') {
+    const normalized = normalizeMassQuantityForReporting(Number(quantity), row.persistedOutputUnit);
+    return formatProcessOutput(normalized.quantity, normalized.unit || processUnits.value.outputUnit);
+  }
+  return formatProcessOutput(quantity, processUnits.value.outputUnit);
 }
 
 // -------------------------------------------------------------------------

@@ -1349,6 +1349,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
             BigDecimal remaining = produced.subtract(used);
             String status = remaining.signum() <= 0 ? "DEPLETED" : "ACTIVE";
+            ProcessSheetRowRequest storedRequest = parsePayloadQuiet(row.getRowPayload());
+            String storedOutputUnit = storedRequest == null
+                    ? wip.getQuantityUnit()
+                    : firstNonBlank(storedRequest.getOutputUnit(), storedRequest.getUnit(), wip.getQuantityUnit());
 
             result.add(ProcessSheetInventoryItem.builder()
                     .batchNumber(row.getBatchNumber())
@@ -1356,6 +1360,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .used(used)
                     .remaining(remaining)
                     .status(status)
+                    .unit(storedOutputUnit)
                     .unitPrice(nz(wip.getUnitPrice()))
                     // ② 批次下拉补 品名 + 生产日期 (成本用 unitPrice)。品名从 row payload 的 productTypeId 反查。
                     .productTypeName(resolveProductTypeName(factoryId, row))
