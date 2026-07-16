@@ -57,10 +57,60 @@ while [ "$#" -gt 0 ]; do
     shift
 done
 
-[[ "$FRESH_DB_PORT" =~ ^[0-9]+$ ]] || fail "FRESH_DB_PORT must be numeric"
-[[ "$FRESH_DB_APP_PORT" =~ ^[0-9]+$ ]] || fail "FRESH_DB_APP_PORT must be numeric"
+validate_port_range() {
+    local name="$1"
+    local raw_value="$2"
+    [[ "$raw_value" =~ ^[0-9]{1,5}$ ]] \
+        || fail "$name must be an integer between 1024 and 65535"
+    local value=$((10#$raw_value))
+    [ "$value" -ge 1024 ] && [ "$value" -le 65535 ] \
+        || fail "$name must be between 1024 and 65535"
+}
+
+port_is_available() {
+    local port="$1"
+    if command -v powershell.exe >/dev/null 2>&1; then
+        powershell.exe -NoProfile -NonInteractive -Command \
+            "\$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $port); try { \$listener.Start(); \$listener.Stop(); exit 0 } catch { exit 1 }" \
+            >/dev/null 2>&1
+        return $?
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - "$port" <<'PY'
+import socket
+import sys
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    sock.bind(("127.0.0.1", int(sys.argv[1])))
+except OSError:
+    sys.exit(1)
+finally:
+    sock.close()
+PY
+        return $?
+    fi
+    fail "cannot verify local port availability (PowerShell or python3 is required)"
+}
+
+require_port_available() {
+    local name="$1"
+    local port="$2"
+    port_is_available "$port" \
+        || fail "$name $port is already in use on 127.0.0.1; stop the existing process or choose another port"
+}
+
+validate_port_range "FRESH_DB_PORT" "$FRESH_DB_PORT"
+validate_port_range "FRESH_DB_APP_PORT" "$FRESH_DB_APP_PORT"
 [[ "$STARTUP_TIMEOUT" =~ ^[0-9]+$ ]] || fail "FRESH_DB_STARTUP_TIMEOUT must be numeric"
 [ "$FRESH_DB_PORT" -ne 5432 ] || fail "port 5432 is intentionally forbidden; use the isolated default 55432"
+case "$FRESH_DB_APP_PORT" in
+    10010|10011|10020)
+        fail "FRESH_DB_APP_PORT $FRESH_DB_APP_PORT is reserved; use an isolated local application port"
+        ;;
+esac
+[ "$FRESH_DB_PORT" -ne "$FRESH_DB_APP_PORT" ] \
+    || fail "FRESH_DB_PORT and FRESH_DB_APP_PORT must be different"
 [[ "$FRESH_DB_PROJECT" =~ ^cretas-fresh-db(-[a-z0-9-]+)?$ ]] \
     || fail "FRESH_DB_PROJECT must be cretas-fresh-db or a safe cretas-fresh-db-* suffix"
 
@@ -111,6 +161,13 @@ cleanup() {
         printf '\n[fresh-db] backend startup tail (%s):\n' "$BACKEND_LOG" >&2
         tail -120 "$BACKEND_LOG" >&2 || true
     fi
+    if [ -d "$WORK_DIR" ]; then
+        if [ "$FRESH_DB_KEEP" = "1" ]; then
+            log "work directory kept: $WORK_DIR"
+        else
+            rm -rf -- "$WORK_DIR"
+        fi
+    fi
     return "$rc"
 }
 trap cleanup EXIT
@@ -138,6 +195,8 @@ command -v docker >/dev/null 2>&1 || fail "Docker CLI not found; install/start D
 docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is required (docker compose)"
 command -v curl >/dev/null 2>&1 || fail "curl is required for the Spring health gate"
 [ -f "$COMPOSE_FILE" ] || fail "missing $COMPOSE_FILE"
+require_port_available "FRESH_DB_PORT" "$FRESH_DB_PORT"
+require_port_available "FRESH_DB_APP_PORT" "$FRESH_DB_APP_PORT"
 mkdir -p "$WORK_DIR"
 
 export FRESH_DB_PORT
@@ -176,12 +235,13 @@ log "running CI-equivalent Repository query startup gate"
 
 DB_URL="jdbc:postgresql://127.0.0.1:${FRESH_DB_PORT}/cretas_db?currentSchema=public&stringtype=unspecified"
 SMARTBI_URL="jdbc:postgresql://127.0.0.1:${FRESH_DB_PORT}/smartbi_db"
-RUN_ARGS="--server.port=${FRESH_DB_APP_PORT} --spring.datasource.url=${DB_URL} --spring.datasource.username=cretas_user --spring.datasource.password=cretas_local_only --smartbi.postgres.url=${SMARTBI_URL} --smartbi.postgres.username=smartbi_user --smartbi.postgres.password=smartbi_local_only --spring.jpa.show-sql=false --python-smartbi.enabled=false --python-error-analysis.enabled=false --python-classifier.enabled=false"
+RUN_ARGS="--server.address=127.0.0.1 --server.port=${FRESH_DB_APP_PORT} --spring.datasource.url=${DB_URL} --spring.datasource.username=cretas_user --spring.datasource.password=cretas_local_only --smartbi.postgres.url=${SMARTBI_URL} --smartbi.postgres.username=smartbi_user --smartbi.postgres.password=smartbi_local_only --spring.jpa.show-sql=false --python-smartbi.enabled=false --python-error-analysis.enabled=false --python-classifier.enabled=false"
 export DB_PASSWORD=cretas_local_only
 export POSTGRES_SMARTBI_PASSWORD=smartbi_local_only
 export JWT_SECRET=fresh_db_local_jwt_secret_not_for_remote_use
 
 log "starting real pg profile for Flyway + full Spring/JPA gate"
+require_port_available "FRESH_DB_APP_PORT" "$FRESH_DB_APP_PORT"
 (
     cd "$BACKEND_DIR"
     run_maven -B spring-boot:run \
@@ -198,13 +258,17 @@ for _ in $(seq 1 "$STARTUP_TIMEOUT"); do
         fail "Spring process exited before becoming healthy"
     fi
     if curl --silent --show-error --fail --max-time 2 \
-        "http://127.0.0.1:${FRESH_DB_APP_PORT}/api/mobile/health" >/dev/null 2>&1; then
+        "http://127.0.0.1:${FRESH_DB_APP_PORT}/api/mobile/health" >/dev/null 2>&1 \
+        && kill -0 "$BACKEND_PID" >/dev/null 2>&1 \
+        && grep -q 'Started CretasBackendApplication' "$BACKEND_LOG"; then
         healthy=1
         break
     fi
     sleep 1
 done
 [ "$healthy" -eq 1 ] || fail "Spring health gate timed out after ${STARTUP_TIMEOUT}s"
+kill -0 "$BACKEND_PID" >/dev/null 2>&1 \
+    || fail "Spring process exited immediately after the health response"
 
 log "verifying Flyway history on the fresh database"
 MIGRATION_COUNT=$("${COMPOSE[@]}" exec -T postgres psql -v ON_ERROR_STOP=1 \
