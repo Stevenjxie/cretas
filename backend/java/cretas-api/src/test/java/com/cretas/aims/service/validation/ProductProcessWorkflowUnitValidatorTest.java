@@ -2,6 +2,7 @@ package com.cretas.aims.service.validation;
 
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.unit.ProductUnitConversion;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
@@ -9,6 +10,10 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.unit.ProductUnitConversionRepository;
 import com.cretas.aims.service.unit.CanonicalUnit;
 import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitConversionContext;
+import com.cretas.aims.service.unit.UnitConversionResult;
+import com.cretas.aims.service.unit.UnitConversionStatus;
+import com.cretas.aims.service.unit.UnitConversionStep;
 import com.cretas.aims.service.unit.UnitDimension;
 import com.cretas.aims.service.unit.UnitNormalizationResult;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,6 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -48,22 +54,27 @@ class ProductProcessWorkflowUnitValidatorTest {
         product.setId("SKU-1");
         product.setFactoryId("F006");
         product.setUnit("g");
+        RawMaterialType rawMaterial = new RawMaterialType();
+        rawMaterial.setId("RMT-1");
+        rawMaterial.setFactoryId("F006");
+        rawMaterial.setUnit("g");
         when(productTypeRepository.findByIdIn(any())).thenReturn(List.of(product));
-        when(rawMaterialTypeRepository.findAllById(any())).thenReturn(List.of());
-        when(unitContractService.validateConversionGraph(eq("F006"), eq("SKU-1"), any()))
+        when(rawMaterialTypeRepository.findAllById(any())).thenReturn(List.of(rawMaterial));
+        lenient().when(unitContractService.validateConversionGraph(eq("F006"), eq("SKU-1"), any()))
                 .thenReturn(List.of());
         when(unitContractService.normalize(eq("F006"), any())).thenAnswer(invocation -> {
             String raw = invocation.getArgument(1);
             String code = switch (raw == null ? "" : raw) {
+                case "kg" -> "kg";
                 case "g", "克" -> "g";
                 case "pcs", "件" -> "pcs";
                 default -> null;
             };
             CanonicalUnit unit = code == null ? null : new CanonicalUnit(
                     code,
-                    "g".equals(code) ? UnitDimension.MASS : UnitDimension.COUNT,
-                    code,
-                    BigDecimal.ONE,
+                    "pcs".equals(code) ? UnitDimension.COUNT : UnitDimension.MASS,
+                    "pcs".equals(code) ? "pcs" : "g",
+                    "kg".equals(code) ? new BigDecimal("1000") : BigDecimal.ONE,
                     code,
                     4);
             return new UnitNormalizationResult(raw, code, unit);
@@ -74,6 +85,30 @@ class ProductProcessWorkflowUnitValidatorTest {
     void acceptsCanonicalAliasWithoutConversion() {
         var result = validator.validate("F006", workflow("克", "g", "g", null, null));
         assertThat(result.errors()).isEmpty();
+    }
+
+    @Test
+    void acceptsIntrinsicMassConversionForRawMaterialWithoutSkuConversionReference() {
+        stubIntrinsicMassConversion();
+        var result = validator.validate("F006", workflow(
+                "RAW_MATERIAL", "RMT-1", "kg", "kg", "kg", null, null));
+
+        assertThat(result.errors()).isEmpty();
+    }
+
+    private void stubIntrinsicMassConversion() {
+        when(unitContractService.convert(any(UnitConversionContext.class))).thenAnswer(invocation -> {
+            UnitConversionContext context = invocation.getArgument(0);
+            if ("kg".equals(context.fromUnit()) && "g".equals(context.toUnit())) {
+                return new UnitConversionResult(
+                        UnitConversionStatus.CONVERTED, null, "kg", "g", List.of("kg", "g"),
+                        null, null, null,
+                        List.of(new UnitConversionStep("kg", "g", new BigDecimal("1000"), null, null)));
+            }
+            return new UnitConversionResult(
+                    UnitConversionStatus.PRODUCT_CONVERSION_MISSING, null,
+                    context.fromUnit(), context.toUnit(), List.of(), null, null, "missing");
+        });
     }
 
     @Test
@@ -129,9 +164,21 @@ class ProductProcessWorkflowUnitValidatorTest {
             String processOutputUnit,
             String conversionRefId,
             Long conversionVersion) {
+        return workflow("FINISHED_GOOD", "SKU-1", materialUnit, portUnit, processOutputUnit,
+                conversionRefId, conversionVersion);
+    }
+
+    private ProductProcessWorkflowDTO workflow(
+            String materialKind,
+            String skuId,
+            String materialUnit,
+            String portUnit,
+            String processOutputUnit,
+            String conversionRefId,
+            Long conversionVersion) {
         Map<String, Object> materialData = new LinkedHashMap<>();
         materialData.put("name", "成品");
-        materialData.put("skuId", "SKU-1");
+        materialData.put("skuId", skuId);
         materialData.put("baseUnit", materialUnit);
         materialData.put("bound", true);
 
@@ -145,7 +192,7 @@ class ProductProcessWorkflowUnitValidatorTest {
 
         ProductProcessWorkflowDTO definition = new ProductProcessWorkflowDTO();
         definition.setNodes(List.of(
-                new ProductProcessWorkflowDTO.Node("mat-1", "FINISHED_GOOD",
+                new ProductProcessWorkflowDTO.Node("mat-1", materialKind,
                         new ProductProcessWorkflowDTO.Position(0D, 0D), materialData),
                 new ProductProcessWorkflowDTO.Node("proc-1", "PROCESS",
                         new ProductProcessWorkflowDTO.Position(1D, 1D), processData)));
