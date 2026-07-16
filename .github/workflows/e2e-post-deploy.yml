@@ -120,7 +120,7 @@ jobs:
         with:
           name: playwright-report
           path: tests/v1-e2e/playwright-report/
-          retention-days: 14
+          retention-days: 3
 
       - name: Upload Playwright traces
         if: always()
@@ -128,7 +128,7 @@ jobs:
         with:
           name: playwright-traces
           path: tests/v1-e2e/test-results/
-          retention-days: 14
+          retention-days: 3
           if-no-files-found: ignore
 
       - name: Upload backend log
@@ -137,7 +137,7 @@ jobs:
         with:
           name: backend-log
           path: /tmp/backend.log
-          retention-days: 7
+          retention-days: 3
           if-no-files-found: ignore
 
       - name: Upload web-admin log
@@ -146,5 +146,5 @@ jobs:
         with:
           name: web-admin-log
           path: /tmp/web-admin.log
-          retention-days: 7
+          retention-days: 3
           if-no-files-found: ignore

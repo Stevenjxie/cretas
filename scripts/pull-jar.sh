@@ -68,8 +68,8 @@ if [ -f "$JAR_NAME" ]; then
     mv "$JAR_NAME" "$BACKUP_NAME"
 fi
 
-# 3. 下载新 JAR (使用 GitHub 镜像加速)
-log "从 GitHub Release 下载 JAR (通过 ghproxy.cc 镜像加速)..."
+# 3. 使用已认证的 GitHub CLI 下载（同时支持 public/private repo）
+log "从 GitHub Release 下载 JAR (authenticated gh CLI)..."
 
 # 如果是 latest，先获取最新版本号
 if [ "$VERSION" = "latest" ]; then
@@ -82,10 +82,18 @@ if [ "$VERSION" = "latest" ]; then
     log "   最新版本: $VERSION"
 fi
 
-# 使用 ghproxy.cc 镜像下载 (中国服务器下载 GitHub 更快)
-DOWNLOAD_URL="https://ghproxy.cc/https://github.com/$REPO/releases/download/$VERSION/$JAR_NAME"
-log "   下载地址: $DOWNLOAD_URL"
-wget -q --show-progress -O "$JAR_NAME" "$DOWNLOAD_URL"
+if ! gh release download "$VERSION" \
+    --repo "$REPO" \
+    --pattern "$JAR_NAME" \
+    --dir "."; then
+    log "❌ JAR 下载失败"
+    LATEST_BACKUP=$(ls -t ${JAR_NAME}.bak.* 2>/dev/null | head -1)
+    if [ -n "$LATEST_BACKUP" ]; then
+        log "恢复备份: $LATEST_BACKUP"
+        mv "$LATEST_BACKUP" "$JAR_NAME"
+    fi
+    exit 1
+fi
 
 if [ ! -f "$JAR_NAME" ]; then
     log "❌ JAR 下载失败"

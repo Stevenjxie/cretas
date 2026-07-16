@@ -3,14 +3,26 @@ name: CI/CD Pipeline
 on:
   push:
     branches: [main]
+    # Main-push mode only packages the exact Java deploy artifact. Other
+    # component gates run on the consolidated daily integration PR, so avoid
+    # spending a private-repository runner on docs/scripts/frontend-only pushes.
+    paths:
+      - 'backend/java/**'
+      - '.github/workflows/ci.yml'
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      package_java_artifact:
+        description: 'Build and retain the exact-main Java deploy artifact'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # Superseded PR revisions may stop; every main push must finish so its exact-
-  # commit release artifact cannot be cancelled by a later docs-only merge.
+  # Superseded PR revisions may stop. Main pushes are already path-filtered and
+  # only opt-in `[ci-artifact]` builds reach the expensive Java job.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -58,9 +70,15 @@ jobs:
   # ---- Java Backend: Build + Test ----
   java-build-test:
     needs: changes
-    # Daily PR: validate Java against PostgreSQL. Main: only package the exact
-    # commit artifact; the daily PR merge ref already passed the test gates.
-    if: needs.changes.outputs.java == 'true'
+    # Daily PR: validate Java against PostgreSQL. Main: package only when the
+    # commit explicitly requests `[ci-artifact]`; routine domestic deployments
+    # use the local manifest-backed cache/build path instead.
+    if: >-
+      ${{ (github.event_name == 'pull_request' && needs.changes.outputs.java == 'true') ||
+          (github.event_name == 'workflow_dispatch' &&
+           (needs.changes.outputs.java == 'true' || inputs.package_java_artifact)) ||
+          (github.event_name == 'push' && needs.changes.outputs.java == 'true' &&
+           contains(github.event.head_commit.message, '[ci-artifact]')) }}
     runs-on: ubuntu-latest
 
     # PostgreSQL service container — enables PG-required IT classes (e.g.
@@ -125,12 +143,16 @@ jobs:
       # gates and JPA startup gate still authorize merges; this step only makes
       # the exact-main artifact available early so deploy does not rebuild it.
       - name: Package exact-commit deploy artifact
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: >-
+          ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+              (github.event_name == 'workflow_dispatch' && inputs.package_java_artifact) }}
         working-directory: backend/java/cretas-api
         timeout-minutes: 10
         run: mvn -B package -Dmaven.test.skip=true -pl .
       - name: Prepare exact-commit deploy artifact
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: >-
+          ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+              (github.event_name == 'workflow_dispatch' && inputs.package_java_artifact) }}
         working-directory: backend/java/cretas-api/target
         run: |
           JAR=cretas-backend-system-1.0.0.jar
@@ -138,7 +160,9 @@ jobs:
           sha256sum "$JAR" > "$JAR.sha256"
           printf '%s\n' "$GITHUB_SHA" > "$JAR.commit"
       - name: Upload exact-commit deploy artifact
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: >-
+          ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+              (github.event_name == 'workflow_dispatch' && inputs.package_java_artifact) }}
         uses: actions/upload-artifact@v4
         with:
           name: cretas-java-${{ github.sha }}
@@ -148,7 +172,7 @@ jobs:
             backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar.commit
           if-no-files-found: error
           compression-level: 0
-          retention-days: 7
+          retention-days: 1
       - name: Maven compile and test
         if: github.event_name != 'push'
         working-directory: backend/java/cretas-api
@@ -156,12 +180,12 @@ jobs:
         # output already in target/ and remains visible as a separate CI gate.
         run: mvn -B verify -Dspring.profiles.active=test -pl .
       - name: Upload test results
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: java-test-results
           path: backend/java/cretas-api/target/surefire-reports/
-          retention-days: 14
+          retention-days: 3
 
   # ---- Python Service: Lint + Test ----
   python-lint-test:
@@ -262,9 +286,9 @@ jobs:
         # — separate follow-up to fix transformIgnorePatterns).
         run: yarn test --ci --coverage --forceExit
       - name: Upload coverage
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: rn-coverage
           path: frontend/CretasFoodTrace/coverage/
-          retention-days: 14
+          retention-days: 3

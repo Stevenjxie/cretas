@@ -10,8 +10,9 @@ on:
       - 'scripts/ci/check-kb-anchor-consistency.py'
       - 'scripts/ci/check-manual-chat-contract.py'
       - 'backend/python/food_kb/api/manual_chat.py'
-  schedule:
-    - cron: '0 9 * * 1'  # Weekly Monday 09:00 UTC
+  # Scheduled runs are intentionally paused while the referenced manual
+  # sections await a real content review. Related PRs and manual dispatches
+  # still enforce the drift contract without producing a weekly known-red run.
 
 jobs:
   kb-drift-check:

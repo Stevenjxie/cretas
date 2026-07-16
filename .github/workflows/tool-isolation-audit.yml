@@ -35,13 +35,14 @@ jobs:
         run: node scripts/audit/tool-factory-isolation-audit.mjs
 
       - name: Upload audit results
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: tool-isolation-audit-results
           path: |
             scripts/audit/audit-results.csv
             scripts/audit/audit-results.md
+          retention-days: 3
 
       - name: Post summary on PR
         if: github.event_name == 'pull_request' && always()

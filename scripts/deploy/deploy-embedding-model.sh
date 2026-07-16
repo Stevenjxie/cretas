@@ -20,6 +20,12 @@ LOCAL_MODEL_DIR="scripts/finetune/models/$MODEL_NAME"
 REPO="Stevenjxie/cretas"
 VERSION="model-$(date +%Y%m%d_%H%M%S)"
 
+IS_PRIVATE_REPO=false
+if command -v gh &> /dev/null; then
+    REPO_PRIVATE=$(gh api "repos/$REPO" --jq '.private' 2>/dev/null || echo "unknown")
+    [ "$REPO_PRIVATE" = "true" ] && IS_PRIVATE_REPO=true
+fi
+
 # 临时文件用于追踪哪个方法先完成
 UPLOAD_STATUS_DIR="/tmp/embedding-upload-$$"
 mkdir -p "$UPLOAD_STATUS_DIR"
@@ -73,6 +79,11 @@ upload_scp() {
 # 方法2: GitHub Release + 镜像下载
 upload_github_release() {
     echo "   [GitHub] 开始上传到 Release..."
+
+    if [ "$IS_PRIVATE_REPO" = "true" ]; then
+        echo "   [GitHub] 跳过: private repo 的匿名镜像无法下载 Release asset"
+        return 1
+    fi
 
     # 检查 gh CLI
     if ! command -v gh &> /dev/null; then
