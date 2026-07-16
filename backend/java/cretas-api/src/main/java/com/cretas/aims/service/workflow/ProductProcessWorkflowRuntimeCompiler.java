@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.annotation.Autowired;
 
+import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -16,10 +17,13 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeSet;
 
 @Component
 public class ProductProcessWorkflowRuntimeCompiler {
+
+    private static final Set<String> QUANTITY_MODES = Set.of("AUTO_CONVERT", "FIXED_RATIO");
 
     private final ObjectMapper objectMapper;
     private final ProductProcessWorkflowValidator validator;
@@ -195,7 +199,11 @@ public class ProductProcessWorkflowRuntimeCompiler {
                     requiredString(port.get("unit"), nodeId, path + ".unit"),
                     optionalString(port.get("conversionRefId"), nodeId, path + ".conversionRefId"),
                     optionalLong(port.get("conversionVersion"), nodeId, path + ".conversionVersion"),
-                    requiredInteger(port.get("ordinal"), nodeId, path + ".ordinal")));
+                    requiredInteger(port.get("ordinal"), nodeId, path + ".ordinal"),
+                    optionalPositiveDecimal(
+                            port.get("standardQuantity"), nodeId, path + ".standardQuantity"),
+                    optionalQuantityMode(
+                            port.get("quantityMode"), nodeId, path + ".quantityMode")));
         }
         return List.copyOf(ports);
     }
@@ -241,6 +249,46 @@ public class ProductProcessWorkflowRuntimeCompiler {
             return ((Number) value).longValue();
         }
         throw runtimeInvalid(nodeId, fieldPath, "must be an integral number");
+    }
+
+    private BigDecimal optionalPositiveDecimal(Object value, String nodeId, String fieldPath) {
+        if (value == null) {
+            return null;
+        }
+        BigDecimal parsed;
+        try {
+            if (value instanceof BigDecimal decimal) {
+                parsed = decimal;
+            } else if (value instanceof BigInteger integer) {
+                parsed = new BigDecimal(integer);
+            } else if (value instanceof Byte || value instanceof Short
+                    || value instanceof Integer || value instanceof Long) {
+                parsed = BigDecimal.valueOf(((Number) value).longValue());
+            } else if (value instanceof Float || value instanceof Double) {
+                double decimal = ((Number) value).doubleValue();
+                if (!Double.isFinite(decimal)) {
+                    throw new NumberFormatException("non-finite number");
+                }
+                parsed = BigDecimal.valueOf(decimal);
+            } else {
+                throw runtimeInvalid(nodeId, fieldPath, "must be a number");
+            }
+        } catch (NumberFormatException exception) {
+            throw runtimeInvalid(nodeId, fieldPath, "must be a finite number");
+        }
+        if (parsed.signum() <= 0) {
+            throw runtimeInvalid(nodeId, fieldPath, "must be greater than zero");
+        }
+        return parsed;
+    }
+
+    private String optionalQuantityMode(Object value, String nodeId, String fieldPath) {
+        String mode = optionalString(value, nodeId, fieldPath);
+        if (mode != null && !QUANTITY_MODES.contains(mode)) {
+            throw runtimeInvalid(
+                    nodeId, fieldPath, "must be AUTO_CONVERT or FIXED_RATIO");
+        }
+        return mode;
     }
 
     private Integer requiredInteger(Object value, String nodeId, String fieldPath) {
@@ -347,7 +395,9 @@ public class ProductProcessWorkflowRuntimeCompiler {
                     null,
                     true,
                     conversionRule.mode(),
-                    conversionRule.expression()));
+                    conversionRule.expression(),
+                    declaredPort.standardQuantity(),
+                    declaredPort.quantityMode()));
         }
     }
 
@@ -495,7 +545,9 @@ public class ProductProcessWorkflowRuntimeCompiler {
             String unit,
             String conversionRefId,
             Long conversionVersion,
-            Integer ordinal) {
+            Integer ordinal,
+            BigDecimal standardQuantity,
+            String quantityMode) {
     }
 
     private record MaterialNodeData(

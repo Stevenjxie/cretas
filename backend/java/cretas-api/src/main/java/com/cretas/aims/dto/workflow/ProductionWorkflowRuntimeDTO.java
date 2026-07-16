@@ -66,5 +66,7 @@ public class ProductionWorkflowRuntimeDTO {
         private Boolean required;
         private String conversionMode;
         private String conversionExpression;
+        private BigDecimal standardQuantity;
+        private String quantityMode;
     }
 }

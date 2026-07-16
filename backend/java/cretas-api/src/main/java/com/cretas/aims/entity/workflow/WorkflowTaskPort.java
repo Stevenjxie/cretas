@@ -103,4 +103,10 @@ public class WorkflowTaskPort extends BaseEntity {
 
     @Column(name = "conversion_expression", length = 500)
     private String conversionExpression;
+
+    @Column(name = "standard_quantity", precision = 20, scale = 6)
+    private BigDecimal standardQuantity;
+
+    @Column(name = "quantity_mode", length = 24)
+    private String quantityMode;
 }
