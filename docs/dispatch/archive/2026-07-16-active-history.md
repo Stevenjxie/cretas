@@ -19,6 +19,7 @@
 | SETTLEMENT-RECONCILIATION-20260716 | `aa2af813c2dc8281deb6369dd3c13e5e1f807139` | `/root` | 核对结单改为逐道报工汇总，一键结束计划；保留原料批次与逐道工时，兼容 g/kg 存储单位，并在预填和写入两层阻断跨计划重复占用。定位 F006 同一100kg批次被两个未结计划各占100kg；后端目标测试9/9、Web目标测试5/5及生产构建通过。 |
 | FRESH-DB-FMR-BOOTSTRAP-20260716 | `21883e32013522f0d65bb0f4722cea4bab885151` | `/root` | Docker Desktop/Engine/Compose 在 Windows 重启后可用；新增 active Flyway 路径中的 FMR 空库 bootstrap，真实 PostgreSQL 17 + pgvector 门禁通过 Repository 1/1、Flyway 526 个迁移和完整 Spring/JPA 健康启动；修复 Git Bash 清理 Maven/Java 进程树残留。直接快进 `origin/main` 为 `26c0021191e6a227b325a847b271412973c25b4b`，未使用 PR。 |
 | DEPLOY-SOURCE-CACHE-20260716 | `3cb1ce54d4c14a853506179c631317b724bf2754` | `/root` | 部署脚本增加 manifest-backed 后端 Git tree 缓存，纯文档提交不再重复 Maven；生产 JAR MD5、真实 upstream、active systemd 和直连健康全部匹配时安全 no-op，并增加独立阶段耗时。目标 shell/契约测试通过，直接快进 `origin/main` 为 `e18776ea2`，未重复部署 Java。 |
+| DEPLOY-NOOP-RUNTIME-JAR-20260716 | `46aa0807c686a0cb446b0d50f4a473787c2f357c` | `/root` | PR #1386 合并并从精确 main 发布 Java/Web；Java 从 blue/10010 切到 green/10020，启动健康 69 秒、5/5 稳定观察，总耗时 283 秒；Web 原子发布 HTTP 200；F006 只读验收业务写请求 0。修复 no-op 错比上传文件名的问题，改为校验真实 `aims-0.0.1-SNAPSHOT.jar`，线上 MD5/upstream/systemd/健康证明通过，脚本修复合并为 `13bd1f1af`。 |
 
 ## 合同一致性审计
 

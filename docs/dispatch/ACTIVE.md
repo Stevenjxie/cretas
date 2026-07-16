@@ -8,7 +8,7 @@
 
 | ID | Base SHA | Scope 锁 | Owner | Mode | Worktree/PR | Status | Blocker | Next action |
 |---|---|---|---|---|---|---|---|---|
-| DEPLOY-NOOP-RUNTIME-JAR-20260716 | `46aa0807c686a0cb446b0d50f4a473787c2f357c` | `scripts/deploy/deploy-backend.sh`; `scripts/tests/test-deploy-backend-source-cache.sh`; `docs/dispatch/ACTIVE.md`; completion archive only | Codex coordinator | code | `C:\Users\Steve\cretas-release-1386` / `codex/deploy-noop-runtime-jar` | review | None | Runtime JAR MD5 proof fixed; shell contracts and live read-only no-op proof passed; commit and merge pending |
+| - | - | - | - | - | - | - | - | 当前无在飞任务 |
 
 ## 阻塞项
 
