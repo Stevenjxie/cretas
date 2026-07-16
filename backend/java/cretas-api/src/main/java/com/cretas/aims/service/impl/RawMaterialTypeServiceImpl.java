@@ -97,8 +97,23 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
     public RawMaterialTypeDTO createMaterialType(String factoryId, RawMaterialTypeDTO dto) {
         com.cretas.aims.entity.enums.TaxTreatment taxTreatment = dto.getTaxTreatment() != null
                 ? dto.getTaxTreatment() : com.cretas.aims.entity.enums.TaxTreatment.TAXABLE;
-        validateRequiredPricing(taxTreatment, dto.getTaxRate(), dto.getTaxIncludedUnitPrice(), dto.getTaxExemptionReason());
         MaterialSegmentChain segmentChain = requireValidSegmentChain(factoryId, dto.getSegmentCode());
+        String materialCategory = segmentChain.l1().getSegmentLabel();
+        boolean packaging = isPackagingCategory(materialCategory);
+        String normalizedName = normalizeRequiredName(dto.getName());
+        if (materialTypeRepository.existsByFactoryIdAndNormalizedName(factoryId, normalizedName)) {
+            throw duplicateMaterialName(normalizedName);
+        }
+        dto.setName(normalizedName);
+        dto.setUnit(normalizeUnit(dto.getUnit()));
+        if (taxTreatment != com.cretas.aims.entity.enums.TaxTreatment.EXEMPT && dto.getTaxRate() == null) {
+            dto.setTaxRate(TaxRate.TAX_13);
+        }
+        if (packaging) {
+            validateRequiredPricing(taxTreatment, dto.getTaxRate(), dto.getTaxIncludedUnitPrice(), dto.getTaxExemptionReason());
+        } else {
+            validateTaxMetadata(taxTreatment, dto.getTaxRate(), dto.getTaxExemptionReason());
+        }
         // Serialize allocation per L3 prefix. The previous max+1 scan could return the same
         // suffix to two concurrent transactions.
         materialCodeSegmentRepository.lockByFactoryIdAndSegmentCode(factoryId, segmentChain.l3().getSegmentCode())
@@ -106,7 +121,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         String generated = generateNextCode(factoryId, segmentChain.l1().getSegmentLabel(),
                 segmentChain.l3().getSegmentCode());
         dto.setCode(generated);
-        dto.setCategory(segmentChain.l1().getSegmentLabel());
+        dto.setCategory(materialCategory);
         dto.setPrimaryCode(segmentChain.l1().getSegmentCode());
         log.info("自动生成16位原材料编码: factoryId={}, segmentCode={}, code={}",
                 factoryId, dto.getSegmentCode(), generated);
@@ -131,9 +146,9 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         materialType.setFactoryId(factoryId);
         materialType.setCode(dto.getCode());
         materialType.setName(dto.getName());
-        materialType.setCategory(segmentChain.l1().getSegmentLabel());
+        materialType.setCategory(materialCategory);
         materialType.setUnit(dto.getUnit());
-        materialType.setStorageType(dto.getStorageType());
+        materialType.setStorageType(packaging ? null : dto.getStorageType());
         materialType.setShelfLifeDays(dto.getShelfLifeDays());
         materialType.setMinStock(dto.getMinStock());
         materialType.setMaxStock(dto.getMaxStock());
@@ -145,15 +160,20 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         materialType.setUpdatedAt(LocalDateTime.now());
 
         // SP4-A8: 税率 + 含税单价 → 自动换算未税单价
-        materialType.setTaxRate(dto.getTaxRate());
+        materialType.setTaxRate(taxTreatment == com.cretas.aims.entity.enums.TaxTreatment.EXEMPT
+                ? null : dto.getTaxRate());
         materialType.setTaxTreatment(taxTreatment);
         materialType.setTaxExemptionReason(dto.getTaxExemptionReason());
-        materialType.setTaxIncludedUnitPrice(dto.getTaxIncludedUnitPrice());
-        if (taxTreatment == com.cretas.aims.entity.enums.TaxTreatment.EXEMPT) {
-            materialType.setTaxRate(null);
-            materialType.setUnitPrice(dto.getTaxIncludedUnitPrice());
-        } else if (dto.getTaxRate() != null && dto.getTaxIncludedUnitPrice() != null) {
-            materialType.setUnitPrice(dto.getTaxRate().preTaxPrice(dto.getTaxIncludedUnitPrice()));
+        if (packaging) {
+            materialType.setTaxIncludedUnitPrice(dto.getTaxIncludedUnitPrice());
+            if (taxTreatment == com.cretas.aims.entity.enums.TaxTreatment.EXEMPT) {
+                materialType.setUnitPrice(dto.getTaxIncludedUnitPrice());
+            } else {
+                materialType.setUnitPrice(dto.getTaxRate().preTaxPrice(dto.getTaxIncludedUnitPrice()));
+            }
+        } else {
+            materialType.setTaxIncludedUnitPrice(null);
+            materialType.setUnitPrice(null);
         }
 
         materialType.setPrimaryCode(segmentChain.l1().getSegmentCode());
@@ -179,6 +199,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                 .orElseThrow(() -> new ResourceNotFoundException("原材料类型不存在: " + id));
 
         String previousUnit = materialType.getUnit();
+        boolean wasPackaging = isPackagingCategory(materialType.getCategory());
 
         if (!materialType.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权限操作此原材料类型")
@@ -199,6 +220,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         }
         materialType.setCategory(segmentChain.l1().getSegmentLabel());
         materialType.setPrimaryCode(segmentChain.l1().getSegmentCode());
+        boolean packaging = isPackagingCategory(materialType.getCategory());
 
         // 检查编码是否重复
         if (dto.getCode() != null && !dto.getCode().equals(materialType.getCode())) {
@@ -208,10 +230,21 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         }
 
         // 更新其他字段
-        if (dto.getName() != null) materialType.setName(dto.getName());
+        if (dto.getName() != null) {
+            String normalizedName = normalizeRequiredName(dto.getName());
+            if (materialTypeRepository.existsByFactoryIdAndNormalizedNameExcludingId(
+                    factoryId, normalizedName, id)) {
+                throw duplicateMaterialName(normalizedName);
+            }
+            materialType.setName(normalizedName);
+        }
         // category is derived exclusively from the validated L1 ancestor.
-        if (dto.getUnit() != null) materialType.setUnit(dto.getUnit());
-        if (dto.getStorageType() != null) materialType.setStorageType(dto.getStorageType());
+        if (dto.getUnit() != null) materialType.setUnit(normalizeUnit(dto.getUnit()));
+        if (packaging) {
+            materialType.setStorageType(null);
+        } else if (dto.getStorageType() != null) {
+            materialType.setStorageType(dto.getStorageType());
+        }
         if (dto.getShelfLifeDays() != null) materialType.setShelfLifeDays(dto.getShelfLifeDays());
         if (dto.getMinStock() != null) materialType.setMinStock(dto.getMinStock());
         if (dto.getMaxStock() != null) materialType.setMaxStock(dto.getMaxStock());
@@ -222,16 +255,31 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         if (dto.getTaxRate() != null) materialType.setTaxRate(dto.getTaxRate());
         if (dto.getTaxTreatment() != null) materialType.setTaxTreatment(dto.getTaxTreatment());
         if (dto.getTaxExemptionReason() != null) materialType.setTaxExemptionReason(dto.getTaxExemptionReason());
-        if (dto.getTaxIncludedUnitPrice() != null) materialType.setTaxIncludedUnitPrice(dto.getTaxIncludedUnitPrice());
-        // 仅当 taxRate + taxIncludedUnitPrice 都已配置 (含本次更新后的值) 才换算
-        if (materialType.getTaxTreatment() == com.cretas.aims.entity.enums.TaxTreatment.EXEMPT) {
-            materialType.setTaxRate(null);
-            materialType.setUnitPrice(materialType.getTaxIncludedUnitPrice());
-        } else if (materialType.getTaxRate() != null && materialType.getTaxIncludedUnitPrice() != null) {
-            materialType.setUnitPrice(materialType.getTaxRate().preTaxPrice(materialType.getTaxIncludedUnitPrice()));
+        if (materialType.getTaxTreatment() != com.cretas.aims.entity.enums.TaxTreatment.EXEMPT
+                && materialType.getTaxRate() == null) {
+            materialType.setTaxRate(TaxRate.TAX_13);
         }
-        validateRequiredPricing(materialType.getTaxTreatment(), materialType.getTaxRate(),
-                materialType.getTaxIncludedUnitPrice(), materialType.getTaxExemptionReason());
+        if (packaging) {
+            if (dto.getTaxIncludedUnitPrice() != null) {
+                materialType.setTaxIncludedUnitPrice(dto.getTaxIncludedUnitPrice());
+            }
+            if (materialType.getTaxTreatment() == com.cretas.aims.entity.enums.TaxTreatment.EXEMPT) {
+                materialType.setTaxRate(null);
+                materialType.setUnitPrice(materialType.getTaxIncludedUnitPrice());
+            } else if (materialType.getTaxIncludedUnitPrice() != null) {
+                materialType.setUnitPrice(materialType.getTaxRate().preTaxPrice(materialType.getTaxIncludedUnitPrice()));
+            }
+            validateRequiredPricing(materialType.getTaxTreatment(), materialType.getTaxRate(),
+                    materialType.getTaxIncludedUnitPrice(), materialType.getTaxExemptionReason());
+        } else {
+            if (materialType.getTaxTreatment() == com.cretas.aims.entity.enums.TaxTreatment.EXEMPT) {
+                materialType.setTaxRate(null);
+            }
+            materialType.setTaxIncludedUnitPrice(null);
+            materialType.setUnitPrice(null);
+            validateTaxMetadata(materialType.getTaxTreatment(), materialType.getTaxRate(),
+                    materialType.getTaxExemptionReason());
+        }
 
         // primaryCode is also derived; caller input cannot override it.
 
@@ -251,6 +299,11 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         materialType.setUpdatedAt(LocalDateTime.now());
         materialType = materialTypeRepository.save(materialType);
 
+        if (wasPackaging && !packaging) {
+            packagingRepository.deleteByMaterialTypeId(id);
+            log.info("物料由包材改为非包材，已清理包装层级: factoryId={}, materialTypeId={}", factoryId, id);
+        }
+
         if (!Objects.equals(previousUnit, materialType.getUnit())) {
             workflowUnitReviewService.markPublishedWorkflowsForReview(factoryId);
         }
@@ -263,6 +316,16 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                                          com.cretas.aims.entity.enums.TaxRate taxRate,
                                          BigDecimal taxIncludedUnitPrice,
                                          String taxExemptionReason) {
+        validateTaxMetadata(taxTreatment, taxRate, taxExemptionReason);
+        if (taxIncludedUnitPrice == null || taxIncludedUnitPrice.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(400, "含税单价必须大于0")
+                    .withHint("包材主数据需要维护采购参考价");
+        }
+    }
+
+    private void validateTaxMetadata(com.cretas.aims.entity.enums.TaxTreatment taxTreatment,
+                                     com.cretas.aims.entity.enums.TaxRate taxRate,
+                                     String taxExemptionReason) {
         if (taxTreatment == com.cretas.aims.entity.enums.TaxTreatment.EXEMPT
                 && (taxExemptionReason == null || taxExemptionReason.isBlank())) {
             throw new BusinessException(400, "免税物料必须填写免税依据")
@@ -272,10 +335,28 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
             throw new BusinessException(400, "税率不能为空")
                     .withHint("请在物料字典维护采购税率，BOM 将自动继承");
         }
-        if (taxIncludedUnitPrice == null || taxIncludedUnitPrice.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new BusinessException(400, "含税单价必须大于0")
-                    .withHint("请在物料字典维护含税单价，BOM 不再重复录入价格");
+    }
+
+    private boolean isPackagingCategory(String category) {
+        return category != null
+                && ("PACKAGING".equalsIgnoreCase(category.trim()) || "包材".equals(category.trim()));
+    }
+
+    private String normalizeRequiredName(String name) {
+        if (name == null || name.trim().isEmpty()) {
+            throw new BusinessException(400, "原料类型名称不能为空").withHintTarget("name");
         }
+        return name.trim();
+    }
+
+    private String normalizeUnit(String unit) {
+        return unit == null || unit.trim().isEmpty() ? "kg" : unit.trim();
+    }
+
+    private BusinessException duplicateMaterialName(String name) {
+        return new BusinessException(409, "原料类型名称已存在: " + name)
+                .withHint("同一工厂内原料类型名称不能重复，请修改名称")
+                .withHintTarget("name");
     }
 
     @Override

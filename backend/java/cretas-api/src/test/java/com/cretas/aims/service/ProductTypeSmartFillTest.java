@@ -7,6 +7,9 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.impl.ProductTypeServiceImpl;
+import com.cretas.aims.service.product.ProductPackagingSpecService;
+import com.cretas.aims.service.unit.ProductSpecificationConversionSyncService;
+import com.cretas.aims.service.workflow.WorkflowUnitReviewService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -48,6 +51,12 @@ class ProductTypeSmartFillTest {
     private CustomerRepository customerRepository;
     @Mock
     private ObjectMapper objectMapper;
+    @Mock
+    private WorkflowUnitReviewService workflowUnitReviewService;
+    @Mock
+    private ProductSpecificationConversionSyncService specificationConversionSyncService;
+    @Mock
+    private ProductPackagingSpecService productPackagingSpecService;
 
     @InjectMocks
     private ProductTypeServiceImpl service;
@@ -61,8 +70,9 @@ class ProductTypeSmartFillTest {
         dto.setCode(null); // 自动生成
         dto.setProductCategory("FINISHED_PRODUCT");
 
-        // 第一次 count=12 → CP...0013, 撞约束; 第二次 count=13 → CP...0014, 成功
-        when(productTypeRepository.countByFactoryId("F001")).thenReturn(12L, 13L);
+        // 第一次最大后缀=12 → CP...0013, 撞约束; 重查后最大后缀=13 → CP...0014
+        when(productTypeRepository.findCodesByFactoryIdAndGeneratedPrefix("F001", "CPF001"))
+                .thenReturn(List.of("CPF0010012"), List.of("CPF0010013"));
         when(productTypeRepository.save(any(ProductType.class)))
                 .thenThrow(new DataIntegrityViolationException("duplicate code"))
                 .thenAnswer(inv -> inv.getArgument(0));
@@ -81,7 +91,8 @@ class ProductTypeSmartFillTest {
         dto.setCode(null);
         dto.setProductCategory("FINISHED_PRODUCT");
 
-        when(productTypeRepository.countByFactoryId("F001")).thenReturn(0L);
+        when(productTypeRepository.findCodesByFactoryIdAndGeneratedPrefix("F001", "CPF001"))
+                .thenReturn(List.of());
         when(productTypeRepository.save(any(ProductType.class)))
                 .thenThrow(new DataIntegrityViolationException("duplicate code"));
 

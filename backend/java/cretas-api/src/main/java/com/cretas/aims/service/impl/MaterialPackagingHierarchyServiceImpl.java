@@ -50,9 +50,14 @@ public class MaterialPackagingHierarchyServiceImpl implements MaterialPackagingH
     public MaterialPackagingHierarchyDTO upsert(String factoryId, String materialTypeId,
                                                 MaterialPackagingHierarchyDTO dto, Long createdBy) {
         // 校验原料归属本工厂
-        materialTypeRepository.findById(materialTypeId)
+        com.cretas.aims.entity.RawMaterialType materialType = materialTypeRepository.findById(materialTypeId)
                 .filter(m -> factoryId.equals(m.getFactoryId()))
                 .orElseThrow(() -> new BusinessException(404, "原材料不存在或不属于此工厂"));
+        if (!isPackagingCategory(materialType.getCategory())) {
+            throw new BusinessException(409, "仅包材可以配置包装层级")
+                    .withHint("请先将物料大类设置为包材，再维护包装层级")
+                    .withHintTarget("category");
+        }
 
         validateLevels(dto);
 
@@ -111,6 +116,11 @@ public class MaterialPackagingHierarchyServiceImpl implements MaterialPackagingH
         if (hasLevel3Unit && !hasLevel2Unit) {
             throw new BusinessException(400, "必须先配置二级单位才能配置三级");
         }
+    }
+
+    private boolean isPackagingCategory(String category) {
+        return category != null
+                && ("PACKAGING".equalsIgnoreCase(category.trim()) || "包材".equals(category.trim()));
     }
 
     private MaterialPackagingHierarchyDTO toDTO(MaterialPackagingHierarchy e) {

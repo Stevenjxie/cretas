@@ -40,6 +40,15 @@ public interface ProductTypeRepository extends JpaRepository<ProductType, String
       */
     Page<ProductType> findByFactoryId(String factoryId, Pageable pageable);
 
+    /** 产品/SKU 目录可见记录；RAW_MATERIAL 仅作为 Workflow 内部兼容 owner，不对产品页暴露。 */
+    @Query("SELECT p FROM ProductType p WHERE p.factoryId = :factoryId " +
+           "AND UPPER(TRIM(COALESCE(p.productCategory, ''))) <> 'RAW_MATERIAL'")
+    Page<ProductType> findVisibleByFactoryId(@Param("factoryId") String factoryId, Pageable pageable);
+
+    @Query("SELECT p FROM ProductType p WHERE p.factoryId = :factoryId " +
+           "AND UPPER(TRIM(COALESCE(p.productCategory, ''))) <> 'RAW_MATERIAL'")
+    List<ProductType> findVisibleByFactoryId(@Param("factoryId") String factoryId);
+
     /**
      * 精简「选项」投影 —— 仅供下拉/SKU picker。构造器投影只 SELECT 需要的标量列,
      * 不 hydrate 实体、不解析 JSON 字段, 单查询即可返回全量, 避免重 DTO 的 ~3s/422KB 开销。
@@ -48,13 +57,20 @@ public interface ProductTypeRepository extends JpaRepository<ProductType, String
      */
     @Query("SELECT new com.cretas.aims.dto.producttype.ProductTypeOptionDTO(" +
            "p.id, p.code, p.name, p.unit, p.specification, p.productCategory, p.isActive, p.temperatureZone) " +
-           "FROM ProductType p WHERE p.factoryId = :factoryId ORDER BY p.createdAt DESC")
+           "FROM ProductType p WHERE p.factoryId = :factoryId " +
+           "AND UPPER(TRIM(COALESCE(p.productCategory, ''))) <> 'RAW_MATERIAL' " +
+           "ORDER BY p.createdAt DESC")
     List<com.cretas.aims.dto.producttype.ProductTypeOptionDTO> findOptionsByFactoryId(
             @Param("factoryId") String factoryId);
      /**
      * 根据类别查找产品类型
       */
     List<ProductType> findByFactoryIdAndCategory(String factoryId, String category);
+
+    @Query("SELECT p FROM ProductType p WHERE p.factoryId = :factoryId AND p.category = :category " +
+           "AND UPPER(TRIM(COALESCE(p.productCategory, ''))) <> 'RAW_MATERIAL'")
+    List<ProductType> findVisibleByFactoryIdAndCategory(@Param("factoryId") String factoryId,
+                                                        @Param("category") String category);
      /**
      * 搜索产品类型
      * 注意：code使用右模糊（可使用索引），name/category使用双向模糊（无法使用索引）
@@ -66,6 +82,15 @@ public interface ProductTypeRepository extends JpaRepository<ProductType, String
     Page<ProductType> searchProductTypes(@Param("factoryId") String factoryId,
                                          @Param("keyword") String keyword,
                                          Pageable pageable);
+
+    @Query("SELECT p FROM ProductType p WHERE p.factoryId = :factoryId " +
+           "AND UPPER(TRIM(COALESCE(p.productCategory, ''))) <> 'RAW_MATERIAL' AND " +
+           "(LOWER(p.name) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
+           "LOWER(p.code) LIKE LOWER(CONCAT(:keyword, '%')) ESCAPE '\\' OR " +
+           "LOWER(p.category) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\')")
+    Page<ProductType> searchVisibleProductTypes(@Param("factoryId") String factoryId,
+                                                @Param("keyword") String keyword,
+                                                Pageable pageable);
 
     /** R10 CRIT-2: push-down isActive filter (see CustomerRepository). */
     Page<ProductType> findByFactoryIdAndIsActiveTrue(String factoryId, Pageable pageable);
@@ -85,6 +110,14 @@ public interface ProductTypeRepository extends JpaRepository<ProductType, String
      */
     Page<ProductType> findByFactoryIdAndProductCategory(String factoryId, String productCategory, Pageable pageable);
 
+    @Query("SELECT p FROM ProductType p WHERE p.factoryId = :factoryId " +
+           "AND p.productCategory = :productCategory " +
+           "AND UPPER(TRIM(COALESCE(p.productCategory, ''))) <> 'RAW_MATERIAL'")
+    Page<ProductType> findVisibleByFactoryIdAndProductCategory(
+            @Param("factoryId") String factoryId,
+            @Param("productCategory") String productCategory,
+            Pageable pageable);
+
     /** 按工厂 + 大类 + 关键词搜索 (兼顾过滤 + 搜索两种场景) */
     @Query("SELECT p FROM ProductType p WHERE p.factoryId = :factoryId " +
            "AND p.productCategory = :productCategory AND " +
@@ -95,6 +128,17 @@ public interface ProductTypeRepository extends JpaRepository<ProductType, String
                                                           @Param("keyword") String keyword,
                                                           Pageable pageable);
 
+    @Query("SELECT p FROM ProductType p WHERE p.factoryId = :factoryId " +
+           "AND p.productCategory = :productCategory " +
+           "AND UPPER(TRIM(COALESCE(p.productCategory, ''))) <> 'RAW_MATERIAL' AND " +
+           "(LOWER(p.name) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
+           " LOWER(p.code) LIKE LOWER(CONCAT(:keyword, '%')) ESCAPE '\\')")
+    Page<ProductType> searchVisibleByFactoryIdAndProductCategory(
+            @Param("factoryId") String factoryId,
+            @Param("productCategory") String productCategory,
+            @Param("keyword") String keyword,
+            Pageable pageable);
+
     /**
      * 成品/SKU 管理页 单位/温区 筛选 (2026-07-14) — category/keyword/unit/temperatureZone 均可空。
      * 每个参数用 CAST(:param AS string) IS NULL 做类型 hint (PostgreSQL 严格类型推断,
@@ -102,6 +146,7 @@ public interface ProductTypeRepository extends JpaRepository<ProductType, String
      * 仅当 Service 层判定 unit/temperatureZone 至少一个非空时才调用本查询, 不影响上面 4 条老查询路径。
      */
     @Query("SELECT p FROM ProductType p WHERE p.factoryId = :factoryId " +
+           "AND UPPER(TRIM(COALESCE(p.productCategory, ''))) <> 'RAW_MATERIAL' " +
            "AND (CAST(:productCategory AS string) IS NULL OR p.productCategory = :productCategory) " +
            "AND (CAST(:keyword AS string) IS NULL OR " +
            "     LOWER(p.name) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
@@ -118,6 +163,27 @@ public interface ProductTypeRepository extends JpaRepository<ProductType, String
      * 检查产品代码是否存在
       */
     boolean existsByFactoryIdAndCode(String factoryId, String code);
+
+    /** 当前生成前缀下的所有编码；Service 解析纯数字后缀并取最大值。 */
+    @Query("SELECT p.code FROM ProductType p WHERE p.factoryId = :factoryId " +
+           "AND SUBSTRING(p.code, 1, LENGTH(:prefix)) = :prefix")
+    List<String> findCodesByFactoryIdAndGeneratedPrefix(@Param("factoryId") String factoryId,
+                                                        @Param("prefix") String prefix);
+
+    @Query("SELECT CASE WHEN COUNT(p) > 0 THEN true ELSE false END FROM ProductType p " +
+           "WHERE p.factoryId = :factoryId " +
+           "AND UPPER(TRIM(COALESCE(p.productCategory, ''))) <> 'RAW_MATERIAL' " +
+           "AND LOWER(TRIM(p.name)) = LOWER(TRIM(:name))")
+    boolean existsByFactoryIdAndNormalizedName(@Param("factoryId") String factoryId,
+                                               @Param("name") String name);
+
+    @Query("SELECT CASE WHEN COUNT(p) > 0 THEN true ELSE false END FROM ProductType p " +
+           "WHERE p.factoryId = :factoryId AND p.id <> :excludeId " +
+           "AND UPPER(TRIM(COALESCE(p.productCategory, ''))) <> 'RAW_MATERIAL' " +
+           "AND LOWER(TRIM(p.name)) = LOWER(TRIM(:name))")
+    boolean existsByFactoryIdAndNormalizedNameExcludingId(@Param("factoryId") String factoryId,
+                                                          @Param("name") String name,
+                                                          @Param("excludeId") String excludeId);
 
     /**
      * 检查产品类型是否存在（工厂隔离）
@@ -141,6 +207,10 @@ public interface ProductTypeRepository extends JpaRepository<ProductType, String
      * @return 产品类型列表
      */
     List<ProductType> findByFactoryIdAndIsActiveTrue(String factoryId);
+
+    @Query("SELECT p FROM ProductType p WHERE p.factoryId = :factoryId AND p.isActive = true " +
+           "AND UPPER(TRIM(COALESCE(p.productCategory, ''))) <> 'RAW_MATERIAL'")
+    List<ProductType> findVisibleByFactoryIdAndIsActiveTrue(@Param("factoryId") String factoryId);
 
     /** 查询产品模板列表 (templateId IS NULL, 即基础产品) */
     List<ProductType> findByFactoryIdAndTemplateIdIsNullAndIsActiveTrue(String factoryId);

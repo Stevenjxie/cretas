@@ -89,6 +89,12 @@ public class ProductTypeServiceImpl implements ProductTypeService {
     @Transactional
     @CacheEvict(value = {"productTypes", "productTypeOptions"}, key = "#factoryId")
     public ProductTypeDTO createProductType(String factoryId, ProductTypeDTO dto) {
+        String normalizedName = normalizeRequiredName(dto.getName(), "产品名称不能为空");
+        if (productTypeRepository.existsByFactoryIdAndNormalizedName(factoryId, normalizedName)) {
+            throw duplicateProductName(normalizedName);
+        }
+        dto.setName(normalizedName);
+
         // T149 Part A: 区分「自动生成编号」与「用户手输编号」.
         // - 用户手输 (manual): 提前检查存在性 → 友好 409, 不重试 (用户本就该换一个).
         // - 自动生成 (generated): count+1 序号在并发下可能撞 UNIQUE 约束 → 拦截
@@ -276,6 +282,15 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         if (!productType.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权限操作此产品类型")
                     .withHint("当前产品类型不属于该工厂, 无法操作");
+        }
+
+        if (dto.getName() != null) {
+            String normalizedName = normalizeRequiredName(dto.getName(), "产品名称不能为空");
+            if (productTypeRepository.existsByFactoryIdAndNormalizedNameExcludingId(
+                    factoryId, normalizedName, id)) {
+                throw duplicateProductName(normalizedName);
+            }
+            dto.setName(normalizedName);
         }
 
         assertUnitChangeDoesNotBypassMigration(productType, dto);
@@ -508,14 +523,14 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                     hasTemperatureZone ? temperatureZone : null,
                     pageable);
         } else if (hasCategory && hasKeyword) {
-            page = productTypeRepository.searchByFactoryIdAndProductCategory(
+            page = productTypeRepository.searchVisibleByFactoryIdAndProductCategory(
                     factoryId, productCategory, safeKeyword, pageable);
         } else if (hasCategory) {
-            page = productTypeRepository.findByFactoryIdAndProductCategory(factoryId, productCategory, pageable);
+            page = productTypeRepository.findVisibleByFactoryIdAndProductCategory(factoryId, productCategory, pageable);
         } else if (hasKeyword) {
-            page = productTypeRepository.searchProductTypes(factoryId, safeKeyword, pageable);
+            page = productTypeRepository.searchVisibleProductTypes(factoryId, safeKeyword, pageable);
         } else {
-            page = productTypeRepository.findByFactoryId(factoryId, pageable);
+            page = productTypeRepository.findVisibleByFactoryId(factoryId, pageable);
         }
 
         List<ProductTypeDTO> dtos = page.getContent().stream()
@@ -543,7 +558,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
     public List<ProductTypeDTO> getActiveProductTypes(String factoryId) {
         log.info("获取激活的产品类型: factoryId={}", factoryId);
 
-        List<ProductType> productTypes = productTypeRepository.findByFactoryIdAndIsActive(factoryId, true);
+        List<ProductType> productTypes = productTypeRepository.findVisibleByFactoryIdAndIsActiveTrue(factoryId);
         return productTypes.stream()
                 .map(this::convertToDTO)
                 .collect(Collectors.toList());
@@ -553,7 +568,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
     public List<ProductTypeDTO> getProductTypesByCategory(String factoryId, String category) {
         log.info("根据类别获取产品类型: factoryId={}, category={}", factoryId, category);
 
-        List<ProductType> productTypes = productTypeRepository.findByFactoryIdAndCategory(factoryId, category);
+        List<ProductType> productTypes = productTypeRepository.findVisibleByFactoryIdAndCategory(factoryId, category);
         return productTypes.stream()
                 .map(this::convertToDTO)
                 .collect(Collectors.toList());
@@ -569,7 +584,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                 Sort.by(Sort.Direction.DESC, "createdAt")
         );
 
-        Page<ProductType> page = productTypeRepository.searchProductTypes(factoryId,
+        Page<ProductType> page = productTypeRepository.searchVisibleProductTypes(factoryId,
             com.cretas.aims.util.SqlLikeEscaper.escape(keyword), pageable);
         List<ProductTypeDTO> dtos = page.getContent().stream()
                 .map(this::convertToDTO)
@@ -587,7 +602,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
     public List<String> getProductCategories(String factoryId) {
         log.info("获取产品类别列表: factoryId={}", factoryId);
 
-        return productTypeRepository.findByFactoryId(factoryId).stream()
+        return productTypeRepository.findVisibleByFactoryId(factoryId).stream()
                 .map(ProductType::getCategory)
                 .filter(category -> category != null && !category.isEmpty())
                 .distinct()
@@ -697,8 +712,36 @@ public class ProductTypeServiceImpl implements ProductTypeService {
     private String buildGeneratedCode(String factoryId, String category, String relatedCustomer) {
         String prefix = getCategoryPrefix(category);
         String customerInitials = getCustomerInitials(relatedCustomer, factoryId);
-        long count = productTypeRepository.countByFactoryId(factoryId);
-        return String.format("%s%s%04d", prefix, customerInitials, count + 1);
+        String generatedPrefix = prefix + customerInitials;
+        long maxSuffix = productTypeRepository.findCodesByFactoryIdAndGeneratedPrefix(factoryId, generatedPrefix)
+                .stream()
+                .filter(Objects::nonNull)
+                .filter(code -> code.startsWith(generatedPrefix))
+                .map(code -> code.substring(generatedPrefix.length()))
+                .filter(suffix -> !suffix.isEmpty() && suffix.chars().allMatch(Character::isDigit))
+                .mapToLong(suffix -> {
+                    try {
+                        return Long.parseLong(suffix);
+                    } catch (NumberFormatException ignored) {
+                        return 0;
+                    }
+                })
+                .max()
+                .orElse(0);
+        return String.format("%s%04d", generatedPrefix, maxSuffix + 1);
+    }
+
+    private String normalizeRequiredName(String name, String emptyMessage) {
+        if (name == null || name.trim().isEmpty()) {
+            throw new BusinessException(400, emptyMessage).withHintTarget("name");
+        }
+        return name.trim();
+    }
+
+    private BusinessException duplicateProductName(String name) {
+        return new BusinessException(409, "产品名称已存在: " + name)
+                .withHint("同一工厂内产品名称不能重复，请修改名称")
+                .withHintTarget("name");
     }
 
     @Override
