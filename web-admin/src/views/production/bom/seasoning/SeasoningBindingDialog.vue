@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
-import { ElMessage, ElNotification } from 'element-plus';
+import { ElMessage } from 'element-plus';
+import { showSingletonNotification } from '@/utils/singletonNotification';
 import { useRoute, useRouter } from 'vue-router';
 import { bomSeasoningApi, type SeasoningBindingView, type SeasoningProcessView } from '@/api/bom';
 import { get } from '@/api/request';
@@ -89,7 +90,7 @@ async function submit() {
   const duplicate = findDuplicateBinding(props.process, form.materialTypeId, props.binding?.id);
   if (duplicate) return ElMessage.warning('该调料已在本工序配置');
   if (missingMovingAvgPrice.value) {
-    ElNotification({
+    showSingletonNotification({
       title: '该调料尚无移动平均价',
       message: '表单内容已保留。请点击下方“去配置价格”在新标签页补充价格，完成后回到本页即可继续保存。',
       type: 'warning', duration: 0, showClose: true,

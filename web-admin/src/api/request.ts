@@ -52,7 +52,7 @@ const showMessage = async (message: string, type: 'success' | 'error' | 'warning
 
 // Apr 18 2026 UX 进阶: 3 渠道错误呈现
 //   severity=BLOCKING  → ElMessageBox.alert (必须点确定才能继续, 阻塞)
-//   actionHint != null → ElNotification (带 "去处理" 按钮; 点击 pulse hintTarget)
+//   actionHint != null → singleton notification (带 "去处理" 按钮; 点击 pulse hintTarget)
 //   default            → showMessage (方案 A sticky toast)
 const pulseHintTarget = (label: string) => {
   if (!label) return;
@@ -73,7 +73,7 @@ const showRichError = async (
   opts: { actionHint?: string | null; severity?: string | null; hintTarget?: string | null }
 ) => {
   const el = await import('element-plus');
-  const { ElMessageBox, ElNotification } = el;
+  const { ElMessageBox } = el;
   if (opts.severity === 'BLOCKING') {
     // Modal alert — must click 确定 to dismiss. Used for critical errors
     // (RBAC denial, destructive-confirm, critical business-rule violation).
@@ -89,7 +89,8 @@ const showRichError = async (
   }
   if (opts.actionHint) {
     // Rich notification with action button.
-    const n = ElNotification({
+    const { showSingletonNotification } = await import('@/utils/singletonNotification');
+    const n = showSingletonNotification({
       title: '操作无法完成',
       message: `${message}\n\n${opts.actionHint}`,
       type: 'error',

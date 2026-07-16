@@ -5,7 +5,8 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { useBusinessMode } from '@/composables/useBusinessMode';
 import { get, post, put, del } from '@/api/request';
-import { ElMessage, ElMessageBox, ElNotification } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { showSingletonNotification } from '@/utils/singletonNotification';
 import { Plus, Refresh, Search, ChatDotRound, QuestionFilled } from '@element-plus/icons-vue';
 import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue';
 import AuditLogDrawer from '@/components/AuditLogDrawer.vue';
@@ -1510,7 +1511,7 @@ async function handleBatchSubmitForReview(): Promise<void> {
     if (confirmedOnly > 0) {
       msg += '已确认订单可直接「提交财务审核」重试，无需重走确认。';
     }
-    ElNotification({
+    showSingletonNotification({
       title: '批量提交财务审核结果',
       message: msg,
       type: failed > 0 ? 'warning' : 'success',
@@ -1553,7 +1554,7 @@ async function runBatchSimple(
         failedList.push(`${orderNumber}: ${extractErrMessage(res.reason, actionLabel + '失败')}`);
       }
     }
-    ElNotification({
+    showSingletonNotification({
       title: `批量${actionLabel}结果`,
       message: `成功 ${success} 条，失败 ${failed} 条。`,
       type: failed > 0 ? 'warning' : 'success',
@@ -1639,7 +1640,7 @@ async function submitCancel(): Promise<void> {
       );
       const success = results.filter((r) => r.status === 'fulfilled').length;
       const failed = results.length - success;
-      ElNotification({
+      showSingletonNotification({
         title: '批量取消结果',
         message: `成功 ${success} 条，失败 ${failed} 条。`,
         type: failed > 0 ? 'warning' : 'success',

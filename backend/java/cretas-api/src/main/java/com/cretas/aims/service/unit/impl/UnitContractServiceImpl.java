@@ -18,6 +18,7 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.MathContext;
 import java.time.LocalDateTime;
+import java.text.Normalizer;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -55,8 +56,9 @@ public class UnitContractServiceImpl implements UnitContractService {
 
     @Override
     public List<CanonicalUnit> catalog(String factoryId) {
-        return factoryCatalog(factoryId).units().values().stream()
-                .distinct()
+        Map<String, CanonicalUnit> byCode = new LinkedHashMap<>(SYSTEM_UNITS);
+        factoryCatalog(factoryId).units().values().forEach(unit -> byCode.put(unit.code(), unit));
+        return byCode.values().stream()
                 .sorted(Comparator.comparing(CanonicalUnit::code))
                 .toList();
     }
@@ -152,6 +154,19 @@ public class UnitContractServiceImpl implements UnitContractService {
                     List.of(new UnitConversionStep(from.code(), to.code(), factor, null, null)),
                     null
             );
+        }
+
+        if (isScientificDimension(from.unit().dimension())
+                && isScientificDimension(to.unit().dimension())
+                && from.unit().dimension() != to.unit().dimension()) {
+            return result(
+                    UnitConversionStatus.INCOMPATIBLE_DIMENSION,
+                    quantity,
+                    from.code(),
+                    to.code(),
+                    List.of(from.code(), to.code()),
+                    List.of(),
+                    "不同物理维度的科学单位不能直接换算");
         }
 
         if (!hasText(context.factoryId()) || !hasText(context.productTypeId()) || context.at() == null) {
@@ -260,9 +275,17 @@ public class UnitContractServiceImpl implements UnitContractService {
 
     private boolean isIntrinsicConvertible(CanonicalUnit from, CanonicalUnit to) {
         return from.dimension() == to.dimension()
-                && (from.dimension() == UnitDimension.MASS || from.dimension() == UnitDimension.VOLUME)
+                && (from.dimension() == UnitDimension.MASS
+                || from.dimension() == UnitDimension.VOLUME
+                || from.dimension() == UnitDimension.LENGTH)
                 && from.factorToBase() != null
                 && to.factorToBase() != null;
+    }
+
+    private boolean isScientificDimension(UnitDimension dimension) {
+        return dimension == UnitDimension.MASS
+                || dimension == UnitDimension.VOLUME
+                || dimension == UnitDimension.LENGTH;
     }
 
     private ConversionGraph buildGraph(
@@ -564,6 +587,7 @@ public class UnitContractServiceImpl implements UnitContractService {
         return switch (category.trim().toUpperCase(Locale.ROOT)) {
             case "MASS", "WEIGHT" -> UnitDimension.MASS;
             case "VOLUME" -> UnitDimension.VOLUME;
+            case "LENGTH" -> UnitDimension.LENGTH;
             case "COUNT" -> UnitDimension.COUNT;
             case "PACKAGE" -> UnitDimension.PACKAGE;
             default -> UnitDimension.UNKNOWN;
@@ -574,7 +598,9 @@ public class UnitContractServiceImpl implements UnitContractService {
         if (rawUnit == null || rawUnit.isBlank()) {
             return null;
         }
-        return rawUnit.trim().toLowerCase(Locale.ROOT);
+        return Normalizer.normalize(rawUnit, Normalizer.Form.NFKC)
+                .trim()
+                .toLowerCase(Locale.ROOT);
     }
 
     private static Map<String, CanonicalUnit> systemUnits() {
@@ -586,6 +612,10 @@ public class UnitContractServiceImpl implements UnitContractService {
         add(units, "t", UnitDimension.MASS, "g", "1000000", "吨", 6);
         add(units, "ml", UnitDimension.VOLUME, "ml", "1", "毫升", 3);
         add(units, "l", UnitDimension.VOLUME, "ml", "1000", "升", 3);
+        add(units, "mm", UnitDimension.LENGTH, "m", "0.001", "毫米", 3);
+        add(units, "cm", UnitDimension.LENGTH, "m", "0.01", "厘米", 3);
+        add(units, "m", UnitDimension.LENGTH, "m", "1", "米", 3);
+        add(units, "km", UnitDimension.LENGTH, "m", "1000", "千米", 6);
         add(units, "pcs", UnitDimension.COUNT, "pcs", null, "件", 0);
         add(units, "portion", UnitDimension.COUNT, "portion", null, "份", 0);
         add(units, "box", UnitDimension.PACKAGE, "box", null, "盒", 0);
@@ -629,6 +659,10 @@ public class UnitContractServiceImpl implements UnitContractService {
         alias(aliases, "t", "t", "吨");
         alias(aliases, "ml", "ml", "毫升");
         alias(aliases, "l", "l", "升");
+        alias(aliases, "mm", "mm", "毫米", "公厘", "millimeter", "millimeters");
+        alias(aliases, "cm", "cm", "厘米", "公分", "centimeter", "centimeters");
+        alias(aliases, "m", "m", "米", "公尺", "meter", "meters", "metre", "metres");
+        alias(aliases, "km", "km", "千米", "公里", "kilometer", "kilometers", "kilometre", "kilometres");
         alias(aliases, "pcs", "pcs", "件", "个", "只");
         alias(aliases, "portion", "portion", "份");
         alias(aliases, "box", "box", "盒");
@@ -643,6 +677,17 @@ public class UnitContractServiceImpl implements UnitContractService {
         alias(aliases, "slice", "slice", "片");
         alias(aliases, "item", "item", "项");
         return Map.copyOf(aliases);
+    }
+
+    /** Built-in canonical lookup used by the unit creation duplicate gate. */
+    public static Optional<CanonicalUnit> describeBuiltIn(String rawUnit) {
+        String normalized = key(rawUnit);
+        return Optional.ofNullable(normalized == null ? null : systemUnitFor(normalized));
+    }
+
+    /** Same normalization used by runtime unit lookup and create-time duplicate checks. */
+    public static String normalizeLookupKey(String rawUnit) {
+        return key(rawUnit);
     }
 
     private static void alias(Map<String, String> aliases, String code, String... values) {

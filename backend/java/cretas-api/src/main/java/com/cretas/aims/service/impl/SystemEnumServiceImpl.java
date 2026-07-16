@@ -7,8 +7,10 @@ import com.cretas.aims.repository.config.SystemEnumRepository;
 import com.cretas.aims.repository.config.UnitOfMeasurementRepository;
 import com.cretas.aims.service.SystemEnumService;
 import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.CanonicalUnit;
 import com.cretas.aims.service.unit.UnitConversionContext;
 import com.cretas.aims.service.unit.UnitConversionResult;
+import com.cretas.aims.service.unit.impl.UnitContractServiceImpl;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
@@ -276,13 +278,72 @@ public class SystemEnumServiceImpl implements SystemEnumService {
     @Transactional
     @CacheEvict(value = {"unitsByCategory", "allUnits"}, allEntries = true)
     public UnitOfMeasurement createUnit(UnitOfMeasurement unit) {
-        if (unitOfMeasurementRepository.existsByFactoryIdAndUnitCode(unit.getFactoryId(), unit.getUnitCode())) {
-            throw new BusinessException(409, "单位配置已存在: " + unit.getUnitCode())
-                    .withHint("请使用其他单位编码, 或编辑现有配置")
+        UnitConflict conflict = findUnitConflict(unit);
+        if (conflict != null) {
+            throw new BusinessException(409, "单位已存在或与已有别名冲突: " + conflict.display())
+                    .withCode("UNIT_ALIAS_CONFLICT")
+                    .withHint("请直接选择已有单位 " + conflict.display() + "，不要重复创建")
                     .withHintTarget("unitCode");
         }
 
         return unitOfMeasurementRepository.save(unit);
+    }
+
+    private UnitConflict findUnitConflict(UnitOfMeasurement requested) {
+        Set<String> requestedKeys = unitKeys(requested);
+        if (requestedKeys.isEmpty()) {
+            throw new BusinessException(400, "单位代码、名称或符号至少填写一项")
+                    .withCode("UNIT_IDENTITY_REQUIRED")
+                    .withHintTarget("unitCode");
+        }
+
+        for (UnitOfMeasurement existing : unitOfMeasurementRepository.findAllByFactoryId(requested.getFactoryId())) {
+            Set<String> overlap = new HashSet<>(requestedKeys);
+            overlap.retainAll(unitKeys(existing));
+            if (!overlap.isEmpty()) {
+                return new UnitConflict(
+                        existing.getUnitCode(),
+                        existing.getUnitName(),
+                        existing.getUnitSymbol());
+            }
+        }
+
+        for (String raw : rawUnitIdentities(requested)) {
+            Optional<CanonicalUnit> builtIn = UnitContractServiceImpl.describeBuiltIn(raw);
+            if (builtIn.isPresent()) {
+                CanonicalUnit unit = builtIn.get();
+                return new UnitConflict(unit.code(), unit.displayName(), unit.code());
+            }
+        }
+        return null;
+    }
+
+    private Set<String> unitKeys(UnitOfMeasurement unit) {
+        return rawUnitIdentities(unit).stream()
+                .map(UnitContractServiceImpl::normalizeLookupKey)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    private List<String> rawUnitIdentities(UnitOfMeasurement unit) {
+        List<String> values = new ArrayList<>();
+        values.add(unit.getUnitCode());
+        values.add(unit.getUnitName());
+        values.add(unit.getUnitSymbol());
+        if (unit.getAliasesJson() != null) {
+            values.addAll(unit.getAliasesJson());
+        }
+        return values;
+    }
+
+    private record UnitConflict(String code, String name, String symbol) {
+        private String display() {
+            String label = name == null || name.isBlank() ? code : name;
+            String suffix = symbol == null || symbol.isBlank() || symbol.equals(label)
+                    ? ""
+                    : " / " + symbol;
+            return label + suffix + " [" + code + "]";
+        }
     }
 
     @Override

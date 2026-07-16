@@ -296,10 +296,27 @@ export interface RecommendedWorkProcess {
 
 export interface ProductWorkProcessRecommendation {
   productTypeId: string;
-  source: 'HISTORY' | 'LLM' | 'NO_HISTORY' | 'LLM_UNAVAILABLE' | 'NO_CATALOG' | 'LLM_EMPTY' | 'LLM_NO_MATCH' | string;
+  source: 'PUBLISHED_WORKFLOW' | 'HISTORY' | 'LLM' | 'NO_HISTORY' | 'LLM_UNAVAILABLE' | 'NO_CATALOG' | 'LLM_EMPTY' | 'LLM_NO_MATCH' | string;
+  sourceScope?: string | null;
+  reasonCode?: string | null;
   notice: string;
   message: string;
   recommendations: RecommendedWorkProcess[];
+  sourceProductTypeId?: string | null;
+  sourceProductName?: string | null;
+  sourceWorkflowId?: number | null;
+  sourceWorkflowVersion?: number | null;
+  completeWorkflow?: boolean;
+  workflowComplete?: boolean;
+  provenance?: string | {
+    sourceProductName?: string;
+    sourceProductCode?: string;
+    workflowName?: string;
+    workflowVersion?: string;
+    completeWorkflow?: boolean;
+    workflowComplete?: boolean;
+    complete?: boolean;
+  } | null;
 }
 
 export interface ProcessTaskItem {
