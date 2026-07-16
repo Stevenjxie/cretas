@@ -9,7 +9,7 @@
  *
  * May 7 2026 用户需求 (PR #114/#116/#120 后端落地):
  * 1. 编码自动生成 (创建时不传 code, 后端生成)
- * 2. 类别下拉 (主材/辅材/调味料/包材) 走 system_enums.MATERIAL_CATEGORY 字典
+ * 2. 类别下拉与列表大类统一读取 16 位物料编码字典的 L1 类族
  * 3. 单位下拉 + 智能默认 (suggest-unit 按相似名称+类别取最近原料的 unit)
  * 4. 去掉单价 (按采购价浮动, 在采购订单里录)
  * 5. 包装层级: 一级 (kg, 必填=unit) + 二/三级 (10kg/箱, 12箱/柜)
@@ -36,6 +36,7 @@ import { get, post, put, del } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Edit, Delete as DeleteIcon, Search, Refresh, Lock, View } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
+import { bigCategoryOf } from '@/utils/materialCategory';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
@@ -89,10 +90,9 @@ watch(filteredData, (list) => {
   if (pagination.value.page > maxPage) pagination.value.page = 1;
 });
 
-// 字典选项 (从后端 system_enums + unit_of_measurements 拉, Canvas 字典管理可改)
+// 储存类型和单位仍读取系统字典；类别统一读取下方 16 位编码 L1 类族。
 interface DictItem { enumCode: string; enumLabel: string; sortOrder: number }
 interface UnitItem { unitCode: string; unitName: string; unitSymbol?: string; sortOrder: number }
-const categoryOptions = ref<DictItem[]>([]);
 const storageTypeOptions = ref<DictItem[]>([]);
 const unitOptions = ref<UnitItem[]>([]);
 
@@ -101,19 +101,17 @@ onMounted(async () => {
   if (typeof keyword === 'string' && keyword.trim()) {
     searchKeyword.value = keyword.trim();
   }
-  await loadDictionaries();
+  await Promise.all([loadDictionaries(), loadSegmentTree()]);
   await loadData();
 });
 
 async function loadDictionaries() {
   if (!factoryId.value) return;
   try {
-    const [catRes, storageRes, unitRes] = await Promise.all([
-      get<DictItem[]>(`/${factoryId.value}/system-config/enums/MATERIAL_CATEGORY`),
+    const [storageRes, unitRes] = await Promise.all([
       get<DictItem[]>(`/${factoryId.value}/system-config/enums/MATERIAL_STORAGE_TYPE`),
       get<UnitItem[]>(`/${factoryId.value}/system-config/units`),
     ]);
-    categoryOptions.value = (catRes.data || []).slice().sort((a, b) => a.sortOrder - b.sortOrder);
     storageTypeOptions.value = (storageRes.data || []).slice().sort((a, b) => a.sortOrder - b.sortOrder);
     unitOptions.value = (unitRes.data || []).slice().sort((a, b) => a.sortOrder - b.sortOrder);
   } catch (e) {
@@ -121,14 +119,6 @@ async function loadDictionaries() {
   }
 }
 
-// 编辑老数据时, 若历史值不在字典中, 临时合入下拉避免值丢失显示
-function mergeHistoricCategory(current?: string): { value: string; label: string }[] {
-  const opts = categoryOptions.value.map((c) => ({ value: c.enumLabel, label: c.enumLabel }));
-  if (current && current.trim() !== '' && !opts.find((o) => o.value === current)) {
-    return [{ value: current, label: `${current} (历史)` }, ...opts];
-  }
-  return opts;
-}
 function mergeHistoricStorage(current?: string): { value: string; label: string }[] {
   const opts = storageTypeOptions.value.map((c) => ({ value: c.enumLabel, label: c.enumLabel }));
   if (current && current.trim() !== '' && !opts.find((o) => o.value === current)) {
@@ -282,6 +272,53 @@ async function loadSegmentTree() {
 const segmentL1Options = computed(() =>
   segmentTree.value.filter((n) => n.level === 1),
 );
+// 新建类别与列表大类共用此组选项，避免旧 MATERIAL_CATEGORY 枚举与编码类族漂移。
+const materialFamilyOptions = computed(() =>
+  segmentL1Options.value.map((node) => ({
+    value: node.segmentLabel,
+    label: node.segmentLabel,
+    segmentCode: node.segmentCode,
+  })),
+);
+
+function resolveMaterialFamily(category: string | null | undefined): string | null {
+  const raw = String(category || '').trim();
+  if (!raw) return null;
+  const exact = materialFamilyOptions.value.find((option) => option.value === raw);
+  if (exact) return exact.value;
+
+  // 历史枚举归并到当前三类 L1：主材→原料，辅材/添加剂/调味料→辅料，PACKAGING→包材。
+  const bucket = bigCategoryOf(raw);
+  const canonical = bucket === '调料' ? '辅料' : bucket;
+  return materialFamilyOptions.value.find((option) => option.value === canonical)?.value ?? null;
+}
+
+function isMaterialFamily(category: string | null | undefined): boolean {
+  return materialFamilyOptions.value.some((option) => option.value === category);
+}
+
+function syncMaterialFamilyFromCategory(category: string | null | undefined) {
+  if (editingId.value) return;
+  const family = resolveMaterialFamily(category);
+  if (!family) {
+    if (!String(category || '').trim()) segmentL1.value = '';
+    return;
+  }
+  const option = materialFamilyOptions.value.find((item) => item.value === family);
+  if (option && segmentL1.value !== option.segmentCode) segmentL1.value = option.segmentCode;
+}
+
+function syncMaterialFamilyFromSegment(segmentCode: string) {
+  if (editingId.value || !segmentCode) return;
+  const option = materialFamilyOptions.value.find((item) => item.segmentCode === segmentCode);
+  if (!option || form.value.category === option.value) return;
+  cascadeWriting.value = true;
+  try {
+    form.value.category = option.value;
+  } finally {
+    cascadeWriting.value = false;
+  }
+}
 // L2 options = children of selected L1
 const segmentL2Options = computed(() => {
   if (!segmentL1.value) return [];
@@ -299,10 +336,11 @@ const segmentL3Options = computed(() => {
 });
 
 // When L1 changes, reset L2/L3
-watch(segmentL1, () => {
+watch(segmentL1, (segmentCode) => {
   segmentL2.value = '';
   segmentL3.value = '';
   segmentCodePreview.value = '';
+  syncMaterialFamilyFromSegment(segmentCode);
 });
 watch(segmentL2, () => {
   segmentL3.value = '';
@@ -387,8 +425,9 @@ const packagingManuallyEdited = ref(false); // covers level1PerLevel2 + level2Un
 watch(() => form.value.unit, () => {
   if (!cascadeWriting.value) unitManuallyEdited.value = true;
 });
-watch(() => form.value.category, () => {
+watch(() => form.value.category, (category) => {
   if (!cascadeWriting.value) categoryManuallyEdited.value = true;
+  syncMaterialFamilyFromCategory(category);
 });
 watch(() => form.value.storageType, () => {
   if (!cascadeWriting.value) storageTypeManuallyEdited.value = true;
@@ -484,7 +523,10 @@ watch(
         cascadeWriting.value = true;
         try {
           if (d.unit != null && !unitManuallyEdited.value) form.value.unit = d.unit;
-          if (d.category != null && !categoryManuallyEdited.value) form.value.category = d.category;
+          if (d.category != null && !categoryManuallyEdited.value) {
+            const family = resolveMaterialFamily(d.category);
+            if (family) form.value.category = family;
+          }
           if (d.storageType != null && !storageTypeManuallyEdited.value) form.value.storageType = d.storageType;
           if (d.shelfLifeDays != null && !shelfLifeManuallyEdited.value) form.value.shelfLifeDays = d.shelfLifeDays;
           if (!packagingManuallyEdited.value) {
@@ -775,9 +817,12 @@ function handleSizeChange(size: number) {
           style="width: 130px"
           @change="handleSearch"
         >
-          <el-option label="原料" value="原料" />
-          <el-option label="辅料" value="辅料" />
-          <el-option label="包材" value="包材" />
+          <el-option
+            v-for="opt in materialFamilyOptions"
+            :key="opt.segmentCode"
+            :label="opt.label"
+            :value="opt.value"
+          />
         </el-select>
         <el-input
           v-model="searchKeyword"
@@ -865,12 +910,19 @@ function handleSizeChange(size: number) {
         <el-form-item label="类别" required>
           <el-select v-model="form.category" placeholder="请选择类别" style="width: 100%" filterable>
             <el-option
-              v-for="opt in mergeHistoricCategory(form.category)"
-              :key="opt.value"
+              v-if="editingId && form.category && !isMaterialFamily(form.category)"
+              :label="`${form.category} (历史)`"
+              :value="form.category"
+              disabled
+            />
+            <el-option
+              v-for="opt in materialFamilyOptions"
+              :key="opt.segmentCode"
               :label="opt.label"
               :value="opt.value"
             />
           </el-select>
+          <div class="field-hint">与 16 位物料编码字典的 L1 类族保持一致</div>
         </el-form-item>
 
         <!-- T159-A: 单位 — filterable + allow-create, 复用 /system-config/units -->
