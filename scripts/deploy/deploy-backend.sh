@@ -18,6 +18,7 @@
 #   ./deploy-backend.sh --rollback          # 回滚到上一备份
 
 set -e
+DEPLOY_SCRIPT_STARTED_AT=$(date +%s)
 
 # 自动加载用户的 ~/.bashrc 环境变量 (R2_*/SKIP_RSYNC 等)
 # 非交互式 shell 默认不 source .bashrc，所以这里显式加载
@@ -64,8 +65,10 @@ REMOTE_TMP="/tmp"
 # Blue-Green 部署配置
 NGINX_UPSTREAM_FILE="/www/server/panel/vhost/nginx/_upstream_cretas.conf"
 BLUE_PORT=10010
+BLUE_MANAGEMENT_PORT=10012
 BLUE_SERVICE="cretas-backend"
 GREEN_PORT=10020
+GREEN_MANAGEMENT_PORT=10022
 GREEN_SERVICE="cretas-backend-green"
 
 # GitHub 镜像列表
@@ -277,6 +280,73 @@ mkdir -p "$UPLOAD_STATUS_DIR"
 UPLOAD_PIDS=()
 BUILD_RACE_PIDS=()
 
+# BEGIN_DEPLOY_TIMING_HELPERS
+DEPLOY_TIMING_DIR="$UPLOAD_STATUS_DIR/timing"
+mkdir -p "$DEPLOY_TIMING_DIR"
+DEPLOY_TIMING_PRINTED=false
+
+deploy_epoch() {
+    date +%s
+}
+
+deploy_timing_begin() {
+    local key="$1"
+    local label="$2"
+    local started_at="${3:-$(deploy_epoch)}"
+
+    printf '%s\n' "$label" > "$DEPLOY_TIMING_DIR/$key.label"
+    printf '%s\n' "$started_at" > "$DEPLOY_TIMING_DIR/$key.start"
+    if ! grep -Fxq "$key" "$DEPLOY_TIMING_DIR/order" 2>/dev/null; then
+        printf '%s\n' "$key" >> "$DEPLOY_TIMING_DIR/order"
+    fi
+}
+
+deploy_timing_end() {
+    local key="$1"
+    local ended_at="${2:-$(deploy_epoch)}"
+    local started_at
+
+    [ -f "$DEPLOY_TIMING_DIR/$key.start" ] || return 0
+    started_at=$(cat "$DEPLOY_TIMING_DIR/$key.start")
+    printf '%s\n' "$((ended_at - started_at))" > "$DEPLOY_TIMING_DIR/$key.seconds"
+    rm -f "$DEPLOY_TIMING_DIR/$key.start"
+}
+
+print_deploy_timing_summary() {
+    local exit_code="${1:-0}"
+    local now total key label seconds
+
+    [ "$DEPLOY_TIMING_PRINTED" = "false" ] || return 0
+    DEPLOY_TIMING_PRINTED=true
+    now=$(deploy_epoch)
+    total=$((now - DEPLOY_SCRIPT_STARTED_AT))
+
+    echo ""
+    echo "=========================================="
+    echo "  ⏱️  部署阶段耗时汇总"
+    if [ -f "$DEPLOY_TIMING_DIR/order" ]; then
+        while IFS= read -r key; do
+            [ -n "$key" ] || continue
+            label=$(cat "$DEPLOY_TIMING_DIR/$key.label" 2>/dev/null || echo "$key")
+            if [ -f "$DEPLOY_TIMING_DIR/$key.seconds" ]; then
+                seconds=$(cat "$DEPLOY_TIMING_DIR/$key.seconds")
+                printf '  %-28s %4ss\n' "$label" "$seconds"
+            elif [ -f "$DEPLOY_TIMING_DIR/$key.start" ]; then
+                seconds=$((now - $(cat "$DEPLOY_TIMING_DIR/$key.start")))
+                printf '  %-28s %4ss  [未完成]\n' "$label" "$seconds"
+            fi
+        done < "$DEPLOY_TIMING_DIR/order"
+    fi
+    printf '  %-28s %4ss\n' "总耗时" "$total"
+    if [ "$exit_code" -eq 0 ]; then
+        echo "  结果                         SUCCESS"
+    else
+        echo "  结果                         FAILED (exit=$exit_code)"
+    fi
+    echo "=========================================="
+}
+# END_DEPLOY_TIMING_HELPERS
+
 # 只终止本次部署记录的进程树，避免上传竞速结束后 scp/rsync 子进程继续传输。
 # Git Bash 通常没有 pgrep/pkill，且 `$!` 是 MSYS PID、不能直接传给
 # taskkill /PID。统一从进程表按 PPID 递归结束后代，再结束父进程。
@@ -402,12 +472,15 @@ run_first_success_build_race() {
 # END_JAR_BUILD_RACE_HELPERS
 
 cleanup() {
+    local exit_code=$?
     terminate_build_race_tasks
     terminate_upload_tasks
+    print_deploy_timing_summary "$exit_code"
     rm -rf "$UPLOAD_STATUS_DIR"
     # R43 fix: 也清 deploy lock — 否则 trap cleanup 会覆盖 acquire_deploy_lock
     # 注册的 lock cleanup trap, 导致 stale lock leak. 反复出现"另一deploy进程在跑".
     rm -f /tmp/cretas-backend-deploy.lock 2>/dev/null || true
+    return "$exit_code"
 }
 trap cleanup EXIT
 
@@ -430,6 +503,7 @@ deploy_git() {
 # ==================== JAR 部署模式 ====================
 deploy_jar() {
     local VERSION="${1:-v$(date +%Y%m%d_%H%M%S)}"
+    deploy_timing_begin preparation "准备与 Flyway 预检" "$DEPLOY_SCRIPT_STARTED_AT"
 
     # Reuse the exact CI-built JAR only when its artifact, commit manifest, and
     # SHA-256 all match the local commit. The optional destination keeps CI
@@ -686,6 +760,8 @@ deploy_jar() {
     # R25: 默认 `clean package` 强制全量重编, 防 incremental cache 漏新 Controller/DTO 签名 (R24 事故教训)
     # 如需保留 incremental build (快, 但不安全), 传 SKIP_CLEAN=1
     echo ""
+    deploy_timing_end preparation
+    deploy_timing_begin build "构建与 JAR 完整性"
     CI_ARTIFACT_REUSED=false
     JAR_TARGET="backend/java/cretas-api/target/$JAR_NAME"
     if [ -n "$SKIP_BUILD" ]; then
@@ -772,10 +848,12 @@ deploy_jar() {
         cd ../../..
         exit 1
     fi
+    deploy_timing_end build
 
     # ----- 2. 并行上传 -----
     echo ""
     echo "📤 [2/4] 启动并行上传..."
+    deploy_timing_begin upload "上传并校验制品"
 
     # 检查是否已有胜者
     check_winner() {
@@ -1148,10 +1226,12 @@ deploy_jar() {
     echo "   🏆 胜出: $WINNER"
     echo "   ⏱️  耗时: ${UPLOAD_DURATION}s"
     echo "   📊 速度: ${SPEED_MBPS} MB/s (${JAR_SIZE} 文件)"
+    deploy_timing_end upload
 
     # ----- 3. 服务器部署 -----
     echo ""
     echo "🚀 [3/4] 服务器部署..."
+    deploy_timing_begin remote_install "服务器安装 JAR"
     # MD5 验证 + 部署 JAR (不含重启)
     DEPLOY_OK=false
     if ssh $SERVER "
@@ -1195,6 +1275,8 @@ deploy_jar() {
         echo "   ❌ 部署失败 (MD5 不匹配或文件损坏)"
         exit 1
     fi
+    deploy_timing_end remote_install
+    deploy_timing_begin rollout "服务发布与切流"
 
     # 清理 .jar.new (防止 restart.sh 的 auto-swap 覆盖刚部署的 JAR)
     ssh -o ConnectTimeout=5 $SERVER "rm -f $REMOTE_JAR_DIR/aims-0.0.1-SNAPSHOT.jar.new 2>/dev/null" 2>/dev/null || true
@@ -1220,10 +1302,10 @@ deploy_jar() {
             DEPLOY_MODE="inplace"
         else
             if [ "$ACTIVE_PORT" = "$BLUE_PORT" ]; then
-                IDLE_COLOR="green"; IDLE_SERVICE="$GREEN_SERVICE"; IDLE_PORT="$GREEN_PORT"
+                IDLE_COLOR="green"; IDLE_SERVICE="$GREEN_SERVICE"; IDLE_PORT="$GREEN_PORT"; IDLE_MANAGEMENT_PORT="$GREEN_MANAGEMENT_PORT"
                 ACTIVE_COLOR="blue"; ACTIVE_SERVICE="$BLUE_SERVICE"
             else
-                IDLE_COLOR="blue"; IDLE_SERVICE="$BLUE_SERVICE"; IDLE_PORT="$BLUE_PORT"
+                IDLE_COLOR="blue"; IDLE_SERVICE="$BLUE_SERVICE"; IDLE_PORT="$BLUE_PORT"; IDLE_MANAGEMENT_PORT="$BLUE_MANAGEMENT_PORT"
                 ACTIVE_COLOR="green"; ACTIVE_SERVICE="$GREEN_SERVICE"
             fi
 
@@ -1255,6 +1337,7 @@ deploy_jar() {
             IDLE_RESTART_BASELINE=$(ssh $SERVER "systemctl show $IDLE_SERVICE -p NRestarts --value 2>/dev/null || echo 0" 2>/dev/null)
             [[ "$IDLE_RESTART_BASELINE" =~ ^[0-9]+$ ]] || IDLE_RESTART_BASELINE=0
             echo "   [BG 1/4] 启动 $IDLE_COLOR ($IDLE_SERVICE)..."
+            deploy_timing_begin idle_startup "idle Java 启动至健康"
             if ! ssh $SERVER "systemctl restart $IDLE_SERVICE"; then
                 echo "   ❌ 无法启动 $IDLE_SERVICE, 中止切换"
                 exit 1
@@ -1262,13 +1345,13 @@ deploy_jar() {
 
             # [BG 2/4] 等 idle 健康 — 单次 ssh + 远端 loop
             # 避免 client-side ssh roundtrip 每轮建立连接导致的卡死
-            echo "   [BG 2/4] 等待 $IDLE_COLOR 健康 (远端 loop, 最多 150s)..."
+            echo "   [BG 2/4] 等待 $IDLE_COLOR core readiness (management $IDLE_MANAGEMENT_PORT, 最多 150s)..."
             BG_T0=$(date +%s)
             IDLE_HEALTHY=false
             set +e
             BG_RESULT=$(ssh -o ConnectTimeout=10 -o ServerAliveInterval=15 $SERVER "
                 for i in \$(seq 1 150); do
-                    STATUS=\$(curl -s -o /dev/null --max-time 2 -w '%{http_code}' http://localhost:$IDLE_PORT/api/mobile/health 2>/dev/null)
+                    STATUS=\$(curl -s -o /dev/null --max-time 2 -w '%{http_code}' http://localhost:$IDLE_MANAGEMENT_PORT/actuator/health/readiness 2>/dev/null)
                     if [ \"\$STATUS\" = '200' ]; then
                         echo \"UP:\${i}\"
                         exit 0
@@ -1296,6 +1379,7 @@ deploy_jar() {
             BG_ELAPSED=$(( $(date +%s) - BG_T0 ))
 
             if [ "$BG_EXIT" = "0" ] && [[ "$BG_RESULT" == UP:* ]]; then
+                deploy_timing_end idle_startup
                 echo "   ✓ $IDLE_COLOR 健康 (${BG_ELAPSED}s, 远端计数: ${BG_RESULT#UP:}s)"
                 IDLE_HEALTHY=true
             else
@@ -1332,6 +1416,7 @@ deploy_jar() {
             # 间隔 6s 持续监测, 任何一次 nginx 返非 2xx 就 auto-rollback (切回旧 upstream
             # + 重启旧 active service).
             POST_SWITCH_HEALTHY=true
+            deploy_timing_begin post_switch_observation "切流后稳定观察"
             for ROUND in 1 2 3 4 5; do
                 sleep 6
                 VERIFY=$(ssh $GATEWAY "curl -sk -o /dev/null --max-time 5 -w '%{http_code}' -H 'Host: api.cretaceousfuture.com' https://127.0.0.1/api/mobile/health" 2>/dev/null)
@@ -1368,6 +1453,7 @@ deploy_jar() {
                 ssh $SERVER "systemctl stop $IDLE_SERVICE" 2>/dev/null || true
                 exit 1
             fi
+            deploy_timing_end post_switch_observation
             echo "   ✓ 切换后验证全部通过 (5/5 轮 nginx 200 + idle systemd active)"
 
             # [BG 4/4] 停旧 active (5s 优雅等待让现有连接完成)
@@ -1456,10 +1542,12 @@ deploy_jar() {
 
     # 清理残留临时文件
     ssh -o ConnectTimeout=5 $SERVER "rm -f $REMOTE_TMP/${JAR_NAME}.* $REMOTE_TMP/aims-new.jar $REMOTE_TMP/deploy.jar.gz 2>/dev/null" 2>/dev/null || true
+    deploy_timing_end rollout
 
     # ----- 4. 验证部署 -----
     echo ""
     echo "🔍 [4/4] 验证部署..."
+    deploy_timing_begin verification "最终健康与服务状态验证"
     SERVER_IP="${SERVER#*@}"
 
     # 生产验证:
@@ -1555,6 +1643,7 @@ deploy_jar() {
         fi
         echo "   ✓ [Phase 1 #19 gate] cretas-backend-test is-active"
     fi
+    deploy_timing_end verification
 
     echo ""
     echo "=========================================="
@@ -1570,6 +1659,7 @@ deploy_jar() {
         echo "  GitHub Release: 未创建（本次通过 $WINNER 上传）"
     fi
     echo "=========================================="
+    print_deploy_timing_summary 0
 }
 
 # ==================== Dry-run 模式 ====================
