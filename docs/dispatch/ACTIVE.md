@@ -8,8 +8,6 @@
 
 | ID | Base SHA | Scope 锁 | Owner | Mode | Worktree/PR | Status | Blocker | Next action |
 |---|---|---|---|---|---|---|---|---|
-| MAT16-CONTRACT-20260716 | `9e9331607` | `backend/java/cretas-api/**/RawMaterialType*`, `backend/java/cretas-api/**/MaterialCodeSegment*`, material-code Flyway/tests, `MaterialBatchServiceImpl` 与 `AIController` 的物料快速创建窄入口，`web-admin/src/views/warehouse/material-types/**`, RN material-type screens/APIs | `/root/material_contract_impl` | code | `C:/Users/Steve/cretas-material-contract` | in-progress | 无 | 建立统一 L1-L3/16位编码后端契约并收口 Web/RN/AI/快速创建路径；运行定向后端、前端测试 |
-| SETTLE-CONTRACT-20260716 | `9e9331607` | `ProductionPlan*` settlement DTO/controller/service/tests, `web-admin/src/views/production/plans/**` | `/root/settlement_contract_impl` | code | `C:/Users/Steve/cretas-settlement-contract-v2` | in-progress | 无 | 实现服务端事实派生的最小核对结单，修正式报工状态与投入/产出单位来源；运行定向测试 |
 
 ## 阻塞项
 
