@@ -128,18 +128,30 @@ run_maven() {
 
 terminate_process_tree() {
     local pid="$1"
-    [ -n "$pid" ] || return 0
-    if command -v cmd.exe >/dev/null 2>&1; then
-        cmd.exe /d /c taskkill /PID "$pid" /T /F >/dev/null 2>&1 || true
-        return 0
+    local child_pids=""
+    local child_pid
+
+    case "$pid" in
+        ''|*[!0-9]*) return 0 ;;
+    esac
+    kill -0 "$pid" 2>/dev/null || return 0
+
+    # `$!` is an MSYS PID in Git Bash. Walk the MSYS process table instead of
+    # passing it to native taskkill, which can miss the Maven/Java descendants
+    # and leave both the application port and Compose cleanup blocked.
+    if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* || "${OSTYPE:-}" == win32* ]]; then
+        child_pids=$(ps -e 2>/dev/null | awk -v parent="$pid" 'NR > 1 && $2 == parent {print $1}')
+    elif command -v pgrep >/dev/null 2>&1; then
+        child_pids=$(pgrep -P "$pid" 2>/dev/null || true)
+    elif ps -eo pid=,ppid= >/dev/null 2>&1; then
+        child_pids=$(ps -eo pid=,ppid= 2>/dev/null | awk -v parent="$pid" '$2 == parent {print $1}')
     fi
-    if command -v pgrep >/dev/null 2>&1; then
-        local child
-        while IFS= read -r child; do
-            [ -n "$child" ] && terminate_process_tree "$child"
-        done < <(pgrep -P "$pid" 2>/dev/null || true)
-    fi
-    kill "$pid" >/dev/null 2>&1 || true
+    for child_pid in $child_pids; do
+        terminate_process_tree "$child_pid"
+    done
+    kill -TERM "$pid" 2>/dev/null || true
+    sleep 0.05
+    kill -KILL "$pid" 2>/dev/null || true
 }
 
 cleanup() {

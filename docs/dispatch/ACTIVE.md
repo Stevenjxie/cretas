@@ -8,7 +8,7 @@
 
 | ID | Base SHA | Scope 锁 | Owner | Mode | Worktree/PR | Status | Blocker | Next action |
 |---|---|---|---|---|---|---|---|---|
-| - | - | - | - | - | - | - | - | 当前无在飞任务 |
+| FRESH-DB-FMR-BOOTSTRAP-20260716 | `21883e32013522f0d65bb0f4722cea4bab885151` | `backend/java/cretas-api/src/main/resources/db/flyway/V20261028_69_1__bootstrap_factory_material_requisitions.sql`; `scripts/testing/fresh-db-gate.sh`; `scripts/tests/test-fresh-db-gate.sh`; `docs/dispatch/ACTIVE.md`; completion archive only | Codex coordinator | code | `C:\Users\Steve\cretas-main-deploy` / `codex/fresh-db-fmr-bootstrap` | review | None | Commit scoped diff, merge into latest origin/main, archive and deploy from main |
 
 ## 阻塞项
 

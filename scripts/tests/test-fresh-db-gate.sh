@@ -82,10 +82,36 @@ assert_contains "$script_text" 'kill -0 "$BACKEND_PID"'
 assert_contains "$script_text" "grep -q 'Started CretasBackendApplication'"
 assert_contains "$script_text" 'work directory kept:'
 assert_contains "$script_text" 'rm -rf -- "$WORK_DIR"'
+assert_contains "$script_text" 'terminate_process_tree() {'
+assert_contains "$script_text" 'child_pids=$(ps -e 2>/dev/null | awk -v parent="$pid"'
+[[ "$script_text" != *'taskkill /PID "$pid"'* ]] || fail "unsafe native taskkill with an MSYS PID is still present"
 # Guard against silently drifting away from the actual CI Repository gate.
 assert_contains "$ci_text" 'JPA repository query startup gate'
 assert_contains "$ci_text" "-Dspring.profiles.active=test"
 assert_contains "$ci_text" "-Dtest='*RepositoryQueryValidationTest'"
 assert_contains "$ci_text" '-Dsurefire.failIfNoSpecifiedTests=false'
+
+# Behavioral probe: source only the cleanup helper and prove it terminates an
+# exact private process tree without relying on native Windows PID conversion.
+PROCESS_TREE_HELPER=$(awk '
+    /^terminate_process_tree\(\) \{/ {copy = 1}
+    copy {print}
+    copy && /^}$/ {exit}
+' "$SCRIPT")
+eval "$PROCESS_TREE_HELPER"
+bash -c 'sleep 30 & wait' &
+probe_parent=$!
+sleep 1
+if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* || "${OSTYPE:-}" == win32* ]]; then
+    probe_child=$(ps -e 2>/dev/null | awk -v parent="$probe_parent" 'NR > 1 && $2 == parent {print $1; exit}')
+else
+    probe_child=$(pgrep -P "$probe_parent" 2>/dev/null | head -1 || true)
+fi
+[ -n "$probe_child" ] || fail "process-tree probe child not found"
+terminate_process_tree "$probe_parent"
+wait "$probe_parent" 2>/dev/null || true
+if kill -0 "$probe_parent" 2>/dev/null || kill -0 "$probe_child" 2>/dev/null; then
+    fail "process-tree cleanup left a probe process running"
+fi
 
 echo "PASS: fresh DB gate dry-run and safety contract"
