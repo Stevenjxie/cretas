@@ -145,6 +145,42 @@ class FactoryMaterialRequisitionGenerateFromPlanTest {
         verify(warehouseResolver).resolvePurchaseInboundWh(FACTORY_ID);
     }
 
+    @Test
+    @DisplayName("10箱销售快照归一为500件后，200g/件 BOM 应生成100000g领料上限")
+    void generateFromPlan_usesNormalizedProductQuantityForGramBomRequirement() {
+        ProductionPlan normalizedPlan = new ProductionPlan();
+        normalizedPlan.setId(PLAN_ID);
+        normalizedPlan.setFactoryId(FACTORY_ID);
+        normalizedPlan.setProductTypeId(PRODUCT_TYPE_ID);
+        normalizedPlan.setPlanNumber("PLAN-10-BOX");
+        normalizedPlan.setPlannedQuantity(new BigDecimal("500"));
+        normalizedPlan.setPlannedUnit("piece");
+        normalizedPlan.setExpectedCompletionDate(LocalDate.now().plusDays(3));
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
+                .thenReturn(Optional.of(normalizedPlan));
+
+        BomItem gramBom = new BomItem();
+        gramBom.setId(2L);
+        gramBom.setMaterialTypeId("MAT-GRAM");
+        gramBom.setMaterialName("原料克重");
+        gramBom.setStandardQuantity(new BigDecimal("200"));
+        gramBom.setUnit("g");
+        gramBom.setMaterialCategory("RAW");
+        when(bomItemRepository
+                .findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(
+                        FACTORY_ID, PRODUCT_TYPE_ID))
+                .thenReturn(List.of(gramBom));
+        when(materialBatchRepository.findStockUnitsByMaterialType(FACTORY_ID, "MAT-GRAM"))
+                .thenReturn(List.of("g"));
+        when(warehouseResolver.resolvePurchaseInboundWh(FACTORY_ID)).thenReturn(WH_RAW);
+
+        FactoryMaterialRequisition mr = service.generateFromPlan(FACTORY_ID, PLAN_ID, 1L);
+
+        assertEquals(1, mr.getItems().size());
+        assertEquals(0, new BigDecimal("100000").compareTo(mr.getItems().get(0).getRequiredQty()));
+        assertEquals("g", mr.getItems().get(0).getUnit());
+    }
+
     private FactoryWarehouse warehouse(String id, WarehouseType type) {
         FactoryWarehouse wh = new FactoryWarehouse();
         wh.setId(id);

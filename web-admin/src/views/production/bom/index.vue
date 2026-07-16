@@ -981,7 +981,7 @@ function handleEditBomItem(row: TableRow) {
     yieldRate: row.yieldRate != null ? (row.yieldRate as number) : null,
     unit: row.unit || 'g',
     unitPrice: row.unitPrice || 0,
-    taxRate: row.taxRate || 13,
+    taxRate: row.taxRate ?? 13,
     sortOrder: row.sortOrder || 0,
     notes: row.notes || '',
     isOptional: Boolean(row.isOptional),

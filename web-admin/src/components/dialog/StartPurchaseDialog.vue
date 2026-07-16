@@ -77,7 +77,9 @@ const submitting = ref(false);
 const suggestion = ref<PurchaseSuggestionResponse | null>(null);
 const editableItems = ref<EditableItem[]>([]);
 const supplierId = ref('');
-const orderDateStr = ref(new Date().toISOString().slice(0, 10));
+const factoryToday = () =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
+const orderDateStr = ref(factoryToday());
 const remark = ref('');
 
 // ── computed ───────────────────────────────────────────────────────────────
@@ -138,7 +140,7 @@ watch(
   (open) => {
     if (open) {
       supplierId.value = '';
-      orderDateStr.value = new Date().toISOString().slice(0, 10);
+      orderDateStr.value = factoryToday();
       remark.value = '';
       loadSuggestion();
     }

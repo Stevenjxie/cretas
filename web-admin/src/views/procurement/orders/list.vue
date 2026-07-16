@@ -60,6 +60,8 @@ const createModeSelectorVisible = ref(false);
 const batchCreateVisible = ref(false);
 const quickCreateVisible = ref(false);
 const bomCreateVisible = ref(false);
+const factoryToday = () =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
 function openCreateModeSelector(): void {
   createModeSelectorVisible.value = true;
 }
@@ -91,21 +93,8 @@ function quickPurchaseOrderFactory(): QuickPurchaseOrderRow {
   return { supplierId: '', purchaseType: 'NORMAL', expectedDate: '', remark: '' };
 }
 async function submitQuickPurchaseOrder(row: QuickPurchaseOrderRow): Promise<void> {
-  if (!row.supplierId) {
-    throw new Error('请选择供应商');
-  }
-  const payload = {
-    supplierId: row.supplierId,
-    purchaseType: row.purchaseType || 'NORMAL',
-    expectedDate: row.expectedDate || null,
-    remark: row.remark || '',
-    items: [] as unknown[],
-  };
-  const res = await post(`/${factoryId.value}/purchase/orders`, payload);
-  if (!res?.success) {
-    throw new Error(res?.message || '创建失败');
-  }
-  await loadData();
+  void row;
+  throw new Error('采购订单必须至少包含 1 项物料明细；请使用“普通新建”或“BOM 展开”。');
 }
 
 // P1 #58 — BOM 展开: parent PO + child items from material template.
@@ -225,23 +214,8 @@ function batchPurchaseFactory(): { supplierId: string; purchaseType: string; exp
   return { supplierId: '', purchaseType: 'NORMAL', expectedDate: '', remark: '' };
 }
 async function submitBatchPurchaseOrders(orders: Array<{ supplierId: string; purchaseType: string; expectedDate: string; remark: string }>): Promise<void> {
-  const created: string[] = [];
-  for (const order of orders) {
-    if (!order.supplierId) continue;
-    const payload = {
-      supplierId: order.supplierId,
-      purchaseType: order.purchaseType || 'NORMAL',
-      expectedDate: order.expectedDate || null,
-      remark: order.remark || '',
-      items: [] as unknown[],
-    };
-    const res = await post(`/${factoryId.value}/purchase/orders`, payload);
-    if (res?.success) created.push(String(res.data?.orderNumber || res.data?.id || ''));
-  }
-  if (!created.length) {
-    throw new Error('未能创建任何订单（请确认每行至少填写供应商）');
-  }
-  await loadData();
+  void orders;
+  throw new Error('批量采购必须逐单填写物料明细；当前二维模式已停用，请使用“普通新建”或“BOM 展开”。');
 }
 
 function rowActionsFor(row: TableRow) {
@@ -667,7 +641,7 @@ async function handleCreate() {
       })),
       remark,
       salesOrderId,
-      orderDate: new Date().toISOString().slice(0, 10), // backend requires @NotNull orderDate
+      orderDate: factoryToday(), // backend requires @NotNull orderDate in factory-local date
     };
     const res = await post(`/${factoryId.value}/purchase/orders`, payload);
     if (res.success) {
@@ -1205,6 +1179,7 @@ function handleAiFill(params: TableRow) {
     <CreateModeSelector
       v-model="createModeSelectorVisible"
       :entity-label="label('purchaseOrder')"
+      :disabled-modes="['quick', 'batch']"
       @mode-selected="handleCreateModeSelected"
     />
     <BatchCreateDialog

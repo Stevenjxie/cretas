@@ -278,27 +278,8 @@ function batchOrderFactory(): { customerId: string; salesperson: string; require
   return { customerId: '', salesperson: '', requiredDeliveryDate: '', remark: '' };
 }
 async function submitBatchOrders(orders: Array<{ customerId: string; salesperson: string; requiredDeliveryDate: string; remark: string }>): Promise<void> {
-  const created: string[] = [];
-  for (const order of orders) {
-    if (!order.customerId) continue;
-    const payload = {
-      customerId: order.customerId,
-      salesperson: order.salesperson || '',
-      requiredDeliveryDate: order.requiredDeliveryDate || null,
-      remark: order.remark || '',
-      shippingIncluded: false,
-      shippingFee: 0,
-      extraFees: [] as unknown[],
-      items: [] as unknown[],
-      customFields: {},
-    };
-    const res = await post(`/${factoryId.value}/sales/orders`, payload);
-    if (res?.success) created.push(String(res.data?.orderNumber || res.data?.id || ''));
-  }
-  if (!created.length) {
-    throw new Error('未能创建任何订单（请确认每行至少填写客户）');
-  }
-  await loadData();
+  void orders;
+  throw new Error('批量销售订单必须逐单填写商品明细；当前二维模式已停用，请使用“普通新建”或“BOM 展开”。');
 }
 
 /** UX-A2: secondary-action dropdown ("操作 ▾") shown last in row toolbar. */
@@ -2758,6 +2739,7 @@ function handleMergePurchase() {
     <CreateModeSelector
       v-model="createModeSelectorVisible"
       :entity-label="label('salesOrder')"
+      :disabled-modes="['quick', 'batch']"
       @mode-selected="handleCreateModeSelected"
     />
     <BatchCreateDialog
