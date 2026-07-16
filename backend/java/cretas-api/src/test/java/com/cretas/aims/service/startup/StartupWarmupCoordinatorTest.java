@@ -10,6 +10,7 @@ import java.util.concurrent.Executor;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 class StartupWarmupCoordinatorTest {
@@ -28,6 +29,7 @@ class StartupWarmupCoordinatorTest {
         InOrder order = inOrder(intentCache, semanticMatcher);
         order.verify(intentCache).initializeCache();
         order.verify(semanticMatcher).initializePhraseVectors();
+        verify(intentCache, times(1)).initializeCache();
         assertEquals(WarmupState.READY,
                 registry.snapshot().get(AiWarmupStatusRegistry.INTENT_CACHE).state());
         assertEquals(WarmupState.READY,
@@ -53,5 +55,30 @@ class StartupWarmupCoordinatorTest {
         assertEquals(WarmupState.READY,
                 registry.snapshot().get(AiWarmupStatusRegistry.SEMANTIC_MATCHER).state());
         verify(semanticMatcher).initializePhraseVectors();
+        verify(intentCache, times(2)).initializeCache();
+    }
+
+    @Test
+    void retriesIntentCacheOnceAfterSemanticWarmupAndRecoversHealth() {
+        IntentEmbeddingCacheServiceImpl intentCache = mock(IntentEmbeddingCacheServiceImpl.class);
+        SemanticIntentMatcher semanticMatcher = mock(SemanticIntentMatcher.class);
+        org.mockito.Mockito.doThrow(new IllegalStateException("cold batch timeout"))
+                .doNothing()
+                .when(intentCache).initializeCache();
+        AiWarmupStatusRegistry registry = new AiWarmupStatusRegistry();
+        StartupWarmupCoordinator coordinator = new StartupWarmupCoordinator(
+                Runnable::run, intentCache, semanticMatcher, registry);
+
+        coordinator.afterApplicationReady();
+
+        InOrder order = inOrder(intentCache, semanticMatcher);
+        order.verify(intentCache).initializeCache();
+        order.verify(semanticMatcher).initializePhraseVectors();
+        order.verify(intentCache).initializeCache();
+        verify(intentCache, times(2)).initializeCache();
+        assertEquals(WarmupState.READY,
+                registry.snapshot().get(AiWarmupStatusRegistry.INTENT_CACHE).state());
+        assertEquals(WarmupState.READY,
+                registry.snapshot().get(AiWarmupStatusRegistry.SEMANTIC_MATCHER).state());
     }
 }

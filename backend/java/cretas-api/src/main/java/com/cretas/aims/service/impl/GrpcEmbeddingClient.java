@@ -5,6 +5,7 @@ import com.cretas.embedding.grpc.*;
 import io.grpc.StatusRuntimeException;
 import lombok.extern.slf4j.Slf4j;
 import net.devh.boot.grpc.client.inject.GrpcClient;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
@@ -36,6 +37,9 @@ public class GrpcEmbeddingClient implements EmbeddingClient {
 
     private static final int DEFAULT_DIMENSION = 768;
     private static final int RPC_DEADLINE_SECONDS = 3;
+
+    @Value("${cretas.embedding.grpc.batch-deadline-seconds:15}")
+    private int batchRpcDeadlineSeconds = 15;
 
     @GrpcClient("embedding-service")
     private EmbeddingServiceGrpc.EmbeddingServiceBlockingStub embeddingStub;
@@ -138,7 +142,7 @@ public class GrpcEmbeddingClient implements EmbeddingClient {
                     .build();
 
             EncodeBatchResponse response = embeddingStub
-                    .withDeadlineAfter(RPC_DEADLINE_SECONDS, TimeUnit.SECONDS)
+                    .withDeadlineAfter(batchRpcDeadlineSeconds, TimeUnit.SECONDS)
                     .encodeBatch(request);
 
             if (!response.getSuccess()) {

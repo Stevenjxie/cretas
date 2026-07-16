@@ -36,21 +36,29 @@ public class StartupWarmupCoordinator {
     }
 
     void runSerialWarmups() {
-        warm(AiWarmupStatusRegistry.INTENT_CACHE, intentCache::initializeCache);
+        boolean intentCacheReady = warm(
+                AiWarmupStatusRegistry.INTENT_CACHE, intentCache::initializeCache);
         warm(AiWarmupStatusRegistry.SEMANTIC_MATCHER, semanticMatcher::initializePhraseVectors);
+        if (!intentCacheReady) {
+            log.warn("Retrying startup warmup {} once after semantic matcher warmup",
+                    AiWarmupStatusRegistry.INTENT_CACHE);
+            warm(AiWarmupStatusRegistry.INTENT_CACHE, intentCache::initializeCache);
+        }
     }
 
-    private void warm(String component, Runnable action) {
+    private boolean warm(String component, Runnable action) {
         statusRegistry.warming(component);
         long started = System.currentTimeMillis();
         try {
             action.run();
             statusRegistry.ready(component);
             log.info("Startup warmup {} READY in {}ms", component, System.currentTimeMillis() - started);
+            return true;
         } catch (Exception error) {
             statusRegistry.failed(component, error);
             log.error("Startup warmup {} FAILED after {}ms: {}", component,
                     System.currentTimeMillis() - started, error.getMessage(), error);
+            return false;
         }
     }
 }
