@@ -54,6 +54,6 @@ class ProductWorkflowResolutionUnitAdmissionTest {
                 () -> service.assertActiveWorkflowCoversOutputs(
                         "F006", "RAW-1", List.of("FG-1")));
 
-        assertEquals("WORKFLOW_RESOLUTION_NOT_COVERED", error.getErrorCode());
+        assertEquals("WORKFLOW_SINGLE_OUTPUT_NOT_FOUND", error.getErrorCode());
     }
 }

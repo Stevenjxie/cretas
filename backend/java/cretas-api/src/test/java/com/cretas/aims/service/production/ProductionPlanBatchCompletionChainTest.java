@@ -123,6 +123,7 @@ class ProductionPlanBatchCompletionChainTest {
         plan.setProductTypeId(PRODUCT_TYPE_ID);
         plan.setPlanNumber("PP-2026-100");
         plan.setPlannedQuantity(new BigDecimal("200"));
+        plan.setPlannedUnit("kg");
         plan.setStatus(ProductionPlanStatus.PENDING);
         return plan;
     }
@@ -139,6 +140,9 @@ class ProductionPlanBatchCompletionChainTest {
     @DisplayName("转批次: 批次置 IN_PROGRESS + 设 startTime + spawnTasks(factoryId, batchId, productTypeId)")
     void createBatchFromPlan_spawnsTasks_andBatchInProgress() {
         ProductionPlan plan = pendingPlan();
+        plan.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.WORKFLOW);
+        plan.setSelectedWorkflowId(44L);
+        plan.setSelectedWorkflowVersion(3);
         // R6 (2026-06-14): createBatchFromPlan 改用悲观锁 findByIdForUpdate 取计划。
         when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -151,9 +155,6 @@ class ProductionPlanBatchCompletionChainTest {
         when(productionBatchRepository.save(any(ProductionBatch.class))).thenAnswer(inv -> {
             ProductionBatch b = inv.getArgument(0);
             b.setId(777L);
-            b.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.WORKFLOW);
-            b.setSelectedWorkflowId(44L);
-            b.setSelectedWorkflowVersion(3);
             return b;
         });
 

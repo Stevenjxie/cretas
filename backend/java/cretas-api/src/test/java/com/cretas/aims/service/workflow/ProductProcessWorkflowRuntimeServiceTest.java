@@ -120,6 +120,23 @@ class ProductProcessWorkflowRuntimeServiceTest {
     }
 
     @Test
+    void materializesPinnedWorkflowEvenWhenLegacyAnchorDiffersFromPlannedProduct() {
+        givenValidOwnedBatch();
+        ProductProcessWorkflow workflow = workflow();
+        workflow.setProductTypeId("INTERNAL-RAW-ANCHOR");
+        givenActivationTarget(workflow);
+        givenFreshRuntimePersistence(true);
+        when(compiler.compile(any())).thenReturn(compiledWorkflow());
+
+        Optional<List<WorkProcessTaskDTO>> result =
+                service.materializeIfActive("F006", 901L, "PT-PIG");
+
+        assertTrue(result.isPresent());
+        assertEquals(44L, savedInstances.getFirst().getWorkflowId());
+        assertEquals("PT-PIG", savedInstances.getFirst().getProductTypeId());
+    }
+
+    @Test
     void snapshotsPortStandardQuantityAndQuantityModeWhenMaterializing() {
         givenValidOwnedBatch();
         givenEnabledPublishedWorkflow();
@@ -337,20 +354,6 @@ class ProductProcessWorkflowRuntimeServiceTest {
         ProductProcessWorkflow draft = workflow();
         draft.setStatus(ProductProcessWorkflow.Status.DRAFT);
         givenActivationTarget(draft);
-
-        assertThrows(RuntimeException.class,
-                () -> service.materializeIfActive("F006", 901L, "PT-PIG"));
-
-        verifyNoInteractions(compiler, taskRepository, portRepository);
-        verify(instanceRepository, never()).save(any());
-    }
-
-    @Test
-    void pinnedSelectionRejectsWrongProductTarget() {
-        givenValidOwnedBatch();
-        ProductProcessWorkflow wrongProduct = workflow();
-        wrongProduct.setProductTypeId("PT-CHICKEN");
-        givenActivationTarget(wrongProduct);
 
         assertThrows(RuntimeException.class,
                 () -> service.materializeIfActive("F006", 901L, "PT-PIG"));

@@ -36,4 +36,16 @@ describe('production plan operator guardrails', () => {
     expect(source).toContain('前天为极限');
     expect(source).toContain('大前天及更早禁止补录');
   });
+
+  it('blocks a single product without silently falling back to a multi-output Workflow', () => {
+    expect(source).toContain('该产品没有单产出 Workflow，请前往创建单产出 Workflow');
+    expect(source).toContain("planForm.value.resolutionMode === 'NONE'");
+  });
+
+  it('requires multiple products to share one multi-output Workflow', () => {
+    expect(source).toContain('未找到共享的工序 Workflow，请分开创建生产计划');
+    expect(source).toContain("resolutionMode === 'SHARED_MULTI_OUTPUT'");
+    expect(source).toContain('计划绑定整张共同 Workflow');
+    expect(source).not.toContain('父计划 + 多个产出计划行');
+  });
 });

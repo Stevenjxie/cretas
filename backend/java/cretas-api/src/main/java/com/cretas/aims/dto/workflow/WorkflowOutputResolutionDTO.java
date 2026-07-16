@@ -25,6 +25,9 @@ public class WorkflowOutputResolutionDTO {
     /** SELF_WORKFLOW(单选命中成品自有图) / RAW_OWNED(原料图候选) / NONE(0 候选)。 */
     private String resolutionMode;
 
+    /** Human-readable result for plan-creation UI. */
+    private String message;
+
     private List<Candidate> candidates;
 
     @Data
@@ -46,6 +49,10 @@ public class WorkflowOutputResolutionDTO {
         private List<TerminalOutput> terminalOutputs;
         /** 终端集合是否恰好等于所选集合。 */
         private boolean exactMatch;
+        /** SINGLE_OUTPUT_PRODUCT / RAW_MATERIAL_SPLIT / JOINT_PRODUCTION. */
+        private String workflowType;
+        /** Root raw-material SKU set derived from the canvas, never guessed from the anchor. */
+        private List<String> rootInputProductTypeIds;
     }
 
     @Data

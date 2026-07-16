@@ -112,12 +112,11 @@ public class ProductProcessWorkflowRuntimeServiceImpl
         ProductProcessWorkflow workflow = workflowRepository
                 .lockByIdAndFactoryId(batch.getSelectedWorkflowId(), factoryId)
                 .filter(candidate -> candidate.getStatus() == ProductProcessWorkflow.Status.PUBLISHED)
-                .filter(candidate -> productTypeId.equals(candidate.getProductTypeId()))
                 .filter(candidate -> batch.getSelectedWorkflowVersion()
                         .equals(candidate.getDefinitionVersion()))
                 .orElseThrow(() -> conflict(
                         "WORKFLOW_BATCH_SELECTION_TARGET_INVALID",
-                        "The batch no longer references the exact published factory/product version"));
+                        "The batch no longer references the exact published Workflow version"));
         if (Boolean.TRUE.equals(workflow.getUnitReviewRequired())) {
             throw conflict(
                     "WORKFLOW_UNIT_REVIEW_REQUIRED",

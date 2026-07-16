@@ -72,6 +72,7 @@ class ProductWorkflowResolutionPlannedUnitTest {
                 .thenReturn(new UnitNormalizationResult("box", "box", box));
         activate("P1", """
                 [
+                  {"id":"raw","kind":"RAW_MATERIAL","data":{"skuId":"RAW"}},
                   {"id":"fg1","kind":"FINISHED_GOOD","data":{"skuId":"P1"}},
                   {"id":"fg2","kind":"FINISHED_GOOD","data":{"skuId":"P2"}},
                   {"id":"proc","kind":"PROCESS","data":{"ports":[
@@ -89,10 +90,13 @@ class ProductWorkflowResolutionPlannedUnitTest {
     }
 
     @Test
-    void noActivationLeavesLegacyPathAvailable() {
-        when(activations.findByFactoryIdAndProductTypeId("F1", "P1"))
-                .thenReturn(Optional.empty());
-        assertTrue(service.resolveActivePlanOutputContract("F1", "P1", null).isEmpty());
+    void noSingleOutputActivationFailsWithoutMultiOutputFallback() {
+        when(activations.findByFactoryIdAndEnabledTrue("F1")).thenReturn(List.of());
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.resolveActivePlanOutputContract("F1", "P1", null));
+
+        assertEquals("WORKFLOW_SINGLE_OUTPUT_NOT_FOUND", error.getErrorCode());
     }
 
     @Test
@@ -134,8 +138,11 @@ class ProductWorkflowResolutionPlannedUnitTest {
         workflow.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
         workflow.setUnitReviewRequired(false);
         workflow.setNodesJson(nodesJson);
+        workflow.setEdgesJson("[]");
         when(activations.findByFactoryIdAndProductTypeId("F1", ownerId))
                 .thenReturn(Optional.of(activation));
+        when(activations.findByFactoryIdAndEnabledTrue("F1"))
+                .thenReturn(List.of(activation));
         when(workflows.findByIdAndFactoryId(41L, "F1")).thenReturn(Optional.of(workflow));
     }
 }

@@ -44,34 +44,33 @@ const rawMaterials = ref<WorkflowOwnerOption[]>([]);
 const selectedProductId = ref('');
 const productsLoading = ref(false);
 
-// raw-centric 双模式 (2026-07-13): 一级分类 = workflow 锚点 = 成品 or 原料。
-//   成品模式 = 锚成品 = 单终端成品图 (现状)。原料模式 = 锚原料 = 多终端成品图 (raw-centric)。
-//   模式只看"终端成品 SKU 数量", 这里的一级选择决定 owner 产品的候选范围 (成品分类 vs 原料分类)。
-const FINISHED_OWNER_CATEGORIES = new Set([
+const PRODUCIBLE_WORKFLOW_CATEGORIES = new Set([
   'FINISHED_PRODUCT', 'CONTRACT_MANUFACTURING', 'CUSTOMER_MATERIAL', 'DISH', 'COMBO',
+  'SEMI_FINISHED',
 ]);
-const ownerMode = ref<'FINISHED' | 'RAW'>('FINISHED');
-const productsByMode = computed<WorkflowOwnerOption[]>(() => {
-  if (ownerMode.value === 'RAW') return rawMaterials.value;
-  return products.value.filter((p) => FINISHED_OWNER_CATEGORIES.has(p.productCategory || ''));
-});
-/** 当前选中 owner 产品的分类是否为原料 → 传给编辑器决定是否放开多终端产出。 */
-const isRawOwnerMode = computed(() => ownerMode.value === 'RAW');
+const producibleWorkflowOptions = computed(() =>
+  products.value.filter((product) => PRODUCIBLE_WORKFLOW_CATEGORIES.has(product.productCategory || '')));
+/**
+ * 原料和成品只作为既有 Workflow 的兼容检索锚点；不再是用户预先选择的编辑模式。
+ * Workflow 类型由画布终端产出和根投入在发布时自动研判。
+ */
+const workflowOwnerOptions = computed<WorkflowOwnerOption[]>(() => [
+  ...producibleWorkflowOptions.value,
+  ...rawMaterials.value,
+]);
+const selectedOwnerIsRaw = computed(() =>
+  rawMaterials.value.some((material) => material.id === selectedProductId.value));
 
-// #2: 顶部产品选择器拼音首字母搜索 (复用 pinyinInitials.ts 的共享 usePinyinFilter composable)。
-//     raw-centric: 过滤范围 = 当前模式的产品子集 (成品/原料), 不是全量。
-const topProductFilter = usePinyinFilter(() => productsByMode.value, (p) => [p.name, p.code]);
+function workflowAnchorLabel(option: WorkflowOwnerOption): string {
+  if (rawMaterials.value.some((material) => material.id === option.id)) return '原料';
+  return option.productCategory === 'SEMI_FINISHED' ? '半成品' : '成品';
+}
+
+// #2: 统一选择器支持名称、编码和拼音首字母搜索。
+const topProductFilter = usePinyinFilter(() => workflowOwnerOptions.value, (p) => [p.name, p.code]);
 const handleTopProductFilter = topProductFilter.handleFilter;
 const handleTopProductVisibleChange = topProductFilter.handleVisibleChange;
 const filteredTopProducts = topProductFilter.filtered;
-
-// 切换成品/原料模式: 选中项若不在新模式子集里, 重置为该模式第一个产品 (防呆: 不留空/不留跨模式脏值)。
-function onOwnerModeChange() {
-  const list = productsByMode.value;
-  if (!list.some((p) => p.id === selectedProductId.value)) {
-    selectedProductId.value = list.length ? list[0].id : '';
-  }
-}
 
 // 服务端已关联工序（source of truth from backend）
 const linkedProcesses = ref<ProductWorkProcessItem[]>([]);
@@ -346,7 +345,7 @@ onMounted(async () => {
   await loadProducts();
   await loadAllProcesses();
   await loadOperators();
-  if (selectedProductId.value && ownerMode.value === 'FINISHED') {
+  if (selectedProductId.value && !selectedOwnerIsRaw.value) {
     await loadLinkedProcesses();
   }
   await applyRouteRecommendationDraft();
@@ -358,7 +357,7 @@ let suppressNextWatch = false;
 watch(selectedProductId, async (newVal, oldVal) => {
   if (newVal === oldVal) return;
   if (suppressNextWatch) { suppressNextWatch = false; return; }
-  if (newVal && ownerMode.value === 'FINISHED') {
+  if (newVal && !selectedOwnerIsRaw.value) {
     await loadLinkedProcesses();
   } else {
     linkedProcesses.value = [];
@@ -383,9 +382,11 @@ async function loadProducts() {
       if (products.value.length > 0 || rawMaterials.value.length > 0) {
         const selectedFromRoute = applyRouteProductSelection(route.query.productTypeId, true);
         if (!selectedFromRoute && !selectedProductId.value) {
-          if (routeQueryString(route.query.ownerMode) === 'RAW') ownerMode.value = 'RAW';
           suppressNextWatch = true;
-          selectedProductId.value = productsByMode.value[0]?.id || '';
+          // 兼容旧 ?ownerMode=RAW 深链，但它只影响初始定位，不再切换或锁定编辑模式。
+          selectedProductId.value = routeQueryString(route.query.ownerMode) === 'RAW'
+            ? rawMaterials.value[0]?.id || ''
+            : workflowOwnerOptions.value[0]?.id || '';
         }
       }
     }
@@ -414,7 +415,6 @@ function applyRouteProductSelection(value: unknown, suppressReload = false): boo
   const preferredRaw = rawMaterials.value.find((material) => material.id === preferredProductId);
   const preferred = preferredProduct || preferredRaw;
   if (!preferred) return false;
-  ownerMode.value = preferredRaw ? 'RAW' : 'FINISHED';
   if (selectedProductId.value !== preferred.id) {
     suppressNextWatch = suppressReload;
     selectedProductId.value = preferred.id;
@@ -547,17 +547,8 @@ const filteredAvailableProcesses = computed(() => {
 });
 
 const selectedProductName = computed(() => {
-  return productsByMode.value.find(p => p.id === selectedProductId.value)?.name || '';
+  return workflowOwnerOptions.value.find(p => p.id === selectedProductId.value)?.name || '';
 });
-
-async function handleWorkflowOwnerChange(ownerId: string): Promise<void> {
-  if (!ownerId || ownerId === selectedProductId.value) return;
-  const nextOwner = productsByMode.value.find((item) => item.id === ownerId);
-  if (!nextOwner) return;
-  const ok = await guardUnsaved();
-  if (!ok) return;
-  selectedProductId.value = ownerId;
-}
 
 // ─────────────────────────────────────────────
 // C3 — 责任人下拉搜索 filter method
@@ -972,7 +963,7 @@ function onDragEnd() {
 async function handleRefresh() {
   const ok = await guardUnsaved();
   if (!ok) return;
-  if (ownerMode.value === 'FINISHED') await loadLinkedProcesses();
+  if (!selectedOwnerIsRaw.value) await loadLinkedProcesses();
 }
 
 // ───── 工序成本配置 (报工自动继承; 防呆: 操作员不手填会计类别/明细) ─────
@@ -1137,45 +1128,13 @@ async function saveCustomFieldConfig() {
     <el-card>
       <div class="toolbar">
         <div class="toolbar-left">
-          <h2 style="margin: 0">产品-工序配置</h2>
+          <h2 style="margin: 0">Workflow 配置</h2>
           <el-tag type="info">{{ factoryId }}</el-tag>
-          <!-- raw-centric 双模式 (2026-07-13): 一级 = workflow 锚点。
-               成品 = 单终端成品图 (一个成品一张图); 原料 = 多终端成品图 (一原料→多成品 SKU)。 -->
-          <el-radio-group v-model="ownerMode" size="default" @change="onOwnerModeChange">
-            <el-radio-button label="FINISHED">成品</el-radio-button>
-            <el-tooltip trigger="click" placement="bottom">
-              <template #content>
-                成品 workflow：以单个成品作为产出目标，支持多个原料投入。<br />
-                质检围绕该成品的生产过程与最终成品放行。
-              </template>
-              <el-icon
-                class="workflow-mode-hint"
-                role="button"
-                tabindex="0"
-                aria-label="成品质检说明"
-                @click.stop
-              ><QuestionFilled /></el-icon>
-            </el-tooltip>
-            <el-radio-button label="RAW">原料</el-radio-button>
-            <el-tooltip trigger="click" placement="bottom">
-              <template #content>
-                原料 workflow：以单个入口原料作为来源，支持多个成品产出。<br />
-                质检围绕同一原料批次，分别追踪各成品分支的质量结果。
-              </template>
-              <el-icon
-                class="workflow-mode-hint"
-                role="button"
-                tabindex="0"
-                aria-label="原料质检说明"
-                @click.stop
-              ><QuestionFilled /></el-icon>
-            </el-tooltip>
-          </el-radio-group>
           <el-select
             v-model="selectedProductId"
-            :placeholder="ownerMode === 'RAW' ? '选择原料（一原料可产多个成品 SKU）' : '选择成品（支持拼音首字母搜索）'"
+            placeholder="选择关联的原料或成品（支持拼音首字母搜索）"
             filterable
-            style="width: 320px"
+            style="width: 360px"
             :loading="productsLoading"
             :filter-method="handleTopProductFilter"
             @visible-change="handleTopProductVisibleChange"
@@ -1184,17 +1143,17 @@ async function saveCustomFieldConfig() {
             <el-option
               v-for="p in filteredTopProducts"
               :key="p.id"
-              :label="p.code ? `${p.code} — ${p.name}` : p.name"
+              :label="`${workflowAnchorLabel(p)} · ${p.code ? `${p.code} — ` : ''}${p.name}`"
               :value="p.id"
             />
           </el-select>
-          <el-text v-if="ownerMode === 'RAW'" type="warning" size="small">
-            原料模式：这张图可产出多个成品 SKU（分支/扇出）
+          <el-text type="info" size="small">
+            无需选择模式，发布时由画布自动识别产品、原料分流或联产 Workflow
           </el-text>
         </div>
         <div class="toolbar-right">
           <!-- C4 status indicator + save button -->
-          <template v-if="selectedProductId && canWrite && ownerMode === 'FINISHED'">
+          <template v-if="selectedProductId && canWrite && !selectedOwnerIsRaw">
             <span v-if="dirty" class="dirty-indicator">● 有未保存改动</span>
             <span v-else class="clean-indicator">✓ 已保存</span>
             <el-button
@@ -1208,7 +1167,7 @@ async function saveCustomFieldConfig() {
             </el-button>
           </template>
           <el-button
-            v-if="selectedProductId && canWrite && ownerMode === 'FINISHED'"
+            v-if="selectedProductId && canWrite && !selectedOwnerIsRaw"
             :disabled="copyChainLoading"
             @click="openCopyChainDialog"
           >从产品复制工序链</el-button>
@@ -1223,11 +1182,10 @@ async function saveCustomFieldConfig() {
       :product-type-id="selectedProductId"
       :product-name="selectedProductName"
       :can-write="canWrite"
-      :raw-owner-mode="isRawOwnerMode"
-      @owner-change="handleWorkflowOwnerChange"
+      :raw-owner-mode="selectedOwnerIsRaw"
     />
 
-    <el-collapse v-if="ownerMode === 'FINISHED'" class="legacy-compatibility">
+    <el-collapse v-if="!selectedOwnerIsRaw" class="legacy-compatibility">
       <el-collapse-item name="legacy">
         <template #title>
           <div class="legacy-title">

@@ -9,6 +9,7 @@ const apiMocks = vi.hoisted(() => ({
   getActiveWorkProcesses: vi.fn(),
   createWorkProcess: vi.fn(),
   getProductProcessWorkflow: vi.fn(),
+  getProductProcessWorkflowActivation: vi.fn(),
   getProductWorkProcesses: vi.fn(),
 }));
 
@@ -25,6 +26,7 @@ vi.mock('@/api/processProduction', () => ({
 
 vi.mock('../workflowApi', () => ({
   getProductProcessWorkflow: apiMocks.getProductProcessWorkflow,
+  getProductProcessWorkflowActivation: apiMocks.getProductProcessWorkflowActivation,
   publishProductProcessWorkflow: vi.fn(),
   saveProductProcessWorkflowDraft: vi.fn(),
 }));
@@ -64,6 +66,8 @@ interface EditorVm {
   confirmAddProcess: () => void;
   confirmCreateAndAddProcess: () => Promise<void>;
   addOutputToProcess: (processId: string) => void;
+  addInputToProcess: (processId: string) => void;
+  addStandaloneRaw: () => void;
   selectOutputSku: (processId: string, portId: string, skuId: string) => void;
   selectMaterialSku: (materialNodeId: string, skuId: string) => void;
   confirmCreateSku: () => Promise<void>;
@@ -180,6 +184,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
         viewport: { x: 0, y: 0, zoom: 1 },
       },
     });
+    apiMocks.getProductProcessWorkflowActivation.mockResolvedValue({ success: true, data: null });
   });
 
   it('adds the process, derived finished output, and both edges in one undo snapshot', async () => {
@@ -230,17 +235,32 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
   });
 
   it.each(['SKU-FINISHED', 'SKU-CONTRACT', 'SKU-CUSTOMER'])(
-    'rejects a second finished terminal %s in finished-owner mode',
+    'allows a second finished terminal %s because topology determines the Workflow type',
     async (skuId) => {
       const vm = await mountEditor();
       const { process, port, material } = addSecondOutput(vm);
 
       vm.selectOutputSku(process.id, port.id, skuId);
 
-      expect(port).toMatchObject({ skuId: '', materialKind: 'SEMI_FINISHED' });
-      expect(material.data).toMatchObject({ skuId: '', kind: 'SEMI_FINISHED', bound: false });
+      expect(port).toMatchObject({ skuId, materialKind: 'FINISHED_GOOD' });
+      expect(material.data).toMatchObject({ skuId, kind: 'FINISHED_GOOD', bound: true });
     },
   );
+
+  it('does not let a legacy raw anchor lock additional roots or process inputs', async () => {
+    const vm = await mountEditor(true);
+    vm.addStandaloneRaw();
+    expect(vm.flowNodes.filter((node) => node.data.kind === 'RAW_MATERIAL')).toHaveLength(2);
+
+    vm.openAddProcess('raw');
+    vm.selectedWorkProcessId = 'WP-PACK';
+    vm.confirmAddProcess();
+    const process = vm.flowNodes.find((node) => node.data.kind === 'PROCESS');
+    if (!process) throw new Error('Expected process node');
+    vm.addInputToProcess(process.id);
+
+    expect(process.data.ports?.filter((port) => port.direction === 'INPUT')).toHaveLength(2);
+  });
 
   it('binds a SKU selected on the SEMI output material Cell to the owning process OUTPUT port', async () => {
     const vm = await mountEditor();
@@ -429,13 +449,14 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
   });
 });
 
-async function mountEditor(): Promise<EditorVm> {
+async function mountEditor(rawOwnerMode = false): Promise<EditorVm> {
   const wrapper = shallowMount(ProductProcessWorkflowEditor, {
     props: {
       factoryId: 'F006',
       productTypeId: 'PT-PIG-400',
       productName: '五香去骨猪蹄 400g',
       canWrite: true,
+      rawOwnerMode,
     },
   });
   await flushPromises();

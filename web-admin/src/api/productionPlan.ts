@@ -349,10 +349,7 @@ export function stopProduction(factoryId: string, planId: string) {
   return post<Record<string, unknown>>(`/${factoryId}/production-plans/${planId}/stop-production`)
 }
 
-/**
- * 生产计划「多选成品 → 解析共用 raw workflow」(raw-centric 多SKU, 2026-07-13)
- * 终端产出 DTO — 某 workflow owner 图谱上标记 kind=FINISHED_GOOD 的产出节点。
- */
+/** Workflow 终端成品。 */
 export interface WorkflowResolutionTerminal {
   productTypeId: string
   productName: string
@@ -365,25 +362,42 @@ export interface WorkflowResolutionTerminal {
 export interface WorkflowResolutionCandidate {
   workflowId: number
   definitionVersion: number
-  ownerProductTypeId: string
-  ownerProductName: string
-  ownerProductCategory: string
-  ownerUnit: string
+  /** 兼容旧 owner-centric DTO；新 DTO 可改用 bindingProductTypeId。 */
+  ownerProductTypeId?: string
+  ownerProductName?: string
+  ownerProductCategory?: string
+  ownerUnit?: string
+  /** 计划真正绑定的兼容锚点，不代表 Workflow 类型。 */
+  bindingProductTypeId?: string
+  bindingProductName?: string
+  /** 后端按图派生的只读类型。 */
+  workflowType?: 'SINGLE_OUTPUT_PRODUCT' | 'RAW_MATERIAL_SPLIT' | 'JOINT_PRODUCTION'
+  rootInputProductTypeIds?: string[]
   plannedUnit: string | null
-  terminalOutputs: WorkflowResolutionTerminal[]
+  terminalOutputs?: WorkflowResolutionTerminal[]
+  /** 兼容拟定的精简 resolve DTO。 */
+  outputProductTypeIds?: string[]
   exactMatch: boolean
 }
 
 /**
  * POST /product-process-workflows/resolve-by-outputs 响应体。
- * resolutionMode:
- *   - SELF_WORKFLOW: 单选且该成品自己就有 enabled workflow (自有图, 优先)
- *   - RAW_OWNED: 由某原料/半成品拥有的 workflow 的终端产出覆盖所选成品集合
- *   - NONE: 无候选覆盖 (需先去产品工序配置)
+ * 前端不以 owner 模式决定业务语义，而是复核候选的终端产出集合：
+ * 单选只接受单产出 Workflow，多选只接受共同的多产出 Workflow。
+ * union 同时兼容现网旧 DTO 与拟定的新 DTO。
  */
+export type WorkflowOutputResolutionMode =
+  | 'SELF_WORKFLOW'
+  | 'RAW_OWNED'
+  | 'SINGLE_OUTPUT'
+  | 'MULTI_OUTPUT'
+  | 'SHARED_MULTI_OUTPUT'
+  | 'NONE'
+
 export interface WorkflowOutputResolution {
   requestedProductTypeIds: string[]
-  resolutionMode: 'SELF_WORKFLOW' | 'RAW_OWNED' | 'NONE'
+  resolutionMode: WorkflowOutputResolutionMode
+  message?: string | null
   candidates: WorkflowResolutionCandidate[]
 }
 
