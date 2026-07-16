@@ -17,7 +17,9 @@
           <span class="stage-note">图定义独立保存，暂不改写现有报工运行时</span>
         </div>
         <div class="toolbar-actions">
-          <el-button :disabled="!canEdit" @click="addStandaloneRaw">+ 原料 Cell</el-button>
+          <el-button :disabled="!canEdit || (rawOwnerMode && hasRawRoot)" @click="addStandaloneRaw">
+            {{ rawOwnerMode ? '原料模式仅允许一个入口原料' : '+ 原料 Cell' }}
+          </el-button>
           <el-button :disabled="!canEdit || history.length === 0" @click="undo">撤销</el-button>
           <el-button :disabled="!canEdit || future.length === 0" @click="redo">重做</el-button>
           <el-button :disabled="!canEdit || flowNodes.length === 0" @click="handleAutoLayout">自动布局</el-button>
@@ -58,6 +60,21 @@
         show-icon
         title="SKU 单位已变化：成品产出已同步为当前基本单位。请核对并重新发布；已有计划不受影响，新计划才采用新单位。"
       />
+
+      <el-alert
+        v-if="bomMissingProducts.length > 0"
+        class="workflow-bom-alert"
+        type="warning"
+        :closable="false"
+        show-icon
+      >
+        <template #title>
+          {{ bomMissingProducts.map((item) => item.name).join('、') }} 尚未配置原辅料 BOM
+        </template>
+        <template #default>
+          <el-button link type="primary" @click="openBomDrawer">在右侧配置 BOM →</el-button>
+        </template>
+      </el-alert>
 
       <div ref="canvasRef" class="canvas-shell" :class="{ 'is-connecting': !!connectingFromKind }" v-loading="loading">
         <!-- #12b: 历史版本预览横幅 (只读, 不会自动保存覆盖草稿) -->
@@ -113,6 +130,7 @@
               @add-next="openAddProcess(slotProps.id)"
               @select-raw-sku="(skuId) => selectRawSku(slotProps.id, skuId)"
               @select-sku="(skuId) => selectMaterialSku(slotProps.id, skuId)"
+              @edit-sku="openQuickEditSku(slotProps.id)"
               @delete="removeNode(slotProps.id)"
               @config-bom="openBomDrawer"
             />
@@ -126,6 +144,7 @@
               :connecting-from-kind="connectingFromKind"
               :semi-options="semiFinishedSkuOptions"
               :finished-options="finishedGoodSkuOptions"
+              :allow-add-input="!isRawOwnerFirstProcess(slotProps.id)"
               @update="(patch) => updateProcessData(slotProps.id, patch)"
               @add-input="addInputToProcess(slotProps.id)"
               @add-output="addOutputToProcess(slotProps.id)"
@@ -297,6 +316,29 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="quickEditVisible" title="快捷修改 SKU" width="480px" destroy-on-close>
+      <el-alert
+        type="warning"
+        :closable="false"
+        title="这里修改的是 SKU 主数据，会同步影响其它使用该 SKU 的页面；历史计划仍保留原快照。"
+        style="margin-bottom: 16px"
+      />
+      <el-form label-width="90px">
+        <el-form-item label="SKU 名称" required>
+          <el-input v-model="quickEditForm.name" maxlength="100" />
+        </el-form-item>
+        <el-form-item label="基本单位" required>
+          <el-select v-model="quickEditForm.unit" filterable allow-create default-first-option style="width: 100%">
+            <el-option v-for="unit in quickEditUnitOptions" :key="unit" :label="unit" :value="unit" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="quickEditVisible = false">取消</el-button>
+        <el-button type="primary" :loading="quickEditSaving" @click="saveQuickEditSku">保存主数据</el-button>
+      </template>
+    </el-dialog>
+
     <!-- #10: BOM 原辅料配置抽屉 (右侧滑出, 不跳转页面; 关闭即回工序配置, 工序草稿不丢) -->
     <el-drawer
       v-model="bomDrawerVisible"
@@ -345,7 +387,7 @@ import {
 import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { get, post } from '@/api/request';
+import { get, post, put } from '@/api/request';
 import {
   createWorkProcess,
   getActiveWorkProcesses,
@@ -450,6 +492,10 @@ const props = defineProps<{
   rawOwnerMode?: boolean;
 }>();
 
+const emit = defineEmits<{
+  ownerChange: [ownerId: string];
+}>();
+
 const { fitView, getViewport, setViewport } = useVueFlow('product-process-workflow');
 const definition = ref<ProductProcessWorkflowDefinition | null>(null);
 const activation = ref<ProductProcessWorkflowActivation | null>(null);
@@ -488,6 +534,7 @@ const rawMaterialOptions = ref<RawMaterialOption[]>([]);
 // #3: 该产品 BOM 原辅料清单 (per-product, 随 productTypeId 变化而重新加载,
 // 与 loadCatalogs 的"全厂字典"缓存粒度不同, 单独一个 ref + 单独一个 loader)。
 const productBomItems = ref<BomItemOption[]>([]);
+const bomMissingProducts = ref<Array<{ id: string; name: string }>>([]);
 const bomRawMaterialIdList = computed(() => productBomItems.value.map((item) => item.materialTypeId));
 const outputSkuOptions = computed(() => skuOptions.value.filter(
   (option) => classifyOutputSkuCategory(option.productCategory) !== null,
@@ -571,6 +618,16 @@ const creatingSku = ref(false);
 const skuBindingTarget = ref<SkuBindingTarget | null>(null);
 const onsiteSkuUnitOptions = ['kg', 'g', '只', '件', '个', '盒', '袋', '瓶', '箱', '份'];
 const skuForm = ref({ name: '', unit: 'kg' });
+const quickEditVisible = ref(false);
+const quickEditSaving = ref(false);
+const quickEditNodeId = ref('');
+const quickEditSkuId = ref('');
+const quickEditForm = ref({ name: '', unit: 'kg' });
+const quickEditUnitOptions = computed(() => Array.from(new Set([
+  ...onsiteSkuUnitOptions,
+  ...workProcessOptions.value.flatMap((item) => [item.unit, item.outputUnit || '']),
+  ...skuOptions.value.map((item) => item.unit || ''),
+].filter(Boolean))));
 let lastGraphIdSeed = 0;
 let catalogGeneration = 0;
 let createSkuGeneration = 0;
@@ -582,6 +639,9 @@ let activationLoadGeneration = 0;
 let activationMutationGeneration = 0;
 
 const productTypeId = computed(() => props.productTypeId);
+const rawOwnerMode = computed(() => props.rawOwnerMode === true);
+const rawRootNodes = computed(() => flowNodes.value.filter((node) => node.data?.kind === 'RAW_MATERIAL'));
+const hasRawRoot = computed(() => rawRootNodes.value.length > 0);
 // #12b 预览历史版本标志 (非空=正在只读预览某历史版本); 提前声明供 canEdit 引用
 const previewingVersion = ref<number | null>(null);
 const unitReviewPending = ref(false);
@@ -630,7 +690,9 @@ onMounted(async () => {
   // #8: GSAP context 作用域化 (吸附脉冲), 卸载时 revert; 键盘删边监听
   gsapCtx = gsap.context(() => {}, canvasRef.value || undefined);
   window.addEventListener('keydown', onEditorKeydown);
-  await Promise.all([loadCatalogs(), loadDefinition(), loadActivation(), loadProductBom()]);
+  await loadCatalogs();
+  await Promise.all([loadDefinition(), loadActivation()]);
+  await loadProductBom();
 });
 
 onUnmounted(() => {
@@ -658,6 +720,14 @@ function scheduleAutoSave(): void {
 // 每次改动 (dirty 置 true) 都重排防抖定时器 —— 定时器 2.5s 后从"最后一次改动"起算,
 // 不再依赖 dirty 的 false→true 一次性 transition (那样一次跳过/失败就永久停摆)。
 watch(dirty, (isDirty) => { if (isDirty) scheduleAutoSave(); });
+watch(
+  () => flowNodes.value
+    .filter((node) => node.data?.kind === 'FINISHED_GOOD' && node.data?.skuId)
+    .map((node) => String(node.data.skuId))
+    .sort()
+    .join(','),
+  () => { if (rawOwnerMode.value) void loadProductBom(); },
+);
 
 // #10: 打开 BOM 配置抽屉; 关闭时刷新本产品 BOM (原料分组 + 提示随即更新)
 function openBomDrawer(): void {
@@ -714,10 +784,13 @@ watch(() => [props.factoryId, props.productTypeId] as const, async (next, previo
   if (next[0] === previous[0] && next[1] === previous[1]) return;
   previewingVersion.value = null;   // #12b fix: 切产品必退出历史版本预览 (否则横幅粘住 + 新产品自动保存被抑制)
   if (next[0] !== previous[0]) {
-    await Promise.all([loadCatalogs(), loadDefinition(), loadActivation(), loadProductBom()]);
+    await loadCatalogs();
+    await Promise.all([loadDefinition(), loadActivation()]);
+    await loadProductBom();
     return;
   }
-  await Promise.all([loadDefinition(), loadActivation(), loadProductBom()]);
+  await Promise.all([loadDefinition(), loadActivation()]);
+  await loadProductBom();
 });
 
 watch(aiStorageKey, () => {
@@ -877,16 +950,33 @@ async function loadDefinition(): Promise<void> {
     if (!isCurrentLoad(generation, identity)) return;
     let nextDefinition = response.success ? response.data : null;
     if (!nextDefinition) {
-      const legacyResponse = await getProductWorkProcesses(identity.factoryId, identity.productTypeId);
-      if (!isCurrentLoad(generation, identity)) return;
-      const legacyProcesses = legacyResponse.success && Array.isArray(legacyResponse.data)
-        ? legacyResponse.data
-        : [];
+      let legacyProcesses: Parameters<typeof createWorkflowFromLegacy>[0]['processes'] = [];
+      if (!rawOwnerMode.value) {
+        const legacyResponse = await getProductWorkProcesses(identity.factoryId, identity.productTypeId);
+        if (!isCurrentLoad(generation, identity)) return;
+        legacyProcesses = legacyResponse.success && Array.isArray(legacyResponse.data)
+          ? legacyResponse.data
+          : [];
+      }
       nextDefinition = createWorkflowFromLegacy({
         productTypeId: identity.productTypeId,
         productName: productName || identity.productTypeId,
         processes: legacyProcesses,
       });
+    }
+    if (rawOwnerMode.value) {
+      const owner = rawMaterialOptions.value.find((item) => item.id === identity.productTypeId);
+      const roots = nextDefinition.nodes.filter((node) => node.kind === 'RAW_MATERIAL');
+      if (roots.length === 1) {
+        roots[0].data = {
+          ...roots[0].data,
+          name: owner?.name || productName || identity.productTypeId,
+          skuId: identity.productTypeId,
+          skuCode: owner?.code || identity.productTypeId,
+          baseUnit: workflowReportingUnit('RAW_MATERIAL', owner?.unit || 'kg'),
+          bound: true,
+        };
+      }
     }
     if (!definitionMatchesIdentity(nextDefinition, identity)) {
       throw new Error('Workflow definition identity does not match the requested product');
@@ -930,6 +1020,10 @@ function invalidateLoadedDefinition(invalidatePersistence = true): void {
   dragStartSnapshot.value = null;
   processDialogVisible.value = false;
   skuDialogVisible.value = false;
+  quickEditVisible.value = false;
+  quickEditNodeId.value = '';
+  quickEditSkuId.value = '';
+  bomMissingProducts.value = [];
   skuBindingTarget.value = null;
   if (invalidatePersistence) {
     createSkuGeneration += 1;
@@ -993,21 +1087,39 @@ async function loadActivation(): Promise<void> {
 async function loadProductBom(): Promise<void> {
   const generation = ++bomLoadGeneration;
   const factoryId = props.factoryId;
-  const productTypeId = props.productTypeId;
+  const ownerId = props.productTypeId;
   productBomItems.value = [];
-  if (!factoryId || !productTypeId) return;
+  bomMissingProducts.value = [];
+  if (!factoryId || !ownerId) return;
+  const targets = rawOwnerMode.value
+    ? flowNodes.value
+      .filter((node) => node.data?.kind === 'FINISHED_GOOD' && node.data?.skuId)
+      .map((node) => ({ id: String(node.data.skuId), name: String(node.data.name || node.data.skuId) }))
+    : [{ id: ownerId, name: props.productName || ownerId }];
+  const uniqueTargets = targets.filter((target, index, list) =>
+    list.findIndex((candidate) => candidate.id === target.id) === index);
+  if (uniqueTargets.length === 0) return;
   try {
-    const response = await get<BomItemOption[]>(`/${factoryId}/bom/items/${productTypeId}`);
+    const responses = await Promise.all(uniqueTargets.map(async (target) => ({
+      target,
+      response: await get<BomItemOption[]>(`/${factoryId}/bom/items/${target.id}`),
+    })));
     if (generation !== bomLoadGeneration
       || props.factoryId !== factoryId
-      || props.productTypeId !== productTypeId) return;
-    if (response.success && Array.isArray(response.data)) {
-      productBomItems.value = response.data;
-    }
+      || props.productTypeId !== ownerId) return;
+    const allItems: BomItemOption[] = [];
+    const missing: Array<{ id: string; name: string }> = [];
+    responses.forEach(({ target, response }) => {
+      if (!response.success || !Array.isArray(response.data)) return;
+      allItems.push(...response.data);
+      if (response.data.length === 0) missing.push(target);
+    });
+    productBomItems.value = allItems;
+    bomMissingProducts.value = missing;
   } catch (error) {
     if (generation !== bomLoadGeneration
       || props.factoryId !== factoryId
-      || props.productTypeId !== productTypeId) return;
+      || props.productTypeId !== ownerId) return;
     console.error('[ProductProcessWorkflow] BOM items loading failed (raw material picker falls back to a single unsorted group)', error);
   }
 }
@@ -1287,6 +1399,11 @@ function removeNode(nodeId: string): void {
   if (!canEdit.value) return;
   const node = flowNodes.value.find((n) => n.id === nodeId);
   if (!node) return;
+  if (rawOwnerMode.value && nodeKind(node) === 'RAW_MATERIAL'
+    && String(node.data?.skuId || '') === productTypeId.value) {
+    ElMessage.warning('原料模式必须保留当前入口原料；如需更换，请在顶部选择其它原料');
+    return;
+  }
   const data = node.data as { name?: string; processName?: string } | undefined;
   const label = data?.name || data?.processName || '该 Cell';
   const touching = flowEdges.value.filter((e) => e.source === nodeId || e.target === nodeId).length;
@@ -1342,6 +1459,13 @@ function pulseHandle(processId: string, portId: string): void {
 }
 
 function addStandaloneRaw(): void {
+  if (rawOwnerMode.value && hasRawRoot.value) {
+    ElMessage.warning('原料模式只能有一个入口原料；请直接修改现有原料 Cell');
+    return;
+  }
+  const owner = rawOwnerMode.value
+    ? rawMaterialOptions.value.find((item) => item.id === props.productTypeId)
+    : undefined;
   mutate(() => {
     const count = flowNodes.value.filter((node) => node.data?.kind === 'RAW_MATERIAL').length;
     flowNodes.value.push({
@@ -1350,11 +1474,11 @@ function addStandaloneRaw(): void {
       position: { x: 32, y: 32 + count * 160 },
       data: {
         kind: 'RAW_MATERIAL',
-        name: `入口原料 ${count + 1}`,
-        skuId: '',
-        skuCode: '待绑定原料 SKU',
-        bound: false,
-        baseUnit: 'kg',
+        name: owner?.name || `入口原料 ${count + 1}`,
+        skuId: owner?.id || '',
+        skuCode: owner?.code || '待绑定原料 SKU',
+        bound: Boolean(owner),
+        baseUnit: workflowReportingUnit('RAW_MATERIAL', owner?.unit || 'kg'),
       },
     });
   });
@@ -1413,6 +1537,10 @@ function confirmAddProcess(): void {
 }
 
 function addInputToProcess(processId: string): void {
+  if (isRawOwnerFirstProcess(processId)) {
+    ElMessage.warning('原料模式的首道工序固定由唯一入口原料供料，不能再添加来源 Cell');
+    return;
+  }
   const process = flowNodes.value.find((node) => node.id === processId);
   if (!process) return;
   mutate(() => {
@@ -1436,6 +1564,17 @@ function addInputToProcess(processId: string): void {
     ];
     flowEdges.value.push(flowEdge(materialId, 'output', processId, portId));
   });
+}
+
+function isRawOwnerFirstProcess(processId: string): boolean {
+  if (!rawOwnerMode.value) return false;
+  const process = flowNodes.value.find((node) => node.id === processId);
+  if (!process || process.data?.kind !== 'PROCESS') return false;
+  const rawRootIds = new Set(rawRootNodes.value.map((node) => node.id));
+  const data = process.data as ProcessNodeData & { kind: 'PROCESS' };
+  return data.ports.some((port) => port.direction === 'INPUT'
+    && !!port.materialNodeId
+    && rawRootIds.has(port.materialNodeId));
 }
 
 function addOutputToProcess(processId: string): void {
@@ -1479,6 +1618,11 @@ function selectRawSku(materialNodeId: string, skuId: string): void {
   const material = flowNodes.value.find((node) => node.id === materialNodeId);
   const option = rawMaterialOptions.value.find((item) => item.id === skuId);
   if (!material || !option) return;
+  if (rawOwnerMode.value && rawRootNodes.value.some((node) => node.id === materialNodeId)
+    && skuId !== props.productTypeId) {
+    emit('ownerChange', skuId);
+    return;
+  }
   const nextUnit = workflowReportingUnit(
     'RAW_MATERIAL',
     option.unit || String(material.data?.baseUnit || 'kg'),
@@ -1550,6 +1694,15 @@ function bindOutputSku(processId: string, portId: string, option: SkuOption): bo
     ElMessage.error('所选 SKU 分类不能作为工序产出');
     return false;
   }
+  if (!rawOwnerMode.value && kind === 'FINISHED_GOOD') {
+    const existingFinished = flowNodes.value.find((node) => node.data?.kind === 'FINISHED_GOOD'
+      && node.data?.skuId
+      && node.id !== dataMaterialNodeId(processId, portId));
+    if (existingFinished) {
+      ElMessage.warning('成品模式只能有一个最终成品出口；如需多成品分支，请切换到原料模式');
+      return false;
+    }
+  }
   const process = flowNodes.value.find((node) => node.id === processId);
   if (!process) return false;
   const data = process.data as ProcessNodeData & { kind: 'PROCESS' };
@@ -1584,6 +1737,62 @@ function bindOutputSku(processId: string, portId: string, option: SkuOption): bo
     };
   });
   return true;
+}
+
+function dataMaterialNodeId(processId: string, portId: string): string | undefined {
+  const process = flowNodes.value.find((node) => node.id === processId);
+  if (!process || process.data?.kind !== 'PROCESS') return undefined;
+  return (process.data as ProcessNodeData).ports.find((port) => port.id === portId)?.materialNodeId;
+}
+
+function openQuickEditSku(materialNodeId: string): void {
+  const material = flowNodes.value.find((node) => node.id === materialNodeId);
+  if (!material || !material.data?.skuId) return;
+  quickEditNodeId.value = materialNodeId;
+  quickEditSkuId.value = String(material.data.skuId);
+  quickEditForm.value = {
+    name: String(material.data.name || ''),
+    unit: String(material.data.baseUnit || 'kg'),
+  };
+  quickEditVisible.value = true;
+}
+
+async function saveQuickEditSku(): Promise<void> {
+  const name = quickEditForm.value.name.trim();
+  const unit = quickEditForm.value.unit.trim();
+  if (!name || !unit || !props.factoryId || !quickEditSkuId.value) {
+    ElMessage.warning('请填写 SKU 名称和基本单位');
+    return;
+  }
+  quickEditSaving.value = true;
+  try {
+    const response = await put<SkuOption>(
+      `/${props.factoryId}/product-types/${quickEditSkuId.value}`,
+      { name, unit },
+    );
+    if (!response.success) throw new Error(response.message || 'SKU 修改失败');
+    const option = skuOptions.value.find((item) => item.id === quickEditSkuId.value);
+    if (option) Object.assign(option, { name, unit });
+    const material = flowNodes.value.find((node) => node.id === quickEditNodeId.value);
+    if (material) {
+      mutate(() => {
+        material.data = { ...material.data, name, baseUnit: unit };
+        flowNodes.value.filter((node) => node.data?.kind === 'PROCESS').forEach((node) => {
+          const data = node.data as ProcessNodeData;
+          data.ports.forEach((port) => {
+            if (port.materialNodeId === material.id) port.unit = unit;
+          });
+        });
+      });
+    }
+    quickEditVisible.value = false;
+    ElMessage.success('SKU 主数据已更新；当前 Workflow 单位已同步，请核对后重新发布');
+  } catch (error) {
+    console.error('[ProductProcessWorkflow] quick edit sku failed', error);
+    ElMessage.error(error instanceof Error ? error.message : 'SKU 修改失败');
+  } finally {
+    quickEditSaving.value = false;
+  }
 }
 
 async function confirmCreateSku(): Promise<void> {
@@ -2289,6 +2498,7 @@ function toggleAI(): void {
 </script>
 
 <style scoped>
+.workflow-bom-alert { margin: 0 12px 12px; }
 /* #8: 选中的边高亮 (提示可按 Delete 删除) + 连线中光标 */
 .canvas-shell :deep(.vue-flow__edge.selected .vue-flow__edge-path) {
   stroke: #f56c6c !important;

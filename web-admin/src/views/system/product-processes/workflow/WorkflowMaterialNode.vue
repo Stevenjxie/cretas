@@ -24,6 +24,14 @@
       <el-tag size="small" :type="data.skuId ? 'success' : 'warning'">
         {{ data.skuId ? '已绑定' : '待绑定' }}
       </el-tag>
+      <button
+        v-if="canWrite && data.skuId && (kind === 'SEMI_FINISHED' || kind === 'FINISHED_GOOD')"
+        type="button"
+        class="quick-edit nodrag"
+        title="快捷修改该 SKU"
+        aria-label="快捷修改 SKU"
+        @click.stop="emit('editSku')"
+      >✎</button>
     </div>
 
     <div class="identity-row">
@@ -50,7 +58,7 @@
         <el-option
           v-for="option in filteredBomRawOptions"
           :key="option.id"
-          :label="`${option.name} · ${option.unit || '-'}`"
+          :label="`${option.code ? `${option.code} — ` : ''}${option.name} · ${option.unit || '-'}`"
           :value="option.id"
         />
       </el-option-group>
@@ -58,21 +66,11 @@
         <el-option
           v-for="option in filteredOtherRawOptions"
           :key="option.id"
-          :label="`${option.name} · ${option.unit || '-'}`"
+          :label="`${option.code ? `${option.code} — ` : ''}${option.name} · ${option.unit || '-'}`"
           :value="option.id"
         />
       </el-option-group>
     </el-select>
-    <div
-      v-if="kind === 'RAW_MATERIAL' && canWrite && bomRawOptions.length === 0"
-      class="bom-hint nodrag"
-      data-testid="bom-hint"
-    >
-      <span>该产品尚未配置原辅料 BOM，建议先去配置</span>
-      <!-- #10: 不跳转页面 (会丢工序草稿), 改在右侧抽屉内打开 BOM 配置, 关闭即回本页 -->
-      <button type="button" class="bom-hint-link nodrag" @click.stop="emit('configBom')">去配置 →</button>
-    </div>
-
     <WorkflowSkuPicker
       v-if="(kind === 'SEMI_FINISHED' || kind === 'FINISHED_GOOD') && canWrite"
       class="sku-selector"
@@ -103,7 +101,7 @@ const props = withDefaults(defineProps<{
   canWrite: boolean;
   /** #8: 拖拽连线中源 cell 的类型；用于给非法目标 cell 灰化 */
   connectingFromKind?: '' | 'MATERIAL' | 'PROCESS';
-  rawMaterialOptions: Array<{ id: string; name: string; unit?: string }>;
+  rawMaterialOptions: Array<{ id: string; name: string; code?: string; unit?: string }>;
   /**
    * #3 (Steve 定: BOM 原料优先、可加其他): 该产品 BOM 原辅料清单里出现过的
    * 原料 SKU id 集合 (RawMaterialType.id，与 BomItem.materialTypeId 同一业务
@@ -133,6 +131,7 @@ const emit = defineEmits<{
   selectSku: [skuId: string];
   delete: [];
   configBom: [];
+  editSku: [];
 }>();
 
 // #3 原料 Cell = BOM 原料优先、可加其他 (soft 约束，Steve 定：BOM 优先但不硬
@@ -147,8 +146,8 @@ const otherRawOptions = computed(() => props.rawMaterialOptions
 // 有"其它"和"BOM"的区分，组名相应改成「全部原料」避免暗示一个空的 BOM 分组。
 const otherRawGroupLabel = computed(() => (bomRawOptions.value.length > 0 ? '其它原料' : '全部原料'));
 
-const bomRawFilter = usePinyinFilter(() => bomRawOptions.value, (option) => [option.name]);
-const otherRawFilter = usePinyinFilter(() => otherRawOptions.value, (option) => [option.name]);
+const bomRawFilter = usePinyinFilter(() => bomRawOptions.value, (option) => [option.name, option.code]);
+const otherRawFilter = usePinyinFilter(() => otherRawOptions.value, (option) => [option.name, option.code]);
 
 function handleRawFilter(query: string): void {
   bomRawFilter.handleFilter(query);
@@ -225,6 +224,12 @@ const kindMark = computed(() => ({
 .material-node.kind-raw_material { border-left-color: #6b7c93; }
 .material-node.kind-finished_good { border-left-color: #8b5cf6; }
 .node-heading { display: flex; align-items: flex-start; gap: 8px; }
+.quick-edit {
+  display: grid; place-items: center; width: 24px; height: 24px; flex: 0 0 auto;
+  padding: 0; border: 1px solid #d8e4ef; border-radius: 6px; background: #fff;
+  color: #1b65a8; cursor: pointer; font-size: 14px;
+}
+.quick-edit:hover { border-color: #409eff; background: #eef6ff; }
 .kind-mark {
   display: grid; place-items: center; width: 28px; height: 28px; flex: 0 0 auto;
   border-radius: 7px; color: #2f8a3d; background: #edf9e8; font-weight: 700;

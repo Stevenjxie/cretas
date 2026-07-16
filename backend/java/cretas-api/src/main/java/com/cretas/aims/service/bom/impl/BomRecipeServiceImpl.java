@@ -14,6 +14,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
+import com.cretas.aims.service.workflow.ProductWorkflowResolutionService;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
@@ -70,6 +71,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     private final BomRecipeItemRepository itemRepo;
     private final RawMaterialTypeRepository materialTypeRepo;
     private final ProductWorkProcessRepository productWorkProcessRepo;
+    private final ProductWorkflowResolutionService workflowResolutionService;
     private final MaterialUomConverter materialUomConverter;
     /** SP1: 嵌套 BOM 成本聚合 (组合装/先做后用). */
     private final NestedBomCostService nestedBomCostService;
@@ -590,8 +592,12 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                     .withHint("请选择该 SKU 配置的有效工序")
                     .withHintTarget("workProcessId");
         }
-        if (!productWorkProcessRepo.existsByFactoryIdAndProductTypeIdAndWorkProcessId(
-                factoryId, recipe.getProductTypeId(), workProcessId)) {
+        boolean valid = workflowResolutionService.resolveProcessPath(factoryId, recipe.getProductTypeId())
+                .map(path -> path.processes().stream()
+                        .anyMatch(step -> workProcessId.equals(step.workProcessId())))
+                .orElseGet(() -> productWorkProcessRepo.existsByFactoryIdAndProductTypeIdAndWorkProcessId(
+                        factoryId, recipe.getProductTypeId(), workProcessId));
+        if (!valid) {
             throw new BusinessException(400, "所选工序不是该 SKU 的有效工序: " + workProcessId)
                     .withHint("请重新选择该 SKU 工序路线中的工序")
                     .withHintTarget("workProcessId");

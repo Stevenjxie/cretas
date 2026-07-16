@@ -14,6 +14,8 @@ import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.service.bom.impl.BomSeasoningWorkspaceServiceImpl;
+import com.cretas.aims.service.workflow.ProductWorkflowResolutionService;
+import com.cretas.aims.service.workflow.WorkflowProcessPath;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -39,6 +41,7 @@ class BomSeasoningWorkspaceServiceTest {
     @Mock ProductWorkProcessRepository productWorkProcessRepository;
     @Mock WorkProcessRepository workProcessRepository;
     @Mock RawMaterialTypeRepository materialTypeRepository;
+    @Mock ProductWorkflowResolutionService workflowResolutionService;
     @InjectMocks BomSeasoningWorkspaceServiceImpl service;
 
     @Test
@@ -66,6 +69,29 @@ class BomSeasoningWorkspaceServiceTest {
                 response.getMaterialSummaries().get(0).getProcessUsages().get(0).getDosagePerKgG());
         assertEquals(new BigDecimal("1.5000"),
                 response.getMaterialSummaries().get(0).getProcessUsages().get(1).getDosagePerKgG());
+    }
+
+    @Test
+    void workspaceUsesResolvedGraphPathBeforeLegacyLinearProcesses() {
+        BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 3L);
+        when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
+        when(workflowResolutionService.resolveProcessPath(FACTORY, "product-1"))
+                .thenReturn(Optional.of(new WorkflowProcessPath(
+                        41L, 3, "raw-1", "RAW_MATERIAL_TYPE", "product-1", "raw-1",
+                        List.of(
+                                new WorkflowProcessPath.ProcessStep("node-1", "p1", 1),
+                                new WorkflowProcessPath.ProcessStep("node-2", "p3", 2)))));
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY), anyList())).thenReturn(List.of(
+                workProcess("p1", "前处理"), workProcess("p3", "熟制")));
+        when(seasoningItemRepository.findByRecipeIdOrderBySeqAsc(RECIPE)).thenReturn(List.of());
+        when(materialTypeRepository.findAllById(any())).thenReturn(List.of());
+
+        BomSeasoningWorkspaceResponse response = service.getWorkspace(FACTORY, RECIPE);
+
+        assertEquals(List.of("p1", "p3"), response.getProcesses().stream()
+                .map(BomSeasoningWorkspaceResponse.ProcessView::getWorkProcessId).toList());
+        verify(productWorkProcessRepository, never())
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(anyString(), anyString());
     }
 
     @Test

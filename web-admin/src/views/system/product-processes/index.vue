@@ -30,8 +30,17 @@ const route = useRoute();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('system'));
 
-// 产品列表（从后端获取）
-const products = ref<Array<{ id: string; name: string; productCategory?: string | null }>>([]);
+interface WorkflowOwnerOption {
+  id: string;
+  name: string;
+  code?: string | null;
+  unit?: string | null;
+  productCategory?: string | null;
+}
+
+// 成品来自 product_types；原料 owner 必须来自 raw_material_types，不能再用伪产品代替。
+const products = ref<WorkflowOwnerOption[]>([]);
+const rawMaterials = ref<WorkflowOwnerOption[]>([]);
 const selectedProductId = ref('');
 const productsLoading = ref(false);
 
@@ -42,19 +51,16 @@ const FINISHED_OWNER_CATEGORIES = new Set([
   'FINISHED_PRODUCT', 'CONTRACT_MANUFACTURING', 'CUSTOMER_MATERIAL', 'DISH', 'COMBO',
 ]);
 const ownerMode = ref<'FINISHED' | 'RAW'>('FINISHED');
-const productsByMode = computed(() => products.value.filter((p) => {
-  const cat = p.productCategory || '';
-  return ownerMode.value === 'RAW' ? cat === 'RAW_MATERIAL' : FINISHED_OWNER_CATEGORIES.has(cat);
-}));
-/** 当前选中 owner 产品的分类是否为原料 → 传给编辑器决定是否放开多终端产出。 */
-const isRawOwnerMode = computed(() => {
-  const p = products.value.find((x) => x.id === selectedProductId.value);
-  return (p?.productCategory || '') === 'RAW_MATERIAL';
+const productsByMode = computed<WorkflowOwnerOption[]>(() => {
+  if (ownerMode.value === 'RAW') return rawMaterials.value;
+  return products.value.filter((p) => FINISHED_OWNER_CATEGORIES.has(p.productCategory || ''));
 });
+/** 当前选中 owner 产品的分类是否为原料 → 传给编辑器决定是否放开多终端产出。 */
+const isRawOwnerMode = computed(() => ownerMode.value === 'RAW');
 
 // #2: 顶部产品选择器拼音首字母搜索 (复用 pinyinInitials.ts 的共享 usePinyinFilter composable)。
 //     raw-centric: 过滤范围 = 当前模式的产品子集 (成品/原料), 不是全量。
-const topProductFilter = usePinyinFilter(() => productsByMode.value, (p) => [p.name]);
+const topProductFilter = usePinyinFilter(() => productsByMode.value, (p) => [p.name, p.code]);
 const handleTopProductFilter = topProductFilter.handleFilter;
 const handleTopProductVisibleChange = topProductFilter.handleVisibleChange;
 const filteredTopProducts = topProductFilter.filtered;
@@ -340,7 +346,7 @@ onMounted(async () => {
   await loadProducts();
   await loadAllProcesses();
   await loadOperators();
-  if (selectedProductId.value) {
+  if (selectedProductId.value && ownerMode.value === 'FINISHED') {
     await loadLinkedProcesses();
   }
   await applyRouteRecommendationDraft();
@@ -352,7 +358,7 @@ let suppressNextWatch = false;
 watch(selectedProductId, async (newVal, oldVal) => {
   if (newVal === oldVal) return;
   if (suppressNextWatch) { suppressNextWatch = false; return; }
-  if (newVal) {
+  if (newVal && ownerMode.value === 'FINISHED') {
     await loadLinkedProcesses();
   } else {
     linkedProcesses.value = [];
@@ -367,17 +373,19 @@ async function loadProducts() {
     const { get } = await import('@/api/request');
     // 精简「选项」端点 (id/name/... 7 字段 + @Cacheable) — 避开重 DTO 的 ~3s/422KB 全量加载。
     // 返回 {content} 信封与旧 size=1000 调用一致, 读法不变。
-    const res = await get<{ content: Array<{ id: string; name: string; productCategory?: string | null }> }>(
-      `/${factoryId.value}/product-types/options`
-    );
-    if (res.success && res.data?.content) {
-      products.value = res.data.content;
-      if (products.value.length > 0) {
+    const [productRes, rawRes] = await Promise.all([
+      get<{ content: WorkflowOwnerOption[] }>(`/${factoryId.value}/product-types/options`),
+      get<WorkflowOwnerOption[]>(`/${factoryId.value}/raw-material-types/active`),
+    ]);
+    if (productRes.success && productRes.data?.content && rawRes.success && Array.isArray(rawRes.data)) {
+      products.value = productRes.data.content;
+      rawMaterials.value = rawRes.data;
+      if (products.value.length > 0 || rawMaterials.value.length > 0) {
         const selectedFromRoute = applyRouteProductSelection(route.query.productTypeId, true);
         if (!selectedFromRoute && !selectedProductId.value) {
           if (routeQueryString(route.query.ownerMode) === 'RAW') ownerMode.value = 'RAW';
           suppressNextWatch = true;
-          selectedProductId.value = productsByMode.value[0]?.id || products.value[0].id;
+          selectedProductId.value = productsByMode.value[0]?.id || '';
         }
       }
     }
@@ -402,9 +410,11 @@ function routeQueryString(value: unknown): string {
 function applyRouteProductSelection(value: unknown, suppressReload = false): boolean {
   const preferredProductId = routeQueryString(value);
   if (!preferredProductId) return false;
-  const preferred = products.value.find((product) => product.id === preferredProductId);
+  const preferredProduct = products.value.find((product) => product.id === preferredProductId);
+  const preferredRaw = rawMaterials.value.find((material) => material.id === preferredProductId);
+  const preferred = preferredProduct || preferredRaw;
   if (!preferred) return false;
-  ownerMode.value = (preferred.productCategory || '') === 'RAW_MATERIAL' ? 'RAW' : 'FINISHED';
+  ownerMode.value = preferredRaw ? 'RAW' : 'FINISHED';
   if (selectedProductId.value !== preferred.id) {
     suppressNextWatch = suppressReload;
     selectedProductId.value = preferred.id;
@@ -537,8 +547,17 @@ const filteredAvailableProcesses = computed(() => {
 });
 
 const selectedProductName = computed(() => {
-  return products.value.find(p => p.id === selectedProductId.value)?.name || '';
+  return productsByMode.value.find(p => p.id === selectedProductId.value)?.name || '';
 });
+
+async function handleWorkflowOwnerChange(ownerId: string): Promise<void> {
+  if (!ownerId || ownerId === selectedProductId.value) return;
+  const nextOwner = productsByMode.value.find((item) => item.id === ownerId);
+  if (!nextOwner) return;
+  const ok = await guardUnsaved();
+  if (!ok) return;
+  selectedProductId.value = ownerId;
+}
 
 // ─────────────────────────────────────────────
 // C3 — 责任人下拉搜索 filter method
@@ -953,7 +972,7 @@ function onDragEnd() {
 async function handleRefresh() {
   const ok = await guardUnsaved();
   if (!ok) return;
-  await loadLinkedProcesses();
+  if (ownerMode.value === 'FINISHED') await loadLinkedProcesses();
 }
 
 // ───── 工序成本配置 (报工自动继承; 防呆: 操作员不手填会计类别/明细) ─────
@@ -1140,7 +1159,7 @@ async function saveCustomFieldConfig() {
             <el-radio-button label="RAW">原料</el-radio-button>
             <el-tooltip trigger="click" placement="bottom">
               <template #content>
-                原料 workflow：以单个原料作为产出目标，支持多个成品产出。<br />
+                原料 workflow：以单个入口原料作为来源，支持多个成品产出。<br />
                 质检围绕同一原料批次，分别追踪各成品分支的质量结果。
               </template>
               <el-icon
@@ -1162,7 +1181,12 @@ async function saveCustomFieldConfig() {
             @visible-change="handleTopProductVisibleChange"
             @change="handleProductChange"
           >
-            <el-option v-for="p in filteredTopProducts" :key="p.id" :label="p.name" :value="p.id" />
+            <el-option
+              v-for="p in filteredTopProducts"
+              :key="p.id"
+              :label="p.code ? `${p.code} — ${p.name}` : p.name"
+              :value="p.id"
+            />
           </el-select>
           <el-text v-if="ownerMode === 'RAW'" type="warning" size="small">
             原料模式：这张图可产出多个成品 SKU（分支/扇出）
@@ -1170,7 +1194,7 @@ async function saveCustomFieldConfig() {
         </div>
         <div class="toolbar-right">
           <!-- C4 status indicator + save button -->
-          <template v-if="selectedProductId && canWrite">
+          <template v-if="selectedProductId && canWrite && ownerMode === 'FINISHED'">
             <span v-if="dirty" class="dirty-indicator">● 有未保存改动</span>
             <span v-else class="clean-indicator">✓ 已保存</span>
             <el-button
@@ -1184,7 +1208,7 @@ async function saveCustomFieldConfig() {
             </el-button>
           </template>
           <el-button
-            v-if="selectedProductId && canWrite"
+            v-if="selectedProductId && canWrite && ownerMode === 'FINISHED'"
             :disabled="copyChainLoading"
             @click="openCopyChainDialog"
           >从产品复制工序链</el-button>
@@ -1200,9 +1224,10 @@ async function saveCustomFieldConfig() {
       :product-name="selectedProductName"
       :can-write="canWrite"
       :raw-owner-mode="isRawOwnerMode"
+      @owner-change="handleWorkflowOwnerChange"
     />
 
-    <el-collapse class="legacy-compatibility">
+    <el-collapse v-if="ownerMode === 'FINISHED'" class="legacy-compatibility">
       <el-collapse-item name="legacy">
         <template #title>
           <div class="legacy-title">
