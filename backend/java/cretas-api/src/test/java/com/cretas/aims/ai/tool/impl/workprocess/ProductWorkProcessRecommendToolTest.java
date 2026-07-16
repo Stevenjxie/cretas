@@ -57,8 +57,8 @@ class ProductWorkProcessRecommendToolTest {
     @Test
     @DisplayName("same-category complete published source returns provenance and topological process order")
     void recommendsOneCompletePublishedWorkflowWithProvenance() throws Exception {
-        ProductType target = product(TARGET_ID, "新品", "FINISHED_PRODUCT");
-        ProductType source = product("source-a", "历史成品 A", "FINISHED_PRODUCT");
+        ProductType target = product(TARGET_ID, "干式熟成脆皮鸡 400g", "FINISHED_PRODUCT");
+        ProductType source = product("source-a", "干式熟成脆皮鸡 350g", "FINISHED_PRODUCT");
         givenProducts(target, source);
         when(workflowRepository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
                 FACTORY_ID, source.getId(), ProductProcessWorkflow.Status.PUBLISHED))
@@ -73,7 +73,7 @@ class ProductWorkProcessRecommendToolTest {
         assertEquals("PRODUCT_OWNED", result.sourceScope());
         assertEquals("COMPLETE_PUBLISHED_WORKFLOW", result.reasonCode());
         assertEquals("source-a", result.sourceProductTypeId());
-        assertEquals("历史成品 A", result.sourceProductName());
+        assertEquals("干式熟成脆皮鸡 350g", result.sourceProductName());
         assertEquals(31L, result.sourceWorkflowId());
         assertEquals(4, result.sourceWorkflowVersion());
         assertEquals(List.of("CUT", "PACK"), result.recommendations().stream()
@@ -86,9 +86,9 @@ class ProductWorkProcessRecommendToolTest {
     @Test
     @DisplayName("two products are never aggregated; newest eligible workflow remains the single source")
     void doesNotMixProcessesAcrossProductsOrWorkflows() throws Exception {
-        ProductType target = product(TARGET_ID, "新品", "FINISHED_PRODUCT");
-        ProductType sourceA = product("source-a", "历史 A", "FINISHED_PRODUCT");
-        ProductType sourceB = product("source-b", "历史 B", "FINISHED_PRODUCT");
+        ProductType target = product(TARGET_ID, "干式熟成脆皮鸡 400g", "FINISHED_PRODUCT");
+        ProductType sourceA = product("source-a", "干式熟成脆皮鸡 350g", "FINISHED_PRODUCT");
+        ProductType sourceB = product("source-b", "干式熟成脆皮鸡 500g", "FINISHED_PRODUCT");
         givenProducts(target, sourceA, sourceB);
         when(workflowRepository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
                 FACTORY_ID, sourceA.getId(), ProductProcessWorkflow.Status.PUBLISHED))
@@ -111,8 +111,8 @@ class ProductWorkProcessRecommendToolTest {
     @Test
     @DisplayName("invalid or incomplete published workflow fails closed and legacy rows are not considered")
     void noCompleteSourceReturnsNoRecommendation() throws Exception {
-        ProductType target = product(TARGET_ID, "新品", "FINISHED_PRODUCT");
-        ProductType source = product("source-a", "历史 A", "FINISHED_PRODUCT");
+        ProductType target = product(TARGET_ID, "干式熟成脆皮鸡 400g", "FINISHED_PRODUCT");
+        ProductType source = product("source-a", "干式熟成脆皮鸡 350g", "FINISHED_PRODUCT");
         givenProducts(target, source);
         ProductProcessWorkflow invalid = workflow(11L, source.getId(), 1, "CUT");
         invalid.setEdgesJson("[]");
@@ -125,7 +125,7 @@ class ProductWorkProcessRecommendToolTest {
 
         assertEquals("NONE", result.source());
         assertEquals("PRODUCT_OWNED", result.sourceScope());
-        assertEquals("NO_COMPLETE_PUBLISHED_WORKFLOW", result.reasonCode());
+        assertEquals("NO_RELATED_COMPLETE_PUBLISHED_WORKFLOW", result.reasonCode());
         assertTrue(result.recommendations().isEmpty());
         assertNull(result.sourceWorkflowId());
         verify(workProcessRepository, never()).findByFactoryIdAndIdIn(
@@ -147,6 +147,24 @@ class ProductWorkProcessRecommendToolTest {
         verify(workflowRepository, never())
                 .findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
                         FACTORY_ID, raw.getId(), ProductProcessWorkflow.Status.PUBLISHED);
+    }
+
+    @Test
+    @DisplayName("same broad category but unrelated product family is never recommended")
+    void rejectsUnrelatedProductInSameBroadCategory() {
+        ProductType target = product(TARGET_ID, "干式熟成脆皮鸡 400g", "FINISHED_PRODUCT");
+        ProductType unrelated = product("source-lamb", "SHH0713香辣孜然羊排", "FINISHED_PRODUCT");
+        givenProducts(target, unrelated);
+
+        ProductWorkProcessRecommendTool.RecommendationResult result =
+                tool.recommend(FACTORY_ID, TARGET_ID, 5);
+
+        assertEquals("NONE", result.source());
+        assertEquals("NO_RELATED_COMPLETE_PUBLISHED_WORKFLOW", result.reasonCode());
+        assertTrue(result.recommendations().isEmpty());
+        verify(workflowRepository, never())
+                .findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                        FACTORY_ID, unrelated.getId(), ProductProcessWorkflow.Status.PUBLISHED);
     }
 
     @Test
