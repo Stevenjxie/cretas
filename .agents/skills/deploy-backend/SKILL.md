@@ -25,6 +25,8 @@ For one commit, perform one final full release build:
 
 - If the deploy script will run `clean package` or `npm run build`, do not run the same full build immediately beforehand. Use target tests and static checks during implementation.
 - `SKIP_BUILD=1` is allowed only when the existing artifact has a manifest tying it to the exact deployed commit and its hash has been verified. A recent mtime or filename is not provenance.
+- The deploy script may also reuse its local backend-tree cache across docs-only commits. That cache must record the original build commit, the exact `backend/java/cretas-api` Git tree, and SHA-256; the recorded build commit must resolve to the same backend tree as the current clean exact `origin/main`.
+- If the verified cached JAR MD5 already matches production, the script may return a no-op only after reading the real nginx upstream and verifying the selected systemd unit plus direct active-slot health. `FORCE_REDEPLOY=1` bypasses this optimization.
 - When no exact manifest-backed CI artifact is available, let the deployment script perform the single trusted release build immediately.
 
 Before a release from the exact merged `origin/main`, run the single fast gate
@@ -37,11 +39,11 @@ instead of repeating shell, YAML, encoding, Flyway, and diff checks manually:
 It must stay read-only and must not run Maven or contact production. During
 feature development, use `--allow-non-main --allow-dirty --skip-fetch` only as
 a diagnostic; the real release gate remains strict on clean exact `origin/main`.
-After it passes, let `deploy-backend.sh` race an exact-commit CI artifact download
-against the local clean Maven package. The first verified result wins and the
-script terminates only the recorded losing process tree. This prevents slow
-GitHub downloads on domestic networks from delaying a faster local build. Do not
-wait or poll for CI artifact creation: a missing or invalid exact artifact simply
+After it passes, let `deploy-backend.sh` first check the manifest-backed local
+backend-tree cache, then race an exact-commit CI artifact download against the
+local clean Maven package on a cache miss. The first verified result wins and
+the script terminates only the recorded losing process tree. This prevents slow
+GitHub downloads on domestic networks from delaying a faster local build; do not wait or poll for CI artifact creation: a missing or invalid exact artifact simply
 leaves the local clean package running.
 
 ## Reuse A Merged Feature Worktree

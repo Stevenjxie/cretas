@@ -182,6 +182,9 @@ while [[ $# -gt 0 ]]; do
             echo "  SKIP_RSYNC=1              临时禁用 rsync 走 scp 兜底 (~/.bashrc 已不再默认设置)"
             echo "  SKIP_BUILD=1              跳过本地 Maven 打包 (使用 target/ 已有 jar)"
             echo "  DISABLE_CI_ARTIFACT_REUSE=1  禁用 exact-commit CI JAR 复用，直接本地构建"
+            echo "  DISABLE_LOCAL_JAR_CACHE=1    禁用后端源码 tree 指纹缓存"
+            echo "  CRETAS_JAR_CACHE_DIR=PATH    覆盖本地可信 JAR 缓存目录"
+            echo "  FORCE_REDEPLOY=1             相同 JAR 仍强制上传并执行蓝绿切流"
             echo "  ENABLE_R2=1               紧急 rollback: 启用 R2 通道 (scp 全失败时)"
             echo "  R2_ACCESS_KEY_ID/SECRET   R2 凭证 (配合 ENABLE_R2=1 使用)"
             echo ""
@@ -279,6 +282,7 @@ UPLOAD_STATUS_DIR="/tmp/jar-upload-$$"
 mkdir -p "$UPLOAD_STATUS_DIR"
 UPLOAD_PIDS=()
 BUILD_RACE_PIDS=()
+LOCAL_JAR_CACHE_ROOT="${CRETAS_JAR_CACHE_DIR:-$HOME/.cache/cretas/java-deploy}"
 
 # BEGIN_DEPLOY_TIMING_HELPERS
 DEPLOY_TIMING_DIR="$UPLOAD_STATUS_DIR/timing"
@@ -470,6 +474,118 @@ run_first_success_build_race() {
     return 0
 }
 # END_JAR_BUILD_RACE_HELPERS
+
+# BEGIN_BACKEND_SOURCE_CACHE_HELPERS
+backend_source_tree_fingerprint() {
+    git -C "$PROJECT_ROOT" rev-parse "HEAD:backend/java/cretas-api" 2>/dev/null
+}
+
+reuse_local_source_artifact_cache() {
+    local destination="$1"
+    local head_sha origin_sha source_tree cache_dir cache_jar
+    local commit_file tree_file sha_file built_commit expected_sha actual_sha built_tree destination_tmp
+
+    [ "${DISABLE_LOCAL_JAR_CACHE:-0}" != "1" ] || return 1
+    head_sha=$(git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null) || return 1
+    origin_sha=$(git -C "$PROJECT_ROOT" rev-parse origin/main 2>/dev/null) || return 1
+    [ "$head_sha" = "$origin_sha" ] || return 1
+    git -C "$PROJECT_ROOT" diff --quiet || return 1
+    git -C "$PROJECT_ROOT" diff --cached --quiet || return 1
+    source_tree=$(backend_source_tree_fingerprint) || return 1
+    cache_dir="$LOCAL_JAR_CACHE_ROOT/current"
+    cache_jar="$cache_dir/$JAR_NAME"
+    commit_file="$cache_dir/$JAR_NAME.commit"
+    tree_file="$cache_dir/$JAR_NAME.source-tree"
+    sha_file="$cache_dir/$JAR_NAME.sha256"
+    [ -f "$cache_jar" ] && [ -f "$commit_file" ] && [ -f "$tree_file" ] && [ -f "$sha_file" ] || return 1
+
+    built_commit=$(tr -d '\r\n' < "$commit_file" 2>/dev/null)
+    [ "$(tr -d '\r\n' < "$tree_file" 2>/dev/null)" = "$source_tree" ] || return 1
+    git -C "$PROJECT_ROOT" cat-file -e "${built_commit}^{commit}" 2>/dev/null || return 1
+    built_tree=$(git -C "$PROJECT_ROOT" rev-parse "${built_commit}:backend/java/cretas-api" 2>/dev/null) || return 1
+    [ "$built_tree" = "$source_tree" ] || return 1
+    expected_sha=$(awk -v jar="$JAR_NAME" '
+        NF >= 2 {
+            file = $2
+            sub(/^\*/, "", file)
+            if (file == jar) { print tolower($1); exit }
+        }
+    ' "$sha_file" 2>/dev/null)
+    actual_sha=$(sha256sum "$cache_jar" 2>/dev/null | awk '{print tolower($1)}')
+    [[ "$expected_sha" =~ ^[0-9a-f]{64}$ ]] || return 1
+    [ "$expected_sha" = "$actual_sha" ] || return 1
+    (cd "$cache_dir" && sha256sum -c "$JAR_NAME.sha256" >/dev/null 2>&1) || return 1
+
+    mkdir -p "$(dirname "$destination")"
+    destination_tmp="${destination}.source-cache.$$"
+    cp "$cache_jar" "$destination_tmp" || { rm -f "$destination_tmp"; return 1; }
+    mv -f "$destination_tmp" "$destination" || { rm -f "$destination_tmp"; return 1; }
+    echo "   ✓ 复用本地后端源码指纹 JAR: tree=$source_tree (built=$built_commit, SHA-256 已核验)"
+    return 0
+}
+
+store_local_source_artifact_cache() {
+    local jar_path="$1"
+    local head_sha origin_sha source_tree cache_dir cache_parent tmp_dir
+
+    [ "${DISABLE_LOCAL_JAR_CACHE:-0}" != "1" ] || return 0
+    [ -f "$jar_path" ] || return 0
+    head_sha=$(git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null) || return 0
+    origin_sha=$(git -C "$PROJECT_ROOT" rev-parse origin/main 2>/dev/null) || return 0
+    [ "$head_sha" = "$origin_sha" ] || return 0
+    git -C "$PROJECT_ROOT" diff --quiet || return 0
+    git -C "$PROJECT_ROOT" diff --cached --quiet || return 0
+    source_tree=$(backend_source_tree_fingerprint) || return 0
+    cache_parent="$LOCAL_JAR_CACHE_ROOT"
+    cache_dir="$cache_parent/current"
+    tmp_dir="$cache_parent/.current.$$"
+    mkdir -p "$cache_parent" || return 0
+    rm -rf "$tmp_dir"
+    mkdir -p "$tmp_dir" || return 0
+    cp "$jar_path" "$tmp_dir/$JAR_NAME" || { rm -rf "$tmp_dir"; return 0; }
+    printf '%s\n' "$head_sha" > "$tmp_dir/$JAR_NAME.commit"
+    printf '%s\n' "$source_tree" > "$tmp_dir/$JAR_NAME.source-tree"
+    (cd "$tmp_dir" && sha256sum "$JAR_NAME" > "$JAR_NAME.sha256") \
+        || { rm -rf "$tmp_dir"; return 0; }
+    rm -rf "$cache_dir"
+    mv "$tmp_dir" "$cache_dir" || { rm -rf "$tmp_dir"; return 0; }
+    echo "   ✓ 已写入本地后端源码指纹缓存: tree=$source_tree"
+}
+
+prod_already_runs_local_artifact() {
+    local local_md5="$1"
+    local remote_md5 upstream_text active_port active_service live_state
+
+    [ "$MODE" = "jar" ] || return 1
+    [ "$DEPLOY_ENV" = "prod" ] || return 1
+    [ "$DEPLOY_MODE" = "bluegreen" ] || return 1
+    [ "${FORCE_REDEPLOY:-0}" != "1" ] || return 1
+
+    remote_md5=$(ssh -o ConnectTimeout=5 "$SERVER" \
+        "md5sum '$REMOTE_JAR_DIR/$JAR_NAME' 2>/dev/null | awk '{print \$1}'" \
+        2>/dev/null | tr -d '\r\n') || return 1
+    [ "$remote_md5" = "$local_md5" ] || return 1
+
+    upstream_text=$(ssh -o ConnectTimeout=5 "$GATEWAY" "cat '$NGINX_UPSTREAM_FILE'" 2>/dev/null) || return 1
+    active_port=$(printf '%s\n' "$upstream_text" \
+        | sed -nE 's/.*server[[:space:]]+47\.100\.235\.168:(10010|10020).*/\1/p' \
+        | head -1)
+    case "$active_port" in
+        10010) active_service="$BLUE_SERVICE" ;;
+        10020) active_service="$GREEN_SERVICE" ;;
+        *) return 1 ;;
+    esac
+
+    live_state=$(ssh -o ConnectTimeout=5 "$SERVER" \
+        "printf '%s\\n' \"\$(systemctl is-active '$active_service' 2>/dev/null || true)\"; curl -s -o /dev/null --connect-timeout 2 --max-time 3 -w '%{http_code}' 'http://127.0.0.1:$active_port/api/mobile/health'" \
+        2>/dev/null) || return 1
+    [ "$(printf '%s\n' "$live_state" | sed -n '1p' | tr -d '\r')" = "active" ] || return 1
+    [ "$(printf '%s\n' "$live_state" | sed -n '2p' | tr -d '\r\n')" = "200" ] || return 1
+
+    echo "   ✓ 生产已运行相同 JAR: upstream=$active_port service=$active_service MD5=$local_md5"
+    return 0
+}
+# END_BACKEND_SOURCE_CACHE_HELPERS
 
 cleanup() {
     local exit_code=$?
@@ -764,7 +880,11 @@ deploy_jar() {
     deploy_timing_begin build "构建与 JAR 完整性"
     CI_ARTIFACT_REUSED=false
     JAR_TARGET="backend/java/cretas-api/target/$JAR_NAME"
-    if [ -n "$SKIP_BUILD" ]; then
+    LOCAL_SOURCE_CACHE_REUSED=false
+    if [ -z "$SKIP_BUILD" ] && reuse_local_source_artifact_cache "$JAR_TARGET"; then
+        LOCAL_SOURCE_CACHE_REUSED=true
+        echo "📦 [1/4] 后端源码未变化，跳过 Maven 打包"
+    elif [ -n "$SKIP_BUILD" ]; then
         if [ ! -f "$JAR_TARGET" ]; then
             echo "❌ SKIP_BUILD=1 但指定 JAR 不存在: $JAR_TARGET"
             exit 1
@@ -848,7 +968,29 @@ deploy_jar() {
         cd ../../..
         exit 1
     fi
+    if [ "$LOCAL_SOURCE_CACHE_REUSED" != "true" ]; then
+        store_local_source_artifact_cache "$JAR_PATH"
+    fi
     deploy_timing_end build
+
+    # A docs/dispatch-only main commit may point at the exact backend tree that
+    # is already live. Require matching JAR bytes plus the real upstream,
+    # systemd unit and direct active-slot health before treating deploy as a
+    # successful no-op. FORCE_REDEPLOY=1 preserves an explicit restart path.
+    deploy_timing_begin identical_artifact "相同制品线上验证"
+    if prod_already_runs_local_artifact "$LOCAL_MD5"; then
+        deploy_timing_end identical_artifact
+        echo ""
+        echo "=========================================="
+        echo "  ✅ 无需重新部署：生产已运行相同后端制品"
+        echo "  后端 tree: $(backend_source_tree_fingerprint)"
+        echo "  MD5: $LOCAL_MD5"
+        echo "  跳过: Maven / 上传 / Java 重启 / 蓝绿切流"
+        echo "=========================================="
+        print_deploy_timing_summary 0
+        return 0
+    fi
+    deploy_timing_end identical_artifact
 
     # ----- 2. 并行上传 -----
     echo ""
