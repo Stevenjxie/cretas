@@ -1,4 +1,4 @@
-name: threshold-parity-check
+name: threshold-parity-check (manual)
 
 # Verifies bundled Python copy of alert_thresholds.json stays byte-equal to Java source.
 # Drift defense: Java edited, Python forgot. Either side touched → both must match.
@@ -6,14 +6,9 @@ name: threshold-parity-check
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'backend/java/cretas-api/src/main/resources/config/smartbi/alert_thresholds.json'
-      - 'backend/python/smartbi_compat/config/alert_thresholds.json'
 
 jobs:
   diff:
-    if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'daily/integration-')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

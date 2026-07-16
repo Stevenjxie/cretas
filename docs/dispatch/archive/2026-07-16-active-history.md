@@ -35,6 +35,12 @@
 | MAT16-CONTRACT-20260716 | `9e9331607f64a22b0055fb779ab24368ab3182b4` | `/root/material_contract_impl` | 原料创建和历史短码修复统一要求有效 L1-L2-L3 父链并由服务端生成16位编码；类别/primaryCode 从 L1 派生，Web/RN 支持三级筛选，AI/Excel/默认初始化不再绕过契约。F006 线上230/230条已符合，无需写入补码；其他租户缺本地编码树，未做不可靠自动匹配。后端44项含真实 JPA 启动门禁、Web 6项和 vue-tsc 通过，RN改动完成语法编译检查，提交 `aa7d42a25` 已整合。 |
 | CROSSMODULE-FIX-20260716 | `0f81b78e7` | `/root` | 采购/销售一维和二维入口因没有明细编辑器而禁用，代码层同时阻止空明细请求；普通新建和 BOM 展开保留。采购隐藏日期改用上海工厂本地日历日期，BOM 编辑保留显式0%税率。新增10箱→500件→200g/件→100000g领料链路证据。后端20项、Web 12项和 vue-tsc 全部通过，提交 `3cfd0a279`。 |
 
+## GitHub Actions 本地优先
+
+| ID | Base SHA | Owner | Result |
+|---|---|---|---|
+| OPS-ACTIONS-LOCAL-FIRST-20260716 | `010c2f8e95f82898d743beb70dab733444307978` | `/root` | 7 个 GitHub Actions workflow 全部取消 `push`、`pull_request`、`schedule` 自动触发，仅保留手动入口；手动 CI 默认执行 Java/Python/Vue/RN 独立全量审计，Java 制品仍需显式选择。目标 shell 契约测试、YAML 解析与 diff check 通过；未部署、未修改生产数据。 |
+
 ## 发布证据
 
 - PR #1374 Java/Web 发布：真实 upstream 从 10020 切换到 10010，5/5 次 HTTP 200，旧槽停止；F006 只读 E2E 通过，业务写请求为 0。

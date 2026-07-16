@@ -1,4 +1,4 @@
-name: Tool factoryId Isolation Audit
+name: Tool factoryId Isolation Audit (manual)
 
 # P0-1 CI 门禁 — 防止新引入的 AI Tool 漏掉 factoryId 隔离
 # 审计脚本会扫描 backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/**/*.java
@@ -6,12 +6,6 @@ name: Tool factoryId Isolation Audit
 # 脚本 process.exit(1) 阻塞 PR merge.
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/**'
-      - 'scripts/audit/tool-factory-isolation-audit.mjs'
-      - '.github/workflows/tool-isolation-audit.yml'
   workflow_dispatch:
 
 concurrency:
@@ -20,7 +14,6 @@ concurrency:
 
 jobs:
   audit:
-    if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'daily/integration-')
     runs-on: ubuntu-latest
     name: factoryId Isolation Audit
     steps:

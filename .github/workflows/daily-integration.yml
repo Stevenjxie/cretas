@@ -1,9 +1,7 @@
-name: Daily integration PR
+name: Daily integration PR (manual fallback)
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 12 * * *' # 20:00 China Standard Time (UTC+8)
 
 permissions:
   contents: write

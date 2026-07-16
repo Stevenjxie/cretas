@@ -1,4 +1,4 @@
-name: E2E PR Gate
+name: E2E PR Gate (manual)
 
 # PR 门禁: 对 PR 改动到 backend/java、web-admin 或 tests/v1-e2e/ 的变更, 跑 L1 + G1/G2/G3 共 14 个 @pr-gate 测试.
 #
@@ -6,12 +6,6 @@ name: E2E PR Gate
 # 参考: tests/v1-e2e/scripts/run-pr-gate.sh (本地指挥官)
 
 on:
-  pull_request:
-    paths:
-      - 'backend/java/cretas-api/**'
-      - 'web-admin/**'
-      - 'tests/v1-e2e/**'
-      - '.github/workflows/e2e-pr.yml'
   workflow_dispatch:
 
 concurrency:
@@ -20,9 +14,7 @@ concurrency:
 
 jobs:
   e2e-pr-gate:
-    # One consolidated PR per day gets the expensive fresh-DB/Flyway/Spring
-    # startup gate. It can still be run explicitly for an exceptional PR.
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'daily/integration-')
+    # Expensive fresh-DB/Flyway/Spring startup gate is now explicit-only.
     runs-on: ubuntu-latest
     timeout-minutes: 25
 

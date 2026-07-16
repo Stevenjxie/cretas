@@ -73,7 +73,11 @@ git -C "$TMP/seed" checkout codex/conflict-b >/dev/null
 )
 test "$(git -C "$TMP/seed" log -1 --format='%(trailers:key=Integration-Status,valueonly)')" = review
 
-grep -q "cron: '0 12 \* \* \*'" "$REPO_ROOT/.github/workflows/daily-integration.yml"
+grep -q '  workflow_dispatch:' "$REPO_ROOT/.github/workflows/daily-integration.yml"
+if grep -q '  schedule:' "$REPO_ROOT/.github/workflows/daily-integration.yml"; then
+  echo 'daily integration must not consume GitHub runners on a schedule' >&2
+  exit 1
+fi
 grep -q 'cancel-in-progress: false' "$REPO_ROOT/.github/workflows/daily-integration.yml"
 grep -q 'pull-requests: write' "$REPO_ROOT/.github/workflows/daily-integration.yml"
 
@@ -87,17 +91,27 @@ ci = (root / '.github/workflows/ci.yml').read_text(encoding='utf-8')
 e2e = (root / '.github/workflows/e2e-pr.yml').read_text(encoding='utf-8')
 post_deploy = (root / '.github/workflows/e2e-post-deploy.yml').read_text(encoding='utf-8')
 assert 'JPA repository query startup gate' in ci
-assert "if: github.event_name != 'push'" in ci
-assert 'pr-batch-policy:' in ci
-assert "github.event.pull_request.user.login != 'github-actions[bot]'" in ci
+assert 'full_audit:' in ci
+assert 'pr-batch-policy:' not in ci
+assert 'dorny/paths-filter' not in ci
 assert 'deploy-staging:' not in ci and 'deploy-prod:' not in ci
 assert 'pgvector/pgvector:pg17' in e2e
 assert 'Start Java backend (background)' in e2e
-assert "startsWith(github.head_ref, 'daily/integration-')" in e2e
 assert '\n  schedule:' not in post_deploy, 'post-deploy E2E must be explicit, not nightly'
-for name in ('kb-drift-check.yml', 'threshold-parity-check.yml', 'tool-isolation-audit.yml'):
+for name in (
+    'ci.yml',
+    'daily-integration.yml',
+    'e2e-pr.yml',
+    'e2e-post-deploy.yml',
+    'kb-drift-check.yml',
+    'threshold-parity-check.yml',
+    'tool-isolation-audit.yml',
+):
     text = (root / '.github/workflows' / name).read_text(encoding='utf-8')
-    assert '\n  push:' not in text, f'{name} should not duplicate checks on main push'
+    assert '\n  workflow_dispatch:' in text, f'{name} must retain a manual fallback'
+    assert '\n  push:' not in text, f'{name} must not run on push'
+    assert '\n  pull_request:' not in text, f'{name} must not run on pull requests'
+    assert '\n  schedule:' not in text, f'{name} must not run on a schedule'
 PY
 
 echo 'PASS: selection, conflict recording, same-day PR idempotency, workflow YAML, and schedule'

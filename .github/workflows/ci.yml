@@ -1,18 +1,13 @@
-name: CI/CD Pipeline
+name: CI/CD Pipeline (manual)
 
 on:
-  push:
-    branches: [main]
-    # Main-push mode only packages the exact Java deploy artifact. Other
-    # component gates run on the consolidated daily integration PR, so avoid
-    # spending a private-repository runner on docs/scripts/frontend-only pushes.
-    paths:
-      - 'backend/java/**'
-      - '.github/workflows/ci.yml'
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
+      full_audit:
+        description: 'Run the independent Java, Python, Vue and RN audit'
+        required: false
+        default: true
+        type: boolean
       package_java_artifact:
         description: 'Build and retain the exact-main Java deploy artifact'
         required: false
@@ -21,64 +16,13 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # Superseded PR revisions may stop. Main pushes are already path-filtered and
-  # only opt-in `[ci-artifact]` builds reach the expensive Java job.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 jobs:
-  # Development changes are consolidated into one integration PR per day.
-  # A non-daily PR must fail visibly instead of returning an all-skipped green
-  # workflow that could bypass the repository startup gates.
-  pr-batch-policy:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require the daily integration branch
-        if: >-
-          ${{ !startsWith(github.head_ref, 'daily/integration-') ||
-              github.event.pull_request.user.login != 'github-actions[bot]' }}
-        run: |
-          echo 'PRs must be created by the scheduled daily integration workflow.' >&2
-          exit 1
-
-  # ---- Change detection: run only the affected component gates ----
-  changes:
-    # Normal development is batched into one daily integration PR. Ad-hoc PRs
-    # remain available for review, but do not consume CI unless dispatched.
-    if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'daily/integration-')
-    runs-on: ubuntu-latest
-    outputs:
-      java: ${{ steps.filter.outputs.java }}
-      python: ${{ steps.filter.outputs.python }}
-      vue: ${{ steps.filter.outputs.vue }}
-      rn: ${{ steps.filter.outputs.rn }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            java:
-              - 'backend/java/**'
-            python:
-              - 'backend/python/**'
-            vue:
-              - 'web-admin/**'
-            rn:
-              - 'frontend/**'
-
   # ---- Java Backend: Build + Test ----
   java-build-test:
-    needs: changes
-    # Daily PR: validate Java against PostgreSQL. Main: package only when the
-    # commit explicitly requests `[ci-artifact]`; routine domestic deployments
-    # use the local manifest-backed cache/build path instead.
     if: >-
-      ${{ (github.event_name == 'pull_request' && needs.changes.outputs.java == 'true') ||
-          (github.event_name == 'workflow_dispatch' &&
-           (needs.changes.outputs.java == 'true' || inputs.package_java_artifact)) ||
-          (github.event_name == 'push' && needs.changes.outputs.java == 'true' &&
-           contains(github.event.head_commit.message, '[ci-artifact]')) }}
+      ${{ inputs.full_audit || inputs.package_java_artifact }}
     runs-on: ubuntu-latest
 
     # PostgreSQL service container — enables PG-required IT classes (e.g.
@@ -130,7 +74,7 @@ jobs:
       # queries otherwise survive compilation and fail only when Spring starts.
       # The naming convention is enforced by AGENTS.md for all new query tests.
       - name: JPA repository query startup gate
-        if: github.event_name != 'push'
+        if: inputs.full_audit
         working-directory: backend/java/cretas-api
         timeout-minutes: 15
         run: >-
@@ -143,16 +87,12 @@ jobs:
       # gates and JPA startup gate still authorize merges; this step only makes
       # the exact-main artifact available early so deploy does not rebuild it.
       - name: Package exact-commit deploy artifact
-        if: >-
-          ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-              (github.event_name == 'workflow_dispatch' && inputs.package_java_artifact) }}
+        if: inputs.package_java_artifact
         working-directory: backend/java/cretas-api
         timeout-minutes: 10
         run: mvn -B package -Dmaven.test.skip=true -pl .
       - name: Prepare exact-commit deploy artifact
-        if: >-
-          ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-              (github.event_name == 'workflow_dispatch' && inputs.package_java_artifact) }}
+        if: inputs.package_java_artifact
         working-directory: backend/java/cretas-api/target
         run: |
           JAR=cretas-backend-system-1.0.0.jar
@@ -160,9 +100,7 @@ jobs:
           sha256sum "$JAR" > "$JAR.sha256"
           printf '%s\n' "$GITHUB_SHA" > "$JAR.commit"
       - name: Upload exact-commit deploy artifact
-        if: >-
-          ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-              (github.event_name == 'workflow_dispatch' && inputs.package_java_artifact) }}
+        if: inputs.package_java_artifact
         uses: actions/upload-artifact@v4
         with:
           name: cretas-java-${{ github.sha }}
@@ -174,7 +112,7 @@ jobs:
           compression-level: 0
           retention-days: 1
       - name: Maven compile and test
-        if: github.event_name != 'push'
+        if: inputs.full_audit
         working-directory: backend/java/cretas-api
         # Keep the complete suite after artifact upload. It reuses the package
         # output already in target/ and remains visible as a separate CI gate.
@@ -189,8 +127,7 @@ jobs:
 
   # ---- Python Service: Lint + Test ----
   python-lint-test:
-    needs: changes
-    if: github.event_name != 'push' && needs.changes.outputs.python == 'true'
+    if: inputs.full_audit
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -236,8 +173,7 @@ jobs:
 
   # ---- Vue Web Admin: Build + Type Check ----
   vue-build-check:
-    needs: changes
-    if: github.event_name != 'push' && needs.changes.outputs.vue == 'true'
+    if: inputs.full_audit
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -264,8 +200,7 @@ jobs:
 
   # ---- React Native: Jest Tests ----
   rn-test:
-    needs: changes
-    if: github.event_name != 'push' && needs.changes.outputs.rn == 'true'
+    if: inputs.full_audit
     runs-on: ubuntu-latest
     defaults:
       run:
