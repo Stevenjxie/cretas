@@ -21,6 +21,7 @@
 | DEPLOY-SOURCE-CACHE-20260716 | `3cb1ce54d4c14a853506179c631317b724bf2754` | `/root` | 部署脚本增加 manifest-backed 后端 Git tree 缓存，纯文档提交不再重复 Maven；生产 JAR MD5、真实 upstream、active systemd 和直连健康全部匹配时安全 no-op，并增加独立阶段耗时。目标 shell/契约测试通过，直接快进 `origin/main` 为 `e18776ea2`，未重复部署 Java。 |
 | DEPLOY-NOOP-RUNTIME-JAR-20260716 | `46aa0807c686a0cb446b0d50f4a473787c2f357c` | `/root` | PR #1386 合并并从精确 main 发布 Java/Web；Java 从 blue/10010 切到 green/10020，启动健康 69 秒、5/5 稳定观察，总耗时 283 秒；Web 原子发布 HTTP 200；F006 只读验收业务写请求 0。修复 no-op 错比上传文件名的问题，改为校验真实 `aims-0.0.1-SNAPSHOT.jar`，线上 MD5/upstream/systemd/健康证明通过，脚本修复合并为 `13bd1f1af`。 |
 | MAVEN-RELEASE-BUILD-20260716 | `9e9331607f64a22b0055fb779ab24368ab3182b4` | `/root` | protobuf 仅在 `.proto` 变化时重新生成，避免每次 Maven 调用误触发 3,894 个 Java 源文件全量重编译；移除 Spring Boot parent 已提供的重复 repackage 绑定。相同源码 warm package 从 114.2 秒降至 45.5 秒（节省 68.7 秒，约 60%）；clean package 与合同测试通过。Docker clean build 实测 162.7 秒，未纳入默认发布路径。直接快进 `origin/main` 为 `60cad0910`，未重启无运行时变化的生产 Java。 |
+| PRIVATE-REPO-READINESS-20260716 | `83d610b24f2cee20971ce8eaff401212c21f6741` | `/root` | Embedding JAR 改为真实目录下 rsync/scp 直传并由 `cretas-embedding` systemd 管理，模型 private 时跳过匿名 Release，legacy pull 使用显式鉴权。Actions 保留每日集成/JPA/E2E/隔离门禁；Java JAR 改为 `[ci-artifact]` 或手动才生成，成功测试/coverage 不再堆 artifact，KB 已知红灯 schedule 暂停。清理 1,310 个有效 artifact（约 10.47GB），开启 Actions 创建 PR 权限；代码直接快进 main 为 `024b233b2`。仓库切为 `PRIVATE` 后 fetch/no-op push、7 个 active workflow、CI run `29487280326` 与 Daily integration run `29487395857` 均验证成功；未重启生产服务、未操作生产数据。 |
 
 ## 合同一致性审计
 

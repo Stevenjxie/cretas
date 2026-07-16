@@ -8,7 +8,7 @@
 
 | ID | Base SHA | Scope 锁 | Owner | Mode | Worktree/PR | Status | Blocker | Next action |
 |---|---|---|---|---|---|---|---|---|
-| PRIVATE-REPO-READINESS-20260716 | `83d610b24f2cee20971ce8eaff401212c21f6741` | `scripts/deploy/deploy-embedding.sh`; `scripts/deploy/deploy-embedding-model.sh`; `scripts/pull-jar.sh`; related private-repo contract tests; `.github/workflows/**` only if the audit proves a required private-repo compatibility change; `docs/dispatch/ACTIVE.md`; completion archive; GitHub repository visibility/settings | Codex coordinator | code + GitHub settings | `C:\Users\Steve\cretas-private-readiness` / `codex/private-repo-readiness` | review | None | Commit reviewed changes, fast-forward exact main, switch repository private, verify authenticated access and active Actions, then archive/release scope |
+| - | - | - | - | - | - | - | - | 当前无在飞任务 |
 
 ## 阻塞项
 
