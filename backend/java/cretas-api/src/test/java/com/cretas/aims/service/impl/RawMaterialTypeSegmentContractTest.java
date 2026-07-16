@@ -1,6 +1,7 @@
 package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.material.RawMaterialTypeDTO;
+import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.TaxTreatment;
 import com.cretas.aims.entity.material.MaterialCodeSegment;
@@ -18,6 +19,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -129,6 +132,36 @@ class RawMaterialTypeSegmentContractTest {
         assertEquals("原料", result.getCategory());
         assertEquals(L1, result.getPrimaryCode());
         assertEquals(L3 + "000042", result.getCode());
+    }
+
+    @Test
+    void prefixOnlyFilterBindsKeywordAsTextInsteadOfNull() {
+        PageRequest request = new PageRequest();
+        request.setPage(1);
+        request.setSize(20);
+        when(materialTypeRepository.filterBySegmentPrefixAndKeyword(
+                eq(FACTORY_ID), eq("002"), eq(""), any(Pageable.class)))
+                .thenReturn(Page.empty());
+
+        service.filterMaterialTypes(FACTORY_ID, " 002 ", null, request);
+
+        verify(materialTypeRepository).filterBySegmentPrefixAndKeyword(
+                eq(FACTORY_ID), eq("002"), eq(""), any(Pageable.class));
+    }
+
+    @Test
+    void keywordOnlyFilterBindsPrefixAsTextInsteadOfNull() {
+        PageRequest request = new PageRequest();
+        request.setPage(1);
+        request.setSize(20);
+        when(materialTypeRepository.filterBySegmentPrefixAndKeyword(
+                eq(FACTORY_ID), eq(""), eq("chicken"), any(Pageable.class)))
+                .thenReturn(Page.empty());
+
+        service.filterMaterialTypes(FACTORY_ID, null, " chicken ", request);
+
+        verify(materialTypeRepository).filterBySegmentPrefixAndKeyword(
+                eq(FACTORY_ID), eq(""), eq("chicken"), any(Pageable.class));
     }
 
     private RawMaterialTypeDTO validRequest(String segmentCode) {
