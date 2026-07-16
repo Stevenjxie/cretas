@@ -697,7 +697,8 @@ onUnmounted(() => {
 });
 
 // #11: 每次操作后防抖 ~2.5s 自动保存 (静默 + 保留撤销栈)。用户停手 2.5s 即存;
-// 连续操作只会在最后一次后触发。saving 中 / 校验暂时非法则跳过, 下次改动再排。
+// 连续操作只会在最后一次后触发。服务端失败后不自动重试同一编辑，避免 500 通知风暴；
+// 用户再次编辑会重新排期，手动“保存草稿”也可立即重试。
 const AUTO_SAVE_DELAY = 2500;
 function scheduleAutoSave(): void {
   if (autoSaveTimer) clearTimeout(autoSaveTimer);
@@ -707,8 +708,7 @@ function scheduleAutoSave(): void {
     if (previewingVersion.value !== null || !canEdit.value) return;
     if (!dirty.value) return;                                 // 没有未保存改动
     if (saving.value) { scheduleAutoSave(); return; }         // 正在存 → 稍后重试, 不丢
-    const ok = await saveDraft({ silent: true, preserveHistory: true });
-    if (!ok && dirty.value) scheduleAutoSave();               // 存失败但仍有改动 → 重排 (一次失败不永久停摆)
+    await saveDraft({ silent: true, preserveHistory: true });
   }, AUTO_SAVE_DELAY);
 }
 // 每次改动 (dirty 置 true) 都重排防抖定时器 —— 定时器 2.5s 后从"最后一次改动"起算,

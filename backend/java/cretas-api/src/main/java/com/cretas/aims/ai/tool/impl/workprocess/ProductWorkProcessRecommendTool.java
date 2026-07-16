@@ -25,6 +25,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -100,6 +101,7 @@ public class ProductWorkProcessRecommendTool extends AbstractBusinessTool {
                 .filter(product -> Boolean.TRUE.equals(product.getIsActive()))
                 .filter(product -> !Objects.equals(product.getId(), target.getId()))
                 .filter(product -> sameText(product.getProductCategory(), target.getProductCategory()))
+                .filter(product -> sameProductFamily(target, product))
                 .map(product -> candidate(factoryId, product))
                 .flatMap(Optional::stream)
                 .sorted(Comparator
@@ -111,8 +113,8 @@ public class ProductWorkProcessRecommendTool extends AbstractBusinessTool {
         if (candidates.isEmpty()) {
             return emptyResult(
                     target.getId(),
-                    "NO_COMPLETE_PUBLISHED_WORKFLOW",
-                    "没有同产品大类且可证明完整的已发布 product-owned Workflow；未使用 legacy 工序或 LLM 猜测");
+                    "NO_RELATED_COMPLETE_PUBLISHED_WORKFLOW",
+                    "没有同源产品族且可证明完整的已发布 product-owned Workflow；未跨产品猜测或推荐");
         }
 
         ResolvedCandidate selected = candidates.stream()
@@ -150,7 +152,7 @@ public class ProductWorkProcessRecommendTool extends AbstractBusinessTool {
                 SOURCE_SCOPE,
                 "COMPLETE_PUBLISHED_WORKFLOW",
                 REVIEW_NOTICE,
-                "同产品大类中最新发布且通过完整性校验的 product-owned Workflow",
+                "同源产品族中最新发布且通过完整性校验的 product-owned Workflow",
                 sourceProduct.getId(),
                 sourceProduct.getName(),
                 workflow.getId(),
@@ -366,6 +368,44 @@ public class ProductWorkProcessRecommendTool extends AbstractBusinessTool {
 
     private boolean sameText(String left, String right) {
         return safeText(left).equalsIgnoreCase(safeText(right));
+    }
+
+    /**
+     * Recommendation is a copy operation, not a broad discovery search. Only
+     * variants of the same product may share a workflow automatically:
+     * template identity is strongest, followed by the explicit base name, then
+     * a specification-stripped name (for example 350g vs 400g).
+     */
+    private boolean sameProductFamily(ProductType target, ProductType source) {
+        if (sameNonBlankText(target.getTemplateId(), source.getTemplateId())) {
+            return true;
+        }
+        if (sameNonBlankText(target.getBaseProductName(), source.getBaseProductName())) {
+            return true;
+        }
+        String targetFamily = normalizedFamilyName(target);
+        String sourceFamily = normalizedFamilyName(source);
+        if (targetFamily.length() < 2 || sourceFamily.length() < 2) {
+            return false;
+        }
+        if (targetFamily.equals(sourceFamily)) {
+            return true;
+        }
+        int shorter = Math.min(targetFamily.length(), sourceFamily.length());
+        return shorter >= 4
+                && (targetFamily.contains(sourceFamily) || sourceFamily.contains(targetFamily));
+    }
+
+    private boolean sameNonBlankText(String left, String right) {
+        return !safeText(left).isEmpty() && sameText(left, right);
+    }
+
+    private String normalizedFamilyName(ProductType product) {
+        String explicitBaseName = safeText(product.getBaseProductName());
+        String value = explicitBaseName.isEmpty() ? safeText(product.getName()) : explicitBaseName;
+        return value.toLowerCase(Locale.ROOT)
+                .replaceAll("\\d+(?:\\.\\d+)?\\s*(?:kg|g|克|千克|公斤|斤|ml|l|毫升|升|只|件|个|盒|袋|瓶|箱|份)", "")
+                .replaceAll("[\\s\\p{Punct}，。；：、·×（）【】]+", "");
     }
 
     private String safeText(String value) {

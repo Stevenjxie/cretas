@@ -186,6 +186,10 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         anchor.setProductCategory(ProductCategory.RAW_MATERIAL);
         anchor.setUnit(rawOwner.getUnit() == null || rawOwner.getUnit().isBlank() ? "kg" : rawOwner.getUnit());
         anchor.setIsActive(false);
+        // product_types.created_by is NOT NULL. The internal anchor belongs to the
+        // same master-data lineage as its raw material, so inherit its creator;
+        // legacy raw rows without creator use the repository's established system user.
+        anchor.setCreatedBy(rawOwner.getCreatedBy() == null ? 1L : rawOwner.getCreatedBy());
         try {
             productTypeRepository.saveAndFlush(anchor);
         } catch (DataIntegrityViolationException race) {

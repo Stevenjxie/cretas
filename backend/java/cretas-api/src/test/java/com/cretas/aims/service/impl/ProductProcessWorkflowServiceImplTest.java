@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
@@ -140,6 +141,41 @@ class ProductProcessWorkflowServiceImplTest {
         assertEquals("kg", saved.getNodes().get(2).getData().get("inputUnit"));
         assertEquals(ProductProcessWorkflow.Status.DRAFT.name(), saved.getStatus());
         verify(catalogValidator, never()).validateForPublish(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("原料 owner 首次保存会创建带创建人的内部锚点")
+    void rawOwnerAnchorInheritsCreatedBy() {
+        String rawOwnerId = "RMT-RAW-1";
+        ProductProcessWorkflowDTO request = validDefinition();
+        request.setLockVersion(null);
+        RawMaterialType rawOwner = new RawMaterialType();
+        rawOwner.setId(rawOwnerId);
+        rawOwner.setFactoryId(FACTORY_ID);
+        rawOwner.setCode("0010030002000001");
+        rawOwner.setUnit("只");
+        rawOwner.setCreatedBy(77L);
+        when(productTypeRepository.findByIdAndFactoryId(rawOwnerId, FACTORY_ID))
+                .thenReturn(Optional.empty());
+        when(rawMaterialTypeRepository.findById(rawOwnerId)).thenReturn(Optional.of(rawOwner));
+        when(productTypeRepository.saveAndFlush(any(ProductType.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, rawOwnerId, ProductProcessWorkflow.Status.DRAFT))
+                .thenReturn(Optional.empty());
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, rawOwnerId, ProductProcessWorkflow.Status.PUBLISHED))
+                .thenReturn(Optional.empty());
+        when(repository.saveAndFlush(any(ProductProcessWorkflow.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.saveDraft(FACTORY_ID, rawOwnerId, request);
+
+        ArgumentCaptor<ProductType> anchor = ArgumentCaptor.forClass(ProductType.class);
+        verify(productTypeRepository).saveAndFlush(anchor.capture());
+        assertEquals(77L, anchor.getValue().getCreatedBy());
+        assertEquals(rawOwnerId, anchor.getValue().getId());
+        assertEquals("只", anchor.getValue().getUnit());
     }
 
     @Test
