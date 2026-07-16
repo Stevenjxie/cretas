@@ -54,25 +54,32 @@ const { goCreate } = useCreateAndReturn();
 const loading = ref(false);
 // 客户张权反馈 (2026-07-02): "搜不出来 filter 不了" — 搜索框绑了 searchKeyword 但后端
 // GET /{factoryId}/raw-material-types 列表接口 (list.vue 实际调用的接口) 从不接收 keyword 参数
-// (只有独立的 /raw-material-types/search 子路由支持 keyword, 但那个不支持叠加 materialKind
-// 大类筛选) — 输入框敲字对结果毫无影响, 是纯前端死代码。改为客户端过滤: 一次性拉回当前
-// materialKind 下的全量原料类型 (字典表通常几十到几百条, 远小于 FETCH_ALL_SIZE), keyword 在
-// 浏览器内按 名称/编码/类别 实时过滤 + 客户端分页, 不依赖后端新增接口/参数 (纯前端修复,
+// (只有独立的 /raw-material-types/search 子路由支持 keyword) — 输入框敲字对结果毫无影响,
+// 是纯前端死代码。改为客户端一次性拉回全量原料类型 (字典表通常几十到几百条,
+// 远小于 FETCH_ALL_SIZE), 再按 L1-L3 编码前缀和关键字实时过滤、分页, 不依赖后端新增接口/参数,
 // 无需 Java 改动/部署)。
 const FETCH_ALL_SIZE = 2000;
 const fullData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 20, total: 0 });
 const searchKeyword = ref('');
-// P11: 物料大类筛选 (原料/辅料/包材). 空串 = 全部. (仍走后端 materialKind 参数, 服务端过滤)
-const filterKind = ref('');
+// 16位编码前缀筛选：L1/L2/L3 分别对应编码前 3/6/10 位。
+const filterSegmentL1 = ref('');
+const filterSegmentL2 = ref('');
+const filterSegmentL3 = ref('');
+const selectedSegmentPrefix = computed(() =>
+  filterSegmentL3.value || filterSegmentL2.value || filterSegmentL1.value,
+);
 
-// 客户端关键字过滤: 名称 / 编码 / 类别 任一字段包含关键字 (大小写不敏感)。
+// 客户端组合过滤：先按16位编码层级前缀，再按名称 / 编码 / 类别关键字。
 const filteredData = computed<TableRow[]>(() => {
   const kw = searchKeyword.value.trim().toLowerCase();
-  if (!kw) return fullData.value;
+  const prefix = selectedSegmentPrefix.value;
   return fullData.value.filter((m) => {
+    const code = String(m.code || '');
+    if (prefix && (!/^\d{16}$/.test(code) || !code.startsWith(prefix))) return false;
+    if (!kw) return true;
     return String(m.name || '').toLowerCase().includes(kw)
-      || String(m.code || '').toLowerCase().includes(kw)
+      || code.toLowerCase().includes(kw)
       || String(m.category || '').toLowerCase().includes(kw);
   });
 });
@@ -147,16 +154,13 @@ async function loadData() {
   if (!factoryId.value) return;
   loading.value = true;
   try {
-    // 一次性拉全量 (materialKind 仍走后端服务端过滤; keyword 不传 — 后端此接口不支持,
-    // 见上方 fullData/filteredData 注释), 客户端再做 关键字过滤 + 分页。
+    // 一次性拉全量，客户端按16位编码前缀、关键字组合过滤并分页。
     const res = await get<{ content: TableRow[]; totalElements: number }>(
       `/${factoryId.value}/raw-material-types`,
       {
         params: {
           page: 1,
           size: FETCH_ALL_SIZE,
-          // P11: 可选大类过滤 (原料/辅料/包材)
-          materialKind: filterKind.value || undefined,
         },
       },
     );
@@ -280,6 +284,32 @@ const materialFamilyOptions = computed(() =>
     segmentCode: node.segmentCode,
   })),
 );
+const filterSegmentL2Options = computed(() => {
+  if (!filterSegmentL1.value) return [];
+  const l1Node = segmentTree.value.find((node) => node.segmentCode === filterSegmentL1.value);
+  return l1Node?.children?.filter((node) => node.level === 2) ?? [];
+});
+const filterSegmentL3Options = computed(() => {
+  if (!filterSegmentL2.value) return [];
+  for (const l1Node of segmentTree.value) {
+    const l2Node = l1Node.children?.find((node) => node.segmentCode === filterSegmentL2.value);
+    if (l2Node) return l2Node.children?.filter((node) => node.level === 3) ?? [];
+  }
+  return [];
+});
+
+watch(filterSegmentL1, () => {
+  filterSegmentL2.value = '';
+  filterSegmentL3.value = '';
+  pagination.value.page = 1;
+});
+watch(filterSegmentL2, () => {
+  filterSegmentL3.value = '';
+  pagination.value.page = 1;
+});
+watch(filterSegmentL3, () => {
+  pagination.value.page = 1;
+});
 
 function resolveMaterialFamily(category: string | null | undefined): string | null {
   const raw = String(category || '').trim();
@@ -362,12 +392,12 @@ async function generateSP8Code() {
     if (res.success && res.data?.code) {
       segmentCodePreview.value = res.data.code;
     } else {
-      // fallback: show a placeholder hint
-      segmentCodePreview.value = `${segmentL1.value}${segmentL2.value}${segmentL3.value}...`;
+      segmentCodePreview.value = '';
+      ElMessage.error(res.message || '16位编码预览失败，请检查编码字典配置');
     }
   } catch {
-    // API not yet available — graceful degrade
-    segmentCodePreview.value = `${segmentL1.value}-${segmentL2.value}-${segmentL3.value}`;
+    segmentCodePreview.value = '';
+    ElMessage.error('16位编码预览失败，请稍后重试');
   } finally {
     sp8PreviewLoading.value = false;
   }
@@ -649,8 +679,8 @@ async function handleSave() {
   } else if (!editingId.value) {
     return ElMessage.warning('新建物料必须配置含税单价，请联系有价格权限的人员创建');
   }
-  if (!editingId.value && segmentTree.value.length > 0 && !segmentL3.value) {
-    return ElMessage.error('本工厂启用 16 位编码，请先选择 L1类型、L2部位、L3品类后保存');
+  if (!editingId.value && (!segmentL1.value || !segmentL2.value || !segmentL3.value)) {
+    return ElMessage.error('每个原料类型都必须选择 L1类型、L2部位、L3品类后保存');
   }
 
   // 包装层级前端校验 (后端 service + DB CHECK 双重兜底)
@@ -762,14 +792,14 @@ watch(searchKeyword, () => {
 });
 
 function handleSearch() {
-  // 大类筛选 (filterKind) 走服务端 materialKind 参数, 变了需要重新拉数据;
-  // 关键字筛选已是客户端实时生效, 这里统一刷新一次也无妨 (数据量小, 成本可忽略)。
+  // 层级和关键字都已在 filteredData 中实时生效。
   pagination.value.page = 1;
-  loadData();
 }
 function handleRefresh() {
   searchKeyword.value = '';
-  filterKind.value = '';
+  filterSegmentL1.value = '';
+  filterSegmentL2.value = '';
+  filterSegmentL3.value = '';
   pagination.value.page = 1;
   loadData();
 }
@@ -809,19 +839,51 @@ function handleSizeChange(size: number) {
       </template>
 
       <div class="search-bar">
-        <!-- P11: 物料大类快速筛选 -->
+        <!-- 16位编码层级筛选：按累计编码前缀逐级收窄 -->
         <el-select
-          v-model="filterKind"
-          placeholder="全部大类"
+          v-model="filterSegmentL1"
+          placeholder="全部 L1 大类"
           clearable
-          style="width: 130px"
+          style="width: 170px"
           @change="handleSearch"
         >
           <el-option
             v-for="opt in materialFamilyOptions"
             :key="opt.segmentCode"
-            :label="opt.label"
-            :value="opt.value"
+            :label="`${opt.segmentCode} — ${opt.label}`"
+            :value="opt.segmentCode"
+          />
+        </el-select>
+        <el-select
+          v-model="filterSegmentL2"
+          placeholder="全部 L2 中类"
+          clearable
+          filterable
+          :disabled="!filterSegmentL1"
+          style="width: 190px"
+          @change="handleSearch"
+        >
+          <el-option
+            v-for="opt in filterSegmentL2Options"
+            :key="opt.segmentCode"
+            :label="`${opt.segmentCode} — ${opt.segmentLabel}`"
+            :value="opt.segmentCode"
+          />
+        </el-select>
+        <el-select
+          v-model="filterSegmentL3"
+          placeholder="全部 L3 小类"
+          clearable
+          filterable
+          :disabled="!filterSegmentL2"
+          style="width: 220px"
+          @change="handleSearch"
+        >
+          <el-option
+            v-for="opt in filterSegmentL3Options"
+            :key="opt.segmentCode"
+            :label="`${opt.segmentCode} — ${opt.segmentLabel}`"
+            :value="opt.segmentCode"
           />
         </el-select>
         <el-input
@@ -1051,12 +1113,12 @@ function handleSizeChange(size: number) {
         <!-- SP8 兜底 (Tier0 #15 minimal): 字典未配置时隐藏级联入口防 dead-end (fool-proof Rule 5).
              generate-code 端点 P1 上线; 当前 tree 为空时显示诚实空态而非空下拉组合. -->
         <el-divider v-if="!editingId">
-          <span class="divider-title">16位编码级联（可选）</span>
+          <span class="divider-title">16位编码级联（必填）</span>
         </el-divider>
         <template v-if="!editingId">
           <!-- 字典已配置: 展示完整级联 -->
           <template v-if="segmentL1Options.length > 0 || segmentLoading">
-            <el-form-item label="L1 类型">
+            <el-form-item label="L1 类型" required>
               <el-select
                 v-model="segmentL1"
                 placeholder="请选择类型分类"
@@ -1073,7 +1135,7 @@ function handleSizeChange(size: number) {
                 />
               </el-select>
             </el-form-item>
-            <el-form-item label="L2 部位">
+            <el-form-item label="L2 部位" required>
               <el-select
                 v-model="segmentL2"
                 placeholder="请先选择 L1 类型"
@@ -1090,7 +1152,7 @@ function handleSizeChange(size: number) {
                 />
               </el-select>
             </el-form-item>
-            <el-form-item label="L3 品类">
+            <el-form-item label="L3 品类" required>
               <el-select
                 v-model="segmentL3"
                 placeholder="请先选择 L2 部位"
@@ -1134,7 +1196,7 @@ function handleSizeChange(size: number) {
             >
               <template #default>
                 <div style="font-size:12px;margin-top:4px;color:#606266">
-                  留空将使用系统自动编码。16位分段编码计划 P1 阶段上线。
+                   请先配置完整的 L1-L3 物料编码字典；配置完成前不能新建原料类型。
                 </div>
               </template>
             </el-alert>
@@ -1280,7 +1342,7 @@ function handleSizeChange(size: number) {
 .header-left { display: flex; align-items: baseline; gap: 12px; }
 .page-title { font-size: 18px; font-weight: 600; }
 .data-count { font-size: 13px; color: #909399; }
-.search-bar { display: flex; gap: 8px; margin-bottom: 16px; }
+.search-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
 .divider-title { font-size: 14px; color: #606266; font-weight: 500; }
 
 /* T159-A: Code preview row */

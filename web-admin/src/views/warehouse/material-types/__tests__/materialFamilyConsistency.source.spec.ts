@@ -28,4 +28,26 @@ describe('material type family source contract', () => {
     expect(source).toContain('resolveMaterialFamily(d.category)');
     expect(source).toContain("bucket === '调料' ? '辅料' : bucket");
   });
+
+  it('requires a complete L1-L3 selection for every new material type', () => {
+    expect(source).toContain("if (!editingId.value && (!segmentL1.value || !segmentL2.value || !segmentL3.value))");
+    expect(source).toContain('16位编码级联（必填）');
+    expect(source).not.toContain('16位编码级联（可选）');
+  });
+
+  it('filters material types by the selected L1, L2 or L3 code prefix', () => {
+    expect(source).toContain("const filterSegmentL1 = ref('')");
+    expect(source).toContain("const filterSegmentL2 = ref('')");
+    expect(source).toContain("const filterSegmentL3 = ref('')");
+    expect(source).toContain('const selectedSegmentPrefix = computed');
+    expect(source).toContain('code.startsWith(prefix)');
+    expect(source).toContain('v-model="filterSegmentL1"');
+    expect(source).toContain('v-model="filterSegmentL2"');
+    expect(source).toContain('v-model="filterSegmentL3"');
+  });
+
+  it('never fabricates a 16-digit preview when the preview API fails', () => {
+    expect(source).not.toContain('segmentCodePreview.value = `${segmentL1.value}${segmentL2.value}${segmentL3.value}...`');
+    expect(source).not.toContain('segmentCodePreview.value = `${segmentL1.value}-${segmentL2.value}-${segmentL3.value}`');
+  });
 });
