@@ -1124,8 +1124,13 @@ async function handleEntryDrawerBeforeClose(done: () => void) {
 interface SettlementRawConsumptionForm {
   materialBatchId: string;
   productTypeId?: string | null;
+  materialTypeId?: string | null;
+  batchNumber?: string | null;
+  unit?: string | null;
+  warehouseId?: string | null;
   quantity: number;
   note: string;
+  source?: 'PROCESS_REPORT' | 'MANUAL';
 }
 
 interface SettlementWipConsumptionForm {
@@ -1141,6 +1146,15 @@ interface SettlementCompleteForm {
   semiFinishedConsumptions: SettlementWipConsumptionForm[];
   workerCount: number;
   workMinutes: number;
+  laborSegments: Array<{
+    workerId?: number | null;
+    workerName?: string | null;
+    workType?: string | null;
+    minutes: number;
+    headcount: number;
+    note?: string | null;
+  }>;
+  laborDeferredReason: string;
   varianceReason: string;
   otherVarianceReason: string;
 }
@@ -1224,10 +1238,22 @@ interface SettlementPrefillResponse {
     rawMaterialConsumptions?: Array<{
       materialBatchId?: string | null;
       productTypeId?: string | null;
+      materialTypeId?: string | null;
+      batchNumber?: string | null;
+      unit?: string | null;
+      warehouseId?: string | null;
       quantity?: number | null;
       note?: string | null;
     }> | null;
-    laborSegments?: Array<{ minutes?: number | null; headcount?: number | null }> | null;
+    laborSegments?: Array<{
+      workerId?: number | null;
+      workerName?: string | null;
+      workType?: string | null;
+      minutes?: number | null;
+      headcount?: number | null;
+      note?: string | null;
+    }> | null;
+    laborDeferredReason?: string | null;
   } | null;
   audit: { clean: boolean; issues: SettlementPrefillIssue[] } | null;
 }
@@ -1306,6 +1332,8 @@ const completeForm = ref<SettlementCompleteForm>({
   semiFinishedConsumptions: [],
   workerCount: 0,
   workMinutes: 0,
+  laborSegments: [],
+  laborDeferredReason: '',
   varianceReason: '',
   otherVarianceReason: '',
 });
@@ -1372,9 +1400,12 @@ function materialBatchLabel(batch: MaterialBatchOption): string {
 
 function rawLineDisabledReason(line: SettlementRawConsumptionForm, index: number): string {
   if (!line.materialBatchId) return `第 ${index + 1} 行原料领用必须选择批次`;
+  if (!line.quantity || line.quantity <= 0) return `第 ${index + 1} 行原料领用数量必须大于 0`;
+  // 逐道报工行已经由后端按计划、BOM、仓库和当前库存审计，不依赖“当前可选批次”下拉。
+  // 报工后批次通常已从物流仓转入生产仓，不能因为它不在物流仓下拉里就丢弃真实领用。
+  if (line.source === 'PROCESS_REPORT') return '';
   const batch = selectedMaterialBatch(line.materialBatchId);
   if (!batch) return `第 ${index + 1} 行原料批次不存在或未加载`;
-  if (!line.quantity || line.quantity <= 0) return `第 ${index + 1} 行原料领用数量必须大于 0`;
   const available = materialBatchAvailable(batch);
   if (line.quantity > available) return `第 ${index + 1} 行原料领用超出可用量 ${available}${materialBatchUnit(batch)}`;
   return '';
@@ -1412,8 +1443,10 @@ const completeSubmitDisabledReason = computed(() => {
   if (!hasMaterialLines) return '请至少录入一条原料/半成品实际领用明细';
   if (firstRawLineError.value) return firstRawLineError.value;
   if (firstWipLineError.value) return firstWipLineError.value;
-  if (!completeForm.value.workerCount || completeForm.value.workerCount <= 0) return '请录入实际人数';
-  if (!completeForm.value.workMinutes || completeForm.value.workMinutes <= 0) return '请录入实际工时分钟';
+  if (completeForm.value.laborSegments.length === 0 && !completeForm.value.laborDeferredReason) {
+    if (!completeForm.value.workerCount || completeForm.value.workerCount <= 0) return '请录入实际人数';
+    if (!completeForm.value.workMinutes || completeForm.value.workMinutes <= 0) return '请录入实际工时分钟';
+  }
   return '';
 });
 const completeCanSubmit = computed(() => completeSubmitDisabledReason.value === '');
@@ -1431,6 +1464,7 @@ function addRawConsumptionLine() {
     materialBatchId: '',
     quantity: 0,
     note: '',
+    source: 'MANUAL',
   });
 }
 
@@ -1541,11 +1575,11 @@ function buildRawConsumptionPayload() {
     return {
       materialBatchId: line.materialBatchId,
       productTypeId: line.productTypeId || null,
-      materialTypeId: batch?.materialTypeId || null,
-      batchNumber: batch?.batchNumber || null,
+      materialTypeId: line.materialTypeId || batch?.materialTypeId || null,
+      batchNumber: line.batchNumber || batch?.batchNumber || null,
       quantity: line.quantity,
-      unit: materialBatchUnit(batch),
-      warehouseId: batch?.warehouseId || null,
+      unit: line.unit || materialBatchUnit(batch),
+      warehouseId: line.warehouseId || batch?.warehouseId || null,
       note: line.note || null,
     };
   });
@@ -1565,9 +1599,9 @@ function buildWipConsumptionPayload() {
 }
 
 /**
- * Phase 2A: 从逐道报工 derive 出预填表单 + 审计, 灌入 completeForm。
- * 必须在 loadSettlementInventoryOptions 之后调用 — 原料预填行只接受已加载到可用批次列表里的 batch,
- * 否则丢弃并提示让人核对 (宁可少填不可瞎填, 不臆造库存)。
+ * Phase 2A: 从逐道报工 derive 出结单汇总 + 审计, 灌入 completeForm。
+ * 报工原料行由后端按计划/BOM/仓库/库存审计后原样带入，不再依赖当前物流仓下拉。
+ * 批次报工后已进入生产仓是正常料流，不能把“不在物流仓下拉”误判为批次不存在。
  */
 async function applySettlementPrefill(row: TableRow) {
   settlementPrefillApplied.value = false;
@@ -1613,36 +1647,38 @@ async function applySettlementPrefill(row: TableRow) {
           completeForm.value.otherVarianceReason = prefill.quantityVarianceReason;
         }
       }
-      // 原料领用: 仅带入已加载到可用批次列表的 batch, 其余丢弃 + 提示
+      // 原料领用: 后端审计后的逐道报工是计划结算事实，完整保留批次与单位元数据。
       const rawLines = prefill.rawMaterialConsumptions ?? [];
-      let droppedRaw = 0;
       completeForm.value.rawMaterialConsumptions = [];
       for (const line of rawLines) {
         const batchId = line.materialBatchId ? String(line.materialBatchId) : '';
         const qty = Number(line.quantity || 0);
-        const batch = batchId ? selectedMaterialBatch(batchId) : null;
-        if (!batch || qty <= 0 || qty > materialBatchAvailable(batch)) {
-          droppedRaw += 1;
-          continue;
-        }
+        if (!batchId || qty <= 0) continue;
         completeForm.value.rawMaterialConsumptions.push({
           materialBatchId: batchId,
           productTypeId: line.productTypeId ? String(line.productTypeId) : null,
+          materialTypeId: line.materialTypeId ? String(line.materialTypeId) : null,
+          batchNumber: line.batchNumber ? String(line.batchNumber) : null,
+          unit: line.unit ? String(line.unit) : null,
+          warehouseId: line.warehouseId ? String(line.warehouseId) : null,
           quantity: qty,
           note: line.note || '自动带入自逐道报工',
+          source: 'PROCESS_REPORT',
         });
       }
-      if (droppedRaw > 0) {
-        carriedIssues.push({
-          code: 'RAW_LINE_NOT_LOADABLE',
-          message: `有 ${droppedRaw} 条报工原料领用因批次不在当前可用列表(已消耗/换仓/不在BOM)未自动带入，请手工核对原料领用。`,
-          field: 'rawMaterialConsumptions',
-          severity: 'BLOCKER',
-        });
-        serverClean = false; // 前端丢弃了原料行 → 必须人工核对, 不能一键确认
-      }
-      // 人效: 汇总工时/人数 (后端各段已 derive; 前端最小字段只取合计)
+      // 人效: 保留逐道工时段用于真实结算，同时显示汇总，不再伪造成一条“PC文员汇总”。
       const segs = prefill.laborSegments ?? [];
+      completeForm.value.laborSegments = segs
+        .map((s) => ({
+          workerId: s.workerId ?? null,
+          workerName: s.workerName ?? null,
+          workType: s.workType ?? null,
+          minutes: Number(s.minutes || 0),
+          headcount: Number(s.headcount || 1),
+          note: s.note ?? null,
+        }))
+        .filter((s) => s.minutes > 0 && s.headcount > 0);
+      completeForm.value.laborDeferredReason = prefill.laborDeferredReason || '';
       if (segs.length > 0) {
         let totalMinutes = 0;
         let maxHeadcount = 0;
@@ -1682,6 +1718,8 @@ async function handleComplete(row: TableRow) {
     semiFinishedConsumptions: [],
     workerCount: Number(row.estimatedWorkers || 0),
     workMinutes: 0,
+    laborSegments: [],
+    laborDeferredReason: '',
     varianceReason: '',
     otherVarianceReason: '',
   };
@@ -1689,9 +1727,11 @@ async function handleComplete(row: TableRow) {
   settlementPrefillIssues.value = [];
   settlementPrefillCleanFromServer.value = false;
   completeDialogVisible.value = true;
-  // 先加载可用批次/WIP, 再用报工 derive 出的预填灌入 (预填依赖已加载的批次列表做校验)
-  await loadSettlementInventoryOptions(row);
+  // 正常结单只拉取逐道报工汇总；仅存在阻塞异常时，才加载可选批次/WIP供人工补录。
   await applySettlementPrefill(row);
+  if (settlementBlockerIssues.value.length > 0) {
+    await loadSettlementInventoryOptions(row);
+  }
   // 防呆: 预填完成后才快照 (自动带入的数据不算"用户改动"), 之后用户手改才计入 dirty
   completeFormSnapshot.value = JSON.stringify(completeForm.value);
 }
@@ -1734,12 +1774,17 @@ async function submitComplete() {
       rawMaterialConsumptions: buildRawConsumptionPayload(),
       semiFinishedConsumptions: buildWipConsumptionPayload(),
       auxiliaryConsumptions: [],
-      laborSegments: [{
-        workerName: 'PC文员汇总',
-        workType: '生产结单',
-        minutes: Number(completeForm.value.workMinutes || 0),
-        headcount: Number(completeForm.value.workerCount || 1),
-      }],
+      laborDeferredReason: completeForm.value.laborDeferredReason || null,
+      laborSegments: completeForm.value.laborSegments.length > 0
+        ? completeForm.value.laborSegments
+        : completeForm.value.laborDeferredReason
+          ? []
+          : [{
+              workerName: 'PC文员补录',
+              workType: '生产结单异常补录',
+              minutes: Number(completeForm.value.workMinutes || 0),
+              headcount: Number(completeForm.value.workerCount || 1),
+            }],
     });
     if (response.success) {
       ElMessage.success(response.message || '生产结单已提交，下一步请仓库确认入库');
@@ -3858,6 +3903,53 @@ function handleAiFill(params: TableRow) {
             <div class="settlement-context-value">{{ formatPlannedQuantity(completePlannedQuantity, completePlannedUnit) }}</div>
           </div>
         </div>
+        <template v-if="settlementPrefillClean">
+          <el-divider content-position="left">逐道报工汇总</el-divider>
+          <div class="settlement-reconciliation-grid">
+            <div class="settlement-reconciliation-card">
+              <span>实际成品产出</span>
+              <strong>{{ completeActualQuantity }} {{ completePlannedUnit || '' }}</strong>
+            </div>
+            <div class="settlement-reconciliation-card">
+              <span>原料批次</span>
+              <strong>{{ completeForm.rawMaterialConsumptions.length }} 个</strong>
+            </div>
+            <div class="settlement-reconciliation-card">
+              <span>逐道工时</span>
+              <strong>{{ completeForm.workMinutes }} 分钟</strong>
+            </div>
+          </div>
+          <div class="settlement-reconciliation-section">
+            <div class="settlement-reconciliation-title">实际原料领用</div>
+            <div
+              v-for="(line, index) in completeForm.rawMaterialConsumptions"
+              :key="`recorded-raw-${line.materialBatchId}-${index}`"
+              class="settlement-reconciliation-row"
+            >
+              <span>{{ line.batchNumber || line.materialBatchId }}</span>
+              <strong>{{ line.quantity }} {{ line.unit || '' }}</strong>
+            </div>
+          </div>
+          <div class="settlement-reconciliation-section">
+            <div class="settlement-reconciliation-title">人员与工时</div>
+            <div
+              v-for="(segment, index) in completeForm.laborSegments"
+              :key="`recorded-labor-${index}`"
+              class="settlement-reconciliation-row"
+            >
+              <span>{{ segment.workType || `第 ${index + 1} 道工序` }}</span>
+              <strong>{{ segment.headcount }} 人 × {{ segment.minutes }} 分钟</strong>
+            </div>
+          </div>
+          <el-alert
+            title="以上数据来自逐道报工，确认后系统将统一结算领用、产出和工时，并结束当前生产计划。"
+            type="info"
+            show-icon
+            :closable="false"
+            style="margin: 12px 0"
+          />
+        </template>
+        <template v-else>
         <el-divider content-position="left">产出核对</el-divider>
         <el-form-item label="实际产量" required>
           <el-input-number
@@ -4109,6 +4201,10 @@ function handleAiFill(params: TableRow) {
             </el-form-item>
           </el-col>
         </el-row>
+        <div class="settlement-help" style="margin-bottom: 12px;">
+          仅在上方出现异常时才需要补录或调整；正常计划会直接展示逐道报工汇总。
+        </div>
+        </template>
         <el-alert
           v-if="completeSubmitDisabledReason"
           :title="completeSubmitDisabledReason"
@@ -4125,7 +4221,7 @@ function handleAiFill(params: TableRow) {
           :loading="actionLoading"
           :disabled="!completeCanSubmit"
           @click="submitComplete"
-        >提交结单</el-button>
+        >确认结单并结束计划</el-button>
       </template>
     </el-dialog>
 
@@ -4941,6 +5037,69 @@ function handleAiFill(params: TableRow) {
   white-space: nowrap;
 }
 
+.settlement-reconciliation-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.settlement-reconciliation-card,
+.settlement-reconciliation-section {
+  border: 1px solid var(--border-color-lighter, #ebeef5);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.settlement-reconciliation-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 12px;
+
+  span {
+    color: var(--text-color-secondary, #909399);
+    font-size: 12px;
+  }
+
+  strong {
+    color: var(--text-color-primary, #303133);
+    font-size: 16px;
+  }
+}
+
+.settlement-reconciliation-section {
+  margin-top: 10px;
+  overflow: hidden;
+}
+
+.settlement-reconciliation-title {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
+  color: var(--text-color-primary, #303133);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settlement-reconciliation-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border-color-extra-light, #f2f6fc);
+  color: var(--text-color-regular, #606266);
+  font-size: 13px;
+
+  &:last-child {
+    border-bottom: 0;
+  }
+
+  strong {
+    color: var(--text-color-primary, #303133);
+    white-space: nowrap;
+  }
+}
+
 .settlement-help {
   margin-top: 4px;
   color: var(--text-color-secondary, #909399);
@@ -5059,7 +5218,8 @@ function handleAiFill(params: TableRow) {
 
 @media (max-width: 760px) {
   .settlement-consumption-row,
-  .receipt-diff-panel {
+  .receipt-diff-panel,
+  .settlement-reconciliation-grid {
     grid-template-columns: 1fr;
   }
 

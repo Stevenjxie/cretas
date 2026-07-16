@@ -16,6 +16,7 @@
 | CRETAS-BOM-FE-20260716-10 | `c6e3dad2bf980ad7f83c252dcd995201c4d305e2` | `/root/workflow_units` | BOM 版本/成本/备注、调料 g/kg、快速价格配置、半成品单位与 SKU 导入预览 UI 完成；Vitest 与 `vue-tsc` 通过。 |
 | CRETAS-BOM-REVIEW-20260716-11 | `c6e3dad2bf980ad7f83c252dcd995201c4d305e2` | `/root/bom_backend` | 最终审查发现并关闭同包装单位不同换算被误判、预览缺少生成规格两个 P1；关闭后无剩余 P0/P1。 |
 | CRETAS-SKU-IMPORT-BE-20260716-12 | `c6e3dad2bf980ad7f83c252dcd995201c4d305e2` | `/root/bom_review` | 四工作表 `.xlsx` 模板、内容标记示例行、空格/单位归一、图片安全上传与映射、预览/原子确认、双包装规格持久化完成；目标测试 14 + 10 通过。 |
+| SETTLEMENT-RECONCILIATION-20260716 | `aa2af813c2dc8281deb6369dd3c13e5e1f807139` | `/root` | 核对结单改为逐道报工汇总，一键结束计划；保留原料批次与逐道工时，兼容 g/kg 存储单位，并在预填和写入两层阻断跨计划重复占用。定位 F006 同一100kg批次被两个未结计划各占100kg；后端目标测试9/9、Web目标测试5/5及生产构建通过。 |
 
 ## 发布证据
 

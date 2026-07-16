@@ -174,6 +174,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.uom.MaterialUomConverter materialUomConverter;
 
+    /** 逐道报工原料量按行单位记录，结单扣减前转换回批次库存单位。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.UnitConversionService unitConversionService;
+
     /**
      * T144: 物料库存单位改读 MaterialBatch.quantityUnit (称重批次单位, e.g. kg) 而非
      * RawMaterialType.unit (箱). 保留 rawMaterialTypeRepository 仅作 fallback (无可用批次时).
@@ -1841,6 +1845,16 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // 1) 取本计划全部非取消批次的逐道 YIELD 报工 (按 processOrder, createdAt 已排序)
         List<ProductionBatch> batches = productionBatchRepository
                 .findByFactoryIdAndProductionPlanId(factoryId, planId);
+
+        // 逐道电子表格包含本计划实际使用的原料批次、内部 WIP 流转和工时，
+        // 是核对结单的完整事实来源。旧 YIELD 报工只保留为历史计划的兼容回退，
+        // 不能因为它存在就跳过更完整的逐道数据。
+        ProductionSettlementPrefillResponse sheetPrefill =
+                deriveSettlementPrefillFromProcessSheetRows(factoryId, plan, batches);
+        if (sheetPrefill != null) {
+            return sheetPrefill;
+        }
+
         List<ProductionReport> allReports = new ArrayList<>();
         if (batches != null) {
             for (ProductionBatch b : batches) {
@@ -1856,11 +1870,6 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         if (allReports.isEmpty()) {
-            ProductionSettlementPrefillResponse sheetPrefill =
-                    deriveSettlementPrefillFromProcessSheetRows(factoryId, plan, batches);
-            if (sheetPrefill != null) {
-                return sheetPrefill;
-            }
             // 无任何报工 → 不臆造, 返回空预填 + 明确 issue 让人手填 (诚实空态)
             issues.add(issue("NO_YIELD_REPORTS",
                     "该计划暂无逐道报工记录, 无法自动预填; 请手工录入实际产量、领用与人效后结单。",
@@ -2109,24 +2118,37 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     private List<ProductionSettlementRequest.ConsumptionLine> deriveRawConsumptionsFromProcessSheetRows(
             String factoryId, List<ParsedProcessSheetRow> rows,
             List<ProductionSettlementPrefillResponse.Issue> issues) {
+        String currentPlanId = rows.stream()
+                .map(r -> trimToNull(r.row().getPlanId()))
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
+        Set<Long> currentProcessBatchIds = rows.stream()
+                .map(r -> r.row().getBatchId())
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
         Map<String, BigDecimal> qtyByBatchAndProduct = new LinkedHashMap<>();
         Map<String, String> batchIdByKey = new LinkedHashMap<>();
         Map<String, String> productTypeIdByKey = new LinkedHashMap<>();
+        Map<String, String> reportedUnitByKey = new LinkedHashMap<>();
         for (ParsedProcessSheetRow parsed : rows) {
             List<ProcessSheetRowRequest.RawInput> rawInputs = parsed.request().getRawMaterialInputs();
             if (rawInputs == null) {
                 continue;
             }
             String productTypeId = trimToNull(parsed.request().getProductTypeId());
+            String reportedUnit = firstNonBlank(trimToNull(parsed.request().getUnit()), "kg");
             for (ProcessSheetRowRequest.RawInput input : rawInputs) {
                 if (input == null || isBlank(input.getMaterialBatchId())
                         || input.getQuantity() == null || input.getQuantity().compareTo(BigDecimal.ZERO) <= 0) {
                     continue;
                 }
                 String batchId = input.getMaterialBatchId();
-                String key = batchId + "\u0000" + firstNonBlank(productTypeId, "");
+                String key = batchId + "\u0000" + firstNonBlank(productTypeId, "")
+                        + "\u0000" + reportedUnit;
                 batchIdByKey.putIfAbsent(key, batchId);
                 productTypeIdByKey.putIfAbsent(key, productTypeId);
+                reportedUnitByKey.putIfAbsent(key, reportedUnit);
                 qtyByBatchAndProduct.merge(key, input.getQuantity(), BigDecimal::add);
             }
         }
@@ -2135,7 +2157,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         for (Map.Entry<String, BigDecimal> e : qtyByBatchAndProduct.entrySet()) {
             String batchId = batchIdByKey.get(e.getKey());
             String productTypeId = productTypeIdByKey.get(e.getKey());
-            BigDecimal qty = e.getValue();
+            String reportedUnit = reportedUnitByKey.get(e.getKey());
+            BigDecimal reportedQuantity = e.getValue();
             MaterialBatch batch = materialBatchRepository.findByIdAndFactoryId(batchId, factoryId).orElse(null);
             if (batch == null) {
                 issues.add(issue("RAW_BATCH_NOT_FOUND",
@@ -2143,19 +2166,43 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         "rawMaterialConsumptions"));
                 continue;
             }
-            BigDecimal available = zeroIfNull(batch.getCurrentQuantity());
-            if (available.compareTo(qty) < 0) {
-                issues.add(issue("RAW_BATCH_INSUFFICIENT",
-                        "原料批次 " + safeBatchRef(batch) + " 逐道领用 " + stripTrailing(qty)
-                                + " 超过当前可用量 " + stripTrailing(available)
-                                + ", 未自动带入该行; 请人工核对实际领用批次和数量。",
-                        "rawMaterialConsumptions"));
-                continue;
-            }
             String quantityUnit = trimToNull(batch.getQuantityUnit());
             if (quantityUnit == null) {
                 issues.add(issue("RAW_BATCH_UNIT_MISSING",
                         "原料批次 " + safeBatchRef(batch) + " 未配置计量单位, 未自动带入; 请先修正批次单位。",
+                        "rawMaterialConsumptions"));
+                continue;
+            }
+            BigDecimal qty = convertProcessInputToBatchUnit(reportedQuantity, reportedUnit, quantityUnit);
+            if (qty == null) {
+                issues.add(issue("RAW_BATCH_UNIT_INCOMPATIBLE",
+                        "原料批次 " + safeBatchRef(batch) + " 的库存单位 " + quantityUnit
+                                + " 无法与逐道报工单位 " + reportedUnit + " 换算, 未自动带入; 请先修正批次单位。",
+                        "rawMaterialConsumptions"));
+                continue;
+            }
+            BigDecimal available = zeroIfNull(batch.getCurrentQuantity());
+            PendingConsumptionConflict conflict = resolveOtherPendingConsumption(
+                    factoryId, currentPlanId, currentProcessBatchIds, batchId);
+            if (conflict.quantity().add(qty).compareTo(available) > 0) {
+                String planRefs = conflict.planRefs().isEmpty()
+                        ? "其他未结生产计划"
+                        : String.join("、", conflict.planRefs());
+                issues.add(issue("RAW_BATCH_CROSS_PLAN_CONFLICT",
+                        "原料批次 " + safeBatchRef(batch) + " 当前可用 " + stripTrailing(available)
+                                + quantityUnit + "，但 " + planRefs + " 已待结占用 "
+                                + stripTrailing(conflict.quantity()) + quantityUnit + "；本计划还需 "
+                                + stripTrailing(qty) + quantityUnit
+                                + "。请先撤销错误报工、补充库存或结清冲突计划，系统不会让两个计划重复扣同一批原料。",
+                        "rawMaterialConsumptions"));
+                continue;
+            }
+            if (available.compareTo(qty) < 0) {
+                issues.add(issue("RAW_BATCH_INSUFFICIENT",
+                        "原料批次 " + safeBatchRef(batch) + " 逐道领用 " + stripTrailing(reportedQuantity)
+                                + reportedUnit + "（库存单位 " + stripTrailing(qty) + quantityUnit + "）超过当前可用量 "
+                                + stripTrailing(available) + quantityUnit
+                                + ", 未自动带入该行; 请人工核对实际领用批次和数量。",
                         "rawMaterialConsumptions"));
                 continue;
             }
@@ -2171,6 +2218,96 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .build());
         }
         return lines;
+    }
+
+    private PendingConsumptionConflict resolveOtherPendingConsumption(
+            String factoryId, String currentPlanId, Set<Long> currentProcessBatchIds, String materialBatchId) {
+        if (materialConsumptionRepository == null || isBlank(materialBatchId)) {
+            return PendingConsumptionConflict.NONE;
+        }
+        BigDecimal quantity = BigDecimal.ZERO;
+        Set<String> planRefs = new LinkedHashSet<>();
+        List<MaterialConsumption> pending = materialConsumptionRepository
+                .findByFactoryIdAndBatchId(factoryId, materialBatchId);
+        if (pending == null) {
+            return PendingConsumptionConflict.NONE;
+        }
+        for (MaterialConsumption consumption : pending) {
+            if (consumption == null || consumption.getInterimSettledAt() != null
+                    || zeroIfNull(consumption.getQuantity()).compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+            Long productionBatchId = consumption.getProductionBatchId();
+            if (productionBatchId != null && currentProcessBatchIds.contains(productionBatchId)) {
+                continue;
+            }
+            String ownerPlanId = trimToNull(consumption.getProductionPlanId());
+            if (ownerPlanId == null && productionBatchId != null && processSheetRowRepository != null) {
+                ownerPlanId = processSheetRowRepository.findByFactoryIdAndBatchId(factoryId, productionBatchId)
+                        .stream()
+                        .map(ProcessSheetRow::getPlanId)
+                        .map(this::trimToNull)
+                        .filter(Objects::nonNull)
+                        .findFirst()
+                        .orElse(null);
+            }
+            if (currentPlanId != null && currentPlanId.equals(ownerPlanId)) {
+                continue;
+            }
+            quantity = quantity.add(consumption.getQuantity());
+            if (ownerPlanId != null) {
+                String resolvedOwnerPlanId = ownerPlanId;
+                String ref = productionPlanRepository.findByIdAndFactoryId(ownerPlanId, factoryId)
+                        .map(p -> firstNonBlank(p.getPlanNumber(), resolvedOwnerPlanId))
+                        .orElse(ownerPlanId);
+                planRefs.add(ref);
+            }
+        }
+        return new PendingConsumptionConflict(quantity, List.copyOf(planRefs));
+    }
+
+    private record PendingConsumptionConflict(BigDecimal quantity, List<String> planRefs) {
+        private static final PendingConsumptionConflict NONE =
+                new PendingConsumptionConflict(BigDecimal.ZERO, List.of());
+    }
+
+    private BigDecimal convertProcessInputToBatchUnit(
+            BigDecimal quantity, String reportedUnit, String batchUnit) {
+        if (quantity == null || reportedUnit == null || batchUnit == null) {
+            return null;
+        }
+        if (unitConversionService != null) {
+            BigDecimal converted = unitConversionService.convert(quantity, reportedUnit, batchUnit);
+            if (converted != null) {
+                return converted.stripTrailingZeros();
+            }
+        }
+        BigDecimal kilograms = toKilograms(quantity, reportedUnit);
+        if (kilograms == null) {
+            return null;
+        }
+        return fromKilograms(kilograms, batchUnit);
+    }
+
+    private BigDecimal toKilograms(BigDecimal quantity, String unit) {
+        String normalized = unit.trim().toLowerCase(Locale.ROOT);
+        return switch (normalized) {
+            case "kg", "kilogram", "公斤", "千克" -> quantity;
+            case "g", "gram", "克" -> quantity.divide(new BigDecimal("1000"), 9, RoundingMode.HALF_UP);
+            case "t", "ton", "吨" -> quantity.multiply(new BigDecimal("1000"));
+            default -> null;
+        };
+    }
+
+    private BigDecimal fromKilograms(BigDecimal kilograms, String unit) {
+        String normalized = unit.trim().toLowerCase(Locale.ROOT);
+        return switch (normalized) {
+            case "kg", "kilogram", "公斤", "千克" -> kilograms.stripTrailingZeros();
+            case "g", "gram", "克" -> kilograms.multiply(new BigDecimal("1000")).stripTrailingZeros();
+            case "t", "ton", "吨" -> kilograms.divide(new BigDecimal("1000"), 9, RoundingMode.HALF_UP)
+                    .stripTrailingZeros();
+            default -> null;
+        };
     }
 
     private List<ProductionSettlementRequest.LaborSegment> deriveLaborSegmentsFromProcessSheetRows(
@@ -2797,6 +2934,24 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         .withHintTarget("实际领用"));
         ensureMaterialBatchAllowedForSettlement(factoryId, plan, line.getProductTypeId(), batch, "实际领用");
         BigDecimal available = zeroIfNull(batch.getCurrentQuantity());
+        Set<Long> currentProcessBatchIds = processSheetRowRepository == null
+                ? Set.of()
+                : processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, plan.getId()).stream()
+                        .map(ProcessSheetRow::getBatchId)
+                        .filter(Objects::nonNull)
+                        .collect(Collectors.toSet());
+        PendingConsumptionConflict conflict = resolveOtherPendingConsumption(
+                factoryId, plan.getId(), currentProcessBatchIds, line.getMaterialBatchId());
+        if (conflict.quantity().add(zeroIfNull(line.getQuantity())).compareTo(available) > 0) {
+            String planRefs = conflict.planRefs().isEmpty()
+                    ? "其他未结生产计划"
+                    : String.join("、", conflict.planRefs());
+            throw new BusinessException(409, "原料批次 " + batch.getBatchNumber()
+                    + " 已被 " + planRefs + " 待结占用，本计划不能重复扣减")
+                    .withCode("RAW_BATCH_CROSS_PLAN_CONFLICT")
+                    .withHint("请先撤销错误报工、补充库存或结清冲突计划")
+                    .withHintTarget("实际领用");
+        }
         ensureQuantityWithinAvailable("原料批次 " + batch.getBatchNumber(), line.getQuantity(), available, "实际领用");
         if (line.getBatchNumber() == null) {
             line.setBatchNumber(batch.getBatchNumber());
