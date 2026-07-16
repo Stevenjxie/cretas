@@ -1,8 +1,9 @@
 package com.cretas.aims.dto.bom;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
@@ -43,8 +44,7 @@ public class UpdateBomItemRequest {
     @Size(max = 100, message = "原辅料名称长度不能超过100个字符")
     private String materialName;
 
-    @Schema(description = "成品含量/标准用量", required = true)
-    @NotNull(message = "标准用量不能为空")
+    @Schema(description = "成品含量/标准用量；RAW 关联行可空，辅料/包材必须大于 0")
     @Positive(message = "标准用量必须大于0")
     private BigDecimal standardQuantity;
 
@@ -86,4 +86,14 @@ public class UpdateBomItemRequest {
     @Schema(description = "SP12 #728: 子产品类型ID — 嵌套 BOM")
     @Size(max = 100)
     private String subProductTypeId;
+
+    /** Keep the update contract aligned with create and the service-layer RAW rule. */
+    @JsonIgnore
+    @AssertTrue(message = "standardQuantity is required for non-RAW BOM items")
+    public boolean isStandardQuantityValidForCategory() {
+        return materialCategory == null
+                || materialCategory.isBlank()
+                || "RAW".equalsIgnoreCase(materialCategory)
+                || standardQuantity != null;
+    }
 }

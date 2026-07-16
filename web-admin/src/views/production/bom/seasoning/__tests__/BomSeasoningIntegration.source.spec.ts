@@ -60,8 +60,9 @@ describe('seasoning BOM integration source contract', () => {
     expect(bomSource).toContain('单价与税率从物料档案自动带入');
     expect(bomSource).toContain('bomForm.value.standardQuantity = null');
     expect(bomSource).not.toContain('bomForm.value.standardQuantity = skuGramsPerUnit.value');
-    expect(materialTypeSource).toContain('<el-form-item label="税率" required>');
-    expect(materialTypeSource).toContain('<el-form-item label="含税单价 (元)" required>');
+    expect(materialTypeSource).toContain('<el-form-item label="计税方式" required>');
+    expect(materialTypeSource).toContain("v-if=\"form.taxTreatment === 'TAXABLE'\" label=\"采购税率\" required");
+    expect(materialTypeSource).toContain("'免税采购参考价 (元/库存主单位)' : '含税采购参考价 (元/库存主单位)'");
     expect(materialTypeSource).toContain("ElMessage.warning('请填写大于 0 的含税单价')");
   });
 
@@ -86,8 +87,15 @@ describe('seasoning BOM integration source contract', () => {
     expect(bomSource).not.toContain("summaryNumber('totalMaterialCost'");
     expect(bomSource).not.toContain("summaryNumber('totalLaborCost'");
     expect(bomSource).not.toContain("summaryNumber('totalOverheadCost'");
-    expect(bomSource).toContain('costSummary.value?.costUnit?.trim()');
+    expect(bomSource).toContain('return `元/${skuOutputUnit.value}`');
     expect(bomSource).toContain('{{ costDisplayUnit }}');
     expect(bomSource).toContain('元/kg');
+  });
+
+  it('keeps RAW Excel import relationship-only while requiring quantities for non-RAW rows', () => {
+    expect(bomSource).toContain('成品含量（RAW可空）');
+    expect(bomSource).toContain("materialCategory === 'RAW'");
+    expect(bomSource).toContain("? null\n            : Number(quantityCell ?? 0)");
+    expect(bomSource).toContain('辅料/包材成品含量必须大于 0');
   });
 });

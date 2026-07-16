@@ -18,6 +18,14 @@
 | CRETAS-SKU-IMPORT-BE-20260716-12 | `c6e3dad2bf980ad7f83c252dcd995201c4d305e2` | `/root/bom_review` | 四工作表 `.xlsx` 模板、内容标记示例行、空格/单位归一、图片安全上传与映射、预览/原子确认、双包装规格持久化完成；目标测试 14 + 10 通过。 |
 | SETTLEMENT-RECONCILIATION-20260716 | `aa2af813c2dc8281deb6369dd3c13e5e1f807139` | `/root` | 核对结单改为逐道报工汇总，一键结束计划；保留原料批次与逐道工时，兼容 g/kg 存储单位，并在预填和写入两层阻断跨计划重复占用。定位 F006 同一100kg批次被两个未结计划各占100kg；后端目标测试9/9、Web目标测试5/5及生产构建通过。 |
 
+## 合同一致性审计
+
+| ID | Base SHA | Owner | Result |
+|---|---|---|---|
+| AUDIT-MATERIAL-CONTRACT-20260716 | `21883e32013522f0d65bb0f4722cea4bab885151` | `/root/audit-material-agent` | 只读审计确认：16位编码/L1-L3目前只是 Web 创建页门禁，后端 DTO、AI、Excel、初始化与快速创建仍可生成无层级或旧式编码；历史数据无法仅凭名称安全推断 L2/L3，需先确认映射与迁移策略。 |
+| AUDIT-PRODUCTION-CONTRACT-20260716 | `21883e32013522f0d65bb0f4722cea4bab885151` | `/root/audit-production-agent` | 只读审计确认：核对结单仍信任前端重复提交的完整事实，原料主导多产出、报工状态筛选、投入单位与半成品扣减存在服务端合同缺口，需改为服务端锁定后按计划快照/正式报工重算。 |
+| AUDIT-CROSSMODULE-OPS-20260716 | `21883e32013522f0d65bb0f4722cea4bab885151` | `/root/audit-crossmodule-agent` | 只读审计确认：BOM RAW标准用量前后端不一致、AI旧年份仅部分修复、治理审计误报固有g/kg换算；线上GREEN健康且Metaspace/监控已生效，但生产部署落后origin/main，systemd单元文件还存在明文云凭证风险。 |
+
 ## 发布证据
 
 - PR #1374 Java/Web 发布：真实 upstream 从 10020 切换到 10010，5/5 次 HTTP 200，旧槽停止；F006 只读 E2E 通过，业务写请求为 0。
