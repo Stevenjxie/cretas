@@ -42,6 +42,17 @@ export interface MaterialType {
   factoryName?: string;
   createdByName?: string;
   totalBatches?: number;
+  primaryCode?: string;
+}
+
+export interface MaterialCodeSegmentNode {
+  id: number;
+  segmentCode: string;
+  segmentLabel: string;
+  level: 1 | 2 | 3;
+  parentCode: string | null;
+  isActive: boolean;
+  children?: MaterialCodeSegmentNode[];
 }
 
 /**
@@ -62,6 +73,7 @@ export interface CreateMaterialTypeRequest {
   minStock?: number;          // 最低库存
   maxStock?: number;          // 最高库存
   notes?: string;             // 备注
+  segmentCode: string;        // 必填 L3 累计10位编码；后端据此生成16位编码
 }
 
 /**
@@ -88,6 +100,17 @@ class MaterialTypeApiClient {
   async createMaterialType(data: CreateMaterialTypeRequest, factoryId?: string): Promise<MaterialType> {
     const response = await apiClient.post<{ code: number; data: MaterialType; message: string; success: boolean }>(this.getPath(factoryId), data);
     return response.data;
+  }
+
+  async getMaterialSegmentTree(factoryId?: string): Promise<MaterialCodeSegmentNode[]> {
+    const currentFactoryId = getCurrentFactoryId(factoryId);
+    if (!currentFactoryId) {
+      throw new Error('factoryId 是必需的，请先登录或提供 factoryId 参数');
+    }
+    const response = await apiClient.get<{ code: number; data: MaterialCodeSegmentNode[]; message: string; success: boolean }>(
+      `/api/mobile/${currentFactoryId}/material-segments/tree`,
+    );
+    return response.data || [];
   }
 
   async getMaterialTypeById(id: string, factoryId?: string): Promise<MaterialType> {

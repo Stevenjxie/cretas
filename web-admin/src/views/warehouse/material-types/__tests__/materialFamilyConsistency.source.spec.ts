@@ -29,8 +29,9 @@ describe('material type family source contract', () => {
     expect(source).toContain("bucket === '调料' ? '辅料' : bucket");
   });
 
-  it('requires a complete L1-L3 selection for every new material type', () => {
-    expect(source).toContain("if (!editingId.value && (!segmentL1.value || !segmentL2.value || !segmentL3.value))");
+  it('requires a complete L1-L3 selection for new and legacy-code material types', () => {
+    expect(source).toContain('const showSegmentEditor = computed(() => !editingId.value || editingNeedsSegmentRepair.value)');
+    expect(source).toContain("if (showSegmentEditor.value && (!segmentL1.value || !segmentL2.value || !segmentL3.value))");
     expect(source).toContain('16位编码级联（必填）');
     expect(source).not.toContain('16位编码级联（可选）');
   });
@@ -40,7 +41,9 @@ describe('material type family source contract', () => {
     expect(source).toContain("const filterSegmentL2 = ref('')");
     expect(source).toContain("const filterSegmentL3 = ref('')");
     expect(source).toContain('const selectedSegmentPrefix = computed');
-    expect(source).toContain('code.startsWith(prefix)');
+    expect(source).toContain('codePrefix: selectedSegmentPrefix.value || undefined');
+    expect(source).toContain('keyword: searchKeyword.value.trim() || undefined');
+    expect(source).not.toContain('FETCH_ALL_SIZE = 2000');
     expect(source).toContain('v-model="filterSegmentL1"');
     expect(source).toContain('v-model="filterSegmentL2"');
     expect(source).toContain('v-model="filterSegmentL3"');

@@ -3,11 +3,13 @@ package com.cretas.aims.repository.material;
 import com.cretas.aims.entity.material.MaterialCodeSegment;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
 import java.util.Optional;
+import jakarta.persistence.LockModeType;
 
 /**
  * SP8: 物料分段编码字典 Repository.
@@ -24,6 +26,14 @@ public interface MaterialCodeSegmentRepository extends JpaRepository<MaterialCod
 
     /** 按工厂+编码查找 (唯一). */
     Optional<MaterialCodeSegment> findByFactoryIdAndSegmentCode(String factoryId, String segmentCode);
+
+    /** Serializes 16-digit suffix allocation for a selected L3 node. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT s FROM MaterialCodeSegment s WHERE s.factoryId = :factoryId " +
+           "AND s.segmentCode = :segmentCode")
+    Optional<MaterialCodeSegment> lockByFactoryIdAndSegmentCode(
+            @Param("factoryId") String factoryId,
+            @Param("segmentCode") String segmentCode);
 
     /** 检查是否存在 (含软删除). */
     boolean existsByFactoryIdAndSegmentCode(String factoryId, String segmentCode);

@@ -131,13 +131,17 @@ public class RawMaterialTypeController {
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @RequestParam(defaultValue = "1") @Parameter(description = "页码（1-based）", example = "1") Integer page,
             @RequestParam(defaultValue = "20") @Parameter(description = "每页大小", example = "20") Integer size,
+            @RequestParam(required = false) @Parameter(description = "L1/L2/L3累计编码前缀") String codePrefix,
+            @RequestParam(required = false) @Parameter(description = "名称、编码或类别关键字") String keyword,
             @RequestParam(required = false) @Parameter(description = "P11: 物料大类筛选 (原料/辅料/包材); 不传=全部", example = "包材") String materialKind) {
         log.info("获取原材料类型列表: factoryId={}, page={}, size={}, materialKind={}", factoryId, page, size, materialKind);
         PageRequest pageRequest = new PageRequest();
         pageRequest.setPage(page);
         pageRequest.setSize(size);
         PageResponse<RawMaterialTypeDTO> result;
-        if (materialKind != null && !materialKind.isBlank()) {
+        if ((codePrefix != null && !codePrefix.isBlank()) || (keyword != null && !keyword.isBlank())) {
+            result = materialTypeService.filterMaterialTypes(factoryId, codePrefix, keyword, pageRequest);
+        } else if (materialKind != null && !materialKind.isBlank()) {
             // P11: 按大类筛选 — 复用 getMaterialTypesByCategory (pageRequest 版本)
             result = materialTypeService.getMaterialTypesByKind(factoryId, materialKind, pageRequest);
         } else {

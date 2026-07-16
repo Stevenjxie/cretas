@@ -165,25 +165,8 @@ export const BatchOperationsTestScreen = () => {
     setLoading(true);
     addLog('🚀 开始测试：创建原材料类型');
 
-    try {
-      const response = await materialTypeApiClient.createMaterialType({
-        code: `TEST_${Date.now()}`,
-        name: '测试鲜鱼',
-        category: '原材料',
-        unit: '公斤',
-        storageType: 'fresh', // fresh, frozen, dry
-        shelfLifeDays: 7,
-        notes: '前端测试用'
-      });
-
-      const id = extractId(response);
-      setMaterialTypeId(id);
-      addLog(`✅ 成功：创建原材料类型 ID=${id}`);
-    } catch (error) {
-      addLog(`❌ 失败：${getErrorMessage(error)}`);
-    } finally {
-      setLoading(false);
-    }
+    addLog('⛔ 已停用：原料建档必须在管理页选择完整 L1-L2-L3，测试页不得绕过');
+    setLoading(false);
   };
 
   // Step 2: 创建供应商

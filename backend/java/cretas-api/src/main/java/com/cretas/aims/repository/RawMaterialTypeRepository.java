@@ -36,6 +36,18 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
      * 分页查找工厂的原材料类型
       */
     Page<RawMaterialType> findByFactoryId(String factoryId, Pageable pageable);
+
+    /** Server-side L1/L2/L3 prefix + keyword filtering for the material dictionary. */
+    @Query("SELECT r FROM RawMaterialType r WHERE r.factoryId = :factoryId " +
+           "AND (CAST(:codePrefix AS string) IS NULL OR r.code LIKE CONCAT(:codePrefix, '%')) " +
+           "AND (CAST(:keyword AS string) IS NULL OR LOWER(r.name) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
+           "OR LOWER(r.code) LIKE LOWER(CONCAT(:keyword, '%')) " +
+           "OR LOWER(r.category) LIKE LOWER(CONCAT('%', :keyword, '%'))) ")
+    Page<RawMaterialType> filterBySegmentPrefixAndKeyword(
+            @Param("factoryId") String factoryId,
+            @Param("codePrefix") String codePrefix,
+            @Param("keyword") String keyword,
+            Pageable pageable);
      /**
      * 根据类别查找原材料类型
       */

@@ -206,8 +206,6 @@ class MaterialCodeSegmentServiceTest {
                     .segmentLabel("肉类")
                     .parentCode(null)
                     .build();
-            when(repo.existsByFactoryIdAndSegmentCode(FACTORY_ID, "001001")).thenReturn(false);
-
             BusinessException ex = assertThrows(BusinessException.class,
                     () -> service.create(FACTORY_ID, req));
             assertEquals(400, ex.getCode());
@@ -222,7 +220,6 @@ class MaterialCodeSegmentServiceTest {
                     .segmentLabel("肉类")
                     .parentCode("099")
                     .build();
-            when(repo.existsByFactoryIdAndSegmentCode(FACTORY_ID, "001001")).thenReturn(false);
             when(repo.findByFactoryIdAndSegmentCode(FACTORY_ID, "099")).thenReturn(Optional.empty());
 
             assertThrows(ResourceNotFoundException.class,
