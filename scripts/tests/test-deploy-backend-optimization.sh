@@ -32,7 +32,7 @@ assert_contains "$DEPLOY_SCRIPT" 'ARTIFACT_NAME="cretas-java-$HEAD_SHA"'
 assert_contains "$DEPLOY_SCRIPT" '.workflow_run.head_branch == \"main\"'
 assert_contains "$DEPLOY_SCRIPT" '.workflow_run.head_sha == \"$HEAD_SHA\"'
 assert_contains "$DEPLOY_SCRIPT" 'sha256sum -c "$JAR_NAME.sha256"'
-assert_contains "$DEPLOY_SCRIPT" '无可用的精确 SHA CI 制品，回退本地 clean package'
+assert_contains "$DEPLOY_SCRIPT" 'run_first_success_build_race "$BUILD_RACE_DIR" "ci" ci_build_candidate "maven" maven_build_candidate'
 
 # Repeated startup crashes must fail before the full 150-second timeout and show logs.
 assert_contains "$DEPLOY_SCRIPT" 'STARTUP_RESTART_LIMIT="${STARTUP_RESTART_LIMIT:-2}"'
