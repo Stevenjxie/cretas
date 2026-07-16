@@ -20,6 +20,14 @@
 | FRESH-DB-FMR-BOOTSTRAP-20260716 | `21883e32013522f0d65bb0f4722cea4bab885151` | `/root` | Docker Desktop/Engine/Compose 在 Windows 重启后可用；新增 active Flyway 路径中的 FMR 空库 bootstrap，真实 PostgreSQL 17 + pgvector 门禁通过 Repository 1/1、Flyway 526 个迁移和完整 Spring/JPA 健康启动；修复 Git Bash 清理 Maven/Java 进程树残留。直接快进 `origin/main` 为 `26c0021191e6a227b325a847b271412973c25b4b`，未使用 PR。 |
 | DEPLOY-SOURCE-CACHE-20260716 | `3cb1ce54d4c14a853506179c631317b724bf2754` | `/root` | 部署脚本增加 manifest-backed 后端 Git tree 缓存，纯文档提交不再重复 Maven；生产 JAR MD5、真实 upstream、active systemd 和直连健康全部匹配时安全 no-op，并增加独立阶段耗时。目标 shell/契约测试通过，直接快进 `origin/main` 为 `e18776ea2`，未重复部署 Java。 |
 
+## 合同一致性审计
+
+| ID | Base SHA | Owner | Result |
+|---|---|---|---|
+| AUDIT-MATERIAL-CONTRACT-20260716 | `21883e32013522f0d65bb0f4722cea4bab885151` | `/root/audit-material-agent` | 只读审计确认：16位编码/L1-L3目前只是 Web 创建页门禁，后端 DTO、AI、Excel、初始化与快速创建仍可生成无层级或旧式编码；历史数据无法仅凭名称安全推断 L2/L3，需先确认映射与迁移策略。 |
+| AUDIT-PRODUCTION-CONTRACT-20260716 | `21883e32013522f0d65bb0f4722cea4bab885151` | `/root/audit-production-agent` | 只读审计确认：核对结单仍信任前端重复提交的完整事实，原料主导多产出、报工状态筛选、投入单位与半成品扣减存在服务端合同缺口，需改为服务端锁定后按计划快照/正式报工重算。 |
+| AUDIT-CROSSMODULE-OPS-20260716 | `21883e32013522f0d65bb0f4722cea4bab885151` | `/root/audit-crossmodule-agent` | 只读审计确认：BOM RAW标准用量前后端不一致、AI旧年份仅部分修复、治理审计误报固有g/kg换算；线上GREEN健康且Metaspace/监控已生效，但生产部署落后origin/main，systemd单元文件还存在明文云凭证风险。 |
+
 ## 发布证据
 
 - PR #1374 Java/Web 发布：真实 upstream 从 10020 切换到 10010，5/5 次 HTTP 200，旧槽停止；F006 只读 E2E 通过，业务写请求为 0。

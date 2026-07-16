@@ -1502,7 +1502,7 @@ function refreshData() {
 interface ParsedImportRow {
   materialName: string;
   materialCategory: string;
-  standardQuantity: number;
+  standardQuantity: number | null;
   yieldRate: number | null;
   unit: string;
   _ok?: boolean;
@@ -1516,8 +1516,8 @@ const importPreviewRows = ref<ParsedImportRow[]>([]);
 
 function downloadBomTemplate() {
   const ws = XLSX.utils.aoa_to_sheet([
-    ['物料名', '物料类别(RAW/AUXILIARY/PACKAGING)', '成品含量', '出成率%', '单位'],
-    ['示例: 猪蹄', 'RAW', 200, 61, 'g'],
+    ['物料名', '物料类别(RAW/AUXILIARY/PACKAGING)', '成品含量（RAW可空）', '出成率%', '单位'],
+    ['示例: 猪蹄', 'RAW', '', 61, 'g'],
     ['示例: 辅料A', 'AUXILIARY', 5, 95, 'g'],
     ['示例: 包装袋', 'PACKAGING', 1, '', 'pcs'],
   ]);
@@ -1567,7 +1567,10 @@ function handleFileSelected(event: Event) {
             categoryRaw === 'AUXILIARY' || categoryRaw === '辅料' ? 'AUXILIARY'
             : categoryRaw === 'PACKAGING' || categoryRaw === '包材' ? 'PACKAGING'
             : 'RAW';
-          const standardQuantity = Number(r['成品含量'] ?? 0);
+          const quantityCell = r['成品含量（RAW可空）'] ?? r['成品含量'];
+          const standardQuantity = materialCategory === 'RAW'
+            ? null
+            : Number(quantityCell ?? 0);
           const yieldRateRaw = r['出成率%'] ?? r['出成率'];
           const yieldRate =
             yieldRateRaw === '' || yieldRateRaw == null
@@ -1576,10 +1579,12 @@ function handleFileSelected(event: Event) {
           const unit = String(r['单位'] ?? 'g').trim() || 'g';
           return { materialName, materialCategory, standardQuantity, yieldRate, unit };
         })
-        .filter((r) => r.materialName.length > 0 && r.standardQuantity > 0);
+        .filter((r) => r.materialName.length > 0
+          && (r.materialCategory === 'RAW'
+            || (r.standardQuantity != null && r.standardQuantity > 0)));
 
       if (parsed.length === 0) {
-        ElMessage.warning('未解析到有效行（物料名必填，成品含量必须大于 0）');
+        ElMessage.warning('未解析到有效行（物料名必填；辅料/包材成品含量必须大于 0）');
         return;
       }
 
@@ -2554,7 +2559,11 @@ async function handleAdjustConfirm() {
             >{{ row.materialCategory }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="standardQuantity" label="成品含量" width="100" align="right" />
+        <el-table-column label="成品含量" width="100" align="right">
+          <template #default="{ row }">
+            {{ row.standardQuantity == null ? '系统统计' : row.standardQuantity }}
+          </template>
+        </el-table-column>
         <el-table-column label="出成率%" width="90" align="right">
           <template #default="{ row }">
             <span v-if="row.yieldRate != null">{{ row.yieldRate }}</span>

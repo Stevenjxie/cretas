@@ -18,7 +18,7 @@ describe('procurement order tax rate create entry', () => {
 
   it('sends taxRate on normal and BOM create payload items without fake defaults', () => {
     expect(listSource).toContain('taxRate: normalizeTaxRateForPayload(i.taxRate)');
-    expect(listSource).toContain('taxRate: normalizeTaxRateForPayload(c.taxRate)');
+    expect(listSource).toContain('buildBomPurchaseOrderPayload(parent, children, orderDate)');
     expect(listSource).toContain('taxRate: normalizeTaxRateForPayload(tpl.taxRate)');
     expect(listSource).not.toContain('taxRate: 13');
   });
