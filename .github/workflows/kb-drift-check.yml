@@ -1,14 +1,7 @@
 name: KB Drift Check
 
 on:
-  push:
-    paths:
-      - 'docs/plans/restaurant-product-manual.html'
-      - 'docs/plans/factory-operation-manual.html'
-      - 'scripts/ci/check-kb-meta-freshness.py'
-      - 'scripts/ci/check-kb-anchor-consistency.py'
-      - 'scripts/ci/check-manual-chat-contract.py'
-      - 'backend/python/food_kb/api/manual_chat.py'
+  workflow_dispatch:
   pull_request:
     paths:
       - 'docs/plans/restaurant-product-manual.html'
@@ -22,6 +15,7 @@ on:
 
 jobs:
   kb-drift-check:
+    if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'daily/integration-')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

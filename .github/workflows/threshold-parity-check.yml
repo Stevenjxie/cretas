@@ -5,18 +5,15 @@ name: threshold-parity-check
 # See docs/superpowers/specs/2026-04-29-alerts-full-port-design.md §3.2
 
 on:
+  workflow_dispatch:
   pull_request:
-    paths:
-      - 'backend/java/cretas-api/src/main/resources/config/smartbi/alert_thresholds.json'
-      - 'backend/python/smartbi_compat/config/alert_thresholds.json'
-  push:
-    branches: [main]
     paths:
       - 'backend/java/cretas-api/src/main/resources/config/smartbi/alert_thresholds.json'
       - 'backend/python/smartbi_compat/config/alert_thresholds.json'
 
 jobs:
   diff:
+    if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'daily/integration-')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -20,6 +20,9 @@ concurrency:
 
 jobs:
   e2e-pr-gate:
+    # One consolidated PR per day gets the expensive fresh-DB/Flyway/Spring
+    # startup gate. It can still be run explicitly for an exceptional PR.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'daily/integration-')
     runs-on: ubuntu-latest
     timeout-minutes: 25
 

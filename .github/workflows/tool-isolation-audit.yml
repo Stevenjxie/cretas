@@ -6,12 +6,6 @@ name: Tool factoryId Isolation Audit
 # 脚本 process.exit(1) 阻塞 PR merge.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/**'
-      - 'scripts/audit/tool-factory-isolation-audit.mjs'
-      - '.github/workflows/tool-isolation-audit.yml'
   pull_request:
     branches: [main]
     paths:
@@ -26,6 +20,7 @@ concurrency:
 
 jobs:
   audit:
+    if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'daily/integration-')
     runs-on: ubuntu-latest
     name: factoryId Isolation Audit
     steps:

@@ -6,11 +6,6 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      deploy_prod:
-        description: 'Deploy to production (10010/8083)?'
-        type: boolean
-        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -19,8 +14,24 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # ---- 变更探测: 按路径决定哪些重 job 在 PR 上需要跑 (push 到 main 不受影响, 全跑) ----
+  # Development changes are consolidated into one integration PR per day.
+  # A non-daily PR must fail visibly instead of returning an all-skipped green
+  # workflow that could bypass the repository startup gates.
+  pr-batch-policy:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the daily integration branch
+        if: ${{ !startsWith(github.head_ref, 'daily/integration-') }}
+        run: |
+          echo 'Use the daily integration workflow; exceptional PRs must be reviewed and dispatched explicitly.' >&2
+          exit 1
+
+  # ---- Change detection: run only the affected component gates ----
   changes:
+    # Normal development is batched into one daily integration PR. Ad-hoc PRs
+    # remain available for review, but do not consume CI unless dispatched.
+    if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'daily/integration-')
     runs-on: ubuntu-latest
     outputs:
       java: ${{ steps.filter.outputs.java }}
@@ -45,9 +56,9 @@ jobs:
   # ---- Java Backend: Build + Test ----
   java-build-test:
     needs: changes
-    # PR: 仅当 backend/java 改动才跑 (前端/python/docs PR 跳过, 不再空等 ~10min)。
-    # push 到 main: 始终跑 (deploy-staging 的 needs 不受影响)。
-    if: github.event_name != 'pull_request' || needs.changes.outputs.java == 'true'
+    # Daily PR: validate Java against PostgreSQL. Main: only package the exact
+    # commit artifact; the daily PR merge ref already passed the test gates.
+    if: needs.changes.outputs.java == 'true'
     runs-on: ubuntu-latest
 
     # PostgreSQL service container — enables PG-required IT classes (e.g.
@@ -99,6 +110,7 @@ jobs:
       # queries otherwise survive compilation and fail only when Spring starts.
       # The naming convention is enforced by AGENTS.md for all new query tests.
       - name: JPA repository query startup gate
+        if: github.event_name != 'push'
         working-directory: backend/java/cretas-api
         timeout-minutes: 15
         run: >-
@@ -136,6 +148,7 @@ jobs:
           compression-level: 0
           retention-days: 7
       - name: Maven compile and test
+        if: github.event_name != 'push'
         working-directory: backend/java/cretas-api
         # Keep the complete suite after artifact upload. It reuses the package
         # output already in target/ and remains visible as a separate CI gate.
@@ -151,7 +164,7 @@ jobs:
   # ---- Python Service: Lint + Test ----
   python-lint-test:
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.python == 'true'
+    if: github.event_name != 'push' && needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -198,7 +211,7 @@ jobs:
   # ---- Vue Web Admin: Build + Type Check ----
   vue-build-check:
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.vue == 'true'
+    if: github.event_name != 'push' && needs.changes.outputs.vue == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -226,7 +239,7 @@ jobs:
   # ---- React Native: Jest Tests ----
   rn-test:
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.rn == 'true'
+    if: github.event_name != 'push' && needs.changes.outputs.rn == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -253,78 +266,3 @@ jobs:
           name: rn-coverage
           path: frontend/CretasFoodTrace/coverage/
           retention-days: 14
-
-  # ---- Deploy to Test Environment (staging) ----
-  # Requires GitHub secret: DEPLOY_SSH_KEY (private key for root@47.100.235.168)
-  deploy-staging:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [java-build-test, python-lint-test]
-    runs-on: ubuntu-latest
-    environment: staging
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-          cache: 'maven'
-          cache-dependency-path: backend/java/cretas-api/pom.xml
-      - name: Build JAR
-        working-directory: backend/java/cretas-api
-        run: mvn -B clean package -DskipTests
-      - name: Configure SSH
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
-      - name: Add server to known_hosts
-        run: ssh-keyscan -H 47.100.235.168 >> ~/.ssh/known_hosts
-      - name: Deploy to test env (10011/8084)
-        run: |
-          rsync -az backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar \
-            root@47.100.235.168:/www/wwwroot/cretas/aims-0.0.1-SNAPSHOT.jar.staging
-          rsync -az --exclude='__pycache__' --exclude='*.pyc' --exclude='.env' --exclude='venv*' \
-            backend/python/ root@47.100.235.168:/www/wwwroot/cretas/code/backend/python/
-          ssh root@47.100.235.168 "cd /www/wwwroot/cretas && bash restart.sh test"
-      - name: Health check
-        run: |
-          sleep 15
-          curl -sf --retry 5 --retry-delay 5 http://47.100.235.168:10011/api/mobile/health || echo "::warning::Java test health check failed"
-          curl -sf --retry 5 --retry-delay 5 http://47.100.235.168:8084/health || echo "::warning::Python test health check failed"
-
-  # ---- Deploy to Production (manual only) ----
-  # Requires: workflow_dispatch with deploy_prod=true
-  deploy-prod:
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_prod == 'true'
-    needs: [deploy-staging]
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-          cache: 'maven'
-          cache-dependency-path: backend/java/cretas-api/pom.xml
-      - name: Build JAR
-        working-directory: backend/java/cretas-api
-        run: mvn -B clean package -DskipTests
-      - name: Configure SSH
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
-      - name: Add server to known_hosts
-        run: ssh-keyscan -H 47.100.235.168 >> ~/.ssh/known_hosts
-      - name: Backup + deploy to prod (10010/8083)
-        run: |
-          ssh root@47.100.235.168 "cd /www/wwwroot/cretas && cp aims-0.0.1-SNAPSHOT.jar aims-0.0.1-SNAPSHOT.jar.bak.\$(date +%Y%m%d%H%M)"
-          rsync -az backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar \
-            root@47.100.235.168:/www/wwwroot/cretas/aims-0.0.1-SNAPSHOT.jar
-          rsync -az --exclude='__pycache__' --exclude='*.pyc' --exclude='.env' --exclude='venv*' \
-            backend/python/ root@47.100.235.168:/www/wwwroot/cretas/code/backend/python/
-          ssh root@47.100.235.168 "systemctl restart cretas-backend && systemctl restart cretas-python"
-      - name: Health check
-        run: |
-          sleep 15
-          curl -sf --retry 5 --retry-delay 5 http://47.100.235.168:10010/api/mobile/health || { echo "::error::Prod Java health check FAILED"; exit 1; }
-          curl -sf --retry 5 --retry-delay 5 http://47.100.235.168:8083/health || { echo "::error::Prod Python health check FAILED"; exit 1; }
