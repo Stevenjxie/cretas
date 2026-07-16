@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 DEPLOY_SCRIPT="$ROOT_DIR/scripts/deploy/deploy-backend.sh"
+MANIFEST_HELPER="$ROOT_DIR/scripts/deploy/release-jar-manifest.sh"
 TMP_ROOT=$(mktemp -d)
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
@@ -10,6 +11,8 @@ fail() {
     echo "FAIL: $*" >&2
     exit 1
 }
+
+source "$MANIFEST_HELPER"
 
 HELPERS=$(awk '
     /^# BEGIN_BACKEND_SOURCE_CACHE_HELPERS$/ {copy = 1; next}
@@ -36,10 +39,15 @@ mkdir -p "$FIXTURE_REPO/backend/java/cretas-api"
     git update-ref refs/remotes/origin/main HEAD
 )
 printf 'verified jar bytes\n' > "$SOURCE_JAR"
+JAR_CONTENT="$TMP_ROOT/jar-content"
+mkdir -p "$JAR_CONTENT"
+printf 'verified jar bytes\n' > "$JAR_CONTENT/payload.txt"
+rm -f "$SOURCE_JAR"
+(cd "$JAR_CONTENT" && jar --create --file "$SOURCE_JAR" payload.txt)
 
 # Store a verified main artifact, advance main with docs only, and prove the
 # unchanged backend tree reuses the same bytes across commits.
-store_local_source_artifact_cache "$SOURCE_JAR"
+LOCAL_MAVEN_BUILD_COMPLETED=true store_local_source_artifact_cache "$SOURCE_JAR"
 (
     cd "$FIXTURE_REPO"
     mkdir -p docs
@@ -66,18 +74,33 @@ fi
 # Restore the cached tree, then corrupt its checksum and prove rejection.
 git -C "$FIXTURE_REPO" reset -q --hard HEAD~1
 git -C "$FIXTURE_REPO" update-ref refs/remotes/origin/main HEAD
-printf '%064d  %s\n' 0 "$JAR_NAME" > "$LOCAL_JAR_CACHE_ROOT/current/$JAR_NAME.sha256"
+sed -i 's/^jar_sha256=.*/jar_sha256=0000000000000000000000000000000000000000000000000000000000000000/' \
+    "$LOCAL_JAR_CACHE_ROOT/current/$RELEASE_MANIFEST_NAME"
 if reuse_local_source_artifact_cache "$DEST_JAR"; then
     fail "corrupt cache checksum was accepted"
 fi
 
 # Explicit cache disable must fail closed.
-(
-    cd "$LOCAL_JAR_CACHE_ROOT/current"
-    sha256sum "$JAR_NAME" > "$JAR_NAME.sha256"
-)
+LOCAL_MAVEN_BUILD_COMPLETED=true store_local_source_artifact_cache "$SOURCE_JAR"
 if DISABLE_LOCAL_JAR_CACHE=1 reuse_local_source_artifact_cache "$DEST_JAR"; then
     fail "DISABLE_LOCAL_JAR_CACHE=1 did not disable reuse"
+fi
+
+# Dirty includes untracked files. A clean index/diff is not enough.
+printf 'untracked\n' > "$FIXTURE_REPO/untracked.txt"
+if reuse_local_source_artifact_cache "$DEST_JAR"; then
+    fail "untracked release worktree was accepted"
+fi
+rm "$FIXTURE_REPO/untracked.txt"
+
+# Recompute the checksum over deliberately non-ZIP bytes. SHA matching alone
+# must not make a damaged JAR trustworthy.
+printf 'not a jar\n' > "$LOCAL_JAR_CACHE_ROOT/current/$JAR_NAME"
+DAMAGED_SHA=$(sha256sum "$LOCAL_JAR_CACHE_ROOT/current/$JAR_NAME" | awk '{print $1}')
+sed -i "s/^jar_sha256=.*/jar_sha256=$DAMAGED_SHA/" \
+    "$LOCAL_JAR_CACHE_ROOT/current/$RELEASE_MANIFEST_NAME"
+if reuse_local_source_artifact_cache "$DEST_JAR"; then
+    fail "damaged non-ZIP JAR was accepted with a matching SHA"
 fi
 
 # Mock the two SSH hosts: identical bytes + real parsed upstream + active unit
@@ -130,10 +153,14 @@ if prod_already_runs_local_artifact "$LOCAL_MD5"; then
     fail "unhealthy active slot was accepted"
 fi
 
-grep -Fq 'reuse_local_source_artifact_cache "$JAR_TARGET"' "$DEPLOY_SCRIPT" \
+grep -Fq 'if reuse_local_source_artifact_cache "$JAR_TARGET"; then' "$DEPLOY_SCRIPT" \
     || fail "source cache is not wired before Maven"
 grep -Fq 'store_local_source_artifact_cache "$JAR_PATH"' "$DEPLOY_SCRIPT" \
     || fail "verified JAR is not persisted"
+grep -Fq 'SKIP_BUILD=1 但可信 manifest 未命中；安全回退本地 clean package' "$DEPLOY_SCRIPT" \
+    || fail "SKIP_BUILD manifest miss does not fall back to clean package"
+grep -Fq '[ "${ENABLE_CI_ARTIFACT_REUSE:-0}" != "1" ]' "$DEPLOY_SCRIPT" \
+    || fail "CI artifact fallback is not explicit opt-in"
 grep -Fq 'prod_already_runs_local_artifact "$LOCAL_MD5"' "$DEPLOY_SCRIPT" \
     || fail "identical production no-op is not wired"
 

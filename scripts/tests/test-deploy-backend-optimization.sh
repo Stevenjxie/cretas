@@ -33,6 +33,7 @@ assert_contains "$DEPLOY_SCRIPT" '.workflow_run.head_branch == \"main\"'
 assert_contains "$DEPLOY_SCRIPT" '.workflow_run.head_sha == \"$HEAD_SHA\"'
 assert_contains "$DEPLOY_SCRIPT" 'sha256sum -c "$JAR_NAME.sha256"'
 assert_contains "$DEPLOY_SCRIPT" 'run_first_success_build_race "$BUILD_RACE_DIR" "ci" ci_build_candidate "maven" maven_build_candidate'
+assert_contains "$DEPLOY_SCRIPT" '[ "${ENABLE_CI_ARTIFACT_REUSE:-0}" = "1" ] || return 1'
 
 # Repeated startup crashes must fail before the full 150-second timeout and show logs.
 assert_contains "$DEPLOY_SCRIPT" 'STARTUP_RESTART_LIMIT="${STARTUP_RESTART_LIMIT:-2}"'
