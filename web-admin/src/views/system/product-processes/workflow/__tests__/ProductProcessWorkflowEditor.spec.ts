@@ -7,6 +7,7 @@ const apiMocks = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
   getActiveWorkProcesses: vi.fn(),
+  createWorkProcess: vi.fn(),
   getProductProcessWorkflow: vi.fn(),
   getProductWorkProcesses: vi.fn(),
 }));
@@ -19,6 +20,7 @@ vi.mock('@/api/request', () => ({
 vi.mock('@/api/processProduction', () => ({
   getActiveWorkProcesses: apiMocks.getActiveWorkProcesses,
   getProductWorkProcesses: apiMocks.getProductWorkProcesses,
+  createWorkProcess: apiMocks.createWorkProcess,
 }));
 
 vi.mock('../workflowApi', () => ({
@@ -56,8 +58,11 @@ interface EditorVm {
   history: unknown[];
   outputSkuOptions: SkuOption[];
   selectedWorkProcessId: string;
+  processCreateMode: 'existing' | 'create';
+  newProcessForm: { name: string; outputKind: 'SEMI_FINISHED' | 'FINISHED_GOOD' };
   openAddProcess: (materialNodeId: string) => void;
   confirmAddProcess: () => void;
+  confirmCreateAndAddProcess: () => Promise<void>;
   addOutputToProcess: (processId: string) => void;
   selectOutputSku: (processId: string, portId: string, skuId: string) => void;
   selectMaterialSku: (materialNodeId: string, skuId: string) => void;
@@ -72,6 +77,8 @@ interface TestPort {
   materialKind?: string;
   skuId?: string;
   unit?: string;
+  standardQuantity?: number;
+  quantityMode?: 'AUTO_CONVERT' | 'FIXED_RATIO';
   ordinal: number;
 }
 
@@ -148,6 +155,13 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
         updatedAt: '2026-07-10T00:00:00Z',
       }],
     });
+    apiMocks.createWorkProcess.mockResolvedValue({
+      success: true,
+      data: {
+        id: 'WP-CREATED', processName: '现场切分', processCategory: '加工', unit: 'g', outputUnit: 'g',
+        defaultOutputMaterialKind: 'SEMI_FINISHED', isActive: true,
+      },
+    });
     apiMocks.getProductProcessWorkflow.mockResolvedValue({
       success: true,
       data: {
@@ -187,6 +201,22 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
       expect.objectContaining({ source: 'raw' }),
       expect.objectContaining({ target: expect.stringContaining('material:finished:') }),
     ]));
+  });
+
+  it('uses the upstream material unit only as the onsite-created process legacy payload', async () => {
+    const vm = await mountEditor();
+    const raw = vm.flowNodes.find((node) => node.id === 'raw');
+    if (!raw) throw new Error('Expected raw source');
+    raw.data.baseUnit = 'g';
+    vm.openAddProcess('raw');
+    vm.processCreateMode = 'create';
+    vm.newProcessForm.name = '现场切分';
+
+    await vm.confirmCreateAndAddProcess();
+
+    expect(apiMocks.createWorkProcess).toHaveBeenCalledWith('F006', expect.objectContaining({
+      processName: '现场切分', unit: 'g', outputUnit: 'g',
+    }));
   });
 
   it('binds a semi-finished SKU on both the port and material Cell', async () => {
@@ -342,10 +372,11 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     const downstream = vm.flowNodes.find((node) => node.id === 'process:downstream');
     expect(downstream?.data.inputUnit).toBe('只');
     expect(downstream?.data.ports?.[0].unit).toBe('只');
-    expect((downstream?.data.conversionRule as { mode?: string })?.mode).toBe('FIXED_RATIO');
+    expect(downstream?.data.ports?.[0]).toMatchObject({ quantityMode: 'FIXED_RATIO', standardQuantity: 1 });
+    expect(downstream?.data.ports?.[1]).toMatchObject({ quantityMode: 'FIXED_RATIO', standardQuantity: 1 });
   });
 
-  it('rewrites a fixed-ratio expression to the newly rebound SKU unit without losing quantities', async () => {
+  it('migrates a legacy fixed ratio onto the rebound output port without losing its ratio', async () => {
     const vm = await mountEditor();
     vm.openAddProcess('raw');
     vm.selectedWorkProcessId = 'WP-PACK';
@@ -354,11 +385,15 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     const port = process?.data.ports?.find((candidate) => candidate.direction === 'OUTPUT' && candidate.ordinal === 0);
     if (!process || !port) throw new Error('Expected primary process output');
     vm.selectOutputSku(process.id, port.id, 'SKU-COUNT');
+    const countPort = process.data.ports?.find((candidate) => candidate.id === port.id);
+    if (!countPort) throw new Error('Expected rebound count output');
+    delete countPort.standardQuantity;
     process.data.conversionRule = { mode: 'FIXED_RATIO', expression: '3 kg = 6 只' };
 
     vm.selectOutputSku(process.id, port.id, 'SKU-COUNT-PIECE');
 
-    expect(process.data.conversionRule).toEqual({ mode: 'FIXED_RATIO', expression: '3 kg = 6 件' });
+    const reboundPort = process.data.ports?.find((candidate) => candidate.id === port.id);
+    expect(reboundPort).toMatchObject({ unit: '件', quantityMode: 'FIXED_RATIO', standardQuantity: 2 });
   });
 
   it('keeps rapid output node, port, and edge IDs unique within one millisecond', async () => {

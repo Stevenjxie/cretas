@@ -1,6 +1,6 @@
 import { del, get, post, put } from './request';
 
-export type UnitDimension = 'MASS' | 'VOLUME' | 'COUNT' | 'PACKAGE';
+export type UnitDimension = 'MASS' | 'VOLUME' | 'LENGTH' | 'COUNT' | 'PACKAGE' | 'UNKNOWN';
 
 export interface UnitCatalogItem {
   code: string;

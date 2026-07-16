@@ -224,7 +224,7 @@
             <el-option
               v-for="process in filteredWorkProcessOptions"
               :key="process.id"
-              :label="`${process.processName} · ${process.unit}${process.outputUnit ? ` → ${process.outputUnit}` : ''}`"
+              :label="process.processCategory ? `${process.processName} · ${process.processCategory}` : process.processName"
               :value="process.id"
             />
           </el-select>
@@ -255,7 +255,7 @@
               >复用「{{ p.processName }}」</el-button>
             </div>
           </el-alert>
-          <el-alert type="info" :closable="false" title="原料与半成品报工统一使用 kg；成品产出单位由所选 SKU 自动带入。" />
+          <el-alert type="info" :closable="false" title="投入单位继承上游物料；产出单位由所选半成品或成品 SKU 自动带入。" />
           <el-form-item label="产出类型">
             <el-radio-group v-model="newProcessForm.outputKind">
               <el-radio-button label="SEMI_FINISHED">半成品</el-radio-button>
@@ -387,6 +387,7 @@ import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { get, post, put } from '@/api/request';
+import { getUnitCatalog, type UnitCatalogItem } from '@/api/unitContract';
 import {
   createWorkProcess,
   getActiveWorkProcesses,
@@ -422,8 +423,7 @@ import {
 } from './workflowModel';
 import {
   forkWorkflowUnitReviewDraft,
-  isWorkflowWeightUnit,
-  parseFixedRatioQuantities,
+  reconcileProcessPortQuantities,
   reconcileWorkflowUnits,
   workflowReportingUnit,
   type WorkflowUnitContext,
@@ -531,6 +531,7 @@ const dragStartSnapshot = ref<ProductProcessWorkflowDefinition | null>(null);
 const workProcessOptions = ref<WorkProcessItem[]>([]);
 const skuOptions = ref<SkuOption[]>([]);
 const rawMaterialOptions = ref<RawMaterialOption[]>([]);
+const unitCatalog = ref<UnitCatalogItem[]>([]);
 // #3: 该产品 BOM 原辅料清单 (per-product, 随 productTypeId 变化而重新加载,
 // 与 loadCatalogs 的"全厂字典"缓存粒度不同, 单独一个 ref + 单独一个 loader)。
 const productBomItems = ref<BomItemOption[]>([]);
@@ -552,7 +553,7 @@ const processDialogVisible = ref(false);
 const processSourceMaterialId = ref('');
 const selectedWorkProcessId = ref('');
 
-// #13: 现场创建工序 (类似现场创建 SKU) + 相似检测防重复建。最小必填=名称+单位。
+// #13: 现场创建工序 + 相似检测防重复建。工序本身不持有业务单位；legacy payload 继承上游端口单位。
 const processCreateMode = ref<'existing' | 'create'>('existing');
 const creatingProcess = ref(false);
 const newProcessForm = ref<{ name: string; outputKind: 'SEMI_FINISHED' | 'FINISHED_GOOD' }>(
@@ -581,12 +582,18 @@ async function confirmCreateAndAddProcess(): Promise<void> {
   const identity = currentLoadedIdentity();
   const name = newProcessForm.value.name.trim();
   if (!identity || !name || creatingProcess.value) return;
+  const source = flowNodes.value.find((node) => node.id === processSourceMaterialId.value);
+  const compatibilityUnit = String(source?.data?.baseUnit || '').trim();
+  if (!compatibilityUnit) {
+    ElMessage.warning('上游物料缺少单位，请先绑定物料 SKU');
+    return;
+  }
   creatingProcess.value = true;
   try {
     const payload: Partial<WorkProcessItem> = {
       processName: name,
-      unit: 'kg',
-      outputUnit: 'kg',
+      unit: compatibilityUnit,
+      outputUnit: compatibilityUnit,
       defaultOutputMaterialKind: newProcessForm.value.outputKind,
       isActive: true,
     };
@@ -798,12 +805,17 @@ async function loadCatalogs(): Promise<void> {
   if (!factoryId) return;
   catalogLoading.value = true;
   try {
-    const [processResponse, productResponse, rawResponse] = await Promise.all([
+    const unitCatalogRequest = getUnitCatalog(factoryId).catch((error) => {
+      console.error('[ProductProcessWorkflow] unit catalog loading failed; using built-in scientific units', error);
+      return null;
+    });
+    const [processResponse, productResponse, rawResponse, unitCatalogResponse] = await Promise.all([
       getActiveWorkProcesses(factoryId),
       // 精简「选项」端点 (7 字段: id/name/code/unit/specification/productCategory/isActive + @Cacheable) —
       // SkuOption 只需这些字段; 避开重 DTO 的 ~3s/422KB 全量加载 (顶部选择器已先命中缓存, 这里秒回)。
       get<{ content: SkuOption[] }>(`/${factoryId}/product-types/options`),
       get<RawMaterialOption[]>(`/${factoryId}/raw-material-types/active`),
+      unitCatalogRequest,
     ]);
     if (!isCurrentCatalogLoad(generation, factoryId)) return;
     if (!processResponse.success
@@ -817,6 +829,12 @@ async function loadCatalogs(): Promise<void> {
     workProcessOptions.value = processResponse.data;
     skuOptions.value = productResponse.data.content;
     rawMaterialOptions.value = rawResponse.data;
+    if (unitCatalogResponse?.success && Array.isArray(unitCatalogResponse.data)) {
+      unitCatalog.value = unitCatalogResponse.data;
+    } else {
+      unitCatalog.value = [];
+      ElMessage.warning('系统单位目录加载失败，当前仅使用内建质量、体积和长度换算规则');
+    }
     loadedCatalogFactoryId.value = factoryId;
     void reconcileLoadedUnits();
   } catch (error) {
@@ -837,6 +855,7 @@ function invalidateCatalogs(): void {
   workProcessOptions.value = [];
   skuOptions.value = [];
   rawMaterialOptions.value = [];
+  unitCatalog.value = [];
 }
 
 function isCurrentCatalogLoad(generation: number, factoryId: string): boolean {
@@ -853,7 +872,7 @@ function unitContext(): WorkflowUnitContext {
       conversions: [],
     };
   });
-  return { products };
+  return { products, catalog: unitCatalog.value };
 }
 
 function unitIssueForNode(nodeId: string): string | undefined {
@@ -1871,27 +1890,14 @@ function refreshPortMaterialMetadata(): void {
         unit: materialUnit || port.unit,
       };
     });
-    const primaryInput = data.ports.filter((port) => port.direction === 'INPUT')
-      .sort((left, right) => left.ordinal - right.ordinal)[0];
-    const primaryOutput = data.ports.filter((port) => port.direction === 'OUTPUT')
-      .sort((left, right) => left.ordinal - right.ordinal)[0];
-    if (primaryInput) data.inputUnit = primaryInput.unit;
-    if (primaryOutput) data.outputUnit = primaryOutput.unit;
-    if (primaryInput && primaryOutput) {
-      const fixedRatioRequired = !isWorkflowWeightUnit(primaryInput.unit)
-        || !isWorkflowWeightUnit(primaryOutput.unit);
-      if (fixedRatioRequired) {
-        const quantities = parseFixedRatioQuantities(data.conversionRule.expression);
-        data.conversionRule = {
-          mode: 'FIXED_RATIO',
-          expression: `${quantities?.inputQuantity || 1} ${primaryInput.unit} = ${quantities?.outputQuantity || 1} ${primaryOutput.unit}`,
-        };
-      } else if (!fixedRatioRequired && data.conversionRule.mode === 'FIXED_RATIO') {
-        data.conversionRule = { mode: 'ACTUAL_WEIGHT', expression: null };
-      }
-    }
+    const reconciled = reconcileProcessPortQuantities(data, unitCatalog.value);
     // Vue Flow can cache nested data references. Replacing data makes all connected Cell chips refresh now.
-    node.data = { ...data, ports: [...data.ports], conversionRule: { ...data.conversionRule } };
+    node.data = {
+      ...reconciled,
+      kind: 'PROCESS',
+      ports: [...reconciled.ports],
+      conversionRule: { ...reconciled.conversionRule },
+    };
   });
   flowNodes.value = [...flowNodes.value];
 }

@@ -18,12 +18,10 @@ describe('work process output kind', () => {
     expect(usesSemiFinishedCode('FINISHED_GOOD')).toBe(false);
   });
 
-  it('keeps the primary process fields focused and moves optional fields into advanced settings', () => {
-    expect(source).toContain('label="投入单位" prop="unit"');
-    expect(source).toContain('label="产出单位" prop="outputUnit"');
-    expect(source).toContain('const canonicalUnitOptions = computed');
-    expect(source).toContain('默认跟随投入单位');
-    expect(source).toContain('outputUnitManuallyEdited');
+  it('keeps units out of process master data forms and moves optional fields into advanced settings', () => {
+    expect(source).not.toContain('label="投入单位" prop="unit"');
+    expect(source).not.toContain('label="产出单位" prop="outputUnit"');
+    expect(source).not.toContain('outputUnitManuallyEdited');
     expect(source).toContain('<el-radio-group');
     expect(source).toContain('title="高级设置（可选）"');
     expect(source.indexOf('title="高级设置（可选）"')).toBeLessThan(source.indexOf('label="预估工时"'));

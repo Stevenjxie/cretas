@@ -4,6 +4,7 @@ import type {
   ProcessPort,
   ProductProcessWorkflowDefinition,
 } from './types';
+import type { UnitCatalogItem, UnitDimension } from '@/api/unitContract';
 import { toPlainWorkflowValue } from './workflowModel';
 
 export interface WorkflowUnitConversionRef {
@@ -22,6 +23,7 @@ export interface WorkflowSkuUnitContract {
 
 export interface WorkflowUnitContext {
   aliases?: Record<string, string>;
+  catalog?: UnitCatalogItem[];
   products: Record<string, WorkflowSkuUnitContract>;
 }
 
@@ -49,6 +51,14 @@ const SYSTEM_ALIASES: Record<string, string> = {
   pcs: 'pcs', '件': 'pcs', '个': 'pcs', '只': 'pcs', portion: 'portion', '份': 'portion',
   box: 'box', '盒': 'box', case: 'case', '箱': 'case', bag: 'bag', '袋': 'bag',
   bottle: 'bottle', '瓶': 'bottle',
+  mm: 'mm', '毫米': 'mm', cm: 'cm', '厘米': 'cm', m: 'm', '米': 'm', km: 'km', '千米': 'km',
+};
+
+const PHYSICAL_DIMENSIONS = new Set<UnitDimension>(['MASS', 'VOLUME', 'LENGTH']);
+const FALLBACK_DIMENSIONS: Record<string, UnitDimension> = {
+  mg: 'MASS', g: 'MASS', kg: 'MASS', t: 'MASS', jin: 'MASS',
+  ml: 'VOLUME', l: 'VOLUME',
+  mm: 'LENGTH', cm: 'LENGTH', m: 'LENGTH', km: 'LENGTH',
 };
 
 const CHINESE_UNIT_LABELS: Record<string, string> = {
@@ -98,6 +108,89 @@ export function parseFixedRatioQuantities(expression: string | null | undefined)
   return { inputQuantity, outputQuantity };
 }
 
+/** Returns a system physical dimension. COUNT/PACKAGE/unknown units intentionally return UNKNOWN. */
+export function workflowUnitDimension(
+  unit: string | null | undefined,
+  catalog: UnitCatalogItem[] = [],
+  customAliases?: Record<string, string>,
+): UnitDimension {
+  const aliases = normalizedAliases(customAliases);
+  const code = normalizeUnit(unit, aliases);
+  if (!code) return 'UNKNOWN';
+  const catalogItem = catalog.find((item) => {
+    const candidates = [item.code, item.label, item.baseCode]
+      .map((value) => normalizeUnit(value, aliases));
+    return candidates.includes(code);
+  });
+  return catalogItem?.dimension || FALLBACK_DIMENSIONS[code] || 'UNKNOWN';
+}
+
+/** Only physical units in the same system dimension can omit a manually configured ratio. */
+export function areWorkflowUnitsAutoConvertible(
+  fromUnit: string | null | undefined,
+  toUnit: string | null | undefined,
+  catalog: UnitCatalogItem[] = [],
+  customAliases?: Record<string, string>,
+): boolean {
+  const fromDimension = workflowUnitDimension(fromUnit, catalog, customAliases);
+  const toDimension = workflowUnitDimension(toUnit, catalog, customAliases);
+  return PHYSICAL_DIMENSIONS.has(fromDimension) && fromDimension === toDimension;
+}
+
+/**
+ * Migrates the legacy single expression into port-level quantities and then keeps every port mode
+ * synchronized with its bound SKU unit. Main input is the baseline 1; extra inputs are always an
+ * explicit recipe ratio. Each output decides AUTO_CONVERT/FIXED_RATIO independently.
+ */
+export function reconcileProcessPortQuantities(
+  input: ProcessNodeData,
+  catalog: UnitCatalogItem[] = [],
+): ProcessNodeData {
+  const process = toPlainWorkflowValue(input);
+  const inputs = process.ports.filter((port) => port.direction === 'INPUT')
+    .sort((left, right) => left.ordinal - right.ordinal);
+  const outputs = process.ports.filter((port) => port.direction === 'OUTPUT')
+    .sort((left, right) => left.ordinal - right.ordinal);
+  const primaryInput = inputs[0];
+  const legacy = parseFixedRatioQuantities(process.conversionRule.expression);
+  const legacyOutputRatio = legacy
+    ? legacy.outputQuantity / legacy.inputQuantity
+    : null;
+
+  const ports = process.ports.map((port) => {
+    const existingQuantity = positiveQuantity(port.standardQuantity);
+    if (port.direction === 'INPUT') {
+      if (port.id === primaryInput?.id) {
+        return { ...port, quantityMode: 'FIXED_RATIO' as const, standardQuantity: 1 };
+      }
+      return {
+        ...port,
+        quantityMode: 'FIXED_RATIO' as const,
+        standardQuantity: existingQuantity || 1,
+      };
+    }
+
+    const autoConvert = !!primaryInput
+      && areWorkflowUnitsAutoConvertible(primaryInput.unit, port.unit, catalog);
+    if (autoConvert) {
+      return { ...port, quantityMode: 'AUTO_CONVERT' as const };
+    }
+    const isPrimaryOutput = port.id === outputs[0]?.id;
+    return {
+      ...port,
+      quantityMode: 'FIXED_RATIO' as const,
+      standardQuantity: existingQuantity || (isPrimaryOutput ? legacyOutputRatio : null) || 1,
+    };
+  });
+
+  const nextPrimaryInput = primaryPort(ports, 'INPUT');
+  const nextPrimaryOutput = primaryPort(ports, 'OUTPUT');
+  if (nextPrimaryInput) process.inputUnit = nextPrimaryInput.unit;
+  if (nextPrimaryOutput) process.outputUnit = nextPrimaryOutput.unit;
+  process.ports = ports;
+  return process;
+}
+
 export function reconcileWorkflowUnits(
   input: ProductProcessWorkflowDefinition,
   context: WorkflowUnitContext,
@@ -143,11 +236,10 @@ export function reconcileWorkflowUnits(
   });
 
   processNodes.forEach((processNode) => {
-    const process = processNode.data as ProcessNodeData;
-    const primaryInput = primaryPort(process.ports, 'INPUT');
-    const primaryOutput = primaryPort(process.ports, 'OUTPUT');
-    if (primaryInput) process.inputUnit = primaryInput.unit;
-    if (primaryOutput) process.outputUnit = primaryOutput.unit;
+    processNode.data = reconcileProcessPortQuantities(
+      processNode.data as ProcessNodeData,
+      context.catalog || [],
+    );
   });
 
   return { definition, errors, warnings };
@@ -190,4 +282,8 @@ function leadingPositiveNumber(value: string): number | null {
   if (!match) return null;
   const parsed = Number(match[1]);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function positiveQuantity(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
 }

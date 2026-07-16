@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, reactive, watch } from 'vue';
+import { ref, computed, onMounted, reactive } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Refresh, Warning } from '@element-plus/icons-vue';
 import { handleCatchError } from '@/utils/errorToast';
 import WorkProcessAIChatPanel from './WorkProcessAIChatPanel.vue';
-import UnitSelect from '@/components/common/UnitSelect.vue';
 import {
   getWorkProcesses, createWorkProcess, updateWorkProcess,
   deleteWorkProcess, toggleWorkProcessStatus, getWorkProcessDuplicates,
@@ -116,7 +115,6 @@ const formData = reactive<WorkProcessForm>({
 const showSemiFinishedCode = computed(() => usesSemiFinishedCode(
   normalizeOutputMaterialKind(formData.defaultOutputMaterialKind),
 ));
-const outputUnitManuallyEdited = ref(false);
 const advancedSettings = ref<string[]>([]);
 const exactNameDuplicate = computed(() => {
   const name = formData.processName?.trim().toLocaleLowerCase();
@@ -124,10 +122,6 @@ const exactNameDuplicate = computed(() => {
   return allData.value.find((item) =>
     item.id !== formData.id && item.processName.trim().toLocaleLowerCase() === name,
   ) ?? null;
-});
-
-watch(() => formData.unit, (unit) => {
-  if (!outputUnitManuallyEdited.value) formData.outputUnit = unit || '';
 });
 
 function queryProcessNames(query: string, callback: (items: Array<{ value: string }>) => void): void {
@@ -150,10 +144,6 @@ function queryProcessCategories(query: string, callback: (items: Array<{ value: 
     .map((value) => ({ value })));
 }
 
-function markOutputUnitEdited(): void {
-  outputUnitManuallyEdited.value = true;
-}
-
 // P0-3: 百分比 ↔ 小数转换 (表单按百分比录入, payload 存小数 0.0001..99.9999)
 const minPct = computed<number | null>({
   get: () => formData.standardYieldMin != null ? +(formData.standardYieldMin * 100).toFixed(2) : null,
@@ -169,14 +159,8 @@ const formRules = {
     { required: true, message: '请输入工序名称', trigger: 'blur' },
     { max: 100, message: '不能超过100个字符', trigger: 'blur' }
   ],
-  unit: [
-    { required: true, message: '请选择投入单位', trigger: 'change' }
-  ],
   processCategory: [
     { required: true, message: '请选择或输入工序类别', trigger: ['blur', 'change'] }
-  ],
-  outputUnit: [
-    { required: true, message: '请选择产出单位', trigger: 'change' }
   ],
   defaultOutputMaterialKind: [
     { required: true, message: '请选择默认产出类型', trigger: 'change' }
@@ -297,7 +281,6 @@ function handleAdd() {
     semiFinishedOutputCode: null,
     standardHourlyRate: null
   });
-  outputUnitManuallyEdited.value = false;
   advancedSettings.value = [];
   dialogVisible.value = true;
 }
@@ -312,7 +295,6 @@ function handleEdit(row: WorkProcessItem) {
     defaultOutputMaterialKind: outputKind,
     semiFinishedOutputCode: usesSemiFinishedCode(outputKind) ? semiOutputCodeOf(row) : null,
   });
-  outputUnitManuallyEdited.value = Boolean(row.outputUnit && row.outputUnit !== row.unit);
   advancedSettings.value = [];
   dialogVisible.value = true;
 }
@@ -602,22 +584,6 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
             clearable
             style="width: 100%"
           />
-        </el-form-item>
-        <el-form-item label="投入单位" prop="unit">
-          <UnitSelect
-            v-model="formData.unit"
-            :factory-id="factoryId"
-            placeholder="搜索投入单位；无匹配可新增"
-          />
-        </el-form-item>
-        <el-form-item label="产出单位" prop="outputUnit">
-          <UnitSelect
-            v-model="formData.outputUnit"
-            :factory-id="factoryId"
-            placeholder="默认跟随投入单位"
-            @change="markOutputUnitEdited"
-          />
-          <span class="form-hint">新增时自动跟随投入单位；手动选择后不再被投入单位覆盖</span>
         </el-form-item>
         <el-form-item label="默认产出类型" prop="defaultOutputMaterialKind">
           <el-radio-group
