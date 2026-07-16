@@ -9,7 +9,7 @@
  *
  * May 7 2026 用户需求 (PR #114/#116/#120 后端落地):
  * 1. 编码自动生成 (创建时不传 code, 后端生成)
- * 2. 类别下拉 (主材/辅材/调味料/包材) 走 system_enums.MATERIAL_CATEGORY 字典
+ * 2. 类别下拉与列表大类统一读取 16 位物料编码字典的 L1 类族
  * 3. 单位下拉 + 智能默认 (suggest-unit 按相似名称+类别取最近原料的 unit)
  * 4. 去掉单价 (按采购价浮动, 在采购订单里录)
  * 5. 包装层级: 一级 (kg, 必填=unit) + 二/三级 (10kg/箱, 12箱/柜)
@@ -36,6 +36,7 @@ import { get, post, put, del } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Edit, Delete as DeleteIcon, Search, Refresh, Lock, View } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
+import { bigCategoryOf } from '@/utils/materialCategory';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
@@ -53,25 +54,32 @@ const { goCreate } = useCreateAndReturn();
 const loading = ref(false);
 // 客户张权反馈 (2026-07-02): "搜不出来 filter 不了" — 搜索框绑了 searchKeyword 但后端
 // GET /{factoryId}/raw-material-types 列表接口 (list.vue 实际调用的接口) 从不接收 keyword 参数
-// (只有独立的 /raw-material-types/search 子路由支持 keyword, 但那个不支持叠加 materialKind
-// 大类筛选) — 输入框敲字对结果毫无影响, 是纯前端死代码。改为客户端过滤: 一次性拉回当前
-// materialKind 下的全量原料类型 (字典表通常几十到几百条, 远小于 FETCH_ALL_SIZE), keyword 在
-// 浏览器内按 名称/编码/类别 实时过滤 + 客户端分页, 不依赖后端新增接口/参数 (纯前端修复,
+// (只有独立的 /raw-material-types/search 子路由支持 keyword) — 输入框敲字对结果毫无影响,
+// 是纯前端死代码。改为客户端一次性拉回全量原料类型 (字典表通常几十到几百条,
+// 远小于 FETCH_ALL_SIZE), 再按 L1-L3 编码前缀和关键字实时过滤、分页, 不依赖后端新增接口/参数,
 // 无需 Java 改动/部署)。
 const FETCH_ALL_SIZE = 2000;
 const fullData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 20, total: 0 });
 const searchKeyword = ref('');
-// P11: 物料大类筛选 (原料/辅料/包材). 空串 = 全部. (仍走后端 materialKind 参数, 服务端过滤)
-const filterKind = ref('');
+// 16位编码前缀筛选：L1/L2/L3 分别对应编码前 3/6/10 位。
+const filterSegmentL1 = ref('');
+const filterSegmentL2 = ref('');
+const filterSegmentL3 = ref('');
+const selectedSegmentPrefix = computed(() =>
+  filterSegmentL3.value || filterSegmentL2.value || filterSegmentL1.value,
+);
 
-// 客户端关键字过滤: 名称 / 编码 / 类别 任一字段包含关键字 (大小写不敏感)。
+// 客户端组合过滤：先按16位编码层级前缀，再按名称 / 编码 / 类别关键字。
 const filteredData = computed<TableRow[]>(() => {
   const kw = searchKeyword.value.trim().toLowerCase();
-  if (!kw) return fullData.value;
+  const prefix = selectedSegmentPrefix.value;
   return fullData.value.filter((m) => {
+    const code = String(m.code || '');
+    if (prefix && (!/^\d{16}$/.test(code) || !code.startsWith(prefix))) return false;
+    if (!kw) return true;
     return String(m.name || '').toLowerCase().includes(kw)
-      || String(m.code || '').toLowerCase().includes(kw)
+      || code.toLowerCase().includes(kw)
       || String(m.category || '').toLowerCase().includes(kw);
   });
 });
@@ -89,10 +97,9 @@ watch(filteredData, (list) => {
   if (pagination.value.page > maxPage) pagination.value.page = 1;
 });
 
-// 字典选项 (从后端 system_enums + unit_of_measurements 拉, Canvas 字典管理可改)
+// 储存类型和单位仍读取系统字典；类别统一读取下方 16 位编码 L1 类族。
 interface DictItem { enumCode: string; enumLabel: string; sortOrder: number }
 interface UnitItem { unitCode: string; unitName: string; unitSymbol?: string; sortOrder: number }
-const categoryOptions = ref<DictItem[]>([]);
 const storageTypeOptions = ref<DictItem[]>([]);
 const unitOptions = ref<UnitItem[]>([]);
 
@@ -101,19 +108,17 @@ onMounted(async () => {
   if (typeof keyword === 'string' && keyword.trim()) {
     searchKeyword.value = keyword.trim();
   }
-  await loadDictionaries();
+  await Promise.all([loadDictionaries(), loadSegmentTree()]);
   await loadData();
 });
 
 async function loadDictionaries() {
   if (!factoryId.value) return;
   try {
-    const [catRes, storageRes, unitRes] = await Promise.all([
-      get<DictItem[]>(`/${factoryId.value}/system-config/enums/MATERIAL_CATEGORY`),
+    const [storageRes, unitRes] = await Promise.all([
       get<DictItem[]>(`/${factoryId.value}/system-config/enums/MATERIAL_STORAGE_TYPE`),
       get<UnitItem[]>(`/${factoryId.value}/system-config/units`),
     ]);
-    categoryOptions.value = (catRes.data || []).slice().sort((a, b) => a.sortOrder - b.sortOrder);
     storageTypeOptions.value = (storageRes.data || []).slice().sort((a, b) => a.sortOrder - b.sortOrder);
     unitOptions.value = (unitRes.data || []).slice().sort((a, b) => a.sortOrder - b.sortOrder);
   } catch (e) {
@@ -121,14 +126,6 @@ async function loadDictionaries() {
   }
 }
 
-// 编辑老数据时, 若历史值不在字典中, 临时合入下拉避免值丢失显示
-function mergeHistoricCategory(current?: string): { value: string; label: string }[] {
-  const opts = categoryOptions.value.map((c) => ({ value: c.enumLabel, label: c.enumLabel }));
-  if (current && current.trim() !== '' && !opts.find((o) => o.value === current)) {
-    return [{ value: current, label: `${current} (历史)` }, ...opts];
-  }
-  return opts;
-}
 function mergeHistoricStorage(current?: string): { value: string; label: string }[] {
   const opts = storageTypeOptions.value.map((c) => ({ value: c.enumLabel, label: c.enumLabel }));
   if (current && current.trim() !== '' && !opts.find((o) => o.value === current)) {
@@ -157,16 +154,13 @@ async function loadData() {
   if (!factoryId.value) return;
   loading.value = true;
   try {
-    // 一次性拉全量 (materialKind 仍走后端服务端过滤; keyword 不传 — 后端此接口不支持,
-    // 见上方 fullData/filteredData 注释), 客户端再做 关键字过滤 + 分页。
+    // 一次性拉全量，客户端按16位编码前缀、关键字组合过滤并分页。
     const res = await get<{ content: TableRow[]; totalElements: number }>(
       `/${factoryId.value}/raw-material-types`,
       {
         params: {
           page: 1,
           size: FETCH_ALL_SIZE,
-          // P11: 可选大类过滤 (原料/辅料/包材)
-          materialKind: filterKind.value || undefined,
         },
       },
     );
@@ -282,6 +276,79 @@ async function loadSegmentTree() {
 const segmentL1Options = computed(() =>
   segmentTree.value.filter((n) => n.level === 1),
 );
+// 新建类别与列表大类共用此组选项，避免旧 MATERIAL_CATEGORY 枚举与编码类族漂移。
+const materialFamilyOptions = computed(() =>
+  segmentL1Options.value.map((node) => ({
+    value: node.segmentLabel,
+    label: node.segmentLabel,
+    segmentCode: node.segmentCode,
+  })),
+);
+const filterSegmentL2Options = computed(() => {
+  if (!filterSegmentL1.value) return [];
+  const l1Node = segmentTree.value.find((node) => node.segmentCode === filterSegmentL1.value);
+  return l1Node?.children?.filter((node) => node.level === 2) ?? [];
+});
+const filterSegmentL3Options = computed(() => {
+  if (!filterSegmentL2.value) return [];
+  for (const l1Node of segmentTree.value) {
+    const l2Node = l1Node.children?.find((node) => node.segmentCode === filterSegmentL2.value);
+    if (l2Node) return l2Node.children?.filter((node) => node.level === 3) ?? [];
+  }
+  return [];
+});
+
+watch(filterSegmentL1, () => {
+  filterSegmentL2.value = '';
+  filterSegmentL3.value = '';
+  pagination.value.page = 1;
+});
+watch(filterSegmentL2, () => {
+  filterSegmentL3.value = '';
+  pagination.value.page = 1;
+});
+watch(filterSegmentL3, () => {
+  pagination.value.page = 1;
+});
+
+function resolveMaterialFamily(category: string | null | undefined): string | null {
+  const raw = String(category || '').trim();
+  if (!raw) return null;
+  const exact = materialFamilyOptions.value.find((option) => option.value === raw);
+  if (exact) return exact.value;
+
+  // 历史枚举归并到当前三类 L1：主材→原料，辅材/添加剂/调味料→辅料，PACKAGING→包材。
+  const bucket = bigCategoryOf(raw);
+  const canonical = bucket === '调料' ? '辅料' : bucket;
+  return materialFamilyOptions.value.find((option) => option.value === canonical)?.value ?? null;
+}
+
+function isMaterialFamily(category: string | null | undefined): boolean {
+  return materialFamilyOptions.value.some((option) => option.value === category);
+}
+
+function syncMaterialFamilyFromCategory(category: string | null | undefined) {
+  if (editingId.value) return;
+  const family = resolveMaterialFamily(category);
+  if (!family) {
+    if (!String(category || '').trim()) segmentL1.value = '';
+    return;
+  }
+  const option = materialFamilyOptions.value.find((item) => item.value === family);
+  if (option && segmentL1.value !== option.segmentCode) segmentL1.value = option.segmentCode;
+}
+
+function syncMaterialFamilyFromSegment(segmentCode: string) {
+  if (editingId.value || !segmentCode) return;
+  const option = materialFamilyOptions.value.find((item) => item.segmentCode === segmentCode);
+  if (!option || form.value.category === option.value) return;
+  cascadeWriting.value = true;
+  try {
+    form.value.category = option.value;
+  } finally {
+    cascadeWriting.value = false;
+  }
+}
 // L2 options = children of selected L1
 const segmentL2Options = computed(() => {
   if (!segmentL1.value) return [];
@@ -299,10 +366,11 @@ const segmentL3Options = computed(() => {
 });
 
 // When L1 changes, reset L2/L3
-watch(segmentL1, () => {
+watch(segmentL1, (segmentCode) => {
   segmentL2.value = '';
   segmentL3.value = '';
   segmentCodePreview.value = '';
+  syncMaterialFamilyFromSegment(segmentCode);
 });
 watch(segmentL2, () => {
   segmentL3.value = '';
@@ -324,12 +392,12 @@ async function generateSP8Code() {
     if (res.success && res.data?.code) {
       segmentCodePreview.value = res.data.code;
     } else {
-      // fallback: show a placeholder hint
-      segmentCodePreview.value = `${segmentL1.value}${segmentL2.value}${segmentL3.value}...`;
+      segmentCodePreview.value = '';
+      ElMessage.error(res.message || '16位编码预览失败，请检查编码字典配置');
     }
   } catch {
-    // API not yet available — graceful degrade
-    segmentCodePreview.value = `${segmentL1.value}-${segmentL2.value}-${segmentL3.value}`;
+    segmentCodePreview.value = '';
+    ElMessage.error('16位编码预览失败，请稍后重试');
   } finally {
     sp8PreviewLoading.value = false;
   }
@@ -387,8 +455,9 @@ const packagingManuallyEdited = ref(false); // covers level1PerLevel2 + level2Un
 watch(() => form.value.unit, () => {
   if (!cascadeWriting.value) unitManuallyEdited.value = true;
 });
-watch(() => form.value.category, () => {
+watch(() => form.value.category, (category) => {
   if (!cascadeWriting.value) categoryManuallyEdited.value = true;
+  syncMaterialFamilyFromCategory(category);
 });
 watch(() => form.value.storageType, () => {
   if (!cascadeWriting.value) storageTypeManuallyEdited.value = true;
@@ -484,7 +553,10 @@ watch(
         cascadeWriting.value = true;
         try {
           if (d.unit != null && !unitManuallyEdited.value) form.value.unit = d.unit;
-          if (d.category != null && !categoryManuallyEdited.value) form.value.category = d.category;
+          if (d.category != null && !categoryManuallyEdited.value) {
+            const family = resolveMaterialFamily(d.category);
+            if (family) form.value.category = family;
+          }
           if (d.storageType != null && !storageTypeManuallyEdited.value) form.value.storageType = d.storageType;
           if (d.shelfLifeDays != null && !shelfLifeManuallyEdited.value) form.value.shelfLifeDays = d.shelfLifeDays;
           if (!packagingManuallyEdited.value) {
@@ -607,8 +679,8 @@ async function handleSave() {
   } else if (!editingId.value) {
     return ElMessage.warning('新建物料必须配置含税单价，请联系有价格权限的人员创建');
   }
-  if (!editingId.value && segmentTree.value.length > 0 && !segmentL3.value) {
-    return ElMessage.error('本工厂启用 16 位编码，请先选择 L1类型、L2部位、L3品类后保存');
+  if (!editingId.value && (!segmentL1.value || !segmentL2.value || !segmentL3.value)) {
+    return ElMessage.error('每个原料类型都必须选择 L1类型、L2部位、L3品类后保存');
   }
 
   // 包装层级前端校验 (后端 service + DB CHECK 双重兜底)
@@ -720,14 +792,14 @@ watch(searchKeyword, () => {
 });
 
 function handleSearch() {
-  // 大类筛选 (filterKind) 走服务端 materialKind 参数, 变了需要重新拉数据;
-  // 关键字筛选已是客户端实时生效, 这里统一刷新一次也无妨 (数据量小, 成本可忽略)。
+  // 层级和关键字都已在 filteredData 中实时生效。
   pagination.value.page = 1;
-  loadData();
 }
 function handleRefresh() {
   searchKeyword.value = '';
-  filterKind.value = '';
+  filterSegmentL1.value = '';
+  filterSegmentL2.value = '';
+  filterSegmentL3.value = '';
   pagination.value.page = 1;
   loadData();
 }
@@ -767,17 +839,52 @@ function handleSizeChange(size: number) {
       </template>
 
       <div class="search-bar">
-        <!-- P11: 物料大类快速筛选 -->
+        <!-- 16位编码层级筛选：按累计编码前缀逐级收窄 -->
         <el-select
-          v-model="filterKind"
-          placeholder="全部大类"
+          v-model="filterSegmentL1"
+          placeholder="全部 L1 大类"
           clearable
-          style="width: 130px"
+          style="width: 170px"
           @change="handleSearch"
         >
-          <el-option label="原料" value="原料" />
-          <el-option label="辅料" value="辅料" />
-          <el-option label="包材" value="包材" />
+          <el-option
+            v-for="opt in materialFamilyOptions"
+            :key="opt.segmentCode"
+            :label="`${opt.segmentCode} — ${opt.label}`"
+            :value="opt.segmentCode"
+          />
+        </el-select>
+        <el-select
+          v-model="filterSegmentL2"
+          placeholder="全部 L2 中类"
+          clearable
+          filterable
+          :disabled="!filterSegmentL1"
+          style="width: 190px"
+          @change="handleSearch"
+        >
+          <el-option
+            v-for="opt in filterSegmentL2Options"
+            :key="opt.segmentCode"
+            :label="`${opt.segmentCode} — ${opt.segmentLabel}`"
+            :value="opt.segmentCode"
+          />
+        </el-select>
+        <el-select
+          v-model="filterSegmentL3"
+          placeholder="全部 L3 小类"
+          clearable
+          filterable
+          :disabled="!filterSegmentL2"
+          style="width: 220px"
+          @change="handleSearch"
+        >
+          <el-option
+            v-for="opt in filterSegmentL3Options"
+            :key="opt.segmentCode"
+            :label="`${opt.segmentCode} — ${opt.segmentLabel}`"
+            :value="opt.segmentCode"
+          />
         </el-select>
         <el-input
           v-model="searchKeyword"
@@ -865,12 +972,19 @@ function handleSizeChange(size: number) {
         <el-form-item label="类别" required>
           <el-select v-model="form.category" placeholder="请选择类别" style="width: 100%" filterable>
             <el-option
-              v-for="opt in mergeHistoricCategory(form.category)"
-              :key="opt.value"
+              v-if="editingId && form.category && !isMaterialFamily(form.category)"
+              :label="`${form.category} (历史)`"
+              :value="form.category"
+              disabled
+            />
+            <el-option
+              v-for="opt in materialFamilyOptions"
+              :key="opt.segmentCode"
               :label="opt.label"
               :value="opt.value"
             />
           </el-select>
+          <div class="field-hint">与 16 位物料编码字典的 L1 类族保持一致</div>
         </el-form-item>
 
         <!-- T159-A: 单位 — filterable + allow-create, 复用 /system-config/units -->
@@ -999,12 +1113,12 @@ function handleSizeChange(size: number) {
         <!-- SP8 兜底 (Tier0 #15 minimal): 字典未配置时隐藏级联入口防 dead-end (fool-proof Rule 5).
              generate-code 端点 P1 上线; 当前 tree 为空时显示诚实空态而非空下拉组合. -->
         <el-divider v-if="!editingId">
-          <span class="divider-title">16位编码级联（可选）</span>
+          <span class="divider-title">16位编码级联（必填）</span>
         </el-divider>
         <template v-if="!editingId">
           <!-- 字典已配置: 展示完整级联 -->
           <template v-if="segmentL1Options.length > 0 || segmentLoading">
-            <el-form-item label="L1 类型">
+            <el-form-item label="L1 类型" required>
               <el-select
                 v-model="segmentL1"
                 placeholder="请选择类型分类"
@@ -1021,7 +1135,7 @@ function handleSizeChange(size: number) {
                 />
               </el-select>
             </el-form-item>
-            <el-form-item label="L2 部位">
+            <el-form-item label="L2 部位" required>
               <el-select
                 v-model="segmentL2"
                 placeholder="请先选择 L1 类型"
@@ -1038,7 +1152,7 @@ function handleSizeChange(size: number) {
                 />
               </el-select>
             </el-form-item>
-            <el-form-item label="L3 品类">
+            <el-form-item label="L3 品类" required>
               <el-select
                 v-model="segmentL3"
                 placeholder="请先选择 L2 部位"
@@ -1082,7 +1196,7 @@ function handleSizeChange(size: number) {
             >
               <template #default>
                 <div style="font-size:12px;margin-top:4px;color:#606266">
-                  留空将使用系统自动编码。16位分段编码计划 P1 阶段上线。
+                   请先配置完整的 L1-L3 物料编码字典；配置完成前不能新建原料类型。
                 </div>
               </template>
             </el-alert>
@@ -1228,7 +1342,7 @@ function handleSizeChange(size: number) {
 .header-left { display: flex; align-items: baseline; gap: 12px; }
 .page-title { font-size: 18px; font-weight: 600; }
 .data-count { font-size: 13px; color: #909399; }
-.search-bar { display: flex; gap: 8px; margin-bottom: 16px; }
+.search-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
 .divider-title { font-size: 14px; color: #606266; font-weight: 500; }
 
 /* T159-A: Code preview row */

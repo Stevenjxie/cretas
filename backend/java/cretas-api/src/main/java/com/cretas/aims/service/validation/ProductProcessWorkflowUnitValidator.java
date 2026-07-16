@@ -11,7 +11,10 @@ import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.unit.ProductUnitConversionRepository;
 import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitConversionContext;
+import com.cretas.aims.service.unit.UnitConversionResult;
 import com.cretas.aims.service.unit.UnitNormalizationResult;
+import com.cretas.aims.service.unit.UnitUsageScene;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -73,7 +76,8 @@ public class ProductProcessWorkflowUnitValidator {
                         material.getId(), null, text(data(material).get("baseUnit")), expected));
                 continue;
             }
-            if (!materialUnit.equals(expectedUnit)) {
+            if (!materialUnit.equals(expectedUnit)
+                    && !isIntrinsicConversion(factoryId, skuId, materialUnit, expectedUnit, now)) {
                 errors.add(issue("WORKFLOW_MATERIAL_UNIT_STALE", "物料 Cell 单位与绑定主数据单位不一致",
                         material.getId(), null, materialUnit, expectedUnit));
             }
@@ -135,6 +139,8 @@ public class ProductProcessWorkflowUnitValidator {
         String refId = text(port.get("conversionRefId"));
         Long refVersion = number(port.get("conversionVersion"));
         if (current.equals(expected) && blank(refId) && refVersion == null) return;
+        if (blank(refId) && refVersion == null
+                && isIntrinsicConversion(factoryId, skuId, current, expected, now)) return;
         if (blank(refId) || refVersion == null) {
             errors.add(issue("WORKFLOW_CONVERSION_REQUIRED", "端口单位与物料主单位不同，必须绑定精确换算版本",
                     process.getId(), portId, current, expected));
@@ -227,6 +233,27 @@ public class ProductProcessWorkflowUnitValidator {
     private String canonical(String factoryId, String value) {
         UnitNormalizationResult normalized = unitContractService.normalize(factoryId, value);
         return normalized.recognized() ? normalized.code() : null;
+    }
+
+    private boolean isIntrinsicConversion(
+            String factoryId,
+            String skuId,
+            String fromUnit,
+            String toUnit,
+            LocalDateTime at) {
+        UnitConversionResult result = unitContractService.convert(new UnitConversionContext(
+                factoryId,
+                skuId,
+                fromUnit,
+                toUnit,
+                at,
+                UnitUsageScene.PRODUCTION,
+                null,
+                null));
+        return result != null
+                && result.succeeded()
+                && result.conversionRefId() == null
+                && result.steps().stream().allMatch(step -> step.conversionRefId() == null);
     }
 
     private WorkflowUnitIssueDTO issue(String code, String message, String nodeId, String portId,
