@@ -88,6 +88,7 @@ DEPLOY_MODE=bluegreen
 SERVER=root@backend
 GATEWAY=root@gateway
 REMOTE_JAR_DIR=/srv/cretas
+RUNTIME_JAR_NAME=aims-0.0.1-SNAPSHOT.jar
 NGINX_UPSTREAM_FILE=/etc/nginx/upstream.conf
 BLUE_SERVICE=cretas-backend
 GREEN_SERVICE=cretas-backend-green
@@ -97,7 +98,11 @@ MOCK_SERVICE_STATE=active
 MOCK_HTTP_STATUS=200
 ssh() {
     case "$*" in
-        *md5sum*) printf '%s\n' "$LOCAL_MD5" ;;
+        *md5sum*)
+            [[ "$*" == *"$REMOTE_JAR_DIR/$RUNTIME_JAR_NAME"* ]] \
+                || fail "production no-op checked the upload artifact instead of the runtime JAR"
+            printf '%s\n' "$LOCAL_MD5"
+            ;;
         *"cat '$NGINX_UPSTREAM_FILE'"*) printf 'upstream x { server 47.100.235.168:%s; }\n' "$MOCK_UPSTREAM_PORT" ;;
         *systemctl*) printf '%s\n%s' "$MOCK_SERVICE_STATE" "$MOCK_HTTP_STATUS" ;;
         *) return 1 ;;

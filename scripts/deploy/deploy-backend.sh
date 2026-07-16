@@ -57,6 +57,7 @@ fi
 # ==================== 配置 ====================
 REPO="Stevenjxie/cretas"
 JAR_NAME="cretas-backend-system-1.0.0.jar"
+RUNTIME_JAR_NAME="aims-0.0.1-SNAPSHOT.jar"
 SERVER="root@47.100.235.168"
 GATEWAY="root@139.196.165.140"         # Nginx 网关 (Blue-Green upstream 切换)
 REMOTE_JAR_DIR="/www/wwwroot/cretas"
@@ -562,7 +563,7 @@ prod_already_runs_local_artifact() {
     [ "${FORCE_REDEPLOY:-0}" != "1" ] || return 1
 
     remote_md5=$(ssh -o ConnectTimeout=5 "$SERVER" \
-        "md5sum '$REMOTE_JAR_DIR/$JAR_NAME' 2>/dev/null | awk '{print \$1}'" \
+        "md5sum '$REMOTE_JAR_DIR/$RUNTIME_JAR_NAME' 2>/dev/null | awk '{print \$1}'" \
         2>/dev/null | tr -d '\r\n') || return 1
     [ "$remote_md5" = "$local_md5" ] || return 1
 
