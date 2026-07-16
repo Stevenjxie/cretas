@@ -805,7 +805,7 @@ async function loadCatalogs(): Promise<void> {
   if (!factoryId) return;
   catalogLoading.value = true;
   try {
-    const unitCatalogRequest = getUnitCatalog(factoryId).catch((error) => {
+    const unitCatalogRequest = getUnitCatalog(factoryId).catch((error: unknown): null => {
       console.error('[ProductProcessWorkflow] unit catalog loading failed; using built-in scientific units', error);
       return null;
     });

@@ -165,8 +165,8 @@ async function submitUnit(): Promise<void> {
   }
 }
 
-watch(() => props.factoryId, () => void loadUnits());
-onMounted(() => void loadUnits());
+watch(() => props.factoryId, (): void => { void loadUnits(); });
+onMounted((): void => { void loadUnits(); });
 </script>
 
 <template>

@@ -244,7 +244,7 @@ async function handleAiApplied(): Promise<void> {
   }
 }
 
-onMounted(() => void loadData());
+onMounted((): void => { void loadData(); });
 
 async function loadData() {
   if (!factoryId.value) return;
