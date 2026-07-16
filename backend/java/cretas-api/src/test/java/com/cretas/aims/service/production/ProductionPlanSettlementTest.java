@@ -339,14 +339,14 @@ class ProductionPlanSettlementTest {
     }
 
     @Test
-    @DisplayName("R2 防双扣: 结单请求带手工 SFI 领用 → 跳过 process-row SFI 自动扣 (FG 仍扣)")
-    void settleProduction_manualSemiSkipsAutoSfiButStillFg() {
+    @DisplayName("R2 定点覆盖: 手工补录其他 SFI 不得全局跳过 process-row SFI 自动扣")
+    void settleProduction_manualDifferentSemiDoesNotSkipAutoSfi() {
         wireR2(plan(),
                 feedRow("SFI-STOCK", "30", true, false),
                 feedRow("FG-STOCK", "20", false, true));
         when(finishedGoodsFeedService.consumeForFeedStrict(eq(FACTORY_ID), eq("FG-STOCK"), any(), eq("kg")))
                 .thenAnswer(inv -> inv.getArgument(2));
-        // 手工 SFI 领用行 (postSemiFinishedConsumption 走另一路径, 此处仅测跳过自动扣)
+        // 手工补录的是 WIP-001，并非 process-row 的 SFI-STOCK；不得把无关自动扣一并跳过。
         SemiFinishedInventory wip = wip();
         when(semiFinishedInventoryRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(wip));
         when(semiFinishedInventoryRepository.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -356,8 +356,31 @@ class ProductionPlanSettlementTest {
 
         service.settleProduction(FACTORY_ID, PLAN_ID, r2Request(manual), 10L);
 
-        verify(wipInventoryService, never()).consumeClerkSemiStrict(any(), any(), any());
+        verify(wipInventoryService).consumeClerkSemiStrict(FACTORY_ID, "SFI-STOCK", new BigDecimal("30"));
         verify(finishedGoodsFeedService).consumeForFeedStrict(FACTORY_ID, "FG-STOCK", new BigDecimal("20"), "kg");
+    }
+
+    @Test
+    @DisplayName("R2 定点覆盖: 手工补录同一 SFI 时仅跳过该来源自动扣")
+    void settleProduction_manualMatchingSemiSkipsOnlyMatchingAutoSfi() {
+        wireR2(plan(),
+                feedRow("SFI-STOCK", "30", true, false),
+                feedRow("SFI-OTHER", "10", true, false));
+        when(wipInventoryService.consumeClerkSemiStrict(eq(FACTORY_ID), eq("SFI-OTHER"), any()))
+                .thenAnswer(inv -> inv.getArgument(2));
+        SemiFinishedInventory wip = wip();
+        wip.setIntermediateBatchNo("SFI-STOCK");
+        when(semiFinishedInventoryRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(wip));
+        when(semiFinishedInventoryRepository.findById(7L)).thenReturn(Optional.of(wip));
+        when(semiFinishedInventoryRepository.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+        List<ProductionSettlementRequest.ConsumptionLine> manual = List.of(
+                ProductionSettlementRequest.ConsumptionLine.builder()
+                        .semiFinishedInventoryId(7L).quantity(new BigDecimal("5")).unit("kg").build());
+
+        service.settleProduction(FACTORY_ID, PLAN_ID, r2Request(manual), 10L);
+
+        verify(wipInventoryService, never()).consumeClerkSemiStrict(FACTORY_ID, "SFI-STOCK", new BigDecimal("30"));
+        verify(wipInventoryService).consumeClerkSemiStrict(FACTORY_ID, "SFI-OTHER", new BigDecimal("10"));
     }
 
     @Test
@@ -532,6 +555,96 @@ class ProductionPlanSettlementTest {
     }
 
     @Test
+    @DisplayName("confirmation-only settlement re-derives server facts and ignores client fact tampering")
+    void settleProduction_confirmationOnly_rederivesServerFacts() {
+        ProductionPlan plan = plan();
+        ProcessSheetRow submitted = feedRow("IN-PLAN", "1", false, false);
+        submitted.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        submitted.setRowPayload("""
+                {"clientRowId":"confirmed-row","processCode":"pack","processOrder":1,"productTypeId":"PT-1","batchNumber":"FG-10","outputQuantity":10,"inputUnit":"kg","outputUnit":"box","unit":"box","laborSegments":[{"startTime":"08:00","endTime":"09:00","workerCount":1}]}
+                """);
+        ReflectionTestUtils.setField(service, "processSheetRowRepository", processSheetRowRepository);
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID)).thenReturn(List.of());
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, PLAN_ID)).thenReturn(List.of(submitted));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID, "idem-confirm")).thenReturn(Optional.empty());
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+        when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementConsumptionRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementLaborRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+
+        ProductionSettlementRequest request = ProductionSettlementRequest.builder()
+                .idempotencyKey("idem-confirm")
+                .confirm(true)
+                .actualFinishedQuantity(new BigDecimal("999"))
+                .materialVarianceReason("本计划无外部领料")
+                .build();
+
+        ProductionSettlementResponse response = service.settleProduction(FACTORY_ID, PLAN_ID, request, 10L);
+
+        assertEquals(new BigDecimal("10"), response.getActualFinishedQuantity());
+        assertEquals(new BigDecimal("10"), plan.getActualQuantity());
+    }
+
+    @Test
+    @DisplayName("confirmation-only settlement cannot bypass server BLOCKER with client facts")
+    void settleProduction_confirmationOnly_cannotBypassServerBlocker() {
+        ProductionPlan plan = plan();
+        ProcessSheetRow draft = feedRow("DRAFT", "1", false, false);
+        draft.setSubmissionStatus(ProcessSheetRow.SUBMISSION_DRAFT);
+        ReflectionTestUtils.setField(service, "processSheetRowRepository", processSheetRowRepository);
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID)).thenReturn(List.of());
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, PLAN_ID)).thenReturn(List.of(draft));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID, "idem-blocked")).thenReturn(Optional.empty());
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+
+        ProductionSettlementRequest request = ProductionSettlementRequest.builder()
+                .idempotencyKey("idem-blocked")
+                .confirm(true)
+                .actualFinishedQuantity(new BigDecimal("999"))
+                .materialVarianceReason("伪造绕过")
+                .laborDeferredReason("伪造绕过")
+                .build();
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.settleProduction(FACTORY_ID, PLAN_ID, request, 10L));
+
+        assertEquals("PRODUCTION_SETTLEMENT_BLOCKED", ex.getErrorCode());
+        verify(productionSettlementRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("active workflow cannot bypass submitted process reporting through legacy settle payload")
+    void settleProduction_activeWorkflow_requiresSubmittedRows() {
+        ProductionPlan plan = plan();
+        plan.setSelectedWorkflowId(99L);
+        plan.setSkipProcessReporting(false);
+        ProcessSheetRow draft = feedRow("DRAFT-WORKFLOW", "1", false, false);
+        draft.setSubmissionStatus(ProcessSheetRow.SUBMISSION_DRAFT);
+        ReflectionTestUtils.setField(service, "processSheetRowRepository", processSheetRowRepository);
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, PLAN_ID)).thenReturn(List.of(draft));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID, "idem-1")).thenReturn(Optional.empty());
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.settleProduction(FACTORY_ID, PLAN_ID, baseRequest(), 10L));
+
+        assertEquals("WORKFLOW_REPORTING_REQUIRED", ex.getErrorCode());
+        verify(productionSettlementRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("仓库确认实收等于报产时生成成品库存且不挂中转账")
     void confirmWarehouseReceipt_exactMatch_postsFinishedGoodsOnly() {
         ProductionPlan plan = plan();
@@ -558,6 +671,25 @@ class ProductionPlanSettlementTest {
         assertEquals(null, response.getTransitLedgerId());
         assertEquals(new BigDecimal("90"), response.getWarehouseReceivedQuantity());
         verify(productionTransitLedgerRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("raw-centric multi-output receipt never creates a finished batch for the raw owner")
+    void confirmWarehouseReceipt_rawCentricMultiOutput_doesNotCreateRawOwnerBatch() {
+        ProductionPlan plan = plan();
+        plan.setProductTypeId("RAW-OWNER");
+        plan.setTargetFinishedGoodIds(List.of("FG-SKU-A", "FG-SKU-B"));
+        ProductionSettlement settlement = settled();
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.confirmWarehouseReceipt(
+                        FACTORY_ID, PLAN_ID, receiptRequest("receipt-multi", "90", "kg", null, null), 11L));
+
+        assertEquals("MULTI_OUTPUT_RECEIPT_REQUIRES_LINES", ex.getErrorCode());
+        verify(finishedGoodsBatchRepository, never()).save(any());
     }
 
     @Test

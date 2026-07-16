@@ -19,7 +19,7 @@ import {
 } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
-import { materialTypeApiClient, MaterialType, CreateMaterialTypeRequest } from '../../services/api/materialTypeApiClient';
+import { materialTypeApiClient, MaterialType, CreateMaterialTypeRequest, UpdateMaterialTypeRequest, MaterialCodeSegmentNode } from '../../services/api/materialTypeApiClient';
 import { materialSpecApiClient, DEFAULT_SPEC_CONFIG, SpecConfig } from '../../services/api/materialSpecApiClient';
 import { dictionaryApiClient, DictionaryItem, UnitItem } from '../../services/api/dictionaryApiClient';
 import { materialPackagingApiClient, MaterialPackagingHierarchy } from '../../services/api/materialPackagingApiClient';
@@ -57,6 +57,17 @@ export default function MaterialTypeManagementScreen() {
   // Menu visibility states (仅包装层级仍用 Menu, 主表单字段已迁到 DynamicForm)
   const [level2UnitMenuVisible, setLevel2UnitMenuVisible] = useState(false);
   const [level3UnitMenuVisible, setLevel3UnitMenuVisible] = useState(false);
+  const [segmentL1MenuVisible, setSegmentL1MenuVisible] = useState(false);
+  const [segmentL2MenuVisible, setSegmentL2MenuVisible] = useState(false);
+  const [segmentL3MenuVisible, setSegmentL3MenuVisible] = useState(false);
+  const [segmentTree, setSegmentTree] = useState<MaterialCodeSegmentNode[]>([]);
+  const [segmentL1, setSegmentL1] = useState('');
+  const [segmentL2, setSegmentL2] = useState('');
+  const [segmentL3, setSegmentL3] = useState('');
+  const segmentL2Options = segmentTree.find((node) => node.segmentCode === segmentL1)
+    ?.children?.filter((node) => node.isActive && node.level === 2) || [];
+  const segmentL3Options = segmentL2Options.find((node) => node.segmentCode === segmentL2)
+    ?.children?.filter((node) => node.isActive && node.level === 3) || [];
 
   // 包装层级状态 (一级 = formData.unit, 二三级在此; 空字符串表示未填)
   const [packaging, setPackaging] = useState<{
@@ -122,19 +133,21 @@ export default function MaterialTypeManagementScreen() {
   const loadDictionaries = async () => {
     try {
       // 1. 拉字典 + Canvas 自定义 schema
-      const [categories, units, storageTypes, mergedSchemaResult] = await Promise.all([
-        dictionaryApiClient.getEnums('MATERIAL_CATEGORY', factoryId),
+      const [segments, units, storageTypes, mergedSchemaResult] = await Promise.all([
+        materialTypeApiClient.getMaterialSegmentTree(factoryId),
         dictionaryApiClient.getUnits(undefined, factoryId),
         dictionaryApiClient.getEnums('MATERIAL_STORAGE_TYPE', factoryId),
         schemaService.getMergedSchema('RAW_MATERIAL_TYPE', rawMaterialTypeSchema, factoryId),
       ]);
 
-      const categoryLabels = categories.map((c: DictionaryItem) => c.enumLabel);
+      const activeSegments = segments.filter((s) => s.level === 1 && s.isActive);
+      const categoryLabels = activeSegments.map((s) => s.segmentLabel);
       // 单位用 unitSymbol 存储 (跟历史数据保持一致)
       const unitLabels = units.map((u: UnitItem) => u.unitSymbol || u.unitCode);
       const storageLabels = storageTypes.map((s: DictionaryItem) => s.enumLabel);
 
       setCategoryOptions(categoryLabels);
+      setSegmentTree(activeSegments);
       setUnitOptions(unitLabels);
       setStorageTypeOptions(storageLabels);
 
@@ -257,6 +270,9 @@ export default function MaterialTypeManagementScreen() {
     setCustomSpecMode(false);
     setCustomSpecValue('');
     setPackaging({ level1PerLevel2: '', level2Unit: '', level2PerLevel3: '', level3Unit: '' });
+    setSegmentL1('');
+    setSegmentL2('');
+    setSegmentL3('');
     setModalVisible(true);
   };
 
@@ -331,6 +347,10 @@ export default function MaterialTypeManagementScreen() {
     });
     setCustomSpecMode(false);
     setCustomSpecValue('');
+    const hasValidCode = /^\d{16}$/.test(item.code || '');
+    setSegmentL1(hasValidCode ? item.code.slice(0, 3) : '');
+    setSegmentL2(hasValidCode ? item.code.slice(0, 6) : '');
+    setSegmentL3(hasValidCode ? item.code.slice(0, 10) : '');
     // 加载现有包装层级 (无配置返回 null)
     setPackaging({ level1PerLevel2: '', level2Unit: '', level2PerLevel3: '', level3Unit: '' });
     try {
@@ -355,6 +375,11 @@ export default function MaterialTypeManagementScreen() {
       Alert.alert('提示', '原料名称、类别、单位和储存类型不能为空');
       return;
     }
+    const needsSegmentRepair = !editingItem || !/^\d{16}$/.test(editingItem.code || '');
+    if (needsSegmentRepair && (!segmentL1 || !segmentL2 || !segmentL3)) {
+      Alert.alert('提示', '每个原料类型都必须选择完整的 L1、L2、L3 编码分类');
+      return;
+    }
 
     // 包装层级前端校验 (后端有 DB CHECK + service 校验, 前端给即时反馈)
     const hasL2Unit = packaging.level2Unit.trim() !== '';
@@ -377,9 +402,14 @@ export default function MaterialTypeManagementScreen() {
     try {
       let materialId: string;
       if (editingItem) {
+        const { code: _immutableCode, ...editableFields } = formData;
+        const updateRequest: UpdateMaterialTypeRequest = {
+          ...editableFields,
+          segmentCode: needsSegmentRepair ? segmentL3 : undefined,
+        };
         await materialTypeApiClient.updateMaterialType(
           editingItem.id,
-          formData as Partial<CreateMaterialTypeRequest>,
+          updateRequest,
           factoryId
         );
         materialId = editingItem.id;
@@ -388,7 +418,7 @@ export default function MaterialTypeManagementScreen() {
         // 创建 - 移除code字段，让后端自动生成
         const { code, ...dataWithoutCode } = formData;
         const created = await materialTypeApiClient.createMaterialType(
-          dataWithoutCode as CreateMaterialTypeRequest,
+          { ...dataWithoutCode, segmentCode: segmentL3 } as CreateMaterialTypeRequest,
           factoryId
         );
         materialId = created.id;
@@ -693,6 +723,88 @@ export default function MaterialTypeManagementScreen() {
                 <ActivityIndicator />
                 <Text style={{ marginTop: 8, color: '#666' }}>加载表单 schema 中...</Text>
               </View>
+            )}
+
+            {(!editingItem || !/^\d{16}$/.test(editingItem.code || '')) && (
+              <>
+                <View style={styles.sectionHeader}>
+                  <Text style={styles.sectionTitle}>16位编码分类（必填）</Text>
+                  <Text style={styles.sectionHint}>类别由 L1 自动确定，必须继续选择到 L3。</Text>
+                </View>
+                <Menu
+                  visible={segmentL1MenuVisible}
+                  onDismiss={() => setSegmentL1MenuVisible(false)}
+                  anchor={
+                    <TextInput
+                      label="L1 大类"
+                      value={segmentTree.find((n) => n.segmentCode === segmentL1)?.segmentLabel || ''}
+                      mode="outlined"
+                      style={styles.input}
+                      editable={false}
+                      onPressIn={() => setSegmentL1MenuVisible(true)}
+                      right={<TextInput.Icon icon="menu-down" onPress={() => setSegmentL1MenuVisible(true)} />}
+                    />
+                  }
+                >
+                  {segmentTree.map((node) => (
+                    <Menu.Item key={node.segmentCode} title={`${node.segmentCode} ${node.segmentLabel}`} onPress={() => {
+                      setSegmentL1(node.segmentCode);
+                      setSegmentL2('');
+                      setSegmentL3('');
+                      setFormData((prev) => ({ ...prev, category: node.segmentLabel }));
+                      formRef.current?.setFieldValue('category', node.segmentLabel);
+                      setSegmentL1MenuVisible(false);
+                    }} />
+                  ))}
+                </Menu>
+                <Menu
+                  visible={segmentL2MenuVisible}
+                  onDismiss={() => setSegmentL2MenuVisible(false)}
+                  anchor={
+                    <TextInput
+                      label="L2 中类"
+                      value={segmentL2Options.find((n) => n.segmentCode === segmentL2)?.segmentLabel || ''}
+                      mode="outlined"
+                      style={styles.input}
+                      editable={false}
+                      disabled={!segmentL1}
+                      onPressIn={() => segmentL1 && setSegmentL2MenuVisible(true)}
+                      right={<TextInput.Icon icon="menu-down" onPress={() => segmentL1 && setSegmentL2MenuVisible(true)} />}
+                    />
+                  }
+                >
+                  {segmentL2Options.map((node) => (
+                    <Menu.Item key={node.segmentCode} title={`${node.segmentCode} ${node.segmentLabel}`} onPress={() => {
+                      setSegmentL2(node.segmentCode);
+                      setSegmentL3('');
+                      setSegmentL2MenuVisible(false);
+                    }} />
+                  ))}
+                </Menu>
+                <Menu
+                  visible={segmentL3MenuVisible}
+                  onDismiss={() => setSegmentL3MenuVisible(false)}
+                  anchor={
+                    <TextInput
+                      label="L3 小类"
+                      value={segmentL3Options.find((n) => n.segmentCode === segmentL3)?.segmentLabel || ''}
+                      mode="outlined"
+                      style={styles.input}
+                      editable={false}
+                      disabled={!segmentL2}
+                      onPressIn={() => segmentL2 && setSegmentL3MenuVisible(true)}
+                      right={<TextInput.Icon icon="menu-down" onPress={() => segmentL2 && setSegmentL3MenuVisible(true)} />}
+                    />
+                  }
+                >
+                  {segmentL3Options.map((node) => (
+                    <Menu.Item key={node.segmentCode} title={`${node.segmentCode} ${node.segmentLabel}`} onPress={() => {
+                      setSegmentL3(node.segmentCode);
+                      setSegmentL3MenuVisible(false);
+                    }} />
+                  ))}
+                </Menu>
+              </>
             )}
 
             {/* 包装层级 (一级 = 单位字段, 二/三级可选) */}

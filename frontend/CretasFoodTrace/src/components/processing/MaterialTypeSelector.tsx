@@ -95,31 +95,7 @@ export const MaterialTypeSelector: React.FC<MaterialTypeSelectorProps> = ({
       return;
     }
 
-    try {
-      setCreating(true);
-
-      await materialQuickAPI.createMaterialType({
-        name: newMaterialName.trim(),
-        category: newMaterialCategory,
-        unit: 'kg',
-      }, factoryId);
-
-      console.log('✅ Material type created:', newMaterialName);
-
-      // 刷新列表
-      await fetchMaterialTypes();
-
-      // 自动选中新创建的原料
-      onSelect(newMaterialName.trim());
-
-      // 关闭弹窗（使用统一函数）
-      handleModalClose();
-    } catch (error) {
-      console.error('❌ Failed to create material:', error);
-      Alert.alert('创建失败', getErrorMsg(error) || '请重试');
-    } finally {
-      setCreating(false);
-    }
+    Alert.alert('请先配置16位编码', '快捷新建不能跳过 L1、L2、L3。请到“原料类型管理”完成建档后再选择。');
   };
 
   return (

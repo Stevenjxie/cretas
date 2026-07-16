@@ -37,6 +37,9 @@ public interface RawMaterialTypeService {
       */
     PageResponse<RawMaterialTypeDTO> getMaterialTypes(String factoryId, PageRequest pageRequest);
 
+    PageResponse<RawMaterialTypeDTO> filterMaterialTypes(String factoryId, String codePrefix,
+                                                         String keyword, PageRequest pageRequest);
+
     /**
      * P11: 按物料大类(原料/辅料/包材)分页查询. materialKind 对应 category 字段.
      */

@@ -17,6 +17,7 @@ import com.cretas.aims.repository.ConversionRepository;
 import com.cretas.aims.repository.MaterialPackagingHierarchyRepository;
 import com.cretas.aims.repository.material.MaterialCodeSegmentRepository;
 import com.cretas.aims.entity.MaterialPackagingHierarchy;
+import com.cretas.aims.entity.material.MaterialCodeSegment;
 import com.cretas.aims.service.RawMaterialTypeService;
 import com.cretas.aims.service.workflow.WorkflowUnitReviewService;
 import com.cretas.aims.utils.ExcelUtil;
@@ -97,15 +98,18 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         com.cretas.aims.entity.enums.TaxTreatment taxTreatment = dto.getTaxTreatment() != null
                 ? dto.getTaxTreatment() : com.cretas.aims.entity.enums.TaxTreatment.TAXABLE;
         validateRequiredPricing(taxTreatment, dto.getTaxRate(), dto.getTaxIncludedUnitPrice(), dto.getTaxExemptionReason());
-        // T159-B-codegen: auto-generate code when caller does not provide one.
-        // SP8: if segmentCode is provided (10-digit), use 16-digit generator; else fallback SP4 flat.
-        if (dto.getCode() == null || dto.getCode().trim().isEmpty()) {
-            String generated = generateNextCode(factoryId, dto.getCategory(), dto.getSegmentCode());
-            dto.setCode(generated);
-            log.info("自动生成原材料编码: factoryId={}, segmentCode={}, code={}", factoryId, dto.getSegmentCode(), generated);
-        } else if (isSegmentDictionaryEnabled(factoryId) && !dto.getCode().trim().matches("[0-9]{16}")) {
-            throw strict16CodeException(dto.getCode());
-        }
+        MaterialSegmentChain segmentChain = requireValidSegmentChain(factoryId, dto.getSegmentCode());
+        // Serialize allocation per L3 prefix. The previous max+1 scan could return the same
+        // suffix to two concurrent transactions.
+        materialCodeSegmentRepository.lockByFactoryIdAndSegmentCode(factoryId, segmentChain.l3().getSegmentCode())
+                .orElseThrow(() -> invalidSegment("L3编码在生成过程中已失效", dto.getSegmentCode()));
+        String generated = generateNextCode(factoryId, segmentChain.l1().getSegmentLabel(),
+                segmentChain.l3().getSegmentCode());
+        dto.setCode(generated);
+        dto.setCategory(segmentChain.l1().getSegmentLabel());
+        dto.setPrimaryCode(segmentChain.l1().getSegmentCode());
+        log.info("自动生成16位原材料编码: factoryId={}, segmentCode={}, code={}",
+                factoryId, dto.getSegmentCode(), generated);
 
         log.info("创建原材料类型: factoryId={}, code={}", factoryId, dto.getCode());
 
@@ -127,7 +131,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         materialType.setFactoryId(factoryId);
         materialType.setCode(dto.getCode());
         materialType.setName(dto.getName());
-        materialType.setCategory(dto.getCategory());
+        materialType.setCategory(segmentChain.l1().getSegmentLabel());
         materialType.setUnit(dto.getUnit());
         materialType.setStorageType(dto.getStorageType());
         materialType.setShelfLifeDays(dto.getShelfLifeDays());
@@ -152,12 +156,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
             materialType.setUnitPrice(dto.getTaxRate().preTaxPrice(dto.getTaxIncludedUnitPrice()));
         }
 
-        // SP8: primaryCode — 优先 DTO 传入, 否则从 code 前三位自动提取
-        if (dto.getPrimaryCode() != null && !dto.getPrimaryCode().isBlank()) {
-            materialType.setPrimaryCode(dto.getPrimaryCode());
-        } else if (materialType.getCode() != null && materialType.getCode().length() >= 3) {
-            materialType.setPrimaryCode(materialType.getCode().substring(0, 3));
-        }
+        materialType.setPrimaryCode(segmentChain.l1().getSegmentCode());
 
         // 包材规格: 随 create 写入 (nullable, 仅 category=PACKAGING 有业务意义)
         materialType.setPackQtyPerProduct(dto.getPackQtyPerProduct());
@@ -186,18 +185,31 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                     .withHint("当前原材料类型不属于该工厂, 无法操作");
         }
 
+        String requestedSegment = dto.getSegmentCode();
+        if ((requestedSegment == null || requestedSegment.isBlank())
+                && materialType.getCode() != null && materialType.getCode().matches("[0-9]{16}")) {
+            requestedSegment = materialType.getCode().substring(0, 10);
+        }
+        MaterialSegmentChain segmentChain = requireValidSegmentChain(factoryId, requestedSegment);
+        if (materialType.getCode() == null || !materialType.getCode().matches("[0-9]{16}")) {
+            materialCodeSegmentRepository.lockByFactoryIdAndSegmentCode(factoryId, segmentChain.l3().getSegmentCode())
+                    .orElseThrow(() -> invalidSegment("L3编码在生成过程中已失效", segmentChain.l3().getSegmentCode()));
+            materialType.setCode(generateNextCode(factoryId, segmentChain.l1().getSegmentLabel(),
+                    segmentChain.l3().getSegmentCode()));
+        }
+        materialType.setCategory(segmentChain.l1().getSegmentLabel());
+        materialType.setPrimaryCode(segmentChain.l1().getSegmentCode());
+
         // 检查编码是否重复
         if (dto.getCode() != null && !dto.getCode().equals(materialType.getCode())) {
-            if (materialTypeRepository.existsByFactoryIdAndCode(factoryId, dto.getCode())) {
-                throw new BusinessException(409, "原材料编码已存在: " + dto.getCode())
-                    .withHint("请使用其他原材料编码").withHintTarget("code");
-            }
-            materialType.setCode(dto.getCode());
+            throw new BusinessException(400, "16位原料编码不可手工修改")
+                    .withHint("如需为历史原料补码，请仅选择L1-L2-L3，系统会自动生成")
+                    .withHintTarget("code");
         }
 
         // 更新其他字段
         if (dto.getName() != null) materialType.setName(dto.getName());
-        if (dto.getCategory() != null) materialType.setCategory(dto.getCategory());
+        // category is derived exclusively from the validated L1 ancestor.
         if (dto.getUnit() != null) materialType.setUnit(dto.getUnit());
         if (dto.getStorageType() != null) materialType.setStorageType(dto.getStorageType());
         if (dto.getShelfLifeDays() != null) materialType.setShelfLifeDays(dto.getShelfLifeDays());
@@ -221,10 +233,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         validateRequiredPricing(materialType.getTaxTreatment(), materialType.getTaxRate(),
                 materialType.getTaxIncludedUnitPrice(), materialType.getTaxExemptionReason());
 
-        // SP8: primaryCode null-guard 更新
-        if (dto.getPrimaryCode() != null) {
-            materialType.setPrimaryCode(dto.getPrimaryCode());
-        }
+        // primaryCode is also derived; caller input cannot override it.
 
         // 包材规格: null-guard 更新 (传 null 视为"不修改"; 若要清除规格前端传 0 由服务端忽略负值即可)
         // 设计选择: 使用 packQtyPerProduct != null 作为"有意更新"信号, 与 SP8 primaryCode 模式一致
@@ -390,6 +399,23 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                 pageRequest.getSize(),
                 page.getTotalElements()
         );
+    }
+
+    @Override
+    public PageResponse<RawMaterialTypeDTO> filterMaterialTypes(String factoryId, String codePrefix,
+                                                                String keyword, PageRequest pageRequest) {
+        String normalizedPrefix = codePrefix == null || codePrefix.isBlank() ? null : codePrefix.trim();
+        if (normalizedPrefix != null && !normalizedPrefix.matches("[0-9]{3}|[0-9]{6}|[0-9]{10}")) {
+            throw new BusinessException(400, "编码筛选前缀必须是L1(3位)、L2(6位)或L3(10位)数字编码")
+                    .withHintTarget("codePrefix");
+        }
+        String normalizedKeyword = keyword == null || keyword.isBlank() ? null : keyword.trim();
+        org.springframework.data.domain.PageRequest pageable = org.springframework.data.domain.PageRequest.of(
+                pageRequest.getPage() - 1, pageRequest.getSize(), Sort.by(Sort.Direction.DESC, "createdAt"));
+        Page<RawMaterialType> page = materialTypeRepository.filterBySegmentPrefixAndKeyword(
+                factoryId, normalizedPrefix, normalizedKeyword, pageable);
+        List<RawMaterialTypeDTO> dtos = page.getContent().stream().map(this::convertToDTO).toList();
+        return PageResponse.of(dtos, pageRequest.getPage(), pageRequest.getSize(), page.getTotalElements());
     }
 
     // ==================== P11: 按物料大类分页查询 ====================
@@ -624,6 +650,17 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
 
         ImportResult<RawMaterialType> result = ImportResult.create(excelData.size());
 
+        // The legacy workbook has no L1/L2/L3 columns. Refuse every row explicitly instead
+        // of silently creating material master data outside the 16-digit contract.
+        if (!excelData.isEmpty()) {
+            for (int i = 0; i < excelData.size(); i++) {
+                result.addFailure(i + 2,
+                        "Excel导入缺少L3十位编码；请使用原料类型页面选择完整L1-L3后创建",
+                        toJsonString(excelData.get(i)));
+            }
+            return result;
+        }
+
         // 2. 逐行验证并导入
         for (int i = 0; i < excelData.size(); i++) {
             MaterialTypeExportDTO exportDTO = excelData.get(i);
@@ -671,6 +708,11 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
     @Transactional
     public int initializeDefaults(String factoryId) {
         log.info("初始化默认原材料类型: factoryId={}", factoryId);
+        if (!DEFAULT_MATERIAL_TYPES.isEmpty()) {
+            throw new BusinessException(400, "默认原料初始化已停用：默认数据未绑定L1-L2-L3编码")
+                    .withHint("请先配置物料编码树，再通过原料类型页面建档")
+                    .withSeverity("BLOCKING");
+        }
         int count = 0;
 
         for (Map<String, String> defaultMaterial : DEFAULT_MATERIAL_TYPES) {
@@ -840,29 +882,28 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
      * @return 生成的物料编码
      */
     String generateNextCode(String factoryId, String category, String segmentCode) {
-        boolean dictionaryEnabled = isSegmentDictionaryEnabled(factoryId);
-        if (dictionaryEnabled) {
-            if (segmentCode == null || !segmentCode.matches("[0-9]{10}")) {
-                throw strict16CodeException(segmentCode);
-            }
-            List<String> existing = materialTypeRepository
-                    .findCodesByFactoryIdAndSegmentPrefix(factoryId, segmentCode);
-            int maxSeq = 0;
-            for (String code : existing) {
-                if (code.length() == 16) {
-                    String seqPart = code.substring(10); // last 6 digits
-                    try {
-                        int seq = Integer.parseInt(seqPart);
-                        if (seq > maxSeq) maxSeq = seq;
-                    } catch (NumberFormatException ignored) {
-                        // skip non-numeric suffix
-                    }
+        if (segmentCode == null || !segmentCode.matches("[0-9]{10}")) {
+            throw strict16CodeException(segmentCode);
+        }
+        List<String> existing = materialTypeRepository
+                .findCodesByFactoryIdAndSegmentPrefix(factoryId, segmentCode);
+        int maxSeq = 0;
+        for (String code : existing) {
+            if (code.length() == 16) {
+                String seqPart = code.substring(10);
+                try {
+                    int seq = Integer.parseInt(seqPart);
+                    if (seq > maxSeq) maxSeq = seq;
+                } catch (NumberFormatException ignored) {
+                    // Ignore malformed historical rows; the unique constraint remains the final guard.
                 }
             }
-            return String.format("%s%06d", segmentCode, maxSeq + 1);
         }
-        // Fallback: SP4 扁平方案
-        return generateNextCode(factoryId, category);
+        if (maxSeq == 999999) {
+            throw new BusinessException(409, "该L3品类的16位编码序号已用尽")
+                    .withHintTarget("segmentCode").withSeverity("BLOCKING");
+        }
+        return String.format("%s%06d", segmentCode, maxSeq + 1);
     }
 
     private boolean isSegmentDictionaryEnabled(String factoryId) {
@@ -875,6 +916,53 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                 .withHint("请先选择L1类型、L2部位、L3品类，再点击生成16位编码")
                 .withHintTarget("segmentCode")
                 .withSeverity("BLOCKING");
+    }
+
+    private MaterialSegmentChain requireValidSegmentChain(String factoryId, String segmentCode) {
+        if (segmentCode == null || !segmentCode.matches("[0-9]{10}")) {
+            throw invalidSegment("必须选择有效的L3十位编码", segmentCode);
+        }
+        MaterialCodeSegment l3 = requireSegment(factoryId, segmentCode, (short) 3);
+        if (l3.getParentCode() == null || !segmentCode.startsWith(l3.getParentCode())) {
+            throw invalidSegment("L3父链或编码前缀无效", segmentCode);
+        }
+        MaterialCodeSegment l2 = requireSegment(factoryId, l3.getParentCode(), (short) 2);
+        if (l2.getParentCode() == null || !l2.getSegmentCode().startsWith(l2.getParentCode())
+                || !segmentCode.startsWith(l2.getSegmentCode())) {
+            throw invalidSegment("L2父链或编码前缀无效", segmentCode);
+        }
+        MaterialCodeSegment l1 = requireSegment(factoryId, l2.getParentCode(), (short) 1);
+        if (l1.getParentCode() != null || !l2.getSegmentCode().startsWith(l1.getSegmentCode())
+                || !segmentCode.startsWith(l1.getSegmentCode())) {
+            throw invalidSegment("L1父链或编码前缀无效", segmentCode);
+        }
+        return new MaterialSegmentChain(l1, l2, l3);
+    }
+
+    private MaterialCodeSegment requireSegment(String factoryId, String code, short expectedLevel) {
+        MaterialCodeSegment segment = materialCodeSegmentRepository
+                .findByFactoryIdAndSegmentCode(factoryId, code)
+                .orElseThrow(() -> invalidSegment("编码节点不存在", code));
+        int expectedLength = expectedLevel == 1 ? 3 : expectedLevel == 2 ? 6 : 10;
+        if (segment.getLevel() == null || segment.getLevel() != expectedLevel
+                || !Boolean.TRUE.equals(segment.getIsActive())
+                || segment.getSegmentCode() == null
+                || !segment.getSegmentCode().matches("[0-9]{" + expectedLength + "}")) {
+            throw invalidSegment("编码节点层级、状态或长度无效", code);
+        }
+        return segment;
+    }
+
+    private BusinessException invalidSegment(String reason, String value) {
+        return new BusinessException(400, reason + ": " + value)
+                .withHint("请选择启用且父链完整的L1、L2、L3编码")
+                .withHintTarget("segmentCode")
+                .withSeverity("BLOCKING");
+    }
+
+    private record MaterialSegmentChain(MaterialCodeSegment l1,
+                                        MaterialCodeSegment l2,
+                                        MaterialCodeSegment l3) {
     }
 
     @Override

@@ -28,6 +28,10 @@
 | AUDIT-MATERIAL-CONTRACT-20260716 | `21883e32013522f0d65bb0f4722cea4bab885151` | `/root/audit-material-agent` | 只读审计确认：16位编码/L1-L3目前只是 Web 创建页门禁，后端 DTO、AI、Excel、初始化与快速创建仍可生成无层级或旧式编码；历史数据无法仅凭名称安全推断 L2/L3，需先确认映射与迁移策略。 |
 | AUDIT-PRODUCTION-CONTRACT-20260716 | `21883e32013522f0d65bb0f4722cea4bab885151` | `/root/audit-production-agent` | 只读审计确认：核对结单仍信任前端重复提交的完整事实，原料主导多产出、报工状态筛选、投入单位与半成品扣减存在服务端合同缺口，需改为服务端锁定后按计划快照/正式报工重算。 |
 | AUDIT-CROSSMODULE-OPS-20260716 | `21883e32013522f0d65bb0f4722cea4bab885151` | `/root/audit-crossmodule-agent` | 只读审计确认：BOM RAW标准用量前后端不一致、AI旧年份仅部分修复、治理审计误报固有g/kg换算；线上GREEN健康且Metaspace/监控已生效，但生产部署落后origin/main，systemd单元文件还存在明文云凭证风险。 |
+| CROSSMODULE-VERIFY-20260716 | `9e9331607f64a22b0055fb779ab24368ab3182b4` | `/root/audit_material_contract` | 当前 main 只读复核：价格语义、BOM成本单位、BOM订单ID、AI日期/主数据匹配、供应商草稿、物料需求单快照已修；0%用免税口径合理。另确认采购/销售批量入口空明细与缺日期、UTC隐藏日期、BOM 0%回填及跨模块箱/g/kg集成证明仍需修复。前端目标测试13项通过。 |
+| SETTLE-CONTRACT-20260716 | `9e9331607f64a22b0055fb779ab24368ab3182b4` | `/root/settlement_contract_impl` | 核对结单改为服务端锁定计划后，从正式提交的逐道报工重新派生投入、终端产出和工时；正常路径只提交确认和幂等键，差异阻塞才要求补充异常原因。修正 inputUnit、草稿报工过滤、半成品定点扣减与原料主导多成品入库保护。后端35项、Web 5项及 vue-tsc 全部通过，提交 `c6ea3dd26` 已整合。 |
+| MAT16-CONTRACT-20260716 | `9e9331607f64a22b0055fb779ab24368ab3182b4` | `/root/material_contract_impl` | 原料创建和历史短码修复统一要求有效 L1-L2-L3 父链并由服务端生成16位编码；类别/primaryCode 从 L1 派生，Web/RN 支持三级筛选，AI/Excel/默认初始化不再绕过契约。F006 线上230/230条已符合，无需写入补码；其他租户缺本地编码树，未做不可靠自动匹配。后端44项含真实 JPA 启动门禁、Web 6项和 vue-tsc 通过，RN改动完成语法编译检查，提交 `aa7d42a25` 已整合。 |
+| CROSSMODULE-FIX-20260716 | `0f81b78e7` | `/root` | 采购/销售一维和二维入口因没有明细编辑器而禁用，代码层同时阻止空明细请求；普通新建和 BOM 展开保留。采购隐藏日期改用上海工厂本地日历日期，BOM 编辑保留显式0%税率。新增10箱→500件→200g/件→100000g领料链路证据。后端20项、Web 12项和 vue-tsc 全部通过，提交 `3cfd0a279`。 |
 
 ## 发布证据
 

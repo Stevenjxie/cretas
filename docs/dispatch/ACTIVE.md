@@ -8,7 +8,6 @@
 
 | ID | Base SHA | Scope 锁 | Owner | Mode | Worktree/PR | Status | Blocker | Next action |
 |---|---|---|---|---|---|---|---|---|
-| - | - | - | - | - | - | - | - | 当前无在飞任务 |
 
 ## 阻塞项
 

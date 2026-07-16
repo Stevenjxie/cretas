@@ -11,7 +11,7 @@ import com.cretas.aims.dto.ai.ProductionAIContext;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.MaterialProductConversion;
 import com.cretas.aims.entity.ProductType;
-import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ConversionRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
@@ -720,35 +720,12 @@ public class AIController {
             }
 
             // 2. 创建原材料类型
-            if (request.getMaterialTypes() != null) {
-                for (AIBusinessDataRequest.MaterialTypeData mtData : request.getMaterialTypes()) {
-                    if (rawMaterialTypeRepository.existsByFactoryIdAndCode(factoryId, mtData.getCode())) {
-                        log.info("原材料类型已存在，跳过: {}", mtData.getCode());
-                        materialTypesSkipped++;
-                        rawMaterialTypeRepository.findByFactoryIdAndCode(factoryId, mtData.getCode())
-                                .ifPresent(mt -> materialTypeCodeToId.put(mtData.getCode(), mt.getId()));
-                        continue;
-                    }
-
-                    RawMaterialType materialType = new RawMaterialType();
-                    materialType.setId(UUID.randomUUID().toString());
-                    materialType.setFactoryId(factoryId);
-                    materialType.setCode(mtData.getCode());
-                    materialType.setName(mtData.getName());
-                    materialType.setCategory(mtData.getCategory() != null ? mtData.getCategory() : "通用");
-                    materialType.setUnit(mtData.getUnit() != null ? mtData.getUnit() : "kg");
-                    materialType.setStorageType(mtData.getStorageType() != null ? mtData.getStorageType() : "frozen");
-                    materialType.setShelfLifeDays(mtData.getShelfLifeDays());
-                    materialType.setNotes(mtData.getDescription());
-                    materialType.setIsActive(true);
-                    materialType.setCreatedBy(userId);
-
-                    RawMaterialType saved = rawMaterialTypeRepository.save(materialType);
-                    createdMaterialTypeIds.add(saved.getId());
-                    materialTypeCodeToId.put(mtData.getCode(), saved.getId());
-                    materialTypesCreated++;
-                    log.info("创建原材料类型: {} - {}", mtData.getCode(), mtData.getName());
-                }
+            if (request.getMaterialTypes() != null && !request.getMaterialTypes().isEmpty()) {
+                throw new BusinessException(400,
+                        "AI批量建档暂不接受原料类型：每个原料必须先选择有效的L1、L2、L3编码分类")
+                        .withHint("请先在原料类型字典完成16位编码分类，再让AI引用已建原料")
+                        .withHintTarget("materialTypes")
+                        .withSeverity("BLOCKING");
             }
 
             // 3. 创建转换率配置

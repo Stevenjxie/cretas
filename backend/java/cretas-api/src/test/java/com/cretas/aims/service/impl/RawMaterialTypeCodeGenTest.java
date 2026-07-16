@@ -13,6 +13,7 @@ import com.cretas.aims.repository.material.MaterialCodeSegmentRepository;
 import com.cretas.aims.utils.ExcelUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -282,6 +283,7 @@ class RawMaterialTypeCodeGenTest {
     // =========================================================
 
     @Nested
+    @Disabled("legacy flat-code create path was replaced by mandatory L1-L2-L3 16-digit contract")
     @DisplayName("createMaterialType 无 code → 自动生成 + 读回有 code")
     class CreateWithAutoCode {
 

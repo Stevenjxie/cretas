@@ -55,11 +55,8 @@ const loading = ref(false);
 // 客户张权反馈 (2026-07-02): "搜不出来 filter 不了" — 搜索框绑了 searchKeyword 但后端
 // GET /{factoryId}/raw-material-types 列表接口 (list.vue 实际调用的接口) 从不接收 keyword 参数
 // (只有独立的 /raw-material-types/search 子路由支持 keyword) — 输入框敲字对结果毫无影响,
-// 是纯前端死代码。改为客户端一次性拉回全量原料类型 (字典表通常几十到几百条,
-// 远小于 FETCH_ALL_SIZE), 再按 L1-L3 编码前缀和关键字实时过滤、分页, 不依赖后端新增接口/参数,
-// 无需 Java 改动/部署)。
-const FETCH_ALL_SIZE = 2000;
-const fullData = ref<TableRow[]>([]);
+// 关键字和 L1-L3 前缀统一下推后端分页，避免只取前 2000 条后在客户端假筛选。
+const tableData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 20, total: 0 });
 const searchKeyword = ref('');
 // 16位编码前缀筛选：L1/L2/L3 分别对应编码前 3/6/10 位。
@@ -69,33 +66,6 @@ const filterSegmentL3 = ref('');
 const selectedSegmentPrefix = computed(() =>
   filterSegmentL3.value || filterSegmentL2.value || filterSegmentL1.value,
 );
-
-// 客户端组合过滤：先按16位编码层级前缀，再按名称 / 编码 / 类别关键字。
-const filteredData = computed<TableRow[]>(() => {
-  const kw = searchKeyword.value.trim().toLowerCase();
-  const prefix = selectedSegmentPrefix.value;
-  return fullData.value.filter((m) => {
-    const code = String(m.code || '');
-    if (prefix && (!/^\d{16}$/.test(code) || !code.startsWith(prefix))) return false;
-    if (!kw) return true;
-    return String(m.name || '').toLowerCase().includes(kw)
-      || code.toLowerCase().includes(kw)
-      || String(m.category || '').toLowerCase().includes(kw);
-  });
-});
-
-// 客户端分页: 对过滤后的全量结果按当前页/页大小切片展示。
-const tableData = computed<TableRow[]>(() => {
-  const start = (pagination.value.page - 1) * pagination.value.size;
-  return filteredData.value.slice(start, start + pagination.value.size);
-});
-
-// 关键字/大类变化后, 过滤结果集大小可能变化, 页码超出范围要回退, 且分页组件的 total 要跟着更新。
-watch(filteredData, (list) => {
-  pagination.value.total = list.length;
-  const maxPage = Math.max(1, Math.ceil(list.length / pagination.value.size));
-  if (pagination.value.page > maxPage) pagination.value.page = 1;
-});
 
 // 储存类型和单位仍读取系统字典；类别统一读取下方 16 位编码 L1 类族。
 interface DictItem { enumCode: string; enumLabel: string; sortOrder: number }
@@ -154,19 +124,20 @@ async function loadData() {
   if (!factoryId.value) return;
   loading.value = true;
   try {
-    // 一次性拉全量，客户端按16位编码前缀、关键字组合过滤并分页。
     const res = await get<{ content: TableRow[]; totalElements: number }>(
       `/${factoryId.value}/raw-material-types`,
       {
         params: {
-          page: 1,
-          size: FETCH_ALL_SIZE,
+          page: pagination.value.page,
+          size: pagination.value.size,
+          codePrefix: selectedSegmentPrefix.value || undefined,
+          keyword: searchKeyword.value.trim() || undefined,
         },
       },
     );
     if (res.success && res.data) {
-      fullData.value = res.data.content || [];
-      pagination.value.total = filteredData.value.length;
+      tableData.value = res.data.content || [];
+      pagination.value.total = res.data.totalElements || 0;
     }
   } catch (e) { console.error(e); }
   finally { loading.value = false; }
@@ -249,6 +220,7 @@ interface SegmentNode {
   segmentLabel: string;
   level: number;
   parentCode: string | null;
+  isActive: boolean;
   children?: SegmentNode[];
 }
 const segmentTree = ref<SegmentNode[]>([]);
@@ -278,7 +250,7 @@ async function loadSegmentTree() {
 
 // L1 options = top-level nodes
 const segmentL1Options = computed(() =>
-  segmentTree.value.filter((n) => n.level === 1),
+  segmentTree.value.filter((n) => n.level === 1 && n.isActive),
 );
 // 新建类别与列表大类共用此组选项，避免旧 MATERIAL_CATEGORY 枚举与编码类族漂移。
 const materialFamilyOptions = computed(() =>
@@ -291,13 +263,13 @@ const materialFamilyOptions = computed(() =>
 const filterSegmentL2Options = computed(() => {
   if (!filterSegmentL1.value) return [];
   const l1Node = segmentTree.value.find((node) => node.segmentCode === filterSegmentL1.value);
-  return l1Node?.children?.filter((node) => node.level === 2) ?? [];
+  return l1Node?.children?.filter((node) => node.level === 2 && node.isActive) ?? [];
 });
 const filterSegmentL3Options = computed(() => {
   if (!filterSegmentL2.value) return [];
   for (const l1Node of segmentTree.value) {
     const l2Node = l1Node.children?.find((node) => node.segmentCode === filterSegmentL2.value);
-    if (l2Node) return l2Node.children?.filter((node) => node.level === 3) ?? [];
+    if (l2Node) return l2Node.children?.filter((node) => node.level === 3 && node.isActive) ?? [];
   }
   return [];
 });
@@ -306,13 +278,16 @@ watch(filterSegmentL1, () => {
   filterSegmentL2.value = '';
   filterSegmentL3.value = '';
   pagination.value.page = 1;
+  loadData();
 });
 watch(filterSegmentL2, () => {
   filterSegmentL3.value = '';
   pagination.value.page = 1;
+  loadData();
 });
 watch(filterSegmentL3, () => {
   pagination.value.page = 1;
+  loadData();
 });
 
 function resolveMaterialFamily(category: string | null | undefined): string | null {
@@ -357,14 +332,14 @@ function syncMaterialFamilyFromSegment(segmentCode: string) {
 const segmentL2Options = computed(() => {
   if (!segmentL1.value) return [];
   const l1Node = segmentTree.value.find((n) => n.segmentCode === segmentL1.value);
-  return l1Node?.children?.filter((c) => c.level === 2) ?? [];
+  return l1Node?.children?.filter((c) => c.level === 2 && c.isActive) ?? [];
 });
 // L3 options = children of selected L2
 const segmentL3Options = computed(() => {
   if (!segmentL2.value) return [];
   for (const l1 of segmentTree.value) {
     const l2Node = l1.children?.find((c) => c.segmentCode === segmentL2.value);
-    if (l2Node) return l2Node.children?.filter((c) => c.level === 3) ?? [];
+    if (l2Node) return l2Node.children?.filter((c) => c.level === 3 && c.isActive) ?? [];
   }
   return [];
 });
@@ -674,6 +649,10 @@ const packagingL3Preview = computed(() => {
 });
 
 const submitting = ref(false);
+const editingNeedsSegmentRepair = computed(() =>
+  Boolean(editingId.value) && !/^\d{16}$/.test(String(form.value.code || '')),
+);
+const showSegmentEditor = computed(() => !editingId.value || editingNeedsSegmentRepair.value);
 async function handleSave() {
   if (!form.value.name) return ElMessage.warning('请填写原料名称');
   if (!form.value.category) return ElMessage.warning('请选择类别');
@@ -690,7 +669,7 @@ async function handleSave() {
   } else if (!editingId.value) {
     return ElMessage.warning('新建物料必须配置含税单价，请联系有价格权限的人员创建');
   }
-  if (!editingId.value && (!segmentL1.value || !segmentL2.value || !segmentL3.value)) {
+  if (showSegmentEditor.value && (!segmentL1.value || !segmentL2.value || !segmentL3.value)) {
     return ElMessage.error('每个原料类型都必须选择 L1类型、L2部位、L3品类后保存');
   }
 
@@ -707,7 +686,11 @@ async function handleSave() {
   try {
     let materialId: string;
     if (editingId.value) {
-      const res = await put(`/${factoryId.value}/raw-material-types/${editingId.value}`, form.value);
+      const { code, ...editableFields } = form.value;
+      const res = await put(`/${factoryId.value}/raw-material-types/${editingId.value}`, {
+        ...editableFields,
+        segmentCode: editingNeedsSegmentRepair.value ? segmentL3.value : undefined,
+      });
       if (!res.success) throw new Error(res.message || '更新失败');
       materialId = editingId.value;
       ElMessage.success('更新成功');
@@ -803,8 +786,8 @@ watch(searchKeyword, () => {
 });
 
 function handleSearch() {
-  // 层级和关键字都已在 filteredData 中实时生效。
   pagination.value.page = 1;
+  loadData();
 }
 function handleRefresh() {
   searchKeyword.value = '';
@@ -815,12 +798,13 @@ function handleRefresh() {
   loadData();
 }
 function handlePageChange(page: number) {
-  // 客户端分页: fullData 已一次性拉全量, 翻页只是切片, 不需要再打后端。
   pagination.value.page = page;
+  loadData();
 }
 function handleSizeChange(size: number) {
   pagination.value.size = size;
   pagination.value.page = 1;
+  loadData();
 }
 </script>
 
@@ -1132,10 +1116,10 @@ function handleSizeChange(size: number) {
         <!-- SP8: 16位编码级联 (创建模式下显示, 编辑模式只读) -->
         <!-- SP8 兜底 (Tier0 #15 minimal): 字典未配置时隐藏级联入口防 dead-end (fool-proof Rule 5).
              generate-code 端点 P1 上线; 当前 tree 为空时显示诚实空态而非空下拉组合. -->
-        <el-divider v-if="!editingId">
+        <el-divider v-if="showSegmentEditor">
           <span class="divider-title">16位编码级联（必填）</span>
         </el-divider>
-        <template v-if="!editingId">
+        <template v-if="showSegmentEditor">
           <!-- 字典已配置: 展示完整级联 -->
           <template v-if="segmentL1Options.length > 0 || segmentLoading">
             <el-form-item label="L1 类型" required>

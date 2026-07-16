@@ -70,6 +70,7 @@ public class MaterialCodeSegmentServiceImpl implements MaterialCodeSegmentServic
     @Override
     @Transactional
     public MaterialCodeSegmentDTO create(String factoryId, CreateMaterialCodeSegmentRequest req) {
+        validateHierarchy(factoryId, req.getLevel(), req.getSegmentCode(), req.getParentCode());
         // Validate segment_code uniqueness
         if (repo.existsByFactoryIdAndSegmentCode(factoryId, req.getSegmentCode())) {
             throw new BusinessException(409, "编码段 " + req.getSegmentCode() + " 在该工厂已存在")
@@ -112,6 +113,10 @@ public class MaterialCodeSegmentServiceImpl implements MaterialCodeSegmentServic
         if (!factoryId.equals(entity.getFactoryId())) {
             throw new BusinessException(403, "无权限操作此编码段");
         }
+        short effectiveLevel = entity.getLevel();
+        String effectiveCode = req.getSegmentCode() != null ? req.getSegmentCode() : entity.getSegmentCode();
+        String effectiveParent = req.getParentCode() != null ? req.getParentCode() : entity.getParentCode();
+        validateHierarchy(factoryId, effectiveLevel, effectiveCode, effectiveParent);
 
         // If segmentCode changes, check new code uniqueness
         if (req.getSegmentCode() != null && !req.getSegmentCode().equals(entity.getSegmentCode())) {
@@ -207,5 +212,31 @@ public class MaterialCodeSegmentServiceImpl implements MaterialCodeSegmentServic
                 .sortOrder(e.getSortOrder())
                 .isActive(e.getIsActive())
                 .build();
+    }
+
+    private void validateHierarchy(String factoryId, short level, String code, String parentCode) {
+        int expectedLength = level == 1 ? 3 : level == 2 ? 6 : level == 3 ? 10 : -1;
+        if (expectedLength < 0 || code == null || !code.matches("[0-9]{" + expectedLength + "}")) {
+            throw new BusinessException(400, "分段编码层级与长度不匹配")
+                    .withHintTarget("segmentCode");
+        }
+        if (level == 1) {
+            if (parentCode != null && !parentCode.isBlank()) {
+                throw new BusinessException(400, "L1节点不能配置父编码").withHintTarget("parentCode");
+            }
+            return;
+        }
+        if (parentCode == null || parentCode.isBlank()) {
+            throw new BusinessException(400, "L2/L3节点必须选择直属父编码")
+                    .withHintTarget("parentCode");
+        }
+        MaterialCodeSegment parent = repo.findByFactoryIdAndSegmentCode(factoryId, parentCode)
+                .orElseThrow(() -> new ResourceNotFoundException("父级编码 " + parentCode + " 不存在"));
+        if (parent.getLevel() == null || parent.getLevel() != level - 1
+                || !Boolean.TRUE.equals(parent.getIsActive()) || !code.startsWith(parentCode)) {
+            throw new BusinessException(400, "父节点层级、状态或编码前缀无效")
+                    .withHint("请选择启用的直属父节点")
+                    .withHintTarget("parentCode");
+        }
     }
 }
