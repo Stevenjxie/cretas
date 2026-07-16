@@ -8,7 +8,7 @@
 
 | ID | Base SHA | Scope 锁 | Owner | Mode | Worktree/PR | Status | Blocker | Next action |
 |---|---|---|---|---|---|---|---|---|
-| PUR-SUGG-PACK-20260716 | 010c2f8e95f82898d743beb70dab733444307978 | `backend/java/cretas-api` 销售订单采购建议计算与目标测试；`docs/dispatch/ACTIVE.md` | Codex `/root` | code | `C:\Users\Steve\cretas-purchase-suggestion-packaging` / 待建 PR | review | 无 | 目标测试 27/27 通过，提交并发起 PR |
+| - | - | - | - | - | - | - | - | 当前无在飞任务 |
 
 ## 阻塞项
 

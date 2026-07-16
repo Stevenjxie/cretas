@@ -40,6 +40,7 @@
 | ID | Base SHA | Owner | Result |
 |---|---|---|---|
 | OPS-ACTIONS-LOCAL-FIRST-20260716 | `010c2f8e95f82898d743beb70dab733444307978` | `/root` | 7 个 GitHub Actions workflow 全部取消 `push`、`pull_request`、`schedule` 自动触发，仅保留手动入口；手动 CI 默认执行 Java/Python/Vue/RN 独立全量审计，Java 制品仍需显式选择。目标 shell 契约测试、YAML 解析与 diff check 通过；未部署、未修改生产数据。 |
+| PUR-SUGG-PACK-20260716 | `010c2f8e95f82898d743beb70dab733444307978` | `/root` | 销售订单采购建议复用以销定产包装换算器，10箱×50盒/箱×200g/盒由错误的2000g修正为100000g；单SO与多SO共享生效，目标测试27/27通过；[PR #1388](https://github.com/Stevenjxie/cretas/pull/1388) 合并为 `aeee16dc830404edf4f7c0bb1b7f328de1193a0c`。 |
 
 ## 发布证据
 
