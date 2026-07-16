@@ -9,6 +9,7 @@ WAIT_FOR_HEALTH="$ROOT_DIR/tests/v1-e2e/scripts/wait-for-health.sh"
 AGENTS_FILE="$ROOT_DIR/AGENTS.md"
 DEPLOY_SKILL="$ROOT_DIR/.agents/skills/deploy-backend/SKILL.md"
 L1_SMOKE="$ROOT_DIR/tests/v1-e2e/web/l1-smoke.spec.ts"
+RELEASE_PREFLIGHT="$ROOT_DIR/scripts/deploy/release-preflight.sh"
 
 assert_contains() {
     local file=$1
@@ -26,6 +27,15 @@ line_number() {
 }
 
 assert_contains "$CI_WORKFLOW" "cancel-in-progress: \${{ github.event_name == 'pull_request' }}"
+
+package_line=$(line_number "$CI_WORKFLOW" 'name: Package exact-commit deploy artifact')
+artifact_upload_line=$(line_number "$CI_WORKFLOW" 'name: Upload exact-commit deploy artifact')
+full_verify_line=$(line_number "$CI_WORKFLOW" 'name: Maven compile and test')
+if ! (( package_line < artifact_upload_line && artifact_upload_line < full_verify_line )); then
+    echo "FAIL: exact-main JAR must upload before the long full Maven verify" >&2
+    exit 1
+fi
+assert_contains "$CI_WORKFLOW" 'run: mvn -B package -Dmaven.test.skip=true -pl .'
 
 backend_line=$(line_number "$E2E_WORKFLOW" 'name: Start Java backend (background)')
 web_deps_line=$(line_number "$E2E_WORKFLOW" 'name: Install web-admin deps')
@@ -45,6 +55,9 @@ assert_contains "$DEPLOY_SKILL" 'feature-head == <pr-head>'
 assert_contains "$DEPLOY_SKILL" 'git merge-base --is-ancestor <merge-commit> origin/main'
 assert_contains "$DEPLOY_SKILL" 'git diff --quiet "$feature-head" <merge-commit>'
 assert_contains "$DEPLOY_SKILL" 'git switch --detach origin/main'
+assert_contains "$DEPLOY_SKILL" './scripts/deploy/release-preflight.sh'
+assert_contains "$DEPLOY_SKILL" 'do not wait or poll for CI artifact creation'
+assert_contains "$RELEASE_PREFLIGHT" 'Fast, read-only release gates.'
 assert_contains "$L1_SMOKE" '/\b401\b|Unauthorized|500 Internal|NoResourceFoundException/i'
 
 # A dead backend must fail immediately instead of consuming the full timeout.

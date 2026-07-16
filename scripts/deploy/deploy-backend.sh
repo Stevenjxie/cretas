@@ -178,6 +178,7 @@ while [[ $# -gt 0 ]]; do
             echo "环境变量:"
             echo "  SKIP_RSYNC=1              临时禁用 rsync 走 scp 兜底 (~/.bashrc 已不再默认设置)"
             echo "  SKIP_BUILD=1              跳过本地 Maven 打包 (使用 target/ 已有 jar)"
+            echo "  DISABLE_CI_ARTIFACT_REUSE=1  禁用 exact-commit CI JAR 复用，直接本地构建"
             echo "  ENABLE_R2=1               紧急 rollback: 启用 R2 通道 (scp 全失败时)"
             echo "  R2_ACCESS_KEY_ID/SECRET   R2 凭证 (配合 ENABLE_R2=1 使用)"
             echo ""
@@ -349,30 +350,60 @@ deploy_jar() {
     # and SHA-256 all match the exact local commit. Any lookup/validation failure
     # is deliberately non-fatal: the normal clean Maven build remains the safe fallback.
     reuse_exact_ci_artifact() {
-        local HEAD_SHA ARTIFACT_NAME DOWNLOAD_URL TMP_DIR ARTIFACT_JAR ARTIFACT_DIR
-        HEAD_SHA=$(git rev-parse HEAD 2>/dev/null) || return 1
-        ARTIFACT_NAME="cretas-java-$HEAD_SHA"
+        local HEAD_SHA ORIGIN_MAIN_SHA ARTIFACT_NAME DOWNLOAD_URL TMP_DIR
+        local ARTIFACT_JAR ARTIFACT_DIR COMMIT_FILE SHA_FILE EXPECTED_SHA ACTUAL_SHA
 
-        [ "$HAS_GH" = "true" ] || return 1
-        DOWNLOAD_URL=$(GH_HTTP_TIMEOUT=15 gh api \
-            "repos/$REPO/actions/artifacts?name=$ARTIFACT_NAME&per_page=10" \
-            --jq ".artifacts[] | select(.expired == false and .workflow_run.head_branch == \"main\" and .workflow_run.head_sha == \"$HEAD_SHA\") | .archive_download_url" \
-            2>/dev/null | head -1) || return 1
-        [ -n "$DOWNLOAD_URL" ] || return 1
+        [ "${DISABLE_CI_ARTIFACT_REUSE:-0}" != "1" ] || return 1
+        HEAD_SHA=$(git rev-parse HEAD 2>/dev/null) || return 1
+        ORIGIN_MAIN_SHA=$(git rev-parse origin/main 2>/dev/null) || return 1
+        [ "$HEAD_SHA" = "$ORIGIN_MAIN_SHA" ] || return 1
+        ARTIFACT_NAME="cretas-java-$HEAD_SHA"
 
         TMP_DIR="$UPLOAD_STATUS_DIR/ci-artifact"
         rm -rf "$TMP_DIR"
         mkdir -p "$TMP_DIR" || return 1
-        if ! GH_HTTP_TIMEOUT=30 gh api "$DOWNLOAD_URL" > "$TMP_DIR/artifact.zip" 2>/dev/null \
-            || ! unzip -q "$TMP_DIR/artifact.zip" -d "$TMP_DIR/extracted"; then
-            rm -rf "$TMP_DIR"
-            return 1
+
+        # Test-only injection avoids GitHub/network access while exercising the
+        # same commit and checksum validation. Production leaves this unset.
+        if [ -n "${CI_ARTIFACT_TEST_DIR:-}" ]; then
+            [ -d "$CI_ARTIFACT_TEST_DIR" ] \
+                && mkdir -p "$TMP_DIR/extracted" \
+                && cp -R "$CI_ARTIFACT_TEST_DIR"/. "$TMP_DIR/extracted"/ \
+                || { rm -rf "$TMP_DIR"; return 1; }
+        else
+            [ "$HAS_GH" = "true" ] || { rm -rf "$TMP_DIR"; return 1; }
+            DOWNLOAD_URL=$(GH_HTTP_TIMEOUT=15 gh api \
+                "repos/$REPO/actions/artifacts?name=$ARTIFACT_NAME&per_page=10" \
+                --jq ".artifacts[] | select(.name == \"$ARTIFACT_NAME\" and .expired == false and .workflow_run.head_branch == \"main\" and .workflow_run.head_sha == \"$HEAD_SHA\") | .archive_download_url" \
+                2>/dev/null | head -1) || { rm -rf "$TMP_DIR"; return 1; }
+            [ -n "$DOWNLOAD_URL" ] || { rm -rf "$TMP_DIR"; return 1; }
+            if ! GH_HTTP_TIMEOUT=30 gh api "$DOWNLOAD_URL" > "$TMP_DIR/artifact.zip" 2>/dev/null \
+                || ! unzip -q "$TMP_DIR/artifact.zip" -d "$TMP_DIR/extracted"; then
+                rm -rf "$TMP_DIR"
+                return 1
+            fi
         fi
 
         ARTIFACT_JAR=$(find "$TMP_DIR/extracted" -type f -name "$JAR_NAME" -print -quit)
         [ -n "$ARTIFACT_JAR" ] || { rm -rf "$TMP_DIR"; return 1; }
         ARTIFACT_DIR=$(dirname "$ARTIFACT_JAR")
-        if [ "$(tr -d '\r\n' < "$ARTIFACT_DIR/$JAR_NAME.commit" 2>/dev/null)" != "$HEAD_SHA" ] \
+        COMMIT_FILE="$ARTIFACT_DIR/$JAR_NAME.commit"
+        SHA_FILE="$ARTIFACT_DIR/$JAR_NAME.sha256"
+        if [ ! -f "$COMMIT_FILE" ] || [ ! -f "$SHA_FILE" ]; then
+            rm -rf "$TMP_DIR"
+            return 1
+        fi
+        EXPECTED_SHA=$(awk -v jar="$JAR_NAME" '
+            NF >= 2 {
+                file = $2
+                sub(/^\*/, "", file)
+                if (file == jar) { print tolower($1); exit }
+            }
+        ' "$SHA_FILE" 2>/dev/null)
+        ACTUAL_SHA=$(sha256sum "$ARTIFACT_JAR" 2>/dev/null | awk '{print tolower($1)}')
+        if [ "$(tr -d '\r\n' < "$COMMIT_FILE" 2>/dev/null)" != "$HEAD_SHA" ] \
+            || ! [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{64}$ ]] \
+            || [ "$EXPECTED_SHA" != "$ACTUAL_SHA" ] \
             || ! (cd "$ARTIFACT_DIR" && sha256sum -c "$JAR_NAME.sha256" >/dev/null 2>&1); then
             rm -rf "$TMP_DIR"
             return 1
@@ -381,7 +412,7 @@ deploy_jar() {
         mkdir -p "backend/java/cretas-api/target"
         cp "$ARTIFACT_JAR" "backend/java/cretas-api/target/$JAR_NAME"
         rm -rf "$TMP_DIR"
-        echo "   ✓ 复用 CI 已验证 JAR: $ARTIFACT_NAME (commit + SHA-256 已核验)"
+        echo "   ✓ 复用 CI 构建 JAR: $ARTIFACT_NAME (commit + SHA-256 已核验)"
         return 0
     }
 
@@ -537,10 +568,14 @@ deploy_jar() {
     echo ""
     CI_ARTIFACT_REUSED=false
     if [ -z "$SKIP_BUILD" ] && [ -z "$SKIP_CLEAN" ]; then
-        echo "📦 [1/4] 查找当前 commit 的 CI 已验证 JAR..."
-        if reuse_exact_ci_artifact; then
-            CI_ARTIFACT_REUSED=true
+        if [ "${DISABLE_CI_ARTIFACT_REUSE:-0}" = "1" ]; then
+            echo "📦 [1/4] CI JAR 复用已禁用，直接本地 clean package"
         else
+            echo "📦 [1/4] 查找当前 origin/main commit 的 CI 构建 JAR (单次查询，不等待 CI)..."
+        fi
+        if [ "${DISABLE_CI_ARTIFACT_REUSE:-0}" != "1" ] && reuse_exact_ci_artifact; then
+            CI_ARTIFACT_REUSED=true
+        elif [ "${DISABLE_CI_ARTIFACT_REUSE:-0}" != "1" ]; then
             echo "   ℹ️  无可用的精确 SHA CI 制品，回退本地 clean package"
         fi
     fi
