@@ -23,6 +23,14 @@ export interface LaborSegment {
   workerCount: number;
 }
 
+/** 副产物明细；单位由报工端口/现有副产规则固定，前端只读展示。 */
+export interface ProcessSheetByproduct {
+  name: string;
+  quantity: number;
+  unit: string;
+  unitPrice?: number;
+}
+
 /** 原料领料项 (mirrors ProcessSheetRowRequest.RawInput) */
 export interface RawInput {
   materialBatchId: string;
@@ -41,7 +49,8 @@ export interface RawInput {
 export interface MaterialInputTotal {
   materialTypeId: string;
   quantity: number;
-  unit: 'kg';
+  /** 来自 Workflow 投入端口的固定报工单位。旧接口仍兼容 kg。 */
+  unit: string;
   workflowPortId?: string;
   materialNodeId?: string;
 }
@@ -92,6 +101,12 @@ export interface OutputLine {
   materialNodeId?: string;
   /** 可选成品重(kg): 多数多产出场景留空按 quantity 入库。 */
   productWeight?: number;
+  /** 逐产出工时时段；旧后端未返回时前端回落顶层 laborSegments。 */
+  laborSegments?: LaborSegment[];
+  /** 逐产出副产；旧后端未返回时前端回落顶层 byproducts。 */
+  byproducts?: ProcessSheetByproduct[];
+  /** 无法按统一质量或同单位自动分摊时，由操作员填写的成本分摊比例（百分比）。 */
+  costAllocationRatio?: number;
 }
 
 /**
@@ -136,7 +151,7 @@ export interface ProcessSheetRowRequest {
   /** 可选防双击 key (同 clientRowId 在同一 saveRow 内使用) */
   idempotencyKey?: string;
   /** SP-G G3a: 副产品列表 (气调: 料头等) */
-  byproducts?: Array<{ name: string; quantity: number; unit: string; unitPrice?: number }>;
+  byproducts?: ProcessSheetByproduct[];
   /** SP-G G3a: 留样数量 (气调: 留样盒数) */
   sampleRetainQuantity?: number;
   /** SP-G G3a: 包装明细 (来自产品-工序配置, 气调不在此录) */
@@ -161,6 +176,8 @@ export interface ProcessSheetRowRequest {
   workflowPortId?: string;
   /** 2B.2 本行产出对应的 workflow 产出物料 Cell (节点) id。 */
   materialNodeId?: string;
+  /** 多产出拆行持久化后的成本分摊比例；用于 GET rows 回显。 */
+  costAllocationRatio?: number;
   /**
    * G2: 本工序自定义字段值 (如 {baume: 12.5, remark: "..."})。key 集合受该工序
    * WorkProcess.customFieldSchema 约束 —— 未配置 schema 的工序传任何 key 都会被后端 400 拒绝
@@ -247,6 +264,8 @@ export interface ProcessSheetInventorySourceBreakdown {
 
 export interface ProcessSheetInventoryItem {
   batchNumber: string;
+  /** 所属半成品 SKU；新后端用于 Workflow 投入端口过滤，旧快照可能为空。 */
+  productTypeId?: string | null;
   produced: number;
   used: number;
   remaining: number;

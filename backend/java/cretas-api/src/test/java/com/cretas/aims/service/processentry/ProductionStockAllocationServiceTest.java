@@ -87,6 +87,27 @@ class ProductionStockAllocationServiceTest {
     }
 
     @Test
+    void convertsWorkflowGramReportingQuantityToCanonicalKgAllocation() {
+        ProcessSheetRowRequest.MaterialInputTotal input = total("RAW-1", "2000");
+        input.setUnit("g");
+        MaterialBatch stock = batch("B1", "RAW-1", "WKS-1", "5", LocalDate.of(2026, 7, 20));
+
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
+                "F006", "RAW-1", "WKS-1"))
+                .thenReturn(List.of(stock));
+        when(allocationRepository.sumPendingQuantityByMaterialBatchId("F006", "B1"))
+                .thenReturn(BigDecimal.ZERO);
+
+        assertThat(service.plan("F006", List.of(input)))
+                .singleElement()
+                .satisfies(allocation -> {
+                    assertThat(allocation.quantity()).isEqualByComparingTo("2");
+                    assertThat(allocation.unit()).isEqualTo("kg");
+                });
+    }
+
+    @Test
     void rejectsFormalSubmissionWithStructuredShortageAndExactOperatorMessage() {
         ProcessSheetRowRequest.MaterialInputTotal input = total("RAW-1", "10");
         MaterialBatch only = batch("B1", "RAW-1", "WKS-1", "7", LocalDate.of(2026, 7, 20));

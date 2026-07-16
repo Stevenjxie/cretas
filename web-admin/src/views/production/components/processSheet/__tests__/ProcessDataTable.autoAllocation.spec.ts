@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import ElementPlus from 'element-plus';
+import { ElMessageBox } from 'element-plus';
 import { ApiError } from '@/types/api';
 
 const saveDraftRow = vi.fn();
@@ -68,6 +69,7 @@ describe('ProcessDataTable production-store automatic allocation', () => {
     submitRow.mockReset();
     saveDraftRow.mockResolvedValue({ success: true, data: { submissionStatus: 'DRAFT', materialized: false } });
     submitRow.mockResolvedValue({ success: true, data: { submissionStatus: 'SUBMITTED', materialized: true, batchNumber: 'WIP-1' } });
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
   });
 
   it('asks for material totals without a source batch and exposes separate draft and submit actions', async () => {
@@ -77,7 +79,7 @@ describe('ProcessDataTable production-store automatic allocation', () => {
 
     expect(wrapper.find('[data-testid="material-input-total"]').exists()).toBe(true);
     expect(wrapper.text()).toContain('牛肉');
-    expect(wrapper.text()).toContain('投料总量(kg)');
+    expect(wrapper.text()).toContain('投料总量');
     expect(wrapper.find('[data-testid="legacy-raw-batch-picker"]').exists()).toBe(false);
     expect(wrapper.text()).toContain('保存草稿');
     expect(wrapper.text()).toContain('正式报工');
@@ -89,8 +91,9 @@ describe('ProcessDataTable production-store automatic allocation', () => {
     await addRow(wrapper);
 
     wrapper.find('[data-testid="material-input-total"]').findComponent({ name: 'ElInputNumber' }).vm.$emit('update:model-value', 10);
-    const outputField = wrapper.findAll('.sp-card-field').find((item) => item.text().includes('产出'))!;
-    outputField.findComponent({ name: 'ElInputNumber' }).vm.$emit('update:model-value', 8);
+    wrapper.find('[data-testid="output-quantity"]')
+      .findComponent({ name: 'ElInputNumber' })
+      .vm.$emit('update:model-value', 8);
     await flushPromises();
 
     await wrapper.findAll('button').find((item) => item.text().includes('保存草稿'))!.trigger('click');
@@ -116,8 +119,9 @@ describe('ProcessDataTable production-store automatic allocation', () => {
     await flushPromises();
     await addRow(wrapper);
     wrapper.find('[data-testid="material-input-total"]').findComponent({ name: 'ElInputNumber' }).vm.$emit('update:model-value', 10);
-    const outputField = wrapper.findAll('.sp-card-field').find((item) => item.text().includes('产出'))!;
-    outputField.findComponent({ name: 'ElInputNumber' }).vm.$emit('update:model-value', 8);
+    wrapper.find('[data-testid="output-quantity"]')
+      .findComponent({ name: 'ElInputNumber' })
+      .vm.$emit('update:model-value', 8);
     await flushPromises();
 
     await wrapper.findAll('button').find((item) => item.text().includes('正式报工'))!.trigger('click');

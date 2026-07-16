@@ -118,6 +118,20 @@ public class ProcessSheetRowRequest {
      */
     private List<OutputLine> outputs;
 
+    /** 多产出合成行的投入批次血缘快照；只用于审计，不参与再次扣减。 */
+    private List<RawInput> inputLineageRawMaterialInputs;
+    /** 多产出合成行的上游批次血缘快照；只用于审计，不参与再次扣减。 */
+    private List<UpstreamRef> inputLineageUpstreamSources;
+
+    /** 多产出合成行的成本分摊比例（百分比）；由后端计算并覆盖客户端值。 */
+    private BigDecimal costAllocationRatio;
+    /** 多产出合成行的已分摊总成本；由后端计算，成本未知时为 null。 */
+    private BigDecimal allocatedCost;
+    /** QUANTITY / MASS / EXPLICIT_RATIO；由后端记录用于审计。 */
+    private String costAllocationBasis;
+    /** 人时合计（Σ 时长×人数）；由后端按 laborSegments 计算。 */
+    private BigDecimal totalLaborHours;
+
     /**
      * 2B.2 内部标记 (合成产出行专用, FE 不传): true 表示本行是多产出分解出的产出行。
      * 用途: 删除/重存按 {@link #multiOutputBaseRowId} 整组级联 (防单行删除留幻库存)。
@@ -184,6 +198,15 @@ public class ProcessSheetRowRequest {
         private BigDecimal productWeight;
         /** Retained samples for this output SKU; inventory equals quantity minus this value. */
         private Integer sampleRetainQuantity;
+        /** 该产出自己的工时时段；为空时仅首产出兼容继承顶层 laborSegments。 */
+        private List<LaborSegment> laborSegments;
+        /** 该产出自己的副产及回收单价；为空时仅首产出兼容继承顶层 byproducts。 */
+        private List<ProcessChainEntryRequest.Byproduct> byproducts;
+        /**
+         * 混合计量维度时的显式成本分摊比例（百分比）。同单位或可换算质量单位时可不传，
+         * 后端按数量/质量自动计算；一旦任一产出传入，则所有产出都必须传且合计 100。
+         */
+        private BigDecimal costAllocationRatio;
     }
 
     /** 混锅上游引用: 上游 WIP 的持久化 batchNumber + 投料量 (kg)。 */

@@ -586,9 +586,42 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         // SP-D Fix 1a: 区分 CLERK_WIP 与 REGULAR 批次
         // CLK-W- 前缀 = isFinished=false 中间批次, 不计入仪表盘; CLK-B- 前缀 = 成品批次.
         batch.setBatchType(ctx.isFinished() ? "REGULAR" : "CLERK_WIP");
+        applyProductionWindow(batch, steps);
         batch.setCreatedAt(LocalDateTime.now());
 
         return batchRepo.save(batch);
+    }
+
+    /** 把逐产出工时时段投影到批次起止时间；跨午夜的结束时间自动顺延一天。 */
+    private void applyProductionWindow(ProductionBatch batch, List<StepEntry> steps) {
+        if (steps == null || steps.isEmpty()) return;
+        StepEntry step = steps.stream()
+                .filter(candidate -> candidate.getLaborSegments() != null
+                        && !candidate.getLaborSegments().isEmpty())
+                .reduce((left, right) -> right)
+                .orElse(null);
+        if (step == null) return;
+        LocalDate date = step.getProcessDate() != null ? step.getProcessDate() : LocalDate.now();
+        LocalDateTime earliest = null;
+        LocalDateTime latest = null;
+        for (LaborSegment segment : step.getLaborSegments()) {
+            try {
+                java.time.LocalTime startTime = java.time.LocalTime.parse(segment.getStartTime().trim());
+                java.time.LocalTime endTime = java.time.LocalTime.parse(segment.getEndTime().trim());
+                LocalDateTime start = date.atTime(startTime);
+                LocalDateTime end = date.atTime(endTime);
+                if (end.isBefore(start)) end = end.plusDays(1);
+                if (earliest == null || start.isBefore(earliest)) earliest = start;
+                if (latest == null || end.isAfter(latest)) latest = end;
+            } catch (Exception e) {
+                throw new BusinessException(400, "工时时间格式无效，无法保存批次起止时间")
+                        .withCode("PROCESS_SHEET_OUTPUT_LABOR_TIME_INVALID")
+                        .withHint("请使用 HH:mm 格式")
+                        .withSeverity("BLOCKING");
+            }
+        }
+        batch.setStartTime(earliest);
+        batch.setEndTime(latest);
     }
 
     private BigDecimal firstPositiveInput(List<StepEntry> steps) {

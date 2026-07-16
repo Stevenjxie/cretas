@@ -28,6 +28,9 @@ public class ProcessSheetInventoryItem {
     /** WIP 批次号 (batchNumber / intermediateBatchNo) */
     private String batchNumber;
 
+    /** 该库存产出的真实产品类型 ID；普通 getInventory 路径回传，yield-card 兼容为空。 */
+    private String productTypeId;
+
     /**
      * ② 批次下拉补品名: 产品类型名称 (从 row payload 的 productTypeId 反查; getInventory 填充,
      * getInventoryYieldCard 兼容留 null)。前端投料下拉标签用 {@code 品名 | 批号 | ...}。

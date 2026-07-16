@@ -58,7 +58,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
         for (ProcessSheetRowRequest.MaterialInputTotal input : materialInputTotals) {
             validateInput(input);
             String materialTypeId = input.getMaterialTypeId().trim();
-            BigDecimal required = input.getQuantity();
+            BigDecimal required = reportingQuantityToKg(input.getQuantity(), input.getUnit());
             List<MaterialBatch> batches = batchesByMaterial.computeIfAbsent(
                     materialTypeId,
                     key -> materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
@@ -316,16 +316,30 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                     .withCode("PRODUCTION_INPUT_QUANTITY_INVALID")
                     .withHintTarget("投料量");
         }
-        if (!KG.equalsIgnoreCase(normalizeUnit(input.getUnit()))) {
-            throw new BusinessException(400, "生产投料总量单位必须为 kg")
+        if (!isMassStorageUnit(normalizeUnit(input.getUnit()))) {
+            throw new BusinessException(400, "生产投料总量单位必须为可换算的质量单位")
                     .withCode("PRODUCTION_INPUT_UNIT_INVALID")
-                    .withHint("请将投料量换算为 kg 后再提交")
+                    .withHint("当前支持 g/kg（含克、千克、公斤），单位由 Workflow 投入端口固定")
                     .withHintTarget("投料单位");
         }
     }
 
     private String normalizeUnit(String unit) {
         return unit == null || unit.isBlank() ? KG : unit.trim();
+    }
+
+    private BigDecimal reportingQuantityToKg(BigDecimal quantity, String reportingUnit) {
+        String normalized = normalizeUnit(reportingUnit).toLowerCase(java.util.Locale.ROOT);
+        if ("g".equals(normalized) || "克".equals(normalized)) {
+            return quantity.movePointLeft(3);
+        }
+        if ("kg".equals(normalized) || "千克".equals(normalized) || "公斤".equals(normalized)) {
+            return quantity;
+        }
+        throw new BusinessException(400, "投料单位“" + reportingUnit + "”不能换算为 kg")
+                .withCode("PRODUCTION_INPUT_UNIT_INVALID")
+                .withHint("当前仅支持 g/kg 质量换算")
+                .withSeverity("BLOCKING");
     }
 
     private boolean isMassStorageUnit(String unit) {

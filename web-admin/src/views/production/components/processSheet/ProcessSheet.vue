@@ -486,6 +486,13 @@ async function onRowSaved(savedProc: ProcEntry) {
   for (const p of PROCESSES.value) {
     dataTableRefs.value[procKey(p)]?.refreshSharedInventories?.();
   }
+  // 重新读取后端已存行，工序 tab 状态和下游提交门禁只认真实 submissionStatus。
+  try {
+    const rowsResp = await getRows(props.factoryId, props.planId, savedProc.code, savedProc.order);
+    initialRowsMap.value[procKey(savedProc)] = Array.isArray(rowsResp.data) ? rowsResp.data : [];
+  } catch {
+    // 保存本身已成功；状态刷新失败不伪造“已报工”，保留上次服务端状态供用户重试刷新。
+  }
   // F006 双出成率总览: 保存后刷新全工序汇总卡 (出成率随录入更新)
   yieldCardRef.value?.refresh?.();
 }
@@ -504,6 +511,27 @@ function upstreamItems(proc: ProcEntry): ProcessSheetInventoryItem[] {
 function upstreamLabelOf(proc: ProcEntry): string | undefined {
   const idx = PROCESSES.value.findIndex((p) => procKey(p) === procKey(proc));
   return idx > 0 ? PROCESSES.value[idx - 1].label : undefined;
+}
+
+function hasSubmittedRow(proc: ProcEntry): boolean {
+  return (initialRowsMap.value[procKey(proc)] || [])
+    .some((row) => row.submissionStatus === 'SUBMITTED');
+}
+
+function processTabState(proc: ProcEntry): 'reported' | 'current' | 'pending' {
+  if (hasSubmittedRow(proc)) return 'reported';
+  return activeTab.value === procKey(proc) ? 'current' : 'pending';
+}
+
+function upstreamSubmissionReady(proc: ProcEntry): boolean {
+  const idx = PROCESSES.value.findIndex((item) => procKey(item) === procKey(proc));
+  return idx <= 0 || hasSubmittedRow(PROCESSES.value[idx - 1]);
+}
+
+function upstreamSubmissionMessage(proc: ProcEntry): string | undefined {
+  const idx = PROCESSES.value.findIndex((item) => procKey(item) === procKey(proc));
+  if (idx <= 0 || upstreamSubmissionReady(proc)) return undefined;
+  return `上游工序「${PROCESSES.value[idx - 1].label}」尚未正式报工；可先保存草稿，正式报工前请先完成上游工序。`;
 }
 
 // -------------------------------------------------------------------------
@@ -575,10 +603,17 @@ defineExpose({ hasUnsavedRows });
       <el-tab-pane
         v-for="proc in PROCESSES"
         :key="procKey(proc)"
-        :label="proc.label"
         :name="procKey(proc)"
         style="height:100%;overflow-y:auto;padding:4px 0"
       >
+        <template #label>
+          <span class="process-tab-label">
+            <span>{{ proc.label }}</span>
+            <el-tag v-if="processTabState(proc) === 'reported'" type="success" size="small">已报工</el-tag>
+            <el-tag v-else-if="processTabState(proc) === 'current'" type="primary" size="small">当前</el-tag>
+            <el-tag v-else type="info" size="small">待报工</el-tag>
+          </span>
+        </template>
         <!-- Vertical stack: data-entry table (full width) → 半成品库存 (full width below) -->
         <div style="display:flex;flex-direction:column;gap:16px">
           <!-- Data entry table — full width -->
@@ -600,6 +635,8 @@ defineExpose({ hasUnsavedRows });
             :process-category="proc.processCategory ?? null"
             :seasoning-pot-enabled="proc.seasoningPotEnabled"
             :seasoning-configured="proc.seasoningConfigured"
+            :upstream-submission-ready="upstreamSubmissionReady(proc)"
+            :upstream-submission-message="upstreamSubmissionMessage(proc)"
             :upstream-process-label="upstreamLabelOf(proc)"
             :product-type-id="productTypeId"
             :upstream-items="upstreamItems(proc)"
@@ -628,3 +665,17 @@ defineExpose({ hasUnsavedRows });
     </template>
   </div>
 </template>
+
+<style scoped>
+.process-tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.process-tab-label :deep(.el-tag) {
+  height: 18px;
+  padding: 0 5px;
+  font-size: 10px;
+}
+</style>

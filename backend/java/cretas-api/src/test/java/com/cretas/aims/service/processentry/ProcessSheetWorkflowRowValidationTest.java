@@ -212,7 +212,8 @@ class ProcessSheetWorkflowRowValidationTest {
                 .workflowPortId("in-1").unit("g").required(true).build();
         PortDescriptor pieces = PortDescriptor.builder()
                 .workflowPortId("out-pieces").materialName("成品")
-                .skuId("PT-FG").unit("件").required(true).finished(true).build();
+                .skuId("PT-FG").unit("件").gramsPerUnit(new BigDecimal("500"))
+                .required(true).finished(true).build();
         PortDescriptor scraps = PortDescriptor.builder()
                 .workflowPortId("out-scraps").materialName("边角料")
                 .skuId("PT-SCRAP").unit("g").required(true).finished(false).build();

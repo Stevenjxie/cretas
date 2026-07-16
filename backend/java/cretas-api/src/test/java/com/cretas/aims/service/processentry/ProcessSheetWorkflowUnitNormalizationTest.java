@@ -345,4 +345,73 @@ class ProcessSheetWorkflowUnitNormalizationTest {
                 .isInstanceOfSatisfying(BusinessException.class,
                         error -> assertEquals("PROCESS_SHEET_SOURCE_UNIT_MISMATCH", error.getErrorCode()));
     }
+
+    @Test
+    @DisplayName("多投入单产出按端口固定 g/kg，组级投入统一为 kg")
+    void multiInputSingleOutput_usesAuthoritativePortUnits() throws Throwable {
+        WorkflowClerkSheetService svc = mock(WorkflowClerkSheetService.class);
+        PortDescriptor grams = PortDescriptor.builder()
+                .workflowPortId("in-grams").materialNodeId("raw-a")
+                .materialKind("RAW_MATERIAL").skuId("RAW-A").unit("g").required(true).build();
+        PortDescriptor kilos = PortDescriptor.builder()
+                .workflowPortId("in-kilos").materialNodeId("raw-b")
+                .materialKind("RAW_MATERIAL").skuId("RAW-B").unit("kg").required(true).build();
+        PortDescriptor output = PortDescriptor.builder()
+                .workflowPortId("out-kg").materialKind("SEMI_FINISHED")
+                .skuId("PT-OUT").unit("kg").required(true).finished(false).build();
+        ProcessDescriptor descriptor = ProcessDescriptor.builder()
+                .processOrder(2).inputs(List.of(grams, kilos)).output(output).outputs(List.of(output)).build();
+        when(svc.getWorkflowSheetConfig(FACTORY_ID, PLAN_ID)).thenReturn(
+                WorkflowClerkSheetConfigDTO.builder().processes(List.of(descriptor)).build());
+
+        ProcessSheetRowRequest.MaterialInputTotal first = new ProcessSheetRowRequest.MaterialInputTotal();
+        first.setMaterialTypeId("RAW-A");
+        first.setWorkflowPortId("in-grams");
+        first.setQuantity(new BigDecimal("1000"));
+        first.setUnit("g");
+        ProcessSheetRowRequest.MaterialInputTotal second = new ProcessSheetRowRequest.MaterialInputTotal();
+        second.setMaterialTypeId("RAW-B");
+        second.setWorkflowPortId("in-kilos");
+        second.setQuantity(new BigDecimal("2"));
+        second.setUnit("kg");
+        ProcessSheetRowRequest req = row(2, "kg", "kg", "kg");
+        req.setMaterialInputTotals(List.of(first, second));
+
+        assertTrue(apply(newImpl(svc), req));
+        assertEquals("kg", req.getInputUnit());
+        assertEquals("g", first.getUnit());
+        assertEquals("kg", second.getUnit());
+        assertEquals("raw-a", first.getMaterialNodeId());
+        assertEquals("raw-b", second.getMaterialNodeId());
+    }
+
+    @Test
+    @DisplayName("多投入缺端口身份时明确阻断，不按数组位置猜")
+    void multiInputWithoutPortIdentity_failsClosed() throws Throwable {
+        WorkflowClerkSheetService svc = mock(WorkflowClerkSheetService.class);
+        PortDescriptor firstPort = PortDescriptor.builder()
+                .workflowPortId("in-a").materialKind("RAW_MATERIAL")
+                .skuId("RAW-A").unit("kg").required(true).build();
+        PortDescriptor secondPort = PortDescriptor.builder()
+                .workflowPortId("in-b").materialKind("RAW_MATERIAL")
+                .skuId("RAW-B").unit("kg").required(true).build();
+        PortDescriptor output = PortDescriptor.builder()
+                .workflowPortId("out").materialKind("SEMI_FINISHED")
+                .skuId("PT-OUT").unit("kg").required(true).finished(false).build();
+        ProcessDescriptor descriptor = ProcessDescriptor.builder()
+                .processOrder(2).inputs(List.of(firstPort, secondPort))
+                .output(output).outputs(List.of(output)).build();
+        when(svc.getWorkflowSheetConfig(FACTORY_ID, PLAN_ID)).thenReturn(
+                WorkflowClerkSheetConfigDTO.builder().processes(List.of(descriptor)).build());
+        ProcessSheetRowRequest.MaterialInputTotal input = new ProcessSheetRowRequest.MaterialInputTotal();
+        input.setMaterialTypeId("RAW-A");
+        input.setQuantity(BigDecimal.ONE);
+        input.setUnit("kg");
+        ProcessSheetRowRequest req = row(2, "kg", "kg", "kg");
+        req.setMaterialInputTotals(List.of(input));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> apply(newImpl(svc), req));
+        assertEquals("PROCESS_SHEET_WORKFLOW_INPUT_PORT_REQUIRED", error.getErrorCode());
+    }
 }

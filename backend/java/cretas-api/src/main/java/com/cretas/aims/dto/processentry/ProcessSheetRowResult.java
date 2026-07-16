@@ -3,6 +3,7 @@ package com.cretas.aims.dto.processentry;
 import lombok.Data;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -77,5 +78,21 @@ public class ProcessSheetRowResult {
         private String unit;
         /** 该产出行物化成本 (existing 机制副产, Workflow 不干预成本字段)。 */
         private BigDecimal rowTotalCost;
+        /** 该产出相对报工组总投入的出成率。 */
+        private BigDecimal yieldRate;
+        /** 报工组生产日期。 */
+        private LocalDate processDate;
+        /** 该产出的工时时段。 */
+        private List<LaborSegment> laborSegments;
+        /** Σ(时段小时×人数)。 */
+        private BigDecimal totalLaborHours;
+        /** 该产出的副产及回收单价。 */
+        private List<ProcessChainEntryRequest.Byproduct> byproducts;
+        /** 成本分摊百分比。 */
+        private BigDecimal costAllocationRatio;
+        /** QUANTITY / MASS / EXPLICIT_RATIO。 */
+        private String costAllocationBasis;
+        /** 分摊后的该产出总成本；成本未知时为 null。 */
+        private BigDecimal allocatedCost;
     }
 }
