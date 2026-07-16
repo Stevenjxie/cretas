@@ -275,6 +275,7 @@ fi
 UPLOAD_STATUS_DIR="/tmp/jar-upload-$$"
 mkdir -p "$UPLOAD_STATUS_DIR"
 UPLOAD_PIDS=()
+BUILD_RACE_PIDS=()
 
 # 只终止本次部署记录的进程树，避免上传竞速结束后 scp/rsync 子进程继续传输。
 # Git Bash 通常没有 pgrep/pkill，且 `$!` 是 MSYS PID、不能直接传给
@@ -317,7 +318,91 @@ terminate_upload_tasks() {
     UPLOAD_PIDS=()
 }
 
+# BEGIN_JAR_BUILD_RACE_HELPERS
+claim_build_race_winner() {
+    local race_dir="$1"
+    local contender="$2"
+
+    if mkdir "$race_dir/claim" 2>/dev/null; then
+        printf '%s\n' "$contender" > "$race_dir/winner.tmp"
+        mv -f "$race_dir/winner.tmp" "$race_dir/winner"
+    fi
+}
+
+terminate_build_race_tasks() {
+    local pid
+    for pid in "${BUILD_RACE_PIDS[@]}"; do
+        terminate_process_tree "$pid"
+    done
+    for pid in "${BUILD_RACE_PIDS[@]}"; do
+        wait "$pid" 2>/dev/null || true
+    done
+    BUILD_RACE_PIDS=()
+}
+
+run_first_success_build_race() {
+    local race_dir="$1"
+    local left_name="$2"
+    local left_worker="$3"
+    local right_name="$4"
+    local right_worker="$5"
+    local left_pid right_pid left_alive right_alive
+
+    rm -rf "$race_dir"
+    mkdir -p "$race_dir"
+    BUILD_RACE_WINNER=""
+
+    (
+        if "$left_worker" > "$race_dir/$left_name.log" 2>&1; then
+            claim_build_race_winner "$race_dir" "$left_name"
+        else
+            : > "$race_dir/$left_name.failed"
+        fi
+    ) &
+    left_pid=$!
+    BUILD_RACE_PIDS+=("$left_pid")
+
+    (
+        if "$right_worker" > "$race_dir/$right_name.log" 2>&1; then
+            claim_build_race_winner "$race_dir" "$right_name"
+        else
+            : > "$race_dir/$right_name.failed"
+        fi
+    ) &
+    right_pid=$!
+    BUILD_RACE_PIDS+=("$right_pid")
+
+    while [ ! -f "$race_dir/winner" ]; do
+        left_alive=false
+        right_alive=false
+        kill -0 "$left_pid" 2>/dev/null && left_alive=true
+        kill -0 "$right_pid" 2>/dev/null && right_alive=true
+        if [ "$left_alive" = "false" ] && [ "$right_alive" = "false" ]; then
+            break
+        fi
+        sleep 0.2
+    done
+
+    if [ -f "$race_dir/winner" ]; then
+        BUILD_RACE_WINNER=$(tr -d '\r\n' < "$race_dir/winner")
+    fi
+
+    terminate_build_race_tasks
+
+    if [ -z "$BUILD_RACE_WINNER" ]; then
+        echo "   ❌ CI artifact 与本地 Maven 均未成功" >&2
+        [ -s "$race_dir/$left_name.log" ] && tail -20 "$race_dir/$left_name.log" >&2
+        [ -s "$race_dir/$right_name.log" ] && tail -20 "$race_dir/$right_name.log" >&2
+        return 1
+    fi
+
+    [ -s "$race_dir/$BUILD_RACE_WINNER.log" ] && cat "$race_dir/$BUILD_RACE_WINNER.log"
+    return 0
+}
+# END_JAR_BUILD_RACE_HELPERS
+
 cleanup() {
+    terminate_build_race_tasks
     terminate_upload_tasks
     rm -rf "$UPLOAD_STATUS_DIR"
     # R43 fix: 也清 deploy lock — 否则 trap cleanup 会覆盖 acquire_deploy_lock
@@ -346,12 +431,14 @@ deploy_git() {
 deploy_jar() {
     local VERSION="${1:-v$(date +%Y%m%d_%H%M%S)}"
 
-    # Reuse the already-verified CI JAR only when its artifact, commit manifest,
-    # and SHA-256 all match the exact local commit. Any lookup/validation failure
-    # is deliberately non-fatal: the normal clean Maven build remains the safe fallback.
+    # Reuse the exact CI-built JAR only when its artifact, commit manifest, and
+    # SHA-256 all match the local commit. The optional destination keeps CI
+    # candidates isolated from Maven target/ while both paths race.
     reuse_exact_ci_artifact() {
         local HEAD_SHA ORIGIN_MAIN_SHA ARTIFACT_NAME DOWNLOAD_URL TMP_DIR
         local ARTIFACT_JAR ARTIFACT_DIR COMMIT_FILE SHA_FILE EXPECTED_SHA ACTUAL_SHA
+        local DESTINATION="${1:-backend/java/cretas-api/target/$JAR_NAME}"
+        local DESTINATION_TMP
 
         [ "${DISABLE_CI_ARTIFACT_REUSE:-0}" != "1" ] || return 1
         HEAD_SHA=$(git rev-parse HEAD 2>/dev/null) || return 1
@@ -377,7 +464,7 @@ deploy_jar() {
                 --jq ".artifacts[] | select(.name == \"$ARTIFACT_NAME\" and .expired == false and .workflow_run.head_branch == \"main\" and .workflow_run.head_sha == \"$HEAD_SHA\") | .archive_download_url" \
                 2>/dev/null | head -1) || { rm -rf "$TMP_DIR"; return 1; }
             [ -n "$DOWNLOAD_URL" ] || { rm -rf "$TMP_DIR"; return 1; }
-            if ! GH_HTTP_TIMEOUT=30 gh api "$DOWNLOAD_URL" > "$TMP_DIR/artifact.zip" 2>/dev/null \
+            if ! GH_HTTP_TIMEOUT="${CI_ARTIFACT_DOWNLOAD_TIMEOUT:-180}" gh api "$DOWNLOAD_URL" > "$TMP_DIR/artifact.zip" 2>/dev/null \
                 || ! unzip -q "$TMP_DIR/artifact.zip" -d "$TMP_DIR/extracted"; then
                 rm -rf "$TMP_DIR"
                 return 1
@@ -409,11 +496,44 @@ deploy_jar() {
             return 1
         fi
 
-        mkdir -p "backend/java/cretas-api/target"
-        cp "$ARTIFACT_JAR" "backend/java/cretas-api/target/$JAR_NAME"
+        mkdir -p "$(dirname "$DESTINATION")"
+        DESTINATION_TMP="${DESTINATION}.tmp.$$"
+        cp "$ARTIFACT_JAR" "$DESTINATION_TMP" || { rm -f "$DESTINATION_TMP"; rm -rf "$TMP_DIR"; return 1; }
+        mv -f "$DESTINATION_TMP" "$DESTINATION" || { rm -f "$DESTINATION_TMP"; rm -rf "$TMP_DIR"; return 1; }
         rm -rf "$TMP_DIR"
         echo "   ✓ 复用 CI 构建 JAR: $ARTIFACT_NAME (commit + SHA-256 已核验)"
         return 0
+    }
+
+    run_mvn() {
+        if [[ "$OSTYPE" == "darwin"* ]] || [[ "$OSTYPE" == "linux"* ]]; then
+            chmod +x mvnw 2>/dev/null
+            ./mvnw "$@" -Dmaven.test.skip=true -q
+        else
+            if [ -z "$JAVA_HOME" ]; then
+                for J in "C:/Program Files/Zulu/zulu-21" "C:/Program Files/Java/jdk-21" "C:/Program Files/Java/jdk-17"; do
+                    [ -x "$J/bin/java.exe" ] && export JAVA_HOME="$J" && break
+                done
+            fi
+            ./mvnw.cmd "$@" -Dmaven.test.skip=true -q
+        fi
+    }
+
+    build_local_jar() {
+        local goals="$1"
+        (
+            cd backend/java/cretas-api || return 1
+            if ! run_mvn $goals; then
+                if [ "$goals" = "clean package" ]; then
+                    echo "   ⚠️  Maven clean 失败 (可能 target/ 被锁)，清理 target 后 retry package..."
+                    rm -rf target 2>/dev/null || true
+                    run_mvn package || return 1
+                    echo "   ✓ retry 打包成功"
+                else
+                    return 1
+                fi
+            fi
+        )
     }
 
     # 统计可用方式
@@ -567,64 +687,45 @@ deploy_jar() {
     # 如需保留 incremental build (快, 但不安全), 传 SKIP_CLEAN=1
     echo ""
     CI_ARTIFACT_REUSED=false
-    if [ -z "$SKIP_BUILD" ] && [ -z "$SKIP_CLEAN" ]; then
-        if [ "${DISABLE_CI_ARTIFACT_REUSE:-0}" = "1" ]; then
-            echo "📦 [1/4] CI JAR 复用已禁用，直接本地 clean package"
-        else
-            echo "📦 [1/4] 查找当前 origin/main commit 的 CI 构建 JAR (单次查询，不等待 CI)..."
+    JAR_TARGET="backend/java/cretas-api/target/$JAR_NAME"
+    if [ -n "$SKIP_BUILD" ]; then
+        if [ ! -f "$JAR_TARGET" ]; then
+            echo "❌ SKIP_BUILD=1 但指定 JAR 不存在: $JAR_TARGET"
+            exit 1
         fi
-        if [ "${DISABLE_CI_ARTIFACT_REUSE:-0}" != "1" ] && reuse_exact_ci_artifact; then
-            CI_ARTIFACT_REUSED=true
-        elif [ "${DISABLE_CI_ARTIFACT_REUSE:-0}" != "1" ]; then
-            echo "   ℹ️  无可用的精确 SHA CI 制品，回退本地 clean package"
-        fi
-    fi
-
-    if [ "$CI_ARTIFACT_REUSED" = "true" ]; then
-        :
-    elif [ -n "$SKIP_BUILD" ] && [ -f "backend/java/cretas-api/target/$JAR_NAME" ]; then
         echo "📦 [1/4] 跳过 Maven 打包 (SKIP_BUILD=1, 使用已有 JAR)"
+    elif [ -n "$SKIP_CLEAN" ]; then
+        echo "📦 [1/4] 本地 Maven 打包 (SKIP_CLEAN=1, 增量模式 — 不参与 CI 竞速)..."
+        build_local_jar "package" || { echo "❌ Maven 打包失败"; exit 1; }
+    elif [ "${DISABLE_CI_ARTIFACT_REUSE:-0}" = "1" ] || { [ "$HAS_GH" != "true" ] && [ -z "${CI_ARTIFACT_TEST_DIR:-}" ]; }; then
+        echo "📦 [1/4] CI JAR 复用不可用/已禁用，直接本地 clean package"
+        build_local_jar "clean package" || { echo "❌ Maven 打包失败 (已 retry)"; exit 1; }
     else
-        MVN_GOALS="clean package"
-        if [ -n "$SKIP_CLEAN" ]; then
-            MVN_GOALS="package"
-            echo "📦 [1/4] 本地 Maven 打包 (SKIP_CLEAN=1, 增量模式 — 如遇奇怪 bug 去掉 SKIP_CLEAN 重试)..."
+        BUILD_RACE_DIR="$UPLOAD_STATUS_DIR/build-race"
+        CI_RACE_JAR="$BUILD_RACE_DIR/ci/$JAR_NAME"
+        ci_build_candidate() { reuse_exact_ci_artifact "$CI_RACE_JAR"; }
+        maven_build_candidate() { build_local_jar "clean package"; }
+
+        echo "📦 [1/4] CI artifact 下载 ↔ 本地 clean package 并行竞速..."
+        echo "   GitHub 慢不会阻塞：本地 Maven 先完成就立即终止下载"
+        if ! run_first_success_build_race "$BUILD_RACE_DIR" "ci" ci_build_candidate "maven" maven_build_candidate; then
+            echo "❌ CI artifact 与本地 Maven 均失败"
+            exit 1
+        fi
+
+        if [ "$BUILD_RACE_WINNER" = "ci" ]; then
+            mkdir -p "$(dirname "$JAR_TARGET")"
+            CI_TARGET_TMP="${JAR_TARGET}.ci-race.$$"
+            cp "$CI_RACE_JAR" "$CI_TARGET_TMP" || { rm -f "$CI_TARGET_TMP"; echo "❌ CI JAR 发布失败"; exit 1; }
+            mv -f "$CI_TARGET_TMP" "$JAR_TARGET" || { rm -f "$CI_TARGET_TMP"; echo "❌ CI JAR 原子替换失败"; exit 1; }
+            CI_ARTIFACT_REUSED=true
+            echo "   🏁 构建竞速胜出: CI artifact"
         else
-            echo "📦 [1/4] 本地 Maven 打包 (clean + package, ~90s)..."
+            echo "   🏁 构建竞速胜出: 本地 Maven"
         fi
-        cd backend/java/cretas-api
-        # R29: maven clean 遇 target/ 被锁时 (Windows 并发 build), 自动 rm -rf 后重试 package
-        # 常见原因: 另一 session 刚跑过 mvn, JVM 未退出就锁住 protoc-dependencies
-        run_mvn() {
-            if [[ "$OSTYPE" == "darwin"* ]] || [[ "$OSTYPE" == "linux"* ]]; then
-                chmod +x mvnw 2>/dev/null
-                ./mvnw "$@" -Dmaven.test.skip=true -q
-            else
-                # R4 (Apr 16 2026): project requires Java 21 per pom.xml <maven.compiler.release>21</...>
-                # Use existing JAVA_HOME (Zulu 21 typical install) instead of hardcoding jdk-17
-                if [ -z "$JAVA_HOME" ]; then
-                    for J in "C:/Program Files/Zulu/zulu-21" "C:/Program Files/Java/jdk-21" "C:/Program Files/Java/jdk-17"; do
-                        [ -x "$J/bin/java.exe" ] && export JAVA_HOME="$J" && break
-                    done
-                fi
-                ./mvnw.cmd "$@" -Dmaven.test.skip=true -q
-            fi
-        }
-        if ! run_mvn $MVN_GOALS; then
-            if [ -z "$SKIP_CLEAN" ]; then
-                echo "   ⚠️  Maven clean 失败 (可能 target/ 被其他进程锁定), 强制 rm + retry package..."
-                rm -rf target 2>/dev/null || true
-                # 二次尝试: 直接 package (clean 已无意义因 target 已 rm)
-                run_mvn package || { echo "❌ Maven 打包失败 (已 retry)"; cd ../../..; exit 1; }
-                echo "   ✓ retry 打包成功"
-            else
-                echo "❌ Maven 打包失败"; cd ../../..; exit 1
-            fi
-        fi
-        cd ../../..
     fi
 
-    JAR_PATH="backend/java/cretas-api/target/$JAR_NAME"
+    JAR_PATH="$JAR_TARGET"
     if [ ! -f "$JAR_PATH" ]; then
         echo "❌ JAR 文件不存在: $JAR_PATH"
         exit 1

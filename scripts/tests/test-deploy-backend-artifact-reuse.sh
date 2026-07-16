@@ -62,6 +62,17 @@ printf 'verified jar bytes\n' > "$FIXTURE_ARTIFACT/$JAR_NAME"
     cmp "$FIXTURE_ARTIFACT/$JAR_NAME" "backend/java/cretas-api/target/$JAR_NAME"
 ) || fail "valid exact-commit artifact was not reused"
 
+# A race candidate must be written to its isolated destination instead of
+# sharing Maven's target directory.
+(
+    cd "$FIXTURE_REPO"
+    rm -f "backend/java/cretas-api/target/$JAR_NAME"
+    CI_ARTIFACT_TEST_DIR="$FIXTURE_ARTIFACT"
+    reuse_exact_ci_artifact "$TMP_ROOT/isolated/$JAR_NAME"
+    cmp "$FIXTURE_ARTIFACT/$JAR_NAME" "$TMP_ROOT/isolated/$JAR_NAME"
+    [ ! -f "backend/java/cretas-api/target/$JAR_NAME" ]
+) || fail "race artifact candidate was not isolated from Maven target"
+
 # Explicit disable must bypass even a valid injected artifact.
 if (
     cd "$FIXTURE_REPO"
@@ -131,8 +142,8 @@ if (
 fi
 
 assert_contains '.name == \"$ARTIFACT_NAME\"'
-assert_contains 'GH_HTTP_TIMEOUT=15 gh api'
-assert_contains '无可用的精确 SHA CI 制品，回退本地 clean package'
-assert_contains 'MVN_GOALS="clean package"'
+assert_contains 'GH_HTTP_TIMEOUT="${CI_ARTIFACT_DOWNLOAD_TIMEOUT:-180}" gh api'
+assert_contains 'run_first_success_build_race "$BUILD_RACE_DIR" "ci" ci_build_candidate "maven" maven_build_candidate'
+assert_contains 'build_local_jar "clean package"'
 
 echo "PASS: exact origin/main artifact reuse validates name, commit, and SHA-256 with safe fallback"

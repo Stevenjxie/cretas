@@ -37,9 +37,12 @@ instead of repeating shell, YAML, encoding, Flyway, and diff checks manually:
 It must stay read-only and must not run Maven or contact production. During
 feature development, use `--allow-non-main --allow-dirty --skip-fetch` only as
 a diagnostic; the real release gate remains strict on clean exact `origin/main`.
-After it passes, let `deploy-backend.sh` reuse the exact-commit CI-built JAR when
-available. Missing or invalid CI artifacts immediately fall back to the existing
-local clean package; do not wait or poll for CI artifact creation.
+After it passes, let `deploy-backend.sh` race an exact-commit CI artifact download
+against the local clean Maven package. The first verified result wins and the
+script terminates only the recorded losing process tree. This prevents slow
+GitHub downloads on domestic networks from delaying a faster local build. Do not
+wait or poll for CI artifact creation: a missing or invalid exact artifact simply
+leaves the local clean package running.
 
 ## Reuse A Merged Feature Worktree
 
