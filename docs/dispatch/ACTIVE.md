@@ -8,6 +8,7 @@
 
 | ID | Base SHA | Scope 锁 | Owner | Mode | Worktree/PR | Status | Blocker | Next action |
 |---|---|---|---|---|---|---|---|---|
+| MAVEN-RELEASE-BUILD-20260716 | `9e9331607f64a22b0055fb779ab24368ab3182b4` | `backend/java/cretas-api/pom.xml`; `backend/java/cretas-api/.mvn/**`; `.mvn/**`; `scripts/deploy/deploy-backend.sh`; related deploy/build benchmark and contract tests; `AGENTS.md`; `.agents/skills/deploy-backend/SKILL.md`; `docs/dispatch/ACTIVE.md`; completion archive only | Codex coordinator | code | `C:\Users\Steve\cretas-maven-build-optimization` / `codex/maven-build-optimization` | review | None | Commit the reviewed build optimization, merge to exact `origin/main`, then archive and release the scope lock |
 
 ## 阻塞项
 

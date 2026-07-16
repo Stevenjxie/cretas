@@ -484,6 +484,12 @@
                     <pluginId>grpc-java</pluginId>
                     <pluginArtifact>io.grpc:protoc-gen-grpc-java:1.63.0:exe:${os.detected.classifier}</pluginArtifact>
                     <protoSourceRoot>${project.basedir}/src/main/proto</protoSourceRoot>
+                    <!-- Do not rewrite unchanged generated sources on every Maven invocation.
+                         Rewriting their timestamps made maven-compiler-plugin recompile all
+                         ~3,900 Java sources even for a warm package/test run. A clean build
+                         still regenerates everything because target/ does not exist. -->
+                    <checkStaleness>true</checkStaleness>
+                    <staleMillis>0</staleMillis>
                 </configuration>
                 <executions>
                     <execution>
@@ -527,13 +533,6 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <goals>
-                            <goal>repackage</goal>
-                        </goals>
-                    </execution>
-                </executions>
                 <configuration>
                     <mainClass>com.cretas.aims.CretasBackendApplication</mainClass>
                     <excludes>

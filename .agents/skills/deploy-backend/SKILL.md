@@ -28,6 +28,7 @@ For one commit, perform one final full release build:
 - The deploy script may also reuse its local backend-tree cache across docs-only commits. That cache must record the original build commit, the exact `backend/java/cretas-api` Git tree, and SHA-256; the recorded build commit must resolve to the same backend tree as the current clean exact `origin/main`.
 - If the verified cached JAR MD5 already matches production, the script may return a no-op only after reading the real nginx upstream and verifying the selected systemd unit plus direct active-slot health. `FORCE_REDEPLOY=1` bypasses this optimization.
 - When no exact manifest-backed CI artifact is available, let the deployment script perform the single trusted release build immediately.
+- Keep `target/` between sequential Maven target-test/package invocations in the same worktree. The protobuf plugin deliberately skips regeneration when its source is unchanged, so warm Maven invocations can reuse compiled classes instead of recompiling the whole module. Do not extend this into cross-worktree or mtime-only artifact trust: the final release build/cache rules above still apply.
 
 Before a release from the exact merged `origin/main`, run the single fast gate
 instead of repeating shell, YAML, encoding, Flyway, and diff checks manually:
