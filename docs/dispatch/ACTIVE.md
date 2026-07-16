@@ -8,7 +8,7 @@
 
 | ID | Base SHA | Scope 锁 | Owner | Mode | Worktree/PR | Status | Blocker | Next action |
 |---|---|---|---|---|---|---|---|---|
-| DEPLOY-SOURCE-CACHE-20260716 | `3cb1ce54d4c14a853506179c631317b724bf2754` | `scripts/deploy/deploy-backend.sh`; `scripts/tests/test-deploy-backend-source-cache.sh`; related deploy contract tests; `AGENTS.md`; `.agents/skills/deploy-backend/SKILL.md`; `docs/dispatch/ACTIVE.md`; completion archive only | Codex coordinator | code | `C:\Users\Steve\cretas-main-deploy` / `codex/backend-source-fingerprint-cache` | review | None | Source-tree cache, verified prod no-op, timing stage and contract tests complete; final scope review and merge pending |
+| - | - | - | - | - | - | - | - | 当前无在飞任务 |
 
 ## 阻塞项
 
