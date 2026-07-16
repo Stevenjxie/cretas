@@ -33,4 +33,17 @@ describe('SKU editor dialog UX', () => {
     expect(source).toContain('prop="specification" label="生成规格"');
     expect(source).toContain("{{ row.specification || '—' }}");
   });
+
+  it('keeps category authoritative, scopes suggestions, and explains multi-box rules', () => {
+    const dialogSource = source.slice(source.indexOf('class="product-edit-dialog"'));
+    expect(dialogSource.indexOf('label="产品大类"')).toBeLessThan(dialogSource.indexOf('label="产品名称"'));
+    expect(source).toContain('params: { name, productCategory: formData.productCategory || undefined }');
+    expect(source).toContain('名称建议只在当前大类内匹配，绝不反写或清空大类');
+    expect(source).not.toContain('formData.productCategory = newCat');
+    expect(source).toContain('const exactNameDuplicate = computed');
+    expect(source).toContain('同厂已存在同名 SKU');
+    expect(source).toContain('class="packaging-rule-note"');
+    expect(source).toContain('一个 SKU 只有一个基本单位和一份标准克重');
+    expect(source).toContain('添加多装箱包装规则');
+  });
 });

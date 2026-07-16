@@ -53,4 +53,24 @@ describe('material type family source contract', () => {
     expect(source).not.toContain('segmentCodePreview.value = `${segmentL1.value}${segmentL2.value}${segmentL3.value}...`');
     expect(source).not.toContain('segmentCodePreview.value = `${segmentL1.value}-${segmentL2.value}-${segmentL3.value}`');
   });
+
+  it('uses the requested material-family form defaults and visibility contracts', () => {
+    expect(source).toContain("taxRate: 'TAX_13'");
+    expect(source).toContain('label="入库计量单位"');
+    expect(source).toContain('新建默认 kg（公斤）');
+    expect(source).toContain('v-if="!isPackagingMaterial" label="储存类型"');
+    expect(source).toContain('v-if="isPackagingMaterial" :label="form.taxTreatment');
+    expect(source).toContain('<template v-if="isPackagingMaterial">');
+    expect(source).toContain('包装层级（包材专属，可选）');
+    expect(source).toContain('原料/辅料完全不发送 hierarchy');
+  });
+
+  it('matches historical L3 under the selected L1/L2 and reuses the real dictionary create endpoint', () => {
+    expect(source).toContain('params: { page: 1, size: 20, codePrefix: l2, keyword: normalizedName }');
+    expect(source).toContain('label="＋ 快捷创建新品类"');
+    expect(source).toContain('`/${factoryId.value}/material-segments`');
+    expect(source).toContain('level: 3');
+    expect(source).toContain('parentCode: segmentL2.value');
+    expect(source).toContain('创建并选中');
+  });
 });

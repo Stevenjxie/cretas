@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, reactive } from 'vue';
+import { ref, computed, onMounted, reactive, watch } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -9,8 +9,9 @@ import WorkProcessAIChatPanel from './WorkProcessAIChatPanel.vue';
 import {
   getWorkProcesses, createWorkProcess, updateWorkProcess,
   deleteWorkProcess, toggleWorkProcessStatus, getWorkProcessDuplicates,
+  getSystemUnitOptions,
   type WorkProcessItem, type WorkProcessDuplicateGroup,
-  type WorkProcessOutputMaterialKind
+  type WorkProcessOutputMaterialKind, type SystemUnitOption
 } from '@/api/processProduction';
 import {
   WORK_PROCESS_OUTPUT_KIND_OPTIONS,
@@ -89,6 +90,32 @@ const CATEGORIES = [
   '前处理', '加工', '熟制', '注射', '包装', '灭菌', '质检', '存储', '配送', '其他'
 ];
 
+const systemUnits = ref<SystemUnitOption[]>([]);
+const canonicalUnitOptions = computed(() => {
+  const options = systemUnits.value
+    .filter((unit) => unit.isActive !== false && unit.unitName.trim())
+    .map((unit) => ({
+      value: unit.unitName.trim(),
+      label: unit.unitSymbol && unit.unitSymbol !== unit.unitName
+        ? `${unit.unitName}（${unit.unitSymbol}）`
+        : unit.unitName,
+    }));
+  const currentValues = [formData.unit, formData.outputUnit]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .map((value) => value.trim());
+  for (const value of currentValues) {
+    if (!options.some((option) => option.value === value)) {
+      options.push({ value, label: `${value}（历史值）` });
+    }
+  }
+  return options;
+});
+
+const processCategoryOptions = computed(() => Array.from(new Set([
+  ...CATEGORIES,
+  ...allData.value.map((item) => item.processCategory).filter((value): value is string => Boolean(value)),
+])).sort());
+
 type WorkProcessForm = Partial<WorkProcessItem>;
 
 const formData = reactive<WorkProcessForm>({
@@ -110,6 +137,43 @@ const formData = reactive<WorkProcessForm>({
 const showSemiFinishedCode = computed(() => usesSemiFinishedCode(
   normalizeOutputMaterialKind(formData.defaultOutputMaterialKind),
 ));
+const outputUnitManuallyEdited = ref(false);
+const advancedSettings = ref<string[]>([]);
+const exactNameDuplicate = computed(() => {
+  const name = formData.processName?.trim().toLocaleLowerCase();
+  if (!name) return null;
+  return allData.value.find((item) =>
+    item.id !== formData.id && item.processName.trim().toLocaleLowerCase() === name,
+  ) ?? null;
+});
+
+watch(() => formData.unit, (unit) => {
+  if (!outputUnitManuallyEdited.value) formData.outputUnit = unit || '';
+});
+
+function queryProcessNames(query: string, callback: (items: Array<{ value: string }>) => void): void {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const names = new Set(
+    allData.value
+      .filter((item) => !formData.processCategory || item.processCategory === formData.processCategory)
+      .map((item) => item.processName.trim())
+      .filter(Boolean),
+  );
+  callback(Array.from(names)
+    .filter((name) => !normalizedQuery || name.toLocaleLowerCase().includes(normalizedQuery))
+    .map((value) => ({ value })));
+}
+
+function queryProcessCategories(query: string, callback: (items: Array<{ value: string }>) => void): void {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  callback(processCategoryOptions.value
+    .filter((category) => !normalizedQuery || category.toLocaleLowerCase().includes(normalizedQuery))
+    .map((value) => ({ value })));
+}
+
+function markOutputUnitEdited(): void {
+  outputUnitManuallyEdited.value = true;
+}
 
 // P0-3: 百分比 ↔ 小数转换 (表单按百分比录入, payload 存小数 0.0001..99.9999)
 const minPct = computed<number | null>({
@@ -127,7 +191,16 @@ const formRules = {
     { max: 100, message: '不能超过100个字符', trigger: 'blur' }
   ],
   unit: [
-    { required: true, message: '请输入单位', trigger: 'blur' }
+    { required: true, message: '请选择投入单位', trigger: 'change' }
+  ],
+  processCategory: [
+    { required: true, message: '请选择或输入工序类别', trigger: ['blur', 'change'] }
+  ],
+  outputUnit: [
+    { required: true, message: '请选择产出单位', trigger: 'change' }
+  ],
+  defaultOutputMaterialKind: [
+    { required: true, message: '请选择默认产出类型', trigger: 'change' }
   ],
   standardYieldMax: [
     {
@@ -209,8 +282,18 @@ async function handleAiApplied(): Promise<void> {
 }
 
 onMounted(() => {
-  loadData();
+  void Promise.all([loadData(), loadSystemUnits()]);
 });
+
+async function loadSystemUnits(): Promise<void> {
+  if (!factoryId.value) return;
+  try {
+    const response = await getSystemUnitOptions(factoryId.value);
+    systemUnits.value = response.success && Array.isArray(response.data) ? response.data : [];
+  } catch {
+    systemUnits.value = [];
+  }
+}
 
 async function loadData() {
   if (!factoryId.value) return;
@@ -242,11 +325,13 @@ function handleAdd() {
   Object.assign(formData, {
     id: '', processName: '', processCategory: '',
     unit: 'kg', estimatedMinutes: null, sortOrder: 0,
-    standardYieldMin: null, standardYieldMax: null, needsInput: true, outputUnit: '',
+    standardYieldMin: null, standardYieldMax: null, needsInput: true, outputUnit: 'kg',
     defaultOutputMaterialKind: normalizeOutputMaterialKind(undefined),
     semiFinishedOutputCode: null,
     standardHourlyRate: null
   });
+  outputUnitManuallyEdited.value = false;
+  advancedSettings.value = [];
   dialogVisible.value = true;
 }
 
@@ -256,15 +341,22 @@ function handleEdit(row: WorkProcessItem) {
   const outputKind = normalizeOutputMaterialKind(row.defaultOutputMaterialKind);
   Object.assign(formData, {
     ...row,
+    outputUnit: row.outputUnit || row.unit,
     defaultOutputMaterialKind: outputKind,
     semiFinishedOutputCode: usesSemiFinishedCode(outputKind) ? semiOutputCodeOf(row) : null,
   });
+  outputUnitManuallyEdited.value = Boolean(row.outputUnit && row.outputUnit !== row.unit);
+  advancedSettings.value = [];
   dialogVisible.value = true;
 }
 
 async function handleSubmit() {
   const valid = await formRef.value?.validate().catch(() => false);
   if (!valid || !factoryId.value) return;
+  if (exactNameDuplicate.value) {
+    ElMessage.error(`已存在同名工序「${exactNameDuplicate.value.processName}」，请直接编辑已有工序`);
+    return;
+  }
 
   submitting.value = true;
   try {
@@ -516,73 +608,113 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
     </el-card>
 
     <!-- Form Dialog -->
-    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="560px">
+    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="620px" :close-on-click-modal="false">
       <el-form ref="formRef" :model="formData" :rules="formRules" label-width="130px">
         <el-form-item label="工序名称" prop="processName">
-          <el-input v-model="formData.processName" placeholder="如：拆箱、挂晒、卤制" />
+          <el-autocomplete
+            v-model="formData.processName"
+            :fetch-suggestions="queryProcessNames"
+            placeholder="如：拆箱、挂晒、卤制"
+            clearable
+            style="width: 100%"
+          />
+          <el-alert
+            v-if="exactNameDuplicate"
+            class="exact-duplicate-alert"
+            type="error"
+            :closable="false"
+            show-icon
+            :title="`已存在同名工序「${exactNameDuplicate.processName}」，不能重复创建`"
+          />
         </el-form-item>
         <el-form-item label="工序类别" prop="processCategory">
-          <el-select v-model="formData.processCategory" placeholder="选择类别" clearable style="width: 100%">
-            <el-option v-for="cat in CATEGORIES" :key="cat" :label="cat" :value="cat" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="计量单位" prop="unit">
-          <el-input v-model="formData.unit" placeholder="如：箱、车、框、kg" />
-        </el-form-item>
-        <el-form-item label="预估工时">
-          <el-input-number v-model="formData.estimatedMinutes" :min="1" placeholder="分钟" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="标准出成率下限" prop="standardYieldMin">
-          <!-- 防呆 Rule 1: :min=0.01 (映射后端最小有效值 0.0001), 禁止输 0 → 后端 @DecimalMin(0.0001) 会拒.
-               想"不校验"请清空 (留空=null), 这是唯一的低于阈值路径。 -->
-          <el-input-number v-model="minPct" :min="0.01" :max="999.99" :step="5" :precision="2"
-            placeholder="如 30 (留空=不校验)" style="width: 100%" />
-          <span class="form-hint">%（焯水约 30~60，滚揉保水 100~135；装盒/检验类留空。输 0 无效，不校验请清空）</span>
-        </el-form-item>
-        <el-form-item label="标准出成率上限" prop="standardYieldMax">
-          <!-- 防呆 Rule 1: 同上, :min=0.01 禁 0; 清空=不校验 -->
-          <el-input-number v-model="maxPct" :min="0.01" :max="999.99" :step="5" :precision="2"
-            placeholder="如 60 (留空=不校验)" style="width: 100%" />
-          <span class="form-hint">%（超收预检以此为基准 × 投入量 × 1.3 容差）</span>
-        </el-form-item>
-        <el-form-item label="需录投入量">
-          <el-switch v-model="formData.needsInput" />
-          <span class="form-hint">纯包装/检验类可关闭</span>
-        </el-form-item>
-        <el-form-item label="产出单位">
-          <el-input v-model="formData.outputUnit" placeholder="与投入单位不同时填，如 盒/份；留空则同投入单位" />
-        </el-form-item>
-        <el-form-item label="默认产出类型" prop="defaultOutputMaterialKind">
-          <el-select
-            v-model="formData.defaultOutputMaterialKind"
+          <el-autocomplete
+            v-model="formData.processCategory"
+            :fetch-suggestions="queryProcessCategories"
+            placeholder="选择或输入历史类别"
+            clearable
             style="width: 100%"
-            @change="handleOutputKindChange"
-          >
+          />
+        </el-form-item>
+        <el-form-item label="投入单位" prop="unit">
+          <el-select v-model="formData.unit" placeholder="请选择 canonical 单位" filterable style="width: 100%">
             <el-option
-              v-for="option in WORK_PROCESS_OUTPUT_KIND_OPTIONS"
+              v-for="option in canonicalUnitOptions"
               :key="option.value"
               :label="option.label"
               :value="option.value"
             />
           </el-select>
+        </el-form-item>
+        <el-form-item label="产出单位" prop="outputUnit">
+          <el-select
+            v-model="formData.outputUnit"
+            placeholder="默认跟随投入单位"
+            filterable
+            style="width: 100%"
+            @change="markOutputUnitEdited"
+          >
+            <el-option
+              v-for="option in canonicalUnitOptions"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </el-select>
+          <span class="form-hint">新增时自动跟随投入单位；手动选择后不再被投入单位覆盖</span>
+        </el-form-item>
+        <el-form-item label="默认产出类型" prop="defaultOutputMaterialKind">
+          <el-radio-group
+            v-model="formData.defaultOutputMaterialKind"
+            @change="handleOutputKindChange"
+          >
+            <el-radio
+              v-for="option in WORK_PROCESS_OUTPUT_KIND_OPTIONS"
+              :key="option.value"
+              :value="option.value"
+            >
+              {{ option.label }}
+            </el-radio>
+          </el-radio-group>
           <span class="form-hint">该工序加入产品 Workflow 后，系统会据此生成半成品或成品 Cell；默认为半成品，报工人员不可修改。</span>
         </el-form-item>
-        <el-form-item v-if="showSemiFinishedCode" label="半成品产出编码" prop="semiFinishedOutputCode">
-          <el-input
-            v-model="formData.semiFinishedOutputCode"
-            maxlength="50"
-            show-word-limit
-            placeholder="如 LU-ZHI-ZHU-TI 或 熟制猪蹄-WIP"
-          />
-          <span class="form-hint">可选；建议按产品/工序命名，供后续半成品识别与领用</span>
-        </el-form-item>
-        <el-form-item label="标准时薪(元/小时)" prop="standardHourlyRate">
-          <el-input-number v-model="formData.standardHourlyRate" :min="0" :step="1" :precision="2"
-            placeholder="如 25.00；留空表示未配置(不计算人工成本)" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="排序">
-          <el-input-number v-model="formData.sortOrder" :min="0" style="width: 100%" />
-        </el-form-item>
+
+        <el-collapse v-model="advancedSettings" class="process-advanced">
+          <el-collapse-item name="advanced" title="高级设置（可选）">
+            <el-form-item label="预估工时">
+              <el-input-number v-model="formData.estimatedMinutes" :min="1" placeholder="分钟" style="width: 100%" />
+            </el-form-item>
+            <el-form-item label="标准出成率下限" prop="standardYieldMin">
+              <el-input-number v-model="minPct" :min="0.01" :max="999.99" :step="5" :precision="2"
+                placeholder="如 30 (留空=不校验)" style="width: 100%" />
+              <span class="form-hint">%（留空表示不校验）</span>
+            </el-form-item>
+            <el-form-item label="标准出成率上限" prop="standardYieldMax">
+              <el-input-number v-model="maxPct" :min="0.01" :max="999.99" :step="5" :precision="2"
+                placeholder="如 60 (留空=不校验)" style="width: 100%" />
+              <span class="form-hint">%（超收预检以此为基准 × 投入量 × 1.3 容差）</span>
+            </el-form-item>
+            <el-form-item label="需录投入量">
+              <el-switch v-model="formData.needsInput" />
+              <span class="form-hint">纯包装/检验类可关闭</span>
+            </el-form-item>
+            <el-form-item v-if="showSemiFinishedCode" label="半成品产出编码" prop="semiFinishedOutputCode">
+              <el-input
+                v-model="formData.semiFinishedOutputCode"
+                maxlength="50"
+                show-word-limit
+                placeholder="默认留空；需要固定识别码时再配置"
+              />
+            </el-form-item>
+            <el-form-item label="标准时薪(元/小时)" prop="standardHourlyRate">
+              <el-input-number v-model="formData.standardHourlyRate" :min="0" :step="1" :precision="2"
+                placeholder="留空表示不计算人工成本" style="width: 100%" />
+            </el-form-item>
+            <el-form-item label="排序">
+              <el-input-number v-model="formData.sortOrder" :min="0" style="width: 100%" />
+            </el-form-item>
+          </el-collapse-item>
+        </el-collapse>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -600,6 +732,8 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
 .filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
 .text-muted { color: #909399; }
 .form-hint { font-size: 12px; color: #909399; margin-left: 4px; }
+.exact-duplicate-alert { width: 100%; margin-top: 8px; }
+.process-advanced { width: 100%; margin-top: 8px; }
 /* C5: duplicate panel */
 .dup-group { margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid #f0f0f0; }
 .dup-group:last-child { border-bottom: none; margin-bottom: 0; }
