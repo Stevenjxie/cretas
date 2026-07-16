@@ -5,7 +5,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put, del } from '@/api/request';
-import { ElMessage, ElMessageBox, ElNotification } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { handleCatchError } from '@/utils/errorToast';
 import { Plus, Search, Refresh, Download, Upload, Picture, ChatDotRound, Setting, Rank, Delete as DeleteIcon } from '@element-plus/icons-vue';
 import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue';
@@ -13,47 +13,9 @@ import { PRODUCT_CONFIG } from '@/components/ai-entry/types';
 import DynamicEntityForm from '@/components/DynamicEntityForm.vue';
 import type { FieldConfig } from '@/config/entityFieldConfigs';
 import { composeProductSpecification } from '@/utils/productSpecification';
-
-// T137: 计量单位字典 — 从 /system-config/units 加载, 供一级单位/二级单位下拉用
-const unitDictOptions = ref<{ label: string; value: string }[]>([]);
-// 静态兜底列表 (API 为空或加载失败时使用) — common-first 顺序, 含 框 (六扇门规格用)
-const UNIT_FALLBACK: { label: string; value: string }[] = [
-  { label: '盒', value: '盒' },
-  { label: '份', value: '份' },
-  { label: '筐', value: '筐' },
-  { label: '框', value: '框' },
-  { label: '箱', value: '箱' },
-  { label: '件', value: '件' },
-  { label: '袋', value: '袋' },
-  { label: '桶', value: '桶' },
-  { label: '瓶', value: '瓶' },
-  { label: 'kg', value: 'kg' },
-  { label: '克', value: '克' },
-];
-// 合并字典 + 兜底 (去重)
-const unitSelectOptions = computed<{ label: string; value: string }[]>(() => {
-  const dict = unitDictOptions.value.length > 0 ? unitDictOptions.value : UNIT_FALLBACK;
-  const seen = new Set(dict.map(o => o.value));
-  // ensure fallback entries that aren't in dict are also available (兜底补充)
-  const extra = UNIT_FALLBACK.filter(o => !seen.has(o.value));
-  return [...dict, ...extra];
-});
-
-async function loadUnitDict() {
-  if (!factoryId.value) return;
-  try {
-    const res = await get<{ unitName: string; unitSymbol?: string; isActive?: boolean }[]>(
-      `/${factoryId.value}/system-config/units`
-    );
-    if (res.success && Array.isArray(res.data) && res.data.length > 0) {
-      unitDictOptions.value = res.data
-        .filter(u => u.isActive !== false)
-        .map(u => ({ label: u.unitName, value: u.unitName }));
-    }
-  } catch {
-    // 加载失败 → 静默, 使用兜底列表
-  }
-}
+import UnitSelect from '@/components/common/UnitSelect.vue';
+import { showSingletonNotification } from '@/utils/singletonNotification';
+import { isCurrentCategorySuggestion, reconcilePackagingSpecs } from './productDialogState';
 
 // T137: 转换数 placeholder 动态显示实际单位名 ("1 筐 = ? 盒 填 20")
 const conversionPlaceholder = computed(() => {
@@ -65,11 +27,7 @@ const conversionPlaceholder = computed(() => {
 });
 
 // T146: 标准克重 placeholder — 动态替换二级单位名 (如 "每盒多少克")
-const gramsPerUnitPlaceholder = computed(() => {
-  const l2 = formData.unit?.trim();
-  if (l2) return `每${l2}多少克（如 1${l2}=120克 填 120）`;
-  return '每二级单位多少克（如 1盒=120克 填 120），末道报工折算用';
-});
+const gramsPerUnitPlaceholder = computed(() => '每基本单位数量');
 
 // 产品扩展字段 — 添加新字段只需在此数组加一行
 // T123 重组: gramsPerUnit + boxConversionCoefficient 移到 '规格信息' 组
@@ -368,7 +326,7 @@ function packagingSpecText(spec: PackagingSpec): string {
 const baseProductNameSuggestions = ref<{ value: string }[]>([]);
 function queryBaseProductName(query: string, cb: (suggestions: { value: string }[]) => void) {
   const existing = new Set<string>();
-  for (const p of tableData.value) {
+  for (const p of tableData.value.filter((item) => item.productCategory === formData.productCategory)) {
     const bpn = (p as ProductType).baseProductName;
     if (bpn) existing.add(bpn);
     if (p.name) existing.add(p.name);
@@ -455,15 +413,19 @@ function handleCategoryChange() {
 const isSemiFinishedSku = computed(() => formData.productCategory === 'SEMI_FINISHED');
 
 function applyCategoryUnitContract(): void {
-  if (!isSemiFinishedSku.value) return;
-  // 半成品可按实际 SKU 定义基本单位；仅重量型 SKU 在 Workflow/报工层统一折算为 kg。
-  if (!formData.unit) formData.unit = 'kg';
-  formData.gramsPerUnit = undefined;
-  formData.wipToFgYield = undefined;
-  formData.level1Unit = undefined;
-  formData.boxConversionCoefficient = undefined;
-  formData.specification = '';
-  packagingSpecs.value = [];
+  if (isSemiFinishedSku.value) {
+    // 半成品可按实际 SKU 定义基本单位；仅重量型 SKU 在 Workflow/报工层统一折算为 kg。
+    if (!formData.unit) formData.unit = 'kg';
+    formData.gramsPerUnit = undefined;
+    formData.wipToFgYield = undefined;
+    formData.level1Unit = undefined;
+    formData.boxConversionCoefficient = undefined;
+    formData.specification = '';
+    packagingSpecs.value = reconcilePackagingSpecs(formData.productCategory, packagingSpecs.value, () => blankPackagingSpec(0));
+    return;
+  }
+  // 从半成品切回需要装箱的产品类型时，稳定恢复一条默认箱规。
+  packagingSpecs.value = reconcilePackagingSpecs(formData.productCategory, packagingSpecs.value, () => blankPackagingSpec(0));
 }
 
 // ==================== T149: SKU 智能防呆填充 (名称→大类/单位/装箱 历史记忆) ====================
@@ -569,10 +531,23 @@ async function fetchSuggest() {
   const name = (formData.name || '').trim();
   // T154: 名称为空 → 清空所有 cascade 管控的非手动编辑字段
   if (!name) { clearCascadeFields(); return; }
+  const requestedCategory = formData.productCategory;
+  const requestedName = name;
   try {
     const res = await get<SuggestResult>(`/${factoryId.value}/product-types/suggest`, {
       params: { name, productCategory: formData.productCategory || undefined },
     });
+    // 丢弃大类或名称变化前发出的旧响应；后端若返回跨类结果也不应用。
+    if (!isCurrentCategorySuggestion(
+      formData.name || '',
+      formData.productCategory,
+      requestedName,
+      requestedCategory,
+      res.data?.productCategory,
+    )) {
+      suggestHint.value = '';
+      return;
+    }
     // T154: cascade 开始写字段, 防 handleExtendedFormUpdate 误标手动编辑
     cascadeWriting = true;
     try {
@@ -775,7 +750,6 @@ const exactNameDuplicate = computed(() => {
 onMounted(() => {
   loadData();
   loadCustomers();
-  loadUnitDict(); // T137: 计量单位字典 (供一级/二级单位下拉)
   loadFilterOptionsSource(); // 筛选下拉动态取值源
 });
 
@@ -1071,7 +1045,7 @@ async function handleSubmit() {
 }
 
 function offerBomConfiguration(product: ProductType) {
-  ElNotification({
+  showSingletonNotification({
     title: '配置 BOM',
     message: `新产品「${product.name}」已创建，点击"去配置"设置原辅料配方`,
     type: 'info',
@@ -1090,17 +1064,36 @@ async function offerWorkProcessRecommendation(product: ProductType) {
   if (!factoryId.value) return;
   try {
     const res = await getProductWorkProcessRecommendation(factoryId.value, product.id, 5);
-    const count = res.success && res.data ? res.data.recommendations.length : 0;
-    if (!res.success || !res.data || count === 0) {
-      ElMessage.warning(res.message || res.data?.message || '暂未生成推荐工序，请手动配置');
-      return;
-    }
+    const recommendation = res.success ? res.data : null;
+    const count = recommendation?.recommendations?.length || 0;
+    const nestedProvenance = recommendation?.provenance;
+    const explicitProvenance = Boolean(
+      recommendation?.sourceProductTypeId
+      && recommendation?.sourceProductName
+      && recommendation?.sourceWorkflowId != null
+      && recommendation?.sourceWorkflowVersion != null,
+    );
+    const complete = recommendation?.reasonCode === 'COMPLETE_PUBLISHED_WORKFLOW'
+      || recommendation?.completeWorkflow === true
+      || recommendation?.workflowComplete === true
+      || (typeof nestedProvenance === 'object' && nestedProvenance !== null
+        && (nestedProvenance.completeWorkflow === true || nestedProvenance.workflowComplete === true || nestedProvenance.complete === true));
+    const fromHistory = recommendation?.source === 'PUBLISHED_WORKFLOW'
+      || recommendation?.source === 'HISTORY'
+      || recommendation?.source === 'HISTORY_WORKFLOW';
+    if (!recommendation || count === 0 || (!explicitProvenance && !nestedProvenance) || !complete || !fromHistory) return;
 
-    // 非阻塞：用 ElNotification 代替 ElMessageBox.confirm，
+    const sourceName = recommendation.sourceProductName
+      || (typeof nestedProvenance === 'string'
+        ? nestedProvenance
+        : nestedProvenance?.sourceProductName || nestedProvenance?.workflowName || nestedProvenance?.sourceProductCode)
+      || '历史完整 Workflow';
+
+    // 非阻塞：用全局单例通知代替 ElMessageBox.confirm，
     // 用户可继续操作产品列表，通知自动展示在角落，点击"去查看"再跳转。
-    ElNotification({
+    showSingletonNotification({
       title: 'AI 工序推荐',
-      message: `AI 已推荐 ${count} 道工序，点击"去查看"核对草稿`,
+      message: `已找到来源「${sourceName}」的完整 ${count} 道工序，点击进入核对草稿`,
       type: 'success',
       duration: 0,
       showClose: true,
@@ -1115,7 +1108,8 @@ async function offerWorkProcessRecommendation(product: ProductType) {
       },
     });
   } catch (error) {
-    handleCatchError(error, '推荐工序生成失败');
+    // 推荐是非阻塞增强能力；失败时不弹持久 warning 干扰继续录入。
+    console.error('工序推荐加载失败:', error);
   }
 }
 
@@ -1842,14 +1836,12 @@ async function handleAiProductCreate() {
         />
         <!-- 基本单位(unit) = 最小计量/售卖单位 (成品如 盒/包; 原料如 kg) -->
         <el-form-item label="基本单位" prop="unit">
-          <el-select
+          <UnitSelect
             v-model="formData.unit"
-            placeholder="选择或输入基本单位（如 盒、包、kg）"
-            filterable allow-create clearable style="width: 100%"
+            :factory-id="factoryId"
+            placeholder="搜索基本单位；无匹配可新增"
             @change="markUnitEdited"
-          >
-            <el-option v-for="opt in unitSelectOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-          </el-select>
+          />
           <div class="form-tip" v-if="isSemiFinishedSku">半成品只维护基本单位；g/kg 等重量单位在生产报工时统一按 kg，非重量单位（如只、件）保留 SKU 单位</div>
           <div class="form-tip" v-else>基本单位 = 最小计量/售卖单位（成品如「盒」「袋」）；修改后会同步标准克重和所有装箱换算右侧单位</div>
         </el-form-item>
@@ -1880,10 +1872,8 @@ async function handleAiProductCreate() {
                 <el-tag v-if="index === 0" size="small" type="success">默认</el-tag>
                 <span v-else class="packaging-spec-index">规格 {{ index + 1 }}</span>
                 <span class="spec-conversion-one">1</span>
-                <el-select v-model="spec.packageUnit" placeholder="大包装单位" filterable allow-create clearable
-                  class="spec-unit-select" @change="markLevel1UnitEdited">
-                  <el-option v-for="opt in unitSelectOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-                </el-select>
+                <UnitSelect v-model="spec.packageUnit" :factory-id="factoryId" placeholder="大包装单位"
+                  class="spec-unit-select" @change="markLevel1UnitEdited" />
                 <span class="spec-conversion-eq">＝</span>
                 <el-input-number v-model="spec.conversionFactor" :min="1" :precision="0" :controls="false"
                   placeholder="换算数" class="spec-coef-input" @change="markBoxCoefEdited" />
@@ -2549,6 +2539,10 @@ async function handleAiProductCreate() {
   align-items: center;
   gap: 8px;
   white-space: nowrap;
+}
+
+.standard-weight-row :deep(.el-input-number) {
+  width: 220px;
 }
 
 .standard-weight-unit {

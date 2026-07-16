@@ -45,5 +45,10 @@ describe('SKU editor dialog UX', () => {
     expect(source).toContain('class="packaging-rule-note"');
     expect(source).toContain('一个 SKU 只有一个基本单位和一份标准克重');
     expect(source).toContain('添加多装箱包装规则');
+    expect(source).toContain('reconcilePackagingSpecs(formData.productCategory');
+    expect(source).toContain('isCurrentCategorySuggestion(');
+    expect(source).toContain("recommendation?.source === 'PUBLISHED_WORKFLOW'");
+    expect(source).toContain("recommendation?.reasonCode === 'COMPLETE_PUBLISHED_WORKFLOW'");
+    expect(source).not.toContain("ElMessage.warning(res.message || res.data?.message || '暂未生成推荐工序");
   });
 });

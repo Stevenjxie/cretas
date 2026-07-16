@@ -1,45 +1,56 @@
 package com.cretas.aims.ai.tool.impl.workprocess;
 
-import com.cretas.aims.ai.client.PythonLLMClient;
-import com.cretas.aims.ai.dto.ChatCompletionRequest;
-import com.cretas.aims.ai.dto.ChatCompletionResponse;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.dto.ProductProcessWorkflowDTO;
+import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.ProductType;
-import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.WorkProcess;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
-import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
-import com.fasterxml.jackson.databind.JsonNode;
+import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.PriorityQueue;
+import java.util.Queue;
+import java.util.Set;
 import java.util.stream.Collectors;
 
+/**
+ * Recommends a traceable process chain by copying one complete published,
+ * product-owned workflow. Legacy ProductWorkProcess rows and LLM guesses are
+ * intentionally excluded because neither can prove a complete source chain.
+ */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class ProductWorkProcessRecommendTool extends AbstractBusinessTool {
 
-    private static final int DEFAULT_LIMIT = 5;
     private static final String REVIEW_NOTICE = "AI 建议，请核对";
+    private static final String SOURCE = "PUBLISHED_WORKFLOW";
+    private static final String SOURCE_SCOPE = "PRODUCT_OWNED";
 
     private final ProductTypeRepository productTypeRepository;
-    private final ProductWorkProcessRepository productWorkProcessRepository;
+    private final ProductProcessWorkflowRepository workflowRepository;
     private final WorkProcessRepository workProcessRepository;
-    private final PythonLLMClient pythonLLMClient;
+    private final ProductProcessWorkflowValidator workflowValidator;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -49,17 +60,16 @@ public class ProductWorkProcessRecommendTool extends AbstractBusinessTool {
 
     @Override
     public String getDescription() {
-        return "新建产品后推荐产品工序链。按同 productCategory 的相似产品历史工序频次打分；无历史时基于产品名/类别调用 LLM 给建议草稿。只返回草稿，不写库。";
+        return "只从同 productCategory 的单一历史 SKU 最新已发布完整 Workflow 返回可追溯复制候选；只读且不写库。";
     }
 
     @Override
     public Map<String, Object> getParametersSchema() {
-        Map<String, Object> properties = new HashMap<>();
-        properties.put("productTypeId", Map.of("type", "string", "description", "新建或待配置的产品类型ID"));
-        properties.put("limit", Map.of("type", "integer", "description", "最多推荐几道工序，默认 5"));
         return Map.of(
                 "type", "object",
-                "properties", properties,
+                "properties", Map.of(
+                        "productTypeId", Map.of("type", "string", "description", "待配置产品类型 ID"),
+                        "limit", Map.of("type", "integer", "description", "兼容字段；完整来源链不会被截断")),
                 "required", List.of("productTypeId"));
     }
 
@@ -70,212 +80,288 @@ public class ProductWorkProcessRecommendTool extends AbstractBusinessTool {
 
     @Override
     @Transactional(readOnly = true)
-    protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) {
-        RecommendationResult result = recommend(factoryId, getString(params, "productTypeId"), getInteger(params, "limit", DEFAULT_LIMIT));
+    protected Map<String, Object> doExecute(
+            String factoryId,
+            Map<String, Object> params,
+            Map<String, Object> context) {
+        RecommendationResult result = recommend(
+                factoryId,
+                getString(params, "productTypeId"),
+                getInteger(params, "limit", 5));
         return buildSimpleResult(buildMessage(result), result);
     }
 
     @Transactional(readOnly = true)
-    public RecommendationResult recommend(String factoryId, String productTypeId, int limit) {
-        int safeLimit = limit <= 0 ? DEFAULT_LIMIT : Math.min(limit, 10);
+    public RecommendationResult recommend(String factoryId, String productTypeId, int ignoredLimit) {
         ProductType target = productTypeRepository.findByIdAndFactoryId(productTypeId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("产品类型不存在: " + productTypeId));
 
-        RecommendationResult historyResult = recommendFromHistory(factoryId, target, safeLimit);
-        if (!historyResult.recommendations().isEmpty()) {
-            return historyResult;
-        }
-
-        return recommendFromLlm(factoryId, target, safeLimit);
-    }
-
-    private RecommendationResult recommendFromHistory(String factoryId, ProductType target, int limit) {
-        List<ProductType> similarProducts = productTypeRepository.findByFactoryId(factoryId).stream()
-                .filter(p -> Boolean.TRUE.equals(p.getIsActive()))
-                .filter(p -> !Objects.equals(p.getId(), target.getId()))
-                .filter(p -> sameText(p.getProductCategory(), target.getProductCategory()))
+        List<WorkflowCandidate> candidates = productTypeRepository.findByFactoryId(factoryId).stream()
+                .filter(product -> Boolean.TRUE.equals(product.getIsActive()))
+                .filter(product -> !Objects.equals(product.getId(), target.getId()))
+                .filter(product -> sameText(product.getProductCategory(), target.getProductCategory()))
+                .map(product -> candidate(factoryId, product))
+                .flatMap(Optional::stream)
+                .sorted(Comparator
+                        .comparing((WorkflowCandidate value) -> value.workflow().getId(),
+                                Comparator.nullsLast(Comparator.reverseOrder()))
+                        .thenComparing(value -> value.sourceProduct().getId()))
                 .toList();
 
-        Map<String, ProcessStats> statsByProcessId = new LinkedHashMap<>();
-        for (ProductType product : similarProducts) {
-            List<ProductWorkProcess> chain = productWorkProcessRepository
-                    .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, product.getId());
-            for (ProductWorkProcess item : chain) {
-                if (!Boolean.TRUE.equals(item.getIsActive())) {
-                    continue;
-                }
-                statsByProcessId
-                        .computeIfAbsent(item.getWorkProcessId(), ProcessStats::new)
-                        .addOrder(item.getProcessOrder());
-            }
+        if (candidates.isEmpty()) {
+            return emptyResult(
+                    target.getId(),
+                    "NO_COMPLETE_PUBLISHED_WORKFLOW",
+                    "没有同产品大类且可证明完整的已发布 product-owned Workflow；未使用 legacy 工序或 LLM 猜测");
         }
 
-        if (statsByProcessId.isEmpty()) {
-            return emptyResult(target.getId(), "NO_HISTORY", "未找到同产品大类的历史工序链，准备使用 LLM 冷启动建议");
+        ResolvedCandidate selected = candidates.stream()
+                .map(candidate -> resolveCandidate(factoryId, candidate))
+                .flatMap(Optional::stream)
+                .findFirst()
+                .orElse(null);
+        if (selected == null) {
+            return emptyResult(
+                    target.getId(),
+                    "SOURCE_PROCESS_UNAVAILABLE",
+                    "候选 Workflow 引用了不存在或已停用的工序定义，已按 fail closed 拒绝推荐");
         }
-
-        List<ProcessStats> topStats = statsByProcessId.values().stream()
-                .sorted(Comparator
-                        .comparingInt(ProcessStats::frequency).reversed()
-                        .thenComparingDouble(ProcessStats::averageOrder)
-                        .thenComparing(ProcessStats::workProcessId))
-                .limit(limit)
-                .sorted(Comparator
-                        .comparingDouble(ProcessStats::averageOrder)
-                        .thenComparing(Comparator.comparingInt(ProcessStats::frequency).reversed())
-                        .thenComparing(ProcessStats::workProcessId))
-                .toList();
-
-        List<String> ids = topStats.stream().map(ProcessStats::workProcessId).toList();
-        Map<String, WorkProcess> workProcessById = workProcessRepository.findByFactoryIdAndIdIn(factoryId, ids).stream()
-                .collect(Collectors.toMap(WorkProcess::getId, wp -> wp, (a, b) -> a));
 
         List<RecommendedProcess> recommendations = new ArrayList<>();
-        for (int i = 0; i < topStats.size(); i++) {
-            ProcessStats stats = topStats.get(i);
-            WorkProcess workProcess = workProcessById.get(stats.workProcessId());
-            if (workProcess == null || !Boolean.TRUE.equals(workProcess.getIsActive())) {
-                continue;
-            }
-            recommendations.add(toRecommendedProcess(workProcess, i + 1, stats.frequency(), "HISTORY"));
+        for (int index = 0; index < selected.candidate().processNodes().size(); index++) {
+            ProductProcessWorkflowDTO.Node node = selected.candidate().processNodes().get(index);
+            WorkProcess process = selected.workProcesses().get(workProcessId(node));
+            recommendations.add(new RecommendedProcess(
+                    process.getId(),
+                    process.getProcessName(),
+                    process.getProcessCategory(),
+                    process.getUnit(),
+                    process.getEstimatedMinutes(),
+                    index + 1,
+                    100,
+                    "COPIED_FROM_SINGLE_PUBLISHED_WORKFLOW"));
         }
 
+        ProductProcessWorkflow workflow = selected.candidate().workflow();
+        ProductType sourceProduct = selected.candidate().sourceProduct();
         return new RecommendationResult(
                 target.getId(),
-                "HISTORY",
+                SOURCE,
+                SOURCE_SCOPE,
+                "COMPLETE_PUBLISHED_WORKFLOW",
                 REVIEW_NOTICE,
-                String.format("基于 %d 个同产品大类历史产品聚合生成", similarProducts.size()),
+                "同产品大类中最新发布且通过完整性校验的 product-owned Workflow",
+                sourceProduct.getId(),
+                sourceProduct.getName(),
+                workflow.getId(),
+                workflow.getDefinitionVersion(),
                 recommendations);
     }
 
-    private RecommendationResult recommendFromLlm(String factoryId, ProductType target, int limit) {
-        if (pythonLLMClient == null) {
-            return emptyResult(target.getId(), "LLM_UNAVAILABLE", "没有历史工序链，且 LLM 客户端未配置，无法生成冷启动建议");
-        }
-
-        List<WorkProcess> catalog = workProcessRepository.findByFactoryIdAndIsActiveTrueOrderBySortOrderAsc(factoryId);
-        if (catalog.isEmpty()) {
-            return emptyResult(target.getId(), "NO_CATALOG", "本厂还没有可用工序定义，请先到工序管理创建工序");
-        }
-
-        String systemPrompt = "你是食品工厂工序配置助手。只能从给定工序 catalog 中选择，返回严格 JSON 数组，格式为 [{\"processName\":\"修整\"}]。不要解释。";
-        String userInput = """
-                产品名: %s
-                产品大类: %s
-                温区: %s
-                单位: %s
-                最多推荐 %d 道。
-                可选工序 catalog:
-                %s
-                """.formatted(
-                safeText(target.getName()),
-                safeText(target.getProductCategory()),
-                safeText(target.getTemperatureZone()),
-                safeText(target.getUnit()),
-                limit,
-                catalog.stream()
-                        .map(wp -> "- " + wp.getProcessName() + " / " + safeText(wp.getProcessCategory()) + " / " + safeText(wp.getUnit()))
-                        .collect(Collectors.joining("\n")));
-
-        ChatCompletionResponse response = pythonLLMClient.chatCompletion(
-                ChatCompletionRequest.builder()
-                        .model("qwen-plus")
-                        .temperature(0.2)
-                        .maxTokens(800)
-                        .enableThinking(false)
-                        .messages(List.of(
-                                com.cretas.aims.ai.dto.ChatMessage.system(systemPrompt),
-                                com.cretas.aims.ai.dto.ChatMessage.user(userInput)))
-                        .build());
-
-        if (response == null || response.hasError() || response.getContent() == null || response.getContent().isBlank()) {
-            String reason = response != null && response.hasError() ? response.getErrorMessage() : "LLM 无有效响应";
-            return emptyResult(target.getId(), "LLM_UNAVAILABLE", "没有历史工序链，LLM 冷启动建议失败: " + safeText(reason));
-        }
-
-        List<String> suggestedNames = parseProcessNames(response.getContent());
-        if (suggestedNames.isEmpty()) {
-            return emptyResult(target.getId(), "LLM_EMPTY", "LLM 未返回可识别的工序名称，请手动配置");
-        }
-
-        Map<String, WorkProcess> catalogByName = catalog.stream()
-                .collect(Collectors.toMap(WorkProcess::getProcessName, wp -> wp, (a, b) -> a, LinkedHashMap::new));
-        List<RecommendedProcess> recommendations = new ArrayList<>();
-        for (String name : suggestedNames) {
-            WorkProcess workProcess = catalogByName.get(name);
-            if (workProcess == null || recommendations.stream().anyMatch(r -> r.workProcessId().equals(workProcess.getId()))) {
-                continue;
-            }
-            recommendations.add(toRecommendedProcess(workProcess, recommendations.size() + 1, 1, "LLM"));
-            if (recommendations.size() >= limit) {
-                break;
-            }
-        }
-
-        if (recommendations.isEmpty()) {
-            return emptyResult(target.getId(), "LLM_NO_MATCH", "LLM 建议没有命中本厂工序 catalog，请手动配置或先补充工序定义");
-        }
-
-        return new RecommendationResult(target.getId(), "LLM", REVIEW_NOTICE, "无历史产品时由 LLM 根据产品名和类别生成", recommendations);
+    private Optional<ResolvedCandidate> resolveCandidate(String factoryId, WorkflowCandidate candidate) {
+        List<String> workProcessIds = candidate.processNodes().stream()
+                .map(this::workProcessId)
+                .toList();
+        Map<String, WorkProcess> masters = workProcessRepository
+                .findByFactoryIdAndIdIn(factoryId, workProcessIds).stream()
+                .filter(process -> Boolean.TRUE.equals(process.getIsActive()))
+                .collect(Collectors.toMap(WorkProcess::getId, process -> process, (left, right) -> left));
+        return workProcessIds.stream().allMatch(masters::containsKey)
+                ? Optional.of(new ResolvedCandidate(candidate, masters))
+                : Optional.empty();
     }
 
-    private List<String> parseProcessNames(String content) {
-        String json = stripCodeFence(content.trim());
+    private Optional<WorkflowCandidate> candidate(String factoryId, ProductType sourceProduct) {
+        Optional<ProductProcessWorkflow> workflow = workflowRepository
+                .findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                        factoryId,
+                        sourceProduct.getId(),
+                        ProductProcessWorkflow.Status.PUBLISHED);
+        if (workflow.isEmpty()) {
+            return Optional.empty();
+        }
+
         try {
-            JsonNode node = objectMapper.readTree(json);
-            if (!node.isArray()) {
-                return List.of();
+            ProductProcessWorkflowDTO definition = toDefinition(workflow.get());
+            workflowValidator.validateForPublish(definition);
+            List<ProductProcessWorkflowDTO.Node> processNodes = completeProductOwnedProcessOrder(
+                    sourceProduct,
+                    definition);
+            if (processNodes.isEmpty()) {
+                return Optional.empty();
             }
-            List<String> names = new ArrayList<>();
-            for (JsonNode item : node) {
-                String name = Optional.ofNullable(item.get("processName"))
-                        .map(JsonNode::asText)
-                        .orElse("");
-                if (!name.isBlank()) {
-                    names.add(name.trim());
-                }
-            }
-            return names;
-        } catch (Exception e) {
-            log.warn("解析 LLM 工序推荐失败: {}", e.getMessage());
+            return Optional.of(new WorkflowCandidate(sourceProduct, workflow.get(), processNodes));
+        } catch (BusinessException | IllegalArgumentException exception) {
+            log.debug(
+                    "Skip incomplete workflow recommendation source: factoryId={}, productTypeId={}, workflowId={}, reason={}",
+                    factoryId,
+                    sourceProduct.getId(),
+                    workflow.get().getId(),
+                    exception.getMessage());
+            return Optional.empty();
+        } catch (Exception exception) {
+            log.warn(
+                    "Skip unreadable workflow recommendation source: factoryId={}, productTypeId={}, workflowId={}",
+                    factoryId,
+                    sourceProduct.getId(),
+                    workflow.get().getId(),
+                    exception);
+            return Optional.empty();
+        }
+    }
+
+    private ProductProcessWorkflowDTO toDefinition(ProductProcessWorkflow workflow) throws Exception {
+        ProductProcessWorkflowDTO definition = new ProductProcessWorkflowDTO();
+        definition.setId(workflow.getId());
+        definition.setFactoryId(workflow.getFactoryId());
+        definition.setProductTypeId(workflow.getProductTypeId());
+        definition.setSchemaVersion(workflow.getSchemaVersion());
+        definition.setStatus(workflow.getStatus().name());
+        definition.setVersion(workflow.getDefinitionVersion());
+        definition.setNodes(objectMapper.readValue(
+                workflow.getNodesJson(),
+                new TypeReference<List<ProductProcessWorkflowDTO.Node>>() { }));
+        definition.setEdges(objectMapper.readValue(
+                workflow.getEdgesJson(),
+                new TypeReference<List<ProductProcessWorkflowDTO.Edge>>() { }));
+        definition.setViewport(objectMapper.readValue(
+                workflow.getViewportJson(),
+                ProductProcessWorkflowDTO.Viewport.class));
+        return definition;
+    }
+
+    /**
+     * Adds the recommendation-specific completeness gate on top of the existing
+     * publish validator. Every process must be reachable from a raw entry and be
+     * able to reach the source product's terminal material cell.
+     */
+    private List<ProductProcessWorkflowDTO.Node> completeProductOwnedProcessOrder(
+            ProductType sourceProduct,
+            ProductProcessWorkflowDTO definition) {
+        Map<String, ProductProcessWorkflowDTO.Node> nodes = definition.getNodes().stream()
+                .collect(Collectors.toMap(
+                        ProductProcessWorkflowDTO.Node::getId,
+                        node -> node,
+                        (left, right) -> left,
+                        LinkedHashMap::new));
+        Map<String, List<String>> outgoing = new HashMap<>();
+        Map<String, List<String>> incoming = new HashMap<>();
+        Map<String, Integer> indegree = new HashMap<>();
+        nodes.keySet().forEach(id -> indegree.put(id, 0));
+        for (ProductProcessWorkflowDTO.Edge edge : definition.getEdges()) {
+            outgoing.computeIfAbsent(edge.getSource(), ignored -> new ArrayList<>()).add(edge.getTarget());
+            incoming.computeIfAbsent(edge.getTarget(), ignored -> new ArrayList<>()).add(edge.getSource());
+            indegree.merge(edge.getTarget(), 1, Integer::sum);
+        }
+
+        Set<String> rawEntries = nodes.values().stream()
+                .filter(node -> "RAW_MATERIAL".equals(node.getKind()))
+                .filter(node -> incoming.getOrDefault(node.getId(), List.of()).isEmpty())
+                .map(ProductProcessWorkflowDTO.Node::getId)
+                .collect(Collectors.toSet());
+        Set<String> matchingTerminals = nodes.values().stream()
+                .filter(node -> expectedTerminalKind(sourceProduct).equals(node.getKind()))
+                .filter(node -> outgoing.getOrDefault(node.getId(), List.of()).isEmpty())
+                .filter(node -> sourceProduct.getId().equals(text(data(node).get("skuId"))))
+                .map(ProductProcessWorkflowDTO.Node::getId)
+                .collect(Collectors.toSet());
+        if (rawEntries.isEmpty() || matchingTerminals.isEmpty()) {
             return List.of();
         }
-    }
 
-    private String stripCodeFence(String content) {
-        if (!content.startsWith("```")) {
-            return content;
+        Set<String> reachableFromRaw = reachable(rawEntries, outgoing);
+        Set<String> canReachTerminal = reachable(matchingTerminals, incoming);
+        List<ProductProcessWorkflowDTO.Node> processes = nodes.values().stream()
+                .filter(node -> "PROCESS".equals(node.getKind()))
+                .toList();
+        if (processes.isEmpty()
+                || processes.stream().anyMatch(node -> !reachableFromRaw.contains(node.getId())
+                || !canReachTerminal.contains(node.getId())
+                || workProcessId(node) == null)) {
+            return List.of();
         }
-        int firstLineEnd = content.indexOf('\n');
-        int lastFence = content.lastIndexOf("```");
-        if (firstLineEnd >= 0 && lastFence > firstLineEnd) {
-            return content.substring(firstLineEnd + 1, lastFence).trim();
+
+        PriorityQueue<String> ready = new PriorityQueue<>();
+        indegree.forEach((id, count) -> {
+            if (count == 0) {
+                ready.add(id);
+            }
+        });
+        List<ProductProcessWorkflowDTO.Node> orderedProcesses = new ArrayList<>();
+        while (!ready.isEmpty()) {
+            String current = ready.remove();
+            ProductProcessWorkflowDTO.Node node = nodes.get(current);
+            if (node != null && "PROCESS".equals(node.getKind())) {
+                orderedProcesses.add(node);
+            }
+            for (String next : outgoing.getOrDefault(current, List.of())) {
+                if (indegree.merge(next, -1, Integer::sum) == 0) {
+                    ready.add(next);
+                }
+            }
         }
-        return content;
+        return orderedProcesses.size() == processes.size() ? List.copyOf(orderedProcesses) : List.of();
     }
 
-    private RecommendedProcess toRecommendedProcess(WorkProcess workProcess, int order, int score, String reason) {
-        return new RecommendedProcess(
-                workProcess.getId(),
-                workProcess.getProcessName(),
-                workProcess.getProcessCategory(),
-                workProcess.getUnit(),
-                workProcess.getEstimatedMinutes(),
-                order,
-                score,
-                reason);
+    private Set<String> reachable(Set<String> starts, Map<String, List<String>> adjacency) {
+        Set<String> visited = new HashSet<>(starts);
+        Queue<String> queue = new ArrayDeque<>(starts);
+        while (!queue.isEmpty()) {
+            String current = queue.remove();
+            for (String next : adjacency.getOrDefault(current, List.of())) {
+                if (visited.add(next)) {
+                    queue.add(next);
+                }
+            }
+        }
+        return visited;
     }
 
-    private RecommendationResult emptyResult(String productTypeId, String source, String message) {
-        return new RecommendationResult(productTypeId, source, REVIEW_NOTICE, message, List.of());
+    private String expectedTerminalKind(ProductType product) {
+        return switch (safeText(product.getProductCategory()).toUpperCase()) {
+            case "SEMI_FINISHED", "SEMI_FINISHED_PRODUCT" -> "SEMI_FINISHED";
+            default -> "FINISHED_GOOD";
+        };
+    }
+
+    private Map<String, Object> data(ProductProcessWorkflowDTO.Node node) {
+        return node.getData() == null ? Map.of() : node.getData();
+    }
+
+    private String workProcessId(ProductProcessWorkflowDTO.Node node) {
+        return text(data(node).get("workProcessId"));
+    }
+
+    private String text(Object value) {
+        if (!(value instanceof String string) || string.isBlank()) {
+            return null;
+        }
+        return string.trim();
+    }
+
+    private RecommendationResult emptyResult(String productTypeId, String reasonCode, String message) {
+        return new RecommendationResult(
+                productTypeId,
+                "NONE",
+                SOURCE_SCOPE,
+                reasonCode,
+                REVIEW_NOTICE,
+                message,
+                null,
+                null,
+                null,
+                null,
+                List.of());
     }
 
     private String buildMessage(RecommendationResult result) {
-        int count = result.recommendations().size();
-        if (count == 0) {
+        if (result.recommendations().isEmpty()) {
             return result.message();
         }
-        return String.format("AI 已推荐 %d 道工序，去查看前请核对", count);
+        return String.format(
+                "已找到来源 %s 的完整 Workflow（%d 道工序），请核对后复制",
+                result.sourceProductName(),
+                result.recommendations().size());
     }
 
     private boolean sameText(String left, String right) {
@@ -289,8 +375,14 @@ public class ProductWorkProcessRecommendTool extends AbstractBusinessTool {
     public record RecommendationResult(
             String productTypeId,
             String source,
+            String sourceScope,
+            String reasonCode,
             String notice,
             String message,
+            String sourceProductTypeId,
+            String sourceProductName,
+            Long sourceWorkflowId,
+            Integer sourceWorkflowVersion,
             List<RecommendedProcess> recommendations) {
     }
 
@@ -305,30 +397,14 @@ public class ProductWorkProcessRecommendTool extends AbstractBusinessTool {
             String reason) {
     }
 
-    private static final class ProcessStats {
-        private final String workProcessId;
-        private int frequency;
-        private int orderTotal;
+    private record WorkflowCandidate(
+            ProductType sourceProduct,
+            ProductProcessWorkflow workflow,
+            List<ProductProcessWorkflowDTO.Node> processNodes) {
+    }
 
-        private ProcessStats(String workProcessId) {
-            this.workProcessId = workProcessId;
-        }
-
-        private void addOrder(Integer processOrder) {
-            frequency++;
-            orderTotal += processOrder == null ? frequency : processOrder;
-        }
-
-        private String workProcessId() {
-            return workProcessId;
-        }
-
-        private int frequency() {
-            return frequency;
-        }
-
-        private double averageOrder() {
-            return frequency == 0 ? 0 : (double) orderTotal / frequency;
-        }
+    private record ResolvedCandidate(
+            WorkflowCandidate candidate,
+            Map<String, WorkProcess> workProcesses) {
     }
 }

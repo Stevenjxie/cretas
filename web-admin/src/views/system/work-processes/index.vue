@@ -6,12 +6,12 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Refresh, Warning } from '@element-plus/icons-vue';
 import { handleCatchError } from '@/utils/errorToast';
 import WorkProcessAIChatPanel from './WorkProcessAIChatPanel.vue';
+import UnitSelect from '@/components/common/UnitSelect.vue';
 import {
   getWorkProcesses, createWorkProcess, updateWorkProcess,
   deleteWorkProcess, toggleWorkProcessStatus, getWorkProcessDuplicates,
-  getSystemUnitOptions,
   type WorkProcessItem, type WorkProcessDuplicateGroup,
-  type WorkProcessOutputMaterialKind, type SystemUnitOption
+  type WorkProcessOutputMaterialKind
 } from '@/api/processProduction';
 import {
   WORK_PROCESS_OUTPUT_KIND_OPTIONS,
@@ -89,27 +89,6 @@ const submitting = ref(false);
 const CATEGORIES = [
   '前处理', '加工', '熟制', '注射', '包装', '灭菌', '质检', '存储', '配送', '其他'
 ];
-
-const systemUnits = ref<SystemUnitOption[]>([]);
-const canonicalUnitOptions = computed(() => {
-  const options = systemUnits.value
-    .filter((unit) => unit.isActive !== false && unit.unitName.trim())
-    .map((unit) => ({
-      value: unit.unitName.trim(),
-      label: unit.unitSymbol && unit.unitSymbol !== unit.unitName
-        ? `${unit.unitName}（${unit.unitSymbol}）`
-        : unit.unitName,
-    }));
-  const currentValues = [formData.unit, formData.outputUnit]
-    .filter((value): value is string => Boolean(value?.trim()))
-    .map((value) => value.trim());
-  for (const value of currentValues) {
-    if (!options.some((option) => option.value === value)) {
-      options.push({ value, label: `${value}（历史值）` });
-    }
-  }
-  return options;
-});
 
 const processCategoryOptions = computed(() => Array.from(new Set([
   ...CATEGORIES,
@@ -281,19 +260,7 @@ async function handleAiApplied(): Promise<void> {
   }
 }
 
-onMounted(() => {
-  void Promise.all([loadData(), loadSystemUnits()]);
-});
-
-async function loadSystemUnits(): Promise<void> {
-  if (!factoryId.value) return;
-  try {
-    const response = await getSystemUnitOptions(factoryId.value);
-    systemUnits.value = response.success && Array.isArray(response.data) ? response.data : [];
-  } catch {
-    systemUnits.value = [];
-  }
-}
+onMounted(() => void loadData());
 
 async function loadData() {
   if (!factoryId.value) return;
@@ -637,30 +604,19 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
           />
         </el-form-item>
         <el-form-item label="投入单位" prop="unit">
-          <el-select v-model="formData.unit" placeholder="请选择 canonical 单位" filterable style="width: 100%">
-            <el-option
-              v-for="option in canonicalUnitOptions"
-              :key="option.value"
-              :label="option.label"
-              :value="option.value"
-            />
-          </el-select>
+          <UnitSelect
+            v-model="formData.unit"
+            :factory-id="factoryId"
+            placeholder="搜索投入单位；无匹配可新增"
+          />
         </el-form-item>
         <el-form-item label="产出单位" prop="outputUnit">
-          <el-select
+          <UnitSelect
             v-model="formData.outputUnit"
+            :factory-id="factoryId"
             placeholder="默认跟随投入单位"
-            filterable
-            style="width: 100%"
             @change="markOutputUnitEdited"
-          >
-            <el-option
-              v-for="option in canonicalUnitOptions"
-              :key="option.value"
-              :label="option.label"
-              :value="option.value"
-            />
-          </el-select>
+          />
           <span class="form-hint">新增时自动跟随投入单位；手动选择后不再被投入单位覆盖</span>
         </el-form-item>
         <el-form-item label="默认产出类型" prop="defaultOutputMaterialKind">

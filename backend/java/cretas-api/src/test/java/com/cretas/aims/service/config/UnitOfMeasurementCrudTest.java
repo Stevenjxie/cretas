@@ -54,14 +54,14 @@ class UnitOfMeasurementCrudTest {
     @Test
     @DisplayName("createUnit: 新建一个工厂级单位成功")
     void createUnit_success() {
-        UnitOfMeasurement unit = buildUnit(FACTORY_ID, UNIT_CODE, "筐", false);
-        when(unitRepo.existsByFactoryIdAndUnitCode(FACTORY_ID, UNIT_CODE)).thenReturn(false);
+        UnitOfMeasurement unit = buildUnit(FACTORY_ID, UNIT_CODE, "自定义周转单位", false);
+        when(unitRepo.findAllByFactoryId(FACTORY_ID)).thenReturn(List.of());
         when(unitRepo.save(any())).thenReturn(unit);
 
         UnitOfMeasurement result = service.createUnit(unit);
 
         assertThat(result.getUnitCode()).isEqualTo(UNIT_CODE);
-        assertThat(result.getUnitName()).isEqualTo("筐");
+        assertThat(result.getUnitName()).isEqualTo("自定义周转单位");
         verify(unitRepo).save(unit);
     }
 
@@ -69,7 +69,7 @@ class UnitOfMeasurementCrudTest {
     @DisplayName("createUnit: 重复 unitCode → 409 BusinessException (幂等防重)")
     void createUnit_duplicate_throws409() {
         UnitOfMeasurement unit = buildUnit(FACTORY_ID, UNIT_CODE, "筐", false);
-        when(unitRepo.existsByFactoryIdAndUnitCode(FACTORY_ID, UNIT_CODE)).thenReturn(true);
+        when(unitRepo.findAllByFactoryId(FACTORY_ID)).thenReturn(List.of(unit));
 
         assertThatThrownBy(() -> service.createUnit(unit))
                 .isInstanceOf(BusinessException.class)
@@ -82,14 +82,49 @@ class UnitOfMeasurementCrudTest {
     @DisplayName("createUnit: 工厂隔离 — 不同 factoryId 查询不冲突")
     void createUnit_factoryIsolation() {
         String otherFactory = "F001";
-        UnitOfMeasurement unit = buildUnit(otherFactory, UNIT_CODE, "筐", false);
-        when(unitRepo.existsByFactoryIdAndUnitCode(otherFactory, UNIT_CODE)).thenReturn(false);
+        UnitOfMeasurement unit = buildUnit(otherFactory, UNIT_CODE, "自定义周转单位", false);
+        when(unitRepo.findAllByFactoryId(otherFactory)).thenReturn(List.of());
         when(unitRepo.save(any())).thenReturn(unit);
 
         service.createUnit(unit);
 
-        verify(unitRepo).existsByFactoryIdAndUnitCode(otherFactory, UNIT_CODE);
-        verify(unitRepo, never()).existsByFactoryIdAndUnitCode(eq(FACTORY_ID), any());
+        verify(unitRepo).findAllByFactoryId(otherFactory);
+        verify(unitRepo, never()).findAllByFactoryId(FACTORY_ID);
+    }
+
+    @Test
+    @DisplayName("createUnit: name/symbol/alias 任一与已有单位别名冲突时拒绝并返回已有单位")
+    void createUnit_aliasConflict_returnsExistingUnitIdentity() {
+        UnitOfMeasurement existing = buildUnit(FACTORY_ID, "pcs", "件", true);
+        existing.setUnitSymbol("件");
+        existing.setAliasesJson(List.of("只", "个"));
+        UnitOfMeasurement requested = buildUnit(FACTORY_ID, "zhi", "只", false);
+        requested.setAliasesJson(List.of("piece"));
+        when(unitRepo.findAllByFactoryId(FACTORY_ID)).thenReturn(List.of(existing));
+
+        assertThatThrownBy(() -> service.createUnit(requested))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("pcs")
+                .hasMessageContaining("已有别名冲突")
+                .satisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                        .isEqualTo("UNIT_ALIAS_CONFLICT"));
+
+        verify(unitRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("createUnit: 内置 canonical 中文别名不能被重复创建")
+    void createUnit_builtinCanonicalAliasConflict() {
+        UnitOfMeasurement requested = buildUnit(FACTORY_ID, "gongjin", "公斤", false);
+        when(unitRepo.findAllByFactoryId(FACTORY_ID)).thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.createUnit(requested))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("kg")
+                .satisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                        .isEqualTo("UNIT_ALIAS_CONFLICT"));
+
+        verify(unitRepo, never()).save(any());
     }
 
     // ---- updateUnit ----

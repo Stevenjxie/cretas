@@ -47,6 +47,7 @@ class UnitContractServiceTest {
     @CsvSource({
             "克,g", "g,g", "公斤,kg", "千克,kg", "KG,kg",
             "毫升,ml", "mL,ml", "升,l", "件,pcs", "个,pcs", "只,pcs",
+            "毫米,mm", "公厘,mm", "厘米,cm", "公分,cm", "米,m", "公尺,m", "千米,km", "公里,km",
             "份,portion", "盒,box", "箱,case", "袋,bag", "包,pack", "瓶,bottle",
             "罐,can", "框,crate", "筐,crate", "桶,pail", "卷,roll", "片,slice", "项,item"
     })
@@ -66,6 +67,14 @@ class UnitContractServiceTest {
     }
 
     @Test
+    void catalogIncludesBuiltInLengthUnitsWithoutDatabaseSeedRows() {
+        assertThat(service.catalog(FACTORY_ID))
+                .filteredOn(unit -> unit.dimension() == UnitDimension.LENGTH)
+                .extracting(CanonicalUnit::code)
+                .containsExactly("cm", "km", "m", "mm");
+    }
+
+    @Test
     void boxAndPcsAreNotEquivalent() {
         assertThat(service.areEquivalent(FACTORY_ID, "盒", "件")).isFalse();
     }
@@ -77,6 +86,28 @@ class UnitContractServiceTest {
 
         assertThat(result.status()).isEqualTo(UnitConversionStatus.CONVERTED);
         assertThat(result.quantity()).isEqualByComparingTo("1234.567");
+    }
+
+    @Test
+    void convertsLengthAliasesWithinTheLengthDimension() {
+        UnitConversionResult result = service.convert(
+                new BigDecimal("1.25"), context("公里", "米"));
+
+        assertThat(result.status()).isEqualTo(UnitConversionStatus.CONVERTED);
+        assertThat(result.quantity()).isEqualByComparingTo("1250");
+        assertThat(service.describe(FACTORY_ID, "cm"))
+                .hasValueSatisfying(unit -> assertThat(unit.dimension()).isEqualTo(UnitDimension.LENGTH));
+        verifyNoInteractions(conversionRepository);
+    }
+
+    @Test
+    void rejectsCrossScientificDimensionsEvenWhenProductContextExists() {
+        UnitConversionResult result = service.convert(
+                new BigDecimal("1"), context(PRODUCT_TYPE_ID, "kg", "m"));
+
+        assertThat(result.status()).isEqualTo(UnitConversionStatus.INCOMPATIBLE_DIMENSION);
+        assertThat(result.quantity()).isEqualByComparingTo("1");
+        verifyNoInteractions(conversionRepository);
     }
 
     @Test

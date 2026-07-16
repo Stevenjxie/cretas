@@ -1,198 +1,307 @@
 package com.cretas.aims.ai.tool.impl.workprocess;
 
 import com.cretas.aims.ai.client.PythonLLMClient;
-import com.cretas.aims.ai.dto.ChatCompletionResponse;
+import com.cretas.aims.dto.ProductProcessWorkflowDTO;
+import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.ProductType;
-import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.WorkProcess;
+import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
-import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-@DisplayName("ProductWorkProcessRecommendTool 推荐打分")
+@DisplayName("ProductWorkProcessRecommendTool published workflow gate")
 class ProductWorkProcessRecommendToolTest {
 
     private static final String FACTORY_ID = "F006";
     private static final String TARGET_ID = "target-product";
 
-    @Test
-    @DisplayName("同产品大类历史工序按频次打分取 Top，并按平均工序顺序输出草稿链")
-    void recommendsBySameProductCategoryFrequencyAndAverageOrder() {
-        ProductTypeRepository productTypeRepository = mock(ProductTypeRepository.class);
-        ProductWorkProcessRepository productWorkProcessRepository = mock(ProductWorkProcessRepository.class);
-        WorkProcessRepository workProcessRepository = mock(WorkProcessRepository.class);
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private ProductTypeRepository productTypeRepository;
+    private ProductProcessWorkflowRepository workflowRepository;
+    private WorkProcessRepository workProcessRepository;
+    private ProductWorkProcessRecommendTool tool;
 
-        ProductType target = product("target-product", "新卤猪舌", "FINISHED_PRODUCT", "冷藏");
-        ProductType similarA = product("similar-a", "卤猪蹄", "FINISHED_PRODUCT", "冷藏");
-        ProductType similarB = product("similar-b", "卤牛腱", "FINISHED_PRODUCT", "冷冻");
-        ProductType similarC = product("similar-c", "酱猪耳", "FINISHED_PRODUCT", "冷藏");
-        ProductType differentCategory = product("raw-a", "冻猪舌", "RAW_MATERIAL", "冷冻");
-
-        when(productTypeRepository.findByIdAndFactoryId(TARGET_ID, FACTORY_ID))
-                .thenReturn(java.util.Optional.of(target));
-        when(productTypeRepository.findByFactoryId(FACTORY_ID))
-                .thenReturn(List.of(target, similarA, similarB, similarC, differentCategory));
-
-        when(productWorkProcessRepository.findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, "similar-a"))
-                .thenReturn(List.of(binding("cut", 1), binding("cook", 2), binding("pack", 3)));
-        when(productWorkProcessRepository.findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, "similar-b"))
-                .thenReturn(List.of(binding("cut", 1), binding("cook", 2), binding("pack", 3)));
-        when(productWorkProcessRepository.findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, "similar-c"))
-                .thenReturn(List.of(binding("cut", 1), binding("pickle", 2), binding("pack", 3)));
-        when(productWorkProcessRepository.findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, "raw-a"))
-                .thenReturn(List.of(binding("raw-only", 1), binding("pack", 2)));
-
-        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("cut", "cook", "pack")))
-                .thenReturn(List.of(
-                        workProcess("cut", "修整"),
-                        workProcess("cook", "卤制"),
-                        workProcess("pack", "包装")
-                ));
-
-        ProductWorkProcessRecommendTool tool = new ProductWorkProcessRecommendTool(
+    @BeforeEach
+    void setUp() {
+        productTypeRepository = mock(ProductTypeRepository.class);
+        workflowRepository = mock(ProductProcessWorkflowRepository.class);
+        workProcessRepository = mock(WorkProcessRepository.class);
+        tool = new ProductWorkProcessRecommendTool(
                 productTypeRepository,
-                productWorkProcessRepository,
+                workflowRepository,
                 workProcessRepository,
-                null,
-                new ObjectMapper()
-        );
-
-        ProductWorkProcessRecommendTool.RecommendationResult result =
-                tool.recommend(FACTORY_ID, TARGET_ID, 3);
-
-        assertEquals("HISTORY", result.source());
-        assertEquals("AI 建议，请核对", result.notice());
-        assertFalse(result.recommendations().isEmpty());
-        assertEquals(List.of("cut", "cook", "pack"),
-                result.recommendations().stream()
-                        .map(ProductWorkProcessRecommendTool.RecommendedProcess::workProcessId)
-                        .toList());
-        assertEquals(List.of(3, 2, 3),
-                result.recommendations().stream()
-                        .map(ProductWorkProcessRecommendTool.RecommendedProcess::score)
-                        .toList());
+                new ProductProcessWorkflowValidator(),
+                objectMapper);
     }
 
     @Test
-    @DisplayName("无同类产品历史工序时返回 NO_HISTORY emptyResult，recommendations 为空，notice 不为空")
-    void noSimilarProductsReturnsNoHistoryEmptyResult() {
-        ProductTypeRepository productTypeRepository = mock(ProductTypeRepository.class);
-        ProductWorkProcessRepository productWorkProcessRepository = mock(ProductWorkProcessRepository.class);
-        WorkProcessRepository workProcessRepository = mock(WorkProcessRepository.class);
+    @DisplayName("same-category complete published source returns provenance and topological process order")
+    void recommendsOneCompletePublishedWorkflowWithProvenance() throws Exception {
+        ProductType target = product(TARGET_ID, "新品", "FINISHED_PRODUCT");
+        ProductType source = product("source-a", "历史成品 A", "FINISHED_PRODUCT");
+        givenProducts(target, source);
+        when(workflowRepository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, source.getId(), ProductProcessWorkflow.Status.PUBLISHED))
+                .thenReturn(Optional.of(workflow(31L, source.getId(), 4, "CUT", "PACK")));
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("CUT", "PACK")))
+                .thenReturn(List.of(process("CUT", "分切"), process("PACK", "包装")));
 
-        ProductType target = product("target-product", "新品猪蹄", "FINISHED_PRODUCT", "冷藏");
-        // 只有 target 本身，无同类历史产品
-        when(productTypeRepository.findByIdAndFactoryId(TARGET_ID, FACTORY_ID))
-                .thenReturn(java.util.Optional.of(target));
-        when(productTypeRepository.findByFactoryId(FACTORY_ID))
-                .thenReturn(List.of(target));
-        // LLM 客户端传 null → LLM_UNAVAILABLE 路径
-        ProductWorkProcessRecommendTool tool = new ProductWorkProcessRecommendTool(
-                productTypeRepository,
-                productWorkProcessRepository,
-                workProcessRepository,
-                null,
-                new ObjectMapper()
-        );
+        ProductWorkProcessRecommendTool.RecommendationResult result =
+                tool.recommend(FACTORY_ID, TARGET_ID, 1);
+
+        assertEquals("PUBLISHED_WORKFLOW", result.source());
+        assertEquals("PRODUCT_OWNED", result.sourceScope());
+        assertEquals("COMPLETE_PUBLISHED_WORKFLOW", result.reasonCode());
+        assertEquals("source-a", result.sourceProductTypeId());
+        assertEquals("历史成品 A", result.sourceProductName());
+        assertEquals(31L, result.sourceWorkflowId());
+        assertEquals(4, result.sourceWorkflowVersion());
+        assertEquals(List.of("CUT", "PACK"), result.recommendations().stream()
+                .map(ProductWorkProcessRecommendTool.RecommendedProcess::workProcessId)
+                .toList());
+        assertTrue(result.recommendations().stream()
+                .allMatch(item -> "COPIED_FROM_SINGLE_PUBLISHED_WORKFLOW".equals(item.reason())));
+    }
+
+    @Test
+    @DisplayName("two products are never aggregated; newest eligible workflow remains the single source")
+    void doesNotMixProcessesAcrossProductsOrWorkflows() throws Exception {
+        ProductType target = product(TARGET_ID, "新品", "FINISHED_PRODUCT");
+        ProductType sourceA = product("source-a", "历史 A", "FINISHED_PRODUCT");
+        ProductType sourceB = product("source-b", "历史 B", "FINISHED_PRODUCT");
+        givenProducts(target, sourceA, sourceB);
+        when(workflowRepository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, sourceA.getId(), ProductProcessWorkflow.Status.PUBLISHED))
+                .thenReturn(Optional.of(workflow(10L, sourceA.getId(), 3, "CUT", "COOK")));
+        when(workflowRepository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, sourceB.getId(), ProductProcessWorkflow.Status.PUBLISHED))
+                .thenReturn(Optional.of(workflow(20L, sourceB.getId(), 1, "PACK")));
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("PACK")))
+                .thenReturn(List.of(process("PACK", "包装")));
 
         ProductWorkProcessRecommendTool.RecommendationResult result =
                 tool.recommend(FACTORY_ID, TARGET_ID, 5);
 
-        // 无历史 + 无 LLM → LLM_UNAVAILABLE emptyResult
-        assertEquals("LLM_UNAVAILABLE", result.source());
-        assertTrue(result.recommendations().isEmpty(), "无历史时 recommendations 应为空");
-        assertFalse(result.notice().isBlank(), "notice 不应为空字符串");
-        assertTrue(result.message().contains("LLM") || result.message().contains("没有"),
-                "message 应说明无历史/LLM 不可用，实际为: " + result.message());
+        assertEquals("source-b", result.sourceProductTypeId());
+        assertEquals(List.of("PACK"), result.recommendations().stream()
+                .map(ProductWorkProcessRecommendTool.RecommendedProcess::workProcessId)
+                .toList());
     }
 
     @Test
-    @DisplayName("有 LLM 客户端但 LLM 返回的工序名在 catalog 中找不到时，返回 LLM_NO_MATCH emptyResult")
-    void llmSuggestsNamesNotInCatalogReturnsLlmNoMatchEmptyResult() {
-        ProductTypeRepository productTypeRepository = mock(ProductTypeRepository.class);
-        ProductWorkProcessRepository productWorkProcessRepository = mock(ProductWorkProcessRepository.class);
-        WorkProcessRepository workProcessRepository = mock(WorkProcessRepository.class);
-        PythonLLMClient pythonLLMClient = mock(PythonLLMClient.class);
-
-        ProductType target = product("target-product", "新品鸭货", "FINISHED_PRODUCT", "冷冻");
-        // 无同类历史，走 LLM 路径
-        when(productTypeRepository.findByIdAndFactoryId(TARGET_ID, FACTORY_ID))
-                .thenReturn(java.util.Optional.of(target));
-        when(productTypeRepository.findByFactoryId(FACTORY_ID))
-                .thenReturn(List.of(target));
-
-        // Catalog 只有"腌制"和"包装"
-        WorkProcess catalogProcess1 = workProcess("wp-marinate", "腌制");
-        WorkProcess catalogProcess2 = workProcess("wp-pack", "包装");
-        when(workProcessRepository.findByFactoryIdAndIsActiveTrueOrderBySortOrderAsc(FACTORY_ID))
-                .thenReturn(List.of(catalogProcess1, catalogProcess2));
-
-        // LLM 建议"切割"和"蒸制" — catalog 中均不存在
-        ChatCompletionResponse llmResponse = mock(ChatCompletionResponse.class);
-        when(llmResponse.hasError()).thenReturn(false);
-        when(llmResponse.getContent()).thenReturn("[{\"processName\":\"切割\"},{\"processName\":\"蒸制\"}]");
-        when(pythonLLMClient.chatCompletion(any())).thenReturn(llmResponse);
-
-        ProductWorkProcessRecommendTool tool = new ProductWorkProcessRecommendTool(
-                productTypeRepository,
-                productWorkProcessRepository,
-                workProcessRepository,
-                pythonLLMClient,
-                new ObjectMapper()
-        );
+    @DisplayName("invalid or incomplete published workflow fails closed and legacy rows are not considered")
+    void noCompleteSourceReturnsNoRecommendation() throws Exception {
+        ProductType target = product(TARGET_ID, "新品", "FINISHED_PRODUCT");
+        ProductType source = product("source-a", "历史 A", "FINISHED_PRODUCT");
+        givenProducts(target, source);
+        ProductProcessWorkflow invalid = workflow(11L, source.getId(), 1, "CUT");
+        invalid.setEdgesJson("[]");
+        when(workflowRepository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, source.getId(), ProductProcessWorkflow.Status.PUBLISHED))
+                .thenReturn(Optional.of(invalid));
 
         ProductWorkProcessRecommendTool.RecommendationResult result =
                 tool.recommend(FACTORY_ID, TARGET_ID, 5);
 
-        assertEquals("LLM_NO_MATCH", result.source());
-        assertTrue(result.recommendations().isEmpty(), "LLM 名不在 catalog 时 recommendations 应为空");
-        assertFalse(result.notice().isBlank(), "notice 不应为空");
-        assertTrue(result.message().contains("catalog") || result.message().contains("命中"),
-                "message 应提示未命中 catalog，实际为: " + result.message());
+        assertEquals("NONE", result.source());
+        assertEquals("PRODUCT_OWNED", result.sourceScope());
+        assertEquals("NO_COMPLETE_PUBLISHED_WORKFLOW", result.reasonCode());
+        assertTrue(result.recommendations().isEmpty());
+        assertNull(result.sourceWorkflowId());
+        verify(workProcessRepository, never()).findByFactoryIdAndIdIn(
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyList());
     }
 
-    private static ProductType product(String id, String name, String productCategory, String temperatureZone) {
+    @Test
+    @DisplayName("cross-category products are not queried as workflow sources")
+    void rejectsCrossCategorySource() {
+        ProductType target = product(TARGET_ID, "新品", "FINISHED_PRODUCT");
+        ProductType raw = product("raw-a", "原料", "RAW_MATERIAL");
+        givenProducts(target, raw);
+
+        ProductWorkProcessRecommendTool.RecommendationResult result =
+                tool.recommend(FACTORY_ID, TARGET_ID, 5);
+
+        assertTrue(result.recommendations().isEmpty());
+        verify(workflowRepository, never())
+                .findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                        FACTORY_ID, raw.getId(), ProductProcessWorkflow.Status.PUBLISHED);
+    }
+
+    @Test
+    @DisplayName("LLM cold-start dependency is removed")
+    void doesNotDependOnLlmClient() {
+        boolean hasLlmDependency = java.util.Arrays.stream(ProductWorkProcessRecommendTool.class.getDeclaredFields())
+                .anyMatch(field -> PythonLLMClient.class.equals(field.getType()));
+        assertFalse(hasLlmDependency);
+    }
+
+    private void givenProducts(ProductType target, ProductType... historical) {
+        when(productTypeRepository.findByIdAndFactoryId(TARGET_ID, FACTORY_ID))
+                .thenReturn(Optional.of(target));
+        List<ProductType> products = new ArrayList<>();
+        products.add(target);
+        products.addAll(List.of(historical));
+        when(productTypeRepository.findByFactoryId(FACTORY_ID)).thenReturn(products);
+    }
+
+    private ProductProcessWorkflow workflow(
+            Long id,
+            String productTypeId,
+            int version,
+            String... processIds) throws Exception {
+        ProductProcessWorkflowDTO definition = workflowDefinition(productTypeId, processIds);
+        ProductProcessWorkflow workflow = new ProductProcessWorkflow();
+        workflow.setId(id);
+        workflow.setFactoryId(FACTORY_ID);
+        workflow.setProductTypeId(productTypeId);
+        workflow.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
+        workflow.setSchemaVersion(1);
+        workflow.setDefinitionVersion(version);
+        workflow.setNodesJson(objectMapper.writeValueAsString(definition.getNodes()));
+        workflow.setEdgesJson(objectMapper.writeValueAsString(definition.getEdges()));
+        workflow.setViewportJson(objectMapper.writeValueAsString(definition.getViewport()));
+        return workflow;
+    }
+
+    private ProductProcessWorkflowDTO workflowDefinition(String productTypeId, String... processIds) {
+        ProductProcessWorkflowDTO definition = new ProductProcessWorkflowDTO();
+        List<ProductProcessWorkflowDTO.Node> nodes = new ArrayList<>();
+        List<ProductProcessWorkflowDTO.Edge> edges = new ArrayList<>();
+        nodes.add(material("raw", "RAW_MATERIAL", "RM-1"));
+        String previousMaterial = "raw";
+        for (int index = 0; index < processIds.length; index++) {
+            String processNodeId = "process-" + index;
+            String outputMaterial = index == processIds.length - 1 ? "finished" : "semi-" + index;
+            String outputKind = index == processIds.length - 1 ? "FINISHED_GOOD" : "SEMI_FINISHED";
+            String inputPort = "in-" + index;
+            String outputPort = "out-" + index;
+            nodes.add(process(
+                    processNodeId,
+                    processIds[index],
+                    inputPort,
+                    previousMaterial,
+                    index == 0 ? "RAW_MATERIAL" : "SEMI_FINISHED",
+                    outputPort,
+                    outputMaterial,
+                    outputKind));
+            nodes.add(material(
+                    outputMaterial,
+                    outputKind,
+                    index == processIds.length - 1 ? productTypeId : "SFI-" + index));
+            edges.add(edge(
+                    "edge-in-" + index,
+                    previousMaterial,
+                    "output",
+                    processNodeId,
+                    inputPort));
+            edges.add(edge(
+                    "edge-out-" + index,
+                    processNodeId,
+                    outputPort,
+                    outputMaterial,
+                    "input"));
+            previousMaterial = outputMaterial;
+        }
+        definition.setNodes(nodes);
+        definition.setEdges(edges);
+        definition.setViewport(new ProductProcessWorkflowDTO.Viewport(0D, 0D, 1D));
+        return definition;
+    }
+
+    private ProductProcessWorkflowDTO.Node material(String id, String kind, String skuId) {
+        return new ProductProcessWorkflowDTO.Node(
+                id,
+                kind,
+                new ProductProcessWorkflowDTO.Position(0D, 0D),
+                new LinkedHashMap<>(Map.of("name", id, "skuId", skuId)));
+    }
+
+    private ProductProcessWorkflowDTO.Node process(
+            String id,
+            String workProcessId,
+            String inputPort,
+            String inputMaterial,
+            String inputKind,
+            String outputPort,
+            String outputMaterial,
+            String outputKind) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("workProcessId", workProcessId);
+        data.put("processName", workProcessId);
+        data.put("ports", List.of(
+                port(inputPort, "INPUT", inputMaterial, inputKind, 0),
+                port(outputPort, "OUTPUT", outputMaterial, outputKind, 0)));
+        return new ProductProcessWorkflowDTO.Node(
+                id,
+                "PROCESS",
+                new ProductProcessWorkflowDTO.Position(0D, 0D),
+                data);
+    }
+
+    private Map<String, Object> port(
+            String id,
+            String direction,
+            String materialNodeId,
+            String materialKind,
+            int ordinal) {
+        Map<String, Object> port = new LinkedHashMap<>();
+        port.put("id", id);
+        port.put("direction", direction);
+        port.put("materialNodeId", materialNodeId);
+        port.put("materialKind", materialKind);
+        port.put("unit", "kg");
+        port.put("ordinal", ordinal);
+        return port;
+    }
+
+    private ProductProcessWorkflowDTO.Edge edge(
+            String id,
+            String source,
+            String sourceHandle,
+            String target,
+            String targetHandle) {
+        return new ProductProcessWorkflowDTO.Edge(id, source, sourceHandle, target, targetHandle);
+    }
+
+    private ProductType product(String id, String name, String category) {
         ProductType product = new ProductType();
         product.setId(id);
-        product.setFactoryId(FACTORY_ID);
         product.setName(name);
-        product.setProductCategory(productCategory);
-        product.setTemperatureZone(temperatureZone);
-        product.setUnit("kg");
+        product.setProductCategory(category);
         product.setIsActive(true);
         return product;
     }
 
-    private static ProductWorkProcess binding(String workProcessId, int order) {
-        return ProductWorkProcess.builder()
-                .factoryId(FACTORY_ID)
-                .productTypeId("unused")
-                .workProcessId(workProcessId)
-                .processOrder(order)
-                .isActive(true)
-                .build();
-    }
-
-    private static WorkProcess workProcess(String id, String name) {
-        return WorkProcess.builder()
-                .id(id)
-                .factoryId(FACTORY_ID)
-                .processName(name)
-                .processCategory("生产")
-                .unit("kg")
-                .isActive(true)
-                .build();
+    private WorkProcess process(String id, String name) {
+        WorkProcess process = new WorkProcess();
+        process.setId(id);
+        process.setProcessName(name);
+        process.setProcessCategory("生产");
+        process.setUnit("kg");
+        process.setEstimatedMinutes(10);
+        process.setIsActive(true);
+        return process;
     }
 }

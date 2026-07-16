@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { ElMessage, ElMessageBox, ElNotification } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { showSingletonNotification } from '@/utils/singletonNotification';
 import { Plus, Refresh, View, Tickets } from '@element-plus/icons-vue';
 import { get, post, put } from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
@@ -479,7 +480,7 @@ async function submitClose() {
   if (!closeTarget.value || submitting.value) return;
   const invalidRows = closeRows.value.filter((row) => row.previewReturnQty < 0);
   if (invalidRows.length > 0) {
-    ElNotification({
+    showSingletonNotification({
       title: '退料数据异常',
       message: `${invalidRows.map((r) => r.materialName || r.materialTypeId || r.id).join('、')} 的实用量+损耗大于发出量。请修正损耗后再关单。`,
       type: 'error',
