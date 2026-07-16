@@ -8,7 +8,9 @@
 
 | ID | Base SHA | Scope 锁 | Owner | Mode | Worktree/PR | Status | Blocker | Next action |
 |---|---|---|---|---|---|---|---|---|
-| - | - | - | - | - | - | - | - | 当前无在飞任务 |
+| MAT16-CONTRACT-20260716 | `9e9331607` | `backend/java/cretas-api/**/RawMaterialType*`, `backend/java/cretas-api/**/MaterialCodeSegment*`, material-code Flyway/tests, `MaterialBatchServiceImpl` 与 `AIController` 的物料快速创建窄入口，`web-admin/src/views/warehouse/material-types/**`, RN material-type screens/APIs | `/root/material_contract_impl` | code | `C:/Users/Steve/cretas-material-contract` | in-progress | 无 | 建立统一 L1-L3/16位编码后端契约并收口 Web/RN/AI/快速创建路径；运行定向后端、前端测试 |
+| SETTLE-CONTRACT-20260716 | `9e9331607` | `ProductionPlan*` settlement DTO/controller/service/tests, `web-admin/src/views/production/plans/**` | `/root/settlement_contract_impl` | code | `C:/Users/Steve/cretas-settlement-contract-v2` | in-progress | 无 | 实现服务端事实派生的最小核对结单，修正式报工状态与投入/产出单位来源；运行定向测试 |
+| CROSSMODULE-VERIFY-20260716 | `9e9331607` | 只读：价格、BOM展开订单、供应商、税率、物料需求单、采购/计划单位链路 | `/root/crossmodule_verify` | read-only/test | `C:/Users/Steve/cretas-contract-completion` | queued | 无 | 基于当前 main 复核反馈项，区分已修、仍复现与实务规则，给出下一批最小落地范围 |
 
 ## 阻塞项
 
