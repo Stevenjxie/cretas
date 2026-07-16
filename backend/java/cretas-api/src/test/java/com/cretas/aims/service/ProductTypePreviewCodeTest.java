@@ -13,6 +13,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.Optional;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.lenient;
@@ -39,7 +40,8 @@ class ProductTypePreviewCodeTest {
     @Test
     @DisplayName("成品 + customerId 解析客户名 → CP + 客户首字母 + 序号 (CPDD0013)")
     void preview_finishedProduct_withCustomerId() {
-        when(productTypeRepository.countByFactoryId("F001")).thenReturn(12L);
+        when(productTypeRepository.findCodesByFactoryIdAndGeneratedPrefix("F001", "CPDD"))
+                .thenReturn(List.of("CPDD0012"));
         Customer c = new Customer();
         c.setId("cust-1");
         c.setName("大东"); // D D
@@ -53,7 +55,8 @@ class ProductTypePreviewCodeTest {
     @Test
     @DisplayName("customerId 解析不到 → 回退到传入的 relatedCustomer 名")
     void preview_customerIdNotFound_fallbackToName() {
-        when(productTypeRepository.countByFactoryId("F001")).thenReturn(0L);
+        when(productTypeRepository.findCodesByFactoryIdAndGeneratedPrefix("F001", "CPDD"))
+                .thenReturn(List.of());
         when(customerRepository.findByIdAndFactoryId("missing", "F001")).thenReturn(Optional.empty());
 
         String code = service.previewGeneratedCode("F001", "FINISHED_PRODUCT", "missing", "大东");
@@ -64,7 +67,8 @@ class ProductTypePreviewCodeTest {
     @Test
     @DisplayName("仅传 relatedCustomer 名 (无 customerId) → 直接用名取首字母")
     void preview_relatedCustomerOnly() {
-        when(productTypeRepository.countByFactoryId("F001")).thenReturn(4L);
+        when(productTypeRepository.findCodesByFactoryIdAndGeneratedPrefix("F001", "CPDD"))
+                .thenReturn(List.of("CPDD0004"));
 
         String code = service.previewGeneratedCode("F001", "FINISHED_PRODUCT", null, "大东");
 
@@ -74,7 +78,8 @@ class ProductTypePreviewCodeTest {
     @Test
     @DisplayName("无客户 → 用 factoryId 作首字母段后备 (与 createProductType 一致)")
     void preview_noCustomer_usesFactoryIdFallback() {
-        when(productTypeRepository.countByFactoryId("F001")).thenReturn(0L);
+        when(productTypeRepository.findCodesByFactoryIdAndGeneratedPrefix("F001", "CPF001"))
+                .thenReturn(List.of());
 
         String code = service.previewGeneratedCode("F001", "FINISHED_PRODUCT", null, null);
 
@@ -85,7 +90,9 @@ class ProductTypePreviewCodeTest {
     @Test
     @DisplayName("不同大类映射不同前缀 — 原料 YL / 包辅材 BF / 调味品 TW / 客户自带 KH")
     void preview_categoryPrefixMapping() {
-        lenient().when(productTypeRepository.countByFactoryId("F001")).thenReturn(0L);
+        lenient().when(productTypeRepository.findCodesByFactoryIdAndGeneratedPrefix(
+                org.mockito.ArgumentMatchers.eq("F001"), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(List.of());
         Customer c = new Customer();
         c.setId("cust-1");
         c.setName("大东");
@@ -100,10 +107,22 @@ class ProductTypePreviewCodeTest {
     @Test
     @DisplayName("未知/空大类 → 前缀 PT (与 getCategoryPrefix 默认一致)")
     void preview_unknownCategory_defaultPrefix() {
-        when(productTypeRepository.countByFactoryId("F001")).thenReturn(0L);
+        when(productTypeRepository.findCodesByFactoryIdAndGeneratedPrefix("F001", "PTDD"))
+                .thenReturn(List.of());
 
         String code = service.previewGeneratedCode("F001", null, null, "大东");
 
         assertThat(code).isEqualTo("PTDD0001");
+    }
+
+    @Test
+    @DisplayName("手工保存 CPF0060149 后，同前缀预览返回 CPF0060150")
+    void preview_usesMaxNumericSuffixWithinCurrentPrefix() {
+        when(productTypeRepository.findCodesByFactoryIdAndGeneratedPrefix("F006", "CPF006"))
+                .thenReturn(List.of("CPF0060002", "CPF0060149", "CPF006LEGACY"));
+
+        String code = service.previewGeneratedCode("F006", "FINISHED_PRODUCT", null, null);
+
+        assertThat(code).isEqualTo("CPF0060150");
     }
 }

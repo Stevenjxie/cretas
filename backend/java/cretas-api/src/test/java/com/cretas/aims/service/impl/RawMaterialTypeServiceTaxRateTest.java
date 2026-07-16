@@ -190,12 +190,17 @@ class RawMaterialTypeServiceTaxRateTest {
     // =========================================================================
 
     @Test
-    @DisplayName("T2-S3: create 无taxRate → unitPrice保持null不被覆盖")
-    void create_noTaxRate_rejected() {
+    @DisplayName("T2-S3: 非包材 create 无taxRate → 默认TAX_13且不保存参考价")
+    void create_noTaxRate_defaultsTo13WithoutReferencePrice() {
+        stubForCreate();
         RawMaterialTypeDTO dto = buildCreateDto(null, null);
-        assertThatThrownBy(() -> service.createMaterialType(FACTORY_ID, dto))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("税率不能为空");
+        dto.setUnit("  ");
+
+        RawMaterialTypeDTO result = service.createMaterialType(FACTORY_ID, dto);
+
+        assertThat(result.getUnit()).isEqualTo("kg");
+        assertThat(result.getTaxRate()).isEqualTo(TaxRate.TAX_13);
+        assertThat(result.getTaxIncludedUnitPrice()).isNull();
     }
 
     // =========================================================================
@@ -203,12 +208,15 @@ class RawMaterialTypeServiceTaxRateTest {
     // =========================================================================
 
     @Test
-    @DisplayName("T2-S4: create 有taxRate无taxIncludedUnitPrice → 不换算")
-    void create_taxRateWithoutIncludedPrice_rejected() {
+    @DisplayName("T2-S4: 非包材 create 有taxRate无参考价 → 允许且不保存价格")
+    void create_taxRateWithoutIncludedPrice_allowedForNonPackaging() {
+        stubForCreate();
         RawMaterialTypeDTO dto = buildCreateDto(TaxRate.TAX_9, null);
-        assertThatThrownBy(() -> service.createMaterialType(FACTORY_ID, dto))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("含税单价必须大于0");
+
+        RawMaterialTypeDTO result = service.createMaterialType(FACTORY_ID, dto);
+
+        assertThat(result.getTaxRate()).isEqualTo(TaxRate.TAX_9);
+        assertThat(result.getTaxIncludedUnitPrice()).isNull();
     }
 
     // =========================================================================
@@ -267,9 +275,9 @@ class RawMaterialTypeServiceTaxRateTest {
     // =========================================================================
 
     @Test
-    @DisplayName("T2-S7: update不传税率字段 → entity既有unitPrice不变")
-    void update_legacyUnpricedWithoutTaxFields_rejected() {
-        stubValidSegmentChain();
+    @DisplayName("T2-S7: 非包材 update 不传税率 → 默认TAX_13并清除历史参考价")
+    void update_nonPackagingDefaultsTaxAndClearsLegacyReferencePrice() {
+        stubForUpdate();
         BigDecimal existingUnitPrice = new BigDecimal("50.0000");
         // Entity has NO taxRate (null), so condition `taxRate != null && taxIncludedUnitPrice != null` is false
         RawMaterialType existingEntity = buildExistingEntity(null, null, existingUnitPrice);
@@ -281,9 +289,10 @@ class RawMaterialTypeServiceTaxRateTest {
         dto.setNotes("test update");
         // No taxRate, no taxIncludedUnitPrice in dto
 
-        assertThatThrownBy(() -> service.updateMaterialType(FACTORY_ID, MATERIAL_ID, dto))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("税率不能为空");
+        RawMaterialTypeDTO result = service.updateMaterialType(FACTORY_ID, MATERIAL_ID, dto);
+
+        assertThat(result.getTaxRate()).isEqualTo(TaxRate.TAX_13);
+        assertThat(result.getTaxIncludedUnitPrice()).isNull();
     }
 
     // =========================================================================

@@ -212,12 +212,21 @@ const activeTab = ref<ProductCategory>('FINISHED_PRODUCT');
 const filterUnit = ref('');
 const filterTemperatureZone = ref('');
 // 精简选项端点 (@Cacheable, 全量, 供筛选下拉动态取值用) — 与主列表分页查询独立, 避免重复拉重 DTO
-const filterOptionsSource = ref<Array<{ unit?: string | null; temperatureZone?: string | null; productCategory?: string | null }>>([]);
+interface ProductOptionSummary {
+  id: string;
+  name: string;
+  unit?: string | null;
+  temperatureZone?: string | null;
+  productCategory?: string | null;
+  isActive?: boolean | null;
+}
+
+const filterOptionsSource = ref<ProductOptionSummary[]>([]);
 
 async function loadFilterOptionsSource() {
   if (!factoryId.value) return;
   try {
-    const res = await get<{ content: Array<{ unit?: string | null; temperatureZone?: string | null; productCategory?: string | null }> }>(
+    const res = await get<{ content: ProductOptionSummary[] }>(
       `/${factoryId.value}/product-types/options`
     );
     if (res.success && res.data?.content) {
@@ -440,6 +449,7 @@ function handleCategoryChange() {
   categoryManuallyEdited.value = true;
   applyCategoryUnitContract();
   refreshCodePreview();
+  handleNameInput();
 }
 
 const isSemiFinishedSku = computed(() => formData.productCategory === 'SEMI_FINISHED');
@@ -508,10 +518,7 @@ function resetSuggestFlags() {
 function clearCascadeFields() {
   cascadeWriting = true;
   try {
-    if (!categoryManuallyEdited.value) {
-      // 大类重置为当前 tab 默认值 (大类是必填, 不能置 null)
-      formData.productCategory = activeTab.value;
-    }
+    // 产品大类由用户先选定。名称建议只在当前大类内匹配，绝不反写或清空大类。
     if (!unitManuallyEdited.value) formData.unit = '';
     if (!level1UnitManuallyEdited.value) formData.level1Unit = undefined;
     if (!boxCoefManuallyEdited.value) formData.boxConversionCoefficient = undefined;
@@ -574,15 +581,7 @@ async function fetchSuggest() {
       let filledAny = false;
 
       // T154 reactive: 对每个非手动编辑字段, 始终写入新匹配值 (或清空 null); 不再限制"仅当为空".
-      // 大类: 未手动改过 → 跟随匹配结果; 匹配无结果时保持 tab 默认 (大类是必填)
-      if (!categoryManuallyEdited.value) {
-        const newCat = (s.productCategory as ProductCategory | null) ?? null;
-        if (newCat && formData.productCategory !== newCat) {
-          formData.productCategory = newCat;
-          refreshCodePreview(); // 大类变化需刷新编号预览
-          filledAny = true;
-        }
-      }
+      // 大类是建议查询条件，不是建议结果。选定后只能由用户修改。
       // 单位 (二级): 未手动改过 → 写入或清空
       if (!unitManuallyEdited.value) {
         const newUnit = s.unit ?? '';
@@ -763,6 +762,15 @@ const formRules = {
     { required: true, message: '请选择产品大类', trigger: 'change' }
   ]
 };
+
+const exactNameDuplicate = computed(() => {
+  const normalizedName = formData.name?.trim().toLocaleLowerCase();
+  if (!normalizedName) return null;
+  return filterOptionsSource.value.find((product) =>
+    product.id !== formData.id
+      && product.name.trim().toLocaleLowerCase() === normalizedName,
+  ) ?? null;
+});
 
 onMounted(() => {
   loadData();
@@ -1039,7 +1047,7 @@ async function handleSubmit() {
     if (response.success) {
       ElMessage.success(isEditing.value ? '产品已保存，毛利红线配置已同步' : '产品已新增，毛利红线配置已同步');
       dialogVisible.value = false;
-      await loadData();
+      await Promise.all([loadData(), loadFilterOptionsSource()]);
       if (!isEditing.value && response.data?.id) {
         // fire-and-forget：推荐请求不阻塞 UI，LLM 冷启动 2-5s 会在后台进行，弹框异步出现
         offerWorkProcessRecommendation(response.data);
@@ -1792,14 +1800,7 @@ async function handleAiProductCreate() {
           </div>
           <div v-else class="form-tip">选定「产品大类」与「关联客户」后将自动生成编号（如 CPDD0001）；也可手动输入</div>
         </el-form-item>
-        <el-form-item label="产品名称" prop="name">
-          <el-input v-model="formData.name" placeholder="请输入产品名称" @input="handleNameInput" />
-          <!-- T149: 智能填充命中提示 (按历史产品匹配出大类/单位/装箱) -->
-          <div v-if="suggestHint && !isEditing" class="form-tip" style="color:#67c23a;">
-            ✨ {{ suggestHint }}
-          </div>
-        </el-form-item>
-        <!-- T147 Fix3: 新增时默认=当前 tab 的大类 (resetForm/handleAdd 已置), 变化时刷新编号预览 (Fix2) -->
+        <!-- 先定产品大类，再录名称；历史建议只在该大类内查询，不会反写大类。 -->
         <el-form-item label="产品大类" prop="productCategory">
           <el-select v-model="formData.productCategory" placeholder="请选择产品大类" style="width: 100%" @change="handleCategoryChange">
             <el-option
@@ -1809,6 +1810,26 @@ async function handleAiProductCreate() {
               :value="category.value"
             />
           </el-select>
+        </el-form-item>
+        <el-form-item label="产品名称" prop="name">
+          <el-input
+            v-model="formData.name"
+            placeholder="请输入产品名称"
+            :disabled="!formData.productCategory"
+            @input="handleNameInput"
+          />
+          <div class="form-tip">历史建议仅匹配当前产品大类，不会改变已选大类</div>
+          <div v-if="suggestHint && !isEditing" class="form-tip" style="color:#67c23a;">
+            ✨ {{ suggestHint }}
+          </div>
+          <el-alert
+            v-if="exactNameDuplicate"
+            class="exact-duplicate-alert"
+            type="warning"
+            :closable="false"
+            show-icon
+            :title="`同厂已存在同名 SKU「${exactNameDuplicate.name}」（${exactNameDuplicate.productCategory || '未分类'}）`"
+          />
         </el-form-item>
         <!-- ========== 规格 section (T157 双模式表单瘦身): 基本单位 + 标准克重 + 装箱换算 + 规格(只读自动) ========== -->
         <el-divider content-position="left">规格</el-divider>
@@ -1851,6 +1872,9 @@ async function handleAiProductCreate() {
         <!-- 同一 SKU 允许多条装箱换算；标准克重仍保持唯一。第一条是默认箱规。 -->
         <el-form-item v-if="!isSemiFinishedSku" label="装箱换算" label-width="120px">
           <div class="packaging-spec-list">
+            <div class="packaging-rule-note">
+              一个 SKU 只有一个基本单位和一份标准克重；下面每一条都只是不同外箱对基本单位的换算规则。
+            </div>
             <div v-for="(spec, index) in packagingSpecs" :key="spec.id || index" class="packaging-spec-item">
               <div class="spec-conversion-row">
                 <el-tag v-if="index === 0" size="small" type="success">默认</el-tag>
@@ -1871,9 +1895,8 @@ async function handleAiProductCreate() {
               </div>
               <div v-else-if="packagingSpecText(spec)" class="spec-echo">= {{ packagingSpecText(spec) }}</div>
             </div>
-            <el-button type="primary" link @click="addPackagingSpec">+ 添加多包装规格</el-button>
+            <el-button type="primary" plain @click="addPackagingSpec">添加多装箱包装规则</el-button>
           </div>
-          <div class="form-tip">同一 SKU 只能有一个标准克重，但可维护多种装箱数量，如 1箱=12盒、1箱=24盒</div>
         </el-form-item>
         <!-- 规格 = 上面结构化字段自动拼 (只读, 不再手输文字+数字混排) -->
         <el-form-item v-if="!isSemiFinishedSku" label="规格">
@@ -2504,6 +2527,21 @@ async function handleAiProductCreate() {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.packaging-rule-note {
+  padding: 10px 12px;
+  color: #7a8599;
+  font-size: 12px;
+  line-height: 1.6;
+  background: #f4f6f9;
+  border: 1px solid #edf2f7;
+  border-radius: 8px;
+}
+
+.exact-duplicate-alert {
+  width: 100%;
+  margin-top: 8px;
 }
 
 .standard-weight-row {

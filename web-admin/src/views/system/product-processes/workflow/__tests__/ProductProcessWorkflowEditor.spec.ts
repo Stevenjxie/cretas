@@ -189,20 +189,28 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     ]));
   });
 
-  it.each([
-    ['SKU-SEMI', 'SEMI_FINISHED'],
-    ['SKU-FINISHED', 'FINISHED_GOOD'],
-    ['SKU-CONTRACT', 'FINISHED_GOOD'],
-    ['SKU-CUSTOMER', 'FINISHED_GOOD'],
-  ] as const)('binds %s as %s on both the port and material Cell', async (skuId, expectedKind) => {
+  it('binds a semi-finished SKU on both the port and material Cell', async () => {
     const vm = await mountEditor();
     const { process, port, material } = addSecondOutput(vm);
 
-    vm.selectOutputSku(process.id, port.id, skuId);
+    vm.selectOutputSku(process.id, port.id, 'SKU-SEMI');
 
-    expect(port).toMatchObject({ skuId, materialKind: expectedKind });
-    expect(material.data).toMatchObject({ skuId, kind: expectedKind, bound: true });
+    expect(port).toMatchObject({ skuId: 'SKU-SEMI', materialKind: 'SEMI_FINISHED' });
+    expect(material.data).toMatchObject({ skuId: 'SKU-SEMI', kind: 'SEMI_FINISHED', bound: true });
   });
+
+  it.each(['SKU-FINISHED', 'SKU-CONTRACT', 'SKU-CUSTOMER'])(
+    'rejects a second finished terminal %s in finished-owner mode',
+    async (skuId) => {
+      const vm = await mountEditor();
+      const { process, port, material } = addSecondOutput(vm);
+
+      vm.selectOutputSku(process.id, port.id, skuId);
+
+      expect(port).toMatchObject({ skuId: '', materialKind: 'SEMI_FINISHED' });
+      expect(material.data).toMatchObject({ skuId: '', kind: 'SEMI_FINISHED', bound: false });
+    },
+  );
 
   it('binds a SKU selected on the SEMI output material Cell to the owning process OUTPUT port', async () => {
     const vm = await mountEditor();

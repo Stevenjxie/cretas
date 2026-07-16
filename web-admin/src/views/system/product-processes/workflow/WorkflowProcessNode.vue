@@ -60,7 +60,7 @@
     <section class="port-section">
       <div class="section-title">
         <span>投入物料</span>
-        <el-button v-if="canWrite" text size="small" type="primary" class="nodrag" @click="emit('addInput')">+ 来源 Cell（合流）</el-button>
+        <el-button v-if="canWrite && allowAddInput" text size="small" type="primary" class="nodrag" @click="emit('addInput')">+ 来源 Cell（合流）</el-button>
       </div>
       <div v-for="port in inputPorts" :key="port.id" class="port-row">
         <el-input
@@ -107,10 +107,10 @@
         <el-input-number
           :model-value="fixedRatio.inputQuantity"
           :min="0.0001"
-          :precision="4"
           :controls="false"
           :disabled="!canWrite"
           aria-label="投入数量"
+          @focus="selectNumericInput"
           @change="(value: number | undefined) => updateFixedRatio('input', value)"
         />
         <span>{{ primaryInput?.unit }}</span>
@@ -118,10 +118,10 @@
         <el-input-number
           :model-value="fixedRatio.outputQuantity"
           :min="0.0001"
-          :precision="4"
           :controls="false"
           :disabled="!canWrite"
           aria-label="产出数量"
+          @focus="selectNumericInput"
           @change="(value: number | undefined) => updateFixedRatio('output', value)"
         />
         <span>{{ primaryOutput?.unit }}</span>
@@ -153,7 +153,7 @@ import WorkflowSkuPicker, { type WorkflowSkuPickerOption } from './WorkflowSkuPi
 import type { ProcessNodeData } from './types';
 import { isWorkflowWeightUnit, parseFixedRatioQuantities } from './workflowUnits';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   data: ProcessNodeData;
   selected?: boolean;
   canWrite: boolean;
@@ -161,7 +161,8 @@ const props = defineProps<{
   connectingFromKind?: '' | 'MATERIAL' | 'PROCESS';
   semiOptions: WorkflowSkuPickerOption[];
   finishedOptions: WorkflowSkuPickerOption[];
-}>();
+  allowAddInput?: boolean;
+}>(), { allowAddInput: true });
 
 // #8: 工序 Cell 只有在「物料拖向工序(投入)」时才是合法目标；「工序拖向物料」时
 // 工序互相之间非法 → 灰化。
@@ -200,6 +201,11 @@ function updateFixedRatio(side: 'input' | 'output', value: number | undefined): 
       expression: `${inputQuantity} ${primaryInput.value.unit} = ${outputQuantity} ${primaryOutput.value.unit}`,
     },
   });
+}
+
+function selectNumericInput(event: FocusEvent): void {
+  const target = event.target;
+  if (target instanceof HTMLInputElement) target.select();
 }
 
 function handleStyle(index: number, count: number): Record<string, string> {
@@ -267,6 +273,7 @@ const isMultiOutput = computed(() => outputPorts.value.length > 1);
   font-size: 12px;
 }
 .fixed-ratio-editor :deep(.el-input-number) { width: 100%; }
+.fixed-ratio-editor :deep(input) { user-select: text; }
 .reporting-row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; color: #667085; font-size: 12px; }
 .unit-chip {
   display: flex;

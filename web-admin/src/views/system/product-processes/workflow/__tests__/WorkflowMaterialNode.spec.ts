@@ -94,12 +94,8 @@ describe('WorkflowMaterialNode raw material picker — BOM priority grouping (#3
     expect(groups[0].props('label')).toBe('全部原料');
     expect(groups[0].findAllComponents(ElOption)).toHaveLength(RAW_OPTIONS.length);
 
-    const hint = wrapper.get('[data-testid="bom-hint"]');
-    expect(hint.text()).toContain('该产品尚未配置原辅料 BOM，建议先去配置');
-    // #10: 「去配置」不再跳转页面, 改成按钮触发 configBom (父组件在右侧抽屉里打开 BOM 配置)
-    const configBtn = hint.get('.bom-hint-link');
-    await configBtn.trigger('click');
-    expect(wrapper.emitted('configBom')).toBeTruthy();
+    // 缺失 BOM 的提示已统一移动到 Workflow 顶部 banner，原料 Cell 不重复展示。
+    expect(wrapper.find('[data-testid="bom-hint"]').exists()).toBe(false);
   });
 
   it('filters both groups by pinyin-initial match, keeping BOM priority grouping intact while searching', async () => {

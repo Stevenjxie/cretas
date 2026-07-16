@@ -17,6 +17,8 @@ import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.service.bom.BomSeasoningWorkspaceService;
+import com.cretas.aims.service.workflow.ProductWorkflowResolutionService;
+import com.cretas.aims.service.workflow.WorkflowProcessPath;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,6 +30,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -44,16 +47,16 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
     private final ProductWorkProcessRepository productWorkProcessRepository;
     private final WorkProcessRepository workProcessRepository;
     private final RawMaterialTypeRepository materialTypeRepository;
+    private final ProductWorkflowResolutionService workflowResolutionService;
 
     @Override
     @Transactional(readOnly = true)
     public BomSeasoningWorkspaceResponse getWorkspace(String factoryId, String recipeId) {
         BomRecipe recipe = loadRecipe(factoryId, recipeId);
-        List<ProductWorkProcess> workflow = productWorkProcessRepository
-                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, recipe.getProductTypeId());
+        List<ResolvedProcess> workflow = resolveProcesses(factoryId, recipe.getProductTypeId());
         List<BomSeasoningItem> bindings = seasoningItemRepository.findByRecipeIdOrderBySeqAsc(recipeId);
 
-        List<String> processIds = workflow.stream().map(ProductWorkProcess::getWorkProcessId).distinct().toList();
+        List<String> processIds = workflow.stream().map(ResolvedProcess::workProcessId).distinct().toList();
         Map<String, WorkProcess> workProcesses = workProcessRepository
                 .findByFactoryIdAndIdIn(factoryId, processIds).stream()
                 .collect(Collectors.toMap(WorkProcess::getId, Function.identity()));
@@ -69,14 +72,14 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
         response.setEditable(recipe.getStatus() == BomRecipe.Status.DRAFT);
         response.setSeasoningRevision(recipe.getSeasoningRevision());
 
-        for (ProductWorkProcess configured : workflow) {
-            WorkProcess master = workProcesses.get(configured.getWorkProcessId());
+        for (ResolvedProcess configured : workflow) {
+            WorkProcess master = workProcesses.get(configured.workProcessId());
             response.getProcesses().add(new BomSeasoningWorkspaceResponse.ProcessView(
-                    configured.getWorkProcessId(),
-                    master != null ? master.getProcessName() : configured.getWorkProcessId(),
+                    configured.workProcessId(),
+                    master != null ? master.getProcessName() : configured.workProcessId(),
                     master != null ? master.getProcessCategory() : null,
-                    configured.getProcessOrder(),
-                    new ArrayList<>(byProcess.getOrDefault(configured.getWorkProcessId(), List.of()))));
+                    configured.processOrder(),
+                    new ArrayList<>(byProcess.getOrDefault(configured.workProcessId(), List.of()))));
         }
 
         Map<String, RawMaterialType> materials = materialTypeRepository.findAllById(bindings.stream()
@@ -213,13 +216,36 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
     }
 
     private void validateWorkflow(BomRecipe recipe, String factoryId, String workProcessId) {
-        if (workProcessId == null || !productWorkProcessRepository
-                .existsByFactoryIdAndProductTypeIdAndWorkProcessId(
-                        factoryId, recipe.getProductTypeId(), workProcessId)) {
+        Optional<WorkflowProcessPath> activePath = workflowResolutionService
+                .resolveProcessPath(factoryId, recipe.getProductTypeId());
+        boolean valid = workProcessId != null && activePath
+                .map(path -> path.processes().stream()
+                        .anyMatch(process -> workProcessId.equals(process.workProcessId())))
+                .orElseGet(() -> productWorkProcessRepository
+                        .existsByFactoryIdAndProductTypeIdAndWorkProcessId(
+                                factoryId, recipe.getProductTypeId(), workProcessId));
+        if (!valid) {
             throw new BusinessException(400, "所选工序不是该 SKU 的有效工序")
                     .withHint("请从当前 SKU 的 workflow 中选择工序");
         }
     }
+
+    private List<ResolvedProcess> resolveProcesses(String factoryId, String productTypeId) {
+        Optional<WorkflowProcessPath> activePath = workflowResolutionService
+                .resolveProcessPath(factoryId, productTypeId);
+        if (activePath.isPresent()) {
+            return activePath.get().processes().stream()
+                    .map(step -> new ResolvedProcess(step.workProcessId(), step.order()))
+                    .toList();
+        }
+        return productWorkProcessRepository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, productTypeId)
+                .stream()
+                .map(process -> new ResolvedProcess(process.getWorkProcessId(), process.getProcessOrder()))
+                .toList();
+    }
+
+    private record ResolvedProcess(String workProcessId, Integer processOrder) { }
 
     private RawMaterialType validateMaterial(String factoryId, String materialTypeId) {
         RawMaterialType material = materialTypeRepository.findById(materialTypeId)

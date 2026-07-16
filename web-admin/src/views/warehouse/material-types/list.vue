@@ -156,7 +156,7 @@ const form = ref({
   notes: '',
   // SP4: 税率 + 含税单价
   taxTreatment: 'TAXABLE' as 'TAXABLE' | 'EXEMPT',
-  taxRate: '' as string,
+  taxRate: 'TAX_13' as string,
   taxExemptionReason: '',
   taxIncludedUnitPrice: null as number | null,
   // P8: 包材关联固定客户 (选填, 非 PACKAGING 类留空)
@@ -164,6 +164,12 @@ const form = ref({
   // #759: 包材每产品单位用量 (选填, 仅 PACKAGING 有意义)
   packQtyPerProduct: null as number | null,
 });
+
+function isPackagingCategory(category: string | null | undefined): boolean {
+  return bigCategoryOf(String(category || '')) === '包材';
+}
+
+const isPackagingMaterial = computed(() => isPackagingCategory(form.value.category));
 
 // P8: 客户列表 (用于 associatedCustomerId 下拉)
 // 客户张权反馈 (2026-07-02): "关联固定客户" 下拉显示"没有数据"。根因排查 (headed + curl F006 对比):
@@ -230,6 +236,12 @@ const segmentL3 = ref(''); // L3 品类
 const segmentLoading = ref(false);
 const segmentCodePreview = ref(''); // SP8 生成的编码预览
 const sp8PreviewLoading = ref(false);
+const QUICK_CREATE_L3 = '__quick_create_l3__';
+const createL3DialogVisible = ref(false);
+const createL3Submitting = ref(false);
+const createL3Form = ref({ suffix: '', label: '' });
+const l3MatchHint = ref('');
+const l3ManuallyEdited = ref(false);
 
 async function loadSegmentTree() {
   if (!factoryId.value) return;
@@ -354,7 +366,92 @@ watch(segmentL1, (segmentCode) => {
 watch(segmentL2, () => {
   segmentL3.value = '';
   segmentCodePreview.value = '';
+  l3MatchHint.value = '';
+  l3ManuallyEdited.value = false;
 });
+
+function nextL3Suffix(): string {
+  const maxSuffix = segmentL3Options.value.reduce((max, node) => {
+    const suffix = Number(node.segmentCode.slice(-4));
+    return Number.isInteger(suffix) ? Math.max(max, suffix) : max;
+  }, 0);
+  return String(maxSuffix + 1).padStart(4, '0');
+}
+
+function handleL3Change(value: string): void {
+  if (value === QUICK_CREATE_L3) {
+    segmentL3.value = '';
+    createL3Form.value = { suffix: nextL3Suffix(), label: form.value.name.trim() };
+    createL3DialogVisible.value = true;
+    return;
+  }
+  l3ManuallyEdited.value = true;
+  l3MatchHint.value = '';
+}
+
+async function handleCreateL3(): Promise<void> {
+  const suffix = createL3Form.value.suffix.trim();
+  const label = createL3Form.value.label.trim();
+  if (!segmentL2.value) { ElMessage.warning('请先选择 L2 部位'); return; }
+  if (!/^\d{4}$/.test(suffix)) { ElMessage.warning('L3 编码须为 4 位数字'); return; }
+  if (!label) { ElMessage.warning('请输入新品类名称'); return; }
+  if (!factoryId.value) return;
+
+  createL3Submitting.value = true;
+  try {
+    const segmentCode = `${segmentL2.value}${suffix}`;
+    const response = await post<SegmentNode>(`/${factoryId.value}/material-segments`, {
+      level: 3,
+      segmentCode,
+      segmentLabel: label,
+      parentCode: segmentL2.value,
+      sortOrder: segmentL3Options.value.length,
+      isActive: true,
+    });
+    if (!response.success || !response.data) {
+      throw new Error(response.message || '创建 L3 品类失败');
+    }
+    await loadSegmentTree();
+    segmentL3.value = response.data.segmentCode;
+    l3ManuallyEdited.value = true;
+    createL3DialogVisible.value = false;
+    ElMessage.success(`已创建新品类「${response.data.segmentLabel}」`);
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '创建 L3 品类失败');
+  } finally {
+    createL3Submitting.value = false;
+  }
+}
+
+let l3MatchTimer: ReturnType<typeof setTimeout> | undefined;
+watch(
+  () => [form.value.name, segmentL1.value, segmentL2.value, dialogVisible.value, editingId.value] as const,
+  ([name, _l1, l2, visible, currentEditingId]) => {
+    if (l3MatchTimer) clearTimeout(l3MatchTimer);
+    l3MatchHint.value = '';
+    const normalizedName = String(name || '').trim();
+    if (!visible || currentEditingId || !l2 || normalizedName.length < 2 || l3ManuallyEdited.value) return;
+    l3MatchTimer = setTimeout(async () => {
+      try {
+        const response = await get<{ content: TableRow[] }>(`/${factoryId.value}/raw-material-types`, {
+          params: { page: 1, size: 20, codePrefix: l2, keyword: normalizedName },
+        });
+        const rows = response.success && Array.isArray(response.data?.content) ? response.data.content : [];
+        const query = normalizedName.toLocaleLowerCase();
+        const matched = rows.find((row) => String(row.name || '').trim().toLocaleLowerCase() === query)
+          ?? rows.find((row) => String(row.name || '').toLocaleLowerCase().includes(query));
+        const matchedL3 = String(matched?.code || '').slice(0, 10);
+        const option = segmentL3Options.value.find((node) => node.segmentCode === matchedL3);
+        if (option && !l3ManuallyEdited.value) {
+          segmentL3.value = option.segmentCode;
+          l3MatchHint.value = `已按历史物料「${String(matched?.name || '')}」匹配 ${option.segmentLabel}`;
+        }
+      } catch {
+        // 历史匹配失败不影响手工选择，也不虚构 L3。
+      }
+    }, 400);
+  },
+);
 
 async function generateSP8Code() {
   if (!segmentL1.value || !segmentL2.value || !segmentL3.value) {
@@ -437,6 +534,10 @@ watch(() => form.value.unit, () => {
 watch(() => form.value.category, (category) => {
   if (!cascadeWriting.value) categoryManuallyEdited.value = true;
   syncMaterialFamilyFromCategory(category);
+  if (!isPackagingCategory(category)) {
+    form.value.associatedCustomerId = null;
+    form.value.packQtyPerProduct = null;
+  }
 });
 watch(() => form.value.storageType, () => {
   if (!cascadeWriting.value) storageTypeManuallyEdited.value = true;
@@ -567,7 +668,7 @@ function openCreate() {
     shelfLifeDays: null,
     notes: '',
     taxTreatment: 'TAXABLE',
-    taxRate: '',
+    taxRate: 'TAX_13',
     taxExemptionReason: '',
     taxIncludedUnitPrice: null,
     associatedCustomerId: null,
@@ -581,6 +682,8 @@ function openCreate() {
   segmentL2.value = '';
   segmentL3.value = '';
   segmentCodePreview.value = '';
+  l3MatchHint.value = '';
+  l3ManuallyEdited.value = false;
   if (segmentTree.value.length === 0) loadSegmentTree();
   loadCustomers();
   dialogVisible.value = true;
@@ -612,21 +715,25 @@ async function openEdit(row: TableRow) {
   segmentL2.value = '';
   segmentL3.value = '';
   segmentCodePreview.value = '';
+  l3MatchHint.value = '';
+  l3ManuallyEdited.value = false;
   if (segmentTree.value.length === 0) loadSegmentTree();
-  // 加载现有包装层级
-  try {
-    const res = await get<{ level1PerLevel2: number | null; level2Unit: string | null; level2PerLevel3: number | null; level3Unit: string | null }>(
-      `/${factoryId.value}/material-packaging/by-material/${editingId.value}`,
-    );
-    if (res.success && res.data) {
-      packaging.value = {
-        level1PerLevel2: res.data.level1PerLevel2 ?? '',
-        level2Unit: res.data.level2Unit || '',
-        level2PerLevel3: res.data.level2PerLevel3 ?? '',
-        level3Unit: res.data.level3Unit || '',
-      };
-    }
-  } catch { /* 无配置时正常空 */ }
+  // 包装层级是包材专属；原料/辅料不读取、不展示，也不会提交 hierarchy。
+  if (isPackagingMaterial.value) {
+    try {
+      const res = await get<{ level1PerLevel2: number | null; level2Unit: string | null; level2PerLevel3: number | null; level3Unit: string | null }>(
+        `/${factoryId.value}/material-packaging/by-material/${editingId.value}`,
+      );
+      if (res.success && res.data) {
+        packaging.value = {
+          level1PerLevel2: res.data.level1PerLevel2 ?? '',
+          level2Unit: res.data.level2Unit || '',
+          level2PerLevel3: res.data.level2PerLevel3 ?? '',
+          level3Unit: res.data.level3Unit || '',
+        };
+      }
+    } catch { /* 包材无配置时正常空 */ }
+  }
   dialogVisible.value = true;
 }
 
@@ -657,38 +764,47 @@ async function handleSave() {
   if (!form.value.name) return ElMessage.warning('请填写原料名称');
   if (!form.value.category) return ElMessage.warning('请选择类别');
   if (!form.value.unit) return ElMessage.warning('请选择单位');
-  if (!form.value.storageType) return ElMessage.warning('请选择储存类型');
+  if (!isPackagingMaterial.value && !form.value.storageType) return ElMessage.warning('请选择储存类型');
   if (canViewPrice.value) {
     if (form.value.taxTreatment === 'TAXABLE' && !form.value.taxRate) return ElMessage.warning('请选择税率');
     if (form.value.taxTreatment === 'EXEMPT' && !form.value.taxExemptionReason.trim()) {
       return ElMessage.warning('免税物料必须填写免税依据');
     }
-    if (form.value.taxIncludedUnitPrice == null || Number(form.value.taxIncludedUnitPrice) <= 0) {
+    if (isPackagingMaterial.value
+      && (form.value.taxIncludedUnitPrice == null || Number(form.value.taxIncludedUnitPrice) <= 0)) {
       return ElMessage.warning('请填写大于 0 的含税单价');
     }
-  } else if (!editingId.value) {
-    return ElMessage.warning('新建物料必须配置含税单价，请联系有价格权限的人员创建');
+  } else if (isPackagingMaterial.value && !editingId.value) {
+    return ElMessage.warning('新建包材必须配置含税单价，请联系有价格权限的人员创建');
   }
   if (showSegmentEditor.value && (!segmentL1.value || !segmentL2.value || !segmentL3.value)) {
     return ElMessage.error('每个原料类型都必须选择 L1类型、L2部位、L3品类后保存');
   }
 
-  // 包装层级前端校验 (后端 service + DB CHECK 双重兜底)
+  // 包装层级仅包材校验并提交；原料/辅料完全不发送 hierarchy。
   const hasL2Unit = !!packaging.value.level2Unit?.trim();
   const hasL2Qty = packaging.value.level1PerLevel2 !== '' && Number(packaging.value.level1PerLevel2) > 0;
   const hasL3Unit = !!packaging.value.level3Unit?.trim();
   const hasL3Qty = packaging.value.level2PerLevel3 !== '' && Number(packaging.value.level2PerLevel3) > 0;
-  if (hasL2Unit !== hasL2Qty) return ElMessage.warning('二级单位和换算数量必须同时填写或同时清空');
-  if (hasL3Unit !== hasL3Qty) return ElMessage.warning('三级单位和换算数量必须同时填写或同时清空');
-  if (hasL3Unit && !hasL2Unit) return ElMessage.warning('必须先配置二级单位才能配置三级');
+  if (isPackagingMaterial.value && hasL2Unit !== hasL2Qty) return ElMessage.warning('二级单位和换算数量必须同时填写或同时清空');
+  if (isPackagingMaterial.value && hasL3Unit !== hasL3Qty) return ElMessage.warning('三级单位和换算数量必须同时填写或同时清空');
+  if (isPackagingMaterial.value && hasL3Unit && !hasL2Unit) return ElMessage.warning('必须先配置二级单位才能配置三级');
 
   submitting.value = true;
   try {
     let materialId: string;
+    const materialPayload: Record<string, unknown> = { ...form.value };
+    delete materialPayload.code;
+    if (isPackagingMaterial.value) {
+      delete materialPayload.storageType;
+    } else {
+      delete materialPayload.taxIncludedUnitPrice;
+      delete materialPayload.associatedCustomerId;
+      delete materialPayload.packQtyPerProduct;
+    }
     if (editingId.value) {
-      const { code, ...editableFields } = form.value;
       const res = await put(`/${factoryId.value}/raw-material-types/${editingId.value}`, {
-        ...editableFields,
+        ...materialPayload,
         segmentCode: editingNeedsSegmentRepair.value ? segmentL3.value : undefined,
       });
       if (!res.success) throw new Error(res.message || '更新失败');
@@ -696,8 +812,8 @@ async function handleSave() {
       ElMessage.success('更新成功');
     } else {
       // 创建: 不传 code 让后端自动生成
-      const { code, ...payload } = {
-        ...form.value,
+      const payload = {
+        ...materialPayload,
         segmentCode: segmentL3.value || undefined,
       };
       const res = await post<{ id: string }>(`/${factoryId.value}/raw-material-types`, payload);
@@ -707,7 +823,7 @@ async function handleSave() {
     }
 
     // 包装层级 upsert / delete
-    if (hasL2Unit || hasL3Unit) {
+    if (isPackagingMaterial.value && (hasL2Unit || hasL3Unit)) {
       await put(`/${factoryId.value}/material-packaging/by-material/${materialId}`, {
         level1Unit: form.value.unit,
         level1PerLevel2: hasL2Unit ? Number(packaging.value.level1PerLevel2) : null,
@@ -715,7 +831,7 @@ async function handleSave() {
         level2PerLevel3: hasL3Unit ? Number(packaging.value.level2PerLevel3) : null,
         level3Unit: hasL3Unit ? packaging.value.level3Unit.trim() : null,
       });
-    } else if (editingId.value) {
+    } else if (isPackagingMaterial.value && editingId.value) {
       // 编辑模式下用户清空了二三级 → 删除现有配置
       try { await del(`/${factoryId.value}/material-packaging/by-material/${materialId}`); }
       catch { /* 不存在也 OK */ }
@@ -983,7 +1099,7 @@ function handleSizeChange(size: number) {
         </el-form-item>
 
         <!-- T159-A: 单位 — filterable + allow-create, 复用 /system-config/units -->
-        <el-form-item label="单位" required>
+        <el-form-item label="入库计量单位" required>
           <el-select
             v-model="form.unit"
             placeholder="请选择或输入单位"
@@ -999,12 +1115,13 @@ function handleSizeChange(size: number) {
               :value="opt.value"
             />
           </el-select>
+          <div class="field-hint">新建默认 kg（公斤），可按实际入库计量单位修改</div>
           <div v-if="unitManuallyEdited && !editingId" class="field-hint field-hint--manual">
             已手动设置，自动填充将不再覆盖此字段
           </div>
         </el-form-item>
 
-        <el-form-item label="储存类型" required>
+        <el-form-item v-if="!isPackagingMaterial" label="储存类型" required>
           <el-select v-model="form.storageType" placeholder="请选择储存类型" style="width: 100%">
             <el-option
               v-for="opt in mergeHistoricStorage(form.storageType)"
@@ -1040,7 +1157,7 @@ function handleSizeChange(size: number) {
           <el-form-item v-else label="免税依据" required>
             <el-input v-model="form.taxExemptionReason" placeholder="填写政策、票据或业务依据" maxlength="255" />
           </el-form-item>
-          <el-form-item :label="form.taxTreatment === 'EXEMPT' ? '免税采购参考价 (元/库存主单位)' : '含税采购参考价 (元/库存主单位)'" required>
+          <el-form-item v-if="isPackagingMaterial" :label="form.taxTreatment === 'EXEMPT' ? '免税采购参考价 (元/库存主单位)' : '含税采购参考价 (元/库存主单位)'" required>
             <el-input-number
               v-model="form.taxIncludedUnitPrice"
               :min="0.0001"
@@ -1050,7 +1167,7 @@ function handleSizeChange(size: number) {
               style="width: 100%"
             />
           </el-form-item>
-          <el-form-item v-if="form.taxIncludedUnitPrice != null && (form.taxRate || form.taxTreatment === 'EXEMPT')" label="未税采购参考价 (元/库存主单位)">
+          <el-form-item v-if="isPackagingMaterial && form.taxIncludedUnitPrice != null && (form.taxRate || form.taxTreatment === 'EXEMPT')" label="未税采购参考价 (元/库存主单位)">
             <el-input
               :model-value="preTaxUnitPrice != null ? preTaxUnitPrice.toFixed(4) : '—'"
               disabled
@@ -1060,11 +1177,12 @@ function handleSizeChange(size: number) {
           </el-form-item>
         </template>
 
-        <!-- P8: 关联固定客户 (仅 PACKAGING 有实际意义, 其他类别也允许填写) -->
-        <el-divider>
-          <span class="divider-title">包材专属字段（选填）</span>
-        </el-divider>
-        <el-form-item label="关联固定客户">
+        <!-- 包材专属字段只在包材建档时显示和提交。 -->
+        <template v-if="isPackagingMaterial">
+          <el-divider>
+            <span class="divider-title">包材专属字段（选填）</span>
+          </el-divider>
+          <el-form-item label="关联固定客户">
           <el-select
             v-model="form.associatedCustomerId"
             placeholder="该包材专供某客户（可选）"
@@ -1094,12 +1212,9 @@ function handleSizeChange(size: number) {
             </template>
           </el-select>
           <div class="field-hint">选填 — 如吸塑盒专供某客户，留空表示通用包材</div>
-        </el-form-item>
+          </el-form-item>
         <!-- #759: 每成品单位用量 (仅 PACKAGING 类型显示，后端自动推 BOM standardQuantity) -->
-        <el-form-item
-          v-if="form.category === 'PACKAGING' || form.category === '包材'"
-          label="每产品用量"
-        >
+          <el-form-item label="每产品用量">
           <el-input-number
             v-model="form.packQtyPerProduct"
             :min="0"
@@ -1111,7 +1226,8 @@ function handleSizeChange(size: number) {
           <div class="field-hint">
             例：吸塑盒 1 个/成品填 1；外箱 20 盒/箱填 0.05（=1/20）。留空则 BOM 行需手填用量
           </div>
-        </el-form-item>
+          </el-form-item>
+        </template>
 
         <!-- SP8: 16位编码级联 (创建模式下显示, 编辑模式只读) -->
         <!-- SP8 兜底 (Tier0 #15 minimal): 字典未配置时隐藏级联入口防 dead-end (fool-proof Rule 5).
@@ -1164,7 +1280,13 @@ function handleSizeChange(size: number) {
                 filterable
                 style="width: 100%"
                 :disabled="!segmentL2"
+                @change="handleL3Change"
               >
+                <el-option
+                  :key="QUICK_CREATE_L3"
+                  label="＋ 快捷创建新品类"
+                  :value="QUICK_CREATE_L3"
+                />
                 <el-option
                   v-for="opt in segmentL3Options"
                   :key="opt.segmentCode"
@@ -1172,6 +1294,7 @@ function handleSizeChange(size: number) {
                   :value="opt.segmentCode"
                 />
               </el-select>
+              <div v-if="l3MatchHint" class="field-hint field-hint--matched">{{ l3MatchHint }}</div>
             </el-form-item>
             <el-form-item v-if="segmentL1 && segmentL2 && segmentL3" label="编码预览">
               <div class="code-preview-row">
@@ -1208,21 +1331,22 @@ function handleSizeChange(size: number) {
         </template>
 
         <!-- ==================== T159-A: 包装层级 内联换算行 (SKU-style) ==================== -->
-        <el-divider>
-          <span class="divider-title">包装层级（可选）</span>
-        </el-divider>
+        <template v-if="isPackagingMaterial">
+          <el-divider>
+            <span class="divider-title">包装层级（包材专属，可选）</span>
+          </el-divider>
 
         <!-- 一级: 显示主单位 (read-only echo — single source of truth = 上方单位字段) -->
-        <el-form-item label="一级 (主单位)">
+          <el-form-item label="一级 (主单位)">
           <div class="packaging-inline-row">
             <el-tag type="info" class="unit-tag">{{ form.unit || '请先填单位' }}</el-tag>
             <span class="packaging-equals-hint">← 同「单位」字段（主数据 canonical 单位，不可单独更改）</span>
           </div>
-        </el-form-item>
+          </el-form-item>
 
         <!-- 二级换算: SKU-style inline row -->
         <!-- 布局: 1 [二级单位 select] = [换算数] [一级单位 tag] -->
-        <el-form-item label="二级换算">
+          <el-form-item label="二级换算">
           <div class="packaging-conversion-row">
             <span class="conversion-label">1</span>
             <el-select
@@ -1261,10 +1385,10 @@ function handleSizeChange(size: number) {
           >
             请同时填写二级单位和换算数量
           </div>
-        </el-form-item>
+          </el-form-item>
 
         <!-- 三级换算 -->
-        <el-form-item label="三级换算">
+          <el-form-item label="三级换算">
           <div class="packaging-conversion-row">
             <span class="conversion-label">1</span>
             <el-select
@@ -1302,12 +1426,38 @@ function handleSizeChange(size: number) {
           <div v-if="!packaging.level2Unit" class="field-hint">
             请先配置二级单位才能配置三级
           </div>
-        </el-form-item>
+          </el-form-item>
+        </template>
 
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="submitting" @click="handleSave">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="createL3DialogVisible"
+      title="快捷创建 L3 新品类"
+      width="460px"
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <el-form label-width="110px">
+        <el-form-item label="所属 L2">
+          <el-input :model-value="segmentL2" disabled />
+        </el-form-item>
+        <el-form-item label="L3 四位编码" required>
+          <el-input v-model="createL3Form.suffix" maxlength="4" placeholder="如 0001" />
+          <div class="field-hint">保存时组成完整 L3 编码：{{ segmentL2 }}{{ createL3Form.suffix }}</div>
+        </el-form-item>
+        <el-form-item label="新品类名称" required>
+          <el-input v-model="createL3Form.label" maxlength="100" placeholder="请输入 L3 品类名称" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="createL3DialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="createL3Submitting" @click="handleCreateL3">创建并选中</el-button>
       </template>
     </el-dialog>
 
@@ -1377,6 +1527,10 @@ function handleSizeChange(size: number) {
 }
 .field-hint--manual {
   color: #e6a23c;
+}
+
+.field-hint--matched {
+  color: #67c23a;
 }
 
 /* T159-A: Packaging inline row (SKU-style) */

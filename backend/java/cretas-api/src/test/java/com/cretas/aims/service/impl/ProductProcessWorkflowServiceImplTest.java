@@ -59,6 +59,9 @@ class ProductProcessWorkflowServiceImplTest {
     private ProductTypeRepository productTypeRepository;
 
     @Mock
+    private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
+
+    @Mock
     private ProductProcessWorkflowUnitValidator unitValidator;
 
     private ProductProcessWorkflowValidator validator;
@@ -69,7 +72,8 @@ class ProductProcessWorkflowServiceImplTest {
         ObjectMapper objectMapper = new ObjectMapper();
         validator = new ProductProcessWorkflowValidator();
         service = new ProductProcessWorkflowServiceImpl(
-                repository, activationRepository, objectMapper, validator, catalogValidator, unitValidator, productTypeRepository);
+                repository, activationRepository, objectMapper, validator, catalogValidator, unitValidator,
+                productTypeRepository, rawMaterialTypeRepository);
         ProductType owner = new ProductType();
         owner.setId(PRODUCT_ID);
         owner.setFactoryId(FACTORY_ID);
@@ -189,7 +193,7 @@ class ProductProcessWorkflowServiceImplTest {
                 BusinessException.class,
                 () -> service.saveDraft(FACTORY_ID, PRODUCT_ID, validDefinition()));
 
-        assertEquals("PRODUCT_PROCESS_WORKFLOW_PRODUCT_INVALID", error.getErrorCode());
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_OWNER_INVALID", error.getErrorCode());
         assertTrue(error.getActionHint() != null && !error.getActionHint().isBlank());
         verify(repository, never()).saveAndFlush(any());
     }
@@ -320,7 +324,7 @@ class ProductProcessWorkflowServiceImplTest {
                 BusinessException.class,
                 () -> service.publish(FACTORY_ID, PRODUCT_ID, 3L));
 
-        assertEquals("PRODUCT_PROCESS_WORKFLOW_PRODUCT_INVALID", error.getErrorCode());
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_OWNER_INVALID", error.getErrorCode());
         assertTrue(error.getActionHint() != null && !error.getActionHint().isBlank());
         verify(repository, never()).saveAndFlush(any());
         verify(catalogValidator, never()).validateForPublish(any(), any(), any());
@@ -365,7 +369,8 @@ class ProductProcessWorkflowServiceImplTest {
         ProductProcessWorkflowCatalogValidator realCatalogValidator =
                 new ProductProcessWorkflowCatalogValidator(workProcessRepository, productTypeRepository);
         ProductProcessWorkflowServiceImpl realService = new ProductProcessWorkflowServiceImpl(
-                repository, activationRepository, new ObjectMapper(), validator, realCatalogValidator, unitValidator, productTypeRepository);
+                repository, activationRepository, new ObjectMapper(), validator, realCatalogValidator, unitValidator,
+                productTypeRepository, mock(com.cretas.aims.repository.RawMaterialTypeRepository.class));
 
         BusinessException error = assertThrows(BusinessException.class,
                 () -> realService.publish(FACTORY_ID, PRODUCT_ID, 3L));

@@ -87,6 +87,18 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
      * 检查代码是否存在
       */
     boolean existsByFactoryIdAndCode(String factoryId, String code);
+
+    @Query("SELECT CASE WHEN COUNT(r) > 0 THEN true ELSE false END FROM RawMaterialType r " +
+           "WHERE r.factoryId = :factoryId AND LOWER(TRIM(r.name)) = LOWER(TRIM(:name))")
+    boolean existsByFactoryIdAndNormalizedName(@Param("factoryId") String factoryId,
+                                               @Param("name") String name);
+
+    @Query("SELECT CASE WHEN COUNT(r) > 0 THEN true ELSE false END FROM RawMaterialType r " +
+           "WHERE r.factoryId = :factoryId AND r.id <> :excludeId " +
+           "AND LOWER(TRIM(r.name)) = LOWER(TRIM(:name))")
+    boolean existsByFactoryIdAndNormalizedNameExcludingId(@Param("factoryId") String factoryId,
+                                                          @Param("name") String name,
+                                                          @Param("excludeId") String excludeId);
      /**
      * 统计原材料类型数量
       */

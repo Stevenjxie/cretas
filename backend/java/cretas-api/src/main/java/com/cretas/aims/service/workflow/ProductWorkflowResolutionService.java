@@ -23,6 +23,13 @@ public interface ProductWorkflowResolutionService {
     WorkflowOutputResolutionDTO resolveForOutputs(String factoryId, List<String> finishedGoodProductTypeIds);
 
     /**
+     * Resolve the unique active workflow and return only the ancestor process path for one finished SKU.
+     * An empty result means that no active workflow exists and callers may use the legacy linear chain.
+     * Ambiguous or invalid active workflows fail closed and must never fall back silently.
+     */
+    Optional<WorkflowProcessPath> resolveProcessPath(String factoryId, String finishedGoodProductTypeId);
+
+    /**
      * 写路径守卫: 断言 ownerProductTypeId 当前 enabled activation 指向的 workflow 终端覆盖 targets,
      * 否则抛 409 WORKFLOW_RESOLUTION_NOT_COVERED。用于建计划/转批次防绕过 + 防 activation 窗口期漂移。
      */

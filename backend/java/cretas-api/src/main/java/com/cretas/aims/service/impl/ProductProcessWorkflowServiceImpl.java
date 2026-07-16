@@ -7,10 +7,14 @@ import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.dto.ProductProcessWorkflowVersionSummaryDTO;
 import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.ProductProcessWorkflowActivation;
+import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.enums.ProductCategory;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductProcessWorkflowActivationRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.service.ProductProcessWorkflowService;
 import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
@@ -18,6 +22,7 @@ import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.util.List;
 import java.util.Optional;
@@ -34,6 +39,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
     private final ProductProcessWorkflowCatalogValidator catalogValidator;
     private final ProductProcessWorkflowUnitValidator unitValidator;
     private final ProductTypeRepository productTypeRepository;
+    private final RawMaterialTypeRepository rawMaterialTypeRepository;
 
     @Override
     @Transactional(readOnly = true)
@@ -53,7 +59,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
             String factoryId,
             String productTypeId,
             ProductProcessWorkflowDTO definition) {
-        requireOwningProduct(factoryId, productTypeId);
+        requireWorkflowOwner(factoryId, productTypeId);
         validator.validateForDraft(definition);
         var unitValidation = unitValidator.validate(factoryId, definition);
         definition.setUnitWarnings(java.util.stream.Stream.concat(
@@ -89,7 +95,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
     @Override
     @Transactional
     public ProductProcessWorkflowDTO publish(String factoryId, String productTypeId, Long lockVersion) {
-        requireOwningProduct(factoryId, productTypeId);
+        requireWorkflowOwner(factoryId, productTypeId);
         ProductProcessWorkflow candidate = find(factoryId, productTypeId, ProductProcessWorkflow.Status.DRAFT)
                 .orElseThrow(() -> new BusinessException(409, "没有可发布的 Workflow 草稿")
                         .withCode("PRODUCT_PROCESS_WORKFLOW_DRAFT_MISSING")
@@ -113,7 +119,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
     @Override
     @Transactional(readOnly = true)
     public List<ProductProcessWorkflowVersionSummaryDTO> listVersions(String factoryId, String productTypeId) {
-        requireOwningProduct(factoryId, productTypeId);
+        requireWorkflowOwner(factoryId, productTypeId);
         Optional<ProductProcessWorkflowActivation> activation = activationRepository
                 .findByFactoryIdAndProductTypeId(factoryId, productTypeId);
         List<ProductProcessWorkflow> rows = repository
@@ -126,7 +132,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
     @Override
     @Transactional(readOnly = true)
     public ProductProcessWorkflowDTO getVersion(String factoryId, String productTypeId, Integer definitionVersion) {
-        requireOwningProduct(factoryId, productTypeId);
+        requireWorkflowOwner(factoryId, productTypeId);
         ProductProcessWorkflow row = repository
                 .findFirstByFactoryIdAndProductTypeIdAndDefinitionVersion(factoryId, productTypeId, definitionVersion)
                 .orElseThrow(() -> new BusinessException(
@@ -159,13 +165,40 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
                 factoryId, productTypeId, status);
     }
 
-    private void requireOwningProduct(String factoryId, String productTypeId) {
-        if (productTypeRepository.findByIdAndFactoryId(productTypeId, factoryId).isEmpty()) {
-            throw new BusinessException(400, "Workflow 所属产品不存在或不属于当前工厂")
-                    .withCode("PRODUCT_PROCESS_WORKFLOW_PRODUCT_INVALID")
-                    .withHint("请重新选择当前工厂内的有效产品后再保存或发布 Workflow")
-                    .withSeverity("warning");
+    private void requireWorkflowOwner(String factoryId, String ownerId) {
+        if (productTypeRepository.findByIdAndFactoryId(ownerId, factoryId).isPresent()) return;
+
+        RawMaterialType rawOwner = rawMaterialTypeRepository.findById(ownerId)
+                .filter(raw -> factoryId.equals(raw.getFactoryId()))
+                .orElseThrow(() -> new BusinessException(400, "Workflow 所属成品或原料不存在于当前工厂")
+                        .withCode("PRODUCT_PROCESS_WORKFLOW_OWNER_INVALID")
+                        .withHint("请重新选择当前工厂内的有效成品或入口原料")
+                        .withSeverity("warning"));
+
+        // 运行时与历史外键仍以 product_type_id 作为通用 owner key。为真正的 RawMaterialType
+        // 创建一个 inactive 内部锚点，前端产品目录会过滤 RAW_MATERIAL，不再把原料伪装成 SKU。
+        ProductType anchor = new ProductType();
+        anchor.setId(rawOwner.getId());
+        anchor.setFactoryId(factoryId);
+        anchor.setCode(rawOwnerAnchorCode(rawOwner));
+        anchor.setName("__RAW_WORKFLOW_OWNER__" + rawOwner.getId());
+        anchor.setCategory(ProductCategory.RAW_MATERIAL);
+        anchor.setProductCategory(ProductCategory.RAW_MATERIAL);
+        anchor.setUnit(rawOwner.getUnit() == null || rawOwner.getUnit().isBlank() ? "kg" : rawOwner.getUnit());
+        anchor.setIsActive(false);
+        try {
+            productTypeRepository.saveAndFlush(anchor);
+        } catch (DataIntegrityViolationException race) {
+            if (productTypeRepository.findByIdAndFactoryId(ownerId, factoryId).isEmpty()) throw race;
         }
+    }
+
+    private String rawOwnerAnchorCode(RawMaterialType rawOwner) {
+        String source = rawOwner.getCode() == null || rawOwner.getCode().isBlank()
+                ? rawOwner.getId() : rawOwner.getCode();
+        String normalized = source.replaceAll("[^A-Za-z0-9_-]", "");
+        String code = "WFRAW-" + (normalized.isBlank() ? Integer.toUnsignedString(source.hashCode()) : normalized);
+        return code.length() <= 50 ? code : code.substring(0, 50);
     }
 
     private void assertCurrentVersion(Long requestVersion, ProductProcessWorkflow entity) {

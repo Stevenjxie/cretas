@@ -6,6 +6,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductProcessWorkflowActivationRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.service.unit.CanonicalUnit;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitDimension;
@@ -36,6 +37,7 @@ class ProductWorkflowResolutionPlannedUnitTest {
         units = mock(UnitContractService.class);
         service = new ProductWorkflowResolutionServiceImpl(
                 activations, workflows, mock(ProductTypeRepository.class),
+                mock(RawMaterialTypeRepository.class),
                 new ObjectMapper(), units);
         CanonicalUnit gram = new CanonicalUnit(
                 "g", UnitDimension.MASS, "g", BigDecimal.ONE, "克", 2);

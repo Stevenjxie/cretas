@@ -1,5 +1,6 @@
 <template>
   <el-cascader
+    ref="cascaderRef"
     class="nodrag nowheel workflow-sku-picker"
     :data-testid="testId"
     :model-value="modelValue"
@@ -10,12 +11,14 @@
     :filter-method="filterNode"
     :disabled="disabled"
     :size="size || 'small'"
-    @change="(value: unknown) => emit('change', String(value ?? ''))"
+    :teleported="false"
+    @change="handleChange"
+    @keydown.esc.stop="closeDropdown"
   />
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, nextTick, ref } from 'vue';
 import { matchesSearchText } from './pinyinInitials';
 
 /**
@@ -62,6 +65,22 @@ const props = defineProps<{
 const emit = defineEmits<{
   change: [skuId: string];
 }>();
+
+interface CascaderExpose {
+  togglePopperVisible: (visible?: boolean) => void;
+}
+
+const cascaderRef = ref<CascaderExpose | null>(null);
+
+function closeDropdown(): void {
+  cascaderRef.value?.togglePopperVisible(false);
+}
+
+function handleChange(value: unknown): void {
+  emit('change', String(value ?? ''));
+  // 选中新项或再次点击当前项后都应立即收起，避免必须改选其它项才能关闭。
+  void nextTick(closeDropdown);
+}
 
 // emitPath:false → 只回传叶子值(skuId); expandTrigger:'click' → 点分类才展开(不是 hover)。
 const cascaderProps = { emitPath: false, expandTrigger: 'click' as const };

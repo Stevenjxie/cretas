@@ -6,6 +6,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductProcessWorkflowActivationRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.service.workflow.impl.ProductWorkflowResolutionServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -27,7 +28,7 @@ class ProductWorkflowResolutionUnitAdmissionTest {
         ProductProcessWorkflowRepository workflows = mock(ProductProcessWorkflowRepository.class);
         ProductTypeRepository products = mock(ProductTypeRepository.class);
         ProductWorkflowResolutionService service = new ProductWorkflowResolutionServiceImpl(
-                activations, workflows, products, new ObjectMapper(),
+                activations, workflows, products, mock(RawMaterialTypeRepository.class), new ObjectMapper(),
                 mock(com.cretas.aims.service.unit.UnitContractService.class));
 
         ProductProcessWorkflowActivation activation = new ProductProcessWorkflowActivation();

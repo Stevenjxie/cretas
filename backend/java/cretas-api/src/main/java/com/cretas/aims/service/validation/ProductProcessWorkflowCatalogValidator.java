@@ -181,6 +181,25 @@ public class ProductProcessWorkflowCatalogValidator {
         // owner 不存在或非原料 → 视为成品模式 (保守): 只允许单终端成品。
         boolean rawOwnerMode = owner != null
                 && ProductCategory.RAW_MATERIAL.equals(owner.getProductCategory());
+        List<ProductProcessWorkflowDTO.Node> rawRoots = definition.getNodes().stream()
+                .filter(node -> "RAW_MATERIAL".equals(node.getKind()))
+                .toList();
+        if (rawOwnerMode && rawRoots.size() != 1) {
+            throw new BusinessException(400,
+                    "原料模式必须且只能有 1 个入口原料 Cell, 当前有 " + rawRoots.size() + " 个")
+                    .withCode("PRODUCT_PROCESS_WORKFLOW_RAW_ROOT_COUNT_MISMATCH")
+                    .withHint("保留当前 Workflow owner 对应的唯一入口原料，删除其它来源原料 Cell")
+                    .withSeverity("warning");
+        }
+        if (rawOwnerMode) {
+            String rootSkuId = asString(data(rawRoots.getFirst()).get("skuId"));
+            if (!productTypeId.equals(rootSkuId)) {
+                throw new BusinessException(400, "入口原料 Cell 与当前 Workflow owner 不一致")
+                        .withCode("PRODUCT_PROCESS_WORKFLOW_RAW_OWNER_MISMATCH")
+                        .withHint("请使用页面顶部选择的入口原料；修改 Cell 会同步切换 Workflow owner")
+                        .withSeverity("warning");
+            }
+        }
         if (!rawOwnerMode && finishedGoodCells > 1) {
             throw new BusinessException(400,
                     "成品模式下一张 Workflow 只能有 1 个终端成品, 当前有 " + finishedGoodCells

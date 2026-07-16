@@ -37,6 +37,17 @@ export function getWorkProcessDuplicates(factoryId: string) {
   return get<WorkProcessDuplicateGroup[]>(`/${factoryId}/work-processes/duplicates`);
 }
 
+export interface SystemUnitOption {
+  unitName: string;
+  unitSymbol?: string | null;
+  isActive?: boolean | null;
+}
+
+/** Canonical unit dictionary shared by work-process input/output ports. */
+export function getSystemUnitOptions(factoryId: string) {
+  return get<SystemUnitOption[]>(`/${factoryId}/system-config/units`);
+}
+
 // === Product-Work Process Associations ===
 
 export function getProductWorkProcesses(factoryId: string, productTypeId: string) {

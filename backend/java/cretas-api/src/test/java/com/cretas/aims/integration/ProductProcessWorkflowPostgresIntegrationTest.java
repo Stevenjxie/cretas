@@ -130,7 +130,8 @@ class ProductProcessWorkflowPostgresIntegrationTest {
                 new ProductProcessWorkflowValidator(),
                 catalogValidator,
                 mock(ProductProcessWorkflowUnitValidator.class),
-                productTypeRepository);
+                productTypeRepository,
+                mock(com.cretas.aims.repository.RawMaterialTypeRepository.class));
 
         mockMvc = MockMvcBuilders
                 .standaloneSetup(new ProductProcessWorkflowController(service))

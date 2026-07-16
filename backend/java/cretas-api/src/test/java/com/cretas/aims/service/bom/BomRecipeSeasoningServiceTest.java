@@ -18,6 +18,7 @@ import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.service.bom.NestedBomCostService;
 import com.cretas.aims.service.bom.impl.BomRecipeServiceImpl;
 import com.cretas.aims.service.uom.MaterialUomConverter;
+import com.cretas.aims.service.workflow.ProductWorkflowResolutionService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -53,6 +54,7 @@ class BomRecipeSeasoningServiceTest {
     @Mock ProductWorkProcessRepository productWorkProcessRepo;
     @Mock MaterialUomConverter materialUomConverter;
     @Mock NestedBomCostService nestedBomCostService;
+    @Mock ProductWorkflowResolutionService workflowResolutionService;
 
     @InjectMocks BomRecipeServiceImpl service;
 
@@ -65,6 +67,8 @@ class BomRecipeSeasoningServiceTest {
 
     @BeforeEach
     void allowConfiguredProductProcessesByDefault() {
+        lenient().when(workflowResolutionService.resolveProcessPath(anyString(), anyString()))
+                .thenReturn(Optional.empty());
         lenient().when(productWorkProcessRepo.existsByFactoryIdAndProductTypeIdAndWorkProcessId(
                 anyString(), anyString(), anyString())).thenReturn(true);
     }
