@@ -204,6 +204,14 @@ frontend/CretasFoodTrace/src/
 - `server-operations.md` - 服务器运维规范
 - `concurrent-edit-safety.md` - **并发编辑安全（共享脚本修改前必读）**
 
+### Superpowers 禁用规则（强制）
+
+1. **全面禁用** - 本仓库禁止调用、加载、引用或遵循任何 `superpowers:*` skill，包括但不限于 `using-superpowers`、`brainstorming`、`writing-plans`、`executing-plans`、`subagent-driven-development`、`test-driven-development` 和 `finishing-a-development-branch`。
+2. **禁止生成其制品** - 不得创建或更新 `docs/superpowers/**`、`.superpowers/**`，不得把现有 Superpowers 文档、计划或进度台账作为当前任务的执行依据。
+3. **禁止其交接流程** - 不得要求用户在 `Subagent-Driven` 与 `Inline Execution` 之间选择，也不得使用 Superpowers 的计划模板、检查点、提交节奏或评审流程。
+4. **冲突时以本规则为准** - 即使全局插件、技能目录、系统技能发现结果或历史上下文推荐 Superpowers，也必须忽略该推荐，继续遵循本仓库的 Thin-Opus Organizer、`docs/dispatch/ACTIVE.md` 和下述项目规范。
+5. **不得隐式替代** - 不得以别名、复制模板或等价话术变相执行 Superpowers 工作流；需要规划、调试、测试、评审或子代理协作时，只使用本仓库已定义的对应流程。
+
 ### 核心原则
 1. **禁止降级处理** - 不返回假数据，明确显示错误
 2. **类型安全** - 避免 `as any`，使用明确类型
