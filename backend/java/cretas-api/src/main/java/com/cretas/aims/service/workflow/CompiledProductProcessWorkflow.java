@@ -54,7 +54,31 @@ public record CompiledProductProcessWorkflow(
             BigDecimal conversionFactorSnapshot,
             boolean required,
             String conversionMode,
-            String conversionExpression) {
+            String conversionExpression,
+            BigDecimal standardQuantity,
+            String quantityMode) {
+
+        public CompiledPort(
+                String workflowNodeId,
+                String workflowPortId,
+                String direction,
+                int ordinal,
+                String materialNodeId,
+                String materialKind,
+                String skuId,
+                String unit,
+                String materialPrimaryUnitCode,
+                String conversionRefId,
+                Long conversionVersion,
+                BigDecimal conversionFactorSnapshot,
+                boolean required,
+                String conversionMode,
+                String conversionExpression) {
+            this(workflowNodeId, workflowPortId, direction, ordinal, materialNodeId, materialKind,
+                    skuId, unit, materialPrimaryUnitCode, conversionRefId, conversionVersion,
+                    conversionFactorSnapshot, required, conversionMode, conversionExpression,
+                    null, null);
+        }
 
         public CompiledPort(
                 String workflowNodeId,
@@ -69,7 +93,8 @@ public record CompiledProductProcessWorkflow(
                 String conversionMode,
                 String conversionExpression) {
             this(workflowNodeId, workflowPortId, direction, ordinal, materialNodeId, materialKind,
-                    skuId, unit, unit, null, null, null, required, conversionMode, conversionExpression);
+                    skuId, unit, unit, null, null, null, required, conversionMode,
+                    conversionExpression, null, null);
         }
     }
 }

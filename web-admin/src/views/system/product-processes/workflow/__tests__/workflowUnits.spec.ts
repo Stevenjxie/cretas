@@ -4,11 +4,88 @@ import { applyWorkflowPatches } from '../workflowModel';
 import {
   forkWorkflowUnitReviewDraft,
   parseFixedRatioQuantities,
+  reconcileProcessPortQuantities,
   reconcileWorkflowUnits,
+  workflowUnitDimension,
   type WorkflowUnitContext,
 } from '../workflowUnits';
 
 describe('reconcileWorkflowUnits', () => {
+  it('recognizes MASS, VOLUME, and LENGTH as system physical dimensions', () => {
+    expect(workflowUnitDimension('公斤')).toBe('MASS');
+    expect(workflowUnitDimension('ml')).toBe('VOLUME');
+    expect(workflowUnitDimension('厘米')).toBe('LENGTH');
+    expect(workflowUnitDimension('盒')).toBe('UNKNOWN');
+  });
+
+  it('uses the server unit catalog for physical units outside the built-in fallback', () => {
+    const catalog = [
+      { code: 'oz', label: '盎司', dimension: 'MASS' as const, baseCode: 'g', displayScale: 3 },
+      { code: 'lb', label: '磅', dimension: 'MASS' as const, baseCode: 'g', displayScale: 3 },
+    ];
+    const reconciled = reconcileProcessPortQuantities({
+      workProcessId: 'weigh', processName: '称重', inputUnit: 'oz', outputUnit: 'lb',
+      ports: [
+        { id: 'in', direction: 'INPUT', unit: 'oz', ordinal: 0 },
+        { id: 'out', direction: 'OUTPUT', unit: 'lb', ordinal: 0 },
+      ],
+      conversionRule: { mode: 'ACTUAL_WEIGHT' }, reportingRequired: true,
+    }, catalog);
+
+    expect(reconciled.ports[1]).toMatchObject({ quantityMode: 'AUTO_CONVERT' });
+  });
+
+  it('migrates a legacy expression to the primary fixed output while normalizing main input to 1', () => {
+    const migrated = reconcileProcessPortQuantities({
+      workProcessId: 'cut', processName: '切分', inputUnit: '只', outputUnit: '盒',
+      ports: [
+        { id: 'in', direction: 'INPUT', unit: '只', ordinal: 0 },
+        { id: 'out', direction: 'OUTPUT', unit: '盒', ordinal: 0 },
+      ],
+      conversionRule: { mode: 'FIXED_RATIO', expression: '2 只 = 6 盒' },
+      reportingRequired: true,
+    });
+
+    expect(migrated.ports[0]).toMatchObject({ quantityMode: 'FIXED_RATIO', standardQuantity: 1 });
+    expect(migrated.ports[1]).toMatchObject({ quantityMode: 'FIXED_RATIO', standardQuantity: 3 });
+  });
+
+  it('reconciles each output independently and never guesses an extra input ratio', () => {
+    const reconciled = reconcileProcessPortQuantities({
+      workProcessId: 'split', processName: '分流', inputUnit: 'kg', outputUnit: 'g',
+      ports: [
+        { id: 'main', direction: 'INPUT', unit: 'kg', ordinal: 0 },
+        { id: 'seasoning', direction: 'INPUT', unit: 'g', ordinal: 1 },
+        { id: 'mass-output', direction: 'OUTPUT', unit: 'g', ordinal: 0 },
+        { id: 'box-output', direction: 'OUTPUT', unit: '盒', ordinal: 1, standardQuantity: 4 },
+      ],
+      conversionRule: { mode: 'ACTUAL_WEIGHT' }, reportingRequired: true,
+    });
+
+    expect(reconciled.ports).toEqual([
+      expect.objectContaining({ id: 'main', quantityMode: 'FIXED_RATIO', standardQuantity: 1 }),
+      expect.objectContaining({ id: 'seasoning', quantityMode: 'FIXED_RATIO', standardQuantity: 1 }),
+      expect.objectContaining({ id: 'mass-output', quantityMode: 'AUTO_CONVERT' }),
+      expect.objectContaining({ id: 'box-output', quantityMode: 'FIXED_RATIO', standardQuantity: 4 }),
+    ]);
+  });
+
+  it('recomputes quantity mode after unit changes while preserving a legal prior fixed quantity', () => {
+    const automatic = reconcileProcessPortQuantities({
+      workProcessId: 'pack', processName: '包装', inputUnit: 'kg', outputUnit: 'g',
+      ports: [
+        { id: 'in', direction: 'INPUT', unit: 'kg', ordinal: 0 },
+        { id: 'out', direction: 'OUTPUT', unit: 'g', ordinal: 0, quantityMode: 'FIXED_RATIO', standardQuantity: 12 },
+      ],
+      conversionRule: { mode: 'FIXED_RATIO', expression: '1 kg = 12 盒' }, reportingRequired: true,
+    });
+    expect(automatic.ports[1]).toMatchObject({ quantityMode: 'AUTO_CONVERT', standardQuantity: 12 });
+
+    automatic.ports[1].unit = '盒';
+    const fixedAgain = reconcileProcessPortQuantities(automatic);
+    expect(fixedAgain.ports[1]).toMatchObject({ quantityMode: 'FIXED_RATIO', standardQuantity: 12 });
+  });
+
   it('parses both canonical fixed-ratio quantities when the output unit ends the expression', () => {
     expect(parseFixedRatioQuantities('1.5 只 = 2.25 件')).toEqual({
       inputQuantity: 1.5,

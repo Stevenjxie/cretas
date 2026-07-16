@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -120,6 +121,54 @@ class ProductProcessWorkflowRuntimeCompilerTest {
 
         assertEquals("conv-200g", compiled.conversionRefId());
         assertEquals(7L, compiled.conversionVersion());
+    }
+
+    @Test
+    void compilesPortStandardQuantityAndQuantityMode() throws Exception {
+        ProductProcessWorkflowDTO definition = linearWorkflow();
+        Map<String, Object> output = processPorts(definition, "pack").stream()
+                .filter(port -> "OUTPUT".equals(port.get("direction")))
+                .findFirst().orElseThrow();
+        output.put("standardQuantity", new BigDecimal("2.500000"));
+        output.put("quantityMode", "FIXED_RATIO");
+
+        CompiledProductProcessWorkflow compiled = compiler.compile(definition);
+        CompiledProductProcessWorkflow.CompiledPort compiledOutput = compiled
+                .portsFor("pack").stream()
+                .filter(port -> "OUTPUT".equals(port.direction()))
+                .findFirst().orElseThrow();
+
+        assertEquals(0, new BigDecimal("2.500000")
+                .compareTo(compiledOutput.standardQuantity()));
+        assertEquals("FIXED_RATIO", compiledOutput.quantityMode());
+        JsonNode runtimePack = runtimeNode(objectMapper.readTree(compiled.nodesJson()), "pack");
+        JsonNode runtimeOutput = runtimePack.path("data").path("ports").get(1);
+        assertEquals(0, new BigDecimal("2.500000")
+                .compareTo(runtimeOutput.path("standardQuantity").decimalValue()));
+        assertEquals("FIXED_RATIO", runtimeOutput.path("quantityMode").asText());
+    }
+
+    @Test
+    void keepsLegacyPortsWithoutQuantityFieldsCompatible() {
+        CompiledProductProcessWorkflow.CompiledPort compiled = compiler.compile(linearWorkflow())
+                .portsFor("cut").getFirst();
+
+        assertEquals(null, compiled.standardQuantity());
+        assertEquals(null, compiled.quantityMode());
+    }
+
+    @Test
+    void rejectsUnknownQuantityModeAndInvalidStandardQuantity() {
+        ProductProcessWorkflowDTO unknownMode = linearWorkflow();
+        processPorts(unknownMode, "cut").getFirst().put("quantityMode", "ESTIMATED");
+        assertRuntimeInvalid(unknownMode, "cut", "data.ports[0].quantityMode");
+
+        for (Object invalid : List.of(0, -1, "1", Double.NaN, Double.POSITIVE_INFINITY)) {
+            ProductProcessWorkflowDTO definition = linearWorkflow();
+            processPorts(definition, "cut").getFirst().put("standardQuantity", invalid);
+
+            assertRuntimeInvalid(definition, "cut", "data.ports[0].standardQuantity");
+        }
     }
 
     @Test

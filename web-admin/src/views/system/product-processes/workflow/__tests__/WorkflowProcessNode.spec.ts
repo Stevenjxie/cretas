@@ -22,6 +22,7 @@ const processData: ProcessNodeData = {
       materialNodeId: 'material-1',
       materialKind: 'SEMI_FINISHED',
       unit: 'kg',
+      quantityMode: 'AUTO_CONVERT',
       ordinal: 0,
     },
   ],
@@ -206,31 +207,26 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     expect(badge.text()).toContain('3 出（同时多产出）');
   });
 
-  it('keeps weight-based quantity relations automatic', () => {
+  it('hides quantity inputs for a single system-convertible physical output', () => {
     const wrapper = mountNode();
 
-    expect(wrapper.find('.conversion-row .el-select').exists()).toBe(false);
     expect(wrapper.get('[data-testid="quantity-rule-note"]').text())
-      .toContain('实际出成率由历史报工自动计算');
+      .toContain('按系统单位换算（kg → kg）');
+    expect(wrapper.findComponent({ name: 'ElInputNumber' }).exists()).toBe(false);
   });
 
-  it('#5: shows a read-only multi-output auto-note (投入 = 各产出之和) instead of a selectable mode when there is more than one output', () => {
+  it('renders every multi-output port independently without forcing a shared ratio', () => {
     const ports: ProcessPort[] = [
-      { id: 'in-1', direction: 'INPUT', unit: 'kg', ordinal: 0 },
-      { id: 'out-1', direction: 'OUTPUT', materialName: '瘦肉出品', unit: 'kg', ordinal: 0 },
-      { id: 'out-2', direction: 'OUTPUT', materialName: '肥肉出品', unit: 'kg', ordinal: 1 },
+      { id: 'in-1', direction: 'INPUT', unit: 'kg', quantityMode: 'FIXED_RATIO', standardQuantity: 1, ordinal: 0 },
+      { id: 'out-1', direction: 'OUTPUT', materialName: '瘦肉出品', unit: 'g', quantityMode: 'AUTO_CONVERT', ordinal: 0 },
+      { id: 'out-2', direction: 'OUTPUT', materialName: '装盒成品', unit: '盒', quantityMode: 'FIXED_RATIO', standardQuantity: 2, ordinal: 1 },
     ];
-    const wrapper = mountNode(true, withPorts({
-      ports,
-      conversionRule: { mode: 'SUM_OUTPUTS', expression: null },
-    }));
+    const wrapper = mountNode(true, withPorts({ ports }));
 
-    expect(wrapper.get('[data-testid="quantity-rule-note"]').text())
-      .toContain('多产出分别按各自 SKU 单位报工');
-    expect(wrapper.find('.conversion-row .el-select').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="fixed-ratio-row"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="legacy-mode-hint"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="conversion-sentence"]').exists()).toBe(false);
+    expect(wrapper.findAll('[data-testid="auto-convert-output"]')).toHaveLength(1);
+    expect(wrapper.get('[data-testid="auto-convert-output"]').text()).toContain('g');
+    expect(wrapper.findAll('[data-testid="fixed-output-quantity"]')).toHaveLength(1);
+    expect(wrapper.findAllComponents({ name: 'ElInputNumber' })).toHaveLength(1);
   });
 
   it('does not offer a generic conversion mode selector', () => {
@@ -246,81 +242,36 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     expect(wrapper.find('.conversion-select').exists()).toBe(false);
   });
 
-  it('renders a read-only reporting note without repeating material names', () => {
+  it('uses the main input as a read-only baseline and requires each extra input quantity', () => {
     const ports: ProcessPort[] = [
-      { id: 'in-1', direction: 'INPUT', materialName: '整猪', unit: 'kg', ordinal: 0 },
-      { id: 'out-1', direction: 'OUTPUT', materialName: '分割肉', unit: 'kg', ordinal: 0 },
+      { id: 'in-1', direction: 'INPUT', materialName: '主料', unit: 'kg', quantityMode: 'FIXED_RATIO', standardQuantity: 1, ordinal: 0 },
+      { id: 'in-2', direction: 'INPUT', materialName: '调味料', unit: 'g', quantityMode: 'FIXED_RATIO', standardQuantity: 25, ordinal: 1 },
+      { id: 'out-1', direction: 'OUTPUT', materialName: '分割肉', unit: 'kg', quantityMode: 'AUTO_CONVERT', ordinal: 0 },
     ];
-    const wrapper = mountNode(true, withPorts({
-      ports,
-      conversionRule: { mode: 'ACTUAL_WEIGHT' },
-    }));
+    const wrapper = mountNode(true, withPorts({ ports }));
 
-    const sentence = wrapper.get('[data-testid="quantity-rule-note"]').text();
-    expect(sentence).toContain('实际出成率由历史报工自动计算');
-    expect(sentence).not.toContain('整猪');
-    expect(sentence).not.toContain('分割肉');
-    expect(sentence).not.toContain('→');
-    expect(sentence).not.toContain('Σ');
+    expect(wrapper.get('[data-testid="primary-input-baseline"]').text()).toContain('基准 1 kg');
+    const quantityInputs = wrapper.findAllComponents({ name: 'ElInputNumber' });
+    expect(quantityInputs).toHaveLength(1);
+    expect(quantityInputs[0].props('modelValue')).toBe(25);
+    expect(wrapper.text()).toContain('调味料');
   });
 
-  it('renders a structured fixed-ratio editor for non-weight SKU units', () => {
+  it('renders and updates a fixed quantity on the matching output port only', async () => {
     const ports: ProcessPort[] = [
-      { id: 'in-1', direction: 'INPUT', materialName: '整猪', unit: '只', ordinal: 0 },
-      {
-        id: 'out-1', direction: 'OUTPUT', materialName: '半只分割', materialKind: 'SEMI_FINISHED', unit: '半只', ordinal: 0,
-      },
+      { id: 'in-1', direction: 'INPUT', materialName: '整猪', unit: '只', quantityMode: 'FIXED_RATIO', standardQuantity: 1, ordinal: 0 },
+      { id: 'out-1', direction: 'OUTPUT', materialName: '半只分割', unit: '件', quantityMode: 'FIXED_RATIO', standardQuantity: 2, ordinal: 0 },
     ];
-    const wrapper = mountNode(true, withPorts({
-      ports,
-      conversionRule: { mode: 'FIXED_RATIO', expression: '1 只 = 2 半只' },
-    }));
+    const wrapper = mountNode(true, withPorts({ ports }));
 
-    expect(wrapper.find('[data-testid="fixed-ratio-row"]').exists()).toBe(true);
-    expect(wrapper.findAllComponents({ name: 'ElInputNumber' })).toHaveLength(2);
-    expect(wrapper.text()).toContain('只');
-    expect(wrapper.text()).toContain('半只');
-  });
-
-  it('emits a canonical fixed-ratio rule when a quantity changes', async () => {
-    const wrapper = mountNode(true, withPorts({
-      ports: [
-        { id: 'in-1', direction: 'INPUT', unit: '只', ordinal: 0 },
-        { id: 'out-1', direction: 'OUTPUT', unit: '件', ordinal: 0 },
-      ],
-      conversionRule: { mode: 'FIXED_RATIO', expression: null },
-    }));
-
-    wrapper.findAllComponents({ name: 'ElInputNumber' })[1].vm.$emit('change', 2);
+    wrapper.findComponent({ name: 'ElInputNumber' }).vm.$emit('change', 3);
     await wrapper.vm.$nextTick();
 
-    expect(wrapper.emitted('update')).toEqual([[{
-      conversionRule: { mode: 'FIXED_RATIO', expression: '1 只 = 2 件' },
-    }]]);
-  });
-
-  it('preserves the other side across consecutive fixed-ratio edits', async () => {
-    const data = withPorts({
-      ports: [
-        { id: 'in-1', direction: 'INPUT', unit: '只', ordinal: 0 },
-        { id: 'out-1', direction: 'OUTPUT', unit: '件', ordinal: 0 },
-      ],
-      conversionRule: { mode: 'FIXED_RATIO', expression: '1 只 = 2 件' },
+    const patch = wrapper.emitted('update')?.[0]?.[0] as Partial<ProcessNodeData>;
+    expect(patch.ports?.find((port) => port.id === 'in-1')?.standardQuantity).toBe(1);
+    expect(patch.ports?.find((port) => port.id === 'out-1')).toMatchObject({
+      quantityMode: 'FIXED_RATIO', standardQuantity: 3,
     });
-    const wrapper = mountNode(true, data);
-
-    wrapper.findAllComponents({ name: 'ElInputNumber' })[0].vm.$emit('change', 3);
-    const firstRule = wrapper.emitted('update')?.[0]?.[0] as Partial<ProcessNodeData>;
-    expect(firstRule.conversionRule?.expression).toBe('3 只 = 2 件');
-
-    await wrapper.setProps({
-      data: { ...data, conversionRule: firstRule.conversionRule as ProcessNodeData['conversionRule'] },
-    });
-    wrapper.findAllComponents({ name: 'ElInputNumber' })[1].vm.$emit('change', 4);
-
-    expect(wrapper.emitted('update')?.[1]).toEqual([{
-      conversionRule: { mode: 'FIXED_RATIO', expression: '3 只 = 4 件' },
-    }]);
   });
 
   it('#4: gracefully leaves the ratio unset (returns null, does not crash) for legacy free-text expressions that are not the canonical shape', () => {
@@ -351,7 +302,7 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     }));
 
     expect(wrapper.find('[data-testid="legacy-mode-hint"]').exists()).toBe(false);
-    expect(wrapper.get('[data-testid="quantity-rule-note"]').text()).toContain('实际出成率');
+    expect(wrapper.find('[data-testid="conversion-expression-input"]').exists()).toBe(false);
   });
 
   it('no longer renders a separate 样例 example line (trimmed per config-driven UX simplification)', () => {

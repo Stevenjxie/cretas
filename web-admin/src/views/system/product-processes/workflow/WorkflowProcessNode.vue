@@ -102,32 +102,53 @@
     </section>
 
     <section class="quantity-rule-section">
-      <div class="section-title"><span>投入产出数量关系</span></div>
-      <div v-if="requiresFixedRatio" class="fixed-ratio-editor" data-testid="fixed-ratio-row">
-        <el-input-number
-          :model-value="fixedRatio.inputQuantity"
-          :min="0.0001"
-          :controls="false"
-          :disabled="!canWrite"
-          aria-label="投入数量"
-          @focus="selectNumericInput"
-          @change="(value: number | undefined) => updateFixedRatio('input', value)"
-        />
-        <span>{{ primaryInput?.unit }}</span>
-        <span>=</span>
-        <el-input-number
-          :model-value="fixedRatio.outputQuantity"
-          :min="0.0001"
-          :controls="false"
-          :disabled="!canWrite"
-          aria-label="产出数量"
-          @focus="selectNumericInput"
-          @change="(value: number | undefined) => updateFixedRatio('output', value)"
-        />
-        <span>{{ primaryOutput?.unit }}</span>
+      <div class="section-title"><span>端口标准数量</span></div>
+      <div v-if="isSingleAutoConvert" class="quantity-rule-note" data-testid="quantity-rule-note">
+        按系统单位换算（{{ primaryInput?.unit }} → {{ primaryOutput?.unit }}），无需填写数量关系。
       </div>
-      <div v-else class="quantity-rule-note" data-testid="quantity-rule-note">
-        重量单位统一按 kg 报工；{{ isMultiOutput ? '多产出分别按各自 SKU 单位报工；' : '' }}实际出成率由历史报工自动计算。
+      <div v-else class="port-quantity-list" data-testid="port-quantity-list">
+        <div v-for="(port, index) in inputPorts" :key="`quantity:${port.id}`" class="port-quantity-row">
+          <div class="quantity-port-name">
+            <el-tag size="small" type="info">{{ index === 0 ? '主投入' : '追加投入' }}</el-tag>
+            <span>{{ port.materialName || `投入 ${index + 1}` }}</span>
+          </div>
+          <div v-if="index === 0" class="baseline-quantity" data-testid="primary-input-baseline">
+            基准 1 {{ port.unit }}
+          </div>
+          <div v-else class="quantity-input-wrap">
+            <el-input-number
+              :model-value="port.standardQuantity || 1"
+              :min="0.0001"
+              :controls="false"
+              :disabled="!canWrite"
+              :aria-label="`${port.materialName || '追加投入'}标准数量`"
+              @focus="selectNumericInput"
+              @change="(value: number | undefined) => updatePortQuantity(port.id, value)"
+            />
+            <span>{{ port.unit }}</span>
+          </div>
+        </div>
+        <div v-for="(port, index) in outputPorts" :key="`quantity:${port.id}`" class="port-quantity-row">
+          <div class="quantity-port-name">
+            <el-tag size="small" type="success">产出 {{ index + 1 }}</el-tag>
+            <span>{{ port.materialName || `产出 ${index + 1}` }}</span>
+          </div>
+          <div v-if="port.quantityMode === 'AUTO_CONVERT'" class="auto-convert-chip" data-testid="auto-convert-output">
+            按系统单位换算 · {{ port.unit }}
+          </div>
+          <div v-else class="quantity-input-wrap" data-testid="fixed-output-quantity">
+            <el-input-number
+              :model-value="port.standardQuantity || 1"
+              :min="0.0001"
+              :controls="false"
+              :disabled="!canWrite"
+              :aria-label="`${port.materialName || '产出'}标准数量`"
+              @focus="selectNumericInput"
+              @change="(value: number | undefined) => updatePortQuantity(port.id, value)"
+            />
+            <span>{{ port.unit }}</span>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -151,7 +172,6 @@ import { computed, ref } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
 import WorkflowSkuPicker, { type WorkflowSkuPickerOption } from './WorkflowSkuPicker.vue';
 import type { ProcessNodeData } from './types';
-import { isWorkflowWeightUnit, parseFixedRatioQuantities } from './workflowUnits';
 
 const props = withDefaults(defineProps<{
   data: ProcessNodeData;
@@ -184,22 +204,16 @@ const inputPorts = computed(() => props.data.ports.filter((port) => port.directi
 const outputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'OUTPUT'));
 const primaryInput = computed(() => [...inputPorts.value].sort((a, b) => a.ordinal - b.ordinal)[0]);
 const primaryOutput = computed(() => [...outputPorts.value].sort((a, b) => a.ordinal - b.ordinal)[0]);
-const requiresFixedRatio = computed(() => !!primaryInput.value && !!primaryOutput.value
-  && (!isWorkflowWeightUnit(primaryInput.value.unit) || !isWorkflowWeightUnit(primaryOutput.value.unit)));
-const fixedRatio = computed(() => {
-  return parseFixedRatioQuantities(props.data.conversionRule.expression)
-    || { inputQuantity: 1, outputQuantity: 1 };
-});
+const isSingleAutoConvert = computed(() => inputPorts.value.length === 1
+  && outputPorts.value.length === 1
+  && primaryOutput.value?.quantityMode === 'AUTO_CONVERT');
 
-function updateFixedRatio(side: 'input' | 'output', value: number | undefined): void {
-  if (!primaryInput.value || !primaryOutput.value || !value || value <= 0) return;
-  const inputQuantity = side === 'input' ? value : fixedRatio.value.inputQuantity;
-  const outputQuantity = side === 'output' ? value : fixedRatio.value.outputQuantity;
+function updatePortQuantity(portId: string, value: number | undefined): void {
+  if (!value || value <= 0) return;
   emit('update', {
-    conversionRule: {
-      mode: 'FIXED_RATIO',
-      expression: `${inputQuantity} ${primaryInput.value.unit} = ${outputQuantity} ${primaryOutput.value.unit}`,
-    },
+    ports: props.data.ports.map((port) => (port.id === portId
+      ? { ...port, quantityMode: 'FIXED_RATIO', standardQuantity: value }
+      : { ...port })),
   });
 }
 
@@ -211,10 +225,6 @@ function selectNumericInput(event: FocusEvent): void {
 function handleStyle(index: number, count: number): Record<string, string> {
   return { top: `${((index + 1) / (count + 1)) * 100}%` };
 }
-
-// #5: 多产出 (>1 个产出端口) 时数量关系隐性生效 (投入 = 各产出之和), 不再是
-// 用户可选的一个模式 (对齐 fool-proof-design: 不给用户看不懂的通用选项)。
-const isMultiOutput = computed(() => outputPorts.value.length > 1);
 
 </script>
 
@@ -244,7 +254,7 @@ const isMultiOutput = computed(() => outputPorts.value.length > 1);
 
 .process-node {
   position: relative;
-  width: 390px; padding: 14px; border: 1px solid #b9d8f4; border-left: 4px solid #409eff;
+  width: 440px; padding: 14px; border: 1px solid #b9d8f4; border-left: 4px solid #409eff;
   border-radius: 10px; background: #fff; box-shadow: 0 2px 12px rgba(27, 101, 168, 0.09);
 }
 .process-node.selected { box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.3); }
@@ -264,16 +274,21 @@ const isMultiOutput = computed(() => outputPorts.value.length > 1);
   padding: 8px 10px; border-radius: 7px; background: #eef6ff; color: #1b65a8;
   font-size: 12px; font-weight: 600; line-height: 1.4;
 }
-.fixed-ratio-editor {
-  display: grid;
-  grid-template-columns: minmax(88px, 1fr) auto auto minmax(88px, 1fr) auto;
-  gap: 8px;
-  align-items: center;
-  color: #475467;
-  font-size: 12px;
+.port-quantity-list { display: flex; flex-direction: column; gap: 8px; }
+.port-quantity-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 190px); gap: 10px;
+  align-items: center; min-height: 32px; padding: 6px 8px; border: 1px solid #edf2f7; border-radius: 7px;
 }
-.fixed-ratio-editor :deep(.el-input-number) { width: 100%; }
-.fixed-ratio-editor :deep(input) { user-select: text; }
+.quantity-port-name { display: flex; align-items: center; gap: 6px; min-width: 0; color: #475467; font-size: 12px; }
+.quantity-port-name > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.baseline-quantity, .auto-convert-chip {
+  padding: 5px 8px; border-radius: 6px; background: #eef6ff; color: #1b65a8;
+  font-size: 12px; font-weight: 600; text-align: center;
+}
+.auto-convert-chip { background: #edf8f2; color: #2f855a; }
+.quantity-input-wrap { display: grid; grid-template-columns: minmax(90px, 1fr) auto; align-items: center; gap: 6px; color: #667085; font-size: 12px; }
+.quantity-input-wrap :deep(.el-input-number) { width: 100%; }
+.quantity-input-wrap :deep(input) { user-select: text; }
 .reporting-row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; color: #667085; font-size: 12px; }
 .unit-chip {
   display: flex;

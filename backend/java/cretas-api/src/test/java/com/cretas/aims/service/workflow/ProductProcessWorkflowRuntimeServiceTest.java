@@ -31,6 +31,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -116,6 +117,30 @@ class ProductProcessWorkflowRuntimeServiceTest {
                 .map(WorkProcessTaskDTO::getWorkflowNodeId).toList());
         assertTrue(result.orElseThrow().stream()
                 .allMatch(task -> task.getWorkflowInstanceId().equals(501L)));
+    }
+
+    @Test
+    void snapshotsPortStandardQuantityAndQuantityModeWhenMaterializing() {
+        givenValidOwnedBatch();
+        givenEnabledPublishedWorkflow();
+        givenFreshRuntimePersistence(true);
+        CompiledProductProcessWorkflow base = compiledWorkflow();
+        List<CompiledProductProcessWorkflow.CompiledPort> ports = new ArrayList<>(base.ports());
+        CompiledProductProcessWorkflow.CompiledPort first = ports.getFirst();
+        ports.set(0, new CompiledProductProcessWorkflow.CompiledPort(
+                first.workflowNodeId(), first.workflowPortId(), first.direction(), first.ordinal(),
+                first.materialNodeId(), first.materialKind(), first.skuId(), first.unit(),
+                first.materialPrimaryUnitCode(), first.conversionRefId(), first.conversionVersion(),
+                first.conversionFactorSnapshot(), first.required(), first.conversionMode(),
+                first.conversionExpression(), new BigDecimal("2.500000"), "FIXED_RATIO"));
+        when(compiler.compile(any())).thenReturn(new CompiledProductProcessWorkflow(
+                base.nodesJson(), base.edgesJson(), base.processTasks(), ports));
+
+        service.materializeIfActive("F006", 901L, "PT-PIG");
+
+        WorkflowTaskPort saved = savedPorts.getFirst();
+        assertEquals(0, new BigDecimal("2.500000").compareTo(saved.getStandardQuantity()));
+        assertEquals("FIXED_RATIO", saved.getQuantityMode());
     }
 
     @Test
@@ -472,6 +497,8 @@ class ProductProcessWorkflowRuntimeServiceTest {
         WorkProcessTask first = task(801L, 501L, "trim-1", "TRIM", 1);
         WorkflowTaskPort firstOut = port(904L, 501L, 801L, "trim-out", 2);
         WorkflowTaskPort firstIn = port(903L, 501L, 801L, "trim-in", 1);
+        firstIn.setStandardQuantity(new BigDecimal("3.250000"));
+        firstIn.setQuantityMode("AUTO_CONVERT");
         WorkflowTaskPort secondIn = port(905L, 501L, 802L, "pack-in", 1);
         when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
                 .thenReturn(Optional.of(existing));
@@ -488,6 +515,11 @@ class ProductProcessWorkflowRuntimeServiceTest {
                 .stream().map(ProductionWorkflowRuntimeDTO.PortDTO::getWorkflowPortId).toList());
         assertEquals(List.of("pack-in"), runtime.getTasks().get(1).getPorts()
                 .stream().map(ProductionWorkflowRuntimeDTO.PortDTO::getWorkflowPortId).toList());
+        ProductionWorkflowRuntimeDTO.PortDTO runtimeFirstIn =
+                runtime.getTasks().getFirst().getPorts().getFirst();
+        assertEquals(0, new BigDecimal("3.250000")
+                .compareTo(runtimeFirstIn.getStandardQuantity()));
+        assertEquals("AUTO_CONVERT", runtimeFirstIn.getQuantityMode());
     }
 
     private void givenValidOwnedBatch() {

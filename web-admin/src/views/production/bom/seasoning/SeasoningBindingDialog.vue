@@ -5,6 +5,7 @@ import { showSingletonNotification } from '@/utils/singletonNotification';
 import { useRoute, useRouter } from 'vue-router';
 import { bomSeasoningApi, type SeasoningBindingView, type SeasoningProcessView } from '@/api/bom';
 import { get } from '@/api/request';
+import { convertUnit } from '@/api/unitContract';
 import { findDuplicateBinding } from './seasoningModel';
 
 export interface SeasoningMaterialOption {
@@ -42,8 +43,19 @@ const form = reactive({
   remark: '',
 });
 const saving = reactive({ value: false });
-const dosageUnit = ref<'g' | 'kg'>('g');
+const dosageUnit = ref('kg');
+const dosageUnitFactorsToG = ref<Record<string, number>>({ g: 1, kg: 1000 });
+const materialUnitLoading = ref(false);
 const selectedMaterial = computed(() => props.materials.find((item) => item.id === form.materialTypeId));
+const selectedMaterialUnit = computed(() => selectedMaterial.value?.unit?.trim() || '');
+const dosageUnitOptions = computed(() => {
+  const options = ['kg', 'g'];
+  const materialUnit = selectedMaterialUnit.value;
+  if (materialUnit && dosageUnitFactorsToG.value[materialUnit] && !options.includes(materialUnit)) {
+    options.unshift(materialUnit);
+  }
+  return options;
+});
 const refreshedMovingAvgPrice = ref<number | null | undefined>(undefined);
 const effectiveMovingAvgPrice = computed(() => (
   refreshedMovingAvgPrice.value === undefined
@@ -57,23 +69,55 @@ const missingMovingAvgPrice = computed(() => (
 const dosageDisplayValue = computed<number | null>({
   get: () => form.dosagePerKgG == null
     ? null
-    : dosageUnit.value === 'kg' ? form.dosagePerKgG / 1000 : form.dosagePerKgG,
+    : form.dosagePerKgG / (dosageUnitFactorsToG.value[dosageUnit.value] || 1),
   set: (value) => {
-    form.dosagePerKgG = value == null ? null : value * (dosageUnit.value === 'kg' ? 1000 : 1);
+    form.dosagePerKgG = value == null
+      ? null
+      : value * (dosageUnitFactorsToG.value[dosageUnit.value] || 1);
   },
 });
 
 watch(() => [props.modelValue, props.binding] as const, () => {
   if (!props.modelValue) return;
   form.materialTypeId = props.binding?.materialTypeId || '';
-  form.dosagePerKgG = props.binding?.dosagePerKgG ?? null;
-  dosageUnit.value = (props.binding?.dosagePerKgG ?? 0) >= 1000 ? 'kg' : 'g';
+  form.dosagePerKgG = props.binding?.dosagePerKgG ?? 1000;
+  dosageUnit.value = props.binding && props.binding.dosagePerKgG < 1000 ? 'g' : 'kg';
   form.potEnabled = props.binding?.subsequentPotRatio != null;
   form.subsequentPercent = props.binding?.subsequentPotRatio == null ? 50 : props.binding.subsequentPotRatio * 100;
   form.countInSeasoning = props.binding?.countInSeasoning ?? true;
   form.remark = props.binding?.remark || '';
 }, { immediate: true });
-watch(() => form.materialTypeId, () => { refreshedMovingAvgPrice.value = undefined; });
+watch(() => form.materialTypeId, () => {
+  refreshedMovingAvgPrice.value = undefined;
+  void loadSelectedMaterialUnit();
+});
+
+async function loadSelectedMaterialUnit(): Promise<void> {
+  const unit = selectedMaterialUnit.value;
+  if (!['g', 'kg', unit].includes(dosageUnit.value)) dosageUnit.value = 'kg';
+  if (!unit || dosageUnitFactorsToG.value[unit]) return;
+  materialUnitLoading.value = true;
+  try {
+    const response = await convertUnit(props.factoryId, {
+      quantity: 1,
+      fromUnit: unit,
+      toUnit: 'g',
+      scene: 'PRODUCTION',
+      scale: 6,
+      roundingMode: 'HALF_UP',
+    });
+    const factor = response.success ? Number(response.data?.quantity) : Number.NaN;
+    if (Number.isFinite(factor) && factor > 0) {
+      dosageUnitFactorsToG.value = { ...dosageUnitFactorsToG.value, [unit]: factor };
+    } else {
+      ElMessage.warning(`调料单位“${unit}”无法换算为重量，投入量暂按 kg/g 填写`);
+    }
+  } catch {
+    ElMessage.warning(`调料单位“${unit}”换算读取失败，投入量暂按 kg/g 填写`);
+  } finally {
+    materialUnitLoading.value = false;
+  }
+}
 
 function isRevisionConflict(error: unknown): boolean {
   const candidate = error as { response?: { status?: number }; status?: number; code?: string };
@@ -168,12 +212,11 @@ async function refreshSelectedMaterialPrice() {
         <div class="dosage-sentence" data-testid="seasoning-dosage-sentence">
           <span>每生产 1 kg 本工序半成品，需要投入</span>
           <el-input-number v-model="dosageDisplayValue" :min="0" :precision="4" :controls="false" />
-          <el-select v-model="dosageUnit" style="width: 84px">
-            <el-option label="g" value="g" />
-            <el-option label="kg" value="kg" />
+          <el-select v-model="dosageUnit" :loading="materialUnitLoading" style="width: 96px">
+            <el-option v-for="unit in dosageUnitOptions" :key="unit" :label="unit" :value="unit" />
           </el-select>
         </div>
-        <div class="form-tip">保存时系统统一换算为 g/kg，显示可自由切换 g 或 kg。</div>
+        <div class="form-tip">默认 1 kg；可切换为该调料的物料单位，保存时系统统一换算为 g/kg。</div>
       </el-form-item>
       <el-form-item label="按锅序计算"><el-switch v-model="form.potEnabled" /></el-form-item>
       <template v-if="form.potEnabled">

@@ -65,7 +65,6 @@ const categoryOptions: Array<{ value: SystemUnitCategory; label: string }> = [
 ];
 
 const rules = {
-  unitCode: [{ required: true, message: '请输入单位代码', trigger: 'blur' }],
   unitName: [{ required: true, message: '请输入单位名称', trigger: 'blur' }],
   category: [{ required: true, message: '请选择单位分类', trigger: 'change' }],
 };
@@ -112,16 +111,30 @@ function selectExisting(unit: SystemUnit): void {
   emit('change', value);
 }
 
+function generatedUnitCode(name: string): string {
+  const base = defaultUnitCode(name) || 'unit';
+  const usedCodes = new Set(units.value.map((unit) => normalizeUnitIdentity(unit.unitCode)));
+  if (!usedCodes.has(normalizeUnitIdentity(base))) return base;
+  for (let suffix = 2; suffix < 10000; suffix += 1) {
+    const marker = `_${suffix}`;
+    const candidate = `${base.slice(0, Math.max(1, 20 - marker.length))}${marker}`;
+    if (!usedCodes.has(normalizeUnitIdentity(candidate))) return candidate;
+  }
+  return `${base.slice(0, 14)}_${Date.now().toString(36).slice(-5)}`;
+}
+
 async function submitUnit(): Promise<void> {
   const valid = await formRef.value?.validate().catch(() => false);
   if (!valid || !props.factoryId) return;
-  const duplicate = findDuplicateUnit(units.value, [form.unitCode, form.unitName, form.unitSymbol]);
+  const duplicate = findDuplicateUnit(units.value, [form.unitName, form.unitSymbol]);
   if (duplicate) {
     selectExisting(duplicate);
     ElMessage.warning(`单位已存在，已选择「${duplicate.unitName}」`);
     dialogVisible.value = false;
     return;
   }
+
+  form.unitCode = generatedUnitCode(form.unitName.trim());
 
   submitting.value = true;
   try {
@@ -152,8 +165,8 @@ async function submitUnit(): Promise<void> {
   }
 }
 
-watch(() => props.factoryId, () => void loadUnits());
-onMounted(() => void loadUnits());
+watch(() => props.factoryId, (): void => { void loadUnits(); });
+onMounted((): void => { void loadUnits(); });
 </script>
 
 <template>
@@ -189,9 +202,6 @@ onMounted(() => void loadUnits());
         <el-form-item label="单位名称" prop="unitName">
           <el-input v-model="form.unitName" maxlength="100" />
         </el-form-item>
-        <el-form-item label="单位代码" prop="unitCode">
-          <el-input v-model="form.unitCode" maxlength="20" placeholder="唯一代码，如 pcs" />
-        </el-form-item>
         <el-form-item label="单位符号">
           <el-input v-model="form.unitSymbol" maxlength="20" placeholder="如 只、kg" />
         </el-form-item>
@@ -200,7 +210,7 @@ onMounted(() => void loadUnits());
             <el-option v-for="item in categoryOptions" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
         </el-form-item>
-        <div class="unit-dialog-tip">代码、名称、符号或别名重复时，将直接选择已有单位。</div>
+        <div class="unit-dialog-tip">单位代码由系统自动生成；名称、符号或别名重复时，将直接选择已有单位。</div>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>

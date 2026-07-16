@@ -33,6 +33,9 @@ export interface ProcessPort {
   skuId?: string;
   materialKind?: Exclude<ProductProcessNodeKind, 'PROCESS'>;
   unit: string;
+  /** Standard quantity relative to the primary input. Ignored for AUTO_CONVERT ports. */
+  standardQuantity?: number;
+  quantityMode?: 'AUTO_CONVERT' | 'FIXED_RATIO';
   conversionRefId?: string | null;
   conversionVersion?: number | null;
   ordinal: number;

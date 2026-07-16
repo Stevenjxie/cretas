@@ -303,6 +303,8 @@ public class ProductProcessWorkflowRuntimeServiceImpl
         port.setRequired(compiled.required());
         port.setConversionMode(compiled.conversionMode());
         port.setConversionExpression(compiled.conversionExpression());
+        port.setStandardQuantity(compiled.standardQuantity());
+        port.setQuantityMode(compiled.quantityMode());
         return port;
     }
 
@@ -418,6 +420,8 @@ public class ProductProcessWorkflowRuntimeServiceImpl
                 .required(port.getRequired())
                 .conversionMode(port.getConversionMode())
                 .conversionExpression(port.getConversionExpression())
+                .standardQuantity(port.getStandardQuantity())
+                .quantityMode(port.getQuantityMode())
                 .build();
     }
 

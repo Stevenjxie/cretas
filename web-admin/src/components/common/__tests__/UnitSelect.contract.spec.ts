@@ -16,16 +16,19 @@ describe('shared UnitSelect contract', () => {
   it('offers dictionary-backed create-first behavior without allow-create ghost values', () => {
     expect(apiSource).toContain('/system-config/units');
     expect(source).toContain('＋ 新增单位「${query.trim()}」');
-    expect(source).toContain('findDuplicateUnit(units.value, [form.unitCode, form.unitName, form.unitSymbol])');
+    expect(source).toContain('findDuplicateUnit(units.value, [form.unitName, form.unitSymbol])');
+    expect(source).toContain('form.unitCode = generatedUnitCode(form.unitName.trim())');
+    expect(source).toContain('单位代码由系统自动生成');
+    expect(source).not.toContain('<el-form-item label="单位代码"');
     expect(source).toContain('创建并选中');
     expect(source).not.toContain('allow-create');
   });
 
-  it('is shared by SKU and both work-process unit ports', () => {
+  it('is shared by SKU while work-process master data no longer owns port units', () => {
     expect(productSource).toContain('<UnitSelect');
     expect(productSource).toContain(':placeholder="gramsPerUnitPlaceholder"');
-    expect(processSource.match(/<UnitSelect/g)).toHaveLength(2);
-    expect(processSource).toContain('placeholder="搜索投入单位；无匹配可新增"');
-    expect(processSource).toContain('@change="markOutputUnitEdited"');
+    expect(processSource).not.toContain('<UnitSelect');
+    expect(processSource).not.toContain('label="投入单位"');
+    expect(processSource).not.toContain('label="产出单位"');
   });
 });
