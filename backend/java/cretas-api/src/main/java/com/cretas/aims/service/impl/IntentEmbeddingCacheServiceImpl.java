@@ -17,7 +17,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import jakarta.annotation.PostConstruct;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -49,10 +48,10 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
     private final RequestScopedEmbeddingCache requestScopedCache;
 
     // 意图缓存结构: factoryId -> (intentCode -> embedding)
-    private final Map<String, Map<String, CachedIntentEmbedding>> intentCache = new ConcurrentHashMap<>();
+    private volatile Map<String, Map<String, CachedIntentEmbedding>> intentCache = new ConcurrentHashMap<>();
 
     // 表达缓存结构: factoryId -> (expressionId -> embedding)
-    private final Map<String, Map<String, CachedExpressionEmbedding>> expressionCache = new ConcurrentHashMap<>();
+    private volatile Map<String, Map<String, CachedExpressionEmbedding>> expressionCache = new ConcurrentHashMap<>();
 
     // 统计计数器
     private final AtomicLong cacheHits = new AtomicLong(0);
@@ -77,80 +76,82 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
         this.requestScopedCache = requestScopedCache;
     }
 
-    @PostConstruct
     @Override
-    public void initializeCache() {
+    public synchronized void initializeCache() {
         if (!embeddingClient.isAvailable()) {
-            log.warn("Embedding client not available, skipping intent cache initialization");
-            return;
+            throw new IllegalStateException("Embedding client unavailable during intent cache warmup");
         }
 
         log.info("Initializing intent embedding cache...");
         long startTime = System.currentTimeMillis();
 
-        try {
-            // 获取所有启用的意图配置
-            List<AIIntentConfig> allIntents = intentConfigRepository.findAllEnabled();
-            int cachedCount = 0;
-
-            for (AIIntentConfig intent : allIntents) {
-                try {
-                    cacheIntent(intent);
-                    cachedCount++;
-                } catch (Exception e) {
-                    log.warn("Failed to cache intent {}: {}", intent.getIntentCode(), e.getMessage());
-                }
+        List<AIIntentConfig> allIntents = intentConfigRepository.findAllEnabled();
+        List<AIIntentConfig> candidates = new ArrayList<>();
+        List<String> texts = new ArrayList<>();
+        for (AIIntentConfig intent : allIntents) {
+            String keywordText = buildKeywordText(intent);
+            if (!keywordText.isEmpty()) {
+                candidates.add(intent);
+                texts.add(keywordText);
             }
-
-            long duration = System.currentTimeMillis() - startTime;
-            log.info("Intent embedding cache initialized: {} intents cached in {}ms",
-                cachedCount, duration);
-
-            // 同时初始化表达缓存
-            initializeExpressionCache();
-
-        } catch (Exception e) {
-            log.error("Failed to initialize intent embedding cache: {}", e.getMessage(), e);
         }
+
+        List<float[]> vectors = texts.isEmpty() ? List.of() : embeddingClient.encodeBatch(texts);
+        if (vectors.size() != candidates.size()) {
+            throw new IllegalStateException("Embedding batch size mismatch: expected "
+                    + candidates.size() + ", got " + vectors.size());
+        }
+
+        Map<String, Map<String, CachedIntentEmbedding>> nextIntentCache = new ConcurrentHashMap<>();
+        for (int i = 0; i < candidates.size(); i++) {
+            AIIntentConfig intent = candidates.get(i);
+            String factoryId = intent.getFactoryId() == null ? "*" : intent.getFactoryId();
+            nextIntentCache.computeIfAbsent(factoryId, ignored -> new ConcurrentHashMap<>())
+                    .put(intent.getIntentCode(), new CachedIntentEmbedding(intent, vectors.get(i)));
+        }
+
+        Map<String, Map<String, CachedExpressionEmbedding>> nextExpressionCache = buildExpressionCache();
+        intentCache = nextIntentCache;
+        expressionCache = nextExpressionCache;
+
+        long duration = System.currentTimeMillis() - startTime;
+        log.info("Intent embedding cache initialized atomically: {} intents cached in {}ms",
+                candidates.size(), duration);
     }
 
     /**
      * 初始化表达 embedding 缓存
      */
     private void initializeExpressionCache() {
-        if (!embeddingClient.isAvailable()) {
-            return;
-        }
-
         log.info("Initializing expression embedding cache...");
         long startTime = System.currentTimeMillis();
+        Map<String, Map<String, CachedExpressionEmbedding>> next = buildExpressionCache();
+        expressionCache = next;
+        int count = next.values().stream().mapToInt(Map::size).sum();
+        log.info("Expression embedding cache initialized: {} expressions cached in {}ms",
+                count, System.currentTimeMillis() - startTime);
+    }
 
-        try {
-            // 获取所有有 embedding 的表达
-            List<LearnedExpression> expressions = expressionRepository.findByIsActiveTrue();
-            int cachedCount = 0;
-
-            for (LearnedExpression expr : expressions) {
-                if (expr.hasEmbedding()) {
-                    cacheExpressionInternal(expr);
-                    cachedCount++;
-                }
+    private Map<String, Map<String, CachedExpressionEmbedding>> buildExpressionCache() {
+        Map<String, Map<String, CachedExpressionEmbedding>> next = new ConcurrentHashMap<>();
+        for (LearnedExpression expression : expressionRepository.findByIsActiveTrue()) {
+            if (!expression.hasEmbedding()) {
+                continue;
             }
-
-            long duration = System.currentTimeMillis() - startTime;
-            log.info("Expression embedding cache initialized: {} expressions cached in {}ms",
-                cachedCount, duration);
-
-        } catch (Exception e) {
-            log.warn("Failed to initialize expression cache: {}", e.getMessage());
+            String factoryId = expression.getFactoryId() == null ? "*" : expression.getFactoryId();
+            next.computeIfAbsent(factoryId, ignored -> new ConcurrentHashMap<>())
+                    .put(expression.getId(), new CachedExpressionEmbedding(
+                            expression.getId(), expression.getIntentCode(), expression.getExpression(),
+                            expression.getEmbeddingAsFloatArray(),
+                            expression.getHitCount() != null ? expression.getHitCount() : 0,
+                            Boolean.TRUE.equals(expression.getIsVerified())));
         }
+        return next;
     }
 
     @Scheduled(cron = "0 0 4 * * ?") // 每天凌晨4点刷新
     public void refreshAllCache() {
         log.info("Scheduled refresh of intent embedding cache...");
-        intentCache.clear();
-        expressionCache.clear();
         initializeCache();
     }
 
@@ -222,19 +223,8 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
 
             // 如果合并后仍为空，尝试初始化
             if (combinedCache.isEmpty()) {
-                refreshFactoryCache(factoryId);
-                factoryCache = intentCache.get(factoryId);
-                if (factoryCache != null) {
-                    combinedCache.putAll(factoryCache);
-                }
-                globalCache = intentCache.get("*");
-                if (globalCache != null) {
-                    combinedCache.putAll(globalCache);
-                }
-                if (combinedCache.isEmpty()) {
-                    cacheMisses.incrementAndGet();
-                    return Collections.emptyList();
-                }
+                cacheMisses.incrementAndGet();
+                return Collections.emptyList();
             }
 
             cacheHits.incrementAndGet();

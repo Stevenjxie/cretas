@@ -11,7 +11,6 @@ import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -51,12 +50,12 @@ public class SemanticIntentMatcher {
      * 短语向量缓存
      * Key: 短语文本, Value: 向量
      */
-    private final Map<String, float[]> phraseVectorCache = new ConcurrentHashMap<>();
+    private volatile Map<String, float[]> phraseVectorCache = Map.of();
 
     /**
      * 短语到意图的映射缓存（从 IntentKnowledgeBase 复制）
      */
-    private final Map<String, String> phraseToIntent = new ConcurrentHashMap<>();
+    private volatile Map<String, String> phraseToIntent = Map.of();
 
     /**
      * 用户输入向量缓存（LRU，避免重复计算频繁输入）
@@ -106,8 +105,7 @@ public class SemanticIntentMatcher {
      * 初始化：将 IntentKnowledgeBase 中的所有短语向量化并缓存
      */
     @PostConstruct
-    public void initializePhraseVectors() {
-        log.info("Initializing SemanticIntentMatcher...");
+    public void initializeLocalCache() {
 
         // 初始化输入向量缓存
         inputVectorCache = Caffeine.newBuilder()
@@ -115,41 +113,49 @@ public class SemanticIntentMatcher {
                 .expireAfterAccess(30, TimeUnit.MINUTES)
                 .build();
 
+    }
+
+    /** Expensive remote warmup, invoked by the serial startup coordinator. */
+    public synchronized void initializePhraseVectors() {
+        boolean previouslyInitialized = initialized;
+        Map<String, String> nextMappings = new LinkedHashMap<>();
+
         // 复制短语映射 (工厂 + 餐饮)
         Map<String, String> phraseMappings = knowledgeBase.getPhraseToIntentMapping();
         if (phraseMappings != null && !phraseMappings.isEmpty()) {
-            phraseToIntent.putAll(phraseMappings);
-            log.info("Loaded {} factory phrase mappings from IntentKnowledgeBase", phraseToIntent.size());
+            nextMappings.putAll(phraseMappings);
+            log.info("Loaded {} factory phrase mappings from IntentKnowledgeBase", nextMappings.size());
         } else {
             log.warn("No phrase mappings found in IntentKnowledgeBase");
             initFailureReason = "No phrase mappings available";
-            return;
+            throw new IllegalStateException(initFailureReason);
         }
 
         // Wave-10: 加载餐饮短语映射，提升餐饮意图语义匹配能力
         Map<String, String> restaurantMappings = knowledgeBase.getRestaurantPhraseMapping();
         if (restaurantMappings != null && !restaurantMappings.isEmpty()) {
-            phraseToIntent.putAll(restaurantMappings);
+            nextMappings.putAll(restaurantMappings);
             log.info("Loaded {} restaurant phrase mappings (total: {})",
-                    restaurantMappings.size(), phraseToIntent.size());
+                    restaurantMappings.size(), nextMappings.size());
         }
 
         // 检查 Embedding 服务是否可用
         if (embeddingClient == null) {
             log.warn("EmbeddingClient is not available. Semantic matching will be disabled.");
             initFailureReason = "EmbeddingClient not injected";
-            return;
+            throw new IllegalStateException(initFailureReason);
         }
 
         if (!embeddingClient.isAvailable()) {
             log.warn("Embedding service is not available at startup. Will retry on first use.");
             initFailureReason = "Embedding service unavailable";
-            return;
+            throw new IllegalStateException(initFailureReason);
         }
 
         // 批量向量化所有短语
         try {
-            List<String> phrases = new ArrayList<>(phraseToIntent.keySet());
+            List<String> phrases = new ArrayList<>(nextMappings.keySet());
+            Map<String, float[]> nextVectors = new HashMap<>();
             log.info("Vectorizing {} phrases...", phrases.size());
 
             long startTime = System.currentTimeMillis();
@@ -161,16 +167,23 @@ public class SemanticIntentMatcher {
                 List<String> batch = phrases.subList(i, endIndex);
 
                 List<float[]> vectors = embeddingClient.encodeBatch(batch);
+                if (vectors.size() != batch.size()) {
+                    throw new IllegalStateException("Embedding batch size mismatch: expected "
+                            + batch.size() + ", got " + vectors.size());
+                }
 
                 for (int j = 0; j < batch.size(); j++) {
-                    phraseVectorCache.put(batch.get(j), vectors.get(j));
+                    nextVectors.put(batch.get(j), vectors.get(j));
                 }
 
                 log.debug("Vectorized batch {}/{}", endIndex, phrases.size());
             }
 
             long elapsed = System.currentTimeMillis() - startTime;
+            phraseToIntent = Map.copyOf(nextMappings);
+            phraseVectorCache = Map.copyOf(nextVectors);
             initialized = true;
+            initFailureReason = null;
             log.info("SemanticIntentMatcher initialized successfully. " +
                     "Vectorized {} phrases in {}ms. Model: {}",
                     phraseVectorCache.size(), elapsed, embeddingClient.getModelName());
@@ -178,6 +191,8 @@ public class SemanticIntentMatcher {
         } catch (Exception e) {
             log.error("Failed to initialize phrase vectors: {}", e.getMessage(), e);
             initFailureReason = "Vectorization failed: " + e.getMessage();
+            initialized = previouslyInitialized;
+            throw e;
         }
     }
 
@@ -367,13 +382,6 @@ public class SemanticIntentMatcher {
         }
 
         // 如果尚未初始化，尝试延迟初始化
-        if (!initialized && phraseVectorCache.isEmpty()) {
-            if (embeddingClient.isAvailable()) {
-                log.info("Embedding service became available, attempting delayed initialization...");
-                initializePhraseVectors();
-            }
-        }
-
         return initialized && embeddingClient.isAvailable();
     }
 
@@ -418,10 +426,6 @@ public class SemanticIntentMatcher {
      */
     public void refreshPhraseVectors() {
         log.info("Refreshing phrase vectors...");
-        phraseVectorCache.clear();
-        phraseToIntent.clear();
-        initialized = false;
-        initFailureReason = null;
         initializePhraseVectors();
     }
 
@@ -440,8 +444,12 @@ public class SemanticIntentMatcher {
 
         try {
             float[] vector = embeddingClient.encode(phrase);
-            phraseVectorCache.put(phrase, vector);
-            phraseToIntent.put(phrase, intentCode);
+            Map<String, float[]> nextVectors = new HashMap<>(phraseVectorCache);
+            Map<String, String> nextMappings = new HashMap<>(phraseToIntent);
+            nextVectors.put(phrase, vector);
+            nextMappings.put(phrase, intentCode);
+            phraseVectorCache = Map.copyOf(nextVectors);
+            phraseToIntent = Map.copyOf(nextMappings);
             log.info("Warmed up new phrase: '{}' -> {}", phrase, intentCode);
         } catch (Exception e) {
             log.error("Failed to warmup phrase '{}': {}", phrase, e.getMessage());

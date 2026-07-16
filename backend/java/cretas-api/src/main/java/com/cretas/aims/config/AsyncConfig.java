@@ -58,6 +58,19 @@ public class AsyncConfig {
         return executor;
     }
 
+    /** Single lane for expensive embedding warmups after core startup. */
+    @Bean(name = "startupWarmupExecutor")
+    public Executor startupWarmupExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(1);
+        executor.setMaxPoolSize(1);
+        executor.setQueueCapacity(4);
+        executor.setThreadNamePrefix("StartupWarmup-");
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.initialize();
+        return executor;
+    }
+
     /**
      * SmartBI Sheet 并行处理线程池
      *
