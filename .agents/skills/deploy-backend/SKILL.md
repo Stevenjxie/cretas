@@ -21,9 +21,12 @@ Java runtime is `/www/wwwroot/cretas/`; web admin is `/www/wwwroot/web-admin/`. 
 
 ## Build Once
 
-Every release starts from a clean exact `origin/main` worktree: require an
-empty `git status --porcelain` and `HEAD == origin/main` before artifact reuse,
-build, or deployment. Build once for one backend Git tree:
+Every release/deployment starts from a clean exact `origin/main` worktree:
+require an empty `git status --porcelain` and `HEAD == origin/main` before
+artifact reuse, fallback build, or deployment. A trusted candidate JAR may be
+built earlier in the clean reviewed source worktree and reused after squash
+merge when the backend tree remains identical. Build once for one backend Git
+tree:
 
 - Run release target tests and create the final release JAR in the same Maven lifecycle: `mvn clean package -Dtest=<tests>`. Do not run the target tests separately and then package again.
 - A successful release build must generate a trusted manifest recording at least the build commit, exact `backend/java/cretas-api` Git tree, JAR SHA-256, and the information needed to check JAR integrity. A recent mtime or filename is not provenance.
