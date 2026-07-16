@@ -404,12 +404,14 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
     @Override
     public PageResponse<RawMaterialTypeDTO> filterMaterialTypes(String factoryId, String codePrefix,
                                                                 String keyword, PageRequest pageRequest) {
-        String normalizedPrefix = codePrefix == null || codePrefix.isBlank() ? null : codePrefix.trim();
-        if (normalizedPrefix != null && !normalizedPrefix.matches("[0-9]{3}|[0-9]{6}|[0-9]{10}")) {
+        // Keep optional String parameters non-null when invoking the JPQL query. PostgreSQL otherwise
+        // receives an untyped null as bytea, and LOWER(:keyword) fails with "lower(bytea) does not exist".
+        String normalizedPrefix = codePrefix == null || codePrefix.isBlank() ? "" : codePrefix.trim();
+        if (!normalizedPrefix.isEmpty() && !normalizedPrefix.matches("[0-9]{3}|[0-9]{6}|[0-9]{10}")) {
             throw new BusinessException(400, "编码筛选前缀必须是L1(3位)、L2(6位)或L3(10位)数字编码")
                     .withHintTarget("codePrefix");
         }
-        String normalizedKeyword = keyword == null || keyword.isBlank() ? null : keyword.trim();
+        String normalizedKeyword = keyword == null || keyword.isBlank() ? "" : keyword.trim();
         org.springframework.data.domain.PageRequest pageable = org.springframework.data.domain.PageRequest.of(
                 pageRequest.getPage() - 1, pageRequest.getSize(), Sort.by(Sort.Direction.DESC, "createdAt"));
         Page<RawMaterialType> page = materialTypeRepository.filterBySegmentPrefixAndKeyword(
