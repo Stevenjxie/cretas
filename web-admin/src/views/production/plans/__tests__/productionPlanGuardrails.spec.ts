@@ -15,6 +15,13 @@ describe('production plan operator guardrails', () => {
     expect(source).toContain('拍照或附件留证');
   });
 
+  it('treats settlement as a recorded-process reconciliation instead of a second data-entry form', () => {
+    expect(source).toContain('逐道报工汇总');
+    expect(source).toContain('确认结单并结束计划');
+    expect(source).toContain("source: 'PROCESS_REPORT'");
+    expect(source).toContain('仅在上方出现异常时才需要补录或调整');
+  });
+
   it('shows persistent WIP available quantity and max boundary in settlement', () => {
     expect(source).toContain('当前可用');
     expect(source).toContain('本行最多领用');
