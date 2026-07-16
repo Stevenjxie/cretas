@@ -56,6 +56,13 @@ public class FactoryMaterialRequisition extends BaseEntity {
     @Column(name = "production_plan_id", nullable = false, length = 64)
     private String productionPlanId;
 
+    /** Immutable display snapshots prevent list/detail pages from querying deleted historical plans. */
+    @Column(name = "production_plan_number", length = 64)
+    private String productionPlanNumber;
+
+    @Column(name = "product_name", length = 191)
+    private String productName;
+
     @Column(name = "source_warehouse_id", length = 64)
     private String sourceWarehouseId;   // 物流仓
 

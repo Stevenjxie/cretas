@@ -1,6 +1,7 @@
 package com.cretas.aims.entity;
 
 import com.cretas.aims.entity.enums.TaxRate;
+import com.cretas.aims.entity.enums.TaxTreatment;
 import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -212,6 +213,13 @@ public class RawMaterialType extends BaseEntity {
     @Enumerated(EnumType.STRING)
     @Column(name = "tax_rate", length = 10)
     private TaxRate taxRate;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "tax_treatment", nullable = false, length = 16)
+    private TaxTreatment taxTreatment = TaxTreatment.TAXABLE;
+
+    @Column(name = "tax_exemption_reason", length = 255)
+    private String taxExemptionReason;
 
     /**
      * SP4-A8: 含税单价 (仓管录入时的发票价).

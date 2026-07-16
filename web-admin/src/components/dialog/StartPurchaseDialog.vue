@@ -329,7 +329,7 @@ function handleClose() {
         type="info"
         :closable="false"
         style="margin-top: 8px"
-        title="供应商可在采购单创建后补填。确认创建后可在「采购管理」页查看并完善。"
+        title="将先创建采购草稿；供应商可稍后补填，但提交审批前必须选择。"
       />
     </template>
 

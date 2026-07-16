@@ -53,6 +53,9 @@ public class ProductionPlanDTO {
 
     @Schema(description = "计划成品单位快照")
     private String plannedUnit;
+    private BigDecimal sourceDisplayQuantity;
+    private String sourceDisplayUnit;
+    private String workflowOutputUnit;
     private BigDecimal plannedNetWeightGrams;
 
     private String workflowSelectionMode;

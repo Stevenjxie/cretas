@@ -1,6 +1,7 @@
 package com.cretas.aims.dto.material;
 
 import com.cretas.aims.entity.enums.TaxRate;
+import com.cretas.aims.entity.enums.TaxTreatment;
 import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -88,6 +89,8 @@ public class RawMaterialTypeDTO {
      * 新建/编辑物料时必填，BOM 仅继承，不重复维护。
      */
     private TaxRate taxRate;
+    private TaxTreatment taxTreatment;
+    private String taxExemptionReason;
 
     /**
      * SP4-A8: 含税单价 (发票价). Price-sensitive: 同 unitPrice.

@@ -2,6 +2,7 @@ import { ref } from 'vue';
 import { sendAiChat } from '@/api/aiChat';
 import type { AiEntryConfig, ChatMessage } from '@/components/ai-entry/types';
 import type { TableRow } from '@/types/api';
+import { buildAiTemporalContext, normalizeAiOrderDates } from '@/utils/aiOrderNormalization';
 
 const FILL_FORM_REGEX = /```json\s*(\{[\s\S]*?"action"\s*:\s*"FILL_FORM"[\s\S]*?\})\s*```/;
 const FILL_FORM_INLINE_REGEX = /(\{"action"\s*:\s*"FILL_FORM"[\s\S]*?\})\s*$/;
@@ -27,7 +28,7 @@ export function useAiChat(config: AiEntryConfig) {
 
   function buildApiMessages(userText: string) {
     const apiMessages: { role: string; content: string }[] = [
-      { role: 'system', content: config.systemPrompt },
+      { role: 'system', content: `${config.systemPrompt}\n${buildAiTemporalContext()}` },
     ];
     for (const msg of messages.value) {
       apiMessages.push({ role: msg.role, content: msg.content });
@@ -48,7 +49,7 @@ export function useAiChat(config: AiEntryConfig) {
       // Remove the last user message from apiMessages since we already added it to messages
       // Actually we built it before pushing — rebuild correctly
       const correctedMessages: { role: string; content: string }[] = [
-        { role: 'system', content: config.systemPrompt },
+        { role: 'system', content: `${config.systemPrompt}\n${buildAiTemporalContext()}` },
       ];
       // All messages except the last one (which is the one we just pushed)
       for (let i = 0; i < messages.value.length - 1; i++) {
@@ -70,7 +71,11 @@ export function useAiChat(config: AiEntryConfig) {
       // Check for FILL_FORM
       const params = extractFillForm(assistantContent);
       if (params) {
-        previewParams.value = params;
+        const userContext = messages.value
+          .filter((message) => message.role === 'user')
+          .map((message) => message.content)
+          .join('\n');
+        previewParams.value = normalizeAiOrderDates(config.entityType, params, userContext);
       }
     } catch {
       messages.value.push({ role: 'assistant', content: '抱歉，发生错误。请重试。' });

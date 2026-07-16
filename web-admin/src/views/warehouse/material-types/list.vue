@@ -184,7 +184,9 @@ const form = ref({
   shelfLifeDays: null as number | null,
   notes: '',
   // SP4: 税率 + 含税单价
+  taxTreatment: 'TAXABLE' as 'TAXABLE' | 'EXEMPT',
   taxRate: '' as string,
+  taxExemptionReason: '',
   taxIncludedUnitPrice: null as number | null,
   // P8: 包材关联固定客户 (选填, 非 PACKAGING 类留空)
   associatedCustomerId: null as string | null,
@@ -232,7 +234,9 @@ const dialogTitle = computed(() => (editingId.value ? '编辑原料类型' : '�
 const preTaxUnitPrice = computed(() => {
   const price = form.value.taxIncludedUnitPrice;
   const rate = form.value.taxRate;
-  if (price == null || !rate) return null;
+  if (price == null) return null;
+  if (form.value.taxTreatment === 'EXEMPT') return Number(price);
+  if (!rate) return null;
   const rateNum = rate === 'TAX_9' ? 0.09 : rate === 'TAX_13' ? 0.13 : null;
   if (rateNum == null) return null;
   return Math.round((price / (1 + rateNum)) * 100) / 100;
@@ -587,7 +591,9 @@ function openCreate() {
     storageType: storageTypeOptions.value[0]?.enumLabel || '',
     shelfLifeDays: null,
     notes: '',
+    taxTreatment: 'TAXABLE',
     taxRate: '',
+    taxExemptionReason: '',
     taxIncludedUnitPrice: null,
     associatedCustomerId: null,
     packQtyPerProduct: null,
@@ -615,7 +621,9 @@ async function openEdit(row: TableRow) {
     storageType: String(row.storageType || ''),
     shelfLifeDays: row.shelfLifeDays as number | null ?? null,
     notes: String(row.notes || ''),
+    taxTreatment: row.taxTreatment === 'EXEMPT' ? 'EXEMPT' : 'TAXABLE',
     taxRate: String(row.taxRate || ''),
+    taxExemptionReason: String(row.taxExemptionReason || ''),
     taxIncludedUnitPrice: (row.taxIncludedUnitPrice as number | null) ?? null,
     associatedCustomerId: (row.associatedCustomerId as string | null) ?? null,
     packQtyPerProduct: row.packQtyPerProduct != null ? Number(row.packQtyPerProduct) : null,
@@ -672,7 +680,10 @@ async function handleSave() {
   if (!form.value.unit) return ElMessage.warning('请选择单位');
   if (!form.value.storageType) return ElMessage.warning('请选择储存类型');
   if (canViewPrice.value) {
-    if (!form.value.taxRate) return ElMessage.warning('请选择税率');
+    if (form.value.taxTreatment === 'TAXABLE' && !form.value.taxRate) return ElMessage.warning('请选择税率');
+    if (form.value.taxTreatment === 'EXEMPT' && !form.value.taxExemptionReason.trim()) {
+      return ElMessage.warning('免税物料必须填写免税依据');
+    }
     if (form.value.taxIncludedUnitPrice == null || Number(form.value.taxIncludedUnitPrice) <= 0) {
       return ElMessage.warning('请填写大于 0 的含税单价');
     }
@@ -1030,13 +1041,22 @@ function handleSizeChange(size: number) {
 
         <!-- SP4: 税率 + 含税/未税单价 (canViewPrice 门控) -->
         <template v-if="canViewPrice">
-          <el-form-item label="税率" required>
+          <el-form-item label="计税方式" required>
+            <el-radio-group v-model="form.taxTreatment">
+              <el-radio value="TAXABLE">正常计税</el-radio>
+              <el-radio value="EXEMPT">免税</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item v-if="form.taxTreatment === 'TAXABLE'" label="采购税率" required>
             <el-select v-model="form.taxRate" placeholder="请选择税率" style="width: 100%">
               <el-option label="9% (农产品等)" value="TAX_9" />
               <el-option label="13% (标准税率)" value="TAX_13" />
             </el-select>
           </el-form-item>
-          <el-form-item label="含税单价 (元)" required>
+          <el-form-item v-else label="免税依据" required>
+            <el-input v-model="form.taxExemptionReason" placeholder="填写政策、票据或业务依据" maxlength="255" />
+          </el-form-item>
+          <el-form-item :label="form.taxTreatment === 'EXEMPT' ? '免税采购参考价 (元/库存主单位)' : '含税采购参考价 (元/库存主单位)'" required>
             <el-input-number
               v-model="form.taxIncludedUnitPrice"
               :min="0.0001"
@@ -1046,13 +1066,13 @@ function handleSizeChange(size: number) {
               style="width: 100%"
             />
           </el-form-item>
-          <el-form-item v-if="form.taxIncludedUnitPrice != null && form.taxRate" label="未税单价 (元)">
+          <el-form-item v-if="form.taxIncludedUnitPrice != null && (form.taxRate || form.taxTreatment === 'EXEMPT')" label="未税采购参考价 (元/库存主单位)">
             <el-input
               :model-value="preTaxUnitPrice != null ? preTaxUnitPrice.toFixed(4) : '—'"
               disabled
               style="width: 100%"
             />
-            <div class="field-hint">= 含税单价 ÷ (1 + 税率)，自动计算</div>
+            <div class="field-hint">{{ form.taxTreatment === 'EXEMPT' ? '免税时未税价等于采购参考价' : '= 含税采购参考价 ÷ (1 + 税率)，自动计算' }}</div>
           </el-form-item>
         </template>
 

@@ -1385,8 +1385,7 @@ function summaryNumber(value: unknown, fallback: number): number {
   return Number.isFinite(number) ? number : fallback;
 }
 const costDisplayUnit = computed(() => {
-  const value = costSummary.value?.costUnit?.trim();
-  return value || '元/基本单位';
+  return `元/${skuOutputUnit.value}`;
 });
 const estimatedMaterialCost = computed(() => summaryNumber(costSummary.value?.materialCostTotal, materialCostTotal.value));
 const estimatedLaborCost = computed(() => summaryNumber(costSummary.value?.laborCostTotal, laborCostTotal.value));

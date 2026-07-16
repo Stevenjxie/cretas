@@ -78,8 +78,7 @@ public class PurchaseOrder extends BaseEntity {
     @Column(name = "order_number", nullable = false, length = 50)
     private String orderNumber;
 
-    @NotBlank(message = "供应商不能为空")
-    @Column(name = "supplier_id", nullable = false, length = 191)
+    @Column(name = "supplier_id", length = 191)
     private String supplierId;
 
     @Formula("(SELECT s.name FROM suppliers s WHERE s.id = supplier_id)")

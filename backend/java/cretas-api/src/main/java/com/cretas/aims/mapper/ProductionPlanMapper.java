@@ -40,6 +40,9 @@ public class ProductionPlanMapper {
                 .productTypeId(plan.getProductTypeId())
                 .plannedQuantity(plan.getPlannedQuantity())
                 .plannedUnit(plan.getPlannedUnit())
+                .sourceDisplayQuantity(plan.getSourceDisplayQuantity())
+                .sourceDisplayUnit(plan.getSourceDisplayUnit())
+                .workflowOutputUnit(plan.getWorkflowOutputUnit())
                 .plannedNetWeightGrams(plan.getPlannedNetWeightGrams())
                 .workflowSelectionMode(plan.getWorkflowSelectionMode() == null
                         ? null : plan.getWorkflowSelectionMode().name())
@@ -171,6 +174,9 @@ public class ProductionPlanMapper {
         plan.setProductTypeId(request.getProductTypeId());
         plan.setPlannedQuantity(request.getPlannedQuantity());
         plan.setPlannedUnit(request.getPlannedUnit());
+        plan.setSourceDisplayQuantity(request.getSourceDisplayQuantity());
+        plan.setSourceDisplayUnit(request.getSourceDisplayUnit());
+        plan.setWorkflowOutputUnit(request.getWorkflowOutputUnit());
         // W-07 fix (Round 9): plannedDate column restored; map it on create
         plan.setPlannedDate(request.getPlannedDate());
         plan.setStatus(ProductionPlanStatus.PENDING);

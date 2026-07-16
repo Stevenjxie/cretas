@@ -28,6 +28,8 @@ import { useLinkChipCounts } from '@/composables/useLinkChipCounts';
 import { CreateModeSelector, BatchCreateDialog, QuickCreateDialog, BomExpansionDialog } from '@/components/dialog';
 import CreateReturnOrderDialog from '@/components/dialog/CreateReturnOrderDialog.vue';
 import { copyPurchaseOrder } from '@/api/orderCopy';
+import { buildBomPurchaseOrderPayload } from '@/utils/orderPayloadBuilders';
+import { resolveReferenceByName } from '@/utils/referenceResolver';
 // PR #878 (#860 follow-up) — 转发 / 分享链接 dialog.
 import ForwardShareDialog from '@/components/dialog/ForwardShareDialog.vue';
 import type { ViewMode } from '@/types/viewMode';
@@ -156,20 +158,8 @@ async function submitBomPurchaseOrder(parent: BomPurchaseOrderParent, children: 
   if (invalidChildIndex >= 0) {
     throw new Error(`第 ${invalidChildIndex + 1} 行税率必须是 0-100 之间的数字`);
   }
-  const payload = {
-    supplierId: parent.supplierId,
-    purchaseType: parent.purchaseType || 'NORMAL',
-    expectedDate: parent.expectedDate || null,
-    remark: parent.remark || '',
-    items: children.map((c) => ({
-      materialId: c.materialId,
-      materialName: c.materialName,
-      quantity: Number(c.quantity) || 0,
-      unit: c.unit || 'kg',
-      unitPrice: Number(c.unitPrice) || 0,
-      taxRate: normalizeTaxRateForPayload(c.taxRate),
-    })),
-  };
+  const orderDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
+  const payload = buildBomPurchaseOrderPayload(parent, children, orderDate);
   const res = await post(`/${factoryId.value}/purchase/orders`, payload);
   if (!res?.success) {
     throw new Error(res?.message || '提交失败');
@@ -808,30 +798,39 @@ const forwardEntityLabel = ref('');
 function handleAiFill(params: TableRow) {
   // Match supplierName to supplierId
   const supplierName = String(params.supplierName || '');
-  const matched = suppliers.value.find(
-    (s: TableRow) => String(s.name || '').includes(supplierName) || supplierName.includes(String(s.name || ''))
-  );
-
-  form.value.supplierId = matched ? String(matched.id) : '';
+  const supplierResolution = resolveReferenceByName(supplierName, suppliers.value);
+  if (supplierResolution.status !== 'MATCHED') {
+    ElMessage.warning(supplierResolution.status === 'AMBIGUOUS'
+      ? `供应商“${supplierName}”匹配到多个候选，请明确名称`
+      : `未找到供应商“${supplierName}”，请先维护供应商档案`);
+    return;
+  }
+  form.value.supplierId = supplierResolution.id;
   form.value.purchaseType = String(params.purchaseType || 'DIRECT');
   form.value.expectedDeliveryDate = String(params.expectedDeliveryDate || '');
   form.value.remark = String(params.remark || '');
 
   if (Array.isArray(params.items) && params.items.length > 0) {
-    form.value.items = (params.items as TableRow[]).map((item) => {
+    try {
+      form.value.items = (params.items as TableRow[]).map((item) => {
       // Try to match materialName to materialTypeId
       const matName = String(item.materialName || '');
-      const matMatch = materials.value.find(
-        (m: TableRow) => String(m.name || '').includes(matName) || matName.includes(String(m.name || ''))
-      );
+      const materialResolution = resolveReferenceByName(matName, materials.value);
+      if (materialResolution.status !== 'MATCHED') {
+        throw new Error(`原料“${matName}”${materialResolution.status === 'AMBIGUOUS' ? '匹配到多个候选' : '未找到'}`);
+      }
       return {
-        materialTypeId: matMatch ? String(matMatch.id) : '',
+        materialTypeId: materialResolution.id,
         quantity: Number(item.quantity || 0),
         unit: String(item.unit || 'kg'),
         unitPrice: Number(item.unitPrice || 0),
         taxRate: validateTaxRate(item.taxRate) ? null : normalizeTaxRateForPayload(item.taxRate),
       };
-    });
+      });
+    } catch (error) {
+      ElMessage.warning(error instanceof Error ? error.message : 'AI 原料匹配失败');
+      return;
+    }
   }
 
   dialogVisible.value = true;
@@ -1123,7 +1122,7 @@ function handleAiFill(params: TableRow) {
           <span style="width: 140px">规格</span>
           <span style="width: 140px"><span class="req-star">*</span>数量</span>
           <span style="width: 130px"><span class="req-star">*</span>单位</span>
-          <span style="width: 160px">单价</span>
+          <span style="width: 160px">未税采购单价（元/所选单位）</span>
           <span style="width: 130px">税率</span>
           <span style="width: 140px">箱数</span>
           <span style="width: 70px">操作</span>
@@ -1159,7 +1158,7 @@ function handleAiFill(params: TableRow) {
               :value="opt.value"
             />
           </el-select>
-          <el-input-number v-model="item.unitPrice" :min="0" :precision="2" placeholder="单价" style="width: 160px" />
+          <el-input-number v-model="item.unitPrice" :min="0" :precision="2" placeholder="未税采购单价" style="width: 160px" />
           <div style="width: 130px">
             <el-select
               v-model="item.taxRate"
@@ -1282,7 +1281,7 @@ function handleAiFill(params: TableRow) {
         { prop: 'materialName', label: '物料名称', width: 200 },
         { prop: 'quantity', label: '数量', width: 120, slotName: 'quantity' },
         { prop: 'unit', label: '单位', width: 100 },
-        { prop: 'unitPrice', label: '单价', width: 140, slotName: 'price' },
+        { prop: 'unitPrice', label: '未税采购单价（元/所选单位）', width: 210, slotName: 'price' },
         { prop: 'taxRate', label: '税率', width: 140, slotName: 'taxRate' },
       ]"
       :max-children="50"

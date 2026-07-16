@@ -178,6 +178,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.UnitConversionService unitConversionService;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.production.SalesOrderPlanQuantityNormalizer salesOrderPlanQuantityNormalizer;
+
     /**
      * T144: 物料库存单位改读 MaterialBatch.quantityUnit (称重批次单位, e.g. kg) 而非
      * RawMaterialType.unit (箱). 保留 rawMaterialTypeRepository 仅作 fallback (无可用批次时).
@@ -339,19 +342,20 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
     private PlanUnitAuthority resolvePlanUnitAuthority(
             String factoryId, String productTypeId, List<String> targetFinishedGoodIds) {
+        String productionBaseUnit = resolvePlannedOutputUnitForProduct(productTypeId);
         if (workflowResolutionService != null) {
             Optional<com.cretas.aims.service.workflow.WorkflowPlanOutputContract> contract =
                     workflowResolutionService.resolveActivePlanOutputContract(
                             factoryId, productTypeId, targetFinishedGoodIds);
             if (contract.isPresent()) {
                 var value = contract.get();
-                return new PlanUnitAuthority(value.plannedUnit(),
+                return new PlanUnitAuthority(productionBaseUnit, value.plannedUnit(),
                         resolveNetWeightGramsForProduct(factoryId, productTypeId),
                         ProductionBatch.WorkflowSelectionMode.WORKFLOW,
                         value.workflowId(), value.definitionVersion());
             }
         }
-        return new PlanUnitAuthority(resolvePlannedOutputUnitForProduct(productTypeId),
+        return new PlanUnitAuthority(productionBaseUnit, productionBaseUnit,
                 resolveNetWeightGramsForProduct(factoryId, productTypeId),
                 ProductionBatch.WorkflowSelectionMode.LEGACY, null, null);
     }
@@ -365,6 +369,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
     private void applyPlanUnitAuthority(ProductionPlan plan, PlanUnitAuthority authority) {
         plan.setPlannedUnit(authority.unit());
+        plan.setWorkflowOutputUnit(authority.workflowOutputUnit());
         plan.setPlannedNetWeightGrams(authority.netWeightGrams());
         plan.setWorkflowSelectionMode(authority.mode());
         plan.setSelectedWorkflowId(authority.workflowId());
@@ -385,6 +390,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
     private record PlanUnitAuthority(
             String unit,
+            String workflowOutputUnit,
             BigDecimal netWeightGrams,
             ProductionBatch.WorkflowSelectionMode mode,
             Long workflowId,
@@ -1101,6 +1107,15 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         "产品行已全部交付, 无需生产: " + (item.getProductName() != null ? item.getProductName() : itemId))
                         .withHint("请在产品行多选中取消该已交付产品");
             }
+            ProductType product = productTypeRepository
+                    .findByIdAndFactoryId(item.getProductTypeId(), factoryId)
+                    .orElseThrow(() -> new com.cretas.aims.exception.EntityNotFoundException(
+                            "产品类型不存在或不属于当前工厂: " + item.getProductTypeId()));
+            if (salesOrderPlanQuantityNormalizer == null) {
+                throw new BusinessException(500, "销售订单单位换算服务未初始化")
+                        .withCode("SALES_PLAN_NORMALIZER_UNAVAILABLE");
+            }
+            var normalizedPlanQuantity = salesOrderPlanQuantityNormalizer.normalize(remaining, item, product);
             // reviewer Issue1: CUSTOMER_ORDER 来源在 createProductionPlan 强制要求 processName + batchDate
             // (P1-4 gate)。批量路径补齐: processName 取该产品工序名 (镜像前端, 0 工序→两点报工);
             // batchDate 沿用共享计划生产日 (新建计划未开工, 批次日=计划日合理)。
@@ -1121,7 +1136,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             CreateProductionPlanRequest one = new CreateProductionPlanRequest();
             // 每行各自的产品 + 数量 (权威自 SO 行)
             one.setProductTypeId(item.getProductTypeId());
-            one.setPlannedQuantity(remaining);
+            one.setPlannedQuantity(normalizedPlanQuantity.quantity());
+            one.setPlannedUnit(normalizedPlanQuantity.unit());
+            one.setSourceDisplayQuantity(normalizedPlanQuantity.displayQuantity());
+            one.setSourceDisplayUnit(normalizedPlanQuantity.displayUnit());
             one.setSourceType(PlanSourceType.CUSTOMER_ORDER);
             one.setSourceOrderId(so.getId());
             one.setSourceOrderItemId(itemId);

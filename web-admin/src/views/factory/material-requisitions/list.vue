@@ -28,6 +28,8 @@ interface Requisition {
   requisitionNo: string;
   status: string;
   productionPlanId?: string | null;
+  productionPlanNumber?: string | null;
+  productName?: string | null;
   sourceWarehouseId?: string | null;
   targetWarehouseId?: string | null;
   requiredDate?: string | null;
@@ -185,7 +187,7 @@ function planLabel(planId?: string | null): string {
     const parts = [cached.planNumber, cached.productName].filter(Boolean);
     if (parts.length > 0) return parts.join(' · ');
   }
-  return planId;
+  return '原计划已删除/归档';
 }
 
 // 补齐 planCache 未命中的计划 (例如已完结/已取消计划不在 loadPlanOptions 的开放集合里)。
@@ -247,7 +249,14 @@ async function loadData() {
       const data = res.data || {};
       tableData.value = data.content || [];
       pagination.value.total = data.totalElements || 0;
-      void resolvePlanNames(tableData.value.map((r) => r.productionPlanId));
+      tableData.value.forEach((row) => {
+        if (row.productionPlanId) {
+          planCache.value[row.productionPlanId] = {
+            planNumber: row.productionPlanNumber || '原计划已删除/归档',
+            productName: row.productName,
+          };
+        }
+      });
     }
   } catch (e) {
     handleCatchError(e, '加载物料需求单失败');
@@ -302,7 +311,12 @@ async function openDetail(row: Requisition) {
     if (data) {
       detailData.value = data;
       detailDialogVisible.value = true;
-      void resolvePlanNames([data.productionPlanId]);
+      if (data.productionPlanId) {
+        planCache.value[data.productionPlanId] = {
+          planNumber: data.productionPlanNumber || '原计划已删除/归档',
+          productName: data.productName,
+        };
+      }
     }
   } catch (e) {
     handleCatchError(e, '加载物料需求单详情失败');
@@ -358,7 +372,12 @@ function prepareConfirmDialog(data: Requisition) {
     };
   });
   confirmDialogVisible.value = true;
-  void resolvePlanNames([data.productionPlanId]);
+  if (data.productionPlanId) {
+    planCache.value[data.productionPlanId] = {
+      planNumber: data.productionPlanNumber || '原计划已删除/归档',
+      productName: data.productName,
+    };
+  }
 }
 
 // 调拨: 备料仓 → 生产仓, 富确认带品名+数量+仓库路由 (对齐「确认领料」上下文标准, 不是裸单号弹窗)。

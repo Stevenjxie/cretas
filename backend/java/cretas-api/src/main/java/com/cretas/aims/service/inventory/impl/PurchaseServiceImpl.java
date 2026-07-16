@@ -268,14 +268,18 @@ public class PurchaseServiceImpl implements PurchaseService {
             catch (Exception e) { log.warn("Canvas validation non-blocking: {}", e.getMessage()); }
         }
 
-        // 验证供应商
-        supplierRepository.findByIdAndFactoryId(request.getSupplierId(), factoryId)
-                .orElseThrow(() -> new ResourceNotFoundException("供应商不存在或不属于当前组织"));
+        // DRAFT may be created before supplier assignment; submission remains fail-closed below.
+        if (request.getSupplierId() != null && !request.getSupplierId().isBlank()) {
+            supplierRepository.findByIdAndFactoryId(request.getSupplierId(), factoryId)
+                    .orElseThrow(() -> new ResourceNotFoundException("供应商不存在或不属于当前组织"));
+        }
 
         // 防呆 R4 (幂等防双击, edge-case 审计 2026-06-24): 60s 内同买手对同供应商重复建 DRAFT 单 → 409。
         // 键含 createdBy, 误拦仅"同一人 60s 内对同供应商双击"; 合法重复下单 (不同人/超 60s) 不受影响。
-        java.util.List<PurchaseOrder> poDupes = purchaseOrderRepository.findRecentDuplicateOrders(
-                factoryId, request.getSupplierId(), userId, java.time.LocalDateTime.now().minusSeconds(60));
+        java.util.List<PurchaseOrder> poDupes = request.getSupplierId() == null || request.getSupplierId().isBlank()
+                ? java.util.List.of()
+                : purchaseOrderRepository.findRecentDuplicateOrders(
+                        factoryId, request.getSupplierId(), userId, java.time.LocalDateTime.now().minusSeconds(60));
         if (!poDupes.isEmpty()) {
             PurchaseOrder existing = poDupes.get(0);
             throw new com.cretas.aims.exception.BusinessException(409, String.format(
@@ -473,16 +477,22 @@ public class PurchaseServiceImpl implements PurchaseService {
               entityIdParam = "orderId")
     public PurchaseOrder submitOrder(String factoryId, String orderId) {
         PurchaseOrder order = getPurchaseOrderById(factoryId, orderId);
+        if (order.getStatus() != PurchaseOrderStatus.DRAFT) {
+            throw new BusinessException(409, "只有草稿状态的订单可以提交")
+                    .withHint("请刷新订单列表查看最新状态");
+        }
+        if (order.getSupplierId() == null || order.getSupplierId().isBlank()) {
+            throw new BusinessException(422, "提交采购单前必须选择供应商")
+                    .withCode("PURCHASE_SUPPLIER_REQUIRED")
+                    .withHint("请编辑采购草稿并选择供应商后再提交")
+                    .withHintTarget("supplierId");
+        }
         // Phase 4a follow-up (issue #45): Option A wrap. The annotated helper
         // evaluateOrderRules() must be invoked through the Spring proxy ({@code self}, not
         // {@code this}) so the @RuleEvaluate aspect intercepts. The helper receives the
         // loaded PurchaseOrder POJO; aspect binds target="order" parameter name → runs
         // ORDER scope rules against it.
         self.evaluateOrderRules(factoryId, order);
-        if (order.getStatus() != PurchaseOrderStatus.DRAFT) {
-            throw new BusinessException(409, "只有草稿状态的订单可以提交")
-                    .withHint("请刷新订单列表查看最新状态");
-        }
         order.setStatus(PurchaseOrderStatus.SUBMITTED);
         log.info("提交采购订单: orderId={}, orderNumber={}", orderId, order.getOrderNumber());
         return purchaseOrderRepository.save(order);

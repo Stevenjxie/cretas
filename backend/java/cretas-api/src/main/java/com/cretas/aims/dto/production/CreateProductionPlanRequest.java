@@ -49,6 +49,15 @@ public class CreateProductionPlanRequest {
     @Schema(description = "计划成品单位快照；后端按产品单位权威解析，客户端值不会覆盖")
     private String plannedUnit;
 
+    @Schema(description = "来源单据原始展示数量，例如销售订单 10 箱")
+    private BigDecimal sourceDisplayQuantity;
+
+    @Schema(description = "来源单据原始展示单位")
+    private String sourceDisplayUnit;
+
+    @Schema(description = "Workflow 报工/产出单位，不覆盖计划数量单位")
+    private String workflowOutputUnit;
+
     @Schema(description = "计划日期", required = true)
     @NotNull(message = "计划日期不能为空")
     @FutureOrPresent(message = "计划日期不能是过去", groups = OnCreate.class)

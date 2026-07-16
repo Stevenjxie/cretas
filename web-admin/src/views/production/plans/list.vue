@@ -2713,6 +2713,19 @@ function formatPlannedQuantity(v: number | null | undefined, unit?: string | nul
   return unit ? `${v} ${unit}` : `${v}（单位未配置）`;
 }
 
+function formatPlanDisplayQuantity(row: TableRow | null | undefined): string {
+  if (!row) return '—';
+  const sourceQuantity = row.sourceDisplayQuantity as number | null | undefined;
+  const sourceUnit = row.sourceDisplayUnit as string | null | undefined;
+  if (sourceQuantity != null && sourceQuantity !== 0 && sourceUnit) {
+    return formatPlannedQuantity(sourceQuantity, sourceUnit);
+  }
+  return formatPlannedQuantity(
+    row.plannedQuantity as number | null | undefined,
+    row.plannedUnit as string | null | undefined,
+  );
+}
+
 // raw-centric 多SKU (2026-07-13): 计划的 targetFinishedGoodIds → 产品名 (列表/详情共用)。
 // 查不到 (产品已删除) 时兜底显示 id + 「已删除」提示, 不静默丢字段。
 function targetFinishedGoodNames(ids: unknown): string[] {
@@ -3071,7 +3084,7 @@ function handleAiFill(params: TableRow) {
         <el-table-column prop="processName" label="工序" width="120" show-overflow-tooltip />
         <el-table-column prop="batchDate" label="批次日期" width="120" />
         <el-table-column label="计划成品" width="110" align="right">
-          <template #default="{ row }">{{ formatPlannedQuantity(row.plannedQuantity, row.plannedUnit) }}</template>
+          <template #default="{ row }">{{ formatPlanDisplayQuantity(row) }}</template>
         </el-table-column>
         <el-table-column prop="actualQuantity" label="实际数量" width="100" align="right" />
         <el-table-column prop="plannedDate" label="计划日期" width="120" />
@@ -3363,7 +3376,7 @@ function handleAiFill(params: TableRow) {
             </el-descriptions-item>
             <el-descriptions-item label="客户">{{ viewPlan.sourceCustomerName || '-' }}</el-descriptions-item>
             <el-descriptions-item label="指派主管">{{ viewPlan.assignedSupervisorName || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="计划成品">{{ formatPlannedQuantity(viewPlan.plannedQuantity, viewPlan.plannedUnit) }}</el-descriptions-item>
+            <el-descriptions-item label="计划成品">{{ formatPlanDisplayQuantity(viewPlan) }}</el-descriptions-item>
             <el-descriptions-item label="实际数量">{{ viewPlan.actualQuantity || '-' }}</el-descriptions-item>
             <el-descriptions-item label="状态">
               <el-tag :type="getStatusType(viewPlan.status as string)" size="small">{{ getStatusText(viewPlan.status as string) }}</el-tag>

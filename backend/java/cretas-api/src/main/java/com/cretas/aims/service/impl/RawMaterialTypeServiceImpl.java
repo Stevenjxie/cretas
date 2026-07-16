@@ -94,7 +94,9 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
     @Transactional
     @CacheEvict(value = "materialTypes", key = "#factoryId")
     public RawMaterialTypeDTO createMaterialType(String factoryId, RawMaterialTypeDTO dto) {
-        validateRequiredPricing(dto.getTaxRate(), dto.getTaxIncludedUnitPrice());
+        com.cretas.aims.entity.enums.TaxTreatment taxTreatment = dto.getTaxTreatment() != null
+                ? dto.getTaxTreatment() : com.cretas.aims.entity.enums.TaxTreatment.TAXABLE;
+        validateRequiredPricing(taxTreatment, dto.getTaxRate(), dto.getTaxIncludedUnitPrice(), dto.getTaxExemptionReason());
         // T159-B-codegen: auto-generate code when caller does not provide one.
         // SP8: if segmentCode is provided (10-digit), use 16-digit generator; else fallback SP4 flat.
         if (dto.getCode() == null || dto.getCode().trim().isEmpty()) {
@@ -140,8 +142,13 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
 
         // SP4-A8: 税率 + 含税单价 → 自动换算未税单价
         materialType.setTaxRate(dto.getTaxRate());
+        materialType.setTaxTreatment(taxTreatment);
+        materialType.setTaxExemptionReason(dto.getTaxExemptionReason());
         materialType.setTaxIncludedUnitPrice(dto.getTaxIncludedUnitPrice());
-        if (dto.getTaxRate() != null && dto.getTaxIncludedUnitPrice() != null) {
+        if (taxTreatment == com.cretas.aims.entity.enums.TaxTreatment.EXEMPT) {
+            materialType.setTaxRate(null);
+            materialType.setUnitPrice(dto.getTaxIncludedUnitPrice());
+        } else if (dto.getTaxRate() != null && dto.getTaxIncludedUnitPrice() != null) {
             materialType.setUnitPrice(dto.getTaxRate().preTaxPrice(dto.getTaxIncludedUnitPrice()));
         }
 
@@ -201,12 +208,18 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
 
         // SP4-A8: 税率 + 含税单价 null-guard 更新 → 自动换算未税单价
         if (dto.getTaxRate() != null) materialType.setTaxRate(dto.getTaxRate());
+        if (dto.getTaxTreatment() != null) materialType.setTaxTreatment(dto.getTaxTreatment());
+        if (dto.getTaxExemptionReason() != null) materialType.setTaxExemptionReason(dto.getTaxExemptionReason());
         if (dto.getTaxIncludedUnitPrice() != null) materialType.setTaxIncludedUnitPrice(dto.getTaxIncludedUnitPrice());
         // 仅当 taxRate + taxIncludedUnitPrice 都已配置 (含本次更新后的值) 才换算
-        if (materialType.getTaxRate() != null && materialType.getTaxIncludedUnitPrice() != null) {
+        if (materialType.getTaxTreatment() == com.cretas.aims.entity.enums.TaxTreatment.EXEMPT) {
+            materialType.setTaxRate(null);
+            materialType.setUnitPrice(materialType.getTaxIncludedUnitPrice());
+        } else if (materialType.getTaxRate() != null && materialType.getTaxIncludedUnitPrice() != null) {
             materialType.setUnitPrice(materialType.getTaxRate().preTaxPrice(materialType.getTaxIncludedUnitPrice()));
         }
-        validateRequiredPricing(materialType.getTaxRate(), materialType.getTaxIncludedUnitPrice());
+        validateRequiredPricing(materialType.getTaxTreatment(), materialType.getTaxRate(),
+                materialType.getTaxIncludedUnitPrice(), materialType.getTaxExemptionReason());
 
         // SP8: primaryCode null-guard 更新
         if (dto.getPrimaryCode() != null) {
@@ -237,9 +250,16 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         return convertToDTO(materialType);
     }
 
-    private void validateRequiredPricing(com.cretas.aims.entity.enums.TaxRate taxRate,
-                                         BigDecimal taxIncludedUnitPrice) {
-        if (taxRate == null) {
+    private void validateRequiredPricing(com.cretas.aims.entity.enums.TaxTreatment taxTreatment,
+                                         com.cretas.aims.entity.enums.TaxRate taxRate,
+                                         BigDecimal taxIncludedUnitPrice,
+                                         String taxExemptionReason) {
+        if (taxTreatment == com.cretas.aims.entity.enums.TaxTreatment.EXEMPT
+                && (taxExemptionReason == null || taxExemptionReason.isBlank())) {
+            throw new BusinessException(400, "免税物料必须填写免税依据")
+                    .withHint("请选择免税后填写政策、票据或业务依据");
+        }
+        if (taxTreatment != com.cretas.aims.entity.enums.TaxTreatment.EXEMPT && taxRate == null) {
             throw new BusinessException(400, "税率不能为空")
                     .withHint("请在物料字典维护采购税率，BOM 将自动继承");
         }
@@ -556,6 +576,8 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                 .movingAvgPrice(materialType.getMovingAvgPrice())
                 // SP4-A8: 税率 + 含税单价
                 .taxRate(materialType.getTaxRate())
+                .taxTreatment(materialType.getTaxTreatment())
+                .taxExemptionReason(materialType.getTaxExemptionReason())
                 .taxIncludedUnitPrice(materialType.getTaxIncludedUnitPrice())
                 // SP8: 前三位主编码
                 .primaryCode(materialType.getPrimaryCode())

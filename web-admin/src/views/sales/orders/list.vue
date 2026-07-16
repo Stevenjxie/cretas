@@ -15,6 +15,8 @@ import { useWorkflowStats } from '@/composables/useWorkflowStats';
 import { getBucketPrimaryStatus, getBucketLabel } from '@/types/workflow';
 import { formatAmount } from '@/utils/tableFormatters';
 import { warehouseDisplayName } from '@/utils/warehouse';
+import { buildBomSalesOrderPayload } from '@/utils/orderPayloadBuilders';
+import { resolveReferenceByName } from '@/utils/referenceResolver';
 import { RowActionMenu, ViewModeSwitcher, GridView, KanbanView, TimelinePlaceholder, CalendarPlaceholder, InlineRowIcons, RowMarkerCell } from '@/components/list';
 // Sprint 6 W3-A — inline 3-chip link counter (文件 / 图片 / 合同).
 import LinkChipCell from '@/components/list/LinkChipCell.vue';
@@ -211,23 +213,7 @@ async function submitBomSalesOrder(parent: BomSalesOrderParent, children: BomSal
   if (!children.length) {
     throw new Error('请至少添加 1 项明细');
   }
-  const payload = {
-    customerId: parent.customerId,
-    salesperson: '',
-    requiredDeliveryDate: parent.requiredDeliveryDate || null,
-    remark: parent.remark || '',
-    shippingIncluded: false,
-    shippingFee: 0,
-    extraFees: [] as unknown[],
-    items: children.map((c) => ({
-      productId: c.productId,
-      productName: c.productName,
-      quantity: Number(c.quantity) || 0,
-      unit: c.unit || 'kg',
-      unitPrice: Number(c.unitPrice) || 0,
-    })),
-    customFields: {},
-  };
+  const payload = buildBomSalesOrderPayload(parent, children);
   const res = await post(`/${factoryId.value}/sales/orders`, payload);
   if (!res?.success) {
     throw new Error(res?.message || '提交失败');
@@ -1856,29 +1842,38 @@ const forwardEntityLabel = ref('');
 function handleAiFill(params: TableRow) {
   // Match customerName to customerId
   const customerName = String(params.customerName || '');
-  const matched = customers.value.find(
-    (c: TableRow) => String(c.name || '').includes(customerName) || customerName.includes(String(c.name || ''))
-  );
-
-  form.value.customerId = matched ? String(matched.id) : '';
+  const customerResolution = resolveReferenceByName(customerName, customers.value);
+  if (customerResolution.status !== 'MATCHED') {
+    ElMessage.warning(customerResolution.status === 'AMBIGUOUS'
+      ? `客户“${customerName}”匹配到多个候选，请明确名称`
+      : `未找到客户“${customerName}”，请先维护客户档案`);
+    return;
+  }
+  form.value.customerId = customerResolution.id;
   form.value.requiredDeliveryDate = String(params.requiredDeliveryDate || '');
   form.value.deliveryAddress = String(params.deliveryAddress || '');
   form.value.remark = String(params.remark || '');
 
   if (Array.isArray(params.items) && params.items.length > 0) {
-    form.value.items = (params.items as TableRow[]).map((item) => {
+    try {
+      form.value.items = (params.items as TableRow[]).map((item) => {
       const prodName = String(item.productName || '');
-      const prodMatch = products.value.find(
-        (p: TableRow) => String(p.name || '').includes(prodName) || prodName.includes(String(p.name || ''))
-      );
+      const productResolution = resolveReferenceByName(prodName, products.value);
+      if (productResolution.status !== 'MATCHED') {
+        throw new Error(`产品“${prodName}”${productResolution.status === 'AMBIGUOUS' ? '匹配到多个候选' : '未找到'}`);
+      }
       return {
-        productTypeId: prodMatch ? String(prodMatch.id) : '',
+        productTypeId: productResolution.id,
         quantity: Number(item.quantity || 0),
         unit: String(item.unit || 'kg'),
         unitPrice: Number(item.unitPrice || 0),
         taxRate: item.taxRate != null ? Number(item.taxRate) : 13,
       };
-    });
+      });
+    } catch (error) {
+      ElMessage.warning(error instanceof Error ? error.message : 'AI 产品匹配失败');
+      return;
+    }
   }
 
   dialogVisible.value = true;
@@ -2824,7 +2819,7 @@ function handleMergePurchase() {
         { prop: 'productName', label: '商品名称', width: 200 },
         { prop: 'quantity', label: '数量', width: 120, slotName: 'quantity' },
         { prop: 'unit', label: '单位', width: 100 },
-        { prop: 'unitPrice', label: '单价', width: 140, slotName: 'price' },
+        { prop: 'unitPrice', label: '未税销售单价（元/所选单位）', width: 210, slotName: 'price' },
       ]"
       :max-children="50"
     >

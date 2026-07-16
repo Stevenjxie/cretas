@@ -200,6 +200,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     @Autowired(required = false)
     private com.cretas.aims.service.uom.MaterialUomConverter materialUomConverter;
 
+    /** Rebuilds weighted-average cost after normalizing every stock layer to the material master unit. */
+    @Autowired(required = false)
+    private com.cretas.aims.service.inventory.cost.MaterialMovingAverageCalculator materialMovingAverageCalculator;
+
     /** Sprint 6 W2-B: 数据权限解析器 (optional). */
     @Autowired(required = false)
     private DataScopeResolver dataScopeResolver;
@@ -2111,6 +2115,33 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         if (receiptQty == null || receiptPrice == null
                 || receiptQty.compareTo(java.math.BigDecimal.ZERO) <= 0
                 || receiptPrice.compareTo(java.math.BigDecimal.ZERO) <= 0) {
+            return;
+        }
+        if (materialMovingAverageCalculator != null) {
+            try {
+                List<MaterialBatch> allBatches = materialBatchRepository
+                        .findByFactoryIdAndMaterialTypeId(materialType.getFactoryId(), materialType.getId());
+                List<com.cretas.aims.service.inventory.cost.MaterialMovingAverageCalculator.CostLayer> layers =
+                        allBatches.stream()
+                                .map(batch -> new com.cretas.aims.service.inventory.cost.MaterialMovingAverageCalculator.CostLayer(
+                                        batch.getCurrentQuantity(), batch.getQuantityUnit(), batch.getUnitPrice(), batch.getId()))
+                                .toList();
+                var result = materialMovingAverageCalculator.calculate(
+                        materialType.getId(), materialType.getUnit(), layers);
+                if (!result.complete()) {
+                    log.warn("Moving-average rebuild skipped for materialType={}: {}",
+                            materialType.getId(), result.issues());
+                    return;
+                }
+                materialType.setMovingAvgPrice(result.averagePrice());
+                materialTypeRepository.save(materialType);
+                log.info("Moving-average rebuilt: materialType={}, normalizedQty={} {}, totalValue={}, newAvg={}",
+                        materialType.getName(), result.normalizedQuantity(), materialType.getUnit(),
+                        result.totalValue(), result.averagePrice());
+            } catch (Exception e) {
+                log.warn("Moving-average rebuild failed without blocking receipt: materialType={}, error={}",
+                        materialType.getId(), e.getMessage());
+            }
             return;
         }
         try {

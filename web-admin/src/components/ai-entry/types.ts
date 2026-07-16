@@ -177,7 +177,7 @@ export const PURCHASE_ORDER_CONFIG: AiEntryConfig = {
 
 当信息收集完毕后，返回如下格式：
 \`\`\`json
-{"action":"FILL_FORM","params":{"supplierName":"XX供应商","purchaseType":"DIRECT","expectedDeliveryDate":"2026-03-15","remark":"","items":[{"materialName":"大豆","quantity":500,"unit":"kg","unitPrice":0}]}}
+{"action":"FILL_FORM","params":{"supplierName":"XX供应商","purchaseType":"DIRECT","expectedDeliveryDate":"<YYYY-MM-DD>","remark":"","items":[{"materialName":"大豆","quantity":500,"unit":"kg","unitPrice":0}]}}
 \`\`\`
 
 在返回 JSON 之前，先用一句话总结。`,
@@ -230,7 +230,7 @@ export const SALES_ORDER_CONFIG: AiEntryConfig = {
 
 当信息收集完毕后，返回如下格式：
 \`\`\`json
-{"action":"FILL_FORM","params":{"customerName":"<客户名>","requiredDeliveryDate":"2026-03-15","deliveryAddress":"","remark":"","items":[{"productName":"<产品名>","quantity":1000,"unit":"kg","unitPrice":0}]}}
+{"action":"FILL_FORM","params":{"customerName":"<客户名>","requiredDeliveryDate":"<YYYY-MM-DD>","deliveryAddress":"","remark":"","items":[{"productName":"<产品名>","quantity":1000,"unit":"kg","unitPrice":0}]}}
 \`\`\`
 
 在返回 JSON 之前，先用一句话总结。`,

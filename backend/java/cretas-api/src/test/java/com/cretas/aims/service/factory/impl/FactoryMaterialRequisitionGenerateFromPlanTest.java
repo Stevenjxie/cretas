@@ -89,6 +89,7 @@ class FactoryMaterialRequisitionGenerateFromPlanTest {
         plan.setId(PLAN_ID);
         plan.setFactoryId(FACTORY_ID);
         plan.setProductTypeId(PRODUCT_TYPE_ID);
+        plan.setPlanNumber("PLAN-F006-001");
         plan.setPlannedQuantity(new BigDecimal("100"));
         plan.setExpectedCompletionDate(LocalDate.now().plusDays(3));
         lenient().when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
@@ -126,6 +127,7 @@ class FactoryMaterialRequisitionGenerateFromPlanTest {
         assertEquals(WH_RAW, mr.getSourceWarehouseId(),
                 "领料来源仓应为采购落点原料仓, 而不是硬编码物流仓");
         assertEquals(WH_WORKSHOP, mr.getTargetWarehouseId(), "目标仓应为车间/生产仓");
+        assertEquals("PLAN-F006-001", mr.getProductionPlanNumber(), "需求单应保存生产计划编号快照");
         verify(warehouseResolver).resolvePurchaseInboundWh(FACTORY_ID);
     }
 

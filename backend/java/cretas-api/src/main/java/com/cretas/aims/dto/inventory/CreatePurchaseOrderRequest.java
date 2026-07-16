@@ -19,7 +19,6 @@ import java.util.List;
 @AllArgsConstructor
 public class CreatePurchaseOrderRequest {
 
-    @NotBlank(message = "供应商ID不能为空")
     @Size(max = 191, message = "供应商ID长度不能超过191个字符")
     private String supplierId;
 

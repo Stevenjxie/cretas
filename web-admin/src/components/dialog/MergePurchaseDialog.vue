@@ -378,7 +378,7 @@ function handleClose() {
         type="info"
         :closable="false"
         style="margin-top: 8px"
-        title="供应商可在采购单创建后补填。合并单关联首张销售订单，全部订单号记入备注供溯源。"
+        title="将先创建采购草稿；供应商可稍后补填，但提交审批前必须选择。全部销售订单号记入备注供溯源。"
       />
     </template>
 

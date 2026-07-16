@@ -63,6 +63,9 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.ProductTypeRepository productTypeRepository;
+
     /** Canvas V2: DB-driven validation rules */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.engine.ValidationRuleEvaluator validationRuleEvaluator;
@@ -168,6 +171,11 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         mr.setFactoryId(factoryId);
         mr.setRequisitionNo(generateRequisitionNo(factoryId));
         mr.setProductionPlanId(productionPlanId);
+        mr.setProductionPlanNumber(plan.getPlanNumber());
+        if (productTypeRepository != null) {
+            productTypeRepository.findByIdAndFactoryId(plan.getProductTypeId(), factoryId)
+                    .ifPresent(product -> mr.setProductName(product.getName()));
+        }
         mr.setStatus(Status.PENDING);
         mr.setRequiredDate(plan.getExpectedCompletionDate());
         mr.setRequestedBy(requestedBy);

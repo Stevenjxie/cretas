@@ -59,6 +59,17 @@ public class ProductionPlan extends BaseEntity {
     @Column(name = "planned_unit", nullable = false, length = 32)
     private String plannedUnit;
 
+    /** Original sales-order quantity snapshot used for operator-facing display. */
+    @Column(name = "source_display_quantity", precision = 20, scale = 6)
+    private BigDecimal sourceDisplayQuantity;
+
+    @Column(name = "source_display_unit", length = 32)
+    private String sourceDisplayUnit;
+
+    /** Workflow reporting/output unit; it does not redefine the plan quantity unit. */
+    @Column(name = "workflow_output_unit", length = 32)
+    private String workflowOutputUnit;
+
     /** Finished SKU net-weight snapshot captured with the planned unit. */
     @Column(name = "planned_net_weight_grams", precision = 20, scale = 6)
     private BigDecimal plannedNetWeightGrams;
