@@ -89,6 +89,7 @@ post_deploy = (root / '.github/workflows/e2e-post-deploy.yml').read_text(encodin
 assert 'JPA repository query startup gate' in ci
 assert "if: github.event_name != 'push'" in ci
 assert 'pr-batch-policy:' in ci
+assert "github.event.pull_request.user.login != 'github-actions[bot]'" in ci
 assert 'deploy-staging:' not in ci and 'deploy-prod:' not in ci
 assert 'pgvector/pgvector:pg17' in e2e
 assert 'Start Java backend (background)' in e2e

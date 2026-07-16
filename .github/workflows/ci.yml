@@ -22,9 +22,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Require the daily integration branch
-        if: ${{ !startsWith(github.head_ref, 'daily/integration-') }}
+        if: >-
+          ${{ !startsWith(github.head_ref, 'daily/integration-') ||
+              github.event.pull_request.user.login != 'github-actions[bot]' }}
         run: |
-          echo 'Use the daily integration workflow; exceptional PRs must be reviewed and dispatched explicitly.' >&2
+          echo 'PRs must be created by the scheduled daily integration workflow.' >&2
           exit 1
 
   # ---- Change detection: run only the affected component gates ----
