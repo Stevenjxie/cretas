@@ -1,6 +1,7 @@
 package com.cretas.aims.service.inventory.impl;
 
 import com.cretas.aims.dto.inventory.PurchaseSuggestionResponse;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.bom.BomItem;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
@@ -9,6 +10,7 @@ import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.bom.BomItemRepository;
@@ -18,6 +20,7 @@ import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
+import com.cretas.aims.service.production.SalesOrderPlanQuantityNormalizer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -51,6 +54,7 @@ class PurchaseServiceImplSuggestionTest {
     @Mock private BomRecipeItemRepository bomRecipeItemRepository;
     @Mock private SalesOrderRepository salesOrderRepository;
     @Mock private SalesOrderItemRepository salesOrderItemRepository;
+    @Mock private ProductTypeRepository productTypeRepository;
 
     private PurchaseServiceImpl service;
 
@@ -87,6 +91,15 @@ class PurchaseServiceImplSuggestionTest {
             var recipeItemRepoField = PurchaseServiceImpl.class.getDeclaredField("bomRecipeItemRepository");
             recipeItemRepoField.setAccessible(true);
             recipeItemRepoField.set(service, bomRecipeItemRepository);
+
+            var productTypeRepoField = PurchaseServiceImpl.class.getDeclaredField("productTypeRepository");
+            productTypeRepoField.setAccessible(true);
+            productTypeRepoField.set(service, productTypeRepository);
+
+            var normalizerField = PurchaseServiceImpl.class.getDeclaredField("salesOrderPlanQuantityNormalizer");
+            normalizerField.setAccessible(true);
+            normalizerField.set(service, new SalesOrderPlanQuantityNormalizer(
+                    com.cretas.aims.service.unit.TestUnitContractFactory.legacyFacade()));
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -347,6 +360,40 @@ class PurchaseServiceImplSuggestionTest {
         // legacy bom_items must NOT be consulted when recipe exists
         verify(bomItemRepository, never())
                 .findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(FACTORY, "prod-001");
+    }
+
+    @Test
+    @DisplayName("Purchase suggestion expands sales packaging snapshot before BOM multiplication")
+    void packagingSnapshot_expandsBoxesToProductBaseUnits() {
+        when(salesOrderRepository.findById(SO_ID)).thenReturn(Optional.of(mockSo()));
+        SalesOrderItem item = soItem("prod-001", "香辣孜然羊排", new BigDecimal("10"));
+        item.setUnit("箱");
+        item.setPackagingUnit("箱");
+        item.setPackagingBaseUnit("盒");
+        item.setPackagingFactor(new BigDecimal("50"));
+        when(salesOrderItemRepository.findBySalesOrderId(SO_ID)).thenReturn(List.of(item));
+        ProductType product = new ProductType();
+        product.setId("prod-001");
+        product.setFactoryId(FACTORY);
+        product.setUnit("盒");
+        product.setGramsPerUnit(new BigDecimal("200"));
+        when(productTypeRepository.findByIdAndFactoryId("prod-001", FACTORY))
+                .thenReturn(Optional.of(product));
+
+        BomRecipe recipe = recipe("recipe-box", "prod-001");
+        BomRecipeItem recipeItem = recipeItem("recipe-box", "rm-001", "羊排",
+                new BigDecimal("200"), new BigDecimal("100"), "RAW", new BigDecimal("200"));
+        recipeItem.setUnit("g");
+        stubRecipe("prod-001", recipe, List.of(recipeItem));
+        when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY, "rm-001"))
+                .thenReturn(BigDecimal.ZERO);
+
+        PurchaseSuggestionResponse result = service.generatePurchaseSuggestion(FACTORY, SO_ID);
+
+        assertThat(result.getItems()).hasSize(1);
+        assertThat(result.getItems().get(0).getRequiredQuantity())
+                .isEqualByComparingTo(new BigDecimal("100000"));
+        assertThat(result.getItems().get(0).getUnit()).isEqualTo("g");
     }
 
     @Test

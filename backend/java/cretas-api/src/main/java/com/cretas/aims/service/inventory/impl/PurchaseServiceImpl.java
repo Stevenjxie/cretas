@@ -30,6 +30,7 @@ import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus;
 import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.bom.BomItemRepository;
@@ -112,6 +113,16 @@ public class PurchaseServiceImpl implements PurchaseService {
     /** 开始采购: 从 SO 展开原料需求. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private SalesOrderItemRepository salesOrderItemRepository;
+
+    /**
+     * 销售订单采购建议必须与以销定产使用同一包装换算契约：先把销售展示单位
+     * （例如 10 箱）换算为成品基本单位（500 盒），再乘每基本单位 BOM 用量。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ProductTypeRepository productTypeRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.production.SalesOrderPlanQuantityNormalizer salesOrderPlanQuantityNormalizer;
 
     /**
      * #748 口径统一 (2026-06-11): 采购建议优先读 bom_recipe_items (新表), 与财务成本拆分
@@ -1762,7 +1773,7 @@ public class PurchaseServiceImpl implements PurchaseService {
 
         for (SalesOrderItem soItem : soItems) {
             if (soItem.getProductTypeId() == null) continue;
-            BigDecimal soQty = soItem.getQuantity() != null ? soItem.getQuantity() : BigDecimal.ONE;
+            BigDecimal soQty = resolveBomProductQuantity(factoryId, soItem);
             String soProductName = soItem.getProductName() != null ? soItem.getProductName() : "";
 
             // #748 口径统一: 优先读 bom_recipe_items (新表, 同财务成本拆分源).
@@ -1813,6 +1824,26 @@ public class PurchaseServiceImpl implements PurchaseService {
         }
 
         return hasBom;
+    }
+
+    /**
+     * Resolve the SO line quantity in the finished product's BOM base unit.
+     *
+     * <p>Historical rows may not have a unit snapshot. Those retain the legacy quantity semantics;
+     * rows with a complete product/unit contract use the shared production normalizer so purchase
+     * suggestion, production plan and material requirement calculations cannot drift apart.
+     */
+    private BigDecimal resolveBomProductQuantity(String factoryId, SalesOrderItem soItem) {
+        BigDecimal sourceQuantity = soItem.getQuantity() != null ? soItem.getQuantity() : BigDecimal.ONE;
+        if (salesOrderPlanQuantityNormalizer == null || productTypeRepository == null
+                || soItem.getUnit() == null || soItem.getUnit().isBlank()) {
+            return sourceQuantity;
+        }
+
+        return productTypeRepository.findByIdAndFactoryId(soItem.getProductTypeId(), factoryId)
+                .filter(product -> product.getUnit() != null && !product.getUnit().isBlank())
+                .map(product -> salesOrderPlanQuantityNormalizer.normalize(soItem, product).quantity())
+                .orElse(sourceQuantity);
     }
 
     /**
