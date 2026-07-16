@@ -57,3 +57,9 @@
 - F006 线上只读验证：登录成功；SKU Excel 模板接口 HTTP 200，XLSX magic `504b0304`，16,155 bytes；业务写请求为 0。
 - PR E2E Gate 的失败发生在既有 `V20261028_69` 对全新 CI 空库的前置列假设，后端启动前即失败；PR #1378 未修改迁移文件。Java 发布 JAR clean package 成功，JAR 完整性和 MD5 校验通过。
 - 未操作 LIUSHANMEN 数据。
+
+## Raw material dictionary filter hotfix
+
+| ID | Base SHA | Owner | Result |
+|---|---|---|---|
+| BUG-RAW-FILTER-20260716 | `1b6804af5` | Codex | Prefix-only and keyword-only raw-material filters now bind blank optional values as text, preventing PostgreSQL `lower(bytea)` failures. Target test passed 8/8; [PR #1391](https://github.com/Stevenjxie/cretas/pull/1391). |
