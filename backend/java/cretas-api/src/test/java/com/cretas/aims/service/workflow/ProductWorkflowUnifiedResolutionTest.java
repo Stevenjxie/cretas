@@ -116,6 +116,19 @@ class ProductWorkflowUnifiedResolutionTest {
         assertEquals("WORKFLOW_SINGLE_OUTPUT_AMBIGUOUS", error.getErrorCode());
     }
 
+    @Test
+    void planContractRevalidatesTheSelectedAnchorInsteadOfChoosingAnotherMatch() {
+        activate(51L, "ANCHOR-NEW", List.of("RAW-A"), List.of("P1", "P2"),
+                LocalDateTime.now());
+        activate(52L, "ANCHOR-SELECTED", List.of("RAW-B"), List.of("P1", "P2"),
+                LocalDateTime.now().minusDays(1));
+
+        WorkflowPlanOutputContract result = service.resolveActivePlanOutputContract(
+                "F1", "ANCHOR-SELECTED", List.of("P1", "P2")).orElseThrow();
+
+        assertEquals(52L, result.workflowId());
+    }
+
     private void activate(
             Long id, String anchor, List<String> roots, List<String> terminals,
             LocalDateTime activatedAt) {
@@ -138,6 +151,8 @@ class ProductWorkflowUnifiedResolutionTest {
         activation.setEnabled(true);
         activation.setActivatedAt(activatedAt);
         enabled.add(activation);
+        when(activations.findByFactoryIdAndProductTypeId("F1", anchor))
+                .thenReturn(Optional.of(activation));
     }
 
     private String nodesJson(List<String> roots, List<String> terminals) {

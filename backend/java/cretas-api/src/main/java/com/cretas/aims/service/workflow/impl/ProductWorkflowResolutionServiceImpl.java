@@ -128,7 +128,9 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
     public void assertActiveWorkflowCoversOutputs(
             String factoryId, String ownerProductTypeId, List<String> targetFinishedGoodIds) {
         List<String> targets = selectedOutputs(ownerProductTypeId, targetFinishedGoodIds);
-        if (!targets.isEmpty()) requireResolution(factoryId, targets);
+        if (!targets.isEmpty()) {
+            requireResolutionForAnchor(factoryId, ownerProductTypeId, targets);
+        }
     }
 
     @Override
@@ -155,7 +157,8 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
             String factoryId, String ownerProductTypeId, List<String> targetFinishedGoodIds) {
         List<String> targets = selectedOutputs(ownerProductTypeId, targetFinishedGoodIds);
         if (targets.isEmpty()) return Optional.empty();
-        ResolvedWorkflow resolved = requireResolution(factoryId, targets).rw;
+        ResolvedWorkflow resolved = requireResolutionForAnchor(
+                factoryId, ownerProductTypeId, targets);
         Map<String, List<String>> unitsBySku = parseTerminalOutputUnits(factoryId, resolved.workflow);
         Map<String, String> selected = new LinkedHashMap<>();
         for (String target : targets) {
@@ -313,6 +316,28 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
         }
         if (matches.isEmpty()) throw noMatchingWorkflow(requested.size());
         return matches.getFirst();
+    }
+
+    /**
+     * Revalidates the exact activation selected by the plan UI. Global resolution chooses a
+     * candidate; plan persistence must not silently drift to another matching activation if
+     * activations change between resolution and submission.
+     */
+    private ResolvedWorkflow requireResolutionForAnchor(
+            String factoryId, String ownerProductTypeId, List<String> requested) {
+        if (ownerProductTypeId == null || ownerProductTypeId.isBlank()) {
+            throw noMatchingWorkflow(requested.size());
+        }
+        ProductProcessWorkflowActivation activation = activationRepository
+                .findByFactoryIdAndProductTypeId(factoryId, ownerProductTypeId)
+                .filter(row -> Boolean.TRUE.equals(row.getEnabled()))
+                .orElseThrow(() -> noMatchingWorkflow(requested.size()));
+        ResolvedWorkflow resolved = loadResolved(factoryId, activation);
+        if (resolved == null || !matchesSelection(
+                resolved.topology, new HashSet<>(requested), requested.size())) {
+            throw noMatchingWorkflow(requested.size());
+        }
+        return resolved;
     }
 
     private boolean matchesSelection(
