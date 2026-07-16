@@ -12,6 +12,8 @@ import type {
   CreateBomRecipeRequest,
   UpdateBomRecipeRequest,
   BomImportRow,
+  BomCopyCandidate,
+  CopyBomToProductRequest,
 } from '@/api/bom';
 import * as XLSX from 'xlsx';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -21,6 +23,7 @@ import BomChangeLog from './BomChangeLog.vue'
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue'
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue'
 import BomAuxiliaryWorkspace from './seasoning/BomAuxiliaryWorkspace.vue'
+import BomCopySuggestionDialog from './BomCopySuggestionDialog.vue'
 import type { TableRow } from '@/types/api';
 // 客户张权反馈 (2026-07-02): "辅料 添加剂全混在一起了" — 「添加原辅料」对话框的「关联原料」
 // 下拉需按上方「物料类别」筛选, 归类逻辑复用 procurement/receives/list.vue 同款共享工具。
@@ -231,6 +234,11 @@ async function handleActivateRecipe(recipe: BomRecipeSummary) {
 const loading = ref(false);
 const changeLogVisible = ref(false)
 const selectedProductTypeId = ref<string>('');
+const bomCopyDialogVisible = ref(false);
+const bomCopyCandidates = ref<BomCopyCandidate[]>([]);
+const bomCopyCandidatesLoading = ref(false);
+const bomCopySubmitting = ref(false);
+const automaticallyPromptedProductIds = new Set<string>();
 // :key 强制 el-select 重新挂载 —— element-plus 的 currentLabel 是渲染时按当前 options
 // 匹配一次后缓存的, 异步 (route 带 productTypeId 跳转) 补写 options + modelValue 不会
 // 触发它重新求值, 导致选中态生效但下拉框标签显示空白 (同款坑见 ReferenceSelector.vue)。
@@ -573,7 +581,7 @@ function resetRecipeForm(recipe?: BomRecipeSummary) {
   };
 }
 
-function handleAddRecipeHeader() {
+function openBlankRecipeHeader() {
   if (!selectedProductTypeId.value) {
     ElMessage.warning('请先选择产品，再创建配方头');
     return;
@@ -587,6 +595,87 @@ function handleAddRecipeHeader() {
   const currentRecipe = bomRecipes.value.find((recipe) => recipe.isCurrent) || bomRecipes.value[0];
   resetRecipeForm(currentRecipe);
   recipeDialogVisible.value = true;
+}
+
+function bomCopyErrorMessage(error: unknown, fallback: string) {
+  return (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+    || (error as { message?: string })?.message
+    || fallback;
+}
+
+async function openBomCopySuggestions(manual: boolean): Promise<boolean> {
+  const targetProductTypeId = selectedProductTypeId.value;
+  if (!factoryId.value || !targetProductTypeId || recipeVersionLimitReached.value) return false;
+  if (!manual && automaticallyPromptedProductIds.has(targetProductTypeId)) return false;
+  if (!manual) automaticallyPromptedProductIds.add(targetProductTypeId);
+
+  bomCopyCandidatesLoading.value = true;
+  try {
+    const response = await bomRecipeApi.getCopyCandidates(factoryId.value, targetProductTypeId);
+    if (selectedProductTypeId.value !== targetProductTypeId) return false;
+    if (!response.success) throw new Error(response.message || '同源配方候选加载失败');
+    bomCopyCandidates.value = response.data ?? [];
+    if (bomCopyCandidates.value.length > 0) {
+      bomCopyDialogVisible.value = true;
+      return true;
+    }
+    if (manual) openBlankRecipeHeader();
+    return false;
+  } catch (error: unknown) {
+    if (selectedProductTypeId.value !== targetProductTypeId) return false;
+    ElMessage({
+      message: bomCopyErrorMessage(error, '未能加载同源配方候选，可继续空白创建'),
+      type: 'warning',
+      duration: 0,
+      showClose: true,
+    });
+    if (manual) openBlankRecipeHeader();
+    return false;
+  } finally {
+    bomCopyCandidatesLoading.value = false;
+  }
+}
+
+async function handleAddRecipeHeader() {
+  if (!selectedProductTypeId.value) {
+    ElMessage.warning('请先选择产品，再创建配方头');
+    return;
+  }
+  if (recipeVersionLimitReached.value) {
+    ElMessage.warning('该 SKU 已达到 10 个 BOM 版本，请先删除无用草稿或历史版本');
+    return;
+  }
+  await openBomCopySuggestions(true);
+}
+
+function handleBlankCreateFromCopyDialog() {
+  bomCopyDialogVisible.value = false;
+  openBlankRecipeHeader();
+}
+
+async function handleCopyRulesToProduct(payload: CopyBomToProductRequest) {
+  if (!factoryId.value || payload.targetProductTypeId !== selectedProductTypeId.value) return;
+  bomCopySubmitting.value = true;
+  try {
+    const response = await bomRecipeApi.copyToProduct(factoryId.value, payload);
+    if (!response.success || !response.data) throw new Error(response.message || '复制配方规则失败');
+    bomCopyDialogVisible.value = false;
+    await Promise.all([
+      loadBomRecipes(response.data.id),
+      loadBomItems(),
+      loadCostSummary(),
+    ]);
+    ElMessage.success('所选规则已复制为新草稿，请核对数量后继续编辑');
+  } catch (error: unknown) {
+    ElMessage({
+      message: bomCopyErrorMessage(error, '复制配方规则失败'),
+      type: 'error',
+      duration: 0,
+      showClose: true,
+    });
+  } finally {
+    bomCopySubmitting.value = false;
+  }
 }
 
 function handleEditRecipeHeader(recipe: BomRecipeSummary) {
@@ -745,6 +834,9 @@ watch(selectedProductTypeId, async (newVal) => {
     await loadCostSummary();
     await loadBomRecipes();
     await loadHistoricalYield();
+    if (bomRecipes.value.length === 0 && canWrite.value) {
+      await openBomCopySuggestions(false);
+    }
   } else {
     selectedProductMeta.value = null;
     bomItems.value = [];
@@ -752,6 +844,8 @@ watch(selectedProductTypeId, async (newVal) => {
     costSummary.value = null;
     bomRecipes.value = [];
     selectedRecipeId.value = '';
+    bomCopyCandidates.value = [];
+    bomCopyDialogVisible.value = false;
     historicalYield.value = null;
     historicalYieldLoadFailed.value = false;
   }
@@ -1851,6 +1945,7 @@ async function handleAdjustConfirm() {
             type="primary"
             :icon="Plus"
             style="margin-left: 12px;"
+            :loading="bomCopyCandidatesLoading"
             :disabled="!selectedProductTypeId || recipeVersionLimitReached"
             @click="handleAddRecipeHeader"
           >创建配方</el-button>
@@ -1896,7 +1991,7 @@ async function handleAdjustConfirm() {
             <el-tag size="small" :type="recipeVersionLimitReached ? 'warning' : 'info'">
               已用 {{ bomRecipes.length }}/{{ MAX_RECIPE_VERSIONS }} 个版本
             </el-tag>
-            <el-button v-if="canWrite" type="primary" size="small" :icon="Plus" :disabled="recipeVersionLimitReached" @click="handleAddRecipeHeader">
+            <el-button v-if="canWrite" type="primary" size="small" :icon="Plus" :loading="bomCopyCandidatesLoading" :disabled="recipeVersionLimitReached" @click="handleAddRecipeHeader">
               创建配方
             </el-button>
             <el-button size="small" :icon="Refresh" :loading="bomRecipesLoading" @click="loadBomRecipes">
@@ -2095,7 +2190,7 @@ async function handleAdjustConfirm() {
             description="请先为当前 SKU 创建 BOM 配方，再配置工序调料"
             :image-size="64"
           >
-            <el-button v-if="canWrite && selectedProductTypeId" type="primary" @click="handleAddRecipeHeader">创建配方</el-button>
+            <el-button v-if="canWrite && selectedProductTypeId" type="primary" :loading="bomCopyCandidatesLoading" @click="handleAddRecipeHeader">创建配方</el-button>
           </el-empty>
         </div>
 
@@ -2233,6 +2328,17 @@ async function handleAdjustConfirm() {
         </div>
       </el-card>
     </div>
+
+    <BomCopySuggestionDialog
+      v-model="bomCopyDialogVisible"
+      :target-product-name="selectedProductName"
+      :target-product-type-id="selectedProductTypeId"
+      :candidates="bomCopyCandidates"
+      :loading="bomCopyCandidatesLoading"
+      :submitting="bomCopySubmitting"
+      @blank-create="handleBlankCreateFromCopyDialog"
+      @copy="handleCopyRulesToProduct"
+    />
 
     <!-- BOM Recipe Header Dialog -->
     <el-dialog

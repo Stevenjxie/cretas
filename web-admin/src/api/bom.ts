@@ -82,6 +82,73 @@ export interface UpdateBomRecipeRequest {
   notes?: string | null;
 }
 
+export interface BomCopySharedProcess {
+  workProcessId: string;
+  processName: string;
+  targetOrder?: number | null;
+}
+
+export interface BomCopyItemRule {
+  id: number;
+  materialTypeId: string;
+  materialName: string;
+  materialCategory?: string | null;
+  standardQuantity?: number | null;
+  unit?: string | null;
+  sortOrder?: number | null;
+  optional?: boolean | null;
+  substituteGroup?: string | null;
+  remark?: string | null;
+  perPortion?: boolean | null;
+  semiFinishedRefCode?: string | null;
+  subProductTypeId?: string | null;
+  primaryCode?: string | null;
+}
+
+export interface BomCopySeasoningRule {
+  id: number;
+  workProcessId: string;
+  workProcessName?: string | null;
+  materialTypeId?: string | null;
+  name: string;
+  section?: string | null;
+  dosagePerKgG?: number | null;
+  seq?: number | null;
+  countInSeasoning?: boolean | null;
+  remark?: string | null;
+}
+
+export interface BomCopyProcessParamRule {
+  id: number;
+  workProcessId: string;
+  workProcessName?: string | null;
+  subsequentPotRatio?: number | null;
+  injectionAmountKg?: number | null;
+  notes?: string | null;
+}
+
+/** A current BOM from a finished product that shares the target's raw source and processes. */
+export interface BomCopyCandidate {
+  sourceProductTypeId: string;
+  sourceProductName: string;
+  sourceRecipeId: string;
+  sourceRecipeCode?: string | null;
+  sourceRecipeVersion?: number | null;
+  rawRootMaterialTypeId?: string | null;
+  sharedProcesses: BomCopySharedProcess[];
+  bomItems: BomCopyItemRule[];
+  seasoningItems: BomCopySeasoningRule[];
+  processSeasoningParams: BomCopyProcessParamRule[];
+}
+
+export interface CopyBomToProductRequest {
+  targetProductTypeId: string;
+  sourceRecipeId: string;
+  bomItemIds: number[];
+  seasoningItemIds: number[];
+  processSeasoningParamIds: number[];
+}
+
 const recipeBase = (factoryId: string) => `/${factoryId}/bom/recipes`;
 
 export const bomRecipeApi = {
@@ -115,6 +182,17 @@ export const bomRecipeApi = {
   /** 克隆任意历史版本为可编辑草稿。 */
   clone: (factoryId: string, recipeId: string) =>
     post<BomRecipeSummary>(`${recipeBase(factoryId)}/${recipeId}/clone`, null),
+
+  /** Find current BOMs from same-source finished products with shared workflow processes. */
+  getCopyCandidates: (factoryId: string, targetProductTypeId: string) =>
+    get<BomCopyCandidate[]>(`${recipeBase(factoryId)}/copy-candidates`, {
+      params: { targetProductTypeId },
+      _silent: true,
+    }),
+
+  /** Copy only explicitly selected rules into a new editable DRAFT for the target product. */
+  copyToProduct: (factoryId: string, req: CopyBomToProductRequest) =>
+    post<BomRecipeSummary>(`${recipeBase(factoryId)}/copy-to-draft`, req),
 
   /** 删除草稿或历史未生效版本；当前 ACTIVE 版本由后端拒绝。 */
   removeDraft: (factoryId: string, recipeId: string) =>
