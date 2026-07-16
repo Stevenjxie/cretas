@@ -1711,8 +1711,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHintTarget("核对结单");
         }
 
-        ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
-                .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        ProductionPlan plan = request.isConfirm()
+                ? productionPlanRepository.findByIdForUpdate(planId)
+                        .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
+                        .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId))
+                : productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+                        .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
 
         Optional<ProductionSettlement> sameRequest = productionSettlementRepository
                 .findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
@@ -1729,12 +1733,17 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                             .withHintTarget("核对结单");
                 });
 
-        validateSettlementRequest(plan, request);
+        ensureWorkflowSettlementUsesSubmittedReports(factoryId, plan);
+        ProductionSettlementRequest effectiveRequest = request.isConfirm()
+                ? deriveConfirmedSettlementRequest(factoryId, planId, request)
+                : request;
+
+        validateSettlementRequest(plan, effectiveRequest);
 
         List<ProductionSettlementConsumption> consumptionLines = new ArrayList<>();
-        appendConsumptionLines(factoryId, plan, "RAW_MATERIAL", request.getRawMaterialConsumptions(), consumptionLines);
-        appendConsumptionLines(factoryId, plan, "SEMI_FINISHED", request.getSemiFinishedConsumptions(), consumptionLines);
-        appendConsumptionLines(factoryId, plan, "AUXILIARY", request.getAuxiliaryConsumptions(), consumptionLines);
+        appendConsumptionLines(factoryId, plan, "RAW_MATERIAL", effectiveRequest.getRawMaterialConsumptions(), consumptionLines);
+        appendConsumptionLines(factoryId, plan, "SEMI_FINISHED", effectiveRequest.getSemiFinishedConsumptions(), consumptionLines);
+        appendConsumptionLines(factoryId, plan, "AUXILIARY", effectiveRequest.getAuxiliaryConsumptions(), consumptionLines);
 
         ProductionSettlement settlement = new ProductionSettlement();
         settlement.setId(UUID.randomUUID().toString());
@@ -1743,14 +1752,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         settlement.setPlanNumber(plan.getPlanNumber());
         settlement.setIdempotencyKey(request.getIdempotencyKey());
         settlement.setPlannedQuantity(zeroIfNull(plan.getPlannedQuantity()));
-        settlement.setActualFinishedQuantity(zeroIfNull(request.getActualFinishedQuantity()));
-        settlement.setActualSemiFinishedQuantity(zeroIfNull(request.getActualSemiFinishedQuantity()));
-        settlement.setQuantityUnit(trimToNull(request.getQuantityUnit()));
-        settlement.setQuantityVarianceReason(trimToNull(request.getQuantityVarianceReason()));
-        settlement.setQuantityVarianceNote(trimToNull(request.getQuantityVarianceNote()));
-        settlement.setMaterialVarianceReason(trimToNull(request.getMaterialVarianceReason()));
-        settlement.setMaterialVarianceNote(trimToNull(request.getMaterialVarianceNote()));
-        settlement.setLaborDeferredReason(trimToNull(request.getLaborDeferredReason()));
+        settlement.setActualFinishedQuantity(zeroIfNull(effectiveRequest.getActualFinishedQuantity()));
+        settlement.setActualSemiFinishedQuantity(zeroIfNull(effectiveRequest.getActualSemiFinishedQuantity()));
+        settlement.setQuantityUnit(trimToNull(effectiveRequest.getQuantityUnit()));
+        settlement.setQuantityVarianceReason(trimToNull(effectiveRequest.getQuantityVarianceReason()));
+        settlement.setQuantityVarianceNote(trimToNull(effectiveRequest.getQuantityVarianceNote()));
+        settlement.setMaterialVarianceReason(trimToNull(effectiveRequest.getMaterialVarianceReason()));
+        settlement.setMaterialVarianceNote(trimToNull(effectiveRequest.getMaterialVarianceNote()));
+        settlement.setLaborDeferredReason(trimToNull(effectiveRequest.getLaborDeferredReason()));
         settlement.setPlanStatusAfter(ProductionPlanStatus.COMPLETED);
         settlement.setPostingStatus("PENDING_WAREHOUSE_RECEIPT");
         settlement.setPostingMessage("已完成结单和实际领用扣减; 等待仓库确认实收后才生成成品库存, 差异进入中转挂账");
@@ -1768,9 +1777,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         //   此前<b>从不扣减</b> = SFI/FG 可用量不降 (幻库存: 消耗了却还在库, 可被重复领用/发货)。此处按 process-row
         //   直接严格扣减 (缺失/不足即抛, 整事务回滚, 禁止降级)。成本侧由 R4 computeByPlan (含 SFI/FG 投料桶)
         //   在仓库确认实收创建 FG 时补入, 此处仅补扣减。仅结单族 (SAFETY_STOCK 走小结扣减, 内部守卫)。
-        deductProcessSheetStockFeeds(factoryId, plan, request);
+        deductProcessSheetStockFeeds(factoryId, plan, effectiveRequest);
         productionSettlementConsumptionRepository.saveAll(consumptionLines);
-        productionSettlementLaborRepository.saveAll(toLaborLines(factoryId, planId, settlement.getId(), request.getLaborSegments()));
+        productionSettlementLaborRepository.saveAll(toLaborLines(factoryId, planId, settlement.getId(), effectiveRequest.getLaborSegments()));
 
         plan.setStatus(ProductionPlanStatus.COMPLETED);
         if (plan.getStartTime() == null) {
@@ -1827,6 +1836,77 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 factoryId, planId, settlement.getId(),
                 settlement.getActualFinishedQuantity(), settlement.getActualSemiFinishedQuantity());
         return toSettlementResponse(settlement, warnings);
+    }
+
+    /**
+     * Rebuild the normal close-plan request from current server facts. Only explicit
+     * exception reasons are carried from the caller; quantities, batches and labor
+     * lines are never trusted in confirmation-only mode.
+     */
+    private ProductionSettlementRequest deriveConfirmedSettlementRequest(
+            String factoryId, String planId, ProductionSettlementRequest confirmation) {
+        ProductionSettlementPrefillResponse latest = getSettlementPrefill(factoryId, planId);
+        ProductionSettlementRequest derived = latest != null ? latest.getPrefill() : null;
+        List<ProductionSettlementPrefillResponse.Issue> blockers = latest == null || latest.getAudit() == null
+                ? List.of(issue("SETTLEMENT_FACTS_UNAVAILABLE", "无法读取当前报工事实，不能结单。", "processSheetRows"))
+                : Optional.ofNullable(latest.getAudit().getIssues()).orElseGet(ArrayList::new).stream()
+                        .filter(i -> i.getSeverity() == ProductionSettlementPrefillResponse.Severity.BLOCKER)
+                        .filter(i -> !isResolvedSettlementOverride(i, confirmation))
+                        .toList();
+        if (derived == null || !blockers.isEmpty()) {
+            String detail = blockers.stream()
+                    .map(ProductionSettlementPrefillResponse.Issue::getMessage)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.joining("；"));
+            throw new BusinessException(409, "当前生产事实仍有阻塞项，不能结单")
+                    .withCode("PRODUCTION_SETTLEMENT_BLOCKED")
+                    .withHint(isBlank(detail) ? "请先完成并正式提交逐道报工" : detail)
+                    .withHintTarget("核对结单");
+        }
+        derived.setIdempotencyKey(confirmation.getIdempotencyKey());
+        derived.setConfirm(true);
+        derived.setQuantityVarianceReason(firstNonBlank(
+                confirmation.getQuantityVarianceReason(), derived.getQuantityVarianceReason()));
+        derived.setQuantityVarianceNote(trimToNull(confirmation.getQuantityVarianceNote()));
+        derived.setMaterialVarianceReason(trimToNull(confirmation.getMaterialVarianceReason()));
+        derived.setMaterialVarianceNote(trimToNull(confirmation.getMaterialVarianceNote()));
+        derived.setLaborDeferredReason(firstNonBlank(
+                derived.getLaborDeferredReason(), confirmation.getLaborDeferredReason()));
+        return derived;
+    }
+
+    private boolean isResolvedSettlementOverride(ProductionSettlementPrefillResponse.Issue issue,
+                                                 ProductionSettlementRequest confirmation) {
+        if (issue == null || issue.getCode() == null) {
+            return false;
+        }
+        return switch (issue.getCode()) {
+            case "QUANTITY_VARIANCE_OVER_PLAN" -> !isBlank(confirmation.getQuantityVarianceReason());
+            case "MATERIAL_CONSUMPTION_EMPTY" -> !isBlank(confirmation.getMaterialVarianceReason());
+            default -> false;
+        };
+    }
+
+    private void ensureWorkflowSettlementUsesSubmittedReports(String factoryId, ProductionPlan plan) {
+        boolean workflowPlan = plan != null && (plan.getSelectedWorkflowId() != null
+                || plan.getWorkflowSelectionMode() == ProductionBatch.WorkflowSelectionMode.WORKFLOW
+                || (plan.getTargetFinishedGoodIds() != null && !plan.getTargetFinishedGoodIds().isEmpty()));
+        if (!workflowPlan || Boolean.TRUE.equals(plan.getSkipProcessReporting())) {
+            return;
+        }
+        if (processSheetRowRepository == null) {
+            throw new BusinessException(500, "逐道报工服务未初始化，workflow 计划不能结单")
+                    .withCode("WORKFLOW_REPORTING_UNAVAILABLE")
+                    .withHintTarget("核对结单");
+        }
+        List<ProcessSheetRow> rows = processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, plan.getId());
+        boolean hasSubmitted = rows != null && rows.stream().anyMatch(this::isUsableProcessSheetRow);
+        if (!hasSubmitted) {
+            throw new BusinessException(409, "workflow 计划必须先完成并正式提交逐道报工")
+                    .withCode("WORKFLOW_REPORTING_REQUIRED")
+                    .withHint("请逐道录入并提交后，再核对结单")
+                    .withHintTarget("核对结单");
+        }
     }
 
     // ==================== Phase 2A: 报工→核算自动化 (核对结单预填) ====================
@@ -2006,7 +2086,21 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .thenComparing(r -> r.row().getCreatedAt(), Comparator.nullsLast(LocalDateTime::compareTo))
                 .thenComparing(r -> r.row().getId(), Comparator.nullsLast(Long::compareTo)));
 
-        BigDecimal actualFinished = deriveTerminalProcessSheetOutput(parsedRows);
+        List<ProductionSettlementRequest.OutputLine> terminalOutputs =
+                deriveTerminalProcessSheetOutputs(parsedRows);
+        BigDecimal actualFinished = sumCompatibleTerminalOutputs(terminalOutputs);
+        long terminalUnitCount = terminalOutputs.stream()
+                .map(ProductionSettlementRequest.OutputLine::getUnit)
+                .map(this::trimToNull)
+                .filter(Objects::nonNull)
+                .map(unit -> unit.toLowerCase(Locale.ROOT))
+                .distinct()
+                .count();
+        if (terminalUnitCount > 1) {
+            issues.add(issue("FINISHED_OUTPUT_UNIT_MIXED",
+                    "终端产出包含多个不能直接相加的单位，请按 SKU、批次和单位分别核对。",
+                    "terminalOutputs"));
+        }
         if (actualFinished == null || actualFinished.compareTo(BigDecimal.ZERO) <= 0) {
             issues.add(issue("FINISHED_OUTPUT_MISSING",
                     "逐道电子表格末道产出量缺失或为 0, 无法自动带入实际成品产量; 请在产出核对处手工填写。",
@@ -2068,6 +2162,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .semiFinishedConsumptions(new ArrayList<>())
                 .auxiliaryConsumptions(new ArrayList<>())
                 .laborSegments(laborSegments)
+                .terminalOutputs(terminalOutputs)
                 .build();
         return buildPrefillResponse(prefill, issues);
     }
@@ -2077,7 +2172,17 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             return false;
         }
         String status = trimToNull(row.getRowStatus());
-        return status == null || "SAVED".equals(status) || "SUBMITTED".equals(status);
+        String submission = trimToNull(row.getSubmissionStatus());
+        if (ProcessSheetRow.SUBMISSION_DRAFT.equals(submission)) {
+            return false;
+        }
+        if (ProcessSheetRow.SUBMISSION_SUBMITTED.equals(submission)) {
+            return true;
+        }
+        // Explicit legacy compatibility: rows written before submission_status existed
+        // retain their historical rowStatus semantics, but new DRAFT rows never enter settlement.
+        boolean legacy = submission == null || ProcessSheetRow.SUBMISSION_LEGACY.equals(submission);
+        return legacy && (status == null || "SAVED".equals(status) || "SUBMITTED".equals(status));
     }
 
     private ProcessSheetRowRequest parseProcessSheetRowPayload(ProcessSheetRow row,
@@ -2092,14 +2197,15 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
     }
 
-    private BigDecimal deriveTerminalProcessSheetOutput(List<ParsedProcessSheetRow> rows) {
+    private List<ProductionSettlementRequest.OutputLine> deriveTerminalProcessSheetOutputs(
+            List<ParsedProcessSheetRow> rows) {
         Set<String> consumedBatchNumbers = rows.stream()
                 .flatMap(r -> Optional.ofNullable(r.request().getUpstreamSources()).orElseGet(ArrayList::new).stream())
                 .map(ProcessSheetRowRequest.UpstreamRef::getSourceBatchNumber)
                 .filter(s -> !isBlank(s))
                 .collect(Collectors.toSet());
 
-        BigDecimal terminalSum = null;
+        Map<String, ProductionSettlementRequest.OutputLine> outputs = new LinkedHashMap<>();
         for (ParsedProcessSheetRow parsed : rows) {
             ProcessSheetRow row = parsed.row();
             ProcessSheetRowRequest req = parsed.request();
@@ -2110,10 +2216,24 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             if (consumedBatchNumbers.contains(row.getBatchNumber())) {
                 continue;
             }
-            terminalSum = terminalSum == null ? output : terminalSum.add(output);
+            String productTypeId = trimToNull(req.getProductTypeId());
+            String unit = firstNonBlank(trimToNull(req.getOutputUnit()), trimToNull(req.getUnit()));
+            String key = firstNonBlank(productTypeId, "") + "\u0000" + row.getBatchNumber()
+                    + "\u0000" + firstNonBlank(unit, "");
+            ProductionSettlementRequest.OutputLine existing = outputs.get(key);
+            if (existing == null) {
+                outputs.put(key, ProductionSettlementRequest.OutputLine.builder()
+                        .productTypeId(productTypeId)
+                        .batchNumber(row.getBatchNumber())
+                        .quantity(output)
+                        .unit(unit)
+                        .build());
+            } else {
+                existing.setQuantity(zeroIfNull(existing.getQuantity()).add(output));
+            }
         }
-        if (terminalSum != null) {
-            return terminalSum;
+        if (!outputs.isEmpty()) {
+            return new ArrayList<>(outputs.values());
         }
 
         Integer maxOrder = rows.stream()
@@ -2121,16 +2241,40 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .filter(Objects::nonNull)
                 .max(Integer::compareTo)
                 .orElse(null);
-        BigDecimal maxOrderSum = null;
+        List<ProductionSettlementRequest.OutputLine> fallback = new ArrayList<>();
         for (ParsedProcessSheetRow parsed : rows) {
             ProcessSheetRowRequest req = parsed.request();
             boolean inLastStep = maxOrder == null || maxOrder.equals(req.getProcessOrder());
             BigDecimal output = req.getOutputQuantity();
             if (inLastStep && output != null && output.compareTo(BigDecimal.ZERO) > 0) {
-                maxOrderSum = maxOrderSum == null ? output : maxOrderSum.add(output);
+                fallback.add(ProductionSettlementRequest.OutputLine.builder()
+                        .productTypeId(trimToNull(req.getProductTypeId()))
+                        .batchNumber(trimToNull(parsed.row().getBatchNumber()))
+                        .quantity(output)
+                        .unit(firstNonBlank(trimToNull(req.getOutputUnit()), trimToNull(req.getUnit())))
+                        .build());
             }
         }
-        return maxOrderSum;
+        return fallback;
+    }
+
+    private BigDecimal sumCompatibleTerminalOutputs(List<ProductionSettlementRequest.OutputLine> outputs) {
+        if (outputs == null || outputs.isEmpty()) {
+            return null;
+        }
+        Set<String> units = outputs.stream()
+                .map(ProductionSettlementRequest.OutputLine::getUnit)
+                .map(this::trimToNull)
+                .filter(Objects::nonNull)
+                .map(unit -> unit.toLowerCase(Locale.ROOT))
+                .collect(Collectors.toSet());
+        if (units.size() > 1) {
+            return null;
+        }
+        return outputs.stream()
+                .map(ProductionSettlementRequest.OutputLine::getQuantity)
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     private List<ProductionSettlementRequest.ConsumptionLine> deriveRawConsumptionsFromProcessSheetRows(
@@ -2155,7 +2299,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 continue;
             }
             String productTypeId = trimToNull(parsed.request().getProductTypeId());
-            String reportedUnit = firstNonBlank(trimToNull(parsed.request().getUnit()), "kg");
+            String reportedUnit = firstNonBlank(
+                    trimToNull(parsed.request().getInputUnit()),
+                    firstNonBlank(trimToNull(parsed.request().getUnit()), "kg"));
             for (ProcessSheetRowRequest.RawInput input : rawInputs) {
                 if (input == null || isBlank(input.getMaterialBatchId())
                         || input.getQuantity() == null || input.getQuantity().compareTo(BigDecimal.ZERO) <= 0) {
@@ -3190,7 +3336,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (isEmpty(rows)) {
             return;
         }
-        boolean manualSemi = request != null && !isEmpty(request.getSemiFinishedConsumptions());
+        Set<String> manuallyPostedSemiBatchNumbers = resolveManualSemiBatchNumbers(factoryId, request);
         BigDecimal sfiOut = BigDecimal.ZERO;
         BigDecimal fgOut = BigDecimal.ZERO;
         int sfiCount = 0;
@@ -3220,8 +3366,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     fgOut = fgOut.add(zeroIfNull(drawn));
                     fgCount++;
                 } else if (ref.isSemiFinished()) {
-                    if (manualSemi) {
-                        continue;   // 文员手工管理 SFI 领用, 不自动扣 (防双扣)
+                    if (manuallyPostedSemiBatchNumbers.contains(srcBatchNo)) {
+                        continue;   // 仅该同一 SFI 已走手工领用时跳过，不能全局跳过其他真实投料
                     }
                     if (wipInventoryService == null) {
                         throw new BusinessException(500, "半成品投料扣减服务未就绪, 无法完成结单 (投料来源: "
@@ -3236,8 +3382,30 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (sfiCount > 0 || fgCount > 0) {
             log.info("结单族 SFI/FG 投料扣减 (R2): factoryId={}, planId={}, SFI {} 笔 ({}), FG {} 笔 ({}){}",
                     factoryId, plan.getId(), sfiCount, sfiOut, fgCount, fgOut,
-                    manualSemi ? " [SFI 手工管理, 已跳过自动扣]" : "");
+                    manuallyPostedSemiBatchNumbers.isEmpty()
+                            ? ""
+                            : " [同批次 SFI 手工补录已定点替换]");
         }
+    }
+
+    private Set<String> resolveManualSemiBatchNumbers(String factoryId,
+                                                       ProductionSettlementRequest request) {
+        if (request == null || isEmpty(request.getSemiFinishedConsumptions())
+                || semiFinishedInventoryRepository == null) {
+            return Set.of();
+        }
+        Set<String> result = new HashSet<>();
+        for (ProductionSettlementRequest.ConsumptionLine line : request.getSemiFinishedConsumptions()) {
+            if (line == null || line.getSemiFinishedInventoryId() == null) {
+                continue;
+            }
+            semiFinishedInventoryRepository.findById(line.getSemiFinishedInventoryId())
+                    .filter(inventory -> factoryId.equals(inventory.getFactoryId()))
+                    .map(SemiFinishedInventory::getIntermediateBatchNo)
+                    .map(this::trimToNull)
+                    .ifPresent(result::add);
+        }
+        return result;
     }
 
     private List<ProductionSettlementLabor> toLaborLines(String factoryId, String planId, String settlementId,
@@ -3324,7 +3492,22 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                                                               BigDecimal received,
                                                               String unit,
                                                               Long receivedBy) {
-        if (isBlank(plan.getProductTypeId())) {
+        List<String> targetFinishedGoodIds = Optional.ofNullable(plan.getTargetFinishedGoodIds())
+                .orElseGet(ArrayList::new).stream()
+                .map(this::trimToNull)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (targetFinishedGoodIds.size() > 1) {
+            throw new BusinessException(409, "多成品计划必须按终端 SKU 逐行确认入库，不能把原料 owner 当成品入库")
+                    .withCode("MULTI_OUTPUT_RECEIPT_REQUIRES_LINES")
+                    .withHint("请按逐道报工的终端 SKU、批次和单位分别确认实收")
+                    .withHintTarget("仓库实收");
+        }
+        String finishedProductTypeId = targetFinishedGoodIds.isEmpty()
+                ? trimToNull(plan.getProductTypeId())
+                : targetFinishedGoodIds.get(0);
+        if (isBlank(finishedProductTypeId)) {
             throw new BusinessException(409, "生产计划缺少产品类型, 不能生成成品库存")
                     .withHint("请先修正生产计划产品类型")
                     .withHintTarget("仓库实收");
@@ -3336,14 +3519,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             return existing.get();
         }
 
-        ProductType productType = plan.getProductTypeId() != null
-                ? productTypeRepository.findById(plan.getProductTypeId()).orElse(null)
+        ProductType productType = finishedProductTypeId != null
+                ? productTypeRepository.findById(finishedProductTypeId).orElse(null)
                 : null;
 
         FinishedGoodsBatch batch = new FinishedGoodsBatch();
         batch.setFactoryId(settlement.getFactoryId());
         batch.setBatchNumber(batchNumber);
-        batch.setProductTypeId(plan.getProductTypeId());
+        batch.setProductTypeId(finishedProductTypeId);
         batch.setProductName(productType != null ? productType.getName() : null);
         batch.setProducedQuantity(received);
         batch.setShippedQuantity(BigDecimal.ZERO);

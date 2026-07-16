@@ -23,7 +23,14 @@ public class ProductionSettlementRequest {
     @NotBlank(message = "idempotencyKey is required")
     private String idempotencyKey;
 
-    @NotNull(message = "actualFinishedQuantity is required")
+    /**
+     * Normal settlement contract: the caller only confirms that the plan should be closed.
+     * When true, the service ignores client-supplied production facts and re-derives them
+     * from submitted process reports inside the settlement transaction.
+     */
+    @Builder.Default
+    private boolean confirm = false;
+
     @PositiveOrZero(message = "actualFinishedQuantity must be >= 0")
     private BigDecimal actualFinishedQuantity;
 
@@ -53,6 +60,21 @@ public class ProductionSettlementRequest {
     @Valid
     @Builder.Default
     private List<LaborSegment> laborSegments = new ArrayList<>();
+
+    /** Server-derived terminal outputs, keyed by SKU + batch + unit. */
+    @Builder.Default
+    private List<OutputLine> terminalOutputs = new ArrayList<>();
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class OutputLine {
+        private String productTypeId;
+        private String batchNumber;
+        private BigDecimal quantity;
+        private String unit;
+    }
 
     @Data
     @Builder

@@ -20,6 +20,8 @@ describe('production plan operator guardrails', () => {
     expect(source).toContain('确认结单并结束计划');
     expect(source).toContain("source: 'PROCESS_REPORT'");
     expect(source).toContain('仅在上方出现异常时才需要补录或调整');
+    expect(source).toContain('confirm: true');
+    expect(source).toContain('settlementPrefillClean.value');
   });
 
   it('shows persistent WIP available quantity and max boundary in settlement', () => {

@@ -271,6 +271,14 @@ class ProductionPlanServiceImplVarianceUnitTest {
         assertThat(resp.getAudit().isClean()).isTrue();
         assertThat(hasIssue(resp, "NO_YIELD_REPORTS")).isFalse();
         assertThat(resp.getPrefill().getActualFinishedQuantity()).isEqualByComparingTo("1.10");
+        assertThat(resp.getPrefill().getTerminalOutputs())
+                .singleElement()
+                .satisfies(output -> {
+                    assertThat(output.getProductTypeId()).isEqualTo("SKU-A");
+                    assertThat(output.getBatchNumber()).isEqualTo("WIP-C");
+                    assertThat(output.getQuantity()).isEqualByComparingTo("1.10");
+                    assertThat(output.getUnit()).isEqualTo("kg");
+                });
         assertThat(resp.getPrefill().getRawMaterialConsumptions()).hasSize(2);
         assertThat(resp.getPrefill().getRawMaterialConsumptions())
                 .extracting(ProductionSettlementRequest.ConsumptionLine::getMaterialBatchId)
@@ -399,6 +407,65 @@ class ProductionPlanServiceImplVarianceUnitTest {
         assertThat(resp.getPrefill().getRawMaterialConsumptions())
                 .singleElement()
                 .satisfies(line -> assertThat(line.getQuantity()).isEqualByComparingTo("100000"));
+    }
+
+    @Test
+    @DisplayName("new draft rows are excluded while explicit legacy rows remain compatible")
+    void prefill_excludesDraftRowsButKeepsLegacyRows() throws Exception {
+        ProductionPlanRepository planRepo = mock(ProductionPlanRepository.class);
+        ProductionBatchRepository batchRepo = mock(ProductionBatchRepository.class);
+        ProductionReportRepository reportRepo = mock(ProductionReportRepository.class);
+        ProcessSheetRowRepository sheetRepo = mock(ProcessSheetRowRepository.class);
+
+        when(planRepo.findByIdAndFactoryId(PLAN, FACTORY)).thenReturn(Optional.of(plan(new BigDecimal("10"))));
+        when(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY, PLAN)).thenReturn(List.of());
+        ProcessSheetRow draft = sheetRow(51, 1, "FG-DRAFT", """
+                {"clientRowId":"R51","processCode":"draft","processOrder":1,"productTypeId":"SKU-A","batchNumber":"FG-DRAFT","outputQuantity":999,"outputUnit":"box","unit":"box"}
+                """);
+        draft.setSubmissionStatus(ProcessSheetRow.SUBMISSION_DRAFT);
+        ProcessSheetRow legacy = sheetRow(52, 1, "FG-LEGACY", """
+                {"clientRowId":"R52","processCode":"legacy","processOrder":1,"productTypeId":"SKU-A","batchNumber":"FG-LEGACY","outputQuantity":10,"outputUnit":"box","unit":"box"}
+                """);
+        legacy.setSubmissionStatus(ProcessSheetRow.SUBMISSION_LEGACY);
+        when(sheetRepo.findByFactoryIdAndPlanId(FACTORY, PLAN)).thenReturn(List.of(draft, legacy));
+
+        ProductionPlanServiceImpl svc = newService(planRepo, batchRepo, reportRepo, null, sheetRepo);
+
+        ProductionSettlementPrefillResponse resp = svc.getSettlementPrefill(FACTORY, PLAN);
+
+        assertThat(resp.getPrefill().getActualFinishedQuantity()).isEqualByComparingTo("10");
+    }
+
+    @Test
+    @DisplayName("raw consumption converts from process inputUnit instead of output unit")
+    void prefill_usesInputUnitForRawConsumption() throws Exception {
+        ProductionPlanRepository planRepo = mock(ProductionPlanRepository.class);
+        ProductionBatchRepository batchRepo = mock(ProductionBatchRepository.class);
+        ProductionReportRepository reportRepo = mock(ProductionReportRepository.class);
+        MaterialBatchRepository materialRepo = mock(MaterialBatchRepository.class);
+        ProcessSheetRowRepository sheetRepo = mock(ProcessSheetRowRepository.class);
+
+        when(planRepo.findByIdAndFactoryId(PLAN, FACTORY)).thenReturn(Optional.of(plan(new BigDecimal("10"))));
+        when(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY, PLAN)).thenReturn(List.of());
+        ProcessSheetRow submitted = sheetRow(61, 1, "FG-BOX", """
+                {"clientRowId":"R61","processCode":"pack","processOrder":1,"productTypeId":"SKU-A","batchNumber":"FG-BOX","inputQuantity":100,"inputUnit":"kg","outputQuantity":10,"outputUnit":"box","unit":"box","rawMaterialInputs":[{"materialBatchId":"RAW-G","quantity":100}]}
+                """);
+        submitted.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        when(sheetRepo.findByFactoryIdAndPlanId(FACTORY, PLAN)).thenReturn(List.of(submitted));
+        MaterialBatch gramBatch = materialBatch("RAW-G", "MB-G", "100000");
+        gramBatch.setQuantityUnit("g");
+        when(materialRepo.findByIdAndFactoryId("RAW-G", FACTORY)).thenReturn(Optional.of(gramBatch));
+
+        ProductionPlanServiceImpl svc = newService(planRepo, batchRepo, reportRepo, materialRepo, sheetRepo);
+
+        ProductionSettlementPrefillResponse resp = svc.getSettlementPrefill(FACTORY, PLAN);
+
+        assertThat(resp.getPrefill().getRawMaterialConsumptions())
+                .singleElement()
+                .satisfies(line -> {
+                    assertThat(line.getQuantity()).isEqualByComparingTo("100000");
+                    assertThat(line.getUnit()).isEqualTo("g");
+                });
     }
 
     @Test

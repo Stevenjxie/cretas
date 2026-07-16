@@ -1254,6 +1254,12 @@ interface SettlementPrefillResponse {
       note?: string | null;
     }> | null;
     laborDeferredReason?: string | null;
+    terminalOutputs?: Array<{
+      productTypeId?: string | null;
+      batchNumber?: string | null;
+      quantity?: number | null;
+      unit?: string | null;
+    }> | null;
   } | null;
   audit: { clean: boolean; issues: SettlementPrefillIssue[] } | null;
 }
@@ -1262,6 +1268,12 @@ const settlementPrefillIssues = ref<SettlementPrefillIssue[]>([]);
 const settlementPrefillApplied = ref(false);
 // 后端审计 clean (只看 BLOCKER); 未带入数据时 false
 const settlementPrefillCleanFromServer = ref(false);
+const settlementTerminalOutputs = ref<Array<{
+  productTypeId: string;
+  batchNumber: string;
+  quantity: number;
+  unit: string;
+}>>([]);
 // 阻塞级问题 (令一键确认禁用 + 顶部 warning)
 const settlementBlockerIssues = computed(
   () => settlementPrefillIssues.value.filter((i) => (i.severity ?? 'BLOCKER') === 'BLOCKER'),
@@ -1270,13 +1282,11 @@ const settlementBlockerIssues = computed(
 const settlementInfoIssues = computed(
   () => settlementPrefillIssues.value.filter((i) => i.severity === 'INFO'),
 );
-// 审计通过 (后端 clean=true + 应用了预填 + 现有表单校验也无阻塞 → 顶部绿色"一键确认"提示)。
-// 叠加 completeSubmitDisabledReason 是因为本 dialog 始终要求工时分钟>0 (无 laborDeferredReason UI),
-// 报工 derive 不出工时时仍需人补分钟, 故不显示误导性的"可一键确认"绿条。
+// 后端审计 clean=true 即可走确认式结单；正常路径不再重复校验或回传客户端事实副本。
+// 缺失工时、批次或产量会由后端审计作为 BLOCKER 返回，再进入下方异常补录路径。
 const settlementPrefillClean = computed(
   () => settlementPrefillApplied.value
-    && settlementPrefillCleanFromServer.value
-    && completeSubmitDisabledReason.value === '',
+    && settlementPrefillCleanFromServer.value,
 );
 // 某字段是否被预填审计标记为待人工补全 (BLOCKER 级才高亮)
 function settlementFieldHasIssue(field: string): boolean {
@@ -1449,7 +1459,9 @@ const completeSubmitDisabledReason = computed(() => {
   }
   return '';
 });
-const completeCanSubmit = computed(() => completeSubmitDisabledReason.value === '');
+const completeCanSubmit = computed(
+  () => settlementPrefillClean.value || completeSubmitDisabledReason.value === '',
+);
 
 function buildSettlementIdempotencyKey(row: TableRow): string {
   // 生成并保存到 settlementIdempotencyKey，确保重试时复用同一 key (防呆 Rule 4)
@@ -1607,6 +1619,7 @@ async function applySettlementPrefill(row: TableRow) {
   settlementPrefillApplied.value = false;
   settlementPrefillIssues.value = [];
   settlementPrefillCleanFromServer.value = false;
+  settlementTerminalOutputs.value = [];
   if (!factoryId.value) return;
   settlementPrefillLoading.value = true;
   try {
@@ -1628,6 +1641,14 @@ async function applySettlementPrefill(row: TableRow) {
     let serverClean = res.data.audit?.clean ?? false;
 
     if (prefill) {
+      settlementTerminalOutputs.value = (prefill.terminalOutputs ?? [])
+        .map((output) => ({
+          productTypeId: String(output.productTypeId || ''),
+          batchNumber: String(output.batchNumber || ''),
+          quantity: Number(output.quantity || 0),
+          unit: String(output.unit || ''),
+        }))
+        .filter((output) => output.quantity > 0);
       // 实际产量 (derive 不出时留空, 用户手填)
       if (prefill.actualFinishedQuantity != null) {
         completeForm.value.actualQuantity = Number(prefill.actualFinishedQuantity);
@@ -1726,6 +1747,7 @@ async function handleComplete(row: TableRow) {
   settlementPrefillApplied.value = false;
   settlementPrefillIssues.value = [];
   settlementPrefillCleanFromServer.value = false;
+  settlementTerminalOutputs.value = [];
   completeDialogVisible.value = true;
   // 正常结单只拉取逐道报工汇总；仅存在阻塞异常时，才加载可选批次/WIP供人工补录。
   await applySettlementPrefill(row);
@@ -1763,29 +1785,41 @@ async function submitComplete() {
   }
   actionLoading.value = true;
   try {
-    const response = await post(`/${factoryId.value}/production-plans/${completeRow.value.id}/settle`, {
-      idempotencyKey: settlementIdempotencyKey.value,
-      actualFinishedQuantity: completeActualQuantity.value,
-      actualSemiFinishedQuantity: Number(completeForm.value.semiFinishedOutputQuantity || 0),
-      quantityUnit: completeRow.value.unit || completeRow.value.quantityUnit || null,
-      quantityVarianceReason: completeForm.value.varianceReason === '其他'
-        ? completeForm.value.otherVarianceReason.trim()
-        : completeForm.value.varianceReason,
-      rawMaterialConsumptions: buildRawConsumptionPayload(),
-      semiFinishedConsumptions: buildWipConsumptionPayload(),
-      auxiliaryConsumptions: [],
-      laborDeferredReason: completeForm.value.laborDeferredReason || null,
-      laborSegments: completeForm.value.laborSegments.length > 0
-        ? completeForm.value.laborSegments
-        : completeForm.value.laborDeferredReason
-          ? []
-          : [{
-              workerName: 'PC文员补录',
-              workType: '生产结单异常补录',
-              minutes: Number(completeForm.value.workMinutes || 0),
-              headcount: Number(completeForm.value.workerCount || 1),
-            }],
-    });
+    const payload = settlementPrefillClean.value
+      ? {
+          idempotencyKey: settlementIdempotencyKey.value,
+          confirm: true,
+        }
+      : {
+          // Legacy-compatible exception override path. The normal path above never
+          // echoes server facts back; only a human-resolved blocker uses these fields.
+          idempotencyKey: settlementIdempotencyKey.value,
+          confirm: false,
+          actualFinishedQuantity: completeActualQuantity.value,
+          actualSemiFinishedQuantity: Number(completeForm.value.semiFinishedOutputQuantity || 0),
+          quantityUnit: completeRow.value.unit || completeRow.value.quantityUnit || null,
+          quantityVarianceReason: completeForm.value.varianceReason === '其他'
+            ? completeForm.value.otherVarianceReason.trim()
+            : completeForm.value.varianceReason,
+          rawMaterialConsumptions: buildRawConsumptionPayload(),
+          semiFinishedConsumptions: buildWipConsumptionPayload(),
+          auxiliaryConsumptions: [],
+          laborDeferredReason: completeForm.value.laborDeferredReason || null,
+          laborSegments: completeForm.value.laborSegments.length > 0
+            ? completeForm.value.laborSegments
+            : completeForm.value.laborDeferredReason
+              ? []
+              : [{
+                  workerName: 'PC文员补录',
+                  workType: '生产结单异常补录',
+                  minutes: Number(completeForm.value.workMinutes || 0),
+                  headcount: Number(completeForm.value.workerCount || 1),
+                }],
+        };
+    const response = await post(
+      `/${factoryId.value}/production-plans/${completeRow.value.id}/settle`,
+      payload,
+    );
     if (response.success) {
       ElMessage.success(response.message || '生产结单已提交，下一步请仓库确认入库');
       completeDialogVisible.value = false;
@@ -3932,6 +3966,17 @@ function handleAiFill(params: TableRow) {
               <strong>{{ completeForm.workMinutes }} 分钟</strong>
             </div>
           </div>
+          <div v-if="settlementTerminalOutputs.length > 0" class="settlement-reconciliation-section">
+            <div class="settlement-reconciliation-title">终端产出（按 SKU / 批次 / 单位）</div>
+            <div
+              v-for="(output, index) in settlementTerminalOutputs"
+              :key="`terminal-${output.productTypeId}-${output.batchNumber}-${output.unit}-${index}`"
+              class="settlement-reconciliation-row"
+            >
+              <span>{{ output.productTypeId || '未识别 SKU' }} · {{ output.batchNumber || '未识别批次' }}</span>
+              <strong>{{ output.quantity }} {{ output.unit }}</strong>
+            </div>
+          </div>
           <div class="settlement-reconciliation-section">
             <div class="settlement-reconciliation-title">实际原料领用</div>
             <div
@@ -4219,7 +4264,7 @@ function handleAiFill(params: TableRow) {
         </div>
         </template>
         <el-alert
-          v-if="completeSubmitDisabledReason"
+          v-if="!settlementPrefillClean && completeSubmitDisabledReason"
           :title="completeSubmitDisabledReason"
           type="warning"
           show-icon
