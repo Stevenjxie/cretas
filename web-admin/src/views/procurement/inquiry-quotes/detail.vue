@@ -14,6 +14,7 @@ import { ref, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { buildSupplierPricePayload } from './quotePayload';
 import { Refresh } from '@element-plus/icons-vue';
 import {
   getInquiry,
@@ -125,13 +126,11 @@ async function submitAddPrice() {
   }
   addPriceSubmitting.value = true;
   try {
-    const res = await addSupplierPrice(factoryId.value, inquiryId.value, {
-      supplierId: addPriceForm.value.supplierId,
-      unitPrice: addPriceForm.value.unitPrice,
-      taxRate: addPriceForm.value.taxRate || undefined,
-      deliveryDays: addPriceForm.value.deliveryDays || undefined,
-      remark: addPriceForm.value.remark || undefined,
-    });
+    const res = await addSupplierPrice(
+      factoryId.value,
+      inquiryId.value,
+      buildSupplierPricePayload(addPriceForm.value),
+    );
     if (res.success) {
       ElMessage.success(res.message || '报价提交成功');
       addPriceForm.value = { supplierId: '', unitPrice: 0, taxRate: 0, deliveryDays: 0, remark: '' };

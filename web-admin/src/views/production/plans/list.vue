@@ -32,6 +32,7 @@ import {
   type InterimSettleReversalRequest,
   stopProduction,
   resolveWorkflowByOutputs,
+  getProductionDocumentTrace,
 } from '@/api/productionPlan';
 import type {
   ProductionPlanMaterialAdvisory,
@@ -64,6 +65,11 @@ import {
 } from './statusVisuals';
 import ProcessSheet from '../components/processSheet/ProcessSheet.vue';
 import ProductionSummaryDialog from '../components/ProductionSummaryDialog.vue';
+import {
+  documentTraceTarget,
+  traceDocumentLabel,
+} from './documentTrace';
+import type { ProductionDocumentTrace, ProductionTraceDocument } from '@/types/productionDocumentTrace';
 
 const router = useRouter();
 const route = useRoute();
@@ -150,6 +156,44 @@ const materialAdvisoryMap = ref<Record<string, ProductionPlanMaterialAdvisory>>(
 const settlementStatusMap = ref<Record<string, ProductionSettlementStatus>>({});
 // #726 SP12: 批量合并打印工单 — 多选状态
 const selectedPlans = ref<TableRow[]>([]);
+const documentTraceVisible = ref(false);
+const documentTraceLoading = ref(false);
+const documentTrace = ref<ProductionDocumentTrace | null>(null);
+
+async function openDocumentTrace(row: TableRow) {
+  if (!factoryId.value) return;
+  documentTraceVisible.value = true;
+  documentTraceLoading.value = true;
+  documentTrace.value = null;
+  try {
+    const response = await getProductionDocumentTrace(factoryId.value, String(row.id));
+    if (!response.success || !response.data) {
+      throw new Error(response.message || '加载单据追踪失败');
+    }
+    documentTrace.value = response.data;
+  } catch (error) {
+    handleCatchError(error, '加载单据追踪失败');
+  } finally {
+    documentTraceLoading.value = false;
+  }
+}
+
+function openTraceDocument(document: ProductionTraceDocument) {
+  const target = documentTraceTarget(document);
+  if (!target) {
+    ElMessage.info(`${traceDocumentLabel(document.documentType)}已记录在当前计划中，无独立详情页`);
+    return;
+  }
+  documentTraceVisible.value = false;
+  void router.push(target);
+}
+
+function traceDirectionLabel(direction?: string) {
+  if (direction === 'UPSTREAM') return '上游来源';
+  if (direction === 'EXECUTION') return '生产执行';
+  if (direction === 'DOWNSTREAM') return '结算与出库';
+  return '关联单据';
+}
 function handleSelectionChange(rows: TableRow[]) {
   selectedPlans.value = rows;
 }
@@ -1803,7 +1847,7 @@ async function submitComplete() {
             : completeForm.value.varianceReason,
           rawMaterialConsumptions: buildRawConsumptionPayload(),
           semiFinishedConsumptions: buildWipConsumptionPayload(),
-          auxiliaryConsumptions: [],
+          auxiliaryConsumptions: [] as Array<Record<string, unknown>>,
           laborDeferredReason: completeForm.value.laborDeferredReason || null,
           laborSegments: completeForm.value.laborSegments.length > 0
             ? completeForm.value.laborSegments
@@ -3218,9 +3262,10 @@ function handleAiFill(params: TableRow) {
           </template>
         </el-table-column>
         <el-table-column prop="createdAt" label="创建时间" width="180" :formatter="formatDateTimeCell" />
-        <el-table-column label="操作" width="280" fixed="right" align="center">
+        <el-table-column label="操作" width="340" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="handleViewPlan(row)">查看</el-button>
+            <el-button type="primary" link size="small" @click="openDocumentTrace(row)">单据追踪</el-button>
             <!-- 非存货生产结单 (原逻辑不变) -->
             <el-button
               v-if="canWrite && isUnfinishedStatus(row.status) && row.sourceType !== 'SAFETY_STOCK'"
@@ -3388,6 +3433,50 @@ function handleAiFill(params: TableRow) {
         />
       </div>
     </el-card>
+
+    <el-drawer v-model="documentTraceVisible" title="生产计划单据追踪" size="620px">
+      <div v-loading="documentTraceLoading" class="document-trace">
+        <template v-if="documentTrace">
+          <el-descriptions :column="2" border style="margin-bottom: 16px">
+            <el-descriptions-item label="生产计划">{{ documentTrace.planNumber }}</el-descriptions-item>
+            <el-descriptions-item label="状态">{{ documentTrace.planStatus || '-' }}</el-descriptions-item>
+          </el-descriptions>
+          <el-alert
+            v-for="missing in documentTrace.missingLinks"
+            :key="missing"
+            :title="missing"
+            type="warning"
+            :closable="false"
+            show-icon
+            style="margin-bottom: 10px"
+          />
+          <el-empty v-if="documentTrace.documents.length === 0" description="当前计划暂无已关联单据" />
+          <el-timeline v-else>
+            <el-timeline-item
+              v-for="document in documentTrace.documents"
+              :key="`${document.documentType}-${document.documentId}`"
+              :timestamp="document.occurredAt || undefined"
+              placement="top"
+            >
+              <el-card shadow="never" class="trace-document-card">
+                <div class="trace-document-header">
+                  <div>
+                    <el-tag size="small" effect="plain">{{ traceDirectionLabel(document.direction) }}</el-tag>
+                    <strong>{{ traceDocumentLabel(document.documentType) }}</strong>
+                  </div>
+                  <el-button type="primary" link @click="openTraceDocument(document)">前往单据</el-button>
+                </div>
+                <div class="trace-document-number">{{ document.documentNumber || document.documentId }}</div>
+                <div class="trace-document-meta">
+                  <span>{{ document.relation || '-' }}</span>
+                  <el-tag v-if="document.status" size="small" type="info">{{ document.status }}</el-tag>
+                </div>
+              </el-card>
+            </el-timeline-item>
+          </el-timeline>
+        </template>
+      </div>
+    </el-drawer>
 
     <!-- 查看计划详情 -->
     <el-dialog v-model="viewDialogVisible" title="计划详情" width="680px" destroy-on-close>
@@ -5272,6 +5361,40 @@ function handleAiFill(params: TableRow) {
   strong {
     color: var(--color-danger, #f56c6c);
   }
+}
+
+.document-trace {
+  min-height: 180px;
+}
+
+.trace-document-card :deep(.el-card__body) {
+  padding: 12px 14px;
+}
+
+.trace-document-header,
+.trace-document-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trace-document-header > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.trace-document-number {
+  margin: 10px 0 6px;
+  color: var(--text-color-primary, #303133);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.trace-document-meta {
+  color: var(--text-color-secondary, #909399);
+  font-size: 12px;
 }
 
 @media (max-width: 760px) {

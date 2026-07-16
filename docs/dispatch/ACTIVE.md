@@ -8,7 +8,8 @@
 
 | ID | Base SHA | Scope 锁 | Owner | Mode | Worktree/PR | Status | Blocker | Next action |
 |---|---|---|---|---|---|---|---|---|
-| - | - | - | - | - | - | - | - | 当前无在飞任务 |
+| ORDINARY-ASSURE-20260716 | 8fcbbde98af4edbec55b064da5d24f651c6ca201 | `backend/java/cretas-api` 单据追踪与普通项缺口、`web-admin` 单据追踪/普通项缺口、目标测试、`docs/dispatch/ACTIVE.md` | Codex `/root` | code | `C:\Users\Steve\cretas-ordinary-assurance` / 待建 PR | in-progress | 无 | 冻结9条普通项验收矩阵，补齐单据追踪及审计发现的遗漏 |
+| ORDINARY-AUDIT-20260716 | 8fcbbde98af4edbec55b064da5d24f651c6ca201 | 只读：Google Sheet普通项1-8、当前main测试/生产只读行为 | `/root/verify_material` | audit | 无代码 worktree | claimed | 无 | 按实现/测试/生产证据逐条给出pass、gap和同因扫描 |
 
 ## 阻塞项
 
