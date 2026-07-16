@@ -66,6 +66,9 @@ uvicorn main:app --port 8083     # 启动服务
 
 ### 部署到服务器
 ```bash
+# 在已审查、干净的源码 worktree 中：目标测试与最终 release JAR 只编译一次并写可信 manifest
+./scripts/deploy/release-jar-manifest.sh build --tests '<本次目标测试>'
+
 # 默认：本地可信缓存或本次唯一一次 clean package → SSH 直传 → 蓝绿切换
 # GitHub Actions/Artifact 不在日常发布关键路径，仅保留手动独立审计或显式制品备用。
 ./scripts/deploy/deploy-backend.sh
@@ -252,8 +255,8 @@ frontend/CretasFoodTrace/src/
 3. **问题前移** - SKU、Workflow、报工单位或历史快照改动，合并前必须覆盖生产形态数据，包括旧 `g/box/case`、中文基本单位和多包装规格。
 4. **生产验收责任** - Codex 常规发布默认完成服务级验收：真实 upstream、systemd/端口、直连健康、网关 HTTP，以及 Web 四方哈希。完整线上业务验收与 F006 UI E2E 由用户/QA 执行；只有用户明确要求时 Codex 才运行，并且业务写请求必须为 0。脚本/选择器失败与产品失败分开记录；共享前置条件未变化时只重跑失败场景，不机械重跑全套。
 5. **全量 CI 分层** - 改动相关目标测试和必需门禁必须通过；已确认的全量测试基线噪声应单独治理，不得用重复本地全量构建代替，也不得隐瞒其状态。
-6. **部署快速失败与制品复用** - Java 日常部署先检查 manifest-backed 后端 tree cache；Java 未变时允许 cache 命中或 no-op。GitHub Artifact 只在已经存在时作为手动备用，并且必须通过与本地缓存相同的 manifest、后端 tree、SHA-256 和 JAR 完整性校验；禁止触发后等待远端制品。缓存/Artifact 缺失或校验失败时只回退一次本地 `mvn clean package -Dtest=<tests>`，不得重复构建。相同制品 no-op 仍必须读取真实 upstream 并验证 active systemd 与健康；真正切流时 5×6 秒观察和自动回滚不得省略。idle 槽连续自动重启达到阈值时应立即保留旧 upstream、输出有限诊断日志并终止，不得盲等完整健康超时。
-7. **Maven 单生命周期** - release gate 所需目标测试、编译和最终 JAR 必须在同一干净、已审查源码 worktree 内由同一条 `mvn clean package -Dtest=<tests>` 完成；该命令成功后才可为本次 JAR 写入可信 manifest。squash merge 后必须改在 clean exact `origin/main` release worktree 校验 build commit 与前后 backend tree，再决定复用或回退构建。禁止用旧 `target/`、mtime 或先前分开的测试命令证明最终 JAR 已测试；protobuf 的 staleness 检查仍是构建路径的必要条件，除非有等价性能回归证据不得移除。
+6. **部署快速失败与制品复用** - Java 日常部署先检查 manifest-backed 后端 tree cache；Java 未变时允许 cache 命中或 no-op。GitHub Artifact 只在已经存在时作为显式手动备用，必须通过 exact-commit 清单、SHA-256 与部署阶段 JAR 完整性校验；禁止触发后等待远端制品。缓存/Artifact 缺失或校验失败时只回退一次现有本地 `clean package`，不得再次 retry package。相同制品 no-op 仍必须读取真实 upstream 并验证 active systemd 与健康；真正切流时 5×6 秒观察和自动回滚不得省略。idle 槽连续自动重启达到阈值时应立即保留旧 upstream、输出有限诊断日志并终止，不得盲等完整健康超时。
+7. **Maven 单生命周期** - release gate 所需目标测试、编译和最终 JAR 必须在同一干净、已审查源码 worktree 内通过 `./scripts/deploy/release-jar-manifest.sh build --tests '<tests>'` 完成；该入口只执行一条 `mvn clean package -Dtest=<tests>`，成功后才写可信 manifest。squash merge 后必须改在 clean exact `origin/main` release worktree 校验 build commit 与前后 backend tree，再决定复用或单次安全回退。禁止用旧 `target/`、mtime 或先前分开的测试命令证明最终 JAR 已测试；protobuf 的 staleness 检查仍是构建路径的必要条件，除非有等价性能回归证据不得移除。
 
 ### UX Flow Gate（低技术素养用户屏幕）
 
