@@ -504,7 +504,8 @@ export interface BomImportRow {
   materialName?: string;
   materialTypeId?: string;
   materialCategory?: string;
-  standardQuantity: number;
+  /** RAW relationship rows may omit quantity; non-RAW rows require a positive value. */
+  standardQuantity: number | null;
   yieldRate?: number | null;
   unit?: string;
 }

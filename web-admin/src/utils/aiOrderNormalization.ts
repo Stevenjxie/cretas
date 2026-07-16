@@ -33,10 +33,31 @@ export function normalizeAiOrderDates(
   const normalized = { ...params }
   const today = formatLocalDate(now, timeZone)
   const tomorrow = formatLocalDate(now, timeZone, 1)
-  if (/(明日|明天|次日|tomorrow)/i.test(userText)) {
+  const relativeTomorrow = /(明日|明天|次日|tomorrow)/i.test(userText)
+  if (relativeTomorrow) {
     normalized.orderDate = today
     if (entityType === 'PURCHASE_ORDER') normalized.expectedDeliveryDate = tomorrow
     if (entityType === 'SALES_ORDER') normalized.requiredDeliveryDate = tomorrow
+    return normalized
+  }
+
+  // An LLM can occasionally copy a stale training/example year into a new order.
+  // Preserve dates explicitly stated by the user, but never silently prefill an
+  // unrequested historical date for a normal new-order flow.
+  const explicitDateInUserText = /\b20\d{2}(?:[-/.年]\d{1,2})?(?:[-/.月]\d{1,2}日?)?/i.test(userText)
+  if (!explicitDateInUserText) {
+    const normalizePastDate = (value: unknown): unknown =>
+      typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && value < today
+        ? today
+        : value
+
+    normalized.orderDate = normalizePastDate(normalized.orderDate)
+    if (entityType === 'PURCHASE_ORDER') {
+      normalized.expectedDeliveryDate = normalizePastDate(normalized.expectedDeliveryDate)
+    }
+    if (entityType === 'SALES_ORDER') {
+      normalized.requiredDeliveryDate = normalizePastDate(normalized.requiredDeliveryDate)
+    }
   }
   return normalized
 }

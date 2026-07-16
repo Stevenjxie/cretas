@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
@@ -136,6 +137,39 @@ class UnitGovernanceAuditServiceTest {
                 .thenReturn(List.of(workflow));
         when(conversionRepository.findByFactoryIdOrderByProductTypeIdAscCreatedAtAsc("F006"))
                 .thenReturn(List.of(conversion));
+
+        assertThat(service.scan("F006")).isEmpty();
+    }
+
+    @Test
+    void acceptsIntrinsicMassConversionWithoutSkuConversionReference() throws Exception {
+        ProductType product = product("P1", "g", null);
+        ProductProcessWorkflow workflow = workflow(1, """
+                [
+                  {"id":"material:finished","kind":"FINISHED_GOOD","data":{"skuId":"P1","baseUnit":"kg"}},
+                  {"id":"process:mix","kind":"PROCESS","data":{"inputUnit":"kg","ports":[
+                    {"id":"in","direction":"INPUT","ordinal":0,"materialNodeId":"material:finished","unit":"kg"}
+                  ]}}
+                ]
+                """);
+
+        when(productTypeRepository.findByFactoryId("F006")).thenReturn(List.of(product));
+        when(rawMaterialTypeRepository.findByFactoryId("F006")).thenReturn(List.of());
+        when(workflowRepository.findByFactoryIdOrderByProductTypeIdAscDefinitionVersionDesc("F006"))
+                .thenReturn(List.of(workflow));
+        when(conversionRepository.findByFactoryIdOrderByProductTypeIdAscCreatedAtAsc("F006"))
+                .thenReturn(List.of());
+        when(unitContractService.convert(any(UnitConversionContext.class))).thenReturn(
+                new UnitConversionResult(
+                        UnitConversionStatus.CONVERTED,
+                        BigDecimal.ONE,
+                        "kg",
+                        "g",
+                        List.of("kg", "g"),
+                        null,
+                        null,
+                        null,
+                        List.of(new UnitConversionStep("kg", "g", new BigDecimal("1000"), null, null))));
 
         assertThat(service.scan("F006")).isEmpty();
     }

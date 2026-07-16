@@ -11,8 +11,11 @@ import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.unit.ProductUnitConversionRepository;
 import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitConversionContext;
+import com.cretas.aims.service.unit.UnitConversionResult;
 import com.cretas.aims.service.unit.UnitGovernanceAuditService;
 import com.cretas.aims.service.unit.UnitNormalizationResult;
+import com.cretas.aims.service.unit.UnitUsageScene;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
@@ -138,7 +141,7 @@ public class UnitGovernanceAuditServiceImpl implements UnitGovernanceAuditServic
         for (ProductProcessWorkflowDTO.Node node : nodes) {
             if (!"PROCESS".equals(node.getKind())) {
                 materials.put(node.getId(), node);
-                scanMaterial(factoryId, workflow, node, productsById, rawById, findings);
+                scanMaterial(factoryId, workflow, node, productsById, rawById, now, findings);
             }
         }
         for (ProductProcessWorkflowDTO.Node node : nodes) {
@@ -155,6 +158,7 @@ public class UnitGovernanceAuditServiceImpl implements UnitGovernanceAuditServic
             ProductProcessWorkflowDTO.Node material,
             Map<String, ProductType> productsById,
             Map<String, RawMaterialType> rawById,
+            LocalDateTime now,
             List<UnitGovernanceConflictDTO> findings) {
         String skuId = text(data(material).get("skuId"));
         String currentRaw = text(data(material).get("baseUnit"));
@@ -168,7 +172,8 @@ public class UnitGovernanceAuditServiceImpl implements UnitGovernanceAuditServic
             return;
         }
         String expected = canonical(factoryId, expectedRaw);
-        if (current != null && expected != null && !current.equals(expected)) {
+        if (current != null && expected != null && !current.equals(expected)
+                && !isIntrinsicConversion(factoryId, skuId, current, expected, now)) {
             findings.add(finding(factoryId, workflow.getProductTypeId(), workflow.getDefinitionVersion(),
                     material.getId(), null, current, expected, "MATERIAL_SKU_UNIT_MISMATCH"));
         }
@@ -244,6 +249,8 @@ public class UnitGovernanceAuditServiceImpl implements UnitGovernanceAuditServic
         String refId = text(port.get("conversionRefId"));
         Long refVersion = exactLong(port.get("conversionVersion"));
         if (current.equals(expected) && blank(refId) && refVersion == null) return;
+        if (blank(refId) && refVersion == null
+                && isIntrinsicConversion(factoryId, skuId, current, expected, now)) return;
         if (blank(refId) || refVersion == null) {
             findings.add(finding(factoryId, workflow.getProductTypeId(), workflow.getDefinitionVersion(),
                     process.getId(), portId, current, expected, "PORT_CONVERSION_REQUIRED"));
@@ -254,6 +261,27 @@ public class UnitGovernanceAuditServiceImpl implements UnitGovernanceAuditServic
             findings.add(finding(factoryId, workflow.getProductTypeId(), workflow.getDefinitionVersion(),
                     process.getId(), portId, current, expected, "PORT_CONVERSION_STALE"));
         }
+    }
+
+    private boolean isIntrinsicConversion(
+            String factoryId,
+            String skuId,
+            String fromUnit,
+            String toUnit,
+            LocalDateTime at) {
+        UnitConversionResult result = unitContractService.convert(new UnitConversionContext(
+                factoryId,
+                skuId,
+                fromUnit,
+                toUnit,
+                at,
+                UnitUsageScene.PRODUCTION,
+                null,
+                null));
+        return result != null
+                && result.succeeded()
+                && result.conversionRefId() == null
+                && result.steps().stream().allMatch(step -> step.conversionRefId() == null);
     }
 
     private boolean validConversion(
