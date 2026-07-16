@@ -293,16 +293,12 @@
           <el-input v-model="skuForm.name" placeholder="例：红烧熟制后猪蹄" />
         </el-form-item>
         <el-form-item label="基本单位" required>
-          <el-select
+          <UnitSelect
             v-model="skuForm.unit"
-            filterable
-            allow-create
-            default-first-option
-            placeholder="选择或输入基本单位"
-            style="width: 100%"
-          >
-            <el-option v-for="unit in onsiteSkuUnitOptions" :key="unit" :label="unit" :value="unit" />
-          </el-select>
+            :factory-id="factoryId"
+            placeholder="选择或搜索基本单位"
+            :clearable="false"
+          />
         </el-form-item>
       </el-form>
       <el-alert
@@ -328,9 +324,12 @@
           <el-input v-model="quickEditForm.name" maxlength="100" />
         </el-form-item>
         <el-form-item label="基本单位" required>
-          <el-select v-model="quickEditForm.unit" filterable allow-create default-first-option style="width: 100%">
-            <el-option v-for="unit in quickEditUnitOptions" :key="unit" :label="unit" :value="unit" />
-          </el-select>
+          <UnitSelect
+            v-model="quickEditForm.unit"
+            :factory-id="factoryId"
+            placeholder="选择或搜索基本单位"
+            :clearable="false"
+          />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -395,6 +394,7 @@ import {
   type WorkProcessItem,
 } from '@/api/processProduction';
 import WorkProcessAIChatPanel from '@/views/system/components/WorkProcessAIChatPanel.vue';
+import UnitSelect from '@/components/common/UnitSelect.vue';
 import WorkflowMaterialNode from './WorkflowMaterialNode.vue';
 import WorkflowProcessNode from './WorkflowProcessNode.vue';
 import { classifyOutputSkuCategory, matchOutputSkuByName } from './outputSkuClassification';
@@ -616,18 +616,12 @@ const filteredWorkProcessOptions = workProcessFilter.filtered;
 const skuDialogVisible = ref(false);
 const creatingSku = ref(false);
 const skuBindingTarget = ref<SkuBindingTarget | null>(null);
-const onsiteSkuUnitOptions = ['kg', 'g', '只', '件', '个', '盒', '袋', '瓶', '箱', '份'];
 const skuForm = ref({ name: '', unit: 'kg' });
 const quickEditVisible = ref(false);
 const quickEditSaving = ref(false);
 const quickEditNodeId = ref('');
 const quickEditSkuId = ref('');
 const quickEditForm = ref({ name: '', unit: 'kg' });
-const quickEditUnitOptions = computed(() => Array.from(new Set([
-  ...onsiteSkuUnitOptions,
-  ...workProcessOptions.value.flatMap((item) => [item.unit, item.outputUnit || '']),
-  ...skuOptions.value.map((item) => item.unit || ''),
-].filter(Boolean))));
 let lastGraphIdSeed = 0;
 let catalogGeneration = 0;
 let createSkuGeneration = 0;

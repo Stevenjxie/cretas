@@ -25,7 +25,7 @@
  *   3. 包装层级内联换算行 (SKU-style):
  *      「1 [二级单位] = [换算数] [一级单位]」+ live preview tag
  *      一级单位 = 只读 echo 主单位 (single source of truth)
- *   4. 单位下拉: filterable + allow-create (复用 /system-config/units)
+ *   4. 单位下拉统一使用 UnitSelect，支持搜索、查重和现场创建
  *   foldable #1: 批次列表单位列 → 修 materials/list.vue 显示 quantityUnit 而非 unit
  */
 import { ref, computed, onMounted, watch } from 'vue';
@@ -39,6 +39,7 @@ import { formatAmount } from '@/utils/tableFormatters';
 import { bigCategoryOf } from '@/utils/materialCategory';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
+import UnitSelect from '@/components/common/UnitSelect.vue';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import type { TableRow } from '@/types/api';
 
@@ -67,11 +68,9 @@ const selectedSegmentPrefix = computed(() =>
   filterSegmentL3.value || filterSegmentL2.value || filterSegmentL1.value,
 );
 
-// 储存类型和单位仍读取系统字典；类别统一读取下方 16 位编码 L1 类族。
+// 储存类型读取系统字典；单位由 UnitSelect 统一加载；类别读取下方 16 位编码 L1 类族。
 interface DictItem { enumCode: string; enumLabel: string; sortOrder: number }
-interface UnitItem { unitCode: string; unitName: string; unitSymbol?: string; sortOrder: number }
 const storageTypeOptions = ref<DictItem[]>([]);
-const unitOptions = ref<UnitItem[]>([]);
 
 onMounted(async () => {
   const keyword = route.query.keyword;
@@ -85,12 +84,8 @@ onMounted(async () => {
 async function loadDictionaries() {
   if (!factoryId.value) return;
   try {
-    const [storageRes, unitRes] = await Promise.all([
-      get<DictItem[]>(`/${factoryId.value}/system-config/enums/MATERIAL_STORAGE_TYPE`),
-      get<UnitItem[]>(`/${factoryId.value}/system-config/units`),
-    ]);
+    const storageRes = await get<DictItem[]>(`/${factoryId.value}/system-config/enums/MATERIAL_STORAGE_TYPE`);
     storageTypeOptions.value = (storageRes.data || []).slice().sort((a, b) => a.sortOrder - b.sortOrder);
-    unitOptions.value = (unitRes.data || []).slice().sort((a, b) => a.sortOrder - b.sortOrder);
   } catch (e) {
     console.warn('字典加载失败, 用空选项', e);
   }
@@ -98,22 +93,6 @@ async function loadDictionaries() {
 
 function mergeHistoricStorage(current?: string): { value: string; label: string }[] {
   const opts = storageTypeOptions.value.map((c) => ({ value: c.enumLabel, label: c.enumLabel }));
-  if (current && current.trim() !== '' && !opts.find((o) => o.value === current)) {
-    return [{ value: current, label: `${current} (历史)` }, ...opts];
-  }
-  return opts;
-}
-
-// T159-A: 单位选项统一用 /system-config/units + allow-create (复用 SKU unitSelectOptions 模式)
-const unitSelectOptions = computed(() => {
-  return unitOptions.value.map((u) => {
-    const sym = u.unitSymbol || u.unitCode;
-    return { value: sym, label: `${u.unitName} (${sym})` };
-  });
-});
-
-function mergeHistoricUnit(current?: string): { value: string; label: string }[] {
-  const opts = unitSelectOptions.value;
   if (current && current.trim() !== '' && !opts.find((o) => o.value === current)) {
     return [{ value: current, label: `${current} (历史)` }, ...opts];
   }
@@ -1098,23 +1077,14 @@ function handleSizeChange(size: number) {
           <div class="field-hint">与 16 位物料编码字典的 L1 类族保持一致</div>
         </el-form-item>
 
-        <!-- T159-A: 单位 — filterable + allow-create, 复用 /system-config/units -->
+        <!-- 单位统一入口：搜索不到时可现场创建，重复时直接选择已有单位 -->
         <el-form-item label="入库计量单位" required>
-          <el-select
+          <UnitSelect
             v-model="form.unit"
-            placeholder="请选择或输入单位"
-            style="width: 100%"
-            filterable
-            allow-create
-            default-first-option
-          >
-            <el-option
-              v-for="opt in mergeHistoricUnit(form.unit)"
-              :key="opt.value"
-              :label="opt.label"
-              :value="opt.value"
-            />
-          </el-select>
+            :factory-id="factoryId"
+            placeholder="请选择或搜索入库计量单位"
+            :clearable="false"
+          />
           <div class="field-hint">新建默认 kg（公斤），可按实际入库计量单位修改</div>
           <div v-if="unitManuallyEdited && !editingId" class="field-hint field-hint--manual">
             已手动设置，自动填充将不再覆盖此字段
@@ -1349,22 +1319,12 @@ function handleSizeChange(size: number) {
           <el-form-item label="二级换算">
           <div class="packaging-conversion-row">
             <span class="conversion-label">1</span>
-            <el-select
+            <UnitSelect
               v-model="packaging.level2Unit"
-              placeholder="二级单位 (箱)"
+              :factory-id="factoryId"
+              placeholder="二级单位（如箱）"
               style="width: 155px"
-              filterable
-              allow-create
-              default-first-option
-              clearable
-            >
-              <el-option
-                v-for="opt in mergeHistoricUnit(packaging.level2Unit)"
-                :key="opt.value"
-                :label="opt.label"
-                :value="opt.value"
-              />
-            </el-select>
+            />
             <span class="conversion-equals">=</span>
             <el-input-number
               v-model="packaging.level1PerLevel2"
@@ -1391,23 +1351,13 @@ function handleSizeChange(size: number) {
           <el-form-item label="三级换算">
           <div class="packaging-conversion-row">
             <span class="conversion-label">1</span>
-            <el-select
+            <UnitSelect
               v-model="packaging.level3Unit"
-              placeholder="三级单位 (柜)"
+              :factory-id="factoryId"
+              placeholder="三级单位（如柜）"
               style="width: 155px"
               :disabled="!packaging.level2Unit"
-              filterable
-              allow-create
-              default-first-option
-              clearable
-            >
-              <el-option
-                v-for="opt in mergeHistoricUnit(packaging.level3Unit)"
-                :key="opt.value"
-                :label="opt.label"
-                :value="opt.value"
-              />
-            </el-select>
+            />
             <span class="conversion-equals">=</span>
             <el-input-number
               v-model="packaging.level2PerLevel3"
