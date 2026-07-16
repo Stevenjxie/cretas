@@ -18,7 +18,7 @@
 // legacy (workflowContext-less) rows byte-identical to before.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import ElementPlus from 'element-plus';
+import ElementPlus, { ElMessageBox } from 'element-plus';
 
 const getSemiFinishedInventory = vi.fn();
 const getFinishedGoodsInventory = vi.fn();
@@ -145,6 +145,17 @@ async function selectUpstreamSource(wrapper: ReturnType<typeof mountChaoshuiTabl
 }
 
 async function setNumberField(wrapper: ReturnType<typeof mountChaoshuiTable>, labelText: string, value: number) {
+  if (labelText.startsWith('产出(')) {
+    const workflowOutput = wrapper.find('[data-testid="workflow-output-line"]');
+    if (workflowOutput.exists()) {
+      const outputInput = workflowOutput.find('[data-testid="output-quantity"]')
+        .findComponent({ name: 'ElInputNumber' });
+      if (!outputInput.exists()) throw new Error('Workflow 产出行内找不到产出数量输入框');
+      outputInput.vm.$emit('update:model-value', value);
+      await wrapper.vm.$nextTick();
+      return;
+    }
+  }
   const field = wrapper.findAll('.sp-card-field').find((f) => f.text().includes(labelText));
   if (!field) throw new Error(`找不到字段: ${labelText}`);
   const input = field.findComponent({ name: 'ElInputNumber' });
@@ -255,6 +266,7 @@ describe('ProcessDataTable.vue buildRequest sources finished/unit from the workf
       success: true,
       data: { clientRowId: 'CR-1', batchNumber: 'WIP-NEW-1', materialized: true, warnings: [] },
     });
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
   });
 
   it('(1) workflow output finished=true, unit="盒": the built request has finished:true, unit:"盒" even though processCode ("chaoshui") is a non-qidiao archetype', async () => {
