@@ -23,7 +23,7 @@ describe('BOM order payload builders', () => {
       orderDate: '2026-07-16',
       expectedDeliveryDate: '2026-07-17',
     })
-    expect(payload.items[0]).toMatchObject({ materialTypeId: 'MAT-1' })
+    expect(payload.items[0]).toMatchObject({ materialTypeId: 'MAT-1', taxRate: 9 })
     expect(payload.items[0]).not.toHaveProperty('materialId')
     expect(payload).not.toHaveProperty('expectedDate')
   })
