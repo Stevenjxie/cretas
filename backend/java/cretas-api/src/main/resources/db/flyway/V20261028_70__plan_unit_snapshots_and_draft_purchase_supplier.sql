@@ -24,18 +24,28 @@ ALTER TABLE purchase_orders
 COMMENT ON COLUMN purchase_orders.supplier_id IS
     'Nullable only while status is DRAFT; application submission validation requires a supplier';
 
--- Material requisition display snapshots remove per-row production-plan lookups and survive plan archival.
-ALTER TABLE factory_material_requisitions
-    ADD COLUMN IF NOT EXISTS production_plan_number VARCHAR(64),
-    ADD COLUMN IF NOT EXISTS product_name VARCHAR(191);
+-- Material requisitions are Hibernate-owned on a fresh database, so Flyway runs
+-- before the table exists. Existing databases still need the additive columns
+-- and backfill; Hibernate will create both columns from the entity on fresh DBs.
+DO $$
+BEGIN
+    IF to_regclass('public.factory_material_requisitions') IS NULL THEN
+        RAISE NOTICE 'V20261028_70 skipped requisition snapshots: factory_material_requisitions not present before Hibernate DDL';
+        RETURN;
+    END IF;
 
-UPDATE factory_material_requisitions requisition
-SET production_plan_number = plan.plan_number,
-    product_name = product.name
-FROM production_plans plan
-LEFT JOIN product_types product ON product.id = plan.product_type_id
-WHERE requisition.production_plan_id = plan.id
-  AND (requisition.production_plan_number IS NULL OR requisition.product_name IS NULL);
+    ALTER TABLE factory_material_requisitions
+        ADD COLUMN IF NOT EXISTS production_plan_number VARCHAR(64),
+        ADD COLUMN IF NOT EXISTS product_name VARCHAR(191);
+
+    UPDATE factory_material_requisitions requisition
+    SET production_plan_number = plan.plan_number,
+        product_name = product.name
+    FROM production_plans plan
+    LEFT JOIN product_types product ON product.id = plan.product_type_id
+    WHERE requisition.production_plan_id = plan.id
+      AND (requisition.production_plan_number IS NULL OR requisition.product_name IS NULL);
+END $$;
 
 ALTER TABLE raw_material_types
     ADD COLUMN IF NOT EXISTS tax_treatment VARCHAR(16) NOT NULL DEFAULT 'TAXABLE',
