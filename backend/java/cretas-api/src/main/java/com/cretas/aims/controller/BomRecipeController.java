@@ -4,6 +4,8 @@ import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.bom.BomRecipeMigrationReport;
+import com.cretas.aims.dto.bom.BomCopyCandidateDTO;
+import com.cretas.aims.dto.bom.BomCopyToDraftRequest;
 import com.cretas.aims.dto.bom.BomSeasoningResponse;
 import com.cretas.aims.dto.bom.BomSeasoningSaveRequest;
 import com.cretas.aims.dto.bom.BomSeasoningWorkspaceResponse;
@@ -17,6 +19,7 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.service.bom.BomRecipeMigrationService;
+import com.cretas.aims.service.bom.BomCopyService;
 import com.cretas.aims.service.bom.BomRecipeService;
 import com.cretas.aims.service.bom.BomSeasoningWorkspaceService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -55,6 +58,7 @@ import java.util.Optional;
 public class BomRecipeController {
 
     private final BomRecipeService recipeService;
+    private final BomCopyService bomCopyService;
     private final BomRecipeMigrationService migrationService;
     private final BomSeasoningWorkspaceService seasoningWorkspaceService;
 
@@ -96,6 +100,23 @@ public class BomRecipeController {
             @PathVariable String factoryId,
             @PathVariable String productTypeId) {
         return ApiResponse.success(recipeService.getRecipeVersions(factoryId, productTypeId));
+    }
+
+    @GetMapping("/copy-candidates")
+    @Operation(summary = "查询同源且共享工序的当前生效 BOM 复制候选")
+    public ApiResponse<List<BomCopyCandidateDTO>> getCopyCandidates(
+            @PathVariable String factoryId,
+            @RequestParam String targetProductTypeId) {
+        return ApiResponse.success(bomCopyService.listCandidates(factoryId, targetProductTypeId));
+    }
+
+    @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
+    @PostMapping("/copy-to-draft")
+    @Operation(summary = "逐条复制同源成品 BOM 规则为目标产品可编辑草稿")
+    public ApiResponse<BomRecipe> copyToDraft(
+            @PathVariable String factoryId,
+            @Valid @RequestBody BomCopyToDraftRequest request) {
+        return ApiResponse.success(bomCopyService.copySelectedRulesToDraft(factoryId, request));
     }
 
     // ========== Lifecycle ==========
