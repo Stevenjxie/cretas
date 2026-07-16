@@ -41,6 +41,8 @@ import java.util.stream.Collectors;
 @Service
 public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheService {
 
+    private static final int WARMUP_BATCH_SIZE = 50;
+
     private final AIIntentConfigRepository intentConfigRepository;
     private final SemanticCacheConfigRepository cacheConfigRepository;
     private final EmbeddingClient embeddingClient;
@@ -48,10 +50,7 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
     private final RequestScopedEmbeddingCache requestScopedCache;
 
     // 意图缓存结构: factoryId -> (intentCode -> embedding)
-    private volatile Map<String, Map<String, CachedIntentEmbedding>> intentCache = new ConcurrentHashMap<>();
-
-    // 表达缓存结构: factoryId -> (expressionId -> embedding)
-    private volatile Map<String, Map<String, CachedExpressionEmbedding>> expressionCache = new ConcurrentHashMap<>();
+    private volatile CacheSnapshot cacheSnapshot = CacheSnapshot.empty();
 
     // 统计计数器
     private final AtomicLong cacheHits = new AtomicLong(0);
@@ -96,10 +95,16 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
             }
         }
 
-        List<float[]> vectors = texts.isEmpty() ? List.of() : embeddingClient.encodeBatch(texts);
-        if (vectors.size() != candidates.size()) {
-            throw new IllegalStateException("Embedding batch size mismatch: expected "
-                    + candidates.size() + ", got " + vectors.size());
+        List<float[]> vectors = new ArrayList<>(texts.size());
+        for (int start = 0; start < texts.size(); start += WARMUP_BATCH_SIZE) {
+            int end = Math.min(start + WARMUP_BATCH_SIZE, texts.size());
+            List<String> batch = texts.subList(start, end);
+            List<float[]> batchVectors = embeddingClient.encodeBatch(batch);
+            if (batchVectors.size() != batch.size()) {
+                throw new IllegalStateException("Embedding batch size mismatch: expected "
+                        + batch.size() + ", got " + batchVectors.size());
+            }
+            vectors.addAll(batchVectors);
         }
 
         Map<String, Map<String, CachedIntentEmbedding>> nextIntentCache = new ConcurrentHashMap<>();
@@ -111,25 +116,11 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
         }
 
         Map<String, Map<String, CachedExpressionEmbedding>> nextExpressionCache = buildExpressionCache();
-        intentCache = nextIntentCache;
-        expressionCache = nextExpressionCache;
+        cacheSnapshot = new CacheSnapshot(nextIntentCache, nextExpressionCache);
 
         long duration = System.currentTimeMillis() - startTime;
         log.info("Intent embedding cache initialized atomically: {} intents cached in {}ms",
                 candidates.size(), duration);
-    }
-
-    /**
-     * 初始化表达 embedding 缓存
-     */
-    private void initializeExpressionCache() {
-        log.info("Initializing expression embedding cache...");
-        long startTime = System.currentTimeMillis();
-        Map<String, Map<String, CachedExpressionEmbedding>> next = buildExpressionCache();
-        expressionCache = next;
-        int count = next.values().stream().mapToInt(Map::size).sum();
-        log.info("Expression embedding cache initialized: {} expressions cached in {}ms",
-                count, System.currentTimeMillis() - startTime);
     }
 
     private Map<String, Map<String, CachedExpressionEmbedding>> buildExpressionCache() {
@@ -156,10 +147,10 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
     }
 
     @Override
-    public void refreshFactoryCache(String factoryId) {
+    public synchronized void refreshFactoryCache(String factoryId) {
         log.debug("Refreshing cache for factory: {}", factoryId);
-        intentCache.remove(factoryId);
-        expressionCache.remove(factoryId);
+        intentCache().remove(factoryId);
+        expressionCache().remove(factoryId);
 
         List<AIIntentConfig> intents = intentConfigRepository.findByFactoryIdAndEnabled(factoryId, true);
         for (AIIntentConfig intent : intents) {
@@ -171,14 +162,14 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
     }
 
     @Override
-    public void refreshIntentCache(String factoryId, String intentCode) {
+    public synchronized void refreshIntentCache(String factoryId, String intentCode) {
         intentConfigRepository.findByFactoryIdAndIntentCode(factoryId, intentCode)
             .ifPresent(this::cacheIntent);
     }
 
     @Override
     public Optional<float[]> getIntentEmbedding(String factoryId, String intentCode) {
-        Map<String, CachedIntentEmbedding> factoryCache = intentCache.get(factoryId);
+        Map<String, CachedIntentEmbedding> factoryCache = intentCache().get(factoryId);
         if (factoryCache == null) {
             return Optional.empty();
         }
@@ -210,13 +201,13 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
             Map<String, CachedIntentEmbedding> combinedCache = new HashMap<>();
 
             // 1. 先加载全局意图 (factoryId = null 存储为 "*")
-            Map<String, CachedIntentEmbedding> globalCache = intentCache.get("*");
+            Map<String, CachedIntentEmbedding> globalCache = intentCache().get("*");
             if (globalCache != null) {
                 combinedCache.putAll(globalCache);
             }
 
             // 2. 再加载工厂特定意图 (会覆盖同名全局意图，实现工厂级定制)
-            Map<String, CachedIntentEmbedding> factoryCache = intentCache.get(factoryId);
+            Map<String, CachedIntentEmbedding> factoryCache = intentCache().get(factoryId);
             if (factoryCache != null) {
                 combinedCache.putAll(factoryCache);
             }
@@ -276,9 +267,9 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
     }
 
     @Override
-    public void clearFactoryCache(String factoryId) {
-        intentCache.remove(factoryId);
-        expressionCache.remove(factoryId);
+    public synchronized void clearFactoryCache(String factoryId) {
+        intentCache().remove(factoryId);
+        expressionCache().remove(factoryId);
         log.debug("Cleared cache for factory: {}", factoryId);
     }
 
@@ -287,13 +278,13 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
         int totalIntents = 0;
         int cachedIntents = 0;
 
-        for (Map<String, CachedIntentEmbedding> factoryCache : intentCache.values()) {
+        for (Map<String, CachedIntentEmbedding> factoryCache : intentCache().values()) {
             cachedIntents += factoryCache.size();
         }
 
         // 添加表达缓存统计
         int cachedExpressions = 0;
-        for (Map<String, CachedExpressionEmbedding> factoryExprCache : expressionCache.values()) {
+        for (Map<String, CachedExpressionEmbedding> factoryExprCache : expressionCache().values()) {
             cachedExpressions += factoryExprCache.size();
         }
 
@@ -384,7 +375,7 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
     }
 
     @Override
-    public void cacheExpression(LearnedExpression expression) {
+    public synchronized void cacheExpression(LearnedExpression expression) {
         if (expression == null || !expression.hasEmbedding()) {
             return;
         }
@@ -392,7 +383,7 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
     }
 
     @Override
-    public void cacheExpressions(List<LearnedExpression> expressions) {
+    public synchronized void cacheExpressions(List<LearnedExpression> expressions) {
         if (expressions == null || expressions.isEmpty()) {
             return;
         }
@@ -404,9 +395,9 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
     }
 
     @Override
-    public void refreshExpressionCache(String factoryId) {
+    public synchronized void refreshExpressionCache(String factoryId) {
         log.debug("Refreshing expression cache for factory: {}", factoryId);
-        expressionCache.remove(factoryId);
+        expressionCache().remove(factoryId);
 
         List<LearnedExpression> expressions = expressionRepository.findByFactoryIdAndIsActiveTrue(factoryId);
         for (LearnedExpression expr : expressions) {
@@ -417,9 +408,9 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
     }
 
     @Override
-    public void removeExpressionCache(String expressionId) {
+    public synchronized void removeExpressionCache(String expressionId) {
         // 遍历所有工厂缓存，移除指定表达
-        for (Map<String, CachedExpressionEmbedding> factoryCache : expressionCache.values()) {
+        for (Map<String, CachedExpressionEmbedding> factoryCache : expressionCache().values()) {
             factoryCache.remove(expressionId);
         }
         log.trace("Removed expression from cache: {}", expressionId);
@@ -446,7 +437,7 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
         try {
             float[] embedding = embeddingClient.encode(keywordText);
 
-            intentCache.computeIfAbsent(factoryId, k -> new ConcurrentHashMap<>())
+            intentCache().computeIfAbsent(factoryId, k -> new ConcurrentHashMap<>())
                 .put(intent.getIntentCode(), new CachedIntentEmbedding(intent, embedding));
 
             log.trace("Cached intent: {} / {}", factoryId, intent.getIntentCode());
@@ -471,7 +462,7 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
             return;
         }
 
-        expressionCache.computeIfAbsent(factoryId, k -> new ConcurrentHashMap<>())
+        expressionCache().computeIfAbsent(factoryId, k -> new ConcurrentHashMap<>())
             .put(expression.getId(), new CachedExpressionEmbedding(
                 expression.getId(),
                 expression.getIntentCode(),
@@ -491,13 +482,13 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
         Map<String, CachedIntentEmbedding> combined = new HashMap<>();
 
         // 1. 先加载全局意图
-        Map<String, CachedIntentEmbedding> globalCache = intentCache.get("*");
+        Map<String, CachedIntentEmbedding> globalCache = intentCache().get("*");
         if (globalCache != null) {
             combined.putAll(globalCache);
         }
 
         // 2. 再加载工厂特定意图 (会覆盖同名全局意图)
-        Map<String, CachedIntentEmbedding> factoryCache = intentCache.get(factoryId);
+        Map<String, CachedIntentEmbedding> factoryCache = intentCache().get(factoryId);
         if (factoryCache != null) {
             combined.putAll(factoryCache);
         }
@@ -512,13 +503,13 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
         Map<String, CachedExpressionEmbedding> combined = new HashMap<>();
 
         // 1. 先加载全局表达
-        Map<String, CachedExpressionEmbedding> globalCache = expressionCache.get("*");
+        Map<String, CachedExpressionEmbedding> globalCache = expressionCache().get("*");
         if (globalCache != null) {
             combined.putAll(globalCache);
         }
 
         // 2. 再加载工厂特定表达
-        Map<String, CachedExpressionEmbedding> factoryCache = expressionCache.get(factoryId);
+        Map<String, CachedExpressionEmbedding> factoryCache = expressionCache().get(factoryId);
         if (factoryCache != null) {
             combined.putAll(factoryCache);
         }
@@ -549,7 +540,23 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
             .orElseGet(SemanticCacheConfig::defaultConfig);
     }
 
+    private Map<String, Map<String, CachedIntentEmbedding>> intentCache() {
+        return cacheSnapshot.intentCache();
+    }
+
+    private Map<String, Map<String, CachedExpressionEmbedding>> expressionCache() {
+        return cacheSnapshot.expressionCache();
+    }
+
     // ========== Inner Classes ==========
+
+    private record CacheSnapshot(
+            Map<String, Map<String, CachedIntentEmbedding>> intentCache,
+            Map<String, Map<String, CachedExpressionEmbedding>> expressionCache) {
+        private static CacheSnapshot empty() {
+            return new CacheSnapshot(new ConcurrentHashMap<>(), new ConcurrentHashMap<>());
+        }
+    }
 
     private static class CachedIntentEmbedding {
         final AIIntentConfig intent;

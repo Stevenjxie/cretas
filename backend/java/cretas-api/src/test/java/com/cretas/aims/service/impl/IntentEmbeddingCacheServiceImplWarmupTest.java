@@ -9,12 +9,15 @@ import com.cretas.aims.service.RequestScopedEmbeddingCache;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -59,5 +62,42 @@ class IntentEmbeddingCacheServiceImplWarmupTest {
 
         org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class, service::initializeCache);
         assertTrue(service.getIntentEmbedding("*", "A").isEmpty());
+    }
+
+    @Test
+    void splitsLargeWarmupAndKeepsPreviousSnapshotWhenLaterBatchFails() {
+        AIIntentConfigRepository intents = mock(AIIntentConfigRepository.class);
+        LearnedExpressionRepository expressions = mock(LearnedExpressionRepository.class);
+        EmbeddingClient embedding = mock(EmbeddingClient.class);
+        when(embedding.isAvailable()).thenReturn(true);
+        when(expressions.findByIsActiveTrue()).thenReturn(List.of());
+        when(intents.findAllEnabled()).thenReturn(List.of(
+                AIIntentConfig.builder().intentCode("OLD").description("old").build()));
+        when(embedding.encodeBatch(anyList())).thenReturn(List.of(new float[]{9}));
+        IntentEmbeddingCacheServiceImpl service = new IntentEmbeddingCacheServiceImpl(
+                intents, mock(SemanticCacheConfigRepository.class), embedding, expressions,
+                mock(RequestScopedEmbeddingCache.class));
+        service.initializeCache();
+
+        List<AIIntentConfig> replacement = IntStream.range(0, 51)
+                .mapToObj(index -> AIIntentConfig.builder()
+                        .intentCode("N" + index).description("text-" + index).build())
+                .toList();
+        when(intents.findAllEnabled()).thenReturn(replacement);
+        org.mockito.Mockito.reset(embedding);
+        when(embedding.isAvailable()).thenReturn(true);
+        when(embedding.encodeBatch(anyList()))
+                .thenAnswer(invocation -> {
+                    List<String> batch = invocation.getArgument(0);
+                    assertEquals(50, batch.size());
+                    return batch.stream().map(ignored -> new float[]{1}).toList();
+                })
+                .thenThrow(new EmbeddingClient.EmbeddingException("second batch failed"));
+
+        org.junit.jupiter.api.Assertions.assertThrows(
+                EmbeddingClient.EmbeddingException.class, service::initializeCache);
+        verify(embedding, times(2)).encodeBatch(anyList());
+        assertArrayEquals(new float[]{9}, service.getIntentEmbedding("*", "OLD").orElseThrow());
+        assertTrue(service.getIntentEmbedding("*", "N0").isEmpty());
     }
 }

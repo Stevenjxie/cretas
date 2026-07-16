@@ -50,12 +50,7 @@ public class SemanticIntentMatcher {
      * 短语向量缓存
      * Key: 短语文本, Value: 向量
      */
-    private volatile Map<String, float[]> phraseVectorCache = Map.of();
-
-    /**
-     * 短语到意图的映射缓存（从 IntentKnowledgeBase 复制）
-     */
-    private volatile Map<String, String> phraseToIntent = Map.of();
+    private volatile PhraseSnapshot phraseSnapshot = PhraseSnapshot.empty();
 
     /**
      * 用户输入向量缓存（LRU，避免重复计算频繁输入）
@@ -180,13 +175,12 @@ public class SemanticIntentMatcher {
             }
 
             long elapsed = System.currentTimeMillis() - startTime;
-            phraseToIntent = Map.copyOf(nextMappings);
-            phraseVectorCache = Map.copyOf(nextVectors);
+            phraseSnapshot = new PhraseSnapshot(Map.copyOf(nextVectors), Map.copyOf(nextMappings));
             initialized = true;
             initFailureReason = null;
             log.info("SemanticIntentMatcher initialized successfully. " +
                     "Vectorized {} phrases in {}ms. Model: {}",
-                    phraseVectorCache.size(), elapsed, embeddingClient.getModelName());
+                    phraseSnapshot.vectors().size(), elapsed, embeddingClient.getModelName());
 
         } catch (Exception e) {
             log.error("Failed to initialize phrase vectors: {}", e.getMessage(), e);
@@ -230,7 +224,8 @@ public class SemanticIntentMatcher {
             String bestPhrase = null;
             double bestSimilarity = 0.0;
 
-            for (Map.Entry<String, float[]> entry : phraseVectorCache.entrySet()) {
+            PhraseSnapshot snapshot = phraseSnapshot;
+            for (Map.Entry<String, float[]> entry : snapshot.vectors().entrySet()) {
                 double similarity = cosineSimilarity(inputVector, entry.getValue());
                 if (similarity > bestSimilarity) {
                     bestSimilarity = similarity;
@@ -242,7 +237,7 @@ public class SemanticIntentMatcher {
 
             // 检查是否超过阈值
             if (bestSimilarity >= actualThreshold && bestPhrase != null) {
-                String intentCode = phraseToIntent.get(bestPhrase);
+                String intentCode = snapshot.mappings().get(bestPhrase);
                 log.info("Semantic match found: '{}' -> '{}' (similarity: {:.4f}, intent: {}, time: {}ms)",
                         userInput, bestPhrase, bestSimilarity, intentCode, matchTimeMs);
 
@@ -290,7 +285,8 @@ public class SemanticIntentMatcher {
 
             // 计算所有相似度并排序
             List<Map.Entry<String, Double>> similarities = new ArrayList<>();
-            for (Map.Entry<String, float[]> entry : phraseVectorCache.entrySet()) {
+            PhraseSnapshot snapshot = phraseSnapshot;
+            for (Map.Entry<String, float[]> entry : snapshot.vectors().entrySet()) {
                 double similarity = cosineSimilarity(inputVector, entry.getValue());
                 if (similarity >= threshold) {
                     similarities.add(new AbstractMap.SimpleEntry<>(entry.getKey(), similarity));
@@ -306,7 +302,7 @@ public class SemanticIntentMatcher {
             return similarities.stream()
                     .limit(k)
                     .map(entry -> SemanticMatchResult.semanticMatch(
-                            phraseToIntent.get(entry.getKey()),
+                            snapshot.mappings().get(entry.getKey()),
                             entry.getValue(),
                             entry.getKey(),
                             matchTimeMs))
@@ -407,7 +403,7 @@ public class SemanticIntentMatcher {
      */
     public Map<String, Object> getCacheStats() {
         Map<String, Object> stats = new HashMap<>();
-        stats.put("phraseVectorCacheSize", phraseVectorCache.size());
+        stats.put("phraseVectorCacheSize", phraseSnapshot.vectors().size());
         stats.put("inputVectorCacheSize", inputVectorCache.estimatedSize());
         stats.put("initialized", initialized);
         stats.put("semanticEnabled", semanticEnabled);
@@ -432,7 +428,7 @@ public class SemanticIntentMatcher {
     /**
      * 预热特定短语（用于动态添加新短语）
      */
-    public void warmupPhrase(String phrase, String intentCode) {
+    public synchronized void warmupPhrase(String phrase, String intentCode) {
         if (phrase == null || intentCode == null) {
             return;
         }
@@ -444,15 +440,21 @@ public class SemanticIntentMatcher {
 
         try {
             float[] vector = embeddingClient.encode(phrase);
-            Map<String, float[]> nextVectors = new HashMap<>(phraseVectorCache);
-            Map<String, String> nextMappings = new HashMap<>(phraseToIntent);
+            PhraseSnapshot current = phraseSnapshot;
+            Map<String, float[]> nextVectors = new HashMap<>(current.vectors());
+            Map<String, String> nextMappings = new HashMap<>(current.mappings());
             nextVectors.put(phrase, vector);
             nextMappings.put(phrase, intentCode);
-            phraseVectorCache = Map.copyOf(nextVectors);
-            phraseToIntent = Map.copyOf(nextMappings);
+            phraseSnapshot = new PhraseSnapshot(Map.copyOf(nextVectors), Map.copyOf(nextMappings));
             log.info("Warmed up new phrase: '{}' -> {}", phrase, intentCode);
         } catch (Exception e) {
             log.error("Failed to warmup phrase '{}': {}", phrase, e.getMessage());
+        }
+    }
+
+    private record PhraseSnapshot(Map<String, float[]> vectors, Map<String, String> mappings) {
+        private static PhraseSnapshot empty() {
+            return new PhraseSnapshot(Map.of(), Map.of());
         }
     }
 }
