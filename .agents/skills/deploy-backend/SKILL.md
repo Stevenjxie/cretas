@@ -21,14 +21,19 @@ Java runtime is `/www/wwwroot/cretas/`; web admin is `/www/wwwroot/web-admin/`. 
 
 ## Build Once
 
-For one commit, perform one final full release build:
+Every release/deployment starts from a clean exact `origin/main` worktree:
+require an empty `git status --porcelain` and `HEAD == origin/main` before
+artifact reuse, fallback build, or deployment. A trusted candidate JAR may be
+built earlier in the clean reviewed source worktree and reused after squash
+merge when the backend tree remains identical. Build once for one backend Git
+tree:
 
-- If the deploy script will run `clean package` or `npm run build`, do not run the same full build immediately beforehand. Use target tests and static checks during implementation.
-- `SKIP_BUILD=1` is allowed only when the existing artifact has a manifest tying it to the exact deployed commit and its hash has been verified. A recent mtime or filename is not provenance.
-- The deploy script may also reuse its local backend-tree cache across docs-only commits. That cache must record the original build commit, the exact `backend/java/cretas-api` Git tree, and SHA-256; the recorded build commit must resolve to the same backend tree as the current clean exact `origin/main`.
+- In the clean reviewed source worktree, run `./scripts/deploy/release-jar-manifest.sh build --tests '<tests>'`. This executes one `mvn clean package -Dtest=<tests>` lifecycle, creates the final JAR, and writes its manifest. Do not run the target tests separately and then package again.
+- A successful release build must generate a trusted manifest recording at least the build commit, exact `backend/java/cretas-api` Git tree, JAR SHA-256, and the information needed to check JAR integrity. A recent mtime or filename is not provenance.
+- `SKIP_BUILD=1`, local cache reuse, or Artifact reuse is allowed only after validating all of the following: the manifest build commit resolves in Git; that commit's `backend/java/cretas-api` tree equals both the manifest tree and the current `origin/main` backend tree; SHA-256 matches; the JAR passes an integrity check; and the current exact `origin/main` worktree is clean. A squash merge may change the commit while preserving the backend tree; matching backend trees are reusable in that case.
+- Keep using the manifest-backed backend-tree cache, including cache/no-op behavior when Java did not change. If reuse is unavailable or any validation fails, fall back exactly once to the existing local clean-package path; do not retry with a second package invocation. Write a fallback manifest only after that build and all existing JAR checks succeed.
 - If the verified cached JAR MD5 already matches production, the script may return a no-op only after reading the real nginx upstream and verifying the selected systemd unit plus direct active-slot health. `FORCE_REDEPLOY=1` bypasses this optimization.
-- Prefer the manifest-backed local backend-tree cache, then start the single trusted local clean build immediately. GitHub Actions and artifacts are manual fallbacks, not part of the normal release critical path. Reuse a CI artifact only when it already exists for the exact commit and passes manifest and SHA-256 validation; never wait for one to be generated.
-- Keep `target/` between sequential Maven target-test/package invocations in the same worktree. The protobuf plugin deliberately skips regeneration when its source is unchanged, so warm Maven invocations can reuse compiled classes instead of recompiling the whole module. Do not extend this into cross-worktree or mtime-only artifact trust: the final release build/cache rules above still apply.
+- GitHub Artifact is a manual fallback only when it already exists and passes the same trusted-manifest checks. Never trigger or wait for an Artifact during a release.
 
 Before a release from the exact merged `origin/main`, run the single fast gate
 instead of repeating shell, YAML, encoding, Flyway, and diff checks manually:
@@ -41,10 +46,9 @@ It must stay read-only and must not run Maven or contact production. During
 feature development, use `--allow-non-main --allow-dirty --skip-fetch` only as
 a diagnostic; the real release gate remains strict on clean exact `origin/main`.
 After it passes, let `deploy-backend.sh` check the manifest-backed local
-backend-tree cache and immediately start the local clean Maven package on a
-cache miss. An already available exact-commit CI artifact may join as a
-best-effort fallback, but a missing, private, slow, or invalid GitHub artifact
-must never delay the local build.
+backend-tree cache. On a cache/Artifact miss or validation failure, run one
+local clean-package fallback without waiting for GitHub and generate the
+trusted manifest only after that build succeeds.
 
 ## Reuse A Merged Feature Worktree
 

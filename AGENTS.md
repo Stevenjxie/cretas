@@ -66,6 +66,9 @@ uvicorn main:app --port 8083     # 启动服务
 
 ### 部署到服务器
 ```bash
+# 在已审查、干净的源码 worktree 中：目标测试与最终 release JAR 只编译一次并写可信 manifest
+./scripts/deploy/release-jar-manifest.sh build --tests '<本次目标测试>'
+
 # 默认：本地可信缓存或本次唯一一次 clean package → SSH 直传 → 蓝绿切换
 # GitHub Actions/Artifact 不在日常发布关键路径，仅保留手动独立审计或显式制品备用。
 ./scripts/deploy/deploy-backend.sh
@@ -247,13 +250,13 @@ frontend/CretasFoodTrace/src/
 
 ### 发布与 E2E 去重复
 
-1. **唯一发布构建** - 同一后端源码 tree 的最终 JAR/Web 制品只完整构建一次。若部署脚本会构建，部署前不得再机械执行一次完整 package/build；只有具备精确 commit 清单，或同时具备构建 commit、后端 Git tree 指纹和 SHA-256 且能证明当前 `origin/main` 后端 tree 完全相同的可信制品，才可跳过脚本构建并复用。生产当前 JAR 的 MD5、真实 upstream、active systemd 与直连健康均匹配时，允许把纯文档/台账提交发布判定为安全 no-op；任一证据缺失则走完整构建与蓝绿发布。
+1. **唯一发布构建与可信 manifest** - 后续发布必须从干净且 `HEAD == origin/main` 的 exact release worktree 执行。同一 `backend/java/cretas-api` Git tree 的目标测试与最终 release JAR 必须合并为唯一一次 `mvn clean package -Dtest=<tests>` 生命周期，成功后生成可信 manifest；不得先单跑目标测试再重复 package。manifest/制品复用前必须证明记录的 build commit 可由 Git 解析，且该 commit 的后端 tree、manifest 记录的后端 tree、当前 `origin/main` 后端 tree 三者一致，同时通过 SHA-256、JAR 完整性和当前 worktree clean 校验。squash 后 commit 不同但后端 tree 完全相同可复用；任一校验失败只回退一次本地 `clean package`。生产当前 JAR 的 MD5、真实 upstream、active systemd 与直连健康均匹配时，Java 未变化可按后端 tree cache 判定安全 no-op。
 2. **蓝绿槽位交替** - prod Java 的 `10010` 与 `10020` 都是可用槽位，会交替成为 active。部署前必须读取 `139.196.165.140:/www/server/panel/vhost/nginx/_upstream_cretas.conf`，禁止假设某个槽永久停用。
 3. **问题前移** - SKU、Workflow、报工单位或历史快照改动，合并前必须覆盖生产形态数据，包括旧 `g/box/case`、中文基本单位和多包装规格。
 4. **生产验收责任** - Codex 常规发布默认完成服务级验收：真实 upstream、systemd/端口、直连健康、网关 HTTP，以及 Web 四方哈希。完整线上业务验收与 F006 UI E2E 由用户/QA 执行；只有用户明确要求时 Codex 才运行，并且业务写请求必须为 0。脚本/选择器失败与产品失败分开记录；共享前置条件未变化时只重跑失败场景，不机械重跑全套。
 5. **全量 CI 分层** - 改动相关目标测试和必需门禁必须通过；已确认的全量测试基线噪声应单独治理，不得用重复本地全量构建代替，也不得隐瞒其状态。
-6. **部署快速失败与制品复用** - Java 日常部署先检查本地 manifest-backed 后端 tree 缓存，未命中就立即执行本地 clean build；GitHub CI JAR 只在已经手动生成、与当前 `origin/main` 完全相同 commit 且清单/SHA-256 均通过时作为可选备用，禁止等待远端制品。相同制品 no-op 仍必须读取真实 upstream 并验证 active systemd 与健康；真正切流时 5×6 秒观察和自动回滚不得省略。idle 槽连续自动重启达到阈值时应立即保留旧 upstream、输出有限诊断日志并终止，不得盲等完整健康超时。
-7. **Maven 生命周期复用** - 同一 worktree 中连续执行目标测试、编译和打包时必须保留 `target/`，依赖 Maven 的输入变更检测复用已验证编译结果；不要在每条目标测试命令前机械执行 `clean`。首次 release 构建或来源不明的 `target/` 仍必须走 clean/清单校验，禁止以时间戳冒充制品来源证明。protobuf 的 staleness 检查是该复用路径的必要条件，除非有等价性能回归证据不得移除。
+6. **部署快速失败与制品复用** - Java 日常部署先检查 manifest-backed 后端 tree cache；Java 未变时允许 cache 命中或 no-op。GitHub Artifact 只在已经存在时作为显式手动备用，必须通过 exact-commit 清单、SHA-256 与部署阶段 JAR 完整性校验；禁止触发后等待远端制品。缓存/Artifact 缺失或校验失败时只回退一次现有本地 `clean package`，不得再次 retry package。相同制品 no-op 仍必须读取真实 upstream 并验证 active systemd 与健康；真正切流时 5×6 秒观察和自动回滚不得省略。idle 槽连续自动重启达到阈值时应立即保留旧 upstream、输出有限诊断日志并终止，不得盲等完整健康超时。
+7. **Maven 单生命周期** - release gate 所需目标测试、编译和最终 JAR 必须在同一干净、已审查源码 worktree 内通过 `./scripts/deploy/release-jar-manifest.sh build --tests '<tests>'` 完成；该入口只执行一条 `mvn clean package -Dtest=<tests>`，成功后才写可信 manifest。squash merge 后必须改在 clean exact `origin/main` release worktree 校验 build commit 与前后 backend tree，再决定复用或单次安全回退。禁止用旧 `target/`、mtime 或先前分开的测试命令证明最终 JAR 已测试；protobuf 的 staleness 检查仍是构建路径的必要条件，除非有等价性能回归证据不得移除。
 
 ### UX Flow Gate（低技术素养用户屏幕）
 

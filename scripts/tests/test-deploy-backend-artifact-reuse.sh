@@ -57,7 +57,7 @@ printf 'verified jar bytes\n' > "$FIXTURE_ARTIFACT/$JAR_NAME"
 # A valid exact-origin/main artifact is copied into the normal Maven target.
 (
     cd "$FIXTURE_REPO"
-    CI_ARTIFACT_TEST_DIR="$FIXTURE_ARTIFACT"
+    ENABLE_CI_ARTIFACT_REUSE=1 CI_ARTIFACT_TEST_DIR="$FIXTURE_ARTIFACT"
     reuse_exact_ci_artifact
     cmp "$FIXTURE_ARTIFACT/$JAR_NAME" "backend/java/cretas-api/target/$JAR_NAME"
 ) || fail "valid exact-commit artifact was not reused"
@@ -67,7 +67,7 @@ printf 'verified jar bytes\n' > "$FIXTURE_ARTIFACT/$JAR_NAME"
 (
     cd "$FIXTURE_REPO"
     rm -f "backend/java/cretas-api/target/$JAR_NAME"
-    CI_ARTIFACT_TEST_DIR="$FIXTURE_ARTIFACT"
+    ENABLE_CI_ARTIFACT_REUSE=1 CI_ARTIFACT_TEST_DIR="$FIXTURE_ARTIFACT"
     reuse_exact_ci_artifact "$TMP_ROOT/isolated/$JAR_NAME"
     cmp "$FIXTURE_ARTIFACT/$JAR_NAME" "$TMP_ROOT/isolated/$JAR_NAME"
     [ ! -f "backend/java/cretas-api/target/$JAR_NAME" ]
@@ -76,16 +76,25 @@ printf 'verified jar bytes\n' > "$FIXTURE_ARTIFACT/$JAR_NAME"
 # Explicit disable must bypass even a valid injected artifact.
 if (
     cd "$FIXTURE_REPO"
-    DISABLE_CI_ARTIFACT_REUSE=1 CI_ARTIFACT_TEST_DIR="$FIXTURE_ARTIFACT" reuse_exact_ci_artifact
+    ENABLE_CI_ARTIFACT_REUSE=1 DISABLE_CI_ARTIFACT_REUSE=1 CI_ARTIFACT_TEST_DIR="$FIXTURE_ARTIFACT" reuse_exact_ci_artifact
 ); then
     fail "DISABLE_CI_ARTIFACT_REUSE=1 did not disable reuse"
+fi
+
+# Default behavior must not touch even an injected CI source. CI reuse is a
+# manual, already-existing fallback only.
+if (
+    cd "$FIXTURE_REPO"
+    CI_ARTIFACT_TEST_DIR="$FIXTURE_ARTIFACT" reuse_exact_ci_artifact
+); then
+    fail "CI artifact reuse ran without explicit opt-in"
 fi
 
 # A commit manifest mismatch must fail closed.
 printf 'wrong-commit\n' > "$FIXTURE_ARTIFACT/$JAR_NAME.commit"
 if (
     cd "$FIXTURE_REPO"
-    CI_ARTIFACT_TEST_DIR="$FIXTURE_ARTIFACT" reuse_exact_ci_artifact
+    ENABLE_CI_ARTIFACT_REUSE=1 CI_ARTIFACT_TEST_DIR="$FIXTURE_ARTIFACT" reuse_exact_ci_artifact
 ); then
     fail "commit manifest mismatch was accepted"
 fi
@@ -95,7 +104,7 @@ printf '%s\n' "$HEAD_SHA" > "$FIXTURE_ARTIFACT/$JAR_NAME.commit"
 rm "$FIXTURE_ARTIFACT/$JAR_NAME.sha256"
 if (
     cd "$FIXTURE_REPO"
-    CI_ARTIFACT_TEST_DIR="$FIXTURE_ARTIFACT" reuse_exact_ci_artifact
+    ENABLE_CI_ARTIFACT_REUSE=1 CI_ARTIFACT_TEST_DIR="$FIXTURE_ARTIFACT" reuse_exact_ci_artifact
 ); then
     fail "missing checksum manifest was accepted"
 fi
@@ -108,7 +117,7 @@ fi
 printf '%064d  another.jar\n' 0 > "$FIXTURE_ARTIFACT/$JAR_NAME.sha256"
 if (
     cd "$FIXTURE_REPO"
-    CI_ARTIFACT_TEST_DIR="$FIXTURE_ARTIFACT" reuse_exact_ci_artifact
+    ENABLE_CI_ARTIFACT_REUSE=1 CI_ARTIFACT_TEST_DIR="$FIXTURE_ARTIFACT" reuse_exact_ci_artifact
 ); then
     fail "checksum manifest for another file was accepted"
 fi
@@ -126,7 +135,7 @@ fi
 )
 if (
     cd "$FIXTURE_REPO"
-    CI_ARTIFACT_TEST_DIR="$FIXTURE_ARTIFACT" reuse_exact_ci_artifact
+    ENABLE_CI_ARTIFACT_REUSE=1 CI_ARTIFACT_TEST_DIR="$FIXTURE_ARTIFACT" reuse_exact_ci_artifact
 ); then
     fail "non-origin/main HEAD reused a main artifact"
 fi
@@ -136,7 +145,7 @@ fi
 git -C "$FIXTURE_REPO" update-ref refs/remotes/origin/main HEAD
 if (
     cd "$FIXTURE_REPO"
-    CI_ARTIFACT_TEST_DIR="$TMP_ROOT/missing" reuse_exact_ci_artifact
+    ENABLE_CI_ARTIFACT_REUSE=1 CI_ARTIFACT_TEST_DIR="$TMP_ROOT/missing" reuse_exact_ci_artifact
 ); then
     fail "unavailable artifact source was accepted"
 fi

@@ -47,6 +47,12 @@ else
     # 无 deploy-common.sh 时不加锁
     acquire_deploy_lock() { return 0; }
 fi
+if [ -f "$SCRIPT_DIR/release-jar-manifest.sh" ]; then
+    source "$SCRIPT_DIR/release-jar-manifest.sh"
+else
+    echo "错误: 缺少可信 release JAR manifest helper: $SCRIPT_DIR/release-jar-manifest.sh"
+    exit 1
+fi
 
 # 防止多个 chat/terminal 同时跑 deploy 覆盖 jar
 # 锁定到进程退出自动释放, 支持 flock (首选) 或 PID 文件 (fallback)
@@ -181,8 +187,8 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "环境变量:"
             echo "  SKIP_RSYNC=1              临时禁用 rsync 走 scp 兜底 (~/.bashrc 已不再默认设置)"
-            echo "  SKIP_BUILD=1              跳过本地 Maven 打包 (使用 target/ 已有 jar)"
-            echo "  DISABLE_CI_ARTIFACT_REUSE=1  禁用 exact-commit CI JAR 复用，直接本地构建"
+            echo "  SKIP_BUILD=1              仅在可信 manifest 有效时跳过 Maven；无效则 clean package"
+            echo "  ENABLE_CI_ARTIFACT_REUSE=1   显式尝试已有 exact-commit CI JAR（单次查询，不等待生成）"
             echo "  DISABLE_LOCAL_JAR_CACHE=1    禁用后端源码 tree 指纹缓存"
             echo "  CRETAS_JAR_CACHE_DIR=PATH    覆盖本地可信 JAR 缓存目录"
             echo "  FORCE_REDEPLOY=1             相同 JAR 仍强制上传并执行蓝绿切流"
@@ -483,74 +489,35 @@ backend_source_tree_fingerprint() {
 
 reuse_local_source_artifact_cache() {
     local destination="$1"
-    local head_sha origin_sha source_tree cache_dir cache_jar
-    local commit_file tree_file sha_file built_commit expected_sha actual_sha built_tree destination_tmp
+    local manifest
 
     [ "${DISABLE_LOCAL_JAR_CACHE:-0}" != "1" ] || return 1
-    head_sha=$(git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null) || return 1
-    origin_sha=$(git -C "$PROJECT_ROOT" rev-parse origin/main 2>/dev/null) || return 1
-    [ "$head_sha" = "$origin_sha" ] || return 1
-    git -C "$PROJECT_ROOT" diff --quiet || return 1
-    git -C "$PROJECT_ROOT" diff --cached --quiet || return 1
-    source_tree=$(backend_source_tree_fingerprint) || return 1
-    cache_dir="$LOCAL_JAR_CACHE_ROOT/current"
-    cache_jar="$cache_dir/$JAR_NAME"
-    commit_file="$cache_dir/$JAR_NAME.commit"
-    tree_file="$cache_dir/$JAR_NAME.source-tree"
-    sha_file="$cache_dir/$JAR_NAME.sha256"
-    [ -f "$cache_jar" ] && [ -f "$commit_file" ] && [ -f "$tree_file" ] && [ -f "$sha_file" ] || return 1
-
-    built_commit=$(tr -d '\r\n' < "$commit_file" 2>/dev/null)
-    [ "$(tr -d '\r\n' < "$tree_file" 2>/dev/null)" = "$source_tree" ] || return 1
-    git -C "$PROJECT_ROOT" cat-file -e "${built_commit}^{commit}" 2>/dev/null || return 1
-    built_tree=$(git -C "$PROJECT_ROOT" rev-parse "${built_commit}:backend/java/cretas-api" 2>/dev/null) || return 1
-    [ "$built_tree" = "$source_tree" ] || return 1
-    expected_sha=$(awk -v jar="$JAR_NAME" '
-        NF >= 2 {
-            file = $2
-            sub(/^\*/, "", file)
-            if (file == jar) { print tolower($1); exit }
-        }
-    ' "$sha_file" 2>/dev/null)
-    actual_sha=$(sha256sum "$cache_jar" 2>/dev/null | awk '{print tolower($1)}')
-    [[ "$expected_sha" =~ ^[0-9a-f]{64}$ ]] || return 1
-    [ "$expected_sha" = "$actual_sha" ] || return 1
-    (cd "$cache_dir" && sha256sum -c "$JAR_NAME.sha256" >/dev/null 2>&1) || return 1
-
-    mkdir -p "$(dirname "$destination")"
-    destination_tmp="${destination}.source-cache.$$"
-    cp "$cache_jar" "$destination_tmp" || { rm -f "$destination_tmp"; return 1; }
-    mv -f "$destination_tmp" "$destination" || { rm -f "$destination_tmp"; return 1; }
-    echo "   ✓ 复用本地后端源码指纹 JAR: tree=$source_tree (built=$built_commit, SHA-256 已核验)"
+    manifest="${CRETAS_RELEASE_MANIFEST_PATH:-$LOCAL_JAR_CACHE_ROOT/current/$RELEASE_MANIFEST_NAME}"
+    release_manifest_validate "$manifest" "$PROJECT_ROOT" "$destination" || return 1
+    echo "   ✓ 复用 manifest-backed release JAR: tree=$RELEASE_MANIFEST_BACKEND_TREE (built=$RELEASE_MANIFEST_BUILD_COMMIT, SHA-256 已核验)"
     return 0
 }
 
 store_local_source_artifact_cache() {
     local jar_path="$1"
-    local head_sha origin_sha source_tree cache_dir cache_parent tmp_dir
+    local manifest maven_command target_tests maven_wrapper
 
     [ "${DISABLE_LOCAL_JAR_CACHE:-0}" != "1" ] || return 0
+    [ "${LOCAL_MAVEN_BUILD_COMPLETED:-false}" = "true" ] || return 0
     [ -f "$jar_path" ] || return 0
-    head_sha=$(git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null) || return 0
-    origin_sha=$(git -C "$PROJECT_ROOT" rev-parse origin/main 2>/dev/null) || return 0
-    [ "$head_sha" = "$origin_sha" ] || return 0
-    git -C "$PROJECT_ROOT" diff --quiet || return 0
-    git -C "$PROJECT_ROOT" diff --cached --quiet || return 0
-    source_tree=$(backend_source_tree_fingerprint) || return 0
-    cache_parent="$LOCAL_JAR_CACHE_ROOT"
-    cache_dir="$cache_parent/current"
-    tmp_dir="$cache_parent/.current.$$"
-    mkdir -p "$cache_parent" || return 0
-    rm -rf "$tmp_dir"
-    mkdir -p "$tmp_dir" || return 0
-    cp "$jar_path" "$tmp_dir/$JAR_NAME" || { rm -rf "$tmp_dir"; return 0; }
-    printf '%s\n' "$head_sha" > "$tmp_dir/$JAR_NAME.commit"
-    printf '%s\n' "$source_tree" > "$tmp_dir/$JAR_NAME.source-tree"
-    (cd "$tmp_dir" && sha256sum "$JAR_NAME" > "$JAR_NAME.sha256") \
-        || { rm -rf "$tmp_dir"; return 0; }
-    rm -rf "$cache_dir"
-    mv "$tmp_dir" "$cache_dir" || { rm -rf "$tmp_dir"; return 0; }
-    echo "   ✓ 已写入本地后端源码指纹缓存: tree=$source_tree"
+    manifest="${CRETAS_RELEASE_MANIFEST_PATH:-$LOCAL_JAR_CACHE_ROOT/current/$RELEASE_MANIFEST_NAME}"
+    if [[ "$OSTYPE" == "darwin"* ]] || [[ "$OSTYPE" == "linux"* ]]; then
+        maven_wrapper=./mvnw
+    else
+        maven_wrapper=./mvnw.cmd
+    fi
+    maven_command="${LOCAL_MAVEN_COMMAND:-$maven_wrapper clean package -Dmaven.test.skip=true -q}"
+    target_tests="${LOCAL_MAVEN_TARGET_TESTS:-none (maven.test.skip=true)}"
+    if release_manifest_write "$PROJECT_ROOT" "$jar_path" "$manifest" "$maven_command" "$target_tests"; then
+        echo "   ✓ 已写入 manifest-backed 本地缓存: tree=$(backend_source_tree_fingerprint)"
+    else
+        echo "   ⚠️  本地构建成功，但 release manifest 写入失败；本次继续部署，下次将重新 clean package"
+    fi
 }
 
 prod_already_runs_local_artifact() {
@@ -631,6 +598,7 @@ deploy_jar() {
         local DESTINATION="${1:-backend/java/cretas-api/target/$JAR_NAME}"
         local DESTINATION_TMP
 
+        [ "${ENABLE_CI_ARTIFACT_REUSE:-0}" = "1" ] || return 1
         [ "${DISABLE_CI_ARTIFACT_REUSE:-0}" != "1" ] || return 1
         HEAD_SHA=$(git rev-parse HEAD 2>/dev/null) || return 1
         ORIGIN_MAIN_SHA=$(git rev-parse origin/main 2>/dev/null) || return 1
@@ -714,16 +682,7 @@ deploy_jar() {
         local goals="$1"
         (
             cd backend/java/cretas-api || return 1
-            if ! run_mvn $goals; then
-                if [ "$goals" = "clean package" ]; then
-                    echo "   ⚠️  Maven clean 失败 (可能 target/ 被锁)，清理 target 后 retry package..."
-                    rm -rf target 2>/dev/null || true
-                    run_mvn package || return 1
-                    echo "   ✓ retry 打包成功"
-                else
-                    return 1
-                fi
-            fi
+            run_mvn $goals
         )
     }
 
@@ -882,21 +841,23 @@ deploy_jar() {
     CI_ARTIFACT_REUSED=false
     JAR_TARGET="backend/java/cretas-api/target/$JAR_NAME"
     LOCAL_SOURCE_CACHE_REUSED=false
-    if [ -z "$SKIP_BUILD" ] && reuse_local_source_artifact_cache "$JAR_TARGET"; then
+    LOCAL_MAVEN_BUILD_COMPLETED=false
+    if reuse_local_source_artifact_cache "$JAR_TARGET"; then
         LOCAL_SOURCE_CACHE_REUSED=true
         echo "📦 [1/4] 后端源码未变化，跳过 Maven 打包"
     elif [ -n "$SKIP_BUILD" ]; then
-        if [ ! -f "$JAR_TARGET" ]; then
-            echo "❌ SKIP_BUILD=1 但指定 JAR 不存在: $JAR_TARGET"
-            exit 1
-        fi
-        echo "📦 [1/4] 跳过 Maven 打包 (SKIP_BUILD=1, 使用已有 JAR)"
+        echo "📦 [1/4] SKIP_BUILD=1 但可信 manifest 未命中；安全回退本地 clean package"
+        build_local_jar "clean package" || { echo "❌ Maven clean package 失败"; exit 1; }
+        LOCAL_MAVEN_BUILD_COMPLETED=true
     elif [ -n "$SKIP_CLEAN" ]; then
         echo "📦 [1/4] 本地 Maven 打包 (SKIP_CLEAN=1, 增量模式 — 不参与 CI 竞速)..."
         build_local_jar "package" || { echo "❌ Maven 打包失败"; exit 1; }
-    elif [ "${DISABLE_CI_ARTIFACT_REUSE:-0}" = "1" ] || { [ "$HAS_GH" != "true" ] && [ -z "${CI_ARTIFACT_TEST_DIR:-}" ]; }; then
-        echo "📦 [1/4] CI JAR 复用不可用/已禁用，直接本地 clean package"
-        build_local_jar "clean package" || { echo "❌ Maven 打包失败 (已 retry)"; exit 1; }
+    elif [ "${ENABLE_CI_ARTIFACT_REUSE:-0}" != "1" ] \
+        || [ "${DISABLE_CI_ARTIFACT_REUSE:-0}" = "1" ] \
+        || { [ "$HAS_GH" != "true" ] && [ -z "${CI_ARTIFACT_TEST_DIR:-}" ]; }; then
+        echo "📦 [1/4] manifest 未命中，立即执行本地 clean package"
+        build_local_jar "clean package" || { echo "❌ Maven clean package 失败"; exit 1; }
+        LOCAL_MAVEN_BUILD_COMPLETED=true
     else
         BUILD_RACE_DIR="$UPLOAD_STATUS_DIR/build-race"
         CI_RACE_JAR="$BUILD_RACE_DIR/ci/$JAR_NAME"
@@ -918,6 +879,7 @@ deploy_jar() {
             CI_ARTIFACT_REUSED=true
             echo "   🏁 构建竞速胜出: CI artifact"
         else
+            LOCAL_MAVEN_BUILD_COMPLETED=true
             echo "   🏁 构建竞速胜出: 本地 Maven"
         fi
     fi

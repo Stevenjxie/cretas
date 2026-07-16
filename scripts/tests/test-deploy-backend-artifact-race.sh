@@ -86,9 +86,10 @@ UNRELATED_PID=""
 
 # Explicit local modes must not enter the race.
 assert_contains 'if [ -n "$SKIP_BUILD" ]; then'
-assert_contains 'SKIP_BUILD=1 但指定 JAR 不存在'
+assert_contains 'SKIP_BUILD=1 但可信 manifest 未命中；安全回退本地 clean package'
 assert_contains '本地 Maven 打包 (SKIP_CLEAN=1, 增量模式 — 不参与 CI 竞速)'
-assert_contains 'CI JAR 复用不可用/已禁用，直接本地 clean package'
+assert_contains '[ "${ENABLE_CI_ARTIFACT_REUSE:-0}" != "1" ]'
+assert_contains 'manifest 未命中，立即执行本地 clean package'
 assert_contains 'CI_ARTIFACT_DOWNLOAD_TIMEOUT:-180'
 
 echo "PASS: CI/local build race selects one valid winner and terminates only recorded loser trees"
