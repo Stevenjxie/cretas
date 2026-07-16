@@ -63,6 +63,12 @@ import {
   planRowClassNameByStatus,
   planStatusClass,
 } from './statusVisuals';
+import {
+  resolvePlanWorkflowCandidates,
+  workflowCandidateBindingProductTypeId,
+  workflowCandidateDisplayName,
+  type PlanWorkflowResolutionMode,
+} from './productionPlanWorkflowResolution';
 import ProcessSheet from '../components/processSheet/ProcessSheet.vue';
 import ProductionSummaryDialog from '../components/ProductionSummaryDialog.vue';
 import {
@@ -351,12 +357,11 @@ const planForm = ref({
   customFields: {} as TableRow,
   // Wave2 六扇门: 免工序报工开关 (null→后端默认 true, 新建默认 true = 两点报工)
   skipProcessReporting: true as boolean | null,
-  // raw-centric 多SKU (2026-07-13): 多选「生产成品」→ 解析共用 raw workflow。
-  // 非 CUSTOMER_ORDER 来源专用; SO 来源沿用 sourceOrderItemIds 多产品逻辑不变。
+  // 非 CUSTOMER_ORDER 来源：按所选成品集合解析一个完整 Workflow。
   targetFinishedGoodIds: [] as string[],
   resolvedCandidates: [] as WorkflowResolutionCandidate[],
-  selectedCandidateOwnerId: '' as string,
-  resolutionMode: '' as '' | 'SELF_WORKFLOW' | 'RAW_OWNED' | 'NONE',
+  selectedCandidateWorkflowId: null as number | null,
+  resolutionMode: '' as '' | PlanWorkflowResolutionMode,
 });
 const productTypes = ref<TableRow[]>([]);
 // raw-centric 多SKU: 「生产成品」多选下拉只列成品/半成品, 过滤掉原料/包材/调味品。
@@ -385,13 +390,12 @@ const reportModeLocked = computed(() =>
   !!planForm.value.productTypeId && (hasActiveWorkflow.value || !hasProcesses.value));
 const customers = ref<TableRow[]>([]);
 
-// raw-centric 多SKU: 当前已锁定的工序图候选 (SELF_WORKFLOW 自动锁定的自身 / RAW_OWNED 单候选自动锁定 / 多候选用户手选)。
-const resolvedOwnerCandidate = computed<WorkflowResolutionCandidate | undefined>(() =>
+const resolvedWorkflowCandidate = computed<WorkflowResolutionCandidate | undefined>(() =>
   planForm.value.resolvedCandidates.find(
-    (c) => c.ownerProductTypeId === planForm.value.selectedCandidateOwnerId
+    (candidate) => candidate.workflowId === planForm.value.selectedCandidateWorkflowId
   )
 );
-const hasResolvedWorkflowCandidate = computed(() => !!resolvedOwnerCandidate.value);
+const hasResolvedWorkflowCandidate = computed(() => !!resolvedWorkflowCandidate.value);
 
 // A5: today helper
 function todayStr(): string {
@@ -728,63 +732,36 @@ let workflowResolveGeneration = 0;
 function resetWorkflowResolutionState() {
   planForm.value.resolutionMode = '';
   planForm.value.resolvedCandidates = [];
-  planForm.value.selectedCandidateOwnerId = '';
+  planForm.value.selectedCandidateWorkflowId = null;
 }
 
-// 命中候选 (SELF_WORKFLOW 或 RAW_OWNED 已选定 owner): 复用既有 loadBomProcesses 逻辑
-// (探测 activation + 工序列表), 使 hasActiveWorkflow/reportModeLocked/skipProcessReporting
-// 自动联动 — 不新增平行状态, 与本 session 已加的 workflow-aware 报工模式共存。
-async function applyResolvedCandidateOwner(ownerId: string) {
-  planForm.value.productTypeId = ownerId;
-  await loadBomProcesses(ownerId);
-}
-
-function handleWorkflowCandidateSelect(ownerId: string) {
-  planForm.value.selectedCandidateOwnerId = ownerId;
-  void applyResolvedCandidateOwner(ownerId);
-}
-
-// raw-centric 多SKU (2026-07-14): NONE 多选无候选覆盖时, 「去产品工序配置」不能带成品 id
-// 跳转 (target 页会误停在"成品"模式选中该成品, 而真正要配的是原料 workflow)。
-// 改为按各成品当前生效 BOM 的 subProductTypeId 取交集, 若交集恰好 1 个候选原料,
-// 直接深链 ?productTypeId=<该原料> (target 页已有逻辑: 命中原料分类自动切"原料"模式并选中)。
-// 交集为空/多个(无法唯一判定) → 退化为 ?ownerMode=RAW 只切 tab, 不瞎猜选中哪个。
-const resolvingRawMaterialLink = ref(false);
-async function goToRawMaterialProcessConfig(finishedGoodIds: string[]) {
-  if (!factoryId.value || finishedGoodIds.length === 0) {
-    router.push('/system/product-processes');
+async function applyResolvedWorkflowCandidate(candidate: WorkflowResolutionCandidate) {
+  const bindingProductTypeId = workflowCandidateBindingProductTypeId(
+    candidate,
+    planForm.value.targetFinishedGoodIds,
+  );
+  if (!bindingProductTypeId) {
+    planForm.value.productTypeId = '';
+    hasActiveWorkflow.value = false;
+    productWorkProcessList.value = [];
+    ElMessage.error('该 Workflow 缺少生产计划绑定信息，请联系管理员重新发布');
     return;
   }
-  resolvingRawMaterialLink.value = true;
-  try {
-    const results = await Promise.all(
-      finishedGoodIds.map((id) =>
-        get<{ items?: Array<{ subProductTypeId?: string | null }> }>(
-          `/${factoryId.value}/bom/recipes/by-product/${id}/current`
-        ).catch((): null => null)
-      )
-    );
-    const materialSets = results
-      .filter((r): r is NonNullable<typeof r> => r != null && r.success)
-      .map((r) => new Set(
-        (r.data?.items || [])
-          .map((item) => item.subProductTypeId)
-          .filter((id): id is string => !!id)
-      ));
-    let commonRawMaterialId = '';
-    if (materialSets.length === finishedGoodIds.length && materialSets.length > 0) {
-      const [first, ...rest] = materialSets;
-      const common = [...first].filter((id) => rest.every((set) => set.has(id)));
-      if (common.length === 1) commonRawMaterialId = common[0];
-    }
-    router.push(
-      commonRawMaterialId
-        ? `/system/product-processes?productTypeId=${commonRawMaterialId}`
-        : '/system/product-processes?ownerMode=RAW'
-    );
-  } finally {
-    resolvingRawMaterialLink.value = false;
-  }
+  planForm.value.productTypeId = bindingProductTypeId;
+  await loadBomProcesses(bindingProductTypeId);
+}
+
+function handleWorkflowCandidateSelect(workflowId: number) {
+  planForm.value.selectedCandidateWorkflowId = workflowId;
+  const candidate = planForm.value.resolvedCandidates.find((item) => item.workflowId === workflowId);
+  if (candidate) void applyResolvedWorkflowCandidate(candidate);
+}
+
+function goToWorkflowConfig(finishedGoodIds: string[]) {
+  const productTypeId = finishedGoodIds.length === 1 ? finishedGoodIds[0] : '';
+  router.push(productTypeId
+    ? `/system/product-processes?productTypeId=${encodeURIComponent(productTypeId)}`
+    : '/system/product-processes');
 }
 
 async function resolveTargetFinishedGoods(ids: string[]): Promise<void> {
@@ -798,39 +775,19 @@ async function resolveTargetFinishedGoods(ids: string[]): Promise<void> {
       handleCatchError(new Error(res.message || '解析工序图失败'), '解析工序图失败');
       return;
     }
-    const data = res.data;
-    planForm.value.resolutionMode = data.resolutionMode;
-    planForm.value.resolvedCandidates = data.candidates || [];
-    if (data.resolutionMode === 'SELF_WORKFLOW') {
-      const owner = data.candidates[0];
-      if (owner) {
-        planForm.value.selectedCandidateOwnerId = owner.ownerProductTypeId;
-        await applyResolvedCandidateOwner(owner.ownerProductTypeId);
-      }
-    } else if (data.resolutionMode === 'RAW_OWNED') {
-      if (data.candidates.length === 1) {
-        planForm.value.selectedCandidateOwnerId = data.candidates[0].ownerProductTypeId;
-        await applyResolvedCandidateOwner(data.candidates[0].ownerProductTypeId);
-      } else {
-        // 多候选: 等用户手选 (未选时提交按钮 disabled, 见 nonSoSubmitBlocked)
-        planForm.value.selectedCandidateOwnerId = '';
-        planForm.value.productTypeId = '';
-        hasActiveWorkflow.value = false;
-        productWorkProcessList.value = [];
-      }
+    const resolution = resolvePlanWorkflowCandidates(ids, res.data.candidates || []);
+    planForm.value.resolutionMode = resolution.mode;
+    planForm.value.resolvedCandidates = resolution.candidates;
+    if (resolution.candidates.length === 1) {
+      const candidate = resolution.candidates[0];
+      planForm.value.selectedCandidateWorkflowId = candidate.workflowId;
+      await applyResolvedWorkflowCandidate(candidate);
     } else {
-      // NONE
-      if (ids.length === 1) {
-        // 维持现状 (设计 §13): 单选且无 workflow 覆盖 → 走既有单产品手填逻辑,
-        // 不传 targetFinishedGoodIds (submitPlan 里按此判断)。
-        planForm.value.productTypeId = ids[0];
-        handleProductChange(ids[0]);
-      } else {
-        // 多选且无候选覆盖: 禁提交 (Rule 5: 不留死胡同, 引导去产品工序配置)
-        planForm.value.productTypeId = '';
-        hasActiveWorkflow.value = false;
-        productWorkProcessList.value = [];
-      }
+      // 无候选或数据异常出现多个激活候选时，必须显式处理，不能退回 legacy 产品路径。
+      planForm.value.selectedCandidateWorkflowId = null;
+      planForm.value.productTypeId = '';
+      hasActiveWorkflow.value = false;
+      productWorkProcessList.value = [];
     }
   } catch (e) {
     if (myGeneration === workflowResolveGeneration) handleCatchError(e, '解析工序图失败');
@@ -857,18 +814,13 @@ watch(
   }
 );
 
-// raw-centric 多SKU: RAW_OWNED 多候选未选 owner / NONE 多选无覆盖 → 禁提交
-// (fool-proof-design Rule 1: 预先显示边界, 不要事后报错)。仅作用于非 SO 来源。
 const nonSoSubmitBlocked = computed(() => {
   if (planForm.value.sourceType === 'CUSTOMER_ORDER') return false;
   const ids = planForm.value.targetFinishedGoodIds;
   if (ids.length === 0) return false;
-  if (planForm.value.resolutionMode === 'NONE' && ids.length >= 2) return true;
-  if (
-    planForm.value.resolutionMode === 'RAW_OWNED'
-    && planForm.value.resolvedCandidates.length > 1
-    && !planForm.value.selectedCandidateOwnerId
-  ) return true;
+  if (planForm.value.resolutionMode === 'NONE') return true;
+  if (planForm.value.resolvedCandidates.length > 1
+    && planForm.value.selectedCandidateWorkflowId == null) return true;
   return false;
 });
 // ========== /raw-centric 多SKU ==========
@@ -922,7 +874,7 @@ function handleCreate() {
     // raw-centric 多SKU (2026-07-13): 重置多选成品 + 工序图解析状态。
     targetFinishedGoodIds: [],
     resolvedCandidates: [],
-    selectedCandidateOwnerId: '',
+    selectedCandidateWorkflowId: null,
     resolutionMode: '',
   };
   productWorkProcessList.value = [];
@@ -1006,19 +958,23 @@ async function submitPlan() {
     return;
   }
 
-  // 非 SO 来源 (MANUAL / AI_FORECAST / SAFETY_STOCK): 手选「生产成品」+ 解析共用 raw workflow
-  if (planForm.value.targetFinishedGoodIds.length === 0 || !planForm.value.productTypeId) {
+  // 非 SO 来源：单选只认单产出 Workflow，多选只认共同多产出 Workflow。
+  if (planForm.value.targetFinishedGoodIds.length === 0) {
     ElMessage.warning('请选择生产成品');
     return;
   }
-  // raw-centric 多SKU: RAW_OWNED 多候选未选定 / NONE 多选无覆盖 → 提交按钮已 disabled,
-  // 这里是双保险 (Rule 1: 提交前也要挡, 不只是点击那一刻)。
   if (nonSoSubmitBlocked.value) {
-    ElMessage.warning(
-      planForm.value.resolutionMode === 'NONE'
-        ? '所选成品没有对应的通用(原料)工序配置，请先配置'
-        : '请先选择使用哪个工序图'
-    );
+    if (planForm.value.resolutionMode === 'NONE') {
+      ElMessage.warning(planForm.value.targetFinishedGoodIds.length === 1
+        ? '该产品没有单产出 Workflow，请前往创建单产出 Workflow'
+        : '未找到共享的工序 Workflow，请分开创建生产计划');
+    } else {
+      ElMessage.warning('检测到多个可用 Workflow，请先选择本计划使用的版本');
+    }
+    return;
+  }
+  if (!planForm.value.productTypeId || !resolvedWorkflowCandidate.value) {
+    ElMessage.warning('请选择生产计划使用的 Workflow');
     return;
   }
   // raw-centric 多SKU: 存货生产常规无需数量, 但 workflow 驱动产品必须 (转批次 create-batch 要求 >0)。
@@ -1034,16 +990,13 @@ async function submitPlan() {
   try {
     const {
       resolvedCandidates: _resolvedCandidates,
-      selectedCandidateOwnerId: _selectedCandidateOwnerId,
+      selectedCandidateWorkflowId: _selectedCandidateWorkflowId,
       resolutionMode,
       targetFinishedGoodIds,
       ...rest
     } = planForm.value;
-    // 命中 workflow 候选 (SELF_WORKFLOW / RAW_OWNED 已选定 owner) 才带 targetFinishedGoodIds;
-    // NONE 单选走既有单产品路径, 不传该字段 (维持现状, 设计 §13)。
-    const hitWorkflowCandidate = resolutionMode === 'SELF_WORKFLOW' || resolutionMode === 'RAW_OWNED';
     const payload: Record<string, unknown> = { ...rest };
-    if (hitWorkflowCandidate) {
+    if (resolutionMode === 'SINGLE_OUTPUT' || resolutionMode === 'SHARED_MULTI_OUTPUT') {
       payload.targetFinishedGoodIds = targetFinishedGoodIds;
     }
     const response = await post(`/${factoryId.value}/production-plans`, payload);
@@ -1060,11 +1013,13 @@ async function submitPlan() {
     const err = error as { status?: number; code?: string; message?: string };
     if (err?.status === 409 && err?.code === 'WORKFLOW_RESOLUTION_NOT_COVERED') {
       ElMessageBox.confirm(
-        err.message || '所选成品没有对应的通用(原料)工序配置，请先配置',
+        err.message || (planForm.value.targetFinishedGoodIds.length === 1
+          ? '该产品没有单产出 Workflow，请前往创建单产出 Workflow'
+          : '未找到共享的工序 Workflow，请分开创建生产计划'),
         '工序图未覆盖',
         { confirmButtonText: '去产品工序配置', cancelButtonText: '取消', type: 'warning' }
       ).then(() => {
-        void goToRawMaterialProcessConfig(planForm.value.targetFinishedGoodIds);
+        goToWorkflowConfig(planForm.value.targetFinishedGoodIds);
       }).catch(() => { /* 用户取消, 静默 */ });
     } else {
       // Interceptor shows specific toast; dedupe fallback
@@ -3002,7 +2957,7 @@ function handleAiFill(params: TableRow) {
     // 保持「生产成品」下拉与 productTypeId 一致 (触发 watch → 解析工序图)。
     targetFinishedGoodIds: matched ? [String(matched.id)] : [],
     resolvedCandidates: [],
-    selectedCandidateOwnerId: '',
+    selectedCandidateWorkflowId: null,
     resolutionMode: '',
   };
   dialogVisible.value = true;
@@ -3699,8 +3654,7 @@ function handleAiFill(params: TableRow) {
           />
         </el-form-item>
         <!-- 以销定产 (2026-06-24): 来源=销售订单时, 产品/数量按所选产品行各自取, 不再手选单产品 → 隐藏 -->
-        <!-- raw-centric 多SKU (2026-07-13): 多选生产成品, 自动解析共用 raw workflow (工序图)。
-             单选且无 workflow 覆盖时维持既有单产品手填逻辑 (兼容旧行为)。 -->
+        <!-- 单选只接受单产出 Workflow；多选只接受同时覆盖全部成品的多产出 Workflow。 -->
         <el-form-item v-if="planForm.sourceType !== 'CUSTOMER_ORDER'" label="生产成品" required>
           <el-select
             v-model="planForm.targetFinishedGoodIds"
@@ -3720,49 +3674,46 @@ function handleAiFill(params: TableRow) {
             正在解析工序图…
           </div>
           <template v-else-if="planForm.targetFinishedGoodIds.length > 0">
-            <!-- SELF_WORKFLOW: 该成品自己就有工序图 -->
-            <div v-if="planForm.resolutionMode === 'SELF_WORKFLOW'" style="margin-top: 8px;">
-              <el-tag type="info" size="small">使用该成品自己的工序图</el-tag>
+            <div v-if="planForm.resolutionMode === 'SINGLE_OUTPUT' && hasResolvedWorkflowCandidate" style="margin-top: 8px;">
+              <el-tag type="success" size="small">已匹配单产出 Workflow</el-tag>
             </div>
-            <!-- RAW_OWNED 唯一候选: 自动选定 + 摘要卡 -->
             <div
-              v-else-if="planForm.resolutionMode === 'RAW_OWNED' && planForm.resolvedCandidates.length === 1"
+              v-else-if="planForm.resolutionMode === 'SHARED_MULTI_OUTPUT' && planForm.resolvedCandidates.length === 1"
               style="margin-top: 8px; padding: 10px; border: 1px solid var(--el-border-color, #dcdfe6); border-radius: 4px;"
             >
-              <div style="font-weight: 600;">{{ planForm.resolvedCandidates[0].ownerProductName }}</div>
+              <div style="font-weight: 600;">{{ workflowCandidateDisplayName(planForm.resolvedCandidates[0]) }}</div>
               <div style="margin: 6px 0;">
                 <el-tag
-                  v-for="t in planForm.resolvedCandidates[0].terminalOutputs"
+                  v-for="t in (planForm.resolvedCandidates[0].terminalOutputs || [])"
                   :key="t.productTypeId"
                   size="small"
                   style="margin-right: 4px; margin-bottom: 4px;"
                 >→ {{ t.productName }}</el-tag>
               </div>
               <el-tag :type="planForm.resolvedCandidates[0].exactMatch ? 'success' : 'warning'" size="small">
-                {{ planForm.resolvedCandidates[0].exactMatch ? '精确匹配' : '含额外成品' }}
+                {{ planForm.resolvedCandidates[0].exactMatch ? '精确匹配' : '该 Workflow 还包含其它共同产出' }}
               </el-tag>
             </div>
-            <!-- RAW_OWNED 多候选: 用户手选 owner, 未选禁提交 -->
-            <div v-else-if="planForm.resolutionMode === 'RAW_OWNED' && planForm.resolvedCandidates.length > 1" style="margin-top: 8px;">
+            <div v-else-if="planForm.resolvedCandidates.length > 1" style="margin-top: 8px;">
               <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-bottom: 6px;">
-                该组成品有多个通用工序图候选，请选择使用哪一个:
+                检测到多个可用 Workflow，请选择本计划使用的版本：
               </div>
               <el-radio-group
-                v-model="planForm.selectedCandidateOwnerId"
+                v-model="planForm.selectedCandidateWorkflowId"
                 style="width: 100%; display: flex; flex-direction: column; gap: 8px;"
                 @change="handleWorkflowCandidateSelect"
               >
                 <el-radio
                   v-for="c in planForm.resolvedCandidates"
                   :key="c.workflowId"
-                  :label="c.ownerProductTypeId"
+                  :label="c.workflowId"
                   border
                   style="height: auto; width: 100%; margin: 0; padding: 10px; white-space: normal;"
                 >
-                  <div style="font-weight: 600;">{{ c.ownerProductName }}</div>
+                  <div style="font-weight: 600;">{{ workflowCandidateDisplayName(c) }} · v{{ c.definitionVersion }}</div>
                   <div style="margin: 6px 0;">
                     <el-tag
-                      v-for="t in c.terminalOutputs"
+                      v-for="t in (c.terminalOutputs || [])"
                       :key="t.productTypeId"
                       size="small"
                       style="margin-right: 4px; margin-bottom: 4px;"
@@ -3774,27 +3725,30 @@ function handleAiFill(params: TableRow) {
                 </el-radio>
               </el-radio-group>
             </div>
-            <!-- NONE + 多选: 无候选覆盖, 引导去配置, 禁提交 -->
             <el-alert
-              v-else-if="planForm.resolutionMode === 'NONE' && planForm.targetFinishedGoodIds.length > 1"
+              v-else-if="planForm.resolutionMode === 'NONE' && planForm.targetFinishedGoodIds.length === 1"
               type="error"
               show-icon
               :closable="false"
               style="margin-top: 8px;"
             >
-              <template #title>所选成品没有对应的通用(原料)工序配置，请先配置</template>
+              <template #title>该产品没有单产出 Workflow，请前往创建单产出 Workflow</template>
               <div style="display: flex; gap: 8px; margin-top: 8px;">
                 <el-button
                   size="small"
                   type="primary"
-                  :loading="resolvingRawMaterialLink"
-                  @click="goToRawMaterialProcessConfig(planForm.targetFinishedGoodIds)"
-                >去产品工序配置</el-button>
-                <el-button size="small" @click="ElMessage.info('请将「生产成品」改为只选 1 个成品，分别建计划')">
-                  改为单成品分别建计划
-                </el-button>
+                  @click="goToWorkflowConfig(planForm.targetFinishedGoodIds)"
+                >去 Workflow 配置</el-button>
               </div>
             </el-alert>
+            <el-alert
+              v-else-if="planForm.resolutionMode === 'NONE' && planForm.targetFinishedGoodIds.length > 1"
+              type="error"
+              show-icon
+              :closable="false"
+              title="未找到共享的工序 Workflow，请分开创建生产计划"
+              style="margin-top: 8px;"
+            />
           </template>
         </el-form-item>
         <el-form-item label="客户名称">
@@ -3881,14 +3835,14 @@ function handleAiFill(params: TableRow) {
         <el-form-item
           v-if="planForm.sourceType !== 'CUSTOMER_ORDER' && planForm.sourceType !== 'SAFETY_STOCK'"
           :label="hasResolvedWorkflowCandidate
-            ? `${planForm.resolutionMode === 'RAW_OWNED' ? '计划投料数量' : '计划成品数量'}（${resolvedOwnerCandidate?.plannedUnit || '单位未配置'}）`
+            ? `${planForm.resolutionMode === 'SHARED_MULTI_OUTPUT' ? 'Workflow 计划基准数量' : '计划成品数量'}（${resolvedWorkflowCandidate?.plannedUnit || '单位未配置'}）`
             : '计划成品数量'"
           required
         >
           <el-input-number v-model="planForm.plannedQuantity" :min="1" style="width: 100%" />
           <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 2px;">
-            <template v-if="hasResolvedWorkflowCandidate && planForm.resolutionMode === 'RAW_OWNED'">
-              本次生产由「产品工序 Workflow」驱动分支生产；填首道投料原料数量。转批次后按图逐道报工，各终端成品各自入库。
+            <template v-if="hasResolvedWorkflowCandidate && planForm.resolutionMode === 'SHARED_MULTI_OUTPUT'">
+              计划绑定整张共同 Workflow；逐道报工按图处理全部投入、半成品和产出，不裁剪其它分支。
             </template>
             <template v-else-if="hasResolvedWorkflowCandidate">
               按 Workflow 终端成品输出端口单位填写；各工序继续按自己的端口单位报工。
@@ -3903,13 +3857,13 @@ function handleAiFill(params: TableRow) {
              非 workflow 的存货生产仍按实际小结累计不填数量 (不回归)。 -->
         <el-form-item
           v-if="planForm.sourceType === 'SAFETY_STOCK' && (hasActiveWorkflow || hasResolvedWorkflowCandidate)"
-          :label="`${planForm.resolutionMode === 'RAW_OWNED' ? '计划投料数量' : '计划成品数量'}（${resolvedOwnerCandidate?.plannedUnit || '单位未配置'}）`"
+          :label="`${planForm.resolutionMode === 'SHARED_MULTI_OUTPUT' ? 'Workflow 计划基准数量' : '计划成品数量'}（${resolvedWorkflowCandidate?.plannedUnit || '单位未配置'}）`"
           required
         >
           <el-input-number v-model="planForm.plannedQuantity" :min="1" style="width: 100%" />
           <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 2px;">
-            <template v-if="planForm.resolutionMode === 'RAW_OWNED'">
-              填 Workflow 原料入口端口的投料数量。转批次后按图逐道报工，各终端成品各自入库。
+            <template v-if="planForm.resolutionMode === 'SHARED_MULTI_OUTPUT'">
+              该计划使用共同的多产出 Workflow；逐道报工时按完整工序图记录全部分支。
             </template>
             <template v-else>
               填 Workflow 终端成品输出端口的计划数量；逐道报工仍使用各工序端口单位。

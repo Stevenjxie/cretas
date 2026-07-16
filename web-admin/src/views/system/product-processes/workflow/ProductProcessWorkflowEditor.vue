@@ -12,14 +12,15 @@
           >
             {{ activation?.enabled ? `已启用 v${activation.activeDefinitionVersion}` : '未启用' }}
           </el-tag>
+          <el-tag data-testid="workflow-system-classification" type="info">
+            系统研判：{{ workflowClassificationLabel }}
+          </el-tag>
           <span v-if="dirty" class="dirty-status">● 有未保存改动</span>
           <span v-else-if="definition" class="saved-status">✓ 已保存</span>
           <span class="stage-note">图定义独立保存，暂不改写现有报工运行时</span>
         </div>
         <div class="toolbar-actions">
-          <el-button :disabled="!canEdit || (rawOwnerMode && hasRawRoot)" @click="addStandaloneRaw">
-            {{ rawOwnerMode ? '原料模式仅允许一个入口原料' : '+ 原料 Cell' }}
-          </el-button>
+          <el-button :disabled="!canEdit" @click="addStandaloneRaw">+ 原料 Cell</el-button>
           <el-button :disabled="!canEdit || history.length === 0" @click="undo">撤销</el-button>
           <el-button :disabled="!canEdit || future.length === 0" @click="redo">重做</el-button>
           <el-button :disabled="!canEdit || flowNodes.length === 0" @click="handleAutoLayout">自动布局</el-button>
@@ -144,7 +145,7 @@
               :connecting-from-kind="connectingFromKind"
               :semi-options="semiFinishedSkuOptions"
               :finished-options="finishedGoodSkuOptions"
-              :allow-add-input="!isRawOwnerFirstProcess(slotProps.id)"
+              :allow-add-input="true"
               @update="(patch) => updateProcessData(slotProps.id, patch)"
               @add-input="addInputToProcess(slotProps.id)"
               @add-output="addOutputToProcess(slotProps.id)"
@@ -400,6 +401,7 @@ import WorkflowMaterialNode from './WorkflowMaterialNode.vue';
 import WorkflowProcessNode from './WorkflowProcessNode.vue';
 import { classifyOutputSkuCategory, matchOutputSkuByName } from './outputSkuClassification';
 import { usePinyinFilter } from './pinyinInitials';
+import { classifyWorkflowTopology } from './workflowClassification';
 import {
   activateProductProcessWorkflow,
   deactivateProductProcessWorkflow,
@@ -487,13 +489,8 @@ const props = defineProps<{
   productTypeId: string;
   productName: string;
   canWrite: boolean;
-  // raw-centric 双模式: owner 是原料 → 允许多终端成品 (分支/扇出); 成品 → 单终端成品。
-  // 前端提示为主, 硬约束在后端发布校验 (按 owner 分类校验终端 FINISHED_GOOD 数)。
+  // 仅用于读取旧 owner-centric 数据时的初始锚点兼容，不得限制可编辑的画布拓扑。
   rawOwnerMode?: boolean;
-}>();
-
-const emit = defineEmits<{
-  ownerChange: [ownerId: string];
 }>();
 
 const { fitView, getViewport, setViewport } = useVueFlow('product-process-workflow');
@@ -641,8 +638,28 @@ let activationMutationGeneration = 0;
 
 const productTypeId = computed(() => props.productTypeId);
 const rawOwnerMode = computed(() => props.rawOwnerMode === true);
-const rawRootNodes = computed(() => flowNodes.value.filter((node) => node.data?.kind === 'RAW_MATERIAL'));
-const hasRawRoot = computed(() => rawRootNodes.value.length > 0);
+const derivedWorkflowClassification = computed(() => classifyWorkflowTopology(
+  flowNodes.value.map((node) => ({
+    id: node.id,
+    kind: nodeKind(node),
+    skuId: typeof node.data?.skuId === 'string' ? node.data.skuId : undefined,
+  })),
+  flowEdges.value.map((edge) => ({ source: edge.source, target: edge.target })),
+));
+const activationWorkflowTypeLabel = computed(() => {
+  switch (activation.value?.workflowType) {
+    case 'SINGLE_OUTPUT_PRODUCT': return '单产出产品';
+    case 'RAW_MATERIAL_SPLIT': return '原料分流';
+    case 'JOINT_PRODUCTION': return '联产';
+    default: return '';
+  }
+});
+const workflowClassificationLabel = computed(() => {
+  if (derivedWorkflowClassification.value.type === 'PRODUCT') return '单产出产品';
+  if (derivedWorkflowClassification.value.type === 'RAW_SPLIT') return '原料分流';
+  if (derivedWorkflowClassification.value.type === 'JOINT_PRODUCTION') return '联产';
+  return activationWorkflowTypeLabel.value || '待完善画布';
+});
 // #12b 预览历史版本标志 (非空=正在只读预览某历史版本); 提前声明供 canEdit 引用
 const previewingVersion = ref<number | null>(null);
 const unitReviewPending = ref(false);
@@ -727,7 +744,7 @@ watch(
     .map((node) => String(node.data.skuId))
     .sort()
     .join(','),
-  () => { if (rawOwnerMode.value) void loadProductBom(); },
+  () => { void loadProductBom(); },
 );
 
 // #10: 打开 BOM 配置抽屉; 关闭时刷新本产品 BOM (原料分组 + 提示随即更新)
@@ -1104,11 +1121,13 @@ async function loadProductBom(): Promise<void> {
   productBomItems.value = [];
   bomMissingProducts.value = [];
   if (!factoryId || !ownerId) return;
-  const targets = rawOwnerMode.value
-    ? flowNodes.value
-      .filter((node) => node.data?.kind === 'FINISHED_GOOD' && node.data?.skuId)
-      .map((node) => ({ id: String(node.data.skuId), name: String(node.data.name || node.data.skuId) }))
-    : [{ id: ownerId, name: props.productName || ownerId }];
+  const graphOutputs = flowNodes.value
+    .filter((node) => node.data?.kind === 'FINISHED_GOOD' && node.data?.skuId)
+    .map((node) => ({ id: String(node.data.skuId), name: String(node.data.name || node.data.skuId) }));
+  // BOM 目标由画布产出决定；只有旧图尚无产出时才用非原料锚点兼容加载。
+  const targets = graphOutputs.length > 0
+    ? graphOutputs
+    : rawOwnerMode.value ? [] : [{ id: ownerId, name: props.productName || ownerId }];
   const uniqueTargets = targets.filter((target, index, list) =>
     list.findIndex((candidate) => candidate.id === target.id) === index);
   if (uniqueTargets.length === 0) return;
@@ -1412,11 +1431,6 @@ function removeNode(nodeId: string): void {
   if (!canEdit.value) return;
   const node = flowNodes.value.find((n) => n.id === nodeId);
   if (!node) return;
-  if (rawOwnerMode.value && nodeKind(node) === 'RAW_MATERIAL'
-    && String(node.data?.skuId || '') === productTypeId.value) {
-    ElMessage.warning('原料模式必须保留当前入口原料；如需更换，请在顶部选择其它原料');
-    return;
-  }
   const data = node.data as { name?: string; processName?: string } | undefined;
   const label = data?.name || data?.processName || '该 Cell';
   const touching = flowEdges.value.filter((e) => e.source === nodeId || e.target === nodeId).length;
@@ -1472,15 +1486,12 @@ function pulseHandle(processId: string, portId: string): void {
 }
 
 function addStandaloneRaw(): void {
-  if (rawOwnerMode.value && hasRawRoot.value) {
-    ElMessage.warning('原料模式只能有一个入口原料；请直接修改现有原料 Cell');
-    return;
-  }
-  const owner = rawOwnerMode.value
+  const rawCount = flowNodes.value.filter((node) => node.data?.kind === 'RAW_MATERIAL').length;
+  const owner = rawOwnerMode.value && rawCount === 0
     ? rawMaterialOptions.value.find((item) => item.id === props.productTypeId)
     : undefined;
   mutate(() => {
-    const count = flowNodes.value.filter((node) => node.data?.kind === 'RAW_MATERIAL').length;
+    const count = rawCount;
     flowNodes.value.push({
       id: `material:raw:${nextGraphIdSeed()}`,
       type: 'material',
@@ -1550,10 +1561,6 @@ function confirmAddProcess(): void {
 }
 
 function addInputToProcess(processId: string): void {
-  if (isRawOwnerFirstProcess(processId)) {
-    ElMessage.warning('原料模式的首道工序固定由唯一入口原料供料，不能再添加来源 Cell');
-    return;
-  }
   const process = flowNodes.value.find((node) => node.id === processId);
   if (!process) return;
   mutate(() => {
@@ -1577,17 +1584,6 @@ function addInputToProcess(processId: string): void {
     ];
     flowEdges.value.push(flowEdge(materialId, 'output', processId, portId));
   });
-}
-
-function isRawOwnerFirstProcess(processId: string): boolean {
-  if (!rawOwnerMode.value) return false;
-  const process = flowNodes.value.find((node) => node.id === processId);
-  if (!process || process.data?.kind !== 'PROCESS') return false;
-  const rawRootIds = new Set(rawRootNodes.value.map((node) => node.id));
-  const data = process.data as ProcessNodeData & { kind: 'PROCESS' };
-  return data.ports.some((port) => port.direction === 'INPUT'
-    && !!port.materialNodeId
-    && rawRootIds.has(port.materialNodeId));
 }
 
 function addOutputToProcess(processId: string): void {
@@ -1631,11 +1627,6 @@ function selectRawSku(materialNodeId: string, skuId: string): void {
   const material = flowNodes.value.find((node) => node.id === materialNodeId);
   const option = rawMaterialOptions.value.find((item) => item.id === skuId);
   if (!material || !option) return;
-  if (rawOwnerMode.value && rawRootNodes.value.some((node) => node.id === materialNodeId)
-    && skuId !== props.productTypeId) {
-    emit('ownerChange', skuId);
-    return;
-  }
   const nextUnit = workflowReportingUnit(
     'RAW_MATERIAL',
     option.unit || String(material.data?.baseUnit || 'kg'),
@@ -1706,15 +1697,6 @@ function bindOutputSku(processId: string, portId: string, option: SkuOption): bo
   if (!kind) {
     ElMessage.error('所选 SKU 分类不能作为工序产出');
     return false;
-  }
-  if (!rawOwnerMode.value && kind === 'FINISHED_GOOD') {
-    const existingFinished = flowNodes.value.find((node) => node.data?.kind === 'FINISHED_GOOD'
-      && node.data?.skuId
-      && node.id !== dataMaterialNodeId(processId, portId));
-    if (existingFinished) {
-      ElMessage.warning('成品模式只能有一个最终成品出口；如需多成品分支，请切换到原料模式');
-      return false;
-    }
   }
   const process = flowNodes.value.find((node) => node.id === processId);
   if (!process) return false;

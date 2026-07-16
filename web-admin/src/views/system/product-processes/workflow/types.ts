@@ -110,6 +110,10 @@ export interface ProductProcessWorkflowActivation {
   activeWorkflowId: number;
   activeDefinitionVersion: number;
   enabled: boolean;
+  /** 后端按已发布画布拓扑派生，用户不可手选。 */
+  workflowType?: 'SINGLE_OUTPUT_PRODUCT' | 'RAW_MATERIAL_SPLIT' | 'JOINT_PRODUCTION' | null;
+  rootInputProductTypeIds?: string[] | null;
+  terminalOutputProductTypeIds?: string[] | null;
   activatedBy?: number | null;
   activatedAt?: string | null;
   lockVersion: number;
