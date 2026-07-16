@@ -27,7 +27,7 @@ For one commit, perform one final full release build:
 - `SKIP_BUILD=1` is allowed only when the existing artifact has a manifest tying it to the exact deployed commit and its hash has been verified. A recent mtime or filename is not provenance.
 - The deploy script may also reuse its local backend-tree cache across docs-only commits. That cache must record the original build commit, the exact `backend/java/cretas-api` Git tree, and SHA-256; the recorded build commit must resolve to the same backend tree as the current clean exact `origin/main`.
 - If the verified cached JAR MD5 already matches production, the script may return a no-op only after reading the real nginx upstream and verifying the selected systemd unit plus direct active-slot health. `FORCE_REDEPLOY=1` bypasses this optimization.
-- When no exact manifest-backed CI artifact is available, let the deployment script perform the single trusted release build immediately.
+- Prefer the manifest-backed local backend-tree cache, then start the single trusted local clean build immediately. GitHub Actions and artifacts are manual fallbacks, not part of the normal release critical path. Reuse a CI artifact only when it already exists for the exact commit and passes manifest and SHA-256 validation; never wait for one to be generated.
 - Keep `target/` between sequential Maven target-test/package invocations in the same worktree. The protobuf plugin deliberately skips regeneration when its source is unchanged, so warm Maven invocations can reuse compiled classes instead of recompiling the whole module. Do not extend this into cross-worktree or mtime-only artifact trust: the final release build/cache rules above still apply.
 
 Before a release from the exact merged `origin/main`, run the single fast gate
@@ -40,12 +40,11 @@ instead of repeating shell, YAML, encoding, Flyway, and diff checks manually:
 It must stay read-only and must not run Maven or contact production. During
 feature development, use `--allow-non-main --allow-dirty --skip-fetch` only as
 a diagnostic; the real release gate remains strict on clean exact `origin/main`.
-After it passes, let `deploy-backend.sh` first check the manifest-backed local
-backend-tree cache, then race an exact-commit CI artifact download against the
-local clean Maven package on a cache miss. The first verified result wins and
-the script terminates only the recorded losing process tree. This prevents slow
-GitHub downloads on domestic networks from delaying a faster local build; do not wait or poll for CI artifact creation: a missing or invalid exact artifact simply
-leaves the local clean package running.
+After it passes, let `deploy-backend.sh` check the manifest-backed local
+backend-tree cache and immediately start the local clean Maven package on a
+cache miss. An already available exact-commit CI artifact may join as a
+best-effort fallback, but a missing, private, slow, or invalid GitHub artifact
+must never delay the local build.
 
 ## Reuse A Merged Feature Worktree
 
@@ -85,8 +84,12 @@ Do not use `--git` unless the user explicitly requests the legacy server-build p
 Use the atomic project script, not manual `rsync --delete`:
 
 ```bash
-./scripts/deploy/deploy-web-admin.sh --env prod
+./scripts/deploy/deploy-web-admin.sh --env prod --confirm-prod YES-PROD
 ```
+
+Interactive runs may omit `--confirm-prod` and type `YES-PROD` at the prompt.
+Automation and other non-interactive callers must pass the flag or set
+`CRETAS_WEB_PROD_CONFIRM=YES-PROD`; never pipe a synthetic prompt response.
 
 After deployment, compare local `dist/index.html`, server file, localhost response, and public response hashes. All must reference the same release.
 
@@ -98,6 +101,10 @@ After deployment, compare local `dist/index.html`, server file, localhost respon
 ssh root@47.100.235.168 "cd /www/wwwroot/cretas && bash restart.sh prod"
 ```
 
+The Python deploy script verifies a requirements hash, interpreter fingerprint,
+installed-package hash, and `pip check` before reusing the remote virtualenv.
+Do not force a repeated `pip install` when that manifest-backed cache is valid.
+
 Never overwrite server `.env` files.
 
 ## Mandatory Verification
@@ -106,7 +113,11 @@ Never overwrite server `.env` files.
 - Confirm the new systemd unit is active and only the active production port listens.
 - Verify direct active-slot health and the nginx/public route appropriate to the service.
 - Verify Web HTTP 200 and content hashes when Web changed.
-- After the final backend + Web combination is live, use `e2e-web-admin` once for the required production read-only E2E. Do not count slot smoke checks as the full E2E.
 - If production assertions fail, roll back first; do not debug for an extended period on the active bad release.
+
+Stop after service-level verification unless the user explicitly asks Codex to
+run full online business acceptance or F006 UI E2E. By default the user/QA owns
+that suite. When explicitly requested, use `e2e-web-admin`, keep business
+mutation count at zero, and do not count slot smoke checks as the full E2E.
 
 Production and test may drift. Mention the untouched environment's observed status without expanding a scoped production deploy into an unrequested test deployment.

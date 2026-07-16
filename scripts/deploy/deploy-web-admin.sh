@@ -39,6 +39,7 @@ set -e
 # ==================== 参数解析 ====================
 ENV="test"   # 默认 test (Bug #30 fix, 之前默认 prod 导致误操作)
 DRY_RUN=0
+PROD_CONFIRM="${CRETAS_WEB_PROD_CONFIRM:-}"
 ASSET_RETENTION_HOURS=24   # 旧 chunk 延续窗口(小时); 0 = 退回 v2.0 纯原子替换
 
 while [ $# -gt 0 ]; do
@@ -55,6 +56,14 @@ while [ $# -gt 0 ]; do
             DRY_RUN=1
             shift
             ;;
+        --confirm-prod)
+            PROD_CONFIRM="${2:-}"
+            shift 2
+            ;;
+        --confirm-prod=*)
+            PROD_CONFIRM="${1#*=}"
+            shift
+            ;;
         --asset-retention-hours)
             ASSET_RETENTION_HOURS="$2"
             shift 2
@@ -65,7 +74,7 @@ while [ $# -gt 0 ]; do
             ;;
         *)
             echo "❌ 未知参数: $1"
-            echo "用法: $0 [--env test|prod|all] [--dry-run] [--asset-retention-hours N]"
+            echo "用法: $0 [--env test|prod|all] [--confirm-prod YES-PROD] [--dry-run] [--asset-retention-hours N]"
             exit 1
             ;;
     esac
@@ -82,6 +91,32 @@ esac
 if ! [[ "$ASSET_RETENTION_HOURS" =~ ^[0-9]+$ ]]; then
     echo "❌ --asset-retention-hours 必须是非负整数 (你传了: $ASSET_RETENTION_HOURS)"
     exit 1
+fi
+
+confirm_prod_deploy() {
+    if [ "$PROD_CONFIRM" = "YES-PROD" ]; then
+        echo "    Production deployment explicitly confirmed by caller."
+        return 0
+    fi
+    if [ -n "$PROD_CONFIRM" ]; then
+        echo "ERROR: invalid production confirmation '$PROD_CONFIRM' (expected YES-PROD)"
+        return 1
+    fi
+    if [ ! -t 0 ]; then
+        echo "ERROR: production deployment requires --confirm-prod YES-PROD or CRETAS_WEB_PROD_CONFIRM=YES-PROD"
+        return 1
+    fi
+    read -r -p "    Enter 'YES-PROD' to continue, anything else to cancel: " confirm
+    if [ "$confirm" != "YES-PROD" ]; then
+        echo "Production deployment cancelled."
+        return 1
+    fi
+}
+
+# Fail before git/network/build work when a non-interactive production caller
+# forgot to make the production choice explicit.
+if [[ "$ENV" =~ ^(prod|all)$ ]]; then
+    confirm_prod_deploy
 fi
 
 # ==================== 配置 ====================
@@ -106,14 +141,27 @@ ensure_web_admin_dependencies() {
     local web_admin_dir="$PROJECT_ROOT/web-admin"
     local vite_bin="$web_admin_dir/node_modules/.bin/vite"
     local vite_cmd="$web_admin_dir/node_modules/.bin/vite.cmd"
+    local manifest="$web_admin_dir/node_modules/.cretas-package-lock.sha256"
+    local started_at lock_hash manifest_tmp elapsed
 
-    if [ -x "$vite_bin" ] || [ -f "$vite_cmd" ]; then
-        log "✓ 本地 Vite 依赖已就绪，跳过 npm ci"
+    started_at=$(date +%s)
+    if command -v sha256sum >/dev/null 2>&1; then
+        lock_hash=$(sha256sum "$web_admin_dir/package-lock.json" | awk '{print $1}')
+    else
+        lock_hash=$(shasum -a 256 "$web_admin_dir/package-lock.json" | awk '{print $1}')
+    fi
+
+    if [ -f "$manifest" ] \
+        && [ "$(tr -d '\r\n' < "$manifest")" = "$lock_hash" ] \
+        && { [ -x "$vite_bin" ] || [ -f "$vite_cmd" ]; }; then
+        elapsed=$(( $(date +%s) - started_at ))
+        log "✓ Trusted package-lock dependency cache hit; npm ci skipped"
+        log "   Dependency reuse stage: ${elapsed}s"
         return 0
     fi
 
-    log "📦 本地 Vite 依赖缺失，执行 npm ci --legacy-peer-deps --prefer-offline..."
-    if ! (cd "$web_admin_dir" && npm ci --legacy-peer-deps --prefer-offline); then
+    log "📦 Dependency cache miss; running npm ci --legacy-peer-deps --prefer-offline --no-audit --no-fund..."
+    if ! (cd "$web_admin_dir" && npm ci --legacy-peer-deps --prefer-offline --no-audit --no-fund); then
         log "❌ Web 依赖恢复失败 — 拒绝确认或构建部署"
         return 1
     fi
@@ -123,7 +171,12 @@ ensure_web_admin_dependencies() {
         return 1
     fi
 
-    log "✓ Web 依赖恢复完成"
+    manifest_tmp="${manifest}.tmp.$$"
+    printf '%s\n' "$lock_hash" > "$manifest_tmp"
+    mv -f "$manifest_tmp" "$manifest"
+    elapsed=$(( $(date +%s) - started_at ))
+    log "✓ Web 依赖恢复完成，已原子记录 package-lock digest"
+    log "   Dependency restore stage: ${elapsed}s"
 }
 
 # ==================== Git Sync Pre-check ====================
@@ -153,11 +206,6 @@ if [ "$ENV" = "prod" ]; then
     echo "    目标: $REMOTE_PATH (139:8086 / admin.cretaceousfuture.com)"
     echo "    影响: 所有 prod 用户立刻看到新代码"
     echo ""
-    read -p "    真的部 prod? 输 'YES-PROD' 继续, 其他退出: " confirm
-    if [ "$confirm" != "YES-PROD" ]; then
-        echo "❌ 已取消 (你输: '$confirm')"
-        exit 1
-    fi
     echo ""
 elif [ "$ENV" = "all" ]; then
     # all 模式: test → smoke → prod, 单独循环处理见下
@@ -332,12 +380,6 @@ if [ "$ENV" = "all" ]; then
     echo "    目标: /www/wwwroot/web-admin (139:8086 / admin.cretaceousfuture.com)"
     echo "    影响: 所有 prod 用户立刻看到新代码"
     echo ""
-    read -p "    输 'YES-PROD' 继续部 prod, 其他跳过 prod: " confirm
-    if [ "$confirm" != "YES-PROD" ]; then
-        echo "✅ Test 已部署, 跳过 prod (你输: '$confirm')"
-        exit 0
-    fi
-
     # 重新打包 + 上传 (test 那次已 rm'd $REMOTE_TAR via heredoc cleanup)
     log "📦 [prod 1/3] 重新打包..."
     cd "$PROJECT_ROOT/web-admin/dist"

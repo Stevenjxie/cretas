@@ -66,8 +66,9 @@ uvicorn main:app --port 8083     # 启动服务
 
 ### 部署到服务器
 ```bash
-# 方式1: JAR 部署 (推荐，默认)
-./scripts/deploy/deploy-backend.sh              # 默认执行本次发布唯一一次 clean package → 上传 → 蓝绿切换
+# 默认：本地可信缓存或本次唯一一次 clean package → SSH 直传 → 蓝绿切换
+# GitHub Actions/Artifact 不在日常发布关键路径，仅保留手动独立审计或显式制品备用。
+./scripts/deploy/deploy-backend.sh
 
 # 方式2: Git 部署 (旧方式)
 ./scripts/deploy/deploy-backend.sh --git        # git push → 服务器编译
@@ -249,9 +250,9 @@ frontend/CretasFoodTrace/src/
 1. **唯一发布构建** - 同一后端源码 tree 的最终 JAR/Web 制品只完整构建一次。若部署脚本会构建，部署前不得再机械执行一次完整 package/build；只有具备精确 commit 清单，或同时具备构建 commit、后端 Git tree 指纹和 SHA-256 且能证明当前 `origin/main` 后端 tree 完全相同的可信制品，才可跳过脚本构建并复用。生产当前 JAR 的 MD5、真实 upstream、active systemd 与直连健康均匹配时，允许把纯文档/台账提交发布判定为安全 no-op；任一证据缺失则走完整构建与蓝绿发布。
 2. **蓝绿槽位交替** - prod Java 的 `10010` 与 `10020` 都是可用槽位，会交替成为 active。部署前必须读取 `139.196.165.140:/www/server/panel/vhost/nginx/_upstream_cretas.conf`，禁止假设某个槽永久停用。
 3. **问题前移** - SKU、Workflow、报工单位或历史快照改动，合并前必须覆盖生产形态数据，包括旧 `g/box/case`、中文基本单位和多包装规格。
-4. **一次生产验收** - 后端与 Web 都部署完成后执行一次 F006 只读 E2E，业务写请求必须为 0。脚本/选择器失败与产品失败分开记录；共享前置条件未变化时只重跑失败场景，不机械重跑全套。
+4. **生产验收责任** - Codex 常规发布默认完成服务级验收：真实 upstream、systemd/端口、直连健康、网关 HTTP，以及 Web 四方哈希。完整线上业务验收与 F006 UI E2E 由用户/QA 执行；只有用户明确要求时 Codex 才运行，并且业务写请求必须为 0。脚本/选择器失败与产品失败分开记录；共享前置条件未变化时只重跑失败场景，不机械重跑全套。
 5. **全量 CI 分层** - 改动相关目标测试和必需门禁必须通过；已确认的全量测试基线噪声应单独治理，不得用重复本地全量构建代替，也不得隐瞒其状态。
-6. **部署快速失败与制品复用** - Java 部署先检查本地 manifest-backed 后端 tree 缓存，再竞速复用与当前 `origin/main` 完全相同 commit、且 commit 清单与 SHA-256 均通过校验的 CI JAR；无匹配制品时立即回退本地 clean build，不等待制品生成。相同制品 no-op 仍必须读取真实 upstream 并验证 active systemd 与健康；真正切流时 5×6 秒观察和自动回滚不得省略。idle 槽连续自动重启达到阈值时应立即保留旧 upstream、输出有限诊断日志并终止，不得盲等完整健康超时。
+6. **部署快速失败与制品复用** - Java 日常部署先检查本地 manifest-backed 后端 tree 缓存，未命中就立即执行本地 clean build；GitHub CI JAR 只在已经手动生成、与当前 `origin/main` 完全相同 commit 且清单/SHA-256 均通过时作为可选备用，禁止等待远端制品。相同制品 no-op 仍必须读取真实 upstream 并验证 active systemd 与健康；真正切流时 5×6 秒观察和自动回滚不得省略。idle 槽连续自动重启达到阈值时应立即保留旧 upstream、输出有限诊断日志并终止，不得盲等完整健康超时。
 7. **Maven 生命周期复用** - 同一 worktree 中连续执行目标测试、编译和打包时必须保留 `target/`，依赖 Maven 的输入变更检测复用已验证编译结果；不要在每条目标测试命令前机械执行 `clean`。首次 release 构建或来源不明的 `target/` 仍必须走 clean/清单校验，禁止以时间戳冒充制品来源证明。protobuf 的 staleness 检查是该复用路径的必要条件，除非有等价性能回归证据不得移除。
 
 ### UX Flow Gate（低技术素养用户屏幕）

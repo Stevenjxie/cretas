@@ -165,29 +165,67 @@ else
 fi
 
 # 4. 在服务器上安装依赖
-log "INFO" "[4/5] 安装依赖..."
-ssh $SERVER << ENDSSH
-cd $REMOTE_DIR
+log "INFO" "[4/5] 验证 Python 依赖缓存并按需安装..."
+# The quoted heredoc prevents local command substitution. A previous unquoted
+# heredoc executed backticks from the cryptography import-smoke comment locally.
+ssh "$SERVER" bash -s -- "$REMOTE_DIR" <<'ENDSSH'
+set -e
+REMOTE_DIR="$1"
+cd "$REMOTE_DIR"
 
 # 使用 Python 3.8
 PYTHON_BIN="python3.8"
-if ! command -v \$PYTHON_BIN &> /dev/null; then
+if ! command -v "$PYTHON_BIN" &> /dev/null; then
     echo "Python 3.8 不可用，尝试 python3..."
     PYTHON_BIN="python3"
 fi
-echo "使用 Python: \$PYTHON_BIN"
-\$PYTHON_BIN --version
+echo "使用 Python: $PYTHON_BIN"
+"$PYTHON_BIN" --version
 
-# 创建虚拟环境 (使用 Python 3.8)
-if [ ! -d "venv38" ]; then
-    echo "创建虚拟环境 (Python 3.8)..."
-    \$PYTHON_BIN -m venv venv38
+VENV_PYTHON="$REMOTE_DIR/venv38/bin/python"
+# A directory alone is not a trustworthy venv. Rebuild it when its interpreter
+# or pip entry point is missing/broken, then take the normal cache-miss path.
+if [ ! -x "$VENV_PYTHON" ] || ! "$VENV_PYTHON" -m pip --version >/dev/null 2>&1; then
+    echo "[Dependencies] venv missing or invalid - rebuilding with $PYTHON_BIN"
+    rm -rf "$REMOTE_DIR/venv38"
+    "$PYTHON_BIN" -m venv "$REMOTE_DIR/venv38"
 fi
 
-# 激活虚拟环境并安装依赖
-source venv38/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
+MANIFEST="$REMOTE_DIR/.deploy-requirements-manifest"
+REQUIREMENTS_SHA256="$(sha256sum requirements.txt | awk '{print $1}')"
+PYTHON_FINGERPRINT="$($VENV_PYTHON -c 'import platform,sys; print(platform.python_implementation()+"-"+platform.python_version()+"-"+sys.prefix)')"
+INSTALLED_SHA256="$($VENV_PYTHON -m pip freeze --all | LC_ALL=C sort | sha256sum | awk '{print $1}')"
+
+manifest_value() {
+    sed -n "s/^$1=//p" "$MANIFEST" 2>/dev/null | head -n 1
+}
+
+DEPENDENCY_CACHE_HIT=0
+DEPENDENCY_CACHE_REASON="manifest missing"
+if [ -f "$MANIFEST" ]; then
+    if [ "$(manifest_value requirements_sha256)" != "$REQUIREMENTS_SHA256" ]; then
+        DEPENDENCY_CACHE_REASON="requirements.txt content changed"
+    elif [ "$(manifest_value python_fingerprint)" != "$PYTHON_FINGERPRINT" ]; then
+        DEPENDENCY_CACHE_REASON="Python interpreter changed"
+    elif [ "$(manifest_value installed_sha256)" != "$INSTALLED_SHA256" ]; then
+        DEPENDENCY_CACHE_REASON="venv package state changed"
+    elif ! "$VENV_PYTHON" -m pip check >/dev/null 2>&1; then
+        DEPENDENCY_CACHE_REASON="pip check failed"
+    else
+        DEPENDENCY_CACHE_HIT=1
+        DEPENDENCY_CACHE_REASON="requirements and verified venv match manifest"
+    fi
+fi
+
+if [ "$DEPENDENCY_CACHE_HIT" = "1" ]; then
+    echo "[Dependencies] cache hit - skipping pip install ($DEPENDENCY_CACHE_REASON)"
+else
+    echo "[Dependencies] cache miss - running pip install ($DEPENDENCY_CACHE_REASON)"
+    "$VENV_PYTHON" -m pip install --upgrade pip
+    "$VENV_PYTHON" -m pip install -r requirements.txt
+    "$VENV_PYTHON" -m pip check
+    INSTALLED_SHA256="$($VENV_PYTHON -m pip freeze --all | LC_ALL=C sort | sha256sum | awk '{print $1}')"
+fi
 
 # 创建 .env 文件 (如果不存在)
 if [ ! -f ".env" ]; then
@@ -203,12 +241,22 @@ fi
 # makes the deploy ABORT here instead of restarting a broken process.
 echo
 echo "[Import smoke] checking that main.py imports cleanly..."
-if ! python -c 'import sys; sys.path.insert(0, "."); import main' 2>&1; then
+if ! "$VENV_PYTHON" -c 'import sys; sys.path.insert(0, "."); import main' 2>&1; then
     echo "[ERROR] main.py import smoke FAILED — aborting deploy BEFORE restart"
     echo "[ERROR] Service is still on the OLD code; fix requirements.txt or imports, then re-deploy"
     exit 1
 fi
 echo "[Import smoke] OK — main.py + all routers import successfully"
+if [ "$DEPENDENCY_CACHE_HIT" != "1" ]; then
+    MANIFEST_TMP="${MANIFEST}.tmp.$$"
+    {
+        printf 'requirements_sha256=%s\n' "$REQUIREMENTS_SHA256"
+        printf 'python_fingerprint=%s\n' "$PYTHON_FINGERPRINT"
+        printf 'installed_sha256=%s\n' "$INSTALLED_SHA256"
+    } > "$MANIFEST_TMP"
+    mv -f "$MANIFEST_TMP" "$MANIFEST"
+    echo "[Dependencies] verified manifest updated: $MANIFEST"
+fi
 ENDSSH
 
 # 重启对应环境的 Python 服务 (通过 restart 脚本，保证环境变量一致)

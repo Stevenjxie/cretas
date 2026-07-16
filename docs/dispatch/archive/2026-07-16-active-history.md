@@ -41,6 +41,10 @@
 |---|---|---|---|
 | OPS-ACTIONS-LOCAL-FIRST-20260716 | `010c2f8e95f82898d743beb70dab733444307978` | `/root` | 7 个 GitHub Actions workflow 全部取消 `push`、`pull_request`、`schedule` 自动触发，仅保留手动入口；手动 CI 默认执行 Java/Python/Vue/RN 独立全量审计，Java 制品仍需显式选择。目标 shell 契约测试、YAML 解析与 diff check 通过；未部署、未修改生产数据。 |
 | PUR-SUGG-PACK-20260716 | `010c2f8e95f82898d743beb70dab733444307978` | `/root` | 销售订单采购建议复用以销定产包装换算器，10箱×50盒/箱×200g/盒由错误的2000g修正为100000g；单SO与多SO共享生效，目标测试27/27通过；[PR #1388](https://github.com/Stevenjxie/cretas/pull/1388) 合并为 `aeee16dc830404edf4f7c0bb1b7f328de1193a0c`。 |
+| OPS-DEPLOY-GOVERNANCE-20260716 | `8fcbbde98af4edbec55b064da5d24f651c6ca201` | `/root` | 日常发布固化为本地可信缓存/唯一构建后 SSH 直传，GitHub 制品仅作手动备用；Codex 默认止于服务级验证，完整线上业务验收和 F006 UI E2E 由用户/QA 执行。 |
+| OPS-PYTHON-DEPLOY-FAST-20260716 | `8fcbbde98af4edbec55b064da5d24f651c6ca201` | `/root/python_deploy_fast` | 修复未引用 heredoc 触发本地命令替换；按 requirements、Python、已安装包与 pip check 复用远端 venv，失效才安装，目标契约测试通过。 |
+| OPS-WEB-DEPLOY-FAST-20260716 | `8fcbbde98af4edbec55b064da5d24f651c6ca201` | `/root/web_deploy_fast` | package-lock SHA-256 与 Vite 双重校验后复用 node_modules；生产自动化改用显式确认参数，移除等待人工输入；新旧目标契约测试通过。 |
+| OPS-JAVA-DEPLOY-AUDIT-20260716 | `8fcbbde98af4edbec55b064da5d24f651c6ca201` | `/root` | 只读审计确认 clean build 与约71秒启动仍是后端变更时的安全下限；现有后端 tree 缓存已覆盖未变源码，当前不缩堆、不启用懒加载、不牺牲蓝绿稳定观察。 |
 
 ## 发布证据
 

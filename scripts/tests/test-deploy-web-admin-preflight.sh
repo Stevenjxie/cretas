@@ -18,6 +18,7 @@ make_fixture() {
     cat > "$fixture/scripts/lib/deploy-common.sh" <<'COMMON'
 check_git_sync() { :; }
 COMMON
+    printf '{"name":"fixture","lockfileVersion":3,"packages":{}}\n' > "$fixture/web-admin/package-lock.json"
     cat > "$fixture/mock-bin/npm" <<'MOCK_NPM'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -62,9 +63,12 @@ make_fixture "$MISSING_FIXTURE"
 run_dry_build "$MISSING_FIXTURE" > "$MISSING_FIXTURE/output.log"
 mapfile -t missing_calls < "$MISSING_FIXTURE/npm.log"
 [[ "${#missing_calls[@]}" -eq 2 ]] || fail "missing-Vite path expected 2 npm calls"
-[[ "${missing_calls[0]}" = "ci --legacy-peer-deps --prefer-offline" ]] || fail "unexpected npm ci arguments: ${missing_calls[0]}"
+[[ "${missing_calls[0]}" = "ci --legacy-peer-deps --prefer-offline --no-audit --no-fund" ]] || fail "unexpected npm ci arguments: ${missing_calls[0]}"
 [[ "${missing_calls[1]}" = "run build" ]] || fail "build did not follow dependency restore"
-grep -Fq "Web 依赖恢复完成" "$MISSING_FIXTURE/output.log" || fail "missing restore success log"
+grep -Fq "Web 依赖恢复完成，已原子记录 package-lock digest" "$MISSING_FIXTURE/output.log" || fail "missing restore success log"
+expected_hash=$(sha256sum "$MISSING_FIXTURE/web-admin/package-lock.json" | awk '{print $1}')
+actual_hash=$(tr -d '\r\n' < "$MISSING_FIXTURE/web-admin/node_modules/.cretas-package-lock.sha256")
+[[ "$actual_hash" = "$expected_hash" ]] || fail "restore did not atomically record the package-lock digest"
 
 # Existing Vite: do not reinstall dependencies; go straight to the build.
 READY_FIXTURE="$TMP_ROOT/ready"
@@ -72,11 +76,12 @@ make_fixture "$READY_FIXTURE"
 mkdir -p "$READY_FIXTURE/web-admin/node_modules/.bin"
 printf '#!/usr/bin/env bash\n' > "$READY_FIXTURE/web-admin/node_modules/.bin/vite"
 chmod +x "$READY_FIXTURE/web-admin/node_modules/.bin/vite"
+sha256sum "$READY_FIXTURE/web-admin/package-lock.json" | awk '{print $1}' > "$READY_FIXTURE/web-admin/node_modules/.cretas-package-lock.sha256"
 run_dry_build "$READY_FIXTURE" > "$READY_FIXTURE/output.log"
 mapfile -t ready_calls < "$READY_FIXTURE/npm.log"
 [[ "${#ready_calls[@]}" -eq 1 ]] || fail "ready-Vite path unexpectedly ran npm ci"
 [[ "${ready_calls[0]}" = "run build" ]] || fail "ready-Vite path did not build directly"
-grep -Fq "跳过 npm ci" "$READY_FIXTURE/output.log" || fail "missing skip log"
+grep -Fq "Trusted package-lock dependency cache hit; npm ci skipped" "$READY_FIXTURE/output.log" || fail "missing skip log"
 
 # Failed restore: exit before build and keep the failure visible.
 FAILED_FIXTURE="$TMP_ROOT/failed"
@@ -88,14 +93,15 @@ set -e
 [[ "$failed_rc" -ne 0 ]] || fail "failed npm ci must stop deployment"
 mapfile -t failed_calls < "$FAILED_FIXTURE/npm.log"
 [[ "${#failed_calls[@]}" -eq 1 ]] || fail "failed npm ci must not continue to build"
-[[ "${failed_calls[0]}" = "ci --legacy-peer-deps --prefer-offline" ]] || fail "failure path used unexpected npm arguments"
+[[ "${failed_calls[0]}" = "ci --legacy-peer-deps --prefer-offline --no-audit --no-fund" ]] || fail "failure path used unexpected npm arguments"
 grep -Fq "Web 依赖恢复失败" "$FAILED_FIXTURE/output.log" || fail "missing dependency failure log"
 
-# The preflight call must stay before any prod confirmation and before the build.
+# Production confirmation must fail fast before dependency/network work, while
+# dependency restoration must still happen before the single build.
 preflight_line=$(grep -n '^ensure_web_admin_dependencies$' "$DEPLOY_SCRIPT" | cut -d: -f1)
-confirm_line=$(grep -n "read -p .*YES-PROD" "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1)
+confirm_line=$(grep -n '^    confirm_prod_deploy$' "$DEPLOY_SCRIPT" | cut -d: -f1)
 build_line=$(grep -n '^npm run build ' "$DEPLOY_SCRIPT" | cut -d: -f1)
-[[ "$preflight_line" -lt "$confirm_line" ]] || fail "dependency preflight must run before prod confirmation"
+[[ "$confirm_line" -lt "$preflight_line" ]] || fail "explicit prod confirmation must fail before dependency work"
 [[ "$preflight_line" -lt "$build_line" ]] || fail "dependency preflight must run before build"
 
-echo "PASS: web-admin dependency preflight restores, skips, and fails safely"
+echo "PASS: web-admin dependency preflight validates lock digest, restores, skips, and fails safely"
