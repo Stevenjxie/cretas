@@ -201,6 +201,25 @@ class ProductProcessWorkflowActivationServiceTest {
     }
 
     @Test
+    void activateRejectsDifferentFamilyWithSameSingleTerminalOutput() {
+        ProductProcessWorkflow requested = withSingleTerminal(
+                publishedWorkflow(45L, "F006", "ANCHOR-B", 1), "FG-1");
+        ProductProcessWorkflow competing = withSingleTerminal(
+                publishedWorkflow(44L, "F006", "ANCHOR-A", 3), "FG-1");
+        ProductProcessWorkflowActivation active = activation(91L, competing, true, 0L);
+        when(workflowRepository.findByIdAndFactoryId(45L, "F006")).thenReturn(Optional.of(requested));
+        when(workflowRepository.findByIdAndFactoryId(44L, "F006")).thenReturn(Optional.of(competing));
+        when(activationRepository.findByFactoryIdAndEnabledTrue("F006")).thenReturn(List.of(active));
+        when(compiler.compile(any())).thenReturn(singleOutputCompiledWorkflow());
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.activate("F006", 45L, 7002L));
+
+        assertEquals("WORKFLOW_SINGLE_OUTPUT_ALREADY_ACTIVE", error.getErrorCode());
+        verify(activationRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
     void deactivateRejectsStaleLockVersionWithStableConflictCode() {
         ProductProcessWorkflowActivation current = activation(
                 91L, publishedWorkflow(44L, "F006", "PT-PIG", 3), true, 5L);
@@ -260,6 +279,24 @@ class ProductProcessWorkflowActivationServiceTest {
         workflow.setNodesJson("[]");
         workflow.setEdgesJson("[]");
         workflow.setViewportJson("{\"x\":0,\"y\":0,\"zoom\":1}");
+        return workflow;
+    }
+
+    private ProductProcessWorkflow withSingleTerminal(
+            ProductProcessWorkflow workflow, String terminalSkuId) {
+        workflow.setNodesJson("""
+                [
+                  {"id":"raw","kind":"RAW_MATERIAL","data":{"skuId":"RAW-1"}},
+                  {"id":"process","kind":"PROCESS","data":{}},
+                  {"id":"finished","kind":"FINISHED_GOOD","data":{"skuId":"%s"}}
+                ]
+                """.formatted(terminalSkuId));
+        workflow.setEdgesJson("""
+                [
+                  {"id":"in","source":"raw","target":"process"},
+                  {"id":"out","source":"process","target":"finished"}
+                ]
+                """);
         return workflow;
     }
 

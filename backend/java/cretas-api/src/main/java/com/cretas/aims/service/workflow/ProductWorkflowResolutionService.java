@@ -36,6 +36,10 @@ public interface ProductWorkflowResolutionService {
     void assertActiveWorkflowCoversOutputs(String factoryId, String ownerProductTypeId,
                                            List<String> targetFinishedGoodIds);
 
+    /** Validate the exact workflow/version pinned by an existing production plan. */
+    void assertPinnedWorkflowCoversOutputs(String factoryId, Long workflowId, Integer definitionVersion,
+                                           List<String> targetFinishedGoodIds);
+
     /** Resolve and pin the active workflow's terminal reporting-unit contract for a plan. */
     Optional<WorkflowPlanOutputContract> resolveActivePlanOutputContract(
             String factoryId, String ownerProductTypeId, List<String> targetFinishedGoodIds);

@@ -15,6 +15,8 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.service.workflow.ProductWorkflowResolutionService;
 import com.cretas.aims.service.workflow.WorkflowProcessPath;
 import com.cretas.aims.service.workflow.WorkflowPlanOutputContract;
+import com.cretas.aims.service.workflow.WorkflowTopology;
+import com.cretas.aims.service.workflow.WorkflowTopologyClassifier;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -73,61 +75,27 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
                     .withCode("WORKFLOW_RESOLUTION_PRODUCT_NOT_FOUND")
                     .withSeverity("warning");
         }
+        ResolvedCandidate resolved;
+        try {
+            resolved = requireResolution(factoryId, requested);
+        } catch (BusinessException error) {
+            if (!"WORKFLOW_SINGLE_OUTPUT_NOT_FOUND".equals(error.getErrorCode())
+                    && !"WORKFLOW_SHARED_OUTPUT_NOT_FOUND".equals(error.getErrorCode())) {
+                throw error;
+            }
+            return WorkflowOutputResolutionDTO.builder()
+                    .requestedProductTypeIds(requested)
+                    .resolutionMode("NONE")
+                    .message(error.getMessage())
+                    .candidates(List.of())
+                    .build();
+        }
         Set<String> requestedSet = new HashSet<>(requested);
-
-        // 单选优先该成品自有图 (owner 非原料)
-        if (requested.size() == 1) {
-            String only = requested.get(0);
-            ProductProcessWorkflowActivation self = activationRepository
-                    .findByFactoryIdAndProductTypeId(factoryId, only).orElse(null);
-            if (self != null && Boolean.TRUE.equals(self.getEnabled())) {
-                ProductType ownerPt = productTypeRepository.findByIdAndFactoryId(only, factoryId).orElse(null);
-                if (ownerPt != null && !ProductCategory.RAW_MATERIAL.equals(ownerPt.getProductCategory())) {
-                    ResolvedWorkflow rw = loadResolved(factoryId, self);
-                    if (rw != null && rw.terminalSkuIds.containsAll(requestedSet)) {
-                        return WorkflowOutputResolutionDTO.builder()
-                                .requestedProductTypeIds(requested)
-                                .resolutionMode("SELF_WORKFLOW")
-                                .candidates(List.of(buildCandidate(factoryId, ownerPt, rw, requestedSet)))
-                                .build();
-                    }
-                }
-            }
-        }
-
-        // 原料图候选: 扫已启用 activation → 过滤 owner=原料 → 复核版本/PUBLISHED → 终端 ⊇ 所选
-        List<ProductProcessWorkflowActivation> enabled =
-                activationRepository.findByFactoryIdAndEnabledTrue(factoryId);
-        Map<String, ProductType> ownerById = batchOwners(factoryId, enabled);
-        List<ResolvedCandidate> resolved = new ArrayList<>();
-        for (ProductProcessWorkflowActivation act : enabled) {
-            ProductType owner = ownerById.get(act.getProductTypeId());
-            if (owner == null || !ProductCategory.RAW_MATERIAL.equals(owner.getProductCategory())) {
-                continue;
-            }
-            ResolvedWorkflow rw = loadResolved(factoryId, act);
-            if (rw == null) {
-                continue;
-            }
-            if (rw.terminalSkuIds.containsAll(requestedSet)) {
-                boolean exact = rw.terminalSkuIds.size() == requestedSet.size();
-                resolved.add(new ResolvedCandidate(owner, rw, exact, act.getActivatedAt()));
-            }
-        }
-        // 排序: 精确匹配 > 终端数少 > 启用时间新
-        resolved.sort(Comparator
-                .comparing((ResolvedCandidate c) -> c.exact ? 0 : 1)
-                .thenComparingInt(c -> c.rw.terminalSkuIds.size())
-                .thenComparing(c -> c.activatedAt == null ? LocalDateTime.MIN : c.activatedAt,
-                        Comparator.reverseOrder()));
-
-        List<WorkflowOutputResolutionDTO.Candidate> candidates = resolved.stream()
-                .map(c -> buildCandidate(factoryId, c.owner, c.rw, requestedSet))
-                .collect(Collectors.toList());
         return WorkflowOutputResolutionDTO.builder()
                 .requestedProductTypeIds(requested)
-                .resolutionMode(candidates.isEmpty() ? "NONE" : "RAW_OWNED")
-                .candidates(candidates)
+                .resolutionMode(requested.size() == 1 ? "SINGLE_OUTPUT" : "MULTI_OUTPUT")
+                .message("已匹配启用的工序 Workflow")
+                .candidates(List.of(buildCandidate(factoryId, resolved.owner, resolved.rw, requestedSet)))
                 .build();
     }
 
@@ -159,17 +127,25 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
     @Transactional(readOnly = true)
     public void assertActiveWorkflowCoversOutputs(
             String factoryId, String ownerProductTypeId, List<String> targetFinishedGoodIds) {
+        List<String> targets = selectedOutputs(ownerProductTypeId, targetFinishedGoodIds);
+        if (!targets.isEmpty()) requireResolution(factoryId, targets);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public void assertPinnedWorkflowCoversOutputs(
+            String factoryId, Long workflowId, Integer definitionVersion,
+            List<String> targetFinishedGoodIds) {
         List<String> targets = dedupeNonBlank(targetFinishedGoodIds);
-        if (targets.isEmpty()) {
-            return;
-        }
-        ProductProcessWorkflowActivation act = activationRepository
-                .findByFactoryIdAndProductTypeId(factoryId, ownerProductTypeId)
-                .filter(a -> Boolean.TRUE.equals(a.getEnabled()))
-                .orElseThrow(this::notCovered);
-        ResolvedWorkflow rw = loadResolved(factoryId, act);
-        if (rw == null || !rw.terminalSkuIds.containsAll(new HashSet<>(targets))) {
-            throw notCovered();
+        ProductProcessWorkflow workflow = workflowRepository.findByIdAndFactoryId(workflowId, factoryId)
+                .filter(row -> row.getStatus() == ProductProcessWorkflow.Status.PUBLISHED)
+                .filter(row -> java.util.Objects.equals(row.getDefinitionVersion(), definitionVersion))
+                .filter(row -> !Boolean.TRUE.equals(row.getUnitReviewRequired()))
+                .orElseThrow(() -> new BusinessException(409, "生产计划固定的 Workflow 版本已失效")
+                        .withCode("WORKFLOW_PINNED_VERSION_INVALID"));
+        WorkflowTopology topology = parseTopology(workflow);
+        if (!matchesSelection(topology, new HashSet<>(targets), targets.size())) {
+            throw noMatchingWorkflow(targets.size());
         }
     }
 
@@ -177,28 +153,9 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
     @Transactional(readOnly = true)
     public Optional<WorkflowPlanOutputContract> resolveActivePlanOutputContract(
             String factoryId, String ownerProductTypeId, List<String> targetFinishedGoodIds) {
-        ProductProcessWorkflowActivation activation = activationRepository
-                .findByFactoryIdAndProductTypeId(factoryId, ownerProductTypeId)
-                .filter(row -> Boolean.TRUE.equals(row.getEnabled()))
-                .orElse(null);
-        if (activation == null) return Optional.empty();
-
-        ResolvedWorkflow resolved = loadResolved(factoryId, activation);
-        if (resolved == null) {
-            throw new BusinessException(409, "已启用的工序 Workflow 版本无效或等待单位复核")
-                    .withCode("WORKFLOW_PLAN_CONTRACT_INVALID");
-        }
-        List<String> targets = dedupeNonBlank(targetFinishedGoodIds);
-        if (targets.isEmpty()) {
-            if (resolved.terminalSkuIds.contains(ownerProductTypeId)) {
-                targets = List.of(ownerProductTypeId);
-            } else if (resolved.terminalSkuIds.size() == 1) {
-                targets = List.copyOf(resolved.terminalSkuIds);
-            } else {
-                throw new BusinessException(409, "该 Workflow 有多个成品出口，请明确选择计划成品")
-                        .withCode("WORKFLOW_PLAN_OUTPUT_AMBIGUOUS");
-            }
-        }
+        List<String> targets = selectedOutputs(ownerProductTypeId, targetFinishedGoodIds);
+        if (targets.isEmpty()) return Optional.empty();
+        ResolvedWorkflow resolved = requireResolution(factoryId, targets).rw;
         Map<String, List<String>> unitsBySku = parseTerminalOutputUnits(factoryId, resolved.workflow);
         Map<String, String> selected = new LinkedHashMap<>();
         for (String target : targets) {
@@ -214,7 +171,8 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
             selected.put(target, units.get(0));
         }
         String plannedUnit;
-        if (resolved.terminalSkuIds.contains(ownerProductTypeId)) {
+        String internalAnchor = resolved.workflow.getProductTypeId();
+        if (!resolved.topology.rootInputSkuIds().contains(internalAnchor)) {
             Set<String> distinctUnits = new LinkedHashSet<>(selected.values());
             if (distinctUnits.size() != 1) {
                 throw new BusinessException(409, "所选成品的 Workflow 产出单位不一致，不能合并为一个计划数量")
@@ -223,7 +181,7 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
             plannedUnit = distinctUnits.iterator().next();
         } else {
             Set<String> ownerInputUnits = parseOwnerInputUnits(
-                    factoryId, resolved.workflow, ownerProductTypeId);
+                    factoryId, resolved.workflow, internalAnchor);
             if (ownerInputUnits.size() != 1) {
                 throw new BusinessException(409, "原料中心 Workflow 必须为计划原料提供唯一入口单位")
                         .withCode("WORKFLOW_PLAN_INPUT_UNIT_AMBIGUOUS");
@@ -323,6 +281,56 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
 
     // ---- 内部 ----
 
+    private ResolvedCandidate requireResolution(String factoryId, List<String> requested) {
+        Set<String> requestedSet = new HashSet<>(requested);
+        List<ProductProcessWorkflowActivation> enabled =
+                activationRepository.findByFactoryIdAndEnabledTrue(factoryId);
+        Map<String, ProductType> ownerById = batchOwners(factoryId, enabled);
+        List<ResolvedCandidate> matches = new ArrayList<>();
+        for (ProductProcessWorkflowActivation activation : enabled) {
+            ResolvedWorkflow resolved = loadResolved(factoryId, activation);
+            if (resolved == null
+                    || !matchesSelection(resolved.topology, requestedSet, requested.size())) {
+                continue;
+            }
+            boolean exact = resolved.terminalSkuIds.size() == requestedSet.size();
+            matches.add(new ResolvedCandidate(
+                    ownerById.get(activation.getProductTypeId()), resolved,
+                    exact, activation.getActivatedAt()));
+        }
+        matches.sort(Comparator
+                .comparing((ResolvedCandidate candidate) -> candidate.exact ? 0 : 1)
+                .thenComparingInt(candidate -> candidate.rw.terminalSkuIds.size())
+                .thenComparing(candidate -> candidate.activatedAt == null
+                                ? LocalDateTime.MIN : candidate.activatedAt,
+                        Comparator.reverseOrder())
+                .thenComparing(candidate -> candidate.rw.workflow.getId()));
+        if (requested.size() == 1 && matches.size() > 1) {
+            throw new BusinessException(409, "该产品存在多个已启用的单产出 Workflow，请先处理冲突")
+                    .withCode("WORKFLOW_SINGLE_OUTPUT_AMBIGUOUS")
+                    .withHint("同一成品只允许一个单产出 Workflow 启用；请停用冲突图或合并为同一图的版本")
+                    .withSeverity("error");
+        }
+        if (matches.isEmpty()) throw noMatchingWorkflow(requested.size());
+        return matches.getFirst();
+    }
+
+    private boolean matchesSelection(
+            WorkflowTopology topology, Set<String> requestedSet, int requestedCount) {
+        Set<String> terminals = new HashSet<>(topology.terminalOutputSkuIds());
+        if (requestedCount == 1) {
+            return topology.isSingleOutput() && terminals.equals(requestedSet);
+        }
+        return requestedCount > 1 && topology.isMultiOutput() && terminals.containsAll(requestedSet);
+    }
+
+    private List<String> selectedOutputs(String productTypeId, List<String> requested) {
+        List<String> targets = dedupeNonBlank(requested);
+        if (!targets.isEmpty()) return targets;
+        return productTypeId == null || productTypeId.isBlank()
+                ? List.of() : List.of(productTypeId);
+    }
+
     /** 从 activation 精确取 PUBLISHED workflow + 解析终端成品 skuId; 版本不符/坏图返 null (只读侧不瘫全厂)。 */
     private ResolvedWorkflow loadResolved(String factoryId, ProductProcessWorkflowActivation act) {
         ProductProcessWorkflow wf = workflowRepository
@@ -333,37 +341,26 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
                 || !java.util.Objects.equals(act.getActiveDefinitionVersion(), wf.getDefinitionVersion())) {
             return null;
         }
-        Set<String> terminals = parseTerminalSkuIds(wf);
-        if (terminals == null) {
+        WorkflowTopology topology = parseTopology(wf);
+        if (topology.type() == WorkflowTopology.Type.INVALID) {
             return null;
         }
-        return new ResolvedWorkflow(wf, terminals);
+        return new ResolvedWorkflow(wf, new LinkedHashSet<>(topology.terminalOutputSkuIds()), topology);
     }
 
-    private Set<String> parseTerminalSkuIds(ProductProcessWorkflow wf) {
+    private WorkflowTopology parseTopology(ProductProcessWorkflow wf) {
         try {
             List<ProductProcessWorkflowDTO.Node> nodes = objectMapper.readValue(
                     wf.getNodesJson(), new TypeReference<List<ProductProcessWorkflowDTO.Node>>() { });
             List<ProductProcessWorkflowDTO.Edge> edges = objectMapper.readValue(
                     wf.getEdgesJson(), new TypeReference<List<ProductProcessWorkflowDTO.Edge>>() { });
-            Set<String> nodesWithOutgoingEdges = edges.stream()
-                    .map(ProductProcessWorkflowDTO.Edge::getSource)
-                    .filter(java.util.Objects::nonNull)
-                    .collect(Collectors.toSet());
-            Set<String> skuIds = new LinkedHashSet<>();
-            for (ProductProcessWorkflowDTO.Node node : nodes) {
-                if (node != null && FINISHED_GOOD.equals(node.getKind()) && node.getData() != null
-                        && !nodesWithOutgoingEdges.contains(node.getId())) {
-                    Object skuId = node.getData().get("skuId");
-                    if (skuId instanceof String s && !s.isBlank()) {
-                        skuIds.add(s);
-                    }
-                }
-            }
-            return skuIds;
+            ProductProcessWorkflowDTO definition = new ProductProcessWorkflowDTO();
+            definition.setNodes(nodes);
+            definition.setEdges(edges);
+            return WorkflowTopologyClassifier.classify(definition);
         } catch (Exception e) {
             log.error("workflow {} nodesJson 解析失败, 该图剔除出候选", wf.getId(), e);
-            return null;
+            return new WorkflowTopology(WorkflowTopology.Type.INVALID, List.of(), List.of());
         }
     }
 
@@ -478,7 +475,7 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
 
     private WorkflowOutputResolutionDTO.Candidate buildCandidate(
             String factoryId, ProductType owner, ResolvedWorkflow rw, Set<String> requestedSet) {
-        RawMaterialType rawOwner = ProductCategory.RAW_MATERIAL.equals(owner.getProductCategory())
+        RawMaterialType rawOwner = owner != null && ProductCategory.RAW_MATERIAL.equals(owner.getProductCategory())
                 ? rawMaterialTypeRepository.findById(owner.getId())
                     .filter(raw -> factoryId.equals(raw.getFactoryId()))
                     .orElse(null)
@@ -497,19 +494,21 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
         return WorkflowOutputResolutionDTO.Candidate.builder()
                 .workflowId(rw.workflow.getId())
                 .definitionVersion(rw.workflow.getDefinitionVersion())
-                .ownerProductTypeId(owner.getId())
-                .ownerProductName(rawOwner != null ? rawOwner.getName() : owner.getName())
-                .ownerProductCategory(owner.getProductCategory())
-                .ownerUnit(rawOwner != null ? rawOwner.getUnit() : owner.getUnit())
-                .plannedUnit(resolveCandidatePlanUnit(factoryId, owner.getId(), rw))
+                .ownerProductTypeId(rw.workflow.getProductTypeId())
+                .ownerProductName(rawOwner != null ? rawOwner.getName() : owner == null ? null : owner.getName())
+                .ownerProductCategory(owner == null ? null : owner.getProductCategory())
+                .ownerUnit(rawOwner != null ? rawOwner.getUnit() : owner == null ? null : owner.getUnit())
+                .plannedUnit(resolveCandidatePlanUnit(factoryId, rw.workflow.getProductTypeId(), rw))
                 .terminalOutputs(terminals)
                 .exactMatch(rw.terminalSkuIds.size() == requestedSet.size())
+                .workflowType(rw.topology.type().name())
+                .rootInputProductTypeIds(rw.topology.rootInputSkuIds())
                 .build();
     }
 
     private String resolveCandidatePlanUnit(
             String factoryId, String ownerProductTypeId, ResolvedWorkflow workflow) {
-        if (workflow.terminalSkuIds.contains(ownerProductTypeId)) {
+        if (!workflow.topology.rootInputSkuIds().contains(ownerProductTypeId)) {
             List<String> units = parseTerminalOutputUnits(factoryId, workflow.workflow)
                     .getOrDefault(ownerProductTypeId, List.of());
             return units.size() == 1 ? units.get(0) : null;
@@ -545,10 +544,15 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
                 .collect(Collectors.toList());
     }
 
-    private BusinessException notCovered() {
-        return new BusinessException(409, "所选成品没有对应的通用(原料)工序配置, 请先配置")
-                .withCode("WORKFLOW_RESOLUTION_NOT_COVERED")
-                .withHint("到「产品工序配置」以原料为锚建一张覆盖这些成品的工序图并启用; 或分别为每个成品单独建计划")
+    private BusinessException noMatchingWorkflow(int requestedCount) {
+        if (requestedCount == 1) {
+            return new BusinessException(409, "该产品没有单产出 Workflow，请前往创建单产出 Workflow")
+                    .withCode("WORKFLOW_SINGLE_OUTPUT_NOT_FOUND")
+                    .withHintTarget("productTypeId")
+                    .withSeverity("warning");
+        }
+        return new BusinessException(409, "未找到共享的工序 Workflow，请分开创建生产计划")
+                .withCode("WORKFLOW_SHARED_OUTPUT_NOT_FOUND")
                 .withHintTarget("targetFinishedGoodIds")
                 .withSeverity("warning");
     }
@@ -556,9 +560,12 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
     private static final class ResolvedWorkflow {
         final ProductProcessWorkflow workflow;
         final Set<String> terminalSkuIds;
-        ResolvedWorkflow(ProductProcessWorkflow workflow, Set<String> terminalSkuIds) {
+        final WorkflowTopology topology;
+        ResolvedWorkflow(ProductProcessWorkflow workflow, Set<String> terminalSkuIds,
+                         WorkflowTopology topology) {
             this.workflow = workflow;
             this.terminalSkuIds = terminalSkuIds;
+            this.topology = topology;
         }
     }
 

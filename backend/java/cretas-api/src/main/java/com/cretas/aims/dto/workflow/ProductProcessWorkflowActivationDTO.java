@@ -3,6 +3,7 @@ package com.cretas.aims.dto.workflow;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Data
 public class ProductProcessWorkflowActivationDTO {
@@ -16,4 +17,7 @@ public class ProductProcessWorkflowActivationDTO {
     private Long activatedBy;
     private LocalDateTime activatedAt;
     private Long lockVersion;
+    private String workflowType;
+    private List<String> terminalOutputProductTypeIds;
+    private List<String> rootInputProductTypeIds;
 }
