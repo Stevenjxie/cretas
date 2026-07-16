@@ -4,6 +4,7 @@
  */
 import request from './request'
 import { get, post } from './request'
+import type { ProductionDocumentTrace } from '@/types/productionDocumentTrace'
 
 /** Download the Excel import template (returns Blob) */
 export function downloadImportTemplate(factoryId: string) {
@@ -72,6 +73,10 @@ export interface ProductionPlanMaterialAdvisory {
 
 export function getMaterialAdvisory(factoryId: string, planId: string) {
   return get<ProductionPlanMaterialAdvisory>(`/${factoryId}/production-plans/${planId}/material-advisory`)
+}
+
+export function getProductionDocumentTrace(factoryId: string, planId: string) {
+  return get<ProductionDocumentTrace>(`/${factoryId}/production-plans/${planId}/document-trace`)
 }
 
 export interface ProductionSettlementStatus {

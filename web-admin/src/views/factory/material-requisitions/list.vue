@@ -190,29 +190,6 @@ function planLabel(planId?: string | null): string {
   return '原计划已删除/归档';
 }
 
-// 补齐 planCache 未命中的计划 (例如已完结/已取消计划不在 loadPlanOptions 的开放集合里)。
-async function resolvePlanNames(ids: Array<string | null | undefined>) {
-  if (!factoryId.value) return;
-  const unique = Array.from(new Set(ids.filter((id): id is string => !!id && !planCache.value[id])));
-  if (unique.length === 0) return;
-  await Promise.all(
-    unique.map(async (id) => {
-      try {
-        const res = await get(`/${factoryId.value}/production-plans/${id}`);
-        if (res.success && res.data) {
-          planCache.value[id] = {
-            planNumber: res.data.planNumber,
-            productName: res.data.productName,
-            plannedDate: res.data.plannedDate,
-          };
-        }
-      } catch {
-        // best-effort: 展示回退到裸 ID
-      }
-    }),
-  );
-}
-
 function toNumber(value: number | string | null | undefined): number {
   if (value === null || value === undefined || value === '') return 0;
   const n = Number(value);
