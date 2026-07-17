@@ -18,3 +18,15 @@ test('canonical skill and compatibility pointer both route production to the sha
   assert.match(pointer, /scripts\/e2e\/production-readonly/);
   assert.doesNotMatch(pointer, /chromium\.launch|CRUD|create\/edit\/delete/i);
 });
+
+test('project Playwright skill routes direct MCP production runs to the canonical guarded entry', () => {
+  const skillPath = path.join(repoRoot, '.agents', 'skills', 'project-playwright-e2e', 'SKILL.md');
+  const skill = fs.readFileSync(skillPath, 'utf8');
+  assert.match(skill, /browser_run_code_unsafe/);
+  assert.match(skill, /scripts\/e2e\/production-readonly\/mcp-entry\.js/);
+  assert.match(skill, /before-send mutation guard/);
+  assert.match(skill, /Production business writes must be zero/);
+  assert.match(skill, /nonprod-business-flow-audit\.mjs/);
+  assert.doesNotMatch(skill, /Prefer standalone Node scripts over persistent browser-profile MCP sessions/);
+  assert.doesNotMatch(skill, /1\. Read `\.mcp\.json`/);
+});

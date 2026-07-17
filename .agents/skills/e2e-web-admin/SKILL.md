@@ -73,6 +73,17 @@ await browser.close();
 
 Use `.agents/skills/agent-browser` or available browser tools for exploratory inspection. Treat `.mcp.json` as historical MCP configuration, not as a guarantee that MCP tools are available in Codex.
 
+Do not resurrect retired standalone production runners. In particular,
+`tests/qa-r1-vue-smoke/run-smoke.mjs` and
+`tests/e2e-yield-mixed-sku/readonly-bom-workflow-contract.mjs` were removed
+after their reusable coverage moved into the canonical harness. Historical
+JSON and screenshots are evidence, not runnable acceptance assets.
+
+The write-capable mixed-SKU chain is intentionally named
+`tests/e2e-yield-mixed-sku/nonprod-business-flow-audit.mjs`. It must never run
+as production acceptance: it requires an explicit test target, rejects known
+production hosts, and requires both non-production write acknowledgements.
+
 ## Production Read-Only Acceptance
 
 After the final backend and Web versions are both live, run one F006 production read-only suite covering the changed paths. For the SKU/unit workflow, cover SKU edit, Workflow, process-sheet reporting, finished-goods opening inventory, and sales order entry.

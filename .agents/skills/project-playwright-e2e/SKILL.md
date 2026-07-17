@@ -9,7 +9,9 @@ description: >
 
 # Project Playwright E2E
 
-Use this skill for concrete Playwright automation in this repo. It converts the historical Claude MCP workflow into Codex-friendly local scripts.
+Use this skill for concrete Playwright automation in this repo. Production
+read-only acceptance and local/write-capable testing deliberately use different
+entries so a convenient local runner cannot bypass production safety.
 
 ## Source Material
 
@@ -28,7 +30,21 @@ Use this skill for concrete Playwright automation in this repo. It converts the 
 
 ## Preferred Pattern
 
-Prefer standalone Node scripts over persistent browser-profile MCP sessions:
+For production read-only acceptance, use the shared direct Playwright MCP
+entry first:
+
+```text
+scripts/e2e/production-readonly/mcp-entry.js
+```
+
+Pass the checked-in filename to `browser_run_code_unsafe`. It consumes the
+MCP-supplied `page`, reuses one clean UI-login session, records network and
+console evidence, and installs the before-send mutation guard before the first
+target navigation. Do not paste an ad-hoc production script, launch a second
+browser, reuse storage state, or substitute a historical runner.
+
+For local or explicitly non-production write-capable testing, standalone Node
+scripts remain appropriate:
 
 ```javascript
 import { chromium } from 'playwright';
@@ -119,7 +135,25 @@ If dependencies are missing or browser downloads are required, ask for approval 
 
 If the user asks for Playwright MCP specifically:
 
-1. Read `.mcp.json`.
-2. Explain that Codex may not have those MCP tools loaded automatically.
-3. Use local Playwright or available browser tools unless the runtime exposes MCP browser tools.
-4. Preserve `.mcp.json`; do not edit it unless the user requests configuration changes.
+1. Use the directly integrated Playwright MCP tools when they are available.
+2. For production read-only acceptance, load
+   `scripts/e2e/production-readonly/mcp-entry.js` by filename and keep one
+   clean session for the ordered business-domain run.
+3. If Playwright MCP is unavailable, say so; use the canonical CLI only when
+   that still satisfies the user's request. Do not silently switch browser
+   products when the user explicitly requires MCP.
+4. Treat `.mcp.json` as historical configuration. Preserve it, but do not use
+   it to infer current Codex MCP availability.
+
+## Production Safety Boundary
+
+- Production business writes must be zero. Authentication and exact registered
+  query-only POST contracts are the only write-shaped requests allowed.
+- Any unexpected `POST`, `PUT`, `PATCH`, or `DELETE` must be aborted before
+  send and reported as a failed run.
+- Never execute archived SmartBI/BOM runners or a write-capable yield/settlement
+  script against production.
+- `nonprod-business-flow-audit.mjs` is test-only and requires its explicit
+  environment and write acknowledgements; its name is not a production entry.
+- Use `scripts/e2e/production-readonly/README.md` for scenario IDs, evidence
+  schema, validation commands, and credential/redaction rules.
