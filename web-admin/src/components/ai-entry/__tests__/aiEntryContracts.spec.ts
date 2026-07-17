@@ -15,5 +15,8 @@ describe('AI entry contracts', () => {
     });
     expect(PRODUCTION_PLAN_CONFIG.systemPrompt).toContain('quantityUnit="kg"');
     expect(PRODUCTION_PLAN_CONFIG.systemPrompt).not.toContain('2026-03-10');
+    expect(PRODUCTION_PLAN_CONFIG.systemPrompt).toContain('必须逐字保留用户输入的完整 SKU 名称');
+    expect(PRODUCTION_PLAN_CONFIG.systemPrompt).toContain('400g、350g');
+    expect(PRODUCTION_PLAN_CONFIG.systemPrompt).toContain('不要猜测或返回 productTypeId');
   });
 });

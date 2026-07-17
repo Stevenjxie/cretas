@@ -336,31 +336,31 @@ export const usePermissionStore = defineStore('permission', () => {
 
     const request = (async () => {
       try {
-      const [l1Rows, l2Map] = await Promise.all([
-        getPlatformPermissions(),
-        factoryId
-          ? getFactoryOverride(factoryId).catch(() => ({} as RoleModuleOverride))
-          : Promise.resolve({} as RoleModuleOverride),
-      ]);
+        const [l1Rows, l2Map] = await Promise.all([
+          getPlatformPermissions(),
+          factoryId
+            ? getFactoryOverride(factoryId).catch(() => ({} as RoleModuleOverride))
+            : Promise.resolve({} as RoleModuleOverride),
+        ]);
 
-      let l4Rows: UserModuleAccessView[] = [];
-      let l4Loaded = false;
-      if (factoryId && userId) {
-        try {
-          l4Rows = await getUserModuleAccess(factoryId, userId, { silent: true });
-          l4Loaded = true;
-        } catch {
-          // L4 user-specific overrides are managed from System/Canvas. Business roles
-          // can run on L1/L2 permissions without read access to that admin matrix.
-          l4Loaded = true;
+        let l4Rows: UserModuleAccessView[] = [];
+        let l4Loaded = false;
+        if (factoryId && userId) {
+          try {
+            l4Rows = await getUserModuleAccess(factoryId, userId, { silent: true });
+            l4Loaded = true;
+          } catch {
+            // L4 user-specific overrides are managed from System/Canvas. Business roles
+            // can run on L1/L2 permissions without read access to that admin matrix.
+            l4Loaded = true;
+          }
         }
-      }
 
-      // A previous identity's slower response must never overwrite a newer login.
-      if (permissionIdentity() !== identity) return;
-      dbPermissions.value = mergeLayers(l1Rows, l2Map, role);
-      if (l4Loaded) applyUserModuleAccess(l4Rows);
-      isDbLoaded.value = true;
+        // A previous identity's slower response must never overwrite a newer login.
+        if (permissionIdentity() !== identity) return;
+        dbPermissions.value = mergeLayers(l1Rows, l2Map, role);
+        if (l4Loaded) applyUserModuleAccess(l4Rows);
+        isDbLoaded.value = true;
       } catch (e) {
         if (permissionIdentity() !== identity) return;
         dbLoadError.value = (e as Error)?.message || 'Failed to load permissions';

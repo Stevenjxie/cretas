@@ -51,7 +51,7 @@ export const PRODUCTION_PLAN_CONFIG: AiEntryConfig = {
   systemPrompt: `你是食品工厂的生产计划助手。用户会用自然语言描述生产计划需求，你需要通过对话收集以下字段信息：
 
 必填字段：
-- productTypeName: 产品名称（由工厂决定，你不知道具体清单，需要用户提供）
+- productTypeName: 产品名称（由工厂决定，你不知道具体清单，需要用户提供）。必须逐字保留用户输入的完整 SKU 名称，包括数字、重量/规格后缀（如 400g、350g）和包装描述；禁止缩写、归一化、删除后缀或改成相似产品
 - plannedQuantity: 计划数量（数字）
 - quantityUnit: 计划数量单位（必须保留用户原始单位，如 kg、g、box、case）
 - plannedDate: 计划日期（YYYY-MM-DD 格式）
@@ -72,6 +72,7 @@ export const PRODUCTION_PLAN_CONFIG: AiEntryConfig = {
 2. 如果缺少必填字段，礼貌追问（每次只问1-2个问题）
 3. 工厂当前日期是 ${currentFactoryDate}；日期支持自然语言（"明天"、"下周一"等），必须以该日期换算为 YYYY-MM-DD，禁止使用提示词示例中的历史日期
 4. 数量与单位不可拆丢（"500kg"→ plannedQuantity=500 且 quantityUnit="kg"）
+5. productTypeName 必须原样返回用户明确提供的完整文本；不要猜测或返回 productTypeId，页面会用完整名称唯一匹配现有 SKU
 
 当所有必填字段收集完毕后，返回如下格式（用 markdown 代码块包裹）：
 \`\`\`json

@@ -22,6 +22,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -341,9 +343,37 @@ public class BomServiceImpl implements BomService {
             log.setChangeType(type);
             log.setOldValue(snapshotBomItem(oldItem));
             log.setNewValue(snapshotBomItem(newItem));
+            populateChangeActor(log);
             bomChangeLogRepository.save(log);
         } catch (Exception e) {
             BomServiceImpl.log.warn("[P1-9] BomChangeLog 写入失败 (non-blocking): {}", e.getMessage());
+        }
+    }
+
+    /**
+     * JwtAuthInterceptor exposes the authenticated actor through request attributes rather than
+     * Spring Security's SecurityContext. Keep non-request/system contexts null so audit history
+     * never invents a user identity.
+     */
+    private void populateChangeActor(BomChangeLog changeLog) {
+        RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
+        if (attributes == null) return;
+
+        Object userId = attributes.getAttribute("userId", RequestAttributes.SCOPE_REQUEST);
+        if (userId instanceof Number number) {
+            changeLog.setChangedBy(number.longValue());
+        } else if (userId instanceof String value) {
+            try {
+                changeLog.setChangedBy(Long.parseLong(value));
+            } catch (NumberFormatException ignored) {
+                BomServiceImpl.log.warn("[P1-9] Ignoring non-numeric BOM audit userId: {}", value);
+            }
+        }
+
+        Object username = attributes.getAttribute("username", RequestAttributes.SCOPE_REQUEST);
+        if (username != null) {
+            String value = username.toString().trim();
+            if (!value.isEmpty()) changeLog.setChangedByName(value);
         }
     }
 

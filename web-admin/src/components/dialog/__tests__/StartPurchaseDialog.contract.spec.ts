@@ -29,4 +29,11 @@ describe('StartPurchaseDialog purchase-order contract', () => {
     expect(source).toContain('clearSuggestionAmount(item)');
     expect(source).not.toContain('allow-create');
   });
+
+  it('invalidates the numeric price when its pricing unit changes', () => {
+    expect(source).toContain('function onPriceUnitChange');
+    expect(source).toContain('item.unitPrice = null');
+    expect(source).toContain('@change="onPriceUnitChange(row)"');
+    expect(source).toContain('切换计价单位后需重新输入对应单价');
+  });
 });

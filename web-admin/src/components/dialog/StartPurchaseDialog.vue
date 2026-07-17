@@ -86,6 +86,7 @@ interface EditableItem {
   _currentStock: number;
   _netRequired: number;
   _stockSufficient: boolean;
+  _activePriceUnit: string;
 }
 
 // ── props / emits ──────────────────────────────────────────────────────────
@@ -221,6 +222,24 @@ function onQuantityChange(item: EditableItem) {
   recalculateBoxQuantity(item);
 }
 
+function onPriceUnitChange(item: EditableItem) {
+  const nextUnit = canonicalUnitCode(item.priceUnit);
+  if (!nextUnit) {
+    item.priceUnit = item._activePriceUnit;
+    return;
+  }
+  if (nextUnit === item._activePriceUnit) return;
+
+  // A numeric price is inseparable from its unit. Carrying the same number from
+  // 元/kg to 元/g (or package units) would corrupt the purchase amount, so require
+  // the buyer to enter the price that belongs to the newly selected unit.
+  item.priceUnit = nextUnit;
+  item._activePriceUnit = nextUnit;
+  item.unitPrice = null;
+  clearSuggestionAmount(item);
+  ElMessage.info('计价单位已变化，请输入该单位对应的单价');
+}
+
 function onQuantityUnitChange(item: EditableItem) {
   const previousUnit = canonicalUnitCode(item.unit);
   const nextUnit = canonicalUnitCode(item.quantityUnit);
@@ -253,6 +272,9 @@ async function loadSupplierOptions() {
       params: { page: 1, size: 100 },
     });
     suppliers.value = res.success && Array.isArray(res.data?.content) ? res.data.content : [];
+  } catch {
+    suppliers.value = [];
+    ElMessage.warning('供应商列表加载失败，可稍后在采购草稿中补填');
   } finally {
     suppliersLoading.value = false;
   }
@@ -284,26 +306,27 @@ async function loadSuggestion() {
     if (res.success && res.data) {
       suggestion.value = res.data;
       // Pre-fill editable rows from suggestion, defaulting quantity to netRequired
-      editableItems.value = res.data.items.map((it) => {
+      editableItems.value = res.data.items.map<EditableItem>((it) => {
         const units = resolvePurchaseSuggestionUnits(it);
         return {
-        materialTypeId: it.materialTypeId,
-        materialName: it.materialName,
-        materialCategory: it.materialCategory,
-        quantity: it.netRequired > 0 ? it.netRequired : it.requiredQuantity,
-        unit: units.quantityUnit,
-        quantityUnit: units.quantityUnit,
-        unitPrice: it.referenceUnitPrice ?? null,
-        priceUnit: units.priceUnit,
-        lineAmount: it.lineAmount ?? null,
-        convertedPricingQuantity: it.convertedPricingQuantity ?? null,
-        specification: '',
-        boxQuantity: null,
-        remark: '',
-        _requiredQuantity: it.requiredQuantity,
-        _currentStock: it.currentStock,
-        _netRequired: it.netRequired,
-        _stockSufficient: it.stockSufficient,
+          materialTypeId: it.materialTypeId,
+          materialName: it.materialName,
+          materialCategory: it.materialCategory,
+          quantity: it.netRequired > 0 ? it.netRequired : it.requiredQuantity,
+          unit: units.quantityUnit,
+          quantityUnit: units.quantityUnit,
+          unitPrice: it.referenceUnitPrice ?? null,
+          priceUnit: units.priceUnit,
+          lineAmount: it.lineAmount ?? null,
+          convertedPricingQuantity: it.convertedPricingQuantity ?? null,
+          specification: '',
+          boxQuantity: null,
+          remark: '',
+          _requiredQuantity: it.requiredQuantity,
+          _currentStock: it.currentStock,
+          _netRequired: it.netRequired,
+          _stockSufficient: it.stockSufficient,
+          _activePriceUnit: units.priceUnit,
         };
       });
       await Promise.all(editableItems.value.map((item) => ensurePackagingLoaded(item.materialTypeId)));
@@ -528,7 +551,13 @@ function handleClose() {
                 controls-position="right"
                 :placeholder="row.unitPrice == null ? '未知' : ''"
               />
-              <el-select v-model="row.priceUnit" size="small" style="width: 82px" placeholder="计价单位">
+              <el-select
+                v-model="row.priceUnit"
+                size="small"
+                style="width: 82px"
+                placeholder="计价单位"
+                @change="onPriceUnitChange(row)"
+              >
                 <el-option
                   v-for="option in priceUnitOptions(row)"
                   :key="option.value"
@@ -538,6 +567,7 @@ function handleClose() {
               </el-select>
             </div>
             <div class="sp-price-label">{{ formatPriceUnit(row.priceUnit) }}</div>
+            <div class="sp-packaging-hint">切换计价单位后需重新输入对应单价</div>
           </template>
         </el-table-column>
         <el-table-column label="金额预览" width="150" align="right">
