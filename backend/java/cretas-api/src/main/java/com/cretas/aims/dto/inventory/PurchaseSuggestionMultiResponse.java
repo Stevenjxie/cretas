@@ -105,6 +105,9 @@ public class PurchaseSuggestionMultiResponse {
         /** 计量单位 */
         private String unit;
 
+        /** Canonical quantity unit; explicit replacement for the legacy unit alias. */
+        private String quantityUnit;
+
         /** 当前可用库存 (来自 MaterialBatch 汇总，全 SO 共享一份库存) */
         private BigDecimal currentStock;
 
@@ -119,5 +122,8 @@ public class PurchaseSuggestionMultiResponse {
 
         /** 参考单价 (来自 BOM.unitPrice，null = 未配置) */
         private BigDecimal referenceUnitPrice;
+
+        /** Canonical denominator unit of referenceUnitPrice, e.g. kg. */
+        private String referencePriceUnit;
     }
 }

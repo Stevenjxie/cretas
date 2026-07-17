@@ -4,6 +4,7 @@ import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.production.CreateProductionPlanRequest;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.ProductionPlanService;
 import lombok.extern.slf4j.Slf4j;
@@ -11,7 +12,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.*;
@@ -35,6 +38,19 @@ public class ProductionPlanCreateTool extends AbstractBusinessTool {
 
     @Autowired
     private ProductTypeRepository productTypeRepository;
+
+    @Autowired
+    private com.cretas.aims.service.unit.UnitContractService unitContractService;
+
+    @Autowired(required = false)
+    private com.cretas.aims.repository.FactorySettingsRepository factorySettingsRepository;
+
+    private Clock clock = Clock.systemUTC();
+
+    @Autowired(required = false)
+    void setClock(Clock clock) {
+        if (clock != null) this.clock = clock;
+    }
 
     @Override
     public String getToolName() {
@@ -65,9 +81,13 @@ public class ProductionPlanCreateTool extends AbstractBusinessTool {
         quantity.put("description", "计划产量，如500kg、100箱");
         properties.put("quantity", quantity);
 
+        properties.put("quantityUnit", Map.of(
+                "type", "string",
+                "description", "计划数量单位的 canonical code，如 kg、box；quantity 未携带单位时必填"));
+
         Map<String, Object> expectedDate = new HashMap<>();
         expectedDate.put("type", "string");
-        expectedDate.put("description", "预计完成日期，如2026-03-10、明天、后天");
+        expectedDate.put("description", "预计完成日期，支持 ISO 日期、今天、明天、后天");
         properties.put("expectedDate", expectedDate);
 
         Map<String, Object> productionLineId = new HashMap<>();
@@ -117,6 +137,37 @@ public class ProductionPlanCreateTool extends AbstractBusinessTool {
     }
 
     @Override
+    public boolean supportsPreview() {
+        return true;
+    }
+
+    @Override
+    protected Map<String, Object> doPreview(
+            String factoryId, Map<String, Object> params, Map<String, Object> context) {
+        String productInput = getString(params, "productId");
+        ProductType product = resolveProductType(factoryId, productInput);
+        if (product == null) {
+            throw new BusinessException(400, "找不到产品: " + productInput);
+        }
+        ParsedQuantity parsed = parseQuantity(factoryId, getString(params, "quantity"),
+                getString(params, "quantityUnit"));
+        BigDecimal normalized = normalizeQuantity(factoryId, product, parsed);
+        LocalDate plannedDate = parseDate(factoryId, getString(params, "expectedDate"));
+        if (plannedDate == null) plannedDate = today(factoryId);
+        Map<String, Object> preview = new LinkedHashMap<>();
+        preview.put("status", "PREVIEW");
+        preview.put("productId", product.getId());
+        preview.put("productName", product.getName());
+        preview.put("sourceQuantity", parsed.quantity());
+        preview.put("sourceQuantityUnit", parsed.unit());
+        preview.put("plannedQuantity", normalized);
+        preview.put("plannedQuantityUnit", product.getUnit());
+        preview.put("plannedDate", plannedDate);
+        preview.put("message", "将创建生产计划；当前仅预览，尚未写入");
+        return preview;
+    }
+
+    @Override
     protected String getParameterQuestion(String paramName) {
         return switch (paramName) {
             case "productId" -> "请提供产品名称或ID。";
@@ -140,21 +191,18 @@ public class ProductionPlanCreateTool extends AbstractBusinessTool {
         Integer priority = getInteger(params, "priority");
 
         // 解析产品：先尝试按ID查找，再按名称模糊匹配
-        String resolvedProductTypeId = resolveProductTypeId(factoryId, productId);
-        if (resolvedProductTypeId == null) {
+        ProductType product = resolveProductType(factoryId, productId);
+        if (product == null) {
             return Map.of("success", false, "message","找不到产品: " + productId + "。请提供正确的产品名称或ID。");
         }
 
-        // 解析数量（提取数字部分，如 "500kg" → 500）
-        BigDecimal plannedQuantity = parseQuantity(quantity);
-        if (plannedQuantity == null) {
-            return Map.of("success", false, "message","无法解析产量: " + quantity + "。请提供数字，如 500 或 500kg。");
-        }
+        ParsedQuantity parsedQuantity = parseQuantity(factoryId, quantity, getString(params, "quantityUnit"));
+        BigDecimal plannedQuantity = normalizeQuantity(factoryId, product, parsedQuantity);
 
         // 解析日期
-        LocalDate plannedDate = parseDate(expectedDate);
+        LocalDate plannedDate = parseDate(factoryId, expectedDate);
         if (plannedDate == null) {
-            plannedDate = LocalDate.now(); // 默认今天
+            plannedDate = today(factoryId);
         }
 
         // 获取操作人ID
@@ -162,8 +210,11 @@ public class ProductionPlanCreateTool extends AbstractBusinessTool {
 
         // 构建请求
         CreateProductionPlanRequest request = new CreateProductionPlanRequest();
-        request.setProductTypeId(resolvedProductTypeId);
+        request.setProductTypeId(product.getId());
         request.setPlannedQuantity(plannedQuantity);
+        request.setPlannedUnit(product.getUnit());
+        request.setSourceDisplayQuantity(parsedQuantity.quantity());
+        request.setSourceDisplayUnit(parsedQuantity.unit());
         request.setPlannedDate(plannedDate);
         request.setExpectedCompletionDate(plannedDate.plusDays(1));
         if (priority != null) request.setPriority(priority);
@@ -179,6 +230,7 @@ public class ProductionPlanCreateTool extends AbstractBusinessTool {
         result.put("planNumber", created.getPlanNumber());
         result.put("productName", created.getProductTypeName());
         result.put("plannedQuantity", created.getPlannedQuantity());
+        result.put("plannedQuantityUnit", product.getUnit());
         result.put("plannedDate", created.getPlannedDate());
         result.put("status", created.getStatus());
         result.put("message", String.format("生产计划创建成功！计划编号: %s，产品: %s，计划产量: %s",
@@ -191,18 +243,18 @@ public class ProductionPlanCreateTool extends AbstractBusinessTool {
     /**
      * 解析产品ID：先按ID查找，再按名称模糊匹配
      */
-    private String resolveProductTypeId(String factoryId, String productIdOrName) {
+    private ProductType resolveProductType(String factoryId, String productIdOrName) {
         // 先尝试按ID精确查找
         Optional<ProductType> byId = productTypeRepository.findByIdAndFactoryId(productIdOrName, factoryId);
-        if (byId.isPresent()) return byId.get().getId();
+        if (byId.isPresent()) return byId.get();
 
         // 按编码查找
         Optional<ProductType> byCode = productTypeRepository.findByFactoryIdAndCode(factoryId, productIdOrName);
-        if (byCode.isPresent()) return byCode.get().getId();
+        if (byCode.isPresent()) return byCode.get();
 
         // 按名称查找
         Optional<ProductType> byName = productTypeRepository.findByFactoryIdAndName(factoryId, productIdOrName);
-        if (byName.isPresent()) return byName.get().getId();
+        if (byName.isPresent()) return byName.get();
 
         return null;
     }
@@ -210,29 +262,83 @@ public class ProductionPlanCreateTool extends AbstractBusinessTool {
     /**
      * 从字符串中提取数字部分，如 "500kg" → 500, "100箱" → 100
      */
-    private BigDecimal parseQuantity(String quantityStr) {
-        if (quantityStr == null) return null;
-        String digits = quantityStr.replaceAll("[^0-9.]", "");
-        if (digits.isEmpty()) return null;
-        try {
-            return new BigDecimal(digits);
-        } catch (NumberFormatException e) {
-            return null;
+    private ParsedQuantity parseQuantity(String factoryId, String quantityStr, String explicitUnit) {
+        if (quantityStr == null || quantityStr.isBlank()) {
+            throw new IllegalArgumentException("计划产量不能为空");
         }
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("^\\s*([0-9]+(?:\\.[0-9]+)?)\\s*([^0-9\\s]+)?\\s*$")
+                .matcher(quantityStr);
+        if (!matcher.matches()) {
+            throw new IllegalArgumentException("无法解析产量: " + quantityStr + "；请使用 500kg 或 quantity+quantityUnit");
+        }
+        try {
+            BigDecimal value = new BigDecimal(matcher.group(1));
+            String embeddedUnit = matcher.group(2);
+            String unit = embeddedUnit != null ? embeddedUnit : explicitUnit;
+            if (unit == null || unit.isBlank()) {
+                throw new IllegalArgumentException("计划产量必须携带单位，或单独提供 quantityUnit");
+            }
+            if (embeddedUnit != null && explicitUnit != null && !explicitUnit.isBlank()
+                    && !unitContractService.areEquivalent(factoryId, embeddedUnit, explicitUnit)) {
+                throw new IllegalArgumentException("quantity 中的单位与 quantityUnit 不一致");
+            }
+            return new ParsedQuantity(value, unit);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("无法解析产量: " + quantityStr);
+        }
+    }
+
+    private BigDecimal normalizeQuantity(String factoryId, ProductType product, ParsedQuantity parsed) {
+        if (product.getUnit() == null || product.getUnit().isBlank()) {
+            throw new BusinessException(409, "产品未配置计划单位，不能创建生产计划");
+        }
+        com.cretas.aims.service.unit.UnitConversionResult result = unitContractService.convert(
+                parsed.quantity(), new com.cretas.aims.service.unit.UnitConversionContext(
+                        factoryId, product.getId(), parsed.unit(), product.getUnit(),
+                        java.time.LocalDateTime.now(clock),
+                        com.cretas.aims.service.unit.UnitUsageScene.PRODUCTION,
+                        6, java.math.RoundingMode.HALF_UP));
+        if (!result.succeeded() || result.quantity() == null) {
+            throw new BusinessException(400, "计划数量单位无法换算到 SKU 单位: "
+                    + parsed.unit() + " → " + product.getUnit());
+        }
+        return result.quantity();
     }
 
     /**
      * 解析日期字符串，支持 YYYY-MM-DD 和相对日期（明天、后天）
      */
-    private LocalDate parseDate(String dateStr) {
+    private LocalDate parseDate(String factoryId, String dateStr) {
         if (dateStr == null) return null;
-        if (dateStr.contains("明天")) return LocalDate.now().plusDays(1);
-        if (dateStr.contains("后天")) return LocalDate.now().plusDays(2);
-        if (dateStr.contains("今天")) return LocalDate.now();
+        LocalDate today = today(factoryId);
+        if (dateStr.contains("明天")) return today.plusDays(1);
+        if (dateStr.contains("后天")) return today.plusDays(2);
+        if (dateStr.contains("今天")) return today;
         try {
             return LocalDate.parse(dateStr, DateTimeFormatter.ISO_LOCAL_DATE);
         } catch (DateTimeParseException e) {
             return null;
         }
+    }
+
+    private LocalDate today(String factoryId) {
+        ZoneId zone = ZoneId.of("Asia/Shanghai");
+        if (factorySettingsRepository != null) {
+            String configured = factorySettingsRepository.findByFactoryId(factoryId)
+                    .map(com.cretas.aims.entity.FactorySettings::getTimezone)
+                    .orElse(null);
+            if (configured != null && !configured.isBlank()) {
+                try {
+                    zone = ZoneId.of(configured);
+                } catch (Exception e) {
+                    log.warn("工厂时区无效，使用 Asia/Shanghai: factory={}, timezone={}", factoryId, configured);
+                }
+            }
+        }
+        return LocalDate.now(clock.withZone(zone));
+    }
+
+    private record ParsedQuantity(BigDecimal quantity, String unit) {
     }
 }

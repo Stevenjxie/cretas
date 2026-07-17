@@ -70,6 +70,10 @@ public class CreateReceiveRecordRequest {
 
         private BigDecimal unitPrice;
 
+        /** Canonical denominator unit of unitPrice; defaults to the receipt quantity unit. */
+        @Size(max = 20, message = "计价单位长度不能超过20个字符")
+        private String priceUnit;
+
         @Size(max = 50, message = "质检结果长度不能超过50个字符")
         private String qcResult;
 

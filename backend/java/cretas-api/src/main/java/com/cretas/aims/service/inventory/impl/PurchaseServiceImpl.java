@@ -121,6 +121,10 @@ public class PurchaseServiceImpl implements PurchaseService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ProductTypeRepository productTypeRepository;
 
+    /** Authoritative canonical-unit and conversion contract for quantity/price calculations. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.unit.UnitContractService unitContractService;
+
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.production.SalesOrderPlanQuantityNormalizer salesOrderPlanQuantityNormalizer;
 
@@ -342,7 +346,8 @@ public class PurchaseServiceImpl implements PurchaseService {
             }
             item.setMaterialName(materialName);
             item.setQuantity(itemDTO.getQuantity());
-            item.setUnit(itemDTO.getUnit());
+            applyPurchasePriceContract(factoryId, item, itemDTO.getQuantityUnit(), itemDTO.getUnit(),
+                    itemDTO.getPriceUnit());
             item.setUnitPrice(itemDTO.getUnitPrice());
             item.setTaxRate(itemDTO.getTaxRate() != null ? itemDTO.getTaxRate() : BigDecimal.ZERO);
             item.setRemark(itemDTO.getRemark());
@@ -982,7 +987,8 @@ public class PurchaseServiceImpl implements PurchaseService {
             item.setMaterialTypeId(itemDTO.getMaterialTypeId());
             item.setMaterialName(itemDTO.getMaterialName());
             item.setQuantity(itemDTO.getQuantity());
-            item.setUnit(itemDTO.getUnit());
+            applyPurchasePriceContract(factoryId, item, itemDTO.getQuantityUnit(), itemDTO.getUnit(),
+                    itemDTO.getPriceUnit());
             item.setUnitPrice(itemDTO.getUnitPrice());
             item.setTaxRate(itemDTO.getTaxRate() != null ? itemDTO.getTaxRate() : BigDecimal.ZERO);
             item.setRemark(itemDTO.getRemark());
@@ -1060,6 +1066,9 @@ public class PurchaseServiceImpl implements PurchaseService {
             newItem.setMaterialName(srcItem.getMaterialName());
             newItem.setQuantity(srcItem.getQuantity());
             newItem.setUnit(srcItem.getUnit());
+            newItem.setPriceUnit(srcItem.getPriceUnit() != null ? srcItem.getPriceUnit() : srcItem.getUnit());
+            newItem.setQuantityToPriceFactor(srcItem.getQuantityToPriceFactor() != null
+                    ? srcItem.getQuantityToPriceFactor() : BigDecimal.ONE);
             newItem.setUnitPrice(srcItem.getUnitPrice());
             newItem.setTaxRate(srcItem.getTaxRate() != null ? srcItem.getTaxRate() : BigDecimal.ZERO);
             newItem.setRemark(srcItem.getRemark());
@@ -1155,13 +1164,15 @@ public class PurchaseServiceImpl implements PurchaseService {
         // + 入库总额自然继承, 无需在多处重复.
         // 注: 用 purchaseOrderItemRepository (与 validateOverReceiveCap 一致), 不用 order.getItems()
         // (@OneToMany LAZY, 跨查询可能未加载).
-        Map<String, BigDecimal> poLinePrices = Collections.emptyMap();
+        Map<String, PurchasePriceQuote> poLinePrices = Collections.emptyMap();
         if (order != null) {
             poLinePrices = new HashMap<>();
             for (var poItem : purchaseOrderItemRepository.findByPurchaseOrderId(order.getId())) {
                 // PO 行价是合同价, 收货未填价时的权威来源. 同物料多行取首个非空价.
                 if (poItem.getMaterialTypeId() != null && poItem.getUnitPrice() != null) {
-                    poLinePrices.putIfAbsent(poItem.getMaterialTypeId(), poItem.getUnitPrice());
+                    poLinePrices.putIfAbsent(poItem.getMaterialTypeId(), new PurchasePriceQuote(
+                            poItem.getUnitPrice(),
+                            poItem.getPriceUnit() != null ? poItem.getPriceUnit() : poItem.getUnit()));
                 }
             }
         }
@@ -1174,12 +1185,24 @@ public class PurchaseServiceImpl implements PurchaseService {
             item.setMaterialTypeId(itemDTO.getMaterialTypeId());
             item.setMaterialName(itemDTO.getMaterialName());
             item.setReceivedQuantity(itemDTO.getReceivedQuantity());
-            item.setUnit(itemDTO.getUnit());
+            String quantityUnit = canonicalUnit(factoryId, itemDTO.getUnit(), "收货数量单位");
+            item.setUnit(quantityUnit);
             // BUG-RCV: 行价为空 → 继承 PO 行价 (合同价); 无 PO / PO 无此物料价 → 保持 null (诚实, 不伪造 0).
-            BigDecimal resolvedPrice = itemDTO.getUnitPrice() != null
+            PurchasePriceQuote inheritedQuote = poLinePrices.get(itemDTO.getMaterialTypeId());
+            BigDecimal sourcePrice = itemDTO.getUnitPrice() != null
                     ? itemDTO.getUnitPrice()
-                    : poLinePrices.get(itemDTO.getMaterialTypeId());
+                    : inheritedQuote != null ? inheritedQuote.unitPrice() : null;
+            String sourcePriceUnit = itemDTO.getUnitPrice() != null
+                    ? firstNonBlank(itemDTO.getPriceUnit(), quantityUnit)
+                    : inheritedQuote != null
+                            ? firstNonBlank(inheritedQuote.priceUnit(), quantityUnit)
+                            : quantityUnit;
+            BigDecimal resolvedPrice = sourcePrice != null
+                    ? convertPricePerUnit(factoryId, itemDTO.getMaterialTypeId(), sourcePrice,
+                            sourcePriceUnit, quantityUnit)
+                    : null;
             item.setUnitPrice(resolvedPrice);
+            item.setPriceUnit(quantityUnit);
             item.setQcResult(itemDTO.getQcResult());
             item.setFactoryNumber(itemDTO.getFactoryNumber());
             item.setOriginPlace(itemDTO.getOriginPlace());
@@ -1650,10 +1673,12 @@ public class PurchaseServiceImpl implements PurchaseService {
                     .sourceProductName(acc.sourceProductName)
                     .requiredQuantity(totalRequired)
                     .unit(acc.unit)
+                    .quantityUnit(acc.unit)
                     .currentStock(currentStock)
                     .netRequired(netRequired)
                     .stockSufficient(netRequired.compareTo(BigDecimal.ZERO) == 0)
                     .referenceUnitPrice(acc.referenceUnitPrice)
+                    .referencePriceUnit(acc.referencePriceUnit)
                     .build());
         }
 
@@ -1741,10 +1766,12 @@ public class PurchaseServiceImpl implements PurchaseService {
                     .sourceSalesOrderNumbers(new ArrayList<>(acc.sourceSalesOrderNumbers))
                     .requiredQuantity(totalRequired)
                     .unit(acc.unit)
+                    .quantityUnit(acc.unit)
                     .currentStock(currentStock)
                     .netRequired(netRequired)
                     .stockSufficient(netRequired.compareTo(BigDecimal.ZERO) == 0)
                     .referenceUnitPrice(acc.referenceUnitPrice)
+                    .referencePriceUnit(acc.referencePriceUnit)
                     .build());
         }
 
@@ -1790,10 +1817,10 @@ public class PurchaseServiceImpl implements PurchaseService {
                     if (actualQtyPerUnit == null || actualQtyPerUnit.compareTo(BigDecimal.ZERO) <= 0) continue;
 
                     BigDecimal required = actualQtyPerUnit.multiply(soQty).setScale(4, BigDecimal.ROUND_HALF_UP);
-                    accumulateMaterial(accumulators, ri.getMaterialTypeId(), required, salesOrderNumber,
+                    accumulateMaterial(factoryId, accumulators, ri.getMaterialTypeId(), required, salesOrderNumber,
                             ri.getMaterialName() != null ? ri.getMaterialName() : "未知原料",
                             ri.getMaterialCategory() != null ? ri.getMaterialCategory() : "RAW",
-                            soProductName, ri.getUnit(), ri.getUnitPrice());
+                            soProductName, ri.getUnit(), ri.getUnitPrice(), ri.getPriceUnit());
                     expandedAny = true;
                 }
                 if (expandedAny) hasBom = true;
@@ -1816,10 +1843,10 @@ public class PurchaseServiceImpl implements PurchaseService {
                 if (actualQtyPerUnit == null || actualQtyPerUnit.compareTo(BigDecimal.ZERO) <= 0) continue;
 
                 BigDecimal required = actualQtyPerUnit.multiply(soQty).setScale(4, BigDecimal.ROUND_HALF_UP);
-                accumulateMaterial(accumulators, bom.getMaterialTypeId(), required, salesOrderNumber,
+                accumulateMaterial(factoryId, accumulators, bom.getMaterialTypeId(), required, salesOrderNumber,
                         bom.getMaterialName() != null ? bom.getMaterialName() : "未知原料",
                         bom.getMaterialCategory() != null ? bom.getMaterialCategory() : "RAW",
-                        soProductName, bom.getUnit(), bom.getUnitPrice());
+                        soProductName, bom.getUnit(), bom.getUnitPrice(), bom.getPriceUnit());
             }
         }
 
@@ -1850,21 +1877,33 @@ public class PurchaseServiceImpl implements PurchaseService {
      * 把一条 BOM 展开结果累加进 accumulators (按 materialTypeId 合并需求量 + 记录来源 SO).
      * 第一次见到某 materialTypeId 时记录其名称/分类/单位/参考价 (后续同物料沿用首次模板)。
      */
-    private void accumulateMaterial(Map<String, MaterialAccumulator> accumulators,
+    private void accumulateMaterial(String factoryId, Map<String, MaterialAccumulator> accumulators,
             String matId, BigDecimal required, String salesOrderNumber,
             String materialName, String materialCategory, String sourceProductName,
-            String unit, BigDecimal referenceUnitPrice) {
+            String unit, BigDecimal referenceUnitPrice, String referencePriceUnit) {
         MaterialAccumulator acc = accumulators.computeIfAbsent(matId, k -> {
             MaterialAccumulator a = new MaterialAccumulator();
             a.materialTypeId = matId;
             a.materialName = materialName;
             a.materialCategory = materialCategory;
             a.sourceProductName = sourceProductName;
-            a.unit = unit;
+            a.unit = canonicalUnitOrRaw(factoryId, unit);
             a.referenceUnitPrice = referenceUnitPrice;
+            a.referencePriceUnit = canonicalUnitOrRaw(factoryId,
+                    firstNonBlank(referencePriceUnit, unit));
             return a;
         });
-        acc.requiredQty = acc.requiredQty.add(required);
+        String sourceUnit = canonicalUnitOrRaw(factoryId, unit);
+        BigDecimal normalizedRequired = required;
+        if (required != null && acc.unit != null && sourceUnit != null && !acc.unit.equals(sourceUnit)) {
+            normalizedRequired = required.multiply(conversionFactor(factoryId, matId, sourceUnit, acc.unit));
+        }
+        acc.requiredQty = acc.requiredQty.add(normalizedRequired);
+        if (referenceUnitPrice != null && acc.referenceUnitPrice == null) {
+            acc.referenceUnitPrice = referenceUnitPrice;
+            acc.referencePriceUnit = canonicalUnitOrRaw(factoryId,
+                    firstNonBlank(referencePriceUnit, sourceUnit));
+        }
         if (salesOrderNumber != null) acc.sourceSalesOrderNumbers.add(salesOrderNumber);
     }
 
@@ -1894,9 +1933,83 @@ public class PurchaseServiceImpl implements PurchaseService {
         String sourceProductName;
         String unit;
         BigDecimal referenceUnitPrice;
+        String referencePriceUnit;
         BigDecimal requiredQty = BigDecimal.ZERO;
         /** LinkedHashSet: 去重 + 保留首次出现顺序 (同 SO 多产品共用同物料只记一次 SO 号). */
         java.util.LinkedHashSet<String> sourceSalesOrderNumbers = new java.util.LinkedHashSet<>();
+    }
+
+    private void applyPurchasePriceContract(String factoryId, PurchaseOrderItem item,
+            String quantityUnit, String legacyUnit, String priceUnit) {
+        String canonicalQuantityUnit = canonicalUnit(factoryId,
+                firstNonBlank(quantityUnit, legacyUnit), "采购数量单位");
+        String canonicalPriceUnit = canonicalUnit(factoryId,
+                firstNonBlank(priceUnit, canonicalQuantityUnit), "采购计价单位");
+        item.setUnit(canonicalQuantityUnit);
+        item.setPriceUnit(canonicalPriceUnit);
+        item.setQuantityToPriceFactor(conversionFactor(factoryId, item.getMaterialTypeId(),
+                canonicalQuantityUnit, canonicalPriceUnit));
+    }
+
+    private BigDecimal convertPricePerUnit(String factoryId, String materialTypeId,
+            BigDecimal unitPrice, String sourcePriceUnit, String targetQuantityUnit) {
+        String canonicalSource = canonicalUnit(factoryId, sourcePriceUnit, "计价单位");
+        String canonicalTarget = canonicalUnit(factoryId, targetQuantityUnit, "收货数量单位");
+        BigDecimal targetToSource = conversionFactor(factoryId, materialTypeId,
+                canonicalTarget, canonicalSource);
+        return unitPrice.multiply(targetToSource);
+    }
+
+    private BigDecimal conversionFactor(String factoryId, String productTypeId,
+            String fromUnit, String toUnit) {
+        if (Objects.equals(fromUnit, toUnit)) {
+            return BigDecimal.ONE;
+        }
+        if (unitContractService == null) {
+            throw new BusinessException(503, "单位换算服务不可用，不能安全计算跨单位价格");
+        }
+        com.cretas.aims.service.unit.UnitConversionResult result = unitContractService.convert(
+                BigDecimal.ONE,
+                new com.cretas.aims.service.unit.UnitConversionContext(
+                        factoryId, productTypeId, fromUnit, toUnit, LocalDateTime.now(),
+                        com.cretas.aims.service.unit.UnitUsageScene.PROCUREMENT,
+                        12, java.math.RoundingMode.HALF_UP));
+        if (!result.succeeded() || result.quantity() == null) {
+            throw new BusinessException(400, "单位无法换算: " + fromUnit + " → " + toUnit
+                    + (result.message() != null ? "（" + result.message() + "）" : ""));
+        }
+        return result.quantity();
+    }
+
+    private String canonicalUnit(String factoryId, String rawUnit, String fieldName) {
+        if (rawUnit == null || rawUnit.isBlank()) {
+            throw new BusinessException(400, fieldName + "不能为空");
+        }
+        if (unitContractService == null) {
+            return rawUnit.trim();
+        }
+        com.cretas.aims.service.unit.UnitNormalizationResult normalized =
+                unitContractService.normalize(factoryId, rawUnit);
+        if (!normalized.recognized()) {
+            throw new BusinessException(400, fieldName + "不是已登记单位: " + rawUnit);
+        }
+        return normalized.code();
+    }
+
+    private String canonicalUnitOrRaw(String factoryId, String rawUnit) {
+        if (rawUnit == null || rawUnit.isBlank() || unitContractService == null) {
+            return rawUnit;
+        }
+        com.cretas.aims.service.unit.UnitNormalizationResult normalized =
+                unitContractService.normalize(factoryId, rawUnit);
+        return normalized.recognized() ? normalized.code() : rawUnit;
+    }
+
+    private String firstNonBlank(String first, String fallback) {
+        return first != null && !first.isBlank() ? first : fallback;
+    }
+
+    private record PurchasePriceQuote(BigDecimal unitPrice, String priceUnit) {
     }
 
     /**

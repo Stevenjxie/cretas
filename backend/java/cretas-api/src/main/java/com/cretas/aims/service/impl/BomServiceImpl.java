@@ -300,9 +300,31 @@ public class BomServiceImpl implements BomService {
         bomItem.setUnitPrice(material.getMovingAvgPrice() != null
                 ? material.getMovingAvgPrice()
                 : material.getUnitPrice());
+        applyBomPriceUnitContract(bomItem, material.getUnit());
         bomItem.setTaxRate(material.getTaxRate() == null
                 ? null
                 : material.getTaxRate().getRate().multiply(java.math.BigDecimal.valueOf(100)));
+    }
+
+    private void applyBomPriceUnitContract(BomItem item, String rawPriceUnit) {
+        String priceUnit = trimToNull(rawPriceUnit) != null ? rawPriceUnit.trim() : item.getUnit();
+        item.setPriceUnit(priceUnit);
+        if (item.getUnit() == null || priceUnit == null || item.getUnit().equals(priceUnit)) {
+            item.setQuantityToPriceFactor(BigDecimal.ONE);
+            return;
+        }
+        if (materialUomConverter == null) {
+            throw new com.cretas.aims.exception.BusinessException(503,
+                    "BOM 单位换算服务不可用，不能安全保存跨单位价格");
+        }
+        com.cretas.aims.service.uom.MaterialUomConverter.ConversionResult conversion =
+                materialUomConverter.toComparableQuantity(item.getMaterialTypeId(), BigDecimal.ONE,
+                        item.getUnit(), priceUnit);
+        if (!conversion.isConverted() || conversion.getQuantity() == null) {
+            throw new com.cretas.aims.exception.BusinessException(409,
+                    "BOM 数量单位无法换算到计价单位: " + item.getUnit() + " → " + priceUnit);
+        }
+        item.setQuantityToPriceFactor(conversion.getQuantity());
     }
 
     /**

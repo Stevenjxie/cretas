@@ -83,12 +83,12 @@ class WorkProcessCatalogToolTest {
         WorkProcessDTO dto = dtoCaptor.getValue();
         assertEquals("焯水", dto.getProcessName());
         assertEquals("加工", dto.getProcessCategory());
-        assertEquals("kg", dto.getUnit());
+        assertNull(dto.getUnit(), "工序主数据不再维护投入单位");
         assertEquals(15, dto.getEstimatedMinutes());
         assertEquals(0, new BigDecimal("0.30").compareTo(dto.getStandardYieldMin()));
         assertEquals(0, new BigDecimal("0.60").compareTo(dto.getStandardYieldMax()));
         assertTrue(dto.getNeedsInput());
-        assertEquals("kg", dto.getOutputUnit());
+        assertNull(dto.getOutputUnit(), "工序主数据不再维护产出单位");
         assertEquals(0, new BigDecimal("25.00").compareTo(dto.getStandardHourlyRate()));
         assertEquals(7, dto.getSortOrder());
         assertTrue(result.get("message").toString().contains("已创建工序"));
@@ -120,7 +120,7 @@ class WorkProcessCatalogToolTest {
         verify(workProcessService).list(eq(FACTORY_ID), any());
         verify(workProcessService, never()).create(anyString(), any());
         assertEquals("DUPLICATE", result.get("status"));
-        assertTrue(result.get("message").toString().contains("已存在相同名称+类别+单位的工序"));
+        assertTrue(result.get("message").toString().contains("已存在相同名称+类别的工序"));
         assertSame(existing, result.get("data"));
     }
 
@@ -150,7 +150,7 @@ class WorkProcessCatalogToolTest {
         WorkProcessDTO dto = dtoCaptor.getValue();
         assertEquals("焯水", dto.getProcessName());
         assertEquals("加工", dto.getProcessCategory());
-        assertEquals("kg", dto.getUnit());
+        assertNull(dto.getUnit(), "工序主数据不再维护投入单位");
         assertEquals(0, new BigDecimal("28.00").compareTo(dto.getStandardHourlyRate()));
         assertTrue(result.get("message").toString().contains("已更新工序"));
         assertSame(updated, result.get("data"));
