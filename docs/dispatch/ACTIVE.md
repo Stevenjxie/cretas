@@ -6,21 +6,11 @@
 
 ## 在飞任务
 
-- `CRETAS-RELEASE-FASTLANE-20260718-POLICY` — `in-progress`
-  - Base SHA: `50275a4257cba8e9894a3faf58a6c4123b034346`
-  - Owner: coordinator
-  - Scope: `AGENTS.md`、`.codex/rules/worktree-and-main-only-deploy.md`、`.agents/skills/deploy-backend/SKILL.md`、`scripts/deploy/publish-main-fastlane.sh` 及其直接契约测试、ACTIVE/归档
-  - 验收: 受控无 PR fast-forward 门禁测试、shell syntax、编码检查、`git diff --check`
-- `CRETAS-RELEASE-FASTLANE-20260718-WEB` — `claimed`
-  - Base SHA: `50275a4257cba8e9894a3faf58a6c4123b034346`
-  - Owner: coordinator (Dirac exited before structured handoff; coordinator adopted scope)
-  - Scope: `scripts/deploy/deploy-web-admin.sh`、`scripts/deploy/release-web-manifest.sh`、对应 `scripts/tests/test-*web*manifest*.sh` 与既有 Web deploy 直接契约测试
-  - 验收: manifest 有效复用、tree/哈希/dirty/损坏回退测试、既有 Web deploy 测试、shell syntax、`git diff --check`
+- 无。
 
 ## Scope 锁地图
 
-- `CRETAS-RELEASE-FASTLANE-20260718-POLICY`: 发布规则、无 PR fast-forward helper、ACTIVE/归档
-- `CRETAS-RELEASE-FASTLANE-20260718-WEB`: Web dist manifest helper、Web deploy 接入与直接测试
+- 无。
 
 ## 阻塞项
 
