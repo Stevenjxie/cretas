@@ -89,6 +89,9 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Production read-only harness unit and skill-drift gate
+        run: node --test scripts/e2e/production-readonly/tests/unit.test.js
+
       # ── Dependencies (overlapped with background Java startup) ────────────────
       - name: Install web-admin deps
         working-directory: web-admin
