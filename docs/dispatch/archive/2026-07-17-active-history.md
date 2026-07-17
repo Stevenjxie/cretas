@@ -11,3 +11,4 @@
 | ID | Base SHA | Owner | Result |
 |---|---|---|---|
 | WF-VALIDATION-RAW-FILTER-20260717 | `0a535848b8c509b28f3573f594428d7e40a24557` | Codex coordinator | 发布前未绑定 SKU 时自动定位首个问题 Cell，全部问题 Cell 保持红框，用户开始处理后停止闪烁、绑定成功后逐项清除；顶部保留未完成数量与再次定位入口。原料 Cell 只显示原料/主材，保留 BOM 优先，新增 L1/L2/L3 与文字/拼音组合筛选。目标 Vitest 35/35、`vue-tsc --noEmit`、编码检查、`git diff --check` 通过；[PR #1402](https://github.com/Stevenjxie/cretas/pull/1402)。 |
+| WF-OWNER-FILTER-20260717 | `94a80f73b29ed959a422b292f66426096aab001a` | Codex coordinator | Workflow 顶部归属选择器仅保留成品与真正的原料/主材，排除半成品、调料、辅料和包材；半成品深链路同样不会被选为 Workflow 归属，但仍可作为画布中间 Cell。目标 Vitest 4/4、`vue-tsc --noEmit`、编码检查、`git diff --check` 通过；[PR #1403](https://github.com/Stevenjxie/cretas/pull/1403)。 |
