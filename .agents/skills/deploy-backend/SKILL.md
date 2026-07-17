@@ -60,6 +60,28 @@ Avoid creating a second release worktree when the reviewed feature worktree is c
 
 If any condition fails, create a fresh clean release worktree from `origin/main`. Never discard uncommitted work to enter this fast path.
 
+## Controlled Direct-Main Fast Lane
+
+PR remains the default. Use the no-PR path only when the user explicitly asks
+for direct publication and one coordinator has completed review and scoped
+verification in a clean `codex/*` worktree based on the ACTIVE Base SHA.
+
+Archive every ACTIVE task and release every scope lock in the final commit,
+then run:
+
+```bash
+./scripts/deploy/publish-main-fastlane.sh \
+  --base-sha <registered-origin-main-sha> \
+  --confirm YES-DIRECT-MAIN
+```
+
+The helper fetches immediately before publication, rejects a stale base,
+dirty worktree, non-linear history, unfinished ACTIVE task, and any force-push
+path. High-risk scopes remain PR-only unless the user explicitly authorized
+this exact high-risk direct publication and all required deep gates passed; in
+that case add `--allow-high-risk YES-HIGH-RISK-REVIEWED`. Any rejection falls
+back to one PR. Publishing to `main` never authorizes production deployment.
+
 ## Java Blue-Green Deploy
 
 1. Require a clean release worktree whose `HEAD` equals `origin/main`.
@@ -84,6 +106,19 @@ Useful modes:
 Do not use `--git` unless the user explicitly requests the legacy server-build path.
 
 ## Web Admin Deploy
+
+Build the reviewed Web release once and record its trusted dist manifest:
+
+```bash
+./scripts/deploy/release-web-manifest.sh build
+```
+
+After merge/direct publication, deploy only from clean exact `origin/main`.
+The deploy script reuses that dist when the build commit resolves, the build
+and current `web-admin` Git trees match (including squash merges), and the
+package-lock, index, assets, full-dist hashes, and referenced chunks all pass.
+Any miss or validation failure performs exactly one normal local build and
+refreshes the manifest; it never trusts mtime, filename, or a present `dist/`.
 
 Use the atomic project script, not manual `rsync --delete`:
 

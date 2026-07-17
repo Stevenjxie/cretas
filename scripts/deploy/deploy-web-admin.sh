@@ -134,6 +134,11 @@ if [ -f "$PROJECT_ROOT/scripts/lib/deploy-common.sh" ]; then
 else
     echo "❌ 未找到 $PROJECT_ROOT/scripts/lib/deploy-common.sh"; exit 1
 fi
+if [ -f "$PROJECT_ROOT/scripts/deploy/release-web-manifest.sh" ]; then
+    source "$PROJECT_ROOT/scripts/deploy/release-web-manifest.sh"
+else
+    echo "❌ 未找到 $PROJECT_ROOT/scripts/deploy/release-web-manifest.sh"; exit 1
+fi
 # 注: source 引入 common 的 log() (双参数 LEVEL msg); 本脚本下方重新定义单参数 log() 覆盖之.
 # check_git_sync 在覆盖前调用, 用的是 common log; 之后的 log "..." 用本脚本单参数版.
 
@@ -195,9 +200,24 @@ log() {
     echo "[$(date '+%H:%M:%S')] $*"
 }
 
-# 依赖门禁放在 prod 确认和构建之前：干净 worktree 没有 node_modules 时先自动恢复，
-# 避免用户确认生产部署后才因 vite 缺失中断。每个 worktree 独立安装，禁止 junction 共享。
-ensure_web_admin_dependencies
+# 可信 Web dist 优先：只有 clean exact origin/main、构建提交可解析、前后
+# web-admin Git tree 一致且 index/assets/dist 哈希与引用完整性全部通过时才复用。
+# 任一失败都回退既有依赖恢复 + 单次 npm build，禁止按 mtime/目录存在复用。
+WEB_MANIFEST_PATH=$(web_release_default_manifest)
+WEB_DIST_REUSED=0
+if web_release_validate "$WEB_MANIFEST_PATH" "$PROJECT_ROOT"; then
+    WEB_DIST_REUSED=1
+    LOCAL_BUILD_DIR="$WEB_RELEASE_DIST_DIR"
+    log "✓ Trusted Web dist manifest hit; npm ci/build skipped"
+    log "   Build commit: $WEB_RELEASE_BUILD_COMMIT"
+    log "   web-admin tree: $WEB_RELEASE_WEB_TREE"
+    log "   dist SHA-256: $WEB_RELEASE_DIST_SHA256"
+else
+    LOCAL_BUILD_DIR="$PROJECT_ROOT/web-admin/dist"
+    log "ℹ️ Trusted Web dist unavailable or invalid; falling back to one local build"
+    # 每个 worktree 独立安装，禁止 junction 共享。
+    ensure_web_admin_dependencies
+fi
 
 # 根据 --env 决定目标路径
 if [ "$ENV" = "prod" ]; then
@@ -280,49 +300,56 @@ REMOTE_DEPLOY
 log "📦 [1/4] 本地构建 web-admin..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-cd "$PROJECT_ROOT/web-admin"
+if [ "$WEB_DIST_REUSED" = "0" ]; then
+    cd "$PROJECT_ROOT/web-admin"
 
-# Apr 29 2026 fix (张权 banner deploy 故障): 之前 `npm run build 2>&1 | tail -5`
-# 通过 pipe 把 npm 的 exit code 吃掉了 (pipe 的 exit code 是 tail 的 0), build 失败但
-# 后续 dist/index.html 检查仍通过 (旧 dist 还在), 部署上传旧 dist + 报"成功".
-# 用 PIPESTATUS 拿到 npm 的真实 exit code, 失败立即 exit.
-set -o pipefail
-npm run build 2>&1 | tail -5
-BUILD_RC=${PIPESTATUS[0]}
-set +o pipefail
-if [ "$BUILD_RC" != "0" ]; then
-    log "❌ 构建失败 (npm run build exit=$BUILD_RC) — 拒绝继续部署"
-    exit 1
-fi
+    # Apr 29 2026 fix: preserve npm's real exit code instead of tail's status.
+    set -o pipefail
+    npm run build 2>&1 | tail -5
+    BUILD_RC=${PIPESTATUS[0]}
+    set +o pipefail
+    if [ "$BUILD_RC" != "0" ]; then
+        log "❌ 构建失败 (npm run build exit=$BUILD_RC) — 拒绝继续部署"
+        exit 1
+    fi
 
-if [ ! -f "dist/index.html" ]; then
-    log "❌ 构建失败: dist/index.html 不存在"
-    exit 1
-fi
+    if ! web_release_verify_dist "$LOCAL_BUILD_DIR"; then
+        log "❌ 构建失败: dist/index.html、assets 或引用完整性检查未通过"
+        exit 1
+    fi
 
-# Apr 29 2026 强化: build 跑完 dist 应 < 120s. 之前是 warning, 现在 hard fail.
-# 防止 build 被 silent skip / npm cache 复用旧 dist 等情况.
-DIST_AGE=$(($(date +%s) - $(stat -c %Y dist/index.html 2>/dev/null || stat -f %m dist/index.html)))
-if [ "$DIST_AGE" -gt 120 ]; then
-    log "❌ dist/index.html 修改时间已 ${DIST_AGE}s 前 (> 120s 阈值)"
-    log "   build 可能未真正运行. 拒绝继续部署."
-    log "   排查: cd web-admin && rm -rf dist && npm run build 看错误"
-    exit 1
+    # Freshness is only a fallback-build assertion. Trusted cache reuse is
+    # proven by hashes and provenance, never by mtime.
+    DIST_AGE=$(($(date +%s) - $(stat -c %Y "$LOCAL_BUILD_DIR/index.html" 2>/dev/null || stat -f %m "$LOCAL_BUILD_DIR/index.html")))
+    if [ "$DIST_AGE" -gt 120 ]; then
+        log "❌ dist/index.html 修改时间已 ${DIST_AGE}s 前 (> 120s 阈值)"
+        log "   build 可能未真正运行. 拒绝继续部署."
+        exit 1
+    fi
+
+    if web_release_write "$PROJECT_ROOT" "$LOCAL_BUILD_DIR" "$WEB_MANIFEST_PATH" "npm run build"; then
+        log "✓ Fallback build passed integrity checks; trusted Web manifest updated"
+    else
+        log "❌ 构建成功但可信 Web manifest 写入失败 — 拒绝部署无来源制品"
+        exit 1
+    fi
+else
+    log "📦 [1/4] 复用可信 Web dist（未执行 npm ci/build）"
 fi
 
 # 提取本地 dist 的 entry chunk hash, 用于部署后内容验证
-LOCAL_ENTRY_HASH=$(grep -oP 'assets/index-[A-Za-z0-9_-]+\.js' dist/index.html | head -1)
+LOCAL_ENTRY_HASH=$(grep -oP 'assets/index-[A-Za-z0-9_-]+\.js' "$LOCAL_BUILD_DIR/index.html" | head -1)
 if [ -z "$LOCAL_ENTRY_HASH" ]; then
     log "⚠️  无法提取本地 dist 的 entry chunk, 跳过 post-deploy 内容验证"
 fi
 
-ASSET_COUNT=$(find dist/assets -type f 2>/dev/null | wc -l | tr -d ' ')
-DIST_SIZE=$(du -sh dist/ | cut -f1)
-log "   ✓ 构建完成: $ASSET_COUNT 个 assets, $DIST_SIZE"
+ASSET_COUNT=$(find "$LOCAL_BUILD_DIR/assets" -type f 2>/dev/null | wc -l | tr -d ' ')
+DIST_SIZE=$(du -sh "$LOCAL_BUILD_DIR" | cut -f1)
+log "   ✓ 制品就绪: $ASSET_COUNT 个 assets, $DIST_SIZE"
 
 # ==================== 2. 打包 ====================
 log "📦 [2/4] 打包 tarball..."
-tar czf "$TMP_TAR" -C dist .
+tar czf "$TMP_TAR" -C "$LOCAL_BUILD_DIR" .
 TAR_SIZE=$(du -sh "$TMP_TAR" | cut -f1)
 log "   ✓ Tarball: $TAR_SIZE"
 
@@ -382,8 +409,7 @@ if [ "$ENV" = "all" ]; then
     echo ""
     # 重新打包 + 上传 (test 那次已 rm'd $REMOTE_TAR via heredoc cleanup)
     log "📦 [prod 1/3] 重新打包..."
-    cd "$PROJECT_ROOT/web-admin/dist"
-    tar czf "$TMP_TAR" .
+    tar czf "$TMP_TAR" -C "$LOCAL_BUILD_DIR" .
     cd "$PROJECT_ROOT"
     log "   ✓ Tarball: $(du -h "$TMP_TAR" | awk '{print $1}')"
 

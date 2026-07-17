@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 DEPLOY_SCRIPT="$ROOT_DIR/scripts/deploy/deploy-web-admin.sh"
+WEB_MANIFEST_SCRIPT="$ROOT_DIR/scripts/deploy/release-web-manifest.sh"
 TMP_ROOT=$(mktemp -d)
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
@@ -15,13 +16,18 @@ make_fixture() {
     local fixture=$1
     mkdir -p "$fixture/scripts/deploy" "$fixture/scripts/lib" "$fixture/web-admin" "$fixture/mock-bin"
     cp "$DEPLOY_SCRIPT" "$fixture/scripts/deploy/deploy-web-admin.sh"
+    cp "$WEB_MANIFEST_SCRIPT" "$fixture/scripts/deploy/release-web-manifest.sh"
     cat > "$fixture/scripts/lib/deploy-common.sh" <<'COMMON'
 check_git_sync() { :; }
 COMMON
     printf '{"name":"fixture","lockfileVersion":3,"packages":{}}\n' > "$fixture/web-admin/package-lock.json"
-    cat > "$fixture/mock-bin/npm" <<'MOCK_NPM'
+cat > "$fixture/mock-bin/npm" <<'MOCK_NPM'
 #!/usr/bin/env bash
 set -euo pipefail
+if [ "${1:-}" = "--version" ]; then
+    printf '10.0.0\n'
+    exit 0
+fi
 printf '%s\n' "$*" >> "$MOCK_NPM_LOG"
 
 if [ "${1:-}" = "ci" ]; then
@@ -44,6 +50,13 @@ fi
 exit 99
 MOCK_NPM
     chmod +x "$fixture/mock-bin/npm"
+    printf 'web-admin/dist\nweb-admin/node_modules\ncache\n*.log\n' > "$fixture/.gitignore"
+    git -C "$fixture" init -q -b main
+    git -C "$fixture" config user.email fixture@example.com
+    git -C "$fixture" config user.name Fixture
+    git -C "$fixture" add .
+    git -C "$fixture" commit -qm fixture
+    git -C "$fixture" update-ref refs/remotes/origin/main HEAD
 }
 
 run_dry_build() {
@@ -53,6 +66,7 @@ run_dry_build() {
         PATH="$fixture/mock-bin:$PATH" \
             MOCK_NPM_LOG="$fixture/npm.log" \
             MOCK_NPM_CI_FAIL="${MOCK_NPM_CI_FAIL:-0}" \
+            CRETAS_WEB_CACHE_DIR="$fixture/cache" \
             bash scripts/deploy/deploy-web-admin.sh --env test --dry-run
     )
 }
@@ -98,9 +112,9 @@ grep -Fq "Web 依赖恢复失败" "$FAILED_FIXTURE/output.log" || fail "missing 
 
 # Production confirmation must fail fast before dependency/network work, while
 # dependency restoration must still happen before the single build.
-preflight_line=$(grep -n '^ensure_web_admin_dependencies$' "$DEPLOY_SCRIPT" | cut -d: -f1)
+preflight_line=$(grep -n '^    ensure_web_admin_dependencies$' "$DEPLOY_SCRIPT" | cut -d: -f1)
 confirm_line=$(grep -n '^    confirm_prod_deploy$' "$DEPLOY_SCRIPT" | cut -d: -f1)
-build_line=$(grep -n '^npm run build ' "$DEPLOY_SCRIPT" | cut -d: -f1)
+build_line=$(grep -n '^    npm run build ' "$DEPLOY_SCRIPT" | cut -d: -f1)
 [[ "$confirm_line" -lt "$preflight_line" ]] || fail "explicit prod confirmation must fail before dependency work"
 [[ "$preflight_line" -lt "$build_line" ]] || fail "dependency preflight must run before build"
 

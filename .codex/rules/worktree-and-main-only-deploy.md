@@ -1,6 +1,6 @@
 # Worktree 隔离 + 只从 main 部署 prod (HARD RULE)
 
-**最后更新**: 2026-05-30
+**最后更新**: 2026-07-18
 **触发事故**: 2026-05-30 青花椒 RBAC 修复在 prod 被并发 session 的 Java 部署覆盖, 总营收回归 ¥0。
 
 ---
@@ -14,18 +14,28 @@
 每个任务开**独立 git worktree**:
 
 ```bash
-git worktree add -b feat/<task> ../cretas-<task> origin/main   # 永远 off origin/main
+git worktree add -b codex/<task> ../cretas-<task> origin/main   # 永远 off origin/main
 cd ../cretas-<task>
 # 全部工作在这里做
 ```
 
 **Why**: 主目录被多个并发 session(Claude chat / Cursor / VSCode)共享, 互相污染 —— working-tree 改动串台、commit 范围被并发文件污染、rebase/checkout 被别 session 的未提交改动阻塞。worktree 物理隔离。
 
-### 2. 完成 → merge 到 main (不在 feature 分支上累积部署)
+### 2. 完成 → 受审控地进入 main（不在 feature 分支上累积部署）
 
-任务完成 → PR → merge 到 `main`。**worktree 永远 off `origin/main`** 开(不要 off 别的 feature 分支, 否则基底会夹带 sister 的 commit → PR scope 污染, 2026-05-30 实测一个分支 PR 夹带 140 个 sister 文件)。
+默认是任务完成 → PR → merge 到 `main`。**worktree 永远 off `origin/main`** 开（不要 off 别的 feature 分支）。
 
-merge 前确认 PR scope 干净:
+用户明确要求“不做 PR/直接发 main”时，允许单协调者使用受控快速通道：
+
+```bash
+./scripts/deploy/publish-main-fastlane.sh \
+  --base-sha <ACTIVE 登记的 origin/main SHA> \
+  --confirm YES-DIRECT-MAIN
+```
+
+必须同时满足：clean `codex/*` worktree、HEAD 线性后继于登记 base、最终 commit 已归档 ACTIVE 并释放全部 scope、目标验证通过、推送前 fetch 后 `origin/main` 仍等于 base。脚本只做非 force fast-forward push；任一失败必须回到一次 PR，不得手工强推。高风险文件默认仍要 PR；用户对本次高风险直发明确授权且所需门禁已通过时，才可增加 `--allow-high-risk YES-HIGH-RISK-REVIEWED`。
+
+merge/直发前确认 scope 干净:
 ```bash
 git diff origin/main...HEAD --stat   # 应只有你的文件, 没有 sister 的 audit/docs
 ```
@@ -67,8 +77,9 @@ git checkout main && git pull origin main
 
 | 场景 | 做法 |
 |---|---|
-| 开始任何代码任务 | `git worktree add -b feat/X ../cretas-X origin/main` (off origin/main) |
-| 任务完成 | PR → merge main; 先 `git diff origin/main...HEAD --stat` 确认 scope 干净 |
+| 开始任何代码任务 | `git worktree add -b codex/X ../cretas-X origin/main` (off origin/main) |
+| 任务完成（默认） | PR → merge main；先 `git diff origin/main...HEAD --stat` 确认 scope 干净 |
+| 用户明确不做 PR | 归档 ACTIVE 后运行 `publish-main-fastlane.sh`；门禁失败则回到一次 PR |
 | 部署 prod | 先 `git checkout main && git pull`, 再 deploy(绝不从 feature 分支) |
 | 必须 prod 验 feature | 验完立即 merge main + 从 main 重部 + 核对运行 jar 含修复 |
 | 清理 | `git worktree remove ../cretas-X`(⛔ 不要 mklink /J 共享 node_modules, 见 concurrent-edit-safety Rule 7) |

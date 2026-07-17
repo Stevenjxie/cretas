@@ -238,6 +238,7 @@ frontend/CretasFoodTrace/src/
 3. **真值与交接** - `origin/main` 和精简 ACTIVE 是当前状态真值；本地旧文档、旧会话和 feature worktree 不可覆盖它们。完成项进入带日期归档，ACTIVE 不累积历史。
 4. **测试与浏览器纪律** - 同一 worktree 的 Maven 目标测试顺序执行；优先复用 helper。浏览器/设备验证须隔离配置并限制并发；没有文件、截图或断言进展时停止或切到更快的 Expo/Web 路径。
 5. **发布证据复用** - 发布后优先运行 `scripts/deploy/verify-release.sh` 汇总只读证据，再补充任务特有的业务断言；不得以脚本退出码替代真实线上验证。
+6. **受控无 PR 快速通道** - PR 仍是默认路径。只有用户明确要求“不做 PR/直接发 main”、本批只有一个协调者且已在 clean `codex/*` worktree 完成 scope 审查和目标验证时，才可使用 `scripts/deploy/publish-main-fastlane.sh` 快进推送。必须锁定登记的 Base SHA、在同一最终 commit 归档 ACTIVE 并释放 scope、推送前重新 fetch 且证明 `origin/main` 未前进；禁止 force push。脚本任一门禁失败即回退为一次 PR，不得手工绕过。迁移、Entity/Repository/Security、共享发布脚本等高风险 scope 默认仍走 PR；只有用户明确授权且必需深度门禁已通过时才可传入高风险覆盖口令。合入 main 与生产部署仍是两个独立状态。
 
 ### 子代理协作约束
 
@@ -260,6 +261,7 @@ frontend/CretasFoodTrace/src/
 7. **Maven 单生命周期** - release gate 所需目标测试、编译和最终 JAR 必须在同一干净、已审查源码 worktree 内通过 `./scripts/deploy/release-jar-manifest.sh build --tests '<tests>'` 完成；该入口只执行一条 `mvn clean package -Dtest=<tests>`，成功后才写可信 manifest。squash merge 后必须改在 clean exact `origin/main` release worktree 校验 build commit 与前后 backend tree，再决定复用或单次安全回退。禁止用旧 `target/`、mtime 或先前分开的测试命令证明最终 JAR 已测试；protobuf 的 staleness 检查仍是构建路径的必要条件，除非有等价性能回归证据不得移除。
 8. **生产 Web Playwright 唯一入口** - 用户明确要求生产 Web 只读验收时，必须优先使用 Codex 直接集成的 Playwright MCP，并以 filename 方式加载 `scripts/e2e/production-readonly/mcp-entry.js`；同一次验收复用一个干净 UI 登录会话。该 MCP entry、Node CLI、本地 fixture 与 CI drift gate 必须共享同一套 `core/`、`scenarios/`、before-send mutation guard、证据 schema 与脱敏规则，禁止临时复制脚本、启动第二浏览器、复用历史 storageState 或以 `.mcp.json` 推断当前工具可用性。
 9. **旧 Runner 与写测试边界** - 已迁移的 SmartBI/BOM standalone runner 不得恢复为生产入口；历史 JSON/截图只作证据。生产只读验收仅允许 UI 登录和注册表中精确匹配的 query-only POST，所有其他 `POST`/`PUT`/`PATCH`/`DELETE` 必须发送前拦截；通过条件同时要求 `actualBusinessWrites == 0` 且 blocked mutation attempts 为 0。`tests/e2e-yield-mixed-sku/nonprod-business-flow-audit.mjs` 等写测试只能用于显式测试环境，必须拒绝生产 host 并要求非生产写确认，绝不能作为生产验收替代品。
+10. **Web 构建一次** - Web Admin 的审查/验证构建应通过 `./scripts/deploy/release-web-manifest.sh build` 生成 dist 和可信 manifest。部署时只有当 clean `HEAD == origin/main`、原 build commit 可解析、原与当前 `web-admin` Git tree 相同、package-lock/index/assets/dist SHA-256 及引用完整性全部通过时才能跳过第二次 `npm ci/build`；squash 后 commit 不同但 Web tree 相同允许复用。任一校验失败只回退一次既有本地 build，不得按 mtime、文件名或 `dist` 目录存在判定复用；原子切换、旧 chunk 保留和 Web 四方哈希验收不得削弱。
 
 ### UX Flow Gate（低技术素养用户屏幕）
 

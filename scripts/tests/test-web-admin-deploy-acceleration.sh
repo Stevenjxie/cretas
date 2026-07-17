@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 DEPLOY_SCRIPT="$ROOT_DIR/scripts/deploy/deploy-web-admin.sh"
+WEB_MANIFEST_SCRIPT="$ROOT_DIR/scripts/deploy/release-web-manifest.sh"
 TMP_ROOT=$(mktemp -d)
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
@@ -15,11 +16,16 @@ make_fixture() {
     local fixture=$1
     mkdir -p "$fixture/scripts/deploy" "$fixture/scripts/lib" "$fixture/web-admin" "$fixture/mock-bin"
     cp "$DEPLOY_SCRIPT" "$fixture/scripts/deploy/deploy-web-admin.sh"
+    cp "$WEB_MANIFEST_SCRIPT" "$fixture/scripts/deploy/release-web-manifest.sh"
     printf 'check_git_sync() { :; }\n' > "$fixture/scripts/lib/deploy-common.sh"
     printf '{"name":"fixture","lockfileVersion":3,"packages":{}}\n' > "$fixture/web-admin/package-lock.json"
-    cat > "$fixture/mock-bin/npm" <<'MOCK_NPM'
+cat > "$fixture/mock-bin/npm" <<'MOCK_NPM'
 #!/usr/bin/env bash
 set -euo pipefail
+if [ "${1:-}" = "--version" ]; then
+    printf '10.0.0\n'
+    exit 0
+fi
 printf '%s\n' "$*" >> "$MOCK_NPM_LOG"
 if [ "${1:-}" = "ci" ]; then
     mkdir -p node_modules/.bin
@@ -36,6 +42,13 @@ fi
 exit 99
 MOCK_NPM
     chmod +x "$fixture/mock-bin/npm"
+    printf 'web-admin/dist\nweb-admin/node_modules\ncache\n*.log\n' > "$fixture/.gitignore"
+    git -C "$fixture" init -q -b main
+    git -C "$fixture" config user.email fixture@example.com
+    git -C "$fixture" config user.name Fixture
+    git -C "$fixture" add .
+    git -C "$fixture" commit -qm fixture
+    git -C "$fixture" update-ref refs/remotes/origin/main HEAD
 }
 
 run_dry_build() {
@@ -43,6 +56,7 @@ run_dry_build() {
     (
         cd "$fixture"
         PATH="$fixture/mock-bin:$PATH" MOCK_NPM_LOG="$fixture/npm.log" \
+            CRETAS_WEB_CACHE_DIR="$fixture/cache" \
             bash scripts/deploy/deploy-web-admin.sh --env test --dry-run
     )
 }
@@ -54,6 +68,7 @@ set +e
 (
     cd "$CONFIRM"
     PATH="$CONFIRM/mock-bin:$PATH" MOCK_NPM_LOG="$CONFIRM/npm.log" \
+        CRETAS_WEB_CACHE_DIR="$CONFIRM/cache" \
         bash scripts/deploy/deploy-web-admin.sh --env prod --dry-run </dev/null
 ) > "$TMP_ROOT/prod-unconfirmed.log" 2>&1
 unconfirmed_rc=$?
@@ -65,11 +80,13 @@ grep -Fq -- "--confirm-prod YES-PROD" "$TMP_ROOT/prod-unconfirmed.log" || fail "
 (
     cd "$CONFIRM"
     PATH="$CONFIRM/mock-bin:$PATH" MOCK_NPM_LOG="$CONFIRM/npm.log" \
+        CRETAS_WEB_CACHE_DIR="$CONFIRM/cache" \
         bash scripts/deploy/deploy-web-admin.sh --env prod --confirm-prod YES-PROD --dry-run </dev/null
 ) > "$TMP_ROOT/prod-flag.log" 2>&1
 (
     cd "$CONFIRM"
     PATH="$CONFIRM/mock-bin:$PATH" MOCK_NPM_LOG="$CONFIRM/npm.log" CRETAS_WEB_PROD_CONFIRM=YES-PROD \
+        CRETAS_WEB_CACHE_DIR="$CONFIRM/cache" \
         bash scripts/deploy/deploy-web-admin.sh --env prod --dry-run </dev/null
 ) > "$TMP_ROOT/prod-env.log" 2>&1
 grep -Fq "explicitly confirmed by caller" "$TMP_ROOT/prod-flag.log" || fail "prod flag was not recognized"
@@ -88,6 +105,14 @@ actual_hash=$(tr -d '\r\n' < "$MISS/web-admin/node_modules/.cretas-package-lock.
 [[ "$actual_hash" = "$expected_hash" ]] || fail "cache miss did not record the package-lock digest"
 grep -Fq "Dependency restore stage:" "$MISS/output.log" || fail "missing dependency restore timing"
 
+# The successful fallback build writes a trusted dist. The next exact-main
+# invocation must reuse it without either npm ci or npm run build.
+: > "$MISS/npm.log"
+run_dry_build "$MISS" > "$MISS/reuse-output.log"
+[[ ! -s "$MISS/npm.log" ]] || fail "trusted Web dist reuse unexpectedly invoked npm"
+grep -Fq "Trusted Web dist manifest hit; npm ci/build skipped" "$MISS/reuse-output.log" || fail "missing trusted dist reuse log"
+grep -Fq "复用可信 Web dist" "$MISS/reuse-output.log" || fail "reuse path did not reach packaging"
+
 # Cache hit: matching manifest plus executable tool skips npm ci and builds once.
 HIT="$TMP_ROOT/hit"
 make_fixture "$HIT"
@@ -102,6 +127,7 @@ grep -Fq "Dependency reuse stage:" "$HIT/output.log" || fail "missing dependency
 
 # A changed lock hash must invalidate the manifest even when Vite exists.
 printf 'stale\n' > "$HIT/web-admin/node_modules/.cretas-package-lock.sha256"
+rm -rf "$HIT/cache/current"
 : > "$HIT/npm.log"
 run_dry_build "$HIT" > "$HIT/stale-output.log"
 mapfile -t stale_calls < "$HIT/npm.log"
