@@ -5,7 +5,7 @@ export interface StocktakeCountItem {
 }
 
 export interface StocktakeItemUpdatePayload {
-  id: string;
+  itemId: string;
   actualQty: number;
   notes: string;
 }
@@ -16,7 +16,7 @@ export function buildStocktakeItemUpdates(
   return items
     .filter((item): item is StocktakeCountItem & { actualQty: number } => item.actualQty != null)
     .map((item) => ({
-      id: item.id,
+      itemId: item.id,
       actualQty: item.actualQty,
       notes: item.notes,
     }));
