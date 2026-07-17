@@ -8,6 +8,11 @@ import type { FormRules } from 'element-plus';
 import { Plus, Search, Refresh, List } from '@element-plus/icons-vue';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import type { TableRow } from '@/types/api';
+import {
+  toSupplierHistoryViewRow,
+  type SupplierHistoryApiRow,
+  type SupplierHistoryViewRow,
+} from './supplierHistory';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -270,18 +275,18 @@ async function handleSubmit() {
 
 // ==================== Issue #779: 该供应商供应的原料 (反查) ====================
 // 客户要求 (May 7 part2 L222-240): "一种原料可来自多个供应商, 一个供应商可供多种原料"
-// 复用 GET /suppliers/{supplierId}/history (SupplierController:285) — 返回历史供货记录,
-// 含每条记录的 materialName / quantity / 时间. 按 materialName 去重得到该供应商供过哪些原料.
+// GET /suppliers/{supplierId}/history (SupplierController:285) returns aggregate rows
+// grouped by material and unit, not individual purchase-order lines.
 const materialsDialogVisible = ref(false);
-const materialsForSupplier = ref<Array<{ materialName?: string; materialType?: string; quantity?: number; unit?: string; date?: string; orderNumber?: string }>>([]);
+const materialsForSupplier = ref<SupplierHistoryViewRow[]>([]);
 const materialsLoading = ref(false);
 const materialsDialogSupplierName = ref('');
 const materialsDistinct = computed(() => {
   const seen = new Map<string, number>();
   for (const h of materialsForSupplier.value) {
-    const n = String(h.materialName || h.materialType || '').trim();
+    const n = h.materialName;
     if (!n) continue;
-    seen.set(n, (seen.get(n) || 0) + 1);
+    seen.set(n, (seen.get(n) || 0) + h.purchaseCount);
   }
   return Array.from(seen.entries()).map(([name, count]) => ({ name, count }));
 });
@@ -297,11 +302,11 @@ async function openMaterialsForSupplier(row: TableRow) {
   materialsDialogVisible.value = true;
   materialsLoading.value = true;
   try {
-    const res = await get<Array<{ materialName?: string; quantity?: number; unit?: string; date?: string; orderNumber?: string }>>(
+    const res = await get<SupplierHistoryApiRow[]>(
       `/${factoryId.value}/suppliers/${supplierId}/history`,
     );
     if (res.success && Array.isArray(res.data)) {
-      materialsForSupplier.value = res.data;
+      materialsForSupplier.value = res.data.map(toSupplierHistoryViewRow);
     }
   } catch {
     /* interceptor */
@@ -514,19 +519,19 @@ async function handleDelete(row: TableRow) {
         size="small"
         max-height="400"
       >
-        <el-table-column prop="date" label="供货日期" width="120">
-          <template #default="{ row }">{{ row.date || '-' }}</template>
+        <el-table-column prop="lastPurchaseDate" label="最近采购日期" width="130">
+          <template #default="{ row }">{{ row.lastPurchaseDate || '-' }}</template>
         </el-table-column>
         <el-table-column label="原料" min-width="180" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.materialName || row.materialType || '-' }}</template>
+          <template #default="{ row }">{{ row.materialName || '-' }}</template>
         </el-table-column>
-        <el-table-column label="数量" width="120" align="right">
+        <el-table-column label="累计实收数量" width="150" align="right">
           <template #default="{ row }">
-            {{ row.quantity != null ? `${row.quantity} ${row.unit || ''}` : '-' }}
+            {{ row.receivedQuantity != null ? `${row.receivedQuantity} ${row.quantityUnit || ''}` : '-' }}
           </template>
         </el-table-column>
-        <el-table-column prop="orderNumber" label="采购单号" width="160" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.orderNumber || '-' }}</template>
+        <el-table-column prop="purchaseCount" label="采购次数" width="100" align="right">
+          <template #default="{ row }">{{ row.purchaseCount }}</template>
         </el-table-column>
       </el-table>
       <template #footer>

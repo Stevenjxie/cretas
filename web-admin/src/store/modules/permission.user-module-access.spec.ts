@@ -1,10 +1,21 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { usePermissionStore } from './permission';
+
+const permissionApiMocks = vi.hoisted(() => ({
+  getPlatformPermissions: vi.fn(),
+  getFactoryOverride: vi.fn(),
+  getUserModuleAccess: vi.fn(),
+}));
+
+vi.mock('@/api/permissionApi', () => permissionApiMocks);
 
 describe('permission store user module access overrides', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
+    permissionApiMocks.getPlatformPermissions.mockReset().mockResolvedValue([]);
+    permissionApiMocks.getFactoryOverride.mockReset().mockResolvedValue({});
+    permissionApiMocks.getUserModuleAccess.mockReset().mockResolvedValue([]);
   });
 
   it('DENY override blocks the exact module and its legacy route module', () => {
@@ -53,5 +64,30 @@ describe('permission store user module access overrides', () => {
 
     expect(store.canAccess('production_plan')).toBe(true);
     expect(store.canAccess('quality_inspection')).toBe(false);
+  });
+
+  it('deduplicates concurrent first-load requests and preserves the 30 second cache', async () => {
+    let resolvePlatformPermissions: (value: never[]) => void = () => undefined;
+    permissionApiMocks.getPlatformPermissions.mockReturnValueOnce(new Promise<never[]>((resolve) => {
+      resolvePlatformPermissions = resolve;
+    }));
+
+    const store = usePermissionStore();
+    store.setRole('factory_super_admin', 'F006', 'FACTORY', '1309', { skipDbLoad: true });
+
+    const first = store.loadFromDb();
+    const second = store.loadFromDb();
+
+    expect(permissionApiMocks.getPlatformPermissions).toHaveBeenCalledTimes(1);
+    expect(permissionApiMocks.getFactoryOverride).toHaveBeenCalledTimes(1);
+
+    resolvePlatformPermissions([]);
+    await Promise.all([first, second]);
+    await store.loadFromDb();
+
+    expect(store.isDbLoaded).toBe(true);
+    expect(permissionApiMocks.getPlatformPermissions).toHaveBeenCalledTimes(1);
+    expect(permissionApiMocks.getFactoryOverride).toHaveBeenCalledTimes(1);
+    expect(permissionApiMocks.getUserModuleAccess).toHaveBeenCalledTimes(1);
   });
 });
