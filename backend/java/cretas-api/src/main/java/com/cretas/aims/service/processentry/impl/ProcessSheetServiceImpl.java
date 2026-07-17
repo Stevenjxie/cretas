@@ -43,6 +43,9 @@ import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.processentry.ClerkProcessEntryService;
 import com.cretas.aims.service.processentry.ProcessSheetService;
 import com.cretas.aims.service.processentry.ProductionStockAllocationService;
+import com.cretas.aims.service.unit.CanonicalUnit;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.impl.UnitContractServiceImpl;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -116,6 +119,13 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
     @Autowired(required = false)
     private WarehouseResolver warehouseResolver;
+
+    /**
+     * Canonical unit and tenant alias contract. Optional only so focused unit tests can keep
+     * constructing this service without a Spring context; built-in aliases still apply there.
+     */
+    @Autowired(required = false)
+    private UnitContractService unitContractService;
 
     /**
      * ② Part B 生产领料单 Gate — 工厂级"报工前必须领料确认"开关读取 (required=false 兼容单测).
@@ -639,8 +649,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             if (outputs.size() == 1) {
                 return outputs.getFirst();
             }
-            throw new BusinessException(409, "多产出工序必须指定实际选择的 Workflow 产出端口")
-                    .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_REQUIRED")
+            throw new BusinessException(409, "多产出工序必须使用逐产出结构报工")
+                    .withCode("PROCESS_SHEET_WORKFLOW_MULTI_OUTPUT_REQUIRED")
                     .withSeverity("BLOCKING");
         }
         return outputs.stream()
@@ -727,7 +737,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withSeverity("BLOCKING");
         }
 
-        applyWorkflowInputPorts(descriptor, req, true);
+        applyWorkflowInputPorts(factoryId, descriptor, req, true);
 
         List<WorkflowClerkSheetConfigDTO.PortDescriptor> outputs = workflowOutputs(descriptor);
         Map<String, WorkflowClerkSheetConfigDTO.PortDescriptor> outputsById = new LinkedHashMap<>();
@@ -1485,7 +1495,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withSeverity("BLOCKING")
                     .withHintTarget("Workflow");
         }
-        applyWorkflowInputPorts(desc, req, false);
+        applyWorkflowInputPorts(factoryId, desc, req, false);
 
         Map<String, com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor> byPortId =
                 new HashMap<>();
@@ -1551,8 +1561,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             }
             String expectUnit = requireWorkflowPortUnit(port.getUnit(), "产出");
             String actualUnit = firstNonBlank(o.getUnit(), req.getUnit());
-            if (actualUnit != null && !actualUnit.isBlank()
-                    && !expectUnit.equalsIgnoreCase(actualUnit.trim())) {
+            if (!configuredUnitsEquivalent(factoryId, actualUnit, expectUnit)) {
                 throw new BusinessException(409, "产出「"
                         + (port.getMaterialName() != null ? port.getMaterialName() : "")
                         + "」单位应为「" + expectUnit + "」, 当前为「" + actualUnit + "」")
@@ -3058,9 +3067,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         String outputUnit = requireWorkflowPortUnit(selectedOutput.getUnit(), "产出");
 
         // 与 ProductWorkProcess 路径同语义: 请求单位若提供则必须匹配端口, 否则按端口单位归一化。
-        applyWorkflowInputPorts(descriptor, req, false);
-        assertConfiguredUnit(req.getOutputUnit(), outputUnit, "产出");
-        assertConfiguredUnit(req.getUnit(), outputUnit, "产出");
+        applyWorkflowInputPorts(factoryId, descriptor, req, false);
+        assertConfiguredUnit(factoryId, req.getOutputUnit(), outputUnit, "产出");
+        assertConfiguredUnit(factoryId, req.getUnit(), outputUnit, "产出");
 
         req.setOutputUnit(outputUnit);
         req.setUnit(outputUnit);
@@ -3131,7 +3140,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
      * workflowPortId，且每个必填端口恰好出现。所有实际消费数量在内部按 kg 结算，g/kg 展示单位只在
      * 分配边界转换，绝不允许客户端覆盖端口单位。
      */
-    private static void applyWorkflowInputPorts(
+    private void applyWorkflowInputPorts(
+            String factoryId,
             com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.ProcessDescriptor descriptor,
             ProcessSheetRowRequest req,
             boolean requireCompleteSelections) {
@@ -3150,6 +3160,11 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         if (!hasStructuredInputs) {
             if (requireCompleteSelections) {
                 validatePortSelections(ports, Set.of(), "INPUT");
+            } else {
+                // Draft/unit normalization can arrive before the operator selects concrete
+                // ports. The workflow still owns the unit contract when every candidate
+                // input uses the same reporting unit.
+                req.setInputUnit(workflowInputUnit(descriptor));
             }
             return;
         }
@@ -3171,7 +3186,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         resolveInputPort(byId, ports, input.getWorkflowPortId());
                 assertInputSku(port, input.getMaterialTypeId());
                 String portUnit = requireWorkflowPortUnit(port.getUnit(), "投入");
-                assertConfiguredUnit(input.getUnit(), portUnit, "投入");
+                assertConfiguredUnit(factoryId, input.getUnit(), portUnit, "投入");
                 assertNonNegativeWorkflowInput(input.getQuantity());
                 input.setUnit(portUnit);
                 input.setWorkflowPortId(port.getWorkflowPortId());
@@ -3308,8 +3323,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     }
 
     private static void assertConfiguredUnit(String suppliedUnit, String configuredUnit, String side) {
-        if (suppliedUnit == null || suppliedUnit.isBlank()
-                || suppliedUnit.trim().equalsIgnoreCase(configuredUnit)) {
+        if (builtInUnitsEquivalent(suppliedUnit, configuredUnit)) {
             return;
         }
         throw new BusinessException(409, "请求" + side + "单位为“" + suppliedUnit
@@ -3318,6 +3332,39 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 .withHint("请刷新工序表后按配置单位录入；单位变更请在产品工序配置中维护")
                 .withSeverity("BLOCKING")
                 .withHintTarget("工序配置");
+    }
+
+    private void assertConfiguredUnit(
+            String factoryId, String suppliedUnit, String configuredUnit, String side) {
+        if (configuredUnitsEquivalent(factoryId, suppliedUnit, configuredUnit)) {
+            return;
+        }
+        assertConfiguredUnit(suppliedUnit, configuredUnit, side);
+    }
+
+    private boolean configuredUnitsEquivalent(
+            String factoryId, String suppliedUnit, String configuredUnit) {
+        if (builtInUnitsEquivalent(suppliedUnit, configuredUnit)) {
+            return true;
+        }
+        return suppliedUnit != null
+                && !suppliedUnit.isBlank()
+                && unitContractService != null
+                && unitContractService.areEquivalent(factoryId, suppliedUnit, configuredUnit);
+    }
+
+    private static boolean builtInUnitsEquivalent(String suppliedUnit, String configuredUnit) {
+        if (suppliedUnit == null || suppliedUnit.isBlank()) {
+            return true;
+        }
+        if (configuredUnit != null && suppliedUnit.trim().equalsIgnoreCase(configuredUnit.trim())) {
+            return true;
+        }
+        Optional<CanonicalUnit> supplied = UnitContractServiceImpl.describeBuiltIn(suppliedUnit);
+        Optional<CanonicalUnit> configured = UnitContractServiceImpl.describeBuiltIn(configuredUnit);
+        return supplied.isPresent()
+                && configured.isPresent()
+                && supplied.get().code().equals(configured.get().code());
     }
 
     /**
