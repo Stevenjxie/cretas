@@ -6,15 +6,11 @@
 
 ## 在飞任务
 
-- `CRETAS-WEB-RELEASE-FASTLANE-V2-20260718` — `in-progress`
-  - Base SHA: `3d199278f71a775ee570084eea0729bede63b4f9`
-  - Owner: coordinator
-  - Scope: `scripts/deploy/release-web-manifest.sh`、`scripts/deploy/deploy-web-admin.sh`、对应 shell 契约测试、`AGENTS.md`、`.agents/skills/deploy-backend/SKILL.md`、ACTIVE/归档
-  - 验收: 单制品 SHA 复用、archive 损坏/引用缺失/tree/dirty 拒绝、远端同制品 no-op、既有 Web 部署契约、实测耗时、shell syntax、编码检查、`git diff --check`
+- 无。
 
 ## Scope 锁地图
 
-- `CRETAS-WEB-RELEASE-FASTLANE-V2-20260718`: Web archive manifest、Web 部署 no-op、直接契约测试与对应发布规则
+- 无。
 
 ## 阻塞项
 
