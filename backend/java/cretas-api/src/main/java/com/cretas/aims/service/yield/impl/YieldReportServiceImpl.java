@@ -1974,9 +1974,35 @@ public class YieldReportServiceImpl implements YieldReportService {
                 }
             }
         }
-        // 2) 文员逐道录入 (task=null): 按产品工序配置 (ProductWorkProcess) processOrder → processName。
-        //    Config-driven, 非硬编码。G0 后文员行 processOrder = ProductWorkProcess.processOrder (同源), 对齐安全。
+        // 2) Workflow 文员逐道录入 (step taskId=null): 最终生产批次仍持有生成的任务，
+        //    优先按 processOrder → WorkProcessTask → WorkProcess 回填名称。
         boolean anyMissing = dto.getSteps().stream().anyMatch(s -> s.getProcessName() == null);
+        if (anyMissing && batchId != null) {
+            List<WorkProcessTask> batchTasks = taskRepo
+                    .findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(factoryId, batchId);
+            Set<String> workflowProcessIds = batchTasks.stream()
+                    .map(WorkProcessTask::getWorkProcessId)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toSet());
+            Map<String, String> workflowProcessNames = processRepo.findAllById(workflowProcessIds).stream()
+                    .collect(Collectors.toMap(WorkProcess::getId, WorkProcess::getProcessName, (a, b) -> a));
+            Map<Integer, String> workflowOrderToName = new HashMap<>();
+            for (WorkProcessTask task : batchTasks) {
+                String name = workflowProcessNames.get(task.getWorkProcessId());
+                if (task.getProcessOrder() != null && name != null) {
+                    workflowOrderToName.putIfAbsent(task.getProcessOrder(), name);
+                }
+            }
+            for (StepYieldDTO step : dto.getSteps()) {
+                if (step.getProcessName() == null && step.getProcessOrder() != null) {
+                    step.setProcessName(workflowOrderToName.get(step.getProcessOrder()));
+                }
+            }
+        }
+
+        // 3) Legacy 文员逐道录入: ProductWorkProcess processOrder → processName。
+        //    Workflow-only 产品没有该模板，因此这里只作为回退。
+        anyMissing = dto.getSteps().stream().anyMatch(s -> s.getProcessName() == null);
         if (anyMissing && batchId != null) {
             productionBatchRepository.findByIdAndFactoryId(batchId, factoryId).ifPresent(pb -> {
                 List<com.cretas.aims.entity.ProductWorkProcess> pwps = productWorkProcessRepository

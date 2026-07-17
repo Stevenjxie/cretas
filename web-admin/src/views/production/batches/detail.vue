@@ -8,6 +8,7 @@ import { getBatchWip, getOrderYieldSummary, getBatchWorkProcessTasks, type WipRo
 import { ElMessage } from 'element-plus';
 import { ArrowLeft, Refresh, User } from '@element-plus/icons-vue';
 import { formatDateTime } from '@/utils/dateFormat';
+import { displayProcessUnit } from '@/utils/processSheetUnits';
 import AttachmentList from '@/components/attachment/AttachmentList.vue';
 import AttachmentUploadButton from '@/components/attachment/AttachmentUploadButton.vue';
 import type { TableRow } from '@/types/api';
@@ -312,7 +313,7 @@ const hasYield = computed(() => !!yieldData.value?.steps?.length);
 const displayActualQuantity = computed(() =>
   hasYield.value ? yieldData.value.lastStepOutput : batch.value?.actualQuantity);
 const displayActualUnit = computed(() =>
-  hasYield.value ? (yieldData.value.lastStepOutputUnit || '') : (batch.value?.unit || ''));
+  displayProcessUnit(hasYield.value ? yieldData.value.lastStepOutputUnit : batch.value?.unit));
 // audit YIELD-1: 跨单位 cumulative=null 显 —, 不能 *100 (null*100===0 会误显 0.0%)
 // P0-2: 跨单位且无 cumulative → 标"跨单位不可比, 需配产品标准克重" (诚实, 不显 0/—)
 const cumulativeDisplay = computed(() => {
@@ -1082,10 +1083,10 @@ function goToReversalList() {
               </template>
             </el-table-column>
             <el-table-column label="投入" width="130" align="right">
-              <template #default="{ row }">{{ formatNum(row.totalInput) }} {{ row.inputUnit || '' }}</template>
+              <template #default="{ row }">{{ formatNum(row.totalInput) }} {{ displayProcessUnit(row.inputUnit) }}</template>
             </el-table-column>
             <el-table-column label="产出" width="130" align="right">
-              <template #default="{ row }">{{ formatNum(row.totalOutput) }} {{ row.outputUnit || '' }}</template>
+              <template #default="{ row }">{{ formatNum(row.totalOutput) }} {{ displayProcessUnit(row.outputUnit) }}</template>
             </el-table-column>
             <!-- SP1 双产出: outputKind=SEMI/BOTH 时展示半成品产出量 + semiCode; null/FINISHED → 隐藏 -->
             <el-table-column label="产出类型" width="90" align="center">
@@ -1179,8 +1180,8 @@ function goToReversalList() {
             </el-table-column>
           </el-table>
           <div class="yield-summary">
-            合计: {{ formatNum(yieldData.firstStepInput) }} {{ yieldData.firstStepInputUnit || '' }}
-            → {{ formatNum(yieldData.lastStepOutput) }} {{ yieldData.lastStepOutputUnit || '' }}
+            合计: {{ formatNum(yieldData.firstStepInput) }} {{ displayProcessUnit(yieldData.firstStepInputUnit) }}
+            → {{ formatNum(yieldData.lastStepOutput) }} {{ displayProcessUnit(yieldData.lastStepOutputUnit) }}
             &nbsp;累计出成率 {{ cumulativeDisplay }}
             <!-- P1-3 (G4): 整批工时/人次 — 跨道相加是"人次"(同一人多道重复计), 诚实标注 -->
             <span v-if="yieldData.totalWorkMinutes != null">&nbsp;·&nbsp;总工时 {{ yieldData.totalWorkMinutes }} 分钟</span>
