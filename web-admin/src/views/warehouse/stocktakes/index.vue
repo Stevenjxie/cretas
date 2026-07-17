@@ -10,6 +10,7 @@ import * as XLSX from 'xlsx';
 import type { TableRow } from '@/types/api';
 import { warehouseTypeBadge } from '@/utils/warehouse';
 import { BIG_CATEGORY_OPTIONS, filterOptionsByBigCategory, type BigCategory } from '@/utils/materialCategory';
+import { buildStocktakeItemUpdates } from './stocktakeItemUpdates';
 
 // Safe helpers — Vue template compiler does not support optional chaining (?.)
 // in attribute bindings; delegate to these plain functions instead.
@@ -653,12 +654,14 @@ async function openCountDialog(row: TableRow) {
 async function saveCountItems() {
   countLoading.value = true;
   try {
-    const updates = countItems.value.map((item) => ({
-      id: item.id,
-      actualQty: item.actualQty,
-      notes: item.notes,
-    }));
-    const res = await put(`/${factoryId.value}/stocktakes/${countStocktakeId.value}/items`, { items: updates });
+    const updates = buildStocktakeItemUpdates(countItems.value);
+    if (updates.length === 0) {
+      ElMessage({ message: '请至少录入一条实盘数量', type: 'warning', duration: 3000 });
+      return;
+    }
+    // Backend PUT /items accepts a raw DTO array. Uncounted rows must be omitted
+    // because actualQty is required for every DTO that is submitted.
+    const res = await put(`/${factoryId.value}/stocktakes/${countStocktakeId.value}/items`, updates);
     if (res.success) {
       ElMessage({ message: '盘点数量已保存（暂存，批准后生效）', type: 'success', duration: 3000 });
       countDialogVisible.value = false;
