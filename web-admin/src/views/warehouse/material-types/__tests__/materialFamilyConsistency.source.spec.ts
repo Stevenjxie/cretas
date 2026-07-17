@@ -72,5 +72,10 @@ describe('material type family source contract', () => {
     expect(source).toContain('level: 3');
     expect(source).toContain('parentCode: segmentL2.value');
     expect(source).toContain('创建并选中');
+    expect(source).toContain('const nextL3Code = computed');
+    expect(source).toContain(':model-value="nextL3Code"');
+    expect(source).toContain('已直接选中');
+    expect(source).not.toContain('createL3Form.suffix');
+    expect(source).not.toContain('L3 四位编码');
   });
 });

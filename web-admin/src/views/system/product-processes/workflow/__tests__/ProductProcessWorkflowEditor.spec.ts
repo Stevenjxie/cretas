@@ -398,6 +398,9 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
 
   it('migrates a legacy fixed ratio onto the rebound output port without losing its ratio', async () => {
     const vm = await mountEditor();
+    const workProcess = vm.workProcessOptions.find((option) => option.id === 'WP-PACK');
+    if (!workProcess) throw new Error('Expected work process option');
+    workProcess.defaultOutputMaterialKind = 'SEMI_FINISHED';
     vm.openAddProcess('raw');
     vm.selectedWorkProcessId = 'WP-PACK';
     vm.confirmAddProcess();

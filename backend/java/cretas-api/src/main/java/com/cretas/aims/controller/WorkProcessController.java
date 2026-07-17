@@ -1,6 +1,7 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.dto.WorkProcessDTO;
+import com.cretas.aims.dto.UpdateWorkProcessOutputKindRequest;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.common.PageResponse;
@@ -77,6 +78,19 @@ public class WorkProcessController {
             @RequestBody @Valid WorkProcessDTO dto) {
         log.info("Updating work process {} for factory: {}", id, factoryId);
         return ApiResponse.success(workProcessService.update(factoryId, id, dto));
+    }
+
+    @RequirePermission({"production:read_write"})
+    @PatchMapping("/{id}/output-kind")
+    @Operation(summary = "快捷修改工序主产出类型")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    public ApiResponse<WorkProcessDTO> updateOutputMaterialKind(
+            @PathVariable String factoryId,
+            @PathVariable String id,
+            @RequestBody @Valid UpdateWorkProcessOutputKindRequest request) {
+        log.info("Updating work process {} output kind for factory: {}", id, factoryId);
+        return ApiResponse.success(workProcessService.updateOutputMaterialKind(
+                factoryId, id, request.getDefaultOutputMaterialKind()));
     }
 
     @RequirePermission({"production:read_write"})

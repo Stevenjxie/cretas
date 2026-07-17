@@ -2,6 +2,7 @@ package com.cretas.aims.service;
 
 import com.cretas.aims.dto.WorkProcessDTO;
 import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.entity.enums.WorkProcessOutputMaterialKind;
 import org.springframework.data.domain.Pageable;
 
 import java.util.List;
@@ -17,6 +18,11 @@ public interface WorkProcessService {
     WorkProcessDTO getById(String factoryId, String id);
 
     WorkProcessDTO update(String factoryId, String id, WorkProcessDTO dto);
+
+    WorkProcessDTO updateOutputMaterialKind(
+            String factoryId,
+            String id,
+            WorkProcessOutputMaterialKind outputMaterialKind);
 
     void delete(String factoryId, String id);
 

@@ -209,16 +209,16 @@ interface SegmentNode {
   children?: SegmentNode[];
 }
 const segmentTree = ref<SegmentNode[]>([]);
-const segmentL1 = ref(''); // L1 类型
-const segmentL2 = ref(''); // L2 部位
-const segmentL3 = ref(''); // L3 品类
+const segmentL1 = ref(''); // L1 大类
+const segmentL2 = ref(''); // L2 中类
+const segmentL3 = ref(''); // L3 小类（原料类型复用）
 const segmentLoading = ref(false);
 const segmentCodePreview = ref(''); // SP8 生成的编码预览
 const sp8PreviewLoading = ref(false);
 const QUICK_CREATE_L3 = '__quick_create_l3__';
 const createL3DialogVisible = ref(false);
 const createL3Submitting = ref(false);
-const createL3Form = ref({ suffix: '', label: '' });
+const createL3Form = ref({ label: '' });
 const l3MatchHint = ref('');
 const l3ManuallyEdited = ref(false);
 
@@ -356,11 +356,14 @@ function nextL3Suffix(): string {
   }, 0);
   return String(maxSuffix + 1).padStart(4, '0');
 }
+const nextL3Code = computed(() => (
+  segmentL2.value ? `${segmentL2.value}${nextL3Suffix()}` : ''
+));
 
 function handleL3Change(value: string): void {
   if (value === QUICK_CREATE_L3) {
     segmentL3.value = '';
-    createL3Form.value = { suffix: nextL3Suffix(), label: form.value.name.trim() };
+    createL3Form.value = { label: form.value.name.trim() };
     createL3DialogVisible.value = true;
     return;
   }
@@ -369,16 +372,26 @@ function handleL3Change(value: string): void {
 }
 
 async function handleCreateL3(): Promise<void> {
-  const suffix = createL3Form.value.suffix.trim();
   const label = createL3Form.value.label.trim();
-  if (!segmentL2.value) { ElMessage.warning('请先选择 L2 部位'); return; }
-  if (!/^\d{4}$/.test(suffix)) { ElMessage.warning('L3 编码须为 4 位数字'); return; }
+  if (!segmentL2.value) { ElMessage.warning('请先选择 L2 中类'); return; }
   if (!label) { ElMessage.warning('请输入新品类名称'); return; }
   if (!factoryId.value) return;
 
+  const normalizedLabel = label.toLocaleLowerCase();
+  const existing = segmentL3Options.value.find(
+    (node) => node.segmentLabel.trim().toLocaleLowerCase() === normalizedLabel,
+  );
+  if (existing) {
+    segmentL3.value = existing.segmentCode;
+    l3ManuallyEdited.value = true;
+    createL3DialogVisible.value = false;
+    ElMessage.success(`“${existing.segmentLabel}”已存在，已直接选中`);
+    return;
+  }
+
   createL3Submitting.value = true;
   try {
-    const segmentCode = `${segmentL2.value}${suffix}`;
+    const segmentCode = nextL3Code.value;
     const response = await post<SegmentNode>(`/${factoryId.value}/material-segments`, {
       level: 3,
       segmentCode,
@@ -388,7 +401,7 @@ async function handleCreateL3(): Promise<void> {
       isActive: true,
     });
     if (!response.success || !response.data) {
-      throw new Error(response.message || '创建 L3 品类失败');
+      throw new Error(response.message || '创建 L3 小类失败');
     }
     await loadSegmentTree();
     segmentL3.value = response.data.segmentCode;
@@ -396,7 +409,7 @@ async function handleCreateL3(): Promise<void> {
     createL3DialogVisible.value = false;
     ElMessage.success(`已创建新品类「${response.data.segmentLabel}」`);
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '创建 L3 品类失败');
+    ElMessage.error(error instanceof Error ? error.message : '创建 L3 小类失败');
   } finally {
     createL3Submitting.value = false;
   }
@@ -434,7 +447,7 @@ watch(
 
 async function generateSP8Code() {
   if (!segmentL1.value || !segmentL2.value || !segmentL3.value) {
-    ElMessage.warning('请先选择 L1类型、L2部位、L3品类后再生成编码');
+    ElMessage.warning('请先选择 L1大类、L2中类、L3小类后再生成编码');
     return;
   }
   if (!factoryId.value) return;
@@ -757,7 +770,7 @@ async function handleSave() {
     return ElMessage.warning('新建包材必须配置含税单价，请联系有价格权限的人员创建');
   }
   if (showSegmentEditor.value && (!segmentL1.value || !segmentL2.value || !segmentL3.value)) {
-    return ElMessage.error('每个原料类型都必须选择 L1类型、L2部位、L3品类后保存');
+    return ElMessage.error('每个原料类型都必须选择 L1大类、L2中类、L3小类后保存');
   }
 
   // 包装层级仅包材校验并提交；原料/辅料完全不发送 hierarchy。
@@ -1208,10 +1221,10 @@ function handleSizeChange(size: number) {
         <template v-if="showSegmentEditor">
           <!-- 字典已配置: 展示完整级联 -->
           <template v-if="segmentL1Options.length > 0 || segmentLoading">
-            <el-form-item label="L1 类型" required>
+            <el-form-item label="L1 大类" required>
               <el-select
                 v-model="segmentL1"
-                placeholder="请选择类型分类"
+                placeholder="请选择物料大类"
                 clearable
                 filterable
                 style="width: 100%"
@@ -1225,10 +1238,10 @@ function handleSizeChange(size: number) {
                 />
               </el-select>
             </el-form-item>
-            <el-form-item label="L2 部位" required>
+            <el-form-item label="L2 中类" required>
               <el-select
                 v-model="segmentL2"
-                placeholder="请先选择 L1 类型"
+                placeholder="请先选择 L1 大类"
                 clearable
                 filterable
                 style="width: 100%"
@@ -1242,10 +1255,10 @@ function handleSizeChange(size: number) {
                 />
               </el-select>
             </el-form-item>
-            <el-form-item label="L3 品类" required>
+            <el-form-item label="L3 小类" required>
               <el-select
                 v-model="segmentL3"
-                placeholder="请先选择 L2 部位"
+                placeholder="请先选择 L2 中类"
                 clearable
                 filterable
                 style="width: 100%"
@@ -1264,6 +1277,7 @@ function handleSizeChange(size: number) {
                   :value="opt.segmentCode"
                 />
               </el-select>
+              <div class="field-hint">L3 是原料类型共用的具体品类；单位、规格、储存方式等仍在原料类型中维护。</div>
               <div v-if="l3MatchHint" class="field-hint field-hint--matched">{{ l3MatchHint }}</div>
             </el-form-item>
             <el-form-item v-if="segmentL1 && segmentL2 && segmentL3" label="编码预览">
@@ -1388,21 +1402,21 @@ function handleSizeChange(size: number) {
 
     <el-dialog
       v-model="createL3DialogVisible"
-      title="快捷创建 L3 新品类"
+      title="快捷创建 L3 小类"
       width="460px"
       append-to-body
       :close-on-click-modal="false"
     >
       <el-form label-width="110px">
-        <el-form-item label="所属 L2">
+        <el-form-item label="所属 L2 中类">
           <el-input :model-value="segmentL2" disabled />
         </el-form-item>
-        <el-form-item label="L3 四位编码" required>
-          <el-input v-model="createL3Form.suffix" maxlength="4" placeholder="如 0001" />
-          <div class="field-hint">保存时组成完整 L3 编码：{{ segmentL2 }}{{ createL3Form.suffix }}</div>
+        <el-form-item label="系统编码">
+          <el-input :model-value="nextL3Code" disabled />
+          <div class="field-hint">系统已检查当前 L2 下的编码并自动生成，无需手工填写。</div>
         </el-form-item>
-        <el-form-item label="新品类名称" required>
-          <el-input v-model="createL3Form.label" maxlength="100" placeholder="请输入 L3 品类名称" />
+        <el-form-item label="小类名称" required>
+          <el-input v-model="createL3Form.label" maxlength="100" placeholder="例如：黄油鸡 / 食盐 / 纸盒" />
         </el-form-item>
       </el-form>
       <template #footer>

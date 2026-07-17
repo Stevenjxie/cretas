@@ -1,12 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Delete as DeleteIcon, Edit, Plus, Refresh } from '@element-plus/icons-vue';
+import { Delete as DeleteIcon, Edit, Plus, QuestionFilled, Refresh } from '@element-plus/icons-vue';
 import { del, get, post, put } from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
-
-type SegmentLevel = 1 | 2 | 3;
+import {
+  findLabelConflict,
+  nextSegmentCode,
+  SEGMENT_LEVEL_DEFINITIONS,
+  type SegmentLevel,
+} from './materialSegmentRules';
 
 interface SegmentNode {
   id: number;
@@ -76,6 +80,18 @@ const parentOptions = computed(() => {
   if (form.level === 1) return [];
   return form.level === 2 ? l1Options.value : l2Options.value;
 });
+const systemGeneratedCode = computed(() => (
+  form.id
+    ? form.segmentCode
+    : nextSegmentCode(flatRows.value, form.level, form.level === 1 ? null : form.parentCode)
+));
+
+watch(
+  () => form.level,
+  () => {
+    if (!form.id) form.parentCode = null;
+  },
+);
 
 function resetForm(level: SegmentLevel = selectedLevel.value) {
   form.id = null;
@@ -126,7 +142,7 @@ function openEdit(row: SegmentNode) {
 }
 
 function validateForm(): boolean {
-  const code = form.segmentCode.trim();
+  const code = systemGeneratedCode.value;
   if (!form.segmentLabel.trim()) {
     showStickyError('名称不能为空，请填写分类名称。');
     return false;
@@ -152,10 +168,27 @@ function validateForm(): boolean {
 
 async function saveSegment() {
   if (!factoryId.value || !validateForm()) return;
+  const conflict = findLabelConflict(flatRows.value, form.segmentLabel, form.id);
+  if (conflict) {
+    const samePosition = conflict.level === form.level && conflict.parentCode === form.parentCode;
+    if (samePosition) {
+      showStickyError(`“${conflict.segmentLabel}”已存在于当前层级（${conflict.segmentCode}），请直接使用已有分类。`);
+      return;
+    }
+    try {
+      await ElMessageBox.confirm(
+        `“${conflict.segmentLabel}”已属于 L${conflict.level} ${conflict.level === 1 ? '大类' : conflict.level === 2 ? '中类' : '小类'}（${conflict.segmentCode}）。请根据层级定义确认是否仍要在当前层级创建。`,
+        '检测到同名分类',
+        { type: 'warning', confirmButtonText: '仍按当前层级创建', cancelButtonText: '返回调整' },
+      );
+    } catch {
+      return;
+    }
+  }
   saving.value = true;
   const payload = {
     level: form.level,
-    segmentCode: form.segmentCode.trim(),
+    segmentCode: systemGeneratedCode.value,
     segmentLabel: form.segmentLabel.trim(),
     parentCode: form.level === 1 ? null : form.parentCode,
     sortOrder: Number(form.sortOrder || 0),
@@ -172,7 +205,8 @@ async function saveSegment() {
     dialogVisible.value = false;
     await loadTree();
   } catch (error) {
-    showStickyError(errorMessage(error, '保存失败，请检查编码是否重复，然后重试。'));
+    await loadTree();
+    showStickyError(errorMessage(error, '保存失败，系统已重新检查编码和分类名称，请重试。'));
   } finally {
     saving.value = false;
   }
@@ -205,8 +239,22 @@ onMounted(loadTree);
       <template #header>
         <div class="card-header">
           <div>
-            <div class="page-title">16位物料编码字典</div>
-            <div class="page-subtitle">L1 大类（3位） · L2 中类（6位） · L3 小类（10位）</div>
+            <div class="page-title-row">
+              <div class="page-title">16位物料编码字典</div>
+              <el-popover placement="bottom-start" :width="420" trigger="click">
+                <template #reference>
+                  <el-button class="definition-help" link :icon="QuestionFilled" aria-label="查看分类层级定义" />
+                </template>
+                <div class="definition-list">
+                  <div v-for="item in SEGMENT_LEVEL_DEFINITIONS" :key="item.level" class="definition-item">
+                    <strong>{{ item.title }}</strong>
+                    <div>{{ item.description }}</div>
+                    <div class="definition-example">例如：{{ item.example }}</div>
+                  </div>
+                </div>
+              </el-popover>
+            </div>
+            <div class="page-subtitle">L1 大类（3位） · L2 中类（6位） · L3 小类（10位）；编码由系统自动生成</div>
           </div>
           <div class="header-actions">
             <el-button :icon="Refresh" :loading="loading" @click="loadTree">刷新</el-button>
@@ -267,8 +315,9 @@ onMounted(loadTree);
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="编码" required>
-          <el-input v-model="form.segmentCode" maxlength="10" placeholder="如：001 / 001001 / 0010010001" />
+        <el-form-item label="系统编码" required>
+          <el-input :model-value="systemGeneratedCode" disabled placeholder="选择层级和上级后自动生成" />
+          <div class="field-hint">编码自动查重并按当前层级顺序生成，用户无需填写或记忆。</div>
         </el-form-item>
         <el-form-item label="名称" required>
           <el-input v-model="form.segmentLabel" maxlength="100" placeholder="如：牛肉类 / 牛腱 / 卤牛腱" />
@@ -304,6 +353,33 @@ onMounted(loadTree);
   font-size: 18px;
   font-weight: 600;
   color: #303133;
+}
+
+.page-title-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.definition-help {
+  color: #909399;
+}
+
+.definition-list {
+  display: grid;
+  gap: 12px;
+  line-height: 1.55;
+  color: #606266;
+}
+
+.definition-item strong {
+  color: #303133;
+}
+
+.definition-example,
+.field-hint {
+  color: #909399;
+  font-size: 12px;
 }
 
 .page-subtitle {

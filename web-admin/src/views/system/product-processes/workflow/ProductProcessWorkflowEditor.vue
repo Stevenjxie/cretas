@@ -412,7 +412,9 @@ import {
   createWorkProcess,
   getActiveWorkProcesses,
   getProductWorkProcesses,
+  updateWorkProcessOutputKind,
   type WorkProcessItem,
+  type WorkProcessOutputMaterialKind,
 } from '@/api/processProduction';
 import WorkProcessAIChatPanel from '@/views/system/components/WorkProcessAIChatPanel.vue';
 import UnitSelect from '@/components/common/UnitSelect.vue';
@@ -425,6 +427,7 @@ import {
   type RawMaterialPickerOption,
 } from './rawMaterialCatalog';
 import { classifyOutputSkuCategory, matchOutputSkuByName } from './outputSkuClassification';
+import { needsPrimaryOutputKindUpdate } from './processOutputKindCompatibility';
 import { usePinyinFilter } from './pinyinInitials';
 import { classifyWorkflowTopology } from './workflowClassification';
 import {
@@ -970,7 +973,7 @@ async function focusFirstPublishBindingError(): Promise<void> {
   const target = flowNodes.value.find((node) => node.id === targetId);
   if (!target) return;
   await nextTick();
-  await fitView({ nodes: [target], padding: 0.48, duration: 420, maxZoom: 1.15 });
+  await fitView({ nodes: [target.id], padding: 0.48, duration: 420, maxZoom: 1.15 });
 }
 
 function rememberUnitIssues(issues: WorkflowUnitIssue[]): void {
@@ -1754,12 +1757,76 @@ function selectMaterialSku(materialNodeId: string, skuId: string): void {
   selectOutputSku(owner.processId, owner.portId, skuId);
 }
 
+function processOutputKind(processData: ProcessNodeData): WorkProcessOutputMaterialKind | null {
+  return workProcessOptions.value.find(
+    (option) => option.id === processData.workProcessId,
+  )?.defaultOutputMaterialKind ?? null;
+}
+
+function isPrimaryOutputPort(processData: ProcessNodeData, portId: string): boolean {
+  return processData.ports
+    .filter((candidate) => candidate.direction === 'OUTPUT')
+    .sort((left, right) => left.ordinal - right.ordinal)[0]?.id === portId;
+}
+
+async function ensurePrimaryOutputKind(
+  processId: string,
+  portId: string,
+  nextKind: WorkProcessOutputMaterialKind,
+): Promise<boolean> {
+  const identity = currentLoadedIdentity();
+  const process = flowNodes.value.find((node) => node.id === processId);
+  if (!identity || !process || process.data?.kind !== 'PROCESS') return false;
+  const data = process.data as ProcessNodeData & { kind: 'PROCESS' };
+  if (!isPrimaryOutputPort(data, portId)) return true;
+
+  const currentKind = processOutputKind(data);
+  if (!needsPrimaryOutputKindUpdate(currentKind, nextKind, true)) return true;
+  const currentLabel = currentKind === 'FINISHED_GOOD' ? '成品出品工序' : '半成品工序';
+  const nextLabel = nextKind === 'FINISHED_GOOD' ? '成品出品工序' : '半成品工序';
+  try {
+    await ElMessageBox.confirm(
+      `工序“${data.processName}”当前配置为“${currentLabel}”，不能把主产出绑定为${nextKind === 'FINISHED_GOOD' ? '成品' : '半成品'}。是否快捷修改为“${nextLabel}”后继续？`,
+      '产出类型不一致',
+      {
+        type: 'warning',
+        confirmButtonText: `修改为${nextLabel}`,
+        cancelButtonText: '取消选择',
+      },
+    );
+    const response = await updateWorkProcessOutputKind(
+      identity.factoryId,
+      data.workProcessId,
+      nextKind,
+    );
+    if (!response.success || !response.data) {
+      ElMessage.error(response.message || '工序产出类型修改失败');
+      return false;
+    }
+    const updatedProcess = response.data;
+    workProcessOptions.value = workProcessOptions.value.map(
+      (option) => option.id === updatedProcess.id ? updatedProcess : option,
+    );
+    ElMessage.success(`工序“${data.processName}”已修改为${nextLabel}`);
+    return true;
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') {
+      console.error('[updateWorkProcessOutputKind] failed', error);
+    }
+    return false;
+  }
+}
+
 function selectOutputSku(processId: string, portId: string, skuId: string): void {
   if (!canEdit.value) return;
   if (skuId === '__CREATE__') {
     const process = flowNodes.value.find((node) => node.id === processId);
     const data = process?.data as ProcessNodeData | undefined;
     const port = data?.ports.find((candidate) => candidate.id === portId);
+    if (data && isPrimaryOutputPort(data, portId) && processOutputKind(data) === 'FINISHED_GOOD') {
+      ElMessage.warning('成品出品工序不能现场创建半成品 SKU，请选择已有成品 SKU，或先到 SKU 管理创建成品');
+      return;
+    }
     skuBindingTarget.value = { processId, portId };
     skuForm.value = {
       name: port?.materialName || `${data?.processName || '工序'}后半成品`,
@@ -1769,7 +1836,28 @@ function selectOutputSku(processId: string, portId: string, skuId: string): void
     return;
   }
   const option = skuOptions.value.find((item) => item.id === skuId);
-  if (option) bindOutputSku(processId, portId, option);
+  const kind = classifyOutputSkuCategory(option?.productCategory);
+  if (!option || !kind) {
+    ElMessage.error('所选 SKU 分类不能作为工序产出');
+    return;
+  }
+  const process = flowNodes.value.find((node) => node.id === processId);
+  const data = process?.data as ProcessNodeData | undefined;
+  const requiresKindUpdate = Boolean(
+    data
+    && needsPrimaryOutputKindUpdate(
+      processOutputKind(data),
+      kind,
+      isPrimaryOutputPort(data, portId),
+    ),
+  );
+  if (requiresKindUpdate) {
+    void ensurePrimaryOutputKind(processId, portId, kind).then((compatible) => {
+      if (compatible) bindOutputSku(processId, portId, option);
+    });
+    return;
+  }
+  bindOutputSku(processId, portId, option);
 }
 
 function bindOutputSku(processId: string, portId: string, option: SkuOption): boolean {
@@ -1787,6 +1875,11 @@ function bindOutputSku(processId: string, portId: string, option: SkuOption): bo
   const primaryOutputPort = data.ports
     .filter((candidate) => candidate.direction === 'OUTPUT')
     .sort((left, right) => left.ordinal - right.ordinal)[0];
+  const expectedKind = processOutputKind(data);
+  if (needsPrimaryOutputKindUpdate(expectedKind, kind, primaryOutputPort?.id === port.id)) {
+    ElMessage.error(`工序“${data.processName}”的主产出类型与所选 SKU 不一致，请先修改工序产出类型`);
+    return false;
+  }
   const nextUnit = workflowReportingUnit(kind, option.unit || port.unit);
   mutate(() => {
     Object.assign(port, {

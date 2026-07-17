@@ -471,6 +471,25 @@ class WorkProcessServiceImplTest {
             assertEquals(WorkProcessOutputMaterialKind.FINISHED_GOOD,
                     result.getDefaultOutputMaterialKind());
         }
+
+        @Test
+        @DisplayName("快捷修改主产出类型为成品时清除半成品编码")
+        void updateOutputMaterialKindToFinishedClearsSemiFinishedCode() {
+            WorkProcess existing = buildDefaultWorkProcess();
+            existing.setDefaultOutputMaterialKind(WorkProcessOutputMaterialKind.SEMI_FINISHED);
+            existing.setSemiFinishedOutputCode("SEMI-001");
+            when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WP_ID))
+                    .thenReturn(Optional.of(existing));
+            when(workProcessRepository.save(any(WorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            WorkProcessDTO result = service.updateOutputMaterialKind(
+                    FACTORY_ID, WP_ID, WorkProcessOutputMaterialKind.FINISHED_GOOD);
+
+            assertEquals(WorkProcessOutputMaterialKind.FINISHED_GOOD,
+                    result.getDefaultOutputMaterialKind());
+            assertNull(existing.getSemiFinishedOutputCode());
+            verify(workProcessRepository).save(existing);
+        }
     }
 
     // ==================== 删除工序测试 ====================
