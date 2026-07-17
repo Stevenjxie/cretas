@@ -114,6 +114,20 @@ immediately if the guard reports a blocked mutation attempt or an actual write.
 4. Add response extractors only for non-sensitive business fields.
 5. Add a local fixture assertion and run the drift/unit gate.
 
+## Retired standalone runners
+
+The reusable contracts from `tests/qa-r1-vue-smoke/run-smoke.mjs` and
+`tests/e2e-yield-mixed-sku/readonly-bom-workflow-contract.mjs` now live here.
+Their standalone runners and duplicate dependency package were removed. The
+SmartBI JSON/screenshots remain archived evidence.
+
+The former `prod-business-flow-audit.mjs` was renamed to
+`nonprod-business-flow-audit.mjs`. It is intentionally outside this read-only
+harness because it creates plans, reports process rows, and settles production.
+It has no default target or factory, rejects known production hosts, and
+requires both `E2E_TARGET_ENV=test` and
+`E2E_ALLOW_BUSINESS_WRITES=NON_PRODUCTION_ONLY` before it can start.
+
 ## Result vocabulary
 
 Scenario results are `PASS`, `CONFIRMED_DEFECT`, `PARTIAL_DEFECT`,

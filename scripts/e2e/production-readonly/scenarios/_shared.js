@@ -29,15 +29,25 @@ async function runReadOnlyPageScenario(ctx, definition) {
       bodyTextLength: body.trim().length,
       finalPath: new URL(result.url).pathname,
     });
+    let assessment = null;
     if (definition.inspect) {
       const inspected = await definition.inspect(ctx.page, body, ctx);
-      if (inspected) result.pageEvidence.push(inspected);
+      if (inspected) {
+        assessment = inspected.assessment || null;
+        const { assessment: _assessment, screenshots = [], ...evidence } = inspected;
+        result.pageEvidence.push(evidence);
+        result.screenshots.push(...screenshots);
+      }
     }
     if (definition.screenshot) result.screenshots.push(await ctx.screenshot(definition.id));
     result.result = matched.length === (definition.landmarks || []).length && body.trim().length > 40
       ? 'PASS'
       : 'UNVERIFIED';
     result.rootCauseClass = result.result === 'PASS' ? 'none' : 'tool';
+    if (result.result === 'PASS' && assessment) {
+      result.result = assessment.result;
+      result.rootCauseClass = assessment.rootCauseClass;
+    }
   } catch (error) {
     result.result = 'TOOL_ERROR';
     result.rootCauseClass = 'tool';

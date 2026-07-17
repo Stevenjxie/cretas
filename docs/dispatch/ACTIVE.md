@@ -11,13 +11,13 @@
 - 状态：`review`
 - Base SHA：`3ce98d4d9d3a7edca79606844c0ac34c0be7b4fb`
 - Owner：Codex `/root`
-- Scope 锁：`scripts/e2e/production-readonly/**`、`docs/testing/playwright-assets.md`、`.agents/skills/e2e-web-admin/**`、`.claude/skills/e2e-web-admin/SKILL.md`、`.github/workflows/e2e-pr.yml`、`docs/dispatch/ACTIVE.md`
-- 验收：Node 单元 10/10、Playwright 本地 fixture 3/3、CLI dry-run、MCP filename dry-run、生产 F006 租户隔离与纯 GET Workflow smoke 均通过；生产业务写请求 0。
-- 下一动作：审查并合并本任务 PR；合并后移入当日归档并释放 scope 锁。
+- Scope 锁：`scripts/e2e/production-readonly/**`、`tests/qa-r1-vue-smoke/**`、`tests/e2e-yield-mixed-sku/readonly-bom-workflow-contract.mjs`、`tests/e2e-yield-mixed-sku/prod-business-flow-audit.mjs`、`tests/e2e-yield-mixed-sku/nonprod-business-flow-audit.mjs`、`tests/e2e-yield-mixed-sku/ui-render-deep-audit.mjs`、`docs/testing/playwright-assets.md`、`.agents/skills/e2e-web-admin/**`、`.claude/skills/e2e-web-admin/SKILL.md`、`.github/workflows/e2e-pr.yml`、`docs/dispatch/ACTIVE.md`
+- 验收：旧 BOM/Workflow 观察项已迁入统一框架；旧 SmartBI runner 与重复依赖包、旧 BOM runner 已删除；生产写入口已改为显式非生产脚本，生产域名拒绝与测试环境确认门禁均通过；Node 单元 10/10、Playwright 本地 fixture 3/3（业务写 0）、bundle drift、CLI/MCP/迁移脚本语法检查通过。
+- 下一动作：审查并合并更新后的任务 PR；合并后移入当日归档并释放 scope 锁。
 
 ## Scope 锁地图
 
-- `E2E-PROD-READONLY-HARNESS-20260717`：`scripts/e2e/production-readonly/**`、`docs/testing/playwright-assets.md`、仓库 E2E skill、`.github/workflows/e2e-pr.yml`。
+- `E2E-PROD-READONLY-HARNESS-20260717`：`scripts/e2e/production-readonly/**`、三个旧 Playwright 候选及其迁移目标、`docs/testing/playwright-assets.md`、仓库 E2E skill、`.github/workflows/e2e-pr.yml`。
 
 ## 阻塞项
 

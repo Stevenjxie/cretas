@@ -7,11 +7,12 @@ entry is `scripts/e2e/production-readonly/`.
 | Asset | Intended environment | Reusable parts | Production status |
 |---|---|---|---|
 | `scripts/e2e/production-readonly/` | Production read-only, local fixture, CI unit gate | Entire shared harness | **Canonical** |
-| `tests/qa-r1-vue-smoke/run-smoke.mjs` | Historical QA smoke | Page scan, console/network capture concepts | **Forbidden for production**: embedded credentials and obsolete target |
+| `tests/qa-r1-vue-smoke/` | Archived QA evidence | Route/evidence history only; executable runner removed | **Evidence only**: current page scan and capture behavior lives in the canonical harness |
 | `tests/e2e-comprehensive/p2-guardrail-smoke.mjs` | Non-production guardrail | Fresh Chromium/context pattern | **Forbidden for production**: embedded credentials and AI POSTs |
-| `tests/e2e-yield-mixed-sku/readonly-bom-workflow-contract.mjs` | Historical focused audit | Read-only UI observations | **Deprecated for production**: reports zero writes without a before-send guard |
+| `scripts/e2e/production-readonly/scenarios/bom-readonly.js` | Production read-only | BOM dialog and UI contract migrated from the retired focused audit | **Canonical**: protected by the shared before-send mutation guard |
 | `tests/e2e-yield-mixed-sku/_headed-helpers.mjs` | Test-data setup | None for production | **Forbidden for production**: token reuse and direct API mutations |
-| `tests/e2e-yield-mixed-sku/prod-business-flow-audit.mjs` | Historical business-flow audit | None for read-only acceptance | **Forbidden for production**: creates and advances production records |
+| `tests/e2e-yield-mixed-sku/nonprod-business-flow-audit.mjs` | Explicit non-production write audit | Mixed-SKU plan, process-sheet, yield, cost and settlement chain | **Non-production only**: rejects known production hosts and requires two explicit test/write acknowledgements |
+| `tests/e2e-yield-mixed-sku/ui-render-deep-audit.mjs` | Historical write-capable UI audit | UI/oracle comparison reference | **Forbidden for production**: creates records and submits settlement; not part of the canonical read-only harness |
 | `tests/v1-e2e/helpers/login.ts` | Local/CI integration | UI locator ideas | **Non-production only**: test defaults and write-capable suites |
 | `tests/v1-e2e/helpers/auth-cache.ts` | Local/CI integration | Storage-state speedup | **Forbidden for production**: shared cached auth violates clean-session isolation |
 | `web-admin/e2e-auth-helper.ts` | Web-admin local tests | API contract reference | **Forbidden for production**: token injection bypasses real UI login |
@@ -20,8 +21,9 @@ entry is `scripts/e2e/production-readonly/`.
 
 ## Rules
 
-- Never move, delete, or silently repurpose historical assets. Update this
-  registry when their safety classification changes.
+- Preserve historical evidence by default. A legacy executable may be retired
+  only after reusable assertions are migrated, references are removed, and
+  this registry records its replacement or archived evidence location.
 - Never copy a credential from an old script into the canonical harness.
 - Do not maintain a second whitelist or result schema in a wrapper.
 - `.agents/skills/e2e-web-admin/SKILL.md` is the canonical skill instruction.
