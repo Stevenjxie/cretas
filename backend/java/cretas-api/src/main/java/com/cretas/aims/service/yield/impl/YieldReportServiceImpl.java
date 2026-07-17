@@ -61,6 +61,8 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -1361,8 +1363,10 @@ public class YieldReportServiceImpl implements YieldReportService {
         // P0-2: 解析末道产品标准克重, 打通 kg↔份 折算 (跨单位且无克重时 cumulative 保持 null, 诚实)
         BigDecimal gramsPerUnit = resolveGramsPerUnit(factoryId, reports);
         BatchYieldDTO dto = calcSvc.calculateBatchYield(reports, gramsPerUnit);
-        enrichProcessNames(factoryId, batchId, dto);
         enrichFromProcessSheetRows(factoryId, batchId, dto);
+        // Process-sheet enrichment can replace the sparse report steps. Resolve names afterwards
+        // so workflow-based clerk rows also receive their configured process names.
+        enrichProcessNames(factoryId, batchId, dto);
         // G8 Wave 3 (C): 进行中标注 — 算在制 WIP 总量 + 批次完工判定
         enrichInProgressAnnotation(factoryId, batchId, dto);
         return dto;
@@ -1702,16 +1706,24 @@ public class YieldReportServiceImpl implements YieldReportService {
             return;
         }
 
-        List<SheetYieldRow> sheetRows = rows.stream()
+        List<SheetYieldRow> allSheetRows = rows.stream()
                 .map(row -> toSheetYieldRow(row, batch))
                 .filter(Objects::nonNull)
-                .filter(row -> Objects.equals(row.productTypeId(), batch.getProductTypeId()))
                 .sorted((a, b) -> {
                     int orderCompare = Integer.compare(orderOrMax(a.processOrder()), orderOrMax(b.processOrder()));
                     if (orderCompare != 0) return orderCompare;
                     return Long.compare(idOrMax(a.rowId()), idOrMax(b.rowId()));
                 })
                 .toList();
+        SheetYieldRow exactTarget = allSheetRows.stream()
+                .filter(row -> Objects.equals(row.batchId(), batchId))
+                .findFirst()
+                .orElse(null);
+        List<SheetYieldRow> sheetRows = exactTarget == null
+                ? allSheetRows.stream()
+                        .filter(row -> Objects.equals(row.productTypeId(), batch.getProductTypeId()))
+                        .toList()
+                : collectLineageRows(allSheetRows, exactTarget);
         if (sheetRows.isEmpty()) {
             return;
         }
@@ -1720,32 +1732,58 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .filter(row -> positive(row.inputQuantity()))
                 .findFirst()
                 .orElse(null);
-        SheetYieldRow target = sheetRows.stream()
-                .filter(row -> Objects.equals(row.batchId(), batchId))
-                .findFirst()
-                .orElse(sheetRows.get(sheetRows.size() - 1));
+        SheetYieldRow target = exactTarget != null ? exactTarget : sheetRows.get(sheetRows.size() - 1);
 
         dto.setBatchId(batch.getId());
         dto.setBatchNumber(batch.getBatchNumber());
         if (first != null) {
             dto.setFirstStepInput(first.inputQuantity());
-            dto.setFirstStepInputUnit(first.unit());
+            dto.setFirstStepInputUnit(first.inputUnit());
         }
         dto.setLastStepOutput(target.outputQuantity());
-        dto.setLastStepOutputUnit(target.unit());
+        dto.setLastStepOutputUnit(target.outputUnit());
 
         BigDecimal gramsPerUnit = productTypeRepository.findByIdAndFactoryId(batch.getProductTypeId(), factoryId)
                 .map(ProductType::getGramsPerUnit)
                 .orElse(null);
         BigDecimal cumulative = first == null ? null
-                : calculateCumulativeYieldRate(first.inputQuantity(), first.unit(),
-                        target.outputQuantity(), target.unit(), gramsPerUnit);
+                : calculateCumulativeYieldRate(first.inputQuantity(), first.inputUnit(),
+                        target.outputQuantity(), target.outputUnit(), gramsPerUnit);
         dto.setCumulativeYieldRate(cumulative);
         dto.setSteps(sheetRows.stream()
                 .map(row -> toStepYield(row, first, gramsPerUnit))
                 .toList());
         dto.setComplete(sheetRows.stream()
                 .allMatch(row -> positive(row.inputQuantity()) && row.outputQuantity() != null));
+    }
+
+    /**
+     * Follow persisted upstream batch references backwards from the requested output batch.
+     * This keeps shared upstream rows even when every step produces a different SKU, while
+     * excluding sibling fan-out rows that do not contribute to this output.
+     */
+    private List<SheetYieldRow> collectLineageRows(List<SheetYieldRow> allRows, SheetYieldRow target) {
+        Map<String, SheetYieldRow> byBatchNumber = allRows.stream()
+                .filter(row -> row.batchNumber() != null && !row.batchNumber().isBlank())
+                .collect(Collectors.toMap(SheetYieldRow::batchNumber, row -> row, (left, right) -> right));
+        Set<Long> selectedRowIds = new HashSet<>();
+        Deque<SheetYieldRow> pending = new ArrayDeque<>();
+        pending.add(target);
+        while (!pending.isEmpty()) {
+            SheetYieldRow current = pending.removeFirst();
+            if (current.rowId() != null && !selectedRowIds.add(current.rowId())) {
+                continue;
+            }
+            for (String sourceBatchNumber : current.sourceBatchNumbers()) {
+                SheetYieldRow upstream = byBatchNumber.get(sourceBatchNumber);
+                if (upstream != null) {
+                    pending.addLast(upstream);
+                }
+            }
+        }
+        return allRows.stream()
+                .filter(row -> row.rowId() != null && selectedRowIds.contains(row.rowId()))
+                .toList();
     }
 
     private SheetYieldRow toSheetYieldRow(ProcessSheetRow row, ProductionBatch targetBatch) {
@@ -1757,16 +1795,36 @@ public class YieldReportServiceImpl implements YieldReportService {
         BigDecimal output = firstPositiveOrNull(req.getOutputQuantity(),
                 isTargetBatch ? targetBatch.getActualQuantity() : null,
                 isTargetBatch ? targetBatch.getQuantity() : null);
-        String unit = req.getUnit() != null ? req.getUnit() : (isTargetBatch ? targetBatch.getUnit() : null);
+        String inputUnit = firstNonBlank(req.getInputUnit(), req.getUnit());
+        String outputUnit = firstNonBlank(req.getOutputUnit(), req.getUnit(),
+                isTargetBatch ? targetBatch.getUnit() : null);
+        List<ProcessSheetRowRequest.UpstreamRef> upstreamRefs = new ArrayList<>();
+        if (req.getUpstreamSources() != null) {
+            upstreamRefs.addAll(req.getUpstreamSources());
+        }
+        // Fan-out creates one synthesized output row per target SKU and preserves the shared
+        // input lineage in inputLineageUpstreamSources instead of upstreamSources.
+        if (req.getInputLineageUpstreamSources() != null) {
+            upstreamRefs.addAll(req.getInputLineageUpstreamSources());
+        }
+        List<String> sourceBatchNumbers = upstreamRefs.stream()
+                .filter(Objects::nonNull)
+                .map(ProcessSheetRowRequest.UpstreamRef::getSourceBatchNumber)
+                .filter(value -> value != null && !value.isBlank())
+                .distinct()
+                .toList();
         return new SheetYieldRow(
                 row.getId(),
                 row.getBatchId(),
+                row.getBatchNumber(),
                 req.getProductTypeId(),
                 req.getProcessOrder(),
                 req.getProcessName(),
                 req.getInputQuantity(),
                 output,
-                unit,
+                inputUnit,
+                outputUnit,
+                sourceBatchNumbers,
                 convertByproducts(req.getByproducts()),
                 req.getSampleRetainQuantity(),
                 req.getPackagingDetail());
@@ -1785,22 +1843,23 @@ public class YieldReportServiceImpl implements YieldReportService {
     }
 
     private StepYieldDTO toStepYield(SheetYieldRow row, SheetYieldRow first, BigDecimal gramsPerUnit) {
+        boolean unitComparable = Objects.equals(row.inputUnit(), row.outputUnit());
         BigDecimal stepYield = null;
-        if (positive(row.inputQuantity()) && row.outputQuantity() != null) {
+        if (unitComparable && positive(row.inputQuantity()) && row.outputQuantity() != null) {
             stepYield = row.outputQuantity().divide(row.inputQuantity(), 4, RoundingMode.HALF_UP);
         }
         BigDecimal cumulative = first == null ? null
-                : calculateCumulativeYieldRate(first.inputQuantity(), first.unit(),
-                        row.outputQuantity(), row.unit(), gramsPerUnit);
+                : calculateCumulativeYieldRate(first.inputQuantity(), first.inputUnit(),
+                        row.outputQuantity(), row.outputUnit(), gramsPerUnit);
         return StepYieldDTO.builder()
                 .processOrder(row.processOrder())
                 .processName(row.processName())
                 .totalInput(row.inputQuantity())
                 .totalOutput(row.outputQuantity())
-                .inputUnit(row.unit())
-                .outputUnit(row.unit())
+                .inputUnit(row.inputUnit())
+                .outputUnit(row.outputUnit())
                 .yieldRate(stepYield)
-                .unitComparable(true)
+                .unitComparable(unitComparable)
                 .cumulativeYieldRate(cumulative)
                 .byproducts(row.byproducts())
                 .sampleRetainQuantity(row.sampleRetainQuantity())
@@ -1865,15 +1924,27 @@ public class YieldReportServiceImpl implements YieldReportService {
         return value == null ? Long.MAX_VALUE : value;
     }
 
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
     private record SheetYieldRow(
             Long rowId,
             Long batchId,
+            String batchNumber,
             String productTypeId,
             Integer processOrder,
             String processName,
             BigDecimal inputQuantity,
             BigDecimal outputQuantity,
-            String unit,
+            String inputUnit,
+            String outputUnit,
+            List<String> sourceBatchNumbers,
             List<Map<String, Object>> byproducts,
             Integer sampleRetainQuantity,
             List<Map<String, Object>> packagingDetail) {

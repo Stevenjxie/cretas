@@ -5,16 +5,19 @@ import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.ReportReversalLog;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ReportReversalLogRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.reversal.impl.ReportReversalServiceImpl;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -24,6 +27,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -88,6 +92,13 @@ class ReportReversalServiceTest {
     private com.cretas.aims.repository.workprocess.WorkProcessTaskRepository workProcessTaskRepository;
     @Mock
     private com.cretas.aims.service.NotificationService notificationService;
+    @Mock
+    private ProcessSheetRowRepository processSheetRowRepository;
+
+    @BeforeEach
+    void injectOptionalRepositories() {
+        ReflectionTestUtils.setField(service, "processSheetRowRepository", processSheetRowRepository);
+    }
 
     // ==================== submitReversal ====================
 
@@ -147,6 +158,38 @@ class ReportReversalServiceTest {
             ReportReversalLog result = service.submitReversal(FACTORY_ID, BATCH_ID, SUBMITTED_BY, "retry");
             assertThat(result.getId()).isEqualTo(LOG_ID);
             verify(reversalLogRepo, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("G3: 旧版 DONE 仍有工序报工行 → 幂等重试只软删残留行，不重复冲销")
+        void g3_existingDone_repairsLegacyProcessSheetRows() {
+            when(txnRepo.existsDownstreamConsumed(anyString(), anyString())).thenReturn(false);
+            ProductionBatch batch = new ProductionBatch();
+            batch.setProductionPlanId("plan-001");
+            when(batchRepo.findByIdAndFactoryId(BATCH_ID, FACTORY_ID)).thenReturn(Optional.of(batch));
+            when(fgbRepo.existsShippedByFactoryIdAndProductionPlanId(anyString(), anyString())).thenReturn(false);
+
+            ReportReversalLog existing = ReportReversalLog.builder()
+                    .id(LOG_ID).factoryId(FACTORY_ID).batchId(BATCH_ID)
+                    .status(ReportReversalLog.ReversalStatus.DONE)
+                    .reversalScope(ReportReversalLog.ReversalScope.WHOLE_ORDER)
+                    .build();
+            when(reversalLogRepo.findByBatchIdAndReversalScopeAndDeletedAtIsNull(
+                    BATCH_ID, ReportReversalLog.ReversalScope.WHOLE_ORDER))
+                    .thenReturn(Optional.of(existing));
+            ProcessSheetRow row = new ProcessSheetRow();
+            row.setId(88L);
+            row.setFactoryId(FACTORY_ID);
+            row.setBatchId(BATCH_ID);
+            when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, "plan-001"))
+                    .thenReturn(List.of(row));
+
+            service.submitReversal(FACTORY_ID, BATCH_ID, SUBMITTED_BY, "repair legacy row");
+
+            assertThat(row.getDeletedAt()).isNotNull();
+            verify(processSheetRowRepository).saveAll(List.of(row));
+            verify(reportRepo, never()).save(any());
+            verify(txnRepo, never()).save(any());
         }
 
         @Test
@@ -348,6 +391,38 @@ class ReportReversalServiceTest {
                     .isEqualTo(com.cretas.aims.entity.workprocess.WorkProcessTask.Status.SKIPPED);
             assertThat(skippedTask.getActualQuantity()).isNull();
             verify(workProcessTaskRepository).saveAll(List.of(completedTask, skippedTask));
+        }
+
+        @Test
+        @DisplayName("executeReversal → 同批逐道录入行软删，计划取消门禁不再误判")
+        void executeReversal_softDeletesProcessSheetRows() {
+            ReportReversalLog pending = ReportReversalLog.builder()
+                    .id(LOG_ID).factoryId(FACTORY_ID).batchId(BATCH_ID)
+                    .planId("plan-001")
+                    .status(ReportReversalLog.ReversalStatus.APPROVED)
+                    .reversalScope(ReportReversalLog.ReversalScope.WHOLE_ORDER)
+                    .build();
+            when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(pending));
+            when(reportRepo.findYieldReportsByBatch(FACTORY_ID, BATCH_ID)).thenReturn(Collections.emptyList());
+            when(reversalLogRepo.save(any())).thenReturn(pending);
+
+            ProcessSheetRow row = new ProcessSheetRow();
+            row.setId(89L);
+            row.setFactoryId(FACTORY_ID);
+            row.setBatchId(BATCH_ID);
+            ProcessSheetRow upstreamRow = new ProcessSheetRow();
+            upstreamRow.setId(90L);
+            upstreamRow.setFactoryId(FACTORY_ID);
+            upstreamRow.setBatchId(BATCH_ID - 1);
+            when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, "plan-001"))
+                    .thenReturn(List.of(upstreamRow, row));
+
+            service.executeReversal(LOG_ID, FACTORY_ID);
+
+            assertThat(row.getDeletedAt()).isNotNull();
+            assertThat(upstreamRow.getDeletedAt()).isNotNull();
+            verify(processSheetRowRepository).saveAll(List.of(upstreamRow, row));
+            assertThat(pending.getStatus()).isEqualTo(ReportReversalLog.ReversalStatus.DONE);
         }
 
         @Test

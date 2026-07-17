@@ -9,6 +9,7 @@ import com.cretas.aims.entity.ProductionSettlementConsumption;
 import com.cretas.aims.entity.ReportReversalLog;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
@@ -20,6 +21,7 @@ import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.ProductionSettlementConsumptionRepository;
 import com.cretas.aims.repository.ProductionSettlementRepository;
+import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ReportReversalLogRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
@@ -132,6 +134,16 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     private ProductionSettlementConsumptionRepository productionSettlementConsumptionRepository;
 
     /**
+     * 逐道录入闭环: 正式报工除了写 {@link ProductionReport}，还会保留一条物化后的
+     * {@link ProcessSheetRow}。计划取消门禁把有效的物化行视为生产数据，因此整单撤回必须在同一
+     * 回滚动作里软删对应批次的行；否则界面虽显示 DONE，计划仍永久报“已有报工/WIP”。
+     *
+     * <p>required=false 保持旧单测构造方式兼容。生产 Spring context 会正常注入；未注入时维持旧行为。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ProcessSheetRowRepository processSheetRowRepository;
+
+    /**
      * SP12 快速撤回时间窗口 (分钟)。
      * 在此窗口内, 本人提交 + 无下游消费 → 快速撤回无需审批。
      * 超出此窗口 → 退回完整审批流。
@@ -173,6 +185,9 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         if (existing.isPresent()) {
             ReportReversalLog ex = existing.get();
             if (ReportReversalLog.ReversalStatus.DONE == ex.getStatus()) {
+                // 兼容修复上线前已经完成的撤回：旧版本只软删 production_reports，没有清理
+                // process_sheet_rows。重复点击撤回时只修复这批残留行，不重复冲销库存流水。
+                softDeleteProcessSheetRows(factoryId, batchId, batch.getProductionPlanId(), LocalDateTime.now());
                 log.info("[SP2] submitReversal idempotent DONE: batchId={} logId={}", batchId, ex.getId());
                 return ex;
             }
@@ -267,6 +282,9 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             reportRepo.save(r);
         }
 
+        // ①.1 软删除逐道录入物化行。取消计划的兜底门禁会读取这些行，必须与 YIELD 报工同进退。
+        softDeleteProcessSheetRows(factoryId, batchId, log_.getPlanId(), now);
+
         // ①.5 复位该批次工序任务 (BUG-1 联动修复的撤回路径):
         // OUTPUT 报工提交现在会把 WorkProcessTask 置 COMPLETED(终态) — 整单撤回软删了全部
         // YIELD 报工后, 若任务留在 COMPLETED, RN 任务列表不再显示该道 → 无法重报, 撤回流程被打断。
@@ -341,6 +359,27 @@ public class ReportReversalServiceImpl implements ReportReversalService {
 
         log.info("[SP2] executeReversal DONE logId={} batchId={} revertedTxns={}",
                 logId, batchId, revertedTxnIds.size());
+    }
+
+    private void softDeleteProcessSheetRows(String factoryId, Long batchId, String planId,
+                                            LocalDateTime deletedAt) {
+        if (processSheetRowRepository == null || batchId == null) {
+            return;
+        }
+        // WHOLE_ORDER reversal is plan-scoped. A clerk workflow materializes one output batch per
+        // step, so deleting only the selected final batch would leave every upstream row active.
+        List<ProcessSheetRow> rows = planId != null && !planId.isBlank()
+                ? processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, planId)
+                : processSheetRowRepository.findByFactoryIdAndBatchId(factoryId, batchId);
+        if (rows == null || rows.isEmpty()) {
+            return;
+        }
+        for (ProcessSheetRow row : rows) {
+            row.setDeletedAt(deletedAt);
+        }
+        processSheetRowRepository.saveAll(rows);
+        log.info("[SP2] 撤回软删逐道录入行: factoryId={} planId={} batchId={} rows={}",
+                factoryId, planId, batchId, rows.size());
     }
 
     // ==================== 审批操作 ====================

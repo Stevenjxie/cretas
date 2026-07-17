@@ -635,9 +635,12 @@ class YieldReportServiceImplTest {
         when(productTypeRepo.findByIdAndFactoryId("PT-PORK-A", "F006")).thenReturn(Optional.of(productType));
 
         when(processSheetRowRepository.findByFactoryIdAndPlanId("F006", "PLAN-MIX")).thenReturn(List.of(
-                sheetRow(1L, 100L, "PLAN-MIX", "PT-OTHER", 1, "别的SKU", "10", "10", "kg"),
-                sheetRow(2L, 200L, "PLAN-MIX", "PT-PORK-A", 1, "炖水", "50", "52", "kg"),
-                sheetRow(3L, 777L, "PLAN-MIX", "PT-PORK-A", 2, "分切/包装", "50", "400", "盒")
+                sheetRow(1L, 100L, "PLAN-MIX", "PT-OTHER", 1, "无关分支", "10", "10",
+                        "kg", "kg", null),
+                sheetRow(2L, 200L, "PLAN-MIX", "PT-WIP-A", 1, "炖水", "50", "52",
+                        "kg", "kg", null),
+                sheetRow(3L, 777L, "PLAN-MIX", "PT-PORK-A", 2, "分切/包装", "52", "400",
+                        "kg", "盒", "B-200")
         ));
 
         BatchYieldDTO dto = svc.getYield("F006", 777L);
@@ -650,7 +653,10 @@ class YieldReportServiceImplTest {
         assertThat(dto.getCumulativeYieldRate()).isEqualByComparingTo("0.9600");
         assertThat(dto.getSteps()).extracting(StepYieldDTO::getProcessName)
                 .containsExactly("炖水", "分切/包装");
-        assertThat(dto.getSteps().get(1).getYieldRate()).isEqualByComparingTo("8.0000");
+        assertThat(dto.getSteps().get(1).getInputUnit()).isEqualTo("kg");
+        assertThat(dto.getSteps().get(1).getOutputUnit()).isEqualTo("盒");
+        assertThat(dto.getSteps().get(1).getUnitComparable()).isFalse();
+        assertThat(dto.getSteps().get(1).getYieldRate()).isNull();
         assertThat(dto.getSteps().get(1).getPackagingDetail()).hasSize(2);
         assertThat(dto.getSteps().get(1).getByproducts()).hasSize(1);
         assertThat(dto.getSteps().get(1).getSampleRetainQuantity()).isEqualTo(5);
@@ -658,7 +664,8 @@ class YieldReportServiceImplTest {
 
     private ProcessSheetRow sheetRow(Long id, Long batchId, String planId, String productTypeId,
                                      int processOrder, String processName, String input,
-                                     String output, String unit) throws Exception {
+                                     String output, String inputUnit, String outputUnit,
+                                     String upstreamBatchNumber) throws Exception {
         ProcessSheetRowRequest req = new ProcessSheetRowRequest();
         req.setClientRowId("row-" + id);
         req.setProcessCode("process-" + processOrder);
@@ -667,8 +674,16 @@ class YieldReportServiceImplTest {
         req.setProductTypeId(productTypeId);
         req.setInputQuantity(new BigDecimal(input));
         req.setOutputQuantity(new BigDecimal(output));
-        req.setUnit(unit);
-        req.setFinished("盒".equals(unit));
+        req.setUnit(outputUnit);
+        req.setInputUnit(inputUnit);
+        req.setOutputUnit(outputUnit);
+        req.setFinished("盒".equals(outputUnit));
+        if (upstreamBatchNumber != null) {
+            ProcessSheetRowRequest.UpstreamRef upstream = new ProcessSheetRowRequest.UpstreamRef();
+            upstream.setSourceBatchNumber(upstreamBatchNumber);
+            upstream.setFeedQuantityKg(new BigDecimal(input));
+            req.setUpstreamSources(List.of(upstream));
+        }
         if (req.isFinished()) {
             ProcessChainEntryRequest.Byproduct byproduct = new ProcessChainEntryRequest.Byproduct();
             byproduct.setName("料头");
