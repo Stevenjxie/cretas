@@ -23,6 +23,7 @@ import {
 import { getOperatorUsers } from '@/api/factory';
 import ProductProcessWorkflowEditor from './workflow/ProductProcessWorkflowEditor.vue';
 import { usePinyinFilter } from './workflow/pinyinInitials';
+import { isRawMaterialOption } from './workflow/rawMaterialCatalog';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -36,6 +37,7 @@ interface WorkflowOwnerOption {
   code?: string | null;
   unit?: string | null;
   productCategory?: string | null;
+  category?: string | null;
 }
 
 // 成品来自 product_types；原料 owner 必须来自 raw_material_types，不能再用伪产品代替。
@@ -44,18 +46,17 @@ const rawMaterials = ref<WorkflowOwnerOption[]>([]);
 const selectedProductId = ref('');
 const productsLoading = ref(false);
 
-const PRODUCIBLE_WORKFLOW_CATEGORIES = new Set([
+const FINISHED_WORKFLOW_OWNER_CATEGORIES = new Set([
   'FINISHED_PRODUCT', 'CONTRACT_MANUFACTURING', 'CUSTOMER_MATERIAL', 'DISH', 'COMBO',
-  'SEMI_FINISHED',
 ]);
-const producibleWorkflowOptions = computed(() =>
-  products.value.filter((product) => PRODUCIBLE_WORKFLOW_CATEGORIES.has(product.productCategory || '')));
+const finishedWorkflowOptions = computed(() =>
+  products.value.filter((product) => FINISHED_WORKFLOW_OWNER_CATEGORIES.has(product.productCategory || '')));
 /**
  * 原料和成品只作为既有 Workflow 的兼容检索锚点；不再是用户预先选择的编辑模式。
  * Workflow 类型由画布终端产出和根投入在发布时自动研判。
  */
 const workflowOwnerOptions = computed<WorkflowOwnerOption[]>(() => [
-  ...producibleWorkflowOptions.value,
+  ...finishedWorkflowOptions.value,
   ...rawMaterials.value,
 ]);
 const selectedOwnerIsRaw = computed(() =>
@@ -63,7 +64,7 @@ const selectedOwnerIsRaw = computed(() =>
 
 function workflowAnchorLabel(option: WorkflowOwnerOption): string {
   if (rawMaterials.value.some((material) => material.id === option.id)) return '原料';
-  return option.productCategory === 'SEMI_FINISHED' ? '半成品' : '成品';
+  return '成品';
 }
 
 // #2: 统一选择器支持名称、编码和拼音首字母搜索。
@@ -378,8 +379,8 @@ async function loadProducts() {
     ]);
     if (productRes.success && productRes.data?.content && rawRes.success && Array.isArray(rawRes.data)) {
       products.value = productRes.data.content;
-      rawMaterials.value = rawRes.data;
-      if (products.value.length > 0 || rawMaterials.value.length > 0) {
+      rawMaterials.value = rawRes.data.filter(isRawMaterialOption);
+      if (finishedWorkflowOptions.value.length > 0 || rawMaterials.value.length > 0) {
         const selectedFromRoute = applyRouteProductSelection(route.query.productTypeId, true);
         if (!selectedFromRoute && !selectedProductId.value) {
           suppressNextWatch = true;
@@ -411,7 +412,7 @@ function routeQueryString(value: unknown): string {
 function applyRouteProductSelection(value: unknown, suppressReload = false): boolean {
   const preferredProductId = routeQueryString(value);
   if (!preferredProductId) return false;
-  const preferredProduct = products.value.find((product) => product.id === preferredProductId);
+  const preferredProduct = finishedWorkflowOptions.value.find((product) => product.id === preferredProductId);
   const preferredRaw = rawMaterials.value.find((material) => material.id === preferredProductId);
   const preferred = preferredProduct || preferredRaw;
   if (!preferred) return false;
@@ -423,7 +424,7 @@ function applyRouteProductSelection(value: unknown, suppressReload = false): boo
 }
 
 watch(() => route.query.productTypeId, (value) => {
-  if (products.value.length > 0) applyRouteProductSelection(value);
+  if (workflowOwnerOptions.value.length > 0) applyRouteProductSelection(value);
 });
 
 async function loadAllProcesses() {
