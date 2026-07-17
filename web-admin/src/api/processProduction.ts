@@ -2,7 +2,8 @@
  * Process-centric production mode API client
  * Work processes, product-process associations, process tasks, approvals
  */
-import { get, post, put, del } from './request';
+import request, { get, post, put, del } from './request';
+import type { ApiResponse } from '@/types/api';
 
 // === Work Processes ===
 
@@ -22,6 +23,16 @@ export function createWorkProcess(factoryId: string, data: Partial<WorkProcessIt
 
 export function updateWorkProcess(factoryId: string, id: string, data: Partial<WorkProcessItem>) {
   return put<WorkProcessItem>(`/${factoryId}/work-processes/${id}`, data);
+}
+
+export function updateWorkProcessOutputKind(
+  factoryId: string,
+  id: string,
+  defaultOutputMaterialKind: WorkProcessOutputMaterialKind,
+) {
+  return request.patch<ApiResponse<WorkProcessItem>>(`/${factoryId}/work-processes/${id}/output-kind`, {
+    defaultOutputMaterialKind,
+  });
 }
 
 export function deleteWorkProcess(factoryId: string, id: string) {

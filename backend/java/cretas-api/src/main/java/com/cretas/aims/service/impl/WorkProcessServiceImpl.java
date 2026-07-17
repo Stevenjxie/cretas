@@ -98,6 +98,23 @@ public class WorkProcessServiceImpl implements WorkProcessService {
     }
 
     @Override
+    @Transactional
+    public WorkProcessDTO updateOutputMaterialKind(
+            String factoryId,
+            String id,
+            WorkProcessOutputMaterialKind outputMaterialKind) {
+        WorkProcess entity = workProcessRepository.findByFactoryIdAndId(factoryId, id)
+                .orElseThrow(() -> new ResourceNotFoundException("WorkProcess", "id", id));
+        entity.setDefaultOutputMaterialKind(outputMaterialKind);
+        if (outputMaterialKind == WorkProcessOutputMaterialKind.FINISHED_GOOD) {
+            entity.setSemiFinishedOutputCode(null);
+        }
+        log.info("Updated work process {} output material kind to {} for factory {}",
+                id, outputMaterialKind, factoryId);
+        return toDTO(workProcessRepository.save(entity));
+    }
+
+    @Override
     public PageResponse<WorkProcessDTO> list(String factoryId, Pageable pageable) {
         log.debug("Listing work processes for factory: {}", factoryId);
         Page<WorkProcess> page = workProcessRepository.findByFactoryId(factoryId, pageable);
