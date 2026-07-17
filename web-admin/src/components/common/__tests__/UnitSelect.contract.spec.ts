@@ -21,6 +21,8 @@ describe('shared UnitSelect contract', () => {
     expect(source).toContain('单位代码由系统自动生成');
     expect(source).not.toContain('<el-form-item label="单位代码"');
     expect(source).toContain('创建并选中');
+    expect(source).toContain('await loadUnits();');
+    expect(source).toContain('单位已存在，已选择');
     expect(source).not.toContain('allow-create');
   });
 

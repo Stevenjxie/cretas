@@ -19,12 +19,70 @@ export interface SystemUnit {
   sortOrder?: number | null;
 }
 
-interface UnitCatalogItem {
+export interface UnitCatalogItem {
   code: string;
   label: string;
   dimension: string;
   baseCode: string;
   displayScale: number;
+}
+
+/**
+ * The scientific catalog owns the canonical code/label pair. Historic global
+ * rows may carry a stale label (for example box=箱), so merging by label can
+ * accidentally hide both box=盒 and case=箱. Reconcile by code first and only
+ * retain historic aliases that do not belong to another canonical code.
+ */
+export function mergeSystemUnitSources(
+  configuredUnits: SystemUnit[],
+  catalogItems: UnitCatalogItem[],
+): SystemUnit[] {
+  const merged = configuredUnits.map((unit) => ({ ...unit }));
+  const canonicalLabelOwners = new Map(
+    catalogItems.map((item) => [normalizeUnitIdentity(item.label), normalizeUnitIdentity(item.code)]),
+  );
+
+  for (const item of catalogItems) {
+    const canonicalCode = normalizeUnitIdentity(item.code);
+    const existingIndex = merged.findIndex(
+      (unit) => normalizeUnitIdentity(unit.unitCode) === canonicalCode,
+    );
+    if (existingIndex < 0) {
+      merged.push({
+        unitCode: item.code,
+        unitName: item.label,
+        unitSymbol: item.code,
+        baseUnit: item.baseCode,
+        category: item.dimension,
+        decimalPlaces: item.displayScale,
+        isActive: true,
+        isSystem: true,
+      });
+      continue;
+    }
+
+    const existing = merged[existingIndex];
+    const canonicalName = normalizeUnitIdentity(item.label);
+    const aliasesJson = [...new Set(unitAliases(existing))].filter((alias) => {
+      const normalized = normalizeUnitIdentity(alias);
+      if (!normalized || normalized === canonicalCode || normalized === canonicalName) return false;
+      const owner = canonicalLabelOwners.get(normalized);
+      return !owner || owner === canonicalCode;
+    });
+    merged[existingIndex] = {
+      ...existing,
+      unitCode: item.code,
+      unitName: item.label,
+      unitSymbol: item.code,
+      aliases: null,
+      aliasesJson,
+      baseUnit: item.baseCode,
+      category: item.dimension,
+      decimalPlaces: item.displayScale,
+    };
+  }
+
+  return merged;
 }
 
 const COMMON_DISPLAY_ALIASES: SystemUnit[] = [
@@ -52,21 +110,7 @@ export async function listSystemUnits(factoryId: string) {
     get<SystemUnit[]>(`/${factoryId}/system-config/units`),
     get<UnitCatalogItem[]>(`/${factoryId}/units/catalog`),
   ]);
-  const merged: SystemUnit[] = [...(configured.data || [])];
-  for (const item of catalog.data || []) {
-    if (!merged.some((unit) => normalizeUnitIdentity(unit.unitCode) === normalizeUnitIdentity(item.code)
-      || normalizeUnitIdentity(unit.unitName) === normalizeUnitIdentity(item.label))) {
-      merged.push({
-        unitCode: item.code,
-        unitName: item.label,
-        unitSymbol: item.code,
-        category: item.dimension,
-        decimalPlaces: item.displayScale,
-        isActive: true,
-        isSystem: true,
-      });
-    }
-  }
+  const merged = mergeSystemUnitSources(configured.data || [], catalog.data || []);
   for (const alias of COMMON_DISPLAY_ALIASES) {
     if (!merged.some((unit) => normalizeUnitIdentity(unit.unitName) === normalizeUnitIdentity(alias.unitName))) {
       merged.push(alias);
