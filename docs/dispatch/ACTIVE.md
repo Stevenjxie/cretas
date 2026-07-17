@@ -6,11 +6,27 @@
 
 ## 在飞任务
 
-_当前无在飞代码任务。_
+- `CRETAS-E2E-20260717-FE` — `queued`
+  - Base SHA: `3ce98d4d9d3a7edca79606844c0ac34c0be7b4fb`
+  - Owner: frontend code agent
+  - Scope: `web-admin/src/views/procurement/suppliers/**`、`web-admin/src/components/dialog/StartPurchaseDialog.vue`、`web-admin/src/store/modules/permission.ts`（若实际路径不同，仅限对应 permission store 单文件）及其直接单元测试
+  - 验收: Web 目标测试、TypeScript 检查、字段契约断言
+- `CRETAS-E2E-20260717-AI` — `queued`
+  - Base SHA: `3ce98d4d9d3a7edca79606844c0ac34c0be7b4fb`
+  - Owner: AI workflow code agent
+  - Scope: `web-admin/src/**/WorkProcessAIChatPanel.vue`、`web-admin/src/utils/aiEntryGuards.ts`、`backend/java/cretas-api/src/main/java/com/cretas/aims/**/CanvasAIController.java` 及其直接目标测试
+  - 验收: Web 目标测试、AI controller/service 目标测试、模式与 SKU 实体保持契约
+- `CRETAS-E2E-20260717-AUDIT` — `in-progress`
+  - Base SHA: `3ce98d4d9d3a7edca79606844c0ac34c0be7b4fb`
+  - Owner: coordinator
+  - Scope: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/BomServiceImpl.java`、对应 BOM 测试、共享契约审查、最终集成与发布
+  - 验收: BOM 变更日志操作者目标测试、最终 Web 检查、单生命周期 release build、服务级发布验证
 
 ## Scope 锁地图
 
-_当前无 scope 锁。_
+- `CRETAS-E2E-20260717-FE`: 供应商历史、开始采购弹窗、permission store 与直接测试
+- `CRETAS-E2E-20260717-AI`: 工序 AI 面板、AI SKU 守卫、Canvas AI controller 与直接测试
+- `CRETAS-E2E-20260717-AUDIT`: BOM 审计服务、对应测试、ACTIVE/归档及最终集成
 
 ## 阻塞项
 
