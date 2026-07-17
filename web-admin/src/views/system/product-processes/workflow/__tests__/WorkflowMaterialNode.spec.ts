@@ -1,6 +1,6 @@
 import ElementPlus, { ElOption, ElOptionGroup } from 'element-plus';
 import { mount } from '@vue/test-utils';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { defineComponent, h } from 'vue';
 import WorkflowMaterialNode from '../WorkflowMaterialNode.vue';
 import type { MaterialNodeData } from '../types';
@@ -59,6 +59,7 @@ function mountNode(overrides: {
   unitError?: string;
   validationError?: string;
   validationAttention?: boolean;
+  excludedRawMaterialIds?: string[];
 } = {}) {
   return mount(WorkflowMaterialNode, {
     props: {
@@ -73,6 +74,7 @@ function mountNode(overrides: {
       unitError: overrides.unitError,
       validationError: overrides.validationError,
       validationAttention: overrides.validationAttention,
+      excludedRawMaterialIds: overrides.excludedRawMaterialIds ?? [],
     },
     global: {
       plugins: [ElementPlus],
@@ -153,6 +155,16 @@ describe('WorkflowMaterialNode raw material picker — BOM priority grouping (#3
     expect(wrapper.emitted('selectRawSku')).toEqual([['RM-PIG']]);
   });
 
+  it('removes raw materials already used by another Cell while preserving the current Cell selection', () => {
+    const wrapper = mountNode({
+      excludedRawMaterialIds: ['RM-PIG'],
+      data: { ...RAW_DATA, skuId: 'RM-CHICKEN', name: '鸡胸肉', bound: true },
+    });
+
+    expect(wrapper.findAllComponents(ElOption).map((option) => option.props('value')))
+      .toEqual(['RM-CHICKEN']);
+  });
+
   it('never offers seasoning or packaging entries in a raw Cell', () => {
     const wrapper = mountNode();
     const values = wrapper.findAllComponents(ElOption).map((option) => option.props('value'));
@@ -173,11 +185,51 @@ describe('WorkflowMaterialNode raw material picker — BOM priority grouping (#3
       .toEqual(['RM-CHICKEN']);
   });
 
+  it('keeps the category popper local, preserves wheel scrolling, and closes on leaf, Esc, or outside click', async () => {
+    const wrapper = mountNode();
+    const cascader = wrapper.getComponent({ name: 'ElCascader' });
+    const rawSelect = wrapper.getComponent({ name: 'ElSelect' });
+    expect(cascader.props('teleported')).toBe(false);
+    expect(rawSelect.props('teleported')).toBe(false);
+    expect(cascader.props('popperClass')).toContain('nowheel');
+    const shell = wrapper.get('[data-testid="raw-segment-filter-shell"]');
+    expect(shell.classes()).toContain('nowheel');
+    const parentWheel = vi.fn();
+    wrapper.element.addEventListener('wheel', parentWheel);
+    await shell.trigger('wheel', { deltaY: 120 });
+    expect(parentWheel).not.toHaveBeenCalled();
+
+    const exposed = cascader.vm.$.exposed as { togglePopperVisible: (visible: boolean) => void };
+    const closeSpy = vi.spyOn(exposed, 'togglePopperVisible');
+
+    await cascader.vm.$emit('change', ['001', '001003', '0010030001']);
+    expect(closeSpy).toHaveBeenCalledWith(false);
+
+    cascader.vm.$emit('keydown', new KeyboardEvent('keydown', { key: 'Escape' }));
+    await wrapper.vm.$nextTick();
+    expect(closeSpy).toHaveBeenCalledTimes(2);
+
+    cascader.vm.$emit('visible-change', true);
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    expect(closeSpy).toHaveBeenCalledTimes(3);
+  });
+
   it('shows the unit-contract error on the affected material cell', () => {
     const wrapper = mountNode({ unitError: 'SKU RM-PIG 缺少规范主单位，请先维护 SKU 单位' });
 
     expect(wrapper.classes()).toContain('unit-error');
     expect(wrapper.get('[data-testid="unit-error"]').text()).toContain('缺少规范主单位');
+  });
+
+  it('gives material names a full-width heading row with a hover title', () => {
+    const name = 'E2E-替代链-处理后半成品';
+    const wrapper = mountNode({
+      data: { ...RAW_DATA, name, skuId: 'SKU-SEMI-1', bound: true },
+    });
+
+    expect(wrapper.get('.material-name').text()).toBe(name);
+    expect(wrapper.get('.material-name').attributes('title')).toBe(name);
+    expect(wrapper.get('.material-name').element.parentElement?.classList).toContain('node-heading');
   });
 
   it('keeps an unbound Cell red and pulses until the user starts handling it', () => {

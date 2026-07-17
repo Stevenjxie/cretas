@@ -7,6 +7,7 @@ import com.cretas.aims.entity.enums.ProductCategory;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.repository.bom.BomItemRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -33,6 +34,7 @@ public class ProductProcessWorkflowCatalogValidator {
 
     private final WorkProcessRepository workProcessRepository;
     private final ProductTypeRepository productTypeRepository;
+    private final BomItemRepository bomItemRepository;
 
     public void validateForPublish(
             String factoryId,
@@ -154,8 +156,35 @@ public class ProductProcessWorkflowCatalogValidator {
         validateMaterialProducers(definition, outputBindingsByMaterialId);
         List<OutputBinding> outputBindings = new ArrayList<>(outputBindingsByMaterialId.values());
         validateOutputSkus(factoryId, productTypeId, outputBindings);
+        validateFinishedOutputBoms(factoryId, outputBindings);
         // Terminal/root counts are graph properties. productTypeId remains a legacy
         // persistence anchor and no longer constrains the graph's topology.
+    }
+
+    private void validateFinishedOutputBoms(
+            String factoryId,
+            List<OutputBinding> outputBindings) {
+        LinkedHashSet<String> finishedSkuIds = outputBindings.stream()
+                .filter(binding -> "FINISHED_GOOD".equals(binding.materialNode().getKind()))
+                .map(binding -> asString(data(binding.materialNode()).get("skuId")))
+                .filter(skuId -> !isBlank(skuId))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        for (String skuId : finishedSkuIds) {
+            if (bomItemRepository.countByFactoryIdAndProductTypeId(factoryId, skuId) > 0) {
+                continue;
+            }
+            ProductProcessWorkflowDTO.Node materialNode = outputBindings.stream()
+                    .map(OutputBinding::materialNode)
+                    .filter(node -> "FINISHED_GOOD".equals(node.getKind()))
+                    .filter(node -> skuId.equals(asString(data(node).get("skuId"))))
+                    .findFirst()
+                    .orElseThrow();
+            throw new BusinessException(409, "成品产出 Cell " + materialNode.getId()
+                    + " 尚未配置原辅料 BOM: " + skuId)
+                    .withCode("PRODUCT_PROCESS_WORKFLOW_BOM_REQUIRED")
+                    .withHint("请先为该成品 SKU 配置至少一条 BOM 原料，再发布 Workflow")
+                    .withSeverity("warning");
+        }
     }
 
     private void validateMaterialProducers(

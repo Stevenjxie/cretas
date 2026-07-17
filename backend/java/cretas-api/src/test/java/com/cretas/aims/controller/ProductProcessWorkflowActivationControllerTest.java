@@ -1,5 +1,6 @@
 package com.cretas.aims.controller;
 
+import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.workflow.ProductProcessWorkflowActivationDTO;
 import com.cretas.aims.service.ProductProcessWorkflowService;
@@ -14,15 +15,29 @@ import static org.mockito.Mockito.*;
 class ProductProcessWorkflowActivationControllerTest {
 
     private ProductProcessWorkflowActivationService activationService;
+    private ProductProcessWorkflowService workflowService;
     private HttpServletRequest request;
     private ProductProcessWorkflowController controller;
 
     @BeforeEach
     void setUp() {
-        ProductProcessWorkflowService workflowService = mock(ProductProcessWorkflowService.class);
+        workflowService = mock(ProductProcessWorkflowService.class);
         activationService = mock(ProductProcessWorkflowActivationService.class);
         request = mock(HttpServletRequest.class);
         controller = new ProductProcessWorkflowController(workflowService, activationService);
+    }
+
+    @Test
+    void snapshotDelegatesOwnerAndOptimisticLockVersion() {
+        ProductProcessWorkflowDTO.PublishRequest request = new ProductProcessWorkflowDTO.PublishRequest();
+        request.setLockVersion(8L);
+        ProductProcessWorkflowDTO expected = new ProductProcessWorkflowDTO();
+        when(workflowService.snapshot("F006", "PT-PIG", 8L)).thenReturn(expected);
+
+        ApiResponse<ProductProcessWorkflowDTO> response = controller.snapshot("F006", "PT-PIG", request);
+
+        assertSame(expected, response.getData());
+        verify(workflowService).snapshot("F006", "PT-PIG", 8L);
     }
 
     @Test

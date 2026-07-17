@@ -25,6 +25,7 @@ public class ProductProcessWorkflow extends BaseEntity {
 
     public enum Status {
         DRAFT,
+        SNAPSHOT,
         PUBLISHED
     }
 

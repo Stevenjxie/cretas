@@ -59,6 +59,9 @@ function mountNode(selected = true, data: ProcessNodeData = processData) {
       canWrite: true,
       semiOptions: SEMI_OPTIONS,
       finishedOptions: FINISHED_OPTIONS,
+      skuSpecifications: {
+        'SKU-FIN-800': { unit: '盒', gramsPerUnit: 800 },
+      },
     },
     global: {
       plugins: [ElementPlus],
@@ -104,6 +107,16 @@ describe('WorkflowProcessNode output gestures', () => {
 
     expect(wrapper.find('[data-testid="output-kind-select"]').exists()).toBe(false);
     expect(wrapper.find('.kind-select').exists()).toBe(false);
+  });
+
+  it('exposes a clear pencil action for editing the real process master data', async () => {
+    const wrapper = mountNode();
+    const button = wrapper.get('[data-testid="quick-edit-process"]');
+
+    expect(button.attributes('title')).toBe('快捷编辑工序');
+    expect(button.attributes('aria-label')).toBe('快捷编辑工序');
+    await button.trigger('click');
+    expect(wrapper.emitted('editProcess')).toHaveLength(1);
   });
 
   it('P3: exposes an editable output SKU picker on each output row and emits selectOutput(portId, skuId)', () => {
@@ -207,12 +220,12 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     expect(badge.text()).toContain('3 出（同时多产出）');
   });
 
-  it('hides quantity inputs for a single system-convertible physical output', () => {
+  it('shows a direct same-row input-to-output relationship even when units match', () => {
     const wrapper = mountNode();
 
-    expect(wrapper.get('[data-testid="quantity-rule-note"]').text())
-      .toContain('按系统单位换算（kg → kg）');
-    expect(wrapper.findComponent({ name: 'ElInputNumber' }).exists()).toBe(false);
+    expect(wrapper.get('[data-testid="quantity-baseline"]').text()).toContain('产出基准');
+    expect(wrapper.get('[data-testid="fixed-input-quantity"]').text()).toContain('kg投入=1kg产出');
+    expect(wrapper.findComponent({ name: 'ElInputNumber' }).exists()).toBe(true);
   });
 
   it('renders every multi-output port independently without forcing a shared ratio', () => {
@@ -223,10 +236,9 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     ];
     const wrapper = mountNode(true, withPorts({ ports }));
 
-    expect(wrapper.findAll('[data-testid="auto-convert-output"]')).toHaveLength(1);
-    expect(wrapper.get('[data-testid="auto-convert-output"]').text()).toContain('g');
+    expect(wrapper.findAll('[data-testid="auto-convert-output"]')).toHaveLength(0);
     expect(wrapper.findAll('[data-testid="fixed-output-quantity"]')).toHaveLength(1);
-    expect(wrapper.findAllComponents({ name: 'ElInputNumber' })).toHaveLength(1);
+    expect(wrapper.findAllComponents({ name: 'ElInputNumber' })).toHaveLength(2);
   });
 
   it('does not offer a generic conversion mode selector', () => {
@@ -242,7 +254,7 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     expect(wrapper.find('.conversion-select').exists()).toBe(false);
   });
 
-  it('uses the main input as a read-only baseline and requires each extra input quantity', () => {
+  it('labels inputs by display order and gives every input its own output-relative quantity', () => {
     const ports: ProcessPort[] = [
       { id: 'in-1', direction: 'INPUT', materialName: '主料', unit: 'kg', quantityMode: 'FIXED_RATIO', standardQuantity: 1, ordinal: 0 },
       { id: 'in-2', direction: 'INPUT', materialName: '调味料', unit: 'g', quantityMode: 'FIXED_RATIO', standardQuantity: 25, ordinal: 1 },
@@ -250,14 +262,53 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     ];
     const wrapper = mountNode(true, withPorts({ ports }));
 
-    expect(wrapper.get('[data-testid="primary-input-baseline"]').text()).toContain('基准 1 kg');
+    expect(wrapper.text()).toContain('投入1');
+    expect(wrapper.text()).toContain('投入2');
+    expect(wrapper.text()).not.toContain('主投入');
+    expect(wrapper.text()).not.toContain('追加投入');
+    expect(wrapper.text()).not.toContain('端口');
     const quantityInputs = wrapper.findAllComponents({ name: 'ElInputNumber' });
-    expect(quantityInputs).toHaveLength(1);
-    expect(quantityInputs[0].props('modelValue')).toBe(25);
+    expect(quantityInputs).toHaveLength(2);
+    expect(wrapper.findAll('[data-testid="fixed-input-quantity"]')).toHaveLength(2);
+    expect(wrapper.findAll('[data-testid="fixed-input-quantity"]')[0].text()).toContain('kg投入=1kg产出');
+    expect(wrapper.findAll('[data-testid="fixed-input-quantity"]')[1].text()).toContain('g投入');
     expect(wrapper.text()).toContain('调味料');
   });
 
-  it('renders and updates a fixed quantity on the matching output port only', async () => {
+  it('switches only an actually long material row to the stacked responsive layout', () => {
+    const ports: ProcessPort[] = [
+      { id: 'short', direction: 'INPUT', materialName: '原料A', unit: 'kg', standardQuantity: 1, ordinal: 0 },
+      {
+        id: 'long', direction: 'INPUT', materialName: 'E2E-替代链-处理后超长半成品原料名称',
+        unit: 'kg', standardQuantity: 1, ordinal: 1,
+      },
+      { id: 'out', direction: 'OUTPUT', materialName: '袋装产出', unit: '袋', standardQuantity: 1, ordinal: 0 },
+    ];
+    const wrapper = mountNode(true, withPorts({ ports }));
+    const rows = wrapper.findAll('.port-quantity-row');
+
+    expect(rows[0].classes()).not.toContain('is-long-name');
+    expect(rows[1].classes()).toContain('is-long-name');
+    expect(rows[1].text()).toContain('E2E-替代链-处理后超长半成品原料名称');
+  });
+
+  it('shows the finished SKU specification beside the output baseline and keeps the input ratio editable', () => {
+    const ports: ProcessPort[] = [
+      { id: 'in-1', direction: 'INPUT', materialName: '包装前产品', unit: 'kg', ordinal: 0 },
+      {
+        id: 'out-1', direction: 'OUTPUT', skuId: 'SKU-FIN-800', materialName: '成品800g',
+        unit: '盒', quantityMode: 'FIXED_RATIO', standardQuantity: 9, ordinal: 0,
+      },
+    ];
+    const wrapper = mountNode(true, withPorts({ ports }));
+
+    expect(wrapper.get('[data-testid="quantity-baseline"]').text()).toContain('1 盒 · 成品800g');
+    expect(wrapper.get('[data-testid="quantity-baseline"]').text()).toContain('SKU 规格：1盒 = 800g');
+    expect(wrapper.get('[data-testid="fixed-input-quantity"]').text()).toContain('kg投入=1盒产出');
+    expect(wrapper.findComponent({ name: 'ElInputNumber' }).exists()).toBe(true);
+  });
+
+  it('renders and updates the matching per-output input quantity only', async () => {
     const ports: ProcessPort[] = [
       { id: 'in-1', direction: 'INPUT', materialName: '整猪', unit: '只', quantityMode: 'FIXED_RATIO', standardQuantity: 1, ordinal: 0 },
       { id: 'out-1', direction: 'OUTPUT', materialName: '半只分割', unit: '件', quantityMode: 'FIXED_RATIO', standardQuantity: 2, ordinal: 0 },
@@ -268,10 +319,10 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     await wrapper.vm.$nextTick();
 
     const patch = wrapper.emitted('update')?.[0]?.[0] as Partial<ProcessNodeData>;
-    expect(patch.ports?.find((port) => port.id === 'in-1')?.standardQuantity).toBe(1);
-    expect(patch.ports?.find((port) => port.id === 'out-1')).toMatchObject({
+    expect(patch.ports?.find((port) => port.id === 'in-1')).toMatchObject({
       quantityMode: 'FIXED_RATIO', standardQuantity: 3,
     });
+    expect(patch.ports?.find((port) => port.id === 'out-1')?.standardQuantity).toBe(2);
   });
 
   it('#4: gracefully leaves the ratio unset (returns null, does not crash) for legacy free-text expressions that are not the canonical shape', () => {
@@ -329,7 +380,7 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     expect(wrapper.get('[data-testid="output-unit-chip"]').text()).toBe('kg');
   });
 
-  it('shows compact input/output relationship selectors and emits an all-direction port group', async () => {
+  it('fixes multi-inputs to per-batch free choice while retaining the output relationship selector', async () => {
     const ports: ProcessPort[] = [
       { id: 'in-1', direction: 'INPUT', unit: 'kg', ordinal: 0 },
       { id: 'in-2', direction: 'INPUT', unit: 'kg', ordinal: 1 },
@@ -338,16 +389,19 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     ];
     const wrapper = mountNode(true, withPorts({ ports, portGroups: [] }));
 
-    expect(wrapper.get('[data-testid="input-port-relation"]').text()).toContain('全部必投');
+    expect(wrapper.get('[data-testid="input-free-choice-mode"]').text()).toBe('批次自由选择（至少1个）');
+    expect(wrapper.find('[data-testid="input-relation-select"]').exists()).toBe(false);
     expect(wrapper.get('[data-testid="output-port-relation"]').text()).toContain('全部产出');
-    wrapper.get('[data-testid="input-port-relation"]')
-      .findComponent({ name: 'ElSelect' }).vm.$emit('change', 'EXACTLY_ONE');
+    expect(wrapper.get('[data-testid="input-relation-help"]').text()).toBe('每个批次至少选择1种，可选择1种、多种或全部。');
+    expect(wrapper.get('[data-testid="output-relation-help"]').text()).toBe('所有产出都会生成。');
+    wrapper.get('[data-testid="output-port-relation"]')
+      .findComponent({ name: 'ElSelect' }).vm.$emit('change', 'OPTIONAL');
     await wrapper.vm.$nextTick();
 
     const patch = wrapper.emitted('update')?.[0]?.[0] as Partial<ProcessNodeData>;
     expect(patch.portGroups).toEqual([{
-      id: 'port-group:input:all', direction: 'INPUT', label: '投入关系', mode: 'EXACTLY_ONE',
-      minSelections: 1, maxSelections: 1, portIds: ['in-1', 'in-2'],
+      id: 'port-group:output:all', direction: 'OUTPUT', label: '产出关系', mode: 'OPTIONAL',
+      minSelections: 0, maxSelections: 2, portIds: ['out-1', 'out-2'],
     }]);
   });
 });

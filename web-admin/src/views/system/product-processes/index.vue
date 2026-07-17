@@ -1148,9 +1148,6 @@ async function saveCustomFieldConfig() {
               :value="p.id"
             />
           </el-select>
-          <el-text type="info" size="small">
-            无需选择模式，发布时由画布自动识别产品、原料分流或联产 Workflow
-          </el-text>
         </div>
         <div class="toolbar-right">
           <!-- C4 status indicator + save button -->

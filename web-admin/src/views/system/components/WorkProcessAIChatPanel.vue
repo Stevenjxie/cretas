@@ -1,102 +1,129 @@
 <template>
-  <div class="work-process-ai-chat-panel">
-    <div class="panel-header">
-      <div>
-        <div class="panel-title">{{ title }}</div>
-        <div class="panel-subtitle">输入自然语言，AI 生成可审核草稿</div>
-      </div>
-      <el-tag size="small" type="info">{{ modeLabel }}</el-tag>
+  <div ref="panelRef" class="work-process-ai-chat-panel" data-testid="workflow-ai-compose-bar">
+    <div v-if="hasSelectionContext" ref="contextChipRef" class="ai-context-attachment" :title="contextLabel">
+      <el-icon><Aim /></el-icon>
+      <span>{{ contextDisplayLabel }}</span>
     </div>
 
-    <div v-if="quickPrompts.length" class="quick-command-bar">
-      <el-button
-        v-for="prompt in quickPrompts"
-        :key="prompt"
-        size="small"
-        plain
-        :disabled="disabled || loading"
-        @click="runQuickPrompt(prompt)"
-      >{{ prompt }}</el-button>
-    </div>
+    <el-input
+      v-model="input"
+      class="ai-single-input"
+      type="textarea"
+      :autosize="{ minRows: 1, maxRows: 4 }"
+      resize="none"
+      :disabled="disabled || loading"
+      :placeholder="placeholder"
+      @keydown.enter.exact.prevent="send"
+      @keydown.ctrl.enter.prevent="send"
+    />
 
-    <div ref="messagesRef" class="chat-messages">
-      <div v-for="(msg, index) in messages" :key="index" :class="['message', msg.role]">
-        <div class="message-content">{{ msg.content }}</div>
-        <div v-if="msg.diffPreview?.length" class="diff-preview">
-          <template v-for="(diff, diffIndex) in msg.diffPreview" :key="diffIndex">
-            <!-- PRODUCT_WORK_PROCESS_DRAFT: render individual step cards -->
-            <template v-if="diff.type === 'PRODUCT_WORK_PROCESS_DRAFT' && isDraftParams(diff.params)">
-              <div class="draft-step-list">
-                <div
-                  v-for="(step, stepIndex) in getDraftSteps(diff.params)"
-                  :key="stepIndex"
-                  class="draft-step-card"
-                >
-                  <span class="step-order">{{ step.processOrder }}</span>
-                  <span class="step-name">{{ step.processName }}</span>
-                  <el-tag v-if="step.processCategory" size="small" type="info">
-                    {{ step.processCategory }}
-                  </el-tag>
-                  <span v-if="step.responsibleWorkerName" class="step-assignee">
-                    {{ step.responsibleWorkerName }}
-                  </span>
-                  <el-tag size="small" :type="step.operation === 'update' ? 'warning' : 'success'">
-                    {{ step.operation === 'update' ? '更新' : '新建' }}
-                  </el-tag>
-                </div>
-                <div v-if="getMissingProcesses(diff.params).length" class="missing-warning">
-                  <el-alert
-                    :title="`${getMissingProcesses(diff.params).length} 个工序未匹配，请先在工序管理中新建`"
-                    type="warning"
-                    :closable="false"
-                    show-icon
-                  />
-                </div>
-                <el-button
-                  class="apply-draft-btn"
-                  size="small"
-                  type="primary"
-                  @click="emitDraft(diff.params, msg.sourceIdentity)"
-                >
-                  应用 {{ getDraftSteps(diff.params).length }} 道工序到草稿
-                </el-button>
-              </div>
-            </template>
-            <!-- Generic diff: single-line display -->
-            <template v-else>
-              <div class="diff-item">
-                <div class="diff-text">
-                  <el-tag size="small" type="warning">{{ diff.type }}</el-tag>
-                  <span>{{ diff.description }}</span>
-                </div>
-                <el-button size="small" type="primary" link @click="emitDraft(diff.params, msg.sourceIdentity)">
-                  应用到草稿
-                </el-button>
-              </div>
-            </template>
+    <div class="ai-composer-footer">
+      <div class="ai-composer-tools">
+        <el-popover
+          v-model:visible="historyVisible"
+          placement="top-start"
+          :width="720"
+          trigger="click"
+          popper-class="workflow-ai-history-popper"
+        >
+          <template #reference>
+            <el-button class="ai-history-button" text aria-label="打开 AI 对话记录">
+              <el-icon><MagicStick /></el-icon>
+              <span>AI 对话</span>
+            </el-button>
           </template>
-        </div>
-      </div>
-    </div>
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">{{ title }}</div>
+              <div class="panel-subtitle">AI 只修改当前指定范围，生成草稿后仍需人工确认</div>
+            </div>
+            <el-tag size="small" type="info">{{ modeLabel }}</el-tag>
+          </div>
+          <div ref="messagesRef" class="chat-messages">
+            <div v-for="(msg, index) in messages" :key="index" :class="['message', msg.role]">
+              <div class="message-content">{{ msg.content }}</div>
+              <div v-if="msg.diffPreview?.length" class="diff-preview">
+                <template v-for="(diff, diffIndex) in msg.diffPreview" :key="diffIndex">
+                  <div v-if="diff.type === 'PRODUCT_WORK_PROCESS_DRAFT' && isDraftParams(diff.params)" class="draft-step-list">
+                    <div
+                      v-for="(step, stepIndex) in getDraftSteps(diff.params)"
+                      :key="stepIndex"
+                      class="draft-step-card"
+                    >
+                      <span class="step-order">{{ step.processOrder }}</span>
+                      <span class="step-name">{{ step.processName }}</span>
+                      <el-tag v-if="step.processCategory" size="small" type="info">{{ step.processCategory }}</el-tag>
+                      <span v-if="step.responsibleWorkerName" class="step-assignee">{{ step.responsibleWorkerName }}</span>
+                      <el-tag size="small" :type="step.operation === 'update' ? 'warning' : 'success'">
+                        {{ step.operation === 'update' ? '更新' : '新建' }}
+                      </el-tag>
+                    </div>
+                    <div v-if="getMissingProcesses(diff.params).length" class="missing-warning">
+                      <el-alert
+                        :title="`${getMissingProcesses(diff.params).length} 个工序未匹配，请先在工序管理中新建`"
+                        type="warning"
+                        :closable="false"
+                        show-icon
+                      />
+                    </div>
+                    <el-button class="apply-draft-btn" size="small" type="primary" @click="emitDraft(diff.params, msg.sourceIdentity)">
+                      应用 {{ getDraftSteps(diff.params).length }} 道工序到草稿
+                    </el-button>
+                  </div>
+                  <div v-else class="diff-item">
+                    <div class="diff-text">
+                      <el-tag size="small" type="warning">{{ diff.type }}</el-tag>
+                      <span>{{ diff.description }}</span>
+                    </div>
+                    <el-button size="small" type="primary" link @click="emitDraft(diff.params, msg.sourceIdentity)">
+                      应用到草稿
+                    </el-button>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+        </el-popover>
 
-    <div class="chat-input">
-      <el-input
-        v-model="input"
-        type="textarea"
-        :rows="3"
-        :disabled="disabled || loading"
-        :placeholder="placeholder"
-        @keydown.ctrl.enter.prevent="send"
-      />
-      <el-button type="primary" :loading="loading" :disabled="disabled || !input.trim()" @click="send">
-        生成草稿
+        <el-dropdown
+          v-if="quickPrompts.length"
+          trigger="click"
+          :disabled="disabled || loading"
+          @command="runQuickPrompt"
+        >
+          <el-button class="quick-prompt-button" text>
+            <el-icon><Menu /></el-icon>
+            <span>快捷问题</span>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item v-for="prompt in quickPrompts" :key="prompt" :command="prompt">
+                {{ prompt }}
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </div>
+
+      <el-button
+        class="ai-send-button"
+        type="primary"
+        circle
+        aria-label="发送给 Workflow AI"
+        :loading="loading"
+        :disabled="disabled || !input.trim()"
+        @click="send"
+      >
+        <el-icon><Top /></el-icon>
       </el-button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { Aim, MagicStick, Menu, Top } from '@element-plus/icons-vue';
+import { gsap } from 'gsap';
 import request from '@/api/request';
 
 type ChatRole = 'system' | 'user' | 'assistant';
@@ -134,12 +161,14 @@ const props = withDefaults(defineProps<{
   title?: string;
   disabled?: boolean;
   context?: Record<string, unknown>;
+  contextLabel?: string;
   quickPrompts?: string[];
 }>(), {
   title: 'AI 配工序',
   productTypeId: '',
   disabled: false,
   context: () => ({}),
+  contextLabel: '当前范围：整个 Workflow',
   quickPrompts: () => [],
 });
 
@@ -148,17 +177,59 @@ const emit = defineEmits<{
 }>();
 
 const modeLabel = computed(() => 'Plan');
+const hasSelectionContext = computed(() => (
+  Boolean(props.contextLabel)
+  && props.contextLabel !== '当前范围：整个 Workflow'
+));
+const contextDisplayLabel = computed(() => props.contextLabel.replace(/^当前范围：/, ''));
 const placeholder = computed(() => (
   props.productTypeId
-    ? '例：第一步修油，滚揉交给莫云，第三步焯水。Ctrl+Enter 发送'
+    ? '输入想要的修改'
     : '请先选择产品'
 ));
 
 const input = ref('');
 const loading = ref(false);
+const historyVisible = ref(false);
+const panelRef = ref<HTMLElement | null>(null);
+const contextChipRef = ref<HTMLElement | null>(null);
 const messagesRef = ref<HTMLElement>();
 const messages = ref<ChatMessage[]>(initialMessages());
 let requestGeneration = 0;
+
+onMounted(() => {
+  if (!panelRef.value || prefersReducedMotion()) return;
+  gsap.from(panelRef.value, {
+    y: 10,
+    autoAlpha: 0,
+    duration: 0.24,
+    ease: 'power3.out',
+    clearProps: 'transform,opacity,visibility',
+  });
+});
+
+onBeforeUnmount(() => {
+  gsap.killTweensOf(panelRef.value);
+  gsap.killTweensOf(contextChipRef.value);
+});
+
+watch(() => props.contextLabel, async () => {
+  await nextTick();
+  if (!contextChipRef.value || prefersReducedMotion()) return;
+  gsap.fromTo(contextChipRef.value, { scale: 0.97, autoAlpha: 0.72 }, {
+    scale: 1,
+    autoAlpha: 1,
+    duration: 0.2,
+    ease: 'power3.out',
+    overwrite: 'auto',
+    clearProps: 'transform,opacity,visibility',
+  });
+});
+
+function prefersReducedMotion(): boolean {
+  return typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
 
 watch(() => `${props.factoryId}:${props.productTypeId}`, () => {
   requestGeneration += 1;
@@ -181,6 +252,7 @@ async function send(): Promise<void> {
   const moduleCode = props.moduleCode;
   const context = props.context;
   const generation = ++requestGeneration;
+  historyVisible.value = true;
   input.value = '';
   messages.value.push({ role: 'user', content: text, sourceIdentity });
   loading.value = true;
@@ -287,11 +359,21 @@ function getMissingProcesses(params: Record<string, unknown>): MissingProcess[] 
 .work-process-ai-chat-panel {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  min-height: 360px;
-  margin-top: 16px;
-  padding-top: 12px;
-  border-top: 1px solid var(--el-border-color-light);
+  align-items: stretch;
+  gap: 2px;
+  width: 100%;
+  min-height: 84px;
+  padding: 10px 10px 8px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 16px;
+  background: var(--el-bg-color);
+  box-shadow: 0 4px 10px rgb(31 62 92 / 13%);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.work-process-ai-chat-panel:focus-within {
+  border-color: var(--el-color-primary-light-5);
+  box-shadow: 0 5px 12px rgb(31 62 92 / 16%);
 }
 
 .panel-header {
@@ -317,22 +399,55 @@ function getMissingProcesses(params: Record<string, unknown>): MissingProcess[] 
   flex: 1;
   flex-direction: column;
   gap: 8px;
-  max-height: 400px;
+  max-height: min(480px, 56vh);
   overflow-y: auto;
+  margin-top: 12px;
+  padding-right: 4px;
 }
 
-.quick-command-bar {
+.ai-composer-footer,
+.ai-composer-tools,
+.ai-context-attachment {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
 }
-
-.quick-command-bar :deep(.el-button) {
-  height: auto;
-  margin-left: 0;
-  padding: 5px 8px;
-  white-space: normal;
-  text-align: left;
+.ai-composer-footer { justify-content: space-between; gap: 10px; min-height: 32px; }
+.ai-composer-tools { gap: 2px; min-width: 0; }
+.ai-history-button, .quick-prompt-button { flex: 0 0 auto; }
+.ai-history-button {
+  min-height: 30px; margin: 0; padding-inline: 9px; border-radius: 8px;
+  color: var(--el-text-color-regular); font-weight: 550;
+}
+.ai-history-button :deep(.el-icon) { font-size: 14px; }
+.ai-context-attachment {
+  align-self: flex-start; gap: 6px; max-width: min(100%, 520px); min-height: 28px;
+  overflow: hidden; padding: 0 9px; border: 1px solid var(--el-border-color-lighter);
+  border-radius: 999px; color: var(--el-text-color-regular); background: var(--el-fill-color-lighter);
+  font-size: 12px; font-weight: 550; white-space: nowrap;
+}
+.ai-context-attachment > span { overflow: hidden; text-overflow: ellipsis; }
+.ai-context-attachment :deep(.el-icon) { flex: 0 0 auto; color: var(--el-color-primary); }
+.quick-prompt-button {
+  min-height: 30px; margin: 0; padding-inline: 9px; border-radius: 8px;
+  color: var(--el-text-color-regular);
+}
+.quick-prompt-button:hover { color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
+.ai-single-input { width: 100%; }
+.ai-single-input :deep(.el-textarea__inner) {
+  min-height: 34px !important; max-height: 92px; padding: 6px 2px;
+  border: 0; border-radius: 0; background: transparent; box-shadow: none;
+  font-size: 14px; line-height: 22px; overflow-y: auto;
+}
+.ai-single-input :deep(.el-textarea__inner:hover),
+.ai-single-input :deep(.el-textarea__inner:focus) { box-shadow: none; }
+.ai-single-input :deep(.el-textarea__inner::placeholder) { color: var(--el-text-color-placeholder); }
+.ai-send-button {
+  width: 32px; height: 32px; min-width: 32px; margin: 0;
+  transition: transform 160ms ease, background-color 160ms ease;
+}
+.ai-send-button:not(.is-disabled):active { transform: scale(0.96); }
+:global(.workflow-ai-history-popper) {
+  max-width: calc(100vw - 32px); padding: 14px !important; border-radius: 12px !important;
 }
 
 .message {
@@ -433,9 +548,13 @@ function getMissingProcesses(params: Record<string, unknown>): MissingProcess[] 
   align-self: flex-start;
 }
 
-.chat-input {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+@media (max-width: 760px) {
+  .work-process-ai-chat-panel { min-height: 78px; padding-inline: 8px; }
+  .ai-context-attachment { max-width: 100%; }
+  .ai-history-button span, .quick-prompt-button span { display: none; }
+  .ai-history-button, .quick-prompt-button { width: 32px; padding-inline: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .work-process-ai-chat-panel, .ai-send-button { transition: none; }
 }
 </style>

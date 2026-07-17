@@ -56,7 +56,7 @@ public interface ProductTypeRepository extends JpaRepository<ProductType, String
      * 字段顺序必须与 {@link com.cretas.aims.dto.producttype.ProductTypeOptionDTO} 构造器一致。
      */
     @Query("SELECT new com.cretas.aims.dto.producttype.ProductTypeOptionDTO(" +
-           "p.id, p.code, p.name, p.unit, p.specification, p.productCategory, p.isActive, p.temperatureZone) " +
+           "p.id, p.code, p.name, p.unit, p.specification, p.gramsPerUnit, p.productCategory, p.isActive, p.temperatureZone) " +
            "FROM ProductType p WHERE p.factoryId = :factoryId " +
            "AND UPPER(TRIM(COALESCE(p.productCategory, ''))) <> 'RAW_MATERIAL' " +
            "ORDER BY p.createdAt DESC")

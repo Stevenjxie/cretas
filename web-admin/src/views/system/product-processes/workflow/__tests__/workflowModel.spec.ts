@@ -143,13 +143,53 @@ describe('product process workflow model', () => {
     const laidOut = autoLayoutWorkflow(definition);
     const positions = Object.fromEntries(laidOut.nodes.map((node) => [node.id, node.position]));
 
-    // LAYER_GAP=440 / BRANCH_GAP=320 (放宽间距避免多产出/分支 Cell 挤在一起), 结果按 16px 网格吸附
-    expect(positions.raw).toEqual({ x: 32, y: 32 });
-    expect(positions.split.x).toBe(480);
-    expect(positions.cookA.x).toBe(912);
-    expect(positions.cookB.x).toBe(912);
-    expect(Math.abs(positions.cookA.y - positions.cookB.y)).toBeGreaterThanOrEqual(320);
-    expect(positions.finished.x).toBe(1360);
+    // 横向按真实 Cell 宽度 + 96px 边距累加；纵向按估算高度 + 32px 间距居中。
+    expect(positions.raw.x).toBe(32);
+    expect(positions.split.x).toBe(368);
+    expect(positions.cookA.x).toBe(944);
+    expect(positions.cookB.x).toBe(944);
+    expect(Math.abs(positions.cookA.y - positions.cookB.y)).toBeGreaterThanOrEqual(192);
+    expect(positions.finished.x).toBe(1280);
+  });
+
+  it('orders four converging raw Cells by input ordinal with a stable 32px visual gap', () => {
+    const definition: ProductProcessWorkflowDefinition = {
+      schemaVersion: 1, status: 'DRAFT', version: 1,
+      nodes: [
+        { id: 'raw-z', kind: 'RAW_MATERIAL', position: { x: 0, y: 900 }, data: { name: '投入4', skuId: 'R4' } },
+        { id: 'raw-a', kind: 'RAW_MATERIAL', position: { x: 0, y: 700 }, data: { name: '投入2', skuId: 'R2' } },
+        { id: 'raw-y', kind: 'RAW_MATERIAL', position: { x: 0, y: 500 }, data: { name: '投入1', skuId: 'R1' } },
+        { id: 'raw-b', kind: 'RAW_MATERIAL', position: { x: 0, y: 300 }, data: { name: '投入3', skuId: 'R3' } },
+        { id: 'process', kind: 'PROCESS', position: { x: 0, y: 0 }, data: {
+          workProcessId: 'WP', processName: '合流', inputUnit: 'kg', outputUnit: 'kg',
+          ports: [
+            { id: 'in-1', direction: 'INPUT', materialNodeId: 'raw-y', unit: 'kg', ordinal: 0 },
+            { id: 'in-2', direction: 'INPUT', materialNodeId: 'raw-a', unit: 'kg', ordinal: 1 },
+            { id: 'in-3', direction: 'INPUT', materialNodeId: 'raw-b', unit: 'kg', ordinal: 2 },
+            { id: 'in-4', direction: 'INPUT', materialNodeId: 'raw-z', unit: 'kg', ordinal: 3 },
+            { id: 'out-1', direction: 'OUTPUT', materialNodeId: 'finished', unit: 'kg', ordinal: 0 },
+          ], conversionRule: { mode: 'ACTUAL_WEIGHT' }, reportingRequired: true,
+        } },
+        { id: 'finished', kind: 'FINISHED_GOOD', position: { x: 0, y: 0 }, data: { name: '产出', skuId: 'FG' } },
+      ],
+      edges: [
+        { id: 'e1', source: 'raw-y', sourceHandle: 'output', target: 'process', targetHandle: 'in-1' },
+        { id: 'e2', source: 'raw-a', sourceHandle: 'output', target: 'process', targetHandle: 'in-2' },
+        { id: 'e3', source: 'raw-b', sourceHandle: 'output', target: 'process', targetHandle: 'in-3' },
+        { id: 'e4', source: 'raw-z', sourceHandle: 'output', target: 'process', targetHandle: 'in-4' },
+        { id: 'e5', source: 'process', sourceHandle: 'out-1', target: 'finished', targetHandle: 'input' },
+      ],
+      viewport: { x: 0, y: 0, zoom: 1 },
+    };
+
+    const once = autoLayoutWorkflow(definition);
+    const twice = autoLayoutWorkflow(once);
+    const rawNodes = once.nodes.filter((node) => node.kind === 'RAW_MATERIAL').sort((a, b) => a.position.y - b.position.y);
+
+    expect(rawNodes.map((node) => node.id)).toEqual(['raw-y', 'raw-a', 'raw-b', 'raw-z']);
+    expect(rawNodes.slice(1).map((node, index) => node.position.y - rawNodes[index].position.y))
+      .toEqual([272, 272, 272]);
+    expect(twice.nodes.map((node) => node.position)).toEqual(once.nodes.map((node) => node.position));
   });
 
   it('applies a valid workflow patch immutably and reports a concise summary', () => {

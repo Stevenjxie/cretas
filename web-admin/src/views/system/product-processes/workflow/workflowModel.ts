@@ -14,15 +14,10 @@ import type {
 } from './types';
 
 const GRID_SIZE = 16;
-// 自动布局间距: 层间(横向)须清得过最宽的工序 Cell(~390px), 同层(纵向)须清得过 Cell 高度,
-// 否则多产出/多分支时 Cell 会叠成一坨(挤在一起)。放宽后各 Cell 有呼吸空间。
-// BRANCH_GAP=480: 工序 Cell 是同层里最高的盒子——heading + 系统研判提示 + 投入/产出两个
-// port-section + 数量关系 + 报工开关叠起来, 常规 1~2 端口场景下实测约 400~450px 高,
-// 320 明显不够(相邻两行会视觉重叠), 480 留出安全余量。这是"够用的固定常量", 不是按
-// 每个 Cell 实际 DOM 高度动态计算——极端多端口(4+ 入/出)场景仍可能偏紧, 需要时再引入
-// 运行时测量。
-const LAYER_GAP = 440;
-const BRANCH_GAP = 480;
+const NODE_HORIZONTAL_GAP = 96;
+const MATERIAL_NODE_WIDTH = 240;
+const PROCESS_NODE_WIDTH = 472;
+const NODE_VERTICAL_GAP = 32;
 const CANVAS_ORIGIN = 32;
 
 /**
@@ -155,8 +150,15 @@ export function createWorkflowFromLegacy(input: {
     const outputId = index === processes.length - 1
       ? 'material:finished'
       : `material:semi:${index}`;
-    const processX = CANVAS_ORIGIN + (index * 2 + 1) * LAYER_GAP;
-    const outputX = CANVAS_ORIGIN + (index * 2 + 2) * LAYER_GAP;
+    const pairWidth = MATERIAL_NODE_WIDTH + PROCESS_NODE_WIDTH + NODE_HORIZONTAL_GAP * 2;
+    const processX = snapPosition({
+      x: CANVAS_ORIGIN + MATERIAL_NODE_WIDTH + NODE_HORIZONTAL_GAP + index * pairWidth,
+      y: 0,
+    }).x;
+    const outputX = snapPosition({
+      x: processX + PROCESS_NODE_WIDTH + NODE_HORIZONTAL_GAP,
+      y: 0,
+    }).x;
     const inputPortId = `input:${index}`;
     const outputPortId = `output:${index}`;
 
@@ -255,21 +257,66 @@ export function autoLayoutWorkflow(
     const layer = depth.get(node.id) ?? 0;
     layers.set(layer, [...(layers.get(layer) ?? []), node]);
   });
-  // 每层各自独立起跑一个"行计数器"(rowInLayer), 不用跨层的全局 index——否则两个不同层、
-  // 但恰好都是该层第 0 个节点的 Cell 会拿到同一个 y, 同层内任意两个 Cell 的 position
-  // 就永远不会重合/重叠。
+  const nodeById = new Map(result.nodes.map((node) => [node.id, node]));
+  const edgeOrder = (node: ProductProcessWorkflowNode): number => {
+    const outbound = result.edges.find((edge) => edge.source === node.id);
+    if (outbound) {
+      const target = nodeById.get(outbound.target);
+      if (target?.kind === 'PROCESS') {
+        const port = (target.data as ProcessNodeData).ports.find((candidate) => candidate.id === outbound.targetHandle);
+        if (port) return port.ordinal;
+      }
+    }
+    const inbound = result.edges.find((edge) => edge.target === node.id);
+    if (inbound) {
+      const source = nodeById.get(inbound.source);
+      if (source?.kind === 'PROCESS') {
+        const port = (source.data as ProcessNodeData).ports.find((candidate) => candidate.id === inbound.sourceHandle);
+        if (port) return port.ordinal;
+      }
+    }
+    return Number.MAX_SAFE_INTEGER;
+  };
+  layers.forEach((layerNodes) => {
+    layerNodes.sort((a, b) => edgeOrder(a) - edgeOrder(b) || a.id.localeCompare(b.id));
+  });
+  const layerHeight = (nodes: ProductProcessWorkflowNode[]): number => nodes.reduce(
+    (height, node, index) => height + estimatedNodeHeight(node) + (index === 0 ? 0 : NODE_VERTICAL_GAP),
+    0,
+  );
+  const maxLayerHeight = Math.max(...[...layers.values()].map(layerHeight), 0);
+  const layerX = new Map<number, number>();
+  let nextLayerX = CANVAS_ORIGIN;
+  [...layers.keys()].sort((a, b) => a - b).forEach((layer) => {
+    layerX.set(layer, nextLayerX);
+    const width = Math.max(...(layers.get(layer) ?? []).map(estimatedNodeWidth), MATERIAL_NODE_WIDTH);
+    nextLayerX = snapPosition({ x: nextLayerX + width + NODE_HORIZONTAL_GAP, y: 0 }).x;
+  });
   layers.forEach((layerNodes, layer) => {
-    layerNodes.sort((a, b) => a.id.localeCompare(b.id));
-    let rowInLayer = 0;
+    let y = CANVAS_ORIGIN + (maxLayerHeight - layerHeight(layerNodes)) / 2;
     layerNodes.forEach((node) => {
       node.position = snapPosition({
-        x: CANVAS_ORIGIN + layer * LAYER_GAP,
-        y: CANVAS_ORIGIN + rowInLayer * BRANCH_GAP,
+        x: layerX.get(layer) ?? CANVAS_ORIGIN,
+        y,
       });
-      rowInLayer += 1;
+      y += estimatedNodeHeight(node) + NODE_VERTICAL_GAP;
     });
   });
   return result;
+}
+
+function estimatedNodeWidth(node: ProductProcessWorkflowNode): number {
+  return node.kind === 'PROCESS' ? PROCESS_NODE_WIDTH : MATERIAL_NODE_WIDTH;
+}
+
+function estimatedNodeHeight(node: ProductProcessWorkflowNode): number {
+  if (node.kind === 'RAW_MATERIAL') return 240;
+  if (node.kind !== 'PROCESS') return 168;
+  const process = node.data as ProcessNodeData;
+  const inputCount = process.ports.filter((port) => port.direction === 'INPUT').length;
+  const outputCount = process.ports.filter((port) => port.direction === 'OUTPUT').length;
+  const relationRows = (inputCount > 1 ? 1 : 0) + (outputCount > 1 ? 1 : 0);
+  return 300 + (inputCount + outputCount) * 46 + relationRows * 54;
 }
 
 export function applyWorkflowPatches(
