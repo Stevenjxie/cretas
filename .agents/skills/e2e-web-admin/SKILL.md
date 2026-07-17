@@ -46,7 +46,20 @@ Run this gate before production deployment so a compatibility defect does not fo
 
 ## Execution Preference
 
-Prefer a standalone Node Playwright script using `chromium.launch()`:
+For production read-only acceptance, use the repository's canonical shared
+harness first:
+
+```text
+scripts/e2e/production-readonly/mcp-entry.js
+```
+
+Pass that checked-in file to Codex Playwright MCP's filename entry. It consumes
+the MCP-supplied `page`, installs its before-send mutation guard before the
+first target navigation, and reuses one clean UI-login session. Do not paste an
+ad-hoc script into the tool call and do not launch a second browser.
+
+For local or write-capable non-production workflows, a standalone Node
+Playwright script using `chromium.launch()` remains acceptable:
 
 ```javascript
 import { chromium } from 'playwright';
@@ -60,17 +73,43 @@ await browser.close();
 
 Use `.agents/skills/agent-browser` or available browser tools for exploratory inspection. Treat `.mcp.json` as historical MCP configuration, not as a guarantee that MCP tools are available in Codex.
 
+Do not resurrect retired standalone production runners. In particular,
+`tests/qa-r1-vue-smoke/run-smoke.mjs` and
+`tests/e2e-yield-mixed-sku/readonly-bom-workflow-contract.mjs` were removed
+after their reusable coverage moved into the canonical harness. Historical
+JSON and screenshots are evidence, not runnable acceptance assets.
+
+The write-capable mixed-SKU chain is intentionally named
+`tests/e2e-yield-mixed-sku/nonprod-business-flow-audit.mjs`. It must never run
+as production acceptance: it requires an explicit test target, rejects known
+production hosts, and requires both non-production write acknowledgements.
+
 ## Production Read-Only Acceptance
 
 After the final backend and Web versions are both live, run one F006 production read-only suite covering the changed paths. For the SKU/unit workflow, cover SKU edit, Workflow, process-sheet reporting, finished-goods opening inventory, and sales order entry.
 
+Canonical instructions, whitelist rationale, scenario IDs, CLI usage, and
+evidence locations are in
+`scripts/e2e/production-readonly/README.md`. The same core must be used by MCP,
+the Node CLI, local Playwright fixtures, and the CI unit/drift gate.
+
 The suite must:
 
 - Use F006 only unless the user explicitly opens another tenant.
-- Record every `POST`, `PUT`, `PATCH`, and `DELETE`; allow only authentication and documented read-only query POSTs. Business mutation count must be zero.
+- Record every `POST`, `PUT`, `PATCH`, and `DELETE`; allow only authentication and exact documented read-only query POSTs from `config/readonly-post-whitelist.js`. Unexpected mutations must be aborted before send.
+- Require both `actualBusinessWrites: 0` and zero blocked mutation attempts. A blocked attempt is a harness failure, not a successful acceptance run.
 - Never save, publish, create, settle, or submit. Discard local unsaved UI rows before exit.
 - Assert zero page errors, zero console errors, and zero unexpected HTTP responses `>=400`.
 - Capture screenshots for unit labels, packaging selectors, horizontal overflow, sticky actions, and Workflow overlay/fit behavior.
+- Keep credentials in gitignored environment sources. Evidence must never contain passwords, tokens, cookies, authorization headers, raw request bodies, email addresses, or phone numbers.
+
+Before any production smoke, run:
+
+```bash
+node --test scripts/e2e/production-readonly/tests/unit.test.js
+npx playwright test scripts/e2e/production-readonly/tests/fixture.spec.js --workers=1
+node scripts/e2e/production-readonly/cli-runner.mjs --dry-run --production-readonly
+```
 
 Classify failures before changing product code:
 

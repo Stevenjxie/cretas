@@ -2,7 +2,7 @@
  * UI-layer DEEP E2E — verifies the production process-sheet yield/cost numbers
  * that the CUSTOMER ACTUALLY SEES in web-admin are accurate.
  *
- * Gap this closes vs prod-business-flow-audit.mjs (API-only):
+ * Gap this closes vs nonprod-business-flow-audit.mjs (API-only):
  *   - That test asserts BACKEND numbers via API. It never reads the rendered DOM,
  *     so frontend display bugs (#1 漏字段, #7 结单弹窗丢混SKU行) are invisible to it.
  *

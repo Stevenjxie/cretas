@@ -1,32 +1,23 @@
 # tests/qa-r1-vue-smoke
 
-Round 1 part 2 — SmartBI Vue page L1 smoke (chat2 deliverable).
+Archived Round 1 part 2 SmartBI Vue page L1 evidence (chat2 deliverable).
+
+The original standalone runner was retired after its reusable page, console,
+network, screenshot, and clean-session behavior moved to
+`scripts/e2e/production-readonly/`. This directory is evidence only and must
+not be treated as an executable production test package.
 
 ## Files
 
 - `pages.mjs` — 18-page registry derived from `web-admin/src/router/`
-- `run-smoke.mjs` — Playwright smoke runner (chromium.launch + storageState cache)
 - `round-1-vue-smoke.json` — per-page result (rendered/console/api/toast/screenshot)
 - `console-matrix.json` — page × signal-type matrix
 - `coverage-matrix.md` — Rule 11 breadth coverage + findings (human-readable)
 - `screenshots/*.png` — one fullPage screenshot per page (18)
 
-## Run
-
-```bash
-cd tests/qa-r1-vue-smoke
-node run-smoke.mjs
-# or: TARGET=http://other-host:8086 node run-smoke.mjs
-```
-
-Requires Playwright (1.58+). The worktree has `node_modules` as a junction
-into `scripts/customer-audit-e2e-2026-05-13/node_modules` from the main
-checkout to share the Chromium binary download.
-
-`screenshots/` matches the root `.gitignore` pattern. The 18 PNGs in this
-branch were committed with `git add -f` as one-shot evidence; future re-runs
-that overwrite them will not show up in `git status` (still gitignored).
-That is deliberate — re-run the script and inspect locally, do not re-commit.
+The JSON, matrix, route registry, and screenshots remain as immutable historical
+evidence. Run current acceptance through the canonical harness; do not refresh
+or re-commit this archived evidence directory.
 
 ## Spec / scope
 

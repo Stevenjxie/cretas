@@ -1,0 +1,5 @@
+{
+  "name": "@cretas/production-readonly-harness",
+  "private": true,
+  "type": "commonjs"
+}

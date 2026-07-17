@@ -258,6 +258,8 @@ frontend/CretasFoodTrace/src/
 5. **全量 CI 分层** - 改动相关目标测试和必需门禁必须通过；已确认的全量测试基线噪声应单独治理，不得用重复本地全量构建代替，也不得隐瞒其状态。
 6. **部署快速失败与制品复用** - Java 日常部署先检查 manifest-backed 后端 tree cache；Java 未变时允许 cache 命中或 no-op。GitHub Artifact 只在已经存在时作为显式手动备用，必须通过 exact-commit 清单、SHA-256 与部署阶段 JAR 完整性校验；禁止触发后等待远端制品。缓存/Artifact 缺失或校验失败时只回退一次现有本地 `clean package`，不得再次 retry package。相同制品 no-op 仍必须读取真实 upstream 并验证 active systemd 与健康；真正切流时 5×6 秒观察和自动回滚不得省略。idle 槽连续自动重启达到阈值时应立即保留旧 upstream、输出有限诊断日志并终止，不得盲等完整健康超时。
 7. **Maven 单生命周期** - release gate 所需目标测试、编译和最终 JAR 必须在同一干净、已审查源码 worktree 内通过 `./scripts/deploy/release-jar-manifest.sh build --tests '<tests>'` 完成；该入口只执行一条 `mvn clean package -Dtest=<tests>`，成功后才写可信 manifest。squash merge 后必须改在 clean exact `origin/main` release worktree 校验 build commit 与前后 backend tree，再决定复用或单次安全回退。禁止用旧 `target/`、mtime 或先前分开的测试命令证明最终 JAR 已测试；protobuf 的 staleness 检查仍是构建路径的必要条件，除非有等价性能回归证据不得移除。
+8. **生产 Web Playwright 唯一入口** - 用户明确要求生产 Web 只读验收时，必须优先使用 Codex 直接集成的 Playwright MCP，并以 filename 方式加载 `scripts/e2e/production-readonly/mcp-entry.js`；同一次验收复用一个干净 UI 登录会话。该 MCP entry、Node CLI、本地 fixture 与 CI drift gate 必须共享同一套 `core/`、`scenarios/`、before-send mutation guard、证据 schema 与脱敏规则，禁止临时复制脚本、启动第二浏览器、复用历史 storageState 或以 `.mcp.json` 推断当前工具可用性。
+9. **旧 Runner 与写测试边界** - 已迁移的 SmartBI/BOM standalone runner 不得恢复为生产入口；历史 JSON/截图只作证据。生产只读验收仅允许 UI 登录和注册表中精确匹配的 query-only POST，所有其他 `POST`/`PUT`/`PATCH`/`DELETE` 必须发送前拦截；通过条件同时要求 `actualBusinessWrites == 0` 且 blocked mutation attempts 为 0。`tests/e2e-yield-mixed-sku/nonprod-business-flow-audit.mjs` 等写测试只能用于显式测试环境，必须拒绝生产 host 并要求非生产写确认，绝不能作为生产验收替代品。
 
 ### UX Flow Gate（低技术素养用户屏幕）
 

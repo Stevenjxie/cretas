@@ -2,9 +2,9 @@ import { chromium } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-const APP_URL = process.env.E2E_ADMIN_URL || 'http://139.196.165.140:8086';
-const FACTORY_ID = process.env.E2E_FACTORY_ID || 'F006';
-const OUT_DIR = path.resolve(process.env.E2E_OUT || `.playwright-mcp/codex-${new Date().toISOString().replace(/[:.]/g, '-')}-prod-business-flow`);
+const APP_URL = requiredEnv('E2E_ADMIN_URL');
+const FACTORY_ID = requiredEnv('E2E_FACTORY_ID');
+const OUT_DIR = path.resolve(process.env.E2E_OUT || `.playwright-mcp/codex-${new Date().toISOString().replace(/[:.]/g, '-')}-nonprod-business-flow`);
 const PROFILE_DIR = path.join(OUT_DIR, `profile-${Date.now().toString(36)}`);
 const TS = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
 const AUDIT_PREFIX = `CodexAudit-${TS}`;
@@ -21,6 +21,27 @@ function requiredEnv(name) {
   if (!value) throw new Error(`${name} is required`);
   return value;
 }
+
+function assertNonProductionWriteTarget(rawUrl) {
+  let target;
+  try {
+    target = new URL(rawUrl);
+  } catch {
+    throw new Error('E2E_ADMIN_URL must be an absolute non-production URL');
+  }
+  const forbiddenHosts = new Set(['admin.cretaceousfuture.com', '139.196.165.140']);
+  if (forbiddenHosts.has(target.hostname.toLowerCase())) {
+    throw new Error(`Refusing business-write audit against production host: ${target.hostname}`);
+  }
+  if (process.env.E2E_TARGET_ENV !== 'test') {
+    throw new Error('E2E_TARGET_ENV=test is required for this write-capable audit');
+  }
+  if (process.env.E2E_ALLOW_BUSINESS_WRITES !== 'NON_PRODUCTION_ONLY') {
+    throw new Error('E2E_ALLOW_BUSINESS_WRITES=NON_PRODUCTION_ONLY is required for this write-capable audit');
+  }
+}
+
+assertNonProductionWriteTarget(APP_URL);
 
 const USERNAME = requiredEnv('E2E_USERNAME');
 const PASSWORD = requiredEnv('E2E_PASSWORD');
