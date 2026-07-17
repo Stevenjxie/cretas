@@ -6,9 +6,7 @@
 
 ## 在飞任务
 
-| ID | Base SHA | Scope 锁 | Owner | Mode | Worktree/PR | Status | Blocker | Next action |
-|---|---|---|---|---|---|---|---|---|
-| WF-VALIDATION-RAW-FILTER-20260717 | `0a535848b8c509b28f3573f594428d7e40a24557` | `web-admin/src/views/system/product-processes/workflow/**`; related frontend tests; `docs/dispatch/ACTIVE.md`; completion archive | Codex coordinator | inline | `C:\Users\Steve\cretas-workflow-validation-raw-filter-v2` / `codex/workflow-validation-raw-filter-v2` | in-progress | 无 | 实现未绑定 SKU Cell 自动定位、多节点持续提示，以及仅原料的 L1/L2/L3 分类与文字搜索；验收：workflow 目标 Vitest、`vue-tsc --noEmit`、`git diff --check` |
+_当前无在飞代码任务。_
 
 ## 阻塞项
 
