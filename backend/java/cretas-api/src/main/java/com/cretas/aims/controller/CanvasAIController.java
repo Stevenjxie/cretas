@@ -365,7 +365,17 @@ public class CanvasAIController {
         String argsJson = objectMapper.writeValueAsString(params);
         ToolCall toolCall = ToolCall.of(
                 "d3-catalog-" + System.currentTimeMillis(), WORK_PROCESS_CATALOG_TOOL, argsJson);
-        String raw = executor.execute(toolCall, toolContext);
+        String mode = request.getMode() == null ? "action" : request.getMode().trim().toLowerCase();
+        boolean execute = "autopilot".equals(mode);
+        if (!execute && !"plan".equals(mode) && !"action".equals(mode)) {
+            throw new BusinessException(400, "未知模式: " + mode);
+        }
+        if (!execute && !executor.supportsPreview()) {
+            throw new BusinessException(409, "该工具不支持无写入预览，已阻止执行");
+        }
+        String raw = execute
+                ? executor.execute(toolCall, toolContext)
+                : executor.preview(toolCall, toolContext);
 
         Map<String, Object> toolResponse = objectMapper.readValue(raw, new TypeReference<Map<String, Object>>() {});
 
@@ -384,14 +394,15 @@ public class CanvasAIController {
         String replyMsg = Objects.toString(data.getOrDefault("message", "工序操作已完成"), "工序操作已完成");
 
         AIResponse response = new AIResponse();
-        response.setApplied(true);
+        response.setApplied(execute);
         response.setReply(replyMsg);
-        response.setDiffs(List.of(Map.of(
+        Map<String, Object> diff = Map.of(
                 "type", "WORK_PROCESS_CATALOG",
                 "tool", WORK_PROCESS_CATALOG_TOOL,
                 "params", data,
                 "description", replyMsg
-        )));
+        );
+        response.setDiffs("plan".equals(mode) ? List.of(diff) : List.of());
         return response;
     }
 

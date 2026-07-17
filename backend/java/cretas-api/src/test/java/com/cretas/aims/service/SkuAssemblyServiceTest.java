@@ -110,6 +110,8 @@ class SkuAssemblyServiceTest {
         assertEquals(1, copiedRecipeItems.size());
         assertEquals("MAT-RAW-1", copiedRecipeItems.get(0).getMaterialTypeId());
         assertEquals(Boolean.TRUE, copiedRecipeItems.get(0).getPerPortion());
+        assertEquals("g", copiedRecipeItems.get(0).getPriceUnit());
+        assertEquals(0, new BigDecimal("0.001").compareTo(copiedRecipeItems.get(0).getQuantityToPriceFactor()));
         assertNotEquals(101L, copiedRecipeItems.get(0).getId());
 
         List<BomSeasoningItem> copiedSeasoningItems =
@@ -126,6 +128,8 @@ class SkuAssemblyServiceTest {
         assertEquals(savedSku.getName(), copiedLegacyItems.get(0).getProductName());
         assertEquals("MAT-LEGACY-1", copiedLegacyItems.get(0).getMaterialTypeId());
         assertEquals(Boolean.TRUE, copiedLegacyItems.get(0).getPerPortion());
+        assertEquals("g", copiedLegacyItems.get(0).getPriceUnit());
+        assertEquals(0, new BigDecimal("0.001").compareTo(copiedLegacyItems.get(0).getQuantityToPriceFactor()));
 
         assertThrows(BusinessException.class, () -> skuAssemblyService.assemblesku(
                 FACTORY_ID, TEMPLATE_ID, CUSTOMER_ID, "v1", null, USER_ID));
@@ -231,6 +235,8 @@ class SkuAssemblyServiceTest {
         recipeItem.setYieldRate(new BigDecimal("95.00"));
         recipeItem.setActualQuantity(new BigDecimal("5.2632"));
         recipeItem.setUnit("kg");
+        recipeItem.setPriceUnit("g");
+        recipeItem.setQuantityToPriceFactor(new BigDecimal("0.00100000"));
         recipeItem.setUnitPrice(new BigDecimal("2.0000"));
         recipeItem.setTaxRate(new BigDecimal("13.00"));
         recipeItem.setItemCost(new BigDecimal("10.5264"));
@@ -268,6 +274,8 @@ class SkuAssemblyServiceTest {
         legacyItem.setStandardQuantity(new BigDecimal("2.0000"));
         legacyItem.setYieldRate(new BigDecimal("90.00"));
         legacyItem.setUnit("kg");
+        legacyItem.setPriceUnit("g");
+        legacyItem.setQuantityToPriceFactor(new BigDecimal("0.00100000"));
         legacyItem.setUnitPrice(new BigDecimal("1.0000"));
         legacyItem.setTaxRate(new BigDecimal("13.00"));
         legacyItem.setMaterialCategory("AUXILIARY");

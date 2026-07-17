@@ -95,6 +95,15 @@ public class BomItem extends BaseEntity {
     @Column(name = "unit_price", precision = 15, scale = 4)
     private BigDecimal unitPrice;
 
+    /** Canonical denominator unit of unitPrice (for example kg). */
+    @Column(name = "price_unit", length = 20)
+    private String priceUnit;
+
+    /** Snapshot factor converting one BOM quantity unit into priceUnit. */
+    @Column(name = "quantity_to_price_factor", nullable = false, precision = 24, scale = 12)
+    @Builder.Default
+    private BigDecimal quantityToPriceFactor = BigDecimal.ONE;
+
     /**
      * 税率 (百分比，如13表示13%增值税)
      */
@@ -172,6 +181,8 @@ public class BomItem extends BaseEntity {
         if (unitPrice == null || standardQuantity == null) {
             return BigDecimal.ZERO;
         }
-        return getActualQuantity().multiply(unitPrice).setScale(4, BigDecimal.ROUND_HALF_UP);
+        BigDecimal factor = quantityToPriceFactor != null ? quantityToPriceFactor : BigDecimal.ONE;
+        return getActualQuantity().multiply(factor).multiply(unitPrice)
+                .setScale(4, java.math.RoundingMode.HALF_UP);
     }
 }

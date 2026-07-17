@@ -35,6 +35,9 @@ import java.util.Map;
 @Component
 public class ProductCreateTool extends AbstractBusinessTool {
 
+    private static final List<String> SKU_CATEGORIES = List.of(
+            "FINISHED_PRODUCT", "SEMI_FINISHED", "CUSTOMER_MATERIAL", "CONTRACT_MANUFACTURING");
+
     @Autowired
     private ProductTypeService productTypeService;
     @Autowired
@@ -63,7 +66,10 @@ public class ProductCreateTool extends AbstractBusinessTool {
         Map<String, Object> props = new LinkedHashMap<>();
         props.put("productName", Map.of("type", "string", "description", "产品名称(必需), 如 '叮咚红烧肉 200g'"));
         props.put("unit", Map.of("type", "string", "description", "计量单位, 如 盒/份/kg; 不填则按飞轮相似产品建议"));
-        props.put("productCategory", Map.of("type", "string", "description", "产品类别, 默认 FINISHED_PRODUCT"));
+        props.put("productCategory", Map.of(
+                "type", "string",
+                "enum", SKU_CATEGORIES,
+                "description", "SKU 产品类别；半成品必须使用 SEMI_FINISHED"));
         props.put("specification", Map.of("type", "string", "description", "规格, 如 200g/盒"));
         props.put("customerName", Map.of("type", "string", "description", "关联客户名(可选)"));
         props.put("inheritFrom", Map.of("type", "string", "description", "显式指定继承哪个产品的工序链(可选); 不填则飞轮自动找最相似产品"));
@@ -83,9 +89,11 @@ public class ProductCreateTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doPreview(String factoryId, Map<String, Object> params, Map<String, Object> context) {
         Plan plan = resolvePlan(factoryId, params);
+        String productCategory = validatedCategory(params);
         Map<String, Object> r = new LinkedHashMap<>();
         r.put("status", "PREVIEW");
         r.put("productName", plan.name);
+        r.put("productCategory", productCategory);
         r.put("defaults", plan.defaults);
         r.put("inheritFromProduct", plan.sourceName);
         r.put("suggestedProcessChain", plan.processNames);
@@ -101,13 +109,14 @@ public class ProductCreateTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
         Plan plan = resolvePlan(factoryId, params);
+        String productCategory = validatedCategory(params);
 
         // 1. 建产品 (属性默认来自飞轮)
         ProductTypeDTO dto = new ProductTypeDTO();
         dto.setName(plan.name);
         Object unitDefault = plan.defaults.get("unit");
         dto.setUnit(unitDefault != null ? String.valueOf(unitDefault) : "盒");
-        dto.setProductCategory(getString(params, "productCategory", "FINISHED_PRODUCT"));
+        dto.setProductCategory(productCategory);
         dto.setSpecification(getString(params, "specification"));
         Object gpu = plan.defaults.get("gramsPerUnit");
         if (gpu instanceof BigDecimal) {
@@ -159,10 +168,11 @@ public class ProductCreateTool extends AbstractBusinessTool {
         p.bomSuggestion = new ArrayList<>();
         p.seasoningSuggestion = new ArrayList<>();
 
+        String requestedCategory = validatedCategory(params);
         // 飞轮属性建议 (智能填充)
         try {
             ProductTypeSuggestionDTO sug = productTypeService.suggestDefaults(
-                    factoryId, p.name, getString(params, "productCategory"));
+                    factoryId, p.name, requestedCategory);
             if (sug != null) {
                 if (sug.getUnit() != null) p.defaults.put("unit", sug.getUnit());
                 if (sug.getGramsPerUnit() != null) p.defaults.put("gramsPerUnit", sug.getGramsPerUnit());
@@ -181,6 +191,11 @@ public class ProductCreateTool extends AbstractBusinessTool {
         if (sourceName == null) sourceName = p.matchedFrom;
         if (sourceName != null) {
             p.source = productTypeRepository.findByFactoryIdAndName(factoryId, sourceName).orElse(null);
+            if (p.source != null && !requestedCategory.equals(p.source.getProductCategory())) {
+                log.info("[PRODUCT-CREATE] 忽略跨类别继承: requested={}, source={}({})",
+                        requestedCategory, p.source.getName(), p.source.getProductCategory());
+                p.source = null;
+            }
             if (p.source != null) p.sourceName = p.source.getName();
         }
 
@@ -217,6 +232,15 @@ public class ProductCreateTool extends AbstractBusinessTool {
             } catch (Exception ignore) { /* 调料可选 */ }
         }
         return p;
+    }
+
+    private String validatedCategory(Map<String, Object> params) {
+        String category = getString(params, "productCategory", "FINISHED_PRODUCT").trim().toUpperCase();
+        if (!SKU_CATEGORIES.contains(category)) {
+            throw new IllegalArgumentException("不支持的 SKU 产品类别: " + category
+                    + "；可选值为 " + String.join(", ", SKU_CATEGORIES));
+        }
+        return category;
     }
 
     /** 飞轮解析结果 (内部传递)。 */

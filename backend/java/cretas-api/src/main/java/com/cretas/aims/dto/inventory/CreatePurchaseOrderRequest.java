@@ -86,11 +86,18 @@ public class CreatePurchaseOrderRequest {
         @DecimalMin(value = "0.01", message = "采购数量必须大于0")
         private BigDecimal quantity;
 
-        @NotBlank(message = "单位不能为空")
         @Size(max = 20, message = "单位长度不能超过20个字符")
         private String unit;
 
+        /** Canonical quantity unit. New clients should use this; unit remains the legacy alias. */
+        @Size(max = 20, message = "数量单位长度不能超过20个字符")
+        private String quantityUnit;
+
         private BigDecimal unitPrice;
+
+        /** Canonical denominator unit of unitPrice, e.g. kg (not 元/kg). */
+        @Size(max = 20, message = "计价单位长度不能超过20个字符")
+        private String priceUnit;
 
         private BigDecimal taxRate;
 

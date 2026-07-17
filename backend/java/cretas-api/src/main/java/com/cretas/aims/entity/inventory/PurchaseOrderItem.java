@@ -56,6 +56,20 @@ public class PurchaseOrderItem extends BaseEntity {
     @Column(name = "unit", nullable = false, length = 20)
     private String unit;
 
+    /**
+     * Canonical denominator unit of {@link #unitPrice}, for example {@code kg}.
+     * This is deliberately stored as a unit code, never as a display string such as 元/kg.
+     */
+    @Column(name = "price_unit", nullable = false, length = 20)
+    private String priceUnit;
+
+    /**
+     * Snapshot factor converting one {@link #unit} into {@link #priceUnit}.
+     * It makes historical order totals deterministic even if master-data conversions change later.
+     */
+    @Column(name = "quantity_to_price_factor", nullable = false, precision = 24, scale = 12)
+    private BigDecimal quantityToPriceFactor = BigDecimal.ONE;
+
     @PriceSensitive
     @Column(name = "unit_price", precision = 15, scale = 4)
     private BigDecimal unitPrice;
@@ -101,7 +115,8 @@ public class PurchaseOrderItem extends BaseEntity {
         // Defensive null guard — unitPrice is @PriceSensitive, stripped to null
         // for warehouse_manager. Return null (not ZERO) to avoid leaking "free".
         if (unitPrice == null || quantity == null) return null;
-        return quantity.multiply(unitPrice).setScale(2, BigDecimal.ROUND_HALF_UP);
+        BigDecimal factor = quantityToPriceFactor != null ? quantityToPriceFactor : BigDecimal.ONE;
+        return quantity.multiply(factor).multiply(unitPrice).setScale(2, java.math.RoundingMode.HALF_UP);
     }
 
     /** 含税金额. Price-sensitive: returns null when unitPrice / taxRate stripped. */

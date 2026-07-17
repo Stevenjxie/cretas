@@ -223,6 +223,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             item.setYieldRate(src.getYieldRate());
             item.setUnit(src.getUnit());
             item.setUnitPrice(src.getUnitPrice());
+            item.setPriceUnit(src.getPriceUnit() != null ? src.getPriceUnit() : src.getUnit());
+            item.setQuantityToPriceFactor(src.getQuantityToPriceFactor() != null
+                    ? src.getQuantityToPriceFactor() : BigDecimal.ONE);
             item.setTaxRate(src.getTaxRate());
             item.setMaterialCategory(src.getMaterialCategory());
             item.setSortOrder(src.getSortOrder());
@@ -707,9 +710,27 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                 ? material.getMovingAvgPrice()
                 : material.getUnitPrice();
         item.setUnitPrice(price);
+        applyPriceUnitContract(item, material.getUnit());
         item.setTaxRate(material.getTaxRate() == null
                 ? null
                 : material.getTaxRate().getRate().multiply(BigDecimal.valueOf(100)));
+    }
+
+    private void applyPriceUnitContract(BomRecipeItem item, String rawPriceUnit) {
+        String priceUnit = rawPriceUnit != null && !rawPriceUnit.isBlank()
+                ? rawPriceUnit.trim() : item.getUnit();
+        item.setPriceUnit(priceUnit);
+        if (item.getUnit() == null || priceUnit == null || item.getUnit().equals(priceUnit)) {
+            item.setQuantityToPriceFactor(BigDecimal.ONE);
+            return;
+        }
+        MaterialUomConverter.ConversionResult conversion = materialUomConverter.toComparableQuantity(
+                item.getMaterialTypeId(), BigDecimal.ONE, item.getUnit(), priceUnit);
+        if (!conversion.isConverted() || conversion.getQuantity() == null) {
+            throw new BusinessException(409,
+                    "BOM 数量单位无法换算到计价单位: " + item.getUnit() + " → " + priceUnit);
+        }
+        item.setQuantityToPriceFactor(conversion.getQuantity());
     }
 
     /**

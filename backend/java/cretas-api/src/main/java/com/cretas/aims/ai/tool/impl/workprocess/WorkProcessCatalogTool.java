@@ -20,7 +20,7 @@ import java.util.Objects;
  * 工序主数据 Canvas AI Tool.
  *
  * <p>支持工序管理页自然语言新增/修改工序，执行前对 create 做
- * 名称+类别+单位重复检查，避免 AI 生成重复工序。
+ * 名称+类别重复检查，避免 AI 生成重复工序。工序投入/产出单位由 Workflow/SKU 端口决定。
  */
 @Slf4j
 @Component
@@ -39,9 +39,10 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
 
     @Override
     public String getDescription() {
-        return "工序管理页用于新增或修改工序主数据。支持字段: 工序名称、类别、单位、标准工时、"
-                + "出成率上下限、需录投入量、产出单位、标准时薪、排序。"
-                + "新增前会按名称+类别+单位查重，避免重复创建。"
+        return "工序管理页用于新增或修改工序主数据。支持字段: 工序名称、类别、标准工时、"
+                + "出成率上下限、需录投入量、标准时薪、排序。"
+                + "投入/产出单位由 Workflow/SKU 端口决定，不在工序主数据重复维护。"
+                + "新增前会按名称+类别查重，避免重复创建。"
                 + "出成率请传小数，例如 30% 传 0.30。";
     }
 
@@ -64,9 +65,6 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
         properties.put("processCategory", Map.of(
                 "type", "string",
                 "description", "工序类别，如 前处理、加工、包装、质检"));
-        properties.put("unit", Map.of(
-                "type", "string",
-                "description", "投入计量单位，默认 kg"));
         properties.put("estimatedMinutes", Map.of(
                 "type", "integer",
                 "description", "标准工时/预估工时，单位分钟"));
@@ -79,9 +77,6 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
         properties.put("needsInput", Map.of(
                 "type", "boolean",
                 "description", "是否需要录入投入量"));
-        properties.put("outputUnit", Map.of(
-                "type", "string",
-                "description", "产出单位，留空沿用投入单位"));
         properties.put("standardHourlyRate", Map.of(
                 "type", "number",
                 "description", "标准时薪，单位元/小时"));
@@ -110,6 +105,42 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
     }
 
     @Override
+    public boolean supportsPreview() {
+        return true;
+    }
+
+    @Override
+    protected Map<String, Object> doPreview(
+            String factoryId, Map<String, Object> params, Map<String, Object> context) {
+        String action = getString(params, "action", "").trim().toLowerCase();
+        WorkProcessDTO draft = buildDto(params);
+        if (ACTION_CREATE.equals(action)) {
+            draft.setProcessName(getRequiredText(params, "processName", "工序名称不能为空"));
+            WorkProcessDTO existing = findExisting(factoryId, draft);
+            Map<String, Object> preview = new HashMap<>();
+            preview.put("status", existing == null ? "PREVIEW" : "DUPLICATE");
+            preview.put("action", ACTION_CREATE);
+            preview.put("processName", draft.getProcessName());
+            preview.put("processCategory", draft.getProcessCategory());
+            preview.put("existingId", existing != null ? existing.getId() : "");
+            preview.put("message", existing == null ? "将创建工序: " + draft.getProcessName()
+                    : "已存在同名同类别工序，建议直接复用: " + existing.getProcessName());
+            return preview;
+        }
+        if (ACTION_UPDATE.equals(action)) {
+            String id = getRequiredText(params, "id", "更新工序时必须提供 id");
+            return Map.of(
+                    "status", "PREVIEW",
+                    "action", ACTION_UPDATE,
+                    "id", id,
+                    "processName", Objects.toString(draft.getProcessName(), ""),
+                    "processCategory", Objects.toString(draft.getProcessCategory(), ""),
+                    "message", "将更新工序 " + id);
+        }
+        throw new BusinessException(400, "不支持的工序操作: " + action);
+    }
+
+    @Override
     protected Map<String, Object> doExecute(
             String factoryId, Map<String, Object> params, Map<String, Object> context) {
         String action = getString(params, "action", "").trim().toLowerCase();
@@ -126,20 +157,16 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
         String processName = getRequiredText(params, "processName", "工序名称不能为空");
         WorkProcessDTO dto = buildDto(params);
         dto.setProcessName(processName);
-        if (dto.getUnit() == null || dto.getUnit().isBlank()) {
-            dto.setUnit("kg");
-        }
-
         WorkProcessDTO existing = findExisting(factoryId, dto);
         if (existing != null) {
-            log.info("AI 工序新增命中重复: factory={}, processName={}, category={}, unit={}",
-                    factoryId, dto.getProcessName(), dto.getProcessCategory(), dto.getUnit());
+            log.info("AI 工序新增命中重复: factory={}, processName={}, category={}",
+                    factoryId, dto.getProcessName(), dto.getProcessCategory());
             Map<String, Object> result = buildSimpleResult(
-                    "已存在相同名称+类别+单位的工序，未重复创建: " + dto.getProcessName(),
+                    "已存在相同名称+类别的工序，未重复创建: " + dto.getProcessName(),
                     existing);
             result.put("status", "DUPLICATE");
             result.put("existingId", existing.getId());
-            result.put("actionHint", "请直接复用已有工序，或修改名称/类别/单位后再创建");
+            result.put("actionHint", "请直接复用已有工序，或修改名称/类别后再创建");
             return result;
         }
 
@@ -165,12 +192,10 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
     private WorkProcessDTO findExisting(String factoryId, WorkProcessDTO incoming) {
         String processName = normalize(incoming.getProcessName());
         String category = normalize(incoming.getProcessCategory());
-        String unit = normalize(incoming.getUnit());
 
         return workProcessService.list(factoryId, Pageable.unpaged()).getContent().stream()
                 .filter(wp -> Objects.equals(normalize(wp.getProcessName()), processName)
-                        && Objects.equals(normalize(wp.getProcessCategory()), category)
-                        && Objects.equals(normalize(wp.getUnit()), unit))
+                        && Objects.equals(normalize(wp.getProcessCategory()), category))
                 .findFirst()
                 .orElse(null);
     }
@@ -179,13 +204,11 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
         return WorkProcessDTO.builder()
                 .processName(getString(params, "processName"))
                 .processCategory(getString(params, "processCategory"))
-                .unit(getString(params, "unit"))
                 .estimatedMinutes(getInteger(params, "estimatedMinutes"))
                 .sortOrder(getInteger(params, "sortOrder"))
                 .standardYieldMin(getBigDecimal(params, "standardYieldMin"))
                 .standardYieldMax(getBigDecimal(params, "standardYieldMax"))
                 .needsInput(getBoolean(params, "needsInput"))
-                .outputUnit(getString(params, "outputUnit"))
                 .standardHourlyRate(toScale2(getBigDecimal(params, "standardHourlyRate")))
                 .build();
     }

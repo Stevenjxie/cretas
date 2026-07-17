@@ -282,6 +282,8 @@ public class SkuAssemblyService {
             copy.setYieldRate(source.getYieldRate());
             copy.setUnit(source.getUnit());
             copy.setUnitPrice(source.getUnitPrice());
+            copy.setPriceUnit(source.getPriceUnit());
+            copy.setQuantityToPriceFactor(source.getQuantityToPriceFactor());
             copy.setTaxRate(source.getTaxRate());
             copy.setMaterialCategory(source.getMaterialCategory());
             copy.setSortOrder(source.getSortOrder());
@@ -335,6 +337,8 @@ public class SkuAssemblyService {
             itemCopy.setActualQuantity(sourceItem.getActualQuantity());
             itemCopy.setUnit(sourceItem.getUnit());
             itemCopy.setUnitPrice(sourceItem.getUnitPrice());
+            itemCopy.setPriceUnit(sourceItem.getPriceUnit());
+            itemCopy.setQuantityToPriceFactor(sourceItem.getQuantityToPriceFactor());
             itemCopy.setTaxRate(sourceItem.getTaxRate());
             itemCopy.setItemCost(sourceItem.getItemCost());
             itemCopy.setMaterialCategory(sourceItem.getMaterialCategory());

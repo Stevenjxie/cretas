@@ -80,6 +80,15 @@ public class BomRecipeItem extends BaseEntity {
     @Column(name = "unit_price", precision = 15, scale = 4)
     private BigDecimal unitPrice;
 
+    /** Canonical denominator unit of unitPrice (for example kg). */
+    @Column(name = "price_unit", length = 20)
+    private String priceUnit;
+
+    /** Snapshot factor converting one BOM quantity unit into priceUnit. */
+    @Column(name = "quantity_to_price_factor", nullable = false, precision = 24, scale = 12)
+    @Builder.Default
+    private BigDecimal quantityToPriceFactor = BigDecimal.ONE;
+
     @Column(name = "tax_rate", precision = 5, scale = 2)
     @Builder.Default
     private BigDecimal taxRate = BigDecimal.ZERO;
@@ -200,6 +209,7 @@ public class BomRecipeItem extends BaseEntity {
         if (standardQuantity == null) {
             return BigDecimal.ZERO;
         }
-        return CostRollupUtil.calcItemCost(calculateActualQuantity(), unitPrice);
+        BigDecimal factor = quantityToPriceFactor != null ? quantityToPriceFactor : BigDecimal.ONE;
+        return CostRollupUtil.calcItemCost(calculateActualQuantity().multiply(factor), unitPrice);
     }
 }

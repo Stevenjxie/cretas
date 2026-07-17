@@ -504,6 +504,7 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
         tx.setCounterpartyId(pr.getSupplierId());
         tx.setPurchaseOrderId(pr.getPurchaseOrderId());
         tx.setAmount(amount);
+        tx.setPaymentMethod(parsePaymentMethod(pr.getPaymentMethod()));
         tx.setBalanceAfter(newBalance);                  // ⛔ NOT NULL 必须设置
         tx.setTransactionDate(LocalDate.now());
         tx.setOperatedBy(userId);
@@ -694,8 +695,7 @@ public class PaymentRequestServiceImpl implements PaymentRequestService {
                     .map(item -> {
                         BigDecimal qty = item.getQuantity();
                         BigDecimal price = item.getUnitPrice();
-                        BigDecimal lineAmt = (qty != null && price != null)
-                                ? qty.multiply(price) : null;
+                        BigDecimal lineAmt = item.getLineAmount();
                         return PaymentRequestApprovedDTO.ItemLine.builder()
                                 .itemId(item.getId())
                                 .materialName(item.getMaterialName())

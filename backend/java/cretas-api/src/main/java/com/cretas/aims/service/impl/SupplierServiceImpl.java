@@ -37,6 +37,12 @@ public class SupplierServiceImpl implements SupplierService {
     private final SupplierMapper supplierMapper;
     private final com.cretas.aims.utils.ExcelUtil excelUtil;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.inventory.PurchaseOrderRepository purchaseOrderRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.inventory.PurchaseOrderItemRepository purchaseOrderItemRepository;
+
     /** Canvas V2: DB-driven validation rules */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.engine.ValidationRuleEvaluator validationRuleEvaluator;
@@ -270,11 +276,102 @@ public class SupplierServiceImpl implements SupplierService {
     @Override
     @Transactional(readOnly = true)
     public List<Map<String, Object>> getSupplierHistory(String factoryId, String supplierId) {
-        Supplier supplier = supplierRepository.findByIdAndFactoryId(supplierId, factoryId)
+        supplierRepository.findByIdAndFactoryId(supplierId, factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("Supplier", supplierId));
-        // TODO: 从原材料批次表中获取供货历史
-        List<Map<String, Object>> history = new ArrayList<>();
-        return history;
+        if (purchaseOrderRepository == null || purchaseOrderItemRepository == null) {
+            throw new BusinessException(503, "采购历史服务不可用");
+        }
+
+        List<com.cretas.aims.entity.inventory.PurchaseOrder> orders = purchaseOrderRepository
+                .findByFactoryIdAndSupplierId(factoryId, supplierId);
+        if (orders.isEmpty()) {
+            return List.of();
+        }
+
+        Map<String, com.cretas.aims.entity.inventory.PurchaseOrder> orderById = orders.stream()
+                .collect(Collectors.toMap(com.cretas.aims.entity.inventory.PurchaseOrder::getId,
+                        java.util.function.Function.identity()));
+        List<com.cretas.aims.entity.inventory.PurchaseOrderItem> items = purchaseOrderItemRepository
+                .findByPurchaseOrderIdIn(new ArrayList<>(orderById.keySet()));
+
+        Map<String, SupplierHistoryAccumulator> grouped = new LinkedHashMap<>();
+        for (com.cretas.aims.entity.inventory.PurchaseOrderItem item : items) {
+            com.cretas.aims.entity.inventory.PurchaseOrder order = orderById.get(item.getPurchaseOrderId());
+            if (order == null || item.getReceivedQuantity() == null
+                    || item.getReceivedQuantity().signum() <= 0) continue;
+            String unit = item.getUnit() != null ? item.getUnit() : "";
+            String priceUnit = item.getPriceUnit() != null ? item.getPriceUnit() : unit;
+            String key = item.getMaterialTypeId() + "\u0000" + unit + "\u0000" + priceUnit;
+            SupplierHistoryAccumulator acc = grouped.computeIfAbsent(key,
+                    ignored -> new SupplierHistoryAccumulator(item.getMaterialTypeId(),
+                            item.getMaterialName(), unit, priceUnit));
+            acc.orderIds.add(order.getId());
+            acc.orderedQuantity = acc.orderedQuantity.add(nullToZero(item.getQuantity()));
+            acc.receivedQuantity = acc.receivedQuantity.add(nullToZero(item.getReceivedQuantity()));
+            if (item.getUnitPrice() != null) {
+                BigDecimal factor = item.getQuantityToPriceFactor() != null
+                        ? item.getQuantityToPriceFactor() : BigDecimal.ONE;
+                BigDecimal receivedInPriceUnit = item.getReceivedQuantity().multiply(factor);
+                acc.totalReceivedAmount = acc.totalReceivedAmount.add(
+                        receivedInPriceUnit.multiply(item.getUnitPrice()));
+                acc.pricedQuantity = acc.pricedQuantity.add(
+                        receivedInPriceUnit);
+            }
+            if (order.getOrderDate() != null
+                    && (acc.lastPurchaseDate == null || order.getOrderDate().isAfter(acc.lastPurchaseDate))) {
+                acc.lastPurchaseDate = order.getOrderDate();
+                acc.lastUnitPrice = item.getUnitPrice();
+            }
+        }
+
+        return grouped.values().stream()
+                .sorted(Comparator.comparing((SupplierHistoryAccumulator acc) -> acc.lastPurchaseDate,
+                        Comparator.nullsLast(Comparator.reverseOrder())))
+                .map(SupplierHistoryAccumulator::toMap)
+                .toList();
+    }
+
+    private static BigDecimal nullToZero(BigDecimal value) {
+        return value != null ? value : BigDecimal.ZERO;
+    }
+
+    private static final class SupplierHistoryAccumulator {
+        private final String materialTypeId;
+        private final String materialName;
+        private final String quantityUnit;
+        private final Set<String> orderIds = new LinkedHashSet<>();
+        private BigDecimal orderedQuantity = BigDecimal.ZERO;
+        private BigDecimal receivedQuantity = BigDecimal.ZERO;
+        private BigDecimal totalReceivedAmount = BigDecimal.ZERO;
+        private BigDecimal pricedQuantity = BigDecimal.ZERO;
+        private java.time.LocalDate lastPurchaseDate;
+        private BigDecimal lastUnitPrice;
+        private final String priceUnit;
+
+        private SupplierHistoryAccumulator(String materialTypeId, String materialName,
+                String quantityUnit, String priceUnit) {
+            this.materialTypeId = materialTypeId;
+            this.materialName = materialName;
+            this.quantityUnit = quantityUnit;
+            this.priceUnit = priceUnit;
+        }
+
+        private Map<String, Object> toMap() {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("materialTypeId", materialTypeId);
+            row.put("materialName", materialName);
+            row.put("orderCount", orderIds.size());
+            row.put("orderedQuantity", orderedQuantity);
+            row.put("actuallyReceivedQuantity", receivedQuantity);
+            row.put("quantityUnit", quantityUnit);
+            row.put("totalReceivedAmount", totalReceivedAmount);
+            row.put("averageUnitPrice", pricedQuantity.signum() > 0
+                    ? totalReceivedAmount.divide(pricedQuantity, 4, java.math.RoundingMode.HALF_UP) : null);
+            row.put("priceUnit", priceUnit);
+            row.put("lastUnitPrice", lastUnitPrice);
+            row.put("lastPurchaseDate", lastPurchaseDate);
+            return row;
+        }
     }
     @Override
     @Transactional(readOnly = true)

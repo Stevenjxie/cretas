@@ -56,6 +56,10 @@ public class PurchaseReceiveItem extends BaseEntity {
     @Column(name = "unit", nullable = false, length = 20)
     private String unit;
 
+    /** Canonical denominator of unitPrice. Receipt prices are normalized to {@link #unit}. */
+    @Column(name = "price_unit", nullable = false, length = 20)
+    private String priceUnit;
+
     @PriceSensitive
     @Column(name = "unit_price", precision = 15, scale = 4)
     private BigDecimal unitPrice;

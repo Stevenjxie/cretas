@@ -133,6 +133,8 @@ public class ProcurementSuggestionService {
             item.setMaterialName(materialName);
             item.setQuantity(sf.getShortfallQuantity());
             item.setUnit(unit);
+            item.setPriceUnit(unit);
+            item.setQuantityToPriceFactor(BigDecimal.ONE);
             item.setUnitPrice(BigDecimal.ZERO); // 采购员填写实际单价
             item.setTaxRate(BigDecimal.ZERO);
             item.setReceivedQuantity(BigDecimal.ZERO);
