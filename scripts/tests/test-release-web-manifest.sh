@@ -56,11 +56,27 @@ expect_invalid() {
     fi
 }
 
+rewrite_archive_without() {
+    local manifest=$1
+    local relative_path=$2
+    local archive="$(dirname "$manifest")/$WEB_RELEASE_ARCHIVE_NAME"
+    local unpack="$TMP_ROOT/rewrite-$RANDOM-$RANDOM"
+    local new_hash
+
+    mkdir -p "$unpack"
+    tar xzf "$archive" -C "$unpack"
+    rm -rf "$unpack/$relative_path"
+    tar czf "$archive" -C "$unpack" .
+    new_hash=$(web_release_sha256_file "$archive")
+    sed -i "s/^archive_sha256=.*/archive_sha256=$new_hash/" "$manifest"
+    rm -rf "$unpack"
+}
+
 # Valid same-commit reuse.
 IFS='|' read -r repo manifest dist < <(make_repo valid)
 write_candidate "$repo" "$manifest" "$dist"
 expect_valid "$manifest" "$repo" "valid manifest"
-[[ "$WEB_RELEASE_DIST_DIR" = "$(cd "$(dirname "$manifest")/dist" && pwd)" ]] || fail "validated dist path not exported"
+[[ "$WEB_RELEASE_ARCHIVE_PATH" = "$(cd "$(dirname "$manifest")" && pwd)/$WEB_RELEASE_ARCHIVE_NAME" ]] || fail "validated archive path not exported"
 
 # Squash/merge-compatible reuse: commit changes, but web-admin tree is identical.
 IFS='|' read -r repo manifest dist < <(make_repo squash)
@@ -80,11 +96,11 @@ git -C "$repo" commit -qm "change web tree"
 git -C "$repo" update-ref refs/remotes/origin/main HEAD
 expect_invalid "$manifest" "$repo" "web tree mismatch"
 
-# Any cached asset mutation must fail all-dist integrity validation.
+# Any cached archive mutation must fail immutable archive validation.
 IFS='|' read -r repo manifest dist < <(make_repo hash-mismatch)
 write_candidate "$repo" "$manifest" "$dist"
-printf 'tampered\n' >> "$(dirname "$manifest")/dist/assets/index-test.js"
-expect_invalid "$manifest" "$repo" "asset hash mismatch"
+printf 'tampered\n' >> "$(dirname "$manifest")/$WEB_RELEASE_ARCHIVE_NAME"
+expect_invalid "$manifest" "$repo" "archive hash mismatch"
 
 # Dirty exact-main worktrees are never trusted.
 IFS='|' read -r repo manifest dist < <(make_repo dirty)
@@ -96,21 +112,26 @@ expect_invalid "$manifest" "$repo" "dirty worktree"
 IFS='|' read -r repo manifest dist < <(make_repo missing-manifest)
 expect_invalid "$manifest" "$repo" "missing manifest"
 
-# Missing/corrupt index and missing assets are independently rejected.
+# Structurally invalid archives are rejected even when their archive SHA field
+# is refreshed to match the changed bytes.
 IFS='|' read -r repo manifest dist < <(make_repo missing-index)
 write_candidate "$repo" "$manifest" "$dist"
-rm -f "$(dirname "$manifest")/dist/index.html"
+rewrite_archive_without "$manifest" "index.html"
 expect_invalid "$manifest" "$repo" "missing index"
 
 IFS='|' read -r repo manifest dist < <(make_repo missing-assets)
 write_candidate "$repo" "$manifest" "$dist"
-rm -rf "$(dirname "$manifest")/dist/assets"
+rewrite_archive_without "$manifest" "assets"
 expect_invalid "$manifest" "$repo" "missing assets"
 
 # An index that references a missing chunk fails even if another asset remains.
 IFS='|' read -r repo manifest dist < <(make_repo broken-reference)
 write_candidate "$repo" "$manifest" "$dist"
-rm -f "$(dirname "$manifest")/dist/assets/index-test.js"
+rewrite_archive_without "$manifest" "assets/index-test.js"
 expect_invalid "$manifest" "$repo" "missing referenced asset"
 
-echo "PASS: Web manifest validates provenance, same-tree squash reuse, hashes, clean state, and dist integrity"
+if grep -q 'web_release_hash_tree' "$MANIFEST_HELPER"; then
+    fail "slow per-file hash tree helper was reintroduced"
+fi
+
+echo "PASS: Web archive manifest validates provenance, same-tree squash reuse, one-file hash, clean state, and archive integrity"

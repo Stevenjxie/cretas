@@ -124,6 +124,7 @@ GATEWAY="root@139.196.165.140"
 REMOTE_BACKUP_DIR="/www/wwwroot/web-admin-backups"
 LOCAL_BUILD_DIR="web-admin/dist"
 TMP_TAR="/tmp/web-admin-dist.$$.tar.gz"
+TMP_INDEX="/tmp/web-admin-index.$$.html"
 BACKUP_KEEP=3
 
 # ==================== 加载共享函数库 ====================
@@ -200,18 +201,19 @@ log() {
     echo "[$(date '+%H:%M:%S')] $*"
 }
 
-# 可信 Web dist 优先：只有 clean exact origin/main、构建提交可解析、前后
-# web-admin Git tree 一致且 index/assets/dist 哈希与引用完整性全部通过时才复用。
+# 可信 Web archive 优先：只有 clean exact origin/main、构建提交可解析、
+# web-admin Git tree 一致，且不可变 tar.gz SHA/index/引用完整性全部通过时才复用。
 # 任一失败都回退既有依赖恢复 + 单次 npm build，禁止按 mtime/目录存在复用。
 WEB_MANIFEST_PATH=$(web_release_default_manifest)
 WEB_DIST_REUSED=0
+WEB_ARCHIVE_PATH=""
 if web_release_validate "$WEB_MANIFEST_PATH" "$PROJECT_ROOT"; then
     WEB_DIST_REUSED=1
-    LOCAL_BUILD_DIR="$WEB_RELEASE_DIST_DIR"
+    WEB_ARCHIVE_PATH="$WEB_RELEASE_ARCHIVE_PATH"
     log "✓ Trusted Web dist manifest hit; npm ci/build skipped"
     log "   Build commit: $WEB_RELEASE_BUILD_COMMIT"
     log "   web-admin tree: $WEB_RELEASE_WEB_TREE"
-    log "   dist SHA-256: $WEB_RELEASE_DIST_SHA256"
+    log "   archive SHA-256: $WEB_RELEASE_ARCHIVE_SHA256"
 else
     LOCAL_BUILD_DIR="$PROJECT_ROOT/web-admin/dist"
     log "ℹ️ Trusted Web dist unavailable or invalid; falling back to one local build"
@@ -256,6 +258,7 @@ mkdir -p "\$BACKUP_DIR"
 rm -rf "\$STAGING"
 mkdir -p "\$STAGING"
 tar xzf "$REMOTE_TAR" -C "\$STAGING"
+printf '%s\n' "$WEB_RELEASE_ARCHIVE_SHA256" > "\$STAGING/.cretas-release-sha256"
 
 # 记录旧/新 assets 数量 (用于对比)
 OLD_ASSET_COUNT=0
@@ -328,6 +331,7 @@ if [ "$WEB_DIST_REUSED" = "0" ]; then
     fi
 
     if web_release_write "$PROJECT_ROOT" "$LOCAL_BUILD_DIR" "$WEB_MANIFEST_PATH" "npm run build"; then
+        WEB_ARCHIVE_PATH="$WEB_RELEASE_ARCHIVE_PATH"
         log "✓ Fallback build passed integrity checks; trusted Web manifest updated"
     else
         log "❌ 构建成功但可信 Web manifest 写入失败 — 拒绝部署无来源制品"
@@ -337,26 +341,53 @@ else
     log "📦 [1/4] 复用可信 Web dist（未执行 npm ci/build）"
 fi
 
-# 提取本地 dist 的 entry chunk hash, 用于部署后内容验证
-LOCAL_ENTRY_HASH=$(grep -oP 'assets/index-[A-Za-z0-9_-]+\.js' "$LOCAL_BUILD_DIR/index.html" | head -1)
+# 从不可变 archive 提取 index；后续上传的也是这一个已验证 archive。
+web_release_extract_index "$WEB_ARCHIVE_PATH" "$TMP_INDEX" || {
+    log "❌ 无法从可信 Web archive 提取 index.html"
+    exit 1
+}
+LOCAL_ENTRY_HASH=$(grep -oP 'assets/index-[A-Za-z0-9_-]+\.js' "$TMP_INDEX" | head -1)
 if [ -z "$LOCAL_ENTRY_HASH" ]; then
     log "⚠️  无法提取本地 dist 的 entry chunk, 跳过 post-deploy 内容验证"
 fi
 
-ASSET_COUNT=$(find "$LOCAL_BUILD_DIR/assets" -type f 2>/dev/null | wc -l | tr -d ' ')
-DIST_SIZE=$(du -sh "$LOCAL_BUILD_DIR" | cut -f1)
-log "   ✓ 制品就绪: $ASSET_COUNT 个 assets, $DIST_SIZE"
+ASSET_COUNT="$WEB_RELEASE_ASSET_COUNT"
+ARCHIVE_SIZE=$(du -sh "$WEB_ARCHIVE_PATH" | cut -f1)
+log "   ✓ 制品就绪: $ASSET_COUNT 个 assets, archive $ARCHIVE_SIZE"
 
 # ==================== 2. 打包 ====================
-log "📦 [2/4] 打包 tarball..."
-tar czf "$TMP_TAR" -C "$LOCAL_BUILD_DIR" .
+log "📦 [2/4] 复用已验证 tarball..."
+cp "$WEB_ARCHIVE_PATH" "$TMP_TAR"
 TAR_SIZE=$(du -sh "$TMP_TAR" | cut -f1)
 log "   ✓ Tarball: $TAR_SIZE"
 
 if [ "$DRY_RUN" = "1" ]; then
     log "🧪 dry-run: 跳过上传和部署"
     log "   本地 tarball 保留: $TMP_TAR"
+    rm -f "$TMP_INDEX"
     exit 0
+fi
+
+# 远端已运行同一不可变 archive 时，仍校验远端 index 和 HTTP，
+# 但跳过上传、解压和原子交换。--env all 保留两阶段显式部署。
+if [ "$ENV" != "all" ]; then
+    REMOTE_RELEASE_SHA=$(ssh "$GATEWAY" "cat '$REMOTE_PATH/.cretas-release-sha256' 2>/dev/null || true" | tr -d '\r\n')
+    if [ "$REMOTE_RELEASE_SHA" = "$WEB_RELEASE_ARCHIVE_SHA256" ]; then
+        REMOTE_INDEX_SHA=$(ssh "$GATEWAY" "sha256sum '$REMOTE_PATH/index.html' 2>/dev/null | cut -d' ' -f1" | tr -d '\r\n')
+        if [ "$ENV" = "prod" ]; then
+            NOOP_VERIFY_URL="http://139.196.165.140:8086/"
+        else
+            NOOP_VERIFY_URL="http://139.196.165.140:8097/"
+        fi
+        NOOP_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$NOOP_VERIFY_URL" || echo "000")
+        if [ "$REMOTE_INDEX_SHA" = "$WEB_RELEASE_INDEX_SHA256" ] && [ "$NOOP_HTTP_CODE" = "200" ]; then
+            rm -f "$TMP_TAR" "$TMP_INDEX"
+            log "✅ 无需重新部署：远端 archive/index 指纹一致且 HTTP 200"
+            log "   archive SHA-256: $WEB_RELEASE_ARCHIVE_SHA256"
+            exit 0
+        fi
+        log "⚠️  远端 archive 指纹相同但 index/HTTP 验证失败，继续原子重部署"
+    fi
 fi
 
 # ==================== 3. 上传 ====================
@@ -387,7 +418,7 @@ log "   ✓ 上传完成 (verified ${LOCAL_SIZE}B match)"
 log "🚀 [4/4] 原子交换 + 清理旧 backups..."
 atomic_swap_webadmin "$REMOTE_PATH"
 
-rm -f "$TMP_TAR"
+rm -f "$TMP_TAR" "$TMP_INDEX"
 
 # ==================== 5. 验证 ====================
 log "🔍 验证..."
@@ -407,9 +438,9 @@ if [ "$ENV" = "all" ]; then
     echo "    目标: /www/wwwroot/web-admin (139:8086 / admin.cretaceousfuture.com)"
     echo "    影响: 所有 prod 用户立刻看到新代码"
     echo ""
-    # 重新打包 + 上传 (test 那次已 rm'd $REMOTE_TAR via heredoc cleanup)
-    log "📦 [prod 1/3] 重新打包..."
-    tar czf "$TMP_TAR" -C "$LOCAL_BUILD_DIR" .
+    # 复用同一已验证 archive + 上传 (test 那次已 rm'd 远端 tar)
+    log "📦 [prod 1/3] 复用已验证 tarball..."
+    cp "$WEB_ARCHIVE_PATH" "$TMP_TAR"
     cd "$PROJECT_ROOT"
     log "   ✓ Tarball: $(du -h "$TMP_TAR" | awk '{print $1}')"
 

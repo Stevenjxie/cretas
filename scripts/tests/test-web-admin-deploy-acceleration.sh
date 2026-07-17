@@ -42,6 +42,25 @@ fi
 exit 99
 MOCK_NPM
     chmod +x "$fixture/mock-bin/npm"
+    cat > "$fixture/mock-bin/ssh" <<'MOCK_SSH'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+    *'.cretas-release-sha256'*) printf '%s\n' "$MOCK_REMOTE_ARCHIVE_SHA" ;;
+    *'sha256sum'*'index.html'*) printf '%s\n' "$MOCK_REMOTE_INDEX_SHA" ;;
+    *) exit 91 ;;
+esac
+MOCK_SSH
+    cat > "$fixture/mock-bin/curl" <<'MOCK_CURL'
+#!/usr/bin/env bash
+printf '200'
+MOCK_CURL
+    cat > "$fixture/mock-bin/scp" <<'MOCK_SCP'
+#!/usr/bin/env bash
+printf 'unexpected scp\n' >> "$MOCK_SCP_LOG"
+exit 92
+MOCK_SCP
+    chmod +x "$fixture/mock-bin/ssh" "$fixture/mock-bin/curl" "$fixture/mock-bin/scp"
     printf 'web-admin/dist\nweb-admin/node_modules\ncache\n*.log\n' > "$fixture/.gitignore"
     git -C "$fixture" init -q -b main
     git -C "$fixture" config user.email fixture@example.com
@@ -112,6 +131,23 @@ run_dry_build "$MISS" > "$MISS/reuse-output.log"
 [[ ! -s "$MISS/npm.log" ]] || fail "trusted Web dist reuse unexpectedly invoked npm"
 grep -Fq "Trusted Web dist manifest hit; npm ci/build skipped" "$MISS/reuse-output.log" || fail "missing trusted dist reuse log"
 grep -Fq "复用可信 Web dist" "$MISS/reuse-output.log" || fail "reuse path did not reach packaging"
+
+# The remote deployment marker is the immutable archive SHA. When both it and
+# the deployed index match and HTTP is healthy, deployment must no-op before scp.
+manifest="$MISS/cache/current/release-web.manifest"
+archive_sha=$(awk -F= '$1 == "archive_sha256" { print $2 }' "$manifest")
+index_sha=$(awk -F= '$1 == "index_sha256" { print $2 }' "$manifest")
+: > "$MISS/scp.log"
+(
+    cd "$MISS"
+    PATH="$MISS/mock-bin:$PATH" MOCK_NPM_LOG="$MISS/npm.log" MOCK_SCP_LOG="$MISS/scp.log" \
+        MOCK_REMOTE_ARCHIVE_SHA="$archive_sha" MOCK_REMOTE_INDEX_SHA="$index_sha" \
+        CRETAS_WEB_CACHE_DIR="$MISS/cache" \
+        bash scripts/deploy/deploy-web-admin.sh --env prod --confirm-prod YES-PROD
+) > "$MISS/noop-output.log"
+[[ ! -s "$MISS/scp.log" ]] || fail "same remote archive unexpectedly uploaded"
+grep -Fq "无需重新部署：远端 archive/index 指纹一致且 HTTP 200" "$MISS/noop-output.log" \
+    || fail "remote same-release no-op receipt missing"
 
 # Cache hit: matching manifest plus executable tool skips npm ci and builds once.
 HIT="$TMP_ROOT/hit"

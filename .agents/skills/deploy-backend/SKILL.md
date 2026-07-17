@@ -114,11 +114,15 @@ Build the reviewed Web release once and record its trusted dist manifest:
 ```
 
 After merge/direct publication, deploy only from clean exact `origin/main`.
-The deploy script reuses that dist when the build commit resolves, the build
-and current `web-admin` Git trees match (including squash merges), and the
-package-lock, index, assets, full-dist hashes, and referenced chunks all pass.
-Any miss or validation failure performs exactly one normal local build and
-refreshes the manifest; it never trusts mtime, filename, or a present `dist/`.
+The deploy script reuses one immutable `dist.tar.gz` when the build commit
+resolves, the build and current `web-admin` Git trees match (including squash
+merges), and the package-lock, index, archive SHA-256, tar integrity, and
+referenced chunks all pass. The archive SHA covers every release byte; do not
+spawn one hash process per dist file. Any miss or validation failure performs
+exactly one normal local build and refreshes the manifest; it never trusts
+mtime, filename, or a present `dist/`. If the remote archive and index
+fingerprints already match and HTTP is healthy, return a verified no-op before
+upload; otherwise retain the atomic swap and stale-chunk behavior.
 
 Use the atomic project script, not manual `rsync --delete`:
 
