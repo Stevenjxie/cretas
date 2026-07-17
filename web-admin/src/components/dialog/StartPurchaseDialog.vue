@@ -15,6 +15,12 @@
 import { ref, watch, computed } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { get, post } from '@/api/request';
+import {
+  formatPriceUnit,
+  pricingAmountPreview,
+  purchaseOrderPricingPayload,
+  resolvePurchaseSuggestionUnits,
+} from '@/utils/unitPricing';
 
 // ── types ──────────────────────────────────────────────────────────────────
 
@@ -25,10 +31,15 @@ interface SuggestionItem {
   sourceProductName: string;
   requiredQuantity: number;
   unit: string;
+  quantityUnit?: string;
   currentStock: number;
   netRequired: number;
   stockSufficient: boolean;
   referenceUnitPrice: number | null;
+  priceUnit?: string | null;
+  referencePriceUnit?: string | null;
+  lineAmount?: number | null;
+  convertedPricingQuantity?: number | null;
 }
 
 interface PurchaseSuggestionResponse {
@@ -46,7 +57,11 @@ interface EditableItem {
   materialCategory: string;
   quantity: number;
   unit: string;
+  quantityUnit: string;
   unitPrice: number | null;
+  priceUnit: string;
+  lineAmount: number | null;
+  convertedPricingQuantity: number | null;
   remark: string;
   _requiredQuantity: number;
   _currentStock: number;
@@ -80,6 +95,7 @@ const supplierId = ref('');
 const factoryToday = () =>
   new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
 const orderDateStr = ref(factoryToday());
+const expectedDeliveryDate = ref('');
 const remark = ref('');
 
 // ── computed ───────────────────────────────────────────────────────────────
@@ -102,6 +118,10 @@ const categoryLabel = (cat: string) => {
   return map[cat] ?? cat;
 };
 
+function amountPreview(item: EditableItem) {
+  return pricingAmountPreview(item);
+}
+
 // ── load suggestion ────────────────────────────────────────────────────────
 
 async function loadSuggestion() {
@@ -116,19 +136,26 @@ async function loadSuggestion() {
     if (res.success && res.data) {
       suggestion.value = res.data;
       // Pre-fill editable rows from suggestion, defaulting quantity to netRequired
-      editableItems.value = res.data.items.map((it) => ({
+      editableItems.value = res.data.items.map((it) => {
+        const units = resolvePurchaseSuggestionUnits(it);
+        return {
         materialTypeId: it.materialTypeId,
         materialName: it.materialName,
         materialCategory: it.materialCategory,
         quantity: it.netRequired > 0 ? it.netRequired : it.requiredQuantity,
-        unit: it.unit,
+        unit: units.quantityUnit,
+        quantityUnit: units.quantityUnit,
         unitPrice: it.referenceUnitPrice ?? null,
+        priceUnit: units.priceUnit,
+        lineAmount: it.lineAmount ?? null,
+        convertedPricingQuantity: it.convertedPricingQuantity ?? null,
         remark: '',
         _requiredQuantity: it.requiredQuantity,
         _currentStock: it.currentStock,
         _netRequired: it.netRequired,
         _stockSufficient: it.stockSufficient,
-      }));
+        };
+      });
     }
   } finally {
     loading.value = false;
@@ -141,6 +168,7 @@ watch(
     if (open) {
       supplierId.value = '';
       orderDateStr.value = factoryToday();
+      expectedDeliveryDate.value = '';
       remark.value = '';
       loadSuggestion();
     }
@@ -166,14 +194,17 @@ async function handleConfirm() {
       supplierId: supplierId.value || null,
       purchaseType: 'DIRECT',
       orderDate: orderDateStr.value,
+      expectedDeliveryDate: expectedDeliveryDate.value || null,
       salesOrderId: props.salesOrderId,
       remark: remark.value || `基于销售订单 ${props.salesOrderNumber} 自动生成`,
-      items: editableItems.value.map((it) => ({
+      items: editableItems.value.map((it) => purchaseOrderPricingPayload({
         materialTypeId: it.materialTypeId,
         materialName: it.materialName,
         quantity: it.quantity,
         unit: it.unit,
+        quantityUnit: it.quantityUnit,
         unitPrice: it.unitPrice ?? null,
+        priceUnit: it.priceUnit,
         remark: it.remark || '',
       })),
     };
@@ -287,8 +318,9 @@ function handleClose() {
             />
           </template>
         </el-table-column>
-        <el-table-column label="参考单价" width="120">
+        <el-table-column label="参考单价" width="150">
           <template #default="{ row }">
+            <div class="sp-price-label">{{ formatPriceUnit(row.priceUnit) }}</div>
             <el-input-number
               v-model="row.unitPrice"
               :min="0"
@@ -298,6 +330,12 @@ function handleClose() {
               controls-position="right"
               :placeholder="row.unitPrice == null ? '未知' : ''"
             />
+          </template>
+        </el-table-column>
+        <el-table-column label="金额预览" width="150" align="right">
+          <template #default="{ row }">
+            <span v-if="amountPreview(row).amount != null">{{ amountPreview(row).amount?.toFixed(2) }} 元</span>
+            <span v-else class="sp-pending-amount">{{ amountPreview(row).message }}</span>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="70" align="center">
@@ -316,6 +354,9 @@ function handleClose() {
       <div class="sp-meta-row" style="margin-top: 16px; display: flex; gap: 16px; align-items: flex-start">
         <el-form-item label="下单日期" style="flex: 1">
           <el-input v-model="orderDateStr" type="date" size="small" />
+        </el-form-item>
+        <el-form-item label="期望交货" style="flex: 1">
+          <el-input v-model="expectedDeliveryDate" type="date" size="small" />
         </el-form-item>
         <el-form-item label="备注" style="flex: 2">
           <el-input
@@ -375,6 +416,15 @@ function handleClose() {
 .sp-net-needed {
   color: #f56c6c;
   font-weight: 600;
+}
+.sp-price-label {
+  margin-bottom: 4px;
+  color: #909399;
+  font-size: 12px;
+}
+.sp-pending-amount {
+  color: #909399;
+  font-size: 12px;
 }
 :deep(.sp-row-needed) td {
   background-color: #fff8f0 !important;

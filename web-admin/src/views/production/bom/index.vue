@@ -28,6 +28,12 @@ import type { TableRow } from '@/types/api';
 // 客户张权反馈 (2026-07-02): "辅料 添加剂全混在一起了" — 「添加原辅料」对话框的「关联原料」
 // 下拉需按上方「物料类别」筛选, 归类逻辑复用 procurement/receives/list.vue 同款共享工具。
 import { bigCategoryOf, type BigCategory } from '@/utils/materialCategory';
+import {
+  canonicalUnitCode,
+  displayUnit,
+  formatPriceUnit,
+  pricingAmountPreview,
+} from '@/utils/unitPricing';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -299,7 +305,11 @@ interface BomItemRow {
   standardQuantity?: number | null;
   yieldRate?: number | null;
   unit?: string;
+  quantityUnit?: string;
   unitPrice?: number;
+  priceUnit?: string;
+  lineAmount?: number;
+  convertedPricingQuantity?: number;
   taxRate?: number;
   sortOrder?: number;
   notes?: string;
@@ -339,7 +349,6 @@ const bomItems = ref<BomItemRow[]>([]);
 const bomDialogVisible = ref(false);
 const bomDialogLoading = ref(false);
 const isBomEdit = ref(false);
-// D3 (2026-05-10 客户会议): BOM 配方层默认用 g, 仓库 / 调拨层用 kg, 后台 1:1000 自动换算
 const bomForm = ref({
   id: null as number | null,
   productTypeId: '',
@@ -349,8 +358,10 @@ const bomForm = ref({
   standardQuantity: null as number | null,
   // Phase A side-effect: 默认 null, 保存时 null = 出成率待评估 (后端用 standardQuantity 原样)
   yieldRate: null as number | null,
-  unit: 'g',
+  unit: '',
+  quantityUnit: '',
   unitPrice: 0,
+  priceUnit: '',
   taxRate: 13,
   sortOrder: 0,
   notes: '',
@@ -398,10 +409,9 @@ function selectedMaterialUnit(): string {
 }
 
 function recipeUnitForMaterial(material: Record<string, unknown>, category: string): string {
-  const materialUnit = normalizeUnitValue(material.unit);
+  const materialUnit = canonicalUnitCode(material.quantityUnit || material.unit);
   if (category === 'PACKAGING') return materialUnit || 'pcs';
-  if (isCountingUnit(materialUnit)) return materialUnit;
-  return 'g';
+  return materialUnit;
 }
 
 function bomUnitLabel(unit?: unknown): string {
@@ -416,6 +426,22 @@ function bomUnitLabel(unit?: unknown): string {
 
 const bomFormUnitLabel = computed(() => bomUnitLabel(bomForm.value.unit));
 const bomUnitIsCounting = computed(() => isCountingUnit(bomForm.value.unit));
+const bomUnitOptions = computed(() => {
+  const materialUnit = canonicalUnitCode(selectedMaterialUnit());
+  if (isWeightUnit(materialUnit)) return ['kg', 'g'];
+  if (isVolumeUnit(materialUnit)) return ['L', 'mL'];
+  return materialUnit ? [materialUnit] : [];
+});
+
+function bomLineAmountPreview(row: BomItemRow) {
+  const yieldRate = row.yieldRate != null ? Number(row.yieldRate) : 100;
+  const pricingQuantity = Number(row.standardQuantity || 0) / (yieldRate / 100 || 1);
+  return pricingAmountPreview({
+    ...row,
+    quantity: pricingQuantity,
+    quantityUnit: row.quantityUnit || row.unit,
+  });
+}
 
 function knownUnitFamily(unit: unknown): 'weight' | 'volume' | 'count' | null {
   if (isWeightUnit(unit)) return 'weight';
@@ -999,17 +1025,17 @@ async function loadMaterialTypes() {
   }
 }
 
-// 默认仍保持重量原料用 g；若原料主单位是计数单位 (只/个/件/pcs)，BOM 也用计数单位。
-// 这类原料不能被强行解释成克，否则结单时会出现 g ↔ 只 的不可换算预警。
-// Ref: D3 comment L68 + F006_OPERATIONS_GUIDE §0.4
 function onMaterialLink(materialTypeId: string) {
   if (!materialTypeId) return;
   const material = materialTypes.value.find((m: Record<string, unknown>) => m.id === materialTypeId);
   if (material) {
     if (material.name) bomForm.value.materialName = String(material.name);
-    bomForm.value.unit = recipeUnitForMaterial(material, bomForm.value.materialCategory);
+    const quantityUnit = recipeUnitForMaterial(material, bomForm.value.materialCategory);
+    bomForm.value.unit = quantityUnit;
+    bomForm.value.quantityUnit = quantityUnit;
     const autoPrice = Number(material.movingAvgPrice ?? material.unitPrice ?? 0);
     bomForm.value.unitPrice = Number.isFinite(autoPrice) ? autoPrice : 0;
+    bomForm.value.priceUnit = canonicalUnitCode(material.priceUnit || material.unit);
     const taxRate = String(material.taxRate || '');
     bomForm.value.taxRate = taxRate === 'TAX_9' ? 9 : taxRate === 'TAX_13' ? 13 : 0;
     if (bomForm.value.materialCategory === 'PACKAGING' && material.packQtyPerProduct != null) {
@@ -1037,7 +1063,6 @@ async function loadBomItems() {
 
 function handleAddBomItem() {
   isBomEdit.value = false;
-  // D3: 新建 BOM 默认单位为 g (克), 后台调拨时自动换算为 kg (千克)
   // Phase A side-effect: yieldRate 默认 null (出成率待评估), 不是 100
   bomForm.value = {
     id: null,
@@ -1047,8 +1072,10 @@ function handleAddBomItem() {
     materialCategory: activeCategoryTab.value,
     standardQuantity: null,
     yieldRate: null,
-    unit: 'g',
+    unit: '',
+    quantityUnit: '',
     unitPrice: 0,
+    priceUnit: '',
     taxRate: 13,
     sortOrder: bomItems.value.length,
     notes: '',
@@ -1073,8 +1100,10 @@ function handleEditBomItem(row: TableRow) {
     standardQuantity: row.standardQuantity || 0,
     // Phase A: 编辑时保留原值 (可为 null = 待评估)
     yieldRate: row.yieldRate != null ? (row.yieldRate as number) : null,
-    unit: row.unit || 'g',
+    unit: String(row.quantityUnit || row.unit || ''),
+    quantityUnit: String(row.quantityUnit || row.unit || ''),
     unitPrice: row.unitPrice || 0,
+    priceUnit: String(row.priceUnit || row.unit || ''),
     taxRate: row.taxRate ?? 13,
     sortOrder: row.sortOrder || 0,
     notes: row.notes || '',
@@ -1089,7 +1118,13 @@ function handleEditBomItem(row: TableRow) {
 }
 
 function buildLegacyBomItemPayload() {
-  const payload = { ...bomForm.value };
+  const quantityUnit = canonicalUnitCode(bomForm.value.quantityUnit || bomForm.value.unit);
+  const payload = {
+    ...bomForm.value,
+    unit: quantityUnit,
+    quantityUnit,
+    priceUnit: canonicalUnitCode(bomForm.value.priceUnit),
+  };
   delete payload.id;
   delete payload.isOptional;
   delete payload.substituteGroup;
@@ -2217,12 +2252,15 @@ async function handleAdjustConfirm() {
           <el-table-column prop="unit" label="计量单位" width="90" align="center" />
           <el-table-column v-if="canViewPrice" prop="unitPrice" label="自动单价" width="100" align="right">
             <template #default="{ row }">
-              {{ formatFriendlyNumber(row.unitPrice, 4) }} 元/{{ row.unit || '单位' }}
+              {{ formatFriendlyNumber(row.unitPrice, 4) }} {{ formatPriceUnit(row.priceUnit) }}
             </template>
           </el-table-column>
-          <el-table-column v-if="canViewPrice" label="小计" width="90" align="right">
+          <el-table-column v-if="canViewPrice" label="小计" width="150" align="right">
             <template #default="{ row }">
-              {{ formatFriendlyNumber(((row.standardQuantity || 0) / ((row.yieldRate != null ? row.yieldRate : 100) / 100)) * (row.unitPrice || 0), 4) }} 元
+              <span v-if="bomLineAmountPreview(row).amount != null">
+                {{ formatFriendlyNumber(bomLineAmountPreview(row).amount, 4) }} 元
+              </span>
+              <span v-else class="text-secondary">{{ bomLineAmountPreview(row).message }}</span>
             </template>
           </el-table-column>
           <el-table-column label="操作" width="100" fixed="right" align="center">
@@ -2444,7 +2482,16 @@ async function handleAdjustConfirm() {
           <div class="form-tip">每 1 个成品基本单位需要的包材数量。</div>
         </el-form-item>
         <el-form-item label="计量单位">
-          <el-input :model-value="bomForm.unit || '选择物料后自动带入'" disabled />
+          <el-select
+            v-model="bomForm.unit"
+            :disabled="bomUnitOptions.length <= 1"
+            placeholder="选择物料后自动带入"
+            style="width: 100%"
+            @change="bomForm.quantityUnit = canonicalUnitCode(bomForm.unit)"
+          >
+            <el-option v-for="unit in bomUnitOptions" :key="unit" :label="displayUnit(unit)" :value="unit" />
+          </el-select>
+          <div class="form-tip">默认使用物料主数据单位；同量纲单位可显式选择，提交时同时保存 quantityUnit。</div>
           <div v-if="bomUnitCompatibilityWarning()" class="form-tip form-tip--warning">
             <span>{{ bomUnitCompatibilityWarning() }}</span>
             <el-button link type="warning" size="small" @click="goMaterialUnitConfigFromBom">
@@ -2479,7 +2526,7 @@ async function handleAdjustConfirm() {
           type="info"
           :closable="false"
           show-icon
-          title="单价与税率从物料档案自动带入，BOM 中无需重复填写。原料历史出成率由正式报工自动统计。"
+          :title="`参考单价从物料档案带入（${formatPriceUnit(bomForm.priceUnit)}）；数量单位不同且无权威换算时不预估金额。`"
           style="margin-bottom: 12px;"
         />
         <el-form-item label="备注">

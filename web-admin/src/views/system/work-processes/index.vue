@@ -559,6 +559,13 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
     <!-- Form Dialog -->
     <el-dialog v-model="dialogVisible" :title="dialogTitle" width="620px" :close-on-click-modal="false">
       <el-form ref="formRef" :model="formData" :rules="formRules" label-width="130px">
+        <el-alert
+          title="工序主数据不维护投入/产出单位；实际单位由所选 SKU 与 Workflow 端口确定。"
+          type="info"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 16px"
+        />
         <el-form-item label="工序名称" prop="processName">
           <el-autocomplete
             v-model="formData.processName"

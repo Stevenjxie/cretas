@@ -4,7 +4,7 @@
       <div class="ai-card-header">
         <div>
           <div class="ai-title">AI 工序助手</div>
-          <div class="ai-subtitle">用自然语言新增或修改工序，支持名称、类别、单位、工时、出成率、产出单位、标准时薪。</div>
+          <div class="ai-subtitle">用自然语言新增或修改工序主数据；投入/产出单位由 SKU 与 Workflow 端口确定。</div>
         </div>
         <el-segmented v-model="mode" :options="modeOptions" size="small" />
       </div>
@@ -20,7 +20,7 @@
             </el-tag>
             <span class="diff-desc">{{ diff.description || diff.tool }}</span>
             <el-button
-              v-if="isWorkProcessDiff(diff)"
+              v-if="mode === 'plan' && isWorkProcessDiff(diff)"
               type="primary"
               link
               size="small"
@@ -39,7 +39,7 @@
         v-model="input"
         type="textarea"
         :rows="2"
-        placeholder="例如：新建焯水工序，加工类，单位kg，标准时薪25"
+        placeholder="例如：新建焯水工序，加工类，标准时薪25"
         @keydown.ctrl.enter.prevent="send"
       />
       <el-button type="primary" :loading="loading" @click="send">发送</el-button>
@@ -69,6 +69,7 @@ interface AIResponse {
   reply: string;
   diffs?: CanvasDiff[];
   applied: boolean;
+  receipt?: { id?: string; writeCount?: number; operationId?: string } | null;
 }
 
 interface ChatMessage {
@@ -114,15 +115,14 @@ function buildInstruction(userMessage: string): string {
 - id: 修改已有工序时必填
 - processName: 工序名称
 - processCategory: 工序类别
-- unit: 投入计量单位，未说明时用 kg
 - estimatedMinutes: 标准工时，单位分钟
 - standardYieldMin / standardYieldMax: 标准出成率上下限，用小数表达，例如 30% = 0.30
 - needsInput: 是否需要录投入量
-- outputUnit: 产出单位
 - standardHourlyRate: 标准时薪，元/小时
 - sortOrder: 排序
 
 若用户表达“新建/新增/加一道”，使用 action=create。若表达“修改/更新/把某工序改为”，使用 action=update，并尽量从上下文保留或要求用户提供 id。
+工序主数据不填写投入/产出单位；单位由 SKU 与 Workflow 端口绑定，禁止生成 unit/outputUnit 参数。
 返回 JSON 数组，每项格式:
 {"type":"FIELD_CHANGE","tool":"${WORK_PROCESS_TOOL}","params":{...},"description":"中文说明"}
 
@@ -149,8 +149,15 @@ async function send(): Promise<void> {
       content: data?.reply || 'AI 未返回内容',
       diffs: data?.diffs || [],
     });
-    if (data?.applied) {
-      ElMessage.success('AI 已执行工序变更');
+    if (data?.applied && mode.value === 'autopilot') {
+      if (data.receipt?.id || data.receipt?.operationId || Number(data.receipt?.writeCount) > 0) {
+        ElMessage.success('AI 自动执行成功，已收到写入回执');
+        emit('applied');
+      } else {
+        ElMessage.warning('后端声明已执行，但未返回可核验写入回执；请刷新确认结果');
+      }
+    } else if (data?.applied) {
+      ElMessage.warning(`${mode.value === 'plan' ? '计划' : '建议'}模式不应直接写入；已刷新列表供核对`);
       emit('applied');
     }
   } catch (e) {
@@ -165,7 +172,7 @@ async function send(): Promise<void> {
 }
 
 async function applyDiff(diff: CanvasDiff): Promise<void> {
-  if (!props.factoryId || !isWorkProcessDiff(diff)) return;
+  if (!props.factoryId || mode.value !== 'plan' || !isWorkProcessDiff(diff)) return;
 
   applying.value = true;
   try {

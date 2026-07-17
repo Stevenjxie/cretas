@@ -27,6 +27,8 @@ export interface ChatMessage {
   content: string;
 }
 
+const currentFactoryDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
+
 // ======================== Entity Configs ========================
 
 export const PRODUCTION_PLAN_CONFIG: AiEntryConfig = {
@@ -51,6 +53,7 @@ export const PRODUCTION_PLAN_CONFIG: AiEntryConfig = {
 必填字段：
 - productTypeName: 产品名称（由工厂决定，你不知道具体清单，需要用户提供）
 - plannedQuantity: 计划数量（数字）
+- quantityUnit: 计划数量单位（必须保留用户原始单位，如 kg、g、box、case）
 - plannedDate: 计划日期（YYYY-MM-DD 格式）
 
 可选字段：
@@ -67,18 +70,19 @@ export const PRODUCTION_PLAN_CONFIG: AiEntryConfig = {
 交互规则：
 1. 如果用户一次性提供了所有必填信息，直接返回 FILL_FORM
 2. 如果缺少必填字段，礼貌追问（每次只问1-2个问题）
-3. 日期支持自然语言（"明天"、"下周一"等），你需要转换为 YYYY-MM-DD
-4. 数量支持带单位（"500kg"→500）
+3. 工厂当前日期是 ${currentFactoryDate}；日期支持自然语言（"明天"、"下周一"等），必须以该日期换算为 YYYY-MM-DD，禁止使用提示词示例中的历史日期
+4. 数量与单位不可拆丢（"500kg"→ plannedQuantity=500 且 quantityUnit="kg"）
 
 当所有必填字段收集完毕后，返回如下格式（用 markdown 代码块包裹）：
 \`\`\`json
-{"action":"FILL_FORM","params":{"productTypeName":"<用户提供的产品名>","plannedQuantity":500,"plannedDate":"2026-03-10","sourceCustomerName":"<客户名>","processName":"分切","batchDate":"2026-03-10","notes":""}}
+{"action":"FILL_FORM","params":{"productTypeName":"<用户提供的产品名>","plannedQuantity":500,"quantityUnit":"kg","plannedDate":"<按工厂当前日期换算的YYYY-MM-DD>","sourceCustomerName":"<客户名>","processName":"分切","batchDate":"<YYYY-MM-DD>","notes":""}}
 \`\`\`
 
 在返回 JSON 之前，先用一句话总结收集到的信息。`,
   fields: [
     { key: 'productTypeName', label: '产品名称', required: true },
     { key: 'plannedQuantity', label: '计划数量', required: true },
+    { key: 'quantityUnit', label: '数量单位', required: true },
     { key: 'plannedDate', label: '计划日期', required: true },
     { key: 'sourceCustomerName', label: '客户名称' },
     { key: 'processName', label: '工序' },
@@ -108,7 +112,7 @@ export const PRODUCT_CONFIG: AiEntryConfig = {
 
 必填字段：
 - name: 产品名称
-- productCategory: 产品大类，必须是以下之一：FINISHED_PRODUCT(成品)、RAW_MATERIAL(原料)、PACKAGING(包辅材)、SEASONING(调味品)、CUSTOMER_MATERIAL(客户自带原料加工)、CONTRACT_MANUFACTURING(纯代工)
+- productCategory: 产品大类，必须是以下之一：FINISHED_PRODUCT(成品)、SEMI_FINISHED(半成品)、RAW_MATERIAL(原料)、PACKAGING(包辅材)、SEASONING(调味品)、CUSTOMER_MATERIAL(客户自带原料加工)、CONTRACT_MANUFACTURING(纯代工)
 - unit: 单位（如 kg、箱、袋、瓶）
 
 可选字段：
@@ -119,7 +123,8 @@ export const PRODUCT_CONFIG: AiEntryConfig = {
 交互规则：
 1. 如果用户一次性提供了所有必填信息，直接返回 FILL_FORM
 2. 如果缺少必填字段，礼貌追问
-3. 根据用户描述智能判断 productCategory（如"成品"→FINISHED_PRODUCT、"原料"→RAW_MATERIAL）
+3. 根据用户描述智能判断 productCategory（如"成品"→FINISHED_PRODUCT、"半成品"→SEMI_FINISHED、"原料"→RAW_MATERIAL）
+4. RAW_MATERIAL、PACKAGING、SEASONING 只能交由原料类型字典维护；本助手仍返回真实类别，由页面阻止误落到 SKU 列表
 
 当所有必填字段收集完毕后，返回如下格式：
 \`\`\`json

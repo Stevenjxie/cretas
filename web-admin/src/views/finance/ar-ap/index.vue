@@ -8,6 +8,7 @@ import { ElMessage } from 'element-plus';
 import { Refresh, WarningFilled } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
 import type { TableRow } from '@/types/api';
+import { enumLabel } from '@/utils/enumDisplay';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -187,7 +188,7 @@ function handleAgingTypeChange() { loadAging(); }
             <el-table-column prop="transactionType" label="类型" width="120" align="center">
               <template #default="{ row }">
                 <el-tag :type="(txTypeMap[row.transactionType]?.type) || 'info'" size="small">
-                  {{ txTypeMap[row.transactionType]?.text || row.transactionType }}
+                  {{ txTypeMap[row.transactionType]?.text || enumLabel(row.transactionType) }}
                 </el-tag>
               </template>
             </el-table-column>
@@ -206,13 +207,13 @@ function handleAgingTypeChange() { loadAging(); }
             <el-table-column v-if="transactions.some((r) => isAdjustmentRow(r))" label="审批状态" width="100" align="center">
               <template #default="{ row }">
                 <el-tag v-if="isAdjustmentRow(row)" :type="approvalStatusMap[row.approvalStatus]?.type || 'info'" size="small">
-                  {{ approvalStatusMap[row.approvalStatus]?.text || row.approvalStatus }}
+                  {{ approvalStatusMap[row.approvalStatus]?.text || enumLabel(row.approvalStatus) }}
                 </el-tag>
                 <span v-else>-</span>
               </template>
             </el-table-column>
             <el-table-column prop="paymentMethod" label="支付方式" width="110" align="center">
-              <template #default="{ row }">{{ row.paymentMethod ? paymentMethodMap[row.paymentMethod] || row.paymentMethod : '-' }}</template>
+              <template #default="{ row }">{{ row.paymentMethod ? paymentMethodMap[row.paymentMethod] || enumLabel(row.paymentMethod) : '-' }}</template>
             </el-table-column>
             <el-table-column prop="transactionDate" label="日期" width="120" />
             <el-table-column prop="dueDate" label="到期日" width="120" />
@@ -228,7 +229,7 @@ function handleAgingTypeChange() { loadAging(); }
             <el-table-column prop="transactionType" label="类型" width="120" align="center">
               <template #default="{ row }">
                 <el-tag :type="(txTypeMap[row.transactionType]?.type) || 'info'" size="small">
-                  {{ txTypeMap[row.transactionType]?.text || row.transactionType }}
+                  {{ txTypeMap[row.transactionType]?.text || enumLabel(row.transactionType) }}
                 </el-tag>
               </template>
             </el-table-column>
@@ -247,13 +248,13 @@ function handleAgingTypeChange() { loadAging(); }
             <el-table-column v-if="transactions.some((r) => isAdjustmentRow(r))" label="审批状态" width="100" align="center">
               <template #default="{ row }">
                 <el-tag v-if="isAdjustmentRow(row)" :type="approvalStatusMap[row.approvalStatus]?.type || 'info'" size="small">
-                  {{ approvalStatusMap[row.approvalStatus]?.text || row.approvalStatus }}
+                  {{ approvalStatusMap[row.approvalStatus]?.text || enumLabel(row.approvalStatus) }}
                 </el-tag>
                 <span v-else>-</span>
               </template>
             </el-table-column>
             <el-table-column prop="paymentMethod" label="支付方式" width="110" align="center">
-              <template #default="{ row }">{{ row.paymentMethod ? paymentMethodMap[row.paymentMethod] || row.paymentMethod : '-' }}</template>
+              <template #default="{ row }">{{ row.paymentMethod ? paymentMethodMap[row.paymentMethod] || enumLabel(row.paymentMethod) : '-' }}</template>
             </el-table-column>
             <el-table-column prop="transactionDate" label="日期" width="120" />
             <el-table-column prop="remark" label="备注" min-width="150" show-overflow-tooltip />

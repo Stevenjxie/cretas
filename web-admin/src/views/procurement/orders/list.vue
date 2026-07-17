@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { useBusinessMode } from '@/composables/useBusinessMode';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
-import request, { get, post } from '@/api/request';
+import request, { get, post, put } from '@/api/request';
 // request.patch is used by U-MARKER-1 below; default export already imported.
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Search, Refresh, ChatDotRound, Download, QuestionFilled } from '@element-plus/icons-vue';
@@ -40,8 +40,11 @@ import { computeRowActions } from '@/composables/useRowActions';
 import { useListSummary } from '@/composables/useListSummary';
 import { formatSummaryForAI } from '@/utils/aiSummaryContext';
 import type { ListSummaryRequest } from '@/types/listSummary';
+import { canonicalUnitCode, formatPriceUnit, mergeCanonicalUnitOptions, pricingAmountPreview } from '@/utils/unitPricing';
+import { enumLabel } from '@/utils/enumDisplay';
 
 const router = useRouter();
+const route = useRoute();
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const { label } = useBusinessMode();
@@ -261,8 +264,7 @@ function handleRowActionClick(actionId: string, row: TableRow) {
   switch (actionId) {
     case 'view-detail': goDetail(String(row.id)); break;
     case 'edit':
-      ElMessage.info(`请在采购单 ${row.orderNumber || row.id} 详情页编辑`);
-      router.push({ path: `/procurement/orders/${row.id}`, query: { action: 'edit' } });
+      router.push({ path: '/procurement/orders', query: { edit: String(row.id) } });
       break;
     case 'submit': handleAction(String(row.id), 'submit'); break;
     case 'approve': handleAction(String(row.id), 'approve'); break;
@@ -349,7 +351,11 @@ interface ProcurementOrderItem {
   materialTypeId: string;
   quantity: number;
   unit: string;
+  quantityUnit: string;
   unitPrice: number;
+  priceUnit: string;
+  lineAmount?: number | null;
+  convertedPricingQuantity?: number | null;
   taxRate?: number | string | null;
   specification?: string;
   boxQuantity?: number;
@@ -386,9 +392,25 @@ const form = ref({
   contractNumber: '',       // SP6 合同号（选填，对应纸质/框架合同）
   settlementType: '',       // SP6 结算方式
   invoiceReminderDays: null as number | null,  // SP6 开票提醒天数
-  items: [{ materialTypeId: '', quantity: 0, unit: 'kg', unitPrice: 0, taxRate: null }] as ProcurementOrderItem[],
+  items: [{ materialTypeId: '', quantity: 0, unit: 'kg', quantityUnit: 'kg', unitPrice: 0, priceUnit: 'kg', taxRate: null }] as ProcurementOrderItem[],
   customFields: {} as TableRow,
 });
+const editingOrderId = ref('');
+const editingVersion = ref<number | null>(null);
+const editingOrderDate = ref('');
+const isEditing = computed(() => Boolean(editingOrderId.value));
+
+function itemAmountPreview(item: ProcurementOrderItem) {
+  return pricingAmountPreview(item);
+}
+
+function getPriceUnitOptionsForItem(item: TableRow): { value: string; label: string }[] {
+  const units = mergeCanonicalUnitOptions(
+    getUnitOptionsForItem(item).map((option) => option.value),
+    item.priceUnit,
+  );
+  return units.map((unit) => ({ value: unit, label: formatPriceUnit(unit) }));
+}
 const suppliers = ref<TableRow[]>([]);
 const materials = ref<TableRow[]>([]);
 const salesOrders = ref<TableRow[]>([]);
@@ -444,7 +466,9 @@ function onItemMaterialChange(item: TableRow) {
   ensurePackagingLoaded(matId).then(() => {
     // 选原料后默认带入该原料的一级单位 (除非用户已经填了)
     const mat = materials.value.find((m) => m.id === matId);
-    if (mat && mat.unit && !item.unit) item.unit = String(mat.unit);
+    if (mat && mat.unit && !item.unit) item.unit = canonicalUnitCode(mat.unit);
+    item.quantityUnit = canonicalUnitCode(item.unit);
+    if (mat && !item.priceUnit) item.priceUnit = canonicalUnitCode(mat.priceUnit || mat.unit);
     if (mat && mat.taxRate != null && item.taxRate == null && !validateTaxRate(mat.taxRate)) {
       item.taxRate = Number(mat.taxRate);
     }
@@ -518,6 +542,8 @@ onMounted(() => {
   loadSuppliers();
   loadMaterials();
   loadSalesOrders();
+  const editId = String(route.query.edit || '');
+  if (editId) void openEditDialog(editId);
   window.addEventListener('beforeunload', handleBeforeUnload);
 });
 onBeforeUnmount(() => { window.removeEventListener('beforeunload', handleBeforeUnload); });
@@ -593,7 +619,7 @@ async function loadSalesOrders() {
 }
 
 function addItem() {
-  form.value.items.push({ materialTypeId: '', quantity: 0, unit: 'kg', unitPrice: 0, taxRate: null });
+  form.value.items.push({ materialTypeId: '', quantity: 0, unit: 'kg', quantityUnit: 'kg', unitPrice: 0, priceUnit: 'kg', taxRate: null });
 }
 
 function removeItem(index: number) {
@@ -614,6 +640,9 @@ async function handleCreate() {
     return ElMessage.warning(`第 ${invalidQtyIndex + 1} 行采购数量必须大于 0`);
   }
   if (form.value.items.some(i => !i.unit)) return ElMessage.warning('请填写所有明细的单位');
+  if (form.value.items.some(i => Number(i.unitPrice) > 0 && !canonicalUnitCode(i.priceUnit))) {
+    return ElMessage.warning('有采购单价的明细必须选择计价单位');
+  }
   const invalidTaxRateIndex = form.value.items.findIndex((i) => validateTaxRate(i.taxRate));
   if (invalidTaxRateIndex >= 0) {
     return ElMessage.warning(`第 ${invalidTaxRateIndex + 1} 行税率必须是 0-100 之间的数字`);
@@ -637,17 +666,24 @@ async function handleCreate() {
       ...formData,
       items: items.map((i) => ({
         ...i,
+        unit: canonicalUnitCode(i.quantityUnit || i.unit),
+        quantityUnit: canonicalUnitCode(i.quantityUnit || i.unit),
+        priceUnit: canonicalUnitCode(i.priceUnit),
         taxRate: normalizeTaxRateForPayload(i.taxRate),
       })),
       remark,
       salesOrderId,
-      orderDate: factoryToday(), // backend requires @NotNull orderDate in factory-local date
+      orderDate: isEditing.value ? editingOrderDate.value : factoryToday(),
+      ...(isEditing.value ? { version: editingVersion.value } : {}),
     };
-    const res = await post(`/${factoryId.value}/purchase/orders`, payload);
+    const res = isEditing.value
+      ? await put(`/${factoryId.value}/purchase/orders/${editingOrderId.value}`, payload)
+      : await post(`/${factoryId.value}/purchase/orders`, payload);
     if (res.success) {
-      ElMessage.success('创建成功');
+      ElMessage.success(isEditing.value ? '采购草稿已更新' : '创建成功');
       dialogVisible.value = false;
       resetForm();
+      await clearEditQuery();
       loadData();
     } else {
       ElMessage.error(res.message || '创建失败');
@@ -661,7 +697,10 @@ async function handleCreate() {
 }
 
 function resetForm() {
-  form.value = { supplierId: '', purchaseType: 'DIRECT', expectedDeliveryDate: '', remark: '', relatedSalesOrderId: '', contractNumber: '', settlementType: '', invoiceReminderDays: null, items: [{ materialTypeId: '', quantity: 0, unit: 'kg', unitPrice: 0, taxRate: null }], customFields: {} as TableRow };
+  editingOrderId.value = '';
+  editingVersion.value = null;
+  editingOrderDate.value = '';
+  form.value = { supplierId: '', purchaseType: 'DIRECT', expectedDeliveryDate: '', remark: '', relatedSalesOrderId: '', contractNumber: '', settlementType: '', invoiceReminderDays: null, items: [{ materialTypeId: '', quantity: 0, unit: 'kg', quantityUnit: 'kg', unitPrice: 0, priceUnit: 'kg', taxRate: null }], customFields: {} as TableRow };
 }
 
 // 张权 Apr 28 反馈: "基础数据已经新建了 但是采购订单 下拉没有选项"
@@ -671,6 +710,65 @@ function resetForm() {
 async function openCreateDialog() {
   resetForm();
   await Promise.all([loadSuppliers(), loadMaterials(), loadSalesOrders()]);
+  dialogVisible.value = true;
+}
+
+async function clearEditQuery() {
+  if (!route.query.edit) return;
+  const query = { ...route.query };
+  delete query.edit;
+  await router.replace({ path: route.path, query });
+}
+
+async function closeOrderEditor() {
+  dialogVisible.value = false;
+  resetForm();
+  await clearEditQuery();
+}
+
+async function openEditDialog(orderId: string) {
+  resetForm();
+  await Promise.all([loadSuppliers(), loadMaterials(), loadSalesOrders()]);
+  const response = await get<TableRow>(`/${factoryId.value}/purchase/orders/${orderId}`);
+  if (!response.success || !response.data) return;
+  const order = response.data;
+  if (String(order.status) !== 'DRAFT') {
+    ElMessage.warning('仅草稿采购单允许编辑');
+    await clearEditQuery();
+    return;
+  }
+  editingOrderId.value = orderId;
+  editingVersion.value = Number(order.version);
+  editingOrderDate.value = String(order.orderDate || factoryToday());
+  form.value = {
+    supplierId: String(order.supplierId || ''),
+    purchaseType: String(order.purchaseType || 'DIRECT'),
+    expectedDeliveryDate: String(order.expectedDeliveryDate || ''),
+    remark: String(order.remark || ''),
+    relatedSalesOrderId: String(order.salesOrderId || order.relatedSalesOrderId || ''),
+    contractNumber: String(order.contractNumber || ''),
+    settlementType: String(order.settlementType || ''),
+    invoiceReminderDays: order.invoiceReminderDays == null ? null : Number(order.invoiceReminderDays),
+    items: (Array.isArray(order.items) ? order.items : []).map((raw) => {
+      const item = raw as TableRow;
+      const quantityUnit = canonicalUnitCode(item.quantityUnit || item.unit);
+      return {
+        materialTypeId: String(item.materialTypeId || ''),
+        quantity: Number(item.quantity || 0),
+        unit: quantityUnit,
+        quantityUnit,
+        unitPrice: Number(item.unitPrice || 0),
+        priceUnit: canonicalUnitCode(item.priceUnit || item.unit),
+        lineAmount: item.lineAmount == null ? null : Number(item.lineAmount),
+        convertedPricingQuantity: item.convertedPricingQuantity == null ? null : Number(item.convertedPricingQuantity),
+        taxRate: item.taxRate == null ? null : Number(item.taxRate),
+        specification: String(item.specification || ''),
+        boxQuantity: item.boxQuantity == null ? undefined : Number(item.boxQuantity),
+      };
+    }),
+    customFields: (order.customFields as TableRow) || {},
+  };
+  if (!form.value.items.length) addItem();
   dialogVisible.value = true;
 }
 
@@ -796,8 +894,10 @@ function handleAiFill(params: TableRow) {
       return {
         materialTypeId: materialResolution.id,
         quantity: Number(item.quantity || 0),
-        unit: String(item.unit || 'kg'),
+        unit: canonicalUnitCode(item.quantityUnit || item.unit || 'kg'),
+        quantityUnit: canonicalUnitCode(item.quantityUnit || item.unit || 'kg'),
         unitPrice: Number(item.unitPrice || 0),
+        priceUnit: canonicalUnitCode(item.priceUnit || item.unit || 'kg'),
         taxRate: validateTaxRate(item.taxRate) ? null : normalizeTaxRateForPayload(item.taxRate),
       };
       });
@@ -897,7 +997,7 @@ function handleAiFill(params: TableRow) {
       />
       <TimelinePlaceholder v-else-if="viewMode === 'timeline'" />
       <CalendarPlaceholder v-else-if="viewMode === 'calendar'" />
-      <el-table v-else :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
+      <el-table v-else :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%" :scrollbar-always-on="true" class="wide-table">
         <!-- U-MARKER-1 row marker column (Sprint 4 Wave 2 Chat L) -->
         <el-table-column label="" width="36" align="center">
           <template #default="{ row }">
@@ -944,7 +1044,7 @@ function handleAiFill(params: TableRow) {
         <el-table-column prop="status" label="状态" width="110" align="center">
           <template #default="{ row }">
             <el-tag :type="(statusMap[row.status]?.type) || 'info'" size="small">
-              {{ statusMap[row.status]?.text || row.status }}
+              {{ statusMap[row.status]?.text || enumLabel(row.status) }}
             </el-tag>
           </template>
         </el-table-column>
@@ -1018,7 +1118,7 @@ function handleAiFill(params: TableRow) {
 
     <!-- May 7 2026 用户反馈: "新建采购订单需要把页面放大,要不然很多明细的话是很小的".
          改全屏 dialog (full-screen modal),明细行有充足空间. -->
-    <el-dialog v-model="dialogVisible" :title="`新建${label('purchaseOrder')}`" fullscreen destroy-on-close>
+    <el-dialog :model-value="dialogVisible" :title="`${isEditing ? '编辑草稿' : '新建'}${label('purchaseOrder')}`" fullscreen destroy-on-close @update:model-value="(open: boolean) => { if (!open) closeOrderEditor() }">
       <el-form :model="form" label-width="100px">
         <el-form-item :label="label('supplier')" required>
           <el-select v-model="form.supplierId" placeholder="请选择" filterable style="width: 100%">
@@ -1096,7 +1196,7 @@ function handleAiFill(params: TableRow) {
           <span style="width: 140px">规格</span>
           <span style="width: 140px"><span class="req-star">*</span>数量</span>
           <span style="width: 130px"><span class="req-star">*</span>单位</span>
-          <span style="width: 160px">未税采购单价（元/所选单位）</span>
+          <span style="width: 210px">未税采购单价 / 金额预览</span>
           <span style="width: 130px">税率</span>
           <span style="width: 140px">箱数</span>
           <span style="width: 70px">操作</span>
@@ -1123,7 +1223,7 @@ function handleAiFill(params: TableRow) {
             filterable
             allow-create
             default-first-option
-            @change="recalcBoxQuantity(item)"
+            @change="item.quantityUnit = canonicalUnitCode(item.unit); recalcBoxQuantity(item)"
           >
             <el-option
               v-for="opt in getUnitOptionsForItem(item)"
@@ -1132,7 +1232,21 @@ function handleAiFill(params: TableRow) {
               :value="opt.value"
             />
           </el-select>
-          <el-input-number v-model="item.unitPrice" :min="0" :precision="2" placeholder="未税采购单价" style="width: 160px" />
+          <div class="pricing-editor">
+            <div class="pricing-inputs">
+              <el-input-number v-model="item.unitPrice" :min="0" :precision="2" placeholder="未税采购单价" style="width: 120px" />
+              <el-select v-model="item.priceUnit" style="width: 84px" placeholder="计价单位">
+                <el-option
+                  v-for="option in getPriceUnitOptionsForItem(item)"
+                  :key="option.value"
+                  :label="option.label"
+                  :value="option.value"
+                />
+              </el-select>
+            </div>
+            <span v-if="itemAmountPreview(item).amount != null" class="pricing-preview">金额 {{ itemAmountPreview(item).amount?.toFixed(2) }} 元</span>
+            <span v-else class="pricing-preview pricing-preview--pending">{{ itemAmountPreview(item).message }}</span>
+          </div>
           <div style="width: 130px">
             <el-select
               v-model="item.taxRate"
@@ -1162,8 +1276,8 @@ function handleAiFill(params: TableRow) {
         <el-button style="width: 100%; margin-top: 8px" @click="addItem">+ 添加行</el-button>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleCreate">创建</el-button>
+        <el-button @click="closeOrderEditor">取消</el-button>
+        <el-button type="primary" :loading="submitting" @click="handleCreate">{{ isEditing ? '保存修改' : '创建' }}</el-button>
       </template>
     </el-dialog>
 
@@ -1350,6 +1464,7 @@ function handleAiFill(params: TableRow) {
 </template>
 
 <style lang="scss" scoped>
+.wide-table :deep(.el-scrollbar__bar.is-horizontal) { opacity: 1; }
 .page-wrapper { height: 100%; width: 100%; display: flex; flex-direction: column; }
 .page-card { flex: 1; display: flex; flex-direction: column;
   :deep(.el-card__header) { padding: 16px 20px; border-bottom: 1px solid #ebeef5; }
@@ -1364,6 +1479,10 @@ function handleAiFill(params: TableRow) {
 .search-bar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
 .pagination-wrapper { display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #ebeef5; margin-top: 16px; }
 .item-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.pricing-editor { width: 210px; display: flex; flex-direction: column; gap: 3px; }
+.pricing-inputs { display: flex; gap: 6px; }
+.pricing-preview { color: #606266; font-size: 12px; line-height: 18px; }
+.pricing-preview--pending { color: #909399; }
 .item-header { font-size: 13px; font-weight: 600; color: #606266; margin-bottom: 4px;
   span { text-align: center; display: inline-block; }
 }

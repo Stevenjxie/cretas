@@ -94,7 +94,7 @@
         </el-table-column>
         <el-table-column label="付款方式" prop="paymentMethod" width="100">
           <template #default="{ row }">
-            {{ row.paymentMethod || '—' }}
+            {{ row.paymentMethod ? enumLabel(row.paymentMethod) : '—' }}
           </template>
         </el-table-column>
         <el-table-column label="状态" prop="status" width="100">
@@ -296,7 +296,7 @@
             {{ currentRow.amount !== null && currentRow.amount !== undefined ? `¥${formatAmount(currentRow.amount)}` : '—' }}
           </el-descriptions-item>
           <el-descriptions-item label="结算方式">{{ settlementTypeLabel(currentRow.settlementType) }}</el-descriptions-item>
-          <el-descriptions-item label="付款方式" :span="2">{{ currentRow.paymentMethod || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="付款方式" :span="2">{{ currentRow.paymentMethod ? enumLabel(currentRow.paymentMethod) : '—' }}</el-descriptions-item>
           <el-descriptions-item label="申请备注" :span="2">{{ currentRow.remark || '—' }}</el-descriptions-item>
         </el-descriptions>
       </div>
@@ -415,7 +415,7 @@
           <el-descriptions-item label="申请金额">
             {{ currentRow.amount !== null && currentRow.amount !== undefined ? `¥${formatAmount(currentRow.amount)}` : '—' }}
           </el-descriptions-item>
-          <el-descriptions-item label="付款方式">{{ currentRow.paymentMethod || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="付款方式">{{ currentRow.paymentMethod ? enumLabel(currentRow.paymentMethod) : '—' }}</el-descriptions-item>
           <el-descriptions-item label="状态">
             <el-tag :type="statusTag(currentRow.status)" size="small">
               {{ statusLabel(currentRow.status) }}
@@ -443,6 +443,7 @@ import type { FormInstance, FormRules } from 'element-plus'
 import { get, post, put } from '@/api/request'
 import { useAuthStore } from '@/store/modules/auth'
 import { usePermissionStore } from '@/store/modules/permission'
+import { enumLabel } from '@/utils/enumDisplay'
 
 // ─── 类型定义 ───────────────────────────────────────────────
 type SettlementType = 'PREPAID' | 'CREDIT_FIRST' | 'NO_INVOICE' | 'MONTHLY' | 'CREDIT_PERIOD' | 'IMMEDIATE'
@@ -567,7 +568,7 @@ function settlementTypeLabel(t: string): string {
     CREDIT_PERIOD: '信用期',
     IMMEDIATE: '即时付款'
   }
-  return map[t] ?? t
+  return map[t] ?? enumLabel(t)
 }
 
 function statusLabel(s: string): string {
@@ -578,7 +579,7 @@ function statusLabel(s: string): string {
     PAID: '已付款',
     REJECTED: '已拒绝'
   }
-  return map[s] ?? s
+  return map[s] ?? enumLabel(s)
 }
 
 function statusTag(s: string): '' | 'success' | 'warning' | 'danger' | 'info' {
