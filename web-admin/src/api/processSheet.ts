@@ -479,6 +479,12 @@ export interface WorkflowPortDescriptor {
   /** 固定包装成品的 SKU 单位净重（克/基本单位）；缺失时前端不得猜测重量换算。 */
   gramsPerUnit?: number | null;
   required: boolean;
+  /** 端口选择组；旧快照缺失时前端按 ALL_REQUIRED 处理。 */
+  selectionGroupId?: string | null;
+  selectionGroupLabel?: string | null;
+  selectionGroupMode?: 'ALL_REQUIRED' | 'EXACTLY_ONE' | 'AT_LEAST_ONE' | 'OPTIONAL' | null;
+  selectionGroupMinSelections?: number | null;
+  selectionGroupMaxSelections?: number | null;
   /** false = skuId 已无法解析 (物料/产品被删除)。 */
   skuResolved: boolean;
   /** 仅 output 端口有意义: materialKind === 'FINISHED_GOOD'。 */

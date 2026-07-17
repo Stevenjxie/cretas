@@ -37,6 +37,8 @@ import {
 } from '@/utils/processSheetUnits';
 import { buildEqualPotWeightsKg } from './potAllocation';
 
+type PortSelectionMode = NonNullable<WorkflowPortDescriptor['selectionGroupMode']>;
+
 // -------------------------------------------------------------------------
 // Props & emits
 // -------------------------------------------------------------------------
@@ -133,6 +135,7 @@ interface MultiOutputLine {
   gramsPerUnit: number | null;
   finished: boolean;
   required: boolean;
+  selected: boolean;
   quantity: number | null;
   /** 一条产出对应一段开始/结束时间；总工时由这两个值即时计算。 */
   startTime: string;
@@ -151,6 +154,11 @@ interface MultiOutputLine {
 interface MaterialInputTotalLine extends Omit<MaterialInputTotal, 'quantity'> {
   materialName: string;
   quantity: number | null;
+  selected: boolean;
+}
+
+interface SelectableUpstreamRef extends UpstreamRef {
+  selected: boolean;
 }
 
 // -------------------------------------------------------------------------
@@ -197,7 +205,7 @@ interface SheetRow {
    */
   upstreamFinishedGoods: boolean;
   /** 熟制: multi-source upstream WIP refs */
-  upstreamSources: UpstreamRef[];
+  upstreamSources: SelectableUpstreamRef[];
   /** Multi-segment labor entries */
   laborSegments: LaborSegment[];
   /** 熟制: number of pots */
@@ -536,6 +544,90 @@ function todayStr(): string {
   return `${y}-${m}-${day}`;
 }
 
+function portSelectionMode(port?: WorkflowPortDescriptor): PortSelectionMode {
+  return port?.selectionGroupMode ?? 'ALL_REQUIRED';
+}
+
+function portSelectedByDefault(port?: WorkflowPortDescriptor): boolean {
+  return !port?.selectionGroupId || portSelectionMode(port) === 'ALL_REQUIRED';
+}
+
+function portSelectionDisabled(port?: WorkflowPortDescriptor): boolean {
+  return !port?.selectionGroupId || portSelectionMode(port) === 'ALL_REQUIRED';
+}
+
+function portSelectionSummary(port?: WorkflowPortDescriptor): string {
+  if (!port?.selectionGroupId) return '全部必选';
+  const modeLabel: Record<PortSelectionMode, string> = {
+    ALL_REQUIRED: '全部必选',
+    EXACTLY_ONE: '互相替代（选 1）',
+    AT_LEAST_ONE: '至少选 1',
+    OPTIONAL: '可选',
+  };
+  return `${port.selectionGroupLabel || '端口关系'} · ${modeLabel[portSelectionMode(port)]}`;
+}
+
+function portById(portId?: string): WorkflowPortDescriptor | undefined {
+  if (!portId) return undefined;
+  return [...(props.workflowContext?.inputs ?? []), ...outputPorts.value]
+    .find((port) => port.workflowPortId === portId);
+}
+
+function setPortSelected(
+  row: SheetRow,
+  port: WorkflowPortDescriptor | undefined,
+  selected: boolean,
+): void {
+  if (!port || portSelectionDisabled(port)) return;
+  const groupId = port.selectionGroupId;
+  const update = (line: { workflowPortId?: string; selected: boolean }): void => {
+    const candidate = portById(line.workflowPortId);
+    if (!candidate) return;
+    if (portSelectionMode(port) === 'EXACTLY_ONE'
+      && candidate.selectionGroupId === groupId) {
+      line.selected = false;
+    }
+    if (candidate.workflowPortId === port.workflowPortId) line.selected = selected;
+  };
+  row.materialInputTotals.forEach(update);
+  row.upstreamSources.forEach(update);
+  row.multiOutputs.forEach(update);
+}
+
+function selectedWorkflowPortIds(row: SheetRow): Set<string> {
+  return new Set([
+    ...row.materialInputTotals.filter((line) => line.selected).map((line) => line.workflowPortId || ''),
+    ...row.upstreamSources.filter((line) => line.selected).map((line) => line.workflowPortId || ''),
+    ...row.multiOutputs.filter((line) => line.selected).map((line) => line.workflowPortId || ''),
+  ].filter(Boolean));
+}
+
+function selectionGroupReason(row: SheetRow, direction: 'INPUT' | 'OUTPUT'): string | null {
+  const ports = direction === 'INPUT' ? (props.workflowContext?.inputs ?? []) : outputPorts.value;
+  const explicitGroups = new Map<string, WorkflowPortDescriptor[]>();
+  ports.forEach((port) => {
+    if (!port.selectionGroupId) return;
+    explicitGroups.set(port.selectionGroupId, [...(explicitGroups.get(port.selectionGroupId) ?? []), port]);
+  });
+  const selectedIds = selectedWorkflowPortIds(row);
+  for (const groupPorts of explicitGroups.values()) {
+    const first = groupPorts[0];
+    const mode = portSelectionMode(first);
+    const selectedCount = groupPorts.filter((port) => selectedIds.has(port.workflowPortId)).length;
+    const defaultMin = mode === 'OPTIONAL' ? 0 : mode === 'ALL_REQUIRED' ? groupPorts.length : 1;
+    const defaultMax = mode === 'EXACTLY_ONE' ? 1 : groupPorts.length;
+    const min = first.selectionGroupMinSelections ?? defaultMin;
+    const max = first.selectionGroupMaxSelections ?? defaultMax;
+    if (selectedCount >= min && selectedCount <= max) continue;
+    const label = first.selectionGroupLabel || (direction === 'INPUT' ? '投入关系' : '产出关系');
+    if (mode === 'ALL_REQUIRED') return `“${label}”要求全部选用，请检查每条${direction === 'INPUT' ? '投入' : '产出'}`;
+    if (mode === 'EXACTLY_ONE') return `“${label}”要求且只能选择 1 项，当前已选 ${selectedCount} 项`;
+    if (mode === 'AT_LEAST_ONE') return `“${label}”至少选择 1 项，当前尚未选择`;
+    return `“${label}”最多选择 ${max} 项，当前已选 ${selectedCount} 项`;
+  }
+  return null;
+}
+
 function blankRow(): SheetRow {
   // Default daterange fields to [today, today] for each daterange col in this process.
   const today = todayStr();
@@ -567,6 +659,7 @@ function blankRow(): SheetRow {
       unit: workflowPortDisplayUnit(port) || processUnits.value.inputUnit,
       workflowPortId: port.workflowPortId || undefined,
       materialNodeId: port.materialNodeId || undefined,
+      selected: portSelectedByDefault(port),
     })),
     legacyExplicitRawInput: false,
     upstreamBatch: '',
@@ -597,6 +690,7 @@ function initMultiOutputs(): MultiOutputLine[] {
     gramsPerUnit: p.gramsPerUnit ?? null,
     finished: p.finished === true,
     required: p.required === true,
+    selected: portSelectedByDefault(p),
     quantity: null,
     startTime: '',
     endTime: '',
@@ -617,11 +711,11 @@ function sourceIdentity(port?: WorkflowPortDescriptor): Pick<UpstreamRef, 'workf
   } : {};
 }
 
-function blankUpstreamSource(port?: WorkflowPortDescriptor): UpstreamRef {
-  return { sourceBatchNumber: '', feedQuantityKg: 0, ...sourceIdentity(port) };
+function blankUpstreamSource(port?: WorkflowPortDescriptor, selected = portSelectedByDefault(port)): SelectableUpstreamRef {
+  return { sourceBatchNumber: '', feedQuantityKg: 0, selected, ...sourceIdentity(port) };
 }
 
-function initWorkflowUpstreamSources(): UpstreamRef[] {
+function initWorkflowUpstreamSources(): SelectableUpstreamRef[] {
   return workflowUpstreamInputs.value.map((port) => blankUpstreamSource(port));
 }
 
@@ -631,11 +725,11 @@ function sourcePort(src: UpstreamRef, fallbackIndex?: number): WorkflowPortDescr
     || (fallbackIndex != null ? workflowUpstreamInputs.value[fallbackIndex] : undefined);
 }
 
-function hydrateUpstreamSources(sources: UpstreamRef[] | undefined): UpstreamRef[] {
+function hydrateUpstreamSources(sources: UpstreamRef[] | undefined): SelectableUpstreamRef[] {
   if (!sources?.length) return initWorkflowUpstreamSources();
   const hydrated = sources.map((source, index) => {
     const port = sourcePort(source, index);
-    return { ...sourceIdentity(port), ...source };
+    return { ...sourceIdentity(port), ...source, selected: true };
   });
   for (const port of workflowUpstreamInputs.value) {
     if (!hydrated.some((source) => source.workflowPortId === port.workflowPortId)) {
@@ -646,9 +740,10 @@ function hydrateUpstreamSources(sources: UpstreamRef[] | undefined): UpstreamRef
 }
 
 function submittedUpstreamSources(row: SheetRow): UpstreamRef[] {
-  return row.upstreamSources.map((source, index) => {
+  return row.upstreamSources.filter((source) => source.selected).map((source, index) => {
     const port = sourcePort(source, index);
-    return { ...sourceIdentity(port), ...source };
+    const { selected: _selected, ...requestSource } = source;
+    return { ...sourceIdentity(port), ...requestSource };
   });
 }
 
@@ -674,7 +769,7 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
     row.rawBatchId = explicitRaw?.materialBatchId ?? '';
     row.rawBatchQty = explicitRaw?.quantity ?? null;
     if (p.materialInputTotals?.length) {
-      row.materialInputTotals = p.materialInputTotals.map((item) => {
+      const savedLines = p.materialInputTotals.map((item): MaterialInputTotalLine => {
         const port = workflowRawInputs.value.find((candidate) =>
           candidate.workflowPortId === item.workflowPortId || candidate.skuId === item.materialTypeId,
         );
@@ -682,7 +777,23 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
           ...item,
           materialName: port?.materialName || item.materialTypeId,
           unit: port ? (workflowPortDisplayUnit(port) || item.unit) : item.unit,
+          selected: true,
         };
+      });
+      const savedByPort = new Map(savedLines.map((line) => [line.workflowPortId, line]));
+      row.materialInputTotals = workflowRawInputs.value.map((port) => savedByPort.get(port.workflowPortId) ?? ({
+          materialTypeId: port.skuId,
+          materialName: port.materialName || port.skuId,
+          quantity: null,
+          unit: workflowPortDisplayUnit(port) || processUnits.value.inputUnit,
+          workflowPortId: port.workflowPortId || undefined,
+          materialNodeId: port.materialNodeId || undefined,
+          selected: portSelectedByDefault(port),
+        }));
+      savedLines.forEach((line) => {
+        if (!row.materialInputTotals.some((candidate) => candidate.workflowPortId === line.workflowPortId)) {
+          row.materialInputTotals.push(line);
+        }
       });
     }
     row.fields['output'] = p.outputQuantity ?? null;
@@ -830,6 +941,7 @@ function multiOutputLineFromView(view: ProcessSheetRowView): MultiOutputLine {
     gramsPerUnit: port?.gramsPerUnit ?? null,
     finished: port ? port.finished === true : p.finished === true,
     required: port?.required ?? true,
+    selected: true,
     quantity: p.outputQuantity ?? null,
     startTime: segment?.startTime ?? '',
     endTime: segment?.endTime ?? '',
@@ -875,7 +987,14 @@ function buildDisplayRows(views: ProcessSheetRowView[]): SheetRow[] {
     // 用 base 覆盖 clientRowId 复用既有 hydrateRow 还原输入侧字段 (上游/原料/工时/自定义字段等,
     // 与单产出完全一致的逻辑) —— 再保存时 buildRequest 发的 clientRowId 就是这个 base。
     const row = hydrateRow({ ...first, clientRowId: base });
-    row.multiOutputs = sorted.map(multiOutputLineFromView);
+    const savedOutputs = sorted.map(multiOutputLineFromView);
+    const savedByPort = new Map(savedOutputs.map((line) => [line.workflowPortId, line]));
+    row.multiOutputs = initMultiOutputs().map((line) => savedByPort.get(line.workflowPortId) ?? line);
+    savedOutputs.forEach((line) => {
+      if (!row.multiOutputs.some((candidate) => candidate.workflowPortId === line.workflowPortId)) {
+        row.multiOutputs.push(line);
+      }
+    });
     result.push(row);
   }
   return result;
@@ -1058,7 +1177,7 @@ function formalSubmitBlockedReason(row: SheetRow): string | null {
       || `上游工序尚未正式报工，请先完成「${upstreamProcessName.value}」后再提交本道工序`;
   }
   if (requiresManualCostAllocation(row)) {
-    const activeOutputs = row.multiOutputs.filter((output) => output.quantity != null && output.quantity > 0);
+    const activeOutputs = row.multiOutputs.filter((output) => output.selected && output.quantity != null && output.quantity > 0);
     if (activeOutputs.some((output) => output.costAllocationRatio == null || output.costAllocationRatio <= 0)) {
       return '产出单位无法统一折算，请填写每项大于 0 的成本分摊比例';
     }
@@ -1075,7 +1194,9 @@ function formalSubmitBlockedReason(row: SheetRow): string | null {
 function potInputQuantity(row: SheetRow): number {
   if (isXiuYou.value) return usesAutoMaterialTotals(row) ? materialInputTotalKg(row) : (row.rawBatchQty ?? 0);
   if (isMultiSource.value) {
-    const totalFeed = row.upstreamSources.reduce((sum, source) => sum + (source.feedQuantityKg || 0), 0);
+    const totalFeed = row.upstreamSources
+      .filter((source) => source.selected)
+      .reduce((sum, source) => sum + (source.feedQuantityKg || 0), 0);
     if (isSingleUpstream.value) return (row.fields['before'] as number) ?? totalFeed;
     if (isQuSheTou.value) return calcReverseInput(row) ?? totalFeed;
     if (isShuZhi.value || isGenericUpstream.value) return (row.fields['input'] as number) ?? totalFeed;
@@ -1092,7 +1213,9 @@ function calcYield(row: SheetRow): number | null {
     input = usesAutoMaterialTotals(row) ? materialInputTotalKg(row) : row.rawBatchQty;
     output = (row.fields['output'] as number) ?? null;
   } else if (isMultiSource.value) {
-    input = row.upstreamSources.reduce((sum, src) => sum + (src.feedQuantityKg || 0), 0);
+    input = row.upstreamSources
+      .filter((source) => source.selected)
+      .reduce((sum, src) => sum + (src.feedQuantityKg || 0), 0);
     output = (row.fields['output'] as number) ?? null;
   } else if (isSingleUpstream.value) {
     // 焯水 + 滚揉: before/after 字段
@@ -1227,9 +1350,10 @@ function canConvertOutputToKg(line: MultiOutputLine): boolean {
 }
 
 function requiresManualCostAllocation(row: SheetRow): boolean {
-  if (row.multiOutputs.length <= 1) return false;
-  if (row.multiOutputs.every(canConvertOutputToKg)) return false;
-  const dimensions = new Set(row.multiOutputs.map((line) => {
+  const selectedOutputs = row.multiOutputs.filter((line) => line.selected);
+  if (selectedOutputs.length <= 1) return false;
+  if (selectedOutputs.every(canConvertOutputToKg)) return false;
+  const dimensions = new Set(selectedOutputs.map((line) => {
     const unit = normalizedReportingUnit(line.unit);
     return unit === 'kg' || unit === 'g' ? 'mass' : unit;
   }));
@@ -1239,7 +1363,7 @@ function requiresManualCostAllocation(row: SheetRow): boolean {
 function reportingInputFacts(row: SheetRow): Array<{ quantity: number; unit: string; gramsPerUnit: number | null }> {
   if (usesAutoMaterialTotals(row)) {
     return row.materialInputTotals
-      .filter((item) => item.quantity != null && item.quantity > 0)
+      .filter((item) => item.selected && item.quantity != null && item.quantity > 0)
       .map((item) => {
         const port = workflowRawInputs.value.find((candidate) =>
           candidate.workflowPortId === item.workflowPortId || candidate.skuId === item.materialTypeId,
@@ -1249,7 +1373,7 @@ function reportingInputFacts(row: SheetRow): Array<{ quantity: number; unit: str
   }
   if (isMultiSource.value) {
     return row.upstreamSources
-      .filter((source) => source.feedQuantityKg > 0)
+      .filter((source) => source.selected && source.feedQuantityKg > 0)
       .map((source) => {
         const port = sourcePort(source);
         return {
@@ -1328,8 +1452,8 @@ function usesAutoMaterialTotals(row: SheetRow): boolean {
 
 function submittedMaterialInputTotals(row: SheetRow): MaterialInputTotal[] {
   return row.materialInputTotals
-    .filter((item) => item.quantity != null && item.quantity > 0)
-    .map(({ materialName: _materialName, quantity, ...item }) => ({ ...item, quantity: quantity! }));
+    .filter((item) => item.selected && item.quantity != null && item.quantity > 0)
+    .map(({ materialName: _materialName, selected: _selected, quantity, ...item }) => ({ ...item, quantity: quantity! }));
 }
 
 function materialInputTotalKg(row: SheetRow): number {
@@ -1365,6 +1489,7 @@ function upstreamWarning(row: SheetRow): string | null {
   if (isMultiSource.value) {
     const warnings: string[] = [];
     for (const src of row.upstreamSources) {
+      if (!src.selected) continue;
       const usage = src.feedQuantityKg;
       if (src.finishedGoods) {
         // ①c FG 投料 max 守卫: 计数单位(盒装)成品经每盒克重折算 kg 可投量; kg 源按原 kg 比较。
@@ -1407,20 +1532,30 @@ function upstreamWarning(row: SheetRow): string | null {
 // -------------------------------------------------------------------------
 // Save-disabled reason (fool-proof gate)
 // -------------------------------------------------------------------------
-function saveDisabledReason(row: SheetRow): string | null {
+function draftSaveDisabledReason(row: SheetRow): string | null {
   if (isReadOnlyRow(row)) return '已入账或历史数据只读，不能直接修改';
   if (row.submissionStatus === 'SUBMITTED') return '该行已正式报工，不能直接修改';
   if (unresolvedWorkflowRawInputs.value.length > 0) {
     return '当前计划的 Workflow 原料已失效，请先重新绑定原料并重新创建生产计划';
   }
+  return null;
+}
+
+function rowCompletenessReason(row: SheetRow): string | null {
+  const draftReason = draftSaveDisabledReason(row);
+  if (draftReason) return draftReason;
   if (isPortOutputMode.value && !row.productionDate) return '请选择生产日期';
+  const inputGroupReason = selectionGroupReason(row, 'INPUT');
+  if (inputGroupReason) return inputGroupReason;
+  const outputGroupReason = selectionGroupReason(row, 'OUTPUT');
+  if (outputGroupReason) return outputGroupReason;
   // 2B.2 多产出: 单产出字段(下方 'output'/'after'/'usedWeight'+sumBoxes 等)已被「多产出」录入块
   // 取代、不再渲染 —— 下方 `&& !isMultiOutput.value` 跳过那些"填了单产出输出吗"检查(它们永远
   // 是 null, 会永久卡住保存), 改用本函数末尾的多产出专属检查。输入侧完整性检查(上游批次/原料
   // 批次/投入重量等)照常执行, 不受影响 —— 多产出的投入分配方式与单产出完全一致。
   if (isXiuYou.value) {
     if (usesAutoMaterialTotals(row)) {
-      const missing = row.materialInputTotals.find((item) => item.quantity == null || item.quantity <= 0);
+      const missing = row.materialInputTotals.find((item) => item.selected && (item.quantity == null || item.quantity <= 0));
       if (missing) return `请填写「${missing.materialName}」的投料总量`;
     } else {
       if (!row.rawBatchId) return '请选择原料批次';
@@ -1428,9 +1563,10 @@ function saveDisabledReason(row: SheetRow): string | null {
     }
     if (!isPortOutputMode.value && (row.fields['output'] as number) == null) return '请填写产出数量';
   } else if (isMultiSource.value) {
-    if (row.upstreamSources.length === 0) return '请添加上游来源批';
-    if (row.upstreamSources.some((s) => !s.sourceBatchNumber || !s.feedQuantityKg)) return '请补全所有来源批次及投料量';
-    if (workflowUpstreamInputs.value.length > 0 && row.upstreamSources.some((s) => !s.workflowPortId || !s.skuId)) {
+    const selectedSources = row.upstreamSources.filter((source) => source.selected);
+    if (selectedSources.length === 0 && workflowUpstreamInputs.value.length === 0) return '请添加上游来源批';
+    if (selectedSources.some((s) => !s.sourceBatchNumber || !s.feedQuantityKg)) return '请补全所有已选来源批次及投料量';
+    if (workflowUpstreamInputs.value.length > 0 && selectedSources.some((s) => !s.workflowPortId || !s.skuId)) {
       return 'Workflow 投入来源缺少端口身份，请重新打开报工组后再填写';
     }
     if (isSingleUpstream.value) {
@@ -1474,9 +1610,9 @@ function saveDisabledReason(row: SheetRow): string | null {
   // 2B.2 多产出: required 端口必须填数量；可选端口允许留空且不会发送。
   if (isPortOutputMode.value) {
     if (row.multiOutputs.length === 0) return '本工序 workflow 未配置产出端口, 无法录入';
-    const missing = row.multiOutputs.find((o) => o.required && (o.quantity == null || o.quantity <= 0));
+    const missing = row.multiOutputs.find((o) => o.selected && (o.quantity == null || o.quantity <= 0));
     if (missing) return `请填写「${missing.materialName}」的产出数量`;
-    const incompleteTime = row.multiOutputs.find((o) => Boolean(o.startTime) !== Boolean(o.endTime));
+    const incompleteTime = row.multiOutputs.find((o) => o.selected && Boolean(o.startTime) !== Boolean(o.endTime));
     if (incompleteTime) return `请补全「${incompleteTime.materialName}」的开始和结束时间`;
   }
   if (needsSeasoningInputKg.value) {
@@ -1498,7 +1634,7 @@ function saveDisabledReason(row: SheetRow): string | null {
 }
 
 function submitDisabledReason(row: SheetRow): string | null {
-  return saveDisabledReason(row) || formalSubmitBlockedReason(row);
+  return rowCompletenessReason(row) || formalSubmitBlockedReason(row);
 }
 
 // -------------------------------------------------------------------------
@@ -1566,7 +1702,9 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
       base.byproducts = [{ name: '副产', quantity: bpQty, unit: 'kg', ...(bpPrice != null ? { unitPrice: bpPrice } : {}) }];
     }
   } else if (isMultiSource.value) {
-    const totalFeed = row.upstreamSources.reduce((s, r) => s + (r.feedQuantityKg || 0), 0);
+    const totalFeed = row.upstreamSources
+      .filter((source) => source.selected)
+      .reduce((s, r) => s + (r.feedQuantityKg || 0), 0);
     base.upstreamSources = submittedUpstreamSources(row);
     if (isSingleUpstream.value) {
       const before = (row.fields['before'] as number) ?? totalFeed;
@@ -1696,7 +1834,7 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
   // 输入侧分配 (rawMaterialInputs/upstreamSources/inputQuantity/laborSegments 等, 上面各 archetype
   // 分支已按原逻辑填好) 原样发送不变 —— 后端首产出行(#0)承载全部实际投入, 一次全量扣减。
   if (isMultiOutput.value) {
-    const submittedOutputs = row.multiOutputs.filter((o) => o.quantity != null && o.quantity > 0);
+    const submittedOutputs = row.multiOutputs.filter((o) => o.selected && o.quantity != null && o.quantity > 0);
     base.outputs = submittedOutputs.map((o) => {
       const productWeight = o.finished ? outputLineWeightKg(o) : null;
       return {
@@ -1753,17 +1891,17 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
 function formalSubmitSummary(row: SheetRow): string {
   const inputs = usesAutoMaterialTotals(row)
     ? row.materialInputTotals
-      .filter((item) => item.quantity != null && item.quantity > 0)
+      .filter((item) => item.selected && item.quantity != null && item.quantity > 0)
       .map((item) => `${item.materialName} ${item.quantity}${item.unit}`)
-    : row.upstreamSources.length > 0
-      ? row.upstreamSources.map((item) => `${item.sourceBatchNumber} ${item.feedQuantityKg}${processUnits.value.inputUnit}`)
+    : row.upstreamSources.some((item) => item.selected)
+      ? row.upstreamSources.filter((item) => item.selected).map((item) => `${item.sourceBatchNumber} ${item.feedQuantityKg}${processUnits.value.inputUnit}`)
       : row.upstreamBatch
         ? [`${row.upstreamBatch} ${singleSourceUsage(row)}${processUnits.value.inputUnit}`]
         : row.rawBatchQty != null
           ? [`原料 ${row.rawBatchQty}${processUnits.value.inputUnit}`]
           : [];
   const outputs = row.multiOutputs
-    .filter((item) => item.quantity != null && item.quantity > 0)
+    .filter((item) => item.selected && item.quantity != null && item.quantity > 0)
     .map((item) => `${item.materialName} ${item.quantity}${item.unit}`);
   return [
     `生产日期：${row.productionDate || '未填写'}`,
@@ -1775,19 +1913,14 @@ function formalSubmitSummary(row: SheetRow): string {
 
 async function handleSave(row: SheetRow, action: 'draft' | 'submit') {
   if (row.saving) return;
-  const reason = saveDisabledReason(row);
+  const reason = action === 'draft' ? draftSaveDisabledReason(row) : submitDisabledReason(row);
   if (reason) {
+    if (action === 'submit') row.blockingMessage = reason;
     // 防呆 4位一体: type:error (非 warning) + sticky (duration:0) + showClose + next-action 明示
     ElMessage({ message: reason, type: 'error', duration: 0, showClose: true });
     return;
   }
   if (action === 'submit') {
-    const formalReason = formalSubmitBlockedReason(row);
-    if (formalReason) {
-      row.blockingMessage = formalReason;
-      ElMessage({ message: formalReason, type: 'error', duration: 0, showClose: true });
-      return;
-    }
     if (isPortOutputMode.value) {
       try {
         await ElMessageBox.confirm(formalSubmitSummary(row), '确认正式报工', {
@@ -1934,16 +2067,16 @@ function formatHistoryTime(iso: string): string {
 // -------------------------------------------------------------------------
 // 熟制: multi-source helpers
 // -------------------------------------------------------------------------
-function addUpstreamSource(row: SheetRow, template?: UpstreamRef) {
+function addUpstreamSource(row: SheetRow, template?: SelectableUpstreamRef) {
   const port = template ? sourcePort(template) : workflowUpstreamInputs.value[0];
-  row.upstreamSources = [...row.upstreamSources, blankUpstreamSource(port)];
+  row.upstreamSources = [...row.upstreamSources, blankUpstreamSource(port, template?.selected)];
 }
 function removeUpstreamSource(row: SheetRow, idx: number) {
   const current = row.upstreamSources[idx];
   if (current?.workflowPortId) {
     const samePortCount = row.upstreamSources.filter((source) => source.workflowPortId === current.workflowPortId).length;
     if (samePortCount <= 1) {
-      row.upstreamSources[idx] = blankUpstreamSource(sourcePort(current));
+      row.upstreamSources[idx] = blankUpstreamSource(sourcePort(current), current.selected);
       return;
     }
   }
@@ -2463,8 +2596,8 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
           <el-button
             size="small"
             :loading="row.saving"
-            :disabled="!!saveDisabledReason(row) || row.saving"
-            :title="saveDisabledReason(row) || '只保存草稿，不占用生产库库存'"
+              :disabled="!!draftSaveDisabledReason(row) || row.saving"
+              :title="draftSaveDisabledReason(row) || '只保存草稿，不占用生产库库存'"
             @click="handleSave(row, 'draft')"
             style="padding:3px 8px">保存草稿</el-button>
           <el-button
@@ -2530,10 +2663,19 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 :key="item.workflowPortId || item.materialTypeId"
                 data-testid="material-input-total"
                 class="sp-card-field"
+                :class="{ 'sp-port-unselected': !item.selected }"
               >
+                <el-checkbox
+                  :model-value="item.selected"
+                  :disabled="portSelectionDisabled(portById(item.workflowPortId))"
+                  data-testid="port-selected"
+                  @change="(selected: boolean) => setPortSelected(row, portById(item.workflowPortId), selected)"
+                >选用</el-checkbox>
+                <span class="sp-port-selection-hint">{{ portSelectionSummary(portById(item.workflowPortId)) }}</span>
                 <label class="sp-card-label">{{ item.materialName }} · 投料总量</label>
                 <el-input-number
                   v-model="item.quantity"
+                  :disabled="!item.selected"
                   :min="0"
                   :precision="6"
                   controls-position="right"
@@ -2681,8 +2823,15 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 <el-button v-if="workflowUpstreamInputs.length === 0" size="small" :icon="Plus" @click="addUpstreamSource(row)">+ 来源批</el-button>
               </div>
               <div v-for="(src, si) in row.upstreamSources" :key="`${src.workflowPortId || 'legacy'}-${si}`"
-                   data-testid="upstream-source-line"
+              data-testid="upstream-source-line"
+                   :class="{ 'sp-port-unselected': !src.selected }"
                    style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+                <el-checkbox
+                  :model-value="src.selected"
+                  :disabled="portSelectionDisabled(sourcePort(src))"
+                  data-testid="port-selected"
+                  @change="(selected: boolean) => setPortSelected(row, sourcePort(src), selected)"
+                >选用</el-checkbox>
                 <span data-testid="input-port-name" class="sp-fixed-port-name">{{ sourcePortName(src) }}</span>
                 <el-select
                   :model-value="srcSelectKey(src)"
@@ -2845,8 +2994,15 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               :key="o.workflowPortId || oi"
               data-testid="workflow-output-line"
               class="sp-output-line"
+              :class="{ 'sp-port-unselected': !o.selected }"
             >
               <div class="sp-output-line-head">
+                <el-checkbox
+                  :model-value="o.selected"
+                  :disabled="portSelectionDisabled(portById(o.workflowPortId))"
+                  data-testid="port-selected"
+                  @change="(selected: boolean) => setPortSelected(row, portById(o.workflowPortId), selected)"
+                >选用</el-checkbox>
                 <strong>{{ o.materialName }}</strong>
                 <el-tag size="small" :type="o.finished ? 'success' : 'warning'">
                   {{ o.finished ? '成品' : '半成品' }}
@@ -3075,10 +3231,18 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                       v-for="item in row.materialInputTotals"
                       :key="item.workflowPortId || item.materialTypeId"
                       data-testid="material-input-total"
+                      :class="{ 'sp-port-unselected': !item.selected }"
                       style="display:flex;align-items:center;gap:4px;margin-bottom:4px"
                     >
+                      <el-checkbox
+                        :model-value="item.selected"
+                        :disabled="portSelectionDisabled(portById(item.workflowPortId))"
+                        data-testid="port-selected"
+                        @change="(selected: boolean) => setPortSelected(row, portById(item.workflowPortId), selected)"
+                      >选用</el-checkbox>
                       <el-input-number
                         v-model="item.quantity"
+                        :disabled="!item.selected"
                         :min="0"
                         :precision="6"
                         controls-position="right"
@@ -3342,8 +3506,8 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 <el-button
                   size="small"
                   :loading="row.saving"
-                  :disabled="!!saveDisabledReason(row) || row.saving"
-                  :title="saveDisabledReason(row) || '只保存草稿，不占用生产库库存'"
+                          :disabled="!!draftSaveDisabledReason(row) || row.saving"
+                          :title="draftSaveDisabledReason(row) || '只保存草稿，不占用生产库库存'"
                   @click="handleSave(row, 'draft')"
                   style="padding:3px 6px">保存草稿</el-button>
                 <el-button
@@ -3395,8 +3559,15 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     :key="o.workflowPortId || oi"
                     data-testid="workflow-output-line"
                     class="sp-output-line"
+                    :class="{ 'sp-port-unselected': !o.selected }"
                   >
                     <div class="sp-output-line-head">
+                      <el-checkbox
+                        :model-value="o.selected"
+                        :disabled="portSelectionDisabled(portById(o.workflowPortId))"
+                        data-testid="port-selected"
+                        @change="(selected: boolean) => setPortSelected(row, portById(o.workflowPortId), selected)"
+                      >选用</el-checkbox>
                       <strong>{{ o.materialName }}</strong>
                       <el-tag size="small" :type="o.finished ? 'success' : 'warning'">{{ o.finished ? '成品' : '半成品' }}</el-tag>
                       <span v-if="o.batchNumber" class="sp-readonly sp-batch-num">{{ o.batchNumber }}</span>
@@ -3447,7 +3618,14 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                   <!-- Multi-source rows -->
                   <div v-for="(src, si) in row.upstreamSources" :key="`${src.workflowPortId || 'legacy'}-${si}`"
                        data-testid="upstream-source-line"
+                       :class="{ 'sp-port-unselected': !src.selected }"
                        style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                    <el-checkbox
+                      :model-value="src.selected"
+                      :disabled="portSelectionDisabled(sourcePort(src))"
+                      data-testid="port-selected"
+                      @change="(selected: boolean) => setPortSelected(row, sourcePort(src), selected)"
+                    >选用</el-checkbox>
                     <span data-testid="input-port-name" class="sp-fixed-port-name">{{ sourcePortName(src) }}</span>
                     <el-select
                       :model-value="srcSelectKey(src)"
@@ -3517,7 +3695,14 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                   <!-- Multi-source rows -->
                   <div v-for="(src, si) in row.upstreamSources" :key="`${src.workflowPortId || 'legacy'}-${si}`"
                        data-testid="upstream-source-line"
+                       :class="{ 'sp-port-unselected': !src.selected }"
                        style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                    <el-checkbox
+                      :model-value="src.selected"
+                      :disabled="portSelectionDisabled(sourcePort(src))"
+                      data-testid="port-selected"
+                      @change="(selected: boolean) => setPortSelected(row, sourcePort(src), selected)"
+                    >选用</el-checkbox>
                     <span data-testid="input-port-name" class="sp-fixed-port-name">{{ sourcePortName(src) }}</span>
                     <el-select
                       :model-value="srcSelectKey(src)"
@@ -3963,6 +4148,8 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   padding: 10px 0;
   border-top: 1px solid #ebeef5;
 }
+.sp-port-unselected { opacity: 0.58; }
+.sp-port-selection-hint { color: #909399; font-size: 11px; white-space: nowrap; }
 .sp-output-line:first-of-type {
   border-top: 0;
 }

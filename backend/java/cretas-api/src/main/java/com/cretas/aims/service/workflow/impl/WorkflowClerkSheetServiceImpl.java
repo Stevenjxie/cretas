@@ -211,6 +211,11 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                 .unit(unit.trim())
                 .gramsPerUnit(port.getNetWeightGramsSnapshot())
                 .required(port.getRequired())
+                .selectionGroupId(port.getSelectionGroupId())
+                .selectionGroupLabel(port.getSelectionGroupLabel())
+                .selectionGroupMode(port.getSelectionGroupMode())
+                .selectionGroupMinSelections(port.getSelectionGroupMinSelections())
+                .selectionGroupMaxSelections(port.getSelectionGroupMaxSelections())
                 .skuResolved(lookup.resolved())
                 .finished(FINISHED_GOOD.equals(port.getMaterialKind()))
                 .build();

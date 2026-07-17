@@ -70,6 +70,11 @@ public class WorkflowClerkSheetConfigDTO {
         /** Workflow 运行时物化时锁定的 SKU 每基本单位净重（克）。 */
         private BigDecimal gramsPerUnit;
         private Boolean required;
+        private String selectionGroupId;
+        private String selectionGroupLabel;
+        private String selectionGroupMode;
+        private Integer selectionGroupMinSelections;
+        private Integer selectionGroupMaxSelections;
         /** false 时 skuId 已无法解析 (物料/产品被删除) — FE 应显示 "SKU 已失效, 请回 Workflow 配置" 提示。 */
         private Boolean skuResolved;
         /** 仅 output 端口有意义: materialKind == FINISHED_GOOD。 */

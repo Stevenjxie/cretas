@@ -14,6 +14,7 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,6 +25,8 @@ import java.util.TreeSet;
 public class ProductProcessWorkflowRuntimeCompiler {
 
     private static final Set<String> QUANTITY_MODES = Set.of("AUTO_CONVERT", "FIXED_RATIO");
+    private static final Set<String> SELECTION_GROUP_MODES = Set.of(
+            "ALL_REQUIRED", "EXACTLY_ONE", "AT_LEAST_ONE", "OPTIONAL");
 
     private final ObjectMapper objectMapper;
     private final ProductProcessWorkflowValidator validator;
@@ -148,12 +151,14 @@ public class ProductProcessWorkflowRuntimeCompiler {
                 "data.reportingRequired");
         ConversionRule conversionRule = parseConversionRule(data.get("conversionRule"), nodeId);
         List<DeclaredPort> ports = parsePorts(data.get("ports"), nodeId);
+        List<DeclaredPortGroup> portGroups = parsePortGroups(data.get("portGroups"), ports, nodeId);
         return new ProcessNodeData(
                 workProcessId,
                 outputUnit,
                 standardTime,
                 reportingRequired,
                 ports,
+                portGroups,
                 conversionRule);
     }
 
@@ -206,6 +211,113 @@ public class ProductProcessWorkflowRuntimeCompiler {
                             port.get("quantityMode"), nodeId, path + ".quantityMode")));
         }
         return List.copyOf(ports);
+    }
+
+    private List<DeclaredPortGroup> parsePortGroups(
+            Object rawValue,
+            List<DeclaredPort> ports,
+            String nodeId) {
+        if (rawValue == null) {
+            return List.of();
+        }
+        if (!(rawValue instanceof List<?> rawGroups)) {
+            throw runtimeInvalid(nodeId, "data.portGroups", "must be an array");
+        }
+
+        Map<String, DeclaredPort> portsById = new HashMap<>();
+        for (DeclaredPort port : ports) {
+            portsById.put(port.id(), port);
+        }
+        Set<String> groupIds = new HashSet<>();
+        Set<String> assignedPortIds = new HashSet<>();
+        List<DeclaredPortGroup> groups = new ArrayList<>(rawGroups.size());
+        for (int index = 0; index < rawGroups.size(); index++) {
+            String path = "data.portGroups[" + index + "]";
+            Object rawGroup = rawGroups.get(index);
+            if (!(rawGroup instanceof Map<?, ?> group)) {
+                throw runtimeInvalid(nodeId, path, "must be an object");
+            }
+            String id = requiredString(group.get("id"), nodeId, path + ".id");
+            if (!groupIds.add(id)) {
+                throw runtimeInvalid(nodeId, path + ".id", "must be unique within the process node");
+            }
+            String direction = requiredString(group.get("direction"), nodeId, path + ".direction");
+            if (!"INPUT".equals(direction) && !"OUTPUT".equals(direction)) {
+                throw runtimeInvalid(nodeId, path + ".direction", "must be INPUT or OUTPUT");
+            }
+            String label = requiredString(group.get("label"), nodeId, path + ".label");
+            String mode = requiredString(group.get("mode"), nodeId, path + ".mode");
+            if (!SELECTION_GROUP_MODES.contains(mode)) {
+                throw runtimeInvalid(nodeId, path + ".mode",
+                        "must be ALL_REQUIRED, EXACTLY_ONE, AT_LEAST_ONE, or OPTIONAL");
+            }
+            int minSelections = requiredInteger(
+                    group.get("minSelections"), nodeId, path + ".minSelections");
+            int maxSelections = requiredInteger(
+                    group.get("maxSelections"), nodeId, path + ".maxSelections");
+            if (minSelections < 0 || maxSelections < minSelections) {
+                throw runtimeInvalid(nodeId, path,
+                        "requires 0 <= minSelections <= maxSelections");
+            }
+            Object rawPortIds = group.get("portIds");
+            if (!(rawPortIds instanceof List<?> values) || values.isEmpty()) {
+                throw runtimeInvalid(nodeId, path + ".portIds", "must be a non-empty array");
+            }
+            List<String> portIds = new ArrayList<>(values.size());
+            Set<String> groupPortIds = new HashSet<>();
+            for (int portIndex = 0; portIndex < values.size(); portIndex++) {
+                String portId = requiredString(
+                        values.get(portIndex), nodeId,
+                        path + ".portIds[" + portIndex + "]");
+                if (!groupPortIds.add(portId)) {
+                    throw runtimeInvalid(nodeId, path + ".portIds", "must not contain duplicates");
+                }
+                DeclaredPort port = portsById.get(portId);
+                if (port == null) {
+                    throw runtimeInvalid(nodeId, path + ".portIds",
+                            "references missing port " + portId);
+                }
+                if (!direction.equals(port.direction())) {
+                    throw runtimeInvalid(nodeId, path + ".direction",
+                            "does not match referenced port " + portId);
+                }
+                if (!assignedPortIds.add(portId)) {
+                    throw runtimeInvalid(nodeId, path + ".portIds",
+                            "port " + portId + " belongs to more than one group");
+                }
+                portIds.add(portId);
+            }
+            validateSelectionBounds(
+                    nodeId, path, mode, minSelections, maxSelections, portIds.size());
+            groups.add(new DeclaredPortGroup(
+                    id, direction, label, mode, minSelections, maxSelections,
+                    List.copyOf(portIds)));
+        }
+        return List.copyOf(groups);
+    }
+
+    private void validateSelectionBounds(
+            String nodeId,
+            String path,
+            String mode,
+            int minSelections,
+            int maxSelections,
+            int portCount) {
+        if (maxSelections > portCount) {
+            throw runtimeInvalid(nodeId, path + ".maxSelections",
+                    "must not exceed the number of grouped ports");
+        }
+        boolean valid = switch (mode) {
+            case "ALL_REQUIRED" -> minSelections == portCount && maxSelections == portCount;
+            case "EXACTLY_ONE" -> minSelections == 1 && maxSelections == 1;
+            case "AT_LEAST_ONE" -> minSelections == 1 && maxSelections == portCount;
+            case "OPTIONAL" -> minSelections == 0 && maxSelections == portCount;
+            default -> false;
+        };
+        if (!valid) {
+            throw runtimeInvalid(nodeId, path,
+                    "minSelections/maxSelections do not match mode " + mode);
+        }
     }
 
     private String requiredString(Object value, String nodeId, String fieldPath) {
@@ -366,6 +478,10 @@ public class ProductProcessWorkflowRuntimeCompiler {
                 : processData.conversionRule();
         for (int index = 0; index < processData.ports().size(); index++) {
             DeclaredPort declaredPort = processData.ports().get(index);
+            DeclaredPortGroup selectionGroup = processData.portGroups().stream()
+                    .filter(group -> group.portIds().contains(declaredPort.id()))
+                    .findFirst()
+                    .orElse(null);
             ProductProcessWorkflowDTO.Node materialNode = nodesById.get(declaredPort.materialNodeId());
             if (materialNode == null) {
                 throw runtimeInvalid(
@@ -393,11 +509,16 @@ public class ProductProcessWorkflowRuntimeCompiler {
                     declaredPort.conversionRefId(),
                     declaredPort.conversionVersion(),
                     null,
-                    true,
+                    selectionGroup == null || "ALL_REQUIRED".equals(selectionGroup.mode()),
                     conversionRule.mode(),
                     conversionRule.expression(),
                     declaredPort.standardQuantity(),
-                    declaredPort.quantityMode()));
+                    declaredPort.quantityMode(),
+                    selectionGroup == null ? null : selectionGroup.id(),
+                    selectionGroup == null ? null : selectionGroup.label(),
+                    selectionGroup == null ? null : selectionGroup.mode(),
+                    selectionGroup == null ? null : selectionGroup.minSelections(),
+                    selectionGroup == null ? null : selectionGroup.maxSelections()));
         }
     }
 
@@ -535,6 +656,7 @@ public class ProductProcessWorkflowRuntimeCompiler {
             Integer standardTime,
             Boolean reportingRequired,
             List<DeclaredPort> ports,
+            List<DeclaredPortGroup> portGroups,
             ConversionRule conversionRule) {
     }
 
@@ -548,6 +670,16 @@ public class ProductProcessWorkflowRuntimeCompiler {
             Integer ordinal,
             BigDecimal standardQuantity,
             String quantityMode) {
+    }
+
+    private record DeclaredPortGroup(
+            String id,
+            String direction,
+            String label,
+            String mode,
+            Integer minSelections,
+            Integer maxSelections,
+            List<String> portIds) {
     }
 
     private record MaterialNodeData(

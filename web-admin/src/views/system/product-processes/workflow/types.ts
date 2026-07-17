@@ -6,6 +6,7 @@ export type ProductProcessNodeKind =
 
 export type WorkflowStatus = 'DRAFT' | 'PUBLISHED';
 export type ConversionMode = 'ACTUAL_WEIGHT' | 'FIXED_RATIO' | 'SUM_OUTPUTS' | 'FORMULA';
+export type PortSelectionMode = 'ALL_REQUIRED' | 'EXACTLY_ONE' | 'AT_LEAST_ONE' | 'OPTIONAL';
 
 export interface WorkflowPosition {
   x: number;
@@ -41,12 +42,24 @@ export interface ProcessPort {
   ordinal: number;
 }
 
+export interface ProcessPortGroup {
+  id: string;
+  direction: 'INPUT' | 'OUTPUT';
+  label: string;
+  mode: PortSelectionMode;
+  minSelections: number;
+  maxSelections: number;
+  portIds: string[];
+}
+
 export interface ProcessNodeData extends Record<string, unknown> {
   workProcessId: string;
   processName: string;
   inputUnit: string;
   outputUnit: string;
   ports: ProcessPort[];
+  /** Optional for legacy workflow JSON. Missing groups mean every port is required. */
+  portGroups?: ProcessPortGroup[];
   conversionRule: {
     mode: ConversionMode;
     expression?: string | null;
@@ -127,7 +140,7 @@ export type WorkflowPatch =
   | { op: 'SET_NODE_FIELD'; nodeId: string; path: string; value: unknown };
 
 export interface WorkflowValidationError {
-  code: 'SCHEMA' | 'NODE_REFERENCE' | 'SKU_REQUIRED' | 'PORT_REQUIRED' | 'CYCLE' | 'BOUNDARY_REQUIRED';
+  code: 'SCHEMA' | 'NODE_REFERENCE' | 'SKU_REQUIRED' | 'PORT_REQUIRED' | 'PORT_GROUP_INVALID' | 'CYCLE' | 'BOUNDARY_REQUIRED';
   message: string;
   nodeId?: string;
   edgeId?: string;

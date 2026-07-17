@@ -56,7 +56,36 @@ public record CompiledProductProcessWorkflow(
             String conversionMode,
             String conversionExpression,
             BigDecimal standardQuantity,
-            String quantityMode) {
+            String quantityMode,
+            String selectionGroupId,
+            String selectionGroupLabel,
+            String selectionGroupMode,
+            Integer selectionGroupMinSelections,
+            Integer selectionGroupMaxSelections) {
+
+        public CompiledPort(
+                String workflowNodeId,
+                String workflowPortId,
+                String direction,
+                int ordinal,
+                String materialNodeId,
+                String materialKind,
+                String skuId,
+                String unit,
+                String materialPrimaryUnitCode,
+                String conversionRefId,
+                Long conversionVersion,
+                BigDecimal conversionFactorSnapshot,
+                boolean required,
+                String conversionMode,
+                String conversionExpression,
+                BigDecimal standardQuantity,
+                String quantityMode) {
+            this(workflowNodeId, workflowPortId, direction, ordinal, materialNodeId, materialKind,
+                    skuId, unit, materialPrimaryUnitCode, conversionRefId, conversionVersion,
+                    conversionFactorSnapshot, required, conversionMode, conversionExpression,
+                    standardQuantity, quantityMode, null, null, null, null, null);
+        }
 
         public CompiledPort(
                 String workflowNodeId,
@@ -77,7 +106,7 @@ public record CompiledProductProcessWorkflow(
             this(workflowNodeId, workflowPortId, direction, ordinal, materialNodeId, materialKind,
                     skuId, unit, materialPrimaryUnitCode, conversionRefId, conversionVersion,
                     conversionFactorSnapshot, required, conversionMode, conversionExpression,
-                    null, null);
+                    null, null, null, null, null, null, null);
         }
 
         public CompiledPort(
@@ -94,7 +123,7 @@ public record CompiledProductProcessWorkflow(
                 String conversionExpression) {
             this(workflowNodeId, workflowPortId, direction, ordinal, materialNodeId, materialKind,
                     skuId, unit, unit, null, null, null, required, conversionMode,
-                    conversionExpression, null, null);
+                    conversionExpression, null, null, null, null, null, null, null);
         }
     }
 }

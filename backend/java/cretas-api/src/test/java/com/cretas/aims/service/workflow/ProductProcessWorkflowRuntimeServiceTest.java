@@ -161,6 +161,35 @@ class ProductProcessWorkflowRuntimeServiceTest {
     }
 
     @Test
+    void snapshotsSelectionGroupWhenMaterializing() {
+        givenValidOwnedBatch();
+        givenEnabledPublishedWorkflow();
+        givenFreshRuntimePersistence(true);
+        CompiledProductProcessWorkflow base = compiledWorkflow();
+        List<CompiledProductProcessWorkflow.CompiledPort> ports = new ArrayList<>(base.ports());
+        CompiledProductProcessWorkflow.CompiledPort first = ports.getFirst();
+        ports.set(0, new CompiledProductProcessWorkflow.CompiledPort(
+                first.workflowNodeId(), first.workflowPortId(), first.direction(), first.ordinal(),
+                first.materialNodeId(), first.materialKind(), first.skuId(), first.unit(),
+                first.materialPrimaryUnitCode(), first.conversionRefId(), first.conversionVersion(),
+                first.conversionFactorSnapshot(), false, first.conversionMode(),
+                first.conversionExpression(), first.standardQuantity(), first.quantityMode(),
+                "input-choice", "替代投入", "EXACTLY_ONE", 1, 1));
+        when(compiler.compile(any())).thenReturn(new CompiledProductProcessWorkflow(
+                base.nodesJson(), base.edgesJson(), base.processTasks(), ports));
+
+        service.materializeIfActive("F006", 901L, "PT-PIG");
+
+        WorkflowTaskPort saved = savedPorts.getFirst();
+        assertEquals("input-choice", saved.getSelectionGroupId());
+        assertEquals("替代投入", saved.getSelectionGroupLabel());
+        assertEquals("EXACTLY_ONE", saved.getSelectionGroupMode());
+        assertEquals(1, saved.getSelectionGroupMinSelections());
+        assertEquals(1, saved.getSelectionGroupMaxSelections());
+        assertFalse(saved.getRequired());
+    }
+
+    @Test
     void snapshotsFinishedSkuNetWeightWhenMaterializing() {
         givenValidOwnedBatch();
         givenEnabledPublishedWorkflow();
@@ -502,6 +531,11 @@ class ProductProcessWorkflowRuntimeServiceTest {
         WorkflowTaskPort firstIn = port(903L, 501L, 801L, "trim-in", 1);
         firstIn.setStandardQuantity(new BigDecimal("3.250000"));
         firstIn.setQuantityMode("AUTO_CONVERT");
+        firstIn.setSelectionGroupId("input-choice");
+        firstIn.setSelectionGroupLabel("替代投入");
+        firstIn.setSelectionGroupMode("EXACTLY_ONE");
+        firstIn.setSelectionGroupMinSelections(1);
+        firstIn.setSelectionGroupMaxSelections(1);
         WorkflowTaskPort secondIn = port(905L, 501L, 802L, "pack-in", 1);
         when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
                 .thenReturn(Optional.of(existing));
@@ -523,6 +557,11 @@ class ProductProcessWorkflowRuntimeServiceTest {
         assertEquals(0, new BigDecimal("3.250000")
                 .compareTo(runtimeFirstIn.getStandardQuantity()));
         assertEquals("AUTO_CONVERT", runtimeFirstIn.getQuantityMode());
+        assertEquals("input-choice", runtimeFirstIn.getSelectionGroupId());
+        assertEquals("替代投入", runtimeFirstIn.getSelectionGroupLabel());
+        assertEquals("EXACTLY_ONE", runtimeFirstIn.getSelectionGroupMode());
+        assertEquals(1, runtimeFirstIn.getSelectionGroupMinSelections());
+        assertEquals(1, runtimeFirstIn.getSelectionGroupMaxSelections());
     }
 
     private void givenValidOwnedBatch() {

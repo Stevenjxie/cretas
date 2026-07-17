@@ -68,5 +68,10 @@ public class ProductionWorkflowRuntimeDTO {
         private String conversionExpression;
         private BigDecimal standardQuantity;
         private String quantityMode;
+        private String selectionGroupId;
+        private String selectionGroupLabel;
+        private String selectionGroupMode;
+        private Integer selectionGroupMinSelections;
+        private Integer selectionGroupMaxSelections;
     }
 }

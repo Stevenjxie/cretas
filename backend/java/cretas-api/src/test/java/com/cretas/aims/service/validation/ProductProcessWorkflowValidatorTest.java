@@ -78,6 +78,27 @@ class ProductProcessWorkflowValidatorTest {
         assertEquals("PRODUCT_PROCESS_WORKFLOW_INVALID", error.getErrorCode());
     }
 
+    @Test
+    void publishRejectsSelectionGroupBoundsThatDoNotMatchFrontendContract() {
+        ProductProcessWorkflowDTO definition = validPublishDefinition();
+        ProductProcessWorkflowDTO.Node process = definition.getNodes().stream()
+                .filter(node -> "PROCESS".equals(node.getKind()))
+                .findFirst().orElseThrow();
+        process.getData().put("portGroups", List.of(Map.of(
+                "id", "inputs",
+                "direction", "INPUT",
+                "label", "替代投入",
+                "mode", "AT_LEAST_ONE",
+                "minSelections", 1,
+                "maxSelections", 1,
+                "portIds", List.of("in-a", "in-b"))));
+
+        BusinessException error = assertThrows(
+                BusinessException.class, () -> validator.validateForPublish(definition));
+
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_INVALID", error.getErrorCode());
+    }
+
     private ProductProcessWorkflowDTO validMultiInputDefinition() {
         ProductProcessWorkflowDTO definition = new ProductProcessWorkflowDTO();
         definition.setNodes(new ArrayList<>(List.of(
@@ -114,6 +135,29 @@ class ProductProcessWorkflowValidatorTest {
                 edge("px-input", "raw-2", "output", "p::x", "y"),
                 edge("px-other-input", "raw-1", "output", "p::x", "other"),
                 edge("px-output", "p::x", "out-px", "semi-2", "input"))));
+        return definition;
+    }
+
+    @SuppressWarnings("unchecked")
+    private ProductProcessWorkflowDTO validPublishDefinition() {
+        ProductProcessWorkflowDTO definition = validMultiInputDefinition();
+        for (ProductProcessWorkflowDTO.Node node : definition.getNodes()) {
+            if (!"PROCESS".equals(node.getKind())) {
+                node.getData().put("skuId", "SKU-" + node.getId());
+            }
+        }
+        ProductProcessWorkflowDTO.Node output = definition.getNodes().stream()
+                .filter(node -> "semi".equals(node.getId()))
+                .findFirst().orElseThrow();
+        output.setKind("FINISHED_GOOD");
+        ProductProcessWorkflowDTO.Node process = definition.getNodes().stream()
+                .filter(node -> "PROCESS".equals(node.getKind()))
+                .findFirst().orElseThrow();
+        List<Map<String, Object>> ports =
+                (List<Map<String, Object>>) process.getData().get("ports");
+        ports.forEach(port -> port.put("unit", "kg"));
+        ports.stream().filter(port -> "out".equals(port.get("id")))
+                .findFirst().orElseThrow().put("materialKind", "FINISHED_GOOD");
         return definition;
     }
 

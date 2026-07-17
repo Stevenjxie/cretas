@@ -21,6 +21,8 @@ public class ProductProcessWorkflowValidator {
             "RAW_MATERIAL", "PROCESS", "SEMI_FINISHED", "FINISHED_GOOD");
     private static final Set<String> MATERIAL_NODE_KINDS = Set.of(
             "RAW_MATERIAL", "SEMI_FINISHED", "FINISHED_GOOD");
+    private static final Set<String> SELECTION_GROUP_MODES = Set.of(
+            "ALL_REQUIRED", "EXACTLY_ONE", "AT_LEAST_ONE", "OPTIONAL");
 
     public void validateForDraft(ProductProcessWorkflowDTO definition) {
         if (definition == null) {
@@ -184,6 +186,7 @@ public class ProductProcessWorkflowValidator {
                 }
                 portsById.put(portId, new PortBinding(direction, materialNodeId));
             }
+            validatePortGroups(node, data.get("portGroups"), portsById);
             portsByProcess.put(node.getId(), portsById);
         }
 
@@ -233,6 +236,91 @@ public class ProductProcessWorkflowValidator {
                 invalid("工序端口必须且只能连接一次: " + portId);
             }
         }));
+    }
+
+    private void validatePortGroups(
+            ProductProcessWorkflowDTO.Node node,
+            Object rawValue,
+            Map<String, PortBinding> portsById) {
+        if (rawValue == null) {
+            return;
+        }
+        if (!(rawValue instanceof List<?>)) {
+            invalid("工序端口选择组必须是数组: " + displayName(node));
+        }
+        List<?> rawGroups = (List<?>) rawValue;
+
+        Set<String> groupIds = new HashSet<>();
+        Set<String> assignedPortIds = new HashSet<>();
+        for (Object rawGroup : rawGroups) {
+            if (!(rawGroup instanceof Map<?, ?>)) {
+                invalid("工序端口选择组格式错误: " + displayName(node));
+            }
+            Map<?, ?> group = (Map<?, ?>) rawGroup;
+            String groupId = asString(group.get("id"));
+            String direction = asString(group.get("direction"));
+            String label = asString(group.get("label"));
+            String mode = asString(group.get("mode"));
+            if (isBlank(groupId) || !groupIds.add(groupId)) {
+                invalid("工序端口选择组 ID 不能为空或重复: " + displayName(node));
+            }
+            if (!"INPUT".equals(direction) && !"OUTPUT".equals(direction)) {
+                invalid("工序端口选择组方向无效: " + groupId);
+            }
+            if (isBlank(label) || !SELECTION_GROUP_MODES.contains(mode)) {
+                invalid("工序端口选择组标签或模式无效: " + groupId);
+            }
+            BigInteger minSelections = nonNegativeInteger(group.get("minSelections"));
+            BigInteger maxSelections = nonNegativeInteger(group.get("maxSelections"));
+            if (minSelections == null || maxSelections == null
+                    || minSelections.compareTo(maxSelections) > 0) {
+                invalid("工序端口选择组 min/max 无效: " + groupId);
+            }
+            Object rawPortIds = group.get("portIds");
+            if (!(rawPortIds instanceof List<?>) || ((List<?>) rawPortIds).isEmpty()) {
+                invalid("工序端口选择组必须引用至少一个端口: " + groupId);
+            }
+            List<?> portIds = (List<?>) rawPortIds;
+            Set<String> groupPortIds = new HashSet<>();
+            for (Object rawPortId : portIds) {
+                String portId = asString(rawPortId);
+                PortBinding port = portsById.get(portId);
+                if (isBlank(portId) || port == null) {
+                    invalid("工序端口选择组引用了不存在的端口: " + groupId);
+                }
+                if (!groupPortIds.add(portId)) {
+                    invalid("工序端口选择组不能重复引用端口: " + portId);
+                }
+                if (!direction.equals(port.direction())) {
+                    invalid("工序端口选择组方向与端口不一致: " + portId);
+                }
+                if (!assignedPortIds.add(portId)) {
+                    invalid("工序端口不能归属多个选择组: " + portId);
+                }
+            }
+            BigInteger portCount = BigInteger.valueOf(groupPortIds.size());
+            if (maxSelections.compareTo(portCount) > 0
+                    || !selectionBoundsMatchMode(mode, minSelections, maxSelections, portCount)) {
+                invalid("工序端口选择组 min/max 与模式不一致: " + groupId);
+            }
+        }
+    }
+
+    private boolean selectionBoundsMatchMode(
+            String mode,
+            BigInteger minSelections,
+            BigInteger maxSelections,
+            BigInteger portCount) {
+        return switch (mode) {
+            case "ALL_REQUIRED" -> minSelections.equals(portCount) && maxSelections.equals(portCount);
+            case "EXACTLY_ONE" -> BigInteger.ONE.equals(minSelections)
+                    && BigInteger.ONE.equals(maxSelections);
+            case "AT_LEAST_ONE" -> BigInteger.ONE.equals(minSelections)
+                    && maxSelections.equals(portCount);
+            case "OPTIONAL" -> BigInteger.ZERO.equals(minSelections)
+                    && maxSelections.equals(portCount);
+            default -> false;
+        };
     }
 
     private BigInteger nonNegativeInteger(Object value) {
