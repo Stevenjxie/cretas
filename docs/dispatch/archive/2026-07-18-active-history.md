@@ -18,3 +18,9 @@
 | ID | Base SHA | Owner | Result |
 |---|---|---|---|
 | CRETAS-WEB-RELEASE-FASTLANE-V2-20260718 | `3d199278f71a775ee570084eea0729bede63b4f9` | coordinator | 将逐文件 shell 哈希替换为单个不可变 `dist.tar.gz` SHA-256，保留 build commit、Web Git tree、package-lock、index、tar 完整性与引用 chunk 门禁；部署保存远端 archive 指纹，相同 archive/index 且 HTTP 200 时在 scp 前 no-op。直接契约测试覆盖 squash/tree/dirty/archive 篡改/结构损坏/引用缺失/依赖回退/远端 no-op，且既有 Web 部署门禁通过。 |
+
+## Workflow 编辑器阻塞修复
+
+| ID | Base SHA | Owner | Result |
+|---|---|---|---|
+| WF-UX-20260718-01 | `c39ef12f4fb87878184d114f9a69b7a42f92af05` | Codex `/root` | 完成 Workflow 编辑器自由投入、响应式单位换算、SKU 拼音搜索、下拉滚轮与外部收起、Cell/连线选择和批量删除、自动布局、产出类型转换、BOM 发布门禁、独立版本以及内嵌 AI Composer；前端 182/182 目标测试与 production build 通过，Java 6 类 93/93 目标测试和真实 JPA Context 门禁通过，可信 JAR 由 build commit `3e35c392309ff072a58d207a4cd6d3efddc31fce` 生成；[PR #1421](https://github.com/Stevenjxie/cretas/pull/1421) squash 合并为 `7b0b19e87ba2712a825f33bb28b316db72506ce7`。 |
