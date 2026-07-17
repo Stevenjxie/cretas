@@ -69,15 +69,16 @@ const range = ref<[string, string]>(defaultRange());
 const empties = computed(() => masked.value ? '无价格查看权限或区间内无订单' : '该区间无含生产批次的订单');
 
 const money = (v?: number | null) => (v == null ? '—' : '¥' + Number(v).toFixed(2));
+const skuUnit = (row: Row) => canonicalUnitCode(row.skuUnit) || (row.boxCount != null ? 'box' : '');
 const skuOutput = (row: Row) => {
-  const unit = canonicalUnitCode(row.skuUnit);
-  const quantity = row.skuQuantity ?? row.outputQuantity ?? (unit === 'box' ? row.boxCount : null);
+  const unit = skuUnit(row);
+  const quantity = row.skuQuantity ?? row.outputQuantity ?? row.boxCount;
   return quantity == null ? '—' : `${Number(quantity).toFixed(2)} ${displayUnit(unit)}`;
 };
 const perKg = (row: Row) => money(row.costPerKg ?? row.perKgCost);
 const perSkuUnit = (row: Row) => {
-  const unit = canonicalUnitCode(row.skuUnit);
-  const value = row.costPerSkuUnit ?? row.perSkuUnitCost ?? (unit === 'box' ? row.perBoxCost : null);
+  const unit = skuUnit(row);
+  const value = row.costPerSkuUnit ?? row.perSkuUnitCost ?? row.perBoxCost;
   return value == null || !unit ? '—' : `${money(value)}/${displayUnit(unit)}`;
 };
 const yieldClass = (y?: number | null) => (y == null ? '' : (y * 100 < 50 ? 'y-low' : (y * 100 > 130 ? 'y-high' : 'y-ok')));
