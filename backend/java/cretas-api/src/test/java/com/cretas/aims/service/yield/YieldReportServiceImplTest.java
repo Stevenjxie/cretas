@@ -613,7 +613,13 @@ class YieldReportServiceImplTest {
     void getYield_enrichesFinalBatchSummaryFromProcessSheetRows() throws Exception {
         when(reportRepo.findYieldReportsByBatch("F006", 777L)).thenReturn(List.of());
         when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
-        when(processRepo.findAllById(any())).thenReturn(List.of());
+        when(taskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc("F006", 777L))
+                .thenReturn(List.of(task(201L, 1, "WP-COOK"), task(202L, 2, "WP-PACK")));
+        WorkProcess cook = new WorkProcess();
+        cook.setId("WP-COOK"); cook.setProcessName("炖水");
+        WorkProcess pack = new WorkProcess();
+        pack.setId("WP-PACK"); pack.setProcessName("分切/包装");
+        when(processRepo.findAllById(any())).thenReturn(List.of(cook, pack));
 
         ProductionBatch finalBatch = ProductionBatch.builder()
                 .id(777L)
@@ -637,9 +643,9 @@ class YieldReportServiceImplTest {
         when(processSheetRowRepository.findByFactoryIdAndPlanId("F006", "PLAN-MIX")).thenReturn(List.of(
                 sheetRow(1L, 100L, "PLAN-MIX", "PT-OTHER", 1, "无关分支", "10", "10",
                         "kg", "kg", null),
-                sheetRow(2L, 200L, "PLAN-MIX", "PT-WIP-A", 1, "炖水", "50", "52",
+                sheetRow(2L, 200L, "PLAN-MIX", "PT-WIP-A", 1, null, "50", "52",
                         "kg", "kg", null),
-                sheetRow(3L, 777L, "PLAN-MIX", "PT-PORK-A", 2, "分切/包装", "52", "400",
+                sheetRow(3L, 777L, "PLAN-MIX", "PT-PORK-A", 2, null, "52", "400",
                         "kg", "盒", "B-200")
         ));
 
