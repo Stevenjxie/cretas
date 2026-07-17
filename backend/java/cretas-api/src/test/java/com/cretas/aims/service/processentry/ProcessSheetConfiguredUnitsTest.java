@@ -43,6 +43,33 @@ class ProcessSheetConfiguredUnitsTest {
     }
 
     @Test
+    void acceptsChineseDisplayAliasForCanonicalConfiguredUnit() throws Exception {
+        ProcessSheetRowRequest request = new ProcessSheetRowRequest();
+        request.setInputUnit("kg");
+        request.setOutputUnit("盒");
+        request.setUnit("盒");
+
+        configuredUnitsMethod().invoke(null, request, productProcess("kg"), workProcess("kg", "box"));
+
+        assertEquals("kg", request.getInputUnit());
+        assertEquals("box", request.getOutputUnit());
+        assertEquals("box", request.getUnit());
+    }
+
+    @Test
+    void doesNotTreatCaseAsAliasForBox() throws Exception {
+        ProcessSheetRowRequest request = new ProcessSheetRowRequest();
+        request.setInputUnit("kg");
+        request.setOutputUnit("箱");
+
+        InvocationTargetException thrown = assertThrows(InvocationTargetException.class,
+                () -> configuredUnitsMethod().invoke(null, request, productProcess("kg"), workProcess("kg", "box")));
+
+        BusinessException error = (BusinessException) thrown.getCause();
+        assertEquals("PROCESS_SHEET_UNIT_MISMATCH", error.getErrorCode());
+    }
+
+    @Test
     void rejectsExternalSemiFinishedFeedForNonKgConfiguredInput() throws Exception {
         ProcessSheetRowRequest request = new ProcessSheetRowRequest();
         request.setInputUnit("bag");

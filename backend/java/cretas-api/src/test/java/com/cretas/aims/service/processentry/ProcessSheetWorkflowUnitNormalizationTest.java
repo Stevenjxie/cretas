@@ -158,6 +158,23 @@ class ProcessSheetWorkflowUnitNormalizationTest {
     }
 
     @Test
+    @DisplayName("Workflow canonical box 接受客户端显示别名盒并归一化")
+    void finishedConversionRow_acceptsChineseAliasForCanonicalBox() throws Throwable {
+        WorkflowClerkSheetService svc = mock(WorkflowClerkSheetService.class);
+        WorkflowClerkSheetConfigDTO workflow = config(3, true, "kg", "box");
+        workflow.getProcesses().getFirst().getOutput().setGramsPerUnit(new BigDecimal("800"));
+        when(svc.getWorkflowSheetConfig(FACTORY_ID, PLAN_ID)).thenReturn(workflow);
+        ProcessSheetServiceImpl impl = newImpl(svc);
+
+        ProcessSheetRowRequest req = row(3, "盒", "kg", "盒");
+        assertTrue(apply(impl, req));
+        assertEquals("kg", req.getInputUnit());
+        assertEquals("box", req.getOutputUnit());
+        assertEquals("box", req.getUnit());
+        assertEquals(0, new BigDecimal("8").compareTo(req.getProductWeight()));
+    }
+
+    @Test
     @DisplayName("计数型成品缺少净重快照时阻止报工")
     void finishedCountOutputRequiresNetWeightSnapshot() throws Throwable {
         WorkflowClerkSheetService svc = mock(WorkflowClerkSheetService.class);
