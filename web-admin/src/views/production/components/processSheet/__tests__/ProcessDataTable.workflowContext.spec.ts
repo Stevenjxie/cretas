@@ -242,6 +242,35 @@ describe('ProcessDataTable.vue workflow-planned-output banner (2B Task F2)', () 
     expect(wrapper.text()).toContain('请回 Workflow 配置');
   });
 
+  it('blocks reporting and points to Workflow repair when a required raw input has been deleted', async () => {
+    const wrapper = mountTable({
+      workflowNodeId: 'N1',
+      workProcessId: 'WP1',
+      processName: '熟制',
+      defaultCostCategory: 'SEASONING',
+      processOrder: 2,
+      plannedUnit: 'kg',
+      allowMultipleUpstreamSources: true,
+      allowFinishedGoodsSource: false,
+      customFieldSchema: null,
+      inputs: [{
+        workflowPortId: 'IN-DELETED', materialKind: 'RAW_MATERIAL', skuId: 'RMT-DELETED',
+        materialName: null, unit: 'kg', required: true, skuResolved: false, finished: false,
+      }],
+      output: {
+        workflowPortId: 'OUT1', materialKind: 'FINISHED_GOOD', skuId: 'PT-FIN-1',
+        materialName: '盐葱横膈膜', unit: 'kg', required: true, skuResolved: true, finished: true,
+      },
+    });
+    await flushPromises();
+
+    const warning = wrapper.find('[data-testid="workflow-input-invalid"]');
+    expect(warning.exists()).toBe(true);
+    expect(warning.text()).toContain('当前计划绑定的原料已失效');
+    expect(warning.text()).toContain('报工页只填写各原料实际投入量');
+    expect(warning.text()).toContain('去产品-工序配置重新绑定');
+  });
+
   it('renders no workflow banner at all for legacy processes (workflowContext null/default) — zero regression', async () => {
     const wrapper = mountTable(null);
     await flushPromises();

@@ -84,6 +84,17 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     ]));
   });
 
+  it('exposes the real stocktake page and its opening-inventory entry under warehouse', () => {
+    expect(childPaths('/warehouse')).toEqual(expect.arrayContaining([
+      '/warehouse/inventory',
+      '/warehouse/stocktakes',
+    ]));
+    expect(childTitles('/warehouse')).toEqual(expect.arrayContaining([
+      '库存批次查询',
+      '盘点与期初库存',
+    ]));
+  });
+
   it('groups workdesks by management and execution roles without duplicate quality titles', () => {
     expect(childGroupLabels('/workdesk')).toEqual(['经营管理', '一线执行']);
     expect(childTitles('/workdesk')).toEqual([

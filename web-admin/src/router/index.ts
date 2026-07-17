@@ -391,14 +391,14 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'inventory',
             name: 'WarehouseInventory',
             component: () => import('@/views/warehouse/inventory/index.vue'),
-            meta: { requiresAuth: true, title: '盘点管理', module: 'warehouse' }
+            meta: { requiresAuth: true, title: '库存批次查询', module: 'warehouse' }
           },
           // SP7 六扇门 ERP-lite — 盘点任务管理 (发起→录入→审批→应用)
           {
             path: 'stocktakes',
             name: 'WarehouseStocktakes',
             component: () => import('@/views/warehouse/stocktakes/index.vue'),
-            meta: { requiresAuth: true, title: '盘点任务', module: 'warehouse' }
+            meta: { requiresAuth: true, title: '盘点与期初库存', module: 'warehouse' }
           },
           // SP7 六扇门 ERP-lite — 报损管理 (仓库→财务 / 生产→厂长 双轨)
           {
