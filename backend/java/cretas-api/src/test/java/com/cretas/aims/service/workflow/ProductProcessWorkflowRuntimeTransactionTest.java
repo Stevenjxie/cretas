@@ -37,6 +37,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
@@ -77,6 +78,7 @@ class ProductProcessWorkflowRuntimeTransactionTest {
     @MockBean private com.cretas.aims.repository.unit.ProductUnitConversionRepository conversionRepository;
     @MockBean private com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator unitValidator;
     @MockBean private com.cretas.aims.service.unit.UnitContractService unitContractService;
+    @MockBean private WorkflowReportingUnitResolver workflowReportingUnitResolver;
 
     @Autowired private ProductProcessWorkflowRuntimeService runtimeService;
     @Autowired private ProductionWorkflowInstanceRepository instanceRepository;
@@ -101,6 +103,23 @@ class ProductProcessWorkflowRuntimeTransactionTest {
                 portRepository.count()
         });
         assertArrayEquals(new long[] {0L, 0L, 0L}, persistedCounts);
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void selectionGroupSnapshotPersistsAndReloadsThroughRealJpaContext() {
+        givenValidScopeAndActivation();
+        doReturn(compiledWithSelectionGroup()).when(compiler).compile(any());
+
+        runtimeService.materializeIfActive("TX-F001", 9901L, "TX-PIG");
+
+        TransactionTemplate freshTransaction = new TransactionTemplate(transactionManager);
+        WorkflowTaskPort persisted = freshTransaction.execute(status -> portRepository.findAll().getFirst());
+        assertEquals("input-alternatives", persisted.getSelectionGroupId());
+        assertEquals("替代投入", persisted.getSelectionGroupLabel());
+        assertEquals("EXACTLY_ONE", persisted.getSelectionGroupMode());
+        assertEquals(1, persisted.getSelectionGroupMinSelections());
+        assertEquals(1, persisted.getSelectionGroupMaxSelections());
     }
 
     private void givenValidScopeAndActivation() {
@@ -150,5 +169,36 @@ class ProductProcessWorkflowRuntimeTransactionTest {
                         true,
                         null,
                         null)));
+    }
+
+    private CompiledProductProcessWorkflow compiledWithSelectionGroup() {
+        return new CompiledProductProcessWorkflow(
+                "[{\"id\":\"tx-process\"}]",
+                "[]",
+                List.of(new CompiledProductProcessWorkflow.CompiledTask(
+                        "tx-process", "TX-WP", 1, "kg", 5, true)),
+                List.of(new CompiledProductProcessWorkflow.CompiledPort(
+                        "tx-process",
+                        "tx-input",
+                        "INPUT",
+                        1,
+                        "tx-material",
+                        "RAW_MATERIAL",
+                        "TX-SKU",
+                        "kg",
+                        "kg",
+                        null,
+                        null,
+                        null,
+                        false,
+                        null,
+                        null,
+                        null,
+                        null,
+                        "input-alternatives",
+                        "替代投入",
+                        "EXACTLY_ONE",
+                        1,
+                        1)));
     }
 }

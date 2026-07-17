@@ -256,6 +256,14 @@ class WorkflowClerkSheetServiceTest {
                 1, "SEMI_FINISHED", "PT-SEMI", "kg", true);
         WorkflowTaskPort outB = port(801L, "trim-out-b", WorkflowTaskPort.Direction.OUTPUT,
                 2, "SEMI_FINISHED", "PT-SEMI-2", "kg", true);
+        for (WorkflowTaskPort port : List.of(outA, outB)) {
+            port.setRequired(false);
+            port.setSelectionGroupId("optional-outputs");
+            port.setSelectionGroupLabel("可选多产出");
+            port.setSelectionGroupMode("OPTIONAL");
+            port.setSelectionGroupMinSelections(0);
+            port.setSelectionGroupMaxSelections(2);
+        }
         when(portRepository.findByFactoryIdAndWorkflowInstanceId("F006", 501L))
                 .thenReturn(List.of(outA, outB));
 
@@ -265,6 +273,13 @@ class WorkflowClerkSheetServiceTest {
         assertEquals("trim-out-a", result.getProcesses().get(0).getOutputs().get(0).getWorkflowPortId());
         assertEquals("trim-out-b", result.getProcesses().get(0).getOutputs().get(1).getWorkflowPortId());
         assertEquals("trim-out-a", result.getProcesses().get(0).getOutput().getWorkflowPortId());
+        WorkflowClerkSheetConfigDTO.PortDescriptor projected =
+                result.getProcesses().get(0).getOutputs().getFirst();
+        assertEquals("optional-outputs", projected.getSelectionGroupId());
+        assertEquals("可选多产出", projected.getSelectionGroupLabel());
+        assertEquals("OPTIONAL", projected.getSelectionGroupMode());
+        assertEquals(0, projected.getSelectionGroupMinSelections());
+        assertEquals(2, projected.getSelectionGroupMaxSelections());
     }
 
     @Test

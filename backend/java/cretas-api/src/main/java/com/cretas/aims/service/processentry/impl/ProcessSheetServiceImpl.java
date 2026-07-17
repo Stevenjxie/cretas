@@ -205,11 +205,19 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withHintTarget("生产日期")
                     .withSeverity("BLOCKING");
         }
+        if (req.getOutputs() != null && req.getOutputs().stream()
+                .filter(Objects::nonNull)
+                .anyMatch(output -> output.getQuantity() != null
+                        && output.getQuantity().signum() < 0)) {
+            throw new BusinessException(400, "多产出的产出数量不能为负数")
+                    .withCode("PROCESS_SHEET_OUTPUT_QUANTITY_INVALID");
+        }
+        assertNoNegativeWorkflowInputs(req);
         boolean hasSingleOutput = req.getOutputQuantity() != null
                 && req.getOutputQuantity().signum() > 0;
         boolean hasMultiOutput = req.getOutputs() != null
                 && !req.getOutputs().isEmpty()
-                && req.getOutputs().stream().allMatch(output ->
+                && req.getOutputs().stream().anyMatch(output ->
                         output.getQuantity() != null && output.getQuantity().signum() > 0);
         if (!hasSingleOutput && !hasMultiOutput) {
             throw new BusinessException(400, "正式提交必须填写大于 0 的实际产出数量")
@@ -218,6 +226,11 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withSeverity("BLOCKING")
                     .withHintTarget("实际生产");
         }
+        retainActualPositiveSelections(req);
+        // 正式报工必须在任何库存分摊、持久化或成本动作前，按实际正数量端口集合完成组约束校验。
+        // saveRow 仍允许不完整草稿，仅校验草稿中实际携带端口的归属、SKU、单位和数量合法性。
+        validateWorkflowSubmissionSelections(factoryId, planId, req);
+
         Optional<ProcessSheetRow> existing = rowRepo
                 .findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
                         factoryId, planId, req.getProcessCode(), req.getClientRowId());
@@ -335,6 +348,57 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .forEach(row -> rows.put(row.getId(), row));
         }
         return List.copyOf(rows.values());
+    }
+
+    private static void retainActualPositiveSelections(ProcessSheetRowRequest req) {
+        if (req.getOutputs() != null) {
+            req.setOutputs(req.getOutputs().stream()
+                    .filter(Objects::nonNull)
+                    .filter(output -> output.getQuantity() != null
+                            && output.getQuantity().signum() > 0)
+                    .toList());
+        }
+        if (req.getMaterialInputTotals() != null) {
+            req.setMaterialInputTotals(req.getMaterialInputTotals().stream()
+                    .filter(Objects::nonNull)
+                    .filter(input -> input.getQuantity() != null
+                            && input.getQuantity().signum() > 0)
+                    .toList());
+        }
+        if (req.getRawMaterialInputs() != null) {
+            req.setRawMaterialInputs(req.getRawMaterialInputs().stream()
+                    .filter(Objects::nonNull)
+                    .filter(input -> input.getQuantity() != null
+                            && input.getQuantity().signum() > 0)
+                    .toList());
+        }
+        if (req.getUpstreamSources() != null) {
+            req.setUpstreamSources(req.getUpstreamSources().stream()
+                    .filter(Objects::nonNull)
+                    .filter(input -> input.getFeedQuantityKg() != null
+                            && input.getFeedQuantityKg().signum() > 0)
+                    .toList());
+        }
+    }
+
+    private static void assertNoNegativeWorkflowInputs(ProcessSheetRowRequest req) {
+        boolean negative = req.getMaterialInputTotals() != null
+                && req.getMaterialInputTotals().stream().filter(Objects::nonNull)
+                        .anyMatch(input -> input.getQuantity() != null
+                                && input.getQuantity().signum() < 0);
+        negative |= req.getRawMaterialInputs() != null
+                && req.getRawMaterialInputs().stream().filter(Objects::nonNull)
+                        .anyMatch(input -> input.getQuantity() != null
+                                && input.getQuantity().signum() < 0);
+        negative |= req.getUpstreamSources() != null
+                && req.getUpstreamSources().stream().filter(Objects::nonNull)
+                        .anyMatch(input -> input.getFeedQuantityKg() != null
+                                && input.getFeedQuantityKg().signum() < 0);
+        if (negative) {
+            throw new BusinessException(400, "Workflow 投入端口数量不能为负数")
+                    .withCode("PROCESS_SHEET_INPUT_QUANTITY_INVALID")
+                    .withSeverity("BLOCKING");
+        }
     }
 
     @Override
@@ -508,7 +572,12 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withSeverity("BLOCKING")
                     .withHintTarget("Workflow");
         }
-        com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor out = desc.getOutput();
+        com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor out =
+                resolveWorkflowOutputPort(desc, req.getWorkflowPortId());
+        req.setWorkflowPortId(out.getWorkflowPortId());
+        if (req.getMaterialNodeId() == null) {
+            req.setMaterialNodeId(out.getMaterialNodeId());
+        }
         String processName = desc.getProcessName() != null ? desc.getProcessName() : "";
         String outputName = out.getMaterialName() != null ? out.getMaterialName() : "";
 
@@ -547,6 +616,217 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withHint("请按 Workflow 配置的单位录入产出数量");
         }
         return config;
+    }
+
+    private static List<WorkflowClerkSheetConfigDTO.PortDescriptor> workflowOutputs(
+            WorkflowClerkSheetConfigDTO.ProcessDescriptor descriptor) {
+        if (descriptor.getOutputs() != null && !descriptor.getOutputs().isEmpty()) {
+            return descriptor.getOutputs();
+        }
+        return descriptor.getOutput() == null ? List.of() : List.of(descriptor.getOutput());
+    }
+
+    private static WorkflowClerkSheetConfigDTO.PortDescriptor resolveWorkflowOutputPort(
+            WorkflowClerkSheetConfigDTO.ProcessDescriptor descriptor,
+            String workflowPortId) {
+        List<WorkflowClerkSheetConfigDTO.PortDescriptor> outputs = workflowOutputs(descriptor);
+        if (outputs.isEmpty()) {
+            throw new BusinessException(409, "Workflow 工序缺少产出端口，不能报工")
+                    .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_MISSING")
+                    .withSeverity("BLOCKING");
+        }
+        if (workflowPortId == null || workflowPortId.isBlank()) {
+            if (outputs.size() == 1) {
+                return outputs.getFirst();
+            }
+            throw new BusinessException(409, "多产出工序必须指定实际选择的 Workflow 产出端口")
+                    .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_REQUIRED")
+                    .withSeverity("BLOCKING");
+        }
+        return outputs.stream()
+                .filter(port -> workflowPortId.equals(port.getWorkflowPortId()))
+                .findFirst()
+                .orElseThrow(() -> new BusinessException(409,
+                        "请求包含不属于该 Workflow 工序的产出端口")
+                        .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_NOT_FOUND")
+                        .withSeverity("BLOCKING"));
+    }
+
+    private static void validatePortSelections(
+            List<WorkflowClerkSheetConfigDTO.PortDescriptor> ports,
+            Set<String> selectedPortIds,
+            String direction) {
+        Map<String, List<WorkflowClerkSheetConfigDTO.PortDescriptor>> groups = new LinkedHashMap<>();
+        for (WorkflowClerkSheetConfigDTO.PortDescriptor port : ports) {
+            String groupId = port.getSelectionGroupId();
+            if (groupId == null || groupId.isBlank()) {
+                if (Boolean.TRUE.equals(port.getRequired())
+                        && !selectedPortIds.contains(port.getWorkflowPortId())) {
+                    throw missingRequiredPort(port, direction);
+                }
+                continue;
+            }
+            groups.computeIfAbsent(groupId, ignored -> new ArrayList<>()).add(port);
+        }
+
+        for (Map.Entry<String, List<WorkflowClerkSheetConfigDTO.PortDescriptor>> entry
+                : groups.entrySet()) {
+            List<WorkflowClerkSheetConfigDTO.PortDescriptor> groupPorts = entry.getValue();
+            WorkflowClerkSheetConfigDTO.PortDescriptor snapshot = groupPorts.getFirst();
+            assertConsistentSelectionGroupSnapshot(entry.getKey(), snapshot, groupPorts);
+            long selectedCount = groupPorts.stream()
+                    .filter(port -> selectedPortIds.contains(port.getWorkflowPortId()))
+                    .count();
+            int portCount = groupPorts.size();
+            boolean valid = switch (snapshot.getSelectionGroupMode()) {
+                case "ALL_REQUIRED" -> selectedCount == portCount;
+                case "EXACTLY_ONE" -> selectedCount == 1;
+                case "AT_LEAST_ONE" -> selectedCount >= 1 && selectedCount <= portCount;
+                case "OPTIONAL" -> selectedCount <= portCount;
+                default -> false;
+            };
+            if (!valid) {
+                String label = snapshot.getSelectionGroupLabel();
+                throw new BusinessException(409, "Workflow 端口选择组「" + label
+                        + "」不满足 " + snapshot.getSelectionGroupMode() + " 规则")
+                        .withCode("PROCESS_SHEET_WORKFLOW_SELECTION_GROUP_VIOLATION")
+                        .withHint("请按端口选择组规则重新选择实际报工端口")
+                        .withSeverity("BLOCKING");
+            }
+        }
+    }
+
+    private void validateWorkflowSubmissionSelections(
+            String factoryId, String planId, ProcessSheetRowRequest req) {
+        if (workflowClerkSheetService == null || req.getProcessOrder() == null) {
+            return;
+        }
+        WorkflowClerkSheetConfigDTO config;
+        try {
+            config = workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId);
+        } catch (BusinessException be) {
+            throw be;
+        } catch (Exception e) {
+            log.error("Workflow 正式报工选择组配置读取失败: factory={}, plan={}", factoryId, planId, e);
+            throw new BusinessException(409, "Workflow 运行时配置读取失败，不能校验正式报工端口选择")
+                    .withCode("PROCESS_SHEET_WORKFLOW_CONFIG_UNAVAILABLE")
+                    .withSeverity("BLOCKING");
+        }
+        if (config == null) {
+            return;
+        }
+        WorkflowClerkSheetConfigDTO.ProcessDescriptor descriptor = config.getProcesses() == null
+                ? null
+                : config.getProcesses().stream()
+                        .filter(process -> req.getProcessOrder().equals(process.getProcessOrder()))
+                        .findFirst()
+                        .orElse(null);
+        if (descriptor == null) {
+            throw new BusinessException(409, "请求工序不在该批次锁定的 Workflow 中")
+                    .withCode("PROCESS_SHEET_WORKFLOW_PROCESS_NOT_FOUND")
+                    .withSeverity("BLOCKING");
+        }
+
+        applyWorkflowInputPorts(descriptor, req, true);
+
+        List<WorkflowClerkSheetConfigDTO.PortDescriptor> outputs = workflowOutputs(descriptor);
+        Map<String, WorkflowClerkSheetConfigDTO.PortDescriptor> outputsById = new LinkedHashMap<>();
+        for (WorkflowClerkSheetConfigDTO.PortDescriptor output : outputs) {
+            if (output.getWorkflowPortId() == null || output.getWorkflowPortId().isBlank()) {
+                throw new BusinessException(409, "Workflow 产出端口缺少稳定标识")
+                        .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_ID_MISSING")
+                        .withSeverity("BLOCKING");
+            }
+            if (outputsById.put(output.getWorkflowPortId(), output) != null) {
+                throw new BusinessException(409, "Workflow 存在重复的产出端口标识")
+                        .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_DUPLICATE")
+                        .withSeverity("BLOCKING");
+            }
+        }
+
+        Set<String> selectedOutputs = new LinkedHashSet<>();
+        if (req.getOutputs() != null && !req.getOutputs().isEmpty()) {
+            for (ProcessSheetRowRequest.OutputLine output : req.getOutputs()) {
+                if (output == null || output.getQuantity() == null
+                        || output.getQuantity().signum() <= 0) {
+                    continue;
+                }
+                String portId = output.getWorkflowPortId();
+                if (portId == null || portId.isBlank()) {
+                    throw new BusinessException(409, "多产出报工必须指定 Workflow 产出端口")
+                            .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_REQUIRED")
+                            .withSeverity("BLOCKING");
+                }
+                if (!outputsById.containsKey(portId)) {
+                    throw new BusinessException(409, "请求包含不属于该 Workflow 工序的产出端口")
+                            .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_NOT_FOUND")
+                            .withSeverity("BLOCKING");
+                }
+                if (!selectedOutputs.add(portId)) {
+                    throw new BusinessException(409, "同一 Workflow 产出端口不能重复报工")
+                            .withCode("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_REPEATED")
+                            .withSeverity("BLOCKING");
+                }
+            }
+        } else {
+            WorkflowClerkSheetConfigDTO.PortDescriptor output =
+                    resolveWorkflowOutputPort(descriptor, req.getWorkflowPortId());
+            selectedOutputs.add(output.getWorkflowPortId());
+        }
+        validatePortSelections(outputs, selectedOutputs, "OUTPUT");
+    }
+
+    private static void assertConsistentSelectionGroupSnapshot(
+            String groupId,
+            WorkflowClerkSheetConfigDTO.PortDescriptor snapshot,
+            List<WorkflowClerkSheetConfigDTO.PortDescriptor> groupPorts) {
+        int portCount = groupPorts.size();
+        boolean invalid = snapshot.getSelectionGroupLabel() == null
+                || snapshot.getSelectionGroupLabel().isBlank()
+                || snapshot.getSelectionGroupMode() == null
+                || snapshot.getSelectionGroupMinSelections() == null
+                || snapshot.getSelectionGroupMaxSelections() == null;
+        for (WorkflowClerkSheetConfigDTO.PortDescriptor port : groupPorts) {
+            invalid |= !Objects.equals(snapshot.getSelectionGroupLabel(), port.getSelectionGroupLabel())
+                    || !Objects.equals(snapshot.getSelectionGroupMode(), port.getSelectionGroupMode())
+                    || !Objects.equals(snapshot.getSelectionGroupMinSelections(),
+                            port.getSelectionGroupMinSelections())
+                    || !Objects.equals(snapshot.getSelectionGroupMaxSelections(),
+                            port.getSelectionGroupMaxSelections());
+        }
+        if (invalid) {
+            throw new BusinessException(409, "Workflow 端口选择组快照不完整或不一致: " + groupId)
+                    .withCode("PROCESS_SHEET_WORKFLOW_SELECTION_GROUP_SNAPSHOT_INVALID")
+                    .withSeverity("BLOCKING");
+        }
+        int min = snapshot.getSelectionGroupMinSelections();
+        int max = snapshot.getSelectionGroupMaxSelections();
+        boolean boundsValid = switch (snapshot.getSelectionGroupMode()) {
+            case "ALL_REQUIRED" -> min == portCount && max == portCount;
+            case "EXACTLY_ONE" -> min == 1 && max == 1;
+            case "AT_LEAST_ONE" -> min == 1 && max == portCount;
+            case "OPTIONAL" -> min == 0 && max == portCount;
+            default -> false;
+        };
+        if (!boundsValid) {
+            throw new BusinessException(409, "Workflow 端口选择组边界与模式不一致: " + groupId)
+                    .withCode("PROCESS_SHEET_WORKFLOW_SELECTION_GROUP_SNAPSHOT_INVALID")
+                    .withSeverity("BLOCKING");
+        }
+    }
+
+    private static BusinessException missingRequiredPort(
+            WorkflowClerkSheetConfigDTO.PortDescriptor port,
+            String direction) {
+        boolean input = "INPUT".equals(direction);
+        return new BusinessException(409, "缺少 Workflow 必填" + (input ? "投入" : "产出") + "端口「"
+                + (port.getMaterialName() != null
+                        ? port.getMaterialName() : port.getWorkflowPortId()) + "」")
+                .withCode(input
+                        ? "PROCESS_SHEET_WORKFLOW_REQUIRED_INPUT_MISSING"
+                        : "PROCESS_SHEET_WORKFLOW_REQUIRED_OUTPUT_MISSING")
+                .withHint(input ? "请补全所有必填投入后再正式报工" : "请补全所有必填产出后再正式报工")
+                .withSeverity("BLOCKING");
     }
 
     /**
@@ -654,7 +934,16 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     private ProcessSheetRowResult saveMultiOutputRow(String factoryId, String planId,
             ProcessSheetRowRequest req, Long userId) {
         List<String> warnings = new ArrayList<>();
-        List<ProcessSheetRowRequest.OutputLine> outs = req.getOutputs();
+        List<ProcessSheetRowRequest.OutputLine> outs = req.getOutputs().stream()
+                .filter(Objects::nonNull)
+                .filter(output -> output.getQuantity() != null
+                        && output.getQuantity().signum() != 0)
+                .toList();
+        if (outs.isEmpty()) {
+            throw new BusinessException(400, "多产出报工至少需要一个正数产出")
+                    .withCode("PROCESS_SHEET_OUTPUT_REQUIRED");
+        }
+        req.setOutputs(outs);
 
         // 1. 逐产出校验 (禁止降级: 缺产品/量<=0 明确报错)
         for (ProcessSheetRowRequest.OutputLine o : outs) {
@@ -1196,7 +1485,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withSeverity("BLOCKING")
                     .withHintTarget("Workflow");
         }
-        applyWorkflowInputPorts(desc, req);
+        applyWorkflowInputPorts(desc, req, false);
 
         Map<String, com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor> byPortId =
                 new HashMap<>();
@@ -1273,31 +1562,13 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             o.setUnit(expectUnit);
             applyAuthoritativeFinishedWeight(o, port);
         }
-        for (com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor port : desc.getOutputs()) {
-            if (Boolean.TRUE.equals(port.getRequired())
-                    && !submittedPortIds.contains(port.getWorkflowPortId())) {
-                throw new BusinessException(409, "缺少 Workflow 必填产出端口「"
-                        + (port.getMaterialName() != null ? port.getMaterialName() : port.getWorkflowPortId()) + "」")
-                        .withCode("PROCESS_SHEET_WORKFLOW_REQUIRED_OUTPUT_MISSING")
-                        .withHint("请补全所有必填产出后再保存")
-                        .withSeverity("BLOCKING")
-                        .withHintTarget("Workflow");
-            }
-        }
         // WorkProcessTask.actualQuantity 只记录主产出数量。禁止把不同单位的多产出直接求和
         // （例如 8件 + 500g = 508），主产出由 descriptor.output 明确定义。
         String primaryPortId = desc.getOutput() != null ? desc.getOutput().getWorkflowPortId() : null;
         ProcessSheetRowRequest.OutputLine primaryOutput = outs.stream()
                 .filter(line -> primaryPortId != null && primaryPortId.equals(line.getWorkflowPortId()))
                 .findFirst()
-                .orElse(null);
-        if (primaryOutput == null || primaryOutput.getQuantity() == null) {
-            throw new BusinessException(409, "缺少 Workflow 主产出，不能完成本道报工")
-                    .withCode("PROCESS_SHEET_WORKFLOW_PRIMARY_OUTPUT_MISSING")
-                    .withHint("请填写主产出数量后再保存")
-                    .withSeverity("BLOCKING")
-                    .withHintTarget("Workflow");
-        }
+                .orElseGet(outs::getFirst);
         req.setOutputQuantity(primaryOutput.getQuantity());
         return config;
     }
@@ -2778,23 +3049,22 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withSeverity("BLOCKING")
                     .withHintTarget("Workflow");
         }
-        if (descriptor.getOutputs() != null && descriptor.getOutputs().size() > 1) {
-            throw new BusinessException(409, "Workflow 本道工序包含多个产出，必须按端口逐项报工")
-                    .withCode("PROCESS_SHEET_WORKFLOW_MULTI_OUTPUT_REQUIRED")
-                    .withHint("请刷新逐道录入页面，填写各产出端口数量")
-                    .withSeverity("BLOCKING")
-                    .withHintTarget("Workflow");
+        WorkflowClerkSheetConfigDTO.PortDescriptor selectedOutput =
+                resolveWorkflowOutputPort(descriptor, req.getWorkflowPortId());
+        req.setWorkflowPortId(selectedOutput.getWorkflowPortId());
+        if (req.getMaterialNodeId() == null) {
+            req.setMaterialNodeId(selectedOutput.getMaterialNodeId());
         }
-        String outputUnit = requireWorkflowPortUnit(descriptor.getOutput().getUnit(), "产出");
+        String outputUnit = requireWorkflowPortUnit(selectedOutput.getUnit(), "产出");
 
         // 与 ProductWorkProcess 路径同语义: 请求单位若提供则必须匹配端口, 否则按端口单位归一化。
-        applyWorkflowInputPorts(descriptor, req);
+        applyWorkflowInputPorts(descriptor, req, false);
         assertConfiguredUnit(req.getOutputUnit(), outputUnit, "产出");
         assertConfiguredUnit(req.getUnit(), outputUnit, "产出");
 
         req.setOutputUnit(outputUnit);
         req.setUnit(outputUnit);
-        applyAuthoritativeFinishedWeight(req, descriptor.getOutput());
+        applyAuthoritativeFinishedWeight(req, selectedOutput);
         return true;
     }
 
@@ -2863,7 +3133,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
      */
     private static void applyWorkflowInputPorts(
             com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.ProcessDescriptor descriptor,
-            ProcessSheetRowRequest req) {
+            ProcessSheetRowRequest req,
+            boolean requireCompleteSelections) {
         List<com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor> ports =
                 descriptor.getInputs();
         if (ports == null || ports.isEmpty()) {
@@ -2877,9 +3148,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 || (req.getRawMaterialInputs() != null && !req.getRawMaterialInputs().isEmpty())
                 || (req.getUpstreamSources() != null && !req.getUpstreamSources().isEmpty());
         if (!hasStructuredInputs) {
-            String unit = workflowInputUnit(descriptor);
-            assertConfiguredUnit(req.getInputUnit(), unit, "投入");
-            req.setInputUnit(unit);
+            if (requireCompleteSelections) {
+                validatePortSelections(ports, Set.of(), "INPUT");
+            }
             return;
         }
 
@@ -2901,10 +3172,13 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 assertInputSku(port, input.getMaterialTypeId());
                 String portUnit = requireWorkflowPortUnit(port.getUnit(), "投入");
                 assertConfiguredUnit(input.getUnit(), portUnit, "投入");
+                assertNonNegativeWorkflowInput(input.getQuantity());
                 input.setUnit(portUnit);
                 input.setWorkflowPortId(port.getWorkflowPortId());
                 if (input.getMaterialNodeId() == null) input.setMaterialNodeId(port.getMaterialNodeId());
-                submitted.add(port.getWorkflowPortId());
+                if (input.getQuantity() != null && input.getQuantity().signum() > 0) {
+                    submitted.add(port.getWorkflowPortId());
+                }
             }
         }
         if (req.getRawMaterialInputs() != null) {
@@ -2912,10 +3186,13 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor port =
                         resolveInputPort(byId, ports, input.getWorkflowPortId());
                 assertInputSku(port, input.getSkuId());
+                assertNonNegativeWorkflowInput(input.getQuantity());
                 input.setSkuId(port.getSkuId());
                 input.setWorkflowPortId(port.getWorkflowPortId());
                 if (input.getMaterialNodeId() == null) input.setMaterialNodeId(port.getMaterialNodeId());
-                submitted.add(port.getWorkflowPortId());
+                if (input.getQuantity() != null && input.getQuantity().signum() > 0) {
+                    submitted.add(port.getWorkflowPortId());
+                }
             }
         }
         if (req.getUpstreamSources() != null) {
@@ -2923,26 +3200,26 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor port =
                         resolveInputPort(byId, ports, input.getWorkflowPortId());
                 assertInputSku(port, input.getSkuId());
+                assertNonNegativeWorkflowInput(input.getFeedQuantityKg());
                 input.setSkuId(port.getSkuId());
                 input.setWorkflowPortId(port.getWorkflowPortId());
                 if (input.getMaterialNodeId() == null) input.setMaterialNodeId(port.getMaterialNodeId());
-                submitted.add(port.getWorkflowPortId());
+                if (input.getFeedQuantityKg() != null && input.getFeedQuantityKg().signum() > 0) {
+                    submitted.add(port.getWorkflowPortId());
+                }
             }
         }
-        for (com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor port : ports) {
-            if (Boolean.TRUE.equals(port.getRequired()) && !submitted.contains(port.getWorkflowPortId())) {
-                throw new BusinessException(409, "缺少 Workflow 必填投入端口「"
-                        + (port.getMaterialName() != null ? port.getMaterialName() : port.getWorkflowPortId()) + "」")
-                        .withCode("PROCESS_SHEET_WORKFLOW_REQUIRED_INPUT_MISSING")
-                        .withHint("请补全所有必填投入后再正式报工")
-                        .withSeverity("BLOCKING");
-            }
+        if (requireCompleteSelections) {
+            validatePortSelections(ports, submitted, "INPUT");
         }
         List<String> normalizedUnits = ports.stream()
                 .filter(port -> submitted.contains(port.getWorkflowPortId()))
                 .map(port -> normalizeReportingUnit(requireWorkflowPortUnit(port.getUnit(), "投入")))
                 .distinct()
                 .toList();
+        if (normalizedUnits.isEmpty()) {
+            return;
+        }
         boolean allMass = normalizedUnits.stream().allMatch(unit -> "kg".equals(unit) || "g".equals(unit));
         if (normalizedUnits.size() == 1) {
             req.setInputUnit(requireWorkflowPortUnit(
@@ -2954,6 +3231,14 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             throw new BusinessException(409, "不同物理维度的投入不能合并为一个组级投入总量")
                     .withCode("PROCESS_SHEET_WORKFLOW_MIXED_INPUT_DIMENSIONS")
                     .withHint("请拆分工序；g/kg 可自动换算，数量/长度/重量不可直接相加")
+                    .withSeverity("BLOCKING");
+        }
+    }
+
+    private static void assertNonNegativeWorkflowInput(BigDecimal quantity) {
+        if (quantity != null && quantity.signum() < 0) {
+            throw new BusinessException(400, "Workflow 投入端口数量不能为负数")
+                    .withCode("PROCESS_SHEET_INPUT_QUANTITY_INVALID")
                     .withSeverity("BLOCKING");
         }
     }

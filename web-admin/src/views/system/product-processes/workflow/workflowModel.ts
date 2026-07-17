@@ -3,6 +3,7 @@ import type {
   MaterialNodeData,
   ProcessBranchInput,
   ProcessNodeData,
+  ProcessPortGroup,
   ProductProcessNodeKind,
   ProductProcessWorkflowDefinition,
   ProductProcessWorkflowEdge,
@@ -370,6 +371,7 @@ function patchPhase(operation: WorkflowPatch['op']): number {
 function isPathCompatibleWithNodeKind(kind: ProductProcessNodeKind, path: string): boolean {
   if (kind === 'PROCESS') {
     return path === 'ports'
+      || path === 'portGroups'
       || path === 'conversionRule'
       || path.startsWith('conversionRule.')
       || path === 'reportingRequired';
@@ -385,10 +387,11 @@ const workflowNodeKinds = new Set<ProductProcessNodeKind>([
 ]);
 const materialNodeKinds = new Set(['RAW_MATERIAL', 'SEMI_FINISHED', 'FINISHED_GOOD']);
 const conversionModes = new Set(['ACTUAL_WEIGHT', 'FIXED_RATIO', 'SUM_OUTPUTS', 'FORMULA']);
+const portSelectionModes = new Set(['ALL_REQUIRED', 'EXACTLY_ONE', 'AT_LEAST_ONE', 'OPTIONAL']);
 const materialDataKeys = new Set(['name', 'skuId', 'skuCode', 'specification', 'baseUnit', 'bound']);
 const processDataKeys = new Set([
   'workProcessId', 'processName', 'processCategory', 'inputUnit', 'outputUnit', 'standardTime',
-  'ports', 'conversionRule', 'reportingRequired', 'allowMultipleUpstreamSources',
+  'ports', 'portGroups', 'conversionRule', 'reportingRequired', 'allowMultipleUpstreamSources',
   'allowFinishedGoodsSource',
 ]);
 const portKeys = new Set([
@@ -396,7 +399,7 @@ const portKeys = new Set([
   'conversionRefId', 'conversionVersion', 'ordinal',
 ]);
 const fieldPaths = new Set([
-  'name', 'skuId', 'skuCode', 'specification', 'ports', 'conversionRule',
+  'name', 'skuId', 'skuCode', 'specification', 'ports', 'portGroups', 'conversionRule',
   'conversionRule.mode', 'conversionRule.expression', 'reportingRequired',
 ]);
 
@@ -488,12 +491,42 @@ function isProcessNodeData(value: Record<string, unknown>): value is ProcessNode
     && isNonBlankString(value.outputUnit)
     && Array.isArray(value.ports)
     && value.ports.every(isProcessPort)
+    && (value.portGroups === undefined
+      || (Array.isArray(value.portGroups) && value.portGroups.every(isProcessPortGroup)))
     && isConversionRule(value.conversionRule)
     && typeof value.reportingRequired === 'boolean'
     && optionalNullableString(value.processCategory)
     && optionalNullableFiniteNumber(value.standardTime)
     && optionalBoolean(value.allowMultipleUpstreamSources)
     && optionalBoolean(value.allowFinishedGoodsSource);
+}
+
+function isProcessPortGroup(value: unknown): value is ProcessPortGroup {
+  if (!isRecord(value)
+    || !hasExactKeys(value, [
+      'id', 'direction', 'label', 'mode', 'minSelections', 'maxSelections', 'portIds',
+    ])
+    || !isNonBlankString(value.id)
+    || (value.direction !== 'INPUT' && value.direction !== 'OUTPUT')
+    || !isNonBlankString(value.label)
+    || typeof value.mode !== 'string'
+    || !portSelectionModes.has(value.mode)
+    || !Number.isInteger(value.minSelections)
+    || !Number.isInteger(value.maxSelections)
+    || !Array.isArray(value.portIds)
+    || value.portIds.length === 0
+    || !value.portIds.every(isNonBlankString)
+    || new Set(value.portIds).size !== value.portIds.length) {
+    return false;
+  }
+  const count = value.portIds.length;
+  const min = value.minSelections as number;
+  const max = value.maxSelections as number;
+  if (min < 0 || max < min || max > count) return false;
+  if (value.mode === 'ALL_REQUIRED') return min === count && max === count;
+  if (value.mode === 'EXACTLY_ONE') return min === 1 && max === 1;
+  if (value.mode === 'AT_LEAST_ONE') return min === 1 && max === count;
+  return min === 0 && max === count;
 }
 
 function isProcessPort(value: unknown): boolean {
@@ -533,6 +566,7 @@ function isAllowedFieldValue(path: string, value: unknown): boolean {
   if (path === 'conversionRule.mode') return typeof value === 'string' && conversionModes.has(value);
   if (path === 'conversionRule') return isConversionRule(value);
   if (path === 'ports') return Array.isArray(value) && value.every(isProcessPort);
+  if (path === 'portGroups') return Array.isArray(value) && value.every(isProcessPortGroup);
   return false;
 }
 
@@ -615,6 +649,7 @@ function validateWorkflowPatchGraph(definition: ProductProcessWorkflowDefinition
       }
       ports.set(portId, port);
     });
+    processPortGroupErrors(data).forEach((error) => errors.push(`${node.id}: ${error}`));
     portsByProcess.set(node.id, ports);
   });
 
@@ -660,6 +695,33 @@ function validateWorkflowPatchGraph(definition: ProductProcessWorkflowDefinition
   return errors;
 }
 
+function processPortGroupErrors(data: ProcessNodeData): string[] {
+  if (data.portGroups === undefined) return [];
+  if (!Array.isArray(data.portGroups)) return ['Process port groups are invalid'];
+  const errors: string[] = [];
+  const ports = new Map(data.ports.map((port) => [port.id, port]));
+  const groupIds = new Set<string>();
+  const groupedPorts = new Set<string>();
+  data.portGroups.forEach((group) => {
+    if (!isProcessPortGroup(group)) {
+      errors.push('Process port group shape is invalid');
+      return;
+    }
+    if (groupIds.has(group.id)) errors.push(`Duplicate process port group: ${group.id}`);
+    groupIds.add(group.id);
+    group.portIds.forEach((portId) => {
+      const port = ports.get(portId);
+      if (!port) errors.push(`Process port group references a missing port: ${group.id}/${portId}`);
+      else if (port.direction !== group.direction) {
+        errors.push(`Process port group direction mismatch: ${group.id}/${portId}`);
+      }
+      if (groupedPorts.has(portId)) errors.push(`Process port belongs to multiple groups: ${portId}`);
+      groupedPorts.add(portId);
+    });
+  });
+  return errors;
+}
+
 export function validateWorkflow(
   definition: ProductProcessWorkflowDefinition,
   mode: 'draft' | 'publish',
@@ -692,6 +754,9 @@ export function validateWorkflow(
     }
     const data = node.data as ProcessNodeData;
     const ports = Array.isArray(data.ports) ? data.ports : [];
+    processPortGroupErrors(data).forEach((message) => {
+      errors.push({ code: 'PORT_GROUP_INVALID', nodeId: node.id, message: `${data.processName}: ${message}` });
+    });
     ports.forEach((port) => {
       const connected = port.direction === 'INPUT'
         ? definition.edges.some((edge) => edge.target === node.id && edge.targetHandle === port.id)

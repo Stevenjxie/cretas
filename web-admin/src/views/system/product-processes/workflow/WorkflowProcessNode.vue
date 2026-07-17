@@ -62,6 +62,26 @@
         <span>投入物料</span>
         <el-button v-if="canWrite && allowAddInput" text size="small" type="primary" class="nodrag" @click="emit('addInput')">+ 来源 Cell（合流）</el-button>
       </div>
+      <div v-if="inputPorts.length > 1" class="port-relation nodrag" data-testid="input-port-relation">
+        <div class="port-relation-control">
+          <span>投入关系</span>
+          <el-select
+            :model-value="relationMode('INPUT')"
+            :disabled="!canWrite || inputPortGroups.length > 1"
+            size="small"
+            data-testid="input-relation-select"
+            @change="(mode: PortSelectionMode) => updatePortRelation('INPUT', mode)"
+          >
+            <el-option v-for="option in relationOptions('INPUT')" :key="option.value" :label="option.label" :value="option.value" />
+          </el-select>
+        </div>
+        <div class="port-relation-labels">
+          <el-tag v-if="inputPortGroups.length === 0" size="small" type="info">兼容旧配置 · 全部必投</el-tag>
+          <el-tag v-for="group in inputPortGroups" :key="group.id" size="small" type="info">
+            {{ group.label }} · {{ selectionModeLabel(group.mode, 'INPUT') }}
+          </el-tag>
+        </div>
+      </div>
       <div v-for="port in inputPorts" :key="port.id" class="port-row">
         <el-input
           class="nodrag"
@@ -85,6 +105,26 @@
           data-testid="add-output-inline"
           @click.stop="emit('addOutput')"
         >+ 产出 Cell（分流）</el-button>
+      </div>
+      <div v-if="outputPorts.length > 1" class="port-relation nodrag" data-testid="output-port-relation">
+        <div class="port-relation-control">
+          <span>产出关系</span>
+          <el-select
+            :model-value="relationMode('OUTPUT')"
+            :disabled="!canWrite || outputPortGroups.length > 1"
+            size="small"
+            data-testid="output-relation-select"
+            @change="(mode: PortSelectionMode) => updatePortRelation('OUTPUT', mode)"
+          >
+            <el-option v-for="option in relationOptions('OUTPUT')" :key="option.value" :label="option.label" :value="option.value" />
+          </el-select>
+        </div>
+        <div class="port-relation-labels">
+          <el-tag v-if="outputPortGroups.length === 0" size="small" type="success">兼容旧配置 · 全部产出</el-tag>
+          <el-tag v-for="group in outputPortGroups" :key="group.id" size="small" type="success">
+            {{ group.label }} · {{ selectionModeLabel(group.mode, 'OUTPUT') }}
+          </el-tag>
+        </div>
       </div>
       <div v-for="port in outputPorts" :key="port.id" class="port-row output-row">
         <WorkflowSkuPicker
@@ -171,7 +211,7 @@
 import { computed, ref } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
 import WorkflowSkuPicker, { type WorkflowSkuPickerOption } from './WorkflowSkuPicker.vue';
-import type { ProcessNodeData } from './types';
+import type { PortSelectionMode, ProcessNodeData, ProcessPortGroup } from './types';
 
 const props = withDefaults(defineProps<{
   data: ProcessNodeData;
@@ -202,11 +242,65 @@ const edgeOutputStyle = { top: '12px', right: '-14px' } as const;
 const hovered = ref(false);
 const inputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'INPUT'));
 const outputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'OUTPUT'));
+const inputPortGroups = computed(() => (props.data.portGroups ?? []).filter((group) => group.direction === 'INPUT'));
+const outputPortGroups = computed(() => (props.data.portGroups ?? []).filter((group) => group.direction === 'OUTPUT'));
 const primaryInput = computed(() => [...inputPorts.value].sort((a, b) => a.ordinal - b.ordinal)[0]);
 const primaryOutput = computed(() => [...outputPorts.value].sort((a, b) => a.ordinal - b.ordinal)[0]);
 const isSingleAutoConvert = computed(() => inputPorts.value.length === 1
   && outputPorts.value.length === 1
   && primaryOutput.value?.quantityMode === 'AUTO_CONVERT');
+
+function relationOptions(direction: 'INPUT' | 'OUTPUT'): Array<{ value: PortSelectionMode; label: string }> {
+  return [
+    { value: 'ALL_REQUIRED', label: direction === 'INPUT' ? '全部必投' : '全部产出' },
+    { value: 'EXACTLY_ONE', label: '互相替代（选 1）' },
+    { value: 'AT_LEAST_ONE', label: '至少选 1' },
+    { value: 'OPTIONAL', label: '可选' },
+  ];
+}
+
+function selectionModeLabel(mode: PortSelectionMode, direction: 'INPUT' | 'OUTPUT'): string {
+  return relationOptions(direction).find((option) => option.value === mode)?.label ?? mode;
+}
+
+function directionGroups(direction: 'INPUT' | 'OUTPUT'): ProcessPortGroup[] {
+  return direction === 'INPUT' ? inputPortGroups.value : outputPortGroups.value;
+}
+
+function relationMode(direction: 'INPUT' | 'OUTPUT'): PortSelectionMode {
+  const groups = directionGroups(direction);
+  return groups.length === 1 ? groups[0].mode : 'ALL_REQUIRED';
+}
+
+function updatePortRelation(direction: 'INPUT' | 'OUTPUT', mode: PortSelectionMode): void {
+  const portIds = props.data.ports
+    .filter((port) => port.direction === direction)
+    .sort((left, right) => left.ordinal - right.ordinal)
+    .map((port) => port.id);
+  if (portIds.length < 2) return;
+  const bounds = mode === 'ALL_REQUIRED'
+    ? { minSelections: portIds.length, maxSelections: portIds.length }
+    : mode === 'EXACTLY_ONE'
+      ? { minSelections: 1, maxSelections: 1 }
+      : mode === 'AT_LEAST_ONE'
+        ? { minSelections: 1, maxSelections: portIds.length }
+        : { minSelections: 0, maxSelections: portIds.length };
+  const existing = directionGroups(direction)[0];
+  const group: ProcessPortGroup = {
+    id: existing?.id || `port-group:${direction.toLowerCase()}:all`,
+    direction,
+    label: direction === 'INPUT' ? '投入关系' : '产出关系',
+    mode,
+    ...bounds,
+    portIds,
+  };
+  emit('update', {
+    portGroups: [
+      ...(props.data.portGroups ?? []).filter((candidate) => candidate.direction !== direction),
+      group,
+    ],
+  });
+}
 
 function updatePortQuantity(portId: string, value: number | undefined): void {
   if (!value || value <= 0) return;
@@ -270,6 +364,10 @@ function handleStyle(index: number, count: number): Record<string, string> {
 .section-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; color: #475467; font-size: 12px; font-weight: 650; }
 .port-row { display: grid; grid-template-columns: minmax(0, 1fr) 76px; gap: 6px; margin-top: 6px; }
 .output-row { grid-template-columns: minmax(0, 1fr) 70px; }
+.port-relation { margin: 5px 0 7px; padding: 7px 8px; border-radius: 7px; background: #f7f9fc; }
+.port-relation-control { display: grid; grid-template-columns: auto minmax(150px, 1fr); align-items: center; gap: 8px; color: #475467; font-size: 12px; font-weight: 650; }
+.port-relation-control :deep(.el-select) { width: 100%; }
+.port-relation-labels { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
 .quantity-rule-note {
   padding: 8px 10px; border-radius: 7px; background: #eef6ff; color: #1b65a8;
   font-size: 12px; font-weight: 600; line-height: 1.4;

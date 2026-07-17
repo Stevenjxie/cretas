@@ -227,7 +227,62 @@ class ProductProcessWorkflowRuntimeCompilerTest {
         assertEquals(List.of("SKU-A", "SKU-B", "SKU-MAIN", "SKU-SIDE"),
                 compiled.portsFor("mix").stream()
                         .map(CompiledProductProcessWorkflow.CompiledPort::skuId)
-                        .toList());
+                .toList());
+    }
+
+    @Test
+    void compilesSelectionGroupsIntoEveryPortSnapshot() {
+        ProductProcessWorkflowDTO definition = multiInputOutputWorkflow();
+        processData(definition, "mix").put("portGroups", List.of(
+                portGroup("input-choice", "INPUT", "替代投入", "EXACTLY_ONE",
+                        1, 1, List.of("in-a", "in-b")),
+                portGroup("optional-outputs", "OUTPUT", "可选副产出", "OPTIONAL",
+                        0, 2, List.of("out-main", "out-side"))));
+
+        CompiledProductProcessWorkflow compiled = compiler.compile(definition);
+
+        CompiledProductProcessWorkflow.CompiledPort input = compiled.portsFor("mix").getFirst();
+        assertEquals("input-choice", input.selectionGroupId());
+        assertEquals("替代投入", input.selectionGroupLabel());
+        assertEquals("EXACTLY_ONE", input.selectionGroupMode());
+        assertEquals(1, input.selectionGroupMinSelections());
+        assertEquals(1, input.selectionGroupMaxSelections());
+        assertFalse(input.required());
+        CompiledProductProcessWorkflow.CompiledPort output = compiled.portsFor("mix").get(2);
+        assertEquals("optional-outputs", output.selectionGroupId());
+        assertEquals("OPTIONAL", output.selectionGroupMode());
+        assertEquals(0, output.selectionGroupMinSelections());
+        assertEquals(2, output.selectionGroupMaxSelections());
+        assertFalse(output.required());
+    }
+
+    @Test
+    void rejectsInvalidSelectionGroupReferencesDirectionsDuplicatesAndBounds() {
+        ProductProcessWorkflowDTO missing = multiInputOutputWorkflow();
+        processData(missing, "mix").put("portGroups", List.of(
+                portGroup("bad", "INPUT", "bad", "EXACTLY_ONE",
+                        1, 1, List.of("missing"))));
+        assertRuntimeInvalid(missing, "mix", "data.portGroups[0].portIds");
+
+        ProductProcessWorkflowDTO direction = multiInputOutputWorkflow();
+        processData(direction, "mix").put("portGroups", List.of(
+                portGroup("bad", "OUTPUT", "bad", "EXACTLY_ONE",
+                        1, 1, List.of("in-a"))));
+        assertRuntimeInvalid(direction, "mix", "data.portGroups[0].direction");
+
+        ProductProcessWorkflowDTO duplicate = multiInputOutputWorkflow();
+        processData(duplicate, "mix").put("portGroups", List.of(
+                portGroup("first", "INPUT", "first", "EXACTLY_ONE",
+                        1, 1, List.of("in-a", "in-b")),
+                portGroup("second", "INPUT", "second", "OPTIONAL",
+                        0, 1, List.of("in-a"))));
+        assertRuntimeInvalid(duplicate, "mix", "data.portGroups[1].portIds");
+
+        ProductProcessWorkflowDTO bounds = multiInputOutputWorkflow();
+        processData(bounds, "mix").put("portGroups", List.of(
+                portGroup("bad", "INPUT", "bad", "AT_LEAST_ONE",
+                        1, 1, List.of("in-a", "in-b"))));
+        assertRuntimeInvalid(bounds, "mix", "data.portGroups[0]");
     }
 
     @Test
@@ -481,6 +536,25 @@ class ProductProcessWorkflowRuntimeCompilerTest {
         port.put("unit", unit);
         port.put("ordinal", ordinal);
         return port;
+    }
+
+    private Map<String, Object> portGroup(
+            String id,
+            String direction,
+            String label,
+            String mode,
+            int minSelections,
+            int maxSelections,
+            List<String> portIds) {
+        Map<String, Object> group = new LinkedHashMap<>();
+        group.put("id", id);
+        group.put("direction", direction);
+        group.put("label", label);
+        group.put("mode", mode);
+        group.put("minSelections", minSelections);
+        group.put("maxSelections", maxSelections);
+        group.put("portIds", portIds);
+        return group;
     }
 
     private ProductProcessWorkflowDTO.Edge edge(

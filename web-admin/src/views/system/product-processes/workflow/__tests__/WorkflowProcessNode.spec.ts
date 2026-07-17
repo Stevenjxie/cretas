@@ -328,4 +328,26 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     expect(wrapper.get('[data-testid="input-unit-chip"]').text()).toBe('kg');
     expect(wrapper.get('[data-testid="output-unit-chip"]').text()).toBe('kg');
   });
+
+  it('shows compact input/output relationship selectors and emits an all-direction port group', async () => {
+    const ports: ProcessPort[] = [
+      { id: 'in-1', direction: 'INPUT', unit: 'kg', ordinal: 0 },
+      { id: 'in-2', direction: 'INPUT', unit: 'kg', ordinal: 1 },
+      { id: 'out-1', direction: 'OUTPUT', unit: 'kg', ordinal: 0 },
+      { id: 'out-2', direction: 'OUTPUT', unit: 'kg', ordinal: 1 },
+    ];
+    const wrapper = mountNode(true, withPorts({ ports, portGroups: [] }));
+
+    expect(wrapper.get('[data-testid="input-port-relation"]').text()).toContain('全部必投');
+    expect(wrapper.get('[data-testid="output-port-relation"]').text()).toContain('全部产出');
+    wrapper.get('[data-testid="input-port-relation"]')
+      .findComponent({ name: 'ElSelect' }).vm.$emit('change', 'EXACTLY_ONE');
+    await wrapper.vm.$nextTick();
+
+    const patch = wrapper.emitted('update')?.[0]?.[0] as Partial<ProcessNodeData>;
+    expect(patch.portGroups).toEqual([{
+      id: 'port-group:input:all', direction: 'INPUT', label: '投入关系', mode: 'EXACTLY_ONE',
+      minSelections: 1, maxSelections: 1, portIds: ['in-1', 'in-2'],
+    }]);
+  });
 });

@@ -71,6 +71,17 @@ class ProcessSheetWorkflowRowValidationTest {
         }
     }
 
+    private void invokeSubmission(ProcessSheetServiceImpl impl, ProcessSheetRowRequest req) throws Throwable {
+        Method m = ProcessSheetServiceImpl.class.getDeclaredMethod(
+                "validateWorkflowSubmissionSelections", String.class, String.class, ProcessSheetRowRequest.class);
+        m.setAccessible(true);
+        try {
+            m.invoke(impl, FACTORY_ID, PLAN_ID, req);
+        } catch (InvocationTargetException e) {
+            throw e.getCause();
+        }
+    }
+
     private ProcessSheetRowRequest row(int processOrder, boolean finished, String unit, BigDecimal output) {
         ProcessSheetRowRequest req = new ProcessSheetRowRequest();
         req.setProcessOrder(processOrder);
@@ -273,5 +284,146 @@ class ProcessSheetWorkflowRowValidationTest {
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> invokeMulti(newImpl(svc), request));
         assertEquals("PROCESS_SHEET_WORKFLOW_OUTPUT_PORT_REQUIRED", ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("草稿可保存不完整选择组，正式提交同一请求因缺少替代投入而失败")
+    void draftIncompleteGroup_passesButSubmissionFails() throws Throwable {
+        PortDescriptor inputA = groupedPort("in-a", "RAW-A", "EXACTLY_ONE", 1, 1, false);
+        PortDescriptor inputB = groupedPort("in-b", "RAW-B", "EXACTLY_ONE", 1, 1, false);
+        PortDescriptor output = groupedOutput("out-a", "PT-A", "OPTIONAL", 0, 2);
+        PortDescriptor outputB = groupedOutput("out-b", "PT-B", "OPTIONAL", 0, 2);
+        ProcessDescriptor descriptor = ProcessDescriptor.builder()
+                .processOrder(4)
+                .inputs(List.of(inputA, inputB))
+                .output(output)
+                .outputs(List.of(output, outputB))
+                .build();
+        WorkflowClerkSheetService svc = workflowService(descriptor);
+        ProcessSheetRowRequest request = multiRequest(4, outputLine("out-a", "PT-A"));
+
+        assertDoesNotThrow(() -> invokeMulti(newImpl(svc), request));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> invokeSubmission(newImpl(svc), request));
+        assertEquals("PROCESS_SHEET_WORKFLOW_SELECTION_GROUP_VIOLATION", ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("EXACTLY_ONE 替代投入按 workflowPortId 统计，选择其一可正式提交")
+    void replacementInput_exactlyOneSelected_passesSubmission() throws Throwable {
+        PortDescriptor inputA = groupedPort("in-a", "RAW-A", "EXACTLY_ONE", 1, 1, false);
+        PortDescriptor inputB = groupedPort("in-b", "RAW-B", "EXACTLY_ONE", 1, 1, false);
+        PortDescriptor output = ungroupedOutput("out-a", "PT-A");
+        ProcessDescriptor descriptor = ProcessDescriptor.builder()
+                .processOrder(5)
+                .inputs(List.of(inputA, inputB))
+                .output(output)
+                .outputs(List.of(output))
+                .build();
+        ProcessSheetRowRequest request = multiRequest(5, outputLine("out-a", "PT-A"));
+        ProcessSheetRowRequest.MaterialInputTotal selected = new ProcessSheetRowRequest.MaterialInputTotal();
+        selected.setWorkflowPortId("in-b");
+        selected.setMaterialTypeId("RAW-B");
+        selected.setUnit("kg");
+        selected.setQuantity(new BigDecimal("3"));
+        request.setMaterialInputTotals(List.of(selected));
+
+        assertDoesNotThrow(() -> invokeSubmission(newImpl(workflowService(descriptor)), request));
+    }
+
+    @Test
+    @DisplayName("OPTIONAL 多产出正式报工只统计正数量已选端口")
+    void optionalMultiOutput_onlyPositiveSelectionCounts() throws Throwable {
+        PortDescriptor input = groupedPort("in-a", "RAW-A", "OPTIONAL", 0, 1, false);
+        PortDescriptor outputA = groupedOutput("out-a", "PT-A", "OPTIONAL", 0, 2);
+        PortDescriptor outputB = groupedOutput("out-b", "PT-B", "OPTIONAL", 0, 2);
+        ProcessDescriptor descriptor = ProcessDescriptor.builder()
+                .processOrder(6)
+                .inputs(List.of(input))
+                .output(outputA)
+                .outputs(List.of(outputA, outputB))
+                .build();
+        ProcessSheetRowRequest.OutputLine zero = outputLine("out-a", "PT-A");
+        zero.setQuantity(BigDecimal.ZERO);
+        ProcessSheetRowRequest request = multiRequest(6, zero, outputLine("out-b", "PT-B"));
+
+        assertDoesNotThrow(() -> invokeSubmission(newImpl(workflowService(descriptor)), request));
+    }
+
+    @Test
+    @DisplayName("无选择组的 legacy 端口在正式提交时仍全部必填")
+    void legacyUngroupedOutputs_allRemainRequired() throws Throwable {
+        PortDescriptor input = groupedPort("in-a", "RAW-A", "OPTIONAL", 0, 1, false);
+        PortDescriptor outputA = ungroupedOutput("out-a", "PT-A");
+        PortDescriptor outputB = ungroupedOutput("out-b", "PT-B");
+        ProcessDescriptor descriptor = ProcessDescriptor.builder()
+                .processOrder(7)
+                .inputs(List.of(input))
+                .output(outputA)
+                .outputs(List.of(outputA, outputB))
+                .build();
+        ProcessSheetRowRequest request = multiRequest(7, outputLine("out-a", "PT-A"));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> invokeSubmission(newImpl(workflowService(descriptor)), request));
+        assertEquals("PROCESS_SHEET_WORKFLOW_REQUIRED_OUTPUT_MISSING", ex.getErrorCode());
+    }
+
+    private WorkflowClerkSheetService workflowService(ProcessDescriptor descriptor) {
+        WorkflowClerkSheetService svc = mock(WorkflowClerkSheetService.class);
+        when(svc.getWorkflowSheetConfig(FACTORY_ID, PLAN_ID)).thenReturn(
+                WorkflowClerkSheetConfigDTO.builder().processes(List.of(descriptor)).build());
+        return svc;
+    }
+
+    private PortDescriptor groupedPort(
+            String portId, String skuId, String mode, int min, int max, boolean finished) {
+        return PortDescriptor.builder()
+                .workflowPortId(portId)
+                .materialName(portId)
+                .skuId(skuId)
+                .unit("kg")
+                .required(false)
+                .finished(finished)
+                .selectionGroupId(portId.startsWith("in-") ? "inputs" : "outputs")
+                .selectionGroupLabel(portId.startsWith("in-") ? "替代投入" : "可选产出")
+                .selectionGroupMode(mode)
+                .selectionGroupMinSelections(min)
+                .selectionGroupMaxSelections(max)
+                .build();
+    }
+
+    private PortDescriptor groupedOutput(String portId, String skuId, String mode, int min, int max) {
+        return groupedPort(portId, skuId, mode, min, max, false);
+    }
+
+    private PortDescriptor ungroupedOutput(String portId, String skuId) {
+        return PortDescriptor.builder()
+                .workflowPortId(portId)
+                .materialName(portId)
+                .skuId(skuId)
+                .unit("kg")
+                .required(true)
+                .finished(false)
+                .build();
+    }
+
+    private ProcessSheetRowRequest.OutputLine outputLine(String portId, String skuId) {
+        ProcessSheetRowRequest.OutputLine line = new ProcessSheetRowRequest.OutputLine();
+        line.setWorkflowPortId(portId);
+        line.setProductTypeId(skuId);
+        line.setUnit("kg");
+        line.setFinished(false);
+        line.setQuantity(BigDecimal.ONE);
+        return line;
+    }
+
+    private ProcessSheetRowRequest multiRequest(
+            int processOrder, ProcessSheetRowRequest.OutputLine... outputs) {
+        ProcessSheetRowRequest request = new ProcessSheetRowRequest();
+        request.setProcessOrder(processOrder);
+        request.setOutputs(List.of(outputs));
+        return request;
     }
 }

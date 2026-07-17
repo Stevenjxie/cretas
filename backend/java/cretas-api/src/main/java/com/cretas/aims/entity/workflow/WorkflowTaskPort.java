@@ -109,4 +109,19 @@ public class WorkflowTaskPort extends BaseEntity {
 
     @Column(name = "quantity_mode", length = 24)
     private String quantityMode;
+
+    @Column(name = "selection_group_id", length = 128)
+    private String selectionGroupId;
+
+    @Column(name = "selection_group_label", length = 255)
+    private String selectionGroupLabel;
+
+    @Column(name = "selection_group_mode", length = 32)
+    private String selectionGroupMode;
+
+    @Column(name = "selection_group_min_selections")
+    private Integer selectionGroupMinSelections;
+
+    @Column(name = "selection_group_max_selections")
+    private Integer selectionGroupMaxSelections;
 }

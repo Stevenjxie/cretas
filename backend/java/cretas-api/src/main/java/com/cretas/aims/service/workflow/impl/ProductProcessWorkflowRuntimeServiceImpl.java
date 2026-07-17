@@ -304,6 +304,11 @@ public class ProductProcessWorkflowRuntimeServiceImpl
         port.setConversionExpression(compiled.conversionExpression());
         port.setStandardQuantity(compiled.standardQuantity());
         port.setQuantityMode(compiled.quantityMode());
+        port.setSelectionGroupId(compiled.selectionGroupId());
+        port.setSelectionGroupLabel(compiled.selectionGroupLabel());
+        port.setSelectionGroupMode(compiled.selectionGroupMode());
+        port.setSelectionGroupMinSelections(compiled.selectionGroupMinSelections());
+        port.setSelectionGroupMaxSelections(compiled.selectionGroupMaxSelections());
         return port;
     }
 
@@ -421,6 +426,11 @@ public class ProductProcessWorkflowRuntimeServiceImpl
                 .conversionExpression(port.getConversionExpression())
                 .standardQuantity(port.getStandardQuantity())
                 .quantityMode(port.getQuantityMode())
+                .selectionGroupId(port.getSelectionGroupId())
+                .selectionGroupLabel(port.getSelectionGroupLabel())
+                .selectionGroupMode(port.getSelectionGroupMode())
+                .selectionGroupMinSelections(port.getSelectionGroupMinSelections())
+                .selectionGroupMaxSelections(port.getSelectionGroupMaxSelections())
                 .build();
     }
 
