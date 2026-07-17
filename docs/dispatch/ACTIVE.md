@@ -6,7 +6,9 @@
 
 ## 在飞任务
 
-_当前无在飞代码任务。_
+| ID | Base SHA | Scope 锁 | Owner | Mode | Worktree/PR | Status | Blocker | Next action |
+|---|---|---|---|---|---|---|---|---|
+| WF-OWNER-FILTER-20260717 | `94a80f73b29ed959a422b292f66426096aab001a` | `web-admin/src/views/system/product-processes/index.vue`; related product-process selector tests; `docs/dispatch/ACTIVE.md`; completion archive | Codex coordinator | inline | `C:\Users\Steve\cretas-workflow-owner-filter-20260717` / `codex/workflow-owner-selector-filter` | in-progress | 无 | 顶部 Workflow 归属选择器仅允许成品与原料，排除半成品；覆盖加载、搜索、深链路选择，验收目标 Vitest、`vue-tsc --noEmit`、`git diff --check` |
 
 ## 阻塞项
 

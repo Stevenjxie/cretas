@@ -19,9 +19,12 @@ describe('product-process unified Workflow entry', () => {
     expect(source).not.toContain('<el-radio-button label="RAW">');
   });
 
-  it('includes semi-finished products in the unified selector', () => {
-    expect(source).toContain("'SEMI_FINISHED'");
-    expect(source).toContain("return option.productCategory === 'SEMI_FINISHED' ? '半成品' : '成品'");
+  it('only offers finished products and actual raw materials as Workflow owners', () => {
+    expect(source).toContain('FINISHED_WORKFLOW_OWNER_CATEGORIES');
+    expect(source).not.toMatch(/FINISHED_WORKFLOW_OWNER_CATEGORIES[\s\S]{0,240}SEMI_FINISHED/);
+    expect(source).toContain('rawRes.data.filter(isRawMaterialOption)');
+    expect(source).toContain('finishedWorkflowOptions.value.find');
+    expect(source).not.toContain("return option.productCategory === 'SEMI_FINISHED' ? '半成品' : '成品'");
   });
 
   it('treats the legacy raw-owner prop only as an initial anchor and never as a topology lock', () => {
