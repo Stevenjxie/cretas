@@ -6,7 +6,17 @@
 
 ## 在飞任务
 
-_当前无在飞代码任务。_
+| ID | 任务 | Base SHA | model | effort | orchestration | 分支 | scope 锁 | Owner | 状态 | 验收命令 | PR | 阻塞 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| CFX-20260717-BE | 统一数量/计价单位契约，修复付款方式、供应商历史及 AI 确定性门禁 | `2233797dc8d6417885b628e45eab4a687f7ce0ee` | Codex | high | worker | `codex/f006-contract-backend-20260717` | `backend/java/cretas-api/**` | coordinator | review | 相关 Maven 目标测试；JPA 查询变更需真实 JPA Context；`git diff --check` | PR #1413 / `9107b4fb5` | 主源码编译通过；JPA Context 通过；失败组修正后 11/11 通过 |
+| CFX-20260717-WEB | 修复 BOM/采购/AI/成本/枚举及长表格 Web 交互契约 | `2233797dc8d6417885b628e45eab4a687f7ce0ee` | Codex | high | worker | `codex/f006-contract-web-20260717` | `web-admin/**` | coordinator | review | 目标 Vitest/类型检查/构建；`git diff --check` | PR #1414 / `0f9d6ef4b` | 目标测试、类型检查及生产构建通过 |
+
+## Scope 锁地图
+
+| 文件 / 目录 | 锁定 task | 预计解锁 |
+|---|---|---|
+| `backend/java/cretas-api/**` | CFX-20260717-BE | PR 合并或任务归档后 |
+| `web-admin/**` | CFX-20260717-WEB | PR 合并或任务归档后 |
 
 ## 阻塞项
 
