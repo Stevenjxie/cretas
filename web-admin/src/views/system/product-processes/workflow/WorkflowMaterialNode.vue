@@ -1,7 +1,14 @@
 <template>
   <div
     class="material-node"
-    :class="[`kind-${kind.toLowerCase()}`, { selected, 'wf-dim': isConnectDimmed, 'wf-valid': isValidConnectTarget, 'unit-error': !!unitError }]"
+    :class="[`kind-${kind.toLowerCase()}`, {
+      selected,
+      'wf-dim': isConnectDimmed,
+      'wf-valid': isValidConnectTarget,
+      'unit-error': !!unitError,
+      'validation-error': !!validationError,
+      'validation-attention': validationAttention,
+    }]"
   >
     <Handle v-if="kind !== 'RAW_MATERIAL'" type="target" :position="Position.Left" id="input" />
     <Handle v-if="kind !== 'FINISHED_GOOD'" type="source" :position="Position.Right" id="output" />
@@ -42,6 +49,23 @@
     <div v-if="unitError" class="unit-error-message" data-testid="unit-error">
       {{ unitError }}
     </div>
+    <div v-if="validationError" class="validation-error-message" data-testid="binding-validation-error">
+      <strong>请在这里绑定 SKU</strong>
+      <span>{{ validationError }}</span>
+    </div>
+
+    <el-cascader
+      v-if="kind === 'RAW_MATERIAL' && canWrite && rawMaterialSegments.length > 0"
+      v-model="selectedRawSegmentPath"
+      class="nodrag nowheel raw-category-filter"
+      :options="rawMaterialSegments"
+      :props="rawSegmentCascaderProps"
+      placeholder="按 L1 / L2 / L3 筛选"
+      filterable
+      clearable
+      size="small"
+      data-testid="raw-segment-filter"
+    />
 
     <el-select
       v-if="kind === 'RAW_MATERIAL' && canWrite"
@@ -88,9 +112,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
 import { usePinyinFilter } from './pinyinInitials';
+import {
+  filterRawMaterialsBySegment,
+  type MaterialSegmentNode,
+  type RawMaterialPickerOption,
+} from './rawMaterialCatalog';
 import WorkflowSkuPicker, { type WorkflowSkuPickerOption } from './WorkflowSkuPicker.vue';
 import type { MaterialNodeData, ProductProcessNodeKind } from './types';
 
@@ -101,7 +130,8 @@ const props = withDefaults(defineProps<{
   canWrite: boolean;
   /** #8: 拖拽连线中源 cell 的类型；用于给非法目标 cell 灰化 */
   connectingFromKind?: '' | 'MATERIAL' | 'PROCESS';
-  rawMaterialOptions: Array<{ id: string; name: string; code?: string; unit?: string }>;
+  rawMaterialOptions: RawMaterialPickerOption[];
+  rawMaterialSegments?: MaterialSegmentNode[];
   /**
    * #3 (Steve 定: BOM 原料优先、可加其他): 该产品 BOM 原辅料清单里出现过的
    * 原料 SKU id 集合 (RawMaterialType.id，与 BomItem.materialTypeId 同一业务
@@ -114,9 +144,13 @@ const props = withDefaults(defineProps<{
   semiOptions: WorkflowSkuPickerOption[];
   finishedOptions: WorkflowSkuPickerOption[];
   unitError?: string;
+  validationError?: string;
+  validationAttention?: boolean;
 }>(), {
   connectingFromKind: '',
   bomRawMaterialIds: () => [],
+  rawMaterialSegments: () => [],
+  validationAttention: false,
 });
 
 // #8: 物料 Cell 只有在「工序拖向物料(产出)」且自身是半成品/成品时才是合法目标；
@@ -134,13 +168,27 @@ const emit = defineEmits<{
   editSku: [];
 }>();
 
+const selectedRawSegmentPath = ref<string[]>([]);
+const rawSegmentCascaderProps = {
+  value: 'segmentCode',
+  label: 'segmentLabel',
+  children: 'children',
+  emitPath: true,
+  checkStrictly: true,
+};
+const rawCandidateOptions = computed(() => filterRawMaterialsBySegment(
+  props.rawMaterialOptions,
+  props.rawMaterialSegments,
+  selectedRawSegmentPath.value,
+));
+
 // #3 原料 Cell = BOM 原料优先、可加其他 (soft 约束，Steve 定：BOM 优先但不硬
 // 禁其它)。把候选原料拆成「本产品 BOM 原料」+「其它原料」两组，BOM 组置顶,
 // 两组各自独立跑拼音首字母搜索 (#2，复用 usePinyinFilter 共享 composable)。
 const bomRawMaterialIdSet = computed(() => new Set(props.bomRawMaterialIds));
-const bomRawOptions = computed(() => props.rawMaterialOptions
+const bomRawOptions = computed(() => rawCandidateOptions.value
   .filter((option) => bomRawMaterialIdSet.value.has(option.id)));
-const otherRawOptions = computed(() => props.rawMaterialOptions
+const otherRawOptions = computed(() => rawCandidateOptions.value
   .filter((option) => !bomRawMaterialIdSet.value.has(option.id)));
 // BOM 为空时不硬禁选其它原料 (fool-proof-design Rule 5: 不留死胡同)，只是不再
 // 有"其它"和"BOM"的区分，组名相应改成「全部原料」避免暗示一个空的 BOM 分组。
@@ -181,6 +229,15 @@ const kindMark = computed(() => ({
 .material-node.wf-dim { opacity: 0.4; cursor: not-allowed; }
 .material-node.wf-valid { box-shadow: 0 0 0 2px #1b65a8, 0 0 12px rgba(27, 101, 168, 0.35); }
 .material-node.unit-error { box-shadow: 0 0 0 2px #f56c6c; }
+.material-node.validation-error {
+  border-color: #f56c6c;
+  box-shadow: 0 0 0 2px rgba(245, 108, 108, 0.72), 0 6px 20px rgba(245, 108, 108, 0.2);
+}
+.material-node.validation-attention { animation: binding-attention-pulse 1.15s ease-in-out infinite; }
+@keyframes binding-attention-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(245, 108, 108, 0.65), 0 6px 18px rgba(245, 108, 108, 0.16); }
+  50% { box-shadow: 0 0 0 5px rgba(245, 108, 108, 0.22), 0 8px 26px rgba(245, 108, 108, 0.34); }
+}
 .unit-error-message {
   margin: 8px 0;
   padding: 6px 8px;
@@ -191,6 +248,12 @@ const kindMark = computed(() => ({
   font-size: 12px;
   line-height: 1.4;
 }
+.validation-error-message {
+  display: flex; flex-direction: column; gap: 2px; margin: 8px 0 0; padding: 7px 8px;
+  color: #b42318; background: #fef3f2; border: 1px solid #fecdca; border-radius: 7px;
+  font-size: 11px; line-height: 1.4;
+}
+.validation-error-message strong { font-size: 12px; }
 .material-node :deep(.vue-flow__handle) {
   width: 12px; height: 12px; opacity: 0.35;
   transition: opacity 150ms ease, transform 120ms ease;
@@ -200,6 +263,7 @@ const kindMark = computed(() => ({
 .material-node :deep(.vue-flow__handle):hover { transform: scale(1.3); cursor: crosshair; }
 @media (prefers-reduced-motion: reduce) {
   .material-node, .material-node :deep(.vue-flow__handle) { transition: none; }
+  .material-node.validation-attention { animation: none; }
 }
 /* #9 删除 Cell 按钮 (选中时出现, 右上角) */
 .cell-delete {
@@ -245,7 +309,7 @@ const kindMark = computed(() => ({
 }
 .identity-row strong { overflow: hidden; color: #344054; text-overflow: ellipsis; white-space: nowrap; }
 .specification { margin-top: 6px; color: #7a8599; font-size: 11px; }
-.raw-selector, .sku-selector { width: 100%; margin-top: 8px; }
+.raw-selector, .raw-category-filter, .sku-selector { width: 100%; margin-top: 8px; }
 .node-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
 /* #3 BOM 为空时的提示 (fool-proof-design Rule 5: 不留死胡同, 给出下一步动作) */
 .bom-hint {

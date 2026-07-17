@@ -13,6 +13,7 @@ const apiMocks = vi.hoisted(() => ({
   getProductWorkProcesses: vi.fn(),
   publishProductProcessWorkflow: vi.fn(),
   saveProductProcessWorkflowDraft: vi.fn(),
+  fitView: vi.fn(),
 }));
 
 vi.mock('@/api/request', () => ({
@@ -35,7 +36,7 @@ vi.mock('@vue-flow/core', () => ({
   MarkerType: { ArrowClosed: 'arrow-closed' },
   VueFlow: defineComponent({ name: 'VueFlow', template: '<div />' }),
   useVueFlow: () => ({
-    fitView: vi.fn(),
+    fitView: apiMocks.fitView,
     getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
     setViewport: vi.fn(),
   }),
@@ -58,6 +59,8 @@ interface EditorVm {
   future: ProductProcessWorkflowDefinition[];
   loading: boolean;
   rawMaterialOptions: Array<{ id: string }>;
+  publishBindingErrors: Array<{ code: string; nodeId?: string }>;
+  publishBindingAttentionNodeIds: Set<string>;
   skuOptions: Array<{ id: string }>;
   workProcessOptions: Array<{ id: string }>;
   addStandaloneRaw: () => void;
@@ -71,6 +74,8 @@ interface EditorVm {
   onViewportChangeEnd: (viewport: { x: number; y: number; zoom: number }) => void;
   confirmCreateSku: () => Promise<void>;
   selectOutputSku: (processId: string, portId: string, skuId: string) => void;
+  selectRawSku: (nodeId: string, skuId: string) => void;
+  onNodeClick: (event: { node: { id: string } }) => void;
   skuDialogVisible: boolean;
 }
 
@@ -89,6 +94,7 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
         ? { content: [testSku('PT-A'), testSku('PT-B')] }
         : url.includes('/raw-material-types')
           ? [testSku('SKU-RAW'), testSku('SKU:PT-A'), testSku('SKU:PT-B')]
+            .map((item) => ({ ...item, category: '主材' }))
           : [],
     }));
     apiMocks.getActiveWorkProcesses.mockResolvedValue({ success: true, data: [] });
@@ -103,6 +109,36 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
       data: definitionFor('PT-A'),
     });
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
+    vi.spyOn(ElMessageBox, 'alert').mockResolvedValue('confirm');
+  });
+
+  it('focuses and marks every unbound SKU Cell, then clears each marker as it is handled', async () => {
+    const unbound = publishableDefinition('PT-A');
+    unbound.nodes = unbound.nodes.map((node) => (
+      node.kind === 'PROCESS'
+        ? node
+        : { ...node, data: { ...node.data, skuId: '', bound: false } }
+    ));
+    apiMocks.getProductProcessWorkflow.mockResolvedValue({ success: true, data: unbound });
+    const wrapper = mountEditor();
+    await flushPromises();
+    const vm = editorVm(wrapper);
+
+    await vm.publishWorkflow();
+
+    expect(vm.publishBindingErrors.map((error) => error.nodeId)).toEqual(['raw', 'finished']);
+    expect([...vm.publishBindingAttentionNodeIds]).toEqual(['raw', 'finished']);
+    expect(apiMocks.fitView).toHaveBeenCalledWith(expect.objectContaining({
+      nodes: [expect.objectContaining({ id: 'raw' })],
+    }));
+    expect(apiMocks.publishProductProcessWorkflow).not.toHaveBeenCalled();
+
+    vm.onNodeClick({ node: { id: 'raw' } });
+    expect([...vm.publishBindingAttentionNodeIds]).toEqual(['finished']);
+    expect(vm.publishBindingErrors.map((error) => error.nodeId)).toEqual(['raw', 'finished']);
+
+    vm.selectRawSku('raw', 'SKU-RAW');
+    expect(vm.publishBindingErrors.map((error) => error.nodeId)).toEqual(['finished']);
   });
 
   it('hydrates only B when B resolves before the earlier A request', async () => {
@@ -953,14 +989,26 @@ function deferred<T>(): {
 
 interface TestCatalog {
   processes: Array<{ id: string }>;
-  rawMaterials: Array<{ id: string; name: string }>;
+  rawMaterials: Array<{ id: string; name: string; category: string }>;
+  materialSegments: Array<{
+    level: number;
+    segmentCode: string;
+    segmentLabel: string;
+    children: Array<{ level: number; segmentCode: string; segmentLabel: string }>;
+  }>;
   skus: Array<{ id: string; name: string; unit: string; productCategory: string }>;
 }
 
 function catalogFor(factoryId: string): TestCatalog {
   return {
     processes: [{ id: `WP-${factoryId}` }],
-    rawMaterials: [{ id: `RAW-${factoryId}`, name: `Raw ${factoryId}` }],
+    rawMaterials: [{ id: `RAW-${factoryId}`, name: `Raw ${factoryId}`, category: '主材' }],
+    materialSegments: [{
+      level: 1,
+      segmentCode: '001',
+      segmentLabel: '原料',
+      children: [{ level: 3, segmentCode: '0010010001', segmentLabel: `Raw ${factoryId}` }],
+    }],
     skus: [{
       id: `SKU-${factoryId}`,
       name: `SKU ${factoryId}`,
@@ -979,7 +1027,9 @@ function installCatalogMocks(catalogs: Record<string, Promise<TestCatalog>>): vo
     return catalogs[factoryId].then((catalog) => (
       url.includes('/product-types')
         ? { success: true, data: { content: catalog.skus } }
-        : { success: true, data: catalog.rawMaterials }
+        : url.includes('/material-segments/tree')
+          ? { success: true, data: catalog.materialSegments }
+          : { success: true, data: catalog.rawMaterials }
     ));
   });
 }

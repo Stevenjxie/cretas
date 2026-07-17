@@ -63,6 +63,22 @@
       />
 
       <el-alert
+        v-if="publishBindingErrors.length > 0"
+        class="workflow-validation-alert"
+        type="error"
+        :closable="false"
+        show-icon
+      >
+        <template #title>
+          发布前还有 {{ publishBindingErrors.length }} 个 Cell 未绑定 SKU
+        </template>
+        <template #default>
+          <span>画布中已用红框标出；请逐个选择正确的 SKU。</span>
+          <el-button link type="danger" @click="focusFirstPublishBindingError">定位第一个 →</el-button>
+        </template>
+      </el-alert>
+
+      <el-alert
         v-if="bomMissingProducts.length > 0"
         class="workflow-bom-alert"
         type="warning"
@@ -124,10 +140,13 @@
               :can-write="canEdit"
               :connecting-from-kind="connectingFromKind"
               :raw-material-options="rawMaterialOptions"
+              :raw-material-segments="rawMaterialSegments"
               :bom-raw-material-ids="bomRawMaterialIdList"
               :semi-options="semiFinishedSkuOptions"
               :finished-options="finishedGoodSkuOptions"
               :unit-error="unitIssueForNode(slotProps.id)"
+              :validation-error="publishBindingErrorForNode(slotProps.id)"
+              :validation-attention="publishBindingAttentionNodeIds.has(slotProps.id)"
               @add-next="openAddProcess(slotProps.id)"
               @select-raw-sku="(skuId) => selectRawSku(slotProps.id, skuId)"
               @select-sku="(skuId) => selectMaterialSku(slotProps.id, skuId)"
@@ -399,6 +418,12 @@ import WorkProcessAIChatPanel from '@/views/system/components/WorkProcessAIChatP
 import UnitSelect from '@/components/common/UnitSelect.vue';
 import WorkflowMaterialNode from './WorkflowMaterialNode.vue';
 import WorkflowProcessNode from './WorkflowProcessNode.vue';
+import {
+  buildRawMaterialSegmentTree,
+  isRawMaterialOption,
+  type MaterialSegmentNode,
+  type RawMaterialPickerOption,
+} from './rawMaterialCatalog';
 import { classifyOutputSkuCategory, matchOutputSkuByName } from './outputSkuClassification';
 import { usePinyinFilter } from './pinyinInitials';
 import { classifyWorkflowTopology } from './workflowClassification';
@@ -440,6 +465,7 @@ import type {
   ProductProcessWorkflowDefinition,
   ProductProcessWorkflowEdge,
   ProductProcessWorkflowNode,
+  WorkflowValidationError,
 } from './types';
 
 import '@vue-flow/core/dist/style.css';
@@ -453,13 +479,6 @@ interface SkuOption {
   unit?: string;
   specification?: string;
   productCategory?: string;
-}
-
-interface RawMaterialOption {
-  id: string;
-  name: string;
-  code?: string;
-  unit?: string;
 }
 
 /**
@@ -527,7 +546,8 @@ const future = ref<ProductProcessWorkflowDefinition[]>([]);
 const dragStartSnapshot = ref<ProductProcessWorkflowDefinition | null>(null);
 const workProcessOptions = ref<WorkProcessItem[]>([]);
 const skuOptions = ref<SkuOption[]>([]);
-const rawMaterialOptions = ref<RawMaterialOption[]>([]);
+const rawMaterialOptions = ref<RawMaterialPickerOption[]>([]);
+const rawMaterialSegments = ref<MaterialSegmentNode[]>([]);
 const unitCatalog = ref<UnitCatalogItem[]>([]);
 // #3: 该产品 BOM 原辅料清单 (per-product, 随 productTypeId 变化而重新加载,
 // 与 loadCatalogs 的"全厂字典"缓存粒度不同, 单独一个 ref + 单独一个 loader)。
@@ -664,6 +684,8 @@ const workflowClassificationLabel = computed(() => {
 const previewingVersion = ref<number | null>(null);
 const unitReviewPending = ref(false);
 const unitIssues = ref<WorkflowUnitIssue[]>([]);
+const publishBindingErrors = ref<WorkflowValidationError[]>([]);
+const publishBindingAttentionNodeIds = ref<Set<string>>(new Set());
 const canEdit = computed(() => (
   props.canWrite
   && !loading.value
@@ -800,6 +822,7 @@ function restorePreviewAsDraft(): void {
 
 watch(() => [props.factoryId, props.productTypeId] as const, async (next, previous) => {
   if (next[0] === previous[0] && next[1] === previous[1]) return;
+  clearPublishBindingErrors();
   previewingVersion.value = null;   // #12b fix: 切产品必退出历史版本预览 (否则横幅粘住 + 新产品自动保存被抑制)
   if (next[0] !== previous[0]) {
     await loadCatalogs();
@@ -826,12 +849,13 @@ async function loadCatalogs(): Promise<void> {
       console.error('[ProductProcessWorkflow] unit catalog loading failed; using built-in scientific units', error);
       return null;
     });
-    const [processResponse, productResponse, rawResponse, unitCatalogResponse] = await Promise.all([
+    const [processResponse, productResponse, rawResponse, segmentResponse, unitCatalogResponse] = await Promise.all([
       getActiveWorkProcesses(factoryId),
       // 精简「选项」端点 (7 字段: id/name/code/unit/specification/productCategory/isActive + @Cacheable) —
       // SkuOption 只需这些字段; 避开重 DTO 的 ~3s/422KB 全量加载 (顶部选择器已先命中缓存, 这里秒回)。
       get<{ content: SkuOption[] }>(`/${factoryId}/product-types/options`),
-      get<RawMaterialOption[]>(`/${factoryId}/raw-material-types/active`),
+      get<RawMaterialPickerOption[]>(`/${factoryId}/raw-material-types/active`),
+      get<MaterialSegmentNode[]>(`/${factoryId}/material-segments/tree`),
       unitCatalogRequest,
     ]);
     if (!isCurrentCatalogLoad(generation, factoryId)) return;
@@ -840,12 +864,15 @@ async function loadCatalogs(): Promise<void> {
       || !productResponse.success
       || !Array.isArray(productResponse.data?.content)
       || !rawResponse.success
-      || !Array.isArray(rawResponse.data)) {
+      || !Array.isArray(rawResponse.data)
+      || !segmentResponse.success
+      || !Array.isArray(segmentResponse.data)) {
       throw new Error('Workflow catalog response is incomplete');
     }
     workProcessOptions.value = processResponse.data;
     skuOptions.value = productResponse.data.content;
-    rawMaterialOptions.value = rawResponse.data;
+    rawMaterialOptions.value = rawResponse.data.filter(isRawMaterialOption);
+    rawMaterialSegments.value = buildRawMaterialSegmentTree(segmentResponse.data);
     if (unitCatalogResponse?.success && Array.isArray(unitCatalogResponse.data)) {
       unitCatalog.value = unitCatalogResponse.data;
     } else {
@@ -872,6 +899,7 @@ function invalidateCatalogs(): void {
   workProcessOptions.value = [];
   skuOptions.value = [];
   rawMaterialOptions.value = [];
+  rawMaterialSegments.value = [];
   unitCatalog.value = [];
 }
 
@@ -894,6 +922,55 @@ function unitContext(): WorkflowUnitContext {
 
 function unitIssueForNode(nodeId: string): string | undefined {
   return unitIssues.value.find((issue) => issue.nodeId === nodeId)?.message;
+}
+
+function publishBindingErrorForNode(nodeId: string): string | undefined {
+  return publishBindingErrors.value.find((error) => error.nodeId === nodeId)?.message;
+}
+
+function clearPublishBindingErrors(): void {
+  publishBindingErrors.value = [];
+  publishBindingAttentionNodeIds.value = new Set();
+}
+
+function clearPublishBindingError(nodeId: string): void {
+  publishBindingErrors.value = publishBindingErrors.value.filter((error) => error.nodeId !== nodeId);
+  if (publishBindingAttentionNodeIds.value.has(nodeId)) {
+    const next = new Set(publishBindingAttentionNodeIds.value);
+    next.delete(nodeId);
+    publishBindingAttentionNodeIds.value = next;
+  }
+}
+
+function acknowledgePublishBindingError(nodeId: string): void {
+  if (!publishBindingAttentionNodeIds.value.has(nodeId)) return;
+  const next = new Set(publishBindingAttentionNodeIds.value);
+  next.delete(nodeId);
+  publishBindingAttentionNodeIds.value = next;
+}
+
+async function markPublishBindingErrors(errors: WorkflowValidationError[]): Promise<void> {
+  publishBindingErrors.value = errors.filter(
+    (error): error is WorkflowValidationError & { nodeId: string } => (
+      error.code === 'SKU_REQUIRED' && typeof error.nodeId === 'string'
+    ),
+  );
+  publishBindingAttentionNodeIds.value = new Set(
+    publishBindingErrors.value.map((error) => error.nodeId as string),
+  );
+  await focusFirstPublishBindingError();
+}
+
+async function focusFirstPublishBindingError(): Promise<void> {
+  const targetId = publishBindingErrors.value.find((error) => (
+    error.nodeId && flowNodes.value.some((node) => node.id === error.nodeId)
+  ))?.nodeId;
+  if (!targetId) return;
+  selectedNodeId.value = targetId;
+  const target = flowNodes.value.find((node) => node.id === targetId);
+  if (!target) return;
+  await nextTick();
+  await fitView({ nodes: [target], padding: 0.48, duration: 420, maxZoom: 1.15 });
 }
 
 function rememberUnitIssues(issues: WorkflowUnitIssue[]): void {
@@ -1279,6 +1356,7 @@ function redo(): void {
 
 function onNodeClick({ node }: { node: Node }): void {
   selectedNodeId.value = node.id;
+  acknowledgePublishBindingError(node.id);
 }
 
 function onNodeDragStart(): void {
@@ -1448,6 +1526,7 @@ function removeNode(nodeId: string): void {
       flowEdges.value = flowEdges.value.filter((e) => e.source !== nodeId && e.target !== nodeId);
     });
     if (selectedNodeId.value === nodeId) selectedNodeId.value = '';
+    clearPublishBindingError(nodeId);
   };
   // 有连线才二次确认 (防呆: 别误删一整条链路); 孤立 Cell 直接删。
   if (touching > 0) {
@@ -1650,6 +1729,7 @@ function selectRawSku(materialNodeId: string, skuId: string): void {
       if (primaryInput) data.inputUnit = primaryInput.unit;
     });
   });
+  clearPublishBindingError(materialNodeId);
 }
 
 function findOutputPortOwner(materialNodeId: string): SkuBindingTarget | null {
@@ -1731,6 +1811,7 @@ function bindOutputSku(processId: string, portId: string, option: SkuOption): bo
       bound: true,
     };
   });
+  clearPublishBindingError(material.id);
   return true;
 }
 
@@ -1987,11 +2068,13 @@ async function publishWorkflow(): Promise<void> {
   }
   const errors = validateWorkflow(currentDefinition(), 'publish');
   if (errors.length > 0) {
-    ElMessageBox.alert(errors.slice(0, 8).map((error) => `• ${error.message}`).join('\n'), '发布前检查未通过', {
+    await markPublishBindingErrors(errors);
+    void ElMessageBox.alert(errors.slice(0, 8).map((error) => `• ${error.message}`).join('\n'), '发布前检查未通过', {
       type: 'warning',
     });
     return;
   }
+  clearPublishBindingErrors();
   try {
     await ElMessageBox.confirm(
       '发布后会生成可审计的 Workflow 图版本。当前阶段不会自动改写生产任务或报工链，确认发布？',
@@ -2017,6 +2100,7 @@ async function publishWorkflow(): Promise<void> {
     }
     if (!definitionMatchesIdentity(response.data, identity)) return;
     hydrate(response.data);
+    clearPublishBindingErrors();
     unitReviewPending.value = false;
     dirty.value = false;
     // #12a: 发布即启用当前版本 (一步完成), 不再需要单独的「启用版本」按钮
@@ -2480,7 +2564,11 @@ function toggleAI(): void {
 </script>
 
 <style scoped>
-.workflow-bom-alert { margin: 0 12px 12px; }
+.workflow-bom-alert, .workflow-validation-alert { margin: 0 12px 12px; }
+.workflow-validation-alert :deep(.el-alert__content) { width: 100%; }
+.workflow-validation-alert :deep(.el-alert__description) {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
 /* #8: 选中的边高亮 (提示可按 Delete 删除) + 连线中光标 */
 .canvas-shell :deep(.vue-flow__edge.selected .vue-flow__edge-path) {
   stroke: #f56c6c !important;
