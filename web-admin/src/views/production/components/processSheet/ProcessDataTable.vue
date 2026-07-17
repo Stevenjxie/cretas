@@ -294,6 +294,15 @@ const workflowOutput = computed(() => props.workflowContext?.output ?? null);
 const workflowRawInputs = computed(() =>
   (props.workflowContext?.inputs ?? []).filter((p) => p.materialKind === 'RAW_MATERIAL'),
 );
+/** 已被删除/重建、无法再解析的 Workflow 原料。报工页不能临时换料，必须阻断并回配置修复。 */
+const unresolvedWorkflowRawInputs = computed(() =>
+  workflowRawInputs.value.filter((p) => !p.skuId || p.skuResolved === false),
+);
+const workflowConfigHref = computed(() =>
+  props.productTypeId
+    ? `/system/product-processes?productTypeId=${encodeURIComponent(props.productTypeId)}`
+    : '/system/product-processes',
+);
 /** 产出摘要文字: "{品名}（{单位}）" — 品名/单位缺失 (SKU 已失效) 时用 skuId 兜底, 不崩溃。 */
 const workflowOutputLabel = computed(() => {
   const out = workflowOutput.value;
@@ -1401,6 +1410,9 @@ function upstreamWarning(row: SheetRow): string | null {
 function saveDisabledReason(row: SheetRow): string | null {
   if (isReadOnlyRow(row)) return '已入账或历史数据只读，不能直接修改';
   if (row.submissionStatus === 'SUBMITTED') return '该行已正式报工，不能直接修改';
+  if (unresolvedWorkflowRawInputs.value.length > 0) {
+    return '当前计划的 Workflow 原料已失效，请先重新绑定原料并重新创建生产计划';
+  }
   if (isPortOutputMode.value && !row.productionDate) return '请选择生产日期';
   // 2B.2 多产出: 单产出字段(下方 'output'/'after'/'usedWeight'+sumBoxes 等)已被「多产出」录入块
   // 取代、不再渲染 —— 下方 `&& !isMultiOutput.value` 跳过那些"填了单产出输出吗"检查(它们永远
@@ -2354,6 +2366,26 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
       show-icon
       title="产出 SKU 已失效，请回 Workflow 配置"
     />
+    <el-alert
+      v-if="unresolvedWorkflowRawInputs.length > 0"
+      data-testid="workflow-input-invalid"
+      class="sp-workflow-banner sp-workflow-banner-warning"
+      type="error"
+      :closable="false"
+      show-icon
+    >
+      <template #title>
+        <span>当前计划绑定的原料已失效，暂不能报工</span>
+      </template>
+      <div>
+        失效原料：{{ unresolvedWorkflowRawInputs.map((p) => p.materialName || p.skuId).join('、') }}。
+        报工页只填写各原料实际投入量，不能临时更换原料。
+        <el-link :href="workflowConfigHref" type="primary" underline="always">
+          去产品-工序配置重新绑定
+        </el-link>
+        ，然后重新创建生产计划。
+      </div>
+    </el-alert>
 
     <!-- ====================================================================
          CARD LAYOUT
