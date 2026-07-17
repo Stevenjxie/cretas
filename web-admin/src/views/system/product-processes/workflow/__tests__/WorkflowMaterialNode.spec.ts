@@ -24,10 +24,28 @@ const HandleStub = defineComponent({
  */
 
 const RAW_OPTIONS = [
-  { id: 'RM-PIG', name: '猪蹄', unit: 'kg' },
-  { id: 'RM-CHICKEN', name: '鸡胸肉', unit: 'kg' },
-  { id: 'RM-SALT', name: '食盐', unit: 'kg' },
+  { id: 'RM-PIG', name: '猪蹄', unit: 'kg', category: '主材' },
+  { id: 'RM-CHICKEN', name: '鸡胸肉', unit: 'kg', category: '原料' },
+  { id: 'RM-SALT', name: '食盐', unit: 'kg', category: '调味料' },
+  { id: 'RM-BOX', name: '包装盒', unit: '个', category: '包材' },
 ];
+
+const RAW_SEGMENTS = [{
+  level: 1,
+  segmentCode: '001',
+  segmentLabel: '原料',
+  children: [{
+    level: 2,
+    segmentCode: '001001',
+    segmentLabel: '猪肉原料',
+    children: [{ level: 3, segmentCode: '0010010001', segmentLabel: '猪蹄' }],
+  }, {
+    level: 2,
+    segmentCode: '001003',
+    segmentLabel: '禽类原料',
+    children: [{ level: 3, segmentCode: '0010030001', segmentLabel: '鸡胸肉' }],
+  }],
+}];
 
 const RAW_DATA: MaterialNodeData = {
   name: '入口原料',
@@ -39,6 +57,8 @@ function mountNode(overrides: {
   bomRawMaterialIds?: string[];
   data?: MaterialNodeData;
   unitError?: string;
+  validationError?: string;
+  validationAttention?: boolean;
 } = {}) {
   return mount(WorkflowMaterialNode, {
     props: {
@@ -46,10 +66,13 @@ function mountNode(overrides: {
       data: overrides.data || RAW_DATA,
       canWrite: true,
       rawMaterialOptions: RAW_OPTIONS,
+      rawMaterialSegments: RAW_SEGMENTS,
       bomRawMaterialIds: overrides.bomRawMaterialIds ?? [],
       semiOptions: [],
       finishedOptions: [],
       unitError: overrides.unitError,
+      validationError: overrides.validationError,
+      validationAttention: overrides.validationAttention,
     },
     global: {
       plugins: [ElementPlus],
@@ -75,14 +98,14 @@ describe('WorkflowMaterialNode raw material picker — BOM priority grouping (#3
     const bomGroupOptions = groups[0].findAllComponents(ElOption).map((o) => o.props('value'));
     const otherGroupOptions = groups[1].findAllComponents(ElOption).map((o) => o.props('value'));
     expect(bomGroupOptions).toEqual(['RM-PIG']);
-    expect(otherGroupOptions.sort()).toEqual(['RM-CHICKEN', 'RM-SALT']);
+    expect(otherGroupOptions).toEqual(['RM-CHICKEN']);
   });
 
   it('does not hard-block selecting a raw material outside the BOM (soft constraint per Steve)', () => {
     const wrapper = mountNode({ bomRawMaterialIds: ['RM-PIG'] });
 
     const groups = wrapper.findAllComponents(ElOptionGroup);
-    const otherOption = groups[1].findAllComponents(ElOption).find((o) => o.props('value') === 'RM-SALT');
+    const otherOption = groups[1].findAllComponents(ElOption).find((o) => o.props('value') === 'RM-CHICKEN');
     expect(otherOption?.props('disabled')).toBeFalsy();
   });
 
@@ -92,7 +115,8 @@ describe('WorkflowMaterialNode raw material picker — BOM priority grouping (#3
     const groups = wrapper.findAllComponents(ElOptionGroup);
     expect(groups).toHaveLength(1);
     expect(groups[0].props('label')).toBe('全部原料');
-    expect(groups[0].findAllComponents(ElOption)).toHaveLength(RAW_OPTIONS.length);
+    expect(groups[0].findAllComponents(ElOption).map((o) => o.props('value')))
+      .toEqual(['RM-PIG', 'RM-CHICKEN']);
 
     // 缺失 BOM 的提示已统一移动到 Workflow 顶部 banner，原料 Cell 不重复展示。
     expect(wrapper.find('[data-testid="bom-hint"]').exists()).toBe(false);
@@ -129,10 +153,41 @@ describe('WorkflowMaterialNode raw material picker — BOM priority grouping (#3
     expect(wrapper.emitted('selectRawSku')).toEqual([['RM-PIG']]);
   });
 
+  it('never offers seasoning or packaging entries in a raw Cell', () => {
+    const wrapper = mountNode();
+    const values = wrapper.findAllComponents(ElOption).map((option) => option.props('value'));
+
+    expect(values).toEqual(['RM-PIG', 'RM-CHICKEN']);
+    expect(values).not.toContain('RM-SALT');
+    expect(values).not.toContain('RM-BOX');
+  });
+
+  it('filters raw candidates by the selected L1/L2/L3 segment while retaining text search', async () => {
+    const wrapper = mountNode();
+    const cascader = wrapper.getComponent({ name: 'ElCascader' });
+
+    await cascader.vm.$emit('update:modelValue', ['001', '001003']);
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.findAllComponents(ElOption).map((option) => option.props('value')))
+      .toEqual(['RM-CHICKEN']);
+  });
+
   it('shows the unit-contract error on the affected material cell', () => {
     const wrapper = mountNode({ unitError: 'SKU RM-PIG 缺少规范主单位，请先维护 SKU 单位' });
 
     expect(wrapper.classes()).toContain('unit-error');
     expect(wrapper.get('[data-testid="unit-error"]').text()).toContain('缺少规范主单位');
+  });
+
+  it('keeps an unbound Cell red and pulses until the user starts handling it', () => {
+    const wrapper = mountNode({
+      validationError: '入口原料尚未绑定 SKU',
+      validationAttention: true,
+    });
+
+    expect(wrapper.classes()).toContain('validation-error');
+    expect(wrapper.classes()).toContain('validation-attention');
+    expect(wrapper.get('[data-testid="binding-validation-error"]').text()).toContain('请在这里绑定 SKU');
   });
 });
