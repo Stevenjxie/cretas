@@ -24,4 +24,21 @@ describe('AI entry guards', () => {
       [{ id: 'PT-3', name: '干式熟成脆皮鸡 400g', unit: '袋', gramsPerUnit: 400 }],
     )).toBeNull();
   });
+
+  it('requires a real unique SKU entity and rejects a conflicting AI SKU id', () => {
+    const products = [
+      { id: 'PT-400', name: '干式熟成脆皮鸡 400g', unit: '袋' },
+      { id: 'PT-350', name: '干式熟成脆皮鸡 350g', unit: '袋' },
+    ];
+
+    expect(productionPlanAiGuard({
+      productTypeName: '干式熟成脆皮鸡 400g',
+      productTypeId: 'PT-350',
+      quantityUnit: '袋',
+    }, products)).toContain('编号与完整产品名称不一致');
+    expect(productionPlanAiGuard({
+      productTypeName: '干式熟成脆皮鸡 400g',
+      quantityUnit: '袋',
+    }, [{ name: '干式熟成脆皮鸡 400g', unit: '袋' }])).toContain('未唯一匹配');
+  });
 });
