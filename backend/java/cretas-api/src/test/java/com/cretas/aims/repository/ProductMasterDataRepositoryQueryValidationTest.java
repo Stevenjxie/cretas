@@ -15,6 +15,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.test.context.ActiveProfiles;
 
+import java.math.BigDecimal;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Real Hibernate/JPA startup and behavior gate for product/material master-data queries. */
@@ -52,6 +54,7 @@ class ProductMasterDataRepositoryQueryValidationTest {
 
         ProductType visible = product("P-VISIBLE", factory.getId(), user.getId(),
                 "CPF0060149", "  Case Product  ", "FINISHED_PRODUCT");
+        visible.setGramsPerUnit(new BigDecimal("800"));
         ProductType hiddenOwner = product("P-RAW-OWNER", factory.getId(), user.getId(),
                 "RAW-OWNER-1", "内部原料 owner", "RAW_MATERIAL");
         entityManager.persist(visible);
@@ -71,8 +74,12 @@ class ProductMasterDataRepositoryQueryValidationTest {
         entityManager.clear();
 
         assertThat(productRepository.findOptionsByFactoryId(factory.getId()))
-                .extracting(option -> option.getId())
-                .containsExactly("P-VISIBLE");
+                .singleElement()
+                .satisfies(option -> {
+                    assertThat(option.getId()).isEqualTo("P-VISIBLE");
+                    assertThat(option.getUnit()).isEqualTo("盒");
+                    assertThat(option.getGramsPerUnit()).isEqualByComparingTo("800");
+                });
         assertThat(productRepository.findVisibleByFactoryId(factory.getId(), PageRequest.of(0, 20)).getContent())
                 .extracting(ProductType::getId)
                 .containsExactly("P-VISIBLE");

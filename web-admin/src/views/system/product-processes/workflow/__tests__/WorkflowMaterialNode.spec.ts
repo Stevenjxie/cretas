@@ -1,6 +1,6 @@
 import ElementPlus, { ElOption, ElOptionGroup } from 'element-plus';
 import { mount } from '@vue/test-utils';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { defineComponent, h } from 'vue';
 import WorkflowMaterialNode from '../WorkflowMaterialNode.vue';
 import type { MaterialNodeData } from '../types';
@@ -59,6 +59,7 @@ function mountNode(overrides: {
   unitError?: string;
   validationError?: string;
   validationAttention?: boolean;
+  excludedRawMaterialIds?: string[];
 } = {}) {
   return mount(WorkflowMaterialNode, {
     props: {
@@ -73,6 +74,7 @@ function mountNode(overrides: {
       unitError: overrides.unitError,
       validationError: overrides.validationError,
       validationAttention: overrides.validationAttention,
+      excludedRawMaterialIds: overrides.excludedRawMaterialIds ?? [],
     },
     global: {
       plugins: [ElementPlus],
@@ -153,6 +155,16 @@ describe('WorkflowMaterialNode raw material picker — BOM priority grouping (#3
     expect(wrapper.emitted('selectRawSku')).toEqual([['RM-PIG']]);
   });
 
+  it('removes raw materials already used by another Cell while preserving the current Cell selection', () => {
+    const wrapper = mountNode({
+      excludedRawMaterialIds: ['RM-PIG'],
+      data: { ...RAW_DATA, skuId: 'RM-CHICKEN', name: '鸡胸肉', bound: true },
+    });
+
+    expect(wrapper.findAllComponents(ElOption).map((option) => option.props('value')))
+      .toEqual(['RM-CHICKEN']);
+  });
+
   it('never offers seasoning or packaging entries in a raw Cell', () => {
     const wrapper = mountNode();
     const values = wrapper.findAllComponents(ElOption).map((option) => option.props('value'));
@@ -171,6 +183,21 @@ describe('WorkflowMaterialNode raw material picker — BOM priority grouping (#3
 
     expect(wrapper.findAllComponents(ElOption).map((option) => option.props('value')))
       .toEqual(['RM-CHICKEN']);
+  });
+
+  it('keeps the category popper local to the Cell and closes after choosing a leaf or pressing Esc', async () => {
+    const wrapper = mountNode();
+    const cascader = wrapper.getComponent({ name: 'ElCascader' });
+    expect(cascader.props('teleported')).toBe(false);
+    const exposed = cascader.vm.$.exposed as { togglePopperVisible: (visible: boolean) => void };
+    const closeSpy = vi.spyOn(exposed, 'togglePopperVisible');
+
+    await cascader.vm.$emit('change', ['001', '001003', '0010030001']);
+    expect(closeSpy).toHaveBeenCalledWith(false);
+
+    cascader.vm.$emit('keydown', new KeyboardEvent('keydown', { key: 'Escape' }));
+    await wrapper.vm.$nextTick();
+    expect(closeSpy).toHaveBeenCalledTimes(2);
   });
 
   it('shows the unit-contract error on the affected material cell', () => {

@@ -5,6 +5,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.math.BigDecimal;
+
 /**
  * 产品类型「选项」精简 DTO —— 仅供下拉选择器 / SKU picker 使用。
  *
@@ -30,6 +32,8 @@ public class ProductTypeOptionDTO {
     private String name;
     private String unit;
     private String specification;
+    /** SKU 主数据标准克重，Workflow 用于只读展示“1基本单位 = Ng”。 */
+    private BigDecimal gramsPerUnit;
     private String productCategory;
     private Boolean isActive;
     /** 温区 (2026-07-14 追加, 供成品/SKU 管理页动态筛选下拉用) */

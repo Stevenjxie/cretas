@@ -48,6 +48,15 @@
         <div class="eyebrow">工序 Cell</div>
         <div class="process-name">{{ data.processName }}</div>
       </div>
+      <button
+        v-if="canWrite"
+        type="button"
+        class="quick-edit-process nodrag"
+        title="快捷编辑工序"
+        aria-label="快捷编辑工序"
+        data-testid="quick-edit-process"
+        @click.stop="emit('editProcess')"
+      >✎</button>
     </div>
 
     <div class="system-inference" data-testid="system-inference">
@@ -142,20 +151,21 @@
     </section>
 
     <section class="quantity-rule-section">
-      <div class="section-title"><span>端口标准数量</span></div>
-      <div v-if="isSingleAutoConvert" class="quantity-rule-note" data-testid="quantity-rule-note">
-        按系统单位换算（{{ primaryInput?.unit }} → {{ primaryOutput?.unit }}），无需填写数量关系。
+      <div class="section-title"><span>数量关系</span></div>
+      <div v-if="singleReadOnlyEquation" class="quantity-rule-note" data-testid="quantity-rule-note">
+        {{ singleReadOnlyEquation }}
       </div>
       <div v-else class="port-quantity-list" data-testid="port-quantity-list">
         <div v-for="(port, index) in inputPorts" :key="`quantity:${port.id}`" class="port-quantity-row">
           <div class="quantity-port-name">
-            <el-tag size="small" type="info">{{ index === 0 ? '主投入' : '追加投入' }}</el-tag>
+            <el-tag size="small" type="info">投入{{ index + 1 }}</el-tag>
             <span>{{ port.materialName || `投入 ${index + 1}` }}</span>
           </div>
           <div v-if="index === 0" class="baseline-quantity" data-testid="primary-input-baseline">
-            基准 1 {{ port.unit }}
+            1 {{ port.unit }}
           </div>
           <div v-else class="quantity-input-wrap">
+            <span class="equation-prefix">1 {{ primaryInput?.unit }} =</span>
             <el-input-number
               :model-value="port.standardQuantity || 1"
               :min="0.0001"
@@ -170,13 +180,14 @@
         </div>
         <div v-for="(port, index) in outputPorts" :key="`quantity:${port.id}`" class="port-quantity-row">
           <div class="quantity-port-name">
-            <el-tag size="small" type="success">产出 {{ index + 1 }}</el-tag>
+            <el-tag size="small" type="success">产出{{ index + 1 }}</el-tag>
             <span>{{ port.materialName || `产出 ${index + 1}` }}</span>
           </div>
-          <div v-if="port.quantityMode === 'AUTO_CONVERT'" class="auto-convert-chip" data-testid="auto-convert-output">
-            按系统单位换算 · {{ port.unit }}
+          <div v-if="outputReadOnlyEquation(port)" class="auto-convert-chip" data-testid="auto-convert-output">
+            {{ outputReadOnlyEquation(port) }}
           </div>
           <div v-else class="quantity-input-wrap" data-testid="fixed-output-quantity">
+            <span class="equation-prefix">1 {{ primaryInput?.unit }} =</span>
             <el-input-number
               :model-value="port.standardQuantity || 1"
               :min="0.0001"
@@ -211,7 +222,11 @@
 import { computed, ref } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
 import WorkflowSkuPicker, { type WorkflowSkuPickerOption } from './WorkflowSkuPicker.vue';
-import type { PortSelectionMode, ProcessNodeData, ProcessPortGroup } from './types';
+import {
+  workflowAutoConversionEquation,
+  workflowSkuSpecificationEquation,
+} from './workflowUnits';
+import type { PortSelectionMode, ProcessNodeData, ProcessPort, ProcessPortGroup } from './types';
 
 const props = withDefaults(defineProps<{
   data: ProcessNodeData;
@@ -222,6 +237,7 @@ const props = withDefaults(defineProps<{
   semiOptions: WorkflowSkuPickerOption[];
   finishedOptions: WorkflowSkuPickerOption[];
   allowAddInput?: boolean;
+  skuSpecifications?: Record<string, { unit: string; gramsPerUnit: number | null }>;
 }>(), { allowAddInput: true });
 
 // #8: 工序 Cell 只有在「物料拖向工序(投入)」时才是合法目标；「工序拖向物料」时
@@ -235,6 +251,7 @@ const emit = defineEmits<{
   addOutput: [];
   selectOutput: [portId: string, skuId: string];
   delete: [];
+  editProcess: [];
 }>();
 
 const processNodeStyle = { minHeight: '96px' } as const;
@@ -246,15 +263,26 @@ const inputPortGroups = computed(() => (props.data.portGroups ?? []).filter((gro
 const outputPortGroups = computed(() => (props.data.portGroups ?? []).filter((group) => group.direction === 'OUTPUT'));
 const primaryInput = computed(() => [...inputPorts.value].sort((a, b) => a.ordinal - b.ordinal)[0]);
 const primaryOutput = computed(() => [...outputPorts.value].sort((a, b) => a.ordinal - b.ordinal)[0]);
-const isSingleAutoConvert = computed(() => inputPorts.value.length === 1
-  && outputPorts.value.length === 1
-  && primaryOutput.value?.quantityMode === 'AUTO_CONVERT');
+const singleReadOnlyEquation = computed(() => (
+  inputPorts.value.length === 1 && outputPorts.value.length === 1 && primaryOutput.value
+    ? outputReadOnlyEquation(primaryOutput.value)
+    : null
+));
+
+function outputReadOnlyEquation(port: ProcessPort): string | null {
+  const spec = port.skuId ? props.skuSpecifications?.[port.skuId] : undefined;
+  const skuEquation = workflowSkuSpecificationEquation(spec?.unit || port.unit, spec?.gramsPerUnit);
+  if (skuEquation) return `SKU 规格：${skuEquation}`;
+  return port.quantityMode === 'AUTO_CONVERT'
+    ? workflowAutoConversionEquation(primaryInput.value?.unit, port.unit)
+    : null;
+}
 
 function relationOptions(direction: 'INPUT' | 'OUTPUT'): Array<{ value: PortSelectionMode; label: string }> {
   return [
     { value: 'ALL_REQUIRED', label: direction === 'INPUT' ? '全部必投' : '全部产出' },
-    { value: 'EXACTLY_ONE', label: '互相替代（选 1）' },
-    { value: 'AT_LEAST_ONE', label: '至少选 1' },
+    { value: 'EXACTLY_ONE', label: '互相替代（选1）' },
+    { value: 'AT_LEAST_ONE', label: '至少选1' },
     { value: 'OPTIONAL', label: '可选' },
   ];
 }
@@ -354,6 +382,12 @@ function handleStyle(index: number, count: number): Record<string, string> {
 .process-node.selected { box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.3); }
 .process-heading { display: flex; align-items: flex-start; gap: 8px; }
 .process-heading > div { min-width: 0; flex: 1; }
+.quick-edit-process {
+  display: grid; place-items: center; width: 26px; height: 26px; flex: 0 0 auto;
+  padding: 0; border: 1px solid #b9d8f4; border-radius: 6px; background: #fff;
+  color: #1b65a8; cursor: pointer; font-size: 14px;
+}
+.quick-edit-process:hover { border-color: #409eff; background: #eef6ff; }
 .step-mark { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; color: #1b65a8; background: #eaf4ff; font-weight: 700; }
 .eyebrow { color: #7a8599; font-size: 11px; }
 .process-name { color: #1a2332; font-size: 15px; font-weight: 700; }
@@ -384,7 +418,8 @@ function handleStyle(index: number, count: number): Record<string, string> {
   font-size: 12px; font-weight: 600; text-align: center;
 }
 .auto-convert-chip { background: #edf8f2; color: #2f855a; }
-.quantity-input-wrap { display: grid; grid-template-columns: minmax(90px, 1fr) auto; align-items: center; gap: 6px; color: #667085; font-size: 12px; }
+.quantity-input-wrap { display: grid; grid-template-columns: auto minmax(70px, 1fr) auto; align-items: center; gap: 6px; color: #667085; font-size: 12px; }
+.equation-prefix { white-space: nowrap; }
 .quantity-input-wrap :deep(.el-input-number) { width: 100%; }
 .quantity-input-wrap :deep(input) { user-select: text; }
 .reporting-row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; color: #667085; font-size: 12px; }

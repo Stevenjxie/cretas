@@ -6,11 +6,21 @@ import {
   parseFixedRatioQuantities,
   reconcileProcessPortQuantities,
   reconcileWorkflowUnits,
+  workflowAutoConversionEquation,
+  workflowSkuSpecificationEquation,
   workflowUnitDimension,
   type WorkflowUnitContext,
 } from '../workflowUnits';
 
 describe('reconcileWorkflowUnits', () => {
+  it('formats scientific conversions and SKU standard weights as read-only business equations', () => {
+    expect(workflowAutoConversionEquation('kg', 'kg')).toBe('同单位，无需换算');
+    expect(workflowAutoConversionEquation('kg', 'g')).toBe('1kg = 1000g');
+    expect(workflowAutoConversionEquation('g', 'kg')).toBe('1g = 0.001kg');
+    expect(workflowAutoConversionEquation('只', '半只')).toBeNull();
+    expect(workflowSkuSpecificationEquation('盒', 800)).toBe('1盒 = 800g');
+  });
+
   it('recognizes MASS, VOLUME, and LENGTH as system physical dimensions', () => {
     expect(workflowUnitDimension('公斤')).toBe('MASS');
     expect(workflowUnitDimension('ml')).toBe('VOLUME');

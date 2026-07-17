@@ -61,6 +61,12 @@ const FALLBACK_DIMENSIONS: Record<string, UnitDimension> = {
   mm: 'LENGTH', cm: 'LENGTH', m: 'LENGTH', km: 'LENGTH',
 };
 
+const PHYSICAL_BASE_FACTORS: Record<string, number> = {
+  mg: 0.001, g: 1, kg: 1000, t: 1_000_000, jin: 500,
+  ml: 1, l: 1000,
+  mm: 1, cm: 10, m: 1000, km: 1_000_000,
+};
+
 const CHINESE_UNIT_LABELS: Record<string, string> = {
   pcs: '件', portion: '份', box: '盒', case: '箱', bag: '袋', bottle: '瓶',
 };
@@ -135,6 +141,32 @@ export function areWorkflowUnitsAutoConvertible(
   const fromDimension = workflowUnitDimension(fromUnit, catalog, customAliases);
   const toDimension = workflowUnitDimension(toUnit, catalog, customAliases);
   return PHYSICAL_DIMENSIONS.has(fromDimension) && fromDimension === toDimension;
+}
+
+export function workflowAutoConversionEquation(
+  fromUnit: string | null | undefined,
+  toUnit: string | null | undefined,
+  customAliases?: Record<string, string>,
+): string | null {
+  const aliases = normalizedAliases(customAliases);
+  const fromCode = normalizeUnit(fromUnit, aliases);
+  const toCode = normalizeUnit(toUnit, aliases);
+  if (!fromCode || !toCode) return null;
+  if (fromCode === toCode) return '同单位，无需换算';
+  const fromFactor = PHYSICAL_BASE_FACTORS[fromCode];
+  const toFactor = PHYSICAL_BASE_FACTORS[toCode];
+  if (!fromFactor || !toFactor || workflowUnitDimension(fromCode) !== workflowUnitDimension(toCode)) return null;
+  return `1${displayUnit(fromUnit, aliases)} = ${formatQuantity(fromFactor / toFactor)}${displayUnit(toUnit, aliases)}`;
+}
+
+export function workflowSkuSpecificationEquation(
+  unit: string | null | undefined,
+  gramsPerUnit: number | null | undefined,
+): string | null {
+  const grams = Number(gramsPerUnit);
+  const label = String(unit || '').trim();
+  if (!label || !Number.isFinite(grams) || grams <= 0) return null;
+  return `1${label} = ${formatQuantity(grams)}g`;
 }
 
 /**
@@ -286,4 +318,8 @@ function leadingPositiveNumber(value: string): number | null {
 
 function positiveQuantity(value: number | null | undefined): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function formatQuantity(value: number): string {
+  return Number(value.toFixed(6)).toString();
 }

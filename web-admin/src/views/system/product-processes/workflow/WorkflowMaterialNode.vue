@@ -56,6 +56,7 @@
 
     <el-cascader
       v-if="kind === 'RAW_MATERIAL' && canWrite && rawMaterialSegments.length > 0"
+      ref="rawSegmentCascaderRef"
       v-model="selectedRawSegmentPath"
       class="nodrag nowheel raw-category-filter"
       :options="rawMaterialSegments"
@@ -64,7 +65,10 @@
       filterable
       clearable
       size="small"
+      :teleported="false"
       data-testid="raw-segment-filter"
+      @change="handleRawSegmentChange"
+      @keydown.esc.stop="closeRawSegmentDropdown"
     />
 
     <el-select
@@ -132,6 +136,7 @@ const props = withDefaults(defineProps<{
   connectingFromKind?: '' | 'MATERIAL' | 'PROCESS';
   rawMaterialOptions: RawMaterialPickerOption[];
   rawMaterialSegments?: MaterialSegmentNode[];
+  excludedRawMaterialIds?: string[];
   /**
    * #3 (Steve 定: BOM 原料优先、可加其他): 该产品 BOM 原辅料清单里出现过的
    * 原料 SKU id 集合 (RawMaterialType.id，与 BomItem.materialTypeId 同一业务
@@ -150,6 +155,7 @@ const props = withDefaults(defineProps<{
   connectingFromKind: '',
   bomRawMaterialIds: () => [],
   rawMaterialSegments: () => [],
+  excludedRawMaterialIds: () => [],
   validationAttention: false,
 });
 
@@ -169,6 +175,10 @@ const emit = defineEmits<{
 }>();
 
 const selectedRawSegmentPath = ref<string[]>([]);
+interface CascaderExpose {
+  togglePopperVisible: (visible?: boolean) => void;
+}
+const rawSegmentCascaderRef = ref<CascaderExpose | null>(null);
 const rawSegmentCascaderProps = {
   value: 'segmentCode',
   label: 'segmentLabel',
@@ -180,7 +190,29 @@ const rawCandidateOptions = computed(() => filterRawMaterialsBySegment(
   props.rawMaterialOptions,
   props.rawMaterialSegments,
   selectedRawSegmentPath.value,
-));
+).filter((option) => (
+  option.id === props.data.skuId || !props.excludedRawMaterialIds.includes(option.id)
+)));
+
+function closeRawSegmentDropdown(): void {
+  rawSegmentCascaderRef.value?.togglePopperVisible(false);
+}
+
+function handleRawSegmentChange(path: string[]): void {
+  const selectedCode = path.at(-1);
+  if (!selectedCode) return;
+  const selected = findSegment(props.rawMaterialSegments, selectedCode);
+  if (!selected?.children?.length) closeRawSegmentDropdown();
+}
+
+function findSegment(nodes: MaterialSegmentNode[], code: string): MaterialSegmentNode | undefined {
+  for (const node of nodes) {
+    if (node.segmentCode === code) return node;
+    const child = findSegment(node.children || [], code);
+    if (child) return child;
+  }
+  return undefined;
+}
 
 // #3 原料 Cell = BOM 原料优先、可加其他 (soft 约束，Steve 定：BOM 优先但不硬
 // 禁其它)。把候选原料拆成「本产品 BOM 原料」+「其它原料」两组，BOM 组置顶,

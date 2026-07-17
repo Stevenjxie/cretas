@@ -129,7 +129,7 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
     expect(vm.publishBindingErrors.map((error) => error.nodeId)).toEqual(['raw', 'finished']);
     expect([...vm.publishBindingAttentionNodeIds]).toEqual(['raw', 'finished']);
     expect(apiMocks.fitView).toHaveBeenCalledWith(expect.objectContaining({
-      nodes: [expect.objectContaining({ id: 'raw' })],
+      nodes: ['raw'],
     }));
     expect(apiMocks.publishProductProcessWorkflow).not.toHaveBeenCalled();
 

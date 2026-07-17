@@ -59,6 +59,9 @@ function mountNode(selected = true, data: ProcessNodeData = processData) {
       canWrite: true,
       semiOptions: SEMI_OPTIONS,
       finishedOptions: FINISHED_OPTIONS,
+      skuSpecifications: {
+        'SKU-FIN-800': { unit: '盒', gramsPerUnit: 800 },
+      },
     },
     global: {
       plugins: [ElementPlus],
@@ -104,6 +107,16 @@ describe('WorkflowProcessNode output gestures', () => {
 
     expect(wrapper.find('[data-testid="output-kind-select"]').exists()).toBe(false);
     expect(wrapper.find('.kind-select').exists()).toBe(false);
+  });
+
+  it('exposes a clear pencil action for editing the real process master data', async () => {
+    const wrapper = mountNode();
+    const button = wrapper.get('[data-testid="quick-edit-process"]');
+
+    expect(button.attributes('title')).toBe('快捷编辑工序');
+    expect(button.attributes('aria-label')).toBe('快捷编辑工序');
+    await button.trigger('click');
+    expect(wrapper.emitted('editProcess')).toHaveLength(1);
   });
 
   it('P3: exposes an editable output SKU picker on each output row and emits selectOutput(portId, skuId)', () => {
@@ -211,7 +224,7 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     const wrapper = mountNode();
 
     expect(wrapper.get('[data-testid="quantity-rule-note"]').text())
-      .toContain('按系统单位换算（kg → kg）');
+      .toContain('同单位，无需换算');
     expect(wrapper.findComponent({ name: 'ElInputNumber' }).exists()).toBe(false);
   });
 
@@ -242,7 +255,7 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     expect(wrapper.find('.conversion-select').exists()).toBe(false);
   });
 
-  it('uses the main input as a read-only baseline and requires each extra input quantity', () => {
+  it('labels equal inputs by display order and shows a complete quantity equation', () => {
     const ports: ProcessPort[] = [
       { id: 'in-1', direction: 'INPUT', materialName: '主料', unit: 'kg', quantityMode: 'FIXED_RATIO', standardQuantity: 1, ordinal: 0 },
       { id: 'in-2', direction: 'INPUT', materialName: '调味料', unit: 'g', quantityMode: 'FIXED_RATIO', standardQuantity: 25, ordinal: 1 },
@@ -250,11 +263,32 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     ];
     const wrapper = mountNode(true, withPorts({ ports }));
 
-    expect(wrapper.get('[data-testid="primary-input-baseline"]').text()).toContain('基准 1 kg');
+    expect(wrapper.get('[data-testid="primary-input-baseline"]').text()).toContain('1 kg');
+    expect(wrapper.text()).toContain('投入1');
+    expect(wrapper.text()).toContain('投入2');
+    expect(wrapper.text()).not.toContain('主投入');
+    expect(wrapper.text()).not.toContain('追加投入');
+    expect(wrapper.text()).not.toContain('端口');
+    expect(wrapper.get('.equation-prefix').text()).toBe('1 kg =');
     const quantityInputs = wrapper.findAllComponents({ name: 'ElInputNumber' });
     expect(quantityInputs).toHaveLength(1);
     expect(quantityInputs[0].props('modelValue')).toBe(25);
     expect(wrapper.text()).toContain('调味料');
+  });
+
+  it('inherits a finished SKU standard weight as a read-only 1盒 = 800g specification', () => {
+    const ports: ProcessPort[] = [
+      { id: 'in-1', direction: 'INPUT', materialName: '包装前产品', unit: 'kg', ordinal: 0 },
+      {
+        id: 'out-1', direction: 'OUTPUT', skuId: 'SKU-FIN-800', materialName: '成品800g',
+        unit: '盒', quantityMode: 'FIXED_RATIO', standardQuantity: 9, ordinal: 0,
+      },
+    ];
+    const wrapper = mountNode(true, withPorts({ ports }));
+
+    expect(wrapper.get('[data-testid="quantity-rule-note"]').text()).toContain('SKU 规格：1盒 = 800g');
+    expect(wrapper.findComponent({ name: 'ElInputNumber' }).exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('1kg = 1盒');
   });
 
   it('renders and updates a fixed quantity on the matching output port only', async () => {

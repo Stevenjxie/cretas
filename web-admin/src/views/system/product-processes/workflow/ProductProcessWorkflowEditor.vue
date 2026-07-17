@@ -141,6 +141,7 @@
               :connecting-from-kind="connectingFromKind"
               :raw-material-options="rawMaterialOptions"
               :raw-material-segments="rawMaterialSegments"
+              :excluded-raw-material-ids="usedRawMaterialIdsExcept(slotProps.id)"
               :bom-raw-material-ids="bomRawMaterialIdList"
               :semi-options="semiFinishedSkuOptions"
               :finished-options="finishedGoodSkuOptions"
@@ -164,11 +165,13 @@
               :connecting-from-kind="connectingFromKind"
               :semi-options="semiFinishedSkuOptions"
               :finished-options="finishedGoodSkuOptions"
+              :sku-specifications="skuSpecifications"
               :allow-add-input="true"
               @update="(patch) => updateProcessData(slotProps.id, patch)"
               @add-input="addInputToProcess(slotProps.id)"
               @add-output="addOutputToProcess(slotProps.id)"
               @select-output="(portId, skuId) => selectOutputSku(slotProps.id, portId, skuId)"
+              @edit-process="openQuickEditProcess(slotProps.id)"
               @delete="removeNode(slotProps.id)"
             />
           </template>
@@ -358,6 +361,42 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="processEditVisible" title="快捷编辑工序" width="560px" destroy-on-close>
+      <el-alert
+        type="warning"
+        :closable="false"
+        title="这里修改的是工序主数据；保存后当前 Cell 会从接口结果刷新，Workflow 连线保持不变。"
+        style="margin-bottom: 16px"
+      />
+      <el-form label-width="120px" data-testid="process-edit-form">
+        <el-form-item label="工序名称" required>
+          <el-input v-model="processEditForm.processName" maxlength="100" />
+        </el-form-item>
+        <el-form-item label="工序类别" required>
+          <el-input v-model="processEditForm.processCategory" maxlength="50" />
+        </el-form-item>
+        <el-form-item label="投入 / 报工单位" required>
+          <UnitSelect v-model="processEditForm.unit" :factory-id="factoryId" :clearable="false" />
+        </el-form-item>
+        <el-form-item label="产出单位" required>
+          <UnitSelect v-model="processEditForm.outputUnit" :factory-id="factoryId" :clearable="false" />
+        </el-form-item>
+        <el-form-item label="默认产出类型" required>
+          <el-radio-group v-model="processEditForm.defaultOutputMaterialKind">
+            <el-radio-button label="SEMI_FINISHED">半成品</el-radio-button>
+            <el-radio-button label="FINISHED_GOOD">成品</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="是否需要投入">
+          <el-switch v-model="processEditForm.needsInput" active-text="需要" inactive-text="不需要" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="processEditVisible = false">取消</el-button>
+        <el-button type="primary" :loading="processEditSaving" data-testid="save-process-edit" @click="saveQuickEditProcess">保存工序主数据</el-button>
+      </template>
+    </el-dialog>
+
     <!-- #10: BOM 原辅料配置抽屉 (右侧滑出, 不跳转页面; 关闭即回工序配置, 工序草稿不丢) -->
     <el-drawer
       v-model="bomDrawerVisible"
@@ -412,6 +451,7 @@ import {
   createWorkProcess,
   getActiveWorkProcesses,
   getProductWorkProcesses,
+  updateWorkProcess,
   updateWorkProcessOutputKind,
   type WorkProcessItem,
   type WorkProcessOutputMaterialKind,
@@ -482,6 +522,8 @@ interface SkuOption {
   unit?: string;
   specification?: string;
   productCategory?: string;
+  gramsPerUnit?: number | null;
+  detailLoaded?: boolean;
 }
 
 /**
@@ -557,6 +599,12 @@ const unitCatalog = ref<UnitCatalogItem[]>([]);
 const productBomItems = ref<BomItemOption[]>([]);
 const bomMissingProducts = ref<Array<{ id: string; name: string }>>([]);
 const bomRawMaterialIdList = computed(() => productBomItems.value.map((item) => item.materialTypeId));
+function usedRawMaterialIdsExcept(nodeId: string): string[] {
+  return flowNodes.value
+    .filter((node) => node.id !== nodeId && node.data?.kind === 'RAW_MATERIAL')
+    .map((node) => String(node.data?.skuId || ''))
+    .filter(Boolean);
+}
 const outputSkuOptions = computed(() => skuOptions.value.filter(
   (option) => classifyOutputSkuCategory(option.productCategory) !== null,
 ));
@@ -568,6 +616,10 @@ const semiFinishedSkuOptions = computed(() => skuOptions.value.filter(
 const finishedGoodSkuOptions = computed(() => skuOptions.value.filter(
   (option) => classifyOutputSkuCategory(option.productCategory) === 'FINISHED_GOOD',
 ));
+const skuSpecifications = computed(() => Object.fromEntries(skuOptions.value.map((option) => [
+  option.id,
+  { unit: option.unit || '', gramsPerUnit: option.gramsPerUnit ?? null },
+])));
 
 const processDialogVisible = ref(false);
 const processSourceMaterialId = ref('');
@@ -649,6 +701,17 @@ const quickEditSaving = ref(false);
 const quickEditNodeId = ref('');
 const quickEditSkuId = ref('');
 const quickEditForm = ref({ name: '', unit: 'kg' });
+const processEditVisible = ref(false);
+const processEditSaving = ref(false);
+const processEditNodeId = ref('');
+const processEditForm = ref({
+  processName: '',
+  processCategory: '',
+  unit: 'kg',
+  outputUnit: 'kg',
+  defaultOutputMaterialKind: 'SEMI_FINISHED' as WorkProcessOutputMaterialKind,
+  needsInput: true,
+});
 let lastGraphIdSeed = 0;
 let catalogGeneration = 0;
 let createSkuGeneration = 0;
@@ -873,7 +936,10 @@ async function loadCatalogs(): Promise<void> {
       throw new Error('Workflow catalog response is incomplete');
     }
     workProcessOptions.value = processResponse.data;
-    skuOptions.value = productResponse.data.content;
+    skuOptions.value = productResponse.data.content.map((option) => ({
+      ...option,
+      detailLoaded: Object.prototype.hasOwnProperty.call(option, 'gramsPerUnit'),
+    }));
     rawMaterialOptions.value = rawResponse.data.filter(isRawMaterialOption);
     rawMaterialSegments.value = buildRawMaterialSegmentTree(segmentResponse.data);
     if (unitCatalogResponse?.success && Array.isArray(unitCatalogResponse.data)) {
@@ -921,6 +987,24 @@ function unitContext(): WorkflowUnitContext {
     };
   });
   return { products, catalog: unitCatalog.value };
+}
+
+async function ensureSkuDetail(skuId: string): Promise<SkuOption | undefined> {
+  const option = skuOptions.value.find((candidate) => candidate.id === skuId);
+  if (!option || option.detailLoaded) return option;
+  const response = await get<SkuOption>(`/${props.factoryId}/product-types/${skuId}`);
+  if (!response.success || !response.data) return option;
+  Object.assign(option, response.data, { detailLoaded: true });
+  skuOptions.value = [...skuOptions.value];
+  return option;
+}
+
+async function ensureBoundSkuDetails(): Promise<void> {
+  const skuIds = [...new Set(flowNodes.value
+    .filter((node) => node.data?.kind === 'SEMI_FINISHED' || node.data?.kind === 'FINISHED_GOOD')
+    .map((node) => String(node.data?.skuId || ''))
+    .filter(Boolean))];
+  await Promise.all(skuIds.map((skuId) => ensureSkuDetail(skuId)));
 }
 
 function unitIssueForNode(nodeId: string): string | undefined {
@@ -1094,8 +1178,10 @@ async function loadDefinition(): Promise<void> {
     unitReviewPending.value = nextDefinition.unitReviewRequired === true;
     hydrate(nextDefinition);
     loadedDefinitionIdentity.value = identity;
+    await ensureBoundSkuDetails();
+    if (!isCurrentLoad(generation, identity)) return;
     dirty.value = !nextDefinition.id;
-    void reconcileLoadedUnits();
+    await reconcileLoadedUnits();
     await nextTick();
     if (!isCurrentLoad(generation, identity)) return;
     if (nextDefinition.id) {
@@ -1133,6 +1219,8 @@ function invalidateLoadedDefinition(invalidatePersistence = true): void {
   quickEditVisible.value = false;
   quickEditNodeId.value = '';
   quickEditSkuId.value = '';
+  processEditVisible.value = false;
+  processEditNodeId.value = '';
   bomMissingProducts.value = [];
   skuBindingTarget.value = null;
   if (invalidatePersistence) {
@@ -1709,6 +1797,15 @@ function selectRawSku(materialNodeId: string, skuId: string): void {
   const material = flowNodes.value.find((node) => node.id === materialNodeId);
   const option = rawMaterialOptions.value.find((item) => item.id === skuId);
   if (!material || !option) return;
+  const duplicate = flowNodes.value.some((node) => (
+    node.id !== materialNodeId
+    && node.data?.kind === 'RAW_MATERIAL'
+    && String(node.data?.skuId || '') === skuId
+  ));
+  if (duplicate) {
+    ElMessage.warning('该原料已在当前 Workflow 中使用');
+    return;
+  }
   const nextUnit = workflowReportingUnit(
     'RAW_MATERIAL',
     option.unit || String(material.data?.baseUnit || 'kg'),
@@ -1747,14 +1844,14 @@ function findOutputPortOwner(materialNodeId: string): SkuBindingTarget | null {
   return null;
 }
 
-function selectMaterialSku(materialNodeId: string, skuId: string): void {
+async function selectMaterialSku(materialNodeId: string, skuId: string): Promise<void> {
   if (!canEdit.value) return;
   const owner = findOutputPortOwner(materialNodeId);
   if (!owner) {
     ElMessage.warning('未找到该产出 Cell 对应的工序，无法绑定 SKU');
     return;
   }
-  selectOutputSku(owner.processId, owner.portId, skuId);
+  await selectOutputSku(owner.processId, owner.portId, skuId);
 }
 
 function processOutputKind(processData: ProcessNodeData): WorkProcessOutputMaterialKind | null {
@@ -1817,7 +1914,7 @@ async function ensurePrimaryOutputKind(
   }
 }
 
-function selectOutputSku(processId: string, portId: string, skuId: string): void {
+async function selectOutputSku(processId: string, portId: string, skuId: string): Promise<void> {
   if (!canEdit.value) return;
   if (skuId === '__CREATE__') {
     const process = flowNodes.value.find((node) => node.id === processId);
@@ -1835,7 +1932,7 @@ function selectOutputSku(processId: string, portId: string, skuId: string): void
     skuDialogVisible.value = true;
     return;
   }
-  const option = skuOptions.value.find((item) => item.id === skuId);
+  const option = await ensureSkuDetail(skuId);
   const kind = classifyOutputSkuCategory(option?.productCategory);
   if (!option || !kind) {
     ElMessage.error('所选 SKU 分类不能作为工序产出');
@@ -1887,6 +1984,8 @@ function bindOutputSku(processId: string, portId: string, option: SkuOption): bo
       materialName: option.name,
       materialKind: kind,
       unit: nextUnit,
+      quantityMode: 'FIXED_RATIO',
+      standardQuantity: 1,
     });
     delete port.conversionRefId;
     delete port.conversionVersion;
@@ -1912,6 +2011,73 @@ function dataMaterialNodeId(processId: string, portId: string): string | undefin
   const process = flowNodes.value.find((node) => node.id === processId);
   if (!process || process.data?.kind !== 'PROCESS') return undefined;
   return (process.data as ProcessNodeData).ports.find((port) => port.id === portId)?.materialNodeId;
+}
+
+function openQuickEditProcess(processNodeId: string): void {
+  const node = flowNodes.value.find((candidate) => candidate.id === processNodeId);
+  if (!node || node.data?.kind !== 'PROCESS') return;
+  const data = node.data as ProcessNodeData;
+  const master = workProcessOptions.value.find((option) => option.id === data.workProcessId);
+  if (!master) {
+    ElMessage.warning('未找到该工序主数据，请刷新后重试');
+    return;
+  }
+  processEditNodeId.value = processNodeId;
+  processEditForm.value = {
+    processName: master.processName,
+    processCategory: master.processCategory || '',
+    unit: master.unit || data.inputUnit || 'kg',
+    outputUnit: master.outputUnit || data.outputUnit || master.unit || 'kg',
+    defaultOutputMaterialKind: master.defaultOutputMaterialKind,
+    needsInput: master.needsInput !== false,
+  };
+  processEditVisible.value = true;
+}
+
+async function saveQuickEditProcess(): Promise<void> {
+  const identity = currentLoadedIdentity();
+  const node = flowNodes.value.find((candidate) => candidate.id === processEditNodeId.value);
+  if (!identity || !node || node.data?.kind !== 'PROCESS' || processEditSaving.value) return;
+  const form = processEditForm.value;
+  if (!form.processName.trim() || !form.processCategory.trim() || !form.unit || !form.outputUnit) {
+    ElMessage.warning('请完整填写工序名称、类别和单位');
+    return;
+  }
+  const data = node.data as ProcessNodeData;
+  processEditSaving.value = true;
+  try {
+    const response = await updateWorkProcess(identity.factoryId, data.workProcessId, {
+      processName: form.processName.trim(),
+      processCategory: form.processCategory.trim(),
+      unit: form.unit,
+      outputUnit: form.outputUnit,
+      defaultOutputMaterialKind: form.defaultOutputMaterialKind,
+      needsInput: form.needsInput,
+    });
+    if (!response.success || !response.data) throw new Error(response.message || '工序修改失败');
+    const updated = response.data;
+    workProcessOptions.value = workProcessOptions.value.map(
+      (option) => option.id === updated.id ? updated : option,
+    );
+    mutate(() => {
+      data.processName = updated.processName;
+      data.processCategory = updated.processCategory;
+      data.inputUnit = updated.unit;
+      data.outputUnit = updated.outputUnit || updated.unit;
+      data.ports.forEach((port) => {
+        const material = flowNodes.value.find((candidate) => candidate.id === port.materialNodeId);
+        const boundUnit = String(material?.data?.baseUnit || '').trim();
+        port.unit = boundUnit || (port.direction === 'INPUT' ? updated.unit : (updated.outputUnit || updated.unit));
+      });
+    });
+    processEditVisible.value = false;
+    ElMessage.success('工序主数据已更新，当前 Workflow 已刷新');
+  } catch (error) {
+    console.error('[ProductProcessWorkflow] quick edit process failed', error);
+    ElMessage.error(error instanceof Error ? error.message : '工序修改失败');
+  } finally {
+    processEditSaving.value = false;
+  }
 }
 
 function openQuickEditSku(materialNodeId: string): void {

@@ -6,11 +6,11 @@
 
 ## 在飞任务
 
-- 无。
+- `WF-UX-20260718-01` | `in-progress` | Owner: Codex `/root` | Base SHA: `c39ef12f4fb87878184d114f9a69b7a42f92af05` | 修复 Workflow 编辑器原料去重、下拉收起、布局连线、投入命名、单位换算和工序快捷编辑 | 验收：目标 Vitest + Web build + F006 浏览器聚焦验证
 
 ## Scope 锁地图
 
-- 无。
+- `WF-UX-20260718-01`: `web-admin/src/views/system/product-processes/workflow/**`、对应单元测试、`backend/java/cretas-api/src/main/java/com/cretas/aims/dto/producttype/ProductTypeOptionDTO.java`、`backend/java/cretas-api/src/main/java/com/cretas/aims/repository/ProductTypeRepository.java`、`backend/java/cretas-api/src/test/java/com/cretas/aims/repository/ProductMasterDataRepositoryQueryValidationTest.java`、`docs/dispatch/ACTIVE.md` 与当日归档。补充 Java scope 用于让 Workflow SKU 选项直接继承 `gramsPerUnit`；Repository 投影变更必须通过真实 JPA Context 门禁。
 
 ## 阻塞项
 

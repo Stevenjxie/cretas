@@ -6,8 +6,10 @@ import ProductProcessWorkflowEditor from '../ProductProcessWorkflowEditor.vue';
 const apiMocks = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
+  put: vi.fn(),
   getActiveWorkProcesses: vi.fn(),
   createWorkProcess: vi.fn(),
+  updateWorkProcess: vi.fn(),
   getProductProcessWorkflow: vi.fn(),
   getProductProcessWorkflowActivation: vi.fn(),
   getProductWorkProcesses: vi.fn(),
@@ -16,12 +18,14 @@ const apiMocks = vi.hoisted(() => ({
 vi.mock('@/api/request', () => ({
   get: apiMocks.get,
   post: apiMocks.post,
+  put: apiMocks.put,
 }));
 
 vi.mock('@/api/processProduction', () => ({
   getActiveWorkProcesses: apiMocks.getActiveWorkProcesses,
   getProductWorkProcesses: apiMocks.getProductWorkProcesses,
   createWorkProcess: apiMocks.createWorkProcess,
+  updateWorkProcess: apiMocks.updateWorkProcess,
 }));
 
 vi.mock('../workflowApi', () => ({
@@ -68,8 +72,15 @@ interface EditorVm {
   addOutputToProcess: (processId: string) => void;
   addInputToProcess: (processId: string) => void;
   addStandaloneRaw: () => void;
-  selectOutputSku: (processId: string, portId: string, skuId: string) => void;
-  selectMaterialSku: (materialNodeId: string, skuId: string) => void;
+  selectOutputSku: (processId: string, portId: string, skuId: string) => Promise<void>;
+  selectMaterialSku: (materialNodeId: string, skuId: string) => Promise<void>;
+  selectRawSku: (materialNodeId: string, skuId: string) => void;
+  openQuickEditProcess: (processNodeId: string) => void;
+  saveQuickEditProcess: () => Promise<void>;
+  processEditForm: {
+    processName: string; processCategory: string; unit: string; outputUnit: string;
+    defaultOutputMaterialKind: 'SEMI_FINISHED' | 'FINISHED_GOOD'; needsInput: boolean;
+  };
   confirmCreateSku: () => Promise<void>;
   skuForm: { name: string; unit: string };
 }
@@ -107,6 +118,7 @@ const SKU_OPTIONS: SkuOption[] = [
   { id: 'SKU-COUNT', name: 'Count output', unit: '只', productCategory: 'SEMI_FINISHED' },
   { id: 'SKU-COUNT-PIECE', name: 'Piece output', unit: '件', productCategory: 'SEMI_FINISHED' },
   { id: 'SKU-FINISHED', name: 'Finished output', unit: 'kg', productCategory: 'FINISHED_PRODUCT' },
+  { id: 'SKU-FIN-800', name: 'Finished 800g', unit: '盒', productCategory: 'FINISHED_PRODUCT' },
   { id: 'SKU-CONTRACT', name: 'Contract output', unit: 'kg', productCategory: 'CONTRACT_MANUFACTURING' },
   { id: 'SKU-CUSTOMER', name: 'Customer output', unit: 'kg', productCategory: 'CUSTOMER_MATERIAL' },
   { id: 'SKU-RAW', name: 'Raw input', unit: 'kg', productCategory: 'RAW_MATERIAL' },
@@ -119,14 +131,25 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     vi.clearAllMocks();
     let timestamp = 1_000;
     vi.spyOn(Date, 'now').mockImplementation(() => timestamp++);
-    apiMocks.get.mockImplementation((url: string) => Promise.resolve(
-      url.includes('/product-types')
-        // Fresh copy per mount: the editor's skuOptions ref mutates this array in place
-        // (e.g. confirmCreateSku unshifts), so sharing SKU_OPTIONS directly would leak
-        // state across tests/mounts.
-        ? { success: true, data: { content: [...SKU_OPTIONS] } }
-        : { success: true, data: [] },
-    ));
+    apiMocks.get.mockImplementation((url: string) => {
+      if (url.endsWith('/product-types/options')) {
+        return Promise.resolve({ success: true, data: { content: [...SKU_OPTIONS] } });
+      }
+      if (url.includes('/product-types/SKU-FIN-800')) {
+        return Promise.resolve({ success: true, data: { ...SKU_OPTIONS.find((item) => item.id === 'SKU-FIN-800'), gramsPerUnit: 800 } });
+      }
+      if (url.includes('/product-types/')) {
+        const id = url.split('/').at(-1);
+        return Promise.resolve({ success: true, data: SKU_OPTIONS.find((item) => item.id === id) });
+      }
+      if (url.endsWith('/raw-material-types/active')) {
+        return Promise.resolve({ success: true, data: [
+          { id: 'RM-PIG', name: '猪蹄原料', unit: 'kg', category: '原料' },
+          { id: 'RM-CHICKEN', name: '鸡肉原料', unit: 'kg', category: '原料' },
+        ] });
+      }
+      return Promise.resolve({ success: true, data: [] });
+    });
     apiMocks.post.mockResolvedValue({
       success: true,
       data: {
@@ -166,6 +189,13 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
         defaultOutputMaterialKind: 'SEMI_FINISHED', isActive: true,
       },
     });
+    apiMocks.updateWorkProcess.mockImplementation((_factoryId: string, id: string, payload: Record<string, unknown>) => Promise.resolve({
+      success: true,
+      data: {
+        id, processName: '装盒', processCategory: 'PACKING', unit: 'kg', outputUnit: '盒',
+        needsInput: true, defaultOutputMaterialKind: 'FINISHED_GOOD', ...payload,
+      },
+    }));
     apiMocks.getProductProcessWorkflow.mockResolvedValue({
       success: true,
       data: {
@@ -228,7 +258,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     const vm = await mountEditor();
     const { process, port, material } = addSecondOutput(vm);
 
-    vm.selectOutputSku(process.id, port.id, 'SKU-SEMI');
+    await vm.selectOutputSku(process.id, port.id, 'SKU-SEMI');
 
     expect(port).toMatchObject({ skuId: 'SKU-SEMI', materialKind: 'SEMI_FINISHED' });
     expect(material.data).toMatchObject({ skuId: 'SKU-SEMI', kind: 'SEMI_FINISHED', bound: true });
@@ -240,7 +270,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
       const vm = await mountEditor();
       const { process, port, material } = addSecondOutput(vm);
 
-      vm.selectOutputSku(process.id, port.id, skuId);
+      await vm.selectOutputSku(process.id, port.id, skuId);
 
       expect(port).toMatchObject({ skuId, materialKind: 'FINISHED_GOOD' });
       expect(material.data).toMatchObject({ skuId, kind: 'FINISHED_GOOD', bound: true });
@@ -266,7 +296,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     const vm = await mountEditor();
     const { process, port, material } = addSecondOutput(vm);
 
-    vm.selectMaterialSku(material.id, 'SKU-SEMI');
+    await vm.selectMaterialSku(material.id, 'SKU-SEMI');
 
     expect(port).toMatchObject({ skuId: 'SKU-SEMI', materialKind: 'SEMI_FINISHED' });
     expect(material.data).toMatchObject({ skuId: 'SKU-SEMI', kind: 'SEMI_FINISHED', bound: true });
@@ -277,7 +307,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     const vm = await mountEditor();
     const { port, material } = addSecondOutput(vm);
 
-    vm.selectMaterialSku(material.id, '__CREATE__');
+    await vm.selectMaterialSku(material.id, '__CREATE__');
     await vm.confirmCreateSku();
 
     expect(apiMocks.post).toHaveBeenCalledWith('/F006/product-types', expect.objectContaining({
@@ -294,7 +324,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     if (!rawNode) throw new Error('Expected raw material node');
     const historyBefore = vm.history.length;
 
-    vm.selectMaterialSku(rawNode.id, 'SKU-SEMI');
+    await vm.selectMaterialSku(rawNode.id, 'SKU-SEMI');
 
     expect(warnSpy).toHaveBeenCalledWith('未找到该产出 Cell 对应的工序，无法绑定 SKU');
     expect(vm.history).toHaveLength(historyBefore);
@@ -308,6 +338,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
       'SKU-COUNT',
       'SKU-COUNT-PIECE',
       'SKU-FINISHED',
+      'SKU-FIN-800',
       'SKU-CONTRACT',
       'SKU-CUSTOMER',
     ]);
@@ -321,7 +352,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     const originalMaterialData = { ...material.data };
     const originalHistoryLength = vm.history.length;
 
-    vm.selectOutputSku(process.id, port.id, 'SKU-RAW');
+    await vm.selectOutputSku(process.id, port.id, 'SKU-RAW');
 
     expect(errorSpy).toHaveBeenCalledWith('所选 SKU 分类不能作为工序产出');
     expect(port).toEqual(originalPort);
@@ -333,7 +364,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     const vm = await mountEditor();
     const { process, port, material } = addSecondOutput(vm);
 
-    vm.selectOutputSku(process.id, port.id, '__CREATE__');
+    await vm.selectOutputSku(process.id, port.id, '__CREATE__');
     await vm.confirmCreateSku();
 
     expect(apiMocks.post).toHaveBeenCalledWith('/F006/product-types', expect.objectContaining({
@@ -360,7 +391,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     const vm = await mountEditor();
     const { process, port } = addSecondOutput(vm);
 
-    vm.selectOutputSku(process.id, port.id, '__CREATE__');
+    await vm.selectOutputSku(process.id, port.id, '__CREATE__');
     vm.skuForm.name = 'Created count semi';
     vm.skuForm.unit = '只';
     await vm.confirmCreateSku();
@@ -387,7 +418,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
         conversionRule: { mode: 'ACTUAL_WEIGHT' }, reportingRequired: true,
       },
     });
-    vm.selectOutputSku(process.id, port.id, 'SKU-COUNT');
+    await vm.selectOutputSku(process.id, port.id, 'SKU-COUNT');
 
     const downstream = vm.flowNodes.find((node) => node.id === 'process:downstream');
     expect(downstream?.data.inputUnit).toBe('只');
@@ -396,7 +427,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     expect(downstream?.data.ports?.[1]).toMatchObject({ quantityMode: 'FIXED_RATIO', standardQuantity: 1 });
   });
 
-  it('migrates a legacy fixed ratio onto the rebound output port without losing its ratio', async () => {
+  it('does not retain a stale fixed ratio after switching the output SKU', async () => {
     const vm = await mountEditor();
     const workProcess = vm.workProcessOptions.find((option) => option.id === 'WP-PACK');
     if (!workProcess) throw new Error('Expected work process option');
@@ -407,16 +438,52 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     const process = vm.flowNodes.find((node) => node.data.kind === 'PROCESS');
     const port = process?.data.ports?.find((candidate) => candidate.direction === 'OUTPUT' && candidate.ordinal === 0);
     if (!process || !port) throw new Error('Expected primary process output');
-    vm.selectOutputSku(process.id, port.id, 'SKU-COUNT');
+    await vm.selectOutputSku(process.id, port.id, 'SKU-COUNT');
     const countPort = process.data.ports?.find((candidate) => candidate.id === port.id);
     if (!countPort) throw new Error('Expected rebound count output');
     delete countPort.standardQuantity;
     process.data.conversionRule = { mode: 'FIXED_RATIO', expression: '3 kg = 6 只' };
 
-    vm.selectOutputSku(process.id, port.id, 'SKU-COUNT-PIECE');
+    await vm.selectOutputSku(process.id, port.id, 'SKU-COUNT-PIECE');
 
     const reboundPort = process.data.ports?.find((candidate) => candidate.id === port.id);
-    expect(reboundPort).toMatchObject({ unit: '件', quantityMode: 'FIXED_RATIO', standardQuantity: 2 });
+    expect(reboundPort).toMatchObject({ unit: '件', quantityMode: 'FIXED_RATIO', standardQuantity: 1 });
+  });
+
+  it('rejects a duplicate raw material even if a stale picker bypasses candidate filtering', async () => {
+    const warnSpy = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined);
+    const vm = await mountEditor();
+    vm.addStandaloneRaw();
+    const secondRaw = vm.flowNodes.filter((node) => node.data.kind === 'RAW_MATERIAL')[1];
+    if (!secondRaw) throw new Error('Expected second raw Cell');
+
+    vm.selectRawSku(secondRaw.id, 'RM-PIG');
+
+    expect(warnSpy).toHaveBeenCalledWith('该原料已在当前 Workflow 中使用');
+    expect(secondRaw.data.skuId).toBe('');
+  });
+
+  it('updates real process master data and refreshes the Cell without losing graph links', async () => {
+    const vm = await mountEditor();
+    vm.openAddProcess('raw');
+    vm.selectedWorkProcessId = 'WP-PACK';
+    vm.confirmAddProcess();
+    const process = vm.flowNodes.find((node) => node.data.kind === 'PROCESS');
+    if (!process) throw new Error('Expected process node');
+    const edgesBefore = JSON.parse(JSON.stringify(vm.flowEdges));
+
+    vm.openQuickEditProcess(process.id);
+    Object.assign(vm.processEditForm, {
+      processName: '定量包装', processCategory: '包装', unit: 'kg', outputUnit: '盒',
+      defaultOutputMaterialKind: 'FINISHED_GOOD', needsInput: true,
+    });
+    await vm.saveQuickEditProcess();
+
+    expect(apiMocks.updateWorkProcess).toHaveBeenCalledWith('F006', 'WP-PACK', expect.objectContaining({
+      processName: '定量包装', processCategory: '包装', unit: 'kg', outputUnit: '盒',
+    }));
+    expect(process.data.processName).toBe('定量包装');
+    expect(vm.flowEdges).toEqual(edgesBefore);
   });
 
   it('keeps rapid output node, port, and edge IDs unique within one millisecond', async () => {
