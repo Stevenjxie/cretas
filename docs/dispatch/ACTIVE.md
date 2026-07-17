@@ -8,6 +8,8 @@
 
 | ID | Base SHA | Scope 锁 | Owner | Mode | Worktree/PR | Status | Blocker | Next action |
 |---|---|---|---|---|---|---|---|---|
+| UNIT-BOX-CASE-20260717 | `893eaafc830e8c436723f7080c867b2a8613458a` | `web-admin/src/api/systemUnits.ts`; `web-admin/src/api/__tests__/systemUnits.spec.ts`; `web-admin/src/components/common/**`; `docs/dispatch/ACTIVE.md`; completion archive | Codex coordinator | inline | `C:\Users\Steve\cretas-workflow-validation-raw-filter` / `codex/workflow-validation-raw-filter` | in-progress | 无 | 修正 `box=盒`、`case=箱` 合并与选择，先合并部署 Web；验收：单位目标 Vitest、`vue-tsc --noEmit`、`git diff --check`、线上单位 API/静态资源验证 |
+| WF-VALIDATION-RAW-FILTER-20260717 | `893eaafc830e8c436723f7080c867b2a8613458a` | `web-admin/src/views/system/product-processes/workflow/**`; related frontend tests; `docs/dispatch/ACTIVE.md`; completion archive | Codex coordinator | inline | `C:\Users\Steve\cretas-workflow-validation-raw-filter` / `codex/workflow-validation-raw-filter` | queued | 等待单位紧急修复部署 | 单位修复上线后继续实现未绑定 SKU Cell 定位高亮，以及原料下拉三级分类与搜索 |
 
 ## 阻塞项
 

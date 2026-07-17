@@ -159,6 +159,14 @@ async function submitUnit(): Promise<void> {
     dialogVisible.value = false;
     ElMessage.success(`单位「${created.unitName}」已创建`);
   } catch (error) {
+    await loadUnits();
+    const duplicate = findDuplicateUnit(units.value, [form.unitName, form.unitSymbol]);
+    if (duplicate) {
+      selectExisting(duplicate);
+      dialogVisible.value = false;
+      ElMessage.warning(`单位已存在，已选择「${duplicate.unitName}」`);
+      return;
+    }
     handleCatchError(error, '创建计量单位失败');
   } finally {
     submitting.value = false;
