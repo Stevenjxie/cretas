@@ -188,8 +188,11 @@ public class CanvasAIController {
 
             switch (mode) {
                 case "autopilot" -> {
-                    response.setReply(executeAutopilot(factoryId, message, toolContext));
-                    response.setApplied(true);
+                    List<Map<String, Object>> diffs = generatePlan(factoryId, message);
+                    response.setDiffs(diffs);
+                    response.setReply("自动模式已生成 " + diffs.size()
+                            + " 项候选变更。首次请求不会写入，请明确确认后执行。");
+                    response.setApplied(false);
                 }
                 case "plan" -> {
                     List<Map<String, Object>> diffs = generatePlan(factoryId, message);
@@ -312,9 +315,14 @@ public class CanvasAIController {
         String argsJson = objectMapper.writeValueAsString(params);
         ToolCall toolCall = ToolCall.of(
                 "d1-preview-" + System.currentTimeMillis(), PRODUCT_WORK_PROCESS_TOOL, argsJson);
-        String raw = executor.supportsPreview()
-                ? executor.preview(toolCall, toolContext)
-                : executor.execute(toolCall, toolContext);
+        // Every first AI request is a preview.  Do not silently turn a missing
+        // preview implementation into a write just because the user selected
+        // autopilot; the explicit /apply-diffs confirmation is the only write
+        // boundary for this controller.
+        if (!executor.supportsPreview()) {
+            throw new BusinessException(409, "该工具不支持无写入预览，已阻止执行");
+        }
+        String raw = executor.preview(toolCall, toolContext);
 
         Map<String, Object> toolResponse = objectMapper.readValue(raw, new TypeReference<Map<String, Object>>() {});
 
@@ -366,16 +374,13 @@ public class CanvasAIController {
         ToolCall toolCall = ToolCall.of(
                 "d3-catalog-" + System.currentTimeMillis(), WORK_PROCESS_CATALOG_TOOL, argsJson);
         String mode = request.getMode() == null ? "action" : request.getMode().trim().toLowerCase();
-        boolean execute = "autopilot".equals(mode);
-        if (!execute && !"plan".equals(mode) && !"action".equals(mode)) {
+        if (!"autopilot".equals(mode) && !"plan".equals(mode) && !"action".equals(mode)) {
             throw new BusinessException(400, "未知模式: " + mode);
         }
-        if (!execute && !executor.supportsPreview()) {
+        if (!executor.supportsPreview()) {
             throw new BusinessException(409, "该工具不支持无写入预览，已阻止执行");
         }
-        String raw = execute
-                ? executor.execute(toolCall, toolContext)
-                : executor.preview(toolCall, toolContext);
+        String raw = executor.preview(toolCall, toolContext);
 
         Map<String, Object> toolResponse = objectMapper.readValue(raw, new TypeReference<Map<String, Object>>() {});
 
@@ -394,15 +399,20 @@ public class CanvasAIController {
         String replyMsg = Objects.toString(data.getOrDefault("message", "工序操作已完成"), "工序操作已完成");
 
         AIResponse response = new AIResponse();
-        response.setApplied(execute);
-        response.setReply(replyMsg);
+        response.setApplied(false);
+        response.setReply(switch (mode) {
+            case "autopilot" -> replyMsg + "；自动模式首次仅预览，请点击“确认并执行”后写入。";
+            case "plan" -> replyMsg + "；计划模式仅生成方案，请审核后点击“应用”。";
+            case "action" -> "建议模式仅分析，不会写入。" + replyMsg;
+            default -> replyMsg;
+        });
         Map<String, Object> diff = Map.of(
                 "type", "WORK_PROCESS_CATALOG",
                 "tool", WORK_PROCESS_CATALOG_TOOL,
                 "params", data,
                 "description", replyMsg
         );
-        response.setDiffs("plan".equals(mode) ? List.of(diff) : List.of());
+        response.setDiffs("action".equals(mode) ? List.of() : List.of(diff));
         return response;
     }
 
@@ -416,6 +426,11 @@ public class CanvasAIController {
             @RequestBody List<Map<String, Object>> diffs) {
 
         Map<String, Object> toolContext = buildToolContext(factoryId, authorization);
+        String operationId = "canvas-confirm-" + UUID.randomUUID();
+        toolContext.put("operationId", operationId);
+        toolContext.put("confirmationSource", "explicit-user-confirmation");
+        log.info("Canvas AI confirmed apply started: operationId={}, factory={}, operator={}, diffs={}",
+                operationId, factoryId, toolContext.get("operatorId"), diffs.size());
         int applied = 0;
         List<String> errors = new ArrayList<>();
         for (Map<String, Object> diff : diffs) {
@@ -444,7 +459,7 @@ public class CanvasAIController {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> params = (Map<String, Object>) diff.getOrDefault("params", Map.of());
                 String argsJson = objectMapper.writeValueAsString(params);
-                ToolCall toolCall = ToolCall.of("ai-apply-" + applied, toolName, argsJson);
+                ToolCall toolCall = ToolCall.of(operationId + "-" + applied, toolName, argsJson);
                 executor.get().execute(toolCall, toolContext);
                 applied++;
             } catch (Exception e) {
@@ -453,80 +468,11 @@ public class CanvasAIController {
             }
         }
 
-        String msg = "已应用 " + applied + "/" + diffs.size() + " 项变更";
+        String msg = "已应用 " + applied + "/" + diffs.size() + " 项变更。操作ID: " + operationId;
         if (!errors.isEmpty()) msg += "。失败: " + String.join("; ", errors);
+        log.info("Canvas AI confirmed apply completed: operationId={}, factory={}, applied={}, errors={}",
+                operationId, factoryId, applied, errors.size());
         return ApiResponse.success(msg);
-    }
-
-    /**
-     * Autopilot: LLM 分析用户意图 → 直接调用 canvas tools 执行
-     */
-    private String executeAutopilot(String factoryId, String message, Map<String, Object> toolContext) {
-        String prompt = CANVAS_SYSTEM_PROMPT + """
-
-                模式: AUTOPILOT (全自动执行)
-                工厂ID: %s
-
-                用户指令: "%s"
-
-                请分析用户需求，返回需要执行的操作列表。格式为 JSON 数组:
-                [{"tool":"canvas_xxx","params":{"key":"value"},"description":"说明"}]
-
-                只返回 JSON 数组，不要其他文字。如果不需要任何操作，返回空数组 []。
-                """.formatted(factoryId, message);
-
-        String llmResponse = dashScopeClient.chatFast(prompt, message);
-        log.info("Canvas AI Autopilot LLM response: {}", llmResponse);
-
-        // Parse and execute
-        try {
-            // Extract JSON array from response — if LLM didn't return JSON, surface the raw reply
-            // so user sees what the AI actually said (instead of silently saying "no operations").
-            String json = extractJson(llmResponse);
-            if ("[]".equals(json) && llmResponse != null && !llmResponse.trim().isEmpty()
-                    && !llmResponse.contains("[") && !llmResponse.contains("]")) {
-                // LLM returned plain text, not JSON — show it to the user
-                return "AI 回复 (非 JSON): " + llmResponse.trim();
-            }
-            List<Map<String, Object>> actions = objectMapper.readValue(json,
-                    new TypeReference<List<Map<String, Object>>>() {});
-
-            if (actions.isEmpty()) return "分析完成，当前无需操作。";
-
-            StringBuilder result = new StringBuilder("已执行 " + actions.size() + " 项操作:\n");
-            for (Map<String, Object> action : actions) {
-                String toolName = (String) action.get("tool");
-                String desc = (String) action.getOrDefault("description", toolName);
-                @SuppressWarnings("unchecked")
-                Map<String, Object> params = (Map<String, Object>) action.getOrDefault("params", Map.of());
-
-                try {
-                    validateCanvasTool(toolName);
-                } catch (Exception e) {
-                    result.append("- ❌ ").append(desc).append(" (").append(e.getMessage()).append(")\n");
-                    continue;
-                }
-
-                Optional<ToolExecutor> executor = toolRegistry.getExecutor(toolName);
-                if (executor.isEmpty()) {
-                    result.append("- ❌ ").append(desc).append(" (工具不存在)\n");
-                    continue;
-                }
-
-                try {
-                    String argsJson = objectMapper.writeValueAsString(params);
-                    ToolCall toolCall = ToolCall.of("autopilot-" + toolName, toolName, argsJson);
-                    executor.get().execute(toolCall, toolContext);
-                    result.append("- ✅ ").append(desc).append("\n");
-                } catch (Exception e) {
-                    result.append("- ❌ ").append(desc).append(": ").append(e.getMessage()).append("\n");
-                }
-            }
-            return result.toString();
-        } catch (Exception e) {
-            log.warn("Autopilot JSON parse failed, returning raw LLM response: {}", e.getMessage());
-            return llmResponse;
-        }
     }
 
     /**

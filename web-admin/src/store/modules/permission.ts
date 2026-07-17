@@ -280,6 +280,11 @@ export const usePermissionStore = defineStore('permission', () => {
   const isUserModuleAccessLoaded = ref(false);
   const lastLoadTs = ref<number>(0);
   const LOAD_DEBOUNCE_MS = 30_000;  // Avoid redundant fetches within 30s
+  let dbLoadPromise: Promise<void> | null = null;
+  let dbLoadIdentity = '';
+
+  const permissionIdentity = () =>
+    `${currentRole.value}\u0000${currentFactoryId.value}\u0000${currentUserId.value}`;
 
   function setRole(
     role: string,
@@ -314,38 +319,67 @@ export const usePermissionStore = defineStore('permission', () => {
    * Load permissions from L1 + L2 API, merge for current role, fill dbPermissions.
    * Failures set dbLoadError and leave dbPermissions null (canWrite falls back to hardcoded).
    */
-  async function loadFromDb(): Promise<void> {
+  function loadFromDb(): Promise<void> {
     const now = Date.now();
-    if (now - lastLoadTs.value < LOAD_DEBOUNCE_MS && isDbLoaded.value) return;
+    if (now - lastLoadTs.value < LOAD_DEBOUNCE_MS && isDbLoaded.value) {
+      return Promise.resolve();
+    }
+
+    const identity = permissionIdentity();
+    if (dbLoadPromise && dbLoadIdentity === identity) return dbLoadPromise;
+
     lastLoadTs.value = now;
     dbLoadError.value = null;
-    try {
-      const [l1Rows, l2Map] = await Promise.all([
-        getPlatformPermissions(),
-        currentFactoryId.value
-          ? getFactoryOverride(currentFactoryId.value).catch(() => ({} as RoleModuleOverride))
-          : Promise.resolve({} as RoleModuleOverride),
-      ]);
-      dbPermissions.value = mergeLayers(l1Rows, l2Map, currentRole.value);
-      if (currentFactoryId.value && currentUserId.value) {
-        try {
-          const l4Rows = await getUserModuleAccess(currentFactoryId.value, currentUserId.value, { silent: true });
-          applyUserModuleAccess(l4Rows);
-        } catch {
-          // L4 user-specific overrides are managed from System/Canvas. Business roles
-          // can run on L1/L2 permissions without read access to that admin matrix.
-          userModuleAccess.value = {};
-          isUserModuleAccessLoaded.value = true;
+    const role = currentRole.value;
+    const factoryId = currentFactoryId.value;
+    const userId = currentUserId.value;
+
+    const request = (async () => {
+      try {
+        const [l1Rows, l2Map] = await Promise.all([
+          getPlatformPermissions(),
+          factoryId
+            ? getFactoryOverride(factoryId).catch(() => ({} as RoleModuleOverride))
+            : Promise.resolve({} as RoleModuleOverride),
+        ]);
+
+        let l4Rows: UserModuleAccessView[] = [];
+        let l4Loaded = false;
+        if (factoryId && userId) {
+          try {
+            l4Rows = await getUserModuleAccess(factoryId, userId, { silent: true });
+            l4Loaded = true;
+          } catch {
+            // L4 user-specific overrides are managed from System/Canvas. Business roles
+            // can run on L1/L2 permissions without read access to that admin matrix.
+            l4Loaded = true;
+          }
         }
+
+        // A previous identity's slower response must never overwrite a newer login.
+        if (permissionIdentity() !== identity) return;
+        dbPermissions.value = mergeLayers(l1Rows, l2Map, role);
+        if (l4Loaded) applyUserModuleAccess(l4Rows);
+        isDbLoaded.value = true;
+      } catch (e) {
+        if (permissionIdentity() !== identity) return;
+        dbLoadError.value = (e as Error)?.message || 'Failed to load permissions';
+        isDbLoaded.value = false;
+        dbPermissions.value = null;
+        userModuleAccess.value = {};
+        isUserModuleAccessLoaded.value = false;
       }
-      isDbLoaded.value = true;
-    } catch (e) {
-      dbLoadError.value = (e as Error)?.message || 'Failed to load permissions';
-      isDbLoaded.value = false;
-      dbPermissions.value = null;
-      userModuleAccess.value = {};
-      isUserModuleAccessLoaded.value = false;
-    }
+    })();
+
+    const trackedRequest = request.finally(() => {
+      if (dbLoadPromise === trackedRequest) {
+        dbLoadPromise = null;
+        dbLoadIdentity = '';
+      }
+    });
+    dbLoadIdentity = identity;
+    dbLoadPromise = trackedRequest;
+    return trackedRequest;
   }
 
   function applyUserModuleAccess(rows: UserModuleAccessView[]): void {

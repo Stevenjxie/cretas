@@ -10,6 +10,14 @@
       </div>
     </template>
 
+    <el-alert
+      class="mode-hint"
+      type="info"
+      :closable="false"
+      :title="modeHint"
+      show-icon
+    />
+
     <div ref="messagesRef" class="chat-messages">
       <div v-for="(message, index) in messages" :key="index" :class="['chat-message', message.role]">
         <div class="message-content">{{ message.content }}</div>
@@ -20,14 +28,17 @@
             </el-tag>
             <span class="diff-desc">{{ diff.description || diff.tool }}</span>
             <el-button
-              v-if="mode === 'plan' && isWorkProcessDiff(diff)"
+              v-if="message.mode !== 'action' && isWorkProcessDiff(diff)"
               type="primary"
               link
               size="small"
-              :loading="applying"
-              @click="applyDiff(diff)"
+              :loading="applyingDiffKey === diffKey(diff)"
+              :disabled="appliedDiffKeys.has(diffKey(diff))"
+              @click="applyDiff(diff, message.mode)"
             >
-              应用
+              {{ appliedDiffKeys.has(diffKey(diff))
+                ? '已执行'
+                : message.mode === 'autopilot' ? '确认并执行' : '应用' }}
             </el-button>
           </div>
         </div>
@@ -48,7 +59,7 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, ref } from 'vue';
+import { computed, nextTick, ref } from 'vue';
 import { isAxiosError } from 'axios';
 import { ElMessage } from 'element-plus';
 import { aiApplyDiffs, aiChat } from '@/api/canvasApi';
@@ -76,6 +87,7 @@ interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
   diffs?: CanvasDiff[];
+  mode?: AIAgentMode;
 }
 
 const props = defineProps<{
@@ -94,7 +106,8 @@ const modeOptions = [
 ];
 const input = ref('');
 const loading = ref(false);
-const applying = ref(false);
+const applyingDiffKey = ref('');
+const appliedDiffKeys = ref(new Set<string>());
 const messagesRef = ref<HTMLElement>();
 const messages = ref<ChatMessage[]>([
   {
@@ -102,9 +115,18 @@ const messages = ref<ChatMessage[]>([
     content: '请描述要新增或修改的工序。计划模式会先生成方案，点击“应用”后才写入。',
   },
 ]);
+const modeHint = computed(() => ({
+  plan: '计划模式：只生成候选方案；点击“应用”后才会写入。',
+  autopilot: '自动模式：首次只生成候选预览；必须点击“确认并执行”后才会写入。',
+  action: '建议模式：只分析影响并给出建议，不提供执行入口，也不会写入。',
+}[mode.value]));
 
 function isWorkProcessDiff(diff: CanvasDiff): boolean {
   return diff.tool === WORK_PROCESS_TOOL;
+}
+
+function diffKey(diff: CanvasDiff): string {
+  return JSON.stringify({ tool: diff.tool, params: diff.params });
 }
 
 function buildInstruction(userMessage: string): string {
@@ -134,13 +156,14 @@ async function send(): Promise<void> {
   if (!text || !props.factoryId) return;
 
   input.value = '';
-  messages.value.push({ role: 'user', content: text });
+  const requestMode = mode.value;
+  messages.value.push({ role: 'user', content: text, mode: requestMode });
   loading.value = true;
 
   try {
     const response = await aiChat(props.factoryId, {
       message: buildInstruction(text),
-      mode: mode.value,
+      mode: requestMode,
       moduleCode: MODULE_CODE,
     }) as ApiResponse<AIResponse>;
     const data = response.data;
@@ -148,16 +171,10 @@ async function send(): Promise<void> {
       role: 'assistant',
       content: data?.reply || 'AI 未返回内容',
       diffs: data?.diffs || [],
+      mode: requestMode,
     });
-    if (data?.applied && mode.value === 'autopilot') {
-      if (data.receipt?.id || data.receipt?.operationId || Number(data.receipt?.writeCount) > 0) {
-        ElMessage.success('AI 自动执行成功，已收到写入回执');
-        emit('applied');
-      } else {
-        ElMessage.warning('后端声明已执行，但未返回可核验写入回执；请刷新确认结果');
-      }
-    } else if (data?.applied) {
-      ElMessage.warning(`${mode.value === 'plan' ? '计划' : '建议'}模式不应直接写入；已刷新列表供核对`);
+    if (data?.applied) {
+      ElMessage.warning('安全契约异常：首次 AI 对话不应直接写入；已刷新列表供核对');
       emit('applied');
     }
   } catch (e) {
@@ -171,12 +188,18 @@ async function send(): Promise<void> {
   }
 }
 
-async function applyDiff(diff: CanvasDiff): Promise<void> {
-  if (!props.factoryId || mode.value !== 'plan' || !isWorkProcessDiff(diff)) return;
+async function applyDiff(diff: CanvasDiff, sourceMode?: AIAgentMode): Promise<void> {
+  const key = diffKey(diff);
+  if (!props.factoryId
+    || (sourceMode !== 'plan' && sourceMode !== 'autopilot')
+    || !isWorkProcessDiff(diff)
+    || appliedDiffKeys.value.has(key)
+    || applyingDiffKey.value) return;
 
-  applying.value = true;
+  applyingDiffKey.value = key;
   try {
     await aiApplyDiffs(props.factoryId, [diff as unknown as Record<string, unknown>]);
+    appliedDiffKeys.value.add(key);
     ElMessage.success('工序变更已应用');
     emit('applied');
   } catch (e) {
@@ -186,7 +209,7 @@ async function applyDiff(diff: CanvasDiff): Promise<void> {
     const errorText = backendMsg || '应用工序变更失败，请稍后重试';
     messages.value.push({ role: 'assistant', content: `应用失败: ${errorText}` });
   } finally {
-    applying.value = false;
+    applyingDiffKey.value = '';
   }
 }
 
@@ -226,6 +249,10 @@ async function scrollToBottom(): Promise<void> {
   max-height: 240px;
   overflow-y: auto;
   padding-right: 4px;
+}
+
+.mode-hint {
+  margin-bottom: 12px;
 }
 
 .chat-message {

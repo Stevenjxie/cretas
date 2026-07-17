@@ -27,7 +27,10 @@ export function findUniqueProductByName(
   const target = String(name ?? '').trim().toLocaleLowerCase();
   if (!target) return null;
   const matches = products.filter((product) => String(product.name ?? '').trim().toLocaleLowerCase() === target);
-  return matches.length === 1 ? matches[0] : null;
+  // A name match without a real entity ID is not safe to put into a production
+  // plan.  The plan form persists an ID, while the full SKU text remains the
+  // human-readable disambiguation key.
+  return matches.length === 1 && String(matches[0].id ?? '').trim() ? matches[0] : null;
 }
 
 export function productionPlanAiGuard(
@@ -37,8 +40,14 @@ export function productionPlanAiGuard(
   const requestedUnit = canonicalUnitCode(params.quantityUnit || params.plannedUnit || params.unit);
   if (!requestedUnit) return 'AI 计划缺少数量单位，不能填入表单。请补充如 kg、g、盒或箱。';
 
-  const product = findUniqueProductByName(params.productTypeName, products);
+  const requestedProductName = String(params.productTypeName ?? '').trim();
+  const product = findUniqueProductByName(requestedProductName, products);
   if (!product) return '产品名称未唯一匹配现有 SKU，不能填入表单。请使用完整、准确的产品名称。';
+
+  const declaredProductId = String(params.productTypeId ?? '').trim();
+  if (declaredProductId && declaredProductId !== String(product.id)) {
+    return 'AI 返回的 SKU 编号与完整产品名称不一致，不能填入表单。请重新确认唯一 SKU。';
+  }
 
   const skuUnit = canonicalUnitCode(product.unit || product.baseUnit);
   if (!skuUnit) return '所选 SKU 未配置单位，不能应用 AI 计划。请先完善 SKU 单位。';

@@ -9,14 +9,12 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.governance.ToolSimilarityService;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -30,7 +28,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
-import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.mock;
@@ -60,29 +57,12 @@ class CanvasAIWorkflowConfigTest {
     }
 
     @Test
-    void workflowModuleUsesLowTemperaturePreviewAndNeverExecutes() throws Exception {
+    void workflowModuleReturnsValidatedSpecAndNeverExecutes() throws Exception {
         CanvasAIController.AIRequest request = workflowRequest();
 
         when(toolRegistry.getExecutor(TOOL_NAME)).thenReturn(Optional.of(workflowTool));
-        when(dashScopeClient.chatLowTemp(
-                argThat(prompt -> prompt.contains("WorkflowPatch")
-                        && prompt.contains("\"schemaVersion\":1")
-                        && prompt.contains("process:1")),
-                eq("Change the conversion rule")))
-                .thenReturn("```json\n[{\"op\":\"SET_NODE_FIELD\",\"nodeId\":\"process:1\","
-                        + "\"path\":\"conversionRule.mode\",\"value\":\"SUM_OUTPUTS\"}]\n```");
-        when(workflowTool.preview(org.mockito.ArgumentMatchers.any(ToolCall.class),
-                org.mockito.ArgumentMatchers.anyMap()))
-                .thenReturn(objectMapper.writeValueAsString(Map.of(
-                        "success", true,
-                        "data", Map.of(
-                                "status", "PREVIEW",
-                                "applied", false,
-                                "patches", List.of(Map.of(
-                                        "op", "SET_NODE_FIELD",
-                                        "nodeId", "process:1",
-                                        "path", "conversionRule.mode",
-                                        "value", "SUM_OUTPUTS"))))));
+        when(dashScopeClient.chatLowTemp(any(String.class), eq("Change the conversion rule")))
+                .thenReturn("{\"steps\":[{\"processName\":\"分切\",\"outputType\":\"SEMI_FINISHED\"}]}");
 
         ApiResponse<CanvasAIController.AIResponse> envelope =
                 controller.chat("F006", null, request);
@@ -90,43 +70,27 @@ class CanvasAIWorkflowConfigTest {
         CanvasAIController.AIResponse response = envelope.getData();
         assertFalse(response.isApplied());
         assertEquals(1, response.getDiffs().size());
-        assertEquals("PRODUCT_PROCESS_WORKFLOW_PATCH", response.getDiffs().get(0).get("type"));
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_SPEC", response.getDiffs().get(0).get("type"));
         Map<String, Object> diffParams = readMap(response.getDiffs().get(0).get("params"));
-        assertEquals(1, ((List<?>) diffParams.get("patches")).size());
-
-        ArgumentCaptor<ToolCall> callCaptor = ArgumentCaptor.forClass(ToolCall.class);
-        verify(workflowTool).preview(callCaptor.capture(), org.mockito.ArgumentMatchers.anyMap());
-        verify(workflowTool, never()).execute(
-                org.mockito.ArgumentMatchers.any(ToolCall.class),
-                org.mockito.ArgumentMatchers.anyMap());
-
-        Map<String, Object> toolArguments = objectMapper.readValue(
-                callCaptor.getValue().getFunction().getArguments(), new TypeReference<>() {});
-        assertTrue(toolArguments.containsKey("definition"));
-        assertEquals("process:1", toolArguments.get("selectedNodeId"));
-        assertEquals("Change the conversion rule", toolArguments.get("message"));
-        assertEquals(1, ((List<?>) toolArguments.get("patches")).size());
+        Map<String, Object> spec = readMap(diffParams.get("spec"));
+        assertEquals(1, ((List<?>) spec.get("steps")).size());
+        verify(workflowTool, never()).preview(any(ToolCall.class), anyMap());
+        verify(workflowTool, never()).execute(any(ToolCall.class), anyMap());
     }
 
     @Test
-    void rejectedMixedBatchReturnsNoDiffAndNeverExecutes() throws Exception {
+    void invalidWorkflowSpecReturnsNoDiffAndNeverExecutes() throws Exception {
         CanvasAIController.AIRequest request = workflowRequest();
         when(toolRegistry.getExecutor(TOOL_NAME)).thenReturn(Optional.of(workflowTool));
         when(dashScopeClient.chatLowTemp(any(String.class), any(String.class)))
-                .thenReturn("[{\"op\":\"SET_NODE_FIELD\",\"nodeId\":\"process:1\","
-                        + "\"path\":\"conversionRule.mode\",\"value\":\"SUM_OUTPUTS\"},"
-                        + "{\"op\":\"ACTIVATE_WORKFLOW\",\"workflowId\":9}]");
-        when(workflowTool.preview(any(ToolCall.class), anyMap()))
-                .thenReturn(objectMapper.writeValueAsString(Map.of(
-                        "success", false,
-                        "errorCode", "WORKFLOW_PATCH_REJECTED",
-                        "error", "Workflow patch batch rejected")));
+                .thenReturn("{\"steps\":[]}");
 
         CanvasAIController.AIResponse response = controller.chat("F006", null, request).getData();
 
         assertFalse(response.isApplied());
         assertTrue(response.getDiffs().isEmpty());
-        assertTrue(response.getReply().contains("rejected"));
+        assertTrue(response.getReply().contains("未能从描述里解析"));
+        verify(workflowTool, never()).preview(any(ToolCall.class), anyMap());
         verify(workflowTool, never()).execute(any(ToolCall.class), anyMap());
     }
 
@@ -142,7 +106,7 @@ class CanvasAIWorkflowConfigTest {
 
         assertFalse(response.isApplied());
         assertTrue(response.getDiffs().isEmpty());
-        assertEquals("AI 未返回可审核的 Workflow 补丁，请调整描述后重试", response.getReply());
+        assertEquals("AI 未能从描述里解析出可用的工序步骤，请把每一步的工序名和产出说清楚后重试", response.getReply());
         verify(workflowTool, never()).preview(any(ToolCall.class), anyMap());
         verify(workflowTool, never()).execute(any(ToolCall.class), anyMap());
     }
@@ -163,6 +127,70 @@ class CanvasAIWorkflowConfigTest {
     }
 
     @Test
+    void workProcessCatalogAutopilotOnlyPreviewsUntilApplyIsExplicitlyConfirmed() throws Exception {
+        String catalogTool = "canvas_work_process_catalog";
+        CanvasAIController.AIRequest request = new CanvasAIController.AIRequest();
+        request.setModuleCode("work_process_catalog");
+        request.setMode("autopilot");
+        request.setMessage("新增腌制工序");
+
+        when(toolRegistry.getExecutor(catalogTool)).thenReturn(Optional.of(workflowTool));
+        when(workflowTool.supportsPreview()).thenReturn(true);
+        when(workflowTool.preview(any(ToolCall.class), anyMap())).thenReturn(objectMapper.writeValueAsString(Map.of(
+                "success", true,
+                "data", Map.of("action", "create", "processName", "腌制工序", "message", "已生成预览"))));
+
+        CanvasAIController.AIResponse response = controller.chat("F006", null, request).getData();
+
+        assertFalse(response.isApplied());
+        assertEquals(1, response.getDiffs().size());
+        assertTrue(response.getReply().contains("首次仅预览"));
+        verify(workflowTool).preview(any(ToolCall.class), anyMap());
+        verify(workflowTool, never()).execute(any(ToolCall.class), anyMap());
+    }
+
+    @Test
+    void workProcessCatalogActionModeOnlyAnalyzesAndDoesNotExposeAnApplyDiff() throws Exception {
+        String catalogTool = "canvas_work_process_catalog";
+        CanvasAIController.AIRequest request = new CanvasAIController.AIRequest();
+        request.setModuleCode("work_process_catalog");
+        request.setMode("action");
+        request.setMessage("新增腌制工序有什么影响");
+
+        when(toolRegistry.getExecutor(catalogTool)).thenReturn(Optional.of(workflowTool));
+        when(workflowTool.supportsPreview()).thenReturn(true);
+        when(workflowTool.preview(any(ToolCall.class), anyMap())).thenReturn(objectMapper.writeValueAsString(Map.of(
+                "success", true,
+                "data", Map.of("message", "影响分析已生成"))));
+
+        CanvasAIController.AIResponse response = controller.chat("F006", null, request).getData();
+
+        assertFalse(response.isApplied());
+        assertTrue(response.getDiffs().isEmpty());
+        assertTrue(response.getReply().contains("仅分析"));
+        verify(workflowTool, never()).execute(any(ToolCall.class), anyMap());
+    }
+
+    @Test
+    void productWorkProcessToolWithoutPreviewIsRejectedWithoutAWrite() throws Exception {
+        String productWorkProcessTool = "canvas_product_work_process_config";
+        CanvasAIController.AIRequest request = new CanvasAIController.AIRequest();
+        request.setModuleCode("product_work_process_config");
+        request.setMode("autopilot");
+        request.setMessage("配置工序");
+
+        when(toolRegistry.getExecutor(productWorkProcessTool)).thenReturn(Optional.of(workflowTool));
+        when(workflowTool.supportsPreview()).thenReturn(false);
+
+        CanvasAIController.AIResponse response = controller.chat("F006", null, request).getData();
+
+        assertFalse(response.isApplied());
+        assertTrue(response.getReply().contains("不支持无写入预览"));
+        verify(workflowTool, never()).execute(any(ToolCall.class), anyMap());
+        verify(workflowTool, never()).preview(any(ToolCall.class), anyMap());
+    }
+
+    @Test
     void realRegistryResolvesRealWorkflowToolForControllerPreview() throws Exception {
         ProductProcessWorkflowConfigTool realTool = new ProductProcessWorkflowConfigTool(
                 objectMapper, new ProductProcessWorkflowValidator());
@@ -177,10 +205,7 @@ class CanvasAIWorkflowConfigTest {
         CanvasAIController realController = new CanvasAIController(
                 realRegistry, objectMapper, dashScopeClient, mobileService);
         when(dashScopeClient.chatLowTemp(any(String.class), any(String.class)))
-                .thenReturn("[{\"op\":\"UPSERT_NODE\",\"node\":{"
-                        + "\"id\":\"raw\",\"kind\":\"RAW_MATERIAL\","
-                        + "\"position\":{\"x\":16,\"y\":32},"
-                        + "\"data\":{\"name\":\"Raw\",\"skuId\":\"RM-1\"}}}]");
+                .thenReturn("{\"steps\":[{\"processName\":\"分切\",\"outputType\":\"SEMI_FINISHED\"}]}");
 
         CanvasAIController.AIResponse response =
                 realController.chat("F006", null, workflowRequest()).getData();

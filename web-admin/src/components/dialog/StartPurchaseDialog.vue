@@ -16,7 +16,10 @@ import { ref, watch, computed } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { get, post } from '@/api/request';
 import {
+  canonicalUnitCode,
+  displayUnit,
   formatPriceUnit,
+  mergeCanonicalUnitOptions,
   pricingAmountPreview,
   purchaseOrderPricingPayload,
   resolvePurchaseSuggestionUnits,
@@ -50,6 +53,20 @@ interface PurchaseSuggestionResponse {
   items: SuggestionItem[];
 }
 
+interface SupplierOption {
+  id: string;
+  name: string;
+  supplierCode?: string | null;
+}
+
+interface MaterialPackagingHierarchy {
+  level1Unit?: string | null;
+  level1PerLevel2?: number | null;
+  level2Unit?: string | null;
+  level2PerLevel3?: number | null;
+  level3Unit?: string | null;
+}
+
 // editable item for PO creation
 interface EditableItem {
   materialTypeId: string;
@@ -62,11 +79,14 @@ interface EditableItem {
   priceUnit: string;
   lineAmount: number | null;
   convertedPricingQuantity: number | null;
+  specification: string;
+  boxQuantity: number | null;
   remark: string;
   _requiredQuantity: number;
   _currentStock: number;
   _netRequired: number;
   _stockSufficient: boolean;
+  _activePriceUnit: string;
 }
 
 // ── props / emits ──────────────────────────────────────────────────────────
@@ -92,6 +112,9 @@ const submitting = ref(false);
 const suggestion = ref<PurchaseSuggestionResponse | null>(null);
 const editableItems = ref<EditableItem[]>([]);
 const supplierId = ref('');
+const suppliers = ref<SupplierOption[]>([]);
+const suppliersLoading = ref(false);
+const packagingByMaterial = ref<Record<string, MaterialPackagingHierarchy>>({});
 const factoryToday = () =>
   new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
 const orderDateStr = ref(factoryToday());
@@ -122,6 +145,153 @@ function amountPreview(item: EditableItem) {
   return pricingAmountPreview(item);
 }
 
+function quantityUnitOptions(item: EditableItem) {
+  const packaging = packagingByMaterial.value[item.materialTypeId];
+  return mergeCanonicalUnitOptions(
+    packaging?.level1Unit,
+    packaging?.level2Unit,
+    packaging?.level3Unit,
+    item.quantityUnit,
+    item.unit,
+  ).map((unit) => ({ value: unit, label: displayUnit(unit) }));
+}
+
+function priceUnitOptions(item: EditableItem) {
+  return mergeCanonicalUnitOptions(
+    quantityUnitOptions(item).map((option) => option.value),
+    item.priceUnit,
+  ).map((unit) => ({ value: unit, label: formatPriceUnit(unit) }));
+}
+
+function packagingSummary(item: EditableItem): string {
+  const packaging = packagingByMaterial.value[item.materialTypeId];
+  if (!packaging?.level1Unit || !packaging.level2Unit || !packaging.level1PerLevel2) return '';
+  const level2 = `1 ${displayUnit(packaging.level2Unit)} = ${packaging.level1PerLevel2} ${displayUnit(packaging.level1Unit)}`;
+  if (!packaging.level3Unit || !packaging.level2PerLevel3) return level2;
+  return `${level2}；1 ${displayUnit(packaging.level3Unit)} = ${packaging.level2PerLevel3} ${displayUnit(packaging.level2Unit)}`;
+}
+
+function recalculateBoxQuantity(item: EditableItem) {
+  const packaging = packagingByMaterial.value[item.materialTypeId];
+  const quantity = Number(item.quantity);
+  const quantityUnit = canonicalUnitCode(item.quantityUnit || item.unit);
+  const level1Unit = canonicalUnitCode(packaging?.level1Unit);
+  const level2Unit = canonicalUnitCode(packaging?.level2Unit);
+  const level1PerLevel2 = Number(packaging?.level1PerLevel2);
+  if (!Number.isFinite(quantity) || quantity <= 0 || !level2Unit) {
+    item.boxQuantity = null;
+  } else if (quantityUnit === level2Unit) {
+    item.boxQuantity = quantity;
+  } else if (quantityUnit === level1Unit && Number.isFinite(level1PerLevel2) && level1PerLevel2 > 0) {
+    item.boxQuantity = Math.round((quantity / level1PerLevel2) * 10000) / 10000;
+  } else {
+    item.boxQuantity = null;
+  }
+}
+
+function quantityUnitToLevel1Factor(item: EditableItem, unit: string): number | null {
+  const packaging = packagingByMaterial.value[item.materialTypeId];
+  const candidate = canonicalUnitCode(unit);
+  const level1Unit = canonicalUnitCode(packaging?.level1Unit);
+  const level2Unit = canonicalUnitCode(packaging?.level2Unit);
+  const level3Unit = canonicalUnitCode(packaging?.level3Unit);
+  const level1PerLevel2 = Number(packaging?.level1PerLevel2);
+  const level2PerLevel3 = Number(packaging?.level2PerLevel3);
+
+  if (!candidate) return null;
+  if (candidate === level1Unit) return 1;
+  if (candidate === level2Unit && Number.isFinite(level1PerLevel2) && level1PerLevel2 > 0) {
+    return level1PerLevel2;
+  }
+  if (candidate === level3Unit
+    && Number.isFinite(level1PerLevel2) && level1PerLevel2 > 0
+    && Number.isFinite(level2PerLevel3) && level2PerLevel3 > 0) {
+    return level1PerLevel2 * level2PerLevel3;
+  }
+  return null;
+}
+
+function clearSuggestionAmount(item: EditableItem) {
+  // Backend preview values describe the original suggestion quantity only.
+  item.lineAmount = null;
+  item.convertedPricingQuantity = null;
+}
+
+function onQuantityChange(item: EditableItem) {
+  clearSuggestionAmount(item);
+  recalculateBoxQuantity(item);
+}
+
+function onPriceUnitChange(item: EditableItem) {
+  const nextUnit = canonicalUnitCode(item.priceUnit);
+  if (!nextUnit) {
+    item.priceUnit = item._activePriceUnit;
+    return;
+  }
+  if (nextUnit === item._activePriceUnit) return;
+
+  // A numeric price is inseparable from its unit. Carrying the same number from
+  // 元/kg to 元/g (or package units) would corrupt the purchase amount, so require
+  // the buyer to enter the price that belongs to the newly selected unit.
+  item.priceUnit = nextUnit;
+  item._activePriceUnit = nextUnit;
+  item.unitPrice = null;
+  clearSuggestionAmount(item);
+  ElMessage.info('计价单位已变化，请输入该单位对应的单价');
+}
+
+function onQuantityUnitChange(item: EditableItem) {
+  const previousUnit = canonicalUnitCode(item.unit);
+  const nextUnit = canonicalUnitCode(item.quantityUnit);
+  if (!nextUnit) {
+    item.quantityUnit = previousUnit;
+    return;
+  }
+
+  if (previousUnit && previousUnit !== nextUnit) {
+    const previousFactor = quantityUnitToLevel1Factor(item, previousUnit);
+    const nextFactor = quantityUnitToLevel1Factor(item, nextUnit);
+    if (previousFactor == null || nextFactor == null) {
+      ElMessage.warning('该物料未配置这两个单位之间的包装换算，不能直接切换单位');
+      item.quantityUnit = previousUnit;
+      return;
+    }
+    item.quantity = Math.round((Number(item.quantity) * previousFactor / nextFactor) * 10000) / 10000;
+  }
+
+  item.quantityUnit = nextUnit;
+  item.unit = nextUnit;
+  clearSuggestionAmount(item);
+  recalculateBoxQuantity(item);
+}
+
+async function loadSupplierOptions() {
+  suppliersLoading.value = true;
+  try {
+    const res = await get<{ content?: SupplierOption[] }>(`/${props.factoryId}/suppliers`, {
+      params: { page: 1, size: 100 },
+    });
+    suppliers.value = res.success && Array.isArray(res.data?.content) ? res.data.content : [];
+  } catch {
+    suppliers.value = [];
+    ElMessage.warning('供应商列表加载失败，可稍后在采购草稿中补填');
+  } finally {
+    suppliersLoading.value = false;
+  }
+}
+
+async function ensurePackagingLoaded(materialTypeId: string) {
+  if (!materialTypeId || packagingByMaterial.value[materialTypeId]) return;
+  try {
+    const res = await get<MaterialPackagingHierarchy | null>(
+      `/${props.factoryId}/material-packaging/by-material/${materialTypeId}`,
+    );
+    packagingByMaterial.value[materialTypeId] = res.data || {};
+  } catch {
+    packagingByMaterial.value[materialTypeId] = {};
+  }
+}
+
 // ── load suggestion ────────────────────────────────────────────────────────
 
 async function loadSuggestion() {
@@ -136,26 +306,31 @@ async function loadSuggestion() {
     if (res.success && res.data) {
       suggestion.value = res.data;
       // Pre-fill editable rows from suggestion, defaulting quantity to netRequired
-      editableItems.value = res.data.items.map((it) => {
+      editableItems.value = res.data.items.map<EditableItem>((it) => {
         const units = resolvePurchaseSuggestionUnits(it);
         return {
-        materialTypeId: it.materialTypeId,
-        materialName: it.materialName,
-        materialCategory: it.materialCategory,
-        quantity: it.netRequired > 0 ? it.netRequired : it.requiredQuantity,
-        unit: units.quantityUnit,
-        quantityUnit: units.quantityUnit,
-        unitPrice: it.referenceUnitPrice ?? null,
-        priceUnit: units.priceUnit,
-        lineAmount: it.lineAmount ?? null,
-        convertedPricingQuantity: it.convertedPricingQuantity ?? null,
-        remark: '',
-        _requiredQuantity: it.requiredQuantity,
-        _currentStock: it.currentStock,
-        _netRequired: it.netRequired,
-        _stockSufficient: it.stockSufficient,
+          materialTypeId: it.materialTypeId,
+          materialName: it.materialName,
+          materialCategory: it.materialCategory,
+          quantity: it.netRequired > 0 ? it.netRequired : it.requiredQuantity,
+          unit: units.quantityUnit,
+          quantityUnit: units.quantityUnit,
+          unitPrice: it.referenceUnitPrice ?? null,
+          priceUnit: units.priceUnit,
+          lineAmount: it.lineAmount ?? null,
+          convertedPricingQuantity: it.convertedPricingQuantity ?? null,
+          specification: '',
+          boxQuantity: null,
+          remark: '',
+          _requiredQuantity: it.requiredQuantity,
+          _currentStock: it.currentStock,
+          _netRequired: it.netRequired,
+          _stockSufficient: it.stockSufficient,
+          _activePriceUnit: units.priceUnit,
         };
       });
+      await Promise.all(editableItems.value.map((item) => ensurePackagingLoaded(item.materialTypeId)));
+      editableItems.value.forEach(recalculateBoxQuantity);
     }
   } finally {
     loading.value = false;
@@ -170,7 +345,8 @@ watch(
       orderDateStr.value = factoryToday();
       expectedDeliveryDate.value = '';
       remark.value = '';
-      loadSuggestion();
+      void loadSupplierOptions();
+      void loadSuggestion();
     }
   },
   { immediate: false }
@@ -185,6 +361,23 @@ async function handleConfirm() {
       '无需采购',
       { type: 'info', confirmButtonText: '确定' }
     );
+    return;
+  }
+  const invalidQuantityIndex = editableItems.value.findIndex((item) => !(Number(item.quantity) > 0));
+  if (invalidQuantityIndex >= 0) {
+    ElMessage.warning(`第 ${invalidQuantityIndex + 1} 行采购数量必须大于 0`);
+    return;
+  }
+  const missingQuantityUnitIndex = editableItems.value.findIndex((item) => !canonicalUnitCode(item.quantityUnit));
+  if (missingQuantityUnitIndex >= 0) {
+    ElMessage.warning(`第 ${missingQuantityUnitIndex + 1} 行请选择数量单位`);
+    return;
+  }
+  const missingPriceUnitIndex = editableItems.value.findIndex(
+    (item) => Number(item.unitPrice) > 0 && !canonicalUnitCode(item.priceUnit),
+  );
+  if (missingPriceUnitIndex >= 0) {
+    ElMessage.warning(`第 ${missingPriceUnitIndex + 1} 行有参考单价，请选择计价单位`);
     return;
   }
 
@@ -205,6 +398,8 @@ async function handleConfirm() {
         quantityUnit: it.quantityUnit,
         unitPrice: it.unitPrice ?? null,
         priceUnit: it.priceUnit,
+        specification: it.specification || null,
+        boxQuantity: it.boxQuantity,
         remark: it.remark || '',
       })),
     };
@@ -232,7 +427,8 @@ function handleClose() {
   <el-dialog
     :model-value="modelValue"
     :title="dialogTitle"
-    width="860px"
+    width="96%"
+    top="4vh"
     destroy-on-close
     @update:model-value="$emit('update:modelValue', $event)"
   >
@@ -306,30 +502,72 @@ function handleClose() {
             </span>
           </template>
         </el-table-column>
-        <el-table-column label="采购数量" width="140">
+        <el-table-column label="采购数量 / 单位" width="220">
           <template #default="{ row }">
-            <el-input-number
-              v-model="row.quantity"
-              :min="0"
-              :precision="2"
-              size="small"
-              style="width: 120px"
-              controls-position="right"
-            />
+            <div class="sp-inline-editor">
+              <el-input-number
+                v-model="row.quantity"
+                :min="0"
+                :precision="2"
+                size="small"
+                style="width: 125px"
+                controls-position="right"
+                @change="onQuantityChange(row)"
+              />
+              <el-select
+                v-model="row.quantityUnit"
+                filterable
+                size="small"
+                style="width: 82px"
+                placeholder="单位"
+                @change="onQuantityUnitChange(row)"
+              >
+                <el-option
+                  v-for="option in quantityUnitOptions(row)"
+                  :key="option.value"
+                  :label="option.label"
+                  :value="option.value"
+                />
+              </el-select>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column label="参考单价" width="150">
+        <el-table-column label="包装规格" width="190">
           <template #default="{ row }">
+            <el-input v-model="row.specification" size="small" placeholder="选填，如 10kg/箱" clearable />
+            <div v-if="packagingSummary(row)" class="sp-packaging-hint">{{ packagingSummary(row) }}</div>
+            <div v-if="row.boxQuantity != null" class="sp-packaging-hint">折算箱数：{{ row.boxQuantity }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="参考单价 / 计价单位" width="200">
+          <template #default="{ row }">
+            <div class="sp-inline-editor">
+              <el-input-number
+                v-model="row.unitPrice"
+                :min="0"
+                :precision="4"
+                size="small"
+                style="width: 108px"
+                controls-position="right"
+                :placeholder="row.unitPrice == null ? '未知' : ''"
+              />
+              <el-select
+                v-model="row.priceUnit"
+                size="small"
+                style="width: 82px"
+                placeholder="计价单位"
+                @change="onPriceUnitChange(row)"
+              >
+                <el-option
+                  v-for="option in priceUnitOptions(row)"
+                  :key="option.value"
+                  :label="option.label"
+                  :value="option.value"
+                />
+              </el-select>
+            </div>
             <div class="sp-price-label">{{ formatPriceUnit(row.priceUnit) }}</div>
-            <el-input-number
-              v-model="row.unitPrice"
-              :min="0"
-              :precision="4"
-              size="small"
-              style="width: 100px"
-              controls-position="right"
-              :placeholder="row.unitPrice == null ? '未知' : ''"
-            />
+            <div class="sp-packaging-hint">切换计价单位后需重新输入对应单价</div>
           </template>
         </el-table-column>
         <el-table-column label="金额预览" width="150" align="right">
@@ -352,6 +590,24 @@ function handleClose() {
 
       <!-- PO meta -->
       <div class="sp-meta-row" style="margin-top: 16px; display: flex; gap: 16px; align-items: flex-start">
+        <el-form-item label="供应商（选填）" style="flex: 1.4">
+          <el-select
+            v-model="supplierId"
+            :loading="suppliersLoading"
+            placeholder="可稍后在采购草稿中补填"
+            filterable
+            clearable
+            size="small"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="supplier in suppliers"
+              :key="supplier.id"
+              :label="supplier.supplierCode ? `${supplier.name} (${supplier.supplierCode})` : supplier.name"
+              :value="supplier.id"
+            />
+          </el-select>
+        </el-form-item>
         <el-form-item label="下单日期" style="flex: 1">
           <el-input v-model="orderDateStr" type="date" size="small" />
         </el-form-item>
@@ -421,6 +677,17 @@ function handleClose() {
   margin-bottom: 4px;
   color: #909399;
   font-size: 12px;
+}
+.sp-inline-editor {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.sp-packaging-hint {
+  margin-top: 4px;
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.35;
 }
 .sp-pending-amount {
   color: #909399;
