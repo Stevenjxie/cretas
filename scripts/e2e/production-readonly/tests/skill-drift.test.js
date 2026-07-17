@@ -30,3 +30,13 @@ test('project Playwright skill routes direct MCP production runs to the canonica
   assert.doesNotMatch(skill, /Prefer standalone Node scripts over persistent browser-profile MCP sessions/);
   assert.doesNotMatch(skill, /1\. Read `\.mcp\.json`/);
 });
+
+test('repository AGENTS policy pins production Web acceptance to the guarded MCP entry', () => {
+  const agents = fs.readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8');
+  assert.match(agents, /生产 Web Playwright 唯一入口/);
+  assert.match(agents, /scripts\/e2e\/production-readonly\/mcp-entry\.js/);
+  assert.match(agents, /before-send mutation guard/);
+  assert.match(agents, /actualBusinessWrites == 0/);
+  assert.match(agents, /blocked mutation attempts 为 0/);
+  assert.match(agents, /nonprod-business-flow-audit\.mjs/);
+});
