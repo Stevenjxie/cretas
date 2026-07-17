@@ -11,6 +11,7 @@ import type { TableRow } from '@/types/api';
 // Sprint 6 W3-A — inline 3-chip link counter (文件 / 图片 / 合同).
 import LinkChipCell from '@/components/list/LinkChipCell.vue';
 import { useLinkChipCounts } from '@/composables/useLinkChipCounts';
+import { enumLabel } from '@/utils/enumDisplay';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -249,7 +250,7 @@ async function handleRecordSubmit() {
           <template #default="{ row }">{{ formatAmount(row.amount) }}</template>
         </el-table-column>
         <el-table-column prop="paymentMethod" label="方式" width="100" align="center">
-          <template #default="{ row }">{{ methodMap[row.paymentMethod] || row.paymentMethod }}</template>
+          <template #default="{ row }">{{ methodMap[row.paymentMethod] || enumLabel(row.paymentMethod) }}</template>
         </el-table-column>
         <el-table-column prop="paymentDate" label="收款日期" width="120" />
         <el-table-column prop="paymentReference" label="流水号" min-width="140" show-overflow-tooltip />
@@ -261,7 +262,7 @@ async function handleRecordSubmit() {
         </el-table-column>
         <el-table-column prop="status" label="状态" width="100" align="center">
           <template #default="{ row }">
-            <el-tag :type="statusMap[row.status]?.type || 'info'" size="small">{{ statusMap[row.status]?.text || row.status }}</el-tag>
+            <el-tag :type="statusMap[row.status]?.type || 'info'" size="small">{{ statusMap[row.status]?.text || enumLabel(row.status) }}</el-tag>
           </template>
         </el-table-column>
         <!--

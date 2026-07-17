@@ -80,6 +80,7 @@ import {
   type ProductWorkProcessItem,
 } from '@/api/processProduction';
 import type { TableRow } from '@/types/api';
+import { productAiGuard } from '@/utils/aiEntryGuards';
 
 // 产品分类定义 (全量 — 仅用于标签渲染/历史数据兼容; 原料/包辅材/调味品 是遗留物料类, 物料应在"原料类型字典"管理)
 const PRODUCT_CATEGORIES = [
@@ -1489,6 +1490,11 @@ function handleAiFill(params: TableRow) {
   fetchSuggest(); // 立即按 AI 给的名称补充装箱等历史记忆
 }
 
+function handleProductAiGuardAction() {
+  aiEntryVisible.value = false;
+  router.push('/warehouse/material-types');
+}
+
 // ==================== AI 智能建产品 (飞轮衔接) ====================
 
 interface AiProductPreviewBomRow {
@@ -2291,7 +2297,10 @@ async function handleAiProductCreate() {
     <AiEntryDrawer
       v-model="aiEntryVisible"
       :config="PRODUCT_CONFIG"
+      :confirm-guard="productAiGuard"
+      guard-action-label="前往原料类型字典"
       @fill-form="handleAiFill"
+      @guard-action="handleProductAiGuardAction"
     />
 
     <!-- 工序配置抽屉 -->

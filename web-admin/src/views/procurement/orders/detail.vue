@@ -6,13 +6,15 @@ import { usePermissionStore } from '@/store/modules/permission';
 import { useBusinessMode } from '@/composables/useBusinessMode';
 import request, { get, post } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { ArrowLeft, Download, InfoFilled } from '@element-plus/icons-vue';
+import { ArrowLeft, Download, Edit, InfoFilled } from '@element-plus/icons-vue';
 import { handleCatchError } from '@/utils/errorToast';
 import { formatAmount } from '@/utils/tableFormatters';
 import NotFoundEmpty from '@/components/common/NotFoundEmpty.vue';
 import AttachmentList from '@/components/attachment/AttachmentList.vue';
 import AttachmentUploadButton from '@/components/attachment/AttachmentUploadButton.vue';
 import type { TableRow } from '@/types/api';
+import { enumLabel } from '@/utils/enumDisplay';
+import { canonicalUnitCode, formatPriceUnit, pricingAmountPreview } from '@/utils/unitPricing';
 
 const route = useRoute();
 const router = useRouter();
@@ -92,6 +94,22 @@ const receiveStatusMap: Record<string, { text: string; type: string }> = {
   CONFIRMED: { text: '已确认', type: 'success' },
   REJECTED: { text: '已拒绝', type: 'danger' },
 };
+
+function purchaseLineAmount(row: TableRow) {
+  return pricingAmountPreview({
+    quantity: row.quantity as number,
+    unit: String(row.unit || ''),
+    quantityUnit: String(row.quantityUnit || row.unit || ''),
+    unitPrice: row.unitPrice as number,
+    priceUnit: String(row.priceUnit || row.unit || ''),
+    lineAmount: row.lineAmount as number,
+    convertedPricingQuantity: row.convertedPricingQuantity as number,
+  });
+}
+
+function goEditDraft() {
+  router.push({ path: '/procurement/orders', query: { edit: orderId.value } });
+}
 
 onMounted(() => { loadOrder(); loadReceives(); });
 
@@ -349,7 +367,7 @@ async function confirmReceive(receiveId: string) {
             <el-button :icon="ArrowLeft" @click="router.push('/procurement/orders')">返回</el-button>
             <span class="page-title">{{ label('purchaseOrder') }}详情</span>
             <el-tag v-if="order" :type="(statusMap[order.status]?.type) || 'info'" size="large">
-              {{ statusMap[order.status]?.text || order.status }}
+              {{ statusMap[order.status]?.text || enumLabel(order.status) }}
             </el-tag>
           </div>
           <div class="header-right" v-if="order">
@@ -357,6 +375,7 @@ async function confirmReceive(receiveId: string) {
             <el-button type="primary" :icon="Download" :loading="pdfDownloading" @click="handleDownloadPdf(true)">对外供货单</el-button>
             <el-button v-if="canViewPrice" :icon="Download" :loading="pdfDownloading" @click="handleDownloadPdf(false)">内部审批版</el-button>
             <template v-if="canWrite">
+            <el-button v-if="order.status === 'DRAFT'" :icon="Edit" @click="goEditDraft">编辑草稿</el-button>
             <el-button v-if="order.status === 'DRAFT'" type="warning" :loading="submitting" @click="handleAction('submit')">提交审批</el-button>
             <el-button v-if="order.status === 'SUBMITTED'" type="success" :loading="submitting" @click="handleAction('approve')">审批通过</el-button>
             <el-button v-if="order.status === 'APPROVED'" type="warning" :loading="submitting" @click="handleAction('submitFinance')">提交财务审核</el-button>
@@ -390,7 +409,7 @@ async function confirmReceive(receiveId: string) {
           <el-descriptions-item label="审批人">{{ order.approvedBy || '-' }}</el-descriptions-item>
           <el-descriptions-item label="合同号">{{ order.contractNumber || '-' }}</el-descriptions-item>
           <el-descriptions-item label="结算方式">
-            <span v-if="order.settlementType">{{ ({ PREPAID: '预付', CREDIT_FIRST: '赊销先入库', NO_INVOICE: '未到票', MONTHLY: '月结', CREDIT_PERIOD: '账期', IMMEDIATE: '现结' } as Record<string, string>)[order.settlementType] || order.settlementType }}</span>
+            <span v-if="order.settlementType">{{ ({ PREPAID: '预付', CREDIT_FIRST: '赊销先入库', NO_INVOICE: '未到票', MONTHLY: '月结', CREDIT_PERIOD: '账期', IMMEDIATE: '现结' } as Record<string, string>)[order.settlementType] || enumLabel(order.settlementType) }}</span>
             <span v-else>-</span>
           </el-descriptions-item>
           <el-descriptions-item label="开票提醒">
@@ -413,7 +432,9 @@ async function confirmReceive(receiveId: string) {
           </el-table-column>
           <el-table-column prop="unit" label="单位" width="80" align="center" />
           <el-table-column v-if="canViewPrice" prop="unitPrice" label="单价" width="120" align="right">
-            <template #default="{ row }">{{ formatAmount(row.unitPrice) }}</template>
+            <template #default="{ row }">
+              {{ Number(row.unitPrice || 0).toFixed(4) }} {{ formatPriceUnit(canonicalUnitCode(row.priceUnit || row.unit)) }}
+            </template>
           </el-table-column>
           <el-table-column v-if="canViewPrice" prop="taxRate" label="税率" width="90" align="right">
             <template #default="{ row }">{{ formatTaxRate(row.taxRate) }}</template>
@@ -422,7 +443,10 @@ async function confirmReceive(receiveId: string) {
             <template #default="{ row }">{{ row.receivedQuantity || 0 }}</template>
           </el-table-column>
           <el-table-column v-if="canViewPrice" label="小计" width="130" align="right">
-            <template #default="{ row }">{{ formatAmount(row.quantity * row.unitPrice) }}</template>
+            <template #default="{ row }">
+              <span v-if="purchaseLineAmount(row).amount != null">{{ formatAmount(purchaseLineAmount(row).amount) }}</span>
+              <span v-else class="text-secondary">{{ purchaseLineAmount(row).message }}</span>
+            </template>
           </el-table-column>
         </el-table>
 

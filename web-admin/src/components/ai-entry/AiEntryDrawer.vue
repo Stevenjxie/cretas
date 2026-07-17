@@ -8,11 +8,14 @@ import type { AiEntryConfig } from './types';
 const props = defineProps<{
   modelValue: boolean;
   config: AiEntryConfig;
+  confirmGuard?: (params: Record<string, unknown>) => string | null;
+  guardActionLabel?: string;
 }>();
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean];
   'fill-form': [params: Record<string, unknown>];
+  'guard-action': [];
 }>();
 
 const { messages, loading, previewParams, sendMessage, continueEditing, confirmParams, reset } = useAiChat(props.config);
@@ -36,6 +39,9 @@ const filledFieldCount = computed(() => {
     return val !== null && val !== undefined && val !== '' && val !== '-';
   }).length;
 });
+const guardMessage = computed(() => (
+  previewParams.value && props.confirmGuard ? props.confirmGuard(previewParams.value) : null
+));
 
 const { config } = props;
 
@@ -116,6 +122,7 @@ async function handleExampleClick(example: string) {
 }
 
 function handleFillForm() {
+  if (guardMessage.value) return;
   const params = confirmParams();
   emit('update:modelValue', false);
   emit('fill-form', params);
@@ -150,6 +157,7 @@ function formatPreviewValue(key: string, value: unknown): string {
   if (key === 'productCategory') {
     const map: Record<string, string> = {
       FINISHED_PRODUCT: '成品', RAW_MATERIAL: '原料', PACKAGING: '包辅材',
+      SEMI_FINISHED: '半成品',
       SEASONING: '调味品', CUSTOMER_MATERIAL: '客户自带原料加工',
       CONTRACT_MANUFACTURING: '纯代工',
     };
@@ -439,8 +447,12 @@ watch(() => props.modelValue, (visible) => {
                     </div>
                   </div>
                   <div class="preview-actions">
+                    <el-alert v-if="guardMessage" :title="guardMessage" type="warning" :closable="false" show-icon class="preview-guard" />
+                    <el-button v-if="guardMessage && guardActionLabel" type="warning" plain @click="$emit('guard-action')">
+                      {{ guardActionLabel }}
+                    </el-button>
                     <el-button @click="handleContinueEdit" round>继续修改</el-button>
-                    <el-button type="primary" @click="handleFillForm" round>
+                    <el-button type="primary" :disabled="Boolean(guardMessage)" @click="handleFillForm" round>
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 4px; vertical-align: -2px">
                         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
                       </svg>

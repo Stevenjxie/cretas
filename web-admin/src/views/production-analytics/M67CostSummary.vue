@@ -7,7 +7,7 @@
     <div class="sum-header">
       <div>
         <h2>成本汇总</h2>
-        <p class="sub">区间内每张订单的 出成率 · 单盒成本 · 成本拆解 (对标 Excel 汇总页)</p>
+        <p class="sub">区间内每张订单按 SKU 口径展示出成率、总成本、元/kg 与元/SKU单位</p>
       </div>
       <div class="ctrls">
         <el-date-picker v-model="range" type="daterange" value-format="YYYY-MM-DD" start-placeholder="起始下单日" end-placeholder="截止下单日" :clearable="false" />
@@ -17,10 +17,12 @@
 
     <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" class="mb" />
 
-    <el-table v-if="rows.length" :data="rows" border stripe show-summary :summary-method="summary" size="default">
+    <el-table v-if="rows.length" :data="rows" border stripe show-summary :summary-method="summary" size="default" :scrollbar-always-on="true" class="wide-table">
       <el-table-column prop="orderNumber" label="订单号" min-width="150" />
       <el-table-column prop="orderDate" label="下单日期" width="120" />
-      <el-table-column label="盒数" width="90" align="right"><template #default="{ row }">{{ row.boxCount ?? '—' }}</template></el-table-column>
+      <el-table-column prop="productName" label="产品" min-width="160"><template #default="{ row }">{{ row.productName || '—' }}</template></el-table-column>
+      <el-table-column prop="skuCode" label="SKU" min-width="130"><template #default="{ row }">{{ row.skuCode || row.productTypeId || '—' }}</template></el-table-column>
+      <el-table-column label="SKU产出" width="120" align="right"><template #default="{ row }">{{ skuOutput(row) }}</template></el-table-column>
       <el-table-column label="整批出成率" width="110" align="right">
         <template #default="{ row }"><span :class="yieldClass(row.overallYieldRate)">{{ row.overallYieldRate == null ? '—' : (row.overallYieldRate * 100).toFixed(1) + '%' }}</span></template>
       </el-table-column>
@@ -28,8 +30,9 @@
       <el-table-column label="人工" width="100" align="right"><template #default="{ row }">{{ money(row.laborCost) }}</template></el-table-column>
       <el-table-column label="调料" width="100" align="right"><template #default="{ row }">{{ money(row.seasoningCost) }}</template></el-table-column>
       <el-table-column label="包装" width="100" align="right"><template #default="{ row }">{{ money(row.packagingCost) }}</template></el-table-column>
-      <el-table-column label="总成本" width="120" align="right"><template #default="{ row }"><b>{{ money(row.totalCost) }}</b></template></el-table-column>
-      <el-table-column label="单盒成本" width="110" align="right"><template #default="{ row }"><b>{{ money(row.perBoxCost) }}</b>/盒</template></el-table-column>
+      <el-table-column prop="totalCost" label="总成本" width="120" align="right"><template #default="{ row }"><b>{{ money(row.totalCost) }}</b></template></el-table-column>
+      <el-table-column label="元/kg" width="110" align="right"><template #default="{ row }">{{ perKg(row) }}</template></el-table-column>
+      <el-table-column label="元/SKU单位" width="140" align="right"><template #default="{ row }">{{ perSkuUnit(row) }}</template></el-table-column>
     </el-table>
 
     <el-empty v-else-if="!loading && !error" :description="empties" />
@@ -41,10 +44,13 @@ import { ref, computed, onMounted } from 'vue';
 import { Refresh } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
+import { canonicalUnitCode, displayUnit } from '@/utils/unitPricing';
 
 interface Row {
-  orderId: string; orderNumber?: string; orderDate?: string; boxCount?: number; overallYieldRate?: number;
-  rawMaterialCost?: number; laborCost?: number; seasoningCost?: number; packagingCost?: number; totalCost?: number; perBoxCost?: number;
+  orderId: string; orderNumber?: string; orderDate?: string; productTypeId?: string; productName?: string; skuCode?: string;
+  skuUnit?: string; skuQuantity?: number; outputQuantity?: number; boxCount?: number; overallYieldRate?: number;
+  rawMaterialCost?: number; laborCost?: number; seasoningCost?: number; packagingCost?: number; totalCost?: number;
+  costPerKg?: number; perKgCost?: number; costPerSkuUnit?: number; perSkuUnitCost?: number; perBoxCost?: number;
 }
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
@@ -63,22 +69,26 @@ const range = ref<[string, string]>(defaultRange());
 const empties = computed(() => masked.value ? '无价格查看权限或区间内无订单' : '该区间无含生产批次的订单');
 
 const money = (v?: number | null) => (v == null ? '—' : '¥' + Number(v).toFixed(2));
+const skuUnit = (row: Row) => canonicalUnitCode(row.skuUnit) || (row.boxCount != null ? 'box' : '');
+const skuOutput = (row: Row) => {
+  const unit = skuUnit(row);
+  const quantity = row.skuQuantity ?? row.outputQuantity ?? row.boxCount;
+  return quantity == null ? '—' : `${Number(quantity).toFixed(2)} ${displayUnit(unit)}`;
+};
+const perKg = (row: Row) => money(row.costPerKg ?? row.perKgCost);
+const perSkuUnit = (row: Row) => {
+  const unit = skuUnit(row);
+  const value = row.costPerSkuUnit ?? row.perSkuUnitCost ?? row.perBoxCost;
+  return value == null || !unit ? '—' : `${money(value)}/${displayUnit(unit)}`;
+};
 const yieldClass = (y?: number | null) => (y == null ? '' : (y * 100 < 50 ? 'y-low' : (y * 100 > 130 ? 'y-high' : 'y-ok')));
 
-function summary({ columns, data }: any) {
-  const out: string[] = [];
-  columns.forEach((_: any, i: number) => {
-    if (i === 0) { out.push('合计/均'); return; }
-    if (i === 2) { out.push(String(data.reduce((s: number, r: Row) => s + (r.boxCount || 0), 0))); return; }
-    if (i === 8) { out.push(money(data.reduce((s: number, r: Row) => s + (r.totalCost || 0), 0))); return; }
-    if (i === 9) {
-      const tc = data.reduce((s: number, r: Row) => s + (r.totalCost || 0), 0);
-      const bc = data.reduce((s: number, r: Row) => s + (r.boxCount || 0), 0);
-      out.push(bc ? money(tc / bc) + '/盒' : '—'); return;
-    }
-    out.push('');
+function summary({ columns, data }: { columns: Array<{ property?: string }>; data: Row[] }) {
+  return columns.map((column, index) => {
+    if (index === 0) return '合计';
+    if (column.property === 'totalCost') return money(data.reduce((sum, row) => sum + (row.totalCost || 0), 0));
+    return '';
   });
-  return out;
 }
 
 async function load() {
@@ -109,4 +119,5 @@ onMounted(load);
 .ctrls { display: flex; align-items: center; gap: 8px; }
 .mb { margin-bottom: 16px; }
 .y-ok { color: #67c23a; } .y-low { color: #f56c6c; font-weight: 600; } .y-high { color: #e6a23c; }
+.wide-table :deep(.el-scrollbar__bar.is-horizontal) { opacity: 1; }
 </style>

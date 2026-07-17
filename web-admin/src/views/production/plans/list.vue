@@ -76,6 +76,9 @@ import {
   traceDocumentLabel,
 } from './documentTrace';
 import type { ProductionDocumentTrace, ProductionTraceDocument } from '@/types/productionDocumentTrace';
+import { productionPlanAiGuard, findUniqueProductByName } from '@/utils/aiEntryGuards';
+import { canonicalUnitCode } from '@/utils/unitPricing';
+import { enumLabel } from '@/utils/enumDisplay';
 
 const router = useRouter();
 const route = useRoute();
@@ -339,6 +342,7 @@ const dialogLoading = ref(false);
 const planForm = ref({
   productTypeId: '',
   plannedQuantity: 0,
+  aiRequestedUnit: '',
   plannedDate: '',
   notes: '',
   estimatedWorkers: undefined as number | undefined,
@@ -852,6 +856,7 @@ function handleCreate() {
   planForm.value = {
     productTypeId: '',
     plannedQuantity: 0,
+    aiRequestedUnit: '',
     // T135 ITEM #3: 计划生产日默认 = 今天 + 1 天
     plannedDate: tomorrowStr(),
     notes: '',
@@ -993,6 +998,7 @@ async function submitPlan() {
       selectedCandidateWorkflowId: _selectedCandidateWorkflowId,
       resolutionMode,
       targetFinishedGoodIds,
+      aiRequestedUnit: _aiRequestedUnit,
       ...rest
     } = planForm.value;
     const payload: Record<string, unknown> = { ...rest };
@@ -2929,16 +2935,14 @@ async function handleDialogClose() {
 // ==================== AI Entry ====================
 
 function handleAiFill(params: TableRow) {
-  // Match productTypeName to productTypeId
   const name = String(params.productTypeName || '');
-  const matched = productTypes.value.find(
-    (pt: TableRow) => String(pt.name || '').includes(name) || name.includes(String(pt.name || ''))
-  );
+  const matched = findUniqueProductByName(name, productTypes.value);
 
   const today = todayStr();
   planForm.value = {
     productTypeId: matched ? String(matched.id) : '',
     plannedQuantity: Number(params.plannedQuantity || 0),
+    aiRequestedUnit: canonicalUnitCode(params.quantityUnit || params.plannedUnit || params.unit),
     plannedDate: String(params.plannedDate || today),
     notes: String(params.notes || ''),
     estimatedWorkers: undefined,
@@ -2961,6 +2965,10 @@ function handleAiFill(params: TableRow) {
     resolutionMode: '',
   };
   dialogVisible.value = true;
+}
+
+function guardProductionPlanAi(params: Record<string, unknown>) {
+  return productionPlanAiGuard(params, productTypes.value);
 }
 </script>
 
@@ -3093,6 +3101,8 @@ function handleAiFill(params: TableRow) {
         :empty-text="emptyText"
         stripe
         border
+        :scrollbar-always-on="true"
+        class="wide-table"
         style="width: 100%"
         :row-class-name="planRowClassName"
         @selection-change="handleSelectionChange"
@@ -3424,7 +3434,7 @@ function handleAiFill(params: TableRow) {
                 <div class="trace-document-number">{{ document.documentNumber || document.documentId }}</div>
                 <div class="trace-document-meta">
                   <span>{{ document.relation || '-' }}</span>
-                  <el-tag v-if="document.status" size="small" type="info">{{ document.status }}</el-tag>
+                  <el-tag v-if="document.status" size="small" type="info">{{ enumLabel(document.status) }}</el-tag>
                 </div>
               </el-card>
             </el-timeline-item>
@@ -3840,6 +3850,9 @@ function handleAiFill(params: TableRow) {
           required
         >
           <el-input-number v-model="planForm.plannedQuantity" :min="1" style="width: 100%" />
+          <div v-if="planForm.aiRequestedUnit" class="ai-unit-preserved">
+            AI 原始数量单位：{{ planForm.aiRequestedUnit }}；保存口径：{{ resolvedWorkflowCandidate?.plannedUnit || '等待 Workflow 解析' }}
+          </div>
           <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 2px;">
             <template v-if="hasResolvedWorkflowCandidate && planForm.resolutionMode === 'SHARED_MULTI_OUTPUT'">
               计划绑定整张共同 Workflow；逐道报工按图处理全部投入、半成品和产出，不裁剪其它分支。
@@ -4755,6 +4768,7 @@ function handleAiFill(params: TableRow) {
     <AiEntryDrawer
       v-model="aiEntryVisible"
       :config="PRODUCTION_PLAN_CONFIG"
+      :confirm-guard="guardProductionPlanAi"
       @fill-form="handleAiFill"
     />
 
@@ -4817,6 +4831,8 @@ function handleAiFill(params: TableRow) {
 </template>
 
 <style lang="scss" scoped>
+.wide-table :deep(.el-scrollbar__bar.is-horizontal) { opacity: 1; }
+.ai-unit-preserved { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 12px; }
 // 校验失败字段红框锚定 (fool-proof-design Rule: 预先显示边界, 不只弹 toast 让用户自己找字段)。
 .field-error {
   :deep(.el-select__wrapper) {
