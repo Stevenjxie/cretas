@@ -1,8 +1,8 @@
 package com.cretas.aims.controller;
 
+import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.workflow.ProductProcessWorkflowActivationDTO;
-import com.cretas.aims.dto.workflow.ProductProcessWorkflowDTO;
 import com.cretas.aims.service.ProductProcessWorkflowService;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowActivationService;
 import jakarta.servlet.http.HttpServletRequest;
