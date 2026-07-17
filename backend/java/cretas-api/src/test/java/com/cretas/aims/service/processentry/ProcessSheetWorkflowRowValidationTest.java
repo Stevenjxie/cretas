@@ -333,6 +333,44 @@ class ProcessSheetWorkflowRowValidationTest {
     }
 
     @Test
+    @DisplayName("AT_LEAST_ONE 批次自由投入允许选择一个、多个或全部，但禁止零投入")
+    void freeChoiceInputs_acceptAnyNonEmptySubset() throws Throwable {
+        PortDescriptor inputA = groupedPort("in-a", "RAW-A", "AT_LEAST_ONE", 1, 3, false);
+        PortDescriptor inputB = groupedPort("in-b", "RAW-B", "AT_LEAST_ONE", 1, 3, false);
+        PortDescriptor inputC = groupedPort("in-c", "RAW-C", "AT_LEAST_ONE", 1, 3, false);
+        PortDescriptor output = ungroupedOutput("out-a", "PT-A");
+        ProcessDescriptor descriptor = ProcessDescriptor.builder()
+                .processOrder(8)
+                .inputs(List.of(inputA, inputB, inputC))
+                .output(output)
+                .outputs(List.of(output))
+                .build();
+        WorkflowClerkSheetService svc = workflowService(descriptor);
+
+        ProcessSheetRowRequest none = multiRequest(8, outputLine("out-a", "PT-A"));
+        BusinessException emptyError = assertThrows(BusinessException.class,
+                () -> invokeSubmission(newImpl(svc), none));
+        assertEquals("PROCESS_SHEET_WORKFLOW_SELECTION_GROUP_VIOLATION", emptyError.getErrorCode());
+
+        ProcessSheetRowRequest one = multiRequest(8, outputLine("out-a", "PT-A"));
+        one.setMaterialInputTotals(List.of(materialInput("in-a", "RAW-A")));
+        assertDoesNotThrow(() -> invokeSubmission(newImpl(svc), one));
+
+        ProcessSheetRowRequest two = multiRequest(8, outputLine("out-a", "PT-A"));
+        two.setMaterialInputTotals(List.of(
+                materialInput("in-a", "RAW-A"),
+                materialInput("in-b", "RAW-B")));
+        assertDoesNotThrow(() -> invokeSubmission(newImpl(svc), two));
+
+        ProcessSheetRowRequest all = multiRequest(8, outputLine("out-a", "PT-A"));
+        all.setMaterialInputTotals(List.of(
+                materialInput("in-a", "RAW-A"),
+                materialInput("in-b", "RAW-B"),
+                materialInput("in-c", "RAW-C")));
+        assertDoesNotThrow(() -> invokeSubmission(newImpl(svc), all));
+    }
+
+    @Test
     @DisplayName("OPTIONAL 多产出正式报工只统计正数量已选端口")
     void optionalMultiOutput_onlyPositiveSelectionCounts() throws Throwable {
         PortDescriptor input = groupedPort("in-a", "RAW-A", "OPTIONAL", 0, 1, false);
@@ -417,6 +455,15 @@ class ProcessSheetWorkflowRowValidationTest {
         line.setFinished(false);
         line.setQuantity(BigDecimal.ONE);
         return line;
+    }
+
+    private ProcessSheetRowRequest.MaterialInputTotal materialInput(String portId, String skuId) {
+        ProcessSheetRowRequest.MaterialInputTotal input = new ProcessSheetRowRequest.MaterialInputTotal();
+        input.setWorkflowPortId(portId);
+        input.setMaterialTypeId(skuId);
+        input.setUnit("kg");
+        input.setQuantity(BigDecimal.ONE);
+        return input;
     }
 
     private ProcessSheetRowRequest multiRequest(

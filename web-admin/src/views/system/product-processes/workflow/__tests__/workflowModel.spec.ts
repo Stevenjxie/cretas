@@ -143,13 +143,13 @@ describe('product process workflow model', () => {
     const laidOut = autoLayoutWorkflow(definition);
     const positions = Object.fromEntries(laidOut.nodes.map((node) => [node.id, node.position]));
 
-    // LAYER_GAP=440；各层按估算 Cell 高度 + 32px 视觉间距排列并整体垂直居中。
+    // 横向按真实 Cell 宽度 + 96px 边距累加；纵向按估算高度 + 32px 间距居中。
     expect(positions.raw.x).toBe(32);
-    expect(positions.split.x).toBe(480);
-    expect(positions.cookA.x).toBe(912);
-    expect(positions.cookB.x).toBe(912);
+    expect(positions.split.x).toBe(368);
+    expect(positions.cookA.x).toBe(944);
+    expect(positions.cookB.x).toBe(944);
     expect(Math.abs(positions.cookA.y - positions.cookB.y)).toBeGreaterThanOrEqual(192);
-    expect(positions.finished.x).toBe(1360);
+    expect(positions.finished.x).toBe(1280);
   });
 
   it('orders four converging raw Cells by input ordinal with a stable 32px visual gap', () => {

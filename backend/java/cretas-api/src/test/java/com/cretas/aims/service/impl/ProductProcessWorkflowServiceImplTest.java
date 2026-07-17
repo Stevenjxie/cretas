@@ -37,6 +37,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -141,6 +142,58 @@ class ProductProcessWorkflowServiceImplTest {
         assertEquals("kg", saved.getNodes().get(2).getData().get("inputUnit"));
         assertEquals(ProductProcessWorkflow.Status.DRAFT.name(), saved.getStatus());
         verify(catalogValidator, never()).validateForPublish(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("另存版本冻结当前草稿并递增可编辑草稿版本，不发布也不启用")
+    void snapshotFreezesCurrentDraftAndAdvancesEditableDraft() throws Exception {
+        ProductProcessWorkflow draft = persistedDraft(validDefinition(), 3L);
+        draft.setDefinitionVersion(2);
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
+                .thenReturn(Optional.of(draft));
+        when(repository.saveAndFlush(any(ProductProcessWorkflow.class))).thenAnswer(invocation -> {
+            ProductProcessWorkflow saved = invocation.getArgument(0);
+            if (saved.getId() == null) saved.setId(92L);
+            if (saved.getLockVersion() == null) saved.setLockVersion(0L);
+            return saved;
+        });
+
+        ProductProcessWorkflowDTO nextDraft = service.snapshot(FACTORY_ID, PRODUCT_ID, 3L);
+
+        ArgumentCaptor<ProductProcessWorkflow> rows = ArgumentCaptor.forClass(ProductProcessWorkflow.class);
+        verify(repository, times(2)).saveAndFlush(rows.capture());
+        ProductProcessWorkflow snapshot = rows.getAllValues().get(0);
+        assertEquals(ProductProcessWorkflow.Status.SNAPSHOT, snapshot.getStatus());
+        assertEquals(2, snapshot.getDefinitionVersion());
+        assertEquals(draft.getNodesJson(), snapshot.getNodesJson());
+        assertEquals(ProductProcessWorkflow.Status.DRAFT.name(), nextDraft.getStatus());
+        assertEquals(3, nextDraft.getVersion());
+        verify(catalogValidator, never()).validateForPublish(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("草稿重建时从独立版本之后继续编号")
+    void recreatedDraftAdvancesPastSnapshotVersion() {
+        ProductProcessWorkflowDTO request = validDefinition();
+        request.setLockVersion(null);
+        ProductProcessWorkflow snapshot = entityFrom(request);
+        snapshot.setStatus(ProductProcessWorkflow.Status.SNAPSHOT);
+        snapshot.setDefinitionVersion(4);
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
+                .thenReturn(Optional.empty());
+        when(repository.findByFactoryIdAndProductTypeIdOrderByDefinitionVersionDesc(FACTORY_ID, PRODUCT_ID))
+                .thenReturn(List.of(snapshot));
+        when(repository.saveAndFlush(any(ProductProcessWorkflow.class))).thenAnswer(invocation -> {
+            ProductProcessWorkflow saved = invocation.getArgument(0);
+            saved.setId(93L);
+            return saved;
+        });
+
+        ProductProcessWorkflowDTO saved = service.saveDraft(FACTORY_ID, PRODUCT_ID, request);
+
+        assertEquals(5, saved.getVersion());
     }
 
     @Test
@@ -403,7 +456,10 @@ class ProductProcessWorkflowServiceImplTest {
         when(productTypeRepository.findByIdAndFactoryId(PRODUCT_ID, FACTORY_ID))
                 .thenReturn(Optional.of(owner));
         ProductProcessWorkflowCatalogValidator realCatalogValidator =
-                new ProductProcessWorkflowCatalogValidator(workProcessRepository, productTypeRepository);
+                new ProductProcessWorkflowCatalogValidator(
+                        workProcessRepository,
+                        productTypeRepository,
+                        mock(com.cretas.aims.repository.bom.BomItemRepository.class));
         ProductProcessWorkflowServiceImpl realService = new ProductProcessWorkflowServiceImpl(
                 repository, activationRepository, new ObjectMapper(), validator, realCatalogValidator, unitValidator,
                 productTypeRepository, mock(com.cretas.aims.repository.RawMaterialTypeRepository.class));

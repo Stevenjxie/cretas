@@ -169,6 +169,23 @@ export function workflowSkuSpecificationEquation(
   return `1${label} = ${formatQuantity(grams)}g`;
 }
 
+/** Makes the process relationship explicit when a package/count SKU has a standard gram weight. */
+export function workflowSkuOutputEquation(
+  inputUnit: string | null | undefined,
+  outputUnit: string | null | undefined,
+  gramsPerUnit: number | null | undefined,
+  customAliases?: Record<string, string>,
+): string | null {
+  const aliases = normalizedAliases(customAliases);
+  const inputCode = normalizeUnit(inputUnit, aliases);
+  const inputFactor = inputCode ? PHYSICAL_BASE_FACTORS[inputCode] : undefined;
+  const outputLabel = String(outputUnit || '').trim();
+  const grams = Number(gramsPerUnit);
+  if (!inputFactor || workflowUnitDimension(inputCode) !== 'MASS'
+    || !outputLabel || !Number.isFinite(grams) || grams <= 0) return null;
+  return `1${displayUnit(inputUnit, aliases)}投入 = ${formatQuantity(inputFactor / grams)}${outputLabel}产出（SKU规格：1${outputLabel} = ${formatQuantity(grams)}g）`;
+}
+
 /**
  * Migrates the legacy single expression into port-level quantities and then keeps every port mode
  * synchronized with its bound SKU unit. Main input is the baseline 1; extra inputs are always an

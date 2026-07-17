@@ -1,4 +1,5 @@
 <template>
+  <div ref="pickerRootRef" class="workflow-sku-picker-shell nodrag nowheel" @wheel.stop>
   <el-cascader
     ref="cascaderRef"
     class="nodrag nowheel workflow-sku-picker"
@@ -12,13 +13,37 @@
     :disabled="disabled"
     :size="size || 'small'"
     :teleported="false"
+    popper-class="workflow-sku-picker-popper nowheel nodrag"
     @change="handleChange"
+    @wheel.stop
     @keydown.esc.stop="closeDropdown"
-  />
+  >
+    <template #default="{ data }">
+      <div
+        v-if="data.isSearch"
+        class="submenu-search"
+        @pointerdown.stop
+        @mousedown.stop
+        @click.stop
+        @keydown.stop
+        @wheel.stop
+      >
+        <el-input
+          :model-value="searchQuery(data.searchKind)"
+          size="small"
+          clearable
+          :placeholder="`搜索${data.searchKind === 'SEMI' ? '半成品' : '成品'}名称 / 编码 / 拼音`"
+          @update:model-value="setSearchQuery(data.searchKind, String($event || ''))"
+        />
+      </div>
+      <span v-else>{{ data.label }}</span>
+    </template>
+  </el-cascader>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import { matchesSearchText } from './pinyinInitials';
 
 /**
@@ -49,6 +74,8 @@ interface SkuCascaderNode {
   name?: string;
   code?: string;
   isCreate?: boolean;
+  isSearch?: boolean;
+  searchKind?: 'SEMI' | 'FINISHED';
   children?: SkuCascaderNode[];
 }
 
@@ -71,13 +98,37 @@ interface CascaderExpose {
 }
 
 const cascaderRef = ref<CascaderExpose | null>(null);
+const pickerRootRef = ref<HTMLElement | null>(null);
+const semiSearch = ref('');
+const finishedSearch = ref('');
 
 function closeDropdown(): void {
   cascaderRef.value?.togglePopperVisible(false);
 }
 
+function handleCloseAllDropdowns(): void {
+  closeDropdown();
+}
+
+function handleDocumentPointerDown(event: PointerEvent): void {
+  const target = event.target;
+  if (target instanceof Node && pickerRootRef.value?.contains(target)) return;
+  closeDropdown();
+}
+
+onMounted(() => {
+  window.addEventListener('workflow-close-dropdowns', handleCloseAllDropdowns);
+  document.addEventListener('pointerdown', handleDocumentPointerDown, true);
+});
+onUnmounted(() => {
+  window.removeEventListener('workflow-close-dropdowns', handleCloseAllDropdowns);
+  document.removeEventListener('pointerdown', handleDocumentPointerDown, true);
+});
+
 function handleChange(value: unknown): void {
-  emit('change', String(value ?? ''));
+  const nextValue = String(value ?? '');
+  if (nextValue.startsWith('__SEARCH_')) return;
+  emit('change', nextValue);
   // 选中新项或再次点击当前项后都应立即收起，避免必须改选其它项才能关闭。
   void nextTick(closeDropdown);
 }
@@ -93,20 +144,41 @@ function toNode(option: WorkflowSkuPickerOption): SkuCascaderNode {
   return { value: option.id, label: optionLabel(option), name: option.name, code: option.code };
 }
 
+function searchQuery(kind?: 'SEMI' | 'FINISHED'): string {
+  return kind === 'SEMI' ? semiSearch.value : finishedSearch.value;
+}
+
+function setSearchQuery(kind: 'SEMI' | 'FINISHED' | undefined, value: string): void {
+  if (kind === 'SEMI') semiSearch.value = value;
+  if (kind === 'FINISHED') finishedSearch.value = value;
+}
+
+function matchesOption(option: WorkflowSkuPickerOption, query: string): boolean {
+  const keyword = query.trim();
+  if (!keyword) return true;
+  return matchesSearchText(keyword, option.name)
+    || matchesSearchText(keyword, option.id)
+    || matchesSearchText(keyword, option.code || '');
+}
+
 // 一级 = 半成品 / 成品；二级 = 各自的 SKU。现场创建入口固定在「半成品」二级首位。
 const cascaderOptions = computed<SkuCascaderNode[]>(() => [
   {
     value: '__SEMI__',
     label: '半成品',
     children: [
+      { value: '__SEARCH_SEMI__', label: '搜索半成品', isSearch: true, searchKind: 'SEMI' },
       { value: '__CREATE__', label: '＋ 现场创建半成品 SKU', isCreate: true },
-      ...props.semiOptions.map(toNode),
+      ...props.semiOptions.filter((option) => matchesOption(option, semiSearch.value)).map(toNode),
     ],
   },
   {
     value: '__FIN__',
     label: '成品',
-    children: props.finishedOptions.map(toNode),
+    children: [
+      { value: '__SEARCH_FINISHED__', label: '搜索成品', isSearch: true, searchKind: 'FINISHED' },
+      ...props.finishedOptions.filter((option) => matchesOption(option, finishedSearch.value)).map(toNode),
+    ],
   },
 ]);
 
@@ -117,6 +189,7 @@ const cascaderOptions = computed<SkuCascaderNode[]>(() => [
  */
 function filterNode(node: { data?: SkuCascaderNode; text?: string }, keyword: string): boolean {
   const data = node.data;
+  if (data?.isSearch) return true;
   if (data?.isCreate) return true;
   const kw = (keyword || '').trim();
   if (!kw) return true;
@@ -129,7 +202,9 @@ function filterNode(node: { data?: SkuCascaderNode; text?: string }, keyword: st
 </script>
 
 <style scoped>
-.workflow-sku-picker { width: 100%; }
+.workflow-sku-picker-shell, .workflow-sku-picker { width: 100%; }
+.submenu-search { width: 260px; padding: 2px 0; cursor: text; }
+:deep(.el-cascader-node:has(.submenu-search)) { padding: 4px 12px; }
 :deep(.el-cascader-menu__item.create-option),
 :deep(.el-cascader-node[aria-label*="现场创建"]) { color: #409eff; font-weight: 600; }
 </style>

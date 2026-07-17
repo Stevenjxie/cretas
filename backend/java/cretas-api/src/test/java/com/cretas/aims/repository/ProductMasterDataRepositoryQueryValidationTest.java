@@ -2,6 +2,7 @@ package com.cretas.aims.repository;
 
 import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.FactoryType;
@@ -31,6 +32,7 @@ class ProductMasterDataRepositoryQueryValidationTest {
     @Autowired ProductTypeRepository productRepository;
     @Autowired RawMaterialTypeRepository materialRepository;
     @Autowired MaterialPackagingHierarchyRepository hierarchyRepository;
+    @Autowired ProductProcessWorkflowRepository workflowRepository;
 
     @Test
     void repositoriesBootAndProductQueriesHideRawMaterialOwner() {
@@ -59,6 +61,16 @@ class ProductMasterDataRepositoryQueryValidationTest {
                 "RAW-OWNER-1", "内部原料 owner", "RAW_MATERIAL");
         entityManager.persist(visible);
         entityManager.persist(hiddenOwner);
+
+        ProductProcessWorkflow snapshot = new ProductProcessWorkflow();
+        snapshot.setFactoryId(factory.getId());
+        snapshot.setProductTypeId(visible.getId());
+        snapshot.setStatus(ProductProcessWorkflow.Status.SNAPSHOT);
+        snapshot.setDefinitionVersion(7);
+        snapshot.setNodesJson("[]");
+        snapshot.setEdgesJson("[]");
+        snapshot.setViewportJson("{\"x\":0,\"y\":0,\"zoom\":1}");
+        entityManager.persist(snapshot);
 
         RawMaterialType raw = new RawMaterialType();
         raw.setId("R-JPA-MASTER");
@@ -107,6 +119,12 @@ class ProductMasterDataRepositoryQueryValidationTest {
         assertThat(materialRepository.existsByFactoryIdAndNormalizedNameExcludingId(
                 factory.getId(), " RAW MATERIAL ", raw.getId())).isFalse();
         assertThat(hierarchyRepository).isNotNull();
+        assertThat(workflowRepository
+                .findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                        factory.getId(), visible.getId(), ProductProcessWorkflow.Status.SNAPSHOT))
+                .get()
+                .extracting(ProductProcessWorkflow::getDefinitionVersion)
+                .isEqualTo(7);
     }
 
     private ProductType product(String id, String factoryId, Long userId,

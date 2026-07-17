@@ -185,10 +185,20 @@ describe('WorkflowMaterialNode raw material picker — BOM priority grouping (#3
       .toEqual(['RM-CHICKEN']);
   });
 
-  it('keeps the category popper local to the Cell and closes after choosing a leaf or pressing Esc', async () => {
+  it('keeps the category popper local, preserves wheel scrolling, and closes on leaf, Esc, or outside click', async () => {
     const wrapper = mountNode();
     const cascader = wrapper.getComponent({ name: 'ElCascader' });
+    const rawSelect = wrapper.getComponent({ name: 'ElSelect' });
     expect(cascader.props('teleported')).toBe(false);
+    expect(rawSelect.props('teleported')).toBe(false);
+    expect(cascader.props('popperClass')).toContain('nowheel');
+    const shell = wrapper.get('[data-testid="raw-segment-filter-shell"]');
+    expect(shell.classes()).toContain('nowheel');
+    const parentWheel = vi.fn();
+    wrapper.element.addEventListener('wheel', parentWheel);
+    await shell.trigger('wheel', { deltaY: 120 });
+    expect(parentWheel).not.toHaveBeenCalled();
+
     const exposed = cascader.vm.$.exposed as { togglePopperVisible: (visible: boolean) => void };
     const closeSpy = vi.spyOn(exposed, 'togglePopperVisible');
 
@@ -198,6 +208,10 @@ describe('WorkflowMaterialNode raw material picker — BOM priority grouping (#3
     cascader.vm.$emit('keydown', new KeyboardEvent('keydown', { key: 'Escape' }));
     await wrapper.vm.$nextTick();
     expect(closeSpy).toHaveBeenCalledTimes(2);
+
+    cascader.vm.$emit('visible-change', true);
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    expect(closeSpy).toHaveBeenCalledTimes(3);
   });
 
   it('shows the unit-contract error on the affected material cell', () => {
@@ -205,6 +219,17 @@ describe('WorkflowMaterialNode raw material picker — BOM priority grouping (#3
 
     expect(wrapper.classes()).toContain('unit-error');
     expect(wrapper.get('[data-testid="unit-error"]').text()).toContain('缺少规范主单位');
+  });
+
+  it('gives material names a full-width heading row with a hover title', () => {
+    const name = 'E2E-替代链-处理后半成品';
+    const wrapper = mountNode({
+      data: { ...RAW_DATA, name, skuId: 'SKU-SEMI-1', bound: true },
+    });
+
+    expect(wrapper.get('.material-name').text()).toBe(name);
+    expect(wrapper.get('.material-name').attributes('title')).toBe(name);
+    expect(wrapper.get('.material-name').element.parentElement?.classList).toContain('node-heading');
   });
 
   it('keeps an unbound Cell red and pulses until the user starts handling it', () => {

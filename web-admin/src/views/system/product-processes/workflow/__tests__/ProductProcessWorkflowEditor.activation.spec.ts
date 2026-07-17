@@ -16,6 +16,7 @@ const apiMocks = vi.hoisted(() => ({
   getProductProcessWorkflowActivation: vi.fn(),
   publishProductProcessWorkflow: vi.fn(),
   saveProductProcessWorkflowDraft: vi.fn(),
+  snapshotProductProcessWorkflow: vi.fn(),
   activateProductProcessWorkflow: vi.fn(),
   deactivateProductProcessWorkflow: vi.fn(),
 }));
@@ -30,6 +31,7 @@ vi.mock('../workflowApi', () => ({
   getProductProcessWorkflowActivation: apiMocks.getProductProcessWorkflowActivation,
   publishProductProcessWorkflow: apiMocks.publishProductProcessWorkflow,
   saveProductProcessWorkflowDraft: apiMocks.saveProductProcessWorkflowDraft,
+  snapshotProductProcessWorkflow: apiMocks.snapshotProductProcessWorkflow,
   activateProductProcessWorkflow: apiMocks.activateProductProcessWorkflow,
   deactivateProductProcessWorkflow: apiMocks.deactivateProductProcessWorkflow,
   listProductProcessWorkflowVersions: vi.fn().mockResolvedValue({ success: true, data: [] }),
@@ -62,10 +64,14 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
     apiMocks.get.mockImplementation((url: string) => Promise.resolve({
       success: true,
-      data: url.includes('/product-types')
+      data: url.includes('/bom/items/')
+        ? [{ id: 1, materialTypeId: 'RAW', materialName: 'Raw', unit: 'kg' }]
+        : url.endsWith('/product-types/PT-A')
+          ? productOption('PT-A')
+        : url.includes('/product-types')
         ? { content: [productOption('PT-A'), productOption('PT-B')] }
         : url.includes('/raw-material-types')
-          ? [productOption('RAW')]
+          ? [{ id: 'RAW', name: 'Raw', unit: 'kg', category: '原料' }]
           : [],
     }));
     apiMocks.post.mockResolvedValue({ success: true, data: null });
@@ -90,9 +96,12 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     const wrapper = mountEditor();
     await flushPromises();
 
-    await wrapper.get('[data-testid="publish-workflow"]').trigger('click');
+    await (wrapper.vm as unknown as { publishWorkflow: () => Promise<void> }).publishWorkflow();
     await flushPromises();
 
+    expect((wrapper.vm as unknown as { unitIssues: unknown[] }).unitIssues).toEqual([]);
+    expect((wrapper.vm as unknown as { publishBindingErrors: unknown[] }).publishBindingErrors).toEqual([]);
+    expect((wrapper.vm as unknown as { bomMissingProducts: unknown[] }).bomMissingProducts).toEqual([]);
     expect(apiMocks.publishProductProcessWorkflow).toHaveBeenCalledTimes(1);
     // 发布成功后自动用发布出的版本 (id 44) 启用, 无需用户再点一次
     expect(apiMocks.activateProductProcessWorkflow).toHaveBeenCalledWith('F006', 44);
@@ -128,17 +137,21 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     expect(wrapper.get('[data-testid="activation-status"]').text()).not.toContain('v3');
   });
 
-  it('detects stale units in a published workflow even when the backend review flag is missing', async () => {
+  it('forks a published workflow into a review draft when the backend marks SKU units stale', async () => {
     apiMocks.get.mockImplementation((url: string) => Promise.resolve({
       success: true,
-      data: url.includes('/product-types')
+      data: url.includes('/bom/items/')
+        ? [{ id: 1, materialTypeId: 'RAW', materialName: 'Raw', unit: 'kg' }]
+        : url.endsWith('/product-types/PT-A')
+          ? productOption('PT-A', '盒')
+        : url.includes('/product-types')
         ? { content: [productOption('PT-A', '盒'), productOption('PT-B')] }
         : url.includes('/raw-material-types')
-          ? [productOption('RAW')]
+          ? [{ id: 'RAW', name: 'Raw', unit: 'kg', category: '原料' }]
           : [],
     }));
     const stale = definition('PT-A', 'PUBLISHED', 4, 44);
-    stale.unitReviewRequired = false;
+    stale.unitReviewRequired = true;
     apiMocks.getProductProcessWorkflow.mockResolvedValue({ success: true, data: stale });
 
     const wrapper = mountEditor();

@@ -14,7 +14,9 @@ import type {
 } from './types';
 
 const GRID_SIZE = 16;
-const LAYER_GAP = 440;
+const NODE_HORIZONTAL_GAP = 96;
+const MATERIAL_NODE_WIDTH = 240;
+const PROCESS_NODE_WIDTH = 472;
 const NODE_VERTICAL_GAP = 32;
 const CANVAS_ORIGIN = 32;
 
@@ -148,8 +150,15 @@ export function createWorkflowFromLegacy(input: {
     const outputId = index === processes.length - 1
       ? 'material:finished'
       : `material:semi:${index}`;
-    const processX = CANVAS_ORIGIN + (index * 2 + 1) * LAYER_GAP;
-    const outputX = CANVAS_ORIGIN + (index * 2 + 2) * LAYER_GAP;
+    const pairWidth = MATERIAL_NODE_WIDTH + PROCESS_NODE_WIDTH + NODE_HORIZONTAL_GAP * 2;
+    const processX = snapPosition({
+      x: CANVAS_ORIGIN + MATERIAL_NODE_WIDTH + NODE_HORIZONTAL_GAP + index * pairWidth,
+      y: 0,
+    }).x;
+    const outputX = snapPosition({
+      x: processX + PROCESS_NODE_WIDTH + NODE_HORIZONTAL_GAP,
+      y: 0,
+    }).x;
     const inputPortId = `input:${index}`;
     const outputPortId = `output:${index}`;
 
@@ -276,17 +285,28 @@ export function autoLayoutWorkflow(
     0,
   );
   const maxLayerHeight = Math.max(...[...layers.values()].map(layerHeight), 0);
+  const layerX = new Map<number, number>();
+  let nextLayerX = CANVAS_ORIGIN;
+  [...layers.keys()].sort((a, b) => a - b).forEach((layer) => {
+    layerX.set(layer, nextLayerX);
+    const width = Math.max(...(layers.get(layer) ?? []).map(estimatedNodeWidth), MATERIAL_NODE_WIDTH);
+    nextLayerX = snapPosition({ x: nextLayerX + width + NODE_HORIZONTAL_GAP, y: 0 }).x;
+  });
   layers.forEach((layerNodes, layer) => {
     let y = CANVAS_ORIGIN + (maxLayerHeight - layerHeight(layerNodes)) / 2;
     layerNodes.forEach((node) => {
       node.position = snapPosition({
-        x: CANVAS_ORIGIN + layer * LAYER_GAP,
+        x: layerX.get(layer) ?? CANVAS_ORIGIN,
         y,
       });
       y += estimatedNodeHeight(node) + NODE_VERTICAL_GAP;
     });
   });
   return result;
+}
+
+function estimatedNodeWidth(node: ProductProcessWorkflowNode): number {
+  return node.kind === 'PROCESS' ? PROCESS_NODE_WIDTH : MATERIAL_NODE_WIDTH;
 }
 
 function estimatedNodeHeight(node: ProductProcessWorkflowNode): number {

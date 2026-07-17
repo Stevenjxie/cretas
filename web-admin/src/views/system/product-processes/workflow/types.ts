@@ -4,7 +4,7 @@ export type ProductProcessNodeKind =
   | 'SEMI_FINISHED'
   | 'FINISHED_GOOD';
 
-export type WorkflowStatus = 'DRAFT' | 'PUBLISHED';
+export type WorkflowStatus = 'DRAFT' | 'SNAPSHOT' | 'PUBLISHED';
 export type ConversionMode = 'ACTUAL_WEIGHT' | 'FIXED_RATIO' | 'SUM_OUTPUTS' | 'FORMULA';
 export type PortSelectionMode = 'ALL_REQUIRED' | 'EXACTLY_ONE' | 'AT_LEAST_ONE' | 'OPTIONAL';
 
@@ -34,7 +34,7 @@ export interface ProcessPort {
   skuId?: string;
   materialKind?: Exclude<ProductProcessNodeKind, 'PROCESS'>;
   unit: string;
-  /** Standard quantity relative to the primary input. Ignored for AUTO_CONVERT ports. */
+  /** Input required per primary output unit, or secondary-output quantity per primary output unit. */
   standardQuantity?: number;
   quantityMode?: 'AUTO_CONVERT' | 'FIXED_RATIO';
   conversionRefId?: string | null;

@@ -77,8 +77,14 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
             entity.setFactoryId(factoryId);
             entity.setProductTypeId(productTypeId);
             entity.setStatus(ProductProcessWorkflow.Status.DRAFT);
-            int nextVersion = find(factoryId, productTypeId, ProductProcessWorkflow.Status.PUBLISHED)
+            // SNAPSHOT 也是正式占用的历史版本号；从全部状态取最大值，避免草稿被异常重建时
+            // 与已另存版本复用同一个 definitionVersion，导致历史查看命中不确定行。
+            int nextVersion = repository
+                    .findByFactoryIdAndProductTypeIdOrderByDefinitionVersionDesc(factoryId, productTypeId)
+                    .stream()
                     .map(ProductProcessWorkflow::getDefinitionVersion)
+                    .filter(java.util.Objects::nonNull)
+                    .max(Integer::compareTo)
                     .orElse(0) + 1;
             entity.setDefinitionVersion(nextVersion);
         }
@@ -113,6 +119,41 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         unitValidator.validateForPublish(factoryId, definition);
         draft.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
         draft.setUnitReviewRequired(false);
+        return toDTO(repository.saveAndFlush(draft));
+    }
+
+    @Override
+    @Transactional
+    public ProductProcessWorkflowDTO snapshot(String factoryId, String productTypeId, Long lockVersion) {
+        requireWorkflowOwner(factoryId, productTypeId);
+        ProductProcessWorkflow candidate = find(factoryId, productTypeId, ProductProcessWorkflow.Status.DRAFT)
+                .orElseThrow(() -> new BusinessException(409, "没有可另存的 Workflow 草稿")
+                        .withCode("PRODUCT_PROCESS_WORKFLOW_DRAFT_MISSING")
+                        .withHint("请先保存草稿，再另存为版本")
+                        .withSeverity("warning"));
+        ProductProcessWorkflow draft = repository.lockByIdAndFactoryId(candidate.getId(), factoryId)
+                .filter(row -> row.getStatus() == ProductProcessWorkflow.Status.DRAFT)
+                .orElseThrow(() -> new BusinessException(409, "Workflow 草稿状态已变化，请刷新后重试")
+                        .withCode("PRODUCT_PROCESS_WORKFLOW_CONFLICT")
+                        .withSeverity("warning"));
+        assertCurrentVersion(lockVersion, draft);
+        ProductProcessWorkflowDTO definition = toDTO(draft);
+        validator.validateForDraft(definition);
+        unitValidator.validate(factoryId, definition);
+
+        ProductProcessWorkflow snapshot = new ProductProcessWorkflow();
+        snapshot.setFactoryId(factoryId);
+        snapshot.setProductTypeId(productTypeId);
+        snapshot.setSchemaVersion(draft.getSchemaVersion());
+        snapshot.setStatus(ProductProcessWorkflow.Status.SNAPSHOT);
+        snapshot.setDefinitionVersion(draft.getDefinitionVersion());
+        snapshot.setNodesJson(draft.getNodesJson());
+        snapshot.setEdgesJson(draft.getEdgesJson());
+        snapshot.setViewportJson(draft.getViewportJson());
+        snapshot.setUnitReviewRequired(draft.getUnitReviewRequired());
+        repository.saveAndFlush(snapshot);
+
+        draft.setDefinitionVersion(draft.getDefinitionVersion() + 1);
         return toDTO(repository.saveAndFlush(draft));
     }
 

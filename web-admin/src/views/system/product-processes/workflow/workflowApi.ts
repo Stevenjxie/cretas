@@ -41,10 +41,22 @@ export function publishProductProcessWorkflow(
   );
 }
 
+export function snapshotProductProcessWorkflow(
+  factoryId: string,
+  productTypeId: string,
+  lockVersion: number,
+) {
+  return post<ProductProcessWorkflowDefinition>(
+    `/${factoryId}/product-process-workflows/${productTypeId}/snapshot`,
+    { lockVersion },
+    workflowConflictConfig,
+  );
+}
+
 // #12: 版本历史 (只读浏览之前版本)。历史已作为多行持久化 (每次发布留一 PUBLISHED 行)。
 export interface WorkflowVersionSummary {
   definitionVersion: number;
-  status: 'DRAFT' | 'PUBLISHED';
+  status: 'DRAFT' | 'SNAPSHOT' | 'PUBLISHED';
   updatedAt: string | null;
   active: boolean;
 }

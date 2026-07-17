@@ -8,6 +8,7 @@ import {
   reconcileWorkflowUnits,
   workflowAutoConversionEquation,
   workflowSkuSpecificationEquation,
+  workflowSkuOutputEquation,
   workflowUnitDimension,
   type WorkflowUnitContext,
 } from '../workflowUnits';
@@ -19,6 +20,8 @@ describe('reconcileWorkflowUnits', () => {
     expect(workflowAutoConversionEquation('g', 'kg')).toBe('1g = 0.001kg');
     expect(workflowAutoConversionEquation('只', '半只')).toBeNull();
     expect(workflowSkuSpecificationEquation('盒', 800)).toBe('1盒 = 800g');
+    expect(workflowSkuOutputEquation('kg', '盒', 800))
+      .toBe('1kg投入 = 1.25盒产出（SKU规格：1盒 = 800g）');
   });
 
   it('recognizes MASS, VOLUME, and LENGTH as system physical dimensions', () => {

@@ -8,6 +8,7 @@ import com.cretas.aims.entity.enums.WorkProcessOutputMaterialKind;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.repository.bom.BomItemRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -29,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.ArgumentMatchers.anyString;
 
 @ExtendWith(MockitoExtension.class)
 class ProductProcessWorkflowCatalogValidatorTest {
@@ -42,11 +44,17 @@ class ProductProcessWorkflowCatalogValidatorTest {
     @Mock
     private ProductTypeRepository productTypeRepository;
 
+    @Mock
+    private BomItemRepository bomItemRepository;
+
     private ProductProcessWorkflowCatalogValidator validator;
 
     @BeforeEach
     void setUp() {
-        validator = new ProductProcessWorkflowCatalogValidator(workProcessRepository, productTypeRepository);
+        validator = new ProductProcessWorkflowCatalogValidator(
+                workProcessRepository, productTypeRepository, bomItemRepository);
+        lenient().when(bomItemRepository.countByFactoryIdAndProductTypeId(anyString(), anyString()))
+                .thenReturn(1L);
     }
 
     @Test
@@ -73,6 +81,22 @@ class ProductProcessWorkflowCatalogValidatorTest {
 
         verify(workProcessRepository).findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-PACK"));
         verify(productTypeRepository).findByIdIn(List.of(PRODUCT_ID));
+    }
+
+    @Test
+    void rejectsFinishedOutputWithoutBom() {
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-PACK")))
+                .thenReturn(List.of(workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD)));
+        when(productTypeRepository.findByIdIn(List.of(PRODUCT_ID)))
+                .thenReturn(List.of(product(PRODUCT_ID, FACTORY_ID, ProductCategory.FINISHED_PRODUCT)));
+        when(bomItemRepository.countByFactoryIdAndProductTypeId(FACTORY_ID, PRODUCT_ID)).thenReturn(0L);
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID,
+                        workflowWithPrimaryOutput("WP-PACK", "FINISHED_GOOD", PRODUCT_ID)));
+
+        assertEquals(409, error.getCode());
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_BOM_REQUIRED", error.getErrorCode());
     }
 
     @Test

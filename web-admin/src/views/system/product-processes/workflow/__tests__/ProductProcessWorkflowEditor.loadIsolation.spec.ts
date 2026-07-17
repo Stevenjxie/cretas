@@ -13,6 +13,10 @@ const apiMocks = vi.hoisted(() => ({
   getProductWorkProcesses: vi.fn(),
   publishProductProcessWorkflow: vi.fn(),
   saveProductProcessWorkflowDraft: vi.fn(),
+  snapshotProductProcessWorkflow: vi.fn(),
+  getProductProcessWorkflowActivation: vi.fn(),
+  listProductProcessWorkflowVersions: vi.fn(),
+  getProductProcessWorkflowVersion: vi.fn(),
   fitView: vi.fn(),
 }));
 
@@ -28,8 +32,12 @@ vi.mock('@/api/processProduction', () => ({
 
 vi.mock('../workflowApi', () => ({
   getProductProcessWorkflow: apiMocks.getProductProcessWorkflow,
+  getProductProcessWorkflowActivation: apiMocks.getProductProcessWorkflowActivation,
   publishProductProcessWorkflow: apiMocks.publishProductProcessWorkflow,
   saveProductProcessWorkflowDraft: apiMocks.saveProductProcessWorkflowDraft,
+  snapshotProductProcessWorkflow: apiMocks.snapshotProductProcessWorkflow,
+  listProductProcessWorkflowVersions: apiMocks.listProductProcessWorkflowVersions,
+  getProductProcessWorkflowVersion: apiMocks.getProductProcessWorkflowVersion,
 }));
 
 vi.mock('@vue-flow/core', () => ({
@@ -56,7 +64,6 @@ interface EditorVm {
   dirty: boolean;
   flowNodes: Array<{ id: string; data: Record<string, unknown> }>;
   history: ProductProcessWorkflowDefinition[];
-  future: ProductProcessWorkflowDefinition[];
   loading: boolean;
   rawMaterialOptions: Array<{ id: string }>;
   publishBindingErrors: Array<{ code: string; nodeId?: string }>;
@@ -90,7 +97,9 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
     vi.clearAllMocks();
     apiMocks.get.mockImplementation((url: string) => Promise.resolve({
       success: true,
-      data: url.includes('/product-types')
+      data: url.includes('/bom/items/')
+        ? [{ id: 1, materialTypeId: 'SKU-RAW', materialName: 'Raw', unit: 'kg' }]
+        : url.includes('/product-types')
         ? { content: [testSku('PT-A'), testSku('PT-B')] }
         : url.includes('/raw-material-types')
           ? [testSku('SKU-RAW'), testSku('SKU:PT-A'), testSku('SKU:PT-B')]
@@ -99,6 +108,9 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
     }));
     apiMocks.getActiveWorkProcesses.mockResolvedValue({ success: true, data: [] });
     apiMocks.getProductWorkProcesses.mockResolvedValue({ success: true, data: [] });
+    apiMocks.getProductProcessWorkflowActivation.mockResolvedValue({ success: true, data: null });
+    apiMocks.listProductProcessWorkflowVersions.mockResolvedValue({ success: true, data: [] });
+    apiMocks.getProductProcessWorkflowVersion.mockResolvedValue({ success: true, data: null });
     apiMocks.saveProductProcessWorkflowDraft.mockImplementation(
       (_factoryId: string, _productTypeId: string, definition: ProductProcessWorkflowDefinition) => (
         Promise.resolve({ success: true, data: definition })
@@ -509,7 +521,6 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
     vm.history.push(jsonClone(vm.currentDefinition()));
     const nodesBeforeConflict = jsonClone(vm.flowNodes);
     const historyBeforeConflict = jsonClone(vm.history);
-    const futureBeforeConflict = jsonClone(vm.future);
 
     const savePromise = vm.saveDraft();
     await flushPromises();
@@ -517,7 +528,6 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
     expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1);
     expect(vm.flowNodes).toEqual(nodesBeforeConflict);
     expect(vm.history).toEqual(historyBeforeConflict);
-    expect(vm.future).toEqual(futureBeforeConflict);
     expect(vm.dirty).toBe(true);
     expect(apiMocks.getProductProcessWorkflow).toHaveBeenCalledTimes(1);
 

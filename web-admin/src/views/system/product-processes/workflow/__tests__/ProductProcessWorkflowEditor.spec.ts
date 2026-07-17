@@ -1,7 +1,8 @@
 import { flushPromises, shallowMount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import ProductProcessWorkflowEditor from '../ProductProcessWorkflowEditor.vue';
+import type { ProductProcessWorkflowDefinition } from '../types';
 
 const apiMocks = vi.hoisted(() => ({
   get: vi.fn(),
@@ -13,6 +14,9 @@ const apiMocks = vi.hoisted(() => ({
   getProductProcessWorkflow: vi.fn(),
   getProductProcessWorkflowActivation: vi.fn(),
   getProductWorkProcesses: vi.fn(),
+  publishProductProcessWorkflow: vi.fn(),
+  saveProductProcessWorkflowDraft: vi.fn(),
+  snapshotProductProcessWorkflow: vi.fn(),
 }));
 
 vi.mock('@/api/request', () => ({
@@ -31,8 +35,9 @@ vi.mock('@/api/processProduction', () => ({
 vi.mock('../workflowApi', () => ({
   getProductProcessWorkflow: apiMocks.getProductProcessWorkflow,
   getProductProcessWorkflowActivation: apiMocks.getProductProcessWorkflowActivation,
-  publishProductProcessWorkflow: vi.fn(),
-  saveProductProcessWorkflowDraft: vi.fn(),
+  publishProductProcessWorkflow: apiMocks.publishProductProcessWorkflow,
+  saveProductProcessWorkflowDraft: apiMocks.saveProductProcessWorkflowDraft,
+  snapshotProductProcessWorkflow: apiMocks.snapshotProductProcessWorkflow,
 }));
 
 vi.mock('@vue-flow/core', async () => {
@@ -60,7 +65,7 @@ vi.mock('@vue-flow/controls', async () => {
 
 interface EditorVm {
   flowNodes: EditorNode[];
-  flowEdges: Array<{ id: string; source: string; target: string }>;
+  flowEdges: Array<{ id: string; source: string; target: string; selected?: boolean }>;
   history: unknown[];
   outputSkuOptions: SkuOption[];
   selectedWorkProcessId: string;
@@ -83,6 +88,20 @@ interface EditorVm {
   };
   confirmCreateSku: () => Promise<void>;
   skuForm: { name: string; unit: string };
+  bomMissingProducts: Array<{ id: string; name: string }>;
+  publishDisabledReason: string;
+  publishWorkflow: () => Promise<void>;
+  undo: () => void;
+  removeSelectedElements: () => void;
+  onNodeClick: (payload: { node: EditorNode; event?: MouseEvent }) => void;
+  onEdgeClick: (payload: { edge: { id: string; source: string; target: string } }) => void;
+  selectedNodeContext: {
+    selectedNodeIds: string[];
+    selectedEdgeIds: string[];
+  };
+  snapshotWorkflow: () => Promise<void>;
+  definition: ProductProcessWorkflowDefinition;
+  dirty: boolean;
 }
 
 interface TestPort {
@@ -99,10 +118,20 @@ interface TestPort {
 
 interface EditorNode {
   id: string;
+  selected?: boolean;
   position: { x: number; y: number };
   data: Record<string, unknown> & {
     kind?: string;
     ports?: TestPort[];
+    portGroups?: Array<{
+      id: string;
+      direction: 'INPUT' | 'OUTPUT';
+      label: string;
+      mode: 'ALL_REQUIRED' | 'EXACTLY_ONE' | 'AT_LEAST_ONE' | 'OPTIONAL';
+      minSelections: number;
+      maxSelections: number;
+      portIds: string[];
+    }>;
   };
 }
 
@@ -204,6 +233,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
         schemaVersion: 1,
         status: 'DRAFT',
         version: 1,
+        lockVersion: 0,
         nodes: [{
           id: 'raw',
           kind: 'RAW_MATERIAL',
@@ -236,6 +266,106 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
       expect.objectContaining({ source: 'raw' }),
       expect.objectContaining({ target: expect.stringContaining('material:finished:') }),
     ]));
+  });
+
+  it('blocks publish before any write when the finished product has no BOM', async () => {
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined);
+    const vm = await mountEditor();
+    expect(vm.bomMissingProducts).toEqual([{ id: 'PT-PIG-400', name: '五香去骨猪蹄 400g' }]);
+    expect(vm.publishDisabledReason).toContain('五香去骨猪蹄 400g 尚未配置原辅料 BOM');
+
+    await vm.publishWorkflow();
+
+    expect(warning).toHaveBeenCalledWith('请先为所有成品产出配置原辅料 BOM，再发布并启用 Workflow');
+    expect(apiMocks.saveProductProcessWorkflowDraft).not.toHaveBeenCalled();
+    expect(apiMocks.publishProductProcessWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('treats undo as a new edit and reschedules autosave', async () => {
+    const timerSpy = vi.spyOn(globalThis, 'setTimeout');
+    const vm = await mountEditor();
+    const originalCount = vm.flowNodes.length;
+    vm.addStandaloneRaw();
+    const timersAfterMutation = timerSpy.mock.calls.length;
+
+    vm.undo();
+    expect(vm.flowNodes).toHaveLength(originalCount);
+    expect(vm.dirty).toBe(true);
+    expect(timerSpy.mock.calls.length).toBeGreaterThan(timersAfterMutation);
+    expect(timerSpy.mock.calls.at(-1)?.[1]).toBe(2500);
+
+  });
+
+  it('deletes a batch-selected Cell and every touching link in one undo snapshot', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
+    const vm = await mountEditor();
+    vm.openAddProcess('raw');
+    vm.selectedWorkProcessId = 'WP-PACK';
+    vm.confirmAddProcess();
+    const beforeDelete = vm.flowNodes.length;
+    const historyBeforeDelete = vm.history.length;
+    const raw = vm.flowNodes.find((node) => node.id === 'raw');
+    if (!raw) throw new Error('Expected raw node');
+    raw.selected = true;
+
+    vm.removeSelectedElements();
+    await flushPromises();
+
+    expect(vm.flowNodes).toHaveLength(beforeDelete - 1);
+    expect(vm.flowEdges).toHaveLength(1);
+    expect(vm.flowEdges.some((edge) => edge.source === 'raw' || edge.target === 'raw')).toBe(false);
+    expect(vm.history).toHaveLength(historyBeforeDelete + 1);
+    vm.undo();
+    expect(vm.flowNodes).toHaveLength(beforeDelete);
+    expect(vm.flowEdges).toHaveLength(2);
+  });
+
+  it('selecting a Cell also selects every directly connected line', async () => {
+    const vm = await mountEditor();
+    vm.openAddProcess('raw');
+    vm.selectedWorkProcessId = 'WP-PACK';
+    vm.confirmAddProcess();
+    const raw = vm.flowNodes.find((node) => node.id === 'raw');
+    if (!raw) throw new Error('Expected raw node');
+
+    vm.onNodeClick({ node: raw });
+
+    expect(vm.flowEdges.filter((edge) => edge.selected)).toHaveLength(1);
+    expect(vm.flowEdges.find((edge) => edge.selected)).toMatchObject({ source: 'raw' });
+    expect(vm.selectedNodeContext.selectedNodeIds).toEqual(['raw']);
+    expect(vm.selectedNodeContext.selectedEdgeIds).toHaveLength(1);
+  });
+
+  it('allows a line to be selected independently after a Cell selection', async () => {
+    const vm = await mountEditor();
+    vm.openAddProcess('raw');
+    vm.selectedWorkProcessId = 'WP-PACK';
+    vm.confirmAddProcess();
+    const raw = vm.flowNodes.find((node) => node.id === 'raw');
+    const outputEdge = vm.flowEdges.find((edge) => edge.source !== 'raw');
+    if (!raw || !outputEdge) throw new Error('Expected raw Cell and output line');
+
+    vm.onNodeClick({ node: raw });
+    vm.onEdgeClick({ edge: outputEdge });
+
+    expect(vm.flowNodes.filter((node) => node.selected)).toHaveLength(0);
+    expect(vm.flowEdges.filter((edge) => edge.selected)).toEqual([
+      expect.objectContaining({ id: outputEdge.id }),
+    ]);
+  });
+
+  it('stores an independent version and continues with the incremented draft', async () => {
+    const vm = await mountEditor();
+    apiMocks.snapshotProductProcessWorkflow.mockResolvedValue({
+      success: true,
+      data: { ...JSON.parse(JSON.stringify(vm.definition)), version: 2, lockVersion: 1 },
+    });
+
+    await vm.snapshotWorkflow();
+
+    expect(apiMocks.snapshotProductProcessWorkflow).toHaveBeenCalledWith('F006', 'PT-PIG-400', 0);
+    expect(vm.definition).toMatchObject({ status: 'DRAFT', version: 2, lockVersion: 1 });
+    expect(vm.dirty).toBe(false);
   });
 
   it('uses the upstream material unit only as the onsite-created process legacy payload', async () => {
@@ -463,6 +593,37 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     expect(secondRaw.data.skuId).toBe('');
   });
 
+  it('normalizes every multi-input process to a non-empty per-batch free-choice group', async () => {
+    const vm = await mountEditor();
+    vm.openAddProcess('raw');
+    vm.selectedWorkProcessId = 'WP-PACK';
+    vm.confirmAddProcess();
+    const process = vm.flowNodes.find((node) => node.data.kind === 'PROCESS');
+    if (!process) throw new Error('Expected process node');
+
+    vm.addInputToProcess(process.id);
+    const firstTwoInputIds = process.data.ports
+      ?.filter((port) => port.direction === 'INPUT')
+      .map((port) => port.id) ?? [];
+    process.data.portGroups = [{
+      id: 'legacy-exact-one', direction: 'INPUT', label: '互相替代', mode: 'EXACTLY_ONE',
+      minSelections: 1, maxSelections: 1, portIds: firstTwoInputIds,
+    }];
+    vm.addInputToProcess(process.id);
+
+    const inputPorts = process.data.ports?.filter((port) => port.direction === 'INPUT') ?? [];
+    expect(inputPorts).toHaveLength(3);
+    expect(process.data.portGroups?.filter((group) => group.direction === 'INPUT')).toEqual([{
+      id: 'legacy-exact-one',
+      direction: 'INPUT',
+      label: '批次自由选择',
+      mode: 'AT_LEAST_ONE',
+      minSelections: 1,
+      maxSelections: 3,
+      portIds: inputPorts.map((port) => port.id),
+    }]);
+  });
+
   it('updates real process master data and refreshes the Cell without losing graph links', async () => {
     const vm = await mountEditor();
     vm.openAddProcess('raw');
@@ -484,6 +645,59 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     }));
     expect(process.data.processName).toBe('定量包装');
     expect(vm.flowEdges).toEqual(edgesBefore);
+  });
+
+  it('confirms a changed output kind, converts conflicting Cells, and unbinds their SKU and unit', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
+    const vm = await mountEditor();
+    vm.openAddProcess('raw');
+    vm.selectedWorkProcessId = 'WP-PACK';
+    vm.confirmAddProcess();
+    const process = vm.flowNodes.find((node) => node.data.kind === 'PROCESS');
+    if (!process) throw new Error('Expected process node');
+    const outputPort = process.data.ports?.find((port) => port.direction === 'OUTPUT');
+    const outputCell = vm.flowNodes.find((node) => node.id === outputPort?.materialNodeId);
+    if (!outputPort || !outputCell) throw new Error('Expected output port and Cell');
+    expect(outputCell.data).toMatchObject({ kind: 'FINISHED_GOOD', bound: true });
+
+    vm.openQuickEditProcess(process.id);
+    vm.processEditForm.defaultOutputMaterialKind = 'SEMI_FINISHED';
+    await vm.saveQuickEditProcess();
+
+    expect(ElMessageBox.confirm).toHaveBeenCalledWith(
+      expect.stringContaining('将改为半成品并解绑现有 成品 SKU'),
+      '确认修改产出类型',
+      expect.any(Object),
+    );
+    expect(apiMocks.updateWorkProcess).toHaveBeenCalledWith('F006', 'WP-PACK', expect.objectContaining({
+      defaultOutputMaterialKind: 'SEMI_FINISHED',
+    }));
+    expect(outputPort).toMatchObject({ materialKind: 'SEMI_FINISHED', unit: '' });
+    expect(outputPort.skuId).toBeUndefined();
+    expect(outputCell.data).toMatchObject({
+      kind: 'SEMI_FINISHED', skuId: '', baseUnit: '', bound: false,
+    });
+  });
+
+  it('does not update process master data or Workflow when output-kind confirmation is cancelled', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel');
+    const vm = await mountEditor();
+    vm.openAddProcess('raw');
+    vm.selectedWorkProcessId = 'WP-PACK';
+    vm.confirmAddProcess();
+    const process = vm.flowNodes.find((node) => node.data.kind === 'PROCESS');
+    if (!process) throw new Error('Expected process node');
+    const outputPort = process.data.ports?.find((port) => port.direction === 'OUTPUT');
+    const outputCell = vm.flowNodes.find((node) => node.id === outputPort?.materialNodeId);
+    if (!outputPort || !outputCell) throw new Error('Expected output port and Cell');
+
+    vm.openQuickEditProcess(process.id);
+    vm.processEditForm.defaultOutputMaterialKind = 'SEMI_FINISHED';
+    await vm.saveQuickEditProcess();
+
+    expect(apiMocks.updateWorkProcess).not.toHaveBeenCalled();
+    expect(outputPort.skuId).toBe('PT-PIG-400');
+    expect(outputCell.data).toMatchObject({ kind: 'FINISHED_GOOD', skuId: 'PT-PIG-400', bound: true });
   });
 
   it('keeps rapid output node, port, and edge IDs unique within one millisecond', async () => {

@@ -16,6 +16,8 @@ interface CascaderNode {
   label: string;
   name?: string;
   isCreate?: boolean;
+  isSearch?: boolean;
+  searchKind?: 'SEMI' | 'FINISHED';
   children?: CascaderNode[];
 }
 
@@ -39,16 +41,20 @@ describe('WorkflowSkuPicker (真·两级 cascader)', () => {
   it('一级只有「半成品/成品」，二级才是各自 SKU', () => {
     const options = cascader(mountPicker()).props('options') as CascaderNode[];
     expect(options.map((o) => o.label)).toEqual(['半成品', '成品']);
-    // 半成品二级 = 创建入口 + 两个半成品; 成品二级 = 一个成品
-    expect(options[0].children?.map((c) => c.value)).toEqual(['__CREATE__', 'SKU-PIG-SEMI', 'SKU-CHICKEN-SEMI']);
-    expect(options[1].children?.map((c) => c.value)).toEqual(['SKU-PIG-FIN']);
+    // 每个二级菜单首行固定搜索，其后才是创建入口和 SKU。
+    expect(options[0].children?.map((c) => c.value)).toEqual([
+      '__SEARCH_SEMI__', '__CREATE__', 'SKU-PIG-SEMI', 'SKU-CHICKEN-SEMI',
+    ]);
+    expect(options[1].children?.map((c) => c.value)).toEqual(['__SEARCH_FINISHED__', 'SKU-PIG-FIN']);
   });
 
-  it('现场创建半成品固定在「半成品」二级首位', () => {
+  it('搜索固定在二级首行，现场创建半成品紧随其后', () => {
     const options = cascader(mountPicker()).props('options') as CascaderNode[];
     const firstSemiChild = options[0].children?.[0];
-    expect(firstSemiChild?.value).toBe('__CREATE__');
-    expect(firstSemiChild?.isCreate).toBe(true);
+    const createSemiChild = options[0].children?.[1];
+    expect(firstSemiChild).toMatchObject({ value: '__SEARCH_SEMI__', isSearch: true, searchKind: 'SEMI' });
+    expect(createSemiChild?.value).toBe('__CREATE__');
+    expect(createSemiChild?.isCreate).toBe(true);
     // 成品分支不含创建入口
     expect(options[1].children?.some((c) => c.value === '__CREATE__')).toBe(false);
   });
@@ -59,6 +65,33 @@ describe('WorkflowSkuPicker (真·两级 cascader)', () => {
     expect((c.props('props') as { emitPath: boolean }).emitPath).toBe(false);
     c.vm.$emit('change', 'SKU-PIG-SEMI');
     expect(wrapper.emitted('change')).toEqual([['SKU-PIG-SEMI']]);
+  });
+
+  it('keeps the dropdown inside the canvas and shields its wheel events from Vue Flow', () => {
+    const c = cascader(mountPicker());
+    expect(c.props('teleported')).toBe(false);
+    expect(c.props('popperClass')).toContain('nowheel');
+  });
+
+  it('filters each submenu from its first-row search with pinyin initials or SKU code', async () => {
+    const wrapper = mountPicker();
+    const vm = wrapper.vm as unknown as {
+      setSearchQuery: (kind: 'SEMI' | 'FINISHED', value: string) => void;
+    };
+
+    vm.setSearchQuery('SEMI', 'gscj');
+    await wrapper.vm.$nextTick();
+    let options = cascader(wrapper).props('options') as CascaderNode[];
+    expect(options[0].children?.map((child) => child.value)).toEqual([
+      '__SEARCH_SEMI__', '__CREATE__', 'SKU-CHICKEN-SEMI',
+    ]);
+
+    vm.setSearchQuery('SEMI', 'SKU-PIG');
+    await wrapper.vm.$nextTick();
+    options = cascader(wrapper).props('options') as CascaderNode[];
+    expect(options[0].children?.map((child) => child.value)).toEqual([
+      '__SEARCH_SEMI__', '__CREATE__', 'SKU-PIG-SEMI',
+    ]);
   });
 
   it('filter-method 支持拼音首字母/字面子串, 大小写不限; 创建入口搜索时始终保留', () => {

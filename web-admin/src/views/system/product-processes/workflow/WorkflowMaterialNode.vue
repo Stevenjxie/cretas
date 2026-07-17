@@ -1,5 +1,6 @@
 <template>
   <div
+    ref="materialNodeRef"
     class="material-node"
     :class="[`kind-${kind.toLowerCase()}`, {
       selected,
@@ -24,21 +25,23 @@
 
     <div class="node-heading">
       <span class="kind-mark">{{ kindMark }}</span>
-      <div>
-        <div class="kind-label">{{ kindLabel }}</div>
-        <div class="material-name">{{ data.name || '未命名物料' }}</div>
+      <div class="kind-label">{{ kindLabel }}</div>
+      <div class="heading-actions">
+        <el-tag size="small" :type="data.skuId ? 'success' : 'warning'">
+          {{ data.skuId ? '已绑定' : '待绑定' }}
+        </el-tag>
+        <button
+          v-if="canWrite && data.skuId && (kind === 'SEMI_FINISHED' || kind === 'FINISHED_GOOD')"
+          type="button"
+          class="quick-edit nodrag"
+          title="快捷修改该 SKU"
+          aria-label="快捷修改 SKU"
+          @click.stop="emit('editSku')"
+        >✎</button>
       </div>
-      <el-tag size="small" :type="data.skuId ? 'success' : 'warning'">
-        {{ data.skuId ? '已绑定' : '待绑定' }}
-      </el-tag>
-      <button
-        v-if="canWrite && data.skuId && (kind === 'SEMI_FINISHED' || kind === 'FINISHED_GOOD')"
-        type="button"
-        class="quick-edit nodrag"
-        title="快捷修改该 SKU"
-        aria-label="快捷修改 SKU"
-        @click.stop="emit('editSku')"
-      >✎</button>
+      <div class="material-name" :title="data.name || '未命名物料'">
+        {{ data.name || '未命名物料' }}
+      </div>
     </div>
 
     <div class="identity-row">
@@ -54,30 +57,41 @@
       <span>{{ validationError }}</span>
     </div>
 
-    <el-cascader
+    <div
       v-if="kind === 'RAW_MATERIAL' && canWrite && rawMaterialSegments.length > 0"
-      ref="rawSegmentCascaderRef"
-      v-model="selectedRawSegmentPath"
-      class="nodrag nowheel raw-category-filter"
-      :options="rawMaterialSegments"
-      :props="rawSegmentCascaderProps"
-      placeholder="按 L1 / L2 / L3 筛选"
-      filterable
-      clearable
-      size="small"
-      :teleported="false"
-      data-testid="raw-segment-filter"
-      @change="handleRawSegmentChange"
-      @keydown.esc.stop="closeRawSegmentDropdown"
-    />
+      class="raw-category-filter-shell nodrag nowheel"
+      data-testid="raw-segment-filter-shell"
+      @wheel.stop
+    >
+      <el-cascader
+        ref="rawSegmentCascaderRef"
+        v-model="selectedRawSegmentPath"
+        class="raw-category-filter"
+        :options="rawMaterialSegments"
+        :props="rawSegmentCascaderProps"
+        placeholder="按 L1 / L2 / L3 筛选"
+        filterable
+        clearable
+        size="small"
+        :teleported="false"
+        popper-class="workflow-raw-segment-popper nowheel nodrag"
+        data-testid="raw-segment-filter"
+        @change="handleRawSegmentChange"
+        @visible-change="handleRawSegmentVisibleChange"
+        @keydown.esc.stop="closeRawSegmentDropdown"
+      />
+    </div>
 
     <el-select
       v-if="kind === 'RAW_MATERIAL' && canWrite"
+      ref="rawSelectorRef"
       class="nodrag nowheel raw-selector"
       :model-value="data.skuId"
       placeholder="选择入口原料 SKU"
       filterable
       size="small"
+      :teleported="false"
+      popper-class="workflow-raw-selector-popper nowheel nodrag"
       :filter-method="handleRawFilter"
       @visible-change="handleRawVisibleChange"
       @change="(value: string) => emit('selectRawSku', value)"
@@ -116,7 +130,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
 import { usePinyinFilter } from './pinyinInitials';
 import {
@@ -175,10 +189,13 @@ const emit = defineEmits<{
 }>();
 
 const selectedRawSegmentPath = ref<string[]>([]);
+const materialNodeRef = ref<HTMLElement | null>(null);
+const rawSegmentDropdownVisible = ref(false);
 interface CascaderExpose {
   togglePopperVisible: (visible?: boolean) => void;
 }
 const rawSegmentCascaderRef = ref<CascaderExpose | null>(null);
+const rawSelectorRef = ref<{ blur: () => void } | null>(null);
 const rawSegmentCascaderProps = {
   value: 'segmentCode',
   label: 'segmentLabel',
@@ -196,7 +213,33 @@ const rawCandidateOptions = computed(() => filterRawMaterialsBySegment(
 
 function closeRawSegmentDropdown(): void {
   rawSegmentCascaderRef.value?.togglePopperVisible(false);
+  rawSegmentDropdownVisible.value = false;
 }
+
+function handleRawSegmentVisibleChange(visible: boolean): void {
+  rawSegmentDropdownVisible.value = visible;
+}
+
+function handleDocumentPointerDown(event: PointerEvent): void {
+  if (!rawSegmentDropdownVisible.value) return;
+  const target = event.target;
+  if (target instanceof Node && materialNodeRef.value?.contains(target)) return;
+  closeRawSegmentDropdown();
+}
+
+function handleCloseAllDropdowns(): void {
+  closeRawSegmentDropdown();
+  rawSelectorRef.value?.blur();
+}
+
+onMounted(() => {
+  document.addEventListener('pointerdown', handleDocumentPointerDown, true);
+  window.addEventListener('workflow-close-dropdowns', handleCloseAllDropdowns);
+});
+onUnmounted(() => {
+  document.removeEventListener('pointerdown', handleDocumentPointerDown, true);
+  window.removeEventListener('workflow-close-dropdowns', handleCloseAllDropdowns);
+});
 
 function handleRawSegmentChange(path: string[]): void {
   const selectedCode = path.at(-1);
@@ -287,12 +330,18 @@ const kindMark = computed(() => ({
 }
 .validation-error-message strong { font-size: 12px; }
 .material-node :deep(.vue-flow__handle) {
-  width: 12px; height: 12px; opacity: 0.35;
+  width: 18px; height: 18px; opacity: 0.5; border-width: 3px;
+  transform-origin: center;
   transition: opacity 150ms ease, transform 120ms ease;
 }
 .material-node:hover :deep(.vue-flow__handle),
 .material-node.wf-valid :deep(.vue-flow__handle) { opacity: 1; }
-.material-node :deep(.vue-flow__handle):hover { transform: scale(1.3); cursor: crosshair; }
+.material-node :deep(.vue-flow__handle-left):hover {
+  opacity: 1; transform: translate(-50%, -50%) scale(1.35); cursor: crosshair;
+}
+.material-node :deep(.vue-flow__handle-right):hover {
+  opacity: 1; transform: translate(50%, -50%) scale(1.35); cursor: crosshair;
+}
 @media (prefers-reduced-motion: reduce) {
   .material-node, .material-node :deep(.vue-flow__handle) { transition: none; }
   .material-node.validation-attention { animation: none; }
@@ -319,7 +368,11 @@ const kindMark = computed(() => ({
 /* 原料=蓝灰, 半成品=绿(默认), 成品=紫 */
 .material-node.kind-raw_material { border-left-color: #6b7c93; }
 .material-node.kind-finished_good { border-left-color: #8b5cf6; }
-.node-heading { display: flex; align-items: flex-start; gap: 8px; }
+.node-heading {
+  display: grid; grid-template-columns: 28px minmax(0, 1fr) auto;
+  grid-template-rows: 28px auto; align-items: center; column-gap: 8px; row-gap: 6px;
+}
+.heading-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .quick-edit {
   display: grid; place-items: center; width: 24px; height: 24px; flex: 0 0 auto;
   padding: 0; border: 1px solid #d8e4ef; border-radius: 6px; background: #fff;
@@ -332,16 +385,23 @@ const kindMark = computed(() => ({
 }
 .kind-raw_material .kind-mark { color: #4a5b73; background: #eef1f6; }
 .kind-finished_good .kind-mark { color: #7141d8; background: #f2ecff; }
-.node-heading > div { min-width: 0; flex: 1; }
+.node-heading > * { min-width: 0; }
 .kind-label { color: #7a8599; font-size: 11px; }
-.material-name { margin-top: 2px; color: #1a2332; font-size: 14px; font-weight: 650; line-height: 1.35; }
+.material-name {
+  grid-column: 1 / -1; color: #1a2332; font-size: 14px; font-weight: 650;
+  line-height: 1.45; overflow-wrap: anywhere; word-break: normal;
+}
 .identity-row {
   display: flex; justify-content: space-between; gap: 8px; margin-top: 12px;
   padding: 8px; border-radius: 7px; background: #f7f9fc; font-size: 11px; color: #7a8599;
 }
-.identity-row strong { overflow: hidden; color: #344054; text-overflow: ellipsis; white-space: nowrap; }
+.identity-row strong {
+  min-width: 0; flex: 1; overflow: hidden; color: #344054;
+  text-align: right; text-overflow: ellipsis; white-space: nowrap;
+}
 .specification { margin-top: 6px; color: #7a8599; font-size: 11px; }
-.raw-selector, .raw-category-filter, .sku-selector { width: 100%; margin-top: 8px; }
+.raw-selector, .raw-category-filter-shell, .sku-selector { width: 100%; margin-top: 8px; }
+.raw-category-filter { width: 100%; }
 .node-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
 /* #3 BOM 为空时的提示 (fool-proof-design Rule 5: 不留死胡同, 给出下一步动作) */
 .bom-hint {

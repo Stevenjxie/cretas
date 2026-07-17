@@ -73,22 +73,11 @@
       </div>
       <div v-if="inputPorts.length > 1" class="port-relation nodrag" data-testid="input-port-relation">
         <div class="port-relation-control">
-          <span>投入关系</span>
-          <el-select
-            :model-value="relationMode('INPUT')"
-            :disabled="!canWrite || inputPortGroups.length > 1"
-            size="small"
-            data-testid="input-relation-select"
-            @change="(mode: PortSelectionMode) => updatePortRelation('INPUT', mode)"
-          >
-            <el-option v-for="option in relationOptions('INPUT')" :key="option.value" :label="option.label" :value="option.value" />
-          </el-select>
+          <span>投入方式</span>
+          <el-tag type="primary" effect="light" data-testid="input-free-choice-mode">批次自由选择（至少1个）</el-tag>
         </div>
-        <div class="port-relation-labels">
-          <el-tag v-if="inputPortGroups.length === 0" size="small" type="info">兼容旧配置 · 全部必投</el-tag>
-          <el-tag v-for="group in inputPortGroups" :key="group.id" size="small" type="info">
-            {{ group.label }} · {{ selectionModeLabel(group.mode, 'INPUT') }}
-          </el-tag>
+        <div class="port-relation-help" data-testid="input-relation-help">
+          每个批次至少选择1种，可选择1种、多种或全部。
         </div>
       </div>
       <div v-for="port in inputPorts" :key="port.id" class="port-row">
@@ -123,10 +112,13 @@
             :disabled="!canWrite || outputPortGroups.length > 1"
             size="small"
             data-testid="output-relation-select"
-            @change="(mode: PortSelectionMode) => updatePortRelation('OUTPUT', mode)"
+            @change="(mode: PortSelectionMode) => updateOutputRelation(mode)"
           >
             <el-option v-for="option in relationOptions('OUTPUT')" :key="option.value" :label="option.label" :value="option.value" />
           </el-select>
+        </div>
+        <div class="port-relation-help" data-testid="output-relation-help">
+          {{ relationDescription(relationMode('OUTPUT'), 'OUTPUT') }}
         </div>
         <div class="port-relation-labels">
           <el-tag v-if="outputPortGroups.length === 0" size="small" type="success">兼容旧配置 · 全部产出</el-tag>
@@ -152,33 +144,39 @@
 
     <section class="quantity-rule-section">
       <div class="section-title"><span>数量关系</span></div>
-      <div v-if="singleReadOnlyEquation" class="quantity-rule-note" data-testid="quantity-rule-note">
-        {{ singleReadOnlyEquation }}
-      </div>
-      <div v-else class="port-quantity-list" data-testid="port-quantity-list">
-        <div v-for="(port, index) in inputPorts" :key="`quantity:${port.id}`" class="port-quantity-row">
+      <div class="port-quantity-list" data-testid="port-quantity-list">
+        <div v-if="primaryOutput" class="quantity-baseline" data-testid="quantity-baseline">
+          <span>产出基准</span>
+          <strong>1 {{ primaryOutput.unit }} · {{ primaryOutput.materialName || '本工序产出' }}</strong>
+          <small v-if="primaryOutputSpecification">SKU 规格：{{ primaryOutputSpecification }}</small>
+          <small v-else>每一行直接说明 1 单位产出需要多少对应投入</small>
+        </div>
+        <div
+          v-for="(port, index) in inputPorts"
+          :key="`quantity:${port.id}`"
+          class="port-quantity-row"
+          :class="{ 'is-long-name': isLongMaterialName(port.materialName) }"
+        >
           <div class="quantity-port-name">
             <el-tag size="small" type="info">投入{{ index + 1 }}</el-tag>
             <span>{{ port.materialName || `投入 ${index + 1}` }}</span>
           </div>
-          <div v-if="index === 0" class="baseline-quantity" data-testid="primary-input-baseline">
-            1 {{ port.unit }}
-          </div>
-          <div v-else class="quantity-input-wrap">
-            <span class="equation-prefix">1 {{ primaryInput?.unit }} =</span>
+          <div class="quantity-input-wrap" data-testid="fixed-input-quantity">
             <el-input-number
               :model-value="port.standardQuantity || 1"
               :min="0.0001"
               :controls="false"
               :disabled="!canWrite"
-              :aria-label="`${port.materialName || '追加投入'}标准数量`"
+              :aria-label="`${port.materialName || `投入${index + 1}`}标准数量`"
               @focus="selectNumericInput"
               @change="(value: number | undefined) => updatePortQuantity(port.id, value)"
             />
-            <span>{{ port.unit }}</span>
+            <span>{{ port.unit }}投入</span>
+            <span class="equation-equals">=</span>
+            <strong>1{{ primaryOutput?.unit }}产出</strong>
           </div>
         </div>
-        <div v-for="(port, index) in outputPorts" :key="`quantity:${port.id}`" class="port-quantity-row">
+        <div v-for="(port, index) in secondaryOutputs" :key="`quantity:${port.id}`" class="port-quantity-row">
           <div class="quantity-port-name">
             <el-tag size="small" type="success">产出{{ index + 1 }}</el-tag>
             <span>{{ port.materialName || `产出 ${index + 1}` }}</span>
@@ -187,7 +185,7 @@
             {{ outputReadOnlyEquation(port) }}
           </div>
           <div v-else class="quantity-input-wrap" data-testid="fixed-output-quantity">
-            <span class="equation-prefix">1 {{ primaryInput?.unit }} =</span>
+            <span class="equation-prefix">1 {{ primaryOutput?.unit }}主产出 =</span>
             <el-input-number
               :model-value="port.standardQuantity || 1"
               :min="0.0001"
@@ -197,7 +195,7 @@
               @focus="selectNumericInput"
               @change="(value: number | undefined) => updatePortQuantity(port.id, value)"
             />
-            <span>{{ port.unit }}</span>
+            <span>{{ port.unit }}产出</span>
           </div>
         </div>
       </div>
@@ -261,21 +259,27 @@ const inputPorts = computed(() => props.data.ports.filter((port) => port.directi
 const outputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'OUTPUT'));
 const inputPortGroups = computed(() => (props.data.portGroups ?? []).filter((group) => group.direction === 'INPUT'));
 const outputPortGroups = computed(() => (props.data.portGroups ?? []).filter((group) => group.direction === 'OUTPUT'));
-const primaryInput = computed(() => [...inputPorts.value].sort((a, b) => a.ordinal - b.ordinal)[0]);
 const primaryOutput = computed(() => [...outputPorts.value].sort((a, b) => a.ordinal - b.ordinal)[0]);
-const singleReadOnlyEquation = computed(() => (
-  inputPorts.value.length === 1 && outputPorts.value.length === 1 && primaryOutput.value
-    ? outputReadOnlyEquation(primaryOutput.value)
-    : null
-));
+const secondaryOutputs = computed(() => outputPorts.value.filter((port) => port.id !== primaryOutput.value?.id));
+const primaryOutputSpecification = computed(() => {
+  const port = primaryOutput.value;
+  if (!port) return null;
+  const spec = port.skuId ? props.skuSpecifications?.[port.skuId] : undefined;
+  return workflowSkuSpecificationEquation(spec?.unit || port.unit, spec?.gramsPerUnit);
+});
 
 function outputReadOnlyEquation(port: ProcessPort): string | null {
-  const spec = port.skuId ? props.skuSpecifications?.[port.skuId] : undefined;
-  const skuEquation = workflowSkuSpecificationEquation(spec?.unit || port.unit, spec?.gramsPerUnit);
-  if (skuEquation) return `SKU 规格：${skuEquation}`;
   return port.quantityMode === 'AUTO_CONVERT'
-    ? workflowAutoConversionEquation(primaryInput.value?.unit, port.unit)
+    ? workflowAutoConversionEquation(primaryOutput.value?.unit, port.unit)
     : null;
+}
+
+function isLongMaterialName(name: string | undefined): boolean {
+  const visualLength = Array.from(name || '').reduce(
+    (total, character) => total + (/^[\x00-\x7F]$/.test(character) ? 1 : 2),
+    0,
+  );
+  return visualLength > 24;
 }
 
 function relationOptions(direction: 'INPUT' | 'OUTPUT'): Array<{ value: PortSelectionMode; label: string }> {
@@ -285,6 +289,13 @@ function relationOptions(direction: 'INPUT' | 'OUTPUT'): Array<{ value: PortSele
     { value: 'AT_LEAST_ONE', label: '至少选1' },
     { value: 'OPTIONAL', label: '可选' },
   ];
+}
+
+function relationDescription(mode: PortSelectionMode, direction: 'INPUT' | 'OUTPUT'): string {
+  if (mode === 'EXACTLY_ONE') return '组内只能选择一个。';
+  if (mode === 'AT_LEAST_ONE') return '可以选择一个或多个。';
+  if (mode === 'OPTIONAL') return '可以一个都不选。';
+  return direction === 'INPUT' ? '所有投入都必须选择。' : '所有产出都会生成。';
 }
 
 function selectionModeLabel(mode: PortSelectionMode, direction: 'INPUT' | 'OUTPUT'): string {
@@ -300,7 +311,8 @@ function relationMode(direction: 'INPUT' | 'OUTPUT'): PortSelectionMode {
   return groups.length === 1 ? groups[0].mode : 'ALL_REQUIRED';
 }
 
-function updatePortRelation(direction: 'INPUT' | 'OUTPUT', mode: PortSelectionMode): void {
+function updateOutputRelation(mode: PortSelectionMode): void {
+  const direction = 'OUTPUT' as const;
   const portIds = props.data.ports
     .filter((port) => port.direction === direction)
     .sort((left, right) => left.ordinal - right.ordinal)
@@ -356,12 +368,18 @@ function handleStyle(index: number, count: number): Record<string, string> {
 .process-node.wf-dim { opacity: 0.4; cursor: not-allowed; }
 .process-node.wf-valid { box-shadow: 0 0 0 2px #1b65a8, 0 0 12px rgba(27, 101, 168, 0.35); }
 .process-node :deep(.vue-flow__handle) {
-  width: 12px; height: 12px; opacity: 0.35;
+  width: 18px; height: 18px; opacity: 0.5; border-width: 3px;
+  transform-origin: center;
   transition: opacity 150ms ease, transform 120ms ease;
 }
 .process-node:hover :deep(.vue-flow__handle),
 .process-node.wf-valid :deep(.vue-flow__handle) { opacity: 1; }
-.process-node :deep(.vue-flow__handle):hover { transform: scale(1.3); cursor: crosshair; }
+.process-node :deep(.vue-flow__handle-left):hover {
+  opacity: 1; transform: translate(-50%, -50%) scale(1.35); cursor: crosshair;
+}
+.process-node :deep(.vue-flow__handle-right):hover {
+  opacity: 1; transform: translate(50%, -50%) scale(1.35); cursor: crosshair;
+}
 @media (prefers-reduced-motion: reduce) {
   .process-node, .process-node :deep(.vue-flow__handle) { transition: none; }
 }
@@ -401,24 +419,40 @@ function handleStyle(index: number, count: number): Record<string, string> {
 .port-relation { margin: 5px 0 7px; padding: 7px 8px; border-radius: 7px; background: #f7f9fc; }
 .port-relation-control { display: grid; grid-template-columns: auto minmax(150px, 1fr); align-items: center; gap: 8px; color: #475467; font-size: 12px; font-weight: 650; }
 .port-relation-control :deep(.el-select) { width: 100%; }
+.port-relation-help { margin-top: 5px; color: #667085; font-size: 12px; line-height: 1.5; }
 .port-relation-labels { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
 .quantity-rule-note {
   padding: 8px 10px; border-radius: 7px; background: #eef6ff; color: #1b65a8;
   font-size: 12px; font-weight: 600; line-height: 1.4;
 }
+.quantity-baseline {
+  display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 3px 8px;
+  padding: 8px 10px; border-radius: 7px; background: #eef6ff; color: #1b65a8;
+  font-size: 12px;
+}
+.quantity-baseline > span { font-weight: 650; }
+.quantity-baseline > strong { color: #174f7c; }
+.quantity-baseline > small { grid-column: 1 / -1; color: #667085; }
 .port-quantity-list { display: flex; flex-direction: column; gap: 8px; }
 .port-quantity-row {
-  display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 190px); gap: 10px;
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(158px, 42%); gap: 6px;
   align-items: center; min-height: 32px; padding: 6px 8px; border: 1px solid #edf2f7; border-radius: 7px;
 }
 .quantity-port-name { display: flex; align-items: center; gap: 6px; min-width: 0; color: #475467; font-size: 12px; }
 .quantity-port-name > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.port-quantity-row.is-long-name { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+.port-quantity-row.is-long-name .quantity-port-name > span:last-child {
+  overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; line-height: 1.35;
+}
+.port-quantity-row.is-long-name .quantity-input-wrap { justify-self: end; width: min(100%, 190px); }
 .baseline-quantity, .auto-convert-chip {
   padding: 5px 8px; border-radius: 6px; background: #eef6ff; color: #1b65a8;
   font-size: 12px; font-weight: 600; text-align: center;
 }
 .auto-convert-chip { background: #edf8f2; color: #2f855a; }
-.quantity-input-wrap { display: grid; grid-template-columns: auto minmax(70px, 1fr) auto; align-items: center; gap: 6px; color: #667085; font-size: 12px; }
+.quantity-input-wrap { display: grid; grid-template-columns: minmax(54px, 64px) auto auto auto; justify-content: end; align-items: center; gap: 3px; color: #667085; font-size: 11px; }
+.quantity-input-wrap strong { color: #2f855a; font-weight: 650; white-space: nowrap; }
+.equation-equals { color: #98a2b3; }
 .equation-prefix { white-space: nowrap; }
 .quantity-input-wrap :deep(.el-input-number) { width: 100%; }
 .quantity-input-wrap :deep(input) { user-select: text; }
@@ -455,5 +489,5 @@ function handleStyle(index: number, count: number): Record<string, string> {
   cursor: pointer;
 }
 .edge-output-add:hover { background: #eaf4ff; }
-:deep(.vue-flow__handle) { width: 10px; height: 10px; border: 2px solid #fff; background: #1b65a8; }
+:deep(.vue-flow__handle) { border-color: #fff; background: #1b65a8; }
 </style>

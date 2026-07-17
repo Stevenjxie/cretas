@@ -81,10 +81,14 @@ describe('WorkProcessAIChatPanel identity isolation', () => {
         }],
       },
     });
-    const wrapper = mountPanel({ factoryId: 'F007', productTypeId: 'PT-B' });
+    const selectionContext = { selectedNodeIds: ['process:packing'], selectedEdgeIds: ['edge:packing'] };
+    const wrapper = mountPanel({ factoryId: 'F007', productTypeId: 'PT-B', context: selectionContext });
     const vm = wrapper.vm as unknown as PanelVm;
     vm.input = 'Generate B';
     await vm.send();
+    expect(requestMocks.post).toHaveBeenCalledWith('/workflow-ai', expect.objectContaining({
+      params: expect.objectContaining({ context: selectionContext }),
+    }));
     const assistant = vm.messages.find((message) => message.role === 'assistant');
     expect(assistant?.sourceIdentity).toEqual({ factoryId: 'F007', productTypeId: 'PT-B' });
 
@@ -95,15 +99,31 @@ describe('WorkProcessAIChatPanel identity isolation', () => {
       { factoryId: 'F007', productTypeId: 'PT-B' },
     ]]);
   });
+
+  it('renders selected cells and lines as an attachment inside the composer', () => {
+    const wrapper = mountPanel({ contextLabel: '当前范围：2 个 Cell、6 条线' });
+    const composer = wrapper.get('[data-testid="workflow-ai-compose-bar"]');
+
+    expect(composer.get('.ai-context-attachment').text()).toContain('2 个 Cell、6 条线');
+    expect(composer.get('.ai-single-input').attributes('placeholder')).toBe('输入想要的修改');
+    expect(wrapper.find('.ai-context-chip').exists()).toBe(false);
+  });
 });
 
-function mountPanel(overrides: Partial<{ factoryId: string; productTypeId: string }> = {}) {
+function mountPanel(overrides: Partial<{
+  factoryId: string;
+  productTypeId: string;
+  context: Record<string, unknown>;
+  contextLabel: string;
+}> = {}) {
   return shallowMount(WorkProcessAIChatPanel, {
     props: {
       factoryId: overrides.factoryId ?? 'F006',
       productTypeId: overrides.productTypeId ?? 'PT-A',
       endpoint: '/workflow-ai',
       moduleCode: 'product_process_workflow_config',
+      context: overrides.context ?? {},
+      contextLabel: overrides.contextLabel,
     },
   });
 }

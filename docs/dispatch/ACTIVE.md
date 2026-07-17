@@ -6,11 +6,11 @@
 
 ## 在飞任务
 
-- `WF-UX-20260718-01` | `in-progress` | Owner: Codex `/root` | Base SHA: `c39ef12f4fb87878184d114f9a69b7a42f92af05` | 修复 Workflow 编辑器原料去重、下拉收起、布局连线、投入命名、单位换算和工序快捷编辑 | 验收：目标 Vitest + Web build + F006 浏览器聚焦验证
+- `WF-UX-20260718-01` | `review` | Owner: Codex `/root` | Base SHA: `c39ef12f4fb87878184d114f9a69b7a42f92af05` | 完成 Workflow 编辑器交互、选择与连线、响应式单位换算、SKU 搜索、产出类型转换、BOM 发布门禁、独立版本和内嵌 AI Composer | 验收：目标 Vitest + Web build + Java 单生命周期目标测试与可信 JAR + F006 浏览器聚焦验证
 
 ## Scope 锁地图
 
-- `WF-UX-20260718-01`: `web-admin/src/views/system/product-processes/workflow/**`、对应单元测试、`backend/java/cretas-api/src/main/java/com/cretas/aims/dto/producttype/ProductTypeOptionDTO.java`、`backend/java/cretas-api/src/main/java/com/cretas/aims/repository/ProductTypeRepository.java`、`backend/java/cretas-api/src/test/java/com/cretas/aims/repository/ProductMasterDataRepositoryQueryValidationTest.java`、`docs/dispatch/ACTIVE.md` 与当日归档。补充 Java scope 用于让 Workflow SKU 选项直接继承 `gramsPerUnit`；Repository 投影变更必须通过真实 JPA Context 门禁。
+- `WF-UX-20260718-01`: `web-admin/src/views/system/product-processes/workflow/**`、`web-admin/src/views/system/product-processes/index.vue`、共享 `WorkProcessAIChatPanel.vue` 及测试、后端 Workflow controller/entity/service/validator、产品类型 DTO/Repository、对应 controller/service/validation/process-entry/JPA Context 测试、Flyway Workflow migration、`docs/dispatch/ACTIVE.md` 与当日归档。Java scope 覆盖 `gramsPerUnit`、多投入运行时、BOM 发布门禁和独立版本；Repository/Entity 变更必须通过真实 JPA Context 门禁。
 
 ## 阻塞项
 
