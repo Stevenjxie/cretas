@@ -1,5 +1,12 @@
 # Dispatch 归档 — 2026-07-17
 
+## F006 数量、计价、采购与 AI 契约闭环
+
+| ID | Base SHA | Owner | Result |
+|---|---|---|---|
+| CFX-20260717-BE | `2233797dc8d6417885b628e45eab4a687f7ce0ee` | Codex coordinator | 统一 BOM、采购单、收货与采购建议的数量/计价单位契约及换算因子；修复付款方式、供应商历史、AI 半成品/日期/单位/模式门禁，并补齐 SKU 复制与自动采购的价格契约。目标测试、真实 JPA Context、编码检查及 `git diff --check` 通过；[PR #1413](https://github.com/Stevenjxie/cretas/pull/1413) 合并为 `57150296ad0a681e871e4a8dc2275f91bbc0d77d`。 |
+| CFX-20260717-WEB | `2233797dc8d6417885b628e45eab4a687f7ce0ee` | Codex coordinator | 修复 BOM、采购草稿、AI 创建门禁、枚举回显和成本汇总单位显示；旧成本接口继续按盒口径兼容，无权威元/kg 时不猜测。目标 Vitest、类型检查、生产构建、编码检查及 `git diff --check` 通过；[PR #1414](https://github.com/Stevenjxie/cretas/pull/1414) 合并为 `9baff829c175f1f0b2fbaa36b74b95baa587ce0e`。 |
+
 ## 单位与 SKU 规格修正
 
 | ID | Base SHA | Owner | Result |
