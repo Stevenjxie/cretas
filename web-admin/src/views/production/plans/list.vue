@@ -66,9 +66,13 @@ import {
 import {
   resolvePlanWorkflowCandidates,
   workflowCandidateBindingProductTypeId,
-  workflowCandidateDisplayName,
+  workflowCandidateExtraOutputs,
+  workflowCandidateOutputIds,
+  workflowCandidateProcessSummary,
+  workflowCandidateTopologyLabel,
   type PlanWorkflowResolutionMode,
 } from './productionPlanWorkflowResolution';
+import WorkflowRoutePreview from './components/WorkflowRoutePreview.vue';
 import ProcessSheet from '../components/processSheet/ProcessSheet.vue';
 import ProductionSummaryDialog from '../components/ProductionSummaryDialog.vue';
 import {
@@ -728,15 +732,26 @@ function handleProductChange(productTypeId: string) {
 // ========== raw-centric 多SKU (2026-07-13): 多选「生产成品」→ 解析共用 raw workflow ==========
 // 非 CUSTOMER_ORDER 来源专用 (设计文档 §13)。
 const resolvingWorkflow = ref(false);
+const workflowCandidateDialogVisible = ref(false);
+const confirmingWorkflowCandidate = ref(false);
+const pendingCandidateWorkflowId = ref<number | null>(null);
+let preferredWorkflowSelection: {
+  workflowId: number;
+  definitionVersion: number;
+  targetKey: string;
+} | null = null;
 let workflowResolveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 // 防竞态: 快速切换选中集时, 老的 in-flight 请求可能比新请求晚回, 用单调递增代
 // (generation) 丢弃过期响应, 避免旧结果覆盖新选择的解析结果。
 let workflowResolveGeneration = 0;
 
 function resetWorkflowResolutionState() {
+  workflowResolveGeneration += 1;
   planForm.value.resolutionMode = '';
   planForm.value.resolvedCandidates = [];
   planForm.value.selectedCandidateWorkflowId = null;
+  workflowCandidateDialogVisible.value = false;
+  pendingCandidateWorkflowId.value = null;
 }
 
 async function applyResolvedWorkflowCandidate(candidate: WorkflowResolutionCandidate) {
@@ -755,10 +770,56 @@ async function applyResolvedWorkflowCandidate(candidate: WorkflowResolutionCandi
   await loadBomProcesses(bindingProductTypeId);
 }
 
-function handleWorkflowCandidateSelect(workflowId: number) {
-  planForm.value.selectedCandidateWorkflowId = workflowId;
-  const candidate = planForm.value.resolvedCandidates.find((item) => item.workflowId === workflowId);
-  if (candidate) void applyResolvedWorkflowCandidate(candidate);
+function openWorkflowCandidateDialog() {
+  const candidates = planForm.value.resolvedCandidates;
+  if (candidates.length === 0) return;
+  pendingCandidateWorkflowId.value = planForm.value.selectedCandidateWorkflowId
+    ?? (candidates.length === 1 ? candidates[0].workflowId : null);
+  workflowCandidateDialogVisible.value = true;
+}
+
+function candidateExtraOutputNames(candidate: WorkflowResolutionCandidate): string[] {
+  const extraIds = new Set(workflowCandidateExtraOutputs(
+    candidate,
+    planForm.value.targetFinishedGoodIds,
+  ));
+  return (candidate.terminalOutputs || [])
+    .filter((output) => extraIds.has(output.productTypeId))
+    .map((output) => output.productName || output.productTypeId);
+}
+
+async function confirmWorkflowCandidateSelection() {
+  const candidate = planForm.value.resolvedCandidates.find(
+    (item) => item.workflowId === pendingCandidateWorkflowId.value,
+  );
+  if (!candidate) {
+    ElMessage.warning('请选择一条生产工序路线');
+    return;
+  }
+  const completeOutputs = workflowCandidateOutputIds(candidate);
+  const extraOutputs = workflowCandidateExtraOutputs(
+    candidate,
+    planForm.value.targetFinishedGoodIds,
+  );
+  if (extraOutputs.length > 0) {
+    preferredWorkflowSelection = {
+      workflowId: candidate.workflowId,
+      definitionVersion: candidate.definitionVersion,
+      targetKey: completeOutputs.join(','),
+    };
+    workflowCandidateDialogVisible.value = false;
+    planForm.value.targetFinishedGoodIds = completeOutputs;
+    ElMessage.success('已把该 Workflow 的额外联产成品加入本计划');
+    return;
+  }
+  confirmingWorkflowCandidate.value = true;
+  try {
+    planForm.value.selectedCandidateWorkflowId = candidate.workflowId;
+    await applyResolvedWorkflowCandidate(candidate);
+    workflowCandidateDialogVisible.value = false;
+  } finally {
+    confirmingWorkflowCandidate.value = false;
+  }
 }
 
 function goToWorkflowConfig(finishedGoodIds: string[]) {
@@ -782,10 +843,28 @@ async function resolveTargetFinishedGoods(ids: string[]): Promise<void> {
     const resolution = resolvePlanWorkflowCandidates(ids, res.data.candidates || []);
     planForm.value.resolutionMode = resolution.mode;
     planForm.value.resolvedCandidates = resolution.candidates;
-    if (resolution.candidates.length === 1) {
+    const preferred = preferredWorkflowSelection?.targetKey === ids.join(',')
+      ? resolution.candidates.find((candidate) =>
+          candidate.workflowId === preferredWorkflowSelection?.workflowId
+          && candidate.definitionVersion === preferredWorkflowSelection?.definitionVersion)
+      : undefined;
+    preferredWorkflowSelection = null;
+    if (preferred) {
+      planForm.value.selectedCandidateWorkflowId = preferred.workflowId;
+      await applyResolvedWorkflowCandidate(preferred);
+    } else if (resolution.candidates.length === 1 && resolution.candidates[0].exactMatch) {
       const candidate = resolution.candidates[0];
       planForm.value.selectedCandidateWorkflowId = candidate.workflowId;
       await applyResolvedWorkflowCandidate(candidate);
+    } else if (resolution.candidates.length > 0) {
+      // 同层歧义，或唯一候选包含额外联产成品：必须弹窗显式确认。
+      planForm.value.selectedCandidateWorkflowId = null;
+      planForm.value.productTypeId = '';
+      hasActiveWorkflow.value = false;
+      productWorkProcessList.value = [];
+      pendingCandidateWorkflowId.value = resolution.candidates.length === 1
+        ? resolution.candidates[0].workflowId : null;
+      workflowCandidateDialogVisible.value = true;
     } else {
       // 无候选或数据异常出现多个激活候选时，必须显式处理，不能退回 legacy 产品路径。
       planForm.value.selectedCandidateWorkflowId = null;
@@ -794,7 +873,10 @@ async function resolveTargetFinishedGoods(ids: string[]): Promise<void> {
       productWorkProcessList.value = [];
     }
   } catch (e) {
-    if (myGeneration === workflowResolveGeneration) handleCatchError(e, '解析工序图失败');
+    if (myGeneration === workflowResolveGeneration) {
+      preferredWorkflowSelection = null;
+      handleCatchError(e, '解析工序图失败');
+    }
   } finally {
     if (myGeneration === workflowResolveGeneration) resolvingWorkflow.value = false;
   }
@@ -822,10 +904,9 @@ const nonSoSubmitBlocked = computed(() => {
   if (planForm.value.sourceType === 'CUSTOMER_ORDER') return false;
   const ids = planForm.value.targetFinishedGoodIds;
   if (ids.length === 0) return false;
+  if (resolvingWorkflow.value || planForm.value.resolutionMode === '') return true;
   if (planForm.value.resolutionMode === 'NONE') return true;
-  if (planForm.value.resolvedCandidates.length > 1
-    && planForm.value.selectedCandidateWorkflowId == null) return true;
-  return false;
+  return planForm.value.selectedCandidateWorkflowId == null;
 });
 // ========== /raw-centric 多SKU ==========
 
@@ -885,6 +966,10 @@ function handleCreate() {
   productWorkProcessList.value = [];
   hasActiveWorkflow.value = false;
   resolvingWorkflow.value = false;
+  workflowCandidateDialogVisible.value = false;
+  pendingCandidateWorkflowId.value = null;
+  preferredWorkflowSelection = null;
+  workflowResolveGeneration += 1;
   // T135 ITEM #1: 默认 CUSTOMER_ORDER — 预加载可选销售订单列表
   if (selectableSalesOrders.value.length === 0) loadSelectableSalesOrders();
   dialogVisible.value = true;
@@ -1004,6 +1089,8 @@ async function submitPlan() {
     const payload: Record<string, unknown> = { ...rest };
     if (resolutionMode === 'SINGLE_OUTPUT' || resolutionMode === 'SHARED_MULTI_OUTPUT') {
       payload.targetFinishedGoodIds = targetFinishedGoodIds;
+      payload.selectedWorkflowId = resolvedWorkflowCandidate.value?.workflowId;
+      payload.selectedWorkflowVersion = resolvedWorkflowCandidate.value?.definitionVersion;
     }
     const response = await post(`/${factoryId.value}/production-plans`, payload);
     if (response.success) {
@@ -1017,7 +1104,16 @@ async function submitPlan() {
     // 409 WORKFLOW_RESOLUTION_NOT_COVERED: 双保险 — interceptor 已弹 sticky toast,
     // 这里额外给「去产品工序配置」跳转按钮 (Rule 5: 不留死胡同)。
     const err = error as { status?: number; code?: string; message?: string };
-    if (err?.status === 409 && err?.code === 'WORKFLOW_RESOLUTION_NOT_COVERED') {
+    if (err?.status === 409 && err?.code === 'WORKFLOW_SELECTED_VERSION_CHANGED') {
+      resetWorkflowResolutionState();
+      ElMessageBox.alert(
+        err.message || '所选 Workflow 已被切换或失效，请重新选择',
+        '工序版本已变化',
+        { confirmButtonText: '重新解析', type: 'warning' },
+      ).then(() => {
+        void resolveTargetFinishedGoods(planForm.value.targetFinishedGoodIds.slice());
+      }).catch(() => { /* 用户关闭，保持提交阻塞 */ });
+    } else if (err?.status === 409 && err?.code === 'WORKFLOW_RESOLUTION_NOT_COVERED') {
       ElMessageBox.confirm(
         err.message || (planForm.value.targetFinishedGoodIds.length === 1
           ? '该产品没有单产出 Workflow，请前往创建单产出 Workflow'
@@ -2929,6 +3025,8 @@ async function handleDialogClose() {
       return;
     }
   }
+  workflowCandidateDialogVisible.value = false;
+  preferredWorkflowSelection = null;
   dialogVisible.value = false;
 }
 
@@ -3684,57 +3782,62 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             正在解析工序图…
           </div>
           <template v-else-if="planForm.targetFinishedGoodIds.length > 0">
-            <div v-if="planForm.resolutionMode === 'SINGLE_OUTPUT' && hasResolvedWorkflowCandidate" style="margin-top: 8px;">
-              <el-tag type="success" size="small">已匹配单产出 Workflow</el-tag>
-            </div>
             <div
-              v-else-if="planForm.resolutionMode === 'SHARED_MULTI_OUTPUT' && planForm.resolvedCandidates.length === 1"
-              style="margin-top: 8px; padding: 10px; border: 1px solid var(--el-border-color, #dcdfe6); border-radius: 4px;"
+              v-if="hasResolvedWorkflowCandidate && resolvedWorkflowCandidate"
+              class="selected-workflow-route"
             >
-              <div style="font-weight: 600;">{{ workflowCandidateDisplayName(planForm.resolvedCandidates[0]) }}</div>
-              <div style="margin: 6px 0;">
+              <div class="selected-workflow-route__head">
+                <div>
+                  <span class="selected-workflow-route__eyebrow">本计划已固定工序路线</span>
+                  <strong>{{ workflowCandidateProcessSummary(resolvedWorkflowCandidate) }}</strong>
+                </div>
+                <el-popover
+                  trigger="hover"
+                  placement="right-start"
+                  :width="780"
+                  :show-after="120"
+                  :hide-after="120"
+                >
+                  <WorkflowRoutePreview
+                    :nodes="resolvedWorkflowCandidate.previewNodes"
+                    :edges="resolvedWorkflowCandidate.previewEdges"
+                  />
+                  <template #reference>
+                    <el-button size="small" plain @click.stop>悬浮查看 Cell 图</el-button>
+                  </template>
+                </el-popover>
+              </div>
+              <div class="selected-workflow-route__meta">
+                <el-tag type="success" size="small">{{ workflowCandidateTopologyLabel(resolvedWorkflowCandidate) }}</el-tag>
+                <span>版本 v{{ resolvedWorkflowCandidate.definitionVersion }}</span>
+              </div>
+              <div class="selected-workflow-route__outputs">
                 <el-tag
-                  v-for="t in (planForm.resolvedCandidates[0].terminalOutputs || [])"
+                  v-for="t in (resolvedWorkflowCandidate.terminalOutputs || [])"
                   :key="t.productTypeId"
                   size="small"
-                  style="margin-right: 4px; margin-bottom: 4px;"
                 >→ {{ t.productName }}</el-tag>
               </div>
-              <el-tag :type="planForm.resolvedCandidates[0].exactMatch ? 'success' : 'warning'" size="small">
-                {{ planForm.resolvedCandidates[0].exactMatch ? '精确匹配' : '该 Workflow 还包含其它共同产出' }}
-              </el-tag>
             </div>
-            <div v-else-if="planForm.resolvedCandidates.length > 1" style="margin-top: 8px;">
-              <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-bottom: 6px;">
-                检测到多个可用 Workflow，请选择本计划使用的版本：
-              </div>
-              <el-radio-group
-                v-model="planForm.selectedCandidateWorkflowId"
-                style="width: 100%; display: flex; flex-direction: column; gap: 8px;"
-                @change="handleWorkflowCandidateSelect"
+            <el-alert
+              v-else-if="planForm.resolvedCandidates.length > 0"
+              type="warning"
+              show-icon
+              :closable="false"
+              class="workflow-route-decision-alert"
+              :title="planForm.resolvedCandidates.length > 1
+                ? '多个 Workflow 处于同一匹配层级，需要选择实际生产路线'
+                : '该 Workflow 会同时产出其它成品，需要确认完整产出集合'"
+            >
+              <el-button
+                type="warning"
+                plain
+                size="small"
+                @click="openWorkflowCandidateDialog"
               >
-                <el-radio
-                  v-for="c in planForm.resolvedCandidates"
-                  :key="c.workflowId"
-                  :label="c.workflowId"
-                  border
-                  style="height: auto; width: 100%; margin: 0; padding: 10px; white-space: normal;"
-                >
-                  <div style="font-weight: 600;">{{ workflowCandidateDisplayName(c) }} · v{{ c.definitionVersion }}</div>
-                  <div style="margin: 6px 0;">
-                    <el-tag
-                      v-for="t in (c.terminalOutputs || [])"
-                      :key="t.productTypeId"
-                      size="small"
-                      style="margin-right: 4px; margin-bottom: 4px;"
-                    >→ {{ t.productName }}</el-tag>
-                  </div>
-                  <el-tag :type="c.exactMatch ? 'success' : 'warning'" size="small">
-                    {{ c.exactMatch ? '精确匹配' : '含额外成品' }}
-                  </el-tag>
-                </el-radio>
-              </el-radio-group>
-            </div>
+                选择生产工序路线
+              </el-button>
+            </el-alert>
             <el-alert
               v-else-if="planForm.resolutionMode === 'NONE' && planForm.targetFinishedGoodIds.length === 1"
               type="error"
@@ -3909,6 +4012,103 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
       <template #footer>
         <el-button @click="handleDialogClose">取消</el-button>
         <el-button type="primary" :loading="dialogLoading" :disabled="nonSoSubmitBlocked" @click="submitPlan">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="workflowCandidateDialogVisible"
+      title="选择本计划使用的生产工序路线"
+      width="880px"
+      top="7vh"
+      append-to-body
+      destroy-on-close
+      :close-on-click-modal="false"
+    >
+      <el-alert
+        type="info"
+        show-icon
+        :closable="false"
+        class="workflow-candidate-dialog__hint"
+        title="系统只展示当前最高优先层的候选。Workflow 名称不作为判断依据，请核对中间工序、投入和完整产出。"
+      />
+      <el-radio-group v-model="pendingCandidateWorkflowId" class="workflow-candidate-list">
+        <div
+          v-for="candidate in planForm.resolvedCandidates"
+          :key="candidate.workflowId"
+          :class="[
+            'workflow-candidate-card',
+            { 'is-selected': pendingCandidateWorkflowId === candidate.workflowId },
+          ]"
+          @click="pendingCandidateWorkflowId = candidate.workflowId"
+        >
+          <div class="workflow-candidate-card__top">
+            <el-radio :label="candidate.workflowId">
+              <span class="workflow-candidate-card__process">
+                {{ workflowCandidateProcessSummary(candidate) }}
+              </span>
+            </el-radio>
+            <el-popover
+              trigger="hover"
+              placement="right-start"
+              :width="780"
+              :show-after="120"
+              :hide-after="120"
+            >
+              <WorkflowRoutePreview
+                :nodes="candidate.previewNodes"
+                :edges="candidate.previewEdges"
+              />
+              <template #reference>
+                <el-button
+                  class="workflow-preview-trigger"
+                  type="primary"
+                  plain
+                  size="small"
+                  @click.stop
+                >
+                  悬浮查看 Cell 连线
+                </el-button>
+              </template>
+            </el-popover>
+          </div>
+
+          <div class="workflow-candidate-card__meta">
+            <el-tag size="small" type="info">{{ workflowCandidateTopologyLabel(candidate) }}</el-tag>
+            <span>版本 v{{ candidate.definitionVersion }}</span>
+            <span v-if="candidate.ownerProductName">归属 {{ candidate.ownerProductName }}</span>
+          </div>
+
+          <div class="workflow-candidate-card__outputs">
+            <span class="workflow-candidate-card__label">完整产出</span>
+            <el-tag
+              v-for="output in (candidate.terminalOutputs || [])"
+              :key="output.productTypeId"
+              size="small"
+              :type="workflowCandidateExtraOutputs(candidate, planForm.targetFinishedGoodIds).includes(output.productTypeId)
+                ? 'warning' : 'success'"
+            >
+              {{ output.productName || output.productTypeId }}
+            </el-tag>
+          </div>
+
+          <el-alert
+            v-if="candidateExtraOutputNames(candidate).length > 0"
+            type="warning"
+            :closable="false"
+            :title="`确认后会把额外联产成品加入本计划：${candidateExtraOutputNames(candidate).join('、')}`"
+          />
+        </div>
+      </el-radio-group>
+      <template #footer>
+        <el-button @click="workflowCandidateDialogVisible = false">暂不选择</el-button>
+        <el-button
+          type="primary"
+          :loading="confirmingWorkflowCandidate"
+          :disabled="pendingCandidateWorkflowId == null"
+          @click="confirmWorkflowCandidateSelection"
+        >
+          确认并固定该路线
+        </el-button>
       </template>
     </el-dialog>
 
@@ -5367,6 +5567,145 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
   font-size: 12px;
 }
 
+.selected-workflow-route {
+  width: 100%;
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid #b9ddc6;
+  border-radius: 10px;
+  background: #f5fbf7;
+}
+
+.selected-workflow-route__head,
+.workflow-candidate-card__top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.selected-workflow-route__head > div:first-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.selected-workflow-route__eyebrow {
+  color: #548066;
+  font-size: 11px;
+}
+
+.selected-workflow-route__head strong,
+.workflow-candidate-card__process {
+  color: #1d2c3d;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.selected-workflow-route__meta,
+.selected-workflow-route__outputs,
+.workflow-candidate-card__meta,
+.workflow-candidate-card__outputs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.selected-workflow-route__meta {
+  margin-top: 9px;
+  color: #667085;
+  font-size: 12px;
+}
+
+.selected-workflow-route__outputs {
+  margin-top: 8px;
+}
+
+.workflow-route-decision-alert {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.workflow-route-decision-alert :deep(.el-alert__content) {
+  width: 100%;
+}
+
+.workflow-route-decision-alert .el-button {
+  margin-top: 9px;
+}
+
+.workflow-candidate-dialog__hint {
+  margin-bottom: 14px;
+}
+
+.workflow-candidate-list {
+  display: flex;
+  width: 100%;
+  max-height: 58vh;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  padding: 2px 4px 4px 2px;
+}
+
+.workflow-candidate-card {
+  padding: 14px 16px;
+  border: 1px solid #d9e1ea;
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
+}
+
+.workflow-candidate-card:hover {
+  border-color: #91b9e9;
+  box-shadow: 0 6px 18px rgba(47, 104, 170, 0.09);
+}
+
+.workflow-candidate-card.is-selected {
+  border-color: var(--el-color-primary, #409eff);
+  background: #f5f9ff;
+  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.1);
+}
+
+.workflow-candidate-card__top :deep(.el-radio) {
+  min-width: 0;
+  height: auto;
+  flex: 1;
+  align-items: flex-start;
+  white-space: normal;
+}
+
+.workflow-candidate-card__top :deep(.el-radio__label) {
+  min-width: 0;
+  padding-right: 8px;
+  white-space: normal;
+}
+
+.workflow-candidate-card__meta {
+  margin: 9px 0;
+  color: #7a8695;
+  font-size: 12px;
+}
+
+.workflow-candidate-card__outputs {
+  padding-top: 9px;
+  border-top: 1px solid #edf0f4;
+}
+
+.workflow-candidate-card__label {
+  margin-right: 2px;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.workflow-candidate-card :deep(.el-alert) {
+  margin-top: 10px;
+}
+
 @media (max-width: 760px) {
   .settlement-consumption-row,
   .receipt-diff-panel,
@@ -5376,6 +5715,11 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 
   .receipt-diff-panel {
     margin-left: 0;
+  }
+
+  .selected-workflow-route__head,
+  .workflow-candidate-card__top {
+    flex-direction: column;
   }
 }
 

@@ -106,14 +106,49 @@ class ProductWorkflowUnifiedResolutionTest {
     }
 
     @Test
-    void duplicateActiveSingleOutputWorkflowsFailLoudly() {
+    void duplicateActiveSingleOutputWorkflowsAreReturnedForExplicitSelection() {
         activate(41L, "ANCHOR-A", List.of("RAW-A"), List.of("P1"), LocalDateTime.now());
         activate(42L, "ANCHOR-B", List.of("RAW-B"), List.of("P1"), LocalDateTime.now().minusDays(1));
 
-        BusinessException error = assertThrows(BusinessException.class,
-                () -> service.resolveForOutputs("F1", List.of("P1")));
+        WorkflowOutputResolutionDTO result = service.resolveForOutputs("F1", List.of("P1"));
 
-        assertEquals("WORKFLOW_SINGLE_OUTPUT_AMBIGUOUS", error.getErrorCode());
+        assertEquals(List.of(41L, 42L), result.getCandidates().stream()
+                .map(WorkflowOutputResolutionDTO.Candidate::getWorkflowId).toList());
+        assertEquals("匹配到多条同优先级 Workflow，请根据工序链选择本计划使用的版本", result.getMessage());
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.resolveProcessPath("F1", "P1"));
+        assertEquals("WORKFLOW_RESOLUTION_AMBIGUOUS", error.getErrorCode());
+    }
+
+    @Test
+    void multiSelectionReturnsOnlyTheSmallestSupersetLayer() {
+        activate(43L, "ANCHOR-SMALL-A", List.of("RAW-A"), List.of("P1", "P2", "P3"),
+                LocalDateTime.now());
+        activate(44L, "ANCHOR-LARGE", List.of("RAW-B"), List.of("P1", "P2", "P3", "P4"),
+                LocalDateTime.now().minusHours(1));
+        activate(45L, "ANCHOR-SMALL-B", List.of("RAW-C"), List.of("P1", "P2", "P3"),
+                LocalDateTime.now().minusHours(2));
+        when(products.findByIdAndFactoryId("P4", "F1")).thenReturn(Optional.of(product("P4")));
+
+        WorkflowOutputResolutionDTO result = service.resolveForOutputs("F1", List.of("P1", "P2"));
+
+        assertEquals(List.of(43L, 45L), result.getCandidates().stream()
+                .map(WorkflowOutputResolutionDTO.Candidate::getWorkflowId).toList());
+        assertEquals(false, result.getCandidates().getFirst().isExactMatch());
+    }
+
+    @Test
+    void candidateCarriesSanitizedProcessAndCellPreview() {
+        activate(46L, "ANCHOR-PREVIEW", List.of("RAW-A"), List.of("P1"), LocalDateTime.now());
+
+        WorkflowOutputResolutionDTO.Candidate candidate = service.resolveForOutputs("F1", List.of("P1"))
+                .getCandidates().getFirst();
+
+        assertEquals(List.of("原料处理"), candidate.getProcessSteps());
+        assertEquals(3, candidate.getPreviewNodes().size());
+        assertEquals("原料处理", candidate.getPreviewNodes().stream()
+                .filter(node -> "PROCESS".equals(node.getKind())).findFirst().orElseThrow().getLabel());
     }
 
     @Test
@@ -129,6 +164,20 @@ class ProductWorkflowUnifiedResolutionTest {
         assertEquals(52L, result.workflowId());
     }
 
+    @Test
+    void pinnedPlanContractRejectsAWorkflowVersionThatIsNoLongerTheActiveSelection() {
+        activate(53L, "ANCHOR-PINNED", List.of("RAW-A"), List.of("P1"), LocalDateTime.now());
+
+        WorkflowPlanOutputContract contract = service.resolvePinnedPlanOutputContract(
+                "F1", "ANCHOR-PINNED", 53L, 1, List.of("P1"));
+        assertEquals(53L, contract.workflowId());
+
+        BusinessException stale = assertThrows(BusinessException.class,
+                () -> service.resolvePinnedPlanOutputContract(
+                        "F1", "ANCHOR-PINNED", 53L, 2, List.of("P1")));
+        assertEquals("WORKFLOW_SELECTED_VERSION_CHANGED", stale.getErrorCode());
+    }
+
     private void activate(
             Long id, String anchor, List<String> roots, List<String> terminals,
             LocalDateTime activatedAt) {
@@ -140,7 +189,7 @@ class ProductWorkflowUnifiedResolutionTest {
         workflow.setDefinitionVersion(1);
         workflow.setUnitReviewRequired(false);
         workflow.setNodesJson(nodesJson(roots, terminals));
-        workflow.setEdgesJson("[]");
+        workflow.setEdgesJson(edgesJson(roots.size(), terminals.size()));
         when(workflows.findByIdAndFactoryId(id, "F1")).thenReturn(Optional.of(workflow));
 
         ProductProcessWorkflowActivation activation = new ProductProcessWorkflowActivation();
@@ -159,17 +208,30 @@ class ProductWorkflowUnifiedResolutionTest {
         List<String> nodes = new ArrayList<>();
         int index = 0;
         for (String root : roots) {
-            nodes.add("{\"id\":\"raw-" + index++ + "\",\"kind\":\"RAW_MATERIAL\",\"data\":{\"skuId\":\"" + root + "\"}}");
+            nodes.add("{\"id\":\"raw-" + index++ + "\",\"kind\":\"RAW_MATERIAL\",\"position\":{\"x\":0,\"y\":0},\"data\":{\"skuId\":\"" + root + "\",\"name\":\"" + root + "\",\"baseUnit\":\"kg\"}}");
         }
         List<String> ports = new ArrayList<>();
         index = 0;
         for (String terminal : terminals) {
             String nodeId = "fg-" + index++;
-            nodes.add("{\"id\":\"" + nodeId + "\",\"kind\":\"FINISHED_GOOD\",\"data\":{\"skuId\":\"" + terminal + "\"}}");
+            nodes.add("{\"id\":\"" + nodeId + "\",\"kind\":\"FINISHED_GOOD\",\"position\":{\"x\":400,\"y\":0},\"data\":{\"skuId\":\"" + terminal + "\",\"name\":\"" + terminal + "\",\"baseUnit\":\"kg\"}}");
             ports.add("{\"direction\":\"OUTPUT\",\"materialNodeId\":\"" + nodeId + "\",\"unit\":\"kg\"}");
         }
-        nodes.add("{\"id\":\"process\",\"kind\":\"PROCESS\",\"data\":{\"ports\":[" + String.join(",", ports) + "]}}");
+        nodes.add("{\"id\":\"process\",\"kind\":\"PROCESS\",\"position\":{\"x\":200,\"y\":0},\"data\":{\"processName\":\"原料处理\",\"inputUnit\":\"kg\",\"outputUnit\":\"kg\",\"ports\":[" + String.join(",", ports) + "]}}");
         return "[" + String.join(",", nodes) + "]";
+    }
+
+    private String edgesJson(int rootCount, int terminalCount) {
+        List<String> edges = new ArrayList<>();
+        for (int index = 0; index < rootCount; index++) {
+            edges.add("{\"id\":\"edge-in-" + index + "\",\"source\":\"raw-" + index
+                    + "\",\"target\":\"process\"}");
+        }
+        for (int index = 0; index < terminalCount; index++) {
+            edges.add("{\"id\":\"edge-out-" + index + "\",\"source\":\"process\",\"target\":\"fg-"
+                    + index + "\"}");
+        }
+        return "[" + String.join(",", edges) + "]";
     }
 
     private ProductType product(String id) {

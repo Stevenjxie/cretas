@@ -342,11 +342,35 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
     private PlanUnitAuthority resolvePlanUnitAuthority(
             String factoryId, String productTypeId, List<String> targetFinishedGoodIds) {
+        return resolvePlanUnitAuthority(
+                factoryId, productTypeId, targetFinishedGoodIds, null, null);
+    }
+
+    private PlanUnitAuthority resolvePlanUnitAuthority(
+            String factoryId, String productTypeId, List<String> targetFinishedGoodIds,
+            Long selectedWorkflowId, Integer selectedWorkflowVersion) {
         String productionBaseUnit = resolvePlannedOutputUnitForProduct(productTypeId);
+        boolean hasSelectedId = selectedWorkflowId != null;
+        boolean hasSelectedVersion = selectedWorkflowVersion != null;
+        if (hasSelectedId != hasSelectedVersion) {
+            throw new BusinessException(400, "Workflow ID 与版本必须成对提交")
+                    .withCode("WORKFLOW_SELECTION_INCOMPLETE")
+                    .withHintTarget(hasSelectedId ? "selectedWorkflowVersion" : "selectedWorkflowId");
+        }
+        if (hasSelectedId && workflowResolutionService == null) {
+            throw new BusinessException(500, "Workflow 解析服务未初始化，无法固定所选版本")
+                    .withCode("WORKFLOW_RESOLUTION_UNAVAILABLE");
+        }
         if (workflowResolutionService != null) {
-            Optional<com.cretas.aims.service.workflow.WorkflowPlanOutputContract> contract =
-                    workflowResolutionService.resolveActivePlanOutputContract(
-                            factoryId, productTypeId, targetFinishedGoodIds);
+            Optional<com.cretas.aims.service.workflow.WorkflowPlanOutputContract> contract;
+            if (hasSelectedId) {
+                contract = Optional.of(workflowResolutionService.resolvePinnedPlanOutputContract(
+                        factoryId, productTypeId, selectedWorkflowId, selectedWorkflowVersion,
+                        targetFinishedGoodIds));
+            } else {
+                contract = workflowResolutionService.resolveActivePlanOutputContract(
+                        factoryId, productTypeId, targetFinishedGoodIds);
+            }
             if (contract.isPresent()) {
                 var value = contract.get();
                 return new PlanUnitAuthority(productionBaseUnit, value.plannedUnit(),
@@ -962,7 +986,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // Resolve by selected terminal outputs, not by the legacy product_type_id anchor.
         // The resolved exact workflow/version is persisted on the plan and later copied to its batch.
         PlanUnitAuthority planUnitAuthority = resolvePlanUnitAuthority(
-                factoryId, request.getProductTypeId(), request.getTargetFinishedGoodIds());
+                factoryId, request.getProductTypeId(), request.getTargetFinishedGoodIds(),
+                request.getSelectedWorkflowId(), request.getSelectedWorkflowVersion());
         if (planUnitAuthority.mode() == ProductionBatch.WorkflowSelectionMode.WORKFLOW) {
             if (Boolean.TRUE.equals(request.getSkipProcessReporting())) {
                 throw new BusinessException(400, "Workflow 生产计划必须使用逐道报工")

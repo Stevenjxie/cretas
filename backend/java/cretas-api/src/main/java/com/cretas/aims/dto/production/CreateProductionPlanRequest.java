@@ -138,6 +138,12 @@ public class CreateProductionPlanRequest {
     @Schema(description = "raw-centric 多成品: 本计划要产的终端成品 productTypeId 列表; 传值时 productTypeId 必须是解析出的 workflow owner(原料)")
     private List<String> targetFinishedGoodIds;
 
+    @Schema(description = "生产计划选择弹窗确认的 Workflow ID；必须与 selectedWorkflowVersion 成对提交")
+    private Long selectedWorkflowId;
+
+    @Schema(description = "生产计划选择弹窗确认的 Workflow 定义版本；必须与 selectedWorkflowId 成对提交")
+    private Integer selectedWorkflowVersion;
+
     @Schema(description = "关联销售订单行ID (P0-12 字段粒度修正; CUSTOMER_ORDER 必填)")
     @Size(max = 50, message = "关联销售订单行ID不能超过50个字符")
     private String sourceOrderItemId;

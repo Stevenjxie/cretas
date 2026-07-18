@@ -356,6 +356,19 @@ export interface WorkflowResolutionTerminal {
   unit: string
 }
 
+export interface WorkflowResolutionPreviewNode {
+  id: string
+  kind: 'RAW_MATERIAL' | 'PROCESS' | 'SEMI_FINISHED' | 'FINISHED_GOOD'
+  label: string
+  unit?: string | null
+}
+
+export interface WorkflowResolutionPreviewEdge {
+  id?: string | null
+  source: string
+  target: string
+}
+
 /**
  * 工序图解析候选 — 覆盖所选成品集合的 workflow 及其 owner 信息。
  */
@@ -373,6 +386,11 @@ export interface WorkflowResolutionCandidate {
   /** 后端按图派生的只读类型。 */
   workflowType?: 'SINGLE_OUTPUT_PRODUCT' | 'RAW_MATERIAL_SPLIT' | 'JOINT_PRODUCTION'
   rootInputProductTypeIds?: string[]
+  /** 中间工序的拓扑顺序，用于候选主标题；Workflow 名称只作辅助。 */
+  processSteps?: string[]
+  /** 只读、安全裁剪后的 Cell 图，不包含公式或可编辑配置。 */
+  previewNodes?: WorkflowResolutionPreviewNode[]
+  previewEdges?: WorkflowResolutionPreviewEdge[]
   plannedUnit: string | null
   terminalOutputs?: WorkflowResolutionTerminal[]
   /** 兼容拟定的精简 resolve DTO。 */

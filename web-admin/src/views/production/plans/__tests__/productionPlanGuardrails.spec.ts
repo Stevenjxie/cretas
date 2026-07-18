@@ -48,4 +48,19 @@ describe('production plan operator guardrails', () => {
     expect(source).toContain('计划绑定整张共同 Workflow');
     expect(source).not.toContain('父计划 + 多个产出计划行');
   });
+
+  it('uses a fail-closed route dialog, previews Cell links, and submits the exact selected version', () => {
+    expect(source).toContain('选择本计划使用的生产工序路线');
+    expect(source).toContain('悬浮查看 Cell 连线');
+    expect(source).toContain('<WorkflowRoutePreview');
+    expect(source).toContain('payload.selectedWorkflowId');
+    expect(source).toContain('payload.selectedWorkflowVersion');
+    expect(source).toContain('WORKFLOW_SELECTED_VERSION_CHANGED');
+  });
+
+  it('requires explicit confirmation before adding superset co-products', () => {
+    expect(source).toContain('额外联产成品加入本计划');
+    expect(source).toContain('该 Workflow 会同时产出其它成品，需要确认完整产出集合');
+    expect(source).toContain('planForm.value.targetFinishedGoodIds = completeOutputs');
+  });
 });

@@ -9,10 +9,10 @@ import lombok.NoArgsConstructor;
 import java.util.List;
 
 /**
- * raw-centric 多成品 (2026-07-13): 生产计划「多选成品 → 解析共用 raw workflow」的解析结果。
+ * 生产计划「选择成品 → 解析可用 Workflow 路线」的只读结果。
  *
- * <p>单选优先该成品自己的图 (SELF_WORKFLOW); 多选只匹配以原料为锚、终端覆盖所选全部成品的图
- * (RAW_OWNED); 无覆盖图 = NONE (空候选, 不报错 —— 报错留写路径守卫)。
+ * <p>只返回当前最高优先层：有精确终端集合时返回全部精确候选；否则返回额外产出最少的
+ * 同层超集候选。候选超过一条时由前端显式选择，不允许服务端静默取第一条。
  */
 @Data
 @Builder
@@ -22,7 +22,7 @@ public class WorkflowOutputResolutionDTO {
 
     private List<String> requestedProductTypeIds;
 
-    /** SELF_WORKFLOW(单选命中成品自有图) / RAW_OWNED(原料图候选) / NONE(0 候选)。 */
+    /** SINGLE_OUTPUT / MULTI_OUTPUT / NONE。 */
     private String resolutionMode;
 
     /** Human-readable result for plan-creation UI. */
@@ -53,6 +53,34 @@ public class WorkflowOutputResolutionDTO {
         private String workflowType;
         /** Root raw-material SKU set derived from the canvas, never guessed from the anchor. */
         private List<String> rootInputProductTypeIds;
+        /** Topologically ordered middle process names for fast candidate identification. */
+        private List<String> processSteps;
+        /** Sanitized read-only Cell graph for the plan-selection hover preview. */
+        private List<PreviewNode> previewNodes;
+        private List<PreviewEdge> previewEdges;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class PreviewNode {
+        private String id;
+        /** RAW_MATERIAL / PROCESS / SEMI_FINISHED / FINISHED_GOOD. */
+        private String kind;
+        private String label;
+        /** Material base unit, or process input-to-output unit summary. */
+        private String unit;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class PreviewEdge {
+        private String id;
+        private String source;
+        private String target;
     }
 
     @Data
