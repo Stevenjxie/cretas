@@ -66,15 +66,22 @@ uvicorn main:app --port 8083     # 启动服务
 
 ### 部署到服务器
 ```bash
-# 在已审查、干净的源码 worktree 中：目标测试与最终 release JAR 只编译一次并写可信 manifest
-./scripts/deploy/release-jar-manifest.sh build --tests '<本次目标测试>'
+# 正常 Java/Web 发布优先使用统一入口；Base SHA 必须来自 dispatch 登记
+# 候选 worktree 只构建可信制品：
+./scripts/deploy/release-cretas.sh \
+  --phase build \
+  --base-sha '<登记的 Base SHA>' \
+  --tests '<本次目标测试>'
 
-# 默认：本地可信缓存或本次唯一一次 clean package → SSH 直传 → 蓝绿切换
-# GitHub Actions/Artifact 不在日常发布关键路径，仅保留手动独立审计或显式制品备用。
-./scripts/deploy/deploy-backend.sh
+# 合入后在 clean exact origin/main worktree 自动检测范围、复用 manifest 并安全串行发布：
+./scripts/deploy/release-cretas.sh \
+  --phase deploy \
+  --base-sha '<登记的 Base SHA>' \
+  --tests '<本次目标测试>' \
+  --confirm-prod YES-PROD
 
-# 方式2: Git 部署 (旧方式)
-./scripts/deploy/deploy-backend.sh --git        # git push → 服务器编译
+# `release-jar-manifest.sh`、`deploy-backend.sh`、`deploy-web-admin.sh`
+# 保留为明确的单组件发布和故障排查入口；不要由 Agent 自行拼接成普通全栈发布流程。
 
 # 或使用 skill
 /deploy-backend
@@ -262,7 +269,8 @@ frontend/CretasFoodTrace/src/
 8. **生产 Web Playwright 唯一入口** - 用户明确要求生产 Web 只读验收时，必须优先使用 Codex 直接集成的 Playwright MCP，并以 filename 方式加载 `scripts/e2e/production-readonly/mcp-entry.js`；同一次验收复用一个干净 UI 登录会话。该 MCP entry、Node CLI、本地 fixture 与 CI drift gate 必须共享同一套 `core/`、`scenarios/`、before-send mutation guard、证据 schema 与脱敏规则，禁止临时复制脚本、启动第二浏览器、复用历史 storageState 或以 `.mcp.json` 推断当前工具可用性。
 9. **旧 Runner 与写测试边界** - 已迁移的 SmartBI/BOM standalone runner 不得恢复为生产入口；历史 JSON/截图只作证据。生产只读验收仅允许 UI 登录和注册表中精确匹配的 query-only POST，所有其他 `POST`/`PUT`/`PATCH`/`DELETE` 必须发送前拦截；通过条件同时要求 `actualBusinessWrites == 0` 且 blocked mutation attempts 为 0。`tests/e2e-yield-mixed-sku/nonprod-business-flow-audit.mjs` 等写测试只能用于显式测试环境，必须拒绝生产 host 并要求非生产写确认，绝不能作为生产验收替代品。
 10. **Web 构建一次** - Web Admin 的审查/验证构建应通过 `./scripts/deploy/release-web-manifest.sh build` 生成一个不可变 `dist.tar.gz` 和可信 manifest。部署时只有当 clean `HEAD == origin/main`、原 build commit 可解析、原与当前 `web-admin` Git tree 相同、package-lock/index/archive SHA-256 及 tar 内引用完整性全部通过时才能跳过第二次 `npm ci/build`；squash 后 commit 不同但 Web tree 相同允许复用。不得为每个 dist 文件启动独立哈希进程；archive SHA 已覆盖制品全部字节。任一校验失败只回退一次既有本地 build，不得按 mtime、文件名或 `dist` 目录存在判定复用。远端 archive 与 index 指纹相同且 HTTP 健康时允许 no-op；否则原子切换、旧 chunk 保留和 Web 四方哈希验收不得削弱。
-11. **并行发布边界** - Java/Web 制品可在同一干净候选 worktree 用 `./scripts/deploy/release-cretas-artifacts.sh --tests '<tests>'` 并行构建；Java 仍只能执行一次最终 `mvn clean package -Dtest=<tests>`。生产并行部署仅限两边在任意切换顺序均 API 兼容的独立发布，且必须从 clean exact `origin/main` 使用 `deploy-cretas-parallel.sh --confirm-prod YES-PROD --confirm-independent-services YES-INDEPENDENT-SERVICES`。任何跨端接口、迁移、认证契约或需要严格先后顺序的改动必须串行发布。`release-java-preflight.sh` 只验证显式测试选择器和项目导入，不能替代 Maven/Mockito 运行时门禁。
+11. **统一发布总入口** - 正常 Java/Web 发布优先调用 `./scripts/deploy/release-cretas.sh --base-sha '<dispatch Base SHA>' --tests '<tests>' --confirm-prod YES-PROD`，由它自动检测 `backend/java/cretas-api` 与 `web-admin` 的变更、选择可信构建/部署/no-op，并输出统一 JSON 回执。默认必须安全串行；只有调用者显式传入 `--parallel-if-independent YES-INDEPENDENT-SERVICES` 且迁移、Entity、Repository/查询、Security/Auth、Controller/DTO/API 契约、配置/环境契约和显式顺序检测均未命中时才可调用现有并行部署。`--order backend-first|web-first` 只用于显式串行顺序。底层 manifest、单组件 deploy 和并行 wrapper 继续负责原有完整性、蓝绿、原子交换、健康、观察与回滚，不得在总入口复制或削弱这些门禁。
+12. **并行发布边界** - Java/Web 制品可在同一干净候选 worktree 用 `./scripts/deploy/release-cretas-artifacts.sh --tests '<tests>'` 并行构建；Java 仍只能执行一次最终 `mvn clean package -Dtest=<tests>`。生产并行部署仅限两边在任意切换顺序均 API 兼容的独立发布，且必须从 clean exact `origin/main` 使用 `deploy-cretas-parallel.sh --confirm-prod YES-PROD --confirm-independent-services YES-INDEPENDENT-SERVICES`。任何跨端接口、迁移、认证契约或需要严格先后顺序的改动必须串行发布。`release-java-preflight.sh` 只验证显式测试选择器和项目导入，不能替代 Maven/Mockito 运行时门禁。
 
 ### UX Flow Gate（低技术素养用户屏幕）
 

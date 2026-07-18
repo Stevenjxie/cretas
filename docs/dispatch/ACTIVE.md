@@ -6,16 +6,16 @@
 
 ## 在飞任务
 
-- `CRETAS-RELEASE-CRITICAL-PATH-20260718` — `in-progress`
+- `CRETAS-RELEASE-CRITICAL-PATH-20260718` — `review`
   - Base SHA: `10b2c0195607fc891eb59b25a78a7f8a6e877ed0`
   - Owner: Codex `/root`
-  - Scope: Java 可信制品远端预热/复用、构建与部署结构化阶段计时、启动路径只读诊断；不部署 Web，不改业务逻辑
-  - 验收: 发布脚本契约测试、shell 语法检查、现有 manifest/deploy 门禁；若产生 Java 代码则按单一 Maven 生命周期验证
-  - 下一动作: 审查当前 Java manifest/蓝绿脚本与生产启动日志，提交最小安全实现并量化收益
+  - Scope: Java 可信制品远端预热/复用、构建与部署结构化阶段计时、启动路径优化，以及 Java/Web 统一发布总入口自动调度；不改 Web 业务代码
+  - 验收: 发布脚本契约测试、shell 语法/编码/diff 检查、现有 manifest/deploy 加速门禁；Java 代码严格复用已通过的单一 Maven 生命周期可信制品
+  - 下一动作: 提交已通过验证的统一入口与启动/制品优化，走 PR 合入 `origin/main` 后归档并释放 scope
 
 ## Scope 锁地图
 
-- `CRETAS-RELEASE-CRITICAL-PATH-20260718` 锁定：`scripts/deploy/release-jar-manifest.sh`、`scripts/deploy/deploy-backend.sh`、新增 Java 制品预热/报告 helper、对应 `scripts/tests/`、`SemanticRouterServiceImpl.java`、`service/startup/StartupWarmupCoordinator.java`、`AiWarmupStatusRegistry.java` 及对应目标测试、`.agents/skills/deploy-backend/SKILL.md`、本任务 dispatch 文档。
+- `CRETAS-RELEASE-CRITICAL-PATH-20260718` 锁定：`scripts/deploy/release-jar-manifest.sh`、`scripts/deploy/deploy-backend.sh`、`scripts/deploy/release-cretas.sh`、`scripts/deploy/release-cretas-artifacts.sh`、`scripts/deploy/deploy-cretas-parallel.sh`、`scripts/deploy/verify-release.sh`、新增 Java 制品预热/报告 helper、对应 `scripts/tests/`、`SemanticRouterServiceImpl.java`、`service/startup/StartupWarmupCoordinator.java`、`AiWarmupStatusRegistry.java` 及对应目标测试、`AGENTS.md`、`.agents/skills/deploy-backend/SKILL.md`、本任务 dispatch 文档。
 
 ## 阻塞项
 

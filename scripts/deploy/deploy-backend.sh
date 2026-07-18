@@ -189,6 +189,7 @@ while [[ $# -gt 0 ]]; do
             echo "环境变量:"
             echo "  SKIP_RSYNC=1              临时禁用 rsync 走 scp 兜底 (~/.bashrc 已不再默认设置)"
             echo "  SKIP_BUILD=1              仅在可信 manifest 有效时跳过 Maven；无效则 clean package"
+            echo "  CRETAS_REQUIRE_TRUSTED_ARTIFACT=1  manifest/cache 失效时快速失败，禁止子部署重复构建"
             echo "  ENABLE_CI_ARTIFACT_REUSE=1   显式尝试已有 exact-commit CI JAR（单次查询，不等待生成）"
             echo "  DISABLE_LOCAL_JAR_CACHE=1    禁用后端源码 tree 指纹缓存"
             echo "  CRETAS_JAR_CACHE_DIR=PATH    覆盖本地可信 JAR 缓存目录"
@@ -958,6 +959,9 @@ deploy_jar() {
     if reuse_local_source_artifact_cache "$JAR_TARGET"; then
         LOCAL_SOURCE_CACHE_REUSED=true
         echo "📦 [1/4] 后端源码未变化，跳过 Maven 打包"
+    elif [ "${CRETAS_REQUIRE_TRUSTED_ARTIFACT:-0}" = "1" ]; then
+        echo "❌ 统一发布入口已完成 manifest 校验/单次回退，但子部署未命中可信 JAR；拒绝第二次 Maven 构建"
+        exit 1
     elif [ -n "$SKIP_BUILD" ]; then
         echo "📦 [1/4] SKIP_BUILD=1 但可信 manifest 未命中；安全回退本地 clean package"
         build_local_jar "clean package" || { echo "❌ Maven clean package 失败"; exit 1; }

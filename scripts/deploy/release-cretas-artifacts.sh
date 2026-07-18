@@ -35,9 +35,21 @@ cleanup() { rm -rf "$logs_dir"; }
 trap cleanup EXIT
 started=$(date +%s)
 
-"$SCRIPT_DIR/release-jar-manifest.sh" build --tests "$TESTS" >"$logs_dir/java.log" 2>&1 &
+( child_started=$(date +%s)
+  set +e
+  "$SCRIPT_DIR/release-jar-manifest.sh" build --tests "$TESTS" >"$logs_dir/java.log" 2>&1
+  child_rc=$?
+  printf '%s\n' "$(( $(date +%s) - child_started ))" >"$logs_dir/java.seconds"
+  exit "$child_rc"
+) &
 java_pid=$!
-"$SCRIPT_DIR/release-web-manifest.sh" build >"$logs_dir/web.log" 2>&1 &
+( child_started=$(date +%s)
+  set +e
+  "$SCRIPT_DIR/release-web-manifest.sh" build >"$logs_dir/web.log" 2>&1
+  child_rc=$?
+  printf '%s\n' "$(( $(date +%s) - child_started ))" >"$logs_dir/web.seconds"
+  exit "$child_rc"
+) &
 web_pid=$!
 
 set +e
@@ -48,6 +60,10 @@ set -e
 cat "$logs_dir/java.log"
 cat "$logs_dir/web.log"
 elapsed=$(( $(date +%s) - started ))
+java_elapsed=$(cat "$logs_dir/java.seconds" 2>/dev/null || echo 0)
+web_elapsed=$(cat "$logs_dir/web.seconds" 2>/dev/null || echo 0)
+printf 'JAVA_BUILD_WALL_SECONDS=%s\n' "$java_elapsed"
+printf 'WEB_BUILD_WALL_SECONDS=%s\n' "$web_elapsed"
 
 if [ "$java_rc" -ne 0 ] || [ "$web_rc" -ne 0 ]; then
     echo "ERROR: parallel artifact build failed (java=$java_rc web=$web_rc elapsed=${elapsed}s)" >&2

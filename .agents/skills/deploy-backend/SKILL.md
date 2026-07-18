@@ -19,6 +19,43 @@ Deploy only an exact, reviewed commit. Read `.codex/rules/server-operations.md`,
 
 Java runtime is `/www/wwwroot/cretas/`; web admin is `/www/wwwroot/web-admin/`. Production Java traffic is routed by `139.196.165.140:/www/server/panel/vhost/nginx/_upstream_cretas.conf`.
 
+## Preferred Unified Release Entry
+
+For normal Java/Web releases, call the unified orchestrator instead of composing
+artifact and deployment commands by hand. The Base SHA must be the value
+registered in `docs/dispatch/ACTIVE.md`:
+
+```bash
+# Optional pre-merge candidate artifact build
+./scripts/deploy/release-cretas.sh \
+  --phase build \
+  --base-sha '<registered Base SHA>' \
+  --tests '<MavenTestSelector>'
+
+# Post-merge production release from clean exact origin/main
+./scripts/deploy/release-cretas.sh \
+  --phase deploy \
+  --base-sha '<registered Base SHA>' \
+  --tests '<MavenTestSelector>' \
+  --confirm-prod YES-PROD
+```
+
+It detects `backend/java/cretas-api` and `web-admin` changes, selects the
+component builds/deployments or verified no-op, validates both trusted
+manifests before deployment, and writes one structured release receipt. It is
+safe-sequential by default and never infers API compatibility from Git diff.
+Parallel deployment is allowed only with
+`--parallel-if-independent YES-INDEPENDENT-SERVICES` and only when its
+migration, Entity, Repository/query, Security/Auth, Controller/DTO/API, config
+and explicit-order risk gates all pass. Use `--order backend-first|web-first`
+for explicit serial ordering.
+
+Keep `release-jar-manifest.sh`, `release-web-manifest.sh`, `deploy-backend.sh`,
+`deploy-web-admin.sh`, and `deploy-cretas-parallel.sh` as single-component or
+troubleshooting entries. They retain all blue-green, atomic-swap, health,
+rollback, no-op, stale-chunk, and hash gates; do not duplicate those mechanics
+in a normal Agent release flow.
+
 ## Build Once
 
 Every release/deployment starts from a clean exact `origin/main` worktree:
