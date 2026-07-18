@@ -94,14 +94,14 @@ public class PurchaseOrderPdfServiceImpl implements PurchaseOrderPdfService {
             headerTable.setWidthPercentage(100);
             headerTable.setWidths(new float[]{6, 4});
 
-            // 左列: 工厂 / 订单号 / 日期
+            // 左列: 工厂 / 采购订单号 / 来源销售订单号 / 日期
             PdfPCell leftCell = new PdfPCell();
             leftCell.setBorder(Rectangle.NO_BORDER);
             leftCell.setPadding(4);
             String factoryName = factory != null && factory.getName() != null ? factory.getName() : factoryId;
             leftCell.addElement(new Paragraph("采购方: " + factoryName, subTitleFont));
-            leftCell.addElement(new Paragraph("订单编号: " + safe(order.getOrderNumber()), normalFont));
-            leftCell.addElement(new Paragraph("销售订单号: " + salesOrderLabel(order), normalFont));
+            leftCell.addElement(new Paragraph("采购订单号（PO）: " + safe(order.getOrderNumber()), normalFont));
+            leftCell.addElement(new Paragraph("来源销售订单号（SO）: " + salesOrderLabel(order), normalFont));
             leftCell.addElement(new Paragraph("下单日期: " + (order.getOrderDate() != null
                     ? order.getOrderDate().format(DATE_FORMATTER) : "-"), normalFont));
             if (order.getExpectedDeliveryDate() != null) {

@@ -214,7 +214,10 @@ class PurchaseOrderPdfServiceImplTest {
         byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, false, true);
 
         String text = extractPdfText(pdfBytes);
-        assertTrue(text.contains("SO-20260612-001"), "External PDF must include sales order number; text=" + summarize(text));
+        assertTrue(text.contains("采购订单号（PO）"), "External PDF must label the purchase order number as PO; text=" + summarize(text));
+        assertTrue(text.contains("PO-N3-EXTERNAL"), "External PDF must include purchase order number; text=" + summarize(text));
+        assertTrue(text.contains("来源销售订单号（SO）"), "External PDF must distinguish the source sales order as SO; text=" + summarize(text));
+        assertTrue(text.contains("SO-20260612-001"), "External PDF must include source sales order number; text=" + summarize(text));
         assertTrue(text.contains("件数"), "External PDF must include piece count column; text=" + summarize(text));
         assertFalse(text.contains("单价"), "External PDF must remove unit price column label; text=" + summarize(text));
         assertFalse(text.contains("小计"), "External PDF must remove line amount column label; text=" + summarize(text));
@@ -227,7 +230,7 @@ class PurchaseOrderPdfServiceImplTest {
     }
 
     @Test
-    @DisplayName("N3: internalVersion → 头部显示销售订单号, 内部审批版保留价格列")
+    @DisplayName("N3: internalVersion → 头部区分采购订单号(PO)与来源销售订单号(SO), 内部审批版保留价格列")
     void generatePdf_internalVersion_includesSalesOrderNumberAndPrices() throws Exception {
         PurchaseOrder order = makeOrder("PO-N3-INTERNAL", buildItems());
         when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
@@ -237,7 +240,10 @@ class PurchaseOrderPdfServiceImplTest {
         byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, false, false);
 
         String text = extractPdfText(pdfBytes);
-        assertTrue(text.contains("SO-20260612-001"), "Internal PDF must include sales order number; text=" + summarize(text));
+        assertTrue(text.contains("采购订单号（PO）"), "Internal PDF must label the purchase order number as PO; text=" + summarize(text));
+        assertTrue(text.contains("PO-N3-INTERNAL"), "Internal PDF must include purchase order number; text=" + summarize(text));
+        assertTrue(text.contains("来源销售订单号（SO）"), "Internal PDF must distinguish the source sales order as SO; text=" + summarize(text));
+        assertTrue(text.contains("SO-20260612-001"), "Internal PDF must include source sales order number; text=" + summarize(text));
         assertTrue(text.contains("件数"), "Internal PDF must rename box count as piece count; text=" + summarize(text));
         assertTrue(text.contains("单价"), "Internal PDF must keep unit price column label; text=" + summarize(text));
         assertTrue(text.contains("小计"), "Internal PDF must keep line amount column label; text=" + summarize(text));

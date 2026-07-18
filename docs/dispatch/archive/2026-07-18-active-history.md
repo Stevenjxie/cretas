@@ -42,3 +42,9 @@
 | ID | Base SHA | Owner | Result |
 |---|---|---|---|
 | WF-UX-20260718-01 | `c39ef12f4fb87878184d114f9a69b7a42f92af05` | Codex `/root` | 完成 Workflow 编辑器自由投入、响应式单位换算、SKU 拼音搜索、下拉滚轮与外部收起、Cell/连线选择和批量删除、自动布局、产出类型转换、BOM 发布门禁、独立版本以及内嵌 AI Composer；前端 182/182 目标测试与 production build 通过，Java 6 类 93/93 目标测试和真实 JPA Context 门禁通过，可信 JAR 由 build commit `3e35c392309ff072a58d207a4cd6d3efddc31fce` 生成；[PR #1421](https://github.com/Stevenjxie/cretas/pull/1421) squash 合并为 `7b0b19e87ba2712a825f33bb28b316db72506ce7`。 |
+
+## 采购入库外仓与采购订单 PDF 语义
+
+| ID | Base SHA | Owner | Result |
+|---|---|---|---|
+| PURCHASE-RECEIVE-WAREHOUSE-PDF-20260718 | `44bd057af0425e7b9655cd20f6f4f90149649155` | Codex `/root` | Web 采购入库候选仓新增外仓/委外仓，默认仓仍预选但目标仓改为必选并显式提交；后端在草稿创建和确认建批次时双重校验仓库归属、启用状态与仓型，拒绝不存在、跨工厂或停用仓库。采购订单 PDF 明确显示“采购订单号（PO）”与“来源销售订单号（SO）”；按用户纠正未修改 RN 手机端。Web 单测 4/4、`vue-tsc --noEmit` 与唯一 production build 通过；Java 唯一 Maven 生命周期 171 秒，3 类 25/25 通过，可信 JAR SHA-256 `36a5a7fcb58005746f6fecb2d74bc89bad1716a60e6dca06093dc5ddd18393cb`。 |
