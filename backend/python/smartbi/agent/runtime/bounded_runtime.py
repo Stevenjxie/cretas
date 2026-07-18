@@ -15,7 +15,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Callable, Iterable, Optional
 
 from .contracts import EvidenceEnvelope, EvidenceStatus, TrustedExecutionContext
-from .gateway import ReadToolGateway
+from .gateway import ReadToolGateway, ReadToolTimeout
 from .numeric_truth import NumericTruthGuard
 from .routes import gross_margin_decline_plan
 from .run_contracts import (
@@ -125,6 +125,7 @@ class BoundedRestaurantRuntime:
                     step.round_number, counters, started, is_cancelled
                 )
                 step_context = replace(run_context, step_id=step.step_id)
+                counters = counters.start_tool(round_number=step.round_number)
                 await self._event(
                     run_id,
                     step_context,
@@ -134,10 +135,62 @@ class BoundedRestaurantRuntime:
                     step_id=step.step_id,
                     tool_name=step.tool_name,
                 )
+                if is_cancelled():
+                    raise RuntimeCancelled()
+                remaining_wallclock = self._remaining_wallclock(started)
+                effective_timeout = min(
+                    remaining_wallclock, self._budgets.per_tool_timeout_seconds
+                )
+                if (
+                    effective_timeout - self._budgets.timeout_cleanup_grace_seconds
+                    < 0.001
+                ):
+                    failure_code = "WALLCLOCK_BUDGET_EXCEEDED"
+                    try:
+                        await self._event(
+                            run_id,
+                            step_context,
+                            AgentEventType.STEP_FAILED,
+                            {"failureCode": failure_code},
+                            counters,
+                            step_id=step.step_id,
+                            tool_name=step.tool_name,
+                        )
+                    except Exception as persist_exc:
+                        raise StepFailureEventPersistenceError() from persist_exc
+                    raise RuntimeBudgetExceeded(failure_code)
+                wallclock_limits_call = (
+                    remaining_wallclock <= self._budgets.per_tool_timeout_seconds
+                )
                 try:
                     envelope = await self._gateway.execute(
-                        step.tool_name, step.parameters, step_context
+                        step.tool_name,
+                        step.parameters,
+                        step_context,
+                        timeout_seconds=effective_timeout,
+                        cleanup_grace_seconds=self._budgets.timeout_cleanup_grace_seconds,
                     )
+                except ReadToolTimeout:
+                    if is_cancelled():
+                        raise RuntimeCancelled()
+                    failure_code = (
+                        "WALLCLOCK_BUDGET_EXCEEDED"
+                        if wallclock_limits_call
+                        else "READ_TOOL_TIMEOUT"
+                    )
+                    try:
+                        await self._event(
+                            run_id,
+                            step_context,
+                            AgentEventType.STEP_FAILED,
+                            {"failureCode": failure_code},
+                            counters,
+                            step_id=step.step_id,
+                            tool_name=step.tool_name,
+                        )
+                    except Exception as persist_exc:
+                        raise StepFailureEventPersistenceError() from persist_exc
+                    raise RuntimeBudgetExceeded(failure_code)
                 except Exception as exc:
                     try:
                         await self._event(
@@ -153,8 +206,7 @@ class BoundedRestaurantRuntime:
                         raise StepFailureEventPersistenceError() from persist_exc
                     raise RuntimeSourceFailure("READ_TOOL_EXECUTION_FAILED") from exc
                 evidence.append(envelope)
-                counters = counters.after(
-                    round_number=step.round_number,
+                counters = counters.add_evidence(
                     facts=len(envelope.facts),
                     evidence_bytes=envelope.limits.bytes_returned,
                 )
@@ -375,6 +427,9 @@ class BoundedRestaurantRuntime:
             raise RuntimeBudgetExceeded("EVIDENCE_BYTE_BUDGET_EXCEEDED")
         if self._monotonic() - started >= self._budgets.wallclock_seconds:
             raise RuntimeBudgetExceeded("WALLCLOCK_BUDGET_EXCEEDED")
+
+    def _remaining_wallclock(self, started: float) -> float:
+        return self._budgets.wallclock_seconds - (self._monotonic() - started)
 
     async def _event(
         self,

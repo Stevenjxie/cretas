@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import math
 import uuid
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timezone
@@ -33,12 +35,22 @@ class ReadToolLimitError(ReadToolContractError):
     pass
 
 
+class ReadToolTimeout(RuntimeError):
+    """Controlled timeout after the DB transaction and pool lease are cleaned up."""
+
+    pass
+
+
 _FORBIDDEN_TENANT_KEYS = {
     "factoryid",
     "factory_id",
     "tenantid",
     "tenant_id",
 }
+# PostgreSQL's millisecond timer and the Windows event-loop clock can disagree by
+# a few milliseconds at delivery. Keep this narrow relative to the 1s cleanup
+# grace while avoiding locale/message matching for SQLSTATE 57014.
+_SERVER_TIMEOUT_SCHEDULING_TOLERANCE_SECONDS = 0.010
 
 
 class _BoundAcquire(AbstractAsyncContextManager):
@@ -47,7 +59,9 @@ class _BoundAcquire(AbstractAsyncContextManager):
 
     async def __aenter__(self) -> Any:
         if self._owner._leased:
-            raise RuntimeError("concurrent or nested acquire on bound tenant connection")
+            raise RuntimeError(
+                "concurrent or nested acquire on bound tenant connection"
+            )
         self._owner._leased = True
         return self._owner.connection
 
@@ -85,6 +99,9 @@ class ReadToolGateway:
         tool_name: str,
         parameters: Mapping[str, Any],
         context: TrustedExecutionContext,
+        *,
+        timeout_seconds: float = 15.0,
+        cleanup_grace_seconds: float = 1.0,
     ) -> EvidenceEnvelope:
         if not isinstance(context, TrustedExecutionContext):
             raise TypeError("trusted execution context is required")
@@ -95,6 +112,9 @@ class ReadToolGateway:
         if not isinstance(parameters, Mapping):
             raise ReadToolContractError("parameters must be an object")
         self._reject_tenant_parameters(parameters)
+        statement_timeout_ms = self._statement_timeout_ms(
+            timeout_seconds, cleanup_grace_seconds
+        )
 
         registered = self._registry.require(tool_name)
         descriptor = registered.descriptor
@@ -119,23 +139,77 @@ class ReadToolGateway:
         if missing:
             raise ReadToolContractError(f"missing parameters: {sorted(missing)}")
 
+        loop = asyncio.get_running_loop()
+        tool_started = loop.time()
+        deadline = tool_started + timeout_seconds
+        # Conservative lower bound: acquisition/setup can only make this tool's
+        # server-side timeout arrive later. This still separates an immediate
+        # administrative cancellation from the configured statement interval.
+        server_timeout_earliest = tool_started + statement_timeout_ms / 1000
+        timeout_scope = asyncio.timeout_at(deadline)
         try:
-            async with self._pool.acquire() as connection:
-                # Read-only DB transaction and RLS tenant context are inseparable.
-                # Existing Gold queries still receive factory_id explicitly, so
-                # every query has two tenant boundaries rather than relying on one.
-                async with connection.transaction(readonly=True):
-                    await connection.execute(
-                        "SELECT set_config('app.factory_id', $1, true)",
-                        context.factory_id,
-                    )
-                    bound_pool = _BoundConnectionPool(connection)
-                    draft = await registered.adapter(
-                        bound_pool, context, dict(parameters), descriptor
-                    )
-        except ReadToolContractError:
+            async with timeout_scope:
+                async with self._pool.acquire() as connection:
+                    # Acquisition, the read-only transaction, both local settings,
+                    # every Gold query, and Python-side conversion share one
+                    # cancellation deadline. The earlier PostgreSQL deadline
+                    # reserves time for normal rollback/reset before the lease is
+                    # returned; a coroutine that suppresses cancellation is not
+                    # claimed to have an absolute wall-clock hard stop here.
+                    async with connection.transaction(readonly=True):
+                        await connection.execute(
+                            "SELECT set_config('statement_timeout', $1, true)",
+                            f"{statement_timeout_ms}ms",
+                        )
+                        await connection.execute(
+                            "SELECT set_config('app.factory_id', $1, true)",
+                            context.factory_id,
+                        )
+                        bound_pool = _BoundConnectionPool(connection)
+                        draft = await registered.adapter(
+                            bound_pool, context, dict(parameters), descriptor
+                        )
+                # Final evidence validation/serialization is synchronous, so
+                # asyncio can only inject cancellation at await points. Keep it
+                # inside the cancellation scope and explicitly reject evidence
+                # if CPU work crossed the trusted orchestration deadline.
+                envelope = self._finalize(descriptor, context, parameters, draft)
+                if loop.time() >= deadline:
+                    raise ReadToolTimeout("READ_TOOL_TIMEOUT")
+        except TimeoutError as exc:
+            if timeout_scope.expired() or loop.time() >= deadline:
+                raise ReadToolTimeout("READ_TOOL_TIMEOUT") from exc
+            return self._terminal_envelope(
+                descriptor=descriptor,
+                context=context,
+                parameters=parameters,
+                status=EvidenceStatus.ERROR,
+                warning=EvidenceWarning(
+                    code="READ_SOURCE_FAILED",
+                    severity="BLOCKING",
+                    message="Read source failed; no business facts were returned",
+                    blocks_conclusions=descriptor.conclusions_allowed,
+                ),
+            )
+        except ReadToolTimeout:
             raise
-        except Exception:
+        except ReadToolContractError as exc:
+            if loop.time() >= deadline:
+                raise ReadToolTimeout("READ_TOOL_TIMEOUT") from exc
+            raise
+        except Exception as exc:
+            if loop.time() >= deadline:
+                raise ReadToolTimeout("READ_TOOL_TIMEOUT") from exc
+            if getattr(exc, "sqlstate", None) == "57014":
+                # SQLSTATE 57014 also covers pg_cancel_backend and user-requested
+                # cancellation. Only classify it as our statement timeout once
+                # this tool's own server deadline could have fired. Cancellation
+                # extremely close to that boundary remains inherently ambiguous.
+                if (
+                    loop.time() + _SERVER_TIMEOUT_SCHEDULING_TOLERANCE_SECONDS
+                    >= server_timeout_earliest
+                ):
+                    raise ReadToolTimeout("READ_TOOL_TIMEOUT") from exc
             return self._terminal_envelope(
                 descriptor=descriptor,
                 context=context,
@@ -149,9 +223,43 @@ class ReadToolGateway:
                 ),
             )
 
-        return self._finalize(descriptor, context, parameters, draft)
+        # A cooperative adapter should let cancellation propagate. If an adapter
+        # catches it but eventually returns, do not accept late evidence; wait for
+        # normal context cleanup, then report the already-expired deadline.
+        if timeout_scope.expired():
+            raise ReadToolTimeout("READ_TOOL_TIMEOUT")
+        return envelope
 
-    def _finalize(self, descriptor, context, parameters, draft: EvidenceDraft) -> EvidenceEnvelope:
+    @staticmethod
+    def _statement_timeout_ms(
+        timeout_seconds: float, cleanup_grace_seconds: float
+    ) -> int:
+        for value, label in (
+            (timeout_seconds, "timeout"),
+            (cleanup_grace_seconds, "cleanup grace"),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value <= 0
+            ):
+                raise ReadToolContractError(f"{label} must be finite and positive")
+        if cleanup_grace_seconds >= timeout_seconds:
+            raise ReadToolContractError("cleanup grace must be below timeout")
+        # Floor so PostgreSQL never runs past the deadline reserved for normal
+        # rollback/reset. Reject a sub-millisecond SQL budget rather than sending
+        # PostgreSQL its special unlimited value (0).
+        milliseconds = math.floor((timeout_seconds - cleanup_grace_seconds) * 1000)
+        if milliseconds < 1:
+            raise ReadToolContractError(
+                "timeout must leave a representable cleanup interval before the coroutine deadline"
+            )
+        return milliseconds
+
+    def _finalize(
+        self, descriptor, context, parameters, draft: EvidenceDraft
+    ) -> EvidenceEnvelope:
         provenance_ids = {ref.ref_id for ref in draft.provenance}
         fact_ids = [fact.fact_id for fact in draft.facts]
         if len(fact_ids) != len(set(fact_ids)):

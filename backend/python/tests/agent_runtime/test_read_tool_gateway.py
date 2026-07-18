@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import time
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timezone
+import math
 
 import pytest
 
@@ -17,7 +20,9 @@ from smartbi.agent.runtime.contracts import (
 )
 from smartbi.agent.runtime.descriptors import restaurant_descriptors
 from smartbi.agent.runtime.gateway import (
+    ReadToolContractError,
     ReadToolGateway,
+    ReadToolTimeout,
     TenantParameterError,
 )
 from smartbi.agent.runtime.registry import ReadonlyToolRegistry
@@ -150,10 +155,250 @@ async def test_gateway_binds_rls_and_adapter_to_same_readonly_connection():
     assert seen == {"connection": pool.connection, "factory_id": "F001"}
     assert ("transaction", "created", True) in pool.connection.events
     assert pool.connection.executes == [
-        ("SELECT set_config('app.factory_id', $1, true)", ("F001",))
+        ("SELECT set_config('statement_timeout', $1, true)", ("14000ms",)),
+        ("SELECT set_config('app.factory_id', $1, true)", ("F001",)),
     ]
+    assert pool.connection.events[-1] == ("transaction", "exit", None)
     assert envelope.status is EvidenceStatus.OK
     assert envelope.facts[0].value == "12.3"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("timeout", "grace"),
+    [
+        (True, 0.1),
+        (math.inf, 0.1),
+        (1.0, True),
+        (1.0, math.nan),
+        (1.0, 1.0),
+        (0.0005, 0.0001),
+    ],
+)
+async def test_trusted_timeout_contract_rejects_invalid_values_before_pool_access(
+    timeout, grace
+):
+    async def adapter(*args):
+        raise AssertionError("adapter must not run")
+
+    descriptor, pool, gateway = gateway_with_adapter(adapter)
+    with pytest.raises(ReadToolContractError):
+        await gateway.execute(
+            descriptor.name,
+            {"startDate": "2026-01-01", "endDate": "2026-01-01"},
+            context(),
+            timeout_seconds=timeout,
+            cleanup_grace_seconds=grace,
+        )
+    assert pool.acquire_count == 0
+
+
+@pytest.mark.asyncio
+async def test_coroutine_timeout_wraps_pool_acquire_and_does_not_enter_transaction():
+    acquire_started = asyncio.Event()
+    acquire_cleaned = asyncio.Event()
+
+    class SlowAcquire(AbstractAsyncContextManager):
+        async def __aenter__(self):
+            acquire_started.set()
+            try:
+                await asyncio.Future()
+            finally:
+                acquire_cleaned.set()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            raise AssertionError("unentered acquire must not exit")
+
+    class SlowPool:
+        def acquire(self):
+            return SlowAcquire()
+
+    async def adapter(*args):
+        raise AssertionError("adapter must not run")
+
+    descriptor = restaurant_descriptors()[0]
+    registry = ReadonlyToolRegistry()
+    registry.register(descriptor, adapter)
+    gateway = ReadToolGateway(SlowPool(), registry)
+
+    with pytest.raises(ReadToolTimeout, match="READ_TOOL_TIMEOUT"):
+        await gateway.execute(
+            descriptor.name,
+            {"startDate": "2026-01-01", "endDate": "2026-01-01"},
+            context(),
+            timeout_seconds=0.04,
+            cleanup_grace_seconds=0.01,
+        )
+    assert acquire_started.is_set()
+    assert acquire_cleaned.is_set()
+
+
+@pytest.mark.asyncio
+async def test_adapter_cancellation_finally_and_transaction_cleanup_finish_before_timeout_returns():
+    adapter_finally = asyncio.Event()
+
+    async def adapter(*args):
+        try:
+            await asyncio.Future()
+        finally:
+            await asyncio.sleep(0)
+            adapter_finally.set()
+
+    descriptor, pool, gateway = gateway_with_adapter(adapter)
+    with pytest.raises(ReadToolTimeout, match="READ_TOOL_TIMEOUT"):
+        await gateway.execute(
+            descriptor.name,
+            {"startDate": "2026-01-01", "endDate": "2026-01-01"},
+            context(),
+            timeout_seconds=0.04,
+            cleanup_grace_seconds=0.01,
+        )
+
+    assert adapter_finally.is_set()
+    assert pool.events[-1][0:2] == ("pool", "exit")
+    assert pool.connection.events[-1][0:2] == ("transaction", "exit")
+
+
+@pytest.mark.asyncio
+async def test_adapter_that_suppresses_cancellation_cannot_return_late_evidence():
+    cancellation_seen = asyncio.Event()
+
+    async def adapter(bound_pool, trusted, parameters, descriptor):
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            cancellation_seen.set()
+            await asyncio.sleep(0)
+            return draft(descriptor)
+
+    descriptor, pool, gateway = gateway_with_adapter(adapter)
+    with pytest.raises(ReadToolTimeout, match="READ_TOOL_TIMEOUT"):
+        await gateway.execute(
+            descriptor.name,
+            {"startDate": "2026-01-01", "endDate": "2026-01-01"},
+            context(),
+            timeout_seconds=0.04,
+            cleanup_grace_seconds=0.01,
+        )
+
+    assert cancellation_seen.is_set()
+    assert pool.events[-1][0:2] == ("pool", "exit")
+    assert pool.connection.events[-1][0:2] == ("transaction", "exit")
+
+
+@pytest.mark.asyncio
+async def test_sync_finalize_runs_after_pool_release_and_rejects_cpu_deadline_overrun():
+    async def adapter(bound_pool, trusted, parameters, descriptor):
+        async with bound_pool.acquire():
+            pass
+        return draft(descriptor)
+
+    descriptor, pool, gateway = gateway_with_adapter(adapter)
+    original_finalize = gateway._finalize
+
+    def slow_finalize(*args):
+        assert pool.events[-1][0:2] == ("pool", "exit")
+        assert pool.connection.events[-1][0:2] == ("transaction", "exit")
+        time.sleep(0.05)
+        return original_finalize(*args)
+
+    gateway._finalize = slow_finalize
+    with pytest.raises(ReadToolTimeout, match="READ_TOOL_TIMEOUT"):
+        await gateway.execute(
+            descriptor.name,
+            {"startDate": "2026-01-01", "endDate": "2026-01-01"},
+            context(),
+            timeout_seconds=0.04,
+            cleanup_grace_seconds=0.01,
+        )
+
+
+@pytest.mark.asyncio
+async def test_sqlstate_query_cancel_is_typed_only_after_transaction_and_pool_cleanup():
+    class QueryCancelled(Exception):
+        sqlstate = "57014"
+
+    async def adapter(*args):
+        await asyncio.sleep(0.04)
+        raise QueryCancelled("raw SQL text")
+
+    descriptor, pool, gateway = gateway_with_adapter(adapter)
+    with pytest.raises(ReadToolTimeout) as captured:
+        await gateway.execute(
+            descriptor.name,
+            {"startDate": "2026-01-01", "endDate": "2026-01-01"},
+            context(),
+            timeout_seconds=0.08,
+            cleanup_grace_seconds=0.05,
+        )
+
+    assert str(captured.value) == "READ_TOOL_TIMEOUT"
+    assert "SQL" not in str(captured.value)
+    assert pool.events[-1][0:2] == ("pool", "exit")
+    assert pool.connection.events[-1][0:2] == ("transaction", "exit")
+
+
+@pytest.mark.asyncio
+async def test_early_sqlstate_query_cancel_is_source_failure_not_our_timeout():
+    class QueryCancelled(Exception):
+        sqlstate = "57014"
+
+    async def adapter(*args):
+        raise QueryCancelled("raw admin cancellation detail")
+
+    descriptor, pool, gateway = gateway_with_adapter(adapter)
+    envelope = await gateway.execute(
+        descriptor.name,
+        {"startDate": "2026-01-01", "endDate": "2026-01-01"},
+        context(),
+        timeout_seconds=2.0,
+        cleanup_grace_seconds=1.0,
+    )
+
+    assert envelope.status is EvidenceStatus.ERROR
+    assert envelope.warnings[0].code == "READ_SOURCE_FAILED"
+    assert "admin" not in str(envelope.to_dict()).lower()
+    assert pool.events[-1][0:2] == ("pool", "exit")
+    assert pool.connection.events[-1][0:2] == ("transaction", "exit")
+
+
+@pytest.mark.asyncio
+async def test_adapter_timeout_error_is_not_misclassified_as_orchestrator_deadline():
+    async def adapter(*args):
+        raise TimeoutError("raw adapter timeout detail")
+
+    descriptor, _, gateway = gateway_with_adapter(adapter)
+    envelope = await gateway.execute(
+        descriptor.name,
+        {"startDate": "2026-01-01", "endDate": "2026-01-01"},
+        context(),
+    )
+
+    assert envelope.status is EvidenceStatus.ERROR
+    assert envelope.warnings[0].code == "READ_SOURCE_FAILED"
+    assert "adapter" not in str(envelope.to_dict()).lower()
+
+
+@pytest.mark.asyncio
+async def test_external_task_cancellation_propagates_without_timeout_reclassification():
+    started = asyncio.Event()
+
+    async def adapter(*args):
+        started.set()
+        await asyncio.Future()
+
+    descriptor, _, gateway = gateway_with_adapter(adapter)
+    task = asyncio.create_task(
+        gateway.execute(
+            descriptor.name,
+            {"startDate": "2026-01-01", "endDate": "2026-01-01"},
+            context(),
+        )
+    )
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
 
 @pytest.mark.asyncio
