@@ -10,6 +10,7 @@ import org.springframework.aop.support.AopUtils;
 import org.springframework.stereotype.Component;
 
 import java.util.Optional;
+import java.util.Set;
 
 /** Joins approved runtime policy to the exact registered Spring Tool implementation. */
 @Component
@@ -64,7 +65,8 @@ public class ToolRuntimeRegistry {
                     || !descriptor.requiredPermissions().equals(executor.getRequiredPermissions())
                     || !descriptor.domainTags().equals(executor.getDomainTags())
                     || !executor.requiresPermission()
-                    || !hasExactRoleBehavior(descriptor, executor)) {
+                    || !hasExactRoleBehavior(descriptor, executor)
+                    || !hasExactEgressBehavior(descriptor, executor)) {
                 return Optional.empty();
             }
 
@@ -95,5 +97,31 @@ public class ToolRuntimeRegistry {
             }
         }
         return !executor.hasPermission(null) && !executor.hasPermission("unknown_role");
+    }
+
+    static boolean hasExactEgressBehavior(
+            ToolDescriptor descriptor,
+            ToolExecutor executor) {
+        return switch (descriptor.egressPolicy().mode()) {
+            case DENY_ALL -> !(executor instanceof EgressCapableTool);
+            case ALLOWLIST_ONLY -> hasExactAllowlist(descriptor, executor);
+            case LEGACY_UNSPECIFIED -> false;
+        };
+    }
+
+    private static boolean hasExactAllowlist(
+            ToolDescriptor descriptor,
+            ToolExecutor executor) {
+        if (!(executor instanceof EgressCapableTool egressCapableTool)) {
+            return false;
+        }
+        Set<String> declaredDestinations = egressCapableTool.getEgressDestinationIds();
+        if (declaredDestinations == null || declaredDestinations.isEmpty()) {
+            return false;
+        }
+        Set<String> immutableDestinations = ContractValidation.immutableNonBlankSet(
+                declaredDestinations, "egressDestinationIds");
+        return immutableDestinations.equals(
+                descriptor.egressPolicy().allowedDestinations());
     }
 }

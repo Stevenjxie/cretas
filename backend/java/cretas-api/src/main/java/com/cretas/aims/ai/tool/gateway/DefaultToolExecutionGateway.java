@@ -18,6 +18,7 @@ import org.springframework.stereotype.Component;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Optional;
 
 /** Production fail-closed implementation of the governed Tool execution boundary. */
@@ -67,7 +68,7 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
         ResolvedTool resolved = resolvedOptional.get();
         ToolDescriptor descriptor = resolved.descriptor();
 
-        if (descriptor.egressPolicy().mode() != EgressMode.DENY_ALL) {
+        if (descriptor.egressPolicy().mode() == EgressMode.LEGACY_UNSPECIFIED) {
             ledgerService.completeAudit(
                     auditEventId, ToolExecutionStatus.DENIED, GatewayResultCode.POLICY_DENIED);
             return result(command, auditEventId, ToolExecutionStatus.DENIED,
@@ -314,7 +315,8 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
         String arguments = objectMapper.writeValueAsString(parameters);
         ToolCall toolCall = ToolCall.of(command.requestId(), command.toolName(), arguments);
         ToolExecutor executor = resolved.executor();
-        String rawResponse = executor.execute(toolCall, current.executionContext());
+        String rawResponse = executor.execute(
+                toolCall, trustedExecutionContext(command, current, resolved));
         return objectMapper.readTree(rawResponse);
     }
 
@@ -343,7 +345,8 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
             ToolCall toolCall = ToolCall.of(
                     command.requestId(), command.toolName(), arguments);
             ToolExecutor executor = resolved.executor();
-            String rawResponse = executor.preview(toolCall, current.executionContext());
+            String rawResponse = executor.preview(
+                    toolCall, trustedExecutionContext(command, current, resolved));
             payload = objectMapper.readTree(rawResponse);
         } catch (Exception previewFailure) {
             return finishPreview(
@@ -484,6 +487,25 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
             return result(command, auditEventId, ToolExecutionStatus.OUTCOME_UNKNOWN,
                     emptyPayload(), "Execution outcome requires reconciliation", false);
         }
+    }
+
+    private static Map<String, Object> trustedExecutionContext(
+            ToolExecutionCommand command,
+            RehydratedPrincipal current,
+            ResolvedTool resolved) {
+        ToolDescriptor descriptor = resolved.descriptor();
+        Optional<ToolEgressPermit> permit = switch (descriptor.egressPolicy().mode()) {
+            case DENY_ALL -> Optional.empty();
+            case ALLOWLIST_ONLY -> Optional.of(new ToolEgressPermit(
+                    descriptor.toolName(),
+                    descriptor.version(),
+                    command.requestId(),
+                    command.deadline(),
+                    descriptor.egressPolicy().allowedDestinations()));
+            case LEGACY_UNSPECIFIED -> throw new SecurityException(
+                    "Legacy egress policy cannot execute");
+        };
+        return ToolEgressPermit.trustedExecutionContext(current.executionContext(), permit);
     }
 
     private static ToolExecutionResult result(
