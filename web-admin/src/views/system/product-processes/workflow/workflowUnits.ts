@@ -169,74 +169,26 @@ export function workflowSkuSpecificationEquation(
   return `1${label} = ${formatQuantity(grams)}g`;
 }
 
-/** Makes the process relationship explicit when a package/count SKU has a standard gram weight. */
-export function workflowSkuOutputEquation(
-  inputUnit: string | null | undefined,
-  outputUnit: string | null | undefined,
-  gramsPerUnit: number | null | undefined,
-  customAliases?: Record<string, string>,
-): string | null {
-  const aliases = normalizedAliases(customAliases);
-  const inputCode = normalizeUnit(inputUnit, aliases);
-  const inputFactor = inputCode ? PHYSICAL_BASE_FACTORS[inputCode] : undefined;
-  const outputLabel = String(outputUnit || '').trim();
-  const grams = Number(gramsPerUnit);
-  if (!inputFactor || workflowUnitDimension(inputCode) !== 'MASS'
-    || !outputLabel || !Number.isFinite(grams) || grams <= 0) return null;
-  return `1${displayUnit(inputUnit, aliases)}投入 = ${formatQuantity(inputFactor / grams)}${outputLabel}产出（SKU规格：1${outputLabel} = ${formatQuantity(grams)}g）`;
-}
-
 /**
- * Migrates the legacy single expression into port-level quantities and then keeps every port mode
- * synchronized with its bound SKU unit. Main input is the baseline 1; extra inputs are always an
- * explicit recipe ratio. Each output decides AUTO_CONVERT/FIXED_RATIO independently.
+ * Keeps unit contracts separate from production facts:
+ * every process port carries its bound SKU reporting unit only. Actual input, output and yield are
+ * production-reporting facts. Finished-SKU gramsPerUnit and packaging conversions remain SKU master
+ * data and are consumed later by planning/reporting/settlement instead of being copied into Workflow.
+ * No historical-data migration is required because standardQuantity/quantityMode are nullable.
  */
 export function reconcileProcessPortQuantities(
   input: ProcessNodeData,
-  catalog: UnitCatalogItem[] = [],
+  _catalog: UnitCatalogItem[] = [],
 ): ProcessNodeData {
   const process = toPlainWorkflowValue(input);
-  const inputs = process.ports.filter((port) => port.direction === 'INPUT')
-    .sort((left, right) => left.ordinal - right.ordinal);
-  const outputs = process.ports.filter((port) => port.direction === 'OUTPUT')
-    .sort((left, right) => left.ordinal - right.ordinal);
-  const primaryInput = inputs[0];
-  const legacy = parseFixedRatioQuantities(process.conversionRule.expression);
-  const legacyOutputRatio = legacy
-    ? legacy.outputQuantity / legacy.inputQuantity
-    : null;
-
-  const ports = process.ports.map((port) => {
-    const existingQuantity = positiveQuantity(port.standardQuantity);
-    if (port.direction === 'INPUT') {
-      if (port.id === primaryInput?.id) {
-        return { ...port, quantityMode: 'FIXED_RATIO' as const, standardQuantity: 1 };
-      }
-      return {
-        ...port,
-        quantityMode: 'FIXED_RATIO' as const,
-        standardQuantity: existingQuantity || 1,
-      };
-    }
-
-    const autoConvert = !!primaryInput
-      && areWorkflowUnitsAutoConvertible(primaryInput.unit, port.unit, catalog);
-    if (autoConvert) {
-      return { ...port, quantityMode: 'AUTO_CONVERT' as const };
-    }
-    const isPrimaryOutput = port.id === outputs[0]?.id;
-    return {
-      ...port,
-      quantityMode: 'FIXED_RATIO' as const,
-      standardQuantity: existingQuantity || (isPrimaryOutput ? legacyOutputRatio : null) || 1,
-    };
-  });
+  const ports = process.ports.map(withoutQuantityRelationship);
 
   const nextPrimaryInput = primaryPort(ports, 'INPUT');
   const nextPrimaryOutput = primaryPort(ports, 'OUTPUT');
   if (nextPrimaryInput) process.inputUnit = nextPrimaryInput.unit;
   if (nextPrimaryOutput) process.outputUnit = nextPrimaryOutput.unit;
   process.ports = ports;
+  process.conversionRule = { mode: 'ACTUAL_WEIGHT' };
   return process;
 }
 
@@ -333,8 +285,11 @@ function leadingPositiveNumber(value: string): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-function positiveQuantity(value: number | null | undefined): number | null {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+function withoutQuantityRelationship(port: ProcessPort): ProcessPort {
+  const next = { ...port };
+  delete next.quantityMode;
+  delete next.standardQuantity;
+  return next;
 }
 
 function formatQuantity(value: number): string {

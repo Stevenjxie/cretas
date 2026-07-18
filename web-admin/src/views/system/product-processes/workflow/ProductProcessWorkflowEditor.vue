@@ -2187,9 +2187,9 @@ function bindOutputSku(processId: string, portId: string, option: SkuOption): bo
       materialName: option.name,
       materialKind: kind,
       unit: nextUnit,
-      quantityMode: 'FIXED_RATIO',
-      standardQuantity: 1,
     });
+    delete port.quantityMode;
+    delete port.standardQuantity;
     delete port.conversionRefId;
     delete port.conversionVersion;
     if (primaryOutputPort?.id === port.id) {
@@ -2306,9 +2306,9 @@ async function saveQuickEditProcess(): Promise<void> {
             materialName: nextLabel,
             materialKind: nextOutputKind,
             unit: '',
-            quantityMode: 'FIXED_RATIO',
-            standardQuantity: 1,
           });
+          delete port.quantityMode;
+          delete port.standardQuantity;
           material.data = {
             ...material.data,
             kind: nextOutputKind,

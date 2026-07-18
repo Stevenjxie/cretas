@@ -553,8 +553,10 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     const downstream = vm.flowNodes.find((node) => node.id === 'process:downstream');
     expect(downstream?.data.inputUnit).toBe('只');
     expect(downstream?.data.ports?.[0].unit).toBe('只');
-    expect(downstream?.data.ports?.[0]).toMatchObject({ quantityMode: 'FIXED_RATIO', standardQuantity: 1 });
-    expect(downstream?.data.ports?.[1]).toMatchObject({ quantityMode: 'FIXED_RATIO', standardQuantity: 1 });
+    expect(downstream?.data.ports?.[0]).not.toHaveProperty('quantityMode');
+    expect(downstream?.data.ports?.[0]).not.toHaveProperty('standardQuantity');
+    expect(downstream?.data.ports?.[1]).not.toHaveProperty('quantityMode');
+    expect(downstream?.data.ports?.[1]).not.toHaveProperty('standardQuantity');
   });
 
   it('does not retain a stale fixed ratio after switching the output SKU', async () => {
@@ -577,7 +579,9 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     await vm.selectOutputSku(process.id, port.id, 'SKU-COUNT-PIECE');
 
     const reboundPort = process.data.ports?.find((candidate) => candidate.id === port.id);
-    expect(reboundPort).toMatchObject({ unit: '件', quantityMode: 'FIXED_RATIO', standardQuantity: 1 });
+    expect(reboundPort).toMatchObject({ unit: '件' });
+    expect(reboundPort).not.toHaveProperty('quantityMode');
+    expect(reboundPort).not.toHaveProperty('standardQuantity');
   });
 
   it('rejects a duplicate raw material even if a stale picker bypasses candidate filtering', async () => {
@@ -674,6 +678,8 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     }));
     expect(outputPort).toMatchObject({ materialKind: 'SEMI_FINISHED', unit: '' });
     expect(outputPort.skuId).toBeUndefined();
+    expect(outputPort).not.toHaveProperty('quantityMode');
+    expect(outputPort).not.toHaveProperty('standardQuantity');
     expect(outputCell.data).toMatchObject({
       kind: 'SEMI_FINISHED', skuId: '', baseUnit: '', bound: false,
     });

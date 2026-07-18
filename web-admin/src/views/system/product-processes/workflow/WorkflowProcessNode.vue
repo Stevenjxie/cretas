@@ -142,60 +142,37 @@
       </div>
     </section>
 
-    <section class="quantity-rule-section">
-      <div class="section-title"><span>数量关系</span></div>
-      <div class="port-quantity-list" data-testid="port-quantity-list">
-        <div v-if="primaryOutput" class="quantity-baseline" data-testid="quantity-baseline">
-          <span>产出基准</span>
-          <strong>1 {{ primaryOutput.unit }} · {{ primaryOutput.materialName || '本工序产出' }}</strong>
-          <small v-if="primaryOutputSpecification">SKU 规格：{{ primaryOutputSpecification }}</small>
-          <small v-else>每一行直接说明 1 单位产出需要多少对应投入</small>
-        </div>
+    <section class="unit-rule-section">
+      <div class="section-title"><span>单位关系</span></div>
+      <div class="unit-only-summary" data-testid="unit-only-summary">
+        <strong>{{ unitRelationshipSummary }}</strong>
+        <span>这里只约定各物料的报工单位，不预设投入产出数量；实际投入、实际产出和出成率以正式报工为准。</span>
+        <small v-if="primaryOutputSpecification">
+          成品 SKU 规格：{{ primaryOutputSpecification }}，计划、报工与结单需要折算时自动使用。
+        </small>
+      </div>
+      <div class="unit-relationship-list" data-testid="unit-relationship-list">
         <div
           v-for="(port, index) in inputPorts"
-          :key="`quantity:${port.id}`"
-          class="port-quantity-row"
+          :key="`unit:${port.id}`"
+          class="unit-relationship-row"
           :class="{ 'is-long-name': isLongMaterialName(port.materialName) }"
         >
-          <div class="quantity-port-name">
+          <div class="unit-port-name">
             <el-tag size="small" type="info">投入{{ index + 1 }}</el-tag>
             <span>{{ port.materialName || `投入 ${index + 1}` }}</span>
           </div>
-          <div class="quantity-input-wrap" data-testid="fixed-input-quantity">
-            <el-input-number
-              :model-value="port.standardQuantity || 1"
-              :min="0.0001"
-              :controls="false"
-              :disabled="!canWrite"
-              :aria-label="`${port.materialName || `投入${index + 1}`}标准数量`"
-              @focus="selectNumericInput"
-              @change="(value: number | undefined) => updatePortQuantity(port.id, value)"
-            />
-            <span>{{ port.unit }}投入</span>
-            <span class="equation-equals">=</span>
-            <strong>1{{ primaryOutput?.unit }}产出</strong>
+          <div class="unit-flow-chip" data-testid="unit-flow-input">
+            {{ port.unit }}投入 <span>→</span> {{ primaryOutput?.unit }}产出
           </div>
         </div>
-        <div v-for="(port, index) in secondaryOutputs" :key="`quantity:${port.id}`" class="port-quantity-row">
-          <div class="quantity-port-name">
+        <div v-for="(port, index) in secondaryOutputs" :key="`unit:${port.id}`" class="unit-relationship-row">
+          <div class="unit-port-name">
             <el-tag size="small" type="success">产出{{ index + 1 }}</el-tag>
             <span>{{ port.materialName || `产出 ${index + 1}` }}</span>
           </div>
-          <div v-if="outputReadOnlyEquation(port)" class="auto-convert-chip" data-testid="auto-convert-output">
-            {{ outputReadOnlyEquation(port) }}
-          </div>
-          <div v-else class="quantity-input-wrap" data-testid="fixed-output-quantity">
-            <span class="equation-prefix">1 {{ primaryOutput?.unit }}主产出 =</span>
-            <el-input-number
-              :model-value="port.standardQuantity || 1"
-              :min="0.0001"
-              :controls="false"
-              :disabled="!canWrite"
-              :aria-label="`${port.materialName || '产出'}标准数量`"
-              @focus="selectNumericInput"
-              @change="(value: number | undefined) => updatePortQuantity(port.id, value)"
-            />
-            <span>{{ port.unit }}产出</span>
+          <div class="unit-flow-chip" data-testid="unit-flow-output">
+            主产出 {{ primaryOutput?.unit }} <span>→</span> 本产出 {{ port.unit }}
           </div>
         </div>
       </div>
@@ -220,11 +197,8 @@
 import { computed, ref } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
 import WorkflowSkuPicker, { type WorkflowSkuPickerOption } from './WorkflowSkuPicker.vue';
-import {
-  workflowAutoConversionEquation,
-  workflowSkuSpecificationEquation,
-} from './workflowUnits';
-import type { PortSelectionMode, ProcessNodeData, ProcessPort, ProcessPortGroup } from './types';
+import { workflowSkuSpecificationEquation } from './workflowUnits';
+import type { PortSelectionMode, ProcessNodeData, ProcessPortGroup } from './types';
 
 const props = withDefaults(defineProps<{
   data: ProcessNodeData;
@@ -261,18 +235,17 @@ const inputPortGroups = computed(() => (props.data.portGroups ?? []).filter((gro
 const outputPortGroups = computed(() => (props.data.portGroups ?? []).filter((group) => group.direction === 'OUTPUT'));
 const primaryOutput = computed(() => [...outputPorts.value].sort((a, b) => a.ordinal - b.ordinal)[0]);
 const secondaryOutputs = computed(() => outputPorts.value.filter((port) => port.id !== primaryOutput.value?.id));
+const unitRelationshipSummary = computed(() => {
+  const inputUnits = [...new Set(inputPorts.value.map((port) => port.unit).filter(Boolean))];
+  const inputLabel = inputUnits.length === 1 ? inputUnits[0] : inputUnits.join(' / ');
+  return `投入单位：${inputLabel || '待绑定'} · 产出单位：${primaryOutput.value?.unit || '待绑定'}`;
+});
 const primaryOutputSpecification = computed(() => {
   const port = primaryOutput.value;
   if (!port) return null;
   const spec = port.skuId ? props.skuSpecifications?.[port.skuId] : undefined;
   return workflowSkuSpecificationEquation(spec?.unit || port.unit, spec?.gramsPerUnit);
 });
-
-function outputReadOnlyEquation(port: ProcessPort): string | null {
-  return port.quantityMode === 'AUTO_CONVERT'
-    ? workflowAutoConversionEquation(primaryOutput.value?.unit, port.unit)
-    : null;
-}
 
 function isLongMaterialName(name: string | undefined): boolean {
   const visualLength = Array.from(name || '').reduce(
@@ -329,7 +302,7 @@ function updateOutputRelation(mode: PortSelectionMode): void {
   const group: ProcessPortGroup = {
     id: existing?.id || `port-group:${direction.toLowerCase()}:all`,
     direction,
-    label: direction === 'INPUT' ? '投入关系' : '产出关系',
+    label: '产出关系',
     mode,
     ...bounds,
     portIds,
@@ -340,20 +313,6 @@ function updateOutputRelation(mode: PortSelectionMode): void {
       group,
     ],
   });
-}
-
-function updatePortQuantity(portId: string, value: number | undefined): void {
-  if (!value || value <= 0) return;
-  emit('update', {
-    ports: props.data.ports.map((port) => (port.id === portId
-      ? { ...port, quantityMode: 'FIXED_RATIO', standardQuantity: value }
-      : { ...port })),
-  });
-}
-
-function selectNumericInput(event: FocusEvent): void {
-  const target = event.target;
-  if (target instanceof HTMLInputElement) target.select();
 }
 
 function handleStyle(index: number, count: number): Record<string, string> {
@@ -412,7 +371,7 @@ function handleStyle(index: number, count: number): Record<string, string> {
 .system-inference { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
 .system-inference-badge { width: fit-content; padding: 2px 8px; border-radius: 999px; background: #eef6ff; color: #1b65a8; font-size: 11px; font-weight: 650; }
 .system-inference-hint { color: #9aa5b8; font-size: 10px; }
-.port-section, .quantity-rule-section { margin-top: 12px; padding-top: 10px; border-top: 1px solid #edf2f7; }
+.port-section, .unit-rule-section { margin-top: 12px; padding-top: 10px; border-top: 1px solid #edf2f7; }
 .section-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; color: #475467; font-size: 12px; font-weight: 650; }
 .port-row { display: grid; grid-template-columns: minmax(0, 1fr) 76px; gap: 6px; margin-top: 6px; }
 .output-row { grid-template-columns: minmax(0, 1fr) 70px; }
@@ -425,37 +384,29 @@ function handleStyle(index: number, count: number): Record<string, string> {
   padding: 8px 10px; border-radius: 7px; background: #eef6ff; color: #1b65a8;
   font-size: 12px; font-weight: 600; line-height: 1.4;
 }
-.quantity-baseline {
-  display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 3px 8px;
-  padding: 8px 10px; border-radius: 7px; background: #eef6ff; color: #1b65a8;
-  font-size: 12px;
-}
-.quantity-baseline > span { font-weight: 650; }
-.quantity-baseline > strong { color: #174f7c; }
-.quantity-baseline > small { grid-column: 1 / -1; color: #667085; }
-.port-quantity-list { display: flex; flex-direction: column; gap: 8px; }
-.port-quantity-row {
+.unit-relationship-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.unit-relationship-row {
   display: grid; grid-template-columns: minmax(0, 1fr) minmax(158px, 42%); gap: 6px;
   align-items: center; min-height: 32px; padding: 6px 8px; border: 1px solid #edf2f7; border-radius: 7px;
 }
-.quantity-port-name { display: flex; align-items: center; gap: 6px; min-width: 0; color: #475467; font-size: 12px; }
-.quantity-port-name > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.port-quantity-row.is-long-name { grid-template-columns: minmax(0, 1fr); gap: 5px; }
-.port-quantity-row.is-long-name .quantity-port-name > span:last-child {
+.unit-port-name { display: flex; align-items: center; gap: 6px; min-width: 0; color: #475467; font-size: 12px; }
+.unit-port-name > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.unit-relationship-row.is-long-name { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+.unit-relationship-row.is-long-name .unit-port-name > span:last-child {
   overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; line-height: 1.35;
 }
-.port-quantity-row.is-long-name .quantity-input-wrap { justify-self: end; width: min(100%, 190px); }
-.baseline-quantity, .auto-convert-chip {
-  padding: 5px 8px; border-radius: 6px; background: #eef6ff; color: #1b65a8;
+.unit-relationship-row.is-long-name .unit-flow-chip { justify-self: end; width: min(100%, 190px); }
+.unit-only-summary {
+  display: flex; flex-direction: column; gap: 4px; padding: 9px 10px; border-radius: 7px;
+  background: #f7f9fc; color: #667085; font-size: 12px; line-height: 1.45;
+}
+.unit-only-summary strong { color: #344054; }
+.unit-only-summary small { color: #1b65a8; }
+.unit-flow-chip {
+  padding: 5px 8px; border-radius: 6px; background: #f7f9fc; color: #667085;
   font-size: 12px; font-weight: 600; text-align: center;
 }
-.auto-convert-chip { background: #edf8f2; color: #2f855a; }
-.quantity-input-wrap { display: grid; grid-template-columns: minmax(54px, 64px) auto auto auto; justify-content: end; align-items: center; gap: 3px; color: #667085; font-size: 11px; }
-.quantity-input-wrap strong { color: #2f855a; font-weight: 650; white-space: nowrap; }
-.equation-equals { color: #98a2b3; }
-.equation-prefix { white-space: nowrap; }
-.quantity-input-wrap :deep(.el-input-number) { width: 100%; }
-.quantity-input-wrap :deep(input) { user-select: text; }
+.unit-flow-chip span { color: #98a2b3; padding: 0 3px; }
 .reporting-row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; color: #667085; font-size: 12px; }
 .unit-chip {
   display: flex;

@@ -34,7 +34,7 @@ export interface ProcessPort {
   skuId?: string;
   materialKind?: Exclude<ProductProcessNodeKind, 'PROCESS'>;
   unit: string;
-  /** Input required per primary output unit, or secondary-output quantity per primary output unit. */
+  /** Legacy snapshot field. The editor no longer authors planned input/output quantities. */
   standardQuantity?: number;
   quantityMode?: 'AUTO_CONVERT' | 'FIXED_RATIO';
   conversionRefId?: string | null;
