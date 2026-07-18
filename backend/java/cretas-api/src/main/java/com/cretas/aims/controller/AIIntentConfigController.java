@@ -579,12 +579,12 @@ public class AIIntentConfigController {
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 
-    // Sprint 11 Round 2: removed @RequirePermission({"system:read_write"}). The confirm step
-    // is the second half of preview/confirm pair — perm gate (if any) belongs on the original
-    // preview which already established intent permission. Intent-level perm via tokenized
-    // confirmToken still enforces the original requestor's role.
+    // The token binds factory, user, intent, tool/version/mode and canonical parameters. Role is
+    // intentionally not persisted in the token; confirm re-runs Tool RBAC using the current
+    // trusted JWT role, so revoked permissions take effect before execution.
     @PostMapping("/confirm/{confirmToken}")
-    @Operation(summary = "确认执行预览的意图", description = "确认执行之前预览的意图操作")
+    @Operation(summary = "确认执行预览的意图",
+               description = "原子认领命令绑定的预览令牌，并在当前JWT权限复核后执行；执行成功后才确认令牌")
     public ResponseEntity<ApiResponse<IntentExecuteResponse>> confirmIntent(
             @Parameter(description = "工厂ID") @PathVariable String factoryId,
             @Parameter(description = "确认Token") @PathVariable String confirmToken,
@@ -595,7 +595,8 @@ public class AIIntentConfigController {
         Long userId = jwtUtil.getUserIdFromToken(token);
         String userRole = jwtUtil.getRoleFromToken(token);
 
-        log.info("确认执行AI意图: factoryId={}, confirmToken={}", factoryId, confirmToken);
+        log.info("确认执行AI意图: factoryId={}, tokenFingerprint={}", factoryId,
+                com.cretas.aims.ai.tool.gateway.ToolCommandDigest.tokenFingerprint(confirmToken));
 
         IntentExecuteResponse response = intentExecutorService.confirm(factoryId, confirmToken, userId, userRole);
         return ResponseEntity.ok(ApiResponse.success(response));

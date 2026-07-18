@@ -1,5 +1,6 @@
 package com.cretas.aims.entity.intent;
 
+import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -40,19 +41,23 @@ public class IntentPreviewToken {
     /**
      * 令牌值 (UUID)
      */
-    @Column(name = "token", length = 64, nullable = false, unique = true)
+    @Column(name = "token", length = 64, nullable = false, unique = true, updatable = false)
     private String token;
 
     /**
      * 工厂ID
      */
-    @Column(name = "factory_id", length = 50, nullable = false)
+    @Column(name = "factory_id", length = 50, nullable = false, updatable = false)
     private String factoryId;
+
+    /** Trusted tenant binding. Currently equal to factoryId for Cretas factory/restaurant tenants. */
+    @Column(name = "tenant_id", length = 50, updatable = false)
+    private String tenantId;
 
     /**
      * 用户ID
      */
-    @Column(name = "user_id", nullable = false)
+    @Column(name = "user_id", nullable = false, updatable = false)
     private Long userId;
 
     /**
@@ -64,7 +69,7 @@ public class IntentPreviewToken {
     /**
      * 意图代码
      */
-    @Column(name = "intent_code", length = 100, nullable = false)
+    @Column(name = "intent_code", length = 100, nullable = false, updatable = false)
     private String intentCode;
 
     /**
@@ -72,6 +77,27 @@ public class IntentPreviewToken {
      */
     @Column(name = "intent_name", length = 200)
     private String intentName;
+
+    /** Exact Tool selected when the preview was issued. */
+    @Column(name = "tool_name", length = 150, updatable = false)
+    private String toolName;
+
+    /** Tool descriptor/version lock captured at issuance. */
+    @Column(name = "descriptor_version", length = 64, updatable = false)
+    private String descriptorVersion;
+
+    /** Confirmation may execute only the mode captured at issuance. */
+    @Column(name = "execution_mode", length = 20, updatable = false)
+    @Enumerated(EnumType.STRING)
+    private ToolExecutionMode executionMode;
+
+    /** SHA-256 of canonical parameters only. */
+    @Column(name = "parameters_hash", length = 64, updatable = false)
+    private String parametersHash;
+
+    /** SHA-256 of factory/user/tool/version/mode/canonical parameters. */
+    @Column(name = "command_digest", length = 64, updatable = false)
+    private String commandDigest;
 
     /**
      * 实体类型 (如 PRODUCT_TYPE, PRODUCTION_BATCH)
@@ -95,7 +121,7 @@ public class IntentPreviewToken {
      * 预览数据 (JSON)
      * 包含操作的完整参数，confirm 时使用
      */
-    @Column(name = "preview_data", columnDefinition = "TEXT")
+    @Column(name = "preview_data", columnDefinition = "TEXT", updatable = false)
     private String previewData;
 
     /**
@@ -138,6 +164,13 @@ public class IntentPreviewToken {
     @Column(name = "resolved_at")
     private LocalDateTime resolvedAt;
 
+    /** Random lease owner written by the atomic PENDING -> EXECUTING claim. */
+    @Column(name = "claim_id", length = 64)
+    private String claimId;
+
+    @Column(name = "claimed_at")
+    private LocalDateTime claimedAt;
+
     /**
      * 确认/取消结果描述
      */
@@ -167,6 +200,8 @@ public class IntentPreviewToken {
     public enum TokenStatus {
         /** 待确认 */
         PENDING,
+        /** 已被单个确认请求原子认领，Tool 尚未完成 */
+        EXECUTING,
         /** 已确认执行 */
         CONFIRMED,
         /** 已取消 */
@@ -195,6 +230,9 @@ public class IntentPreviewToken {
      * 确认令牌 (执行操作)
      */
     public void confirm(String message) {
+        if (status != TokenStatus.EXECUTING) {
+            throw new IllegalStateException("Only an EXECUTING token can be confirmed");
+        }
         this.status = TokenStatus.CONFIRMED;
         this.resolvedAt = LocalDateTime.now();
         this.resolutionMessage = message;
@@ -222,6 +260,9 @@ public class IntentPreviewToken {
      * 标记为执行失败
      */
     public void fail(String errorMessage) {
+        if (status != TokenStatus.EXECUTING) {
+            throw new IllegalStateException("Only an EXECUTING token can fail");
+        }
         this.status = TokenStatus.FAILED;
         this.resolvedAt = LocalDateTime.now();
         this.resolutionMessage = errorMessage;
@@ -230,6 +271,7 @@ public class IntentPreviewToken {
     /**
      * 创建预览令牌
      */
+    @Deprecated(forRemoval = false)
     public static IntentPreviewToken create(String factoryId, Long userId, String username,
                                              String intentCode, String intentName,
                                              String entityType, String entityId,
@@ -255,5 +297,15 @@ public class IntentPreviewToken {
     public long getRemainingSeconds() {
         if (isExpired()) return 0;
         return java.time.Duration.between(LocalDateTime.now(), expiresAt).getSeconds();
+    }
+
+    /** Legacy rows and legacy issuance deliberately fail closed at confirmation time. */
+    public boolean isBoundForExecution() {
+        return tenantId != null && !tenantId.isBlank()
+                && toolName != null && !toolName.isBlank()
+                && descriptorVersion != null && !descriptorVersion.isBlank()
+                && executionMode != null
+                && parametersHash != null && parametersHash.length() == 64
+                && commandDigest != null && commandDigest.length() == 64;
     }
 }
