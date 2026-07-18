@@ -2014,14 +2014,13 @@ function selectRawSku(materialNodeId: string, skuId: string): void {
     option.unit || String(material.data?.baseUnit || 'kg'),
   );
   mutate(() => {
-    material.data = {
-      ...material.data,
+    Object.assign(material.data, {
       name: option.name,
       skuId: option.id,
       skuCode: option.code || option.id,
       baseUnit: nextUnit,
       bound: true,
-    };
+    });
     flowNodes.value.filter((node) => node.data?.kind === 'PROCESS').forEach((node) => {
       const data = node.data as ProcessNodeData & { kind: 'PROCESS' };
       data.ports.forEach((port) => {
@@ -2195,8 +2194,9 @@ function bindOutputSku(processId: string, portId: string, option: SkuOption): bo
     if (primaryOutputPort?.id === port.id) {
       data.outputUnit = nextUnit;
     }
-    material.data = {
-      ...material.data,
+    // Vue Flow keeps the node-data reference used by the rendered Cell. Mutate that
+    // reference so changing an output SKU refreshes the connected Cell immediately.
+    Object.assign(material.data, {
       kind,
       name: option.name,
       skuId: option.id,
@@ -2204,7 +2204,7 @@ function bindOutputSku(processId: string, portId: string, option: SkuOption): bo
       specification: option.specification,
       baseUnit: nextUnit,
       bound: true,
-    };
+    });
   });
   clearPublishBindingError(material.id);
   return true;
@@ -2309,8 +2309,7 @@ async function saveQuickEditProcess(): Promise<void> {
           });
           delete port.quantityMode;
           delete port.standardQuantity;
-          material.data = {
-            ...material.data,
+          Object.assign(material.data, {
             kind: nextOutputKind,
             name: nextLabel,
             skuId: '',
@@ -2318,7 +2317,7 @@ async function saveQuickEditProcess(): Promise<void> {
             specification: undefined,
             baseUnit: '',
             bound: false,
-          };
+          });
         }
       });
     });
@@ -2363,7 +2362,7 @@ async function saveQuickEditSku(): Promise<void> {
     const material = flowNodes.value.find((node) => node.id === quickEditNodeId.value);
     if (material) {
       mutate(() => {
-        material.data = { ...material.data, name, baseUnit: unit };
+        Object.assign(material.data, { name, baseUnit: unit });
         flowNodes.value.filter((node) => node.data?.kind === 'PROCESS').forEach((node) => {
           const data = node.data as ProcessNodeData;
           data.ports.forEach((port) => {
