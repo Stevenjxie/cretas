@@ -1,150 +1,238 @@
 package com.cretas.aims.mcp;
 
 import com.cretas.aims.ai.tool.ToolRegistry;
-import com.cretas.aims.mcp.MCPProtocol.*;
+import com.cretas.aims.ai.tool.gateway.mcp.MCPExternalEndpoint;
+import com.cretas.aims.ai.tool.gateway.mcp.MCPExternalHttpClientFactory;
+import com.cretas.aims.ai.tool.gateway.mcp.MCPExternalRuntimeRegistry;
+import com.cretas.aims.ai.tool.gateway.mcp.MCPExternalSchemaDigest;
+import com.cretas.aims.ai.tool.gateway.mcp.MCPExternalToolPolicy;
+import com.cretas.aims.mcp.MCPProtocol.MCPRequest;
+import com.cretas.aims.mcp.MCPProtocol.MCPResponse;
+import com.cretas.aims.mcp.MCPProtocol.MCPToolDefinition;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.http.*;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
-import jakarta.annotation.PostConstruct;
-import java.util.*;
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 
 /**
- * MCP Client Adapter — 发现并注册外部 MCP 服务器上的工具
+ * Discovers only locally allowlisted outbound MCP tools.
  *
- * <p>在应用启动时，连接配置的外部 MCP 服务器，发现其暴露的工具，
- * 并将它们以 {@link MCPToolProxy} 的形式注册到 {@link ToolRegistry}。
- *
- * <p>仅在 {@code cretas.mcp.external-servers} 配置属性存在时激活。
- *
- * @author Cretas Team
- * @version 1.0.0
- * @since 2026-03-09
+ * <p>The legacy URL list is intentionally not an authority. With no complete local policy this
+ * component performs no network calls and registers zero external capabilities. Validated proxies
+ * enter an isolated runtime registry, never the ordinary {@link ToolRegistry}.</p>
  */
 @Slf4j
 @Service
-@ConditionalOnProperty(name = "cretas.mcp.external-servers")
 public class MCPClientAdapter {
 
-    @Autowired
-    private ToolRegistry toolRegistry;
+    private final ToolRegistry toolRegistry;
+    private final ObjectMapper objectMapper;
+    private final MCPExternalProperties properties;
+    private final MCPExternalRuntimeRegistry externalRuntimeRegistry;
+    private final RestTemplate restTemplate;
 
     @Autowired
-    private ObjectMapper objectMapper;
+    public MCPClientAdapter(
+            ToolRegistry toolRegistry,
+            ObjectMapper objectMapper,
+            MCPExternalProperties properties,
+            MCPExternalRuntimeRegistry externalRuntimeRegistry) {
+        this(toolRegistry, objectMapper, properties, externalRuntimeRegistry,
+                MCPExternalHttpClientFactory.create());
+    }
 
-    /**
-     * 外部 MCP 服务器 URL 列表（逗号分隔）
-     * 示例: http://localhost:9000/api/mcp,http://other-server:8080/api/mcp
-     */
-    @Value("${cretas.mcp.external-servers}")
-    private String externalServersConfig;
+    MCPClientAdapter(
+            ToolRegistry toolRegistry,
+            ObjectMapper objectMapper,
+            MCPExternalProperties properties,
+            MCPExternalRuntimeRegistry externalRuntimeRegistry,
+            RestTemplate restTemplate) {
+        this.toolRegistry = toolRegistry;
+        this.objectMapper = objectMapper;
+        this.properties = properties;
+        this.externalRuntimeRegistry = externalRuntimeRegistry;
+        this.restTemplate = restTemplate;
+    }
 
-    private final RestTemplate restTemplate = new RestTemplate();
-
-    /**
-     * 启动时自动发现并注册外部 MCP 工具
-     */
     @PostConstruct
     public void discoverAndRegister() {
-        if (externalServersConfig == null || externalServersConfig.isBlank()) {
-            log.info("MCP Client: 无外部服务器配置，跳过");
+        List<MCPExternalToolPolicy> policies = properties.validatedPolicies();
+        validatePolicySet(policies);
+
+        if (policies.isEmpty()) {
+            if (properties.getExternalServers() != null
+                    && !properties.getExternalServers().isBlank()) {
+                log.warn("MCP Client: ignoring legacy cretas.mcp.external-servers because no "
+                        + "governed external-tools policy is configured");
+            }
+            log.info("MCP Client: no governed outbound policies; registered 0 external tools");
             return;
         }
 
-        String[] serverUrls = externalServersConfig.split(",");
-        int totalRegistered = 0;
+        Map<MCPExternalEndpoint, List<MCPExternalToolPolicy>> byEndpoint = new LinkedHashMap<>();
+        policies.forEach(policy -> byEndpoint
+                .computeIfAbsent(policy.endpoint(), ignored -> new ArrayList<>())
+                .add(policy));
 
-        for (String rawUrl : serverUrls) {
-            String serverUrl = rawUrl.trim();
-            if (serverUrl.isEmpty()) continue;
-
+        int registered = 0;
+        for (Map.Entry<MCPExternalEndpoint, List<MCPExternalToolPolicy>> entry : byEndpoint.entrySet()) {
             try {
-                int count = discoverToolsFromServer(serverUrl);
-                totalRegistered += count;
-                log.info("MCP Client: 从 {} 注册了 {} 个外部工具", serverUrl, count);
-            } catch (Exception e) {
-                log.warn("MCP Client: 连接外部服务器失败 {} — {}", serverUrl, e.getMessage());
+                registered += discoverEndpoint(entry.getKey(), entry.getValue());
+            } catch (RuntimeException exception) {
+                log.warn("MCP Client: server {} discovery rejected: {}",
+                        entry.getKey().serverId(), exception.getMessage());
+            }
+        }
+        log.info("MCP Client: governed discovery completed; registered {} external tools", registered);
+    }
+
+    private int discoverEndpoint(
+            MCPExternalEndpoint endpoint,
+            List<MCPExternalToolPolicy> policies) {
+        List<MCPToolDefinition> remoteTools = fetchTools(endpoint);
+        Map<String, List<MCPToolDefinition>> byName = new HashMap<>();
+        for (MCPToolDefinition definition : remoteTools) {
+            if (definition.getName() != null) {
+                byName.computeIfAbsent(definition.getName(), ignored -> new ArrayList<>())
+                        .add(definition);
             }
         }
 
-        log.info("MCP Client: 外部工具发现完成，共注册 {} 个工具", totalRegistered);
+        int registered = 0;
+        for (MCPExternalToolPolicy policy : policies) {
+            List<MCPToolDefinition> matches = byName.getOrDefault(policy.remoteToolName(), List.of());
+            if (matches.size() != 1) {
+                if (matches.size() > 1) {
+                    log.warn("MCP Client: duplicate remote definition rejected: {}",
+                            policy.identity());
+                }
+                continue;
+            }
+
+            MCPToolDefinition definition = matches.getFirst();
+            if (definition.getInputSchema() == null) {
+                log.warn("MCP Client: missing schema rejected: {}", policy.identity());
+                continue;
+            }
+            String actualDigest = MCPExternalSchemaDigest.sha256(
+                    definition.getInputSchema(), objectMapper);
+            if (!MCPExternalSchemaDigest.matches(policy.schemaDigest(), actualDigest)) {
+                log.warn("MCP Client: schema drift rejected: {}", policy.identity());
+                continue;
+            }
+
+            if (toolRegistry.hasExecutor(policy.localToolName())) {
+                log.warn("MCP Client: local tool name collision rejected: {}",
+                        policy.localToolName());
+                continue;
+            }
+            if (externalRuntimeRegistry.hasCapability(policy.localToolName())) {
+                log.warn("MCP Client: duplicate external runtime capability rejected: {}",
+                        policy.localToolName());
+                continue;
+            }
+
+            MCPToolProxy proxy = new MCPToolProxy(
+                    policy, definition.getInputSchema(), restTemplate, objectMapper);
+            if (externalRuntimeRegistry.registerValidated(proxy)) {
+                registered++;
+                log.info("MCP Client: isolated governed external tool {} ({})",
+                        policy.localToolName(), policy.identity());
+            }
+        }
+        return registered;
     }
 
-    /**
-     * 从单个 MCP 服务器发现工具
-     *
-     * @param serverUrl 服务器基础 URL
-     * @return 成功注册的工具数量
-     */
-    @SuppressWarnings("unchecked")
-    private int discoverToolsFromServer(String serverUrl) {
-        String listUrl = serverUrl.endsWith("/")
-                ? serverUrl + "tools/list"
-                : serverUrl + "/tools/list";
-
-        log.info("MCP Client: 发现工具 — {}", listUrl);
-
-        // 构建 tools/list 请求
+    private List<MCPToolDefinition> fetchTools(MCPExternalEndpoint endpoint) {
+        URI listUri = endpoint.toolsListUri();
         MCPRequest request = MCPRequest.builder()
                 .id(UUID.randomUUID().toString())
                 .method("tools/list")
                 .params(Map.of())
                 .build();
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        HttpEntity<MCPRequest> httpEntity = new HttpEntity<>(request, headers);
-
         ResponseEntity<MCPResponse> response = restTemplate.exchange(
-                listUrl, HttpMethod.POST, httpEntity, MCPResponse.class);
-
-        MCPResponse mcpResponse = response.getBody();
-        if (mcpResponse == null || mcpResponse.getResult() == null) {
-            log.warn("MCP Client: 服务器 {} 返回空结果", serverUrl);
-            return 0;
+                listUri,
+                HttpMethod.POST,
+                new HttpEntity<>(request, jsonHeaders()),
+                MCPResponse.class);
+        if (!response.getStatusCode().is2xxSuccessful()) {
+            throw new IllegalStateException("tools/list returned HTTP "
+                    + response.getStatusCode().value());
         }
 
-        // 解析工具列表
-        Map<String, Object> result = (Map<String, Object>) mcpResponse.getResult();
-        List<Map<String, Object>> toolMaps = (List<Map<String, Object>>) result.get("tools");
-
-        if (toolMaps == null || toolMaps.isEmpty()) {
-            log.info("MCP Client: 服务器 {} 无可用工具", serverUrl);
-            return 0;
+        MCPResponse body = response.getBody();
+        if (body == null || body.getError() != null || !(body.getResult() instanceof Map<?, ?> result)) {
+            throw new IllegalStateException("tools/list returned an invalid MCP response");
+        }
+        Object rawTools = result.get("tools");
+        if (!(rawTools instanceof List<?> list)) {
+            throw new IllegalStateException("tools/list result.tools must be an array");
         }
 
-        int registered = 0;
-        for (Map<String, Object> toolMap : toolMaps) {
-            try {
-                MCPToolDefinition definition = MCPToolDefinition.builder()
-                        .name((String) toolMap.get("name"))
-                        .description((String) toolMap.get("description"))
-                        .inputSchema((Map<String, Object>) toolMap.get("inputSchema"))
-                        .build();
+        List<MCPToolDefinition> definitions = new ArrayList<>();
+        for (Object rawTool : list) {
+            if (!(rawTool instanceof Map<?, ?> map)) {
+                continue;
+            }
+            Object name = map.get("name");
+            Object schema = map.get("inputSchema");
+            if (!(name instanceof String remoteName) || remoteName.isBlank()
+                    || !(schema instanceof Map<?, ?>)) {
+                continue;
+            }
+            Map<String, Object> inputSchema = objectMapper.convertValue(
+                    schema, new TypeReference<>() { });
+            definitions.add(MCPToolDefinition.builder()
+                    .name(remoteName)
+                    .inputSchema(inputSchema)
+                    .build());
+        }
+        return definitions;
+    }
 
-                MCPToolProxy proxy = new MCPToolProxy(serverUrl, definition, restTemplate, objectMapper);
-
-                // 检查是否已存在同名工具
-                String proxyName = proxy.getToolName();
-                if (toolRegistry.hasExecutor(proxyName)) {
-                    log.warn("MCP Client: 跳过重复工具 {} (来自 {})", proxyName, serverUrl);
-                    continue;
-                }
-
-                toolRegistry.registerExternal(proxyName, proxy);
-                registered++;
-                log.info("MCP Client: 注册外部工具 {} (来自 {})", proxyName, serverUrl);
-
-            } catch (Exception e) {
-                log.warn("MCP Client: 注册工具失败 — {}", e.getMessage());
+    private void validatePolicySet(List<MCPExternalToolPolicy> policies) {
+        Set<String> identities = new LinkedHashSet<>();
+        Set<String> localNames = new LinkedHashSet<>();
+        Map<String, MCPExternalEndpoint> endpointByServer = new HashMap<>();
+        for (MCPExternalToolPolicy policy : policies) {
+            if (!identities.add(policy.identity())) {
+                throw new IllegalStateException("duplicate outbound MCP policy identity: "
+                        + policy.identity());
+            }
+            if (!localNames.add(policy.localToolName())) {
+                throw new IllegalStateException("duplicate outbound MCP localToolName: "
+                        + policy.localToolName());
+            }
+            MCPExternalEndpoint previous = endpointByServer.putIfAbsent(
+                    policy.endpoint().serverId(), policy.endpoint());
+            if (previous != null && !previous.equals(policy.endpoint())) {
+                throw new IllegalStateException("serverId is bound to multiple origin/path values: "
+                        + policy.endpoint().serverId());
             }
         }
+    }
 
-        return registered;
+    private HttpHeaders jsonHeaders() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        return headers;
     }
 }
