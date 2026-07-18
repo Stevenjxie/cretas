@@ -34,6 +34,8 @@ class ToolExecutionArchitectureTest {
 
     private static final String BASELINE_RESOURCE =
             "/ai/tool/gateway/tool-execution-direct-call-baseline.tsv";
+    private static final String SANCTIONED_GATEWAY =
+            "com/cretas/aims/ai/tool/gateway/DefaultToolExecutionGateway.java";
     private static final Pattern TOOL_EXECUTOR_IDENTIFIER = Pattern.compile(
             "(?:\\bToolExecutor\\b|\\bOptional\\s*<\\s*ToolExecutor\\s*>)"
                     + "\\s+([A-Za-z_$][A-Za-z0-9_$]*)");
@@ -47,7 +49,11 @@ class ToolExecutionArchitectureTest {
     void directToolExecutionPathsDoNotGrowBeyondMigrationBaseline() throws IOException {
         Baseline baseline = loadBaseline();
         Path sourceRoot = Path.of(System.getProperty("user.dir"), "src", "main", "java");
-        ScanResult actual = scan(sourceRoot);
+        ScanResult completeScan = scan(sourceRoot);
+        assertThat(completeScan.files().get(SANCTIONED_GATEWAY))
+                .as("the only sanctioned new ToolExecutor caller")
+                .isEqualTo(new Counts(1, 0, 1));
+        ScanResult actual = completeScan.without(SANCTIONED_GATEWAY);
 
         assertThat(baseline.files()).hasSize(14);
         assertThat(baseline.totalLines()).isEqualTo(18);
@@ -360,6 +366,12 @@ class ToolExecutionArchitectureTest {
 
         int totalLines() {
             return files.values().stream().mapToInt(Counts::lines).sum();
+        }
+
+        ScanResult without(String relativePath) {
+            Map<String, Counts> remaining = new LinkedHashMap<>(files);
+            remaining.remove(relativePath);
+            return new ScanResult(remaining);
         }
     }
 }

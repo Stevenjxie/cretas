@@ -65,5 +65,10 @@ class ToolCommandDigestTest {
         assertThat(ToolCommandDigest.tokenFingerprint(token))
                 .hasSize(12)
                 .doesNotContain(token);
+        assertThat(ToolCommandDigest.persistentSecretFingerprint(token))
+                .hasSize(64)
+                .matches("[0-9a-f]{64}")
+                .doesNotContain(token)
+                .isNotEqualTo(ToolCommandDigest.tokenFingerprint(token));
     }
 }

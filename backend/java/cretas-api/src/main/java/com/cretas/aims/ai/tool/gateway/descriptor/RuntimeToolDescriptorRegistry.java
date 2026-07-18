@@ -20,6 +20,7 @@ import java.util.stream.Collectors;
 public final class RuntimeToolDescriptorRegistry {
 
     private final Map<String, ToolDescriptor> descriptorsByName;
+    private final Map<String, String> implementationClassesByName;
 
     public static RuntimeToolDescriptorRegistry loadDefault() {
         return new RuntimeToolDescriptorRegistry(
@@ -69,13 +70,16 @@ public final class RuntimeToolDescriptorRegistry {
         }
 
         Map<String, ToolDescriptor> approvedDescriptors = new LinkedHashMap<>();
+        Map<String, String> approvedImplementations = new LinkedHashMap<>();
         for (Map.Entry<String, RuntimeToolPolicyEntry> binding : runtimePolicies.entrySet()) {
             ToolDescriptorInventoryEntry inventoryEntry = approvedInventory.get(binding.getKey());
             RuntimeToolPolicyEntry runtimeEntry = binding.getValue();
             validateAlignment(inventoryEntry, runtimeEntry);
             approvedDescriptors.put(binding.getKey(), runtimeEntry.toDescriptor());
+            approvedImplementations.put(binding.getKey(), runtimeEntry.implementationClass());
         }
         this.descriptorsByName = Collections.unmodifiableMap(approvedDescriptors);
+        this.implementationClassesByName = Collections.unmodifiableMap(approvedImplementations);
     }
 
     public Optional<ToolDescriptor> findApproved(String toolName) {
@@ -87,6 +91,14 @@ public final class RuntimeToolDescriptorRegistry {
 
     public Set<String> approvedToolNames() {
         return descriptorsByName.keySet();
+    }
+
+    /** Exact source-audited implementation binding for runtime executor verification. */
+    public Optional<String> approvedImplementationClass(String toolName) {
+        if (toolName == null || toolName.isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(implementationClassesByName.get(toolName));
     }
 
     private static void validateAlignment(

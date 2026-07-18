@@ -3,8 +3,8 @@ package com.cretas.aims.ai.tool.gateway;
 /**
  * Contract boundary for governed tool execution.
  *
- * <p>This phase intentionally defines no implementation and makes no claim that policy,
- * idempotency, audit, or trace enforcement is already wired into production callers.</p>
+ * <p>The default Spring implementation enforces policy, confirmation, persistent idempotency,
+ * and audit. Production callers remain on their legacy paths until migrated explicitly.</p>
  */
 @FunctionalInterface
 public interface ToolExecutionGateway {
