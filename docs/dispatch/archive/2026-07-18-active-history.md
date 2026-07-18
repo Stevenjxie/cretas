@@ -19,6 +19,12 @@
 |---|---|---|---|
 | CRETAS-WEB-RELEASE-FASTLANE-V2-20260718 | `3d199278f71a775ee570084eea0729bede63b4f9` | coordinator | 将逐文件 shell 哈希替换为单个不可变 `dist.tar.gz` SHA-256，保留 build commit、Web Git tree、package-lock、index、tar 完整性与引用 chunk 门禁；部署保存远端 archive 指纹，相同 archive/index 且 HTTP 200 时在 scp 前 no-op。直接契约测试覆盖 squash/tree/dirty/archive 篡改/结构损坏/引用缺失/依赖回退/远端 no-op，且既有 Web 部署门禁通过。 |
 
+## Java/Web 并行发布快速通道
+
+| ID | Base SHA | Owner | Result |
+|---|---|---|---|
+| CRETAS-RELEASE-PARALLEL-FASTLANE-20260718 | `8b82fd7973a5ab6d3c264be15df46e50a6d7dc8e` | coordinator | 新增 Java 显式测试选择器与项目导入静态预检、Java/Web 可信制品并行构建入口、以及必须显式确认任意切换顺序 API 兼容的受控并行生产部署入口。保留 Java 单次 Maven 生命周期、双 manifest 验证、Web 原子切换、Java 蓝绿观察与各自失败日志；契约测试与既有 release manifest/Web 部署门禁全部通过。 |
+
 ## Workflow 编辑器阻塞修复
 
 | ID | Base SHA | Owner | Result |
