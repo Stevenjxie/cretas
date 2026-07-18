@@ -7,6 +7,7 @@ from typing import Any, Literal, Mapping
 from pydantic import BaseModel, ConfigDict, Field
 
 from .run_contracts import AgentEvent, GrossMarginDeclineRequest, RunRecord
+from .run_store import StaleRunReconciliation
 
 
 class StartRestaurantRunRequest(BaseModel):
@@ -55,4 +56,18 @@ def run_replay_v1(record: RunRecord, events: tuple[AgentEvent, ...]) -> dict[str
         "events": [event_v1(event) for event in events],
         "terminalOutcome": dict(outcome) if outcome is not None else None,
         "failureCode": record.failure_code,
+    }
+
+
+def stale_reconciliation_v1(
+    run_id: str, reconciliation: StaleRunReconciliation
+) -> dict[str, Any]:
+    """Serialize only the exact stale-run reconciliation result contract."""
+
+    return {
+        "schemaVersion": "1.0",
+        "runId": run_id,
+        "result": reconciliation.result.value,
+        "state": reconciliation.record.state.value,
+        "failureCode": reconciliation.record.failure_code,
     }

@@ -5,13 +5,16 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from dataclasses import replace
-from typing import Any, Mapping, Optional, Protocol
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
+from enum import Enum
+from typing import Any, Callable, Mapping, Optional, Protocol
 
 from .contracts import TrustedExecutionContext
 from .run_contracts import (
     AgentEvent,
     AgentEventType,
+    OutcomeStatus,
     RouteCode,
     RunRecord,
     RunState,
@@ -44,6 +47,21 @@ _TERMINAL_EVENT_TYPES = {
     AgentEventType.RUN_CANCELLED,
     AgentEventType.BUDGET_EXCEEDED,
 }
+
+STALE_AFTER_SECONDS = 120
+STALE_RUN_FAILURE_CODE = "PROCESS_INTERRUPTED_STALE_RUN"
+
+
+class StaleRunReconcileResult(str, Enum):
+    RECONCILED = "RECONCILED"
+    NOT_STALE = "NOT_STALE"
+    ALREADY_TERMINAL = "ALREADY_TERMINAL"
+
+
+@dataclass(frozen=True)
+class StaleRunReconciliation:
+    result: StaleRunReconcileResult
+    record: RunRecord
 
 
 def _exact_keys(value: Mapping[str, Any], expected: set[str], label: str) -> None:
@@ -356,14 +374,27 @@ class RunStore(Protocol):
     ) -> bool:
         ...
 
+    async def reconcile_stale_run(
+        self, run_id: str, context: TrustedExecutionContext
+    ) -> StaleRunReconciliation:
+        ...
+
 
 class InMemoryRunStore:
     """Concurrency-safe fake with the same tenant and terminal invariants."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, clock: Callable[[], datetime] | None = None) -> None:
         self._runs: dict[str, RunRecord] = {}
         self._events: dict[str, list[AgentEvent]] = {}
+        self._updated_at: dict[str, datetime] = {}
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._lock = asyncio.Lock()
+
+    def _now(self) -> datetime:
+        value = self._clock()
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise RunStoreError("run store clock must return timezone-aware datetime")
+        return value.astimezone(timezone.utc)
 
     async def create_run(self, run_id, context, route_code, safe_request):
         _require_context(context)
@@ -371,6 +402,7 @@ class InMemoryRunStore:
         async with self._lock:
             if run_id in self._runs:
                 raise RunStoreError("run id already exists")
+            now = self._now()
             record = RunRecord(
                 run_id=run_id,
                 factory_id=context.factory_id,
@@ -381,6 +413,7 @@ class InMemoryRunStore:
             )
             self._runs[run_id] = record
             self._events[run_id] = []
+            self._updated_at[run_id] = now
             return record
 
     async def load_run(self, run_id, context):
@@ -408,6 +441,7 @@ class InMemoryRunStore:
             if record.state.terminal:
                 raise RunStoreError("events may not be appended after terminal state")
             _require_monotonic_counters(record.counters, counters)
+            now = self._now()
             sequence = record.next_event_sequence + 1
             event = AgentEvent(
                 run_id,
@@ -422,6 +456,7 @@ class InMemoryRunStore:
             self._runs[run_id] = replace(
                 record, next_event_sequence=sequence, counters=counters
             )
+            self._updated_at[run_id] = now
             return event
 
     async def compare_and_set_terminal(
@@ -449,6 +484,7 @@ class InMemoryRunStore:
             if record.state is not expected_state:
                 return False
             _require_monotonic_counters(record.counters, counters)
+            now = self._now()
             sequence = record.next_event_sequence + 1
             self._events[run_id].append(
                 AgentEvent(
@@ -467,7 +503,53 @@ class InMemoryRunStore:
                 failure_code=failure_code,
                 next_event_sequence=sequence,
             )
+            self._updated_at[run_id] = now
             return True
+
+    async def reconcile_stale_run(self, run_id, context):
+        _require_context(context)
+        async with self._lock:
+            record = self._owned(run_id, context)
+            if record.state.terminal:
+                return StaleRunReconciliation(
+                    StaleRunReconcileResult.ALREADY_TERMINAL, record
+                )
+            now = self._now()
+            cutoff = now - timedelta(seconds=STALE_AFTER_SECONDS)
+            if self._updated_at[run_id] > cutoff:
+                return StaleRunReconciliation(StaleRunReconcileResult.NOT_STALE, record)
+
+            outcome = StructuredOutcome(
+                status=OutcomeStatus.FAILED,
+                route_code=record.route_code,
+                blockers=(STALE_RUN_FAILURE_CODE,),
+            )
+            summary = safe_outcome_payload(outcome.persistence_dict())
+            event_body = safe_event_payload(
+                AgentEventType.RUN_FAILED,
+                {"failureCode": STALE_RUN_FAILURE_CODE},
+            )
+            sequence = record.next_event_sequence + 1
+            event = AgentEvent(
+                run_id,
+                context.factory_id,
+                sequence,
+                AgentEventType.RUN_FAILED,
+                event_body,
+            )
+            reconciled = replace(
+                record,
+                state=RunState.FAILED,
+                outcome_summary=summary,
+                failure_code=STALE_RUN_FAILURE_CODE,
+                next_event_sequence=sequence,
+            )
+            self._events[run_id].append(event)
+            self._runs[run_id] = reconciled
+            self._updated_at[run_id] = now
+            return StaleRunReconciliation(
+                StaleRunReconcileResult.RECONCILED, reconciled
+            )
 
     async def events_for(self, run_id, context, *, after_sequence=0):
         _require_context(context)
@@ -501,10 +583,17 @@ class PostgresRunStore:
                 await self._bind(connection, context)
                 row = await connection.fetchrow(
                     """
+                    WITH statement_time AS (
+                        SELECT clock_timestamp() AS observed_at
+                    )
                     INSERT INTO smart_bi_agent_run (
                         run_id, factory_id, business_type, correlation_id,
-                        route_code, state, sanitized_request
-                    ) VALUES ($1::uuid, $2, 'RESTAURANT', $3, $4, 'RUNNING', $5::jsonb)
+                        route_code, state, sanitized_request,
+                        created_at, updated_at
+                    )
+                    SELECT $1::uuid, $2, 'RESTAURANT', $3, $4, 'RUNNING',
+                           $5::jsonb, observed_at, observed_at
+                    FROM statement_time
                     RETURNING *
                     """,
                     run_id,
@@ -551,14 +640,30 @@ class PostgresRunStore:
         async with self._pool.acquire() as connection:
             async with connection.transaction():
                 await self._bind(connection, context)
+                observed = await connection.fetchrow(
+                    """
+                    SELECT version
+                    FROM smart_bi_agent_run
+                    WHERE run_id = $1::uuid AND factory_id = $2
+                      AND state = 'RUNNING'
+                    FOR UPDATE
+                    """,
+                    run_id,
+                    context.factory_id,
+                )
+                if observed is None:
+                    raise RunAccessError("run is absent, cross-tenant, or terminal")
+                observed_at = await connection.fetchval("SELECT clock_timestamp()")
                 row = await connection.fetchrow(
                     """
                     UPDATE smart_bi_agent_run
                     SET next_event_sequence = next_event_sequence + 1,
                         rounds_used = $3, tool_calls_used = $4,
                         facts_used = $5, evidence_bytes_used = $6,
-                        updated_at = NOW(), version = version + 1
-                    WHERE run_id = $1::uuid AND factory_id = $2 AND state = 'RUNNING'
+                        updated_at = $8::timestamptz,
+                        version = version + 1
+                    WHERE run_id = $1::uuid AND factory_id = $2
+                      AND state = 'RUNNING' AND version = $7
                     RETURNING next_event_sequence
                     """,
                     run_id,
@@ -567,9 +672,11 @@ class PostgresRunStore:
                     counters.tool_calls_used,
                     counters.facts_used,
                     counters.evidence_bytes_used,
+                    int(observed["version"]),
+                    observed_at,
                 )
                 if row is None:
-                    raise RunAccessError("run is absent, cross-tenant, or terminal")
+                    raise RunStoreError("run changed while appending event")
                 sequence = int(row["next_event_sequence"])
                 await connection.execute(
                     """
@@ -613,6 +720,19 @@ class PostgresRunStore:
         async with self._pool.acquire() as connection:
             async with connection.transaction():
                 await self._bind(connection, context)
+                observed = await connection.fetchrow(
+                    """
+                    SELECT state, version
+                    FROM smart_bi_agent_run
+                    WHERE run_id = $1::uuid AND factory_id = $2
+                    FOR UPDATE
+                    """,
+                    run_id,
+                    context.factory_id,
+                )
+                if observed is None or observed["state"] != expected_state.value:
+                    return False
+                observed_at = await connection.fetchval("SELECT clock_timestamp()")
                 row = await connection.fetchrow(
                     """
                     UPDATE smart_bi_agent_run
@@ -621,8 +741,11 @@ class PostgresRunStore:
                         tool_calls_used = $8, facts_used = $9,
                         evidence_bytes_used = $10,
                         next_event_sequence = next_event_sequence + 1,
-                        completed_at = NOW(), updated_at = NOW(), version = version + 1
-                    WHERE run_id = $1::uuid AND factory_id = $2 AND state = $3
+                        completed_at = $12::timestamptz,
+                        updated_at = $12::timestamptz,
+                        version = version + 1
+                    WHERE run_id = $1::uuid AND factory_id = $2
+                      AND state = $3 AND version = $11
                     RETURNING next_event_sequence
                     """,
                     run_id,
@@ -635,9 +758,11 @@ class PostgresRunStore:
                     counters.tool_calls_used,
                     counters.facts_used,
                     counters.evidence_bytes_used,
+                    int(observed["version"]),
+                    observed_at,
                 )
                 if row is None:
-                    return False
+                    raise RunStoreError("run changed during terminal transition")
                 await connection.execute(
                     """
                     INSERT INTO smart_bi_agent_event (
@@ -651,6 +776,89 @@ class PostgresRunStore:
                     self._json(event_body),
                 )
         return True
+
+    async def reconcile_stale_run(self, run_id, context):
+        _require_context(context)
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                await self._bind(connection, context)
+                observed = await connection.fetchrow(
+                    """
+                    SELECT run.*
+                    FROM smart_bi_agent_run AS run
+                    WHERE run.run_id = $1::uuid AND run.factory_id = $2
+                    FOR UPDATE OF run
+                    """,
+                    run_id,
+                    context.factory_id,
+                )
+                if observed is None:
+                    raise RunAccessError("run does not exist in trusted tenant")
+                server_now = await connection.fetchval("SELECT clock_timestamp()")
+                record = self._record(observed)
+                if record.state.terminal:
+                    return StaleRunReconciliation(
+                        StaleRunReconcileResult.ALREADY_TERMINAL, record
+                    )
+
+                cutoff = server_now - timedelta(seconds=STALE_AFTER_SECONDS)
+                if observed["updated_at"] > cutoff:
+                    return StaleRunReconciliation(
+                        StaleRunReconcileResult.NOT_STALE, record
+                    )
+
+                outcome = StructuredOutcome(
+                    status=OutcomeStatus.FAILED,
+                    route_code=record.route_code,
+                    blockers=(STALE_RUN_FAILURE_CODE,),
+                )
+                summary = safe_outcome_payload(outcome.persistence_dict())
+                event_body = safe_event_payload(
+                    AgentEventType.RUN_FAILED,
+                    {"failureCode": STALE_RUN_FAILURE_CODE},
+                )
+                updated = await connection.fetchrow(
+                    """
+                    UPDATE smart_bi_agent_run
+                    SET state = 'FAILED', outcome_summary = $6::jsonb,
+                        failure_code = $7,
+                        next_event_sequence = next_event_sequence + 1,
+                        completed_at = $5::timestamptz,
+                        updated_at = $5::timestamptz, version = version + 1
+                    WHERE run_id = $1::uuid AND factory_id = $2
+                      AND state = 'RUNNING' AND version = $3
+                      AND updated_at = $4
+                      AND updated_at <= $5::timestamptz
+                          - make_interval(secs => $8::double precision)
+                    RETURNING *
+                    """,
+                    run_id,
+                    context.factory_id,
+                    int(observed["version"]),
+                    observed["updated_at"],
+                    server_now,
+                    self._json(summary),
+                    STALE_RUN_FAILURE_CODE,
+                    STALE_AFTER_SECONDS,
+                )
+                if updated is None:
+                    raise RunStoreError("stale run changed during reconciliation")
+                sequence = int(updated["next_event_sequence"])
+                await connection.execute(
+                    """
+                    INSERT INTO smart_bi_agent_event (
+                        run_id, factory_id, event_sequence, event_type, payload
+                    ) VALUES ($1::uuid, $2, $3, 'RUN_FAILED', $4::jsonb)
+                    """,
+                    run_id,
+                    context.factory_id,
+                    sequence,
+                    self._json(event_body),
+                )
+                reconciled = self._record(updated)
+                return StaleRunReconciliation(
+                    StaleRunReconcileResult.RECONCILED, reconciled
+                )
 
     async def events_for(self, run_id, context, *, after_sequence=0):
         _require_context(context)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import jwt
@@ -30,7 +31,12 @@ from smartbi.agent.runtime.run_contracts import (
     StructuredOutcome,
 )
 from smartbi.agent.runtime.routes import gross_margin_decline_plan
-from smartbi.agent.runtime.run_store import InMemoryRunStore, UnsafeRunPayloadError
+from smartbi.agent.runtime.run_store import (
+    STALE_AFTER_SECONDS,
+    STALE_RUN_FAILURE_CODE,
+    InMemoryRunStore,
+    UnsafeRunPayloadError,
+)
 
 
 SECRET = "agent-runtime-internal-secret"
@@ -50,6 +56,17 @@ VALID_BODY = {
     "storeTopN": 20,
     "dishTopN": 10,
 }
+
+
+class MutableClock:
+    def __init__(self) -> None:
+        self.value = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
+
+    def __call__(self) -> datetime:
+        return self.value
+
+    def advance(self, seconds: float) -> None:
+        self.value += timedelta(seconds=seconds)
 
 
 def test_sse_persistence_poll_is_not_a_busy_spin():
@@ -111,7 +128,8 @@ class PersistingRuntime:
 @pytest.fixture
 def app(monkeypatch):
     monkeypatch.setenv("INTERNAL_API_SECRET", SECRET)
-    store = InMemoryRunStore()
+    clock = MutableClock()
+    store = InMemoryRunStore(clock=clock)
     runtime = PersistingRuntime(store)
     application = FastAPI()
     application.include_router(router)
@@ -122,6 +140,7 @@ def app(monkeypatch):
     ] = lambda: RuntimeComponents(runtime, store)
     application.state.test_store = store
     application.state.test_runtime = runtime
+    application.state.test_clock = clock
     return application
 
 
@@ -342,6 +361,157 @@ async def test_cross_tenant_get_is_indistinguishable_from_missing(client):
     )
     assert cross.status_code == missing.status_code == 404
     assert cross.json() == missing.json()
+
+
+def _trusted_context(factory_id: str = "REST-A") -> TrustedExecutionContext:
+    return TrustedExecutionContext(
+        factory_id=factory_id,
+        business_type="RESTAURANT",
+        user_id="user-1",
+        correlation_id="http-reconcile",
+        authorized_classifications=frozenset(),
+    )
+
+
+async def _create_running_run(app, factory_id: str = "REST-A") -> str:
+    run_id = str(uuid.uuid4())
+    await app.state.test_store.create_run(
+        run_id,
+        _trusted_context(factory_id),
+        RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION,
+        {key: value for key, value in VALID_BODY.items() if key != "schemaVersion"},
+    )
+    return run_id
+
+
+@pytest.mark.asyncio
+async def test_reconcile_stale_http_exact_fresh_stale_and_terminal_contract(
+    client, app
+):
+    run_id = await _create_running_run(app)
+
+    fresh = await client.post(
+        f"/api/internal/smartbi/agent/runs/{run_id}/reconcile-stale",
+        headers=BASE_HEADERS,
+    )
+    assert fresh.status_code == 200
+    assert fresh.json() == {
+        "schemaVersion": "1.0",
+        "runId": run_id,
+        "result": "NOT_STALE",
+        "state": "RUNNING",
+        "failureCode": None,
+    }
+
+    app.state.test_clock.advance(STALE_AFTER_SECONDS)
+    stale = await client.post(
+        f"/api/internal/smartbi/agent/runs/{run_id}/reconcile-stale",
+        headers=BASE_HEADERS,
+    )
+    assert stale.status_code == 200
+    assert stale.json() == {
+        "schemaVersion": "1.0",
+        "runId": run_id,
+        "result": "RECONCILED",
+        "state": "FAILED",
+        "failureCode": STALE_RUN_FAILURE_CODE,
+    }
+
+    terminal = await client.post(
+        f"/api/internal/smartbi/agent/runs/{run_id}/reconcile-stale",
+        headers=BASE_HEADERS,
+    )
+    assert terminal.status_code == 200
+    assert terminal.json() == {
+        **stale.json(),
+        "result": "ALREADY_TERMINAL",
+    }
+    replay = await client.get(
+        f"/api/internal/smartbi/agent/runs/{run_id}/events",
+        headers=BASE_HEADERS,
+    )
+    assert [event["eventType"] for event in replay.json()["events"]] == ["RUN_FAILED"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("suffix", "content"),
+    [
+        ("?afterSeconds=120", None),
+        ("", b"{}"),
+        ("", b"null"),
+        ("", b" "),
+    ],
+)
+async def test_reconcile_rejects_any_query_or_nonempty_body(
+    client, app, suffix, content
+):
+    run_id = await _create_running_run(app)
+    response = await client.post(
+        f"/api/internal/smartbi/agent/runs/{run_id}/reconcile-stale{suffix}",
+        content=content,
+        headers=BASE_HEADERS,
+    )
+    assert response.status_code == 422
+    assert response.json() == {"detail": "RECONCILE_INPUT_FORBIDDEN"}
+
+
+@pytest.mark.asyncio
+async def test_reconcile_auth_role_business_and_tenant_fail_closed(client, app):
+    run_id = await _create_running_run(app)
+    cases = [
+        ({}, 401),
+        ({**BASE_HEADERS, "X-User-Role": "restaurant_staff"}, 403),
+        ({**BASE_HEADERS, "X-Business-Type": "FACTORY"}, 403),
+    ]
+    for headers, expected_status in cases:
+        response = await client.post(
+            f"/api/internal/smartbi/agent/runs/{run_id}/reconcile-stale",
+            headers=headers,
+        )
+        assert response.status_code == expected_status
+
+    other_headers = {**BASE_HEADERS, "X-Factory-Id": "REST-B"}
+    cross = await client.post(
+        f"/api/internal/smartbi/agent/runs/{run_id}/reconcile-stale",
+        headers=other_headers,
+    )
+    missing = await client.post(
+        "/api/internal/smartbi/agent/runs/40404040-4040-4040-8040-404040404040/reconcile-stale",
+        headers=BASE_HEADERS,
+    )
+    assert cross.status_code == missing.status_code == 404
+    assert cross.json() == missing.json() == {"detail": "RUN_NOT_FOUND"}
+
+
+@pytest.mark.asyncio
+async def test_reconcile_has_no_get_mutation_and_store_errors_are_controlled(
+    client, app
+):
+    run_id = await _create_running_run(app)
+    get_response = await client.get(
+        f"/api/internal/smartbi/agent/runs/{run_id}/reconcile-stale",
+        headers=BASE_HEADERS,
+    )
+    assert get_response.status_code == 405
+    assert (
+        await app.state.test_store.load_run(run_id, _trusted_context())
+    ).state is RunState.RUNNING
+
+    class BrokenStore:
+        async def reconcile_stale_run(self, run_id, context):
+            raise RuntimeError("raw database secret")
+
+    app.dependency_overrides[get_runtime_components] = lambda: RuntimeComponents(
+        app.state.test_runtime, BrokenStore()
+    )
+    response = await client.post(
+        f"/api/internal/smartbi/agent/runs/{run_id}/reconcile-stale",
+        headers=BASE_HEADERS,
+    )
+    assert response.status_code == 503
+    assert response.json() == {"detail": "AGENT_RUN_STORE_UNAVAILABLE"}
+    assert "secret" not in response.text
 
 
 class TamperedReplayStore:
