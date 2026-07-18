@@ -1,5 +1,6 @@
 package com.cretas.aims.dto.ai;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -64,8 +65,9 @@ public class IntentExecuteRequest {
     private Boolean previewOnly = false;
 
     /**
-     * 强制执行 (跳过确认，仅限有权限的用户)
+     * 强制执行 (仅服务端内部编排可设置；JSON 入站只读)
      */
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
     @Builder.Default
     private Boolean forceExecute = false;
 
