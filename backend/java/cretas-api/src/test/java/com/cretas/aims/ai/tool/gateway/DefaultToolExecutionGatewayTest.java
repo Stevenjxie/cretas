@@ -23,6 +23,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -72,6 +73,236 @@ class DefaultToolExecutionGatewayTest {
                 IdempotencyPolicy.REQUIRED_FOR_EXECUTION, DataClassification.RESTRICTED,
                 Set.of(ToolExecutionSource.AI_CHAT), ToolEgressPolicy.denyAll(),
                 DescriptorProvenance.EXPLICIT);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"READ", "ANALYZE"})
+    void explicitNonMutatingExecuteUsesTrustedContextWithoutWriteSecurityState(
+            String actionTypeName) throws Exception {
+        descriptor = nonMutatingDescriptor(
+                ToolExecutor.ActionType.valueOf(actionTypeName),
+                ConfirmationPolicy.NOT_REQUIRED,
+                ApprovalPolicy.NOT_REQUIRED,
+                IdempotencyPolicy.NOT_REQUIRED,
+                ToolEgressPolicy.denyAll(),
+                DescriptorProvenance.EXPLICIT,
+                false);
+        ToolExecutionCommand command = nonMutatingCommand(ToolExecutionMode.EXECUTE);
+        stubPolicy(command);
+        when(executor.execute(any(ToolCall.class), any())).thenReturn(
+                "{\"success\":true,\"data\":{\"grossMarginChange\":-4.2}}");
+
+        ToolExecutionResult result = gateway.execute(command);
+
+        assertThat(result.status()).isEqualTo(ToolExecutionStatus.SUCCEEDED);
+        assertThat(result.payload().path("data").path("grossMarginChange").asDouble())
+                .isEqualTo(-4.2);
+        ArgumentCaptor<ToolCall> callCaptor = ArgumentCaptor.forClass(ToolCall.class);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> contextCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(executor).execute(callCaptor.capture(), contextCaptor.capture());
+        assertThat(callCaptor.getValue().getFunction().getArguments())
+                .contains("2026-07-01")
+                .doesNotContain("factoryId");
+        assertThat(contextCaptor.getValue())
+                .containsEntry("factoryId", "F-1")
+                .containsEntry("userId", 42L)
+                .doesNotContainKey("parameters");
+        verify(ledgerService).completeAudit(
+                "audit-1", ToolExecutionStatus.SUCCEEDED, GatewayResultCode.TOOL_SUCCEEDED);
+        assertNoWriteSecurityState();
+    }
+
+    @Test
+    void nonMutatingSuccessFalseFailsClosedWithFixedEmptyResult() throws Exception {
+        descriptor = nonMutatingDescriptor(ToolExecutor.ActionType.READ);
+        ToolExecutionCommand command = nonMutatingCommand(ToolExecutionMode.EXECUTE);
+        stubPolicy(command);
+        when(executor.execute(any(), any())).thenReturn(
+                "{\"success\":false,\"error\":\"database secret detail\"}");
+
+        ToolExecutionResult result = gateway.execute(command);
+
+        assertThat(result.status()).isEqualTo(ToolExecutionStatus.FAILED);
+        assertThat(result.payload()).isEmpty();
+        assertThat(result.message()).isEqualTo("Tool execution failed").doesNotContain("secret");
+        verify(ledgerService).completeAudit(
+                "audit-1",
+                ToolExecutionStatus.FAILED,
+                GatewayResultCode.TOOL_EXECUTION_FAILED);
+        assertNoWriteSecurityState();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "null",
+            "[]",
+            "{\"data\":{}}",
+            "{\"success\":\"true\"}"
+    })
+    void nonMutatingMalformedPayloadFailsClosed(String rawResponse) throws Exception {
+        descriptor = nonMutatingDescriptor(ToolExecutor.ActionType.ANALYZE);
+        ToolExecutionCommand command = nonMutatingCommand(ToolExecutionMode.EXECUTE);
+        stubPolicy(command);
+        when(executor.execute(any(), any())).thenReturn(rawResponse);
+
+        ToolExecutionResult result = gateway.execute(command);
+
+        assertThat(result.status()).isEqualTo(ToolExecutionStatus.FAILED);
+        assertThat(result.payload()).isEmpty();
+        verify(ledgerService).completeAudit(
+                "audit-1",
+                ToolExecutionStatus.FAILED,
+                GatewayResultCode.TOOL_EXECUTION_FAILED);
+        assertNoWriteSecurityState();
+    }
+
+    @Test
+    void nonMutatingExecutorExceptionReturnsFixedFailureWithoutRawDetail() throws Exception {
+        descriptor = nonMutatingDescriptor(ToolExecutor.ActionType.READ);
+        ToolExecutionCommand command = nonMutatingCommand(ToolExecutionMode.EXECUTE);
+        stubPolicy(command);
+        when(executor.execute(any(), any()))
+                .thenThrow(new IllegalStateException("database secret detail"));
+
+        ToolExecutionResult result = gateway.execute(command);
+
+        assertThat(result.status()).isEqualTo(ToolExecutionStatus.FAILED);
+        assertThat(result.payload()).isEmpty();
+        assertThat(result.message()).isEqualTo("Tool execution failed").doesNotContain("secret");
+        verify(ledgerService).completeAudit(
+                "audit-1",
+                ToolExecutionStatus.FAILED,
+                GatewayResultCode.TOOL_EXECUTION_FAILED);
+        assertNoWriteSecurityState();
+    }
+
+    @Test
+    void nonMutatingExecuteRejectsEveryDescriptorPolicyMismatch() throws Exception {
+        ToolExecutionCommand command = nonMutatingCommand(ToolExecutionMode.EXECUTE);
+        List<ToolDescriptor> rejectedDescriptors = List.of(
+                nonMutatingDescriptor(
+                        ToolExecutor.ActionType.READ,
+                        ConfirmationPolicy.REQUIRED_FOR_EXECUTION,
+                        ApprovalPolicy.NOT_REQUIRED,
+                        IdempotencyPolicy.NOT_REQUIRED,
+                        ToolEgressPolicy.denyAll(),
+                        DescriptorProvenance.EXPLICIT,
+                        false),
+                nonMutatingDescriptor(
+                        ToolExecutor.ActionType.ANALYZE,
+                        ConfirmationPolicy.NOT_REQUIRED,
+                        ApprovalPolicy.NOT_REQUIRED,
+                        IdempotencyPolicy.OPTIONAL,
+                        ToolEgressPolicy.denyAll(),
+                        DescriptorProvenance.EXPLICIT,
+                        false),
+                nonMutatingDescriptor(
+                        ToolExecutor.ActionType.READ,
+                        ConfirmationPolicy.NOT_REQUIRED,
+                        ApprovalPolicy.NOT_REQUIRED,
+                        IdempotencyPolicy.NOT_REQUIRED,
+                        ToolEgressPolicy.denyAll(),
+                        DescriptorProvenance.LEGACY_INFERRED,
+                        false),
+                nonMutatingDescriptor(
+                        ToolExecutor.ActionType.ANALYZE,
+                        ConfirmationPolicy.NOT_REQUIRED,
+                        ApprovalPolicy.NOT_REQUIRED,
+                        IdempotencyPolicy.NOT_REQUIRED,
+                        ToolEgressPolicy.allowlistOnly(Set.of("smartbi.internal")),
+                        DescriptorProvenance.EXPLICIT,
+                        false));
+
+        for (ToolDescriptor rejectedDescriptor : rejectedDescriptors) {
+            descriptor = rejectedDescriptor;
+            stubPolicy(command);
+            ToolExecutionResult result = gateway.execute(command);
+            assertThat(result.status()).isEqualTo(ToolExecutionStatus.DENIED);
+        }
+
+        verify(executor, never()).execute(any(), any());
+        verify(ledgerService, times(rejectedDescriptors.size())).completeAudit(
+                "audit-1", ToolExecutionStatus.DENIED, GatewayResultCode.POLICY_DENIED);
+        assertNoWriteSecurityState();
+    }
+
+    @Test
+    void nonMutatingExecuteRejectsEveryExtraProofOrKey() throws Exception {
+        descriptor = nonMutatingDescriptor(ToolExecutor.ActionType.READ);
+        ToolExecutionCommand base = nonMutatingCommand(ToolExecutionMode.EXECUTE);
+        ConfirmationProof confirmationProof = new ConfirmationProof(
+                "confirmation-token", "command-digest", Instant.now().plusSeconds(60));
+        ApprovalProof approvalProof = new ApprovalProof(
+                "approval-1",
+                "command-digest",
+                "approver-1",
+                Instant.now(),
+                Instant.now().plusSeconds(60));
+        List<ToolExecutionCommand> rejectedCommands = List.of(
+                withExecutionSecurity(
+                        base, Optional.of("unexpected-key"), Optional.empty(), Optional.empty()),
+                withExecutionSecurity(
+                        base, Optional.empty(), Optional.of(confirmationProof), Optional.empty()),
+                withExecutionSecurity(
+                        base, Optional.empty(), Optional.empty(), Optional.of(approvalProof)));
+
+        for (ToolExecutionCommand rejectedCommand : rejectedCommands) {
+            stubPolicy(rejectedCommand);
+            ToolExecutionResult result = gateway.execute(rejectedCommand);
+            assertThat(result.status()).isEqualTo(ToolExecutionStatus.DENIED);
+        }
+
+        verify(executor, never()).execute(any(), any());
+        verify(ledgerService, times(rejectedCommands.size())).completeAudit(
+                "audit-1", ToolExecutionStatus.DENIED, GatewayResultCode.POLICY_DENIED);
+        assertNoWriteSecurityState();
+    }
+
+    @Test
+    void nonMutatingApprovalPolicyStillUsesExistingApprovalGate() throws Exception {
+        descriptor = nonMutatingDescriptor(
+                ToolExecutor.ActionType.ANALYZE,
+                ConfirmationPolicy.NOT_REQUIRED,
+                ApprovalPolicy.REQUIRED_FOR_EXECUTION,
+                IdempotencyPolicy.NOT_REQUIRED,
+                ToolEgressPolicy.denyAll(),
+                DescriptorProvenance.EXPLICIT,
+                false);
+        ToolExecutionCommand command = nonMutatingCommand(ToolExecutionMode.EXECUTE);
+        stubPolicy(command);
+
+        ToolExecutionResult result = gateway.execute(command);
+
+        assertThat(result.status()).isEqualTo(ToolExecutionStatus.APPROVAL_REQUIRED);
+        verify(ledgerService).completeAudit(
+                "audit-1", ToolExecutionStatus.APPROVAL_REQUIRED, GatewayResultCode.POLICY_DENIED);
+        verify(executor, never()).execute(any(), any());
+        assertNoWriteSecurityState();
+    }
+
+    @Test
+    void nonMutatingPreviewPreservesPreviewPathAndNeverExecutes() throws Exception {
+        descriptor = nonMutatingDescriptor(
+                ToolExecutor.ActionType.READ,
+                ConfirmationPolicy.NOT_REQUIRED,
+                ApprovalPolicy.NOT_REQUIRED,
+                IdempotencyPolicy.NOT_REQUIRED,
+                ToolEgressPolicy.denyAll(),
+                DescriptorProvenance.EXPLICIT,
+                true);
+        ToolExecutionCommand command = nonMutatingCommand(ToolExecutionMode.PREVIEW);
+        stubPolicy(command);
+        when(executor.preview(any(), any())).thenReturn(
+                "{\"success\":true,\"data\":{\"draft\":true}}");
+
+        ToolExecutionResult result = gateway.execute(command);
+
+        assertThat(result.status()).isEqualTo(ToolExecutionStatus.SUCCEEDED);
+        assertThat(result.payload().path("data").path("draft").asBoolean()).isTrue();
+        verify(executor).preview(any(), any());
+        verify(executor, never()).execute(any(), any());
+        assertNoWriteSecurityState();
     }
 
     @Test
@@ -546,6 +777,63 @@ class DefaultToolExecutionGatewayTest {
                 Instant.now().plusSeconds(30));
     }
 
+    private ToolExecutionCommand nonMutatingCommand(ToolExecutionMode mode) {
+        return new ToolExecutionCommand(
+                "restaurant-analysis-request-1",
+                "restaurant-analysis-correlation-1",
+                "restaurant-analysis-trace-1",
+                "restaurant_margin_analysis",
+                "1.0.0",
+                JsonNodeFactory.instance.objectNode()
+                        .put("startDate", "2026-07-01")
+                        .put("endDate", "2026-07-18"),
+                currentPrincipal,
+                ToolExecutionSource.HTTP_CONTROLLER,
+                mode,
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Instant.now().plusSeconds(30));
+    }
+
+    private ToolDescriptor nonMutatingDescriptor(ToolExecutor.ActionType actionType) {
+        return nonMutatingDescriptor(
+                actionType,
+                ConfirmationPolicy.NOT_REQUIRED,
+                ApprovalPolicy.NOT_REQUIRED,
+                IdempotencyPolicy.NOT_REQUIRED,
+                ToolEgressPolicy.denyAll(),
+                DescriptorProvenance.EXPLICIT,
+                false);
+    }
+
+    private ToolDescriptor nonMutatingDescriptor(
+            ToolExecutor.ActionType actionType,
+            ConfirmationPolicy confirmationPolicy,
+            ApprovalPolicy approvalPolicy,
+            IdempotencyPolicy idempotencyPolicy,
+            ToolEgressPolicy egressPolicy,
+            DescriptorProvenance provenance,
+            boolean supportsPreview) {
+        return new ToolDescriptor(
+                "restaurant_margin_analysis",
+                actionType,
+                ToolExecutor.RiskLevel.LOW,
+                Set.of("hr:read_write"),
+                Set.of("factory_super_admin"),
+                Set.of(FactoryType.FACTORY),
+                Set.of("restaurant", "analytics"),
+                "1.0.0",
+                supportsPreview,
+                confirmationPolicy,
+                approvalPolicy,
+                idempotencyPolicy,
+                DataClassification.INTERNAL,
+                Set.of(ToolExecutionSource.HTTP_CONTROLLER),
+                egressPolicy,
+                provenance);
+    }
+
     private ToolDescriptor previewDescriptor() {
         return new ToolDescriptor(
                 "canvas_work_process_catalog",
@@ -595,6 +883,28 @@ class DefaultToolExecutionGatewayTest {
                 command.toolName(), command.expectedDescriptorVersion(), command.parameters(),
                 command.principal(), command.source(), command.mode(), command.idempotencyKey(),
                 Optional.of(proof), command.approvalProof(), deadline);
+    }
+
+    private static ToolExecutionCommand withExecutionSecurity(
+            ToolExecutionCommand command,
+            Optional<String> idempotencyKey,
+            Optional<ConfirmationProof> confirmationProof,
+            Optional<ApprovalProof> approvalProof) {
+        return new ToolExecutionCommand(
+                command.requestId(), command.correlationId(), command.traceId(),
+                command.toolName(), command.expectedDescriptorVersion(), command.parameters(),
+                command.principal(), command.source(), command.mode(), idempotencyKey,
+                confirmationProof, approvalProof, command.deadline());
+    }
+
+    private void assertNoWriteSecurityState() {
+        verify(confirmationLease, never()).claim(any(), any(), anyString());
+        verify(confirmationLease, never()).resolve(any(), anyBoolean());
+        verify(ledgerService, never()).reserve(any());
+        verify(ledgerService, never()).completeExecution(
+                anyString(), anyString(), any(), any(), any());
+        verify(ledgerService, never()).bindSecurityEvidence(
+                anyString(), anyString(), anyString(), anyString());
     }
 
     private static String digest(ToolExecutionCommand command) {

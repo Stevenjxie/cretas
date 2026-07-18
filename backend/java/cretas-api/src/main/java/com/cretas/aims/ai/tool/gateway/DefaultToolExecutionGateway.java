@@ -84,6 +84,9 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
         if (command.mode() == ToolExecutionMode.PREVIEW) {
             return preview(command, current, resolved, auditEventId);
         }
+        if (isNonMutatingAction(descriptor.actionType())) {
+            return executeNonMutating(command, current, resolved, auditEventId);
+        }
         if (descriptor.confirmationPolicy() != ConfirmationPolicy.REQUIRED_FOR_EXECUTION
                 || command.confirmationProof().isEmpty()) {
             ledgerService.completeAudit(
@@ -190,12 +193,8 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
         Lease lease = leaseOptional.get();
 
         try {
-            String arguments = objectMapper.writeValueAsString(lease.persistedParameters());
-            ToolCall toolCall = ToolCall.of(command.requestId(), command.toolName(), arguments);
-            ToolExecutor executor = resolved.executor();
-            String rawResponse = executor.execute(
-                    toolCall, current.executionContext());
-            JsonNode payload = objectMapper.readTree(rawResponse);
+            JsonNode payload = executeResolved(
+                    command, current, resolved, lease.persistedParameters());
             if (payload == null || !payload.isObject() || !payload.has("success")
                     || !payload.get("success").isBoolean()) {
                 return outcomeUnknownAfterClaim(
@@ -254,6 +253,74 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
                     command, idempotencyRecord, auditEventId, lease,
                     GatewayResultCode.TOOL_OUTCOME_UNCERTAIN);
         }
+    }
+
+    private ToolExecutionResult executeNonMutating(
+            ToolExecutionCommand command,
+            RehydratedPrincipal current,
+            ResolvedTool resolved,
+            String auditEventId) {
+        ToolDescriptor descriptor = resolved.descriptor();
+        boolean exactNonMutatingPolicy = descriptor.provenance() == DescriptorProvenance.EXPLICIT
+                && command.mode() == ToolExecutionMode.EXECUTE
+                && descriptor.confirmationPolicy() == ConfirmationPolicy.NOT_REQUIRED
+                && descriptor.approvalPolicy() == ApprovalPolicy.NOT_REQUIRED
+                && descriptor.idempotencyPolicy() == IdempotencyPolicy.NOT_REQUIRED
+                && command.confirmationProof().isEmpty()
+                && command.approvalProof().isEmpty()
+                && command.idempotencyKey().isEmpty();
+        if (!exactNonMutatingPolicy) {
+            ledgerService.completeAudit(
+                    auditEventId, ToolExecutionStatus.DENIED, GatewayResultCode.POLICY_DENIED);
+            return result(command, auditEventId, ToolExecutionStatus.DENIED,
+                    emptyPayload(), "Non-mutating execution policy rejected", false);
+        }
+
+        JsonNode payload;
+        try {
+            payload = executeResolved(command, current, resolved, command.parameters());
+        } catch (Exception executionFailure) {
+            return finishNonMutatingFailure(command, auditEventId);
+        }
+        if (payload == null || !payload.isObject() || !payload.has("success")
+                || !payload.get("success").isBoolean()) {
+            return finishNonMutatingFailure(command, auditEventId);
+        }
+        if (!payload.get("success").booleanValue()) {
+            return finishNonMutatingFailure(command, auditEventId);
+        }
+        ledgerService.completeAudit(
+                auditEventId, ToolExecutionStatus.SUCCEEDED, GatewayResultCode.TOOL_SUCCEEDED);
+        return result(command, auditEventId, ToolExecutionStatus.SUCCEEDED,
+                payload, "Tool execution succeeded", false);
+    }
+
+    private ToolExecutionResult finishNonMutatingFailure(
+            ToolExecutionCommand command,
+            String auditEventId) {
+        ledgerService.completeAudit(
+                auditEventId,
+                ToolExecutionStatus.FAILED,
+                GatewayResultCode.TOOL_EXECUTION_FAILED);
+        return result(command, auditEventId, ToolExecutionStatus.FAILED,
+                emptyPayload(), "Tool execution failed", false);
+    }
+
+    private JsonNode executeResolved(
+            ToolExecutionCommand command,
+            RehydratedPrincipal current,
+            ResolvedTool resolved,
+            JsonNode parameters) throws Exception {
+        String arguments = objectMapper.writeValueAsString(parameters);
+        ToolCall toolCall = ToolCall.of(command.requestId(), command.toolName(), arguments);
+        ToolExecutor executor = resolved.executor();
+        String rawResponse = executor.execute(toolCall, current.executionContext());
+        return objectMapper.readTree(rawResponse);
+    }
+
+    private static boolean isNonMutatingAction(ToolExecutor.ActionType actionType) {
+        return actionType == ToolExecutor.ActionType.READ
+                || actionType == ToolExecutor.ActionType.ANALYZE;
     }
 
     private ToolExecutionResult preview(
