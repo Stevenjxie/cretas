@@ -61,7 +61,7 @@ class ProductWorkflowUnifiedResolutionTest {
     }
 
     @Test
-    void singleSelectionUsesOnlySingleOutputWorkflow() {
+    void singleSelectionPrefersExactSingleOutputWorkflowOverMultiOutputSuperset() {
         activate(11L, "ANCHOR-M", List.of("RAW"), List.of("P1", "P2"), LocalDateTime.now());
         activate(12L, "ANCHOR-S", List.of("RAW-A", "RAW-B"), List.of("P1"), LocalDateTime.now().minusDays(1));
 
@@ -73,13 +73,33 @@ class ProductWorkflowUnifiedResolutionTest {
     }
 
     @Test
-    void singleSelectionDoesNotFallbackToMultiOutputWorkflow() {
-        activate(11L, "ANCHOR-M", List.of("RAW"), List.of("P1", "P2"), LocalDateTime.now());
+    void singleSelectionFallsBackToTheSmallestMultiOutputSuperset() {
+        activate(11L, "ANCHOR-SMALL", List.of("RAW"), List.of("P1", "P2"), LocalDateTime.now());
+        activate(12L, "ANCHOR-LARGE", List.of("RAW-B"), List.of("P1", "P2", "P3"),
+                LocalDateTime.now().minusHours(1));
 
         WorkflowOutputResolutionDTO result = service.resolveForOutputs("F1", List.of("P1"));
 
-        assertEquals("NONE", result.getResolutionMode());
-        assertEquals("该产品没有单产出 Workflow，请前往创建单产出 Workflow", result.getMessage());
+        assertEquals("SINGLE_OUTPUT", result.getResolutionMode());
+        assertEquals(List.of(11L), result.getCandidates().stream()
+                .map(WorkflowOutputResolutionDTO.Candidate::getWorkflowId).toList());
+        assertEquals(false, result.getCandidates().getFirst().isExactMatch());
+        assertEquals("匹配到包含额外联产成品的 Workflow，请确认完整产出集合", result.getMessage());
+    }
+
+    @Test
+    void singleSelectionReturnsAllCandidatesInTheSmallestSupersetLayer() {
+        activate(13L, "ANCHOR-A", List.of("RAW-A"), List.of("P1", "P2"), LocalDateTime.now());
+        activate(14L, "ANCHOR-LARGE", List.of("RAW-B"), List.of("P1", "P2", "P3"),
+                LocalDateTime.now().minusHours(1));
+        activate(15L, "ANCHOR-B", List.of("RAW-C"), List.of("P1", "P3"),
+                LocalDateTime.now().minusHours(2));
+
+        WorkflowOutputResolutionDTO result = service.resolveForOutputs("F1", List.of("P1"));
+
+        assertEquals(List.of(13L, 15L), result.getCandidates().stream()
+                .map(WorkflowOutputResolutionDTO.Candidate::getWorkflowId).toList());
+        assertEquals("匹配到多条同优先级 Workflow，请根据工序链选择本计划使用的版本", result.getMessage());
     }
 
     @Test
@@ -176,6 +196,18 @@ class ProductWorkflowUnifiedResolutionTest {
                 () -> service.resolvePinnedPlanOutputContract(
                         "F1", "ANCHOR-PINNED", 53L, 2, List.of("P1")));
         assertEquals("WORKFLOW_SELECTED_VERSION_CHANGED", stale.getErrorCode());
+    }
+
+    @Test
+    void pinnedPlanContractAcceptsOneSelectedProductFromJointOutputs() {
+        activate(54L, "ANCHOR-JOINT", List.of("RAW-A", "RAW-B"), List.of("P1", "P2"),
+                LocalDateTime.now());
+
+        WorkflowPlanOutputContract contract = service.resolvePinnedPlanOutputContract(
+                "F1", "ANCHOR-JOINT", 54L, 1, List.of("P1"));
+
+        assertEquals(54L, contract.workflowId());
+        assertEquals(List.of("P1"), contract.outputUnitBySku().keySet().stream().toList());
     }
 
     private void activate(

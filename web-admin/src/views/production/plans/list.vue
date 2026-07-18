@@ -1048,7 +1048,7 @@ async function submitPlan() {
     return;
   }
 
-  // 非 SO 来源：单选只认单产出 Workflow，多选只认共同多产出 Workflow。
+  // 非 SO 来源：完全匹配优先；无完全匹配时允许最小联产超集并要求确认完整产出。
   if (planForm.value.targetFinishedGoodIds.length === 0) {
     ElMessage.warning('请选择生产成品');
     return;
@@ -1056,7 +1056,7 @@ async function submitPlan() {
   if (nonSoSubmitBlocked.value) {
     if (planForm.value.resolutionMode === 'NONE') {
       ElMessage.warning(planForm.value.targetFinishedGoodIds.length === 1
-        ? '该产品没有单产出 Workflow，请前往创建单产出 Workflow'
+        ? '未找到覆盖该产品的工序 Workflow，请前往 Workflow 配置'
         : '未找到共享的工序 Workflow，请分开创建生产计划');
     } else {
       ElMessage.warning('检测到多个可用 Workflow，请先选择本计划使用的版本');
@@ -1116,7 +1116,7 @@ async function submitPlan() {
     } else if (err?.status === 409 && err?.code === 'WORKFLOW_RESOLUTION_NOT_COVERED') {
       ElMessageBox.confirm(
         err.message || (planForm.value.targetFinishedGoodIds.length === 1
-          ? '该产品没有单产出 Workflow，请前往创建单产出 Workflow'
+          ? '未找到覆盖该产品的工序 Workflow，请前往 Workflow 配置'
           : '未找到共享的工序 Workflow，请分开创建生产计划'),
         '工序图未覆盖',
         { confirmButtonText: '去产品工序配置', cancelButtonText: '取消', type: 'warning' }
@@ -3762,7 +3762,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           />
         </el-form-item>
         <!-- 以销定产 (2026-06-24): 来源=销售订单时, 产品/数量按所选产品行各自取, 不再手选单产品 → 隐藏 -->
-        <!-- 单选只接受单产出 Workflow；多选只接受同时覆盖全部成品的多产出 Workflow。 -->
+        <!-- 完全匹配优先；无完全匹配时接受覆盖所选成品的最小联产超集。 -->
         <el-form-item v-if="planForm.sourceType !== 'CUSTOMER_ORDER'" label="生产成品" required>
           <el-select
             v-model="planForm.targetFinishedGoodIds"
@@ -3845,7 +3845,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               :closable="false"
               style="margin-top: 8px;"
             >
-              <template #title>该产品没有单产出 Workflow，请前往创建单产出 Workflow</template>
+              <template #title>未找到覆盖该产品的工序 Workflow，请前往 Workflow 配置</template>
               <div style="display: flex; gap: 8px; margin-top: 8px;">
                 <el-button
                   size="small"

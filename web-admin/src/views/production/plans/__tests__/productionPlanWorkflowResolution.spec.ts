@@ -23,7 +23,7 @@ function candidate(
 }
 
 describe('production plan Workflow resolution', () => {
-  it('single selection only accepts a single-output Workflow regardless of input count', () => {
+  it('single selection prefers an exact single-output Workflow over a multi-output superset', () => {
     const result = resolvePlanWorkflowCandidates(['FG-A'], [
       candidate(1, ['FG-A']),
       candidate(2, ['FG-A', 'FG-B']),
@@ -33,9 +33,24 @@ describe('production plan Workflow resolution', () => {
     expect(result.candidates.map((item) => item.workflowId)).toEqual([1]);
   });
 
-  it('single selection rejects a multi-output Workflow even when it contains the product', () => {
-    expect(resolvePlanWorkflowCandidates(['FG-A'], [candidate(2, ['FG-A', 'FG-B'])]))
-      .toEqual({ mode: 'NONE', candidates: [] });
+  it('single selection falls back to the smallest multi-output superset', () => {
+    const result = resolvePlanWorkflowCandidates(['FG-A'], [
+      candidate(2, ['FG-A', 'FG-B']),
+      candidate(3, ['FG-A', 'FG-B', 'FG-C']),
+    ]);
+
+    expect(result.mode).toBe('SINGLE_OUTPUT');
+    expect(result.candidates.map((item) => item.workflowId)).toEqual([2]);
+  });
+
+  it('single selection keeps all candidates in the smallest superset layer', () => {
+    const result = resolvePlanWorkflowCandidates(['FG-A'], [
+      candidate(2, ['FG-A', 'FG-B']),
+      candidate(3, ['FG-A', 'FG-B', 'FG-C']),
+      candidate(4, ['FG-A', 'FG-D']),
+    ]);
+
+    expect(result.candidates.map((item) => item.workflowId)).toEqual([2, 4]);
   });
 
   it('multiple selections accept one shared multi-output Workflow', () => {

@@ -18,8 +18,9 @@ export function workflowCandidateOutputIds(candidate: WorkflowResolutionCandidat
 
 /**
  * 计划匹配只看已发布 Workflow 的真实终端产出，不看 owner：
- * - 单选必须命中恰好一个终端产出的 Workflow；
- * - 多选必须由同一个多终端 Workflow 同时覆盖。
+ * - 完全匹配优先；
+ * - 没有完全匹配时，选择能够覆盖所选成品的最小终端产出超集；
+ * - 同一最小层级保留全部候选，交给用户按工序链显式选择。
  */
 export function resolvePlanWorkflowCandidates(
   requestedProductTypeIds: readonly string[],
@@ -31,8 +32,7 @@ export function resolvePlanWorkflowCandidates(
   const matching = candidates.filter((candidate) => {
     const outputs = workflowCandidateOutputIds(candidate);
     const coversRequested = requested.every((id) => outputs.includes(id));
-    if (!coversRequested) return false;
-    return requested.length === 1 ? outputs.length === 1 : outputs.length > 1;
+    return coversRequested;
   });
 
   const exact = matching.filter((candidate) => {

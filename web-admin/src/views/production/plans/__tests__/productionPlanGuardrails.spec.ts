@@ -37,8 +37,9 @@ describe('production plan operator guardrails', () => {
     expect(source).toContain('大前天及更早禁止补录');
   });
 
-  it('blocks a single product without silently falling back to a multi-output Workflow', () => {
-    expect(source).toContain('该产品没有单产出 Workflow，请前往创建单产出 Workflow');
+  it('allows a single product to use a smallest-superset joint Workflow and still fails closed when none covers it', () => {
+    expect(source).toContain('未找到覆盖该产品的工序 Workflow，请前往 Workflow 配置');
+    expect(source).toContain('该 Workflow 会同时产出其它成品，需要确认完整产出集合');
     expect(source).toContain("planForm.value.resolutionMode === 'NONE'");
   });
 
