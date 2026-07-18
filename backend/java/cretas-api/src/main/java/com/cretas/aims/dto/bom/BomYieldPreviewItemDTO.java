@@ -32,14 +32,14 @@ public class BomYieldPreviewItemDTO {
     /** 产品名称 */
     private String productName;
 
-    /** BOM 行 ID (bom_items.id) */
-    private Long bomItemId;
+    /** 当前生效 BOM 配方 ID。 */
+    private String recipeId;
 
     /** 原料名称 */
     private String materialName;
 
     /**
-     * 当前 bom_items.yield_rate (null 表示未配置/待评估).
+     * 当前 bom_recipes.overall_yield_rate (null 表示样本尚不足).
      *
      * <p>前端应将此值在调用 recalculate-apply 时回传为
      * {@link BomYieldApplyRequest#getExpectedCurrentYieldRate()},

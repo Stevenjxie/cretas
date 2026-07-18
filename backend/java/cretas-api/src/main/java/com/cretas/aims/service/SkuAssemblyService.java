@@ -4,7 +4,6 @@ import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.MaterialProductConversion;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductWorkProcess;
-import com.cretas.aims.entity.bom.BomItem;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
@@ -14,7 +13,6 @@ import com.cretas.aims.repository.ConversionRepository;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
-import com.cretas.aims.repository.bom.BomItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
@@ -54,7 +52,6 @@ public class SkuAssemblyService {
     private final BomRecipeRepository bomRecipeRepository;
     private final BomRecipeItemRepository bomRecipeItemRepository;
     private final BomSeasoningItemRepository bomSeasoningItemRepository;
-    private final BomItemRepository bomItemRepository;
 
     /**
      * 拼积木创建 SKU
@@ -259,42 +256,9 @@ public class SkuAssemblyService {
                     .withHint("请检查 SKU 是否已经完成模板组装，避免重复插入BOM")
                     .withHintTarget("productTypeId");
         }
-        if (bomItemRepository.countByFactoryIdAndProductTypeId(factoryId, skuId) > 0) {
-            throw new BusinessException(409, "SKU旧版BOM明细已存在，禁止重复复制: " + skuId)
-                    .withHint("请检查 SKU 是否已经完成模板组装，避免重复插入旧版BOM明细")
-                    .withHintTarget("productTypeId");
-        }
-
         bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, templateId)
                 .ifPresent(source -> copyCurrentBomRecipe(factoryId, source, skuId, skuProductName));
-
-        List<BomItem> legacyItems =
-                bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(
-                        factoryId, templateId);
-        for (BomItem source : legacyItems) {
-            BomItem copy = new BomItem();
-            copy.setFactoryId(factoryId);
-            copy.setProductTypeId(skuId);
-            copy.setProductName(skuProductName);
-            copy.setMaterialTypeId(source.getMaterialTypeId());
-            copy.setMaterialName(source.getMaterialName());
-            copy.setStandardQuantity(source.getStandardQuantity());
-            copy.setYieldRate(source.getYieldRate());
-            copy.setUnit(source.getUnit());
-            copy.setUnitPrice(source.getUnitPrice());
-            copy.setPriceUnit(source.getPriceUnit());
-            copy.setQuantityToPriceFactor(source.getQuantityToPriceFactor());
-            copy.setTaxRate(source.getTaxRate());
-            copy.setMaterialCategory(source.getMaterialCategory());
-            copy.setSortOrder(source.getSortOrder());
-            copy.setRemark(source.getRemark());
-            copy.setPerPortion(source.getPerPortion());
-            copy.setSemiFinishedRefCode(source.getSemiFinishedRefCode());
-            copy.setSubProductTypeId(source.getSubProductTypeId());
-            bomItemRepository.save(copy);
-        }
-
-        log.info("BOM复制完成: template={} -> sku={}, legacyItems={}", templateId, skuId, legacyItems.size());
+        log.info("BOM复制完成: template={} -> sku={} (BomRecipe single truth)", templateId, skuId);
     }
 
     private void copyCurrentBomRecipe(String factoryId, BomRecipe source, String skuId, String skuProductName) {

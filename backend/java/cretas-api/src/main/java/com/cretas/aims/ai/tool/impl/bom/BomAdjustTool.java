@@ -3,12 +3,13 @@ package com.cretas.aims.ai.tool.impl.bom;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.bom.BomSeasoningResponse;
 import com.cretas.aims.dto.bom.BomSeasoningSaveRequest;
+import com.cretas.aims.dto.bom.CreateBomRecipeRequest;
 import com.cretas.aims.entity.ProductType;
-import com.cretas.aims.entity.bom.BomItem;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
-import com.cretas.aims.service.BomService;
 import com.cretas.aims.service.bom.BomRecipeService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,7 +30,7 @@ import java.util.regex.Pattern;
  * 对话工具不得直接覆盖。返回更新后的整张 BOM 表。preview 先展示
  * 旧→新值 (防呆), 确认后才落库。
  *
- * <p>范围: BOM 原料/辅料/包材 (bom_items)。调料配方 (bom_seasoning) 微调需配方 clone 流程, 后续增量。
+ * <p>范围: BOM 原料/辅料/包材与调料均使用版本化 BomRecipe；确认执行时克隆草稿、修改并激活。
  */
 @Slf4j
 @Component
@@ -42,8 +43,6 @@ public class BomAdjustTool extends AbstractBusinessTool {
 
     @Autowired
     private ProductTypeRepository productTypeRepository;
-    @Autowired
-    private BomService bomService;
     @Autowired
     private BomRecipeService bomRecipeService;
 
@@ -116,9 +115,12 @@ public class BomAdjustTool extends AbstractBusinessTool {
         rejectSystemManagedField(field);
 
         // 3. 匹配 BOM 行
-        List<BomItem> bom = bomService.getBomItemsByProduct(factoryId, productTypeId);
-        List<BomItem> matches = new ArrayList<>();
-        for (BomItem b : bom) {
+        BomRecipe currentRecipe = bomRecipeService.getCurrentRecipe(factoryId, productTypeId)
+                .map(recipe -> bomRecipeService.getRecipe(factoryId, recipe.getId()))
+                .orElseThrow(() -> new BusinessException(400, "该产品尚无已激活 BOM 配方"));
+        List<BomRecipeItem> bom = currentRecipe.getItems();
+        List<BomRecipeItem> matches = new ArrayList<>();
+        for (BomRecipeItem b : bom) {
             String mn = b.getMaterialName() == null ? "" : b.getMaterialName();
             if (mn.contains(name) || name.contains(mn)) {
                 matches.add(b);
@@ -131,7 +133,7 @@ public class BomAdjustTool extends AbstractBusinessTool {
         if (matches.size() > 1) {
             throw new BusinessException(400, "原料 '" + name + "' 匹配到多条, 请说更具体的原料名");
         }
-        BomItem target = matches.get(0);
+        BomRecipeItem target = matches.get(0);
         if ("RAW".equalsIgnoreCase(target.getMaterialCategory()) && "standardQuantity".equals(field)) {
             throw new BusinessException(400, "原料 BOM 只建立物料关联，不人工填每成品用量");
         }
@@ -145,11 +147,21 @@ public class BomAdjustTool extends AbstractBusinessTool {
         change.put("newValue", value);
 
         if (!preview) {
-            applyField(target, field, value);
-            bomService.saveBomItem(target);
+            BomRecipe draft = bomRecipeService.cloneRecipe(factoryId, currentRecipe.getId());
+            BomRecipe draftDetail = bomRecipeService.getRecipe(factoryId, draft.getId());
+            BomRecipeItem draftTarget = draftDetail.getItems().stream()
+                    .filter(item -> target.getMaterialTypeId().equals(item.getMaterialTypeId()))
+                    .filter(item -> java.util.Objects.equals(target.getMaterialCategory(), item.getMaterialCategory()))
+                    .filter(item -> java.util.Objects.equals(target.getSortOrder(), item.getSortOrder()))
+                    .findFirst()
+                    .orElseThrow(() -> new BusinessException(409, "克隆后的 BOM 明细与原版本不一致，请刷新后重试"));
+            CreateBomRecipeRequest.BomRecipeItemDTO dto = toItemDto(draftTarget);
+            dto.setStandardQuantity(value);
+            bomRecipeService.updateItem(factoryId, draftTarget.getId(), dto);
+            BomRecipe activated = bomRecipeService.activateRecipe(factoryId, draft.getId(), null);
             log.info("[BOM-ADJUST] factory={} product={} {} {} {}→{}", factoryId, productTypeId,
                     target.getMaterialName(), fieldWord, oldVal, value);
-            bom = bomService.getBomItemsByProduct(factoryId, productTypeId);
+            bom = bomRecipeService.getRecipe(factoryId, activated.getId()).getItems();
         }
 
         Map<String, Object> r = new LinkedHashMap<>();
@@ -171,7 +183,7 @@ public class BomAdjustTool extends AbstractBusinessTool {
         }
     }
 
-    private BigDecimal readField(BomItem b, String field) {
+    private BigDecimal readField(BomRecipeItem b, String field) {
         switch (field) {
             case "standardQuantity": return b.getStandardQuantity();
             case "yieldRate": return b.getYieldRate();
@@ -189,17 +201,10 @@ public class BomAdjustTool extends AbstractBusinessTool {
         }
     }
 
-    private void applyField(BomItem b, String field, BigDecimal v) {
-        switch (field) {
-            case "standardQuantity": b.setStandardQuantity(v); break;
-            default: throw new BusinessException(400, "不支持的字段: " + field);
-        }
-    }
-
     /** BOM → 表格行 (preview 时把目标行的指定字段标成 newValue, 让前端高亮)。 */
-    private List<Map<String, Object>> bomToTable(List<BomItem> bom, Object previewTargetId, String previewField, BigDecimal previewValue) {
+    private List<Map<String, Object>> bomToTable(List<BomRecipeItem> bom, Object previewTargetId, String previewField, BigDecimal previewValue) {
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (BomItem b : bom) {
+        for (BomRecipeItem b : bom) {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("materialName", b.getMaterialName());
             row.put("standardQuantity", b.getStandardQuantity());
@@ -215,6 +220,24 @@ public class BomAdjustTool extends AbstractBusinessTool {
             rows.add(row);
         }
         return rows;
+    }
+
+    private CreateBomRecipeRequest.BomRecipeItemDTO toItemDto(BomRecipeItem item) {
+        CreateBomRecipeRequest.BomRecipeItemDTO dto = new CreateBomRecipeRequest.BomRecipeItemDTO();
+        dto.setMaterialTypeId(item.getMaterialTypeId());
+        dto.setStandardQuantity(item.getStandardQuantity());
+        dto.setUnit(item.getUnit());
+        dto.setMaterialCategory(item.getMaterialCategory());
+        dto.setSortOrder(item.getSortOrder());
+        dto.setIsOptional(item.getIsOptional());
+        dto.setSubstituteGroup(item.getSubstituteGroup());
+        dto.setRemark(item.getRemark());
+        dto.setPerPortion(item.getPerPortion());
+        dto.setSemiFinishedRefCode(item.getSemiFinishedRefCode());
+        dto.setSubProductTypeId(item.getSubProductTypeId());
+        dto.setPrimaryCode(item.getPrimaryCode());
+        dto.setPrimaryCodeRef(item.getPrimaryCodeRef());
+        return dto;
     }
 
     /**

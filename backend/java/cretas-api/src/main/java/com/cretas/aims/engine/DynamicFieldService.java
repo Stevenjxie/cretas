@@ -42,7 +42,7 @@ public class DynamicFieldService {
      * Determine whether the id column of a given table is UUID or VARCHAR.
      * Canvas V3 supports both because different modules use different id types:
      * - sales_orders.id: VARCHAR (legacy)
-     * - bom_items.id: BIGINT
+     * - bom_recipe_items.id: BIGINT
      * - canvas_dynamic_field.id: UUID
      * We query information_schema once per table and cache the result.
      */

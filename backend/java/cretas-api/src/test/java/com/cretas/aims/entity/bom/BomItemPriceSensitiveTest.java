@@ -8,10 +8,10 @@ import java.lang.reflect.Field;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
- * Regression guard for PR #455 BUG-2 — BomItem.unitPrice leak sweep.
+ * Regression guard for PR #455 BUG-2 — BomRecipeItem.unitPrice leak sweep.
  *
- * <p>Before fix: warehouse_manager fetching {@code /api/mobile/{factoryId}/bom/items/{productId}}
- * received real supplier {@code unitPrice} values because {@link BomItem#unitPrice} was not
+ * <p>Before fix: warehouse_manager fetching the current recipe detail
+ * received real supplier {@code unitPrice} values because {@link BomRecipeItem#unitPrice} was not
  * annotated {@code @PriceSensitive}. This violated the same RBAC contract that PR #423/#443
  * established for sales/procurement domains.
  *
@@ -24,13 +24,13 @@ class BomItemPriceSensitiveTest {
 
     @Test
     void unitPrice_isAnnotated_priceSensitive() throws NoSuchFieldException {
-        Field unitPrice = BomItem.class.getDeclaredField("unitPrice");
+        Field unitPrice = BomRecipeItem.class.getDeclaredField("unitPrice");
         assertNotNull(
                 unitPrice.getAnnotation(PriceSensitive.class),
-                "BomItem.unitPrice must be @PriceSensitive — without the annotation "
+                "BomRecipeItem.unitPrice must be @PriceSensitive — without the annotation "
                         + "PriceFieldResponseAdvice cannot strip the value for warehouse_manager / "
                         + "operator / quality_inspector roles and supplier unit pricing leaks via "
-                        + "/api/mobile/{factoryId}/bom/items/{productId}."
+                        + "/api/mobile/{factoryId}/bom/recipes/by-product/{productId}/current."
         );
     }
 }

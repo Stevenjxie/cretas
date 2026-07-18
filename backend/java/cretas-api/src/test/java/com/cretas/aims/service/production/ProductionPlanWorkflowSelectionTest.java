@@ -54,7 +54,7 @@ class ProductionPlanWorkflowSelectionTest {
                 productTypeRepository, mock(ProductionPlanMapper.class), mock(ConversionRepository.class),
                 mock(SchedulingService.class), mock(ProductionLineRepository.class), mock(UserRepository.class),
                 mock(ExcelUtil.class), mock(SalesOrderRepository.class),
-                mock(SalesOrderItemRepository.class), mock(BomService.class));
+                mock(SalesOrderItemRepository.class));
         ReflectionTestUtils.setField(service, "workflowResolutionService", workflowResolutionService);
 
         ProductType owner = new ProductType();

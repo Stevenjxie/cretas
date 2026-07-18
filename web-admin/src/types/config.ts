@@ -168,7 +168,7 @@ export interface ItemSchemaField {
 // Fixed (Round 3 audit): was using hyphen-case that didn't match any real controller.
 export const MODULE_API_PATHS: Record<string, string> = {
   sales_order: 'sales/orders',
-  bom: 'bom/items',
+  bom: 'bom/recipes',
   inbound: 'material-batches',
   outbound: 'material-batches',
   production_report: 'process-work-reporting',

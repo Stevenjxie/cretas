@@ -246,7 +246,7 @@ class BomCopyServiceImplTest {
         BomCopyToDraftRequest request = new BomCopyToDraftRequest();
         request.setTargetProductTypeId(TARGET);
         request.setSourceRecipeId(SOURCE_RECIPE);
-        request.setBomItemIds(items);
+        request.setRecipeItemIds(items);
         request.setSeasoningItemIds(seasonings);
         request.setProcessSeasoningParamIds(params);
         return request;

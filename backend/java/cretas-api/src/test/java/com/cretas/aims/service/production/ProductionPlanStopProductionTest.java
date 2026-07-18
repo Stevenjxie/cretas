@@ -87,7 +87,7 @@ class ProductionPlanStopProductionTest {
                 materialBatchRepository, materialConsumptionRepository, planBatchUsageRepository,
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
-                salesOrderRepository, salesOrderItemRepository, bomService);
+                salesOrderRepository, salesOrderItemRepository);
         ReflectionTestUtils.setField(service, "applicationEventPublisher", applicationEventPublisher);
         ReflectionTestUtils.setField(service, "processSheetRowRepository", processSheetRowRepository);
         lenient().when(conversionRepository.findAll()).thenReturn(Collections.emptyList());

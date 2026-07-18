@@ -3,7 +3,7 @@ package com.cretas.aims.service.factory.impl;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionPlan;
-import com.cretas.aims.entity.bom.BomItem;
+import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition.Status;
@@ -16,7 +16,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
-import com.cretas.aims.repository.bom.BomItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.factory.FactoryMaterialRequisitionItemRepository;
 import com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
@@ -46,7 +46,7 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     private final FactoryMaterialRequisitionRepository repository;
     private final FactoryMaterialRequisitionItemRepository itemRepository;
     private final ProductionPlanRepository productionPlanRepository;
-    private final BomItemRepository bomItemRepository;
+    private final BomRecipeItemRepository bomRecipeItemRepository;
     private final FactoryWarehouseRepository warehouseRepository;
     private final MaterialBatchRepository materialBatchRepository;
     private final MaterialConsumptionRepository materialConsumptionRepository;
@@ -160,8 +160,8 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                         .withHint("请刷新生产计划列表后重新选择").withHintTarget("productionPlanId"));
 
         // 按 BOM 展开
-        List<BomItem> bomItems = bomItemRepository
-                .findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(factoryId, plan.getProductTypeId());
+        List<BomRecipeItem> bomItems = bomRecipeItemRepository
+                .findCurrentByProduct(factoryId, plan.getProductTypeId());
         if (bomItems.isEmpty()) {
             throw new BusinessException(404, "产品 BOM 未配置, 无法生成物料需求单: productTypeId=" + plan.getProductTypeId())
                     .withHint("请前往「生产管理 → BOM成本管理」配置产品 BOM");
@@ -192,7 +192,7 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         }
 
         BigDecimal plannedQty = plan.getPlannedQuantity() != null ? plan.getPlannedQuantity() : BigDecimal.ZERO;
-        for (BomItem bom : bomItems) {
+        for (BomRecipeItem bom : bomItems) {
             FactoryMaterialRequisitionItem item = new FactoryMaterialRequisitionItem();
             item.setRequisition(mr);
             item.setMaterialTypeId(bom.getMaterialTypeId());
@@ -213,9 +213,9 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                 }
             }
             item.setMaterialCategory(category);
-            item.setBomItemId(bom.getId());
+            item.setBomRecipeItemId(bom.getId());
             // required_qty = planned_quantity * actual_quantity (按出成率调整), 单位 = BOM unit (e.g. g)
-            BigDecimal perUnit = bom.getActualQuantity();
+            BigDecimal perUnit = bom.calculateActualQuantity();
             BigDecimal requiredBom = plannedQty.multiply(perUnit);
             String bomUnit = bom.getUnit();
 

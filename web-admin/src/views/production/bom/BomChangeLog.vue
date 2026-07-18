@@ -10,7 +10,7 @@ const canViewPrice = computed(() => permissionStore.canViewPrice)
 const PRICE_FIELDS = ['unitPrice', 'taxRate', 'priceUnit']
 function visibleEntries(obj: Record<string, unknown> | null): [string, unknown][] {
   if (!obj) return []
-  const skipKeys = ['id', 'factoryId', 'bomId', 'createdAt', 'updatedAt', 'deletedAt']
+  const skipKeys = ['id', 'factoryId', 'recipeId', 'createdAt', 'updatedAt', 'deletedAt']
   return Object.entries(obj).filter(([k]) => {
     if (skipKeys.includes(k)) return false
     if (!canViewPrice.value && PRICE_FIELDS.includes(k)) return false
@@ -23,8 +23,8 @@ function visibleDiffKeys(oldVal: Record<string, unknown> | null, newVal: Record<
 
 interface ChangeLogEntry {
   id: string
-  bomId: string
-  bomItemId: number | null
+  bomRecipeId: string
+  bomRecipeItemId: number | null
   changeType: 'CREATE' | 'UPDATE' | 'DELETE'
   oldValue: Record<string, unknown> | null
   newValue: Record<string, unknown> | null
@@ -36,7 +36,7 @@ interface ChangeLogEntry {
 
 const props = defineProps<{
   factoryId: string
-  productTypeId: string
+  recipeId: string
 }>()
 
 const visible = defineModel<boolean>('visible', { default: false })
@@ -44,10 +44,10 @@ const loading = ref(false)
 const logs = ref<ChangeLogEntry[]>([])
 
 async function fetchLogs() {
-  if (!props.factoryId || !props.productTypeId) return
+  if (!props.factoryId || !props.recipeId) return
   loading.value = true
   try {
-    const res = await get(`/${props.factoryId}/bom/items/${props.productTypeId}/change-logs`)
+    const res = await get(`/${props.factoryId}/bom/change-logs/${props.recipeId}`)
     if (res.success) {
       logs.value = res.data || []
     } else {
@@ -129,7 +129,7 @@ function fieldLabel(key: string): string {
                 {{ log.changeType === 'CREATE' ? '新增' : log.changeType === 'DELETE' ? '删除' : '修改' }}
               </el-tag>
               <span class="change-user">{{ log.changedByName || '系统' }}</span>
-              <span v-if="log.bomItemId" class="change-scope">物料项 #{{ log.bomItemId }}</span>
+              <span v-if="log.bomRecipeItemId" class="change-scope">物料项 #{{ log.bomRecipeItemId }}</span>
               <span v-else class="change-scope">BOM 级别</span>
             </div>
             <div v-if="log.changeReason" class="change-reason">

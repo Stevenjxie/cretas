@@ -37,18 +37,18 @@ public class BomTreeNode {
      * 节点 typeId.
      * <ul>
      *   <li>level=0: productTypeId (成品 ID)</li>
-     *   <li>level≥1: materialTypeId (原料或半成品 ID, 来自父节点 BomItem.materialTypeId)</li>
+     *   <li>level≥1: materialTypeId (原料或半成品 ID, 来自父节点 BomRecipeItem.materialTypeId)</li>
      * </ul>
      */
     private String typeId;
 
-    /** 显示名称 (level=0 为产品名; level≥1 为父 BomItem.materialName) */
+    /** 显示名称 (level=0 为产品名; level≥1 为父 BomRecipeItem.materialName) */
     private String name;
 
-    /** 该节点对应的需求数量 (已经按父级数量乘 BomItem.actualQuantity 累积) */
+    /** 该节点对应的需求数量 (已经按父级数量乘 BomRecipeItem.actualQuantity 累积) */
     private BigDecimal requiredQuantity;
 
-    /** 计量单位 (来自父 BomItem.unit, level=0 为成品单位/null) */
+    /** 计量单位 (来自父 BomRecipeItem.unit, level=0 为成品单位/null) */
     private String unit;
 
     /** 损耗率 (0-100, 来自 100 - yieldRate); level=0 为 null */

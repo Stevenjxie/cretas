@@ -17,7 +17,7 @@ import java.util.UUID;
 /**
  * M-BOM-1 BOM 配方头 (主表).
  *
- * <p>取代 {@link BomItem} 单表设计 (后者兼容期保留 30 天).
+ * <p>系统唯一 BOM 头表；所有生产链读取均与 {@link BomRecipeItem} 配套。
  *
  * <p>核心字段:
  * <ul>

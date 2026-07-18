@@ -5,10 +5,12 @@ import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.enums.ProductCategory;
 import com.cretas.aims.entity.enums.WorkProcessOutputMaterialKind;
+import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
-import com.cretas.aims.repository.bom.BomItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -45,16 +47,22 @@ class ProductProcessWorkflowCatalogValidatorTest {
     private ProductTypeRepository productTypeRepository;
 
     @Mock
-    private BomItemRepository bomItemRepository;
+    private BomRecipeItemRepository bomItemRepository;
+
+    @Mock
+    private BomRecipeRepository bomRecipeRepository;
 
     private ProductProcessWorkflowCatalogValidator validator;
 
     @BeforeEach
     void setUp() {
         validator = new ProductProcessWorkflowCatalogValidator(
-                workProcessRepository, productTypeRepository, bomItemRepository);
-        lenient().when(bomItemRepository.countByFactoryIdAndProductTypeId(anyString(), anyString()))
-                .thenReturn(1L);
+                workProcessRepository, productTypeRepository, bomRecipeRepository, bomItemRepository);
+        lenient().when(bomRecipeRepository.existsByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                        anyString(), anyString(), org.mockito.ArgumentMatchers.eq(BomRecipe.Status.ACTIVE)))
+                .thenReturn(true);
+        lenient().when(bomItemRepository.findCurrentByProduct(anyString(), anyString()))
+                .thenReturn(List.of(new com.cretas.aims.entity.bom.BomRecipeItem()));
     }
 
     @Test
@@ -89,7 +97,8 @@ class ProductProcessWorkflowCatalogValidatorTest {
                 .thenReturn(List.of(workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD)));
         when(productTypeRepository.findByIdIn(List.of(PRODUCT_ID)))
                 .thenReturn(List.of(product(PRODUCT_ID, FACTORY_ID, ProductCategory.FINISHED_PRODUCT)));
-        when(bomItemRepository.countByFactoryIdAndProductTypeId(FACTORY_ID, PRODUCT_ID)).thenReturn(0L);
+        when(bomRecipeRepository.existsByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                FACTORY_ID, PRODUCT_ID, BomRecipe.Status.ACTIVE)).thenReturn(false);
 
         BusinessException error = assertThrows(BusinessException.class,
                 () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID,

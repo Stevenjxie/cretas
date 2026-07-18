@@ -81,7 +81,7 @@ public class PurchaseSuggestionResponse {
         /** 是否库存充足 (netRequired == 0) */
         private boolean stockSufficient;
 
-        /** 参考单价 (来自 BomItem.unitPrice，null = 未配置) */
+        /** 参考单价 (来自 BomRecipeItem.unitPrice，null = 未配置) */
         private BigDecimal referenceUnitPrice;
 
         /** Canonical denominator unit of referenceUnitPrice, e.g. kg. */

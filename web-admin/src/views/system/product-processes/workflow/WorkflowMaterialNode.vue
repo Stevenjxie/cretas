@@ -153,9 +153,9 @@ const props = withDefaults(defineProps<{
   excludedRawMaterialIds?: string[];
   /**
    * #3 (Steve 定: BOM 原料优先、可加其他): 该产品 BOM 原辅料清单里出现过的
-   * 原料 SKU id 集合 (RawMaterialType.id，与 BomItem.materialTypeId 同一业务
+   * 原料 SKU id 集合 (RawMaterialType.id，与 BomRecipeItem.materialTypeId 同一业务
    * 键)。由父组件 ProductProcessWorkflowEditor 调用
-   * GET /{factoryId}/bom/items/{productTypeId} 拿到后传下来 —— 该端口在
+   * GET /{factoryId}/bom/recipes/by-product/{productTypeId}/current 拿到后传下来 —— 该端口在
    * BomController 中已确认存在 (com.cretas.aims.controller.BomController
    * #getBomItems)，不需要走"接口缺失降级"分支。
    */

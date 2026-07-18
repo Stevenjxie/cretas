@@ -9,7 +9,7 @@ import com.cretas.aims.entity.BatchWorkSession;
 import com.cretas.aims.entity.EmployeeWorkSession;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.User;
-import com.cretas.aims.entity.bom.BomItem;
+import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.LaborCostConfig;
 import com.cretas.aims.entity.bom.OverheadCostConfig;
 import com.cretas.aims.repository.UserRepository;
@@ -91,12 +91,11 @@ class BomDomainPriceFieldAdviceTest {
         return advice.beforeBodyWrite(body, null, MediaType.APPLICATION_JSON, null, serverRequest, null);
     }
 
-    private BomItem sampleBomItem() {
-        return BomItem.builder()
+    private BomRecipeItem sampleBomItem() {
+        return BomRecipeItem.builder()
                 .id(1L)
                 .factoryId("F001")
-                .productTypeId("PT-F001-001")
-                .productName("带鱼段")
+                .recipeId("RECIPE-PT-F001-001")
                 .materialTypeId("MB-F001-001")
                 .materialName("带鱼原料")
                 .standardQuantity(new BigDecimal("1.2000"))
@@ -155,16 +154,16 @@ class BomDomainPriceFieldAdviceTest {
     // ───────── Tests ─────────
 
     @Test
-    @DisplayName("warehouse_manager → BomItem.unitPrice stripped; identity / quantity / rate preserved")
+    @DisplayName("warehouse_manager → BomRecipeItem.unitPrice stripped; identity / quantity / rate preserved")
     void warehouse_bomItem_unitPriceStripped() {
         asUser(143L, false);  // warehouse_mgr1 (matches data.sql seed userId=143)
 
-        BomItem item = sampleBomItem();
+        BomRecipeItem item = sampleBomItem();
         run(ApiResponse.success(item));
 
-        assertNull(item.getUnitPrice(), "BomItem.unitPrice must be stripped for warehouse role");
+        assertNull(item.getUnitPrice(), "BomRecipeItem.unitPrice must be stripped for warehouse role");
         // Identity / quantity / rate preserved — warehouse legitimately needs these for stock ops.
-        assertEquals("PT-F001-001", item.getProductTypeId());
+        assertEquals("RECIPE-PT-F001-001", item.getRecipeId());
         assertEquals("带鱼原料", item.getMaterialName());
         assertEquals(new BigDecimal("1.2000"), item.getStandardQuantity(), "standardQuantity preserved");
         assertEquals(new BigDecimal("85.00"), item.getYieldRate(), "yieldRate preserved");
@@ -172,13 +171,13 @@ class BomDomainPriceFieldAdviceTest {
     }
 
     @Test
-    @DisplayName("admin → BomItem.unitPrice preserved end-to-end")
+    @DisplayName("admin → BomRecipeItem.unitPrice preserved end-to-end")
     void admin_bomItem_unitPricePreserved() {
         asUser(1L, true);  // factory_admin1
-        BomItem item = sampleBomItem();
+        BomRecipeItem item = sampleBomItem();
         run(ApiResponse.success(item));
         assertEquals(new BigDecimal("18.5000"), item.getUnitPrice(),
-                "BomItem.unitPrice must be visible to admin (procurement:price:view granted)");
+                "BomRecipeItem.unitPrice must be visible to admin (procurement:price:view granted)");
     }
 
     @Test

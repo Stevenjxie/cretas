@@ -41,6 +41,7 @@ export interface BomRecipeSummary {
   totalOverheadCost?: number | null;
   createdAt?: string | null;
   updatedAt?: string | null;
+  items?: BomRecipeItemView[];
 }
 
 export interface BomRecipeItemPayload {
@@ -59,6 +60,19 @@ export interface BomRecipeItemPayload {
   perPortion?: boolean | null;
   semiFinishedRefCode?: string | null;
   subProductTypeId?: string | null;
+}
+
+export interface BomRecipeItemView extends BomRecipeItemPayload {
+  id: number;
+  recipeId: string;
+  factoryId: string;
+  materialName?: string | null;
+  actualQuantity?: number | null;
+  itemCost?: number | null;
+  priceUnit?: string | null;
+  quantityToPriceFactor?: number | null;
+  primaryCode?: string | null;
+  primaryCodeRef?: string | null;
 }
 
 export interface CreateBomRecipeRequest {
@@ -144,7 +158,7 @@ export interface BomCopyCandidate {
 export interface CopyBomToProductRequest {
   targetProductTypeId: string;
   sourceRecipeId: string;
-  bomItemIds: number[];
+  recipeItemIds: number[];
   seasoningItemIds: number[];
   processSeasoningParamIds: number[];
 }
@@ -165,6 +179,12 @@ export const bomRecipeApi = {
       { params: { ...options } },
     ),
 
+  getDetail: (factoryId: string, recipeId: string) =>
+    get<BomRecipeSummary>(`${recipeBase(factoryId)}/${recipeId}`),
+
+  getCurrentByProduct: (factoryId: string, productTypeId: string) =>
+    get<BomRecipeSummary>(`${recipeBase(factoryId)}/by-product/${productTypeId}/current`),
+
   /**
    * 创建 BOM 配方草稿.
    * 对应: POST /api/mobile/{factoryId}/bom/recipes
@@ -178,6 +198,15 @@ export const bomRecipeApi = {
    */
   update: (factoryId: string, recipeId: string, req: UpdateBomRecipeRequest) =>
     put<BomRecipeSummary>(`${recipeBase(factoryId)}/${recipeId}`, req),
+
+  addItem: (factoryId: string, recipeId: string, item: BomRecipeItemPayload) =>
+    post<BomRecipeItemView>(`${recipeBase(factoryId)}/${recipeId}/items`, item),
+
+  updateItem: (factoryId: string, itemId: number, item: BomRecipeItemPayload) =>
+    put<BomRecipeItemView>(`${recipeBase(factoryId)}/items/${itemId}`, item),
+
+  removeItem: (factoryId: string, itemId: number) =>
+    del<void>(`${recipeBase(factoryId)}/items/${itemId}`),
 
   /** 克隆任意历史版本为可编辑草稿。 */
   clone: (factoryId: string, recipeId: string) =>
@@ -241,7 +270,7 @@ export interface YieldEstimateResponse {
 export interface RecalculatePreviewRow {
   productTypeId: string;
   productName: string;
-  bomItemId: number;
+  recipeId: string;
   materialName: string;
   /** 当前配置的出成率, null 表示未填 */
   currentYieldRate: number | null;
@@ -258,7 +287,7 @@ export interface RecalculatePreviewRow {
 
 /** 一键重算应用请求体 — 单行 */
 export interface RecalculateApplyItem {
-  bomItemId: number;
+  recipeId: string;
   yieldRate: number;
   /** 乐观锁: 预览时拿到的当前出成率, null 表示预览时未填 (原值也为 null) */
   expectedCurrentYieldRate: number | null;
@@ -276,7 +305,7 @@ export interface RecalculateApplyResponse {
  */
 export interface RecalculateApplyStaleResponse {
   staleRows: Array<{
-    bomItemId: number;
+    recipeId: string;
     dbCurrent: number | null;
     expected: number | null;
   }>;
@@ -314,7 +343,7 @@ export const bomYieldEstimateApi = {
 
   /**
    * 一键重算应用 — 写入用户勾选的行, 生成变更日志.
-   * @param items  bomItemId + yieldRate 列表
+   * @param items  recipeId + yieldRate 列表
    */
   recalculateApply: (
     factoryId: string,
@@ -571,45 +600,3 @@ export interface SeasoningBindingMutationResponse {
   seasoningRevision: number;
   binding: SeasoningBindingView;
 }
-
-// =========================================================================
-// BOM Batch Import — Excel 导入原辅料行
-// Endpoint: POST /{factoryId}/bom/items/batch-import
-// =========================================================================
-
-/** One row sent to the batch-import endpoint */
-export interface BomImportRow {
-  materialName?: string;
-  materialTypeId?: string;
-  materialCategory?: string;
-  /** RAW relationship rows may omit quantity; non-RAW rows require a positive value. */
-  standardQuantity: number | null;
-  yieldRate?: number | null;
-  unit?: string;
-}
-
-/** Per-row result returned by the backend */
-export interface BomImportRowResult {
-  row: number;
-  ok: boolean;
-  error?: string;
-  resolvedMaterialTypeId?: string;
-  materialName?: string;
-}
-
-/** Top-level response from the batch-import endpoint */
-export interface BomBatchImportResult {
-  inserted: number;
-  failed: number;
-  rows: BomImportRowResult[];
-}
-
-export const batchImportBomItems = (
-  factoryId: string,
-  productTypeId: string,
-  items: BomImportRow[],
-) =>
-  post<BomBatchImportResult>(`/${factoryId}/bom/items/batch-import`, {
-    productTypeId,
-    items,
-  });

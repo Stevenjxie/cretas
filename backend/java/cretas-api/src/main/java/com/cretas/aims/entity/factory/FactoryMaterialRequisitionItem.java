@@ -57,8 +57,8 @@ public class FactoryMaterialRequisitionItem extends BaseEntity {
     @Column(name = "material_category", length = 20)
     private MaterialCategory materialCategory = MaterialCategory.RAW;
 
-    @Column(name = "bom_item_id")
-    private Long bomItemId;
+    @Column(name = "bom_recipe_item_id")
+    private Long bomRecipeItemId;
 
     @Column(name = "required_qty", precision = 15, scale = 3)
     private BigDecimal requiredQty;

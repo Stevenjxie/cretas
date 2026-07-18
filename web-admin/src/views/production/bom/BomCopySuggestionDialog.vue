@@ -118,7 +118,7 @@ function handleCopy() {
   emit('copy', {
     targetProductTypeId: props.targetProductTypeId,
     sourceRecipeId: candidate.sourceRecipeId,
-    bomItemIds: selectedBomItemIds.value.map((id) => originalId(id, candidate.bomItems)),
+    recipeItemIds: selectedBomItemIds.value.map((id) => originalId(id, candidate.bomItems)),
     seasoningItemIds: selectedSeasoningItemIds.value.map((id) => originalId(id, candidate.seasoningItems)),
     processSeasoningParamIds: selectedProcessParamIds.value.map(
       (id) => originalId(id, candidate.processSeasoningParams),

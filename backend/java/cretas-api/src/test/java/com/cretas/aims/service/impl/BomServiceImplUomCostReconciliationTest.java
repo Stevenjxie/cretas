@@ -3,10 +3,11 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.dto.bom.BomCostSummaryDTO;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.ProductType;
-import com.cretas.aims.entity.bom.BomItem;
+import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
-import com.cretas.aims.repository.bom.BomItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.LaborCostConfigRepository;
 import com.cretas.aims.repository.bom.OverheadCostConfigRepository;
 import com.cretas.aims.service.UnitConversionService;
@@ -41,7 +42,7 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class BomServiceImplUomCostReconciliationTest {
 
-    @Mock private BomItemRepository bomItemRepository;
+    @Mock private BomRecipeItemRepository bomItemRepository;
     @Mock private LaborCostConfigRepository laborCostConfigRepository;
     @Mock private OverheadCostConfigRepository overheadCostConfigRepository;
     @Mock private RawMaterialTypeRepository rawMaterialTypeRepository;
@@ -87,10 +88,10 @@ class BomServiceImplUomCostReconciliationTest {
         return product;
     }
 
-    private BomItem item(String productTypeId, String materialTypeId, String qty, String unit, String price) {
-        return BomItem.builder()
+    private BomRecipeItem item(String productTypeId, String materialTypeId, String qty, String unit, String price) {
+        BomRecipeItem item = BomRecipeItem.builder()
                 .factoryId(F)
-                .productTypeId(productTypeId)
+                .recipeId("RECIPE-" + productTypeId)
                 .materialTypeId(materialTypeId)
                 .materialName(materialTypeId)
                 .standardQuantity(new BigDecimal(qty))
@@ -99,6 +100,15 @@ class BomServiceImplUomCostReconciliationTest {
                 .unitPrice(new BigDecimal(price))
                 .taxRate(new BigDecimal("13.00"))
                 .build();
+        BomRecipe recipe = new BomRecipe();
+        recipe.setId("RECIPE-" + productTypeId);
+        recipe.setFactoryId(F);
+        recipe.setProductTypeId(productTypeId);
+        recipe.setProductName(productTypeId);
+        recipe.setStatus(BomRecipe.Status.ACTIVE);
+        recipe.setIsCurrent(true);
+        item.setRecipe(recipe);
+        return item;
     }
 
     @Test
@@ -106,8 +116,8 @@ class BomServiceImplUomCostReconciliationTest {
     void jinLine_kgMasterPrice_normalizedToKg() {
         String p = "P-JIN";
         // 100 斤, 主数据按 kg 计价 ¥10/kg → 50kg × 10 = 500
-        BomItem it = item(p, "RM-BEEF", "100", "斤", "10");
-        when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(F, p))
+        BomRecipeItem it = item(p, "RM-BEEF", "100", "斤", "10");
+        when(bomItemRepository.findCurrentByProduct(F, p))
                 .thenReturn(List.of(it));
         when(rawMaterialTypeRepository.findById("RM-BEEF"))
                 .thenReturn(Optional.of(material("RM-BEEF", "kg")));
@@ -127,8 +137,8 @@ class BomServiceImplUomCostReconciliationTest {
     @DisplayName("kg行 + kg主数据: 无归一, 10kg×¥10 = ¥100 (回归, 旧行为不变)")
     void kgLine_kgMaster_unchanged() {
         String p = "P-KG";
-        BomItem it = item(p, "RM-KG", "10", "kg", "10");
-        when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(F, p))
+        BomRecipeItem it = item(p, "RM-KG", "10", "kg", "10");
+        when(bomItemRepository.findCurrentByProduct(F, p))
                 .thenReturn(List.of(it));
         when(rawMaterialTypeRepository.findById("RM-KG"))
                 .thenReturn(Optional.of(material("RM-KG", "kg")));
@@ -142,10 +152,10 @@ class BomServiceImplUomCostReconciliationTest {
     @DisplayName("成本估算优先使用当前移动平均价且不改写 BOM 快照价")
     void currentMovingAverageOverridesSnapshotOnlyInResponse() {
         String p = "P-CURRENT-AVG";
-        BomItem it = item(p, "RM-KG", "2", "kg", "10");
+        BomRecipeItem it = item(p, "RM-KG", "2", "kg", "10");
         RawMaterialType master = material("RM-KG", "kg");
         master.setMovingAvgPrice(new BigDecimal("12.50"));
-        when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(F, p))
+        when(bomItemRepository.findCurrentByProduct(F, p))
                 .thenReturn(List.of(it));
         when(rawMaterialTypeRepository.findById("RM-KG")).thenReturn(Optional.of(master));
 
@@ -167,8 +177,8 @@ class BomServiceImplUomCostReconciliationTest {
     @DisplayName("重量型成品汇总成本明确显示元/kg")
     void summaryCostUnitUsesKgProductUnit() {
         String p = "P-OUTPUT-KG";
-        BomItem it = item(p, "RM-KG", "1", "kg", "10");
-        when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(F, p))
+        BomRecipeItem it = item(p, "RM-KG", "1", "kg", "10");
+        when(bomItemRepository.findCurrentByProduct(F, p))
                 .thenReturn(List.of(it));
         when(rawMaterialTypeRepository.findById("RM-KG"))
                 .thenReturn(Optional.of(material("RM-KG", "kg")));
@@ -182,8 +192,8 @@ class BomServiceImplUomCostReconciliationTest {
     @DisplayName("计数型成品汇总成本显示实际基本单位")
     void summaryCostUnitUsesCountProductUnit() {
         String p = "P-OUTPUT-BOX";
-        BomItem it = item(p, "RM-KG", "1", "kg", "10");
-        when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(F, p))
+        BomRecipeItem it = item(p, "RM-KG", "1", "kg", "10");
+        when(bomItemRepository.findCurrentByProduct(F, p))
                 .thenReturn(List.of(it));
         when(rawMaterialTypeRepository.findById("RM-KG"))
                 .thenReturn(Optional.of(material("RM-KG", "kg")));
@@ -197,8 +207,8 @@ class BomServiceImplUomCostReconciliationTest {
     @DisplayName("个行 + 个主数据 (非重量): 不归一, 5个×¥3 = ¥15 (绝不当 kg)")
     void countLine_notNormalized() {
         String p = "P-COUNT";
-        BomItem it = item(p, "RM-BOX", "5", "个", "3");
-        when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(F, p))
+        BomRecipeItem it = item(p, "RM-BOX", "5", "个", "3");
+        when(bomItemRepository.findCurrentByProduct(F, p))
                 .thenReturn(List.of(it));
         // 个 非重量单位, reconcile 提前 return, 不会查 repository — lenient 避免 unnecessary stub
         lenient().when(rawMaterialTypeRepository.findById("RM-BOX"))
@@ -213,8 +223,8 @@ class BomServiceImplUomCostReconciliationTest {
     @DisplayName("g行 + kg主数据价: 1500g×¥2/kg = 1.5kg×2 = ¥3 (混重量单位)")
     void gramLine_kgMasterPrice_normalized() {
         String p = "P-GRAM";
-        BomItem it = item(p, "RM-SALT", "1500", "g", "2");
-        when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(F, p))
+        BomRecipeItem it = item(p, "RM-SALT", "1500", "g", "2");
+        when(bomItemRepository.findCurrentByProduct(F, p))
                 .thenReturn(List.of(it));
         when(rawMaterialTypeRepository.findById("RM-SALT"))
                 .thenReturn(Optional.of(material("RM-SALT", "kg")));
@@ -229,10 +239,10 @@ class BomServiceImplUomCostReconciliationTest {
     void mixedUnits_multipleLines() {
         String p = "P-MIX";
         // 斤行: 100斤 × ¥10/kg = 50kg × 10 = 500
-        BomItem jin = item(p, "RM-BEEF", "100", "斤", "10");
+        BomRecipeItem jin = item(p, "RM-BEEF", "100", "斤", "10");
         // kg行: 2kg × ¥20/kg = 40
-        BomItem kg = item(p, "RM-OIL", "2", "kg", "20");
-        when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(F, p))
+        BomRecipeItem kg = item(p, "RM-OIL", "2", "kg", "20");
+        when(bomItemRepository.findCurrentByProduct(F, p))
                 .thenReturn(List.of(jin, kg));
         when(rawMaterialTypeRepository.findById("RM-BEEF"))
                 .thenReturn(Optional.of(material("RM-BEEF", "kg")));
@@ -248,8 +258,8 @@ class BomServiceImplUomCostReconciliationTest {
     @DisplayName("斤行 + 斤主数据价 (主数据也按斤计价): 无归一, 100斤×¥5/斤 = ¥500 口径自洽")
     void jinLine_jinMaster_unchanged() {
         String p = "P-JINJIN";
-        BomItem it = item(p, "RM-JIN", "100", "斤", "5");
-        when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(F, p))
+        BomRecipeItem it = item(p, "RM-JIN", "100", "斤", "5");
+        when(bomItemRepository.findCurrentByProduct(F, p))
                 .thenReturn(List.of(it));
         when(rawMaterialTypeRepository.findById("RM-JIN"))
                 .thenReturn(Optional.of(material("RM-JIN", "斤")));
@@ -264,8 +274,8 @@ class BomServiceImplUomCostReconciliationTest {
     @DisplayName("缺主数据: 斤行但 material 不存在 → 不归一 fail-open, 100斤×¥10 = ¥1000 (诚实不猜)")
     void missingMaster_failOpen() {
         String p = "P-NOMAT";
-        BomItem it = item(p, "RM-GONE", "100", "斤", "10");
-        when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(F, p))
+        BomRecipeItem it = item(p, "RM-GONE", "100", "斤", "10");
+        when(bomItemRepository.findCurrentByProduct(F, p))
                 .thenReturn(List.of(it));
         when(rawMaterialTypeRepository.findById("RM-GONE")).thenReturn(Optional.empty());
 

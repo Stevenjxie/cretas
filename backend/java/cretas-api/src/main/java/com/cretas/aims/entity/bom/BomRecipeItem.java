@@ -98,7 +98,7 @@ public class BomRecipeItem extends BaseEntity {
     @Column(name = "item_cost", precision = 15, scale = 4)
     private BigDecimal itemCost;
 
-    /** RAW / AUXILIARY / PACKAGING (与现有 BomItem 兼容). */
+    /** RAW / AUXILIARY / PACKAGING. */
     @Column(name = "material_category", nullable = false, length = 32)
     @Builder.Default
     private String materialCategory = "RAW";

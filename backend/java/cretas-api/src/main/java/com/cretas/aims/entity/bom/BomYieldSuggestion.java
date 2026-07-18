@@ -56,8 +56,8 @@ public class BomYieldSuggestion extends BaseEntity {
     @Column(name = "product_name", length = 100)
     private String productName;
 
-    @Column(name = "bom_item_id")
-    private Long bomItemId;
+    @Column(name = "bom_recipe_id", length = 191)
+    private String bomRecipeId;
 
     @Column(name = "previous_yield_rate", precision = 6, scale = 2)
     private BigDecimal previousYieldRate;

@@ -1,6 +1,5 @@
 package com.cretas.aims.service;
 
-import com.cretas.aims.entity.bom.BomItem;
 import com.cretas.aims.entity.bom.LaborCostConfig;
 import com.cretas.aims.entity.bom.OverheadCostConfig;
 import com.cretas.aims.dto.bom.BomCostSummaryDTO;
@@ -15,59 +14,6 @@ import java.util.List;
  * @since 2025-01-13
  */
 public interface BomService {
-
-    // ============ BOM Items (原辅料配方) ============
-
-    /**
-     * 获取产品的BOM项目列表
-     *
-     * @param factoryId 工厂ID
-     * @param productTypeId 产品类型ID
-     * @return BOM项目列表
-     */
-    List<BomItem> getBomItemsByProduct(String factoryId, String productTypeId);
-
-    /**
-     * 获取工厂的所有BOM项目
-     *
-     * @param factoryId 工厂ID
-     * @return BOM项目列表
-     */
-    List<BomItem> getAllBomItems(String factoryId);
-
-    /**
-     * 保存BOM项目
-     *
-     * @param bomItem BOM项目
-     * @return 保存后的BOM项目
-     */
-    BomItem saveBomItem(BomItem bomItem);
-
-    /**
-     * 批量保存BOM项目
-     *
-     * @param bomItems BOM项目列表
-     * @return 保存后的BOM项目列表
-     */
-    List<BomItem> saveBomItems(List<BomItem> bomItems);
-
-    /**
-     * BOM 批量导入: 逐行校验 (materialTypeId 缺则按 materialName 模糊匹配原料类型),
-     * <b>任一行失败则整批不入库</b> (原子), 返回每行 ok/error 结果。
-     *
-     * @param factoryId 工厂ID
-     * @param request   {productTypeId, items[]}
-     * @return 每行结果 + inserted/failed 计数
-     */
-    com.cretas.aims.dto.bom.BomBatchImportResult batchImportBomItems(
-            String factoryId, com.cretas.aims.dto.bom.BomBatchImportRequest request);
-
-    /**
-     * 删除BOM项目
-     *
-     * @param id BOM项目ID
-     */
-    void deleteBomItem(Long id);
 
     // ============ Labor Cost (人工成本) ============
 

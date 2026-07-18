@@ -6,7 +6,7 @@ import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
-import com.cretas.aims.repository.bom.BomItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.factory.FactoryMaterialRequisitionItemRepository;
 import com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
@@ -51,7 +51,7 @@ class FactoryMaterialRequisitionRestoreBatchStatusTest {
     @Mock
     private ProductionPlanRepository productionPlanRepository;
     @Mock
-    private BomItemRepository bomItemRepository;
+    private BomRecipeItemRepository bomItemRepository;
     @Mock
     private TransferService transferService;
     @Mock

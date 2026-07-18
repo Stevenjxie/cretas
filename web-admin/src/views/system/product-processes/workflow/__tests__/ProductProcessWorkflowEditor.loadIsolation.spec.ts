@@ -97,8 +97,8 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
     vi.clearAllMocks();
     apiMocks.get.mockImplementation((url: string) => Promise.resolve({
       success: true,
-      data: url.includes('/bom/items/')
-        ? [{ id: 1, materialTypeId: 'SKU-RAW', materialName: 'Raw', unit: 'kg' }]
+      data: url.includes('/bom/recipes/by-product/')
+        ? { id: 'R-1', items: [{ id: 1, materialTypeId: 'SKU-RAW', materialName: 'Raw', unit: 'kg' }] }
         : url.includes('/product-types')
         ? { content: [testSku('PT-A'), testSku('PT-B')] }
         : url.includes('/raw-material-types')

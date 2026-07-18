@@ -8,12 +8,9 @@ import com.cretas.aims.dto.bom.BomYieldApplyRequest;
 import com.cretas.aims.dto.bom.BomYieldApplyResultDTO;
 import com.cretas.aims.dto.bom.BomYieldEstimateDTO;
 import com.cretas.aims.dto.bom.BomYieldPreviewItemDTO;
-import com.cretas.aims.dto.bom.CreateBomItemRequest;
 import com.cretas.aims.dto.bom.CreateLaborCostRequest;
-import com.cretas.aims.dto.bom.UpdateBomItemRequest;
 import com.cretas.aims.dto.bom.UpdateLaborCostRequest;
 import com.cretas.aims.entity.bom.BomChangeLog;
-import com.cretas.aims.entity.bom.BomItem;
 import com.cretas.aims.entity.bom.BomYieldSuggestion;
 import com.cretas.aims.entity.bom.LaborCostConfig;
 import com.cretas.aims.entity.bom.OverheadCostConfig;
@@ -67,19 +64,10 @@ public class BomController {
 
     // ========== BOM Items (原辅料配方) ==========
 
-    @GetMapping("/items/{productTypeId}")
-    @Operation(summary = "获取产品的BOM物料清单")
-    public ApiResponse<List<BomItem>> getBomItems(
-            @PathVariable @Parameter(description = "工厂ID") String factoryId,
-            @PathVariable @Parameter(description = "产品类型ID") String productTypeId) {
-        log.info("Getting BOM items: factoryId={}, productTypeId={}", factoryId, productTypeId);
-        return ApiResponse.success(bomService.getBomItemsByProduct(factoryId, productTypeId));
-    }
-
     /**
      * M-MATTREE-1 (Sprint 4 W2): 多级 BOM 树展开 + 叶子节点库存短缺计算.
      *
-     * <p>区别于 {@code /items/{productTypeId}} 的单层 BomItem 查询, 本端口递归展开 sub-BOM
+     * <p>基于当前 ACTIVE/current BomRecipe 递归展开 sub-BOM
      * (半成品 → 原料), 返回完整树结构 + maxDepth / leafCount / shortfallLeafCount 统计 +
      * 循环检测 (cycleDetected + cycleTypeIds)。</p>
      */
@@ -101,72 +89,16 @@ public class BomController {
      * P1-9 BOM 变更痕迹查询 (v1 §2.2.6).
      * 返回指定产品 BOM 的所有变更历史 (CREATE/UPDATE/DELETE), 按时间倒序.
      */
-    @GetMapping("/items/{productTypeId}/change-logs")
+    @GetMapping("/change-logs/{recipeId}")
     @Operation(summary = "获取 BOM 变更痕迹 (P1-9)")
     public ApiResponse<List<BomChangeLog>> getBomChangeLogs(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
-            @PathVariable @Parameter(description = "产品类型ID") String productTypeId) {
+            @PathVariable @Parameter(description = "BOM Recipe ID") String recipeId) {
         if (bomChangeLogRepository == null) {
             return ApiResponse.success(java.util.Collections.emptyList());
         }
         return ApiResponse.success(bomChangeLogRepository
-                .findByFactoryIdAndBomIdAndDeletedAtIsNullOrderByCreatedAtDesc(factoryId, productTypeId));
-    }
-
-    @GetMapping("/items")
-    @Operation(summary = "获取工厂所有BOM物料")
-    public ApiResponse<List<BomItem>> getAllBomItems(
-            @PathVariable @Parameter(description = "工厂ID") String factoryId) {
-        log.info("Getting all BOM items: factoryId={}", factoryId);
-        return ApiResponse.success(bomService.getAllBomItems(factoryId));
-    }
-
-    @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
-    @PostMapping("/items")
-    @Operation(summary = "添加BOM物料")
-    public ApiResponse<BomItem> addBomItem(
-            @PathVariable @Parameter(description = "工厂ID") String factoryId,
-            @Valid @RequestBody CreateBomItemRequest request) {
-        log.info("Adding BOM item: factoryId={}, materialName={}", factoryId, request.getMaterialName());
-        BomItem bomItem = toBomItem(request);
-        bomItem.setFactoryId(factoryId);
-        return ApiResponse.success(bomService.saveBomItem(bomItem));
-    }
-
-    @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
-    @PostMapping("/items/batch-import")
-    @Operation(summary = "BOM 批量导入 (Excel→JSON; 逐行校验, 任一行失败整批不入库)")
-    public ApiResponse<com.cretas.aims.dto.bom.BomBatchImportResult> batchImportBomItems(
-            @PathVariable @Parameter(description = "工厂ID") String factoryId,
-            @Valid @RequestBody com.cretas.aims.dto.bom.BomBatchImportRequest request) {
-        log.info("Batch importing BOM items: factoryId={}, productTypeId={}, rows={}",
-                factoryId, request.getProductTypeId(), request.getItems() == null ? 0 : request.getItems().size());
-        return ApiResponse.success(bomService.batchImportBomItems(factoryId, request));
-    }
-
-    @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
-    @PutMapping("/items/{id}")
-    @Operation(summary = "更新BOM物料")
-    public ApiResponse<BomItem> updateBomItem(
-            @PathVariable @Parameter(description = "工厂ID") String factoryId,
-            @PathVariable @Parameter(description = "BOM物料ID") Long id,
-            @Valid @RequestBody UpdateBomItemRequest request) {
-        log.info("Updating BOM item: factoryId={}, id={}", factoryId, id);
-        BomItem bomItem = toBomItem(request);
-        bomItem.setId(id);
-        bomItem.setFactoryId(factoryId);
-        return ApiResponse.success(bomService.saveBomItem(bomItem));
-    }
-
-    @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
-    @DeleteMapping("/items/{id}")
-    @Operation(summary = "删除BOM物料")
-    public ApiResponse<Void> deleteBomItem(
-            @PathVariable @Parameter(description = "工厂ID") String factoryId,
-            @PathVariable @Parameter(description = "BOM物料ID") Long id) {
-        log.info("Deleting BOM item: factoryId={}, id={}", factoryId, id);
-        bomService.deleteBomItem(id);
-        return ApiResponse.success(null);
+                .findByFactoryIdAndBomRecipeIdAndDeletedAtIsNullOrderByCreatedAtDesc(factoryId, recipeId));
     }
 
     // ========== Labor Cost (人工费用) ==========
@@ -348,12 +280,12 @@ public class BomController {
     /**
      * 批量应用用户选中行 (写操作, 需 production:read_write).
      * POST /api/mobile/{factoryId}/bom/yield-estimate/recalculate-apply
-     * body: [ { bomItemId, yieldRate }, ... ]
+     * body: [ { recipeId, yieldRate }, ... ]
      */
     @RequirePermission({"production:read_write"})
     @PostMapping("/yield-estimate/recalculate-apply")
     @Operation(summary = "BOM 出成率批量应用 (写)",
-            description = "将用户选中的出成率更新写入 bom_items.yield_rate, 每行记录 BomChangeLog. 需 production:read_write.")
+            description = "将用户选中的系统出成率更新写入 bom_recipes.overall_yield_rate, 每个配方记录 BomChangeLog. 需 production:read_write.")
     public ApiResponse<BomYieldApplyResultDTO> recalculateApply(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @Valid @RequestBody List<@Valid BomYieldApplyRequest> requests) {
@@ -382,63 +314,8 @@ public class BomController {
                         factoryId, parsed));
     }
 
-    // ========== Request DTO → Entity mappers (Rule 17.1 cleanup, PR #370) ==========
 
-    /**
-     * Map CreateBomItemRequest → BomItem entity.
-     *
-     * <p>B1: yieldRate null is now passed through as null (待评估) — the old
-     * sentinel {@code != null ? ... : new BigDecimal("100.00")} is removed.
-     * {@link com.cretas.aims.service.impl.BomServiceImpl#saveBomItem} may still
-     * apply a Canvas-configured factory default; absent that, null persists.
-     */
-    private static BomItem toBomItem(CreateBomItemRequest r) {
-        BomItem b = new BomItem();
-        b.setProductTypeId(r.getProductTypeId());
-        b.setProductName(r.getProductName());
-        b.setMaterialTypeId(r.getMaterialTypeId());
-        b.setMaterialName(r.getMaterialName());
-        b.setStandardQuantity(r.getStandardQuantity());
-        b.setYieldRate(r.getYieldRate()); // null → 待评估; service may apply canvas default
-        b.setUnit(r.getUnit());
-        b.setUnitPrice(r.getUnitPrice());
-        b.setTaxRate(r.getTaxRate() != null ? r.getTaxRate() : BigDecimal.ZERO);
-        b.setMaterialCategory(r.getMaterialCategory() != null ? r.getMaterialCategory() : "RAW");
-        b.setSortOrder(r.getSortOrder() != null ? r.getSortOrder() : 0);
-        b.setRemark(r.getRemark());
-        // #728 SP12: 组合装/嵌套 BOM 字段 (mirrors bom_recipe_items, V20261019_01 migration)
-        b.setPerPortion(r.getPerPortion() != null ? r.getPerPortion() : Boolean.FALSE);
-        b.setSemiFinishedRefCode(r.getSemiFinishedRefCode());
-        b.setSubProductTypeId(r.getSubProductTypeId());
-        return b;
-    }
-
-    /**
-     * Update variant — same shape as create (PUT is full-replace).
-     *
-     * <p>B1: yieldRate null passed through; see {@link #toBomItem(CreateBomItemRequest)}.
-     */
-    private static BomItem toBomItem(UpdateBomItemRequest r) {
-        BomItem b = new BomItem();
-        b.setProductTypeId(r.getProductTypeId());
-        b.setProductName(r.getProductName());
-        b.setMaterialTypeId(r.getMaterialTypeId());
-        b.setMaterialName(r.getMaterialName());
-        b.setStandardQuantity(r.getStandardQuantity());
-        b.setYieldRate(r.getYieldRate()); // null → 待评估; service may apply canvas default
-        b.setUnit(r.getUnit());
-        b.setUnitPrice(r.getUnitPrice());
-        b.setTaxRate(r.getTaxRate() != null ? r.getTaxRate() : BigDecimal.ZERO);
-        b.setMaterialCategory(r.getMaterialCategory() != null ? r.getMaterialCategory() : "RAW");
-        b.setSortOrder(r.getSortOrder() != null ? r.getSortOrder() : 0);
-        b.setRemark(r.getRemark());
-        // #728 SP12: 组合装/嵌套 BOM 字段
-        b.setPerPortion(r.getPerPortion() != null ? r.getPerPortion() : Boolean.FALSE);
-        b.setSemiFinishedRefCode(r.getSemiFinishedRefCode());
-        b.setSubProductTypeId(r.getSubProductTypeId());
-        return b;
-    }
-
+    // ========== Labor Cost request mappers ==========
     /**
      * Map CreateLaborCostRequest → LaborCostConfig entity. Defaults align with
      * @Builder.Default on LaborCostConfig (defaultQuantity=1, isActive=true,

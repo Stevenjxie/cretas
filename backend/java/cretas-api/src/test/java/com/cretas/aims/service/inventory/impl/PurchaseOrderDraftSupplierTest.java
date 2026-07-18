@@ -7,7 +7,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.SupplierRepository;
-import com.cretas.aims.repository.bom.BomItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
@@ -47,7 +47,7 @@ class PurchaseOrderDraftSupplierTest {
                 supplierRepository,
                 mock(RawMaterialTypeRepository.class),
                 mock(MaterialBatchRepository.class),
-                mock(BomItemRepository.class),
+                mock(BomRecipeItemRepository.class),
                 mock(com.cretas.aims.service.finance.ArApService.class),
                 mock(ApplicationEventPublisher.class),
                 mock(MaterialBatchService.class));

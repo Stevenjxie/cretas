@@ -1,14 +1,14 @@
 package com.cretas.aims.service.factory.impl;
 
 import com.cretas.aims.entity.ProductionPlan;
-import com.cretas.aims.entity.bom.BomItem;
+import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
-import com.cretas.aims.repository.bom.BomItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.factory.FactoryMaterialRequisitionItemRepository;
 import com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
@@ -63,7 +63,7 @@ class FactoryMaterialRequisitionGenerateFromPlanTest {
     @Mock
     private ProductionPlanRepository productionPlanRepository;
     @Mock
-    private BomItemRepository bomItemRepository;
+    private BomRecipeItemRepository bomItemRepository;
     @Mock
     private TransferService transferService;
     @Mock
@@ -95,7 +95,7 @@ class FactoryMaterialRequisitionGenerateFromPlanTest {
         lenient().when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
                 .thenReturn(Optional.of(plan));
 
-        BomItem bom = new BomItem();
+        BomRecipeItem bom = new BomRecipeItem();
         bom.setId(1L);
         bom.setMaterialTypeId("MAT-001");
         bom.setMaterialName("猪蹄");
@@ -103,7 +103,7 @@ class FactoryMaterialRequisitionGenerateFromPlanTest {
         bom.setUnit("kg");
         bom.setMaterialCategory("RAW");
         lenient().when(bomItemRepository
-                        .findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(FACTORY_ID, PRODUCT_TYPE_ID))
+                        .findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
                 .thenReturn(List.of(bom));
 
         // 车间/生产仓 (target) lookup — 两个 case 都需要.
@@ -159,7 +159,7 @@ class FactoryMaterialRequisitionGenerateFromPlanTest {
         when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
                 .thenReturn(Optional.of(normalizedPlan));
 
-        BomItem gramBom = new BomItem();
+        BomRecipeItem gramBom = new BomRecipeItem();
         gramBom.setId(2L);
         gramBom.setMaterialTypeId("MAT-GRAM");
         gramBom.setMaterialName("原料克重");
@@ -167,7 +167,7 @@ class FactoryMaterialRequisitionGenerateFromPlanTest {
         gramBom.setUnit("g");
         gramBom.setMaterialCategory("RAW");
         when(bomItemRepository
-                .findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(
+                .findCurrentByProduct(
                         FACTORY_ID, PRODUCT_TYPE_ID))
                 .thenReturn(List.of(gramBom));
         when(materialBatchRepository.findStockUnitsByMaterialType(FACTORY_ID, "MAT-GRAM"))

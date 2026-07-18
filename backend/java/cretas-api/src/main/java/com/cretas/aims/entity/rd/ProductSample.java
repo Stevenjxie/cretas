@@ -84,7 +84,7 @@ public class ProductSample extends BaseEntity {
     @Column(name = "product_type_id", length = 191)
     private String productTypeId;
 
-    /** 审核通过后自动生成的 BOM ID (bom_items 的 product_type_id) */
+    /** 审核通过后自动生成的配方 ID (bom_recipes.id) */
     @Column(name = "bom_product_type_id", length = 191)
     private String bomProductTypeId;
 

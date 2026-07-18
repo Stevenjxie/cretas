@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
  * Regression guard for PR #455 BUG-2 — sister-site sweep across BOM cost-config / production-work
  * cost / raw-material master entities.
  *
- * <p>Beyond the directly-leaking {@link BomItem#unitPrice} that BUG-2 named, the same RBAC gap
+ * <p>Beyond the directly-leaking {@link BomRecipeItem#unitPrice} that BUG-2 named, the same RBAC gap
  * exists on 6 sibling persisted monetary fields reachable via BomController + ProductionBatch
  * + RawMaterialType controllers. All of them returned real values to {@code warehouse_manager}
  * before this fix because {@code PriceFieldResponseAdvice} only walks fields carrying
