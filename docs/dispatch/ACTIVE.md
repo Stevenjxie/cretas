@@ -6,23 +6,11 @@
 
 ## 在飞任务
 
-- `CRETAS-RELEASE-GLOBAL-OUTCOME-20260718` — `review`
-  - Base SHA：`6ee89e8b4399f53a61bae27c3354968d5b654a99`
-  - Owner：当前协调者
-  - 目标：修正统一发布入口对子部署 no-op/deployed 与 fallback build 的结构化回执，并补齐 Web 四方哈希验收。
-  - 验收：`bash -n`、目标 shell 契约测试、现有 manifest/deploy 加速测试、编码检查、`git diff --check`。
+- 无。
 
 ## Scope 锁地图
 
-- `CRETAS-RELEASE-GLOBAL-OUTCOME-20260718`
-  - `scripts/deploy/release-cretas.sh`
-  - `scripts/deploy/deploy-backend.sh`
-  - `scripts/deploy/deploy-web-admin.sh`
-  - `scripts/deploy/deploy-cretas-parallel.sh`（仅复核环境透传，不复制子部署逻辑）
-  - `scripts/tests/test-release-cretas.sh`
-  - 相关发布回执/加速契约测试
-  - `.agents/skills/deploy-backend/SKILL.md`
-  - `docs/dispatch/ACTIVE.md` 与当日归档
+- 无。
 
 ## 阻塞项
 
