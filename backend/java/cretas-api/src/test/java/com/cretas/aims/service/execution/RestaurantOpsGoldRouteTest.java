@@ -144,6 +144,39 @@ class RestaurantOpsGoldRouteTest {
     }
 
     @Test
+    @DisplayName("owner action unavailable data is an explicit error, never fake success")
+    void ownerActionUnavailableDataReturnsErrorStatus() throws Exception {
+        ToolExecutor advisorTool = mock(ToolExecutor.class);
+        when(toolRegistry.getExecutor("restaurant_owner_action_advisor"))
+                .thenReturn(Optional.of(advisorTool));
+        when(advisorTool.execute(any(ToolCall.class), any()))
+                .thenReturn(objectMapper.writeValueAsString(Map.of(
+                        "success", true,
+                        "data", Map.of(
+                                "dataAvailable", false,
+                                "message", "老板动作分析服务暂时不可用，请稍后重试。",
+                                "answer", "老板动作分析服务暂时不可用，请稍后重试。"
+                        )
+                )));
+
+        IntentExecuteRequest request = IntentExecuteRequest.builder()
+                .userInput("今天老板先做什么？")
+                .build();
+
+        IntentExecuteResponse response = ReflectionTestUtils.invokeMethod(
+                orchestrator,
+                "executeRestaurantOwnerActionChat",
+                "DEMO_REST",
+                request,
+                7L);
+
+        assertThat(response).isNotNull();
+        assertThat(response.getStatus()).isEqualTo("ERROR");
+        assertThat(response.getMessage()).contains("暂时不可用");
+        assertThat(response.getResultData()).isNull();
+    }
+
+    @Test
     @DisplayName("owner action follow-up still routes through advisor when user negates an action")
     void ownerActionFollowUpWithNegatedActionUsesAdvisor() throws Exception {
         IntentConfigManagementService configService = mock(IntentConfigManagementService.class);

@@ -1982,8 +1982,6 @@ public class IntentExecutionOrchestrator {
                 : request.getContext();
 
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("factory_id", factoryId);
-        body.put("factoryId", factoryId);
         body.put("message", request.getUserInput());
         putIfPresent(body, "sessionId", stringValue(context.get("ownerActionSessionId")));
         putIfPresent(body, "demoScenario", stringValue(context.get("ownerActionScenario")));
@@ -2020,6 +2018,12 @@ public class IntentExecutionOrchestrator {
         }
 
         Map<String, Object> data = new LinkedHashMap<>((Map<String, Object>) dataMapRaw);
+        if (Boolean.FALSE.equals(data.get("dataAvailable"))) {
+            String message = stringValueOrDefault(
+                    firstNonNull(data.get("message"), data.get("answer")),
+                    "老板动作分析暂时没有返回，请稍后重试。");
+            return buildRestaurantOwnerActionError(message, userId);
+        }
         normalizeOwnerActionSource(data);
         data.put("suggestedFollowups", normalizeOwnerActionFollowups(
                 firstNonNull(data.get("suggestedFollowups"), data.get("followUpSuggestions")),

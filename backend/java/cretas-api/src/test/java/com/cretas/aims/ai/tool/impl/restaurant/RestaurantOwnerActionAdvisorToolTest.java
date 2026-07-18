@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -49,7 +50,8 @@ class RestaurantOwnerActionAdvisorToolTest {
     @Test
     @DisplayName("owner advisor delegates to Python owner action chat and normalizes decision response")
     void delegatesToPythonOwnerActionChat() throws Exception {
-        when(pythonSmartBIClient.askRestaurantOwnerActionChat(org.mockito.ArgumentMatchers.any()))
+        when(pythonSmartBIClient.askRestaurantOwnerActionChat(
+                eq(FACTORY_ID), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(Map.of(
                         "success", true,
                         "data", Map.of(
@@ -96,16 +98,16 @@ class RestaurantOwnerActionAdvisorToolTest {
         assertThat(readiness).containsEntry("factoryId", FACTORY_ID);
 
         ArgumentCaptor<Map<String, Object>> bodyCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(pythonSmartBIClient).askRestaurantOwnerActionChat(bodyCaptor.capture());
+        verify(pythonSmartBIClient).askRestaurantOwnerActionChat(eq(FACTORY_ID), bodyCaptor.capture());
         Map<String, Object> body = bodyCaptor.getValue();
-        assertThat(body).containsEntry("factory_id", FACTORY_ID);
-        assertThat(body).containsEntry("factoryId", FACTORY_ID);
         assertThat(body).containsEntry("message", "这周营收同比上周怎么提高，仓管厨师长前台分别做什么？");
-        assertThat(body).containsEntry("sessionId", "owner-action-001");
-        assertThat(body).containsEntry("demoScenario", "operations_dispatch");
-        assertThat(body).containsEntry("storeName", "青花椒上海示范店");
-        assertThat(body).containsEntry("subSector", "中餐/川味酸菜鱼");
+        assertThat(body).containsEntry("session_id", "owner-action-001");
+        assertThat(body).containsEntry("demo_scenario", "operations_dispatch");
+        assertThat(body).containsEntry("store_name", "青花椒上海示范店");
+        assertThat(body).containsEntry("sub_sector", "中餐/川味酸菜鱼");
         assertThat(body).containsEntry("period", "this_week");
+        assertThat(body).doesNotContainKeys("factory_id", "factoryId", "raw");
+        assertThat(data).doesNotContainKey("raw");
     }
 
     @Test
