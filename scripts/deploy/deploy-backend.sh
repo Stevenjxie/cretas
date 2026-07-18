@@ -68,6 +68,7 @@ SERVER="root@47.100.235.168"
 GATEWAY="root@139.196.165.140"         # Nginx 网关 (Blue-Green upstream 切换)
 REMOTE_JAR_DIR="/www/wwwroot/cretas"
 REMOTE_TMP="/tmp"
+REMOTE_JAR_CACHE_DIR="${CRETAS_REMOTE_JAR_CACHE_DIR:-$REMOTE_JAR_DIR/release-cache/sha256}"
 
 # Blue-Green 部署配置
 NGINX_UPSTREAM_FILE="/www/server/panel/vhost/nginx/_upstream_cretas.conf"
@@ -290,6 +291,9 @@ mkdir -p "$UPLOAD_STATUS_DIR"
 UPLOAD_PIDS=()
 BUILD_RACE_PIDS=()
 LOCAL_JAR_CACHE_ROOT="${CRETAS_JAR_CACHE_DIR:-$HOME/.cache/cretas/java-deploy}"
+DEPLOY_REPORT_ROOT="${CRETAS_DEPLOY_REPORT_DIR:-$HOME/.cache/cretas/deploy-reports}"
+mkdir -p "$DEPLOY_REPORT_ROOT"
+DEPLOY_REPORT_PATH="${CRETAS_DEPLOY_REPORT_PATH:-$DEPLOY_REPORT_ROOT/backend-${DEPLOY_SCRIPT_STARTED_AT}-$$.json}"
 
 # BEGIN_DEPLOY_TIMING_HELPERS
 DEPLOY_TIMING_DIR="$UPLOAD_STATUS_DIR/timing"
@@ -321,6 +325,68 @@ deploy_timing_end() {
     started_at=$(cat "$DEPLOY_TIMING_DIR/$key.start")
     printf '%s\n' "$((ended_at - started_at))" > "$DEPLOY_TIMING_DIR/$key.seconds"
     rm -f "$DEPLOY_TIMING_DIR/$key.start"
+}
+
+deploy_json_escape() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; :a; N; $!ba; s/\n/\\n/g'
+}
+
+write_deploy_json_report() {
+    local exit_code="${1:-0}"
+    local now total result report_tmp first key seconds completed
+    local commit backend_tree
+
+    [ -n "${DEPLOY_REPORT_PATH:-}" ] || return 0
+    now=$(deploy_epoch)
+    total=$((now - DEPLOY_SCRIPT_STARTED_AT))
+    if [ "$exit_code" -eq 0 ]; then result=SUCCESS; else result=FAILED; fi
+    commit=$(git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || true)
+    backend_tree=$(git -C "$PROJECT_ROOT" rev-parse "HEAD:$RELEASE_BACKEND_PATH" 2>/dev/null || true)
+    mkdir -p "$(dirname "$DEPLOY_REPORT_PATH")" || return 1
+    report_tmp="${DEPLOY_REPORT_PATH}.tmp.$$"
+
+    {
+        printf '{\n'
+        printf '  "format": "cretas-backend-deploy-report-v1",\n'
+        printf '  "result": "%s",\n' "$result"
+        printf '  "exit_code": %s,\n' "$exit_code"
+        printf '  "started_at_epoch": %s,\n' "$DEPLOY_SCRIPT_STARTED_AT"
+        printf '  "finished_at_epoch": %s,\n' "$now"
+        printf '  "total_wall_seconds": %s,\n' "$total"
+        printf '  "commit": "%s",\n' "$(deploy_json_escape "$commit")"
+        printf '  "backend_tree": "%s",\n' "$(deploy_json_escape "$backend_tree")"
+        printf '  "jar_sha256": "%s",\n' "$(deploy_json_escape "${LOCAL_SHA256:-}")"
+        printf '  "jar_md5": "%s",\n' "$(deploy_json_escape "${LOCAL_MD5:-}")"
+        printf '  "jar_size_bytes": %s,\n' "${JAR_SIZE_BYTES:-0}"
+        printf '  "upload_method": "%s",\n' "$(deploy_json_escape "${WINNER:-}")"
+        printf '  "upload_seconds": %s,\n' "${UPLOAD_DURATION:-0}"
+        printf '  "active_port": "%s",\n' "$(deploy_json_escape "${FINAL_ACTIVE_PORT:-${IDLE_PORT:-}}")"
+        printf '  "active_service": "%s",\n' "$(deploy_json_escape "${FINAL_ACTIVE_SERVICE:-${IDLE_SERVICE:-}}")"
+        printf '  "phases": {'
+        first=true
+        if [ -f "$DEPLOY_TIMING_DIR/order" ]; then
+            while IFS= read -r key; do
+                [ -n "$key" ] || continue
+                if [ -f "$DEPLOY_TIMING_DIR/$key.seconds" ]; then
+                    seconds=$(cat "$DEPLOY_TIMING_DIR/$key.seconds")
+                    completed=true
+                elif [ -f "$DEPLOY_TIMING_DIR/$key.start" ]; then
+                    seconds=$((now - $(cat "$DEPLOY_TIMING_DIR/$key.start")))
+                    completed=false
+                else
+                    continue
+                fi
+                [ "$first" = true ] || printf ','
+                printf '\n    "%s": {"seconds": %s, "completed": %s}' \
+                    "$(deploy_json_escape "$key")" "$seconds" "$completed"
+                first=false
+            done < "$DEPLOY_TIMING_DIR/order"
+        fi
+        [ "$first" = true ] || printf '\n  '
+        printf '}\n'
+        printf '}\n'
+    } > "$report_tmp" || { rm -f "$report_tmp"; return 1; }
+    mv -f "$report_tmp" "$DEPLOY_REPORT_PATH" || { rm -f "$report_tmp"; return 1; }
 }
 
 print_deploy_timing_summary() {
@@ -355,6 +421,11 @@ print_deploy_timing_summary() {
         echo "  结果                         FAILED (exit=$exit_code)"
     fi
     echo "=========================================="
+    if write_deploy_json_report "$exit_code"; then
+        echo "  结构化报告: $DEPLOY_REPORT_PATH"
+    else
+        echo "  ⚠️  结构化部署报告写入失败"
+    fi
 }
 # END_DEPLOY_TIMING_HELPERS
 
@@ -550,10 +621,52 @@ prod_already_runs_local_artifact() {
     [ "$(printf '%s\n' "$live_state" | sed -n '1p' | tr -d '\r')" = "active" ] || return 1
     [ "$(printf '%s\n' "$live_state" | sed -n '2p' | tr -d '\r\n')" = "200" ] || return 1
 
+    FINAL_ACTIVE_PORT=$active_port
+    FINAL_ACTIVE_SERVICE=$active_service
     echo "   ✓ 生产已运行相同 JAR: upstream=$active_port service=$active_service MD5=$local_md5"
     return 0
 }
 # END_BACKEND_SOURCE_CACHE_HELPERS
+
+# BEGIN_REMOTE_JAR_CACHE_HELPERS
+claim_remote_sha256_artifact() {
+    local jar_sha="$1"
+    local jar_md5="$2"
+    local cache_path="$REMOTE_JAR_CACHE_DIR/$jar_sha.jar"
+
+    [[ "$jar_sha" =~ ^[0-9a-f]{64}$ ]] || return 1
+    ssh -o ConnectTimeout=10 "$SERVER" "
+        set -eu
+        [ -f '$cache_path' ]
+        [ \"\$(sha256sum '$cache_path' | awk '{print \$1}')\" = '$jar_sha' ]
+        [ \"\$(md5sum '$cache_path' | awk '{print \$1}')\" = '$jar_md5' ]
+        unzip -tqq '$cache_path'
+        cp '$cache_path' '$REMOTE_TMP/$JAR_NAME.remote-cache.$$'
+        mv -f '$REMOTE_TMP/$JAR_NAME.remote-cache.$$' '$REMOTE_TMP/$JAR_NAME'
+    " >/dev/null 2>&1
+}
+
+persist_remote_sha256_artifact() {
+    local jar_sha="$1"
+    local cache_path="$REMOTE_JAR_CACHE_DIR/$jar_sha.jar"
+    local cache_tmp="$REMOTE_JAR_CACHE_DIR/.${jar_sha}.$$"
+
+    [[ "$jar_sha" =~ ^[0-9a-f]{64}$ ]] || return 1
+    ssh -o ConnectTimeout=10 "$SERVER" "
+        set -eu
+        mkdir -p '$REMOTE_JAR_CACHE_DIR'
+        chmod 700 '$REMOTE_JAR_CACHE_DIR'
+        if [ -f '$cache_path' ] && [ \"\$(sha256sum '$cache_path' | awk '{print \$1}')\" = '$jar_sha' ]; then
+            exit 0
+        fi
+        cp '$REMOTE_TMP/$JAR_NAME' '$cache_tmp'
+        [ \"\$(sha256sum '$cache_tmp' | awk '{print \$1}')\" = '$jar_sha' ]
+        unzip -tqq '$cache_tmp'
+        chmod 0444 '$cache_tmp'
+        mv -f '$cache_tmp' '$cache_path'
+    " >/dev/null 2>&1
+}
+# END_REMOTE_JAR_CACHE_HELPERS
 
 cleanup() {
     local exit_code=$?
@@ -896,6 +1009,7 @@ deploy_jar() {
 
     # 计算本地 MD5 checksum
     LOCAL_MD5=$(md5sum "$JAR_PATH" | cut -d' ' -f1)
+    LOCAL_SHA256=$(sha256sum "$JAR_PATH" | awk '{print tolower($1)}')
     echo "   ✓ MD5: $LOCAL_MD5"
 
     # ----- 1b. Jar 完整性预检 (防 corrupt jar 上线) -----
@@ -964,6 +1078,11 @@ deploy_jar() {
     check_winner() {
         [ -f "$UPLOAD_STATUS_DIR/winner" ]
     }
+
+    if claim_remote_sha256_artifact "$LOCAL_SHA256" "$LOCAL_MD5"; then
+        echo "remote-sha256-cache" > "$UPLOAD_STATUS_DIR/winner"
+        echo "   [remote-sha256-cache] 命中已预热可信 JAR，跳过网络上传"
+    fi
 
     # 远程 MD5 验证 + rename 为标准名
     # 参数: $1=远程临时文件名 (不含目录), $2=方法名
@@ -1208,7 +1327,7 @@ deploy_jar() {
 
     # 等待 GitHub 方式完成 (最多60秒)
     # private repo / 无 gh / SKIP_GITHUB=1 时，GitHub 阶段从没启动过，直接跳到 fallback
-    WINNER=""
+    WINNER=$(cat "$UPLOAD_STATUS_DIR/winner" 2>/dev/null || true)
     if [ "$HAS_GH" = "true" ] && [ "$IS_PRIVATE_REPO" != "true" ] && [ "$SKIP_GITHUB" != "1" ] && [ "${#UPLOAD_PIDS[@]}" -gt 0 ]; then
         echo ""
         echo "   等待 GitHub 下载完成 (超时: 60秒)..."
@@ -1320,11 +1439,23 @@ deploy_jar() {
     fi
 
     # 计算速度 (兼容不同系统)
-    if command -v bc &> /dev/null && [ -n "$JAR_SIZE_BYTES" ] && [ "$UPLOAD_DURATION" -gt 0 ]; then
+    if [ "$WINNER" = "remote-sha256-cache" ]; then
+        SPEED_MBPS="cache"
+    elif command -v bc &> /dev/null && [ -n "$JAR_SIZE_BYTES" ] && [ "$UPLOAD_DURATION" -gt 0 ]; then
         SPEED_MBPS=$(echo "scale=2; $JAR_SIZE_BYTES / 1024 / 1024 / $UPLOAD_DURATION" | bc 2>/dev/null)
-    else
+    elif [ "$UPLOAD_DURATION" -gt 0 ]; then
         # Fallback: 使用 awk 计算
         SPEED_MBPS=$(awk "BEGIN {printf \"%.2f\", $JAR_SIZE_BYTES / 1024 / 1024 / $UPLOAD_DURATION}" 2>/dev/null || echo "N/A")
+    else
+        SPEED_MBPS="N/A"
+    fi
+
+    if [ "$WINNER" != "remote-sha256-cache" ]; then
+        if persist_remote_sha256_artifact "$LOCAL_SHA256"; then
+            echo "   ✓ 已写入远端 SHA-256 制品缓存"
+        else
+            echo "   ⚠️  远端 SHA-256 缓存写入失败；本次部署继续使用已校验上传文件"
+        fi
     fi
 
     echo ""
@@ -1624,6 +1755,8 @@ deploy_jar() {
             " || echo "   ⚠️  systemd 收尾检查有警告, 请手动 verify"
 
             echo "   ✅ Blue-Green 切换完成: $ACTIVE_COLOR → $IDLE_COLOR"
+            FINAL_ACTIVE_PORT=$IDLE_PORT
+            FINAL_ACTIVE_SERVICE=$IDLE_SERVICE
         fi
     fi
 

@@ -1,6 +1,7 @@
 package com.cretas.aims.service.startup;
 
 import com.cretas.aims.service.SemanticIntentMatcher;
+import com.cretas.aims.service.SemanticRouterService;
 import com.cretas.aims.service.impl.IntentEmbeddingCacheServiceImpl;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -17,16 +18,19 @@ public class StartupWarmupCoordinator {
     private final Executor executor;
     private final IntentEmbeddingCacheServiceImpl intentCache;
     private final SemanticIntentMatcher semanticMatcher;
+    private final SemanticRouterService semanticRouter;
     private final AiWarmupStatusRegistry statusRegistry;
 
     public StartupWarmupCoordinator(
             @Qualifier("startupWarmupExecutor") Executor executor,
             IntentEmbeddingCacheServiceImpl intentCache,
             SemanticIntentMatcher semanticMatcher,
+            SemanticRouterService semanticRouter,
             AiWarmupStatusRegistry statusRegistry) {
         this.executor = executor;
         this.intentCache = intentCache;
         this.semanticMatcher = semanticMatcher;
+        this.semanticRouter = semanticRouter;
         this.statusRegistry = statusRegistry;
     }
 
@@ -42,7 +46,17 @@ public class StartupWarmupCoordinator {
         if (!intentCacheReady) {
             log.warn("Retrying startup warmup {} once after semantic matcher warmup",
                     AiWarmupStatusRegistry.INTENT_CACHE);
-            warm(AiWarmupStatusRegistry.INTENT_CACHE, intentCache::initializeCache);
+            intentCacheReady = warm(
+                    AiWarmupStatusRegistry.INTENT_CACHE, intentCache::initializeCache);
+        }
+        if (intentCacheReady) {
+            warm(AiWarmupStatusRegistry.SEMANTIC_ROUTER, semanticRouter::refreshAllCache);
+        } else {
+            statusRegistry.failed(AiWarmupStatusRegistry.SEMANTIC_ROUTER,
+                    new IllegalStateException("intent embedding cache unavailable"));
+            log.warn("Skipping startup warmup {} because {} did not become ready",
+                    AiWarmupStatusRegistry.SEMANTIC_ROUTER,
+                    AiWarmupStatusRegistry.INTENT_CACHE);
         }
     }
 

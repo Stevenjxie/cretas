@@ -11,12 +11,14 @@ public class AiWarmupStatusRegistry {
 
     public static final String INTENT_CACHE = "intentEmbeddingCache";
     public static final String SEMANTIC_MATCHER = "semanticIntentMatcher";
+    public static final String SEMANTIC_ROUTER = "semanticRouterCache";
 
     private final Map<String, Snapshot> statuses = new ConcurrentHashMap<>();
 
     public AiWarmupStatusRegistry() {
         statuses.put(INTENT_CACHE, Snapshot.notStarted());
         statuses.put(SEMANTIC_MATCHER, Snapshot.notStarted());
+        statuses.put(SEMANTIC_ROUTER, Snapshot.notStarted());
     }
 
     public void warming(String component) {
@@ -39,6 +41,7 @@ public class AiWarmupStatusRegistry {
         Map<String, Snapshot> copy = new LinkedHashMap<>();
         copy.put(INTENT_CACHE, statuses.get(INTENT_CACHE));
         copy.put(SEMANTIC_MATCHER, statuses.get(SEMANTIC_MATCHER));
+        copy.put(SEMANTIC_ROUTER, statuses.get(SEMANTIC_ROUTER));
         return Map.copyOf(copy);
     }
 

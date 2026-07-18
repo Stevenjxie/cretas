@@ -29,6 +29,7 @@ merge when the backend tree remains identical. Build once for one backend Git
 tree:
 
 - In the clean reviewed source worktree, run `./scripts/deploy/release-jar-manifest.sh build --tests '<tests>'`. This executes one `mvn clean package -Dtest=<tests>` lifecycle, creates the final JAR, and writes its manifest. Do not run the target tests separately and then package again.
+- After that trusted build succeeds, `./scripts/deploy/stage-backend-artifact.sh --confirm-stage YES-STAGE` may upload the verified JAR to the immutable server-side SHA-256 cache before merge. Staging never installs the JAR, restarts a service, or changes upstream. The exact `origin/main` deployment still revalidates the manifest/tree and claims the cached bytes only after SHA-256, MD5 and JAR integrity checks.
 - A successful release build must generate a trusted manifest recording at least the build commit, exact `backend/java/cretas-api` Git tree, JAR SHA-256, and the information needed to check JAR integrity. A recent mtime or filename is not provenance.
 - `SKIP_BUILD=1`, local cache reuse, or Artifact reuse is allowed only after validating all of the following: the manifest build commit resolves in Git; that commit's `backend/java/cretas-api` tree equals both the manifest tree and the current `origin/main` backend tree; SHA-256 matches; the JAR passes an integrity check; and the current exact `origin/main` worktree is clean. A squash merge may change the commit while preserving the backend tree; matching backend trees are reusable in that case.
 - Keep using the manifest-backed backend-tree cache, including cache/no-op behavior when Java did not change. If reuse is unavailable or any validation fails, fall back exactly once to the existing local clean-package path; do not retry with a second package invocation. Write a fallback manifest only after that build and all existing JAR checks succeed.
@@ -92,6 +93,8 @@ back to one PR. Publishing to `main` never authorizes production deployment.
 ./scripts/deploy/deploy-backend.sh --env test
 ./scripts/deploy/deploy-backend.sh --env prod
 ```
+
+The deploy prints its normal timing summary and atomically writes a JSON receipt under `~/.cache/cretas/deploy-reports/` (override with `CRETAS_DEPLOY_REPORT_PATH`). The trusted build writes `release-jar.report.json` beside its manifest with Maven wall time, tests, commit/tree, JAR SHA-256 and size.
 
 4. The script must deploy the inactive slot, verify it before switching, atomically update upstream, pass all post-switch health rounds, then stop the old slot.
 5. Report commit, release version, artifact MD5, old/new slot, health rounds, and rollback artifact.

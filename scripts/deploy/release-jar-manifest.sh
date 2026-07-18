@@ -4,6 +4,7 @@ RELEASE_MANIFEST_FORMAT="cretas-release-jar-manifest-v1"
 RELEASE_BACKEND_PATH="backend/java/cretas-api"
 RELEASE_JAR_NAME="cretas-backend-system-1.0.0.jar"
 RELEASE_MANIFEST_NAME="release-jar.manifest"
+RELEASE_BUILD_REPORT_NAME="release-jar.report.json"
 
 release_manifest_cache_root() {
     printf '%s\n' "${CRETAS_JAR_CACHE_DIR:-$HOME/.cache/cretas/java-deploy}"
@@ -136,13 +137,16 @@ release_manifest_write() {
     local manifest=$3
     local maven_command=$4
     local target_tests=$5
-    local build_commit backend_tree jdk_vendor jdk_version cache_dir jar_tmp manifest_tmp jar_sha
+    local build_wall_seconds=${6:-0}
+    local build_commit backend_tree jdk_vendor jdk_version cache_dir jar_tmp manifest_tmp jar_sha jar_size
+    local report report_tmp
 
     release_manifest_require_clean_worktree "$repo_root" || return 1
     release_manifest_verify_jar "$source_jar" || return 1
     case "$maven_command$target_tests" in
         *$'\n'*|*$'\r'*) return 1 ;;
     esac
+    case "$build_wall_seconds" in ''|*[!0-9]*) return 1 ;; esac
 
     build_commit=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null) || return 1
     backend_tree=$(git -C "$repo_root" rev-parse "HEAD:$RELEASE_BACKEND_PATH" 2>/dev/null) || return 1
@@ -156,6 +160,10 @@ release_manifest_write() {
     manifest_tmp="$cache_dir/.${RELEASE_MANIFEST_NAME}.$$"
     cp "$source_jar" "$jar_tmp" || { rm -f "$jar_tmp"; return 1; }
     jar_sha=$(sha256sum "$jar_tmp" | awk '{print tolower($1)}') || { rm -f "$jar_tmp"; return 1; }
+    jar_size=$(wc -c < "$jar_tmp" | tr -d '[:space:]') || { rm -f "$jar_tmp"; return 1; }
+    report="${CRETAS_RELEASE_BUILD_REPORT_PATH:-$cache_dir/$RELEASE_BUILD_REPORT_NAME}"
+    mkdir -p "$(dirname "$report")" || { rm -f "$jar_tmp"; return 1; }
+    report_tmp="${report}.release-manifest.$$"
 
     {
         printf 'format=%s\n' "$RELEASE_MANIFEST_FORMAT"
@@ -168,11 +176,27 @@ release_manifest_write() {
         printf 'jdk_version=%s\n' "$jdk_version"
         printf 'maven_command=%s\n' "$maven_command"
         printf 'target_tests=%s\n' "$target_tests"
+        printf 'maven_wall_seconds=%s\n' "$build_wall_seconds"
+        printf 'jar_size_bytes=%s\n' "$jar_size"
     } > "$manifest_tmp" || { rm -f "$jar_tmp" "$manifest_tmp"; return 1; }
 
+    {
+        printf '{\n'
+        printf '  "format": "cretas-release-jar-report-v1",\n'
+        printf '  "success": true,\n'
+        printf '  "build_commit": "%s",\n' "$build_commit"
+        printf '  "backend_tree": "%s",\n' "$backend_tree"
+        printf '  "jar_sha256": "%s",\n' "$jar_sha"
+        printf '  "jar_size_bytes": %s,\n' "$jar_size"
+        printf '  "maven_wall_seconds": %s,\n' "$build_wall_seconds"
+        printf '  "target_tests": "%s"\n' "$(printf '%s' "$target_tests" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+        printf '}\n'
+    } > "$report_tmp" || { rm -f "$jar_tmp" "$manifest_tmp" "$report_tmp"; return 1; }
+
     mv -f "$jar_tmp" "$cache_dir/$RELEASE_JAR_NAME" \
+        && mv -f "$report_tmp" "$report" \
         && mv -f "$manifest_tmp" "$manifest" \
-        || { rm -f "$jar_tmp" "$manifest_tmp"; return 1; }
+        || { rm -f "$jar_tmp" "$manifest_tmp" "$report_tmp"; return 1; }
     return 0
 }
 
@@ -182,7 +206,7 @@ release_manifest_build() {
     local manifest=$3
     local backend_dir="$repo_root/$RELEASE_BACKEND_PATH"
     local jar_path="$backend_dir/target/$RELEASE_JAR_NAME"
-    local wrapper command_text
+    local wrapper command_text build_started_at build_wall_seconds
 
     [ -n "$target_tests" ] || { echo "ERROR: --tests requires a non-empty Maven test selector" >&2; return 2; }
     case "$target_tests" in *$'\n'*|*$'\r'*) return 2 ;; esac
@@ -197,17 +221,20 @@ release_manifest_build() {
         wrapper=./mvnw.cmd
     fi
     command_text="$wrapper clean package -Dtest=$target_tests"
+    build_started_at=$(date +%s)
 
     (
         cd "$backend_dir"
         [ ! -f "$wrapper" ] || chmod +x "$wrapper" 2>/dev/null || true
         "$wrapper" clean package "-Dtest=$target_tests"
     ) || return 1
+    build_wall_seconds=$(( $(date +%s) - build_started_at ))
 
     release_manifest_require_clean_worktree "$repo_root" \
         || { echo "ERROR: worktree changed during release build; manifest not written" >&2; return 1; }
-    release_manifest_write "$repo_root" "$jar_path" "$manifest" "$command_text" "$target_tests" || return 1
+    release_manifest_write "$repo_root" "$jar_path" "$manifest" "$command_text" "$target_tests" "$build_wall_seconds" || return 1
     printf 'Release manifest: %s\n' "$manifest"
+    printf 'Release build report: %s\n' "${CRETAS_RELEASE_BUILD_REPORT_PATH:-$(dirname "$manifest")/$RELEASE_BUILD_REPORT_NAME}"
 }
 
 release_manifest_usage() {
