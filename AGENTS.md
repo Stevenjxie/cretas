@@ -1,4 +1,14 @@
+**最高优先级模型与 Effort 门禁：执行任何新任务前，必须先调用 `model-effort-router` skill，根据任务的实际复杂度、风险和范围向用户推荐具体模型与 effort；当前设置匹配时告知后直接执行，不匹配或无法确认时等待用户切换并明确确认。**
+
 # AGENTS.md
+
+## Mandatory Model and Effort Gate
+
+- 每个新任务必须按 `.agents/skills/model-effort-router/SKILL.md` 单独判断；不能沿用上一个任务的设置，也不能把仓库默认值视为已确认。
+- 当前设置匹配时要明确说明“无需切换”，随后直接开始执行，不再要求用户重复确认；设置不匹配或无法观察时必须要求用户完成切换并确认。
+- 当前设置不匹配或无法确认时，开始编辑、测试、长时间研究、状态变更或部署前必须取得确认；确认前只允许路由所需的最小只读检查。
+- 任务范围、风险或工作类型发生实质变化时，必须暂停并重新路由。
+- 如推荐外部 Claude Fable 5，必须在同一回复直接附上针对当前任务写好的、可完整粘贴到 Claude Code 的 Prompt 与回交要求；禁止只给出模型/effort 建议、Prompt 大纲或要求用户另行索取 Prompt。
 
 This file provides guidance to Codex when working with this repository.
 
