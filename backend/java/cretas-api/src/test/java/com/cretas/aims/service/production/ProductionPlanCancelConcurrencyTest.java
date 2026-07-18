@@ -21,7 +21,7 @@ import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
-import com.cretas.aims.service.BomService;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.service.SchedulingService;
 import com.cretas.aims.service.impl.ProductionPlanServiceImpl;
 import com.cretas.aims.utils.ExcelUtil;
@@ -95,7 +95,7 @@ class ProductionPlanCancelConcurrencyTest {
     @Mock private ExcelUtil excelUtil;
     @Mock private SalesOrderRepository salesOrderRepository;
     @Mock private SalesOrderItemRepository salesOrderItemRepository;
-    @Mock private BomService bomService;
+    @Mock private BomRecipeItemRepository bomRecipeItemRepository;
     @Mock private com.cretas.aims.service.workprocess.WorkProcessTaskService workProcessTaskService;
 
     // Field-injected (@Autowired(required=false)) — reflection-set per existing pattern.
@@ -112,7 +112,8 @@ class ProductionPlanCancelConcurrencyTest {
                 materialBatchRepository, materialConsumptionRepository, planBatchUsageRepository,
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
-                salesOrderRepository, salesOrderItemRepository, bomService);
+                salesOrderRepository, salesOrderItemRepository);
+        ReflectionTestUtils.setField(service, "bomRecipeItemRepository", bomRecipeItemRepository);
         ReflectionTestUtils.setField(service, "workProcessTaskRepository", workProcessTaskRepository);
         ReflectionTestUtils.setField(service, "productionReportRepository", productionReportRepository);
         ReflectionTestUtils.setField(service, "wipInventoryService", wipInventoryService);
@@ -364,7 +365,7 @@ class ProductionPlanCancelConcurrencyTest {
                     if (b.getId() == null) b.setId(1L);
                     return b;
                 });
-        when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
+        when(bomRecipeItemRepository.findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
                 .thenReturn(Collections.emptyList());
 
         service.createBatchFromPlan(FACTORY_ID, PLAN_ID);
@@ -407,7 +408,7 @@ class ProductionPlanCancelConcurrencyTest {
     void startProduction_pending_happyPath() {
         ProductionPlan target = plan(PLAN_ID, ProductionPlanStatus.PENDING);
         when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(target));
-        when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
+        when(bomRecipeItemRepository.findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
                 .thenReturn(Collections.emptyList());
         // toDTOWithConversionInfo 需要 mapper 返回非 null DTO (happy path 走到返回值)
         when(productionPlanMapper.toDTO(any(ProductionPlan.class)))

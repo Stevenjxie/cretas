@@ -1,8 +1,9 @@
 package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.bom.BomCostSummaryDTO;
-import com.cretas.aims.entity.bom.BomItem;
-import com.cretas.aims.repository.bom.BomItemRepository;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.LaborCostConfigRepository;
 import com.cretas.aims.repository.bom.OverheadCostConfigRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,7 +24,7 @@ import static org.mockito.Mockito.when;
 class BomServiceImplPreTaxCaliberTest {
 
     @Mock
-    private BomItemRepository bomItemRepository;
+    private BomRecipeItemRepository bomItemRepository;
     @Mock
     private LaborCostConfigRepository laborCostConfigRepository;
     @Mock
@@ -39,10 +40,9 @@ class BomServiceImplPreTaxCaliberTest {
     @Test
     @DisplayName("B8: cost summary marks material prices as pre-tax and does not divide an already pre-tax BOM price again")
     void calculateProductCost_marksPreTaxCaliberWithoutDoubleConverting() {
-        BomItem beef = BomItem.builder()
+        BomRecipeItem beef = BomRecipeItem.builder()
                 .factoryId("F006")
-                .productTypeId("P-B8")
-                .productName("B8 cost product")
+                .recipeId("RECIPE-P-B8")
                 .materialTypeId("RM-BEEF")
                 .materialName("beef shank")
                 .standardQuantity(new BigDecimal("1.0000"))
@@ -51,8 +51,9 @@ class BomServiceImplPreTaxCaliberTest {
                 .unitPrice(new BigDecimal("57.5221"))
                 .taxRate(new BigDecimal("13.00"))
                 .build();
+        attachRecipe(beef, "P-B8", "B8 cost product");
 
-        when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc("F006", "P-B8"))
+        when(bomItemRepository.findCurrentByProduct("F006", "P-B8"))
                 .thenReturn(List.of(beef));
         when(laborCostConfigRepository.findByFactoryIdAndProductTypeIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc("F006", "P-B8"))
                 .thenReturn(List.of());
@@ -77,10 +78,9 @@ class BomServiceImplPreTaxCaliberTest {
     @Test
     @DisplayName("B8: missing tax rate remains null and cost summary honestly marks the gap")
     void calculateProductCost_missingTaxRateStaysNullAndMarkedInCaliberHint() {
-        BomItem material = BomItem.builder()
+        BomRecipeItem material = BomRecipeItem.builder()
                 .factoryId("F006")
-                .productTypeId("P-B8-MISSING-TAX")
-                .productName("B8 missing tax")
+                .recipeId("RECIPE-P-B8-MISSING-TAX")
                 .materialTypeId("RM-MISSING-TAX")
                 .materialName("material without tax rate")
                 .standardQuantity(new BigDecimal("1.0000"))
@@ -89,8 +89,9 @@ class BomServiceImplPreTaxCaliberTest {
                 .unitPrice(new BigDecimal("57.5221"))
                 .taxRate(null)
                 .build();
+        attachRecipe(material, "P-B8-MISSING-TAX", "B8 missing tax");
 
-        when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(
+        when(bomItemRepository.findCurrentByProduct(
                 "F006", "P-B8-MISSING-TAX"))
                 .thenReturn(List.of(material));
         when(laborCostConfigRepository.findByFactoryIdAndProductTypeIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc(
@@ -114,10 +115,9 @@ class BomServiceImplPreTaxCaliberTest {
     @DisplayName("B-BUG-1: 缺单价的原料行不静默当 ¥0, 而是显式标记 hasMissingPrice + 缺价列表 + caliberHint 警示")
     void calculateProductCost_missingPriceSurfacedNotSilentlyZero() {
         // 一行有价 (¥10 * 1 = ¥10), 一行缺价 (unitPrice=null → 之前静默当 ¥0 并入合计)。
-        BomItem priced = BomItem.builder()
+        BomRecipeItem priced = BomRecipeItem.builder()
                 .factoryId("F006")
-                .productTypeId("P-MISSING-PRICE")
-                .productName("missing price product")
+                .recipeId("RECIPE-P-MISSING-PRICE")
                 .materialTypeId("RM-PRICED")
                 .materialName("有价原料")
                 .standardQuantity(new BigDecimal("1.0000"))
@@ -126,10 +126,10 @@ class BomServiceImplPreTaxCaliberTest {
                 .unitPrice(new BigDecimal("10.0000"))
                 .taxRate(new BigDecimal("13.00"))
                 .build();
-        BomItem noPrice = BomItem.builder()
+        attachRecipe(priced, "P-MISSING-PRICE", "missing price product");
+        BomRecipeItem noPrice = BomRecipeItem.builder()
                 .factoryId("F006")
-                .productTypeId("P-MISSING-PRICE")
-                .productName("missing price product")
+                .recipeId("RECIPE-P-MISSING-PRICE")
                 .materialTypeId("RM-NOPRICE")
                 .materialName("缺价原料")
                 .standardQuantity(new BigDecimal("2.0000"))
@@ -138,8 +138,9 @@ class BomServiceImplPreTaxCaliberTest {
                 .unitPrice(null)
                 .taxRate(new BigDecimal("13.00"))
                 .build();
+        attachRecipe(noPrice, "P-MISSING-PRICE", "missing price product");
 
-        when(bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(
+        when(bomItemRepository.findCurrentByProduct(
                 "F006", "P-MISSING-PRICE"))
                 .thenReturn(List.of(priced, noPrice));
         when(laborCostConfigRepository.findByFactoryIdAndProductTypeIdAndIsActiveTrueAndDeletedAtIsNullOrderBySortOrderAsc(
@@ -168,5 +169,16 @@ class BomServiceImplPreTaxCaliberTest {
                 .filteredOn(item -> "有价原料".equals(item.getMaterialName()))
                 .singleElement()
                 .satisfies(item -> assertThat(item.isMissingPrice()).isFalse());
+    }
+
+    private void attachRecipe(BomRecipeItem item, String productTypeId, String productName) {
+        BomRecipe recipe = new BomRecipe();
+        recipe.setId(item.getRecipeId());
+        recipe.setFactoryId(item.getFactoryId());
+        recipe.setProductTypeId(productTypeId);
+        recipe.setProductName(productName);
+        recipe.setStatus(BomRecipe.Status.ACTIVE);
+        recipe.setIsCurrent(true);
+        item.setRecipe(recipe);
     }
 }

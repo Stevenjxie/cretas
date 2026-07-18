@@ -14,12 +14,12 @@ import java.util.List;
 @Repository
 public interface BomChangeLogRepository extends JpaRepository<BomChangeLog, String> {
 
-    List<BomChangeLog> findByFactoryIdAndBomIdAndDeletedAtIsNullOrderByCreatedAtDesc(
-            String factoryId, String bomId);
+    List<BomChangeLog> findByFactoryIdAndBomRecipeIdAndDeletedAtIsNullOrderByCreatedAtDesc(
+            String factoryId, String bomRecipeId);
 
-    List<BomChangeLog> findByFactoryIdAndBomItemIdAndDeletedAtIsNullOrderByCreatedAtDesc(
-            String factoryId, Long bomItemId);
+    List<BomChangeLog> findByFactoryIdAndBomRecipeItemIdAndDeletedAtIsNullOrderByCreatedAtDesc(
+            String factoryId, Long bomRecipeItemId);
 
-    @Query("SELECT COUNT(l) FROM BomChangeLog l WHERE l.factoryId = :factoryId AND l.bomId = :bomId AND l.deletedAt IS NULL")
-    long countByFactoryIdAndBomId(@Param("factoryId") String factoryId, @Param("bomId") String bomId);
+    @Query("SELECT COUNT(l) FROM BomChangeLog l WHERE l.factoryId = :factoryId AND l.bomRecipeId = :recipeId AND l.deletedAt IS NULL")
+    long countByFactoryIdAndBomRecipeId(@Param("factoryId") String factoryId, @Param("recipeId") String recipeId);
 }

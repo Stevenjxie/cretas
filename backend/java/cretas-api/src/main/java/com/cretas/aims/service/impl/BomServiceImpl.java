@@ -1,29 +1,20 @@
 package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.bom.BomCostSummaryDTO;
-import com.cretas.aims.dto.config.EffectiveField;
-import com.cretas.aims.dto.config.EffectiveModuleConfig;
-import com.cretas.aims.entity.bom.BomChangeLog;
-import com.cretas.aims.entity.bom.BomItem;
+import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.LaborCostConfig;
 import com.cretas.aims.entity.bom.OverheadCostConfig;
 import com.cretas.aims.exception.EntityNotFoundException;
-import com.cretas.aims.repository.bom.BomChangeLogRepository;
-import com.cretas.aims.repository.bom.BomItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.LaborCostConfigRepository;
 import com.cretas.aims.repository.bom.OverheadCostConfigRepository;
 import com.cretas.aims.service.BomService;
-import com.cretas.aims.service.config.FactoryConfigService;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.context.request.RequestAttributes;
-import org.springframework.web.context.request.RequestContextHolder;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -58,25 +49,16 @@ public class BomServiceImpl implements BomService {
     private static final String MISSING_TAX_RATE_HINT =
             "部分物料缺税率，请补齐税率用于含税/未税来源追踪；成本仍按已存未税 unitPrice 计算。";
 
-    private final BomItemRepository bomItemRepository;
+    private final BomRecipeItemRepository bomRecipeItemRepository;
     private final LaborCostConfigRepository laborCostConfigRepository;
     private final OverheadCostConfigRepository overheadCostConfigRepository;
 
-    /** P1-9 BOM 变更痕迹记录, 可选注入 (老环境未迁移时不阻塞) */
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private BomChangeLogRepository bomChangeLogRepository;
 
-    /** Canvas Config — 可选注入，模块未部署时不影响现有逻辑 */
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private FactoryConfigService factoryConfigService;
 
     /** Canvas V2: DB-driven formula engine */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.engine.FormulaEngine formulaEngine;
 
-    /** Canvas V2: DB-driven default value resolver */
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private com.cretas.aims.engine.DefaultValueResolver defaultValueResolver;
 
     /**
      * R13 (2026-06-22): 计量单位换算 — 成本计算前把 BOM 行用量按重量单位归一到
@@ -97,416 +79,8 @@ public class BomServiceImpl implements BomService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.ProductTypeRepository productTypeRepository;
 
-    /** Write-time unit guard shared by BOM / stock write paths. */
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private com.cretas.aims.service.uom.MaterialUomConverter materialUomConverter;
 
-    /** Canvas V2: DB-driven validation rules */
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private com.cretas.aims.engine.ValidationRuleEvaluator validationRuleEvaluator;
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private com.cretas.aims.engine.DynamicFieldService dynamicFieldService;
 
-    private void validateBomItemUnitCompatibility(BomItem bomItem) {
-        if (bomItem == null || materialUomConverter == null) return;
-        String materialTypeId = trimToNull(bomItem.getMaterialTypeId());
-        String bomUnit = trimToNull(bomItem.getUnit());
-        if (materialTypeId == null || bomUnit == null) return;
-
-        boolean compatible;
-        try {
-            compatible = materialUomConverter.isWriteUnitCompatible(materialTypeId, bomUnit);
-        } catch (Exception e) {
-            log.warn("[BOM-UOM] unit compatibility check skipped material={} unit={}: {}",
-                    materialTypeId, bomUnit, e.getMessage());
-            return;
-        }
-        if (compatible) return;
-
-        com.cretas.aims.entity.RawMaterialType material = loadRawMaterialTypeSafely(materialTypeId);
-        String masterUnit = trimToNull(material != null ? material.getUnit() : null);
-        String materialName = firstNonBlank(
-                bomItem.getMaterialName(),
-                material != null ? material.getName() : null,
-                materialTypeId);
-        String message = String.format(
-                "BOM 单位无法换算：原料「%s」主单位为「%s」，当前 BOM 单位为「%s」。请先核对单位配置，或把 BOM 单位改成同一计量口径。",
-                materialName,
-                masterUnit != null ? masterUnit : "未配置",
-                bomUnit);
-        throw new com.cretas.aims.exception.BusinessException(409, message)
-                .withCode("MATERIAL_UOM_UNCONFIGURED")
-                .withHint("请到仓储 → 原料类型中核对该物料单位；如果不同 SKU 有不同包装/计数口径，请在 SKU/BOM 写入前配置好对应单位或包装换算。")
-                .withSeverity("warning")
-                .withHintTarget("去核对单位配置");
-    }
-
-    private com.cretas.aims.entity.RawMaterialType loadRawMaterialTypeSafely(String materialTypeId) {
-        if (rawMaterialTypeRepository == null || materialTypeId == null) return null;
-        try {
-            return rawMaterialTypeRepository.findById(materialTypeId).orElse(null);
-        } catch (Exception e) {
-            log.debug("[BOM-UOM] load material type failed {}: {}", materialTypeId, e.getMessage());
-            return null;
-        }
-    }
-
-    private static String trimToNull(String value) {
-        if (value == null) return null;
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
-    }
-
-    private static String firstNonBlank(String... values) {
-        if (values == null) return null;
-        for (String value : values) {
-            String trimmed = trimToNull(value);
-            if (trimmed != null) return trimmed;
-        }
-        return null;
-    }
-
-    private void runBomValidation(String factoryId, String operation, BomItem bomItem) {
-        if (validationRuleEvaluator == null) return;
-        try {
-            java.util.Map<String, Object> context = new java.util.HashMap<>();
-            context.put("productTypeId", bomItem.getProductTypeId());
-            context.put("materialTypeId", bomItem.getMaterialTypeId());
-            context.put("yieldRate", bomItem.getYieldRate());
-            context.put("taxRate", bomItem.getTaxRate());
-            context.put("standardQuantity", bomItem.getStandardQuantity());
-            context.put("sortOrder", bomItem.getSortOrder());
-            validationRuleEvaluator.validate(factoryId, "bom", operation, context);
-        } catch (com.cretas.aims.exception.BusinessException e) {
-            throw e;
-        } catch (Exception e) {
-            log.warn("BOM canvas validation non-blocking error: {}", e.getMessage());
-        }
-    }
-
-    // ============ BOM Items ============
-
-    @Override
-    @Transactional(readOnly = true)
-    public List<BomItem> getBomItemsByProduct(String factoryId, String productTypeId) {
-        log.debug("获取产品BOM项目: factoryId={}, productTypeId={}", factoryId, productTypeId);
-        return bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(
-            factoryId, productTypeId);
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public List<BomItem> getAllBomItems(String factoryId) {
-        log.debug("获取工厂所有BOM项目: factoryId={}", factoryId);
-        return bomItemRepository.findByFactoryIdAndDeletedAtIsNullOrderByProductTypeIdAscSortOrderAsc(factoryId);
-    }
-
-    @Override
-    @Transactional
-    public BomItem saveBomItem(BomItem bomItem) {
-        log.info("保存BOM项目: factoryId={}, productTypeId={}, materialTypeId={}",
-            bomItem.getFactoryId(), bomItem.getProductTypeId(), bomItem.getMaterialTypeId());
-
-        // BUG-3 fix (depth-e2e qa-v2.4, PR #370): standardQuantity 必须 > 0
-        // 之前 entity / canvas validator 都未拦截 standardQuantity=0, 产生无意义 BOM 行.
-        // 服务端 hard-rule 拒绝, 比依赖 canvas data-driven 规则更可靠 (validationRuleEvaluator
-        // 可能未配置, 此处确保所有 factory 都有保护).
-        boolean rawMaterialLink = "RAW".equalsIgnoreCase(bomItem.getMaterialCategory());
-        if ((!rawMaterialLink && bomItem.getStandardQuantity() == null)
-                || (bomItem.getStandardQuantity() != null
-                    && bomItem.getStandardQuantity().compareTo(java.math.BigDecimal.ZERO) <= 0)) {
-            throw new com.cretas.aims.exception.BusinessException(400,
-                    "非原料 BOM 的每成品用量必须大于 0 (当前: "
-                            + (bomItem.getStandardQuantity() == null ? "null" : bomItem.getStandardQuantity())
-                            + ")");
-        }
-
-        applyMaterialMasterSnapshot(bomItem);
-        validateBomItemUnitCompatibility(bomItem);
-
-        // Canvas V2: DB-driven validation (runs before defaults so rules like "#yieldRate > 0" can catch invalid user input)
-        String operation = (bomItem.getId() == null) ? "CREATE" : "UPDATE";
-        runBomValidation(bomItem.getFactoryId(), operation, bomItem);
-
-        // P1-9 BOM 痕迹追踪: 如果是 UPDATE, 先查老值做 snapshot
-        BomItem oldSnapshot = null;
-        if (bomItem.getId() != null) {
-            oldSnapshot = bomItemRepository.findById(bomItem.getId()).orElse(null);
-        }
-
-        // 设置默认值（优先从 Canvas Config 读取，不可用时使用硬编码 fallback）
-        // B1 (BOM yield null sentinel removed): yieldRate null = 待评估, 持久化 null,
-        // 不再强制填充 100.00. getActualQuantity() 已对 null yieldRate 回退到 standardQuantity.
-        if (bomItem.getYieldRate() == null) {
-            // Canvas config override only (factory may configure a custom default).
-            // If no config, persist null (待评估 signal) instead of hardcoded 100.00.
-            Object configDefault = getConfigDefault(bomItem.getFactoryId(), "yieldRate", null);
-            if (configDefault instanceof Number) {
-                bomItem.setYieldRate(new BigDecimal(configDefault.toString()));
-            }
-            // else: leave null (待评估)
-        }
-        if (bomItem.getTaxRate() == null) {
-            Object configDefault = getConfigDefault(bomItem.getFactoryId(), "taxRate", BigDecimal.ZERO);
-            bomItem.setTaxRate(configDefault instanceof Number
-                    ? new BigDecimal(configDefault.toString())
-                    : BigDecimal.ZERO);
-        }
-        if (bomItem.getSortOrder() == null) {
-            Object configDefault = getConfigDefault(bomItem.getFactoryId(), "sortOrder", 0);
-            bomItem.setSortOrder(configDefault instanceof Number
-                    ? ((Number) configDefault).intValue()
-                    : 0);
-        }
-
-        BomItem saved = bomItemRepository.save(bomItem);
-        log.info("BOM项目保存成功: id={}", saved.getId());
-
-        // D4 Path B (2026-05-10 customer meeting, PR #309 A2=B): BomExpansionService.expandBOM
-        // 现已优先读 bom_items 表 (BomItem)，本次保存的 BOM 数据将被生产计划展开直接使用。
-        // RPF (MaterialProductConversion) 仅作 fallback (老工厂数据无 BOM 配置时沿用)。
-        // 详见 docs/architecture/2026-05-10-rpf-vs-bomitem-divergence.md §7
-        log.info("[D4-B active] BOM 已保存 (productTypeId={}), 将被生产计划展开 (BomExpansionService) 直接使用",
-                saved.getProductTypeId());
-
-        // P1-9 写 BomChangeLog (best-effort, 失败不影响主业务)
-        recordBomChange(saved, oldSnapshot,
-                oldSnapshot == null ? BomChangeLog.ChangeType.CREATE : BomChangeLog.ChangeType.UPDATE);
-
-        return saved;
-    }
-
-    /**
-     * BOM 行只保存物料主数据/库存移动均价快照，不接受页面重复维护单价和税率。
-     * 移动均价优先；尚无入库均价时回退物料字典未税价。
-     */
-    private void applyMaterialMasterSnapshot(BomItem bomItem) {
-        // The repository is optional only for legacy 3-arg unit-test construction.
-        // Spring production wiring always provides it; keep the old isolated tests focused
-        // on their original validation/cost concern instead of fabricating master data.
-        if (rawMaterialTypeRepository == null) {
-            return;
-        }
-        com.cretas.aims.entity.RawMaterialType material = rawMaterialTypeRepository
-                .findById(bomItem.getMaterialTypeId())
-                .orElseThrow(() -> new com.cretas.aims.exception.BusinessException(400, "请选择有效的关联物料")
-                        .withHint("BOM 原料、辅料和包材必须从物料字典选择"));
-        if (material.getDeletedAt() != null) {
-            throw new com.cretas.aims.exception.BusinessException(400, "请选择有效的关联物料")
-                    .withHint("BOM 原料、辅料和包材必须从物料字典选择");
-        }
-        if (!bomItem.getFactoryId().equals(material.getFactoryId())) {
-            throw new com.cretas.aims.exception.BusinessException(403, "关联物料不属于当前工厂");
-        }
-        bomItem.setMaterialName(material.getName());
-        bomItem.setUnitPrice(material.getMovingAvgPrice() != null
-                ? material.getMovingAvgPrice()
-                : material.getUnitPrice());
-        applyBomPriceUnitContract(bomItem, material.getUnit());
-        bomItem.setTaxRate(material.getTaxRate() == null
-                ? null
-                : material.getTaxRate().getRate().multiply(java.math.BigDecimal.valueOf(100)));
-    }
-
-    private void applyBomPriceUnitContract(BomItem item, String rawPriceUnit) {
-        String priceUnit = trimToNull(rawPriceUnit) != null ? rawPriceUnit.trim() : item.getUnit();
-        item.setPriceUnit(priceUnit);
-        if (item.getUnit() == null || priceUnit == null || item.getUnit().equals(priceUnit)) {
-            item.setQuantityToPriceFactor(BigDecimal.ONE);
-            return;
-        }
-        if (materialUomConverter == null) {
-            throw new com.cretas.aims.exception.BusinessException(503,
-                    "BOM 单位换算服务不可用，不能安全保存跨单位价格");
-        }
-        com.cretas.aims.service.uom.MaterialUomConverter.ConversionResult conversion =
-                materialUomConverter.toComparableQuantity(item.getMaterialTypeId(), BigDecimal.ONE,
-                        item.getUnit(), priceUnit);
-        if (!conversion.isConverted() || conversion.getQuantity() == null) {
-            throw new com.cretas.aims.exception.BusinessException(409,
-                    "BOM 数量单位无法换算到计价单位: " + item.getUnit() + " → " + priceUnit);
-        }
-        item.setQuantityToPriceFactor(conversion.getQuantity());
-    }
-
-    /**
-     * P1-9 写 BomChangeLog (v1 §2.2.6 BOM 变更痕迹追踪).
-     * best-effort — 任何异常不影响主业务.
-     */
-    private void recordBomChange(BomItem newItem, BomItem oldItem, BomChangeLog.ChangeType type) {
-        if (bomChangeLogRepository == null) return;
-        try {
-            BomChangeLog log = new BomChangeLog();
-            log.setFactoryId(newItem != null ? newItem.getFactoryId() : (oldItem != null ? oldItem.getFactoryId() : null));
-            log.setBomId(newItem != null ? newItem.getProductTypeId() : (oldItem != null ? oldItem.getProductTypeId() : null));
-            log.setBomItemId(newItem != null ? newItem.getId() : (oldItem != null ? oldItem.getId() : null));
-            log.setChangeType(type);
-            log.setOldValue(snapshotBomItem(oldItem));
-            log.setNewValue(snapshotBomItem(newItem));
-            populateChangeActor(log);
-            bomChangeLogRepository.save(log);
-        } catch (Exception e) {
-            BomServiceImpl.log.warn("[P1-9] BomChangeLog 写入失败 (non-blocking): {}", e.getMessage());
-        }
-    }
-
-    /**
-     * JwtAuthInterceptor exposes the authenticated actor through request attributes rather than
-     * Spring Security's SecurityContext. Keep non-request/system contexts null so audit history
-     * never invents a user identity.
-     */
-    private void populateChangeActor(BomChangeLog changeLog) {
-        RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
-        if (attributes == null) return;
-
-        Object userId = attributes.getAttribute("userId", RequestAttributes.SCOPE_REQUEST);
-        if (userId instanceof Number number) {
-            changeLog.setChangedBy(number.longValue());
-        } else if (userId instanceof String value) {
-            try {
-                changeLog.setChangedBy(Long.parseLong(value));
-            } catch (NumberFormatException ignored) {
-                BomServiceImpl.log.warn("[P1-9] Ignoring non-numeric BOM audit userId: {}", value);
-            }
-        }
-
-        Object username = attributes.getAttribute("username", RequestAttributes.SCOPE_REQUEST);
-        if (username != null) {
-            String value = username.toString().trim();
-            if (!value.isEmpty()) changeLog.setChangedByName(value);
-        }
-    }
-
-    private Map<String, Object> snapshotBomItem(BomItem item) {
-        if (item == null) return null;
-        Map<String, Object> snapshot = new LinkedHashMap<>();
-        snapshot.put("id", item.getId());
-        snapshot.put("productTypeId", item.getProductTypeId());
-        snapshot.put("productName", item.getProductName());
-        snapshot.put("materialTypeId", item.getMaterialTypeId());
-        snapshot.put("materialName", item.getMaterialName());
-        snapshot.put("materialCategory", item.getMaterialCategory());
-        snapshot.put("standardQuantity", item.getStandardQuantity());
-        snapshot.put("yieldRate", item.getYieldRate());
-        snapshot.put("unit", item.getUnit());
-        snapshot.put("unitPrice", item.getUnitPrice());
-        snapshot.put("taxRate", item.getTaxRate());
-        snapshot.put("sortOrder", item.getSortOrder());
-        snapshot.put("remark", item.getRemark());
-        return snapshot;
-    }
-
-    @Override
-    @Transactional
-    public List<BomItem> saveBomItems(List<BomItem> bomItems) {
-        log.info("批量保存BOM项目: count={}", bomItems.size());
-        return bomItems.stream()
-            .map(this::saveBomItem)
-            .collect(Collectors.toList());
-    }
-
-    @Override
-    @Transactional
-    public com.cretas.aims.dto.bom.BomBatchImportResult batchImportBomItems(
-            String factoryId, com.cretas.aims.dto.bom.BomBatchImportRequest request) {
-        String productTypeId = request.getProductTypeId();
-        List<com.cretas.aims.dto.bom.BomBatchImportRequest.Row> rows = request.getItems();
-        if (productTypeId == null || productTypeId.isBlank()) {
-            throw new com.cretas.aims.exception.BusinessException(400, "productTypeId 不可为空");
-        }
-        if (rows == null || rows.isEmpty()) {
-            throw new com.cretas.aims.exception.BusinessException(400, "导入明细不可为空");
-        }
-        List<com.cretas.aims.entity.RawMaterialType> types = rawMaterialTypeRepository.findByFactoryId(factoryId);
-
-        List<BomItem> toInsert = new ArrayList<>();
-        List<com.cretas.aims.dto.bom.BomBatchImportResult.RowResult> results = new ArrayList<>();
-        boolean anyError = false;
-        int idx = 0;
-        for (com.cretas.aims.dto.bom.BomBatchImportRequest.Row r : rows) {
-            idx++;
-            try {
-                String mtId = r.getMaterialTypeId();
-                String matName = r.getMaterialName();
-                if (mtId == null || mtId.isBlank()) {
-                    final String mn = matName;
-                    if (mn == null || mn.isBlank()) {
-                        throw new com.cretas.aims.exception.BusinessException(400, "物料名与物料类型ID 至少填一个");
-                    }
-                    List<com.cretas.aims.entity.RawMaterialType> exact = types.stream()
-                            .filter(t -> mn.equals(t.getName())).collect(Collectors.toList());
-                    List<com.cretas.aims.entity.RawMaterialType> matches = !exact.isEmpty() ? exact
-                            : types.stream().filter(t -> t.getName() != null
-                                    && (t.getName().contains(mn) || mn.contains(t.getName())))
-                              .collect(Collectors.toList());
-                    if (matches.isEmpty()) {
-                        throw new com.cretas.aims.exception.BusinessException(400,
-                                "物料 '" + mn + "' 匹配不到原料类型, 请先建该原料类型或填 materialTypeId");
-                    }
-                    if (matches.size() > 1) {
-                        throw new com.cretas.aims.exception.BusinessException(400,
-                                "物料 '" + mn + "' 匹配到多个原料类型(" + matches.size() + "), 请填明确 materialTypeId");
-                    }
-                    mtId = matches.get(0).getId();
-                    if (matName == null || matName.isBlank()) matName = matches.get(0).getName();
-                }
-                String cat = (r.getMaterialCategory() == null || r.getMaterialCategory().isBlank())
-                        ? "RAW" : r.getMaterialCategory().trim().toUpperCase();
-                if (!java.util.Set.of("RAW", "AUXILIARY", "PACKAGING").contains(cat)) {
-                    throw new com.cretas.aims.exception.BusinessException(400,
-                            "物料类别须为 RAW/AUXILIARY/PACKAGING (当前: " + cat + ")");
-                }
-                BigDecimal standardQuantity = "RAW".equals(cat) ? null : r.getStandardQuantity();
-                if (!"RAW".equals(cat)
-                        && (standardQuantity == null || standardQuantity.signum() <= 0)) {
-                    throw new com.cretas.aims.exception.BusinessException(400, "非原料的每成品用量必须 > 0");
-                }
-                String unit = (r.getUnit() == null || r.getUnit().isBlank())
-                        ? ("PACKAGING".equals(cat) ? "pcs" : "g") : r.getUnit().trim();
-                BomItem item = BomItem.builder()
-                        .productTypeId(productTypeId)
-                        .materialTypeId(mtId)
-                        .materialName(matName)
-                        .standardQuantity(standardQuantity)
-                        .yieldRate("RAW".equals(cat) ? null : r.getYieldRate())
-                        .unit(unit)
-                        .materialCategory(cat)
-                        .sortOrder(idx - 1)
-                        .build();
-                item.setFactoryId(factoryId);
-                validateBomItemUnitCompatibility(item);
-                toInsert.add(item);
-                results.add(new com.cretas.aims.dto.bom.BomBatchImportResult.RowResult(idx, true, null, mtId, matName));
-            } catch (Exception e) {
-                anyError = true;
-                results.add(new com.cretas.aims.dto.bom.BomBatchImportResult.RowResult(
-                        idx, false, e.getMessage(), null, r.getMaterialName()));
-            }
-        }
-        if (anyError) {
-            int failed = (int) results.stream().filter(x -> !x.isOk()).count();
-            log.warn("[BOM-IMPORT] factory={} product={} 校验失败 {} 行, 整批不入库", factoryId, productTypeId, failed);
-            return new com.cretas.aims.dto.bom.BomBatchImportResult(0, failed, results);
-        }
-        saveBomItems(toInsert);
-        log.info("[BOM-IMPORT] factory={} product={} 导入 {} 行", factoryId, productTypeId, toInsert.size());
-        return new com.cretas.aims.dto.bom.BomBatchImportResult(toInsert.size(), 0, results);
-    }
-
-    @Override
-    @Transactional
-    public void deleteBomItem(Long id) {
-        log.info("删除BOM项目: id={}", id);
-        BomItem bomItem = bomItemRepository.findById(id)
-            .orElseThrow(() -> new EntityNotFoundException("BomItem", id.toString()));
-        // P1-9 snapshot before delete
-        BomItem oldSnapshot = bomItem;
-        bomItem.softDelete();
-        bomItemRepository.save(bomItem);
-        log.info("BOM项目删除成功: id={}", id);
-        // P1-9 写 DELETE log
-        recordBomChange(null, oldSnapshot, BomChangeLog.ChangeType.DELETE);
-    }
 
     // ============ Labor Cost ============
 
@@ -649,7 +223,7 @@ public class BomServiceImpl implements BomService {
         log.info("计算产品成本: factoryId={}, productTypeId={}", factoryId, productTypeId);
 
         // 1. 获取BOM项目
-        List<BomItem> bomItems = getBomItemsByProduct(factoryId, productTypeId);
+        List<BomRecipeItem> bomItems = bomRecipeItemRepository.findCurrentByProduct(factoryId, productTypeId);
 
         // 2. 获取人工成本（优先产品级别，其次全局）
         List<LaborCostConfig> laborCosts = getLaborCostsByProduct(factoryId, productTypeId);
@@ -669,7 +243,7 @@ public class BomServiceImpl implements BomService {
         // 现在标记每行 + 汇总, 让前端展示"成本不完整, 缺 N 行价格"。
         List<String> missingPriceMaterials = new ArrayList<>();
 
-        for (BomItem item : bomItems) {
+        for (BomRecipeItem item : bomItems) {
             BigDecimal actualQuantity = calculateActualQuantity(factoryId, item.getStandardQuantity(), item.getYieldRate());
             com.cretas.aims.entity.RawMaterialType currentMaterial =
                     loadRawMaterialTypeSafely(item.getMaterialTypeId());
@@ -768,7 +342,7 @@ public class BomServiceImpl implements BomService {
             .setScale(4, RoundingMode.HALF_UP);
 
         // 8. 获取产品名称
-        String productName = bomItems.isEmpty() ? null : bomItems.get(0).getProductName();
+        String productName = bomItems.isEmpty() ? null : bomItems.get(0).getRecipe().getProductName();
 
         // 9. 构建返回结果
         BomCostSummaryDTO summary = BomCostSummaryDTO.builder()
@@ -845,7 +419,7 @@ public class BomServiceImpl implements BomService {
     @Transactional(readOnly = true)
     public List<String> getProductTypesWithBom(String factoryId) {
         log.debug("获取有BOM配置的产品类型: factoryId={}", factoryId);
-        return bomItemRepository.findDistinctProductTypeIds(factoryId);
+        return bomRecipeItemRepository.findDistinctCurrentProductTypeIds(factoryId);
     }
 
     // ============ Private Helper Methods ============
@@ -870,30 +444,30 @@ public class BomServiceImpl implements BomService {
         return "BOM unitPrice 为未税价；税率仅用于发票口径追踪，成本不二次除税。";
     }
 
-    /**
-     * Canvas Config: 从配置中获取字段默认值。
-     * 如果 factoryConfigService 未注入（模块未部署），返回 fallback。
-     */
-    private Object getConfigDefault(String factoryId, String fieldCode, Object fallback) {
-        // Canvas V2 Layer B: try DefaultValueResolver first (condition-based defaults)
-        if (defaultValueResolver != null) {
-            try {
-                Object val = defaultValueResolver.resolve(factoryId, "bom", fieldCode, java.util.Map.of());
-                if (val != null) return val;
-            } catch (Exception e) {
-                log.debug("DefaultValueResolver failed for bom.{}: {}", fieldCode, e.getMessage());
-            }
+
+    private com.cretas.aims.entity.RawMaterialType loadRawMaterialTypeSafely(String materialTypeId) {
+        if (rawMaterialTypeRepository == null || materialTypeId == null) return null;
+        try {
+            return rawMaterialTypeRepository.findById(materialTypeId).orElse(null);
+        } catch (Exception e) {
+            log.debug("[BOM-COST] load material type failed {}: {}", materialTypeId, e.getMessage());
+            return null;
         }
-        // Phase 1: try FactoryConfigService (schema-level defaults)
-        if (factoryConfigService != null) {
-            try {
-                Object val = factoryConfigService.getFieldDefault(factoryId, "bom", fieldCode);
-                if (val != null) return val;
-            } catch (Exception e) {
-                log.debug("获取BOM字段 {} 配置默认值失败，使用 fallback: {}", fieldCode, fallback);
-            }
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null) return null;
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) return null;
+        for (String value : values) {
+            String trimmed = trimToNull(value);
+            if (trimmed != null) return trimmed;
         }
-        return fallback;
+        return null;
     }
 
     /**
@@ -943,7 +517,7 @@ public class BomServiceImpl implements BomService {
      * @param item           BOM 行 (取 unit + materialTypeId)
      * @return 折算到主数据计价单位后的用量; 无法/无需归一时返回原量
      */
-    private BigDecimal reconcileQuantityForPricing(BigDecimal actualQuantity, BomItem item) {
+    private BigDecimal reconcileQuantityForPricing(BigDecimal actualQuantity, BomRecipeItem item) {
         if (actualQuantity == null || item == null) return actualQuantity;
         // 依赖未注入 (旧单测 3-arg 构造) → 退化为不归一 (旧行为)
         if (unitConversionService == null || rawMaterialTypeRepository == null) return actualQuantity;

@@ -96,7 +96,7 @@ class ProductionPlanUpdateGuardTest {
                 materialBatchRepository, materialConsumptionRepository, planBatchUsageRepository,
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
-                salesOrderRepository, salesOrderItemRepository, bomService);
+                salesOrderRepository, salesOrderItemRepository);
         when(conversionRepository.findByFactoryIdAndProductTypeId(any(), any())).thenReturn(java.util.List.of());
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
     }

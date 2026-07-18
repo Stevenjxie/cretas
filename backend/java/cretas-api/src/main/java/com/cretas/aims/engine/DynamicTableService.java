@@ -42,7 +42,7 @@ public class DynamicTableService {
     // was hardcoded `?::uuid` / `CAST(? AS uuid)`. This is only correct when the
     // parent table's `id` is UUID. Canvas V3 has mixed id types:
     // - sales_orders.id: VARCHAR (e.g. "SO-F001-202501-001")
-    // - bom_items.id: BIGINT
+    // - bom_recipe_items.id: BIGINT
     // - most others: UUID
     // For VARCHAR-id parents (like sales_orders), the hardcoded cast rejected
     // every sub-table CRUD call with "ERROR: invalid input syntax for type uuid".

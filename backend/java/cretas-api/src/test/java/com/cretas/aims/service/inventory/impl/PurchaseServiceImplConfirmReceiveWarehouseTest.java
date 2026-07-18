@@ -9,7 +9,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.SupplierRepository;
-import com.cretas.aims.repository.bom.BomItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
@@ -47,7 +47,7 @@ class PurchaseServiceImplConfirmReceiveWarehouseTest {
     @Mock private SupplierRepository supplierRepository;
     @Mock private RawMaterialTypeRepository materialTypeRepository;
     @Mock private MaterialBatchRepository materialBatchRepository;
-    @Mock private BomItemRepository bomItemRepository;
+    @Mock private BomRecipeItemRepository bomItemRepository;
     @Mock private com.cretas.aims.service.finance.ArApService arApService;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private MaterialBatchService materialBatchService;

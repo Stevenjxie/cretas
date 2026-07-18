@@ -69,6 +69,9 @@ public interface BomRecipeRepository extends JpaRepository<BomRecipe, String> {
 
     long countByFactoryIdAndProductTypeId(String factoryId, String productTypeId);
 
+    boolean existsByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+            String factoryId, String productTypeId, Status status);
+
     /** 当日 recipeCode 序号 (用于 BOM-YYYYMMDD-NNN 自动生成). */
     @Query("SELECT COUNT(br) FROM BomRecipe br " +
            "WHERE br.factoryId = :factoryId " +

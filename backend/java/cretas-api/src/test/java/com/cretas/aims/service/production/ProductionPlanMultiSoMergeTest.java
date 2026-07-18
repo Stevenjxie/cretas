@@ -103,7 +103,7 @@ class ProductionPlanMultiSoMergeTest {
                 materialBatchRepository, materialConsumptionRepository, planBatchUsageRepository,
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
-                salesOrderRepository, salesOrderItemRepository, bomService);
+                salesOrderRepository, salesOrderItemRepository);
 
         when(productTypeRepository.existsById(PRODUCT_TYPE_ID)).thenReturn(true);
 

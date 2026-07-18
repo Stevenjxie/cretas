@@ -63,7 +63,7 @@ describe('BomCopySuggestionDialog', () => {
     expect(wrapper.emitted('copy')?.[0]).toEqual([{
       targetProductTypeId: 'P350',
       sourceRecipeId: 'R400',
-      bomItemIds: [11, 12],
+      recipeItemIds: [11, 12],
       seasoningItemIds: [21],
       processSeasoningParamIds: [31],
     }]);
@@ -77,7 +77,7 @@ describe('BomCopySuggestionDialog', () => {
     await wrapper.get('[data-testid="copy-selected-rules"]').trigger('click');
 
     expect(wrapper.emitted('copy')?.[0]?.[0]).toMatchObject({
-      bomItemIds: [11],
+      recipeItemIds: [11],
       seasoningItemIds: [21],
     });
   });

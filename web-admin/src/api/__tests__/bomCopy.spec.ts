@@ -29,7 +29,7 @@ describe('BOM same-source copy API', () => {
     const request: CopyBomToProductRequest = {
       targetProductTypeId: 'P350',
       sourceRecipeId: 'R400',
-      bomItemIds: [11],
+      recipeItemIds: [11],
       seasoningItemIds: [21],
       processSeasoningParamIds: [31],
     };

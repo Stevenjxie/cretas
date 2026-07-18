@@ -4,9 +4,8 @@ import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.producttype.ProductTypeDTO;
 import com.cretas.aims.dto.producttype.ProductTypeSuggestionDTO;
 import com.cretas.aims.entity.ProductType;
-import com.cretas.aims.entity.bom.BomItem;
+import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.repository.ProductTypeRepository;
-import com.cretas.aims.service.BomService;
 import com.cretas.aims.service.ProductTypeService;
 import com.cretas.aims.service.ProductWorkProcessService;
 import com.cretas.aims.service.bom.BomRecipeService;
@@ -44,8 +43,6 @@ public class ProductCreateTool extends AbstractBusinessTool {
     private ProductTypeRepository productTypeRepository;
     @Autowired
     private ProductWorkProcessService productWorkProcessService;
-    @Autowired
-    private BomService bomService;
     @Autowired
     private BomRecipeService bomRecipeService;
 
@@ -207,15 +204,19 @@ public class ProductCreateTool extends AbstractBusinessTool {
                                 pwp.getProcessName() != null ? pwp.getProcessName() : pwp.getWorkProcessId()));
             } catch (Exception ignore) { /* 工序链可选 */ }
             try {
-                for (BomItem b : bomService.getBomItemsByProduct(factoryId, p.source.getId())) {
-                    Map<String, Object> row = new LinkedHashMap<>();
-                    row.put("materialName", b.getMaterialName());
-                    row.put("standardQuantity", b.getStandardQuantity());
-                    row.put("yieldRate", b.getYieldRate());
-                    row.put("materialCategory", b.getMaterialCategory());
-                    row.put("unit", b.getUnit());
-                    p.bomSuggestion.add(row);
-                }
+                bomRecipeService.getCurrentRecipe(factoryId, p.source.getId())
+                        .map(recipe -> bomRecipeService.getRecipe(factoryId, recipe.getId()))
+                        .ifPresent(recipe -> {
+                            for (BomRecipeItem b : recipe.getItems()) {
+                                Map<String, Object> row = new LinkedHashMap<>();
+                                row.put("materialName", b.getMaterialName());
+                                row.put("standardQuantity", b.getStandardQuantity());
+                                row.put("yieldRate", b.getYieldRate());
+                                row.put("materialCategory", b.getMaterialCategory());
+                                row.put("unit", b.getUnit());
+                                p.bomSuggestion.add(row);
+                            }
+                        });
             } catch (Exception ignore) { /* BOM 可选 */ }
             try {
                 bomRecipeService.getSeasoningByProduct(factoryId, p.source.getId()).ifPresent(sea -> {

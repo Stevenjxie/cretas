@@ -48,7 +48,7 @@ public interface BomYieldEstimateService {
     /**
      * 批量应用用户选中的行 (写操作).
      *
-     * <p>仅更新 RAW 主料行的 yield_rate; 每次变更写一条 BomChangeLog (old→new).
+     * <p>仅更新当前 ACTIVE Recipe 的 overallYieldRate；每次变更写一条 BomChangeLog。
      * 需要 production:read_write 权限 (由 Controller 层 @RequirePermission 门控).
      *
      * @param factoryId 工厂 ID

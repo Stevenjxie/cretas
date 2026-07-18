@@ -2,12 +2,12 @@ package com.cretas.aims.service.impl;
 
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.RawMaterialType;
-import com.cretas.aims.entity.bom.BomItem;
+import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialPackagingHierarchyRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.entity.MaterialPackagingHierarchy;
-import com.cretas.aims.service.BomService;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.service.UnitConversionService;
 import com.cretas.aims.service.uom.MaterialUomConverter;
 import org.junit.jupiter.api.DisplayName;
@@ -51,7 +51,7 @@ class ProductionPlanServiceImplUomTest {
     private static final String MAT_ZHUSHE = "MT-PORK-TONGUE-001";
 
     private ProductionPlanServiceImpl newService(MaterialBatchRepository batchRepo,
-                                                 BomService bomService,
+                                                 BomRecipeItemRepository bomRecipeItemRepository,
                                                  MaterialUomConverter converter,
                                                  RawMaterialTypeRepository matRepo) throws Exception {
         Constructor<?> ctor = ProductionPlanServiceImpl.class.getDeclaredConstructors()[0];
@@ -60,10 +60,11 @@ class ProductionPlanServiceImplUomTest {
         Class<?>[] types = ctor.getParameterTypes();
         for (int i = 0; i < types.length; i++) {
             if (types[i] == MaterialBatchRepository.class) args[i] = batchRepo;
-            else if (types[i] == BomService.class) args[i] = bomService;
+
             else args[i] = null;
         }
         ProductionPlanServiceImpl svc = (ProductionPlanServiceImpl) ctor.newInstance(args);
+        inject(svc, "bomRecipeItemRepository", bomRecipeItemRepository);
         inject(svc, "materialUomConverter", converter);
         inject(svc, "rawMaterialTypeRepository", matRepo);
         return svc;
@@ -95,8 +96,8 @@ class ProductionPlanServiceImplUomTest {
         return p;
     }
 
-    private BomItem bom(String unit, BigDecimal stdQty, BigDecimal yield) {
-        BomItem b = new BomItem();
+    private BomRecipeItem bom(String unit, BigDecimal stdQty, BigDecimal yield) {
+        BomRecipeItem b = new BomRecipeItem();
         b.setMaterialTypeId(MAT_ZHUSHE);
         b.setMaterialName("冷冻猪舌");
         b.setStandardQuantity(stdQty);
@@ -114,9 +115,9 @@ class ProductionPlanServiceImplUomTest {
     @Test
     @DisplayName("猪舌(headline): BOM 217g vs 库存 200kg(称重批次单位) → g↔kg 换算后充足 → 不抛 / 无 409")
     void zhushe_weighedKgStock_noFalseShortage() throws Throwable {
-        BomService bomService = mock(BomService.class);
+        BomRecipeItemRepository bomRecipeItemRepository = mock(BomRecipeItemRepository.class);
         // 217g/份, yield 100 → 217g/份, 1000份 = 217000g = 217kg
-        when(bomService.getBomItemsByProduct(FACTORY, PRODUCT))
+        when(bomRecipeItemRepository.findCurrentByProduct(FACTORY, PRODUCT))
                 .thenReturn(List.of(bom("g", new BigDecimal("217"), new BigDecimal("100"))));
 
         MaterialBatchRepository batchRepo = mock(MaterialBatchRepository.class);
@@ -138,7 +139,7 @@ class ProductionPlanServiceImplUomTest {
         lenient().when(pkgRepo.findByMaterialTypeId(anyString())).thenReturn(Optional.empty());
 
         MaterialUomConverter conv = converterWith(matRepo, pkgRepo);
-        ProductionPlanServiceImpl svc = newService(batchRepo, bomService, conv, matRepo);
+        ProductionPlanServiceImpl svc = newService(batchRepo, bomRecipeItemRepository, conv, matRepo);
 
         // 217000g → 217kg ≤ 200kg? 217 > 200 → 实际短缺. 用 800份避免短缺干扰: 217×800=173600g=173.6kg ≤ 200kg.
         Throwable t = catchThrowable(() -> callValidate(svc, plan(new BigDecimal("800"))));
@@ -148,9 +149,9 @@ class ProductionPlanServiceImplUomTest {
     @Test
     @DisplayName("N1: 称重原料 BOM-g vs 库存-kg 短缺 → 仅预警, 不抛 409")
     void zhushe_weighedKgStock_shortageWarnsOnly() throws Throwable {
-        BomService bomService = mock(BomService.class);
+        BomRecipeItemRepository bomRecipeItemRepository = mock(BomRecipeItemRepository.class);
         // 217g × 1000份 = 217kg > 200kg 库存 → 真实短缺 (但走普通缺口路径, 不是 UOM 409)
-        when(bomService.getBomItemsByProduct(FACTORY, PRODUCT))
+        when(bomRecipeItemRepository.findCurrentByProduct(FACTORY, PRODUCT))
                 .thenReturn(List.of(bom("g", new BigDecimal("217"), new BigDecimal("100"))));
 
         MaterialBatchRepository batchRepo = mock(MaterialBatchRepository.class);
@@ -170,7 +171,7 @@ class ProductionPlanServiceImplUomTest {
         lenient().when(pkgRepo.findByMaterialTypeId(anyString())).thenReturn(Optional.empty());
 
         MaterialUomConverter conv = converterWith(matRepo, pkgRepo);
-        ProductionPlanServiceImpl svc = newService(batchRepo, bomService, conv, matRepo);
+        ProductionPlanServiceImpl svc = newService(batchRepo, bomRecipeItemRepository, conv, matRepo);
 
         Throwable t = catchThrowable(() -> callValidate(svc, plan(new BigDecimal("1000"))));
         assertThat(t).as("N1 开工无条件化: 真实短缺只记录预警, 不应抛异常").isNull();
@@ -179,9 +180,9 @@ class ProductionPlanServiceImplUomTest {
     @Test
     @DisplayName("同单位 (个 vs 个, 包材 吸塑盒): 直接比较, 充足不抛")
     void packaging_sameUnit_directCompare() throws Throwable {
-        BomService bomService = mock(BomService.class);
+        BomRecipeItemRepository bomRecipeItemRepository = mock(BomRecipeItemRepository.class);
         // 1 个/份 × 500份 = 500 个; 库存 1000 个 → 充足
-        when(bomService.getBomItemsByProduct(FACTORY, PRODUCT))
+        when(bomRecipeItemRepository.findCurrentByProduct(FACTORY, PRODUCT))
                 .thenReturn(List.of(bom("个", new BigDecimal("1"), new BigDecimal("100"))));
 
         MaterialBatchRepository batchRepo = mock(MaterialBatchRepository.class);
@@ -201,7 +202,7 @@ class ProductionPlanServiceImplUomTest {
         lenient().when(pkgRepo.findByMaterialTypeId(anyString())).thenReturn(Optional.empty());
 
         MaterialUomConverter conv = converterWith(matRepo, pkgRepo);
-        ProductionPlanServiceImpl svc = newService(batchRepo, bomService, conv, matRepo);
+        ProductionPlanServiceImpl svc = newService(batchRepo, bomRecipeItemRepository, conv, matRepo);
 
         Throwable t = catchThrowable(() -> callValidate(svc, plan(new BigDecimal("500"))));
         assertThat(t).as("同单位充足, 不应抛异常").isNull();
@@ -210,9 +211,9 @@ class ProductionPlanServiceImplUomTest {
     @Test
     @DisplayName("N1: BOM 个 vs 库存 kg (维度不可换算) → 仅预警, 不抛 409")
     void incompatibleDimension_warnsOnly() throws Throwable {
-        BomService bomService = mock(BomService.class);
+        BomRecipeItemRepository bomRecipeItemRepository = mock(BomRecipeItemRepository.class);
         // BOM 单位 = 个, 库存批次单位 = kg, 无 个↔kg 维度换算桥 → UNCONVERTIBLE
-        when(bomService.getBomItemsByProduct(FACTORY, PRODUCT))
+        when(bomRecipeItemRepository.findCurrentByProduct(FACTORY, PRODUCT))
                 .thenReturn(List.of(bom("个", new BigDecimal("2"), new BigDecimal("100"))));
 
         MaterialBatchRepository batchRepo = mock(MaterialBatchRepository.class);
@@ -232,7 +233,7 @@ class ProductionPlanServiceImplUomTest {
         when(pkgRepo.findByMaterialTypeId(anyString())).thenReturn(Optional.empty());
 
         MaterialUomConverter conv = converterWith(matRepo, pkgRepo);
-        ProductionPlanServiceImpl svc = newService(batchRepo, bomService, conv, matRepo);
+        ProductionPlanServiceImpl svc = newService(batchRepo, bomRecipeItemRepository, conv, matRepo);
 
         Throwable t = catchThrowable(() -> callValidate(svc, plan(new BigDecimal("1000"))));
         assertThat(t).as("N1 开工无条件化: 单位不可换算只记录预警, 不应阻断开工").isNull();

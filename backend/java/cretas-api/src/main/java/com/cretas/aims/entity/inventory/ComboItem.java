@@ -11,7 +11,7 @@ import org.hibernate.annotations.Where;
 
 /**
  * 套餐/组合商品明细
- * product→product 关系（区别于 BomItem 的 product→material）
+ * product→product 关系（区别于 BomRecipeItem 的 product→material）
  * 餐饮套餐：一个 COMBO 类型的 ProductType 包含多个子 ProductType
  * 工厂组合装：一个 FINISHED_PRODUCT 组合包含多个子产品
  *

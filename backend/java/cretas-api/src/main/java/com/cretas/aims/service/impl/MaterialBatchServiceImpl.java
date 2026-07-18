@@ -28,7 +28,6 @@ import com.cretas.aims.repository.ProductionPlanBatchUsageRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
-import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository;
 import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
@@ -208,17 +207,9 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     @Autowired(required = false)
     private DataScopeResolver dataScopeResolver;
 
-    /** BOM 过滤 (领料批次防呆, T-BOM-FILTER): 查产品 ACTIVE BOM. */
-    @Autowired
-    private BomRecipeRepository bomRecipeRepository;
-
     /** BOM 过滤 (领料批次防呆, T-BOM-FILTER): 取 BOM 明细原料类型列表. */
     @Autowired
     private BomRecipeItemRepository bomRecipeItemRepository;
-
-    /** BOM 过滤: 运行时 BOM (bom_items, BOM 编辑器/导入/对话微调 写这套) —— 两套 BOM 系统都要认. */
-    @Autowired
-    private com.cretas.aims.repository.bom.BomItemRepository bomItemRepository;
 
     /** C-074/C-075/X-10: 补录时效锁 — T-3 及更早拒绝 (optional, fail-open 向后兼容). */
     @Autowired(required = false)
@@ -796,29 +787,18 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                     .collect(Collectors.toList());
         }
 
-        // 1. 取 BOM 原料类型集合 —— 并集两套 BOM 系统 (审计抓到的"两套 BOM"断链):
-        //    bom_recipes (R&D 版本化配方) + bom_items (运行时 BOM, BOM 编辑器/导入/对话微调 写这套)。
-        //    之前只查 bom_recipes → 用 BOM 编辑器配的新产品(只有 bom_items, 无配方)首道原料下拉恒为空 → 无法生产。
+        // 1. 取当前 ACTIVE/current BOM 原料类型集合（唯一生产真值）。
         Set<String> bomMaterialTypeIds = new HashSet<>();
-        // 1a. bom_recipes (is_current, 不论 DRAFT/ACTIVE)
-        bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, productTypeId)
-                .ifPresent(recipe -> bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(recipe.getId())
-                        .forEach(item -> {
-                            if (item.getMaterialTypeId() != null) {
-                                bomMaterialTypeIds.add(item.getMaterialTypeId());
-                            }
-                        }));
-        // 1b. bom_items (运行时 BOM, 物料建议/领料/成本真源)
-        bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(factoryId, productTypeId)
+        bomRecipeItemRepository.findCurrentByProduct(factoryId, productTypeId)
                 .forEach(item -> {
                     if (item.getMaterialTypeId() != null) {
                         bomMaterialTypeIds.add(item.getMaterialTypeId());
                     }
                 });
 
-        // 2. 两套 BOM 均无原料明细 → 返回空, 由前端明确提示先维护 BOM, 避免选错料仍可结单
+        // 2. 无当前生效 BOM 明细 → 返回空, 由前端明确提示先维护并激活 BOM。
         if (bomMaterialTypeIds.isEmpty()) {
-            log.debug("BOM 过滤: 产品 {} 两套 BOM(配方+运行时) 均无原料明细, 返回空 {} 批次",
+            log.debug("BOM 过滤: 产品 {} 无 ACTIVE/current 配方明细, 返回空 {} 批次",
                     productTypeId, status);
             return Collections.emptyList();
         }

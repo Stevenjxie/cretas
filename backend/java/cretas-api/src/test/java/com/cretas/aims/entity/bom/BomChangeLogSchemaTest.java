@@ -19,13 +19,13 @@ class BomChangeLogSchemaTest {
     }
 
     @Test
-    void shouldHaveBomId() {
-        assertDoesNotThrow(() -> BomChangeLog.class.getDeclaredField("bomId"));
+    void shouldHaveBomRecipeId() {
+        assertDoesNotThrow(() -> BomChangeLog.class.getDeclaredField("bomRecipeId"));
     }
 
     @Test
-    void shouldHaveBomItemId() {
-        assertDoesNotThrow(() -> BomChangeLog.class.getDeclaredField("bomItemId"));
+    void shouldHaveBomRecipeItemId() {
+        assertDoesNotThrow(() -> BomChangeLog.class.getDeclaredField("bomRecipeItemId"));
     }
 
     @Test

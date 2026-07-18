@@ -16,7 +16,7 @@ public class BomCopyToDraftRequest {
     @NotBlank(message = "sourceRecipeId 不能为空")
     private String sourceRecipeId;
 
-    private List<Long> bomItemIds = new ArrayList<>();
+    private List<Long> recipeItemIds = new ArrayList<>();
     private List<Long> seasoningItemIds = new ArrayList<>();
     private List<Long> processSeasoningParamIds = new ArrayList<>();
 }

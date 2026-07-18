@@ -16,10 +16,10 @@ import org.hibernate.annotations.Where;
  * <p>客户需求: BOM 配方不是一成不变, 随季节/原料供应/成本调整会修改. 客户需要
  * 审计 BOM 变更历史 (什么时候把带鱼段 10 kg 改成了 12 kg / 谁改的 / 为什么).
  *
- * <p>设计: 每次 BOM 或 BomItem 的 CREATE/UPDATE/DELETE 写一条 log, 用 JSONB
+ * <p>设计: 每次 BomRecipe 或 BomRecipeItem 的 CREATE/UPDATE/DELETE 写一条 log, 用 JSONB
  * 存 old/new 全量 snapshot 支持任意字段对比.
  *
- * <p>Service 层 wire up 留下次: 可以用 @EventListener 订阅 BomItem 变更事件,
+ * <p>Service 层可以用 @EventListener 订阅 BomRecipe 变更事件,
  * 或者用 Hibernate envers, 或者 AOP around BomService 写入方法.
  */
 @Data
@@ -30,8 +30,8 @@ import org.hibernate.annotations.Where;
 @Entity
 @Table(name = "bom_change_logs",
         indexes = {
-                @Index(name = "idx_bcl_bom", columnList = "bom_id"),
-                @Index(name = "idx_bcl_bom_item", columnList = "bom_item_id"),
+                @Index(name = "idx_bcl_recipe", columnList = "bom_recipe_id"),
+                @Index(name = "idx_bcl_recipe_item", columnList = "bom_recipe_item_id"),
                 @Index(name = "idx_bcl_factory_time", columnList = "factory_id,changed_at")
         }
 )
@@ -50,13 +50,13 @@ public class BomChangeLog extends BaseEntity {
     @Column(name = "factory_id", nullable = false, length = 64)
     private String factoryId;
 
-    /** BOM 头 ID (product_type_id). */
-    @Column(name = "bom_id", length = 191)
-    private String bomId;
+    /** BomRecipe ID。 */
+    @Column(name = "bom_recipe_id", length = 191)
+    private String bomRecipeId;
 
-    /** BomItem ID (nullable — 为 null 表示 BOM-level 操作如新建 BOM). */
-    @Column(name = "bom_item_id")
-    private Long bomItemId;
+    /** BomRecipeItem ID (nullable — 为 null 表示配方头级变更). */
+    @Column(name = "bom_recipe_item_id")
+    private Long bomRecipeItemId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "change_type", nullable = false, length = 20)

@@ -130,7 +130,7 @@ class ProductionPlanSettlementTest {
                 materialBatchRepository, materialConsumptionRepository, planBatchUsageRepository,
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
-                salesOrderRepository, salesOrderItemRepository, bomService);
+                salesOrderRepository, salesOrderItemRepository);
         ReflectionTestUtils.setField(service, "productionSettlementRepository", productionSettlementRepository);
         ReflectionTestUtils.setField(service, "productionSettlementConsumptionRepository", productionSettlementConsumptionRepository);
         ReflectionTestUtils.setField(service, "productionSettlementLaborRepository", productionSettlementLaborRepository);

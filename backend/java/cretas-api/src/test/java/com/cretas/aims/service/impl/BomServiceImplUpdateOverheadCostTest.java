@@ -3,7 +3,7 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.entity.bom.OverheadCostConfig;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
-import com.cretas.aims.repository.bom.BomItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.LaborCostConfigRepository;
 import com.cretas.aims.repository.bom.OverheadCostConfigRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,7 +32,7 @@ import static org.mockito.Mockito.*;
 @DisplayName("BomServiceImpl.updateOverheadCost — select-then-merge (T-R5-3)")
 class BomServiceImplUpdateOverheadCostTest {
 
-    @Mock private BomItemRepository bomItemRepository;
+    @Mock private BomRecipeItemRepository bomItemRepository;
     @Mock private LaborCostConfigRepository laborCostConfigRepository;
     @Mock private OverheadCostConfigRepository overheadCostConfigRepository;
 

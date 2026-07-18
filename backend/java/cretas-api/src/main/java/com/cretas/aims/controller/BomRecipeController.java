@@ -40,8 +40,7 @@ import java.util.Optional;
 /**
  * M-BOM-1 BOM 配方主子表 Controller (Track D1).
  *
- * <p>路径前缀: {@code /api/mobile/{factoryId}/bom/recipes} — 与现有 {@link BomController}
- * 的 {@code /bom/items} 路径并存 (旧 endpoint 兼容期 30 天).
+ * <p>路径前缀: {@code /api/mobile/{factoryId}/bom/recipes}，是 BOM 配方与明细的唯一管理入口。
  *
  * <p>权限: 沿用 BomController 模式 ({@code production:read_write} / {@code rd:read_write}
  * / {@code finance:read_write}), 而非 SCHEMA spec 提议的 {@code bom:write} (新权限码暂未引入).

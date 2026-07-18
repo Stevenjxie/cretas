@@ -452,7 +452,8 @@ class ProductProcessWorkflowServiceImplTest {
                 new ProductProcessWorkflowCatalogValidator(
                         workProcessRepository,
                         productTypeRepository,
-                        mock(com.cretas.aims.repository.bom.BomItemRepository.class));
+                        mock(com.cretas.aims.repository.bom.BomRecipeRepository.class),
+                        mock(com.cretas.aims.repository.bom.BomRecipeItemRepository.class));
         ProductProcessWorkflowServiceImpl realService = new ProductProcessWorkflowServiceImpl(
                 repository, activationRepository, new ObjectMapper(), validator, realCatalogValidator, unitValidator,
                 productTypeRepository, mock(com.cretas.aims.repository.RawMaterialTypeRepository.class));

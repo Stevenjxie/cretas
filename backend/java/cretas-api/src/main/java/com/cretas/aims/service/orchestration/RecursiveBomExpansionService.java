@@ -4,11 +4,11 @@ import com.cretas.aims.dto.orchestration.BomTreeNode;
 import com.cretas.aims.dto.orchestration.BomTreeResult;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductType;
-import com.cretas.aims.entity.bom.BomItem;
+import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
-import com.cretas.aims.service.BomService;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.service.canvas.ThresholdKeys;
 import com.cretas.aims.service.canvas.ThresholdResolverService;
 import lombok.RequiredArgsConstructor;
@@ -30,7 +30,7 @@ import java.util.Set;
  * 递归 BOM 展开服务 — M-MATTREE-1, Sprint 4 W2.
  *
  * <p>区别于 {@link BomExpansionService} 的扁平单层展开, 本服务支持多级 BOM:
- * 当某个 {@code materialTypeId} 本身也有 BomItem 配置 (半成品 / 子配方),
+ * 当某个 {@code materialTypeId} 本身也有当前生效 BomRecipe 配置 (半成品 / 子配方),
  * 递归展开直到所有叶子节点都是无 BOM 的原料。</p>
  *
  * <p><b>循环检测</b>: 使用 DFS 路径 visited-set, 同一条路径上重复出现的 typeId
@@ -57,7 +57,7 @@ public class RecursiveBomExpansionService {
      */
     private static final int FALLBACK_MAX_DEPTH = 10;
 
-    private final BomService bomService;
+    private final BomRecipeItemRepository bomRecipeItemRepository;
     private final MaterialBatchRepository materialBatchRepository;
     private final ProductTypeRepository productTypeRepository;
     private final RawMaterialTypeRepository rawMaterialTypeRepository;
@@ -135,11 +135,11 @@ public class RecursiveBomExpansionService {
      *
      * @param factoryId    工厂 ID
      * @param typeId       本节点 typeId (level=0 为 productTypeId, level≥1 为 materialTypeId)
-     * @param name         节点名 (来自父 BomItem.materialName 或 ProductType.name)
+     * @param name         节点名 (来自父 BomRecipeItem.materialName 或 ProductType.name)
      * @param quantity     本节点需求量
      * @param level        当前深度
-     * @param unit         来自父 BomItem.unit (level=0 为 null)
-     * @param wastageRate  来自父 BomItem 推导 (level=0 为 null)
+     * @param unit         来自父 BomRecipeItem.unit (level=0 为 null)
+     * @param wastageRate  来自父 BomRecipeItem 推导 (level=0 为 null)
      * @param pathVisited  DFS 路径上已访问的 typeId (用于循环检测)
      * @param cycleTypeIds 全局循环 typeId 集合 (输出参数)
      */
@@ -179,7 +179,7 @@ public class RecursiveBomExpansionService {
         }
 
         // 查找该 typeId 是否有 BOM (有则视为半成品 / 成品, 无则为叶子原料)
-        List<BomItem> bomItems = bomService.getBomItemsByProduct(factoryId, typeId);
+        List<BomRecipeItem> bomItems = bomRecipeItemRepository.findCurrentByProduct(factoryId, typeId);
 
         if (bomItems == null || bomItems.isEmpty()) {
             // 叶子节点: 查库存 + 计算短缺
@@ -189,9 +189,9 @@ public class RecursiveBomExpansionService {
         // 半成品节点: 递归展开 children
         pathVisited.add(typeId);
         List<BomTreeNode> children = new ArrayList<>();
-        for (BomItem item : bomItems) {
-            BigDecimal childRequired = item.getActualQuantity() != null
-                    ? item.getActualQuantity().multiply(quantity).setScale(6, RoundingMode.HALF_UP)
+        for (BomRecipeItem item : bomItems) {
+            BigDecimal childRequired = item.calculateActualQuantity() != null
+                    ? item.calculateActualQuantity().multiply(quantity).setScale(6, RoundingMode.HALF_UP)
                     : BigDecimal.ZERO;
             String childUnit = item.getUnit();
             BigDecimal childWastage = deriveWastageFromYield(item.getYieldRate());

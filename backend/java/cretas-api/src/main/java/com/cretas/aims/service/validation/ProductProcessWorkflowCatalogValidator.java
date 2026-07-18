@@ -7,7 +7,9 @@ import com.cretas.aims.entity.enums.ProductCategory;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
-import com.cretas.aims.repository.bom.BomItemRepository;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -34,7 +36,8 @@ public class ProductProcessWorkflowCatalogValidator {
 
     private final WorkProcessRepository workProcessRepository;
     private final ProductTypeRepository productTypeRepository;
-    private final BomItemRepository bomItemRepository;
+    private final BomRecipeRepository bomRecipeRepository;
+    private final BomRecipeItemRepository bomRecipeItemRepository;
 
     public void validateForPublish(
             String factoryId,
@@ -170,7 +173,9 @@ public class ProductProcessWorkflowCatalogValidator {
                 .filter(skuId -> !isBlank(skuId))
                 .collect(Collectors.toCollection(LinkedHashSet::new));
         for (String skuId : finishedSkuIds) {
-            if (bomItemRepository.countByFactoryIdAndProductTypeId(factoryId, skuId) > 0) {
+            if (bomRecipeRepository.existsByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                    factoryId, skuId, BomRecipe.Status.ACTIVE)
+                    && !bomRecipeItemRepository.findCurrentByProduct(factoryId, skuId).isEmpty()) {
                 continue;
             }
             ProductProcessWorkflowDTO.Node materialNode = outputBindings.stream()
@@ -180,9 +185,9 @@ public class ProductProcessWorkflowCatalogValidator {
                     .findFirst()
                     .orElseThrow();
             throw new BusinessException(409, "成品产出 Cell " + materialNode.getId()
-                    + " 尚未配置原辅料 BOM: " + skuId)
+                    + " 尚未配置并激活新版 BOM 配方: " + skuId)
                     .withCode("PRODUCT_PROCESS_WORKFLOW_BOM_REQUIRED")
-                    .withHint("请先为该成品 SKU 配置至少一条 BOM 原料，再发布 Workflow")
+                    .withHint("请先为该成品 SKU 创建至少一条新版配方明细并激活该配方，再发布 Workflow")
                     .withSeverity("warning");
         }
     }

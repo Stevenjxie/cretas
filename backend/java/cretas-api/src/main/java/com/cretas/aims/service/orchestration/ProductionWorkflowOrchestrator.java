@@ -270,7 +270,7 @@ public class ProductionWorkflowOrchestrator {
      * D3 单位换算 (g↔kg / ml↔L 1:1000, 其他单位返回 null 不换算).
      *
      * <p>T143 (B7 collapse): 不再内联硬编码 1:1000 算术, 委托给共享的
-     * {@link UnitConversionService} (单一事实源, 避免与 BomItem/库存出库/采购入库 drift).
+     * {@link UnitConversionService} (单一事实源, 避免与 BomRecipeItem/库存出库/采购入库 drift).
      * {@code UnitConversionService} 无状态无依赖, 反射单测可直接 new 一个调用.
      *
      * @param value      原值

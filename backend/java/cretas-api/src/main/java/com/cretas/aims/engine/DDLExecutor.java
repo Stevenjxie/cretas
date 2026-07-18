@@ -28,7 +28,7 @@ public class DDLExecutor {
 
     private static final Map<String, String> MODULE_TABLE_MAP = Map.ofEntries(
         Map.entry("sales_order", "sales_orders"),
-        Map.entry("bom", "bom_items"),
+        Map.entry("bom", "bom_recipe_items"),
         Map.entry("production_plan", "production_plans"),
         Map.entry("production_report", "process_work_reports"),
         Map.entry("purchase_order", "purchase_orders"),
@@ -193,7 +193,7 @@ public class DDLExecutor {
         String subTableName = field.getModuleCode() + "_" + field.getFieldCode() + "_items";
         // R4 Fix P0-7 (same-cause sweep): parent_id column type MUST match the parent
         // table's id type. Canvas V3 has mixed id types — sales_orders.id is VARCHAR
-        // while bom_items.id is BIGINT and most others are UUID. Using UUID blindly
+        // while bom_recipe_items.id is BIGINT and most others are UUID. Using UUID blindly
         // broke every sub-table CRUD call for VARCHAR-id parents. Query the parent
         // table's id type at CREATE TIME so new sub-tables have the correct type.
         // Existing sub-tables with UUID parent_id are preserved (empty in test env,

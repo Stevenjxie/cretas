@@ -138,7 +138,7 @@ public interface PurchaseService {
      * <p>逻辑:
      * <ol>
      *   <li>按 salesOrderId 加载 SO 及其行项目。</li>
-     *   <li>对每个行项目查 BomItem；若有 BOM，展开原辅料/包材需求量
+     *   <li>对每个行项目查当前 ACTIVE BomRecipe；若有 BOM，展开原辅料/包材需求量
      *       (standardQuantity / (yieldRate/100) × SOItem.quantity)。</li>
      *   <li>无 BOM 的产品原样放入列表（materialTypeId=null，作为提示）。</li>
      *   <li>相同原料跨产品合并（materialTypeId 为 key，数量累加）。</li>

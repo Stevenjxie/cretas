@@ -22,7 +22,7 @@ import java.math.BigDecimal;
  * <ol>
  *   <li>按 bomVersionId 加载 BomVersion + snapshot_json (items array)</li>
  *   <li>按 servingSize / outputQuantityPerUnit 算缩放系数</li>
- *   <li>对每 BomItem 按 ingredientCode (或 name fallback) 查 IngredientNutritionFact</li>
+ *   <li>对每 BomRecipeItem 按 ingredientCode (或 name fallback) 查 IngredientNutritionFact</li>
  *   <li>累加 each item.standardQuantity / 100 * per100gNutrient * scaling</li>
  *   <li>结果 quantize HALF_UP scale 2</li>
  * </ol>

@@ -28,9 +28,17 @@ class BomRecipeRepositoryQueryValidationTest {
     @Autowired
     private BomRecipeRepository repository;
 
+    @Autowired
+    private BomRecipeItemRepository itemRepository;
+
+    @Autowired
+    private BomChangeLogRepository changeLogRepository;
+
     @Test
     @DisplayName("repository bean starts and all declared JPQL queries validate")
     void repositoryBoots() {
         assertNotNull(repository);
+        assertNotNull(itemRepository);
+        assertNotNull(changeLogRepository);
     }
 }

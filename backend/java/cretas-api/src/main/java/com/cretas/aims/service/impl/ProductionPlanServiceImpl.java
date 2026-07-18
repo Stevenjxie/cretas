@@ -41,11 +41,9 @@ import com.cretas.aims.repository.bom.BomYieldSuggestionRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
-import com.cretas.aims.entity.bom.BomItem;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
-import com.cretas.aims.service.BomService;
 import com.cretas.aims.service.LinkArrayService;
 import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.SchedulingService;
@@ -98,12 +96,6 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     private final ExcelUtil excelUtil;
     private final SalesOrderRepository salesOrderRepository;
     private final SalesOrderItemRepository salesOrderItemRepository;
-    /**
-     * PR #289 §B3 (2026-05-10 客户对接): 开始生产前的原料库存校验.
-     * Optional 注入: 单测时可以省略 (无 BOM 配置即跳过校验, 不破坏现有行为).
-     */
-    private final BomService bomService;
-
     /** Sprint 3 Track-F: unified cross-business link service (double-write w/ sourceOrderId). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private LinkArrayService linkArrayService;
@@ -124,8 +116,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             UserRepository userRepository,
             ExcelUtil excelUtil,
             SalesOrderRepository salesOrderRepository,
-            SalesOrderItemRepository salesOrderItemRepository,
-            @org.springframework.beans.factory.annotation.Autowired(required = false) BomService bomService) {
+            SalesOrderItemRepository salesOrderItemRepository) {
         this.productionPlanRepository = productionPlanRepository;
         this.productionBatchRepository = productionBatchRepository;
         this.processTaskRepository = processTaskRepository;
@@ -141,7 +132,6 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         this.excelUtil = excelUtil;
         this.salesOrderRepository = salesOrderRepository;
         this.salesOrderItemRepository = salesOrderItemRepository;
-        this.bomService = bomService;
     }
 
     /** SP2 二次加工: WIP 半成品库存扣减. required=false 避免循环依赖风险. */
@@ -469,13 +459,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * <ul>
      *   <li>无 BOM 配置 (BOM 空 list) → skip 校验, 仍允许开始 (生产可能不需要原料, 或客户尚未配置)</li>
      *   <li>plan.plannedQuantity == null → skip (历史数据兼容)</li>
-     *   <li>BomService 未注入 (单测场景) → skip</li>
+     *   <li>新版 BOM Repository 未注入 (隔离单测场景) → skip</li>
      *   <li>stock 恰好等于 required → 通过 (边界严格不阻断)</li>
      * </ul>
      */
     private void validateMaterialStockSufficient(String factoryId, ProductionPlan plan) {
-        if (bomService == null) {
-            log.debug("BomService 未注入, 跳过 B3 库存校验");
+        if (bomRecipeItemRepository == null) {
+            log.debug("BomRecipeItemRepository 未注入, 跳过 B3 库存校验");
             return;
         }
         if (plan.getProductTypeId() == null || plan.getProductTypeId().isBlank()) {
@@ -488,9 +478,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             return;
         }
 
-        List<BomItem> bomItems;
+        List<BomRecipeItem> bomItems;
         try {
-            bomItems = bomService.getBomItemsByProduct(factoryId, plan.getProductTypeId());
+            bomItems = bomRecipeItemRepository.findCurrentByProduct(factoryId, plan.getProductTypeId());
         } catch (Exception e) {
             log.warn("加载 BOM 失败, 跳过 B3 库存校验: planId={}, err={}", plan.getId(), e.getMessage());
             return;
@@ -503,7 +493,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         BigDecimal plannedQty = plan.getPlannedQuantity();
         List<String> shortages = new ArrayList<>();
 
-        for (BomItem item : bomItems) {
+        for (BomRecipeItem item : bomItems) {
             if (item.getMaterialTypeId() == null || item.getStandardQuantity() == null) {
                 continue;
             }
@@ -511,7 +501,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             String materialName = resolveLiveMaterialName(item.getMaterialTypeId(), item.getMaterialName());
 
             // 单位需求 (已含出成率: standardQuantity / (yieldRate/100)), 单位 = BOM unit (e.g. g)
-            BigDecimal perUnitRequired = item.getActualQuantity();
+            BigDecimal perUnitRequired = item.calculateActualQuantity();
             BigDecimal totalRequiredBom = perUnitRequired.multiply(plannedQty);
 
             // 库存量 (称重批次单位, e.g. kg)
@@ -566,16 +556,16 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     }
 
     private List<ProductionPlanMaterialAdvisoryDTO.Item> buildMaterialAdvisoryItems(String factoryId, ProductionPlan plan) {
-        if (bomService == null
+        if (bomRecipeItemRepository == null
                 || plan.getProductTypeId() == null || plan.getProductTypeId().isBlank()
                 || plan.getPlannedQuantity() == null
                 || plan.getPlannedQuantity().compareTo(BigDecimal.ZERO) <= 0) {
             return Collections.emptyList();
         }
 
-        List<BomItem> bomItems;
+        List<BomRecipeItem> bomItems;
         try {
-            bomItems = bomService.getBomItemsByProduct(factoryId, plan.getProductTypeId());
+            bomItems = bomRecipeItemRepository.findCurrentByProduct(factoryId, plan.getProductTypeId());
         } catch (Exception e) {
             log.warn("Material advisory failed to load BOM: planId={}, err={}", plan.getId(), e.getMessage());
             return Collections.emptyList();
@@ -587,7 +577,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         BigDecimal plannedQty = plan.getPlannedQuantity();
         BigDecimal effectiveProductYieldRate = resolveEffectiveProductYieldRate(factoryId, plan.getProductTypeId(), bomItems);
         List<ProductionPlanMaterialAdvisoryDTO.Item> warnings = new ArrayList<>();
-        for (BomItem item : bomItems) {
+        for (BomRecipeItem item : bomItems) {
             if (item.getMaterialTypeId() == null || item.getStandardQuantity() == null) {
                 continue;
             }
@@ -670,7 +660,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * @param snapshotName   BOM 快照名称 (fallback)
      * @return 优先返回主数据真名; 快照名次选; 兜底 "原料 {id}"
      */
-    private BigDecimal resolveEffectiveProductYieldRate(String factoryId, String productTypeId, List<BomItem> bomItems) {
+    private BigDecimal resolveEffectiveProductYieldRate(String factoryId, String productTypeId, List<BomRecipeItem> bomItems) {
         if (productTypeId == null || bomItems == null) {
             return null;
         }
@@ -695,9 +685,6 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (bomRecipeRepository != null) {
             Optional<BomRecipe> recipe = bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
                     factoryId, productTypeId, BomRecipe.Status.ACTIVE);
-            if (recipe.isEmpty()) {
-                recipe = bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, productTypeId);
-            }
             if (recipe.isPresent()
                     && isPositive(recipe.get().getOverallYieldRate())
                     && recipe.get().getOverallYieldRate().compareTo(new BigDecimal("100.00")) != 0) {
@@ -707,7 +694,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         return null;
     }
 
-    private BigDecimal calculateRuntimeRequiredQuantity(BomItem item, BigDecimal effectiveProductYieldRate) {
+    private BigDecimal calculateRuntimeRequiredQuantity(BomRecipeItem item, BigDecimal effectiveProductYieldRate) {
         if (item == null || item.getStandardQuantity() == null) {
             return BigDecimal.ZERO;
         }
@@ -716,10 +703,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     effectiveProductYieldRate.divide(new BigDecimal("100"), 6, RoundingMode.HALF_UP),
                     6, RoundingMode.HALF_UP);
         }
-        return item.getActualQuantity();
+        return item.calculateActualQuantity();
     }
 
-    private boolean isMainMaterialCandidate(BomItem item) {
+    private boolean isMainMaterialCandidate(BomRecipeItem item) {
         return item != null
                 && item.getYieldRate() != null
                 && item.getYieldRate().compareTo(new BigDecimal("100.00")) != 0;

@@ -2,11 +2,9 @@ package com.cretas.aims.service.bom.impl;
 
 import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.entity.ProductionBatch;
-import com.cretas.aims.entity.bom.BomItem;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomYieldSuggestion;
 import com.cretas.aims.repository.ProductionBatchRepository;
-import com.cretas.aims.repository.bom.BomItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomYieldSuggestionRepository;
 import com.cretas.aims.service.bom.BomYieldSuggestionService;
@@ -38,7 +36,6 @@ public class BomYieldSuggestionServiceImpl implements BomYieldSuggestionService 
     static final String SYSTEM_APPLIER = "SYSTEM";
 
     private final ProductionBatchRepository productionBatchRepository;
-    private final BomItemRepository bomItemRepository;
     private final BomRecipeRepository bomRecipeRepository;
     private final BomYieldSuggestionRepository bomYieldSuggestionRepository;
     private final YieldReportService yieldReportService;
@@ -48,61 +45,43 @@ public class BomYieldSuggestionServiceImpl implements BomYieldSuggestionService 
     public Optional<BomYieldSuggestion> generateForProduct(
             String factoryId, String productTypeId, String sourceEventType, String sourceEventId) {
         if (isBlank(factoryId) || isBlank(productTypeId) || isBlank(sourceEventType) || isBlank(sourceEventId)) {
-            log.warn("[BomYieldSuggestion] skip invalid event: factoryId={}, productTypeId={}, sourceType={}, sourceId={}",
-                    factoryId, productTypeId, sourceEventType, sourceEventId);
             return Optional.empty();
         }
         if (bomYieldSuggestionRepository.existsByFactoryIdAndProductTypeIdAndSourceEventTypeAndSourceEventIdAndDeletedAtIsNull(
                 factoryId, productTypeId, sourceEventType, sourceEventId)) {
-            log.info("[BomYieldSuggestion] duplicate source event skipped: factoryId={}, productTypeId={}, sourceType={}, sourceId={}",
-                    factoryId, productTypeId, sourceEventType, sourceEventId);
             return Optional.empty();
         }
 
-        List<BomItem> legacyBomItems = bomItemRepository
-                .findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(factoryId, productTypeId)
-                .stream()
-                .toList();
-        BomItem rawItem = legacyBomItems
-                .stream()
-                .filter(item -> "RAW".equalsIgnoreCase(item.getMaterialCategory()))
-                .findFirst()
-                .orElse(null);
-        if (rawItem == null) {
-            log.warn("[BomYieldSuggestion] no RAW BOM item, skip: factoryId={}, productTypeId={}",
+        Optional<BomRecipe> currentRecipe = bomRecipeRepository
+                .findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                        factoryId, productTypeId, BomRecipe.Status.ACTIVE);
+        if (currentRecipe.isEmpty()) {
+            log.warn("[BomYieldSuggestion] no current ACTIVE recipe: factoryId={}, productTypeId={}",
                     factoryId, productTypeId);
             return Optional.empty();
         }
 
         List<BigDecimal> samples = collectYieldPercentSamples(factoryId, productTypeId);
         if (samples.size() < MIN_SAMPLES) {
-            log.info("[BomYieldSuggestion] insufficient samples: factoryId={}, productTypeId={}, samples={}",
-                    factoryId, productTypeId, samples.size());
             return Optional.empty();
         }
-
         BigDecimal initialMedian = computeMedian(samples);
         List<BigDecimal> filtered = samples.stream()
-                .filter(sample -> sample.subtract(initialMedian).abs().compareTo(MAX_OFFSET_PERCENTAGE_POINTS) <= 0)
+                .filter(sample -> sample.subtract(initialMedian).abs()
+                        .compareTo(MAX_OFFSET_PERCENTAGE_POINTS) <= 0)
                 .toList();
         if (filtered.size() < MIN_SAMPLES) {
-            log.warn("[BomYieldSuggestion] guard left insufficient samples: factoryId={}, productTypeId={}, before={}, after={}",
-                    factoryId, productTypeId, samples.size(), filtered.size());
             return Optional.empty();
         }
 
-        BigDecimal suggested = computeMedian(filtered);
+        BomRecipe recipe = currentRecipe.get();
         BomYieldSuggestion suggestion = new BomYieldSuggestion();
         suggestion.setFactoryId(factoryId);
         suggestion.setProductTypeId(productTypeId);
-        suggestion.setProductName(rawItem.getProductName());
-        suggestion.setBomItemId(rawItem.getId());
-        Optional<BomRecipe> currentRecipe = findCurrentRecipe(factoryId, productTypeId);
-        suggestion.setPreviousYieldRate(currentRecipe
-                .map(BomRecipe::getOverallYieldRate)
-                .filter(this::isPositive)
-                .orElse(rawItem.getYieldRate()));
-        suggestion.setSuggestedYieldRate(suggested);
+        suggestion.setProductName(recipe.getProductName());
+        suggestion.setBomRecipeId(recipe.getId());
+        suggestion.setPreviousYieldRate(recipe.getOverallYieldRate());
+        suggestion.setSuggestedYieldRate(computeMedian(filtered));
         suggestion.setSampleCount(filtered.size());
         suggestion.setExcludedSampleCount(samples.size() - filtered.size());
         suggestion.setGuardMaxOffsetPercent(MAX_OFFSET_PERCENTAGE_POINTS);
@@ -113,31 +92,15 @@ public class BomYieldSuggestionServiceImpl implements BomYieldSuggestionService 
         suggestion.setGeneratedAt(LocalDateTime.now());
 
         BomYieldSuggestion saved = bomYieldSuggestionRepository.save(suggestion);
-        autoApplyIfGuarded(saved, currentRecipe);
-        log.info("[BomYieldSuggestion] generated: factoryId={}, productTypeId={}, previous={}, suggested={}, samples={}, excluded={}",
-                factoryId, productTypeId, suggestion.getPreviousYieldRate(), suggested, filtered.size(), suggestion.getExcludedSampleCount());
+        autoApplyIfGuarded(saved, recipe);
         return Optional.of(saved);
     }
 
-    private Optional<BomRecipe> findCurrentRecipe(String factoryId, String productTypeId) {
-        Optional<BomRecipe> active = bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
-                factoryId, productTypeId, BomRecipe.Status.ACTIVE);
-        return active.isPresent()
-                ? active
-                : bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, productTypeId);
-    }
-
-    private void autoApplyIfGuarded(BomYieldSuggestion suggestion, Optional<BomRecipe> currentRecipe) {
-        if (suggestion.getStatus() != BomYieldSuggestion.Status.PENDING) {
-            return;
-        }
-        if (suggestion.getSampleCount() == null || suggestion.getSampleCount() < MIN_SAMPLES) {
-            return;
-        }
-        if (!isPositive(suggestion.getSuggestedYieldRate())) {
-            log.warn("[BomYieldSuggestion] auto-apply skipped: invalid rates factoryId={}, productTypeId={}, previous={}, suggested={}",
-                    suggestion.getFactoryId(), suggestion.getProductTypeId(),
-                    suggestion.getPreviousYieldRate(), suggestion.getSuggestedYieldRate());
+    private void autoApplyIfGuarded(BomYieldSuggestion suggestion, BomRecipe recipe) {
+        if (suggestion.getStatus() != BomYieldSuggestion.Status.PENDING
+                || suggestion.getSampleCount() == null
+                || suggestion.getSampleCount() < MIN_SAMPLES
+                || !isPositive(suggestion.getSuggestedYieldRate())) {
             return;
         }
         if (isPositive(suggestion.getPreviousYieldRate())) {
@@ -146,17 +109,8 @@ public class BomYieldSuggestionServiceImpl implements BomYieldSuggestionService 
                     .abs()
                     .divide(suggestion.getPreviousYieldRate(), 6, RoundingMode.HALF_UP);
             if (relativeChange.compareTo(AUTO_APPLY_MAX_RELATIVE_CHANGE) > 0) {
-                log.info("[BomYieldSuggestion] auto-apply left pending: relative change over guard factoryId={}, productTypeId={}, previous={}, suggested={}, relative={}",
-                        suggestion.getFactoryId(), suggestion.getProductTypeId(),
-                        suggestion.getPreviousYieldRate(), suggestion.getSuggestedYieldRate(), relativeChange);
                 return;
             }
-        }
-        BomRecipe recipe = currentRecipe.orElse(null);
-        if (recipe == null) {
-            log.warn("[BomYieldSuggestion] auto-apply left pending: no current recipe factoryId={}, productTypeId={}",
-                    suggestion.getFactoryId(), suggestion.getProductTypeId());
-            return;
         }
         BigDecimal appliedRate = suggestion.getSuggestedYieldRate().setScale(2, RoundingMode.HALF_UP);
         recipe.setOverallYieldRate(appliedRate);
@@ -165,13 +119,6 @@ public class BomYieldSuggestionServiceImpl implements BomYieldSuggestionService 
         suggestion.setAppliedAt(LocalDateTime.now());
         suggestion.setAppliedBy(SYSTEM_APPLIER);
         bomYieldSuggestionRepository.save(suggestion);
-        log.info("[BomYieldSuggestion] auto-applied product yield: factoryId={}, productTypeId={}, recipeId={}, previous={}, applied={}",
-                suggestion.getFactoryId(), suggestion.getProductTypeId(), recipe.getId(),
-                suggestion.getPreviousYieldRate(), appliedRate);
-    }
-
-    private boolean isPositive(BigDecimal value) {
-        return value != null && value.compareTo(BigDecimal.ZERO) > 0;
     }
 
     private List<BigDecimal> collectYieldPercentSamples(String factoryId, String productTypeId) {
@@ -180,15 +127,15 @@ public class BomYieldSuggestionServiceImpl implements BomYieldSuggestionService 
         List<BigDecimal> samples = new ArrayList<>();
         for (ProductionBatch batch : batches) {
             try {
-                BatchYieldDTO dto = yieldReportService.getYield(factoryId, batch.getId());
-                if (dto != null && dto.getCumulativeYieldRate() != null) {
-                    samples.add(dto.getCumulativeYieldRate()
+                BatchYieldDTO yield = yieldReportService.getYield(factoryId, batch.getId());
+                if (yield != null && yield.getCumulativeYieldRate() != null) {
+                    samples.add(yield.getCumulativeYieldRate()
                             .multiply(BigDecimal.valueOf(100))
                             .setScale(2, RoundingMode.HALF_UP));
                 }
-            } catch (Exception e) {
-                log.warn("[BomYieldSuggestion] yield sample unavailable: factoryId={}, batchId={}, error={}",
-                        factoryId, batch.getId(), e.getMessage());
+            } catch (Exception exception) {
+                log.warn("[BomYieldSuggestion] batch yield unavailable: factoryId={}, batchId={}, error={}",
+                        factoryId, batch.getId(), exception.getMessage());
             }
         }
         return samples;
@@ -197,16 +144,16 @@ public class BomYieldSuggestionServiceImpl implements BomYieldSuggestionService 
     BigDecimal computeMedian(List<BigDecimal> samples) {
         List<BigDecimal> sorted = new ArrayList<>(samples);
         Collections.sort(sorted);
-        int n = sorted.size();
-        BigDecimal median;
-        if (n % 2 == 1) {
-            median = sorted.get(n / 2);
-        } else {
-            median = sorted.get(n / 2 - 1)
-                    .add(sorted.get(n / 2))
-                    .divide(BigDecimal.valueOf(2), 10, RoundingMode.HALF_UP);
-        }
+        int size = sorted.size();
+        BigDecimal median = size % 2 == 1
+                ? sorted.get(size / 2)
+                : sorted.get(size / 2 - 1).add(sorted.get(size / 2))
+                        .divide(BigDecimal.valueOf(2), 10, RoundingMode.HALF_UP);
         return median.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private boolean isPositive(BigDecimal value) {
+        return value != null && value.compareTo(BigDecimal.ZERO) > 0;
     }
 
     private boolean isBlank(String value) {

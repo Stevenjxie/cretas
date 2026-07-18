@@ -3,15 +3,15 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put, del } from '@/api/request';
-import { bomYieldEstimateApi, bomRecipeApi, bomSeasoningApi, batchImportBomItems } from '@/api/bom';
+import { bomYieldEstimateApi, bomRecipeApi, bomSeasoningApi } from '@/api/bom';
 import type {
   YieldEstimateResponse,
   BomRecipeSummary,
   BomRecipeStatus,
   BomRecipeItemPayload,
+  BomRecipeItemView,
   CreateBomRecipeRequest,
   UpdateBomRecipeRequest,
-  BomImportRow,
   BomCopyCandidate,
   CopyBomToProductRequest,
 } from '@/api/bom';
@@ -855,10 +855,10 @@ onMounted(async () => {
 watch(selectedProductTypeId, async (newVal) => {
   if (newVal) {
     await loadSelectedProductMeta(newVal);
+    await loadBomRecipes();
     await loadBomItems();
     await loadLaborCosts();
     await loadCostSummary();
-    await loadBomRecipes();
     await loadHistoricalYield();
     if (bomRecipes.value.length === 0 && canWrite.value) {
       await openBomCopySuggestions(false);
@@ -874,6 +874,12 @@ watch(selectedProductTypeId, async (newVal) => {
     bomCopyDialogVisible.value = false;
     historicalYield.value = null;
     historicalYieldLoadFailed.value = false;
+  }
+});
+
+watch(selectedRecipeId, async (nextRecipeId, previousRecipeId) => {
+  if (nextRecipeId !== previousRecipeId) {
+    await loadBomItems();
   }
 });
 
@@ -1046,12 +1052,15 @@ function onMaterialLink(materialTypeId: string) {
 
 // ========== BOM Items ==========
 async function loadBomItems() {
-  if (!factoryId.value || !selectedProductTypeId.value) return;
+  if (!factoryId.value || !selectedRecipeId.value) {
+    bomItems.value = [];
+    return;
+  }
   loading.value = true;
   try {
-    const response = await get(`/${factoryId.value}/bom/items/${selectedProductTypeId.value}`);
+    const response = await bomRecipeApi.getDetail(factoryId.value, selectedRecipeId.value);
     if (response.success && response.data) {
-      bomItems.value = response.data;
+      bomItems.value = (response.data.items || []) as unknown as TableRow[];
     }
   } catch (error: unknown) {
     const err = error as { actionHint?: string };
@@ -1062,6 +1071,10 @@ async function loadBomItems() {
 }
 
 function handleAddBomItem() {
+  if (!selectedRecipe.value || selectedRecipe.value.status !== 'DRAFT') {
+    ElMessage.warning('请先创建或克隆一个草稿版本，再修改配方物料');
+    return;
+  }
   isBomEdit.value = false;
   // Phase A side-effect: yieldRate 默认 null (出成率待评估), 不是 100
   bomForm.value = {
@@ -1090,6 +1103,10 @@ function handleAddBomItem() {
 }
 
 function handleEditBomItem(row: TableRow) {
+  if (!selectedRecipe.value || selectedRecipe.value.status !== 'DRAFT') {
+    ElMessage.warning('生效版本不可直接修改，请先克隆为草稿');
+    return;
+  }
   isBomEdit.value = true;
   bomForm.value = {
     id: row.id,
@@ -1117,18 +1134,26 @@ function handleEditBomItem(row: TableRow) {
   bomDialogVisible.value = true;
 }
 
-function buildLegacyBomItemPayload() {
+function buildRecipeItemPayload(): BomRecipeItemPayload {
   const quantityUnit = canonicalUnitCode(bomForm.value.quantityUnit || bomForm.value.unit);
-  const payload = {
-    ...bomForm.value,
+  return {
+    materialTypeId: String(bomForm.value.materialTypeId || ''),
+    standardQuantity: bomForm.value.standardQuantity == null
+      ? null
+      : Number(bomForm.value.standardQuantity),
+    yieldRate: bomForm.value.yieldRate == null ? null : Number(bomForm.value.yieldRate),
     unit: quantityUnit,
-    quantityUnit,
-    priceUnit: canonicalUnitCode(bomForm.value.priceUnit),
+    unitPrice: bomForm.value.unitPrice == null ? null : Number(bomForm.value.unitPrice),
+    taxRate: bomForm.value.taxRate == null ? null : Number(bomForm.value.taxRate),
+    materialCategory: String(bomForm.value.materialCategory || 'RAW'),
+    sortOrder: Number(bomForm.value.sortOrder || 0),
+    isOptional: Boolean(bomForm.value.isOptional),
+    substituteGroup: String(bomForm.value.substituteGroup || '') || null,
+    remark: String(bomForm.value.notes || '') || null,
+    perPortion: Boolean(bomForm.value.perPortion),
+    semiFinishedRefCode: String(bomForm.value.semiFinishedRefCode || '') || null,
+    subProductTypeId: String(bomForm.value.subProductTypeId || '') || null,
   };
-  delete payload.id;
-  delete payload.isOptional;
-  delete payload.substituteGroup;
-  return payload;
 }
 
 async function submitBomForm() {
@@ -1155,14 +1180,15 @@ async function submitBomForm() {
   bomDialogLoading.value = true;
   try {
     let response;
-    const bomItemPayload = buildLegacyBomItemPayload();
+    if (!selectedRecipeId.value || selectedRecipe.value?.status !== 'DRAFT') {
+      ElMessage.warning('当前不是可编辑草稿，请先创建或克隆草稿版本');
+      return;
+    }
+    const bomItemPayload = buildRecipeItemPayload();
     if (isBomEdit.value && bomForm.value.id) {
-      response = await put(`/${factoryId.value}/bom/items/${bomForm.value.id}`, bomItemPayload);
+      response = await bomRecipeApi.updateItem(factoryId.value, Number(bomForm.value.id), bomItemPayload);
     } else {
-      // BUG-4 fix (depth-e2e qa-v2.4, PR #370): strip phantom `id: null` from POST body.
-      // handleAddBomItem 设 `id: null` 给 form 一致性, 但 POST 不应携带 id (Jackson 当前默默 drop,
-      // 但在未来 FAIL_ON_UNKNOWN_PROPERTIES strict mode 会爆 400).
-      response = await post(`/${factoryId.value}/bom/items`, bomItemPayload);
+      response = await bomRecipeApi.addItem(factoryId.value, selectedRecipeId.value, bomItemPayload);
     }
     if (response.success) {
       ElMessage.success(isBomEdit.value ? 'Updated successfully' : 'Added successfully');
@@ -1191,9 +1217,13 @@ async function submitBomForm() {
 }
 
 async function handleDeleteBomItem(row: TableRow) {
+  if (!selectedRecipe.value || selectedRecipe.value.status !== 'DRAFT') {
+    ElMessage.warning('生效版本不可直接修改，请先克隆为草稿');
+    return;
+  }
   try {
     await ElMessageBox.confirm('Are you sure you want to delete this item?', 'Confirm', { type: 'warning' });
-    const response = await del(`/${factoryId.value}/bom/items/${row.id}`);
+    const response = await bomRecipeApi.removeItem(factoryId.value, Number(row.id));
     if (response.success) {
       ElMessage.success('Deleted successfully');
       await loadBomItems();
@@ -1732,52 +1762,69 @@ function handleFileSelected(event: Event) {
 }
 
 async function submitImport() {
-  if (!factoryId.value || !selectedProductTypeId.value) return;
+  if (!factoryId.value || !selectedProductTypeId.value || !selectedRecipeId.value) return;
+  if (selectedRecipe.value?.status !== 'DRAFT') {
+    ElMessage.warning('Excel 只能导入到草稿版本，请先创建或克隆草稿');
+    return;
+  }
   importSubmitting.value = true;
   try {
-    const items: BomImportRow[] = importPreviewRows.value.map((r) => ({
-      materialName: r.materialName,
-      materialCategory: r.materialCategory,
-      standardQuantity: r.standardQuantity,
-      yieldRate: r.yieldRate,
-      unit: r.unit,
-    }));
-    const res = await batchImportBomItems(factoryId.value, selectedProductTypeId.value, items);
-    if (res.success && res.data) {
-      const { inserted, failed, rows } = res.data;
-      if (failed > 0) {
-        // Reset result flags then apply per-row errors
-        importPreviewRows.value.forEach((r) => {
-          r._ok = undefined;
-          r._error = undefined;
-        });
-        rows.forEach((result, idx) => {
-          const target = importPreviewRows.value[idx];
-          if (target) {
-            target._ok = result.ok;
-            target._error = result.error;
-          }
-        });
-        ElMessage({
-          message: `${failed} 行校验失败，整批未导入，请修正后重试`,
-          type: 'warning',
-          duration: 0,
-          showClose: true,
-        });
-      } else {
-        ElMessage.success(`成功导入 ${inserted} 行`);
-        importDialogVisible.value = false;
-        await loadBomItems();
-        await loadCostSummary();
+    const existingIds = new Set(bomItems.value.map((item) => String(item.materialTypeId || '')));
+    const resolvedIds = new Set<string>();
+    const imported: BomRecipeItemPayload[] = [];
+    importPreviewRows.value.forEach((row) => {
+      row._ok = undefined;
+      row._error = undefined;
+      const normalizedName = row.materialName.trim().toLocaleLowerCase();
+      const matches = materialTypes.value.filter((material: Record<string, unknown>) =>
+        String(material.name || '').trim().toLocaleLowerCase() === normalizedName);
+      if (matches.length !== 1) {
+        row._ok = false;
+        row._error = matches.length === 0 ? '物料档案中未找到同名物料' : '物料名称不唯一，请先整理物料档案';
+        return;
       }
-    } else {
+      const materialTypeId = String(matches[0].id || '');
+      if (!materialTypeId || existingIds.has(materialTypeId) || resolvedIds.has(materialTypeId)) {
+        row._ok = false;
+        row._error = '同一配方内不能重复选择同一物料';
+        return;
+      }
+      resolvedIds.add(materialTypeId);
+      imported.push({
+        materialTypeId,
+        materialCategory: row.materialCategory,
+        standardQuantity: row.standardQuantity,
+        yieldRate: row.yieldRate,
+        unit: canonicalUnitCode(row.unit),
+        sortOrder: bomItems.value.length + imported.length,
+        isOptional: false,
+        perPortion: false,
+      });
+      row._ok = true;
+    });
+
+    const failed = importPreviewRows.value.filter((row) => row._ok === false).length;
+    if (failed > 0) {
       ElMessage({
-        message: res.message || '导入失败',
-        type: 'error',
+        message: `${failed} 行校验失败，整批未导入，请修正后重试`,
+        type: 'warning',
         duration: 0,
         showClose: true,
       });
+      return;
     }
+
+    const existing = (bomItems.value as unknown as BomRecipeItemView[]).map(toRecipeItemPayload);
+    const response = await bomRecipeApi.update(factoryId.value, selectedRecipeId.value, {
+      items: [...existing, ...imported],
+    });
+    if (!response.success) {
+      throw new Error(response.message || '导入失败');
+    }
+    ElMessage.success(`成功导入 ${imported.length} 行`);
+    importDialogVisible.value = false;
+    await loadBomItems();
+    await loadCostSummary();
   } catch (error: unknown) {
     const err = error as { actionHint?: string };
     if (!err?.actionHint) {
@@ -1789,6 +1836,25 @@ async function submitImport() {
   } finally {
     importSubmitting.value = false;
   }
+}
+
+function toRecipeItemPayload(item: BomRecipeItemView): BomRecipeItemPayload {
+  return {
+    materialTypeId: item.materialTypeId,
+    standardQuantity: item.standardQuantity ?? null,
+    yieldRate: item.yieldRate ?? null,
+    unit: canonicalUnitCode(item.unit),
+    unitPrice: item.unitPrice ?? null,
+    taxRate: item.taxRate ?? null,
+    materialCategory: item.materialCategory ?? 'RAW',
+    sortOrder: item.sortOrder ?? 0,
+    isOptional: item.isOptional ?? false,
+    substituteGroup: item.substituteGroup ?? null,
+    remark: item.remark ?? null,
+    perPortion: item.perPortion ?? false,
+    semiFinishedRefCode: item.semiFinishedRefCode ?? null,
+    subProductTypeId: item.subProductTypeId ?? null,
+  };
 }
 
 // =========================================================================
@@ -1924,7 +1990,7 @@ async function handleAdjustConfirm() {
 <template>
   <CanvasAwareWrapper module-code="bom">
   <div class="bom-page">
-    <!-- D4 Path B (2026-05-10 customer meeting, PR #309 A2=B): BomExpansionService 现已优先读 bom_items 表. -->
+    <!-- BomExpansionService 与本页统一读取当前 ACTIVE/current Recipe。 -->
     <!-- BOM 编辑保存后立即对生产计划生效, 无需再手动同步到转换率配置. -->
     <!-- RPF (MaterialProductConversion) 仅作 fallback (老工厂数据无 BOM 配置时沿用). -->
     <!-- 详见 docs/architecture/2026-05-10-rpf-vs-bomitem-divergence.md §7 -->
@@ -2747,7 +2813,7 @@ async function handleAdjustConfirm() {
     </el-dialog>
 
     <!-- BOM Change Log Drawer (P1-9) -->
-    <BomChangeLog v-model:visible="changeLogVisible" :factory-id="factoryId" :product-type-id="selectedProductTypeId" />
+    <BomChangeLog v-model:visible="changeLogVisible" :factory-id="factoryId" :recipe-id="selectedRecipeId" />
 
     <!-- 对话微调 Dialog -->
     <el-dialog

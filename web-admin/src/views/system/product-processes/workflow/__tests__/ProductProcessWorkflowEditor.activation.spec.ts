@@ -64,8 +64,8 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
     apiMocks.get.mockImplementation((url: string) => Promise.resolve({
       success: true,
-      data: url.includes('/bom/items/')
-        ? [{ id: 1, materialTypeId: 'RAW', materialName: 'Raw', unit: 'kg' }]
+      data: url.includes('/bom/recipes/by-product/')
+        ? { id: 'R-1', items: [{ id: 1, materialTypeId: 'RAW', materialName: 'Raw', unit: 'kg' }] }
         : url.endsWith('/product-types/PT-A')
           ? productOption('PT-A')
         : url.includes('/product-types')
@@ -140,8 +140,8 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
   it('forks a published workflow into a review draft when the backend marks SKU units stale', async () => {
     apiMocks.get.mockImplementation((url: string) => Promise.resolve({
       success: true,
-      data: url.includes('/bom/items/')
-        ? [{ id: 1, materialTypeId: 'RAW', materialName: 'Raw', unit: 'kg' }]
+      data: url.includes('/bom/recipes/by-product/')
+        ? { id: 'R-1', items: [{ id: 1, materialTypeId: 'RAW', materialName: 'Raw', unit: 'kg' }] }
         : url.endsWith('/product-types/PT-A')
           ? productOption('PT-A', '盒')
         : url.includes('/product-types')

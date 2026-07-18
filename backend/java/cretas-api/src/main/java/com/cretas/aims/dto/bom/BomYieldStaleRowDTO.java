@@ -19,8 +19,8 @@ import java.math.BigDecimal;
 @AllArgsConstructor
 public class BomYieldStaleRowDTO {
 
-    /** BOM 行 ID */
-    private Long bomItemId;
+    /** BOM 配方 ID */
+    private String recipeId;
 
     /** 数据库实际当前值 (null 表示待评估) */
     private BigDecimal dbCurrent;

@@ -20,7 +20,6 @@ import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.entity.inventory.*;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
-import com.cretas.aims.entity.bom.BomItem;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.config.ApprovalWorkflow;
 import com.cretas.aims.entity.config.ApprovalWorkflowNode;
@@ -33,7 +32,7 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.SupplierRepository;
-import com.cretas.aims.repository.bom.BomItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderApprovalRuleRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
@@ -93,7 +92,7 @@ public class PurchaseServiceImpl implements PurchaseService {
     private final SupplierRepository supplierRepository;
     private final RawMaterialTypeRepository materialTypeRepository;
     private final MaterialBatchRepository materialBatchRepository;
-    private final BomItemRepository bomItemRepository;
+    private final BomRecipeItemRepository bomRecipeItemRepository;
     private final com.cretas.aims.service.finance.ArApService arApService;
     private final ApplicationEventPublisher applicationEventPublisher;
     private final MaterialBatchService materialBatchService;
@@ -127,18 +126,6 @@ public class PurchaseServiceImpl implements PurchaseService {
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.production.SalesOrderPlanQuantityNormalizer salesOrderPlanQuantityNormalizer;
-
-    /**
-     * #748 口径统一 (2026-06-11): 采购建议优先读 bom_recipe_items (新表), 与财务成本拆分
-     * ({@code SalesServiceImpl.getOrderCostBreakdown} 经 {@code BomRecipeService.getCurrentRecipe})
-     * 同一 BOM 源, 消除"财务算的料 vs 采购建议的料对不上"的口径不一致.
-     * 仅当产品无 ACTIVE recipe 时回退到 legacy bom_items (向后兼容旧品).
-     */
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private com.cretas.aims.repository.bom.BomRecipeRepository bomRecipeRepository;
-
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private com.cretas.aims.repository.bom.BomRecipeItemRepository bomRecipeItemRepository;
 
     /** D-6: 责任绑定 — 查询 PO 创建人的用户名供异常单展示（required=false 兼容旧 context） */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -251,7 +238,7 @@ public class PurchaseServiceImpl implements PurchaseService {
                                SupplierRepository supplierRepository,
                                RawMaterialTypeRepository materialTypeRepository,
                                MaterialBatchRepository materialBatchRepository,
-                               BomItemRepository bomItemRepository,
+                               BomRecipeItemRepository bomRecipeItemRepository,
                                com.cretas.aims.service.finance.ArApService arApService,
                                ApplicationEventPublisher applicationEventPublisher,
                                MaterialBatchService materialBatchService) {
@@ -261,7 +248,7 @@ public class PurchaseServiceImpl implements PurchaseService {
         this.supplierRepository = supplierRepository;
         this.materialTypeRepository = materialTypeRepository;
         this.materialBatchRepository = materialBatchRepository;
-        this.bomItemRepository = bomItemRepository;
+        this.bomRecipeItemRepository = bomRecipeItemRepository;
         this.arApService = arApService;
         this.applicationEventPublisher = applicationEventPublisher;
         this.materialBatchService = materialBatchService;
@@ -1796,7 +1783,7 @@ public class PurchaseServiceImpl implements PurchaseService {
     /**
      * 共享 BOM 展开 + 跨 SO 聚合逻辑 (单 SO 与多 SO 共用).
      *
-     * <p>对一张 SO 的所有行项目展开 BOM (优先 bom_recipe_items, 回退 legacy bom_items),
+     * <p>对一张 SO 的所有行项目按当前 ACTIVE bom_recipe_items 展开 BOM，
      * 按 materialTypeId 累加进传入的 {@code accumulators} —— 多次调用 (多 SO) 会跨 SO 合并同物料。
      * <b>本方法不扣库存</b>: 库存只在调用方汇总后统一扣一次, 避免多 SO 各扣一次重复计算。
      *
@@ -1814,7 +1801,7 @@ public class PurchaseServiceImpl implements PurchaseService {
             // #748 口径统一: 优先读 bom_recipe_items (新表, 同财务成本拆分源).
             // 取产品当前 ACTIVE + is_current=TRUE 的 recipe — 与 BomRecipeService.getCurrentRecipe 完全一致.
             List<BomRecipeItem> recipeItems = loadCurrentRecipeItems(factoryId, soItem.getProductTypeId());
-            if (recipeItems != null && !recipeItems.isEmpty()) {
+            if (!recipeItems.isEmpty()) {
                 boolean expandedAny = false;
                 for (BomRecipeItem ri : recipeItems) {
                     if (ri.getMaterialTypeId() == null) continue;
@@ -1832,29 +1819,6 @@ public class PurchaseServiceImpl implements PurchaseService {
                     expandedAny = true;
                 }
                 if (expandedAny) hasBom = true;
-                // recipe 存在即以它为准 — 不再回退 legacy (避免双源重复计料).
-                continue;
-            }
-
-            // 向后兼容: 该产品无 ACTIVE recipe → 回退 legacy bom_items.
-            List<BomItem> bomItems = bomItemRepository
-                    .findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(
-                            factoryId, soItem.getProductTypeId());
-            if (bomItems.isEmpty()) continue;
-
-            hasBom = true;
-
-            for (BomItem bom : bomItems) {
-                if (bom.getMaterialTypeId() == null) continue;
-                // actualQuantity 已按出成率折算，是"每单位产品需要的原料量"
-                BigDecimal actualQtyPerUnit = bom.getActualQuantity();
-                if (actualQtyPerUnit == null || actualQtyPerUnit.compareTo(BigDecimal.ZERO) <= 0) continue;
-
-                BigDecimal required = actualQtyPerUnit.multiply(soQty).setScale(4, BigDecimal.ROUND_HALF_UP);
-                accumulateMaterial(factoryId, accumulators, bom.getMaterialTypeId(), required, salesOrderNumber,
-                        bom.getMaterialName() != null ? bom.getMaterialName() : "未知原料",
-                        bom.getMaterialCategory() != null ? bom.getMaterialCategory() : "RAW",
-                        soProductName, bom.getUnit(), bom.getUnitPrice(), bom.getPriceUnit());
             }
         }
 
@@ -2027,20 +1991,10 @@ public class PurchaseServiceImpl implements PurchaseService {
      * ({@code findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(ACTIVE)}),
      * 保证采购建议净需求 = 财务成本拆分用料口径一致.
      *
-     * <p>repo 未注入 (老 ApplicationContext) 或无 recipe → 返 null (调用方回退 legacy).
+     * <p>无当前生效配方时返回空列表，不回退任何旧 BOM 表。
      */
     private List<BomRecipeItem> loadCurrentRecipeItems(String factoryId, String productTypeId) {
-        if (bomRecipeRepository == null || bomRecipeItemRepository == null) {
-            return null;
-        }
-        java.util.Optional<com.cretas.aims.entity.bom.BomRecipe> recipeOpt =
-                bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
-                        factoryId, productTypeId, com.cretas.aims.entity.bom.BomRecipe.Status.ACTIVE);
-        if (recipeOpt.isEmpty()) {
-            return null;
-        }
-        // 显式按 recipeId 查 items (LAZY 集合在事务外可能 detach; 直查 repo 稳妥).
-        return bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(recipeOpt.get().getId());
+        return bomRecipeItemRepository.findCurrentByProduct(factoryId, productTypeId);
     }
 
     // ==================== 三价对比 ====================
@@ -2096,26 +2050,26 @@ public class PurchaseServiceImpl implements PurchaseService {
         String name = materialName != null ? materialName : (materialType != null ? materialType.getName() : materialTypeId);
 
         // 2. 查询BOM获取标准单价（如果该原料出现在多个产品的BOM中，取平均值）
-        List<BomItem> bomItems = bomItemRepository.findByFactoryIdAndMaterialTypeIdAndDeletedAtIsNull(factoryId, materialTypeId);
+        List<BomRecipeItem> bomItems = bomRecipeItemRepository.findCurrentByMaterial(factoryId, materialTypeId);
         BigDecimal bomStandardPrice = null;
         String bomProductNames = null;
 
         if (!bomItems.isEmpty()) {
             // 过滤掉没有单价的BOM项
-            List<BomItem> pricedItems = bomItems.stream()
+            List<BomRecipeItem> pricedItems = bomItems.stream()
                     .filter(b -> b.getUnitPrice() != null && b.getUnitPrice().compareTo(BigDecimal.ZERO) > 0)
                     .collect(Collectors.toList());
 
             if (!pricedItems.isEmpty()) {
                 BigDecimal sum = pricedItems.stream()
-                        .map(BomItem::getUnitPrice)
+                        .map(BomRecipeItem::getUnitPrice)
                         .reduce(BigDecimal.ZERO, BigDecimal::add);
                 bomStandardPrice = sum.divide(new BigDecimal(pricedItems.size()), 4, BigDecimal.ROUND_HALF_UP);
             }
 
             // 收集关联的产品名称
             bomProductNames = bomItems.stream()
-                    .map(BomItem::getProductName)
+                    .map(item -> item.getRecipe().getProductName())
                     .filter(Objects::nonNull)
                     .distinct()
                     .collect(Collectors.joining(", "));

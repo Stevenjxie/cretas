@@ -104,7 +104,7 @@ class ProductionPlanBatchCompletionChainTest {
                 materialBatchRepository, materialConsumptionRepository, planBatchUsageRepository,
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
-                salesOrderRepository, salesOrderItemRepository, bomService);
+                salesOrderRepository, salesOrderItemRepository);
 
         // 字段注入的依赖 (@Autowired(required = false)) — 单测用反射注入 mock
         ReflectionTestUtils.setField(service, "workProcessTaskService", workProcessTaskService);

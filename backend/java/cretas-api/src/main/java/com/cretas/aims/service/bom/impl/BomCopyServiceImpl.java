@@ -134,7 +134,7 @@ public class BomCopyServiceImpl implements BomCopyService {
             throw businessError(409, "来源产品与目标产品已不再属于同源共享工序，不能复制", "BOM_COPY_WORKFLOW_MISMATCH");
         }
 
-        List<Long> itemIds = validateIdList(request.getBomItemIds(), "bomItemIds");
+        List<Long> itemIds = validateIdList(request.getRecipeItemIds(), "recipeItemIds");
         List<Long> seasoningIds = validateIdList(request.getSeasoningItemIds(), "seasoningItemIds");
         List<Long> paramIds = validateIdList(request.getProcessSeasoningParamIds(), "processSeasoningParamIds");
         if (itemIds.isEmpty() && seasoningIds.isEmpty() && paramIds.isEmpty()) {
@@ -144,7 +144,7 @@ public class BomCopyServiceImpl implements BomCopyService {
         List<BomRecipeItem> sourceItems = itemRepo.findByRecipeIdOrderBySortOrderAsc(source.getId());
         List<BomSeasoningItem> sourceSeasoning = seasoningRepo.findByRecipeIdOrderBySeqAsc(source.getId());
         List<BomProcessSeasoning> sourceParams = processSeasoningRepo.findByRecipeIdAndDeletedAtIsNull(source.getId());
-        List<BomRecipeItem> selectedItems = selectOwned(sourceItems, itemIds, BomRecipeItem::getId, "bomItemIds");
+        List<BomRecipeItem> selectedItems = selectOwned(sourceItems, itemIds, BomRecipeItem::getId, "recipeItemIds");
         List<BomSeasoningItem> selectedSeasoning = selectOwned(
                 sourceSeasoning, seasoningIds, BomSeasoningItem::getId, "seasoningItemIds");
         List<BomProcessSeasoning> selectedParams = selectOwned(

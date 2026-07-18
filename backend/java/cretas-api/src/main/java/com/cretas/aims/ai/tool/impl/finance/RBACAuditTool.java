@@ -55,7 +55,7 @@ public class RBACAuditTool extends AbstractBusinessTool {
                    "expectedFor", "warehouse_mgr", "expectedBehavior", "mask unitPrice/totalAmount"),
             Map.of("name", "三价对比", "endpoint", "GET /purchase/orders/{id}/price-comparison",
                    "expectedFor", "warehouse_mgr", "expectedBehavior", "整个 endpoint 403 (canViewPrice false)"),
-            Map.of("name", "BOM 详情", "endpoint", "GET /bom/items?productTypeId=X",
+            Map.of("name", "BOM 详情", "endpoint", "GET /bom/recipes/by-product/X/current",
                    "expectedFor", "warehouse_mgr", "expectedBehavior", "mask unitPrice/materialCost"),
             Map.of("name", "财务凭证", "endpoint", "GET /finance/payments/{id}",
                    "expectedFor", "warehouse_mgr", "expectedBehavior", "整个 endpoint 403 (finance:read)")

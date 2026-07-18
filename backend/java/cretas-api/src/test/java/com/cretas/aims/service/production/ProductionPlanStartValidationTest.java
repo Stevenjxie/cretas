@@ -1,7 +1,8 @@
 package com.cretas.aims.service.production;
 
 import com.cretas.aims.entity.ProductionPlan;
-import com.cretas.aims.entity.bom.BomItem;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomYieldSuggestion;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.exception.BusinessException;
@@ -16,12 +17,13 @@ import com.cretas.aims.repository.ProductionPlanBatchUsageRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.bom.BomYieldSuggestionRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
 import com.cretas.aims.mapper.ProductionPlanMapper;
-import com.cretas.aims.service.BomService;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.service.SchedulingService;
 import com.cretas.aims.service.impl.ProductionPlanServiceImpl;
 import com.cretas.aims.utils.ExcelUtil;
@@ -92,7 +94,8 @@ class ProductionPlanStartValidationTest {
     @Mock private ExcelUtil excelUtil;
     @Mock private SalesOrderRepository salesOrderRepository;
     @Mock private SalesOrderItemRepository salesOrderItemRepository;
-    @Mock private BomService bomService;
+    @Mock private BomRecipeItemRepository bomRecipeItemRepository;
+    @Mock private BomRecipeRepository bomRecipeRepository;
     @Mock private BomYieldSuggestionRepository bomYieldSuggestionRepository;
 
     private ProductionPlanServiceImpl service;
@@ -104,7 +107,9 @@ class ProductionPlanStartValidationTest {
                 materialBatchRepository, materialConsumptionRepository, planBatchUsageRepository,
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
-                salesOrderRepository, salesOrderItemRepository, bomService);
+                salesOrderRepository, salesOrderItemRepository);
+        setField(service, "bomRecipeItemRepository", bomRecipeItemRepository);
+        setField(service, "bomRecipeRepository", bomRecipeRepository);
         setField(service, "bomYieldSuggestionRepository", bomYieldSuggestionRepository);
 
         // toDTOWithConversionInfo 的依赖默认 stub — 成功 path 才会用上
@@ -126,16 +131,16 @@ class ProductionPlanStartValidationTest {
     }
 
     /** 构造一个 BOM item (yieldRate=100% → actualQuantity == standardQuantity). */
-    private BomItem bomItem(String materialTypeId, String materialName,
+    private BomRecipeItem bomItem(String materialTypeId, String materialName,
                             BigDecimal standardQuantity, String unit) {
         return bomItem(materialTypeId, materialName, standardQuantity, new BigDecimal("100.00"), unit);
     }
 
-    private BomItem bomItem(String materialTypeId, String materialName,
+    private BomRecipeItem bomItem(String materialTypeId, String materialName,
                             BigDecimal standardQuantity, BigDecimal yieldRate, String unit) {
-        return BomItem.builder()
+        return BomRecipeItem.builder()
                 .factoryId(FACTORY_ID)
-                .productTypeId(PRODUCT_TYPE_ID)
+                .recipeId("RECIPE-" + PRODUCT_TYPE_ID)
                 .materialTypeId(materialTypeId)
                 .materialName(materialName)
                 .standardQuantity(standardQuantity)
@@ -162,7 +167,7 @@ class ProductionPlanStartValidationTest {
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
 
         // 1 个原料: 单位用量 2, 计划数量 100 → 需求 200; 可用 500 → 充足
-        when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
+        when(bomRecipeItemRepository.findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
                 .thenReturn(List.of(bomItem("MT-A", "面粉", new BigDecimal("2"), "kg")));
         when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY_ID, "MT-A"))
                 .thenReturn(new BigDecimal("500"));
@@ -181,7 +186,7 @@ class ProductionPlanStartValidationTest {
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
 
         // 需求 200, 可用 200 → 边界恰好 (不阻断)
-        when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
+        when(bomRecipeItemRepository.findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
                 .thenReturn(List.of(bomItem("MT-A", "面粉", new BigDecimal("2"), "kg")));
         when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY_ID, "MT-A"))
                 .thenReturn(new BigDecimal("200"));
@@ -198,9 +203,9 @@ class ProductionPlanStartValidationTest {
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
 
         // 需求 200, 可用 50 → 缺口 150
-        when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
+        when(bomRecipeItemRepository.findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
                 .thenReturn(List.of(bomItem("MT-A", "面粉", new BigDecimal("2"), "kg")));
-        when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY_ID, "MT-A"))
+        when(materialBatchRepository.sumAvailableRawStockQuantityByMaterialType(FACTORY_ID, "MT-A"))
                 .thenReturn(new BigDecimal("50"));
 
         assertDoesNotThrow(() -> service.startProduction(FACTORY_ID, PLAN_ID));
@@ -215,14 +220,14 @@ class ProductionPlanStartValidationTest {
         when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
+        when(bomRecipeItemRepository.findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
                 .thenReturn(Arrays.asList(
                         bomItem("MT-A", "面粉", new BigDecimal("2"), "kg"),    // 需求 200
                         bomItem("MT-B", "盐", new BigDecimal("0.5"), "kg"),   // 需求 50
                         bomItem("MT-C", "糖", new BigDecimal("1"), "kg")      // 需求 100
                 ));
         // MT-A 充足, MT-B/MT-C 缺
-        when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY_ID, "MT-A"))
+        when(materialBatchRepository.sumAvailableRawStockQuantityByMaterialType(FACTORY_ID, "MT-A"))
                 .thenReturn(new BigDecimal("300"));
         when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY_ID, "MT-B"))
                 .thenReturn(new BigDecimal("10"));   // 缺口 40
@@ -240,7 +245,7 @@ class ProductionPlanStartValidationTest {
         when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
+        when(bomRecipeItemRepository.findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
                 .thenReturn(List.of(bomItem("MT-A", "面粉", new BigDecimal("2"), "kg")));
         when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY_ID, "MT-A"))
                 .thenReturn(null);  // 仓库无任何批次
@@ -255,7 +260,7 @@ class ProductionPlanStartValidationTest {
         ProductionPlan plan = pendingPlan(new BigDecimal("100"));
         when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
+        when(bomRecipeItemRepository.findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
                 .thenReturn(Collections.emptyList());
 
         assertDoesNotThrow(() -> service.startProduction(FACTORY_ID, PLAN_ID));
@@ -295,10 +300,10 @@ class ProductionPlanStartValidationTest {
 
         // 出成率 50% → actualQuantity = standardQuantity / 0.5 = 4
         // 计划数量 100 → 需求 400
-        BomItem item = bomItem("MT-A", "面粉", new BigDecimal("2"), "kg");
+        BomRecipeItem item = bomItem("MT-A", "面粉", new BigDecimal("2"), "kg");
         item.setYieldRate(new BigDecimal("50.00"));
 
-        when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
+        when(bomRecipeItemRepository.findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
                 .thenReturn(List.of(item));
         when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY_ID, "MT-A"))
                 .thenReturn(new BigDecimal("300"));  // < 400 → 缺口 100
@@ -313,9 +318,9 @@ class ProductionPlanStartValidationTest {
         // getMaterialAdvisory 是只读建议查询, 仍用 findById (不加悲观锁)。
         when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
 
-        when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
+        when(bomRecipeItemRepository.findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
                 .thenReturn(List.of(bomItem("MT-A", "flour", new BigDecimal("2"), "kg")));
-        when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY_ID, "MT-A"))
+        when(materialBatchRepository.sumAvailableRawStockQuantityByMaterialType(FACTORY_ID, "MT-A"))
                 .thenReturn(new BigDecimal("50"));
 
         ProductionPlanMaterialAdvisoryDTO advisory = service.getMaterialAdvisory(FACTORY_ID, PLAN_ID);
@@ -336,15 +341,15 @@ class ProductionPlanStartValidationTest {
     void materialAdvisory_appliedSuggestion_scalesMainMaterialAtRuntime() {
         ProductionPlan plan = pendingPlan(new BigDecimal("2"));
         when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
-        BomItem main = bomItem("MT-A", "main pork", new BigDecimal("100"), new BigDecimal("80.00"), "kg");
-        when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID)).thenReturn(List.of(main));
+        BomRecipeItem main = bomItem("MT-A", "main pork", new BigDecimal("100"), new BigDecimal("80.00"), "kg");
+        when(bomRecipeItemRepository.findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID)).thenReturn(List.of(main));
         BomYieldSuggestion applied = new BomYieldSuggestion();
         applied.setSuggestedYieldRate(new BigDecimal("50.00"));
         applied.setStatus(BomYieldSuggestion.Status.APPLIED);
         when(bomYieldSuggestionRepository.findFirstByFactoryIdAndProductTypeIdAndStatusAndDeletedAtIsNullOrderByAppliedAtDescGeneratedAtDesc(
                 FACTORY_ID, PRODUCT_TYPE_ID, BomYieldSuggestion.Status.APPLIED))
                 .thenReturn(Optional.of(applied));
-        when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY_ID, "MT-A"))
+        when(materialBatchRepository.sumAvailableRawStockQuantityByMaterialType(FACTORY_ID, "MT-A"))
                 .thenReturn(new BigDecimal("300"));
 
         ProductionPlanMaterialAdvisoryDTO advisory = service.getMaterialAdvisory(FACTORY_ID, PLAN_ID);
@@ -357,16 +362,25 @@ class ProductionPlanStartValidationTest {
     }
 
     @Test
-    @DisplayName("yield self-learning: material advisory falls back to item yieldRate when no APPLIED suggestion exists")
-    void materialAdvisory_noAppliedSuggestion_fallsBackToItemYieldRate() {
+    @DisplayName("yield self-learning: material advisory reads current Recipe overall yield when no suggestion exists")
+    void materialAdvisory_noAppliedSuggestion_usesRecipeOverallYield() {
         ProductionPlan plan = pendingPlan(new BigDecimal("2"));
         when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
-        BomItem main = bomItem("MT-A", "main pork", new BigDecimal("100"), new BigDecimal("80.00"), "kg");
-        when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID)).thenReturn(List.of(main));
+        BomRecipeItem main = bomItem("MT-A", "main pork", new BigDecimal("100"), new BigDecimal("80.00"), "kg");
+        when(bomRecipeItemRepository.findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID)).thenReturn(List.of(main));
         when(bomYieldSuggestionRepository.findFirstByFactoryIdAndProductTypeIdAndStatusAndDeletedAtIsNullOrderByAppliedAtDescGeneratedAtDesc(
                 FACTORY_ID, PRODUCT_TYPE_ID, BomYieldSuggestion.Status.APPLIED))
                 .thenReturn(Optional.empty());
-        when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY_ID, "MT-A"))
+        BomRecipe recipe = new BomRecipe();
+        recipe.setId("RECIPE-" + PRODUCT_TYPE_ID);
+        recipe.setFactoryId(FACTORY_ID);
+        recipe.setProductTypeId(PRODUCT_TYPE_ID);
+        recipe.setStatus(BomRecipe.Status.ACTIVE);
+        recipe.setIsCurrent(true);
+        recipe.setOverallYieldRate(new BigDecimal("80.00"));
+        when(bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                FACTORY_ID, PRODUCT_TYPE_ID, BomRecipe.Status.ACTIVE)).thenReturn(Optional.of(recipe));
+        when(materialBatchRepository.sumAvailableRawStockQuantityByMaterialType(FACTORY_ID, "MT-A"))
                 .thenReturn(new BigDecimal("200"));
 
         ProductionPlanMaterialAdvisoryDTO advisory = service.getMaterialAdvisory(FACTORY_ID, PLAN_ID);

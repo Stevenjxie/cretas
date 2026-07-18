@@ -569,16 +569,16 @@ interface SkuOption {
   detailLoaded?: boolean;
 }
 
-/**
- * #3: 后端 BomItem 实体的精简形状 (只取本编辑器需要的字段)。
- * 对应 GET /{factoryId}/bom/items/{productTypeId}
- * (com.cretas.aims.controller.BomController#getBomItems, 已确认存在)。
- */
-interface BomItemOption {
+/** Current ACTIVE recipe item shape used by the workflow material picker. */
+interface BomRecipeItemOption {
   materialTypeId: string;
   materialName?: string;
   unit?: string;
   materialCategory?: string;
+}
+
+interface BomRecipeDetailOption {
+  items?: BomRecipeItemOption[];
 }
 
 interface WorkflowIdentity {
@@ -645,7 +645,7 @@ const rawMaterialSegments = ref<MaterialSegmentNode[]>([]);
 const unitCatalog = ref<UnitCatalogItem[]>([]);
 // #3: 该产品 BOM 原辅料清单 (per-product, 随 productTypeId 变化而重新加载,
 // 与 loadCatalogs 的"全厂字典"缓存粒度不同, 单独一个 ref + 单独一个 loader)。
-const productBomItems = ref<BomItemOption[]>([]);
+const productBomItems = ref<BomRecipeItemOption[]>([]);
 const bomMissingProducts = ref<Array<{ id: string; name: string }>>([]);
 const bomRawMaterialIdList = computed(() => productBomItems.value.map((item) => item.materialTypeId));
 function usedRawMaterialIdsExcept(nodeId: string): string[] {
@@ -1372,19 +1372,30 @@ async function loadProductBom(): Promise<void> {
     list.findIndex((candidate) => candidate.id === target.id) === index);
   if (uniqueTargets.length === 0) return;
   try {
-    const responses = await Promise.all(uniqueTargets.map(async (target) => ({
-      target,
-      response: await get<BomItemOption[]>(`/${factoryId}/bom/items/${target.id}`),
-    })));
+    const responses = await Promise.all(uniqueTargets.map(async (target) => {
+      try {
+        return {
+          target,
+          response: await get<BomRecipeDetailOption>(
+            `/${factoryId}/bom/recipes/by-product/${target.id}/current`,
+            { _silent: true },
+          ),
+        };
+      } catch {
+        return { target, response: null };
+      }
+    }));
     if (generation !== bomLoadGeneration
       || props.factoryId !== factoryId
       || props.productTypeId !== ownerId) return;
-    const allItems: BomItemOption[] = [];
+    const allItems: BomRecipeItemOption[] = [];
     const missing: Array<{ id: string; name: string }> = [];
     responses.forEach(({ target, response }) => {
-      if (!response.success || !Array.isArray(response.data)) return;
-      allItems.push(...response.data);
-      if (response.data.length === 0) missing.push(target);
+      const items = response?.success && Array.isArray(response.data?.items)
+        ? response.data.items
+        : [];
+      allItems.push(...items);
+      if (items.length === 0) missing.push(target);
     });
     productBomItems.value = allItems;
     bomMissingProducts.value = missing;

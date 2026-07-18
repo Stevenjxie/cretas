@@ -35,7 +35,7 @@ public class MaterialPriceComparisonDTO {
     // ==================== 三价 ====================
 
     /**
-     * BOM标准单价 (来自 bom_items.unit_price)
+     * BOM标准单价 (来自 bom_recipe_items.unit_price)
      * 如果该原料出现在多个产品BOM中，取平均值
      * null 表示该原料未配置BOM
      */

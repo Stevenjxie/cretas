@@ -5,14 +5,12 @@ import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.User;
-import com.cretas.aims.entity.bom.BomItem;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
-import com.cretas.aims.repository.bom.BomItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
@@ -58,11 +56,10 @@ class SkuAssemblyServiceTest {
     @Autowired private BomRecipeRepository bomRecipeRepository;
     @Autowired private BomRecipeItemRepository bomRecipeItemRepository;
     @Autowired private BomSeasoningItemRepository bomSeasoningItemRepository;
-    @Autowired private BomItemRepository bomItemRepository;
     @Autowired private EntityManager entityManager;
 
     @Test
-    @DisplayName("assemblesku clones template process chain, current BOM, seasoning, and legacy BOM once")
+    @DisplayName("assemblesku clones template process chain, current Recipe and seasoning once")
     void assembleskuClonesProcessChainAndBomFromTemplate() {
         seedTemplateWithProcessChainAndBom();
 
@@ -121,16 +118,6 @@ class SkuAssemblyServiceTest {
         assertEquals(Boolean.FALSE, copiedSeasoningItems.get(0).getCountInSeasoning());
         assertNotEquals(201L, copiedSeasoningItems.get(0).getId());
 
-        List<BomItem> copiedLegacyItems =
-                bomItemRepository.findByFactoryIdAndProductTypeIdAndDeletedAtIsNullOrderBySortOrderAsc(
-                        FACTORY_ID, sku.getId());
-        assertEquals(1, copiedLegacyItems.size());
-        assertEquals(savedSku.getName(), copiedLegacyItems.get(0).getProductName());
-        assertEquals("MAT-LEGACY-1", copiedLegacyItems.get(0).getMaterialTypeId());
-        assertEquals(Boolean.TRUE, copiedLegacyItems.get(0).getPerPortion());
-        assertEquals("g", copiedLegacyItems.get(0).getPriceUnit());
-        assertEquals(0, new BigDecimal("0.001").compareTo(copiedLegacyItems.get(0).getQuantityToPriceFactor()));
-
         assertThrows(BusinessException.class, () -> skuAssemblyService.assemblesku(
                 FACTORY_ID, TEMPLATE_ID, CUSTOMER_ID, "v1", null, USER_ID));
         assertEquals(3, productWorkProcessRepository
@@ -141,7 +128,6 @@ class SkuAssemblyServiceTest {
                 .stream()
                 .filter(BomRecipe::getIsCurrent)
                 .count() == 1);
-        assertEquals(1, bomItemRepository.countByFactoryIdAndProductTypeId(FACTORY_ID, sku.getId()));
     }
 
     private List<Long> templateProcessIds() {
@@ -265,26 +251,6 @@ class SkuAssemblyServiceTest {
         seasoningItem.setRemark("seasoning item");
         bomSeasoningItemRepository.saveAndFlush(seasoningItem);
 
-        BomItem legacyItem = new BomItem();
-        legacyItem.setFactoryId(FACTORY_ID);
-        legacyItem.setProductTypeId(TEMPLATE_ID);
-        legacyItem.setProductName("Template Product");
-        legacyItem.setMaterialTypeId("MAT-LEGACY-1");
-        legacyItem.setMaterialName("Legacy Material");
-        legacyItem.setStandardQuantity(new BigDecimal("2.0000"));
-        legacyItem.setYieldRate(new BigDecimal("90.00"));
-        legacyItem.setUnit("kg");
-        legacyItem.setPriceUnit("g");
-        legacyItem.setQuantityToPriceFactor(new BigDecimal("0.00100000"));
-        legacyItem.setUnitPrice(new BigDecimal("1.0000"));
-        legacyItem.setTaxRate(new BigDecimal("13.00"));
-        legacyItem.setMaterialCategory("AUXILIARY");
-        legacyItem.setSortOrder(1);
-        legacyItem.setRemark("legacy item");
-        legacyItem.setPerPortion(true);
-        legacyItem.setSemiFinishedRefCode("SFI-LEGACY");
-        legacyItem.setSubProductTypeId("SUB-PRODUCT-LEGACY");
-        bomItemRepository.saveAndFlush(legacyItem);
     }
 
     private ProductWorkProcess process(String workProcessId, int order, boolean reportingRequired,

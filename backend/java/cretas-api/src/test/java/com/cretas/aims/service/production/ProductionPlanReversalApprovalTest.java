@@ -102,7 +102,7 @@ class ProductionPlanReversalApprovalTest {
                 materialBatchRepository, materialConsumptionRepository, planBatchUsageRepository,
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
-                salesOrderRepository, salesOrderItemRepository, bomService);
+                salesOrderRepository, salesOrderItemRepository);
 
         // 注入可选依赖 (required = false)
         ReflectionTestUtils.setField(service, "workflowEngine", workflowEngine);

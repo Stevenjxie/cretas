@@ -99,7 +99,7 @@ class ProductionPlanSafetyStockSourceTest {
                 materialBatchRepository, materialConsumptionRepository, planBatchUsageRepository,
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
-                salesOrderRepository, salesOrderItemRepository, bomService);
+                salesOrderRepository, salesOrderItemRepository);
 
         // Product type must exist
         when(productTypeRepository.existsById(PRODUCT_TYPE_ID)).thenReturn(true);

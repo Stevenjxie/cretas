@@ -21,9 +21,9 @@ import java.math.BigDecimal;
 @AllArgsConstructor
 public class BomYieldApplyRequest {
 
-    /** bom_items.id (Long, RAW 主料行) */
-    @NotNull(message = "bomItemId 不能为空")
-    private Long bomItemId;
+    /** 当前 ACTIVE/current bom_recipes.id。 */
+    @NotNull(message = "recipeId 不能为空")
+    private String recipeId;
 
     /**
      * 要写入的出成率 (百分比, > 0).

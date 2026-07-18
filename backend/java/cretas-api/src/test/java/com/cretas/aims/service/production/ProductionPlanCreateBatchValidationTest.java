@@ -2,7 +2,7 @@ package com.cretas.aims.service.production;
 
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
-import com.cretas.aims.entity.bom.BomItem;
+import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ConversionRepository;
@@ -18,7 +18,7 @@ import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.mapper.ProductionPlanMapper;
-import com.cretas.aims.service.BomService;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.service.SchedulingService;
 import com.cretas.aims.service.impl.ProductionPlanServiceImpl;
 import com.cretas.aims.utils.ExcelUtil;
@@ -87,7 +87,7 @@ class ProductionPlanCreateBatchValidationTest {
     @Mock private ExcelUtil excelUtil;
     @Mock private SalesOrderRepository salesOrderRepository;
     @Mock private SalesOrderItemRepository salesOrderItemRepository;
-    @Mock private BomService bomService;
+    @Mock private BomRecipeItemRepository bomRecipeItemRepository;
     @Mock private com.cretas.aims.service.workprocess.WorkProcessTaskService workProcessTaskService;
 
     private ProductionPlanServiceImpl service;
@@ -99,7 +99,9 @@ class ProductionPlanCreateBatchValidationTest {
                 materialBatchRepository, materialConsumptionRepository, planBatchUsageRepository,
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
-                salesOrderRepository, salesOrderItemRepository, bomService);
+                salesOrderRepository, salesOrderItemRepository);
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                service, "bomRecipeItemRepository", bomRecipeItemRepository);
         org.springframework.test.util.ReflectionTestUtils.setField(
                 service, "workProcessTaskService", workProcessTaskService);
         // 产品名查询默认 stub (成功 path 才会用上)
@@ -119,11 +121,11 @@ class ProductionPlanCreateBatchValidationTest {
         return plan;
     }
 
-    private BomItem bomItem(String materialTypeId, String materialName,
+    private BomRecipeItem bomItem(String materialTypeId, String materialName,
                             BigDecimal standardQuantity, String unit) {
-        return BomItem.builder()
+        return BomRecipeItem.builder()
                 .factoryId(FACTORY_ID)
-                .productTypeId(PRODUCT_TYPE_ID)
+                .recipeId("RECIPE-" + PRODUCT_TYPE_ID)
                 .materialTypeId(materialTypeId)
                 .materialName(materialName)
                 .standardQuantity(standardQuantity)
@@ -148,7 +150,7 @@ class ProductionPlanCreateBatchValidationTest {
                 });
 
         // 需求 200, 可用 50 → 缺口 150
-        when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
+        when(bomRecipeItemRepository.findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
                 .thenReturn(List.of(bomItem("MT-A", "面粉", new BigDecimal("2"), "kg")));
         when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY_ID, "MT-A"))
                 .thenReturn(new BigDecimal("50"));
@@ -176,7 +178,7 @@ class ProductionPlanCreateBatchValidationTest {
                 });
 
         // 需求 200, 可用 500 → 充足
-        when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
+        when(bomRecipeItemRepository.findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
                 .thenReturn(List.of(bomItem("MT-A", "面粉", new BigDecimal("2"), "kg")));
         when(materialBatchRepository.sumAvailableQuantityByMaterialType(FACTORY_ID, "MT-A"))
                 .thenReturn(new BigDecimal("500"));
@@ -202,7 +204,7 @@ class ProductionPlanCreateBatchValidationTest {
                     }
                     return b;
                 });
-        when(bomService.getBomItemsByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
+        when(bomRecipeItemRepository.findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
                 .thenReturn(Collections.emptyList());
 
         ProductionBatch batch = service.createBatchFromPlan(FACTORY_ID, PLAN_ID);
