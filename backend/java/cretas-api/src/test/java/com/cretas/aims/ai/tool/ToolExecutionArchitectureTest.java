@@ -33,7 +33,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ToolExecutionArchitectureTest {
 
     private static final String BASELINE_RESOURCE =
-            "/architecture/tool-execution-direct-call-baseline.tsv";
+            "/ai/tool/gateway/tool-execution-direct-call-baseline.tsv";
     private static final Pattern TOOL_EXECUTOR_IDENTIFIER = Pattern.compile(
             "(?:\\bToolExecutor\\b|\\bOptional\\s*<\\s*ToolExecutor\\s*>)"
                     + "\\s+([A-Za-z_$][A-Za-z0-9_$]*)");
