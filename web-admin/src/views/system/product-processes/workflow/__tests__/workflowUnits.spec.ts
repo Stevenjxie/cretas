@@ -8,7 +8,6 @@ import {
   reconcileWorkflowUnits,
   workflowAutoConversionEquation,
   workflowSkuSpecificationEquation,
-  workflowSkuOutputEquation,
   workflowUnitDimension,
   type WorkflowUnitContext,
 } from '../workflowUnits';
@@ -20,8 +19,6 @@ describe('reconcileWorkflowUnits', () => {
     expect(workflowAutoConversionEquation('g', 'kg')).toBe('1g = 0.001kg');
     expect(workflowAutoConversionEquation('只', '半只')).toBeNull();
     expect(workflowSkuSpecificationEquation('盒', 800)).toBe('1盒 = 800g');
-    expect(workflowSkuOutputEquation('kg', '盒', 800))
-      .toBe('1kg投入 = 1.25盒产出（SKU规格：1盒 = 800g）');
   });
 
   it('recognizes MASS, VOLUME, and LENGTH as system physical dimensions', () => {
@@ -31,7 +28,7 @@ describe('reconcileWorkflowUnits', () => {
     expect(workflowUnitDimension('盒')).toBe('UNKNOWN');
   });
 
-  it('uses the server unit catalog for physical units outside the built-in fallback', () => {
+  it('keeps only units even when the server catalog can physically convert them', () => {
     const catalog = [
       { code: 'oz', label: '盎司', dimension: 'MASS' as const, baseCode: 'g', displayScale: 3 },
       { code: 'lb', label: '磅', dimension: 'MASS' as const, baseCode: 'g', displayScale: 3 },
@@ -45,10 +42,12 @@ describe('reconcileWorkflowUnits', () => {
       conversionRule: { mode: 'ACTUAL_WEIGHT' }, reportingRequired: true,
     }, catalog);
 
-    expect(reconciled.ports[1]).toMatchObject({ quantityMode: 'AUTO_CONVERT' });
+    expect(reconciled.ports[0]).not.toHaveProperty('quantityMode');
+    expect(reconciled.ports[1]).not.toHaveProperty('quantityMode');
+    expect(reconciled.conversionRule).toEqual({ mode: 'ACTUAL_WEIGHT' });
   });
 
-  it('migrates a legacy expression to the primary fixed output while normalizing main input to 1', () => {
+  it('drops a legacy planned ratio because actual quantities belong to reporting', () => {
     const migrated = reconcileProcessPortQuantities({
       workProcessId: 'cut', processName: '切分', inputUnit: '只', outputUnit: '盒',
       ports: [
@@ -59,11 +58,14 @@ describe('reconcileWorkflowUnits', () => {
       reportingRequired: true,
     });
 
-    expect(migrated.ports[0]).toMatchObject({ quantityMode: 'FIXED_RATIO', standardQuantity: 1 });
-    expect(migrated.ports[1]).toMatchObject({ quantityMode: 'FIXED_RATIO', standardQuantity: 3 });
+    expect(migrated.ports[0]).not.toHaveProperty('quantityMode');
+    expect(migrated.ports[0]).not.toHaveProperty('standardQuantity');
+    expect(migrated.ports[1]).not.toHaveProperty('quantityMode');
+    expect(migrated.ports[1]).not.toHaveProperty('standardQuantity');
+    expect(migrated.conversionRule).toEqual({ mode: 'ACTUAL_WEIGHT' });
   });
 
-  it('reconciles each output independently and never guesses an extra input ratio', () => {
+  it('clears planned quantities from every input and output port', () => {
     const reconciled = reconcileProcessPortQuantities({
       workProcessId: 'split', processName: '分流', inputUnit: 'kg', outputUnit: 'g',
       ports: [
@@ -75,15 +77,17 @@ describe('reconcileWorkflowUnits', () => {
       conversionRule: { mode: 'ACTUAL_WEIGHT' }, reportingRequired: true,
     });
 
-    expect(reconciled.ports).toEqual([
-      expect.objectContaining({ id: 'main', quantityMode: 'FIXED_RATIO', standardQuantity: 1 }),
-      expect.objectContaining({ id: 'seasoning', quantityMode: 'FIXED_RATIO', standardQuantity: 1 }),
-      expect.objectContaining({ id: 'mass-output', quantityMode: 'AUTO_CONVERT' }),
-      expect.objectContaining({ id: 'box-output', quantityMode: 'FIXED_RATIO', standardQuantity: 4 }),
+    expect(reconciled.ports.map(({ id, quantityMode, standardQuantity }) => ({
+      id, quantityMode, standardQuantity,
+    }))).toEqual([
+      { id: 'main', quantityMode: undefined, standardQuantity: undefined },
+      { id: 'seasoning', quantityMode: undefined, standardQuantity: undefined },
+      { id: 'mass-output', quantityMode: undefined, standardQuantity: undefined },
+      { id: 'box-output', quantityMode: undefined, standardQuantity: undefined },
     ]);
   });
 
-  it('recomputes quantity mode after unit changes while preserving a legal prior fixed quantity', () => {
+  it('does not revive a planned quantity after unit changes', () => {
     const automatic = reconcileProcessPortQuantities({
       workProcessId: 'pack', processName: '包装', inputUnit: 'kg', outputUnit: 'g',
       ports: [
@@ -92,11 +96,13 @@ describe('reconcileWorkflowUnits', () => {
       ],
       conversionRule: { mode: 'FIXED_RATIO', expression: '1 kg = 12 盒' }, reportingRequired: true,
     });
-    expect(automatic.ports[1]).toMatchObject({ quantityMode: 'AUTO_CONVERT', standardQuantity: 12 });
+    expect(automatic.ports[1]).not.toHaveProperty('quantityMode');
+    expect(automatic.ports[1]).not.toHaveProperty('standardQuantity');
 
     automatic.ports[1].unit = '盒';
     const fixedAgain = reconcileProcessPortQuantities(automatic);
-    expect(fixedAgain.ports[1]).toMatchObject({ quantityMode: 'FIXED_RATIO', standardQuantity: 12 });
+    expect(fixedAgain.ports[1]).not.toHaveProperty('quantityMode');
+    expect(fixedAgain.ports[1]).not.toHaveProperty('standardQuantity');
   });
 
   it('parses both canonical fixed-ratio quantities when the output unit ends the expression', () => {
