@@ -1,6 +1,7 @@
 package com.cretas.aims.ai.tool.impl.user;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.UserService;
@@ -78,6 +79,50 @@ public class UserDisableTool extends AbstractBusinessTool {
     protected List<String> getRequiredParameters() {
         // 动态校验：userId 或 username 至少一个
         return Collections.emptyList();
+    }
+
+    @Override
+    public ToolExecutor.ActionType getActionType() {
+        return ToolExecutor.ActionType.UPDATE;
+    }
+
+    @Override
+    public ToolExecutor.RiskLevel getRiskLevel() {
+        return ToolExecutor.RiskLevel.HIGH;
+    }
+
+    @Override
+    public boolean supportsPreview() {
+        return false;
+    }
+
+    @Override
+    public boolean requiresPermission() {
+        return true;
+    }
+
+    /**
+     * Legacy role-only callers cannot prove the permission-code contract, so they must not
+     * advertise or execute this tool. The central RBAC path uses {@link #getRequiredPermissions()}.
+     */
+    @Override
+    public boolean hasPermission(String userRole) {
+        return false;
+    }
+
+    @Override
+    public Set<String> getRequiredPermissions() {
+        return Set.of("hr:read_write");
+    }
+
+    @Override
+    public String getVersion() {
+        return "2.0.0";
+    }
+
+    @Override
+    public Set<String> getDomainTags() {
+        return Set.of("user", "hr", "identity");
     }
 
     @Override

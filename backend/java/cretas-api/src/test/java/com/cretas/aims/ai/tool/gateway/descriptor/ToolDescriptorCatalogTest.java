@@ -24,56 +24,68 @@ class ToolDescriptorCatalogTest {
 
         assertThat(catalog.inventory().schemaVersion()).isEqualTo(1);
         assertThat(catalog.inventory().expectedToolCount()).isEqualTo(601);
-        assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(601);
+        assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(599);
         assertThat(statistics.total()).isEqualTo(601);
-        assertThat(statistics.legacy()).isEqualTo(601);
+        assertThat(statistics.legacy()).isEqualTo(599);
         assertThat(statistics.actionTypes()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.ActionType.READ, 455L,
+                ToolExecutor.ActionType.READ, 454L,
                 ToolExecutor.ActionType.WRITE, 65L,
-                ToolExecutor.ActionType.UPDATE, 27L,
-                ToolExecutor.ActionType.DELETE, 13L,
+                ToolExecutor.ActionType.UPDATE, 29L,
+                ToolExecutor.ActionType.DELETE, 12L,
                 ToolExecutor.ActionType.ANALYZE, 18L,
                 ToolExecutor.ActionType.GENERATE, 15L,
                 ToolExecutor.ActionType.NOTIFY, 8L));
         assertThat(statistics.riskLevels()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.RiskLevel.LOW, 522L,
-                ToolExecutor.RiskLevel.MEDIUM, 76L,
-                ToolExecutor.RiskLevel.HIGH, 3L,
+                ToolExecutor.RiskLevel.LOW, 521L,
+                ToolExecutor.RiskLevel.MEDIUM, 75L,
+                ToolExecutor.RiskLevel.HIGH, 5L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
         assertThat(statistics.previewSupported()).isEqualTo(39);
-        assertThat(statistics.requiresPermission()).isEqualTo(38);
+        assertThat(statistics.requiresPermission()).isEqualTo(39);
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(
                 ToolGovernanceStatus.REVIEW_REQUIRED, 581L,
-                ToolGovernanceStatus.REVIEW_REQUIRED_P0, 20L,
-                ToolGovernanceStatus.APPROVED, 0L,
+                ToolGovernanceStatus.REVIEW_REQUIRED_P0, 18L,
+                ToolGovernanceStatus.APPROVED, 2L,
                 ToolGovernanceStatus.WAIVED, 0L));
 
         assertThat(catalog.inventory().descriptors())
+                .filteredOn(entry -> entry.provenance() == DescriptorProvenance.LEGACY_INFERRED)
                 .allSatisfy(entry -> {
-                    assertThat(entry.provenance()).isEqualTo(DescriptorProvenance.LEGACY_INFERRED);
                     assertThat(entry.version()).isEqualTo("1.0.0");
                     assertThat(entry.requiredPermissions()).isEmpty();
                     assertThat(entry.governanceStatus()).isIn(
                             ToolGovernanceStatus.REVIEW_REQUIRED,
                             ToolGovernanceStatus.REVIEW_REQUIRED_P0);
                 });
+        assertThat(catalog.inventory().descriptors())
+                .filteredOn(entry -> entry.governanceStatus() == ToolGovernanceStatus.APPROVED)
+                .extracting(ToolDescriptorInventoryEntry::toolName)
+                .containsExactlyInAnyOrder("user_disable", "restaurant_dish_delete");
     }
 
     @Test
-    void exposesUniqueLookupsAndKeepsTheExactP0SetUnapproved() {
+    void exposesUniqueLookupsAndKeepsTheRemainingP0SetReviewBlocked() {
         ToolDescriptorCatalog catalog = ToolDescriptorCatalog.loadDefault();
         Set<String> actualP0 = catalog.inventory().descriptors().stream()
                 .filter(entry -> entry.governanceStatus() == ToolGovernanceStatus.REVIEW_REQUIRED_P0)
                 .map(ToolDescriptorInventoryEntry::toolName)
                 .collect(Collectors.toUnmodifiableSet());
+        Set<String> approvedP0 = Set.of("user_disable", "restaurant_dish_delete");
 
-        assertThat(actualP0).isEqualTo(ToolDescriptorInventoryLoader.P0_TOOL_NAMES);
-        assertThat(actualP0).hasSize(20);
-        for (String toolName : ToolDescriptorInventoryLoader.P0_TOOL_NAMES) {
+        assertThat(actualP0).containsExactlyInAnyOrderElementsOf(
+                ToolDescriptorInventoryLoader.P0_TOOL_NAMES.stream()
+                        .filter(toolName -> !approvedP0.contains(toolName))
+                        .collect(Collectors.toUnmodifiableSet()));
+        assertThat(actualP0).hasSize(18);
+        for (String toolName : actualP0) {
             ToolDescriptorInventoryEntry byName = catalog.findByToolName(toolName).orElseThrow();
             assertThat(byName.governanceStatus()).isEqualTo(ToolGovernanceStatus.REVIEW_REQUIRED_P0);
             assertThat(catalog.findByImplementationClass(byName.implementationClass()))
                     .containsSame(byName);
+        }
+        for (String toolName : approvedP0) {
+            assertThat(catalog.findByToolName(toolName).orElseThrow().governanceStatus())
+                    .isEqualTo(ToolGovernanceStatus.APPROVED);
         }
         assertThat(catalog.findByToolName("does_not_exist")).isEmpty();
         assertThat(catalog.findByImplementationClass("com.example.DoesNotExist")).isEmpty();
@@ -131,17 +143,19 @@ class ToolDescriptorCatalogTest {
     }
 
     @Test
-    void rejectsApprovalOrWaiverForAnyP0Tool() {
-        for (ToolGovernanceStatus unsafe : Set.of(
-                ToolGovernanceStatus.APPROVED, ToolGovernanceStatus.WAIVED)) {
-            String yaml = oneExplicitDescriptorYaml()
-                    .replace("safe_test", "canvas_set_user_permission")
-                    .replace("governanceStatus: APPROVED", "governanceStatus: " + unsafe);
+    void rejectsWaiverOrIncompleteApprovalForP0Tools() {
+        String incompleteApproval = oneExplicitDescriptorYaml()
+                .replace("safe_test", "canvas_set_user_permission")
+                .replace("requiredPermissions: [test:execute]", "requiredPermissions: []");
+        assertThatThrownBy(() -> loader.load(new StringReader(incompleteApproval)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("complete explicit source metadata and permission codes");
 
-            assertThatThrownBy(() -> loader.load(new StringReader(yaml)))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("P0 tool must remain REVIEW_REQUIRED_P0");
-        }
+        String waiver = incompleteApproval.replace(
+                "governanceStatus: APPROVED", "governanceStatus: WAIVED");
+        assertThatThrownBy(() -> loader.load(new StringReader(waiver)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("P0 tool must be REVIEW_REQUIRED_P0 or fully explicit APPROVED");
     }
 
     private String oneExplicitDescriptorYaml() {
@@ -156,8 +170,8 @@ class ToolDescriptorCatalogTest {
                     actionType: READ
                     riskLevel: LOW
                     supportsPreview: false
-                    requiresPermission: false
-                    requiredPermissions: []
+                    requiresPermission: true
+                    requiredPermissions: [test:execute]
                     version: 1.0.0
                     domainTags: [test]
                     overrideFlags:

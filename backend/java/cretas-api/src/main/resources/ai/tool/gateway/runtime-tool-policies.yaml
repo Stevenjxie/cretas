@@ -1,0 +1,38 @@
+# Runtime authorization truth. D1 tool-descriptors.yaml remains a separate source audit inventory.
+schemaVersion: 1
+expectedPolicyCount: 2
+policies:
+  - implementationClass: "com.cretas.aims.ai.tool.impl.user.UserDisableTool"
+    toolName: "user_disable"
+    actionType: UPDATE
+    riskLevel: HIGH
+    requiredPermissions: ["hr:read_write"]
+    domainTags: ["user", "hr", "identity"]
+    version: "2.0.0"
+    supportsPreview: false
+    confirmationPolicy: REQUIRED_FOR_EXECUTION
+    approvalPolicy: NOT_REQUIRED
+    idempotencyPolicy: REQUIRED_FOR_EXECUTION
+    dataClassification: RESTRICTED
+    allowedSources: [AI_CHAT]
+    egressPolicy:
+      mode: DENY_ALL
+      allowedDestinations: []
+    provenance: EXPLICIT
+  - implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantDishDeleteTool"
+    toolName: "restaurant_dish_delete"
+    actionType: UPDATE
+    riskLevel: HIGH
+    requiredPermissions: ["restaurant:read_write"]
+    domainTags: ["restaurant", "menu", "product-master"]
+    version: "2.0.0"
+    supportsPreview: false
+    confirmationPolicy: REQUIRED_FOR_EXECUTION
+    approvalPolicy: NOT_REQUIRED
+    idempotencyPolicy: REQUIRED_FOR_EXECUTION
+    dataClassification: CONFIDENTIAL
+    allowedSources: [AI_CHAT]
+    egressPolicy:
+      mode: DENY_ALL
+      allowedDestinations: []
+    provenance: EXPLICIT

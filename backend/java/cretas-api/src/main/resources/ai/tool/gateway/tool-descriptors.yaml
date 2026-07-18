@@ -2,7 +2,7 @@
 # LEGACY_INFERRED and empty requiredPermissions remain review debt; this file is not wired to execution.
 schemaVersion: 1
 expectedToolCount: 601
-expectedLegacyCount: 601
+expectedLegacyCount: 599
 descriptors:
   - toolName: "restaurant_calibration_history"
     implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantCalibrationHistoryTool"
@@ -2426,24 +2426,24 @@ descriptors:
     governanceStatus: REVIEW_REQUIRED
   - toolName: "restaurant_dish_delete"
     implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantDishDeleteTool"
-    provenance: LEGACY_INFERRED
-    actionType: DELETE
-    riskLevel: MEDIUM
+    provenance: EXPLICIT
+    actionType: UPDATE
+    riskLevel: HIGH
     supportsPreview: false
     requiresPermission: true
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
+    requiredPermissions: ["restaurant:read_write"]
+    version: "2.0.0"
+    domainTags: ["restaurant", "menu", "product-master"]
     overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
       requiresPermission: true
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED_P0
+      hasPermission: true
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: APPROVED
   - toolName: "restaurant_peak_hours_analysis"
     implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantPeakHoursAnalysisTool"
     provenance: LEGACY_INFERRED
@@ -3566,24 +3566,24 @@ descriptors:
     governanceStatus: REVIEW_REQUIRED
   - toolName: "user_disable"
     implementationClass: "com.cretas.aims.ai.tool.impl.user.UserDisableTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
+    provenance: EXPLICIT
+    actionType: UPDATE
+    riskLevel: HIGH
     supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["user"]
+    requiresPermission: true
+    requiredPermissions: ["hr:read_write"]
+    version: "2.0.0"
+    domainTags: ["user", "hr", "identity"]
     overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED_P0
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: true
+      hasPermission: true
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: APPROVED
   - toolName: "user_create"
     implementationClass: "com.cretas.aims.ai.tool.impl.user.UserCreateTool"
     provenance: LEGACY_INFERRED
