@@ -56,9 +56,7 @@ PUBLIC_PREFIXES = (
     "/api/smartbi/chart/",  # SmartBI chart endpoints (same reason)
     "/api/insight/",     # Insight endpoints — stateless LLM analysis, no user context needed
     "/api/excel/",       # Excel parsing — called by Java backend internally (no JWT forwarded)
-    "/api/smartbi/excel/",  # SmartBI Excel endpoints — called by Java backend internally
     "/api/smartbi/analysis-cache/",  # SmartBI analysis cache — browser direct calls
-    "/api/smartbi/restaurant/sections/",  # Restaurant section handlers — called by Java backend internally
     "/api/smartbi/cross-sheet",  # Cross-sheet analysis
     "/api/smartbi/yoy-",  # YoY comparison
     "/api/smartbi/benchmark",  # Industry benchmarks
@@ -82,9 +80,9 @@ PUBLIC_PREFIXES = (
     "/api/ota/",
 )
 
-# Exact routes nested below a public prefix that are nevertheless internal-only.
-# Keep this list exact: sibling restaurant section routes intentionally retain
-# their existing public/demo behavior until they are migrated independently.
+# Exact internal-only routes that need stricter service-auth semantics than the
+# ordinary authenticated API surface. Keep this list exact so sibling routes
+# cannot accidentally inherit the internal-service bypass.
 INTERNAL_ONLY_PATHS = frozenset({
     "/api/smartbi/restaurant/sections/owner-action-chat",
 })
@@ -148,11 +146,16 @@ class JWTAuthMiddleware:
     def __init__(self, app: ASGIApp, jwt_secret: str, enabled: bool = True):
         self.app = app
         self.enabled = enabled
-        # Match Java's key derivation: UTF-8 bytes, pad to 32 if shorter
-        key_bytes = jwt_secret.encode("utf-8")
-        if len(key_bytes) < 32:
-            key_bytes = key_bytes + b"\x00" * (32 - len(key_bytes))
-        self.jwt_secret = key_bytes
+        # Match Java's key derivation only when a real secret is configured.
+        # A blank secret must not become the valid 32-byte all-zero HS256 key.
+        # Keep startup healthy, but make every JWT verification fail closed.
+        if jwt_secret and jwt_secret.strip():
+            key_bytes = jwt_secret.encode("utf-8")
+            if len(key_bytes) < 32:
+                key_bytes = key_bytes + b"\x00" * (32 - len(key_bytes))
+            self.jwt_secret: Optional[bytes] = key_bytes
+        else:
+            self.jwt_secret = None
         logger.info(f"JWTAuthMiddleware initialized, enabled={enabled}")
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send):
@@ -180,7 +183,7 @@ class JWTAuthMiddleware:
         # handlers (e.g. ai/api.py:154) require auth_method=="internal" and
         # used to fail with 401 because the secret check was skipped first.
         # 2026-07-08 security fix (fail-closed): NO hardcoded fallback secret.
-        # The old `os.environ.get(...) or "cretas-internal-2026"` meant that if
+        # The old public fallback meant that if
         # INTERNAL_API_SECRET was ever unset on the Python process, the public
         # fallback (this repo is public on GitHub) became live — any external
         # caller reaching Python via the gateway could send that known constant
@@ -383,6 +386,9 @@ class JWTAuthMiddleware:
 
     def _verify_token(self, token: str) -> Optional[dict]:
         """Verify JWT token and return claims, or None if invalid."""
+        if self.jwt_secret is None:
+            logger.error("JWT verification rejected: JWT secret is not configured")
+            return None
         try:
             payload = pyjwt.decode(
                 token,

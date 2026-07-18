@@ -134,12 +134,12 @@ async def _resolve_store_ids(
 
 
 def _user_id_from_request(request: Request) -> str:
-    """Best-effort user id from JWT claim / internal header; falls back to 'anonymous'."""
+    """Best-effort user id from authenticated middleware state."""
     if hasattr(request, "state"):
         uid = getattr(request.state, "user_id", None)
-        if uid:
-            return uid
-    return request.headers.get("x-user-id") or "anonymous"
+        if uid is not None and str(uid).strip():
+            return str(uid)
+    return "anonymous"
 
 
 def _require_revenue_report_role(request: Request, action: str) -> None:
@@ -312,25 +312,12 @@ async def upload_pos_files(
 
 
 def _extract_caller_user_id(request: Request) -> Optional[int]:
-    """Pull user_id from JWT in Authorization header.
-
-    Mirrors _extract_caller_factory_id but returns the userId claim.
-    Returns None gracefully if anything goes wrong — uploaded_by is optional.
-    """
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        return None
-    token = auth_header[len("Bearer "):]
-    try:
-        import jwt
-        payload = jwt.decode(token, options={"verify_signature": False})
-        uid = payload.get("userId") or payload.get("user_id") or payload.get("sub")
-        if isinstance(uid, str) and uid.isdigit():
-            return int(uid)
-        if isinstance(uid, int):
-            return uid
-    except Exception:
-        pass
+    """Read the authenticated caller id from middleware state only."""
+    uid = getattr(request.state, "user_id", None) if hasattr(request, "state") else None
+    if isinstance(uid, int) and not isinstance(uid, bool) and uid > 0:
+        return uid
+    if isinstance(uid, str) and uid.isdigit() and int(uid) > 0:
+        return int(uid)
     return None
 
 

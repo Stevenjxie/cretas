@@ -18,8 +18,10 @@ in-process echo app, asserting:
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
+import jwt as pyjwt
 
 from auth_middleware import JWTAuthMiddleware
 
@@ -60,11 +62,11 @@ def _run(middleware, headers, path="/api/smartbi/gold/restaurant/tiered-answer")
     return status, downstream
 
 
-def _mw(enabled=True):
+def _mw(enabled=True, jwt_secret="test-secret-only-for-jwt-branch"):
     # jwt_secret is irrelevant to the internal-secret branch; any >=1 char works.
     return JWTAuthMiddleware(
         _Echo(),
-        jwt_secret="test-secret-only-for-jwt-branch",
+        jwt_secret=jwt_secret,
         enabled=enabled,
     )
 
@@ -202,7 +204,7 @@ def test_owner_action_exact_route_accepts_correct_internal_identity(monkeypatch)
     assert status == 200
 
 
-def test_non_target_restaurant_section_keeps_existing_public_prefix_behavior(monkeypatch):
+def test_non_target_restaurant_section_requires_authentication(monkeypatch):
     monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
     mw = _mw()
 
@@ -212,8 +214,81 @@ def test_non_target_restaurant_section_keeps_existing_public_prefix_behavior(mon
         path="/api/smartbi/restaurant/sections/list",
     )
 
+    assert echo.reached is False
+    assert status == 401
+
+
+def test_smartbi_excel_prefix_requires_authentication(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
+
+    status, echo = _run(
+        _mw(),
+        {},
+        path="/api/smartbi/excel/auto-parse-status/42",
+    )
+
+    assert echo.reached is False
+    assert status == 401
+
+
+def test_blank_jwt_secret_rejects_token_signed_with_zero_key(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
+    zero_key_token = pyjwt.encode(
+        {"factoryId": "F001", "userId": 7, "exp": int(time.time()) + 300},
+        b"\x00" * 32,
+        algorithm="HS256",
+    )
+
+    status, echo = _run(
+        _mw(jwt_secret=""),
+        {"authorization": f"Bearer {zero_key_token}"},
+        path="/api/smartbi/restaurant/sections/list",
+    )
+
+    assert echo.reached is False
+    assert status == 401
+
+
+def test_blank_jwt_secret_does_not_disable_valid_internal_auth(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
+
+    status, echo = _run(
+        _mw(jwt_secret="   "),
+        {"x-internal-secret": "real-prod-secret-xyz", "x-factory-id": "F001"},
+        path="/api/smartbi/restaurant/sections/list",
+    )
+
     assert echo.reached is True
-    assert echo.state.get("auth_method") is None
+    assert echo.state.get("factory_id") == "F001"
+    assert status == 200
+
+
+def test_valid_jwt_authenticates_newly_protected_restaurant_prefix(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
+    raw_secret = "jwt-real-secret"
+    padded_secret = raw_secret.encode("utf-8") + b"\x00" * (
+        32 - len(raw_secret.encode("utf-8"))
+    )
+    token = pyjwt.encode(
+        {
+            "factoryId": "REST-1",
+            "userId": 7,
+            "role": "restaurant_manager",
+            "exp": int(time.time()) + 300,
+        },
+        padded_secret,
+        algorithm="HS256",
+    )
+
+    status, echo = _run(
+        _mw(jwt_secret=raw_secret),
+        {"authorization": f"Bearer {token}"},
+        path="/api/smartbi/restaurant/sections/list",
+    )
+
+    assert echo.reached is True
+    assert echo.state.get("auth_method") == "jwt"
+    assert echo.state.get("factory_id") == "REST-1"
     assert status == 200
 
 
