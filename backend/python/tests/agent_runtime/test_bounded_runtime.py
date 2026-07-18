@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 import pytest
@@ -154,6 +155,18 @@ class FakeGateway:
         return self.envelopes[tool_name]
 
 
+class BlockingGateway(FakeGateway):
+    def __init__(self, envelopes):
+        super().__init__(envelopes)
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def execute(self, tool_name, parameters, context):
+        self.started.set()
+        await self.release.wait()
+        return await super().execute(tool_name, parameters, context)
+
+
 @pytest.mark.asyncio
 async def test_runtime_executes_period_store_dish_and_refuses_unsupported_attribution():
     store = InMemoryRunStore()
@@ -187,6 +200,41 @@ async def test_runtime_executes_period_store_dish_and_refuses_unsupported_attrib
 
 
 @pytest.mark.asyncio
+async def test_runtime_uses_server_preallocated_uuid_without_calling_id_factory():
+    store = InMemoryRunStore()
+    expected = "10101010-1010-4010-8010-101010101010"
+    runtime = BoundedRestaurantRuntime(
+        FakeGateway(route_evidence()),
+        store,
+        id_factory=lambda: (_ for _ in ()).throw(AssertionError("must not allocate")),
+    )
+
+    result = await runtime.execute(
+        GrossMarginDeclineRequest("2026-01-01", "2026-01-31"),
+        context(),
+        run_id=expected,
+    )
+
+    assert result.run_id == expected
+    assert (await store.load_run(expected, context())).run_id == expected
+
+
+@pytest.mark.asyncio
+async def test_runtime_rejects_non_uuid_injected_run_id_before_persistence():
+    store = InMemoryRunStore()
+    runtime = BoundedRestaurantRuntime(FakeGateway(route_evidence()), store)
+
+    with pytest.raises(ValueError, match="valid UUID"):
+        await runtime.execute(
+            GrossMarginDeclineRequest("2026-01-01", "2026-01-31"),
+            context(),
+            run_id="caller-selected-run-id",
+        )
+
+    assert store._runs == {}
+
+
+@pytest.mark.asyncio
 async def test_budget_and_cancel_have_durable_terminal_semantics():
     request = GrossMarginDeclineRequest("2026-01-01", "2026-01-31")
 
@@ -215,6 +263,38 @@ async def test_budget_and_cancel_have_durable_terminal_semantics():
     )
     assert cancel_result.state is RunState.CANCELLED
     assert (await cancel_store.events_for(cancel_result.run_id, context()))[
+        -1
+    ].event_type is AgentEventType.RUN_CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_best_effort_cancel_waits_for_inflight_read_then_persists_terminal():
+    store = InMemoryRunStore()
+    gateway = BlockingGateway(route_evidence())
+    cancellation_requested = asyncio.Event()
+    runtime = BoundedRestaurantRuntime(
+        gateway,
+        store,
+        id_factory=lambda: "60606060-6060-4060-8060-606060606060",
+    )
+    task = asyncio.create_task(
+        runtime.execute(
+            GrossMarginDeclineRequest("2026-01-01", "2026-01-31"),
+            context(),
+            cancelled=cancellation_requested.is_set,
+        )
+    )
+
+    await gateway.started.wait()
+    cancellation_requested.set()
+    assert not task.done()
+    gateway.release.set()
+    result = await task
+
+    assert result.state is RunState.CANCELLED
+    record = await store.load_run(result.run_id, context())
+    assert record.state is RunState.CANCELLED
+    assert (await store.events_for(result.run_id, context()))[
         -1
     ].event_type is AgentEventType.RUN_CANCELLED
 

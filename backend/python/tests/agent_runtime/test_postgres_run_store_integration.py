@@ -390,3 +390,64 @@ async def test_concurrent_sequence_and_competing_terminal_transition(pg_runtime)
         )
         == 1
     )
+
+
+@pytest.mark.asyncio
+async def test_event_replay_after_sequence_is_ordered_tenant_bound_and_decoded(
+    pg_runtime,
+):
+    _admin, _pool, store = pg_runtime
+    tenant = context("A")
+    run_id = str(uuid.uuid4())
+    await store.create_run(
+        run_id, tenant, RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION, request()
+    )
+    await store.append_event(
+        run_id,
+        tenant,
+        AgentEventType.RUN_STARTED,
+        {"routeCode": "GROSS_MARGIN_DECLINE_ATTRIBUTION"},
+        counters=RuntimeCounters(),
+    )
+    await store.append_event(
+        run_id,
+        tenant,
+        AgentEventType.STEP_STARTED,
+        {"round": 1, "purposeCode": "PERIOD_BASELINE"},
+        counters=RuntimeCounters(),
+        step_id="round1-period",
+        tool_name="restaurant_period_comparison_read.v1",
+    )
+    expected_payload = {
+        "round": 1,
+        "evidenceId": "evidence-1",
+        "evidenceStatus": "OK",
+        "factCount": 2,
+        "evidenceBytes": 300,
+        "warningCodes": [],
+    }
+    await store.append_event(
+        run_id,
+        tenant,
+        AgentEventType.STEP_COMPLETED,
+        expected_payload,
+        counters=RuntimeCounters(1, 1, 2, 300),
+        step_id="round1-period",
+        tool_name="restaurant_period_comparison_read.v1",
+    )
+
+    replay = await store.events_for(run_id, tenant, after_sequence=1)
+
+    assert [event.sequence for event in replay] == [2, 3]
+    assert [event.event_type for event in replay] == [
+        AgentEventType.STEP_STARTED,
+        AgentEventType.STEP_COMPLETED,
+    ]
+    assert replay[1].payload == expected_payload
+    assert replay[1].step_id == "round1-period"
+    assert replay[1].tool_name == "restaurant_period_comparison_read.v1"
+    assert await store.events_for(run_id, tenant, after_sequence=3) == ()
+    with pytest.raises(RunAccessError):
+        await store.events_for(run_id, context("B"), after_sequence=0)
+    with pytest.raises(RunAccessError):
+        await store.events_for(str(uuid.uuid4()), tenant, after_sequence=0)

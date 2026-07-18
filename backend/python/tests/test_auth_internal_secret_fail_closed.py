@@ -71,6 +71,7 @@ def _mw(enabled=True):
 
 _HARDCODED_OLD_FALLBACK = "cretas-internal-2026"
 _OWNER_ACTION_PATH = "/api/smartbi/restaurant/sections/owner-action-chat"
+_AGENT_RUN_PATH = "/api/internal/smartbi/agent/runs"
 
 
 def test_correct_secret_when_env_set_takes_internal_branch(monkeypatch):
@@ -81,6 +82,39 @@ def test_correct_secret_when_env_set_takes_internal_branch(monkeypatch):
     assert echo.state.get("auth_method") == "internal"
     assert echo.state.get("factory_id") == "F001"
     assert status == 200
+
+
+def test_agent_run_prefix_requires_secret_and_injects_trusted_identity(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
+    missing_status, missing_echo = _run(_mw(), {}, path=_AGENT_RUN_PATH)
+    wrong_status, wrong_echo = _run(
+        _mw(),
+        {"x-internal-secret": "wrong"},
+        path=f"{_AGENT_RUN_PATH}/10101010-1010-4010-8010-101010101010/events",
+    )
+    status, echo = _run(
+        _mw(),
+        {
+            "x-internal-secret": "real-prod-secret-xyz",
+            "x-factory-id": "REST-1",
+            "x-user-id": "user-7",
+            "x-user-role": "restaurant_owner",
+            "x-business-type": "RESTAURANT",
+        },
+        path=_AGENT_RUN_PATH,
+    )
+
+    assert (missing_status, wrong_status) == (401, 401)
+    assert missing_echo.reached is False
+    assert wrong_echo.reached is False
+    assert status == 200
+    assert echo.state == {
+        "factory_id": "REST-1",
+        "user_id": "user-7",
+        "auth_method": "internal",
+        "business_type": "RESTAURANT",
+        "role": "restaurant_owner",
+    }
 
 
 def test_old_hardcoded_fallback_rejected_when_env_set(monkeypatch):

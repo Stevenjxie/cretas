@@ -74,12 +74,13 @@ class BoundedRestaurantRuntime:
         request: GrossMarginDeclineRequest,
         context: TrustedExecutionContext,
         *,
+        run_id: str | None = None,
         cancelled: Callable[[], bool] | None = None,
     ) -> RuntimeResult:
         if not isinstance(context, TrustedExecutionContext):
             raise TypeError("trusted execution context is required")
         plan = gross_margin_decline_plan(request)
-        run_id = self._id_factory()
+        run_id = self._validated_run_id(run_id or self._id_factory())
         run_context = replace(context, run_id=run_id, step_id=None)
         counters = RuntimeCounters()
         evidence: list[EvidenceEnvelope] = []
@@ -331,6 +332,18 @@ class BoundedRestaurantRuntime:
                 counters,
                 failure_code,
             )
+
+    @staticmethod
+    def _validated_run_id(value: str) -> str:
+        """Return a canonical UUID without allowing caller-defined identifiers."""
+
+        if not isinstance(value, str):
+            raise TypeError("run_id must be a UUID string")
+        try:
+            parsed = uuid.UUID(value)
+        except (ValueError, AttributeError) as exc:
+            raise ValueError("run_id must be a valid UUID") from exc
+        return str(parsed)
 
     def _check_before_step(
         self,

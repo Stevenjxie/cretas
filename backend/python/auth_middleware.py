@@ -21,6 +21,7 @@ import hmac
 import json
 import logging
 import os
+import re
 from typing import Optional, Set
 
 import jwt as pyjwt
@@ -87,6 +88,17 @@ PUBLIC_PREFIXES = (
 INTERNAL_ONLY_PATHS = frozenset({
     "/api/smartbi/restaurant/sections/owner-action-chat",
 })
+INTERNAL_ONLY_PREFIXES = (
+    "/api/internal/smartbi/agent/runs",
+)
+_INTERNAL_IDENTITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+
+
+def _bounded_internal_identity(headers: dict[str, str], name: str) -> Optional[str]:
+    value = headers.get(name)
+    if value is None or not _INTERNAL_IDENTITY.fullmatch(value):
+        return None
+    return value
 
 # Demo tenants (mirror Java `cretas.demo.factory-ids`). The public /mobile-ai/rest/
 # page hands one of these JWTs (role factory_super_admin) to ANY anonymous visitor.
@@ -194,17 +206,24 @@ class JWTAuthMiddleware:
         ):
             if "state" not in scope:
                 scope["state"] = {}
-            internal_factory = headers.get("x-factory-id") or None
+            internal_factory = _bounded_internal_identity(headers, "x-factory-id")
             scope["state"]["factory_id"] = internal_factory
-            scope["state"]["user_id"] = None
+            scope["state"]["user_id"] = _bounded_internal_identity(
+                headers, "x-user-id"
+            )
             scope["state"]["auth_method"] = "internal"
+            scope["state"]["business_type"] = _bounded_internal_identity(
+                headers, "x-business-type"
+            )
             # May 29 2026: forward the originating user's role so RBAC money-strip
             # (_apply_rbac_strip) respects price-view permission on internal
             # Java→Python calls. Absent header → None → money stripped (safe
             # default). Java GoldFinanceClient sets X-User-Role from the request
             # SecurityContext. Fixes 总营收 ¥0 on restaurant dashboards (the Java
             # dashboard build called finance-summary with no role → all money nulled).
-            scope["state"]["role"] = headers.get("x-user-role") or None
+            scope["state"]["role"] = _bounded_internal_identity(
+                headers, "x-user-role"
+            )
             try:
                 from smartbi.tenant_ctx import set_factory_id, reset_factory_id
                 tenant_token = set_factory_id(internal_factory)
@@ -224,7 +243,10 @@ class JWTAuthMiddleware:
         # the secret is missing, blank, incorrect, or the server is misconfigured
         # without INTERNAL_API_SECRET. Return one indistinguishable response so
         # callers cannot use the status/body as a secret-validity oracle.
-        if path in INTERNAL_ONLY_PATHS:
+        if path in INTERNAL_ONLY_PATHS or any(
+            path == prefix or path.startswith(f"{prefix}/")
+            for prefix in INTERNAL_ONLY_PREFIXES
+        ):
             await self._send_json_response(send, 401, {
                 "success": False,
                 "message": "Internal authentication required",
