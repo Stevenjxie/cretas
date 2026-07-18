@@ -52,9 +52,6 @@ public class SalesPlanCreateTool extends AbstractBusinessTool {
     }
 
     @Override
-    public boolean supportsPreview() { return true; }
-
-    @Override
     protected Map<String, Object> doExecute(String factoryId,
             Map<String, Object> params, Map<String, Object> context) throws Exception {
         String storeId = getString(params, "store_id");

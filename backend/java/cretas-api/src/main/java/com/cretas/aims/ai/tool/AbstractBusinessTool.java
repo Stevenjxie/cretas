@@ -46,10 +46,10 @@ public abstract class AbstractBusinessTool extends AbstractTool {
     protected abstract Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception;
 
     /**
-     * 预览业务操作（子类可覆盖）
+     * 预览业务操作（支持预览的子类必须覆盖）
      *
-     * 默认实现委托到 doExecute()。WRITE 操作的子类应覆盖此方法，
-     * 返回当前值和变更预览，而不实际修改数据。
+     * 默认实现必须 fail closed，绝不能委托到 doExecute()。子类只有在实现了真正的
+     * 只读预览后，才能同时覆盖 {@link #supportsPreview()} 返回 true。
      *
      * @param factoryId 工厂ID
      * @param params 已校验的参数
@@ -58,7 +58,8 @@ public abstract class AbstractBusinessTool extends AbstractTool {
      * @throws Exception 预览异常
      */
     protected Map<String, Object> doPreview(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
-        return doExecute(factoryId, params, context);
+        throw new UnsupportedOperationException(
+                "Tool '" + getToolName() + "' does not implement a safe business preview");
     }
 
     /**

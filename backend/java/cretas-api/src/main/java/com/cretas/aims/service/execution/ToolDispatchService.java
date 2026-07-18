@@ -124,7 +124,24 @@ public class ToolDispatchService {
                         .build();
             }
 
-            // W0 write-guard (intent-w0) — SITE B: block a write tool unless previewOnly or confirmed.
+            // previewOnly is a hard no-write contract. If the tool has no explicit safe preview,
+            // fail closed here instead of falling through to the normal execute() path.
+            if (Boolean.TRUE.equals(request.getPreviewOnly()) && !tool.supportsPreview()) {
+                log.warn("Tool preview unsupported; execution blocked: tool={}, intentCode={}",
+                        tool.getToolName(), intent != null ? intent.getIntentCode() : null);
+                return IntentExecuteResponse.builder()
+                        .intentRecognized(true)
+                        .intentCode(intent != null ? intent.getIntentCode() : null)
+                        .intentName(intent != null ? intent.getIntentName() : null)
+                        .intentCategory(intent != null ? intent.getIntentCategory() : null)
+                        .status("PREVIEW_UNSUPPORTED")
+                        .message("该工具不支持安全预览，未执行任何操作。")
+                        .formattedText("该工具不支持安全预览，未执行任何操作。")
+                        .executedAt(LocalDateTime.now())
+                        .build();
+            }
+
+            // W0 write-guard (intent-w0) — SITE B: block a write tool unless safely previewed or confirmed.
             // Runs BEFORE the role-permission check so a misroute to a destructive operation cannot
             // silently execute. NOT conditioned on forceExecute (the multi-intent bypass flag).
             // The bound AIIntentConfig is available here (Site B only) — add a curated-sensitivity
@@ -190,8 +207,8 @@ public class ToolDispatchService {
                 }
             }
 
-            // 1.5. 预览模式
-            if (Boolean.TRUE.equals(request.getPreviewOnly()) && tool.supportsPreview()) {
+            // 1.5. 预览模式（不支持预览的请求已在上方 fail closed）
+            if (Boolean.TRUE.equals(request.getPreviewOnly())) {
                 log.info("Tool preview 模式: tool={}, intentCode={}", tool.getToolName(), intent.getIntentCode());
                 return executeToolPreview(tool, factoryId, request, intent, userId, userRole);
             }

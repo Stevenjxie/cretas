@@ -23,8 +23,6 @@ public class ShiftScheduleCreateTool extends AbstractBusinessTool {
             "required", List.of("store_id", "action"));
     }
     @Override protected List<String> getRequiredParameters() { return List.of("store_id", "action"); }
-    @Override public boolean supportsPreview() { return true; }
-
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> ctx) throws Exception {
         String storeId = getString(params, "store_id");

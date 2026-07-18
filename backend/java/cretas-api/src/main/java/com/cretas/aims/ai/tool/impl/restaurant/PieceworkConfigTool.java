@@ -25,8 +25,6 @@ public class PieceworkConfigTool extends AbstractBusinessTool {
             "required", List.of("store_id", "role"));
     }
     @Override protected List<String> getRequiredParameters() { return List.of("store_id", "role"); }
-    @Override public boolean supportsPreview() { return true; }
-
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> ctx) throws Exception {
         PieceworkConfig config = PieceworkConfig.builder()
