@@ -7,6 +7,12 @@ description: 检查和更新 Codex Rules 内容。包括格式检查、统计数
 
 维护 `.codex/rules/` 目录中的规则文件。`.claude/rules/` 可作为历史来源读取，但 Codex 的可引用规则应落在 `.codex/rules/`。
 
+## Claude-only 边界
+
+- 不要把 Claude 的 Thin-Opus Organizer 编排复制到 Codex。
+- `.claude/skills/organizer/`、`.claude/rules/organizer-protocol.md` 和 `.claude/rules/multi-model-dispatch.md` 只由 Claude 使用；Codex 侧不得创建对应的 `.agents/skills/organizer/` 或 `.codex/rules/` 镜像。
+- Codex 的模型与 effort 路由唯一入口是 `.agents/skills/model-effort-router/SKILL.md`。
+
 ## Rules 目录
 
 ```
