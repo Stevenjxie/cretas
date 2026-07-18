@@ -1,16 +1,39 @@
 package com.cretas.aims.controller;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import com.cretas.aims.ai.tool.gateway.ConfirmationProof;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
+import com.cretas.aims.dto.ai.IntentExecuteResponse;
+import com.cretas.aims.exception.GlobalExceptionHandler;
+import com.cretas.aims.service.AIIntentService;
+import com.cretas.aims.service.IntentExecutorService;
+import com.cretas.aims.service.KeywordEffectivenessService;
+import com.cretas.aims.service.ParameterExtractionLearningService;
+import com.cretas.aims.service.impl.IntentConfigRollbackService;
+import com.cretas.aims.utils.CookieAuthHelper;
+import com.cretas.aims.utils.JwtUtil;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
+import org.hamcrest.Matchers;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.RequestHeader;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
+import java.time.Instant;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -19,6 +42,17 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
  * Sprint 11 Round 2 (2026-05-22) — P0 fix verification.
@@ -54,6 +88,9 @@ import static org.junit.jupiter.api.Assertions.fail;
  */
 @DisplayName("AIIntentConfigController perm gate — Sprint 11 Round 2 P0 fix")
 class AIIntentConfigControllerTest {
+
+    private static final String CONFIRMATION_TOKEN = "opaque-sensitive-confirmation-token";
+    private static final String COMMAND_DIGEST = "a".repeat(64);
 
     /** Endpoints that MUST NOT have @RequirePermission({"system:read_write"})
      *  — they are AI-execution or read-only diagnostic + feedback paths used by
@@ -335,5 +372,190 @@ class AIIntentConfigControllerTest {
         assertTrue(Arrays.stream(m.getParameterTypes())
                         .anyMatch(HttpServletRequest.class::isAssignableFrom),
                 "extractToken must take HttpServletRequest parameter");
+    }
+
+    @Test
+    @DisplayName("fixed confirmation endpoint keeps the opaque token in the dedicated header")
+    void fixed_confirmation_endpoint_uses_header_and_parameter_bound_body() throws Exception {
+        ControllerFixture fixture = controllerFixture();
+        Instant expiresAt = Instant.now().plusSeconds(300);
+        when(fixture.executor().confirm(
+                eq("F001"), any(ConfirmationProof.class), eq(12L), eq("FACTORY_ADMIN")))
+                .thenReturn(IntentExecuteResponse.builder().status("SUCCESS").build());
+
+        Logger logger = (Logger) LoggerFactory.getLogger(AIIntentConfigController.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            fixture.mvc().perform(post("/api/mobile/F001/ai-intents/confirm")
+                            .header("Authorization", "Bearer jwt-token")
+                            .header("X-Cretas-Confirmation-Token", CONFIRMATION_TOKEN)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(new ObjectMapper().findAndRegisterModules().writeValueAsString(Map.of(
+                                    "commandDigest", COMMAND_DIGEST,
+                                    "expiresAt", expiresAt.toString(),
+                                    "requestId", "request-12345678",
+                                    "idempotencyKey", "idem-12345678"))))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.success").value(true));
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
+
+        var proofCaptor = org.mockito.ArgumentCaptor.forClass(ConfirmationProof.class);
+        verify(fixture.executor()).confirm(
+                eq("F001"), proofCaptor.capture(), eq(12L), eq("FACTORY_ADMIN"));
+        assertEquals(CONFIRMATION_TOKEN, proofCaptor.getValue().proofToken());
+        assertEquals(COMMAND_DIGEST, proofCaptor.getValue().commandDigest());
+        assertEquals(expiresAt, proofCaptor.getValue().expiresAt());
+        assertTrue(appender.list.stream()
+                .noneMatch(event -> event.getFormattedMessage().contains(CONFIRMATION_TOKEN)),
+                "controller logs must never contain the confirmation header token");
+    }
+
+    @Test
+    @DisplayName("fixed confirmation endpoint preserves cookie-only authentication")
+    void fixed_confirmation_endpoint_accepts_cookie_only_authentication() throws Exception {
+        ControllerFixture fixture = controllerFixture();
+        when(fixture.executor().confirm(
+                eq("F001"), any(ConfirmationProof.class), eq(12L), eq("FACTORY_ADMIN")))
+                .thenReturn(IntentExecuteResponse.builder().status("SUCCESS").build());
+
+        fixture.mvc().perform(post("/api/mobile/F001/ai-intents/confirm")
+                        .cookie(new Cookie(CookieAuthHelper.ACCESS_TOKEN_COOKIE, "jwt-token"))
+                        .header("X-Cretas-Confirmation-Token", CONFIRMATION_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(validConfirmationBody()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+
+        var proofCaptor = org.mockito.ArgumentCaptor.forClass(ConfirmationProof.class);
+        verify(fixture.executor()).confirm(
+                eq("F001"), proofCaptor.capture(), eq(12L), eq("FACTORY_ADMIN"));
+        assertEquals(CONFIRMATION_TOKEN, proofCaptor.getValue().proofToken());
+        assertEquals(COMMAND_DIGEST, proofCaptor.getValue().commandDigest());
+    }
+
+    @Test
+    @DisplayName("legacy path-token endpoint terminates with 410 and no application execution")
+    void legacy_path_confirmation_returns_gone_without_binding_or_execution() throws Exception {
+        ControllerFixture fixture = controllerFixture();
+
+        fixture.mvc().perform(post("/api/mobile/F001/ai-intents/confirm/{legacyToken}",
+                            CONFIRMATION_TOKEN))
+                .andExpect(status().isGone())
+                .andExpect(header().string("Cache-Control", Matchers.containsString("no-store")))
+                .andExpect(jsonPath("$.errorCode")
+                        .value("CONFIRMATION_ENDPOINT_UPGRADE_REQUIRED"));
+
+        verifyNoInteractions(fixture.executor(), fixture.jwtUtil());
+    }
+
+    @Test
+    @DisplayName("fixed confirmation endpoint rejects invalid or expired proof without echoing values")
+    void fixed_confirmation_endpoint_rejects_invalid_or_expired_proof_without_echo() throws Exception {
+        ControllerFixture fixture = controllerFixture();
+        String invalidDigest = "SECRET-UPPERCASE-DIGEST";
+        String requestId = "request-secret-123";
+        String idempotencyKey = "idempotency-secret-123";
+
+        fixture.mvc().perform(post("/api/mobile/F001/ai-intents/confirm")
+                        .header("Authorization", "Bearer jwt-token")
+                        .header("X-Cretas-Confirmation-Token", CONFIRMATION_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(new ObjectMapper().findAndRegisterModules().writeValueAsString(Map.of(
+                                "commandDigest", invalidDigest,
+                                "expiresAt", Instant.now().minusSeconds(1).toString(),
+                                "requestId", requestId,
+                                "idempotencyKey", idempotencyKey))))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().string(Matchers.not(Matchers.containsString(invalidDigest))))
+                .andExpect(content().string(Matchers.not(Matchers.containsString(requestId))))
+                .andExpect(content().string(Matchers.not(Matchers.containsString(idempotencyKey))))
+                .andExpect(content().string(Matchers.not(Matchers.containsString(CONFIRMATION_TOKEN))));
+
+        verifyNoInteractions(fixture.executor());
+    }
+
+    @Test
+    @DisplayName("fixed confirmation endpoint rejects a blank confirmation header before auth")
+    void fixed_confirmation_endpoint_rejects_blank_header_before_auth() throws Exception {
+        ControllerFixture fixture = controllerFixture();
+
+        fixture.mvc().perform(post("/api/mobile/F001/ai-intents/confirm")
+                        .header("X-Cretas-Confirmation-Token", " ")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(validConfirmationBody()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("INVALID_CONFIRMATION_PROOF"))
+                .andExpect(content().string(Matchers.not(Matchers.containsString(CONFIRMATION_TOKEN))));
+
+        verifyNoInteractions(fixture.executor(), fixture.jwtUtil());
+    }
+
+    @Test
+    @DisplayName("confirmation JSON rejects confirmToken and every other unknown field")
+    void confirmation_body_rejects_unknown_fields_without_echoing_values() throws Exception {
+        ControllerFixture fixture = controllerFixture();
+        for (Map.Entry<String, String> unknown : Map.of(
+                "confirmToken", "body-token-must-never-be-accepted",
+                "unexpectedField", "unexpected-secret-value").entrySet()) {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("commandDigest", COMMAND_DIGEST);
+            body.put("expiresAt", Instant.now().plusSeconds(300).toString());
+            body.put("requestId", "request-12345678");
+            body.put("idempotencyKey", "idem-12345678");
+            body.put(unknown.getKey(), unknown.getValue());
+
+            fixture.mvc().perform(post("/api/mobile/F001/ai-intents/confirm")
+                            .header("Authorization", "Bearer jwt-token")
+                            .header("X-Cretas-Confirmation-Token", CONFIRMATION_TOKEN)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(new ObjectMapper().findAndRegisterModules()
+                                    .writeValueAsString(body)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(content().string(
+                            Matchers.not(Matchers.containsString(unknown.getValue()))))
+                    .andExpect(content().string(
+                            Matchers.not(Matchers.containsString(CONFIRMATION_TOKEN))));
+        }
+
+        verifyNoInteractions(fixture.executor());
+    }
+
+    private ControllerFixture controllerFixture() {
+        IntentExecutorService executor = mock(IntentExecutorService.class);
+        JwtUtil jwtUtil = mock(JwtUtil.class);
+        when(jwtUtil.getUserIdFromToken("jwt-token")).thenReturn(12L);
+        when(jwtUtil.getRoleFromToken("jwt-token")).thenReturn("FACTORY_ADMIN");
+        AIIntentConfigController controller = new AIIntentConfigController(
+                mock(AIIntentService.class),
+                executor,
+                mock(KeywordEffectivenessService.class),
+                mock(IntentConfigRollbackService.class),
+                mock(ParameterExtractionLearningService.class),
+                jwtUtil);
+        return new ControllerFixture(
+                MockMvcBuilders.standaloneSetup(controller)
+                        .setControllerAdvice(new GlobalExceptionHandler())
+                        .build(),
+                executor,
+                jwtUtil);
+    }
+
+    private String validConfirmationBody() throws Exception {
+        return new ObjectMapper().findAndRegisterModules().writeValueAsString(Map.of(
+                "commandDigest", COMMAND_DIGEST,
+                "expiresAt", Instant.now().plusSeconds(300).toString(),
+                "requestId", "request-12345678",
+                "idempotencyKey", "idem-12345678"));
+    }
+
+    private record ControllerFixture(
+            MockMvc mvc,
+            IntentExecutorService executor,
+            JwtUtil jwtUtil) {
     }
 }

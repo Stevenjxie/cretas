@@ -7,6 +7,7 @@ import com.cretas.aims.ai.dto.ChatMessage;
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.ai.tool.gateway.ConfirmationProof;
 import com.cretas.aims.config.DashScopeConfig;
 import com.cretas.aims.config.IntentKnowledgeBase;
 import com.cretas.aims.config.IntentKnowledgeBase.QuestionType;
@@ -36,6 +37,7 @@ import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
@@ -55,6 +57,8 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 public class IntentExecutionOrchestrator {
+
+    private static final Pattern COMMAND_DIGEST_PATTERN = Pattern.compile("^[0-9a-f]{64}$");
 
     private static final Pattern STORE_REFERENCE_PATTERN = Pattern.compile(
             "那家店|这家店|该店|那个店|这个店|该门店|那家|这家");
@@ -715,12 +719,8 @@ public class IntentExecutionOrchestrator {
     /**
      * 确认执行预览的操作
      */
-    public IntentExecuteResponse confirm(String factoryId, String confirmToken,
+    public IntentExecuteResponse confirm(String factoryId, ConfirmationProof confirmationProof,
                                           Long userId, String userRole) {
-        String tokenFingerprint = com.cretas.aims.ai.tool.gateway.ToolCommandDigest
-                .tokenFingerprint(confirmToken);
-        log.info("确认执行: factoryId={}, tokenFingerprint={}", factoryId, tokenFingerprint);
-
         if (previewTokenService == null) {
             return IntentExecuteResponse.builder()
                     .status("FAILED")
@@ -729,8 +729,24 @@ public class IntentExecutionOrchestrator {
                     .build();
         }
 
+        if (confirmationProof == null
+                || !COMMAND_DIGEST_PATTERN.matcher(confirmationProof.commandDigest()).matches()
+                || !confirmationProof.expiresAt().isAfter(Instant.now())) {
+            return IntentExecuteResponse.builder()
+                    .status("FAILED")
+                    .message("Confirmation proof is invalid or expired")
+                    .executedAt(LocalDateTime.now())
+                    .build();
+        }
+
+        String confirmToken = confirmationProof.proofToken();
+
         PreviewTokenService.ClaimResult claimResult =
-                previewTokenService.claimToken(confirmToken, factoryId, userId);
+                previewTokenService.claimToken(
+                        confirmToken,
+                        factoryId,
+                        userId,
+                        confirmationProof.commandDigest());
         if (!claimResult.isSuccess()) {
             return IntentExecuteResponse.builder()
                     .status("FAILED")
@@ -824,8 +840,7 @@ public class IntentExecutionOrchestrator {
             boolean resolved = previewTokenService.resolveClaim(
                     confirmToken, claimId, toolSucceeded, resolution);
             if (!resolved) {
-                log.error("确认状态完成失败: tokenFingerprint={}, claimFingerprint={}",
-                        tokenFingerprint,
+                log.error("确认状态完成失败: claimFingerprint={}",
                         com.cretas.aims.ai.tool.gateway.ToolCommandDigest.tokenFingerprint(claimId));
                 return IntentExecuteResponse.builder()
                         .status("FAILED")
@@ -844,11 +859,11 @@ public class IntentExecutionOrchestrator {
                 previewTokenService.resolveClaim(confirmToken, claimId, false,
                         "执行异常: " + com.cretas.aims.util.ErrorSanitizer.sanitize(e));
             } catch (Exception resolutionError) {
-                log.error("确认失败状态写入异常: tokenFingerprint={}, error={}",
-                        tokenFingerprint, resolutionError.getMessage());
+                log.error("确认失败状态写入异常: factoryId={}, error={}",
+                        factoryId, resolutionError.getMessage());
             }
-            log.error("确认执行失败: tokenFingerprint={}, error={}",
-                    tokenFingerprint, e.getMessage(), e);
+            log.error("确认执行失败: factoryId={}, error={}",
+                    factoryId, e.getMessage(), e);
             return IntentExecuteResponse.builder()
                     .status("FAILED")
                     .message("执行失败: " + com.cretas.aims.util.ErrorSanitizer.sanitize(e))

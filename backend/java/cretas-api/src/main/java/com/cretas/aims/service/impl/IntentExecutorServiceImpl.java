@@ -1,5 +1,6 @@
 package com.cretas.aims.service.impl;
 
+import com.cretas.aims.ai.tool.gateway.ConfirmationProof;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.dto.conversation.ConversationContext;
@@ -99,9 +100,9 @@ public class IntentExecutorServiceImpl implements IntentExecutorService {
     }
 
     @Override
-    public IntentExecuteResponse confirm(String factoryId, String confirmToken,
-                                         Long userId, String userRole) {
-        return orchestrator.confirm(factoryId, confirmToken, userId, userRole);
+    public IntentExecuteResponse confirm(String factoryId, ConfirmationProof confirmationProof,
+                                          Long userId, String userRole) {
+        return orchestrator.confirm(factoryId, confirmationProof, userId, userRole);
     }
 
     @Override

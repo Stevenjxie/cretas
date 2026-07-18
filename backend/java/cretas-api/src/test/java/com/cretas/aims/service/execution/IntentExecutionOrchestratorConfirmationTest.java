@@ -3,6 +3,7 @@ package com.cretas.aims.service.execution;
 import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.ai.tool.gateway.ConfirmationProof;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
 import com.cretas.aims.config.DashScopeConfig;
 import com.cretas.aims.config.IntentKnowledgeBase;
@@ -20,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
@@ -30,6 +32,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class IntentExecutionOrchestratorConfirmationTest {
@@ -39,6 +42,7 @@ class IntentExecutionOrchestratorConfirmationTest {
     private static final String ROLE = "FACTORY_ADMIN";
     private static final String TOKEN = "sensitive-token";
     private static final String CLAIM = "claim-owner";
+    private static final String DIGEST = "a".repeat(64);
 
     private AIIntentService aiIntentService;
     private ToolRegistry toolRegistry;
@@ -74,14 +78,14 @@ class IntentExecutionOrchestratorConfirmationTest {
                 mock(DynamicToolSelectionService.class),
                 mock(QueryPreprocessorService.class));
         ReflectionTestUtils.setField(orchestrator, "previewTokenService", tokenService);
-        when(tokenService.claimToken(TOKEN, FACTORY, USER)).thenReturn(claimResult());
+        when(tokenService.claimToken(TOKEN, FACTORY, USER, DIGEST)).thenReturn(claimResult());
     }
 
     @Test
     void missingIntentConfigFailsTheClaimBeforeToolExecution() {
         when(aiIntentService.getIntentByCode(FACTORY, "ORDER_CREATE")).thenReturn(Optional.empty());
 
-        IntentExecuteResponse response = orchestrator.confirm(FACTORY, TOKEN, USER, ROLE);
+        IntentExecuteResponse response = orchestrator.confirm(FACTORY, proof(), USER, ROLE);
 
         assertThat(response.getStatus()).isEqualTo("FAILED");
         verify(tokenService).resolveClaim(TOKEN, CLAIM, false, "意图配置不存在: ORDER_CREATE");
@@ -93,7 +97,7 @@ class IntentExecutionOrchestratorConfirmationTest {
         when(aiIntentService.getIntentByCode(FACTORY, "ORDER_CREATE")).thenReturn(Optional.of(config));
         when(toolRegistry.getExecutor("order_create")).thenReturn(Optional.empty());
 
-        IntentExecuteResponse missing = orchestrator.confirm(FACTORY, TOKEN, USER, ROLE);
+        IntentExecuteResponse missing = orchestrator.confirm(FACTORY, proof(), USER, ROLE);
         assertThat(missing.getStatus()).isEqualTo("FAILED");
         verify(tokenService).resolveClaim(TOKEN, CLAIM, false, "未找到绑定工具: order_create");
     }
@@ -107,7 +111,7 @@ class IntentExecutionOrchestratorConfirmationTest {
                         .status("FAILED").message("business rejected").build());
         when(tokenService.resolveClaim(TOKEN, CLAIM, false, "business rejected")).thenReturn(true);
 
-        IntentExecuteResponse response = orchestrator.confirm(FACTORY, TOKEN, USER, ROLE);
+        IntentExecuteResponse response = orchestrator.confirm(FACTORY, proof(), USER, ROLE);
 
         assertThat(response.getStatus()).isEqualTo("FAILED");
         verify(tokenService).resolveClaim(TOKEN, CLAIM, false, "business rejected");
@@ -123,7 +127,7 @@ class IntentExecutionOrchestratorConfirmationTest {
                         .status("SUCCESS").message("created").build());
         when(tokenService.resolveClaim(TOKEN, CLAIM, true, "created")).thenReturn(true);
 
-        IntentExecuteResponse response = orchestrator.confirm(FACTORY, TOKEN, USER, ROLE);
+        IntentExecuteResponse response = orchestrator.confirm(FACTORY, proof(), USER, ROLE);
 
         assertThat(response.getStatus()).isEqualTo("SUCCESS");
         Map<String, Object> context = requestCaptor.getValue().getContext();
@@ -136,6 +140,31 @@ class IntentExecutionOrchestratorConfirmationTest {
                 .containsEntry("role", ROLE)
                 .containsEntry("confirmed", true);
         verify(tokenService).resolveClaim(TOKEN, CLAIM, true, "created");
+    }
+
+    @Test
+    void expectedCommandDigestIsPassedExactlyAndMismatchCausesZeroBusinessDispatch() {
+        when(tokenService.claimToken(TOKEN, FACTORY, USER, DIGEST))
+                .thenReturn(ClaimResult.failure("Confirmation proof does not match command"));
+
+        IntentExecuteResponse response = orchestrator.confirm(FACTORY, proof(), USER, ROLE);
+
+        assertThat(response.getStatus()).isEqualTo("FAILED");
+        verify(tokenService).claimToken(TOKEN, FACTORY, USER, DIGEST);
+        verifyNoInteractions(dispatchService, toolRegistry, aiIntentService);
+    }
+
+    @Test
+    void expiredBodyProofFailsBeforeAtomicClaimOrBusinessDispatch() {
+        ConfirmationProof expired = new ConfirmationProof(
+                TOKEN,
+                DIGEST,
+                Instant.now().minusSeconds(1));
+
+        IntentExecuteResponse response = orchestrator.confirm(FACTORY, expired, USER, ROLE);
+
+        assertThat(response.getStatus()).isEqualTo("FAILED");
+        verifyNoInteractions(tokenService, dispatchService, toolRegistry, aiIntentService);
     }
 
     private ToolExecutor configuredTool() {
@@ -173,5 +202,9 @@ class IntentExecutionOrchestratorConfirmationTest {
         spoofed.put("role", "SUPER_ADMIN");
         spoofed.put("amount", 5);
         return ClaimResult.success(token, CLAIM, spoofed);
+    }
+
+    private ConfirmationProof proof() {
+        return new ConfirmationProof(TOKEN, DIGEST, Instant.now().plusSeconds(300));
     }
 }
