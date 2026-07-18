@@ -7,6 +7,7 @@ claims whose numeric values can be traced to an EvidenceEnvelope fact.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
@@ -59,6 +60,8 @@ class RuntimeBudgets:
     max_rounds: int = 2
     max_tool_calls: int = 10
     wallclock_seconds: float = 60.0
+    per_tool_timeout_seconds: float = 15.0
+    timeout_cleanup_grace_seconds: float = 1.0
     max_facts: int = 450
     max_evidence_bytes: int = 300_000
 
@@ -67,8 +70,32 @@ class RuntimeBudgets:
             raise ValueError("runtime supports at most two rounds")
         if not 1 <= self.max_tool_calls <= 10:
             raise ValueError("runtime supports at most ten tool calls")
-        if self.wallclock_seconds <= 0:
-            raise ValueError("wallclock budget must be positive")
+        if (
+            isinstance(self.wallclock_seconds, bool)
+            or not isinstance(self.wallclock_seconds, (int, float))
+            or not math.isfinite(self.wallclock_seconds)
+            or self.wallclock_seconds <= 0
+        ):
+            raise ValueError("wallclock budget must be finite and positive")
+        if (
+            isinstance(self.per_tool_timeout_seconds, bool)
+            or not isinstance(self.per_tool_timeout_seconds, (int, float))
+            or not math.isfinite(self.per_tool_timeout_seconds)
+            or self.per_tool_timeout_seconds <= 0
+        ):
+            raise ValueError("per-tool timeout must be finite and positive")
+        if (
+            isinstance(self.timeout_cleanup_grace_seconds, bool)
+            or not isinstance(self.timeout_cleanup_grace_seconds, (int, float))
+            or not math.isfinite(self.timeout_cleanup_grace_seconds)
+            or self.timeout_cleanup_grace_seconds <= 0
+            or self.timeout_cleanup_grace_seconds >= self.per_tool_timeout_seconds
+            or self.per_tool_timeout_seconds - self.timeout_cleanup_grace_seconds
+            < 0.001
+        ):
+            raise ValueError(
+                "timeout cleanup grace must be finite, positive, and leave at least 1ms for the tool"
+            )
         if self.max_facts <= 0 or self.max_evidence_bytes <= 0:
             raise ValueError("fact and evidence-byte budgets must be positive")
 
@@ -135,12 +162,20 @@ class RuntimeCounters:
     facts_used: int = 0
     evidence_bytes_used: int = 0
 
-    def after(
-        self, *, round_number: int, facts: int, evidence_bytes: int
-    ) -> "RuntimeCounters":
+    def start_tool(self, *, round_number: int) -> "RuntimeCounters":
+        """Count an admitted tool call before execution, including failures."""
+
         return RuntimeCounters(
             rounds_used=max(self.rounds_used, round_number),
             tool_calls_used=self.tool_calls_used + 1,
+            facts_used=self.facts_used,
+            evidence_bytes_used=self.evidence_bytes_used,
+        )
+
+    def add_evidence(self, *, facts: int, evidence_bytes: int) -> "RuntimeCounters":
+        return RuntimeCounters(
+            rounds_used=self.rounds_used,
+            tool_calls_used=self.tool_calls_used,
             facts_used=self.facts_used + facts,
             evidence_bytes_used=self.evidence_bytes_used + evidence_bytes,
         )

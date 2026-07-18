@@ -261,8 +261,10 @@ async def _persisted_event_stream(
         cancellation_requested.set()
         raise
     finally:
-        # Best effort only. The runtime checks this before/after safe read steps;
-        # an in-flight DB read is never force-cancelled or reported as cancelled.
+        # Best effort only. This requests a trusted cancellation outcome after
+        # the current bounded read has completed or timed out and cleaned up; a
+        # browser disconnect does not force-cancel the runtime task or invent an
+        # immediate service-side CANCELLED terminal.
         cancellation_requested.set()
 
 

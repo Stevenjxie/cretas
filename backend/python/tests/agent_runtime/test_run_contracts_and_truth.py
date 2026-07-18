@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 
 import pytest
@@ -86,11 +87,30 @@ def test_route_is_typed_ordered_and_bounded_to_two_rounds():
         {"max_tool_calls": 11},
         {"max_facts": 0},
         {"max_evidence_bytes": 0},
+        {"wallclock_seconds": True},
+        {"wallclock_seconds": math.inf},
+        {"per_tool_timeout_seconds": True},
+        {"per_tool_timeout_seconds": math.nan},
+        {"timeout_cleanup_grace_seconds": True},
+        {"timeout_cleanup_grace_seconds": 0},
+        {"per_tool_timeout_seconds": 1.0, "timeout_cleanup_grace_seconds": 1.0},
+        {
+            "per_tool_timeout_seconds": 1.0005,
+            "timeout_cleanup_grace_seconds": 1.0,
+        },
     ],
 )
 def test_runtime_budget_hard_ceilings(kwargs):
     with pytest.raises(ValueError):
         RuntimeBudgets(**kwargs)
+
+
+def test_runtime_budget_timeout_defaults_are_explicit_and_bounded():
+    budgets = RuntimeBudgets()
+
+    assert budgets.per_tool_timeout_seconds == 15.0
+    assert budgets.timeout_cleanup_grace_seconds == 1.0
+    assert 0 < budgets.timeout_cleanup_grace_seconds < budgets.per_tool_timeout_seconds
 
 
 def test_numeric_claim_requires_exact_evidence_and_fact_match():

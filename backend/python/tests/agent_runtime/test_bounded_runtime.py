@@ -23,6 +23,7 @@ from smartbi.agent.runtime.evaluation import (
     evaluate_runtime,
     LegacyShadowSnapshot,
 )
+from smartbi.agent.runtime.gateway import ReadToolTimeout
 from smartbi.agent.runtime.run_contracts import (
     AgentEventType,
     GrossMarginDeclineRequest,
@@ -148,8 +149,8 @@ class FakeGateway:
         self.calls = []
         self.exception = exception
 
-    async def execute(self, tool_name, parameters, context):
-        self.calls.append((tool_name, dict(parameters), context))
+    async def execute(self, tool_name, parameters, context, **trusted_timeout):
+        self.calls.append((tool_name, dict(parameters), context, trusted_timeout))
         if self.exception is not None:
             raise self.exception
         return self.envelopes[tool_name]
@@ -161,10 +162,38 @@ class BlockingGateway(FakeGateway):
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
-    async def execute(self, tool_name, parameters, context):
+    async def execute(self, tool_name, parameters, context, **trusted_timeout):
         self.started.set()
         await self.release.wait()
-        return await super().execute(tool_name, parameters, context)
+        return await super().execute(tool_name, parameters, context, **trusted_timeout)
+
+
+class TimeoutGateway(FakeGateway):
+    def __init__(self, envelopes, *, cancellation_requested=None):
+        super().__init__(envelopes)
+        self.cancellation_requested = cancellation_requested
+
+    async def execute(self, tool_name, parameters, context, **trusted_timeout):
+        self.calls.append((tool_name, dict(parameters), context, trusted_timeout))
+        if self.cancellation_requested is not None:
+            self.cancellation_requested.set()
+        raise ReadToolTimeout("READ_TOOL_TIMEOUT")
+
+
+class StepStartedClockStore(InMemoryRunStore):
+    def __init__(self, clock, *, after_step_time=159.5, cancellation_requested=None):
+        super().__init__()
+        self.clock = clock
+        self.after_step_time = after_step_time
+        self.cancellation_requested = cancellation_requested
+
+    async def append_event(self, *args, **kwargs):
+        result = await super().append_event(*args, **kwargs)
+        if args[2] is AgentEventType.STEP_STARTED:
+            self.clock["value"] = self.after_step_time
+            if self.cancellation_requested is not None:
+                self.cancellation_requested.set()
+        return result
 
 
 @pytest.mark.asyncio
@@ -188,6 +217,10 @@ async def test_runtime_executes_period_store_dish_and_refuses_unsupported_attrib
         "restaurant_store_performance_read.v1",
         "restaurant_dish_margin_mix_read.v1",
     ]
+    assert all(
+        call[3] == {"timeout_seconds": 15.0, "cleanup_grace_seconds": 1.0}
+        for call in gateway.calls
+    )
     assert not result.outcome.attribution_supported
     assert "STORE_MARGIN_UNAVAILABLE" in result.outcome.blockers
     assert "DISH_MARGIN_UNAVAILABLE" in result.outcome.blockers
@@ -265,6 +298,164 @@ async def test_budget_and_cancel_have_durable_terminal_semantics():
     assert (await cancel_store.events_for(cancel_result.run_id, context()))[
         -1
     ].event_type is AgentEventType.RUN_CANCELLED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("budgets", "expected_code", "expected_timeout"),
+    [
+        (RuntimeBudgets(), "READ_TOOL_TIMEOUT", 15.0),
+        (
+            RuntimeBudgets(
+                wallclock_seconds=2.0,
+                per_tool_timeout_seconds=15.0,
+                timeout_cleanup_grace_seconds=0.5,
+            ),
+            "WALLCLOCK_BUDGET_EXCEEDED",
+            2.0,
+        ),
+        (
+            RuntimeBudgets(
+                wallclock_seconds=15.0,
+                per_tool_timeout_seconds=15.0,
+                timeout_cleanup_grace_seconds=1.0,
+            ),
+            "WALLCLOCK_BUDGET_EXCEEDED",
+            15.0,
+        ),
+    ],
+)
+async def test_read_timeout_is_durable_budget_terminal_and_counts_started_call_once(
+    budgets, expected_code, expected_timeout
+):
+    store = InMemoryRunStore()
+    gateway = TimeoutGateway(route_evidence())
+    runtime = BoundedRestaurantRuntime(
+        gateway,
+        store,
+        budgets=budgets,
+        monotonic=lambda: 100.0,
+        id_factory=lambda: "90909090-9090-4090-8090-909090909090",
+    )
+
+    result = await runtime.execute(
+        GrossMarginDeclineRequest("2026-01-01", "2026-01-31"), context()
+    )
+
+    assert result.state is RunState.BUDGET_EXCEEDED
+    assert result.failure_code == expected_code
+    assert result.evidence == ()
+    assert result.counters.tool_calls_used == 1
+    assert result.counters.rounds_used == 1
+    assert gateway.calls[0][3] == {
+        "timeout_seconds": expected_timeout,
+        "cleanup_grace_seconds": budgets.timeout_cleanup_grace_seconds,
+    }
+    events = await store.events_for(result.run_id, context())
+    assert [
+        event.event_type
+        for event in events
+        if event.event_type is AgentEventType.STEP_FAILED
+    ] == [AgentEventType.STEP_FAILED]
+    assert not any(
+        event.event_type is AgentEventType.STEP_COMPLETED for event in events
+    )
+    assert events[-2].payload == {"failureCode": expected_code}
+    assert events[-1].event_type is AgentEventType.BUDGET_EXCEEDED
+    assert events[-1].payload["failureCode"] == expected_code
+    assert events[-1].payload["toolCallsUsed"] == 1
+    assert (
+        await store.load_run(result.run_id, context())
+    ).counters.tool_calls_used == 1
+
+
+@pytest.mark.asyncio
+async def test_trusted_cancel_request_wins_when_read_timeout_cleanup_completes():
+    store = InMemoryRunStore()
+    requested = asyncio.Event()
+    runtime = BoundedRestaurantRuntime(
+        TimeoutGateway(route_evidence(), cancellation_requested=requested),
+        store,
+        id_factory=lambda: "91919191-9191-4191-8191-919191919191",
+    )
+
+    result = await runtime.execute(
+        GrossMarginDeclineRequest("2026-01-01", "2026-01-31"),
+        context(),
+        cancelled=requested.is_set,
+    )
+
+    assert result.state is RunState.CANCELLED
+    assert result.failure_code == "RUN_CANCELLED"
+    assert result.evidence == ()
+    assert result.counters.tool_calls_used == 1
+    events = await store.events_for(result.run_id, context())
+    assert not any(
+        event.event_type in {AgentEventType.STEP_FAILED, AgentEventType.STEP_COMPLETED}
+        for event in events
+    )
+    assert events[-1].event_type is AgentEventType.RUN_CANCELLED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("after_step_time", [159.5, 158.9995])
+async def test_step_started_persistence_time_is_deducted_before_gateway_admission(
+    after_step_time,
+):
+    clock = {"value": 100.0}
+    store = StepStartedClockStore(clock, after_step_time=after_step_time)
+    gateway = FakeGateway(route_evidence())
+    runtime = BoundedRestaurantRuntime(
+        gateway,
+        store,
+        budgets=RuntimeBudgets(
+            wallclock_seconds=60.0,
+            per_tool_timeout_seconds=15.0,
+            timeout_cleanup_grace_seconds=1.0,
+        ),
+        monotonic=lambda: clock["value"],
+        id_factory=lambda: "92929292-9292-4292-8292-929292929292",
+    )
+
+    result = await runtime.execute(
+        GrossMarginDeclineRequest("2026-01-01", "2026-01-31"), context()
+    )
+
+    assert result.state is RunState.BUDGET_EXCEEDED
+    assert result.failure_code == "WALLCLOCK_BUDGET_EXCEEDED"
+    assert result.counters.tool_calls_used == 1
+    assert gateway.calls == []
+    events = await store.events_for(result.run_id, context())
+    assert events[-2].event_type is AgentEventType.STEP_FAILED
+    assert events[-2].payload == {"failureCode": "WALLCLOCK_BUDGET_EXCEEDED"}
+    assert events[-1].event_type is AgentEventType.BUDGET_EXCEEDED
+
+
+@pytest.mark.asyncio
+async def test_cancel_wins_if_requested_while_step_started_event_is_persisted():
+    clock = {"value": 100.0}
+    requested = asyncio.Event()
+    store = StepStartedClockStore(clock, cancellation_requested=requested)
+    gateway = FakeGateway(route_evidence())
+    runtime = BoundedRestaurantRuntime(
+        gateway,
+        store,
+        monotonic=lambda: clock["value"],
+        id_factory=lambda: "93939393-9393-4393-8393-939393939393",
+    )
+
+    result = await runtime.execute(
+        GrossMarginDeclineRequest("2026-01-01", "2026-01-31"),
+        context(),
+        cancelled=requested.is_set,
+    )
+
+    assert result.state is RunState.CANCELLED
+    assert result.counters.tool_calls_used == 1
+    assert gateway.calls == []
+    events = await store.events_for(result.run_id, context())
+    assert not any(event.event_type is AgentEventType.STEP_FAILED for event in events)
+    assert events[-1].event_type is AgentEventType.RUN_CANCELLED
 
 
 @pytest.mark.asyncio
