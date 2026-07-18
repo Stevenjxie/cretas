@@ -1,6 +1,6 @@
 # Cretas Agent Architecture V2 — 餐饮重分析、工厂轻 Agent
 
-**状态**：Proposed / 终审裁决稿；Phase 0A 安全代码已合并，V2 Runtime 尚未实现
+**状态**：Proposed / 终审裁决稿；Phase 0A 安全代码已合并并完成生产部署验证，V2 Runtime 尚未实现
 
 **日期**：2026-07-18
 
@@ -65,7 +65,7 @@ V2 不引入 Coze Studio、AgentScope、ADK、Qwen-Agent 或 Arkitect 作为运�
 
 - 被删除的 `DictionaryTestController` 位于 `/api/public/dictionary-test`，曾接受外部 `factoryId` 并直接执行 `dictionary_add`；
 - PR #1432 已从生产源码删除该控制器，并加入 `DictionaryTestControllerAbsenceTest` 防回归；
-- 这证明仓库代码风险已修复，不等于生产环境已经部署或线上端点已完成 404 验证。
+- 2026-07-18 生产发布后，网关本机通过 `--resolve` 验证 `/api/public/dictionary-test/**` 返回 404；2026-03-16 至 2026-07-18 的生产访问日志中该路径命中为 0。
 
 因此旧结论应为“P0 公共写入口，现已在仓库代码中移除”，而不是“因 CORS 限制而安全”。
 
@@ -282,7 +282,7 @@ v1 的目标是可观察和可评测，不做崩溃后 checkpoint/resume。分�
 | ADR | Fable 建议 | 最终裁决 |
 |---|---|---|
 | 1 | 升级 ToolDispatchService 为唯一 Gateway | **Modified Adopt**：新增通用 `ToolExecutionGateway`；ToolDispatchService 作为 Intent adapter |
-| 2 | MCP prod 禁用/强制鉴权 | **Adopt / Phase 0A code merged**：默认不注册；启用需强制密钥/服务身份、服务端 tenant、Tool allowlist，禁止外部 context 注入身份。生产部署与消费日志核验未完成 |
+| 2 | MCP prod 禁用/强制鉴权 | **Adopt / Phase 0A production verified**：默认不注册；启用需强制密钥/服务身份、服务端 tenant、Tool allowlist，禁止外部 context 注入身份。生产已部署，历史访问日志中 `/api/mcp` 命中为 0，网关探测返回 404 |
 | 3 | 复活 PreviewToken | **Modified Adopt / partial**：PR #1432 已让不支持安全 preview 的写 Tool 拒绝执行；仍需把确认重做为参数哈希、tenant/user/tool/version 绑定、TTL、单次原子消费，并删除 `confirmed=true` |
 | 4 | DB `tool_governance` 为治理真值 | **Modified Adopt**：先用版本化 Tool descriptor/治理清单 + CI；DB 只允许禁用或收紧。新 Tool 缺 descriptor 直接构建失败，旧 Tool 分批清账 |
 | 5 | Python 自建有界 Agent 循环 | **Adopt**：只做餐饮复杂只读证据循环，不做通用自主 Agent |
@@ -336,7 +336,14 @@ v1 的目标是可观察和可评测，不做崩溃后 checkpoint/resume。分�
 2. **已合并**：删除 `DictionaryTestController` 生产源码，不再保留 `/api/public/**` 的该写入口。
 3. **已合并**：修复 `previewOnly=true` + `supportsPreview=false` 的执行穿透；默认 preview fail-closed，并移除四个餐饮写 Tool 的虚假 preview 声明。
 
-PR #1432 完成的是上述安全代码切片，**不等于已经生产部署**。生产 `/api/mcp` 消费日志、当前线上 JAR 和 `/api/public/dictionary-test/**` 的 404 仍需作为独立只读运维核验；不能从 Git 合并状态推断线上状态。
+PR #1432 完成上述安全代码切片后，已于 2026-07-18 完成生产 Java 部署和独立只读运维核验：
+
+- release commit：`b65337f0c4e8273a1bac68bb5aec1780ab13a040`；backend tree：`c583c277`；
+- 生产 JAR 指纹：SHA-256 前缀 `3d4a3813…`，MD5 前缀 `aac0d575…`；
+- 蓝绿切换：green `10020` → blue `10010`，切后健康检查 `5/5` 通过；
+- 网关本机使用 `--resolve` 验证：`/api/mcp` = 404、`/api/public/dictionary-test/**` = 404、health = 200；
+- 生产访问日志覆盖 2026-03-16 至 2026-07-18，`/api/mcp` 与 `/api/public/dictionary-test` 命中均为 0；
+- 生产 Java 发布已完成；test `10011` 仍处于原异常状态，本次未触碰，也不纳入生产成功结论。
 
 原计划中的“完整直调清单 + 静态旁路门禁”升级为 Phase 0B 的前置工作，因为它必须与 `ToolExecutionGateway` 的唯一合法调用边界一起定义，而不是只做一份不会阻止回归的清单。
 
@@ -427,12 +434,11 @@ PR #1432 完成的是上述安全代码切片，**不等于已经生产部署**�
 
 ## 11. 实施前仍需回答的问题
 
-1. Phase 0A 是否已部署到生产，以及生产 `/api/mcp` 是否有真实调用者；从当前 JAR、Nginx/应用日志和只读端点探测确认，不能从 merge 状态推断。
-2. `tool_call_records` token 字段是否有足量真实数据；否则成本基线从新 Runtime event 建。
-3. Legacy Tool descriptor 的 WARN 命中和误伤面；至少先做影子报告。
-4. evidenceId 强制生成端引用与后核对增强，哪种在真实问题集上更稳。
-5. SmartBI 直达 Python 与 Java 主入口的 session/correlation ID 如何统一。
-6. 餐饮重分析的产品范围必须聚焦运营/供应链/成本等 Cretas 有确定性数据优势的场景，不能退化成与通用平台竞争的无边界聊天机器人。
+1. `tool_call_records` token 字段是否有足量真实数据；否则成本基线从新 Runtime event 建。
+2. Legacy Tool descriptor 的 WARN 命中和误伤面；至少先做影子报告。
+3. evidenceId 强制生成端引用与后核对增强，哪种在真实问题集上更稳。
+4. SmartBI 直达 Python 与 Java 主入口的 session/correlation ID 如何统一。
+5. 餐饮重分析的产品范围必须聚焦运营/供应链/成本等 Cretas 有确定性数据优势的场景，不能退化成与通用平台竞争的无边界聊天机器人。
 
 ---
 
