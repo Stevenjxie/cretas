@@ -25,6 +25,12 @@
 |---|---|---|---|
 | CRETAS-RELEASE-PARALLEL-FASTLANE-20260718 | `8b82fd7973a5ab6d3c264be15df46e50a6d7dc8e` | coordinator | 新增 Java 显式测试选择器与项目导入静态预检、Java/Web 可信制品并行构建入口、以及必须显式确认任意切换顺序 API 兼容的受控并行生产部署入口。保留 Java 单次 Maven 生命周期、双 manifest 验证、Web 原子切换、Java 蓝绿观察与各自失败日志；契约测试与既有 release manifest/Web 部署门禁全部通过。 |
 
+## 统一发布调度与 Java 关键路径优化
+
+| ID | Base SHA | Owner | Result |
+|---|---|---|---|
+| CRETAS-RELEASE-CRITICAL-PATH-20260718 | `10b2c0195607fc891eb59b25a78a7f8a6e877ed0` | Codex `/root` | 新增 `release-cretas.sh` 统一入口，按 Java/Web 变更自动构建、部署或健康 no-op；默认安全串行，仅在显式独立确认且迁移、Entity、Repository/Query、Security/Auth、Controller/DTO/API、配置和顺序门禁均未命中时并行。统一 JSON 记录制品、组件结果、阶段耗时和生产证据，并以子部署 fail-fast 环境门禁保证每组件最多一次构建。Java 同步 SemanticRouter 启动缓存改为 ready 后异步预热，可信 JAR 已通过唯一 Maven 生命周期 3 类 9 项测试并预置远端不可变缓存；shell/manifest/cache/Web 加速契约全部通过。[PR #1424](https://github.com/Stevenjxie/cretas/pull/1424)。 |
+
 ## Workflow 编辑器阻塞修复
 
 | ID | Base SHA | Owner | Result |
