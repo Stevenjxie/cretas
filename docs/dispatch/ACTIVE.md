@@ -6,11 +6,15 @@
 
 ## 在飞任务
 
-- 无。
+- `CRETAS-RELEASE-PARALLEL-FASTLANE-20260718` — `in-progress`
+  - Base SHA: `8b82fd7973a5ab6d3c264be15df46e50a6d7dc8e`
+  - Owner: coordinator
+  - Scope: `scripts/deploy/release-java-preflight.sh`、`scripts/deploy/release-cretas-parallel.sh`、对应 shell 契约测试、`AGENTS.md`、`.agents/skills/deploy-backend/SKILL.md`、ACTIVE/归档
+  - 验收: 低成本 Java 预检捕获常见测试配置问题；并行入口严格校验两类可信 manifest、仅在独立服务且已验证制品时并行、失败不掩盖任一子发布结果；shell syntax、目标 shell 测试、编码检查、`git diff --check`
 
 ## Scope 锁地图
 
-- 无。
+- `CRETAS-RELEASE-PARALLEL-FASTLANE-20260718`: Java 预检、Web/Java 受控并行发布入口、直接契约测试与对应发布规则
 
 ## 阻塞项
 
