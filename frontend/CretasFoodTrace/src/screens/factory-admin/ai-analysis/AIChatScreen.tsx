@@ -40,6 +40,15 @@ import type { FAAIStackParamList } from '../../../types/navigation';
 import { QuickActionCardGrid } from '../../../components/ai/QuickActionCardGrid';
 import { feedbackSounds } from '../../../services/audio/feedbackSounds';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { isRestaurant } from '../../../utils/factoryType';
+import {
+  currentMonthRestaurantAgentWindow,
+  isRestaurantAgentRunActive,
+} from '../../../services/api/restaurantAgentRuns';
+import {
+  RESTAURANT_AGENT_PRICE_VIEW_ROLES,
+} from '../../../types/restaurantAgentRun';
+import { RestaurantGrossMarginRunCard } from '../../../components/ai/RestaurantGrossMarginRunCard';
 
 // 建议操作类型
 interface SuggestedAction {
@@ -202,7 +211,18 @@ export default function AIChatScreen() {
 
   // Get user role for card grid and audio feedback
   const getUserRole = useAuthStore((s) => s.getUserRole);
-  const userRole = getUserRole() || 'factory_super_admin';
+  const resolvedUserRole = getUserRole();
+  const userRole = resolvedUserRole || 'factory_super_admin';
+  const currentFactoryId = user?.userType === 'factory' ? user.factoryUser.factoryId : '';
+  const restaurantAgentWindow = useMemo(() => currentMonthRestaurantAgentWindow(), []);
+  const restaurantAgentEligible = (
+    isRestaurantAgentRunActive()
+    && isRestaurant(user)
+    && RESTAURANT_AGENT_PRICE_VIEW_ROLES.has((resolvedUserRole || '').trim().toLowerCase())
+    && Boolean(currentFactoryId)
+    && Boolean(restaurantAgentWindow.startDate)
+    && Boolean(restaurantAgentWindow.endDate)
+  );
 
   // P1: Voice result handler — show preview then auto-send
   const handleVoiceResult = (text: string) => {
@@ -360,7 +380,10 @@ export default function AIChatScreen() {
     let resultData: Record<string, unknown> | null = null;
 
     try {
-      const factoryId = user?.factoryId || 'F001';
+      const factoryId = currentFactoryId;
+      if (!factoryId) {
+        throw new Error('当前账号缺少工厂标识，请重新登录');
+      }
 
       const callbacks: IntentSSECallbacks = {
         onStart: (message) => {
@@ -816,6 +839,13 @@ export default function AIChatScreen() {
           contentContainerStyle={styles.messagesContent}
           onContentSizeChange={scrollToBottom}
         >
+          {restaurantAgentEligible ? (
+            <RestaurantGrossMarginRunCard
+              factoryId={currentFactoryId}
+              startDate={restaurantAgentWindow.startDate}
+              endDate={restaurantAgentWindow.endDate}
+            />
+          ) : null}
           {messages.length === 0 ? renderWelcome() : messages.map(renderMessage)}
         </ScrollView>
 

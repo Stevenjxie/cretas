@@ -20,6 +20,7 @@ import { ref, nextTick } from 'vue';
 import { ElInput, ElButton, ElMessage } from 'element-plus';
 import ChatBubble from './ChatBubble.vue';
 import ChatTypingIndicator from './ChatTypingIndicator.vue';
+import GrossMarginDeclineRun from './GrossMarginDeclineRun.vue';
 import { askRestaurantSynthesis } from '@/api/smartbi/restaurant-synthesis';
 import type { ChatTurn } from '@/types/restaurant-chat';
 
@@ -31,6 +32,9 @@ import type { ChatTurn } from '@/types/restaurant-chat';
 // kept for potential display use; it is not sent to the API.
 defineProps<{
   factoryId: string;
+  agentRunEligible: boolean;
+  startDate: string;
+  endDate: string;
 }>();
 
 const turns = ref<ChatTurn[]>([]);
@@ -134,6 +138,13 @@ defineExpose({
     <div class="chat-scope-note">
       本问答基于全店真实经营数据（评价 / 财务 / 成本率 / 供应商价格），不读取上方所选的上传 Excel。
     </div>
+
+    <GrossMarginDeclineRun
+      :factory-id="factoryId"
+      :eligible="agentRunEligible"
+      :start-date="startDate"
+      :end-date="endDate"
+    />
 
     <div ref="chatContainer" class="chat-body">
       <div v-if="turns.length === 0" class="chat-empty">
