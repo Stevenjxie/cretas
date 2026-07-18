@@ -62,6 +62,7 @@ import ChartInsightProvider from './components/ChartInsightProvider.vue';
 import type { ChartWithMeta, UserPermissions } from './components/chartInsight';
 import AdvancedTrafficPersonaCard from './components/chat/cards/AdvancedTrafficPersonaCard.vue';
 import { resolveAdvancedTrafficPersona } from './advancedTrafficPersonaDemo';
+import { RESTAURANT_AGENT_PRICE_VIEW_ROLES } from '@/types/restaurant-agent-run';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -330,6 +331,13 @@ function _monthStartIso(offsetMonths = 0): string {
   return d.toISOString().slice(0, 10);
 }
 const goldKpiRange = ref<[string, string]>([_monthStartIso(), _todayIso()]);
+const restaurantAgentEligible = computed(() => (
+  authStore.businessDomain === 'RESTAURANT'
+  && RESTAURANT_AGENT_PRICE_VIEW_ROLES.has(authStore.currentRole.trim().toLowerCase())
+  && Boolean(factoryId.value)
+  && Boolean(goldKpiRange.value[0])
+  && Boolean(goldKpiRange.value[1])
+));
 const goldKpiShortcuts = [
   { text: '本月', value: (): [Date, Date] => [new Date(new Date().setDate(1)), new Date()] },
   { text: '近30天', value: (): [Date, Date] => {
@@ -2075,7 +2083,12 @@ function formatCurrency(v?: number): string {
       <!-- The chat panel answers over whole-store data (backend derives the
            tenant from JWT); it deliberately ignores subSector / the selected
            upload Excel, so those are not bound here (F2: synthesis-only). -->
-      <RestaurantChatPanel :factory-id="factoryId || ''" />
+      <RestaurantChatPanel
+        :factory-id="factoryId || ''"
+        :agent-run-eligible="restaurantAgentEligible"
+        :start-date="goldKpiRange[0] || ''"
+        :end-date="goldKpiRange[1] || ''"
+      />
     </el-drawer>
 
     <!-- Week 6 Template Surfacing: show analysis results for this page -->
