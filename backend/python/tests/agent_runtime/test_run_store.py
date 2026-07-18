@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from contextlib import AbstractAsyncContextManager
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -19,10 +21,36 @@ from smartbi.agent.runtime.run_store import (
     InMemoryRunStore,
     PostgresRunStore,
     RunAccessError,
+    STALE_AFTER_SECONDS,
+    STALE_RUN_FAILURE_CODE,
+    StaleRunReconcileResult,
     UnsafeRunPayloadError,
     safe_payload,
     RunStoreError,
 )
+
+
+class MutableClock:
+    def __init__(self) -> None:
+        self.value = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
+
+    def __call__(self) -> datetime:
+        return self.value
+
+    def advance(self, seconds: float) -> None:
+        self.value += timedelta(seconds=seconds)
+
+
+class FailingClock(MutableClock):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_next = False
+
+    def __call__(self) -> datetime:
+        if self.fail_next:
+            self.fail_next = False
+            raise RuntimeError("clock unavailable")
+        return self.value
 
 
 def ctx(factory_id: str) -> TrustedExecutionContext:
@@ -194,6 +222,231 @@ async def test_generic_append_rejects_terminal_events_and_counter_regression():
         )
 
 
+@pytest.mark.asyncio
+async def test_in_memory_stale_reconciliation_boundary_preserves_ledger_and_is_unique():
+    clock = MutableClock()
+    store = InMemoryRunStore(clock=clock)
+    run_id = "24242424-2424-4242-8242-242424242424"
+    tenant = ctx("A")
+    await store.create_run(
+        run_id, tenant, RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION, request()
+    )
+    counters = RuntimeCounters(1, 2, 17, 4096)
+    await store.append_event(
+        run_id,
+        tenant,
+        AgentEventType.STEP_COMPLETED,
+        {
+            "round": 1,
+            "evidenceId": "ev-stale",
+            "evidenceStatus": "OK",
+            "factCount": 17,
+            "evidenceBytes": 4096,
+            "warningCodes": [],
+        },
+        counters=counters,
+    )
+    clock.advance(STALE_AFTER_SECONDS)
+
+    reconciled = await store.reconcile_stale_run(run_id, tenant)
+
+    assert reconciled.result is StaleRunReconcileResult.RECONCILED
+    assert reconciled.record.state is RunState.FAILED
+    assert reconciled.record.failure_code == STALE_RUN_FAILURE_CODE
+    assert reconciled.record.counters == counters
+    assert reconciled.record.outcome_summary == {
+        "status": "FAILED",
+        "routeCode": "GROSS_MARGIN_DECLINE_ATTRIBUTION",
+        "claims": [],
+        "blockers": [STALE_RUN_FAILURE_CODE],
+        "observations": [],
+        "attributionSupported": False,
+    }
+    events = await store.events_for(run_id, tenant)
+    assert [event.event_type for event in events] == [
+        AgentEventType.STEP_COMPLETED,
+        AgentEventType.RUN_FAILED,
+    ]
+    assert events[-1].payload == {"failureCode": STALE_RUN_FAILURE_CODE}
+    repeated = await store.reconcile_stale_run(run_id, tenant)
+    assert repeated.result is StaleRunReconcileResult.ALREADY_TERMINAL
+    assert len(await store.events_for(run_id, tenant)) == 2
+
+
+@pytest.mark.asyncio
+async def test_in_memory_reconciliation_fresh_refresh_and_access_are_fail_closed():
+    clock = MutableClock()
+    store = InMemoryRunStore(clock=clock)
+    run_id = "25252525-2525-4252-8252-252525252525"
+    tenant = ctx("A")
+    await store.create_run(
+        run_id, tenant, RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION, request()
+    )
+    clock.advance(STALE_AFTER_SECONDS - 1)
+    fresh = await store.reconcile_stale_run(run_id, tenant)
+    assert fresh.result is StaleRunReconcileResult.NOT_STALE
+    assert await store.events_for(run_id, tenant) == ()
+
+    await store.append_event(
+        run_id,
+        tenant,
+        AgentEventType.RUN_STARTED,
+        {"routeCode": "GROSS_MARGIN_DECLINE_ATTRIBUTION"},
+        counters=RuntimeCounters(),
+    )
+    clock.advance(STALE_AFTER_SECONDS - 1)
+    assert (
+        await store.reconcile_stale_run(run_id, tenant)
+    ).result is StaleRunReconcileResult.NOT_STALE
+
+    for inaccessible_id, inaccessible_context in (
+        (run_id, ctx("B")),
+        ("26262626-2626-4262-8262-262626262626", tenant),
+    ):
+        with pytest.raises(RunAccessError, match="trusted tenant"):
+            await store.reconcile_stale_run(inaccessible_id, inaccessible_context)
+
+
+@pytest.mark.asyncio
+async def test_in_memory_two_reconcilers_have_exactly_one_winner():
+    clock = MutableClock()
+    store = InMemoryRunStore(clock=clock)
+    run_id = "27272727-2727-4272-8272-272727272727"
+    tenant = ctx("A")
+    await store.create_run(
+        run_id, tenant, RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION, request()
+    )
+    clock.advance(STALE_AFTER_SECONDS)
+
+    results = await asyncio.gather(
+        store.reconcile_stale_run(run_id, tenant),
+        store.reconcile_stale_run(run_id, tenant),
+    )
+
+    assert sorted(result.result.value for result in results) == [
+        "ALREADY_TERMINAL",
+        "RECONCILED",
+    ]
+    assert len(await store.events_for(run_id, tenant)) == 1
+
+
+@pytest.mark.asyncio
+async def test_in_memory_append_or_terminal_race_with_reconcile_stays_atomic():
+    for race_kind in ("append", "terminal"):
+        clock = MutableClock()
+        store = InMemoryRunStore(clock=clock)
+        run_id = str(
+            "28282828-2828-4282-8282-282828282828"
+            if race_kind == "append"
+            else "29292929-2929-4292-8292-292929292929"
+        )
+        tenant = ctx("A")
+        await store.create_run(
+            run_id, tenant, RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION, request()
+        )
+        clock.advance(STALE_AFTER_SECONDS)
+        if race_kind == "append":
+            competitor = store.append_event(
+                run_id,
+                tenant,
+                AgentEventType.RUN_STARTED,
+                {"routeCode": "GROSS_MARGIN_DECLINE_ATTRIBUTION"},
+                counters=RuntimeCounters(),
+            )
+        else:
+            competitor = store.compare_and_set_terminal(
+                run_id,
+                tenant,
+                expected_state=RunState.RUNNING,
+                terminal_state=RunState.PARTIAL,
+                outcome=StructuredOutcome(
+                    OutcomeStatus.PARTIAL,
+                    RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION,
+                ),
+                counters=RuntimeCounters(),
+                terminal_event_type=AgentEventType.RUN_COMPLETED,
+            )
+        results = await asyncio.gather(
+            store.reconcile_stale_run(run_id, tenant),
+            competitor,
+            return_exceptions=True,
+        )
+        record = await store.load_run(run_id, tenant)
+        terminal_events = [
+            event
+            for event in await store.events_for(run_id, tenant)
+            if event.event_type
+            in {AgentEventType.RUN_FAILED, AgentEventType.RUN_COMPLETED}
+        ]
+        assert len(terminal_events) <= 1
+        if record.state is RunState.RUNNING:
+            assert race_kind == "append"
+            assert results[0].result is StaleRunReconcileResult.NOT_STALE
+        else:
+            assert len(terminal_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_in_memory_clock_failure_never_partially_mutates_state():
+    clock = FailingClock()
+    store = InMemoryRunStore(clock=clock)
+    tenant = ctx("A")
+    create_run_id = "30303030-3030-4303-8303-303030303030"
+    clock.fail_next = True
+    with pytest.raises(RuntimeError, match="clock unavailable"):
+        await store.create_run(
+            create_run_id,
+            tenant,
+            RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION,
+            request(),
+        )
+    # The same id remains creatable, proving no orphan run/event map was left.
+    await store.create_run(
+        create_run_id,
+        tenant,
+        RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION,
+        request(),
+    )
+
+    clock.fail_next = True
+    with pytest.raises(RuntimeError, match="clock unavailable"):
+        await store.append_event(
+            create_run_id,
+            tenant,
+            AgentEventType.RUN_STARTED,
+            {"routeCode": "GROSS_MARGIN_DECLINE_ATTRIBUTION"},
+            counters=RuntimeCounters(),
+        )
+    assert await store.events_for(create_run_id, tenant) == ()
+    assert (await store.load_run(create_run_id, tenant)).next_event_sequence == 0
+
+    clock.fail_next = True
+    with pytest.raises(RuntimeError, match="clock unavailable"):
+        await store.compare_and_set_terminal(
+            create_run_id,
+            tenant,
+            expected_state=RunState.RUNNING,
+            terminal_state=RunState.FAILED,
+            outcome=StructuredOutcome(
+                OutcomeStatus.FAILED,
+                RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION,
+                blockers=("CONTROLLED_FAILURE",),
+            ),
+            counters=RuntimeCounters(),
+            terminal_event_type=AgentEventType.RUN_FAILED,
+            failure_code="CONTROLLED_FAILURE",
+        )
+    assert (await store.load_run(create_run_id, tenant)).state is RunState.RUNNING
+    assert await store.events_for(create_run_id, tenant) == ()
+
+    clock.advance(STALE_AFTER_SECONDS)
+    clock.fail_next = True
+    with pytest.raises(RuntimeError, match="clock unavailable"):
+        await store.reconcile_stale_run(create_run_id, tenant)
+    assert (await store.load_run(create_run_id, tenant)).state is RunState.RUNNING
+    assert await store.events_for(create_run_id, tenant) == ()
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -227,6 +480,7 @@ class FakeConnection:
         self.log = []
         self.executes = []
         self.fetchrows = []
+        self.fetchvals = []
         self.fetches = []
 
     def transaction(self, *, readonly=False):
@@ -239,11 +493,19 @@ class FakeConnection:
 
     async def fetchrow(self, sql, *args):
         self.fetchrows.append((sql, args))
+        if "SELECT version" in sql and "FOR UPDATE" in sql:
+            return {"version": 0}
         if "UPDATE smart_bi_agent_run" in sql:
             return {"next_event_sequence": 1}
         if "SELECT run_id FROM smart_bi_agent_run" in sql:
             return {"run_id": args[0]}
         raise AssertionError("unexpected fetchrow")
+
+    async def fetchval(self, sql, *args):
+        self.fetchvals.append((sql, args))
+        if "clock_timestamp()" in sql:
+            return datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
+        raise AssertionError("unexpected fetchval")
 
     async def fetch(self, sql, *args):
         self.fetches.append((sql, args))
@@ -296,7 +558,9 @@ async def test_postgres_append_binds_rls_update_and_insert_on_one_connection_tra
         ("A",),
     )
     assert "INSERT INTO smart_bi_agent_event" in pool.connection.executes[1][0]
-    assert "factory_id = $2 AND state = 'RUNNING'" in pool.connection.fetchrows[0][0]
+    assert "factory_id = $2" in pool.connection.fetchrows[0][0]
+    assert "state = 'RUNNING'" in pool.connection.fetchrows[0][0]
+    assert pool.connection.fetchvals == [("SELECT clock_timestamp()", ())]
 
 
 @pytest.mark.asyncio
@@ -399,6 +663,12 @@ def test_postgres_event_revalidates_decoded_payload():
 
     with pytest.raises(UnsafeRunPayloadError, match="exact keys"):
         PostgresRunStore._event(row)
+
+
+def test_postgres_liveness_writes_never_use_transaction_start_time_now():
+    source = inspect.getsource(PostgresRunStore)
+    assert "NOW()" not in source.upper()
+    assert source.count("clock_timestamp()") >= 4
 
 
 @pytest.mark.parametrize(

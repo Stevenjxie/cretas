@@ -25,7 +25,12 @@ from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
 from .bounded_runtime import BoundedRestaurantRuntime
 from .contracts import DataClassification, TrustedExecutionContext
 from .gateway import ReadToolGateway
-from .http_contracts import StartRestaurantRunRequest, event_v1, run_replay_v1
+from .http_contracts import (
+    StartRestaurantRunRequest,
+    event_v1,
+    run_replay_v1,
+    stale_reconciliation_v1,
+)
 from .restaurant_read_tools import build_restaurant_read_registry
 from .run_store import PostgresRunStore, RunAccessError, RunStore
 
@@ -178,6 +183,28 @@ async def replay_restaurant_run(
             status_code=503, detail="AGENT_RUN_STORE_UNAVAILABLE"
         ) from exc
     return run_replay_v1(record, events)
+
+
+@router.post("/{run_id}/reconcile-stale")
+async def reconcile_stale_restaurant_run(
+    run_id: uuid.UUID,
+    request: Request,
+    context: TrustedExecutionContext = Depends(require_internal_restaurant_context),
+    components: RuntimeComponents = Depends(get_runtime_components),
+):
+    if request.query_params or await request.body():
+        raise HTTPException(status_code=422, detail="RECONCILE_INPUT_FORBIDDEN")
+    run_key = str(run_id)
+    try:
+        result = await components.store.reconcile_stale_run(run_key, context)
+    except RunAccessError as exc:
+        # Missing and cross-tenant runs intentionally share one response.
+        raise HTTPException(status_code=404, detail="RUN_NOT_FOUND") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503, detail="AGENT_RUN_STORE_UNAVAILABLE"
+        ) from exc
+    return stale_reconciliation_v1(run_key, result)
 
 
 async def _wait_until_durable(
