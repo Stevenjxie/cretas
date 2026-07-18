@@ -52,14 +52,14 @@ class ToolExecutionArchitectureTest {
         ScanResult completeScan = scan(sourceRoot);
         assertThat(completeScan.files().get(SANCTIONED_GATEWAY))
                 .as("the only sanctioned new ToolExecutor caller")
-                .isEqualTo(new Counts(1, 0, 1));
+                .isEqualTo(new Counts(1, 1, 2));
         ScanResult actual = completeScan.without(SANCTIONED_GATEWAY);
 
         assertThat(baseline.files()).hasSize(14);
-        assertThat(baseline.totalLines()).isEqualTo(18);
-        assertThat(baseline.totalExpressions()).isEqualTo(19);
+        assertThat(baseline.totalLines()).isEqualTo(16);
+        assertThat(baseline.totalExpressions()).isEqualTo(17);
         assertThat(baseline.totalExecute()).isEqualTo(14);
-        assertThat(baseline.totalPreview()).isEqualTo(5);
+        assertThat(baseline.totalPreview()).isEqualTo(3);
 
         assertNoGrowth(baseline, actual);
         if (actual.totalExpressions() < baseline.totalExpressions()

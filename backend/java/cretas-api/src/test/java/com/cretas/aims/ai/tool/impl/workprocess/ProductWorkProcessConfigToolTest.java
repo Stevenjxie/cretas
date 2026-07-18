@@ -23,6 +23,7 @@ import java.lang.reflect.Field;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -69,6 +70,14 @@ class ProductWorkProcessConfigToolTest {
         assertTrue(tool.supportsPreview());
         assertEquals(ToolExecutor.ActionType.WRITE, tool.getActionType());
         assertEquals(ToolExecutor.RiskLevel.MEDIUM, tool.getRiskLevel());
+        assertTrue(tool.requiresPermission());
+        assertTrue(tool.getRequiredPermissions().isEmpty());
+        assertTrue(tool.hasPermission(FactoryUserRole.factory_super_admin.name()));
+        assertTrue(tool.hasPermission(FactoryUserRole.permission_admin.name()));
+        assertFalse(tool.hasPermission(FactoryUserRole.operator.name()));
+        assertEquals("1.0.0", tool.getVersion());
+        assertEquals(Set.of("canvas", "production", "work-process", "product"),
+                tool.getDomainTags());
         assertTrue(tool.getRequiredParameters().contains("productTypeId"));
         assertTrue(tool.getRequiredParameters().contains("message"));
     }

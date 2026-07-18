@@ -24,9 +24,9 @@ class ToolDescriptorCatalogTest {
 
         assertThat(catalog.inventory().schemaVersion()).isEqualTo(1);
         assertThat(catalog.inventory().expectedToolCount()).isEqualTo(601);
-        assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(599);
+        assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(597);
         assertThat(statistics.total()).isEqualTo(601);
-        assertThat(statistics.legacy()).isEqualTo(599);
+        assertThat(statistics.legacy()).isEqualTo(597);
         assertThat(statistics.actionTypes()).containsExactlyInAnyOrderEntriesOf(Map.of(
                 ToolExecutor.ActionType.READ, 454L,
                 ToolExecutor.ActionType.WRITE, 65L,
@@ -41,11 +41,11 @@ class ToolDescriptorCatalogTest {
                 ToolExecutor.RiskLevel.HIGH, 5L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
         assertThat(statistics.previewSupported()).isEqualTo(39);
-        assertThat(statistics.requiresPermission()).isEqualTo(39);
+        assertThat(statistics.requiresPermission()).isEqualTo(41);
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolGovernanceStatus.REVIEW_REQUIRED, 581L,
+                ToolGovernanceStatus.REVIEW_REQUIRED, 579L,
                 ToolGovernanceStatus.REVIEW_REQUIRED_P0, 18L,
-                ToolGovernanceStatus.APPROVED, 2L,
+                ToolGovernanceStatus.APPROVED, 4L,
                 ToolGovernanceStatus.WAIVED, 0L));
 
         assertThat(catalog.inventory().descriptors())
@@ -60,7 +60,11 @@ class ToolDescriptorCatalogTest {
         assertThat(catalog.inventory().descriptors())
                 .filteredOn(entry -> entry.governanceStatus() == ToolGovernanceStatus.APPROVED)
                 .extracting(ToolDescriptorInventoryEntry::toolName)
-                .containsExactlyInAnyOrder("user_disable", "restaurant_dish_delete");
+                .containsExactlyInAnyOrder(
+                        "user_disable",
+                        "restaurant_dish_delete",
+                        "canvas_product_work_process_config",
+                        "canvas_work_process_catalog");
     }
 
     @Test
@@ -137,6 +141,10 @@ class ToolDescriptorCatalogTest {
                         "implementationClass: ''"))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("implementationClass must be a non-blank string");
+        assertThatThrownBy(() -> loader.load(new StringReader(
+                valid.replace("    allowedRoles: []\n", ""))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("explicit descriptor is missing allowedRoles");
         assertThatThrownBy(() -> loader.loadResource("ai/tool/gateway/missing.yaml"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("resource not found");
@@ -149,7 +157,7 @@ class ToolDescriptorCatalogTest {
                 .replace("requiredPermissions: [test:execute]", "requiredPermissions: []");
         assertThatThrownBy(() -> loader.load(new StringReader(incompleteApproval)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("complete explicit source metadata and permission codes");
+                .hasMessageContaining("complete explicit source authorization metadata");
 
         String waiver = incompleteApproval.replace(
                 "governanceStatus: APPROVED", "governanceStatus: WAIVED");
@@ -172,6 +180,7 @@ class ToolDescriptorCatalogTest {
                     supportsPreview: false
                     requiresPermission: true
                     requiredPermissions: [test:execute]
+                    allowedRoles: []
                     version: 1.0.0
                     domainTags: [test]
                     overrideFlags:

@@ -1,12 +1,15 @@
 # Runtime authorization truth. D1 tool-descriptors.yaml remains a separate source audit inventory.
 schemaVersion: 1
-expectedPolicyCount: 2
+expectedPolicyCount: 4
 policies:
   - implementationClass: "com.cretas.aims.ai.tool.impl.user.UserDisableTool"
     toolName: "user_disable"
     actionType: UPDATE
     riskLevel: HIGH
     requiredPermissions: ["hr:read_write"]
+    allowedRoles: []
+    # User administration is tenant-generic and has no organization-type branch in UserDisableTool.
+    allowedBusinessTypes: [FACTORY, RESTAURANT, HEADQUARTERS, BRANCH, CENTRAL_KITCHEN, LOGISTICS]
     domainTags: ["user", "hr", "identity"]
     version: "2.0.0"
     supportsPreview: false
@@ -24,6 +27,8 @@ policies:
     actionType: UPDATE
     riskLevel: HIGH
     requiredPermissions: ["restaurant:read_write"]
+    allowedRoles: []
+    allowedBusinessTypes: [RESTAURANT, BRANCH]
     domainTags: ["restaurant", "menu", "product-master"]
     version: "2.0.0"
     supportsPreview: false
@@ -32,6 +37,44 @@ policies:
     idempotencyPolicy: REQUIRED_FOR_EXECUTION
     dataClassification: CONFIDENTIAL
     allowedSources: [AI_CHAT]
+    egressPolicy:
+      mode: DENY_ALL
+      allowedDestinations: []
+    provenance: EXPLICIT
+  - implementationClass: "com.cretas.aims.ai.tool.impl.workprocess.ProductWorkProcessConfigTool"
+    toolName: "canvas_product_work_process_config"
+    actionType: WRITE
+    riskLevel: MEDIUM
+    requiredPermissions: []
+    allowedRoles: [factory_super_admin, permission_admin]
+    allowedBusinessTypes: [FACTORY, CENTRAL_KITCHEN]
+    domainTags: ["canvas", "production", "work-process", "product"]
+    version: "1.0.0"
+    supportsPreview: true
+    confirmationPolicy: NOT_REQUIRED
+    approvalPolicy: NOT_REQUIRED
+    idempotencyPolicy: NOT_REQUIRED
+    dataClassification: CONFIDENTIAL
+    allowedSources: [HTTP_CONTROLLER]
+    egressPolicy:
+      mode: DENY_ALL
+      allowedDestinations: []
+    provenance: EXPLICIT
+  - implementationClass: "com.cretas.aims.ai.tool.impl.workprocess.WorkProcessCatalogTool"
+    toolName: "canvas_work_process_catalog"
+    actionType: UPDATE
+    riskLevel: MEDIUM
+    requiredPermissions: []
+    allowedRoles: [factory_super_admin, permission_admin]
+    allowedBusinessTypes: [FACTORY, CENTRAL_KITCHEN]
+    domainTags: ["canvas", "production", "work-process", "master-data"]
+    version: "1.0.0"
+    supportsPreview: true
+    confirmationPolicy: NOT_REQUIRED
+    approvalPolicy: NOT_REQUIRED
+    idempotencyPolicy: NOT_REQUIRED
+    dataClassification: INTERNAL
+    allowedSources: [HTTP_CONTROLLER]
     egressPolicy:
       mode: DENY_ALL
       allowedDestinations: []

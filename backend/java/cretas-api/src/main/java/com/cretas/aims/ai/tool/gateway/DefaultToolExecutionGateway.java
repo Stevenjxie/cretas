@@ -57,7 +57,7 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
         }
 
         Optional<ResolvedTool> resolvedOptional =
-                runtimeRegistry.resolve(command, current.principal().permissions());
+                runtimeRegistry.resolve(command, current.principal());
         if (resolvedOptional.isEmpty()) {
             ledgerService.completeAudit(
                     auditEventId, ToolExecutionStatus.DENIED, GatewayResultCode.POLICY_DENIED);
@@ -67,14 +67,6 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
         ResolvedTool resolved = resolvedOptional.get();
         ToolDescriptor descriptor = resolved.descriptor();
 
-        if (command.mode() == ToolExecutionMode.PREVIEW) {
-            ledgerService.completeAudit(
-                    auditEventId,
-                    ToolExecutionStatus.PREVIEW_UNSUPPORTED,
-                    GatewayResultCode.PREVIEW_UNSUPPORTED);
-            return result(command, auditEventId, ToolExecutionStatus.PREVIEW_UNSUPPORTED,
-                    emptyPayload(), "Preview is not supported", false);
-        }
         if (descriptor.egressPolicy().mode() != EgressMode.DENY_ALL) {
             ledgerService.completeAudit(
                     auditEventId, ToolExecutionStatus.DENIED, GatewayResultCode.POLICY_DENIED);
@@ -88,6 +80,9 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
                     GatewayResultCode.POLICY_DENIED);
             return result(command, auditEventId, ToolExecutionStatus.APPROVAL_REQUIRED,
                     emptyPayload(), "Approval policy is not implemented", false);
+        }
+        if (command.mode() == ToolExecutionMode.PREVIEW) {
+            return preview(command, current, resolved, auditEventId);
         }
         if (descriptor.confirmationPolicy() != ConfirmationPolicy.REQUIRED_FOR_EXECUTION
                 || command.confirmationProof().isEmpty()) {
@@ -259,6 +254,76 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
                     command, idempotencyRecord, auditEventId, lease,
                     GatewayResultCode.TOOL_OUTCOME_UNCERTAIN);
         }
+    }
+
+    private ToolExecutionResult preview(
+            ToolExecutionCommand command,
+            RehydratedPrincipal current,
+            ResolvedTool resolved,
+            String auditEventId) {
+        ToolDescriptor descriptor = resolved.descriptor();
+        if (!descriptor.supportsPreview()) {
+            ledgerService.completeAudit(
+                    auditEventId,
+                    ToolExecutionStatus.PREVIEW_UNSUPPORTED,
+                    GatewayResultCode.PREVIEW_UNSUPPORTED);
+            return result(command, auditEventId, ToolExecutionStatus.PREVIEW_UNSUPPORTED,
+                    emptyPayload(), "Preview is not supported", false);
+        }
+        JsonNode payload;
+        try {
+            String arguments = objectMapper.writeValueAsString(command.parameters());
+            ToolCall toolCall = ToolCall.of(
+                    command.requestId(), command.toolName(), arguments);
+            ToolExecutor executor = resolved.executor();
+            String rawResponse = executor.preview(toolCall, current.executionContext());
+            payload = objectMapper.readTree(rawResponse);
+        } catch (Exception previewFailure) {
+            return finishPreview(
+                    command,
+                    auditEventId,
+                    ToolExecutionStatus.FAILED,
+                    GatewayResultCode.TOOL_PREVIEW_FAILED,
+                    emptyPayload(),
+                    "Tool preview failed");
+        }
+        if (payload == null || !payload.isObject() || !payload.has("success")
+                || !payload.get("success").isBoolean()) {
+            return finishPreview(
+                    command,
+                    auditEventId,
+                    ToolExecutionStatus.FAILED,
+                    GatewayResultCode.TOOL_PREVIEW_FAILED,
+                    emptyPayload(),
+                    "Tool preview failed");
+        }
+        if (payload.get("success").booleanValue()) {
+            return finishPreview(
+                    command,
+                    auditEventId,
+                    ToolExecutionStatus.SUCCEEDED,
+                    GatewayResultCode.TOOL_PREVIEW_SUCCEEDED,
+                    payload,
+                    "Tool preview succeeded");
+        }
+        return finishPreview(
+                command,
+                auditEventId,
+                ToolExecutionStatus.FAILED,
+                GatewayResultCode.TOOL_PREVIEW_FAILED,
+                payload,
+                "Tool preview failed");
+    }
+
+    private ToolExecutionResult finishPreview(
+            ToolExecutionCommand command,
+            String auditEventId,
+            ToolExecutionStatus status,
+            GatewayResultCode resultCode,
+            JsonNode payload,
+            String message) {
+        ledgerService.completeAudit(auditEventId, status, resultCode);
+        return result(command, auditEventId, status, payload, message, false);
     }
 
     private ToolExecutionResult classifyExisting(

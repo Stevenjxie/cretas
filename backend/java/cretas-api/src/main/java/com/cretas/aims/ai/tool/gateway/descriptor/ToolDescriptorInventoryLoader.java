@@ -39,10 +39,11 @@ public final class ToolDescriptorInventoryLoader {
             "[A-Za-z_$][A-Za-z0-9_$]*(?:\\.[A-Za-z_$][A-Za-z0-9_$]*)+");
     private static final Set<String> ROOT_KEYS = Set.of(
             "schemaVersion", "expectedToolCount", "expectedLegacyCount", "descriptors");
-    private static final Set<String> ENTRY_KEYS = Set.of(
+    private static final Set<String> LEGACY_ENTRY_KEYS = Set.of(
             "toolName", "implementationClass", "provenance", "actionType", "riskLevel",
             "supportsPreview", "requiresPermission", "requiredPermissions", "version",
             "domainTags", "overrideFlags", "governanceStatus");
+    private static final Set<String> ENTRY_KEYS = withAllowedRoles(LEGACY_ENTRY_KEYS);
     private static final Set<String> OVERRIDE_KEYS = Set.of(
             "actionType", "riskLevel", "supportsPreview", "requiresPermission",
             "hasPermission", "requiredPermissions", "version", "domainTags");
@@ -135,21 +136,31 @@ public final class ToolDescriptorInventoryLoader {
     private ToolDescriptorInventoryEntry parseEntry(Object raw, int index) {
         String prefix = "descriptors[" + index + "]";
         Map<String, Object> entry = asMap(raw, prefix);
-        requireExactKeys(entry, ENTRY_KEYS, prefix);
+        requireEntryKeys(entry, prefix);
         String implementationClass = asNonBlankString(
                 entry.get("implementationClass"), prefix + ".implementationClass");
         if (!JAVA_CLASS_NAME.matcher(implementationClass).matches()) {
             throw new IllegalArgumentException(prefix + ".implementationClass is not a Java class name");
         }
+        DescriptorProvenance provenance = asEnum(
+                entry.get("provenance"), DescriptorProvenance.class, prefix + ".provenance");
+        if (provenance != DescriptorProvenance.LEGACY_INFERRED
+                && !entry.containsKey("allowedRoles")) {
+            throw new IllegalArgumentException(
+                    prefix + " explicit descriptor is missing allowedRoles");
+        }
         return new ToolDescriptorInventoryEntry(
                 asNonBlankString(entry.get("toolName"), prefix + ".toolName"),
                 implementationClass,
-                asEnum(entry.get("provenance"), DescriptorProvenance.class, prefix + ".provenance"),
+                provenance,
                 asEnum(entry.get("actionType"), ToolExecutor.ActionType.class, prefix + ".actionType"),
                 asEnum(entry.get("riskLevel"), ToolExecutor.RiskLevel.class, prefix + ".riskLevel"),
                 asBoolean(entry.get("supportsPreview"), prefix + ".supportsPreview"),
                 asBoolean(entry.get("requiresPermission"), prefix + ".requiresPermission"),
                 asStringSet(entry.get("requiredPermissions"), prefix + ".requiredPermissions"),
+                entry.containsKey("allowedRoles")
+                        ? asStringSet(entry.get("allowedRoles"), prefix + ".allowedRoles")
+                        : Set.of(),
                 asNonBlankString(entry.get("version"), prefix + ".version"),
                 asStringSet(entry.get("domainTags"), prefix + ".domainTags"),
                 parseOverrideFlags(entry.get("overrideFlags"), prefix + ".overrideFlags"),
@@ -240,12 +251,31 @@ public final class ToolDescriptorInventoryLoader {
         if (entry.provenance() != DescriptorProvenance.EXPLICIT
                 || !completeSourceMetadata
                 || !entry.requiresPermission()
-                || entry.requiredPermissions().isEmpty()
+                || (entry.requiredPermissions().isEmpty() && entry.allowedRoles().isEmpty())
                 || entry.domainTags().isEmpty()) {
             throw new IllegalArgumentException(
-                    "APPROVED tool requires complete explicit source metadata and permission codes: "
+                    "APPROVED tool requires complete explicit source authorization metadata: "
                             + entry.toolName());
         }
+    }
+
+    private static void requireEntryKeys(Map<String, Object> value, String field) {
+        Set<String> actual = value.keySet();
+        Set<String> unknown = new LinkedHashSet<>(actual);
+        unknown.removeAll(ENTRY_KEYS);
+        Set<String> missing = new LinkedHashSet<>(LEGACY_ENTRY_KEYS);
+        missing.removeAll(actual);
+        if (!unknown.isEmpty() || !missing.isEmpty()) {
+            throw new IllegalArgumentException(
+                    field + " keys do not match schema; unknown=" + unknown
+                            + ", missing=" + missing);
+        }
+    }
+
+    private static Set<String> withAllowedRoles(Set<String> base) {
+        Set<String> keys = new LinkedHashSet<>(base);
+        keys.add("allowedRoles");
+        return Set.copyOf(keys);
     }
 
     private static void requireExactKeys(Map<String, Object> value, Set<String> allowed, String field) {

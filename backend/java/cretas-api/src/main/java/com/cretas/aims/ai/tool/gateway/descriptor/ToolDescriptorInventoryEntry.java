@@ -23,6 +23,7 @@ public record ToolDescriptorInventoryEntry(
         boolean supportsPreview,
         boolean requiresPermission,
         Set<String> requiredPermissions,
+        Set<String> allowedRoles,
         String version,
         Set<String> domainTags,
         ToolDescriptorOverrideFlags overrideFlags,
@@ -35,6 +36,7 @@ public record ToolDescriptorInventoryEntry(
         actionType = Objects.requireNonNull(actionType, "actionType");
         riskLevel = Objects.requireNonNull(riskLevel, "riskLevel");
         requiredPermissions = immutableStrings(requiredPermissions, "requiredPermissions");
+        allowedRoles = immutableStrings(allowedRoles, "allowedRoles");
         version = requireNonBlank(version, "version");
         domainTags = immutableStrings(domainTags, "domainTags");
         overrideFlags = Objects.requireNonNull(overrideFlags, "overrideFlags");

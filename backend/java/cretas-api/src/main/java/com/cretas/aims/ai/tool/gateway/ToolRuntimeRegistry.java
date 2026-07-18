@@ -4,12 +4,12 @@ import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.ai.tool.gateway.descriptor.RuntimeToolDescriptorRegistry;
 import com.cretas.aims.entity.config.FactoryToolConfig;
+import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.repository.config.FactoryToolConfigRepository;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.stereotype.Component;
 
 import java.util.Optional;
-import java.util.Set;
 
 /** Joins approved runtime policy to the exact registered Spring Tool implementation. */
 @Component
@@ -38,10 +38,10 @@ public class ToolRuntimeRegistry {
 
     public Optional<ResolvedTool> resolve(
             ToolExecutionCommand command,
-            Set<String> trustedCurrentPermissions) {
+            ExecutionPrincipal trustedCurrentPrincipal) {
         try {
             Optional<ToolDescriptor> descriptorOptional =
-                    policyResolver.resolve(command, trustedCurrentPermissions);
+                    policyResolver.resolve(command, trustedCurrentPrincipal);
             if (descriptorOptional.isEmpty()) {
                 return Optional.empty();
             }
@@ -63,13 +63,14 @@ public class ToolRuntimeRegistry {
                     || descriptor.supportsPreview() != executor.supportsPreview()
                     || !descriptor.requiredPermissions().equals(executor.getRequiredPermissions())
                     || !descriptor.domainTags().equals(executor.getDomainTags())
-                    || !executor.requiresPermission()) {
+                    || !executor.requiresPermission()
+                    || !hasExactRoleBehavior(descriptor, executor)) {
                 return Optional.empty();
             }
 
             Optional<FactoryToolConfig> factoryOverride =
                     factoryToolConfigRepository.findByFactoryIdAndToolName(
-                            command.principal().tenantId(), command.toolName());
+                            trustedCurrentPrincipal.tenantId(), command.toolName());
             if (factoryOverride.isPresent()
                     && !Boolean.TRUE.equals(factoryOverride.get().getEnabled())) {
                 return Optional.empty();
@@ -82,5 +83,17 @@ public class ToolRuntimeRegistry {
     }
 
     public record ResolvedTool(ToolDescriptor descriptor, ToolExecutor executor) {
+    }
+
+    private static boolean hasExactRoleBehavior(
+            ToolDescriptor descriptor,
+            ToolExecutor executor) {
+        for (FactoryUserRole role : FactoryUserRole.values()) {
+            if (executor.hasPermission(role.name())
+                    != descriptor.allowedRoles().contains(role.name())) {
+                return false;
+            }
+        }
+        return !executor.hasPermission(null) && !executor.hasPermission("unknown_role");
     }
 }

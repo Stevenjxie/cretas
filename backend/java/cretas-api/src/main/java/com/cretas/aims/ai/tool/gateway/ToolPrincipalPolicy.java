@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -62,7 +63,8 @@ public class ToolPrincipalPolicy {
             if (currentRole == null || currentRole.isBlank()) {
                 return Optional.empty();
             }
-            Set<String> currentPermissions = Set.copyOf(permissionService.getUserPermissions(user));
+            Set<String> currentPermissions = withReadWriteComposites(
+                    permissionService.getUserPermissions(user));
             ExecutionPrincipal current = new ExecutionPrincipal(
                     factory.getId(),
                     currentBusinessType,
@@ -89,5 +91,26 @@ public class ToolPrincipalPolicy {
     public record RehydratedPrincipal(
             ExecutionPrincipal principal,
             Map<String, Object> executionContext) {
+    }
+
+    /**
+     * PermissionService emits separate module:read and module:write codes. Runtime policies use
+     * the historical module:read_write contract, so derive that composite only from matching,
+     * current DB-backed halves. Roles and asserted command permissions never participate.
+     */
+    static Set<String> withReadWriteComposites(Set<String> currentPermissions) {
+        Set<String> source = currentPermissions == null
+                ? Set.of()
+                : Set.copyOf(currentPermissions);
+        Set<String> expanded = new LinkedHashSet<>(source);
+        for (String permission : source) {
+            if (permission.endsWith(":read")) {
+                String module = permission.substring(0, permission.length() - ":read".length());
+                if (!module.isBlank() && source.contains(module + ":write")) {
+                    expanded.add(module + ":read_write");
+                }
+            }
+        }
+        return Set.copyOf(expanded);
     }
 }
