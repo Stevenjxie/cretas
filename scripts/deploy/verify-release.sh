@@ -97,6 +97,8 @@ check_backend() {
 
     printf 'BACKEND_SLOT=%s\n' "$slot"
     printf 'BACKEND_PORT=%s\n' "$port"
+    printf 'BACKEND_UPSTREAM=%s\n' "47.100.235.168:$port"
+    printf 'BACKEND_SERVICE=%s\n' "$service"
     ssh "$BACKEND_HOST" "systemctl is-active '$service'" | grep -qx active
     ssh "$BACKEND_HOST" "curl -fsS --max-time 10 http://localhost:$port/api/mobile/health" >/dev/null
     printf 'BACKEND_HEALTH=pass\n'

@@ -215,6 +215,10 @@ if web_release_validate "$WEB_MANIFEST_PATH" "$PROJECT_ROOT"; then
     log "   web-admin tree: $WEB_RELEASE_WEB_TREE"
     log "   archive SHA-256: $WEB_RELEASE_ARCHIVE_SHA256"
 else
+    if [ "${CRETAS_REQUIRE_TRUSTED_ARTIFACT:-0}" = "1" ]; then
+        log "❌ 统一发布入口已完成 manifest 校验/单次回退，但子部署未命中可信 Web archive；拒绝第二次 Web 构建"
+        exit 1
+    fi
     LOCAL_BUILD_DIR="$PROJECT_ROOT/web-admin/dist"
     log "ℹ️ Trusted Web dist unavailable or invalid; falling back to one local build"
     # 每个 worktree 独立安装，禁止 junction 共享。

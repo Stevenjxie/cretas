@@ -18,6 +18,7 @@ FIXTURE_REPO="$TMP_ROOT/repo"
 BACKEND="$FIXTURE_REPO/backend/java/cretas-api"
 FIXTURE_HELPER="$FIXTURE_REPO/scripts/deploy/release-jar-manifest.sh"
 MANIFEST="$TMP_ROOT/cache/current/$RELEASE_MANIFEST_NAME"
+BUILD_REPORT="$TMP_ROOT/cache/current/$RELEASE_BUILD_REPORT_NAME"
 DESTINATION="$TMP_ROOT/destination/$RELEASE_JAR_NAME"
 MVN_LOG="$TMP_ROOT/mvn.log"
 FAKE_MVN="$TMP_ROOT/fake-mvn"
@@ -74,6 +75,18 @@ grep -Fq 'jdk_version=' "$MANIFEST" || fail "manifest missing JDK version"
 grep -Fxq 'success=true' "$MANIFEST" || fail "manifest missing success=true"
 grep -Fxq "build_commit=$BUILD_COMMIT" "$MANIFEST" \
     || fail "manifest did not record the feature build commit"
+grep -Eq '^maven_wall_seconds=[0-9]+$' "$MANIFEST" \
+    || fail "manifest did not record Maven wall time"
+grep -Eq '^jar_size_bytes=[1-9][0-9]*$' "$MANIFEST" \
+    || fail "manifest did not record JAR size"
+grep -Fq '"format": "cretas-release-jar-report-v1"' "$BUILD_REPORT" \
+    || fail "JSON build report was not written"
+grep -Fq "\"build_commit\": \"$BUILD_COMMIT\"" "$BUILD_REPORT" \
+    || fail "JSON build report did not record build commit"
+grep -Eq '"maven_wall_seconds": [0-9]+' "$BUILD_REPORT" \
+    || fail "JSON build report did not record Maven wall time"
+python -m json.tool "$BUILD_REPORT" >/dev/null \
+    || fail "JSON build report is not valid JSON"
 git -C "$FIXTURE_REPO" update-ref refs/remotes/origin/main "$BUILD_COMMIT"
 release_manifest_validate "$MANIFEST" "$FIXTURE_REPO" "$DESTINATION" \
     || fail "valid same-commit manifest was rejected"

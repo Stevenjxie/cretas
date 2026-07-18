@@ -49,9 +49,21 @@ cleanup() { rm -rf "$logs_dir"; }
 trap cleanup EXIT
 started=$(date +%s)
 
-"$SCRIPT_DIR/deploy-backend.sh" --env prod >"$logs_dir/java.log" 2>&1 &
+( child_started=$(date +%s)
+  set +e
+  "$SCRIPT_DIR/deploy-backend.sh" --env prod >"$logs_dir/java.log" 2>&1
+  child_rc=$?
+  printf '%s\n' "$(( $(date +%s) - child_started ))" >"$logs_dir/java.seconds"
+  exit "$child_rc"
+) &
 java_pid=$!
-"$SCRIPT_DIR/deploy-web-admin.sh" --env prod --confirm-prod YES-PROD >"$logs_dir/web.log" 2>&1 &
+( child_started=$(date +%s)
+  set +e
+  "$SCRIPT_DIR/deploy-web-admin.sh" --env prod --confirm-prod YES-PROD >"$logs_dir/web.log" 2>&1
+  child_rc=$?
+  printf '%s\n' "$(( $(date +%s) - child_started ))" >"$logs_dir/web.seconds"
+  exit "$child_rc"
+) &
 web_pid=$!
 
 set +e
@@ -62,6 +74,12 @@ set -e
 cat "$logs_dir/java.log"
 cat "$logs_dir/web.log"
 elapsed=$(( $(date +%s) - started ))
+java_elapsed=$(cat "$logs_dir/java.seconds" 2>/dev/null || echo 0)
+web_elapsed=$(cat "$logs_dir/web.seconds" 2>/dev/null || echo 0)
+printf 'JAVA_DEPLOY_WALL_SECONDS=%s\n' "$java_elapsed"
+printf 'WEB_DEPLOY_WALL_SECONDS=%s\n' "$web_elapsed"
+printf 'JAVA_DEPLOY_RC=%s\n' "$java_rc"
+printf 'WEB_DEPLOY_RC=%s\n' "$web_rc"
 if [ "$java_rc" -ne 0 ] || [ "$web_rc" -ne 0 ]; then
     echo "ERROR: parallel production release failed (java=$java_rc web=$web_rc elapsed=${elapsed}s)" >&2
     echo "Each successful child remains independently deployed; inspect the printed child log before any follow-up action." >&2

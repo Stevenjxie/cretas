@@ -141,8 +141,10 @@ public class SemanticRouterServiceImpl implements SemanticRouterService {
     public void init() {
         log.info("SemanticRouterService initialized with thresholds: directExecute={}, reranking={}",
                 directExecuteThreshold, rerankingThreshold);
-        // 初始化时从 IntentEmbeddingCacheService 加载向量
-        refreshAllCache();
+        // StartupWarmupCoordinator refreshes IntentEmbeddingCacheService-backed vectors
+        // after ApplicationReadyEvent.
+        // Doing it here encoded every intent on the Spring main thread and then
+        // repeated the same work in the shared startup warmup lane.
     }
 
     @Override

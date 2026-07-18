@@ -19,6 +19,9 @@ TIMING_HELPERS=$(awk '
 
 UPLOAD_STATUS_DIR="$TMP_ROOT/status"
 DEPLOY_SCRIPT_STARTED_AT=100
+PROJECT_ROOT="$ROOT_DIR"
+RELEASE_BACKEND_PATH="backend/java/cretas-api"
+DEPLOY_REPORT_PATH="$TMP_ROOT/deploy-report.json"
 FAKE_NOW=100
 deploy_epoch() { printf '%s\n' "$FAKE_NOW"; }
 eval "$TIMING_HELPERS"
@@ -42,6 +45,14 @@ grep -Eq '构建与 JAR 完整性 +62s' <<< "$SUMMARY" || fail "build duration i
 grep -Eq 'idle Java 启动至健康 +104s +\[未完成\]' <<< "$SUMMARY" || fail "open stage not reported"
 grep -Eq '总耗时 +175s' <<< "$SUMMARY" || fail "total duration incorrect"
 grep -Fq 'FAILED (exit=7)' <<< "$SUMMARY" || fail "failure status missing"
+grep -Fq '"format": "cretas-backend-deploy-report-v1"' "$DEPLOY_REPORT_PATH" \
+    || fail "structured deploy report missing"
+grep -Fq '"total_wall_seconds": 175' "$DEPLOY_REPORT_PATH" \
+    || fail "structured deploy report total is incorrect"
+grep -Fq '"idle_startup": {"seconds": 104, "completed": false}' "$DEPLOY_REPORT_PATH" \
+    || fail "structured deploy report did not retain open-stage timing"
+python -m json.tool "$DEPLOY_REPORT_PATH" >/dev/null \
+    || fail "structured deploy report is not valid JSON"
 
 # Summary is one-shot even if both the success path and EXIT trap request it.
 print_deploy_timing_summary 0 > "$TMP_ROOT/second-summary.txt"
