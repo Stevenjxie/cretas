@@ -26,7 +26,10 @@ line_number() {
     grep -Fnm1 -- "$expected" "$file" | cut -d: -f1
 }
 
-assert_contains "$CI_WORKFLOW" "cancel-in-progress: \${{ github.event_name == 'pull_request' }}"
+# CI is manual-only now, so a second operator-triggered run must not silently
+# cancel an in-flight release audit.
+assert_contains "$CI_WORKFLOW" 'workflow_dispatch:'
+assert_contains "$CI_WORKFLOW" 'cancel-in-progress: false'
 
 package_line=$(line_number "$CI_WORKFLOW" 'name: Package exact-commit deploy artifact')
 artifact_upload_line=$(line_number "$CI_WORKFLOW" 'name: Upload exact-commit deploy artifact')
@@ -56,7 +59,7 @@ assert_contains "$DEPLOY_SKILL" 'git merge-base --is-ancestor <merge-commit> ori
 assert_contains "$DEPLOY_SKILL" 'git diff --quiet "$feature-head" <merge-commit>'
 assert_contains "$DEPLOY_SKILL" 'git switch --detach origin/main'
 assert_contains "$DEPLOY_SKILL" './scripts/deploy/release-preflight.sh'
-assert_contains "$DEPLOY_SKILL" 'do not wait or poll for CI artifact creation'
+assert_contains "$DEPLOY_SKILL" 'Never trigger or wait for an Artifact during a release.'
 assert_contains "$RELEASE_PREFLIGHT" 'Fast, read-only release gates.'
 assert_contains "$L1_SMOKE" '/\b401\b|Unauthorized|500 Internal|NoResourceFoundException/i'
 

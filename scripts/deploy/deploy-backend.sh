@@ -295,6 +295,7 @@ LOCAL_JAR_CACHE_ROOT="${CRETAS_JAR_CACHE_DIR:-$HOME/.cache/cretas/java-deploy}"
 DEPLOY_REPORT_ROOT="${CRETAS_DEPLOY_REPORT_DIR:-$HOME/.cache/cretas/deploy-reports}"
 mkdir -p "$DEPLOY_REPORT_ROOT"
 DEPLOY_REPORT_PATH="${CRETAS_DEPLOY_REPORT_PATH:-$DEPLOY_REPORT_ROOT/backend-${DEPLOY_SCRIPT_STARTED_AT}-$$.json}"
+DEPLOY_OUTCOME=unknown
 
 # BEGIN_DEPLOY_TIMING_HELPERS
 DEPLOY_TIMING_DIR="$UPLOAD_STATUS_DIR/timing"
@@ -350,6 +351,7 @@ write_deploy_json_report() {
         printf '{\n'
         printf '  "format": "cretas-backend-deploy-report-v1",\n'
         printf '  "result": "%s",\n' "$result"
+        printf '  "outcome": "%s",\n' "$(deploy_json_escape "${DEPLOY_OUTCOME:-unknown}")"
         printf '  "exit_code": %s,\n' "$exit_code"
         printf '  "started_at_epoch": %s,\n' "$DEPLOY_SCRIPT_STARTED_AT"
         printf '  "finished_at_epoch": %s,\n' "$now"
@@ -1060,6 +1062,7 @@ deploy_jar() {
     # successful no-op. FORCE_REDEPLOY=1 preserves an explicit restart path.
     deploy_timing_begin identical_artifact "相同制品线上验证"
     if prod_already_runs_local_artifact "$LOCAL_MD5"; then
+        DEPLOY_OUTCOME=no-op
         deploy_timing_end identical_artifact
         echo ""
         echo "=========================================="
@@ -1886,6 +1889,7 @@ deploy_jar() {
         echo "   ✓ [Phase 1 #19 gate] cretas-backend-test is-active"
     fi
     deploy_timing_end verification
+    DEPLOY_OUTCOME=deployed
 
     echo ""
     echo "=========================================="

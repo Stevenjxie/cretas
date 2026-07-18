@@ -22,6 +22,7 @@ DEPLOY_SCRIPT_STARTED_AT=100
 PROJECT_ROOT="$ROOT_DIR"
 RELEASE_BACKEND_PATH="backend/java/cretas-api"
 DEPLOY_REPORT_PATH="$TMP_ROOT/deploy-report.json"
+DEPLOY_OUTCOME=deployed
 FAKE_NOW=100
 deploy_epoch() { printf '%s\n' "$FAKE_NOW"; }
 eval "$TIMING_HELPERS"
@@ -47,6 +48,8 @@ grep -Eq '总耗时 +175s' <<< "$SUMMARY" || fail "total duration incorrect"
 grep -Fq 'FAILED (exit=7)' <<< "$SUMMARY" || fail "failure status missing"
 grep -Fq '"format": "cretas-backend-deploy-report-v1"' "$DEPLOY_REPORT_PATH" \
     || fail "structured deploy report missing"
+grep -Fq '"outcome": "deployed"' "$DEPLOY_REPORT_PATH" \
+    || fail "structured deploy outcome missing"
 grep -Fq '"total_wall_seconds": 175' "$DEPLOY_REPORT_PATH" \
     || fail "structured deploy report total is incorrect"
 grep -Fq '"idle_startup": {"seconds": 104, "completed": false}' "$DEPLOY_REPORT_PATH" \

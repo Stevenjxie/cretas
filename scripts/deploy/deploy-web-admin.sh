@@ -35,6 +35,7 @@
 #   prod: 139.196.165.140:/www/wwwroot/web-admin/       (vhost 8086 + admin.cretaceousfuture.com 443)
 
 set -e
+WEB_DEPLOY_STARTED_AT=$(date +%s)
 
 # ==================== 参数解析 ====================
 ENV="test"   # 默认 test (Bug #30 fix, 之前默认 prod 导致误操作)
@@ -126,6 +127,13 @@ LOCAL_BUILD_DIR="web-admin/dist"
 TMP_TAR="/tmp/web-admin-dist.$$.tar.gz"
 TMP_INDEX="/tmp/web-admin-index.$$.html"
 BACKUP_KEEP=3
+WEB_DEPLOY_REPORT_PATH="${CRETAS_WEB_DEPLOY_REPORT_PATH:-$HOME/.cache/cretas/deploy-reports/web-${WEB_DEPLOY_STARTED_AT}-$$.json}"
+WEB_DEPLOY_OUTCOME=unknown
+WEB_HTTP_CODE=
+WEB_HASH_LOCAL=
+WEB_HASH_SERVER=
+WEB_HASH_GATEWAY_HTTP=
+WEB_HASH_PUBLIC_HTTPS=
 
 # ==================== 加载共享函数库 ====================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -199,6 +207,69 @@ check_git_sync "$PROJECT_ROOT" "[0/4] Git sync pre-check..." "$GIT_SYNC_STRICT"
 
 log() {
     echo "[$(date '+%H:%M:%S')] $*"
+}
+
+web_deploy_json_escape() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; :a; N; $!ba; s/\n/\\n/g'
+}
+
+write_web_deploy_report() {
+    local exit_code=${1:-1} finished total result commit web_tree tmp
+    finished=$(date +%s)
+    total=$((finished - WEB_DEPLOY_STARTED_AT))
+    if [ "$exit_code" -eq 0 ]; then result=SUCCESS; else result=FAILED; fi
+    commit=$(git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || true)
+    web_tree=$(git -C "$PROJECT_ROOT" rev-parse HEAD:web-admin 2>/dev/null || true)
+    mkdir -p "$(dirname "$WEB_DEPLOY_REPORT_PATH")" || return 1
+    tmp="$WEB_DEPLOY_REPORT_PATH.tmp.$$"
+    {
+        printf '{\n'
+        printf '  "format": "cretas-web-deploy-report-v1",\n'
+        printf '  "result": "%s",\n' "$result"
+        printf '  "outcome": "%s",\n' "$(web_deploy_json_escape "$WEB_DEPLOY_OUTCOME")"
+        printf '  "exit_code": %s,\n' "$exit_code"
+        printf '  "total_wall_seconds": %s,\n' "$total"
+        printf '  "commit": "%s",\n' "$(web_deploy_json_escape "$commit")"
+        printf '  "web_tree": "%s",\n' "$(web_deploy_json_escape "$web_tree")"
+        printf '  "archive_sha256": "%s",\n' "$(web_deploy_json_escape "${WEB_RELEASE_ARCHIVE_SHA256:-}")"
+        printf '  "index_sha256": "%s",\n' "$(web_deploy_json_escape "${WEB_RELEASE_INDEX_SHA256:-}")"
+        printf '  "http_code": "%s",\n' "$(web_deploy_json_escape "$WEB_HTTP_CODE")"
+        printf '  "four_way_hashes": {"local": "%s", "server": "%s", "gateway_http": "%s", "public_https": "%s"}\n' \
+            "$(web_deploy_json_escape "$WEB_HASH_LOCAL")" \
+            "$(web_deploy_json_escape "$WEB_HASH_SERVER")" \
+            "$(web_deploy_json_escape "$WEB_HASH_GATEWAY_HTTP")" \
+            "$(web_deploy_json_escape "$WEB_HASH_PUBLIC_HTTPS")"
+        printf '}\n'
+    } >"$tmp" || { rm -f "$tmp"; return 1; }
+    mv -f "$tmp" "$WEB_DEPLOY_REPORT_PATH"
+}
+
+web_deploy_on_exit() {
+    local rc=$?
+    write_web_deploy_report "$rc" || true
+}
+trap web_deploy_on_exit EXIT
+
+verify_prod_web_four_way() {
+    WEB_HASH_LOCAL=${WEB_RELEASE_INDEX_SHA256:-}
+    WEB_HASH_SERVER=$(ssh "$GATEWAY" "sha256sum '/www/wwwroot/web-admin/index.html' 2>/dev/null | awk '{print \$1}'" | tr -d '\r\n')
+    WEB_HASH_GATEWAY_HTTP=$(ssh "$GATEWAY" "curl -fsS http://127.0.0.1:8086/ | sha256sum | awk '{print \$1}'" | tr -d '\r\n')
+    WEB_HASH_PUBLIC_HTTPS=$(curl -fsS https://admin.cretaceousfuture.com/ | sha256sum | awk '{print $1}')
+
+    printf 'WEB_HASH_LOCAL=%s\n' "$WEB_HASH_LOCAL"
+    printf 'WEB_HASH_SERVER=%s\n' "$WEB_HASH_SERVER"
+    printf 'WEB_HASH_GATEWAY_HTTP=%s\n' "$WEB_HASH_GATEWAY_HTTP"
+    printf 'WEB_HASH_PUBLIC_HTTPS=%s\n' "$WEB_HASH_PUBLIC_HTTPS"
+    if [ -n "$WEB_HASH_LOCAL" ] \
+        && [ "$WEB_HASH_LOCAL" = "$WEB_HASH_SERVER" ] \
+        && [ "$WEB_HASH_LOCAL" = "$WEB_HASH_GATEWAY_HTTP" ] \
+        && [ "$WEB_HASH_LOCAL" = "$WEB_HASH_PUBLIC_HTTPS" ]; then
+        printf 'WEB_HASH_FOUR_WAY=pass\n'
+        return 0
+    fi
+    printf 'WEB_HASH_FOUR_WAY=failed\n' >&2
+    log "❌ Web 四方哈希不一致，拒绝把本次发布标记为成功"
+    return 1
 }
 
 # 可信 Web archive 优先：只有 clean exact origin/main、构建提交可解析、
@@ -366,6 +437,7 @@ TAR_SIZE=$(du -sh "$TMP_TAR" | cut -f1)
 log "   ✓ Tarball: $TAR_SIZE"
 
 if [ "$DRY_RUN" = "1" ]; then
+    WEB_DEPLOY_OUTCOME=dry-run
     log "🧪 dry-run: 跳过上传和部署"
     log "   本地 tarball 保留: $TMP_TAR"
     rm -f "$TMP_INDEX"
@@ -385,6 +457,14 @@ if [ "$ENV" != "all" ]; then
         fi
         NOOP_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$NOOP_VERIFY_URL" || echo "000")
         if [ "$REMOTE_INDEX_SHA" = "$WEB_RELEASE_INDEX_SHA256" ] && [ "$NOOP_HTTP_CODE" = "200" ]; then
+            WEB_HTTP_CODE=$NOOP_HTTP_CODE
+            if [ "$ENV" = "prod" ]; then
+                if ! verify_prod_web_four_way; then
+                    rm -f "$TMP_TAR" "$TMP_INDEX"
+                    exit 1
+                fi
+            fi
+            WEB_DEPLOY_OUTCOME=no-op
             rm -f "$TMP_TAR" "$TMP_INDEX"
             log "✅ 无需重新部署：远端 archive/index 指纹一致且 HTTP 200"
             log "   archive SHA-256: $WEB_RELEASE_ARCHIVE_SHA256"
@@ -426,12 +506,21 @@ rm -f "$TMP_TAR" "$TMP_INDEX"
 
 # ==================== 5. 验证 ====================
 log "🔍 验证..."
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://139.196.165.140:8086/" || echo "000")
-log "   HTTP $HTTP_CODE (http://139.196.165.140:8086/)"
+if [ "$ENV" = "test" ] || [ "$ENV" = "all" ]; then
+    VERIFY_URL="http://139.196.165.140:8097/"
+else
+    VERIFY_URL="http://139.196.165.140:8086/"
+fi
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$VERIFY_URL" || echo "000")
+WEB_HTTP_CODE=$HTTP_CODE
+log "   HTTP $HTTP_CODE ($VERIFY_URL)"
 
 if [ "$HTTP_CODE" != "200" ]; then
     log "⚠️  验证失败 (HTTP $HTTP_CODE),请手动检查"
     exit 1
+fi
+if [ "$ENV" = "prod" ]; then
+    verify_prod_web_four_way
 fi
 
 # R43 fix: --env all 之前 silently 只部 test, 现在测试通过后 prompt 部 prod
@@ -468,8 +557,10 @@ if [ "$ENV" = "all" ]; then
 
     log "🔍 验证 prod..."
     PROD_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://139.196.165.140:8086/" || echo "000")
+    WEB_HTTP_CODE=$PROD_CODE
     log "   HTTP $PROD_CODE (http://139.196.165.140:8086/)"
     if [ "$PROD_CODE" = "200" ]; then
+        verify_prod_web_four_way
         log "✅ Prod 部署完成"
     else
         log "⚠️  Prod 验证失败 (HTTP $PROD_CODE)"
@@ -477,4 +568,5 @@ if [ "$ENV" = "all" ]; then
     fi
 fi
 
+WEB_DEPLOY_OUTCOME=deployed
 log "✅ 部署完成"

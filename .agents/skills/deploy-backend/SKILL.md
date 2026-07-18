@@ -44,6 +44,9 @@ It detects `backend/java/cretas-api` and `web-admin` changes, selects the
 component builds/deployments or verified no-op, validates both trusted
 manifests before deployment, and writes one structured release receipt. It is
 safe-sequential by default and never infers API compatibility from Git diff.
+The final `no-op` versus `deployed` state must come from the Java/Web child
+deployment receipts, not from the detected source diff. A manifest fallback
+build must also appear in `build_mode` and component timing/count fields.
 Parallel deployment is allowed only with
 `--parallel-if-independent YES-INDEPENDENT-SERVICES` and only when its
 migration, Entity, Repository/query, Security/Auth, Controller/DTO/API, config
@@ -162,7 +165,10 @@ spawn one hash process per dist file. Any miss or validation failure performs
 exactly one normal local build and refreshes the manifest; it never trusts
 mtime, filename, or a present `dist/`. If the remote archive and index
 fingerprints already match and HTTP is healthy, return a verified no-op before
-upload; otherwise retain the atomic swap and stale-chunk behavior.
+upload; otherwise retain the atomic swap and stale-chunk behavior. Both the
+no-op and deployed paths must write a child receipt and pass the production
+four-way index hash gate (trusted local index, server file, gateway localhost
+response, and public HTTPS response) before reporting success.
 
 Use the atomic project script, not manual `rsync --delete`:
 
