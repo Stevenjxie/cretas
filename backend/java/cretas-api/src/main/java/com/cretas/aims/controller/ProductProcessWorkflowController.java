@@ -81,7 +81,7 @@ public class ProductProcessWorkflowController {
     }
 
     @GetMapping("/{productTypeId}/versions")
-    @Operation(summary = "读取某产品的全部 Workflow 版本历史(DRAFT + PUBLISHED), 按版本号倒序")
+    @Operation(summary = "读取某产品的全部 Workflow 版本历史(DRAFT + SNAPSHOT + PUBLISHED), 按版本号倒序")
     public ApiResponse<List<ProductProcessWorkflowVersionSummaryDTO>> listVersions(
             @PathVariable String factoryId,
             @PathVariable String productTypeId) {

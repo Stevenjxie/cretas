@@ -9,7 +9,7 @@ import java.time.LocalDateTime;
 /**
  * 产品工序 Workflow 版本历史摘要（只读）。
  *
- * <p>覆盖某个产品的全部版本行（DRAFT + PUBLISHED），供版本历史列表展示。
+ * <p>覆盖某个产品的全部版本行（DRAFT + SNAPSHOT + PUBLISHED），供版本历史列表展示。
  */
 @Data
 @NoArgsConstructor

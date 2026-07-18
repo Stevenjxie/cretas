@@ -180,8 +180,7 @@ class ProductProcessWorkflowServiceImplTest {
         when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
                 FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
                 .thenReturn(Optional.empty());
-        when(repository.findByFactoryIdAndProductTypeIdOrderByDefinitionVersionDesc(FACTORY_ID, PRODUCT_ID))
-                .thenReturn(List.of(snapshot));
+        when(repository.findMaxDefinitionVersion(FACTORY_ID, PRODUCT_ID)).thenReturn(Optional.of(4));
         when(repository.saveAndFlush(any(ProductProcessWorkflow.class))).thenAnswer(invocation -> {
             ProductProcessWorkflow saved = invocation.getArgument(0);
             saved.setId(93L);
