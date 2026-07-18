@@ -59,10 +59,10 @@ class ToolExecutionArchitectureTest {
                 .isEqualTo(new Counts(1, 1, 2));
         ScanResult actual = completeScan.without(SANCTIONED_GATEWAY);
 
-        assertThat(baseline.files()).hasSize(14);
-        assertThat(baseline.totalLines()).isEqualTo(16);
-        assertThat(baseline.totalExpressions()).isEqualTo(17);
-        assertThat(baseline.totalExecute()).isEqualTo(14);
+        assertThat(baseline.files()).hasSize(13);
+        assertThat(baseline.totalLines()).isEqualTo(15);
+        assertThat(baseline.totalExpressions()).isEqualTo(16);
+        assertThat(baseline.totalExecute()).isEqualTo(13);
         assertThat(baseline.totalPreview()).isEqualTo(3);
 
         assertNoGrowth(baseline, actual);
@@ -131,6 +131,19 @@ class ToolExecutionArchitectureTest {
                 sourceRoot, EGRESS_PERMIT_CONSTRUCTION, "ToolEgressPermit construction");
         assertOnlySanctionedUse(
                 sourceRoot, TRUSTED_EGRESS_CONTEXT_CALL, "trusted egress context injection");
+    }
+
+    @Test
+    void ownerAdvisorCannotReturnToDirectRegistryExecution() throws IOException {
+        Path orchestrator = Path.of(
+                System.getProperty("user.dir"),
+                "src", "main", "java", "com", "cretas", "aims", "service", "execution",
+                "IntentExecutionOrchestrator.java");
+        String source = Files.readString(orchestrator, StandardCharsets.UTF_8);
+
+        assertThat(source).doesNotContain(
+                "getExecutor(\"restaurant_owner_action_advisor\")",
+                "askRestaurantOwnerActionChat");
     }
 
     private static Baseline loadBaseline() throws IOException {

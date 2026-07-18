@@ -218,6 +218,27 @@ class PythonSmartBIClientSectionTest {
         assertThat(result).isEmpty();
     }
 
+    @Test
+    @DisplayName("generic SmartBI section calls retain configured retry behavior")
+    void callSection_retriesConfiguredTransientFailure() {
+        config.setMaxRetries(1);
+        mockServer.enqueue(new MockResponse().setResponseCode(500).setBody("temporary"));
+        mockServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("""
+                        {"success":true,"sectionName":"diagnostics","status":"ok","data":{}}
+                        """));
+
+        Optional<PythonSectionResponse> result = client.callSection(
+                "restaurant",
+                "diagnostics",
+                PythonSectionRequest.builder().factoryId("F-TEST").build());
+
+        assertThat(result).isPresent();
+        assertThat(mockServer.getRequestCount()).isEqualTo(2);
+    }
+
     // ── Service disabled → short-circuit ─────────────────────────────────
 
     @Test
