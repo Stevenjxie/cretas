@@ -22,6 +22,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.mock;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.when;
 
 class ProductWorkflowProcessPathTest {
@@ -43,6 +44,7 @@ class ProductWorkflowProcessPathTest {
         target.setName("成品 A");
         target.setProductCategory(ProductCategory.FINISHED_PRODUCT);
         when(products.findByIdAndFactoryId("FG-A", "F006")).thenReturn(Optional.of(target));
+        when(products.findByIdIn(anyList())).thenReturn(List.of(target));
         CanonicalUnit kg = new CanonicalUnit(
                 "kg", UnitDimension.MASS, "g", new BigDecimal("1000"), "千克", 3);
         when(units.normalize("F006", "kg"))
@@ -56,6 +58,8 @@ class ProductWorkflowProcessPathTest {
         activation.setEnabled(true);
         when(activations.findByFactoryIdAndProductTypeId("F006", "FG-A"))
                 .thenReturn(Optional.of(activation));
+        when(activations.findByFactoryIdAndEnabledTrue("F006"))
+                .thenReturn(List.of(activation));
 
         ProductProcessWorkflow workflow = new ProductProcessWorkflow();
         workflow.setId(41L);

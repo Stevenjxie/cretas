@@ -401,7 +401,7 @@ export interface WorkflowResolutionCandidate {
 /**
  * POST /product-process-workflows/resolve-by-outputs 响应体。
  * 前端不以 owner 模式决定业务语义，而是复核候选的终端产出集合：
- * 单选只接受单产出 Workflow，多选只接受共同的多产出 Workflow。
+ * 完全匹配优先；没有完全匹配时接受覆盖所选成品的最小产出超集。
  * union 同时兼容现网旧 DTO 与拟定的新 DTO。
  */
 export type WorkflowOutputResolutionMode =

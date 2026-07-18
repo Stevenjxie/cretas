@@ -383,10 +383,9 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
     private boolean matchesSelection(
             WorkflowTopology topology, Set<String> requestedSet, int requestedCount) {
         Set<String> terminals = new HashSet<>(topology.terminalOutputSkuIds());
-        if (requestedCount == 1) {
-            return topology.isSingleOutput() && terminals.equals(requestedSet);
-        }
-        return requestedCount > 1 && topology.isMultiOutput() && terminals.containsAll(requestedSet);
+        return requestedCount > 0
+                && requestedSet.size() == requestedCount
+                && terminals.containsAll(requestedSet);
     }
 
     private List<String> selectedOutputs(String productTypeId, List<String> requested) {
@@ -749,7 +748,7 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
 
     private BusinessException noMatchingWorkflow(int requestedCount) {
         if (requestedCount == 1) {
-            return new BusinessException(409, "该产品没有单产出 Workflow，请前往创建单产出 Workflow")
+            return new BusinessException(409, "未找到覆盖该产品的工序 Workflow，请前往 Workflow 配置")
                     .withCode("WORKFLOW_SINGLE_OUTPUT_NOT_FOUND")
                     .withHintTarget("productTypeId")
                     .withSeverity("warning");

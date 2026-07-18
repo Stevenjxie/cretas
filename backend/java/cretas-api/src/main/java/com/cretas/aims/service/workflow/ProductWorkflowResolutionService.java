@@ -15,8 +15,8 @@ public interface ProductWorkflowResolutionService {
     /**
      * 给定一组成品 productTypeId, 解析最高优先层的已启用 workflow 候选 (只读, 空候选不报错)。
      * <ul>
-     *   <li>单选只接受单产出精确图。</li>
-     *   <li>多选优先终端集合精确图；无精确图时只返回额外产出最少的同层超集。</li>
+     *   <li>单选和多选都优先终端集合精确图。</li>
+     *   <li>无精确图时，只返回能够覆盖所选成品且额外产出最少的同层超集。</li>
      *   <li>同层可返回 1/N 条，N 条必须由调用方显式选择。</li>
      *   <li>0 候选 → NONE (空列表)。</li>
      * </ul>
