@@ -31,6 +31,12 @@
 |---|---|---|---|
 | CRETAS-RELEASE-CRITICAL-PATH-20260718 | `10b2c0195607fc891eb59b25a78a7f8a6e877ed0` | Codex `/root` | 新增 `release-cretas.sh` 统一入口，按 Java/Web 变更自动构建、部署或健康 no-op；默认安全串行，仅在显式独立确认且迁移、Entity、Repository/Query、Security/Auth、Controller/DTO/API、配置和顺序门禁均未命中时并行。统一 JSON 记录制品、组件结果、阶段耗时和生产证据，并以子部署 fail-fast 环境门禁保证每组件最多一次构建。Java 同步 SemanticRouter 启动缓存改为 ready 后异步预热，可信 JAR 已通过唯一 Maven 生命周期 3 类 9 项测试并预置远端不可变缓存；shell/manifest/cache/Web 加速契约全部通过。[PR #1424](https://github.com/Stevenjxie/cretas/pull/1424)。 |
 
+## 统一发布真实结果与 Web 四方哈希
+
+| ID | Base SHA | Owner | Result |
+|---|---|---|---|
+| CRETAS-RELEASE-GLOBAL-OUTCOME-20260718 | `6ee89e8b4399f53a61bae27c3354968d5b654a99` | Codex `/root` | 全局生产演练发现 Web manifest fallback 实际构建并部署，但统一回执误报 `no-op`。现改为以 Java/Web 子部署回执判定最终 `no-op`/`deployed`，记录 fallback build 模式、耗时与次数；Web no-op/部署成功均强制校验 manifest、服务器文件、网关 localhost、公网 HTTPS 四方 index SHA，并写结构化子回执。Shell 目标矩阵、manifest/cache/并行/preflight/verify 回归、UTF-8 与 diff 门禁通过；未重复 Maven，也未为修复强制重部署生产。[PR #1425](https://github.com/Stevenjxie/cretas/pull/1425)。 |
+
 ## Workflow 编辑器阻塞修复
 
 | ID | Base SHA | Owner | Result |

@@ -97,6 +97,8 @@ JAVA_BUILD_STATUS=not-selected
 WEB_BUILD_STATUS=not-selected
 JAVA_DEPLOY_STATUS=not-selected
 WEB_DEPLOY_STATUS=not-selected
+JAVA_DEPLOY_OUTCOME=not-selected
+WEB_DEPLOY_OUTCOME=not-selected
 JAVA_BUILD_SECONDS=0
 WEB_BUILD_SECONDS=0
 BUILD_SECONDS=0
@@ -113,6 +115,10 @@ BACKEND_PORT=
 BACKEND_SERVICE=
 BACKEND_HEALTH=
 WEB_HTTP=
+WEB_HASH_LOCAL=
+WEB_HASH_SERVER=
+WEB_HASH_GATEWAY_HTTP=
+WEB_HASH_PUBLIC_HTTPS=
 
 json_escape() {
     printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; :a; N; $!ba; s/\n/\\n/g'
@@ -122,6 +128,21 @@ manifest_field() {
     local path=$1 key=$2
     [ -f "$path" ] || return 0
     awk -F= -v key="$key" '$1 == key {sub(/^[^=]*=/, ""); sub(/\r$/, ""); print; exit}' "$path"
+}
+
+json_report_field() {
+    local path=$1 key=$2
+    [ -f "$path" ] || return 0
+    sed -n 's/.*"'"$key"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$path" | head -1
+}
+
+record_fallback_build() {
+    local component=$1
+    case "$BUILD_MODE:$component" in
+        none:java) BUILD_MODE=java-fallback ;;
+        none:web) BUILD_MODE=web-fallback ;;
+        web-fallback:java|java-fallback:web) BUILD_MODE=java+web-fallback ;;
+    esac
 }
 
 duration_run() {
@@ -173,8 +194,8 @@ write_report() {
         printf '  "timings_seconds": {"build_total": %s, "java_build": %s, "web_build": %s, "deploy_total": %s, "java_deploy": %s, "web_deploy": %s, "verify": %s, "total": %s},\n' \
             "$BUILD_SECONDS" "$JAVA_BUILD_SECONDS" "$WEB_BUILD_SECONDS" "$DEPLOY_SECONDS" "$JAVA_DEPLOY_SECONDS" "$WEB_DEPLOY_SECONDS" "$VERIFY_SECONDS" "$total"
         printf '  "components": {\n'
-        printf '    "java": {"build": "%s", "deploy": "%s", "build_count": %s},\n' "$JAVA_BUILD_STATUS" "$JAVA_DEPLOY_STATUS" "$JAVA_BUILD_COUNT"
-        printf '    "web": {"build": "%s", "deploy": "%s", "build_count": %s}\n' "$WEB_BUILD_STATUS" "$WEB_DEPLOY_STATUS" "$WEB_BUILD_COUNT"
+        printf '    "java": {"build": "%s", "deploy": "%s", "outcome": "%s", "build_count": %s},\n' "$JAVA_BUILD_STATUS" "$JAVA_DEPLOY_STATUS" "$JAVA_DEPLOY_OUTCOME" "$JAVA_BUILD_COUNT"
+        printf '    "web": {"build": "%s", "deploy": "%s", "outcome": "%s", "build_count": %s}\n' "$WEB_BUILD_STATUS" "$WEB_DEPLOY_STATUS" "$WEB_DEPLOY_OUTCOME" "$WEB_BUILD_COUNT"
         printf '  },\n'
         printf '  "java_manifest": {"build_commit": "%s", "tree": "%s", "sha256": "%s", "size_bytes": "%s", "maven_wall_seconds": "%s"},\n' \
             "$(json_escape "$java_build_commit")" "$(json_escape "$java_tree")" "$(json_escape "$java_sha")" "$(json_escape "$java_size")" "$(json_escape "$java_maven_seconds")"
@@ -182,6 +203,9 @@ write_report() {
             "$(json_escape "$web_build_commit")" "$(json_escape "$web_tree")" "$(json_escape "$web_sha")" "$(json_escape "$web_index_sha")"
         printf '  "production": {"upstream": "%s", "slot": "%s", "port": "%s", "active_service": "%s", "backend_health": "%s", "web_http": "%s"},\n' \
             "$(json_escape "$BACKEND_UPSTREAM")" "$(json_escape "$BACKEND_SLOT")" "$(json_escape "$BACKEND_PORT")" "$(json_escape "$BACKEND_SERVICE")" "$(json_escape "$BACKEND_HEALTH")" "$(json_escape "$WEB_HTTP")"
+        printf '  "web_four_way_hashes": {"local": "%s", "server": "%s", "gateway_http": "%s", "public_https": "%s"},\n' \
+            "$(json_escape "$WEB_HASH_LOCAL")" "$(json_escape "$WEB_HASH_SERVER")" \
+            "$(json_escape "$WEB_HASH_GATEWAY_HTTP")" "$(json_escape "$WEB_HASH_PUBLIC_HTTPS")"
         printf '  "logs": "%s"\n' "$(json_escape "$RUN_LOG_DIR")"
         printf '}\n'
     } >"$tmp"
@@ -291,6 +315,7 @@ validate_or_build_java_once() {
     cat "$RUN_LOG_DIR/java-manifest-validate.log" >&2
     echo "WARN: Java manifest invalid; using the one permitted build fallback" >&2
     build_java
+    record_fallback_build java
     "$SCRIPT_DIR/release-jar-manifest.sh" validate
 }
 
@@ -303,28 +328,50 @@ validate_or_build_web_once() {
     cat "$RUN_LOG_DIR/web-manifest-validate.log" >&2
     echo "WARN: Web manifest invalid; using the one permitted build fallback" >&2
     build_web
+    record_fallback_build web
     "$SCRIPT_DIR/release-web-manifest.sh" validate
 }
 
 deploy_java() {
+    local child_report="$RUN_LOG_DIR/java-deploy-report.json"
     if duration_run JAVA_DEPLOY_SECONDS "$RUN_LOG_DIR/java-deploy.log" \
         env CRETAS_REQUIRE_TRUSTED_ARTIFACT=1 \
-        CRETAS_DEPLOY_REPORT_PATH="$RUN_LOG_DIR/java-deploy-report.json" \
+        CRETAS_DEPLOY_REPORT_PATH="$child_report" \
         "$SCRIPT_DIR/deploy-backend.sh" --env prod; then
         JAVA_DEPLOY_STATUS=success
+        JAVA_DEPLOY_OUTCOME=$(json_report_field "$child_report" outcome)
+        case "$JAVA_DEPLOY_OUTCOME" in
+            no-op|deployed) ;;
+            *) JAVA_DEPLOY_STATUS=failed; JAVA_DEPLOY_OUTCOME=unknown; echo "ERROR: Java child returned success without a valid no-op/deployed outcome receipt" >&2; return 1 ;;
+        esac
     else
         JAVA_DEPLOY_STATUS=failed
+        JAVA_DEPLOY_OUTCOME=$(json_report_field "$child_report" outcome)
+        JAVA_DEPLOY_OUTCOME=${JAVA_DEPLOY_OUTCOME:-unknown}
         return 1
     fi
 }
 
 deploy_web() {
+    local child_report="$RUN_LOG_DIR/web-deploy-report.json"
     if duration_run WEB_DEPLOY_SECONDS "$RUN_LOG_DIR/web-deploy.log" \
         env CRETAS_REQUIRE_TRUSTED_ARTIFACT=1 \
+        CRETAS_WEB_DEPLOY_REPORT_PATH="$child_report" \
         "$SCRIPT_DIR/deploy-web-admin.sh" --env prod --confirm-prod YES-PROD; then
         WEB_DEPLOY_STATUS=success
+        WEB_DEPLOY_OUTCOME=$(json_report_field "$child_report" outcome)
+        WEB_HASH_LOCAL=$(json_report_field "$child_report" local)
+        WEB_HASH_SERVER=$(json_report_field "$child_report" server)
+        WEB_HASH_GATEWAY_HTTP=$(json_report_field "$child_report" gateway_http)
+        WEB_HASH_PUBLIC_HTTPS=$(json_report_field "$child_report" public_https)
+        case "$WEB_DEPLOY_OUTCOME" in
+            no-op|deployed) ;;
+            *) WEB_DEPLOY_STATUS=failed; WEB_DEPLOY_OUTCOME=unknown; echo "ERROR: Web child returned success without a valid no-op/deployed outcome receipt" >&2; return 1 ;;
+        esac
     else
         WEB_DEPLOY_STATUS=failed
+        WEB_DEPLOY_OUTCOME=$(json_report_field "$child_report" outcome)
+        WEB_DEPLOY_OUTCOME=${WEB_DEPLOY_OUTCOME:-unknown}
         return 1
     fi
 }
@@ -345,6 +392,8 @@ run_parallel_deploy() {
     DEPLOY_MODE=parallel
     if duration_run DEPLOY_SECONDS "$RUN_LOG_DIR/parallel-deploy.log" \
         env CRETAS_REQUIRE_TRUSTED_ARTIFACT=1 \
+        CRETAS_DEPLOY_REPORT_PATH="$RUN_LOG_DIR/java-deploy-report.json" \
+        CRETAS_WEB_DEPLOY_REPORT_PATH="$RUN_LOG_DIR/web-deploy-report.json" \
         "$SCRIPT_DIR/deploy-cretas-parallel.sh" \
         --confirm-prod YES-PROD \
         --confirm-independent-services YES-INDEPENDENT-SERVICES; then
@@ -354,6 +403,16 @@ run_parallel_deploy() {
     fi
     if [ "$rc" -eq 0 ]; then
         JAVA_DEPLOY_STATUS=success; WEB_DEPLOY_STATUS=success
+        JAVA_DEPLOY_OUTCOME=$(json_report_field "$RUN_LOG_DIR/java-deploy-report.json" outcome)
+        WEB_DEPLOY_OUTCOME=$(json_report_field "$RUN_LOG_DIR/web-deploy-report.json" outcome)
+        WEB_HASH_LOCAL=$(json_report_field "$RUN_LOG_DIR/web-deploy-report.json" local)
+        WEB_HASH_SERVER=$(json_report_field "$RUN_LOG_DIR/web-deploy-report.json" server)
+        WEB_HASH_GATEWAY_HTTP=$(json_report_field "$RUN_LOG_DIR/web-deploy-report.json" gateway_http)
+        WEB_HASH_PUBLIC_HTTPS=$(json_report_field "$RUN_LOG_DIR/web-deploy-report.json" public_https)
+        case "$JAVA_DEPLOY_OUTCOME:$WEB_DEPLOY_OUTCOME" in
+            no-op:no-op|no-op:deployed|deployed:no-op|deployed:deployed) ;;
+            *) JAVA_DEPLOY_STATUS=failed; WEB_DEPLOY_STATUS=failed; echo "ERROR: parallel children returned success without valid outcome receipts" >&2; return 1 ;;
+        esac
         JAVA_DEPLOY_SECONDS=$(sed -n 's/^JAVA_DEPLOY_WALL_SECONDS=//p' "$RUN_LOG_DIR/parallel-deploy.log" | tail -1)
         WEB_DEPLOY_SECONDS=$(sed -n 's/^WEB_DEPLOY_WALL_SECONDS=//p' "$RUN_LOG_DIR/parallel-deploy.log" | tail -1)
         JAVA_DEPLOY_SECONDS=${JAVA_DEPLOY_SECONDS:-$DEPLOY_SECONDS}
@@ -368,6 +427,10 @@ run_parallel_deploy() {
     fi
     [ "${java_rc:-1}" -eq 0 ] && JAVA_DEPLOY_STATUS=success || JAVA_DEPLOY_STATUS=failed
     [ "${web_rc:-1}" -eq 0 ] && WEB_DEPLOY_STATUS=success || WEB_DEPLOY_STATUS=failed
+    JAVA_DEPLOY_OUTCOME=$(json_report_field "$RUN_LOG_DIR/java-deploy-report.json" outcome)
+    WEB_DEPLOY_OUTCOME=$(json_report_field "$RUN_LOG_DIR/web-deploy-report.json" outcome)
+    JAVA_DEPLOY_OUTCOME=${JAVA_DEPLOY_OUTCOME:-unknown}
+    WEB_DEPLOY_OUTCOME=${WEB_DEPLOY_OUTCOME:-unknown}
     return 1
 }
 
@@ -395,6 +458,9 @@ run_deploy_phase() {
         java) validate_or_build_java_once ;;
         web) validate_or_build_web_once ;;
         both) validate_or_build_java_once; validate_or_build_web_once ;;
+    esac
+    case "$BUILD_MODE" in
+        *fallback) BUILD_SECONDS=$((JAVA_BUILD_SECONDS + WEB_BUILD_SECONDS)) ;;
     esac
 
     if [ "$selected" = both ]; then
@@ -437,17 +503,20 @@ if [ "$PHASE" = deploy ] || [ "$PHASE" = all ]; then
     run_deploy_phase
 fi
 
-if [ "$COMPONENTS" = none ]; then
-    FINAL_STATUS=no-op
-elif [ "$PHASE" = build ]; then
-    FINAL_STATUS=built
-else
+if [ "$PHASE" = build ]; then
+    if [ "$COMPONENTS" = none ]; then FINAL_STATUS=no-op; else FINAL_STATUS=built; fi
+elif [ "$JAVA_DEPLOY_OUTCOME" = deployed ] || [ "$WEB_DEPLOY_OUTCOME" = deployed ]; then
     FINAL_STATUS=deployed
+elif [ "$JAVA_DEPLOY_OUTCOME" = no-op ] || [ "$WEB_DEPLOY_OUTCOME" = no-op ]; then
+    FINAL_STATUS=no-op
+else
+    FINAL_STATUS=failed
 fi
-
 printf 'RELEASE_BUILD_MODE=%s\n' "$BUILD_MODE"
 printf 'RELEASE_DEPLOY_MODE=%s\n' "$DEPLOY_MODE"
 printf 'RELEASE_MODE_REASON=%s\n' "$MODE_REASON"
 printf 'RELEASE_JAVA_STATUS=build:%s,deploy:%s\n' "$JAVA_BUILD_STATUS" "$JAVA_DEPLOY_STATUS"
 printf 'RELEASE_WEB_STATUS=build:%s,deploy:%s\n' "$WEB_BUILD_STATUS" "$WEB_DEPLOY_STATUS"
+printf 'RELEASE_JAVA_OUTCOME=%s\n' "$JAVA_DEPLOY_OUTCOME"
+printf 'RELEASE_WEB_OUTCOME=%s\n' "$WEB_DEPLOY_OUTCOME"
 printf 'RELEASE_FINAL_STATUS=%s\n' "$FINAL_STATUS"

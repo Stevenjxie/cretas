@@ -47,13 +47,18 @@ MOCK_NPM
 set -euo pipefail
 case "$*" in
     *'.cretas-release-sha256'*) printf '%s\n' "$MOCK_REMOTE_ARCHIVE_SHA" ;;
+    *'curl -fsS http://127.0.0.1:8086/'*) printf '%s\n' "$MOCK_REMOTE_HTTP_SHA" ;;
     *'sha256sum'*'index.html'*) printf '%s\n' "$MOCK_REMOTE_INDEX_SHA" ;;
     *) exit 91 ;;
 esac
 MOCK_SSH
-    cat > "$fixture/mock-bin/curl" <<'MOCK_CURL'
+cat > "$fixture/mock-bin/curl" <<'MOCK_CURL'
 #!/usr/bin/env bash
-printf '200'
+if [[ " $* " == *' -w '* ]]; then
+    printf '200'
+else
+    cat "$MOCK_PUBLIC_BODY"
+fi
 MOCK_CURL
     cat > "$fixture/mock-bin/scp" <<'MOCK_SCP'
 #!/usr/bin/env bash
@@ -138,16 +143,52 @@ manifest="$MISS/cache/current/release-web.manifest"
 archive_sha=$(awk -F= '$1 == "archive_sha256" { print $2 }' "$manifest")
 index_sha=$(awk -F= '$1 == "index_sha256" { print $2 }' "$manifest")
 : > "$MISS/scp.log"
+noop_report="$MISS/cache/web-deploy-report.json"
+public_body="$MISS/cache/public-index.html"
+tar -xOf "$MISS/cache/current/release-web-dist.tar.gz" ./index.html > "$public_body"
+set +e
 (
     cd "$MISS"
     PATH="$MISS/mock-bin:$PATH" MOCK_NPM_LOG="$MISS/npm.log" MOCK_SCP_LOG="$MISS/scp.log" \
         MOCK_REMOTE_ARCHIVE_SHA="$archive_sha" MOCK_REMOTE_INDEX_SHA="$index_sha" \
+        MOCK_REMOTE_HTTP_SHA="$index_sha" MOCK_PUBLIC_BODY="$public_body" \
+        CRETAS_WEB_DEPLOY_REPORT_PATH="$noop_report" \
         CRETAS_WEB_CACHE_DIR="$MISS/cache" \
         bash scripts/deploy/deploy-web-admin.sh --env prod --confirm-prod YES-PROD
 ) > "$MISS/noop-output.log"
+noop_rc=$?
+set -e
+if [ "$noop_rc" -ne 0 ]; then
+    cat "$MISS/noop-output.log" >&2
+    fail "same-release Web no-op failed (rc=$noop_rc)"
+fi
 [[ ! -s "$MISS/scp.log" ]] || fail "same remote archive unexpectedly uploaded"
 grep -Fq "无需重新部署：远端 archive/index 指纹一致且 HTTP 200" "$MISS/noop-output.log" \
     || fail "remote same-release no-op receipt missing"
+grep -Fq 'WEB_HASH_FOUR_WAY=pass' "$MISS/noop-output.log" || fail "four-way hash pass receipt missing"
+grep -Fq '"outcome": "no-op"' "$noop_report" || fail "Web child no-op outcome missing"
+grep -Fq "\"public_https\": \"$index_sha\"" "$noop_report" || fail "Web report missing public hash"
+python -m json.tool "$noop_report" >/dev/null || fail "Web deploy report is not valid JSON"
+
+# Matching archive/index/HTTP status is not enough: a mismatched served body
+# must fail the four-way gate before upload or another atomic swap.
+: > "$MISS/scp.log"
+set +e
+(
+    cd "$MISS"
+    PATH="$MISS/mock-bin:$PATH" MOCK_NPM_LOG="$MISS/npm.log" MOCK_SCP_LOG="$MISS/scp.log" \
+        MOCK_REMOTE_ARCHIVE_SHA="$archive_sha" MOCK_REMOTE_INDEX_SHA="$index_sha" \
+        MOCK_REMOTE_HTTP_SHA="$(printf broken | sha256sum | awk '{print $1}')" \
+        MOCK_PUBLIC_BODY="$public_body" CRETAS_WEB_DEPLOY_REPORT_PATH="$MISS/cache/web-deploy-failed.json" \
+        CRETAS_WEB_CACHE_DIR="$MISS/cache" \
+        bash scripts/deploy/deploy-web-admin.sh --env prod --confirm-prod YES-PROD
+) > "$MISS/four-way-failed.log" 2>&1
+four_way_rc=$?
+set -e
+[[ "$four_way_rc" -ne 0 ]] || fail "four-way hash mismatch was accepted"
+[[ ! -s "$MISS/scp.log" ]] || fail "four-way mismatch unexpectedly triggered upload"
+grep -Fq 'WEB_HASH_FOUR_WAY=failed' "$MISS/four-way-failed.log" || fail "four-way mismatch receipt missing"
+grep -Fq '"result": "FAILED"' "$MISS/cache/web-deploy-failed.json" || fail "failed Web receipt missing"
 
 # Cache hit: matching manifest plus executable tool skips npm ci and builds once.
 HIT="$TMP_ROOT/hit"

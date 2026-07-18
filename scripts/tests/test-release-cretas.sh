@@ -77,19 +77,29 @@ cat >"$CASE_REPO/scripts/deploy/deploy-backend.sh" <<'EOF'
 #!/usr/bin/env bash
 printf 'JAVA_DEPLOY %s\n' "$*" >>"$MOCK_CALL_LOG"
 printf 'JAVA_REQUIRE_TRUSTED=%s\n' "${CRETAS_REQUIRE_TRUSTED_ARTIFACT:-}" >>"$MOCK_CALL_LOG"
-exit "${MOCK_JAVA_DEPLOY_RC:-0}"
+rc=${MOCK_JAVA_DEPLOY_RC:-0}
+if [ "$rc" -eq 0 ]; then outcome=${MOCK_JAVA_OUTCOME:-deployed}; else outcome=unknown; fi
+printf '{"result":"%s","outcome":"%s","exit_code":%s}\n' "$([ "$rc" -eq 0 ] && echo SUCCESS || echo FAILED)" "$outcome" "$rc" >"$CRETAS_DEPLOY_REPORT_PATH"
+exit "$rc"
 EOF
     cat >"$CASE_REPO/scripts/deploy/deploy-web-admin.sh" <<'EOF'
 #!/usr/bin/env bash
 printf 'WEB_DEPLOY %s\n' "$*" >>"$MOCK_CALL_LOG"
 printf 'WEB_REQUIRE_TRUSTED=%s\n' "${CRETAS_REQUIRE_TRUSTED_ARTIFACT:-}" >>"$MOCK_CALL_LOG"
-exit "${MOCK_WEB_DEPLOY_RC:-0}"
+rc=${MOCK_WEB_DEPLOY_RC:-0}
+if [ "$rc" -eq 0 ]; then outcome=${MOCK_WEB_OUTCOME:-deployed}; else outcome=unknown; fi
+printf '{"result":"%s","outcome":"%s","exit_code":%s}\n' "$([ "$rc" -eq 0 ] && echo SUCCESS || echo FAILED)" "$outcome" "$rc" >"$CRETAS_WEB_DEPLOY_REPORT_PATH"
+exit "$rc"
 EOF
     cat >"$CASE_REPO/scripts/deploy/deploy-cretas-parallel.sh" <<'EOF'
 #!/usr/bin/env bash
 printf 'PARALLEL_DEPLOY %s\n' "$*" >>"$MOCK_CALL_LOG"
 java_rc=${MOCK_JAVA_DEPLOY_RC:-0}
 web_rc=${MOCK_WEB_DEPLOY_RC:-0}
+java_outcome=${MOCK_JAVA_OUTCOME:-deployed}
+web_outcome=${MOCK_WEB_OUTCOME:-deployed}
+printf '{"result":"%s","outcome":"%s","exit_code":%s}\n' "$([ "$java_rc" -eq 0 ] && echo SUCCESS || echo FAILED)" "$java_outcome" "$java_rc" >"$CRETAS_DEPLOY_REPORT_PATH"
+printf '{"result":"%s","outcome":"%s","exit_code":%s}\n' "$([ "$web_rc" -eq 0 ] && echo SUCCESS || echo FAILED)" "$web_outcome" "$web_rc" >"$CRETAS_WEB_DEPLOY_REPORT_PATH"
 if [ "$java_rc" -ne 0 ] || [ "$web_rc" -ne 0 ]; then
     printf 'ERROR: parallel production release failed (java=%s web=%s elapsed=1s)\n' "$java_rc" "$web_rc" >&2
     exit 1
@@ -134,6 +144,8 @@ run_release() {
         HOME="$CASE_HOME" \
         MOCK_CALL_LOG="$CASE_LOG" \
         MOCK_COUNTER_ROOT="$CASE_ROOT" \
+        MOCK_JAVA_OUTCOME="${MOCK_JAVA_OUTCOME:-deployed}" \
+        MOCK_WEB_OUTCOME="${MOCK_WEB_OUTCOME:-deployed}" \
         CRETAS_RELEASE_REPORT_PATH="$CASE_REPORT" \
         bash scripts/deploy/release-cretas.sh "$@"
     ) >"$CASE_OUTPUT" 2>&1
@@ -159,6 +171,7 @@ assert_log_count 0 'JAVA_BUILD' "$CASE_LOG"
 
 # No changes: validate both manifests and perform verified child no-ops.
 setup_repo no_changes
+MOCK_JAVA_OUTCOME=no-op MOCK_WEB_OUTCOME=no-op \
 run_release --phase deploy --base-sha "$BASE_SHA" --confirm-prod YES-PROD \
     || { cat "$CASE_OUTPUT" >&2; fail 'no-change release failed'; }
 assert_contains "$CASE_OUTPUT" 'RELEASE_SELECTION=none'
@@ -167,6 +180,30 @@ assert_log_count 1 'JAVA_DEPLOY --env prod' "$CASE_LOG"
 assert_log_count 1 'WEB_DEPLOY --env prod --confirm-prod YES-PROD' "$CASE_LOG"
 assert_log_count 1 'JAVA_REQUIRE_TRUSTED=1' "$CASE_LOG"
 assert_log_count 1 'WEB_REQUIRE_TRUSTED=1' "$CASE_LOG"
+assert_contains "$CASE_REPORT" '"outcome": "no-op"'
+
+# A stale Web manifest in an otherwise unchanged release consumes one Web
+# fallback build and must report the real deployment, never a global no-op.
+setup_repo no_changes_web_fallback
+MOCK_WEB_VALIDATE_FAILS=1 MOCK_JAVA_OUTCOME=no-op MOCK_WEB_OUTCOME=deployed \
+run_release --phase deploy --base-sha "$BASE_SHA" --confirm-prod YES-PROD
+assert_contains "$CASE_OUTPUT" 'Web manifest invalid; using the one permitted build fallback'
+assert_contains "$CASE_OUTPUT" 'RELEASE_BUILD_MODE=web-fallback'
+assert_contains "$CASE_OUTPUT" 'RELEASE_FINAL_STATUS=deployed'
+assert_log_count 0 'JAVA_BUILD build' "$CASE_LOG"
+assert_log_count 1 'WEB_BUILD build' "$CASE_LOG"
+assert_contains "$CASE_REPORT" '"build_mode": "web-fallback"'
+assert_contains "$CASE_REPORT" '"web": {"build": "success", "deploy": "success", "outcome": "deployed", "build_count": 1}'
+
+# A changed component may still be a verified production no-op when identical
+# bytes are already live; final status follows the child receipt, not the diff.
+setup_repo java_changed_already_live
+commit_change backend/java/cretas-api/Service.java
+publish_head
+MOCK_JAVA_OUTCOME=no-op run_release --phase deploy --base-sha "$BASE_SHA" \
+    --tests StartupTest --confirm-prod YES-PROD
+assert_contains "$CASE_OUTPUT" 'RELEASE_FINAL_STATUS=no-op'
+assert_contains "$CASE_OUTPUT" 'RELEASE_JAVA_OUTCOME=no-op'
 
 # Both changes default to safe backend-first sequential deployment.
 setup_repo both_default
