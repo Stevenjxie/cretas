@@ -22,8 +22,6 @@ This file provides guidance to Codex when working with this repository.
 | **前端** | Expo 53+ + TypeScript + React Navigation 7+ |
 | **AI服务** | Python + LLM API |
 
-**项目状态**: Phase 3 核心完成 (82-85%)
-
 ---
 
 ## Quick Reference
@@ -42,10 +40,10 @@ This file provides guidance to Codex when working with this repository.
 | FRP | 7501 | 内网穿透 |
 
 ### 测试账号 / 凭证
-真值**不进 tracked 文件**（两个 GitHub 仓库都是 public）。真值在以下 gitignored 文件，Codex 可直接读取：
+真值**不进 tracked 文件**。无论当前仓库可见性如何，所有 tracked 内容一律按公开仓库标准处理。真值保存在主工作区的以下 gitignored 文件；新 worktree 中通常不存在，应从主工作区只读使用，禁止复制到 tracked 文件：
 - `.codex/rules/aliyun-credentials.md` — 阿里云 AK/SK、服务器 SSH/宝塔、安全组操作
 - `.codex/rules/db-credentials.md` — 数据库 / 服务密码
-- `.codex/rules/test-credentials.md` — 测试账号（默认密码 123456）+ E2E 约定
+- `.codex/rules/test-credentials.md` — 测试账号 + E2E 约定
 
 格式占位见 `.env.test.example`。**禁止把这些真值复制进任何会提交的文件。**
 
@@ -93,53 +91,25 @@ uvicorn main:app --port 8083     # 启动服务
 # `release-jar-manifest.sh`、`deploy-backend.sh`、`deploy-web-admin.sh`
 # 保留为明确的单组件发布和故障排查入口；不要由 Agent 自行拼接成普通全栈发布流程。
 
-# 或使用 skill
-/deploy-backend
+# 或使用 `deploy-backend` skill
 ```
 
 ---
 
-## Server Structure
+## Server Operations
 
-### 服务器目录 (`/www/wwwroot/`)
-```
-/www/wwwroot/
-├── cretas/              # Cretas 食品溯源系统
-│   ├── aims-0.0.1-SNAPSHOT.jar  # 主 JAR
-│   ├── pull-jar.sh      # 从 Release 拉取 JAR
-│   ├── deploy.sh        # Git 部署脚本
-│   ├── restart.sh       # 重启服务
-│   ├── code/            # 完整代码仓库
-│   └── logs/            # 日志目录
-├── mall/                # 商城系统
-│   ├── admin/           # 管理前端
-│   ├── backend/         # 后端服务 (logistics-admin.jar)
-│   └── data/            # 数据文件
-├── showcase/            # 展示网站
-│   └── cretaceousfuture/
-└── web-admin/           # Web 管理前端
-```
+- `47.100.235.168`：Java、Python、Embedding、PostgreSQL、Redis。
+- `139.196.165.140`：Nginx 网关、Web Admin、Showcase、Mall。
+- 生产 Java 使用 `10010`/`cretas-backend` 与 `10020`/`cretas-backend-green` 蓝绿交替；任何检查或操作前先读取真实 upstream，禁止按固定槽位判断 active。
 
-### 服务管理
+### 只读状态检查
 ```bash
-# Mall 后端 (systemd 管理)
-systemctl status mall-backend
-systemctl restart mall-backend
-
-# Cretas 后端 (systemd 管理, 在 47 服务器)
-systemctl status cretas-backend cretas-python cretas-embedding
-systemctl restart cretas-backend
-systemctl restart cretas-python
-
-# 全部 prod 服务按依赖顺序重启
-bash /www/wwwroot/cretas/restart.sh prod
-
-# 查看日志
-journalctl -u cretas-backend -f
-tail -f /www/wwwroot/cretas/cretas-prod.log
-tail -f /www/wwwroot/cretas/python-prod.log
-tail -f /www/wwwroot/mall/backend/mall-admin.log
+ssh root@139.196.165.140 "cat /www/server/panel/vhost/nginx/_upstream_cretas.conf"
+ssh root@47.100.235.168 "systemctl status cretas-backend cretas-backend-green cretas-python cretas-embedding --no-pager"
+ssh root@139.196.165.140 "systemctl status mall-backend --no-pager"
 ```
+
+常规发布和切流必须使用本仓库发布入口；手工重启仅用于明确的故障处置，并先确认 active 槽位。
 
 ---
 
@@ -149,7 +119,7 @@ tail -f /www/wwwroot/mall/backend/mall-admin.log
 ```
 backend/
 ├── java/                          # Java 服务
-│   ├── cretas-api/                # 主后端 (Spring Boot, 端口 10010)
+│   ├── cretas-api/                # 主后端 (Spring Boot, prod 端口 10010/10020)
 │   │   └── src/main/java/com/cretas/aims/
 │   │       ├── controller/        # REST API
 │   │       ├── entity/            # JPA 实体
@@ -157,7 +127,7 @@ backend/
 │   │       │   ├── impl/          # Service 实现
 │   │       │   └── skill/         # Skill 编排层
 │   │       ├── ai/                # AI 意图系统
-│   │       │   ├── tool/          # Tool-Skill 架构 (310 tools)
+│   │       │   ├── tool/          # Tool-Skill 架构，Spring 自动注册 ToolExecutor
 │   │       │   │   ├── ToolExecutor.java
 │   │       │   │   ├── AbstractBusinessTool.java
 │   │       │   │   ├── ToolRegistry.java
@@ -190,20 +160,14 @@ frontend/CretasFoodTrace/src/
 
 ### API 路径
 
-**Java 后端 (10010)**
+**Java 后端 (prod 10010/10020)**
 - 基础路径: `/api/mobile/*`
 - 认证: `/api/mobile/auth/*`
 - 业务: `/api/mobile/{factoryId}/*`
 
 **Python 服务 (8083)**
-- SmartBI: `/api/smartbi/*`
-  - Excel: `/api/smartbi/excel/*`
-  - 分析: `/api/smartbi/analysis/*`
-  - 图表: `/api/smartbi/chart/*`
-  - 预测: `/api/smartbi/forecast/*`
-- 人效识别: `/api/efficiency/*`
-  - 帧分析: `/api/efficiency/analyze-frame`
-  - 视频分析: `/api/efficiency/analyze-video-upload`
+- 路由真值以 `backend/python/main.py` 注册结果和运行时 OpenAPI 为准；不要在 AGENTS.md 维护易漂移的完整路径清单。
+- 主要命名空间包括 `/api/smartbi/*`、`/api/efficiency/*`，以及兼容性的 `/api/forecast`、`/api/chart`、`/api/analysis` 等。
 
 ---
 
@@ -211,18 +175,13 @@ frontend/CretasFoodTrace/src/
 
 ### 代码质量原则
 
-本项目用 **Thin-Opus-Organizer 编排**：所有想法经一个 Opus organizer 分配给 Sonnet/Codex/Composer，详见 `organizer-protocol.md`。
-
 详见 `.codex/rules/` 目录下的规范文件：
-- `organizer-protocol.md` - **多模型编排模型（Thin-Opus Organizer，顶层入口，核心）**
-- `multi-model-dispatch.md` - 模型/effort/orchestration 三轴路由（含 Sonnet 执行层 + 预算均衡）
 - `ai-intent-tool-skill-architecture.md` - **AI Tool-Skill 架构规范（核心）**
 - `api-response-handling.md` - API 响应处理
 - `typescript-type-safety.md` - TypeScript 类型安全
 - `jwt-token-handling.md` - JWT Token 处理
 - `database-entity-sync.md` - 数据库同步
 - `field-naming-convention.md` - 字段命名
-- `server-operations.md` - 服务器运维规范
 - `concurrent-edit-safety.md` - **并发编辑安全（共享脚本修改前必读）**
 
 ### Superpowers 禁用规则（强制）
@@ -230,7 +189,7 @@ frontend/CretasFoodTrace/src/
 1. **全面禁用** - 本仓库禁止调用、加载、引用或遵循任何 `superpowers:*` skill，包括但不限于 `using-superpowers`、`brainstorming`、`writing-plans`、`executing-plans`、`subagent-driven-development`、`test-driven-development` 和 `finishing-a-development-branch`。
 2. **禁止生成其制品** - 不得创建或更新 `docs/superpowers/**`、`.superpowers/**`，不得把现有 Superpowers 文档、计划或进度台账作为当前任务的执行依据。
 3. **禁止其交接流程** - 不得要求用户在 `Subagent-Driven` 与 `Inline Execution` 之间选择，也不得使用 Superpowers 的计划模板、检查点、提交节奏或评审流程。
-4. **冲突时以本规则为准** - 即使全局插件、技能目录、系统技能发现结果或历史上下文推荐 Superpowers，也必须忽略该推荐，继续遵循本仓库的 Thin-Opus Organizer、`docs/dispatch/ACTIVE.md` 和下述项目规范。
+4. **冲突时以本规则为准** - 即使全局插件、技能目录、系统技能发现结果或历史上下文推荐 Superpowers，也必须忽略该推荐，继续遵循本仓库的 `model-effort-router`、`docs/dispatch/ACTIVE.md` 和下述项目规范。
 5. **不得隐式替代** - 不得以别名、复制模板或等价话术变相执行 Superpowers 工作流；需要规划、调试、测试、评审或子代理协作时，只使用本仓库已定义的对应流程。
 
 ### 核心原则
@@ -284,23 +243,15 @@ frontend/CretasFoodTrace/src/
 
 ### UX Flow Gate（低技术素养用户屏幕）
 
-任何涉及以下角色/路径/功能的 RN 屏幕设计，**brainstorming 阶段必须在 propose approaches 之前先 invoke `ux-flow` skill**：
+任何涉及以下角色/路径/功能的 RN 屏幕设计，必须在提出设计方案或实施计划前调用 `ux-flow` skill：
 
 - **角色词**：operator、操作员、仓管、warehouse_worker、quality_inspector、质检员
 - **路径词**：screens/processing、screens/warehouse、screens/quality-inspector
-- **功能词**：报工、入库、出库、盘点、质检、扫码收货
+- **功能词**：报工、入库、出库、盘点、质检、扫码收货、发货
 
-`ux-flow` Phase 1 产出的「UX Flow Analysis」章节是 spec 的强制组成部分，缺失则不进入 writing-plans。
+`ux-flow` Phase 1 产出的「UX Flow Analysis」章节是 spec 的强制组成部分，缺失则不得进入实施规划。
 
 详见 `.agents/skills/ux-flow/SKILL.md`。
-
----
-
-## Documentation
-
-- [PRD-功能与文件映射-v3.0.md](./docs/prd/PRD-功能与文件映射-v3.0.md)
-- [PRD-完整业务流程与界面设计-v5.0.md](./docs/prd/PRD-完整业务流程与界面设计-v5.0.md)
-- [QUICK_START.md](./QUICK_START.md)
 
 ---
 
@@ -311,7 +262,6 @@ frontend/CretasFoodTrace/src/
 ssh root@139.196.165.140 "cat /www/server/panel/vhost/nginx/_upstream_cretas.conf"
 ssh root@47.100.235.168 "curl -s http://localhost:10010/api/mobile/health; curl -s http://localhost:10020/api/mobile/health"
 ssh root@47.100.235.168 "curl -s http://localhost:8083/health"
-lsof -i :10010 -i :10020
 ```
 
 开发机访问 Java 后端请先读取 upstream，再把本地 `10010` 映射到当前 active 槽；例如 active 为 `10020`：
@@ -322,5 +272,4 @@ ssh -L 10010:localhost:10020 root@47.100.235.168
 ### 缓存问题
 ```bash
 npx expo start --clear
-rm -rf node_modules && npm install
 ```
