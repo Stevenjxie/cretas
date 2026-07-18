@@ -43,6 +43,7 @@
 |---|---|---|---|
 | WF-UX-20260718-01 | `c39ef12f4fb87878184d114f9a69b7a42f92af05` | Codex `/root` | 完成 Workflow 编辑器自由投入、响应式单位换算、SKU 拼音搜索、下拉滚轮与外部收起、Cell/连线选择和批量删除、自动布局、产出类型转换、BOM 发布门禁、独立版本以及内嵌 AI Composer；前端 182/182 目标测试与 production build 通过，Java 6 类 93/93 目标测试和真实 JPA Context 门禁通过，可信 JAR 由 build commit `3e35c392309ff072a58d207a4cd6d3efddc31fce` 生成；[PR #1421](https://github.com/Stevenjxie/cretas/pull/1421) squash 合并为 `7b0b19e87ba2712a825f33bb28b316db72506ce7`。 |
 | WF-UNIT-20260718-02 | `18854c456d681540b5f6d33f1e6e6375c1fcd81c` | Codex `/root` | 将 Workflow 数量模型收敛为仅维护端到端报工单位关系，不再配置计划投入、计划产出或预设出成率；成品净重与包装换算继续以 SKU 主数据为唯一真值。Workflow 15 文件/179 用例与 production build 通过；[PR #1427](https://github.com/Stevenjxie/cretas/pull/1427) merge 合并为 `1df58624f2ce6bf13e71b9193070142861f5a748`，可信 Web archive `8cb15445346e4da6f5782daece038c630b2f03a28c59b861628717719c021d29` 已部署生产，四方 index 哈希一致且目标 bundle 哈希与公网一致；未迁移数据、未修改生产业务数据。 |
+| WF-OUTPUT-SYNC-20260718 | `24f06544be5853f794f523cbc960a2f80b689bd1` | Codex `/root` | 修复工序产出 SKU 改绑后右侧产出 Cell 仍保留旧名称、SKU 和单位的 Vue Flow 引用同步问题，并将同一稳定更新规则覆盖原料选择、SKU 快捷编辑和工序产出类型切换。Workflow 15 文件/180 用例与 production build 通过；[PR #1430](https://github.com/Stevenjxie/cretas/pull/1430) merge 合并为 `46b7b8419e5fa76cf43f72b3f1189a047ea67e17`，可信 Web archive `fae80540be5d0e30f64eaa7422975ea48d4dafbd7c366ed85687b1b5ee966126` 已部署生产，四方 index 哈希一致，Workflow 目标 bundle 本地/公网 SHA-256 均为 `9818e2aacc9b795162b3dfe581d8546797e59dd379da26719bb3ca71521b49ce`；未迁移或修改业务数据。 |
 
 ## 采购入库外仓与采购订单 PDF 语义
 
