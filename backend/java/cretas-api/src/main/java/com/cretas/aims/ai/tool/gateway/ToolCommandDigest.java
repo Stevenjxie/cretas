@@ -66,6 +66,19 @@ public final class ToolCommandDigest {
         return sha256Hex(token.getBytes(StandardCharsets.UTF_8)).substring(0, 12);
     }
 
+    /**
+     * Full one-way binding for secrets used as persistent replay locators.
+     *
+     * <p>The value is deliberately not suitable for logs. It preserves enough entropy to bind a
+     * consumed confirmation token or idempotency key without storing the bearer value itself.</p>
+     */
+    public static String persistentSecretFingerprint(String value) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException("fingerprinted value is required");
+        }
+        return sha256Hex(value.getBytes(StandardCharsets.UTF_8));
+    }
+
     static byte[] canonicalBytes(JsonNode node) {
         try {
             return OBJECT_MAPPER.writeValueAsBytes(canonicalize(node));

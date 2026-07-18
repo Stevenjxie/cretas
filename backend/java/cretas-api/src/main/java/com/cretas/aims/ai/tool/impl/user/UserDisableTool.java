@@ -127,7 +127,7 @@ public class UserDisableTool extends AbstractBusinessTool {
 
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
-        log.info("执行用户禁用 - 工厂ID: {}, 参数: {}", factoryId, params);
+        log.info("执行用户禁用 - factoryId={}", factoryId);
 
         String userIdStr = getString(params, "userId");
         String username = getString(params, "username");
@@ -156,7 +156,7 @@ public class UserDisableTool extends AbstractBusinessTool {
             }
             User user = userOpt.get();
             targetUserId = user.getId();
-            log.info("通过用户名查询到用户ID: username={}, userId={}", username, targetUserId);
+            log.info("用户禁用目标已在当前工厂匹配");
         }
 
         if (targetUserId == null) {
@@ -185,7 +185,7 @@ public class UserDisableTool extends AbstractBusinessTool {
             result.put("username", username);
         }
 
-        log.info("用户禁用完成 - 用户ID: {}, 原因: {}", targetUserId, reason);
+        log.info("用户禁用完成 - factoryId={}", factoryId);
 
         return result;
     }

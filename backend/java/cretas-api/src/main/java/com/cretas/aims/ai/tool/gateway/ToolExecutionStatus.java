@@ -8,6 +8,7 @@ public enum ToolExecutionStatus {
     APPROVAL_REQUIRED,
     PREVIEW_UNSUPPORTED,
     TIMEOUT,
+    OUTCOME_UNKNOWN,
     CANCELLED,
     IDEMPOTENT_REPLAY
 }

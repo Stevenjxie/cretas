@@ -111,7 +111,7 @@ public class RestaurantDishDeleteTool extends AbstractBusinessTool {
 
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
-        log.info("执行下架菜品 - 工厂ID: {}, 参数: {}", factoryId, params);
+        log.info("执行下架菜品 - factoryId={}", factoryId);
 
         String dishId = getString(params, "id");
         String dishName = getString(params, "name");
@@ -141,7 +141,7 @@ public class RestaurantDishDeleteTool extends AbstractBusinessTool {
 
         dish.setIsActive(false);
         productTypeRepository.save(dish);
-        log.info("下架菜品成功: factoryId={}, id={}, name={}", factoryId, dish.getId(), dish.getName());
+        log.info("下架菜品成功: factoryId={}", factoryId);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("message", String.format("菜品「%s」已成功下架。如需重新上架，请在菜品管理中操作。", dish.getName()));
