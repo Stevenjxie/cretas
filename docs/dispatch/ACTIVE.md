@@ -6,24 +6,11 @@
 
 ## 在飞任务
 
-- `PURCHASE-RECEIVE-WAREHOUSE-PDF-20260718` — `in-progress`
-  - Base SHA: `44bd057af0425e7b9655cd20f6f4f90149649155`
-  - Owner: 当前协调者
-  - 目标: Web 采购入库支持选择外仓且提交真实目标仓库；修正采购订单 PDF 的 PO/SO 语义。按用户纠正，不修改 RN 手机端。
-  - 验收: Web 目标单测/类型检查；Java 可信制品唯一 Maven 生命周期覆盖 `PurchaseOrderPdfServiceImplTest`；最终范围审查与发布验证。
+- 无。
 
 ## Scope 锁地图
 
-- `PURCHASE-RECEIVE-WAREHOUSE-PDF-20260718`
-  - `web-admin/src/views/procurement/receives/**`
-  - 对应 Web 单元测试
-  - `backend/java/cretas-api/src/main/java/com/cretas/aims/service/inventory/impl/PurchaseOrderPdfServiceImpl.java`
-  - `backend/java/cretas-api/src/test/java/com/cretas/aims/service/inventory/PurchaseOrderPdfServiceImplTest.java`
-  - `backend/java/cretas-api/src/main/java/com/cretas/aims/service/factory/WarehouseInventoryGuardService.java`
-  - `backend/java/cretas-api/src/test/java/com/cretas/aims/service/factory/WarehouseInventoryGuardServiceTest.java`
-  - `backend/java/cretas-api/src/main/java/com/cretas/aims/service/inventory/impl/PurchaseServiceImpl.java`
-  - `backend/java/cretas-api/src/test/java/com/cretas/aims/service/inventory/impl/PurchaseServiceImplReceivePriceInheritTest.java`
-  - `docs/dispatch/ACTIVE.md` 与本次归档
+- 无。
 
 ## 阻塞项
 
