@@ -79,13 +79,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
             entity.setStatus(ProductProcessWorkflow.Status.DRAFT);
             // SNAPSHOT 也是正式占用的历史版本号；从全部状态取最大值，避免草稿被异常重建时
             // 与已另存版本复用同一个 definitionVersion，导致历史查看命中不确定行。
-            int nextVersion = repository
-                    .findByFactoryIdAndProductTypeIdOrderByDefinitionVersionDesc(factoryId, productTypeId)
-                    .stream()
-                    .map(ProductProcessWorkflow::getDefinitionVersion)
-                    .filter(java.util.Objects::nonNull)
-                    .max(Integer::compareTo)
-                    .orElse(0) + 1;
+            int nextVersion = repository.findMaxDefinitionVersion(factoryId, productTypeId).orElse(0) + 1;
             entity.setDefinitionVersion(nextVersion);
         }
 
@@ -163,8 +157,8 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         requireWorkflowOwner(factoryId, productTypeId);
         Optional<ProductProcessWorkflowActivation> activation = activationRepository
                 .findByFactoryIdAndProductTypeId(factoryId, productTypeId);
-        List<ProductProcessWorkflow> rows = repository
-                .findByFactoryIdAndProductTypeIdOrderByDefinitionVersionDesc(factoryId, productTypeId);
+        List<ProductProcessWorkflowRepository.VersionSummaryProjection> rows = repository
+                .findVersionSummaries(factoryId, productTypeId);
         return rows.stream()
                 .map(row -> toVersionSummaryDTO(row, activation))
                 .collect(Collectors.toList());
@@ -185,7 +179,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
     }
 
     private ProductProcessWorkflowVersionSummaryDTO toVersionSummaryDTO(
-            ProductProcessWorkflow row,
+            ProductProcessWorkflowRepository.VersionSummaryProjection row,
             Optional<ProductProcessWorkflowActivation> activation) {
         boolean active = activation
                 .filter(a -> Boolean.TRUE.equals(a.getEnabled()))

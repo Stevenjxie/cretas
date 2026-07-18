@@ -125,6 +125,16 @@ class ProductMasterDataRepositoryQueryValidationTest {
                 .get()
                 .extracting(ProductProcessWorkflow::getDefinitionVersion)
                 .isEqualTo(7);
+        assertThat(workflowRepository.findMaxDefinitionVersion(factory.getId(), visible.getId()))
+                .contains(7);
+        assertThat(workflowRepository.findVersionSummaries(factory.getId(), visible.getId()))
+                .singleElement()
+                .satisfies(summary -> {
+                    assertThat(summary.getId()).isNotNull();
+                    assertThat(summary.getDefinitionVersion()).isEqualTo(7);
+                    assertThat(summary.getStatus()).isEqualTo(ProductProcessWorkflow.Status.SNAPSHOT);
+                    assertThat(summary.getUpdatedAt()).isNotNull();
+                });
     }
 
     private ProductType product(String id, String factoryId, Long userId,

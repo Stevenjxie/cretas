@@ -8,6 +8,7 @@ import org.springframework.data.repository.query.Param;
 
 import jakarta.persistence.LockModeType;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -35,9 +36,29 @@ public interface ProductProcessWorkflowRepository extends JpaRepository<ProductP
             String productTypeId,
             ProductProcessWorkflow.Status status);
 
-    List<ProductProcessWorkflow> findByFactoryIdAndProductTypeIdOrderByDefinitionVersionDesc(
-            String factoryId,
-            String productTypeId);
+    @Query("""
+            select max(workflow.definitionVersion)
+              from ProductProcessWorkflow workflow
+             where workflow.factoryId = :factoryId
+               and workflow.productTypeId = :productTypeId
+            """)
+    Optional<Integer> findMaxDefinitionVersion(
+            @Param("factoryId") String factoryId,
+            @Param("productTypeId") String productTypeId);
+
+    @Query("""
+            select workflow.id as id,
+                   workflow.definitionVersion as definitionVersion,
+                   workflow.status as status,
+                   workflow.updatedAt as updatedAt
+              from ProductProcessWorkflow workflow
+             where workflow.factoryId = :factoryId
+               and workflow.productTypeId = :productTypeId
+             order by workflow.definitionVersion desc
+            """)
+    List<VersionSummaryProjection> findVersionSummaries(
+            @Param("factoryId") String factoryId,
+            @Param("productTypeId") String productTypeId);
 
     List<ProductProcessWorkflow> findByFactoryIdOrderByProductTypeIdAscDefinitionVersionDesc(String factoryId);
 
@@ -55,4 +76,14 @@ public interface ProductProcessWorkflowRepository extends JpaRepository<ProductP
             String factoryId,
             String productTypeId,
             Integer definitionVersion);
+
+    interface VersionSummaryProjection {
+        Long getId();
+
+        Integer getDefinitionVersion();
+
+        ProductProcessWorkflow.Status getStatus();
+
+        LocalDateTime getUpdatedAt();
+    }
 }

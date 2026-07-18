@@ -20,7 +20,7 @@ public interface ProductProcessWorkflowService {
     /** 将当前草稿冻结为独立快照版本，同时创建下一版本草稿继续编辑。 */
     ProductProcessWorkflowDTO snapshot(String factoryId, String productTypeId, Long lockVersion);
 
-    /** 只读: 某产品的全部 Workflow 版本行(DRAFT + PUBLISHED), 按 definitionVersion 倒序。 */
+    /** 只读: 某产品的全部 Workflow 版本行(DRAFT + SNAPSHOT + PUBLISHED), 按 definitionVersion 倒序。 */
     List<ProductProcessWorkflowVersionSummaryDTO> listVersions(String factoryId, String productTypeId);
 
     /** 只读: 某产品指定 definitionVersion 的完整图定义。 */

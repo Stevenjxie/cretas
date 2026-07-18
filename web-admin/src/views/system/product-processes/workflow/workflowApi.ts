@@ -53,7 +53,7 @@ export function snapshotProductProcessWorkflow(
   );
 }
 
-// #12: 版本历史 (只读浏览之前版本)。历史已作为多行持久化 (每次发布留一 PUBLISHED 行)。
+// #12: 版本历史 (只读浏览之前版本)。发布和手动快照都会保留独立历史行。
 export interface WorkflowVersionSummary {
   definitionVersion: number;
   status: 'DRAFT' | 'SNAPSHOT' | 'PUBLISHED';
