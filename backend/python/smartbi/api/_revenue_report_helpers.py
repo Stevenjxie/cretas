@@ -20,7 +20,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import time
 from io import BytesIO
 from typing import Optional
@@ -254,58 +253,23 @@ async def _log_audit(
 # ─── caller factory_id extraction ───────────────────────────────────────
 
 def _extract_caller_factory_id(request: Request) -> str:
-    """JWT Bearer / X-Internal-Secret factory_id resolution.
-
-    Mirrors excel_async.py:auto-parse-status path so behavior is identical
-    for users coming from the frontend (JWT) or Java internal (X-Internal-Secret).
-    Returns factory_id string. Raises 401 if no credential.
-    """
+    """Return the tenant identity already authenticated by middleware."""
     caller = (
         getattr(request.state, "factory_id", None)
         if hasattr(request, "state") else None
     )
-    if caller:
+    if isinstance(caller, str) and caller.strip():
         return caller
-
-    # X-Internal-Secret path (Java cretas-api calling Python).
-    internal_secret = request.headers.get("x-internal-secret", "")
-    expected = os.environ.get("INTERNAL_API_SECRET") or "cretas-internal-2026"
-    if expected and internal_secret == expected:
-        return request.headers.get("x-factory-id") or "INTERNAL"
-
-    # Bearer JWT path (frontend).
-    auth_header = request.headers.get("authorization", "")
-    if auth_header.startswith("Bearer "):
-        token = auth_header[7:]
-        try:
-            import jwt as pyjwt
-            raw_secret = os.environ.get("JWT_SECRET", "default-secret")
-            key_bytes = raw_secret.encode("utf-8")
-            if len(key_bytes) < 32:
-                key_bytes = key_bytes + b"\x00" * (32 - len(key_bytes))
-            claims = pyjwt.decode(
-                token, key_bytes,
-                algorithms=["HS256"],
-                options={"verify_exp": True},
-            )
-            return claims.get("factoryId")
-        except Exception as e:
-            logger.warning("[revenue-report-auth] JWT verify failed: %s", e)
 
     raise HTTPException(
         status_code=401,
-        detail="Authentication required (Bearer token or X-Internal-Secret).",
+        detail="Authenticated tenant identity required",
     )
 
 
 def _enforce_factory_match(url_factory_id: str, request: Request) -> str:
-    """Resolves caller factory_id, raises 403 if it doesn't match URL.
-
-    INTERNAL caller (Java) is allowed to act on any factory.
-    """
+    """Require the authenticated tenant to exactly match the URL tenant."""
     caller = _extract_caller_factory_id(request)
-    if caller == "INTERNAL":
-        return url_factory_id
     if caller != url_factory_id:
         raise HTTPException(
             status_code=403,

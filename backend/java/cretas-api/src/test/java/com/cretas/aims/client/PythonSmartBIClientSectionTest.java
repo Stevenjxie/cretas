@@ -84,7 +84,8 @@ class PythonSmartBIClientSectionTest {
         setBreakerField(breaker, "halfOpenMaxCalls", 2);
         setBreakerField(breaker, "successThresholdInHalfOpen", 2);
 
-        client = new PythonSmartBIClient(config, baseClient, mapper, breaker);
+        client = new PythonSmartBIClient(
+                config, baseClient, mapper, breaker, "test-internal-secret");
     }
 
     @AfterEach
@@ -155,7 +156,8 @@ class PythonSmartBIClientSectionTest {
         assertThat(body).contains("\"sub_sector\":\"火锅\"");
         assertThat(body).contains("\"financial_data\"");
         // X-Internal-Secret interceptor should auto-add the header
-        assertThat(recorded.getHeader("X-Internal-Secret")).isNotNull();
+        assertThat(recorded.getHeader("X-Internal-Secret")).isEqualTo("test-internal-secret");
+        assertThat(recorded.getHeader("X-Factory-Id")).isEqualTo("F-TEST");
     }
 
     // ── Restaurant wrapper delegation ───────────────────────────────────
@@ -197,6 +199,36 @@ class PythonSmartBIClientSectionTest {
         String body = recorded.getBody().readUtf8();
         assertThat(body).contains("\"factory_id\":\"F-TEST\"");
         assertThat(body).contains("\"sub_sector\":\"火锅\"");
+        assertThat(recorded.getHeader("X-Factory-Id")).isEqualTo("F-TEST");
+    }
+
+    @Test
+    @DisplayName("blank internal secret and blank factory fail before network")
+    void callSection_failsClosedBeforeNetworkForMissingCredentials() throws Exception {
+        PythonServiceCircuitBreaker breaker = new PythonServiceCircuitBreaker();
+        setBreakerField(breaker, "failureThreshold", 100);
+        setBreakerField(breaker, "openDurationMs", 100L);
+        setBreakerField(breaker, "halfOpenMaxCalls", 2);
+        setBreakerField(breaker, "successThresholdInHalfOpen", 2);
+        PythonSmartBIClient blankSecretClient = new PythonSmartBIClient(
+                config,
+                new OkHttpClient(),
+                mapper,
+                breaker,
+                "   ");
+
+        Optional<PythonSectionResponse> blankSecretResult = blankSecretClient.callSection(
+                "restaurant",
+                "diagnostics",
+                PythonSectionRequest.builder().factoryId("F-TEST").build());
+        Optional<PythonSectionResponse> blankFactoryResult = client.callSection(
+                "restaurant",
+                "diagnostics",
+                PythonSectionRequest.builder().factoryId(" ").build());
+
+        assertThat(blankSecretResult).isEmpty();
+        assertThat(blankFactoryResult).isEmpty();
+        assertThat(mockServer.getRequestCount()).isZero();
     }
 
     // ── Error path: server 500 ──────────────────────────────────────────
@@ -261,7 +293,8 @@ class PythonSmartBIClientSectionTest {
                 disabledConfig,
                 new OkHttpClient(),
                 mapper,
-                freshBreaker);
+                freshBreaker,
+                "test-internal-secret");
 
         PythonSectionRequest request = PythonSectionRequest.builder()
                 .factoryId("F-TEST")

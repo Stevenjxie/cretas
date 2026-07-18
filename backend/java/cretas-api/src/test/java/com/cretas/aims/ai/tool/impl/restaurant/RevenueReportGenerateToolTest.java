@@ -81,7 +81,7 @@ class RevenueReportGenerateToolTest {
 
     @Test
     void successPathReturnsMessageAndDownloadUrl() throws Exception {
-        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString()))
+        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString(), anyString()))
             .thenReturn(Map.of(
                 "success", true,
                 "data", Map.of(
@@ -116,7 +116,7 @@ class RevenueReportGenerateToolTest {
 
     @Test
     void successWithCacheHitMentionsCacheInMessage() throws Exception {
-        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString()))
+        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString(), anyString()))
             .thenReturn(Map.of(
                 "success", true,
                 "data", Map.of(
@@ -139,7 +139,7 @@ class RevenueReportGenerateToolTest {
 
     @Test
     void buildsFactoryScopedEndpointPath() throws Exception {
-        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString()))
+        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString(), anyString()))
             .thenReturn(Map.of(
                 "success", true,
                 "data", Map.of(
@@ -155,7 +155,7 @@ class RevenueReportGenerateToolTest {
         );
 
         ArgumentCaptor<String> endpoint = ArgumentCaptor.forClass(String.class);
-        verify(mockClient).callRevenueReport(endpoint.capture(), anyMap(), anyString());
+        verify(mockClient).callRevenueReport(endpoint.capture(), anyMap(), eq("R_QINGHUAJIAO_REAL"), anyString());
         assertEquals(
             "/api/smartbi/R_QINGHUAJIAO_REAL/revenue-report/prepare",
             endpoint.getValue()
@@ -164,7 +164,7 @@ class RevenueReportGenerateToolTest {
 
     @Test
     void forwardsUserRoleToPythonClient() throws Exception {
-        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString()))
+        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString(), anyString()))
             .thenReturn(Map.of(
                 "success", true,
                 "data", Map.of(
@@ -179,12 +179,13 @@ class RevenueReportGenerateToolTest {
             Map.of("userRole", "restaurant_manager")
         );
 
-        verify(mockClient).callRevenueReport(anyString(), anyMap(), eq("restaurant_manager"));
+        verify(mockClient).callRevenueReport(
+            anyString(), anyMap(), eq("R_QINGHUAJIAO_REAL"), eq("restaurant_manager"));
     }
 
     @Test
     void normalizesMealPeriodsBeforeForwarding() throws Exception {
-        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString()))
+        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString(), anyString()))
             .thenReturn(Map.of(
                 "success", true,
                 "data", Map.of(
@@ -204,7 +205,8 @@ class RevenueReportGenerateToolTest {
         );
 
         ArgumentCaptor<Map<String, Object>> payload = ArgumentCaptor.forClass(Map.class);
-        verify(mockClient).callRevenueReport(anyString(), payload.capture(), anyString());
+        verify(mockClient).callRevenueReport(
+            anyString(), payload.capture(), eq("R_QINGHUAJIAO_REAL"), anyString());
         @SuppressWarnings("unchecked")
         List<String> sent = (List<String>) payload.getValue().get("meal_periods");
         // 下午茶 → 午市, 夜宵 → 晚市
@@ -213,7 +215,7 @@ class RevenueReportGenerateToolTest {
 
     @Test
     void emptyStoreNamesPassedThrough() throws Exception {
-        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString()))
+        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString(), anyString()))
             .thenReturn(Map.of(
                 "success", true,
                 "data", Map.of(
@@ -229,7 +231,8 @@ class RevenueReportGenerateToolTest {
         );
 
         ArgumentCaptor<Map<String, Object>> payload = ArgumentCaptor.forClass(Map.class);
-        verify(mockClient).callRevenueReport(anyString(), payload.capture(), anyString());
+        verify(mockClient).callRevenueReport(
+            anyString(), payload.capture(), eq("R_QINGHUAJIAO_REAL"), anyString());
         assertEquals(Collections.emptyList(), payload.getValue().get("store_names"));
     }
 
@@ -248,12 +251,13 @@ class RevenueReportGenerateToolTest {
         );
         assertTrue(((String) result.get("message")).contains("班次参数错误"));
         // No Python call when normalization fails up front.
-        verify(mockClient, never()).callRevenueReport(anyString(), anyMap(), anyString());
+        verify(mockClient, never()).callRevenueReport(
+            anyString(), anyMap(), anyString(), anyString());
     }
 
     @Test
     void pythonUnavailableReturnsServiceError() throws Exception {
-        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString())).thenReturn(null);
+        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString(), anyString())).thenReturn(null);
 
         Map<String, Object> result = tool.doExecute(
             "R_QINGHUAJIAO_REAL",
@@ -265,7 +269,7 @@ class RevenueReportGenerateToolTest {
 
     @Test
     void pythonSuccessFalseReturnsErrorMessage() throws Exception {
-        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString()))
+        when(mockClient.callRevenueReport(anyString(), anyMap(), anyString(), anyString()))
             .thenReturn(Map.of("success", false, "error", "factory 不存在"));
 
         Map<String, Object> result = tool.doExecute(

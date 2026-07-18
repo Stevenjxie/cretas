@@ -122,6 +122,7 @@ async def run_b_writers(factory_id: str, upload_id: int) -> None:
 @router.post("/auto-parse-async", status_code=202)
 async def auto_parse_async(
     background_tasks: BackgroundTasks,
+    request: Request,
     file: UploadFile = File(...),
     factory_id: Optional[str] = Form(None),
     factoryId: Optional[str] = Form(None),  # alias
@@ -136,11 +137,20 @@ async def auto_parse_async(
 
     Call GET /api/smartbi/excel/auto-parse-status/{uploadId} to poll status.
     """
-    # Normalize aliases
-    factory_id = factory_id or factoryId
-    sheet_index = sheet_index if sheet_index is not None else sheetIndex
-    if not factory_id:
+    # Authenticate before file validation, filesystem access, or DB checks.
+    authenticated_factory_id = getattr(request.state, "factory_id", None)
+    if not authenticated_factory_id:
+        raise HTTPException(status_code=401, detail="Authenticated tenant identity required")
+
+    supplied_factory_ids = [value for value in (factory_id, factoryId) if value]
+    if not supplied_factory_ids:
         raise HTTPException(status_code=400, detail="factory_id is required")
+    if any(value != authenticated_factory_id for value in supplied_factory_ids):
+        raise HTTPException(status_code=403, detail="Authenticated tenant does not match request tenant")
+
+    # Normalize aliases only after checking both against trusted middleware state.
+    factory_id = str(authenticated_factory_id)
+    sheet_index = sheet_index if sheet_index is not None else sheetIndex
 
     # Apr 26 2026 (S1 audit Bug B): fast-fail unsupported file extensions BEFORE
     # streaming the multipart body to disk. S1 test showed 4MB xlsx wasted 100s
@@ -237,7 +247,7 @@ async def auto_parse_async(
 
 
 @router.get("/auto-parse-status/{upload_id}")
-async def auto_parse_status(upload_id: int, request: Request, factory_id: Optional[str] = None):
+async def auto_parse_status(upload_id: int, request: Request):
     """
     Poll status of async upload. Returns:
     - status (PENDING / PROCESSING / COMPLETED / FAILED)
@@ -250,71 +260,21 @@ async def auto_parse_status(upload_id: int, request: Request, factory_id: Option
     factoryId + 17 column names + 20 rows of preview business data.
     Now: explicit factory_id check.
     """
+    # Authenticate before opening a DB session or revealing upload existence.
+    caller_factory_id = getattr(request.state, "factory_id", None)
+    if not caller_factory_id:
+        raise HTTPException(status_code=401, detail="Authenticated tenant identity required")
+
     if SessionLocal is None:
         raise HTTPException(status_code=503, detail="Database not available")
     db = SessionLocal()
     try:
-        upload = (
-            db.query(SmartBiPgExcelUpload).filter_by(id=upload_id).first()
-        )
+        upload = db.query(SmartBiPgExcelUpload).filter_by(
+            id=upload_id,
+            factory_id=str(caller_factory_id),
+        ).first()
         if not upload:
             raise HTTPException(status_code=404, detail="Upload not found")
-
-        # Security check: verify caller's factory_id matches upload's.
-        # JWT path: request.state.factory_id populated by auth_middleware.
-        # Internal Java path: X-Internal-Secret + X-Factory-Id header.
-        # Public/anonymous: blocked.
-        caller_factory_id = (
-            getattr(request.state, "factory_id", None)
-            if hasattr(request, "state") else None
-        )
-        # The endpoint is currently in PUBLIC_PREFIXES; auth_middleware doesn't
-        # populate state. Re-extract from headers manually to enforce here.
-        # Java internal poll: factory_id query param matches upload.factory_id.
-        if not caller_factory_id and factory_id and factory_id == upload.factory_id:
-            caller_factory_id = factory_id
-        if not caller_factory_id:
-            # Try X-Internal-Secret (Java internal)
-            internal_secret = request.headers.get("x-internal-secret", "")
-            expected = os.environ.get("INTERNAL_API_SECRET", "")
-            if expected and internal_secret == expected:
-                caller_factory_id = request.headers.get("x-factory-id") or "INTERNAL"
-            else:
-                # Try Bearer token (frontend) — must use pyjwt + match
-                # auth_middleware's secret padding (UTF-8, pad to 32 bytes)
-                # to align with Java JwtUtil HS256 key derivation.
-                auth_header = request.headers.get("authorization", "")
-                if auth_header.startswith("Bearer "):
-                    token = auth_header[7:]
-                    try:
-                        import jwt as pyjwt
-                        raw_secret = os.environ.get("JWT_SECRET", "default-secret")
-                        key_bytes = raw_secret.encode("utf-8")
-                        if len(key_bytes) < 32:
-                            key_bytes = key_bytes + b"\x00" * (32 - len(key_bytes))
-                        claims = pyjwt.decode(
-                            token, key_bytes,
-                            algorithms=["HS256"],
-                            options={"verify_exp": True},
-                        )
-                        caller_factory_id = claims.get("factoryId")
-                    except Exception as _e:
-                        logger.warning(f"[auto-parse-status] JWT verify failed: {_e}")
-                        caller_factory_id = None
-        if not caller_factory_id:
-            raise HTTPException(
-                status_code=401,
-                detail="Authentication required (Bearer token or X-Internal-Secret).",
-            )
-        # Internal callers can read any factory; JWT users restricted to own.
-        if caller_factory_id != "INTERNAL" and caller_factory_id != upload.factory_id:
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    f"Access denied: you belong to {caller_factory_id}, "
-                    f"upload {upload_id} belongs to {upload.factory_id}"
-                ),
-            )
 
         result = {
             "success": True,

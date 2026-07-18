@@ -11,8 +11,10 @@ import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockMultipartFile;
 
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -48,7 +50,8 @@ class PythonSmartBIClientTest {
         // for unit tests since we never exhaust failure threshold.
         PythonServiceCircuitBreaker circuitBreaker = new PythonServiceCircuitBreaker();
 
-        client = new PythonSmartBIClient(config, baseHttpClient, mapper, circuitBreaker);
+        client = new PythonSmartBIClient(
+                config, baseHttpClient, mapper, circuitBreaker, "test-internal-secret");
     }
 
     @AfterEach
@@ -87,5 +90,57 @@ class PythonSmartBIClientTest {
         assertEquals("moving_average", resp.getAlgorithm());
         assertEquals(3, resp.getPredictions().size());
         assertEquals(100.0, resp.getPredictions().get(0), 0.001);
+    }
+
+    @Test
+    void revenueReport_sendsExactTrustedHeaders() throws Exception {
+        server.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"success\":true,\"data\":{}}"));
+
+        Map<String, Object> response = client.callRevenueReport(
+                "/api/smartbi/REST-1/revenue-report/prepare",
+                Map.of("date_from", "2026-07-01", "date_to", "2026-07-19"),
+                "REST-1",
+                "restaurant_manager");
+
+        assertNotNull(response);
+        RecordedRequest request = server.takeRequest();
+        assertEquals("/api/smartbi/REST-1/revenue-report/prepare", request.getPath());
+        assertEquals("test-internal-secret", request.getHeader("X-Internal-Secret"));
+        assertEquals("REST-1", request.getHeader("X-Factory-Id"));
+        assertEquals("restaurant_manager", request.getHeader("X-User-Role"));
+    }
+
+    @Test
+    void asyncExcelUploadAndPollSendExactFactoryHeaderWithoutQueryAuth() throws Exception {
+        server.enqueue(new MockResponse()
+                .setResponseCode(202)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"success\":true,\"uploadId\":73,\"status\":\"PENDING\"}"));
+        server.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"success\":true,\"uploadId\":73,\"status\":\"COMPLETED\","
+                        + "\"rowCount\":1,\"columnCount\":1}"));
+
+        var response = client.parseExcelViaAsync(
+                new MockMultipartFile(
+                        "file", "orders.xlsx", "application/vnd.ms-excel", new byte[]{1, 2, 3}),
+                "REST-ASYNC",
+                0,
+                null,
+                null);
+
+        assertTrue(response.isSuccess());
+        RecordedRequest upload = server.takeRequest();
+        RecordedRequest poll = server.takeRequest();
+        assertEquals("REST-ASYNC", upload.getHeader("X-Factory-Id"));
+        assertEquals("REST-ASYNC", poll.getHeader("X-Factory-Id"));
+        assertEquals("test-internal-secret", upload.getHeader("X-Internal-Secret"));
+        assertEquals("test-internal-secret", poll.getHeader("X-Internal-Secret"));
+        assertEquals("/api/smartbi/excel/auto-parse-status/73", poll.getPath());
+        assertTrue(upload.getBody().readUtf8().contains("REST-ASYNC"));
     }
 }

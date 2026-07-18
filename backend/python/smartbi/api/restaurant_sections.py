@@ -2611,6 +2611,7 @@ def _owner_action_chat_impl(body: OwnerActionChatRequest, request: Request | Non
 
 @router.post("/{section_name}")
 def compute_section(
+    request: Request,
     section_name: str = Path(..., description="Section handler name (see /list)"),
     body: SectionRequestBody = ...,
 ) -> dict:
@@ -2621,6 +2622,15 @@ def compute_section(
     (``status``, ``warnings``, ``cacheKey``, ``computedAtMs``) so the
     frontend can render skip reasons or surface compute time.
     """
+    authenticated_factory_id = getattr(request.state, "factory_id", None)
+    if not authenticated_factory_id:
+        raise HTTPException(status_code=401, detail="Authenticated tenant identity required")
+    if not hmac.compare_digest(
+        str(authenticated_factory_id).encode("utf-8"),
+        body.factory_id.encode("utf-8"),
+    ):
+        raise HTTPException(status_code=403, detail="Authenticated tenant does not match request tenant")
+
     handler = HANDLERS.get(section_name)
     if handler is None:
         raise HTTPException(
@@ -2746,13 +2756,22 @@ def list_sections() -> dict:
 
 
 @router.get("/ppt-export/download/{factory_id}/{period}")
-def download_monthly_ppt(factory_id: str, period: str):
+def download_monthly_ppt(factory_id: str, period: str, request: Request):
     """Stream a previously-generated monthly PPT file for download.
 
     Call POST /sections/monthly_ppt_export first to generate the file,
     then GET this endpoint to download it. Files are stored in
     /tmp/smartbi_ppt/ and named monthly_{factory_id}_{period}.pptx.
     """
+    authenticated_factory_id = getattr(request.state, "factory_id", None)
+    if not authenticated_factory_id:
+        raise HTTPException(status_code=401, detail="Authenticated tenant identity required")
+    if not hmac.compare_digest(
+        str(authenticated_factory_id).encode("utf-8"),
+        factory_id.encode("utf-8"),
+    ):
+        raise HTTPException(status_code=403, detail="Authenticated tenant does not match request tenant")
+
     output_file = (
         FsPath(tempfile.gettempdir())
         / "smartbi_ppt"

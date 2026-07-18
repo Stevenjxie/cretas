@@ -60,6 +60,7 @@ public class PythonSmartBIClient {
     private final OkHttpClient httpClient;
     private final ObjectMapper objectMapper;
     private final PythonServiceCircuitBreaker circuitBreaker;
+    private final String internalSecret;
 
     /**
      * F4 fault-injection hook (optional). Bean exists only under
@@ -78,10 +79,12 @@ public class PythonSmartBIClient {
     public PythonSmartBIClient(PythonSmartBIConfig config,
                                @Qualifier("aiServiceHttpClient") OkHttpClient baseHttpClient,
                                ObjectMapper objectMapper,
-                               PythonServiceCircuitBreaker circuitBreaker) {
+                               PythonServiceCircuitBreaker circuitBreaker,
+                               @Qualifier("pythonAiInternalSecret") String internalSecret) {
         this.config = config;
         this.objectMapper = objectMapper;
         this.circuitBreaker = circuitBreaker;
+        this.internalSecret = internalSecret;
 
         // 为 Python SmartBI 服务创建专用的 HttpClient
         // 添加拦截器：所有 Java→Python 内部调用自动带 X-Internal-Secret 头
@@ -100,8 +103,11 @@ public class PythonSmartBIClient {
                     if (pythonClientFaultInjector != null) {
                         pythonClientFaultInjector.maybeThrowUnreachable(original.url().encodedPath());
                     }
+                    if (this.internalSecret == null || this.internalSecret.isBlank()) {
+                        throw new IOException("INTERNAL_API_SECRET not configured; cannot call Python SmartBI");
+                    }
                     Request.Builder builder = original.newBuilder()
-                            .header("X-Internal-Secret", System.getenv().getOrDefault("INTERNAL_API_SECRET", "cretas-internal-2026"));
+                            .header("X-Internal-Secret", this.internalSecret);
                     // Propagate correlation ID from MDC to outgoing Python calls
                     String correlationId = MDC.get("correlationId");
                     if (correlationId != null) {
@@ -298,6 +304,7 @@ public class PythonSmartBIClient {
                                                   Integer selectedRegionStart,
                                                   Integer selectedRegionEnd) throws IOException {
         final String filename = file.getOriginalFilename() != null ? file.getOriginalFilename() : "upload.bin";
+        String trustedFactoryId = requireFactoryId(factoryId);
         log.info("[async-parse] 大文件 {}MB, 启动异步解析: file={} factory={}",
                 file.getSize() / 1024 / 1024, filename, factoryId);
 
@@ -310,7 +317,7 @@ public class PythonSmartBIClient {
         MultipartBody.Builder bodyBuilder = new MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
                 .addFormDataPart("file", filename, RequestBody.create(MediaType.parse(guessMimeFromName(filename)), tempFile))
-                .addFormDataPart("factory_id", factoryId != null ? factoryId : "")
+                .addFormDataPart("factory_id", trustedFactoryId)
                 .addFormDataPart("sheetIndex", String.valueOf(sheetIndex))
                 .addFormDataPart("max_rows", "500000");
         if (selectedRegionStart != null) bodyBuilder.addFormDataPart("selected_region_start", String.valueOf(selectedRegionStart));
@@ -318,6 +325,7 @@ public class PythonSmartBIClient {
 
         Request asyncReq = new Request.Builder()
                 .url(config.getUrl() + "/api/smartbi/excel/auto-parse-async")
+                .header("X-Factory-Id", trustedFactoryId)
                 .post(bodyBuilder.build())
                 .build();
 
@@ -345,13 +353,16 @@ public class PythonSmartBIClient {
         log.info("[async-parse] uploadId={}, 开始轮询 (间隔 {}s, 最多 {}次)",
                 uploadId, ASYNC_POLL_INTERVAL_MS / 1000, ASYNC_POLL_MAX_ATTEMPTS);
 
-        // 3. 轮询 /auto-parse-status/{uploadId}?factory_id=xxx
-        String pollUrl = config.getUrl() + "/api/smartbi/excel/auto-parse-status/" + uploadId
-                + "?factory_id=" + java.net.URLEncoder.encode(factoryId != null ? factoryId : "", java.nio.charset.StandardCharsets.UTF_8);
+        // 3. 轮询 /auto-parse-status/{uploadId}; tenant identity is header-only.
+        String pollUrl = config.getUrl() + "/api/smartbi/excel/auto-parse-status/" + uploadId;
         for (int attempt = 0; attempt < ASYNC_POLL_MAX_ATTEMPTS; attempt++) {
             try { Thread.sleep(ASYNC_POLL_INTERVAL_MS); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
 
-            Request pollReq = new Request.Builder().url(pollUrl).get().build();
+            Request pollReq = new Request.Builder()
+                    .url(pollUrl)
+                    .header("X-Factory-Id", trustedFactoryId)
+                    .get()
+                    .build();
             Map<String, Object> status;
             try (Response resp = httpClient.newCall(pollReq).execute()) {
                 String body = resp.body() != null ? resp.body().string() : "{}";
@@ -769,6 +780,7 @@ public class PythonSmartBIClient {
 
             Request httpRequest = new Request.Builder()
                     .url(url)
+                    .header("X-Factory-Id", requireFactoryId(request.getFactoryId()))
                     .post(RequestBody.create(JSON, objectMapper.writeValueAsString(request)))
                     .build();
 
@@ -2079,11 +2091,11 @@ public class PythonSmartBIClient {
      * @return response Map (parsed JSON), or null on service unavailable
      */
     @SuppressWarnings("unchecked")
-    public Map<String, Object> callRevenueReport(String fullEndpoint, Map<String, Object> request) {
-        return callRevenueReport(fullEndpoint, request, null);
-    }
-
-    public Map<String, Object> callRevenueReport(String fullEndpoint, Map<String, Object> request, String userRole) {
+    public Map<String, Object> callRevenueReport(
+            String fullEndpoint,
+            Map<String, Object> request,
+            String factoryId,
+            String userRole) {
         if (!config.isEnabled()) {
             log.debug("Python SmartBI 服务未启用，跳过收入管理报表调用");
             return null;
@@ -2095,6 +2107,7 @@ public class PythonSmartBIClient {
         try {
             Request.Builder requestBuilder = new Request.Builder()
                     .url(url)
+                    .header("X-Factory-Id", requireFactoryId(factoryId))
                     .post(RequestBody.create(JSON, objectMapper.writeValueAsString(request)));
             if (userRole != null && !userRole.isBlank()) {
                 requestBuilder.header("X-User-Role", userRole);
@@ -2105,6 +2118,13 @@ public class PythonSmartBIClient {
             log.error("收入管理报表调用失败: endpoint={}, error={}", fullEndpoint, e.getMessage());
             return null;
         }
+    }
+
+    private static String requireFactoryId(String factoryId) throws IOException {
+        if (factoryId == null || factoryId.isBlank()) {
+            throw new IOException("factoryId is required for Python SmartBI request");
+        }
+        return factoryId;
     }
 
     // ==================== 辅助转换方法 ====================

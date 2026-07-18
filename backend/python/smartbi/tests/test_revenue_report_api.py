@@ -36,25 +36,64 @@ def test_prefix_is_factory_scoped():
     )
 
 
-def test_internal_default_secret_enforces_url_factory_when_env_missing(monkeypatch):
-    """Java internal calls omit Authorization and use the historical default secret."""
+def _request_with_state(factory_id=None, user_id=None, headers=None):
     from starlette.requests import Request
-    from smartbi.api._revenue_report_helpers import _enforce_factory_match
-
-    monkeypatch.delenv("INTERNAL_API_SECRET", raising=False)
     scope = {
         "type": "http",
         "method": "POST",
         "path": "/api/smartbi/DEMO_REST/revenue-report/prepare",
-        "headers": [(b"x-internal-secret", b"cretas-internal-2026")],
+        "headers": headers or [],
         "query_string": b"",
         "server": ("testserver", 80),
         "client": ("testclient", 50000),
         "scheme": "http",
+        "state": {
+            **({"factory_id": factory_id} if factory_id is not None else {}),
+            **({"user_id": user_id} if user_id is not None else {}),
+        },
     }
-    request = Request(scope)
+    return Request(scope)
 
-    assert _enforce_factory_match("DEMO_REST", request) == "DEMO_REST"
+
+def test_revenue_factory_guard_uses_authenticated_state_only():
+    from fastapi import HTTPException
+    from smartbi.api._revenue_report_helpers import _enforce_factory_match
+
+    assert _enforce_factory_match(
+        "DEMO_REST", _request_with_state(factory_id="DEMO_REST")
+    ) == "DEMO_REST"
+
+    forged_headers = [
+        (b"x-internal-secret", b"cretas-internal-2026"),
+        (b"x-factory-id", b"DEMO_REST"),
+        (b"authorization", b"Bearer forged"),
+    ]
+    with pytest.raises(HTTPException) as missing:
+        _enforce_factory_match(
+            "DEMO_REST", _request_with_state(headers=forged_headers)
+        )
+    assert missing.value.status_code == 401
+
+    with pytest.raises(HTTPException) as cross_tenant:
+        _enforce_factory_match(
+            "DEMO_REST", _request_with_state(factory_id="OTHER")
+        )
+    assert cross_tenant.value.status_code == 403
+
+
+def test_revenue_user_id_uses_authenticated_state_not_unsigned_headers():
+    from smartbi.api.revenue_report import (
+        _extract_caller_user_id,
+        _user_id_from_request,
+    )
+
+    forged = _request_with_state(headers=[(b"x-user-id", b"999")])
+    assert _extract_caller_user_id(forged) is None
+    assert _user_id_from_request(forged) == "anonymous"
+
+    authenticated = _request_with_state(factory_id="DEMO_REST", user_id="42")
+    assert _extract_caller_user_id(authenticated) == 42
+    assert _user_id_from_request(authenticated) == "42"
 
 
 # ─── Functional tests ───────────────────────────────────────────────────
@@ -92,6 +131,28 @@ def fake_pool():
     pool = MagicMock()
     pool.acquire = MagicMock(return_value=ctx)
     return pool, conn
+
+
+@pytest.mark.asyncio
+async def test_revenue_authentication_precedes_pool_and_query():
+    pool_loader = AsyncMock()
+    from httpx import ASGITransport, AsyncClient
+
+    with patch("smartbi.api.revenue_report._get_pool", new=pool_loader):
+        app = _mk_app_with_router()
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test",
+        ) as ac:
+            response = await ac.get(
+                "/api/smartbi/REST-1/revenue-report/stores",
+                headers={
+                    "x-internal-secret": "forged",
+                    "x-factory-id": "REST-1",
+                },
+            )
+
+    assert response.status_code == 401
+    pool_loader.assert_not_awaited()
 
 
 @pytest.mark.asyncio
