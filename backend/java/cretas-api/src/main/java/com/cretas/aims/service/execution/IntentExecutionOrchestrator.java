@@ -829,7 +829,6 @@ public class IntentExecutionOrchestrator {
                     Map<String, Object> params = new HashMap<>();
                     params.put("intentCode", candidate.getIntentCode());
                     params.put("sessionId", conversationResp.getSessionId());
-                    params.put("forceExecute", true);
                     candidateActions.add(IntentExecuteResponse.SuggestedAction.builder()
                             .actionCode("SELECT_INTENT")
                             .actionName(candidate.getIntentName())
@@ -2136,7 +2135,6 @@ public class IntentExecutionOrchestrator {
                 }
                 Map<String, Object> params = new HashMap<>();
                 params.put("intentCode", candidate.getIntentCode());
-                params.put("forceExecute", true);
                 actions.add(IntentExecuteResponse.SuggestedAction.builder()
                         .actionCode("SELECT_INTENT").actionName(candidate.getIntentName())
                         .description(candidate.getDescription() != null ? candidate.getDescription() :
