@@ -1,0 +1,288 @@
+from __future__ import annotations
+
+from contextlib import AbstractAsyncContextManager
+from datetime import datetime, timezone
+
+import pytest
+
+from smartbi.agent.runtime.contracts import (
+    Coverage,
+    DataClassification,
+    EvidenceDraft,
+    EvidenceFact,
+    EvidenceStatus,
+    Freshness,
+    ProvenanceReference,
+    TrustedExecutionContext,
+)
+from smartbi.agent.runtime.descriptors import restaurant_descriptors
+from smartbi.agent.runtime.gateway import (
+    ReadToolGateway,
+    TenantParameterError,
+)
+from smartbi.agent.runtime.registry import ReadonlyToolRegistry
+
+
+class _AsyncContext(AbstractAsyncContextManager):
+    def __init__(self, value, events, name):
+        self.value = value
+        self.events = events
+        self.name = name
+
+    async def __aenter__(self):
+        self.events.append((self.name, "enter"))
+        return self.value
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self.events.append((self.name, "exit", exc_type))
+
+
+class FakeConnection:
+    def __init__(self):
+        self.events = []
+        self.executes = []
+
+    def transaction(self, *, readonly=False):
+        self.events.append(("transaction", "created", readonly))
+        return _AsyncContext(self, self.events, "transaction")
+
+    async def execute(self, sql, *args):
+        self.executes.append((sql, args))
+        return "SELECT 1"
+
+
+class FakePool:
+    def __init__(self):
+        self.connection = FakeConnection()
+        self.events = []
+        self.acquire_count = 0
+
+    def acquire(self):
+        self.acquire_count += 1
+        return _AsyncContext(self.connection, self.events, "pool")
+
+
+def context(*, business_type="restaurant", classifications=None):
+    return TrustedExecutionContext(
+        factory_id="F001",
+        business_type=business_type,
+        user_id="42",
+        correlation_id="corr-1",
+        run_id="run-1",
+        step_id="step-1",
+        authorized_classifications=frozenset(
+            classifications
+            or {
+                DataClassification.FINANCIAL_RESTRICTED,
+                DataClassification.OPERATIONAL_INTERNAL,
+                DataClassification.CUSTOMER_SENSITIVE_AGGREGATED,
+            }
+        ),
+    )
+
+
+def draft(descriptor):
+    freshness = Freshness.unknown("test source does not expose max date")
+    coverage = Coverage.complete("one test row", 1)
+    ref = ProvenanceReference(
+        ref_id="p-1",
+        source_type="GOLD",
+        asset="agg_daily",
+        query_id=descriptor.name,
+        source_version=descriptor.digest,
+    )
+    fact = EvidenceFact.numeric(
+        fact_id="f-1",
+        metric="revenue",
+        value="12.30",
+        unit="CNY",
+        scale=2,
+        dimensions={"date": "2026-01-01"},
+        status=EvidenceStatus.OK,
+        semantics="test revenue",
+        provenance_refs=(ref.ref_id,),
+        freshness=freshness,
+        coverage=coverage,
+    )
+    return EvidenceDraft(
+        status=EvidenceStatus.OK,
+        requested_window={"start": "2026-01-01", "end": "2026-01-01"},
+        effective_window={"start": "2026-01-01", "end": "2026-01-01"},
+        grain="DAY",
+        normalized_parameters={"startDate": "2026-01-01", "endDate": "2026-01-01"},
+        facts=(fact,),
+        provenance=(ref,),
+    )
+
+
+def gateway_with_adapter(adapter):
+    descriptor = restaurant_descriptors()[0]
+    registry = ReadonlyToolRegistry()
+    registry.register(descriptor, adapter)
+    pool = FakePool()
+    gateway = ReadToolGateway(
+        pool,
+        registry,
+        id_factory=lambda: "evidence-1",
+        clock=lambda: datetime(2026, 1, 2, tzinfo=timezone.utc),
+    )
+    return descriptor, pool, gateway
+
+
+@pytest.mark.asyncio
+async def test_gateway_binds_rls_and_adapter_to_same_readonly_connection():
+    seen = {}
+
+    async def adapter(bound_pool, trusted, parameters, descriptor):
+        async with bound_pool.acquire() as connection:
+            seen["connection"] = connection
+            seen["factory_id"] = trusted.factory_id
+        return draft(descriptor)
+
+    descriptor, pool, gateway = gateway_with_adapter(adapter)
+    envelope = await gateway.execute(
+        descriptor.name,
+        {"startDate": "2026-01-01", "endDate": "2026-01-01"},
+        context(),
+    )
+
+    assert pool.acquire_count == 1
+    assert seen == {"connection": pool.connection, "factory_id": "F001"}
+    assert ("transaction", "created", True) in pool.connection.events
+    assert pool.connection.executes == [
+        ("SELECT set_config('app.factory_id', $1, true)", ("F001",))
+    ]
+    assert envelope.status is EvidenceStatus.OK
+    assert envelope.facts[0].value == "12.3"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["factoryId", "factory_id", "tenantId", "tenant_id"])
+async def test_model_parameters_cannot_supply_tenant_even_when_nested(key):
+    async def adapter(*args):
+        raise AssertionError("adapter must not run")
+
+    descriptor, pool, gateway = gateway_with_adapter(adapter)
+    with pytest.raises(TenantParameterError):
+        await gateway.execute(
+            descriptor.name,
+            {
+                "startDate": "2026-01-01",
+                "endDate": "2026-01-01",
+                "nested": {key: "F999"},
+            },
+            context(),
+        )
+    assert pool.acquire_count == 0
+
+
+@pytest.mark.asyncio
+async def test_non_restaurant_business_type_is_rejected_before_db_access():
+    async def adapter(*args):
+        raise AssertionError("adapter must not run")
+
+    descriptor, pool, gateway = gateway_with_adapter(adapter)
+    with pytest.raises(TenantParameterError, match="business_type=RESTAURANT"):
+        await gateway.execute(
+            descriptor.name,
+            {"startDate": "2026-01-01", "endDate": "2026-01-01"},
+            context(business_type="FACTORY"),
+        )
+    assert pool.acquire_count == 0
+
+
+@pytest.mark.asyncio
+async def test_classification_denial_is_fail_closed_without_db_access():
+    async def adapter(*args):
+        raise AssertionError("adapter must not run")
+
+    descriptor, pool, gateway = gateway_with_adapter(adapter)
+    envelope = await gateway.execute(
+        descriptor.name,
+        {"startDate": "2026-01-01", "endDate": "2026-01-01"},
+        context(classifications={DataClassification.OPERATIONAL_INTERNAL}),
+    )
+    assert envelope.status is EvidenceStatus.DENIED
+    assert envelope.warnings[0].code == "CLASSIFICATION_ACCESS_DENIED"
+    assert pool.acquire_count == 0
+
+
+@pytest.mark.asyncio
+async def test_external_envelope_json_golden_field_names_are_camel_case():
+    async def adapter(bound_pool, trusted, parameters, descriptor):
+        async with bound_pool.acquire():
+            pass
+        return draft(descriptor)
+
+    descriptor, _, gateway = gateway_with_adapter(adapter)
+    external = (
+        await gateway.execute(
+            descriptor.name,
+            {"startDate": "2026-01-01", "endDate": "2026-01-01"},
+            context(),
+        )
+    ).to_dict()
+
+    assert set(external) == {
+        "schemaVersion",
+        "evidenceId",
+        "toolName",
+        "toolVersion",
+        "descriptorDigest",
+        "tenantId",
+        "businessType",
+        "correlationId",
+        "runId",
+        "stepId",
+        "querySpec",
+        "status",
+        "facts",
+        "provenance",
+        "warnings",
+        "conflicts",
+        "classification",
+        "limits",
+        "generatedAt",
+    }
+    assert set(external["facts"][0]) == {
+        "factId",
+        "metric",
+        "value",
+        "unit",
+        "scale",
+        "dimensions",
+        "status",
+        "semantics",
+        "provenanceRefs",
+        "freshness",
+        "coverage",
+        "qualityFlags",
+    }
+    assert set(external["facts"][0]["freshness"]) == {
+        "dataThrough",
+        "status",
+        "materializedAt",
+        "slaSeconds",
+        "basis",
+    }
+    assert set(external["limits"]) == {
+        "rowsReturned",
+        "rowsTruncated",
+        "factsReturned",
+        "cellsReturned",
+        "bytesReturned",
+        "provenanceRefsReturned",
+    }
+    assert not any("_" in key for key in external)
+
+
+def test_evidence_status_vocabulary_is_frozen():
+    assert {status.value for status in EvidenceStatus} == {
+        "OK",
+        "EMPTY",
+        "PARTIAL",
+        "NOT_COMPUTABLE",
+        "CONFLICT",
+        "DENIED",
+        "ERROR",
+    }
