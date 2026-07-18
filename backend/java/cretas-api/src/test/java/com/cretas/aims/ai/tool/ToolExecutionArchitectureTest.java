@@ -44,6 +44,10 @@ class ToolExecutionArchitectureTest {
                     + "(?:\\s*\\.\\s*(?:getTool|getExecutor|findTool)\\s*\\([^;{}]*?\\))"
                     + "(?:\\s*\\.\\s*(?:get|orElseThrow)\\s*\\([^;{}]*?\\))*"
                     + "\\s*\\.\\s*(execute|preview)\\s*\\(");
+    private static final Pattern EGRESS_PERMIT_CONSTRUCTION = Pattern.compile(
+            "\\bnew\\s+ToolEgressPermit\\s*\\(");
+    private static final Pattern TRUSTED_EGRESS_CONTEXT_CALL = Pattern.compile(
+            "\\bToolEgressPermit\\s*\\.\\s*trustedExecutionContext\\s*\\(");
 
     @Test
     void directToolExecutionPathsDoNotGrowBeyondMigrationBaseline() throws IOException {
@@ -119,6 +123,16 @@ class ToolExecutionArchitectureTest {
                 .hasMessageContaining("com/example/ChainedBypass.java");
     }
 
+    @Test
+    void egressPermitCapabilityMintingRemainsGatewayOnly() throws IOException {
+        Path sourceRoot = Path.of(System.getProperty("user.dir"), "src", "main", "java");
+
+        assertOnlySanctionedUse(
+                sourceRoot, EGRESS_PERMIT_CONSTRUCTION, "ToolEgressPermit construction");
+        assertOnlySanctionedUse(
+                sourceRoot, TRUSTED_EGRESS_CONTEXT_CALL, "trusted egress context injection");
+    }
+
     private static Baseline loadBaseline() throws IOException {
         InputStream input = ToolExecutionArchitectureTest.class.getResourceAsStream(
                 BASELINE_RESOURCE);
@@ -189,6 +203,36 @@ class ToolExecutionArchitectureTest {
             }
         }
         return new ScanResult(files);
+    }
+
+    private static void assertOnlySanctionedUse(
+            Path sourceRoot,
+            Pattern pattern,
+            String capability) throws IOException {
+        Map<String, Integer> occurrences = new LinkedHashMap<>();
+        try (Stream<Path> paths = Files.walk(sourceRoot)) {
+            for (Path path : paths.filter(candidate -> candidate.toString().endsWith(".java"))
+                    .sorted()
+                    .toList()) {
+                Matcher matcher = pattern.matcher(stripCommentsAndLiterals(
+                        Files.readString(path, StandardCharsets.UTF_8)));
+                int count = 0;
+                while (matcher.find()) {
+                    count++;
+                }
+                if (count > 0) {
+                    String relative = sourceRoot.relativize(path).toString().replace('\\', '/');
+                    occurrences.put(relative, count);
+                }
+            }
+        }
+
+        assertThat(occurrences)
+                .as(capability + " must remain exclusive to the governed gateway")
+                .containsOnlyKeys(SANCTIONED_GATEWAY);
+        assertThat(occurrences.get(SANCTIONED_GATEWAY))
+                .as(capability + " count in the governed gateway")
+                .isEqualTo(1);
     }
 
     private static Set<String> toolExecutorIdentifiers(String source) {

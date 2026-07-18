@@ -6,12 +6,16 @@ import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Modifier;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ToolExecutionContractsTest {
@@ -265,6 +269,142 @@ class ToolExecutionContractsTest {
                 Instant.parse("2026-07-18T12:00:00Z")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("approvedAt");
+    }
+
+    @Test
+    void egressPermitIsPackageConstructedCommandBoundAndExact() {
+        Instant deadline = Instant.now().plusSeconds(60);
+        ToolEgressPermit permit = new ToolEgressPermit(
+                "restaurant_margin_analysis",
+                "1.0.0",
+                "request-egress-1",
+                deadline,
+                Set.of("smartbi.internal"));
+
+        assertThat(Modifier.isFinal(ToolEgressPermit.class.getModifiers())).isTrue();
+        assertThat(ToolEgressPermit.class.getDeclaredConstructors())
+                .allMatch(constructor -> !Modifier.isPublic(constructor.getModifiers()))
+                .allMatch(constructor -> !Modifier.isProtected(constructor.getModifiers()));
+        assertThat(Arrays.stream(ToolEgressPermit.class.getDeclaredMethods())
+                .filter(method -> "requireExact".equals(method.getName()))
+                .toList())
+                .singleElement()
+                .satisfies(method -> {
+                    assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
+                    assertThat(method.getParameterTypes()).containsExactly(
+                            String.class, String.class, String.class, String.class);
+                });
+        assertThat(permit.toolName()).isEqualTo("restaurant_margin_analysis");
+        assertThat(permit.toolVersion()).isEqualTo("1.0.0");
+        assertThat(permit.requestId()).isEqualTo("request-egress-1");
+        assertThat(permit.deadline()).isEqualTo(deadline);
+        assertThat(permit.allowedDestinationIds()).containsExactly("smartbi.internal");
+        assertThatThrownBy(() -> permit.allowedDestinationIds().add("attacker.example"))
+                .isInstanceOf(UnsupportedOperationException.class);
+        assertThatCode(() -> permit.requireExact(
+                "restaurant_margin_analysis", "1.0.0", "request-egress-1",
+                "smartbi.internal"))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void egressPermitFailsClosedForEveryNullBlankOrWrongBinding() {
+        ToolEgressPermit live = new ToolEgressPermit(
+                "restaurant_margin_analysis", "1.0.0", "request-live",
+                Instant.now().plusSeconds(60), Set.of("smartbi.internal"));
+
+        assertThatThrownBy(() -> live.requireExact(
+                null, "1.0.0", "request-live", "smartbi.internal"))
+                .isInstanceOf(SecurityException.class);
+        assertThatThrownBy(() -> live.requireExact(
+                " ", "1.0.0", "request-live", "smartbi.internal"))
+                .isInstanceOf(SecurityException.class);
+        assertThatThrownBy(() -> live.requireExact(
+                "restaurant_margin_analysis", null, "request-live", "smartbi.internal"))
+                .isInstanceOf(SecurityException.class);
+        assertThatThrownBy(() -> live.requireExact(
+                "restaurant_margin_analysis", " ", "request-live", "smartbi.internal"))
+                .isInstanceOf(SecurityException.class);
+        assertThatThrownBy(() -> live.requireExact(
+                "restaurant_margin_analysis", "1.0.0", null, "smartbi.internal"))
+                .isInstanceOf(SecurityException.class);
+        assertThatThrownBy(() -> live.requireExact(
+                "restaurant_margin_analysis", "1.0.0", " ", "smartbi.internal"))
+                .isInstanceOf(SecurityException.class);
+        assertThatThrownBy(() -> live.requireExact(
+                "restaurant_margin_analysis", "1.0.0", "request-live", null))
+                .isInstanceOf(SecurityException.class);
+        assertThatThrownBy(() -> live.requireExact(
+                "restaurant_margin_analysis", "1.0.0", "request-live", " "))
+                .isInstanceOf(SecurityException.class);
+        assertThatThrownBy(() -> live.requireExact(
+                "RESTAURANT_MARGIN_ANALYSIS", "1.0.0", "request-live",
+                "smartbi.internal"))
+                .isInstanceOf(SecurityException.class);
+        assertThatThrownBy(() -> live.requireExact(
+                "restaurant_margin_analysis", "1.0.1", "request-live",
+                "smartbi.internal"))
+                .isInstanceOf(SecurityException.class);
+        assertThatThrownBy(() -> live.requireExact(
+                "restaurant_margin_analysis", "1.0.0", "request-other",
+                "smartbi.internal"))
+                .isInstanceOf(SecurityException.class);
+        assertThatThrownBy(() -> live.requireExact(
+                "restaurant_margin_analysis", "1.0.0", "request-live",
+                "SMARTBI.INTERNAL"))
+                .isInstanceOf(SecurityException.class);
+        assertThatThrownBy(() -> live.requireExact(
+                "restaurant_margin_analysis", "1.0.0", "request-live",
+                "smartbi.internal.example"))
+                .isInstanceOf(SecurityException.class);
+    }
+
+    @Test
+    void egressPermitCannotCrossRequestBoundaryAndExpiresFailClosed() {
+        ToolEgressPermit requestOne = new ToolEgressPermit(
+                "restaurant_margin_analysis", "1.0.0", "request-one",
+                Instant.now().plusSeconds(60), Set.of("smartbi.internal"));
+        Map<String, Object> requestOneContext = ToolEgressPermit.trustedExecutionContext(
+                Map.of("factoryId", "F-1"), Optional.of(requestOne));
+        ToolEgressPermit reused = ToolEgressPermit.fromContext(requestOneContext).orElseThrow();
+        ToolEgressPermit expired = new ToolEgressPermit(
+                "restaurant_margin_analysis", "1.0.0", "request-expired",
+                Instant.now().minusSeconds(1), Set.of("smartbi.internal"));
+
+        assertThatThrownBy(() -> reused.requireExact(
+                "restaurant_margin_analysis", "1.0.0", "request-two",
+                "smartbi.internal"))
+                .isInstanceOf(SecurityException.class);
+        assertThatThrownBy(() -> expired.requireExact(
+                "restaurant_margin_analysis", "1.0.0", "request-expired",
+                "smartbi.internal"))
+                .isInstanceOf(SecurityException.class);
+    }
+
+    @Test
+    void trustedEgressContextCannotBeOverwrittenAndIsImmutable() {
+        ToolEgressPermit first = new ToolEgressPermit(
+                "restaurant_margin_analysis", "1.0.0", "request-first",
+                Instant.now().plusSeconds(60), Set.of("smartbi.internal"));
+        ToolEgressPermit replacement = new ToolEgressPermit(
+                "restaurant_margin_analysis", "1.0.0", "request-replacement",
+                Instant.now().plusSeconds(60), Set.of("smartbi.internal"));
+
+        Map<String, Object> firstContext = ToolEgressPermit.trustedExecutionContext(
+                Map.of("factoryId", "F-1"), Optional.of(first));
+        Map<String, Object> replacedContext = ToolEgressPermit.trustedExecutionContext(
+                firstContext, Optional.of(replacement));
+        Map<String, Object> denyAllContext = ToolEgressPermit.trustedExecutionContext(
+                firstContext, Optional.empty());
+
+        assertThat(ToolEgressPermit.fromContext(null)).isEmpty();
+        assertThat(ToolEgressPermit.fromContext(Map.of())).isEmpty();
+        assertThat(ToolEgressPermit.fromContext(firstContext)).contains(first);
+        assertThat(ToolEgressPermit.fromContext(replacedContext)).contains(replacement);
+        assertThat(ToolEgressPermit.fromContext(denyAllContext)).isEmpty();
+        assertThat(firstContext).containsEntry("factoryId", "F-1");
+        assertThatThrownBy(() -> replacedContext.put("factoryId", "attacker"))
+                .isInstanceOf(UnsupportedOperationException.class);
     }
 
     private static ToolExecutionCommand command(ObjectNode parameters, ExecutionPrincipal principal) {

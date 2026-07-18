@@ -1,11 +1,19 @@
 package com.cretas.aims.ai.tool.gateway;
 
+import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.ai.tool.gateway.descriptor.RuntimeToolPolicyEntry;
+import com.cretas.aims.ai.tool.gateway.descriptor.RuntimeToolPolicyManifest;
 import com.cretas.aims.ai.tool.gateway.descriptor.RuntimeToolDescriptorRegistry;
+import com.cretas.aims.ai.tool.gateway.descriptor.ToolDescriptorInventory;
+import com.cretas.aims.ai.tool.gateway.descriptor.ToolDescriptorInventoryEntry;
+import com.cretas.aims.ai.tool.gateway.descriptor.ToolDescriptorOverrideFlags;
+import com.cretas.aims.ai.tool.gateway.descriptor.ToolGovernanceStatus;
 import com.cretas.aims.ai.tool.impl.user.UserDisableTool;
 import com.cretas.aims.ai.tool.impl.workprocess.WorkProcessCatalogTool;
 import com.cretas.aims.entity.config.FactoryToolConfig;
+import com.cretas.aims.entity.enums.FactoryType;
 import com.cretas.aims.repository.config.FactoryToolConfigRepository;
 import com.cretas.aims.service.WorkProcessService;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
@@ -16,6 +24,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -119,6 +129,111 @@ class ToolRuntimeRegistryTest {
                 restaurantCommand, restaurantCommand.principal())).isEmpty();
     }
 
+    @Test
+    void allowlistResolvesOnlyForMarkerWithExactNonEmptyDestinations() {
+        TestEgressTool exact = new TestEgressTool(Set.of("smartbi.internal"));
+        assertThat(resolveEgressTool(
+                exact, ToolEgressPolicy.allowlistOnly(Set.of("smartbi.internal"))))
+                .isPresent();
+
+        TestTool missingMarker = new TestTool();
+        assertThat(resolveEgressTool(
+                missingMarker, ToolEgressPolicy.allowlistOnly(Set.of("smartbi.internal"))))
+                .isEmpty();
+
+        TestEgressTool destinationDrift = new TestEgressTool(Set.of("other.internal"));
+        assertThat(resolveEgressTool(
+                destinationDrift, ToolEgressPolicy.allowlistOnly(Set.of("smartbi.internal"))))
+                .isEmpty();
+
+        TestEgressTool emptyDestinations = new TestEgressTool(Set.of());
+        assertThat(resolveEgressTool(
+                emptyDestinations, ToolEgressPolicy.allowlistOnly(Set.of("smartbi.internal"))))
+                .isEmpty();
+    }
+
+    @Test
+    void denyAllRejectsEgressMarkerAndLegacyAlwaysFailsClosed() {
+        assertThat(resolveEgressTool(
+                new TestEgressTool(Set.of("smartbi.internal")), ToolEgressPolicy.denyAll()))
+                .isEmpty();
+        assertThat(ToolRuntimeRegistry.hasExactEgressBehavior(
+                legacyDescriptor(), new TestTool()))
+                .isFalse();
+    }
+
+    private Optional<ToolRuntimeRegistry.ResolvedTool> resolveEgressTool(
+            ToolExecutor executor,
+            ToolEgressPolicy egressPolicy) {
+        RuntimeToolDescriptorRegistry descriptorRegistry = descriptorRegistry(executor, egressPolicy);
+        runtimeRegistry = new ToolRuntimeRegistry(
+                toolRegistry, factoryToolConfigRepository, descriptorRegistry);
+        when(toolRegistry.getExecutor("egress_test_tool")).thenReturn(Optional.of(executor));
+        return runtimeRegistry.resolve(egressCommand(), current(Set.of("hr:read_write")));
+    }
+
+    private static RuntimeToolDescriptorRegistry descriptorRegistry(
+            ToolExecutor executor,
+            ToolEgressPolicy egressPolicy) {
+        String implementationClass = executor.getClass().getName();
+        ToolDescriptorInventoryEntry inventoryEntry = new ToolDescriptorInventoryEntry(
+                "egress_test_tool",
+                implementationClass,
+                DescriptorProvenance.EXPLICIT,
+                ToolExecutor.ActionType.READ,
+                ToolExecutor.RiskLevel.LOW,
+                true,
+                true,
+                Set.of("hr:read_write"),
+                Set.of(),
+                "1.0.0",
+                Set.of("restaurant", "analytics"),
+                new ToolDescriptorOverrideFlags(
+                        true, true, true, true, true, true, true, true),
+                ToolGovernanceStatus.APPROVED);
+        RuntimeToolPolicyEntry policyEntry = new RuntimeToolPolicyEntry(
+                implementationClass,
+                "egress_test_tool",
+                ToolExecutor.ActionType.READ,
+                ToolExecutor.RiskLevel.LOW,
+                Set.of("hr:read_write"),
+                Set.of(),
+                Set.of(FactoryType.FACTORY),
+                Set.of("restaurant", "analytics"),
+                "1.0.0",
+                true,
+                ConfirmationPolicy.NOT_REQUIRED,
+                ApprovalPolicy.NOT_REQUIRED,
+                IdempotencyPolicy.NOT_REQUIRED,
+                DataClassification.INTERNAL,
+                Set.of(ToolExecutionSource.HTTP_CONTROLLER),
+                egressPolicy,
+                DescriptorProvenance.EXPLICIT);
+        return new RuntimeToolDescriptorRegistry(
+                new ToolDescriptorInventory(1, 1, 0, List.of(inventoryEntry)),
+                new RuntimeToolPolicyManifest(1, 1, List.of(policyEntry)));
+    }
+
+    private static ToolDescriptor legacyDescriptor() {
+        return new ToolDescriptor(
+                "egress_test_tool",
+                ToolExecutor.ActionType.READ,
+                ToolExecutor.RiskLevel.LOW,
+                Set.of("hr:read_write"),
+                Set.of(),
+                Set.of(FactoryType.FACTORY),
+                Set.of("restaurant", "analytics"),
+                "1.0.0",
+                true,
+                ConfirmationPolicy.NOT_REQUIRED,
+                ApprovalPolicy.NOT_REQUIRED,
+                IdempotencyPolicy.NOT_REQUIRED,
+                DataClassification.INTERNAL,
+                Set.of(ToolExecutionSource.HTTP_CONTROLLER),
+                ToolEgressPolicy.legacyUnspecified(),
+                DescriptorProvenance.LEGACY_INFERRED);
+    }
+
     private static ToolExecutionCommand command() {
         return command("2.0.0", ToolExecutionSource.AI_CHAT);
     }
@@ -159,5 +274,81 @@ class ToolRuntimeRegistryTest {
                 source, ToolExecutionMode.EXECUTE,
                 Optional.of("idem-1"), Optional.empty(), Optional.empty(),
                 Instant.now().plusSeconds(60));
+    }
+
+    private static ToolExecutionCommand egressCommand() {
+        ExecutionPrincipal asserted = new ExecutionPrincipal(
+                "F-1", "FACTORY", "42", PrincipalType.USER,
+                Set.of("ADMIN"), Set.of("hr:read_write"), Set.of());
+        return new ToolExecutionCommand(
+                "request-egress", "correlation-egress", "trace-egress",
+                "egress_test_tool", "1.0.0",
+                JsonNodeFactory.instance.objectNode(), asserted,
+                ToolExecutionSource.HTTP_CONTROLLER, ToolExecutionMode.PREVIEW,
+                Optional.empty(), Optional.empty(), Optional.empty(),
+                Instant.now().plusSeconds(60));
+    }
+
+    private static class TestTool implements ToolExecutor {
+
+        @Override
+        public String getToolName() {
+            return "egress_test_tool";
+        }
+
+        @Override
+        public String getDescription() {
+            return "test";
+        }
+
+        @Override
+        public Map<String, Object> getParametersSchema() {
+            return Map.of();
+        }
+
+        @Override
+        public String execute(ToolCall toolCall, Map<String, Object> context) {
+            return "{\"success\":true}";
+        }
+
+        @Override
+        public boolean requiresPermission() {
+            return true;
+        }
+
+        @Override
+        public boolean hasPermission(String userRole) {
+            return false;
+        }
+
+        @Override
+        public Set<String> getRequiredPermissions() {
+            return Set.of("hr:read_write");
+        }
+
+        @Override
+        public boolean supportsPreview() {
+            return true;
+        }
+
+        @Override
+        public Set<String> getDomainTags() {
+            return Set.of("restaurant", "analytics");
+        }
+    }
+
+    private static final class TestEgressTool extends TestTool
+            implements EgressCapableTool {
+
+        private final Set<String> destinationIds;
+
+        private TestEgressTool(Set<String> destinationIds) {
+            this.destinationIds = Set.copyOf(destinationIds);
+        }
+
+        @Override
+        public Set<String> getEgressDestinationIds() {
+            return destinationIds;
+        }
     }
 }

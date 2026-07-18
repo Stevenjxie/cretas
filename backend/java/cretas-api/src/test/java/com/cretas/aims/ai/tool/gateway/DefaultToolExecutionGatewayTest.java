@@ -108,9 +108,67 @@ class DefaultToolExecutionGatewayTest {
                 .containsEntry("factoryId", "F-1")
                 .containsEntry("userId", 42L)
                 .doesNotContainKey("parameters");
+        assertThat(ToolEgressPermit.fromContext(contextCaptor.getValue())).isEmpty();
         verify(ledgerService).completeAudit(
                 "audit-1", ToolExecutionStatus.SUCCEEDED, GatewayResultCode.TOOL_SUCCEEDED);
         assertNoWriteSecurityState();
+    }
+
+    @Test
+    void allowlistedExecuteInjectsCommandBoundPermitIntoCopiedTrustedContext() throws Exception {
+        descriptor = nonMutatingDescriptor(
+                ToolExecutor.ActionType.ANALYZE,
+                ConfirmationPolicy.NOT_REQUIRED,
+                ApprovalPolicy.NOT_REQUIRED,
+                IdempotencyPolicy.NOT_REQUIRED,
+                ToolEgressPolicy.allowlistOnly(Set.of("smartbi.internal")),
+                DescriptorProvenance.EXPLICIT,
+                false);
+        ToolExecutionCommand command = nonMutatingCommand(ToolExecutionMode.EXECUTE);
+        stubPolicy(command);
+        when(executor.execute(any(), any())).thenReturn("{\"success\":true,\"data\":{}}");
+
+        ToolExecutionResult result = gateway.execute(command);
+
+        assertThat(result.status()).isEqualTo(ToolExecutionStatus.SUCCEEDED);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> contextCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(executor).execute(any(), contextCaptor.capture());
+        ToolEgressPermit permit = ToolEgressPermit.fromContext(contextCaptor.getValue())
+                .orElseThrow();
+        assertThat(permit.toolName()).isEqualTo(command.toolName());
+        assertThat(permit.toolVersion()).isEqualTo(command.expectedDescriptorVersion());
+        assertThat(permit.requestId()).isEqualTo(command.requestId());
+        assertThat(permit.deadline()).isEqualTo(command.deadline());
+        assertThat(permit.allowedDestinationIds()).containsExactly("smartbi.internal");
+        assertThat(ToolEgressPermit.fromContext(current.executionContext())).isEmpty();
+    }
+
+    @Test
+    void allowlistedPreviewInjectsCommandBoundPermitThroughSameContextBoundary() throws Exception {
+        descriptor = nonMutatingDescriptor(
+                ToolExecutor.ActionType.READ,
+                ConfirmationPolicy.NOT_REQUIRED,
+                ApprovalPolicy.NOT_REQUIRED,
+                IdempotencyPolicy.NOT_REQUIRED,
+                ToolEgressPolicy.allowlistOnly(Set.of("smartbi.internal")),
+                DescriptorProvenance.EXPLICIT,
+                true);
+        ToolExecutionCommand command = nonMutatingCommand(ToolExecutionMode.PREVIEW);
+        stubPolicy(command);
+        when(executor.preview(any(), any())).thenReturn("{\"success\":true,\"data\":{}}");
+
+        ToolExecutionResult result = gateway.execute(command);
+
+        assertThat(result.status()).isEqualTo(ToolExecutionStatus.SUCCEEDED);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> contextCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(executor).preview(any(), contextCaptor.capture());
+        ToolEgressPermit permit = ToolEgressPermit.fromContext(contextCaptor.getValue())
+                .orElseThrow();
+        assertThat(permit.requestId()).isEqualTo(command.requestId());
+        assertThat(permit.allowedDestinationIds()).containsExactly("smartbi.internal");
+        assertThat(ToolEgressPermit.fromContext(current.executionContext())).isEmpty();
     }
 
     @Test
@@ -204,14 +262,6 @@ class DefaultToolExecutionGatewayTest {
                         IdempotencyPolicy.NOT_REQUIRED,
                         ToolEgressPolicy.denyAll(),
                         DescriptorProvenance.LEGACY_INFERRED,
-                        false),
-                nonMutatingDescriptor(
-                        ToolExecutor.ActionType.ANALYZE,
-                        ConfirmationPolicy.NOT_REQUIRED,
-                        ApprovalPolicy.NOT_REQUIRED,
-                        IdempotencyPolicy.NOT_REQUIRED,
-                        ToolEgressPolicy.allowlistOnly(Set.of("smartbi.internal")),
-                        DescriptorProvenance.EXPLICIT,
                         false));
 
         for (ToolDescriptor rejectedDescriptor : rejectedDescriptors) {
