@@ -320,6 +320,15 @@ class RunStore(Protocol):
     ) -> RunRecord:
         ...
 
+    async def events_for(
+        self,
+        run_id: str,
+        context: TrustedExecutionContext,
+        *,
+        after_sequence: int = 0,
+    ) -> tuple[AgentEvent, ...]:
+        ...
+
     async def append_event(
         self,
         run_id: str,
@@ -460,11 +469,16 @@ class InMemoryRunStore:
             )
             return True
 
-    async def events_for(self, run_id, context):
+    async def events_for(self, run_id, context, *, after_sequence=0):
         _require_context(context)
+        _require_after_sequence(after_sequence)
         async with self._lock:
             self._owned(run_id, context)
-            return tuple(self._events[run_id])
+            return tuple(
+                event
+                for event in self._events[run_id]
+                if event.sequence > after_sequence
+            )
 
     def _owned(self, run_id, context):
         record = self._runs.get(run_id)
@@ -638,6 +652,37 @@ class PostgresRunStore:
                 )
         return True
 
+    async def events_for(self, run_id, context, *, after_sequence=0):
+        _require_context(context)
+        _require_after_sequence(after_sequence)
+        async with self._pool.acquire() as connection:
+            async with connection.transaction(readonly=True):
+                await self._bind(connection, context)
+                owned = await connection.fetchrow(
+                    """
+                    SELECT run_id FROM smart_bi_agent_run
+                    WHERE run_id = $1::uuid AND factory_id = $2
+                    """,
+                    run_id,
+                    context.factory_id,
+                )
+                if owned is None:
+                    raise RunAccessError("run does not exist in trusted tenant")
+                rows = await connection.fetch(
+                    """
+                    SELECT run_id, factory_id, event_sequence, event_type,
+                           payload, step_id, tool_name
+                    FROM smart_bi_agent_event
+                    WHERE run_id = $1::uuid AND factory_id = $2
+                      AND event_sequence > $3
+                    ORDER BY event_sequence ASC
+                    """,
+                    run_id,
+                    context.factory_id,
+                    after_sequence,
+                )
+        return tuple(self._event(row) for row in rows)
+
     @staticmethod
     async def _bind(connection, context):
         await connection.execute(
@@ -656,6 +701,12 @@ class PostgresRunStore:
             request = json.loads(request)
         if isinstance(summary, str):
             summary = json.loads(summary)
+        request = safe_request_payload(request)
+        if summary is not None:
+            summary = safe_outcome_payload(summary)
+        failure_code = row["failure_code"]
+        if failure_code is not None:
+            failure_code = _code(failure_code, "failure_code")
         return RunRecord(
             run_id=str(row["run_id"]),
             factory_id=str(row["factory_id"]),
@@ -670,5 +721,33 @@ class PostgresRunStore:
             ),
             next_event_sequence=int(row["next_event_sequence"]),
             outcome_summary=summary,
-            failure_code=row["failure_code"],
+            failure_code=failure_code,
         )
+
+    @staticmethod
+    def _event(row):
+        payload = row["payload"]
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        event_type = AgentEventType(row["event_type"])
+        payload = safe_event_payload(event_type, payload)
+        step_id = row["step_id"]
+        tool_name = row["tool_name"]
+        if step_id is not None:
+            step_id = _identifier(step_id, "step_id")
+        if tool_name is not None:
+            tool_name = _identifier(tool_name, "tool_name")
+        return AgentEvent(
+            run_id=str(row["run_id"]),
+            factory_id=str(row["factory_id"]),
+            sequence=int(row["event_sequence"]),
+            event_type=event_type,
+            payload=payload,
+            step_id=step_id,
+            tool_name=tool_name,
+        )
+
+
+def _require_after_sequence(value: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError("after_sequence must be a non-negative integer")

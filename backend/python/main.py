@@ -77,6 +77,7 @@ from smartbi.api import (  # noqa: E402
     supplier_price,
     price_anomaly,
     external_benchmarks,
+    restaurant_agent_runs,
 )
 from smartbi.api import restaurant_sections  # noqa: E402
 from smartbi.api import restaurant_value  # noqa: E402  (#56 价值可视化回馈回路, 2026-06-04)
@@ -1113,6 +1114,7 @@ app.include_router(supplier_price.router, prefix="/api/smartbi", tags=["Supplier
 app.include_router(price_anomaly.router, prefix="/api/smartbi", tags=["Price Anomaly Deterrence"])
 app.include_router(restaurant_ops_recipes.router, prefix="/api/smartbi", tags=["Restaurant Ops Recipes"])
 app.include_router(restaurant_health_check.router, prefix="/api/smartbi", tags=["Restaurant Health Check"])
+app.include_router(restaurant_agent_runs.router, tags=["Restaurant Agent Runs"])
 app.include_router(restaurant_sections.router, tags=["Restaurant Sections"])
 app.include_router(restaurant_value.router, prefix="/api/smartbi", tags=["Restaurant Value Feedback"])
 app.include_router(restaurant_cost_card.router, prefix="/api/smartbi", tags=["Restaurant Cost Card"])
