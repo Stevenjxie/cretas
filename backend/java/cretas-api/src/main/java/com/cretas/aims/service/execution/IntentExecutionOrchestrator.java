@@ -717,7 +717,9 @@ public class IntentExecutionOrchestrator {
      */
     public IntentExecuteResponse confirm(String factoryId, String confirmToken,
                                           Long userId, String userRole) {
-        log.info("确认执行: factoryId={}, confirmToken={}", factoryId, confirmToken);
+        String tokenFingerprint = com.cretas.aims.ai.tool.gateway.ToolCommandDigest
+                .tokenFingerprint(confirmToken);
+        log.info("确认执行: factoryId={}, tokenFingerprint={}", factoryId, tokenFingerprint);
 
         if (previewTokenService == null) {
             return IntentExecuteResponse.builder()
@@ -727,34 +729,25 @@ public class IntentExecutionOrchestrator {
                     .build();
         }
 
-        PreviewTokenService.ConfirmResult confirmResult = previewTokenService.confirmToken(confirmToken, userId);
-        if (!confirmResult.isSuccess()) {
+        PreviewTokenService.ClaimResult claimResult =
+                previewTokenService.claimToken(confirmToken, factoryId, userId);
+        if (!claimResult.isSuccess()) {
             return IntentExecuteResponse.builder()
                     .status("FAILED")
-                    .message(confirmResult.getMessage())
+                    .message(claimResult.getMessage())
                     .executedAt(LocalDateTime.now())
                     .build();
         }
 
-        var token = confirmResult.getToken();
+        var token = claimResult.getToken();
+        String claimId = claimResult.getClaimId();
         String intentCode = token.getIntentCode();
-        String entityId = token.getEntityId();
-        String entityType = token.getEntityType();
 
         try {
-            Map<String, Object> context = confirmResult.getExecutionResult() != null
-                    ? confirmResult.getExecutionResult() : new HashMap<>();
-            context.put("confirmed", true);
-            context.put("entityId", entityId);
-            context.put("entityType", entityType);
-
-            IntentExecuteRequest execRequest = IntentExecuteRequest.builder()
-                    .userInput("确认执行: " + intentCode)
-                    .context(context)
-                    .build();
-
             Optional<AIIntentConfig> intentConfigOpt = aiIntentService.getIntentByCode(factoryId, intentCode);
             if (intentConfigOpt.isEmpty()) {
+                previewTokenService.resolveClaim(
+                        confirmToken, claimId, false, "意图配置不存在: " + intentCode);
                 return IntentExecuteResponse.builder()
                         .status("FAILED")
                         .message("意图配置不存在: " + intentCode)
@@ -763,23 +756,99 @@ public class IntentExecutionOrchestrator {
             }
 
             AIIntentConfig intentConfig = intentConfigOpt.get();
-            String toolName = intentConfig.getToolName();
-            if (toolName != null && !toolName.isEmpty()) {
-                Optional<ToolExecutor> toolOpt = toolRegistry.getExecutor(toolName);
-                if (toolOpt.isPresent()) {
-                    return toolDispatchService.executeWithTool(
-                            toolOpt.get(), factoryId, execRequest, intentConfig, userId, userRole, null);
-                }
+            String boundToolName = token.getToolName();
+            if (!boundToolName.equals(intentConfig.getToolName())) {
+                previewTokenService.resolveClaim(confirmToken, claimId, false,
+                        "意图配置的工具绑定已变化");
+                return IntentExecuteResponse.builder()
+                        .status("FAILED")
+                        .message("意图配置已变化，请重新发起预览")
+                        .executedAt(LocalDateTime.now())
+                        .build();
             }
 
-            return IntentExecuteResponse.builder()
+            Optional<ToolExecutor> toolOpt = toolRegistry.getExecutor(boundToolName);
+            if (toolOpt.isEmpty()) {
+                previewTokenService.resolveClaim(confirmToken, claimId, false,
+                        "未找到绑定工具: " + boundToolName);
+                return IntentExecuteResponse.builder()
+                        .status("FAILED")
+                        .message("绑定工具不可用，请重新发起预览")
+                        .executedAt(LocalDateTime.now())
+                        .build();
+            }
+            ToolExecutor tool = toolOpt.get();
+            if (!token.getDescriptorVersion().equals(tool.getVersion())) {
+                previewTokenService.resolveClaim(confirmToken, claimId, false,
+                        "工具版本已变化");
+                return IntentExecuteResponse.builder()
+                        .status("FAILED")
+                        .message("工具版本已变化，请重新发起预览")
+                        .executedAt(LocalDateTime.now())
+                        .build();
+            }
+
+            Map<String, Object> context = claimResult.getParameters() != null
+                    ? new HashMap<>(claimResult.getParameters()) : new HashMap<>();
+            // Identity and authorization are re-established from the trusted path/JWT. The token
+            // deliberately does not persist the original role, so current JWT role is rechecked by
+            // ToolDispatch/RBAC instead of accepting any client parameter as authority.
+            for (String reservedKey : List.of(
+                    "factoryId", "factory_id", "tenantId", "tenant_id",
+                    "userId", "user_id", "userRole", "role",
+                    "permissions", "scopes", "principal", "confirmed")) {
+                context.remove(reservedKey);
+            }
+            context.put("factoryId", token.getFactoryId());
+            context.put("factory_id", token.getFactoryId());
+            context.put("userId", token.getUserId());
+            context.put("user_id", token.getUserId());
+            context.put("userRole", userRole);
+            context.put("role", userRole);
+            context.put("confirmed", true);
+
+            IntentExecuteRequest execRequest = IntentExecuteRequest.builder()
+                    .userInput("确认执行: " + intentCode)
+                    .intentCode(intentCode)
+                    .context(context)
+                    .build();
+
+            IntentExecuteResponse response = toolDispatchService.executeWithTool(
+                    tool, factoryId, execRequest, intentConfig, userId, userRole, null);
+            boolean toolSucceeded = response != null
+                    && ("SUCCESS".equals(response.getStatus())
+                        || "COMPLETED".equals(response.getStatus()));
+            String resolution = response == null
+                    ? "工具未返回执行结果"
+                    : (response.getMessage() != null ? response.getMessage() : response.getStatus());
+            boolean resolved = previewTokenService.resolveClaim(
+                    confirmToken, claimId, toolSucceeded, resolution);
+            if (!resolved) {
+                log.error("确认状态完成失败: tokenFingerprint={}, claimFingerprint={}",
+                        tokenFingerprint,
+                        com.cretas.aims.ai.tool.gateway.ToolCommandDigest.tokenFingerprint(claimId));
+                return IntentExecuteResponse.builder()
+                        .status("FAILED")
+                        .message("执行结果状态记录失败，请勿重复提交并联系管理员")
+                        .executedAt(LocalDateTime.now())
+                        .build();
+            }
+            return response != null ? response : IntentExecuteResponse.builder()
                     .status("FAILED")
-                    .message("未找到工具: " + intentCode)
+                    .message("工具未返回执行结果")
                     .executedAt(LocalDateTime.now())
                     .build();
 
         } catch (Exception e) {
-            log.error("确认执行失败: confirmToken={}, error={}", confirmToken, e.getMessage(), e);
+            try {
+                previewTokenService.resolveClaim(confirmToken, claimId, false,
+                        "执行异常: " + com.cretas.aims.util.ErrorSanitizer.sanitize(e));
+            } catch (Exception resolutionError) {
+                log.error("确认失败状态写入异常: tokenFingerprint={}, error={}",
+                        tokenFingerprint, resolutionError.getMessage());
+            }
+            log.error("确认执行失败: tokenFingerprint={}, error={}",
+                    tokenFingerprint, e.getMessage(), e);
             return IntentExecuteResponse.builder()
                     .status("FAILED")
                     .message("执行失败: " + com.cretas.aims.util.ErrorSanitizer.sanitize(e))

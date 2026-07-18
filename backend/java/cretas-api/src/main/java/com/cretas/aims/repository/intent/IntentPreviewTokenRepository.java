@@ -1,5 +1,6 @@
 package com.cretas.aims.repository.intent;
 
+import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
 import com.cretas.aims.entity.intent.IntentPreviewToken;
 import com.cretas.aims.entity.intent.IntentPreviewToken.TokenStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -27,10 +28,80 @@ public interface IntentPreviewTokenRepository extends JpaRepository<IntentPrevie
      */
     Optional<IntentPreviewToken> findByToken(String token);
 
+    Optional<IntentPreviewToken> findByTokenAndClaimIdAndStatus(
+            String token, String claimId, TokenStatus status);
+
     /**
      * 根据令牌值和状态查找
      */
     Optional<IntentPreviewToken> findByTokenAndStatus(String token, TokenStatus status);
+
+    /**
+     * Atomically acquires the only execution lease for a confirmation token.
+     *
+     * <p>The expected digest is recomputed by the service from persisted bindings before this
+     * update. Factory, tenant, user, status and expiry remain database predicates so a stale read
+     * or concurrent request cannot bypass them.</p>
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE IntentPreviewToken t SET t.status = :executingStatus, " +
+           "t.claimId = :claimId, t.claimedAt = :claimedAt " +
+           "WHERE t.token = :token AND t.factoryId = :factoryId AND t.tenantId = :tenantId " +
+           "AND t.userId = :userId AND t.commandDigest = :expectedCommandDigest " +
+           "AND t.parametersHash = :expectedParametersHash AND t.toolName = :expectedToolName " +
+           "AND t.descriptorVersion = :expectedDescriptorVersion AND t.executionMode = :expectedMode " +
+           "AND t.status = :pendingStatus AND t.expiresAt > :now")
+    int claimForExecution(@Param("token") String token,
+                          @Param("factoryId") String factoryId,
+                          @Param("tenantId") String tenantId,
+                          @Param("userId") Long userId,
+                          @Param("expectedCommandDigest") String expectedCommandDigest,
+                          @Param("expectedParametersHash") String expectedParametersHash,
+                          @Param("expectedToolName") String expectedToolName,
+                          @Param("expectedDescriptorVersion") String expectedDescriptorVersion,
+                          @Param("expectedMode") ToolExecutionMode expectedMode,
+                          @Param("claimId") String claimId,
+                          @Param("claimedAt") LocalDateTime claimedAt,
+                          @Param("now") LocalDateTime now,
+                          @Param("pendingStatus") TokenStatus pendingStatus,
+                          @Param("executingStatus") TokenStatus executingStatus);
+
+    /** Only the current lease owner can resolve an executing token. */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE IntentPreviewToken t SET t.status = :resolvedStatus, " +
+           "t.resolvedAt = :resolvedAt, t.resolutionMessage = :message " +
+           "WHERE t.token = :token AND t.claimId = :claimId AND t.status = :executingStatus")
+    int resolveClaim(@Param("token") String token,
+                     @Param("claimId") String claimId,
+                     @Param("executingStatus") TokenStatus executingStatus,
+                     @Param("resolvedStatus") TokenStatus resolvedStatus,
+                     @Param("resolvedAt") LocalDateTime resolvedAt,
+                     @Param("message") String message);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE IntentPreviewToken t SET t.status = :expiredStatus, " +
+           "t.resolvedAt = :now, t.resolutionMessage = '令牌已过期' " +
+           "WHERE t.token = :token AND t.factoryId = :factoryId AND t.userId = :userId " +
+           "AND t.status = :pendingStatus AND t.expiresAt <= :now")
+    int expirePendingToken(@Param("token") String token,
+                           @Param("factoryId") String factoryId,
+                           @Param("userId") Long userId,
+                           @Param("now") LocalDateTime now,
+                           @Param("pendingStatus") TokenStatus pendingStatus,
+                           @Param("expiredStatus") TokenStatus expiredStatus);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE IntentPreviewToken t SET t.status = :cancelledStatus, " +
+           "t.resolvedAt = :now, t.resolutionMessage = :reason " +
+           "WHERE t.token = :token AND t.factoryId = :factoryId " +
+           "AND t.userId = :userId AND t.status = :pendingStatus")
+    int cancelPendingToken(@Param("token") String token,
+                           @Param("factoryId") String factoryId,
+                           @Param("userId") Long userId,
+                           @Param("reason") String reason,
+                           @Param("now") LocalDateTime now,
+                           @Param("pendingStatus") TokenStatus pendingStatus,
+                           @Param("cancelledStatus") TokenStatus cancelledStatus);
 
     /**
      * 查找用户的待确认令牌

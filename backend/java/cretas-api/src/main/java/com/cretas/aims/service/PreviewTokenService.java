@@ -1,7 +1,10 @@
 package com.cretas.aims.service;
 
+import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
 import com.cretas.aims.entity.intent.IntentPreviewToken;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 
@@ -20,6 +23,11 @@ import java.util.Optional;
 public interface PreviewTokenService {
 
     /**
+     * Issue a confirmation token whose execution command is immutable and server-bound.
+     */
+    IntentPreviewToken createBoundToken(BoundTokenRequest request);
+
+    /**
      * 创建预览令牌 (Try 阶段)
      *
      * @param factoryId 工厂ID
@@ -36,6 +44,7 @@ public interface PreviewTokenService {
      * @param expiresInSeconds 过期时间 (秒)
      * @return 创建的令牌实体
      */
+    @Deprecated(forRemoval = false)
     IntentPreviewToken createToken(String factoryId, Long userId, String username,
                                     String intentCode, String intentName,
                                     String entityType, String entityId, String operation,
@@ -47,6 +56,7 @@ public interface PreviewTokenService {
     /**
      * 创建预览令牌 (默认5分钟过期)
      */
+    @Deprecated(forRemoval = false)
     default IntentPreviewToken createToken(String factoryId, Long userId, String username,
                                             String intentCode, String intentName,
                                             String entityType, String entityId, String operation,
@@ -81,7 +91,27 @@ public interface PreviewTokenService {
      * @param userId 执行用户ID
      * @return 确认结果，包含执行状态和消息
      */
-    ConfirmResult confirmToken(String token, Long userId);
+    @Deprecated(forRemoval = false)
+    default ConfirmResult confirmToken(String token, Long userId) {
+        return ConfirmResult.failure("旧版预览令牌未绑定执行命令，禁止确认执行");
+    }
+
+    /** Atomically moves one matching bound token from PENDING to EXECUTING. */
+    ClaimResult claimToken(String token, String factoryId, Long userId);
+
+    /**
+     * Claim with an optional caller-supplied proof digest. Gateway ConfirmationProof callers must
+     * supply it; the compatibility HTTP bearer-token endpoint currently passes {@code null} and
+     * still receives full persisted-command integrity validation.
+     */
+    ClaimResult claimToken(String token, String factoryId, Long userId,
+                           String expectedCommandDigest);
+
+    /**
+     * Resolves an execution lease. Success must be written only after the real Tool response is
+     * successful; failures are terminal in this phase and are not retried automatically.
+     */
+    boolean resolveClaim(String token, String claimId, boolean success, String message);
 
     /**
      * 取消令牌 (Cancel 阶段)
@@ -91,7 +121,13 @@ public interface PreviewTokenService {
      * @param reason 取消原因
      * @return 是否成功取消
      */
-    boolean cancelToken(String token, Long userId, String reason);
+    boolean cancelToken(String token, String factoryId, Long userId, String reason);
+
+    /** Legacy cancellation lacks the trusted tenant path and therefore fails closed. */
+    @Deprecated(forRemoval = false)
+    default boolean cancelToken(String token, Long userId, String reason) {
+        return false;
+    }
 
     /**
      * 获取令牌的预览数据
@@ -115,6 +151,64 @@ public interface PreviewTokenService {
      * @return 删除的记录数
      */
     int cleanupOldTokens(int daysToKeep);
+
+    /** Explicit issuance contract for tokens that the new confirm path is allowed to execute. */
+    record BoundTokenRequest(
+            String factoryId,
+            Long userId,
+            String username,
+            String intentCode,
+            String intentName,
+            String toolName,
+            String descriptorVersion,
+            ToolExecutionMode executionMode,
+            String entityType,
+            String entityId,
+            String operation,
+            Map<String, Object> parameters,
+            Map<String, Object> currentValues,
+            Map<String, Object> newValues,
+            int expiresInSeconds) {
+
+        public BoundTokenRequest {
+            parameters = immutableCopy(parameters);
+            currentValues = immutableCopy(currentValues);
+            newValues = immutableCopy(newValues);
+        }
+
+        private static Map<String, Object> immutableCopy(Map<String, Object> source) {
+            return source == null
+                    ? Collections.emptyMap()
+                    : Collections.unmodifiableMap(new LinkedHashMap<>(source));
+        }
+    }
+
+    @lombok.Data
+    @lombok.Builder
+    @lombok.NoArgsConstructor
+    @lombok.AllArgsConstructor
+    class ClaimResult {
+        private boolean success;
+        private String message;
+        private IntentPreviewToken token;
+        private String claimId;
+        private Map<String, Object> parameters;
+
+        public static ClaimResult success(IntentPreviewToken token, String claimId,
+                                          Map<String, Object> parameters) {
+            return ClaimResult.builder()
+                    .success(true)
+                    .message("确认请求已认领，等待执行")
+                    .token(token)
+                    .claimId(claimId)
+                    .parameters(parameters)
+                    .build();
+        }
+
+        public static ClaimResult failure(String message) {
+            return ClaimResult.builder().success(false).message(message).build();
+        }
+    }
 
     /**
      * 确认结果
