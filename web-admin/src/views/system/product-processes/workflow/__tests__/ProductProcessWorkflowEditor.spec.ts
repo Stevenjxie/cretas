@@ -387,11 +387,43 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
   it('binds a semi-finished SKU on both the port and material Cell', async () => {
     const vm = await mountEditor();
     const { process, port, material } = addSecondOutput(vm);
+    const renderedMaterialData = material.data;
 
     await vm.selectOutputSku(process.id, port.id, 'SKU-SEMI');
 
     expect(port).toMatchObject({ skuId: 'SKU-SEMI', materialKind: 'SEMI_FINISHED' });
+    expect(material.data).toBe(renderedMaterialData);
     expect(material.data).toMatchObject({ skuId: 'SKU-SEMI', kind: 'SEMI_FINISHED', bound: true });
+  });
+
+  it('refreshes the connected finished Cell identity when its process output SKU changes', async () => {
+    const vm = await mountEditor();
+    vm.openAddProcess('raw');
+    vm.selectedWorkProcessId = 'WP-PACK';
+    vm.confirmAddProcess();
+    const process = vm.flowNodes.find((node) => node.data.kind === 'PROCESS');
+    const port = process?.data.ports?.find((candidate) => candidate.direction === 'OUTPUT');
+    const material = vm.flowNodes.find((node) => node.id === port?.materialNodeId);
+    if (!process || !port || !material) throw new Error('Expected primary finished output');
+    const renderedMaterialData = material.data;
+
+    await vm.selectOutputSku(process.id, port.id, 'SKU-FIN-800');
+
+    expect(port).toMatchObject({
+      skuId: 'SKU-FIN-800',
+      materialName: 'Finished 800g',
+      materialKind: 'FINISHED_GOOD',
+      unit: '盒',
+    });
+    expect(material.data).toBe(renderedMaterialData);
+    expect(renderedMaterialData).toMatchObject({
+      name: 'Finished 800g',
+      skuId: 'SKU-FIN-800',
+      skuCode: 'SKU-FIN-800',
+      kind: 'FINISHED_GOOD',
+      baseUnit: '盒',
+      bound: true,
+    });
   });
 
   it.each(['SKU-FINISHED', 'SKU-CONTRACT', 'SKU-CUSTOMER'])(
