@@ -1,6 +1,7 @@
 package com.cretas.aims.ai.tool.impl.restaurant;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.repository.ProductTypeRepository;
 import lombok.extern.slf4j.Slf4j;
@@ -67,6 +68,45 @@ public class RestaurantDishDeleteTool extends AbstractBusinessTool {
     @Override
     public boolean requiresPermission() {
         return true;
+    }
+
+    @Override
+    public ToolExecutor.ActionType getActionType() {
+        return ToolExecutor.ActionType.UPDATE;
+    }
+
+    @Override
+    public ToolExecutor.RiskLevel getRiskLevel() {
+        return ToolExecutor.RiskLevel.HIGH;
+    }
+
+    @Override
+    public boolean supportsPreview() {
+        return false;
+    }
+
+    /**
+     * Legacy role-only callers cannot prove the permission-code contract, so they must not
+     * advertise or execute this tool. The central RBAC path uses {@link #getRequiredPermissions()}.
+     */
+    @Override
+    public boolean hasPermission(String userRole) {
+        return false;
+    }
+
+    @Override
+    public Set<String> getRequiredPermissions() {
+        return Set.of("restaurant:read_write");
+    }
+
+    @Override
+    public String getVersion() {
+        return "2.0.0";
+    }
+
+    @Override
+    public Set<String> getDomainTags() {
+        return Set.of("restaurant", "menu", "product-master");
     }
 
     @Override

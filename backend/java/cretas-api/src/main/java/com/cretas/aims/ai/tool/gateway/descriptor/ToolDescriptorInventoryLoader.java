@@ -202,11 +202,16 @@ public final class ToolDescriptorInventoryLoader {
 
     private void validateGovernance(ToolDescriptorInventoryEntry entry) {
         if (P0_TOOL_NAMES.contains(entry.toolName())) {
-            if (entry.governanceStatus() != ToolGovernanceStatus.REVIEW_REQUIRED_P0) {
-                throw new IllegalArgumentException(
-                        "P0 tool must remain REVIEW_REQUIRED_P0: " + entry.toolName());
+            if (entry.governanceStatus() == ToolGovernanceStatus.REVIEW_REQUIRED_P0) {
+                return;
             }
-            return;
+            if (entry.governanceStatus() == ToolGovernanceStatus.APPROVED) {
+                validateExplicitApproval(entry);
+                return;
+            }
+            throw new IllegalArgumentException(
+                    "P0 tool must be REVIEW_REQUIRED_P0 or fully explicit APPROVED: "
+                            + entry.toolName());
         }
         if (entry.provenance() == DescriptorProvenance.LEGACY_INFERRED
                 && entry.governanceStatus() != ToolGovernanceStatus.REVIEW_REQUIRED) {
@@ -216,6 +221,30 @@ public final class ToolDescriptorInventoryLoader {
         if (entry.governanceStatus() == ToolGovernanceStatus.REVIEW_REQUIRED_P0) {
             throw new IllegalArgumentException(
                     "only the fixed P0 set may use REVIEW_REQUIRED_P0: " + entry.toolName());
+        }
+        if (entry.governanceStatus() == ToolGovernanceStatus.APPROVED) {
+            validateExplicitApproval(entry);
+        }
+    }
+
+    private void validateExplicitApproval(ToolDescriptorInventoryEntry entry) {
+        ToolDescriptorOverrideFlags flags = entry.overrideFlags();
+        boolean completeSourceMetadata = flags.actionType()
+                && flags.riskLevel()
+                && flags.supportsPreview()
+                && flags.requiresPermission()
+                && flags.hasPermission()
+                && flags.requiredPermissions()
+                && flags.version()
+                && flags.domainTags();
+        if (entry.provenance() != DescriptorProvenance.EXPLICIT
+                || !completeSourceMetadata
+                || !entry.requiresPermission()
+                || entry.requiredPermissions().isEmpty()
+                || entry.domainTags().isEmpty()) {
+            throw new IllegalArgumentException(
+                    "APPROVED tool requires complete explicit source metadata and permission codes: "
+                            + entry.toolName());
         }
     }
 
