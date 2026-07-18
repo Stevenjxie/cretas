@@ -3,14 +3,18 @@ package com.cretas.aims.mcp;
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.ai.tool.WriteGuardService;
 import com.cretas.aims.mcp.MCPProtocol.*;
+import com.cretas.aims.util.ErrorSanitizer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -23,8 +27,10 @@ import java.util.stream.Collectors;
  *   <li>{@code tools/call} — 根据工具名称和参数执行工具</li>
  * </ul>
  *
- * <p>认证方式：通过 {@code X-MCP-API-Key} 请求头传递 API Key，
- * 由 {@code cretas.mcp.api-key} 配置项控制。若配置项为空则不校验。
+ * <p>安全边界：端点仅在 {@code cretas.mcp.enabled=true} 时注册，且启用时必须配置
+ * API Key、精确 Tool allowlist 与服务端 Principal。MCP Phase 0 只暴露 allowlist 中的
+ * READ/ANALYZE 工具；调用者提交的 context 不会进入工具执行上下文，tenant/user/role
+ * 均由服务端配置注入。
  *
  * @author Cretas Team
  * @version 1.0.0
@@ -33,19 +39,48 @@ import java.util.stream.Collectors;
 @Slf4j
 @RestController
 @RequestMapping("/api/mcp")
+@ConditionalOnProperty(prefix = "cretas.mcp", name = "enabled", havingValue = "true")
 public class MCPServerAdapter {
 
-    @Autowired
-    private ToolRegistry toolRegistry;
+    private static final Set<String> MCP_IDENTITY_FIELDS = Set.of(
+            "factoryid", "tenantid", "userid", "userrole");
 
-    @Autowired
-    private ObjectMapper objectMapper;
+    private final ToolRegistry toolRegistry;
+    private final ObjectMapper objectMapper;
+    private final WriteGuardService writeGuardService;
+    private final String apiKey;
+    private final String principalFactoryId;
+    private final Long principalUserId;
+    private final String principalUserRole;
+    private final Set<String> allowedTools;
 
-    /**
-     * MCP API Key，为空则不启用认证
-     */
-    @Value("${cretas.mcp.api-key:}")
-    private String apiKey;
+    public MCPServerAdapter(
+            ToolRegistry toolRegistry,
+            ObjectMapper objectMapper,
+            WriteGuardService writeGuardService,
+            @Value("${cretas.mcp.api-key:}") String apiKey,
+            @Value("${cretas.mcp.principal.factory-id:}") String principalFactoryId,
+            @Value("${cretas.mcp.principal.user-id:}") String principalUserId,
+            @Value("${cretas.mcp.principal.user-role:}") String principalUserRole,
+            @Value("${cretas.mcp.allowed-tools:}") String allowedTools) {
+        this.toolRegistry = Objects.requireNonNull(toolRegistry, "toolRegistry");
+        this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
+        this.writeGuardService = Objects.requireNonNull(writeGuardService, "writeGuardService");
+        this.apiKey = requireConfigured(apiKey, "cretas.mcp.api-key", false);
+        this.principalFactoryId = requireConfigured(
+                principalFactoryId, "cretas.mcp.principal.factory-id", true);
+        String configuredUserId = requireConfigured(
+                principalUserId, "cretas.mcp.principal.user-id", true);
+        this.principalUserRole = requireConfigured(
+                principalUserRole, "cretas.mcp.principal.user-role", true);
+        this.allowedTools = parseAllowedTools(allowedTools);
+        try {
+            this.principalUserId = Long.valueOf(configuredUserId);
+        } catch (NumberFormatException e) {
+            throw new IllegalStateException(
+                    "MCP is enabled but cretas.mcp.principal.user-id is not a valid Long", e);
+        }
+    }
 
     /**
      * tools/list — 列出所有已注册的工具定义
@@ -92,6 +127,11 @@ public class MCPServerAdapter {
                         Optional<ToolExecutor> executor = toolRegistry.getExecutor(name);
                         if (executor.isEmpty()) return null;
                         ToolExecutor exec = executor.get();
+                        if (!allowedTools.contains(name)
+                                || !isMcpReadOnlyTool(exec)
+                                || !toolRegistry.isToolEnabledForFactory(principalFactoryId, name)) {
+                            return null;
+                        }
                         return MCPToolDefinition.builder()
                                 .name(exec.getToolName())
                                 .description(exec.getDescription())
@@ -110,7 +150,8 @@ public class MCPServerAdapter {
         } catch (Exception e) {
             log.error("MCP tools/list 执行失败", e);
             return ResponseEntity.internalServerError()
-                    .body(MCPResponse.error(requestId, MCPProtocol.ERROR_INTERNAL, e.getMessage()));
+                    .body(MCPResponse.error(requestId, MCPProtocol.ERROR_INTERNAL,
+                            ErrorSanitizer.sanitize(e)));
         }
     }
 
@@ -125,8 +166,7 @@ public class MCPServerAdapter {
      *   "method": "tools/call",
      *   "params": {
      *     "name": "material_batch_query",
-     *     "arguments": { "batchNumber": "B001" },
-     *     "context": { "factoryId": "F001", "userId": 22 }
+     *     "arguments": { "batchNumber": "B001" }
      *   }
      * }
      * </pre>
@@ -155,9 +195,8 @@ public class MCPServerAdapter {
         }
 
         Map<String, Object> params = request.getParams();
-        String toolName = (String) params.get("name");
-
-        if (toolName == null || toolName.isBlank()) {
+        Object rawToolName = params.get("name");
+        if (!(rawToolName instanceof String toolName) || toolName.isBlank()) {
             return ResponseEntity.badRequest()
                     .body(MCPResponse.error(requestId, MCPProtocol.ERROR_INVALID_PARAMS, "Missing tool name in params.name"));
         }
@@ -174,15 +213,39 @@ public class MCPServerAdapter {
         try {
             ToolExecutor executor = executorOpt.get();
 
+            if (!allowedTools.contains(toolName)) {
+                log.warn("MCP tools/call: 工具不在显式 allowlist - tool={}", toolName);
+                return ResponseEntity.status(403)
+                        .body(MCPResponse.error(requestId, MCPProtocol.ERROR_INVALID_REQUEST,
+                                "Tool is not allowed for the configured MCP server"));
+            }
+
+            if (!toolRegistry.isToolEnabledForFactory(principalFactoryId, toolName)) {
+                log.warn("MCP tools/call: 工具未对服务端工厂启用 - tool={}, factoryId={}",
+                        toolName, principalFactoryId);
+                return ResponseEntity.status(403)
+                        .body(MCPResponse.error(requestId, MCPProtocol.ERROR_INVALID_REQUEST,
+                                "Tool is disabled for the configured MCP principal"));
+            }
+
+            // Gateway 落地前 MCP 严格只读；禁止通过 API Key 直接触发写操作、通知或产物生成。
+            if (!isMcpReadOnlyTool(executor)) {
+                log.warn("MCP tools/call: 拒绝非只读工具 - tool={}, actionType={}",
+                        toolName, executor.getActionType());
+                return ResponseEntity.status(403)
+                        .body(MCPResponse.error(requestId, MCPProtocol.ERROR_INVALID_REQUEST,
+                                "MCP Phase 0 only permits READ and ANALYZE tools"));
+            }
+
             // 构建 ToolCall 对象
-            Object arguments = params.get("arguments");
             String argumentsJson;
-            if (arguments instanceof String) {
-                argumentsJson = (String) arguments;
-            } else if (arguments != null) {
-                argumentsJson = objectMapper.writeValueAsString(arguments);
-            } else {
-                argumentsJson = "{}";
+            try {
+                argumentsJson = serializeValidatedArguments(params.get("arguments"));
+            } catch (IllegalArgumentException e) {
+                log.warn("MCP tools/call: 参数拒绝 - tool={}, reason={}", toolName, e.getMessage());
+                return ResponseEntity.badRequest()
+                        .body(MCPResponse.error(requestId, MCPProtocol.ERROR_INVALID_PARAMS,
+                                e.getMessage()));
             }
 
             ToolCall toolCall = ToolCall.of(
@@ -191,24 +254,16 @@ public class MCPServerAdapter {
                     argumentsJson
             );
 
-            // 构建执行上下文
-            @SuppressWarnings("unchecked")
-            Map<String, Object> context = params.containsKey("context")
-                    ? (Map<String, Object>) params.get("context")
-                    : new HashMap<>();
+            // 调用者 context 不是身份凭证，必须完全忽略；执行身份只来自服务端配置。
+            if (params.containsKey("context")) {
+                log.debug("MCP tools/call: 忽略调用者提交的 context, tool={}", toolName);
+            }
+            Map<String, Object> context = buildServerPrincipalContext();
 
             // 执行工具
-            log.info("MCP tools/call: 执行工具 {} (args={})", toolName, argumentsJson);
+            log.info("MCP tools/call: 执行工具 {} (factoryId={}, userId={})",
+                    toolName, principalFactoryId, principalUserId);
             String resultJson = executor.execute(toolCall, context);
-
-            // 解析结果为 Object 以便正确序列化
-            Object resultObj;
-            try {
-                resultObj = objectMapper.readValue(resultJson, Map.class);
-            } catch (Exception e) {
-                // 如果不是有效 JSON，包装为文本结果
-                resultObj = Map.of("content", resultJson);
-            }
 
             Map<String, Object> resultWrapper = new LinkedHashMap<>();
             resultWrapper.put("content", List.of(Map.of("type", "text", "text", resultJson)));
@@ -219,8 +274,9 @@ public class MCPServerAdapter {
         } catch (Exception e) {
             log.error("MCP tools/call 执行失败: tool={}", toolName, e);
 
+            String safeMessage = ErrorSanitizer.sanitize(e);
             Map<String, Object> errorResult = new LinkedHashMap<>();
-            errorResult.put("content", List.of(Map.of("type", "text", "text", e.getMessage())));
+            errorResult.put("content", List.of(Map.of("type", "text", "text", safeMessage)));
             errorResult.put("isError", true);
 
             return ResponseEntity.ok(MCPResponse.success(requestId, errorResult));
@@ -234,10 +290,75 @@ public class MCPServerAdapter {
      * @return true 表示认证通过
      */
     private boolean authenticateRequest(String providedKey) {
-        // 未配置 API Key 则不启用认证
-        if (apiKey == null || apiKey.isBlank()) {
-            return true;
+        if (providedKey == null || providedKey.isBlank()) return false;
+        return MessageDigest.isEqual(
+                apiKey.getBytes(StandardCharsets.UTF_8),
+                providedKey.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private boolean isMcpReadOnlyTool(ToolExecutor executor) {
+        if (writeGuardService.isWriteTool(executor)) return false;
+        ToolExecutor.ActionType actionType = executor.getActionType();
+        return actionType == ToolExecutor.ActionType.READ
+                || actionType == ToolExecutor.ActionType.ANALYZE;
+    }
+
+    private Map<String, Object> buildServerPrincipalContext() {
+        Map<String, Object> context = new HashMap<>();
+        context.put("factoryId", principalFactoryId);
+        context.put("userId", principalUserId);
+        context.put("userRole", principalUserRole);
+        context.put("source", "mcp");
+        return context;
+    }
+
+    private String serializeValidatedArguments(Object arguments) {
+        if (arguments == null) return "{}";
+        Object normalized = arguments;
+        try {
+            if (arguments instanceof String stringArguments) {
+                normalized = objectMapper.readValue(stringArguments, Object.class);
+            }
+            rejectCallerIdentityFields(normalized);
+            return objectMapper.writeValueAsString(normalized);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalArgumentException("MCP arguments must be valid JSON", e);
         }
-        return apiKey.equals(providedKey);
+    }
+
+    private void rejectCallerIdentityFields(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                String key = String.valueOf(entry.getKey());
+                String normalizedKey = key.replaceAll("[^A-Za-z0-9]", "").toLowerCase(Locale.ROOT);
+                if (MCP_IDENTITY_FIELDS.contains(normalizedKey)) {
+                    throw new IllegalArgumentException(
+                            "Caller-supplied identity field is not allowed: " + key);
+                }
+                rejectCallerIdentityFields(entry.getValue());
+            }
+        } else if (value instanceof Collection<?> collection) {
+            collection.forEach(this::rejectCallerIdentityFields);
+        }
+    }
+
+    private static String requireConfigured(String value, String propertyName, boolean trim) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException("MCP is enabled but " + propertyName + " is not configured");
+        }
+        return trim ? value.trim() : value;
+    }
+
+    private static Set<String> parseAllowedTools(String value) {
+        String configured = requireConfigured(value, "cretas.mcp.allowed-tools", true);
+        Set<String> tools = Arrays.stream(configured.split(","))
+                .map(String::trim)
+                .filter(name -> !name.isEmpty())
+                .collect(Collectors.toUnmodifiableSet());
+        if (tools.isEmpty()) {
+            throw new IllegalStateException(
+                    "MCP is enabled but cretas.mcp.allowed-tools contains no tool names");
+        }
+        return tools;
     }
 }

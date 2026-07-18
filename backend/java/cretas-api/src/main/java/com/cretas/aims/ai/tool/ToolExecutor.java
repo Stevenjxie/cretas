@@ -132,7 +132,8 @@ public interface ToolExecutor {
     /**
      * 预览执行结果（不实际执行操作）
      *
-     * 默认实现委托到 execute()，子类可覆盖以提供只读预览。
+     * 默认实现必须 fail closed。支持预览的工具需要显式覆盖本方法，避免“预览”请求
+     * 退化为真实 {@link #execute(ToolCall, Map)} 调用。
      *
      * @param toolCall LLM 返回的工具调用对象
      * @param context 执行上下文（工厂ID、用户ID等）
@@ -140,7 +141,8 @@ public interface ToolExecutor {
      * @throws Exception 预览失败时抛出异常
      */
     default String preview(ToolCall toolCall, Map<String, Object> context) throws Exception {
-        return execute(toolCall, context);
+        throw new UnsupportedOperationException(
+                "Tool '" + getToolName() + "' does not implement a safe preview");
     }
 
     // ==================== Governance Metadata (default methods) ====================

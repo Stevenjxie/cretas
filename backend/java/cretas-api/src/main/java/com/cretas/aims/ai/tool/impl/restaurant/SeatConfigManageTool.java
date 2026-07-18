@@ -22,8 +22,6 @@ public class SeatConfigManageTool extends AbstractBusinessTool {
             "required", List.of("store_id", "tables"));
     }
     @Override protected List<String> getRequiredParameters() { return List.of("store_id", "tables"); }
-    @Override public boolean supportsPreview() { return true; }
-
     @Override
     @SuppressWarnings("unchecked")
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> ctx) throws Exception {
