@@ -122,6 +122,9 @@ public final class RuntimeToolDescriptorRegistry {
         if (!inventory.requiredPermissions().equals(descriptor.requiredPermissions())) {
             throw drift(runtime.toolName(), "requiredPermissions");
         }
+        if (!inventory.allowedRoles().equals(descriptor.allowedRoles())) {
+            throw drift(runtime.toolName(), "allowedRoles");
+        }
         if (!inventory.requiresPermission()) {
             throw drift(runtime.toolName(), "requiresPermission");
         }
@@ -150,7 +153,8 @@ public final class RuntimeToolDescriptorRegistry {
                 || inventory.governanceStatus() != ToolGovernanceStatus.APPROVED
                 || !completeSourceMetadata
                 || !inventory.requiresPermission()
-                || inventory.requiredPermissions().isEmpty()
+                || (inventory.requiredPermissions().isEmpty()
+                        && inventory.allowedRoles().isEmpty())
                 || inventory.domainTags().isEmpty()) {
             throw drift(inventory.toolName(), "explicit source approval");
         }

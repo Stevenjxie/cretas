@@ -7,6 +7,7 @@ import com.cretas.aims.ai.tool.gateway.ToolExecutionLedgerService.Reservation;
 import com.cretas.aims.ai.tool.gateway.ToolPrincipalPolicy.RehydratedPrincipal;
 import com.cretas.aims.ai.tool.gateway.ToolRuntimeRegistry.ResolvedTool;
 import com.cretas.aims.entity.ai.ToolExecutionIdempotencyRecord;
+import com.cretas.aims.entity.enums.FactoryType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -28,6 +29,7 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
@@ -64,7 +66,8 @@ class DefaultToolExecutionGatewayTest {
                 "userId", 42L, "userRole", "factory_super_admin"));
         descriptor = new ToolDescriptor(
                 "user_disable", ToolExecutor.ActionType.UPDATE, ToolExecutor.RiskLevel.HIGH,
-                Set.of("hr:read_write"), Set.of("user", "hr", "identity"), "2.0.0", false,
+                Set.of("hr:read_write"), Set.of(), Set.of(FactoryType.FACTORY),
+                Set.of("user", "hr", "identity"), "2.0.0", false,
                 ConfirmationPolicy.REQUIRED_FOR_EXECUTION, ApprovalPolicy.NOT_REQUIRED,
                 IdempotencyPolicy.REQUIRED_FOR_EXECUTION, DataClassification.RESTRICTED,
                 Set.of(ToolExecutionSource.AI_CHAT), ToolEgressPolicy.denyAll(),
@@ -101,6 +104,90 @@ class DefaultToolExecutionGatewayTest {
         verify(ledgerService).completeExecution(
                 record.getId(), "audit-1", ToolExecutionIdempotencyRecord.State.SUCCEEDED,
                 ToolExecutionStatus.SUCCEEDED, GatewayResultCode.TOOL_SUCCEEDED);
+    }
+
+    @Test
+    void previewUsesOnlyPreviewWithTrustedContextAndNoExecutionSecurityState() throws Exception {
+        descriptor = previewDescriptor();
+        ToolExecutionCommand command = previewCommand();
+        stubPolicy(command);
+        when(executor.preview(any(ToolCall.class), any())).thenReturn(
+                "{\"success\":true,\"data\":{\"draft\":true}}");
+
+        ToolExecutionResult result = gateway.execute(command);
+
+        assertThat(result.status()).isEqualTo(ToolExecutionStatus.SUCCEEDED);
+        assertThat(result.payload().path("data").path("draft").asBoolean()).isTrue();
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> contextCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(executor).preview(any(ToolCall.class), contextCaptor.capture());
+        assertThat(contextCaptor.getValue())
+                .containsEntry("factoryId", "F-1")
+                .containsEntry("userId", 42L)
+                .doesNotContainKey("parameters");
+        verify(executor, never()).execute(any(), any());
+        verify(confirmationLease, never()).claim(any(), any(), anyString());
+        verify(confirmationLease, never()).resolve(any(), anyBoolean());
+        verify(ledgerService, never()).reserve(any());
+        verify(ledgerService, never()).bindSecurityEvidence(
+                anyString(), anyString(), anyString(), anyString());
+        verify(ledgerService).completeAudit(
+                "audit-1",
+                ToolExecutionStatus.SUCCEEDED,
+                GatewayResultCode.TOOL_PREVIEW_SUCCEEDED);
+    }
+
+    @Test
+    void previewFalseFailsClosedWithoutExecuteOrReservation() throws Exception {
+        descriptor = previewDescriptor();
+        ToolExecutionCommand command = previewCommand();
+        stubPolicy(command);
+        when(executor.preview(any(), any())).thenReturn(
+                "{\"success\":false,\"error\":\"safe validation message\"}");
+
+        ToolExecutionResult failed = gateway.execute(command);
+
+        assertThat(failed.status()).isEqualTo(ToolExecutionStatus.FAILED);
+        assertThat(failed.message()).isEqualTo("Tool preview failed");
+        verify(executor, never()).execute(any(), any());
+        verify(ledgerService, never()).reserve(any());
+        verify(confirmationLease, never()).claim(any(), any(), anyString());
+        verify(ledgerService).completeAudit(
+                "audit-1", ToolExecutionStatus.FAILED, GatewayResultCode.TOOL_PREVIEW_FAILED);
+    }
+
+    @Test
+    void previewMalformedResponseFailsClosedWithEmptyPayload() throws Exception {
+        descriptor = previewDescriptor();
+        ToolExecutionCommand command = previewCommand();
+        stubPolicy(command);
+        when(executor.preview(any(), any())).thenReturn("{\"data\":{}}");
+
+        ToolExecutionResult result = gateway.execute(command);
+
+        assertThat(result.status()).isEqualTo(ToolExecutionStatus.FAILED);
+        assertThat(result.payload()).isEmpty();
+        verify(executor, never()).execute(any(), any());
+        verify(ledgerService, never()).reserve(any());
+        verify(ledgerService).completeAudit(
+                "audit-1", ToolExecutionStatus.FAILED, GatewayResultCode.TOOL_PREVIEW_FAILED);
+    }
+
+    @Test
+    void previewExceptionReturnsFixedNonSensitiveFailure() throws Exception {
+        descriptor = previewDescriptor();
+        ToolExecutionCommand command = previewCommand();
+        stubPolicy(command);
+        when(executor.preview(any(), any()))
+                .thenThrow(new IllegalStateException("database secret detail"));
+
+        ToolExecutionResult result = gateway.execute(command);
+
+        assertThat(result.status()).isEqualTo(ToolExecutionStatus.FAILED);
+        assertThat(result.message()).isEqualTo("Tool preview failed");
+        assertThat(result.message()).doesNotContain("secret");
+        verify(executor, never()).execute(any(), any());
+        verify(ledgerService, never()).reserve(any());
     }
 
     @Test
@@ -343,7 +430,7 @@ class DefaultToolExecutionGatewayTest {
                 mismatched.deadline());
         when(principalPolicy.rehydrate(mismatched.principal())).thenReturn(Optional.of(current));
         when(ledgerService.beginAudit(mismatched, currentPrincipal)).thenReturn("audit-2");
-        when(runtimeRegistry.resolve(mismatched, currentPrincipal.permissions()))
+        when(runtimeRegistry.resolve(mismatched, currentPrincipal))
                 .thenReturn(Optional.of(new ResolvedTool(descriptor, executor)));
 
         ToolExecutionResult mismatchResult = gateway.execute(mismatched);
@@ -390,7 +477,7 @@ class DefaultToolExecutionGatewayTest {
         ToolExecutionCommand command = command(ToolExecutionMode.EXECUTE, 7, "idem-1", "token-1");
         when(principalPolicy.rehydrate(command.principal())).thenReturn(Optional.of(current));
         when(ledgerService.beginAudit(command, currentPrincipal)).thenReturn("audit-policy-denied");
-        when(runtimeRegistry.resolve(command, currentPrincipal.permissions()))
+        when(runtimeRegistry.resolve(command, currentPrincipal))
                 .thenReturn(Optional.empty());
 
         ToolExecutionResult result = gateway.execute(command);
@@ -404,7 +491,7 @@ class DefaultToolExecutionGatewayTest {
     private void stubPolicy(ToolExecutionCommand command) {
         when(principalPolicy.rehydrate(command.principal())).thenReturn(Optional.of(current));
         when(ledgerService.beginAudit(command, currentPrincipal)).thenReturn("audit-1");
-        when(runtimeRegistry.resolve(command, currentPrincipal.permissions()))
+        when(runtimeRegistry.resolve(command, currentPrincipal))
                 .thenReturn(Optional.of(new ResolvedTool(descriptor, executor)));
     }
 
@@ -438,6 +525,45 @@ class DefaultToolExecutionGatewayTest {
                         token, digest, Instant.now().plusSeconds(60))),
                 Optional.empty(),
                 Instant.now().plusSeconds(30));
+    }
+
+    private ToolExecutionCommand previewCommand() {
+        return new ToolExecutionCommand(
+                "preview-request-1",
+                "preview-correlation-1",
+                "preview-trace-1",
+                "canvas_work_process_catalog",
+                "1.0.0",
+                JsonNodeFactory.instance.objectNode()
+                        .put("action", "create")
+                        .put("processName", "腌制"),
+                currentPrincipal,
+                ToolExecutionSource.HTTP_CONTROLLER,
+                ToolExecutionMode.PREVIEW,
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Instant.now().plusSeconds(30));
+    }
+
+    private ToolDescriptor previewDescriptor() {
+        return new ToolDescriptor(
+                "canvas_work_process_catalog",
+                ToolExecutor.ActionType.UPDATE,
+                ToolExecutor.RiskLevel.MEDIUM,
+                Set.of(),
+                Set.of("factory_super_admin", "permission_admin"),
+                Set.of(FactoryType.FACTORY, FactoryType.CENTRAL_KITCHEN),
+                Set.of("canvas", "production", "work-process", "master-data"),
+                "1.0.0",
+                true,
+                ConfirmationPolicy.NOT_REQUIRED,
+                ApprovalPolicy.NOT_REQUIRED,
+                IdempotencyPolicy.NOT_REQUIRED,
+                DataClassification.INTERNAL,
+                Set.of(ToolExecutionSource.HTTP_CONTROLLER),
+                ToolEgressPolicy.denyAll(),
+                DescriptorProvenance.EXPLICIT);
     }
 
     private ToolExecutionIdempotencyRecord record(

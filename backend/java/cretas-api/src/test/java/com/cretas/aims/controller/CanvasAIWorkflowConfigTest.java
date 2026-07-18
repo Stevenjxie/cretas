@@ -4,8 +4,16 @@ import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionCommand;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionGateway;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionResult;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionStatus;
 import com.cretas.aims.ai.tool.impl.workprocess.ProductProcessWorkflowConfigTool;
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.dto.user.UserDTO;
+import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.governance.ToolSimilarityService;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
@@ -16,11 +24,13 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.lang.reflect.Field;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -47,13 +57,16 @@ class CanvasAIWorkflowConfigTest {
     private MobileService mobileService;
     @Mock
     private ToolExecutor workflowTool;
+    @Mock
+    private ToolExecutionGateway toolExecutionGateway;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private CanvasAIController controller;
 
     @BeforeEach
     void setUp() {
-        controller = new CanvasAIController(toolRegistry, objectMapper, dashScopeClient, mobileService);
+        controller = new CanvasAIController(
+                toolRegistry, objectMapper, dashScopeClient, mobileService, toolExecutionGateway);
     }
 
     @Test
@@ -133,19 +146,32 @@ class CanvasAIWorkflowConfigTest {
         request.setModuleCode("work_process_catalog");
         request.setMode("autopilot");
         request.setMessage("新增腌制工序");
+        request.setParams(Map.of(
+                "role", "factory_super_admin",
+                "permissions", List.of("*:admin")));
 
-        when(toolRegistry.getExecutor(catalogTool)).thenReturn(Optional.of(workflowTool));
-        when(workflowTool.supportsPreview()).thenReturn(true);
-        when(workflowTool.preview(any(ToolCall.class), anyMap())).thenReturn(objectMapper.writeValueAsString(Map.of(
-                "success", true,
-                "data", Map.of("action", "create", "processName", "腌制工序", "message", "已生成预览"))));
+        stubAuthenticated(FactoryUserRole.permission_admin);
+        when(toolExecutionGateway.execute(any())).thenReturn(gatewayResult(
+                ToolExecutionStatus.SUCCEEDED,
+                Map.of("success", true, "data", Map.of(
+                        "action", "create", "processName", "腌制工序", "message", "已生成预览")),
+                "Tool preview succeeded"));
 
-        CanvasAIController.AIResponse response = controller.chat("F006", null, request).getData();
+        CanvasAIController.AIResponse response =
+                controller.chat("F006", "Bearer test-token", request).getData();
 
         assertFalse(response.isApplied());
         assertEquals(1, response.getDiffs().size());
         assertTrue(response.getReply().contains("首次仅预览"));
-        verify(workflowTool).preview(any(ToolCall.class), anyMap());
+        ArgumentCaptor<ToolExecutionCommand> commandCaptor =
+                ArgumentCaptor.forClass(ToolExecutionCommand.class);
+        verify(toolExecutionGateway).execute(commandCaptor.capture());
+        ToolExecutionCommand command = commandCaptor.getValue();
+        assertEquals(ToolExecutionMode.PREVIEW, command.mode());
+        assertEquals(ToolExecutionSource.HTTP_CONTROLLER, command.source());
+        assertEquals(Set.of("permission_admin"), command.principal().roles());
+        assertTrue(command.principal().permissions().isEmpty());
+        verify(toolRegistry, never()).getExecutor(catalogTool);
         verify(workflowTool, never()).execute(any(ToolCall.class), anyMap());
     }
 
@@ -157,13 +183,14 @@ class CanvasAIWorkflowConfigTest {
         request.setMode("action");
         request.setMessage("新增腌制工序有什么影响");
 
-        when(toolRegistry.getExecutor(catalogTool)).thenReturn(Optional.of(workflowTool));
-        when(workflowTool.supportsPreview()).thenReturn(true);
-        when(workflowTool.preview(any(ToolCall.class), anyMap())).thenReturn(objectMapper.writeValueAsString(Map.of(
-                "success", true,
-                "data", Map.of("message", "影响分析已生成"))));
+        stubAuthenticated(FactoryUserRole.factory_super_admin);
+        when(toolExecutionGateway.execute(any())).thenReturn(gatewayResult(
+                ToolExecutionStatus.SUCCEEDED,
+                Map.of("success", true, "data", Map.of("message", "影响分析已生成")),
+                "Tool preview succeeded"));
 
-        CanvasAIController.AIResponse response = controller.chat("F006", null, request).getData();
+        CanvasAIController.AIResponse response =
+                controller.chat("F006", "Bearer test-token", request).getData();
 
         assertFalse(response.isApplied());
         assertTrue(response.getDiffs().isEmpty());
@@ -179,15 +206,59 @@ class CanvasAIWorkflowConfigTest {
         request.setMode("autopilot");
         request.setMessage("配置工序");
 
-        when(toolRegistry.getExecutor(productWorkProcessTool)).thenReturn(Optional.of(workflowTool));
-        when(workflowTool.supportsPreview()).thenReturn(false);
+        stubAuthenticated(FactoryUserRole.factory_super_admin);
+        when(toolExecutionGateway.execute(any())).thenReturn(gatewayResult(
+                ToolExecutionStatus.PREVIEW_UNSUPPORTED,
+                Map.of(),
+                "Preview is not supported"));
 
-        CanvasAIController.AIResponse response = controller.chat("F006", null, request).getData();
+        CanvasAIController.AIResponse response =
+                controller.chat("F006", "Bearer test-token", request).getData();
 
         assertFalse(response.isApplied());
         assertTrue(response.getReply().contains("不支持无写入预览"));
         verify(workflowTool, never()).execute(any(ToolCall.class), anyMap());
         verify(workflowTool, never()).preview(any(ToolCall.class), anyMap());
+    }
+
+    @Test
+    void productWorkProcessPreviewUsesGatewayAndForcesApplyFalse() throws Exception {
+        String productTool = "canvas_product_work_process_config";
+        CanvasAIController.AIRequest request = new CanvasAIController.AIRequest();
+        request.setModuleCode("product_work_process_config");
+        request.setMode("autopilot");
+        request.setMessage("修油，再滚揉");
+        request.setParams(Map.of(
+                "productTypeId", "PT-1",
+                "apply", true,
+                "factoryId", "ATTACKER"));
+        stubAuthenticated(FactoryUserRole.factory_super_admin);
+        when(toolExecutionGateway.execute(any())).thenReturn(new ToolExecutionResult(
+                "request-product",
+                productTool,
+                "1.0.0",
+                "audit-product",
+                "trace-product",
+                ToolExecutionStatus.SUCCEEDED,
+                objectMapper.valueToTree(Map.of(
+                        "success", true,
+                        "data", Map.of("message", "已生成草稿", "draft", List.of()))),
+                "Tool preview succeeded",
+                false));
+
+        CanvasAIController.AIResponse response =
+                controller.chat("F006", "Bearer test-token", request).getData();
+
+        assertFalse(response.isApplied());
+        assertEquals(1, response.getDiffs().size());
+        ArgumentCaptor<ToolExecutionCommand> captor =
+                ArgumentCaptor.forClass(ToolExecutionCommand.class);
+        verify(toolExecutionGateway).execute(captor.capture());
+        assertEquals(productTool, captor.getValue().toolName());
+        assertFalse(captor.getValue().parameters().path("apply").asBoolean());
+        assertEquals("F006", captor.getValue().principal().tenantId());
+        verify(toolRegistry, never()).getExecutor(productTool);
+        verify(workflowTool, never()).execute(any(), anyMap());
     }
 
     @Test
@@ -203,7 +274,7 @@ class CanvasAIWorkflowConfigTest {
         similarityService.set(realRegistry, mock(ToolSimilarityService.class));
         realRegistry.init();
         CanvasAIController realController = new CanvasAIController(
-                realRegistry, objectMapper, dashScopeClient, mobileService);
+                realRegistry, objectMapper, dashScopeClient, mobileService, toolExecutionGateway);
         when(dashScopeClient.chatLowTemp(any(String.class), any(String.class)))
                 .thenReturn("{\"steps\":[{\"processName\":\"分切\",\"outputType\":\"SEMI_FINISHED\"}]}");
 
@@ -232,6 +303,32 @@ class CanvasAIWorkflowConfigTest {
                         "viewport", Map.of("x", 0, "y", 0, "zoom", 1)),
                 "selectedNodeId", "process:1")));
         return request;
+    }
+
+    private void stubAuthenticated(FactoryUserRole role) {
+        when(mobileService.getUserFromToken("test-token")).thenReturn(UserDTO.builder()
+                .id(42L)
+                .factoryId("F006")
+                .factoryType("FACTORY")
+                .roleCode(role)
+                .isActive(true)
+                .build());
+    }
+
+    private ToolExecutionResult gatewayResult(
+            ToolExecutionStatus status,
+            Map<String, Object> payload,
+            String message) {
+        return new ToolExecutionResult(
+                "request-1",
+                "canvas_work_process_catalog",
+                "1.0.0",
+                "audit-1",
+                "trace-1",
+                status,
+                objectMapper.valueToTree(payload),
+                message,
+                false);
     }
 
     @SuppressWarnings("unchecked")

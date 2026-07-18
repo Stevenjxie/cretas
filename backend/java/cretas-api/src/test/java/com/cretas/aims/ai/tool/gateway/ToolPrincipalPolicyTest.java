@@ -83,6 +83,18 @@ class ToolPrincipalPolicyTest {
                 "F-REST", "RESTAURANT", Set.of("role"), Set.of()))).isEmpty();
     }
 
+    @Test
+    void derivesCompositeOnlyFromMatchingCurrentReadAndWritePermissions() {
+        assertThat(ToolPrincipalPolicy.withReadWriteComposites(Set.of(
+                "hr:read", "hr:write", "production:read", "quality:write")))
+                .contains("hr:read_write")
+                .doesNotContain("production:read_write", "quality:read_write");
+
+        assertThat(ToolPrincipalPolicy.withReadWriteComposites(Set.of(
+                "production:read", "production:write")))
+                .contains("production:read_write");
+    }
+
     private static ExecutionPrincipal principal(
             String tenant,
             String businessType,

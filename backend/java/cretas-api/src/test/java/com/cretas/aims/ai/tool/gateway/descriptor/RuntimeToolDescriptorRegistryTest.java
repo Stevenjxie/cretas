@@ -26,16 +26,28 @@ class RuntimeToolDescriptorRegistryTest {
                 new RuntimeToolDescriptorRegistry(inventory, manifest);
 
         assertThat(registry.approvedToolNames())
-                .containsExactlyInAnyOrder("user_disable", "restaurant_dish_delete");
+                .containsExactlyInAnyOrder(
+                        "user_disable",
+                        "restaurant_dish_delete",
+                        "canvas_product_work_process_config",
+                        "canvas_work_process_catalog");
         for (String toolName : registry.approvedToolNames()) {
             ToolDescriptor descriptor = registry.findApproved(toolName).orElseThrow();
             assertThat(descriptor.provenance()).isEqualTo(DescriptorProvenance.EXPLICIT);
-            assertThat(descriptor.requiredPermissions()).isNotEmpty();
-            assertThat(descriptor.version()).isEqualTo("2.0.0");
-            assertThat(descriptor.supportsPreview()).isFalse();
-            assertThat(descriptor.allowedSources()).containsExactly(ToolExecutionSource.AI_CHAT);
+            assertThat(descriptor.requiredPermissions().isEmpty()
+                    && descriptor.allowedRoles().isEmpty()).isFalse();
+            assertThat(descriptor.allowedBusinessTypes()).isNotEmpty();
             assertThat(descriptor.egressPolicy().mode()).isEqualTo(EgressMode.DENY_ALL);
         }
+        assertThat(registry.findApproved("canvas_product_work_process_config").orElseThrow())
+                .satisfies(descriptor -> {
+                    assertThat(descriptor.version()).isEqualTo("1.0.0");
+                    assertThat(descriptor.supportsPreview()).isTrue();
+                    assertThat(descriptor.allowedSources())
+                            .containsExactly(ToolExecutionSource.HTTP_CONTROLLER);
+                    assertThat(descriptor.allowedRoles())
+                            .containsExactlyInAnyOrder("factory_super_admin", "permission_admin");
+                });
         assertThat(ToolDescriptorInventoryLoader.P0_TOOL_NAMES)
                 .filteredOn(toolName -> !registry.approvedToolNames().contains(toolName))
                 .hasSize(18)
@@ -59,7 +71,7 @@ class RuntimeToolDescriptorRegistryTest {
                 "com.example.UnapprovedTool", "unapproved_tool", first.version());
         List<RuntimeToolPolicyEntry> extraPolicies = new ArrayList<>(manifest.policies());
         extraPolicies.add(extraEntry);
-        RuntimeToolPolicyManifest extra = new RuntimeToolPolicyManifest(1, 3, extraPolicies);
+        RuntimeToolPolicyManifest extra = new RuntimeToolPolicyManifest(1, 5, extraPolicies);
         assertThatThrownBy(() -> new RuntimeToolDescriptorRegistry(inventory, extra))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("unapproved=[unapproved_tool]");
@@ -67,7 +79,10 @@ class RuntimeToolDescriptorRegistryTest {
         RuntimeToolPolicyEntry driftedEntry = copy(
                 first, first.implementationClass(), first.toolName(), "2.0.1");
         RuntimeToolPolicyManifest drifted = new RuntimeToolPolicyManifest(
-                1, 2, List.of(driftedEntry, manifest.policies().get(1)));
+                1, 4, manifest.policies().stream()
+                        .map(policy -> policy.toolName().equals(first.toolName())
+                                ? driftedEntry : policy)
+                        .toList());
         assertThatThrownBy(() -> new RuntimeToolDescriptorRegistry(inventory, drifted))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("runtime policy drift for user_disable: version");
@@ -75,7 +90,10 @@ class RuntimeToolDescriptorRegistryTest {
         RuntimeToolPolicyEntry sourceDrift = copy(
                 first, "com.example.UserDisableTool", first.toolName(), first.version());
         RuntimeToolPolicyManifest sourceDriftManifest = new RuntimeToolPolicyManifest(
-                1, 2, List.of(sourceDrift, manifest.policies().get(1)));
+                1, 4, manifest.policies().stream()
+                        .map(policy -> policy.toolName().equals(first.toolName())
+                                ? sourceDrift : policy)
+                        .toList());
         assertThatThrownBy(() -> new RuntimeToolDescriptorRegistry(
                 inventory, sourceDriftManifest))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -84,7 +102,10 @@ class RuntimeToolDescriptorRegistryTest {
         RuntimeToolPolicyEntry permissionDrift = copyWithPermissions(
                 first, Set.of("hr:read"));
         RuntimeToolPolicyManifest permissionDriftManifest = new RuntimeToolPolicyManifest(
-                1, 2, List.of(permissionDrift, manifest.policies().get(1)));
+                1, 4, manifest.policies().stream()
+                        .map(policy -> policy.toolName().equals(first.toolName())
+                                ? permissionDrift : policy)
+                        .toList());
         assertThatThrownBy(() -> new RuntimeToolDescriptorRegistry(
                 inventory, permissionDriftManifest))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -106,6 +127,7 @@ class RuntimeToolDescriptorRegistryTest {
                 target.supportsPreview(),
                 true,
                 Set.of("permission:explicit-review-required"),
+                Set.of(),
                 "2.0.0",
                 Set.of("canvas", "identity"),
                 new ToolDescriptorOverrideFlags(true, true, true, true, true, true, true, true),
@@ -132,6 +154,8 @@ class RuntimeToolDescriptorRegistryTest {
                 source.actionType(),
                 source.riskLevel(),
                 source.requiredPermissions(),
+                source.allowedRoles(),
+                source.allowedBusinessTypes(),
                 source.domainTags(),
                 version,
                 source.supportsPreview(),
@@ -153,6 +177,8 @@ class RuntimeToolDescriptorRegistryTest {
                 source.actionType(),
                 source.riskLevel(),
                 requiredPermissions,
+                source.allowedRoles(),
+                source.allowedBusinessTypes(),
                 source.domainTags(),
                 source.version(),
                 source.supportsPreview(),

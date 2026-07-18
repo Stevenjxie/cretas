@@ -4,8 +4,17 @@ import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.ai.dto.ToolCall;
+import com.cretas.aims.ai.tool.gateway.ExecutionPrincipal;
+import com.cretas.aims.ai.tool.gateway.PrincipalType;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionCommand;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionGateway;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionResult;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionStatus;
 import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.dto.user.UserDTO;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.utils.TokenUtils;
@@ -18,6 +27,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Instant;
 import java.util.*;
 import java.util.regex.Pattern;
 
@@ -32,9 +42,11 @@ public class CanvasAIController {
     private final ObjectMapper objectMapper;
     private final DashScopeClient dashScopeClient;
     private final MobileService mobileService;
+    private final ToolExecutionGateway toolExecutionGateway;
 
     private static final String PRODUCT_WORK_PROCESS_MODULE = "product_work_process_config";
     private static final String PRODUCT_WORK_PROCESS_TOOL = "canvas_product_work_process_config";
+    private static final String PRODUCT_WORK_PROCESS_VERSION = "1.0.0";
     private static final String PRODUCT_WORK_PROCESS_DRAFT_REPLY = "已生成工序配置草稿";
 
     private static final String PRODUCT_PROCESS_WORKFLOW_MODULE = "product_process_workflow_config";
@@ -94,6 +106,7 @@ public class CanvasAIController {
     // D3: narrow route for work-process catalog (create/update work-process master data)
     private static final String WORK_PROCESS_CATALOG_MODULE = "work_process_catalog";
     private static final String WORK_PROCESS_CATALOG_TOOL = "canvas_work_process_catalog";
+    private static final String WORK_PROCESS_CATALOG_VERSION = "1.0.0";
 
     /**
      * Only canvas_* tools are allowed via AI chat to prevent prompt injection from
@@ -172,18 +185,20 @@ public class CanvasAIController {
         String mode = request.getMode() != null ? request.getMode() : "action";
         String message = request.getMessage();
         log.info("Canvas AI [{}] factory={}: {}", mode, factoryId, message);
-        Map<String, Object> toolContext = buildToolContext(factoryId, authorization);
-
         try {
-            if (PRODUCT_PROCESS_WORKFLOW_MODULE.equals(request.getModuleCode())) {
-                return ApiResponse.success(handleProductProcessWorkflowConfigChat(request, toolContext));
-            }
             if (PRODUCT_WORK_PROCESS_MODULE.equals(request.getModuleCode())) {
-                return ApiResponse.success(handleProductWorkProcessConfigChat(request, toolContext));
+                return ApiResponse.success(handleProductWorkProcessConfigChat(
+                        request, authenticatedPrincipal(factoryId, authorization)));
             }
             // D3: work_process_catalog narrow route — bypasses LLM prompt entirely
             if (WORK_PROCESS_CATALOG_MODULE.equals(request.getModuleCode())) {
-                return ApiResponse.success(handleWorkProcessCatalogChat(request, toolContext));
+                return ApiResponse.success(handleWorkProcessCatalogChat(
+                        request, authenticatedPrincipal(factoryId, authorization)));
+            }
+
+            Map<String, Object> toolContext = buildToolContext(factoryId, authorization);
+            if (PRODUCT_PROCESS_WORKFLOW_MODULE.equals(request.getModuleCode())) {
+                return ApiResponse.success(handleProductProcessWorkflowConfigChat(request, toolContext));
             }
 
             switch (mode) {
@@ -301,10 +316,7 @@ public class CanvasAIController {
      * modules keep the original LLM path above.
      */
     private AIResponse handleProductWorkProcessConfigChat(
-            AIRequest request, Map<String, Object> toolContext) throws Exception {
-        ToolExecutor executor = toolRegistry.getExecutor(PRODUCT_WORK_PROCESS_TOOL)
-                .orElseThrow(() -> new BusinessException("工具不存在: " + PRODUCT_WORK_PROCESS_TOOL));
-
+            AIRequest request, ExecutionPrincipal principal) {
         Map<String, Object> params = new LinkedHashMap<>();
         if (request.getParams() != null) {
             params.putAll(request.getParams());
@@ -312,19 +324,9 @@ public class CanvasAIController {
         params.put("message", request.getMessage());
         params.put("apply", false);
 
-        String argsJson = objectMapper.writeValueAsString(params);
-        ToolCall toolCall = ToolCall.of(
-                "d1-preview-" + System.currentTimeMillis(), PRODUCT_WORK_PROCESS_TOOL, argsJson);
-        // Every first AI request is a preview.  Do not silently turn a missing
-        // preview implementation into a write just because the user selected
-        // autopilot; the explicit /apply-diffs confirmation is the only write
-        // boundary for this controller.
-        if (!executor.supportsPreview()) {
-            throw new BusinessException(409, "该工具不支持无写入预览，已阻止执行");
-        }
-        String raw = executor.preview(toolCall, toolContext);
-
-        Map<String, Object> toolResponse = objectMapper.readValue(raw, new TypeReference<Map<String, Object>>() {});
+        ToolExecutionResult gatewayResult = executePreview(
+                PRODUCT_WORK_PROCESS_TOOL, PRODUCT_WORK_PROCESS_VERSION, params, principal);
+        Map<String, Object> toolResponse = gatewayPayload(gatewayResult);
 
         // D1 B-1: surface tool failures instead of silently returning a fake success draft
         if (!Boolean.TRUE.equals(toolResponse.get("success"))) {
@@ -360,29 +362,20 @@ public class CanvasAIController {
      * CANVAS_SYSTEM_PROMPT (where it was previously missing and thus never called via autopilot/plan).
      */
     private AIResponse handleWorkProcessCatalogChat(
-            AIRequest request, Map<String, Object> toolContext) throws Exception {
-        ToolExecutor executor = toolRegistry.getExecutor(WORK_PROCESS_CATALOG_TOOL)
-                .orElseThrow(() -> new BusinessException("工具不存在: " + WORK_PROCESS_CATALOG_TOOL));
-
+            AIRequest request, ExecutionPrincipal principal) {
         Map<String, Object> params = new LinkedHashMap<>();
         if (request.getParams() != null) {
             params.putAll(request.getParams());
         }
         params.put("message", request.getMessage());
 
-        String argsJson = objectMapper.writeValueAsString(params);
-        ToolCall toolCall = ToolCall.of(
-                "d3-catalog-" + System.currentTimeMillis(), WORK_PROCESS_CATALOG_TOOL, argsJson);
         String mode = request.getMode() == null ? "action" : request.getMode().trim().toLowerCase();
         if (!"autopilot".equals(mode) && !"plan".equals(mode) && !"action".equals(mode)) {
             throw new BusinessException(400, "未知模式: " + mode);
         }
-        if (!executor.supportsPreview()) {
-            throw new BusinessException(409, "该工具不支持无写入预览，已阻止执行");
-        }
-        String raw = executor.preview(toolCall, toolContext);
-
-        Map<String, Object> toolResponse = objectMapper.readValue(raw, new TypeReference<Map<String, Object>>() {});
+        ToolExecutionResult gatewayResult = executePreview(
+                WORK_PROCESS_CATALOG_TOOL, WORK_PROCESS_CATALOG_VERSION, params, principal);
+        Map<String, Object> toolResponse = gatewayPayload(gatewayResult);
 
         // D3 B-1: surface tool failures — never return a fake success
         if (!Boolean.TRUE.equals(toolResponse.get("success"))) {
@@ -414,6 +407,70 @@ public class CanvasAIController {
         );
         response.setDiffs("action".equals(mode) ? List.of() : List.of(diff));
         return response;
+    }
+
+    private ExecutionPrincipal authenticatedPrincipal(
+            String pathFactoryId,
+            String authorization) {
+        String token = TokenUtils.extractToken(authorization);
+        UserDTO authenticated = mobileService.getUserFromToken(token);
+        if (authenticated == null
+                || authenticated.getId() == null
+                || authenticated.getFactoryId() == null
+                || authenticated.getFactoryType() == null
+                || authenticated.getFactoryType().isBlank()
+                || authenticated.getRoleCode() == null) {
+            throw new BusinessException(401, "登录身份不完整，请重新登录");
+        }
+        if (!pathFactoryId.equals(authenticated.getFactoryId())) {
+            throw new BusinessException(403, "无权访问其他组织的 Canvas 配置");
+        }
+        return new ExecutionPrincipal(
+                authenticated.getFactoryId(),
+                authenticated.getFactoryType(),
+                authenticated.getId().toString(),
+                PrincipalType.USER,
+                Set.of(authenticated.getRoleCode().name()),
+                Set.of(),
+                Set.of());
+    }
+
+    private ToolExecutionResult executePreview(
+            String toolName,
+            String descriptorVersion,
+            Map<String, Object> params,
+            ExecutionPrincipal principal) {
+        String requestId = "canvas-preview-" + UUID.randomUUID();
+        ToolExecutionCommand command = new ToolExecutionCommand(
+                requestId,
+                "canvas-chat-" + UUID.randomUUID(),
+                "canvas-trace-" + UUID.randomUUID(),
+                toolName,
+                descriptorVersion,
+                objectMapper.valueToTree(params),
+                principal,
+                ToolExecutionSource.HTTP_CONTROLLER,
+                ToolExecutionMode.PREVIEW,
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Instant.now().plusSeconds(30));
+        return toolExecutionGateway.execute(command);
+    }
+
+    private Map<String, Object> gatewayPayload(ToolExecutionResult result) {
+        if (result.status() == ToolExecutionStatus.PREVIEW_UNSUPPORTED) {
+            throw new BusinessException(409, "该工具不支持无写入预览，已阻止执行");
+        }
+        if (result.status() != ToolExecutionStatus.SUCCEEDED
+                && result.status() != ToolExecutionStatus.FAILED) {
+            throw new BusinessException(403, "工具预览未获授权");
+        }
+        if (!result.payload().isObject()) {
+            throw new BusinessException(502, "工具预览返回格式无效");
+        }
+        return objectMapper.convertValue(
+                result.payload(), new TypeReference<Map<String, Object>>() {});
     }
 
     @PostMapping("/apply-diffs")

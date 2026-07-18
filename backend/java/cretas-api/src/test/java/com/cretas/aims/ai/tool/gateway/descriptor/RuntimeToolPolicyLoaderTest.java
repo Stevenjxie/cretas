@@ -20,29 +20,45 @@ class RuntimeToolPolicyLoaderTest {
     private final RuntimeToolPolicyLoader loader = new RuntimeToolPolicyLoader();
 
     @Test
-    void loadsOnlyTheTwoCompleteExplicitRuntimePolicies() {
+    void loadsAllFourCompleteExplicitRuntimePolicies() {
         RuntimeToolPolicyManifest manifest = loader.loadDefault();
 
         assertThat(manifest.schemaVersion()).isEqualTo(1);
-        assertThat(manifest.expectedPolicyCount()).isEqualTo(2);
+        assertThat(manifest.expectedPolicyCount()).isEqualTo(4);
         assertThat(manifest.policies())
                 .extracting(RuntimeToolPolicyEntry::toolName)
-                .containsExactly("user_disable", "restaurant_dish_delete");
+                .containsExactly(
+                        "user_disable",
+                        "restaurant_dish_delete",
+                        "canvas_product_work_process_config",
+                        "canvas_work_process_catalog");
         assertThat(manifest.policies()).allSatisfy(policy -> {
             assertThat(policy.provenance()).isEqualTo(DescriptorProvenance.EXPLICIT);
-            assertThat(policy.requiredPermissions()).isNotEmpty();
+            assertThat(policy.requiredPermissions().isEmpty() && policy.allowedRoles().isEmpty())
+                    .isFalse();
+            assertThat(policy.allowedBusinessTypes()).isNotEmpty();
             assertThat(policy.domainTags()).isNotEmpty();
+            assertThat(policy.approvalPolicy())
+                    .isEqualTo(ApprovalPolicy.NOT_REQUIRED);
+            assertThat(policy.egressPolicy().mode()).isEqualTo(EgressMode.DENY_ALL);
+            assertThat(policy.egressPolicy().allowedDestinations()).isEmpty();
+        });
+        assertThat(manifest.policies().subList(0, 2)).allSatisfy(policy -> {
             assertThat(policy.version()).isEqualTo("2.0.0");
             assertThat(policy.supportsPreview()).isFalse();
             assertThat(policy.confirmationPolicy())
                     .isEqualTo(ConfirmationPolicy.REQUIRED_FOR_EXECUTION);
-            assertThat(policy.approvalPolicy())
-                    .isEqualTo(ApprovalPolicy.NOT_REQUIRED);
             assertThat(policy.idempotencyPolicy())
                     .isEqualTo(IdempotencyPolicy.REQUIRED_FOR_EXECUTION);
             assertThat(policy.allowedSources()).containsExactly(ToolExecutionSource.AI_CHAT);
-            assertThat(policy.egressPolicy().mode()).isEqualTo(EgressMode.DENY_ALL);
-            assertThat(policy.egressPolicy().allowedDestinations()).isEmpty();
+        });
+        assertThat(manifest.policies().subList(2, 4)).allSatisfy(policy -> {
+            assertThat(policy.version()).isEqualTo("1.0.0");
+            assertThat(policy.supportsPreview()).isTrue();
+            assertThat(policy.confirmationPolicy()).isEqualTo(ConfirmationPolicy.NOT_REQUIRED);
+            assertThat(policy.idempotencyPolicy()).isEqualTo(IdempotencyPolicy.NOT_REQUIRED);
+            assertThat(policy.allowedSources())
+                    .containsExactly(ToolExecutionSource.HTTP_CONTROLLER);
         });
         assertThat(manifest.policies().get(0).dataClassification())
                 .isEqualTo(DataClassification.RESTRICTED);
@@ -93,6 +109,14 @@ class RuntimeToolPolicyLoaderTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("missing=[provenance]");
         assertThatThrownBy(() -> loader.load(new StringReader(
+                valid.replace("    allowedRoles: []\n", ""))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("allowedRoles");
+        assertThatThrownBy(() -> loader.load(new StringReader(
+                valid.replace("    allowedBusinessTypes: [FACTORY]\n", ""))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("allowedBusinessTypes");
+        assertThatThrownBy(() -> loader.load(new StringReader(
                 valid.replace("toolName: safe_test", "toolName: ''"))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("toolName must be a non-blank string");
@@ -120,7 +144,7 @@ class RuntimeToolPolicyLoaderTest {
         assertThatThrownBy(() -> loader.load(new StringReader(
                 valid.replace("requiredPermissions: [test:execute]", "requiredPermissions: []"))))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("at least one explicit permission code");
+                .hasMessageContaining("permissions or an allowed role");
         assertThatThrownBy(() -> loader.loadResource("ai/tool/gateway/missing-runtime.yaml"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("resource not found");
@@ -136,6 +160,8 @@ class RuntimeToolPolicyLoaderTest {
                     actionType: UPDATE
                     riskLevel: HIGH
                     requiredPermissions: [test:execute]
+                    allowedRoles: []
+                    allowedBusinessTypes: [FACTORY]
                     domainTags: [test]
                     version: 2.0.0
                     supportsPreview: false

@@ -3,6 +3,7 @@ package com.cretas.aims.ai.tool.impl.workprocess;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.dto.WorkProcessDTO;
+import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.WorkProcessService;
 import lombok.RequiredArgsConstructor;
@@ -15,6 +16,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * 工序主数据 Canvas AI Tool.
@@ -107,6 +109,32 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
     @Override
     public boolean supportsPreview() {
         return true;
+    }
+
+    @Override
+    public boolean requiresPermission() {
+        return true;
+    }
+
+    @Override
+    public boolean hasPermission(String userRole) {
+        return FactoryUserRole.factory_super_admin.name().equals(userRole)
+                || FactoryUserRole.permission_admin.name().equals(userRole);
+    }
+
+    @Override
+    public Set<String> getRequiredPermissions() {
+        return Set.of();
+    }
+
+    @Override
+    public String getVersion() {
+        return "1.0.0";
+    }
+
+    @Override
+    public Set<String> getDomainTags() {
+        return Set.of("canvas", "production", "work-process", "master-data");
     }
 
     @Override

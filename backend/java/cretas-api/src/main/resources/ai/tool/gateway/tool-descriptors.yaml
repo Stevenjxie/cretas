@@ -1,8 +1,9 @@
 # Source-derived D1 inventory. This is audit truth, not an approved runtime policy.
-# LEGACY_INFERRED and empty requiredPermissions remain review debt; this file is not wired to execution.
+# LEGACY_INFERRED, or APPROVED metadata lacking both permissions and allowed roles, remains review debt.
+# This inventory is an independent source-audit truth and is never sufficient by itself to execute.
 schemaVersion: 1
 expectedToolCount: 601
-expectedLegacyCount: 599
+expectedLegacyCount: 597
 descriptors:
   - toolName: "restaurant_calibration_history"
     implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantCalibrationHistoryTool"
@@ -2432,6 +2433,7 @@ descriptors:
     supportsPreview: false
     requiresPermission: true
     requiredPermissions: ["restaurant:read_write"]
+    allowedRoles: []
     version: "2.0.0"
     domainTags: ["restaurant", "menu", "product-master"]
     overrideFlags:
@@ -3572,6 +3574,7 @@ descriptors:
     supportsPreview: false
     requiresPermission: true
     requiredPermissions: ["hr:read_write"]
+    allowedRoles: []
     version: "2.0.0"
     domainTags: ["user", "hr", "identity"]
     overrideFlags:
@@ -3766,24 +3769,25 @@ descriptors:
     governanceStatus: REVIEW_REQUIRED
   - toolName: "canvas_product_work_process_config"
     implementationClass: "com.cretas.aims.ai.tool.impl.workprocess.ProductWorkProcessConfigTool"
-    provenance: LEGACY_INFERRED
+    provenance: EXPLICIT
     actionType: WRITE
     riskLevel: MEDIUM
     supportsPreview: true
-    requiresPermission: false
+    requiresPermission: true
     requiredPermissions: []
+    allowedRoles: ["factory_super_admin", "permission_admin"]
     version: "1.0.0"
-    domainTags: ["canvas"]
+    domainTags: ["canvas", "production", "work-process", "product"]
     overrideFlags:
       actionType: true
       riskLevel: true
       supportsPreview: true
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
+      requiresPermission: true
+      hasPermission: true
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: APPROVED
   - toolName: "canvas_product_process_workflow_config"
     implementationClass: "com.cretas.aims.ai.tool.impl.workprocess.ProductProcessWorkflowConfigTool"
     provenance: LEGACY_INFERRED
@@ -3806,24 +3810,25 @@ descriptors:
     governanceStatus: REVIEW_REQUIRED
   - toolName: "canvas_work_process_catalog"
     implementationClass: "com.cretas.aims.ai.tool.impl.workprocess.WorkProcessCatalogTool"
-    provenance: LEGACY_INFERRED
+    provenance: EXPLICIT
     actionType: UPDATE
     riskLevel: MEDIUM
     supportsPreview: true
-    requiresPermission: false
+    requiresPermission: true
     requiredPermissions: []
+    allowedRoles: ["factory_super_admin", "permission_admin"]
     version: "1.0.0"
-    domainTags: ["canvas"]
+    domainTags: ["canvas", "production", "work-process", "master-data"]
     overrideFlags:
       actionType: true
       riskLevel: true
       supportsPreview: true
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
+      requiresPermission: true
+      hasPermission: true
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: APPROVED
   - toolName: "canvas_product_work_process_recommend"
     implementationClass: "com.cretas.aims.ai.tool.impl.workprocess.ProductWorkProcessRecommendTool"
     provenance: LEGACY_INFERRED

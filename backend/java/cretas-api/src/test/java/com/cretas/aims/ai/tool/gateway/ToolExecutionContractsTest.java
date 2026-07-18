@@ -1,6 +1,7 @@
 package com.cretas.aims.ai.tool.gateway;
 
 import com.cretas.aims.ai.tool.ToolExecutor;
+import com.cretas.aims.entity.enums.FactoryType;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
@@ -215,6 +216,8 @@ class ToolExecutionContractsTest {
                 ToolExecutor.RiskLevel.LOW,
                 Set.of(),
                 Set.of(),
+                Set.of(FactoryType.FACTORY),
+                Set.of(),
                 "1.0.0",
                 false,
                 ConfirmationPolicy.NOT_REQUIRED,
@@ -303,6 +306,8 @@ class ToolExecutionContractsTest {
                 ToolExecutor.ActionType.READ,
                 ToolExecutor.RiskLevel.LOW,
                 permissions,
+                Set.of(),
+                Set.of(FactoryType.FACTORY),
                 domains,
                 "2.0.0",
                 true,
@@ -328,6 +333,8 @@ class ToolExecutionContractsTest {
                 actionType,
                 riskLevel,
                 permissions,
+                Set.of(),
+                Set.of(FactoryType.FACTORY),
                 domains,
                 version,
                 false,

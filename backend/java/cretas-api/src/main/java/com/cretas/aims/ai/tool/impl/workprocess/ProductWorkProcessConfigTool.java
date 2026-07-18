@@ -103,6 +103,34 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
     }
 
     @Override
+    public boolean requiresPermission() {
+        return true;
+    }
+
+    @Override
+    public boolean hasPermission(String userRole) {
+        return FactoryUserRole.factory_super_admin.name().equals(userRole)
+                || FactoryUserRole.permission_admin.name().equals(userRole);
+    }
+
+    @Override
+    public Set<String> getRequiredPermissions() {
+        // CanvasAIController's existing authorization contract is role based. The gateway
+        // rehydrates this role from DB truth and applies the exact descriptor role allowlist.
+        return Set.of();
+    }
+
+    @Override
+    public String getVersion() {
+        return "1.0.0";
+    }
+
+    @Override
+    public Set<String> getDomainTags() {
+        return Set.of("canvas", "production", "work-process", "product");
+    }
+
+    @Override
     protected Map<String, Object> doPreview(
             String factoryId, Map<String, Object> params, Map<String, Object> context) {
         ProductProcessPlan plan = buildPlan(factoryId, params);

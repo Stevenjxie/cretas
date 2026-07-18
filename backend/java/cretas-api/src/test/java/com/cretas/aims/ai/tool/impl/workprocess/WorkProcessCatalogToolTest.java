@@ -2,6 +2,7 @@ package com.cretas.aims.ai.tool.impl.workprocess;
 
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.dto.WorkProcessDTO;
+import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.service.WorkProcessService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -16,6 +17,7 @@ import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.exception.BusinessException;
@@ -46,8 +48,35 @@ class WorkProcessCatalogToolTest {
         assertTrue(tool.getDescription().contains("工序"));
         assertEquals(ToolExecutor.ActionType.UPDATE, tool.getActionType());
         assertEquals(ToolExecutor.RiskLevel.MEDIUM, tool.getRiskLevel());
+        assertTrue(tool.supportsPreview());
+        assertTrue(tool.requiresPermission());
+        assertTrue(tool.getRequiredPermissions().isEmpty());
+        assertTrue(tool.hasPermission(FactoryUserRole.factory_super_admin.name()));
+        assertTrue(tool.hasPermission(FactoryUserRole.permission_admin.name()));
+        assertFalse(tool.hasPermission(FactoryUserRole.operator.name()));
+        assertEquals("1.0.0", tool.getVersion());
+        assertEquals(Set.of("canvas", "production", "work-process", "master-data"),
+                tool.getDomainTags());
         assertTrue(tool.getParametersSchema().containsKey("properties"));
         assertEquals(List.of("action"), tool.getRequiredParameters());
+    }
+
+    @Test
+    @DisplayName("preview: create 只读查重并返回草稿，绝不调用 create/update")
+    void previewCreateIsZeroWrite() throws Exception {
+        PageResponse<WorkProcessDTO> emptyPage = new PageResponse<>();
+        emptyPage.setContent(List.of());
+        when(workProcessService.list(eq(FACTORY_ID), any())).thenReturn(emptyPage);
+
+        Map<String, Object> result = invokeDoPreview(Map.of(
+                "action", "create",
+                "processName", "腌制",
+                "processCategory", "加工"));
+
+        assertEquals("PREVIEW", result.get("status"));
+        verify(workProcessService).list(eq(FACTORY_ID), any());
+        verify(workProcessService, never()).create(anyString(), any());
+        verify(workProcessService, never()).update(anyString(), anyString(), any());
     }
 
     @Test
@@ -222,6 +251,21 @@ class WorkProcessCatalogToolTest {
             return (Map<String, Object>) method.invoke(tool, FACTORY_ID, params, ctx());
         } catch (java.lang.reflect.InvocationTargetException e) {
             // reflection wraps the real exception; rethrow it so assertThrows sees BusinessException
+            if (e.getCause() instanceof Exception cause) {
+                throw cause;
+            }
+            throw e;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> invokeDoPreview(Map<String, Object> params) throws Exception {
+        var method = WorkProcessCatalogTool.class.getDeclaredMethod(
+                "doPreview", String.class, Map.class, Map.class);
+        method.setAccessible(true);
+        try {
+            return (Map<String, Object>) method.invoke(tool, FACTORY_ID, params, ctx());
+        } catch (java.lang.reflect.InvocationTargetException e) {
             if (e.getCause() instanceof Exception cause) {
                 throw cause;
             }

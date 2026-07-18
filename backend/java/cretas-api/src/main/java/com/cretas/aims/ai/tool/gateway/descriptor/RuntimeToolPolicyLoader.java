@@ -9,6 +9,7 @@ import com.cretas.aims.ai.tool.gateway.EgressMode;
 import com.cretas.aims.ai.tool.gateway.IdempotencyPolicy;
 import com.cretas.aims.ai.tool.gateway.ToolEgressPolicy;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
+import com.cretas.aims.entity.enums.FactoryType;
 import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.SafeConstructor;
@@ -42,7 +43,8 @@ public final class RuntimeToolPolicyLoader {
             "schemaVersion", "expectedPolicyCount", "policies");
     private static final Set<String> POLICY_KEYS = Set.of(
             "implementationClass", "toolName", "actionType", "riskLevel",
-            "requiredPermissions", "domainTags", "version", "supportsPreview",
+            "requiredPermissions", "allowedRoles", "allowedBusinessTypes",
+            "domainTags", "version", "supportsPreview",
             "confirmationPolicy", "approvalPolicy", "idempotencyPolicy",
             "dataClassification", "allowedSources", "egressPolicy", "provenance");
     private static final Set<String> EGRESS_KEYS = Set.of("mode", "allowedDestinations");
@@ -129,6 +131,9 @@ public final class RuntimeToolPolicyLoader {
                         prefix + ".riskLevel"),
                 asStringSet(policy.get("requiredPermissions"),
                         prefix + ".requiredPermissions"),
+                asStringSet(policy.get("allowedRoles"), prefix + ".allowedRoles"),
+                asEnumSet(policy.get("allowedBusinessTypes"), FactoryType.class,
+                        prefix + ".allowedBusinessTypes"),
                 asStringSet(policy.get("domainTags"), prefix + ".domainTags"),
                 asNonBlankString(policy.get("version"), prefix + ".version"),
                 asBoolean(policy.get("supportsPreview"), prefix + ".supportsPreview"),
