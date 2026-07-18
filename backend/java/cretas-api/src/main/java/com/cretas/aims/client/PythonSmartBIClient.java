@@ -597,30 +597,6 @@ public class PythonSmartBIClient {
     }
 
     /**
-     * Execute a non-idempotent request exactly once while retaining the shared
-     * circuit-breaker accounting.  This is deliberately separate from
-     * {@link #executeWithRetry(Request, Class)} so existing SmartBI calls keep
-     * their configured retry behavior.
-     */
-    private <T> T executeWithoutRetry(Request request, Class<T> responseType) throws IOException {
-        if (!circuitBreaker.isCallPermitted()) {
-            throw new PythonServiceUnavailableException(
-                    circuitBreaker.getState().name(),
-                    circuitBreaker.getRemainingOpenTimeMs());
-        }
-
-        try {
-            T result = execute(request, responseType);
-            circuitBreaker.recordSuccess();
-            return result;
-        } catch (IOException e) {
-            circuitBreaker.recordFailure();
-            serviceAvailable.set(false);
-            throw e;
-        }
-    }
-
-    /**
      * 执行单次请求
      */
     private <T> T execute(Request request, Class<T> responseType) throws IOException {
@@ -1918,63 +1894,6 @@ public class PythonSmartBIClient {
             errorResult.put("message", e.getMessage());
             return errorResult;
         }
-    }
-
-    /**
-     * 餐饮老板动作建议 Chat。
-     *
-     * <p>Web Admin 统一打 Java /ai-intents/execute，Java 再把需要深度经营动作
-     * 分析的问题转给 Python section。这样前端不用维护第二套路由和反馈入口。</p>
-     */
-    @SuppressWarnings("unchecked")
-    public Map<String, Object> askRestaurantOwnerActionChat(
-            String factoryId,
-            Map<String, Object> chatRequest) {
-        if (factoryId == null || factoryId.isBlank()) {
-            return ownerActionFailure("老板动作分析缺少租户身份，请稍后重试。");
-        }
-
-        Map<String, Object> outboundBody = new LinkedHashMap<>();
-        outboundBody.put("factory_id", factoryId);
-        copyOwnerActionField(chatRequest, outboundBody, "message");
-        copyOwnerActionField(chatRequest, outboundBody, "session_id");
-        copyOwnerActionField(chatRequest, outboundBody, "demo_scenario");
-        copyOwnerActionField(chatRequest, outboundBody, "store_name");
-        copyOwnerActionField(chatRequest, outboundBody, "sub_sector");
-        copyOwnerActionField(chatRequest, outboundBody, "period");
-
-        log.info("餐饮老板动作建议: factoryId={}, scenario={}",
-                factoryId, outboundBody.get("demo_scenario"));
-        try {
-            Request request = new Request.Builder()
-                    .url(config.getUrl() + "/api/smartbi/restaurant/sections/owner-action-chat")
-                    .header("X-Factory-Id", factoryId)
-                    .post(RequestBody.create(JSON, objectMapper.writeValueAsString(outboundBody)))
-                    .build();
-            return executeWithoutRetry(request, Map.class);
-        } catch (IOException | PythonServiceUnavailableException e) {
-            // The exception may contain a Python response body. Do not copy it
-            // into logs or the Tool response, because owner-action payloads and
-            // downstream error details can contain tenant-sensitive data.
-            log.error("餐饮老板动作建议请求失败: type={}", e.getClass().getSimpleName());
-            return ownerActionFailure("老板动作分析服务暂时不可用，请稍后重试。");
-        }
-    }
-
-    private void copyOwnerActionField(
-            Map<String, Object> source,
-            Map<String, Object> target,
-            String field) {
-        if (source != null && source.containsKey(field) && source.get(field) != null) {
-            target.put(field, source.get(field));
-        }
-    }
-
-    private Map<String, Object> ownerActionFailure(String message) {
-        Map<String, Object> errorResult = new java.util.HashMap<>();
-        errorResult.put("success", false);
-        errorResult.put("message", message);
-        return errorResult;
     }
 
     /**

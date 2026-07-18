@@ -24,15 +24,15 @@ class ToolDescriptorCatalogTest {
 
         assertThat(catalog.inventory().schemaVersion()).isEqualTo(1);
         assertThat(catalog.inventory().expectedToolCount()).isEqualTo(601);
-        assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(597);
+        assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(596);
         assertThat(statistics.total()).isEqualTo(601);
-        assertThat(statistics.legacy()).isEqualTo(597);
+        assertThat(statistics.legacy()).isEqualTo(596);
         assertThat(statistics.actionTypes()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.ActionType.READ, 454L,
+                ToolExecutor.ActionType.READ, 453L,
                 ToolExecutor.ActionType.WRITE, 65L,
                 ToolExecutor.ActionType.UPDATE, 29L,
                 ToolExecutor.ActionType.DELETE, 12L,
-                ToolExecutor.ActionType.ANALYZE, 18L,
+                ToolExecutor.ActionType.ANALYZE, 19L,
                 ToolExecutor.ActionType.GENERATE, 15L,
                 ToolExecutor.ActionType.NOTIFY, 8L));
         assertThat(statistics.riskLevels()).containsExactlyInAnyOrderEntriesOf(Map.of(
@@ -41,11 +41,11 @@ class ToolDescriptorCatalogTest {
                 ToolExecutor.RiskLevel.HIGH, 5L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
         assertThat(statistics.previewSupported()).isEqualTo(39);
-        assertThat(statistics.requiresPermission()).isEqualTo(41);
+        assertThat(statistics.requiresPermission()).isEqualTo(42);
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolGovernanceStatus.REVIEW_REQUIRED, 579L,
+                ToolGovernanceStatus.REVIEW_REQUIRED, 578L,
                 ToolGovernanceStatus.REVIEW_REQUIRED_P0, 18L,
-                ToolGovernanceStatus.APPROVED, 4L,
+                ToolGovernanceStatus.APPROVED, 5L,
                 ToolGovernanceStatus.WAIVED, 0L));
 
         assertThat(catalog.inventory().descriptors())
@@ -63,6 +63,7 @@ class ToolDescriptorCatalogTest {
                 .containsExactlyInAnyOrder(
                         "user_disable",
                         "restaurant_dish_delete",
+                        "restaurant_owner_action_advisor",
                         "canvas_product_work_process_config",
                         "canvas_work_process_catalog");
     }

@@ -4,10 +4,17 @@ import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.dto.ChatCompletionRequest;
 import com.cretas.aims.ai.dto.ChatCompletionResponse;
 import com.cretas.aims.ai.dto.ChatMessage;
-import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.ai.tool.gateway.AuthenticatedToolPrincipalFactory;
 import com.cretas.aims.ai.tool.gateway.ConfirmationProof;
+import com.cretas.aims.ai.tool.gateway.ExecutionPrincipal;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionCommand;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionGateway;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionResult;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionStatus;
 import com.cretas.aims.config.DashScopeConfig;
 import com.cretas.aims.config.IntentKnowledgeBase;
 import com.cretas.aims.config.IntentKnowledgeBase.QuestionType;
@@ -145,6 +152,12 @@ public class IntentExecutionOrchestrator {
     @Autowired
     private BusinessTypeGate businessTypeGate;
 
+    @Autowired
+    private ToolExecutionGateway toolExecutionGateway;
+
+    @Autowired
+    private AuthenticatedToolPrincipalFactory authenticatedToolPrincipalFactory;
+
     // W0 write-guard (intent-w0): confidence-independent write detection. Inserted at the
     // explicit-intent convergence point so a misroute to a write intent cannot silently execute,
     // INCLUDING via forceExecute=true (multi-intent / conversation-continuation hard-set true).
@@ -255,7 +268,7 @@ public class IntentExecutionOrchestrator {
         if (shouldRouteRestaurantOwnerAction(factoryId, userInput, request.getContext())) {
             log.info("[restaurant-owner-action] force-route before restaurant report shortcuts: factoryId={}, input={}",
                     factoryId, userInput);
-            return executeRestaurantOwnerActionChat(factoryId, request, userId);
+            return executeRestaurantOwnerActionChat(factoryId, request, userId, userRole);
         }
         if (userInput != null && !userInput.isEmpty() && !hasExplicitReadVeto(userInput)) {
             IntentMatchResult restaurantOpsMatch = tryRestaurantOpsPhraseShortcut(userInput, factoryId);
@@ -287,7 +300,7 @@ public class IntentExecutionOrchestrator {
                     && shouldRouteRestaurantOwnerAction(factoryId, userInput, request.getContext())) {
                 log.info("[restaurant-owner-action] route before VETO_READ clarification: factoryId={}, input={}",
                         factoryId, userInput);
-                return executeRestaurantOwnerActionChat(factoryId, request, userId);
+                return executeRestaurantOwnerActionChat(factoryId, request, userId, userRole);
             }
             if (vk == QueryPreprocessorService.NegationKind.VETO_READ) {
                 log.info("[W1b] orchestrator VETO_READ → clarification (no phrase shortcut, no execution): '{}'", vInput);
@@ -306,7 +319,7 @@ public class IntentExecutionOrchestrator {
         if (shouldRouteRestaurantOwnerAction(factoryId, userInput, request.getContext())) {
             log.info("[restaurant-owner-action] route before generic intent matching: factoryId={}, input={}",
                     factoryId, userInput);
-            return executeRestaurantOwnerActionChat(factoryId, request, userId);
+            return executeRestaurantOwnerActionChat(factoryId, request, userId, userRole);
         }
 
         // 0.2. Sprint 12 cache-fix Phase C — Phrase shortcut moved AHEAD of conversation
@@ -431,7 +444,7 @@ public class IntentExecutionOrchestrator {
 
         // 3. 无匹配
         if (!matchResult.hasMatch()) {
-            return buildNoMatchResponse(matchResult, factoryId, request, userId);
+            return buildNoMatchResponse(matchResult, factoryId, request, userId, userRole);
         }
 
         AIIntentConfig intent = matchResult.getBestMatch();
@@ -1595,11 +1608,12 @@ public class IntentExecutionOrchestrator {
     private IntentExecuteResponse buildNoMatchResponse(IntentMatchResult matchResult,
                                                        String factoryId,
                                                        IntentExecuteRequest request,
-                                                       Long userId) {
+                                                       Long userId,
+                                                       String userRole) {
         if (request != null && shouldRouteRestaurantOwnerAction(factoryId, request.getUserInput(), request.getContext())) {
             log.info("[restaurant-owner-action] route from no-match fallback: factoryId={}, input={}",
                     factoryId, request.getUserInput());
-            return executeRestaurantOwnerActionChat(factoryId, request, userId);
+            return executeRestaurantOwnerActionChat(factoryId, request, userId, userRole);
         }
 
         Map<String, Object> metadata = new HashMap<>();
@@ -1991,7 +2005,8 @@ public class IntentExecutionOrchestrator {
     @SuppressWarnings("unchecked")
     private IntentExecuteResponse executeRestaurantOwnerActionChat(String factoryId,
                                                                    IntentExecuteRequest request,
-                                                                   Long userId) {
+                                                                   Long userId,
+                                                                   String userRole) {
         Map<String, Object> context = request.getContext() == null
                 ? Collections.emptyMap()
                 : request.getContext();
@@ -2004,40 +2019,45 @@ public class IntentExecutionOrchestrator {
         body.put("subSector", stringValueOrDefault(context.get("subSector"), "中餐/川味酸菜鱼"));
         body.put("period", stringValueOrDefault(context.get("period"), "this_week"));
 
-        Optional<ToolExecutor> advisorTool = toolRegistry.getExecutor("restaurant_owner_action_advisor");
-        if (advisorTool.isEmpty()) {
-            return buildRestaurantOwnerActionError("老板动作分析工具未配置，请稍后重试。", userId);
-        }
-
-        Map<String, Object> raw;
+        Map<String, Object> data;
         try {
-            ToolCall toolCall = ToolCall.of(
-                    "owner-action-" + System.nanoTime(),
+            String callId = "owner-action-" + UUID.randomUUID();
+            ExecutionPrincipal principal = authenticatedToolPrincipalFactory.create(
+                    factoryId, userId, userRole);
+            ToolExecutionCommand command = new ToolExecutionCommand(
+                    callId,
+                    callId,
+                    callId + "-trace",
                     "restaurant_owner_action_advisor",
-                    objectMapper.writeValueAsString(body));
-            Map<String, Object> toolContext = new LinkedHashMap<>();
-            toolContext.put("factoryId", factoryId);
-            toolContext.put("userId", userId != null ? userId : 0L);
-            String toolResponseJson = advisorTool.get().execute(toolCall, toolContext);
-            raw = objectMapper.readValue(toolResponseJson, Map.class);
+                    "2.0.0",
+                    objectMapper.valueToTree(body),
+                    principal,
+                    ToolExecutionSource.AI_CHAT,
+                    ToolExecutionMode.EXECUTE,
+                    Optional.empty(),
+                    Optional.empty(),
+                    Optional.empty(),
+                    Instant.now().plusSeconds(30));
+            ToolExecutionResult gatewayResult = toolExecutionGateway.execute(command);
+            com.fasterxml.jackson.databind.JsonNode payload = gatewayResult.payload();
+            com.fasterxml.jackson.databind.JsonNode dataNode = payload.get("data");
+            if (gatewayResult.status() != ToolExecutionStatus.SUCCEEDED
+                    || !payload.path("success").isBoolean()
+                    || !payload.path("success").booleanValue()
+                    || dataNode == null
+                    || !dataNode.isObject()) {
+                return buildRestaurantOwnerActionError(
+                        "老板动作分析暂时不可用，请稍后重试。", userId);
+            }
+            data = objectMapper.convertValue(dataNode, Map.class);
         } catch (Exception ex) {
-            log.warn("餐饮老板动作建议 Tool 执行失败: {}", ex.getMessage(), ex);
+            log.warn("餐饮老板动作建议 Gateway 执行失败: type={}",
+                    ex.getClass().getSimpleName());
             return buildRestaurantOwnerActionError("老板动作分析暂时不可用，请稍后重试。", userId);
         }
-
-        boolean ok = Boolean.TRUE.equals(raw.get("success"));
-        Object dataObj = raw.get("data");
-        if (!ok || !(dataObj instanceof Map<?, ?> dataMapRaw)) {
-            String message = stringValueOrDefault(raw.get("message"), "老板动作分析暂时没有返回，请稍后重试。");
-            return buildRestaurantOwnerActionError(message, userId);
-        }
-
-        Map<String, Object> data = new LinkedHashMap<>((Map<String, Object>) dataMapRaw);
         if (Boolean.FALSE.equals(data.get("dataAvailable"))) {
-            String message = stringValueOrDefault(
-                    firstNonNull(data.get("message"), data.get("answer")),
-                    "老板动作分析暂时没有返回，请稍后重试。");
-            return buildRestaurantOwnerActionError(message, userId);
+            return buildRestaurantOwnerActionError(
+                    "老板动作分析暂时不可用，请稍后重试。", userId);
         }
         normalizeOwnerActionSource(data);
         data.put("suggestedFollowups", normalizeOwnerActionFollowups(

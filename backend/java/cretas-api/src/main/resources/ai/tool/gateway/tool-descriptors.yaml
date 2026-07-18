@@ -3,7 +3,7 @@
 # This inventory is an independent source-audit truth and is never sufficient by itself to execute.
 schemaVersion: 1
 expectedToolCount: 601
-expectedLegacyCount: 597
+expectedLegacyCount: 596
 descriptors:
   - toolName: "restaurant_calibration_history"
     implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantCalibrationHistoryTool"
@@ -2468,24 +2468,25 @@ descriptors:
     governanceStatus: REVIEW_REQUIRED
   - toolName: "restaurant_owner_action_advisor"
     implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantOwnerActionAdvisorTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
+    provenance: EXPLICIT
+    actionType: ANALYZE
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
+    requiresPermission: true
+    requiredPermissions: ["analytics:read"]
+    allowedRoles: []
+    version: "2.0.0"
+    domainTags: ["restaurant", "analytics", "decision-support"]
     overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: true
+      hasPermission: true
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: APPROVED
   - toolName: "restaurant_procurement_suggestion"
     implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantProcurementSuggestionTool"
     provenance: LEGACY_INFERRED

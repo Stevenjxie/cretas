@@ -1,10 +1,18 @@
 package com.cretas.aims.service.execution;
 
 import com.cretas.aims.ai.client.DashScopeClient;
-import com.cretas.aims.ai.dto.ToolCall;
-import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.WriteGuardService;
+import com.cretas.aims.ai.tool.gateway.AuthenticatedToolPrincipalFactory;
+import com.cretas.aims.ai.tool.gateway.ExecutionPrincipal;
+import com.cretas.aims.ai.tool.gateway.PrincipalType;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionCommand;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionGateway;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionResult;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionStatus;
 import com.cretas.aims.config.DashScopeConfig;
 import com.cretas.aims.config.IntentKnowledgeBase;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
@@ -29,15 +37,21 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.Map;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -52,6 +66,8 @@ class RestaurantOpsGoldRouteTest {
     private BusinessTypeGate businessTypeGate;
     private WriteGuardService writeGuardService;
     private QueryPreprocessorService queryPreprocessorService;
+    private ToolExecutionGateway toolExecutionGateway;
+    private AuthenticatedToolPrincipalFactory principalFactory;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @BeforeEach
@@ -62,6 +78,8 @@ class RestaurantOpsGoldRouteTest {
         businessTypeGate = mock(BusinessTypeGate.class);
         writeGuardService = mock(WriteGuardService.class);
         queryPreprocessorService = mock(QueryPreprocessorService.class);
+        toolExecutionGateway = mock(ToolExecutionGateway.class);
+        principalFactory = mock(AuthenticatedToolPrincipalFactory.class);
         orchestrator = new IntentExecutionOrchestrator(
                 aiIntentService,
                 mock(IntentSemanticsParser.class),
@@ -85,29 +103,27 @@ class RestaurantOpsGoldRouteTest {
                 queryPreprocessorService);
         ReflectionTestUtils.setField(orchestrator, "businessTypeGate", businessTypeGate);
         ReflectionTestUtils.setField(orchestrator, "writeGuardService", writeGuardService);
+        ReflectionTestUtils.setField(orchestrator, "toolExecutionGateway", toolExecutionGateway);
+        ReflectionTestUtils.setField(
+                orchestrator, "authenticatedToolPrincipalFactory", principalFactory);
         when(businessTypeGate.check(any(), any())).thenReturn(Optional.empty());
         when(writeGuardService.isWriteIntent(any())).thenReturn(false);
+        when(principalFactory.create(anyString(), anyLong(), anyString()))
+                .thenReturn(principal());
     }
 
     @Test
     @DisplayName("owner action execution delegates through governed restaurant owner advisor tool")
     void ownerActionExecutionUsesGovernedTool() throws Exception {
-        ToolExecutor advisorTool = mock(ToolExecutor.class);
-        when(toolRegistry.getExecutor("restaurant_owner_action_advisor"))
-                .thenReturn(Optional.of(advisorTool));
-        when(advisorTool.execute(any(ToolCall.class), any()))
-                .thenReturn(objectMapper.writeValueAsString(Map.of(
-                        "success", true,
-                        "data", Map.of(
-                                "dataAvailable", true,
-                                "source", "restaurant_owner_action_advisor",
-                                "answer", "今天先让仓管补活鱼，厨师长盯出品，前台盯核销。",
-                                "message", "今天先让仓管补活鱼，厨师长盯出品，前台盯核销。",
-                                "sessionId", "owner-action-001",
-                                "scenario", "operations_dispatch",
-                                "suggestedFollowups", List.of(Map.of("question", "仓管具体做什么？"))
-                        )
-                )));
+        Instant before = Instant.now();
+        stubOwnerGateway(Map.of(
+                "dataAvailable", true,
+                "source", "restaurant_owner_action_advisor",
+                "answer", "今天先让仓管补活鱼，厨师长盯出品，前台盯核销。",
+                "message", "今天先让仓管补活鱼，厨师长盯出品，前台盯核销。",
+                "sessionId", "owner-action-001",
+                "scenario", "operations_dispatch",
+                "suggestedFollowups", List.of(Map.of("question", "仓管具体做什么？"))));
 
         IntentExecuteRequest request = IntentExecuteRequest.builder()
                 .userInput("这周营收同比上周怎么提高，仓管厨师长前台分别做什么？")
@@ -124,7 +140,8 @@ class RestaurantOpsGoldRouteTest {
                 "executeRestaurantOwnerActionChat",
                 "DEMO_REST",
                 request,
-                7L);
+                7L,
+                "restaurant_owner");
 
         assertThat(response).isNotNull();
         assertThat(response.getStatus()).isEqualTo("SUCCESS");
@@ -139,25 +156,75 @@ class RestaurantOpsGoldRouteTest {
                     assertThat(item.get("question")).isEqualTo("仓管具体做什么？");
                     assertThat(item.get("ownerActionScenario")).isEqualTo("operations_dispatch");
                 });
-        verify(toolRegistry).getExecutor("restaurant_owner_action_advisor");
-        verify(advisorTool).execute(any(ToolCall.class), any());
+        ArgumentCaptor<ToolExecutionCommand> command =
+                ArgumentCaptor.forClass(ToolExecutionCommand.class);
+        verify(toolExecutionGateway).execute(command.capture());
+        assertThat(command.getValue().toolName()).isEqualTo("restaurant_owner_action_advisor");
+        assertThat(command.getValue().expectedDescriptorVersion()).isEqualTo("2.0.0");
+        assertThat(command.getValue().source()).isEqualTo(ToolExecutionSource.AI_CHAT);
+        assertThat(command.getValue().mode()).isEqualTo(ToolExecutionMode.EXECUTE);
+        assertThat(command.getValue().idempotencyKey()).isEmpty();
+        assertThat(command.getValue().confirmationProof()).isEmpty();
+        assertThat(command.getValue().approvalProof()).isEmpty();
+        assertThat(command.getValue().deadline()).isAfter(before);
+        assertThat(command.getValue().deadline()).isBeforeOrEqualTo(before.plusSeconds(31));
+        assertThat(command.getValue().requestId()).isEqualTo(command.getValue().correlationId());
+        verify(principalFactory).create("DEMO_REST", 7L, "restaurant_owner");
+    }
+
+    @Test
+    void ownerActionRejectsDeniedFailedAndMalformedGatewayResults() {
+        IntentExecuteRequest request = IntentExecuteRequest.builder()
+                .userInput("今天老板先做什么？")
+                .build();
+
+        for (ToolExecutionStatus status : List.of(
+                ToolExecutionStatus.DENIED, ToolExecutionStatus.FAILED)) {
+            org.mockito.Mockito.reset(toolExecutionGateway);
+            when(toolExecutionGateway.execute(any(ToolExecutionCommand.class)))
+                    .thenAnswer(invocation -> gatewayResult(
+                            invocation.getArgument(0),
+                            status,
+                            objectMapper.valueToTree(Map.of(
+                                    "success", false,
+                                    "error", "sensitive downstream detail"))));
+            IntentExecuteResponse response = ReflectionTestUtils.invokeMethod(
+                    orchestrator,
+                    "executeRestaurantOwnerActionChat",
+                    "DEMO_REST",
+                    request,
+                    7L,
+                    "restaurant_owner");
+            assertThat(response.getStatus()).isEqualTo("ERROR");
+            assertThat(response.getMessage()).contains("暂时不可用")
+                    .doesNotContain("sensitive downstream detail");
+        }
+
+        org.mockito.Mockito.reset(toolExecutionGateway);
+        when(toolExecutionGateway.execute(any(ToolExecutionCommand.class)))
+                .thenAnswer(invocation -> gatewayResult(
+                        invocation.getArgument(0),
+                        ToolExecutionStatus.SUCCEEDED,
+                        objectMapper.valueToTree(Map.of(
+                                "success", true,
+                                "data", List.of("wrong-shape")))));
+        IntentExecuteResponse malformed = ReflectionTestUtils.invokeMethod(
+                orchestrator,
+                "executeRestaurantOwnerActionChat",
+                "DEMO_REST",
+                request,
+                7L,
+                "restaurant_owner");
+        assertThat(malformed.getStatus()).isEqualTo("ERROR");
     }
 
     @Test
     @DisplayName("owner action unavailable data is an explicit error, never fake success")
     void ownerActionUnavailableDataReturnsErrorStatus() throws Exception {
-        ToolExecutor advisorTool = mock(ToolExecutor.class);
-        when(toolRegistry.getExecutor("restaurant_owner_action_advisor"))
-                .thenReturn(Optional.of(advisorTool));
-        when(advisorTool.execute(any(ToolCall.class), any()))
-                .thenReturn(objectMapper.writeValueAsString(Map.of(
-                        "success", true,
-                        "data", Map.of(
-                                "dataAvailable", false,
-                                "message", "老板动作分析服务暂时不可用，请稍后重试。",
-                                "answer", "老板动作分析服务暂时不可用，请稍后重试。"
-                        )
-                )));
+        stubOwnerGateway(Map.of(
+                "dataAvailable", false,
+                "message", "sensitive downstream detail",
+                "answer", "sensitive downstream detail"));
 
         IntentExecuteRequest request = IntentExecuteRequest.builder()
                 .userInput("今天老板先做什么？")
@@ -168,11 +235,13 @@ class RestaurantOpsGoldRouteTest {
                 "executeRestaurantOwnerActionChat",
                 "DEMO_REST",
                 request,
-                7L);
+                7L,
+                "restaurant_owner");
 
         assertThat(response).isNotNull();
         assertThat(response.getStatus()).isEqualTo("ERROR");
-        assertThat(response.getMessage()).contains("暂时不可用");
+        assertThat(response.getMessage()).contains("暂时不可用")
+                .doesNotContain("sensitive downstream detail");
         assertThat(response.getResultData()).isNull();
     }
 
@@ -185,21 +254,13 @@ class RestaurantOpsGoldRouteTest {
         when(queryPreprocessorService.detectNegationVeto(any(), any()))
                 .thenReturn(QueryPreprocessorService.NegationKind.VETO_WRITE);
 
-        ToolExecutor advisorTool = mock(ToolExecutor.class);
-        when(toolRegistry.getExecutor("restaurant_owner_action_advisor"))
-                .thenReturn(Optional.of(advisorTool));
-        when(advisorTool.execute(any(ToolCall.class), any()))
-                .thenReturn(objectMapper.writeValueAsString(Map.of(
-                        "success", true,
-                        "data", Map.of(
-                                "dataAvailable", true,
-                                "source", "restaurant_owner_action_advisor",
-                                "message", "今晚先把前厅加到18:00-20:00，厨房按招牌鱼备货。",
-                                "answer", "今晚先把前厅加到18:00-20:00，厨房按招牌鱼备货。",
-                                "sessionId", "owner-action-followup",
-                                "scenario", "staffing_inventory"
-                        )
-                )));
+        stubOwnerGateway(Map.of(
+                "dataAvailable", true,
+                "source", "restaurant_owner_action_advisor",
+                "message", "今晚先把前厅加到18:00-20:00，厨房按招牌鱼备货。",
+                "answer", "今晚先把前厅加到18:00-20:00，厨房按招牌鱼备货。",
+                "sessionId", "owner-action-followup",
+                "scenario", "staffing_inventory"));
 
         IntentExecuteRequest request = IntentExecuteRequest.builder()
                 .userInput("不要套餐，今天排班和备货怎么调？")
@@ -211,8 +272,7 @@ class RestaurantOpsGoldRouteTest {
         assertThat(response.getIntentCode()).isEqualTo("RESTAURANT_OWNER_ACTION_CHAT");
         assertThat(response.getMessage()).contains("前厅").contains("备货");
         assertThat(((Map<?, ?>) response.getResultData()).get("source")).isEqualTo("restaurant_owner_action");
-        verify(toolRegistry).getExecutor("restaurant_owner_action_advisor");
-        verify(advisorTool).execute(any(ToolCall.class), any());
+        verify(toolExecutionGateway, atLeastOnce()).execute(any(ToolExecutionCommand.class));
     }
 
     @Test
@@ -224,21 +284,13 @@ class RestaurantOpsGoldRouteTest {
         when(queryPreprocessorService.detectNegationVeto(any(), any()))
                 .thenReturn(QueryPreprocessorService.NegationKind.VETO_READ);
 
-        ToolExecutor advisorTool = mock(ToolExecutor.class);
-        when(toolRegistry.getExecutor("restaurant_owner_action_advisor"))
-                .thenReturn(Optional.of(advisorTool));
-        when(advisorTool.execute(any(ToolCall.class), any()))
-                .thenReturn(objectMapper.writeValueAsString(Map.of(
-                        "success", true,
-                        "data", Map.of(
-                                "dataAvailable", true,
-                                "source", "restaurant_owner_action_advisor",
-                                "message", "不打折也能先做门口转化、套餐陈列和前厅话术。",
-                                "answer", "不打折也能先做门口转化、套餐陈列和前厅话术。",
-                                "sessionId", "owner-action-no-discount",
-                                "scenario", "revenue_recovery"
-                        )
-                )));
+        stubOwnerGateway(Map.of(
+                "dataAvailable", true,
+                "source", "restaurant_owner_action_advisor",
+                "message", "不打折也能先做门口转化、套餐陈列和前厅话术。",
+                "answer", "不打折也能先做门口转化、套餐陈列和前厅话术。",
+                "sessionId", "owner-action-no-discount",
+                "scenario", "revenue_recovery"));
 
         IntentExecuteRequest request = IntentExecuteRequest.builder()
                 .userInput("不想打折，那今天还有什么办法提升营收？")
@@ -249,8 +301,7 @@ class RestaurantOpsGoldRouteTest {
         assertThat(response.getStatus()).isEqualTo("SUCCESS");
         assertThat(response.getIntentCode()).isEqualTo("RESTAURANT_OWNER_ACTION_CHAT");
         assertThat(response.getMessage()).contains("不打折").contains("转化");
-        verify(toolRegistry).getExecutor("restaurant_owner_action_advisor");
-        verify(advisorTool).execute(any(ToolCall.class), any());
+        verify(toolExecutionGateway, atLeastOnce()).execute(any(ToolExecutionCommand.class));
     }
 
     @Test
@@ -591,5 +642,49 @@ class RestaurantOpsGoldRouteTest {
                 eq(7L),
                 eq("admin"),
                 any());
+    }
+
+    private void stubOwnerGateway(Map<String, Object> data) {
+        when(toolExecutionGateway.execute(any(ToolExecutionCommand.class)))
+                .thenAnswer(invocation -> {
+                    ToolExecutionCommand command = invocation.getArgument(0);
+                    return new ToolExecutionResult(
+                            command.requestId(),
+                            command.toolName(),
+                            command.expectedDescriptorVersion(),
+                            "audit-owner-action",
+                            command.traceId(),
+                            ToolExecutionStatus.SUCCEEDED,
+                            objectMapper.valueToTree(Map.of("success", true, "data", data)),
+                            "Tool execution succeeded",
+                            false);
+                });
+    }
+
+    private ExecutionPrincipal principal() {
+        return new ExecutionPrincipal(
+                "DEMO_REST",
+                "RESTAURANT",
+                "7",
+                PrincipalType.USER,
+                Set.of("restaurant_owner"),
+                Set.of(),
+                Set.of());
+    }
+
+    private ToolExecutionResult gatewayResult(
+            ToolExecutionCommand command,
+            ToolExecutionStatus status,
+            com.fasterxml.jackson.databind.JsonNode payload) {
+        return new ToolExecutionResult(
+                command.requestId(),
+                command.toolName(),
+                command.expectedDescriptorVersion(),
+                "audit-owner-action",
+                command.traceId(),
+                status,
+                payload,
+                "Gateway result",
+                false);
     }
 }

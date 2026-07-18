@@ -2,23 +2,32 @@ package com.cretas.aims.ai.tool.impl.restaurant;
 
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
-import com.cretas.aims.client.PythonSmartBIClient;
+import com.cretas.aims.ai.tool.gateway.ToolEgressPermit;
+import com.cretas.aims.client.RestaurantOwnerActionClient;
+import com.cretas.aims.client.RestaurantOwnerActionClient.OwnerActionRequest;
+import com.cretas.aims.client.RestaurantOwnerActionClient.TrustedContext;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import java.io.IOException;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.same;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class RestaurantOwnerActionAdvisorToolTest {
@@ -26,127 +35,167 @@ class RestaurantOwnerActionAdvisorToolTest {
     private static final String FACTORY_ID = "RES_DEMO_QHJ";
 
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private PythonSmartBIClient pythonSmartBIClient;
+    private RestaurantOwnerActionClient client;
     private RestaurantOwnerActionAdvisorTool tool;
 
     @BeforeEach
     void setUp() throws Exception {
-        pythonSmartBIClient = mock(PythonSmartBIClient.class);
-        tool = new RestaurantOwnerActionAdvisorTool(pythonSmartBIClient);
-        injectField(tool, "objectMapper", objectMapper);
+        client = mock(RestaurantOwnerActionClient.class);
+        tool = new RestaurantOwnerActionAdvisorTool(client);
+        Field mapper = tool.getClass().getSuperclass().getDeclaredField("objectMapper");
+        mapper.setAccessible(true);
+        mapper.set(tool, objectMapper);
     }
 
     @Test
-    @DisplayName("owner advisor is a governed restaurant read tool")
-    void metadata() {
+    void publishesExactAnalyzePermissionAndEgressMetadata() {
         assertThat(tool.getToolName()).isEqualTo("restaurant_owner_action_advisor");
-        assertThat(tool.getDomainTags()).isEqualTo(Set.of("restaurant"));
-        assertThat(tool.getActionType()).isEqualTo(ToolExecutor.ActionType.READ);
+        assertThat(tool.getActionType()).isEqualTo(ToolExecutor.ActionType.ANALYZE);
         assertThat(tool.getRiskLevel()).isEqualTo(ToolExecutor.RiskLevel.LOW);
-        assertThat(tool.getDescription()).contains("老板").contains("决策");
-        assertThat(tool.getParametersSchema()).containsKey("properties");
+        assertThat(tool.getVersion()).isEqualTo("2.0.0");
+        assertThat(tool.getDomainTags())
+                .containsExactlyInAnyOrder("restaurant", "analytics", "decision-support");
+        assertThat(tool.requiresPermission()).isTrue();
+        assertThat(tool.hasPermission("restaurant_owner")).isFalse();
+        assertThat(tool.getRequiredPermissions()).containsExactly("analytics:read");
+        assertThat(tool.supportsPreview()).isFalse();
+        assertThat(tool.getEgressDestinationIds())
+                .containsExactly(RestaurantOwnerActionClient.DESTINATION_ID);
     }
 
     @Test
-    @DisplayName("owner advisor delegates to Python owner action chat and normalizes decision response")
-    void delegatesToPythonOwnerActionChat() throws Exception {
-        when(pythonSmartBIClient.askRestaurantOwnerActionChat(
-                eq(FACTORY_ID), org.mockito.ArgumentMatchers.any()))
-                .thenReturn(Map.of(
-                        "success", true,
-                        "data", Map.of(
-                                "sessionId", "owner-action-001",
-                                "scenario", "operations_dispatch",
-                                "answer", "今天先让仓管补活鱼，厨师长盯出品，前台盯核销。",
-                                "followUpSuggestions", List.of("仓管具体做什么？", "明天看哪三个数？"),
-                                "charts", List.of(Map.of("title", "角色动作")),
-                                "roleActionPlan", List.of(Map.of("role", "仓管", "action", "补活鱼")),
-                                "ownerDecisionPage", Map.of("headline", "先抓晚高峰执行")
-                        )
-                ));
-
-        ToolCall call = ToolCall.of(
-                "test-call",
-                "restaurant_owner_action_advisor",
+    void passesActualToolCallPermitTrustedContextAndTypedBodyToClient() throws Exception {
+        ToolCall actualCall = ToolCall.of(
+                "request-1",
+                RestaurantOwnerActionClient.TOOL_NAME,
                 objectMapper.writeValueAsString(Map.of(
-                        "message", "这周营收同比上周怎么提高，仓管厨师长前台分别做什么？",
-                        "sessionId", "owner-action-001",
+                        "message", "今天仓管厨师长前台分别做什么？",
+                        "sessionId", "owner-1",
                         "demoScenario", "operations_dispatch",
-                        "storeName", "青花椒上海示范店",
-                        "subSector", "中餐/川味酸菜鱼",
-                        "period", "this_week"
-                )));
+                        "storeName", "测试门店",
+                        "subSector", "中餐",
+                        "period", "this_week")));
+        ToolEgressPermit permit = permit("request-1", Instant.now().plusSeconds(30));
+        when(client.advise(same(actualCall), same(permit), any(), any()))
+                .thenReturn(Map.of(
+                        "sessionId", "owner-1",
+                        "scenario", "operations_dispatch",
+                        "answer", "仓管补货，厨师长盯出品，前台盯核销。",
+                        "followUpSuggestions", List.of("仓管具体做什么？"),
+                        "charts", List.of(),
+                        "roleActionPlan", List.of(),
+                        "ownerDecisionPage", Map.of()));
 
-        String json = tool.execute(call, Map.of("factoryId", FACTORY_ID, "userId", 7L));
-        Map<String, Object> envelope = objectMapper.readValue(json, new TypeReference<>() {});
+        String json = tool.execute(actualCall, trustedContext(permit));
+        Map<String, Object> envelope = objectMapper.readValue(json, new TypeReference<>() { });
 
         assertThat(envelope).containsEntry("success", true);
-        @SuppressWarnings("unchecked")
-        Map<String, Object> data = (Map<String, Object>) envelope.get("data");
-        assertThat(data).containsEntry("dataAvailable", true);
-        assertThat(data).containsEntry("source", "restaurant_owner_action");
-        assertThat(data).containsEntry("advisorSource", "restaurant_owner_action_advisor");
-        assertThat(data).containsEntry("scenario", "operations_dispatch");
-        assertThat(data).containsEntry("sessionId", "owner-action-001");
-        assertThat(data).containsEntry("answer", "今天先让仓管补活鱼，厨师长盯出品，前台盯核销。");
-        assertThat(data).containsKey("suggestedFollowups");
-        assertThat(data).containsKey("dataReadiness");
+        Map<?, ?> data = (Map<?, ?>) envelope.get("data");
+        assertThat(data.get("dataAvailable")).isEqualTo(true);
+        assertThat(data.get("answer")).isEqualTo("仓管补货，厨师长盯出品，前台盯核销。");
+        assertThat(data.get("advisorSource")).isEqualTo(RestaurantOwnerActionClient.TOOL_NAME);
 
-        @SuppressWarnings("unchecked")
-        Map<String, Object> readiness = (Map<String, Object>) data.get("dataReadiness");
-        assertThat(readiness).containsEntry("mode", "java_tool_to_python_owner_action");
-        assertThat(readiness).containsEntry("factoryId", FACTORY_ID);
-
-        ArgumentCaptor<Map<String, Object>> bodyCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(pythonSmartBIClient).askRestaurantOwnerActionChat(eq(FACTORY_ID), bodyCaptor.capture());
-        Map<String, Object> body = bodyCaptor.getValue();
-        assertThat(body).containsEntry("message", "这周营收同比上周怎么提高，仓管厨师长前台分别做什么？");
-        assertThat(body).containsEntry("session_id", "owner-action-001");
-        assertThat(body).containsEntry("demo_scenario", "operations_dispatch");
-        assertThat(body).containsEntry("store_name", "青花椒上海示范店");
-        assertThat(body).containsEntry("sub_sector", "中餐/川味酸菜鱼");
-        assertThat(body).containsEntry("period", "this_week");
-        assertThat(body).doesNotContainKeys("factory_id", "factoryId", "raw");
-        assertThat(data).doesNotContainKey("raw");
+        ArgumentCaptor<TrustedContext> context = ArgumentCaptor.forClass(TrustedContext.class);
+        ArgumentCaptor<OwnerActionRequest> request = ArgumentCaptor.forClass(OwnerActionRequest.class);
+        verify(client).advise(same(actualCall), same(permit), context.capture(), request.capture());
+        assertThat(context.getValue()).isEqualTo(new TrustedContext(
+                FACTORY_ID, "7", "restaurant_owner", "BRANCH", "request-1"));
+        assertThat(request.getValue().message()).isEqualTo("今天仓管厨师长前台分别做什么？");
+        assertThat(request.getValue().sessionId()).isEqualTo("owner-1");
     }
 
     @Test
-    @DisplayName("owner advisor returns explicit unavailable result when Python is not configured")
-    void unavailableWhenPythonClientMissing() throws Exception {
-        RestaurantOwnerActionAdvisorTool missingClientTool = new RestaurantOwnerActionAdvisorTool(null);
-        injectField(missingClientTool, "objectMapper", objectMapper);
+    void missingPermitAndUpstreamFailureReturnSuccessFalseWithoutFakeData() throws Exception {
+        ToolCall missingPermit = ToolCall.of(
+                "missing", RestaurantOwnerActionClient.TOOL_NAME, "{}");
+        String missingJson = tool.execute(missingPermit, Map.of(
+                "factoryId", FACTORY_ID,
+                "userId", 7L,
+                "userRole", "restaurant_owner",
+                "businessType", "RESTAURANT"));
+        Map<String, Object> missingEnvelope = objectMapper.readValue(
+                missingJson, new TypeReference<>() { });
+        assertThat(missingEnvelope).containsEntry("success", false);
+        assertThat(missingEnvelope).doesNotContainKey("data");
 
-        ToolCall call = ToolCall.of(
-                "missing-client",
-                "restaurant_owner_action_advisor",
-                objectMapper.writeValueAsString(Map.of("message", "老板今天怎么提高营收？")));
+        ToolCall upstreamFailure = ToolCall.of(
+                "upstream", RestaurantOwnerActionClient.TOOL_NAME, "{}");
+        ToolEgressPermit permit = permit("upstream", Instant.now().plusSeconds(30));
+        when(client.advise(same(upstreamFailure), same(permit), any(), any()))
+                .thenThrow(new IOException("sensitive upstream detail"));
+        String failedJson = tool.execute(upstreamFailure, trustedContext(permit));
+        Map<String, Object> failedEnvelope = objectMapper.readValue(
+                failedJson, new TypeReference<>() { });
+        assertThat(failedEnvelope).containsEntry("success", false);
+        assertThat(failedEnvelope).doesNotContainKey("data");
+        assertThat(failedEnvelope.get("error").toString())
+                .doesNotContain("sensitive upstream detail");
+    }
 
-        String json = missingClientTool.execute(call, Map.of("factoryId", FACTORY_ID, "userId", 7L));
-        Map<String, Object> envelope = objectMapper.readValue(json, new TypeReference<>() {});
+    @Test
+    void malformedToolCallFailsClosedInsteadOfThrowing() throws Exception {
+        String response = tool.execute(null, Map.of());
+        Map<String, Object> envelope = objectMapper.readValue(
+                response, new TypeReference<>() { });
+        assertThat(envelope).containsEntry("success", false);
+    }
 
-        assertThat(envelope).containsEntry("success", true);
+    @Test
+    void nonStringParametersFailClosedBeforeClientInteraction() throws Exception {
+        ToolCall objectMessage = ToolCall.of(
+                "object-message",
+                RestaurantOwnerActionClient.TOOL_NAME,
+                objectMapper.writeValueAsString(Map.of("message", Map.of("raw", "secret"))));
+        Map<String, Object> objectEnvelope = objectMapper.readValue(
+                tool.execute(
+                        objectMessage,
+                        trustedContext(permit(
+                                "object-message", Instant.now().plusSeconds(30)))),
+                new TypeReference<>() { });
+        assertThat(objectEnvelope).containsEntry("success", false);
+
+        ToolCall listPeriod = ToolCall.of(
+                "list-period",
+                RestaurantOwnerActionClient.TOOL_NAME,
+                objectMapper.writeValueAsString(Map.of(
+                        "message", "今天先做什么？",
+                        "period", List.of("this_week"))));
+        Map<String, Object> listEnvelope = objectMapper.readValue(
+                tool.execute(
+                        listPeriod,
+                        trustedContext(permit(
+                                "list-period", Instant.now().plusSeconds(30)))),
+                new TypeReference<>() { });
+        assertThat(listEnvelope).containsEntry("success", false);
+        verifyNoInteractions(client);
+    }
+
+    private Map<String, Object> trustedContext(ToolEgressPermit permit) throws Exception {
+        Method method = ToolEgressPermit.class.getDeclaredMethod(
+                "trustedExecutionContext", Map.class, Optional.class);
+        method.setAccessible(true);
         @SuppressWarnings("unchecked")
-        Map<String, Object> data = (Map<String, Object>) envelope.get("data");
-        assertThat(data).containsEntry("dataAvailable", false);
-        assertThat(data).containsEntry("source", "restaurant_owner_action");
-        assertThat(data).containsEntry("advisorSource", "restaurant_owner_action_advisor");
-        assertThat(data.get("message").toString()).contains("服务未配置");
+        Map<String, Object> context = (Map<String, Object>) method.invoke(
+                null,
+                Map.of(
+                        "factoryId", FACTORY_ID,
+                        "userId", 7L,
+                        "userRole", "restaurant_owner",
+                        "businessType", "BRANCH"),
+                Optional.of(permit));
+        return context;
     }
 
-    private void injectField(Object target, String name, Object value) throws Exception {
-        Field f = findField(target.getClass(), name);
-        f.setAccessible(true);
-        f.set(target, value);
-    }
-
-    private Field findField(Class<?> clazz, String name) {
-        while (clazz != null) {
-            try {
-                return clazz.getDeclaredField(name);
-            } catch (NoSuchFieldException e) {
-                clazz = clazz.getSuperclass();
-            }
-        }
-        throw new IllegalArgumentException("Field not found: " + name);
+    private ToolEgressPermit permit(String requestId, Instant deadline) throws Exception {
+        Constructor<ToolEgressPermit> constructor = ToolEgressPermit.class
+                .getDeclaredConstructor(
+                        String.class, String.class, String.class, Instant.class, Set.class);
+        constructor.setAccessible(true);
+        return constructor.newInstance(
+                RestaurantOwnerActionClient.TOOL_NAME,
+                RestaurantOwnerActionClient.TOOL_VERSION,
+                requestId,
+                deadline,
+                Set.of(RestaurantOwnerActionClient.DESTINATION_ID));
     }
 }

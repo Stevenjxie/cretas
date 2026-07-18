@@ -7,6 +7,7 @@ import com.cretas.aims.ai.tool.gateway.DescriptorProvenance;
 import com.cretas.aims.ai.tool.gateway.EgressMode;
 import com.cretas.aims.ai.tool.gateway.IdempotencyPolicy;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
+import com.cretas.aims.entity.enums.FactoryType;
 import org.junit.jupiter.api.Test;
 import org.yaml.snakeyaml.error.YAMLException;
 
@@ -20,16 +21,17 @@ class RuntimeToolPolicyLoaderTest {
     private final RuntimeToolPolicyLoader loader = new RuntimeToolPolicyLoader();
 
     @Test
-    void loadsAllFourCompleteExplicitRuntimePolicies() {
+    void loadsAllFiveCompleteExplicitRuntimePolicies() {
         RuntimeToolPolicyManifest manifest = loader.loadDefault();
 
         assertThat(manifest.schemaVersion()).isEqualTo(1);
-        assertThat(manifest.expectedPolicyCount()).isEqualTo(4);
+        assertThat(manifest.expectedPolicyCount()).isEqualTo(5);
         assertThat(manifest.policies())
                 .extracting(RuntimeToolPolicyEntry::toolName)
                 .containsExactly(
                         "user_disable",
                         "restaurant_dish_delete",
+                        "restaurant_owner_action_advisor",
                         "canvas_product_work_process_config",
                         "canvas_work_process_catalog");
         assertThat(manifest.policies()).allSatisfy(policy -> {
@@ -40,8 +42,6 @@ class RuntimeToolPolicyLoaderTest {
             assertThat(policy.domainTags()).isNotEmpty();
             assertThat(policy.approvalPolicy())
                     .isEqualTo(ApprovalPolicy.NOT_REQUIRED);
-            assertThat(policy.egressPolicy().mode()).isEqualTo(EgressMode.DENY_ALL);
-            assertThat(policy.egressPolicy().allowedDestinations()).isEmpty();
         });
         assertThat(manifest.policies().subList(0, 2)).allSatisfy(policy -> {
             assertThat(policy.version()).isEqualTo("2.0.0");
@@ -52,7 +52,7 @@ class RuntimeToolPolicyLoaderTest {
                     .isEqualTo(IdempotencyPolicy.REQUIRED_FOR_EXECUTION);
             assertThat(policy.allowedSources()).containsExactly(ToolExecutionSource.AI_CHAT);
         });
-        assertThat(manifest.policies().subList(2, 4)).allSatisfy(policy -> {
+        assertThat(manifest.policies().subList(3, 5)).allSatisfy(policy -> {
             assertThat(policy.version()).isEqualTo("1.0.0");
             assertThat(policy.supportsPreview()).isTrue();
             assertThat(policy.confirmationPolicy()).isEqualTo(ConfirmationPolicy.NOT_REQUIRED);
@@ -64,6 +64,27 @@ class RuntimeToolPolicyLoaderTest {
                 .isEqualTo(DataClassification.RESTRICTED);
         assertThat(manifest.policies().get(1).dataClassification())
                 .isEqualTo(DataClassification.CONFIDENTIAL);
+        assertThat(manifest.policies().get(2)).satisfies(policy -> {
+            assertThat(policy.toolName()).isEqualTo("restaurant_owner_action_advisor");
+            assertThat(policy.version()).isEqualTo("2.0.0");
+            assertThat(policy.requiredPermissions()).containsExactly("analytics:read");
+            assertThat(policy.allowedRoles()).isEmpty();
+            assertThat(policy.allowedBusinessTypes())
+                    .containsExactlyInAnyOrder(FactoryType.RESTAURANT, FactoryType.BRANCH);
+            assertThat(policy.confirmationPolicy()).isEqualTo(ConfirmationPolicy.NOT_REQUIRED);
+            assertThat(policy.idempotencyPolicy()).isEqualTo(IdempotencyPolicy.NOT_REQUIRED);
+            assertThat(policy.allowedSources()).containsExactly(ToolExecutionSource.AI_CHAT);
+            assertThat(policy.dataClassification()).isEqualTo(DataClassification.CONFIDENTIAL);
+            assertThat(policy.egressPolicy().mode()).isEqualTo(EgressMode.ALLOWLIST_ONLY);
+            assertThat(policy.egressPolicy().allowedDestinations())
+                    .containsExactly("python-smartbi.owner-action-chat.v1");
+        });
+        assertThat(manifest.policies())
+                .filteredOn(policy -> !policy.toolName().equals("restaurant_owner_action_advisor"))
+                .allSatisfy(policy -> {
+                    assertThat(policy.egressPolicy().mode()).isEqualTo(EgressMode.DENY_ALL);
+                    assertThat(policy.egressPolicy().allowedDestinations()).isEmpty();
+                });
     }
 
     @Test
