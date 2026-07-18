@@ -6,17 +6,18 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * raw-centric 多成品 (2026-07-13): 生产计划「多选成品 → 解析共用 raw workflow」。
+ * 生产计划「选择成品 → 解析并固定 Workflow 路线」。
  *
  * <p>反向索引 = 运行时扫描已启用 activation 的原料图 nodesJson 终端成品 (不建映射表, 天然一致)。
  */
 public interface ProductWorkflowResolutionService {
 
     /**
-     * 给定一组成品 productTypeId, 解析可覆盖它们的已启用 workflow 候选 (只读, 空候选不报错)。
+     * 给定一组成品 productTypeId, 解析最高优先层的已启用 workflow 候选 (只读, 空候选不报错)。
      * <ul>
-     *   <li>单选且命中成品自有图 (owner 非原料) → SELF_WORKFLOW, 短路优先。</li>
-     *   <li>否则匹配 owner=原料、终端成品 ⊇ 所选 的图 → RAW_OWNED (0/1/N 候选)。</li>
+     *   <li>单选只接受单产出精确图。</li>
+     *   <li>多选优先终端集合精确图；无精确图时只返回额外产出最少的同层超集。</li>
+     *   <li>同层可返回 1/N 条，N 条必须由调用方显式选择。</li>
      *   <li>0 候选 → NONE (空列表)。</li>
      * </ul>
      */
@@ -43,4 +44,12 @@ public interface ProductWorkflowResolutionService {
     /** Resolve and pin the active workflow's terminal reporting-unit contract for a plan. */
     Optional<WorkflowPlanOutputContract> resolveActivePlanOutputContract(
             String factoryId, String ownerProductTypeId, List<String> targetFinishedGoodIds);
+
+    /**
+     * Revalidate the exact workflow/version explicitly selected in the plan UI and return its
+     * reporting-unit contract. The selection must still be the enabled activation for the owner.
+     */
+    WorkflowPlanOutputContract resolvePinnedPlanOutputContract(
+            String factoryId, String ownerProductTypeId, Long workflowId, Integer definitionVersion,
+            List<String> targetFinishedGoodIds);
 }

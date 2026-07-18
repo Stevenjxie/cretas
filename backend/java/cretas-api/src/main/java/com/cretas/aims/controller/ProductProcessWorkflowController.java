@@ -68,12 +68,12 @@ public class ProductProcessWorkflowController {
     }
 
     /**
-     * raw-centric 多成品 (2026-07-13): 按一组终端成品解析可覆盖它们的已启用 Workflow。
-     * 单选优先成品自有图 (SELF_WORKFLOW); 多选只匹配以原料为锚、终端覆盖所选全部成品的图 (RAW_OWNED)。
+     * 按终端成品集合解析当前最高优先层的已启用 Workflow。
+     * 精确候选优先；无精确候选时返回额外联产成品最少的同层超集候选。
      * 字面量段 /resolve-by-outputs 与 GET /{productTypeId} 不冲突 (Spring 字面量优先)。
      */
     @PostMapping("/resolve-by-outputs")
-    @Operation(summary = "按一组终端成品解析可覆盖它们的已启用 Workflow(单选优先成品自有图, 多选匹配原料 owner 图)")
+    @Operation(summary = "按终端成品集合解析最高优先层的已启用 Workflow 候选")
     public ApiResponse<WorkflowOutputResolutionDTO> resolveByOutputs(
             @PathVariable String factoryId,
             @Valid @RequestBody WorkflowOutputResolutionDTO.Request request) {

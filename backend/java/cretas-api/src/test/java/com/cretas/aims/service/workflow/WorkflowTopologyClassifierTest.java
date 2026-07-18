@@ -33,19 +33,47 @@ class WorkflowTopologyClassifierTest {
         assertEquals(WorkflowTopology.Type.JOINT_PRODUCTION, joint.type());
     }
 
+    @Test
+    void countsMutuallySubstitutableRawMaterialsAsOneLogicalInput() {
+        WorkflowTopology topology = WorkflowTopologyClassifier.classify(
+                graph(List.of("RAW-A", "RAW-B", "RAW-C", "RAW-D"),
+                        List.of("FG-1", "FG-2"), true));
+
+        assertEquals(WorkflowTopology.Type.RAW_MATERIAL_SPLIT, topology.type());
+        assertEquals(List.of("RAW-A", "RAW-B", "RAW-C", "RAW-D"), topology.rootInputSkuIds());
+    }
+
     private ProductProcessWorkflowDTO graph(List<String> roots, List<String> terminals) {
+        return graph(roots, terminals, false);
+    }
+
+    private ProductProcessWorkflowDTO graph(
+            List<String> roots, List<String> terminals, boolean mutuallySubstitutableRoots) {
         ProductProcessWorkflowDTO definition = new ProductProcessWorkflowDTO();
         List<ProductProcessWorkflowDTO.Node> nodes = new ArrayList<>();
         List<ProductProcessWorkflowDTO.Edge> edges = new ArrayList<>();
         Map<String, Object> processData = new LinkedHashMap<>();
-        processData.put("ports", List.of());
+        List<Map<String, Object>> ports = new ArrayList<>();
+        processData.put("ports", ports);
         nodes.add(node("process", "PROCESS", processData));
         int index = 0;
         for (String root : roots) {
             String id = "raw-" + index++;
+            String portId = "input-" + id;
             nodes.add(material(id, "RAW_MATERIAL", root));
             edges.add(new ProductProcessWorkflowDTO.Edge(
-                    "edge-in-" + id, id, "output", "process", "input-" + id));
+                    "edge-in-" + id, id, "output", "process", portId));
+            ports.add(new LinkedHashMap<>(Map.of(
+                    "id", portId,
+                    "direction", "INPUT",
+                    "materialNodeId", id)));
+        }
+        if (mutuallySubstitutableRoots) {
+            processData.put("portGroups", List.of(new LinkedHashMap<>(Map.of(
+                    "id", "input-alternatives",
+                    "direction", "INPUT",
+                    "mode", "EXACTLY_ONE",
+                    "portIds", ports.stream().map(port -> port.get("id")).toList()))));
         }
         index = 0;
         for (String terminal : terminals) {

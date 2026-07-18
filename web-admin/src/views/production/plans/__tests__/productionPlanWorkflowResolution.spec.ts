@@ -3,6 +3,8 @@ import type { WorkflowResolutionCandidate } from '@/api/productionPlan';
 import {
   resolvePlanWorkflowCandidates,
   workflowCandidateBindingProductTypeId,
+  workflowCandidateExtraOutputs,
+  workflowCandidateProcessSummary,
 } from '../productionPlanWorkflowResolution';
 
 function candidate(
@@ -46,6 +48,26 @@ describe('production plan Workflow resolution', () => {
     expect(result.candidates.map((item) => item.workflowId)).toEqual([2]);
   });
 
+  it('keeps all exact candidates and excludes supersets from the same decision layer', () => {
+    const exactA = candidate(2, ['FG-A', 'FG-B']);
+    const exactB = candidate(3, ['FG-A', 'FG-B']);
+    const superset = candidate(4, ['FG-A', 'FG-B', 'FG-C']);
+
+    expect(resolvePlanWorkflowCandidates(
+      ['FG-A', 'FG-B'], [superset, exactA, exactB],
+    ).candidates).toEqual([exactA, exactB]);
+  });
+
+  it('keeps only the smallest superset layer when no exact graph exists', () => {
+    const smallA = candidate(5, ['FG-A', 'FG-B', 'FG-C']);
+    const large = candidate(6, ['FG-A', 'FG-B', 'FG-C', 'FG-D']);
+    const smallB = candidate(7, ['FG-A', 'FG-B', 'FG-E']);
+
+    expect(resolvePlanWorkflowCandidates(
+      ['FG-A', 'FG-B'], [large, smallA, smallB],
+    ).candidates).toEqual([smallA, smallB]);
+  });
+
   it('multiple selections reject unrelated single-output Workflows', () => {
     expect(resolvePlanWorkflowCandidates(
       ['FG-A', 'FG-B'],
@@ -65,5 +87,13 @@ describe('production plan Workflow resolution', () => {
 
     expect(resolvePlanWorkflowCandidates(['FG-A', 'FG-B'], [compact]).candidates).toEqual([compact]);
     expect(workflowCandidateBindingProductTypeId(compact, ['FG-A', 'FG-B'])).toBe('BIND-8');
+  });
+
+  it('uses the middle process chain as the candidate identity and exposes extra outputs', () => {
+    const item = candidate(9, ['FG-A', 'FG-B', 'FG-C']);
+    item.processSteps = ['原料处理', '熟成', '定量包装'];
+
+    expect(workflowCandidateProcessSummary(item)).toBe('原料处理 → 熟成 → 定量包装');
+    expect(workflowCandidateExtraOutputs(item, ['FG-A', 'FG-B'])).toEqual(['FG-C']);
   });
 });
