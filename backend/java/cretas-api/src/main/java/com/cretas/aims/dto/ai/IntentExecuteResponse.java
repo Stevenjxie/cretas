@@ -6,6 +6,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -275,6 +276,11 @@ public class IntentExecuteResponse {
     @AllArgsConstructor
     public static class ConfirmableAction {
         private String confirmToken; // 用于确认执行的token
+        private String commandDigest;
+        private Instant expiresAt;
+        // Future Gateway correlation contract; not persisted or enforced as idempotency yet.
+        private String requestId;
+        private String idempotencyKey;
         private String description;
         private Integer expiresInSeconds;
         private Map<String, Object> previewData;

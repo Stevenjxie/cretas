@@ -131,6 +131,26 @@ export interface IntentExecuteRequest {
 }
 
 /**
+ * Parameter-bound confirmation evidence. The opaque token is transported only in
+ * X-Cretas-Confirmation-Token; the remaining fields form the fixed JSON contract.
+ */
+export interface IntentConfirmationProof {
+  readonly confirmToken: string;
+  readonly commandDigest: string;
+  readonly expiresAt: string;
+  /** Reserved for future Gateway correlation; not yet persisted by the backend. */
+  readonly requestId: string;
+  /** Reserved for a future Gateway idempotency store; atomic token claim is authoritative today. */
+  readonly idempotencyKey: string;
+}
+
+export interface ConfirmableAction extends IntentConfirmationProof {
+  readonly description?: string;
+  readonly expiresInSeconds?: number;
+  readonly previewData?: unknown;
+}
+
+/**
  * 意图执行响应
  */
 export interface IntentExecuteResponse {
@@ -149,7 +169,7 @@ export interface IntentExecuteResponse {
   /** 导航目标 */
   navigationTarget?: string;
   /** 确认 Token (预览模式需要) */
-  confirmToken?: string;
+  confirmableAction?: ConfirmableAction;
   /** 预览数据 */
   previewData?: unknown;
   /** 错误信息 */
@@ -462,16 +482,27 @@ class IntentConfigApiClient {
   /**
    * 确认执行预览的意图
    *
-   * @param confirmToken 确认Token
+   * @param proof 完整的参数绑定确认凭证
    * @param factoryId 工厂ID（可选）
    * @returns 执行结果
    */
   async confirmIntent(
-    confirmToken: string,
+    proof: IntentConfirmationProof,
     factoryId?: string
   ): Promise<IntentExecuteResponse> {
     const response = await apiClient.post<ApiResponseWrapper<IntentExecuteResponse>>(
-      `${this.getBasePath(factoryId)}/confirm/${confirmToken}`
+      `${this.getBasePath(factoryId)}/confirm`,
+      {
+        commandDigest: proof.commandDigest,
+        expiresAt: proof.expiresAt,
+        requestId: proof.requestId,
+        idempotencyKey: proof.idempotencyKey,
+      },
+      {
+        headers: {
+          'X-Cretas-Confirmation-Token': proof.confirmToken,
+        },
+      }
     );
     return response.data;
   }

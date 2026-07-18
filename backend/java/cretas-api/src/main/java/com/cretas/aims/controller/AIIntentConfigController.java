@@ -1,6 +1,7 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
+import com.cretas.aims.dto.ai.IntentConfirmationRequest;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.dto.ai.ParameterConfirmationRequest;
@@ -26,8 +27,11 @@ import com.cretas.aims.annotation.RateLimit;
 import com.cretas.aims.annotation.RateLimit.LimitType;
 import com.cretas.aims.exception.BusinessException;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.CacheControl;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -579,27 +583,57 @@ public class AIIntentConfigController {
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 
-    // The token binds factory, user, intent, tool/version/mode and canonical parameters. Role is
-    // intentionally not persisted in the token; confirm re-runs Tool RBAC using the current
-    // trusted JWT role, so revoked permissions take effect before execution.
-    @PostMapping("/confirm/{confirmToken}")
+    // requestId and idempotencyKey reserve the future Gateway HTTP contract. They are validated,
+    // but are deliberately not represented as persisted/executed idempotency in this phase. The
+    // database atomic token claim remains the only single-use execution authority.
+    @PostMapping("/confirm")
     @Operation(summary = "确认执行预览的意图",
-               description = "原子认领命令绑定的预览令牌，并在当前JWT权限复核后执行；执行成功后才确认令牌")
+               description = "从专用请求头接收不透明令牌，原子认领参数绑定的预览命令并复核当前JWT权限")
     public ResponseEntity<ApiResponse<IntentExecuteResponse>> confirmIntent(
             @Parameter(description = "工厂ID") @PathVariable String factoryId,
-            @Parameter(description = "确认Token") @PathVariable String confirmToken,
+            @RequestHeader("X-Cretas-Confirmation-Token") String confirmationToken,
+            @Valid @RequestBody IntentConfirmationRequest confirmationRequest,
             HttpServletRequest httpRequest) {
+
+        if (confirmationToken == null || confirmationToken.isBlank()
+                || confirmationToken.length() > 2048) {
+            return ResponseEntity.badRequest().body(ApiResponse.errorWithCode(
+                    HttpStatus.BAD_REQUEST.value(),
+                    "INVALID_CONFIRMATION_PROOF",
+                    "Confirmation proof token is missing or invalid",
+                    null,
+                    "BLOCKING"));
+        }
 
         // Sprint 11.5 P0 (2026-05-23): cookie-aware token extraction
         String token = extractToken(httpRequest);
         Long userId = jwtUtil.getUserIdFromToken(token);
         String userRole = jwtUtil.getRoleFromToken(token);
 
-        log.info("确认执行AI意图: factoryId={}, tokenFingerprint={}", factoryId,
-                com.cretas.aims.ai.tool.gateway.ToolCommandDigest.tokenFingerprint(confirmToken));
-
-        IntentExecuteResponse response = intentExecutorService.confirm(factoryId, confirmToken, userId, userRole);
+        IntentExecuteResponse response = intentExecutorService.confirm(
+                factoryId,
+                confirmationRequest.toConfirmationProof(confirmationToken),
+                userId,
+                userRole);
         return ResponseEntity.ok(ApiResponse.success(response));
+    }
+
+    /**
+     * Terminates legacy path-token confirmation without binding, logging, or executing the token.
+     * Upstream access-log policy is outside this controller boundary; new clients must use the
+     * fixed {@code /confirm} endpoint so proof tokens never enter request URLs.
+     */
+    @PostMapping("/confirm/{confirmToken}")
+    public ResponseEntity<ApiResponse<Void>> rejectLegacyPathConfirmation() {
+        ApiResponse<Void> response = ApiResponse.errorWithCode(
+                HttpStatus.GONE.value(),
+                "CONFIRMATION_ENDPOINT_UPGRADE_REQUIRED",
+                "Confirmation endpoint upgrade required",
+                "Use the fixed /confirm endpoint with X-Cretas-Confirmation-Token",
+                "BLOCKING");
+        return ResponseEntity.status(HttpStatus.GONE)
+                .cacheControl(CacheControl.noStore())
+                .body(response);
     }
 
     // ==================== 参数确认和规则学习 ====================

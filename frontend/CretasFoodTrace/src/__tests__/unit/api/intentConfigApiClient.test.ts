@@ -129,9 +129,21 @@ describe('intentConfigApiClient', () => {
   describe('previewIntent', () => {
     it('should POST /preview', async () => {
       const request = { userInput: '更新原料数量为100' };
+      const confirmableAction = {
+        confirmToken: 'opaque-preview-token',
+        commandDigest: 'a'.repeat(64),
+        expiresAt: '2026-07-18T10:05:00Z',
+        requestId: 'request-12345678',
+        idempotencyKey: 'idem-12345678',
+      };
       mock.onPost(`${BASE}/preview`).reply(200, {
         success: true,
-        data: { success: true, resultType: 'preview', previewData: { currentValue: 50, newValue: 100 } },
+        data: {
+          success: true,
+          resultType: 'preview',
+          previewData: { currentValue: 50, newValue: 100 },
+          confirmableAction,
+        },
         message: 'ok',
       });
 
@@ -140,6 +152,45 @@ describe('intentConfigApiClient', () => {
       // Returns IntentExecuteResponse directly
       expect(result).toBeDefined();
       expect(result.resultType).toBe('preview');
+      expect(result.confirmableAction).toEqual(confirmableAction);
+      expect(result).not.toHaveProperty('confirmToken');
+    });
+  });
+
+  describe('confirmIntent', () => {
+    it('uses the fixed path and keeps the opaque token out of URL and JSON body', async () => {
+      const proof = {
+        confirmToken: 'opaque-sensitive-confirmation-token',
+        commandDigest: 'b'.repeat(64),
+        expiresAt: '2026-07-18T10:05:00Z',
+        requestId: 'request-12345678',
+        idempotencyKey: 'idem-12345678',
+      };
+
+      mock.onPost(`${BASE}/confirm`).reply(config => {
+        const body = JSON.parse(config.data);
+        expect(config.url).toBe(`${BASE}/confirm`);
+        expect(config.url).not.toContain(proof.confirmToken);
+        expect(config.headers?.['X-Cretas-Confirmation-Token']).toBe(proof.confirmToken);
+        expect(body).toEqual({
+          commandDigest: proof.commandDigest,
+          expiresAt: proof.expiresAt,
+          requestId: proof.requestId,
+          idempotencyKey: proof.idempotencyKey,
+        });
+        expect(body).not.toHaveProperty('confirmToken');
+        expect(JSON.stringify(body)).not.toContain(proof.confirmToken);
+        return [200, {
+          success: true,
+          data: { success: true, resultType: 'action' },
+          message: 'ok',
+        }];
+      });
+
+      const result = await intentConfigApiClient.confirmIntent(proof);
+
+      expect(result.resultType).toBe('action');
+      expect(mock.history.post).toHaveLength(1);
     });
   });
 

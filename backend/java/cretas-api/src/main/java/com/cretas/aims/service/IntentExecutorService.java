@@ -1,5 +1,6 @@
 package com.cretas.aims.service;
 
+import com.cretas.aims.ai.tool.gateway.ConfirmationProof;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -55,12 +56,12 @@ public interface IntentExecutorService {
      * 确认执行预览的操作
      *
      * @param factoryId 工厂ID
-     * @param confirmToken 预览时返回的确认Token
+     * @param confirmationProof 参数绑定的确认凭证
      * @param userId 当前用户ID
      * @param userRole 当前用户角色
      * @return 执行响应
      */
-    IntentExecuteResponse confirm(String factoryId, String confirmToken,
+    IntentExecuteResponse confirm(String factoryId, ConfirmationProof confirmationProof,
                                   Long userId, String userRole);
 
     /**
