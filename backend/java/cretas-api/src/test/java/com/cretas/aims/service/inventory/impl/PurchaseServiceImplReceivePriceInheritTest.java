@@ -15,6 +15,7 @@ import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.factory.WarehouseResolver;
+import com.cretas.aims.service.factory.WarehouseInventoryGuardService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -33,6 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -57,6 +59,7 @@ class PurchaseServiceImplReceivePriceInheritTest {
     @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private MaterialBatchService materialBatchService;
     @Mock private WarehouseResolver warehouseResolver;
+    @Mock private WarehouseInventoryGuardService warehouseInventoryGuardService;
 
     private PurchaseServiceImpl service;
 
@@ -80,6 +83,7 @@ class PurchaseServiceImplReceivePriceInheritTest {
                 applicationEventPublisher,
                 materialBatchService);
         ReflectionTestUtils.setField(service, "warehouseResolver", warehouseResolver);
+        ReflectionTestUtils.setField(service, "warehouseInventoryGuardService", warehouseInventoryGuardService);
         // @Value 注入字段, 单测手动设 (超收上限 30%, 与 prod 默认一致)
         ReflectionTestUtils.setField(service, "overReceiveRate", new BigDecimal("0.30"));
 
@@ -149,6 +153,16 @@ class PurchaseServiceImplReceivePriceInheritTest {
 
         assertEquals("SC-321", rec.getItems().get(0).getFactoryNumber());
         assertEquals("四川成都", rec.getItems().get(0).getOriginPlace());
+    }
+
+    @Test
+    @DisplayName("显式目标仓在草稿创建前完成归属与仓型校验")
+    void createReceive_withWarehouse_validatesBeforePersistingDraft() {
+        CreateReceiveRecordRequest req = receiveReq(MAT_A, new BigDecimal("10"), null);
+
+        service.createReceiveRecord(FACTORY, req, USER_ID);
+
+        verify(warehouseInventoryGuardService).assertCanReceive("WH-RAW", FACTORY, "RAW");
     }
 
     private PurchaseOrderItem poItem(String materialTypeId, BigDecimal unitPrice) {

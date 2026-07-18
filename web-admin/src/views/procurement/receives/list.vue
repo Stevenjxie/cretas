@@ -39,7 +39,11 @@ import { WH_INBOUND_CONFIG } from '@/components/ai-entry/types';
 // 客户张权反馈 (2026-07-02, "小问题"): 入库单没法选仓库, 默认全进物流仓(WH-LOG).
 // 后端早已支持 (PurchaseServiceImpl L1122/L2062-2071 CreateReceiveRecordRequest.warehouseId,
 // 未传才兜底 resolveLogisticsId), 只缺前端选择器.
-import { listWarehouses, type FactoryWarehouse, type WarehouseType } from '@/api/factoryWarehouse';
+import { listWarehouses, WAREHOUSE_TYPE_LABELS, type FactoryWarehouse } from '@/api/factoryWarehouse';
+import {
+  defaultPurchaseReceiveWarehouseId,
+  purchaseReceiveWarehouseOptions,
+} from './purchaseReceiveWarehouse';
 // Issue #794: 采购入库拍照附件 UI (六扇门 May 7 part 2 L177-180)
 // "拍照也可以留个单谱吧... 留个附件类似一个拍照然后一个附件吗也可以的呀"
 import AttachmentList from '@/components/attachment/AttachmentList.vue';
@@ -218,6 +222,7 @@ const form = ref({
 const formRules = {
   supplierId: [{ required: true, message: '请选择供应商', trigger: 'change' }],
   receiveDate: [{ required: true, message: '请选择入库日期', trigger: 'change' }],
+  warehouseId: [{ required: true, message: '请选择本次实际入库仓库', trigger: 'change' }],
 };
 
 const supplierOptions = ref<SupplierOption[]>([]);
@@ -241,18 +246,11 @@ const inboundDefaultWarehouse = ref<FactoryWarehouse | null>(null);
  *
  * WORKSHOP(车间/鲜棉仓, WH-WKS = resolveWorkshopId 报工消耗默认仓) 和 RD(研发/中试库, WH-RD = 试制
  * 批次专属仓) 虽未被 guard 显式拦截，但有各自专属业务用途，不该出现在采购入库候选里 — 排除。
- * TEMP/QC/LINESIDE/RETURNS/SCRAP/OUTSOURCE/TRANSFER/OTHER 同理，都是专项流转仓非常规采购收货目标。
+ * OUTSOURCE 是明确的外仓/委外仓场景，后端允许采购原料直接入该仓，因此必须向用户开放。
+ * TEMP/QC/LINESIDE/RETURNS/SCRAP/TRANSFER/OTHER 仍是专项流转仓，不作为常规采购收货目标。
  */
-const RAW_RECEIVABLE_WAREHOUSE_TYPES: WarehouseType[] = ['RAW', 'SALTED', 'LOGISTICS'];
 const rawReceivableWarehouses = computed(() => {
-  const list = warehouseOptions.value.filter((w) => RAW_RECEIVABLE_WAREHOUSE_TYPES.includes(w.type));
-  // 若工厂把「采购入库默认仓」配到了白名单之外的仓型 (e.g. 半成品仓), 也把它并入候选,
-  // 否则预填的默认值在下拉里没有匹配 option → el-select 显示空白 (仓管以为没选仓)。
-  const cfg = inboundDefaultWarehouse.value;
-  if (cfg && cfg.isActive !== false && !list.some((w) => w.id === cfg.id)) {
-    list.push(cfg);
-  }
-  return list;
+  return purchaseReceiveWarehouseOptions(warehouseOptions.value, inboundDefaultWarehouse.value);
 });
 
 /**
@@ -265,18 +263,10 @@ const rawReceivableWarehouses = computed(() => {
  *
  * ⚠️ 历史 (2026-07-02): resolveLogisticsId 曾被采购/生产/销售三语义共用, 改这里默认会连坐生产/销售;
  * 现后端已拆出独立 PURCHASE_INBOUND_DEFAULT purpose (只影响采购入库落点), 前端跟随配置安全无连坐。
- * RAW/SALTED 仍在候选(用户可手选)。
+ * RAW/SALTED/OUTSOURCE 仍在候选(用户可手选)。
  */
 function defaultReceiveWarehouseId(list: FactoryWarehouse[]): string {
-  // 1) 工厂配置的采购入库默认仓 (后端解析), 且仍是本页可选的有效仓。
-  const cfg = inboundDefaultWarehouse.value;
-  if (cfg && cfg.isActive !== false) return cfg.id;
-  // 2) 回退物流仓 (与后端 resolvePurchaseInboundWh fallback 一致)。
-  const logistics = list.find((w) => w.type === 'LOGISTICS' && w.isActive !== false);
-  if (logistics) return logistics.id;
-  // 3) 再兜底原料仓。
-  const raw = list.find((w) => w.type === 'RAW' && w.isActive !== false);
-  return raw ? raw.id : '';
+  return defaultPurchaseReceiveWarehouseId(list, inboundDefaultWarehouse.value);
 }
 
 /**
@@ -873,19 +863,21 @@ onMounted(() => { loadData(); loadOptions(); });
         <!--
           客户张权反馈 (2026-07-02→07-04): 入库单没法选仓库, 之前硬编码默认物流仓(WH-LOG)。
           现默认 = 工厂配置的「采购入库默认仓」(PURCHASE_INBOUND_DEFAULT, 后端解析; 六扇门=原料仓),
-          未配置回退物流仓。不选也不阻塞 — 后端 CreateReceiveRecordRequest.warehouseId 未传时同样
-          兜底 resolvePurchaseInboundWh。选了 WIP/成品仓会被后端 422 拦(assertCanReceive)。
+          未配置回退物流仓。页面会显式提交当前选择，避免用户以为进外仓、实际却静默落默认仓。
+          WIP/成品仓不会出现在候选中，后端 assertCanReceive 仍保留最终防线。
         -->
-        <el-form-item label="入库仓库">
-          <!-- Req 1 (2026-07-02): 只列能收原料的仓 (原料仓/盐化仓/物流仓) + 工厂配置的采购入库默认仓,
-               不列成品仓/半成品仓/车间/研发库 — 见 rawReceivableWarehouses 定义处注释. -->
-          <el-select v-model="form.warehouseId" placeholder="(可选,默认采购入库仓) 选择入库仓库" clearable filterable style="width:100%">
+        <el-form-item label="入库仓库" prop="warehouseId">
+          <!-- 常规原料仓 + 外仓/委外仓。默认仓会预选，但必须明确显示并随单提交，避免静默进主仓。 -->
+          <el-select v-model="form.warehouseId" placeholder="选择本次实际入库仓库" filterable style="width:100%">
             <el-option
               v-for="w in rawReceivableWarehouses" :key="w.id"
-              :label="`${w.name} (${w.code})`"
+              :label="`${w.name} (${w.code}) · ${w.type === 'OUTSOURCE' ? '外仓 / 委外仓' : WAREHOUSE_TYPE_LABELS[w.type]}`"
               :value="w.id"
             />
           </el-select>
+          <div class="warehouse-hint">
+            已预选采购默认仓；货物存放在外部仓库时，请改选“委外仓”。
+          </div>
         </el-form-item>
         <el-form-item label="备注" prop="remark">
           <el-input v-model="form.remark" type="textarea" :rows="2" placeholder="入库备注(可选)" />
@@ -1162,6 +1154,14 @@ onMounted(() => { loadData(); loadOptions(); });
 }
 
 .req-star { color: #f56c6c; margin-right: 2px; }
+
+.warehouse-hint {
+  width: 100%;
+  margin-top: 6px;
+  color: #606266;
+  font-size: 12px;
+  line-height: 1.5;
+}
 
 /* fool-proof-design Rule 1: 到货数量灰字上限提示 (正常) / 超限变红 (与 :max 前置拦截 + 提交禁用三重防御) */
 .over-limit-hint {

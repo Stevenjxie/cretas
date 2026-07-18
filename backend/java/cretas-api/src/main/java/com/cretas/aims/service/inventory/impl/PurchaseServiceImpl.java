@@ -1141,6 +1141,14 @@ public class PurchaseServiceImpl implements PurchaseService {
             validateOverReceiveCap(order, request.getItems());
         }
 
+        // 显式目标仓必须在 DRAFT 创建前完成归属/启用状态/仓型校验。
+        // confirmReceive 建批次时仍会二次校验，防止草稿期间仓库被停用或改型。
+        if (request.getWarehouseId() != null && !request.getWarehouseId().isBlank()
+                && warehouseInventoryGuardService != null) {
+            warehouseInventoryGuardService.assertCanReceive(
+                    request.getWarehouseId(), factoryId, "RAW");
+        }
+
         // 生成入库单号: RCV-YYYYMMDD-序号
         String receiveNumber = generateReceiveNumber(factoryId);
 

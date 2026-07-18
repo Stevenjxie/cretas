@@ -20,7 +20,7 @@ import static org.mockito.Mockito.when;
 /**
  * WarehouseInventoryGuardService 单元测试 (SP7 T4 guard 部分).
  *
- * <p>覆盖 3 个场景:
+ * <p>覆盖仓型、归属、启用状态和外仓场景:
  * <ol>
  *   <li>WIP 仓 + 非 SEMI_FINISHED 物料 → 422 WAREHOUSE_TYPE_MISMATCH</li>
  *   <li>WIP 仓 + SEMI_FINISHED 物料 → 通过</li>
@@ -75,12 +75,50 @@ class WarehouseInventoryGuardServiceTest {
                 .isEqualTo(422);
     }
 
+    @Test
+    @DisplayName("T4: 仓库不存在或不属于当前工厂 → 404")
+    void assertCanReceive_unknownWarehouse_throws404() {
+        when(warehouseRepo.findByIdAndFactoryIdAndDeletedAtIsNull(WH_ID, FACTORY_ID))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> guardService.assertCanReceive(WH_ID, FACTORY_ID, "RAW"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getCode())
+                .isEqualTo(404);
+    }
+
+    @Test
+    @DisplayName("T5: 已停用仓库 → 422")
+    void assertCanReceive_inactiveWarehouse_throws422() {
+        FactoryWarehouse warehouse = buildWarehouse(FactoryWarehouse.WarehouseType.RAW);
+        warehouse.setIsActive(false);
+        when(warehouseRepo.findByIdAndFactoryIdAndDeletedAtIsNull(WH_ID, FACTORY_ID))
+                .thenReturn(Optional.of(warehouse));
+
+        assertThatThrownBy(() -> guardService.assertCanReceive(WH_ID, FACTORY_ID, "RAW"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getCode())
+                .isEqualTo(422);
+    }
+
+    @Test
+    @DisplayName("T6: 委外仓 + 采购原料 → 通过")
+    void assertCanReceive_outsourceWarehouse_rawMaterial_passes() {
+        FactoryWarehouse warehouse = buildWarehouse(FactoryWarehouse.WarehouseType.OUTSOURCE);
+        when(warehouseRepo.findByIdAndFactoryIdAndDeletedAtIsNull(WH_ID, FACTORY_ID))
+                .thenReturn(Optional.of(warehouse));
+
+        assertThatCode(() -> guardService.assertCanReceive(WH_ID, FACTORY_ID, "RAW"))
+                .doesNotThrowAnyException();
+    }
+
     private FactoryWarehouse buildWarehouse(FactoryWarehouse.WarehouseType type) {
         FactoryWarehouse wh = new FactoryWarehouse();
         wh.setId(WH_ID);
         wh.setFactoryId(FACTORY_ID);
         wh.setType(type);
         wh.setName("测试仓库");
+        wh.setIsActive(true);
         return wh;
     }
 }

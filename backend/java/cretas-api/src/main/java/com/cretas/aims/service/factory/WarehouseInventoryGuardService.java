@@ -48,11 +48,19 @@ public class WarehouseInventoryGuardService {
         Optional<FactoryWarehouse> warehouseOpt =
                 warehouseRepo.findByIdAndFactoryIdAndDeletedAtIsNull(warehouseId, factoryId);
         if (warehouseOpt.isEmpty()) {
-            // 仓库不存在或不属于该工厂 — 放行让上层业务返回 404
-            return;
+            // 采购收货会把 warehouseId 直接写入物料批次；这里必须 fail-closed，
+            // 否则不存在/跨租户仓库会一路进入 save，依赖数据库异常才失败。
+            throw new BusinessException(404, "仓库不存在或不属于当前工厂: " + warehouseId)
+                    .withCode("WAREHOUSE_NOT_FOUND")
+                    .withHint("请刷新仓库列表后重新选择入库仓库");
         }
 
         FactoryWarehouse warehouse = warehouseOpt.get();
+        if (!Boolean.TRUE.equals(warehouse.getIsActive())) {
+            throw new BusinessException(422, "仓库已停用，不能继续入库: " + warehouse.getName())
+                    .withCode("WAREHOUSE_INACTIVE")
+                    .withHint("请选择一个启用中的入库仓库");
+        }
         FactoryWarehouse.WarehouseType type = warehouse.getType();
         if (type == null) return;
 
