@@ -80,16 +80,14 @@ public class RestaurantOwnerActionAdvisorTool extends AbstractBusinessTool {
                 "老板今天应该怎么提高营收？");
 
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("factory_id", factoryId);
-        body.put("factoryId", factoryId);
         body.put("message", message);
-        putIfPresent(body, "sessionId", firstNonBlank(asString(params.get("sessionId")), asString(params.get("ownerActionSessionId"))));
-        putIfPresent(body, "demoScenario", firstNonBlank(asString(params.get("demoScenario")), asString(params.get("ownerActionScenario"))));
-        body.put("storeName", firstNonBlank(asString(params.get("storeName")), DEFAULT_STORE_NAME));
-        body.put("subSector", firstNonBlank(asString(params.get("subSector")), DEFAULT_SUB_SECTOR));
+        putIfPresent(body, "session_id", firstNonBlank(asString(params.get("sessionId")), asString(params.get("ownerActionSessionId"))));
+        putIfPresent(body, "demo_scenario", firstNonBlank(asString(params.get("demoScenario")), asString(params.get("ownerActionScenario"))));
+        body.put("store_name", firstNonBlank(asString(params.get("storeName")), DEFAULT_STORE_NAME));
+        body.put("sub_sector", firstNonBlank(asString(params.get("subSector")), DEFAULT_SUB_SECTOR));
         body.put("period", firstNonBlank(asString(params.get("period")), DEFAULT_PERIOD));
 
-        Map<String, Object> raw = pythonSmartBIClient.askRestaurantOwnerActionChat(body);
+        Map<String, Object> raw = pythonSmartBIClient.askRestaurantOwnerActionChat(factoryId, body);
         boolean ok = Boolean.TRUE.equals(raw.get("success"));
         Object dataObj = raw.get("data");
         if (!ok || !(dataObj instanceof Map<?, ?> dataRaw)) {
@@ -125,7 +123,6 @@ public class RestaurantOwnerActionAdvisorTool extends AbstractBusinessTool {
         result.put("dataReadiness", pythonData.getOrDefault(
                 "dataReadiness",
                 dataReadiness(factoryId, "java_tool_to_python_owner_action")));
-        result.put("raw", pythonData);
         return result;
     }
 

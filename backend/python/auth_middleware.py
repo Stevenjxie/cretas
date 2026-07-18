@@ -81,6 +81,13 @@ PUBLIC_PREFIXES = (
     "/api/ota/",
 )
 
+# Exact routes nested below a public prefix that are nevertheless internal-only.
+# Keep this list exact: sibling restaurant section routes intentionally retain
+# their existing public/demo behavior until they are migrated independently.
+INTERNAL_ONLY_PATHS = frozenset({
+    "/api/smartbi/restaurant/sections/owner-action-chat",
+})
+
 # Demo tenants (mirror Java `cretas.demo.factory-ids`). The public /mobile-ai/rest/
 # page hands one of these JWTs (role factory_super_admin) to ANY anonymous visitor.
 # That token is otherwise valid against the whole Python service, where some
@@ -141,17 +148,7 @@ class JWTAuthMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # Skip auth if disabled
-        if not self.enabled:
-            await self.app(scope, receive, send)
-            return
-
         path = scope.get("path", "")
-
-        # Skip public paths
-        if path in PUBLIC_PATHS:
-            await self.app(scope, receive, send)
-            return
 
         # Extract headers from scope (needed by both internal-secret + JWT branches)
         headers = dict(
@@ -190,7 +187,10 @@ class JWTAuthMiddleware:
         if (
             expected_secret
             and internal_secret
-            and hmac.compare_digest(internal_secret, expected_secret)
+            and hmac.compare_digest(
+                internal_secret.encode("utf-8"),
+                expected_secret.encode("utf-8"),
+            )
         ):
             if "state" not in scope:
                 scope["state"] = {}
@@ -218,6 +218,31 @@ class JWTAuthMiddleware:
                         reset_factory_id(tenant_token)
                     except Exception:
                         pass
+            return
+
+        # An internal-only route must not fall through into PUBLIC_PREFIXES when
+        # the secret is missing, blank, incorrect, or the server is misconfigured
+        # without INTERNAL_API_SECRET. Return one indistinguishable response so
+        # callers cannot use the status/body as a secret-validity oracle.
+        if path in INTERNAL_ONLY_PATHS:
+            await self._send_json_response(send, 401, {
+                "success": False,
+                "message": "Internal authentication required",
+                "code": "INTERNAL_AUTH_REQUIRED",
+            })
+            return
+
+        # Disabling general JWT auth must never disable the exact internal-only
+        # route gate above. All other routes retain the historical disabled-mode
+        # behavior.
+        if not self.enabled:
+            await self.app(scope, receive, send)
+            return
+
+        # Skip public paths after the internal identity branch so a legitimate
+        # Java call still receives tenant context even on a public endpoint.
+        if path in PUBLIC_PATHS:
+            await self.app(scope, receive, send)
             return
 
         # Skip public prefixes (no JWT required, no internal-secret either)

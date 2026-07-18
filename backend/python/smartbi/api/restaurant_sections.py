@@ -13,6 +13,7 @@ section names. The list includes ``cost_rigidity`` (which the batch
 calls.
 """
 
+import hmac
 import json
 import logging
 import re
@@ -25,7 +26,7 @@ from typing import Any, Dict, Optional
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Path, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from smartbi.services.restaurant.sections.base import SectionRequest, SectionStatus
 from smartbi.services.restaurant.sections.cache import SectionCache
@@ -181,14 +182,16 @@ class SectionRequestBody(BaseModel):
 
 
 class OwnerActionChatRequest(BaseModel):
-    """Boss-facing restaurant demo chat request.
+    """Internal Java-to-Python contract for restaurant owner advice.
 
-    Accepts both snake_case and frontend camelCase names so it can be called
-    directly from Python tests, web-admin, or the RN API client.
+    ``factory_id`` is the sole tenant value in the payload.  The HTTP route also
+    binds it to the independently authenticated ``X-Factory-Id`` header before
+    any session or audit side effect occurs.
     """
 
-    factory_id: Optional[str] = Field(None, description="Factory/store identifier")
-    factoryId: Optional[str] = Field(None, description="Frontend alias for factory_id")
+    model_config = ConfigDict(extra="forbid")
+
+    factory_id: str = Field(..., min_length=1, description="Factory/store identifier")
     message: str = Field(..., description="Owner question")
     session_id: Optional[str] = Field(None, description="Conversation session id")
     sessionId: Optional[str] = Field(None, description="Frontend alias for session_id")
@@ -2479,16 +2482,24 @@ def owner_action_chat(body: OwnerActionChatRequest) -> dict:
 
 @router.post("/owner-action-chat")
 async def owner_action_chat_http(body: OwnerActionChatRequest, request: Request) -> dict:
+    authenticated_factory_id = getattr(request.state, "factory_id", None)
+    if not authenticated_factory_id:
+        raise HTTPException(status_code=401, detail="Internal tenant identity required")
+    if not hmac.compare_digest(
+        str(authenticated_factory_id).encode("utf-8"),
+        body.factory_id.encode("utf-8"),
+    ):
+        raise HTTPException(status_code=403, detail="Authenticated tenant does not match request tenant")
+
     started_at = time.time()
     response = _owner_action_chat_impl(body, request=request)
     data = response.get("data") if isinstance(response, dict) else {}
     if isinstance(data, dict):
-        factory_id = _effective_str(body.factory_id, body.factoryId, default="RES_DEMO_QHJ")
         charts = data.get("charts") if isinstance(data.get("charts"), list) else []
         owner_page = data.get("ownerDecisionPage") if isinstance(data.get("ownerDecisionPage"), dict) else {}
         log_id = await _log_owner_action_chat_async(
             query=body.message,
-            factory_id=factory_id,
+            factory_id=body.factory_id,
             answer=str(data.get("answer") or data.get("responseText") or ""),
             scenario=str(data.get("scenario") or ""),
             session_id=str(data.get("sessionId") or ""),
@@ -2510,7 +2521,7 @@ def _owner_action_chat_impl(body: OwnerActionChatRequest, request: Request | Non
     factory-admin oriented.
     """
 
-    factory_id = _effective_str(body.factory_id, body.factoryId, default="RES_DEMO_QHJ")
+    factory_id = body.factory_id
     provided_session_id = _effective_str(body.session_id, body.sessionId)
     session_id = provided_session_id or f"owner-action-{uuid.uuid4().hex[:12]}"
     session_key = _owner_action_session_key(factory_id, session_id)

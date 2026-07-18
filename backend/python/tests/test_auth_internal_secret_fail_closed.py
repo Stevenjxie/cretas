@@ -60,12 +60,17 @@ def _run(middleware, headers, path="/api/smartbi/gold/restaurant/tiered-answer")
     return status, downstream
 
 
-def _mw():
+def _mw(enabled=True):
     # jwt_secret is irrelevant to the internal-secret branch; any >=1 char works.
-    return JWTAuthMiddleware(_Echo(), jwt_secret="test-secret-only-for-jwt-branch")
+    return JWTAuthMiddleware(
+        _Echo(),
+        jwt_secret="test-secret-only-for-jwt-branch",
+        enabled=enabled,
+    )
 
 
 _HARDCODED_OLD_FALLBACK = "cretas-internal-2026"
+_OWNER_ACTION_PATH = "/api/smartbi/restaurant/sections/owner-action-chat"
 
 
 def test_correct_secret_when_env_set_takes_internal_branch(monkeypatch):
@@ -121,3 +126,91 @@ def test_empty_string_env_is_fail_closed(monkeypatch):
     status, echo = _run(mw, {"x-internal-secret": "", "x-factory-id": "F001"})
     assert echo.reached is False
     assert status == 401
+
+
+def test_owner_action_exact_route_rejects_missing_secret_before_public_prefix(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
+    mw = _mw()
+
+    status, echo = _run(mw, {}, path=_OWNER_ACTION_PATH)
+
+    assert echo.reached is False
+    assert status == 401
+
+
+def test_owner_action_exact_route_rejects_wrong_secret_before_public_prefix(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
+    mw = _mw()
+
+    status, echo = _run(
+        mw,
+        {"x-internal-secret": "wrong-secret", "x-factory-id": "F001"},
+        path=_OWNER_ACTION_PATH,
+    )
+
+    assert echo.reached is False
+    assert status == 401
+
+
+def test_owner_action_exact_route_accepts_correct_internal_identity(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
+    mw = _mw()
+
+    status, echo = _run(
+        mw,
+        {"x-internal-secret": "real-prod-secret-xyz", "x-factory-id": "F001"},
+        path=_OWNER_ACTION_PATH,
+    )
+
+    assert echo.reached is True
+    assert echo.state.get("auth_method") == "internal"
+    assert echo.state.get("factory_id") == "F001"
+    assert status == 200
+
+
+def test_non_target_restaurant_section_keeps_existing_public_prefix_behavior(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
+    mw = _mw()
+
+    status, echo = _run(
+        mw,
+        {},
+        path="/api/smartbi/restaurant/sections/list",
+    )
+
+    assert echo.reached is True
+    assert echo.state.get("auth_method") is None
+    assert status == 200
+
+
+@pytest.mark.parametrize("headers", [
+    {},
+    {"x-internal-secret": "wrong-secret", "x-factory-id": "F001"},
+])
+def test_owner_action_remains_fail_closed_when_general_auth_is_disabled(
+    monkeypatch,
+    headers,
+):
+    monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
+    mw = _mw(enabled=False)
+
+    status, echo = _run(mw, headers, path=_OWNER_ACTION_PATH)
+
+    assert echo.reached is False
+    assert status == 401
+
+
+def test_owner_action_correct_internal_identity_works_when_general_auth_is_disabled(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
+    mw = _mw(enabled=False)
+
+    status, echo = _run(
+        mw,
+        {"x-internal-secret": "real-prod-secret-xyz", "x-factory-id": "F001"},
+        path=_OWNER_ACTION_PATH,
+    )
+
+    assert echo.reached is True
+    assert echo.state.get("auth_method") == "internal"
+    assert echo.state.get("factory_id") == "F001"
+    assert status == 200
