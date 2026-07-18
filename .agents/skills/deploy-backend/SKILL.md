@@ -136,6 +136,35 @@ Automation and other non-interactive callers must pass the flag or set
 
 After deployment, compare local `dist/index.html`, server file, localhost response, and public response hashes. All must reference the same release.
 
+## Concurrent Java + Web Release
+
+For one clean reviewed candidate worktree, the two independent artifact builds
+may overlap:
+
+```bash
+./scripts/deploy/release-cretas-artifacts.sh --tests '<MavenTestSelector>'
+```
+
+It runs the non-Maven Java selector/import preflight first, then launches the
+single Java `clean package` lifecycle and the single Web build concurrently.
+The preflight catches missing target test classes and unresolved project
+imports; it does not replace Maven compilation or Mockito runtime validation.
+
+Production deployment may overlap only after merge, only from clean exact
+`origin/main`, and only when the caller explicitly confirms that frontend and
+backend are compatible in either activation order:
+
+```bash
+./scripts/deploy/deploy-cretas-parallel.sh \
+  --confirm-prod YES-PROD \
+  --confirm-independent-services YES-INDEPENDENT-SERVICES
+```
+
+Do not use it for migrations, incompatible API changes, auth/security changes,
+or any release with an ordering dependency. The wrapper validates both trusted
+manifests before it starts either child, but each child remains responsible for
+its own atomic switch, health gates and rollback behavior.
+
 ## Python And Restart
 
 ```bash
