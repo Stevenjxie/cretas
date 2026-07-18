@@ -148,7 +148,8 @@ public class ToolDispatchService {
             // backstop so HIGH/CRITICAL write intents (e.g. PROCESSING_WORKER_ASSIGN) are blocked even
             // if the tool-NAME heuristic misses the verb. Sites C/D/E/F lack the bound intent and rely
             // on the expanded WRITE_SUFFIXES list.
-            java.util.Map<String, Object> wgCtx = request.getContext() != null ? request.getContext() : java.util.Map.of();
+            Map<String, Object> wgCtx = TrustedExecutionContext.merge(
+                    request.getContext(), factoryId, userId, userRole);
             if ((writeGuardService.isWriteTool(tool)
                     || (intent != null && writeGuardService.isWriteIntent(intent)))
                     && !Boolean.TRUE.equals(request.getPreviewOnly())
@@ -214,10 +215,8 @@ public class ToolDispatchService {
             }
 
             // 2. 构建 ToolCall
-            Map<String, Object> params = new HashMap<>();
-            if (request.getContext() != null) {
-                params.putAll(request.getContext());
-            }
+            Map<String, Object> params = TrustedExecutionContext.merge(
+                    request.getContext(), factoryId, userId, userRole);
 
             String userInputToUse = request.getUserInput();
             if (matchResult != null && matchResult.getPreprocessedQuery() != null) {
@@ -324,6 +323,10 @@ public class ToolDispatchService {
                 }
             }
 
+            // Learned rules, LLM extraction and resolved references are all untrusted inputs.
+            // Re-bind the authenticated principal immediately before hashing and Tool execution.
+            TrustedExecutionContext.enforcePrincipal(params, factoryId, userId, userRole);
+
             String argumentsJson = objectMapper.writeValueAsString(params);
             ToolCall toolCall = ToolCall.of(
                     java.util.UUID.randomUUID().toString(),
@@ -332,10 +335,8 @@ public class ToolDispatchService {
             );
 
             // 3. 构建执行上下文
-            Map<String, Object> context = new HashMap<>();
-            context.put("factoryId", factoryId);
-            context.put("userId", userId);
-            context.put("userRole", userRole);
+            Map<String, Object> context = TrustedExecutionContext.merge(
+                    null, factoryId, userId, userRole);
             context.put("intentConfig", intent);
             context.put("request", request);
 
@@ -693,10 +694,8 @@ public class ToolDispatchService {
                                                      AIIntentConfig intent,
                                                      Long userId, String userRole) {
         try {
-            Map<String, Object> params = new HashMap<>();
-            if (request.getContext() != null) {
-                params.putAll(request.getContext());
-            }
+            Map<String, Object> params = TrustedExecutionContext.merge(
+                    request.getContext(), factoryId, userId, userRole);
             params.put("userInput", request.getUserInput());
             params.put("intentCode", intent.getIntentCode());
 
@@ -714,6 +713,9 @@ public class ToolDispatchService {
                 log.warn("Preview 路径参数抽取失败 (继续用已有 params): {}", ex.getMessage());
             }
 
+            // Preview must expose the same principal-bound arguments as real execution.
+            TrustedExecutionContext.enforcePrincipal(params, factoryId, userId, userRole);
+
             String argumentsJson = objectMapper.writeValueAsString(params);
             ToolCall toolCall = ToolCall.of(
                     java.util.UUID.randomUUID().toString(),
@@ -721,10 +723,8 @@ public class ToolDispatchService {
                     argumentsJson
             );
 
-            Map<String, Object> context = new HashMap<>();
-            context.put("factoryId", factoryId);
-            context.put("userId", userId);
-            context.put("userRole", userRole);
+            Map<String, Object> context = TrustedExecutionContext.merge(
+                    null, factoryId, userId, userRole);
             context.put("intentConfig", intent);
 
             String resultJson = tool.preview(toolCall, context);

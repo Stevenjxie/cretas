@@ -110,21 +110,16 @@ public class DynamicToolSelectionService {
             if (toolRouterService.requiresMultiToolPlan(query, candidates)) {
                 log.info("Auto-Planner: 检测到多工具需求, query={}", query);
 
-                Map<String, Object> planContext = new HashMap<>();
-                planContext.put("factoryId", factoryId);
-                planContext.put("userId", userId);
-                planContext.put("userRole", userRole);
+                Map<String, Object> planContext = TrustedExecutionContext.merge(
+                        request.getContext(), factoryId, userId, userRole);
                 planContext.put("userInput", query);
                 planContext.put("intentCode", intent.getIntentCode());
-                if (request.getContext() != null) {
-                    planContext.putAll(request.getContext());
-                }
 
                 ToolRouterService.AutoPlan plan = toolRouterService.generateExecutionPlan(query, candidates, planContext);
                 if (plan != null && plan.getSteps() != null && !plan.getSteps().isEmpty()) {
                     log.info("Auto-Planner: 生成执行计划, steps={}, confidence={}, reasoning={}",
                             plan.getSteps().size(), plan.getConfidence(), plan.getReasoning());
-                    return executeAutoPlan(plan, planContext, factoryId, intent);
+                    return executeAutoPlan(plan, planContext, factoryId, userId, userRole, intent);
                 }
                 log.info("Auto-Planner: 未生成有效计划, 回退到单工具选择");
             }
@@ -140,16 +135,10 @@ public class DynamicToolSelectionService {
                     selectedTools.getTools().size(), selectedTools.getExecutionOrder());
 
             // 4. 构建执行上下文
-            Map<String, Object> context = new HashMap<>();
-            context.put("factoryId", factoryId);
-            context.put("userId", userId);
-            context.put("userRole", userRole);
+            Map<String, Object> context = TrustedExecutionContext.merge(
+                    request.getContext(), factoryId, userId, userRole);
             context.put("userInput", query);
             context.put("intentCode", intent.getIntentCode());
-
-            if (request.getContext() != null) {
-                context.putAll(request.getContext());
-            }
 
             // 添加预处理结果中的解析引用
             if (matchResult != null && matchResult.getPreprocessedQuery() != null) {
@@ -168,6 +157,9 @@ public class DynamicToolSelectionService {
                     }
                 }
             }
+
+            // Resolved references are request-derived; principal aliases remain server-bound.
+            TrustedExecutionContext.enforcePrincipal(context, factoryId, userId, userRole);
 
             // 5. 执行工具链
             Object result = toolRouterService.executeToolChain(selectedTools, context);
@@ -456,6 +448,8 @@ public class DynamicToolSelectionService {
     private IntentExecuteResponse executeAutoPlan(ToolRouterService.AutoPlan plan,
                                                    Map<String, Object> context,
                                                    String factoryId,
+                                                   Long userId,
+                                                   String userRole,
                                                    AIIntentConfig intent) {
         Map<String, Object> allResults = new HashMap<>();
         Map<String, Object> stepOutputs = new HashMap<>();
@@ -497,6 +491,13 @@ public class DynamicToolSelectionService {
                         }
                     }
                 }
+
+                // Planner output is LLM-controlled and must not replace the authenticated principal.
+                TrustedExecutionContext.enforcePrincipal(
+                        stepParams,
+                        factoryId,
+                        userId,
+                        userRole);
 
                 // W0 write-guard (intent-w0) — SITE C: Auto-Planner calls tool.execute() directly,
                 // not through Site B. Block any write tool in the plan unless the step context carries
