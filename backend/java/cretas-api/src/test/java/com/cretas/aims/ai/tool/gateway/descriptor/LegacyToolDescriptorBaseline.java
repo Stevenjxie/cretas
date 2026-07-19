@@ -5,7 +5,7 @@ import java.util.Set;
 /** Frozen D1 allowlist: legacy membership may shrink but must never gain a new class. */
 final class LegacyToolDescriptorBaseline {
 
-    static final int COUNT = 601;
+    static final int COUNT = 596;
     static final Set<String> IMPLEMENTATION_CLASSES = Set.of(
             "com.cretas.aims.ai.tool.impl.CreateIntentTool",
             "com.cretas.aims.ai.tool.impl.QueryDroolsRuleTool",
@@ -83,12 +83,9 @@ final class LegacyToolDescriptorBaseline {
             "com.cretas.aims.ai.tool.impl.crm.CustomerStatsTool",
             "com.cretas.aims.ai.tool.impl.crm.CustomerTrackingRecentQueryTool",
             "com.cretas.aims.ai.tool.impl.crm.CustomerUpdateTool",
-            "com.cretas.aims.ai.tool.impl.crm.OrderCreateTool",
             "com.cretas.aims.ai.tool.impl.crm.OrderDeleteTool",
             "com.cretas.aims.ai.tool.impl.crm.OrderListTool",
             "com.cretas.aims.ai.tool.impl.crm.OrderQueryTool",
-            "com.cretas.aims.ai.tool.impl.crm.OrderStatsTool",
-            "com.cretas.aims.ai.tool.impl.crm.OrderUpdateTool",
             "com.cretas.aims.ai.tool.impl.crm.SupplierActiveTool",
             "com.cretas.aims.ai.tool.impl.crm.SupplierByCategoryTool",
             "com.cretas.aims.ai.tool.impl.crm.SupplierCreateTool",
@@ -353,7 +350,6 @@ final class LegacyToolDescriptorBaseline {
             "com.cretas.aims.ai.tool.impl.report.ReportSchedulingExecuteTool",
             "com.cretas.aims.ai.tool.impl.report.ReportSchedulingListTool",
             "com.cretas.aims.ai.tool.impl.report.ReportSchedulingModeChangeTool",
-            "com.cretas.aims.ai.tool.impl.report.ReportTaskAssignWorkerTool",
             "com.cretas.aims.ai.tool.impl.report.ReportTrendsTool",
             "com.cretas.aims.ai.tool.impl.report.ReportWorkshopDailyTool",
             "com.cretas.aims.ai.tool.impl.report.SkuGrossMarginTool",
@@ -540,7 +536,6 @@ final class LegacyToolDescriptorBaseline {
             "com.cretas.aims.ai.tool.impl.system.SystemHelpTool",
             "com.cretas.aims.ai.tool.impl.system.SystemNotificationSettingsTool",
             "com.cretas.aims.ai.tool.impl.system.SystemSettingsTool",
-            "com.cretas.aims.ai.tool.impl.system.TodoListTool",
             "com.cretas.aims.ai.tool.impl.system.WorkflowVariableTestTool",
             "com.cretas.aims.ai.tool.impl.transfer.TransferApproveTool",
             "com.cretas.aims.ai.tool.impl.transfer.TransferCreateTool",
