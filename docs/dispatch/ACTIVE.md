@@ -6,12 +6,10 @@
 
 ## 在飞任务
 
-- `JAVA-PROD-RELEASE-20260719`｜状态：`in-progress`｜Base SHA：`3b35955edeb24eb1e4ba8dddd77fb6f1f5af4a9a`｜Owner：Codex `/root`｜目标：修复 latest-main `.gitignore` 尾空白发布门禁后，从 clean exact `origin/main` 构建并蓝绿发布生产 Java 后端，执行已合并 Flyway migrations；不发布 Web/Python/测试环境｜下一动作：合并最小 preflight 修复，完成可信单次构建、生产备份、蓝绿切流和服务级验收。
 - `D10D` — `review` — Owner: Codex coordinator — Base SHA: `ebbc9893320442db26049b0c4875978d165fa231` — 修复 Restaurant Agent Read Tool Gateway 在生产 Python 3.8 缺少 `asyncio.timeout_at` 导致的 ACTIVE 发布阻断；兼容性测试与独立只读复核已通过，下一步为 PR 合并、Python 精确发布与 OFF/ACTIVE 重验。
 
 ## Scope 锁地图
 
-- `JAVA-PROD-RELEASE-20260719`：`.gitignore` 四行尾空白、`docs/dispatch/{ACTIVE.md,archive/2026-07-19-active-history.md}`、生产 Java 发布状态；验收命令：`scripts/deploy/release-preflight.sh`、可信 manifest 单生命周期构建、`scripts/deploy/deploy-backend.sh --env prod`、`scripts/deploy/verify-release.sh` 与迁移/旧表只读断言。
 - `D10D`：`backend/python/smartbi/agent/runtime/gateway.py`、`backend/python/tests/agent_runtime/test_read_tool_gateway.py`、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-19-active-history.md`；验收命令：定向 pytest、Python 3.8 生产只读 Gateway probe、生产 OFF/ACTIVE smoke 与发布核验。
 
 ## 阻塞项

@@ -311,3 +311,18 @@
 - 验收：后端目标测试 40 项通过，最终 current-tree 真实 JPA Context 与 canonical 报工 3/3 通过，Tool descriptor 4/4 通过；RN 改动文件无 TypeScript 错误；Web Vite 生产构建通过。GitHub 未调度 CI，合并使用本地等价真实 JPA 证据。
 - 状态边界：代码与删除迁移已合并；生产迁移未执行，生产未部署，线上旧结构尚未删除。
 - Scope 锁：已释放。
+
+### `JAVA-PROD-RELEASE-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- Base SHA：`3b35955edeb24eb1e4ba8dddd77fb6f1f5af4a9a`
+- 发布门禁修复 commit：`3ce06a24e`；PR：[#1511](https://github.com/Stevenjxie/cretas/pull/1511)；`main` squash merge commit：`066722a42677a0f97a83a0aaf5f8bf92af0fa7a8`。
+- 发布源：clean exact `origin/main` `474d2ef5e958caa8b069ae3e8a6233d916b9f1f7`；该 commit 相比构建 commit 仅含 Python/dispatch 变更，Java backend tree 均为 `6ca229cb5c36661e6694f771a385d54f8fa136e9`。
+- 唯一 Maven 生命周期：`release-jar-manifest.sh build` 完成 clean package，目标测试 88/88 通过，包含 AI intent、真实 JPA Context、旧表移除、canonical 报工、订单 Tool、Restaurant Agent 与 descriptor drift 门禁。
+- 可信制品：JAR SHA-256 `3d65d2e340fac79af805ef1121571a70e90d69d0eae737a01baf4e8876d9514f`，MD5 `e9c38808f86497063f63bc77852d023a`，线上逐字节一致。
+- 生产迁移：Flyway V84/V85 均成功；旧 `work_orders`、`process_tasks` 与 `production_reports.process_task_id` 已不存在；旧 intent、Tool 绑定、Drools 与状态机均冻结，canonical 任务和签到引用断言通过。
+- 备份与回滚：V85 前目标表 custom dump 已完成并通过 SHA-256/对象清单校验；服务器保留前一 JAR。回滚须同时恢复前一 JAR 与迁移前数据库快照，不能只切换槽位。
+- 生产发布：并发窗口内两次蓝绿动作使用同一 commit/tree/JAR，均产生 `SUCCESS` 结构化报告；第二次命中 remote SHA-256 cache。最终 active 为 blue/10010，green 已停止，直连健康与公网 HTTPS health 200。
+- 状态边界：本任务未发布 Web、Python 或测试环境；合并与生产部署已分别完成并验证。
+- Scope 锁：已释放。
