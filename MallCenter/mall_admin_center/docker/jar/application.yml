@@ -147,13 +147,13 @@ wx:
     configs:
       - appId: xxxxxxxx
         secret: '${MALL_WX_MP_SECRET}'
-        token: xxxxxxxxxx
+        token: '${MALL_WX_MP_TOKEN}'
         aesKey: '${MALL_WX_MP_AES_KEY}'
   # 小程序配置
   ma:
     configs:
       - appId: xxxxxxxxxxxxxxxx
-        secret: xxxxxxxxxxxxx
+        secret: '${MALL_WX_MA_SECRET}'
         # 微信支付商户号，请去微信支付平台申请
         mchId: 1588227511
         # 微信支付商户APIv2密钥，请去微信支付平台申请

@@ -21,6 +21,29 @@ class SecretScannerTest(unittest.TestCase):
         self.assertNotIn(value.decode(), rendered)
         self.assertIn(SCANNER.fingerprint(value), rendered)
 
+    def test_mall_wechat_templates_share_complete_environment_contract(self):
+        root = MODULE_PATH.parents[2]
+        expected = {
+            "MALL_WX_MP_SECRET",
+            "MALL_WX_MP_TOKEN",
+            "MALL_WX_MP_AES_KEY",
+            "MALL_WX_MA_SECRET",
+            "MALL_WX_MA_MCH_KEY",
+        }
+        paths = {
+            root / "MallCenter/mall_admin_center/docker/jar/application.yml": expected,
+            root / "MallCenter/mall_admin_center/logistics-admin/src/main/resources/application.yml": (
+                expected | {"MALL_WX_MERCHANT_MA_SECRET"}
+            ),
+        }
+        for path, variables in paths.items():
+            content = path.read_text(encoding="utf-8")
+            actual = {
+                variable
+                for variable in variables
+                if content.count("${" + variable + "}") == 1
+            }
+            self.assertEqual(variables, actual, str(path))
     def test_placeholder_is_allowed(self):
         findings = SCANNER.scan_content(
             "scripts/systemd/.env.template",

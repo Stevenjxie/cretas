@@ -150,13 +150,13 @@ wx:
     configs:
       - appId: xxxxxxxx
         secret: '${MALL_WX_MP_SECRET}'
-        token: xxxxxxxxxx
+        token: '${MALL_WX_MP_TOKEN}'
         aesKey: '${MALL_WX_MP_AES_KEY}'
   # 小程序配置
   ma:
     configs:
       - appId: wx8a458528c6dfb405
-        secret: ${WX_MA_SECRET:请在环境变量WX_MA_SECRET中配置}
+        secret: '${MALL_WX_MA_SECRET}'
         # 微信支付商户号，请去微信支付平台申请
         mchId: 1588227511
         # 微信支付商户APIv2密钥，请去微信支付平台申请
@@ -165,7 +165,7 @@ wx:
         keyPath: /mnt/install/joolun-wx/apiclient_cert.p12
       # 商户小程序
       - appId: wx0b2c60b0e4f36cd6
-        secret: 09133bf49bb9ac1550914ab41a0e2c32
+        secret: '${MALL_WX_MERCHANT_MA_SECRET}'
 
 mall:
   # 支付、物流回调地址，即后台服务7500端口的外网访问域名，要保证外网能访问，如：https://后台地址/prod-api
