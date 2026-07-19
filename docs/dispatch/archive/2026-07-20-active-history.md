@@ -24,3 +24,13 @@
 - 验收：BOM/unit 目标测试 9 files / 42 tests 通过；唯一 Vite release build 生成 729 assets，archive SHA-256 `30c3e0ce62f1d07791b78cb2b6ad08cdc1b46239c3831f143aec7a29dcf65931`、index SHA-256 `d31c0544ab07489c666ba23fcb14bd68ba98d8bf19ee76e5ab8a21bd450ecf3c`。
 - 生产边界：仅部署 Web；Java 后端 tree 未变化应判定 no-op。部署后通知 F006 E2E Chat 从现有 v2 `b1f27a9b-cca3-4644-bc16-bd79c86dba41` 原现场续跑，不删除、重建或激活 v2，不触碰 LIUSHANMEN。
 - Scope 锁：已释放。
+
+### `F006-M07-WIP-DEDUCTION-20260720`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- 登记 Base SHA：`fbe90fff754f2b1377ffbc76ff74856c0aec7c0c`
+- 根因：下游定量包装在多上游来源模式只写入批次身份，没有把所选批次可用量写入 `upstreamSources[].feedQuantityKg`；成品重量可从库存回读计算，但确认框与 submit payload 以该字段为准，因而显示并提交 `0kg`。后端又会静默过滤零数量来源，存在伪造正数汇总投入绕过批次真实投入校验的风险。
+- 范围：选择本计划在制或公共半成品时按当前可用量自动回填实际 kg；确认预览与正式提交共用同一 request；后端在写入前拒绝任何零/空投入的声明来源，并保留指定批次原子消费与重复提交保护。未触碰 F006 生产记录与 LIUSHANMEN。
+- 验收：Web process-sheet 全目录 12 files / 69 tests 通过；唯一 Java release 生命周期 29 tests 通过并生成可信 JAR；唯一 Web release build 生成 729 assets 与可信 archive。生产部署与同一 planId 只读核验在 exact-main 发布阶段完成。
+- Scope 锁：已释放。
