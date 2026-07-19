@@ -4,7 +4,9 @@ import com.cretas.aims.dto.smartbi.ConfigOperationResult;
 import com.cretas.aims.dto.smartbi.CreateAlertThresholdRequest;
 import com.cretas.aims.dto.smartbi.CreateIncentiveRuleRequest;
 import com.cretas.aims.dto.smartbi.UpdateIncentiveRuleRequest;
+import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.entity.smartbi.*;
+import com.cretas.aims.repository.config.AIIntentConfigRepository;
 import com.cretas.aims.repository.smartbi.*;
 import com.cretas.aims.service.smartbi.ChartTemplateService;
 import com.cretas.aims.service.smartbi.SmartBIConfigService;
@@ -41,7 +43,7 @@ import java.util.concurrent.ConcurrentHashMap;
 @RequiredArgsConstructor
 public class SmartBIConfigServiceImpl implements SmartBIConfigService {
 
-    private final AiIntentConfigRepository intentConfigRepository;
+    private final AIIntentConfigRepository intentConfigRepository;
     private final SmartBiAlertThresholdRepository alertThresholdRepository;
     private final SmartBiIncentiveRuleRepository incentiveRuleRepository;
     private final SmartBiDictionaryRepository dictionaryRepository;
@@ -59,7 +61,7 @@ public class SmartBIConfigServiceImpl implements SmartBIConfigService {
     }
 
     // 内存缓存
-    private final Map<String, List<AiIntentConfig>> intentCache = new ConcurrentHashMap<>();
+    private final Map<String, List<AIIntentConfig>> intentCache = new ConcurrentHashMap<>();
     private final Map<String, List<SmartBiAlertThreshold>> thresholdCache = new ConcurrentHashMap<>();
     private final Map<String, List<SmartBiIncentiveRule>> incentiveRuleCache = new ConcurrentHashMap<>();
     private final Map<String, List<SmartBiDictionary>> dictionaryCache = new ConcurrentHashMap<>();
@@ -88,121 +90,12 @@ public class SmartBIConfigServiceImpl implements SmartBIConfigService {
     // ==================== 意图配置 ====================
 
     @Override
-    public List<AiIntentConfig> listIntents(String category) {
+    public List<AIIntentConfig> listIntents(String category) {
         if (category != null && !category.isEmpty()) {
-            return intentConfigRepository.findByIntentCategoryAndIsActiveTrueOrderByPriorityAsc(category);
+            return intentConfigRepository
+                    .findByIntentCategoryAndIsActiveTrueAndDeletedAtIsNullOrderByPriorityDesc(category);
         }
-        return intentConfigRepository.findByIsActiveTrueOrderByPriorityAsc();
-    }
-
-    @Override
-    @Transactional
-    public ConfigOperationResult createIntent(AiIntentConfig config) {
-        try {
-            // 验证唯一性
-            if (intentConfigRepository.existsByIntentCodeAndIsActiveTrue(config.getIntentCode())) {
-                return ConfigOperationResult.error(
-                        ConfigOperationResult.CONFIG_TYPE_INTENT,
-                        "意图代码已存在: " + config.getIntentCode());
-            }
-
-            config.setIsActive(true);
-            AiIntentConfig saved = intentConfigRepository.save(config);
-            log.info("创建意图配置: intentCode={}", config.getIntentCode());
-
-            // 刷新缓存
-            refreshIntentCache();
-
-            return ConfigOperationResult.success(
-                    ConfigOperationResult.CONFIG_TYPE_INTENT,
-                    ConfigOperationResult.OPERATION_CREATE,
-                    "意图配置创建成功", 1);
-        } catch (Exception e) {
-            log.error("创建意图配置失败: {}", e.getMessage(), e);
-            return ConfigOperationResult.error(
-                    ConfigOperationResult.CONFIG_TYPE_INTENT,
-                    "创建失败: " + e.getMessage());
-        }
-    }
-
-    @Override
-    @Transactional
-    public ConfigOperationResult updateIntent(String id, AiIntentConfig config) {
-        try {
-            Optional<AiIntentConfig> existingOpt = intentConfigRepository.findById(id);
-            if (existingOpt.isEmpty()) {
-                return ConfigOperationResult.error(
-                        ConfigOperationResult.CONFIG_TYPE_INTENT,
-                        "意图配置不存在: id=" + id);
-            }
-
-            AiIntentConfig existing = existingOpt.get();
-            updateIntentFields(existing, config);
-            intentConfigRepository.save(existing);
-            log.info("更新意图配置: id={}, intentCode={}", id, existing.getIntentCode());
-
-            // 刷新缓存
-            refreshIntentCache();
-
-            return ConfigOperationResult.success(
-                    ConfigOperationResult.CONFIG_TYPE_INTENT,
-                    ConfigOperationResult.OPERATION_UPDATE,
-                    "意图配置更新成功", 1);
-        } catch (Exception e) {
-            log.error("更新意图配置失败: id={}, error={}", id, e.getMessage(), e);
-            return ConfigOperationResult.error(
-                    ConfigOperationResult.CONFIG_TYPE_INTENT,
-                    "更新失败: " + e.getMessage());
-        }
-    }
-
-    @Override
-    @Transactional
-    public ConfigOperationResult deleteIntent(String id) {
-        try {
-            Optional<AiIntentConfig> existingOpt = intentConfigRepository.findById(id);
-            if (existingOpt.isEmpty()) {
-                return ConfigOperationResult.error(
-                        ConfigOperationResult.CONFIG_TYPE_INTENT,
-                        "意图配置不存在: id=" + id);
-            }
-
-            AiIntentConfig existing = existingOpt.get();
-            existing.setIsActive(false);
-            existing.softDelete();
-            intentConfigRepository.save(existing);
-            log.info("删除意图配置: id={}, intentCode={}", id, existing.getIntentCode());
-
-            // 刷新缓存
-            refreshIntentCache();
-
-            return ConfigOperationResult.success(
-                    ConfigOperationResult.CONFIG_TYPE_INTENT,
-                    ConfigOperationResult.OPERATION_DELETE,
-                    "意图配置删除成功", 1);
-        } catch (Exception e) {
-            log.error("删除意图配置失败: id={}, error={}", id, e.getMessage(), e);
-            return ConfigOperationResult.error(
-                    ConfigOperationResult.CONFIG_TYPE_INTENT,
-                    "删除失败: " + e.getMessage());
-        }
-    }
-
-    @Override
-    public ConfigOperationResult reloadIntents() {
-        try {
-            int count = refreshIntentCache();
-            log.info("重载意图配置缓存: count={}", count);
-            return ConfigOperationResult.success(
-                    ConfigOperationResult.CONFIG_TYPE_INTENT,
-                    ConfigOperationResult.OPERATION_RELOAD,
-                    "意图配置重载成功", count);
-        } catch (Exception e) {
-            log.error("重载意图配置失败: {}", e.getMessage(), e);
-            return ConfigOperationResult.error(
-                    ConfigOperationResult.CONFIG_TYPE_INTENT,
-                    "重载失败: " + e.getMessage());
-        }
+        return intentConfigRepository.findByIsActiveTrueAndDeletedAtIsNullOrderByPriorityDesc();
     }
 
     // ==================== 告警阈值 ====================
@@ -1012,14 +905,15 @@ public class SmartBIConfigServiceImpl implements SmartBIConfigService {
 
     private int refreshIntentCache() {
         intentCache.clear();
-        List<AiIntentConfig> allIntents = intentConfigRepository.findByIsActiveTrueOrderByPriorityAsc();
+        List<AIIntentConfig> allIntents =
+                intentConfigRepository.findByIsActiveTrueAndDeletedAtIsNullOrderByPriorityDesc();
         intentCache.put("all", allIntents);
 
         // 按分类分组. intent_category 允许 NULL (DB 无 NOT NULL), 新建配置可能漏填.
         // ConcurrentHashMap.putAll 不接受 null key → 先按"UNCATEGORIZED" 兜底再 putAll.
-        Map<String, List<AiIntentConfig>> byCategory = new HashMap<>();
+        Map<String, List<AIIntentConfig>> byCategory = new HashMap<>();
         int nullCategoryCount = 0;
-        for (AiIntentConfig intent : allIntents) {
+        for (AIIntentConfig intent : allIntents) {
             String category = intent.getIntentCategory();
             if (category == null) {
                 category = "UNCATEGORIZED";
@@ -1105,22 +999,6 @@ public class SmartBIConfigServiceImpl implements SmartBIConfigService {
 
         lastChartTemplateUpdate = LocalDateTime.now();
         return allTemplates.size();
-    }
-
-    private void updateIntentFields(AiIntentConfig existing, AiIntentConfig updated) {
-        if (updated.getIntentName() != null) existing.setIntentName(updated.getIntentName());
-        if (updated.getIntentCategory() != null) existing.setIntentCategory(updated.getIntentCategory());
-        if (updated.getKeywords() != null) existing.setKeywords(updated.getKeywords());
-        if (updated.getPatterns() != null) existing.setPatterns(updated.getPatterns());
-        if (updated.getExamples() != null) existing.setExamples(updated.getExamples());
-        if (updated.getResponseTemplate() != null) existing.setResponseTemplate(updated.getResponseTemplate());
-        if (updated.getFollowUpQuestions() != null) existing.setFollowUpQuestions(updated.getFollowUpQuestions());
-        if (updated.getAnalysisService() != null) existing.setAnalysisService(updated.getAnalysisService());
-        if (updated.getMethodName() != null) existing.setMethodName(updated.getMethodName());
-        if (updated.getPriority() != null) existing.setPriority(updated.getPriority());
-        if (updated.getConfidenceThreshold() != null) existing.setConfidenceThreshold(updated.getConfidenceThreshold());
-        if (updated.getDescription() != null) existing.setDescription(updated.getDescription());
-        if (updated.getIsActive() != null) existing.setIsActive(updated.getIsActive());
     }
 
     private void updateThresholdFields(SmartBiAlertThreshold existing, SmartBiAlertThreshold updated) {
