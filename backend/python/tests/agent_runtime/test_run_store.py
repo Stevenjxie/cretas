@@ -18,6 +18,7 @@ from smartbi.agent.runtime.run_contracts import (
     StructuredOutcome,
 )
 from smartbi.agent.runtime.run_store import (
+    CancelRequestResult,
     InMemoryRunStore,
     PostgresRunStore,
     RunAccessError,
@@ -53,11 +54,11 @@ class FailingClock(MutableClock):
         return self.value
 
 
-def ctx(factory_id: str) -> TrustedExecutionContext:
+def ctx(factory_id: str, user_id: str = "actor") -> TrustedExecutionContext:
     return TrustedExecutionContext(
         factory_id=factory_id,
         business_type="RESTAURANT",
-        user_id="actor",
+        user_id=user_id,
         correlation_id="corr",
         authorized_classifications=frozenset({DataClassification.FINANCIAL_RESTRICTED}),
     )
@@ -84,6 +85,10 @@ async def test_in_memory_store_refuses_cross_tenant_and_terminal_mutation():
     with pytest.raises(RunAccessError):
         await store.load_run(run_id, ctx("B"))
     with pytest.raises(RunAccessError):
+        await store.load_run(run_id, ctx("A", "other-actor"))
+    with pytest.raises(RunAccessError):
+        await store.request_cancel(run_id, ctx("A", "other-actor"))
+    with pytest.raises(RunAccessError):
         await store.append_event(
             run_id,
             ctx("B"),
@@ -91,7 +96,6 @@ async def test_in_memory_store_refuses_cross_tenant_and_terminal_mutation():
             {"routeCode": "GROSS_MARGIN_DECLINE_ATTRIBUTION"},
             counters=RuntimeCounters(),
         )
-
     event = await store.append_event(
         run_id,
         ctx("A"),
@@ -136,6 +140,58 @@ async def test_in_memory_store_refuses_cross_tenant_and_terminal_mutation():
             {"failureCode": "LATE_EVENT"},
             counters=RuntimeCounters(),
         )
+
+
+@pytest.mark.asyncio
+async def test_cancel_request_is_durable_idempotent_tenant_bound_and_blocks_completion():
+    store = InMemoryRunStore()
+    run_id = "12121212-1212-4212-8212-121212121212"
+    tenant = ctx("A")
+    await store.create_run(
+        run_id, tenant, RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION, request()
+    )
+
+    requested = await store.request_cancel(run_id, tenant)
+    repeated = await store.request_cancel(run_id, tenant)
+
+    assert requested.result is CancelRequestResult.REQUESTED
+    assert repeated.result is CancelRequestResult.ALREADY_REQUESTED
+    assert await store.is_cancellation_requested(run_id, tenant)
+    with pytest.raises(RunAccessError):
+        await store.request_cancel(run_id, ctx("B"))
+    completed = await store.compare_and_set_terminal(
+        run_id,
+        tenant,
+        expected_state=RunState.RUNNING,
+        terminal_state=RunState.PARTIAL,
+        outcome=StructuredOutcome(
+            OutcomeStatus.PARTIAL,
+            RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION,
+        ),
+        counters=RuntimeCounters(),
+        terminal_event_type=AgentEventType.RUN_COMPLETED,
+    )
+    assert completed is False
+    cancelled = await store.compare_and_set_terminal(
+        run_id,
+        tenant,
+        expected_state=RunState.RUNNING,
+        terminal_state=RunState.CANCELLED,
+        outcome=StructuredOutcome(
+            OutcomeStatus.CANCELLED,
+            RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION,
+            blockers=("RUN_CANCELLED_BY_TRUSTED_CALLER",),
+        ),
+        counters=RuntimeCounters(),
+        terminal_event_type=AgentEventType.RUN_CANCELLED,
+        failure_code="RUN_CANCELLED",
+    )
+    assert cancelled is True
+    assert (await store.request_cancel(run_id, tenant)).result is CancelRequestResult.ALREADY_TERMINAL
+    assert [event.event_type for event in await store.events_for(run_id, tenant)] == [
+        AgentEventType.CANCEL_REQUESTED,
+        AgentEventType.RUN_CANCELLED,
+    ]
 
 
 @pytest.mark.asyncio
@@ -258,9 +314,10 @@ async def test_in_memory_stale_reconciliation_boundary_preserves_ledger_and_is_u
         "status": "FAILED",
         "routeCode": "GROSS_MARGIN_DECLINE_ATTRIBUTION",
         "claims": [],
-        "blockers": [STALE_RUN_FAILURE_CODE],
-        "observations": [],
-        "attributionSupported": False,
+            "blockers": [STALE_RUN_FAILURE_CODE],
+            "observations": [],
+            "actionProposals": [],
+            "attributionSupported": False,
     }
     events = await store.events_for(run_id, tenant)
     assert [event.event_type for event in events] == [
@@ -557,7 +614,11 @@ async def test_postgres_append_binds_rls_update_and_insert_on_one_connection_tra
         "SELECT set_config('app.factory_id', $1, true)",
         ("A",),
     )
-    assert "INSERT INTO smart_bi_agent_event" in pool.connection.executes[1][0]
+    assert pool.connection.executes[1] == (
+        "SELECT set_config('app.user_id', $1, true)",
+        ("actor",),
+    )
+    assert "INSERT INTO smart_bi_agent_event" in pool.connection.executes[2][0]
     assert "factory_id = $2" in pool.connection.fetchrows[0][0]
     assert "state = 'RUNNING'" in pool.connection.fetchrows[0][0]
     assert pool.connection.fetchvals == [("SELECT clock_timestamp()", ())]
@@ -596,6 +657,7 @@ def _persisted_run_row():
     return {
         "run_id": "33333333-3333-3333-3333-333333333333",
         "factory_id": "A",
+        "owner_user_id": "actor",
         "state": "RUNNING",
         "route_code": "GROSS_MARGIN_DECLINE_ATTRIBUTION",
         "sanitized_request": json.dumps(request()),
@@ -624,6 +686,20 @@ def _persisted_event_row():
 def test_postgres_record_revalidates_decoded_request_outcome_and_failure_code():
     valid = _persisted_run_row()
     assert PostgresRunStore._record(valid).outcome_summary is None
+
+    legacy = _persisted_run_row()
+    legacy["state"] = "PARTIAL"
+    legacy["outcome_summary"] = json.dumps(
+        {
+            "status": "PARTIAL",
+            "routeCode": "GROSS_MARGIN_DECLINE_ATTRIBUTION",
+            "claims": [],
+            "blockers": ["LEGACY_EVIDENCE_GAP"],
+            "observations": [],
+            "attributionSupported": False,
+        }
+    )
+    assert PostgresRunStore._record(legacy).outcome_summary["actionProposals"] == []
 
     tampered_request = _persisted_run_row()
     tampered_request["sanitized_request"] = json.dumps(

@@ -3,10 +3,12 @@
 This test is intentionally opt-in and must only target a disposable local DB::
 
     AGENT_RUNTIME_PG_DSN=postgresql://postgres:<password>@127.0.0.1:55432/postgres \
+      AGENT_RUNTIME_PG_DISPOSABLE_CONFIRM=YES \
       python -m pytest tests/agent_runtime/test_postgres_run_store_integration.py -q
 
-The fixture bootstraps ``smartbi_user``, applies the exact migration and then
-connects as the non-owner application role so FORCE RLS is genuinely exercised.
+The fixture creates a random schema and random application role, applies the exact
+migrations only inside that schema, and then connects as the non-owner application
+role so FORCE RLS is genuinely exercised. Cleanup targets only those random names.
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ from smartbi.agent.runtime.run_contracts import (
     StructuredOutcome,
 )
 from smartbi.agent.runtime.run_store import (
+    CancelRequestResult,
     PostgresRunStore,
     RunAccessError,
     RunStoreError,
@@ -45,22 +48,33 @@ asyncpg = pytest.importorskip("asyncpg")
 
 
 PG_DSN = os.environ.get("AGENT_RUNTIME_PG_DSN")
+DISPOSABLE_CONFIRMED = os.environ.get("AGENT_RUNTIME_PG_DISPOSABLE_CONFIRM") == "YES"
 pytestmark = pytest.mark.skipif(
-    not PG_DSN,
-    reason="AGENT_RUNTIME_PG_DSN unset; real disposable PostgreSQL gate skipped",
+    not PG_DSN or not DISPOSABLE_CONFIRMED,
+    reason="explicit disposable PostgreSQL DSN/confirmation unset; real gate skipped",
 )
 MIGRATION = (
     Path(__file__).parents[2]
     / "smartbi/database/migrations/V20261028_01__smart_bi_agent_run_event.sql"
 )
+ADAPTIVE_MIGRATION = (
+    Path(__file__).parents[2]
+    / "smartbi/database/migrations/V20261028_03__restaurant_agent_adaptive_events.sql"
+)
+OWNER_CONTRACT_MIGRATION = (
+    Path(__file__).parents[2]
+    / "smartbi/database/migrations/V20261028_05__restaurant_agent_owner_enforcement.sql"
+)
 APP_PASSWORD = secrets.token_urlsafe(24)
+APP_ROLE = ""
+TEST_SCHEMA = ""
 
 
-def context(factory_id: str) -> TrustedExecutionContext:
+def context(factory_id: str, user_id: str = "user-A") -> TrustedExecutionContext:
     return TrustedExecutionContext(
         factory_id=factory_id,
         business_type="RESTAURANT",
-        user_id=None,
+        user_id=user_id,
         correlation_id="integration-corr",
         authorized_classifications=frozenset({DataClassification.FINANCIAL_RESTRICTED}),
     )
@@ -74,6 +88,27 @@ def request():
         "storeTopN": 20,
         "dishTopN": 10,
     }
+
+
+async def bind_app_context(
+    connection,
+    *,
+    factory_id: str,
+    user_id: str = "",
+    actor_role: str = "",
+    audit: bool = False,
+) -> None:
+    await connection.execute(
+        "SELECT set_config('app.factory_id', $1, true)", factory_id
+    )
+    await connection.execute("SELECT set_config('app.user_id', $1, true)", user_id)
+    await connection.execute(
+        "SELECT set_config('app.actor_role', $1, true)", actor_role
+    )
+    await connection.execute(
+        "SELECT set_config('app.agent_ops_audit', $1, true)",
+        "true" if audit else "false",
+    )
 
 
 async def backdate_running_run(admin, run_id: str) -> None:
@@ -98,11 +133,12 @@ async def wait_for_smartbi_lock(admin):
             """
             SELECT xact_start
             FROM pg_stat_activity
-            WHERE usename = 'smartbi_user' AND wait_event_type = 'Lock'
+            WHERE usename = $1 AND wait_event_type = 'Lock'
               AND state = 'active' AND xact_start IS NOT NULL
             ORDER BY xact_start
             LIMIT 1
-            """
+            """,
+            APP_ROLE,
         )
         if row is not None:
             return row["xact_start"]
@@ -114,7 +150,7 @@ def app_dsn(admin_dsn: str) -> str:
     parsed = urlsplit(admin_dsn)
     host = parsed.hostname or "127.0.0.1"
     port = f":{parsed.port}" if parsed.port else ""
-    netloc = f"smartbi_user:{quote(APP_PASSWORD)}@{host}{port}"
+    netloc = f"{APP_ROLE}:{quote(APP_PASSWORD)}@{host}{port}"
     return urlunsplit(
         (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
     )
@@ -122,34 +158,89 @@ def app_dsn(admin_dsn: str) -> str:
 
 @pytest_asyncio.fixture
 async def pg_runtime():
+    global APP_ROLE, TEST_SCHEMA
     parsed = urlsplit(PG_DSN)
     if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
         pytest.fail("AGENT_RUNTIME_PG_DSN must point to a disposable local PostgreSQL")
+    if not DISPOSABLE_CONFIRMED:
+        pytest.fail("AGENT_RUNTIME_PG_DISPOSABLE_CONFIRM=YES is required")
     admin = await asyncpg.connect(PG_DSN)
-    await admin.execute(
-        f"""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'smartbi_user') THEN
-                CREATE ROLE smartbi_user LOGIN PASSWORD '{APP_PASSWORD}';
-            ELSE
-                ALTER ROLE smartbi_user LOGIN PASSWORD '{APP_PASSWORD}';
-            END IF;
-        END
-        $$;
-        GRANT USAGE ON SCHEMA public TO smartbi_user;
-        """
-    )
-    await admin.execute(MIGRATION.read_text(encoding="utf-8"))
-    await admin.execute(
-        "TRUNCATE smart_bi_agent_event, smart_bi_agent_run RESTART IDENTITY CASCADE"
-    )
-    pool = await asyncpg.create_pool(app_dsn(PG_DSN), min_size=2, max_size=20)
+    pool = None
+    schema_created = False
+    role_created = False
     try:
+        for _ in range(10):
+            isolation_suffix = uuid.uuid4().hex[:16]
+            candidate_role = f"smartbi_test_{isolation_suffix}"
+            candidate_schema = f"agent_runtime_test_{isolation_suffix}"
+            collision = await admin.fetchrow(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_namespace WHERE nspname = $1
+                ) AS schema_exists,
+                EXISTS (
+                    SELECT 1 FROM pg_roles WHERE rolname = $2
+                ) AS role_exists
+                """,
+                candidate_schema,
+                candidate_role,
+            )
+            if collision["schema_exists"] or collision["role_exists"]:
+                continue
+            TEST_SCHEMA = candidate_schema
+            APP_ROLE = candidate_role
+            try:
+                await admin.execute(f'CREATE SCHEMA "{TEST_SCHEMA}"')
+                schema_created = True
+                await admin.execute(
+                    f'CREATE ROLE "{APP_ROLE}" LOGIN PASSWORD \'{APP_PASSWORD}\''
+                )
+                role_created = True
+                break
+            except asyncpg.PostgresError as exc:
+                if exc.sqlstate not in {"42710", "42P06"}:
+                    raise
+                if schema_created:
+                    await admin.execute(f'DROP SCHEMA "{TEST_SCHEMA}" CASCADE')
+                if role_created:
+                    await admin.execute(f'DROP ROLE "{APP_ROLE}"')
+                schema_created = False
+                role_created = False
+        else:
+            pytest.fail("could not allocate a collision-free PostgreSQL test namespace")
+
+        await admin.execute(f'GRANT USAGE ON SCHEMA "{TEST_SCHEMA}" TO "{APP_ROLE}"')
+        await admin.execute(f'SET search_path TO "{TEST_SCHEMA}"')
+        migration = MIGRATION.read_text(encoding="utf-8").replace(
+            "smartbi_user", APP_ROLE
+        )
+        adaptive = ADAPTIVE_MIGRATION.read_text(encoding="utf-8")
+        await admin.execute(migration)
+        await admin.execute(adaptive)
+        pool = await asyncpg.create_pool(
+            app_dsn(PG_DSN),
+            min_size=2,
+            max_size=20,
+            server_settings={"search_path": TEST_SCHEMA},
+        )
         yield admin, pool, PostgresRunStore(pool)
     finally:
-        await pool.close()
-        await admin.close()
+        try:
+            if pool is not None:
+                await pool.close()
+        finally:
+            try:
+                await admin.execute("RESET search_path")
+            finally:
+                try:
+                    if schema_created:
+                        await admin.execute(f'DROP SCHEMA "{TEST_SCHEMA}" CASCADE')
+                finally:
+                    try:
+                        if role_created:
+                            await admin.execute(f'DROP ROLE "{APP_ROLE}"')
+                    finally:
+                        await admin.close()
 
 
 @pytest.mark.asyncio
@@ -158,10 +249,13 @@ async def test_force_rls_no_tenant_and_cross_tenant_read_write(pg_runtime):
     flags = await admin.fetch(
         """
         SELECT relname, relrowsecurity, relforcerowsecurity
-        FROM pg_class
-        WHERE relname IN ('smart_bi_agent_run', 'smart_bi_agent_event')
+        FROM pg_class relation
+        JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname = $1
+          AND relname IN ('smart_bi_agent_run', 'smart_bi_agent_event')
         ORDER BY relname
-        """
+        """,
+        TEST_SCHEMA,
     )
     assert len(flags) == 2
     assert all(row["relrowsecurity"] and row["relforcerowsecurity"] for row in flags)
@@ -188,6 +282,15 @@ async def test_force_rls_no_tenant_and_cross_tenant_read_write(pg_runtime):
     )
     with pytest.raises(RunAccessError):
         await store.load_run(run_id, context("B"))
+    other_owner = context("A", "user-B")
+    with pytest.raises(RunAccessError):
+        await store.load_run(run_id, other_owner)
+    with pytest.raises(RunAccessError):
+        await store.events_for(run_id, other_owner)
+    with pytest.raises(RunAccessError):
+        await store.request_cancel(run_id, other_owner)
+    with pytest.raises(RunAccessError):
+        await store.reconcile_stale_run(run_id, other_owner)
 
     async with pool.acquire() as connection:
         async with connection.transaction():
@@ -217,6 +320,215 @@ async def test_force_rls_no_tenant_and_cross_tenant_read_write(pg_runtime):
                     """,
                     run_id,
                 )
+
+
+@pytest.mark.asyncio
+async def test_expand_then_contract_preserves_legacy_without_guessing_owner(pg_runtime):
+    admin, pool, store = pg_runtime
+    legacy_id = str(uuid.uuid4())
+    await admin.execute(
+        """
+        INSERT INTO smart_bi_agent_run (
+            run_id, factory_id, business_type, correlation_id,
+            route_code, sanitized_request
+        ) VALUES ($1::uuid, 'A', 'RESTAURANT', 'legacy-corr',
+                  'GROSS_MARGIN_DECLINE_ATTRIBUTION', $2::jsonb)
+        """,
+        legacy_id,
+        json.dumps(request()),
+    )
+
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            await bind_app_context(connection, factory_id="A")
+            assert await connection.fetchval(
+                "SELECT COUNT(*) FROM smart_bi_agent_run WHERE run_id=$1::uuid",
+                legacy_id,
+            ) == 1
+            assert await connection.execute(
+                """
+                UPDATE smart_bi_agent_run
+                SET updated_at=clock_timestamp(), version=version+1
+                WHERE run_id=$1::uuid
+                """,
+                legacy_id,
+            ) == "UPDATE 1"
+            with pytest.raises(asyncpg.InsufficientPrivilegeError):
+                await connection.execute(
+                    """
+                    INSERT INTO smart_bi_agent_run (
+                        run_id, factory_id, business_type, correlation_id,
+                        route_code, sanitized_request
+                    ) VALUES ($1::uuid, 'A', 'RESTAURANT', 'blocked-null',
+                              'GROSS_MARGIN_DECLINE_ATTRIBUTION', $2::jsonb)
+                    """,
+                    str(uuid.uuid4()),
+                    json.dumps(request()),
+                )
+    with pytest.raises(RunAccessError):
+        await store.load_run(legacy_id, context("A", "user-A"))
+
+    await admin.execute(OWNER_CONTRACT_MIGRATION.read_text(encoding="utf-8"))
+
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            await bind_app_context(connection, factory_id="A")
+            assert await connection.fetchval(
+                "SELECT COUNT(*) FROM smart_bi_agent_run WHERE run_id=$1::uuid",
+                legacy_id,
+            ) == 0
+            assert await connection.execute(
+                """
+                UPDATE smart_bi_agent_run
+                SET updated_at=clock_timestamp(), version=version+1
+                WHERE run_id=$1::uuid
+                """,
+                legacy_id,
+            ) == "UPDATE 0"
+    assert await admin.fetchval(
+        "SELECT COUNT(*) FROM smart_bi_agent_run WHERE run_id=$1::uuid", legacy_id
+    ) == 1
+    with pytest.raises(asyncpg.CheckViolationError):
+        await admin.execute(
+            """
+            INSERT INTO smart_bi_agent_run (
+                run_id, factory_id, business_type, correlation_id,
+                route_code, sanitized_request
+            ) VALUES ($1::uuid, 'A', 'RESTAURANT', 'contract-null',
+                      'GROSS_MARGIN_DECLINE_ATTRIBUTION', $2::jsonb)
+            """,
+            str(uuid.uuid4()),
+            json.dumps(request()),
+        )
+
+    owned_id = str(uuid.uuid4())
+    await store.create_run(
+        owned_id, context("A", "user-A"), RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION, request()
+    )
+    assert (await store.load_run(owned_id, context("A", "user-A"))).owner_user_id == "user-A"
+
+
+@pytest.mark.asyncio
+async def test_contract_tenant_admin_audit_is_select_only_and_tenant_bound(pg_runtime):
+    admin, pool, store = pg_runtime
+    owner = context("A", "user-A")
+    run_id = str(uuid.uuid4())
+    await store.create_run(
+        run_id, owner, RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION, request()
+    )
+    await store.append_event(
+        run_id,
+        owner,
+        AgentEventType.RUN_STARTED,
+        {"routeCode": "GROSS_MARGIN_DECLINE_ATTRIBUTION"},
+        counters=RuntimeCounters(),
+    )
+    audit_insert_run_id = str(uuid.uuid4())
+    await store.create_run(
+        audit_insert_run_id,
+        owner,
+        RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION,
+        request(),
+    )
+    assert await admin.execute(
+        """
+        UPDATE smart_bi_agent_run
+        SET next_event_sequence=1, version=version+1, updated_at=clock_timestamp()
+        WHERE run_id=$1::uuid
+        """,
+        audit_insert_run_id,
+    ) == "UPDATE 1"
+    assert await admin.fetchval(
+        "SELECT COUNT(*) FROM smart_bi_agent_event WHERE run_id=$1::uuid",
+        audit_insert_run_id,
+    ) == 0
+    audit_insert_run = await admin.fetchrow(
+        """
+        SELECT owner_user_id, next_event_sequence
+        FROM smart_bi_agent_run WHERE run_id=$1::uuid
+        """,
+        audit_insert_run_id,
+    )
+    assert dict(audit_insert_run) == {
+        "owner_user_id": "user-A",
+        "next_event_sequence": 1,
+    }
+    await admin.execute(OWNER_CONTRACT_MIGRATION.read_text(encoding="utf-8"))
+
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            await bind_app_context(
+                connection,
+                factory_id="A",
+                user_id="admin-B",
+                actor_role="restaurant_manager",
+                audit=True,
+            )
+            assert await connection.fetchval(
+                "SELECT COUNT(*) FROM smart_bi_agent_run WHERE run_id=$1::uuid", run_id
+            ) == 1
+            assert await connection.fetchval(
+                "SELECT COUNT(*) FROM smart_bi_agent_event WHERE run_id=$1::uuid", run_id
+            ) == 1
+            assert await connection.fetchval(
+                """
+                SELECT next_event_sequence FROM smart_bi_agent_run
+                WHERE run_id=$1::uuid
+                """,
+                audit_insert_run_id,
+            ) == 1
+            assert await connection.fetchval(
+                "SELECT COUNT(*) FROM smart_bi_agent_event WHERE run_id=$1::uuid",
+                audit_insert_run_id,
+            ) == 0
+            assert await connection.execute(
+                """
+                UPDATE smart_bi_agent_run
+                SET updated_at=clock_timestamp(), version=version+1
+                WHERE run_id=$1::uuid
+                """,
+                run_id,
+            ) == "UPDATE 0"
+            with pytest.raises(asyncpg.InsufficientPrivilegeError):
+                await connection.execute(
+                    """
+                    INSERT INTO smart_bi_agent_event (
+                        run_id, factory_id, event_sequence, event_type, payload
+                    ) VALUES ($1::uuid, 'A', 1, 'RUN_STARTED',
+                              '{"routeCode":"GROSS_MARGIN_DECLINE_ATTRIBUTION"}'::jsonb)
+                    """,
+                    audit_insert_run_id,
+                )
+
+        denied_contexts = (
+            ("A", "viewer-B", "viewer", True),
+            ("A", "admin-B", "restaurant_manager", False),
+            ("A", "", "restaurant_manager", True),
+            ("B", "admin-B", "restaurant_manager", True),
+        )
+        for factory_id, user_id, role, audit in denied_contexts:
+            async with connection.transaction():
+                await bind_app_context(
+                    connection,
+                    factory_id=factory_id,
+                    user_id=user_id,
+                    actor_role=role,
+                    audit=audit,
+                )
+                assert await connection.fetchval(
+                    "SELECT COUNT(*) FROM smart_bi_agent_run WHERE run_id=$1::uuid",
+                    run_id,
+                ) == 0
+                assert await connection.fetchval(
+                    "SELECT COUNT(*) FROM smart_bi_agent_event WHERE run_id=$1::uuid",
+                    run_id,
+                ) == 0
+
+    other_owner = context("A", "admin-B")
+    with pytest.raises(RunAccessError):
+        await store.request_cancel(run_id, other_owner)
+    with pytest.raises(RunAccessError):
+        await store.reconcile_stale_run(run_id, other_owner)
 
 
 @pytest.mark.asyncio
@@ -539,6 +851,7 @@ async def test_stale_reconcile_fresh_boundary_preserves_counters_and_is_idempote
         "claims": [],
         "blockers": [STALE_RUN_FAILURE_CODE],
         "observations": [],
+        "actionProposals": [],
         "attributionSupported": False,
     }
     events = await store.events_for(stale_id, tenant)
@@ -848,3 +1161,91 @@ async def test_liveness_timestamps_are_sampled_after_create_append_and_terminal_
     assert (
         await store.reconcile_stale_run(terminal_id, tenant)
     ).result is StaleRunReconcileResult.ALREADY_TERMINAL
+
+
+@pytest.mark.asyncio
+async def test_cross_process_cancel_visibility_idempotency_and_terminal_race(pg_runtime):
+    _admin, pool, store = pg_runtime
+    other_process = PostgresRunStore(pool)
+    tenant = context("A")
+    run_id = str(uuid.uuid4())
+    await store.create_run(
+        run_id, tenant, RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION, request()
+    )
+
+    cancellation = await other_process.request_cancel(run_id, tenant)
+    repeated = await store.request_cancel(run_id, tenant)
+
+    assert cancellation.result is CancelRequestResult.REQUESTED
+    assert repeated.result is CancelRequestResult.ALREADY_REQUESTED
+    assert await store.is_cancellation_requested(run_id, tenant)
+    assert await other_process.is_cancellation_requested(run_id, tenant)
+    with pytest.raises(RunAccessError):
+        await other_process.request_cancel(run_id, context("B"))
+
+    completed = await store.compare_and_set_terminal(
+        run_id,
+        tenant,
+        expected_state=RunState.RUNNING,
+        terminal_state=RunState.PARTIAL,
+        outcome=StructuredOutcome(
+            OutcomeStatus.PARTIAL,
+            RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION,
+        ),
+        counters=RuntimeCounters(),
+        terminal_event_type=AgentEventType.RUN_COMPLETED,
+    )
+    assert completed is False
+    cancelled = await other_process.compare_and_set_terminal(
+        run_id,
+        tenant,
+        expected_state=RunState.RUNNING,
+        terminal_state=RunState.CANCELLED,
+        outcome=StructuredOutcome(
+            OutcomeStatus.CANCELLED,
+            RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION,
+            blockers=("RUN_CANCELLED_BY_TRUSTED_CALLER",),
+        ),
+        counters=RuntimeCounters(),
+        terminal_event_type=AgentEventType.RUN_CANCELLED,
+        failure_code="RUN_CANCELLED",
+    )
+    assert cancelled is True
+    terminal_events = [
+        event.event_type
+        for event in await store.events_for(run_id, tenant)
+        if event.event_type in {
+            AgentEventType.RUN_COMPLETED,
+            AgentEventType.RUN_CANCELLED,
+        }
+    ]
+    assert terminal_events == [AgentEventType.RUN_CANCELLED]
+
+    race_id = str(uuid.uuid4())
+    await store.create_run(
+        race_id, tenant, RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION, request()
+    )
+    race_cancel, race_complete = await asyncio.gather(
+        other_process.request_cancel(race_id, tenant),
+        store.compare_and_set_terminal(
+            race_id,
+            tenant,
+            expected_state=RunState.RUNNING,
+            terminal_state=RunState.PARTIAL,
+            outcome=StructuredOutcome(
+                OutcomeStatus.PARTIAL,
+                RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION,
+            ),
+            counters=RuntimeCounters(),
+            terminal_event_type=AgentEventType.RUN_COMPLETED,
+        ),
+    )
+    if race_cancel.result is CancelRequestResult.REQUESTED:
+        assert race_complete is False
+        assert not any(
+            event.event_type is AgentEventType.RUN_COMPLETED
+            for event in await store.events_for(race_id, tenant)
+        )
+    else:
+        assert race_cancel.result is CancelRequestResult.ALREADY_TERMINAL
+        assert race_complete is True

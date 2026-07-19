@@ -28,20 +28,36 @@ jest.mock('react-native-sse', () => ({
 }));
 
 const mockGetSecureItem = jest.fn();
+const mockSetObject = jest.fn();
+const mockGetObject = jest.fn();
+const mockRemoveItem = jest.fn();
 jest.mock('../../../services/storage/storageService', () => ({
-  StorageService: { getSecureItem: (...args: unknown[]) => mockGetSecureItem(...args) },
+  StorageService: {
+    getSecureItem: (...args: unknown[]) => mockGetSecureItem(...args),
+    setObject: (...args: unknown[]) => mockSetObject(...args),
+    getObject: (...args: unknown[]) => mockGetObject(...args),
+    removeItem: (...args: unknown[]) => mockRemoveItem(...args),
+  },
 }));
 
 const mockApiGet = jest.fn();
+const mockApiPost = jest.fn();
 jest.mock('../../../services/api/apiClient', () => ({
-  apiClient: { get: (...args: unknown[]) => mockApiGet(...args) },
+  apiClient: {
+    get: (...args: unknown[]) => mockApiGet(...args),
+    post: (...args: unknown[]) => mockApiPost(...args),
+  },
 }));
 
 jest.mock('../../../constants/config', () => ({ API_BASE_URL: 'https://api.example.test' }));
 
 import {
+  cancelGrossMarginDeclineRun,
+  clearRestaurantAgentRunCheckpoint,
   currentMonthRestaurantAgentWindow,
+  loadRestaurantAgentRunCheckpoint,
   replayGrossMarginDeclineRun,
+  saveRestaurantAgentRunCheckpoint,
   startGrossMarginDeclineRun,
 } from '../../../services/api/restaurantAgentRuns';
 
@@ -61,6 +77,10 @@ describe('restaurantAgentRuns', () => {
     mockEventSources.length = 0;
     mockGetSecureItem.mockReset().mockResolvedValue('rn-token');
     mockApiGet.mockReset();
+    mockApiPost.mockReset();
+    mockSetObject.mockReset().mockResolvedValue(undefined);
+    mockGetObject.mockReset().mockResolvedValue(null);
+    mockRemoveItem.mockReset().mockResolvedValue(undefined);
   });
 
   it('defaults OFF and creates no EventSource or auth read', async () => {
@@ -113,6 +133,7 @@ describe('restaurantAgentRuns', () => {
       }),
     }));
     expect(String(source.options.body)).not.toContain('factoryId');
+    expect(String(source.options.body)).not.toContain('userId');
     expect(onEvent.mock.calls.map(([item]) => item.sequence)).toEqual([1, 2]);
     expect(completion).toEqual({
       runId: event(1).runId,
@@ -208,5 +229,60 @@ describe('restaurantAgentRuns', () => {
     });
     await expect(replayGrossMarginDeclineRun('REST-1', event(1).runId, 1))
       .rejects.toThrow('RESTAURANT_AGENT_REPLAY_CONTRACT_INVALID');
+  });
+
+  it.each(['REQUESTED', 'ALREADY_REQUESTED', 'ALREADY_TERMINAL'])(
+    'uses the explicit durable cancel endpoint and accepts %s',
+    async (result) => {
+      process.env.EXPO_PUBLIC_RESTAURANT_AGENT_RUN_MODE = 'ACTIVE';
+      mockApiPost.mockResolvedValue({
+        schemaVersion: '1.0',
+        runId: event(1).runId,
+        state: result === 'ALREADY_TERMINAL' ? 'COMPLETED' : 'RUNNING',
+        result,
+        nextEventSequence: 4,
+      });
+
+      await expect(cancelGrossMarginDeclineRun('REST-1', event(1).runId)).resolves.toEqual(
+        expect.objectContaining({ result }),
+      );
+      expect(mockApiPost).toHaveBeenLastCalledWith(
+        `/api/mobile/REST-1/restaurant-agent/runs/${event(1).runId}/cancel`,
+      );
+    },
+  );
+
+  it('rejects an invalid cancel acknowledgement', async () => {
+    process.env.EXPO_PUBLIC_RESTAURANT_AGENT_RUN_MODE = 'ACTIVE';
+    mockApiPost.mockResolvedValue({
+      schemaVersion: '1.0',
+      runId: event(1).runId,
+      state: 'RUNNING',
+      result: 'NOT_DURABLE',
+      nextEventSequence: 4,
+    });
+
+    await expect(cancelGrossMarginDeclineRun('REST-1', event(1).runId))
+      .rejects.toThrow('RESTAURANT_AGENT_CANCEL_CONTRACT_INVALID');
+  });
+
+  it('persists, validates, and clears an owner-scoped recovery checkpoint', async () => {
+    const checkpoint = { runId: event(1).runId, lastSequence: 7 };
+    await saveRestaurantAgentRunCheckpoint('REST-1', '42', checkpoint);
+    expect(mockSetObject).toHaveBeenCalledWith(
+      'restaurant_agent_run_checkpoint:REST-1:42', checkpoint,
+    );
+
+    mockGetObject.mockResolvedValue(checkpoint);
+    await expect(loadRestaurantAgentRunCheckpoint('REST-1', '42')).resolves.toEqual(checkpoint);
+
+    await clearRestaurantAgentRunCheckpoint('REST-1', '42');
+    expect(mockRemoveItem).toHaveBeenCalledWith('restaurant_agent_run_checkpoint:REST-1:42');
+  });
+
+  it('rejects checkpoint access without an explicit stable owner identity', async () => {
+    await expect(loadRestaurantAgentRunCheckpoint('REST-1', ''))
+      .rejects.toThrow('RESTAURANT_AGENT_CHECKPOINT_OWNER_INVALID');
+    expect(mockGetObject).not.toHaveBeenCalled();
   });
 });

@@ -2,6 +2,7 @@ package com.cretas.aims.controller.restaurant;
 
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunReplayResponse;
+import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunCancelResponse;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunStartRequest;
 import com.cretas.aims.filter.CorrelationIdFilter;
 import com.cretas.aims.service.restaurant.RestaurantAgentRunService;
@@ -72,6 +73,19 @@ public class RestaurantAgentRunController {
         RestaurantAgentRunReplayResponse response = service.replay(
                 trusted.factoryId(), trusted.userId(), trusted.role(), trusted.correlationId(),
                 runId, afterSequence);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
+                .body(response);
+    }
+
+    @PostMapping(value = "/{runId}/cancel", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<RestaurantAgentRunCancelResponse> cancel(
+            @PathVariable String factoryId,
+            @PathVariable UUID runId,
+            HttpServletRequest servletRequest) {
+        TrustedRequest trusted = trustedRequest(factoryId, servletRequest);
+        RestaurantAgentRunCancelResponse response = service.cancel(
+                trusted.factoryId(), trusted.userId(), trusted.role(), trusted.correlationId(), runId);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL, "no-store")
                 .body(response);

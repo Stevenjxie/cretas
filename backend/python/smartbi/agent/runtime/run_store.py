@@ -58,9 +58,21 @@ class StaleRunReconcileResult(str, Enum):
     ALREADY_TERMINAL = "ALREADY_TERMINAL"
 
 
+class CancelRequestResult(str, Enum):
+    REQUESTED = "REQUESTED"
+    ALREADY_REQUESTED = "ALREADY_REQUESTED"
+    ALREADY_TERMINAL = "ALREADY_TERMINAL"
+
+
 @dataclass(frozen=True)
 class StaleRunReconciliation:
     result: StaleRunReconcileResult
+    record: RunRecord
+
+
+@dataclass(frozen=True)
+class CancelRequest:
+    result: CancelRequestResult
     record: RunRecord
 
 
@@ -74,7 +86,7 @@ def _exact_keys(value: Mapping[str, Any], expected: set[str], label: str) -> Non
 def _bounded_json(value: Mapping[str, Any]) -> dict[str, Any]:
     normalized = dict(value)
     try:
-        encoded = json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode(
+        encoded = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
             "utf-8"
         )
     except (TypeError, ValueError) as exc:
@@ -93,6 +105,14 @@ def _code(value: Any, label: str) -> str:
 def _identifier(value: Any, label: str) -> str:
     if not isinstance(value, str) or not _IDENTIFIER.fullmatch(value):
         raise UnsafeRunPayloadError(f"{label} must be a bounded identifier")
+    return value
+
+
+def _bounded_text(value: Any, label: str, *, maximum: int = 256) -> str:
+    if not isinstance(value, str) or not value or len(value) > maximum:
+        raise UnsafeRunPayloadError(f"{label} must be bounded non-empty text")
+    if any(ord(character) < 32 for character in value):
+        raise UnsafeRunPayloadError(f"{label} contains control characters")
     return value
 
 
@@ -150,6 +170,18 @@ _EVENT_KEYS = {
         "warningCodes",
     },
     AgentEventType.STEP_FAILED: {"failureCode"},
+    AgentEventType.EVIDENCE_RECORDED: {
+        "evidenceId",
+        "evidenceStatus",
+        "factReferences",
+        "provenance",
+        "warningCodes",
+        "drilldownTruncated",
+    },
+    AgentEventType.EVIDENCE_GAP: {"round", "gapCodes", "resolvable"},
+    AgentEventType.REPLAN: {"fromRound", "toRound", "gapCodes", "stepIds"},
+    AgentEventType.CLARIFICATION: {"clarificationCode", "gapCodes"},
+    AgentEventType.CANCEL_REQUESTED: {"requestCode"},
     AgentEventType.BUDGET_EXCEEDED: {
         "failureCode",
         "roundsUsed",
@@ -164,6 +196,7 @@ _EVENT_KEYS = {
         "claims",
         "blockers",
         "observations",
+        "actionProposals",
         "attributionSupported",
     },
     AgentEventType.RUN_FAILED: {"failureCode"},
@@ -176,17 +209,30 @@ def safe_event_payload(
     _exact_keys(value, _EVENT_KEYS[event_type], f"{event_type.value} payload")
     if event_type is AgentEventType.RUN_COMPLETED:
         return safe_outcome_payload(value)
+    if event_type is AgentEventType.EVIDENCE_RECORDED:
+        return _safe_evidence_payload(value)
     result: dict[str, Any] = {}
     for key, item in value.items():
-        if key in {"routeCode", "purposeCode", "failureCode", "evidenceStatus"}:
+        if key in {
+            "routeCode",
+            "purposeCode",
+            "failureCode",
+            "evidenceStatus",
+            "clarificationCode",
+            "requestCode",
+        }:
             result[key] = _code(item, key)
         elif key == "evidenceId":
             result[key] = _identifier(item, key)
-        elif key == "warningCodes":
+        elif key in {"warningCodes", "gapCodes"}:
             if not isinstance(item, list) or len(item) > 100:
-                raise UnsafeRunPayloadError("warningCodes must be a bounded code list")
-            result[key] = [_code(code, "warningCode") for code in item]
-        elif key in {"round", "maxRounds", "roundsUsed"}:
+                raise UnsafeRunPayloadError(f"{key} must be a bounded code list")
+            result[key] = [_code(code, key) for code in item]
+        elif key == "stepIds":
+            if not isinstance(item, list) or len(item) > 10:
+                raise UnsafeRunPayloadError("stepIds must be a bounded identifier list")
+            result[key] = [_identifier(step_id, "stepId") for step_id in item]
+        elif key in {"round", "fromRound", "toRound", "maxRounds", "roundsUsed"}:
             result[key] = _bounded_int(item, 0, 2, key)
         elif key in {"stepCount", "maxToolCalls", "toolCallsUsed"}:
             result[key] = _bounded_int(item, 0, 10, key)
@@ -194,13 +240,94 @@ def safe_event_payload(
             result[key] = _bounded_int(item, 0, 1_000_000, key)
         elif key in {"evidenceBytes", "evidenceBytesUsed"}:
             result[key] = _bounded_int(item, 0, 100_000_000, key)
+        elif key == "resolvable":
+            if not isinstance(item, bool):
+                raise UnsafeRunPayloadError("resolvable must be boolean")
+            result[key] = item
         else:
             raise UnsafeRunPayloadError(f"unhandled event field: {key}")
     return _bounded_json(result)
 
 
+def _safe_evidence_payload(value: Mapping[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "evidenceId": _identifier(value["evidenceId"], "evidenceId"),
+        "evidenceStatus": _code(value["evidenceStatus"], "evidenceStatus"),
+    }
+    if not isinstance(value["drilldownTruncated"], bool):
+        raise UnsafeRunPayloadError("drilldownTruncated must be boolean")
+    result["drilldownTruncated"] = value["drilldownTruncated"]
+    warnings = value["warningCodes"]
+    if not isinstance(warnings, list) or len(warnings) > 100:
+        raise UnsafeRunPayloadError("warningCodes must be a bounded code list")
+    result["warningCodes"] = [_code(item, "warningCode") for item in warnings]
+
+    facts = value["factReferences"]
+    if not isinstance(facts, list) or len(facts) > 100:
+        raise UnsafeRunPayloadError("factReferences must be a bounded list")
+    fact_keys = {
+        "factId",
+        "metric",
+        "value",
+        "unit",
+        "dimensions",
+        "provenanceRefs",
+    }
+    safe_facts = []
+    for fact in facts:
+        _exact_keys(fact, fact_keys, "evidence fact reference")
+        metric = fact["metric"]
+        if not isinstance(metric, str) or not _METRIC.fullmatch(metric):
+            raise UnsafeRunPayloadError("fact metric must be an identifier")
+        value_string = fact["value"]
+        if not isinstance(value_string, str) or not _DECIMAL.fullmatch(value_string):
+            raise UnsafeRunPayloadError("fact value must be a decimal string")
+        unit = fact["unit"]
+        if unit is not None:
+            unit = _code(unit, "fact unit")
+        dimensions = fact["dimensions"]
+        if not isinstance(dimensions, Mapping) or len(dimensions) > 20:
+            raise UnsafeRunPayloadError("fact dimensions must be a bounded object")
+        safe_dimensions = {
+            _identifier(key, "dimension key"): _bounded_text(item, "dimension value")
+            for key, item in dimensions.items()
+        }
+        refs = fact["provenanceRefs"]
+        if not isinstance(refs, list) or not refs or len(refs) > 20:
+            raise UnsafeRunPayloadError("provenanceRefs must be a bounded identifier list")
+        safe_facts.append(
+            {
+                "factId": _identifier(fact["factId"], "factId"),
+                "metric": metric,
+                "value": value_string,
+                "unit": unit,
+                "dimensions": safe_dimensions,
+                "provenanceRefs": [_identifier(ref, "provenanceRef") for ref in refs],
+            }
+        )
+    result["factReferences"] = safe_facts
+
+    provenance = value["provenance"]
+    if not isinstance(provenance, list) or len(provenance) > 100:
+        raise UnsafeRunPayloadError("provenance must be a bounded list")
+    provenance_keys = {"refId", "sourceType", "asset", "queryId", "sourceVersion"}
+    result["provenance"] = []
+    for reference in provenance:
+        _exact_keys(reference, provenance_keys, "evidence provenance")
+        result["provenance"].append(
+            {
+                "refId": _identifier(reference["refId"], "refId"),
+                "sourceType": _code(reference["sourceType"], "sourceType"),
+                "asset": _bounded_text(reference["asset"], "asset"),
+                "queryId": _identifier(reference["queryId"], "queryId"),
+                "sourceVersion": _identifier(reference["sourceVersion"], "sourceVersion"),
+            }
+        )
+    return _bounded_json(result)
+
+
 def safe_outcome_payload(value: Mapping[str, Any]) -> dict[str, Any]:
-    expected = {
+    legacy_keys = {
         "status",
         "routeCode",
         "claims",
@@ -208,7 +335,16 @@ def safe_outcome_payload(value: Mapping[str, Any]) -> dict[str, Any]:
         "observations",
         "attributionSupported",
     }
-    _exact_keys(value, expected, "outcome")
+    if not isinstance(value, Mapping):
+        raise UnsafeRunPayloadError("outcome must be an object")
+    actual_keys = frozenset(value)
+    if actual_keys not in {
+        frozenset(legacy_keys),
+        frozenset({*legacy_keys, "actionProposals"}),
+    }:
+        raise UnsafeRunPayloadError(
+            "outcome must contain exact keys with optional actionProposals"
+        )
     result: dict[str, Any] = {
         "status": _code(value["status"], "status"),
         "routeCode": _code(value["routeCode"], "routeCode"),
@@ -250,6 +386,46 @@ def safe_outcome_payload(value: Mapping[str, Any]) -> dict[str, Any]:
             }
         )
     result["claims"] = safe_claims
+    proposals = value.get("actionProposals", [])
+    if not isinstance(proposals, list) or len(proposals) > 20:
+        raise UnsafeRunPayloadError("actionProposals must be a bounded list")
+    proposal_keys = {
+        "proposalCode",
+        "actionCode",
+        "rationaleCodes",
+        "evidenceReferences",
+        "executionMode",
+    }
+    safe_proposals = []
+    for proposal in proposals:
+        _exact_keys(proposal, proposal_keys, "action proposal")
+        if proposal["executionMode"] != "READ_ONLY_PROPOSAL":
+            raise UnsafeRunPayloadError("action proposal must remain read-only")
+        rationales = proposal["rationaleCodes"]
+        if not isinstance(rationales, list) or not rationales or len(rationales) > 20:
+            raise UnsafeRunPayloadError("rationaleCodes must be a bounded code list")
+        references = proposal["evidenceReferences"]
+        if not isinstance(references, list) or len(references) > 20:
+            raise UnsafeRunPayloadError("evidenceReferences must be a bounded list")
+        safe_references = []
+        for reference in references:
+            _exact_keys(reference, {"evidenceId", "factId"}, "proposal evidence")
+            safe_references.append(
+                {
+                    "evidenceId": _identifier(reference["evidenceId"], "evidenceId"),
+                    "factId": _identifier(reference["factId"], "factId"),
+                }
+            )
+        safe_proposals.append(
+            {
+                "proposalCode": _code(proposal["proposalCode"], "proposalCode"),
+                "actionCode": _code(proposal["actionCode"], "actionCode"),
+                "rationaleCodes": [_code(item, "rationaleCode") for item in rationales],
+                "evidenceReferences": safe_references,
+                "executionMode": "READ_ONLY_PROPOSAL",
+            }
+        )
+    result["actionProposals"] = safe_proposals
     return _bounded_json(result)
 
 
@@ -309,6 +485,8 @@ def _require_context(context: TrustedExecutionContext) -> None:
         raise TypeError("trusted execution context is required")
     if context.business_type != "RESTAURANT":
         raise RunAccessError("restaurant run store requires business_type=RESTAURANT")
+    if not isinstance(context.user_id, str) or not context.user_id.strip():
+        raise RunAccessError("restaurant run store requires trusted owner user")
 
 
 def _require_monotonic_counters(
@@ -379,6 +557,16 @@ class RunStore(Protocol):
     ) -> StaleRunReconciliation:
         ...
 
+    async def request_cancel(
+        self, run_id: str, context: TrustedExecutionContext
+    ) -> CancelRequest:
+        ...
+
+    async def is_cancellation_requested(
+        self, run_id: str, context: TrustedExecutionContext
+    ) -> bool:
+        ...
+
 
 class InMemoryRunStore:
     """Concurrency-safe fake with the same tenant and terminal invariants."""
@@ -406,6 +594,7 @@ class InMemoryRunStore:
             record = RunRecord(
                 run_id=run_id,
                 factory_id=context.factory_id,
+                owner_user_id=context.user_id,
                 state=RunState.RUNNING,
                 route_code=route_code,
                 safe_request=request,
@@ -483,6 +672,11 @@ class InMemoryRunStore:
             record = self._owned(run_id, context)
             if record.state is not expected_state:
                 return False
+            if terminal_state is not RunState.CANCELLED and any(
+                event.event_type is AgentEventType.CANCEL_REQUESTED
+                for event in self._events[run_id]
+            ):
+                return False
             _require_monotonic_counters(record.counters, counters)
             now = self._now()
             sequence = record.next_event_sequence + 1
@@ -506,6 +700,44 @@ class InMemoryRunStore:
             self._updated_at[run_id] = now
             return True
 
+    async def request_cancel(self, run_id, context):
+        _require_context(context)
+        body = safe_event_payload(
+            AgentEventType.CANCEL_REQUESTED,
+            {"requestCode": "EXPLICIT_SERVER_CANCEL"},
+        )
+        async with self._lock:
+            record = self._owned(run_id, context)
+            if record.state.terminal:
+                return CancelRequest(CancelRequestResult.ALREADY_TERMINAL, record)
+            if any(
+                event.event_type is AgentEventType.CANCEL_REQUESTED
+                for event in self._events[run_id]
+            ):
+                return CancelRequest(CancelRequestResult.ALREADY_REQUESTED, record)
+            sequence = record.next_event_sequence + 1
+            event = AgentEvent(
+                run_id,
+                context.factory_id,
+                sequence,
+                AgentEventType.CANCEL_REQUESTED,
+                body,
+            )
+            self._events[run_id].append(event)
+            updated = replace(record, next_event_sequence=sequence)
+            self._runs[run_id] = updated
+            self._updated_at[run_id] = self._now()
+            return CancelRequest(CancelRequestResult.REQUESTED, updated)
+
+    async def is_cancellation_requested(self, run_id, context):
+        _require_context(context)
+        async with self._lock:
+            self._owned(run_id, context)
+            return any(
+                event.event_type is AgentEventType.CANCEL_REQUESTED
+                for event in self._events[run_id]
+            )
+
     async def reconcile_stale_run(self, run_id, context):
         _require_context(context)
         async with self._lock:
@@ -519,29 +751,44 @@ class InMemoryRunStore:
             if self._updated_at[run_id] > cutoff:
                 return StaleRunReconciliation(StaleRunReconcileResult.NOT_STALE, record)
 
+            cancellation_requested = any(
+                event.event_type is AgentEventType.CANCEL_REQUESTED
+                for event in self._events[run_id]
+            )
+            terminal_state = RunState.CANCELLED if cancellation_requested else RunState.FAILED
+            terminal_event = (
+                AgentEventType.RUN_CANCELLED
+                if cancellation_requested
+                else AgentEventType.RUN_FAILED
+            )
+            failure_code = "RUN_CANCELLED" if cancellation_requested else STALE_RUN_FAILURE_CODE
             outcome = StructuredOutcome(
-                status=OutcomeStatus.FAILED,
+                status=OutcomeStatus.CANCELLED if cancellation_requested else OutcomeStatus.FAILED,
                 route_code=record.route_code,
-                blockers=(STALE_RUN_FAILURE_CODE,),
+                blockers=(
+                    "RUN_CANCELLED_BY_TRUSTED_CALLER"
+                    if cancellation_requested
+                    else STALE_RUN_FAILURE_CODE,
+                ),
             )
             summary = safe_outcome_payload(outcome.persistence_dict())
             event_body = safe_event_payload(
-                AgentEventType.RUN_FAILED,
-                {"failureCode": STALE_RUN_FAILURE_CODE},
+                terminal_event,
+                {"failureCode": failure_code},
             )
             sequence = record.next_event_sequence + 1
             event = AgentEvent(
                 run_id,
                 context.factory_id,
                 sequence,
-                AgentEventType.RUN_FAILED,
+                terminal_event,
                 event_body,
             )
             reconciled = replace(
                 record,
-                state=RunState.FAILED,
+                state=terminal_state,
                 outcome_summary=summary,
-                failure_code=STALE_RUN_FAILURE_CODE,
+                failure_code=failure_code,
                 next_event_sequence=sequence,
             )
             self._events[run_id].append(event)
@@ -564,7 +811,11 @@ class InMemoryRunStore:
 
     def _owned(self, run_id, context):
         record = self._runs.get(run_id)
-        if record is None or record.factory_id != context.factory_id:
+        if (
+            record is None
+            or record.factory_id != context.factory_id
+            or record.owner_user_id != context.user_id
+        ):
             raise RunAccessError("run does not exist in trusted tenant")
         return record
 
@@ -587,17 +838,18 @@ class PostgresRunStore:
                         SELECT clock_timestamp() AS observed_at
                     )
                     INSERT INTO smart_bi_agent_run (
-                        run_id, factory_id, business_type, correlation_id,
+                        run_id, factory_id, owner_user_id, business_type, correlation_id,
                         route_code, state, sanitized_request,
                         created_at, updated_at
                     )
-                    SELECT $1::uuid, $2, 'RESTAURANT', $3, $4, 'RUNNING',
-                           $5::jsonb, observed_at, observed_at
+                    SELECT $1::uuid, $2, $3, 'RESTAURANT', $4, $5, 'RUNNING',
+                           $6::jsonb, observed_at, observed_at
                     FROM statement_time
                     RETURNING *
                     """,
                     run_id,
                     context.factory_id,
+                    context.user_id,
                     context.correlation_id,
                     route_code.value,
                     self._json(request),
@@ -732,6 +984,20 @@ class PostgresRunStore:
                 )
                 if observed is None or observed["state"] != expected_state.value:
                     return False
+                if terminal_state is not RunState.CANCELLED:
+                    cancel_requested = await connection.fetchval(
+                        """
+                        SELECT EXISTS (
+                            SELECT 1 FROM smart_bi_agent_event
+                            WHERE run_id = $1::uuid AND factory_id = $2
+                              AND event_type = 'CANCEL_REQUESTED'
+                        )
+                        """,
+                        run_id,
+                        context.factory_id,
+                    )
+                    if cancel_requested:
+                        return False
                 observed_at = await connection.fetchval("SELECT clock_timestamp()")
                 row = await connection.fetchrow(
                     """
@@ -777,6 +1043,97 @@ class PostgresRunStore:
                 )
         return True
 
+    async def request_cancel(self, run_id, context):
+        _require_context(context)
+        body = safe_event_payload(
+            AgentEventType.CANCEL_REQUESTED,
+            {"requestCode": "EXPLICIT_SERVER_CANCEL"},
+        )
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                await self._bind(connection, context)
+                observed = await connection.fetchrow(
+                    """
+                    SELECT *
+                    FROM smart_bi_agent_run
+                    WHERE run_id = $1::uuid AND factory_id = $2
+                    FOR UPDATE
+                    """,
+                    run_id,
+                    context.factory_id,
+                )
+                if observed is None:
+                    raise RunAccessError("run does not exist in trusted tenant")
+                record = self._record(observed)
+                if record.state.terminal:
+                    return CancelRequest(CancelRequestResult.ALREADY_TERMINAL, record)
+                already_requested = await connection.fetchval(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1 FROM smart_bi_agent_event
+                        WHERE run_id = $1::uuid AND factory_id = $2
+                          AND event_type = 'CANCEL_REQUESTED'
+                    )
+                    """,
+                    run_id,
+                    context.factory_id,
+                )
+                if already_requested:
+                    return CancelRequest(CancelRequestResult.ALREADY_REQUESTED, record)
+                observed_at = await connection.fetchval("SELECT clock_timestamp()")
+                updated = await connection.fetchrow(
+                    """
+                    UPDATE smart_bi_agent_run
+                    SET next_event_sequence = next_event_sequence + 1,
+                        updated_at = $4::timestamptz,
+                        version = version + 1
+                    WHERE run_id = $1::uuid AND factory_id = $2
+                      AND state = 'RUNNING' AND version = $3
+                    RETURNING *
+                    """,
+                    run_id,
+                    context.factory_id,
+                    int(observed["version"]),
+                    observed_at,
+                )
+                if updated is None:
+                    raise RunStoreError("run changed while requesting cancellation")
+                sequence = int(updated["next_event_sequence"])
+                await connection.execute(
+                    """
+                    INSERT INTO smart_bi_agent_event (
+                        run_id, factory_id, event_sequence, event_type, payload
+                    ) VALUES ($1::uuid, $2, $3, 'CANCEL_REQUESTED', $4::jsonb)
+                    """,
+                    run_id,
+                    context.factory_id,
+                    sequence,
+                    self._json(body),
+                )
+        return CancelRequest(CancelRequestResult.REQUESTED, self._record(updated))
+
+    async def is_cancellation_requested(self, run_id, context):
+        _require_context(context)
+        async with self._pool.acquire() as connection:
+            async with connection.transaction(readonly=True):
+                await self._bind(connection, context)
+                row = await connection.fetchrow(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1 FROM smart_bi_agent_event
+                        WHERE run_id = $1::uuid AND factory_id = $2
+                          AND event_type = 'CANCEL_REQUESTED'
+                    ) AS requested
+                    FROM smart_bi_agent_run
+                    WHERE run_id = $1::uuid AND factory_id = $2
+                    """,
+                    run_id,
+                    context.factory_id,
+                )
+        if row is None:
+            raise RunAccessError("run does not exist in trusted tenant")
+        return bool(row["requested"])
+
     async def reconcile_stale_run(self, run_id, context):
         _require_context(context)
         async with self._pool.acquire() as connection:
@@ -807,20 +1164,42 @@ class PostgresRunStore:
                         StaleRunReconcileResult.NOT_STALE, record
                     )
 
+                cancellation_requested = await connection.fetchval(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1 FROM smart_bi_agent_event
+                        WHERE run_id = $1::uuid AND factory_id = $2
+                          AND event_type = 'CANCEL_REQUESTED'
+                    )
+                    """,
+                    run_id,
+                    context.factory_id,
+                )
+                terminal_state = "CANCELLED" if cancellation_requested else "FAILED"
+                terminal_event = (
+                    AgentEventType.RUN_CANCELLED
+                    if cancellation_requested
+                    else AgentEventType.RUN_FAILED
+                )
+                failure_code = "RUN_CANCELLED" if cancellation_requested else STALE_RUN_FAILURE_CODE
                 outcome = StructuredOutcome(
-                    status=OutcomeStatus.FAILED,
+                    status=OutcomeStatus.CANCELLED if cancellation_requested else OutcomeStatus.FAILED,
                     route_code=record.route_code,
-                    blockers=(STALE_RUN_FAILURE_CODE,),
+                    blockers=(
+                        "RUN_CANCELLED_BY_TRUSTED_CALLER"
+                        if cancellation_requested
+                        else STALE_RUN_FAILURE_CODE,
+                    ),
                 )
                 summary = safe_outcome_payload(outcome.persistence_dict())
                 event_body = safe_event_payload(
-                    AgentEventType.RUN_FAILED,
-                    {"failureCode": STALE_RUN_FAILURE_CODE},
+                    terminal_event,
+                    {"failureCode": failure_code},
                 )
                 updated = await connection.fetchrow(
                     """
                     UPDATE smart_bi_agent_run
-                    SET state = 'FAILED', outcome_summary = $6::jsonb,
+                    SET state = $9, outcome_summary = $6::jsonb,
                         failure_code = $7,
                         next_event_sequence = next_event_sequence + 1,
                         completed_at = $5::timestamptz,
@@ -838,8 +1217,9 @@ class PostgresRunStore:
                     observed["updated_at"],
                     server_now,
                     self._json(summary),
-                    STALE_RUN_FAILURE_CODE,
+                    failure_code,
                     STALE_AFTER_SECONDS,
+                    terminal_state,
                 )
                 if updated is None:
                     raise RunStoreError("stale run changed during reconciliation")
@@ -848,11 +1228,12 @@ class PostgresRunStore:
                     """
                     INSERT INTO smart_bi_agent_event (
                         run_id, factory_id, event_sequence, event_type, payload
-                    ) VALUES ($1::uuid, $2, $3, 'RUN_FAILED', $4::jsonb)
+                    ) VALUES ($1::uuid, $2, $3, $4, $5::jsonb)
                     """,
                     run_id,
                     context.factory_id,
                     sequence,
+                    terminal_event.value,
                     self._json(event_body),
                 )
                 reconciled = self._record(updated)
@@ -896,10 +1277,13 @@ class PostgresRunStore:
         await connection.execute(
             "SELECT set_config('app.factory_id', $1, true)", context.factory_id
         )
+        await connection.execute(
+            "SELECT set_config('app.user_id', $1, true)", context.user_id
+        )
 
     @staticmethod
     def _json(value):
-        return json.dumps(value, sort_keys=True, separators=(",", ":"))
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
     @staticmethod
     def _record(row):
@@ -912,12 +1296,16 @@ class PostgresRunStore:
         request = safe_request_payload(request)
         if summary is not None:
             summary = safe_outcome_payload(summary)
+        owner_user_id = row["owner_user_id"]
+        if not isinstance(owner_user_id, str) or not owner_user_id:
+            raise RunAccessError("legacy run has no trusted owner")
         failure_code = row["failure_code"]
         if failure_code is not None:
             failure_code = _code(failure_code, "failure_code")
         return RunRecord(
             run_id=str(row["run_id"]),
             factory_id=str(row["factory_id"]),
+            owner_user_id=owner_user_id,
             state=RunState(row["state"]),
             route_code=RouteCode(row["route_code"]),
             safe_request=request,

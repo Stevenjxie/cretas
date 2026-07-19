@@ -27,6 +27,7 @@ from .contracts import DataClassification, TrustedExecutionContext
 from .gateway import ReadToolGateway
 from .http_contracts import (
     StartRestaurantRunRequest,
+    cancel_request_v1,
     event_v1,
     run_replay_v1,
     stale_reconciliation_v1,
@@ -70,7 +71,10 @@ def require_internal_restaurant_context(request: Request) -> TrustedExecutionCon
         raise HTTPException(status_code=401, detail="INTERNAL_AUTH_REQUIRED")
     if any(
         key in request.query_params
-        for key in ("factoryId", "factory_id", "tenantId", "tenant_id")
+        for key in (
+            "factoryId", "factory_id", "tenantId", "tenant_id",
+            "userId", "user_id", "actorId", "actor_id",
+        )
     ):
         raise HTTPException(status_code=422, detail="TENANT_PARAMETER_FORBIDDEN")
 
@@ -145,7 +149,6 @@ async def start_restaurant_run(
             run_id,
             context,
             task,
-            cancellation_requested,
         ),
         media_type="text/event-stream",
         headers={
@@ -183,6 +186,27 @@ async def replay_restaurant_run(
             status_code=503, detail="AGENT_RUN_STORE_UNAVAILABLE"
         ) from exc
     return run_replay_v1(record, events)
+
+
+@router.post("/{run_id}/cancel")
+async def cancel_restaurant_run(
+    run_id: uuid.UUID,
+    request: Request,
+    context: TrustedExecutionContext = Depends(require_internal_restaurant_context),
+    components: RuntimeComponents = Depends(get_runtime_components),
+):
+    if request.query_params or await request.body():
+        raise HTTPException(status_code=422, detail="CANCEL_INPUT_FORBIDDEN")
+    run_key = str(run_id)
+    try:
+        result = await components.store.request_cancel(run_key, context)
+    except RunAccessError as exc:
+        raise HTTPException(status_code=404, detail="RUN_NOT_FOUND") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503, detail="AGENT_RUN_STORE_UNAVAILABLE"
+        ) from exc
+    return cancel_request_v1(run_key, result)
 
 
 @router.post("/{run_id}/reconcile-stale")
@@ -244,13 +268,11 @@ async def _persisted_event_stream(
     run_id: str,
     context: TrustedExecutionContext,
     task: asyncio.Task,
-    cancellation_requested: asyncio.Event,
 ) -> AsyncIterator[str]:
     cursor = 0
     try:
         while True:
             if await request.is_disconnected():
-                cancellation_requested.set()
                 return
 
             try:
@@ -285,14 +307,7 @@ async def _persisted_event_stream(
                 return
             await asyncio.sleep(_POLL_SECONDS)
     except asyncio.CancelledError:
-        cancellation_requested.set()
         raise
-    finally:
-        # Best effort only. This requests a trusted cancellation outcome after
-        # the current bounded read has completed or timed out and cleaned up; a
-        # browser disconnect does not force-cancel the runtime task or invent an
-        # immediate service-side CANCELLED terminal.
-        cancellation_requested.set()
 
 
 def _sse_event(event) -> str:

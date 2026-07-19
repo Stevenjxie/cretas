@@ -189,6 +189,56 @@ async def test_post_streams_only_persisted_event_v1_and_get_replays_after_sequen
 
 
 @pytest.mark.asyncio
+async def test_explicit_cancel_is_persisted_idempotent_and_cross_tenant_hidden(client, app):
+    run_id = "31313131-3131-4131-8131-313131313131"
+    context = TrustedExecutionContext(
+        factory_id="REST-A",
+        business_type="RESTAURANT",
+        user_id="user-1",
+        correlation_id="cancel-test",
+        authorized_classifications=frozenset(),
+    )
+    await app.state.test_store.create_run(
+        run_id,
+        context,
+        RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION,
+        {key: value for key, value in VALID_BODY.items() if key != "schemaVersion"},
+    )
+
+    first = await client.post(
+        f"/api/internal/smartbi/agent/runs/{run_id}/cancel", headers=BASE_HEADERS
+    )
+    repeated = await client.post(
+        f"/api/internal/smartbi/agent/runs/{run_id}/cancel", headers=BASE_HEADERS
+    )
+
+    assert first.status_code == 200
+    assert first.json()["result"] == "REQUESTED"
+    assert repeated.json()["result"] == "ALREADY_REQUESTED"
+    events = await app.state.test_store.events_for(run_id, context)
+    assert [event.event_type for event in events] == [AgentEventType.CANCEL_REQUESTED]
+
+    hidden = await client.post(
+        f"/api/internal/smartbi/agent/runs/{run_id}/cancel",
+        headers={**BASE_HEADERS, "X-Factory-Id": "REST-B"},
+    )
+    assert hidden.status_code == 404
+
+    hidden_owner = await client.post(
+        f"/api/internal/smartbi/agent/runs/{run_id}/cancel",
+        headers={**BASE_HEADERS, "X-User-Id": "user-2"},
+    )
+    assert hidden_owner.status_code == 404
+
+    forbidden_input = await client.post(
+        f"/api/internal/smartbi/agent/runs/{run_id}/cancel?unexpected=true",
+        headers=BASE_HEADERS,
+        content=b"{}",
+    )
+    assert forbidden_input.status_code == 422
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("headers", "expected"),
     [
@@ -552,7 +602,7 @@ class DisconnectedRequest:
 
 
 @pytest.mark.asyncio
-async def test_disconnect_requests_best_effort_cancel_without_force_cancelling_task():
+async def test_disconnect_only_stops_receiving_and_does_not_request_server_cancel():
     store = InMemoryRunStore()
     context = TrustedExecutionContext(
         factory_id="REST-A",
@@ -570,7 +620,6 @@ async def test_disconnect_requests_best_effort_cancel_without_force_cancelling_t
     )
     blocker = asyncio.Event()
     task = asyncio.create_task(blocker.wait())
-    cancellation_requested = asyncio.Event()
 
     streamed = [
         item
@@ -580,12 +629,10 @@ async def test_disconnect_requests_best_effort_cancel_without_force_cancelling_t
             run_id,
             context,
             task,
-            cancellation_requested,
         )
     ]
 
     assert streamed == []
-    assert cancellation_requested.is_set()
     assert not task.cancelled()
     assert (await store.load_run(run_id, context)).state is RunState.RUNNING
     task.cancel()

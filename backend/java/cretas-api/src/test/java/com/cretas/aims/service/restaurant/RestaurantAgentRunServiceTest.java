@@ -6,6 +6,7 @@ import com.cretas.aims.client.RestaurantAgentRuntimeClient.UpstreamHttpException
 import com.cretas.aims.client.RestaurantAgentRuntimeClient.UpstreamStream;
 import com.cretas.aims.config.RestaurantAgentRuntimeProperties;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunReplayResponse;
+import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunCancelResponse;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunStartRequest;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
 import okio.Buffer;
@@ -174,6 +175,29 @@ class RestaurantAgentRunServiceTest {
                 .thenThrow(new UpstreamHttpException(404));
         assertThatThrownBy(() -> service.replay(
                 "R001", "42", "restaurant_owner", "corr-001", runId, 1))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode().value())
+                        .isEqualTo(404));
+    }
+
+    @Test
+    void cancelPreservesTrustedContextAndMapsMissingRun() throws Exception {
+        active();
+        when(client.isConfigured()).thenReturn(true);
+        when(configService.resolveBusinessDomain("R001")).thenReturn("RESTAURANT");
+        UUID runId = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        TrustedContext context = new TrustedContext(
+                "R001", "42", "restaurant_owner", "RESTAURANT", "corr-001");
+        RestaurantAgentRunCancelResponse expected = new RestaurantAgentRunCancelResponse(
+                "1.0", runId.toString(), "REQUESTED", "RUNNING", 9);
+        when(client.cancel(runId, context)).thenReturn(expected);
+
+        assertThat(service.cancel(
+                "R001", "42", "restaurant_owner", "corr-001", runId)).isSameAs(expected);
+
+        when(client.cancel(runId, context)).thenThrow(new UpstreamHttpException(404));
+        assertThatThrownBy(() -> service.cancel(
+                "R001", "42", "restaurant_owner", "corr-001", runId))
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode().value())
                         .isEqualTo(404));

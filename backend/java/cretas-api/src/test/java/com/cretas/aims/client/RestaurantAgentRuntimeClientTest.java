@@ -4,6 +4,7 @@ import com.cretas.aims.client.RestaurantAgentRuntimeClient.TrustedContext;
 import com.cretas.aims.client.RestaurantAgentRuntimeClient.UpstreamHttpException;
 import com.cretas.aims.client.RestaurantAgentRuntimeClient.UpstreamStream;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunReplayResponse;
+import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunCancelResponse;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunStartRequest;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.time.LocalDate;
 import java.util.Map;
 import java.util.Set;
@@ -188,6 +190,52 @@ class RestaurantAgentRuntimeClientTest {
 
         assertThat(replay.getNextEventSequence()).isEqualTo(8);
         assertThat(replay.getEvents()).isEmpty();
+    }
+
+    @Test
+    void cancelUsesExactTrustedPathEmptyBodyAndValidatesResponse() throws Exception {
+        UUID runId = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        server.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("""
+                        {"schemaVersion":"1.0","runId":"00000000-0000-0000-0000-000000000001",
+                         "result":"REQUESTED","state":"RUNNING","nextEventSequence":9}
+                        """));
+
+        RestaurantAgentRunCancelResponse cancellation = client.cancel(runId, context());
+
+        assertThat(cancellation.getResult()).isEqualTo("REQUESTED");
+        assertThat(cancellation.getNextEventSequence()).isEqualTo(9);
+        RecordedRequest recorded = server.takeRequest(1, TimeUnit.SECONDS);
+        assertThat(recorded.getMethod()).isEqualTo("POST");
+        assertThat(recorded.getPath()).isEqualTo(
+                "/api/internal/smartbi/agent/runs/00000000-0000-0000-0000-000000000001/cancel");
+        assertThat(recorded.getBodySize()).isZero();
+        assertThat(recorded.getHeader("X-Factory-Id")).isEqualTo("R001");
+
+        server.enqueue(new MockResponse().setResponseCode(200).setBody("""
+                {"schemaVersion":"1.0","runId":"00000000-0000-0000-0000-000000000001",
+                 "result":"INVENTED","state":"RUNNING","nextEventSequence":9}
+                """));
+        assertThatThrownBy(() -> client.cancel(runId, context()))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("cancellation contract");
+    }
+
+    @Test
+    void adaptiveEventTypesAreAcceptedButUnknownTypeStillFails() throws Exception {
+        UUID runId = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        String evidence = """
+                {"schemaVersion":"1.0","runId":"00000000-0000-0000-0000-000000000001",
+                 "sequence":3,"eventType":"EVIDENCE_RECORDED","stepId":"dish-evidence",
+                 "toolName":"restaurant_dish_margin_mix_read.v1","payload":{"drilldownTruncated":true}}
+                """;
+        client.validateEventFrame(runId, "3", evidence);
+
+        assertThatThrownBy(() -> client.validateEventFrame(
+                runId, "3", evidence.replace("EVIDENCE_RECORDED", "INVENTED")))
+                .isInstanceOf(IOException.class);
     }
 
     private String replayBody(String state, long nextSequence, long eventSequence) {

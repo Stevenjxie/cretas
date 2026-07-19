@@ -29,6 +29,17 @@ def gross_margin_decline_plan(request: GrossMarginDeclineRequest) -> RoutePlan:
                 parameters={**window, "topN": request.store_top_n},
                 purpose_code="BOUND_STORE_LEVEL_EXPLANATIONS",
             ),
+        ),
+    )
+
+
+def gross_margin_decline_replan(request: GrossMarginDeclineRequest) -> RoutePlan:
+    """Second-round plan admitted only after round-one evidence proves a gap."""
+
+    window = {"startDate": request.start_date, "endDate": request.end_date}
+    return RoutePlan(
+        route_code=RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION,
+        steps=(
             PlanStep(
                 step_id="dish-evidence",
                 round_number=2,

@@ -6,6 +6,7 @@ import com.cretas.aims.client.RestaurantAgentRuntimeClient.UpstreamHttpException
 import com.cretas.aims.client.RestaurantAgentRuntimeClient.UpstreamStream;
 import com.cretas.aims.config.RestaurantAgentRuntimeProperties;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunReplayResponse;
+import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunCancelResponse;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunStartRequest;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
 import lombok.extern.slf4j.Slf4j;
@@ -97,6 +98,23 @@ public class RestaurantAgentRunService {
         requireAvailable();
         try {
             return runtimeClient.replay(runId, afterSequence, context);
+        } catch (UpstreamHttpException ex) {
+            throw translate(ex);
+        } catch (IOException ex) {
+            throw unavailable("RESTAURANT_AGENT_RUNTIME_UNREACHABLE", ex);
+        }
+    }
+
+    public RestaurantAgentRunCancelResponse cancel(
+            String factoryId,
+            String userId,
+            String role,
+            String correlationId,
+            UUID runId) {
+        TrustedContext context = requireTrustedContext(factoryId, userId, role, correlationId);
+        requireAvailable();
+        try {
+            return runtimeClient.cancel(runId, context);
         } catch (UpstreamHttpException ex) {
             throw translate(ex);
         } catch (IOException ex) {

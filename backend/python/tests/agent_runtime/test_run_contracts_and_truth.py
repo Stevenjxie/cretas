@@ -16,7 +16,10 @@ from smartbi.agent.runtime.contracts import (
     ProvenanceReference,
 )
 from smartbi.agent.runtime.numeric_truth import NumericTruthError, NumericTruthGuard
-from smartbi.agent.runtime.routes import gross_margin_decline_plan
+from smartbi.agent.runtime.routes import (
+    gross_margin_decline_plan,
+    gross_margin_decline_replan,
+)
 from smartbi.agent.runtime.run_contracts import (
     GrossMarginDeclineRequest,
     NumericClaim,
@@ -71,13 +74,21 @@ def test_route_is_typed_ordered_and_bounded_to_two_rounds():
     )
 
     assert plan.route_code is RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION
-    assert [step.round_number for step in plan.steps] == [1, 1, 2]
+    assert [step.round_number for step in plan.steps] == [1, 1]
     assert [step.tool_name for step in plan.steps] == [
         "restaurant_period_comparison_read.v1",
         "restaurant_store_performance_read.v1",
+    ]
+    replan = gross_margin_decline_replan(
+        GrossMarginDeclineRequest("2026-01-01", "2026-01-31")
+    )
+    assert [step.round_number for step in replan.steps] == [2]
+    assert [step.tool_name for step in replan.steps] == [
         "restaurant_dish_margin_mix_read.v1",
     ]
-    assert all("factoryId" not in step.parameters for step in plan.steps)
+    assert all(
+        "factoryId" not in step.parameters for step in (*plan.steps, *replan.steps)
+    )
 
 
 @pytest.mark.parametrize(

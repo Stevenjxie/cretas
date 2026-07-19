@@ -7,7 +7,7 @@ from typing import Any, Literal, Mapping
 from pydantic import BaseModel, ConfigDict, Field
 
 from .run_contracts import AgentEvent, GrossMarginDeclineRequest, RunRecord
-from .run_store import StaleRunReconciliation
+from .run_store import CancelRequest, StaleRunReconciliation
 
 
 class StartRestaurantRunRequest(BaseModel):
@@ -70,4 +70,14 @@ def stale_reconciliation_v1(
         "result": reconciliation.result.value,
         "state": reconciliation.record.state.value,
         "failureCode": reconciliation.record.failure_code,
+    }
+
+
+def cancel_request_v1(run_id: str, cancellation: CancelRequest) -> dict[str, Any]:
+    return {
+        "schemaVersion": "1.0",
+        "runId": run_id,
+        "result": cancellation.result.value,
+        "state": cancellation.record.state.value,
+        "nextEventSequence": cancellation.record.next_event_sequence,
     }
