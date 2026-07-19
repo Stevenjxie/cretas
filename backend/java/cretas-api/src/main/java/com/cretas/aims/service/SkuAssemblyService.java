@@ -7,6 +7,7 @@ import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
+import com.cretas.aims.entity.bom.BomProcessInjectionConfig;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.ConversionRepository;
@@ -16,6 +17,7 @@ import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
+import com.cretas.aims.repository.bom.BomProcessInjectionConfigRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -52,6 +54,7 @@ public class SkuAssemblyService {
     private final BomRecipeRepository bomRecipeRepository;
     private final BomRecipeItemRepository bomRecipeItemRepository;
     private final BomSeasoningItemRepository bomSeasoningItemRepository;
+    private final BomProcessInjectionConfigRepository processInjectionConfigRepository;
 
     /**
      * 拼积木创建 SKU
@@ -284,9 +287,6 @@ public class SkuAssemblyService {
         copy.setSourceType(source.getSourceType());
         copy.setSourceSampleId(source.getSourceSampleId());
         copy.setNotes(source.getNotes());
-        copy.setCookingPotBaseKg(source.getCookingPotBaseKg());
-        copy.setSubsequentPotRatio(source.getSubsequentPotRatio());
-        copy.setInjectionRate(source.getInjectionRate());
         bomRecipeRepository.save(copy);
 
         List<BomRecipeItem> sourceItems = bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(source.getId());
@@ -324,6 +324,7 @@ public class SkuAssemblyService {
             BomSeasoningItem seasoningCopy = new BomSeasoningItem();
             seasoningCopy.setRecipeId(copy.getId());
             seasoningCopy.setFactoryId(factoryId);
+            seasoningCopy.setMaterialTypeId(sourceSeasoning.getMaterialTypeId());
             seasoningCopy.setSection(sourceSeasoning.getSection());
             seasoningCopy.setSeq(sourceSeasoning.getSeq());
             seasoningCopy.setName(sourceSeasoning.getName());
@@ -332,7 +333,20 @@ public class SkuAssemblyService {
             seasoningCopy.setPriceSource2(sourceSeasoning.getPriceSource2());
             seasoningCopy.setCountInSeasoning(sourceSeasoning.getCountInSeasoning());
             seasoningCopy.setRemark(sourceSeasoning.getRemark());
+            seasoningCopy.setWorkProcessId(sourceSeasoning.getWorkProcessId());
+            seasoningCopy.setSubsequentPotRatio(sourceSeasoning.getSubsequentPotRatio());
             bomSeasoningItemRepository.save(seasoningCopy);
+        }
+
+        for (BomProcessInjectionConfig sourceConfig : processInjectionConfigRepository
+                .findByRecipeIdAndDeletedAtIsNull(source.getId())) {
+            BomProcessInjectionConfig configCopy = new BomProcessInjectionConfig();
+            configCopy.setFactoryId(factoryId);
+            configCopy.setRecipeId(copy.getId());
+            configCopy.setWorkProcessId(sourceConfig.getWorkProcessId());
+            configCopy.setInjectionAmountKg(sourceConfig.getInjectionAmountKg());
+            configCopy.setNotes(sourceConfig.getNotes());
+            processInjectionConfigRepository.save(configCopy);
         }
     }
 

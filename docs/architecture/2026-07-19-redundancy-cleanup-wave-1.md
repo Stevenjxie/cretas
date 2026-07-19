@@ -1,4 +1,4 @@
-# Cretas 冗余结构清理第一批：CV-01/PR-01 完成、SH-01 执行与 BS-01 设计
+# Cretas 冗余结构清理第一批：CV-01/PR-01/SH-01/BS-01 收敛
 
 ## 1. 决策与边界
 
@@ -8,7 +8,7 @@
 - PR-01 实施 Base SHA：`5d0fbdab88090178afe80d576cae32856a474d91`
 - 已确认实施：CV-01 删除空历史表 `cost_variance_configs`
 - 已确认实施：PR-01 删除旧产品配方双轨，BOM 成为唯一运行时真值
-- 当前执行：SH-01 分成“冻结旧写链”和“冻结后清测试数据”两个顺序发布；BS-01 在 SH-01 后按已确认设计实施
+- 已完成：SH-01 分成“冻结旧写链”和“冻结后清测试数据”两个顺序发布；BS-01 按已确认设计进入合并与部署门禁
 - 明确保留：WF-01、SCH-01
 - 数据授权：PR-01、SH-01、BS-01 相关生产记录均为测试数据，可按已审查范围删除；不得扩展到其他业务域
 - 禁止：在旧写链 410 尚未部署时清空 `shipment_records`、保留静默 fallback、超出候选范围删除数据
@@ -313,7 +313,7 @@ $sh01$;
 - Web/RN 目标测试以及源码消费者清零检查
 - 回滚优先恢复旧历史 GET；禁止无条件恢复不扣库存的旧写 API
 
-## 5. BS-01：工序调味参数收敛设计
+## 5. BS-01：工序调味参数收敛
 
 ### 5.1 目标模型
 
@@ -321,12 +321,14 @@ $sh01$;
 - 注射绝对量唯一真值：每 recipe/work-process 一条注射配置。
 - process 级 `subsequent_pot_ratio` fallback 最终删除。
 
-当前生产 `bom_process_seasoning=0`；12 条工序级 COOKING 调味绑定均已有
-`material_type_id`，不存在历史 unbound 行，item 比例目前均为 null。
+部署前生产快照为：`bom_process_seasoning=0`；`bom_seasoning_items` 有 47 条 live 数据，其中
+12 条工序绑定均已有 `material_type_id`，35 条为整 SKU 绑定。35 条中 28 条 COOKING 的 item 比例为
+null、recipe header 比例为 `0.3333`，V82 会原位回填；7 条 INJECTION 不需要锅序比例。不存在需要删除的
+BS-01 业务行，也不存在入站/出站 FK、View 依赖或业务触发器。
 
-### 5.2 推荐结构
+### 5.2 最终结构
 
-推荐把 `bom_process_seasoning` 收敛为注射专用模型，而不是整表删除：
+`bom_process_seasoning` 收敛为注射专用模型，而不是整表删除：
 
 - 表最终命名：`bom_process_injection_configs`
 - Entity：`BomProcessInjectionConfig`
@@ -335,14 +337,26 @@ $sh01$;
 - 删除字段：process 级 `subsequent_pot_ratio`
 - API DTO 拆分：binding DTO 管熟制比例；injection DTO 管绝对注射量
 
-### 5.3 实施阶段
+### 5.3 V82 SQL 预览与顺序
 
-1. 部署前重查 process 参数和未绑定 seasoning item；任一非零异常都阻断自动收敛。
-2. 若出现历史 process ratio，只能向该工序下明确绑定的每个 item 回填；多物料规则冲突时人工确认。
-3. 修改保存、复制、版本快照和报工成本链，使熟制只读 item 比例。
-4. 删除 `RecipeCostCalculator.computeBindingPotRules` 的 process ratio 参数和兼容分支。
-5. 将旧表/Entity/Repository/DTO 改为 injection-only，并增加真实 JPA Context 测试。
-6. 观察无旧 payload 后，再删除旧 DTO 字段和兼容反序列化。
+1. `ACCESS EXCLUSIVE` 锁定空旧表，并锁住 seasoning 明细；旧表出现任意行即 fail closed。
+2. 验证工序绑定都有物料，整 SKU COOKING 至少存在 item/header 比例，否则阻断部署。
+3. 将 28 条整 SKU COOKING 的 header 比例原位回填到 binding。
+4. 表重命名为 `bom_process_injection_configs`，删除 process ratio，并把注射量设为必填。
+5. 删除 `bom_recipes.cooking_pot_base_kg/subsequent_pot_ratio/injection_rate` 三个重复 header 字段。
+6. 保存、复制、版本快照、SKU 组装和报工成本链只读新模型；不保留 process/header fallback。
+
+完整可执行 SQL 为
+`backend/java/cretas-api/src/main/resources/db/flyway/V20261028_82__make_process_injection_config_single_purpose.sql`。
+迁移不含 `DELETE`，不会删除 47 条调料业务数据。
+
+### 5.4 测试与回滚
+
+- 后端目标集：100 tests，0 failure/error；包含 `BomProcessInjectionConfigRepositoryQueryValidationTest`
+  真实 JPA Context 和 V82 migration contract。
+- Web：3 个受影响测试文件共 17 tests；Vite production build 通过。
+- 回滚方式：应用未切流时保留旧 active 槽；迁移已执行后通过新的补偿 migration 恢复旧表名/字段，
+  从 binding 比例重建 recipe header，并保留所有 `injection_amount_kg`。禁止直接改 Flyway history 或清空调料表。
 
 回滚需保留 rename 前结构和字段快照；若已写入注射配置，回滚 migration 必须无损恢复
 `injection_amount_kg`，不能通过清表回滚。

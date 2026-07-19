@@ -8,7 +8,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
-import com.cretas.aims.repository.bom.BomProcessSeasoningRepository;
+import com.cretas.aims.repository.bom.BomProcessInjectionConfigRepository;
 import com.cretas.aims.service.WorkProcessService;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -35,7 +35,7 @@ public class WorkProcessServiceImpl implements WorkProcessService {
     private final WorkProcessRepository workProcessRepository;
     /** 孤儿守卫 (2026-07-13): 删工序前检查是否被调料配方引用。 */
     private final BomSeasoningItemRepository bomSeasoningItemRepository;
-    private final BomProcessSeasoningRepository bomProcessSeasoningRepository;
+    private final BomProcessInjectionConfigRepository bomProcessInjectionConfigRepository;
 
     @Override
     @Transactional
@@ -207,7 +207,7 @@ public class WorkProcessServiceImpl implements WorkProcessService {
         // 孤儿守卫 (re-audit 2026-07-13): 该工序若被调料配方引用, 删后配置成孤儿 → 调料成本静默变 0 无告警。
         // 删前阻断, 逼用户先清理调料配方。
         if (bomSeasoningItemRepository.existsByWorkProcessId(id)
-                || bomProcessSeasoningRepository.existsByWorkProcessId(id)) {
+                || bomProcessInjectionConfigRepository.existsByWorkProcessId(id)) {
             throw new BusinessException(409, "该工序已被调料配方引用，无法删除")
                     .withHint("请先在「生产 → BOM 配方 → 调料配方」移除引用该工序的调料配置")
                     .withHintTarget("id");

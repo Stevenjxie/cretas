@@ -100,7 +100,6 @@ class SkuAssemblyServiceTest {
         assertEquals(savedSku.getName(), copiedRecipe.getProductName());
         assertEquals(BomRecipe.Status.ACTIVE, copiedRecipe.getStatus());
         assertEquals(Boolean.TRUE, copiedRecipe.getIsCurrent());
-        assertEquals(new BigDecimal("0.2000"), copiedRecipe.getInjectionRate());
 
         List<BomRecipeItem> copiedRecipeItems =
                 bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(copiedRecipe.getId());
@@ -116,6 +115,8 @@ class SkuAssemblyServiceTest {
         assertEquals(1, copiedSeasoningItems.size());
         assertEquals("COOKING", copiedSeasoningItems.get(0).getSection());
         assertEquals(Boolean.FALSE, copiedSeasoningItems.get(0).getCountInSeasoning());
+        assertEquals("MAT-SEASONING-1", copiedSeasoningItems.get(0).getMaterialTypeId());
+        assertEquals(new BigDecimal("0.3333"), copiedSeasoningItems.get(0).getSubsequentPotRatio());
         assertNotEquals(201L, copiedSeasoningItems.get(0).getId());
 
         assertThrows(BusinessException.class, () -> skuAssemblyService.assemblesku(
@@ -207,9 +208,6 @@ class SkuAssemblyServiceTest {
         recipe.setStatus(BomRecipe.Status.ACTIVE);
         recipe.setSourceType(BomRecipe.SourceType.MANUAL);
         recipe.setNotes("template bom");
-        recipe.setCookingPotBaseKg(new BigDecimal("160.000"));
-        recipe.setSubsequentPotRatio(new BigDecimal("0.3333"));
-        recipe.setInjectionRate(new BigDecimal("0.2000"));
         bomRecipeRepository.saveAndFlush(recipe);
 
         BomRecipeItem recipeItem = new BomRecipeItem();
@@ -241,6 +239,7 @@ class SkuAssemblyServiceTest {
         BomSeasoningItem seasoningItem = new BomSeasoningItem();
         seasoningItem.setRecipeId(recipe.getId());
         seasoningItem.setFactoryId(FACTORY_ID);
+        seasoningItem.setMaterialTypeId("MAT-SEASONING-1");
         seasoningItem.setSection("COOKING");
         seasoningItem.setSeq(1);
         seasoningItem.setName("Seasoning");
@@ -249,6 +248,7 @@ class SkuAssemblyServiceTest {
         seasoningItem.setPriceSource2(new BigDecimal("2.5000"));
         seasoningItem.setCountInSeasoning(false);
         seasoningItem.setRemark("seasoning item");
+        seasoningItem.setSubsequentPotRatio(new BigDecimal("0.3333"));
         bomSeasoningItemRepository.saveAndFlush(seasoningItem);
 
     }

@@ -3,7 +3,8 @@ package com.cretas.aims.service.bom;
 import com.cretas.aims.dto.bom.BomSeasoningResponse;
 import com.cretas.aims.dto.bom.BomSeasoningSaveRequest;
 import com.cretas.aims.dto.bom.BomSeasoningSaveRequest.SeasoningItemDTO;
-import com.cretas.aims.dto.bom.ProcessSeasoningParamDTO;
+import com.cretas.aims.dto.bom.ProcessInjectionConfigDTO;
+import com.cretas.aims.entity.bom.BomProcessInjectionConfig;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
@@ -13,7 +14,7 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
-import com.cretas.aims.repository.bom.BomProcessSeasoningRepository;
+import com.cretas.aims.repository.bom.BomProcessInjectionConfigRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.service.bom.NestedBomCostService;
 import com.cretas.aims.service.bom.impl.BomRecipeServiceImpl;
@@ -49,7 +50,7 @@ class BomRecipeSeasoningServiceTest {
     @Mock BomRecipeRepository recipeRepo;
     @Mock BomRecipeItemRepository itemRepo;
     @Mock BomSeasoningItemRepository seasoningItemRepo;
-    @Mock BomProcessSeasoningRepository bomProcessSeasoningRepo;
+    @Mock BomProcessInjectionConfigRepository processInjectionConfigRepo;
     @Mock RawMaterialTypeRepository materialTypeRepo;
     @Mock ProductWorkProcessRepository productWorkProcessRepo;
     @Mock MaterialUomConverter materialUomConverter;
@@ -105,10 +106,6 @@ class BomRecipeSeasoningServiceTest {
     /** 构建合法 saveSeasoning 请求 (一行 INJECTION + 一行 COOKING). */
     private BomSeasoningSaveRequest validRequest() {
         BomSeasoningSaveRequest req = new BomSeasoningSaveRequest();
-        req.setCookingPotBaseKg(new BigDecimal("160.000"));
-        req.setSubsequentPotRatio(new BigDecimal("0.3333"));
-        req.setInjectionRate(new BigDecimal("0.2000"));
-
         SeasoningItemDTO inj = new SeasoningItemDTO();
         inj.setSection("INJECTION");
         inj.setMaterialTypeId(SALT_ID);
@@ -126,8 +123,13 @@ class BomRecipeSeasoningServiceTest {
         cook.setName("老汤");
         cook.setDosagePerKgG(new BigDecimal("2000.0000"));
         cook.setCountInSeasoning(false);   // 老汤不计入调料成本
+        cook.setSubsequentPotRatio(new BigDecimal("0.3333"));
 
         req.setSeasoningItems(List.of(inj, cook));
+        ProcessInjectionConfigDTO injection = new ProcessInjectionConfigDTO();
+        injection.setWorkProcessId("wp-injection");
+        injection.setInjectionAmountKg(new BigDecimal("5.000"));
+        req.setInjectionConfigs(List.of(injection));
         return req;
     }
 
@@ -136,7 +138,7 @@ class BomRecipeSeasoningServiceTest {
     // ------------------------------------------------------------------
 
     @Test
-    @DisplayName("saveSeasoning: DRAFT BOM — 锅序参数写进 recipe + 调料行软删旧/插新")
+    @DisplayName("saveSeasoning: DRAFT BOM — binding 锅序与注射配置各写唯一模型")
     void saveSeasoning_draft_replacesItemsAndSetsPotParams() {
         BomRecipe recipe = draftRecipe();
         when(recipeRepo.findById(RECIPE_ID)).thenReturn(Optional.of(recipe));
@@ -156,11 +158,6 @@ class BomRecipeSeasoningServiceTest {
 
         BomSeasoningResponse resp = service.saveSeasoning(FACTORY, RECIPE_ID, validRequest());
 
-        // 锅序参数写进 recipe
-        assertEquals(new BigDecimal("160.000"), recipe.getCookingPotBaseKg());
-        assertEquals(new BigDecimal("0.3333"),  recipe.getSubsequentPotRatio());
-        assertEquals(new BigDecimal("0.2000"),  recipe.getInjectionRate());
-
         // 旧行软删 (saveAll 第一次 = 软删旧行; 第二次 = 插新行)
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<BomSeasoningItem>> cap = ArgumentCaptor.forClass(List.class);
@@ -179,11 +176,19 @@ class BomRecipeSeasoningServiceTest {
         BomSeasoningItem oldSoup = newBatch.stream()
                 .filter(s -> SOUP_ID.equals(s.getMaterialTypeId())).findFirst().orElseThrow();
         assertEquals(Boolean.FALSE, oldSoup.getCountInSeasoning(), "老汤 countInSeasoning=false 必须保留");
+        assertEquals(new BigDecimal("0.3333"), oldSoup.getSubsequentPotRatio());
         BomSeasoningItem salt = newBatch.stream()
                 .filter(s -> SALT_ID.equals(s.getMaterialTypeId())).findFirst().orElseThrow();
         assertEquals("食盐", salt.getName(), "名称必须以物料档案为准");
         assertEquals(new BigDecimal("2.3500"), salt.getPriceSource1(), "价格必须取移动平均价快照");
         assertNull(salt.getPriceSource2(), "第二价格源不再接受前端输入");
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<BomProcessInjectionConfig>> configCaptor = ArgumentCaptor.forClass(List.class);
+        verify(processInjectionConfigRepo, times(2)).saveAll(configCaptor.capture());
+        List<BomProcessInjectionConfig> insertedConfigs = configCaptor.getAllValues().get(1);
+        assertEquals(1, insertedConfigs.size());
+        assertEquals(new BigDecimal("5.000"), insertedConfigs.get(0).getInjectionAmountKg());
 
         // 响应字段
         assertEquals(RECIPE_ID, resp.getBomRecipeId());
@@ -402,16 +407,16 @@ class BomRecipeSeasoningServiceTest {
     }
 
     @Test
-    @DisplayName("saveSeasoning: 工序参数引用非该 SKU 工序时明确拒绝")
-    void saveSeasoning_processParamWorkProcessNotAssignedToProduct_throwsBusinessException() {
+    @DisplayName("saveSeasoning: 注射配置引用非该 SKU 工序时明确拒绝")
+    void saveSeasoning_injectionConfigWorkProcessNotAssignedToProduct_throwsBusinessException() {
         when(recipeRepo.findById(RECIPE_ID)).thenReturn(Optional.of(draftRecipe()));
         when(productWorkProcessRepo.existsByFactoryIdAndProductTypeIdAndWorkProcessId(
                 FACTORY, PRODUCT, "wp-not-on-product")).thenReturn(false);
         BomSeasoningSaveRequest req = new BomSeasoningSaveRequest();
-        ProcessSeasoningParamDTO param = new ProcessSeasoningParamDTO();
-        param.setWorkProcessId("wp-not-on-product");
-        param.setSubsequentPotRatio(new BigDecimal("0.5000"));
-        req.setProcessParams(List.of(param));
+        ProcessInjectionConfigDTO config = new ProcessInjectionConfigDTO();
+        config.setWorkProcessId("wp-not-on-product");
+        config.setInjectionAmountKg(new BigDecimal("1.000"));
+        req.setInjectionConfigs(List.of(config));
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.saveSeasoning(FACTORY, RECIPE_ID, req));

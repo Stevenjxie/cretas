@@ -1,6 +1,8 @@
 package com.cretas.aims.dto.bom;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
@@ -20,25 +22,13 @@ import java.util.List;
 @Data
 public class BomSeasoningSaveRequest {
 
-    /** 熟制每锅基准原料 (kg), 如 160. */
-    private BigDecimal cookingPotBaseKg;
-
-    /** 第二锅起比例, 如 0.3333. */
-    private BigDecimal subsequentPotRatio;
-
-    /** 注射率, 如 0.20. */
-    private BigDecimal injectionRate;
-
     /** 调料明细列表 (全量替换). null/empty → 清空所有调料. */
     @Valid
     private List<SeasoningItemDTO> seasoningItems = new ArrayList<>();
 
-    /**
-     * 调料配方按工序 (2026-07-13): 每道工序的锅序/注射量参数 (全量替换 bom_process_seasoning)。
-     * 熟制工序填 subsequentPotRatio; 注射工序填 injectionAmountKg。新 UI 写此, 不再写上面 header 三参数。
-     */
+    /** 每道注射工序的绝对注射量（全量替换）。 */
     @Valid
-    private List<ProcessSeasoningParamDTO> processParams = new ArrayList<>();
+    private List<ProcessInjectionConfigDTO> injectionConfigs = new ArrayList<>();
 
     /**
      * 单条调料 DTO (注射段/熟制段原料行).
@@ -80,5 +70,10 @@ public class BomSeasoningSaveRequest {
 
         /** 备注 (可选). */
         private String remark;
+
+        /** 熟制绑定自己的续锅比例；null 表示整段只按总投入应用一次。 */
+        @DecimalMin(value = "0", message = "subsequentPotRatio 不能小于 0")
+        @DecimalMax(value = "1", message = "subsequentPotRatio 不能大于 1")
+        private BigDecimal subsequentPotRatio;
     }
 }

@@ -4,14 +4,14 @@ import com.cretas.aims.dto.bom.BomCopyCandidateDTO;
 import com.cretas.aims.dto.bom.BomCopyToDraftRequest;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.WorkProcess;
-import com.cretas.aims.entity.bom.BomProcessSeasoning;
+import com.cretas.aims.entity.bom.BomProcessInjectionConfig;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
-import com.cretas.aims.repository.bom.BomProcessSeasoningRepository;
+import com.cretas.aims.repository.bom.BomProcessInjectionConfigRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
@@ -52,7 +52,7 @@ class BomCopyServiceImplTest {
     @Mock BomRecipeRepository recipeRepo;
     @Mock BomRecipeItemRepository itemRepo;
     @Mock BomSeasoningItemRepository seasoningRepo;
-    @Mock BomProcessSeasoningRepository processSeasoningRepo;
+    @Mock BomProcessInjectionConfigRepository processInjectionConfigRepo;
     @Mock ProductTypeRepository productTypeRepo;
     @Mock WorkProcessRepository workProcessRepo;
     @Mock ProductWorkflowResolutionService workflowResolutionService;
@@ -94,8 +94,8 @@ class BomCopyServiceImplTest {
         when(itemRepo.findByRecipeIdOrderBySortOrderAsc(SOURCE_RECIPE)).thenReturn(List.of(item(1L, "mat-1")));
         when(seasoningRepo.findByRecipeIdOrderBySeqAsc(SOURCE_RECIPE)).thenReturn(List.of(
                 seasoning(11L, "p1"), seasoning(12L, "p3"), seasoning(13L, null)));
-        when(processSeasoningRepo.findByRecipeIdAndDeletedAtIsNull(SOURCE_RECIPE)).thenReturn(List.of(
-                processParam(21L, "p1"), processParam(22L, "p3")));
+        when(processInjectionConfigRepo.findByRecipeIdAndDeletedAtIsNull(SOURCE_RECIPE)).thenReturn(List.of(
+                injectionConfig(21L, "p1"), injectionConfig(22L, "p3")));
 
         List<BomCopyCandidateDTO> candidates = service.listCandidates(FACTORY, TARGET);
 
@@ -106,8 +106,8 @@ class BomCopyServiceImplTest {
                 .containsExactly("p1");
         assertThat(candidate.getSeasoningItems()).extracting(BomCopyCandidateDTO.SeasoningRuleDTO::getId)
                 .containsExactly(11L);
-        assertThat(candidate.getProcessSeasoningParams())
-                .extracting(BomCopyCandidateDTO.ProcessSeasoningRuleDTO::getId).containsExactly(21L);
+        assertThat(candidate.getProcessInjectionConfigs())
+                .extracting(BomCopyCandidateDTO.ProcessInjectionConfigRuleDTO::getId).containsExactly(21L);
     }
 
     @Test
@@ -120,8 +120,8 @@ class BomCopyServiceImplTest {
         when(itemRepo.findByRecipeIdOrderBySortOrderAsc(SOURCE_RECIPE)).thenReturn(List.of(selected, unselected));
         when(seasoningRepo.findByRecipeIdOrderBySeqAsc(SOURCE_RECIPE))
                 .thenReturn(List.of(seasoning(11L, "p1"), seasoning(12L, "p1")));
-        when(processSeasoningRepo.findByRecipeIdAndDeletedAtIsNull(SOURCE_RECIPE))
-                .thenReturn(List.of(processParam(21L, "p1"), processParam(22L, "p1")));
+        when(processInjectionConfigRepo.findByRecipeIdAndDeletedAtIsNull(SOURCE_RECIPE))
+                .thenReturn(List.of(injectionConfig(21L, "p1"), injectionConfig(22L, "p1")));
         when(recipeRepo.findMaxVersion(FACTORY, TARGET)).thenReturn(null);
         when(recipeRepo.countByRecipeCodePrefix(eq(FACTORY), any())).thenReturn(0L);
         when(recipeRepo.save(any(BomRecipe.class))).thenAnswer(invocation -> {
@@ -157,10 +157,10 @@ class BomCopyServiceImplTest {
         assertThat(seasoningCaptor.getValue()).extracting(BomSeasoningItem::getMaterialTypeId)
                 .containsExactly("seasoning-11");
         @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<BomProcessSeasoning>> paramCaptor = ArgumentCaptor.forClass(List.class);
-        verify(processSeasoningRepo).saveAll(paramCaptor.capture());
-        assertThat(paramCaptor.getValue()).hasSize(1);
-        assertThat(paramCaptor.getValue().get(0).getInjectionAmountKg()).isEqualByComparingTo("1.250");
+        ArgumentCaptor<List<BomProcessInjectionConfig>> configCaptor = ArgumentCaptor.forClass(List.class);
+        verify(processInjectionConfigRepo).saveAll(configCaptor.capture());
+        assertThat(configCaptor.getValue()).hasSize(1);
+        assertThat(configCaptor.getValue().get(0).getInjectionAmountKg()).isEqualByComparingTo("1.250");
     }
 
     @Test
@@ -197,7 +197,7 @@ class BomCopyServiceImplTest {
         prepareCopyBase();
         when(itemRepo.findByRecipeIdOrderBySortOrderAsc(SOURCE_RECIPE)).thenReturn(List.of(item(1L, "mat-1")));
         when(seasoningRepo.findByRecipeIdOrderBySeqAsc(SOURCE_RECIPE)).thenReturn(List.of());
-        when(processSeasoningRepo.findByRecipeIdAndDeletedAtIsNull(SOURCE_RECIPE)).thenReturn(List.of());
+        when(processInjectionConfigRepo.findByRecipeIdAndDeletedAtIsNull(SOURCE_RECIPE)).thenReturn(List.of());
 
         assertBusinessCode(() -> service.copySelectedRulesToDraft(
                 FACTORY, request(List.of(999L), List.of(), List.of())), "BOM_COPY_FOREIGN_RULE_ID");
@@ -210,7 +210,7 @@ class BomCopyServiceImplTest {
         when(itemRepo.findByRecipeIdOrderBySortOrderAsc(SOURCE_RECIPE)).thenReturn(List.of());
         when(seasoningRepo.findByRecipeIdOrderBySeqAsc(SOURCE_RECIPE))
                 .thenReturn(List.of(seasoning(11L, null)));
-        when(processSeasoningRepo.findByRecipeIdAndDeletedAtIsNull(SOURCE_RECIPE)).thenReturn(List.of());
+        when(processInjectionConfigRepo.findByRecipeIdAndDeletedAtIsNull(SOURCE_RECIPE)).thenReturn(List.of());
 
         assertBusinessCode(() -> service.copySelectedRulesToDraft(
                 FACTORY, request(List.of(), List.of(11L), List.of())), "BOM_COPY_INCOMPATIBLE_RULE");
@@ -248,7 +248,7 @@ class BomCopyServiceImplTest {
         request.setSourceRecipeId(SOURCE_RECIPE);
         request.setRecipeItemIds(items);
         request.setSeasoningItemIds(seasonings);
-        request.setProcessSeasoningParamIds(params);
+        request.setProcessInjectionConfigIds(params);
         return request;
     }
 
@@ -317,11 +317,11 @@ class BomCopyServiceImplTest {
         return item;
     }
 
-    private BomProcessSeasoning processParam(Long id, String processId) {
-        BomProcessSeasoning param = new BomProcessSeasoning();
-        param.setId(id);
-        param.setWorkProcessId(processId);
-        param.setInjectionAmountKg(new BigDecimal("1.250"));
-        return param;
+    private BomProcessInjectionConfig injectionConfig(Long id, String processId) {
+        BomProcessInjectionConfig config = new BomProcessInjectionConfig();
+        config.setId(id);
+        config.setWorkProcessId(processId);
+        config.setInjectionAmountKg(new BigDecimal("1.250"));
+        return config;
     }
 }

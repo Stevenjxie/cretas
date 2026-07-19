@@ -31,7 +31,7 @@ describe('BOM same-source copy API', () => {
       sourceRecipeId: 'R400',
       recipeItemIds: [11],
       seasoningItemIds: [21],
-      processSeasoningParamIds: [31],
+      processInjectionConfigIds: [31],
     };
     await bomRecipeApi.copyToProduct('F006', request);
 

@@ -4,7 +4,7 @@ import com.cretas.aims.dto.bom.BomCopyCandidateDTO;
 import com.cretas.aims.dto.bom.BomCopyToDraftRequest;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.WorkProcess;
-import com.cretas.aims.entity.bom.BomProcessSeasoning;
+import com.cretas.aims.entity.bom.BomProcessInjectionConfig;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
@@ -12,7 +12,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
-import com.cretas.aims.repository.bom.BomProcessSeasoningRepository;
+import com.cretas.aims.repository.bom.BomProcessInjectionConfigRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
@@ -48,7 +48,7 @@ public class BomCopyServiceImpl implements BomCopyService {
     private final BomRecipeRepository recipeRepo;
     private final BomRecipeItemRepository itemRepo;
     private final BomSeasoningItemRepository seasoningRepo;
-    private final BomProcessSeasoningRepository processSeasoningRepo;
+    private final BomProcessInjectionConfigRepository processInjectionConfigRepo;
     private final ProductTypeRepository productTypeRepo;
     private final WorkProcessRepository workProcessRepo;
     private final ProductWorkflowResolutionService workflowResolutionService;
@@ -136,27 +136,28 @@ public class BomCopyServiceImpl implements BomCopyService {
 
         List<Long> itemIds = validateIdList(request.getRecipeItemIds(), "recipeItemIds");
         List<Long> seasoningIds = validateIdList(request.getSeasoningItemIds(), "seasoningItemIds");
-        List<Long> paramIds = validateIdList(request.getProcessSeasoningParamIds(), "processSeasoningParamIds");
-        if (itemIds.isEmpty() && seasoningIds.isEmpty() && paramIds.isEmpty()) {
+        List<Long> configIds = validateIdList(request.getProcessInjectionConfigIds(), "processInjectionConfigIds");
+        if (itemIds.isEmpty() && seasoningIds.isEmpty() && configIds.isEmpty()) {
             throw businessError(400, "请至少选择一条要复制的 BOM 规则", "BOM_COPY_EMPTY_SELECTION");
         }
 
         List<BomRecipeItem> sourceItems = itemRepo.findByRecipeIdOrderBySortOrderAsc(source.getId());
         List<BomSeasoningItem> sourceSeasoning = seasoningRepo.findByRecipeIdOrderBySeqAsc(source.getId());
-        List<BomProcessSeasoning> sourceParams = processSeasoningRepo.findByRecipeIdAndDeletedAtIsNull(source.getId());
+        List<BomProcessInjectionConfig> sourceConfigs = processInjectionConfigRepo
+                .findByRecipeIdAndDeletedAtIsNull(source.getId());
         List<BomRecipeItem> selectedItems = selectOwned(sourceItems, itemIds, BomRecipeItem::getId, "recipeItemIds");
         List<BomSeasoningItem> selectedSeasoning = selectOwned(
                 sourceSeasoning, seasoningIds, BomSeasoningItem::getId, "seasoningItemIds");
-        List<BomProcessSeasoning> selectedParams = selectOwned(
-                sourceParams, paramIds, BomProcessSeasoning::getId, "processSeasoningParamIds");
+        List<BomProcessInjectionConfig> selectedConfigs = selectOwned(
+                sourceConfigs, configIds, BomProcessInjectionConfig::getId, "processInjectionConfigIds");
         for (BomSeasoningItem item : selectedSeasoning) {
             if (item.getWorkProcessId() == null || !sharedProcessIds.contains(item.getWorkProcessId())) {
                 throw businessError(400, "所选调味规则绑定了非共享工序: " + item.getId(), "BOM_COPY_INCOMPATIBLE_RULE");
             }
         }
-        for (BomProcessSeasoning param : selectedParams) {
-            if (!sharedProcessIds.contains(param.getWorkProcessId())) {
-                throw businessError(400, "所选工序调味参数不属于共享工序: " + param.getId(), "BOM_COPY_INCOMPATIBLE_RULE");
+        for (BomProcessInjectionConfig config : selectedConfigs) {
+            if (!sharedProcessIds.contains(config.getWorkProcessId())) {
+                throw businessError(400, "所选注射配置不属于共享工序: " + config.getId(), "BOM_COPY_INCOMPATIBLE_RULE");
             }
         }
 
@@ -185,8 +186,8 @@ public class BomCopyServiceImpl implements BomCopyService {
         draft.getItems().addAll(copiedItems);
         seasoningRepo.saveAll(selectedSeasoning.stream()
                 .map(item -> copySeasoning(factoryId, draftId, item)).toList());
-        processSeasoningRepo.saveAll(selectedParams.stream()
-                .map(param -> copyProcessParam(factoryId, draftId, param)).toList());
+        processInjectionConfigRepo.saveAll(selectedConfigs.stream()
+                .map(config -> copyInjectionConfig(factoryId, draftId, config)).toList());
         return recipeRepo.save(draft);
     }
 
@@ -205,10 +206,10 @@ public class BomCopyServiceImpl implements BomCopyService {
                 .filter(item -> item.getWorkProcessId() != null
                         && context.sharedProcessIds().contains(item.getWorkProcessId()))
                 .map(item -> toSeasoningRule(item, processNames)).toList();
-        List<BomCopyCandidateDTO.ProcessSeasoningRuleDTO> params = processSeasoningRepo
+        List<BomCopyCandidateDTO.ProcessInjectionConfigRuleDTO> configs = processInjectionConfigRepo
                 .findByRecipeIdAndDeletedAtIsNull(context.sourceRecipe().getId()).stream()
-                .filter(param -> context.sharedProcessIds().contains(param.getWorkProcessId()))
-                .map(param -> toParamRule(param, processNames)).toList();
+                .filter(config -> context.sharedProcessIds().contains(config.getWorkProcessId()))
+                .map(config -> toInjectionConfigRule(config, processNames)).toList();
         return BomCopyCandidateDTO.builder()
                 .sourceProductTypeId(context.sourceProduct().getId())
                 .sourceProductName(context.sourceProduct().getName())
@@ -217,7 +218,7 @@ public class BomCopyServiceImpl implements BomCopyService {
                 .sourceRecipeVersion(context.sourceRecipe().getVersion())
                 .rawRootMaterialTypeId(context.sourcePath().rawRootMaterialTypeId())
                 .sharedProcesses(sharedProcesses).bomItems(items).seasoningItems(seasonings)
-                .processSeasoningParams(params).build();
+                .processInjectionConfigs(configs).build();
     }
 
     private BomCopyCandidateDTO.BomItemRuleDTO toItemRule(BomRecipeItem item) {
@@ -240,12 +241,12 @@ public class BomCopyServiceImpl implements BomCopyService {
                 .countInSeasoning(item.getCountInSeasoning()).remark(item.getRemark()).build();
     }
 
-    private BomCopyCandidateDTO.ProcessSeasoningRuleDTO toParamRule(BomProcessSeasoning param,
-                                                                     Map<String, String> processNames) {
-        return BomCopyCandidateDTO.ProcessSeasoningRuleDTO.builder().id(param.getId())
-                .workProcessId(param.getWorkProcessId()).workProcessName(processNames.get(param.getWorkProcessId()))
-                .subsequentPotRatio(param.getSubsequentPotRatio())
-                .injectionAmountKg(param.getInjectionAmountKg()).notes(param.getNotes()).build();
+    private BomCopyCandidateDTO.ProcessInjectionConfigRuleDTO toInjectionConfigRule(
+            BomProcessInjectionConfig config, Map<String, String> processNames) {
+        return BomCopyCandidateDTO.ProcessInjectionConfigRuleDTO.builder().id(config.getId())
+                .workProcessId(config.getWorkProcessId())
+                .workProcessName(processNames.get(config.getWorkProcessId()))
+                .injectionAmountKg(config.getInjectionAmountKg()).notes(config.getNotes()).build();
     }
 
     private BomRecipeItem copyItem(String factoryId, String recipeId, BomRecipeItem source) {
@@ -292,12 +293,12 @@ public class BomCopyServiceImpl implements BomCopyService {
         return copy;
     }
 
-    private BomProcessSeasoning copyProcessParam(String factoryId, String recipeId, BomProcessSeasoning source) {
-        BomProcessSeasoning copy = new BomProcessSeasoning();
+    private BomProcessInjectionConfig copyInjectionConfig(
+            String factoryId, String recipeId, BomProcessInjectionConfig source) {
+        BomProcessInjectionConfig copy = new BomProcessInjectionConfig();
         copy.setFactoryId(factoryId);
         copy.setRecipeId(recipeId);
         copy.setWorkProcessId(source.getWorkProcessId());
-        copy.setSubsequentPotRatio(source.getSubsequentPotRatio());
         copy.setInjectionAmountKg(source.getInjectionAmountKg());
         copy.setNotes(source.getNotes());
         return copy;

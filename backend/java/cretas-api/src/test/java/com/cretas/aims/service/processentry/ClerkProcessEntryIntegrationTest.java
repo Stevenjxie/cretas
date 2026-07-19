@@ -149,9 +149,6 @@ class ClerkProcessEntryIntegrationTest {
         recipe.setIsCurrent(true);
         recipe.setOutputQuantityPerUnit(new BigDecimal("1000"));
         recipe.setOutputUnit("g");
-        recipe.setInjectionRate(null);
-        recipe.setCookingPotBaseKg(new BigDecimal("100"));
-        recipe.setSubsequentPotRatio(new BigDecimal("0.3333"));
         recipe.setSeasoningRevision(0L);
         recipe.setStatus(BomRecipe.Status.ACTIVE);
         recipe.setSourceType(BomRecipe.SourceType.MANUAL);

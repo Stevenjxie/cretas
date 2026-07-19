@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import type {
   BomCopyCandidate,
-  BomCopyProcessParamRule,
+  BomCopyInjectionConfigRule,
   BomCopySeasoningRule,
   CopyBomToProductRequest,
 } from '@/api/bom';
@@ -28,7 +28,7 @@ const emit = defineEmits<{
 const selectedSourceRecipeId = ref('');
 const selectedBomItemIds = ref<string[]>([]);
 const selectedSeasoningItemIds = ref<string[]>([]);
-const selectedProcessParamIds = ref<string[]>([]);
+const selectedInjectionConfigIds = ref<string[]>([]);
 
 const activeCandidate = computed(() =>
   props.candidates.find((candidate) => candidate.sourceRecipeId === selectedSourceRecipeId.value)
@@ -53,13 +53,13 @@ const groupedSeasoning = computed(() => {
 const selectedRuleCount = computed(() =>
   selectedBomItemIds.value.length
   + selectedSeasoningItemIds.value.length
-  + selectedProcessParamIds.value.length,
+  + selectedInjectionConfigIds.value.length,
 );
 
 function resetSelections(candidate: BomCopyCandidate | null) {
   selectedBomItemIds.value = (candidate?.bomItems ?? []).map((item) => String(item.id));
   selectedSeasoningItemIds.value = (candidate?.seasoningItems ?? []).map((item) => String(item.id));
-  selectedProcessParamIds.value = (candidate?.processSeasoningParams ?? []).map((item) => String(item.id));
+  selectedInjectionConfigIds.value = (candidate?.processInjectionConfigs ?? []).map((item) => String(item.id));
 }
 
 watch(
@@ -102,9 +102,9 @@ function isProcessSeasoningAllSelected(group: { items: BomCopySeasoningRule[] })
     && group.items.every((item) => selectedSeasoningItemIds.value.includes(String(item.id)));
 }
 
-function setAllProcessParams(checked: boolean) {
-  selectedProcessParamIds.value = checked
-    ? (activeCandidate.value?.processSeasoningParams ?? []).map((item) => String(item.id))
+function setAllInjectionConfigs(checked: boolean) {
+  selectedInjectionConfigIds.value = checked
+    ? (activeCandidate.value?.processInjectionConfigs ?? []).map((item) => String(item.id))
     : [];
 }
 
@@ -120,8 +120,8 @@ function handleCopy() {
     sourceRecipeId: candidate.sourceRecipeId,
     recipeItemIds: selectedBomItemIds.value.map((id) => originalId(id, candidate.bomItems)),
     seasoningItemIds: selectedSeasoningItemIds.value.map((id) => originalId(id, candidate.seasoningItems)),
-    processSeasoningParamIds: selectedProcessParamIds.value.map(
-      (id) => originalId(id, candidate.processSeasoningParams),
+    processInjectionConfigIds: selectedInjectionConfigIds.value.map(
+      (id) => originalId(id, candidate.processInjectionConfigs),
     ),
   });
 }
@@ -131,11 +131,8 @@ function quantityText(value: number | null | undefined, unit: string | null | un
   return `${value} ${unit || ''}`.trim();
 }
 
-function processParamText(item: BomCopyProcessParamRule) {
-  const parts: string[] = [];
-  if (item.injectionAmountKg != null) parts.push(`注射量 ${item.injectionAmountKg} kg`);
-  if (item.subsequentPotRatio != null) parts.push(`续锅比例 ${item.subsequentPotRatio}`);
-  return parts.join('；') || '沿用工序参数';
+function injectionConfigText(item: BomCopyInjectionConfigRule) {
+  return `注射量 ${item.injectionAmountKg} kg`;
 }
 </script>
 
@@ -260,28 +257,28 @@ function processParamText(item: BomCopyProcessParamRule) {
         <section class="rule-section">
           <div class="rule-section__header">
             <div>
-              <strong>工序参数</strong>
-              <span class="rule-count">{{ activeCandidate.processSeasoningParams.length }} 条</span>
+              <strong>注射配置</strong>
+              <span class="rule-count">{{ activeCandidate.processInjectionConfigs.length }} 条</span>
             </div>
             <el-checkbox
-              :model-value="activeCandidate.processSeasoningParams.length > 0 && selectedProcessParamIds.length === activeCandidate.processSeasoningParams.length"
-              :disabled="activeCandidate.processSeasoningParams.length === 0"
-              @change="setAllProcessParams(Boolean($event))"
+              :model-value="activeCandidate.processInjectionConfigs.length > 0 && selectedInjectionConfigIds.length === activeCandidate.processInjectionConfigs.length"
+              :disabled="activeCandidate.processInjectionConfigs.length === 0"
+              @change="setAllInjectionConfigs(Boolean($event))"
             >本组全选</el-checkbox>
           </div>
-          <el-checkbox-group v-if="activeCandidate.processSeasoningParams.length" v-model="selectedProcessParamIds" class="rule-list">
+          <el-checkbox-group v-if="activeCandidate.processInjectionConfigs.length" v-model="selectedInjectionConfigIds" class="rule-list">
             <el-checkbox
-              v-for="item in activeCandidate.processSeasoningParams"
+              v-for="item in activeCandidate.processInjectionConfigs"
               :key="item.id"
               :value="String(item.id)"
-              :data-testid="`copy-process-param-${item.id}`"
+              :data-testid="`copy-injection-config-${item.id}`"
               class="rule-row"
             >
               <span class="rule-row__name">{{ item.workProcessName || item.workProcessId }}</span>
-              <span class="rule-row__value">{{ processParamText(item) }}</span>
+              <span class="rule-row__value">{{ injectionConfigText(item) }}</span>
             </el-checkbox>
           </el-checkbox-group>
-          <el-empty v-else description="共享工序没有额外参数" :image-size="44" />
+          <el-empty v-else description="共享工序没有注射配置" :image-size="44" />
         </section>
       </template>
     </div>

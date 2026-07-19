@@ -22,8 +22,8 @@ const candidates: BomCopyCandidate[] = [
     seasoningItems: [
       { id: 21, workProcessId: 'ROLL', workProcessName: '滚揉', materialTypeId: 'M3', name: '腌料', dosagePerKgG: 12, unit: 'g' },
     ],
-    processSeasoningParams: [
-      { id: 31, workProcessId: 'ROLL', workProcessName: '滚揉', injectionAmountKg: 2, subsequentPotRatio: null },
+    processInjectionConfigs: [
+      { id: 31, workProcessId: 'ROLL', workProcessName: '滚揉', injectionAmountKg: 2 },
     ],
   },
 ];
@@ -65,7 +65,7 @@ describe('BomCopySuggestionDialog', () => {
       sourceRecipeId: 'R400',
       recipeItemIds: [11, 12],
       seasoningItemIds: [21],
-      processSeasoningParamIds: [31],
+      processInjectionConfigIds: [31],
     }]);
   });
 

@@ -47,6 +47,20 @@
 - 状态边界：代码已合并；尚未生产部署，V80 尚未在生产执行，旧表数据尚未清理。
 - Scope 锁：已释放。
 
+### `REDUNDANCY-SH01-DATA-CLEAR-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- Base SHA：`0bd8d80cada4ff00fc1b06fd5e4f5aeabfc5f7d0`
+- 实现 commit：`19281e2e2344969ee6f08efdac431a60da2513c8`
+- PR：[#1479](https://github.com/Stevenjxie/cretas/pull/1479)
+- `main` squash merge commit：`17bea8cf52a0171d9643fce96debf8dfb92bb84e`
+- 范围：V81 在 ACCESS EXCLUSIVE 锁内核对 64/56/8 行数、整表 checksum、逐工厂分布及入站 FK=0，随后只清用户授权的 64 条旧 shipment 测试数据；保留表、Entity/Repository、旧 GET、索引、外键和触发器。
+- 本地验收：`LegacyShipmentDataClearMigrationContractTest` 1 test，BUILD SUCCESS；`git diff --check` 通过。
+- 生产部署：V81 已随 exact `origin/main` JAR 蓝绿发布并切换到 green/10020，5/5 稳定观察通过；`shipment_records=0`，表仍存在，V80/V81 均成功记录。
+- 正式链对账：`sales_delivery_records=71`、`sales_delivery_items=45`、`sales_delivery_item_batch_allocations=1`，与清理前一致。
+- Scope 锁：已释放。
+
 ### `CRETAS-F006-PROD-WRITE-EXCEPTION-20260719`
 
 - 状态：`merged`

@@ -2,12 +2,12 @@ package com.cretas.aims.service.processentry;
 
 import com.cretas.aims.dto.processentry.ProcessChainEntryRequest.StepEntry;
 import com.cretas.aims.entity.WorkProcess;
-import com.cretas.aims.entity.bom.BomProcessSeasoning;
+import com.cretas.aims.entity.bom.BomProcessInjectionConfig;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
-import com.cretas.aims.repository.bom.BomProcessSeasoningRepository;
+import com.cretas.aims.repository.bom.BomProcessInjectionConfigRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.service.processentry.impl.ClerkProcessEntryServiceImpl;
@@ -47,7 +47,7 @@ class ClerkProcessEntrySeasoningPerProcessTest {
     @Mock private ProductWorkProcessRepository productWorkProcessRepository;
     @Mock private BomRecipeRepository bomRecipeRepo;
     @Mock private BomSeasoningItemRepository bomSeasoningItemRepo;
-    @Mock private BomProcessSeasoningRepository bomProcessSeasoningRepository;
+    @Mock private BomProcessInjectionConfigRepository bomProcessInjectionConfigRepository;
 
     @InjectMocks
     private ClerkProcessEntryServiceImpl service;
@@ -97,7 +97,6 @@ class ClerkProcessEntrySeasoningPerProcessTest {
     private void stubRecipe() {
         BomRecipe r = new BomRecipe();
         r.setId(RECIPE);
-        r.setSubsequentPotRatio(new BigDecimal("0.3333"));
         when(bomRecipeRepo.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(F, PT))
                 .thenReturn(Optional.of(r));
     }
@@ -111,12 +110,10 @@ class ClerkProcessEntrySeasoningPerProcessTest {
         when(workProcessRepository.findByFactoryIdAndProcessName(F, "熟制")).thenReturn(List.of(cook));
         stubRecipe();
         // cookPerKg = 1000g/kg /1000 × 3 = 3.0
+        BomSeasoningItem cooking = line("COOKING", "1000", "3");
+        cooking.setSubsequentPotRatio(new BigDecimal("0.5"));
         when(bomSeasoningItemRepo.findByRecipeIdAndWorkProcessIdOrderBySeqAsc(RECIPE, "WP-COOK"))
-                .thenReturn(List.of(line("COOKING", "1000", "3")));
-        BomProcessSeasoning param = new BomProcessSeasoning();
-        param.setSubsequentPotRatio(new BigDecimal("0.5"));
-        when(bomProcessSeasoningRepository.findByRecipeIdAndWorkProcessIdAndDeletedAtIsNull(RECIPE, "WP-COOK"))
-                .thenReturn(Optional.of(param));
+                .thenReturn(List.of(cooking));
 
         // 两锅各 100kg: 100×3×1 + 100×3×0.5 = 300 + 150 = 450
         BigDecimal cost = computePerProcess(step("熟制"),
@@ -125,7 +122,7 @@ class ClerkProcessEntrySeasoningPerProcessTest {
     }
 
     @Test
-    @DisplayName("注射工序: 绝对注射量 × 内容每kg单价 (不用报工生料重)")
+    @DisplayName("熟制工序: 每条 binding 独立锅序，null 比例按总投入一次")
     void cookingStep_usesPerBindingPotRatioAndFullInputForNullRatio() throws Exception {
         WorkProcess cook = wp("WP-COOK", "cooking", "COOKING");
         when(workProcessRepository.findByFactoryIdAndProcessName(F, "cooking")).thenReturn(List.of(cook));
@@ -137,11 +134,6 @@ class ClerkProcessEntrySeasoningPerProcessTest {
         salt.setMaterialTypeId("MAT-SALT");
         when(bomSeasoningItemRepo.findByRecipeIdAndWorkProcessIdOrderBySeqAsc(RECIPE, "WP-COOK"))
                 .thenReturn(List.of(chili, salt));
-        BomProcessSeasoning legacyProcessParam = new BomProcessSeasoning();
-        legacyProcessParam.setSubsequentPotRatio(new BigDecimal("0.2"));
-        when(bomProcessSeasoningRepository.findByRecipeIdAndWorkProcessIdAndDeletedAtIsNull(RECIPE, "WP-COOK"))
-                .thenReturn(Optional.of(legacyProcessParam));
-
         BigDecimal cost = computePerProcess(step("cooking"),
                 List.of(new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100")),
                 new ArrayList<>());
@@ -157,10 +149,10 @@ class ClerkProcessEntrySeasoningPerProcessTest {
         // injPerKg = 1000g/kg /1000 × 2 = 2.0
         when(bomSeasoningItemRepo.findByRecipeIdAndWorkProcessIdOrderBySeqAsc(RECIPE, "WP-INJ"))
                 .thenReturn(List.of(line("INJECTION", "1000", "2")));
-        BomProcessSeasoning param = new BomProcessSeasoning();
-        param.setInjectionAmountKg(new BigDecimal("5")); // 绝对 5kg
-        when(bomProcessSeasoningRepository.findByRecipeIdAndWorkProcessIdAndDeletedAtIsNull(RECIPE, "WP-INJ"))
-                .thenReturn(Optional.of(param));
+        BomProcessInjectionConfig config = new BomProcessInjectionConfig();
+        config.setInjectionAmountKg(new BigDecimal("5")); // 绝对 5kg
+        when(bomProcessInjectionConfigRepository.findByRecipeIdAndWorkProcessIdAndDeletedAtIsNull(RECIPE, "WP-INJ"))
+                .thenReturn(Optional.of(config));
 
         // 5 × 2.0 = 10 (与 step.inputQuantity=999 无关 → 证明用绝对量不用生料重)
         BigDecimal cost = computePerProcess(step("注射"), null, new ArrayList<>());
@@ -175,9 +167,8 @@ class ClerkProcessEntrySeasoningPerProcessTest {
         stubRecipe();
         when(bomSeasoningItemRepo.findByRecipeIdAndWorkProcessIdOrderBySeqAsc(RECIPE, "WP-INJ"))
                 .thenReturn(List.of(line("INJECTION", "1000", "2")));
-        BomProcessSeasoning param = new BomProcessSeasoning(); // injectionAmountKg = null
-        when(bomProcessSeasoningRepository.findByRecipeIdAndWorkProcessIdAndDeletedAtIsNull(RECIPE, "WP-INJ"))
-                .thenReturn(Optional.of(param));
+        when(bomProcessInjectionConfigRepository.findByRecipeIdAndWorkProcessIdAndDeletedAtIsNull(RECIPE, "WP-INJ"))
+                .thenReturn(Optional.empty());
 
         List<String> warnings = new ArrayList<>();
         BigDecimal cost = computePerProcess(step("注射"), null, warnings);
@@ -194,7 +185,7 @@ class ClerkProcessEntrySeasoningPerProcessTest {
         stubRecipe();
         when(bomSeasoningItemRepo.findByRecipeIdAndWorkProcessIdOrderBySeqAsc(RECIPE, "WP9"))
                 .thenReturn(List.of()); // 无 per-工序 明细
-        when(bomProcessSeasoningRepository.findByRecipeIdAndWorkProcessIdAndDeletedAtIsNull(RECIPE, "WP9"))
+        when(bomProcessInjectionConfigRepository.findByRecipeIdAndWorkProcessIdAndDeletedAtIsNull(RECIPE, "WP9"))
                 .thenReturn(Optional.empty()); // 无参数
 
         StepEntry st = step("低温杀菌");
