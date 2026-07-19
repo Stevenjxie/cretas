@@ -11,7 +11,9 @@ import org.springframework.test.context.ActiveProfiles;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -65,6 +67,15 @@ class ConversationSessionRepositoryQueryValidationTest {
         assertThat(repository.getAverageRoundsForCompleted(factoryA, now.minusMinutes(1)))
                 .isEqualTo(4.0);
         assertThat(repository.countActiveByFactoryId(factoryA)).isEqualTo(2);
+        Map<ConversationSession.SessionStatus, Long> factoryAStatuses = repository
+                .countByStatus(factoryA, now.minusMinutes(1))
+                .stream()
+                .collect(Collectors.toMap(
+                        row -> (ConversationSession.SessionStatus) row[0],
+                        row -> ((Number) row[1]).longValue()));
+        assertThat(factoryAStatuses)
+                .containsEntry(ConversationSession.SessionStatus.ACTIVE, 2L)
+                .containsEntry(ConversationSession.SessionStatus.COMPLETED, 1L);
 
         Object[] factoryBRate = repository.getSuccessRate(
                 factoryB, now.minusMinutes(1)).get(0);
@@ -73,6 +84,15 @@ class ConversationSessionRepositoryQueryValidationTest {
         assertThat(repository.getAverageRoundsForCompleted(factoryB, now.minusMinutes(1)))
                 .isEqualTo(9.0);
         assertThat(repository.countActiveByFactoryId(factoryB)).isEqualTo(1);
+        Map<ConversationSession.SessionStatus, Long> factoryBStatuses = repository
+                .countByStatus(factoryB, now.minusMinutes(1))
+                .stream()
+                .collect(Collectors.toMap(
+                        row -> (ConversationSession.SessionStatus) row[0],
+                        row -> ((Number) row[1]).longValue()));
+        assertThat(factoryBStatuses)
+                .containsEntry(ConversationSession.SessionStatus.ACTIVE, 1L)
+                .containsEntry(ConversationSession.SessionStatus.COMPLETED, 1L);
     }
 
     private ConversationSession session(

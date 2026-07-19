@@ -153,9 +153,13 @@ public interface ConversationSessionRepository extends JpaRepository<Conversatio
      * 统计各状态的会话数量
      */
     @Query("SELECT s.status, COUNT(s) FROM ConversationSession s " +
-           "WHERE s.createdAt >= :since " +
+           "WHERE s.factoryId = :factoryId " +
+           "AND s.createdAt >= :since " +
            "GROUP BY s.status")
-    List<Object[]> countByStatus(@Param("since") LocalDateTime since);
+    List<Object[]> countByStatus(
+        @Param("factoryId") String factoryId,
+        @Param("since") LocalDateTime since
+    );
 
     /**
      * 统计多轮对话的成功率

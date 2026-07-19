@@ -2,6 +2,8 @@ package com.cretas.aims.service.impl;
 
 import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.entity.conversation.ConversationSession;
+import com.cretas.aims.entity.conversation.ConversationSession.CandidateIntent;
+import com.cretas.aims.entity.learning.LearnedExpression;
 import com.cretas.aims.repository.config.AIIntentConfigRepository;
 import com.cretas.aims.repository.conversation.ConversationSessionRepository;
 import com.cretas.aims.service.ConversationService;
@@ -11,6 +13,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -82,5 +85,64 @@ class ConversationServiceIsolationTest {
                 eq(FACTORY_ID), any(LocalDateTime.class));
         verify(sessionRepository).countActiveByFactoryId(FACTORY_ID);
         verify(sessionRepository, never()).findByStatus(any());
+    }
+
+    @Test
+    void ownedSessionCanReplyConfirmAndCancelAfterExactIdentityLookup() {
+        ConversationSession replySession = activeSession("session-owned-reply");
+        replySession.setCandidates(List.of(CandidateIntent.builder()
+                .intentCode("QUERY")
+                .intentName("Query")
+                .confidence(0.8)
+                .build()));
+        ConversationSession confirmSession = activeSession("session-owned-confirm");
+        ConversationSession cancelSession = activeSession("session-owned-cancel");
+
+        when(sessionRepository.findBySessionIdAndFactoryIdAndUserId(
+                replySession.getSessionId(), FACTORY_ID, USER_ID)).thenReturn(Optional.of(replySession));
+        when(sessionRepository.findBySessionIdAndFactoryIdAndUserId(
+                confirmSession.getSessionId(), FACTORY_ID, USER_ID)).thenReturn(Optional.of(confirmSession));
+        when(sessionRepository.findBySessionIdAndFactoryIdAndUserId(
+                cancelSession.getSessionId(), FACTORY_ID, USER_ID)).thenReturn(Optional.of(cancelSession));
+
+        ConversationService.ConversationResponse reply = service.continueConversation(
+                FACTORY_ID, USER_ID, replySession.getSessionId(), "1");
+
+        assertThat(reply.isCompleted()).isTrue();
+        assertThat(reply.getIntentCode()).isEqualTo("QUERY");
+        assertThat(service.endConversation(
+                FACTORY_ID, USER_ID, confirmSession.getSessionId(), "CONFIRMED_QUERY")).isTrue();
+        assertThat(service.cancelConversation(
+                FACTORY_ID, USER_ID, cancelSession.getSessionId())).isTrue();
+        assertThat(cancelSession.getStatus()).isEqualTo(ConversationSession.SessionStatus.CANCELLED);
+
+        verify(sessionRepository).save(replySession);
+        verify(sessionRepository).save(confirmSession);
+        verify(sessionRepository).save(cancelSession);
+        verify(learningService).learnExpression(
+                FACTORY_ID, "QUERY", "owned input", 0.95,
+                LearnedExpression.SourceType.USER_FEEDBACK);
+        verify(learningService).learnExpression(
+                FACTORY_ID, "CONFIRMED_QUERY", "owned input", 1.0,
+                LearnedExpression.SourceType.USER_FEEDBACK);
+    }
+
+    private ConversationSession activeSession(String sessionId) {
+        LocalDateTime now = LocalDateTime.now();
+        return ConversationSession.builder()
+                .sessionId(sessionId)
+                .factoryId(FACTORY_ID)
+                .userId(USER_ID)
+                .originalInput("owned input")
+                .currentRound(1)
+                .maxRounds(5)
+                .status(ConversationSession.SessionStatus.ACTIVE)
+                .sessionMode(ConversationSession.SessionMode.INTENT_RECOGNITION)
+                .messagesJson("[]")
+                .candidatesJson("[]")
+                .timeoutMinutes(10)
+                .createdAt(now)
+                .lastActiveAt(now)
+                .build();
     }
 }
