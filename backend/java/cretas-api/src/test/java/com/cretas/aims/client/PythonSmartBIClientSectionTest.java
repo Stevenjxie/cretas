@@ -251,24 +251,31 @@ class PythonSmartBIClientSectionTest {
     }
 
     @Test
-    @DisplayName("generic SmartBI section calls retain configured retry behavior")
-    void callSection_retriesConfiguredTransientFailure() {
+    @DisplayName("non-idempotent section POST is never replayed")
+    void callSection_doesNotReplayConfiguredTransientFailure() {
         config.setMaxRetries(1);
         mockServer.enqueue(new MockResponse().setResponseCode(500).setBody("temporary"));
-        mockServer.enqueue(new MockResponse()
-                .setResponseCode(200)
-                .setHeader("Content-Type", "application/json")
-                .setBody("""
-                        {"success":true,"sectionName":"diagnostics","status":"ok","data":{}}
-                        """));
 
         Optional<PythonSectionResponse> result = client.callSection(
                 "restaurant",
                 "diagnostics",
                 PythonSectionRequest.builder().factoryId("F-TEST").build());
 
-        assertThat(result).isPresent();
-        assertThat(mockServer.getRequestCount()).isEqualTo(2);
+        assertThat(result).isEmpty();
+        assertThat(mockServer.getRequestCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("unknown domain, section and path traversal fail before network")
+    void callSection_rejectsUnregisteredDynamicPathsBeforeNetwork() {
+        PythonSectionRequest request = PythonSectionRequest.builder()
+                .factoryId("F-TEST")
+                .build();
+
+        assertThat(client.callSection("retail", "diagnostics", request)).isEmpty();
+        assertThat(client.callSection("restaurant", "../health", request)).isEmpty();
+        assertThat(client.callSection("restaurant", "not_registered", request)).isEmpty();
+        assertThat(mockServer.getRequestCount()).isZero();
     }
 
     // ── Service disabled → short-circuit ─────────────────────────────────

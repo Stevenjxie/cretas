@@ -81,7 +81,8 @@ public class FinancePptExportTool extends AbstractBusinessTool {
         request.put("year", year);
         request.put("company_name", companyName);
 
-        Map<String, Object> result = pythonClient.callFinancialDashboard("/export-ppt", request);
+        Map<String, Object> result = pythonClient.callFinancialDashboard(
+                "/export-ppt", request, factoryId);
 
         if (result == null) {
             return buildSimpleResult("PPT导出失败：Python服务不可用", null);
