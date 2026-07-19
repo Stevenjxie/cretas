@@ -147,8 +147,9 @@ If the user asks for Playwright MCP specifically:
 
 ## Production Safety Boundary
 
-- Production business writes must be zero. Authentication and exact registered
-  query-only POST contracts are the only write-shaped requests allowed.
+- Production read-only acceptance business writes must be zero. Authentication
+  and exact registered query-only POST contracts are the only write-shaped
+  requests allowed in that mode.
 - Any unexpected `POST`, `PUT`, `PATCH`, or `DELETE` must be aborted before
   send and reported as a failed run.
 - Never execute archived SmartBI/BOM runners or a write-capable yield/settlement
@@ -157,3 +158,24 @@ If the user asks for Playwright MCP specifically:
   environment and write acknowledgements; its name is not a production entry.
 - Use `scripts/e2e/production-readonly/README.md` for scenario IDs, evidence
   schema, validation commands, and credential/redaction rules.
+
+## F006 Production-Write Exception
+
+F006 is a dedicated test tenant on the production host/database. When the user
+explicitly requests a concrete F006 create/update/delete/cleanup/regression
+task in the current task, use a separate task-specific UI/API/SQL execution;
+never use the production read-only entry or the non-production mixed-SKU
+runner for those writes.
+
+Before sending the first mutation, prove `factoryUser.factoryId === 'F006'`
+from the live login response or trusted session and verify the page, request
+path, payload, target entity, and readback are all F006-scoped. Direct SQL must
+use `factory_id = 'F006'` or a provable foreign-key join to an F006 parent and
+include a pre-write row count. Stop if the tenant is missing or inconsistent,
+the record is shared/global, or a cascade could cross tenant boundaries. Report
+actual record IDs or row counts and fresh readback.
+
+This exception does not authorize migrations, Security/permission changes,
+global configuration, bulk destructive work, or any non-F006 write. Those
+remain separately authorized scopes. Do not add F006 mutations to the
+production read-only whitelist; a read-only run remains zero-write for F006.

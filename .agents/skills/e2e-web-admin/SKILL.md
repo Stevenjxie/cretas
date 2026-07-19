@@ -84,6 +84,11 @@ The write-capable mixed-SKU chain is intentionally named
 as production acceptance: it requires an explicit test target, rejects known
 production hosts, and requires both non-production write acknowledgements.
 
+An explicitly authorized F006 production-write task is a separate execution
+mode. Do not route it through either the production read-only harness or the
+non-production mixed-SKU runner; follow the F006 production-write exception
+below with a task-specific UI/API/SQL path.
+
 ## Production Read-Only Acceptance
 
 After the final backend and Web versions are both live, run one F006 production read-only suite covering the changed paths. For the SKU/unit workflow, cover SKU edit, Workflow, process-sheet reporting, finished-goods opening inventory, and sales order entry.
@@ -120,6 +125,32 @@ Classify failures before changing product code:
 | Shared auth/bootstrap/deployment failure | Repair the shared prerequisite, then rerun the full suite |
 
 If shared prerequisites and deployed artifacts did not change, rerun only the failed scenario. Run the full suite again only after a new deployment or a shared setup change.
+
+## F006 Production-Write Exception
+
+F006 is the only tenant-level exception to the repository's default
+production zero-write policy. A user request in the current task to create,
+update, delete, clean up, regress, or end-to-end verify specific F006 business
+data authorizes only that stated mutation scope.
+
+Before the first write:
+
+- Prove from the live login response or trusted session that
+  `factoryUser.factoryId === 'F006'`; also verify the visible page and target
+  API/entity belong to F006.
+- State the expected mutations and keep every request path, payload, entity,
+  readback, and direct-SQL predicate scoped to F006. Direct SQL must use an
+  explicit `factory_id = 'F006'` constraint or a provable foreign-key join to
+  an F006 parent, plus a pre-write row count.
+- Stop before send if tenant identity is missing or inconsistent, the target
+  is shared/global, or a cascade could affect another tenant.
+- Record actual IDs or row counts and fresh readback after the write. Separate
+  authorization remains required for migrations, Security/permissions, global
+  configuration, bulk destructive work, and every non-F006 tenant.
+
+Do not weaken `scripts/e2e/production-readonly/`, add F006 mutations to its
+query-only POST registry, or revive a retired production runner. A production
+read-only run remains zero-write even when its authenticated tenant is F006.
 
 ## Test Layers
 
@@ -172,6 +203,7 @@ Result: PASS | FAIL | WARN | UNVERIFIED
 Evidence:
 Failure class and cause:
 Business mutation count, for production read-only runs:
+F006 write scope and post-write readback, for authorized production-write runs:
 Files changed, if --fix was requested:
 Retest command:
 ```

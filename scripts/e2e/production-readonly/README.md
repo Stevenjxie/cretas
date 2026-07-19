@@ -21,6 +21,12 @@ scenario implementations.
 - Write evidence only below `.playwright-mcp/`, `test-results/`, `test-output/`,
   or `tmp/`.
 
+The repository's task-scoped F006 production-write exception does not apply
+inside this harness. Even when the authenticated tenant is F006, this entry
+remains strictly zero-write. Run an authorized F006 write through a separate
+task-specific UI/API/SQL path; never add its business mutations to the
+query-only POST registry.
+
 AI chat is intentionally not in the read-only POST registry. A chat request can
 dispatch a tool with side effects even when the visible UI looks like a draft.
 
