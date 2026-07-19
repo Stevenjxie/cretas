@@ -236,6 +236,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withSeverity("BLOCKING")
                     .withHintTarget("实际生产");
         }
+        assertPositiveDeclaredUpstreamFeeds(req);
         retainActualPositiveSelections(req);
         // 正式报工必须在任何库存分摊、持久化或成本动作前，按实际正数量端口集合完成组约束校验。
         // saveRow 仍允许不完整草稿，仅校验草稿中实际携带端口的归属、SKU、单位和数量合法性。
@@ -408,6 +409,29 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             throw new BusinessException(400, "Workflow 投入端口数量不能为负数")
                     .withCode("PROCESS_SHEET_INPUT_QUANTITY_INVALID")
                     .withSeverity("BLOCKING");
+        }
+    }
+
+    /**
+     * 正式报工不能把已选择的上游来源以 0/null 投入静默过滤掉，否则会形成“有产出、无消耗”的幽灵成品。
+     * 草稿仍允许未填完整；这里只在 submitRow 的正产出门禁之后执行，并早于任何库存或持久化动作。
+     */
+    private static void assertPositiveDeclaredUpstreamFeeds(ProcessSheetRowRequest req) {
+        if (req.getUpstreamSources() == null || req.getUpstreamSources().isEmpty()) {
+            return;
+        }
+        boolean invalid = req.getUpstreamSources().stream()
+                .filter(Objects::nonNull)
+                .anyMatch(source -> source.getSourceBatchNumber() == null
+                        || source.getSourceBatchNumber().isBlank()
+                        || source.getFeedQuantityKg() == null
+                        || source.getFeedQuantityKg().signum() <= 0);
+        if (invalid) {
+            throw new BusinessException(400, "正式报工的每个上游来源都必须填写大于 0 的实际投入量")
+                    .withCode("PROCESS_SHEET_UPSTREAM_INPUT_REQUIRED")
+                    .withHint("请刷新上游库存并重新选择来源批次；投入量为 0 时只能保存草稿")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("实际投入");
         }
     }
 

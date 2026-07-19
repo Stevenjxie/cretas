@@ -7,10 +7,12 @@
 ## 在飞任务
 
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
+- `F006-M07-WIP-DEDUCTION-20260720` — `in-progress` — Owner: Codex coordinator — Base SHA: `fbe90fff754f2b1377ffbc76ff74856c0aec7c0c` — 修复下游工序选中本计划/公共在制批次后确认预览与提交 payload 的实际投入量、后端零投入拒绝、批次级原子消费与重复提交保护；生产 F006 记录只读，正式报工由原测试任务续跑。
 
 ## Scope 锁地图
 
 - `SEC-CREDENTIAL-ROTATION-20260719`：`scripts/systemd/` 中遗留明文启动脚本、现有/新增 secret 扫描配置与测试、`.gitignore` / 凭证模板、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-19-active-history.md`；外部状态仅限已授权的 Cretas 47/139 服务器配置、PostgreSQL 角色密码、相关阿里云/API 凭证与必要服务重启。验收：tracked tree 与完整 Git 历史脱敏盘点、scanner gate、exact-main 发布门禁、Java/Python/网关健康、登录与 Restaurant Agent 只读 smoke、核心 ERP 零写入。
+- `F006-M07-WIP-DEDUCTION-20260720`：`web-admin/src/views/production/**`、`web-admin/src/api/**` 及对应 Web 测试；`backend/java/cretas-api/src/main/java/com/cretas/aims/**process**`、相关 DTO/controller/service 与对应 Java 测试；`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-20-active-history.md`。验收：Web 目标测试覆盖本计划/公共在制选择、刷新重选、确认预览与 submit payload；Java 目标测试在唯一 release 生命周期覆盖零投入 4xx、指定批次原子消费和幂等；Web/Java 构建、exact-main 发布门禁、蓝绿/四方哈希、F006 同一 planId 只读核验。
 
 ## 阻塞项
 
