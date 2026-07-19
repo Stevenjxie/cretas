@@ -6,11 +6,11 @@
 
 ## 在飞任务
 
-- `D10D` — `review` — Owner: Codex coordinator — Base SHA: `ebbc9893320442db26049b0c4875978d165fa231` — 修复 Restaurant Agent Read Tool Gateway 在生产 Python 3.8 缺少 `asyncio.timeout_at` 导致的 ACTIVE 发布阻断；兼容性测试与独立只读复核已通过，下一步为 PR 合并、Python 精确发布与 OFF/ACTIVE 重验。
+- `D10E` — `in-progress` — Owner: Codex coordinator — Base SHA: `c030f82063cf56e43103c79edf0076c17472c075` — 修复 SmartBI V03 `EVIDENCE_RECORDED` 数据库约束函数中 `value` 参数与 `jsonb_each(...).value` 的 PL/pgSQL 歧义；新增 forward-only V06、真实 PostgreSQL payload 回归测试与 unexpected runtime 脱敏可观测性，随后执行生产迁移和 OFF/ACTIVE 重验。
 
 ## Scope 锁地图
 
-- `D10D`：`backend/python/smartbi/agent/runtime/gateway.py`、`backend/python/tests/agent_runtime/test_read_tool_gateway.py`、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-19-active-history.md`；验收命令：定向 pytest、Python 3.8 生产只读 Gateway probe、生产 OFF/ACTIVE smoke 与发布核验。
+- `D10E`：`backend/python/smartbi/database/migrations/V20261028_06__fix_agent_evidence_payload_constraint.sql`、`backend/python/smartbi/agent/runtime/bounded_runtime.py`、`backend/python/tests/agent_runtime/` 下目标回归测试、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-19-active-history.md`；验收命令：目标 pytest、真实 PostgreSQL migration/payload gate、生产 V06 迁移、OFF/ACTIVE smoke 与零 ERP 写入核验。
 
 ## 阻塞项
 

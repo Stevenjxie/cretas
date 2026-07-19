@@ -65,6 +65,10 @@ OWNER_CONTRACT_MIGRATION = (
     Path(__file__).parents[2]
     / "smartbi/database/migrations/V20261028_05__restaurant_agent_owner_enforcement.sql"
 )
+EVIDENCE_CONSTRAINT_FIX_MIGRATION = (
+    Path(__file__).parents[2]
+    / "smartbi/database/migrations/V20261028_06__fix_agent_evidence_payload_constraint.sql"
+)
 APP_PASSWORD = secrets.token_urlsafe(24)
 APP_ROLE = ""
 TEST_SCHEMA = ""
@@ -215,8 +219,12 @@ async def pg_runtime():
             "smartbi_user", APP_ROLE
         )
         adaptive = ADAPTIVE_MIGRATION.read_text(encoding="utf-8")
+        evidence_constraint_fix = EVIDENCE_CONSTRAINT_FIX_MIGRATION.read_text(
+            encoding="utf-8"
+        )
         await admin.execute(migration)
         await admin.execute(adaptive)
+        await admin.execute(evidence_constraint_fix)
         pool = await asyncpg.create_pool(
             app_dsn(PG_DSN),
             min_size=2,
@@ -529,6 +537,66 @@ async def test_contract_tenant_admin_audit_is_select_only_and_tenant_bound(pg_ru
         await store.request_cancel(run_id, other_owner)
     with pytest.raises(RunAccessError):
         await store.reconcile_stale_run(run_id, other_owner)
+
+
+@pytest.mark.asyncio
+async def test_valid_evidence_recorded_payload_with_dimensions_passes_database_constraint(
+    pg_runtime,
+):
+    _, _, store = pg_runtime
+    run_id = str(uuid.uuid4())
+    tenant = context("A")
+    await store.create_run(
+        run_id, tenant, RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION, request()
+    )
+    await store.append_event(
+        run_id,
+        tenant,
+        AgentEventType.RUN_STARTED,
+        {"routeCode": "GROSS_MARGIN_DECLINE_ATTRIBUTION"},
+        counters=RuntimeCounters(),
+    )
+    await store.append_event(
+        run_id,
+        tenant,
+        AgentEventType.EVIDENCE_RECORDED,
+        {
+            "evidenceId": "evidence-1",
+            "evidenceStatus": "PARTIAL",
+            "factReferences": [
+                {
+                    "factId": "fact-1",
+                    "metric": "revenue",
+                    "value": "1577970.69",
+                    "unit": "CNY",
+                    "dimensions": {"comparison": "current"},
+                    "provenanceRefs": ["provenance-1"],
+                }
+            ],
+            "provenance": [
+                {
+                    "refId": "provenance-1",
+                    "sourceType": "GOLD",
+                    "asset": "agg_daily",
+                    "queryId": "restaurant_period_comparison_read.v1",
+                    "sourceVersion": "sha256:" + "d" * 64,
+                }
+            ],
+            "warningCodes": ["COMPARISON_OR_COST_COVERAGE_MISSING"],
+            "drilldownTruncated": False,
+        },
+        counters=RuntimeCounters(facts_used=1, evidence_bytes_used=1024),
+        step_id="period-comparison",
+        tool_name="restaurant_period_comparison_read.v1",
+    )
+    events = await store.events_for(run_id, tenant)
+    assert [event.event_type for event in events] == [
+        AgentEventType.RUN_STARTED,
+        AgentEventType.EVIDENCE_RECORDED,
+    ]
+    assert events[-1].payload["factReferences"][0]["dimensions"] == {
+        "comparison": "current"
+    }
 
 
 @pytest.mark.asyncio

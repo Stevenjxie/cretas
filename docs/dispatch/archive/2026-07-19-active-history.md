@@ -326,3 +326,16 @@
 - 生产发布：并发窗口内两次蓝绿动作使用同一 commit/tree/JAR，均产生 `SUCCESS` 结构化报告；第二次命中 remote SHA-256 cache。最终 active 为 blue/10010，green 已停止，直连健康与公网 HTTPS health 200。
 - 状态边界：本任务未发布 Web、Python 或测试环境；合并与生产部署已分别完成并验证。
 - Scope 锁：已释放。
+
+### `D10D-RESTAURANT-GATEWAY-PY38-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`) + 独立只读审查子代理
+- Base SHA：`ebbc9893320442db26049b0c4875978d165fa231`
+- PR：[#1512](https://github.com/Stevenjxie/cretas/pull/1512)
+- `main` squash merge commit：`474d2ef5e958caa8b069ae3e8a6233d916b9f1f7`
+- 范围：为 Restaurant Read Tool Gateway 增加 Python 3.8 deadline 兼容实现；deadline 只取消独立 child task，调用方取消继续独立传播，并覆盖同 tick 取消和 child 抑制取消的边界。
+- 验收：本地 Python 176 项通过、18 项跳过；目标回归 28/28；生产 Python 3.8.17 只读 probe 覆盖 success、typed timeout、external cancel 与 suppressed child cancellation；独立终审无 P0/P1/P2。
+- 生产发布：exact-main Python 已发布到 8083，118 个迁移状态正常，健康 200；真实 `restaurant_period_comparison_read.v1` 返回 PARTIAL、9 facts、7359 bytes，原 `asyncio.timeout_at` 故障不再出现。
+- 状态边界：后续 ACTIVE 冒烟已通过两个 Read Tool，另在 `EVIDENCE_RECORDED` 数据库约束处暴露独立的 V03 PL/pgSQL 歧义，转入 `D10E`；生产门禁已恢复 OFF。
+- Scope 锁：已释放。
