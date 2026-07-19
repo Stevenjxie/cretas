@@ -18,6 +18,9 @@ const candidates: BomCopyCandidate[] = [
     bomItems: [
       { id: 11, materialTypeId: 'M1', materialName: '黄油鸡', materialCategory: 'RAW', standardQuantity: null, unit: '只' },
       { id: 12, materialTypeId: 'M2', materialName: '包装袋', materialCategory: 'PACKAGING', standardQuantity: 1, unit: '袋' },
+      { id: 13, materialTypeId: 'M3', materialName: '成品盒', materialCategory: 'PACKAGING', standardQuantity: 1, unit: 'box' },
+      { id: 14, materialTypeId: 'M4', materialName: '外箱', materialCategory: 'PACKAGING', standardQuantity: 0.125, unit: 'case' },
+      { id: 15, materialTypeId: 'M5', materialName: '封膜', materialCategory: 'PACKAGING', standardQuantity: 1, unit: 'slice' },
     ],
     seasoningItems: [
       { id: 21, workProcessId: 'ROLL', workProcessName: '滚揉', materialTypeId: 'M3', name: '腌料', dosagePerKgG: 12, unit: 'g' },
@@ -58,12 +61,15 @@ describe('BomCopySuggestionDialog', () => {
 
     expect(wrapper.text()).toContain('共享 2 道工序');
     expect(wrapper.text()).toContain('数量不会按规格自动缩放');
+    expect(wrapper.text()).toContain('1 盒');
+    expect(wrapper.text()).toContain('0.125 箱');
+    expect(wrapper.text()).toContain('1 片');
     await wrapper.get('[data-testid="copy-selected-rules"]').trigger('click');
 
     expect(wrapper.emitted('copy')?.[0]).toEqual([{
       targetProductTypeId: 'P350',
       sourceRecipeId: 'R400',
-      recipeItemIds: [11, 12],
+      recipeItemIds: [11, 12, 13, 14, 15],
       seasoningItemIds: [21],
       processInjectionConfigIds: [31],
     }]);
@@ -77,7 +83,7 @@ describe('BomCopySuggestionDialog', () => {
     await wrapper.get('[data-testid="copy-selected-rules"]').trigger('click');
 
     expect(wrapper.emitted('copy')?.[0]?.[0]).toMatchObject({
-      recipeItemIds: [11],
+      recipeItemIds: [11, 13, 14, 15],
       seasoningItemIds: [21],
     });
   });

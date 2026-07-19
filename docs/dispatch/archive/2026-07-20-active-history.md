@@ -12,3 +12,15 @@
 - 验收：唯一 Java release 生命周期 102/102 通过，JAR SHA-256 `f0dd7208f36e1805aa21e0223097df42d783816a95bd425e1572bd1341b937b2`；Web BOM 目标测试 16/16 通过；最终 Vite production build 与可信 Web archive 通过。
 - 生产边界：代码合并后从 clean exact main 复用 backend/web tree 匹配的可信制品，部署 Java/Web，并对 F006 指定 recipe `9e2eafed-9205-4627-aa4e-8acf20c460fd` 做已授权连续验收；禁止删除、重建配方头或另造 v1。
 - Scope 锁：已释放。
+
+### `BOM-UNIT-DISPLAY-20260720`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- 登记 Base SHA：`1f94a0c4772ab54e33649fc6310f7aab8072f11a`
+- PR：[#1522](https://github.com/Stevenjxie/cretas/pull/1522)
+- 根因：BOM 主表与相关详情直接渲染 canonical `row.unit`，共享 `formatPriceUnit()` 也直接拼接 canonical code，且缺少 `slice → 片` 映射，导致已正确保存的 `box/case/slice` 在用量、单位与自动单价中泄露英文值。
+- 范围：统一 BOM 用量、单位、版本产出、成本、编辑提示、复制候选、微调预览与 BOM 树的 display formatter；保留 `canonicalUnitCode()` 写入契约，不修改生产数据或 Java。
+- 验收：BOM/unit 目标测试 9 files / 42 tests 通过；唯一 Vite release build 生成 729 assets，archive SHA-256 `30c3e0ce62f1d07791b78cb2b6ad08cdc1b46239c3831f143aec7a29dcf65931`、index SHA-256 `d31c0544ab07489c666ba23fcb14bd68ba98d8bf19ee76e5ab8a21bd450ecf3c`。
+- 生产边界：仅部署 Web；Java 后端 tree 未变化应判定 no-op。部署后通知 F006 E2E Chat 从现有 v2 `b1f27a9b-cca3-4644-bc16-bd79c86dba41` 原现场续跑，不删除、重建或激活 v2，不触碰 LIUSHANMEN。
+- Scope 锁：已释放。

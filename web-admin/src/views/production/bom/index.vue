@@ -442,7 +442,7 @@ function bomUnitLabel(unit?: unknown): string {
   if (u === 'mL') return '毫升 (mL)';
   if (u === 'L') return '升 (L)';
   if (u === 'pcs') return '件 (pcs)';
-  return u || '单位';
+  return displayUnit(u) || '单位';
 }
 
 const bomFormUnitLabel = computed(() => bomUnitLabel(bomForm.value.unit));
@@ -1353,7 +1353,7 @@ function summaryNumber(value: unknown, fallback: number): number {
   return Number.isFinite(number) ? number : fallback;
 }
 const costDisplayUnit = computed(() => {
-  return `元/${skuOutputUnit.value}`;
+  return formatPriceUnit(skuOutputUnit.value);
 });
 const estimatedMaterialCost = computed(() => summaryNumber(costSummary.value?.materialCostTotal, materialCostTotal.value));
 const estimatedLaborCost = computed(() => summaryNumber(costSummary.value?.laborCostTotal, laborCostTotal.value));
@@ -1998,7 +1998,7 @@ watch(adjustDialogVisible, (visible) => {
         <el-table-column label="每单位产出" width="130" align="right">
           <template #default="{ row }">
             <span v-if="row.outputQuantityPerUnit != null">
-              {{ formatFriendlyNumber(row.outputQuantityPerUnit) }} {{ row.outputUnit || '' }}
+              {{ formatFriendlyNumber(row.outputQuantityPerUnit) }} {{ displayUnit(row.outputUnit) }}
             </span>
             <span v-else class="text-secondary">—</span>
           </template>
@@ -2022,7 +2022,7 @@ watch(adjustDialogVisible, (visible) => {
         <el-table-column label="总成本" width="100" align="right">
           <template #default="{ row }">
             <span v-if="canViewPrice && row.totalCost != null">
-              <div>{{ formatFriendlyNumber(row.totalCost, 2) }} 元/{{ row.outputUnit || skuOutputUnit }}</div>
+              <div>{{ formatFriendlyNumber(row.totalCost, 2) }} {{ formatPriceUnit(row.outputUnit || skuOutputUnit) }}</div>
               <div v-if="skuGramsPerUnit != null" class="cost-secondary">
                 {{ formatFriendlyNumber(Number(row.totalCost) / (skuGramsPerUnit / 1000), 2) }} 元/kg
               </div>
@@ -2167,10 +2167,12 @@ watch(adjustDialogVisible, (visible) => {
           </el-table-column>
           <el-table-column v-if="activeCategoryTab === 'PACKAGING'" prop="standardQuantity" label="每成品用量" width="120" align="right">
             <template #default="{ row }">
-              {{ formatFriendlyNumber(row.standardQuantity) }} {{ row.unit || '' }}
+              {{ formatFriendlyNumber(row.standardQuantity) }} {{ displayUnit(row.unit) }}
             </template>
           </el-table-column>
-          <el-table-column prop="unit" label="计量单位" width="90" align="center" />
+          <el-table-column prop="unit" label="计量单位" width="90" align="center">
+            <template #default="{ row }">{{ displayUnit(row.unit) }}</template>
+          </el-table-column>
           <el-table-column v-if="canViewPrice" prop="unitPrice" label="自动单价" width="100" align="right">
             <template #default="{ row }">
               {{ formatFriendlyNumber(row.unitPrice, 4) }} {{ formatPriceUnit(row.priceUnit) }}
@@ -2671,7 +2673,9 @@ watch(adjustDialogVisible, (visible) => {
               <span v-else class="text-secondary">—</span>
             </template>
           </el-table-column>
-          <el-table-column prop="unit" label="单位" width="60" align="center" />
+          <el-table-column prop="unit" label="单位" width="60" align="center">
+            <template #default="{ row }">{{ displayUnit(row.unit) }}</template>
+          </el-table-column>
         </el-table>
         <el-table
           v-if="adjustPreviewResult.seasoningTable && adjustPreviewResult.seasoningTable.length > 0"

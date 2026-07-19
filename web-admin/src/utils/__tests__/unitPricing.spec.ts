@@ -16,9 +16,17 @@ describe('unitPricing', () => {
     expect(displayUnit('box')).toBe('盒');
     expect(canonicalUnitCode('箱')).toBe('case');
     expect(displayUnit('case')).toBe('箱');
+    expect(canonicalUnitCode('片')).toBe('slice');
+    expect(displayUnit('slice')).toBe('片');
     expect(canonicalUnitCode('g')).toBe('g');
     expect(canonicalUnitCode('kg')).toBe('kg');
-    expect(formatPriceUnit('case')).toBe('元/case');
+    expect(displayUnit('g')).toBe('g');
+    expect(displayUnit('kg')).toBe('kg');
+    expect(formatPriceUnit('box')).toBe('元/盒');
+    expect(formatPriceUnit('case')).toBe('元/箱');
+    expect(formatPriceUnit('slice')).toBe('元/片');
+    expect(formatPriceUnit('g')).toBe('元/g');
+    expect(formatPriceUnit('kg')).toBe('元/kg');
   });
 
   it('builds price-unit options from material/catalog values without a static whitelist', () => {

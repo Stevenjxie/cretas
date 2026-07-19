@@ -58,7 +58,7 @@ describe('seasoning BOM integration source contract', () => {
   it('uses category-specific material pickers and material-master pricing', () => {
     expect(bomSource).toContain("? '选择包材' : '选择原料'");
     expect(bomSource).toContain('所选物料为必填');
-    expect(bomSource).toContain('单价与税率从物料档案自动带入');
+    expect(bomSource).toContain('参考单价从物料档案带入');
     expect(bomSource).toContain('bomForm.value.standardQuantity = null');
     expect(bomSource).not.toContain('bomForm.value.standardQuantity = skuGramsPerUnit.value');
     expect(materialTypeSource).toContain('<el-form-item label="计税方式" required>');
@@ -88,7 +88,7 @@ describe('seasoning BOM integration source contract', () => {
     expect(bomSource).not.toContain("summaryNumber('totalMaterialCost'");
     expect(bomSource).not.toContain("summaryNumber('totalLaborCost'");
     expect(bomSource).not.toContain("summaryNumber('totalOverheadCost'");
-    expect(bomSource).toContain('return `元/${skuOutputUnit.value}`');
+    expect(bomSource).toContain('return formatPriceUnit(skuOutputUnit.value);');
     expect(bomSource).toContain('{{ costDisplayUnit }}');
     expect(bomSource).toContain('元/kg');
   });
