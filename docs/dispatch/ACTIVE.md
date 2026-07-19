@@ -6,24 +6,11 @@
 
 ## 在飞任务
 
-- `CRETAS-F006-PROD-WRITE-EXCEPTION-20260719` — `review`
-  - Base SHA：`12039cad4c04c20d68218ace7f04156575917531`
-  - Owner：Codex `/root`
-  - Scope：仅 `AGENTS.md`、`.agents/skills/e2e-web-admin/SKILL.md`、`.agents/skills/project-playwright-e2e/SKILL.md`、`scripts/e2e/production-readonly/README.md`、`scripts/e2e/production-readonly/tests/skill-drift.test.js` 与本任务 dispatch 收尾文件。
-  - 目标：将生产业务写入默认零写入规则改为 F006 受控特例；保留生产只读 harness 的严格零写入语义，其他租户继续零业务写入。
-  - 验收：`node --test scripts/e2e/production-readonly/tests/unit.test.js`；目标 diff 审查；工作区 scope 核验。
-  - 结果：生产只读 unit/drift gate 13/13 通过，`git diff --check` 通过；未执行任何生产写入、部署或合并。
+- 无。
 
 ## Scope 锁地图
 
-- `CRETAS-F006-PROD-WRITE-EXCEPTION-20260719`
-  - `AGENTS.md`
-  - `.agents/skills/e2e-web-admin/SKILL.md`
-  - `.agents/skills/project-playwright-e2e/SKILL.md`
-  - `scripts/e2e/production-readonly/README.md`
-  - `scripts/e2e/production-readonly/tests/skill-drift.test.js`
-  - `docs/dispatch/ACTIVE.md`
-  - `docs/dispatch/archive/2026-07-19-active-history.md`
+- 无。
 
 ## 阻塞项
 

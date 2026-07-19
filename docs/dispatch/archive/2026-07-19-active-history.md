@@ -31,3 +31,16 @@
 - GitHub 门禁：手动 full-audit run [29672597201](https://github.com/Stevenjxie/cretas/actions/runs/29672597201) 的 `JPA repository query startup gate` 在 exact head 上通过。Python Flake8、RN tests 和 Web build 仍为未改动模块的基线/资源失败；Java 全量在 JPA 门禁通过、PR 合并后取消，避免继续消耗资源。
 - 状态边界：代码已合并；未部署、未执行生产 DML/DDL、未删除 2+17 条生产测试数据或两张旧表、未重启生产服务。
 - Scope 锁：已释放。
+
+### `CRETAS-F006-PROD-WRITE-EXCEPTION-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- Base SHA：`12039cad4c04c20d68218ace7f04156575917531`
+- 实现 commit：`93517eecca304ac52dba1f7f5bfe09ca16fcf837`
+- PR：[#1472](https://github.com/Stevenjxie/cretas/pull/1472)
+- `main` squash merge commit：`27705995e2be1ae85af6f52775f85ac0a905a1e2`
+- 范围：将生产业务写入默认零写入规则改为 F006 任务级受控特例；同步 Web/Playwright E2E skill、生产只读 README 与漂移测试，同时明确其他租户继续零写入且生产只读 harness 对 F006 仍严格零写入。
+- 本地验收：`node --test scripts/e2e/production-readonly/tests/unit.test.js`，13/13 通过；`git diff --check` 通过；合并后实现分支 tree 与 `origin/main` tree 等价。
+- 状态边界：规则已合并并可供其他 chat 从 `origin/main` 获取；未执行任何生产业务写入、部署、迁移或服务重启。
+- Scope 锁：已释放。
