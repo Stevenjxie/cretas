@@ -113,7 +113,6 @@ const PYTHON_TIMEOUT_MS = 30000;
 export const PYTHON_LLM_TIMEOUT_MS = 300000;
 export const PYTHON_HEADERS: Record<string, string> = {
   'Content-Type': 'application/json',
-  'X-Internal-Secret': import.meta.env.VITE_PYTHON_SECRET || '',
 };
 
 /**
