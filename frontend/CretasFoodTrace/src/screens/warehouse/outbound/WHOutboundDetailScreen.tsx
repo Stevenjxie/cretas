@@ -169,10 +169,6 @@ export function WHOutboundDetailScreen() {
     loadData();
   }, [loadData]);
 
-  const handleStartPacking = () => {
-    navigation.navigate("WHPacking", { orderId: shipmentId });
-  };
-
   // 加载状态
   if (loading) {
     return (
@@ -332,28 +328,6 @@ export function WHOutboundDetailScreen() {
         <View style={{ height: 100 }} />
       </ScrollView>
 
-      {/* 底部操作 */}
-      {detail.showPackButton && (
-        <View style={styles.bottomActions}>
-          <Button
-            mode="outlined"
-            onPress={() => navigation.goBack()}
-            style={styles.cancelButton}
-            labelStyle={styles.cancelButtonLabel}
-          >
-            返回
-          </Button>
-          <Button
-            mode="contained"
-            onPress={handleStartPacking}
-            style={styles.actionButton}
-            labelStyle={styles.actionButtonLabel}
-            icon="package-variant"
-          >
-            开始打包
-          </Button>
-        </View>
-      )}
     </SafeAreaView>
   );
 }

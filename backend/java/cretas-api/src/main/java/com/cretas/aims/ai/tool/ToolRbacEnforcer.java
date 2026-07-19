@@ -123,8 +123,6 @@ public class ToolRbacEnforcer {
             Map.entry("ecn_approve", Set.of("production:read_write")),
 
             // ===== 出货 (发货是资金/库存出口) =====
-            Map.entry("shipment_confirm", Set.of("sales:read_write", "warehouse:read_write")),
-            Map.entry("shipment_complete", Set.of("sales:read_write", "warehouse:read_write")),
 
             // ===== 系统/配置/告警规则/定时任务 (改全局行为) =====
             Map.entry("factory_feature_toggle", Set.of("system:read_write")),

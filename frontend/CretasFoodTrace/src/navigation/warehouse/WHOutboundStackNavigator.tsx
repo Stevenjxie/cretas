@@ -1,6 +1,6 @@
 /**
  * Warehouse 出货 Stack 导航器
- * 包含: 出货列表、出货详情、打包作业、装车管理、发货确认、物流跟踪、订单详情、扫码作业
+ * 包含: 待发货确认、历史出货列表与详情、物流跟踪、订单详情、扫码作业
  */
 
 import React from "react";
@@ -12,9 +12,6 @@ import WHDeliveryConfirmListScreen from "../../screens/warehouse/outbound/WHDeli
 import WHDeliveryConfirmScreen from "../../screens/warehouse/outbound/WHDeliveryConfirmScreen";
 import WHOutboundListScreen from "../../screens/warehouse/outbound/WHOutboundListScreen";
 import WHOutboundDetailScreen from "../../screens/warehouse/outbound/WHOutboundDetailScreen";
-import WHPackingScreen from "../../screens/warehouse/outbound/WHPackingScreen";
-import WHLoadingScreen from "../../screens/warehouse/outbound/WHLoadingScreen";
-import WHShippingConfirmScreen from "../../screens/warehouse/outbound/WHShippingConfirmScreen";
 import WHTrackingDetailScreen from "../../screens/warehouse/outbound/WHTrackingDetailScreen";
 import WHOrderDetailScreen from "../../screens/warehouse/outbound/WHOrderDetailScreen";
 import WHOutboundIssueScreen from "../../screens/warehouse/outbound/WHOutboundIssueScreen";
@@ -48,27 +45,6 @@ export function WHOutboundStackNavigator() {
         name="WHOutboundDetail"
         component={WHOutboundDetailScreen}
         options={{ title: "出货详情" }}
-      />
-
-      {/* 打包作业 */}
-      <Stack.Screen
-        name="WHPacking"
-        component={WHPackingScreen}
-        options={{ title: "打包作业" }}
-      />
-
-      {/* 装车管理 */}
-      <Stack.Screen
-        name="WHLoading"
-        component={WHLoadingScreen}
-        options={{ title: "装车管理" }}
-      />
-
-      {/* 发货确认 */}
-      <Stack.Screen
-        name="WHShippingConfirm"
-        component={WHShippingConfirmScreen}
-        options={{ title: "发货确认" }}
       />
 
       {/* 物流跟踪 */}

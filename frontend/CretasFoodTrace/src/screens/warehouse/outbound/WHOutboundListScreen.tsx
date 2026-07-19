@@ -190,10 +190,8 @@ export function WHOutboundListScreen() {
         navigation.navigate("WHOutboundDetail", { shipmentId: item.id });
         break;
       case "packing":
-        navigation.navigate("WHPacking", { orderId: item.id });
-        break;
       case "ready":
-        navigation.navigate("WHShippingConfirm", { orderId: item.id });
+        navigation.navigate("WHOutboundDetail", { shipmentId: item.id });
         break;
       case "shipped":
         navigation.navigate("WHTrackingDetail", { shipmentId: item.id });
@@ -261,15 +259,6 @@ export function WHOutboundListScreen() {
 
         {/* 快捷操作 */}
         <View style={styles.actionBar}>
-          <Button
-            mode="contained"
-            icon="truck-delivery"
-            onPress={() => navigation.navigate("WHLoading", {})}
-            style={[styles.actionButton, { backgroundColor: "#4CAF50" }]}
-            labelStyle={styles.actionButtonLabel}
-          >
-            装车管理
-          </Button>
           <Button
             mode="outlined"
             icon="qrcode-scan"

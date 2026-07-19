@@ -1,4 +1,4 @@
-# Cretas 冗余结构清理第一批：CV-01/PR-01 实施与 SH-01/BS-01 方案
+# Cretas 冗余结构清理第一批：CV-01/PR-01 完成、SH-01 执行与 BS-01 设计
 
 ## 1. 决策与边界
 
@@ -8,13 +8,13 @@
 - PR-01 实施 Base SHA：`5d0fbdab88090178afe80d576cae32856a474d91`
 - 已确认实施：CV-01 删除空历史表 `cost_variance_configs`
 - 已确认实施：PR-01 删除旧产品配方双轨，BOM 成为唯一运行时真值
-- 本批只设计、不修改运行时：SH-01、BS-01
+- 当前执行：SH-01 分成“冻结旧写链”和“冻结后清测试数据”两个顺序发布；BS-01 在 SH-01 后按已确认设计实施
 - 明确保留：WF-01、SCH-01
 - 数据授权：PR-01、SH-01、BS-01 相关生产记录均为测试数据，可按已审查范围删除；不得扩展到其他业务域
-- 禁止：本 PR 直接执行生产 DML/DDL、生产部署、静默 fallback、超出候选范围的数据删除
+- 禁止：在旧写链 410 尚未部署时清空 `shipment_records`、保留静默 fallback、超出候选范围删除数据
 - 代码真值：PR-01 分支创建时的 `origin/main`；发 PR 前必须重新 fetch 并检查 V79、ACTIVE 和 scope 冲突。
 
-合并与生产部署是两个独立状态。本批可以通过 PR 合入 migration，但没有获得生产部署授权。
+合并与生产部署是两个独立状态；每个状态分别验证和汇报。
 
 ## 2. CV-01：删除 `cost_variance_configs`
 
@@ -213,7 +213,7 @@ DROP TABLE public.product_recipes;
 被授权删除的 2+17 条测试数据不做恢复承诺。如部署前需要人工快照，可在迁移前导出两表；否则补偿 migration
 只恢复结构。禁止在回滚时重新引入静默 fallback。
 
-## 4. SH-01：旧出货写链冻结与历史迁移方案
+## 4. SH-01：旧出货写链冻结与测试数据清理
 
 ### 4.1 当前状态与迁移可行性
 
@@ -233,31 +233,31 @@ DROP TABLE public.product_recipes;
 这些比例不足以安全地把旧记录机械转换成真实 delivery，更不能对历史 `shipped/delivered`
 记录补扣库存。
 
-### 4.2 冻结写方案
+### 4.2 冻结写实施（Phase A）
 
-1. **先迁移消费者，再封后端**
-   - Web：`sales/shipments/list.vue`、`warehouse/shipments/list.vue` 的创建和状态操作。
-   - RN：ShipmentManagement、仓库首页、装车、包装、发货确认等旧写入口。
-   - AI：旧 shipment create/update/delete/status/cancel/complete/confirm/notify 类 Tool。
+1. **消费者已迁移**
+   - Web 两个出货页面已删除旧创建、发货、送达、取消操作，旧列表标记为只读；仓库正式 confirm 保留。
+   - RN `shipmentApiClient` 已变为只读，旧包装、装车、发货确认页面与导航已删除。
    - 所有新写统一进入 sales delivery + warehouse confirm；不得在客户端本地模拟库存变化。
-2. **后端 mutation gate**
-   - 旧 POST、普通 PUT、status PUT、DELETE 返回明确 `410 Gone`。
-   - 响应包含新业务入口和所缺字段提示。
-   - 禁止把旧 payload 静默转成新 delivery：它缺少可靠的 sales order、product type、
-     finished-goods batch/allocation 主键。
-3. **保留历史读取**
+2. **后端 mutation gate 已实现**
+   - 旧 POST、普通 PUT、status PUT、DELETE 统一抛出 `410 Gone`，错误码为
+     `LEGACY_SHIPMENT_WRITE_GONE`，并返回正式新入口提示。
+   - `ShipmentRecordService` 和 `ShipmentRecordRepository` 已无写调用；旧 payload 不做静默转换。
+3. **AI 旧写链已移除**
+   - 删除 8 个旧 mutation Tool、descriptor 和 RBAC/Skill 注册；Tool 清单由 601 收敛为 593。
+   - `V20261028_80__freeze_legacy_shipment_ai_writes.sql` 将 `SHIPMENT_CREATE` 绑定到
+     `sales_create_delivery`，禁用无法安全翻译的旧 mutation intent，并删除对应 embedding。
+4. **保留历史读取**
    - 旧 GET/list/stats/tracking 暂时保留；测试数据清空后返回空结果。
    - Android 消费者升级并连续观察无旧 GET 后，才删除读 API、Entity/Repository 和表。
-4. **历史分层处理**
-   - A 类：订单、产品、批次均唯一匹配，人工复核后可迁移为“历史导入”记录；禁止触发库存扣减。
-   - B 类：只有部分匹配，保留只读并建立人工映射清单。
-   - C 类：无法匹配，进入历史归档表或只读 View，不伪造外键。
-5. **退出门禁**
+5. **不迁移旧测试记录**
+   - 由于关联完整度不足且用户已确认全部为测试数据，不把 64 行伪造成 sales delivery，也不补扣库存。
+6. **退出门禁**
    - 旧 mutation 网关调用连续观察为 0。
    - 新链扣库存幂等、批次分配和库存台账对账通过。
    - 历史查询/导出/食安追溯均有替代来源后，才讨论删除 `shipment_records`。
 
-### 4.3 已授权测试数据清空 SQL 预览（方案，尚未执行）
+### 4.3 已授权测试数据清空 SQL 预览（Phase B，须在 Phase A 生产生效后执行）
 
 必须先部署旧 mutation 410，再重新核对快照；清数据和最终删表分成两个 migration：
 
@@ -284,7 +284,8 @@ $sh01$;
 DELETE FROM public.shipment_records;
 ```
 
-该预览只清用户已授权的 64 条测试数据，不删除表；如果部署前行数变化，必须重新提交行级范围。
+该预览只清用户已授权的 64 条测试数据，不删除表；Phase A 切流后必须重新查询行数、工厂分布和
+ID 校验摘要，并据最新冻结快照生成独立 migration。如果快照变化，迁移必须失败，不能扩大范围。
 回滚仅能从部署前导出恢复测试数据；业务真值仍为 sales delivery，禁止恢复旧 mutation。
 
 ### 4.4 验收与回滚

@@ -721,9 +721,6 @@ export type WHOutboundStackParamList = {
   WHDeliveryConfirm: { deliveryId: string; deliveryNumber?: string };
   WHOutboundList: undefined;
   WHOutboundDetail: { shipmentId: string };
-  WHPacking: { orderId: string };
-  WHLoading: { vehicleId?: string };
-  WHShippingConfirm: { orderId: string };
   WHTrackingDetail: { shipmentId: string };
   WHOrderDetail: { orderId: string };
   WHScanOperation: { type: 'inbound' | 'outbound'; orderId?: string; mode?: string };

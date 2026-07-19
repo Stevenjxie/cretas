@@ -2,9 +2,9 @@
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
-import { get, post, put } from '@/api/request';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Search, Refresh, Ship, Check, Close } from '@element-plus/icons-vue';
+import { get, post } from '@/api/request';
+import { ElMessage } from 'element-plus';
+import { Search, Refresh, Check } from '@element-plus/icons-vue';
 import { formatDateTime } from '@/utils/dateFormat';
 import { handleCatchError } from '@/utils/errorToast';
 import { emptyCell } from '@/utils/tableFormatters';
@@ -18,7 +18,7 @@ const canWrite = computed(() => permissionStore.canWrite('warehouse'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 
 // Issue #740 (六扇门 May10): Tab 切换 — 默认进入新的"待销售发货单确认"queue.
-//   legacy:  老 /shipments endpoint (出货单, factory 自建)
+//   legacy:  老 /shipments endpoint，只读展示存量记录
 //   sales:   新 /warehouse/deliveries/pending (销售推过来的发货单待 confirm)
 const activeTab = ref<'pending-sales' | 'legacy'>('pending-sales');
 
@@ -41,38 +41,11 @@ const confirmDialogLoading = ref(false);
 const confirmingDelivery = ref<TableRow | null>(null);
 const confirmItems = ref<Array<{ id: string; productName: string; plannedQty: number; actualQty: number; unit: string }>>([]);
 
-// 新建出货对话框
-const dialogVisible = ref(false);
-const dialogLoading = ref(false);
-const shipmentForm = ref({
-  customerId: '',
-  productBatchId: '',
-  shipmentDate: new Date().toISOString().slice(0, 10),
-  quantity: 0,
-  vehicleNumber: '',
-  driverName: '',
-  driverPhone: '',
-  notes: ''
-});
 const customers = ref<TableRow[]>([]);
-const productBatches = ref<TableRow[]>([]);
 const customerMap = computed(() => {
   const map: Record<string, string> = {};
   customers.value.forEach((c) => { if (c.id && c.name) map[String(c.id)] = String(c.name); });
   return map;
-});
-
-// 防呆 Rule 1 (production/warehouse walk): 数量输入框原来无上限, 用户可填任意大数量。
-// 选中批次后, 用该批次良品/实际产量作上限 + 显示提示, 避免超发货。
-const selectedShipmentBatch = computed(() => {
-  if (!shipmentForm.value.productBatchId) return null;
-  return productBatches.value.find((b) => String(b.id) === String(shipmentForm.value.productBatchId)) || null;
-});
-const selectedShipmentBatchMaxQty = computed(() => {
-  const b = selectedShipmentBatch.value;
-  if (!b) return undefined;
-  const n = Number(b.goodQuantity ?? b.actualQuantity ?? b.quantity);
-  return Number.isFinite(n) && n > 0 ? n : undefined;
 });
 
 onMounted(() => {
@@ -80,7 +53,6 @@ onMounted(() => {
   loadPendingSalesDeliveries();
   loadData();
   loadCustomers();
-  loadProductBatches();
 });
 
 // ==================== Issue #740: 销售发货单待 confirm queue ====================
@@ -248,25 +220,6 @@ async function loadCustomers() {
   }
 }
 
-async function loadProductBatches() {
-  if (!factoryId.value) return;
-  try {
-    const response = await get(`/${factoryId.value}/processing/batches`, {
-      params: { status: 'COMPLETED', size: 100 }
-    });
-    if (response.success && response.data) {
-      productBatches.value = response.data.content || response.data || [];
-    } else if (response.success === false) {
-      ElMessage.error(response.message || '加载产品批次失败');
-    }
-  } catch (error) {
-    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
-    // fallback only for network errors (避免双 toast).
-    console.error('加载产品批次失败:', error);
-    handleCatchError(error, '加载产品批次失败');
-  }
-}
-
 function handleSearch() {
   pagination.value.page = 1;
   loadData();
@@ -287,130 +240,6 @@ function handleSizeChange(size: number) {
   pagination.value.size = size;
   pagination.value.page = 1;
   loadData();
-}
-
-async function handleCreate() {
-  shipmentForm.value = {
-    customerId: '',
-    productBatchId: '',
-    shipmentDate: new Date().toISOString().slice(0, 10),
-    quantity: 0,
-    vehicleNumber: '',
-    driverName: '',
-    driverPhone: '',
-    notes: ''
-  };
-  // 张权 Apr 28 反馈: dropdown 显示 onMounted 时的旧 cache.
-  // 强制刷新让用户刚建的客户/批次立即可选.
-  await Promise.all([loadCustomers(), loadProductBatches()]);
-  dialogVisible.value = true;
-}
-
-async function submitShipment() {
-  if (!shipmentForm.value.customerId || !shipmentForm.value.productBatchId || !shipmentForm.value.quantity || !shipmentForm.value.shipmentDate) {
-    ElMessage.warning('请填写完整信息');
-    return;
-  }
-
-  // W-01 fix (Round 7): backend ShipmentRecord requires productName / unit / shipmentDate @NotBlank/@NotNull.
-  // Frontend only collected productBatchId before — POST /shipments returned 400. Derive missing fields
-  // from selected productBatch so create succeeds; vehicleNumber/driverName/driverPhone now persist via
-  // migration V20260424_01.
-  // Reviewer I-4: productBatchId has no column on ShipmentRecord entity, Jackson drops it silently —
-  // strip it from the wire payload to reduce log noise and stay compatible if FAIL_ON_UNKNOWN_PROPERTIES
-  // is ever enabled.
-  const batch = productBatches.value.find((b) => String(b.id) === String(shipmentForm.value.productBatchId)) as TableRow | undefined;
-  // Reviewer S-1: ProductionBatch entity exposes productName + unit (not productTypeName / quantityUnit),
-  // but defensive fallback chain keeps the dropdown label shape compatible with any older batch DTO.
-  const productName = String(batch?.productTypeName || batch?.productName || `批次-${batch?.batchNumber || shipmentForm.value.productBatchId}`);
-  const unit = String(batch?.unit || batch?.quantityUnit || 'kg');
-  const batchNumber = batch?.batchNumber ? String(batch.batchNumber) : undefined;
-
-  const { productBatchId: _productBatchId, ...restForm } = shipmentForm.value;
-  const payload = {
-    ...restForm,
-    productName,
-    unit,
-    ...(batchNumber ? { batchNumber } : {}),
-  };
-
-  dialogLoading.value = true;
-  try {
-    const response = await post(`/${factoryId.value}/shipments`, payload);
-    if (response.success) {
-      ElMessage.success('创建成功');
-      dialogVisible.value = false;
-      loadData();
-    } else {
-      ElMessage.error(response.message || '创建失败');
-    }
-  } catch (error) {
-    // Interceptor shows specific toast; dedupe fallback
-    console.error('[失败]', error);
-  } finally {
-    dialogLoading.value = false;
-  }
-}
-
-async function handleShip(row: TableRow) {
-  try {
-    await ElMessageBox.confirm('确定发货?', '操作确认', { type: 'warning' });
-    const response = await put(`/${factoryId.value}/shipments/${row.id}/status`, {
-      status: 'shipped'
-    });
-    if (response.success) {
-      ElMessage.success('已发货');
-      loadData();
-    } else {
-      ElMessage.error(response.message || '操作失败');
-    }
-  } catch (error) {
-    // Interceptor already shows specific sticky toast for ApiError (request.ts).
-    // Retained catch to prevent uncaught; log for debug.
-    if (error !== 'cancel') console.error('[提交失败]', error);
-  }
-}
-
-async function handleDelivered(row: TableRow) {
-  try {
-    await ElMessageBox.confirm('确认已送达?', '操作确认', { type: 'warning' });
-    const response = await put(`/${factoryId.value}/shipments/${row.id}/status`, {
-      status: 'delivered'
-    });
-    if (response.success) {
-      ElMessage.success('已确认送达');
-      loadData();
-    } else {
-      ElMessage.error(response.message || '操作失败');
-    }
-  } catch (error) {
-    // Interceptor already shows specific sticky toast for ApiError (request.ts).
-    // Retained catch to prevent uncaught; log for debug.
-    if (error !== 'cancel') console.error('[提交失败]', error);
-  }
-}
-
-async function handleCancel(row: TableRow) {
-  try {
-    const { value } = await ElMessageBox.prompt('请输入取消原因', '取消出货', {
-      inputPattern: /.+/,
-      inputErrorMessage: '请输入取消原因'
-    });
-    const response = await put(`/${factoryId.value}/shipments/${row.id}/status`, {
-      status: 'cancelled',
-      reason: value
-    });
-    if (response.success) {
-      ElMessage.success('已取消');
-      loadData();
-    } else {
-      ElMessage.error(response.message || '操作失败');
-    }
-  } catch (error) {
-    // Interceptor already shows specific sticky toast for ApiError (request.ts).
-    // Retained catch to prevent uncaught; log for debug.
-    if (error !== 'cancel') console.error('[提交失败]', error);
-  }
 }
 
 // 详情抽屉
@@ -460,18 +289,13 @@ function getStatusText(status: string) {
             <span v-if="activeTab === 'legacy'" class="data-count">共 {{ pagination.total }} 条记录</span>
             <span v-else class="data-count">共 {{ pendingPagination.total }} 条待确认</span>
           </div>
-          <div class="header-right">
-            <el-button v-if="canWrite && activeTab === 'legacy'" type="primary" :icon="Plus" @click="handleCreate">
-              新建出货
-            </el-button>
-          </div>
         </div>
       </template>
 
       <!--
         Issue #740 (六扇门 May10): 仓库出货管理重构为两 tab.
           tab 1 (default):  销售推过来的待确认发货单 → 填实发数量 + 扣库存
-          tab 2 (legacy):   仓库自建出货单 (老 /shipments endpoint, 兼容存量数据)
+          tab 2 (legacy):   老 /shipments endpoint 历史数据，只读
       -->
       <el-tabs v-model="activeTab" style="margin-bottom: 12px;">
         <el-tab-pane name="pending-sales">
@@ -545,7 +369,15 @@ function getStatusText(status: string) {
           </div>
         </el-tab-pane>
 
-        <el-tab-pane name="legacy" label="出货记录 (自建)">
+        <el-tab-pane name="legacy" label="历史出货记录 (只读)">
+
+      <el-alert
+        title="旧出货台账已冻结，仅供历史查询；新发货请从销售订单创建发货单，并在左侧待确认页完成仓库确认。"
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 12px"
+      />
 
       <div class="search-bar">
         <el-input
@@ -592,33 +424,9 @@ function getStatusText(status: string) {
         <el-table-column prop="createdAt" label="创建时间" width="180">
           <template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="220" fixed="right" align="center">
+        <el-table-column label="操作" width="90" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="showDetail(row)">查看</el-button>
-            <el-button
-              v-if="canWrite && row.status?.toUpperCase() === 'PENDING'"
-              type="success"
-              link
-              size="small"
-              :icon="Ship"
-              @click="handleShip(row)"
-            >发货</el-button>
-            <el-button
-              v-if="canWrite && row.status?.toUpperCase() === 'SHIPPED'"
-              type="primary"
-              link
-              size="small"
-              :icon="Check"
-              @click="handleDelivered(row)"
-            >送达</el-button>
-            <el-button
-              v-if="canWrite && (row.status?.toUpperCase() === 'PENDING' || row.status?.toUpperCase() === 'SHIPPED')"
-              type="danger"
-              link
-              size="small"
-              :icon="Close"
-              @click="handleCancel(row)"
-            >取消</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -717,61 +525,6 @@ function getStatusText(status: string) {
       </template>
     </el-drawer>
 
-    <!-- 新建出货对话框 -->
-    <el-dialog v-model="dialogVisible" title="新建出货" width="550px" :close-on-click-modal="false">
-      <el-form :model="shipmentForm" label-width="100px">
-        <el-form-item label="客户" required>
-          <el-select v-model="shipmentForm.customerId" placeholder="选择客户" filterable style="width: 100%">
-            <el-option
-              v-for="item in customers"
-              :key="item.id"
-              :label="item.name"
-              :value="item.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="产品批次" required>
-          <el-select v-model="shipmentForm.productBatchId" placeholder="选择产品批次" filterable style="width: 100%">
-            <el-option
-              v-for="item in productBatches"
-              :key="item.id"
-              :label="`${item.batchNumber}${item.productTypeName ? ' - ' + item.productTypeName : ''}`"
-              :value="item.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="发货日期" required>
-          <el-date-picker v-model="shipmentForm.shipmentDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="数量" required>
-          <el-input-number
-            v-model="shipmentForm.quantity"
-            :min="1"
-            :max="selectedShipmentBatchMaxQty"
-            style="width: 100%"
-          />
-          <div v-if="selectedShipmentBatchMaxQty != null" style="font-size: 12px; color: #909399; margin-top: 4px;">
-            该批次产量 {{ selectedShipmentBatchMaxQty }} {{ selectedShipmentBatch?.unit || '' }}，最多可发此数量
-          </div>
-        </el-form-item>
-        <el-form-item label="车牌号">
-          <el-input v-model="shipmentForm.vehicleNumber" placeholder="请输入车牌号" />
-        </el-form-item>
-        <el-form-item label="司机姓名">
-          <el-input v-model="shipmentForm.driverName" placeholder="请输入司机姓名" />
-        </el-form-item>
-        <el-form-item label="司机电话">
-          <el-input v-model="shipmentForm.driverPhone" placeholder="请输入司机电话" />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="shipmentForm.notes" type="textarea" :rows="3" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="dialogLoading" @click="submitShipment">确定</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 

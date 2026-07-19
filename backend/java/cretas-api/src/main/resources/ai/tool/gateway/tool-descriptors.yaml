@@ -2,8 +2,8 @@
 # LEGACY_INFERRED, or APPROVED metadata lacking both permissions and allowed roles, remains review debt.
 # This inventory is an independent source-audit truth and is never sufficient by itself to execute.
 schemaVersion: 1
-expectedToolCount: 601
-expectedLegacyCount: 596
+expectedToolCount: 593
+expectedLegacyCount: 588
 descriptors:
   - toolName: "restaurant_calibration_history"
     implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantCalibrationHistoryTool"
@@ -5650,88 +5650,8 @@ descriptors:
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
-  - toolName: "shipment_delete"
-    implementationClass: "com.cretas.aims.ai.tool.impl.shipment.ShipmentDeleteTool"
-    provenance: LEGACY_INFERRED
-    actionType: DELETE
-    riskLevel: MEDIUM
-    supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["shipment"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "shipment_create"
-    implementationClass: "com.cretas.aims.ai.tool.impl.shipment.ShipmentCreateTool"
-    provenance: LEGACY_INFERRED
-    actionType: WRITE
-    riskLevel: MEDIUM
-    supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["shipment"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
   - toolName: "shipment_query"
     implementationClass: "com.cretas.aims.ai.tool.impl.shipment.ShipmentQueryTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["shipment"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "shipment_notify_warehouse"
-    implementationClass: "com.cretas.aims.ai.tool.impl.shipment.ShipmentNotifyWarehouseTool"
-    provenance: LEGACY_INFERRED
-    actionType: NOTIFY
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["shipment"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "shipment_confirm"
-    implementationClass: "com.cretas.aims.ai.tool.impl.shipment.ShipmentConfirmTool"
     provenance: LEGACY_INFERRED
     actionType: READ
     riskLevel: LOW
@@ -5786,46 +5706,6 @@ descriptors:
       supportsPreview: false
       requiresPermission: false
       hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "shipment_complete"
-    implementationClass: "com.cretas.aims.ai.tool.impl.shipment.ShipmentCompleteTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["shipment"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "shipment_cancel"
-    implementationClass: "com.cretas.aims.ai.tool.impl.shipment.ShipmentCancelTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["shipment"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: true
-      hasPermission: true
       requiredPermissions: false
       version: false
       domainTags: false
@@ -5930,26 +5810,6 @@ descriptors:
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
-  - toolName: "shipment_status_update"
-    implementationClass: "com.cretas.aims.ai.tool.impl.shipment.ShipmentStatusUpdateTool"
-    provenance: LEGACY_INFERRED
-    actionType: UPDATE
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["shipment"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
   - toolName: "shipment_stats_query"
     implementationClass: "com.cretas.aims.ai.tool.impl.shipment.ShipmentStatsQueryTool"
     provenance: LEGACY_INFERRED
@@ -5986,26 +5846,6 @@ descriptors:
       supportsPreview: false
       requiresPermission: false
       hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "shipment_update"
-    implementationClass: "com.cretas.aims.ai.tool.impl.shipment.ShipmentUpdateTool"
-    provenance: LEGACY_INFERRED
-    actionType: UPDATE
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["shipment"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: true
-      hasPermission: true
       requiredPermissions: false
       version: false
       domainTags: false

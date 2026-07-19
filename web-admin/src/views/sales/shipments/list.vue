@@ -3,9 +3,9 @@ import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
-import { get, post } from '@/api/request';
-import { ElMessage, type FormInstance } from 'element-plus';
-import { Plus, Search } from '@element-plus/icons-vue';
+import { get } from '@/api/request';
+import { ElMessage } from 'element-plus';
+import { Search } from '@element-plus/icons-vue';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
 import type { TableRow } from '@/types/api';
 import { RowActionMenu, TableFooter } from '@/components/list';
@@ -24,10 +24,8 @@ const factoryId = computed(() => authStore.factoryId);
 
 // Issue 1 (仓管走查 2026-07): 引导到会扣减成品库存的正式发货流程 (销售订单 → 创建发货单 → 仓库确认).
 function goToSalesOrders(): void {
-  createDialogVisible.value = false;
   router.push('/sales/orders');
 }
-const canWrite = computed(() => permissionStore.canWrite('sales'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 
 function rowActionsFor(row: TableRow) {
@@ -208,99 +206,27 @@ function getStatusText(status: string) {
   return map[status?.toUpperCase()] || status;
 }
 
-// ==================== Create ====================
-const createDialogVisible = ref(false);
-const submitting = ref(false);
-const formRef = ref<FormInstance>();
-const customerOptions = ref<Array<{ id: string; name: string }>>([]);
-const emptyForm = () => ({
-  customerId: '',
-  productName: '',
-  quantity: 1,
-  unit: 'kg',
-  unitPrice: 0,
-  shipmentDate: new Date().toISOString().slice(0, 10),
-  shippingAddress: '',
-  trackingNumber: '',
-  notes: ''
-});
-const createForm = ref(emptyForm());
-const createFormRules = {
-  customerId: [{ required: true, message: '请选择客户', trigger: 'change' }],
-  productName: [{ required: true, message: '请输入产品名称', trigger: 'blur' }],
-  quantity: [{ required: true, message: '请输入数量', trigger: 'blur' }],
-  unit: [{ required: true, message: '请输入单位', trigger: 'blur' }],
-  shipmentDate: [{ required: true, message: '请选择出货日期', trigger: 'change' }]
-};
-
-async function loadCustomerOptions() {
-  if (!factoryId.value) return;
-  try {
-    const res = await get(`/${factoryId.value}/customers`, { params: { page: 1, size: 200 } });
-    if (res.success && res.data) {
-      const list = (res.data.content || []) as Array<TableRow>;
-      customerOptions.value = list
-        .filter(c => c.id && c.name)
-        .map(c => ({ id: String(c.id), name: String(c.name) }));
-    }
-  } catch {
-    // fall back to empty select
-  }
-}
-
-function handleCreate() {
-  createForm.value = emptyForm();
-  createDialogVisible.value = true;
-  if (customerOptions.value.length === 0) loadCustomerOptions();
-}
-
-async function submitCreateForm() {
-  if (formRef.value) {
-    try { await formRef.value.validate(); } catch { return; }
-  }
-  submitting.value = true;
-  try {
-    const payload: TableRow = { ...createForm.value };
-    if (!payload.unitPrice) delete payload.unitPrice;
-    const res = await post(`/${factoryId.value}/shipments`, payload);
-    if (res.success) {
-      // 明示不扣库存 (仓管走查 2026-07): 避免误以为已扣减成品库存.
-      ElMessage.success('手工出货登记已创建 (未扣减成品库存)');
-      createDialogVisible.value = false;
-      loadData();
-    } else {
-      ElMessage.error(res.message || '创建失败');
-    }
-  } catch (e) {
-    // Interceptor already shows specific sticky toast for ApiError.
-    console.error('Create shipment failed:', e);
-  } finally {
-    submitting.value = false;
-  }
-}
 </script>
 
 <template>
   <div class="page-container">
     <!--
       仓管现场走查 (2026-07): 在此「新建出货」成功后, 成品库存 (销售 → 成品库存) 可用量不变,
-      误导仓管以为已发货扣了库存。此页 = 遗留「手工出货登记」(ShipmentRecord, 自由文本产品名/
-      无批次/无仓库), 只记台账不扣库存。真正扣减成品库存的正式发货走「销售订单 → 创建发货单」
-      → 仓库确认 (FEFO 批次分配 + 扣减)。此处明确辨析 + 跳转, 不在这条自由文本链上再造一个会
-      扣库存的平行台账 (会与销售发货单双重扣减)。
+      误导仓管以为已发货扣了库存。此页现只读展示遗留 ShipmentRecord 历史；真正扣减成品库存的
+      正式发货走「销售订单 → 创建发货单 → 仓库确认」(FEFO 批次分配 + 扣减)。
     -->
     <ConceptDisambiguationAlert
-      here-name="手工出货登记"
-      here="只登记出货台账 (客户 / 产品名称 / 数量)，不扣减成品库存，也不关联生产批次"
+      here-name="历史手工出货记录（只读）"
+      here="旧台账已停止新增和修改，仅保留历史查询"
       other="要真正扣减成品库存的正式发货 (按批次 FEFO 分配)"
       other-name="销售订单 → 创建发货单"
       other-path="/sales/orders"
-      consequence="此处登记不会改变「成品库存」可用量，仓管请勿据此判断可发数量"
+      consequence="请勿依据旧台账判断库存或继续发货"
     />
     <el-card>
       <template #header>
         <div class="card-header">
-          <span>手工出货登记<span style="font-size:12px;color:#e6a23c;font-weight:400;margin-left:8px">(不扣减成品库存)</span></span>
+          <span>历史手工出货记录<span style="font-size:12px;color:#e6a23c;font-weight:400;margin-left:8px">(只读)</span></span>
           <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
             <el-input
               v-model="searchKeyword"
@@ -334,7 +260,7 @@ async function submitCreateForm() {
             </el-select>
             <el-button type="primary" @click="handleSearch">搜索</el-button>
             <el-button @click="handleReset">重置</el-button>
-            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleCreate">新建出货</el-button>
+            <el-button type="primary" @click="goToSalesOrders">去销售订单创建发货单</el-button>
           </div>
         </div>
       </template>
@@ -366,59 +292,6 @@ async function submitCreateForm() {
           </template>
         </el-table-column>
       </el-table>
-
-      <!-- 新建出货 -->
-      <el-dialog v-model="createDialogVisible" title="新建手工出货登记" width="560px" :close-on-click-modal="false" destroy-on-close>
-        <el-alert
-          type="warning"
-          :closable="false"
-          show-icon
-          style="margin-bottom: 12px"
-          title="此为手工出货登记，不扣减成品库存"
-        >
-          <template #default>
-            <span style="font-size: 13px">
-              仅记录出货台账 (自由填产品名 / 数量)。要按批次扣减「成品库存」的正式发货，请到
-              <el-link type="primary" underline="never" style="font-weight: 600" @click="goToSalesOrders">销售订单 → 创建发货单</el-link>。
-            </span>
-          </template>
-        </el-alert>
-        <el-form ref="formRef" :model="createForm" :rules="createFormRules" label-width="100px">
-          <el-form-item label="客户" prop="customerId">
-            <el-select v-model="createForm.customerId" filterable placeholder="选择客户" style="width: 100%">
-              <el-option v-for="c in customerOptions" :key="c.id" :label="c.name" :value="c.id" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="产品名称" prop="productName">
-            <el-input v-model="createForm.productName" placeholder="请输入产品名称" />
-          </el-form-item>
-          <el-form-item label="数量" prop="quantity">
-            <el-input-number v-model="createForm.quantity" :min="0.01" :precision="2" :step="1" />
-          </el-form-item>
-          <el-form-item label="单位" prop="unit">
-            <el-input v-model="createForm.unit" placeholder="kg / 件 / 箱" style="width: 140px" />
-          </el-form-item>
-          <el-form-item v-if="canViewPrice" label="单价">
-            <el-input-number v-model="createForm.unitPrice" :min="0" :precision="2" :step="1" />
-          </el-form-item>
-          <el-form-item label="出货日期" prop="shipmentDate">
-            <el-date-picker v-model="createForm.shipmentDate" type="date" value-format="YYYY-MM-DD" placeholder="选择日期" style="width: 200px" />
-          </el-form-item>
-          <el-form-item label="发货地址">
-            <el-input v-model="createForm.shippingAddress" placeholder="请输入发货地址" />
-          </el-form-item>
-          <el-form-item label="物流单号">
-            <el-input v-model="createForm.trackingNumber" placeholder="可选" />
-          </el-form-item>
-          <el-form-item label="备注">
-            <el-input v-model="createForm.notes" type="textarea" :rows="2" />
-          </el-form-item>
-        </el-form>
-        <template #footer>
-          <el-button :disabled="submitting" @click="createDialogVisible = false">取消</el-button>
-          <el-button type="primary" :loading="submitting" @click="submitCreateForm">确定</el-button>
-        </template>
-      </el-dialog>
 
       <!-- 查看详情 -->
       <el-dialog v-model="viewDialogVisible" title="出货详情" width="500px" destroy-on-close>

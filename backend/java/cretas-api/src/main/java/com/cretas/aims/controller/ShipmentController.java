@@ -15,7 +15,6 @@ import org.springframework.web.bind.annotation.*;
 
 import com.cretas.aims.util.ErrorSanitizer;
 
-import jakarta.validation.Valid;
 import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.List;
@@ -39,7 +38,17 @@ import com.cretas.aims.annotation.RequireModule;
 @Tag(name = "出货管理", description = "出货记录管理相关接口，包括出货记录的创建、查询、状态更新、物流追踪、统计分析等功能")
 public class ShipmentController {
 
+    private static final String LEGACY_MUTATION_MESSAGE =
+            "旧手工出货写链已停用。请从销售订单创建销售发货单，并由仓库在待确认发货单中确认实际数量；该流程才会分配批次并扣减库存。";
+
     private final ShipmentRecordService shipmentRecordService;
+
+    private com.cretas.aims.exception.BusinessException legacyMutationGone() {
+        return new com.cretas.aims.exception.BusinessException(410, LEGACY_MUTATION_MESSAGE)
+                .withCode("LEGACY_SHIPMENT_WRITE_GONE")
+                .withHint("新入口：销售订单 → 创建发货单 → 仓库待确认发货单")
+                .withSeverity("warning");
+    }
 
     /**
      * 获取出货记录列表（分页）
@@ -240,27 +249,8 @@ public class ShipmentController {
     public ResponseEntity<?> createShipment(
             @PathVariable @Parameter(description = "工厂ID", example = "F001", required = true) String factoryId,
             @RequestAttribute("userId") @Parameter(hidden = true) Long userId,
-            @Valid @RequestBody @Parameter(description = "出货记录信息，包含customerId、productBatchId、quantity、shippingAddress等") ShipmentRecord shipment) {
-        try {
-            shipment.setFactoryId(factoryId);
-            shipment.setRecordedBy(userId);
-            ShipmentRecord created = shipmentRecordService.createShipment(shipment);
-            return ResponseEntity.ok(Map.of(
-                "success", true,
-                "data", created,
-                "message", "出货记录创建成功"
-            ));
-        } catch (com.cretas.aims.exception.BusinessException be) {
-            // 让业务异常 (含 R4 去重 409 / 状态守卫) 透传 GlobalExceptionHandler 正确映射状态码,
-            // 不被下面的 catch-all 降级成 400 (edge-case 审计 2026-06-24)。
-            throw be;
-        } catch (Exception e) {
-            log.error("创建出货记录失败", e);
-            return ResponseEntity.badRequest().body(Map.of(
-                "success", false,
-                "message", ErrorSanitizer.sanitize(e)
-            ));
-        }
+            @RequestBody(required = false) @Parameter(description = "旧出货 payload（该写接口已停用）") ShipmentRecord ignored) {
+        throw legacyMutationGone();
     }
 
     /**
@@ -273,23 +263,8 @@ public class ShipmentController {
     public ResponseEntity<?> updateShipment(
             @PathVariable @Parameter(description = "工厂ID", example = "F001", required = true) String factoryId,
             @PathVariable @Parameter(description = "出货记录ID（UUID格式）", example = "550e8400-e29b-41d4-a716-446655440000", required = true) String id,
-            @RequestBody @Parameter(description = "更新数据，包含需要修改的字段") ShipmentRecord updateData) {
-        try {
-            ShipmentRecord updated = shipmentRecordService.updateShipment(id, updateData);
-            return ResponseEntity.ok(Map.of(
-                "success", true,
-                "data", updated,
-                "message", "出货记录更新成功"
-            ));
-        } catch (com.cretas.aims.exception.BusinessException be) {
-            throw be;
-        } catch (Exception e) {
-            log.error("更新出货记录失败", e);
-            return ResponseEntity.badRequest().body(Map.of(
-                "success", false,
-                "message", ErrorSanitizer.sanitize(e)
-            ));
-        }
+            @RequestBody(required = false) @Parameter(description = "旧出货 payload（该写接口已停用）") ShipmentRecord ignored) {
+        throw legacyMutationGone();
     }
 
     /**
@@ -302,24 +277,8 @@ public class ShipmentController {
     public ResponseEntity<?> updateStatus(
             @PathVariable @Parameter(description = "工厂ID", example = "F001", required = true) String factoryId,
             @PathVariable @Parameter(description = "出货记录ID（UUID格式）", example = "550e8400-e29b-41d4-a716-446655440000", required = true) String id,
-            @RequestBody @Parameter(description = "状态信息 {\"status\": \"shipped\"}，可选值: pending/shipped/delivered/returned") Map<String, String> body) {
-        try {
-            String status = body.get("status");
-            ShipmentRecord updated = shipmentRecordService.updateStatus(id, status);
-            return ResponseEntity.ok(Map.of(
-                "success", true,
-                "data", updated,
-                "message", "状态更新成功"
-            ));
-        } catch (com.cretas.aims.exception.BusinessException be) {
-            throw be;
-        } catch (Exception e) {
-            log.error("更新出货状态失败", e);
-            return ResponseEntity.badRequest().body(Map.of(
-                "success", false,
-                "message", ErrorSanitizer.sanitize(e)
-            ));
-        }
+            @RequestBody(required = false) @Parameter(description = "旧状态 payload（该写接口已停用）") Map<String, String> ignored) {
+        throw legacyMutationGone();
     }
 
     /**
@@ -332,20 +291,6 @@ public class ShipmentController {
     public ResponseEntity<?> deleteShipment(
             @PathVariable @Parameter(description = "工厂ID", example = "F001", required = true) String factoryId,
             @PathVariable @Parameter(description = "出货记录ID（UUID格式）", example = "550e8400-e29b-41d4-a716-446655440000", required = true) String id) {
-        try {
-            shipmentRecordService.deleteShipment(id);
-            return ResponseEntity.ok(Map.of(
-                "success", true,
-                "message", "出货记录删除成功"
-            ));
-        } catch (com.cretas.aims.exception.BusinessException be) {
-            throw be;
-        } catch (Exception e) {
-            log.error("删除出货记录失败", e);
-            return ResponseEntity.badRequest().body(Map.of(
-                "success", false,
-                "message", ErrorSanitizer.sanitize(e)
-            ));
-        }
+        throw legacyMutationGone();
     }
 }

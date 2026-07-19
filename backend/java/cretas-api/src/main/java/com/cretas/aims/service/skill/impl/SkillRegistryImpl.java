@@ -255,7 +255,7 @@ public class SkillRegistryImpl implements SkillRegistry {
                 .description("处理订单发货流程，包括查询订单和创建发货单")
                 .version("1.0.0")
                 .triggers(Arrays.asList("发货", "出货", "物流", "配送", "发运", "订单发货"))
-                .tools(Arrays.asList("order_query", "shipment_create", "shipment_query"))
+                .tools(Arrays.asList("order_query", "sales_create_delivery", "shipment_query"))
                 .contextNeeded(Arrays.asList("factoryId"))
                 .promptTemplate("处理工厂${factoryId}的发货请求，用户问题：${userQuery}")
                 .source("default")
@@ -456,56 +456,6 @@ public class SkillRegistryImpl implements SkillRegistry {
                                 .build()
                 ))
                 .errorStrategy(SkillDefinition.ErrorStrategy.CONTINUE_ON_ERROR)
-                .source("default")
-                .enabled(true)
-                .build());
-        count++;
-
-        // 订单发货全流程Skill（DAG版） — 查订单 → 创建发货 → 更新状态 → 确认 → 完成
-        registerWithSource(SkillDefinition.builder()
-                .name("shipment-lifecycle")
-                .displayName("发货全流程")
-                .description("发货全生命周期：查订单 → 创建发货单 → 更新物流状态 → 客户确认 → 完成发货")
-                .version("2.0.0")
-                .triggers(Arrays.asList("发货流程", "完整发货", "发货全流程", "从发货到签收",
-                        "发货并跟踪", "发货进度管理"))
-                .tools(Arrays.asList("order_query", "shipment_create", "shipment_status_update",
-                        "shipment_confirm", "shipment_complete"))
-                .contextNeeded(Arrays.asList("factoryId"))
-                .promptTemplate("处理工厂${factoryId}的发货全流程。" +
-                        "DAG执行：依次执行发货步骤，每步依赖前一步成功。" +
-                        "用户问题：${userQuery}")
-                .executionGraph(Arrays.asList(
-                        SkillDefinition.ExecutionNode.builder()
-                                .id("query_order")
-                                .toolName("order_query")
-                                .build(),
-                        SkillDefinition.ExecutionNode.builder()
-                                .id("create_shipment")
-                                .toolName("shipment_create")
-                                .dependsOn(Arrays.asList("query_order"))
-                                .condition("query_order.success")
-                                .build(),
-                        SkillDefinition.ExecutionNode.builder()
-                                .id("update_status")
-                                .toolName("shipment_status_update")
-                                .dependsOn(Arrays.asList("create_shipment"))
-                                .condition("create_shipment.success")
-                                .build(),
-                        SkillDefinition.ExecutionNode.builder()
-                                .id("confirm")
-                                .toolName("shipment_confirm")
-                                .dependsOn(Arrays.asList("update_status"))
-                                .condition("update_status.success")
-                                .build(),
-                        SkillDefinition.ExecutionNode.builder()
-                                .id("complete")
-                                .toolName("shipment_complete")
-                                .dependsOn(Arrays.asList("confirm"))
-                                .condition("confirm.success")
-                                .build()
-                ))
-                .errorStrategy(SkillDefinition.ErrorStrategy.STOP)
                 .source("default")
                 .enabled(true)
                 .build());
