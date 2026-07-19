@@ -9,6 +9,7 @@ evidence contracts do not support one.
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from dataclasses import replace
@@ -35,6 +36,9 @@ from .run_contracts import (
     StructuredOutcome,
 )
 from .run_store import RunStore, RunStoreError
+
+
+logger = logging.getLogger(__name__)
 
 
 class RuntimeBudgetExceeded(RuntimeError):
@@ -436,10 +440,17 @@ class BoundedRestaurantRuntime:
                 counters,
                 failure_code,
             )
-        except Exception:
+        except Exception as exc:
             # Never persist raw exception text/type. If persistence is also
             # unavailable this call raises, so callers cannot mistake the run
             # for a durable FAILED terminal.
+            logger.error(
+                "restaurant agent runtime failed unexpectedly "
+                "run_id=%s factory_id=%s exception_class=%s",
+                run_id,
+                run_context.factory_id,
+                type(exc).__name__,
+            )
             failure_code = "UNEXPECTED_RUNTIME_FAILURE"
             outcome = StructuredOutcome(
                 status=OutcomeStatus.FAILED,

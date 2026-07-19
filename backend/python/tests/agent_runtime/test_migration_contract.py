@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -12,6 +13,10 @@ ADAPTIVE_MIGRATION = (
 OWNER_CONTRACT_MIGRATION = (
     Path(__file__).parents[2]
     / "smartbi/database/migrations/V20261028_05__restaurant_agent_owner_enforcement.sql"
+)
+EVIDENCE_CONSTRAINT_FIX_MIGRATION = (
+    Path(__file__).parents[2]
+    / "smartbi/database/migrations/V20261028_06__fix_agent_evidence_payload_constraint.sql"
 )
 PG_HARNESS = Path(__file__).with_name("test_postgres_run_store_integration.py")
 
@@ -115,6 +120,21 @@ def test_owner_contract_is_strict_forward_only_and_audit_is_select_only():
     assert "tenant_admin_audit_update" not in body
 
 
+def test_evidence_constraint_fix_removes_plpgsql_value_ambiguity_without_weakening_schema():
+    body = EVIDENCE_CONSTRAINT_FIX_MIGRATION.read_text(encoding="utf-8")
+    assert "value JSONB" in body
+    assert "payload_value ALIAS FOR $2" in body
+    assert "jsonb_each(item->'dimensions') AS dimension_row(key, value)" in body
+    assert "SELECT dimension_row.key, dimension_row.value" in body
+    assert "EVIDENCE_RECORDED" in body
+    assert "smart_bi_agent_exact_json_keys" in body
+    assert "factReferences" in body
+    assert "provenanceRefs" in body
+    assert "EXCEPTION WHEN OTHERS" in body
+    assert "DROP CONSTRAINT" not in body
+    assert "ALTER TABLE" not in body
+
+
 def test_postgres_gate_is_explicitly_disposable_and_schema_isolated():
     body = PG_HARNESS.read_text(encoding="utf-8")
     assert "AGENT_RUNTIME_PG_DISPOSABLE_CONFIRM" in body
@@ -131,6 +151,6 @@ def test_postgres_gate_is_explicitly_disposable_and_schema_isolated():
     assert 'DROP SCHEMA "{TEST_SCHEMA}" CASCADE' in body
     assert 'DROP ROLE "{APP_ROLE}"' in body
     assert "JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace" in body
-    assert "TRUNCATE" not in body.upper()
+    assert not re.search(r"\bTRUNCATE\b", body, re.IGNORECASE)
     assert "DROP SCHEMA public" not in body
     assert "DROP OWNED" not in body

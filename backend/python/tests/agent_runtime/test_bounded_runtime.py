@@ -811,6 +811,53 @@ class StepAndTerminalUnavailableStore(StepFailureEventUnavailableStore):
         raise RunStoreError("terminal store unavailable")
 
 
+class EvidenceRecordedUnavailableStore(InMemoryRunStore):
+    async def append_event(self, *args, **kwargs):
+        if args[2] is AgentEventType.EVIDENCE_RECORDED:
+            raise RunStoreError("raw secret member review prompt")
+        return await super().append_event(*args, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_unexpected_runtime_logging_keeps_exception_text_out_of_log(caplog):
+    store = EvidenceRecordedUnavailableStore()
+    runtime = BoundedRestaurantRuntime(
+        FakeGateway(route_evidence()),
+        store,
+        id_factory=lambda: "78787878-7878-4878-8878-787878787878",
+    )
+
+    with caplog.at_level("ERROR"):
+        result = await runtime.execute(
+            GrossMarginDeclineRequest("2026-01-01", "2026-01-31"), context()
+        )
+
+    assert result.state is RunState.FAILED
+    assert result.failure_code == "UNEXPECTED_RUNTIME_FAILURE"
+    assert "restaurant agent runtime failed unexpectedly" in caplog.text
+    assert "exception_class=RunStoreError" in caplog.text
+    assert "secret" not in caplog.text.lower()
+    assert "prompt" not in caplog.text.lower()
+    runtime_records = [
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("restaurant agent runtime failed unexpectedly")
+    ]
+    assert len(runtime_records) == 1
+    runtime_record = runtime_records[0]
+    assert runtime_record.args == (
+        "78787878-7878-4878-8878-787878787878",
+        "A",
+        "RunStoreError",
+    )
+    assert runtime_record.exc_info is None
+    assert runtime_record.stack_info is None
+    assert not any(
+        key in runtime_record.__dict__
+        for key in ("exception", "payload", "request", "outcome")
+    )
+
+
 @pytest.mark.asyncio
 async def test_store_failure_is_raised_and_runtime_does_not_claim_terminal():
     store = UnavailableStore()
