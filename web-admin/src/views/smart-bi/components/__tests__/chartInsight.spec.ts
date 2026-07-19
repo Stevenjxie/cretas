@@ -38,6 +38,8 @@ import {
   buildKpiInsight,
   computeDataPattern,
   deriveChartMeta,
+  fetchTier2Insight,
+  submitInsightFeedback,
 } from '../chartInsight';
 import type { ChartWithMeta, UserPermissions } from '../chartInsight';
 
@@ -1409,5 +1411,73 @@ describe('fetchTier2Insight', () => {
     expect(result).not.toBeNull();
     expect(result!.source).toBe('template');
     expect(result!.tier).toBe(2);
+  });
+});
+
+describe('browser authentication for chart insight requests', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('keeps JWT auth on Tier 2 insight and never sends the browser secret', async () => {
+    localStorage.setItem('cretas_access_token', 'chart-jwt-token');
+    vi.stubEnv('VITE_PYTHON_SECRET', 'must-not-leak');
+    try {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, data: null }),
+      } as unknown as Response);
+
+      await fetchTier2Insight(
+        makePie([
+          { name: 'Dine-in', value: 600_000 },
+          { name: 'Delivery', value: 400_000 },
+        ]),
+        financePerms,
+        'F001',
+      );
+
+      const options = fetchSpy.mock.calls[0][1] as RequestInit;
+      expect(options.headers).toMatchObject({
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer chart-jwt-token',
+      });
+      expect(options.headers).not.toHaveProperty('X-Internal-Secret');
+      expect(options.credentials).toBe('include');
+    } finally {
+      localStorage.removeItem('cretas_access_token');
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('keeps JWT auth on feedback and never sends the browser secret', async () => {
+    localStorage.setItem('cretas_access_token', 'feedback-jwt-token');
+    vi.stubEnv('VITE_PYTHON_SECRET', 'must-not-leak');
+    try {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true }),
+      } as unknown as Response);
+
+      await expect(submitInsightFeedback('input-hash', 'up', 'F001')).resolves.toBe(true);
+
+      const options = fetchSpy.mock.calls[0][1] as RequestInit;
+      expect(options.headers).toMatchObject({
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer feedback-jwt-token',
+      });
+      expect(options.headers).not.toHaveProperty('X-Internal-Secret');
+      expect(options.credentials).toBe('include');
+      expect(JSON.parse(options.body as string)).toEqual({
+        input_hash: 'input-hash',
+        vote: 'up',
+        factory_id: 'F001',
+      });
+    } finally {
+      localStorage.removeItem('cretas_access_token');
+      vi.unstubAllEnvs();
+    }
   });
 });

@@ -33,6 +33,8 @@
 // Contracts (locked — mirrors plan U2 §契约)
 // ============================================================
 
+import { getPythonAuthHeaders } from '@/api/smartbi/common';
+
 export interface ChartMeta {
   xDim: 'time' | 'store' | 'product' | 'channel' | 'category' | 'other';
   yMetric: 'revenue' | 'quantity' | 'margin' | 'cost' | 'count' | 'pct' | 'other';
@@ -1006,18 +1008,7 @@ export async function fetchTier2Insight(
     };
 
     // Auth header — same pattern as getPythonAuthHeaders() in common.ts
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    // Prefer localStorage token (same as common.ts getPythonAuthHeaders)
-    if (typeof localStorage !== 'undefined') {
-      const token = localStorage.getItem('cretas_access_token');
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-      const secret = typeof import.meta !== 'undefined' && import.meta.env
-        ? (import.meta.env.VITE_PYTHON_SECRET as string | undefined) ?? ''
-        : '';
-      if (secret) headers['X-Internal-Secret'] = secret;
-    }
+    const headers = getPythonAuthHeaders();
 
     const response = await fetch(`${PYTHON_SMARTBI_URL}/api/smartbi/chart-insight`, {
       method: 'POST',
@@ -1068,18 +1059,7 @@ export async function submitInsightFeedback(
   factoryId: string,
 ): Promise<boolean> {
   try {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (typeof localStorage !== 'undefined') {
-      const token = localStorage.getItem('cretas_access_token');
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-      const secret =
-        typeof import.meta !== 'undefined' && import.meta.env
-          ? (import.meta.env.VITE_PYTHON_SECRET as string | undefined) ?? ''
-          : '';
-      if (secret) headers['X-Internal-Secret'] = secret;
-    }
+    const headers = getPythonAuthHeaders();
 
     const response = await fetch(`${PYTHON_SMARTBI_URL}/api/smartbi/insight/feedback`, {
       method: 'POST',

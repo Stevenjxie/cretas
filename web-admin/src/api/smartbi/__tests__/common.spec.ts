@@ -91,18 +91,54 @@ describe('pythonFetch', () => {
     );
   });
 
-  it('includes Authorization header from localStorage', async () => {
+  it('keeps JWT auth and omits browser-side internal credentials for non-stream requests', async () => {
     (global.fetch as any).mockResolvedValue({
       ok: true,
       status: 200,
       json: vi.fn().mockResolvedValue({ success: true }),
     } as unknown as Response);
 
-    await pythonFetch('/api/test');
+    vi.stubEnv('VITE_PYTHON_SECRET', 'must-not-leak');
+    vi.resetModules();
+    try {
+      expect(import.meta.env.VITE_PYTHON_SECRET).toBe('must-not-leak');
+      const { pythonFetch: freshPythonFetch } = await import('../common');
 
-    const callArgs = (global.fetch as any).mock.calls[0];
-    const fetchOptions = callArgs[1];
-    expect(fetchOptions.headers.Authorization).toBe('Bearer mock-token-123');
+      await freshPythonFetch('/api/chat/general-analysis', {
+        method: 'POST',
+        body: JSON.stringify({ query: 'sales trend' }),
+      });
+
+      const callArgs = (global.fetch as any).mock.calls[0];
+      const fetchOptions = callArgs[1];
+      expect(fetchOptions.headers).toMatchObject({
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer mock-token-123',
+      });
+      expect(fetchOptions.headers).not.toHaveProperty('X-Internal-Secret');
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
+  it('returns JWT-only auth headers for direct SSE stream callers even when a secret env is set', async () => {
+    vi.stubEnv('VITE_PYTHON_SECRET', 'must-not-leak');
+    vi.resetModules();
+    try {
+      expect(import.meta.env.VITE_PYTHON_SECRET).toBe('must-not-leak');
+      const { getPythonAuthHeaders: freshGetPythonAuthHeaders } = await import('../common');
+      const headers = freshGetPythonAuthHeaders();
+
+      expect(headers).toMatchObject({
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer mock-token-123',
+      });
+      expect(headers).not.toHaveProperty('X-Internal-Secret');
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
   });
 
   it('handles arrays in response', async () => {
