@@ -5,6 +5,7 @@ import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
 import { Search, Refresh } from '@element-plus/icons-vue';
 import type { TableRow } from '@/types/api';
+import { displayUnit } from '@/utils/unitPricing';
 
 /**
  * 多级 BOM 树展开视图 — Sprint 4 Wave 2 M-MATTREE-1.
@@ -200,7 +201,7 @@ function formatNumber(v: any): string {
       <el-table-column prop="level" label="层级" width="70" align="center" />
       <el-table-column label="需求量" min-width="120">
         <template #default="{ row }">
-          {{ formatNumber(row.requiredQuantity) }} {{ row.unit || '' }}
+          {{ formatNumber(row.requiredQuantity) }} {{ displayUnit(row.unit) }}
         </template>
       </el-table-column>
       <el-table-column label="损耗率 %" width="100" align="right">

@@ -13,6 +13,7 @@ const UNIT_ALIASES: Record<string, string> = {
   g: 'g', '克': 'g',
   box: 'box', '盒': 'box',
   case: 'case', '箱': 'case',
+  slice: 'slice', '片': 'slice',
   bag: 'bag', '袋': 'bag',
   pcs: 'pcs', pc: 'pcs', piece: 'pcs', pieces: 'pcs', '个': 'pcs', '只': 'pcs', '件': 'pcs',
   l: 'L', '升': 'L',
@@ -20,7 +21,7 @@ const UNIT_ALIASES: Record<string, string> = {
 };
 
 const UNIT_LABELS: Record<string, string> = {
-  kg: 'kg', g: 'g', box: '盒', case: '箱', bag: '袋', pcs: '件', L: 'L', mL: 'mL',
+  kg: 'kg', g: 'g', box: '盒', case: '箱', slice: '片', bag: '袋', pcs: '件', L: 'L', mL: 'mL',
 };
 
 export function canonicalUnitCode(value: unknown): string {
@@ -36,7 +37,7 @@ export function displayUnit(value: unknown): string {
 
 export function formatPriceUnit(value: unknown): string {
   const code = canonicalUnitCode(value);
-  return code ? `元/${code}` : '计价单位未配置';
+  return code ? `元/${displayUnit(code)}` : '计价单位未配置';
 }
 
 export function mergeCanonicalUnitOptions(...sources: Array<unknown | unknown[]>): string[] {

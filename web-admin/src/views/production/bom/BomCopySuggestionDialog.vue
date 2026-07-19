@@ -6,6 +6,7 @@ import type {
   BomCopySeasoningRule,
   CopyBomToProductRequest,
 } from '@/api/bom';
+import { displayUnit } from '@/utils/unitPricing';
 
 const props = withDefaults(defineProps<{
   modelValue: boolean;
@@ -127,7 +128,7 @@ function handleCopy() {
 
 function quantityText(value: number | null | undefined, unit: string | null | undefined) {
   if (value == null) return '仅关联物料';
-  return `${value} ${unit || ''}`.trim();
+  return `${value} ${displayUnit(unit)}`.trim();
 }
 
 function injectionConfigText(item: BomCopyInjectionConfigRule) {
