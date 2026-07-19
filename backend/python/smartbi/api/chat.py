@@ -372,14 +372,26 @@ def _make_chat_cache_key(query_type: str, **kwargs) -> str:
     Build a cache key for chat endpoints.
 
     Combines query_type with arbitrary keyword arguments into a stable
-    SHA-256 hash (24-char hex). Data lists are fingerprinted using the
-    first 5 rows to keep hashing fast.
+    SHA-256 hash (24-char hex). Data lists use a complete, deterministic,
+    order-sensitive digest so a change after the first few rows cannot reuse
+    a stale analysis. Rows are hashed incrementally to avoid building a second
+    copy of the complete dataset in memory.
     """
     parts: Dict[str, Any] = {"t": query_type}
     for k, v in sorted(kwargs.items()):
         if k == "data" and isinstance(v, list):
-            # Fingerprint: first 5 rows only
-            parts[k] = v[:5]
+            digest = hashlib.sha256()
+            for row in v:
+                encoded = _json.dumps(
+                    row,
+                    sort_keys=True,
+                    ensure_ascii=False,
+                    default=str,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                digest.update(len(encoded).to_bytes(8, "big"))
+                digest.update(encoded)
+            parts[k] = {"rows": len(v), "sha256": digest.hexdigest()}
         else:
             parts[k] = v
     raw = _json.dumps(parts, sort_keys=True, ensure_ascii=False, default=str)
@@ -600,14 +612,21 @@ from cachetools import TTLCache  # noqa: E402
 _sheet_data_cache: TTLCache = TTLCache(maxsize=50, ttl=3600)
 
 
-def get_sheet_data(sheet_id: str) -> Optional[List[Dict[str, Any]]]:
-    """Get cached sheet data"""
-    return _sheet_data_cache.get(sheet_id)
+def get_sheet_data(
+    factory_id: str,
+    sheet_id: str,
+) -> Optional[List[Dict[str, Any]]]:
+    """Get cached sheet data from a tenant-scoped namespace."""
+    return _sheet_data_cache.get((factory_id, sheet_id))
 
 
-def cache_sheet_data(sheet_id: str, data: List[Dict[str, Any]]):
-    """Cache sheet data"""
-    _sheet_data_cache[sheet_id] = data
+def cache_sheet_data(
+    factory_id: str,
+    sheet_id: str,
+    data: List[Dict[str, Any]],
+) -> None:
+    """Cache sheet data without allowing cross-tenant key collisions."""
+    _sheet_data_cache[(factory_id, sheet_id)] = data
 
 
 def _require_trusted_factory_id(http_request: Request) -> str:
@@ -677,7 +696,10 @@ async def _require_owned_upload_id(
 # ============================================================================
 
 @router.post("/drill-down", response_model=DrillDownResponse)
-async def drill_down(request: DrillDownRequest) -> DrillDownResponse:
+async def drill_down(
+    request: DrillDownRequest,
+    http_request: Request,
+) -> DrillDownResponse:
     """
     Perform drill-down analysis on a dimension.
 
@@ -694,9 +716,13 @@ async def drill_down(request: DrillDownRequest) -> DrillDownResponse:
     """
     start_time = time.time()
 
+    trusted_factory_id = _require_trusted_factory_id(http_request)
+    await _require_owned_upload_id(request.sheet_id, trusted_factory_id)
+
     # Cache lookup
     cache_key = _make_chat_cache_key(
         "drill_down",
+        factory_id=trusted_factory_id,
         sheet_id=request.sheet_id,
         dimension=request.dimension,
         filter_value=request.filter_value,
@@ -715,7 +741,7 @@ async def drill_down(request: DrillDownRequest) -> DrillDownResponse:
         # Get data from request or cache
         data = request.data
         if not data:
-            data = get_sheet_data(request.sheet_id)
+            data = get_sheet_data(trusted_factory_id, request.sheet_id)
 
         if not data:
             return DrillDownResponse(
@@ -878,7 +904,10 @@ async def drill_down(request: DrillDownRequest) -> DrillDownResponse:
 
 
 @router.post("/benchmark", response_model=BenchmarkResponse)
-async def benchmark(request: BenchmarkRequest) -> BenchmarkResponse:
+async def benchmark(
+    request: BenchmarkRequest,
+    http_request: Request,
+) -> BenchmarkResponse:
     """
     Compare metrics with industry benchmarks.
 
@@ -895,9 +924,13 @@ async def benchmark(request: BenchmarkRequest) -> BenchmarkResponse:
     """
     start_time = time.time()
 
+    trusted_factory_id = _require_trusted_factory_id(http_request)
+    await _require_owned_upload_id(request.sheet_id, trusted_factory_id)
+
     # Cache lookup
     cache_key = _make_chat_cache_key(
         "benchmark",
+        factory_id=trusted_factory_id,
         sheet_id=request.sheet_id,
         industry=request.industry,
         metrics=request.metrics,
@@ -958,7 +991,10 @@ async def benchmark(request: BenchmarkRequest) -> BenchmarkResponse:
 
 
 @router.post("/root-cause", response_model=RootCauseResponse)
-async def root_cause(request: RootCauseRequest) -> RootCauseResponse:
+async def root_cause(
+    request: RootCauseRequest,
+    http_request: Request,
+) -> RootCauseResponse:
     """
     Analyze root causes for a KPI change.
 
@@ -975,9 +1011,13 @@ async def root_cause(request: RootCauseRequest) -> RootCauseResponse:
     """
     start_time = time.time()
 
+    trusted_factory_id = _require_trusted_factory_id(http_request)
+    await _require_owned_upload_id(request.sheet_id, trusted_factory_id)
+
     # Cache lookup
     cache_key = _make_chat_cache_key(
         "root_cause",
+        factory_id=trusted_factory_id,
         sheet_id=request.sheet_id,
         kpi=request.kpi,
         threshold=request.threshold,
@@ -992,7 +1032,7 @@ async def root_cause(request: RootCauseRequest) -> RootCauseResponse:
         # Get data
         data = request.data
         if not data:
-            data = get_sheet_data(request.sheet_id)
+            data = get_sheet_data(trusted_factory_id, request.sheet_id)
 
         if not data:
             return RootCauseResponse(
@@ -1272,7 +1312,7 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
         # provide their own context set allow_tenant_data_fallback=false.
         data = request.data
         if request.allow_tenant_data_fallback and not data and request.sheet_id:
-            data = get_sheet_data(request.sheet_id)
+            data = get_sheet_data(trusted_factory_id, request.sheet_id)
 
         if not data and request.allow_tenant_data_fallback:
             # Bug G fix (Apr 26 2026): fallback factory-scoped + largest non-empty upload.
@@ -2460,7 +2500,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # ── Data loading (same as general_analysis) ──
             data = request.data
             if request.allow_tenant_data_fallback and not data and request.sheet_id:
-                data = get_sheet_data(request.sheet_id)
+                data = get_sheet_data(trusted_factory_id, request.sheet_id)
 
             if not data and request.allow_tenant_data_fallback:
                 try:
@@ -2505,10 +2545,16 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 # So LLM knows which columns are measures/dimensions/times
                                 try:
                                     field_rows = await conn.fetch(
-                                        """SELECT original_name, standard_name, is_measure, is_dimension, is_time
-                                           FROM smart_bi_pg_field_definitions
-                                           WHERE upload_id = $1 ORDER BY display_order""",
-                                        upload_id
+                                        """SELECT fd.original_name, fd.standard_name,
+                                                  fd.is_measure, fd.is_dimension, fd.is_time
+                                           FROM smart_bi_pg_field_definitions fd
+                                           JOIN smart_bi_pg_excel_uploads u
+                                             ON u.id = fd.upload_id
+                                           WHERE fd.upload_id = $1
+                                             AND u.factory_id = $2
+                                           ORDER BY fd.display_order""",
+                                        upload_id,
+                                        trusted_factory_id,
                                     )
                                     field_meta = [dict(r) for r in field_rows]
                                     logger.info(f"[stream] Loaded {len(field_meta)} field defs for upload {upload_id}")
@@ -3783,6 +3829,9 @@ async def drill_down_stream(request: DrillDownRequest, http_request: Request):
     Skips InsightCache (streaming responses are not cached).
     """
 
+    trusted_factory_id = _require_trusted_factory_id(http_request)
+    await _require_owned_upload_id(request.sheet_id, trusted_factory_id)
+
     async def event_stream() -> AsyncGenerator[str, None]:
         start_time = time.time()
         # H4: v2 conv memory phase 0
@@ -3792,7 +3841,7 @@ async def drill_down_stream(request: DrillDownRequest, http_request: Request):
 
             data = request.data
             if not data:
-                data = get_sheet_data(request.sheet_id)
+                data = get_sheet_data(trusted_factory_id, request.sheet_id)
 
             if not data:
                 yield _sse_event("done", {
@@ -3905,6 +3954,9 @@ async def root_cause_stream(request: RootCauseRequest, http_request: Request):
     Skips InsightCache (streaming responses are not cached).
     """
 
+    trusted_factory_id = _require_trusted_factory_id(http_request)
+    await _require_owned_upload_id(request.sheet_id, trusted_factory_id)
+
     async def event_stream() -> AsyncGenerator[str, None]:
         start_time = time.time()
         # H4: v2 conv memory phase 0
@@ -3914,7 +3966,7 @@ async def root_cause_stream(request: RootCauseRequest, http_request: Request):
 
             data = request.data
             if not data:
-                data = get_sheet_data(request.sheet_id)
+                data = get_sheet_data(trusted_factory_id, request.sheet_id)
 
             if not data:
                 yield _sse_event("done", {
@@ -4033,6 +4085,9 @@ async def benchmark_stream(request: BenchmarkRequest, http_request: Request):
     Skips InsightCache (streaming responses are not cached).
     """
 
+    trusted_factory_id = _require_trusted_factory_id(http_request)
+    await _require_owned_upload_id(request.sheet_id, trusted_factory_id)
+
     async def event_stream() -> AsyncGenerator[str, None]:
         start_time = time.time()
         # H4: v2 conv memory phase 0
@@ -4131,6 +4186,9 @@ async def multi_dimension_analysis_stream(request: MultiDimensionRequest, http_r
 
     Skips InsightCache (streaming responses are not cached).
     """
+
+    trusted_factory_id = _require_trusted_factory_id(http_request)
+    await _require_owned_upload_id(request.sheet_id, trusted_factory_id)
 
     async def event_stream() -> AsyncGenerator[str, None]:
         start_time = time.time()
@@ -4381,7 +4439,8 @@ def _build_charts_for_query(query: str, df, data: list) -> List[Dict[str, Any]]:
 
 @router.post("/multi-dimension", response_model=MultiDimensionResponse)
 async def multi_dimension_analysis(
-    request: MultiDimensionRequest
+    request: MultiDimensionRequest,
+    http_request: Request,
 ) -> MultiDimensionResponse:
     """
     Perform multi-dimensional insight analysis.
@@ -4400,9 +4459,13 @@ async def multi_dimension_analysis(
     """
     start_time = time.time()
 
+    trusted_factory_id = _require_trusted_factory_id(http_request)
+    await _require_owned_upload_id(request.sheet_id, trusted_factory_id)
+
     # Cache lookup
     cache_key = _make_chat_cache_key(
         "multi_dimension",
+        factory_id=trusted_factory_id,
         sheet_id=request.sheet_id,
         dimensions=request.dimensions,
         data=request.data,
