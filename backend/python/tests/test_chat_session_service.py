@@ -7,6 +7,8 @@ they skip cleanly otherwise.
 from __future__ import annotations
 
 import uuid
+from contextlib import AbstractAsyncContextManager
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -162,10 +164,113 @@ def test_build_context_block_returns_empty_when_missing_fields():
     assert build_context_block({"parent_query": "", "parent_answer_summary": "a"}) == ""
 
 
+# ---------- Identity + SQL contract tests (pure fake pool, no DB) ----------
+
+class _FakeAcquire(AbstractAsyncContextManager):
+    def __init__(self, conn):
+        self.conn = conn
+
+    async def __aenter__(self):
+        return self.conn
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+
+class _IdentityContractConn:
+    def __init__(self):
+        self.rows: dict[tuple[str, int, str], dict[str, Any]] = {}
+        self.fetchrow_calls: list[tuple[str, tuple[Any, ...]]] = []
+        self.execute_calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    async def fetchrow(self, sql: str, *args):
+        self.fetchrow_calls.append((sql, args))
+        factory_id, user_id, session_id = args
+        return self.rows.get((factory_id, user_id, session_id))
+
+    async def execute(self, sql: str, *args):
+        self.execute_calls.append((sql, args))
+        if "INSERT INTO smart_bi_chat_session" in sql:
+            session_id, factory_id, user_id = args[:3]
+            self.rows[(factory_id, user_id, session_id)] = {
+                "parent_query": args[3],
+                "parent_answer_summary": args[4],
+                "parent_template_code": args[5],
+                "parent_upload_id": args[6],
+                "turn_count": 1,
+                "turns_history": args[7],
+            }
+        return "UPDATE 0"
+
+
+class _IdentityContractPool:
+    def __init__(self):
+        self.conn = _IdentityContractConn()
+
+    def acquire(self):
+        return _FakeAcquire(self.conn)
+
+
+@pytest.mark.asyncio
+async def test_same_factory_users_can_reuse_sid_without_cross_user_disclosure():
+    pool = _IdentityContractPool()
+    svc = ChatSessionService(pool)
+
+    await svc.upsert("same-sid", "FACTORY_A", "u1 q", "u1 a", user_id=101)
+    await svc.upsert("same-sid", "FACTORY_A", "u2 q", "u2 a", user_id=202)
+
+    user1 = await svc.lookup("same-sid", "FACTORY_A", user_id=101)
+    user2 = await svc.lookup("same-sid", "FACTORY_A", user_id=202)
+    missing_user = await svc.lookup("same-sid", "FACTORY_A", user_id=303)
+
+    assert user1 and user1["parent_query"] == "u1 q"
+    assert user2 and user2["parent_query"] == "u2 q"
+    assert missing_user is None
+    assert len(pool.conn.rows) == 2
+
+
+@pytest.mark.asyncio
+async def test_missing_or_invalid_user_never_executes_session_sql():
+    pool = _IdentityContractPool()
+    svc = ChatSessionService(pool)
+
+    assert await svc.lookup("sid", "FACTORY_A", user_id=None) is None
+    assert await svc.lookup("sid", "FACTORY_A", user_id=0) is None
+    assert await svc.lookup("sid", "FACTORY_A", user_id=True) is None
+    await svc.upsert("sid", "FACTORY_A", "q", "a", user_id=None)
+    await svc.upsert("sid", "FACTORY_A", "q", "a", user_id=-1)
+
+    assert pool.conn.fetchrow_calls == []
+    assert pool.conn.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_session_sql_uses_exact_identity_conflict_and_prune_predicates():
+    pool = _IdentityContractPool()
+    svc = ChatSessionService(pool)
+
+    await svc.upsert("sid", "FACTORY_A", "q", "a", user_id=77)
+    await svc.lookup("sid", "FACTORY_A", user_id=77)
+
+    insert_sql, insert_args = pool.conn.execute_calls[0]
+    prune_sql, prune_args = pool.conn.execute_calls[1]
+    lookup_sql, lookup_args = pool.conn.fetchrow_calls[0]
+    normalize = lambda sql: " ".join(sql.split())
+
+    assert "ON CONFLICT (factory_id, user_id, session_id)" in normalize(insert_sql)
+    assert insert_args[:3] == ("sid", "FACTORY_A", 77)
+    assert "WHERE factory_id = $1 AND user_id = $2 AND session_id = $3" in normalize(prune_sql)
+    assert prune_args == ("FACTORY_A", 77, "sid")
+    assert "WHERE factory_id = $1 AND user_id = $2 AND session_id = $3" in normalize(lookup_sql)
+    assert lookup_args == ("FACTORY_A", 77, "sid")
+    assert "user_id IS NULL" not in lookup_sql
+
+
 # ---------- DB-backed tests (skipped without Postgres) ----------
 
 _TENANT_A = "TEST_CHATSESSION_A"
 _TENANT_B = "TEST_CHATSESSION_B"
+_USER_A = 91001
 
 
 @pytest_asyncio.fixture
@@ -175,9 +280,12 @@ async def pool():
     settings = get_settings()
     if not settings.postgres_url:
         pytest.skip("No Postgres configured")
-    p = await asyncpg.create_pool(
-        settings.postgres_url, min_size=1, max_size=2,
-    )
+    try:
+        p = await asyncpg.create_pool(
+            settings.postgres_url, min_size=1, max_size=2,
+        )
+    except Exception as exc:
+        pytest.skip(f"Postgres unavailable for optional DB test: {type(exc).__name__}")
     try:
         # Ensure table exists for first-run test envs.
         async with p.acquire() as conn:
@@ -188,6 +296,29 @@ async def pool():
                 pytest.skip(
                     "smart_bi_chat_session table not created — "
                     "apply V20260426_02__chat_session.sql first"
+                )
+            identity_constraint = await conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint c
+                    JOIN pg_attribute f
+                      ON f.attrelid = c.conrelid AND f.attname = 'factory_id'
+                    JOIN pg_attribute u
+                      ON u.attrelid = c.conrelid AND u.attname = 'user_id'
+                    JOIN pg_attribute s
+                      ON s.attrelid = c.conrelid AND s.attname = 'session_id'
+                    WHERE c.conrelid = 'smart_bi_chat_session'::regclass
+                      AND c.contype = 'u'
+                      AND c.conkey @> ARRAY[f.attnum, u.attnum, s.attnum]::smallint[]
+                      AND c.conkey <@ ARRAY[f.attnum, u.attnum, s.attnum]::smallint[]
+                )
+                """
+            )
+            if not identity_constraint:
+                pytest.skip(
+                    "chat session identity migration not applied — "
+                    "apply V20261028_02__chat_session_user_identity.sql first"
                 )
         yield p
     finally:
@@ -206,7 +337,7 @@ async def _reset(pool, *tenants):
 async def test_lookup_miss_returns_none(pool):
     await _reset(pool, _TENANT_A)
     svc = ChatSessionService(pool)
-    out = await svc.lookup(str(uuid.uuid4()), _TENANT_A)
+    out = await svc.lookup(str(uuid.uuid4()), _TENANT_A, user_id=_USER_A)
     assert out is None
 
 
@@ -222,8 +353,9 @@ async def test_upsert_then_lookup_round_trip(pool):
         parent_answer_summary="总额 1500 万",
         parent_template_code="revenue_summary",
         parent_upload_id=4189,
+        user_id=_USER_A,
     )
-    got = await svc.lookup(sid, _TENANT_A)
+    got = await svc.lookup(sid, _TENANT_A, user_id=_USER_A)
     assert got is not None
     assert got["parent_query"] == "本月营业额"
     assert got["parent_answer_summary"] == "总额 1500 万"
@@ -237,9 +369,9 @@ async def test_upsert_same_session_increments_turn_and_refreshes(pool):
     await _reset(pool, _TENANT_A)
     svc = ChatSessionService(pool)
     sid = str(uuid.uuid4())
-    await svc.upsert(sid, _TENANT_A, "q1", "a1")
-    await svc.upsert(sid, _TENANT_A, "q2", "a2")
-    got = await svc.lookup(sid, _TENANT_A)
+    await svc.upsert(sid, _TENANT_A, "q1", "a1", user_id=_USER_A)
+    await svc.upsert(sid, _TENANT_A, "q2", "a2", user_id=_USER_A)
+    got = await svc.lookup(sid, _TENANT_A, user_id=_USER_A)
     assert got["turn_count"] == 2
     assert got["parent_query"] == "q2"
     assert got["parent_answer_summary"] == "a2"
@@ -250,11 +382,13 @@ async def test_lookup_factory_mismatch_returns_none(pool):
     await _reset(pool, _TENANT_A, _TENANT_B)
     svc = ChatSessionService(pool)
     sid = str(uuid.uuid4())
-    await svc.upsert(sid, _TENANT_A, "tenant A query", "tenant A answer")
+    await svc.upsert(
+        sid, _TENANT_A, "tenant A query", "tenant A answer", user_id=_USER_A,
+    )
     # Cross-tenant lookup must NOT leak.
-    cross = await svc.lookup(sid, _TENANT_B)
+    cross = await svc.lookup(sid, _TENANT_B, user_id=_USER_A)
     assert cross is None
-    same = await svc.lookup(sid, _TENANT_A)
+    same = await svc.lookup(sid, _TENANT_A, user_id=_USER_A)
     assert same is not None
 
 
@@ -264,8 +398,8 @@ async def test_prune_deletes_expired_only(pool):
     svc = ChatSessionService(pool)
     sid_live = str(uuid.uuid4())
     sid_dead = str(uuid.uuid4())
-    await svc.upsert(sid_live, _TENANT_A, "live q", "live a")
-    await svc.upsert(sid_dead, _TENANT_A, "dead q", "dead a")
+    await svc.upsert(sid_live, _TENANT_A, "live q", "live a", user_id=_USER_A)
+    await svc.upsert(sid_dead, _TENANT_A, "dead q", "dead a", user_id=_USER_A)
     # Force one to expire.
     async with pool.acquire() as conn:
         await conn.execute(
@@ -275,8 +409,8 @@ async def test_prune_deletes_expired_only(pool):
         )
     deleted = await svc.prune_expired()
     assert deleted >= 1
-    assert await svc.lookup(sid_live, _TENANT_A) is not None
-    assert await svc.lookup(sid_dead, _TENANT_A) is None
+    assert await svc.lookup(sid_live, _TENANT_A, user_id=_USER_A) is not None
+    assert await svc.lookup(sid_dead, _TENANT_A, user_id=_USER_A) is None
 
 
 @pytest.mark.asyncio
@@ -285,7 +419,7 @@ async def test_upsert_truncates_long_summary(pool):
     svc = ChatSessionService(pool)
     sid = str(uuid.uuid4())
     long_text = "ABC" * (SUMMARY_CHAR_BUDGET * 2)
-    await svc.upsert(sid, _TENANT_A, "q", long_text)
-    got = await svc.lookup(sid, _TENANT_A)
+    await svc.upsert(sid, _TENANT_A, "q", long_text, user_id=_USER_A)
+    got = await svc.lookup(sid, _TENANT_A, user_id=_USER_A)
     assert got is not None
     assert len(got["parent_answer_summary"]) <= SUMMARY_CHAR_BUDGET + 20
