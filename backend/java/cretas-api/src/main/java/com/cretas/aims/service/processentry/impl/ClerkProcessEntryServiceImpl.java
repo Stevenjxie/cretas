@@ -278,10 +278,11 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         //    ⛔ 不访问任何 in-memory map —— edges 是唯一上游输入.
         for (ResolvedEdge e : edges) {
             MaterialBatch src = e.getSourceBatch();
-            if (src.getUnitPrice() == null) {
+            BigDecimal resolvedUnitPrice = edgeUnitPrice(e);
+            if (resolvedUnitPrice == null) {
                 anyUncosted = true;  // 未计价源: edgeCost 仍写 0 (consumption 行), 但 ROLL-UP 诚实 null
             }
-            BigDecimal unitPrice = nz(src.getUnitPrice());
+            BigDecimal unitPrice = nz(resolvedUnitPrice);
             BigDecimal qty = nz(e.getFeedQuantityKg());
             BigDecimal edgeCost = unitPrice.multiply(qty).setScale(2, RoundingMode.HALF_UP);
             writeConsumption(ctx.getFactoryId(), ctx.getPlanId(), batch.getId(),
@@ -399,10 +400,11 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         //    与 materializeBatch 同算式 (setScale(2,HALF_UP)), 写入 existingBatchId.
         for (ResolvedEdge e : edges) {
             MaterialBatch src = e.getSourceBatch();
-            if (src.getUnitPrice() == null) {
+            BigDecimal resolvedUnitPrice = edgeUnitPrice(e);
+            if (resolvedUnitPrice == null) {
                 anyUncosted = true;  // 未计价源: edgeCost 仍写 0, 但 ROLL-UP 诚实 null
             }
-            BigDecimal unitPrice = nz(src.getUnitPrice());
+            BigDecimal unitPrice = nz(resolvedUnitPrice);
             BigDecimal qty = nz(e.getFeedQuantityKg());
             BigDecimal edgeCost = unitPrice.multiply(qty).setScale(2, RoundingMode.HALF_UP);
             writeConsumption(ctx.getFactoryId(), ctx.getPlanId(), existingBatchId,
@@ -1320,6 +1322,12 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             if (value != null && !value.isBlank()) return value.trim();
         }
         return null;
+    }
+
+    private static BigDecimal edgeUnitPrice(ResolvedEdge edge) {
+        return edge.getResolvedUnitPrice() != null
+                ? edge.getResolvedUnitPrice()
+                : edge.getSourceBatch().getUnitPrice();
     }
 
     private static BigDecimal nz(BigDecimal v) {

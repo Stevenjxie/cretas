@@ -2215,7 +2215,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             BigDecimal input = req.getInputQuantity();
             if (input != null && input.compareTo(BigDecimal.ZERO) > 0) {
                 firstInputByProductType.put(productTypeId, input);
-                firstUnitByProductType.put(productTypeId, req.getUnit());
+                firstUnitByProductType.put(productTypeId, requestInputUnit(req));
                 gramsPerUnitByProductType.put(productTypeId, productTypeRepo.findById(productTypeId)
                         .map(pt -> pt.getGramsPerUnit())
                         .orElse(null));
@@ -2248,18 +2248,23 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     ? "COMPLETED"
                     : (remaining.signum() <= 0 ? "DEPLETED" : "ACTIVE");
 
+            String productTypeId = req.getProductTypeId();
+            BigDecimal gramsPerUnit = productTypeId == null ? null : gramsPerUnitByProductType.get(productTypeId);
             BigDecimal input = req.getInputQuantity();
             BigDecimal stepYieldRate = null;
             if (input != null && input.compareTo(BigDecimal.ZERO) > 0) {
-                stepYieldRate = produced
-                        .multiply(BigDecimal.valueOf(100))
-                        .divide(input, YIELD_SCALE, RoundingMode.HALF_UP);
+                BigDecimal comparableOutput = convertProcessSheetOutputToUnit(
+                        req, produced, firstNonBlank(req.getOutputUnit(), req.getUnit()),
+                        requestInputUnit(req), gramsPerUnit);
+                if (comparableOutput != null) {
+                    stepYieldRate = comparableOutput
+                            .multiply(BigDecimal.valueOf(100))
+                            .divide(input, YIELD_SCALE, RoundingMode.HALF_UP);
+                }
             }
 
-            String productTypeId = req.getProductTypeId();
             BigDecimal firstInput = productTypeId == null ? null : firstInputByProductType.get(productTypeId);
             String firstUnit = productTypeId == null ? null : firstUnitByProductType.get(productTypeId);
-            BigDecimal gramsPerUnit = productTypeId == null ? null : gramsPerUnitByProductType.get(productTypeId);
             String unit = req.getUnit() != null
                     ? req.getUnit()
                     : (wip != null ? wip.getQuantityUnit() : (productionBatch == null ? null : productionBatch.getUnit()));
@@ -2281,13 +2286,21 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     : firstInput;
             ProcessSheetRowProvenance rowProvenance = resolveSheetRowProvenance(
                     req, rawEquivalentInput, provenanceByBatchNumber);
+            if (rowProvenance.inheritedCost != null
+                    && (rowTotalCost == null || rowTotalCost.compareTo(rowProvenance.inheritedCost) < 0)) {
+                rowTotalCost = rowProvenance.inheritedCost.setScale(2, RoundingMode.HALF_UP);
+            }
+            if (rowTotalCost != null && produced.compareTo(BigDecimal.ZERO) > 0) {
+                unitPrice = rowTotalCost.divide(produced, 4, RoundingMode.HALF_UP);
+            }
 
             BigDecimal cumulativeDenominator = firstPositiveOrNull(
                     rowProvenance.inheritedRawEquivalentQuantity,
                     hasUpstreamSources(req) ? null : firstInput);
             BigDecimal cumulativeYieldRate = null;
             if (cumulativeDenominator != null && cumulativeDenominator.compareTo(BigDecimal.ZERO) > 0) {
-                BigDecimal producedConverted = convertToFirstStepUnit(produced, unit, firstUnit, gramsPerUnit);
+                BigDecimal producedConverted = convertProcessSheetOutputToUnit(
+                        req, produced, unit, firstUnit, gramsPerUnit);
                 if (producedConverted != null) {
                     cumulativeYieldRate = producedConverted
                             .multiply(BigDecimal.valueOf(100))
@@ -2295,7 +2308,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 }
             }
             BigDecimal addedCost = rowTotalCost != null && rowProvenance.inheritedCost != null
-                    ? rowTotalCost.subtract(rowProvenance.inheritedCost)
+                    ? rowTotalCost.subtract(rowProvenance.inheritedCost).max(BigDecimal.ZERO)
                     : null;
 
             result.add(ProcessSheetInventoryItem.builder()
@@ -2662,6 +2675,28 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 .divide(BigDecimal.valueOf(1000), YIELD_SCALE, RoundingMode.HALF_UP);
     }
 
+    private BigDecimal convertProcessSheetOutputToUnit(
+            ProcessSheetRowRequest request,
+            BigDecimal produced,
+            String currentUnit,
+            String targetUnit,
+            BigDecimal gramsPerUnit) {
+        BigDecimal productWeightKg = request == null ? null : request.getProductWeight();
+        if (productWeightKg != null && productWeightKg.compareTo(BigDecimal.ZERO) > 0 && targetUnit != null) {
+            String normalizedTarget = targetUnit.trim().toLowerCase(java.util.Locale.ROOT);
+            if ("kg".equals(normalizedTarget) || "千克".equals(normalizedTarget) || "公斤".equals(normalizedTarget)) {
+                return productWeightKg;
+            }
+            if ("g".equals(normalizedTarget) || "克".equals(normalizedTarget)) {
+                return productWeightKg.multiply(BigDecimal.valueOf(1000));
+            }
+            if ("mg".equals(normalizedTarget) || "毫克".equals(normalizedTarget)) {
+                return productWeightKg.multiply(BigDecimal.valueOf(1_000_000));
+            }
+        }
+        return convertToFirstStepUnit(produced, currentUnit, targetUnit, gramsPerUnit);
+    }
+
     // ─────────────────────────────────────────────────────────────
     // 已保存行列表读取 (Task 2.2)
     // ─────────────────────────────────────────────────────────────
@@ -2933,7 +2968,15 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 }
                 BigDecimal storageQuantity = convertReportingQuantityToStorage(
                         nz(ur.getFeedQuantityKg()), requestInputUnit(req), srcMb.getQuantityUnit(), "上游批次");
-                edges.add(new ResolvedEdge(srcMb, storageQuantity, "SEMI_FINISHED"));
+                BigDecimal resolvedUnitPrice = srcMb.getUnitPrice();
+                if (resolvedUnitPrice == null
+                        && pb.getTotalCost() != null && pb.getTotalCost().compareTo(BigDecimal.ZERO) > 0
+                        && srcMb.getReceiptQuantity() != null
+                        && srcMb.getReceiptQuantity().compareTo(BigDecimal.ZERO) > 0) {
+                    resolvedUnitPrice = pb.getTotalCost()
+                            .divide(srcMb.getReceiptQuantity(), 4, RoundingMode.HALF_UP);
+                }
+                edges.add(new ResolvedEdge(srcMb, storageQuantity, "SEMI_FINISHED", resolvedUnitPrice));
             }
         }
 
