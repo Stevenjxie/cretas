@@ -6,16 +6,11 @@
 
 ## 在飞任务
 
-- `CR-REDUNDANCY-WO-01-20260719` — `in-progress`
-  - Base SHA: `fe0c732bcf2d1d9d1b07bb755f9272e1fcc1e6af`
-  - Owner: Codex `/root`
-  - Scope: `backend/java/cretas-api/src/main/java/com/cretas/aims/{entity/WorkOrder.java,repository/WorkOrderRepository.java,controller/WorkOrderController.java,service/WorkOrderService.java,service/impl/WorkOrderServiceImpl.java,ai/tool/impl/crm/Order*Tool.java,ai/tool/impl/report/ReportTaskAssignWorkerTool.java,ai/tool/impl/system/TodoListTool.java}`、`backend/java/cretas-api/src/main/resources/{ai/tool/gateway/tool-descriptors.yaml,db/flyway/V20261028_84__drop_legacy_work_orders.sql}`、相关 JPA/Tool 测试、`docs/dispatch/**`
-  - 验收命令: `mvn -q "-Dtest=LegacyWorkOrderRemovalRepositoryQueryValidationTest,OrderListToolTest,OrderQueryToolTest,OrderTodayToolTest,OrderDeleteToolTest,ToolDescriptorInventoryDriftTest,ApprovedToolSourceMetadataTest" test`
-  - 下一动作: 将仍在用的订单查询/取消意图改接 `sales_orders`，删除无消费者的旧写 Tool、旧 `/work-orders` 全链路及空表迁移，完成真实 JPA Context 门禁后提交 PR。
+- 无。
 
 ## Scope 锁地图
 
-- `CR-REDUNDANCY-WO-01-20260719` 锁定上述 WO-01 文件；不触碰打印类 `production-work-order`、WF-01、SCH-01、主工作区未提交内容和生产部署。
+- 无。
 
 ## 阻塞项
 

@@ -246,3 +246,18 @@
 - CI 基线噪声：同一 full-audit 的 Python flake8、Vue build 与 RN tests 在未改动 scope 失败（Vue/RN 为 exit 134）；与本 PR 的 Java AI intent diff 无文件交集，单独治理。
 - 状态边界：代码已合并；无 Flyway/数据库结构变更，无生产数据删除，未部署生产。
 - Scope 锁：已释放。
+
+### `CR-REDUNDANCY-WO-01-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- Base SHA：`fe0c732bcf2d1d9d1b07bb755f9272e1fcc1e6af`
+- PR：[#1501](https://github.com/Stevenjxie/cretas/pull/1501)
+- `main` squash merge commit：`44a241142958bae8db4b787dc2b8fea0c17585a6`
+- 生产只读证据：`work_orders=0`、`sales_orders=490`、`purchase_orders=256`、`work_process_tasks=55`；旧表无外部 FK、无 View，仅有主键和表内更新时间触发器；无前端 `/work-orders` 调用方。
+- 范围：订单列表、状态、取消与今日订单 AI Tool 改接 `sales_orders`；删除无生产绑定的旧创建/更新/统计/派工/待办 Tool，以及旧 `/work-orders` Controller、Entity、Repository、Service；Flyway 将 `ORDER_TODAY` 重绑到 canonical Tool，冻结环境本地旧绑定并以非 `CASCADE` 方式删除 `work_orders`。
+- 保留边界：打印域 `production-work-order` 使用生产计划语义，未修改；采购订单和工序任务继续各自使用 `purchase_orders`、`work_process_tasks`。
+- 验收：本地真实 JPA Context 1/1、canonical order Tool 4/4、descriptor/metadata 8/8 通过；CI run `29684016698` 的 PostgreSQL `JPA repository query startup gate` 通过。
+- CI 基线噪声：同一 full-audit 的 Python flake8、Vue build 与 RN tests 在未改动 scope 失败（Vue/RN 为 exit 134），单独治理。
+- 状态边界：代码与删除迁移已合并；生产迁移未执行，生产未部署，线上 `work_orders` 尚未删除。
+- Scope 锁：已释放。
