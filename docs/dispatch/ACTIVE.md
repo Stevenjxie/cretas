@@ -6,16 +6,11 @@
 
 ## 在飞任务
 
-- `CR-AI-DESCRIPTOR-BASELINE-01-20260719` — `review`
-  - Base SHA: `a2c3ca12fdfe34e227ce19a4c165b46e0107439e`
-  - Owner: Codex `/root`
-  - Scope: `backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/gateway/descriptor/ToolDescriptorCatalogTest.java`、`docs/dispatch/**`
-  - 验收命令: `mvn -q "-Dtest=ToolDescriptorCatalogTest,ToolDescriptorInventoryDriftTest,ApprovedToolSourceMetadataTest" test`
-  - 下一动作: 13 项目标测试与独立只读终审通过；提交 PR 并解除 exact-main 发布构建阻塞。
+- 无。
 
 ## Scope 锁地图
 
-- `CR-AI-DESCRIPTOR-BASELINE-01-20260719` 锁定上述 descriptor Catalog 测试与 dispatch 台账；不修改 inventory、runtime policy、Tool 实现或生产迁移。
+- 无。
 
 ## 阻塞项
 

@@ -273,3 +273,15 @@
 - 验收：Demo 拦截器、Controller 与 Service 共 25 项目标测试通过；覆盖错误 HTTP 方法、非法 UUID、额外路径后缀、未列出的 `/retry` 与普通 ERP 写入继续返回 403；独立只读安全审查无 P0/P1/P2。
 - 状态边界：代码已合并；尚未随最新 exact-main Java 制品部署生产，Restaurant Agent runtime 仍保持 `OFF`。
 - Scope 锁：已释放。
+
+### `CR-AI-DESCRIPTOR-BASELINE-01-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- Base SHA：`a2c3ca12fdfe34e227ce19a4c165b46e0107439e`
+- PR：[#1505](https://github.com/Stevenjxie/cretas/pull/1505)
+- `main` squash merge commit：`fb179ae48e63dfa8a0a15db9a42671f53337c9c1`
+- 范围：同步 PR #1501 删除 5 个 legacy Tool、增加 1 个 explicit `order_today` 后的 descriptor Catalog 精确统计基线；未修改 inventory、runtime policy 或 Tool 实现。
+- 验收：Catalog、source/inventory drift 与 approved metadata 共 13 项通过；独立只读终审严格复核 total、legacy、actionType、riskLevel 与 governanceStatus 差分，无 P0-P3。
+- 状态边界：发布阻塞测试已修复并合并；尚未重做最新 exact-main 可信 Java 发布构建，生产未因本任务发生变化。
+- Scope 锁：已释放。
