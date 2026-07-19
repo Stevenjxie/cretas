@@ -16,13 +16,14 @@
   - 下一动作：PR 合并后单独部署，并验证旧表为 0、正式销售发货数据不变。
 
 - `CRETAS-WORKFLOW-TOPOLOGY-LABELS-20260719`
-  - 状态：`in-progress`
+  - 状态：`review`
   - Owner：Codex (`/root`)
   - Base SHA：`ca31c937fb3fadc20a1a1140822d96726649558a`
   - Scope：Workflow 拓扑只读分类/解析 DTO、对应后端单测；Web 生产计划 Workflow 解析类型、标签 helper 与对应 Vitest；本台账/归档。
   - 目标：在不修改数据库枚举、Workflow 持久化或历史数据的前提下，通过后端派生的逻辑投入数量，准确区分 1→1、多→1、1→多和多→多；可替代原料组继续按一个逻辑投入计算。
   - 验收命令：后端 `WorkflowTopologyClassifierTest,ProductWorkflowUnifiedResolutionTest`；Web `productionPlanWorkflowResolution.spec.ts`；`release-web-manifest.sh build`；`git diff --check`。
-  - 下一动作：实现只读 `logicalRootInputCount` 契约与四类中文标签，目标测试和 Web 构建通过后提交 review。
+  - 结果：新增只读 `logicalRootInputCount`，复用 EXACTLY_ONE 替代组折叠逻辑；生产计划候选标签明确显示 1→1、多→1、1→多、多→多，旧接口缺字段时 fail-safe 显示“投入关系待确认”。Web Vitest 11/11 通过；唯一 Maven release lifecycle 15/15 tests 通过并生成可信 JAR manifest；唯一 Web release build 成功并生成不可变 archive/manifest。
+  - 下一动作：推送 PR；合并后从 exact `origin/main` 校验并复用两个可信制品，分别部署后端与 Web，再对 F006 既有多→1 Workflow 做生产只读 UI 验收。
 
 ## Scope 锁地图
 
