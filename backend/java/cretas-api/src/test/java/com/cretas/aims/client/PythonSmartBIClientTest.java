@@ -1,6 +1,9 @@
 package com.cretas.aims.client;
 
 import com.cretas.aims.config.smartbi.PythonSmartBIConfig;
+import com.cretas.aims.dto.python.PythonGeneralAnalysisRequest;
+import com.cretas.aims.dto.python.PythonGeneralAnalysisResponse;
+import com.cretas.aims.dto.python.PythonServiceHealthResponse;
 import com.cretas.aims.dto.smartbi.PythonForecastResponse;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -35,7 +38,7 @@ class PythonSmartBIClientTest {
         // MockWebServer URL without trailing slash
         config.setUrl(server.url("").toString().replaceAll("/$", ""));
         config.setForecastEndpoint("/api/forecast/predict");
-        config.setMaxRetries(0);
+        config.setMaxRetries(3);
         config.setTimeout(5000);
         config.setConnectTimeout(5000);
 
@@ -142,5 +145,103 @@ class PythonSmartBIClientTest {
         assertEquals("test-internal-secret", poll.getHeader("X-Internal-Secret"));
         assertEquals("/api/smartbi/excel/auto-parse-status/73", poll.getPath());
         assertTrue(upload.getBody().readUtf8().contains("REST-ASYNC"));
+    }
+
+    @Test
+    void analyzeGeneralUsesExactRouteTrustedHeadersAndIdentityFreeBody() throws Exception {
+        server.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"success\":true,\"answer\":\"typed answer\","
+                        + "\"sessionId\":\"session-1\",\"messageCount\":2}"));
+
+        PythonGeneralAnalysisResponse response = client.analyzeGeneral(
+                "FACTORY-1",
+                "73",
+                PythonGeneralAnalysisRequest.builder()
+                        .message("analyze cost")
+                        .sessionId("session-1")
+                        .enableThinking(true)
+                        .thinkingBudget(50)
+                        .allowTenantDataFallback(false)
+                        .build());
+
+        assertEquals("typed answer", response.getEffectiveAnalysis());
+        RecordedRequest request = server.takeRequest();
+        assertEquals("POST", request.getMethod());
+        assertEquals("/api/chat/general-analysis", request.getPath());
+        assertEquals("FACTORY-1", request.getHeader("X-Factory-Id"));
+        assertEquals("73", request.getHeader("X-User-Id"));
+        assertEquals("test-internal-secret", request.getHeader("X-Internal-Secret"));
+
+        JsonNode body = mapper.readTree(request.getBody().readUtf8());
+        assertEquals("analyze cost", body.get("message").asText());
+        assertEquals("session-1", body.get("session_id").asText());
+        assertFalse(body.get("allow_tenant_data_fallback").asBoolean());
+        assertFalse(body.has("factoryId"));
+        assertFalse(body.has("factory_id"));
+        assertFalse(body.has("userId"));
+        assertFalse(body.has("user_id"));
+    }
+
+    @Test
+    void analyzeGeneralOmitsOptionalUserHeaderAndNeverRetriesPost() throws Exception {
+        server.enqueue(new MockResponse()
+                .setResponseCode(503)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"detail\":\"http://internal-service/secret\"}"));
+
+        Exception failure = assertThrows(Exception.class, () -> client.analyzeGeneral(
+                "FACTORY-2",
+                null,
+                PythonGeneralAnalysisRequest.builder()
+                        .message("question")
+                        .allowTenantDataFallback(false)
+                        .build()));
+
+        assertEquals(1, server.getRequestCount());
+        RecordedRequest request = server.takeRequest();
+        assertNull(request.getHeader("X-User-Id"));
+        assertFalse(failure.getMessage().contains("internal-service"));
+        assertFalse(failure.getMessage().contains(server.getHostName()));
+    }
+
+    @Test
+    void analyzeGeneralRejectsSuccessfulButEmptyAnalysis() {
+        server.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"success\":true,\"answer\":\"  \",\"aiAnalysis\":null}"));
+
+        Exception failure = assertThrows(Exception.class, () -> client.analyzeGeneral(
+                "FACTORY-3",
+                "81",
+                PythonGeneralAnalysisRequest.builder()
+                        .message("question")
+                        .allowTenantDataFallback(false)
+                        .build()));
+
+        assertEquals("Python SmartBI general analysis is unavailable", failure.getMessage());
+        assertEquals(1, server.getRequestCount());
+    }
+
+    @Test
+    void healthOnlyAcceptsTypedHealthyStatus() throws Exception {
+        server.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"status\":\"degraded\",\"service\":\"python-services\"}"));
+        server.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"status\":\"healthy\",\"service\":\"python-services\"}"));
+
+        PythonServiceHealthResponse degraded = client.health();
+        PythonServiceHealthResponse healthy = client.health();
+
+        assertFalse(degraded.isHealthy());
+        assertTrue(healthy.isHealthy());
+        assertEquals("/health", server.takeRequest().getPath());
+        assertEquals("/health", server.takeRequest().getPath());
     }
 }

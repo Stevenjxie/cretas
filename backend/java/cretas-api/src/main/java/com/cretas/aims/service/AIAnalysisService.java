@@ -2,10 +2,13 @@ package com.cretas.aims.service;
 
 import com.cretas.aims.ai.client.PythonLLMClient;
 import com.cretas.aims.ai.dto.ChatCompletionResponse;
+import com.cretas.aims.client.PythonSmartBIClient;
 import com.cretas.aims.config.DashScopeConfig;
 import com.cretas.aims.dto.AIResponseDTO;
 import com.cretas.aims.dto.ai.CostAIContext;
 import com.cretas.aims.dto.ai.ProductionAIContext;
+import com.cretas.aims.dto.python.PythonGeneralAnalysisRequest;
+import com.cretas.aims.dto.python.PythonGeneralAnalysisResponse;
 import com.cretas.aims.entity.TimeClockRecord;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.EmployeeWorkSession;
@@ -16,17 +19,11 @@ import com.cretas.aims.repository.BatchWorkSessionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
-import org.springframework.http.*;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
 
 import com.cretas.aims.entity.BatchWorkSession;
 import com.cretas.aims.repository.QualityInspectionRepository;
-import jakarta.annotation.PostConstruct;
-
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
@@ -45,17 +42,6 @@ import java.util.*;
 @Service
 public class AIAnalysisService {
     private static final Logger log = LoggerFactory.getLogger(AIAnalysisService.class);
-
-    @Value("${cretas.ai.service.url:http://localhost:8083}")
-    private String aiServiceUrl;
-
-    @Value("${cretas.ai.service.timeout:120000}")  // 120秒超时，支持思考模式
-    private int timeout;
-
-    @Value("${cretas.ai.service.connect-timeout:10000}")  // 10秒连接超时
-    private int connectTimeout;
-
-    private RestTemplate restTemplate;
 
     @Autowired
     private UserRepository userRepository;
@@ -78,21 +64,12 @@ public class AIAnalysisService {
     @Autowired
     private DashScopeConfig dashScopeConfig;
 
+    @Autowired
+    private PythonSmartBIClient pythonSmartBIClient;
+
     @Lazy
     @Autowired(required = false)
     private AIContextService aiContextService;
-
-    public AIAnalysisService() {
-        // 使用默认超时初始化（120秒读取超时，支持思考模式AI分析）
-        this.restTemplate = createRestTemplate(10000, 120000);
-    }
-
-    @PostConstruct
-    public void init() {
-        // @Value 注入后重新配置超时
-        this.restTemplate = createRestTemplate(connectTimeout, timeout);
-        log.info("AI服务RestTemplate已配置: 连接超时={}ms, 读取超时={}ms", connectTimeout, timeout);
-    }
 
     /**
      * 判断是否使用 DashScope 直接调用
@@ -101,25 +78,6 @@ public class AIAnalysisService {
         return dashScopeConfig != null
                 && dashScopeConfig.isAvailable()
                 && dashScopeConfig.getMigration().isCostAnalysis();
-    }
-
-    private RestTemplate createRestTemplate(int connectTimeout, int readTimeout) {
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(connectTimeout);
-        factory.setReadTimeout(readTimeout);
-        RestTemplate rt = new RestTemplate(factory);
-        // Python 内部 API 自 2026-02 起强制要求 X-Internal-Secret 头.
-        // AIAnalysisService 直接 new HttpHeaders() 每个调用都没加, 导致 401
-        // (见 prod 2026-04-15 20:00:00 日报告定时任务失败).
-        // 用 interceptor 统一注入, 所有 4 处 exchange/getForEntity 都受益.
-        String secret = System.getenv().getOrDefault("INTERNAL_API_SECRET", "cretas-internal-2026");
-        rt.getInterceptors().add((req, body, exec) -> {
-            if (!req.getHeaders().containsKey("X-Internal-Secret")) {
-                req.getHeaders().add("X-Internal-Secret", secret);
-            }
-            return exec.execute(req, body);
-        });
-        return rt;
     }
 
     /**
@@ -158,6 +116,16 @@ public class AIAnalysisService {
                                            String customMessage,
                                            Boolean enableThinking,
                                            Integer thinkingBudget) {
+        return analyzeCost(factoryId, null, batchId, costData, sessionId,
+                customMessage, enableThinking, thinkingBudget);
+    }
+
+    public Map<String, Object> analyzeCost(String factoryId, Long userId, String batchId,
+                                           Map<String, Object> costData,
+                                           String sessionId,
+                                           String customMessage,
+                                           Boolean enableThinking,
+                                           Integer thinkingBudget) {
         // 路由：优先使用 DashScope 直接调用
         if (shouldUseDashScopeDirect()) {
             log.info("[DashScope Direct] 使用 DashScope 直接调用进行成本分析: factoryId={}, batchId={}", factoryId, batchId);
@@ -169,7 +137,8 @@ public class AIAnalysisService {
             }
         }
 
-        return analyzeCostViaPython(factoryId, batchId, costData, sessionId, customMessage, enableThinking, thinkingBudget);
+        return analyzeCostViaPython(factoryId, userId, batchId, costData, sessionId,
+                customMessage, enableThinking, thinkingBudget);
     }
 
     /**
@@ -486,7 +455,7 @@ public class AIAnalysisService {
     /**
      * 通过 Python 服务调用进行成本分析（原有逻辑）
      */
-    private Map<String, Object> analyzeCostViaPython(String factoryId, String batchId,
+    private Map<String, Object> analyzeCostViaPython(String factoryId, Long userId, String batchId,
                                                       Map<String, Object> costData,
                                                       String sessionId,
                                                       String customMessage,
@@ -505,58 +474,33 @@ public class AIAnalysisService {
                 log.info("[Python Service] 已注入预计算上下文: factoryId={}", factoryId);
             }
 
-            // 2. 构建请求
-            String url = aiServiceUrl + "/api/chat/general-analysis";
-            Map<String, Object> request = new HashMap<>();
-            request.put("message", message);
-            request.put("user_id", factoryId + "_batch_" + batchId);
+            PythonGeneralAnalysisRequest request = PythonGeneralAnalysisRequest.builder()
+                    .message(message)
+                    .sessionId(sessionId != null && !sessionId.isBlank() ? sessionId : null)
+                    .enableThinking(enableThinking != null ? enableThinking : true)
+                    .thinkingBudget(thinkingBudget != null ? thinkingBudget : 50)
+                    .allowTenantDataFallback(false)
+                    .build();
 
-            if (sessionId != null && !sessionId.trim().isEmpty()) {
-                request.put("session_id", sessionId);
-            }
-
-            // 思考模式参数（默认开启）
-            request.put("enable_thinking", enableThinking != null ? enableThinking : true);
-            request.put("thinking_budget", thinkingBudget != null ? thinkingBudget : 50);
-
-            // 3. 发送请求
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            HttpEntity<Map<String, Object>> entity = new HttpEntity<>(request, headers);
-
-            log.info("调用AI服务 (Python): url={}, batchId={}, factoryId={}, enableThinking={}",
-                    url, batchId, factoryId, enableThinking);
-            ResponseEntity<Map> response = restTemplate.exchange(
-                url, HttpMethod.POST, entity, Map.class);
-
-            // 4. 处理响应
-            if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
-                Map<String, Object> result = new HashMap<>();
-                Map<String, Object> body = response.getBody();
-
-                result.put("success", true);
-                result.put("aiAnalysis", body.get("aiAnalysis"));  // Python服务返回的字段名
-                result.put("reasoningContent", body.get("reasoningContent")); // 思考过程
-                result.put("thinkingEnabled", body.get("thinkingEnabled"));   // 是否使用了思考模式
-                result.put("sessionId", body.get("sessionId"));     // 驼峰命名
-                result.put("messageCount", body.get("messageCount")); // 驼峰命名
-
-                log.info("AI分析成功 (Python): batchId={}, sessionId={}, thinkingEnabled={}",
-                        batchId, body.get("sessionId"), body.get("thinkingEnabled"));
-                return result;
-            } else {
-                throw new RuntimeException("AI服务返回错误: " + response.getStatusCode());
-            }
+            PythonGeneralAnalysisResponse response = pythonSmartBIClient.analyzeGeneral(
+                    factoryId, userId != null ? userId.toString() : null, request);
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", true);
+            result.put("aiAnalysis", response.getEffectiveAnalysis());
+            result.put("reasoningContent", response.getReasoningContent());
+            result.put("thinkingEnabled", response.getThinkingEnabled());
+            result.put("sessionId", response.getSessionId());
+            result.put("messageCount", response.getMessageCount());
+            return result;
 
         } catch (Exception e) {
-            log.error("AI分析失败 (Python): factoryId={}, batchId={}, error={}",
-                     factoryId, batchId, e.getMessage(), e);
+            log.error("AI分析失败 (Python): factoryId={}, batchId={}, upstream unavailable",
+                    factoryId, batchId);
 
             // 返回友好的错误信息
             Map<String, Object> errorResult = new HashMap<>();
             errorResult.put("success", false);
             errorResult.put("error", "AI服务暂时不可用，请稍后重试");
-            errorResult.put("errorDetail", e.getMessage());
             return errorResult;
         }
     }
@@ -941,45 +885,17 @@ public class AIAnalysisService {
     }
 
     /**
-     * 获取AI会话历史
-     */
-    public List<Map<String, Object>> getSessionHistory(String sessionId) {
-        try {
-            String url = aiServiceUrl + "/api/chat/session/" + sessionId;
-
-            log.info("获取AI会话历史: sessionId={}", sessionId);
-            ResponseEntity<Map> response = restTemplate.getForEntity(url, Map.class);
-
-            if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
-                Map<String, Object> body = response.getBody();
-                return (List<Map<String, Object>>) body.get("messages");
-            }
-        } catch (Exception e) {
-            log.error("获取AI会话历史失败: sessionId={}, error={}", sessionId, e.getMessage());
-        }
-        return List.of();
-    }
-
-    /**
      * 健康检查 - 测试AI服务是否可用
      */
     public Map<String, Object> healthCheck() {
         try {
-            String url = aiServiceUrl + "/";
-            ResponseEntity<Map> response = restTemplate.getForEntity(url, Map.class);
-
             Map<String, Object> result = new HashMap<>();
-            result.put("available", response.getStatusCode() == HttpStatus.OK);
-            result.put("serviceUrl", aiServiceUrl);
-            result.put("serviceInfo", response.getBody());
-
+            result.put("available", pythonSmartBIClient.health().isHealthy());
             return result;
         } catch (Exception e) {
             Map<String, Object> result = new HashMap<>();
             result.put("available", false);
-            result.put("serviceUrl", aiServiceUrl);
-            result.put("error", e.getMessage());
-
+            result.put("error", "AI_SERVICE_UNAVAILABLE");
             return result;
         }
     }
@@ -997,7 +913,8 @@ public class AIAnalysisService {
      * @return 员工分析响应
      */
     public AIResponseDTO.EmployeeAnalysisResponse analyzeEmployee(
-            String factoryId, Long employeeId, Integer days, String question, String sessionId) {
+            String factoryId, Long requesterUserId, Long employeeId, Integer days,
+            String question, String sessionId) {
 
         log.info("开始员工AI分析: factoryId={}, employeeId={}, days={}", factoryId, employeeId, days);
 
@@ -1018,37 +935,23 @@ public class AIAnalysisService {
                     ? question + "\n\n以下是员工数据：\n" + formatEmployeeDataForAI(employeeData)
                     : formatEmployeeDataForAI(employeeData);
 
-            // 5. 调用AI服务
-            String url = aiServiceUrl + "/api/chat/general-analysis";
-            Map<String, Object> request = new HashMap<>();
-            request.put("message", message);
-            request.put("user_id", factoryId + "_employee_" + employeeId);
-            request.put("enable_thinking", true);
-            request.put("thinking_budget", 60);
-
-            if (sessionId != null && !sessionId.trim().isEmpty()) {
-                request.put("session_id", sessionId);
-            }
-
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            HttpEntity<Map<String, Object>> entity = new HttpEntity<>(request, headers);
-
-            log.info("调用AI服务分析员工: url={}, employeeId={}", url, employeeId);
-            ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.POST, entity, Map.class);
-
-            // 6. 解析AI响应并构建结果
-            if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
-                Map<String, Object> body = response.getBody();
-                return buildEmployeeAnalysisResponse(employee, employeeData, body, startTime, endTime);
-            } else {
-                throw new RuntimeException("AI服务返回错误: " + response.getStatusCode());
-            }
+            PythonGeneralAnalysisRequest request = PythonGeneralAnalysisRequest.builder()
+                    .message(message)
+                    .sessionId(sessionId != null && !sessionId.isBlank() ? sessionId : null)
+                    .enableThinking(true)
+                    .thinkingBudget(60)
+                    .allowTenantDataFallback(false)
+                    .build();
+            PythonGeneralAnalysisResponse response = pythonSmartBIClient.analyzeGeneral(
+                    factoryId,
+                    requesterUserId != null ? requesterUserId.toString() : null,
+                    request);
+            return buildEmployeeAnalysisResponse(employee, employeeData, response, startTime, endTime);
 
         } catch (Exception e) {
-            log.error("员工AI分析失败: factoryId={}, employeeId={}, error={}",
-                    factoryId, employeeId, e.getMessage(), e);
-            throw new RuntimeException("员工AI分析失败: " + e.getMessage(), e);
+            log.error("员工AI分析失败: factoryId={}, employeeId={}, upstream unavailable",
+                    factoryId, employeeId);
+            throw new RuntimeException("员工AI分析失败");
         }
     }
 
@@ -1293,7 +1196,7 @@ public class AIAnalysisService {
      */
     @SuppressWarnings("unchecked")
     private AIResponseDTO.EmployeeAnalysisResponse buildEmployeeAnalysisResponse(
-            User employee, Map<String, Object> data, Map<String, Object> aiResponse,
+            User employee, Map<String, Object> data, PythonGeneralAnalysisResponse aiResponse,
             LocalDateTime startTime, LocalDateTime endTime) {
 
         Map<String, Object> employeeInfo = (Map<String, Object>) data.get("employee");
@@ -1432,17 +1335,16 @@ public class AIAnalysisService {
         response.setTrends(trends);
 
         // AI洞察
-        String aiInsight = aiResponse.get("aiAnalysis") != null ?
-                aiResponse.get("aiAnalysis").toString() :
+        String aiInsight = aiResponse.getEffectiveAnalysis() != null ?
+                aiResponse.getEffectiveAnalysis() :
                 "该员工综合表现" + (overallScore >= 80 ? "良好" : "一般") + "，建议关注工作效率和质量提升。";
         response.setAiInsight(aiInsight);
 
         // 会话信息
-        response.setSessionId(aiResponse.get("sessionId") != null ?
-                aiResponse.get("sessionId").toString() : UUID.randomUUID().toString());
+        response.setSessionId(aiResponse.getSessionId() != null ?
+                aiResponse.getSessionId() : UUID.randomUUID().toString());
         response.setAnalyzedAt(LocalDateTime.now());
-        response.setTokensUsed(aiResponse.get("tokensUsed") != null ?
-                ((Number) aiResponse.get("tokensUsed")).intValue() : 500);
+        response.setTokensUsed(aiResponse.getTokensUsed() != null ? aiResponse.getTokensUsed() : 500);
 
         return response;
     }
