@@ -17,6 +17,18 @@
 - 状态边界：代码已合并；未部署、未执行生产 DDL、未删除任何生产数据、未重启生产服务。
 - Scope 锁：已释放。
 
+### `BOM01-WEB-ADMIN-DRAFT-LIFECYCLE-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- 原始 Base SHA：`c030f82063cf56e43103c79edf0076c17472c075`；rebase 后 direct-main 发布 Base：`1ba9a241a77144a80851051efbac584abf4db69d`。
+- 实现 commit：`77a256ec5f3e3a3372995581c6af9770f4a46ef5`。
+- 范围：新增 factory-scoped SKU 悲观锁与幂等 `ensure-draft`，零版本创建空 v1 草稿、复用唯一草稿、从唯一 ACTIVE/current 完整克隆下一版本；激活前校验 SKU 产出元数据和 BOM 明细；Web Admin 统一首次编辑/继续草稿/新建版本主路径，并把跨产品规则复制保留为显式可选动作。
+- 验收：真实 JPA Repository 启动门禁通过；Service 19/19、Copy + 生命周期 12/12、最终并发 JPA 4/4、BOM Vitest 16/16；`git diff --check` 通过。
+- Web 可信制品：build commit `77a256ec5f3e3a3372995581c6af9770f4a46ef5`，web tree `9b1dab7c50ddba0db3984a08f68226d8d79b28c3`，archive SHA-256 `a02bc261beab81cd4980eaf0edec10948c1521e7bbf9aadaff219c9b576a712c`，729 assets。
+- 发布边界：代码通过受控 direct-main fastlane 发布；Java 与 Web 生产部署、槽位/健康/四方哈希证据在发布动作后单独核验，测试环境不触碰。
+- Scope 锁：已释放。
+
 ### `CRETAS-REDUNDANCY-PR01-20260719`
 
 - 状态：`merged`
