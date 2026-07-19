@@ -26,7 +26,7 @@ echo -e "${GREEN}========================================${NC}"
 PG_VERSION="15"
 SMARTBI_DB="smartbi_db"
 SMARTBI_USER="smartbi_user"
-SMARTBI_PASSWORD="smartbi_secure_password_2025"  # CHANGE THIS IN PRODUCTION
+SMARTBI_PASSWORD="${SMARTBI_PASSWORD:?Set SMARTBI_PASSWORD from a protected environment source}"
 
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then

@@ -4,25 +4,26 @@
 # 示例: ./bt-api-call.sh GetSystemTotal
 #       ./bt-api-call.sh GetDir path=/www/wwwroot
 
-# 配置
-BT_PANEL_URL="https://139.196.165.140:16435"
-API_KEY="Fw3rqkRqAashK9uNDsFxvst31YSbBmUb"
+# Configuration: the API key must come from a root-only environment file or
+# the caller environment. Never embed it in a tracked script.
+BT_PANEL_URL="${BT_PANEL_URL:-https://139.196.165.140:16435}"
+: "${BT_API_KEY:?Set BT_API_KEY from a root-only credential source}"
+export BT_API_KEY
 
-# 生成签名
+# Generate a short-lived request signature.
 generate_token() {
     python3 << 'PYTHON_EOF'
 import hashlib
+import os
 import time
-import sys
 
-api_sk = "Fw3rqkRqAashK9uNDsFxvst31YSbBmUb"
+api_sk = os.environ["BT_API_KEY"]
 request_time = str(int(time.time()))
 md5_api_sk = hashlib.md5(api_sk.encode()).hexdigest()
 request_token = hashlib.md5((request_time + md5_api_sk).encode()).hexdigest()
 print(f"{request_time}|{request_token}")
 PYTHON_EOF
 }
-
 # 调用API
 call_api() {
     local action=$1
@@ -47,7 +48,7 @@ call_api() {
     
     # 调用API
     echo "调用API: ${URL}"
-    echo "参数: ${POST_DATA}"
+    echo "Request signature: generated (value redacted)"
     echo "---"
     
     curl -k -X POST "${URL}" \
@@ -82,4 +83,3 @@ MODULE=${2:-system}
 shift 2 || true
 
 call_api "$ACTION" "$MODULE" "$@"
-

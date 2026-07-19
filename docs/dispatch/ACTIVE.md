@@ -6,11 +6,11 @@
 
 ## 在飞任务
 
-- 无。
+- `SEC-CREDENTIAL-ROTATION-20260719` — `in-progress` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — 清除 tracked/服务器配置中的硬编码凭证，建立 secret regression gate，按消费者依赖顺序轮换已暴露的 Aliyun/API、数据库、JWT 与内部服务凭证，并完成生产重启、认证/Agent/零业务写入验收及历史暴露评估。
 
 ## Scope 锁地图
 
-- 无。
+- `SEC-CREDENTIAL-ROTATION-20260719`：`scripts/systemd/` 中遗留明文启动脚本、现有/新增 secret 扫描配置与测试、`.gitignore` / 凭证模板、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-19-active-history.md`；外部状态仅限已授权的 Cretas 47/139 服务器配置、PostgreSQL 角色密码、相关阿里云/API 凭证与必要服务重启。验收：tracked tree 与完整 Git 历史脱敏盘点、scanner gate、exact-main 发布门禁、Java/Python/网关健康、登录与 Restaurant Agent 只读 smoke、核心 ERP 零写入。
 
 ## 阻塞项
 

@@ -2,7 +2,7 @@
 
 ## 连接信息
 - **地址**: `https://139.196.165.140:16435` (必须HTTPS)
-- **密钥**: `Fw3rqkRqAashK9uNDsFxvst31YSbBmUb`
+- **密钥**: `<REVOKED_BAOTA_API_KEY>`
 - **注意**: 必须添加IP白名单，使用 `-k` 忽略SSL
 
 ## 签名算法
@@ -10,7 +10,7 @@
 ```bash
 TIME_TOKEN=$(python3 << 'EOF'
 import hashlib, time
-api_sk = "Fw3rqkRqAashK9uNDsFxvst31YSbBmUb"
+api_sk = "<REVOKED_BAOTA_API_KEY>"
 t = str(int(time.time()))
 token = hashlib.md5((t + hashlib.md5(api_sk.encode()).hexdigest()).encode()).hexdigest()
 print(f"{t}|{token}")

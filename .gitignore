@@ -119,6 +119,17 @@ _archived/
 .codex/rules/*-keys.md
 .codex/rules/aliyun-credentials.md
 
+# Runtime environment files on deployment hosts. Templates must use the
+# explicit .template/.example suffix so real credentials can never be staged.
+.env.prod
+.env.test
+.env.gold-etl
+.env.ota
+**/.env.prod
+**/.env.test
+**/.env.gold-etl
+**/.env.ota
+
 # APK 文件（太大，使用 Git LFS 或单独管理）
 *.apk
 

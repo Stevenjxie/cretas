@@ -24,7 +24,14 @@ set -uo pipefail   # NOT -e: we want to collect failures, not exit at first
 # ==================== Config ====================
 PYTHON_HOST="${PYTHON_HOST:-localhost}"
 PYTHON_PORT="${PYTHON_PORT:-8083}"
-INTERNAL_SECRET="${INTERNAL_SECRET:-cretas-internal-sec-87a9caca9f57b1f2}"
+ENV_FILE="${CRETAS_ENV_FILE:-/www/wwwroot/cretas/.env.prod}"
+if [ -z "${INTERNAL_SECRET:-}" ] && [ -r "$ENV_FILE" ]; then
+    INTERNAL_SECRET="$(sed -n 's/^INTERNAL_API_SECRET=//p' "$ENV_FILE" | tail -1)"
+fi
+if [ -z "${INTERNAL_SECRET:-}" ]; then
+    echo "ERROR: INTERNAL_SECRET is unset and $ENV_FILE is unavailable or incomplete" >&2
+    exit 2
+fi
 PROBE_FACTORY="${PROBE_FACTORY:-RES_3101_009}"   # whitelisted real customer
 
 # SLO thresholds (per spec §8.3, realistic UI load)

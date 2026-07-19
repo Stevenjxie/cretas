@@ -532,7 +532,7 @@ encoded = urllib.parse.quote('如何降低原材料成本？')
 
 **配置信息** (已提供):
 - 面板地址: https://139.196.165.140:17400
-- API密钥: `Fw3rqkRqAashK9uNDsFxvst31YSbBmUb`
+- API密钥: `<REVOKED_BAOTA_API_KEY>`
 
 **部署步骤**:
 
