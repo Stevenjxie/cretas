@@ -1,0 +1,101 @@
+schemaVersion: 1
+packId: "factory.manager"
+version: "1.0.0"
+status: PUBLISHED
+businessTypes: [FACTORY, CENTRAL_KITCHEN]
+roles: [dispatcher, workshop_supervisor, factory_super_admin]
+instructions: |-
+  你是工厂管理岗位的只读摘要与导航助手。只能按预定义组合汇总生产、库存、质量、异常和 OEE 结果，标注数据时间和缺口，并提供固定导航入口。不得创建临时执行计划，不得串联新的流程，不得发起生产、库存或质量写操作。跨域数据冲突时分域展示并要求负责人复核。
+readToolAllowlist:
+  - "production_progress_dashboard"
+  - "report_production"
+  - "report_inventory"
+  - "report_quality"
+  - "report_anomaly"
+  - "report_oee"
+  - "report_workshop_daily"
+workflowReferences:
+  - referenceId: "NAVIGATION:PRODUCTION_DASHBOARD"
+    type: NAVIGATION
+    mutation: false
+    approvalRequired: false
+  - referenceId: "NAVIGATION:INVENTORY_DASHBOARD"
+    type: NAVIGATION
+    mutation: false
+    approvalRequired: false
+  - referenceId: "NAVIGATION:QUALITY_DASHBOARD"
+    type: NAVIGATION
+    mutation: false
+    approvalRequired: false
+  - referenceId: "NAVIGATION:ANOMALY_CENTER"
+    type: NAVIGATION
+    mutation: false
+    approvalRequired: false
+outputSchema:
+  schemaId: "factory.manager.summary.v1"
+  fields:
+    - name: "executiveSummary"
+      type: STRING
+      required: true
+      description: "预定义生产库存质量组合摘要"
+    - name: "production"
+      type: OBJECT
+      required: true
+      description: "生产进度、日报和 OEE 只读结果"
+    - name: "inventory"
+      type: OBJECT
+      required: true
+      description: "库存只读结果"
+    - name: "quality"
+      type: OBJECT
+      required: true
+      description: "质量只读结果"
+    - name: "anomalies"
+      type: ARRAY
+      required: true
+      description: "预定义异常摘要"
+    - name: "navigationTargets"
+      type: ARRAY
+      required: true
+      description: "固定页面导航入口"
+rules:
+  - "摘要固定按生产、库存、质量、异常顺序组织。"
+  - "每个分域必须标注数据时间或数据缺口。"
+  - "导航只能使用列出的固定目标。"
+  - "跨域冲突必须保留原始分域口径。"
+forbiddenActions:
+  - "不得创建、改写或执行生产计划。"
+  - "不得调整库存、提交质检或批准处置。"
+  - "不得动态组合新的工具链或流程。"
+  - "不得把摘要或导航描述成业务操作已完成。"
+matchTerms: ["生产概览", "经营概览", "库存概览", "质量概览", "异常", "OEE", "日报", "看板"]
+fewShots:
+  - userQuery: "给我今天工厂生产库存质量概览"
+    expectedMode: READ_SUMMARY
+    expectedReadTools: ["production_progress_dashboard", "report_inventory", "report_quality", "report_anomaly"]
+    expectedWorkflowReference: "NAVIGATION:PRODUCTION_DASHBOARD"
+    assistantResponse: "按固定四域输出只读摘要并标注数据时间，再提供对应看板导航，不执行任何操作。"
+  - userQuery: "根据异常重新安排生产"
+    expectedMode: NAVIGATION
+    expectedReadTools: ["report_anomaly", "report_production"]
+    expectedWorkflowReference: "NAVIGATION:ANOMALY_CENTER"
+    assistantResponse: "只汇总异常与现有生产信息并导航到异常中心；不生成或执行新的生产安排。"
+evalCases:
+  - caseId: "manager-fixed-overview"
+    query: "查看生产库存质量概览"
+    expectedMode: READ_SUMMARY
+    expectedReadTools: ["production_progress_dashboard", "report_inventory", "report_quality"]
+    expectedWorkflowReference: "NAVIGATION:PRODUCTION_DASHBOARD"
+    expectedOutcome: MATCH
+  - caseId: "manager-anomaly-navigation"
+    query: "查看异常看板"
+    expectedMode: NAVIGATION
+    expectedReadTools: ["report_anomaly"]
+    expectedWorkflowReference: "NAVIGATION:ANOMALY_CENTER"
+    expectedOutcome: MATCH
+  - caseId: "manager-unrelated-restaurant"
+    query: "分析菜品毛利"
+    expectedMode: NO_MATCH
+    expectedReadTools: []
+    expectedWorkflowReference: "NONE"
+    expectedOutcome: NO_MATCH
