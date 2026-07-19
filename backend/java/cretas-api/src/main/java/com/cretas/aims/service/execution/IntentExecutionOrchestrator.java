@@ -892,7 +892,8 @@ public class IntentExecutionOrchestrator {
         log.info("检测到会话延续: sessionId={}", request.getSessionId());
         try {
             ConversationService.ConversationResponse conversationResp =
-                    conversationService.continueConversation(request.getSessionId(), request.getUserInput());
+                    conversationService.continueConversation(
+                            factoryId, userId, request.getSessionId(), request.getUserInput());
 
             if (conversationResp == null ||
                 conversationResp.getStatus() == ConversationSession.SessionStatus.CANCELLED) {
@@ -900,7 +901,8 @@ public class IntentExecutionOrchestrator {
             }
 
             if (conversationResp.isCompleted() && conversationResp.getIntentCode() != null) {
-                conversationService.endConversation(request.getSessionId(), conversationResp.getIntentCode());
+                conversationService.endConversation(
+                        factoryId, userId, request.getSessionId(), conversationResp.getIntentCode());
                 request.setIntentCode(conversationResp.getIntentCode());
                 request.setForceExecute(true);
                 return executeWithExplicitIntent(factoryId, request, userId, userRole);

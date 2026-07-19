@@ -14,11 +14,14 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import java.util.HashMap;
@@ -62,19 +65,15 @@ public class ConversationController {
     public ResponseEntity<Map<String, Object>> startConversation(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @RequestBody @Valid StartConversationRequest request,
-            @RequestHeader(value = "X-User-Id", required = false) Long userId) {
+            HttpServletRequest httpRequest) {
+
+        Long userId = requireAuthenticatedUserId(httpRequest);
 
         log.info("Starting conversation: factory={}, user={}, input='{}'",
                 factoryId, userId, truncate(request.getUserInput(), 50));
 
-        // 如果没有提供 userId，使用请求中的
-        Long effectiveUserId = userId != null ? userId : request.getUserId();
-        if (effectiveUserId == null) {
-            effectiveUserId = 0L; // 默认用户ID
-        }
-
         ConversationResponse response = conversationService.startConversation(
-                factoryId, effectiveUserId, request.getUserInput());
+                factoryId, userId, request.getUserInput());
 
         Map<String, Object> result = new HashMap<>();
         result.put("success", true);
@@ -92,13 +91,16 @@ public class ConversationController {
     public ResponseEntity<Map<String, Object>> continueConversation(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @PathVariable @Parameter(description = "会话ID") String sessionId,
-            @RequestBody @Valid ReplyRequest request) {
+            @RequestBody @Valid ReplyRequest request,
+            HttpServletRequest httpRequest) {
+
+        Long userId = requireAuthenticatedUserId(httpRequest);
 
         log.info("Continuing conversation: session={}, reply='{}'",
                 sessionId, truncate(request.getUserReply(), 50));
 
         ConversationResponse response = conversationService.continueConversation(
-                sessionId, request.getUserReply());
+                factoryId, userId, sessionId, request.getUserReply());
 
         Map<String, Object> result = new HashMap<>();
         result.put("success", true);
@@ -116,22 +118,19 @@ public class ConversationController {
     public SseEmitter startConversationStream(
             @PathVariable String factoryId,
             @RequestBody @Valid StartConversationRequest request,
-            @RequestHeader(value = "X-User-Id", required = false) Long userId) {
+            HttpServletRequest httpRequest) {
+
+        Long userId = requireAuthenticatedUserId(httpRequest);
 
         SseEmitter emitter = new SseEmitter(60_000L);
         emitter.onTimeout(() -> log.warn("Conversation stream timeout"));
-
-        Long effectiveUserId = userId != null ? userId : request.getUserId();
-        if (effectiveUserId == null) effectiveUserId = 0L;
-
-        Long finalUserId = effectiveUserId;
         sseExecutor.execute(() -> {
             try {
                 emitter.send(SseEmitter.event().name("processing")
                         .data("{\"message\":\"正在处理...\"}"));
 
                 ConversationResponse response = conversationService.startConversation(
-                        factoryId, finalUserId, request.getUserInput());
+                        factoryId, userId, request.getUserInput());
 
                 Map<String, Object> result = new HashMap<>();
                 result.put("success", true);
@@ -166,7 +165,10 @@ public class ConversationController {
     public SseEmitter continueConversationStream(
             @PathVariable String factoryId,
             @PathVariable String sessionId,
-            @RequestBody @Valid ReplyRequest request) {
+            @RequestBody @Valid ReplyRequest request,
+            HttpServletRequest httpRequest) {
+
+        Long userId = requireAuthenticatedUserId(httpRequest);
 
         SseEmitter emitter = new SseEmitter(60_000L);
         emitter.onTimeout(() -> log.warn("Conversation reply stream timeout"));
@@ -177,7 +179,7 @@ public class ConversationController {
                         .data("{\"message\":\"正在处理...\"}"));
 
                 ConversationResponse response = conversationService.continueConversation(
-                        sessionId, request.getUserReply());
+                        factoryId, userId, sessionId, request.getUserReply());
 
                 Map<String, Object> result = new HashMap<>();
                 result.put("success", true);
@@ -212,11 +214,15 @@ public class ConversationController {
     public ResponseEntity<Map<String, Object>> confirmIntent(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @PathVariable @Parameter(description = "会话ID") String sessionId,
-            @RequestBody @Valid ConfirmIntentRequest request) {
+            @RequestBody @Valid ConfirmIntentRequest request,
+            HttpServletRequest httpRequest) {
+
+        Long userId = requireAuthenticatedUserId(httpRequest);
 
         log.info("Confirming intent: session={}, intent={}", sessionId, request.getIntentCode());
 
-        boolean success = conversationService.endConversation(sessionId, request.getIntentCode());
+        boolean success = conversationService.endConversation(
+                factoryId, userId, sessionId, request.getIntentCode());
 
         Map<String, Object> result = new HashMap<>();
         result.put("success", success);
@@ -234,11 +240,14 @@ public class ConversationController {
     @Operation(summary = "取消对话", description = "用户取消当前对话")
     public ResponseEntity<Map<String, Object>> cancelConversation(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
-            @PathVariable @Parameter(description = "会话ID") String sessionId) {
+            @PathVariable @Parameter(description = "会话ID") String sessionId,
+            HttpServletRequest httpRequest) {
+
+        Long userId = requireAuthenticatedUserId(httpRequest);
 
         log.info("Cancelling conversation: session={}", sessionId);
 
-        boolean success = conversationService.cancelConversation(sessionId);
+        boolean success = conversationService.cancelConversation(factoryId, userId, sessionId);
 
         Map<String, Object> result = new HashMap<>();
         result.put("success", success);
@@ -254,11 +263,14 @@ public class ConversationController {
     @Operation(summary = "获取会话详情", description = "获取指定会话的详细信息")
     public ResponseEntity<Map<String, Object>> getSession(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
-            @PathVariable @Parameter(description = "会话ID") String sessionId) {
+            @PathVariable @Parameter(description = "会话ID") String sessionId,
+            HttpServletRequest httpRequest) {
+
+        Long userId = requireAuthenticatedUserId(httpRequest);
 
         log.debug("Getting session: session={}", sessionId);
 
-        var session = conversationService.getSession(sessionId);
+        var session = conversationService.getSession(factoryId, userId, sessionId);
 
         Map<String, Object> result = new HashMap<>();
         if (session.isPresent()) {
@@ -279,17 +291,13 @@ public class ConversationController {
     @Operation(summary = "获取活跃会话", description = "获取当前用户的活跃会话（如果存在）")
     public ResponseEntity<Map<String, Object>> getActiveSession(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
-            @RequestHeader(value = "X-User-Id", required = false) Long userId,
-            @RequestParam(required = false) Long userIdParam) {
+            HttpServletRequest httpRequest) {
 
-        Long effectiveUserId = userId != null ? userId : userIdParam;
-        if (effectiveUserId == null) {
-            effectiveUserId = 0L;
-        }
+        Long userId = requireAuthenticatedUserId(httpRequest);
 
-        log.debug("Getting active session: factory={}, user={}", factoryId, effectiveUserId);
+        log.debug("Getting active session: factory={}, user={}", factoryId, userId);
 
-        var session = conversationService.getActiveSession(factoryId, effectiveUserId);
+        var session = conversationService.getActiveSession(factoryId, userId);
 
         Map<String, Object> result = new HashMap<>();
         result.put("success", true);
@@ -315,7 +323,7 @@ public class ConversationController {
 
         log.debug("Getting conversation statistics: factory={}, days={}", factoryId, days);
 
-        ConversationStatistics stats = conversationService.getStatistics(days);
+        ConversationStatistics stats = conversationService.getStatistics(factoryId, days);
 
         Map<String, Object> result = new HashMap<>();
         result.put("success", true);
@@ -333,7 +341,6 @@ public class ConversationController {
     public static class StartConversationRequest {
         @NotBlank(message = "用户输入不能为空")
         private String userInput;
-        private Long userId;
     }
 
     @Data
@@ -399,5 +406,24 @@ public class ConversationController {
     private String truncate(String s, int maxLen) {
         if (s == null) return "";
         return s.length() <= maxLen ? s : s.substring(0, maxLen) + "...";
+    }
+
+    private Long requireAuthenticatedUserId(HttpServletRequest request) {
+        Object rawUserId = request.getAttribute("userId");
+        Long userId = null;
+        if (rawUserId instanceof Long value) {
+            userId = value;
+        } else if (rawUserId instanceof String value) {
+            try {
+                userId = Long.parseLong(value);
+            } catch (NumberFormatException ignored) {
+                // Reject malformed trusted context below.
+            }
+        }
+        if (userId == null || userId <= 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.UNAUTHORIZED, "TRUSTED_USER_CONTEXT_REQUIRED");
+        }
+        return userId;
     }
 }

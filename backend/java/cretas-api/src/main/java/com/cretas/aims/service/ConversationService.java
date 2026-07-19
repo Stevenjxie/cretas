@@ -63,7 +63,8 @@ public interface ConversationService {
      * @param userReply 用户回复
      * @return 对话响应 (包含下一个问题或最终结果)
      */
-    ConversationResponse continueConversation(String sessionId, String userReply);
+    ConversationResponse continueConversation(
+            String factoryId, Long userId, String sessionId, String userReply);
 
     /**
      * 结束对话并学习
@@ -76,7 +77,7 @@ public interface ConversationService {
      * @param intentCode 确认的意图代码
      * @return 是否成功
      */
-    boolean endConversation(String sessionId, String intentCode);
+    boolean endConversation(String factoryId, Long userId, String sessionId, String intentCode);
 
     /**
      * 取消对话
@@ -84,7 +85,7 @@ public interface ConversationService {
      * @param sessionId 会话ID
      * @return 是否成功
      */
-    boolean cancelConversation(String sessionId);
+    boolean cancelConversation(String factoryId, Long userId, String sessionId);
 
     /**
      * 获取活跃会话
@@ -101,7 +102,7 @@ public interface ConversationService {
      * @param sessionId 会话ID
      * @return 会话 (如果存在)
      */
-    Optional<ConversationSession> getSession(String sessionId);
+    Optional<ConversationSession> getSession(String factoryId, Long userId, String sessionId);
 
     /**
      * 处理超时会话 (定时任务调用)
@@ -116,7 +117,7 @@ public interface ConversationService {
      * @param days 最近天数
      * @return 统计信息
      */
-    ConversationStatistics getStatistics(int days);
+    ConversationStatistics getStatistics(String factoryId, int days);
 
     // ========== 响应类 ==========
 

@@ -22,6 +22,12 @@ import java.util.Optional;
 @Repository
 public interface ConversationSessionRepository extends JpaRepository<ConversationSession, String> {
 
+    Optional<ConversationSession> findBySessionIdAndFactoryIdAndUserId(
+        String sessionId,
+        String factoryId,
+        Long userId
+    );
+
     // ========== 活跃会话查询 ==========
 
     /**
@@ -161,16 +167,29 @@ public interface ConversationSessionRepository extends JpaRepository<Conversatio
            "COUNT(CASE WHEN s.status = 'MAX_ROUNDS_REACHED' THEN 1 END) AS maxRounds, " +
            "COUNT(s) AS total " +
            "FROM ConversationSession s " +
-           "WHERE s.createdAt >= :since")
-    List<Object[]> getSuccessRate(@Param("since") LocalDateTime since);
+           "WHERE s.factoryId = :factoryId " +
+           "AND s.createdAt >= :since")
+    List<Object[]> getSuccessRate(
+        @Param("factoryId") String factoryId,
+        @Param("since") LocalDateTime since
+    );
 
     /**
      * 平均对话轮次统计
      */
     @Query("SELECT AVG(s.currentRound) FROM ConversationSession s " +
-           "WHERE s.status = 'COMPLETED' " +
+           "WHERE s.factoryId = :factoryId " +
+           "AND s.status = 'COMPLETED' " +
            "AND s.createdAt >= :since")
-    Double getAverageRoundsForCompleted(@Param("since") LocalDateTime since);
+    Double getAverageRoundsForCompleted(
+        @Param("factoryId") String factoryId,
+        @Param("since") LocalDateTime since
+    );
+
+    @Query("SELECT COUNT(s) FROM ConversationSession s " +
+           "WHERE s.factoryId = :factoryId " +
+           "AND s.status = 'ACTIVE'")
+    long countActiveByFactoryId(@Param("factoryId") String factoryId);
 
     // ========== 清理 ==========
 

@@ -116,7 +116,7 @@ class IntentExecutionOrchestratorSuggestedActionSecurityTest {
                                 .confidence(0.70)
                                 .build()))
                         .build();
-        when(conversationService.continueConversation("session-1", "choose"))
+        when(conversationService.continueConversation(FACTORY_ID, 1L, "session-1", "choose"))
                 .thenReturn(conversationResponse);
 
         IntentExecuteRequest request = IntentExecuteRequest.builder()

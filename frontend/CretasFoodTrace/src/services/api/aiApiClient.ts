@@ -687,17 +687,15 @@ class AIApiClient {
    * 当意图识别置信度高时返回 COMPLETED，否则进入多轮对话。
    *
    * @param userInput 用户输入
-   * @param userId 用户ID（可选）
    * @param factoryId 工厂ID（可选）
    */
   async startConversation(
     userInput: string,
-    userId?: number,
     factoryId?: string
   ): Promise<ConversationStartResponse> {
     const response = await apiClient.post<{ success: boolean; data: ConversationStartResponse }>(
       `${this.getConversationBasePath(factoryId)}/start`,
-      { userInput, userId }
+      { userInput }
     );
     // 提取 data 层
     return response.data || (response as unknown as ConversationStartResponse);
