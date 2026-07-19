@@ -6,11 +6,19 @@
 
 ## 在飞任务
 
-- 无。
+- `CRETAS-F006-PLAN-REPORTING-LINKAGE-E2E-20260719`
+  - 状态：`in-progress`
+  - Owner：Codex (`/root`)
+  - Base SHA：`9ebe0073f9346ee190f2f5a45319c350009c529a`
+  - Scope：F006 生产计划选品与 Workflow 固定后到报工的 UI/API/数据库回读；任务专用 E2E/证据；若发现缺陷，仅修改生产计划到报工的 Workflow、投入/产出选择与锁定相关前后端代码、目标测试及本台账/归档。
+  - 目标：验证报工自动继承生产计划固定的 Workflow；可替代原料和联产成品按业务规则支持选择；不可多选的投入/产出直接默认锁定且不能误选其他物料。
+  - 验收：首次写入前实时证明 `factoryUser.factoryId=F006`；覆盖至少一个可选场景和一个锁定场景，提交后刷新并做 API/数据库或下游回读；全程记录 mutation 与实体 ID，其他租户业务写入为 0。
+  - 结果：首次写入前实时证明 `f006_admin / factoryId=F006`；既有计划成功物化批次 `10583`、Workflow 实例 `41`，固定 `97@v1`，快照正确包含 2 个 RAW 必投端口和 1 个成品端口。生产 UI 发现 RAW-only→成品工序被误映射为上游半成品表单，已修正为投入形态优先；相关 Web tests 34/34 通过。
+  - 下一动作：合并并发布 Web 修复后，继续验证 ALL_REQUIRED 锁定、EXACTLY_ONE 单选、AT_LEAST_ONE/OPTIONAL 多选及正式报工回读。
 
 ## Scope 锁地图
 
-- 无。
+- `CRETAS-F006-PLAN-REPORTING-LINKAGE-E2E-20260719`：锁定任务专用 E2E/证据、生产计划到报工的 Workflow 关联及投入/产出选择与锁定相关前后端目标代码、目标测试与本台账/归档。
 
 ## 阻塞项
 
