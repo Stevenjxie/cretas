@@ -7,6 +7,7 @@ import com.cretas.aims.entity.config.FactoryToolConfig;
 import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.repository.config.FactoryToolConfigRepository;
 import org.springframework.aop.support.AopUtils;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.Optional;
@@ -21,6 +22,7 @@ public class ToolRuntimeRegistry {
     private final RuntimeToolDescriptorRegistry descriptorRegistry;
     private final ToolDescriptorPolicyResolver policyResolver;
 
+    @Autowired
     public ToolRuntimeRegistry(
             ToolRegistry toolRegistry,
             FactoryToolConfigRepository factoryToolConfigRepository) {

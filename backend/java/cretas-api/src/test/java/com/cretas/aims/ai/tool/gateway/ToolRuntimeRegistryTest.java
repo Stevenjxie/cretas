@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.time.Instant;
 import java.util.List;
@@ -49,6 +50,22 @@ class ToolRuntimeRegistryTest {
                 factoryToolConfigRepository,
                 RuntimeToolDescriptorRegistry.loadDefault());
         approvedExecutor = new UserDisableTool();
+    }
+
+    @Test
+    void springContextSelectsTheProductionConstructor() {
+        try (AnnotationConfigApplicationContext context =
+                     new AnnotationConfigApplicationContext()) {
+            context.registerBean(ToolRegistry.class, () -> toolRegistry);
+            context.registerBean(
+                    FactoryToolConfigRepository.class,
+                    () -> factoryToolConfigRepository);
+            context.register(ToolRuntimeRegistry.class);
+
+            context.refresh();
+
+            assertThat(context.getBean(ToolRuntimeRegistry.class)).isNotNull();
+        }
     }
 
     @Test
