@@ -140,17 +140,22 @@ class ProcessSheetSourceSkuValidationTest {
                 .thenReturn(List.of(sourceRow(EXPECTED)));
         ProductionBatch production = new ProductionBatch();
         production.setId(77L);
+        production.setTotalCost(new BigDecimal("56"));
         when(productionBatchRepo.findByFactoryIdAndBatchNumber(FACTORY, BATCH))
                 .thenReturn(Optional.of(production));
         MaterialBatch material = new MaterialBatch();
         material.setId("MB-WIP-77");
         material.setFactoryId(FACTORY);
         material.setQuantityUnit("kg");
+        material.setReceiptQuantity(new BigDecimal("4.5"));
         when(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
                 FACTORY, "PRODUCTION_BATCH", "77"))
                 .thenReturn(Optional.of(material));
 
-        assertThat(resolve(request(false, false))).hasSize(1);
+        List<ResolvedEdge> edges = resolve(request(false, false));
+        assertThat(edges).hasSize(1);
+        assertThat(edges.get(0).getResolvedUnitPrice()).isEqualByComparingTo("12.4444");
+        assertThat(material.getUnitPrice()).isNull();
     }
 
     @Test

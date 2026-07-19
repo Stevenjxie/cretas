@@ -26,6 +26,7 @@ import { PROCESS_SHEET_CONFIG, GENERIC_FALLBACK_COLS, genClientRowId, type ColDe
 import WorkHoursTable from './WorkHoursTable.vue';
 import { boxAvailableKg, isCountUnit, countUnitFeedWarning, countUnitLabelSuffix } from '@/utils/feedUnitConversion';
 import {
+  displayProcessUnit,
   formatFeedPlaceholder,
   formatProcessOutput,
   formatSourceFeedSummary,
@@ -1105,7 +1106,7 @@ function settledRowSummary(row: SheetRow): string {
   }
   if (isQidiao.value) {
     const n = finishedActualQuantity(row);
-    return `实产 ${n ?? '—'} ${processUnits.value.outputUnit}`;
+    return `实产 ${n ?? '—'} ${displayProcessUnit(processUnits.value.outputUnit) || '（单位未配置）'}`;
   }
   return '—';
 }

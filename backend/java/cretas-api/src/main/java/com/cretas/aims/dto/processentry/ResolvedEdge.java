@@ -1,7 +1,6 @@
 package com.cretas.aims.dto.processentry;
 
 import com.cretas.aims.entity.MaterialBatch;
-import lombok.AllArgsConstructor;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -21,7 +20,6 @@ import java.math.BigDecimal;
  * 成本边 totalCost = feedQuantityKg × sourceBatch.unitPrice。
  */
 @Data
-@AllArgsConstructor
 public class ResolvedEdge {
     /** 已 factory-scoped-fetched 的来源批次 (RAW 原料批 或 上游 WIP 批)。 */
     private MaterialBatch sourceBatch;
@@ -29,4 +27,18 @@ public class ResolvedEdge {
     private BigDecimal feedQuantityKg;
     /** "RAW_MATERIAL" | "SEMI_FINISHED" —— 写入 MaterialConsumption.sourceType。 */
     private String sourceType;
+    /** Optional source price resolved from the owning production batch. */
+    private BigDecimal resolvedUnitPrice;
+
+    public ResolvedEdge(MaterialBatch sourceBatch, BigDecimal feedQuantityKg, String sourceType) {
+        this(sourceBatch, feedQuantityKg, sourceType, null);
+    }
+
+    public ResolvedEdge(MaterialBatch sourceBatch, BigDecimal feedQuantityKg, String sourceType,
+                        BigDecimal resolvedUnitPrice) {
+        this.sourceBatch = sourceBatch;
+        this.feedQuantityKg = feedQuantityKg;
+        this.sourceType = sourceType;
+        this.resolvedUnitPrice = resolvedUnitPrice;
+    }
 }

@@ -7,10 +7,12 @@
 ## 在飞任务
 
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
+- `F006-M07-YIELD-COST-UNITS-20260720` — `in-progress` — Owner: Codex coordinator — Base SHA: `8e98b715ba0818c375b5050294876d52647b4de5` — 修复 kg→box 持久化回读的 step/cumulative yield、继承成本与 addedCost 公式，并统一历史只读行的 canonical unit 中文显示；生产指定 row/batch 仅做只读核验。
 
 ## Scope 锁地图
 
 - `SEC-CREDENTIAL-ROTATION-20260719`：`scripts/systemd/` 中遗留明文启动脚本、现有/新增 secret 扫描配置与测试、`.gitignore` / 凭证模板、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-19-active-history.md`；外部状态仅限已授权的 Cretas 47/139 服务器配置、PostgreSQL 角色密码、相关阿里云/API 凭证与必要服务重启。验收：tracked tree 与完整 Git 历史脱敏盘点、scanner gate、exact-main 发布门禁、Java/Python/网关健康、登录与 Restaurant Agent 只读 smoke、核心 ERP 零写入。
+- `F006-M07-YIELD-COST-UNITS-20260720`：`backend/java/cretas-api/src/main/java/com/cretas/aims/**process**`、相关 DTO/service 与 Java 测试；`web-admin/src/views/production/**` 及相关 Web 测试；`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-20-active-history.md`。验收：真实 mixed-unit kg→box 目标测试覆盖刷新后 step=88.8889%、cumulative=80%、继承成本56/新增0/总成本56/单价11.2元每盒；历史行显示5盒；唯一 release 构建、exact-main 发布与同一记录零写入核验。
 
 ## 阻塞项
 

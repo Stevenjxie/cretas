@@ -386,6 +386,67 @@ class ProcessSheetYieldCardTest {
     }
 
     @Test
+    @DisplayName("YIELD-CARD-MIXED-UNIT: kg→box uses productWeight and never drops inherited cost")
+    void processSheetRows_kgToBox_usesProductWeightAndKeepsInheritedCost() throws Exception {
+        ProcessSheetRow source = sheetRow(1, 10589L, "CLK-W-20260720-9232");
+        ProcessSheetRow finished = sheetRow(2, 10588L, "PB-PLAN-TEST-64467");
+        finished.setProcessCode("qidiao");
+        when(rowRepo.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(source, finished));
+
+        ProcessSheetRowRequest sourcePayload = sheetPayload("5", "4.5");
+        sourcePayload.setInputUnit("kg");
+        sourcePayload.setOutputUnit("kg");
+
+        ProcessSheetRowRequest finishedPayload = sheetPayload("4.5", "5");
+        finishedPayload.setInputUnit("kg");
+        finishedPayload.setOutputUnit("box");
+        finishedPayload.setUnit("box");
+        finishedPayload.setProductWeight(new BigDecimal("4"));
+        finishedPayload.setFinished(true);
+        ProcessSheetRowRequest.UpstreamRef upstream = new ProcessSheetRowRequest.UpstreamRef();
+        upstream.setSourceBatchNumber("CLK-W-20260720-9232");
+        upstream.setFeedQuantityKg(new BigDecimal("4.5"));
+        finishedPayload.setUpstreamSources(List.of(upstream));
+
+        when(objectMapper.readValue("payload-1", ProcessSheetRowRequest.class)).thenReturn(sourcePayload);
+        when(objectMapper.readValue("payload-2", ProcessSheetRowRequest.class)).thenReturn(finishedPayload);
+
+        ProductionBatch sourceBatch = batch(10589L);
+        sourceBatch.setTotalCost(new BigDecimal("56"));
+        sourceBatch.setUnitCost(new BigDecimal("12.4444"));
+        ProductionBatch finishedBatch = batch(10588L);
+        finishedBatch.setTotalCost(new BigDecimal("46.66"));
+        finishedBatch.setUnitCost(new BigDecimal("9.332"));
+        when(productionBatchRepo.findAllById(any())).thenReturn(List.of(sourceBatch, finishedBatch));
+
+        when(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY, "PRODUCTION_BATCH", "10589"))
+                .thenReturn(Optional.of(materialWip(10589L, "CLK-W-20260720-9232", "4.5", "12.4444")));
+        when(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY, "PRODUCTION_BATCH", "10588"))
+                .thenReturn(Optional.empty());
+        when(consumptionRepo.findByFactoryIdAndBatchId(eq(FACTORY), anyString())).thenReturn(List.of());
+
+        ProductType productType = new ProductType();
+        productType.setGramsPerUnit(new BigDecimal("800"));
+        when(productTypeRepo.findById("PT-001")).thenReturn(Optional.of(productType));
+
+        List<ProcessSheetInventoryItem> result = service.getInventoryYieldCard(FACTORY, PLAN_ID);
+
+        assertThat(result).hasSize(2);
+        ProcessSheetInventoryItem finalStep = result.get(1);
+        assertThat(finalStep.getUnit()).isEqualTo("box");
+        assertThat(finalStep.getProduced()).isEqualByComparingTo("5");
+        assertThat(finalStep.getProductWeight()).isEqualByComparingTo("4");
+        assertThat(finalStep.getStepYieldRate()).isEqualByComparingTo("88.8889");
+        assertThat(finalStep.getCumulativeYieldRate()).isEqualByComparingTo("80.0000");
+        assertThat(finalStep.getInheritedCost()).isEqualByComparingTo("56.00");
+        assertThat(finalStep.getAddedCost()).isEqualByComparingTo("0");
+        assertThat(finalStep.getRowTotalCost()).isEqualByComparingTo("56.00");
+        assertThat(finalStep.getUnitPrice()).isEqualByComparingTo("11.2000");
+    }
+
+    @Test
     @DisplayName("YIELD-CARD-0D: missing upstream source does not fabricate inherited raw or cumulative yield")
     void processSheetRows_missingUpstreamSource_doesNotFabricateYield() throws Exception {
         ProcessSheetRow row = sheetRow(2, 9401L, "CLK-W-MISSING-SOURCE");

@@ -59,13 +59,17 @@ const availableUpstream = [{
   status: 'ACTIVE', unit: 'kg', productTypeName: '羊排熟制半成品',
 }];
 
-function mountTable(context: unknown = workflowContext, upstreamItems: unknown[] = availableUpstream) {
+function mountTable(
+  context: unknown = workflowContext,
+  upstreamItems: unknown[] = availableUpstream,
+  initialRows: unknown[] = [],
+) {
   const typedContext = context as { allowMultipleUpstreamSources?: boolean } | null;
   return mount(ProcessDataTable, {
     props: {
       factoryId: 'F006', planId: 'PLAN-1', processCode: 'qidiao', processOrder: 2,
       processLabel: '冷冻', productTypeId: 'SKU-1', inputUnit: 'kg', outputUnit: '盒',
-      isFirstProcess: false, upstreamItems, ownInventoryItems: [], initialRows: [],
+      isFirstProcess: false, upstreamItems, ownInventoryItems: [], initialRows,
       viewMode: 'card', workflowContext: context,
       allowMultipleUpstreamSources: typedContext?.allowMultipleUpstreamSources ?? false,
     },
@@ -115,6 +119,34 @@ describe('ProcessDataTable finished-goods reporting contract', () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain('10 kg');
+  });
+
+  it('renders canonical box as 盒 in a persisted finished row without changing its payload unit', async () => {
+    const context = JSON.parse(JSON.stringify(workflowContext));
+    context.output.unit = 'box';
+    context.outputs[0].unit = 'box';
+    const persistedRow = {
+      clientRowId: 'qidiao-mrs9qy4k-34301c',
+      batchNumber: 'PB-PLAN-TEST-64467',
+      batchId: 10588,
+      rowStatus: 'SAVED',
+      submissionStatus: 'SUBMITTED',
+      materialized: true,
+      interimSettledAt: null,
+      payload: {
+        clientRowId: 'qidiao-mrs9qy4k-34301c', processCode: 'qidiao', processOrder: 2,
+        productTypeId: 'SKU-1', finished: true, inputQuantity: 4.5, outputQuantity: 5,
+        inputUnit: 'kg', outputUnit: 'box', unit: 'box', productWeight: 4,
+        seasoningStep: false,
+      },
+    };
+
+    const wrapper = mountTable(context, [], [persistedRow]);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('实产 5 盒');
+    expect(wrapper.text()).not.toContain('实产 5 box');
+    expect(persistedRow.payload.unit).toBe('box');
   });
 
   it('shows an explicit missing-net-weight message instead of inventing a conversion', async () => {
