@@ -3,6 +3,10 @@ import { getCurrentFactoryId } from '../../utils/factoryIdHelper';
 import { timeStatsApiClient } from './timeStatsApiClient';
 import { whitelistApiClient } from './whitelistApiClient';
 import { userApiClient, UserDTO, PageResponse } from './userApiClient';
+import {
+  employeeAIApiClient,
+  type EmployeeAnalysisResponse,
+} from './employeeAIApiClient';
 
 /**
  * HR管理API客户端
@@ -653,87 +657,37 @@ class HRApiClient {
     userId: number;
     analysisType: string;
     lastUpdated: string;
-    summary: string;
+    summary: string | null;
     strengths: string[];
     improvements: string[];
     recommendations: string[];
-    performanceScore: number;
+    performanceScore: number | null;
   } | null> {
     try {
-      const response = await apiClient.post<{
-        code: number;
-        data: {
-          employeeId?: number;
-          employeeName?: string;
-          overallScore?: number;
-          overallGrade?: string;
-          aiInsight?: string;
-          suggestions?: Array<{
-            type?: string;
-            content?: string;
-            priority?: string;
-          }>;
-          attendance?: {
-            attendanceRate?: number;
-            lateCount?: number;
-          };
-          workHours?: {
-            avgDailyHours?: number;
-            overtimeRatio?: number;
-          };
-          production?: {
-            avgOutput?: number;
-            qualityRate?: number;
-          };
-          analyzedAt?: string;
-          sessionId?: string;
-        };
-        message: string;
-        success: boolean;
-      }>(`${this.getPath(factoryId)}/ai/analysis/employee/${userId}`, null, {
-        params: { days: 90 },
-      });
-
-      if (!response.success || !response.data) {
-        return null;
-      }
-
-      const data = response.data;
-
-      // 从suggestions中提取strengths和improvements
+      const data = await employeeAIApiClient.analyzeEmployee(userId, { days: 90 }, factoryId);
       const strengths: string[] = [];
       const improvements: string[] = [];
       const recommendations: string[] = [];
 
-      if (data.suggestions) {
-        for (const suggestion of data.suggestions) {
-          if (suggestion.type === 'STRENGTH') {
-            strengths.push(suggestion.content || '');
-          } else if (suggestion.type === 'IMPROVEMENT') {
-            improvements.push(suggestion.content || '');
+      for (const suggestion of data.suggestions) {
+          if (suggestion.type === '优势') {
+            strengths.push(suggestion.description);
+          } else if (suggestion.type === '关注') {
+            improvements.push(suggestion.description);
           } else {
-            recommendations.push(suggestion.content || '');
+            recommendations.push(suggestion.description);
           }
-        }
-      }
-
-      // 如果没有分类，使用AI洞察作为summary
-      if (strengths.length === 0 && data.attendance?.attendanceRate) {
-        strengths.push(`出勤率: ${data.attendance.attendanceRate}%`);
-      }
-      if (improvements.length === 0 && data.workHours?.overtimeRatio) {
-        improvements.push(`加班比例: ${data.workHours.overtimeRatio}%，建议优化工作效率`);
       }
 
       return {
-        userId: data.employeeId || userId,
+        userId: data.employeeId,
         analysisType: 'COMPREHENSIVE',
-        lastUpdated: data.analyzedAt || new Date().toISOString(),
-        summary: data.aiInsight || `员工综合评分: ${data.overallScore || 0}分 (${data.overallGrade || 'N/A'})`,
+        lastUpdated: data.analyzedAt,
+        summary: data.aiInsight,
         strengths,
         improvements,
         recommendations,
-        performanceScore: data.overallScore || 0,
+        performanceScore: data.overallScore,
       };
     } catch (error) {
       console.error('[hrApiClient] 获取员工AI分析失败:', error);
@@ -751,33 +705,15 @@ class HRApiClient {
   ): Promise<{
     success: boolean;
     message: string;
-    analysisId?: string;
+    analysis?: EmployeeAnalysisResponse;
   }> {
     try {
-      const response = await apiClient.post<{
-        code: number;
-        data: {
-          sessionId?: string;
-          analyzedAt?: string;
-          overallScore?: number;
-        };
-        message: string;
-        success: boolean;
-      }>(`${this.getPath(factoryId)}/ai/analysis/employee/${userId}`, null, {
-        params: { days: 90 },
-      });
-
-      if (!response.success) {
-        return {
-          success: false,
-          message: response.message || 'AI分析请求失败',
-        };
-      }
+      const analysis = await employeeAIApiClient.analyzeEmployee(userId, { days: 90 }, factoryId);
 
       return {
         success: true,
         message: '分析请求已完成',
-        analysisId: response.data?.sessionId || `AI-${userId}-${Date.now()}`,
+        analysis,
       };
     } catch (error) {
       console.error('[hrApiClient] 请求员工AI分析失败:', error);

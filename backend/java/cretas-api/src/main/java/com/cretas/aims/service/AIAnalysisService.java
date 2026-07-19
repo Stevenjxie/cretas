@@ -22,13 +22,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
-import com.cretas.aims.entity.BatchWorkSession;
 import com.cretas.aims.repository.QualityInspectionRepository;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
 import java.util.*;
 
 /**
@@ -920,8 +918,8 @@ public class AIAnalysisService {
 
         try {
             // 1. 获取员工基本信息
-            User employee = userRepository.findById(employeeId)
-                    .orElseThrow(() -> new RuntimeException("员工不存在: " + employeeId));
+            User employee = userRepository.findByIdAndFactoryId(employeeId, factoryId)
+                    .orElseThrow(() -> new RuntimeException("员工不存在"));
 
             // 2. 计算时间范围
             LocalDateTime endTime = LocalDateTime.now();
@@ -931,9 +929,10 @@ public class AIAnalysisService {
             Map<String, Object> employeeData = collectEmployeeData(factoryId, employee, startTime, endTime);
 
             // 4. 格式化为AI提示词
+            String factPrompt = formatEmployeeDataForAI(employeeData);
             String message = question != null && !question.trim().isEmpty()
-                    ? question + "\n\n以下是员工数据：\n" + formatEmployeeDataForAI(employeeData)
-                    : formatEmployeeDataForAI(employeeData);
+                    ? "【用户补充问题（不改变事实约束）】\n" + question.trim() + "\n\n" + factPrompt
+                    : factPrompt;
 
             PythonGeneralAnalysisRequest request = PythonGeneralAnalysisRequest.builder()
                     .message(message)
@@ -967,160 +966,106 @@ public class AIAnalysisService {
         List<TimeClockRecord> attendanceRecords = timeClockRecordRepository
                 .findByFactoryIdAndUserIdAndClockDateBetween(factoryId, userId, startTime, endTime);
 
-        int totalAttendanceDays = attendanceRecords.size();
+        int attendanceDays = 0;
         int lateCount = 0;
         int earlyLeaveCount = 0;
+        int absentDays = 0;
         int totalWorkMinutes = 0;
-        int overtimeMinutes = 0;
 
         for (TimeClockRecord record : attendanceRecords) {
             if (record.getWorkDurationMinutes() != null) {
                 totalWorkMinutes += record.getWorkDurationMinutes();
             }
 
-            // 检查迟到（假设9:00为标准上班时间）
-            if (record.getClockInTime() != null) {
-                int hour = record.getClockInTime().getHour();
-                int minute = record.getClockInTime().getMinute();
-                if (hour > 9 || (hour == 9 && minute > 0)) {
-                    lateCount++;
-                }
+            // 只使用持久化的考勤状态；排班时间不在本服务的可信数据范围内。
+            String attendanceStatus = record.getAttendanceStatus();
+            if ("ABSENT".equalsIgnoreCase(attendanceStatus)) {
+                absentDays++;
+            } else if (attendanceStatus != null) {
+                attendanceDays++;
             }
-
-            // 检查早退（假设18:00为标准下班时间）
-            if (record.getClockOutTime() != null) {
-                int hour = record.getClockOutTime().getHour();
-                if (hour < 18) {
-                    earlyLeaveCount++;
-                }
+            if (attendanceStatus != null && attendanceStatus.toUpperCase(Locale.ROOT).contains("LATE")) {
+                lateCount++;
             }
-
-            // 计算加班
-            if (record.getWorkDurationMinutes() != null && record.getWorkDurationMinutes() > 8 * 60) {
-                overtimeMinutes += record.getWorkDurationMinutes() - 8 * 60;
+            if (attendanceStatus != null && attendanceStatus.toUpperCase(Locale.ROOT).contains("EARLY_LEAVE")) {
+                earlyLeaveCount++;
             }
         }
 
-        // 计算应出勤天数（简化：周一到周五）
-        long totalDays = ChronoUnit.DAYS.between(startTime.toLocalDate(), endTime.toLocalDate());
-        int expectedDays = (int) (totalDays * 5 / 7); // 粗略估算工作日
-
         Map<String, Object> attendanceData = new HashMap<>();
-        attendanceData.put("totalDays", totalAttendanceDays);
-        attendanceData.put("expectedDays", expectedDays);
-        attendanceData.put("attendanceRate", expectedDays > 0 ?
-                Math.round(totalAttendanceDays * 100.0 / expectedDays) : 0);
+        attendanceData.put("recordCount", attendanceRecords.size());
+        attendanceData.put("attendanceDays", attendanceDays);
+        attendanceData.put("attendanceRate", null);
         attendanceData.put("lateCount", lateCount);
         attendanceData.put("earlyLeaveCount", earlyLeaveCount);
-        attendanceData.put("absentDays", Math.max(0, expectedDays - totalAttendanceDays));
+        attendanceData.put("absentDays", absentDays);
         attendanceData.put("totalWorkMinutes", totalWorkMinutes);
-        attendanceData.put("overtimeMinutes", overtimeMinutes);
         data.put("attendance", attendanceData);
 
         // 2. 工作会话数据（工时效率）
         Integer workSessionMinutes = employeeWorkSessionRepository
-                .sumActualWorkMinutesByUserIdAndTimeRange(userId, startTime, endTime);
+                .sumActualWorkMinutesByFactoryIdAndUserIdAndTimeRange(factoryId, userId, startTime, endTime);
         long sessionCount = employeeWorkSessionRepository
-                .countByUserIdAndTimeRange(userId, startTime, endTime);
+                .countByFactoryIdAndUserIdAndTimeRange(factoryId, userId, startTime, endTime);
 
         Map<String, Object> workHoursData = new HashMap<>();
         int actualWorkMinutes = workSessionMinutes != null ? workSessionMinutes : 0;
         workHoursData.put("totalMinutes", actualWorkMinutes);
         workHoursData.put("sessionCount", sessionCount);
-        workHoursData.put("avgDailyHours", totalAttendanceDays > 0 ?
-                Math.round(actualWorkMinutes / 60.0 / totalAttendanceDays * 10) / 10.0 : 0);
-        workHoursData.put("overtimeHours", Math.round(overtimeMinutes / 60.0 * 10) / 10.0);
-        workHoursData.put("efficiency", totalWorkMinutes > 0 ?
-                Math.round(actualWorkMinutes * 100.0 / totalWorkMinutes) : 0);
+        workHoursData.put("avgDailyHours", null);
+        workHoursData.put("overtimeHours", null);
+        workHoursData.put("efficiency", null);
         data.put("workHours", workHoursData);
 
         // 3. 生产贡献数据（从BatchWorkSession获取真实数据）
         Map<String, Object> productionData = new HashMap<>();
 
         // 使用真实的批次工作会话数据
-        long batchCount = batchWorkSessionRepository.countDistinctBatchesByEmployeeAndTimeRange(userId, startTime, endTime);
-        Integer batchWorkMinutes = batchWorkSessionRepository.sumWorkMinutesByEmployeeAndTimeRange(userId, startTime, endTime);
-        long completedBatches = batchWorkSessionRepository.countCompletedByEmployeeAndTimeRange(userId, startTime, endTime);
-        List<BatchWorkSession> batchSessions = batchWorkSessionRepository.findByEmployeeIdAndTimeRange(userId, startTime, endTime);
+        long batchCount = batchWorkSessionRepository.countDistinctBatchesByFactoryIdAndEmployeeAndTimeRange(
+                factoryId, userId, startTime, endTime);
+        long batchWorkSessionCount = batchWorkSessionRepository.countByFactoryIdAndEmployeeAndTimeRange(
+                factoryId, userId, startTime, endTime);
+        Integer batchWorkMinutes = batchWorkSessionRepository.sumWorkMinutesByFactoryIdAndEmployeeAndTimeRange(
+                factoryId, userId, startTime, endTime);
+        long completedBatchWorkSessionCount =
+                batchWorkSessionRepository.countCompletedByFactoryIdAndEmployeeAndTimeRange(
+                        factoryId, userId, startTime, endTime);
 
         int totalBatchMinutes = batchWorkMinutes != null ? batchWorkMinutes : 0;
-        double estimatedOutput = totalBatchMinutes * 0.5; // 估算产量 (kg)
 
         // 获取质检数据计算良品率
-        long totalInspections = qualityInspectionRepository.countByInspectorIdAndDateRange(
-                userId, startTime.toLocalDate(), endTime.toLocalDate());
-        long passedInspections = qualityInspectionRepository.countPassedByInspectorIdAndDateRange(
-                userId, startTime.toLocalDate(), endTime.toLocalDate());
-        double qualityRate = totalInspections > 0 ? (passedInspections * 100.0 / totalInspections) : 95.0;
-
-        // 计算生产效率
-        double productivityRate = totalBatchMinutes > 0 ?
-                Math.round(estimatedOutput / (totalBatchMinutes / 60.0) * 10) / 10.0 : 0;
+        long totalInspections = qualityInspectionRepository.countByFactoryIdAndInspectorIdAndDateRange(
+                factoryId, userId, startTime.toLocalDate(), endTime.toLocalDate());
+        long passedInspections = qualityInspectionRepository.countPassedByFactoryIdAndInspectorIdAndDateRange(
+                factoryId, userId, startTime.toLocalDate(), endTime.toLocalDate());
+        Double qualityRate = totalInspections > 0
+                ? Math.round(passedInspections * 1000.0 / totalInspections) / 10.0
+                : null;
 
         productionData.put("batchCount", (int) batchCount);
-        productionData.put("completedBatches", completedBatches);
+        productionData.put("batchWorkSessionCount", batchWorkSessionCount);
+        productionData.put("completedBatchWorkSessionCount", completedBatchWorkSessionCount);
         productionData.put("batchWorkMinutes", totalBatchMinutes);
-        productionData.put("outputQuantity", estimatedOutput);
+        productionData.put("outputQuantity", null);
         productionData.put("qualityRate", qualityRate);
-        productionData.put("productivityRate", productivityRate);
+        productionData.put("productivityRate", null);
         productionData.put("totalInspections", totalInspections);
         productionData.put("passedInspections", passedInspections);
         data.put("production", productionData);
 
-        // 4. 技能分布（基于BatchWorkSession的工作类型分析）
-        List<Map<String, Object>> skills = new ArrayList<>();
-        Map<String, Integer> workTypeMinutes = new HashMap<>();
-
-        // 从批次工作会话中提取工作类型分布
-        for (BatchWorkSession session : batchSessions) {
-            String workType = session.getNotes() != null ? session.getNotes() : "一般工作";
-            int minutes = session.getWorkMinutes() != null ? session.getWorkMinutes() : 0;
-            workTypeMinutes.merge(workType, minutes, Integer::sum);
-        }
-
-        // 如果有真实数据，使用真实数据；否则使用默认技能
-        if (!workTypeMinutes.isEmpty()) {
-            int totalMinutesForSkill = workTypeMinutes.values().stream().mapToInt(Integer::intValue).sum();
-            for (Map.Entry<String, Integer> entry : workTypeMinutes.entrySet()) {
-                double percentage = totalMinutesForSkill > 0 ?
-                        Math.round(entry.getValue() * 100.0 / totalMinutesForSkill * 10) / 10.0 : 0;
-                String proficiency = entry.getValue() > 120 ? "熟练" : entry.getValue() > 60 ? "学习中" : "入门";
-                skills.add(createSkillMap(entry.getKey(), percentage, proficiency, entry.getValue() / 60.0));
-            }
-        } else {
-            // 使用默认技能分布（当没有真实数据时）
-            skills.add(createSkillMap("加工操作", 40.0, "熟练", actualWorkMinutes * 0.4 / 60));
-            skills.add(createSkillMap("质检", 25.0, "精通", actualWorkMinutes * 0.25 / 60));
-            skills.add(createSkillMap("包装", 20.0, "熟练", actualWorkMinutes * 0.2 / 60));
-            skills.add(createSkillMap("清洁维护", 15.0, "学习中", actualWorkMinutes * 0.15 / 60));
-        }
-        data.put("skills", skills);
+        // BatchWorkSession.notes 是自由文本备注，不是受控技能类型，不能用于技能推断。
+        data.put("skills", Collections.emptyList());
 
         // 5. 员工基本信息
         Map<String, Object> employeeInfo = new HashMap<>();
         employeeInfo.put("id", employee.getId());
         employeeInfo.put("name", employee.getFullName() != null ? employee.getFullName() : employee.getUsername());
         employeeInfo.put("department", employee.getDepartment());
-        employeeInfo.put("position", employee.getRole());
-        // 计算入职时长
-        if (employee.getCreatedAt() != null) {
-            long tenureMonths = ChronoUnit.MONTHS.between(employee.getCreatedAt(), LocalDateTime.now());
-            employeeInfo.put("tenureMonths", tenureMonths);
-        } else {
-            employeeInfo.put("tenureMonths", 0);
-        }
+        employeeInfo.put("position", employee.getPosition());
+        employeeInfo.put("tenureMonths", employee.getWorkMonths());
         data.put("employee", employeeInfo);
 
         return data;
-    }
-
-    private Map<String, Object> createSkillMap(String name, Double percentage, String proficiency, double hours) {
-        Map<String, Object> skill = new HashMap<>();
-        skill.put("skillName", name);
-        skill.put("percentage", percentage);
-        skill.put("proficiency", proficiency);
-        skill.put("hours", Math.round(hours * 10) / 10.0);
-        return skill;
     }
 
     /**
@@ -1134,59 +1079,53 @@ public class AIAnalysisService {
         Map<String, Object> attendance = (Map<String, Object>) data.get("attendance");
         Map<String, Object> workHours = (Map<String, Object>) data.get("workHours");
         Map<String, Object> production = (Map<String, Object>) data.get("production");
-        List<Map<String, Object>> skills = (List<Map<String, Object>>) data.get("skills");
-
-        sb.append("【员工AI绩效分析请求】\n\n");
+        sb.append("【员工事实数据分析请求】\n");
+        sb.append("以下仅列出持久化记录或由记录直接计算的事实。\n\n");
 
         // 员工基本信息
         sb.append("▶ 员工信息\n");
         sb.append("  姓名: ").append(employee.get("name")).append("\n");
-        sb.append("  部门: ").append(employee.get("department")).append("\n");
-        sb.append("  职位: ").append(employee.get("position")).append("\n");
-        sb.append("  入职时长: ").append(employee.get("tenureMonths")).append("个月\n\n");
-
-        // 考勤表现
-        sb.append("▶ 考勤表现\n");
-        sb.append("  出勤天数: ").append(attendance.get("totalDays")).append("/").append(attendance.get("expectedDays")).append("天\n");
-        sb.append("  出勤率: ").append(attendance.get("attendanceRate")).append("%\n");
-        sb.append("  迟到次数: ").append(attendance.get("lateCount")).append("次\n");
-        sb.append("  早退次数: ").append(attendance.get("earlyLeaveCount")).append("次\n");
-        sb.append("  缺勤天数: ").append(attendance.get("absentDays")).append("天\n\n");
-
-        // 工时效率
-        sb.append("▶ 工时效率\n");
-        sb.append("  总工作时长: ").append(Math.round((Integer)attendance.get("totalWorkMinutes") / 60.0)).append("小时\n");
-        sb.append("  有效工作时长: ").append(Math.round((Integer)workHours.get("totalMinutes") / 60.0)).append("小时\n");
-        sb.append("  日均工时: ").append(workHours.get("avgDailyHours")).append("小时\n");
-        sb.append("  加班时长: ").append(workHours.get("overtimeHours")).append("小时\n");
-        sb.append("  工时效率: ").append(workHours.get("efficiency")).append("%\n\n");
-
-        // 生产贡献
-        sb.append("▶ 生产贡献\n");
-        sb.append("  参与批次数: ").append(production.get("batchCount")).append("个\n");
-        sb.append("  产量贡献: ").append(String.format("%.1f", production.get("outputQuantity"))).append("kg\n");
-        sb.append("  良品率: ").append(String.format("%.1f", production.get("qualityRate"))).append("%\n");
-        sb.append("  人均产能: ").append(production.get("productivityRate")).append("kg/h\n\n");
-
-        // 技能分布
-        sb.append("▶ 技能分布\n");
-        for (Map<String, Object> skill : skills) {
-            sb.append("  • ").append(skill.get("skillName"));
-            sb.append(": ").append(skill.get("percentage")).append("% (");
-            sb.append(skill.get("proficiency")).append(", ");
-            sb.append(skill.get("hours")).append("h)\n");
+        if (employee.get("department") != null) {
+            sb.append("  部门: ").append(employee.get("department")).append("\n");
+        }
+        if (employee.get("position") != null) {
+            sb.append("  职位: ").append(employee.get("position")).append("\n");
+        }
+        if (employee.get("tenureMonths") != null) {
+            sb.append("  入职时长: ").append(employee.get("tenureMonths")).append("个月\n");
         }
         sb.append("\n");
 
-        // 分析要求
-        sb.append("【分析要求】\n");
-        sb.append("请根据以上数据进行综合绩效分析，包括：\n");
-        sb.append("1. 给出综合评分(0-100)和等级(A/B/C/D)\n");
-        sb.append("2. 分别评估考勤、工时、生产贡献三个维度\n");
-        sb.append("3. 识别员工的优势和需要改进的地方\n");
-        sb.append("4. 给出具体可行的改进建议\n");
-        sb.append("5. 预测发展趋势\n\n");
-        sb.append("请用简洁专业的语言回复，重点突出关键发现和建议。");
+        // 考勤记录事实，不从固定上下班时间或工作日估算排班结果。
+        sb.append("▶ 考勤记录事实\n");
+        sb.append("  记录数: ").append(attendance.get("recordCount")).append("\n");
+        sb.append("  非ABSENT状态记录数: ").append(attendance.get("attendanceDays")).append("\n");
+        sb.append("  持久化LATE状态记录数: ").append(attendance.get("lateCount")).append("\n");
+        sb.append("  持久化EARLY_LEAVE状态记录数: ").append(attendance.get("earlyLeaveCount")).append("\n");
+        sb.append("  持久化ABSENT状态记录数: ").append(attendance.get("absentDays")).append("\n");
+        sb.append("  打卡记录工作分钟数合计: ").append(attendance.get("totalWorkMinutes")).append("\n\n");
+
+        sb.append("▶ 工作会话事实\n");
+        sb.append("  会话数: ").append(workHours.get("sessionCount")).append("\n");
+        sb.append("  实际工作分钟数合计: ").append(workHours.get("totalMinutes")).append("\n\n");
+
+        sb.append("▶ 生产与质检记录事实\n");
+        sb.append("  参与批次数: ").append(production.get("batchCount")).append("个\n");
+        sb.append("  批次工作会话数: ").append(production.get("batchWorkSessionCount")).append("个\n");
+        sb.append("  已完成批次工作会话数: ")
+                .append(production.get("completedBatchWorkSessionCount")).append("个\n");
+        sb.append("  批次工作分钟数合计: ").append(production.get("batchWorkMinutes")).append("\n");
+        sb.append("  质检记录数: ").append(production.get("totalInspections")).append("\n");
+        sb.append("  质检通过记录数: ").append(production.get("passedInspections")).append("\n");
+        if (production.get("qualityRate") != null) {
+            sb.append("  质检通过率: ").append(production.get("qualityRate")).append("%\n");
+        }
+        sb.append("\n");
+
+        sb.append("【事实约束】\n");
+        sb.append("排班期望天数、出勤率、考勤/工时/生产评分、综合评分、等级、部门均值、部门排名、产量、产能、技能和历史趋势均不可计算。\n");
+        sb.append("不得推测、补值、套用固定上下班时间、行业平均、默认良品率或虚构趋势；缺失项必须明确写‘不可计算’。\n");
+        sb.append("仅基于以上事实回答并区分事实与解释，不得把自由文本备注当作技能类型。");
 
         return sb.toString();
     }
@@ -1203,197 +1142,136 @@ public class AIAnalysisService {
         Map<String, Object> attendanceData = (Map<String, Object>) data.get("attendance");
         Map<String, Object> workHoursData = (Map<String, Object>) data.get("workHours");
         Map<String, Object> productionData = (Map<String, Object>) data.get("production");
-        List<Map<String, Object>> skillsData = (List<Map<String, Object>>) data.get("skills");
+        if (aiResponse == null || !aiResponse.hasAnalysis()) {
+            throw new IllegalStateException("Python employee analysis response is invalid");
+        }
 
-        // 构建响应
         AIResponseDTO.EmployeeAnalysisResponse response = new AIResponseDTO.EmployeeAnalysisResponse();
+        List<String> notComputableMetrics = new ArrayList<>();
 
         // 基本信息
         response.setEmployeeId(employee.getId());
         response.setEmployeeName(employee.getFullName() != null ? employee.getFullName() : employee.getUsername());
         response.setDepartment(employee.getDepartment());
-        response.setPosition(employee.getRole());
-        response.setTenureMonths(((Number) employeeInfo.get("tenureMonths")).intValue());
+        response.setPosition(employee.getPosition());
+        Integer tenureMonths = (Integer) employeeInfo.get("tenureMonths");
+        response.setTenureMonths(tenureMonths);
+        if (tenureMonths == null) {
+            notComputableMetrics.add("tenureMonths");
+        }
         response.setPeriodStart(startTime.toLocalDate().toString());
         response.setPeriodEnd(endTime.toLocalDate().toString());
 
-        // 计算数据点数量
-        int dataPoints = ((Number) attendanceData.get("totalDays")).intValue() +
-                ((Number) workHoursData.get("sessionCount")).intValue();
+        // 原始记录数合计；四张互不重叠的事实表各计一次。
+        long dataPoints = ((Number) attendanceData.get("recordCount")).longValue() +
+                ((Number) workHoursData.get("sessionCount")).longValue() +
+                ((Number) productionData.get("batchWorkSessionCount")).longValue() +
+                ((Number) productionData.get("totalInspections")).longValue();
         response.setDataPoints(dataPoints);
 
-        // 综合评分（基于各维度数据计算）
-        int attendanceScore = calculateAttendanceScore(attendanceData);
-        int workHoursScore = calculateWorkHoursScore(workHoursData);
-        int productionScore = calculateProductionScore(productionData);
-        int overallScore = (attendanceScore * 30 + workHoursScore * 30 + productionScore * 40) / 100;
-        response.setOverallScore(overallScore);
-        response.setOverallGrade(getGrade(overallScore));
-        response.setScoreChange(Math.random() * 10 - 3); // 模拟环比变化
-        response.setDepartmentRankPercent((int)(Math.random() * 30 + 10)); // 模拟排名
+        // 仓库中没有租户配置的评分规则、部门基准或历史可比序列，必须 fail closed。
+        response.setOverallScore(null);
+        response.setOverallGrade(null);
+        response.setScoreChange(null);
+        response.setDepartmentRankPercent(null);
+        notComputableMetrics.addAll(List.of(
+                "overallScore",
+                "overallGrade",
+                "scoreChange",
+                "departmentRankPercent"));
 
         // 考勤分析
         AIResponseDTO.AttendanceAnalysis attendance = new AIResponseDTO.AttendanceAnalysis();
-        attendance.setScore(attendanceScore);
-        attendance.setAttendanceRate(((Number) attendanceData.get("attendanceRate")).doubleValue());
-        attendance.setAttendanceDays(((Number) attendanceData.get("totalDays")).intValue());
+        attendance.setScore(null);
+        attendance.setAttendanceRate(null);
+        attendance.setRecordCount(((Number) attendanceData.get("recordCount")).intValue());
+        attendance.setAttendanceDays(((Number) attendanceData.get("attendanceDays")).intValue());
         attendance.setLateCount(((Number) attendanceData.get("lateCount")).intValue());
         attendance.setEarlyLeaveCount(((Number) attendanceData.get("earlyLeaveCount")).intValue());
         attendance.setAbsentDays(((Number) attendanceData.get("absentDays")).intValue());
-        attendance.setDepartmentAvgRate(92.0); // 模拟部门平均
-        attendance.setInsight(attendanceScore >= 80 ? "考勤表现良好" : "需要改善出勤情况");
-        attendance.setInsightType(attendanceScore >= 80 ? "positive" : "warning");
+        attendance.setClockedWorkMinutes(((Number) attendanceData.get("totalWorkMinutes")).intValue());
+        attendance.setDepartmentAvgRate(null);
+        attendance.setInsight(null);
+        attendance.setInsightType(null);
         response.setAttendance(attendance);
+        notComputableMetrics.addAll(List.of(
+                "attendance.score",
+                "attendance.attendanceRate",
+                "attendance.departmentAvgRate",
+                "attendance.insight",
+                "attendance.insightType"));
 
         // 工时分析
         AIResponseDTO.WorkHoursAnalysis workHours = new AIResponseDTO.WorkHoursAnalysis();
-        workHours.setScore(workHoursScore);
-        workHours.setAvgDailyHours(((Number) workHoursData.get("avgDailyHours")).doubleValue());
-        workHours.setOvertimeHours(((Number) workHoursData.get("overtimeHours")).doubleValue());
-        workHours.setEfficiency(((Number) workHoursData.get("efficiency")).doubleValue());
-        workHours.setWorkTypeCount(skillsData.size());
-        workHours.setDepartmentAvgHours(7.5);
-        workHours.setInsight(workHoursScore >= 80 ? "工时效率优秀" : "工时利用率有待提升");
-        workHours.setInsightType(workHoursScore >= 80 ? "positive" : "neutral");
+        workHours.setScore(null);
+        workHours.setTotalMinutes(((Number) workHoursData.get("totalMinutes")).intValue());
+        workHours.setSessionCount(((Number) workHoursData.get("sessionCount")).longValue());
+        workHours.setAvgDailyHours(null);
+        workHours.setOvertimeHours(null);
+        workHours.setEfficiency(null);
+        workHours.setWorkTypeCount(null);
+        workHours.setDepartmentAvgHours(null);
+        workHours.setInsight(null);
+        workHours.setInsightType(null);
         response.setWorkHours(workHours);
+        notComputableMetrics.addAll(List.of(
+                "workHours.score",
+                "workHours.avgDailyHours",
+                "workHours.overtimeHours",
+                "workHours.efficiency",
+                "workHours.workTypeCount",
+                "workHours.departmentAvgHours",
+                "workHours.insight",
+                "workHours.insightType"));
 
-        // 生产分析（使用真实数据）
+        // 生产分析只暴露真实计数，以及存在质检记录时的直接通过率。
         AIResponseDTO.ProductionAnalysis production = new AIResponseDTO.ProductionAnalysis();
-        production.setScore(productionScore);
+        production.setScore(null);
         production.setBatchCount(((Number) productionData.get("batchCount")).intValue());
-        production.setOutputQuantity(((Number) productionData.get("outputQuantity")).doubleValue());
-        production.setQualityRate(((Number) productionData.get("qualityRate")).doubleValue());
-        production.setProductivityRate(((Number) productionData.get("productivityRate")).doubleValue());
-        production.setDepartmentAvgProductivity(25.0);
-        production.setTopProductLine("水产加工");
-
-        // 根据真实数据生成洞察
-        int batchCount = ((Number) productionData.get("batchCount")).intValue();
-        long completedBatches = productionData.get("completedBatches") != null ?
-                ((Number) productionData.get("completedBatches")).longValue() : 0;
-        double qualityRate = ((Number) productionData.get("qualityRate")).doubleValue();
-
-        String insight;
-        String insightType;
-        if (batchCount == 0) {
-            insight = "暂无生产数据记录";
-            insightType = "neutral";
-        } else if (productionScore >= 85 && qualityRate >= 98) {
-            insight = String.format("生产贡献突出：完成%d个批次，良品率%.1f%%", batchCount, qualityRate);
-            insightType = "positive";
-        } else if (productionScore >= 70) {
-            insight = String.format("生产表现良好：参与%d个批次，完成%d个", batchCount, completedBatches);
-            insightType = "neutral";
-        } else {
-            insight = "产量和质量均需提升";
-            insightType = "warning";
-        }
-        production.setInsight(insight);
-        production.setInsightType(insightType);
+        production.setBatchWorkSessionCount(
+                ((Number) productionData.get("batchWorkSessionCount")).longValue());
+        production.setCompletedBatchWorkSessionCount(
+                ((Number) productionData.get("completedBatchWorkSessionCount")).longValue());
+        production.setBatchWorkMinutes(((Number) productionData.get("batchWorkMinutes")).intValue());
+        production.setTotalInspections(((Number) productionData.get("totalInspections")).longValue());
+        production.setPassedInspections(((Number) productionData.get("passedInspections")).longValue());
+        production.setOutputQuantity(null);
+        Number qualityRate = (Number) productionData.get("qualityRate");
+        production.setQualityRate(qualityRate != null ? qualityRate.doubleValue() : null);
+        production.setProductivityRate(null);
+        production.setDepartmentAvgProductivity(null);
+        production.setTopProductLine(null);
+        production.setInsight(null);
+        production.setInsightType(null);
         response.setProduction(production);
+        notComputableMetrics.add("production.score");
+        notComputableMetrics.add("production.outputQuantity");
+        if (qualityRate == null) {
+            notComputableMetrics.add("production.qualityRate");
+        }
+        notComputableMetrics.addAll(List.of(
+                "production.productivityRate",
+                "production.departmentAvgProductivity",
+                "production.topProductLine",
+                "production.insight",
+                "production.insightType"));
 
-        // 技能分布
-        List<AIResponseDTO.SkillDistribution> skills = new ArrayList<>();
-        for (Map<String, Object> skillMap : skillsData) {
-            AIResponseDTO.SkillDistribution skill = new AIResponseDTO.SkillDistribution();
-            skill.setSkillName((String) skillMap.get("skillName"));
-            skill.setPercentage(((Number) skillMap.get("percentage")).doubleValue());
-            skill.setProficiency((String) skillMap.get("proficiency"));
-            skill.setHours(((Number) skillMap.get("hours")).doubleValue());
-            skills.add(skill);
-        }
-        response.setSkills(skills);
+        response.setSkills(Collections.emptyList());
+        response.setSuggestions(Collections.emptyList());
+        response.setTrends(Collections.emptyList());
+        notComputableMetrics.addAll(List.of("skills", "suggestions", "trends"));
 
-        // 建议
-        List<AIResponseDTO.EmployeeSuggestion> suggestions = new ArrayList<>();
-        if (overallScore >= 85) {
-            suggestions.add(createSuggestion("优势", "综合表现优秀", "继续保持良好的工作状态，可考虑承担更多责任", "low"));
-        }
-        if (attendanceScore < 80) {
-            suggestions.add(createSuggestion("关注", "考勤需改善", "建议关注上班时间，减少迟到次数", "high"));
-        }
-        if (workHoursScore < 80) {
-            suggestions.add(createSuggestion("建议", "提升工时效率", "优化工作方法，提高有效工作时间占比", "medium"));
-        }
-        if (productionScore >= 85) {
-            suggestions.add(createSuggestion("优势", "生产能力强", "产量和质量均表现突出，可作为标杆", "low"));
-        }
-        response.setSuggestions(suggestions);
+        response.setAiInsight(aiResponse.getEffectiveAnalysis());
 
-        // 趋势（模拟近6个月）
-        List<AIResponseDTO.PerformanceTrend> trends = new ArrayList<>();
-        LocalDate now = LocalDate.now();
-        for (int i = 5; i >= 0; i--) {
-            AIResponseDTO.PerformanceTrend trend = new AIResponseDTO.PerformanceTrend();
-            trend.setMonth(now.minusMonths(i).toString().substring(0, 7));
-            int score = overallScore + (int)(Math.random() * 10 - 5);
-            score = Math.max(0, Math.min(100, score));
-            trend.setScore(score);
-            trend.setGrade(getGrade(score));
-            trends.add(trend);
-        }
-        response.setTrends(trends);
-
-        // AI洞察
-        String aiInsight = aiResponse.getEffectiveAnalysis() != null ?
-                aiResponse.getEffectiveAnalysis() :
-                "该员工综合表现" + (overallScore >= 80 ? "良好" : "一般") + "，建议关注工作效率和质量提升。";
-        response.setAiInsight(aiInsight);
-
-        // 会话信息
-        response.setSessionId(aiResponse.getSessionId() != null ?
-                aiResponse.getSessionId() : UUID.randomUUID().toString());
+        String upstreamSessionId = aiResponse.getSessionId();
+        response.setSessionId(upstreamSessionId != null && !upstreamSessionId.isBlank()
+                ? upstreamSessionId
+                : null);
         response.setAnalyzedAt(LocalDateTime.now());
-        response.setTokensUsed(aiResponse.getTokensUsed() != null ? aiResponse.getTokensUsed() : 500);
+        response.setTokensUsed(aiResponse.getTokensUsed());
+        response.setNotComputableMetrics(notComputableMetrics);
 
         return response;
-    }
-
-    private int calculateAttendanceScore(Map<String, Object> data) {
-        double attendanceRate = ((Number) data.get("attendanceRate")).doubleValue();
-        int lateCount = ((Number) data.get("lateCount")).intValue();
-
-        int score = (int) attendanceRate;
-        score -= lateCount * 2; // 每次迟到扣2分
-        return Math.max(0, Math.min(100, score));
-    }
-
-    private int calculateWorkHoursScore(Map<String, Object> data) {
-        double efficiency = ((Number) data.get("efficiency")).doubleValue();
-        double avgDailyHours = ((Number) data.get("avgDailyHours")).doubleValue();
-
-        int score = (int) efficiency;
-        if (avgDailyHours >= 8) {
-            score += 10;
-        } else if (avgDailyHours >= 7) {
-            score += 5;
-        }
-        return Math.max(0, Math.min(100, score));
-    }
-
-    private int calculateProductionScore(Map<String, Object> data) {
-        double qualityRate = ((Number) data.get("qualityRate")).doubleValue();
-        int batchCount = ((Number) data.get("batchCount")).intValue();
-
-        int score = (int) qualityRate;
-        score += Math.min(10, batchCount); // 批次数加分，最多10分
-        return Math.max(0, Math.min(100, score));
-    }
-
-    private String getGrade(int score) {
-        if (score >= 90) return "A";
-        if (score >= 80) return "B";
-        if (score >= 60) return "C";
-        return "D";
-    }
-
-    private AIResponseDTO.EmployeeSuggestion createSuggestion(String type, String title, String description, String priority) {
-        AIResponseDTO.EmployeeSuggestion suggestion = new AIResponseDTO.EmployeeSuggestion();
-        suggestion.setType(type);
-        suggestion.setTitle(title);
-        suggestion.setDescription(description);
-        suggestion.setPriority(priority);
-        return suggestion;
     }
 
     // ========== 辅助方法 ==========

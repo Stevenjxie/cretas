@@ -25,11 +25,17 @@ jest.mock('../../../services/api/userApiClient', () => ({
   UserDTO: {},
   PageResponse: {},
 }));
+jest.mock('../../../services/api/employeeAIApiClient', () => ({
+  employeeAIApiClient: {
+    analyzeEmployee: jest.fn(),
+  },
+}));
 
 import { hrApiClient } from '../../../services/api/hrApiClient';
 import { timeStatsApiClient } from '../../../services/api/timeStatsApiClient';
 import { whitelistApiClient } from '../../../services/api/whitelistApiClient';
 import { userApiClient } from '../../../services/api/userApiClient';
+import { employeeAIApiClient } from '../../../services/api/employeeAIApiClient';
 
 const DEFAULT_FACTORY_ID = 'CRETAS_2024_001';
 const BASE = `/api/mobile/${DEFAULT_FACTORY_ID}`;
@@ -264,6 +270,52 @@ describe('hrApiClient', () => {
 
       expect(data.thisMonthNewHires).toBe(5);
       expect(data.newHiresChange).toBe(2); // 5 - 3
+    });
+  });
+
+  describe('employee AI compatibility methods', () => {
+    it('preserves null insight and score instead of fabricating zero-score content', async () => {
+      (employeeAIApiClient.analyzeEmployee as jest.Mock).mockResolvedValue({
+        employeeId: 17,
+        analyzedAt: '2026-07-19T10:00:00',
+        aiInsight: null,
+        overallScore: null,
+        suggestions: [],
+      });
+
+      const result = await hrApiClient.getEmployeeAIAnalysis(17, DEFAULT_FACTORY_ID);
+
+      expect(employeeAIApiClient.analyzeEmployee).toHaveBeenCalledTimes(1);
+      expect(employeeAIApiClient.analyzeEmployee).toHaveBeenCalledWith(
+        17,
+        { days: 90 },
+        DEFAULT_FACTORY_ID
+      );
+      expect(result?.summary).toBeNull();
+      expect(result?.performanceScore).toBeNull();
+      expect(result?.strengths).toEqual([]);
+      expect(result?.improvements).toEqual([]);
+    });
+
+    it('requests one analysis and returns that exact result without a local analysis id', async () => {
+      const analysis = {
+        employeeId: 17,
+        analyzedAt: '2026-07-19T10:00:00',
+        aiInsight: '仅基于事实的洞察',
+        overallScore: null,
+        suggestions: [],
+      };
+      (employeeAIApiClient.analyzeEmployee as jest.Mock).mockResolvedValue(analysis);
+
+      const result = await hrApiClient.requestEmployeeAIAnalysis(17, DEFAULT_FACTORY_ID);
+
+      expect(employeeAIApiClient.analyzeEmployee).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({
+        success: true,
+        message: '分析请求已完成',
+        analysis,
+      });
+      expect(result).not.toHaveProperty('analysisId');
     });
   });
 });

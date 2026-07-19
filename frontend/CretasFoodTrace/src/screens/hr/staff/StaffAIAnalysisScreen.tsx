@@ -28,30 +28,14 @@ import { useNavigation, useRoute, useFocusEffect, RouteProp } from '@react-navig
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 
-import { hrApiClient } from '../../../services/api/hrApiClient';
+import {
+  employeeAIApiClient,
+  type EmployeeAnalysisResponse,
+} from '../../../services/api/employeeAIApiClient';
 import { MarkdownRenderer } from '../../../components/common/MarkdownRenderer';
 import { HR_THEME, type HRStackParamList } from '../../../types/hrNavigation';
 
 type RouteParams = RouteProp<HRStackParamList, 'StaffAIAnalysis'>;
-
-interface AIAnalysisResult {
-  summary: string;
-  scores: {
-    efficiency: number;
-    quality: number;
-    attendance: number;
-    teamwork: number;
-    overall: number;
-  };
-  strengths: string[];
-  improvements: string[];
-  suggestions: string;
-  analysisDate: string;
-  // Alternative fields from API
-  recommendations?: string[];
-  performanceScore?: number;
-  lastUpdated?: string;
-}
 
 export default function StaffAIAnalysisScreen() {
   const navigation = useNavigation();
@@ -62,32 +46,12 @@ export default function StaffAIAnalysisScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
-  const [analysis, setAnalysis] = useState<AIAnalysisResult | null>(null);
+  const [analysis, setAnalysis] = useState<EmployeeAnalysisResponse | null>(null);
 
   const loadData = useCallback(async () => {
     try {
-      // getEmployeeAIAnalysis returns analysis object directly
-      const res = await hrApiClient.getEmployeeAIAnalysis(staffId);
-      if (res) {
-        // Map to AIAnalysisResult format with default values for missing fields
-        setAnalysis({
-          summary: res.summary || '',
-          strengths: res.strengths || [],
-          improvements: res.improvements || [],
-          suggestions: res.recommendations?.join('\n') || '',
-          analysisDate: res.lastUpdated || new Date().toISOString().split('T')[0] || '',
-          scores: {
-            efficiency: res.performanceScore || 0,
-            quality: res.performanceScore || 0,
-            attendance: res.performanceScore || 0,
-            teamwork: res.performanceScore || 0,
-            overall: res.performanceScore || 0,
-          },
-          recommendations: res.recommendations,
-          performanceScore: res.performanceScore,
-          lastUpdated: res.lastUpdated,
-        });
-      }
+      const result = await employeeAIApiClient.analyzeEmployee(staffId, { days: 90 });
+      setAnalysis(result);
     } catch (error) {
       console.error('加载AI分析失败:', error);
     } finally {
@@ -110,12 +74,8 @@ export default function StaffAIAnalysisScreen() {
   const handleReanalyze = async () => {
     setAnalyzing(true);
     try {
-      // requestEmployeeAIAnalysis returns {success, message, analysisId}
-      const res = await hrApiClient.requestEmployeeAIAnalysis(staffId);
-      if (res.success) {
-        // Reload data after successful analysis request
-        await loadData();
-      }
+      const result = await employeeAIApiClient.analyzeEmployee(staffId, { days: 90 });
+      setAnalysis(result);
     } catch (error) {
       console.error('重新分析失败:', error);
     } finally {
@@ -129,18 +89,41 @@ export default function StaffAIAnalysisScreen() {
     return HR_THEME.danger;
   };
 
-  const renderScoreItem = (label: string, score: number, icon: MCIconName) => (
-    <View style={styles.scoreItem}>
-      <View style={styles.scoreHeader}>
-        <MaterialCommunityIcons name={icon} size={20} color={HR_THEME.primary} />
-        <Text style={styles.scoreLabel}>{label}</Text>
-        <Text style={[styles.scoreValue, { color: getScoreColor(score) }]}>{score}</Text>
+  const renderScoreItem = (label: string, score: number | null, icon: MCIconName) => {
+    if (score === null) {
+      return (
+        <View style={styles.scoreItem}>
+          <View style={styles.scoreHeader}>
+            <MaterialCommunityIcons name={icon} size={20} color={HR_THEME.primary} />
+            <Text style={styles.scoreLabel}>{label}</Text>
+            <Text style={[styles.scoreValue, { color: HR_THEME.textMuted }]}>不可计算</Text>
+          </View>
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.scoreItem}>
+        <View style={styles.scoreHeader}>
+          <MaterialCommunityIcons name={icon} size={20} color={HR_THEME.primary} />
+          <Text style={styles.scoreLabel}>{label}</Text>
+          <Text style={[styles.scoreValue, { color: getScoreColor(score) }]}>
+            {score}
+          </Text>
+        </View>
+        <ProgressBar
+          progress={score / 100}
+          color={getScoreColor(score)}
+          style={styles.progressBar}
+        />
       </View>
-      <ProgressBar
-        progress={score / 100}
-        color={getScoreColor(score)}
-        style={styles.progressBar}
-      />
+    );
+  };
+
+  const renderFact = (label: string, value: string | number) => (
+    <View style={styles.factRow}>
+      <Text style={styles.factLabel}>{label}</Text>
+      <Text style={styles.factValue}>{value}</Text>
     </View>
   );
 
@@ -160,7 +143,12 @@ export default function StaffAIAnalysisScreen() {
           <MaterialCommunityIcons name="arrow-left" size={24} color={HR_THEME.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>{t('staff.ai.title')}</Text>
-        <TouchableOpacity onPress={handleReanalyze} style={styles.refreshBtn} disabled={analyzing}>
+        <TouchableOpacity
+          testID="reanalyze-button"
+          onPress={handleReanalyze}
+          style={styles.refreshBtn}
+          disabled={analyzing}
+        >
           <MaterialCommunityIcons
             name="refresh"
             size={24}
@@ -201,80 +189,88 @@ export default function StaffAIAnalysisScreen() {
           </Card>
         ) : (
           <>
-            {/* 综合评分 */}
+            {/* 综合评分：缺少评分规则时明确留空 */}
             <Card style={styles.overallCard}>
               <Card.Content style={styles.overallContent}>
                 <View style={styles.overallScore}>
-                  <Text style={styles.overallValue}>{analysis.scores.overall}</Text>
+                  <Text style={styles.overallValue}>{analysis.overallScore ?? '—'}</Text>
                   <Text style={styles.overallLabel}>{t('staff.ai.overallScore')}</Text>
+                  {analysis.overallScore === null ? (
+                    <Text style={styles.notComputableLabel}>不可计算</Text>
+                  ) : null}
                 </View>
                 <Text style={styles.analysisDate}>
-                  {t('staff.ai.analysisDate')}: {analysis.analysisDate}
+                  {t('staff.ai.analysisDate')}: {analysis.analyzedAt}
                 </Text>
               </Card.Content>
             </Card>
 
-            {/* 分项评分 */}
+            {/* 仅展示后端真实存在的评分维度，不复制综合评分 */}
             <Card style={styles.sectionCard}>
               <Card.Content>
                 <Text style={styles.sectionTitle}>{t('staff.ai.sections.ability')}</Text>
-                {renderScoreItem(t('staff.ai.scores.efficiency'), analysis.scores.efficiency, 'speedometer')}
-                {renderScoreItem(t('staff.ai.scores.quality'), analysis.scores.quality, 'check-decagram')}
-                {renderScoreItem(t('staff.ai.scores.attendance'), analysis.scores.attendance, 'calendar-check')}
-                {renderScoreItem(t('staff.ai.scores.teamwork'), analysis.scores.teamwork, 'account-group')}
+                {renderScoreItem('考勤评分', analysis.attendance.score, 'calendar-check')}
+                {renderScoreItem('工时评分', analysis.workHours.score, 'speedometer')}
+                {renderScoreItem('生产评分', analysis.production.score, 'factory')}
               </Card.Content>
             </Card>
 
-            {/* 优势 */}
+            {/* 原始事实计数 */}
             <Card style={styles.sectionCard}>
               <Card.Content>
                 <View style={styles.listHeader}>
-                  <MaterialCommunityIcons name="star" size={20} color={HR_THEME.success} />
-                  <Text style={styles.sectionTitle}>{t('staff.ai.sections.strengths')}</Text>
+                  <MaterialCommunityIcons name="database-check" size={20} color={HR_THEME.primary} />
+                  <Text style={styles.sectionTitle}>事实数据</Text>
                 </View>
-                {analysis.strengths.map((item, index) => (
-                  <View key={index} style={styles.listItem}>
-                    <MaterialCommunityIcons
-                      name="check-circle"
-                      size={16}
-                      color={HR_THEME.success}
-                    />
-                    <Text style={styles.listText}>{item}</Text>
+                {renderFact('原始记录合计', analysis.dataPoints)}
+                {renderFact('考勤记录', analysis.attendance.recordCount)}
+                {renderFact('非缺勤状态记录', analysis.attendance.attendanceDays)}
+                {renderFact('缺勤状态记录', analysis.attendance.absentDays)}
+                {renderFact('工作会话', analysis.workHours.sessionCount)}
+                {renderFact('实际工作分钟', analysis.workHours.totalMinutes)}
+                {renderFact('参与批次', analysis.production.batchCount)}
+                {renderFact('批次工作会话', analysis.production.batchWorkSessionCount)}
+                {renderFact('已完成批次工作会话', analysis.production.completedBatchWorkSessionCount)}
+                {renderFact('批次工作分钟', analysis.production.batchWorkMinutes)}
+                {renderFact('质检记录', analysis.production.totalInspections)}
+                {renderFact('质检通过记录', analysis.production.passedInspections)}
+                {renderFact(
+                  '质检通过率',
+                  analysis.production.qualityRate === null
+                    ? '不可计算'
+                    : `${analysis.production.qualityRate}%`
+                )}
+              </Card.Content>
+            </Card>
+
+            {/* AI洞察直接来自后端，不由本地评分模板生成 */}
+            <Card style={styles.sectionCard}>
+              <Card.Content>
+                <View style={styles.listHeader}>
+                  <MaterialCommunityIcons name="robot" size={20} color={HR_THEME.info} />
+                  <Text style={styles.sectionTitle}>AI事实洞察</Text>
+                </View>
+                <MarkdownRenderer content={analysis.aiInsight ?? '不可计算'} />
+              </Card.Content>
+            </Card>
+
+            {analysis.suggestions.length > 0 ? (
+              <Card style={styles.sectionCard}>
+                <Card.Content>
+                  <View style={styles.listHeader}>
+                    <MaterialCommunityIcons name="lightbulb" size={20} color={HR_THEME.info} />
+                    <Text style={styles.sectionTitle}>{t('staff.ai.sections.suggestions')}</Text>
                   </View>
-                ))}
-              </Card.Content>
-            </Card>
-
-            {/* 待改进 */}
-            <Card style={styles.sectionCard}>
-              <Card.Content>
-                <View style={styles.listHeader}>
-                  <MaterialCommunityIcons name="alert-circle" size={20} color={HR_THEME.warning} />
-                  <Text style={styles.sectionTitle}>{t('staff.ai.sections.improvements')}</Text>
-                </View>
-                {analysis.improvements.map((item, index) => (
-                  <View key={index} style={styles.listItem}>
-                    <MaterialCommunityIcons
-                      name="arrow-right-circle"
-                      size={16}
-                      color={HR_THEME.warning}
-                    />
-                    <Text style={styles.listText}>{item}</Text>
-                  </View>
-                ))}
-              </Card.Content>
-            </Card>
-
-            {/* AI建议 */}
-            <Card style={styles.sectionCard}>
-              <Card.Content>
-                <View style={styles.listHeader}>
-                  <MaterialCommunityIcons name="lightbulb" size={20} color={HR_THEME.info} />
-                  <Text style={styles.sectionTitle}>{t('staff.ai.sections.suggestions')}</Text>
-                </View>
-                <MarkdownRenderer content={analysis.suggestions} />
-              </Card.Content>
-            </Card>
+                  {analysis.suggestions.map((suggestion, index) => (
+                    <View key={`${suggestion.type}-${index}`} style={styles.listItem}>
+                      <Text style={styles.listText}>
+                        {suggestion.title}: {suggestion.description}
+                      </Text>
+                    </View>
+                  ))}
+                </Card.Content>
+              </Card>
+            ) : null}
           </>
         )}
 
@@ -369,6 +365,11 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.8)',
     marginTop: 4,
   },
+  notComputableLabel: {
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: 13,
+    marginTop: 4,
+  },
   analysisDate: {
     fontSize: 12,
     color: 'rgba(255,255,255,0.6)',
@@ -408,6 +409,22 @@ const styles = StyleSheet.create({
     height: 6,
     borderRadius: 3,
     backgroundColor: HR_THEME.border,
+  },
+  factRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: HR_THEME.border,
+  },
+  factLabel: {
+    color: HR_THEME.textSecondary,
+    fontSize: 14,
+  },
+  factValue: {
+    color: HR_THEME.textPrimary,
+    fontSize: 14,
+    fontWeight: '600',
   },
   listHeader: {
     flexDirection: 'row',

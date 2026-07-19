@@ -362,8 +362,8 @@ public class AIResponseDTO {
         @Schema(description = "分析周期结束")
         private String periodEnd;
 
-        @Schema(description = "数据点数量")
-        private Integer dataPoints;
+        @Schema(description = "原始记录数合计：考勤记录 + 工作会话 + 批次工作会话 + 质检记录")
+        private Long dataPoints;
 
         @Schema(description = "综合评分(0-100)")
         private Integer overallScore;
@@ -406,6 +406,9 @@ public class AIResponseDTO {
 
         @Schema(description = "消耗Token数")
         private Integer tokensUsed;
+
+        @Schema(description = "因缺少可信数据或配置而不可计算的响应字段路径")
+        private List<String> notComputableMetrics;
     }
 
     /**
@@ -423,17 +426,23 @@ public class AIResponseDTO {
         @Schema(description = "出勤率(%)")
         private Double attendanceRate;
 
-        @Schema(description = "出勤天数")
+        @Schema(description = "非ABSENT状态考勤记录数")
         private Integer attendanceDays;
 
-        @Schema(description = "迟到次数")
+        @Schema(description = "考勤记录数")
+        private Integer recordCount;
+
+        @Schema(description = "持久化LATE状态记录数")
         private Integer lateCount;
 
-        @Schema(description = "早退次数")
+        @Schema(description = "持久化EARLY_LEAVE状态记录数")
         private Integer earlyLeaveCount;
 
-        @Schema(description = "缺勤天数")
+        @Schema(description = "持久化ABSENT状态记录数")
         private Integer absentDays;
+
+        @Schema(description = "打卡记录工作分钟数合计")
+        private Integer clockedWorkMinutes;
 
         @Schema(description = "部门平均出勤率(%)")
         private Double departmentAvgRate;
@@ -456,6 +465,12 @@ public class AIResponseDTO {
     public static class WorkHoursAnalysis {
         @Schema(description = "评分(0-100)")
         private Integer score;
+
+        @Schema(description = "工作会话实际分钟数合计")
+        private Integer totalMinutes;
+
+        @Schema(description = "工作会话数")
+        private Long sessionCount;
 
         @Schema(description = "日均工时(小时)")
         private Double avgDailyHours;
@@ -494,10 +509,25 @@ public class AIResponseDTO {
         @Schema(description = "参与批次数")
         private Integer batchCount;
 
+        @Schema(description = "批次工作会话数")
+        private Long batchWorkSessionCount;
+
+        @Schema(description = "已完成批次工作会话数")
+        private Long completedBatchWorkSessionCount;
+
+        @Schema(description = "批次工作分钟数合计")
+        private Integer batchWorkMinutes;
+
+        @Schema(description = "质检记录数")
+        private Long totalInspections;
+
+        @Schema(description = "质检通过记录数")
+        private Long passedInspections;
+
         @Schema(description = "产量贡献(kg)")
         private Double outputQuantity;
 
-        @Schema(description = "良品率(%)")
+        @Schema(description = "质检通过率(%，无质检记录时不可计算)")
         private Double qualityRate;
 
         @Schema(description = "人均产能(kg/h)")

@@ -102,12 +102,51 @@ public interface BatchWorkSessionRepository extends JpaRepository<BatchWorkSessi
         @Param("endTime") LocalDateTime endTime);
 
     /**
+     * 统计指定工厂内员工参与的不同批次数。
+     */
+    @Query("SELECT COUNT(DISTINCT bws.batchId) FROM BatchWorkSession bws " +
+           "JOIN ProductionBatch pb ON bws.batchId = pb.id " +
+           "WHERE pb.factoryId = :factoryId AND bws.employeeId = :employeeId " +
+           "AND bws.createdAt BETWEEN :startTime AND :endTime")
+    long countDistinctBatchesByFactoryIdAndEmployeeAndTimeRange(
+        @Param("factoryId") String factoryId,
+        @Param("employeeId") Long employeeId,
+        @Param("startTime") LocalDateTime startTime,
+        @Param("endTime") LocalDateTime endTime);
+
+    /**
+     * 统计指定工厂内员工的批次工作会话总数。
+     */
+    @Query("SELECT COUNT(bws) FROM BatchWorkSession bws " +
+           "JOIN ProductionBatch pb ON bws.batchId = pb.id " +
+           "WHERE pb.factoryId = :factoryId AND bws.employeeId = :employeeId " +
+           "AND bws.createdAt BETWEEN :startTime AND :endTime")
+    long countByFactoryIdAndEmployeeAndTimeRange(
+        @Param("factoryId") String factoryId,
+        @Param("employeeId") Long employeeId,
+        @Param("startTime") LocalDateTime startTime,
+        @Param("endTime") LocalDateTime endTime);
+
+    /**
      * 统计员工批次工作总时长
      */
     @Query("SELECT COALESCE(SUM(bws.workMinutes), 0) FROM BatchWorkSession bws " +
            "WHERE bws.employeeId = :employeeId " +
            "AND bws.createdAt BETWEEN :startTime AND :endTime")
     Integer sumWorkMinutesByEmployeeAndTimeRange(
+        @Param("employeeId") Long employeeId,
+        @Param("startTime") LocalDateTime startTime,
+        @Param("endTime") LocalDateTime endTime);
+
+    /**
+     * 统计指定工厂内员工的批次工作分钟数。
+     */
+    @Query("SELECT COALESCE(SUM(bws.workMinutes), 0) FROM BatchWorkSession bws " +
+           "JOIN ProductionBatch pb ON bws.batchId = pb.id " +
+           "WHERE pb.factoryId = :factoryId AND bws.employeeId = :employeeId " +
+           "AND bws.createdAt BETWEEN :startTime AND :endTime")
+    Integer sumWorkMinutesByFactoryIdAndEmployeeAndTimeRange(
+        @Param("factoryId") String factoryId,
         @Param("employeeId") Long employeeId,
         @Param("startTime") LocalDateTime startTime,
         @Param("endTime") LocalDateTime endTime);
@@ -142,6 +181,20 @@ public interface BatchWorkSessionRepository extends JpaRepository<BatchWorkSessi
            "AND bws.status = 'completed' " +
            "AND bws.createdAt BETWEEN :startTime AND :endTime")
     long countCompletedByEmployeeAndTimeRange(
+        @Param("employeeId") Long employeeId,
+        @Param("startTime") LocalDateTime startTime,
+        @Param("endTime") LocalDateTime endTime);
+
+    /**
+     * 统计指定工厂内员工已完成的批次工作会话数。
+     */
+    @Query("SELECT COUNT(bws) FROM BatchWorkSession bws " +
+           "JOIN ProductionBatch pb ON bws.batchId = pb.id " +
+           "WHERE pb.factoryId = :factoryId AND bws.employeeId = :employeeId " +
+           "AND bws.status = 'completed' " +
+           "AND bws.createdAt BETWEEN :startTime AND :endTime")
+    long countCompletedByFactoryIdAndEmployeeAndTimeRange(
+        @Param("factoryId") String factoryId,
         @Param("employeeId") Long employeeId,
         @Param("startTime") LocalDateTime startTime,
         @Param("endTime") LocalDateTime endTime);

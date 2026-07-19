@@ -486,16 +486,14 @@ public class AIController {
     /**
      * 员工AI综合分析
      *
-     * 分析维度：
-     * 1. 考勤表现 - 出勤率、迟到、早退、缺勤
-     * 2. 工时效率 - 日均工时、加班、工作类型分布
-     * 3. 生产贡献 - 参与批次、产量、良品率
-     * 4. 技能分布 - 各工序参与度和熟练程度
+     * 基于持久化事实返回考勤状态计数、工作会话、批次工作会话和质检记录，
+     * 并由AI对这些事实生成文字洞察。缺少租户评分规则、排班基准或受控技能数据时，
+     * 对应评分、出勤率、产量、产能和技能字段明确标记为不可计算。
      */
     @RequirePermission({"analytics:read_write"})
     @PostMapping("/analysis/employee/{employeeId}")
     @Operation(summary = "员工AI综合分析",
-               description = "对指定员工进行AI综合绩效分析，包含考勤、工时、生产贡献、技能等多维度")
+               description = "基于指定员工的租户内持久化记录生成事实分析；不可计算的评分、出勤率、产量、产能和技能不会被推测或补零")
     public ApiResponse<AIResponseDTO.EmployeeAnalysisResponse> analyzeEmployee(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @PathVariable @Parameter(description = "员工ID") Long employeeId,
