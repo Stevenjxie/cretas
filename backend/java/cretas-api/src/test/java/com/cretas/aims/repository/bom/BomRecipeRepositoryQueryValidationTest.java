@@ -1,5 +1,6 @@
 package com.cretas.aims.repository.bom;
 
+import com.cretas.aims.repository.ProductTypeRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,11 +35,15 @@ class BomRecipeRepositoryQueryValidationTest {
     @Autowired
     private BomChangeLogRepository changeLogRepository;
 
+    @Autowired
+    private ProductTypeRepository productTypeRepository;
+
     @Test
     @DisplayName("repository bean starts and all declared JPQL queries validate")
     void repositoryBoots() {
         assertNotNull(repository);
         assertNotNull(itemRepository);
         assertNotNull(changeLogRepository);
+        assertNotNull(productTypeRepository);
     }
 }

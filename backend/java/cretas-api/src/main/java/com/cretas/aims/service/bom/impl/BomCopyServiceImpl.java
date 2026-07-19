@@ -107,7 +107,10 @@ public class BomCopyServiceImpl implements BomCopyService {
     @Override
     @Transactional
     public BomRecipe copySelectedRulesToDraft(String factoryId, BomCopyToDraftRequest request) {
-        ProductType target = loadProduct(factoryId, request.getTargetProductTypeId());
+        ProductType target = productTypeRepo.findByIdAndFactoryIdForUpdate(
+                        request.getTargetProductTypeId(), factoryId)
+                .orElseThrow(() -> new EntityNotFoundException(
+                        "目标产品不存在: " + request.getTargetProductTypeId()));
         BomRecipe source = loadSourceRecipe(factoryId, request.getSourceRecipeId());
         if (target.getId().equals(source.getProductTypeId())) {
             throw businessError(400, "不能把产品自己的 BOM 作为同源复制来源", "BOM_COPY_SOURCE_IS_TARGET");

@@ -7,12 +7,14 @@ import com.cretas.aims.dto.bom.CreateBomRecipeRequest;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest.BomRecipeItemDTO;
 import com.cretas.aims.dto.bom.UpdateBomRecipeRequest;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.service.workflow.ProductWorkflowResolutionService;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
@@ -69,6 +71,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
 
     private final BomRecipeRepository recipeRepo;
     private final BomRecipeItemRepository itemRepo;
+    private final ProductTypeRepository productTypeRepo;
     private final RawMaterialTypeRepository materialTypeRepo;
     private final ProductWorkProcessRepository productWorkProcessRepo;
     private final ProductWorkflowResolutionService workflowResolutionService;
@@ -78,6 +81,65 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     /** U5: BOM 调料明细 repo (BOM 统管配方+锅序, 2026-06-24). */
     private final BomSeasoningItemRepository seasoningItemRepo;
     private final BomProcessInjectionConfigRepository processInjectionConfigRepo;
+
+    @Override
+    @Transactional
+    public BomRecipe ensureDraft(String factoryId, String productTypeId) {
+        ProductType product = loadProductForUpdate(factoryId, productTypeId);
+        validateProductOutputMetadata(product);
+
+        List<BomRecipe> versions = recipeRepo
+                .findByFactoryIdAndProductTypeIdOrderByVersionDesc(factoryId, productTypeId);
+        List<BomRecipe> drafts = versions.stream()
+                .filter(recipe -> recipe.getStatus() == BomRecipe.Status.DRAFT)
+                .toList();
+        if (drafts.size() > 1) {
+            throw bomError(409,
+                    "该产品存在多个 BOM 草稿，无法判断应继续编辑哪一个",
+                    "BOM_MULTIPLE_DRAFTS",
+                    "请先保留一个草稿并归档或删除其余草稿后重试",
+                    "bomVersions");
+        }
+        if (drafts.size() == 1) {
+            BomRecipe draft = drafts.get(0);
+            List<BomRecipeItem> freshItems = itemRepo.findByRecipeIdOrderBySortOrderAsc(draft.getId());
+            draft.getItems().clear();
+            draft.getItems().addAll(freshItems);
+            return draft;
+        }
+
+        assertVersionCapacity(factoryId, productTypeId);
+        if (versions.isEmpty()) {
+            BomRecipe draft = new BomRecipe();
+            draft.setFactoryId(factoryId);
+            draft.setRecipeCode(generateRecipeCode(factoryId));
+            draft.setProductTypeId(productTypeId);
+            draft.setProductName(product.getName());
+            draft.setVersion(1);
+            draft.setIsCurrent(false);
+            draft.setOverallYieldRate(null);
+            draft.setOutputQuantityPerUnit(product.getGramsPerUnit());
+            draft.setOutputUnit(product.getUnit());
+            draft.setStatus(BomRecipe.Status.DRAFT);
+            draft.setSourceType(BomRecipe.SourceType.MANUAL);
+            draft.setTotalMaterialCost(BigDecimal.ZERO);
+            draft.setTotalCost(BigDecimal.ZERO);
+            return recipeRepo.save(draft);
+        }
+
+        List<BomRecipe> currentActive = versions.stream()
+                .filter(recipe -> recipe.getStatus() == BomRecipe.Status.ACTIVE)
+                .filter(recipe -> Boolean.TRUE.equals(recipe.getIsCurrent()))
+                .toList();
+        if (currentActive.size() != 1) {
+            throw bomError(409,
+                    "该产品没有唯一的当前生效 BOM，无法安全创建新版本",
+                    "BOM_CURRENT_ACTIVE_REQUIRED",
+                    "请先修复版本状态，确保只有一个 ACTIVE/current 版本",
+                    "bomVersions");
+        }
+        return cloneRecipeInternal(factoryId, currentActive.get(0));
+    }
 
     @Override
     @Transactional
@@ -167,6 +229,10 @@ public class BomRecipeServiceImpl implements BomRecipeService {
 
         // 同一 SKU 只能有一个 ACTIVE/current 版本。历史脏数据可能 ACTIVE 但 current=false，
         // 也必须在同一事务中归档，确保状态文案与真实生效语义一致。
+        ProductType product = loadProductForUpdate(factoryId, recipe.getProductTypeId());
+        validateProductOutputMetadata(product);
+        validateActivatableItems(recipe);
+
         List<BomRecipe> others = recipeRepo.findCompetingVersionsForActivation(
                 factoryId, recipe.getProductTypeId(), recipe.getId(), BomRecipe.Status.ACTIVE);
         for (BomRecipe other : others) {
@@ -193,6 +259,10 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     public BomRecipe cloneRecipe(String factoryId, String recipeId) {
         BomRecipe source = loadRecipe(factoryId, recipeId);
         assertVersionCapacity(factoryId, source.getProductTypeId());
+        return cloneRecipeInternal(factoryId, source);
+    }
+
+    private BomRecipe cloneRecipeInternal(String factoryId, BomRecipe source) {
         Integer maxVersion = recipeRepo.findMaxVersion(factoryId, source.getProductTypeId());
 
         BomRecipe clone = new BomRecipe();
@@ -221,12 +291,14 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             item.setMaterialName(src.getMaterialName());
             item.setStandardQuantity(src.getStandardQuantity());
             item.setYieldRate(src.getYieldRate());
+            item.setActualQuantity(src.getActualQuantity());
             item.setUnit(src.getUnit());
             item.setUnitPrice(src.getUnitPrice());
             item.setPriceUnit(src.getPriceUnit() != null ? src.getPriceUnit() : src.getUnit());
             item.setQuantityToPriceFactor(src.getQuantityToPriceFactor() != null
                     ? src.getQuantityToPriceFactor() : BigDecimal.ONE);
             item.setTaxRate(src.getTaxRate());
+            item.setItemCost(src.getItemCost());
             item.setMaterialCategory(src.getMaterialCategory());
             item.setSortOrder(src.getSortOrder());
             item.setIsOptional(src.getIsOptional());
@@ -235,6 +307,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             // SP4-T3: propagate per_portion + semi_finished_ref_code on clone
             item.setPerPortion(src.getPerPortion() != null ? src.getPerPortion() : false);
             item.setSemiFinishedRefCode(src.getSemiFinishedRefCode());
+            item.setSubProductTypeId(src.getSubProductTypeId());
             item.setPrimaryCode(src.getPrimaryCode());
             item.setPrimaryCodeRef(src.getPrimaryCodeRef());
             clonedItems.add(item);
@@ -304,6 +377,84 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         }
         recipe.softDelete();
         recipeRepo.save(recipe);
+    }
+
+    private ProductType loadProductForUpdate(String factoryId, String productTypeId) {
+        return productTypeRepo.findByIdAndFactoryIdForUpdate(productTypeId, factoryId)
+                .orElseThrow(() -> new EntityNotFoundException("产品不存在: " + productTypeId));
+    }
+
+    private void validateProductOutputMetadata(ProductType product) {
+        if (product.getUnit() == null || product.getUnit().isBlank()) {
+            throw bomError(409,
+                    "SKU 未配置产出单位，不能创建或激活 BOM",
+                    "BOM_SKU_UNIT_REQUIRED",
+                    "请先在产品档案中填写基本单位",
+                    "productUnit");
+        }
+        if (product.getGramsPerUnit() == null
+                || product.getGramsPerUnit().compareTo(BigDecimal.ZERO) <= 0) {
+            throw bomError(409,
+                    "SKU 未配置有效标准克重，不能创建或激活 BOM",
+                    "BOM_SKU_GRAMS_PER_UNIT_REQUIRED",
+                    "请先在产品档案中填写大于 0 的标准克重",
+                    "gramsPerUnit");
+        }
+    }
+
+    private void validateActivatableItems(BomRecipe recipe) {
+        List<BomRecipeItem> items = itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId());
+        if (items.isEmpty()) {
+            throw bomError(409,
+                    "BOM 还没有任何原辅料或包材，不能激活",
+                    "BOM_ACTIVATION_ITEMS_REQUIRED",
+                    "请至少添加一条原料、辅料或包材明细",
+                    "bomItems");
+        }
+        for (BomRecipeItem item : items) {
+            if (item.getMaterialTypeId() == null || item.getMaterialTypeId().isBlank()) {
+                throw bomError(409,
+                        "BOM 明细存在未关联物料的行，不能激活",
+                        "BOM_ACTIVATION_MATERIAL_REQUIRED",
+                        "请为每一行选择有效物料",
+                        "bomItems");
+            }
+            boolean rawMaterial = item.getMaterialCategory() == null
+                    || item.getMaterialCategory().isBlank()
+                    || "RAW".equalsIgnoreCase(item.getMaterialCategory());
+            boolean invalidQuantity = item.getStandardQuantity() != null
+                    && item.getStandardQuantity().compareTo(BigDecimal.ZERO) <= 0;
+            boolean missingRequiredQuantity = !rawMaterial && item.getStandardQuantity() == null;
+            if (invalidQuantity || missingRequiredQuantity) {
+                String category = rawMaterial ? "原料" : item.getMaterialCategory();
+                throw bomError(409,
+                        category + "明细「" + displayItemName(item) + "」缺少有效数量，不能激活",
+                        "BOM_ACTIVATION_QUANTITY_REQUIRED",
+                        "请填写大于 0 的标准用量；包材数量也不能为空",
+                        "standardQuantity");
+            }
+            if (item.getUnit() == null || item.getUnit().isBlank()) {
+                throw bomError(409,
+                        "BOM 明细「" + displayItemName(item) + "」缺少单位，不能激活",
+                        "BOM_ACTIVATION_ITEM_UNIT_REQUIRED",
+                        "请为该明细选择计量单位",
+                        "unit");
+            }
+        }
+        recipe.setItems(items);
+    }
+
+    private String displayItemName(BomRecipeItem item) {
+        return item.getMaterialName() == null || item.getMaterialName().isBlank()
+                ? item.getMaterialTypeId() : item.getMaterialName();
+    }
+
+    private BusinessException bomError(int status, String message, String code, String hint, String target) {
+        return new BusinessException(status, message)
+                .withCode(code)
+                .withHint(hint)
+                .withHintTarget(target)
+                .withSeverity("BLOCKING");
     }
 
     private void assertVersionCapacity(String factoryId, String productTypeId) {

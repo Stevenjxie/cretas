@@ -22,7 +22,6 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   'update:modelValue': [value: boolean];
   copy: [payload: CopyBomToProductRequest];
-  'blank-create': [];
 }>();
 
 const selectedSourceRecipeId = ref('');
@@ -285,7 +284,7 @@ function injectionConfigText(item: BomCopyInjectionConfigRule) {
 
     <template #footer>
       <div class="dialog-footer">
-        <el-button :disabled="submitting" @click="emit('blank-create')">跳过，空白创建</el-button>
+        <el-button :disabled="submitting" @click="emit('update:modelValue', false)">取消</el-button>
         <el-button
           type="primary"
           :loading="submitting"

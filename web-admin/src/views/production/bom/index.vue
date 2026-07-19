@@ -10,8 +10,6 @@ import type {
   BomRecipeStatus,
   BomRecipeItemPayload,
   BomRecipeItemView,
-  CreateBomRecipeRequest,
-  UpdateBomRecipeRequest,
   BomCopyCandidate,
   CopyBomToProductRequest,
 } from '@/api/bom';
@@ -24,6 +22,7 @@ import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue'
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue'
 import BomAuxiliaryWorkspace from './seasoning/BomAuxiliaryWorkspace.vue'
 import BomCopySuggestionDialog from './BomCopySuggestionDialog.vue'
+import { createBomDraftEnsurer, validateBomActivation } from './bomDraftLifecycle'
 import type { TableRow } from '@/types/api';
 // 客户张权反馈 (2026-07-02): "辅料 添加剂全混在一起了" — 「添加原辅料」对话框的「关联原料」
 // 下拉需按上方「物料类别」筛选, 归类逻辑复用 procurement/receives/list.vue 同款共享工具。
@@ -72,6 +71,13 @@ const selectedRecipe = computed(() =>
   bomRecipes.value.find((recipe) => recipe.id === selectedRecipeId.value) ?? null,
 );
 const recipeVersionLimitReached = computed(() => bomRecipes.value.length >= MAX_RECIPE_VERSIONS);
+const ensureDraftLoading = ref(false);
+const draftRecipe = computed(() => bomRecipes.value.find((recipe) => recipe.status === 'DRAFT') ?? null);
+const draftActionLabel = computed(() => {
+  if (draftRecipe.value) return '继续编辑草稿';
+  if (bomRecipes.value.some((recipe) => recipe.status === 'ACTIVE' && recipe.isCurrent)) return '新建版本';
+  return '开始编辑 BOM';
+});
 
 function formatFriendlyNumber(value: unknown, maxDecimals = 4): string {
   const number = Number(value);
@@ -116,29 +122,44 @@ async function loadBomRecipes(preferredRecipeId?: string) {
   }
 }
 
-async function handleCloneRecipe(recipe: BomRecipeSummary) {
-  if (!factoryId.value) return;
-  try {
-    await ElMessageBox.confirm(
-      `将 ${recipe.productName} v${recipe.version} 复制为新草稿后编辑，原版本和历史记录不受影响。`,
-      '克隆 BOM 版本',
-      { confirmButtonText: '克隆为草稿', cancelButtonText: '取消', type: 'info' },
-    );
-  } catch {
-    return;
+async function refreshEnsuredDraft(draft: BomRecipeSummary) {
+  await loadBomRecipes(draft.id);
+  await Promise.all([loadBomItems(), loadCostSummary()]);
+}
+
+const ensureEditableDraftRequest = createBomDraftEnsurer(
+  (currentFactoryId, productTypeId) => bomRecipeApi.ensureDraft(currentFactoryId, productTypeId),
+  refreshEnsuredDraft,
+);
+
+async function ensureEditableDraft(): Promise<BomRecipeSummary | null> {
+  if (!factoryId.value || !selectedProductTypeId.value) {
+    ElMessage.warning('请先选择产品，再编辑 BOM');
+    return null;
   }
+  ensureDraftLoading.value = true;
   try {
-    const response = await bomRecipeApi.clone(factoryId.value, recipe.id);
-    if (!response.success || !response.data) throw new Error(response.message || '克隆失败');
-    await loadBomRecipes(response.data.id);
-    ElMessage.success('已复制为新草稿，可编辑配方和工序辅料');
+    return await ensureEditableDraftRequest(factoryId.value, selectedProductTypeId.value);
   } catch (error: unknown) {
-    ElMessage.error((error as { message?: string }).message || '克隆 BOM 版本失败');
+    ElMessage({
+      message: bomCopyErrorMessage(error, '无法创建或加载 BOM 草稿'),
+      type: 'error',
+      duration: 0,
+      showClose: true,
+    });
+    return null;
+  } finally {
+    ensureDraftLoading.value = false;
   }
 }
 
+async function handleEnsureDraftVersion() {
+  const draft = await ensureEditableDraft();
+  if (draft) ElMessage.success(draft.version === 1 ? 'BOM 草稿已就绪，可以直接添加明细' : `已进入 v${draft.version} 草稿`);
+}
+
 async function handleCloneSelectedRecipe() {
-  if (selectedRecipe.value) await handleCloneRecipe(selectedRecipe.value);
+  await handleEnsureDraftVersion();
 }
 
 async function handleDeleteRecipe(recipe: BomRecipeSummary) {
@@ -186,6 +207,23 @@ async function handleSeasoningWorkspaceChanged() {
 
 async function handleActivateRecipe(recipe: BomRecipeSummary) {
   if (!factoryId.value) return;
+  try {
+    const detailResponse = await bomRecipeApi.getDetail(factoryId.value, recipe.id);
+    if (!detailResponse.success || !detailResponse.data) {
+      throw new Error(detailResponse.message || '无法读取 BOM 明细');
+    }
+    const validationError = validateBomActivation(detailResponse.data, {
+      unit: skuOutputUnit.value,
+      gramsPerUnit: skuGramsPerUnit.value,
+    });
+    if (validationError) {
+      ElMessage({ message: validationError, type: 'warning', duration: 0, showClose: true });
+      return;
+    }
+  } catch (error: unknown) {
+    ElMessage.error(bomCopyErrorMessage(error, '无法校验 BOM 明细，请刷新后重试'));
+    return;
+  }
   try {
     await ElMessageBox.confirm(
       `激活后 ${recipe.productName} v${recipe.version} 将成为唯一生效 BOM。仅之后新建的生产计划采用此版本；已有生产计划快照和已激活 Workflow 不受影响。确认激活？`,
@@ -244,7 +282,6 @@ const bomCopyDialogVisible = ref(false);
 const bomCopyCandidates = ref<BomCopyCandidate[]>([]);
 const bomCopyCandidatesLoading = ref(false);
 const bomCopySubmitting = ref(false);
-const automaticallyPromptedProductIds = new Set<string>();
 // :key 强制 el-select 重新挂载 —— element-plus 的 currentLabel 是渲染时按当前 options
 // 匹配一次后缓存的, 异步 (route 带 productTypeId 跳转) 补写 options + modelValue 不会
 // 触发它重新求值, 导致选中态生效但下拉框标签显示空白 (同款坑见 ReferenceSelector.vue)。
@@ -279,22 +316,6 @@ const skuGramsPerUnit = computed<number | null>(() => {
 
 // Phase 1: 添加原辅料「高级选项」折叠状态（默认收起）
 const showAdvancedBomFields = ref<string[]>([]);
-
-interface RecipeHeaderForm {
-  outputQuantityPerUnit: number | null;
-  outputUnit: string;
-  notes: string;
-}
-
-const recipeDialogVisible = ref(false);
-const recipeDialogLoading = ref(false);
-const isRecipeEdit = ref(false);
-const editingRecipeId = ref<string | null>(null);
-const recipeForm = ref<RecipeHeaderForm>({
-  outputQuantityPerUnit: 1,
-  outputUnit: '份',
-  notes: '',
-});
 
 // BOM Items (原辅料)
 interface BomItemRow {
@@ -536,93 +557,6 @@ const filteredMaterialTypesForBomForm = computed<TableRow[]>(() => {
   });
 });
 
-function buildRecipeItemPayloads(): BomRecipeItemPayload[] | null {
-  if (bomItems.value.length === 0) {
-    ElMessage.warning('请先添加至少 1 行原辅料，再创建配方头');
-    return null;
-  }
-
-  const missingMaterialRows: string[] = [];
-  const invalidQuantityRows: string[] = [];
-  const items = bomItems.value.map((item, index) => {
-    const materialTypeId = String(item.materialTypeId || '').trim();
-    const materialName = String(item.materialName || `第 ${index + 1} 行`);
-    const materialCategory = normalizeRecipeMaterialCategory(item.materialCategory || item.category);
-    const standardQuantity = item.standardQuantity == null ? null : Number(item.standardQuantity);
-    if (!materialTypeId) missingMaterialRows.push(materialName);
-    if (materialCategory !== 'RAW' && !(standardQuantity != null && standardQuantity > 0)) {
-      invalidQuantityRows.push(materialName);
-    }
-
-    const substituteGroup = String(item.substituteGroup || '').trim();
-    const remark = String(item.notes || item.remark || '').trim();
-    const unit = String(item.unit || 'g').trim();
-
-    return {
-      materialTypeId,
-      standardQuantity,
-      yieldRate: item.yieldRate == null ? undefined : Number(item.yieldRate),
-      unit,
-      materialCategory,
-      sortOrder: item.sortOrder == null ? index : Number(item.sortOrder),
-      isOptional: Boolean(item.isOptional),
-      substituteGroup: substituteGroup || undefined,
-      remark: remark || undefined,
-      perPortion: Boolean(item.perPortion),
-      semiFinishedRefCode: item.semiFinishedRefCode || undefined,
-      subProductTypeId: item.subProductTypeId || undefined,
-    };
-  });
-
-  if (missingMaterialRows.length > 0) {
-    ElMessage({
-      message: `创建配方头前，请给这些行关联原料类型：${missingMaterialRows.join('、')}`,
-      type: 'warning',
-      duration: 0,
-      showClose: true,
-    });
-    return null;
-  }
-
-  if (invalidQuantityRows.length > 0) {
-    ElMessage({
-      message: `创建配方头前，这些行缺少系统计划基准量：${invalidQuantityRows.join('、')}`,
-      type: 'warning',
-      duration: 0,
-      showClose: true,
-    });
-    return null;
-  }
-
-  return items;
-}
-
-function resetRecipeForm(recipe?: BomRecipeSummary) {
-  recipeForm.value = {
-    outputQuantityPerUnit: recipe?.outputQuantityPerUnit != null
-      ? Number(recipe.outputQuantityPerUnit)
-      : 1,
-    outputUnit: recipe?.outputUnit || '份',
-    notes: recipe?.notes || '',
-  };
-}
-
-function openBlankRecipeHeader() {
-  if (!selectedProductTypeId.value) {
-    ElMessage.warning('请先选择产品，再创建配方头');
-    return;
-  }
-  if (recipeVersionLimitReached.value) {
-    ElMessage.warning('该 SKU 已达到 10 个 BOM 版本，请先删除无用草稿或历史版本');
-    return;
-  }
-  isRecipeEdit.value = false;
-  editingRecipeId.value = null;
-  const currentRecipe = bomRecipes.value.find((recipe) => recipe.isCurrent) || bomRecipes.value[0];
-  resetRecipeForm(currentRecipe);
-  recipeDialogVisible.value = true;
-}
-
 function bomCopyErrorMessage(error: unknown, fallback: string) {
   return (error as { response?: { data?: { message?: string } } })?.response?.data?.message
     || (error as { message?: string })?.message
@@ -632,8 +566,6 @@ function bomCopyErrorMessage(error: unknown, fallback: string) {
 async function openBomCopySuggestions(manual: boolean): Promise<boolean> {
   const targetProductTypeId = selectedProductTypeId.value;
   if (!factoryId.value || !targetProductTypeId || recipeVersionLimitReached.value) return false;
-  if (!manual && automaticallyPromptedProductIds.has(targetProductTypeId)) return false;
-  if (!manual) automaticallyPromptedProductIds.add(targetProductTypeId);
 
   bomCopyCandidatesLoading.value = true;
   try {
@@ -645,7 +577,7 @@ async function openBomCopySuggestions(manual: boolean): Promise<boolean> {
       bomCopyDialogVisible.value = true;
       return true;
     }
-    if (manual) openBlankRecipeHeader();
+    if (manual) ElMessage.info('当前没有可复制的同源产品规则，可直接开始编辑 BOM');
     return false;
   } catch (error: unknown) {
     if (selectedProductTypeId.value !== targetProductTypeId) return false;
@@ -655,28 +587,10 @@ async function openBomCopySuggestions(manual: boolean): Promise<boolean> {
       duration: 0,
       showClose: true,
     });
-    if (manual) openBlankRecipeHeader();
     return false;
   } finally {
     bomCopyCandidatesLoading.value = false;
   }
-}
-
-async function handleAddRecipeHeader() {
-  if (!selectedProductTypeId.value) {
-    ElMessage.warning('请先选择产品，再创建配方头');
-    return;
-  }
-  if (recipeVersionLimitReached.value) {
-    ElMessage.warning('该 SKU 已达到 10 个 BOM 版本，请先删除无用草稿或历史版本');
-    return;
-  }
-  await openBomCopySuggestions(true);
-}
-
-function handleBlankCreateFromCopyDialog() {
-  bomCopyDialogVisible.value = false;
-  openBlankRecipeHeader();
 }
 
 async function handleCopyRulesToProduct(payload: CopyBomToProductRequest) {
@@ -701,95 +615,6 @@ async function handleCopyRulesToProduct(payload: CopyBomToProductRequest) {
     });
   } finally {
     bomCopySubmitting.value = false;
-  }
-}
-
-function handleEditRecipeHeader(recipe: BomRecipeSummary) {
-  if (recipe.status !== 'DRAFT') {
-    ElMessage.warning('只有草稿配方可以编辑配方头');
-    return;
-  }
-  isRecipeEdit.value = true;
-  editingRecipeId.value = recipe.id;
-  resetRecipeForm(recipe);
-  recipeDialogVisible.value = true;
-}
-
-async function submitRecipeHeaderForm() {
-  if (!factoryId.value || !selectedProductTypeId.value) return;
-  // Phase 1: 产出规格从 SKU 只读带入，不再读手填字段
-  const outputUnit = skuOutputUnit.value;
-  const gramsPerUnit = skuGramsPerUnit.value;
-
-  // 防呆 (Rule 5): SKU 未填标准克重 → 无法确定每单位产出量，引导去补，不静默传 0
-  if (gramsPerUnit == null) {
-    try {
-      await ElMessageBox.confirm(
-        '该产品尚未在 SKU 里填写标准克重，无法生成配方头。是否现在去补录？',
-        '缺少标准克重',
-        { confirmButtonText: '去 SKU 补克重', cancelButtonText: '稍后', type: 'warning' },
-      );
-      goFillSkuWeight();
-    } catch {
-      // 留在弹窗
-    }
-    return;
-  }
-  const outputQuantityPerUnit = gramsPerUnit;
-  recipeDialogLoading.value = true;
-  try {
-    let response;
-    const basePayload = {
-      productName: selectedProductName.value || null,
-      outputQuantityPerUnit,
-      outputUnit,
-      notes: recipeForm.value.notes.trim() || null,
-    };
-
-    if (isRecipeEdit.value && editingRecipeId.value) {
-      const payload: UpdateBomRecipeRequest = basePayload;
-      response = await bomRecipeApi.update(factoryId.value, editingRecipeId.value, payload);
-    } else {
-      const items = buildRecipeItemPayloads();
-      if (!items) return;
-      const payload: CreateBomRecipeRequest = {
-        ...basePayload,
-        productTypeId: selectedProductTypeId.value,
-        sourceType: 'MANUAL',
-        items,
-      };
-      response = await bomRecipeApi.create(factoryId.value, payload);
-    }
-
-    if (response.success) {
-      ElMessage.success(
-        `${isRecipeEdit.value ? '配方头已更新' : '配方草稿已创建'}：每单位产出 ${outputQuantityPerUnit} ${outputUnit}；历史出成率由系统自动统计`,
-      );
-      recipeDialogVisible.value = false;
-      await loadBomRecipes();
-      await loadCostSummary();
-    } else {
-      ElMessage({
-        message: response.message || (isRecipeEdit.value ? '配方头更新失败' : '配方创建失败'),
-        type: 'error',
-        duration: 0,
-        showClose: true,
-      });
-    }
-  } catch (error: unknown) {
-    const err = error as { actionHint?: string };
-    if (!err?.actionHint) {
-      const msg = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
-        || (isRecipeEdit.value ? '配方头更新失败，请稍后重试' : '配方创建失败，请稍后重试');
-      ElMessage({
-        message: msg,
-        type: 'error',
-        duration: 0,
-        showClose: true,
-      });
-    }
-  } finally {
-    recipeDialogLoading.value = false;
   }
 }
 
@@ -860,9 +685,6 @@ watch(selectedProductTypeId, async (newVal) => {
     await loadLaborCosts();
     await loadCostSummary();
     await loadHistoricalYield();
-    if (bomRecipes.value.length === 0 && canWrite.value) {
-      await openBomCopySuggestions(false);
-    }
   } else {
     selectedProductMeta.value = null;
     bomItems.value = [];
@@ -1004,19 +826,6 @@ async function loadSelectedProductMeta(productTypeId: string) {
   }
 }
 
-/**
- * Phase 1 防呆 (Rule 5 dead-end→导航): SKU 未填标准克重时，引导去产品维护补录。
- */
-function goFillSkuWeight() {
-  router.push({
-    path: '/system/products',
-    query: {
-      _returnTo: route.fullPath,
-      ...(selectedProductName.value ? { keyword: selectedProductName.value } : {}),
-    },
-  });
-}
-
 async function loadMaterialTypes() {
   if (!factoryId.value) return;
   try {
@@ -1070,10 +879,10 @@ async function loadBomItems() {
   }
 }
 
-function handleAddBomItem() {
+async function handleAddBomItem() {
   if (!selectedRecipe.value || selectedRecipe.value.status !== 'DRAFT') {
-    ElMessage.warning('请先创建或克隆一个草稿版本，再修改配方物料');
-    return;
+    const draft = await ensureEditableDraft();
+    if (!draft) return;
   }
   isBomEdit.value = false;
   // Phase A side-effect: yieldRate 默认 null (出成率待评估), 不是 100
@@ -2085,10 +1894,10 @@ watch(adjustDialogVisible, (visible) => {
             type="primary"
             :icon="Plus"
             style="margin-left: 12px;"
-            :loading="bomCopyCandidatesLoading"
-            :disabled="!selectedProductTypeId || recipeVersionLimitReached"
-            @click="handleAddRecipeHeader"
-          >创建配方</el-button>
+            :loading="ensureDraftLoading"
+            :disabled="!selectedProductTypeId || (recipeVersionLimitReached && !draftRecipe)"
+            @click="handleEnsureDraftVersion"
+          >{{ draftActionLabel }}</el-button>
         </div>
         <div v-if="canViewPrice" class="header-right">
           <el-card class="cost-summary-card" shadow="never">
@@ -2131,9 +1940,16 @@ watch(adjustDialogVisible, (visible) => {
             <el-tag size="small" :type="recipeVersionLimitReached ? 'warning' : 'info'">
               已用 {{ bomRecipes.length }}/{{ MAX_RECIPE_VERSIONS }} 个版本
             </el-tag>
-            <el-button v-if="canWrite" type="primary" size="small" :icon="Plus" :loading="bomCopyCandidatesLoading" :disabled="recipeVersionLimitReached" @click="handleAddRecipeHeader">
-              创建配方
+            <el-button v-if="canWrite" type="primary" size="small" :icon="Plus" :loading="ensureDraftLoading" :disabled="recipeVersionLimitReached && !draftRecipe" @click="handleEnsureDraftVersion">
+              {{ draftActionLabel }}
             </el-button>
+            <el-button
+              v-if="canWrite && !draftRecipe"
+              size="small"
+              :loading="bomCopyCandidatesLoading"
+              :disabled="recipeVersionLimitReached"
+              @click="openBomCopySuggestions(true)"
+            >从其他产品复制规则</el-button>
             <el-button size="small" :icon="Refresh" :loading="bomRecipesLoading" @click="loadBomRecipes">
               刷新
             </el-button>
@@ -2221,19 +2037,19 @@ watch(adjustDialogVisible, (visible) => {
               type="primary"
               link
               size="small"
-              @click="handleEditRecipeHeader(row)"
+              @click="selectedRecipeId = row.id"
             >
               编辑
             </el-button>
             <el-button
-              v-else-if="canWrite"
+              v-else-if="canWrite && row.isCurrent"
               type="primary"
               link
               size="small"
-              @click="handleCloneRecipe(row)"
-              :disabled="recipeVersionLimitReached"
+              @click="handleEnsureDraftVersion"
+              :disabled="recipeVersionLimitReached && !draftRecipe"
             >
-              复制编辑
+              {{ draftRecipe ? '继续编辑草稿' : '新建版本' }}
             </el-button>
             <el-button
               v-if="canWrite && row.status !== 'ACTIVE'"
@@ -2330,7 +2146,7 @@ watch(adjustDialogVisible, (visible) => {
             description="请先为当前 SKU 创建 BOM 配方，再配置工序调料"
             :image-size="64"
           >
-            <el-button v-if="canWrite && selectedProductTypeId" type="primary" :loading="bomCopyCandidatesLoading" @click="handleAddRecipeHeader">创建配方</el-button>
+            <el-button v-if="canWrite && selectedProductTypeId" type="primary" :loading="ensureDraftLoading" @click="handleEnsureDraftVersion">{{ draftActionLabel }}</el-button>
           </el-empty>
         </div>
 
@@ -2479,75 +2295,8 @@ watch(adjustDialogVisible, (visible) => {
       :candidates="bomCopyCandidates"
       :loading="bomCopyCandidatesLoading"
       :submitting="bomCopySubmitting"
-      @blank-create="handleBlankCreateFromCopyDialog"
       @copy="handleCopyRulesToProduct"
     />
-
-    <!-- BOM Recipe Header Dialog -->
-    <el-dialog
-      v-model="recipeDialogVisible"
-      :title="isRecipeEdit ? '编辑配方头' : '创建配方头'"
-      width="560px"
-    >
-      <el-alert
-        type="info"
-        :closable="false"
-        show-icon
-        style="margin-bottom: 12px;"
-      >
-        <template #title>
-          这里维护配方版本说明，产出规格由 SKU 自动带入
-        </template>
-        <template #default>
-          整体出成率由系统根据同工厂、同 SKU 的全部正式批次自动统计，只读且不需要人工预估。
-        </template>
-      </el-alert>
-      <el-form :model="recipeForm" label-width="130px">
-        <el-form-item label="产品">
-          <el-input :model-value="selectedProductName || selectedProductTypeId" disabled />
-        </el-form-item>
-        <el-form-item label="产出单位">
-          <el-input :model-value="skuOutputUnit" disabled />
-          <div class="form-tip">从 SKU 单位带入，如需修改请到产品(SKU)维护</div>
-        </el-form-item>
-        <el-form-item label="每单位产出量">
-          <template v-if="skuGramsPerUnit != null">
-            <el-input :model-value="`${skuGramsPerUnit} 克 / ${skuOutputUnit}`" disabled />
-            <div class="form-tip">从 SKU 标准克重带入（1 {{ skuOutputUnit }} = {{ skuGramsPerUnit }} 克）</div>
-          </template>
-          <template v-else>
-            <el-alert
-              type="warning"
-              :closable="false"
-              show-icon
-              title="该产品尚未在 SKU 里填写标准克重，无法确定每单位产出量"
-              style="margin-bottom: 6px;"
-            />
-            <el-button link type="primary" @click="goFillSkuWeight">去 SKU 补标准克重</el-button>
-          </template>
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input
-            v-model="recipeForm.notes"
-            type="textarea"
-            :rows="2"
-            maxlength="500"
-            show-word-limit
-            placeholder="可填写配方头说明，例如适用门店、口径或版本原因"
-          />
-        </el-form-item>
-      </el-form>
-      <div v-if="!isRecipeEdit" class="recipe-create-hint">
-        <el-icon><InfoFilled /></el-icon>
-        <span>创建时会把上方明细一起存为草稿配方；原料只需关联物料，包材还需填写每成品基本单位用量。</span>
-      </div>
-      <template #footer>
-        <el-button @click="recipeDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="recipeDialogLoading" @click="submitRecipeHeaderForm">
-          {{ isRecipeEdit ? '保存配方头' : '创建草稿配方' }}
-        </el-button>
-      </template>
-    </el-dialog>
 
     <!-- BOM Item Dialog -->
     <el-dialog

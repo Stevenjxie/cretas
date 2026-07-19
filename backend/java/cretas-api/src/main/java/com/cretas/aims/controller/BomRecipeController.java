@@ -11,6 +11,7 @@ import com.cretas.aims.dto.bom.SeasoningBindingCreateRequest;
 import com.cretas.aims.dto.bom.SeasoningBindingMutationResponse;
 import com.cretas.aims.dto.bom.SeasoningBindingUpdateRequest;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest;
+import com.cretas.aims.dto.bom.EnsureBomDraftRequest;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest.BomRecipeItemDTO;
 import com.cretas.aims.dto.bom.UpdateBomRecipeRequest;
 import com.cretas.aims.dto.common.ApiResponse;
@@ -115,6 +116,15 @@ public class BomRecipeController {
     }
 
     // ========== Lifecycle ==========
+
+    @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
+    @PostMapping("/ensure-draft")
+    @Operation(summary = "确保产品存在唯一可编辑 BOM 草稿")
+    public ApiResponse<BomRecipe> ensureDraft(
+            @PathVariable String factoryId,
+            @Valid @RequestBody EnsureBomDraftRequest request) {
+        return ApiResponse.success(recipeService.ensureDraft(factoryId, request.getProductTypeId()));
+    }
 
     @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
     @PostMapping

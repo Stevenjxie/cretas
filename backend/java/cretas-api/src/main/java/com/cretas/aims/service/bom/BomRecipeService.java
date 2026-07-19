@@ -23,6 +23,9 @@ import java.util.Optional;
  */
 public interface BomRecipeService {
 
+    /** Reuse the SKU draft, clone current ACTIVE to a draft, or create an empty v1 draft. */
+    BomRecipe ensureDraft(String factoryId, String productTypeId);
+
     /** 创建草稿 (status=DRAFT). 自动生成 recipeCode (BOM-YYYYMMDD-NNN). */
     BomRecipe createRecipe(String factoryId, CreateBomRecipeRequest request);
 

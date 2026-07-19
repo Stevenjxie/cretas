@@ -2,13 +2,19 @@ package com.cretas.aims.service.bom.impl;
 
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest.BomRecipeItemDTO;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.enums.TaxRate;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.entity.bom.BomSeasoningItem;
+import com.cretas.aims.entity.bom.BomProcessInjectionConfig;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
+import com.cretas.aims.repository.bom.BomProcessInjectionConfigRepository;
 import com.cretas.aims.service.bom.NestedBomCostService;
 import com.cretas.aims.service.uom.MaterialUomConverter;
 import org.junit.jupiter.api.BeforeEach;
@@ -61,6 +67,15 @@ class BomRecipeServiceImplAddItemTest {
     BomRecipeItemRepository itemRepo;
 
     @Mock
+    ProductTypeRepository productTypeRepo;
+
+    @Mock
+    BomSeasoningItemRepository seasoningItemRepo;
+
+    @Mock
+    BomProcessInjectionConfigRepository processInjectionConfigRepo;
+
+    @Mock
     RawMaterialTypeRepository materialTypeRepo;
 
     @Mock
@@ -102,6 +117,17 @@ class BomRecipeServiceImplAddItemTest {
         // Mock repo lookups
         when(recipeRepo.findById("RECIPE-ORPHAN-TEST")).thenReturn(Optional.of(recipe));
         when(recipeRepo.save(any(BomRecipe.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-ORPHAN-TEST"))
+                .thenReturn(managedList);
+
+        ProductType product = new ProductType();
+        product.setId("SKU-001");
+        product.setFactoryId("F006");
+        product.setName("测试产品");
+        product.setUnit("袋");
+        product.setGramsPerUnit(new BigDecimal("500"));
+        when(productTypeRepo.findByIdAndFactoryIdForUpdate("SKU-001", "F006"))
+                .thenReturn(Optional.of(product));
 
         RawMaterialType mt = new RawMaterialType();
         mt.setId("MT-001");
@@ -117,6 +143,10 @@ class BomRecipeServiceImplAddItemTest {
 
         // uom converter: allow write unit (service calls isWriteUnitCompatible)
         when(materialUomConverter.isWriteUnitCompatible(anyString(), anyString())).thenReturn(true);
+        when(materialUomConverter.toComparableQuantity(
+                anyString(), any(BigDecimal.class), anyString(), anyString()))
+                .thenAnswer(invocation -> MaterialUomConverter.ConversionResult.converted(
+                        invocation.getArgument(1), invocation.getArgument(3)));
     }
 
     @Test
@@ -203,6 +233,141 @@ class BomRecipeServiceImplAddItemTest {
                     assertThat(ex.getErrorCode()).isEqualTo("BOM_VERSION_LIMIT_REACHED");
                 });
         verify(recipeRepo, never()).save(argThat(candidate -> candidate != recipe));
+    }
+
+    @Test
+    @DisplayName("ensureDraft clones the one current ACTIVE version completely")
+    void ensureDraftClonesCurrentActiveVersion() {
+        recipe.setProductTypeId("SKU-001");
+        recipe.setProductName("测试产品");
+        recipe.setVersion(1);
+        recipe.setStatus(BomRecipe.Status.ACTIVE);
+        recipe.setIsCurrent(true);
+        recipe.setOutputQuantityPerUnit(new BigDecimal("500"));
+        recipe.setOutputUnit("袋");
+        existingItem.setSubProductTypeId("SUB-SKU-1");
+        existingItem.setActualQuantity(new BigDecimal("808"));
+        existingItem.setItemCost(new BigDecimal("9.99"));
+
+        BomSeasoningItem seasoning = new BomSeasoningItem();
+        seasoning.setId(11L);
+        seasoning.setRecipeId(recipe.getId());
+        seasoning.setFactoryId("F006");
+        seasoning.setName("盐");
+        seasoning.setWorkProcessId("WP-1");
+
+        BomProcessInjectionConfig config = new BomProcessInjectionConfig();
+        config.setId(12L);
+        config.setRecipeId(recipe.getId());
+        config.setFactoryId("F006");
+        config.setWorkProcessId("WP-1");
+        config.setInjectionAmountKg(new BigDecimal("2.5"));
+
+        when(recipeRepo.findByFactoryIdAndProductTypeIdOrderByVersionDesc("F006", "SKU-001"))
+                .thenReturn(List.of(recipe));
+        when(recipeRepo.countByFactoryIdAndProductTypeId("F006", "SKU-001")).thenReturn(1L);
+        when(recipeRepo.findMaxVersion("F006", "SKU-001")).thenReturn(1);
+        when(recipeRepo.save(any(BomRecipe.class))).thenAnswer(invocation -> {
+            BomRecipe saved = invocation.getArgument(0);
+            if (saved.getId() == null) saved.setId("RECIPE-V2-DRAFT");
+            return saved;
+        });
+        when(seasoningItemRepo.findByRecipeIdOrderBySeqAsc(recipe.getId())).thenReturn(List.of(seasoning));
+        when(processInjectionConfigRepo.findByRecipeIdAndDeletedAtIsNull(recipe.getId()))
+                .thenReturn(List.of(config));
+
+        BomRecipe draft = service.ensureDraft("F006", "SKU-001");
+
+        assertThat(draft.getVersion()).isEqualTo(2);
+        assertThat(draft.getStatus()).isEqualTo(BomRecipe.Status.DRAFT);
+        assertThat(draft.getIsCurrent()).isFalse();
+        assertThat(recipe.getStatus()).isEqualTo(BomRecipe.Status.ACTIVE);
+        assertThat(recipe.getIsCurrent()).isTrue();
+        assertThat(draft.getItems()).singleElement().satisfies(item -> {
+            assertThat(item.getSubProductTypeId()).isEqualTo("SUB-SKU-1");
+            assertThat(item.getActualQuantity()).isEqualByComparingTo("808");
+            assertThat(item.getItemCost()).isEqualByComparingTo("9.99");
+        });
+        verify(seasoningItemRepo).saveAll(argThat(rows -> rows.iterator().hasNext()));
+        verify(processInjectionConfigRepo).saveAll(argThat(rows -> rows.iterator().hasNext()));
+    }
+
+    @Test
+    @DisplayName("ensureDraft rejects inconsistent history instead of guessing a source")
+    void ensureDraftRejectsHistoryWithoutCurrentActive() {
+        recipe.setProductTypeId("SKU-001");
+        recipe.setStatus(BomRecipe.Status.ARCHIVED);
+        recipe.setIsCurrent(false);
+        when(recipeRepo.findByFactoryIdAndProductTypeIdOrderByVersionDesc("F006", "SKU-001"))
+                .thenReturn(List.of(recipe));
+        when(recipeRepo.countByFactoryIdAndProductTypeId("F006", "SKU-001")).thenReturn(1L);
+
+        assertThatThrownBy(() -> service.ensureDraft("F006", "SKU-001"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo("BOM_CURRENT_ACTIVE_REQUIRED"));
+    }
+
+    @Test
+    @DisplayName("ensureDraft rejects ambiguous multiple drafts")
+    void ensureDraftRejectsMultipleDrafts() {
+        recipe.setProductTypeId("SKU-001");
+        BomRecipe secondDraft = new BomRecipe();
+        secondDraft.setId("RECIPE-DRAFT-2");
+        secondDraft.setFactoryId("F006");
+        secondDraft.setProductTypeId("SKU-001");
+        secondDraft.setStatus(BomRecipe.Status.DRAFT);
+        when(recipeRepo.findByFactoryIdAndProductTypeIdOrderByVersionDesc("F006", "SKU-001"))
+                .thenReturn(List.of(recipe, secondDraft));
+
+        assertThatThrownBy(() -> service.ensureDraft("F006", "SKU-001"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo("BOM_MULTIPLE_DRAFTS"));
+    }
+
+    @Test
+    @DisplayName("ensureDraft rejects invalid SKU grams before creating a version")
+    void ensureDraftRejectsInvalidSkuGrams() {
+        ProductType invalid = new ProductType();
+        invalid.setId("SKU-BAD");
+        invalid.setFactoryId("F006");
+        invalid.setName("错误 SKU");
+        invalid.setUnit("袋");
+        invalid.setGramsPerUnit(BigDecimal.ZERO);
+        when(productTypeRepo.findByIdAndFactoryIdForUpdate("SKU-BAD", "F006"))
+                .thenReturn(Optional.of(invalid));
+
+        assertThatThrownBy(() -> service.ensureDraft("F006", "SKU-BAD"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo("BOM_SKU_GRAMS_PER_UNIT_REQUIRED"));
+        verify(recipeRepo, never()).save(argThat(candidate -> "SKU-BAD".equals(candidate.getProductTypeId())));
+    }
+
+    @Test
+    @DisplayName("activation rejects an empty draft with an actionable error")
+    void activationRejectsEmptyDraft() {
+        recipe.setProductTypeId("SKU-001");
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId())).thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.activateRecipe("F006", recipe.getId(), 1L))
+                .isInstanceOfSatisfying(BusinessException.class, ex -> {
+                    assertThat(ex.getErrorCode()).isEqualTo("BOM_ACTIVATION_ITEMS_REQUIRED");
+                    assertThat(ex.getActionHint()).contains("至少添加一条");
+                });
+        verify(recipeRepo, never()).findCompetingVersionsForActivation(
+                anyString(), anyString(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("activation rejects packaging without a positive quantity")
+    void activationRejectsPackagingWithoutQuantity() {
+        recipe.setProductTypeId("SKU-001");
+        existingItem.setMaterialCategory("PACKAGING");
+        existingItem.setStandardQuantity(null);
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId())).thenReturn(List.of(existingItem));
+
+        assertThatThrownBy(() -> service.activateRecipe("F006", recipe.getId(), 1L))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo("BOM_ACTIVATION_QUANTITY_REQUIRED"));
     }
 
     @Test

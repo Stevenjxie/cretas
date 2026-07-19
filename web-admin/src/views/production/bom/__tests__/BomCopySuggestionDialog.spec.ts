@@ -82,12 +82,12 @@ describe('BomCopySuggestionDialog', () => {
     });
   });
 
-  it('offers a separate blank-create action without submitting a copy', async () => {
+  it('closes the optional advanced copy dialog without creating a BOM', async () => {
     const wrapper = mountDialog();
-    const blankButton = wrapper.findAll('button').find((button) => button.text().includes('跳过，空白创建'));
-    await blankButton?.trigger('click');
+    const cancelButton = wrapper.findAll('button').find((button) => button.text().includes('取消'));
+    await cancelButton?.trigger('click');
 
-    expect(wrapper.emitted('blank-create')).toHaveLength(1);
+    expect(wrapper.emitted('update:modelValue')?.[0]).toEqual([false]);
     expect(wrapper.emitted('copy')).toBeUndefined();
   });
 });

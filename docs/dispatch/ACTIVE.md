@@ -6,11 +6,11 @@
 
 ## 在飞任务
 
-- 无。
+- `BOM01` — `review` — Owner: Codex coordinator — Base SHA: `c030f82063cf56e43103c79edf0076c17472c075` — Web Admin BOM 首次创建与版本管理已实现：原子幂等 ensure-draft、同 SKU 当前版本克隆、空草稿激活门禁及首次编辑交互；目标 JPA/Service/Vitest 已通过，单次 Web release 构建在 clean local commit 上执行，本轮不合并、不部署。
 
 ## Scope 锁地图
 
-- 无。
+- `BOM01`：`backend/java/cretas-api/src/main/java/com/cretas/aims/{controller,dto/bom,service/bom,service/bom/impl,repository/bom}/**`、对应 `src/test/**/bom/**`、`web-admin/src/{api,views/production/bom}/**`、`docs/dispatch/ACTIVE.md`；验收命令：BOM 后端目标测试（Repository/Entity/JPQL 有改动时追加真实 JPA Context）、BOM 前端 Vitest、`scripts/deploy/release-web-manifest.sh build`、`git diff --check`。
 
 ## 阻塞项
 

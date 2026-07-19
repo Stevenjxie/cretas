@@ -181,6 +181,10 @@ export const bomRecipeApi = {
   getDetail: (factoryId: string, recipeId: string) =>
     get<BomRecipeSummary>(`${recipeBase(factoryId)}/${recipeId}`),
 
+  /** Idempotently reuse/create the one editable draft for a factory-scoped SKU. */
+  ensureDraft: (factoryId: string, productTypeId: string) =>
+    post<BomRecipeSummary>(`${recipeBase(factoryId)}/ensure-draft`, { productTypeId }),
+
   getCurrentByProduct: (factoryId: string, productTypeId: string) =>
     get<BomRecipeSummary>(`${recipeBase(factoryId)}/by-product/${productTypeId}/current`),
 

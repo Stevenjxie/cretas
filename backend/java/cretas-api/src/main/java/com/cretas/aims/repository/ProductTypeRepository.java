@@ -1,9 +1,11 @@
 package com.cretas.aims.repository;
 
 import com.cretas.aims.entity.ProductType;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -27,6 +29,12 @@ public interface ProductTypeRepository extends JpaRepository<ProductType, String
      * 根据ID和工厂ID查找（工厂隔离）
      */
     Optional<ProductType> findByIdAndFactoryId(String id, String factoryId);
+
+    /** Serializes BOM draft creation/copy/activation for one factory-scoped SKU. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT p FROM ProductType p WHERE p.id = :id AND p.factoryId = :factoryId")
+    Optional<ProductType> findByIdAndFactoryIdForUpdate(@Param("id") String id,
+                                                        @Param("factoryId") String factoryId);
      /**
      * 查找工厂的所有产品类型
       */

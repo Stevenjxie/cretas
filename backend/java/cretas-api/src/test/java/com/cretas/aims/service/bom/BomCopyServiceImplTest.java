@@ -25,6 +25,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import org.springframework.data.domain.PageImpl;
 
 import java.math.BigDecimal;
@@ -42,6 +44,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class BomCopyServiceImplTest {
 
     private static final String FACTORY = "F006";
@@ -65,6 +68,8 @@ class BomCopyServiceImplTest {
     void setUp() {
         target = product(TARGET, FACTORY, "干式熟成鸡 400g", "袋", "400");
         source = activeRecipe(SOURCE_RECIPE, SOURCE, FACTORY);
+        when(productTypeRepo.findByIdAndFactoryIdForUpdate(TARGET, FACTORY))
+                .thenReturn(Optional.of(target));
     }
 
     @Test
