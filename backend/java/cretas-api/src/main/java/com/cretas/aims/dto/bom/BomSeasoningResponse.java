@@ -24,18 +24,9 @@ public class BomSeasoningResponse {
     /** BOM 当前状态 (前端据此控制编辑可见性: DRAFT 才可改). */
     private BomRecipe.Status status;
 
-    /** 熟制每锅基准原料 (kg). */
-    private BigDecimal cookingPotBaseKg;
-
-    /** 第二锅起比例. */
-    private BigDecimal subsequentPotRatio;
-
-    /** 注射率. */
-    private BigDecimal injectionRate;
-
     /** 调料明细, 按 seq ASC. (每条含 workProcessId, 前端按工序分组) */
     private List<BomSeasoningItem> seasoningItems;
 
-    /** 调料配方按工序 (2026-07-13): 每道工序的锅序/注射量参数 (bom_process_seasoning)。 */
-    private List<ProcessSeasoningParamDTO> processParams;
+    /** 每道注射工序的绝对注射量；熟制锅序只在 seasoningItems 绑定上表达。 */
+    private List<ProcessInjectionConfigDTO> injectionConfigs;
 }

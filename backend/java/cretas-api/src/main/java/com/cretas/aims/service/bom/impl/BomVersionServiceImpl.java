@@ -2,13 +2,13 @@ package com.cretas.aims.service.bom.impl;
 
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
-import com.cretas.aims.entity.bom.BomProcessSeasoning;
+import com.cretas.aims.entity.bom.BomProcessInjectionConfig;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.entity.bom.BomVersion;
 import com.cretas.aims.entity.bom.BomVersion.VersionStatus;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
-import com.cretas.aims.repository.bom.BomProcessSeasoningRepository;
+import com.cretas.aims.repository.bom.BomProcessInjectionConfigRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.repository.bom.BomVersionRepository;
 import com.cretas.aims.service.bom.BomVersionService;
@@ -40,7 +40,7 @@ public class BomVersionServiceImpl implements BomVersionService {
     private final BomVersionRepository versionRepo;
     private final BomRecipeRepository recipeRepo;
     private final BomSeasoningItemRepository seasoningItemRepo;
-    private final BomProcessSeasoningRepository processSeasoningRepo;
+    private final BomProcessInjectionConfigRepository processInjectionConfigRepo;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -220,11 +220,7 @@ public class BomVersionServiceImpl implements BomVersionService {
         snapshot.put("sourceType", recipe.getSourceType() == null ? null : recipe.getSourceType().name());
         snapshot.put("notes", recipe.getNotes());
 
-        // BOM 统管配方+锅序 (2026-06-24): 折叠进 BOM 的配方也纳入版本快照 → 配方改动走版本/ECN (decision 3).
-        snapshot.put("cookingPotBaseKg", recipe.getCookingPotBaseKg());
-        snapshot.put("subsequentPotRatio", recipe.getSubsequentPotRatio());
         snapshot.put("seasoningRevision", recipe.getSeasoningRevision());
-        snapshot.put("injectionRate", recipe.getInjectionRate());
 
         List<Map<String, Object>> seasoning = new ArrayList<>();
         // 经 repo 取 (非 LAZY 集合) — tx 内外都安全, 避免 LazyInitializationException / 隐藏 N+1 (audit Issue 2).
@@ -247,19 +243,18 @@ public class BomVersionServiceImpl implements BomVersionService {
         }
         snapshot.put("seasoningItems", seasoning);
 
-        List<Map<String, Object>> processSeasoning = new ArrayList<>();
-        if (processSeasoningRepo != null) {
-            for (BomProcessSeasoning process : processSeasoningRepo
+        List<Map<String, Object>> injectionConfigs = new ArrayList<>();
+        if (processInjectionConfigRepo != null) {
+            for (BomProcessInjectionConfig config : processInjectionConfigRepo
                     .findByRecipeIdAndDeletedAtIsNull(recipe.getId())) {
                 Map<String, Object> snap = new LinkedHashMap<>();
-                snap.put("workProcessId", process.getWorkProcessId());
-                snap.put("subsequentPotRatio", process.getSubsequentPotRatio());
-                snap.put("injectionAmountKg", process.getInjectionAmountKg());
-                snap.put("notes", process.getNotes());
-                processSeasoning.add(snap);
+                snap.put("workProcessId", config.getWorkProcessId());
+                snap.put("injectionAmountKg", config.getInjectionAmountKg());
+                snap.put("notes", config.getNotes());
+                injectionConfigs.add(snap);
             }
         }
-        snapshot.put("processSeasoning", processSeasoning);
+        snapshot.put("processInjectionConfigs", injectionConfigs);
 
         List<Map<String, Object>> items = new ArrayList<>();
         List<BomRecipeItem> recipeItems = recipe.getItems();

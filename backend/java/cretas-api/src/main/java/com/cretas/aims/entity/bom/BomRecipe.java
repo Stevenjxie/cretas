@@ -137,23 +137,9 @@ public class BomRecipe extends BaseEntity {
     @Column(name = "notes", length = 500)
     private String notes;
 
-    // ========== BOM 统管配方+锅序 (2026-06-24): 折叠自 product_recipes 的锅序参数 ==========
-
-    /** 熟制每锅基准原料(kg), 如 160. 折叠自 product_recipes.cooking_pot_base_kg. */
-    @Column(name = "cooking_pot_base_kg", precision = 12, scale = 3)
-    private BigDecimal cookingPotBaseKg;
-
-    /** 第二锅起比例, 默认 0.3333, per-SKU 可配. 折叠自 product_recipes.subsequent_pot_ratio. */
-    @Column(name = "subsequent_pot_ratio", precision = 8, scale = 4)
-    private BigDecimal subsequentPotRatio;
-
     @Column(name = "seasoning_revision", nullable = false)
     @Builder.Default
     private Long seasoningRevision = 0L;
-
-    /** 注射率, 如 0.20. 折叠自 product_recipes.injection_rate. */
-    @Column(name = "injection_rate", precision = 8, scale = 4)
-    private BigDecimal injectionRate;
 
     @OneToMany(mappedBy = "recipe", cascade = CascadeType.ALL, fetch = FetchType.LAZY, orphanRemoval = true)
     @OrderBy("sortOrder ASC")

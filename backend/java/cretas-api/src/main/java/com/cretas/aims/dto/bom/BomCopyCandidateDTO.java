@@ -29,7 +29,7 @@ public class BomCopyCandidateDTO {
     @Builder.Default
     private List<SeasoningRuleDTO> seasoningItems = new ArrayList<>();
     @Builder.Default
-    private List<ProcessSeasoningRuleDTO> processSeasoningParams = new ArrayList<>();
+    private List<ProcessInjectionConfigRuleDTO> processInjectionConfigs = new ArrayList<>();
 
     @Data
     @Builder
@@ -83,11 +83,10 @@ public class BomCopyCandidateDTO {
     @Builder
     @NoArgsConstructor
     @AllArgsConstructor
-    public static class ProcessSeasoningRuleDTO {
+    public static class ProcessInjectionConfigRuleDTO {
         private Long id;
         private String workProcessId;
         private String workProcessName;
-        private BigDecimal subsequentPotRatio;
         private BigDecimal injectionAmountKg;
         private String notes;
     }

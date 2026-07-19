@@ -55,7 +55,7 @@ class WorkProcessServiceImplTest {
     private com.cretas.aims.repository.bom.BomSeasoningItemRepository bomSeasoningItemRepository;
 
     @Mock
-    private com.cretas.aims.repository.bom.BomProcessSeasoningRepository bomProcessSeasoningRepository;
+    private com.cretas.aims.repository.bom.BomProcessInjectionConfigRepository bomProcessInjectionConfigRepository;
 
     @InjectMocks
     private WorkProcessServiceImpl service;

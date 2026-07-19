@@ -18,5 +18,5 @@ public class BomCopyToDraftRequest {
 
     private List<Long> recipeItemIds = new ArrayList<>();
     private List<Long> seasoningItemIds = new ArrayList<>();
-    private List<Long> processSeasoningParamIds = new ArrayList<>();
+    private List<Long> processInjectionConfigIds = new ArrayList<>();
 }

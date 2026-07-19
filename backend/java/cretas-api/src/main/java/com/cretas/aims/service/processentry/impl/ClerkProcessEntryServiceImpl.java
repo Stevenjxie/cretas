@@ -37,10 +37,10 @@ import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.constant.SeasoningProcessCategory;
-import com.cretas.aims.entity.bom.BomProcessSeasoning;
+import com.cretas.aims.entity.bom.BomProcessInjectionConfig;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
-import com.cretas.aims.repository.bom.BomProcessSeasoningRepository;
+import com.cretas.aims.repository.bom.BomProcessInjectionConfigRepository;
 import com.cretas.aims.service.processentry.ClerkProcessEntryService;
 import com.cretas.aims.service.recipe.RecipeCostCalculator;
 import com.cretas.aims.service.recipe.SeasoningCost;
@@ -108,11 +108,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
      */
     private final ProductWorkProcessRepository productWorkProcessRepository;
     private final WorkProcessRepository workProcessRepository;
-    /**
-     * 调料配方按工序 (2026-07-13): 每道工序的锅序/注射量参数. null-tolerant
-     * (测试 @InjectMocks 未注入时 per-工序 路径不激活, 走原整-SKU 逻辑, 零回归)。
-     */
-    private final BomProcessSeasoningRepository bomProcessSeasoningRepository;
+    /** 每道注射工序的绝对注射量配置。 */
+    private final BomProcessInjectionConfigRepository bomProcessInjectionConfigRepository;
 
     // ─────────────────────────────────────────────────────────────
     // Public API
@@ -962,11 +959,11 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     }
 
     /**
-     * 该报工步是否已配 per-工序 调料 (该工序名下有调料明细 或 锅序/注射参数)。
-     * 决定是否走 per-工序 路径; 未配则不因工序类别误触发旧整-SKU 回退 (防 double-count)。
+     * 该报工步是否已配 per-工序 调料或注射绝对量。
+     * 决定是否走工序绑定路径；未配置时只允许读取同一 BOM 下的整 SKU 调料绑定。
      */
     private boolean hasPerProcessSeasoningConfig(String factoryId, String productTypeId, StepEntry st) {
-        if (bomRecipeRepo == null || bomSeasoningItemRepo == null || bomProcessSeasoningRepository == null) {
+        if (bomRecipeRepo == null || bomSeasoningItemRepo == null || bomProcessInjectionConfigRepository == null) {
             return false;
         }
         WorkProcess wp = resolveStepWorkProcess(factoryId, productTypeId, st);
@@ -979,7 +976,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         if (!bomSeasoningItemRepo.findByRecipeIdAndWorkProcessIdOrderBySeqAsc(recipeId, wpId).isEmpty()) {
             return true;
         }
-        return bomProcessSeasoningRepository
+        return bomProcessInjectionConfigRepository
                 .findByRecipeIdAndWorkProcessIdAndDeletedAtIsNull(recipeId, wpId).isPresent();
     }
 
@@ -1054,8 +1051,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     private BigDecimal computePerProcessSeasoningCost(String factoryId, String productTypeId,
                                                       StepEntry st, List<BigDecimal> potRawKgs,
                                                       List<String> warnings) {
-        if (bomRecipeRepo == null || bomSeasoningItemRepo == null || bomProcessSeasoningRepository == null) {
-            return null; // 测试 @InjectMocks 未注入 → 走原整-SKU 路径
+        if (bomRecipeRepo == null || bomSeasoningItemRepo == null || bomProcessInjectionConfigRepository == null) {
+            return null; // 仅供不完整 Mockito fixture；Spring 运行时依赖均为必注入。
         }
         WorkProcess wp = resolveStepWorkProcess(factoryId, productTypeId, st);
         if (wp == null || wp.getId() == null) return null;
@@ -1067,15 +1064,15 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
 
         List<BomSeasoningItem> lines = bomSeasoningItemRepo
                 .findByRecipeIdAndWorkProcessIdOrderBySeqAsc(recipeId, wpId);
-        Optional<BomProcessSeasoning> paramOpt = bomProcessSeasoningRepository
-                .findByRecipeIdAndWorkProcessIdAndDeletedAtIsNull(recipeId, wpId);
-        if (lines.isEmpty() && paramOpt.isEmpty()) {
-            return null; // 该工序未配 per-工序 调料 (未迁移 SKU) → 落原整-SKU 路径, 零回归
-        }
-
         if (SeasoningProcessCategory.INJECTION.equals(wp.getProcessCategory())) {
+            Optional<BomProcessInjectionConfig> configOpt = bomProcessInjectionConfigRepository
+                    .findByRecipeIdAndWorkProcessIdAndDeletedAtIsNull(recipeId, wpId);
+            if (lines.isEmpty() && configOpt.isEmpty()) {
+                return null;
+            }
             // 注射: 绝对注射量 × 注射内容每kg单价; potRawKgs=null → 熟制段成本 0
-            BigDecimal injectionAmountKg = paramOpt.map(BomProcessSeasoning::getInjectionAmountKg).orElse(null);
+            BigDecimal injectionAmountKg = configOpt
+                    .map(BomProcessInjectionConfig::getInjectionAmountKg).orElse(null);
             if (injectionAmountKg == null) {
                 // audit Finding 3 修复: 配了注射内容但没填注射量 → 不静默 0, 明确 warning 指向配置位置
                 String pn = st.getProcessName() == null ? String.valueOf(st.getProcessOrder()) : st.getProcessName();
@@ -1083,13 +1080,14 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                         + "请在「生产 → BOM 配方 → 调料配方」补该工序注射量。");
                 return BigDecimal.ZERO;
             }
-            SeasoningCost sc = RecipeCostCalculator.compute((BigDecimal) null, lines, injectionAmountKg, null);
+            SeasoningCost sc = RecipeCostCalculator.compute(lines, injectionAmountKg, null);
             return sc.getTotal();
         }
-        // 熟制 (及其它需调料的工序): 报工锅数 + 该工序第二锅比例 (缺则回退 header 比例); 注射基准 0
-        BigDecimal ratio = paramOpt.map(BomProcessSeasoning::getSubsequentPotRatio)
-                .orElse(bomOpt.get().getSubsequentPotRatio());
-        SeasoningCost sc = RecipeCostCalculator.computeBindingPotRules(ratio, lines, potRawKgs);
+        if (lines.isEmpty()) {
+            return null;
+        }
+        // 熟制只读每条调料 binding 的锅序比例；不存在 process/header fallback。
+        SeasoningCost sc = RecipeCostCalculator.computeBindingPotRules(lines, potRawKgs);
         return sc.getTotal();
     }
 
@@ -1114,7 +1112,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                         bomSeasoningItemRepo.findByRecipeIdAndWorkProcessIdIsNullOrderBySeqAsc(bomOpt.get().getId());
                 if (!bomSeasoning.isEmpty()) {
                     SeasoningCost sc = RecipeCostCalculator.compute(
-                            bomOpt.get().getSubsequentPotRatio(), bomSeasoning, injectionRawKg, potRawKgs);
+                            bomSeasoning, injectionRawKg, potRawKgs);
                     return sc.getTotal();
                 }
                 warnings.add("产品 " + productTypeId + " 的当前 BOM 无调料明细，调料成本暂记 0；"

@@ -316,15 +316,15 @@ public class BomAdjustTool extends AbstractBusinessTool {
         change.put("newValue", value);
 
         if (!preview) {
-            // 全量替换请求: 复制现有锅序参数 + 所有调料项, 改目标项的字段
+            // 全量替换请求: 保留 binding 级锅序和 injection-only 配置。
             BomSeasoningSaveRequest req = new BomSeasoningSaveRequest();
-            req.setCookingPotBaseKg(sea.getCookingPotBaseKg());
-            req.setSubsequentPotRatio(sea.getSubsequentPotRatio());
-            req.setInjectionRate(sea.getInjectionRate());
+            req.setInjectionConfigs(sea.getInjectionConfigs());
             List<BomSeasoningSaveRequest.SeasoningItemDTO> dtos = new ArrayList<>();
             for (BomSeasoningItem it : items) {
                 BomSeasoningSaveRequest.SeasoningItemDTO d = new BomSeasoningSaveRequest.SeasoningItemDTO();
                 d.setSection(it.getSection());
+                d.setWorkProcessId(it.getWorkProcessId());
+                d.setMaterialTypeId(it.getMaterialTypeId());
                 d.setSeq(it.getSeq());
                 d.setName(it.getName());
                 boolean isTarget = target.getName().equals(it.getName());
@@ -333,6 +333,7 @@ public class BomAdjustTool extends AbstractBusinessTool {
                 d.setPriceSource2(it.getPriceSource2());
                 d.setCountInSeasoning(it.getCountInSeasoning());
                 d.setRemark(it.getRemark());
+                d.setSubsequentPotRatio(it.getSubsequentPotRatio());
                 dtos.add(d);
             }
             req.setSeasoningItems(dtos);

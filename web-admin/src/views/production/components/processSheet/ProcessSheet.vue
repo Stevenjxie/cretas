@@ -199,7 +199,7 @@ function mapWorkflowProcesses(descriptors: WorkflowProcessDescriptor[]): ProcEnt
         // 不允许 plannedUnit / 产品单位 / kg 默认值掩盖坏配置。
         ...resolveWorkflowProcessSheetUnits(proc),
         workflowContext: proc,
-        // 锅数另由 BOM 调料 processParams 显式驱动，不使用该类别猜测。
+        // 锅数另由 BOM 调料 binding 的 subsequentPotRatio 显式驱动。
         processCategory: proc.processCategory ?? null,
         seasoningPotEnabled: false,
         seasoningConfigured: false,
@@ -339,7 +339,7 @@ async function resolveProcesses() {
           allowFinishedGoodsSource: it.allowFinishedGoodsSource === true,
           inputUnit: units.inputUnit,
           outputUnit: units.outputUnit,
-          // 保留真实工序类别；锅数由 BOM 调料 processParams 显式驱动。
+          // 保留真实工序类别；锅数由 seasoning binding 自己的续锅比例驱动。
           processCategory: it.processCategory ?? null,
           seasoningPotEnabled: false,
           seasoningConfigured: false,
@@ -359,16 +359,16 @@ async function resolveProcesses() {
 async function resolveSeasoningProcesses(): Promise<{ configured: Set<string>; potEnabled: Set<string> }> {
   try {
     const response = await bomSeasoningApi.getByProduct(props.factoryId, props.productTypeId);
-    if (!response || response.success !== true || !response.data || !Array.isArray(response.data.processParams)) {
+    if (!response || response.success !== true || !response.data || !Array.isArray(response.data.seasoningItems)) {
       if (isNotFoundError(response)) return { configured: new Set(), potEnabled: new Set() };
       throw new Error('调料配方响应异常');
     }
     return {
       configured: new Set((response.data.seasoningItems || []).map((item) => item.workProcessId)),
       potEnabled: new Set(
-        response.data.processParams
-          .filter((param) => param.subsequentPotRatio != null)
-          .map((param) => param.workProcessId),
+        response.data.seasoningItems
+          .filter((item) => item.subsequentPotRatio != null)
+          .map((item) => item.workProcessId),
       ),
     };
   } catch (error) {

@@ -11,7 +11,7 @@ import java.util.List;
  * 注射/kg = Σ INJECTION: dosage_g/1000 × max(p1,p2) — 每锅同量
  * 熟制/kg(全量) = Σ COOKING ∧ countInSeasoning: dosage_g/1000 × max(p1,p2)
  * 注射总 = R注射 × 注射/kg
- * 熟制总 = Σ_i 锅i原料 × 熟制/kg(全量) × (i==0 ? 1 : ratio)
+ * 熟制总 = 每条熟制绑定按自己的续锅比例计算后求和
  *
  * <p>运行时只读取 {@link BomSeasoningItem}，不再保留旧配方数据源或兼容入口。
  */
@@ -19,55 +19,34 @@ public final class RecipeCostCalculator {
 
     private static final int SCALE = 4;
     private static final BigDecimal G_PER_KG = new BigDecimal("1000");
-    private static final BigDecimal DEFAULT_SUBSEQUENT_POT_RATIO = new BigDecimal("0.3333");
-
     private RecipeCostCalculator() {}
 
     /**
-     * 核心计算 (数据源中性). BOM 折叠后从 {@code BomRecipe.subsequentPotRatio} + {@code List<BomSeasoningItem>} 走此入口.
+     * 核心计算。注射成本按绝对注射量，熟制成本只读每条 binding 的锅序规则。
      *
-     * @param subsequentPotRatio 第二锅起比例（null → 0.3333）
      * @param ingredients        BOM 调料明细（注射段+熟制段）
      * @param injectionRawKg     注射前生料投入重(kg)
      * @param potRawKgs          逐锅熟制原料(kg), size=锅数N; 第1个=第一锅
      */
-    public static SeasoningCost compute(BigDecimal subsequentPotRatio,
-                                         List<BomSeasoningItem> ingredients,
+    public static SeasoningCost compute(List<BomSeasoningItem> ingredients,
                                         BigDecimal injectionRawKg,
                                         List<BigDecimal> potRawKgs) {
         BigDecimal injPerKg = perKg(ingredients, BomSeasoningItem.SECTION_INJECTION, false);
-        BigDecimal cookPerKg = perKg(ingredients, BomSeasoningItem.SECTION_COOKING, true);
-
         BigDecimal injectionTotal = nz(injectionRawKg).multiply(injPerKg)
                 .setScale(SCALE, RoundingMode.HALF_UP);
-
-        BigDecimal ratio = subsequentPotRatio == null
-                ? DEFAULT_SUBSEQUENT_POT_RATIO : subsequentPotRatio;
-
-        BigDecimal cookingTotal = BigDecimal.ZERO;
-        if (potRawKgs != null) {
-            for (int i = 0; i < potRawKgs.size(); i++) {
-                BigDecimal potFactor = (i == 0) ? BigDecimal.ONE : ratio;
-                BigDecimal potCost = nz(potRawKgs.get(i)).multiply(cookPerKg).multiply(potFactor)
-                        .setScale(SCALE, RoundingMode.HALF_UP);
-                cookingTotal = cookingTotal.add(potCost);
-            }
-        }
-        cookingTotal = cookingTotal.setScale(SCALE, RoundingMode.HALF_UP);
-
+        SeasoningCost cooking = computeBindingPotRules(ingredients, potRawKgs);
+        BigDecimal cookingTotal = cooking.getCookingTotal();
         BigDecimal total = injectionTotal.add(cookingTotal).setScale(SCALE, RoundingMode.HALF_UP);
-        return new SeasoningCost(injPerKg, cookPerKg, injectionTotal, cookingTotal, total);
+        return new SeasoningCost(injPerKg, cooking.getCookingFullCostPerKg(),
+                injectionTotal, cookingTotal, total);
     }
 
     /**
      * Calculate cooking cost with a pot rule attached to each BOM seasoning binding.
      * The first pot is always 100%; every later pot uses the same (non-compounding)
-     * binding ratio. A modern binding with a null ratio is applied to the full process
-     * input once. Only historical rows without a material binding may use the legacy
-     * process-level ratio as a compatibility fallback.
+     * binding ratio. A binding with a null ratio is applied to the full process input once.
      */
-    public static SeasoningCost computeBindingPotRules(BigDecimal legacyProcessRatio,
-                                                       List<BomSeasoningItem> ingredients,
+    public static SeasoningCost computeBindingPotRules(List<BomSeasoningItem> ingredients,
                                                        List<BigDecimal> potRawKgs) {
         BigDecimal cookPerKg = perKg(ingredients, BomSeasoningItem.SECTION_COOKING, true);
         BigDecimal totalRawKg = BigDecimal.ZERO;
@@ -89,9 +68,6 @@ public final class RecipeCostCalculator {
                     continue;
                 }
                 BigDecimal ratio = item.getSubsequentPotRatio();
-                if (ratio == null && item.getMaterialTypeId() == null) {
-                    ratio = legacyProcessRatio;
-                }
                 BigDecimal effectiveRawKg = totalRawKg;
                 if (ratio != null && potCount > 0) {
                     BigDecimal factor = BigDecimal.ONE.add(

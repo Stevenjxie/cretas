@@ -86,7 +86,7 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
     getRows.mockResolvedValue({ success: true, data: [] });
     getSeasoningByProduct.mockResolvedValue({
       success: true,
-      data: { processParams: [], seasoningItems: [] },
+      data: { injectionConfigs: [], seasoningItems: [] },
     });
   });
 
@@ -114,10 +114,8 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
     getSeasoningByProduct.mockResolvedValue({
       success: true,
       data: {
-        seasoningItems: [{ workProcessId: 'WP-CONFIGURED' }],
-        processParams: [
-          { workProcessId: 'WP-CONFIGURED', subsequentPotRatio: 0.5, injectionAmountKg: null },
-        ],
+        seasoningItems: [{ workProcessId: 'WP-CONFIGURED', subsequentPotRatio: 0.5 }],
+        injectionConfigs: [],
       },
     });
 
@@ -166,7 +164,7 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
 
     getSeasoningByProduct.mockResolvedValueOnce({
       success: true,
-      data: { processParams: [], seasoningItems: [] },
+      data: { injectionConfigs: [], seasoningItems: [] },
     });
     const retry = wrapper.findAll('button').find((button) => button.text().includes('重试'));
     if (!retry) throw new Error('找不到重试按钮');

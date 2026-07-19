@@ -132,12 +132,11 @@ export interface BomCopySeasoningRule {
   remark?: string | null;
 }
 
-export interface BomCopyProcessParamRule {
+export interface BomCopyInjectionConfigRule {
   id: number;
   workProcessId: string;
   workProcessName?: string | null;
-  subsequentPotRatio?: number | null;
-  injectionAmountKg?: number | null;
+  injectionAmountKg: number;
   notes?: string | null;
 }
 
@@ -152,7 +151,7 @@ export interface BomCopyCandidate {
   sharedProcesses: BomCopySharedProcess[];
   bomItems: BomCopyItemRule[];
   seasoningItems: BomCopySeasoningRule[];
-  processSeasoningParams: BomCopyProcessParamRule[];
+  processInjectionConfigs: BomCopyInjectionConfigRule[];
 }
 
 export interface CopyBomToProductRequest {
@@ -160,7 +159,7 @@ export interface CopyBomToProductRequest {
   sourceRecipeId: string;
   recipeItemIds: number[];
   seasoningItemIds: number[];
-  processSeasoningParamIds: number[];
+  processInjectionConfigIds: number[];
 }
 
 const recipeBase = (factoryId: string) => `/${factoryId}/bom/recipes`;
@@ -382,17 +381,10 @@ export interface BomSeasoningItem {
   remark?: string | null;
 }
 
-/**
- * 单个工序的调料参数（按工序配置 — 替代旧的单一 header 级锅序/注射率）。
- * 熟制工序: subsequentPotRatio 有效, injectionAmountKg 恒为 null。
- * 注射工序: injectionAmountKg 有效, subsequentPotRatio 恒为 null。
- */
-export interface ProcessSeasoningParam {
+/** 单个注射工序的绝对注射量。 */
+export interface ProcessInjectionConfig {
   workProcessId: string;
-  /** 第二锅起比例 (熟制工序専用, 老汤锅); 未配置为 null */
-  subsequentPotRatio: number | null;
-  /** 绝对注射量 kg (注射工序専用); 未配置为 null */
-  injectionAmountKg: number | null;
+  injectionAmountKg: number;
   notes?: string | null;
 }
 
@@ -403,25 +395,12 @@ export interface BomSeasoningResponse {
   productName: string;
   /** DRAFT = 可编辑; ACTIVE / ARCHIVED = 只读 */
   status: BomRecipeStatus;
-  /** @deprecated legacy header-level 字段, 新 UI 改用 processParams 按工序配置; 保留仅为向后兼容透传 */
-  cookingPotBaseKg: number | null;
-  /** @deprecated 同上 */
-  subsequentPotRatio: number | null;
-  /** @deprecated 同上 */
-  injectionRate: number | null;
   seasoningItems: BomSeasoningItem[];
-  /** 按工序 (熟制/注射) 配置的锅序比例 / 注射量 */
-  processParams: ProcessSeasoningParam[];
+  injectionConfigs: ProcessInjectionConfig[];
 }
 
 /** Save request body for PUT /{recipeId}/seasoning */
 export interface BomSeasoningSaveRequest {
-  /** @deprecated legacy 字段, 新 UI 不再编辑, 原样透传已加载的值 */
-  cookingPotBaseKg: number | null;
-  /** @deprecated 同上 */
-  subsequentPotRatio: number | null;
-  /** @deprecated 同上 */
-  injectionRate: number | null;
   seasoningItems: Array<{
     workProcessId: string;
     materialTypeId: string;
@@ -433,8 +412,9 @@ export interface BomSeasoningSaveRequest {
     priceSource2: number | null;
     countInSeasoning: boolean;
     remark?: string | null;
+    subsequentPotRatio?: number | null;
   }>;
-  processParams: ProcessSeasoningParam[];
+  injectionConfigs: ProcessInjectionConfig[];
 }
 
 const seasoningBase = (factoryId: string) => `/${factoryId}/bom/recipes`;
