@@ -178,18 +178,20 @@ frontend/CretasFoodTrace/src/
 
 ### 代码质量原则
 
-本项目用 **Thin-Opus-Organizer 编排**：所有想法经一个 Opus organizer 分配给 Sonnet/Codex/Composer，详见 `organizer-protocol.md`。
+本项目用 **Thin-Opus-Organizer 编排**：所有想法经一个 Opus organizer 分配给 Sonnet/Codex/Composer，详见 `organizer` skill。
 
-详见 `.claude/rules/` 目录下的规范文件：
-- `organizer-protocol.md` - **多模型编排模型（Thin-Opus Organizer，顶层入口，核心）**
-- `multi-model-dispatch.md` - 模型/effort/orchestration 三轴路由（含 Sonnet 执行层 + 预算均衡）
+编排/运维三大规范已转为按需加载的 project skill(`.claude/skills/`,涉及时自动路由):
+- `organizer` skill - **多模型编排模型（Thin-Opus Organizer 引导+完整协议，顶层入口，核心）**
+- `multi-model-dispatch` skill - 模型/effort/orchestration 三轴路由（含 Sonnet 执行层 + 预算均衡）
+- `server-operations` skill - 服务器运维规范（含凭证文件位置）
+
+常驻规范见 `.claude/rules/` 目录：
 - `ai-intent-tool-skill-architecture.md` - **AI Tool-Skill 架构规范（核心）**
 - `api-response-handling.md` - API 响应处理
 - `typescript-type-safety.md` - TypeScript 类型安全
 - `jwt-token-handling.md` - JWT Token 处理
 - `database-entity-sync.md` - 数据库同步
 - `field-naming-convention.md` - 字段命名
-- `server-operations.md` - 服务器运维规范
 - `concurrent-edit-safety.md` - **并发编辑安全（共享脚本修改前必读）**
 
 ### 核心原则

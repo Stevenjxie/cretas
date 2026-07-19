@@ -1,3 +1,11 @@
+---
+paths:
+  - "backend/python/**"
+  - "backend/java/**"
+  - "tests/fixtures/java-smartbi-golden/**"
+  - "scripts/record-java-golden.sh"
+---
+
 # Java→Python Port 规范
 
 **最后更新**: 2026-05-02

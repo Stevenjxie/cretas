@@ -1,3 +1,8 @@
+---
+name: server-operations
+description: cretas 服务器运维规范(47.100.235.168 主服务器 + 139.196.165.140 网关)。触发场景:SSH 上服务器操作;部署 Java 后端/Python 服务/Web-Admin/Showcase(内容分布禁止搞混,Showcase 只上 139);systemd 服务管理(cretas-backend/cretas-python/cretas-embedding)与启动依赖链;健康检查/看日志/查端口/磁盘内存;双环境(prod 10010/8083,test 已于 2026-07-13 下线);smartbi 数据库 schema 变更硬规则(migration runner,禁手动 psql DDL);环境变量 .env.prod;rsync/scp 传输规范;查服务器/数据库/阿里云凭证。凡涉及"服务器/部署/运维/systemd/日志/migration/凭证"必读本 skill。
+---
+
 # 服务器运维规范
 
 **最后更新**: 2026-06-07
@@ -280,3 +285,9 @@ WARN level 日志 + 跳过 Step 3.5。完后立即修 runner 重新部署。
 11. **本地启动 Java 后端**: 用 `mvn spring-boot:run` 不要用 `java -jar` (后者 mmap 锁 fat jar 会阻断 deploy 的 mvn package). 见 `feedback_deploy_pipeline.md`.
 12. **R2/OSS 凭证位置 (legacy, 默认禁用)**: R2 在 `~/.r2-env` (NTFS ACL 仅 Steve+SYSTEM); OSS 在 `~/.ossutilconfig` (账号 B, **`cretas-media` bucket 属账号 B 不是 A**). 这些是 Steve 在国外期间为绕过跨境 RST 用的中转通道; 现已回国, rsync 主 + scp 兜底, R2/OSS 默认禁用 (`ENABLE_R2=1` 紧急 opt-in). `SKIP_RSYNC=1` 已移除 (见注意事项 7). deploy script 启动时仍自动 source ~/.bashrc (取 R2 凭证供紧急 opt-in).
 13. **Backup 文件清理**: deploy script 自动保留最近 3 份 `*.bak.YYYYMMDD_HHMMSS`. 历史命名 (`.bak4/5/6/.broken/.bak.pre_fix`) 不会被自动清理, 需手动 rm.
+
+---
+
+## 凭证文件位置
+
+凭证见本目录 `db-credentials.md` / `aliyun-credentials.md`(本地文件, gitignored, 不入库)。含数据库密码、服务器登录、阿里云 AccessKey 等真值; 需要凭证时直接读这两个文件, 不要把真值写进任何会被 commit 的文件。

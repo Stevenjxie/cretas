@@ -111,6 +111,10 @@ _archived/
 .claude/rules/*-credentials.md
 .claude/rules/*-keys.md
 .claude/rules/aliyun-credentials.md
+.claude/skills/server-operations/db-credentials.md
+.claude/skills/server-operations/aliyun-credentials.md
+.claude/skills/**/*-credentials.md
+.claude/skills/**/*-keys.md
 .codex/rules/*-credentials.md
 .codex/rules/*-keys.md
 .codex/rules/aliyun-credentials.md

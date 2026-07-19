@@ -73,4 +73,4 @@ git checkout main && git pull origin main
 | 必须 prod 验 feature | 验完立即 merge main + 从 main 重部 + 核对运行 jar 含修复 |
 | 清理 | `git worktree remove ../cretas-X`(⛔ 不要 mklink /J 共享 node_modules, 见 concurrent-edit-safety Rule 7) |
 
-关联: `concurrent-edit-safety.md`(commit 范围保护)、`feedback_concurrent_deploy_r2_path_collision`(memory)、`server-operations.md`(部署脚本)。
+关联: `concurrent-edit-safety.md`(commit 范围保护)、`feedback_concurrent_deploy_r2_path_collision`(memory)、`server-operations` skill(部署脚本)。
