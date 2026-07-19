@@ -23,10 +23,6 @@ export interface EmployeeAnalysisRequest {
   question?: string;
   /** 会话ID（用于追问） */
   sessionId?: string;
-  /** 是否启用思考模式 */
-  enableThinking?: boolean;
-  /** 思考预算（10-100） */
-  thinkingBudget?: number;
 }
 
 /**
@@ -101,8 +97,10 @@ export interface ProductionAnalysis {
   score: number | null;
   /** 参与批次数 */
   batchCount: number;
-  /** 完成批次数 */
-  completedBatches: number;
+  /** 批次工作会话数 */
+  batchWorkSessionCount: number;
+  /** 已完成批次工作会话数 */
+  completedBatchWorkSessionCount: number;
   /** 批次工作分钟数合计 */
   batchWorkMinutes: number;
   /** 质检记录数 */
@@ -183,7 +181,7 @@ export interface EmployeeAnalysisResponse {
   periodStart: string;
   /** 分析周期结束 */
   periodEnd: string;
-  /** 数据点数量 */
+  /** 原始记录数合计：考勤 + 工作会话 + 批次工作会话 + 质检 */
   dataPoints: number;
   /** 综合评分(0-100) */
   overallScore: number | null;
@@ -206,7 +204,7 @@ export interface EmployeeAnalysisResponse {
   /** 绩效趋势(近6个月) */
   trends: PerformanceTrend[];
   /** AI深度洞察 */
-  aiInsight: string;
+  aiInsight: string | null;
   /** 会话ID(用于追问) */
   sessionId: string | null;
   /** 分析时间 */
@@ -263,9 +261,17 @@ class EmployeeAIApiClient {
     request?: EmployeeAnalysisRequest,
     factoryId?: string
   ): Promise<EmployeeAnalysisResponse> {
+    const params = request
+      ? {
+          days: request.days,
+          question: request.question,
+          sessionId: request.sessionId,
+        }
+      : undefined;
     const response = await apiClient.post<ApiResponseWrapper<EmployeeAnalysisResponse>>(
       `${this.getBasePath(factoryId)}/analysis/employee/${employeeId}`,
-      request ?? {}
+      null,
+      { params }
     );
     return response.data;
   }
@@ -286,7 +292,8 @@ class EmployeeAIApiClient {
   ): Promise<EmployeeAnalysisResponse> {
     const response = await apiClient.post<ApiResponseWrapper<EmployeeAnalysisResponse>>(
       `${this.getBasePath(factoryId)}/analysis/employee/${employeeId}/followup`,
-      request
+      { question: request.question },
+      { params: { sessionId: request.sessionId } }
     );
     return response.data;
   }

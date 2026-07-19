@@ -929,9 +929,10 @@ public class AIAnalysisService {
             Map<String, Object> employeeData = collectEmployeeData(factoryId, employee, startTime, endTime);
 
             // 4. 格式化为AI提示词
+            String factPrompt = formatEmployeeDataForAI(employeeData);
             String message = question != null && !question.trim().isEmpty()
-                    ? question + "\n\n以下是员工数据：\n" + formatEmployeeDataForAI(employeeData)
-                    : formatEmployeeDataForAI(employeeData);
+                    ? "【用户补充问题（不改变事实约束）】\n" + question.trim() + "\n\n" + factPrompt
+                    : factPrompt;
 
             PythonGeneralAnalysisRequest request = PythonGeneralAnalysisRequest.builder()
                     .message(message)
@@ -980,7 +981,7 @@ public class AIAnalysisService {
             String attendanceStatus = record.getAttendanceStatus();
             if ("ABSENT".equalsIgnoreCase(attendanceStatus)) {
                 absentDays++;
-            } else {
+            } else if (attendanceStatus != null) {
                 attendanceDays++;
             }
             if (attendanceStatus != null && attendanceStatus.toUpperCase(Locale.ROOT).contains("LATE")) {
@@ -1003,9 +1004,9 @@ public class AIAnalysisService {
 
         // 2. 工作会话数据（工时效率）
         Integer workSessionMinutes = employeeWorkSessionRepository
-                .sumActualWorkMinutesByUserIdAndTimeRange(userId, startTime, endTime);
+                .sumActualWorkMinutesByFactoryIdAndUserIdAndTimeRange(factoryId, userId, startTime, endTime);
         long sessionCount = employeeWorkSessionRepository
-                .countByUserIdAndTimeRange(userId, startTime, endTime);
+                .countByFactoryIdAndUserIdAndTimeRange(factoryId, userId, startTime, endTime);
 
         Map<String, Object> workHoursData = new HashMap<>();
         int actualWorkMinutes = workSessionMinutes != null ? workSessionMinutes : 0;
@@ -1020,23 +1021,30 @@ public class AIAnalysisService {
         Map<String, Object> productionData = new HashMap<>();
 
         // 使用真实的批次工作会话数据
-        long batchCount = batchWorkSessionRepository.countDistinctBatchesByEmployeeAndTimeRange(userId, startTime, endTime);
-        Integer batchWorkMinutes = batchWorkSessionRepository.sumWorkMinutesByEmployeeAndTimeRange(userId, startTime, endTime);
-        long completedBatches = batchWorkSessionRepository.countCompletedByEmployeeAndTimeRange(userId, startTime, endTime);
+        long batchCount = batchWorkSessionRepository.countDistinctBatchesByFactoryIdAndEmployeeAndTimeRange(
+                factoryId, userId, startTime, endTime);
+        long batchWorkSessionCount = batchWorkSessionRepository.countByFactoryIdAndEmployeeAndTimeRange(
+                factoryId, userId, startTime, endTime);
+        Integer batchWorkMinutes = batchWorkSessionRepository.sumWorkMinutesByFactoryIdAndEmployeeAndTimeRange(
+                factoryId, userId, startTime, endTime);
+        long completedBatchWorkSessionCount =
+                batchWorkSessionRepository.countCompletedByFactoryIdAndEmployeeAndTimeRange(
+                        factoryId, userId, startTime, endTime);
 
         int totalBatchMinutes = batchWorkMinutes != null ? batchWorkMinutes : 0;
 
         // 获取质检数据计算良品率
-        long totalInspections = qualityInspectionRepository.countByInspectorIdAndDateRange(
-                userId, startTime.toLocalDate(), endTime.toLocalDate());
-        long passedInspections = qualityInspectionRepository.countPassedByInspectorIdAndDateRange(
-                userId, startTime.toLocalDate(), endTime.toLocalDate());
+        long totalInspections = qualityInspectionRepository.countByFactoryIdAndInspectorIdAndDateRange(
+                factoryId, userId, startTime.toLocalDate(), endTime.toLocalDate());
+        long passedInspections = qualityInspectionRepository.countPassedByFactoryIdAndInspectorIdAndDateRange(
+                factoryId, userId, startTime.toLocalDate(), endTime.toLocalDate());
         Double qualityRate = totalInspections > 0
                 ? Math.round(passedInspections * 1000.0 / totalInspections) / 10.0
                 : null;
 
         productionData.put("batchCount", (int) batchCount);
-        productionData.put("completedBatches", completedBatches);
+        productionData.put("batchWorkSessionCount", batchWorkSessionCount);
+        productionData.put("completedBatchWorkSessionCount", completedBatchWorkSessionCount);
         productionData.put("batchWorkMinutes", totalBatchMinutes);
         productionData.put("outputQuantity", null);
         productionData.put("qualityRate", qualityRate);
@@ -1053,7 +1061,7 @@ public class AIAnalysisService {
         employeeInfo.put("id", employee.getId());
         employeeInfo.put("name", employee.getFullName() != null ? employee.getFullName() : employee.getUsername());
         employeeInfo.put("department", employee.getDepartment());
-        employeeInfo.put("position", employee.getRole());
+        employeeInfo.put("position", employee.getPosition());
         employeeInfo.put("tenureMonths", employee.getWorkMonths());
         data.put("employee", employeeInfo);
 
@@ -1103,7 +1111,9 @@ public class AIAnalysisService {
 
         sb.append("▶ 生产与质检记录事实\n");
         sb.append("  参与批次数: ").append(production.get("batchCount")).append("个\n");
-        sb.append("  完成批次数: ").append(production.get("completedBatches")).append("个\n");
+        sb.append("  批次工作会话数: ").append(production.get("batchWorkSessionCount")).append("个\n");
+        sb.append("  已完成批次工作会话数: ")
+                .append(production.get("completedBatchWorkSessionCount")).append("个\n");
         sb.append("  批次工作分钟数合计: ").append(production.get("batchWorkMinutes")).append("\n");
         sb.append("  质检记录数: ").append(production.get("totalInspections")).append("\n");
         sb.append("  质检通过记录数: ").append(production.get("passedInspections")).append("\n");
@@ -1143,7 +1153,7 @@ public class AIAnalysisService {
         response.setEmployeeId(employee.getId());
         response.setEmployeeName(employee.getFullName() != null ? employee.getFullName() : employee.getUsername());
         response.setDepartment(employee.getDepartment());
-        response.setPosition(employee.getRole());
+        response.setPosition(employee.getPosition());
         Integer tenureMonths = (Integer) employeeInfo.get("tenureMonths");
         response.setTenureMonths(tenureMonths);
         if (tenureMonths == null) {
@@ -1152,9 +1162,11 @@ public class AIAnalysisService {
         response.setPeriodStart(startTime.toLocalDate().toString());
         response.setPeriodEnd(endTime.toLocalDate().toString());
 
-        // 计算数据点数量
-        int dataPoints = ((Number) attendanceData.get("recordCount")).intValue() +
-                ((Number) workHoursData.get("sessionCount")).intValue();
+        // 原始记录数合计；四张互不重叠的事实表各计一次。
+        long dataPoints = ((Number) attendanceData.get("recordCount")).longValue() +
+                ((Number) workHoursData.get("sessionCount")).longValue() +
+                ((Number) productionData.get("batchWorkSessionCount")).longValue() +
+                ((Number) productionData.get("totalInspections")).longValue();
         response.setDataPoints(dataPoints);
 
         // 仓库中没有租户配置的评分规则、部门基准或历史可比序列，必须 fail closed。
@@ -1216,7 +1228,10 @@ public class AIAnalysisService {
         AIResponseDTO.ProductionAnalysis production = new AIResponseDTO.ProductionAnalysis();
         production.setScore(null);
         production.setBatchCount(((Number) productionData.get("batchCount")).intValue());
-        production.setCompletedBatches(((Number) productionData.get("completedBatches")).longValue());
+        production.setBatchWorkSessionCount(
+                ((Number) productionData.get("batchWorkSessionCount")).longValue());
+        production.setCompletedBatchWorkSessionCount(
+                ((Number) productionData.get("completedBatchWorkSessionCount")).longValue());
         production.setBatchWorkMinutes(((Number) productionData.get("batchWorkMinutes")).intValue());
         production.setTotalInspections(((Number) productionData.get("totalInspections")).longValue());
         production.setPassedInspections(((Number) productionData.get("passedInspections")).longValue());

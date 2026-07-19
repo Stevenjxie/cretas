@@ -85,12 +85,35 @@ public interface EmployeeWorkSessionRepository extends JpaRepository<EmployeeWor
             @Param("endTime") LocalDateTime endTime);
 
     /**
+     * 统计指定工厂内用户在时间段内的工作会话数。
+     */
+    @Query("SELECT COUNT(e) FROM EmployeeWorkSession e WHERE e.factoryId = :factoryId " +
+           "AND e.userId = :userId AND e.startTime BETWEEN :startTime AND :endTime")
+    long countByFactoryIdAndUserIdAndTimeRange(
+            @Param("factoryId") String factoryId,
+            @Param("userId") Long userId,
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime);
+
+    /**
      * 计算用户在时间段内的总工作分钟数
      */
     @Query("SELECT COALESCE(SUM(e.actualWorkMinutes), 0) FROM EmployeeWorkSession e " +
            "WHERE e.userId = :userId AND e.status = 'completed' " +
            "AND e.startTime BETWEEN :startTime AND :endTime")
     Integer sumActualWorkMinutesByUserIdAndTimeRange(
+            @Param("userId") Long userId,
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime);
+
+    /**
+     * 计算指定工厂内用户在时间段内已完成会话的实际工作分钟数。
+     */
+    @Query("SELECT COALESCE(SUM(e.actualWorkMinutes), 0) FROM EmployeeWorkSession e " +
+           "WHERE e.factoryId = :factoryId AND e.userId = :userId AND e.status = 'completed' " +
+           "AND e.startTime BETWEEN :startTime AND :endTime")
+    Integer sumActualWorkMinutesByFactoryIdAndUserIdAndTimeRange(
+            @Param("factoryId") String factoryId,
             @Param("userId") Long userId,
             @Param("startTime") LocalDateTime startTime,
             @Param("endTime") LocalDateTime endTime);

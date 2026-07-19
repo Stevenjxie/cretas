@@ -362,8 +362,8 @@ public class AIResponseDTO {
         @Schema(description = "分析周期结束")
         private String periodEnd;
 
-        @Schema(description = "数据点数量")
-        private Integer dataPoints;
+        @Schema(description = "原始记录数合计：考勤记录 + 工作会话 + 批次工作会话 + 质检记录")
+        private Long dataPoints;
 
         @Schema(description = "综合评分(0-100)")
         private Integer overallScore;
@@ -509,8 +509,11 @@ public class AIResponseDTO {
         @Schema(description = "参与批次数")
         private Integer batchCount;
 
-        @Schema(description = "完成批次数")
-        private Long completedBatches;
+        @Schema(description = "批次工作会话数")
+        private Long batchWorkSessionCount;
+
+        @Schema(description = "已完成批次工作会话数")
+        private Long completedBatchWorkSessionCount;
 
         @Schema(description = "批次工作分钟数合计")
         private Integer batchWorkMinutes;

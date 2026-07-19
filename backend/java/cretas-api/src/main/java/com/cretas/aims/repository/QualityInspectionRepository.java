@@ -98,6 +98,18 @@ public interface QualityInspectionRepository extends JpaRepository<QualityInspec
             @Param("endDate") LocalDate endDate);
 
     /**
+     * 根据工厂、质检员和时间范围统计质检记录数。
+     */
+    @Query("SELECT COUNT(q) FROM QualityInspection q WHERE q.factoryId = :factoryId " +
+           "AND q.inspectorId = :inspectorId " +
+           "AND q.inspectionDate BETWEEN :startDate AND :endDate")
+    long countByFactoryIdAndInspectorIdAndDateRange(
+            @Param("factoryId") String factoryId,
+            @Param("inspectorId") Long inspectorId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
+
+    /**
      * 根据质检员ID和时间范围统计合格数量
      * @param inspectorId 质检员ID
      * @param startDate 开始日期
@@ -107,6 +119,18 @@ public interface QualityInspectionRepository extends JpaRepository<QualityInspec
     @Query("SELECT COUNT(q) FROM QualityInspection q WHERE q.inspectorId = :inspectorId " +
            "AND q.result = 'passed' AND q.inspectionDate BETWEEN :startDate AND :endDate")
     long countPassedByInspectorIdAndDateRange(
+            @Param("inspectorId") Long inspectorId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
+
+    /**
+     * 根据工厂、质检员和时间范围统计通过记录数。
+     */
+    @Query("SELECT COUNT(q) FROM QualityInspection q WHERE q.factoryId = :factoryId " +
+           "AND q.inspectorId = :inspectorId AND q.result = 'passed' " +
+           "AND q.inspectionDate BETWEEN :startDate AND :endDate")
+    long countPassedByFactoryIdAndInspectorIdAndDateRange(
+            @Param("factoryId") String factoryId,
             @Param("inspectorId") Long inspectorId,
             @Param("startDate") LocalDate startDate,
             @Param("endDate") LocalDate endDate);
