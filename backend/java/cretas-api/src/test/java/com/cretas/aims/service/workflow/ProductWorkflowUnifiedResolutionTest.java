@@ -70,6 +70,7 @@ class ProductWorkflowUnifiedResolutionTest {
         assertEquals("SINGLE_OUTPUT", result.getResolutionMode());
         assertEquals(12L, result.getCandidates().getFirst().getWorkflowId());
         assertEquals("SINGLE_OUTPUT_PRODUCT", result.getCandidates().getFirst().getWorkflowType());
+        assertEquals(2, result.getCandidates().getFirst().getLogicalRootInputCount());
     }
 
     @Test
@@ -113,6 +114,7 @@ class ProductWorkflowUnifiedResolutionTest {
         assertEquals("MULTI_OUTPUT", result.getResolutionMode());
         assertEquals(22L, result.getCandidates().getFirst().getWorkflowId());
         assertEquals("JOINT_PRODUCTION", result.getCandidates().getFirst().getWorkflowType());
+        assertEquals(2, result.getCandidates().getFirst().getLogicalRootInputCount());
     }
 
     @Test

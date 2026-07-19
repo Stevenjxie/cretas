@@ -20,6 +20,7 @@ class WorkflowTopologyClassifierTest {
         assertEquals(WorkflowTopology.Type.SINGLE_OUTPUT_PRODUCT, topology.type());
         assertEquals(List.of("RAW-A", "RAW-B"), topology.rootInputSkuIds());
         assertEquals(List.of("FG-1"), topology.terminalOutputSkuIds());
+        assertEquals(2, topology.logicalRootInputCount());
     }
 
     @Test
@@ -31,6 +32,8 @@ class WorkflowTopologyClassifierTest {
 
         assertEquals(WorkflowTopology.Type.RAW_MATERIAL_SPLIT, split.type());
         assertEquals(WorkflowTopology.Type.JOINT_PRODUCTION, joint.type());
+        assertEquals(1, split.logicalRootInputCount());
+        assertEquals(2, joint.logicalRootInputCount());
     }
 
     @Test
@@ -41,6 +44,17 @@ class WorkflowTopologyClassifierTest {
 
         assertEquals(WorkflowTopology.Type.RAW_MATERIAL_SPLIT, topology.type());
         assertEquals(List.of("RAW-A", "RAW-B", "RAW-C", "RAW-D"), topology.rootInputSkuIds());
+        assertEquals(1, topology.logicalRootInputCount());
+    }
+
+    @Test
+    void keepsSubstitutableSingleOutputRootsAsOneLogicalInput() {
+        WorkflowTopology topology = WorkflowTopologyClassifier.classify(
+                graph(List.of("RAW-A", "RAW-B", "RAW-C", "RAW-D"),
+                        List.of("FG-1"), true));
+
+        assertEquals(WorkflowTopology.Type.SINGLE_OUTPUT_PRODUCT, topology.type());
+        assertEquals(1, topology.logicalRootInputCount());
     }
 
     private ProductProcessWorkflowDTO graph(List<String> roots, List<String> terminals) {

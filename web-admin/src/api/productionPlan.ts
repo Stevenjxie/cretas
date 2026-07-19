@@ -386,6 +386,8 @@ export interface WorkflowResolutionCandidate {
   /** 后端按图派生的只读类型。 */
   workflowType?: 'SINGLE_OUTPUT_PRODUCT' | 'RAW_MATERIAL_SPLIT' | 'JOINT_PRODUCTION'
   rootInputProductTypeIds?: string[]
+  /** 可替代原料组折叠后的逻辑投入数量。 */
+  logicalRootInputCount?: number
   /** 中间工序的拓扑顺序，用于候选主标题；Workflow 名称只作辅助。 */
   processSteps?: string[]
   /** 只读、安全裁剪后的 Cell 图，不包含公式或可编辑配置。 */

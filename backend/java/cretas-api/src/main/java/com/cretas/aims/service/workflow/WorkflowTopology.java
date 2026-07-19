@@ -6,7 +6,8 @@ import java.util.List;
 public record WorkflowTopology(
         Type type,
         List<String> terminalOutputSkuIds,
-        List<String> rootInputSkuIds) {
+        List<String> rootInputSkuIds,
+        int logicalRootInputCount) {
 
     public enum Type {
         SINGLE_OUTPUT_PRODUCT,

@@ -17,7 +17,7 @@ public final class WorkflowTopologyClassifier {
 
     public static WorkflowTopology classify(ProductProcessWorkflowDTO definition) {
         if (definition == null || definition.getNodes() == null || definition.getEdges() == null) {
-            return new WorkflowTopology(WorkflowTopology.Type.INVALID, List.of(), List.of());
+            return new WorkflowTopology(WorkflowTopology.Type.INVALID, List.of(), List.of(), 0);
         }
         Set<String> withIncoming = definition.getEdges().stream()
                 .map(ProductProcessWorkflowDTO.Edge::getTarget)
@@ -53,7 +53,7 @@ public final class WorkflowTopologyClassifier {
         } else {
             type = WorkflowTopology.Type.INVALID;
         }
-        return new WorkflowTopology(type, List.copyOf(terminals), List.copyOf(roots));
+        return new WorkflowTopology(type, List.copyOf(terminals), List.copyOf(roots), logicalRootCount);
     }
 
     /**
