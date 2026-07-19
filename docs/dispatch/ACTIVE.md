@@ -10,7 +10,7 @@
 
 ## Scope 锁地图
 
-- `REDUNDANCY-SH01-DATA-CLEAR-20260719`：锁定上述 V81 migration、契约测试、第一批清理文档与 dispatch 台账/归档。
+- 无。
 
 ## 阻塞项
 
