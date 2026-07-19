@@ -133,6 +133,25 @@ _QUERY_EXPANSIONS: Dict[str, str] = {
 _SIMPLE_KEYWORDS = {"是什么", "什么是", "在哪", "哪里", "多少", "几个", "有没有", "支持吗", "能不能"}
 _COMPLEX_KEYWORDS = {"怎么", "如何", "步骤", "流程", "对比", "分析", "区别", "原理", "为什么", "详细"}
 
+_CURRENT_FACTORY_SOP_SOURCE = "f006-production-full-chain-sop.md"
+_PRODUCTION_SOP_KEYWORDS = frozenset({
+    "sku", "bom", "配方", "workflow", "cell", "工序", "原料", "辅料", "包材",
+    "半成品", "成品", "单位", "克重", "锅序", "替代", "联产", "副产", "拓扑",
+    "生产计划", "存货生产", "销售订单", "报工", "结单", "小结", "停产", "成本",
+    "入库", "出库", "库存", "仓库", "调拨", "采购", "盘点", "审批", "冲销",
+})
+
+
+def _uses_current_production_sop(query: str) -> bool:
+    """Route production-chain questions to the reviewed current SOP only.
+
+    Older manuals remain useful for unrelated factory screens, but they contain
+    superseded unit, yield and mandatory-input language. Mixing those chunks
+    into a production-chain answer makes the RAG context internally conflict.
+    """
+    normalized = (query or "").lower()
+    return any(keyword.lower() in normalized for keyword in _PRODUCTION_SOP_KEYWORDS)
+
 
 # ---------------------------------------------------------------------------
 # 域检测关键词集（auto-detect 路径，仅当请求未传 category 字段时生效）
@@ -307,6 +326,7 @@ FACTORY_SYSTEM_PROMPT = """\
 - 报工、生产结单、仓库确认完工入库、生产仓到主仓/外仓调拨是不同动作，不能互相冒充完成。
 - 副产物在具体报工中记录，不要求为副产物单独建立 Workflow。
 - 人工成本来自本道实际工时乘全局工时单价；工序主档的高级设置不是本轮成本真值。
+- 如果检索片段出现旧版“全部必投、主投入、固定转换率、Workflow 填出成率”等冲突说法，以当前 F006 生产全链路 SOP 为准，不得拼接旧口径。
 
 【输出限制】
 - 保持专业、克制，不使用 emoji，不暴露检索相似度或内部来源路径。
@@ -686,6 +706,14 @@ async def manual_chat(request: ManualChatRequest) -> dict:
             f"(query='{retrieval_question[:40]}...')"
         )
 
+    # Production-chain questions must use the reviewed current SOP as the
+    # authoritative context. Legacy manuals still serve unrelated factory
+    # screens, but mixing their superseded unit/yield/input rules creates a
+    # self-conflicting prompt and can make the model fabricate old fields.
+    source_names: Optional[List[str]] = None
+    if not is_restaurant_request and _uses_current_production_sop(retrieval_question):
+        source_names = [_CURRENT_FACTORY_SOP_SOURCE]
+
     # ------ Improvement #3: lower threshold + higher top_k ------
     try:
         results = await retriever.retrieve(
@@ -694,7 +722,20 @@ async def manual_chat(request: ManualChatRequest) -> dict:
             subcategories=subcategories,
             top_k=8,
             similarity_threshold=0.40,
+            source_names=source_names,
         )
+        if source_names and not results:
+            logger.warning(
+                "Current factory SOP returned no chunks; falling back to the "
+                "broader factory manual corpus"
+            )
+            results = await retriever.retrieve(
+                query=expanded_question,
+                categories=["operation_manual"],
+                subcategories=subcategories,
+                top_k=8,
+                similarity_threshold=0.40,
+            )
     except Exception as e:
         logger.error(f"Retrieval failed: {e}")
         results = []
