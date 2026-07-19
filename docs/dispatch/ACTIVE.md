@@ -15,9 +15,19 @@
   - 验收命令：`mvn "-Dtest=LegacyShipmentDataClearMigrationContractTest" test`；`git diff --check`。
   - 下一动作：PR 合并后单独部署，并验证旧表为 0、正式销售发货数据不变。
 
+- `CRETAS-WORKFLOW-TOPOLOGY-LABELS-20260719`
+  - 状态：`in-progress`
+  - Owner：Codex (`/root`)
+  - Base SHA：`ca31c937fb3fadc20a1a1140822d96726649558a`
+  - Scope：Workflow 拓扑只读分类/解析 DTO、对应后端单测；Web 生产计划 Workflow 解析类型、标签 helper 与对应 Vitest；本台账/归档。
+  - 目标：在不修改数据库枚举、Workflow 持久化或历史数据的前提下，通过后端派生的逻辑投入数量，准确区分 1→1、多→1、1→多和多→多；可替代原料组继续按一个逻辑投入计算。
+  - 验收命令：后端 `WorkflowTopologyClassifierTest,ProductWorkflowUnifiedResolutionTest`；Web `productionPlanWorkflowResolution.spec.ts`；`release-web-manifest.sh build`；`git diff --check`。
+  - 下一动作：实现只读 `logicalRootInputCount` 契约与四类中文标签，目标测试和 Web 构建通过后提交 review。
+
 ## Scope 锁地图
 
 - `REDUNDANCY-SH01-DATA-CLEAR-20260719`：锁定上述 V81 migration、契约测试、第一批清理文档与 dispatch 台账/归档。
+- `CRETAS-WORKFLOW-TOPOLOGY-LABELS-20260719`：锁定 `WorkflowTopology*`、Workflow 输出解析 DTO/Service/目标单测、`web-admin/src/api/productionPlan.ts`、`web-admin/src/views/production/plans/productionPlanWorkflowResolution*` 与本台账/归档。
 
 ## 阻塞项
 

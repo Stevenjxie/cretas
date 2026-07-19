@@ -424,7 +424,7 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
             return WorkflowTopologyClassifier.classify(definition);
         } catch (Exception e) {
             log.error("workflow {} nodesJson 解析失败, 该图剔除出候选", wf.getId(), e);
-            return new WorkflowTopology(WorkflowTopology.Type.INVALID, List.of(), List.of());
+            return new WorkflowTopology(WorkflowTopology.Type.INVALID, List.of(), List.of(), 0);
         }
     }
 
@@ -568,6 +568,7 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
                 .exactMatch(rw.terminalSkuIds.size() == requestedSet.size())
                 .workflowType(rw.topology.type().name())
                 .rootInputProductTypeIds(rw.topology.rootInputSkuIds())
+                .logicalRootInputCount(rw.topology.logicalRootInputCount())
                 .processSteps(preview.processSteps)
                 .previewNodes(preview.nodes)
                 .previewEdges(preview.edges)

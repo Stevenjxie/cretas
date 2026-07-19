@@ -53,6 +53,8 @@ public class WorkflowOutputResolutionDTO {
         private String workflowType;
         /** Root raw-material SKU set derived from the canvas, never guessed from the anchor. */
         private List<String> rootInputProductTypeIds;
+        /** Root inputs after EXACTLY_ONE substitution groups collapse to one logical input. */
+        private Integer logicalRootInputCount;
         /** Topologically ordered middle process names for fast candidate identification. */
         private List<String> processSteps;
         /** Sanitized read-only Cell graph for the plan-selection hover preview. */

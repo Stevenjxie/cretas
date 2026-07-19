@@ -5,6 +5,7 @@ import {
   workflowCandidateBindingProductTypeId,
   workflowCandidateExtraOutputs,
   workflowCandidateProcessSummary,
+  workflowCandidateTopologyLabel,
 } from '../productionPlanWorkflowResolution';
 
 function candidate(
@@ -110,5 +111,36 @@ describe('production plan Workflow resolution', () => {
 
     expect(workflowCandidateProcessSummary(item)).toBe('原料处理 → 熟成 → 定量包装');
     expect(workflowCandidateExtraOutputs(item, ['FG-A', 'FG-B'])).toEqual(['FG-C']);
+  });
+
+  it('labels the four production topologies from logical inputs and terminal outputs', () => {
+    const oneToOne = candidate(10, ['FG-A']);
+    oneToOne.workflowType = 'SINGLE_OUTPUT_PRODUCT';
+    oneToOne.logicalRootInputCount = 1;
+    oneToOne.rootInputProductTypeIds = ['RAW-A', 'RAW-B', 'RAW-C', 'RAW-D'];
+
+    const manyToOne = candidate(11, ['FG-A']);
+    manyToOne.workflowType = 'SINGLE_OUTPUT_PRODUCT';
+    manyToOne.logicalRootInputCount = 2;
+
+    const oneToMany = candidate(12, ['FG-A', 'FG-B']);
+    oneToMany.workflowType = 'RAW_MATERIAL_SPLIT';
+    oneToMany.logicalRootInputCount = 1;
+
+    const manyToMany = candidate(13, ['FG-A', 'FG-B']);
+    manyToMany.workflowType = 'JOINT_PRODUCTION';
+    manyToMany.logicalRootInputCount = 2;
+
+    expect(workflowCandidateTopologyLabel(oneToOne)).toBe('1→1 · 单投入单产出');
+    expect(workflowCandidateTopologyLabel(manyToOne)).toBe('多→1 · 多投入单产出');
+    expect(workflowCandidateTopologyLabel(oneToMany)).toBe('1→多 · 单投入多成品');
+    expect(workflowCandidateTopologyLabel(manyToMany)).toBe('多→多 · 多投入联产');
+  });
+
+  it('does not guess an input topology when an older response lacks the logical count', () => {
+    const legacy = candidate(14, ['FG-A']);
+    legacy.workflowType = 'SINGLE_OUTPUT_PRODUCT';
+
+    expect(workflowCandidateTopologyLabel(legacy)).toBe('单成品工序链 · 投入关系待确认');
   });
 });
