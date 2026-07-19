@@ -20,6 +20,8 @@ from smartbi.agent.runtime.contracts import (
 )
 from smartbi.agent.runtime.descriptors import restaurant_descriptors
 from smartbi.agent.runtime.gateway import (
+    _CompatDeadlineExpired,
+    _await_with_deadline,
     ReadToolContractError,
     ReadToolGateway,
     ReadToolTimeout,
@@ -399,6 +401,111 @@ async def test_external_task_cancellation_propagates_without_timeout_reclassific
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+@pytest.mark.asyncio
+async def test_python38_timeout_fallback_preserves_success(monkeypatch):
+    monkeypatch.delattr(asyncio, "timeout_at", raising=False)
+
+    async def adapter(bound_pool, trusted, parameters, descriptor):
+        await asyncio.sleep(0)
+        return draft(descriptor)
+
+    descriptor, pool, gateway = gateway_with_adapter(adapter)
+    envelope = await gateway.execute(
+        descriptor.name,
+        {"startDate": "2026-01-01", "endDate": "2026-01-01"},
+        context(),
+        timeout_seconds=0.1,
+        cleanup_grace_seconds=0.01,
+    )
+
+    assert envelope.status is EvidenceStatus.OK
+    assert pool.events[-1][0:2] == ("pool", "exit")
+    assert pool.connection.events[-1][0:2] == ("transaction", "exit")
+
+
+@pytest.mark.asyncio
+async def test_python38_timeout_fallback_cleans_up_before_typed_timeout(monkeypatch):
+    monkeypatch.delattr(asyncio, "timeout_at", raising=False)
+    adapter_finally = asyncio.Event()
+
+    async def adapter(*args):
+        try:
+            await asyncio.Future()
+        finally:
+            await asyncio.sleep(0)
+            adapter_finally.set()
+
+    descriptor, pool, gateway = gateway_with_adapter(adapter)
+    with pytest.raises(ReadToolTimeout, match="READ_TOOL_TIMEOUT"):
+        await gateway.execute(
+            descriptor.name,
+            {"startDate": "2026-01-01", "endDate": "2026-01-01"},
+            context(),
+            timeout_seconds=0.04,
+            cleanup_grace_seconds=0.01,
+        )
+
+    assert adapter_finally.is_set()
+    assert pool.events[-1][0:2] == ("pool", "exit")
+    assert pool.connection.events[-1][0:2] == ("transaction", "exit")
+
+
+@pytest.mark.asyncio
+async def test_python38_timeout_fallback_preserves_external_cancellation(monkeypatch):
+    monkeypatch.delattr(asyncio, "timeout_at", raising=False)
+    started = asyncio.Event()
+
+    async def adapter(*args):
+        started.set()
+        await asyncio.Future()
+
+    descriptor, _, gateway = gateway_with_adapter(adapter)
+    task = asyncio.create_task(
+        gateway.execute(
+            descriptor.name,
+            {"startDate": "2026-01-01", "endDate": "2026-01-01"},
+            context(),
+        )
+    )
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_python38_timeout_fallback_preserves_same_tick_external_cancel():
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 0.03
+
+    async def operation():
+        await asyncio.Future()
+
+    task = asyncio.create_task(_await_with_deadline(operation(), deadline))
+    # Register the caller cancellation at the exact deadline. It is scheduled
+    # before the helper gets its first event-loop turn and registers expiry.
+    loop.call_at(deadline, task.cancel)
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_python38_timeout_fallback_rejects_suppressed_child_cancel():
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 0.03
+
+    async def operation():
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            await asyncio.sleep(0)
+            return "late-result"
+
+    with pytest.raises(_CompatDeadlineExpired):
+        await _await_with_deadline(operation(), deadline)
 
 
 @pytest.mark.asyncio
