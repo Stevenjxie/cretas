@@ -127,7 +127,7 @@ public interface QualityInspectionRepository extends JpaRepository<QualityInspec
      * 根据工厂、质检员和时间范围统计通过记录数。
      */
     @Query("SELECT COUNT(q) FROM QualityInspection q WHERE q.factoryId = :factoryId " +
-           "AND q.inspectorId = :inspectorId AND q.result = 'passed' " +
+           "AND q.inspectorId = :inspectorId AND UPPER(q.result) IN ('PASS', 'PASSED') " +
            "AND q.inspectionDate BETWEEN :startDate AND :endDate")
     long countPassedByFactoryIdAndInspectorIdAndDateRange(
             @Param("factoryId") String factoryId,

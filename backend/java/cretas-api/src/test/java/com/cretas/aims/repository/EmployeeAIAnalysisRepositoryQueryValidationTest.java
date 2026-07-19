@@ -66,9 +66,10 @@ class EmployeeAIAnalysisRepositoryQueryValidationTest {
         persistBatchWorkSession(batchA2.getId(), employee.getId(), now, 30, "completed");
         persistBatchWorkSession(batchB.getId(), employee.getId(), now, 700, "completed");
 
-        persistInspection("QI-A-PASS", FACTORY_A, batchA1.getId(), employee.getId(), "passed");
-        persistInspection("QI-A-FAIL", FACTORY_A, batchA2.getId(), employee.getId(), "failed");
-        persistInspection("QI-B-PASS", FACTORY_B, batchB.getId(), employee.getId(), "passed");
+        persistInspection("QI-A-PASS", FACTORY_A, batchA1.getId(), employee.getId(), "PASS");
+        persistInspection("QI-A-LEGACY-PASSED", FACTORY_A, batchA1.getId(), employee.getId(), "passed");
+        persistInspection("QI-A-FAIL", FACTORY_A, batchA2.getId(), employee.getId(), "FAIL");
+        persistInspection("QI-B-PASS", FACTORY_B, batchB.getId(), employee.getId(), "PASS");
         entityManager.flush();
         entityManager.clear();
 
@@ -93,9 +94,9 @@ class EmployeeAIAnalysisRepositoryQueryValidationTest {
         LocalDate startDate = start.toLocalDate();
         LocalDate endDate = end.toLocalDate();
         assertThat(qualityInspectionRepository.countByFactoryIdAndInspectorIdAndDateRange(
-                FACTORY_A, employee.getId(), startDate, endDate)).isEqualTo(2);
+                FACTORY_A, employee.getId(), startDate, endDate)).isEqualTo(3);
         assertThat(qualityInspectionRepository.countPassedByFactoryIdAndInspectorIdAndDateRange(
-                FACTORY_A, employee.getId(), startDate, endDate)).isEqualTo(1);
+                FACTORY_A, employee.getId(), startDate, endDate)).isEqualTo(2);
         assertThat(qualityInspectionRepository.countByFactoryIdAndInspectorIdAndDateRange(
                 FACTORY_B, employee.getId(), startDate, endDate)).isEqualTo(1);
     }
@@ -184,8 +185,9 @@ class EmployeeAIAnalysisRepositoryQueryValidationTest {
         inspection.setInspectorId(inspectorId);
         inspection.setInspectionDate(LocalDate.now());
         inspection.setSampleSize(BigDecimal.TEN);
-        inspection.setPassCount("passed".equals(result) ? BigDecimal.TEN : BigDecimal.ZERO);
-        inspection.setFailCount("passed".equals(result) ? BigDecimal.ZERO : BigDecimal.TEN);
+        boolean passed = "PASS".equalsIgnoreCase(result) || "PASSED".equalsIgnoreCase(result);
+        inspection.setPassCount(passed ? BigDecimal.TEN : BigDecimal.ZERO);
+        inspection.setFailCount(passed ? BigDecimal.ZERO : BigDecimal.TEN);
         inspection.setResult(result);
         entityManager.persist(inspection);
     }
