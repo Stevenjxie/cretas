@@ -2,8 +2,8 @@
 # LEGACY_INFERRED, or APPROVED metadata lacking both permissions and allowed roles, remains review debt.
 # This inventory is an independent source-audit truth and is never sufficient by itself to execute.
 schemaVersion: 1
-expectedToolCount: 593
-expectedLegacyCount: 586
+expectedToolCount: 589
+expectedLegacyCount: 581
 descriptors:
   - toolName: "restaurant_calibration_history"
     implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantCalibrationHistoryTool"
@@ -2707,26 +2707,6 @@ descriptors:
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
-  - toolName: "report_task_assign_worker"
-    implementationClass: "com.cretas.aims.ai.tool.impl.report.ReportTaskAssignWorkerTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["report"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
   - toolName: "report_scheduling_execute"
     implementationClass: "com.cretas.aims.ai.tool.impl.report.ReportSchedulingExecuteTool"
     provenance: LEGACY_INFERRED
@@ -3437,26 +3417,6 @@ descriptors:
     requiredPermissions: []
     version: "1.0.0"
     domainTags: ["workflow"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "todo_list"
-    implementationClass: "com.cretas.aims.ai.tool.impl.system.TodoListTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["todo"]
     overrideFlags:
       actionType: false
       riskLevel: false
@@ -6250,46 +6210,6 @@ descriptors:
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
-  - toolName: "order_update"
-    implementationClass: "com.cretas.aims.ai.tool.impl.crm.OrderUpdateTool"
-    provenance: LEGACY_INFERRED
-    actionType: UPDATE
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["order"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "order_stats"
-    implementationClass: "com.cretas.aims.ai.tool.impl.crm.OrderStatsTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["order"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
   - toolName: "supplier_by_category"
     implementationClass: "com.cretas.aims.ai.tool.impl.crm.SupplierByCategoryTool"
     provenance: LEGACY_INFERRED
@@ -6350,26 +6270,6 @@ descriptors:
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
-  - toolName: "order_create"
-    implementationClass: "com.cretas.aims.ai.tool.impl.crm.OrderCreateTool"
-    provenance: LEGACY_INFERRED
-    actionType: WRITE
-    riskLevel: MEDIUM
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["order"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
   - toolName: "customer_update"
     implementationClass: "com.cretas.aims.ai.tool.impl.crm.CustomerUpdateTool"
     provenance: LEGACY_INFERRED
@@ -6398,6 +6298,27 @@ descriptors:
     supportsPreview: false
     requiresPermission: false
     requiredPermissions: []
+    version: "1.0.0"
+    domainTags: ["order"]
+    overrideFlags:
+      actionType: false
+      riskLevel: false
+      supportsPreview: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: false
+      version: false
+      domainTags: false
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "order_today"
+    implementationClass: "com.cretas.aims.ai.tool.impl.crm.OrderTodayTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: []
+    allowedRoles: []
     version: "1.0.0"
     domainTags: ["order"]
     overrideFlags:

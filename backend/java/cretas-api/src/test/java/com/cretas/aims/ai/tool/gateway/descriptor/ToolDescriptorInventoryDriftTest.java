@@ -51,8 +51,8 @@ class ToolDescriptorInventoryDriftTest {
                         },
                         LinkedHashMap::new));
 
-        assertThat(sourceTools).hasSize(593);
-        assertThat(inventory.expectedToolCount()).isEqualTo(593);
+        assertThat(sourceTools).hasSize(589);
+        assertThat(inventory.expectedToolCount()).isEqualTo(589);
         assertThat(inventoryByClass.keySet()).isEqualTo(sourceTools.keySet());
         assertThat(sourceTools.values())
                 .extracting(SourceTool::toolName)
@@ -129,7 +129,7 @@ class ToolDescriptorInventoryDriftTest {
                 .filter(tool -> !tool.literalToolName())
                 .toList();
 
-        assertThat(tools.stream().filter(SourceTool::literalToolName)).hasSize(592);
+        assertThat(tools.stream().filter(SourceTool::literalToolName)).hasSize(588);
         assertThat(constantNames).singleElement().satisfies(tool -> {
             assertThat(tool.implementationClass()).isEqualTo(
                     "com.cretas.aims.ai.tool.impl.workprocess.ProductProcessWorkflowConfigTool");
@@ -145,16 +145,16 @@ class ToolDescriptorInventoryDriftTest {
         assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(21);
 
         assertThat(countActions(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.ActionType.READ, 449L,
-                ToolExecutor.ActionType.WRITE, 64L,
-                ToolExecutor.ActionType.UPDATE, 28L,
+                ToolExecutor.ActionType.READ, 447L,
+                ToolExecutor.ActionType.WRITE, 63L,
+                ToolExecutor.ActionType.UPDATE, 27L,
                 ToolExecutor.ActionType.DELETE, 11L,
                 ToolExecutor.ActionType.ANALYZE, 19L,
                 ToolExecutor.ActionType.GENERATE, 15L,
                 ToolExecutor.ActionType.NOTIFY, 7L));
         assertThat(countRisks(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.RiskLevel.LOW, 514L,
-                ToolExecutor.RiskLevel.MEDIUM, 74L,
+                ToolExecutor.RiskLevel.LOW, 511L,
+                ToolExecutor.RiskLevel.MEDIUM, 73L,
                 ToolExecutor.RiskLevel.HIGH, 5L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
     }

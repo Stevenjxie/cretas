@@ -1,22 +1,27 @@
 package com.cretas.aims.ai.tool.impl.crm;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
-import com.cretas.aims.entity.WorkOrder;
-import com.cretas.aims.service.WorkOrderService;
+import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.entity.enums.SalesOrderStatus;
+import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.service.inventory.SalesService;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
 
-import java.util.*;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
+/** Lists canonical sales orders. The historical work_orders table is not consulted. */
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class OrderListTool extends AbstractBusinessTool {
 
-    @Autowired
-    private WorkOrderService workOrderService;
+    private final SalesService salesService;
 
     @Override
     public String getToolName() {
@@ -25,37 +30,27 @@ public class OrderListTool extends AbstractBusinessTool {
 
     @Override
     public String getDescription() {
-        return "查询订单/工单列表，支持分页。也用于查询采购单列表。" +
-                "适用场景：订单列表、查看订单、采购单列表、工单列表。";
+        return "查询销售订单列表，数据来自 sales_orders；支持分页和销售订单状态筛选。";
     }
 
     @Override
     public Map<String, Object> getParametersSchema() {
-        Map<String, Object> schema = new HashMap<>();
-        schema.put("type", "object");
-
         Map<String, Object> properties = new HashMap<>();
-
-        Map<String, Object> page = new HashMap<>();
-        page.put("type", "integer");
-        page.put("description", "页码（从0开始）");
-        page.put("default", 0);
-        properties.put("page", page);
-
-        Map<String, Object> size = new HashMap<>();
-        size.put("type", "integer");
-        size.put("description", "每页数量");
-        size.put("default", 20);
-        properties.put("size", size);
-
-        Map<String, Object> status = new HashMap<>();
-        status.put("type", "string");
-        status.put("description", "订单状态过滤（如：PENDING、IN_PROGRESS、COMPLETED）");
-        properties.put("status", status);
-
-        schema.put("properties", properties);
-        schema.put("required", Collections.emptyList());
-        return schema;
+        properties.put("page", Map.of(
+                "type", "integer",
+                "description", "页码（从1开始）",
+                "default", 1));
+        properties.put("size", Map.of(
+                "type", "integer",
+                "description", "每页数量",
+                "default", 20));
+        properties.put("status", Map.of(
+                "type", "string",
+                "description", "销售订单状态，例如 DRAFT、CONFIRMED、PROCESSING、COMPLETED、CANCELLED"));
+        return Map.of(
+                "type", "object",
+                "properties", properties,
+                "required", Collections.emptyList());
     }
 
     @Override
@@ -64,29 +59,35 @@ public class OrderListTool extends AbstractBusinessTool {
     }
 
     @Override
-    protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
-        log.info("执行订单列表查询 - 工厂ID: {}, 参数: {}", factoryId, params);
+    protected Map<String, Object> doExecute(
+            String factoryId, Map<String, Object> params, Map<String, Object> context) {
+        int page = Math.max(1, getInteger(params, "page", 1));
+        int size = Math.max(1, Math.min(100, getInteger(params, "size", 20)));
+        String statusValue = getString(params, "status");
 
-        int page = getInteger(params, "page", 0);
-        int size = getInteger(params, "size", 20);
-        String status = getString(params, "status");
-
-        PageRequest pageable = PageRequest.of(page, size);
-        Page<WorkOrder> orders;
-
-        if (status != null && !status.isEmpty()) {
-            orders = workOrderService.getWorkOrdersByStatus(factoryId, status, pageable);
+        PageResponse<SalesOrder> orders;
+        if (statusValue == null || statusValue.isBlank()) {
+            orders = salesService.getSalesOrders(factoryId, page, size);
         } else {
-            orders = workOrderService.getWorkOrders(factoryId, pageable);
+            SalesOrderStatus status;
+            try {
+                status = SalesOrderStatus.valueOf(statusValue.trim().toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException exception) {
+                throw new IllegalArgumentException("不支持的销售订单状态: " + statusValue);
+            }
+            orders = salesService.getSalesOrdersByStatus(factoryId, status, page, size);
         }
 
+        log.info("查询销售订单列表 - factoryId={}, page={}, size={}, status={}",
+                factoryId, page, size, statusValue);
         Map<String, Object> result = new HashMap<>();
         result.put("orders", orders.getContent());
         result.put("total", orders.getTotalElements());
-        result.put("page", page);
-        result.put("size", size);
+        result.put("page", orders.getPage());
+        result.put("size", orders.getSize());
         result.put("totalPages", orders.getTotalPages());
-        result.put("message", "查询到 " + orders.getTotalElements() + " 个订单");
+        result.put("source", "sales_orders");
+        result.put("message", "查询到 " + orders.getTotalElements() + " 个销售订单");
         return result;
     }
 }

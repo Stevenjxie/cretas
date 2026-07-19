@@ -1,19 +1,27 @@
 package com.cretas.aims.ai.tool.impl.crm;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
-import com.cretas.aims.service.WorkOrderService;
+import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.repository.inventory.SalesOrderRepository;
+import com.cretas.aims.service.inventory.SalesService;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.util.*;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
+/** Cancels or deletes canonical sales orders; never writes the historical work_orders table. */
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class OrderDeleteTool extends AbstractBusinessTool {
 
-    @Autowired
-    private WorkOrderService workOrderService;
+    private final SalesService salesService;
+    private final SalesOrderRepository salesOrderRepository;
 
     @Override
     public String getToolName() {
@@ -22,36 +30,26 @@ public class OrderDeleteTool extends AbstractBusinessTool {
 
     @Override
     public String getDescription() {
-        return "删除或取消订单/工单。需要提供订单ID，可选提供取消原因。" +
-                "适用场景：删除订单、取消订单、撤销工单。";
+        return "取消销售订单，或删除仍为草稿的销售订单。操作对象来自 sales_orders，需要销售订单ID或订单编号。";
     }
 
     @Override
     public Map<String, Object> getParametersSchema() {
-        Map<String, Object> schema = new HashMap<>();
-        schema.put("type", "object");
-
         Map<String, Object> properties = new HashMap<>();
-
-        Map<String, Object> orderId = new HashMap<>();
-        orderId.put("type", "string");
-        orderId.put("description", "订单/工单ID或编号");
-        properties.put("orderId", orderId);
-
-        Map<String, Object> operation = new HashMap<>();
-        operation.put("type", "string");
-        operation.put("description", "操作类型：DELETE（删除）或 CANCEL（取消）");
-        operation.put("default", "CANCEL");
-        properties.put("operation", operation);
-
-        Map<String, Object> reason = new HashMap<>();
-        reason.put("type", "string");
-        reason.put("description", "取消/删除原因");
-        properties.put("reason", reason);
-
-        schema.put("properties", properties);
-        schema.put("required", Collections.singletonList("orderId"));
-        return schema;
+        properties.put("orderId", Map.of(
+                "type", "string",
+                "description", "销售订单ID或订单编号"));
+        properties.put("operation", Map.of(
+                "type", "string",
+                "description", "DELETE（仅草稿可删除）或 CANCEL（取消订单）",
+                "default", "CANCEL"));
+        properties.put("reason", Map.of(
+                "type", "string",
+                "description", "取消原因"));
+        return Map.of(
+                "type", "object",
+                "properties", properties,
+                "required", Collections.singletonList("orderId"));
     }
 
     @Override
@@ -60,48 +58,54 @@ public class OrderDeleteTool extends AbstractBusinessTool {
     }
 
     @Override
-    protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
-        log.info("执行订单删除/取消 - 工厂ID: {}, 参数: {}", factoryId, params);
-
-        String orderId = getString(params, "orderId");
+    protected Map<String, Object> doExecute(
+            String factoryId, Map<String, Object> params, Map<String, Object> context) {
+        String idOrNumber = getString(params, "orderId");
         String operation = getString(params, "operation", "CANCEL");
         String reason = getString(params, "reason");
         Long userId = getLong(context, "userId");
+        SalesOrder order = resolveOrder(factoryId, idOrNumber);
 
         Map<String, Object> result = new HashMap<>();
-        result.put("orderId", orderId);
-        result.put("operation", operation);
+        result.put("orderId", order.getId());
+        result.put("orderNumber", order.getOrderNumber());
+        result.put("operation", operation.toUpperCase());
+        result.put("source", "sales_orders");
 
         if ("DELETE".equalsIgnoreCase(operation)) {
-            workOrderService.deleteWorkOrder(factoryId, orderId);
-            result.put("message", "订单(ID: " + orderId + ")已删除");
+            salesService.deleteDraft(factoryId, order.getId(), userId);
+            result.put("message", "销售订单 " + order.getOrderNumber() + " 已删除");
+        } else if ("CANCEL".equalsIgnoreCase(operation)) {
+            SalesOrder cancelled = salesService.cancelOrder(factoryId, order.getId(), reason);
+            result.put("order", cancelled);
+            result.put("message", "销售订单 " + order.getOrderNumber() + " 已取消");
         } else {
-            workOrderService.cancelWorkOrder(factoryId, orderId, reason, userId);
-            result.put("message", "订单(ID: " + orderId + ")已取消");
+            throw new IllegalArgumentException("不支持的订单操作: " + operation);
         }
-
+        log.info("销售订单变更 - factoryId={}, orderId={}, operation={}",
+                factoryId, order.getId(), operation);
         return result;
+    }
+
+    private SalesOrder resolveOrder(String factoryId, String idOrNumber) {
+        try {
+            return salesService.getSalesOrderById(factoryId, idOrNumber);
+        } catch (ResourceNotFoundException notFoundById) {
+            return salesOrderRepository.findByFactoryIdAndOrderNumber(factoryId, idOrNumber)
+                    .orElseThrow(() -> new ResourceNotFoundException("销售订单不存在: " + idOrNumber));
+        }
     }
 
     @Override
     protected String getParameterQuestion(String paramName) {
         if ("orderId".equals(paramName)) {
-            return "请提供要删除或取消的订单编号或ID。";
+            return "请提供要取消或删除的销售订单编号或ID。";
         }
         return super.getParameterQuestion(paramName);
     }
 
     @Override
     protected String getParameterDisplayName(String paramName) {
-        switch (paramName) {
-            case "orderId":
-                return "订单ID";
-            case "operation":
-                return "操作类型";
-            case "reason":
-                return "原因";
-            default:
-                return super.getParameterDisplayName(paramName);
-        }
+        return "orderId".equals(paramName) ? "销售订单ID" : super.getParameterDisplayName(paramName);
     }
 }
