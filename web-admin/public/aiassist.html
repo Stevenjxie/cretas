@@ -1,1363 +1,1484 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<meta name="theme-color" content="#3b82f6">
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%233b82f6'/><text x='16' y='22' font-size='18' fill='white' text-anchor='middle' font-family='sans-serif' font-weight='bold'>AI</text></svg>">
-<title>白垩纪 AI 助手</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-                 "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
-    color: #1f2937;
-    background: #f3f4f6;
-    line-height: 1.55;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-  }
-  button { font-family: inherit; font-size: inherit; cursor: pointer; }
-  input, textarea { font-family: inherit; }
-  .hidden { display: none !important; }
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f7f6f2">
+  <meta name="color-scheme" content="light">
+  <title>白垩纪工厂操作助手</title>
+  <style>
+    :root {
+      --ink: #17201d;
+      --muted: #66706c;
+      --subtle: #8b9490;
+      --paper: #f7f6f2;
+      --surface: #fffefa;
+      --soft: #eeece6;
+      --line: #deddd7;
+      --accent: #176b51;
+      --accent-strong: #0f5942;
+      --accent-soft: #e5f0eb;
+      --danger: #a63d3d;
+      --danger-soft: #f9ecea;
+      --shadow: 0 16px 42px rgb(32 41 37 / 8%);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+      font-synthesis: none;
+      text-rendering: optimizeLegibility;
+      -webkit-font-smoothing: antialiased;
+    }
 
-  /* ---------- Screen 1 / 2 shared centered card ---------- */
-  .center-shell {
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 24px 16px;
-    background: linear-gradient(135deg, #eff6ff 0%, #f3f4f6 100%);
-  }
+    * { box-sizing: border-box; }
 
-  /* ---------- Login ---------- */
-  .login-card {
-    width: 100%;
-    max-width: 380px;
-    background: #fff;
-    border-radius: 14px;
-    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
-    padding: 36px 28px 28px;
-  }
-  .login-card h1 {
-    font-size: 22px;
-    font-weight: 600;
-    text-align: center;
-    color: #111827;
-    margin-bottom: 6px;
-  }
-  .login-card .sub {
-    text-align: center;
-    color: #6b7280;
-    font-size: 13px;
-    margin-bottom: 24px;
-  }
-  .field { margin-bottom: 14px; }
-  .field label {
-    display: block;
-    font-size: 13px;
-    color: #4b5563;
-    margin-bottom: 6px;
-  }
-  .field input {
-    width: 100%;
-    padding: 10px 12px;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    font-size: 14px;
-    background: #f9fafb;
-    transition: border-color 0.15s, background 0.15s;
-  }
-  .field input:focus {
-    outline: none;
-    border-color: #3b82f6;
-    background: #fff;
-  }
-  .btn-primary {
-    width: 100%;
-    padding: 11px 16px;
-    border: none;
-    border-radius: 8px;
-    background: #3b82f6;
-    color: #fff;
-    font-size: 14px;
-    font-weight: 500;
-    margin-top: 10px;
-    transition: background 0.15s;
-  }
-  .btn-primary:hover { background: #2563eb; }
-  .btn-primary:disabled {
-    background: #9ca3af;
-    cursor: not-allowed;
-  }
-  .login-error {
-    background: #fef2f2;
-    color: #b91c1c;
-    border: 1px solid #fecaca;
-    padding: 8px 12px;
-    border-radius: 6px;
-    font-size: 13px;
-    margin-bottom: 12px;
-  }
-  .login-hint {
-    text-align: center;
-    font-size: 11px;
-    color: #9ca3af;
-    margin-top: 16px;
-  }
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: var(--paper);
+    }
 
-  /* ---------- Type select ---------- */
-  .select-wrap {
-    width: 100%;
-    max-width: 720px;
-    position: relative;
-  }
-  .select-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 24px;
-  }
-  .select-header h1 {
-    font-size: 22px;
-    font-weight: 600;
-    color: #111827;
-  }
-  .btn-text {
-    background: none;
-    border: none;
-    color: #6b7280;
-    font-size: 13px;
-    padding: 6px 10px;
-    border-radius: 6px;
-    transition: background 0.15s, color 0.15s;
-  }
-  .btn-text:hover { background: #e5e7eb; color: #111827; }
-  .select-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-  }
-  @media (max-width: 600px) {
-    .select-grid { grid-template-columns: 1fr; }
-  }
-  .type-card {
-    background: #fff;
-    border: 2px solid transparent;
-    border-radius: 14px;
-    padding: 32px 24px;
-    text-align: center;
-    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.05);
-    cursor: pointer;
-    transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
-  }
-  .type-card:hover {
-    transform: translateY(-2px);
-    border-color: #3b82f6;
-    box-shadow: 0 8px 20px rgba(59, 130, 246, 0.15);
-  }
-  .type-card .icon {
-    width: 48px;
-    height: 48px;
-    border-radius: 12px;
-    background: #dbeafe;
-    color: #1d4ed8;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 22px;
-    font-weight: 600;
-    margin-bottom: 14px;
-  }
-  .type-card.factory .icon { background: #dcfce7; color: #15803d; }
-  .type-card h3 {
-    font-size: 16px;
-    font-weight: 600;
-    color: #111827;
-    margin-bottom: 6px;
-  }
-  .type-card p {
-    color: #6b7280;
-    font-size: 13px;
-  }
+    body { min-width: 320px; }
 
-  /* ---------- Chat ---------- */
-  .chat-app {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    background: #f3f4f6;
-  }
-  .chat-header {
-    flex: 0 0 auto;
-    background: #fff;
-    border-bottom: 1px solid #e5e7eb;
-    padding: 12px 18px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-  }
-  .chat-title {
-    font-size: 15px;
-    font-weight: 600;
-    color: #111827;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .chat-title .badge {
-    display: inline-block;
-    background: #eff6ff;
-    color: #1d4ed8;
-    font-size: 12px;
-    font-weight: 500;
-    padding: 2px 8px;
-    border-radius: 4px;
-    margin-left: 8px;
-  }
-  .chat-actions { display: flex; gap: 6px; flex: 0 0 auto; }
-  .chat-body {
-    flex: 1 1 auto;
-    overflow-y: auto;
-    padding: 18px 16px 4px;
-    -webkit-overflow-scrolling: touch;
-  }
-  .msg-list {
-    max-width: 820px;
-    margin: 0 auto;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
-  .msg {
-    display: flex;
-    flex-direction: column;
-    max-width: 85%;
-  }
-  .msg.user { align-self: flex-end; align-items: flex-end; }
-  .msg.assistant { align-self: flex-start; align-items: flex-start; }
-  .msg.error { align-self: flex-start; align-items: flex-start; }
-  .bubble {
-    padding: 12px 16px;
-    border-radius: 12px;
-    font-size: 14px;
-    word-break: break-word;
-    white-space: pre-wrap;
-    line-height: 1.6;
-  }
-  .msg.user .bubble {
-    background: #dbeafe;
-    color: #1e3a8a;
-    border-bottom-right-radius: 4px;
-  }
-  .msg.assistant .bubble {
-    background: #f9fafb;
-    color: #1f2937;
-    border: 1px solid #e5e7eb;
-    border-bottom-left-radius: 4px;
-  }
-  .bullet-line {
-    display: block;
-    padding-left: 12px;
-    text-indent: -10px;
-    line-height: 1.7;
-  }
-  .bullet-line.bullet-sub {
-    padding-left: 28px;
-    text-indent: -10px;
-    color: #4b5563;
-    font-size: 14px;
-  }
-  .ans-h3 {
-    font-size: 15px;
-    font-weight: 600;
-    margin: 12px 0 6px;
-    color: #1f2937;
-  }
-  .ans-h4 {
-    font-size: 14px;
-    font-weight: 600;
-    margin: 10px 0 4px;
-    color: #374151;
-  }
-  .ans-table {
-    border-collapse: collapse;
-    margin: 8px 0;
-    font-size: 13px;
-    display: block;
-    overflow-x: auto;
-    max-width: 100%;
-  }
-  .ans-table th, .ans-table td {
-    border: 1px solid #e5e7eb;
-    padding: 6px 10px;
-    text-align: left;
-    white-space: nowrap;
-  }
-  .ans-table th {
-    background: #f3f4f6;
-    font-weight: 600;
-  }
-  .sources-collapse {
-    margin-top: 6px;
-    font-size: 11.5px;
-    color: #6b7280;
-  }
-  .sources-collapse summary {
-    cursor: pointer;
-    color: #4b5563;
-    font-weight: 500;
-    padding: 2px 0;
-    user-select: none;
-  }
-  .sources-collapse summary:hover { color: #1d4ed8; }
-  .sources-collapse[open] summary { margin-bottom: 4px; }
-  .sources-list { line-height: 1.6; }
-  .quick-asks {
-    margin-top: 18px;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-    max-width: 520px;
-    margin-left: auto;
-    margin-right: auto;
-  }
-  @media (max-width: 600px) {
-    .quick-asks { grid-template-columns: 1fr; }
-  }
-  .quick-ask-btn {
-    background: #fff;
-    border: 1px solid #93c5fd;
-    border-radius: 8px;
-    color: #1d4ed8;
-    font-size: 13px;
-    padding: 10px 12px;
-    text-align: left;
-    line-height: 1.4;
-    transition: background 0.15s, border-color 0.15s;
-  }
-  .quick-ask-btn:hover {
-    background: #eff6ff;
-    border-color: #3b82f6;
-  }
-  .msg.error .bubble {
-    background: #fef2f2;
-    color: #b91c1c;
-    border: 1px solid #fecaca;
-  }
-  .msg .img-attach {
-    margin-top: 6px;
-    max-width: 200px;
-    max-height: 200px;
-    border-radius: 8px;
-    border: 1px solid #e5e7eb;
-    display: block;
-  }
-  .msg .sources {
-    margin-top: 6px;
-    font-size: 11.5px;
-    color: #6b7280;
-    line-height: 1.6;
-    max-width: 100%;
-  }
-  .msg .sources .label {
-    font-weight: 500;
-    color: #4b5563;
-    margin-right: 4px;
-  }
-  .msg .sources .src-item {
-    display: inline-block;
-    background: #f3f4f6;
-    border: 1px solid #e5e7eb;
-    border-radius: 4px;
-    padding: 1px 6px;
-    margin: 2px 4px 2px 0;
-    color: #4b5563;
-  }
-  .msg.assistant .bubble strong {
-    color: #111827;
-    font-weight: 600;
-  }
-  .typing-dot {
-    display: inline-block;
-    width: 6px;
-    height: 6px;
-    margin: 0 2px;
-    border-radius: 50%;
-    background: #9ca3af;
-    animation: blink 1.2s infinite ease-in-out both;
-  }
-  .typing-dot:nth-child(2) { animation-delay: 0.2s; }
-  .typing-dot:nth-child(3) { animation-delay: 0.4s; }
-  @keyframes blink {
-    0%, 80%, 100% { opacity: 0.3; transform: scale(0.85); }
-    40% { opacity: 1; transform: scale(1); }
-  }
+    button,
+    textarea,
+    input { font: inherit; }
 
-  /* ---------- Input bar ---------- */
-  .composer {
-    flex: 0 0 auto;
-    background: #fff;
-    border-top: 1px solid #e5e7eb;
-    padding: 10px 16px 12px;
-  }
-  .composer-inner { max-width: 820px; margin: 0 auto; }
-  .preview-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 8px;
-  }
-  .preview-thumb {
-    position: relative;
-    width: 80px;
-    height: 80px;
-    border-radius: 8px;
-    overflow: hidden;
-    border: 1px solid #e5e7eb;
-    background: #f9fafb;
-  }
-  .preview-thumb img {
-    width: 100%; height: 100%; object-fit: cover;
-  }
-  .preview-thumb .remove-btn {
-    position: absolute;
-    top: 4px;
-    right: 4px;
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    background: rgba(17, 24, 39, 0.75);
-    color: #fff;
-    border: none;
-    font-size: 12px;
-    line-height: 20px;
-    text-align: center;
-    cursor: pointer;
-    padding: 0;
-  }
-  .input-row {
-    display: flex;
-    gap: 8px;
-    align-items: flex-end;
-  }
-  .upload-btn {
-    flex: 0 0 auto;
-    height: 40px;
-    width: 40px;
-    border-radius: 8px;
-    border: 1px solid #e5e7eb;
-    background: #f9fafb;
-    color: #4b5563;
-    font-size: 18px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    transition: background 0.15s, border-color 0.15s;
-  }
-  .upload-btn:hover {
-    background: #f3f4f6;
-    border-color: #9ca3af;
-  }
-  .upload-btn input[type="file"] { display: none; }
-  textarea.input {
-    flex: 1 1 auto;
-    min-height: 40px;
-    max-height: 120px;
-    padding: 9px 12px;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    font-size: 14px;
-    background: #f9fafb;
-    resize: none;
-    overflow-y: auto;
-    line-height: 1.5;
-    transition: border-color 0.15s, background 0.15s;
-  }
-  textarea.input:focus {
-    outline: none;
-    border-color: #3b82f6;
-    background: #fff;
-  }
-  .send-btn {
-    flex: 0 0 auto;
-    height: 40px;
-    padding: 0 18px;
-    border: none;
-    border-radius: 8px;
-    background: #3b82f6;
-    color: #fff;
-    font-size: 14px;
-    font-weight: 500;
-    transition: background 0.15s;
-  }
-  .send-btn:hover { background: #2563eb; }
-  .send-btn:disabled {
-    background: #9ca3af;
-    cursor: not-allowed;
-  }
-  .composer-hint {
-    font-size: 11px;
-    color: #9ca3af;
-    margin-top: 6px;
-    text-align: center;
-  }
-  @media (max-width: 600px) {
-    .composer-hint { display: none; }
-  }
+    button,
+    a { -webkit-tap-highlight-color: transparent; }
 
-  /* ---------- Misc ---------- */
-  .empty-tip {
-    text-align: center;
-    color: #9ca3af;
-    font-size: 13px;
-    padding: 60px 24px;
-    line-height: 1.7;
-  }
-  .empty-tip strong { color: #4b5563; font-weight: 600; }
+    button { cursor: pointer; }
 
-  /* ---------- Role paths (Quick Start by role) ---------- */
-  .role-paths {
-    margin: 16px 0 12px;
-  }
-  .section-title {
-    font-size: 13px;
-    color: #6b7280;
-    margin-bottom: 8px;
-    text-align: center;
-  }
-  .role-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: 8px;
-    max-width: 720px;
-    margin: 0 auto;
-  }
-  .role-btn {
-    padding: 10px 12px;
-    font-size: 13px;
-    border: 1px solid #d1d5db;
-    background: #fff;
-    border-radius: 8px;
-    color: #374151;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-  .role-btn:hover {
-    border-color: #3b82f6;
-    background: #eff6ff;
-    color: #1e40af;
-  }
-  @media (max-width: 600px) {
-    .role-grid { grid-template-columns: 1fr 1fr; }
-  }
+    button:focus-visible,
+    a:focus-visible,
+    textarea:focus-visible,
+    input:focus-visible {
+      outline: 3px solid rgb(23 107 81 / 24%);
+      outline-offset: 2px;
+    }
 
-  /* ---------- Copy button on assistant bubbles ---------- */
-  .msg.assistant .bubble {
-    position: relative;
-  }
-  .copy-btn {
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    width: 28px;
-    height: 28px;
-    padding: 0;
-    border: 1px solid #e5e7eb;
-    background: #fff;
-    border-radius: 4px;
-    cursor: pointer;
-    color: #6b7280;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    opacity: 0;
-    transition: opacity 0.15s;
-  }
-  .msg.assistant .bubble:hover .copy-btn {
-    opacity: 1;
-  }
-  .copy-btn:hover {
-    background: #f3f4f6;
-    color: #1f2937;
-    border-color: #d1d5db;
-  }
-  .copy-btn.copied {
-    background: #d1fae5;
-    color: #065f46;
-    border-color: #10b981;
-  }
-  @media (max-width: 600px) {
-    .copy-btn { opacity: 1; }
-  }
+    .app {
+      display: flex;
+      flex-direction: column;
+      width: min(100%, 860px);
+      height: 100dvh;
+      min-height: 100dvh;
+      margin: 0 auto;
+      overflow: hidden;
+      background: var(--surface);
+      border-inline: 1px solid rgb(23 32 29 / 6%);
+    }
 
-  /* ---------- Header link buttons ---------- */
-  .header-link {
-    background: transparent;
-    border: 1px solid #d1d5db;
-    color: #4b5563;
-    padding: 6px 12px;
-    font-size: 13px;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: border-color 0.15s, color 0.15s, background 0.15s;
-  }
-  .header-link:hover {
-    border-color: #3b82f6;
-    color: #1e40af;
-    background: #eff6ff;
-  }
-</style>
+    .topbar {
+      position: relative;
+      z-index: 10;
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: 12px;
+      min-height: 64px;
+      padding: max(10px, env(safe-area-inset-top)) 18px 10px;
+      background: rgb(255 254 250 / 92%);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(18px);
+    }
+
+    .brand-mark {
+      display: grid;
+      flex: 0 0 auto;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      color: #fff;
+      font-size: 15px;
+      font-weight: 760;
+      background: var(--accent);
+      border-radius: 10px;
+      letter-spacing: -.03em;
+    }
+
+    .brand-copy {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .brand-copy h1 {
+      margin: 0;
+      overflow: hidden;
+      font-size: 16px;
+      font-weight: 720;
+      line-height: 1.25;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      letter-spacing: -.01em;
+    }
+
+    .brand-copy p {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 3px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.25;
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      background: var(--accent);
+      border-radius: 50%;
+    }
+
+    .top-actions {
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .icon-button,
+    .manual-link {
+      display: inline-grid;
+      place-items: center;
+      min-width: 44px;
+      min-height: 44px;
+      padding: 0 11px;
+      color: var(--ink);
+      text-decoration: none;
+      background: transparent;
+      border: 0;
+      border-radius: 10px;
+      transition: background-color 160ms ease, color 160ms ease;
+    }
+
+    .icon-button:hover,
+    .manual-link:hover { background: var(--soft); }
+
+    .manual-link {
+      grid-auto-flow: column;
+      gap: 6px;
+      color: var(--accent-strong);
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .icon-button svg,
+    .manual-link svg,
+    .send-button svg,
+    .attach-button svg,
+    .copy-button svg {
+      width: 20px;
+      height: 20px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .feed {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-gutter: stable;
+      background:
+        radial-gradient(circle at 50% -20%, rgb(23 107 81 / 7%), transparent 42%),
+        var(--surface);
+    }
+
+    .feed-inner {
+      width: min(100%, 720px);
+      min-height: 100%;
+      margin: 0 auto;
+      padding: 24px 22px 28px;
+    }
+
+    .welcome {
+      display: grid;
+      place-items: center;
+      min-height: 100%;
+      padding: 20px 0 34px;
+      text-align: center;
+    }
+
+    .welcome-card { width: min(100%, 640px); }
+
+    .welcome-eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      margin-bottom: 16px;
+      padding: 6px 10px;
+      color: var(--accent-strong);
+      font-size: 12px;
+      font-weight: 680;
+      background: var(--accent-soft);
+      border-radius: 999px;
+    }
+
+    .welcome h2 {
+      margin: 0;
+      font-family: ui-serif, "Songti SC", "Noto Serif CJK SC", serif;
+      font-size: clamp(27px, 7vw, 38px);
+      font-weight: 680;
+      line-height: 1.2;
+      letter-spacing: -.035em;
+    }
+
+    .welcome-lead {
+      max-width: 480px;
+      margin: 12px auto 24px;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    .scope-panel {
+      display: grid;
+      gap: 12px;
+      padding: 14px;
+      text-align: left;
+      background: rgb(255 254 250 / 82%);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+    }
+
+    .scope-row {
+      display: grid;
+      grid-template-columns: 64px 1fr;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .scope-label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .segment {
+      display: grid;
+      grid-auto-columns: 1fr;
+      grid-auto-flow: column;
+      gap: 4px;
+      padding: 3px;
+      background: var(--soft);
+      border-radius: 11px;
+    }
+
+    .segment button {
+      min-height: 40px;
+      padding: 7px 8px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 620;
+      background: transparent;
+      border: 0;
+      border-radius: 8px;
+      transition: background-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
+    }
+
+    .segment button[aria-pressed="true"] {
+      color: var(--ink);
+      background: var(--surface);
+      box-shadow: 0 1px 4px rgb(23 32 29 / 10%);
+    }
+
+    .suggestions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 9px;
+      margin-top: 13px;
+    }
+
+    .suggestion {
+      display: flex;
+      align-items: flex-start;
+      gap: 9px;
+      min-height: 54px;
+      padding: 11px 12px;
+      color: var(--ink);
+      text-align: left;
+      background: rgb(255 254 250 / 78%);
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      transition: border-color 160ms ease, background-color 160ms ease, transform 160ms ease;
+    }
+
+    .suggestion:hover {
+      background: var(--accent-soft);
+      border-color: rgb(23 107 81 / 35%);
+    }
+
+    .suggestion:active { transform: scale(.985); }
+
+    .suggestion-index {
+      display: grid;
+      flex: 0 0 auto;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      color: var(--accent-strong);
+      font-size: 11px;
+      font-weight: 720;
+      background: var(--accent-soft);
+      border-radius: 7px;
+    }
+
+    .suggestion span:last-child {
+      font-size: 13px;
+      font-weight: 580;
+      line-height: 1.45;
+    }
+
+    .welcome-note {
+      margin: 14px 0 0;
+      color: var(--subtle);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .message-list { padding: 2px 0 10px; }
+
+    .message-row {
+      display: flex;
+      width: 100%;
+      margin: 8px 0 20px;
+    }
+
+    .message-row.user { justify-content: flex-end; }
+
+    .user-message {
+      max-width: min(82%, 520px);
+      padding: 10px 13px;
+      color: #1d2522;
+      background: var(--soft);
+      border-radius: 16px 16px 5px 16px;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+
+    .user-message p {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.55;
+    }
+
+    .user-attachment {
+      display: block;
+      width: min(210px, 100%);
+      max-height: 240px;
+      margin-top: 9px;
+      object-fit: cover;
+      border-radius: 10px;
+    }
+
+    .message-row.assistant { display: block; }
+
+    .assistant-message {
+      position: relative;
+      width: 100%;
+      min-width: 0;
+      padding-left: 34px;
+    }
+
+    .assistant-mark {
+      position: absolute;
+      top: 0;
+      left: 0;
+      display: grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      color: #fff;
+      font-size: 10px;
+      font-weight: 760;
+      background: var(--accent);
+      border-radius: 7px;
+    }
+
+    .assistant-status {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 24px;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 620;
+    }
+
+    .stop-button {
+      min-height: 34px;
+      margin-left: auto;
+      padding: 5px 9px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 620;
+      background: transparent;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .stop-button:hover { color: var(--ink); background: var(--soft); }
+
+    .thinking-dots { display: inline-flex; gap: 3px; }
+
+    .thinking-dots i {
+      width: 4px;
+      height: 4px;
+      background: currentColor;
+      border-radius: 50%;
+      animation: dot 1.2s ease-in-out infinite;
+    }
+
+    .thinking-dots i:nth-child(2) { animation-delay: 120ms; }
+    .thinking-dots i:nth-child(3) { animation-delay: 240ms; }
+
+    .markdown-body {
+      color: var(--ink);
+      font-size: 15px;
+      line-height: 1.78;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .markdown-body > :first-child { margin-top: 0; }
+    .markdown-body > :last-child { margin-bottom: 0; }
+
+    .markdown-body p { margin: 0 0 13px; }
+
+    .markdown-body h2,
+    .markdown-body h3,
+    .markdown-body h4 {
+      margin: 24px 0 9px;
+      color: #111815;
+      font-weight: 720;
+      line-height: 1.4;
+      letter-spacing: -.015em;
+    }
+
+    .markdown-body h2 { font-size: 19px; }
+    .markdown-body h3 { font-size: 17px; }
+    .markdown-body h4 { font-size: 15px; }
+
+    .markdown-body ul,
+    .markdown-body ol {
+      padding-left: 1.45em;
+      margin: 8px 0 15px;
+    }
+
+    .markdown-body li { margin: 5px 0; padding-left: .15em; }
+
+    .markdown-body strong { font-weight: 720; }
+
+    .markdown-body code {
+      padding: 2px 5px;
+      color: #2d4039;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .88em;
+      background: var(--soft);
+      border-radius: 5px;
+    }
+
+    .markdown-body pre {
+      position: relative;
+      max-width: 100%;
+      padding: 14px;
+      overflow-x: auto;
+      color: #e8f1ed;
+      background: #1c2924;
+      border-radius: 10px;
+    }
+
+    .markdown-body pre code { padding: 0; color: inherit; background: transparent; }
+
+    .markdown-body a { color: var(--accent-strong); text-underline-offset: 3px; }
+
+    .table-wrap {
+      max-width: 100%;
+      margin: 14px 0;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+
+    .markdown-body table {
+      width: 100%;
+      min-width: 420px;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .markdown-body th,
+    .markdown-body td {
+      padding: 9px 10px;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .markdown-body th { background: var(--soft); }
+    .markdown-body tr:last-child td { border-bottom: 0; }
+
+    .answer-actions {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-top: 14px;
+    }
+
+    .copy-button,
+    .retry-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 40px;
+      padding: 7px 10px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 620;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 9px;
+    }
+
+    .copy-button:hover { color: var(--ink); background: var(--soft); }
+    .copy-button svg { width: 16px; height: 16px; }
+
+    .sources {
+      margin-top: 8px;
+      color: var(--subtle);
+      font-size: 12px;
+    }
+
+    .sources summary {
+      min-height: 36px;
+      padding: 8px 0;
+      cursor: pointer;
+    }
+
+    .sources-list {
+      display: grid;
+      gap: 5px;
+      margin-top: 3px;
+      padding-left: 15px;
+    }
+
+    .related {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 12px;
+    }
+
+    .related button {
+      min-height: 40px;
+      padding: 7px 10px;
+      color: var(--accent-strong);
+      font-size: 12px;
+      text-align: left;
+      background: var(--accent-soft);
+      border: 0;
+      border-radius: 9px;
+    }
+
+    .error-panel {
+      padding: 13px 14px;
+      color: #73302f;
+      background: var(--danger-soft);
+      border: 1px solid rgb(166 61 61 / 20%);
+      border-radius: 11px;
+    }
+
+    .error-panel p { margin: 0 0 9px; line-height: 1.55; }
+
+    .retry-button {
+      min-height: 38px;
+      color: var(--danger);
+      background: #fff;
+      border-color: rgb(166 61 61 / 24%);
+    }
+
+    .composer {
+      position: relative;
+      z-index: 10;
+      flex: 0 0 auto;
+      padding: 10px 16px max(10px, env(safe-area-inset-bottom));
+      background: linear-gradient(to bottom, rgb(255 254 250 / 70%), var(--surface) 24%);
+    }
+
+    .composer-inner {
+      width: min(100%, 720px);
+      margin: 0 auto;
+    }
+
+    .attachment-preview {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+      padding: 8px 10px;
+      color: var(--muted);
+      font-size: 12px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 11px;
+    }
+
+    .attachment-preview.visible { display: flex; }
+
+    .attachment-preview img {
+      width: 44px;
+      height: 44px;
+      object-fit: cover;
+      border-radius: 8px;
+    }
+
+    .attachment-preview span {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .remove-attachment {
+      min-width: 40px;
+      min-height: 40px;
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      border-radius: 8px;
+    }
+
+    .composer-box {
+      display: flex;
+      align-items: flex-end;
+      gap: 7px;
+      padding: 7px;
+      background: var(--surface);
+      border: 1px solid #d6d5cf;
+      border-radius: 17px;
+      box-shadow: 0 10px 26px rgb(32 41 37 / 8%);
+      transition: border-color 160ms ease, box-shadow 160ms ease;
+    }
+
+    .composer-box:focus-within {
+      border-color: rgb(23 107 81 / 55%);
+      box-shadow: 0 10px 28px rgb(32 41 37 / 9%), 0 0 0 3px rgb(23 107 81 / 9%);
+    }
+
+    .attach-button,
+    .send-button {
+      display: grid;
+      flex: 0 0 auto;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      min-height: 44px;
+      padding: 0;
+      border: 0;
+      border-radius: 12px;
+    }
+
+    .attach-button { color: var(--muted); background: transparent; }
+    .attach-button:hover { color: var(--ink); background: var(--soft); }
+
+    .composer textarea {
+      flex: 1;
+      min-width: 0;
+      min-height: 44px;
+      max-height: 136px;
+      padding: 10px 4px 8px;
+      resize: none;
+      color: var(--ink);
+      background: transparent;
+      border: 0;
+      outline: 0;
+      overflow-y: auto;
+      line-height: 1.5;
+    }
+
+    .composer textarea::placeholder { color: #9a9e9b; }
+
+    .send-button {
+      color: #fff;
+      background: var(--accent);
+      transition: background-color 160ms ease, opacity 160ms ease, transform 160ms ease;
+    }
+
+    .send-button:not(:disabled):hover { background: var(--accent-strong); }
+    .send-button:not(:disabled):active { transform: scale(.96); }
+
+    .send-button:disabled {
+      color: #9ea5a1;
+      cursor: not-allowed;
+      background: var(--soft);
+    }
+
+    .composer-hint {
+      margin: 7px 4px 0;
+      color: var(--subtle);
+      font-size: 11px;
+      text-align: center;
+    }
+
+    .toast {
+      position: fixed;
+      z-index: 50;
+      right: 50%;
+      bottom: calc(94px + env(safe-area-inset-bottom));
+      max-width: calc(100vw - 32px);
+      padding: 9px 13px;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 620;
+      background: #17201d;
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+      transform: translateX(50%);
+      animation: toast-in 180ms ease-out;
+    }
+
+    .hidden { display: none !important; }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    @keyframes dot {
+      0%, 80%, 100% { opacity: .3; transform: translateY(0); }
+      40% { opacity: 1; transform: translateY(-2px); }
+    }
+
+    @keyframes toast-in {
+      from { opacity: 0; transform: translate(50%, 6px); }
+      to { opacity: 1; transform: translate(50%, 0); }
+    }
+
+    @media (max-width: 560px) {
+      .app { border: 0; }
+      .topbar { min-height: 60px; padding-inline: 12px; }
+      .brand-mark { width: 34px; height: 34px; }
+      .brand-copy h1 { font-size: 15px; }
+      .brand-copy p { font-size: 11px; }
+      .manual-link span { display: none; }
+      .top-actions { gap: 0; }
+      .feed-inner { padding: 18px 16px 22px; }
+      .welcome { padding-block: 10px 22px; }
+      .welcome-lead { margin-bottom: 18px; }
+      .scope-panel { padding: 11px; }
+      .scope-row { grid-template-columns: 1fr; gap: 6px; }
+      .suggestions { grid-template-columns: 1fr; }
+      .suggestion { min-height: 50px; }
+      .assistant-message { padding-left: 30px; }
+      .composer { padding-inline: 10px; }
+      .composer-hint { display: none; }
+    }
+
+    @media (max-width: 350px) {
+      .brand-copy p { display: none; }
+      .segment button { padding-inline: 4px; font-size: 12px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+      }
+    }
+  </style>
 </head>
 <body>
+  <main class="app">
+    <header class="topbar">
+      <div class="brand-mark" aria-hidden="true">白</div>
+      <div class="brand-copy">
+        <h1>工厂操作助手</h1>
+        <p><span class="status-dot" aria-hidden="true"></span>解释 SOP 与系统逻辑，不执行业务操作</p>
+      </div>
+      <nav class="top-actions" aria-label="对话操作">
+        <a class="manual-link" href="/lsmsop/" target="_blank" rel="noopener" aria-label="打开生产全链路 SOP">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v18H6.5A2.5 2.5 0 0 0 4 22.5z"/><path d="M4 4.5v18M8 6h8M8 10h8"/></svg>
+          <span>完整 SOP</span>
+        </a>
+        <button class="icon-button" id="new-chat" type="button" aria-label="开始新对话" title="开始新对话">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z"/></svg>
+        </button>
+      </nav>
+    </header>
 
-<!-- ============== Screen 1: Login ============== -->
-<div id="screen-login" class="center-shell">
-  <div class="login-card">
-    <h1>白垩纪 AI 助手</h1>
-    <div class="sub">食品行业操作手册问答</div>
-    <div id="login-error" class="login-error hidden"></div>
-    <form id="login-form" autocomplete="off">
-      <div class="field">
-        <label for="login-username">用户名</label>
-        <input id="login-username" type="text" autocomplete="username" required>
-      </div>
-      <div class="field">
-        <label for="login-password">密码</label>
-        <input id="login-password" type="password" autocomplete="current-password" required>
-      </div>
-      <button type="submit" class="btn-primary">登录</button>
-    </form>
-    <div class="login-hint">仅供内部演示使用</div>
-  </div>
-</div>
+    <section class="feed" id="feed" aria-label="对话内容">
+      <div class="feed-inner">
+        <section class="welcome" id="welcome" aria-labelledby="welcome-title">
+          <div class="welcome-card">
+            <div class="welcome-eyebrow"><span class="status-dot" aria-hidden="true"></span>最新 F006 生产全链路口径</div>
+            <h2 id="welcome-title">今天要处理哪一步？</h2>
+            <p class="welcome-lead">告诉我你卡住的页面、字段或业务状态。我会按当前 SOP 给出操作路径、填写内容、验收结果和阻塞条件。</p>
 
-<!-- ============== Screen 2: Type select ============== -->
-<div id="screen-select" class="center-shell hidden">
-  <div class="select-wrap">
-    <div class="select-header">
-      <h1>请选择助手类型</h1>
-      <button class="btn-text" id="logout-from-select">退出登录</button>
-    </div>
-    <div class="select-grid">
-      <div class="type-card restaurant" data-category="restaurant" tabindex="0" role="button" aria-label="选择餐饮版">
-        <div class="icon">餐</div>
-        <h3>餐饮版</h3>
-        <p>适用餐厅 / 连锁门店 / 茶饮店等</p>
-      </div>
-      <div class="type-card factory" data-category="factory" tabindex="0" role="button" aria-label="选择工厂版">
-        <div class="icon">厂</div>
-        <h3>工厂版</h3>
-        <p>适用食品加工厂 / 生产车间</p>
-      </div>
-    </div>
-  </div>
-</div>
+            <div class="scope-panel" aria-label="回答范围">
+              <div class="scope-row">
+                <span class="scope-label">测试深度</span>
+                <div class="segment" id="depth-segment" role="group" aria-label="测试深度">
+                  <button type="button" data-value="mvp" aria-pressed="true">MVP</button>
+                  <button type="button" data-value="medium" aria-pressed="false">中度</button>
+                  <button type="button" data-value="full" aria-pressed="false">全量</button>
+                </div>
+              </div>
+              <div class="scope-row">
+                <span class="scope-label">业务线</span>
+                <div class="segment" id="line-segment" role="group" aria-label="业务线">
+                  <button type="button" data-value="general" aria-pressed="true">通用</button>
+                  <button type="button" data-value="stock" aria-pressed="false">存货生产</button>
+                  <button type="button" data-value="sales" aria-pressed="false">销售订单</button>
+                </div>
+              </div>
+            </div>
 
-<!-- ============== Screen 3: Chat ============== -->
-<div id="screen-chat" class="chat-app hidden">
-  <div class="chat-header">
-    <div class="chat-title">白垩纪 AI 助手 <span class="badge" id="chat-badge"></span></div>
-    <div class="chat-actions">
-      <button class="header-link" id="open-manual" title="打开完整手册">打开手册</button>
-      <button class="header-link" id="clear-chat" title="清空对话历史">清空对话</button>
-      <button class="btn-text" id="switch-type">切换类型</button>
-      <button class="btn-text" id="logout-from-chat">退出</button>
-    </div>
-  </div>
-  <div class="chat-body" id="chat-body">
-    <div class="msg-list" id="msg-list">
-      <!-- Welcome tip is rendered by JS so that quick-ask buttons reflect the current category. -->
-    </div>
-  </div>
-  <div class="composer">
-    <div class="composer-inner">
-      <div class="preview-row" id="preview-row" style="display:none;">
-        <div class="preview-thumb">
-          <img id="preview-img" alt="">
-          <button type="button" class="remove-btn" id="remove-image" title="移除图片">×</button>
+            <div class="suggestions" aria-label="推荐问题">
+              <button class="suggestion" type="button" data-question="从零开始创建黄油鸡，MVP 最小闭环先做哪些步骤？"><span class="suggestion-index">01</span><span>从零开始创建黄油鸡，MVP 先做什么？</span></button>
+              <button class="suggestion" type="button" data-question="成品 1盒=800克，为什么 Workflow 里不再填写 1kg 产多少盒？"><span class="suggestion-index">02</span><span>SKU、BOM 与 Workflow 的单位怎么分工？</span></button>
+              <button class="suggestion" type="button" data-question="生产计划选择成品时出现多个 Workflow，系统应该怎么匹配？"><span class="suggestion-index">03</span><span>选成品时多个 Workflow 冲突怎么处理？</span></button>
+              <button class="suggestion" type="button" data-question="报工完成后成品为什么还没进主仓？请按节点帮我排查。"><span class="suggestion-index">04</span><span>报工后成品还没进主仓，先查哪里？</span></button>
+            </div>
+            <p class="welcome-note">也可以上传当前页面截图。助手会读取截图文字后结合操作手册回答，不会替你提交或修改业务数据。</p>
+          </div>
+        </section>
+        <div class="message-list hidden" id="message-list" aria-live="polite" aria-relevant="additions"></div>
+      </div>
+    </section>
+
+    <form class="composer" id="composer">
+      <div class="composer-inner">
+        <div class="attachment-preview" id="attachment-preview">
+          <img id="attachment-image" alt="待发送的页面截图">
+          <span id="attachment-name"></span>
+          <button class="remove-attachment" id="remove-attachment" type="button" aria-label="移除截图">移除</button>
         </div>
-        <div style="font-size:12px;color:#6b7280;" id="preview-info"></div>
+        <div class="composer-box">
+          <label class="attach-button" for="attachment-input" aria-label="上传页面截图" title="上传页面截图">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21.4 11.6-8.9 8.9a6 6 0 0 1-8.5-8.5l9.6-9.6a4 4 0 1 1 5.7 5.7l-9.8 9.8a2 2 0 1 1-2.8-2.8l8.8-8.8"/></svg>
+          </label>
+          <input class="sr-only" id="attachment-input" type="file" accept="image/*">
+          <label class="sr-only" for="question">输入工厂操作问题</label>
+          <textarea id="question" rows="1" maxlength="800" placeholder="描述页面、字段或当前状态…" autocomplete="off"></textarea>
+          <button class="send-button" id="send" type="submit" disabled aria-label="发送问题">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4z"/></svg>
+          </button>
+        </div>
+        <p class="composer-hint">Enter 发送 · Shift+Enter 换行 · 手机端使用右侧发送按钮</p>
       </div>
-      <div class="input-row">
-        <label class="upload-btn" title="上传截图">
-          <span aria-hidden="true">+</span>
-          <input type="file" id="upload-input" accept="image/*">
-        </label>
-        <textarea id="input-text" class="input" placeholder="输入问题，回车发送，Shift+Enter 换行" rows="1"></textarea>
-        <button class="send-btn" id="send-btn">发送</button>
-      </div>
-      <div class="composer-hint">回车发送 · Shift+Enter 换行 · 支持上传截图</div>
-    </div>
-  </div>
-</div>
+    </form>
+    <div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
+  </main>
 
-<script>
-(function() {
-  'use strict';
+  <script>
+    (function () {
+      'use strict';
 
-  // ---------- Constants ----------
-  var API_ENDPOINT = '/api/food-kb/manual-chat';
-  var MAX_HISTORY_PAIRS = 5;
-  var IMAGE_COMPRESS_THRESHOLD = 1024 * 1024; // 1 MB
-  var IMAGE_MAX_PIXEL_AREA = 1024 * 1024;     // 1M pixels (~1024×1024)
-  var IMAGE_MAX_WIDTH = 1024;
-  var IMAGE_JPEG_QUALITY = 0.85;
-  var CATEGORY_LABELS = { restaurant: '餐饮版', factory: '工厂版' };
+      var CHAT_ENDPOINT = '/api/food-kb/manual-chat';
+      var RELATED_ENDPOINT = '/api/food-kb/manual-chat/related';
+      var MAX_HISTORY_MESSAGES = 10;
+      var STORAGE_KEY = 'cretas_factory_ai_session_v2';
 
-  // ---------- State ----------
-  var state = {
-    category: null,        // 'restaurant' | 'factory'
-    history: [],           // [{role:'user'|'assistant', content:string}]
-    imageDataUri: null,    // current pending image (data:image/...;base64,...)
-    sending: false
-  };
+      var $ = function (id) { return document.getElementById(id); };
+      var feed = $('feed');
+      var welcome = $('welcome');
+      var messageList = $('message-list');
+      var composer = $('composer');
+      var questionInput = $('question');
+      var sendButton = $('send');
+      var attachmentInput = $('attachment-input');
+      var attachmentPreview = $('attachment-preview');
+      var attachmentImage = $('attachment-image');
+      var attachmentName = $('attachment-name');
+      var toast = $('toast');
 
-  // ---------- DOM refs ----------
-  var $ = function(id) { return document.getElementById(id); };
-  var screens = {
-    login: $('screen-login'),
-    select: $('screen-select'),
-    chat: $('screen-chat')
-  };
-
-  // ---------- Utilities ----------
-  function show(name) {
-    Object.keys(screens).forEach(function(k) {
-      screens[k].classList.toggle('hidden', k !== name);
-    });
-  }
-
-  // Escape HTML for safe rendering of any string into innerHTML
-  function escapeHtml(s) {
-    if (s == null) return '';
-    return String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  }
-
-  // Lightweight markdown → HTML (escape first, then promote a few patterns).
-  // Supports: **bold**, ### / #### headings, "- item" bullet, "  * sub-item" sub-bullet,
-  // and simple | a | b | tables.
-  // We never feed user/AI raw text into innerHTML — only the escaped + transformed version.
-  function renderAnswer(text) {
-    if (!text) return '';
-    var escaped = escapeHtml(text);
-    // Bold
-    escaped = escaped.replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>');
-    // Headings: #### / ### (single-line, must be at start of line)
-    escaped = escaped.replace(/^####\s+(.+)$/gm, '<h4 class="ans-h4">$1</h4>');
-    escaped = escaped.replace(/^###\s+(.+)$/gm, '<h3 class="ans-h3">$1</h3>');
-    // Sub-bullet: indented "* foo" (2+ spaces or tab) — must run BEFORE top-level bullet
-    escaped = escaped.replace(/^(?:\s{2,}|\t)\*\s+(.+)$/gm, '<span class="bullet-line bullet-sub">∘ $1</span>');
-    // Top-level bullet: "- foo" or "* foo" at line start
-    escaped = escaped.replace(/^[\-\*]\s+(.+)$/gm, '<span class="bullet-line">• $1</span>');
-    // Simple markdown table: 2+ consecutive lines that look like | a | b |
-    escaped = escaped.replace(/((?:^\|[^\n]+\|[^\n]*\n){2,})/gm, function(block) {
-      var lines = block.trim().split('\n');
-      // Skip the separator line "| --- | --- |" if present
-      var rows = lines.filter(function(l) { return !/^\|[\s\-:|]+\|$/.test(l); });
-      if (rows.length < 2) return block;
-      var html = '<table class="ans-table">';
-      rows.forEach(function(line, idx) {
-        var cells = line.split('|').slice(1, -1).map(function(c) { return c.trim(); });
-        var tag = idx === 0 ? 'th' : 'td';
-        html += '<tr>' + cells.map(function(c) { return '<' + tag + '>' + c + '</' + tag + '>'; }).join('') + '</tr>';
-      });
-      html += '</table>';
-      return html;
-    });
-    // Line breaks (preserve paragraphs visually via white-space: pre-wrap CSS too)
-    return escaped;
-  }
-
-  function scrollToBottom() {
-    var body = $('chat-body');
-    requestAnimationFrame(function() {
-      body.scrollTop = body.scrollHeight;
-    });
-  }
-
-  function autoGrow(ta) {
-    ta.style.height = 'auto';
-    ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
-  }
-
-  // ---------- Auth flow ----------
-  function isAuthed() {
-    try {
-      return sessionStorage.getItem('aiassist_auth') === '1';
-    } catch (e) { return false; }
-  }
-  function getStoredCategory() {
-    try {
-      var c = sessionStorage.getItem('aiassist_category');
-      return (c === 'restaurant' || c === 'factory') ? c : null;
-    } catch (e) { return null; }
-  }
-  function clearAuth() {
-    try {
-      sessionStorage.removeItem('aiassist_auth');
-      sessionStorage.removeItem('aiassist_category');
-    } catch (e) {}
-  }
-
-  function attachLogin() {
-    var form = $('login-form');
-    var errBox = $('login-error');
-    form.addEventListener('submit', function(e) {
-      e.preventDefault();
-      var u = $('login-username').value.trim();
-      var p = $('login-password').value;
-      if (u === 'admin' && p === '123456') {
-        try { sessionStorage.setItem('aiassist_auth', '1'); } catch (e) {}
-        errBox.classList.add('hidden');
-        $('login-password').value = '';
-        gotoSelect();
-      } else {
-        errBox.textContent = '用户名或密码错误';
-        errBox.classList.remove('hidden');
-      }
-    });
-  }
-
-  function attachSelect() {
-    document.querySelectorAll('.type-card').forEach(function(card) {
-      card.addEventListener('click', function() {
-        var cat = card.getAttribute('data-category');
-        if (cat === 'restaurant' || cat === 'factory') {
-          try { sessionStorage.setItem('aiassist_category', cat); } catch (e) {}
-          state.category = cat;
-          gotoChat();
-        }
-      });
-      card.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          card.click();
-        }
-      });
-    });
-    $('logout-from-select').addEventListener('click', logout);
-  }
-
-  function attachChat() {
-    $('switch-type').addEventListener('click', function() {
-      // Reset chat state, go back to select
-      state.category = null;
-      state.history = [];
-      state.sending = false;
-      setSending(false);
-      clearImage();
-      try { sessionStorage.removeItem('aiassist_category'); } catch (e) {}
-      resetMessageList();
-      gotoSelect();
-    });
-    $('logout-from-chat').addEventListener('click', logout);
-
-    var openManualBtn = $('open-manual');
-    if (openManualBtn) {
-      openManualBtn.addEventListener('click', function() {
-        // aiassist.cretaceousfuture.com nginx 只放行 /aiassist.html + /api/*，
-        // 完整手册 HTML 部署在 admin 子域名，跨域打开新窗口
-        var manualBase = 'https://admin.cretaceousfuture.com';
-        var manualUrl = state.category === 'restaurant'
-          ? manualBase + '/restaurant-product-manual.html'
-          : manualBase + '/factory-operation-manual.html';
-        window.open(manualUrl, '_blank');
-      });
-    }
-
-    var clearChatBtn = $('clear-chat');
-    if (clearChatBtn) {
-      clearChatBtn.addEventListener('click', function() {
-        if (state.history.length === 0) return;
-        if (!confirm('确定清空当前对话历史吗？')) return;
-        state.history = [];
-        clearImage();
-        resetMessageList();
-      });
-    }
-
-    var input = $('input-text');
-    input.addEventListener('input', function() { autoGrow(input); });
-    input.addEventListener('keydown', function(e) {
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-        e.preventDefault();
-        sendMessage();
-      }
-    });
-
-    $('send-btn').addEventListener('click', sendMessage);
-
-    $('upload-input').addEventListener('change', handleFileSelect);
-    $('remove-image').addEventListener('click', clearImage);
-
-    // Event delegation for copy buttons on assistant bubbles.
-    document.addEventListener('click', function(e) {
-      var btn = e.target && e.target.closest && e.target.closest('.copy-btn');
-      if (!btn) return;
-      var bubble = btn.closest('.bubble');
-      if (!bubble) return;
-      // Get text content excluding the copy button itself.
-      var clone = bubble.cloneNode(true);
-      var btnInClone = clone.querySelector('.copy-btn');
-      if (btnInClone && btnInClone.parentNode) btnInClone.parentNode.removeChild(btnInClone);
-      var text = (clone.textContent || '').trim();
-
-      function flashCopied() {
-        btn.classList.add('copied');
-        setTimeout(function() { btn.classList.remove('copied'); }, 1500);
-      }
-
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(flashCopied).catch(function() {
-          // Fallback below
-          fallbackCopy(text, flashCopied);
-        });
-      } else {
-        fallbackCopy(text, flashCopied);
-      }
-    });
-  }
-
-  function fallbackCopy(text, onSuccess) {
-    var ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.left = '-9999px';
-    document.body.appendChild(ta);
-    ta.select();
-    try {
-      document.execCommand('copy');
-      if (onSuccess) onSuccess();
-    } catch (err) { /* ignore */ }
-    document.body.removeChild(ta);
-  }
-
-  function logout() {
-    clearAuth();
-    state.category = null;
-    state.history = [];
-    state.sending = false;
-    setSending(false);
-    clearImage();
-    resetMessageList();
-    show('login');
-  }
-
-  function gotoSelect() {
-    show('select');
-  }
-
-  function gotoChat() {
-    if (!state.category) state.category = getStoredCategory();
-    if (!state.category) { gotoSelect(); return; }
-    $('chat-badge').textContent = CATEGORY_LABELS[state.category] || '';
-    show('chat');
-    // Render welcome + category-specific quick-ask buttons if chat is empty.
-    var list = $('msg-list');
-    if (list && !list.children.length) resetMessageList();
-    setTimeout(function() { $('input-text').focus(); }, 50);
-  }
-
-  // ---------- Image handling ----------
-  function handleFileSelect(e) {
-    var file = e.target.files && e.target.files[0];
-    e.target.value = ''; // allow same-file reselect
-    if (!file) return;
-    if (!/^image\//.test(file.type)) {
-      showError('请选择图片文件');
-      return;
-    }
-    var reader = new FileReader();
-    reader.onload = function(ev) {
-      var dataUri = ev.target.result;
-      // Compress when: pixel area is large, non-JPEG (BMP/TIFF/PNG balloon after base64),
-      // or raw byte size is large. Falls back to compress pipeline when image can't decode (e.g. HEIC).
-      var img = new Image();
-      img.onload = function() {
-        var pixelCount = img.width * img.height;
-        var isJpeg = /^data:image\/jpe?g/i.test(dataUri);
-        var shouldCompress = !isJpeg || pixelCount > IMAGE_MAX_PIXEL_AREA || file.size > IMAGE_COMPRESS_THRESHOLD;
-        if (shouldCompress) {
-          compressImage(dataUri).then(function(compressed) {
-            setImage(compressed, file.name, true);
-          }).catch(function() {
-            setImage(dataUri, file.name, false);
-          });
-        } else {
-          setImage(dataUri, file.name, false);
-        }
+      var state = {
+        depth: 'mvp',
+        businessLine: 'general',
+        messages: [],
+        imageData: null,
+        imageName: '',
+        sending: false,
+        composing: false,
+        stickToBottom: true,
+        controller: null
       };
-      img.onerror = function() {
-        // Can't decode (HEIC/some TIFF) — try compress pipeline; if that also fails, send original.
-        compressImage(dataUri).then(function(compressed) {
-          setImage(compressed, file.name, true);
-        }).catch(function() {
-          setImage(dataUri, file.name, false);
-        });
-      };
-      img.src = dataUri;
-    };
-    reader.onerror = function() { showError('读取图片失败'); };
-    reader.readAsDataURL(file);
-  }
 
-  function compressImage(dataUri) {
-    return new Promise(function(resolve, reject) {
-      var img = new Image();
-      img.onload = function() {
-        try {
-          var w = img.width, h = img.height;
-          if (w > IMAGE_MAX_WIDTH) {
-            h = Math.round(h * (IMAGE_MAX_WIDTH / w));
-            w = IMAGE_MAX_WIDTH;
+      var toastTimer;
+
+      function escapeHtml(value) {
+        return String(value == null ? '' : value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function renderInline(value) {
+        var safe = escapeHtml(value);
+        safe = safe.replace(/`([^`]+)`/g, '<code>$1</code>');
+        safe = safe.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+        safe = safe.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|\/[^\s)]+)\)/g, function (_, label, href) {
+          return '<a href="' + href + '" target="_blank" rel="noopener">' + label + '</a>';
+        });
+        return safe;
+      }
+
+      function renderMarkdown(markdown) {
+        var lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n');
+        var html = [];
+        var paragraph = [];
+        var listType = null;
+        var inCode = false;
+        var codeLines = [];
+
+        function flushParagraph() {
+          if (!paragraph.length) return;
+          html.push('<p>' + paragraph.map(renderInline).join('<br>') + '</p>');
+          paragraph = [];
+        }
+
+        function closeList() {
+          if (!listType) return;
+          html.push('</' + listType + '>');
+          listType = null;
+        }
+
+        function openList(type) {
+          if (listType === type) return;
+          closeList();
+          html.push('<' + type + '>');
+          listType = type;
+        }
+
+        for (var i = 0; i < lines.length; i += 1) {
+          var line = lines[i];
+
+          if (/^```/.test(line.trim())) {
+            flushParagraph();
+            closeList();
+            if (inCode) {
+              html.push('<pre><code>' + escapeHtml(codeLines.join('\n')) + '</code></pre>');
+              codeLines = [];
+              inCode = false;
+            } else {
+              inCode = true;
+            }
+            continue;
           }
-          var canvas = document.createElement('canvas');
-          canvas.width = w;
-          canvas.height = h;
-          var ctx = canvas.getContext('2d');
-          ctx.fillStyle = '#fff';
-          ctx.fillRect(0, 0, w, h);
-          ctx.drawImage(img, 0, 0, w, h);
-          var out = canvas.toDataURL('image/jpeg', IMAGE_JPEG_QUALITY);
-          resolve(out);
-        } catch (e) { reject(e); }
-      };
-      img.onerror = reject;
-      img.src = dataUri;
-    });
-  }
 
-  function setImage(dataUri, name, compressed) {
-    state.imageDataUri = dataUri;
-    var img = $('preview-img');
-    img.src = dataUri;
-    var info = $('preview-info');
-    var sizeKb = Math.round((dataUri.length * 3 / 4) / 1024);
-    info.textContent = (name || '截图') + ' · ' + sizeKb + ' KB' + (compressed ? ' (已压缩)' : '');
-    $('preview-row').style.display = 'flex';
-  }
+          if (inCode) {
+            codeLines.push(line);
+            continue;
+          }
 
-  function clearImage() {
-    state.imageDataUri = null;
-    $('preview-img').src = '';
-    $('preview-row').style.display = 'none';
-    $('preview-info').textContent = '';
-  }
+          if (/^\|.+\|\s*$/.test(line) && i + 1 < lines.length && /^\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+            flushParagraph();
+            closeList();
+            var tableLines = [line];
+            i += 2;
+            while (i < lines.length && /^\|.+\|\s*$/.test(lines[i])) {
+              tableLines.push(lines[i]);
+              i += 1;
+            }
+            i -= 1;
+            var table = '<div class="table-wrap"><table>';
+            tableLines.forEach(function (row, rowIndex) {
+              var cells = row.split('|').slice(1, -1).map(function (cell) { return cell.trim(); });
+              var tag = rowIndex === 0 ? 'th' : 'td';
+              table += '<tr>' + cells.map(function (cell) { return '<' + tag + '>' + renderInline(cell) + '</' + tag + '>'; }).join('') + '</tr>';
+            });
+            table += '</table></div>';
+            html.push(table);
+            continue;
+          }
 
-  // ---------- Chat rendering ----------
-  var QUICK_ASKS = {
-    restaurant: [
-      '什么是翻台率？',
-      '怎么查看本月营业额？',
-      '怎么处理顾客差评？',
-      '食材成本率多少算正常？'
-    ],
-    factory: [
-      '怎么开始一个生产批次？',
-      '如何录入原料入库？',
-      '质检流程是怎样的？',
-      '什么是 SKU 组装？'
-    ]
-  };
+          var heading = line.match(/^(#{2,4})\s+(.+)$/);
+          if (heading) {
+            flushParagraph();
+            closeList();
+            var level = heading[1].length;
+            html.push('<h' + level + '>' + renderInline(heading[2]) + '</h' + level + '>');
+            continue;
+          }
 
-  var ROLE_PATHS = {
-    factory: [
-      { role: '车间操作工', q: '我是新员工车间操作工，首周该学什么' },
-      { role: '仓库管理员', q: '我是仓库管理员，入库 / 调拨 / 盘点都要会哪些' },
-      { role: '质检员', q: '我是质检员，质检任务怎么做' },
-      { role: '班组长 / 调度员', q: '我是班组长，每天要看哪些 KPI' },
-      { role: '厂长', q: '我是厂长，月度回顾要看哪些数据' }
-    ],
-    restaurant: [
-      { role: '前台 / 收银', q: '我是前台收银，首周该学什么' },
-      { role: '财务文员', q: '我是中台财务，每天要做什么' },
-      { role: '店长', q: '我是店长，每周回顾要看哪些指标' },
-      { role: '老板', q: '我是老板，月度回顾要看哪些数据' }
-    ]
-  };
+          var unordered = line.match(/^\s*[-*]\s+(.+)$/);
+          if (unordered) {
+            flushParagraph();
+            openList('ul');
+            html.push('<li>' + renderInline(unordered[1]) + '</li>');
+            continue;
+          }
 
-  function quickAsk(text) {
-    var input = $('input-text');
-    input.value = text;
-    autoGrow(input);
-    sendMessage();
-  }
+          var ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+          if (ordered) {
+            flushParagraph();
+            openList('ol');
+            html.push('<li>' + renderInline(ordered[1]) + '</li>');
+            continue;
+          }
 
-  function resetMessageList() {
-    var list = $('msg-list');
-    list.innerHTML = '';
-    var tip = document.createElement('div');
-    tip.className = 'empty-tip';
-    tip.id = 'empty-tip';
+          if (!line.trim()) {
+            flushParagraph();
+            closeList();
+            continue;
+          }
 
-    var welcome = document.createElement('div');
-    welcome.innerHTML = '<strong>欢迎使用白垩纪 AI 助手</strong><br>'
-      + '基于操作手册的智能问答，您可以提问任何关于系统使用的问题，<br>'
-      + '也可以上传截图让 AI 识别界面后回答。';
-    tip.appendChild(welcome);
-
-    // Role-based Quick Start: rendered between the welcome tip and the generic quick-ask grid.
-    var rolePaths = (state.category && ROLE_PATHS[state.category]) || [];
-    if (rolePaths.length) {
-      var roleWrap = document.createElement('div');
-      roleWrap.className = 'role-paths';
-      var roleTitle = document.createElement('div');
-      roleTitle.className = 'section-title';
-      roleTitle.textContent = '按岗位快速开始';
-      roleWrap.appendChild(roleTitle);
-      var roleGrid = document.createElement('div');
-      roleGrid.className = 'role-grid';
-      rolePaths.forEach(function(p) {
-        var rb = document.createElement('button');
-        rb.type = 'button';
-        rb.className = 'role-btn';
-        rb.textContent = p.role;
-        rb.addEventListener('click', function() { quickAsk(p.q); });
-        roleGrid.appendChild(rb);
-      });
-      roleWrap.appendChild(roleGrid);
-      tip.appendChild(roleWrap);
-    }
-
-    var asks = (state.category && QUICK_ASKS[state.category]) || [];
-    if (asks.length) {
-      var grid = document.createElement('div');
-      grid.className = 'quick-asks';
-      asks.forEach(function(q) {
-        var btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'quick-ask-btn';
-        btn.textContent = q;
-        btn.addEventListener('click', function() { quickAsk(q); });
-        grid.appendChild(btn);
-      });
-      tip.appendChild(grid);
-    }
-
-    list.appendChild(tip);
-  }
-
-  function removeEmptyTip() {
-    var tip = $('empty-tip');
-    if (tip && tip.parentNode) tip.parentNode.removeChild(tip);
-  }
-
-  function appendUserMessage(text, imageDataUri) {
-    removeEmptyTip();
-    var list = $('msg-list');
-    var wrap = document.createElement('div');
-    wrap.className = 'msg user';
-    var bubble = document.createElement('div');
-    bubble.className = 'bubble';
-    bubble.textContent = text;  // textContent — safe for user input
-    wrap.appendChild(bubble);
-    if (imageDataUri) {
-      var img = document.createElement('img');
-      img.className = 'img-attach';
-      img.src = imageDataUri;
-      img.alt = '上传的截图';
-      wrap.appendChild(img);
-    }
-    list.appendChild(wrap);
-    scrollToBottom();
-  }
-
-  function appendAssistantPlaceholder() {
-    removeEmptyTip();
-    var list = $('msg-list');
-    var wrap = document.createElement('div');
-    wrap.className = 'msg assistant';
-    var bubble = document.createElement('div');
-    bubble.className = 'bubble';
-    bubble.innerHTML = '<span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>';
-    wrap.appendChild(bubble);
-    list.appendChild(wrap);
-    scrollToBottom();
-    return wrap;
-  }
-
-  function fillAssistantMessage(node, answer, sources) {
-    var bubble = node.querySelector('.bubble');
-    bubble.innerHTML = renderAnswer(answer);  // renderAnswer escapes first
-
-    // Inject a copy button in the top-right of the assistant bubble.
-    var copyBtn = document.createElement('button');
-    copyBtn.type = 'button';
-    copyBtn.className = 'copy-btn';
-    copyBtn.title = '复制答案';
-    copyBtn.setAttribute('aria-label', '复制答案');
-    copyBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
-    bubble.appendChild(copyBtn);
-
-    if (sources && sources.length) {
-      var details = document.createElement('details');
-      details.className = 'sources-collapse';
-      var summary = document.createElement('summary');
-      summary.textContent = '参考章节 (' + sources.length + ')';
-      details.appendChild(summary);
-      var listWrap = document.createElement('div');
-      listWrap.className = 'sources sources-list';
-      sources.forEach(function(s) {
-        var simRaw = (typeof s.similarity === 'number') ? s.similarity : null;
-        // Clamp to [0, 1] — backend reranker scores can exceed 1 due to mixing with cosine.
-        var simStr = '';
-        if (simRaw !== null) {
-          var simClamped = Math.max(0, Math.min(1, simRaw));
-          simStr = ' 相似度 ' + simClamped.toFixed(4);
+          closeList();
+          paragraph.push(line);
         }
-        var item = document.createElement('span');
-        item.className = 'src-item';
-        // Build text — title may contain unsafe chars; textContent handles escaping.
-        item.textContent = '[' + (s.title || s.source || '未命名') + ']' + simStr;
-        listWrap.appendChild(item);
+
+        if (inCode) html.push('<pre><code>' + escapeHtml(codeLines.join('\n')) + '</code></pre>');
+        flushParagraph();
+        closeList();
+        return html.join('');
+      }
+
+      function isNearBottom() {
+        return feed.scrollHeight - feed.scrollTop - feed.clientHeight < 120;
+      }
+
+      function scrollToBottom(force) {
+        if (!force && !state.stickToBottom) return;
+        requestAnimationFrame(function () {
+          feed.scrollTo({
+            top: feed.scrollHeight,
+            behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+          });
+        });
+      }
+
+      function showToast(message) {
+        window.clearTimeout(toastTimer);
+        toast.textContent = message;
+        toast.classList.remove('hidden');
+        toastTimer = window.setTimeout(function () {
+          toast.classList.add('hidden');
+        }, 2200);
+      }
+
+      function copyText(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          return navigator.clipboard.writeText(text);
+        }
+        var helper = document.createElement('textarea');
+        helper.value = text;
+        helper.style.position = 'fixed';
+        helper.style.left = '-9999px';
+        document.body.appendChild(helper);
+        helper.select();
+        var succeeded = document.execCommand('copy');
+        document.body.removeChild(helper);
+        return succeeded ? Promise.resolve() : Promise.reject(new Error('copy failed'));
+      }
+
+      function setConversationVisible() {
+        welcome.classList.add('hidden');
+        messageList.classList.remove('hidden');
+      }
+
+      function updateComposer() {
+        questionInput.style.height = 'auto';
+        questionInput.style.height = Math.min(questionInput.scrollHeight, 136) + 'px';
+        sendButton.disabled = state.sending || (!questionInput.value.trim() && !state.imageData);
+        questionInput.disabled = state.sending;
+        attachmentInput.disabled = state.sending;
+      }
+
+      function persistSession() {
+        try {
+          sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+            depth: state.depth,
+            businessLine: state.businessLine,
+            messages: state.messages.slice(-20)
+          }));
+        } catch (_) { /* session persistence is optional */ }
+      }
+
+      function createMessageRecord(role, content) {
+        return { role: role, content: content, createdAt: Date.now() };
+      }
+
+      function appendUserMessage(content, imageData) {
+        setConversationVisible();
+        var row = document.createElement('article');
+        row.className = 'message-row user';
+        var bubble = document.createElement('div');
+        bubble.className = 'user-message';
+        var text = document.createElement('p');
+        text.textContent = content;
+        bubble.appendChild(text);
+        if (imageData) {
+          var image = document.createElement('img');
+          image.className = 'user-attachment';
+          image.src = imageData;
+          image.alt = '用户上传的页面截图';
+          bubble.appendChild(image);
+        }
+        row.appendChild(bubble);
+        messageList.appendChild(row);
+        scrollToBottom(true);
+      }
+
+      function createAssistantPlaceholder() {
+        setConversationVisible();
+        var row = document.createElement('article');
+        row.className = 'message-row assistant';
+        var shell = document.createElement('div');
+        shell.className = 'assistant-message';
+        shell.innerHTML = '<span class="assistant-mark" aria-hidden="true">白</span>'
+          + '<div class="assistant-status" role="status"><span>正在检索手册并组织回答</span>'
+          + '<span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span>'
+          + '<button class="stop-button" type="button">停止</button></div>'
+          + '<div class="markdown-body"></div>';
+        shell.querySelector('.stop-button').addEventListener('click', function () {
+          if (state.controller) state.controller.abort();
+        });
+        row.appendChild(shell);
+        messageList.appendChild(row);
+        scrollToBottom(true);
+        return { row: row, shell: shell };
+      }
+
+      function appendSourceDetails(shell, sources) {
+        if (!Array.isArray(sources) || !sources.length) return;
+        var details = document.createElement('details');
+        details.className = 'sources';
+        var summary = document.createElement('summary');
+        summary.textContent = '查看参考章节（' + sources.length + '）';
+        details.appendChild(summary);
+        var list = document.createElement('div');
+        list.className = 'sources-list';
+        sources.forEach(function (source) {
+          var item = document.createElement('span');
+          item.textContent = source.title || '操作手册章节';
+          list.appendChild(item);
+        });
+        details.appendChild(list);
+        shell.appendChild(details);
+      }
+
+      function finishAssistant(placeholder, answer, sources) {
+        var status = placeholder.shell.querySelector('.assistant-status');
+        status.textContent = '已依据操作手册整理';
+        var body = placeholder.shell.querySelector('.markdown-body');
+        body.innerHTML = renderMarkdown(answer);
+        body.addEventListener('contextmenu', function (event) {
+          event.preventDefault();
+          copyText(answer).then(function () { showToast('答案已复制'); }).catch(function () { showToast('复制失败'); });
+        });
+
+        var actions = document.createElement('div');
+        actions.className = 'answer-actions';
+        var copy = document.createElement('button');
+        copy.type = 'button';
+        copy.className = 'copy-button';
+        copy.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>复制答案</span>';
+        copy.addEventListener('click', function () {
+          copyText(answer).then(function () { showToast('答案已复制'); }).catch(function () { showToast('复制失败'); });
+        });
+        actions.appendChild(copy);
+        placeholder.shell.appendChild(actions);
+        appendSourceDetails(placeholder.shell, sources);
+        scrollToBottom(false);
+      }
+
+      function showAssistantError(placeholder, question, message) {
+        placeholder.shell.querySelector('.assistant-status').textContent = '回答未完成';
+        var body = placeholder.shell.querySelector('.markdown-body');
+        body.className = 'error-panel';
+        body.innerHTML = '';
+        var text = document.createElement('p');
+        text.textContent = message;
+        var retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'retry-button';
+        retry.textContent = '重试这条问题';
+        retry.addEventListener('click', function () { sendQuestion(question, true); });
+        body.appendChild(text);
+        body.appendChild(retry);
+        scrollToBottom(false);
+      }
+
+      function renderRelated(shell, questions) {
+        if (!Array.isArray(questions) || !questions.length) return;
+        var wrap = document.createElement('div');
+        wrap.className = 'related';
+        questions.slice(0, 3).forEach(function (question) {
+          if (typeof question !== 'string' || !question.trim()) return;
+          var button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = question.trim();
+          button.addEventListener('click', function () { sendQuestion(question.trim()); });
+          wrap.appendChild(button);
+        });
+        if (wrap.children.length) shell.appendChild(wrap);
+      }
+
+      function loadRelated(shell, question, answer) {
+        fetch(RELATED_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question: question, answer: answer })
+        }).then(function (response) {
+          if (!response.ok) return null;
+          return response.json();
+        }).then(function (payload) {
+          if (payload && Array.isArray(payload.related_questions)) {
+            renderRelated(shell, payload.related_questions);
+          }
+        }).catch(function () { /* follow-ups are optional */ });
+      }
+
+      function historyPayload() {
+        return state.messages.slice(-MAX_HISTORY_MESSAGES).map(function (message) {
+          return { role: message.role, content: message.content };
+        });
+      }
+
+      function clearAttachment() {
+        state.imageData = null;
+        state.imageName = '';
+        attachmentInput.value = '';
+        attachmentImage.removeAttribute('src');
+        attachmentName.textContent = '';
+        attachmentPreview.classList.remove('visible');
+        updateComposer();
+      }
+
+      function setSending(value) {
+        state.sending = value;
+        updateComposer();
+      }
+
+      function sendQuestion(rawQuestion, fromRetry) {
+        if (state.sending) return;
+        var question = String(rawQuestion == null ? questionInput.value : rawQuestion).trim();
+        if (!question && !state.imageData) return;
+        if (!question) question = '请根据截图说明当前页面的功能、下一步操作和需要注意的阻塞条件。';
+
+        var priorHistory = historyPayload();
+        var imageData = fromRetry ? null : state.imageData;
+        if (!fromRetry) {
+          appendUserMessage(question, imageData);
+          state.messages.push(createMessageRecord('user', question));
+          persistSession();
+        }
+
+        questionInput.value = '';
+        clearAttachment();
+        setSending(true);
+
+        var placeholder = createAssistantPlaceholder();
+        var controller = new AbortController();
+        state.controller = controller;
+        var timeout = window.setTimeout(function () { controller.abort(); }, 45000);
+
+        fetch(CHAT_ENDPOINT, {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            question: question,
+            category: 'factory',
+            depth: state.depth,
+            business_line: state.businessLine,
+            history: priorHistory,
+            image_base64: imageData
+          })
+        }).then(function (response) {
+          return response.text().then(function (text) {
+            var payload = {};
+            try { payload = text ? JSON.parse(text) : {}; } catch (_) { payload = {}; }
+            if (!response.ok || payload.success === false) {
+              var serverMessage = typeof payload.message === 'string' && payload.message.length <= 240
+                ? payload.message
+                : '';
+              throw new Error(serverMessage || ('请求失败（HTTP ' + response.status + '）'));
+            }
+            return payload;
+          });
+        }).then(function (payload) {
+          var answer = typeof payload.answer === 'string' && payload.answer.trim()
+            ? payload.answer.trim()
+            : '知识库没有返回可显示的答案，请换一种方式描述当前页面或问题。';
+          finishAssistant(placeholder, answer, payload.sources || []);
+          state.messages.push(createMessageRecord('assistant', answer));
+          persistSession();
+          loadRelated(placeholder.shell, question, answer);
+        }).catch(function (error) {
+          var message = error && error.name === 'AbortError'
+            ? '请求已超时或被中止。请检查网络后重试；如果问题很长，可以先只问当前一步。'
+            : (error && error.message) || '网络请求失败，请稍后重试。';
+          showAssistantError(placeholder, question, message);
+        }).then(function () {
+          window.clearTimeout(timeout);
+          if (state.controller === controller) state.controller = null;
+          setSending(false);
+          questionInput.focus();
+        });
+      }
+
+      function resizeAndEnable() { updateComposer(); }
+
+      function handleAttachment(file) {
+        if (!file) return;
+        if (!/^image\//.test(file.type)) {
+          showToast('请选择图片文件');
+          return;
+        }
+        if (file.size > 12 * 1024 * 1024) {
+          showToast('图片请小于 12 MB');
+          return;
+        }
+        var reader = new FileReader();
+        reader.onload = function (event) {
+          var dataUrl = event.target && event.target.result;
+          if (typeof dataUrl !== 'string') return;
+          var image = new Image();
+          image.onload = function () {
+            var maxWidth = 1280;
+            var width = image.width;
+            var height = image.height;
+            if (width > maxWidth) {
+              height = Math.round(height * maxWidth / width);
+              width = maxWidth;
+            }
+            var canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            var context = canvas.getContext('2d');
+            context.fillStyle = '#ffffff';
+            context.fillRect(0, 0, width, height);
+            context.drawImage(image, 0, 0, width, height);
+            state.imageData = canvas.toDataURL('image/jpeg', .84);
+            state.imageName = file.name;
+            attachmentImage.src = state.imageData;
+            attachmentName.textContent = file.name + ' · 已压缩用于识别';
+            attachmentPreview.classList.add('visible');
+            updateComposer();
+          };
+          image.onerror = function () { showToast('无法读取这张图片'); };
+          image.src = dataUrl;
+        };
+        reader.onerror = function () { showToast('读取图片失败'); };
+        reader.readAsDataURL(file);
+      }
+
+      function setSegment(group, value) {
+        Array.prototype.forEach.call(group.querySelectorAll('button'), function (button) {
+          button.setAttribute('aria-pressed', button.dataset.value === value ? 'true' : 'false');
+        });
+      }
+
+      function startNewConversation() {
+        if (state.controller) state.controller.abort();
+        state.controller = null;
+        state.messages = [];
+        state.sending = false;
+        messageList.innerHTML = '';
+        messageList.classList.add('hidden');
+        welcome.classList.remove('hidden');
+        clearAttachment();
+        questionInput.value = '';
+        updateComposer();
+        try { sessionStorage.removeItem(STORAGE_KEY); } catch (_) { /* optional */ }
+        feed.scrollTop = 0;
+        questionInput.focus();
+        showToast('已开始新对话');
+      }
+
+      function restoreSession() {
+        try {
+          var saved = JSON.parse(sessionStorage.getItem(STORAGE_KEY) || 'null');
+          if (!saved || !Array.isArray(saved.messages)) return;
+          if (['mvp', 'medium', 'full'].indexOf(saved.depth) >= 0) state.depth = saved.depth;
+          if (['general', 'stock', 'sales'].indexOf(saved.businessLine) >= 0) state.businessLine = saved.businessLine;
+          setSegment($('depth-segment'), state.depth);
+          setSegment($('line-segment'), state.businessLine);
+          saved.messages.slice(-20).forEach(function (message) {
+            if (!message || typeof message.content !== 'string') return;
+            if (message.role === 'user') {
+              appendUserMessage(message.content, null);
+            } else if (message.role === 'assistant') {
+              var placeholder = createAssistantPlaceholder();
+              finishAssistant(placeholder, message.content, []);
+            }
+            state.messages.push(createMessageRecord(message.role, message.content));
+          });
+          if (state.messages.length) scrollToBottom(true);
+        } catch (_) {
+          try { sessionStorage.removeItem(STORAGE_KEY); } catch (_) { /* optional */ }
+        }
+      }
+
+      $('depth-segment').addEventListener('click', function (event) {
+        var button = event.target.closest('button[data-value]');
+        if (!button) return;
+        state.depth = button.dataset.value;
+        setSegment($('depth-segment'), state.depth);
+        persistSession();
       });
-      details.appendChild(listWrap);
-      node.appendChild(details);
-    }
-    scrollToBottom();
-  }
 
-  function appendErrorMessage(text) {
-    removeEmptyTip();
-    var list = $('msg-list');
-    var wrap = document.createElement('div');
-    wrap.className = 'msg error';
-    var bubble = document.createElement('div');
-    bubble.className = 'bubble';
-    bubble.textContent = text;
-    wrap.appendChild(bubble);
-    list.appendChild(wrap);
-    scrollToBottom();
-  }
+      $('line-segment').addEventListener('click', function (event) {
+        var button = event.target.closest('button[data-value]');
+        if (!button) return;
+        state.businessLine = button.dataset.value;
+        setSegment($('line-segment'), state.businessLine);
+        persistSession();
+      });
 
-  function showError(text) {
-    appendErrorMessage(text);
-  }
+      Array.prototype.forEach.call(document.querySelectorAll('.suggestion'), function (button) {
+        button.addEventListener('click', function () { sendQuestion(button.dataset.question || ''); });
+      });
 
-  // ---------- Send flow ----------
-  function buildHistoryPayload() {
-    // Use last 5 user/assistant *pairs* (max 10 messages).
-    var msgs = state.history.slice();
-    var pairs = [];
-    var i = msgs.length - 1;
-    while (i >= 1 && pairs.length < MAX_HISTORY_PAIRS) {
-      // Walk back, expecting alternating assistant<-user pairs
-      if (msgs[i].role === 'assistant' && msgs[i - 1] && msgs[i - 1].role === 'user') {
-        pairs.unshift(msgs[i - 1], msgs[i]);
-        i -= 2;
-      } else {
-        i -= 1;
-      }
-    }
-    return pairs;
-  }
+      feed.addEventListener('scroll', function () { state.stickToBottom = isNearBottom(); }, { passive: true });
+      questionInput.addEventListener('input', resizeAndEnable);
+      questionInput.addEventListener('compositionstart', function () { state.composing = true; });
+      questionInput.addEventListener('compositionend', function () { state.composing = false; updateComposer(); });
+      questionInput.addEventListener('keydown', function (event) {
+        if (state.composing || event.isComposing || event.key !== 'Enter' || event.shiftKey) return;
+        var coarsePointer = window.matchMedia('(pointer: coarse)').matches;
+        if (coarsePointer && !event.ctrlKey && !event.metaKey) return;
+        event.preventDefault();
+        sendQuestion();
+      });
 
-  function sendMessage() {
-    if (state.sending) return;
-    var input = $('input-text');
-    var text = input.value.trim();
-    if (!text && !state.imageDataUri) return;
+      composer.addEventListener('submit', function (event) {
+        event.preventDefault();
+        sendQuestion();
+      });
 
-    var img = state.imageDataUri;
-    var sendText = text || (img ? '（请基于截图回答）' : '');
+      attachmentInput.addEventListener('change', function () {
+        handleAttachment(attachmentInput.files && attachmentInput.files[0]);
+      });
+      $('remove-attachment').addEventListener('click', clearAttachment);
+      $('new-chat').addEventListener('click', startNewConversation);
 
-    appendUserMessage(sendText, img);
-    state.history.push({ role: 'user', content: sendText });
-
-    input.value = '';
-    autoGrow(input);
-    clearImage();
-
-    var placeholder = appendAssistantPlaceholder();
-    setSending(true);
-
-    var payload = {
-      question: sendText,
-      category: state.category,
-      history: buildHistoryPayload(),
-      image_base64: img || null
-    };
-
-    fetch(API_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    }).then(function(resp) {
-      if (!resp.ok) {
-        throw new Error('HTTP ' + resp.status);
-      }
-      // Defensive: some endpoints can return 204 (none expected here)
-      if (resp.status === 204) return null;
-      return resp.json();
-    }).then(function(data) {
-      if (!data || data.success === false) {
-        var msg = (data && data.message) || '出错了，请稍后重试';
-        // Replace placeholder bubble with error styling
-        placeholder.classList.remove('assistant');
-        placeholder.classList.add('error');
-        var bubble = placeholder.querySelector('.bubble');
-        bubble.textContent = msg;
-        scrollToBottom();
-        return;
-      }
-      var answer = data.answer || '（无返回内容）';
-      fillAssistantMessage(placeholder, answer, data.sources || []);
-      state.history.push({ role: 'assistant', content: answer });
-    }).catch(function(err) {
-      console.error('chat fetch failed:', err);
-      placeholder.classList.remove('assistant');
-      placeholder.classList.add('error');
-      var bubble = placeholder.querySelector('.bubble');
-      bubble.textContent = '出错了，请稍后重试';
-      scrollToBottom();
-    }).then(function() {
-      setSending(false);
-    });
-  }
-
-  function setSending(v) {
-    state.sending = v;
-    var btn = $('send-btn');
-    btn.disabled = v;
-    btn.textContent = v ? '思考中…' : '发送';
-  }
-
-  // ---------- Boot ----------
-  function boot() {
-    attachLogin();
-    attachSelect();
-    attachChat();
-
-    if (isAuthed()) {
-      var cat = getStoredCategory();
-      if (cat) {
-        state.category = cat;
-        gotoChat();
-      } else {
-        gotoSelect();
-      }
-    } else {
-      show('login');
-    }
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot);
-  } else {
-    boot();
-  }
-})();
-</script>
-
+      restoreSession();
+      updateComposer();
+    }());
+  </script>
 </body>
 </html>

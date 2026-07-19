@@ -7,10 +7,11 @@ Usage:
 """
 
 import asyncio
+import argparse
 import logging
 import re
 from pathlib import Path
-from typing import List, Dict
+from typing import Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,13 @@ MANUAL_SOURCES = [
         "title_prefix": "六扇门生产链操作手册",
         "source": "liushanmen-production-manual.html",
         "type": "chapter_section",
+        "subcategory": "factory",
+    },
+    {
+        "path": "backend/python/food_kb/data/f006_production_sop.md",
+        "title_prefix": "F006 生产全链路测试 SOP",
+        "source": "f006-production-full-chain-sop.md",
+        "type": "markdown",
         "subcategory": "factory",
     },
 ]
@@ -258,8 +266,13 @@ def parse_markdown_to_sections(md_content: str) -> List[Dict[str, str]]:
     return sections
 
 
-async def ingest_all():
-    """Ingest all operation manual sources into the knowledge base."""
+async def ingest_all(source_names: Optional[Set[str]] = None):
+    """Ingest operation-manual sources into the knowledge base.
+
+    ``source_names`` accepts canonical source names from ``MANUAL_SOURCES``.
+    Keeping the filter at this layer allows a production refresh to update one
+    reviewed manual atomically without re-embedding unrelated knowledge.
+    """
     from smartbi.config import get_settings
     from food_kb.services.document_ingester import get_document_ingester, CHUNK_CONFIG
     from food_kb.services.embedding import configure as configure_embedding, get_embedding
@@ -292,7 +305,21 @@ async def ingest_all():
     total_chunks = 0
     total_docs = 0
 
-    for source_info in MANUAL_SOURCES:
+    selected_sources = [
+        source_info
+        for source_info in MANUAL_SOURCES
+        if not source_names or source_info["source"] in source_names
+    ]
+    if source_names:
+        known = {source_info["source"] for source_info in MANUAL_SOURCES}
+        unknown = source_names - known
+        if unknown:
+            await ingester.close()
+            raise ValueError(
+                "Unknown manual source(s): " + ", ".join(sorted(unknown))
+            )
+
+    for source_info in selected_sources:
         file_path = PROJECT_ROOT / source_info["path"]
         if not file_path.exists():
             logger.warning(f"Source file not found: {file_path}")
@@ -416,4 +443,12 @@ if __name__ == "__main__":
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
-    asyncio.run(ingest_all())
+    parser = argparse.ArgumentParser(description="Ingest operation-manual knowledge")
+    parser.add_argument(
+        "--source",
+        action="append",
+        dest="sources",
+        help="Canonical source name to refresh; repeat for multiple sources",
+    )
+    args = parser.parse_args()
+    asyncio.run(ingest_all(set(args.sources) if args.sources else None))
