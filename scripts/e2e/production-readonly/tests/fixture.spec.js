@@ -33,10 +33,12 @@ test.describe('production read-only harness local fixture', () => {
   let server;
   let baseUrl;
   let businessWriteCount;
+  let readonlyResolverCount;
   let loginStatus;
 
   test.beforeEach(async () => {
     businessWriteCount = 0;
+    readonlyResolverCount = 0;
     loginStatus = 200;
     server = http.createServer((request, response) => {
       const url = new URL(request.url, 'http://fixture');
@@ -47,6 +49,22 @@ test.describe('production read-only harness local fixture', () => {
           response.end(JSON.stringify(loginStatus === 200
             ? { success: true, message: 'ok', data: { username: 'f006_admin', factoryId: 'F006', factoryName: '六膳门食品科技', role: 'factory_admin' } }
             : { success: false, message: 'fixture login rejected' }));
+        });
+        return;
+      }
+      if (request.method === 'POST' && url.pathname === '/api/mobile/F006/product-process-workflows/resolve-by-outputs') {
+        readonlyResolverCount += 1;
+        request.resume();
+        request.on('end', () => {
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({
+            success: true,
+            data: {
+              requestedProductTypeIds: ['P1'],
+              resolutionMode: 'SINGLE_OUTPUT',
+              candidates: [],
+            },
+          }));
         });
         return;
       }
@@ -95,6 +113,25 @@ test.describe('production read-only harness local fixture', () => {
     expect(outcome).toBe('blocked');
     expect(guard.blockedMutationAttempts).toHaveLength(1);
     expect(guard.actualBusinessWrites).toBe(0);
+    expect(businessWriteCount).toBe(0);
+    await guard.dispose();
+  });
+
+  test('allows the exact query-only workflow resolver without counting a business write', async ({ page }) => {
+    const guard = await installMutationGuard(page.context(), { scenarioRef: { value: 'fixture-resolver-test' } });
+    await page.goto(`${baseUrl}/dashboard`);
+    const status = await page.evaluate(async () => {
+      const response = await fetch('/api/mobile/F006/product-process-workflows/resolve-by-outputs', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ productTypeIds: ['P1'] }),
+      });
+      return response.status;
+    });
+    expect(status).toBe(200);
+    expect(guard.readonlyPostRequests).toHaveLength(1);
+    expect(guard.actualBusinessWrites).toBe(0);
+    expect(readonlyResolverCount).toBe(1);
     expect(businessWriteCount).toBe(0);
     await guard.dispose();
   });

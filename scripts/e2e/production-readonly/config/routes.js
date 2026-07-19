@@ -9,6 +9,7 @@ const ROUTES = Object.freeze({
   suppliers: '/procurement/suppliers',
   products: '/system/products',
   workflow: '/system/product-processes',
+  productionPlans: '/production/plans',
 });
 
 module.exports = { ROUTES };

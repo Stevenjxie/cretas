@@ -8,3 +8,4 @@ require('./mutation-guard.test');
 require('./result-schema.test');
 require('./mcp-entry.test');
 require('./skill-drift.test');
+require('./production-plan-routing.test');

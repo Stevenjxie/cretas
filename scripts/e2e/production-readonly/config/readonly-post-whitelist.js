@@ -31,6 +31,12 @@ const READONLY_POST_WHITELIST = [
     rationale: 'Query-only list summary for production plan rows.',
   },
   {
+    id: 'workflow-resolve-by-outputs',
+    method: 'POST',
+    path: /^\/api\/mobile\/[^/]+\/product-process-workflows\/resolve-by-outputs\/?$/,
+    rationale: 'Read-only workflow resolution; backend service is @Transactional(readOnly = true).',
+  },
+  {
     id: 'attachment-chip-counts',
     method: 'POST',
     path: /^\/api\/mobile\/[^/]+\/attachments\/batch-3chip-counts\/?$/,
