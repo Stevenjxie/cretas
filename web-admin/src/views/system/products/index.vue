@@ -1519,12 +1519,18 @@ interface AiProductPreviewData {
   suggestedBom: AiProductPreviewBomRow[];
   suggestedSeasoning: AiProductPreviewSeasoningRow[];
   message: string;
+  confirmationExpiresAt: string;
+}
+
+interface AiProductPreviewResponse extends AiProductPreviewData {
+  confirmationToken: string;
 }
 
 const aiProductDialogVisible = ref(false);
 const aiProductPreviewing = ref(false);
 const aiProductCreating = ref(false);
 const aiProductPreview = ref<AiProductPreviewData | null>(null);
+const aiProductConfirmationToken = ref<string | null>(null);
 
 const aiProductForm = reactive({
   productName: '',
@@ -1541,6 +1547,7 @@ function resetAiProductDialog() {
   aiProductForm.customerName = '';
   aiProductForm.inheritFrom = '';
   aiProductPreview.value = null;
+  aiProductConfirmationToken.value = null;
 }
 
 function buildAiProductBody(): Record<string, string> {
@@ -1560,13 +1567,29 @@ async function handleAiProductPreview() {
   if (!factoryId.value) return;
   aiProductPreviewing.value = true;
   aiProductPreview.value = null;
+  aiProductConfirmationToken.value = null;
   try {
-    const res = await post<AiProductPreviewData>(
+    const res = await post<AiProductPreviewResponse>(
       `/${factoryId.value}/ai-product-create/preview`,
       buildAiProductBody()
     );
     if (res.success && res.data) {
-      aiProductPreview.value = res.data;
+      const data = res.data;
+      if (!data.confirmationToken?.trim()) {
+        ElMessage.error('预览未返回有效确认凭证，请重新预览');
+        return;
+      }
+      aiProductConfirmationToken.value = data.confirmationToken;
+      aiProductPreview.value = {
+        status: data.status,
+        productName: data.productName,
+        inheritFromProduct: data.inheritFromProduct,
+        suggestedProcessChain: data.suggestedProcessChain,
+        suggestedBom: data.suggestedBom,
+        suggestedSeasoning: data.suggestedSeasoning,
+        message: data.message,
+        confirmationExpiresAt: data.confirmationExpiresAt,
+      };
     } else {
       ElMessage({ message: res.message || '预览失败', type: 'error', duration: 0, showClose: true });
     }
@@ -1578,10 +1601,21 @@ async function handleAiProductPreview() {
 }
 
 async function handleAiProductCreate() {
-  if (!factoryId.value) return;
+  if (!factoryId.value || !aiProductPreview.value || !aiProductConfirmationToken.value) {
+    ElMessage.warning('请先完成预览并取得有效确认凭证');
+    return;
+  }
   aiProductCreating.value = true;
   try {
-    const res = await post(`/${factoryId.value}/ai-product-create`, buildAiProductBody());
+    const res = await post(
+      `/${factoryId.value}/ai-product-create`,
+      buildAiProductBody(),
+      {
+        headers: {
+          'X-Cretas-Confirmation-Token': aiProductConfirmationToken.value,
+        },
+      },
+    );
     if (res.success) {
       ElMessage.success((res.data as { message?: string })?.message || '产品已创建');
       aiProductDialogVisible.value = false;
@@ -1596,6 +1630,27 @@ async function handleAiProductCreate() {
     aiProductCreating.value = false;
   }
 }
+
+watch(
+  [
+    () => aiProductForm.productName,
+    () => aiProductForm.unit,
+    () => aiProductForm.specification,
+    () => aiProductForm.customerName,
+    () => aiProductForm.inheritFrom,
+  ],
+  () => {
+    aiProductPreview.value = null;
+    aiProductConfirmationToken.value = null;
+  },
+);
+
+watch(aiProductDialogVisible, (visible) => {
+  if (!visible) {
+    aiProductPreview.value = null;
+    aiProductConfirmationToken.value = null;
+  }
+});
 </script>
 
 <template>
@@ -2285,7 +2340,7 @@ async function handleAiProductCreate() {
         <el-button
           type="primary"
           :loading="aiProductCreating"
-          :disabled="!aiProductPreview"
+          :disabled="!aiProductPreview || !aiProductConfirmationToken"
           @click="handleAiProductCreate"
         >
           确认建产品

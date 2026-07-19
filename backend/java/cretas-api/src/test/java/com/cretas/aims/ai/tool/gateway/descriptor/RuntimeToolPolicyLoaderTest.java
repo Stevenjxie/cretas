@@ -21,11 +21,11 @@ class RuntimeToolPolicyLoaderTest {
     private final RuntimeToolPolicyLoader loader = new RuntimeToolPolicyLoader();
 
     @Test
-    void loadsAllFiveCompleteExplicitRuntimePolicies() {
+    void loadsAllSevenCompleteExplicitRuntimePolicies() {
         RuntimeToolPolicyManifest manifest = loader.loadDefault();
 
         assertThat(manifest.schemaVersion()).isEqualTo(1);
-        assertThat(manifest.expectedPolicyCount()).isEqualTo(5);
+        assertThat(manifest.expectedPolicyCount()).isEqualTo(7);
         assertThat(manifest.policies())
                 .extracting(RuntimeToolPolicyEntry::toolName)
                 .containsExactly(
@@ -33,7 +33,9 @@ class RuntimeToolPolicyLoaderTest {
                         "restaurant_dish_delete",
                         "restaurant_owner_action_advisor",
                         "canvas_product_work_process_config",
-                        "canvas_work_process_catalog");
+                        "canvas_work_process_catalog",
+                        "product_create",
+                        "bom_adjust");
         assertThat(manifest.policies()).allSatisfy(policy -> {
             assertThat(policy.provenance()).isEqualTo(DescriptorProvenance.EXPLICIT);
             assertThat(policy.requiredPermissions().isEmpty() && policy.allowedRoles().isEmpty())
@@ -57,6 +59,16 @@ class RuntimeToolPolicyLoaderTest {
             assertThat(policy.supportsPreview()).isTrue();
             assertThat(policy.confirmationPolicy()).isEqualTo(ConfirmationPolicy.NOT_REQUIRED);
             assertThat(policy.idempotencyPolicy()).isEqualTo(IdempotencyPolicy.NOT_REQUIRED);
+            assertThat(policy.allowedSources())
+                    .containsExactly(ToolExecutionSource.HTTP_CONTROLLER);
+        });
+        assertThat(manifest.policies().subList(5, 7)).allSatisfy(policy -> {
+            assertThat(policy.version()).isEqualTo("1.0.0");
+            assertThat(policy.supportsPreview()).isTrue();
+            assertThat(policy.confirmationPolicy())
+                    .isEqualTo(ConfirmationPolicy.REQUIRED_FOR_EXECUTION);
+            assertThat(policy.idempotencyPolicy())
+                    .isEqualTo(IdempotencyPolicy.REQUIRED_FOR_EXECUTION);
             assertThat(policy.allowedSources())
                     .containsExactly(ToolExecutionSource.HTTP_CONTROLLER);
         });

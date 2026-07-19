@@ -3,6 +3,8 @@ package com.cretas.aims.ai.tool.gateway.descriptor;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.impl.restaurant.RestaurantDishDeleteTool;
 import com.cretas.aims.ai.tool.impl.restaurant.RestaurantOwnerActionAdvisorTool;
+import com.cretas.aims.ai.tool.impl.bom.BomAdjustTool;
+import com.cretas.aims.ai.tool.impl.dataop.ProductCreateTool;
 import com.cretas.aims.client.RestaurantOwnerActionClient;
 import com.cretas.aims.ai.tool.impl.user.UserDisableTool;
 import org.junit.jupiter.api.Test;
@@ -12,6 +14,30 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ApprovedToolSourceMetadataTest {
+
+    @Test
+    void fixedWriteToolsPublishExplicitAnyOfPermissionsAndPreviewMetadata() {
+        ProductCreateTool productCreate = new ProductCreateTool();
+        BomAdjustTool bomAdjust = new BomAdjustTool();
+
+        assertThat(productCreate.getActionType()).isEqualTo(ToolExecutor.ActionType.WRITE);
+        assertThat(productCreate.getRiskLevel()).isEqualTo(ToolExecutor.RiskLevel.MEDIUM);
+        assertThat(productCreate.getRequiredPermissions())
+                .containsExactlyInAnyOrder("production:read_write", "system:read_write");
+        assertThat(productCreate.getDomainTags()).containsExactly("product");
+        assertThat(productCreate.supportsPreview()).isTrue();
+        assertThat(productCreate.requiresPermission()).isTrue();
+        assertThat(productCreate.hasPermission("factory_super_admin")).isFalse();
+
+        assertThat(bomAdjust.getActionType()).isEqualTo(ToolExecutor.ActionType.UPDATE);
+        assertThat(bomAdjust.getRiskLevel()).isEqualTo(ToolExecutor.RiskLevel.MEDIUM);
+        assertThat(bomAdjust.getRequiredPermissions()).containsExactlyInAnyOrder(
+                "production:read_write", "rd:read_write", "finance:read_write");
+        assertThat(bomAdjust.getDomainTags()).containsExactly("bom");
+        assertThat(bomAdjust.supportsPreview()).isTrue();
+        assertThat(bomAdjust.requiresPermission()).isTrue();
+        assertThat(bomAdjust.hasPermission("factory_super_admin")).isFalse();
+    }
 
     @Test
     void ownerAdvisorPublishesExplicitAnalyzePermissionAndEgressMetadata() {

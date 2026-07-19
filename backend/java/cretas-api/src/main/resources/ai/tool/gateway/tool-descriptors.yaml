@@ -3,7 +3,7 @@
 # This inventory is an independent source-audit truth and is never sufficient by itself to execute.
 schemaVersion: 1
 expectedToolCount: 593
-expectedLegacyCount: 588
+expectedLegacyCount: 586
 descriptors:
   - toolName: "restaurant_calibration_history"
     implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantCalibrationHistoryTool"
@@ -6612,24 +6612,25 @@ descriptors:
     governanceStatus: REVIEW_REQUIRED
   - toolName: "product_create"
     implementationClass: "com.cretas.aims.ai.tool.impl.dataop.ProductCreateTool"
-    provenance: LEGACY_INFERRED
+    provenance: EXPLICIT
     actionType: WRITE
     riskLevel: MEDIUM
     supportsPreview: true
-    requiresPermission: false
-    requiredPermissions: []
+    requiresPermission: true
+    requiredPermissions: ["production:read_write", "system:read_write"]
+    allowedRoles: []
     version: "1.0.0"
     domainTags: ["product"]
     overrideFlags:
-      actionType: false
-      riskLevel: false
+      actionType: true
+      riskLevel: true
       supportsPreview: true
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
+      requiresPermission: true
+      hasPermission: true
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: APPROVED
   - toolName: "equipment_status_update"
     implementationClass: "com.cretas.aims.ai.tool.impl.equipment.EquipmentStatusUpdateTool"
     provenance: LEGACY_INFERRED
@@ -7472,24 +7473,25 @@ descriptors:
     governanceStatus: REVIEW_REQUIRED
   - toolName: "bom_adjust"
     implementationClass: "com.cretas.aims.ai.tool.impl.bom.BomAdjustTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
+    provenance: EXPLICIT
+    actionType: UPDATE
+    riskLevel: MEDIUM
     supportsPreview: true
-    requiresPermission: false
-    requiredPermissions: []
+    requiresPermission: true
+    requiredPermissions: ["production:read_write", "rd:read_write", "finance:read_write"]
+    allowedRoles: []
     version: "1.0.0"
     domainTags: ["bom"]
     overrideFlags:
-      actionType: false
-      riskLevel: false
+      actionType: true
+      riskLevel: true
       supportsPreview: true
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
+      requiresPermission: true
+      hasPermission: true
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: APPROVED
   - toolName: "alert_rule_update"
     implementationClass: "com.cretas.aims.ai.tool.impl.alerts.AlertRuleUpdateTool"
     provenance: LEGACY_INFERRED

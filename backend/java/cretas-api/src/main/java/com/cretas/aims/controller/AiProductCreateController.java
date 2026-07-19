@@ -1,95 +1,267 @@
 package com.cretas.aims.controller;
 
-import com.cretas.aims.ai.dto.ToolCall;
-import com.cretas.aims.ai.tool.ToolExecutor;
-import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.ai.tool.gateway.AuthenticatedToolPrincipalFactory;
+import com.cretas.aims.ai.tool.gateway.ConfirmationProof;
+import com.cretas.aims.ai.tool.gateway.ExecutionPrincipal;
+import com.cretas.aims.ai.tool.gateway.ToolCommandDigest;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionCommand;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionGateway;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionResult;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionStatus;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.entity.intent.IntentPreviewToken;
 import com.cretas.aims.exception.BusinessException;
-import com.cretas.aims.utils.JwtUtil;
+import com.cretas.aims.service.PreviewTokenService;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
-import java.util.HashMap;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.regex.Pattern;
 
-/**
- * AI 智能建产品 (飞轮衔接) —— 直接调用 {@code product_create} 工具, <b>绕过 NL 意图识别</b>。
- *
- * <p>"说一句话建产品"经 NL 识别会被 MATERIAL_BATCH_CREATE / PRODUCT_UPDATE 等既有意图抢占,
- * 故提供确定性的专用入口: 前端「AI 智能建产品」对话框直接 POST 产品名 → preview 展示飞轮计划
- * (最相似产品 + 继承的工序链 + BOM/调料建议) → 确认 → create 落库 + 继承工序链。
- */
+/** Fixed HTTP entry for governed {@code product_create} preview and execution. */
 @Slf4j
 @RestController
 @RequestMapping("/api/mobile/{factoryId}/ai-product-create")
-@Tag(name = "AI智能建产品", description = "飞轮衔接建产品, 绕过 NL 意图识别的确定性入口")
+@Tag(name = "AI智能建产品", description = "数据飞轮建产品的显式预览与确认入口")
 @RequiredArgsConstructor
 public class AiProductCreateController {
 
-    private final ToolRegistry toolRegistry;
-    private final JwtUtil jwtUtil;
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final String TOOL_NAME = "product_create";
+    private static final String DESCRIPTOR_VERSION = "1.0.0";
+    private static final int CONFIRMATION_TTL_SECONDS = 300;
+    private static final Pattern SAFE_FACTORY_ID =
+            Pattern.compile("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$");
+    private static final Pattern SAFE_USER_ID = Pattern.compile("^[0-9]{1,20}$");
+    private static final Pattern SAFE_ROLE = Pattern.compile("^[a-z0-9_]{1,64}$");
+
+    private final ToolExecutionGateway toolExecutionGateway;
+    private final AuthenticatedToolPrincipalFactory principalFactory;
+    private final PreviewTokenService previewTokenService;
+    private final ObjectMapper objectMapper;
 
     @PostMapping("/preview")
-    @Operation(summary = "预览飞轮建产品计划(最相似产品 + 继承工序链 + BOM/调料建议), 只读不落库")
-    public ApiResponse<Object> preview(@PathVariable String factoryId, @RequestBody Map<String, Object> body,
-                                       HttpServletRequest request) {
-        return invoke(factoryId, body, true, request);
+    @Operation(summary = "预览建产品计划，不写入业务数据")
+    public ApiResponse<Object> preview(
+            @PathVariable String factoryId,
+            @RequestBody Map<String, Object> body,
+            HttpServletRequest request) {
+        AuthenticatedIdentity identity = authenticatedIdentity(factoryId, request);
+        ToolExecutionResult result = executeGateway(
+                body, ToolExecutionMode.PREVIEW, identity, Optional.empty());
+        Map<String, Object> data = successfulPayload(result, "AI product preview failed");
+
+        IntentPreviewToken token = previewTokenService.createBoundToken(
+                new PreviewTokenService.BoundTokenRequest(
+                        factoryId,
+                        identity.userId(),
+                        identity.username(),
+                        "AI_PRODUCT_CREATE",
+                        "AI product creation",
+                        TOOL_NAME,
+                        DESCRIPTOR_VERSION,
+                        ToolExecutionMode.EXECUTE,
+                        "PRODUCT_TYPE",
+                        text(body.get("productName")),
+                        "CREATE",
+                        body,
+                        Map.of(),
+                        body,
+                        CONFIRMATION_TTL_SECONDS));
+        data.put("confirmationToken", token.getToken());
+        data.put("confirmationExpiresAt", token.getExpiresAt().toString());
+        return ApiResponse.success(data);
     }
 
     @RequirePermission({"production:read_write", "system:read_write"})
     @PostMapping
-    @Operation(summary = "执行: 建产品 + 飞轮自动继承相似产品工序链(大框架)")
-    public ApiResponse<Object> create(@PathVariable String factoryId, @RequestBody Map<String, Object> body,
-                                      HttpServletRequest request) {
-        return invoke(factoryId, body, false, request);
+    @Operation(summary = "确认并执行建产品计划")
+    public ApiResponse<Object> create(
+            @PathVariable String factoryId,
+            @RequestHeader("X-Cretas-Confirmation-Token") String confirmationToken,
+            @RequestBody Map<String, Object> body,
+            HttpServletRequest request) {
+        AuthenticatedIdentity identity = authenticatedIdentity(factoryId, request);
+        IntentPreviewToken token = requireBoundToken(
+                confirmationToken, factoryId, body, identity.userId());
+        ConfirmationProof proof = new ConfirmationProof(
+                token.getToken(),
+                token.getCommandDigest(),
+                token.getExpiresAt().atZone(ZoneId.systemDefault()).toInstant());
+        String idempotencyKey = "fixed-http-"
+                + ToolCommandDigest.persistentSecretFingerprint(token.getToken());
+        ToolExecutionResult result = executeGateway(
+                body,
+                ToolExecutionMode.EXECUTE,
+                identity,
+                Optional.of(new ExecutionEvidence(idempotencyKey, proof)));
+        return ApiResponse.success(successfulPayload(result, "AI product creation failed"));
     }
 
-    private ApiResponse<Object> invoke(String factoryId, Map<String, Object> body, boolean preview,
-                                       HttpServletRequest request) {
-        ToolExecutor executor = toolRegistry.getExecutor("product_create")
-                .orElseThrow(() -> new BusinessException(500, "product_create 工具未注册"));
+    private ToolExecutionResult executeGateway(
+            Map<String, Object> body,
+            ToolExecutionMode mode,
+            AuthenticatedIdentity identity,
+            Optional<ExecutionEvidence> evidence) {
         try {
-            ToolCall toolCall = ToolCall.of(
-                    "ai-create-" + System.currentTimeMillis(),
-                    "product_create",
-                    MAPPER.writeValueAsString(body));
-            Map<String, Object> context = new HashMap<>();
-            context.put("factoryId", factoryId);
-            // AbstractTool.validateContext 要求 context 同时含 factoryId + userId
-            context.put("userId", extractUserId(request));
-            String result = preview
-                    ? executor.preview(toolCall, context)
-                    : executor.execute(toolCall, context);
-            @SuppressWarnings("unchecked")
-            Map<String, Object> parsed = MAPPER.readValue(result, Map.class);
-            // 工具 buildSuccessResult 再包一层 {data:{实际结果}}; 解包内层, 让前端读 response.data.* 即可
-            Object inner = parsed.get("data");
-            return ApiResponse.success(inner instanceof Map ? inner : parsed);
-        } catch (BusinessException be) {
-            throw be;
-        } catch (Exception e) {
-            log.error("[AI-PRODUCT-CREATE] {} 失败: {}", preview ? "preview" : "create", e.getMessage(), e);
-            throw new BusinessException(500, "AI 建产品失败, 请稍后重试");
+            String callId = "ai-create-" + UUID.randomUUID();
+            ToolExecutionCommand command = new ToolExecutionCommand(
+                    callId,
+                    callId,
+                    callId + "-trace",
+                    TOOL_NAME,
+                    DESCRIPTOR_VERSION,
+                    objectMapper.valueToTree(body),
+                    identity.principal(),
+                    ToolExecutionSource.HTTP_CONTROLLER,
+                    mode,
+                    evidence.map(ExecutionEvidence::idempotencyKey),
+                    evidence.map(ExecutionEvidence::confirmationProof),
+                    Optional.empty(),
+                    Instant.now().plusSeconds(30));
+            return toolExecutionGateway.execute(command);
+        } catch (BusinessException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            log.error("[AI-PRODUCT-CREATE] Gateway {} failed: {}",
+                    mode, exception.getMessage(), exception);
+            throw new BusinessException(500, "AI 建产品失败，请稍后重试");
         }
     }
 
-    /** 从 Authorization 头解析 userId (validateContext 必需; 解析失败返 null 不阻断只读 preview)。 */
-    private Long extractUserId(HttpServletRequest request) {
-        String auth = request.getHeader("Authorization");
-        if (auth != null && auth.startsWith("Bearer ")) {
-            try {
-                return jwtUtil.getUserIdFromToken(auth.substring(7));
-            } catch (Exception ignore) {
-                return null;
-            }
+    private AuthenticatedIdentity authenticatedIdentity(
+            String factoryId,
+            HttpServletRequest request) {
+        String trustedFactoryId = stringAttribute(request, "factoryId");
+        String trustedUserId = stringAttribute(request, "userId");
+        String trustedRole = stringAttribute(request, "role");
+        if (trustedFactoryId == null || trustedUserId == null || trustedRole == null) {
+            throw new BusinessException(401, "Trusted authentication context is required");
         }
-        return null;
+        if (!factoryId.equals(trustedFactoryId)) {
+            throw new BusinessException(403,
+                    "Authenticated tenant does not match request tenant");
+        }
+        String normalizedRole = trustedRole.toLowerCase(Locale.ROOT);
+        if (!SAFE_FACTORY_ID.matcher(factoryId).matches()
+                || !SAFE_USER_ID.matcher(trustedUserId).matches()
+                || !SAFE_ROLE.matcher(normalizedRole).matches()) {
+            throw new BusinessException(403, "Trusted authentication context is invalid");
+        }
+        long parsedUserId;
+        try {
+            parsedUserId = Long.parseLong(trustedUserId);
+        } catch (NumberFormatException invalidUserId) {
+            throw new BusinessException(403, "Trusted authentication context is invalid");
+        }
+        if (parsedUserId <= 0) {
+            throw new BusinessException(403, "Trusted authentication context is invalid");
+        }
+        ExecutionPrincipal principal = principalFactory.create(
+                factoryId, parsedUserId, normalizedRole);
+        return new AuthenticatedIdentity(
+                parsedUserId, boundedUsername(stringAttribute(request, "username")), principal);
+    }
+
+    private IntentPreviewToken requireBoundToken(
+            String proofToken,
+            String factoryId,
+            Map<String, Object> body,
+            Long userId) {
+        if (proofToken == null || proofToken.isBlank() || proofToken.length() > 2048) {
+            throw confirmationRejected();
+        }
+        IntentPreviewToken token = previewTokenService.validateTokenForUser(proofToken, userId)
+                .filter(IntentPreviewToken::isBoundForExecution)
+                .filter(candidate -> userId.equals(candidate.getUserId()))
+                .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
+                .filter(candidate -> factoryId.equals(candidate.getTenantId()))
+                .filter(candidate -> TOOL_NAME.equals(candidate.getToolName()))
+                .filter(candidate -> DESCRIPTOR_VERSION.equals(candidate.getDescriptorVersion()))
+                .filter(candidate -> candidate.getExecutionMode() == ToolExecutionMode.EXECUTE)
+                .orElseThrow(this::confirmationRejected);
+        String expectedDigest = ToolCommandDigest.commandDigest(
+                factoryId,
+                userId,
+                TOOL_NAME,
+                DESCRIPTOR_VERSION,
+                ToolExecutionMode.EXECUTE,
+                objectMapper.valueToTree(body));
+        if (!expectedDigest.equals(token.getCommandDigest())) {
+            throw confirmationRejected();
+        }
+        return token;
+    }
+
+    private BusinessException confirmationRejected() {
+        return new BusinessException(
+                409, "Preview confirmation is missing, expired, or no longer matches")
+                .withCode("INVALID_CONFIRMATION_PROOF")
+                .withSeverity("BLOCKING");
+    }
+
+    private Map<String, Object> successfulPayload(
+            ToolExecutionResult result,
+            String fallbackMessage) {
+        if (result.status() != ToolExecutionStatus.SUCCEEDED || !result.payload().isObject()) {
+            String message = result.payload().path("message").asText(result.message());
+            int code = result.status() == ToolExecutionStatus.DENIED ? 403 : 400;
+            throw new BusinessException(code, message.isBlank() ? fallbackMessage : message);
+        }
+        Map<String, Object> payload = objectMapper.convertValue(
+                result.payload(), new TypeReference<Map<String, Object>>() {});
+        Object inner = payload.get("data");
+        if (inner instanceof Map<?, ?> innerMap) {
+            return new LinkedHashMap<>(objectMapper.convertValue(
+                    innerMap, new TypeReference<Map<String, Object>>() {}));
+        }
+        return new LinkedHashMap<>(payload);
+    }
+
+    private String text(Object value) {
+        return value == null ? null : value.toString();
+    }
+
+    private String stringAttribute(HttpServletRequest request, String name) {
+        Object value = request.getAttribute(name);
+        if (value == null) {
+            return null;
+        }
+        String stringValue = String.valueOf(value).trim();
+        return stringValue.isEmpty() ? null : stringValue;
+    }
+
+    private String boundedUsername(String username) {
+        return username != null && username.length() <= 100 ? username : null;
+    }
+
+    private record AuthenticatedIdentity(
+            Long userId,
+            String username,
+            ExecutionPrincipal principal) {
+    }
+
+    private record ExecutionEvidence(
+            String idempotencyKey,
+            ConfirmationProof confirmationProof) {
     }
 }

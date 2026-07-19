@@ -135,26 +135,26 @@ class ToolDescriptorInventoryDriftTest {
                     "com.cretas.aims.ai.tool.impl.workprocess.ProductProcessWorkflowConfigTool");
             assertThat(tool.toolName()).isEqualTo("canvas_product_process_workflow_config");
         });
-        assertThat(countOverride(tools, flags -> flags.actionType())).isEqualTo(51);
-        assertThat(countOverride(tools, flags -> flags.riskLevel())).isEqualTo(34);
+        assertThat(countOverride(tools, flags -> flags.actionType())).isEqualTo(53);
+        assertThat(countOverride(tools, flags -> flags.riskLevel())).isEqualTo(36);
         assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(42);
-        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(45);
-        assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(34);
-        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(5);
-        assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(5);
-        assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(19);
+        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(47);
+        assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(36);
+        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(7);
+        assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(7);
+        assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(21);
 
         assertThat(countActions(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.ActionType.READ, 450L,
+                ToolExecutor.ActionType.READ, 449L,
                 ToolExecutor.ActionType.WRITE, 64L,
-                ToolExecutor.ActionType.UPDATE, 27L,
+                ToolExecutor.ActionType.UPDATE, 28L,
                 ToolExecutor.ActionType.DELETE, 11L,
                 ToolExecutor.ActionType.ANALYZE, 19L,
                 ToolExecutor.ActionType.GENERATE, 15L,
                 ToolExecutor.ActionType.NOTIFY, 7L));
         assertThat(countRisks(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.RiskLevel.LOW, 515L,
-                ToolExecutor.RiskLevel.MEDIUM, 73L,
+                ToolExecutor.RiskLevel.LOW, 514L,
+                ToolExecutor.RiskLevel.MEDIUM, 74L,
                 ToolExecutor.RiskLevel.HIGH, 5L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
     }
