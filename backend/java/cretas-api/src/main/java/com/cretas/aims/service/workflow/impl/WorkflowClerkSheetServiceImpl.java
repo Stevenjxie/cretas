@@ -57,14 +57,13 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
     @Override
     @Transactional(readOnly = true)
     public WorkflowClerkSheetConfigDTO getWorkflowSheetConfig(String factoryId, String planId) {
-        ProductionBatch workflowBatch = findWorkflowBatch(factoryId, planId);
-        if (workflowBatch == null) {
+        WorkflowRuntimeSelection runtimeSelection = findWorkflowRuntime(factoryId, planId);
+        if (runtimeSelection == null) {
             return null;
         }
 
-        ProductionWorkflowInstance instance = instanceRepository
-                .findByFactoryIdAndProductionBatchId(factoryId, workflowBatch.getId())
-                .orElse(null);
+        ProductionBatch workflowBatch = runtimeSelection.batch();
+        ProductionWorkflowInstance instance = runtimeSelection.instance();
         if (instance == null) {
             throw new BusinessException(409, "生产批次已锁定 Workflow，但运行时快照尚未生成")
                     .withCode("WORKFLOW_RUNTIME_NOT_MATERIALIZED")
@@ -104,21 +103,54 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                 .build();
     }
 
-    private ProductionBatch findWorkflowBatch(String factoryId, String planId) {
+    private WorkflowRuntimeSelection findWorkflowRuntime(String factoryId, String planId) {
         List<ProductionBatch> workflowBatches = productionBatchRepository
                 .findByFactoryIdAndProductionPlanId(factoryId, planId).stream()
                 .filter(batch -> batch.getWorkflowSelectionMode()
                         == ProductionBatch.WorkflowSelectionMode.WORKFLOW)
                 .toList();
-        if (workflowBatches.size() > 1) {
+        if (workflowBatches.isEmpty()) {
+            return null;
+        }
+
+        long distinctWorkflowPins = workflowBatches.stream()
+                .map(batch -> new WorkflowPin(
+                        batch.getSelectedWorkflowId(), batch.getSelectedWorkflowVersion()))
+                .distinct()
+                .count();
+        if (distinctWorkflowPins > 1) {
             throw new BusinessException(409, "该生产计划关联了多个 Workflow 批次，无法唯一确定报工快照")
                     .withCode("WORKFLOW_RUNTIME_BATCH_AMBIGUOUS")
                     .withHint("请从具体生产批次进入逐道报工，或清理重复批次")
                     .withSeverity("BLOCKING")
                     .withHintTarget("Workflow");
         }
-        return workflowBatches.isEmpty() ? null : workflowBatches.get(0);
+
+        List<WorkflowRuntimeSelection> materializedRuntimes = workflowBatches.stream()
+                .map(batch -> new WorkflowRuntimeSelection(
+                        batch,
+                        instanceRepository
+                                .findByFactoryIdAndProductionBatchId(factoryId, batch.getId())
+                                .orElse(null)))
+                .filter(selection -> selection.instance() != null)
+                .toList();
+        if (materializedRuntimes.size() > 1) {
+            throw new BusinessException(409, "该生产计划关联了多个 Workflow 运行时快照，无法唯一确定报工快照")
+                    .withCode("WORKFLOW_RUNTIME_BATCH_AMBIGUOUS")
+                    .withHint("请从具体生产批次进入逐道报工，或清理重复运行时")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("Workflow");
+        }
+        if (materializedRuntimes.size() == 1) {
+            return materializedRuntimes.getFirst();
+        }
+        return new WorkflowRuntimeSelection(workflowBatches.getFirst(), null);
     }
+
+    private record WorkflowPin(Long workflowId, Integer workflowVersion) {}
+
+    private record WorkflowRuntimeSelection(
+            ProductionBatch batch, ProductionWorkflowInstance instance) {}
 
     private WorkflowClerkSheetConfigDTO.ProcessDescriptor buildDescriptor(
             String factoryId, WorkProcessTask task, List<WorkflowTaskPort> taskPorts) {

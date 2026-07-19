@@ -97,13 +97,44 @@ class WorkflowClerkSheetServiceTest {
     void rejectsAmbiguousMultipleWorkflowBatches() {
         when(productionBatchRepository.findByFactoryIdAndProductionPlanId("F006", "PLAN-1"))
                 .thenReturn(List.of(
-                        batch(901L, ProductionBatch.WorkflowSelectionMode.WORKFLOW),
-                        batch(902L, ProductionBatch.WorkflowSelectionMode.WORKFLOW)));
+                        batch(901L, ProductionBatch.WorkflowSelectionMode.WORKFLOW, 44L, 3),
+                        batch(902L, ProductionBatch.WorkflowSelectionMode.WORKFLOW, 45L, 1)));
 
         BusinessException error = assertThrows(BusinessException.class,
                 () -> service.getWorkflowSheetConfig("F006", "PLAN-1"));
 
         assertEquals("WORKFLOW_RUNTIME_BATCH_AMBIGUOUS", error.getErrorCode());
+    }
+
+    @Test
+    void jointOutputBatchesWithSameWorkflowPinReuseTheOnlyMaterializedRuntime() {
+        ProductionBatch primaryBatch = batch(
+                901L, ProductionBatch.WorkflowSelectionMode.WORKFLOW, 44L, 3);
+        ProductionBatch jointOutputBatch = batch(
+                902L, ProductionBatch.WorkflowSelectionMode.WORKFLOW, 44L, 3);
+        ProductionWorkflowInstance instance = instance(501L);
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId("F006", "PLAN-1"))
+                .thenReturn(List.of(primaryBatch, jointOutputBatch));
+        when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
+                .thenReturn(Optional.of(instance));
+        when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 902L))
+                .thenReturn(Optional.empty());
+
+        WorkProcessTask task = task(801L, 501L, "joint-output", "PACK", 1, "kg");
+        when(taskRepository.findByFactoryIdAndWorkflowInstanceIdOrderByProcessOrderAsc("F006", 501L))
+                .thenReturn(List.of(task));
+        WorkflowTaskPort output = port(
+                801L, "joint-output-g", WorkflowTaskPort.Direction.OUTPUT,
+                1, "FINISHED_GOOD", "PT-G", "kg", true);
+        when(portRepository.findByFactoryIdAndWorkflowInstanceId("F006", 501L))
+                .thenReturn(List.of(output));
+
+        WorkflowClerkSheetConfigDTO result = service.getWorkflowSheetConfig("F006", "PLAN-1");
+
+        assertEquals(901L, result.getWorkflowBatchId());
+        assertEquals(501L, result.getWorkflowInstanceId());
+        assertEquals("joint-output-g", result.getProcesses().getFirst()
+                .getOutputs().getFirst().getWorkflowPortId());
     }
 
     @Test
@@ -353,11 +384,20 @@ class WorkflowClerkSheetServiceTest {
     }
 
     private ProductionBatch batch(Long id, ProductionBatch.WorkflowSelectionMode mode) {
+        return batch(id, mode, mode == ProductionBatch.WorkflowSelectionMode.WORKFLOW ? 44L : null,
+                mode == ProductionBatch.WorkflowSelectionMode.WORKFLOW ? 3 : null);
+    }
+
+    private ProductionBatch batch(
+            Long id, ProductionBatch.WorkflowSelectionMode mode,
+            Long selectedWorkflowId, Integer selectedWorkflowVersion) {
         ProductionBatch batch = new ProductionBatch();
         batch.setId(id);
         batch.setFactoryId("F006");
         batch.setProductTypeId("PT-PIG");
         batch.setWorkflowSelectionMode(mode);
+        batch.setSelectedWorkflowId(selectedWorkflowId);
+        batch.setSelectedWorkflowVersion(selectedWorkflowVersion);
         return batch;
     }
 
