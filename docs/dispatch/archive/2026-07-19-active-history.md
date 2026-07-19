@@ -104,3 +104,21 @@
 - GitHub 门禁：PR 显示 `MERGEABLE/CLEAN`，未报告 required checks；本次仅测试脚本与 dispatch 文档，不触发 JPA Repository 查询启动门禁。
 - 状态边界：脚本和验证记录已合并；没有部署、迁移、生产代码变更或服务重启。F006 测试数据按用户要求保留，不迁移、不自动清理。
 - Scope 锁：已释放。
+
+### `CRETAS-WORKFLOW-TOPOLOGY-LABELS-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- Base SHA：`ca31c937fb3fadc20a1a1140822d96726649558a`
+- 实现 commits：`e201346fb2a00263c3bf3ee723298156aaa34494`、`8a7f07bbb72ffcb0a7882912a6db23ce1dc1b72c`
+- PR：[#1483](https://github.com/Stevenjxie/cretas/pull/1483)
+- `main` squash merge commit：`0d214e9f785c01992bb579b24710249fd9b9396e`
+- 范围：新增只读 `logicalRootInputCount`，复用 EXACTLY_ONE 可替代原料组折叠规则，令生产计划 Workflow 候选准确区分 1→1、多→1、1→多和多→多；旧接口缺少逻辑投入数时 fail-safe 显示“投入关系待确认”，不误判为 1→1。
+- 数据边界：未修改数据库枚举、Entity、Repository、迁移、Workflow 持久化或历史数据；F006 既有拓扑矩阵测试数据继续保留。
+- 本地验收：Web `productionPlanWorkflowResolution.spec.ts` 11/11 通过；唯一 Maven release lifecycle 中 `WorkflowTopologyClassifierTest,ProductWorkflowUnifiedResolutionTest` 15/15 通过；`git diff --check` 通过。
+- 可信制品：后端 tree `afd2cc0ad140be92863bb22ebc8a6eead54a2e50`，JAR SHA-256 `8a33bbc026d701bd2f13b630fe83a3e01117ed18778bff59c119022fd1d5a260`；Web tree `94103967c1275d2d351a898cd5c6f9d673a53e58`，archive SHA-256 `0c7a8c80b7e91cd61e489ed49bbd60b41172bb8240fdad7ad1d23eb2b93c0a53`。
+- 生产部署：后端版本 `v20260719_143735`，JAR MD5 `bc5d7fcd2a5ad6338e7442eea06c460e`，由 green/10020 切换至 blue/10010，5/5 稳定观察通过；Web 原子发布后本地、服务器、网关和公网 index SHA-256 均为 `3b8a39b0e2c4aa81bbfa7968141e4522182694c62300bc6e7518f881abe51c9c`。
+- F006 生产只读 UI 验收：既有多→1 Workflow `97@v1` 的解析结果为 `SINGLE_OUTPUT_PRODUCT`、`logicalRootInputCount=2`、`rootInputCount=2`、`terminalCount=1`，页面显示“多→1 · 多投入单产出”；未提交新生产计划，本次验收业务写入为 0，浏览器 console errors 为 0。
+- 验收证据：`.playwright-mcp/f006-topology-label-many-to-one-prod.png`、`.playwright-mcp/f006-topology-label-many-to-one-response.json`、`.playwright-mcp/f006-topology-label-console-errors.txt`；后端结构化发布报告为 `C:\Users\Steve\.cache\cretas\deploy-reports\backend-1784443042-13706.json`。
+- 并发边界：本次生产发布锁定 commit `0d214e9f785c01992bb579b24710249fd9b9396e`；发布后 `origin/main` 已因无关 PR #1484/#1485 前进至 `4946662c05b4b5cab37cd36be6c5afa82eed759f`，未把这些后续变更夹带部署。测试环境 10011 当时不健康，本任务未触碰。
+- Scope 锁：已释放。
