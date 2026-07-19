@@ -28,6 +28,14 @@ COMPROMISED_FINGERPRINTS = {
     "33b27390b2be": "exposed aliyun root access-key secret",
     "eb6c0582c264": "exposed baota panel API key",
     "36ae9dae6a54": "committed legacy JWT",
+    "1f19573f53c9": "retired Cretas database password",
+    "1b2b4112e944": "retired SmartBI database password",
+    "37d91a827199": "retired production JWT secret",
+    "18d2a9c4fd84": "exposed Mall WeChat MP secret",
+    "fc11d6f28e59": "exposed Mall WeChat MP token",
+    "d4fc1db66544": "exposed Mall WeChat MP AES key",
+    "dd7a2c20cf82": "exposed Mall WeChat MA secret",
+    "7799e51458c8": "exposed Mall WeChat merchant key",
 }
 
 # These disabled Superpowers documents are immutable under repository policy.
@@ -123,11 +131,16 @@ def scan_content(path: str, content: bytes) -> list[Finding]:
     allow_revoked = path.replace("\\", "/") in LEGACY_REVOKED_ALLOWLIST
 
     for match in TOKEN_RE.finditer(content):
-        fp = fingerprint(match.group(0))
-        if fp in COMPROMISED_FINGERPRINTS and not allow_revoked:
-            findings.add(
-                Finding(path, line_number(content, match.start()), "compromised-fingerprint", fp)
-            )
+        token = match.group(0)
+        candidates = [token]
+        if b"=" in token:
+            candidates.append(token.split(b"=", 1)[1])
+        for candidate in candidates:
+            fp = fingerprint(candidate)
+            if fp in COMPROMISED_FINGERPRINTS and not allow_revoked:
+                findings.add(
+                    Finding(path, line_number(content, match.start()), "compromised-fingerprint", fp)
+                )
 
     text = content.decode("utf-8", errors="ignore")
     for rule, pattern in (

@@ -36,7 +36,7 @@ F006 测试群 @ Cretas 机器人 试一下就行.
 
 ```
 DINGTALK_APP_KEY=dingxxxxxxxxxxxxxxxx
-DINGTALK_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxx
+DINGTALK_APP_SECRET=<REDACTED_REVOKED_CREDENTIAL>
 DINGTALK_CORP_ID=dingxxxxxxxxxxxxxxxx
 DINGTALK_OUTBOUND_WEBHOOK_URL=https://oapi.dingtalk.com/robot/send?access_token=xxxxxxxxxxxx
 DINGTALK_OUTBOUND_WEBHOOK_SECRET=SECxxxxxxxxxxxxxxxxxxxxxxxxxx

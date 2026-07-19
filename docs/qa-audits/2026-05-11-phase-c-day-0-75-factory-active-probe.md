@@ -345,7 +345,7 @@ ssh root@47.100.235.168 'echo "139.196.165.140 api.cretaceousfuture.com  # phase
 
 # 4. Run probe
 ssh root@47.100.235.168 'FACTORIES=$(awk "!/^#/ && NF" /tmp/customer-active-74.txt | tr "\n" "," | sed "s/,$//") && \
-  JWT_SECRET=cretas-jwt-secret-key-2026 \
+  JWT_SECRET=<REDACTED_REVOKED_CREDENTIAL> \
     bash /tmp/record-batch.sh \
       --base-url https://api.cretaceousfuture.com \
       --factories "$FACTORIES" \
@@ -354,7 +354,7 @@ ssh root@47.100.235.168 'FACTORIES=$(awk "!/^#/ && NF" /tmp/customer-active-74.t
       --output /tmp/phase-c-probe/phase-c-day-N-probe-$(date +%Y%m%d).ndjson'
 
 # 5. (Optional) Re-sample bodies for shape verification
-ssh root@47.100.235.168 'JWT_SECRET=cretas-jwt-secret-key-2026 \
+ssh root@47.100.235.168 'JWT_SECRET=<REDACTED_REVOKED_CREDENTIAL> \
   python3 /tmp/sample-bodies.py \
     --base-url https://api.cretaceousfuture.com \
     --factories "F002,F003,F004,FOOD_3101_034,FOOD_3101_035,FOOD_3101_036,R_YHDJ_DEMO,R_YJJ_DEMO,TEST_0000_001" \
