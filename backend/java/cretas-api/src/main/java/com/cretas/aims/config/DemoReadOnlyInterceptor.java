@@ -15,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * 演示租户只读锁.
@@ -55,6 +56,16 @@ public class DemoReadOnlyInterceptor implements HandlerInterceptor {
             "/search"        // 搜索
     );
 
+    /**
+     * Restaurant Agent 的 start/cancel 仅写隔离的 AI run/event 台账，不执行 ERP
+     * 业务写入。使用完整路径匹配，避免把未来新增的 restaurant-agent 写接口
+     * 一并放出演示租户只读锁。
+     */
+    private static final Pattern READ_ONLY_RESTAURANT_AGENT_POST = Pattern.compile(
+            "^/api/mobile/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}/restaurant-agent/runs"
+                    + "(?:/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+                    + "-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/cancel)?$");
+
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler)
             throws IOException {
@@ -78,6 +89,9 @@ public class DemoReadOnlyInterceptor implements HandlerInterceptor {
         // 写方法: PUT/PATCH/DELETE 一律拦; POST 放行读取/分析类.
         String uri = request.getRequestURI();
         if ("POST".equals(method)) {
+            if (READ_ONLY_RESTAURANT_AGENT_POST.matcher(uri).matches()) {
+                return true;
+            }
             for (String allow : READ_POST_ALLOW) {
                 if (uri.contains(allow)) {
                     return true;
