@@ -55,6 +55,42 @@ class ToolDescriptorPolicyResolverTest {
     }
 
     @Test
+    void multiPermissionPoliciesAcceptAnyCurrentDbPermissionAndFailClosedWithoutAMatch() {
+        ToolExecutionCommand productWithSystemPermission = command(
+                "product_create",
+                "1.0.0",
+                ToolExecutionSource.HTTP_CONTROLLER,
+                "FACTORY",
+                "permission_admin",
+                Set.of("system:read_write"));
+        assertThat(resolver.resolve(
+                productWithSystemPermission,
+                productWithSystemPermission.principal())).isPresent();
+
+        ToolExecutionCommand bomWithFinancePermission = command(
+                "bom_adjust",
+                "1.0.0",
+                ToolExecutionSource.HTTP_CONTROLLER,
+                "FACTORY",
+                "finance_manager",
+                Set.of("finance:read_write"));
+        assertThat(resolver.resolve(
+                bomWithFinancePermission,
+                bomWithFinancePermission.principal())).isPresent();
+
+        ToolExecutionCommand bomWithoutAnyRequiredPermission = command(
+                "bom_adjust",
+                "1.0.0",
+                ToolExecutionSource.HTTP_CONTROLLER,
+                "FACTORY",
+                "finance_manager",
+                Set.of("finance:read"));
+        assertThat(resolver.resolve(
+                bomWithoutAnyRequiredPermission,
+                bomWithoutAnyRequiredPermission.principal())).isEmpty();
+    }
+
+    @Test
     void neverFallsBackForLegacyReviewBlockedUnknownOrNullCommands() {
         assertDenied(command("restaurant_sales_overview", "1.0.0",
                 ToolExecutionSource.AI_CHAT, Set.of("restaurant:read_write")));

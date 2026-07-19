@@ -1,24 +1,14 @@
 package com.cretas.aims.ai.tool.impl.bom;
 
-import com.cretas.aims.service.BomService;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.mock;
 
 class BomAdjustToolGovernanceTest {
 
-    private BomAdjustTool tool;
-
-    @BeforeEach
-    void setUp() {
-        tool = new BomAdjustTool();
-        ReflectionTestUtils.setField(tool, "bomService", mock(BomService.class));
-    }
+    private final BomAdjustTool tool = new BomAdjustTool();
 
     @Test
     void yieldAdjustmentIsRejectedAsSystemManaged() {

@@ -58,11 +58,24 @@ public final class ToolDescriptorPolicyResolver {
                         command.expectedDescriptorVersion()))
                 .filter(descriptor -> descriptor.allowedSources().contains(command.source()))
                 .filter(descriptor -> descriptor.allowedBusinessTypes().contains(currentBusinessType))
-                .filter(descriptor -> trustedCurrentPrincipal.permissions()
-                        .containsAll(descriptor.requiredPermissions()))
+                .filter(descriptor -> hasRequiredPermission(
+                        descriptor, trustedCurrentPrincipal))
                 .filter(descriptor -> descriptor.allowedRoles().isEmpty()
                         || descriptor.allowedRoles().stream()
                         .anyMatch(trustedCurrentPrincipal.roles()::contains));
+    }
+
+    /**
+     * ToolExecutor's permission contract is any-of (the same requireAll=false semantics used by
+     * controller @RequirePermission). An empty permission set remains valid for an explicitly
+     * role-governed descriptor; otherwise at least one permission must come from current DB truth.
+     */
+    private static boolean hasRequiredPermission(
+            ToolDescriptor descriptor,
+            ExecutionPrincipal principal) {
+        return descriptor.requiredPermissions().isEmpty()
+                || descriptor.requiredPermissions().stream()
+                .anyMatch(principal.permissions()::contains);
     }
 
     private static boolean sameAuthenticatedIdentity(

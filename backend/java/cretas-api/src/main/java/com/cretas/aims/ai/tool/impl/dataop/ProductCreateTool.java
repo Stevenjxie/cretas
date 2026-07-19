@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 产品创建工具 (飞轮衔接) —— "说一句话建产品"。
@@ -81,6 +82,41 @@ public class ProductCreateTool extends AbstractBusinessTool {
     @Override
     public boolean supportsPreview() {
         return true;
+    }
+
+    @Override
+    public ActionType getActionType() {
+        return ActionType.WRITE;
+    }
+
+    @Override
+    public RiskLevel getRiskLevel() {
+        return RiskLevel.MEDIUM;
+    }
+
+    @Override
+    public boolean requiresPermission() {
+        return true;
+    }
+
+    @Override
+    public boolean hasPermission(String userRole) {
+        return false;
+    }
+
+    @Override
+    public Set<String> getRequiredPermissions() {
+        return Set.of("production:read_write", "system:read_write");
+    }
+
+    @Override
+    public String getVersion() {
+        return "1.0.0";
+    }
+
+    @Override
+    public Set<String> getDomainTags() {
+        return Set.of("product");
     }
 
     @Override

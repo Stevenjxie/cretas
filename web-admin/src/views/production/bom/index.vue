@@ -1884,6 +1884,7 @@ interface AdjustSeasoningRow {
 interface AdjustPreviewResult {
   status: string;
   message: string;
+  confirmationExpiresAt: string;
   change?: {
     material: string;
     field: string;
@@ -1894,14 +1895,19 @@ interface AdjustPreviewResult {
   seasoningTable?: AdjustSeasoningRow[];
 }
 
+interface AdjustPreviewResponse extends AdjustPreviewResult {
+  confirmationToken: string;
+}
+
 const adjustDialogVisible = ref(false);
 const adjustInstruction = ref('');
 const adjustPreviewLoading = ref(false);
 const adjustConfirmLoading = ref(false);
 const adjustPreviewResult = ref<AdjustPreviewResult | null>(null);
+const adjustConfirmationToken = ref<string | null>(null);
 
 const adjustConfirmEnabled = computed(
-  () => adjustPreviewResult.value?.status === 'PREVIEW',
+  () => adjustPreviewResult.value?.status === 'PREVIEW' && !!adjustConfirmationToken.value,
 );
 
 function handleOpenAdjustDialog() {
@@ -1911,6 +1917,7 @@ function handleOpenAdjustDialog() {
   }
   adjustInstruction.value = '';
   adjustPreviewResult.value = null;
+  adjustConfirmationToken.value = null;
   adjustDialogVisible.value = true;
 }
 
@@ -1923,17 +1930,28 @@ async function handleAdjustPreview() {
   }
   adjustPreviewLoading.value = true;
   adjustPreviewResult.value = null;
+  adjustConfirmationToken.value = null;
   try {
     const res = await post(`/${factoryId.value}/bom/adjust/preview`, {
       productTypeId: selectedProductTypeId.value,
       instruction,
     });
     if (res.success && res.data) {
-      const data = res.data as AdjustPreviewResult;
+      const data = res.data as AdjustPreviewResponse;
       if (data.status !== 'PREVIEW') {
         ElMessage.warning(data.message || '预览失败，请检查指令');
+      } else if (!data.confirmationToken?.trim()) {
+        ElMessage.warning('预览未返回有效确认凭证，请重新预览');
       } else {
-        adjustPreviewResult.value = data;
+        adjustConfirmationToken.value = data.confirmationToken;
+        adjustPreviewResult.value = {
+          status: data.status,
+          message: data.message,
+          confirmationExpiresAt: data.confirmationExpiresAt,
+          change: data.change,
+          bomTable: data.bomTable,
+          seasoningTable: data.seasoningTable,
+        };
       }
     } else {
       ElMessage.warning(res.message || '预览失败，请检查指令');
@@ -1955,10 +1973,18 @@ async function handleAdjustConfirm() {
   if (!factoryId.value || !selectedProductTypeId.value || !adjustConfirmEnabled.value) return;
   adjustConfirmLoading.value = true;
   try {
-    const res = await post(`/${factoryId.value}/bom/adjust`, {
-      productTypeId: selectedProductTypeId.value,
-      instruction: adjustInstruction.value.trim(),
-    });
+    const res = await post(
+      `/${factoryId.value}/bom/adjust`,
+      {
+        productTypeId: selectedProductTypeId.value,
+        instruction: adjustInstruction.value.trim(),
+      },
+      {
+        headers: {
+          'X-Cretas-Confirmation-Token': adjustConfirmationToken.value,
+        },
+      },
+    );
     if (res.success) {
       ElMessage.success(
         (res.data as { message?: string } | null)?.message
@@ -1968,6 +1994,7 @@ async function handleAdjustConfirm() {
       adjustDialogVisible.value = false;
       adjustInstruction.value = '';
       adjustPreviewResult.value = null;
+      adjustConfirmationToken.value = null;
       await loadBomItems();
       await loadCostSummary();
     } else {
@@ -1985,6 +2012,18 @@ async function handleAdjustConfirm() {
     adjustConfirmLoading.value = false;
   }
 }
+
+watch([adjustInstruction, selectedProductTypeId], () => {
+  adjustPreviewResult.value = null;
+  adjustConfirmationToken.value = null;
+});
+
+watch(adjustDialogVisible, (visible) => {
+  if (!visible) {
+    adjustPreviewResult.value = null;
+    adjustConfirmationToken.value = null;
+  }
+});
 </script>
 
 <template>
