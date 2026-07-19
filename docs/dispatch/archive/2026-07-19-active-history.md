@@ -74,6 +74,21 @@
 - 状态边界：规则已合并并可供其他 chat 从 `origin/main` 获取；未执行任何生产业务写入、部署、迁移或服务重启。
 - Scope 锁：已释放。
 
+### `REDUNDANCY-BS01-INJECTION-CONFIG-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- Base SHA：`0f81ca356dbbf5d14546eb684ea5e64eaa0a97b9`
+- 实现 commit：`62856f73549381c6ed181505cf913089db163f28`
+- PR：[#1484](https://github.com/Stevenjxie/cretas/pull/1484)
+- `main` squash merge commit：`fd89aa5093a2101239ae8ebfdcfcd048abdfb868`
+- 范围：把空的 mixed-purpose `bom_process_seasoning`/Entity/Repository/DTO 收敛为 injection-only 模型；熟制续锅比例唯一真值改为 `bom_seasoning_items.subsequent_pot_ratio`；删除 recipe header/process fallback；同步保存、复制、版本快照、SKU 组装、报工成本、AI Tool 和 Web 消费者；增加 fail-closed V82。
+- 数据边界：V82 不含 DELETE；保留 47 条 live 调料，部署时仅将 28 条整 SKU COOKING 比例从已审查 header 值 `0.3333` 回填到 binding；旧配置表快照为 0 行，若部署前出现数据则 migration 阻断。
+- 本地验收：后端目标集 100 tests 通过（含真实 JPA Context 和 V82 contract）；Web 17 tests 与 Vite production build 通过；`git diff --check` 通过。
+- GitHub 门禁：manual CI run [29676762026](https://github.com/Stevenjxie/cretas/actions/runs/29676762026) 的 `JPA repository query startup gate` 在 exact head 上通过；随后取消其余长跑作业。
+- 状态边界：代码已合并；生产部署、V82 执行和 Web 发布仍作为独立状态处理。
+- Scope 锁：已释放。
+
 ### `CRETAS-F006-WORKFLOW-TOPOLOGY-MATRIX-20260719`
 
 - 状态：`merged`
