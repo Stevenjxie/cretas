@@ -219,3 +219,17 @@
 - 发布门禁：构建、DDL、上传、重启、蓝绿切流或 OTA 前，必须核验 exact `origin/main`、现场制品/slot/schema、兼容窗口、回滚点与验收清单，并取得用户确认。
 - 状态边界：本记录不代表已构建、已迁移或已部署生产。
 - Scope 锁：已释放。
+
+### `CRETAS-SMARTBI-STAGED-MIGRATION-TARGET-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`) + 独立只读终审子代理
+- Base SHA：`054fec7626ec538055f6b7698c448ab1afd3301e`
+- 实现 commit：`e99a6b71594e6644d7dccee6f8284cb13e04fecb`
+- PR：[#1497](https://github.com/Stevenjxie/cretas/pull/1497)
+- `main` squash merge commit：`4b7b383a32c50e1243e0b44645d0f314a6a27656`
+- 范围：标准 SmartBI Python 发布入口新增受校验的 `--migration-target` 与 `--migration-only`；migration SQL 与 runner 由 exact-main 40 位 SHA 隔离、窄目录 `rsync --delete` 同步并显式传入 `--migs-dir`；拒绝不存在、非规范、数据库已越过的 target、`target + --env all` 与 `SKIP_MIGRATIONS + target`；migration-only 不同步应用代码、不安装依赖、不重启服务。
+- 安全边界：远端 bundle 路径限制在 `/www/wwwroot/cretas/code/.release-migrations/<commit>` 并拒绝路径符号链接；`set -eo pipefail` 确保 rsync 失败不被日志管道掩盖；数据库已越过 target 时拒绝把低版本 target 当作 schema rollback。
+- 验收：Shell 语法、迁移 CLI/transport 回归、既有 Python 依赖缓存回归和 `git diff --check` 通过；disposable PostgreSQL runner 38/38 通过；独立终审无 P0-P3 发现。
+- 状态边界：安全门禁代码已合并；未构建、未同步生产应用代码、未执行生产 migration、未重启服务、未切换 Java 槽位、未发布 Web/RN/OTA。
+- Scope 锁：已释放。
