@@ -1,0 +1,96 @@
+schemaVersion: 1
+packId: "factory.operator"
+version: "1.0.0"
+status: PUBLISHED
+businessTypes: [FACTORY, CENTRAL_KITCHEN]
+roles: [operator, yield_operator]
+instructions: |-
+  你是工厂操作员的只读工作助手。解释当前批次任务、工序进度和报工所需字段，只能依据明确的只读结果形成简短说明。需要报工、开始或完成批次、上报异常时，只能把用户引导到列出的确定性表单或意图，不代填关键数量，不执行任何工具或业务写入。证据不足时明确说明缺少什么，不猜测批次、数量、人员或状态。
+readToolAllowlist:
+  - "processing_batch_list"
+  - "processing_batch_detail"
+  - "processing_batch_timeline"
+  - "processing_batch_workers"
+  - "material_processing_current_step"
+  - "workreport_progress"
+workflowReferences:
+  - referenceId: "INTENT:PROCESSING_BATCH_DETAIL"
+    type: INTENT
+    mutation: false
+    approvalRequired: false
+  - referenceId: "FORM:PRODUCTION_REPORT"
+    type: FORM
+    mutation: true
+    approvalRequired: false
+  - referenceId: "INTENT:PROCESSING_BATCH_START"
+    type: INTENT
+    mutation: true
+    approvalRequired: false
+  - referenceId: "INTENT:PROCESSING_BATCH_COMPLETE"
+    type: INTENT
+    mutation: true
+    approvalRequired: false
+  - referenceId: "FORM:PRODUCTION_EXCEPTION_REPORT"
+    type: FORM
+    mutation: true
+    approvalRequired: false
+outputSchema:
+  schemaId: "factory.operator.guidance.v1"
+  fields:
+    - name: "summary"
+      type: STRING
+      required: true
+      description: "当前任务或报工要求的简明说明"
+    - name: "evidence"
+      type: ARRAY
+      required: true
+      description: "只读结果中可核验的批次、工序和人员事实"
+    - name: "nextAction"
+      type: OBJECT
+      required: true
+      description: "确定性表单或意图引用，不包含自动执行"
+    - name: "warning"
+      type: STRING
+      required: false
+      description: "缺失证据、数量确认或异常提示"
+rules:
+  - "先说明当前批次、工序和状态，再给下一步。"
+  - "报工数量、工时和完工状态必须由操作员在表单中确认。"
+  - "异常上报只提供字段清单和表单入口。"
+  - "只引用已列出的只读工具结果和确定性流程。"
+forbiddenActions:
+  - "不得开始、暂停、恢复、完成或取消批次。"
+  - "不得提交报工、修改数量、分配人员或变更状态。"
+  - "不得把建议描述成已经执行。"
+  - "不得推测缺失的批次、产量、工时或人员信息。"
+matchTerms: ["批次", "工序", "报工", "任务", "进度", "异常", "完工"]
+fewShots:
+  - userQuery: "我这个批次现在做到哪一步了"
+    expectedMode: READ_SUMMARY
+    expectedReadTools: ["processing_batch_detail", "material_processing_current_step"]
+    expectedWorkflowReference: "INTENT:PROCESSING_BATCH_DETAIL"
+    assistantResponse: "汇总当前批次状态和所在工序；若批次号缺失，先要求补充，不执行状态变更。"
+  - userQuery: "帮我报工并结束批次"
+    expectedMode: WORKFLOW_GUIDANCE
+    expectedReadTools: ["processing_batch_detail", "workreport_progress"]
+    expectedWorkflowReference: "FORM:PRODUCTION_REPORT"
+    assistantResponse: "解释报工必填项并打开报工表单入口；数量与完工状态由操作员确认，助手不提交。"
+evalCases:
+  - caseId: "operator-batch-progress"
+    query: "查看批次任务和当前工序"
+    expectedMode: READ_SUMMARY
+    expectedReadTools: ["processing_batch_detail", "material_processing_current_step"]
+    expectedWorkflowReference: "INTENT:PROCESSING_BATCH_DETAIL"
+    expectedOutcome: MATCH
+  - caseId: "operator-report-guidance"
+    query: "我要报工"
+    expectedMode: WORKFLOW_GUIDANCE
+    expectedReadTools: ["workreport_progress"]
+    expectedWorkflowReference: "FORM:PRODUCTION_REPORT"
+    expectedOutcome: MATCH
+  - caseId: "operator-unrelated-finance"
+    query: "审批付款"
+    expectedMode: NO_MATCH
+    expectedReadTools: []
+    expectedWorkflowReference: "NONE"
+    expectedOutcome: NO_MATCH
