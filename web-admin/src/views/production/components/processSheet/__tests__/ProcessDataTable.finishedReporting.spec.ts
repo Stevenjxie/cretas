@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import ElementPlus from 'element-plus';
+import ElementPlus, { ElMessageBox } from 'element-plus';
 
 const saveDraftRow = vi.fn();
 const submitRow = vi.fn();
+const getSemiFinishedInventory = vi.fn();
 
 vi.mock('@/api/processSheet', async () => {
   const actual = await vi.importActual<typeof import('@/api/processSheet')>('@/api/processSheet');
@@ -14,7 +15,7 @@ vi.mock('@/api/processSheet', async () => {
     deleteRow: vi.fn(),
     getRowHistory: vi.fn().mockResolvedValue({ success: true, data: [] }),
     getAvailableRawBatches: vi.fn().mockResolvedValue({ success: true, data: [] }),
-    getSemiFinishedInventory: vi.fn().mockResolvedValue({ success: true, data: [] }),
+    getSemiFinishedInventory: (...args: unknown[]) => getSemiFinishedInventory(...args),
     getFinishedGoodsInventory: vi.fn().mockResolvedValue({ success: true, data: [] }),
   };
 });
@@ -59,12 +60,14 @@ const availableUpstream = [{
 }];
 
 function mountTable(context: unknown = workflowContext, upstreamItems: unknown[] = availableUpstream) {
+  const typedContext = context as { allowMultipleUpstreamSources?: boolean } | null;
   return mount(ProcessDataTable, {
     props: {
       factoryId: 'F006', planId: 'PLAN-1', processCode: 'qidiao', processOrder: 2,
       processLabel: '冷冻', productTypeId: 'SKU-1', inputUnit: 'kg', outputUnit: '盒',
       isFirstProcess: false, upstreamItems, ownInventoryItems: [], initialRows: [],
       viewMode: 'card', workflowContext: context,
+      allowMultipleUpstreamSources: typedContext?.allowMultipleUpstreamSources ?? false,
     },
     global: { plugins: [ElementPlus], stubs: { teleport: true, transition: false } },
   });
@@ -77,37 +80,40 @@ async function addRow(wrapper: ReturnType<typeof mountTable>) {
   await flushPromises();
 }
 
+function setPrimaryOutput(wrapper: ReturnType<typeof mountTable>, quantity: number) {
+  wrapper.find('[data-testid="workflow-output-line"] [data-testid="output-quantity"]')
+    .findComponent({ name: 'ElInputNumber' }).vm.$emit('update:model-value', quantity);
+}
+
 describe('ProcessDataTable finished-goods reporting contract', () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
     saveDraftRow.mockReset();
     submitRow.mockReset();
+    getSemiFinishedInventory.mockReset();
     saveDraftRow.mockResolvedValue({ success: true, data: { submissionStatus: 'DRAFT', materialized: false } });
     submitRow.mockResolvedValue({ success: true, data: { batchNumber: 'FG-1', submissionStatus: 'SUBMITTED', materialized: true } });
+    getSemiFinishedInventory.mockResolvedValue({ success: true, data: [] });
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
   });
 
-  it('only asks for actual production and sample, then derives inbound, remaining and weight from SKU net weight', async () => {
+  it('uses the Workflow-fixed finished output and derives weight from SKU net weight', async () => {
     const wrapper = mountTable();
     await flushPromises();
     await addRow(wrapper);
 
-    expect(wrapper.text()).toContain('实际生产(盒)');
-    expect(wrapper.text()).toContain('留样(盒)');
-    expect(wrapper.text()).toContain('入库(盒)');
-    expect(wrapper.text()).toContain('剩余(盒)');
-    expect(wrapper.text()).toContain('单位净重');
+    expect(wrapper.text()).toContain('产出数量');
+    expect(wrapper.text()).toContain('香辣孜然羊排');
+    expect(wrapper.text()).toContain('盒');
     expect(wrapper.text()).not.toContain('领用');
     expect(wrapper.text()).not.toContain('使用重量');
     expect(wrapper.text()).not.toContain('手工成品重');
     expect(wrapper.text()).not.toContain('单盒克重');
     expect(wrapper.text()).not.toContain('料头');
 
-    const actualField = wrapper.findAll('.sp-card-field').find((item) => item.text().includes('实际生产'))!;
-    const sampleField = wrapper.findAll('.sp-card-field').find((item) => item.text().includes('留样'))!;
-    actualField.findComponent({ name: 'ElInputNumber' }).vm.$emit('update:model-value', 50);
-    sampleField.findComponent({ name: 'ElInputNumber' }).vm.$emit('update:model-value', 2);
+    setPrimaryOutput(wrapper, 50);
     await flushPromises();
 
-    expect(wrapper.text()).toContain('48');
     expect(wrapper.text()).toContain('10 kg');
   });
 
@@ -130,8 +136,7 @@ describe('ProcessDataTable finished-goods reporting contract', () => {
     await addRow(wrapper);
 
     wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('change', 'wip::WIP-UPSTREAM-1');
-    const actualField = wrapper.findAll('.sp-card-field').find((item) => item.text().includes('实际生产'))!;
-    actualField.findComponent({ name: 'ElInputNumber' }).vm.$emit('update:model-value', 50);
+    setPrimaryOutput(wrapper, 50);
     await flushPromises();
 
     await wrapper.findAll('button').find((item) => item.text().includes('正式报工'))!.trigger('click');
@@ -145,21 +150,88 @@ describe('ProcessDataTable finished-goods reporting contract', () => {
     })]);
   });
 
+  it('auto-fills a multi-source finished row from the selected in-plan WIP and keeps preview/payload identical after remount', async () => {
+    const context = JSON.parse(JSON.stringify(workflowContext));
+    context.allowMultipleUpstreamSources = true;
+    const upstream = [{
+      batchNumber: 'CLK-W-20260720-9232', produced: 4.5, used: 0, remaining: 4.5,
+      status: 'ACTIVE', unit: 'kg', productTypeId: 'SEMI-1', productTypeName: '处理后半成品',
+    }];
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const wrapper = mountTable(context, upstream);
+      await flushPromises();
+      await addRow(wrapper);
+      await wrapper.find('[data-testid="upstream-sources-toggle"] button').trigger('click');
+      const sourceLine = wrapper.find('[data-testid="upstream-source-line"]');
+      sourceLine.findComponent({ name: 'ElSelect' }).vm.$emit('change', 'wip::CLK-W-20260720-9232');
+      setPrimaryOutput(wrapper, 5);
+      await flushPromises();
+
+      expect(sourceLine.findComponent({ name: 'ElInputNumber' }).props('modelValue')).toBe(4.5);
+      await wrapper.findAll('button').find((item) => item.text().includes('正式报工'))!.trigger('click');
+      await flushPromises();
+
+      const preview = vi.mocked(ElMessageBox.confirm).mock.calls.at(-1)?.[0];
+      expect(String(preview)).toContain('CLK-W-20260720-9232 4.5kg');
+      const request = submitRow.mock.calls.at(-1)?.[2] as Record<string, unknown>;
+      expect(request.inputQuantity).toBe(4.5);
+      expect(request.outputQuantity).toBe(5);
+      expect(request.upstreamSources).toEqual([expect.objectContaining({
+        workflowPortId: 'IN-1', skuId: 'SEMI-1', sourceBatchNumber: 'CLK-W-20260720-9232',
+        feedQuantityKg: 4.5, semiFinished: false, finishedGoods: false,
+      })]);
+      wrapper.unmount();
+    }
+    expect(submitRow).toHaveBeenCalledTimes(2);
+  });
+
+  it('auto-fills a public semi-finished batch in kg and preserves its source identity in preview and payload', async () => {
+    const context = JSON.parse(JSON.stringify(workflowContext));
+    context.allowMultipleUpstreamSources = true;
+    getSemiFinishedInventory.mockResolvedValue({
+      success: true,
+      data: [{
+        intermediateBatchNo: 'SFI-PUBLIC-1', productTypeId: 'SEMI-1', productTypeName: '公共半成品',
+        availableQuantity: 3.25, remainingQuantity: 3.25, unit: 'kg', productionDate: '2026-07-20',
+      }],
+    });
+    const wrapper = mountTable(context, []);
+    await flushPromises();
+    await addRow(wrapper);
+    await wrapper.find('[data-testid="upstream-sources-toggle"] button').trigger('click');
+    const sourceLine = wrapper.find('[data-testid="upstream-source-line"]');
+    sourceLine.findComponent({ name: 'ElSelect' }).vm.$emit('change', 'sfi::SFI-PUBLIC-1');
+    setPrimaryOutput(wrapper, 5);
+    await flushPromises();
+
+    expect(sourceLine.findComponent({ name: 'ElInputNumber' }).props('modelValue')).toBe(3.25);
+    await wrapper.findAll('button').find((item) => item.text().includes('正式报工'))!.trigger('click');
+    await flushPromises();
+
+    expect(String(vi.mocked(ElMessageBox.confirm).mock.calls.at(-1)?.[0])).toContain('SFI-PUBLIC-1 3.25kg');
+    const request = submitRow.mock.calls.at(-1)?.[2] as Record<string, unknown>;
+    expect(request.inputQuantity).toBe(3.25);
+    expect(request.upstreamSources).toEqual([expect.objectContaining({
+      sourceBatchNumber: 'SFI-PUBLIC-1', feedQuantityKg: 3.25, semiFinished: true,
+    })]);
+  });
+
   it('fails closed instead of submitting zero when the selected upstream stock cannot be resolved', async () => {
     const wrapper = mountTable();
     await flushPromises();
     await addRow(wrapper);
 
     wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('change', 'wip::STALE-BATCH');
-    const actualField = wrapper.findAll('.sp-card-field').find((item) => item.text().includes('实际生产'))!;
-    actualField.findComponent({ name: 'ElInputNumber' }).vm.$emit('update:model-value', 50);
+    setPrimaryOutput(wrapper, 50);
     await flushPromises();
 
-    await wrapper.findAll('button').find((item) => item.text().includes('正式报工'))!.trigger('click');
+    const submitButton = wrapper.findAll('button').find((item) => item.text().includes('正式报工'))!;
+    expect(submitButton.attributes('disabled')).toBeDefined();
+    await submitButton.trigger('click');
     await flushPromises();
 
     expect(submitRow).not.toHaveBeenCalled();
-    expect(wrapper.text()).toContain('无法从所选上游库存确定实际投入量');
   });
 
   it('disables add-row when a downstream workflow step has no available source inventory', async () => {

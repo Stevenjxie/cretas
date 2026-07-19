@@ -356,6 +356,77 @@ class ProcessSheetServiceImplTest {
     }
 
     @Test
+    @DisplayName("正式报工: 已声明上游批次但投入为 0 → 400 且零持久化")
+    void submitRow_declaredUpstreamWithZeroFeed_rejectedBeforeWrites() {
+        ProcessSheetRowRequest req = baseReq("row-zero-upstream", "qidiao", 2, "5");
+        req.setFinished(true);
+        req.setProcessDate(LocalDate.of(2026, 7, 20));
+        // 即使客户端伪造正的汇总投入，也不能掩盖所选批次实际 feedQuantityKg=0。
+        req.setInputQuantity(new BigDecimal("4.5"));
+        req.setUpstreamSources(List.of(upstreamRef("CLK-W-ZERO", "0")));
+        long batchCountBefore = batchRepo.count();
+
+        assertThatThrownBy(() -> processSheetService.submitRow(FACTORY_ID, planId, req, operatorId))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> {
+                    BusinessException business = (BusinessException) error;
+                    assertThat(business.getCode()).isEqualTo(400);
+                    assertThat(business.getErrorCode()).isEqualTo("PROCESS_SHEET_UPSTREAM_INPUT_REQUIRED");
+                    assertThat(business.getMessage()).contains("大于 0 的实际投入量");
+                });
+
+        assertThat(rowRepo.findByFactoryIdAndPlanId(FACTORY_ID, planId)).isEmpty();
+        assertThat(batchRepo.count()).isEqualTo(batchCountBefore);
+    }
+
+    @Test
+    @DisplayName("正式报工: 指定本计划 WIP 4.5kg → 原子耗尽且只生成 1 个 5 单位成品，重复提交不重复扣减")
+    void submitRow_inPlanWip_consumesExactBatchAndIsIdempotent() {
+        ProcessSheetRowResult upstream = saveXiuyou("row-upstream-4_5", "5", "4.5");
+        var before = processSheetService.getInventory(FACTORY_ID, planId, "xiuyou", 1);
+        assertThat(before).singleElement().satisfies(item -> {
+            assertThat(item.getBatchNumber()).isEqualTo(upstream.getBatchNumber());
+            assertThat(item.getRemaining()).isEqualByComparingTo("4.5");
+        });
+
+        ProcessSheetRowRequest req = baseReq("row-finished-5", "qidiao", 2, "5");
+        req.setFinished(true);
+        req.setProcessDate(LocalDate.of(2026, 7, 20));
+        req.setInputQuantity(new BigDecimal("4.5"));
+        req.setUpstreamSources(List.of(upstreamRef(upstream.getBatchNumber(), "4.5")));
+
+        ProcessSheetRowResult submitted = processSheetService.submitRow(
+                FACTORY_ID, planId, req, operatorId);
+
+        assertThat(submitted.getSubmissionStatus()).isEqualTo(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        assertThat(submitted.isMaterialized()).isTrue();
+        var after = processSheetService.getInventory(FACTORY_ID, planId, "xiuyou", 1);
+        assertThat(after).singleElement().satisfies(item -> {
+            assertThat(item.getBatchNumber()).isEqualTo(upstream.getBatchNumber());
+            assertThat(item.getUsed()).isEqualByComparingTo("4.5");
+            assertThat(item.getRemaining()).isEqualByComparingTo("0");
+            assertThat(item.getStatus()).isEqualTo("DEPLETED");
+        });
+        var finishedRows = processSheetService.getRows(FACTORY_ID, planId, "qidiao", 2);
+        assertThat(finishedRows).singleElement().satisfies(row -> {
+            assertThat(row.getSubmissionStatus()).isEqualTo(ProcessSheetRow.SUBMISSION_SUBMITTED);
+            assertThat(row.getPayload().getOutputQuantity()).isEqualByComparingTo("5");
+            assertThat(row.getPayload().getUpstreamSources()).singleElement().satisfies(source -> {
+                assertThat(source.getSourceBatchNumber()).isEqualTo(upstream.getBatchNumber());
+                assertThat(source.getFeedQuantityKg()).isEqualByComparingTo("4.5");
+            });
+        });
+
+        assertThatThrownBy(() -> processSheetService.submitRow(FACTORY_ID, planId, req, operatorId))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                        .isEqualTo("PROCESS_SHEET_ROW_ALREADY_SUBMITTED"));
+        assertThat(processSheetService.getRows(FACTORY_ID, planId, "qidiao", 2)).hasSize(1);
+        assertThat(processSheetService.getInventory(FACTORY_ID, planId, "xiuyou", 1))
+                .singleElement().satisfies(item -> assertThat(item.getUsed()).isEqualByComparingTo("4.5"));
+    }
+
+    @Test
     @DisplayName("5a: 跨租户 planId → 403")
     void saveRow_crossTenantPlan_throws403() {
         // A plan belonging to OTHER_FACTORY_ID

@@ -1889,12 +1889,14 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
 // Save / delete handlers
 // -------------------------------------------------------------------------
 function formalSubmitSummary(row: SheetRow): string {
+  const request = buildRequest(row);
+  const requestUpstreamSources = request.upstreamSources ?? [];
   const inputs = usesAutoMaterialTotals(row)
     ? row.materialInputTotals
       .filter((item) => item.selected && item.quantity != null && item.quantity > 0)
       .map((item) => `${item.materialName} ${item.quantity}${item.unit}`)
-    : row.upstreamSources.some((item) => item.selected)
-      ? row.upstreamSources.filter((item) => item.selected).map((item) => `${item.sourceBatchNumber} ${item.feedQuantityKg}${processUnits.value.inputUnit}`)
+    : requestUpstreamSources.length > 0
+      ? requestUpstreamSources.map((item) => `${item.sourceBatchNumber} ${item.feedQuantityKg}${request.inputUnit || processUnits.value.inputUnit}`)
       : row.upstreamBatch
         ? [`${row.upstreamBatch} ${singleSourceUsage(row)}${processUnits.value.inputUnit}`]
         : row.rawBatchQty != null
@@ -2320,11 +2322,25 @@ function srcSelectKey(src: UpstreamRef): string {
  * 据此置 sourceBatchNumber + semiFinished + finishedGoods (三者互斥)。后端据这两个标记决定保存时是否写消耗边
  * + 小结时走严格 SFI/FG 出库 (consumeClerkSemiStrict / consumeForFeedStrict) 还是 in-plan 在制 WIP 边。
  */
-function onUpstreamSelect(src: UpstreamRef, key: string | null | undefined) {
+function selectedSourceAvailableKg(kind: string, batchNumber: string): number | null {
+  if (kind === SRC_SFI) {
+    const source = sfiOptions.value.find((item) => item.intermediateBatchNo === batchNumber);
+    return source ? sourceAvailableKg(sfiAvailable(source), source.unit, source.gramsPerUnit) : null;
+  }
+  if (kind === SRC_FG) {
+    const source = fgOptions.value.find((item) => item.batchNumber === batchNumber);
+    return source ? sourceAvailableKg(fgAvailable(source), source.unit, source.gramsPerUnit) : null;
+  }
+  const source = props.upstreamItems.find((item) => item.batchNumber === batchNumber);
+  return source ? sourceAvailableKg(source.remaining, source.unit) : null;
+}
+
+function onUpstreamSelect(src: SelectableUpstreamRef, key: string | null | undefined) {
   if (!key) {
     src.sourceBatchNumber = '';
     src.semiFinished = false;
     src.finishedGoods = false;
+    if (isQidiao.value) src.feedQuantityKg = 0;
     return;
   }
   const sep = key.indexOf('::');
@@ -2333,12 +2349,20 @@ function onUpstreamSelect(src: UpstreamRef, key: string | null | undefined) {
     src.sourceBatchNumber = key;
     src.semiFinished = false;
     src.finishedGoods = false;
+    src.selected = true;
+    if (isQidiao.value) src.feedQuantityKg = selectedSourceAvailableKg(SRC_WIP, key) ?? 0;
     return;
   }
   const kind = key.slice(0, sep);
   src.semiFinished = kind === SRC_SFI;
   src.finishedGoods = kind === SRC_FG;
   src.sourceBatchNumber = key.slice(sep + 2);
+  src.selected = true;
+  // 成品道的来源选择即代表把该批次当前可用量全部结转到成品；操作员不再重复抄写重量。
+  // feedQuantityKg 是确认预览、submit payload 与后端批次扣减共用的唯一事实，必须在选择时同步。
+  if (isQidiao.value) {
+    src.feedQuantityKg = selectedSourceAvailableKg(kind, src.sourceBatchNumber) ?? 0;
+  }
 }
 
 // -------------------------------------------------------------------------
