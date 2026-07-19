@@ -6,16 +6,6 @@
 
 ## 在飞任务
 
-- `REDUNDANCY-BS01-INJECTION-CONFIG-20260719`
-  - 状态：`review`
-  - Owner：Codex (`/root`)
-  - Base SHA：`0f81ca356dbbf5d14546eb684ea5e64eaa0a97b9`
-  - Scope：BS-01 的 `BomProcessSeasoning` Entity/Repository/DTO/Service/成本与版本快照链、V82 migration、真实 JPA Context/业务测试、Web BOM API/ProcessSheet/复制弹窗、审计交付文档及本台账/归档。
-  - 生产证据：`bom_process_seasoning=0`；47 条 live 调料中 12 条工序绑定均有 `material_type_id`，35 条整 SKU 绑定里 28 条 COOKING 将从 recipe header 回填 `0.3333`，7 条 INJECTION 不改；旧调料 API 当前网关日志无命中。
-  - 验收命令：真实 JPA repository query startup test；BomRecipe/Copy/Version/ClerkProcessEntry/RecipeCost 目标测试；Web ProcessSheet/BOM copy 目标测试；`git diff --check`。
-  - 验收结果：后端 100 tests、真实 JPA Context、Web 17 tests、Vite build 与 `git diff --check` 均通过。
-  - 下一动作：提交 PR，等待 JPA CI 门禁后合并并独立部署 V82/Java/Web。
-
 - `CRETAS-WORKFLOW-TOPOLOGY-LABELS-20260719`
   - 状态：`review`
   - Owner：Codex (`/root`)
@@ -30,7 +20,6 @@
 
 - `REDUNDANCY-SH01-DATA-CLEAR-20260719`：锁定上述 V81 migration、契约测试、第一批清理文档与 dispatch 台账/归档。
 - `CRETAS-WORKFLOW-TOPOLOGY-LABELS-20260719`：锁定 `WorkflowTopology*`、Workflow 输出解析 DTO/Service/目标单测、`web-admin/src/api/productionPlan.ts`、`web-admin/src/views/production/plans/productionPlanWorkflowResolution*` 与本台账/归档。
-- `REDUNDANCY-BS01-INJECTION-CONFIG-20260719`：锁定上述 BS-01 后端、V82、目标测试、Web 消费者与 dispatch 台账/归档。
 
 ## 阻塞项
 
