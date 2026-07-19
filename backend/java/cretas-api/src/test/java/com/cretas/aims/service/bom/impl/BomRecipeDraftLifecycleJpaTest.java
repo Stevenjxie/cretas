@@ -173,6 +173,7 @@ class BomRecipeDraftLifecycleJpaTest {
         material.setUnit("kg");
         material.setIsActive(true);
         material.setIsAbacaPackaging(false);
+        material.setCreatedBy(1L);
         rawMaterialTypeRepository.saveAndFlush(material);
 
         BomRecipeItem item = new BomRecipeItem();

@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
@@ -158,29 +159,24 @@ class BomRecipePackagingSpecInferTest {
                 .isEqualByComparingTo(new BigDecimal("2"));
     }
 
-    // ─── T3: packQtyPerProduct null → 诚实 null ───────────────────────────
+    // ─── T3: packQtyPerProduct null → explicit validation ─────────────────
 
     @Test
-    @DisplayName("T3: PACKAGING + packQtyPerProduct null + DTO qty null → standardQuantity stays null (诚实)")
-    void packaging_packQtyNull_dtoQtyNull_staysNull() {
+    @DisplayName("T3: PACKAGING + packQtyPerProduct null + DTO qty null → explicit validation error")
+    void packaging_packQtyNull_dtoQtyNull_isRejected() {
         // 物料未配置规格
         RawMaterialType unspecBox = packagingMt("PKG-003", "未配置规格盒", "个", null);
         when(materialTypeRepo.findById("PKG-003")).thenReturn(Optional.of(unspecBox));
 
-        // Service will pass null standardQuantity through to item; @NotNull validation would reject
-        // at controller level, but at service level it's null-propagated (诚实)
         BomRecipeItem savedItem = stubSavedItem("PKG-003", null, "个");
         when(itemRepo.save(any(BomRecipeItem.class))).thenReturn(savedItem);
         when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-PKG-TEST"))
                 .thenReturn(List.of(savedItem));
 
         BomRecipeItemDTO dto = buildDto("PKG-003", null, "个", "PACKAGING");
-        BomRecipeItem result = service.addItem("F006", "RECIPE-PKG-TEST", dto);
-
-        // standardQuantity should remain null (service doesn't fabricate a zero)
-        assertThat(result.getStandardQuantity())
-                .as("packQtyPerProduct=null → standardQuantity stays null (no fabrication)")
-                .isNull();
+        assertThatThrownBy(() -> service.addItem("F006", "RECIPE-PKG-TEST", dto))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("每成品用量");
     }
 
     // ─── T4: RAW 物料不触发推算 ───────────────────────────────────────────
@@ -239,7 +235,7 @@ class BomRecipePackagingSpecInferTest {
     @Test
     @DisplayName("T6: PACKAGING auto-infer + DTO unit=袋 → canonical bag is preserved")
     void packaging_autoInfer_existingUnitPreserved() {
-        RawMaterialType box = packagingMt("PKG-001", "吸塑盒", "个", new BigDecimal("1.000000"));
+        RawMaterialType box = packagingMt("PKG-001", "包装袋", "袋", new BigDecimal("1.000000"));
         when(materialTypeRepo.findById("PKG-001")).thenReturn(Optional.of(box));
         // allow 袋 unit
         when(materialUomConverter.isWriteUnitCompatible(anyString(), eq("袋"))).thenReturn(true);
@@ -256,9 +252,9 @@ class BomRecipePackagingSpecInferTest {
         BomRecipeItemDTO dto = buildDto("PKG-001", null, "袋", "PACKAGING");
         service.addItem("F006", "RECIPE-PKG-TEST", dto);
 
-        // Explicit bag semantics must not be overridden by the material's pcs semantics.
+        // Explicit localized alias is persisted using the canonical bag code.
         assertThat(capturedItem[0].getUnit())
-                .as("explicitly supplied unit=袋 must not be overridden by material unit=个")
+                .as("explicitly supplied unit=袋 should persist as canonical bag")
                 .isEqualTo("bag");
     }
 

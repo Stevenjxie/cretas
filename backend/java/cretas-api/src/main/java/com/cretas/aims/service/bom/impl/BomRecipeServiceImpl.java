@@ -993,7 +993,11 @@ public class BomRecipeServiceImpl implements BomRecipeService {
 
     private void normalizeItemUnit(String factoryId, BomRecipeItemDTO dto) {
         if (dto.getUnit() == null || dto.getUnit().isBlank()) {
-            return;
+            throw bomError(400,
+                    "BOM 明细单位不能为空",
+                    "BOM_ITEM_UNIT_REQUIRED",
+                    "请从物料主数据或工厂单位目录选择计量单位",
+                    "unit");
         }
         dto.setUnit(canonicalUnitOrThrow(factoryId, dto.getUnit(), "unit"));
     }
