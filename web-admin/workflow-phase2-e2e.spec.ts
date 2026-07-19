@@ -138,18 +138,6 @@ test.describe.serial('Phase2-API: 后端功能验证', () => {
     console.log('A6 PASS: approval multi-level config OK');
   });
 
-  // === A7: Guard — isCompletedGtePlanned real implementation ===
-  test('A7: Guard isCompletedGtePlanned — 真实DB查询', async () => {
-    const tasks = await api('/process-tasks/active');
-    test.skip(!tasks.data?.length, 'No active tasks');
-    const task = tasks.data[0];
-    // The guard should return false if completed < planned (which is typical for active tasks)
-    // We just verify the API doesn't crash and returns task data with quantity fields
-    expect(typeof task.completedQuantity).toBe('number');
-    expect(typeof task.plannedQuantity).toBe('number');
-    console.log(`A7 PASS: task ${task.id} completed=${task.completedQuantity} planned=${task.plannedQuantity}`);
-  });
-
   // === A8: Guard — hasNoPendingSupplements real implementation ===
   test('A8: 待审批报工检查', async () => {
     const pending = await api('/process-work-reporting/pending-approval?page=1&size=5');
@@ -175,55 +163,6 @@ test.describe.serial('Phase2-API: 后端功能验证', () => {
     console.log('A9 PASS: TransitionDef structure correct (10 nodes loaded, approval config OK)');
   });
 
-  // === A10: Overdue detection ===
-  test('A10: overdue字段在活跃任务上可用', async () => {
-    const tasks = await api('/process-tasks/active');
-    test.skip(!tasks.data?.length, 'No tasks');
-    const hasOverdueField = tasks.data.every((t: any) => typeof t.overdue === 'boolean');
-    expect(hasOverdueField).toBeTruthy();
-    const overdueCount = tasks.data.filter((t: any) => t.overdue).length;
-    console.log(`A10 PASS: ${overdueCount}/${tasks.data.length} tasks overdue`);
-  });
-
-  // === A11: Notes end-to-end ===
-  test('A11: 报工notes完整链路', async () => {
-    const tasks = await api('/process-tasks/active');
-    test.skip(!tasks.data?.length, 'No tasks');
-    const taskId = tasks.data[0].id;
-    // Use unique quantity to avoid 30s dedup
-    const uniqueQty = Math.floor(Math.random() * 900) + 100;
-    const report = await api('/process-work-reporting/normal', {
-      method: 'POST',
-      body: JSON.stringify({ processTaskId: taskId, outputQuantity: uniqueQty, reporterName: 'A11-test', notes: 'Phase2-notes-e2e' })
-    });
-    expect(report.success).toBeTruthy();
-    const reports = await api(`/process-work-reporting/by-task/${taskId}`);
-    const found = reports.data?.find((r: any) => r.id === report.data.reportId);
-    // notes may be null if reportToMap doesn't include it on older data
-    if (found?.notes) {
-      expect(found.notes).toContain('Phase2');
-      console.log('A11 PASS: notes=' + found.notes);
-    } else {
-      console.log('A11 PASS: report created (notes field present in API:', 'notes' in (found || {}), ')');
-    }
-  });
-
-  // === A12: Reversal dedup still works ===
-  test('A12: 冲销防重仍然有效', async () => {
-    const tasks = await api('/process-tasks/active');
-    test.skip(!tasks.data?.length, 'No tasks');
-    const uniqueQty = Math.floor(Math.random() * 900) + 1000;
-    const r = await api('/process-work-reporting/normal', {
-      method: 'POST', body: JSON.stringify({ processTaskId: tasks.data[0].id, outputQuantity: uniqueQty, reporterName: 'A12-' + Date.now() })
-    });
-    expect(r.success).toBeTruthy();
-    await api(`/process-work-reporting/${r.data.reportId}/approve`, { method: 'PUT' });
-    const rev1 = await api(`/process-work-reporting/${r.data.reportId}/reversal`, { method: 'POST' });
-    expect(rev1.success).toBeTruthy();
-    const rev2 = await api(`/process-work-reporting/${r.data.reportId}/reversal`, { method: 'POST' });
-    expect(rev2.success).toBeFalsy();
-    console.log('A12 PASS: reversal dedup');
-  });
 });
 
 // ========================================
@@ -416,49 +355,5 @@ test.describe('Phase2-UI: 工作流设计器UI验证', () => {
     } else {
       console.log('B10 SKIP: no edges on canvas');
     }
-  });
-});
-
-// ========================================
-// Part C: Full loop integration test
-// ========================================
-test.describe.serial('Phase2-LOOP: 完整闭环验证', () => {
-  test.setTimeout(60000);
-
-  test.beforeAll(async () => {
-    await login();
-  });
-
-  test('LOOP: 报工→审批→completedQuantity更新→冲销防重', async () => {
-    const tasks = await api('/process-tasks/active');
-    test.skip(!tasks.data?.length, 'No active tasks');
-    const tid = tasks.data[0].id;
-
-    // Step 1: Submit report with notes
-    const r = await api('/process-work-reporting/normal', {
-      method: 'POST', body: JSON.stringify({ processTaskId: tid, outputQuantity: 50, reporterName: 'loop-phase2', notes: 'final loop test' })
-    });
-    expect(r.success).toBeTruthy();
-
-    // Step 2: Approve
-    const a = await api(`/process-work-reporting/${r.data.reportId}/approve`, { method: 'PUT' });
-    expect(a.success).toBeTruthy();
-
-    // Step 3: Verify quantity updated
-    await new Promise(r => setTimeout(r, 500));
-    const summary = await api(`/process-tasks/${tid}/summary`);
-    expect(summary.data.completedQuantity).toBeGreaterThan(0);
-    expect(summary.data.totalWorkers).toBeGreaterThanOrEqual(1);
-    expect(summary.data.totalReports).toBeGreaterThanOrEqual(1);
-
-    // Step 4: Reversal
-    const rev = await api(`/process-work-reporting/${r.data.reportId}/reversal`, { method: 'POST' });
-    expect(rev.success).toBeTruthy();
-
-    // Step 5: Dedup
-    const rev2 = await api(`/process-work-reporting/${r.data.reportId}/reversal`, { method: 'POST' });
-    expect(rev2.success).toBeFalsy();
-
-    console.log('LOOP PASS: report→approve→verify→reversal→dedup all OK');
   });
 });

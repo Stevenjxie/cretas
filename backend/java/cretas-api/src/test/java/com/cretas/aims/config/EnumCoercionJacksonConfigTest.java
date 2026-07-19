@@ -59,18 +59,6 @@ class EnumCoercionJacksonConfigTest {
     }
 
     @Test
-    @DisplayName("集合空字符串 → null: 报工 photos (List<String>) 不报晦涩 400（#941 补集合维度）")
-    void emptyStringCollection_coercesToNull() throws Exception {
-        // 报工 photos:"" (空串而非 []) 曾落晦涩 "请求格式不正确" fallback
-        // (Cannot coerce empty String to element of ArrayList) — #941 只修枚举没修集合。
-        com.cretas.aims.dto.ProcessWorkReportSubmitRequest req = mapperWithCoercion()
-                .readValue("{\"processTaskId\":\"x\",\"photos\":\"\",\"workerIds\":\"\"}",
-                        com.cretas.aims.dto.ProcessWorkReportSubmitRequest.class);
-        assertNull(req.getPhotos(), "空字符串 photos 应归一为 null（= 等同省略, 不报晦涩 400）");
-        assertNull(req.getWorkerIds(), "空字符串 workerIds 应归一为 null");
-    }
-
-    @Test
     @DisplayName("Map 空字符串 → null: 销售订单 customFields (Map) 不报晦涩 400")
     void emptyStringMap_coercesToNull() throws Exception {
         // customFields:"" (Map<String,Object> 收空串) 曾落晦涩 fallback

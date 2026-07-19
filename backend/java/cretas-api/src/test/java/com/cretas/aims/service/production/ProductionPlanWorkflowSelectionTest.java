@@ -6,7 +6,6 @@ import com.cretas.aims.mapper.ProductionPlanMapper;
 import com.cretas.aims.repository.ConversionRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
-import com.cretas.aims.repository.ProcessTaskRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionLineRepository;
@@ -49,7 +48,7 @@ class ProductionPlanWorkflowSelectionTest {
         workflowResolutionService = mock(ProductWorkflowResolutionService.class);
         service = new ProductionPlanServiceImpl(
                 mock(ProductionPlanRepository.class), mock(ProductionBatchRepository.class),
-                mock(ProcessTaskRepository.class), mock(MaterialBatchRepository.class),
+                mock(MaterialBatchRepository.class),
                 mock(MaterialConsumptionRepository.class), mock(ProductionPlanBatchUsageRepository.class),
                 productTypeRepository, mock(ProductionPlanMapper.class), mock(ConversionRepository.class),
                 mock(SchedulingService.class), mock(ProductionLineRepository.class), mock(UserRepository.class),

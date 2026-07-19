@@ -2,8 +2,8 @@
 # LEGACY_INFERRED, or APPROVED metadata lacking both permissions and allowed roles, remains review debt.
 # This inventory is an independent source-audit truth and is never sufficient by itself to execute.
 schemaVersion: 1
-expectedToolCount: 589
-expectedLegacyCount: 581
+expectedToolCount: 588
+expectedLegacyCount: 580
 descriptors:
   - toolName: "restaurant_calibration_history"
     implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantCalibrationHistoryTool"
@@ -9927,26 +9927,6 @@ descriptors:
       actionType: false
       riskLevel: false
       supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "process_task_create"
-    implementationClass: "com.cretas.aims.ai.tool.impl.processing.ProcessTaskCreateTool"
-    provenance: LEGACY_INFERRED
-    actionType: WRITE
-    riskLevel: MEDIUM
-    supportsPreview: true
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["process"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: true
       requiresPermission: false
       hasPermission: false
       requiredPermissions: false

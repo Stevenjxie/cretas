@@ -28,7 +28,6 @@ import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
-import com.cretas.aims.entity.enums.ProcessTaskStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.mapper.ProductionPlanMapper;
@@ -83,7 +82,6 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
     private final ProductionPlanRepository productionPlanRepository;
     private final ProductionBatchRepository productionBatchRepository;
-    private final com.cretas.aims.repository.ProcessTaskRepository processTaskRepository;
     private final MaterialBatchRepository materialBatchRepository;
     private final MaterialConsumptionRepository materialConsumptionRepository;
     private final ProductionPlanBatchUsageRepository planBatchUsageRepository;
@@ -104,7 +102,6 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     public ProductionPlanServiceImpl(
             ProductionPlanRepository productionPlanRepository,
             ProductionBatchRepository productionBatchRepository,
-            com.cretas.aims.repository.ProcessTaskRepository processTaskRepository,
             MaterialBatchRepository materialBatchRepository,
             MaterialConsumptionRepository materialConsumptionRepository,
             ProductionPlanBatchUsageRepository planBatchUsageRepository,
@@ -119,7 +116,6 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             SalesOrderItemRepository salesOrderItemRepository) {
         this.productionPlanRepository = productionPlanRepository;
         this.productionBatchRepository = productionBatchRepository;
-        this.processTaskRepository = processTaskRepository;
         this.materialBatchRepository = materialBatchRepository;
         this.materialConsumptionRepository = materialConsumptionRepository;
         this.planBatchUsageRepository = planBatchUsageRepository;
@@ -4605,7 +4601,6 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         List<WorkProcessTaskDTO> spawnedTasks =
                 workProcessTaskService.spawnTasks(factoryId, saved.getId(), saved.getProductTypeId(),
                         plan.getSkipProcessReporting(), responsibleId, responsibleId);
-        mirrorWorkProcessTasksForRn(factoryId, saved, plan, spawnedTasks);
         log.info("转批次已 spawn 报工任务: batchId={}, productTypeId={}, skipProcessReporting={}, taskCount={}",
                 saved.getId(), saved.getProductTypeId(), plan.getSkipProcessReporting(), spawnedTasks.size());
 
@@ -4616,53 +4611,6 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         log.info("从计划创建批次: planId={}, batchId={}, batchNumber={}", planId, saved.getId(), saved.getBatchNumber());
         return saved;
-    }
-
-    private void mirrorWorkProcessTasksForRn(String factoryId, ProductionBatch batch, ProductionPlan plan,
-                                             List<WorkProcessTaskDTO> workTasks) {
-        if (workTasks == null || workTasks.isEmpty()) {
-            return;
-        }
-        for (WorkProcessTaskDTO workTask : workTasks) {
-            if (workTask.getId() == null || workTask.getWorkProcessId() == null) {
-                continue;
-            }
-            String legacyId = "WPT-" + workTask.getId();
-            if (processTaskRepository.existsById(legacyId)) {
-                continue;
-            }
-            ProcessTask mirror = ProcessTask.builder()
-                    .id(legacyId)
-                    .factoryId(factoryId)
-                    .productionRunId("BATCH-" + batch.getId())
-                    .productTypeId(firstNonBlank(workTask.getProductTypeId(), batch.getProductTypeId()))
-                    .workProcessId(workTask.getWorkProcessId())
-                    .sourceCustomerName(plan.getCustomerOrderNumber())
-                    .sourceDocType("BATCH")
-                    .sourceDocId(String.valueOf(batch.getId()))
-                    .plannedQuantity(firstPositive(workTask.getPlannedQuantity(), batch.getPlannedQuantity(), batch.getQuantity()))
-                    .completedQuantity(BigDecimal.ZERO)
-                    .pendingQuantity(BigDecimal.ZERO)
-                    .unit(requireProductionUnit(
-                            firstNonBlank(workTask.getOutputUnit(), workTask.getPlannedUnit(), batch.getUnit()),
-                            "工序任务 " + workTask.getId()))
-                    .startDate(LocalDate.now())
-                    .expectedEndDate(plan.getExpectedCompletionDate())
-                    .status(ProcessTaskStatus.PENDING)
-                    .createdBy(plan.getCreatedBy() == null ? 0L : plan.getCreatedBy())
-                    .notes("mirrorWorkProcessTaskId=" + workTask.getId())
-                    .build();
-            processTaskRepository.save(mirror);
-        }
-    }
-
-    private static BigDecimal firstPositive(BigDecimal... values) {
-        for (BigDecimal value : values) {
-            if (value != null && value.compareTo(BigDecimal.ZERO) > 0) {
-                return value;
-            }
-        }
-        return BigDecimal.ONE;
     }
 
     private static String requireProductionUnit(String unit, String context) {

@@ -94,7 +94,7 @@ async function loadData() {
     if (selectedProduct.value) {
       params.productTypeId = selectedProduct.value;
     }
-    // 单元4: 换源 /process-tasks → /production/yield/by-process (后端已聚合, 直接渲染)
+    // 单元4: 使用 /production/yield/by-process 后端聚合结果直接渲染
     const response = await get<ProcessYieldAgg[]>(
       `/${factoryId.value}/production/yield/by-process`, { params }
     );

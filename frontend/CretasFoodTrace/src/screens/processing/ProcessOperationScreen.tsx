@@ -8,9 +8,9 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, ActivityIndicator, KeyboardAvoidingView, Platform,
+  Alert, ActivityIndicator,
 } from 'react-native';
-import { Appbar, TextInput, Chip } from 'react-native-paper';
+import { Appbar, Chip } from 'react-native-paper';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -34,7 +34,6 @@ interface EmployeeLookupResponse {
     username?: string;
   };
 }
-const SUPERVISOR_SELF: ScannedWorker = { id: -1, name: '主管自己' };
 
 export default function ProcessOperationScreen() {
   const navigation = useNavigation<NavigationProp>();
@@ -80,17 +79,7 @@ export default function ProcessOperationScreen() {
 
   // Scanner
   const [scannerVisible, setScannerVisible] = useState(false);
-  const [scanMode, setScanMode] = useState<'checkin' | 'checkout' | 'report' | 'locate'>('checkin');
-  const [worker, setWorker] = useState<ScannedWorker | null>(null);
-
-  // Workers assigned to selected task (for picker)
-  const [taskWorkers, setTaskWorkers] = useState<ScannedWorker[]>([]);
-  const [workersLoading, setWorkersLoading] = useState(false);
-
-  // Report form
-  const [quantity, setQuantity] = useState('');
-  const [notes, setNotes] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const [scanMode, setScanMode] = useState<'checkin' | 'checkout' | 'locate'>('checkin');
 
   const loadTasks = useCallback(async () => {
     setLoading(true);
@@ -104,40 +93,6 @@ export default function ProcessOperationScreen() {
   }, []);
 
   useFocusEffect(useCallback(() => { loadTasks(); }, [loadTasks]));
-
-  // Load workers assigned to / checked into a task
-  const loadTaskWorkers = useCallback(async (taskId: string) => {
-    setWorkersLoading(true);
-    setTaskWorkers([]);
-    try {
-      // Try getActiveCheckins first — these are workers actually on the floor
-      const checkinsRes = await processTaskApiClient.getActiveCheckins();
-      const checkins = Array.isArray(checkinsRes?.data) ? checkinsRes.data : [];
-      const taskCheckins = checkins.filter((c) => String(c.processTaskId) === String(taskId));
-      if (taskCheckins.length > 0) {
-        const seen = new Set<number>();
-        const workers: ScannedWorker[] = [];
-        for (const c of taskCheckins) {
-          if (!seen.has(c.employeeId)) {
-            seen.add(c.employeeId);
-            workers.push({ id: c.employeeId, name: c.employeeName || c.workerName || `员工#${c.employeeId}` });
-          }
-        }
-        setTaskWorkers(workers);
-      } else {
-        // Fallback: try getWorkersByTask
-        const res = await processTaskApiClient.getWorkersByTask(taskId);
-        const list = Array.isArray(res?.data) ? res.data : [];
-        setTaskWorkers(list.map((w: any) => ({ id: w.id || w.employeeId, name: w.name || w.fullName || `员工#${w.id}` })));
-      }
-    } catch { /* silent — worker list is optional */ }
-    finally { setWorkersLoading(false); }
-  }, []);
-
-  // When a task is selected, load its workers
-  useEffect(() => {
-    if (selectedTask) loadTaskWorkers(String(selectedTask.id));
-  }, [selectedTask, loadTaskWorkers]);
 
   // Parse scanned code — shared resolver
   const resolveEmployee = useCallback(async (raw: string): Promise<ScannedWorker | null> => {
@@ -170,7 +125,6 @@ export default function ProcessOperationScreen() {
           const task = tasks.find(t => String(t.id) === String(match.processTaskId));
           if (task) {
             setSelectedTask(task);
-            setWorker({ id: emp.id, name: match.employeeName || match.workerName || emp.name });
             return;
           }
         }
@@ -184,7 +138,6 @@ export default function ProcessOperationScreen() {
           processTaskId: selectedTask?.id,
         });
         Alert.alert('签到成功', `${emp.name} 已签到「${selectedTask?.processName || '工序'}」`);
-        if (selectedTask) loadTaskWorkers(String(selectedTask.id)); // refresh worker list
       } else if (scanMode === 'checkout') {
         const checkinsRes = await processTaskApiClient.getActiveCheckins();
         const checkins = Array.isArray(checkinsRes?.data) ? checkinsRes.data : [];
@@ -195,16 +148,14 @@ export default function ProcessOperationScreen() {
         } else {
           Alert.alert('未找到签到记录', `${emp.name} 未签到此工序`);
         }
-      } else if (scanMode === 'report') {
-        setWorker(emp);
       }
     } catch (e) {
       Alert.alert('操作失败', e instanceof Error ? e.message : '请重试');
     }
-  }, [scanMode, selectedTask, tasks, resolveEmployee, loadTaskWorkers]);
+  }, [scanMode, selectedTask, tasks, resolveEmployee]);
 
   // R8: 主操作 — 导航到三阶段报工屏 (栈A: YieldStepReportScreen)
-  // D2: 若当前 ProcessTask 没有关联的 WorkProcessTask, 明确提示用户, 不静默降级
+  // Canonical task list guarantees both IDs. Missing linkage is an explicit data error.
   const handleNavigateToYieldReport = () => {
     if (!selectedTask) return;
 
@@ -212,16 +163,7 @@ export default function ProcessOperationScreen() {
     const batchId = selectedTask.batchId;
 
     if (!wptId || !batchId) {
-      // D2: 显式提示 + 允许用户选择回退到旧路径
-      Alert.alert(
-        '提示',
-        `该工序任务未关联工序实例 (workProcessTaskId=${wptId ?? '未知'})，无法进入三阶段报工。\n` +
-        '将使用旧版快速报工，只能提交产出数量（无 T-3 时效锁和超收防呆）。',
-        [
-          { text: '取消', style: 'cancel' },
-          { text: '使用旧版报工', onPress: () => setShowLegacyReportForm(true) },
-        ],
-      );
+      Alert.alert('不能报工', '当前工序任务缺少生产批次关联，请刷新后重试或联系管理员。');
       return;
     }
 
@@ -231,36 +173,6 @@ export default function ProcessOperationScreen() {
       assignedWorkProcessTaskId: wptId,
       assignedProcessOrder: selectedTask.processOrder ?? undefined,
     });
-  };
-
-  // R8: 次级入口 — 旧版快速报工 (submitNormalReport, 保留向后兼容)
-  // 注: 后端端点已标注 @Deprecated, 此路径仅在 D2 明确提示后用户主动选择时触发
-  const [showLegacyReportForm, setShowLegacyReportForm] = useState(false);
-
-  const handleSubmitReport = async () => {
-    if (!selectedTask) return;
-    const qty = parseFloat(quantity);
-    if (isNaN(qty) || qty <= 0) { Alert.alert('提示', '请输入有效的产出数量'); return; }
-
-    setSubmitting(true);
-    try {
-      const data: any = {
-        processTaskId: selectedTask.id,
-        outputQuantity: qty,
-        notes: notes || undefined,
-      };
-      if (worker && worker.id !== SUPERVISOR_SELF.id) {
-        data.reporterName = worker.name;
-        data.targetWorkerId = worker.id;
-      }
-      await processTaskApiClient.submitNormalReport(data);
-      Alert.alert('报工成功', `${selectedTask.processName} — ${qty} ${selectedTask.unit || 'kg'}`, [
-        { text: '继续', onPress: () => { setQuantity(''); setNotes(''); setWorker(null); setShowLegacyReportForm(false); } },
-        { text: '返回', onPress: () => setSelectedTask(null) },
-      ]);
-    } catch (e) {
-      Alert.alert('提交失败', e instanceof Error ? e.message : '请重试');
-    } finally { setSubmitting(false); }
   };
 
   const remaining = selectedTask
@@ -331,7 +243,7 @@ export default function ProcessOperationScreen() {
         <Appbar.Content title={selectedTask.processName || '工序操作'} titleStyle={{ fontWeight: '600' }} />
       </Appbar.Header>
 
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <View style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.scrollContent}>
           {/* Task Summary */}
           <View style={styles.summaryCard}>
@@ -378,131 +290,13 @@ export default function ProcessOperationScreen() {
           <View ref={tgtReport.ref} onLayout={tgtReport.onLayout} style={styles.reportSection}>
             <Text style={styles.sectionTitle}>报产量</Text>
 
-            {/* R8 主操作: 三阶段报工 (栈A) */}
-            {!showLegacyReportForm ? (
-              <View>
-                <TouchableOpacity
-                  style={styles.submitBtn}
-                  onPress={handleNavigateToYieldReport}
-                >
-                  <MaterialCommunityIcons name="clipboard-check-outline" size={20} color="#fff" style={{ marginRight: 6 }} />
-                  <Text style={styles.submitBtnText}>进入三阶段报工</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.legacyReportBtn}
-                  onPress={() => {
-                    Alert.alert(
-                      '旧版快速报工',
-                      '旧版快速报工仅提交产出数量，无时效锁和超收防呆。建议使用三阶段报工确保数据完整。继续？',
-                      [
-                        { text: '取消', style: 'cancel' },
-                        { text: '使用旧版', onPress: () => setShowLegacyReportForm(true) },
-                      ],
-                    );
-                  }}
-                >
-                  <Text style={styles.legacyReportBtnText}>旧版快速报工</Text>
-                </TouchableOpacity>
-              </View>
-            ) : (
-              /* R8 次级入口: 旧版快速报工 (D4: 后端端点已标 @Deprecated, 永久保留) */
-              <View>
-                <View style={styles.legacyWarning}>
-                  <MaterialCommunityIcons name="alert-outline" size={16} color="#faad14" />
-                  <Text style={styles.legacyWarningText}>旧版快速报工 — 无时效锁，无超收防呆</Text>
-                  <TouchableOpacity onPress={() => setShowLegacyReportForm(false)}>
-                    <Text style={{ color: theme.colors.primary, fontSize: 13 }}>切换回三阶段</Text>
-                  </TouchableOpacity>
-                </View>
-
-                {worker ? (
-                  <View style={styles.workerBadge}>
-                    <MaterialCommunityIcons name="account-check" size={18} color="#1890ff" />
-                    <Text style={styles.workerLabel}>报工员工:</Text>
-                    <Text style={styles.workerName}>{worker.name}</Text>
-                    <TouchableOpacity onPress={() => setWorker(null)}>
-                      <Text style={{ color: '#999', fontSize: 12 }}>更换</Text>
-                    </TouchableOpacity>
-                  </View>
-                ) : (
-                  <View>
-                    {workersLoading ? (
-                      <ActivityIndicator size="small" style={{ marginVertical: 8 }} />
-                    ) : taskWorkers.length > 0 ? (
-                      <View style={styles.workerPickerWrap}>
-                        <Text style={styles.workerPickerLabel}>选择员工 (已签到)</Text>
-                        <View style={styles.workerPickerGrid}>
-                          {taskWorkers.map(w => (
-                            <TouchableOpacity key={w.id} style={styles.workerPickerBtn} onPress={() => setWorker(w)}>
-                              <MaterialCommunityIcons name="account" size={16} color="#1890ff" />
-                              <Text style={styles.workerPickerName} numberOfLines={1}>{w.name}</Text>
-                            </TouchableOpacity>
-                          ))}
-                        </View>
-                      </View>
-                    ) : (
-                      <Text style={styles.noWorkerHint}>暂无已签到员工，可扫码或主管自己报工</Text>
-                    )}
-                    <View style={styles.workerActionsRow}>
-                      <TouchableOpacity
-                        style={styles.scanWorkerBtn}
-                        onPress={() => { setScanMode('report'); setScannerVisible(true); }}
-                      >
-                        <MaterialCommunityIcons name="qrcode-scan" size={16} color={theme.colors.primary} />
-                        <Text style={styles.scanWorkerText}>扫码工牌</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.selfReportBtn} onPress={() => setWorker(SUPERVISOR_SELF)}>
-                        <Text style={styles.selfReportText}>主管自己报</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                )}
-
-                <TextInput
-                  label={`产出数量 (${selectedTask.unit || 'kg'})`}
-                  value={quantity}
-                  onChangeText={setQuantity}
-                  keyboardType="decimal-pad"
-                  mode="outlined"
-                  style={styles.input}
-                  right={<TextInput.Affix text={selectedTask.unit || 'kg'} />}
-                />
-
-                {remaining > 0 && (
-                  <View style={styles.quickBtns}>
-                    <Text style={{ fontSize: 13, color: '#666' }}>快捷:</Text>
-                    {[remaining, Math.round(remaining / 2)].filter(v => v > 0).map(v => (
-                      <TouchableOpacity key={v} style={styles.quickBtn} onPress={() => setQuantity(String(v))}>
-                        <Text style={styles.quickBtnText}>{v}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
-
-                <TextInput
-                  label="备注 (选填)"
-                  value={notes}
-                  onChangeText={setNotes}
-                  mode="outlined"
-                  multiline
-                  numberOfLines={2}
-                  style={[styles.input, { marginTop: 10 }]}
-                />
-
-                <TouchableOpacity
-                  style={[styles.submitBtn, (!quantity || submitting) && { opacity: 0.5 }]}
-                  onPress={handleSubmitReport}
-                  disabled={!quantity || submitting}
-                >
-                  {submitting ? <ActivityIndicator color="#fff" /> :
-                    <Text style={styles.submitBtnText}>提交报工</Text>
-                  }
-                </TouchableOpacity>
-              </View>
-            )}
+            <TouchableOpacity style={styles.submitBtn} onPress={handleNavigateToYieldReport}>
+              <MaterialCommunityIcons name="clipboard-check-outline" size={20} color="#fff" style={{ marginRight: 6 }} />
+              <Text style={styles.submitBtnText}>进入三阶段报工</Text>
+            </TouchableOpacity>
           </View>
         </ScrollView>
-      </KeyboardAvoidingView>
+      </View>
 
       <BarcodeScannerModal
         visible={scannerVisible}

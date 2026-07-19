@@ -1,7 +1,6 @@
 package com.cretas.aims.service.production;
 
 import com.cretas.aims.entity.ProductionPlan;
-import com.cretas.aims.entity.enums.ProcessTaskStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.exception.BusinessException;
@@ -9,7 +8,6 @@ import com.cretas.aims.mapper.ProductionPlanMapper;
 import com.cretas.aims.repository.ConversionRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
-import com.cretas.aims.repository.ProcessTaskRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionLineRepository;
@@ -22,7 +20,6 @@ import com.cretas.aims.service.BomService;
 import com.cretas.aims.service.SchedulingService;
 import com.cretas.aims.service.impl.ProductionPlanServiceImpl;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
-import com.cretas.aims.entity.ProcessTask;
 import com.cretas.aims.utils.ExcelUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -72,7 +69,6 @@ class ProductionPlanReversalApprovalTest {
 
     @Mock private ProductionPlanRepository productionPlanRepository;
     @Mock private ProductionBatchRepository productionBatchRepository;
-    @Mock private ProcessTaskRepository processTaskRepository;
     @Mock private MaterialBatchRepository materialBatchRepository;
     @Mock private MaterialConsumptionRepository materialConsumptionRepository;
     @Mock private ProductionPlanBatchUsageRepository planBatchUsageRepository;
@@ -98,7 +94,7 @@ class ProductionPlanReversalApprovalTest {
     @BeforeEach
     void setUp() {
         service = new ProductionPlanServiceImpl(
-                productionPlanRepository, productionBatchRepository, processTaskRepository,
+                productionPlanRepository, productionBatchRepository,
                 materialBatchRepository, materialConsumptionRepository, planBatchUsageRepository,
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
@@ -234,7 +230,6 @@ class ProductionPlanReversalApprovalTest {
         // R1: 仅查询本批次任务, 绝不走旧的"按产品类型全关 ProcessTask"
         verify(workProcessTaskRepository, times(1))
                 .findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, 70L);
-        verify(processTaskRepository, never()).findByFactoryIdAndProductTypeId(any(), any());
     }
 
     // -----------------------------------------------------------------------

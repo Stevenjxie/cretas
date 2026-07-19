@@ -1,5 +1,6 @@
 import { apiClient } from './apiClient';
 import { requireFactoryId } from '../../utils/factoryIdHelper';
+import type { PageResponse, WorkProcessTask } from './yieldReportApi';
 
 // ========== Types ==========
 
@@ -199,36 +200,127 @@ class ProcessTaskApiClient {
     return `/api/mobile/${fid}`;
   }
 
-  // --- Process Tasks ---
+  private toProcessTaskItem(task: WorkProcessTask): ProcessTaskItem {
+    return {
+      id: String(task.id),
+      factoryId: task.factoryId,
+      batchNumber: task.batchNumber ?? undefined,
+      productTypeId: task.productTypeId,
+      productTypeName: task.productTypeName ?? undefined,
+      workProcessId: task.workProcessId,
+      processName: task.processName ?? undefined,
+      processCategory: task.processCategory ?? undefined,
+      unit: task.plannedUnit ?? task.outputUnit ?? '',
+      batchId: task.productionBatchId,
+      productionBatchId: task.productionBatchId,
+      workProcessTaskId: task.id,
+      processOrder: task.processOrder,
+      outputUnit: task.outputUnit ?? undefined,
+      plannedUnit: task.plannedUnit ?? undefined,
+      productionRunId: `BATCH-${task.productionBatchId}`,
+      plannedQuantity: task.plannedQuantity ?? 0,
+      completedQuantity: task.actualQuantity ?? 0,
+      pendingQuantity: 0,
+      status: task.status,
+      createdAt: task.createdAt ?? undefined,
+      updatedAt: task.updatedAt ?? undefined,
+    };
+  }
+
+  private parseTaskId(taskId: string): number {
+    const normalized = taskId.startsWith('WPT-') ? taskId.slice(4) : taskId;
+    const parsed = Number(normalized);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      throw new Error(`无效的工序任务ID: ${taskId}`);
+    }
+    return parsed;
+  }
+
+  private parseBatchId(productionRunId: string): number {
+    const normalized = productionRunId.startsWith('BATCH-')
+      ? productionRunId.slice(6)
+      : productionRunId;
+    const parsed = Number(normalized);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      throw new Error(`无效的生产批次ID: ${productionRunId}`);
+    }
+    return parsed;
+  }
+
+  // --- Canonical Work Process Tasks ---
 
   async getActiveTasks(factoryId?: string): Promise<ApiEnvelope<ProcessTaskItem[] | { content: ProcessTaskItem[] }>> {
     const base = this.getBase(factoryId);
-    return apiClient.get<ApiEnvelope<ProcessTaskItem[] | { content: ProcessTaskItem[] }>>(`${base}/process-tasks/active`);
+    const response = await apiClient.get<ApiEnvelope<PageResponse<WorkProcessTask>>>(
+      `${base}/work-process-tasks`,
+      { params: { page: 1, size: 1000 } },
+    );
+    const tasks = (response.data?.content ?? [])
+      .filter(task => task.status === 'PENDING' || task.status === 'IN_PROGRESS')
+      .map(task => this.toProcessTaskItem(task));
+    return { ...response, data: tasks };
   }
 
-  async getTasks(params: { status?: string; productTypeId?: string; page?: number; size?: number }, factoryId?: string) {
+  async getTasks(
+    params: { status?: string; productTypeId?: string; page?: number; size?: number },
+    factoryId?: string,
+  ): Promise<ApiEnvelope<{ content: ProcessTaskItem[]; totalElements?: number }>> {
     const base = this.getBase(factoryId);
-    return apiClient.get(`${base}/process-tasks`, { params });
+    const response = await apiClient.get<ApiEnvelope<PageResponse<WorkProcessTask>>>(
+      `${base}/work-process-tasks`,
+      { params: { status: params.status, page: params.page ?? 1, size: params.size ?? 50 } },
+    );
+    const content = (response.data?.content ?? [])
+      .filter(task => !params.productTypeId || task.productTypeId === params.productTypeId)
+      .map(task => this.toProcessTaskItem(task));
+    return {
+      ...response,
+      data: { content, totalElements: params.productTypeId ? content.length : response.data?.totalElements },
+    };
   }
 
-  async getTaskById(taskId: string, factoryId?: string) {
+  async getTaskById(taskId: string, factoryId?: string): Promise<ApiEnvelope<ProcessTaskItem>> {
     const base = this.getBase(factoryId);
-    return apiClient.get(`${base}/process-tasks/${taskId}`);
+    const response = await apiClient.get<ApiEnvelope<WorkProcessTask>>(
+      `${base}/work-process-tasks/${this.parseTaskId(taskId)}`,
+    );
+    return { ...response, data: response.data ? this.toProcessTaskItem(response.data) : undefined };
   }
 
-  async getTaskSummary(taskId: string, factoryId?: string) {
-    const base = this.getBase(factoryId);
-    return apiClient.get(`${base}/process-tasks/${taskId}/summary`);
+  async getTaskSummary(taskId: string, factoryId?: string): Promise<ApiEnvelope<ProcessTaskSummary>> {
+    const taskResponse = await this.getTaskById(taskId, factoryId);
+    const task = taskResponse.data;
+    if (!task) return { ...taskResponse, data: undefined };
+    return {
+      ...taskResponse,
+      data: {
+        task,
+        taskId: task.id,
+        processName: task.processName,
+        productName: task.productTypeName,
+        plannedQuantity: task.plannedQuantity,
+        completedQuantity: task.completedQuantity,
+        pendingQuantity: 0,
+        unit: task.unit,
+        status: task.status,
+        productionRunId: task.productionRunId,
+      },
+    };
   }
 
-  async getRunOverview(productionRunId: string, factoryId?: string) {
+  async getRunOverview(productionRunId: string, factoryId?: string): Promise<ApiEnvelope<RunOverview>> {
     const base = this.getBase(factoryId);
-    return apiClient.get(`${base}/process-tasks/run/${productionRunId}`);
-  }
-
-  async updateTaskStatus(taskId: string, status: string, factoryId?: string) {
-    const base = this.getBase(factoryId);
-    return apiClient.put(`${base}/process-tasks/${taskId}/status`, { status });
+    const batchId = this.parseBatchId(productionRunId);
+    const response = await apiClient.get<ApiEnvelope<WorkProcessTask[]>>(
+      `${base}/production/batches/${batchId}/work-process-tasks`,
+    );
+    const tasks = (response.data ?? []).map(task => this.toProcessTaskItem(task));
+    const completedTasks = tasks.filter(task => task.status === 'COMPLETED').length;
+    const overallProgress = tasks.length === 0 ? 0 : Math.round((completedTasks / tasks.length) * 100);
+    return {
+      ...response,
+      data: { productionRunId: `BATCH-${batchId}`, tasks, overallProgress, completedTasks, totalTasks: tasks.length },
+    };
   }
 
   // --- Work Reporting (Process Mode) ---
@@ -251,16 +343,6 @@ class ProcessTaskApiClient {
   async batchApprove(reportIds: number[], factoryId?: string) {
     const base = this.getBase(factoryId);
     return apiClient.put(`${base}/process-work-reporting/batch-approve`, reportIds);
-  }
-
-  async submitNormalReport(data: SubmitProcessReportPayload, factoryId?: string) {
-    const base = this.getBase(factoryId);
-    return apiClient.post(`${base}/process-work-reporting/normal`, data);
-  }
-
-  async submitSupplement(data: SubmitProcessReportPayload, factoryId?: string) {
-    const base = this.getBase(factoryId);
-    return apiClient.post(`${base}/process-work-reporting/supplement`, data);
   }
 
   async getReportsByTask(taskId: string, factoryId?: string) {
@@ -290,18 +372,6 @@ class ProcessTaskApiClient {
     return apiClient.get<ApiEnvelope<ProcessCheckinRecord[]>>(`${base}/process-checkin/active`);
   }
 
-  /** 根据产品关联的工序，一键生成工序任务 */
-  async generateTasksFromProduct(
-    data: {
-      productTypeId: string;
-      sourceCustomerName?: string;
-      plannedQuantities?: Record<string, number>;
-    },
-    factoryId?: string,
-  ) {
-    const base = this.getBase(factoryId);
-    return apiClient.post(`${base}/process-tasks/generate-from-product`, data);
-  }
 }
 
 export const processTaskApiClient = new ProcessTaskApiClient();

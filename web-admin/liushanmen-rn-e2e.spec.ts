@@ -1059,18 +1059,6 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
       }
     }
 
-    // API verification
-    const tasksResp = await api('/process-tasks?page=1&size=5');
-    const tasks = tasksResp.data?.content || tasksResp.data || [];
-    if (tasks.length) {
-      const task = tasks[0];
-      console.log(`RN-P2-01 API: task="${task.processName}", planned=${task.plannedQuantity}, completed=${task.completedQuantity}`);
-      if (task.plannedQuantity > 0 && task.completedQuantity > 0) {
-        const rate = Math.round((task.completedQuantity / task.plannedQuantity) * 1000) / 10;
-        console.log(`RN-P2-01 API: conversion rate=${rate}%`);
-      }
-    }
-
     await shot(page, 'rn-p2-01-final.png');
   });
 
@@ -1260,13 +1248,6 @@ test.describe('六扇门一期 RN Expo Web E2E', () => {
       console.log('RN-M87: SKIP — 管理 tab not found');
     }
 
-    // API verification
-    const tasksResp = await api('/process-tasks?page=1&size=5');
-    const tasks = tasksResp.data?.content || tasksResp.data || [];
-    console.log(`RN-M87 API: ${tasks.length} tasks`);
-    for (const t of tasks.slice(0, 3)) {
-      console.log(`  task="${t.processName}", input=${t.inputQuantity || 'N/A'}, completed=${t.completedQuantity}`);
-    }
     await shot(page, 'rn-m87-final.png');
   });
 

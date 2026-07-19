@@ -257,47 +257,22 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
             @Param("startDate") LocalDate startDate,
             @Param("endDate") LocalDate endDate);
 
-    // ==================== PROCESS 模式 ====================
+    // ==================== 工序任务审批/查询 ====================
 
-    List<ProductionReport> findByProcessTaskIdAndDeletedAtIsNull(String processTaskId);
-
-    List<ProductionReport> findByProcessTaskIdAndApprovalStatusAndDeletedAtIsNull(
-            String processTaskId, String approvalStatus);
-
-    Page<ProductionReport> findByFactoryIdAndApprovalStatusAndProcessTaskIdIsNotNullAndDeletedAtIsNull(
-            String factoryId, String approvalStatus, Pageable pageable);
+    List<ProductionReport> findByFactoryIdAndWorkProcessTaskIdAndDeletedAtIsNull(
+            String factoryId, Long workProcessTaskId);
 
     @Query("""
             SELECT r FROM ProductionReport r
             WHERE r.factoryId = :factoryId
               AND r.approvalStatus = :approvalStatus
               AND r.deletedAt IS NULL
-              AND (r.processTaskId IS NOT NULL OR r.workProcessTaskId IS NOT NULL)
+              AND r.workProcessTaskId IS NOT NULL
             """)
     Page<ProductionReport> findPendingApprovalsForFactory(
             @Param("factoryId") String factoryId,
             @Param("approvalStatus") String approvalStatus,
             Pageable pageable);
-
-    @Query(value = """
-        SELECT
-            COALESCE(SUM(CAST(output_quantity AS DECIMAL(12,2))), 0) as total
-        FROM production_reports
-        WHERE process_task_id = :taskId
-          AND approval_status = 'APPROVED'
-          AND deleted_at IS NULL
-        """, nativeQuery = true)
-    Map<String, Object> sumApprovedQuantityByTaskId(@Param("taskId") String taskId);
-
-    @Query(value = """
-        SELECT
-            COALESCE(SUM(CAST(output_quantity AS DECIMAL(12,2))), 0) as total
-        FROM production_reports
-        WHERE process_task_id = :taskId
-          AND approval_status = 'PENDING'
-          AND deleted_at IS NULL
-        """, nativeQuery = true)
-    Map<String, Object> sumPendingQuantityByTaskId(@Param("taskId") String taskId);
 
     @Query(value = """
         SELECT COALESCE(SUM(CAST(COALESCE(custom_fields->>'sourceWipQuantity', input_quantity::text) AS DECIMAL(12,2))), 0)
@@ -313,42 +288,6 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
             @Param("factoryId") String factoryId,
             @Param("sourceWipNo") String sourceWipNo,
             @Param("excludeReportId") Long excludeReportId);
-
-    @Query(value = """
-        SELECT
-            worker_id,
-            reporter_name as worker_name,
-            COALESCE(SUM(CAST(output_quantity AS DECIMAL(12,2))), 0) as total_quantity,
-            COUNT(*) as report_count
-        FROM production_reports
-        WHERE process_task_id = :taskId
-          AND approval_status = 'APPROVED'
-          AND deleted_at IS NULL
-        GROUP BY worker_id, reporter_name
-        ORDER BY total_quantity DESC
-        """, nativeQuery = true)
-    List<Map<String, Object>> getWorkerSummaryByTaskId(@Param("taskId") String taskId);
-
-    // ==================== 报工防重 (30s 时间窗口) ====================
-
-    // #566 T4-B6: 替代 in-memory filter on findByProcessTaskIdAndDeletedAtIsNull —
-    // F006 prod 单任务可累计 ~6700 行,JVM 端 stream filter 单次 3-15s。
-    // 配套 partial index idx_pr_dedup (V20260514_01) → 索引扫描 <5ms。
-    @Query(value = """
-        SELECT * FROM production_reports
-        WHERE process_task_id = :taskId
-          AND worker_id = :workerId
-          AND output_quantity = :qty
-          AND created_at > :since
-          AND deleted_at IS NULL
-        ORDER BY created_at DESC
-        LIMIT 1
-        """, nativeQuery = true)
-    Optional<ProductionReport> findRecentDuplicate(
-            @Param("taskId") String taskId,
-            @Param("workerId") Long workerId,
-            @Param("qty") BigDecimal qty,
-            @Param("since") LocalDateTime since);
 
     // ==================== 冲销防重 ====================
 

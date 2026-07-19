@@ -49,21 +49,15 @@ public class StateMachineServiceImpl implements StateMachineService {
     private final QualityDispositionRuleService qualityDispositionRuleService;
     private final QualityInspectionRepository qualityInspectionRepository;
     private final WorkflowLearningService workflowLearningService;
-    private final com.cretas.aims.repository.ProcessTaskRepository processTaskRepository;
-    private final com.cretas.aims.repository.ProductionReportRepository productionReportRepository;
 
     // 静态引用用于SpEL函数调用
     private static QualityDispositionRuleService staticQualityService;
     private static QualityInspectionRepository staticInspectionRepo;
-    private static com.cretas.aims.repository.ProcessTaskRepository staticProcessTaskRepo;
-    private static com.cretas.aims.repository.ProductionReportRepository staticProductionReportRepo;
 
     @jakarta.annotation.PostConstruct
     public void init() {
         staticQualityService = this.qualityDispositionRuleService;
         staticInspectionRepo = this.qualityInspectionRepository;
-        staticProcessTaskRepo = this.processTaskRepository;
-        staticProductionReportRepo = this.productionReportRepository;
     }
 
     // SpEL 表达式解析器
@@ -548,20 +542,6 @@ public class StateMachineServiceImpl implements StateMachineService {
                     StateMachineServiceImpl.class.getDeclaredMethod("getQualityDisposition",
                             String.class, Long.class));
 
-            // ==================== 生产工作流守卫函数 ====================
-
-            // 注册 isCompletedGtePlanned 函数 - 完成量 >= 计划量
-            context.registerFunction("isCompletedGtePlanned",
-                    StateMachineServiceImpl.class.getDeclaredMethod("isCompletedGtePlanned", String.class));
-
-            // 注册 hasNoPendingSupplements 函数 - 无待审补报
-            context.registerFunction("hasNoPendingSupplements",
-                    StateMachineServiceImpl.class.getDeclaredMethod("hasNoPendingSupplements", String.class));
-
-            // 注册 previousStatusIs 函数 - 补报前终态匹配
-            context.registerFunction("previousStatusIs",
-                    StateMachineServiceImpl.class.getDeclaredMethod("previousStatusIs", String.class, String.class));
-
         } catch (NoSuchMethodException e) {
             log.warn("注册守卫函数失败: {}", e.getMessage());
         }
@@ -718,56 +698,6 @@ public class StateMachineServiceImpl implements StateMachineService {
 
         } catch (Exception e) {
             return "HOLD";
-        }
-    }
-
-    // ==================== 生产工作流守卫函数 ====================
-
-    /**
-     * 检查完成量是否 >= 计划量 (供 SpEL 调用)
-     * 用法: #isCompletedGtePlanned(taskId)
-     */
-    public static boolean isCompletedGtePlanned(String taskId) {
-        if (staticProcessTaskRepo == null) return true;
-        try {
-            return staticProcessTaskRepo.findById(taskId)
-                    .map(task -> task.getCompletedQuantity().compareTo(task.getPlannedQuantity()) >= 0)
-                    .orElse(false);
-        } catch (Exception e) {
-            log.warn("isCompletedGtePlanned guard failed for taskId={}: {}", taskId, e.getMessage());
-            return false;
-        }
-    }
-
-    /**
-     * 检查是否无待审补报记录 (供 SpEL 调用)
-     * 用法: #hasNoPendingSupplements(taskId)
-     */
-    public static boolean hasNoPendingSupplements(String taskId) {
-        if (staticProductionReportRepo == null) return true;
-        try {
-            java.util.List<com.cretas.aims.entity.ProductionReport> pending =
-                    staticProductionReportRepo.findByProcessTaskIdAndApprovalStatusAndDeletedAtIsNull(taskId, "PENDING");
-            return pending.isEmpty();
-        } catch (Exception e) {
-            log.warn("hasNoPendingSupplements guard failed for taskId={}: {}", taskId, e.getMessage());
-            return true;
-        }
-    }
-
-    /**
-     * 检查补报前终态是否匹配 (供 SpEL 调用)
-     * 用法: #previousStatusIs('COMPLETED')
-     */
-    public static boolean previousStatusIs(String taskId, String expectedStatus) {
-        if (staticProcessTaskRepo == null) return true;
-        try {
-            return staticProcessTaskRepo.findById(taskId)
-                    .map(task -> expectedStatus.equals(task.getPreviousTerminalStatus()))
-                    .orElse(false);
-        } catch (Exception e) {
-            log.warn("previousStatusIs guard failed for taskId={}: {}", taskId, e.getMessage());
-            return false;
         }
     }
 

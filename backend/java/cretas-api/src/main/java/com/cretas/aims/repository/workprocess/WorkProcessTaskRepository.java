@@ -56,7 +56,7 @@ public interface WorkProcessTaskRepository extends JpaRepository<WorkProcessTask
     /**
      * R8 双栈合并: 按 factoryId + productionBatchId + workProcessId 查唯一工序任务.
      *
-     * <p>用于 ProcessTaskServiceImpl.resolveWorkProcessTaskId 的 BATCH- 路径：
+     * <p>用于按批次与工序定位唯一的 canonical task：
      * 当 ProcessTask.productionRunId = "BATCH-{batchId}" 时, 通过
      * (factoryId, productionBatchId, workProcessId) 关联键找对应的 WorkProcessTask.
      * 一个批次内同一工序只有一个实例, 结果唯一.

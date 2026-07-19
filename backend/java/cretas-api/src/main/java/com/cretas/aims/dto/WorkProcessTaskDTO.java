@@ -151,4 +151,18 @@ public class WorkProcessTaskDTO {
         @Size(max = 500, message = "notes 不能超过 500 字符")
         private String notes;
     }
+
+    /** Canonical per-task production report aggregation. */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class WorkerSummary {
+        private Long workerId;
+        private String workerName;
+        private BigDecimal totalQuantity;
+        private BigDecimal approvedQuantity;
+        private BigDecimal pendingQuantity;
+        private Integer reportCount;
+    }
 }
