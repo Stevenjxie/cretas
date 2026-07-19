@@ -32,6 +32,21 @@
 - 状态边界：代码已合并；未部署、未执行生产 DML/DDL、未删除 2+17 条生产测试数据或两张旧表、未重启生产服务。
 - Scope 锁：已释放。
 
+### `REDUNDANCY-SH01-FREEZE-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- Base SHA：`6368314cc33c12bcf0c6705a002f5b78f1eead77`
+- 实现 commit：`e965d35e33c47f14f9be9c55443f1c10e7cf287e`
+- PR：[#1477](https://github.com/Stevenjxie/cretas/pull/1477)
+- `main` squash merge commit：`3120b98600b683e8f7528b8e62cf050fa8806a3d`
+- 范围：旧 `/shipments` 四类 mutation 固定返回 410；`ShipmentRecordService` 收敛为只读；删除 8 个旧 AI mutation Tool、descriptor、RBAC/Skill 注册和 embedding 路由；RN/Web 删除旧写消费者，保留历史 GET；正式写链统一为 sales delivery → warehouse confirm。
+- 数据边界：本阶段未删除 `shipment_records` 的 64 条测试数据，也未删除表。必须先部署本冻结版本，再基于冻结后的生产快照提交独立清理 migration。
+- 本地验收：后端冻结与 descriptor 9 tests 通过；既有追溯与正式发货批次/库存链 32 tests 通过；RN 合约 3 tests 和 `tsc --noEmit` 通过；Web 合约 2 tests 与 Vite 生产构建通过；`git diff --check` 通过。完整 Web `vue-tsc` 仅受未改动的 `ProductProcessWorkflowEditor.vue` 既有类型错误阻塞。
+- GitHub 门禁：PR 未报告 required checks；本次未修改 Entity/Repository query，不触发 JPA Repository 查询启动门禁。
+- 状态边界：代码已合并；尚未生产部署，V80 尚未在生产执行，旧表数据尚未清理。
+- Scope 锁：已释放。
+
 ### `CRETAS-F006-PROD-WRITE-EXCEPTION-20260719`
 
 - 状态：`merged`

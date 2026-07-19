@@ -6,15 +6,11 @@
 
 ## 在飞任务
 
-- `REDUNDANCY-SH01-FREEZE-20260719` — `review`
-  - Base SHA: `6368314cc33c12bcf0c6705a002f5b78f1eead77`
-  - Owner: `Codex /root`
-  - Scope: `backend/java/cretas-api` 旧 shipment mutation Controller/Service、shipment mutation AI Tools、`V20261028_80__freeze_legacy_shipment_ai_writes.sql` 与目标测试；`frontend/CretasFoodTrace` 旧出货写入口；`web-admin` 旧出货写入口；本任务证据文档与 dispatch 归档。数据清空必须在 410 已部署后作为独立任务和 migration 执行。
-  - 验收命令: `mvn "-Dtest=LegacyShipmentWriteFreezeControllerTest,LegacyShipmentWriteFreezeServiceTest,LegacyShipmentMutationToolRemovalContractTest,ToolDescriptorInventoryDriftTest,ShipmentTraceabilityFlowTest,SalesDeliveryHonorBatchAllocationTest,SalesDeliveryBatchAllocationServiceWarehouseTest" test`; RN/Web 旧 mutation 消费者清零目标测试；`git diff --check`。
+- 无。
 
 ## Scope 锁地图
 
-- `REDUNDANCY-SH01-FREEZE-20260719`: `backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ShipmentController.java`, `backend/java/cretas-api/src/main/java/com/cretas/aims/service/ShipmentRecordService.java`, `backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/**` legacy shipment mutation registrations, `backend/java/cretas-api/src/main/resources/db/flyway/V20261028_80__freeze_legacy_shipment_ai_writes.sql`, related backend tests, `frontend/CretasFoodTrace/src/**` legacy shipment mutation consumers, `web-admin/src/views/{sales,warehouse}/shipments/**`, SH-01 evidence/dispatch docs.
+- 无。
 
 ## 阻塞项
 
