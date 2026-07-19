@@ -185,7 +185,7 @@ class ToolExecutionRepositoryQueryValidationTest {
     @Test
     void migrationContainsOnlyOneWaySecretBindingsAndStickyUncertainState() throws Exception {
         String sql = Files.readString(Path.of(
-                "src/main/resources/db/flyway/V20261028_76__tool_execution_gateway_ledger.sql"));
+                "src/main/resources/db/flyway/V20261028_77__tool_execution_gateway_ledger.sql"));
 
         assertThat(sql)
                 .contains("idempotency_key_hash VARCHAR(64) NOT NULL")
