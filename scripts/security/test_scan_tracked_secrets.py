@@ -80,6 +80,23 @@ class SecretScannerTest(unittest.TestCase):
         rendered = "\n".join(str(item) for item in findings)
         self.assertNotIn(value.decode(), rendered)
 
+    def test_known_compromised_fingerprint_in_systemd_wrapper_is_detected(self):
+        value = b"known%compromised!systemd?fixture&with#special"
+        old = SCANNER.COMPROMISED_FINGERPRINTS
+        try:
+            SCANNER.COMPROMISED_FINGERPRINTS = {
+                SCANNER.fingerprint(value): "unit-test systemd fixture"
+            }
+            findings = SCANNER.scan_content(
+                "docs/example.txt",
+                b'Environment="API_KEY=' + value + b'"',
+            )
+        finally:
+            SCANNER.COMPROMISED_FINGERPRINTS = old
+        self.assertEqual("compromised-fingerprint", findings[0].rule)
+        rendered = "\n".join(str(item) for item in findings)
+        self.assertNotIn(value.decode(), rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

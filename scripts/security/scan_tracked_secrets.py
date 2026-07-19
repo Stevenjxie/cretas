@@ -51,6 +51,11 @@ FINGERPRINT_ASSIGNMENT_RE = re.compile(
     rb"(?m)^[ \t]*(?:export[ \t]+)?[A-Za-z_][A-Za-z0-9_.-]*[ \t]*=[ \t]*"
     rb"(?:\"([^\"\r\n]*)\"|'([^'\r\n]*)'|([^\s#;\r\n]+))"
 )
+FINGERPRINT_SYSTEMD_ENV_RE = re.compile(
+    rb"(?m)^[ \t]*Environment[ \t]*=[ \t]*"
+    rb"(?:\"[A-Za-z_][A-Za-z0-9_.-]*=([^\"\r\n]*)\"|"
+    rb"'[A-Za-z_][A-Za-z0-9_.-]*=([^'\r\n]*)')"
+)
 ALIYUN_AK_RE = re.compile(r"\bLTAI[A-Za-z0-9]{16,28}\b")
 PROVIDER_KEY_RE = re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b")
 PRIVATE_KEY_RE = re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----")
@@ -150,6 +155,14 @@ def scan_content(path: str, content: bytes) -> list[Finding]:
     # Parse assignment RHS independently across the full tracked tree and still
     # report only an exact fingerprint match, never the captured value.
     for match in FINGERPRINT_ASSIGNMENT_RE.finditer(content):
+        candidate = next(group for group in match.groups() if group is not None)
+        fp = fingerprint(candidate)
+        if fp in COMPROMISED_FINGERPRINTS and not allow_revoked:
+            findings.add(
+                Finding(path, line_number(content, match.start()), "compromised-fingerprint", fp)
+            )
+
+    for match in FINGERPRINT_SYSTEMD_ENV_RE.finditer(content):
         candidate = next(group for group in match.groups() if group is not None)
         fp = fingerprint(candidate)
         if fp in COMPROMISED_FINGERPRINTS and not allow_revoked:
