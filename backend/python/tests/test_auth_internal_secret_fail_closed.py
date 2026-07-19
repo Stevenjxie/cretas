@@ -23,7 +23,7 @@ import time
 import pytest
 import jwt as pyjwt
 
-from auth_middleware import JWTAuthMiddleware
+from auth_middleware import JWTAuthMiddleware, PUBLIC_PREFIXES
 
 
 class _Echo:
@@ -74,6 +74,15 @@ def _mw(enabled=True, jwt_secret="test-secret-only-for-jwt-branch"):
 _HARDCODED_OLD_FALLBACK = "cretas-internal-2026"
 _OWNER_ACTION_PATH = "/api/smartbi/restaurant/sections/owner-action-chat"
 _AGENT_RUN_PATH = "/api/internal/smartbi/agent/runs"
+_GENERAL_ANALYSIS_PATHS = (
+    "/api/chat/general-analysis",
+    "/api/chat/general-analysis-stream",
+)
+
+
+def test_general_analysis_paths_are_not_public_prefixes():
+    for path in _GENERAL_ANALYSIS_PATHS:
+        assert not any(path.startswith(prefix) for prefix in PUBLIC_PREFIXES)
 
 
 def test_correct_secret_when_env_set_takes_internal_branch(monkeypatch):
@@ -117,6 +126,66 @@ def test_agent_run_prefix_requires_secret_and_injects_trusted_identity(monkeypat
         "business_type": "RESTAURANT",
         "role": "restaurant_owner",
     }
+
+
+@pytest.mark.parametrize("path", _GENERAL_ANALYSIS_PATHS)
+def test_general_analysis_paths_reject_missing_auth(monkeypatch, path):
+    monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
+
+    status, echo = _run(_mw(), {}, path=path)
+
+    assert status == 401
+    assert echo.reached is False
+
+
+@pytest.mark.parametrize("path", _GENERAL_ANALYSIS_PATHS)
+def test_general_analysis_paths_accept_internal_trusted_tenant(monkeypatch, path):
+    monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
+
+    status, echo = _run(
+        _mw(),
+        {
+            "x-internal-secret": "real-prod-secret-xyz",
+            "x-factory-id": "F001",
+            "x-user-id": "7",
+        },
+        path=path,
+    )
+
+    assert status == 200
+    assert echo.reached is True
+    assert echo.state.get("auth_method") == "internal"
+    assert echo.state.get("factory_id") == "F001"
+
+
+@pytest.mark.parametrize("path", _GENERAL_ANALYSIS_PATHS)
+def test_general_analysis_paths_accept_jwt_trusted_tenant(monkeypatch, path):
+    monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
+    raw_secret = "jwt-real-secret"
+    padded_secret = raw_secret.encode("utf-8") + b"\x00" * (
+        32 - len(raw_secret.encode("utf-8"))
+    )
+    token = pyjwt.encode(
+        {
+            "factoryId": "F001",
+            "userId": 7,
+            "role": "factory_super_admin",
+            "exp": int(time.time()) + 300,
+        },
+        padded_secret,
+        algorithm="HS256",
+    )
+
+    status, echo = _run(
+        _mw(jwt_secret=raw_secret),
+        {"authorization": f"Bearer {token}"},
+        path=path,
+    )
+
+    assert status == 200
+    assert echo.reached is True
+    assert echo.state.get("auth_method") == "jwt"
+    assert echo.state.get("factory_id") == "F001"
 
 
 def test_old_hardcoded_fallback_rejected_when_env_set(monkeypatch):
