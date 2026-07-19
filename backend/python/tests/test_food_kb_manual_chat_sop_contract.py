@@ -7,7 +7,9 @@ from food_kb.api.manual_chat import (
     FACTORY_SYSTEM_PROMPT,
     ManualChatRequest,
     _build_scope_prompt,
+    _uses_current_production_sop,
 )
+from food_kb.services.knowledge_retriever import KnowledgeRetriever
 from food_kb.services.manual_ingester import (
     MANUAL_SOURCES,
     PROJECT_ROOT,
@@ -34,6 +36,30 @@ def test_scope_prompt_distinguishes_depth_and_business_line():
     assert "全量数据闭环" in full_sales
     assert "开票和收款" in full_sales
     assert mvp_stock != full_sales
+
+
+def test_only_production_chain_questions_force_the_current_sop_source():
+    assert _uses_current_production_sop("多个原料连接到工序时怎么报工")
+    assert _uses_current_production_sop("Workflow 的成品单位为什么是盒")
+    assert not _uses_current_production_sop("登录页忘记密码怎么办")
+    assert not _uses_current_production_sop("设备保养入口在哪里")
+
+
+def test_retriever_source_allow_list_is_bound_as_a_sql_parameter():
+    retriever = KnowledgeRetriever()
+    sql, params = retriever._build_vector_query(
+        query_embedding=[0.1, 0.2],
+        categories=["operation_manual"],
+        subcategories=["factory"],
+        top_k=8,
+        similarity_threshold=0.4,
+        include_expired=False,
+        source_names=["f006-production-full-chain-sop.md"],
+    )
+
+    assert "source = ANY($4::text[])" in sql
+    assert params[3] == ["f006-production-full-chain-sop.md"]
+    assert params[-2:] == [0.4, 8]
 
 
 def test_manual_chat_request_rejects_unknown_sop_scope():
@@ -116,6 +142,9 @@ async def test_factory_chat_passes_scope_to_llm_and_does_not_delay_for_related(
     assert any("全量数据闭环" in message for message in system_messages)
     assert any("销售订单生产" in message for message in system_messages)
     assert captured["retrieve"]["subcategories"] == ["factory"]
+    assert captured["retrieve"]["source_names"] == [
+        "f006-production-full-chain-sop.md"
+    ]
     assert response["related_questions"] == []
     assert response["sources"][0]["source"] == "f006-production-full-chain-sop.md"
 

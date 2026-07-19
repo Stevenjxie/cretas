@@ -97,6 +97,7 @@ class KnowledgeRetriever:
         top_k: int = 5,
         similarity_threshold: float = 0.60,
         include_expired: bool = False,
+        source_names: Optional[List[str]] = None,
     ) -> List[KnowledgeDocument]:
         """
         Retrieve relevant knowledge documents via hybrid search.
@@ -116,6 +117,8 @@ class KnowledgeRetriever:
             top_k: Number of results to return
             similarity_threshold: Minimum cosine similarity threshold
             include_expired: Whether to include expired documents
+            source_names: Optional canonical source allow-list. Use this when a
+                reviewed manual must be authoritative for a scoped product flow.
 
         Returns:
             List of KnowledgeDocument sorted by relevance
@@ -140,12 +143,20 @@ class KnowledgeRetriever:
             query_embedding = await self._encode_query(raw_primary)
             if query_embedding is None:
                 logger.warning("Failed to encode query, falling back to text search")
-                return await self._text_search(query, categories, subcategories, top_k)
+                return await self._text_search(
+                    query, categories, subcategories, top_k, source_names
+                )
 
             # Step 2: Coarse retrieval size
             coarse_k = COARSE_TOP_K if (reranker.is_enabled or BM25_ENABLED) else top_k
             sql, params = self._build_vector_query(
-                query_embedding, categories, subcategories, coarse_k, similarity_threshold, include_expired
+                query_embedding,
+                categories,
+                subcategories,
+                coarse_k,
+                similarity_threshold,
+                include_expired,
+                source_names,
             )
 
             # Step 3: Execute vector search with original query embedding
@@ -161,7 +172,7 @@ class KnowledgeRetriever:
                     if sq_embedding:
                         sq_sql, sq_params = self._build_vector_query(
                             sq_embedding, categories, subcategories, coarse_k // 2,
-                            similarity_threshold, include_expired
+                            similarity_threshold, include_expired, source_names
                         )
                         async with self._pool.acquire() as conn:
                             sq_rows = await conn.fetch(sq_sql, *sq_params)
@@ -176,14 +187,24 @@ class KnowledgeRetriever:
             bm25_results = []
             if BM25_ENABLED:
                 bm25_results = await self._bm25_search(
-                    expanded_primary, categories, subcategories, coarse_k, include_expired
+                    expanded_primary,
+                    categories,
+                    subcategories,
+                    coarse_k,
+                    include_expired,
+                    source_names,
                 )
                 # Also BM25 search expanded sub-queries
                 if len(query_pairs) > 1:
                     seen_ids = {d.id for d in bm25_results}
                     for _, expanded_sq in query_pairs[1:]:
                         sq_bm25 = await self._bm25_search(
-                            expanded_sq, categories, subcategories, coarse_k // 2, include_expired
+                            expanded_sq,
+                            categories,
+                            subcategories,
+                            coarse_k // 2,
+                            include_expired,
+                            source_names,
                         )
                         for doc in sq_bm25:
                             if doc.id not in seen_ids:
@@ -202,7 +223,9 @@ class KnowledgeRetriever:
                     f"Vector+BM25 returned 0 results for query='{query[:50]}...', "
                     f"falling back to text search"
                 )
-                results = await self._text_search(query, categories, subcategories, top_k)
+                results = await self._text_search(
+                    query, categories, subcategories, top_k, source_names
+                )
                 return results[:top_k]
 
             # Log query rewriting info
@@ -268,6 +291,7 @@ class KnowledgeRetriever:
         subcategories: Optional[List[str]],
         top_k: int,
         include_expired: bool = False,
+        source_names: Optional[List[str]] = None,
     ) -> List[KnowledgeDocument]:
         """
         BM25 keyword search using jieba-tokenized search_tokens column.
@@ -321,6 +345,11 @@ class KnowledgeRetriever:
                 # 用 OR IS NULL 让 factory/restaurant 查询都能查到合规章节
                 sql += f" AND (subcategory = ANY(${param_idx}::text[]) OR subcategory IS NULL)"
                 params.append(subcategories)
+                param_idx += 1
+
+            if source_names:
+                sql += f" AND source = ANY(${param_idx}::text[])"
+                params.append(source_names)
                 param_idx += 1
 
             if not include_expired:
@@ -561,6 +590,7 @@ class KnowledgeRetriever:
         top_k: int,
         similarity_threshold: float,
         include_expired: bool,
+        source_names: Optional[List[str]] = None,
     ) -> tuple:
         """Build pgvector similarity search SQL."""
         params = []
@@ -591,6 +621,11 @@ class KnowledgeRetriever:
             params.append(subcategories)
             param_idx += 1
 
+        if source_names:
+            sql += f" AND source = ANY(${param_idx}::text[])"
+            params.append(source_names)
+            param_idx += 1
+
         # Expired filter
         if not include_expired:
             sql += " AND (expiry_date IS NULL OR expiry_date > CURRENT_DATE)"
@@ -612,6 +647,7 @@ class KnowledgeRetriever:
         categories: Optional[List[str]],
         subcategories: Optional[List[str]],
         top_k: int,
+        source_names: Optional[List[str]] = None,
     ) -> List[KnowledgeDocument]:
         """Fallback text-based search when embeddings unavailable."""
         try:
@@ -641,6 +677,11 @@ class KnowledgeRetriever:
                 # 用 OR IS NULL 让 factory/restaurant 查询都能查到合规章节
                 sql += f" AND (subcategory = ANY(${param_idx}::text[]) OR subcategory IS NULL)"
                 params.append(subcategories)
+                param_idx += 1
+
+            if source_names:
+                sql += f" AND source = ANY(${param_idx}::text[])"
+                params.append(source_names)
                 param_idx += 1
 
             sql += f" ORDER BY similarity DESC LIMIT ${param_idx}"
