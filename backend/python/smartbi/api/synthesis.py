@@ -40,6 +40,7 @@ from smartbi.agent.synthesis_engine import ComprehensiveSynthesisEngine
 from smartbi.config import get_pg_pool
 from smartbi.gold import data_range
 from smartbi.gold.restaurant_ops_router import _resolve_sales_date_range
+from smartbi.services.chat_session_service import parse_trusted_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +129,22 @@ async def _resolve_window(
     return end - timedelta(days=365), end
 
 
-async def _lookup_conversation_history(pool, session_id: Optional[str], factory_id: str):
+def _trusted_user_id(request: Request) -> Optional[int]:
+    """Return the authenticated positive user id attached by auth middleware.
+
+    Conversation memory must never infer identity from the request body or
+    headers. A missing or malformed middleware principal disables memory for
+    the request while leaving the stateless synthesis response available.
+    """
+    return parse_trusted_user_id(getattr(request.state, "user_id", None))
+
+
+async def _lookup_conversation_history(
+    pool,
+    session_id: Optional[str],
+    factory_id: str,
+    user_id: Optional[int],
+):
     """Optional read-side of P2 multi-turn memory for the HTTP endpoints below.
 
     Returns the bounded turns_history (list of {q, a_summary, ts} dicts, see
@@ -140,20 +156,31 @@ async def _lookup_conversation_history(pool, session_id: Optional[str], factory_
     session_id, and body.session_id here is for direct/Java callers that want
     the same reference-resolution benefit without owning their own writeback.
     """
-    if not session_id:
+    if not session_id or user_id is None or user_id <= 0:
         return None
     try:
         from smartbi.services.chat_session_service import ChatSessionService
-        parent = await ChatSessionService(pool).lookup(session_id, factory_id)
+        parent = await ChatSessionService(pool).lookup(
+            session_id,
+            factory_id,
+            user_id=user_id,
+        )
         return parent.get("turns_history") if parent else None
     except Exception as e:
         logger.warning(f"[synthesis] conversation_history lookup failed (non-fatal): {e}")
         return None
 
 
-async def _write_conversation_turn(pool, session_id: Optional[str], factory_id: str,
-                                   query: str, answer: str, source: Optional[str] = None):
-    if not session_id:
+async def _write_conversation_turn(
+    pool,
+    session_id: Optional[str],
+    factory_id: str,
+    user_id: Optional[int],
+    query: str,
+    answer: str,
+    source: Optional[str] = None,
+):
+    if not session_id or user_id is None or user_id <= 0:
         return
     # Don't record a degraded (budget-exhausted / LLM-unavailable) turn - its
     # placeholder answer would occupy a slot in the bounded last-3-turn window and
@@ -168,6 +195,7 @@ async def _write_conversation_turn(pool, session_id: Optional[str], factory_id: 
             parent_query=(query or "")[:500],
             parent_answer_summary=answer or "",
             parent_template_code="COMPREHENSIVE_SYNTHESIS",
+            user_id=user_id,
         )
     except Exception as e:
         logger.warning("[synthesis] session writeback skipped: %s", e)
@@ -197,12 +225,19 @@ async def comprehensive(request: Request, body: SynthesisRequest):
         raise HTTPException(status_code=503, detail="database not available")
     window = await _resolve_window(pool, fid, body.start_date, body.end_date, question=q)
     engine = ComprehensiveSynthesisEngine(pool)
-    conversation_history = await _lookup_conversation_history(pool, body.session_id, fid)
+    user_id = _trusted_user_id(request)
+    conversation_history = await _lookup_conversation_history(
+        pool,
+        body.session_id,
+        fid,
+        user_id,
+    )
     resp = await engine.synthesize(fid, q, window, conversation_history=conversation_history)
     await _write_conversation_turn(
         pool,
         body.session_id,
         fid,
+        user_id,
         (body.question or body.message or ""),
         resp.answer or "",
         resp.source,
@@ -228,6 +263,7 @@ async def comprehensive_stream(request: Request, body: SynthesisRequest):
       event: error   — on failure
     """
     fid = _factory_id(request, body.factory_id)
+    user_id = _trusted_user_id(request)
     q = body.effective_question
     if len(q) > 500:
         raise HTTPException(status_code=400, detail="question too long (max 500 chars)")
@@ -245,7 +281,12 @@ async def comprehensive_stream(request: Request, body: SynthesisRequest):
             window = await _resolve_window(pool, fid, body.start_date, body.end_date, question=q)
             yield _sse("status", "正在汇总评价与经营多维数据…")
             engine = ComprehensiveSynthesisEngine(pool)
-            conversation_history = await _lookup_conversation_history(pool, body.session_id, fid)
+            conversation_history = await _lookup_conversation_history(
+                pool,
+                body.session_id,
+                fid,
+                user_id,
+            )
             resp = await engine.synthesize(fid, q, window, conversation_history=conversation_history)
             # Stream the (already redaction-restored) answer in fixed slices.
             answer = resp.answer or ""
@@ -274,6 +315,7 @@ async def comprehensive_stream(request: Request, body: SynthesisRequest):
                 pool,
                 body.session_id,
                 fid,
+                user_id,
                 (body.question or body.message or ""),
                 answer,
                 resp.source,

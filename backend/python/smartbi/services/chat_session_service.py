@@ -14,8 +14,9 @@ parent context is injected into the LLM prompt. After the answer streams, we
 truncate it to ~750 chars and write back as the new parent_answer_summary so
 the next follow-up can reference it.
 
-Tenant isolation: factory_id is part of the lookup. A session_id from tenant A
-will NOT match if tenant B presents the same id (factory mismatch returns None).
+Identity isolation: every persisted session is keyed by
+(factory_id, user_id, session_id). A session id may be reused safely by another
+user or tenant without disclosing or overwriting conversation memory.
 
 TTL: 1 hour rolling. Each turn refreshes expires_at. Cron prunes expired rows.
 """
@@ -37,6 +38,7 @@ SUMMARY_CHAR_BUDGET = 750
 
 # Rolling TTL: each turn extends expires_at by this duration.
 TTL_SECONDS = 3600  # 1 hour
+POSTGRES_BIGINT_MAX = 9_223_372_036_854_775_807
 
 
 import re  # noqa: E402
@@ -64,6 +66,31 @@ _PROMPT_INJECTION_PATTERNS = [
     re.compile(r'重置.{0,4}(系统|指令|提示词)'),
     re.compile(r'扮演.{0,4}(另一|新|不同)'),
 ]
+
+
+def parse_trusted_user_id(value: Any) -> Optional[int]:
+    """Parse middleware-authenticated user identity without coercion surprises.
+
+    Accept positive Python integers and pure ASCII decimal strings only. In
+    particular, ``bool`` and floating-point values must not inherit ``int``'s
+    permissive coercion semantics. The upper bound mirrors PostgreSQL BIGINT.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        user_id = value
+    elif (
+        isinstance(value, str)
+        and value
+        and value.isascii()
+        and value.isdecimal()
+    ):
+        user_id = int(value)
+    else:
+        return None
+    if user_id <= 0 or user_id > POSTGRES_BIGINT_MAX:
+        return None
+    return user_id
 
 
 def sanitize_for_storage(text: str) -> str:
@@ -118,48 +145,32 @@ class ChatSessionService:
 
         Returns dict with keys: parent_query, parent_answer_summary,
         parent_template_code, parent_upload_id, turn_count, turns_history.
-        Returns None if session_id absent, factory mismatch, or expired.
-
-        Apr 26 2026 H2 (user_id binding): if user_id provided, also enforce
-        that the session was created by this user. Same factory but different
-        users on shared device → no context leak. Backward-compatible: when
-        user_id=None, only checks (session_id, factory_id).
+        Returns None if any identity component is absent/invalid, the exact
+        triple does not exist, or the row expired. There is deliberately no
+        factory-only or legacy anonymous-row fallback.
 
         Apr 27 2026 v3: also returns turns_history (list of last N turns).
         """
         from smartbi.services.smartbi_metrics import CHAT_SESSION_LOOKUP, CHAT_SESSION_TURN
-        if not session_id or not factory_id:
+        trusted_user_id = parse_trusted_user_id(user_id)
+        if not session_id or not factory_id or trusted_user_id is None:
             CHAT_SESSION_LOOKUP.labels(outcome='miss_no_session').inc()
             return None
         try:
             async with self._pool.acquire() as conn:
-                if user_id is not None:
-                    row = await conn.fetchrow(
-                        """
-                        SELECT parent_query, parent_answer_summary,
-                               parent_template_code, parent_upload_id, turn_count,
-                               turns_history
-                        FROM smart_bi_chat_session
-                        WHERE session_id = $1
-                          AND factory_id = $2
-                          AND (user_id = $3 OR user_id IS NULL)
-                          AND expires_at > NOW()
-                        """,
-                        session_id, factory_id, user_id,
-                    )
-                else:
-                    row = await conn.fetchrow(
-                        """
-                        SELECT parent_query, parent_answer_summary,
-                               parent_template_code, parent_upload_id, turn_count,
-                               turns_history
-                        FROM smart_bi_chat_session
-                        WHERE session_id = $1
-                          AND factory_id = $2
-                          AND expires_at > NOW()
-                        """,
-                        session_id, factory_id,
-                    )
+                row = await conn.fetchrow(
+                    """
+                    SELECT parent_query, parent_answer_summary,
+                           parent_template_code, parent_upload_id, turn_count,
+                           turns_history
+                    FROM smart_bi_chat_session
+                    WHERE factory_id = $1
+                      AND user_id = $2
+                      AND session_id = $3
+                      AND expires_at > NOW()
+                    """,
+                    factory_id, trusted_user_id, session_id,
+                )
                 if not row:
                     CHAT_SESSION_LOOKUP.labels(outcome='miss_expired').inc()
                     return None
@@ -183,14 +194,16 @@ class ChatSessionService:
     ) -> None:
         """Write back the parent context after this turn finishes.
 
-        On conflict (existing session_id), refreshes expires_at, increments
-        turn_count, and APPENDS turn to turns_history (last 3 kept).
+        On conflict (existing factory/user/session identity), refreshes
+        expires_at, increments turn_count, and APPENDS turn to turns_history
+        (last 3 kept).
 
         Apr 27 2026 v3: turns_history JSONB array stores last 3 (q, a_summary)
         pairs. Build_context_block uses the array to inject full multi-turn
         context, not just last parent. Enables FU1 ↔ FU2 ↔ FU3 reference.
         """
-        if not session_id or not factory_id:
+        trusted_user_id = parse_trusted_user_id(user_id)
+        if not session_id or not factory_id or trusted_user_id is None:
             return
         summary = truncate_summary(parent_answer_summary)
         # v3: build new turn entry. Truncate sub-fields conservatively to
@@ -204,53 +217,75 @@ class ChatSessionService:
         new_turn_json = _json.dumps([new_turn], ensure_ascii=False)
         try:
             async with self._pool.acquire() as conn:
-                await conn.execute(
-                    """
-                    INSERT INTO smart_bi_chat_session (
-                        session_id, factory_id, user_id,
-                        parent_query, parent_answer_summary,
+                async with conn.transaction():
+                    insert_result = await conn.execute(
+                        """
+                        INSERT INTO smart_bi_chat_session (
+                            session_id, factory_id, user_id,
+                            parent_query, parent_answer_summary,
+                            parent_template_code, parent_upload_id,
+                            turn_count, expires_at, turns_history
+                        )
+                        VALUES (
+                            $1, $2, $3, $4, $5, $6, $7, 1,
+                            NOW() + INTERVAL '1 hour',
+                            $8::jsonb
+                        )
+                        ON CONFLICT DO NOTHING
+                        """,
+                        session_id, factory_id, trusted_user_id,
+                        parent_query, summary,
                         parent_template_code, parent_upload_id,
-                        turn_count, expires_at, turns_history
+                        new_turn_json,
                     )
-                    VALUES (
-                        $1, $2, $3, $4, $5, $6, $7, 1,
-                        NOW() + INTERVAL '1 hour',
-                        $8::jsonb
+
+                    if insert_result != "INSERT 0 1":
+                        update_result = await conn.execute(
+                            """
+                            UPDATE smart_bi_chat_session
+                            SET
+                                parent_query          = $4,
+                                parent_answer_summary = $5,
+                                parent_template_code  = $6,
+                                parent_upload_id      = $7,
+                                turn_count            = turn_count + 1,
+                                updated_at            = NOW(),
+                                expires_at            = NOW() + INTERVAL '1 hour',
+                                turns_history = COALESCE(turns_history, '[]'::jsonb) || $8::jsonb
+                            WHERE factory_id = $1
+                              AND user_id = $2
+                              AND session_id = $3
+                            """,
+                            factory_id, trusted_user_id, session_id,
+                            parent_query, summary,
+                            parent_template_code, parent_upload_id,
+                            new_turn_json,
+                        )
+                        # Under the legacy global UNIQUE(session_id), another
+                        # user can own the conflicting sid. Never overwrite it.
+                        if update_result != "UPDATE 1":
+                            logger.info(
+                                "[chat-session] write skipped: "
+                                "error_code=SESSION_IDENTITY_CONFLICT"
+                            )
+                            return
+
+                    # v3: prune turns_history to last 3 turns (chronological order).
+                    await conn.execute(
+                        """
+                        UPDATE smart_bi_chat_session
+                        SET turns_history = COALESCE((
+                            SELECT jsonb_agg(elem ORDER BY ord)
+                            FROM jsonb_array_elements(turns_history) WITH ORDINALITY t(elem, ord)
+                            WHERE ord > jsonb_array_length(turns_history) - 3
+                        ), '[]'::jsonb)
+                        WHERE factory_id = $1
+                          AND user_id = $2
+                          AND session_id = $3
+                          AND jsonb_array_length(turns_history) > 3
+                        """,
+                        factory_id, trusted_user_id, session_id,
                     )
-                    ON CONFLICT (session_id) DO UPDATE SET
-                        parent_query          = EXCLUDED.parent_query,
-                        parent_answer_summary = EXCLUDED.parent_answer_summary,
-                        parent_template_code  = EXCLUDED.parent_template_code,
-                        parent_upload_id      = EXCLUDED.parent_upload_id,
-                        turn_count            = smart_bi_chat_session.turn_count + 1,
-                        updated_at            = NOW(),
-                        expires_at            = NOW() + INTERVAL '1 hour',
-                        -- v3: append new turn (truncation in next UPDATE).
-                        turns_history =
-                            COALESCE(smart_bi_chat_session.turns_history, '[]'::jsonb)
-                            || EXCLUDED.turns_history
-                    """,
-                    session_id, factory_id, user_id,
-                    parent_query, summary,
-                    parent_template_code, parent_upload_id,
-                    new_turn_json,
-                )
-                # v3: prune turns_history to last 3 turns (chronological order).
-                # Uses ORDER BY ord ASC with offset to skip oldest, keeping
-                # the 3 most recent in original order.
-                await conn.execute(
-                    """
-                    UPDATE smart_bi_chat_session
-                    SET turns_history = COALESCE((
-                        SELECT jsonb_agg(elem ORDER BY ord)
-                        FROM jsonb_array_elements(turns_history) WITH ORDINALITY t(elem, ord)
-                        WHERE ord > jsonb_array_length(turns_history) - 3
-                    ), '[]'::jsonb)
-                    WHERE session_id = $1
-                      AND jsonb_array_length(turns_history) > 3
-                    """,
-                    session_id,
-                )
         except Exception as e:
             logger.warning(f"[chat-session] upsert failed (non-fatal): {e}")
 

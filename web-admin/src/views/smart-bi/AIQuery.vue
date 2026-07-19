@@ -1,3 +1,33 @@
+<script lang="ts">
+export interface ChatSessionStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+}
+
+function chatSessionScopePart(value: unknown): string {
+  const normalized = value === null || value === undefined ? '' : String(value).trim();
+  return normalized ? encodeURIComponent(normalized) : 'anon';
+}
+
+/** A browser tab may serve several users of one factory; scope memory to both. */
+export function buildChatSessionStorageKey(factoryId: unknown, userId: unknown): string {
+  return `smartbi.chatSessionId.${chatSessionScopePart(factoryId)}.${chatSessionScopePart(userId)}`;
+}
+
+/** Read only the supplied identity-scoped key; legacy factory-only keys are ignored. */
+export function getOrCreateScopedChatSessionId(
+  storage: ChatSessionStorage,
+  key: string,
+  createId: () => string,
+): string {
+  const existing = storage.getItem(key);
+  if (existing) return existing;
+  const created = createId();
+  storage.setItem(key, created);
+  return created;
+}
+</script>
+
 <script setup lang="ts">
 /**
  * SmartBI AI 问答页面
@@ -299,30 +329,32 @@ const chatContainerRef = ref<HTMLDivElement | null>(null);
 // v2 conversation memory (Apr 26 2026): server-side session id persisted in
 // sessionStorage so a follow-up question on the same tab inherits the parent
 // answer summary. Survives page reload (sessionStorage), clears on tab close
-// or when user clicks "新会话". Key is namespaced per factory so switching
-// tenants does not leak.
-const CHAT_SESSION_KEY = computed(() => `smartbi.chatSessionId.${factoryId.value || 'anon'}`);
+// or when user clicks "新会话". Key is namespaced per factory + authenticated
+// user so account switching in one tab cannot reuse another user's session.
+const CHAT_SESSION_KEY = computed(() => buildChatSessionStorageKey(
+  factoryId.value,
+  authStore.user?.id,
+));
+function createChatSessionId(): string {
+  // Use crypto.randomUUID when available; fallback to RFC4122 v4 polyfill.
+  return (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+    ? crypto.randomUUID()
+    : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+      });
+}
 function getOrCreateChatSessionId(): string {
   try {
-    const key = CHAT_SESSION_KEY.value;
-    let id = sessionStorage.getItem(key);
-    if (!id) {
-      // Use crypto.randomUUID when available; fallback to RFC4122 v4 polyfill.
-      id = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
-        ? crypto.randomUUID()
-        : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-            const r = (Math.random() * 16) | 0;
-            return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
-          });
-      sessionStorage.setItem(key, id);
-    }
-    return id;
+    return getOrCreateScopedChatSessionId(
+      sessionStorage,
+      CHAT_SESSION_KEY.value,
+      createChatSessionId,
+    );
   } catch {
     // sessionStorage may be blocked (private mode) — still return a per-call
     // UUID so the request goes through, just without continuity.
-    return (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    return createChatSessionId();
   }
 }
 function resetChatSession(): void {
