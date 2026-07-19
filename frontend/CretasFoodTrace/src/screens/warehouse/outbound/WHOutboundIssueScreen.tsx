@@ -12,7 +12,7 @@
  *
  * 出库路径选择 (本次改造范围内的决策, 见 PR description):
  * 出库场景实际分三种 — 领料出库(仓库→车间生产)/销售出库(仓库→客户,走
- * WHOutboundList→WHPacking, 对象是成品 FinishedGoodsBatch)/库位调拨(仓库内部,
+ * 销售订单→发货单→仓库确认, 对象是成品 FinishedGoodsBatch)/库位调拨(仓库内部,
  * 不消耗库存). 扫描的一物一码标签是**原料批次**标签 (LabelServiceImpl.scanLabel
  * 只支持 batchType=MATERIAL), 与销售出库用的成品批次是不同的数据体系, 也不是单纯
  * 库位调拨 (调拨不减库存). 因此本页对接后端已有的"使用批次材料"接口

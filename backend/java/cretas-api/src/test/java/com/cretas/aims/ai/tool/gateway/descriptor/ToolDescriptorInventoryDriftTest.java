@@ -23,7 +23,7 @@ import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Source-metadata drift gate. It never constructs or starts any of the 601 Spring tool beans. */
+/** Source-metadata drift gate. It never constructs or starts any of the 593 Spring tool beans. */
 class ToolDescriptorInventoryDriftTest {
 
     private static final Pattern COMPONENT = Pattern.compile("@Component(?:\\s*\\([^)]*\\))?");
@@ -51,8 +51,8 @@ class ToolDescriptorInventoryDriftTest {
                         },
                         LinkedHashMap::new));
 
-        assertThat(sourceTools).hasSize(601);
-        assertThat(inventory.expectedToolCount()).isEqualTo(601);
+        assertThat(sourceTools).hasSize(593);
+        assertThat(inventory.expectedToolCount()).isEqualTo(593);
         assertThat(inventoryByClass.keySet()).isEqualTo(sourceTools.keySet());
         assertThat(sourceTools.values())
                 .extracting(SourceTool::toolName)
@@ -129,7 +129,7 @@ class ToolDescriptorInventoryDriftTest {
                 .filter(tool -> !tool.literalToolName())
                 .toList();
 
-        assertThat(tools.stream().filter(SourceTool::literalToolName)).hasSize(600);
+        assertThat(tools.stream().filter(SourceTool::literalToolName)).hasSize(592);
         assertThat(constantNames).singleElement().satisfies(tool -> {
             assertThat(tool.implementationClass()).isEqualTo(
                     "com.cretas.aims.ai.tool.impl.workprocess.ProductProcessWorkflowConfigTool");
@@ -138,23 +138,23 @@ class ToolDescriptorInventoryDriftTest {
         assertThat(countOverride(tools, flags -> flags.actionType())).isEqualTo(51);
         assertThat(countOverride(tools, flags -> flags.riskLevel())).isEqualTo(34);
         assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(42);
-        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(50);
-        assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(39);
+        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(45);
+        assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(34);
         assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(5);
         assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(5);
         assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(19);
 
         assertThat(countActions(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.ActionType.READ, 453L,
-                ToolExecutor.ActionType.WRITE, 65L,
-                ToolExecutor.ActionType.UPDATE, 29L,
-                ToolExecutor.ActionType.DELETE, 12L,
+                ToolExecutor.ActionType.READ, 450L,
+                ToolExecutor.ActionType.WRITE, 64L,
+                ToolExecutor.ActionType.UPDATE, 27L,
+                ToolExecutor.ActionType.DELETE, 11L,
                 ToolExecutor.ActionType.ANALYZE, 19L,
                 ToolExecutor.ActionType.GENERATE, 15L,
-                ToolExecutor.ActionType.NOTIFY, 8L));
+                ToolExecutor.ActionType.NOTIFY, 7L));
         assertThat(countRisks(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.RiskLevel.LOW, 521L,
-                ToolExecutor.RiskLevel.MEDIUM, 75L,
+                ToolExecutor.RiskLevel.LOW, 515L,
+                ToolExecutor.RiskLevel.MEDIUM, 73L,
                 ToolExecutor.RiskLevel.HIGH, 5L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
     }

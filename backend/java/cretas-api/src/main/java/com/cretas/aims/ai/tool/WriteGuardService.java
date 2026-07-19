@@ -53,7 +53,7 @@ public class WriteGuardService {
     public boolean isWriteTool(ToolExecutor tool) {
         // Confidence-INDEPENDENT like isWriteIntent: getActionType() only maps _create/_update/_delete
         // name suffixes (AbstractBusinessTool) and defaults everything else to READ — genuinely
-        // destructive tools (material_batch_consume, shipment_cancel, *_approve, equipment_start, ...)
+        // destructive tools (material_batch_consume, *_approve, equipment_start, ...)
         // would otherwise classify as READ and slip the guard. The tool-NAME suffix fallback catches them.
         // Over-flagging a read tool (extra confirm) is acceptable for a safety net; under-flagging a write is not.
         return tool != null && (isWriteAction(tool.getActionType()) || hasWriteSuffix(tool.getToolName()));
