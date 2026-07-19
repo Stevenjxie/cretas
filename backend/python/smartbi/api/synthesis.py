@@ -40,6 +40,7 @@ from smartbi.agent.synthesis_engine import ComprehensiveSynthesisEngine
 from smartbi.config import get_pg_pool
 from smartbi.gold import data_range
 from smartbi.gold.restaurant_ops_router import _resolve_sales_date_range
+from smartbi.services.chat_session_service import parse_trusted_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -135,14 +136,7 @@ def _trusted_user_id(request: Request) -> Optional[int]:
     headers. A missing or malformed middleware principal disables memory for
     the request while leaving the stateless synthesis response available.
     """
-    raw_user_id = getattr(request.state, "user_id", None)
-    if isinstance(raw_user_id, bool):
-        return None
-    try:
-        user_id = int(raw_user_id)
-    except (TypeError, ValueError):
-        return None
-    return user_id if user_id > 0 else None
+    return parse_trusted_user_id(getattr(request.state, "user_id", None))
 
 
 async def _lookup_conversation_history(

@@ -284,12 +284,8 @@ async def _v2_conv_lookup(http_request, session_id: Optional[str]) -> tuple[Opti
         getattr(http_request.state, 'user_id', None)
         if hasattr(http_request, 'state') else None
     )
-    try:
-        user_id = int(raw_user_id) if raw_user_id else None
-        if user_id is not None and user_id <= 0:
-            user_id = None
-    except (ValueError, TypeError):
-        user_id = None
+    from smartbi.services.chat_session_service import parse_trusted_user_id
+    user_id = parse_trusted_user_id(raw_user_id)
 
     # A session without an authenticated numeric user must never degrade to a
     # factory-only lookup. Multiple users can share a factory and even a device;
@@ -426,14 +422,13 @@ def _trusted_chat_identity(http_request: Request) -> tuple[Optional[str], str, O
     trusted_role = trusted_role or None
 
     raw_user_id = getattr(state, "user_id", None) if state is not None else None
-    trusted_user_key = str(raw_user_id).strip() if raw_user_id is not None else ""
-    trusted_user_key = trusted_user_key or "__NO_TRUSTED_USER__"
-    try:
-        session_user_id = int(trusted_user_key)
-        if session_user_id <= 0:
-            session_user_id = None
-    except (TypeError, ValueError):
-        session_user_id = None
+    from smartbi.services.chat_session_service import parse_trusted_user_id
+    session_user_id = parse_trusted_user_id(raw_user_id)
+    trusted_user_key = (
+        str(session_user_id)
+        if session_user_id is not None
+        else "__NO_TRUSTED_USER__"
+    )
 
     from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
 

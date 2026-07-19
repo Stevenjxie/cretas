@@ -6,9 +6,11 @@ they skip cleanly otherwise.
 """
 from __future__ import annotations
 
+import os
 import uuid
 from contextlib import AbstractAsyncContextManager
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 import pytest_asyncio
@@ -177,11 +179,23 @@ class _FakeAcquire(AbstractAsyncContextManager):
         return None
 
 
+class _FakeTransaction(AbstractAsyncContextManager):
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+
 class _IdentityContractConn:
-    def __init__(self):
+    def __init__(self, *, legacy_global_unique: bool = False):
+        self.legacy_global_unique = legacy_global_unique
         self.rows: dict[tuple[str, int, str], dict[str, Any]] = {}
         self.fetchrow_calls: list[tuple[str, tuple[Any, ...]]] = []
         self.execute_calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    def transaction(self):
+        return _FakeTransaction()
 
     async def fetchrow(self, sql: str, *args):
         self.fetchrow_calls.append((sql, args))
@@ -192,7 +206,15 @@ class _IdentityContractConn:
         self.execute_calls.append((sql, args))
         if "INSERT INTO smart_bi_chat_session" in sql:
             session_id, factory_id, user_id = args[:3]
-            self.rows[(factory_id, user_id, session_id)] = {
+            key = (factory_id, user_id, session_id)
+            exact_conflict = key in self.rows
+            global_sid_conflict = self.legacy_global_unique and any(
+                row_session_id == session_id
+                for _, _, row_session_id in self.rows
+            )
+            if exact_conflict or global_sid_conflict:
+                return "INSERT 0 0"
+            self.rows[key] = {
                 "parent_query": args[3],
                 "parent_answer_summary": args[4],
                 "parent_template_code": args[5],
@@ -200,12 +222,32 @@ class _IdentityContractConn:
                 "turn_count": 1,
                 "turns_history": args[7],
             }
+            return "INSERT 0 1"
+        if "parent_query          = $4" in sql:
+            factory_id, user_id, session_id = args[:3]
+            key = (factory_id, user_id, session_id)
+            row = self.rows.get(key)
+            if row is None:
+                return "UPDATE 0"
+            row.update({
+                "parent_query": args[3],
+                "parent_answer_summary": args[4],
+                "parent_template_code": args[5],
+                "parent_upload_id": args[6],
+                "turn_count": row["turn_count"] + 1,
+                "turns_history": args[7],
+            })
+            return "UPDATE 1"
+        if "jsonb_array_elements(turns_history)" in sql:
+            return "UPDATE 0"
         return "UPDATE 0"
 
 
 class _IdentityContractPool:
-    def __init__(self):
-        self.conn = _IdentityContractConn()
+    def __init__(self, *, legacy_global_unique: bool = False):
+        self.conn = _IdentityContractConn(
+            legacy_global_unique=legacy_global_unique,
+        )
 
     def acquire(self):
         return _FakeAcquire(self.conn)
@@ -257,13 +299,45 @@ async def test_session_sql_uses_exact_identity_conflict_and_prune_predicates():
     lookup_sql, lookup_args = pool.conn.fetchrow_calls[0]
     normalize = lambda sql: " ".join(sql.split())
 
-    assert "ON CONFLICT (factory_id, user_id, session_id)" in normalize(insert_sql)
+    assert "ON CONFLICT DO NOTHING" in normalize(insert_sql)
+    assert "ON CONFLICT (" not in normalize(insert_sql)
     assert insert_args[:3] == ("sid", "FACTORY_A", 77)
     assert "WHERE factory_id = $1 AND user_id = $2 AND session_id = $3" in normalize(prune_sql)
     assert prune_args == ("FACTORY_A", 77, "sid")
     assert "WHERE factory_id = $1 AND user_id = $2 AND session_id = $3" in normalize(lookup_sql)
     assert lookup_args == ("FACTORY_A", 77, "sid")
     assert "user_id IS NULL" not in lookup_sql
+
+
+@pytest.mark.asyncio
+async def test_pre_migration_global_sid_conflict_never_overwrites_another_user():
+    pool = _IdentityContractPool(legacy_global_unique=True)
+    svc = ChatSessionService(pool)
+
+    await svc.upsert("shared-sid", "FACTORY_A", "u1 q", "u1 a", user_id=101)
+    await svc.upsert("shared-sid", "FACTORY_A", "u2 q", "u2 a", user_id=202)
+
+    assert pool.conn.rows[("FACTORY_A", 101, "shared-sid")]["parent_query"] == "u1 q"
+    assert ("FACTORY_A", 202, "shared-sid") not in pool.conn.rows
+    conflict_update_sql, conflict_update_args = pool.conn.execute_calls[-1]
+    assert "WHERE factory_id = $1" in conflict_update_sql
+    assert "AND user_id = $2" in conflict_update_sql
+    assert "AND session_id = $3" in conflict_update_sql
+    assert conflict_update_args[:3] == ("FACTORY_A", 202, "shared-sid")
+
+
+@pytest.mark.asyncio
+async def test_pre_migration_same_identity_updates_inside_constraint_agnostic_path():
+    pool = _IdentityContractPool(legacy_global_unique=True)
+    svc = ChatSessionService(pool)
+
+    await svc.upsert("same-sid", "FACTORY_A", "q1", "a1", user_id=101)
+    await svc.upsert("same-sid", "FACTORY_A", "q2", "a2", user_id=101)
+
+    row = pool.conn.rows[("FACTORY_A", 101, "same-sid")]
+    assert row["parent_query"] == "q2"
+    assert row["parent_answer_summary"] == "a2"
+    assert row["turn_count"] == 2
 
 
 # ---------- DB-backed tests (skipped without Postgres) ----------
@@ -273,19 +347,49 @@ _TENANT_B = "TEST_CHATSESSION_B"
 _USER_A = 91001
 
 
+def _assert_safe_local_test_dsn(dsn: str) -> None:
+    parsed = urlsplit(dsn)
+    database = parsed.path.lstrip("/").lower()
+    if parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+        pytest.fail("chat session DB tests refuse non-local PostgreSQL hosts")
+    if database != "smartbi_db" and "test" not in database:
+        pytest.fail("chat session DB tests require an explicitly test database")
+
+
+def _is_local_postgres_absent(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ConnectionRefusedError):
+            return True
+        if isinstance(current, OSError) and (
+            getattr(current, "winerror", None) == 10061
+            or getattr(current, "errno", None) in {61, 111}
+        ):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 @pytest_asyncio.fixture
 async def pool():
     import asyncpg
-    from smartbi.config import get_settings
-    settings = get_settings()
-    if not settings.postgres_url:
-        pytest.skip("No Postgres configured")
+    dsn = os.getenv(
+        "SMARTBI_PG_DSN",
+        "postgresql://smartbi_user:smartbi_pass@localhost:5432/smartbi_db",
+    )
+    _assert_safe_local_test_dsn(dsn)
     try:
         p = await asyncpg.create_pool(
-            settings.postgres_url, min_size=1, max_size=2,
+            dsn, min_size=1, max_size=2,
         )
     except Exception as exc:
-        pytest.skip(f"Postgres unavailable for optional DB test: {type(exc).__name__}")
+        if _is_local_postgres_absent(exc):
+            pytest.skip(
+                f"Local PostgreSQL is not accepting connections: {type(exc).__name__}"
+            )
+        raise
     try:
         # Ensure table exists for first-run test envs.
         async with p.acquire() as conn:
@@ -293,7 +397,7 @@ async def pool():
                 "SELECT to_regclass('public.smart_bi_chat_session') IS NOT NULL"
             )
             if not exists:
-                pytest.skip(
+                pytest.fail(
                     "smart_bi_chat_session table not created — "
                     "apply V20260426_02__chat_session.sql first"
                 )
@@ -316,7 +420,7 @@ async def pool():
                 """
             )
             if not identity_constraint:
-                pytest.skip(
+                pytest.fail(
                     "chat session identity migration not applied — "
                     "apply V20261028_02__chat_session_user_identity.sql first"
                 )

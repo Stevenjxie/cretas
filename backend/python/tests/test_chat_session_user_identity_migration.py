@@ -16,12 +16,21 @@ def _source() -> str:
 
 def test_anonymous_rows_are_deleted_before_user_id_becomes_not_null():
     sql = _source()
+    lock_timeout = sql.index("SET LOCAL lock_timeout = '5s'")
     lock_table = sql.index("LOCK TABLE smart_bi_chat_session IN ACCESS EXCLUSIVE MODE")
     delete_null = sql.index("DELETE FROM smart_bi_chat_session")
     delete_predicate = sql.index("WHERE user_id IS NULL", delete_null)
     make_not_null = sql.index("ALTER COLUMN user_id SET NOT NULL")
 
-    assert lock_table < delete_null < delete_predicate < make_not_null
+    assert lock_timeout < lock_table < delete_null < delete_predicate < make_not_null
+
+
+def test_migration_documents_code_first_drain_before_apply_order():
+    sql = _source().lower()
+
+    assert "first deploy the backward-compatible" in sql
+    assert "drain" in sql
+    assert "only then apply this migration" in sql
 
 
 def test_legacy_single_session_unique_is_discovered_not_name_assumed():

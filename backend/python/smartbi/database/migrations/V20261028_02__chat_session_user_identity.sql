@@ -3,9 +3,15 @@
 -- before making user_id mandatory. This migration is intentionally repeatable:
 -- constraint discovery uses catalog truth instead of assuming the original
 -- inline UNIQUE constraint retained a particular generated name.
+--
+-- Expand/contract order (mandatory): first deploy the backward-compatible
+-- Python writer in this change with migrations disabled, verify it, and drain
+-- every old Python process. Only then apply this migration with the migration
+-- runner. Applying the migration before old writers are drained is unsupported.
 
 -- Prevent an old application instance from inserting another anonymous row
 -- between cleanup and SET NOT NULL during a rolling release.
+SET LOCAL lock_timeout = '5s';
 LOCK TABLE smart_bi_chat_session IN ACCESS EXCLUSIVE MODE;
 
 DELETE FROM smart_bi_chat_session

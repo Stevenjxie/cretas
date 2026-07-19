@@ -183,7 +183,10 @@ async def test_comprehensive_stream_writes_back_after_done_event(synthesis_mocks
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("missing_user", [None, 0, -1, "not-a-user", True])
+@pytest.mark.parametrize(
+    "missing_user",
+    [None, 0, -1, "not-a-user", True, False, 1.0, 1.9, "+1", " 1"],
+)
 async def test_session_memory_fails_closed_without_trusted_user(
     synthesis_mocks,
     missing_user,
@@ -194,5 +197,22 @@ async def test_session_memory_fails_closed_without_trusted_user(
     response = await syn.comprehensive(_request(missing_user), body)
 
     assert response["answer"] == _FakeResponse.answer
+    assert lookup_calls == []
+    assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_user", [None, True, 1.0, 1.9, "+1"])
+async def test_stream_session_memory_fails_closed_without_trusted_user(
+    synthesis_mocks,
+    invalid_user,
+):
+    calls, lookup_calls, _service = synthesis_mocks
+    body = syn.SynthesisRequest(question="继续分析", session_id="shared-stream-sid")
+
+    response = await syn.comprehensive_stream(_request(invalid_user), body)
+    chunks = [chunk async for chunk in response.body_iterator]
+
+    assert any("event: done" in chunk for chunk in chunks)
     assert lookup_calls == []
     assert calls == []
