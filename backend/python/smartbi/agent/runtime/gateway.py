@@ -53,6 +53,67 @@ _FORBIDDEN_TENANT_KEYS = {
 _SERVER_TIMEOUT_SCHEDULING_TOLERANCE_SECONDS = 0.010
 
 
+class _CompatDeadlineExpired(RuntimeError):
+    pass
+
+
+async def _drain_child(task: asyncio.Task) -> None:
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        # The caller decides whether the deadline or the child result wins.
+        pass
+
+
+async def _await_with_deadline(awaitable: Any, deadline: float) -> Any:
+    """Python 3.8 deadline wait that never cancels its calling task.
+
+    ``asyncio.timeout_at`` cancels the current task and uses cancellation counts
+    to distinguish its own request from a concurrent external cancellation.
+    Python 3.8 has neither API.  Run the bounded operation in a child instead:
+    the deadline cancels only that child, while cancellation of this caller is
+    always propagated after starting child cleanup.
+    """
+
+    loop = asyncio.get_running_loop()
+    child = asyncio.ensure_future(awaitable)
+    expired = loop.create_future()
+
+    def expire() -> None:
+        if not expired.done():
+            expired.set_result(None)
+
+    timer = loop.call_at(max(deadline, loop.time()), expire)
+    try:
+        try:
+            done, _ = await asyncio.wait(
+                {child, expired}, return_when=asyncio.FIRST_COMPLETED
+            )
+        except asyncio.CancelledError:
+            timer.cancel()
+            expired.cancel()
+            child.cancel()
+            cleanup = asyncio.create_task(_drain_child(child))
+            await asyncio.shield(cleanup)
+            raise
+
+        timer.cancel()
+        if child in done:
+            expired.cancel()
+            return child.result()
+
+        child.cancel()
+        cleanup = asyncio.create_task(_drain_child(child))
+        # Any CancelledError here belongs to the caller, not the child.  Shield
+        # keeps connection/transaction cleanup running while it propagates.
+        await asyncio.shield(cleanup)
+        raise _CompatDeadlineExpired()
+    finally:
+        timer.cancel()
+
+
 class _BoundAcquire(AbstractAsyncContextManager):
     def __init__(self, owner: "_BoundConnectionPool") -> None:
         self._owner = owner
@@ -146,38 +207,51 @@ class ReadToolGateway:
         # server-side timeout arrive later. This still separates an immediate
         # administrative cancellation from the configured statement interval.
         server_timeout_earliest = tool_started + statement_timeout_ms / 1000
-        timeout_scope = asyncio.timeout_at(deadline)
+        timeout_scope = None
+
+        async def execute_registered() -> EvidenceEnvelope:
+            async with self._pool.acquire() as connection:
+                # Acquisition, the read-only transaction, both local settings,
+                # every Gold query, and Python-side conversion share one
+                # cancellation deadline. The earlier PostgreSQL deadline
+                # reserves time for normal rollback/reset before the lease is
+                # returned; a coroutine that suppresses cancellation is not
+                # claimed to have an absolute wall-clock hard stop here.
+                async with connection.transaction(readonly=True):
+                    await connection.execute(
+                        "SELECT set_config('statement_timeout', $1, true)",
+                        f"{statement_timeout_ms}ms",
+                    )
+                    await connection.execute(
+                        "SELECT set_config('app.factory_id', $1, true)",
+                        context.factory_id,
+                    )
+                    bound_pool = _BoundConnectionPool(connection)
+                    draft = await registered.adapter(
+                        bound_pool, context, dict(parameters), descriptor
+                    )
+            # Final evidence validation/serialization is synchronous, so
+            # asyncio can only inject cancellation at await points. Explicitly
+            # reject evidence if CPU work crossed the trusted deadline.
+            envelope = self._finalize(descriptor, context, parameters, draft)
+            if loop.time() >= deadline:
+                raise ReadToolTimeout("READ_TOOL_TIMEOUT")
+            return envelope
+
         try:
-            async with timeout_scope:
-                async with self._pool.acquire() as connection:
-                    # Acquisition, the read-only transaction, both local settings,
-                    # every Gold query, and Python-side conversion share one
-                    # cancellation deadline. The earlier PostgreSQL deadline
-                    # reserves time for normal rollback/reset before the lease is
-                    # returned; a coroutine that suppresses cancellation is not
-                    # claimed to have an absolute wall-clock hard stop here.
-                    async with connection.transaction(readonly=True):
-                        await connection.execute(
-                            "SELECT set_config('statement_timeout', $1, true)",
-                            f"{statement_timeout_ms}ms",
-                        )
-                        await connection.execute(
-                            "SELECT set_config('app.factory_id', $1, true)",
-                            context.factory_id,
-                        )
-                        bound_pool = _BoundConnectionPool(connection)
-                        draft = await registered.adapter(
-                            bound_pool, context, dict(parameters), descriptor
-                        )
-                # Final evidence validation/serialization is synchronous, so
-                # asyncio can only inject cancellation at await points. Keep it
-                # inside the cancellation scope and explicitly reject evidence
-                # if CPU work crossed the trusted orchestration deadline.
-                envelope = self._finalize(descriptor, context, parameters, draft)
-                if loop.time() >= deadline:
-                    raise ReadToolTimeout("READ_TOOL_TIMEOUT")
+            native_timeout_at = getattr(asyncio, "timeout_at", None)
+            if native_timeout_at is not None:
+                timeout_scope = native_timeout_at(deadline)
+                async with timeout_scope:
+                    envelope = await execute_registered()
+            else:
+                envelope = await _await_with_deadline(execute_registered(), deadline)
+        except _CompatDeadlineExpired as exc:
+            raise ReadToolTimeout("READ_TOOL_TIMEOUT") from exc
         except TimeoutError as exc:
-            if timeout_scope.expired() or loop.time() >= deadline:
+            if (
+                timeout_scope is not None and timeout_scope.expired()
+            ) or loop.time() >= deadline:
                 raise ReadToolTimeout("READ_TOOL_TIMEOUT") from exc
             return self._terminal_envelope(
                 descriptor=descriptor,
@@ -226,7 +300,7 @@ class ReadToolGateway:
         # A cooperative adapter should let cancellation propagate. If an adapter
         # catches it but eventually returns, do not accept late evidence; wait for
         # normal context cleanup, then report the already-expired deadline.
-        if timeout_scope.expired():
+        if timeout_scope is not None and timeout_scope.expired():
             raise ReadToolTimeout("READ_TOOL_TIMEOUT")
         return envelope
 
