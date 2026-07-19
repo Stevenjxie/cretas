@@ -268,6 +268,34 @@ public class AIIntentConfig extends BaseEntity {
     @Builder.Default
     private java.math.BigDecimal confidenceBoost = java.math.BigDecimal.ZERO;
 
+    /**
+     * Legacy SmartBI regex-pattern list. Kept on the canonical entity so the
+     * read-only compatibility API does not lose populated historical columns.
+     */
+    @Column(name = "patterns", columnDefinition = "JSON")
+    private String patterns;
+
+    /** Legacy SmartBI example list (distinct from canonical example_queries). */
+    @Column(name = "examples", columnDefinition = "JSON")
+    private String examples;
+
+    /** Legacy SmartBI follow-up suggestions. */
+    @Column(name = "follow_up_questions", columnDefinition = "JSON")
+    private String followUpQuestions;
+
+    /** Legacy SmartBI analysis service binding. */
+    @Column(name = "analysis_service", length = 64)
+    private String analysisService;
+
+    /** Legacy SmartBI analysis method binding. */
+    @Column(name = "method_name", length = 64)
+    private String methodName;
+
+    /** Legacy SmartBI matching threshold. */
+    @Column(name = "confidence_threshold")
+    @Builder.Default
+    private Double confidenceThreshold = 0.6;
+
     // ==================== 版本控制字段 ====================
 
     /**

@@ -2,10 +2,9 @@ package com.cretas.aims.controller;
 
 import com.cretas.aims.dto.smartbi.ConfigOperationResult;
 import com.cretas.aims.dto.smartbi.CreateIncentiveRuleRequest;
-import com.cretas.aims.entity.smartbi.AiIntentConfig;
+import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.entity.smartbi.SmartBiIncentiveRule;
 import com.cretas.aims.exception.BusinessException;
-import com.cretas.aims.repository.smartbi.AiIntentConfigRepository;
 import com.cretas.aims.repository.smartbi.SmartBiAlertThresholdRepository;
 import com.cretas.aims.repository.smartbi.SmartBiChartTemplateRepository;
 import com.cretas.aims.repository.smartbi.SmartBiDictionaryRepository;
@@ -22,13 +21,12 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import com.cretas.aims.dto.common.ApiResponse;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -53,7 +51,6 @@ class SmartBIConfigControllerIsolationTest {
 
     private SmartBIConfigService configService;
     private DataSourceRegistryService dataSourceService;
-    private AiIntentConfigRepository intentConfigRepository;
     private SmartBiAlertThresholdRepository alertThresholdRepository;
     private SmartBiIncentiveRuleRepository incentiveRuleRepository;
     private SmartBiDictionaryRepository dictionaryRepository;
@@ -66,7 +63,6 @@ class SmartBIConfigControllerIsolationTest {
     void setUp() {
         configService = mock(SmartBIConfigService.class);
         dataSourceService = mock(DataSourceRegistryService.class);
-        intentConfigRepository = mock(AiIntentConfigRepository.class);
         alertThresholdRepository = mock(SmartBiAlertThresholdRepository.class);
         incentiveRuleRepository = mock(SmartBiIncentiveRuleRepository.class);
         dictionaryRepository = mock(SmartBiDictionaryRepository.class);
@@ -75,7 +71,7 @@ class SmartBIConfigControllerIsolationTest {
 
         controller = new SmartBIConfigController(
                 configService, dataSourceService,
-                intentConfigRepository, alertThresholdRepository, incentiveRuleRepository,
+                alertThresholdRepository, incentiveRuleRepository,
                 dictionaryRepository, metricFormulaRepository, chartTemplateRepository);
     }
 
@@ -98,35 +94,23 @@ class SmartBIConfigControllerIsolationTest {
     // ==================== by-id 写: 跨厂 / global 拒绝 ====================
 
     @Test
-    @DisplayName("工厂级管理员改别家工厂的意图配置 → 403")
-    void updateIntent_crossFactory_rejected() {
-        AiIntentConfig other = new AiIntentConfig();
-        other.setId("intent-1");
-        other.setFactoryId("F999"); // 别家工厂
-        when(intentConfigRepository.findById("intent-1")).thenReturn(Optional.of(other));
+    @DisplayName("旧 SmartBI 意图 PUT 明确退役为 410")
+    void updateIntent_retired() {
+        ResponseEntity<ApiResponse<ConfigOperationResult>> response =
+                controller.updateIntent(factoryReq("F001"), "intent-1", Map.of());
 
-        BusinessException ex = assertThrows(BusinessException.class,
-                () -> controller.updateIntent(factoryReq("F001"), "intent-1", new AiIntentConfig()),
-                "跨工厂改意图必须 403");
-
-        assertEquals(403, ex.getCode());
-        verify(configService, never()).updateIntent(anyString(), any());
+        assertEquals(410, response.getStatusCode().value());
+        assertEquals(410, response.getBody().getCode());
     }
 
     @Test
-    @DisplayName("工厂级管理员改全局共享(global)意图配置 → 403 (平台专属)")
-    void updateIntent_globalConfig_rejectedForFactoryRole() {
-        AiIntentConfig global = new AiIntentConfig();
-        global.setId("intent-g");
-        global.setFactoryId(null); // global 共享默认
-        when(intentConfigRepository.findById("intent-g")).thenReturn(Optional.of(global));
-
-        BusinessException ex = assertThrows(BusinessException.class,
-                () -> controller.updateIntent(factoryReq("F001"), "intent-g", new AiIntentConfig()),
-                "改 global 配置须平台角色, 工厂级 403");
-
-        assertEquals(403, ex.getCode());
-        verify(configService, never()).updateIntent(anyString(), any());
+    @DisplayName("旧 SmartBI 意图 POST/DELETE/reload 全部明确退役为 410")
+    void remainingIntentWrites_retired() {
+        assertEquals(410, controller.createIntent(factoryReq("F001"), Map.of())
+                .getStatusCode().value());
+        assertEquals(410, controller.deleteIntent(factoryReq("F001"), "intent-1")
+                .getStatusCode().value());
+        assertEquals(410, controller.reloadIntents().getStatusCode().value());
     }
 
     @Test
@@ -162,55 +146,40 @@ class SmartBIConfigControllerIsolationTest {
         verify(configService, never()).createIncentiveRule(any());
     }
 
-    @Test
-    @DisplayName("工厂级管理员创建意图缺省 factoryId → 自动补本厂 (放行)")
-    void createIntent_nullFactoryId_defaultsToCallerFactory() {
-        AiIntentConfig config = new AiIntentConfig();
-        config.setIntentCode("X");
-        config.setFactoryId(null); // 缺省
-        when(configService.createIntent(any())).thenReturn(
-                ConfigOperationResult.success("INTENT", "CREATE", "ok", 1));
-
-        controller.createIntent(factoryReq("F001"), config);
-
-        assertEquals("F001", config.getFactoryId(), "缺省 factoryId 应补成 caller 工厂");
-        verify(configService).createIntent(any());
-    }
-
     // ==================== list: 过滤别家 + 保留 global ====================
 
     @Test
     @DisplayName("工厂级管理员 list 意图 → 只返回本厂 + global(null), 排除别家")
     void listIntents_factoryRole_filtersForeignFactory() {
-        AiIntentConfig mine = intent("a", "F001");
-        AiIntentConfig global = intent("b", null);
-        AiIntentConfig foreign = intent("c", "F999");
+        AIIntentConfig mine = intent("a", "F001");
+        AIIntentConfig global = intent("b", null);
+        AIIntentConfig foreign = intent("c", "F999");
         when(configService.listIntents(any())).thenReturn(List.of(mine, global, foreign));
 
-        ResponseEntity<ApiResponse<List<AiIntentConfig>>> resp =
+        ResponseEntity<ApiResponse<List<AIIntentConfig>>> resp =
                 controller.listIntents(factoryReq("F001"), null);
 
-        List<AiIntentConfig> data = resp.getBody().getData();
+        List<AIIntentConfig> data = resp.getBody().getData();
         assertEquals(2, data.size(), "只保留本厂 + global");
-        assertTrue(data.contains(mine) && data.contains(global));
-        assertTrue(!data.contains(foreign), "别家工厂配置必须被过滤掉");
+        assertEquals(List.of("a", "b"), data.stream().map(AIIntentConfig::getId).toList(),
+                "别家工厂配置必须被过滤掉");
     }
 
     @Test
     @DisplayName("平台角色 list 意图 → 返回全部 (跨工厂 by design)")
     void listIntents_platformRole_returnsAll() {
-        AiIntentConfig mine = intent("a", "F001");
-        AiIntentConfig foreign = intent("c", "F999");
+        AIIntentConfig mine = intent("a", "F001");
+        AIIntentConfig foreign = intent("c", "F999");
         when(configService.listIntents(any())).thenReturn(List.of(mine, foreign));
 
-        ResponseEntity<ApiResponse<List<AiIntentConfig>>> resp =
+        ResponseEntity<ApiResponse<List<AIIntentConfig>>> resp =
                 controller.listIntents(platformReq(), null);
 
         assertEquals(2, resp.getBody().getData().size(), "平台角色看全部");
     }
 
-    private static AiIntentConfig intent(String id, String factoryId) {
-        AiIntentConfig c = new AiIntentConfig();
+    private static AIIntentConfig intent(String id, String factoryId) {
+        AIIntentConfig c = new AIIntentConfig();
         c.setId(id);
         c.setFactoryId(factoryId);
         return c;

@@ -7,9 +7,9 @@ import com.cretas.aims.dto.smartbi.CreateAlertThresholdRequest;
 import com.cretas.aims.dto.smartbi.CreateIncentiveRuleRequest;
 import com.cretas.aims.dto.smartbi.DataSourceDTO;
 import com.cretas.aims.dto.smartbi.UpdateIncentiveRuleRequest;
+import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.entity.smartbi.*;
 import com.cretas.aims.exception.BusinessException;
-import com.cretas.aims.repository.smartbi.AiIntentConfigRepository;
 import com.cretas.aims.repository.smartbi.SmartBiAlertThresholdRepository;
 import com.cretas.aims.repository.smartbi.SmartBiChartTemplateRepository;
 import com.cretas.aims.repository.smartbi.SmartBiDictionaryRepository;
@@ -23,6 +23,7 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -39,7 +40,7 @@ import com.cretas.aims.util.ErrorSanitizer;
  *
  * <p>提供统一的 REST API 管理 SmartBI 所有动态配置：
  * <ul>
- *   <li>意图配置（CRUD + reload）</li>
+ *   <li>意图配置（规范真值的只读兼容；旧写接口返回 410）</li>
  *   <li>告警阈值（CRUD + reload）</li>
  *   <li>激励规则（CRUD + reload）</li>
  *   <li>字段映射（CRUD + reload）</li>
@@ -65,7 +66,6 @@ public class SmartBIConfigController {
     private final DataSourceRegistryService dataSourceService;
 
     // 🔒 多租户隔离守卫用 — 按 id load entity 校验 factoryId (read-only)。
-    private final AiIntentConfigRepository intentConfigRepository;
     private final SmartBiAlertThresholdRepository alertThresholdRepository;
     private final SmartBiIncentiveRuleRepository incentiveRuleRepository;
     private final SmartBiDictionaryRepository dictionaryRepository;
@@ -163,15 +163,15 @@ public class SmartBIConfigController {
     @RequirePermission({"analytics:read"})
     @GetMapping("/intents")
     @Operation(summary = "获取意图配置列表", description = "获取所有意图配置，可按分类筛选")
-    public ResponseEntity<ApiResponse<List<AiIntentConfig>>> listIntents(
+    public ResponseEntity<ApiResponse<List<AIIntentConfig>>> listIntents(
             HttpServletRequest request,
             @Parameter(description = "意图分类: QUERY/ANALYSIS/ALERT/ACTION")
             @RequestParam(required = false) String category) {
 
         log.info("获取意图配置列表: category={}", category);
         try {
-            List<AiIntentConfig> intents = filterReadable(request,
-                    configService.listIntents(category), AiIntentConfig::getFactoryId);
+            List<AIIntentConfig> intents = filterReadable(request,
+                    configService.listIntents(category), AIIntentConfig::getFactoryId);
             return ResponseEntity.ok(ApiResponse.success(intents));
         } catch (Exception e) {
             log.error("获取意图配置失败: {}", e.getMessage(), e);
@@ -181,93 +181,48 @@ public class SmartBIConfigController {
 
     @RequirePermission({"analytics:read_write"})
     @PostMapping("/intents")
-    @Operation(summary = "创建意图配置", description = "创建新的意图配置")
+    @Operation(summary = "Legacy SmartBI intent write endpoint (retired)",
+            description = "Use /api/mobile/{factoryId}/ai-intents")
     public ResponseEntity<ApiResponse<ConfigOperationResult>> createIntent(
             HttpServletRequest request,
-            @RequestBody @Valid AiIntentConfig config) {
-
-        log.info("创建意图配置: intentCode={}", config.getIntentCode());
-        // 🔒 非平台角色只能为本厂创建 (阻止 body.factoryId 指向别家; try 外抛 → 403)。
-        config.setFactoryId(guardCreateFactory(request, config.getFactoryId()));
-        try {
-            ConfigOperationResult result = configService.createIntent(config);
-            if (result.isSuccess()) {
-                return ResponseEntity.ok(ApiResponse.success("创建成功", result));
-            } else {
-                return ResponseEntity.ok(ApiResponse.error(result.getMessage()));
-            }
-        } catch (Exception e) {
-            log.error("创建意图配置失败: {}", e.getMessage(), e);
-            return ResponseEntity.ok(ApiResponse.error("创建失败: " + ErrorSanitizer.sanitize(e)));
-        }
+            @RequestBody(required = false) Map<String, Object> ignored) {
+        return retiredIntentWriteEndpoint();
     }
 
     @RequirePermission({"analytics:read_write"})
     @PutMapping("/intents/{id}")
-    @Operation(summary = "更新意图配置", description = "更新指定的意图配置")
+    @Operation(summary = "Legacy SmartBI intent write endpoint (retired)",
+            description = "Use /api/mobile/{factoryId}/ai-intents/{intentCode}")
     public ResponseEntity<ApiResponse<ConfigOperationResult>> updateIntent(
             HttpServletRequest request,
             @Parameter(description = "配置ID") @PathVariable String id,
-            @RequestBody @Valid AiIntentConfig config) {
-
-        log.info("更新意图配置: id={}", id);
-        // 🔒 校验该意图属本厂 (跨厂/global 403, 不存在 404)。在 try 外抛, 让 GlobalExceptionHandler 映射 403/404。
-        AiIntentConfig existing = intentConfigRepository.findById(id).orElse(null);
-        guardWriteFactory(request, existing, existing == null ? null : existing.getFactoryId());
-        // 🔒 阻止把意图转移到别家工厂 (body.factoryId 篡改)。existing 仅在平台角色 + 不存在时为 null。
-        if (existing != null) {
-            config.setFactoryId(existing.getFactoryId());
-        }
-        try {
-            ConfigOperationResult result = configService.updateIntent(id, config);
-            if (result.isSuccess()) {
-                return ResponseEntity.ok(ApiResponse.success("更新成功", result));
-            } else {
-                return ResponseEntity.ok(ApiResponse.error(result.getMessage()));
-            }
-        } catch (Exception e) {
-            log.error("更新意图配置失败: id={}, error={}", id, e.getMessage(), e);
-            return ResponseEntity.ok(ApiResponse.error("更新失败: " + ErrorSanitizer.sanitize(e)));
-        }
+            @RequestBody(required = false) Map<String, Object> ignored) {
+        return retiredIntentWriteEndpoint();
     }
 
     @RequirePermission({"analytics:read_write"})
     @DeleteMapping("/intents/{id}")
-    @Operation(summary = "删除意图配置", description = "删除指定的意图配置（软删除）")
+    @Operation(summary = "Legacy SmartBI intent write endpoint (retired)",
+            description = "Use /api/mobile/{factoryId}/ai-intents/{intentCode}")
     public ResponseEntity<ApiResponse<ConfigOperationResult>> deleteIntent(
             HttpServletRequest request,
             @Parameter(description = "配置ID") @PathVariable String id) {
 
-        log.info("删除意图配置: id={}", id);
-        // 🔒 校验该意图属本厂 (try 外抛, 让 GlobalExceptionHandler 映射 403/404)。
-        AiIntentConfig existing = intentConfigRepository.findById(id).orElse(null);
-        guardWriteFactory(request, existing, existing == null ? null : existing.getFactoryId());
-        try {
-            ConfigOperationResult result = configService.deleteIntent(id);
-            if (result.isSuccess()) {
-                return ResponseEntity.ok(ApiResponse.success("删除成功", result));
-            } else {
-                return ResponseEntity.ok(ApiResponse.error(result.getMessage()));
-            }
-        } catch (Exception e) {
-            log.error("删除意图配置失败: id={}, error={}", id, e.getMessage(), e);
-            return ResponseEntity.ok(ApiResponse.error("删除失败: " + ErrorSanitizer.sanitize(e)));
-        }
+        return retiredIntentWriteEndpoint();
     }
 
     @RequirePermission({"analytics:read_write"})
     @PostMapping("/intents/reload")
-    @Operation(summary = "重载意图配置", description = "重新加载意图配置缓存")
+    @Operation(summary = "Legacy SmartBI intent reload endpoint (retired)",
+            description = "Canonical AI intent configuration reloads through the canonical runtime")
     public ResponseEntity<ApiResponse<ConfigOperationResult>> reloadIntents() {
+        return retiredIntentWriteEndpoint();
+    }
 
-        log.info("重载意图配置");
-        try {
-            ConfigOperationResult result = configService.reloadIntents();
-            return ResponseEntity.ok(ApiResponse.success("重载成功", result));
-        } catch (Exception e) {
-            log.error("重载意图配置失败: {}", e.getMessage(), e);
-            return ResponseEntity.ok(ApiResponse.error("重载失败: " + ErrorSanitizer.sanitize(e)));
-        }
+    private ResponseEntity<ApiResponse<ConfigOperationResult>> retiredIntentWriteEndpoint() {
+        String message = "Legacy SmartBI intent write endpoint is retired; "
+                + "use /api/mobile/{factoryId}/ai-intents";
+        return ResponseEntity.status(HttpStatus.GONE).body(ApiResponse.error(410, message));
     }
 
     // ==================== 告警阈值 ====================

@@ -4,9 +4,10 @@ import com.cretas.aims.dto.smartbi.ConfigOperationResult;
 import com.cretas.aims.dto.smartbi.CreateAlertThresholdRequest;
 import com.cretas.aims.dto.smartbi.CreateIncentiveRuleRequest;
 import com.cretas.aims.dto.smartbi.UpdateIncentiveRuleRequest;
+import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.entity.smartbi.SmartBiAlertThreshold;
 import com.cretas.aims.entity.smartbi.SmartBiIncentiveRule;
-import com.cretas.aims.repository.smartbi.AiIntentConfigRepository;
+import com.cretas.aims.repository.config.AIIntentConfigRepository;
 import com.cretas.aims.repository.smartbi.SmartBiAlertThresholdRepository;
 import com.cretas.aims.repository.smartbi.SmartBiChartTemplateRepository;
 import com.cretas.aims.repository.smartbi.SmartBiDictionaryRepository;
@@ -49,7 +50,7 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class SmartBIConfigServiceImplBatch1Test {
 
-    @Mock private AiIntentConfigRepository intentConfigRepository;
+    @Mock private AIIntentConfigRepository intentConfigRepository;
     @Mock private SmartBiAlertThresholdRepository alertThresholdRepository;
     @Mock private SmartBiIncentiveRuleRepository incentiveRuleRepository;
     @Mock private SmartBiDictionaryRepository dictionaryRepository;
@@ -59,6 +60,20 @@ class SmartBIConfigServiceImplBatch1Test {
 
     @InjectMocks
     private SmartBIConfigServiceImpl service;
+
+    @Test
+    void listIntents_readsOnlyCanonicalRepositoryWithCanonicalPriorityOrder() {
+        AIIntentConfig intent = new AIIntentConfig();
+        intent.setIntentCode("SMARTBI_READ");
+        when(intentConfigRepository
+                .findByIntentCategoryAndIsActiveTrueAndDeletedAtIsNullOrderByPriorityDesc("SMARTBI"))
+                .thenReturn(List.of(intent));
+
+        assertThat(service.listIntents("SMARTBI")).containsExactly(intent);
+
+        org.mockito.Mockito.verify(intentConfigRepository)
+                .findByIntentCategoryAndIsActiveTrueAndDeletedAtIsNullOrderByPriorityDesc("SMARTBI");
+    }
 
     // -----------------------------------------------------------------
     // POST /thresholds — createThreshold

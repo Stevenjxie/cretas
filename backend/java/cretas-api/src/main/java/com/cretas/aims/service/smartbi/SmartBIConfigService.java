@@ -4,6 +4,7 @@ import com.cretas.aims.dto.smartbi.ConfigOperationResult;
 import com.cretas.aims.dto.smartbi.CreateAlertThresholdRequest;
 import com.cretas.aims.dto.smartbi.CreateIncentiveRuleRequest;
 import com.cretas.aims.dto.smartbi.UpdateIncentiveRuleRequest;
+import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.entity.smartbi.*;
 
 import java.util.List;
@@ -14,7 +15,7 @@ import java.util.Map;
  *
  * <p>提供统一的配置管理功能，包括：
  * <ul>
- *   <li>意图配置管理（CRUD + reload）</li>
+ *   <li>意图配置只读兼容（写入由规范 AIIntentService 单链路负责）</li>
  *   <li>告警阈值管理（CRUD + reload）</li>
  *   <li>激励规则管理（CRUD + reload）</li>
  *   <li>字段映射管理（CRUD + reload）</li>
@@ -37,39 +38,7 @@ public interface SmartBIConfigService {
      * @param category 意图分类（可选，null 表示获取所有）
      * @return 意图配置列表
      */
-    List<AiIntentConfig> listIntents(String category);
-
-    /**
-     * 创建意图配置
-     *
-     * @param config 意图配置
-     * @return 创建结果
-     */
-    ConfigOperationResult createIntent(AiIntentConfig config);
-
-    /**
-     * 更新意图配置
-     *
-     * @param id     配置ID
-     * @param config 意图配置
-     * @return 更新结果
-     */
-    ConfigOperationResult updateIntent(String id, AiIntentConfig config);
-
-    /**
-     * 删除意图配置（软删除）
-     *
-     * @param id 配置ID
-     * @return 删除结果
-     */
-    ConfigOperationResult deleteIntent(String id);
-
-    /**
-     * 重载意图配置缓存
-     *
-     * @return 重载结果
-     */
-    ConfigOperationResult reloadIntents();
+    List<AIIntentConfig> listIntents(String category);
 
     // ==================== 告警阈值 ====================
 
