@@ -146,18 +146,18 @@ wx:
   mp:
     configs:
       - appId: xxxxxxxx
-        secret: xxxxxxxxxxxxxxxxxxxxxxxxxx
-        token: xxxxxxxxxx
-        aesKey: xxxxxxxxxxxxxxxxxxxx
+        secret: '${MALL_WX_MP_SECRET}'
+        token: '${MALL_WX_MP_TOKEN}'
+        aesKey: '${MALL_WX_MP_AES_KEY}'
   # 小程序配置
   ma:
     configs:
       - appId: xxxxxxxxxxxxxxxx
-        secret: xxxxxxxxxxxxx
+        secret: '${MALL_WX_MA_SECRET}'
         # 微信支付商户号，请去微信支付平台申请
         mchId: 1588227511
         # 微信支付商户APIv2密钥，请去微信支付平台申请
-        mchKey: xxxxxxxxxxxxxxxxxxxxx
+        mchKey: '${MALL_WX_MA_MCH_KEY}'
         # p12证书的位置，绝对路径
         keyPath: /mnt/install/joolun-wx/apiclient_cert.p12
 

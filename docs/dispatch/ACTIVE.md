@@ -6,7 +6,7 @@
 
 ## 在飞任务
 
-- `SEC-CREDENTIAL-ROTATION-20260719` — `in-progress` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — 清除 tracked/服务器配置中的硬编码凭证，建立 secret regression gate，按消费者依赖顺序轮换已暴露的 Aliyun/API、数据库、JWT 与内部服务凭证，并完成生产重启、认证/Agent/零业务写入验收及历史暴露评估。
+- `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
 
 ## Scope 锁地图
 
@@ -14,7 +14,9 @@
 
 ## 阻塞项
 
-- 无。
+- Aliyun 主账号旧 AccessKey：官方 RAM API 返回 `Forbidden` 并提示泄露风险，旧 key 的 STS 仍有效；必须由阿里云控制台主账号删除。
+- 旧 Model Studio/DashScope、Zhipu、DeepSeek key：生产消费者已切换或禁用旧值，但需要在各供应商控制台执行禁用/删除；当前 replacement RAM key 无法通过已安装 CLI 调用 ModelStudio key-management OpenAPI。
+- Mall 微信长期凭证：已从 tracked/0644 YAML 外置到 `0600` root-only EnvironmentFile，运行态验证通过；MP secret/token/AES key、Mini App secret、商户 key 仍需在微信公众平台/商户平台协调重置后同步更新受控环境文件。
 
 ## 维护规则
 

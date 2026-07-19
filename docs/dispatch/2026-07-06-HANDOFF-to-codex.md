@@ -12,7 +12,7 @@
 ## 1. 环境 / 账号
 - web-admin（prod）：`http://139.196.165.140:8086`，登 `f006_admin`/`123456`（factory_super_admin，配置类必用）。
 - RN 业务屏账号：报工 operator `f006_moyun`/`123456`、质检 `f006_quality_insp`/`123456`（**不是 inspector**）、仓管 `f006_warehouse_mgr` / `f006_warehouse_worker` /`123456`。f006_admin 登 RN 进通用 dashboard 无业务屏。
-- prod DB 只读：`ssh root@47.100.235.168` → `PGPASSWORD=c13f0a354eaca24d1be56cbcce43e9956 psql -U cretas_user -d cretas_prod_db -h localhost`。smartbi 库另密码见 memory `db-credentials`。
+- prod DB 只读：`ssh root@47.100.235.168` → `PGPASSWORD=<REDACTED_REVOKED_CREDENTIAL> psql -U cretas_user -d cretas_prod_db -h localhost`。smartbi 库另密码见 memory `db-credentials`。
 - 真实产品族（测试用，别用合成品名会触发防呆过滤看空=非bug）：猪舌门腔120g `4e345886` / 掌中宝 `1d7fbd73`。
 
 ## 2. litmus 定性方法（核心）
