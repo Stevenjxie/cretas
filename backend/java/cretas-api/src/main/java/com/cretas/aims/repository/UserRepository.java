@@ -39,6 +39,15 @@ public interface UserRepository extends JpaRepository<User, Long> {
      * 根据工厂ID和用户名查找用户
      */
     Optional<User> findByFactoryIdAndUsername(String factoryId, String username);
+
+    /**
+     * 根据用户 ID 和工厂 ID 查找用户。
+     *
+     * <p>用于所有以外部 employeeId 为对象标识的租户内查询，避免先按全局主键
+     * 取出其他工厂用户后再拼接当前工厂业务数据。</p>
+     */
+    Optional<User> findByIdAndFactoryId(Long id, String factoryId);
+
     /**
      * 根据工厂ID和手机号查找用户
      */

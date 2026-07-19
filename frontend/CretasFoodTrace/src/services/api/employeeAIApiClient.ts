@@ -44,23 +44,27 @@ export interface EmployeeFollowupRequest {
  */
 export interface AttendanceAnalysis {
   /** 评分(0-100) */
-  score: number;
+  score: number | null;
   /** 出勤率(%) */
-  attendanceRate: number;
-  /** 出勤天数 */
+  attendanceRate: number | null;
+  /** 考勤记录数 */
+  recordCount: number;
+  /** 非ABSENT状态考勤记录数 */
   attendanceDays: number;
-  /** 迟到次数 */
+  /** 持久化LATE状态记录数 */
   lateCount: number;
-  /** 早退次数 */
+  /** 持久化EARLY_LEAVE状态记录数 */
   earlyLeaveCount: number;
-  /** 缺勤天数 */
+  /** 持久化ABSENT状态记录数 */
   absentDays: number;
+  /** 打卡记录工作分钟数合计 */
+  clockedWorkMinutes: number;
   /** 部门平均出勤率(%) */
-  departmentAvgRate: number;
+  departmentAvgRate: number | null;
   /** AI洞察 */
-  insight: string;
+  insight: string | null;
   /** 洞察类型 */
-  insightType: 'positive' | 'warning' | 'neutral';
+  insightType: 'positive' | 'warning' | 'neutral' | null;
 }
 
 /**
@@ -68,21 +72,25 @@ export interface AttendanceAnalysis {
  */
 export interface WorkHoursAnalysis {
   /** 评分(0-100) */
-  score: number;
+  score: number | null;
+  /** 工作会话实际分钟数合计 */
+  totalMinutes: number;
+  /** 工作会话数 */
+  sessionCount: number;
   /** 日均工时(小时) */
-  avgDailyHours: number;
+  avgDailyHours: number | null;
   /** 本月加班时长(小时) */
-  overtimeHours: number;
+  overtimeHours: number | null;
   /** 工时效率(%) */
-  efficiency: number;
+  efficiency: number | null;
   /** 参与工作类型数 */
-  workTypeCount: number;
+  workTypeCount: number | null;
   /** 部门平均日工时 */
-  departmentAvgHours: number;
+  departmentAvgHours: number | null;
   /** AI洞察 */
-  insight: string;
+  insight: string | null;
   /** 洞察类型 */
-  insightType: 'positive' | 'warning' | 'neutral';
+  insightType: 'positive' | 'warning' | 'neutral' | null;
 }
 
 /**
@@ -90,23 +98,31 @@ export interface WorkHoursAnalysis {
  */
 export interface ProductionAnalysis {
   /** 评分(0-100) */
-  score: number;
+  score: number | null;
   /** 参与批次数 */
   batchCount: number;
+  /** 完成批次数 */
+  completedBatches: number;
+  /** 批次工作分钟数合计 */
+  batchWorkMinutes: number;
+  /** 质检记录数 */
+  totalInspections: number;
+  /** 质检通过记录数 */
+  passedInspections: number;
   /** 产量贡献(kg) */
-  outputQuantity: number;
-  /** 良品率(%) */
-  qualityRate: number;
+  outputQuantity: number | null;
+  /** 质检通过率(%，无质检记录时不可计算) */
+  qualityRate: number | null;
   /** 人均产能(kg/h) */
-  productivityRate: number;
+  productivityRate: number | null;
   /** 部门平均产能 */
-  departmentAvgProductivity: number;
+  departmentAvgProductivity: number | null;
   /** 擅长产品线 */
-  topProductLine: string;
+  topProductLine: string | null;
   /** AI洞察 */
-  insight: string;
+  insight: string | null;
   /** 洞察类型 */
-  insightType: 'positive' | 'warning' | 'neutral';
+  insightType: 'positive' | 'warning' | 'neutral' | null;
 }
 
 /**
@@ -158,11 +174,11 @@ export interface EmployeeAnalysisResponse {
   /** 员工姓名 */
   employeeName: string;
   /** 部门 */
-  department: string;
+  department: string | null;
   /** 职位 */
-  position: string;
+  position: string | null;
   /** 入职时长(月) */
-  tenureMonths: number;
+  tenureMonths: number | null;
   /** 分析周期开始 */
   periodStart: string;
   /** 分析周期结束 */
@@ -170,13 +186,13 @@ export interface EmployeeAnalysisResponse {
   /** 数据点数量 */
   dataPoints: number;
   /** 综合评分(0-100) */
-  overallScore: number;
+  overallScore: number | null;
   /** 综合等级 */
-  overallGrade: 'A' | 'B' | 'C' | 'D';
+  overallGrade: 'A' | 'B' | 'C' | 'D' | null;
   /** 环比变化百分比 */
-  scoreChange?: number;
+  scoreChange: number | null;
   /** 部门排名百分比(Top N%) */
-  departmentRankPercent?: number;
+  departmentRankPercent: number | null;
   /** 考勤表现分析 */
   attendance: AttendanceAnalysis;
   /** 工时效率分析 */
@@ -192,11 +208,13 @@ export interface EmployeeAnalysisResponse {
   /** AI深度洞察 */
   aiInsight: string;
   /** 会话ID(用于追问) */
-  sessionId: string;
+  sessionId: string | null;
   /** 分析时间 */
   analyzedAt: string;
   /** 消耗Token数 */
-  tokensUsed?: number;
+  tokensUsed: number | null;
+  /** 因缺少可信数据或配置而不可计算的字段路径 */
+  notComputableMetrics: string[];
 }
 
 /**
@@ -289,9 +307,9 @@ class EmployeeAIApiClient {
   ): Promise<Array<{
     employeeId: number;
     employeeName: string;
-    overallScore: number;
-    overallGrade: string;
-    scoreChange?: number;
+    overallScore: number | null;
+    overallGrade: string | null;
+    scoreChange: number | null;
   }>> {
     // 并行请求每个员工的简要分析
     const promises = employeeIds.map(async (id) => {
