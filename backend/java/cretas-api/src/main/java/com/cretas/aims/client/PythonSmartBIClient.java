@@ -13,6 +13,9 @@ import com.cretas.aims.dto.smartbi.PythonForecastResponse;
 import com.cretas.aims.dto.smartbi.MetricResult;
 import com.cretas.aims.exception.PythonServiceUnavailableException;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
@@ -30,6 +33,9 @@ import java.io.FilterInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -81,7 +87,12 @@ public class PythonSmartBIClient {
 
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
     private static final long MAX_JSON_RESPONSE_BYTES = 256L * 1024L * 1024L;
+    private static final long MAX_GENERAL_ANALYSIS_REQUEST_BYTES = 8L * 1024L * 1024L;
+    private static final long MAX_SSE_RESPONSE_BYTES = 16L * 1024L * 1024L;
+    private static final int MAX_SSE_EVENT_BYTES = 1024 * 1024;
     private static final long MAX_ERROR_INSPECTION_BYTES = 8L * 1024L;
+    private static final Set<String> ALLOWED_GENERAL_ANALYSIS_EVENTS = Set.of(
+            "status", "chunk", "charts", "done", "error");
     private static final Set<String> ALLOWED_FINANCIAL_DASHBOARD_ENDPOINTS = Set.of(
             "/generate", "/export-ppt");
     private static final Pattern INTERNAL_IDENTITY =
@@ -135,8 +146,10 @@ public class PythonSmartBIClient {
                         throw new IOException("INTERNAL_API_SECRET not configured; cannot call Python SmartBI");
                     }
                     Request.Builder builder = original.newBuilder()
-                            .header("X-Internal-Secret", this.internalSecret)
-                            .header("Accept", "application/json");
+                            .header("X-Internal-Secret", this.internalSecret);
+                    if (original.header("Accept") == null) {
+                        builder.header("Accept", "application/json");
+                    }
                     // Propagate correlation ID from MDC to outgoing Python calls
                     String correlationId = MDC.get("correlationId");
                     if (correlationId != null) {
@@ -497,11 +510,41 @@ public class PythonSmartBIClient {
         if (analysisRequest == null) {
             throw new IOException("Python SmartBI general analysis request is invalid");
         }
+        GeneralAnalysisCall call;
+        try {
+            call = new GeneralAnalysisCall(
+                    analysisRequest.getMessage(),
+                    null,
+                    null,
+                    analysisRequest.getSessionId(),
+                    analysisRequest.getEnableThinking(),
+                    analysisRequest.getThinkingBudget(),
+                    analysisRequest.getAllowTenantDataFallback());
+        } catch (IllegalArgumentException invalidRequest) {
+            throw new IOException("Python SmartBI general analysis request is invalid");
+        }
+        return analyzeGeneral(factoryId, userId, null, call);
+    }
+
+    /**
+     * Typed, tenant-bound general-analysis call for Java callers that provide
+     * explicit query/data context. Trusted identities are header-only.
+     */
+    public PythonGeneralAnalysisResponse analyzeGeneral(
+            String factoryId,
+            String userId,
+            String userRole,
+            GeneralAnalysisCall analysisRequest) throws IOException {
+        if (analysisRequest == null) {
+            throw new IOException("Python SmartBI general analysis request is invalid");
+        }
         final String trustedFactoryId;
         final String trustedUserId;
+        final String trustedUserRole;
         try {
             trustedFactoryId = requireFactoryId(factoryId);
             trustedUserId = optionalIdentity(userId);
+            trustedUserRole = optionalIdentity(userRole);
         } catch (IOException invalidIdentity) {
             throw new IOException("Python SmartBI general analysis request is invalid");
         }
@@ -510,12 +553,16 @@ public class PythonSmartBIClient {
                 .addPathSegments("api/chat/general-analysis")
                 .build();
         try {
+            String requestJson = serializeBoundedGeneralAnalysisRequest(analysisRequest);
             Request.Builder builder = new Request.Builder()
                     .url(url)
                     .header("X-Factory-Id", trustedFactoryId)
-                    .post(RequestBody.create(JSON, objectMapper.writeValueAsString(analysisRequest)));
+                    .post(RequestBody.create(JSON, requestJson));
             if (trustedUserId != null) {
                 builder.header("X-User-Id", trustedUserId);
+            }
+            if (trustedUserRole != null) {
+                builder.header("X-User-Role", trustedUserRole);
             }
 
             PythonGeneralAnalysisResponse response = executeWithRetry(
@@ -526,6 +573,208 @@ public class PythonSmartBIClient {
             return response;
         } catch (IOException | PythonServiceUnavailableException failure) {
             throw new IOException("Python SmartBI general analysis is unavailable");
+        }
+    }
+
+    /**
+     * Streams the fixed Python general-analysis SSE route exactly once. The
+     * transport validates content type, event names, JSON framing, total/event
+     * size, and requires a non-empty successful {@code done} event.
+     */
+    public void streamGeneralAnalysis(
+            String factoryId,
+            String userId,
+            String userRole,
+            GeneralAnalysisCall analysisRequest,
+            GeneralAnalysisEventConsumer consumer) throws IOException {
+        if (analysisRequest == null || consumer == null) {
+            throw new IOException("Python SmartBI general analysis stream request is invalid");
+        }
+        final String trustedFactoryId;
+        final String trustedUserId;
+        final String trustedUserRole;
+        try {
+            trustedFactoryId = requireFactoryId(factoryId);
+            trustedUserId = optionalIdentity(userId);
+            trustedUserRole = optionalIdentity(userRole);
+        } catch (IOException invalidIdentity) {
+            throw new IOException("Python SmartBI general analysis stream request is invalid");
+        }
+
+        HttpUrl url = serviceBaseUrl.newBuilder()
+                .addPathSegments("api/chat/general-analysis-stream")
+                .build();
+        String requestJson = serializeBoundedGeneralAnalysisRequest(analysisRequest);
+        Request.Builder builder = new Request.Builder()
+                .url(url)
+                .header("Accept", "text/event-stream")
+                .header("X-Factory-Id", trustedFactoryId)
+                .post(RequestBody.create(JSON, requestJson));
+        if (trustedUserId != null) {
+            builder.header("X-User-Id", trustedUserId);
+        }
+        if (trustedUserRole != null) {
+            builder.header("X-User-Role", trustedUserRole);
+        }
+
+        if (!circuitBreaker.isCallPermitted()) {
+            throw new IOException("Python SmartBI general analysis stream is unavailable");
+        }
+        try {
+            executeGeneralAnalysisStream(builder.build(), consumer);
+            circuitBreaker.recordSuccess();
+        } catch (GeneralAnalysisConsumerException disconnectedConsumer) {
+            // The Python transport may be healthy while the browser/client has
+            // disconnected from Java's SseEmitter. Do not poison the Python
+            // service circuit breaker with a downstream delivery failure. A
+            // successful Python event also resolves the probe acquired by
+            // isCallPermitted(), which is essential in HALF_OPEN.
+            circuitBreaker.recordSuccess();
+            throw new IOException("General analysis stream delivery was interrupted");
+        } catch (IOException | RuntimeException failure) {
+            circuitBreaker.recordFailure();
+            serviceAvailable.set(false);
+            throw new IOException("Python SmartBI general analysis stream is unavailable");
+        }
+    }
+
+    private String serializeBoundedGeneralAnalysisRequest(GeneralAnalysisCall request)
+            throws IOException {
+        String requestJson = objectMapper.writeValueAsString(request);
+        if (requestJson.getBytes(StandardCharsets.UTF_8).length > MAX_GENERAL_ANALYSIS_REQUEST_BYTES) {
+            throw new IOException("Python SmartBI general analysis request exceeded the configured limit");
+        }
+        return requestJson;
+    }
+
+    private void executeGeneralAnalysisStream(
+            Request request,
+            GeneralAnalysisEventConsumer consumer) throws IOException {
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                inspectErrorBodyBounded(response.body());
+                throw sanitizedUpstreamFailure(response.code());
+            }
+            ResponseBody responseBody = response.body();
+            requireEventStreamResponse(responseBody);
+            BoundedInputStream in = boundedStream(responseBody, MAX_SSE_RESPONSE_BYTES);
+            boolean completed = false;
+            boolean hasAnalysis = false;
+            String eventName = null;
+            StringBuilder eventData = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(in, StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.startsWith("event:")) {
+                        eventName = line.substring("event:".length()).trim();
+                    } else if (line.startsWith("data:")) {
+                        if (eventData.length() > 0) {
+                            eventData.append('\n');
+                        }
+                        eventData.append(line.substring("data:".length()).stripLeading());
+                        if (eventData.length() > MAX_SSE_EVENT_BYTES) {
+                            throw new IOException("Python SmartBI SSE event exceeded the configured limit");
+                        }
+                    } else if (line.isEmpty() && (eventName != null || eventData.length() > 0)) {
+                        GeneralAnalysisStreamEvent event = parseGeneralAnalysisEvent(eventName, eventData);
+                        if ("error".equals(event.event())) {
+                            throw new IOException("Python SmartBI general analysis stream failed");
+                        }
+                        if ("chunk".equals(event.event())
+                                && event.data().isTextual()
+                                && !event.data().asText().isBlank()) {
+                            hasAnalysis = true;
+                        }
+                        if ("done".equals(event.event())) {
+                            JsonNode answer = event.data().path("answer");
+                            boolean success = event.data().path("success").asBoolean(false);
+                            if (!success || !answer.isTextual() || answer.asText().isBlank()) {
+                                throw new IOException("Python SmartBI returned an invalid stream completion");
+                            }
+                            hasAnalysis = true;
+                            completed = true;
+                        }
+                        try {
+                            consumer.onEvent(event);
+                        } catch (IOException | RuntimeException deliveryFailure) {
+                            throw new GeneralAnalysisConsumerException();
+                        }
+                        eventName = null;
+                        eventData.setLength(0);
+                    }
+                }
+                if (eventName != null || eventData.length() > 0) {
+                    throw new IOException("Python SmartBI returned an incomplete SSE event");
+                }
+                in.drainToEnd();
+            } finally {
+                in.closeDelegate();
+            }
+            if (!completed || !hasAnalysis) {
+                throw new IOException("Python SmartBI stream ended without a valid completion");
+            }
+        }
+    }
+
+    private GeneralAnalysisStreamEvent parseGeneralAnalysisEvent(
+            String rawEventName,
+            StringBuilder rawData) throws IOException {
+        String eventName = rawEventName == null ? "message" : rawEventName;
+        if (!ALLOWED_GENERAL_ANALYSIS_EVENTS.contains(eventName) || rawData.length() == 0) {
+            throw new IOException("Python SmartBI returned an unsupported SSE event");
+        }
+        JsonNode data = objectMapper.readTree(rawData.toString());
+        if (data == null) {
+            throw new IOException("Python SmartBI returned an invalid SSE event");
+        }
+        return new GeneralAnalysisStreamEvent(eventName, data);
+    }
+
+    private static void requireEventStreamResponse(ResponseBody responseBody) throws IOException {
+        if (responseBody == null) {
+            throw new IOException("Python SmartBI returned an empty stream");
+        }
+        MediaType contentType = responseBody.contentType();
+        if (contentType == null
+                || !"text".equalsIgnoreCase(contentType.type())
+                || !"event-stream".equalsIgnoreCase(contentType.subtype())) {
+            throw new IOException("Python SmartBI returned an unsupported stream response");
+        }
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record GeneralAnalysisCall(
+            String query,
+            List<Map<String, Object>> data,
+            @JsonProperty("table_type") String tableType,
+            @JsonProperty("session_id") String sessionId,
+            @JsonProperty("enable_thinking") Boolean enableThinking,
+            @JsonProperty("thinking_budget") Integer thinkingBudget,
+            @JsonProperty("allow_tenant_data_fallback") Boolean allowTenantDataFallback) {
+
+        public GeneralAnalysisCall {
+            if (query == null || query.isBlank() || query.length() > 65_536) {
+                throw new IllegalArgumentException("query is required");
+            }
+            data = data == null ? null : List.copyOf(data);
+            if (thinkingBudget != null && (thinkingBudget < 0 || thinkingBudget > 100_000)) {
+                throw new IllegalArgumentException("thinking budget is invalid");
+            }
+        }
+    }
+
+    public record GeneralAnalysisStreamEvent(String event, JsonNode data) {
+    }
+
+    @FunctionalInterface
+    public interface GeneralAnalysisEventConsumer {
+        void onEvent(GeneralAnalysisStreamEvent event) throws IOException;
+    }
+
+    private static final class GeneralAnalysisConsumerException extends IOException {
+        private GeneralAnalysisConsumerException() {
+            super("General analysis stream consumer disconnected");
         }
     }
 

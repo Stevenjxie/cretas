@@ -1,5 +1,6 @@
 package com.cretas.aims.service;
 
+import com.cretas.aims.client.PythonSmartBIClient;
 import com.cretas.aims.dto.MobileDTO;
 import com.cretas.aims.entity.AIAnalysisResult;
 import com.cretas.aims.entity.AIAuditLog;
@@ -83,6 +84,9 @@ public class AIEnterpriseService {
 
     @Autowired
     private AIIntentService aiIntentService;
+
+    @Autowired
+    private PythonSmartBIClient pythonSmartBIClient;
 
     @Autowired
     private com.cretas.aims.utils.JwtUtil jwtUtil;
@@ -767,6 +771,7 @@ public class AIEnterpriseService {
         // 创建 SSE Emitter，5分钟超时
         SseEmitter emitter = new SseEmitter(300_000L);
         long startTime = System.currentTimeMillis();
+        String trustedUserRole = requestIdentity(httpRequest, "role");
 
         log.info("开始流式时间范围成本分析: factoryId={}, userId={}, 时间段={} to {}, 维度={}",
                 factoryId, userId, startDate.toLocalDate(), endDate.toLocalDate(), dimension);
@@ -834,9 +839,22 @@ public class AIEnterpriseService {
                         .name("progress")
                         .data("{\"type\":\"progress\",\"message\":\"正在进行AI分析，请稍候...\"}"));
 
-                // 5. 调用 Python SSE 端点（enableThinking 控制是否启用思考过程，关闭可加速响应）
-                String streamUrl = aiServiceUrl + "/api/chat/stream";
-                connectToPythonSSE(streamUrl, promptMessage, factoryId, emitter, enableThinking, thinkingBudget);
+                // 5. 调用固定、认证且有界的 Python general-analysis SSE 端点。
+                PythonSmartBIClient.GeneralAnalysisCall streamRequest =
+                        new PythonSmartBIClient.GeneralAnalysisCall(
+                                promptMessage,
+                                batchesData,
+                                "time_range_cost",
+                                null,
+                                enableThinking,
+                                thinkingBudget,
+                                false);
+                pythonSmartBIClient.streamGeneralAnalysis(
+                        factoryId,
+                        userId != null ? userId.toString() : null,
+                        trustedUserRole,
+                        streamRequest,
+                        event -> forwardGeneralAnalysisEvent(event, emitter));
 
                 // 6. 消耗配额
                 int quotaCost = getQuotaCostFromConfig(factoryId, "time_range");
@@ -850,11 +868,13 @@ public class AIEnterpriseService {
                         factoryId, batchesData.size(), System.currentTimeMillis() - startTime);
 
             } catch (Exception e) {
-                log.error("流式分析失败: factoryId={}, error={}", factoryId, e.getMessage(), e);
+                log.error("流式分析失败: factoryId={}, code=PYTHON_STREAM_UNAVAILABLE", factoryId);
                 try {
                     emitter.send(SseEmitter.event()
                             .name("error")
-                            .data("{\"type\":\"error\",\"message\":\"分析失败: " + e.getMessage().replace("\"", "'") + "\"}"));
+                            .data(Map.of(
+                                    "type", "error",
+                                    "message", "分析服务暂时不可用，请稍后重试")));
                     emitter.complete();
                 } catch (Exception ex) {
                     emitter.completeWithError(ex);
@@ -879,102 +899,45 @@ public class AIEnterpriseService {
         return emitter;
     }
 
-    /**
-     * 连接到 Python SSE 端点并转发事件
-     *
-     * @param streamUrl Python SSE 端点 URL
-     * @param message 发送给 AI 的消息内容
-     * @param factoryId 工厂ID
-     * @param emitter SSE 发射器
-     * @param enableThinking 是否启用 AI 思考过程（false 可显著加速响应）
-     * @param thinkingBudget 思考预算 Token 数（仅 enableThinking=true 时有效）
-     */
-    private void connectToPythonSSE(String streamUrl, String message, String factoryId, SseEmitter emitter,
-                                    boolean enableThinking, int thinkingBudget) throws Exception {
-        URL url = new URL(streamUrl);
-        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-        connection.setRequestMethod("POST");
-        connection.setRequestProperty("Content-Type", "application/json");
-        connection.setRequestProperty("Accept", "text/event-stream");
-        connection.setDoOutput(true);
-        connection.setConnectTimeout(10_000);  // 10秒连接超时
-        connection.setReadTimeout(300_000);    // 5分钟读取超时
-
-        // 构建请求体（enableThinking 由前端控制，false 时跳过思考过程，显著加速响应）
-        String requestBody = String.format(
-                "{\"message\":\"%s\",\"user_id\":\"%s\",\"enable_thinking\":%s,\"thinking_budget\":%d}",
-                message.replace("\"", "\\\"").replace("\n", "\\n"),
-                factoryId,
-                enableThinking,
-                thinkingBudget
-        );
-
-        // 发送请求
-        try (java.io.OutputStream os = connection.getOutputStream()) {
-            os.write(requestBody.getBytes(StandardCharsets.UTF_8));
-            os.flush();
-        }
-
-        // 读取 SSE 流
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8))) {
-
-            String line;
-            StringBuilder eventData = new StringBuilder();
-            boolean completedNormally = false;
-
-            while ((line = reader.readLine()) != null) {
-                if (line.startsWith("data: ")) {
-                    String data = line.substring(6);
-                    eventData.append(data);
-                } else if (line.isEmpty() && eventData.length() > 0) {
-                    // 完整事件，转发到前端
-                    String eventJson = eventData.toString();
-                    try {
-                        // 解析事件类型
-                        String eventType = "message";
-                        if (eventJson.contains("\"type\":\"thinking\"")) {
-                            eventType = "thinking";
-                        } else if (eventJson.contains("\"type\":\"answer\"")) {
-                            eventType = "answer";
-                        } else if (eventJson.contains("\"type\":\"complete\"")) {
-                            eventType = "complete";
-                        } else if (eventJson.contains("\"type\":\"error\"")) {
-                            eventType = "error";
-                        }
-
-                        emitter.send(SseEmitter.event()
-                                .name(eventType)
-                                .data(eventJson));
-
-                        // 如果是完成事件，结束连接
-                        if ("complete".equals(eventType)) {
-                            completedNormally = true;
-                            emitter.complete();
-                            break;
-                        }
-                    } catch (Exception e) {
-                        log.warn("转发SSE事件失败: {}", e.getMessage());
-                    }
-                    eventData.setLength(0);
+    private void forwardGeneralAnalysisEvent(
+            PythonSmartBIClient.GeneralAnalysisStreamEvent event,
+            SseEmitter emitter) throws java.io.IOException {
+        switch (event.event()) {
+            case "status" -> emitter.send(SseEmitter.event()
+                    .name("progress")
+                    .data(Map.of(
+                            "type", "progress",
+                            "message", event.data().asText("正在分析..."))));
+            case "chunk" -> emitter.send(SseEmitter.event()
+                    .name("answer")
+                    .data(Map.of(
+                            "type", "answer",
+                            "content", event.data().asText())));
+            case "charts" -> emitter.send(SseEmitter.event()
+                    .name("progress")
+                    .data(Map.of(
+                            "type", "progress",
+                            "message", "分析图表已生成")));
+            case "done" -> {
+                Map<String, Object> completion = new HashMap<>();
+                completion.put("type", "complete");
+                completion.put("analysis", event.data().path("answer").asText());
+                if (event.data().has("processingTimeMs")) {
+                    completion.put("responseTimeMs", event.data().path("processingTimeMs").asLong());
                 }
+                emitter.send(SseEmitter.event().name("complete").data(completion));
+                emitter.complete();
             }
-
-            // 兜底：如果流结束但未收到 complete 事件，确保关闭 SSE 连接
-            if (!completedNormally) {
-                log.warn("Python SSE 流结束但未收到 complete 事件，执行兜底关闭: factoryId={}", factoryId);
-                try {
-                    emitter.send(SseEmitter.event()
-                            .name("complete")
-                            .data("{\"type\":\"complete\",\"message\":\"分析完成\"}"));
-                    emitter.complete();
-                } catch (Exception e) {
-                    log.warn("兜底关闭 SSE 失败: {}", e.getMessage());
-                }
-            }
-        } finally {
-            connection.disconnect();
+            default -> throw new java.io.IOException("Unsupported general analysis stream event");
         }
+    }
+
+    private String requestIdentity(HttpServletRequest request, String attributeName) {
+        if (request == null) {
+            return null;
+        }
+        Object value = request.getAttribute(attributeName);
+        return value != null ? value.toString() : null;
     }
 
     /**

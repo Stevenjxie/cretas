@@ -169,6 +169,182 @@ class PythonSmartBIClientTransportSecurityTest {
     }
 
     @Test
+    void generalAnalysisStreamIsSingleAttemptBoundedTypedAndSanitized() throws Exception {
+        MockWebServer errorServer = startServer();
+        errorServer.enqueue(new MockResponse()
+                .setResponseCode(503)
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("PRIVATE-DOWNSTREAM-DETAIL"));
+        PythonSmartBIClient errorClient = newClient(errorServer, 3, "stream-secret");
+
+        assertThatThrownBy(() -> errorClient.streamGeneralAnalysis(
+                "REST-1", "7", "restaurant_manager", streamRequest(), event -> { }))
+                .isInstanceOf(IOException.class)
+                .hasMessage("Python SmartBI general analysis stream is unavailable")
+                .hasMessageNotContaining("PRIVATE-DOWNSTREAM-DETAIL")
+                .hasMessageNotContaining("stream-secret");
+        assertThat(errorServer.getRequestCount()).isEqualTo(1);
+
+        MockWebServer wrongTypeServer = startServer();
+        wrongTypeServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"success\":true}"));
+        assertThatThrownBy(() -> newClient(wrongTypeServer, 0, "type-secret")
+                .streamGeneralAnalysis(
+                        "REST-1", null, null, streamRequest(), event -> { }))
+                .isInstanceOf(IOException.class)
+                .hasMessage("Python SmartBI general analysis stream is unavailable");
+
+        MockWebServer incompleteServer = startServer();
+        incompleteServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("event: chunk\ndata: \"partial only\"\n\n"));
+        assertThatThrownBy(() -> newClient(incompleteServer, 0, "done-secret")
+                .streamGeneralAnalysis(
+                        "REST-1", null, null, streamRequest(), event -> { }))
+                .isInstanceOf(IOException.class)
+                .hasMessage("Python SmartBI general analysis stream is unavailable");
+
+        MockWebServer oversizedServer = startServer();
+        oversizedServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("event: done\ndata: {\"success\":true,\"answer\":\"ok\"}\n\n")
+                .setHeader("Content-Length", 16L * 1024L * 1024L + 1L));
+        assertThatThrownBy(() -> newClient(oversizedServer, 0, "size-secret")
+                .streamGeneralAnalysis(
+                        "REST-1", null, null, streamRequest(), event -> { }))
+                .isInstanceOf(IOException.class)
+                .hasMessage("Python SmartBI general analysis stream is unavailable");
+    }
+
+    @Test
+    void generalAnalysisStreamNeverFollowsRedirectOrAcceptsUnknownAndErrorEvents()
+            throws Exception {
+        MockWebServer redirectOrigin = startServer();
+        MockWebServer redirectDestination = startServer();
+        redirectOrigin.enqueue(new MockResponse()
+                .setResponseCode(307)
+                .setHeader("Location", redirectDestination.url("/capture")));
+        assertThatThrownBy(() -> newClient(redirectOrigin, 3, "redirect-stream-secret")
+                .streamGeneralAnalysis(
+                        "REST-1", null, null, streamRequest(), event -> { }))
+                .isInstanceOf(IOException.class)
+                .hasMessage("Python SmartBI general analysis stream is unavailable")
+                .hasMessageNotContaining("redirect-stream-secret");
+        assertThat(redirectOrigin.getRequestCount()).isEqualTo(1);
+        assertThat(redirectDestination.getRequestCount()).isZero();
+
+        MockWebServer unknownEventServer = startServer();
+        unknownEventServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("event: private-debug\ndata: \"TOP-SECRET\"\n\n"));
+        assertThatThrownBy(() -> newClient(unknownEventServer, 0, "unknown-secret")
+                .streamGeneralAnalysis(
+                        "REST-1", null, null, streamRequest(), event -> { }))
+                .isInstanceOf(IOException.class)
+                .hasMessage("Python SmartBI general analysis stream is unavailable")
+                .hasMessageNotContaining("TOP-SECRET");
+
+        MockWebServer errorEventServer = startServer();
+        errorEventServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("event: error\ndata: \"PRIVATE-PYTHON-ERROR\"\n\n"));
+        assertThatThrownBy(() -> newClient(errorEventServer, 0, "event-secret")
+                .streamGeneralAnalysis(
+                        "REST-1", null, null, streamRequest(), event -> { }))
+                .isInstanceOf(IOException.class)
+                .hasMessage("Python SmartBI general analysis stream is unavailable")
+                .hasMessageNotContaining("PRIVATE-PYTHON-ERROR")
+                .hasMessageNotContaining("event-secret");
+    }
+
+    @Test
+    void downstreamConsumerDisconnectDoesNotPoisonPythonCircuitBreaker() throws Exception {
+        MockWebServer origin = startServer();
+        origin.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("event: chunk\ndata: \"answer\"\n\n"
+                        + "event: done\ndata: {\"success\":true,\"answer\":\"answer\"}\n\n"));
+        PythonSmartBIClient client = newClient(origin, 0, "consumer-secret");
+
+        assertThatThrownBy(() -> client.streamGeneralAnalysis(
+                "REST-1", null, null, streamRequest(),
+                event -> { throw new IOException("browser disconnected"); }))
+                .isInstanceOf(IOException.class)
+                .hasMessage("General analysis stream delivery was interrupted")
+                .hasMessageNotContaining("browser disconnected");
+
+        Field breakerField = PythonSmartBIClient.class.getDeclaredField("circuitBreaker");
+        breakerField.setAccessible(true);
+        PythonServiceCircuitBreaker breaker =
+                (PythonServiceCircuitBreaker) breakerField.get(client);
+        assertThat(breaker.getMetrics()).containsEntry("totalFailures", 0L);
+    }
+
+    @Test
+    void downstreamConsumerRuntimeFailureDoesNotPoisonPythonAvailabilityOrCircuitBreaker()
+            throws Exception {
+        MockWebServer origin = startServer();
+        String healthyStream = "event: chunk\ndata: \"answer\"\n\n"
+                + "event: done\ndata: {\"success\":true,\"answer\":\"answer\"}\n\n";
+        origin.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody(healthyStream));
+        origin.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody(healthyStream));
+        PythonSmartBIClient client = newClient(origin, 0, "runtime-consumer-secret");
+        Field availabilityField = PythonSmartBIClient.class.getDeclaredField("serviceAvailable");
+        availabilityField.setAccessible(true);
+        java.util.concurrent.atomic.AtomicBoolean availability =
+                (java.util.concurrent.atomic.AtomicBoolean) availabilityField.get(client);
+        availability.set(true);
+        Field breakerField = PythonSmartBIClient.class.getDeclaredField("circuitBreaker");
+        breakerField.setAccessible(true);
+        PythonServiceCircuitBreaker breaker =
+                (PythonServiceCircuitBreaker) breakerField.get(client);
+        Field stateField = PythonServiceCircuitBreaker.class.getDeclaredField("state");
+        stateField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        java.util.concurrent.atomic.AtomicReference<PythonServiceCircuitBreaker.CircuitState> state =
+                (java.util.concurrent.atomic.AtomicReference<PythonServiceCircuitBreaker.CircuitState>)
+                        stateField.get(breaker);
+        state.set(PythonServiceCircuitBreaker.CircuitState.HALF_OPEN);
+
+        assertThatThrownBy(() -> client.streamGeneralAnalysis(
+                "REST-1", null, null, streamRequest(),
+                event -> { throw new IllegalStateException("emitter already complete"); }))
+                .isInstanceOf(IOException.class)
+                .hasMessage("General analysis stream delivery was interrupted")
+                .hasMessageNotContaining("emitter already complete");
+
+        assertThat(breaker.getState())
+                .isEqualTo(PythonServiceCircuitBreaker.CircuitState.HALF_OPEN);
+        assertThat(breaker.getMetrics())
+                .containsEntry("totalRequests", 1L)
+                .containsEntry("totalFailures", 0L);
+        assertThat(availability).isTrue();
+
+        client.streamGeneralAnalysis(
+                "REST-1", null, null, streamRequest(), event -> { });
+
+        assertThat(breaker.getState())
+                .isEqualTo(PythonServiceCircuitBreaker.CircuitState.CLOSED);
+        assertThat(breaker.getMetrics()).containsEntry("totalFailures", 0L);
+        assertThat(breaker.getMetrics()).containsEntry("totalRequests", 2L);
+        assertThat(availability).isTrue();
+        assertThat(breaker.isCallPermitted()).isTrue();
+    }
+
+    @Test
     void dynamicEndpointAllowlistsRejectBeforeNetwork() throws Exception {
         MockWebServer origin = startServer();
         PythonSmartBIClient client = newClient(origin, 0, "allowlist-secret");
@@ -211,6 +387,11 @@ class PythonSmartBIClientTransportSecurityTest {
                 new ObjectMapper(),
                 breaker(),
                 secret);
+    }
+
+    private static PythonSmartBIClient.GeneralAnalysisCall streamRequest() {
+        return new PythonSmartBIClient.GeneralAnalysisCall(
+                "analyze", null, "time_range_cost", null, false, 0, false);
     }
 
     private static PythonSmartBIConfig config(String baseUrl, int maxRetries) {

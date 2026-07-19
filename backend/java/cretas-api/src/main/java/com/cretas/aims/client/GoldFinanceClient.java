@@ -1,6 +1,8 @@
 package com.cretas.aims.client;
 
 import com.cretas.aims.config.smartbi.PythonSmartBIConfig;
+import com.cretas.aims.dto.python.PythonGeneralAnalysisResponse;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.web.context.request.RequestContextHolder;
@@ -12,6 +14,7 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import jakarta.annotation.PostConstruct;
@@ -48,6 +51,7 @@ public class GoldFinanceClient {
     private final PythonSmartBIConfig config;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final OkHttpClient http;
+    private final PythonSmartBIClient pythonSmartBIClient;
 
     /**
      * Read the same env var that JwtAuthInterceptor + PythonSmartBIClient use
@@ -58,7 +62,15 @@ public class GoldFinanceClient {
             ? System.getenv("INTERNAL_API_SECRET") : "";
 
     public GoldFinanceClient(PythonSmartBIConfig config) {
+        this(config, null);
+    }
+
+    @Autowired
+    public GoldFinanceClient(
+            PythonSmartBIConfig config,
+            PythonSmartBIClient pythonSmartBIClient) {
         this.config = config;
+        this.pythonSmartBIClient = pythonSmartBIClient;
         this.http = new OkHttpClient.Builder()
                 .connectTimeout(config.getConnectTimeout(), TimeUnit.MILLISECONDS)
                 .readTimeout(config.getTimeout(), TimeUnit.MILLISECONDS)
@@ -80,16 +92,24 @@ public class GoldFinanceClient {
      * default. No DB lookup: the role is already on the request.
      */
     private String currentUserRole() {
+        return currentRequestAttribute("role");
+    }
+
+    private String currentUserId() {
+        return currentRequestAttribute("userId");
+    }
+
+    private String currentRequestAttribute(String attributeName) {
         try {
             var attrs = RequestContextHolder.getRequestAttributes();
             if (attrs instanceof ServletRequestAttributes servletAttrs) {
                 HttpServletRequest req = servletAttrs.getRequest();
-                Object role = req.getAttribute("role");
-                return role != null ? role.toString() : null;
+                Object value = req.getAttribute(attributeName);
+                return value != null ? value.toString() : null;
             }
             return null;
         } catch (Exception e) {
-            log.debug("currentUserRole resolve failed: {}", e.getMessage());
+            log.debug("current request identity resolve failed");
             return null;
         }
     }
@@ -1283,47 +1303,30 @@ public class GoldFinanceClient {
             throw new IllegalArgumentException("question required");
         }
 
-        java.util.Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
-        bodyMap.put("query", question);
-        bodyMap.put("table_type", "restaurant_ops");
-        bodyMap.put("session_id", sessionId != null ? sessionId : "java-restaurant-ops");
-        bodyMap.put("enable_thinking", false);
-        String json = objectMapper.writeValueAsString(bodyMap);
-
-        Request.Builder reqBuilder = new Request.Builder()
-                .url(config.getUrl() + "/api/chat/general-analysis")
-                .post(RequestBody.create(json, JSON_MEDIA))
-                .addHeader("Content-Type", "application/json");
-        if (!internalSecret.isEmpty()) {
-            reqBuilder.addHeader("X-Internal-Secret", internalSecret);
-            reqBuilder.addHeader("X-Factory-Id", factoryId);
-            String userRole = currentUserRole();
-            if (userRole != null && !userRole.isEmpty()) {
-                reqBuilder.addHeader("X-User-Role", userRole);
-            }
+        if (pythonSmartBIClient == null) {
+            throw new IOException("Restaurant ops analysis transport is unavailable");
         }
-        Request req = reqBuilder.build();
-
-        long t0 = System.currentTimeMillis();
-        try (Response resp = http.newCall(req).execute()) {
-            long elapsed = System.currentTimeMillis() - t0;
-            if (!resp.isSuccessful()) {
-                String body = resp.body() != null ? resp.body().string() : "";
-                throw new IOException(
-                        "Restaurant ops analysis HTTP " + resp.code() + " in " + elapsed
-                                + "ms: " + body);
-            }
-            String body = resp.body() != null ? resp.body().string() : "{}";
-            @SuppressWarnings("unchecked")
-            Map<String, Object> parsed = objectMapper.readValue(body, Map.class);
-            log.debug("Restaurant ops analysis factory={} charts={} in {}ms",
-                    factoryId,
-                    parsed.get("charts") instanceof java.util.List<?>
-                            ? ((java.util.List<?>) parsed.get("charts")).size()
-                            : 0,
-                    elapsed);
-            return parsed;
-        }
+        PythonSmartBIClient.GeneralAnalysisCall request =
+                new PythonSmartBIClient.GeneralAnalysisCall(
+                        question,
+                        null,
+                        "restaurant_ops",
+                        sessionId != null && !sessionId.isBlank()
+                                ? sessionId : "java-restaurant-ops",
+                        false,
+                        0,
+                        false);
+        PythonGeneralAnalysisResponse response = pythonSmartBIClient.analyzeGeneral(
+                factoryId,
+                currentUserId(),
+                currentUserRole(),
+                request);
+        Map<String, Object> parsed = objectMapper.convertValue(
+                response, new TypeReference<Map<String, Object>>() { });
+        log.debug("Restaurant ops analysis factory={} charts={}",
+                factoryId,
+                response.getCharts() != null ? response.getCharts().size() : 0);
+        return parsed;
     }
 
     // =========================================================================

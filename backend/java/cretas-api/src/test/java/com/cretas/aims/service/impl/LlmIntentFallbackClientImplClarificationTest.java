@@ -1,16 +1,27 @@
 package com.cretas.aims.service.impl;
 
+import com.cretas.aims.client.PythonSmartBIClient;
+import com.cretas.aims.dto.intent.IntentMatchResult.CandidateIntent;
+import com.cretas.aims.dto.python.PythonGeneralAnalysisResponse;
 import com.cretas.aims.entity.config.AIIntentConfig;
+import com.cretas.aims.service.LlmIntentFallbackClient.RerankingResult;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InjectMocks;
+import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
 /**
  * 测试 LlmIntentFallbackClientImpl 的澄清问题生成功能
@@ -20,9 +31,87 @@ class LlmIntentFallbackClientImplClarificationTest {
     @InjectMocks
     private LlmIntentFallbackClientImpl client;
 
+    @Mock
+    private PythonSmartBIClient pythonSmartBIClient;
+
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setAttribute("userId", 55L);
+        request.setAttribute("role", "factory_super_admin");
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+    }
+
+    @AfterEach
+    void tearDown() {
+        RequestContextHolder.resetRequestAttributes();
+    }
+
+    @Test
+    void missingParameterClarificationUsesTypedTenantBoundRequest() throws Exception {
+        when(pythonSmartBIClient.analyzeGeneral(
+                anyString(), nullable(String.class), nullable(String.class),
+                any(PythonSmartBIClient.GeneralAnalysisCall.class)))
+                .thenReturn(PythonGeneralAnalysisResponse.builder()
+                        .success(true)
+                        .answer("请提供批次编号？")
+                        .build());
+        AIIntentConfig intent = AIIntentConfig.builder()
+                .intentCode("UPDATE_BATCH")
+                .intentName("批次更新")
+                .build();
+
+        List<String> questions = client.generateClarificationQuestionsForMissingParams(
+                "更新批次", intent, List.of("batchId"), "FACTORY-9");
+
+        assertEquals(List.of("请提供批次编号？"), questions);
+        var requestCaptor = org.mockito.ArgumentCaptor.forClass(
+                PythonSmartBIClient.GeneralAnalysisCall.class);
+        verify(pythonSmartBIClient).analyzeGeneral(
+                eq("FACTORY-9"), eq("55"), eq("factory_super_admin"),
+                requestCaptor.capture());
+        PythonSmartBIClient.GeneralAnalysisCall request = requestCaptor.getValue();
+        assertEquals("intent_clarification", request.tableType());
+        assertFalse(request.allowTenantDataFallback());
+        assertTrue(request.query().contains("更新批次"));
+        assertEquals("UPDATE_BATCH", request.data().get(0).get("intent_code"));
+        assertEquals(List.of("batchId"), request.data().get(0).get("missing_parameters"));
+    }
+
+    @Test
+    void rerankingUsesTypedCandidateDataInsteadOfWrongSchemaBody() throws Exception {
+        when(pythonSmartBIClient.analyzeGeneral(
+                anyString(), nullable(String.class), nullable(String.class),
+                any(PythonSmartBIClient.GeneralAnalysisCall.class)))
+                .thenReturn(PythonGeneralAnalysisResponse.builder()
+                        .success(true)
+                        .answer("{\"selected_intent\":\"MATERIAL_QUERY\","
+                                + "\"confidence\":0.91,\"reasoning\":\"matches\","
+                                + "\"agrees_with_ranking\":true}")
+                        .build());
+        CandidateIntent candidate = CandidateIntent.builder()
+                .intentCode("MATERIAL_QUERY")
+                .intentName("材料查询")
+                .description("查询材料")
+                .confidence(0.8)
+                .build();
+
+        RerankingResult result = client.rerankCandidates(
+                "查询材料", List.of(candidate), "FACTORY-10");
+
+        assertTrue(result.isSuccess());
+        assertEquals("MATERIAL_QUERY", result.getSelectedIntentCode());
+        var requestCaptor = org.mockito.ArgumentCaptor.forClass(
+                PythonSmartBIClient.GeneralAnalysisCall.class);
+        verify(pythonSmartBIClient).analyzeGeneral(
+                eq("FACTORY-10"), eq("55"), eq("factory_super_admin"),
+                requestCaptor.capture());
+        PythonSmartBIClient.GeneralAnalysisCall request = requestCaptor.getValue();
+        assertEquals("intent_reranking", request.tableType());
+        assertFalse(request.allowTenantDataFallback());
+        assertEquals("MATERIAL_QUERY", request.data().get(0).get("intent_code"));
+        assertTrue(request.query().contains("查询材料"));
     }
 
     /**

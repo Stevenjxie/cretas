@@ -175,13 +175,91 @@ class PythonSmartBIClientTest {
         assertEquals("test-internal-secret", request.getHeader("X-Internal-Secret"));
 
         JsonNode body = mapper.readTree(request.getBody().readUtf8());
-        assertEquals("analyze cost", body.get("message").asText());
+        assertEquals("analyze cost", body.get("query").asText());
         assertEquals("session-1", body.get("session_id").asText());
         assertFalse(body.get("allow_tenant_data_fallback").asBoolean());
         assertFalse(body.has("factoryId"));
         assertFalse(body.has("factory_id"));
         assertFalse(body.has("userId"));
         assertFalse(body.has("user_id"));
+    }
+
+    @Test
+    void typedGeneralAnalysisSendsQueryDataTableAndExactTrustedRole() throws Exception {
+        server.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"success\":true,\"answer\":\"restaurant answer\",\"charts\":[]}"));
+
+        PythonGeneralAnalysisResponse response = client.analyzeGeneral(
+                "REST-1",
+                "91",
+                "restaurant_manager",
+                new PythonSmartBIClient.GeneralAnalysisCall(
+                        "compare restaurant costs",
+                        List.of(Map.of("cost", 12.5)),
+                        "restaurant_ops",
+                        "session-9",
+                        false,
+                        0,
+                        false));
+
+        assertEquals("restaurant answer", response.getEffectiveAnalysis());
+        RecordedRequest request = server.takeRequest();
+        assertEquals("/api/chat/general-analysis", request.getPath());
+        assertEquals("REST-1", request.getHeader("X-Factory-Id"));
+        assertEquals("91", request.getHeader("X-User-Id"));
+        assertEquals("restaurant_manager", request.getHeader("X-User-Role"));
+        assertEquals("test-internal-secret", request.getHeader("X-Internal-Secret"));
+        JsonNode body = mapper.readTree(request.getBody().readUtf8());
+        assertEquals("compare restaurant costs", body.path("query").asText());
+        assertEquals("restaurant_ops", body.path("table_type").asText());
+        assertEquals(12.5, body.path("data").get(0).path("cost").asDouble(), 0.001);
+        assertFalse(body.path("allow_tenant_data_fallback").asBoolean(true));
+        assertFalse(body.has("factory_id"));
+        assertFalse(body.has("user_id"));
+    }
+
+    @Test
+    void generalAnalysisStreamUsesFixedRouteAndTypedBoundedEvents() throws Exception {
+        server.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "text/event-stream; charset=utf-8")
+                .setBody("event: status\ndata: \"正在分析\"\n\n"
+                        + "event: chunk\ndata: \"part one\"\n\n"
+                        + "event: done\ndata: {\"success\":true,\"answer\":\"part one\","
+                        + "\"processingTimeMs\":12}\n\n"));
+        List<PythonSmartBIClient.GeneralAnalysisStreamEvent> events =
+                new java.util.ArrayList<>();
+
+        client.streamGeneralAnalysis(
+                "REST-STREAM",
+                "22",
+                "finance_manager",
+                new PythonSmartBIClient.GeneralAnalysisCall(
+                        "analyze stream",
+                        List.of(Map.of("amount", 10)),
+                        "time_range_cost",
+                        null,
+                        true,
+                        50,
+                        false),
+                events::add);
+
+        assertEquals(List.of("status", "chunk", "done"),
+                events.stream().map(PythonSmartBIClient.GeneralAnalysisStreamEvent::event).toList());
+        RecordedRequest request = server.takeRequest();
+        assertEquals("POST", request.getMethod());
+        assertEquals("/api/chat/general-analysis-stream", request.getPath());
+        assertEquals("text/event-stream", request.getHeader("Accept"));
+        assertEquals("REST-STREAM", request.getHeader("X-Factory-Id"));
+        assertEquals("22", request.getHeader("X-User-Id"));
+        assertEquals("finance_manager", request.getHeader("X-User-Role"));
+        assertEquals("test-internal-secret", request.getHeader("X-Internal-Secret"));
+        JsonNode body = mapper.readTree(request.getBody().readUtf8());
+        assertEquals("analyze stream", body.path("query").asText());
+        assertEquals("time_range_cost", body.path("table_type").asText());
+        assertFalse(body.path("allow_tenant_data_fallback").asBoolean(true));
     }
 
     @Test
