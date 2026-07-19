@@ -23,27 +23,27 @@ class ToolDescriptorCatalogTest {
         ToolDescriptorStatistics statistics = catalog.statistics();
 
         assertThat(catalog.inventory().schemaVersion()).isEqualTo(1);
-        assertThat(catalog.inventory().expectedToolCount()).isEqualTo(593);
-        assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(586);
-        assertThat(statistics.total()).isEqualTo(593);
-        assertThat(statistics.legacy()).isEqualTo(586);
+        assertThat(catalog.inventory().expectedToolCount()).isEqualTo(589);
+        assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(581);
+        assertThat(statistics.total()).isEqualTo(589);
+        assertThat(statistics.legacy()).isEqualTo(581);
         assertThat(statistics.actionTypes()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.ActionType.READ, 449L,
-                ToolExecutor.ActionType.WRITE, 64L,
-                ToolExecutor.ActionType.UPDATE, 28L,
+                ToolExecutor.ActionType.READ, 447L,
+                ToolExecutor.ActionType.WRITE, 63L,
+                ToolExecutor.ActionType.UPDATE, 27L,
                 ToolExecutor.ActionType.DELETE, 11L,
                 ToolExecutor.ActionType.ANALYZE, 19L,
                 ToolExecutor.ActionType.GENERATE, 15L,
                 ToolExecutor.ActionType.NOTIFY, 7L));
         assertThat(statistics.riskLevels()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.RiskLevel.LOW, 514L,
-                ToolExecutor.RiskLevel.MEDIUM, 74L,
+                ToolExecutor.RiskLevel.LOW, 511L,
+                ToolExecutor.RiskLevel.MEDIUM, 73L,
                 ToolExecutor.RiskLevel.HIGH, 5L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
         assertThat(statistics.previewSupported()).isEqualTo(39);
         assertThat(statistics.requiresPermission()).isEqualTo(39);
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolGovernanceStatus.REVIEW_REQUIRED, 568L,
+                ToolGovernanceStatus.REVIEW_REQUIRED, 564L,
                 ToolGovernanceStatus.REVIEW_REQUIRED_P0, 18L,
                 ToolGovernanceStatus.APPROVED, 7L,
                 ToolGovernanceStatus.WAIVED, 0L));
