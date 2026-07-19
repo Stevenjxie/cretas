@@ -22,8 +22,8 @@ import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
-import com.cretas.aims.repository.recipe.ProductRecipeRepository;
-import com.cretas.aims.repository.recipe.RecipeIngredientRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.service.processentry.impl.ClerkProcessEntryServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -78,8 +78,8 @@ class ClerkProcessEntryServiceImplTest {
     @Mock private MaterialConsumptionRepository consumptionRepo;
     @Mock private ProcessEntryIdempotencyRepository idempotencyRepo;
     @Mock private FactoryWarehouseRepository warehouseRepo;
-    @Mock private ProductRecipeRepository recipeRepo;
-    @Mock private RecipeIngredientRepository ingredientRepo;
+    @Mock private BomRecipeRepository bomRecipeRepo;
+    @Mock private BomSeasoningItemRepository bomSeasoningItemRepo;
     @Mock private ProductionPlanRepository planRepository;
     @Mock private ProductTypeRepository productTypeRepository;
     @Mock private com.cretas.aims.repository.ProductionReportRepository reportRepo;
@@ -159,7 +159,7 @@ class ClerkProcessEntryServiceImplTest {
     }
 
     private void stubNoRecipe() {
-        when(recipeRepo.findByFactoryIdAndProductTypeIdAndStatus(any(), any(), any()))
+        when(bomRecipeRepo.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(any(), any()))
                 .thenReturn(Optional.empty());
     }
 
@@ -786,13 +786,7 @@ class ClerkProcessEntryServiceImplTest {
         stubMbSave();
         stubConsumptionSave();
         stubIdempotencySave();
-        // Need a recipe so computeSeasoningCost is actually called
-        com.cretas.aims.entity.recipe.ProductRecipe recipe = new com.cretas.aims.entity.recipe.ProductRecipe();
-        recipe.setId("R-MULTI");
-        recipe.setSubsequentPotRatio(new java.math.BigDecimal("0.5"));
-        when(recipeRepo.findByFactoryIdAndProductTypeIdAndStatus(any(), any(), any()))
-                .thenReturn(Optional.of(recipe));
-        when(ingredientRepo.findByRecipeIdOrderBySeqAsc(any())).thenReturn(List.of());
+        stubNoRecipe();
 
         MaterialBatch raw = rawMb("RAW-T14A", FACTORY, new BigDecimal("10"));
         when(materialBatchRepo.findByIdAndFactoryId("RAW-T14A", FACTORY)).thenReturn(Optional.of(raw));
@@ -835,12 +829,7 @@ class ClerkProcessEntryServiceImplTest {
         stubMbSave();
         stubConsumptionSave();
         stubIdempotencySave();
-        com.cretas.aims.entity.recipe.ProductRecipe recipe = new com.cretas.aims.entity.recipe.ProductRecipe();
-        recipe.setId("R-MULTI2");
-        recipe.setSubsequentPotRatio(new java.math.BigDecimal("0.5"));
-        when(recipeRepo.findByFactoryIdAndProductTypeIdAndStatus(any(), any(), any()))
-                .thenReturn(Optional.of(recipe));
-        when(ingredientRepo.findByRecipeIdOrderBySeqAsc(any())).thenReturn(List.of());
+        stubNoRecipe();
 
         MaterialBatch raw = rawMb("RAW-T14B", FACTORY, new BigDecimal("10"));
         when(materialBatchRepo.findByIdAndFactoryId("RAW-T14B", FACTORY)).thenReturn(Optional.of(raw));
@@ -877,12 +866,7 @@ class ClerkProcessEntryServiceImplTest {
         stubMbSave();
         stubConsumptionSave();
         stubIdempotencySave();
-        com.cretas.aims.entity.recipe.ProductRecipe recipe = new com.cretas.aims.entity.recipe.ProductRecipe();
-        recipe.setId("R-MULTI3");
-        recipe.setSubsequentPotRatio(new java.math.BigDecimal("0.5"));
-        when(recipeRepo.findByFactoryIdAndProductTypeIdAndStatus(any(), any(), any()))
-                .thenReturn(Optional.of(recipe));
-        when(ingredientRepo.findByRecipeIdOrderBySeqAsc(any())).thenReturn(List.of());
+        stubNoRecipe();
 
         MaterialBatch raw = rawMb("RAW-T14C", FACTORY, new BigDecimal("10"));
         when(materialBatchRepo.findByIdAndFactoryId("RAW-T14C", FACTORY)).thenReturn(Optional.of(raw));
@@ -1146,7 +1130,7 @@ class ClerkProcessEntryServiceImplTest {
         // Warning must point to the missing seasoning recipe; "未识别为调味步骤" would be stale.
         assertThat(result.getWarnings())
                 .as("should contain missing seasoning recipe warning for 熟制 step")
-                .anyMatch(w -> w.contains("PT-FINAL") && w.contains("未设置调料配方"));
+                .anyMatch(w -> w.contains("PT-FINAL") && w.contains("未设置当前 BOM 调料配方"));
     }
 
     /**

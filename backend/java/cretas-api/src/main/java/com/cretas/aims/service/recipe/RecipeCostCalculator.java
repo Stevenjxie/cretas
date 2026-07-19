@@ -1,9 +1,6 @@
 package com.cretas.aims.service.recipe;
 
 import com.cretas.aims.entity.bom.BomSeasoningItem;
-import com.cretas.aims.entity.recipe.ProductRecipe;
-import com.cretas.aims.entity.recipe.RecipeIngredient;
-import com.cretas.aims.entity.recipe.SeasoningLine;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -16,53 +13,36 @@ import java.util.List;
  * 注射总 = R注射 × 注射/kg
  * 熟制总 = Σ_i 锅i原料 × 熟制/kg(全量) × (i==0 ? 1 : ratio)
  *
- * <p>BOM 统管配方+锅序合并 (2026-06-24): 算法一字不改, 改为读 {@link SeasoningLine} 契约,
- * 让同一套计算同时服务 SP-A {@link RecipeIngredient}(旧源) 与
- * {@link com.cretas.aims.entity.bom.BomSeasoningItem}(BOM 折叠后新源). 零回归.
+ * <p>运行时只读取 {@link BomSeasoningItem}，不再保留旧配方数据源或兼容入口。
  */
 public final class RecipeCostCalculator {
 
     private static final int SCALE = 4;
     private static final BigDecimal G_PER_KG = new BigDecimal("1000");
+    private static final BigDecimal DEFAULT_SUBSEQUENT_POT_RATIO = new BigDecimal("0.3333");
 
     private RecipeCostCalculator() {}
 
     /**
-     * SP-A 兼容入口 (ProductRecipe + RecipeIngredient). 委托给 {@link #compute(BigDecimal, List, BigDecimal, List)}.
-     *
-     * @param recipe         配方头(读 subsequentPotRatio)
-     * @param ingredients    全部明细(注射段+熟制段)
-     * @param injectionRawKg 注射前生料投入重(kg) — Spec §3.2 R注射
-     * @param potRawKgs      逐锅熟制原料(kg), size=锅数N; 第1个=第一锅
-     */
-    public static SeasoningCost compute(ProductRecipe recipe,
-                                        List<RecipeIngredient> ingredients,
-                                        BigDecimal injectionRawKg,
-                                        List<BigDecimal> potRawKgs) {
-        return compute(recipe == null ? null : recipe.getSubsequentPotRatio(),
-                ingredients, injectionRawKg, potRawKgs);
-    }
-
-    /**
      * 核心计算 (数据源中性). BOM 折叠后从 {@code BomRecipe.subsequentPotRatio} + {@code List<BomSeasoningItem>} 走此入口.
      *
-     * @param subsequentPotRatio 第二锅起比例 (null → {@link ProductRecipe#DEFAULT_SUBSEQUENT_POT_RATIO})
-     * @param ingredients        调料明细 (注射段+熟制段), 任意 {@link SeasoningLine} 实现
+     * @param subsequentPotRatio 第二锅起比例（null → 0.3333）
+     * @param ingredients        BOM 调料明细（注射段+熟制段）
      * @param injectionRawKg     注射前生料投入重(kg)
      * @param potRawKgs          逐锅熟制原料(kg), size=锅数N; 第1个=第一锅
      */
     public static SeasoningCost compute(BigDecimal subsequentPotRatio,
-                                        List<? extends SeasoningLine> ingredients,
+                                         List<BomSeasoningItem> ingredients,
                                         BigDecimal injectionRawKg,
                                         List<BigDecimal> potRawKgs) {
-        BigDecimal injPerKg = perKg(ingredients, RecipeIngredient.SECTION_INJECTION, false);
-        BigDecimal cookPerKg = perKg(ingredients, RecipeIngredient.SECTION_COOKING, true);
+        BigDecimal injPerKg = perKg(ingredients, BomSeasoningItem.SECTION_INJECTION, false);
+        BigDecimal cookPerKg = perKg(ingredients, BomSeasoningItem.SECTION_COOKING, true);
 
         BigDecimal injectionTotal = nz(injectionRawKg).multiply(injPerKg)
                 .setScale(SCALE, RoundingMode.HALF_UP);
 
         BigDecimal ratio = subsequentPotRatio == null
-                ? ProductRecipe.DEFAULT_SUBSEQUENT_POT_RATIO : subsequentPotRatio;
+                ? DEFAULT_SUBSEQUENT_POT_RATIO : subsequentPotRatio;
 
         BigDecimal cookingTotal = BigDecimal.ZERO;
         if (potRawKgs != null) {
@@ -89,7 +69,7 @@ public final class RecipeCostCalculator {
     public static SeasoningCost computeBindingPotRules(BigDecimal legacyProcessRatio,
                                                        List<BomSeasoningItem> ingredients,
                                                        List<BigDecimal> potRawKgs) {
-        BigDecimal cookPerKg = perKg(ingredients, RecipeIngredient.SECTION_COOKING, true);
+        BigDecimal cookPerKg = perKg(ingredients, BomSeasoningItem.SECTION_COOKING, true);
         BigDecimal totalRawKg = BigDecimal.ZERO;
         if (potRawKgs != null) {
             for (BigDecimal potRawKg : potRawKgs) {
@@ -104,7 +84,7 @@ public final class RecipeCostCalculator {
         BigDecimal cookingTotal = BigDecimal.ZERO;
         if (ingredients != null) {
             for (BomSeasoningItem item : ingredients) {
-                if (!RecipeIngredient.SECTION_COOKING.equals(item.getSection())
+                if (!BomSeasoningItem.SECTION_COOKING.equals(item.getSection())
                         || !Boolean.TRUE.equals(item.getCountInSeasoning())) {
                     continue;
                 }
@@ -130,11 +110,11 @@ public final class RecipeCostCalculator {
     }
 
     /** Σ section 明细: dosage_g/1000 × max(p1,p2); applyCountInSeasoning 时跳过 countInSeasoning=false 的行. */
-    private static BigDecimal perKg(List<? extends SeasoningLine> ingredients,
-                                    String section, boolean applyCountInSeasoning) {
+    private static BigDecimal perKg(List<BomSeasoningItem> ingredients,
+                                     String section, boolean applyCountInSeasoning) {
         BigDecimal sum = BigDecimal.ZERO;
         if (ingredients == null) return sum.setScale(SCALE, RoundingMode.HALF_UP);
-        for (SeasoningLine ing : ingredients) {
+        for (BomSeasoningItem ing : ingredients) {
             if (!section.equals(ing.getSection())) continue;
             if (applyCountInSeasoning && !Boolean.TRUE.equals(ing.getCountInSeasoning())) continue;
             BigDecimal dosageKgPerKg = nz(ing.getDosagePerKgG()).divide(G_PER_KG, 8, RoundingMode.HALF_UP);
@@ -143,7 +123,7 @@ public final class RecipeCostCalculator {
         return sum.setScale(SCALE, RoundingMode.HALF_UP);
     }
 
-    private static BigDecimal maxPrice(SeasoningLine ing) {
+    private static BigDecimal maxPrice(BomSeasoningItem ing) {
         BigDecimal p1 = ing.getPriceSource1();
         BigDecimal p2 = ing.getPriceSource2();
         if (p1 == null && p2 == null) return BigDecimal.ZERO;

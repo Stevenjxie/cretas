@@ -318,21 +318,6 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'ProductionReversals',
             component: () => import('@/views/production/reversals/list.vue'),
             meta: { requiresAuth: true, title: '撤回审批', module: 'production' }
-          },
-          {
-            // SP-A: 配方维护 (注射段 + 熟制段, 1 SKU 1 配方)
-            path: 'product-recipes',
-            name: 'ProductRecipes',
-            redirect: (to) => ({
-              path: '/production/bom',
-              query: {
-                ...to.query,
-                tab: 'materials',
-                category: 'AUXILIARY',
-                auxView: 'process',
-              },
-            }),
-            meta: { requiresAuth: true, title: '配方维护', module: 'production' },
           }
         ]
       },

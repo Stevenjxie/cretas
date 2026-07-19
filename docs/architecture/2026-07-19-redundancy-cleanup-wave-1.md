@@ -1,15 +1,18 @@
-# Cretas 冗余结构清理第一批：CV-01 实施与 PR-01/SH-01/BS-01 方案
+# Cretas 冗余结构清理第一批：CV-01/PR-01 实施与 SH-01/BS-01 方案
 
 ## 1. 决策与边界
 
 - 日期：2026-07-19
 - 初始 Base SHA：`a8e9d2c42ec1070ec84682b36e12012c76dc3565`
 - 最终复核基线：`c2d70343a98226e01efe77c93645b562c806a1c5`
+- PR-01 实施 Base SHA：`5d0fbdab88090178afe80d576cae32856a474d91`
 - 已确认实施：CV-01 删除空历史表 `cost_variance_configs`
-- 本批只设计、不修改运行时：PR-01、SH-01、BS-01
+- 已确认实施：PR-01 删除旧产品配方双轨，BOM 成为唯一运行时真值
+- 本批只设计、不修改运行时：SH-01、BS-01
 - 明确保留：WF-01、SCH-01
-- 禁止：生产业务写入、生产 DDL、生产部署、静默 fallback、未经再次确认的生产数据迁移
-- 代码真值：最新 `origin/main`。从首批审计基线 `86f40c30` 到本 Base SHA，相关候选文件没有代码变更。
+- 数据授权：PR-01、SH-01、BS-01 相关生产记录均为测试数据，可按已审查范围删除；不得扩展到其他业务域
+- 禁止：本 PR 直接执行生产 DML/DDL、生产部署、静默 fallback、超出候选范围的数据删除
+- 代码真值：PR-01 分支创建时的 `origin/main`；发 PR 前必须重新 fetch 并检查 V79、ACTIVE 和 scope 冲突。
 
 合并与生产部署是两个独立状态。本批可以通过 PR 合入 migration，但没有获得生产部署授权。
 
@@ -96,60 +99,119 @@ COMMENT ON COLUMN public.cost_variance_configs.threshold_pct IS '超支百分比
 
 本次删除前行数为 0，因此没有待恢复的生产记录；部署前仍需再次查询，不能沿用本文快照。
 
-## 3. PR-01：旧产品配方迁移与旧写链下线方案
+## 3. PR-01：旧产品配方双轨删除
 
-### 3.1 当前状态与阻塞
+### 3.1 结论与运行时真值
 
-- 唯一真值目标：`bom_recipes + bom_recipe_items + bom_seasoning_items`
-- 旧链：`product_recipes + recipe_ingredients`、`ProductRecipeController`、
-  `ProductRecipeServiceImpl`、`/product-recipes`
-- 成本读取：`ClerkProcessEntryServiceImpl` 在当前 BOM/调味行缺失时仍读旧表。
-- 生产仍有 1 条有效旧配方：`DEMO_FACTORY / DF_pt10`，13 条有效原料行，且没有当前 BOM。
-- 13 条旧原料只有 2 条能按同工厂、规范化名称唯一匹配到 `raw_material_types`；
-  其余 11 条没有精确物料匹配。
-- `DF_pt10` 没有有效 `product_work_processes`，旧原料也不带 `work_process_id`。
-- 现有 `BomRecipeMigrationService` 遇到无当前 BOM会 `SKIPPED_NO_BOM`；即使有 BOM，
-  它也只复制文本和价格快照，不补 `material_type_id` 或 `work_process_id`。
+- 唯一真值：`bom_recipes + bom_recipe_items + bom_seasoning_items`。
+- 用户确认旧配方及其明细均为测试数据，不迁移到 BOM，允许直接删除。
+- 近 14 天 Nginx gateway 日志中 `/product-recipes` 调用为 0；Web 仅剩未被引用的
+  `productRecipe.ts`，RN、Python、AI Tool、定时任务、消息任务和导入导出均无消费者。
+- 旧 `BomRecipeMigrationService` 只复制文本/价格，无法补现代物料与工序绑定；继续保留会重新制造
+  “迁移到未绑定 BOM 明细”的错误入口，因此与旧 CRUD 一并删除。
+- `ClerkProcessEntryServiceImpl` 改为只读当前 BOM。缺 BOM 或调料明细时返回显式 warning 并记成本 0，
+  不再读取旧表，也不保留静默 fallback。
 
-因此，禁止直接执行现有实际迁移接口，也禁止把 13 行自动复制成现代“未绑定”调味行。
+### 3.2 删除前生产证据
 
-### 3.2 推荐迁移步骤
+2026-07-19 11:15（UTC+8）对 `cretas_prod_db` 的只读快照：
 
-1. **只读 dry-run 报告**
-   - 固定 factory/product/旧 recipe ID。
-   - 输出 13 行原料的目标 `material_type_id`、目标工序、单位和价格来源。
-   - 对无匹配、多匹配、缺工序的行全部标红；不得自动猜测。
-2. **业务映射确认**
-   - 先确定 `DF_pt10` 是否仍为有效 SKU。
-   - 由业务确认 11 个缺失物料是新建原料、别名映射还是历史数据作废。
-   - 为 INJECTION/COOKING 分别确认真实 `work_process_id`。
-3. **创建当前 BOM**
-   - 这是生产业务写入，必须另行确认。
-   - 新 BOM 建立后先保持旧表不变，不开启双写。
-4. **一次性导入并校验**
-   - 每条新 `bom_seasoning_items` 必须有明确 `material_type_id` 和 `work_process_id`。
-   - 对比首锅/续锅/注射成本、计价开关、剂量、价格快照与总成本。
-   - 只有全量 parity 通过才允许进入下线阶段。
-5. **冻结旧写**
-   - `/product-recipes` 的 POST/PUT/DELETE 返回明确 `410 Gone` 业务错误及新入口提示。
-   - 不把旧请求静默翻译到 BOM，因为旧 payload 缺少现代绑定字段。
-   - 删除孤立的 `web-admin/src/api/productRecipe.ts`；路由继续显式跳到 BOM。
-6. **删除 fallback**
-   - `ClerkProcessEntryServiceImpl` 只读当前 BOM；缺配置时明确失败或返回可见配置错误，
-     不再返回旧表成本。
-7. **观察与最终删除**
-   - 网关日志连续观察旧 API 无调用。
-   - 再次提交旧表行数、依赖计数和导出文件摘要，经确认后按
-     `recipe_ingredients → product_recipes` 顺序删除。
+| 项目 | 结果 |
+| --- | --- |
+| `product_recipes` | 2 行：均为 `DEMO_FACTORY / DF_pt10`；1 有效、1 软删除 |
+| `recipe_ingredients` | 17 行：13 属于有效头、4 属于软删除头 |
+| 允许的旧头 ID | `460add70-680f-4257-8f02-2d595e18c92b`、`53d9c92c-9c35-4989-bbb7-e400e1a4a5ca` |
+| 入站 FK | 仅 `recipe_ingredients.recipe_id → product_recipes.id` |
+| 其他入站 FK | 0 |
+| View / 非内部触发器 | 0 / 0 |
+| 主要索引 | 两表主键；头表 factory/product 索引和有效行唯一索引；明细 recipe 索引 |
+| 近 14 天 gateway 消费者 | 0 |
 
-### 3.3 验收与回滚
+删除影响仅为：旧 API 变为 404、旧测试配方不可恢复、没有当前 BOM 的 SKU 报工调料成本显式记 0 并提示配置。
+现代 BOM CRUD、调料工作区、版本快照和按工序核算不受表删除影响。
 
-- 真实 JPA Context：BOM Repository 和移除后的旧 Repository 扫描门禁。
-- Service：`BomRecipeMigrationServiceTest`、`RecipeCostCalculatorBomParityTest`、
-  `RecipeCostCalculatorBindingPotTest`、`ClerkProcessEntrySeasoningPerProcessTest`。
-- API：旧 mutation 明确 410；新 BOM CRUD 和成本路径通过。
-- 消费者：Web/RN/Python/AI Tool 全仓搜索不得保留旧写调用。
-- 回滚：保留旧表只读导出和上一版 JAR；可以恢复旧读链，但不得默认恢复静默 fallback 或旧写链。
+### 3.3 删除顺序与 SQL 预览
+
+代码/运行时顺序：
+
+1. 删除旧 Controller、Service、DTO、Entity、Repository 和迁移入口。
+2. 删除成本计算旧 overload 与文员报工 fallback；测试只使用 BOM 造数。
+3. 删除孤立 Web API 和 `/production/product-recipes` 兼容跳转。
+4. Flyway 获取两表排他锁并验证生产快照白名单。
+5. 按子表 `recipe_ingredients`、父表 `product_recipes` 顺序删除。
+
+实际文件：`V20261028_79__drop_legacy_product_recipes.sql`。
+
+```sql
+LOCK TABLE public.recipe_ingredients IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE public.product_recipes IN ACCESS EXCLUSIVE MODE;
+
+DO $pr01$
+DECLARE
+    recipe_rows BIGINT;
+    ingredient_rows BIGINT;
+BEGIN
+    SELECT COUNT(*) INTO recipe_rows FROM public.product_recipes;
+    SELECT COUNT(*) INTO ingredient_rows FROM public.recipe_ingredients;
+
+    IF recipe_rows > 2 OR ingredient_rows > 17 THEN
+        RAISE EXCEPTION 'PR-01 blocked: legacy recipe rows changed after review (recipes=%, ingredients=%)',
+            recipe_rows, ingredient_rows;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM public.product_recipes
+         WHERE factory_id IS DISTINCT FROM 'DEMO_FACTORY'
+            OR product_type_id IS DISTINCT FROM 'DF_pt10'
+            OR id NOT IN ('460add70-680f-4257-8f02-2d595e18c92b',
+                          '53d9c92c-9c35-4989-bbb7-e400e1a4a5ca')
+    ) THEN
+        RAISE EXCEPTION 'PR-01 blocked: product_recipes contains data outside the authorized test snapshot';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM public.recipe_ingredients
+         WHERE factory_id IS DISTINCT FROM 'DEMO_FACTORY'
+            OR recipe_id NOT IN ('460add70-680f-4257-8f02-2d595e18c92b',
+                                 '53d9c92c-9c35-4989-bbb7-e400e1a4a5ca')
+    ) THEN
+        RAISE EXCEPTION 'PR-01 blocked: recipe_ingredients contains data outside the authorized test snapshot';
+    END IF;
+END
+$pr01$;
+
+DROP TABLE public.recipe_ingredients;
+DROP TABLE public.product_recipes;
+```
+
+安全属性：不使用 `CASCADE`，不执行单独 `DELETE`，任何新增工厂、ID、行数或依赖都会使迁移失败并阻止切流。
+
+### 3.4 受影响 API 与页面
+
+- 删除 `GET/POST /api/mobile/{factoryId}/product-recipes`。
+- 删除 `GET/PUT/DELETE /api/mobile/{factoryId}/product-recipes/{id}`。
+- 删除 `POST /api/mobile/{factoryId}/bom/recipes/migrate-from-product-recipes`。
+- 删除 Web `src/api/productRecipe.ts` 和孤立路由 `/production/product-recipes`；用户继续使用
+  `/production/bom` 及现有 BOM 调料工作区。
+- 删除仍导航到旧 `ProductRecipeView` DOM 的孤立写入型脚本
+  `tests/e2e-yield-mixed-sku/headed-seasoning-cost.mjs`；该脚本没有 runner/CI 消费者，且其自由文本调料、
+  手填价格流程与当前“物料主数据 + 工序绑定”契约冲突，不能改个 URL 后继续使用。
+
+### 3.5 验收与回滚
+
+- 真实 JPA Context：`LegacyProductRecipeRemovalRepositoryQueryValidationTest`，断言 BOM Repository
+  能启动且 metamodel 不含旧 Entity。
+- SQL：`LegacyProductRecipesRemovalMigrationContractTest`，断言排他锁、白名单守卫、子表优先、无
+  `CASCADE`/`DELETE FROM`。
+- 计算/Service：`RecipeCostCalculatorTest`、`RecipeCostCalculatorBindingPotTest`、
+  `ClerkProcessEntrySeasoningPerProcessTest`、`ClerkProcessEntryServiceImplTest`。
+- 集成：`ClerkProcessEntryIntegrationTest`、`ProcessSheetServiceImplTest` 均只种 BOM 真值。
+- 消费者：除历史 migration、归档文档和“旧视图不得恢复”的源码断言外，旧类名和
+  `/product-recipes` 运行时引用为 0；Web 源码契约单测验证统一 BOM 路由仍存在且旧路由不再注册。
+
+回滚必须使用新的补偿 migration 重建空旧表，再部署旧 JAR；不能只回滚 JAR，否则旧 Entity 会访问不存在的表。
+被授权删除的 2+17 条测试数据不做恢复承诺。如部署前需要人工快照，可在迁移前导出两表；否则补偿 migration
+只恢复结构。禁止在回滚时重新引入静默 fallback。
 
 ## 4. SH-01：旧出货写链冻结与历史迁移方案
 
@@ -158,6 +220,11 @@ COMMENT ON COLUMN public.cost_variance_configs.threshold_pct IS '超支百分比
 - 唯一业务写链目标：`sales_delivery_records/items/batch_allocations`，由仓库 confirm 扣库存。
 - 旧 `ShipmentRecordService` 只保存 `shipment_records`/状态，不扣库存。
 - 生产：旧表 64 行，其中有效 56；新 delivery 71、items 45、allocations 1。
+- 旧表没有入站 FK；只向 customers/users/factories 出站，存在 1 个更新时间触发器，无 View 依赖。
+- 旧表工厂分布：`DEMO_FACTORY=27`、`DEMO_FACTORY2=1`、`F001=27`、`F006=8`、
+  `FOOD_3101_048=1`；用户已确认均可按测试数据删除。
+- 但近 14 天 gateway 日志在 2026-07-18 仍有一次 `okhttp/4.9.2` 的旧 GET，说明已安装 Android
+  客户端尚未完全退出旧读契约。数据可删除不等于 API/table 可立即删除。
 - 56 条有效旧记录中：29 条有 `order_number`，3 条有 `batch_number`，56 条有产品名称。
 - 按工厂、客户和单号匹配现有销售订单，仅 1 条有唯一匹配。
 - 按工厂和产品名称匹配产品类型，17 条唯一匹配、1 条多匹配。
@@ -179,8 +246,8 @@ COMMENT ON COLUMN public.cost_variance_configs.threshold_pct IS '超支百分比
    - 禁止把旧 payload 静默转成新 delivery：它缺少可靠的 sales order、product type、
      finished-goods batch/allocation 主键。
 3. **保留历史读取**
-   - 旧 GET/list/stats/tracking 暂时保留，只读展示时标注 `LEGACY_MANUAL_SHIPMENT`。
-   - 食安追溯和报表应同时读取新 delivery 与经确认的旧历史来源，不能混成同一种库存事实。
+   - 旧 GET/list/stats/tracking 暂时保留；测试数据清空后返回空结果。
+   - Android 消费者升级并连续观察无旧 GET 后，才删除读 API、Entity/Repository 和表。
 4. **历史分层处理**
    - A 类：订单、产品、批次均唯一匹配，人工复核后可迁移为“历史导入”记录；禁止触发库存扣减。
    - B 类：只有部分匹配，保留只读并建立人工映射清单。
@@ -190,7 +257,37 @@ COMMENT ON COLUMN public.cost_variance_configs.threshold_pct IS '超支百分比
    - 新链扣库存幂等、批次分配和库存台账对账通过。
    - 历史查询/导出/食安追溯均有替代来源后，才讨论删除 `shipment_records`。
 
-### 4.3 验收与回滚
+### 4.3 已授权测试数据清空 SQL 预览（方案，尚未执行）
+
+必须先部署旧 mutation 410，再重新核对快照；清数据和最终删表分成两个 migration：
+
+```sql
+LOCK TABLE public.shipment_records IN ACCESS EXCLUSIVE MODE;
+
+DO $sh01$
+DECLARE
+    legacy_rows BIGINT;
+BEGIN
+    SELECT COUNT(*) INTO legacy_rows FROM public.shipment_records;
+    IF legacy_rows <> 64 THEN
+        RAISE EXCEPTION 'SH-01 blocked: shipment snapshot changed after review (rows=%)', legacy_rows;
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM public.shipment_records
+         WHERE factory_id NOT IN ('DEMO_FACTORY', 'DEMO_FACTORY2', 'F001', 'F006', 'FOOD_3101_048')
+    ) THEN
+        RAISE EXCEPTION 'SH-01 blocked: unexpected factory data exists';
+    END IF;
+END
+$sh01$;
+
+DELETE FROM public.shipment_records;
+```
+
+该预览只清用户已授权的 64 条测试数据，不删除表；如果部署前行数变化，必须重新提交行级范围。
+回滚仅能从部署前导出恢复测试数据；业务真值仍为 sales delivery，禁止恢复旧 mutation。
+
+### 4.4 验收与回滚
 
 - `ShipmentTraceabilityFlowTest`
 - `SalesDeliveryHonorBatchAllocationTest`
@@ -243,13 +340,20 @@ COMMENT ON COLUMN public.cost_variance_configs.threshold_pct IS '超支百分比
 
 ```bash
 cd backend/java/cretas-api
-mvn "-Dtest=CostVarianceConfigRepositoryQueryValidationTest,CostVarianceServiceImplTest,CostVarianceServiceTest,CostVarianceConfigsRemovalMigrationContractTest" test
+mvn "-Dtest=LegacyProductRecipesRemovalMigrationContractTest,LegacyProductRecipeRemovalRepositoryQueryValidationTest,RecipeCostCalculatorTest,RecipeCostCalculatorBindingPotTest,ClerkProcessEntryServiceImplTest,ClerkProcessEntryPlanStatusSyncTest,ClerkProcessEntrySeasoningPerProcessTest,LaborRateConfigTest,ClerkProcessEntryIntegrationTest,ProcessSheetServiceImplTest" test
+
+cd ../../../web-admin
+./node_modules/.bin/vitest run src/views/production/bom/seasoning/__tests__/BomSeasoningIntegration.source.spec.ts -t "keeps the canonical BOM auxiliary entry"
 ```
+
+2026-07-19 本批验证时，完整 Web `vue-tsc -b` 仍被未改动的
+`ProductProcessWorkflowEditor.vue` 既有类型错误阻塞；完整 seasoning source spec 还存在一个
+`origin/main` 已有的过期文案断言。本次旧路由专项断言已独立通过，不能把上述基线噪声误报为 PR-01 回归。
 
 补充只读门禁：
 
 ```bash
-git grep -n -I "cost_variance_configs"
+git grep -n -E "ProductRecipe|RecipeIngredient|ProductRecipeRepository|RecipeIngredientRepository|/product-recipes"
 git diff --check
 git status --short
 ```

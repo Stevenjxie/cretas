@@ -19,8 +19,8 @@ import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
-import com.cretas.aims.repository.recipe.ProductRecipeRepository;
-import com.cretas.aims.repository.recipe.RecipeIngredientRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.service.processentry.impl.ClerkProcessEntryServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -70,8 +70,8 @@ class ClerkProcessEntryPlanStatusSyncTest {
     @Mock private MaterialConsumptionRepository consumptionRepo;
     @Mock private ProcessEntryIdempotencyRepository idempotencyRepo;
     @Mock private FactoryWarehouseRepository warehouseRepo;
-    @Mock private ProductRecipeRepository recipeRepo;
-    @Mock private RecipeIngredientRepository ingredientRepo;
+    @Mock private BomRecipeRepository bomRecipeRepo;
+    @Mock private BomSeasoningItemRepository bomSeasoningItemRepo;
     @Mock private ProductionPlanRepository planRepository;
     @Mock private ProductTypeRepository productTypeRepository;
     @Mock private com.cretas.aims.repository.ProductionReportRepository reportRepo;
@@ -130,7 +130,7 @@ class ClerkProcessEntryPlanStatusSyncTest {
     }
 
     private void stubNoRecipe() {
-        when(recipeRepo.findByFactoryIdAndProductTypeIdAndStatus(any(), any(), any()))
+        when(bomRecipeRepo.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(any(), any()))
                 .thenReturn(Optional.empty());
     }
 
