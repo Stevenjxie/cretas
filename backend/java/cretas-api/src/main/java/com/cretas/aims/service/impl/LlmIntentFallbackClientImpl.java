@@ -12,6 +12,8 @@ import com.cretas.aims.config.ArenaRLConfig;
 import com.cretas.aims.config.DashScopeConfig;
 import com.cretas.aims.config.IntentKnowledgeBase;
 import com.cretas.aims.config.IntentMatchingConfig;
+import com.cretas.aims.client.PythonSmartBIClient;
+import com.cretas.aims.dto.python.PythonGeneralAnalysisResponse;
 import com.cretas.aims.dto.arena.TournamentResult;
 import com.cretas.aims.service.arena.ArenaRLTournamentService;
 import com.cretas.aims.dto.intent.IntentMatchResult;
@@ -41,6 +43,10 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+
+import jakarta.servlet.http.HttpServletRequest;
 
 import java.io.*;
 import java.util.*;
@@ -146,6 +152,8 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
     // D8v2: 意图知识库，用于领域检测 → 工具过滤
     private final IntentKnowledgeBase intentKnowledgeBase;
 
+    private final PythonSmartBIClient pythonSmartBIClient;
+
     private static final MediaType JSON_MEDIA_TYPE = MediaType.parse("application/json; charset=utf-8");
 
     // ==================== Category 定义（两阶段分类用） ====================
@@ -245,7 +253,8 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
             @Autowired(required = false) ArenaRLTournamentService arenaRLTournamentService,
             @Autowired(required = false) ArenaRLConfig arenaRLConfig,
             @Autowired(required = false) RAGRetrievalService ragRetrievalService,
-            @Autowired(required = false) IntentKnowledgeBase intentKnowledgeBase) {
+            @Autowired(required = false) IntentKnowledgeBase intentKnowledgeBase,
+            @Autowired(required = false) PythonSmartBIClient pythonSmartBIClient) {
         // OkHttp 客户端
         if (aiServiceHttpClient != null) {
             this.httpClient = aiServiceHttpClient;
@@ -322,6 +331,7 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
 
         // D8v2: 意图知识库（用于领域检测 → 工具过滤）
         this.intentKnowledgeBase = intentKnowledgeBase;
+        this.pythonSmartBIClient = pythonSmartBIClient;
 
         if (arenaRLConfig != null && arenaRLConfig.isIntentDisambiguationEnabled()) {
             log.info("ArenaRL intent disambiguation ENABLED (ambiguity threshold={})",
@@ -1562,12 +1572,21 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
                 responseText = dashScopeClient.classifyIntent(systemPrompt, userInput);
             } else {
                 log.debug("[Reranking] Using Python service");
-                Map<String, Object> requestBody = new HashMap<>();
-                requestBody.put("system_prompt", systemPrompt);
-                requestBody.put("user_input", userInput);
-                requestBody.put("factory_id", factoryId);
-                String responseJson = callPythonEndpoint("/api/chat/general-analysis", requestBody);
-                responseText = extractResponseText(responseJson);
+                List<Map<String, Object>> candidateData = candidates.stream()
+                        .map(candidate -> {
+                            Map<String, Object> item = new LinkedHashMap<>();
+                            item.put("intent_code", candidate.getIntentCode());
+                            item.put("intent_name", candidate.getIntentName());
+                            item.put("description", candidate.getDescription());
+                            item.put("confidence", candidate.getConfidence());
+                            return item;
+                        })
+                        .collect(Collectors.toList());
+                responseText = callTypedGeneralAnalysis(
+                        factoryId,
+                        systemPrompt + "\n\n用户输入:\n" + userInput,
+                        candidateData,
+                        "intent_reranking");
             }
 
             // 3. 解析 Reranking 结果
@@ -1795,14 +1814,15 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
                 responseText = dashScopeClient.chat(prompt, userInput);
             } else {
                 log.debug("Using Python service for clarification questions");
-                // 使用 Python 服务的通用接口
-                Map<String, Object> requestBody = new HashMap<>();
-                requestBody.put("system_prompt", prompt);
-                requestBody.put("user_input", userInput);
-                requestBody.put("factory_id", factoryId);
-
-                String responseJson = callPythonEndpoint("/api/chat/general-analysis", requestBody);
-                responseText = extractResponseText(responseJson);
+                Map<String, Object> clarificationContext = new LinkedHashMap<>();
+                clarificationContext.put("intent_code", intent.getIntentCode());
+                clarificationContext.put("intent_name", intent.getIntentName());
+                clarificationContext.put("missing_parameters", List.copyOf(missingParameters));
+                responseText = callTypedGeneralAnalysis(
+                        factoryId,
+                        prompt + "\n\n用户输入:\n" + userInput,
+                        List.of(clarificationContext),
+                        "intent_clarification");
             }
 
             // 3. 解析 LLM 返回的问题列表
@@ -2146,6 +2166,45 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
                 throw new IOException("HTTP error " + responseCode + ": " + result);
             }
         }
+    }
+
+    private String callTypedGeneralAnalysis(
+            String factoryId,
+            String query,
+            List<Map<String, Object>> data,
+            String tableType) throws IOException {
+        if (pythonSmartBIClient == null) {
+            throw new IOException("Python SmartBI typed transport is unavailable");
+        }
+        PythonSmartBIClient.GeneralAnalysisCall request =
+                new PythonSmartBIClient.GeneralAnalysisCall(
+                        query,
+                        data,
+                        tableType,
+                        null,
+                        false,
+                        0,
+                        false);
+        PythonGeneralAnalysisResponse response = pythonSmartBIClient.analyzeGeneral(
+                factoryId,
+                currentRequestIdentity("userId"),
+                currentRequestIdentity("role"),
+                request);
+        return response.getEffectiveAnalysis();
+    }
+
+    private String currentRequestIdentity(String attributeName) {
+        try {
+            var attributes = RequestContextHolder.getRequestAttributes();
+            if (attributes instanceof ServletRequestAttributes servletAttributes) {
+                HttpServletRequest request = servletAttributes.getRequest();
+                Object value = request.getAttribute(attributeName);
+                return value != null ? value.toString() : null;
+            }
+        } catch (RuntimeException ignored) {
+            log.debug("Trusted request identity is unavailable");
+        }
+        return null;
     }
 
     // ==================== 响应解析 (软 Schema 验证) ====================

@@ -1,6 +1,9 @@
 package com.cretas.aims.client;
 
 import com.cretas.aims.config.smartbi.PythonSmartBIConfig;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import okhttp3.OkHttpClient;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
@@ -8,10 +11,14 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.io.IOException;
 import java.time.LocalDate;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -38,14 +45,68 @@ class GoldFinanceClientTest {
         config.setTimeout(5000);
         config.setConnectTimeout(5000);
 
-        client = new GoldFinanceClient(config);
+        PythonSmartBIClient typedClient = new PythonSmartBIClient(
+                config,
+                new OkHttpClient.Builder()
+                        .connectTimeout(5, TimeUnit.SECONDS)
+                        .readTimeout(5, TimeUnit.SECONDS)
+                        .build(),
+                new ObjectMapper(),
+                new PythonServiceCircuitBreaker(),
+                "typed-secret-xyz");
+        client = new GoldFinanceClient(config, typedClient);
         // Simulate the @Value injection.
         ReflectionTestUtils.setField(client, "internalSecret", "test-secret-abc");
     }
 
     @AfterEach
     void tearDown() throws Exception {
+        RequestContextHolder.resetRequestAttributes();
         server.shutdown();
+    }
+
+    @Test
+    void fetchRestaurantOpsAnalysisUsesTypedTransportAndTrustedHeaders() throws Exception {
+        server.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"success\":true,\"answer\":\"ops answer\",\"charts\":[]}"));
+        MockHttpServletRequest servletRequest = new MockHttpServletRequest();
+        servletRequest.setAttribute("userId", 88L);
+        servletRequest.setAttribute("role", "restaurant_manager");
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(servletRequest));
+
+        Map<String, Object> result = client.fetchRestaurantOpsAnalysis(
+                "REST-OPS", "show restaurant costs", "session-ops");
+
+        assertEquals("ops answer", result.get("answer"));
+        RecordedRequest request = server.takeRequest();
+        assertEquals("/api/chat/general-analysis", request.getPath());
+        assertEquals("typed-secret-xyz", request.getHeader("X-Internal-Secret"));
+        assertEquals("REST-OPS", request.getHeader("X-Factory-Id"));
+        assertEquals("88", request.getHeader("X-User-Id"));
+        assertEquals("restaurant_manager", request.getHeader("X-User-Role"));
+        JsonNode body = new ObjectMapper().readTree(request.getBody().readUtf8());
+        assertEquals("show restaurant costs", body.path("query").asText());
+        assertEquals("restaurant_ops", body.path("table_type").asText());
+        assertEquals("session-ops", body.path("session_id").asText());
+        assertFalse(body.path("allow_tenant_data_fallback").asBoolean(true));
+        assertFalse(body.has("factory_id"));
+        assertFalse(body.has("user_id"));
+    }
+
+    @Test
+    void fetchRestaurantOpsAnalysisRejectsEmptySuccessfulResponse() {
+        server.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"success\":true,\"answer\":\"  \"}"));
+
+        IOException failure = assertThrows(IOException.class, () ->
+                client.fetchRestaurantOpsAnalysis("REST-OPS", "question", null));
+
+        assertEquals("Python SmartBI general analysis is unavailable", failure.getMessage());
+        assertEquals(1, server.getRequestCount());
     }
 
     @Test
