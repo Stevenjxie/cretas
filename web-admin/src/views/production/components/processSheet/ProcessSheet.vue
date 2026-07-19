@@ -159,28 +159,23 @@ function mapWorkflowProcesses(descriptors: WorkflowProcessDescriptor[]): ProcEnt
           code = (kw && kw !== 'xiuyou') ? kw : 'chaoshui';
         }
       }
-      // BLOCKING fix (Part B): the archetype `code` drives which entry form renders AND (via
-      // ProcessDataTable's buildRequest) the name-keyword `finished`/`unit` heuristic. It must
-      // agree with the workflow port's actual output kind, not just the role/keyword guess above
-      // — otherwise a workflow whose finishing process name isn't literally "气调" never gets the
-      // finished-goods form, and every save 409s against
-      // ProcessSheetServiceImpl#validateWorkflowRowIfApplicable (WORKFLOW_ROW_OUTPUT_KIND_MISMATCH),
-      // dead-ending the clerk after they've entered every semi row. A finished output always gets
-      // the finished-goods ('qidiao') archetype; a semi output must never be forced into it even
-      // if role/keyword mapping happened to land there (e.g. a PACKAGING-role or "气调"-named
-      // process whose actual port output is semi-finished) — fall back to the semi-capable
-      // 'chaoshui' archetype instead.
+      // Workflow 的投入形态优先决定录入表单：只吃 RAW 的工序必须显示原料投料总量，不能因为
+      // 产出是成品就被强制成“气调/上游半成品”表单。成品属性和单位已经由 Workflow 端口
+      // 在 ProcessDataTable#buildRequest 中锁定，不再需要借 archetype 猜测。
+      const hasRawMaterialInput = proc.inputs.some((p) => p.materialKind === 'RAW_MATERIAL');
+      const hasUpstreamMaterialInput = proc.inputs.some(
+        (p) => p.materialKind === 'SEMI_FINISHED' || p.materialKind === 'FINISHED_GOOD',
+      );
       const workflowOutputFinished = proc.output?.finished === true;
-      if (workflowOutputFinished) {
+      if (hasRawMaterialInput && !hasUpstreamMaterialInput) {
+        code = 'xiuyou';
+      } else if (workflowOutputFinished) {
         code = 'qidiao';
       } else if (code === 'qidiao') {
         code = 'chaoshui';
       }
       // allowInjection: 计划产出为半成品/成品作投料来源(即客户显式开启 allowFinishedGoodsSource),
       // 或本工序自身的 inputs 里已声明半成品/成品端口 (说明该道设计上就吃半成品/成品投料)。
-      const hasUpstreamMaterialInput = proc.inputs.some(
-        (p) => p.materialKind === 'SEMI_FINISHED' || p.materialKind === 'FINISHED_GOOD',
-      );
       const rawSchema = proc.customFieldSchema;
       const customFieldSchema = Array.isArray(rawSchema)
         ? (rawSchema as ProcessSheetCustomFieldDef[])

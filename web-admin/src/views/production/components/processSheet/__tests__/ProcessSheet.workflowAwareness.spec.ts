@@ -508,4 +508,41 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
 
     expect(tables[2].props().processCode).toBe('qidiao');
   });
+
+  it('(4) keeps a RAW-only to finished-good workflow on the raw-material intake form', async () => {
+    getWorkflowSheetConfig.mockResolvedValue({
+      success: true,
+      data: {
+        workflowBatchId: 101,
+        workflowInstanceId: 201,
+        productTypeId: 'PT-FIN-RAW',
+        processes: [{
+          workflowNodeId: 'N-RAW-FIN',
+          workProcessId: 'WP-RAW-FIN',
+          processName: '定量包装',
+          defaultCostCategory: null,
+          processOrder: 1,
+          plannedUnit: 'kg',
+          allowMultipleUpstreamSources: false,
+          allowFinishedGoodsSource: false,
+          customFieldSchema: null,
+          inputs: [
+            { workflowPortId: 'IN-A', materialKind: 'RAW_MATERIAL', skuId: 'RM-A', materialName: '原料A', unit: 'kg', required: true, skuResolved: true, finished: false },
+            { workflowPortId: 'IN-B', materialKind: 'RAW_MATERIAL', skuId: 'RM-B', materialName: '原料B', unit: 'kg', required: true, skuResolved: true, finished: false },
+          ],
+          output: { workflowPortId: 'OUT-FIN', materialKind: 'FINISHED_GOOD', skuId: 'PT-FIN', materialName: '成品', unit: 'kg', required: true, skuResolved: true, finished: true },
+          outputs: [{ workflowPortId: 'OUT-FIN', materialKind: 'FINISHED_GOOD', skuId: 'PT-FIN', materialName: '成品', unit: 'kg', required: true, skuResolved: true, finished: true }],
+        }],
+      },
+    });
+
+    const wrapper = mountSheet();
+    await flushPromises();
+    await flushPromises();
+
+    const tables = wrapper.findAllComponents(ProcessDataTableStub);
+    expect(tables).toHaveLength(1);
+    expect(tables[0].props().processCode).toBe('xiuyou');
+    expect(tables[0].props().workflowContext.inputs).toHaveLength(2);
+  });
 });
