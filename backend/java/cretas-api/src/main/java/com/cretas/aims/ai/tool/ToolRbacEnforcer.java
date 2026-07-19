@@ -113,7 +113,6 @@ public class ToolRbacEnforcer {
             // ===== 生产/计划/工序 (写库存/排程) =====
             Map.entry("production_plan_create", Set.of("production:read_write")),
             Map.entry("production_batch_create", Set.of("production:read_write")),
-            Map.entry("process_task_create", Set.of("production:read_write")),
             Map.entry("plan_update", Set.of("production:read_write", "scheduling:read_write")),
             Map.entry("work_process_config_update", Set.of("production:read_write")),
             Map.entry("work_process_task_assign", Set.of("production:read_write")),

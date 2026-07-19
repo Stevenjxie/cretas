@@ -101,40 +101,6 @@ export function getProductWorkProcessRecommendation(
   );
 }
 
-// === Process Tasks ===
-
-export function getActiveTasks(factoryId: string) {
-  return get<ProcessTaskItem[]>(`/${factoryId}/process-tasks/active`);
-}
-
-export function getProcessTasks(factoryId: string, params?: Record<string, unknown>) {
-  return get<{ content: ProcessTaskItem[]; totalElements: number }>(
-    `/${factoryId}/process-tasks`, { params }
-  );
-}
-
-export function createProcessTask(factoryId: string, data: Partial<ProcessTaskItem>) {
-  return post<ProcessTaskItem>(`/${factoryId}/process-tasks`, data);
-}
-
-export function generateTasksFromProduct(factoryId: string, data: { productTypeId: string; sourceCustomerName?: string }) {
-  return post<ProcessTaskItem[]>(`/${factoryId}/process-tasks/generate-from-product`, data);
-}
-
-export function updateTaskStatus(factoryId: string, taskId: string, status: string, notes?: string) {
-  return put<ProcessTaskItem>(`/${factoryId}/process-tasks/${taskId}/status`, { status, notes });
-}
-
-export function closeTask(factoryId: string, taskId: string, notes?: string) {
-  return put<ProcessTaskItem>(`/${factoryId}/process-tasks/${taskId}/close`, null, {
-    params: { notes }
-  });
-}
-
-export function getRunOverview(factoryId: string, runId: string) {
-  return get(`/${factoryId}/process-tasks/run/${runId}`);
-}
-
 // === 半成品库存 (WIP) — G6/G7 Wave 4 ===
 
 /**
@@ -328,29 +294,6 @@ export interface ProductWorkProcessRecommendation {
     workflowComplete?: boolean;
     complete?: boolean;
   } | null;
-}
-
-export interface ProcessTaskItem {
-  id: string;
-  factoryId: string;
-  productionRunId: string;
-  productTypeId: string;
-  workProcessId: string;
-  sourceCustomerName: string | null;
-  sourceDocType: string;
-  plannedQuantity: number;
-  completedQuantity: number;
-  pendingQuantity: number;
-  unit: string;
-  startDate: string | null;
-  expectedEndDate: string | null;
-  status: string;
-  estimatedProgress: number;
-  confirmedProgress: number;
-  targetReached: boolean;
-  processName?: string;
-  productName?: string;
-  createdAt: string;
 }
 
 export interface ApprovalItem {

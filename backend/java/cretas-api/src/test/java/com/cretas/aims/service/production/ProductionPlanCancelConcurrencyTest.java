@@ -11,7 +11,6 @@ import com.cretas.aims.mapper.ProductionPlanMapper;
 import com.cretas.aims.repository.ConversionRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
-import com.cretas.aims.repository.ProcessTaskRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanBatchUsageRepository;
@@ -82,7 +81,6 @@ class ProductionPlanCancelConcurrencyTest {
 
     @Mock private ProductionPlanRepository productionPlanRepository;
     @Mock private ProductionBatchRepository productionBatchRepository;
-    @Mock private ProcessTaskRepository processTaskRepository;
     @Mock private MaterialBatchRepository materialBatchRepository;
     @Mock private MaterialConsumptionRepository materialConsumptionRepository;
     @Mock private ProductionPlanBatchUsageRepository planBatchUsageRepository;
@@ -108,7 +106,7 @@ class ProductionPlanCancelConcurrencyTest {
     @BeforeEach
     void setUp() {
         service = new ProductionPlanServiceImpl(
-                productionPlanRepository, productionBatchRepository, processTaskRepository,
+                productionPlanRepository, productionBatchRepository,
                 materialBatchRepository, materialConsumptionRepository, planBatchUsageRepository,
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
@@ -192,9 +190,6 @@ class ProductionPlanCancelConcurrencyTest {
         // ⚠️ 另一批次 (20) 的任务从未被查询 → 不会被误关
         verify(workProcessTaskRepository, never())
                 .findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, 20L);
-        // 绝不再走"按产品类型全关"的旧路径
-        verify(processTaskRepository, never())
-                .findByFactoryIdAndProductTypeId(any(), eq(PRODUCT_TYPE_ID));
     }
 
     @Test

@@ -55,7 +55,6 @@ class ProductionPlanServiceSecondaryTest {
     // --- Mocks for constructor args ---
     @Mock private ProductionPlanRepository productionPlanRepo;
     @Mock private ProductionBatchRepository productionBatchRepo;
-    @Mock private com.cretas.aims.repository.ProcessTaskRepository processTaskRepo;
     @Mock private MaterialBatchRepository materialBatchRepo;
     @Mock private MaterialConsumptionRepository materialConsumptionRepo;
     @Mock private ProductionPlanBatchUsageRepository planBatchUsageRepo;
@@ -85,8 +84,6 @@ class ProductionPlanServiceSecondaryTest {
         for (int i = 0; i < types.length; i++) {
             if (types[i] == ProductionPlanRepository.class)          args[i] = productionPlanRepo;
             else if (types[i] == ProductionBatchRepository.class)    args[i] = productionBatchRepo;
-            else if (types[i] == com.cretas.aims.repository.ProcessTaskRepository.class)
-                                                                      args[i] = processTaskRepo;
             else if (types[i] == MaterialBatchRepository.class)      args[i] = materialBatchRepo;
             else if (types[i] == MaterialConsumptionRepository.class) args[i] = materialConsumptionRepo;
             else if (types[i] == ProductionPlanBatchUsageRepository.class) args[i] = planBatchUsageRepo;

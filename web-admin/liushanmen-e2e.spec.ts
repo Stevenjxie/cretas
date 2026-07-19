@@ -281,10 +281,6 @@ test.describe.serial('六扇门一期 Web-Admin E2E', () => {
       console.log(`W6: workReportsTableVisible=${altTable}`);
     }
 
-    // 4. API: verify process tasks exist
-    const tasks = await api('/process-tasks?page=1&size=5');
-    const taskContent = tasks.data?.content || tasks.data || [];
-    console.log(`W6: process tasks found: ${taskContent.length}`);
   });
 
   // W7: AI自然语言入库 — 意图识别验证 (S1)

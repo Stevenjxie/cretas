@@ -1,21 +1,26 @@
 package com.cretas.aims.ai.tool.impl.processing;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
-import com.cretas.aims.dto.ProcessTaskDTO;
-import com.cretas.aims.service.ProcessTaskService;
+import com.cretas.aims.dto.WorkProcessTaskDTO;
+import com.cretas.aims.service.ProcessWorkReportingService;
+import com.cretas.aims.service.workprocess.WorkProcessTaskService;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.util.*;
-import java.util.stream.Collectors;
+import java.math.BigDecimal;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class ProcessTaskSummaryTool extends AbstractBusinessTool {
 
-    @Autowired
-    private ProcessTaskService processTaskService;
+    private final WorkProcessTaskService workProcessTaskService;
+    private final ProcessWorkReportingService reportingService;
 
     @Override
     public String getToolName() {
@@ -24,22 +29,15 @@ public class ProcessTaskSummaryTool extends AbstractBusinessTool {
 
     @Override
     public String getDescription() {
-        return "查询工序任务详细摘要，包含完成量、待审批量、参与工人、报工记录等。" +
-                "适用场景：查看某个任务的详细进度、人员参与情况、报工明细。";
+        return "查询工序任务摘要、参与人员和报工记录。";
     }
 
     @Override
     public Map<String, Object> getParametersSchema() {
-        Map<String, Object> schema = new HashMap<>();
-        schema.put("type", "object");
-
-        Map<String, Object> properties = new HashMap<>();
-        properties.put("taskId", Map.of("type", "string", "description", "工序任务ID"));
-
-        schema.put("properties", properties);
-        schema.put("required", List.of("taskId"));
-
-        return schema;
+        return Map.of(
+                "type", "object",
+                "properties", Map.of("taskId", Map.of("type", "string", "description", "工序任务ID")),
+                "required", List.of("taskId"));
     }
 
     @Override
@@ -48,46 +46,40 @@ public class ProcessTaskSummaryTool extends AbstractBusinessTool {
     }
 
     @Override
-    protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
+    protected Map<String, Object> doExecute(
+            String factoryId,
+            Map<String, Object> params,
+            Map<String, Object> context) {
         String taskId = getString(params, "taskId");
-        log.info("查询工序任务摘要 - 工厂ID: {}, 任务ID: {}", factoryId, taskId);
+        Long canonicalId = Long.valueOf(taskId.startsWith("WPT-") ? taskId.substring(4) : taskId);
+        WorkProcessTaskDTO task = workProcessTaskService.getById(factoryId, canonicalId);
+        List<WorkProcessTaskDTO.WorkerSummary> workers = reportingService
+                .getWorkerSummaryByTask(factoryId, String.valueOf(canonicalId));
+        int totalReports = reportingService.getReportsByTask(factoryId, String.valueOf(canonicalId)).size();
+        BigDecimal pending = workers.stream()
+                .map(WorkProcessTaskDTO.WorkerSummary::getPendingQuantity)
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-        ProcessTaskDTO.TaskSummary summary = processTaskService.getTaskSummary(factoryId, taskId);
-
-        Map<String, Object> summaryData = new LinkedHashMap<>();
-        summaryData.put("taskId", summary.getTaskId());
-        summaryData.put("processName", summary.getProcessName());
-        summaryData.put("productName", summary.getProductName());
-        summaryData.put("status", summary.getStatus());
-        summaryData.put("plannedQuantity", summary.getPlannedQuantity());
-        summaryData.put("completedQuantity", summary.getCompletedQuantity());
-        summaryData.put("pendingQuantity", summary.getPendingQuantity());
-        summaryData.put("unit", summary.getUnit());
-        summaryData.put("totalWorkers", summary.getTotalWorkers());
-        summaryData.put("totalReports", summary.getTotalReports());
-
-        if (summary.getWorkerSummaries() != null) {
-            summaryData.put("workers", summary.getWorkerSummaries().stream().map(w -> {
-                Map<String, Object> worker = new LinkedHashMap<>();
-                worker.put("workerName", w.getWorkerName());
-                worker.put("totalQuantity", w.getTotalQuantity());
-                worker.put("reportCount", w.getReportCount());
-                return worker;
-            }).collect(Collectors.toList()));
-        }
-
-        Map<String, Object> result = new HashMap<>();
-        result.put("message", String.format("任务「%s」摘要查询完成", summary.getProcessName()));
-        result.put("data", summaryData);
-
-        return result;
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("taskId", task.getId());
+        data.put("productionBatchId", task.getProductionBatchId());
+        data.put("processName", task.getProcessName());
+        data.put("productName", task.getProductTypeName());
+        data.put("status", task.getStatus());
+        data.put("plannedQuantity", task.getPlannedQuantity());
+        data.put("actualQuantity", task.getActualQuantity());
+        data.put("pendingQuantity", pending);
+        data.put("unit", task.getPlannedUnit());
+        data.put("totalWorkers", workers.size());
+        data.put("totalReports", totalReports);
+        data.put("workers", workers);
+        log.info("Canonical work process task summary: factoryId={}, taskId={}", factoryId, canonicalId);
+        return Map.of("message", "工序任务摘要查询完成", "data", data);
     }
 
     @Override
     protected String getParameterQuestion(String paramName) {
-        if ("taskId".equals(paramName)) {
-            return "请提供要查询的工序任务ID（taskId）";
-        }
-        return null;
+        return "taskId".equals(paramName) ? "请提供要查询的工序任务ID" : null;
     }
 }

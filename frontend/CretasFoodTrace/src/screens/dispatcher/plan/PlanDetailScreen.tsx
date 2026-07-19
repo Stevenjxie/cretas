@@ -36,10 +36,7 @@ import { useTranslation } from 'react-i18next';
 import { isAxiosError } from 'axios';
 import { schedulingApiClient } from '../../../services/api/schedulingApiClient';
 import { productionPlanApiClient } from '../../../services/api/productionPlanApiClient';
-import { processTaskApiClient } from '../../../services/api/processTaskApiClient';
-import { workProcessApiClient } from '../../../services/api/workProcessApiClient';
 import { safePrint } from '../../../services/api/printApiClient';
-import { buildPlannedQuantitiesForProcesses } from '../../../utils/processTaskGeneration';
 import type { DispatcherStackParamList } from '../../../types/dispatcher';
 
 type NavigationProp = NativeStackNavigationProp<DispatcherStackParamList, 'PlanDetail'>;
@@ -344,56 +341,6 @@ export default function PlanDetailScreen() {
       default:
         return { backgroundColor: '#f5f5f5', color: '#666' };
     }
-  };
-
-  const [tasksGenerated, setTasksGenerated] = useState(false);
-  const [generatedRunId, setGeneratedRunId] = useState<string | null>(null);
-
-  // 生成工序任务
-  const handleGenerateProcessTasks = () => {
-    if (!plan?.productTypeId) {
-      Alert.alert('提示', '该计划未关联产品，无法生成工序任务');
-      return;
-    }
-    Alert.alert(
-      '生成工序任务',
-      `确定为「${plan.product}」生成工序任务？\n系统将根据产品关联的工序自动创建任务。`,
-      [
-        { text: '取消', style: 'cancel' },
-        {
-          text: '确定生成',
-          onPress: async () => {
-            try {
-              const productProcesses = await workProcessApiClient
-                .listProductWorkProcesses(plan.productTypeId)
-                .catch(() => []);
-              const plannedQuantities = buildPlannedQuantitiesForProcesses(
-                productProcesses,
-                plan.quantity,
-              );
-              const res = await processTaskApiClient.generateTasksFromProduct({
-                productTypeId: plan.productTypeId,
-                sourceCustomerName: plan.sourceCustomerName || plan.product,
-                plannedQuantities,
-              });
-              const data = res as { success?: boolean; data?: Array<{ productionRunId?: string }>; message?: string };
-              if (data?.success && Array.isArray(data.data) && data.data.length > 0) {
-                const runId = data.data[0]?.productionRunId;
-                setTasksGenerated(true);
-                setGeneratedRunId(runId || null);
-                Alert.alert('成功', `已生成 ${data.data.length} 个工序任务`);
-              } else {
-                setTasksGenerated(true);
-                Alert.alert('提示', data?.message || '工序任务已生成');
-              }
-            } catch (error) {
-              const msg = error instanceof Error ? error.message : '生成失败';
-              Alert.alert('错误', msg);
-            }
-          },
-        },
-      ]
-    );
   };
 
   // 取消计划
@@ -782,32 +729,6 @@ export default function PlanDetailScreen() {
 
       {/* 底部操作栏 */}
       <View style={styles.bottomActions}>
-        {plan?.productTypeId && plan?.status?.toUpperCase() !== 'CANCELLED' && plan?.status?.toUpperCase() !== 'COMPLETED' ? (
-          tasksGenerated && generatedRunId ? (
-            <TouchableOpacity
-              style={styles.rescheduleButton}
-              onPress={() => {
-                console.log('[PlanDetail] Navigate to ProcessRunOverview, runId:', generatedRunId);
-                if (generatedRunId) {
-                  navigation.navigate('ProcessRunOverview', { productionRunId: generatedRunId });
-                } else {
-                  Alert.alert('提示', '未找到工序任务ID，请重新生成');
-                }
-              }}
-            >
-              <Ionicons name="checkmark-circle" size={16} color={DISPATCHER_THEME.primary} />
-              <Text style={[styles.rescheduleButtonText, { color: DISPATCHER_THEME.primary }]}>查看工序任务</Text>
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity
-              style={styles.rescheduleButton}
-              onPress={handleGenerateProcessTasks}
-            >
-              <Ionicons name="list" size={16} color={DISPATCHER_THEME.success} />
-              <Text style={[styles.rescheduleButtonText, { color: DISPATCHER_THEME.success }]}>生成工序任务</Text>
-            </TouchableOpacity>
-          )
-        ) : null}
         {plan?.id ? (
           <TouchableOpacity
             style={styles.rescheduleButton}

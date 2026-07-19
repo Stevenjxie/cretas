@@ -93,8 +93,7 @@ public class TriggerChainExecutor {
             "ProductionCompletedEvent",
             "BatchMaterialConsumedEvent",
             // Round 13
-            "InvoiceRequestedEvent",
-            "WorkReportSubmittedEvent"
+            "InvoiceRequestedEvent"
     );
 
     // Round 6 Fix CHECK-5: rate-limited warn log when a factory configures a trigger chain

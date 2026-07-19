@@ -5,7 +5,7 @@ import java.util.Set;
 /** Frozen D1 allowlist: legacy membership may shrink but must never gain a new class. */
 final class LegacyToolDescriptorBaseline {
 
-    static final int COUNT = 596;
+    static final int COUNT = 595;
     static final Set<String> IMPLEMENTATION_CLASSES = Set.of(
             "com.cretas.aims.ai.tool.impl.CreateIntentTool",
             "com.cretas.aims.ai.tool.impl.QueryDroolsRuleTool",
@@ -273,7 +273,6 @@ final class LegacyToolDescriptorBaseline {
             "com.cretas.aims.ai.tool.impl.print.PrintDocumentTool",
             "com.cretas.aims.ai.tool.impl.print.PrintTemplateCreateFromAITool",
             "com.cretas.aims.ai.tool.impl.processing.ProcessTaskAnalysisTool",
-            "com.cretas.aims.ai.tool.impl.processing.ProcessTaskCreateTool",
             "com.cretas.aims.ai.tool.impl.processing.ProcessTaskQueryTool",
             "com.cretas.aims.ai.tool.impl.processing.ProcessTaskSummaryTool",
             "com.cretas.aims.ai.tool.impl.processing.ProcessingBatchCancelTool",

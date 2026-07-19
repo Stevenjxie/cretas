@@ -51,8 +51,8 @@ class ToolDescriptorInventoryDriftTest {
                         },
                         LinkedHashMap::new));
 
-        assertThat(sourceTools).hasSize(589);
-        assertThat(inventory.expectedToolCount()).isEqualTo(589);
+        assertThat(sourceTools).hasSize(588);
+        assertThat(inventory.expectedToolCount()).isEqualTo(588);
         assertThat(inventoryByClass.keySet()).isEqualTo(sourceTools.keySet());
         assertThat(sourceTools.values())
                 .extracting(SourceTool::toolName)
@@ -129,7 +129,7 @@ class ToolDescriptorInventoryDriftTest {
                 .filter(tool -> !tool.literalToolName())
                 .toList();
 
-        assertThat(tools.stream().filter(SourceTool::literalToolName)).hasSize(588);
+        assertThat(tools.stream().filter(SourceTool::literalToolName)).hasSize(587);
         assertThat(constantNames).singleElement().satisfies(tool -> {
             assertThat(tool.implementationClass()).isEqualTo(
                     "com.cretas.aims.ai.tool.impl.workprocess.ProductProcessWorkflowConfigTool");
@@ -137,7 +137,7 @@ class ToolDescriptorInventoryDriftTest {
         });
         assertThat(countOverride(tools, flags -> flags.actionType())).isEqualTo(53);
         assertThat(countOverride(tools, flags -> flags.riskLevel())).isEqualTo(36);
-        assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(42);
+        assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(41);
         assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(47);
         assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(36);
         assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(7);
@@ -146,7 +146,7 @@ class ToolDescriptorInventoryDriftTest {
 
         assertThat(countActions(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
                 ToolExecutor.ActionType.READ, 447L,
-                ToolExecutor.ActionType.WRITE, 63L,
+                ToolExecutor.ActionType.WRITE, 62L,
                 ToolExecutor.ActionType.UPDATE, 27L,
                 ToolExecutor.ActionType.DELETE, 11L,
                 ToolExecutor.ActionType.ANALYZE, 19L,
@@ -154,7 +154,7 @@ class ToolDescriptorInventoryDriftTest {
                 ToolExecutor.ActionType.NOTIFY, 7L));
         assertThat(countRisks(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
                 ToolExecutor.RiskLevel.LOW, 511L,
-                ToolExecutor.RiskLevel.MEDIUM, 73L,
+                ToolExecutor.RiskLevel.MEDIUM, 72L,
                 ToolExecutor.RiskLevel.HIGH, 5L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
     }

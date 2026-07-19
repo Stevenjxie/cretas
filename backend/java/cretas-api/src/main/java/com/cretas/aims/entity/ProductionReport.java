@@ -141,10 +141,6 @@ public class ProductionReport {
     @Builder.Default
     private Boolean syncedToSmartbi = false;
 
-    // PROCESS mode fields
-    @Column(name = "process_task_id", length = 50)
-    private String processTaskId;
-
     @Column(name = "is_supplemental")
     @Builder.Default
     private Boolean isSupplemental = false;

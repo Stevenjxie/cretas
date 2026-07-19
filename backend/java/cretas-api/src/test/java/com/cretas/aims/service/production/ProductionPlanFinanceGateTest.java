@@ -13,7 +13,6 @@ import com.cretas.aims.mapper.ProductionPlanMapper;
 import com.cretas.aims.repository.ConversionRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
-import com.cretas.aims.repository.ProcessTaskRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionLineRepository;
@@ -86,7 +85,6 @@ class ProductionPlanFinanceGateTest {
 
     @Mock private ProductionPlanRepository productionPlanRepository;
     @Mock private ProductionBatchRepository productionBatchRepository;
-    @Mock private ProcessTaskRepository processTaskRepository;
     @Mock private MaterialBatchRepository materialBatchRepository;
     @Mock private MaterialConsumptionRepository materialConsumptionRepository;
     @Mock private ProductionPlanBatchUsageRepository planBatchUsageRepository;
@@ -106,7 +104,7 @@ class ProductionPlanFinanceGateTest {
     @BeforeEach
     void setUp() {
         service = new ProductionPlanServiceImpl(
-                productionPlanRepository, productionBatchRepository, processTaskRepository,
+                productionPlanRepository, productionBatchRepository,
                 materialBatchRepository, materialConsumptionRepository, planBatchUsageRepository,
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
