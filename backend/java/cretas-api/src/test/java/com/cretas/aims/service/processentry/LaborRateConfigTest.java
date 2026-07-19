@@ -8,8 +8,8 @@ import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.config.FactoryCostSettingsRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
-import com.cretas.aims.repository.recipe.ProductRecipeRepository;
-import com.cretas.aims.repository.recipe.RecipeIngredientRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.service.processentry.impl.ClerkProcessEntryServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
@@ -52,8 +52,8 @@ class LaborRateConfigTest {
     @Mock private MaterialConsumptionRepository consumptionRepo;
     @Mock private ProcessEntryIdempotencyRepository idempotencyRepo;
     @Mock private FactoryWarehouseRepository warehouseRepo;
-    @Mock private ProductRecipeRepository recipeRepo;
-    @Mock private RecipeIngredientRepository ingredientRepo;
+    @Mock private BomRecipeRepository bomRecipeRepo;
+    @Mock private BomSeasoningItemRepository bomSeasoningItemRepo;
     @Mock private ProductionReportRepository reportRepo;
     @Mock private FactoryCostSettingsRepository costSettingsRepo;
 

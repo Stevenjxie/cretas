@@ -1,7 +1,6 @@
 package com.cretas.aims.entity.bom;
 
 import com.cretas.aims.entity.BaseEntity;
-import com.cretas.aims.entity.recipe.SeasoningLine;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
@@ -11,15 +10,10 @@ import org.hibernate.annotations.Where;
 import java.math.BigDecimal;
 
 /**
- * BOM 调料 ingredient (注射段 + 熟制段) — 折叠自 SP-A {@code recipe_ingredients}.
+ * BOM 调料明细（注射段 + 熟制段）的唯一运行时模型。
  *
- * <p>BOM 统管配方+锅序合并 (2026-06-24, decision A 真折叠): 调料明细从独立的
- * {@code product_recipes}/{@code recipe_ingredients} 子系统搬进 BOM, 挂在
- * {@link BomRecipe} (SKU 级, FK {@code recipe_id → bom_recipes.id}), 与原辅料
- * {@link BomRecipeItem} 同挂法. 版本化由 {@code bom_versions.snapshot_json} 承载.
- *
- * <p>字段 1:1 镜像 {@code RecipeIngredient} 以保证迁移 (U3) 与成本算法零回归 (U4).
- * implements {@link SeasoningLine} 让 {@code RecipeCostCalculator} 用同一算法读取.
+ * <p>明细挂在 {@link BomRecipe}（SKU 级，FK {@code recipe_id → bom_recipes.id}），
+ * 与原辅料 {@link BomRecipeItem} 同挂法；版本化由 {@code bom_versions.snapshot_json} 承载。
  *
  * @since 2026-06-24
  */
@@ -34,7 +28,10 @@ import java.math.BigDecimal;
 @AllArgsConstructor
 @EqualsAndHashCode(callSuper = true)
 @Where(clause = "deleted_at IS NULL")
-public class BomSeasoningItem extends BaseEntity implements SeasoningLine {
+public class BomSeasoningItem extends BaseEntity {
+
+    public static final String SECTION_INJECTION = "INJECTION";
+    public static final String SECTION_COOKING = "COOKING";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -51,11 +48,11 @@ public class BomSeasoningItem extends BaseEntity implements SeasoningLine {
     @Column(name = "material_type_id", length = 191)
     private String materialTypeId;
 
-    /** {@link SeasoningLine#getSection()}: INJECTION | COOKING. */
+    /** {@link #SECTION_INJECTION} | {@link #SECTION_COOKING}. */
     @Column(name = "section", nullable = false, length = 20)
     private String section;
 
-    /** 段内排序 (镜像 recipe_ingredients.seq). */
+    /** 段内排序。 */
     @Column(name = "seq", nullable = false)
     @Builder.Default
     private Integer seq = 0;

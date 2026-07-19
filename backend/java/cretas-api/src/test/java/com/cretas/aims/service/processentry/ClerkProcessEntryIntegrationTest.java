@@ -10,15 +10,15 @@ import com.cretas.aims.dto.yield.OrderCostBreakdownDTO;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
-import com.cretas.aims.entity.recipe.ProductRecipe;
-import com.cretas.aims.entity.recipe.RecipeIngredient;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.UserRepository;
-import com.cretas.aims.repository.recipe.ProductRecipeRepository;
-import com.cretas.aims.repository.recipe.RecipeIngredientRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.service.yield.OrderCostBreakdownService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -68,10 +68,10 @@ class ClerkProcessEntryIntegrationTest {
     private OrderCostBreakdownService orderCostBreakdownService;
 
     @Autowired
-    private ProductRecipeRepository recipeRepo;
+    private BomRecipeRepository recipeRepo;
 
     @Autowired
-    private RecipeIngredientRepository ingredientRepo;
+    private BomSeasoningItemRepository ingredientRepo;
 
     @Autowired
     private MaterialBatchRepository materialBatchRepo;
@@ -123,6 +123,7 @@ class ClerkProcessEntryIntegrationTest {
         plan.setPlanNumber("IT-PLAN-" + System.currentTimeMillis() % 100000);
         plan.setProductTypeId(PRODUCT_TYPE_ID);
         plan.setPlannedQuantity(new BigDecimal("100"));
+        plan.setPlannedUnit("kg");
         plan.setStatus(ProductionPlanStatus.PENDING);
         plan.setCreatedBy(operatorId);
         plan.setIsLocked(false);
@@ -132,27 +133,34 @@ class ClerkProcessEntryIntegrationTest {
         plan.setUpdatedAt(LocalDateTime.now());
         planRepo.save(plan);
 
-        // 2. 创建 ProductRecipe: INJECTION ~0.24/kg, 熟制 COOKING ~0.31/kg
+        // 2. 创建当前 BOM: INJECTION ~0.24/kg, 熟制 COOKING ~0.31/kg
         //    INJECTION: 240g/kg dosage, countInSeasoning=true
         //    COOKING:   310g/kg dosage, countInSeasoning=true
         //    季节成本 = 100kg × (0.240 × 10.0) + 1 pot (100kg) × 1 × (0.310 × 10.0)
         //             = 100 × 2.40 + 100 × 3.10 = 240 + 310 = 550  (用 priceSource1=10.0)
         String recipeId = "RECIPE-" + UUID.randomUUID().toString().substring(0, 8);
-        ProductRecipe recipe = new ProductRecipe();
+        BomRecipe recipe = new BomRecipe();
         recipe.setId(recipeId);
         recipe.setFactoryId(FACTORY_ID);
+        recipe.setRecipeCode("BOM-IT-" + recipeId);
         recipe.setProductTypeId(PRODUCT_TYPE_ID);
-        recipe.setName("IT-Test-Recipe");
+        recipe.setProductName("IT-Test-Recipe");
+        recipe.setVersion(1);
+        recipe.setIsCurrent(true);
+        recipe.setOutputQuantityPerUnit(new BigDecimal("1000"));
+        recipe.setOutputUnit("g");
         recipe.setInjectionRate(null);
         recipe.setCookingPotBaseKg(new BigDecimal("100"));
-        recipe.setSubsequentPotRatio(ProductRecipe.DEFAULT_SUBSEQUENT_POT_RATIO);
-        recipe.setStatus("ACTIVE");
+        recipe.setSubsequentPotRatio(new BigDecimal("0.3333"));
+        recipe.setSeasoningRevision(0L);
+        recipe.setStatus(BomRecipe.Status.ACTIVE);
+        recipe.setSourceType(BomRecipe.SourceType.MANUAL);
         recipeRepo.save(recipe);
 
-        RecipeIngredient injIngredient = new RecipeIngredient();
+        BomSeasoningItem injIngredient = new BomSeasoningItem();
         injIngredient.setRecipeId(recipeId);
         injIngredient.setFactoryId(FACTORY_ID);
-        injIngredient.setSection(RecipeIngredient.SECTION_INJECTION);
+        injIngredient.setSection(BomSeasoningItem.SECTION_INJECTION);
         injIngredient.setSeq(1);
         injIngredient.setName("IT-Injection-Spice");
         injIngredient.setDosagePerKgG(new BigDecimal("240")); // 240g/kg
@@ -160,10 +168,10 @@ class ClerkProcessEntryIntegrationTest {
         injIngredient.setCountInSeasoning(true);
         ingredientRepo.save(injIngredient);
 
-        RecipeIngredient cookIngredient = new RecipeIngredient();
+        BomSeasoningItem cookIngredient = new BomSeasoningItem();
         cookIngredient.setRecipeId(recipeId);
         cookIngredient.setFactoryId(FACTORY_ID);
-        cookIngredient.setSection(RecipeIngredient.SECTION_COOKING);
+        cookIngredient.setSection(BomSeasoningItem.SECTION_COOKING);
         cookIngredient.setSeq(2);
         cookIngredient.setName("IT-Cooking-Spice");
         cookIngredient.setDosagePerKgG(new BigDecimal("310")); // 310g/kg
@@ -334,6 +342,7 @@ class ClerkProcessEntryIntegrationTest {
         diamondPlan.setPlanNumber("IT-DPLAN-" + System.currentTimeMillis() % 100000);
         diamondPlan.setProductTypeId(PRODUCT_TYPE_ID);
         diamondPlan.setPlannedQuantity(new BigDecimal("100"));
+        diamondPlan.setPlannedUnit("kg");
         diamondPlan.setStatus(ProductionPlanStatus.PENDING);
         diamondPlan.setCreatedBy(operatorId);
         diamondPlan.setIsLocked(false);

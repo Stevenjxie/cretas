@@ -18,13 +18,14 @@ describe('seasoning BOM integration source contract', () => {
     expect(unifiedSource).not.toContain('RecipeContent');
   });
 
-  it('normalizes both legacy seasoning entries to the process-first auxiliary view', () => {
-    for (const source of [unifiedSource, routerSource]) {
-      expect(source).toContain("tab: 'materials'");
-      expect(source).toContain("category: 'AUXILIARY'");
-      expect(source).toContain("auxView: 'process'");
-    }
-    expect(routerSource).toContain("path: 'product-recipes'");
+  it('keeps the canonical BOM auxiliary entry without restoring the removed product recipe route', () => {
+    expect(unifiedSource).toContain("tab: 'materials'");
+    expect(unifiedSource).toContain("category: 'AUXILIARY'");
+    expect(unifiedSource).toContain("auxView: 'process'");
+    expect(routerSource).toContain("path: 'bom'");
+    expect(routerSource).toContain("name: 'BomManagement'");
+    expect(routerSource).not.toContain("path: 'product-recipes'");
+    expect(routerSource).not.toContain("name: 'ProductRecipes'");
     expect(routerSource).not.toContain("import('@/views/production/ProductRecipeView.vue')");
   });
 

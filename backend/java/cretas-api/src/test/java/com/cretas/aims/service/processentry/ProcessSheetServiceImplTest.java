@@ -11,13 +11,13 @@ import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
-import com.cretas.aims.entity.recipe.ProductRecipe;
-import com.cretas.aims.entity.recipe.RecipeIngredient;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
@@ -29,8 +29,8 @@ import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
-import com.cretas.aims.repository.recipe.ProductRecipeRepository;
-import com.cretas.aims.repository.recipe.RecipeIngredientRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -101,10 +101,10 @@ class ProcessSheetServiceImplTest {
     private UserRepository userRepo;
 
     @Autowired
-    private ProductRecipeRepository recipeRepo;
+    private BomRecipeRepository recipeRepo;
 
     @Autowired
-    private RecipeIngredientRepository ingredientRepo;
+    private BomSeasoningItemRepository ingredientRepo;
 
     @Autowired
     private FactoryWarehouseRepository warehouseRepo;
@@ -155,6 +155,7 @@ class ProcessSheetServiceImplTest {
         plan.setPlanNumber("PSF-PN-" + System.currentTimeMillis() % 100000);
         plan.setProductTypeId(PRODUCT_TYPE_ID);
         plan.setPlannedQuantity(new BigDecimal("100"));
+        plan.setPlannedUnit("kg");
         plan.setStatus(ProductionPlanStatus.PENDING);
         plan.setCreatedBy(operatorId);
         plan.setIsLocked(false);
@@ -365,6 +366,7 @@ class ProcessSheetServiceImplTest {
         op.setPlanNumber("PSF-OPN-" + System.currentTimeMillis() % 100000);
         op.setProductTypeId(PRODUCT_TYPE_ID);
         op.setPlannedQuantity(new BigDecimal("100"));
+        op.setPlannedUnit("kg");
         op.setStatus(ProductionPlanStatus.PENDING);
         op.setCreatedBy(operatorId);
         op.setIsLocked(false);
@@ -962,21 +964,28 @@ class ProcessSheetServiceImplTest {
 
     private void seedSeasoningRecipe() {
         String recipeId = "PSF-RECIPE-" + UUID.randomUUID().toString().substring(0, 8);
-        ProductRecipe recipe = new ProductRecipe();
+        BomRecipe recipe = new BomRecipe();
         recipe.setId(recipeId);
         recipe.setFactoryId(FACTORY_ID);
+        recipe.setRecipeCode("BOM-PSF-" + recipeId);
         recipe.setProductTypeId(PRODUCT_TYPE_ID);
-        recipe.setName("PSF-Test-Recipe");
+        recipe.setProductName("PSF-Test-Recipe");
+        recipe.setVersion(1);
+        recipe.setIsCurrent(true);
+        recipe.setOutputQuantityPerUnit(new BigDecimal("1000"));
+        recipe.setOutputUnit("g");
         recipe.setInjectionRate(null);
         recipe.setCookingPotBaseKg(new BigDecimal("100"));
-        recipe.setSubsequentPotRatio(ProductRecipe.DEFAULT_SUBSEQUENT_POT_RATIO);
-        recipe.setStatus("ACTIVE");
+        recipe.setSubsequentPotRatio(new BigDecimal("0.3333"));
+        recipe.setSeasoningRevision(0L);
+        recipe.setStatus(BomRecipe.Status.ACTIVE);
+        recipe.setSourceType(BomRecipe.SourceType.MANUAL);
         recipeRepo.save(recipe);
 
-        RecipeIngredient cook = new RecipeIngredient();
+        BomSeasoningItem cook = new BomSeasoningItem();
         cook.setRecipeId(recipeId);
         cook.setFactoryId(FACTORY_ID);
-        cook.setSection(RecipeIngredient.SECTION_COOKING);
+        cook.setSection(BomSeasoningItem.SECTION_COOKING);
         cook.setSeq(1);
         cook.setName("PSF-Cooking-Spice");
         cook.setDosagePerKgG(new BigDecimal("310"));
