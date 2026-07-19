@@ -64,13 +64,16 @@ class SecretScannerTest(unittest.TestCase):
         self.assertEqual("compromised-fingerprint", findings[0].rule)
 
     def test_known_compromised_fingerprint_after_assignment_is_detected(self):
-        value = b"known-compromised-assignment-fixture"
+        value = b"known%compromised!assignment?fixture&with#special"
         old = SCANNER.COMPROMISED_FINGERPRINTS
         try:
             SCANNER.COMPROMISED_FINGERPRINTS = {
                 SCANNER.fingerprint(value): "unit-test assignment fixture"
             }
-            findings = SCANNER.scan_content("docs/example.txt", b"API_KEY=" + value)
+            findings = SCANNER.scan_content(
+                "docs/example.txt",
+                b'API_KEY="' + value + b'"',
+            )
         finally:
             SCANNER.COMPROMISED_FINGERPRINTS = old
         self.assertEqual("compromised-fingerprint", findings[0].rule)
