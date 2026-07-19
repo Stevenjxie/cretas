@@ -140,3 +140,82 @@
 - 可信制品与部署：#1493 后端 tree `202c9163983e772f05bc955a6e7e837f5a9b03db`，JAR SHA-256 `07f39d0b4a7b21b6585b79ba3809c3ca82d9429be65993866deab9a070dd3dcc`；生产由 blue/10010 切换至 green/10020，5/5 稳定观察通过，结构化报告 `C:\Users\Steve\.cache\cretas\deploy-reports\backend-1784450143-16975.json`。测试环境 10011 不健康，本任务未触碰。
 - 验收证据：`C:\Users\Steve\my-prototype-logistics\.playwright-mcp\f006-plan-reporting-linkage\` 下保存选择交互、正式提交、响应体、批次/消耗/运行时回读和 Workflow 激活恢复记录。
 - Scope 锁：已释放。
+
+## Cretas Agent Architecture V2 — D9/D10
+
+### `CRETAS-AI-PYTHON-SESSION-IDENTITY-D9SP-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`) + 执行/审查子代理
+- PR：[#1473](https://github.com/Stevenjxie/cretas/pull/1473)
+- `main` squash merge commit：`6368314cc33c12bcf0c6705a002f5b78f1eead77`
+- 范围：Python synthesis/chat session 使用严格 trusted positive user parser，所有 lookup/upsert/prune 精确绑定 factory+user+session；兼容旧全局 unique 和新复合 unique，跨用户同 SID 不覆盖；Web session key 含 factory+user。
+- 验收：Pure/contract 78 项、真实 PostgreSQL 随机 schema 1 项、Web 2 项及独立终审通过。
+- 状态边界：代码已合并；`V20261028_02__chat_session_user_identity.sql` 未在生产执行，未部署。
+- Scope 锁：已释放。
+
+### `CRETAS-AI-D10-GAP-AUDIT-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root/d10_gap_audit`)
+- Base SHA：`6368314cc33c12bcf0c6705a002f5b78f1eead77`
+- 范围：只读核验 Tool/Gateway、餐饮 Runtime、AgentOps 与工厂 Capability Pack 的已完成能力和缺口；裁决先迁固定写入口与餐饮 adaptive runtime，再做 AgentOps 和 config-only 工厂 Pack。
+- 结果：确认保留 601 Tool inventory、Gateway/ledger、10 个餐饮 Evidence Tool、有界 Runtime、Run/Event+RLS 和真实 SSE/replay；不把低代码画布或通用工厂 Runtime 纳入本阶段。
+- 状态边界：仓库零修改、未测试、未部署。
+- Scope 锁：已释放。
+
+### `CRETAS-AI-D10A-GATEWAY-FIXED-WRITES-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`) + 执行/审查子代理
+- PR：[#1480](https://github.com/Stevenjxie/cretas/pull/1480)
+- `main` squash merge commit：`0f81ca356dbbf5d14546eb684ea5e64eaa0a97b9`
+- 范围：`product_create` 与 `bom_adjust` 的 preview/execute 迁入 ToolExecutionGateway；opaque confirmation token 绑定可信 factory/user/tool/version/mode/参数摘要/expiry，execute 仅接受 header token；Web token 只驻留内存。
+- 验收：Java 73/73、Web 4/4、Vite production build 与独立终审通过；Gateway direct bypass 降至 11 files / 12 expressions。
+- 状态边界：代码已合并，未部署。
+- Scope 锁：已释放。
+
+### `CRETAS-AI-D10D-FACTORY-CAPABILITY-PACKS-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`) + 执行/审查子代理
+- PR：[#1490](https://github.com/Stevenjxie/cretas/pull/1490)
+- `main` squash merge commit：`7a5d785ce7af5da9d9426593d467b123e994eefe`
+- 范围：新增 operator、warehouse、quality、manager 四个严格 schema、固定 SHA-256、PUBLISHED 的 config-only Capability Pack；仅允许 `READ + LOW + REVIEW_REQUIRED` 元数据，不接 Tool 执行、动态规划、Runtime 或 DAG。
+- 验收：可信 factory/role/业态 fail-closed，16/16 Java 目标测试、`git diff --check` 与独立终审通过。
+- 状态边界：无迁移，未部署。
+- Scope 锁：已释放。
+
+### `CRETAS-AI-D10B-RESTAURANT-ADAPTIVE-RUNTIME-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`) + 执行/审查子代理
+- PR：[#1491](https://github.com/Stevenjxie/cretas/pull/1491)
+- `main` squash merge commit：`a7951cc54600a0f400ab914ecdc2f9b568afd9ac`
+- 范围：餐饮 Agent 增加最多两轮的 `EVIDENCE_GAP → REPLAN → CLARIFICATION`、跨进程显式取消、checkpoint/resume/replay、32 KiB Evidence drill-down 与严格 `READ_ONLY_PROPOSAL`；Run/Event 全链绑定可信 factory+owner。
+- 验收：Python 100、真实 disposable PostgreSQL 13/13、Java 26/26、RN 21/21、TypeScript 与独立 Review3 通过。
+- 状态边界：代码已合并；`V20261028_03__restaurant_agent_adaptive_events.sql` 与 `V20261028_05__restaurant_agent_owner_enforcement.sql` 未在生产执行，未部署。
+- Scope 锁：已释放。
+
+### `CRETAS-AI-D10C-AGENTOPS-EVAL-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`) + Python/Java/Web 执行与四轮审查子代理
+- PR：[#1495](https://github.com/Stevenjxie/cretas/pull/1495)
+- `main` squash merge commit：`a9bbd8c4fd547907bf26bcdc00723820c1adb4cc`
+- 范围：建立租户隔离且不可变的 Eval Set、离线 Experiment、comparison、分页 detail 和管理员 Run Trace；持久化 actual snapshots、RunnerBounds、EvalSet digest、三类精确 config SHA 与 evaluator artifact SHA-256，rerun 只按源 build registry 执行。
+- 幂等与隔离：Create/Run/Rerun 使用 factory+actor+requestId/requestDigest 原子幂等；response-loss retry 在 evaluator 前返回既有结果；RLS/FORCE RLS、同租户 lineage self-FK 和 immutable trigger fail closed。
+- 验收：disposable PostgreSQL 27/27、Java 21/21、Web 17/17 + production build、AgentOps build:check 0 错误与 Review4 P0-P3 无发现。
+- 状态边界：代码已合并；`V20261028_04__restaurant_agent_eval_experiments.sql` 未在生产执行，未部署。
+- Scope 锁：已释放。
+
+### `CRETAS-AI-D9-D10-PRODUCTION-HANDOFF-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- Base SHA：`a9bbd8c4fd547907bf26bcdc00723820c1adb4cc`
+- 范围：确认 D10A/B/C/D 代码 scope 与临时 WIP 全部释放；后续生产迁移与发布作为独立 high-stakes 任务处理。
+- 迁移边界：待统一编排 Python D9 `V02`、D10 `V03/V04/V05`；Java Flyway 历史 `V76` 冲突已在 PR #1463 修为唯一 `V76`（BOM）与 `V77`（Gateway），当前主线无重复版本。
+- 发布门禁：构建、DDL、上传、重启、蓝绿切流或 OTA 前，必须核验 exact `origin/main`、现场制品/slot/schema、兼容窗口、回滚点与验收清单，并取得用户确认。
+- 状态边界：本记录不代表已构建、已迁移或已部署生产。
+- Scope 锁：已释放。
