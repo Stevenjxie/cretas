@@ -34,3 +34,15 @@
 - 范围：选择本计划在制或公共半成品时按当前可用量自动回填实际 kg；确认预览与正式提交共用同一 request；后端在写入前拒绝任何零/空投入的声明来源，并保留指定批次原子消费与重复提交保护。未触碰 F006 生产记录与 LIUSHANMEN。
 - 验收：Web process-sheet 全目录 12 files / 69 tests 通过；唯一 Java release 生命周期 29 tests 通过并生成可信 JAR；唯一 Web release build 生成 729 assets 与可信 archive。生产部署与同一 planId 只读核验在 exact-main 发布阶段完成。
 - Scope 锁：已释放。
+
+### `F006-M07-YIELD-COST-UNITS-20260720`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- 登记 Base SHA：`8e98b715ba0818c375b5050294876d52647b4de5`
+- 根因一：持久化 yield-card 直接用 canonical 产出数量 `5 box` 除以 `4.5kg/5kg`，没有优先使用报工快照中的 `productWeight=4kg`，造成 step/cumulative 跨单位直接相除。
+- 根因二：上游 WIP 的 MaterialBatch 历史行缺少 `unitPrice`，虽然对应 ProductionBatch 已有 `totalCost=56`，物化成本边仍按零价写入；历史成品批的旧总成本低于继承成本时，读模型又直接相减产生负 addedCost。
+- 根因三：气调历史行直接渲染 Workflow canonical output unit，绕过共享 `displayProcessUnit`，所以 `box` 泄漏到中文 UI。
+- 范围：yield-card 用 `productWeight` 做 kg/g/mg 可比产出换算；写入端按 ProductionBatch 总成本/产量补全解析单价；读端保证总成本不低于继承成本并重算单价；历史行统一 display-only 单位格式化。未修改 canonical payload/数据库，未触碰 F006 生产记录与 LIUSHANMEN。
+- 验收：Web 目标测试 3 files / 30 tests 通过；唯一 Java release 生命周期 46/46 通过并生成可信 JAR；唯一 Web release build 与可信 archive 通过。生产同一 planId 仅做只读核验。
+- Scope 锁：已释放。
