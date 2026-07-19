@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   canonicalUnitCode,
+  displayUnit,
   formatPriceUnit,
   pricingAmountPreview,
   purchaseOrderPricingPayload,
@@ -12,6 +13,11 @@ describe('unitPricing', () => {
   it('normalizes canonical aliases without changing the price value', () => {
     expect(canonicalUnitCode('公斤')).toBe('kg');
     expect(canonicalUnitCode('盒')).toBe('box');
+    expect(displayUnit('box')).toBe('盒');
+    expect(canonicalUnitCode('箱')).toBe('case');
+    expect(displayUnit('case')).toBe('箱');
+    expect(canonicalUnitCode('g')).toBe('g');
+    expect(canonicalUnitCode('kg')).toBe('kg');
     expect(formatPriceUnit('case')).toBe('元/case');
   });
 

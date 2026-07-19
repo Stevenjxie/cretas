@@ -9,6 +9,8 @@ import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.service.bom.NestedBomCostService;
 import com.cretas.aims.service.uom.MaterialUomConverter;
+import com.cretas.aims.service.unit.TestUnitContractFactory;
+import com.cretas.aims.service.unit.UnitContractService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -62,6 +64,9 @@ class BomRecipePackagingSpecInferTest {
     MaterialUomConverter materialUomConverter;
 
     @Mock
+    UnitContractService unitContractService;
+
+    @Mock
     NestedBomCostService nestedBomCostService;
 
     @InjectMocks
@@ -80,6 +85,10 @@ class BomRecipePackagingSpecInferTest {
         when(recipeRepo.findById("RECIPE-PKG-TEST")).thenReturn(Optional.of(recipe));
         when(recipeRepo.save(any(BomRecipe.class))).thenAnswer(inv -> inv.getArgument(0));
         when(materialUomConverter.isWriteUnitCompatible(anyString(), anyString())).thenReturn(true);
+        UnitContractService canonicalUnits = TestUnitContractFactory.contract();
+        when(unitContractService.normalize(anyString(), anyString()))
+                .thenAnswer(invocation -> canonicalUnits.normalize(
+                        invocation.getArgument(0), invocation.getArgument(1)));
         // NestedBomCostService: treat all items as plain (non-nested) for these tests
         when(nestedBomCostService.isNestedComponent(any())).thenReturn(false);
     }
@@ -202,7 +211,7 @@ class BomRecipePackagingSpecInferTest {
     // ─── T5: unit 回填 ───────────────────────────────────────────────────
 
     @Test
-    @DisplayName("T5: PACKAGING auto-infer + DTO unit null → unit back-filled from material (个)")
+    @DisplayName("T5: PACKAGING auto-infer + DTO unit null → material alias 个 is canonicalized to pcs")
     void packaging_autoInfer_unitBackfilledFromMaterial() {
         // Material unit = "个", DTO unit not supplied
         RawMaterialType box = packagingMt("PKG-001", "吸塑盒", "个", new BigDecimal("1.000000"));
@@ -221,14 +230,14 @@ class BomRecipePackagingSpecInferTest {
         BomRecipeItemDTO dto = buildDtoNoUnit("PKG-001", null, "PACKAGING");
         service.addItem("F006", "RECIPE-PKG-TEST", dto);
 
-        // unit should be back-filled to "个" (from material)
+        // unit is back-filled from material then persisted as the canonical code.
         assertThat(capturedItem[0].getUnit())
                 .as("unit should be back-filled from material.unit when DTO unit is blank")
-                .isEqualTo("个");
+                .isEqualTo("pcs");
     }
 
     @Test
-    @DisplayName("T6: PACKAGING auto-infer + DTO unit=袋 (already filled) → DTO unit preserved")
+    @DisplayName("T6: PACKAGING auto-infer + DTO unit=袋 → canonical bag is preserved")
     void packaging_autoInfer_existingUnitPreserved() {
         RawMaterialType box = packagingMt("PKG-001", "吸塑盒", "个", new BigDecimal("1.000000"));
         when(materialTypeRepo.findById("PKG-001")).thenReturn(Optional.of(box));
@@ -247,10 +256,10 @@ class BomRecipePackagingSpecInferTest {
         BomRecipeItemDTO dto = buildDto("PKG-001", null, "袋", "PACKAGING");
         service.addItem("F006", "RECIPE-PKG-TEST", dto);
 
-        // "袋" must NOT be overridden by material's "个"
+        // Explicit bag semantics must not be overridden by the material's pcs semantics.
         assertThat(capturedItem[0].getUnit())
                 .as("explicitly supplied unit=袋 must not be overridden by material unit=个")
-                .isEqualTo("袋");
+                .isEqualTo("bag");
     }
 
     // ─── T7: 成本含 PACKAGING 行 ───────────────────────────────────────

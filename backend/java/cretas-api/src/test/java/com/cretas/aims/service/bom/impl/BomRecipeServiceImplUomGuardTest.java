@@ -11,6 +11,8 @@ import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.service.bom.NestedBomCostService;
 import com.cretas.aims.service.uom.MaterialUomConverter;
+import com.cretas.aims.service.unit.TestUnitContractFactory;
+import com.cretas.aims.service.unit.UnitContractService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -61,6 +63,8 @@ class BomRecipeServiceImplUomGuardTest {
     /** Placeholder mock so @InjectMocks constructor can inject; replaced in setUp with real converter. */
     @Mock
     private MaterialUomConverter mockUomConverter;
+    @Mock
+    private UnitContractService unitContractService;
 
     /** SP1: NestedBomCostService must be mocked so @InjectMocks can inject it. */
     @Mock
@@ -88,6 +92,10 @@ class BomRecipeServiceImplUomGuardTest {
                 com.cretas.aims.service.unit.TestUnitContractFactory.legacyFacade());
         // Replace @InjectMocks placeholder mock with real converter
         ReflectionTestUtils.setField(service, "materialUomConverter", realUomConverter);
+        UnitContractService canonicalUnits = TestUnitContractFactory.contract();
+        when(unitContractService.normalize(anyString(), anyString()))
+                .thenAnswer(invocation -> canonicalUnits.normalize(
+                        invocation.getArgument(0), invocation.getArgument(1)));
 
         // BOM recipe exists in DRAFT status
         BomRecipe recipe = new BomRecipe();
@@ -204,7 +212,7 @@ class BomRecipeServiceImplUomGuardTest {
     void addItem_countDimension_geVsJian_allowed() {
         BomRecipeItemDTO dto = bomItemDto(MAT_BOX, "个", new BigDecimal("100"));
         BomRecipeItem item = service.addItem(FACTORY, RECIPE_ID, dto);
-        assertThat(item.getUnit()).isEqualTo("个");
+        assertThat(item.getUnit()).isEqualTo("pcs");
     }
 
     @Test

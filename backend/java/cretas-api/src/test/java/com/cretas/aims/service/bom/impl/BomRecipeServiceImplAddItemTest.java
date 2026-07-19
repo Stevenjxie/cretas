@@ -17,6 +17,8 @@ import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.repository.bom.BomProcessInjectionConfigRepository;
 import com.cretas.aims.service.bom.NestedBomCostService;
 import com.cretas.aims.service.uom.MaterialUomConverter;
+import com.cretas.aims.service.unit.TestUnitContractFactory;
+import com.cretas.aims.service.unit.UnitContractService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -80,6 +82,9 @@ class BomRecipeServiceImplAddItemTest {
 
     @Mock
     MaterialUomConverter materialUomConverter;
+
+    @Mock
+    UnitContractService unitContractService;
 
     /** SP1: NestedBomCostService must be mocked so @InjectMocks can inject it. */
     @Mock
@@ -147,6 +152,10 @@ class BomRecipeServiceImplAddItemTest {
                 anyString(), any(BigDecimal.class), anyString(), anyString()))
                 .thenAnswer(invocation -> MaterialUomConverter.ConversionResult.converted(
                         invocation.getArgument(1), invocation.getArgument(3)));
+        UnitContractService canonicalUnits = TestUnitContractFactory.contract();
+        when(unitContractService.normalize(anyString(), anyString()))
+                .thenAnswer(invocation -> canonicalUnits.normalize(
+                        invocation.getArgument(0), invocation.getArgument(1)));
     }
 
     @Test
@@ -462,6 +471,69 @@ class BomRecipeServiceImplAddItemTest {
         assertThatThrownBy(() -> service.addItem("F006", "RECIPE-ORPHAN-TEST", dto))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("每成品用量");
+    }
+
+    @Test
+    @DisplayName("包材主数据 box 与中文显示值盒统一持久化为 canonical box")
+    void addPackagingItem_boxAliasPersistsCanonicalCode() {
+        RawMaterialType box = newMt("MT-BOX", "内盒", "box", "003");
+        when(materialTypeRepo.findById("MT-BOX")).thenReturn(Optional.of(box));
+        when(itemRepo.save(any(BomRecipeItem.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId())).thenReturn(List.of(existingItem));
+
+        BomRecipeItem saved = service.addItem("F006", recipe.getId(),
+                buildDto("MT-BOX", new BigDecimal("1"), "盒", "PACKAGING"));
+
+        assertThat(saved.getUnit()).isEqualTo("box");
+        assertThat(saved.getPriceUnit()).isEqualTo("box");
+        assertThat(saved.getStandardQuantity()).isEqualByComparingTo("1");
+    }
+
+    @Test
+    @DisplayName("包材主数据 case 与中文显示值箱统一持久化为 canonical case")
+    void addPackagingItem_caseAliasPersistsCanonicalCode() {
+        RawMaterialType outerCase = newMt("MT-CASE", "外箱", "case", "004");
+        when(materialTypeRepo.findById("MT-CASE")).thenReturn(Optional.of(outerCase));
+        when(itemRepo.save(any(BomRecipeItem.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId())).thenReturn(List.of(existingItem));
+
+        BomRecipeItem saved = service.addItem("F006", recipe.getId(),
+                buildDto("MT-CASE", new BigDecimal("0.125"), "箱", "PACKAGING"));
+
+        assertThat(saved.getUnit()).isEqualTo("case");
+        assertThat(saved.getPriceUnit()).isEqualTo("case");
+        assertThat(saved.getStandardQuantity()).isEqualByComparingTo("0.125");
+    }
+
+    @Test
+    @DisplayName("g/kg 继续通过统一单位契约并保持 canonical code")
+    void addMassItems_keepCanonicalGramAndKilogramCodes() {
+        RawMaterialType material = newMt("MT-MASS", "粉料", "kg", "005");
+        when(materialTypeRepo.findById("MT-MASS")).thenReturn(Optional.of(material));
+        when(itemRepo.save(any(BomRecipeItem.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId())).thenReturn(List.of(existingItem));
+
+        BomRecipeItem grams = service.addItem("F006", recipe.getId(),
+                buildDto("MT-MASS", new BigDecimal("125"), "g", "AUXILIARY"));
+        BomRecipeItem kilograms = service.addItem("F006", recipe.getId(),
+                buildDto("MT-MASS", new BigDecimal("1"), "kg", "AUXILIARY"));
+
+        assertThat(grams.getUnit()).isEqualTo("g");
+        assertThat(kilograms.getUnit()).isEqualTo("kg");
+    }
+
+    @Test
+    @DisplayName("未知单位返回明确 400 业务校验而不是进入数据库")
+    void addItem_unknownUnitReturnsBusinessValidation() {
+        BomRecipeItemDTO dto = buildDto("MT-002", BigDecimal.ONE, "unknown-unit", "PACKAGING");
+
+        assertThatThrownBy(() -> service.addItem("F006", recipe.getId(), dto))
+                .isInstanceOfSatisfying(BusinessException.class, ex -> {
+                    assertThat(ex.getCode()).isEqualTo(400);
+                    assertThat(ex.getErrorCode()).isEqualTo("BOM_ITEM_UNIT_UNKNOWN");
+                    assertThat(ex.getActionHint()).contains("单位目录");
+                });
+        verify(itemRepo, never()).save(any(BomRecipeItem.class));
     }
 
     @Test

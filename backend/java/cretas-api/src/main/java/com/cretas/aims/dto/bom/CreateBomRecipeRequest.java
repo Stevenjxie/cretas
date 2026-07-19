@@ -77,11 +77,9 @@ public class CreateBomRecipeRequest {
         @Schema(description = "已废弃：单行出成率不由 BOM 人工维护，传值会被忽略", deprecated = true)
         private BigDecimal yieldRate;
 
-        @Schema(description = "计量单位 (限定 g/kg/mg/ml/L/个/只/件/pcs/袋/箱/瓶/盒/斤)", required = true)
+        @Schema(description = "计量单位；接受工厂单位目录别名，写入时规范化为 canonical code", required = true)
         @NotBlank(message = "单位不能为空")
-        // TODO(R13): 1斤=0.5kg 换算引擎待做, 当前斤为独立计量标签
-        @Pattern(regexp = "^(g|kg|mg|ml|L|个|只|件|pcs|袋|箱|瓶|盒|斤)$",
-                 message = "单位必须是 g/kg/mg/ml/L/个/只/件/pcs/袋/箱/瓶/盒/斤 之一")
+        @Size(max = 20, message = "单位长度不能超过20个字符")
         private String unit;
 
         @Schema(description = "已废弃：BOM 单价从物料档案/移动均价继承，传值会被忽略", deprecated = true)
