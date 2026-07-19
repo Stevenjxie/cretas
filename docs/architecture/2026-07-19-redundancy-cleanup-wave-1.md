@@ -259,33 +259,49 @@ DROP TABLE public.product_recipes;
 
 ### 4.3 已授权测试数据清空 SQL 预览（Phase B，须在 Phase A 生产生效后执行）
 
-必须先部署旧 mutation 410，再重新核对快照；清数据和最终删表分成两个 migration：
+旧 mutation 410 已随 V80 部署到生产 blue/10010。冻结后重新核对的依赖计数为：入站 FK 0、View 依赖 0；
+旧表仍为 64 行（56 live、8 soft-deleted），整表 checksum 为
+`92e9ccab1c78eb13feb1239ac748df7d`。V81 的实际 SQL 预览如下；本阶段只清数据，不删表：
 
 ```sql
 LOCK TABLE public.shipment_records IN ACCESS EXCLUSIVE MODE;
 
 DO $sh01$
 DECLARE
-    legacy_rows BIGINT;
+    total_rows BIGINT;
+    live_rows BIGINT;
+    soft_deleted_rows BIGINT;
+    snapshot_checksum TEXT;
+    deleted_rows BIGINT;
 BEGIN
-    SELECT COUNT(*) INTO legacy_rows FROM public.shipment_records;
-    IF legacy_rows <> 64 THEN
-        RAISE EXCEPTION 'SH-01 blocked: shipment snapshot changed after review (rows=%)', legacy_rows;
+    SELECT COUNT(*),
+           COUNT(*) FILTER (WHERE deleted_at IS NULL),
+           COUNT(*) FILTER (WHERE deleted_at IS NOT NULL),
+           MD5(STRING_AGG(ROW_TO_JSON(sr)::TEXT, E'\n' ORDER BY id))
+      INTO total_rows, live_rows, soft_deleted_rows, snapshot_checksum
+      FROM public.shipment_records sr;
+
+    IF total_rows <> 64 OR live_rows <> 56 OR soft_deleted_rows <> 8 THEN
+        RAISE EXCEPTION 'SH-01 blocked: frozen shipment row counts changed';
     END IF;
-    IF EXISTS (
-        SELECT 1 FROM public.shipment_records
-         WHERE factory_id NOT IN ('DEMO_FACTORY', 'DEMO_FACTORY2', 'F001', 'F006', 'FOOD_3101_048')
-    ) THEN
-        RAISE EXCEPTION 'SH-01 blocked: unexpected factory data exists';
+
+    IF snapshot_checksum IS DISTINCT FROM '92e9ccab1c78eb13feb1239ac748df7d' THEN
+        RAISE EXCEPTION 'SH-01 blocked: frozen shipment checksum changed';
+    END IF;
+
+    -- 实际 migration 还会逐工厂核对 27/1/27/8/1 分布，并再次确认入站 FK 为 0。
+    DELETE FROM public.shipment_records;
+    GET DIAGNOSTICS deleted_rows = ROW_COUNT;
+    IF deleted_rows <> 64 THEN
+        RAISE EXCEPTION 'SH-01 blocked: expected to delete 64 rows';
     END IF;
 END
 $sh01$;
-
-DELETE FROM public.shipment_records;
 ```
 
-该预览只清用户已授权的 64 条测试数据，不删除表；Phase A 切流后必须重新查询行数、工厂分布和
-ID 校验摘要，并据最新冻结快照生成独立 migration。如果快照变化，迁移必须失败，不能扩大范围。
+该预览只清用户已授权的 64 条测试数据，不删除表；完整可执行 SQL 位于
+`V20261028_81__clear_frozen_legacy_shipment_test_data.sql`。如果行数、live/soft-delete 分布、任意行内容、
+工厂分布或入站 FK 发生变化，迁移会整体回滚，不能扩大范围。
 回滚仅能从部署前导出恢复测试数据；业务真值仍为 sales delivery，禁止恢复旧 mutation。
 
 ### 4.4 验收与回滚
