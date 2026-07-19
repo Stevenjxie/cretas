@@ -339,3 +339,19 @@
 - 生产发布：exact-main Python 已发布到 8083，118 个迁移状态正常，健康 200；真实 `restaurant_period_comparison_read.v1` 返回 PARTIAL、9 facts、7359 bytes，原 `asyncio.timeout_at` 故障不再出现。
 - 状态边界：后续 ACTIVE 冒烟已通过两个 Read Tool，另在 `EVIDENCE_RECORDED` 数据库约束处暴露独立的 V03 PL/pgSQL 歧义，转入 `D10E`；生产门禁已恢复 OFF。
 - Scope 锁：已释放。
+
+### `D10E-RESTAURANT-EVIDENCE-CONSTRAINT-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`) + 两个独立只读终审子代理
+- Base SHA：`c030f82063cf56e43103c79edf0076c17472c075`
+- 实现 commit：`052adc82e7cfc32751bfd41a72700b3bd06ab4b5`
+- PR：[#1514](https://github.com/Stevenjxie/cretas/pull/1514)
+- `main` squash merge commit：`40bb587ca3408d11309b7fcaeee0150b33258102`
+- 根因与修复：SmartBI V03 的 `smart_bi_agent_event_payload_is_safe(kind TEXT, value JSONB)` 在 `jsonb_each(...).value` 首次执行时触发 PL/pgSQL 参数/列名歧义，catch-all 因而把合法 `EVIDENCE_RECORDED` 判为 false。V06 保留原函数签名与全部 fail-closed 规则，仅用 `$2` 局部别名并限定 `dimension_row.key/value`；同时为 runtime unexpected failure 增加不记录异常文本、堆栈或业务 payload 的脱敏日志。
+- 本地与终审验收：Agent runtime/eval 目标集 `152 passed, 19 skipped`；独立 PostgreSQL 17 真实约束回归 `1 passed`，临时容器已删除；迁移与运行时终审均无 P0-P3 发现；`git diff --check` 与 release preflight 通过。
+- 生产 SmartBI：从 clean exact-main 执行 `deploy-smartbi-python.sh --env prod --migration-target V20261028_06`，仅应用 V06 并重启 8083；tracker checksum 与仓库 SHA-256 均为 `fe496381a4b5ea22ed1849a468ec09fb2c1bf2b60be2b430ac6fa53281c498e0`。生产函数正例返回 true，空维度值反例返回 false，Python 健康 200。
+- 生产 Java：将 `RESTAURANT_AGENT_RUNTIME_MODE` 从 OFF 原子切换为 ACTIVE，备份 `/www/wwwroot/cretas/.env.prod.pre-restaurant-agent-active.20260719_222759` 权限为 600；从 clean exact-main 复用 backend tree `6ca229cb5c36661e6694f771a385d54f8fa136e9` 的可信 JAR，SHA-256 `3d65d2e340fac79af805ef1121571a70e90d69d0eae737a01baf4e8876d9514f`、MD5 `e9c38808f86497063f63bc77852d023a`，蓝绿由 green/10020 切换到 blue/10010，5/5 稳定观察通过；结构化报告 `C:\Users\Steve\.cache\cretas\deploy-reports\backend-1784471288-26488.json`。
+- 真实只读 smoke：owner `dr_qhj_owner` 创建 run `1966e5a4-a016-4b48-a5ec-b2360cc63b44`，两项 Read Tool 均完成，事件链含 2 个 `EVIDENCE_RECORDED` 并最终 `RUN_COMPLETED`；因数据证据不足，终态按业务语义为 `PARTIAL`，`failureCode=NONE`，不是运行时故障。同租户跨用户 replay 返回 404，owner replay 返回 200，终态 cancel 返回 `ALREADY_TERMINAL`。
+- 零 ERP 写入：`purchase_orders / sales_orders / work_process_tasks / production_reports` 前后均为 `256 / 490 / 55 / 5993`；仅隔离 Agent ledger 从 `2 runs / 16 events` 增至 `3 runs / 28 events`。发布后 Java/Python 关键错误计数均为 0，网关、Java 10010、Python 8083 健康；测试 10011/8084 未触碰。
+- Scope 锁：已释放。

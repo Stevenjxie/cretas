@@ -6,11 +6,11 @@
 
 ## 在飞任务
 
-- `D10E` — `in-progress` — Owner: Codex coordinator — Base SHA: `c030f82063cf56e43103c79edf0076c17472c075` — 修复 SmartBI V03 `EVIDENCE_RECORDED` 数据库约束函数中 `value` 参数与 `jsonb_each(...).value` 的 PL/pgSQL 歧义；新增 forward-only V06、真实 PostgreSQL payload 回归测试与 unexpected runtime 脱敏可观测性，随后执行生产迁移和 OFF/ACTIVE 重验。
+- 无。
 
 ## Scope 锁地图
 
-- `D10E`：`backend/python/smartbi/database/migrations/V20261028_06__fix_agent_evidence_payload_constraint.sql`、`backend/python/smartbi/agent/runtime/bounded_runtime.py`、`backend/python/tests/agent_runtime/` 下目标回归测试、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-19-active-history.md`；验收命令：目标 pytest、真实 PostgreSQL migration/payload gate、生产 V06 迁移、OFF/ACTIVE smoke 与零 ERP 写入核验。
+- 无。
 
 ## 阻塞项
 
