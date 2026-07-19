@@ -1,14 +1,25 @@
 # Cretas Agent Architecture V2 — 餐饮重分析、工厂轻 Agent
 
-**状态**：Proposed / 终审裁决稿；Phase 0A 安全代码已合并并完成生产部署验证，V2 Runtime 尚未实现
+**状态**：Accepted / 主体代码已落地；D9/D10 生产迁移与发布待执行
 
 **日期**：2026-07-18
 
-**仓库真值**：`origin/main` @ `b65337f0c4e8273a1bac68bb5aec1780ab13a040`
+**仓库真值**：`origin/main` @ `a9bbd8c4fd547907bf26bcdc00723820c1adb4cc`
 
-**独立审查基线**：Fable 5 handoff @ `18854c456`。本文已在当前 `origin/main` 重新核验；该基线之后，PR [#1432](https://github.com/Stevenjxie/cretas/pull/1432) 已合并 Phase 0A 安全代码，其他 V2 阶段仍是待实现方案。
+**独立审查基线**：Fable 5 handoff @ `18854c456`。此后的架构裁决和实现均以仓库真值、专项测试、真实 PostgreSQL 门禁与独立终审为准。
 
 **当前产品范围**：餐饮端的数据分析与 AI Chat 是重点；工厂端暂时只做岗位型小 Agent，不建设通用数据分析 Agent Runtime。
+
+### 0.1 2026-07-19 实施状态
+
+本文后续章节保留 2026-07-18 形成裁决时的代码诊断和 ADR 推导；本节是当前实施真值，出现冲突时以本节和 `origin/main` 为准。
+
+- **Gateway**：Phase 0A 安全止血、descriptor/policy、原子 confirmation、幂等账本和统一 Gateway 底座均已落地；D10A 又将 `product_create`、`bom_adjust` 两个固定写入口迁入 Gateway。直调旁路已从早期基线降到 11 个文件/12 个表达式，但并未宣称全部 601 个 Tool 已完成治理迁移。
+- **餐饮 Runtime**：已有 10 个只读 Evidence Tool、有界 `Plan → Act → Observe → Replan`、持久化 Run/Event、最多两轮 evidence gap/replan/clarification、跨进程显式取消、checkpoint/resume/replay、32 KiB Evidence drill-down 和只读 `ActionProposal`。D10B 由 PR #1491 合并；Python `V20261028_03` 与 `V20261028_05` 尚未在生产执行。
+- **AgentOps**：不可变 Eval Set、离线 Experiment、comparison、分页 detail、管理员 Run Trace、实现制品 SHA 和 response-loss-safe 幂等已由 PR #1495 合并；Python `V20261028_04` 尚未在生产执行。
+- **工厂端**：operator、warehouse、quality、manager 四个 config-only Capability Pack 已由 PR #1490 合并，只暴露 `READ + LOW + REVIEW_REQUIRED` 元数据，不接 Tool 执行、动态规划或通用 Runtime；无数据库迁移。
+- **身份收口**：D9 Python session identity 代码已由 PR #1473 合并；Python `V20261028_02` 尚未在生产执行。
+- **发布边界**：上述 D9/D10 代码均已进入 `origin/main`，但不能据此推断生产已更新。生产构建、DDL、服务切换、Web/RN 发布必须以发布前现场真值、兼容窗口、回滚点和用户确认作为独立 high-stakes 门禁。
 
 ---
 
@@ -18,7 +29,7 @@ Cretas 现有架构不是“完全做错了”，但 **Tool + Skill 被迫承担
 
 > 多层意图识别 + 601 个具备 literal `getToolName()` 的具体 Spring Component 工具（descriptor 审计口径）+ 若干一次性 Tool/Skill 执行路径 + 两套餐饮固定分析管线。
 
-它还不是一个具备 `Plan → Act → Observe → Replan`、持久化 Run/Event、逐步预算和可评测工具轨迹的 Agent Runtime。比缺少 Runtime 更紧急的问题，是 Tool 执行存在多个治理旁路，写确认和权限依赖命名推断及分散守卫。
+在本裁决形成时，它还不是一个具备 `Plan → Act → Observe → Replan`、持久化 Run/Event、逐步预算和可评测工具轨迹的 Agent Runtime。此后餐饮只读 Runtime 和 AgentOps 已按上述边界落地；剩余重点是生产兼容发布、继续缩小 Gateway 旁路和用回归评测证明线上收益。
 
 V2 不引入 Coze Studio、AgentScope、ADK、Qwen-Agent 或 Arkitect 作为运行依赖，也不推倒现有数百个 Tool。采用以下边界：
 
@@ -30,7 +41,7 @@ V2 不引入 Coze Studio、AgentScope、ADK、Qwen-Agent 或 Arkitect 作为运�
 6. **Router**：简单问题继续走 Fast Path，只有需要跨证据推理的问题进入 Agent Runtime。
 7. **AgentOps**：Run/Event Trace、评测集、实验和成本指标先于低代码画布。
 
-第一步不是“让 Agent 更聪明”，而是关闭公开写入口并让 preview fail-closed；这部分安全代码已由 PR #1432 合并。当前最先要做的是用 `ToolExecutionGateway` 和静态门禁继续收口 Tool 治理旁路。
+第一步不是“让 Agent 更聪明”，而是关闭公开写入口并让 preview fail-closed；这部分安全代码已由 PR #1432 合并。Gateway 底座、餐饮 Runtime、AgentOps 和工厂 Capability Pack 随后按独立切片落地，当前不应再把“代码尚未实现”与“尚未生产发布”混为一谈。
 
 ---
 
@@ -446,11 +457,12 @@ PR #1432 完成上述安全代码切片后，已于 2026-07-18 完成生产 Java
 
 ## 12. 下一步唯一推荐动作
 
-Phase 0A 安全代码已经由 PR #1432 合并并完成生产验证。下一步只做 **Phase 0B 安全收口与 `ToolExecutionGateway`**，顺序固定为：
+代码侧 D10A/B/C/D 已完成并合并。下一步是一个独立的 **生产兼容迁移与发布任务**，不是继续堆功能：
 
-1. Principal/cache 隔离与 `forceExecute + confirmed` 止血；
-2. 冻结 Gateway Command/Principal/Result、descriptor、policy decision，并对 14 文件/18 物理行/19 表达式建立静态门禁；
-3. 完成参数绑定、单次原子消费的 confirmation 闭环；
-4. 按 ToolDispatch → DynamicSelection → Skill/ToolRouter/LLM fallback → 其余入口分批迁移。
+1. 从 clean exact `origin/main` 核验 Java/Python/Web/RN 变更树、当前生产 commit/制品、Java active slot、Python 进程和已登记 migration；
+2. 先形成 D9 `V02`、D10 `V03/V04/V05` 的 expand/contract runbook，明确暂停路由、旧进程 drain、锁超时、失败恢复和不可逆 DDL 边界；
+3. 只在用户确认后执行唯一一次可信 release build，并按兼容顺序完成 migration、Java/Python、Web/RN 和路由恢复；
+4. 用服务健康、schema/RLS/constraint、跨租户隔离、checkpoint/replay/cancel、Gateway confirmation 和 AgentOps 幂等目标断言验证；
+5. 任一步失败均停在兼容状态或回切旧槽，不以“服务能启动”替代业务与数据隔离验收。
 
-本阶段不要同时增加餐饮 Runtime、run/event 表、低代码画布或完整 AgentOps；先证明统一执行边界可兼容现有业务，并为后续迁移提供可自动验收的安全底座。
+生产构建、DDL、上传、重启、蓝绿切流或 OTA 前，必须先向用户报告 exact main SHA、现场版本、迁移顺序、兼容窗口、回滚点和验收清单并取得确认。
