@@ -188,7 +188,7 @@ export class AIService {
    */
   async chatWithConversation(
     userInput: string,
-    options?: { sessionId?: string; userId?: number }
+    options?: { sessionId?: string }
   ): Promise<AIResult<IntentExecuteResponse>> {
     const startTime = Date.now();
 
@@ -204,7 +204,7 @@ export class AIService {
         response = await aiApiClient.replyConversation(options.sessionId, userInput);
       } else {
         // 启动新对话
-        response = await aiApiClient.startConversation(userInput, options?.userId);
+        response = await aiApiClient.startConversation(userInput);
       }
 
       this.log('chatWithConversation response', response);

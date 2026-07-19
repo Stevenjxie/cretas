@@ -476,7 +476,8 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
             // 继续已有对话
             log.info("Continuing active conversation: session={}", activeSession.get().getSessionId());
             ConversationService.ConversationResponse response =
-                    conversationService.continueConversation(activeSession.get().getSessionId(), userInput);
+                    conversationService.continueConversation(
+                            factoryId, userId, activeSession.get().getSessionId(), userInput);
 
             return convertToEnhancedResult(response, singleResult);
         } else {

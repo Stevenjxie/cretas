@@ -163,10 +163,12 @@ public class ConversationServiceImpl implements ConversationService {
 
     @Override
     @Transactional
-    public ConversationResponse continueConversation(String sessionId, String userReply) {
+    public ConversationResponse continueConversation(
+            String factoryId, Long userId, String sessionId, String userReply) {
         log.info("继续多轮对话: session={}, reply={}", sessionId, truncate(userReply, 50));
 
-        Optional<ConversationSession> optSession = sessionRepository.findById(sessionId);
+        Optional<ConversationSession> optSession =
+                sessionRepository.findBySessionIdAndFactoryIdAndUserId(sessionId, factoryId, userId);
         if (optSession.isEmpty()) {
             log.warn("会话不存在: {}", sessionId);
             return ConversationResponse.builder()
@@ -350,10 +352,11 @@ public class ConversationServiceImpl implements ConversationService {
 
     @Override
     @Transactional
-    public boolean endConversation(String sessionId, String intentCode) {
+    public boolean endConversation(String factoryId, Long userId, String sessionId, String intentCode) {
         log.info("结束对话: session={}, intent={}", sessionId, intentCode);
 
-        Optional<ConversationSession> optSession = sessionRepository.findById(sessionId);
+        Optional<ConversationSession> optSession =
+                sessionRepository.findBySessionIdAndFactoryIdAndUserId(sessionId, factoryId, userId);
         if (optSession.isEmpty()) {
             return false;
         }
@@ -370,10 +373,11 @@ public class ConversationServiceImpl implements ConversationService {
 
     @Override
     @Transactional
-    public boolean cancelConversation(String sessionId) {
+    public boolean cancelConversation(String factoryId, Long userId, String sessionId) {
         log.info("取消对话: session={}", sessionId);
 
-        Optional<ConversationSession> optSession = sessionRepository.findById(sessionId);
+        Optional<ConversationSession> optSession =
+                sessionRepository.findBySessionIdAndFactoryIdAndUserId(sessionId, factoryId, userId);
         if (optSession.isEmpty()) {
             return false;
         }
@@ -393,8 +397,8 @@ public class ConversationServiceImpl implements ConversationService {
 
     @Override
     @Transactional(readOnly = true)
-    public Optional<ConversationSession> getSession(String sessionId) {
-        return sessionRepository.findById(sessionId);
+    public Optional<ConversationSession> getSession(String factoryId, Long userId, String sessionId) {
+        return sessionRepository.findBySessionIdAndFactoryIdAndUserId(sessionId, factoryId, userId);
     }
 
     @Override
@@ -411,13 +415,13 @@ public class ConversationServiceImpl implements ConversationService {
 
     @Override
     @Transactional(readOnly = true)
-    public ConversationStatistics getStatistics(int days) {
+    public ConversationStatistics getStatistics(String factoryId, int days) {
         LocalDateTime since = LocalDateTime.now().minusDays(days);
 
         ConversationStatistics stats = new ConversationStatistics();
 
         // 获取成功率数据
-        List<Object[]> rateData = sessionRepository.getSuccessRate(since);
+        List<Object[]> rateData = sessionRepository.getSuccessRate(factoryId, since);
         if (!rateData.isEmpty()) {
             Object[] row = rateData.get(0);
             long completed = ((Number) row[0]).longValue();
@@ -435,11 +439,11 @@ public class ConversationServiceImpl implements ConversationService {
         }
 
         // 获取平均轮次
-        Double avgRounds = sessionRepository.getAverageRoundsForCompleted(since);
+        Double avgRounds = sessionRepository.getAverageRoundsForCompleted(factoryId, since);
         stats.setAverageRounds(avgRounds != null ? avgRounds : 0);
 
         // 活跃会话数
-        stats.setActiveSessions(sessionRepository.findByStatus(SessionStatus.ACTIVE).size());
+        stats.setActiveSessions(sessionRepository.countActiveByFactoryId(factoryId));
 
         return stats;
     }

@@ -141,8 +141,7 @@ describe('aiApiClient', () => {
 
   describe('startConversation', () => {
     it('should POST to /conversation/start', async () => {
-      // startConversation(userInput, userId?) uses conversation base path
-      mock.onPost(`${CONV_BASE}/start`).reply(200, {
+      mock.onPost(`${CONV_BASE}/start`, { userInput: 'Hello' }).reply(200, {
         success: true,
         data: { status: 'ACTIVE', message: 'Hi there', sessionId: 'conv-001' },
       });
