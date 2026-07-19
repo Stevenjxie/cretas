@@ -285,3 +285,16 @@
 - 验收：Catalog、source/inventory drift 与 approved metadata 共 13 项通过；独立只读终审严格复核 total、legacy、actionType、riskLevel 与 governanceStatus 差分，无 P0-P3。
 - 状态边界：发布阻塞测试已修复并合并；尚未重做最新 exact-main 可信 Java 发布构建，生产未因本任务发生变化。
 - Scope 锁：已释放。
+
+### `CR-HTTP-STATUS-MAP-01-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- Base SHA：`8b9cd5365b01feedbee4ee4f93d6114aabe031f1`
+- PR：[#1507](https://github.com/Stevenjxie/cretas/pull/1507)
+- `main` squash merge commit：`c75ba0b1de53e1faae27537119b06d961813a736`
+- 生产证据：Restaurant Agent OFF 路径正确抛出 `503 RESTAURANT_AGENT_RUNTIME_OFF`，但既有 RuntimeException 兜底将 HTTP 状态误改为 500；现场 Agent run 表仍为 0。
+- 范围：为受控 `ResponseStatusException` 增加精确全局映射，保留动态 HTTP status/headers 和 client-safe reason，统一返回 `ApiResponse`，不序列化 cause/stack；保留 BusinessException 精确 handler 与普通 RuntimeException 脱敏兜底。
+- 验收：全局 handler 专用 MockMvc 4/4，连同 Restaurant/AgentOps Controller/Service 共 32 项通过；独立只读终审无 P0/P1/P2。
+- 状态边界：修复已合并；生产仍运行上一份 exact-main JAR 且 runtime 为 OFF，尚未重建/部署包含本修复的新制品。
+- Scope 锁：已释放。

@@ -6,16 +6,11 @@
 
 ## 在飞任务
 
-- `CR-HTTP-STATUS-MAP-01-20260719` — `review`
-  - Base SHA: `8b9cd5365b01feedbee4ee4f93d6114aabe031f1`
-  - Owner: Codex `/root`
-  - Scope: `backend/java/cretas-api/src/main/java/com/cretas/aims/exception/GlobalExceptionHandler.java`、`backend/java/cretas-api/src/test/java/com/cretas/aims/exception/GlobalExceptionHandlerResponseStatusTest.java`、`docs/dispatch/**`
-  - 验收命令: `mvn -q "-Dtest=GlobalExceptionHandlerResponseStatusTest,RestaurantAgentRunControllerTest,RestaurantAgentRunServiceTest,AgentOpsControllerTest,AgentOpsServiceTest" test`
-  - 下一动作: 32 项目标测试与独立只读终审通过；提交 PR，重建可信制品并重新验证 Restaurant Agent OFF 合同。
+- 无。
 
 ## Scope 锁地图
 
-- `CR-HTTP-STATUS-MAP-01-20260719` 锁定上述全局异常映射、专用测试与 dispatch 台账；不修改 Agent runtime、迁移、ERP Controller 或生产配置。
+- 无。
 
 ## 阻塞项
 
