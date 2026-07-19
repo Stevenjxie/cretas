@@ -26,16 +26,20 @@ import jakarta.annotation.PostConstruct;
 import okio.BufferedSink;
 import okio.Okio;
 import okio.Source;
+import java.io.FilterInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Pattern;
 
 /**
  * Python SmartBI 服务客户端
@@ -61,6 +65,7 @@ public class PythonSmartBIClient {
     private final ObjectMapper objectMapper;
     private final PythonServiceCircuitBreaker circuitBreaker;
     private final String internalSecret;
+    private final HttpUrl serviceBaseUrl;
 
     /**
      * F4 fault-injection hook (optional). Bean exists only under
@@ -75,6 +80,24 @@ public class PythonSmartBIClient {
     private final AtomicLong lastHealthCheck = new AtomicLong(0);
 
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
+    private static final long MAX_JSON_RESPONSE_BYTES = 256L * 1024L * 1024L;
+    private static final long MAX_ERROR_INSPECTION_BYTES = 8L * 1024L;
+    private static final Set<String> ALLOWED_FINANCIAL_DASHBOARD_ENDPOINTS = Set.of(
+            "/generate", "/export-ppt");
+    private static final Pattern INTERNAL_IDENTITY =
+            Pattern.compile("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$");
+    private static final Set<String> ALLOWED_RESTAURANT_SECTIONS = Set.of(
+            "cost_rigidity", "diagnostics", "expense_breakdown", "benchmark_alerts",
+            "channel_margin", "dining_heatmap", "long_tail_sku", "menu_normalization",
+            "temporal_comparison", "review_analysis", "member_rfm", "stored_value",
+            "multi_store_comparison", "calibration_history", "store_pnl_one_pager",
+            "bom_layer_status", "shrinkage_analysis", "department_pnl", "menu_engineering",
+            "monthly_ppt_export", "cross_chain_benchmark", "restaurant_forecast",
+            "bom_variance", "labor_productivity", "sales_plan_tracking", "seat_occupancy",
+            "combo_split", "return_anomaly", "review_competitive", "smart_reorder",
+            "daily_reconciliation", "procurement_forecast", "shift_analysis", "piecework_calc",
+            "performance_eval", "store_kpi_dashboard", "value_summary",
+            "advanced_traffic_persona", "boss_decision_brief");
 
     public PythonSmartBIClient(PythonSmartBIConfig config,
                                @Qualifier("aiServiceHttpClient") OkHttpClient baseHttpClient,
@@ -85,6 +108,7 @@ public class PythonSmartBIClient {
         this.objectMapper = objectMapper;
         this.circuitBreaker = circuitBreaker;
         this.internalSecret = internalSecret;
+        this.serviceBaseUrl = requireServiceBaseUrl(config.getUrl());
 
         // 为 Python SmartBI 服务创建专用的 HttpClient
         // 添加拦截器：所有 Java→Python 内部调用自动带 X-Internal-Secret 头
@@ -92,8 +116,12 @@ public class PythonSmartBIClient {
                 .connectTimeout(config.getConnectTimeout(), TimeUnit.MILLISECONDS)
                 .readTimeout(config.getTimeout(), TimeUnit.MILLISECONDS)
                 .writeTimeout(config.getTimeout(), TimeUnit.MILLISECONDS)
+                .followRedirects(false)
+                .followSslRedirects(false)
+                .retryOnConnectionFailure(false)
                 .addInterceptor(chain -> {
                     Request original = chain.request();
+                    requireSameServiceAuthority(original.url());
                     // F4 fault-injection (dev-fault-injection profile only):
                     // throw IOException to simulate Python unreachable.
                     // Field-read inside lambda is fine because @Autowired field
@@ -107,7 +135,8 @@ public class PythonSmartBIClient {
                         throw new IOException("INTERNAL_API_SECRET not configured; cannot call Python SmartBI");
                     }
                     Request.Builder builder = original.newBuilder()
-                            .header("X-Internal-Secret", this.internalSecret);
+                            .header("X-Internal-Secret", this.internalSecret)
+                            .header("Accept", "application/json");
                     // Propagate correlation ID from MDC to outgoing Python calls
                     String correlationId = MDC.get("correlationId");
                     if (correlationId != null) {
@@ -331,15 +360,15 @@ public class PythonSmartBIClient {
 
         Map<String, Object> asyncResp;
         try (Response resp = httpClient.newCall(asyncReq).execute()) {
-            String body = resp.body() != null ? resp.body().string() : "{}";
             if (resp.code() != 202 && resp.code() != 200) {
-                log.error("[async-parse] POST failed: HTTP {} body={}", resp.code(), body.substring(0, Math.min(200, body.length())));
+                inspectErrorBodyBounded(resp.body());
+                log.error("[async-parse] POST failed: HTTP {}", resp.code());
                 ExcelParseResponse err = new ExcelParseResponse();
                 err.setSuccess(false);
                 err.setErrorMessage("异步上传失败: HTTP " + resp.code());
                 return err;
             }
-            asyncResp = objectMapper.readValue(body, Map.class);
+            asyncResp = readJsonBody(resp.body(), Map.class);
         }
 
         Object uploadIdRaw = asyncResp.get("uploadId");
@@ -365,12 +394,12 @@ public class PythonSmartBIClient {
                     .build();
             Map<String, Object> status;
             try (Response resp = httpClient.newCall(pollReq).execute()) {
-                String body = resp.body() != null ? resp.body().string() : "{}";
                 if (!resp.isSuccessful()) {
+                    inspectErrorBodyBounded(resp.body());
                     log.warn("[async-parse] poll attempt {} HTTP {}", attempt, resp.code());
                     continue;
                 }
-                status = objectMapper.readValue(body, Map.class);
+                status = readJsonBody(resp.body(), Map.class);
             }
 
             String st = (String) status.get("status");
@@ -539,9 +568,10 @@ public class PythonSmartBIClient {
         }
 
         int retries = 0;
+        int maxRetries = isSafelyRetryable(request) ? config.getMaxRetries() : 0;
         IOException lastException = null;
 
-        while (retries <= config.getMaxRetries()) {
+        while (retries <= maxRetries) {
             try {
                 T result = execute(request, responseType);
                 circuitBreaker.recordSuccess();
@@ -549,8 +579,8 @@ public class PythonSmartBIClient {
             } catch (IOException e) {
                 lastException = e;
                 retries++;
-                if (retries <= config.getMaxRetries()) {
-                    log.warn("Python SmartBI 请求失败，重试 {}/{}: {}", retries, config.getMaxRetries(), e.getMessage());
+                if (retries <= maxRetries) {
+                    log.warn("Python SmartBI 安全读取失败，重试 {}/{}", retries, maxRetries);
                     try {
                         Thread.sleep(1000 * retries); // 指数退避
                     } catch (InterruptedException ie) {
@@ -579,9 +609,10 @@ public class PythonSmartBIClient {
         }
 
         int retries = 0;
+        int maxRetries = isSafelyRetryable(request) ? config.getMaxRetries() : 0;
         IOException lastException = null;
 
-        while (retries <= config.getMaxRetries()) {
+        while (retries <= maxRetries) {
             try {
                 T result = execute(request, typeReference);
                 circuitBreaker.recordSuccess();
@@ -589,8 +620,8 @@ public class PythonSmartBIClient {
             } catch (IOException e) {
                 lastException = e;
                 retries++;
-                if (retries <= config.getMaxRetries()) {
-                    log.warn("Python SmartBI 请求失败，重试 {}/{}: {}", retries, config.getMaxRetries(), e.getMessage());
+                if (retries <= maxRetries) {
+                    log.warn("Python SmartBI 安全读取失败，重试 {}/{}", retries, maxRetries);
                     try {
                         Thread.sleep(1000 * retries);
                     } catch (InterruptedException ie) {
@@ -613,17 +644,22 @@ public class PythonSmartBIClient {
     private <T> T execute(Request request, Class<T> responseType) throws IOException {
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
-                String errorBody = response.body() != null ? response.body().string() : "No response body";
-                throw new IOException("Python SmartBI 请求失败: status=" + response.code() + ", body=" + errorBody);
+                inspectErrorBodyBounded(response.body());
+                throw sanitizedUpstreamFailure(response.code());
             }
 
-            // Stream-parse instead of buffering full body to String (see TypeReference
-            // variant below for the OOM history).
-            if (response.body() == null) {
+            ResponseBody responseBody = response.body();
+            if (responseBody == null) {
                 return objectMapper.readValue("{}", responseType);
             }
-            try (java.io.InputStream in = response.body().byteStream()) {
-                return objectMapper.readValue(in, responseType);
+            requireJsonResponse(responseBody);
+            BoundedInputStream in = boundedStream(responseBody, MAX_JSON_RESPONSE_BYTES);
+            try {
+                T result = objectMapper.readValue(in, responseType);
+                in.drainToEnd();
+                return result;
+            } finally {
+                in.closeDelegate();
             }
         }
     }
@@ -634,9 +670,8 @@ public class PythonSmartBIClient {
     private <T> T execute(Request request, TypeReference<T> typeReference) throws IOException {
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
-                // Error body is expected to be small; buffer to String is fine here.
-                String errorBody = response.body() != null ? response.body().string() : "No response body";
-                throw new IOException("Python SmartBI 请求失败: status=" + response.code() + ", body=" + errorBody);
+                inspectErrorBodyBounded(response.body());
+                throw sanitizedUpstreamFailure(response.code());
             }
 
             // Stream-parse the JSON body instead of buffering to String first.
@@ -645,11 +680,171 @@ public class PythonSmartBIClient {
             // graph on top — peak heap ≈ 3× response size, which blew -Xmx1280m with
             // "Self-suppression not permitted" / OutOfMemoryError. byteStream() keeps
             // only the active parse frame in memory.
-            if (response.body() == null) {
+            ResponseBody responseBody = response.body();
+            if (responseBody == null) {
                 return objectMapper.readValue("{}", typeReference);
             }
-            try (java.io.InputStream in = response.body().byteStream()) {
-                return objectMapper.readValue(in, typeReference);
+            requireJsonResponse(responseBody);
+            BoundedInputStream in = boundedStream(responseBody, MAX_JSON_RESPONSE_BYTES);
+            try {
+                T result = objectMapper.readValue(in, typeReference);
+                in.drainToEnd();
+                return result;
+            } finally {
+                in.closeDelegate();
+            }
+        }
+    }
+
+    private static boolean isSafelyRetryable(Request request) {
+        return "GET".equals(request.method()) || "HEAD".equals(request.method());
+    }
+
+    private static HttpUrl requireServiceBaseUrl(String configuredUrl) {
+        final HttpUrl parsed;
+        try {
+            parsed = HttpUrl.get(Objects.requireNonNull(configuredUrl, "Python SmartBI URL"));
+        } catch (RuntimeException invalid) {
+            throw new IllegalArgumentException("Python SmartBI URL is invalid", invalid);
+        }
+        if (!("http".equals(parsed.scheme()) || "https".equals(parsed.scheme()))
+                || !parsed.username().isEmpty()
+                || !parsed.password().isEmpty()
+                || !"/".equals(parsed.encodedPath())
+                || parsed.query() != null
+                || parsed.fragment() != null) {
+            throw new IllegalArgumentException(
+                    "Python SmartBI URL must contain only scheme, host and port");
+        }
+        return parsed;
+    }
+
+    private void requireSameServiceAuthority(HttpUrl requestUrl) throws IOException {
+        if (!serviceBaseUrl.scheme().equals(requestUrl.scheme())
+                || !serviceBaseUrl.host().equals(requestUrl.host())
+                || serviceBaseUrl.port() != requestUrl.port()
+                || !requestUrl.username().isEmpty()
+                || !requestUrl.password().isEmpty()) {
+            throw new IOException("Python SmartBI destination is not permitted");
+        }
+    }
+
+    private static void requireJsonResponse(ResponseBody responseBody) throws IOException {
+        MediaType contentType = responseBody.contentType();
+        if (contentType == null
+                || !"application".equalsIgnoreCase(contentType.type())
+                || !("json".equalsIgnoreCase(contentType.subtype())
+                    || contentType.subtype().toLowerCase(java.util.Locale.ROOT).endsWith("+json"))) {
+            throw new IOException("Python SmartBI returned an unsupported response");
+        }
+    }
+
+    private static BoundedInputStream boundedStream(ResponseBody responseBody, long maxBytes)
+            throws IOException {
+        long contentLength = responseBody.contentLength();
+        if (contentLength > maxBytes) {
+            throw new IOException("Python SmartBI response exceeded the configured limit");
+        }
+        return new BoundedInputStream(responseBody.byteStream(), maxBytes);
+    }
+
+    private static void inspectErrorBodyBounded(ResponseBody responseBody) {
+        if (responseBody == null || responseBody.contentLength() > MAX_ERROR_INSPECTION_BYTES) {
+            return;
+        }
+        try {
+            responseBody.source().request(MAX_ERROR_INSPECTION_BYTES + 1L);
+        } catch (IOException ignored) {
+            // Error payloads are deliberately never surfaced or logged.
+        }
+    }
+
+    private static IOException sanitizedUpstreamFailure(int statusCode) {
+        return new IOException("Python SmartBI request failed with HTTP " + statusCode);
+    }
+
+    private <T> T readJsonBody(ResponseBody responseBody, Class<T> responseType)
+            throws IOException {
+        if (responseBody == null) {
+            return objectMapper.readValue("{}", responseType);
+        }
+        requireJsonResponse(responseBody);
+        BoundedInputStream in = boundedStream(responseBody, MAX_JSON_RESPONSE_BYTES);
+        try {
+            T result = objectMapper.readValue(in, responseType);
+            in.drainToEnd();
+            return result;
+        } finally {
+            in.closeDelegate();
+        }
+    }
+
+    static final class BoundedInputStream extends FilterInputStream {
+        private long remaining;
+        private boolean delegateClosed;
+
+        BoundedInputStream(InputStream delegate, long maxBytes) {
+            super(delegate);
+            this.remaining = maxBytes;
+        }
+
+        /**
+         * Jackson closes its input source after parsing. Keep the delegate open until
+         * {@link #drainToEnd()} verifies that a chunked response has not hidden bytes
+         * beyond the configured boundary.
+         */
+        @Override
+        public void close() {
+            // The owning response parser closes the delegate explicitly in finally.
+        }
+
+        void closeDelegate() throws IOException {
+            if (!delegateClosed) {
+                delegateClosed = true;
+                super.close();
+            }
+        }
+
+        @Override
+        public int read() throws IOException {
+            if (remaining == 0) {
+                int overflow = super.read();
+                if (overflow == -1) {
+                    return -1;
+                }
+                throw new IOException("Python SmartBI response exceeded the configured limit");
+            }
+            int value = super.read();
+            if (value != -1) {
+                remaining--;
+            }
+            return value;
+        }
+
+        @Override
+        public int read(byte[] target, int offset, int length) throws IOException {
+            if (length == 0) {
+                return 0;
+            }
+            if (remaining == 0) {
+                int overflow = super.read();
+                if (overflow == -1) {
+                    return -1;
+                }
+                throw new IOException("Python SmartBI response exceeded the configured limit");
+            }
+            int boundedLength = (int) Math.min((long) length, remaining);
+            int count = super.read(target, offset, boundedLength);
+            if (count > 0) {
+                remaining -= count;
+            }
+            return count;
+        }
+
+        void drainToEnd() throws IOException {
+            byte[] discard = new byte[8192];
+            while (read(discard, 0, discard.length) != -1) {
+                // Consume within the hard bound so chunked responses cannot hide overflow.
             }
         }
     }
@@ -773,9 +968,17 @@ public class PythonSmartBIClient {
             log.debug("Python SmartBI 服务未启用，跳过 section 调用 {}/{}", domain, sectionName);
             return Optional.empty();
         }
+        if (!"restaurant".equals(domain)
+                || !ALLOWED_RESTAURANT_SECTIONS.contains(sectionName)) {
+            log.warn("拒绝未登记的 Python section 调用");
+            return Optional.empty();
+        }
 
         try {
-            String url = config.getFullUrl("/api/smartbi/" + domain + "/sections/" + sectionName);
+            HttpUrl url = serviceBaseUrl.newBuilder()
+                    .addPathSegments("api/smartbi/restaurant/sections")
+                    .addPathSegment(sectionName)
+                    .build();
             log.debug("调用 Python section: {} / {}", domain, sectionName);
 
             Request httpRequest = new Request.Builder()
@@ -1499,20 +1702,23 @@ public class PythonSmartBIClient {
             return null;
         }
 
-        String baseUrl = config.getFullUrl("/api/smartbi/restaurant/" + factoryId + "/health-check-report");
-        HttpUrl parsed = HttpUrl.parse(baseUrl);
-        if (parsed == null) {
-            log.error("餐饮经营体检报告 URL 解析失败: {}", baseUrl);
+        final String trustedFactoryId;
+        try {
+            trustedFactoryId = requireFactoryId(factoryId);
+        } catch (IOException invalidFactory) {
             return null;
         }
-        HttpUrl.Builder urlBuilder = parsed.newBuilder();
+        HttpUrl.Builder urlBuilder = serviceBaseUrl.newBuilder()
+                .addPathSegments("api/smartbi/restaurant")
+                .addPathSegment(trustedFactoryId)
+                .addPathSegment("health-check-report");
         if (month != null && !month.isBlank()) {
             urlBuilder.addQueryParameter("month", month);
         }
 
         Request httpRequest = new Request.Builder()
                 .url(urlBuilder.build())
-                .header("X-Factory-Id", factoryId)
+                .header("X-Factory-Id", trustedFactoryId)
                 .get()
                 .build();
         log.info("调用 Python 餐饮经营体检报告: factoryId={}, month={}", factoryId, month);
@@ -1723,9 +1929,11 @@ public class PythonSmartBIClient {
 
             try (Response response = httpClient.newCall(request).execute()) {
                 if (response.isSuccessful() && response.body() != null) {
-                    String body = response.body().string();
-                    // 检查 model_loaded 字段
-                    return body.contains("\"model_loaded\":true") || body.contains("\"model_loaded\": true");
+                    Map<?, ?> body = readJsonBody(response.body(), Map.class);
+                    return Boolean.TRUE.equals(body.get("model_loaded"));
+                }
+                if (!response.isSuccessful()) {
+                    inspectErrorBodyBounded(response.body());
                 }
             }
         } catch (IOException e) {
@@ -2058,18 +2266,33 @@ public class PythonSmartBIClient {
      * @return 响应结果 Map，服务不可用时返回 null
      */
     @SuppressWarnings("unchecked")
-    public Map<String, Object> callFinancialDashboard(String endpoint, Map<String, Object> request) {
+    public Map<String, Object> callFinancialDashboard(
+            String endpoint, Map<String, Object> request, String factoryId) {
         if (!config.isEnabled()) {
             log.debug("Python SmartBI 服务未启用，跳过财务看板调用");
             return null;
         }
+        if (!ALLOWED_FINANCIAL_DASHBOARD_ENDPOINTS.contains(endpoint)) {
+            log.warn("拒绝未登记的财务看板端点");
+            return null;
+        }
 
-        String url = config.getFullUrl("/api/smartbi/financial-dashboard" + endpoint);
+        final String trustedFactoryId;
+        try {
+            trustedFactoryId = requireFactoryId(factoryId);
+        } catch (IOException invalidFactory) {
+            return null;
+        }
+        HttpUrl url = serviceBaseUrl.newBuilder()
+                .addPathSegments("api/smartbi/financial-dashboard")
+                .addPathSegment(endpoint.substring(1))
+                .build();
         log.info("调用财务看板: url={}, keys={}", url, request.keySet());
 
         try {
             Request httpRequest = new Request.Builder()
                     .url(url)
+                    .header("X-Factory-Id", trustedFactoryId)
                     .post(RequestBody.create(JSON, objectMapper.writeValueAsString(request)))
                     .build();
             return executeWithRetry(httpRequest, Map.class);
@@ -2101,13 +2324,29 @@ public class PythonSmartBIClient {
             return null;
         }
 
-        String url = config.getFullUrl(fullEndpoint);
+        final String trustedFactoryId;
+        try {
+            trustedFactoryId = requireFactoryId(factoryId);
+        } catch (IOException invalidFactory) {
+            return null;
+        }
+        String expectedEndpoint = "/api/smartbi/" + trustedFactoryId
+                + "/revenue-report/prepare";
+        if (!expectedEndpoint.equals(fullEndpoint)) {
+            log.warn("拒绝未登记的收入管理报表端点");
+            return null;
+        }
+        HttpUrl url = serviceBaseUrl.newBuilder()
+                .addPathSegments("api/smartbi")
+                .addPathSegment(trustedFactoryId)
+                .addPathSegments("revenue-report/prepare")
+                .build();
         log.info("调用收入管理报表: url={}, keys={}", url, request.keySet());
 
         try {
             Request.Builder requestBuilder = new Request.Builder()
                     .url(url)
-                    .header("X-Factory-Id", requireFactoryId(factoryId))
+                    .header("X-Factory-Id", trustedFactoryId)
                     .post(RequestBody.create(JSON, objectMapper.writeValueAsString(request)));
             if (userRole != null && !userRole.isBlank()) {
                 requestBuilder.header("X-User-Role", userRole);
@@ -2121,7 +2360,7 @@ public class PythonSmartBIClient {
     }
 
     private static String requireFactoryId(String factoryId) throws IOException {
-        if (factoryId == null || factoryId.isBlank()) {
+        if (factoryId == null || !INTERNAL_IDENTITY.matcher(factoryId).matches()) {
             throw new IOException("factoryId is required for Python SmartBI request");
         }
         return factoryId;
@@ -2176,9 +2415,9 @@ public class PythonSmartBIClient {
                     .build();
             try (Response response = httpClient.newCall(httpRequest).execute()) {
                 if (!response.isSuccessful()) {
-                    log.warn("γ-1c reclassify HTTP {} for upload {}: {}",
-                            response.code(), uploadId,
-                            response.body() != null ? response.body().string() : "<empty>");
+                    inspectErrorBodyBounded(response.body());
+                    log.warn("γ-1c reclassify HTTP {} for upload {}",
+                            response.code(), uploadId);
                     return false;
                 }
                 log.info("γ-1c reclassify OK for upload {} (factory={})", uploadId, factoryId);
@@ -2222,9 +2461,9 @@ public class PythonSmartBIClient {
                     .build();
             try (Response response = httpClient.newCall(httpRequest).execute()) {
                 if (!response.isSuccessful()) {
-                    log.warn("γ-2c precompute-cache HTTP {} for upload {}: {}",
-                            response.code(), uploadId,
-                            response.body() != null ? response.body().string() : "<empty>");
+                    inspectErrorBodyBounded(response.body());
+                    log.warn("γ-2c precompute-cache HTTP {} for upload {}",
+                            response.code(), uploadId);
                     return false;
                 }
                 log.info("γ-2c precompute-cache OK for upload {} (factory={})",

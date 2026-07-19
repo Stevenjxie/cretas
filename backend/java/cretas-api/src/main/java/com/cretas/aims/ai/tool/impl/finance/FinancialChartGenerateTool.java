@@ -104,7 +104,8 @@ public class FinancialChartGenerateTool extends AbstractBusinessTool {
         request.put("end_month", endMonth);
         request.put("factory_id", factoryId);
 
-        Map<String, Object> result = pythonClient.callFinancialDashboard("/generate", request);
+        Map<String, Object> result = pythonClient.callFinancialDashboard(
+                "/generate", request, factoryId);
 
         if (result == null) {
             return buildSimpleResult("财务图表生成失败：Python服务不可用", null);
