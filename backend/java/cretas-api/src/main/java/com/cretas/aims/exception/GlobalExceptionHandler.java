@@ -9,6 +9,7 @@ import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.dao.QueryTimeoutException;
 import org.hibernate.PropertyValueException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BindException;
 import org.springframework.validation.FieldError;
@@ -23,6 +24,7 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
+import org.springframework.web.server.ResponseStatusException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.persistence.OptimisticLockException;
 import jakarta.persistence.PersistenceException;
@@ -1263,6 +1265,23 @@ public class GlobalExceptionHandler {
     }
 
     // ==================== 兜底异常处理 ====================
+
+    /**
+     * Preserve the explicit HTTP contract of controlled Spring status errors.
+     * Without this handler, {@link ResponseStatusException} is captured by the
+     * RuntimeException fallback below and incorrectly converted to a sanitized
+     * HTTP 500 response.
+     */
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<ApiResponse<?>> handleResponseStatusException(ResponseStatusException e) {
+        int status = e.getStatusCode().value();
+        String reason = e.getReason();
+        String message = reason == null || reason.isBlank() ? "请求处理失败" : reason;
+        log.warn("受控 HTTP 异常: status={}, reason={}", status, message);
+        return ResponseEntity.status(e.getStatusCode())
+                .headers(e.getHeaders())
+                .body(ApiResponse.error(status, message));
+    }
 
     /**
      * 处理其他 RuntimeException - 需脱敏
