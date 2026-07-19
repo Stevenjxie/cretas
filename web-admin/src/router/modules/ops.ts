@@ -18,6 +18,14 @@ const restaurantAnalyticsRoles = [
   'restaurant_manager',
 ];
 
+const agentOpsAdminRoles = [
+  'factory_super_admin',
+  'platform_admin',
+  'permission_admin',
+  'restaurant_manager',
+  'restaurant_owner',
+];
+
 const opsRoutes: RouteRecordRaw[] = [
   {
     path: 'ops/operations-analysis',
@@ -31,6 +39,41 @@ const opsRoutes: RouteRecordRaw[] = [
       roles: restaurantAnalyticsRoles,
       hideForFactoryTypes: ['FACTORY'], // restaurant/demo tenants only
     },
+  },
+  {
+    path: 'ops/agent-ops',
+    name: 'AgentOps',
+    component: () => import('@/views/platform/agent-ops/AgentOpsShell.vue'),
+    redirect: '/ops/agent-ops/eval-sets',
+    meta: {
+      requiresAuth: true,
+      title: 'Agent 运行与评测',
+      icon: 'DataAnalysis',
+      module: 'analytics',
+      roles: agentOpsAdminRoles,
+      hideForFactoryTypes: ['FACTORY'],
+      businessDomain: 'RESTAURANT',
+    },
+    children: [
+      {
+        path: 'eval-sets',
+        name: 'AgentOpsEvalSets',
+        component: () => import('@/views/platform/agent-ops/EvalSetsView.vue'),
+        meta: { requiresAuth: true, title: 'Eval Sets', module: 'analytics', roles: agentOpsAdminRoles, hidden: true },
+      },
+      {
+        path: 'experiments',
+        name: 'AgentOpsExperiments',
+        component: () => import('@/views/platform/agent-ops/ExperimentsView.vue'),
+        meta: { requiresAuth: true, title: 'Experiments', module: 'analytics', roles: agentOpsAdminRoles, hidden: true },
+      },
+      {
+        path: 'run-trace',
+        name: 'AgentOpsRunTrace',
+        component: () => import('@/views/platform/agent-ops/RunTraceView.vue'),
+        meta: { requiresAuth: true, title: 'Run Trace', module: 'analytics', roles: agentOpsAdminRoles, hidden: true },
+      },
+    ],
   },
 ];
 
