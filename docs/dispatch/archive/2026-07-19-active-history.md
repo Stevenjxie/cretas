@@ -233,3 +233,16 @@
 - 验收：Shell 语法、迁移 CLI/transport 回归、既有 Python 依赖缓存回归和 `git diff --check` 通过；disposable PostgreSQL runner 38/38 通过；独立终审无 P0-P3 发现。
 - 状态边界：安全门禁代码已合并；未构建、未同步生产应用代码、未执行生产 migration、未重启服务、未切换 Java 槽位、未发布 Web/RN/OTA。
 - Scope 锁：已释放。
+
+### `CRETAS-REDUNDANCY-AI01-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- Base SHA：`054fec7626ec538055f6b7698c448ab1afd3301e`
+- PR：[#1499](https://github.com/Stevenjxie/cretas/pull/1499)
+- `main` squash merge commit：`5ebd72594eb0e7c64c0d27c2d06962dc20f2618c`
+- 范围：删除 `ai_intent_configs` 的影子 `entity.smartbi.AiIntentConfig` 与 `repository.smartbi.AiIntentConfigRepository`；旧 SmartBI intents GET 改读 canonical `AIIntentConfigRepository`，旧 POST/PUT/DELETE/reload 显式返回 HTTP 410；保留历史 SmartBI 已填充列在 canonical Entity 的映射。
+- 验收：本地真实 JPA Context、Controller、Service 共 16 项通过；canonical `/ai-intents`、`SemanticRouterStartupTest`、`SemanticRouterTwinMarginTest` 通过；手动 full-audit CI 的 `JPA repository query startup gate` 通过。
+- CI 基线噪声：同一 full-audit 的 Python flake8、Vue build 与 RN tests 在未改动 scope 失败（Vue/RN 为 exit 134）；与本 PR 的 Java AI intent diff 无文件交集，单独治理。
+- 状态边界：代码已合并；无 Flyway/数据库结构变更，无生产数据删除，未部署生产。
+- Scope 锁：已释放。
