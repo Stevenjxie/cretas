@@ -24,6 +24,11 @@ export type RestaurantAgentEventType =
   | 'STEP_STARTED'
   | 'STEP_COMPLETED'
   | 'STEP_FAILED'
+  | 'EVIDENCE_RECORDED'
+  | 'EVIDENCE_GAP'
+  | 'REPLAN'
+  | 'CLARIFICATION'
+  | 'CANCEL_REQUESTED'
   | 'BUDGET_EXCEEDED'
   | 'RUN_CANCELLED'
   | 'RUN_COMPLETED'
@@ -65,13 +70,62 @@ export interface RestaurantAgentClaim {
   factId: string;
 }
 
+export interface RestaurantAgentEvidenceReference {
+  evidenceId: string;
+  factId: string;
+}
+
+export interface RestaurantAgentActionProposal {
+  proposalCode: string;
+  actionCode: string;
+  rationaleCodes: string[];
+  evidenceReferences: RestaurantAgentEvidenceReference[];
+  executionMode: 'READ_ONLY_PROPOSAL';
+}
+
+export interface RestaurantAgentEvidenceFactReference {
+  factId: string;
+  metric: string;
+  value: string;
+  unit: string | null;
+  dimensions: Record<string, string>;
+  provenanceRefs: string[];
+}
+
+export interface RestaurantAgentEvidenceProvenance {
+  refId: string;
+  sourceType: string;
+  asset: string;
+  queryId: string;
+  sourceVersion: string;
+}
+
+export interface RestaurantAgentEvidenceDrilldown {
+  evidenceId: string;
+  evidenceStatus: string;
+  factReferences: RestaurantAgentEvidenceFactReference[];
+  provenance: RestaurantAgentEvidenceProvenance[];
+  warningCodes: string[];
+  drilldownTruncated: boolean;
+  toolName: string | null;
+}
+
 export interface RestaurantAgentTerminalOutcome {
   status: 'COMPLETE' | 'PARTIAL' | 'NOT_COMPUTABLE' | 'FAILED' | 'CANCELLED' | 'BUDGET_EXCEEDED';
   routeCode: typeof RESTAURANT_AGENT_RUN_ROUTE;
   claims: RestaurantAgentClaim[];
   blockers: string[];
   observations: string[];
+  actionProposals: RestaurantAgentActionProposal[];
   attributionSupported: boolean;
+}
+
+export interface RestaurantAgentRunCancelResponse {
+  schemaVersion: '1.0';
+  runId: string;
+  result: 'REQUESTED' | 'ALREADY_REQUESTED' | 'ALREADY_TERMINAL';
+  state: RestaurantAgentRunState;
+  nextEventSequence: number;
 }
 
 export interface RestaurantAgentRunReplayV1 {
@@ -87,7 +141,8 @@ export interface RestaurantAgentRunReplayV1 {
 
 const EVENT_TYPES: ReadonlySet<string> = new Set<RestaurantAgentEventType>([
   'RUN_STARTED', 'ROUTE_SELECTED', 'PLAN_CREATED', 'STEP_STARTED', 'STEP_COMPLETED',
-  'STEP_FAILED', 'BUDGET_EXCEEDED', 'RUN_CANCELLED', 'RUN_COMPLETED', 'RUN_FAILED',
+  'STEP_FAILED', 'EVIDENCE_RECORDED', 'EVIDENCE_GAP', 'REPLAN', 'CLARIFICATION',
+  'CANCEL_REQUESTED', 'BUDGET_EXCEEDED', 'RUN_CANCELLED', 'RUN_COMPLETED', 'RUN_FAILED',
 ]);
 const RUN_STATES: ReadonlySet<string> = new Set<RestaurantAgentRunState>([
   'RUNNING', 'COMPLETED', 'PARTIAL', 'FAILED', 'CANCELLED', 'BUDGET_EXCEEDED',
@@ -115,7 +170,9 @@ export function parseRestaurantAgentEventV1(value: unknown): RestaurantAgentEven
   ) {
     throw new Error('RESTAURANT_AGENT_EVENT_CONTRACT_INVALID');
   }
-  return value as unknown as RestaurantAgentEventV1;
+  const event = value as unknown as RestaurantAgentEventV1;
+  if (event.eventType === 'EVIDENCE_RECORDED') parseRestaurantAgentEvidenceDrilldown(event);
+  return event;
 }
 
 function parseClaim(value: unknown): RestaurantAgentClaim {
@@ -134,6 +191,27 @@ function parseStringArray(value: unknown): string[] {
   return value;
 }
 
+function parseEvidenceReference(value: unknown): RestaurantAgentEvidenceReference {
+  if (!isRecord(value) || typeof value.evidenceId !== 'string' || typeof value.factId !== 'string') {
+    throw new Error('RESTAURANT_AGENT_OUTCOME_CONTRACT_INVALID');
+  }
+  return { evidenceId: value.evidenceId, factId: value.factId };
+}
+
+function parseActionProposal(value: unknown): RestaurantAgentActionProposal {
+  if (
+    !isRecord(value) || typeof value.proposalCode !== 'string' || typeof value.actionCode !== 'string'
+    || value.executionMode !== 'READ_ONLY_PROPOSAL' || !Array.isArray(value.evidenceReferences)
+  ) throw new Error('RESTAURANT_AGENT_OUTCOME_CONTRACT_INVALID');
+  return {
+    proposalCode: value.proposalCode,
+    actionCode: value.actionCode,
+    rationaleCodes: parseStringArray(value.rationaleCodes),
+    evidenceReferences: value.evidenceReferences.map(parseEvidenceReference),
+    executionMode: 'READ_ONLY_PROPOSAL',
+  };
+}
+
 function parseTerminalOutcome(value: unknown): RestaurantAgentTerminalOutcome | null {
   if (value === null) return null;
   if (
@@ -148,8 +226,69 @@ function parseTerminalOutcome(value: unknown): RestaurantAgentTerminalOutcome | 
     claims: value.claims.map(parseClaim),
     blockers: parseStringArray(value.blockers),
     observations: parseStringArray(value.observations),
+    actionProposals: Array.isArray(value.actionProposals)
+      ? value.actionProposals.map(parseActionProposal)
+      : [],
     attributionSupported: value.attributionSupported,
   };
+}
+
+export function parseRestaurantAgentEvidenceDrilldown(
+  event: RestaurantAgentEventV1,
+): RestaurantAgentEvidenceDrilldown | null {
+  if (event.eventType !== 'EVIDENCE_RECORDED') return null;
+  const value = event.payload;
+  if (
+    typeof value.evidenceId !== 'string' || typeof value.evidenceStatus !== 'string'
+    || !Array.isArray(value.factReferences) || !Array.isArray(value.provenance)
+    || !Array.isArray(value.warningCodes) || typeof value.drilldownTruncated !== 'boolean'
+  ) throw new Error('RESTAURANT_AGENT_EVIDENCE_CONTRACT_INVALID');
+  const factReferences = value.factReferences.map((item): RestaurantAgentEvidenceFactReference => {
+    if (
+      !isRecord(item) || typeof item.factId !== 'string' || typeof item.metric !== 'string'
+      || typeof item.value !== 'string' || !isNullableString(item.unit)
+      || !isRecord(item.dimensions) || !Array.isArray(item.provenanceRefs)
+      || !item.provenanceRefs.every((reference) => typeof reference === 'string')
+      || !Object.values(item.dimensions).every((dimension) => typeof dimension === 'string')
+    ) throw new Error('RESTAURANT_AGENT_EVIDENCE_CONTRACT_INVALID');
+    return {
+      factId: item.factId,
+      metric: item.metric,
+      value: item.value,
+      unit: item.unit,
+      dimensions: item.dimensions as Record<string, string>,
+      provenanceRefs: item.provenanceRefs as string[],
+    };
+  });
+  const provenance = value.provenance.map((item): RestaurantAgentEvidenceProvenance => {
+    if (
+      !isRecord(item) || typeof item.refId !== 'string' || typeof item.sourceType !== 'string'
+      || typeof item.asset !== 'string' || typeof item.queryId !== 'string'
+      || typeof item.sourceVersion !== 'string'
+    ) throw new Error('RESTAURANT_AGENT_EVIDENCE_CONTRACT_INVALID');
+    return item as unknown as RestaurantAgentEvidenceProvenance;
+  });
+  return {
+    evidenceId: value.evidenceId,
+    evidenceStatus: value.evidenceStatus,
+    factReferences,
+    provenance,
+    warningCodes: parseStringArray(value.warningCodes),
+    drilldownTruncated: value.drilldownTruncated,
+    toolName: event.toolName,
+  };
+}
+
+export function parseRestaurantAgentRunCancelResponse(
+  value: unknown,
+): RestaurantAgentRunCancelResponse {
+  if (
+    !isRecord(value) || value.schemaVersion !== '1.0' || !isRestaurantAgentRunId(value.runId)
+    || !['REQUESTED', 'ALREADY_REQUESTED', 'ALREADY_TERMINAL'].includes(String(value.result))
+    || typeof value.state !== 'string' || !RUN_STATES.has(value.state)
+    || !Number.isSafeInteger(value.nextEventSequence) || (value.nextEventSequence as number) < 0
+  ) throw new Error('RESTAURANT_AGENT_CANCEL_CONTRACT_INVALID');
+  return value as unknown as RestaurantAgentRunCancelResponse;
 }
 
 export function parseRestaurantAgentRunReplayV1(value: unknown): RestaurantAgentRunReplayV1 {

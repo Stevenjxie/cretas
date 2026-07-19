@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from dataclasses import replace
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
-from smartbi.agent.runtime.bounded_runtime import BoundedRestaurantRuntime
+from smartbi.agent.runtime.bounded_runtime import BoundedRestaurantRuntime, _bounded_drilldown
 from smartbi.agent.runtime.contracts import (
     Coverage,
     DataClassification,
@@ -27,6 +30,7 @@ from smartbi.agent.runtime.gateway import ReadToolTimeout
 from smartbi.agent.runtime.run_contracts import (
     AgentEventType,
     GrossMarginDeclineRequest,
+    OutcomeStatus,
     RouteCode,
     RunState,
     RuntimeBudgets,
@@ -143,6 +147,15 @@ def route_evidence(*, error_first=False, dish_margin=False):
     return period, store, dish
 
 
+def persisted_fact_references(events) -> set[tuple[str, str]]:
+    return {
+        (event.payload["evidenceId"], fact["factId"])
+        for event in events
+        if event.event_type is AgentEventType.EVIDENCE_RECORDED
+        for fact in event.payload["factReferences"]
+    }
+
+
 class FakeGateway:
     def __init__(self, envelopes, *, exception=None):
         self.envelopes = {item.tool_name: item for item in envelopes}
@@ -196,6 +209,17 @@ class StepStartedClockStore(InMemoryRunStore):
         return result
 
 
+class PeerCancelledStore(InMemoryRunStore):
+    """Simulate another reconciler winning the final cancellation CAS."""
+
+    async def compare_and_set_terminal(self, *args, **kwargs):
+        if kwargs.get("terminal_state") is RunState.CANCELLED:
+            changed = await super().compare_and_set_terminal(*args, **kwargs)
+            assert changed
+            return False
+        return await super().compare_and_set_terminal(*args, **kwargs)
+
+
 @pytest.mark.asyncio
 async def test_runtime_executes_period_store_dish_and_refuses_unsupported_attribution():
     store = InMemoryRunStore()
@@ -230,6 +254,255 @@ async def test_runtime_executes_period_store_dish_and_refuses_unsupported_attrib
     assert [event.sequence for event in events] == list(range(1, len(events) + 1))
     assert events[-1].event_type is AgentEventType.RUN_COMPLETED
     assert "dimensions" not in str(events[-1].payload)
+    assert AgentEventType.EVIDENCE_GAP in [event.event_type for event in events]
+    assert AgentEventType.REPLAN in [event.event_type for event in events]
+    assert AgentEventType.CLARIFICATION in [event.event_type for event in events]
+    drilldowns = [
+        event for event in events
+        if event.event_type is AgentEventType.EVIDENCE_RECORDED
+    ]
+    assert drilldowns
+    assert all(item.payload["factReferences"] for item in drilldowns)
+    assert all(
+        proposal.execution_mode == "READ_ONLY_PROPOSAL"
+        for proposal in result.outcome.action_proposals
+    )
+    assert len(result.outcome.action_proposals) == 2
+    durable_refs = persisted_fact_references(events)
+    assert {
+        (claim.evidence_id, claim.fact_id) for claim in result.outcome.claims
+    }.issubset(durable_refs)
+    assert all(
+        (reference.evidence_id, reference.fact_id) in durable_refs
+        for proposal in result.outcome.action_proposals
+        for reference in proposal.evidence_references
+    )
+
+
+@pytest.mark.asyncio
+async def test_evidence_drilldown_is_bounded_and_marks_deterministic_truncation():
+    period, store_evidence, dish = route_evidence()
+    oversized_decline = fact(
+        "gross_marginMomChange",
+        "-4.5",
+        fact_id="period-margin",
+        dimensions={f"dimension{i:02d}": "\u503c" * 400 for i in range(30)},
+    )
+    period = EvidenceEnvelope(
+        **{
+            **period.__dict__,
+            "facts": (oversized_decline, period.facts[1]),
+        }
+    )
+    store = InMemoryRunStore()
+    runtime = BoundedRestaurantRuntime(
+        FakeGateway((period, store_evidence, dish)),
+        store,
+        id_factory=lambda: "45454545-4545-4545-8545-454545454545",
+    )
+
+    result = await runtime.execute(
+        GrossMarginDeclineRequest("2026-01-01", "2026-01-31"), context()
+    )
+
+    assert result.state is RunState.PARTIAL
+    recorded = [
+        event for event in await store.events_for(result.run_id, context())
+        if event.event_type is AgentEventType.EVIDENCE_RECORDED
+        and event.payload["evidenceId"] == "period-ev"
+    ][0]
+    assert recorded.payload["drilldownTruncated"] is True
+    assert "DRILLDOWN_REFERENCE_TRUNCATED" in recorded.payload["warningCodes"]
+    assert len(recorded.payload["factReferences"][0]["dimensions"]) == 10
+    assert len(str(recorded.payload).encode("utf-8")) < 32_768
+    durable_refs = persisted_fact_references(
+        await store.events_for(result.run_id, context())
+    )
+    assert all(
+        (claim.evidence_id, claim.fact_id) in durable_refs
+        for claim in result.outcome.claims
+    )
+
+
+def test_drilldown_byte_budget_keeps_only_resolvable_provenance_refs():
+    facts = []
+    provenance = []
+    for fact_index in range(12):
+        refs = []
+        for ref_index in range(10):
+            ref_id = f"ref-{fact_index}-{ref_index}"
+            refs.append(ref_id)
+            provenance.append(SimpleNamespace(
+                ref_id=ref_id,
+                source_type="POSTGRES",
+                asset="\u6765\u6e90" * 128,
+                query_id=f"query-{fact_index}-{ref_index}",
+                source_version="v" * 128,
+            ))
+        facts.append(SimpleNamespace(
+            fact_id=f"fact-{fact_index}",
+            metric="dishGrossMargin",
+            value="12.34",
+            unit="PERCENT",
+            dimensions={f"dimension-{i}-" + "k" * 110: "值" * 256 for i in range(10)},
+            provenance_refs=tuple(refs),
+        ))
+
+    bounded_facts, bounded_provenance, truncated = _bounded_drilldown(
+        facts,
+        provenance,
+        evidence_id="dish-evidence",
+        evidence_status="OK",
+        warning_codes=[],
+    )
+    provenance_ids = {item["refId"] for item in bounded_provenance}
+    assert truncated is True
+    assert all(
+        set(fact["provenanceRefs"]).issubset(provenance_ids)
+        for fact in bounded_facts
+    )
+    payload = {
+        "evidenceId": "dish-evidence",
+        "evidenceStatus": "OK",
+        "factReferences": bounded_facts,
+        "provenance": bounded_provenance,
+        "warningCodes": ["DRILLDOWN_REFERENCE_TRUNCATED"],
+        "drilldownTruncated": True,
+    }
+    assert len(json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")) <= 32_768
+
+
+@pytest.mark.asyncio
+async def test_runtime_byte_truncation_prunes_terminal_claims_and_proposal_refs():
+    period, store_evidence, dish = route_evidence(dish_margin=True)
+    large_facts = []
+    provenance = []
+    fact_specs = (
+        ("dish-margin-large", "dishGrossMargin", "22.5"),
+        ("dish-revenue-large-1", "revenue", "600"),
+        ("dish-revenue-large-2", "revenue", "500"),
+        ("dish-revenue-large-3", "revenue", "400"),
+    )
+    for fact_index, (fact_id, metric, value) in enumerate(fact_specs):
+        reference_ids = tuple(
+            f"dish-large-{fact_index}-{reference_index}"
+            for reference_index in range(10)
+        )
+        large_facts.append(replace(
+            fact(metric, value, fact_id=fact_id),
+            dimensions={
+                f"dimension-{dimension_index:02d}": "\u6570\u636e" * 128
+                for dimension_index in range(10)
+            },
+            provenance_refs=reference_ids,
+        ))
+        provenance.extend(
+            ProvenanceReference(
+                reference_id,
+                "POSTGRES",
+                "\u6765\u6e90" * 128,
+                f"query{fact_index}{reference_id[-1]}" + "q" * 110,
+                f"version{fact_index}{reference_id[-1]}" + "v" * 108,
+            )
+            for reference_id in reference_ids
+        )
+    dish = replace(dish, facts=tuple(large_facts), provenance=tuple(provenance))
+    store = InMemoryRunStore()
+    runtime = BoundedRestaurantRuntime(
+        FakeGateway((period, store_evidence, dish)),
+        store,
+        id_factory=lambda: "48484848-4848-4848-8848-484848484848",
+    )
+
+    result = await runtime.execute(
+        GrossMarginDeclineRequest("2026-01-01", "2026-01-31"), context()
+    )
+    events = await store.events_for(result.run_id, context())
+    durable_refs = persisted_fact_references(events)
+    evidence_events = [
+        event for event in events
+        if event.event_type is AgentEventType.EVIDENCE_RECORDED
+    ]
+
+    assert len(result.outcome.claims) < 7
+    assert "PERSISTED_EVIDENCE_REFERENCE_TRUNCATED" in result.outcome.blockers
+    assert {
+        (claim.evidence_id, claim.fact_id) for claim in result.outcome.claims
+    }.issubset(durable_refs)
+    assert all(
+        (reference.evidence_id, reference.fact_id) in durable_refs
+        for proposal in result.outcome.action_proposals
+        for reference in proposal.evidence_references
+    )
+    assert all(
+        len(json.dumps(
+            event.payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")) <= 32_768
+        for event in evidence_events
+    )
+
+
+@pytest.mark.asyncio
+async def test_missing_provenance_prunes_terminal_references_and_degrades_safely():
+    evidence = tuple(
+        EvidenceEnvelope(**{**item.__dict__, "provenance": ()})
+        for item in route_evidence()
+    )
+    store = InMemoryRunStore()
+    runtime = BoundedRestaurantRuntime(
+        FakeGateway(evidence),
+        store,
+        id_factory=lambda: "47474747-4747-4747-8747-474747474747",
+    )
+
+    result = await runtime.execute(
+        GrossMarginDeclineRequest("2026-01-01", "2026-01-31"), context()
+    )
+    events = await store.events_for(result.run_id, context())
+
+    assert result.state is RunState.PARTIAL
+    assert result.outcome.status is OutcomeStatus.NOT_COMPUTABLE
+    assert result.outcome.claims == ()
+    assert "PERSISTED_EVIDENCE_REFERENCE_TRUNCATED" in result.outcome.blockers
+    assert persisted_fact_references(events) == set()
+    assert all(
+        proposal.evidence_references == ()
+        for proposal in result.outcome.action_proposals
+    )
+
+
+@pytest.mark.asyncio
+async def test_durable_cancel_request_from_another_caller_wins_after_inflight_read():
+    store = PeerCancelledStore()
+    gateway = BlockingGateway(route_evidence())
+    run_id = "46464646-4646-4646-8646-464646464646"
+    runtime = BoundedRestaurantRuntime(gateway, store)
+    task = asyncio.create_task(
+        runtime.execute(
+            GrossMarginDeclineRequest("2026-01-01", "2026-01-31"),
+            context(),
+            run_id=run_id,
+        )
+    )
+    await gateway.started.wait()
+    cancellation = await store.request_cancel(run_id, context())
+    assert cancellation.result.value == "REQUESTED"
+    gateway.release.set()
+
+    result = await task
+
+    assert result.state is RunState.CANCELLED
+    events = await store.events_for(run_id, context())
+    assert [event.event_type for event in events if event.event_type in {
+        AgentEventType.CANCEL_REQUESTED,
+        AgentEventType.RUN_CANCELLED,
+        AgentEventType.RUN_COMPLETED,
+    }] == [AgentEventType.CANCEL_REQUESTED, AgentEventType.RUN_CANCELLED]
 
 
 @pytest.mark.asyncio

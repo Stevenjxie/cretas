@@ -5,12 +5,14 @@ import { apiClient } from './apiClient';
 import type {
   GrossMarginDeclineRunRequest,
   RestaurantAgentEventV1,
+  RestaurantAgentRunCancelResponse,
   RestaurantAgentRunReplayV1,
 } from '../../types/restaurantAgentRun';
 import {
   RESTAURANT_AGENT_RUN_ROUTE,
   isRestaurantAgentRunId,
   parseRestaurantAgentEventV1,
+  parseRestaurantAgentRunCancelResponse,
   parseRestaurantAgentRunReplayV1,
 } from '../../types/restaurantAgentRun';
 
@@ -28,6 +30,51 @@ export interface RestaurantAgentRunCompletion {
 export interface RestaurantAgentRunSubscription {
   completion: Promise<RestaurantAgentRunCompletion>;
   stopReceiving: () => void;
+}
+
+export interface RestaurantAgentRunCheckpoint {
+  runId: string;
+  lastSequence: number;
+}
+
+function checkpointKey(factoryId: string, ownerUserId: string): string {
+  const ownerId = ownerUserId.trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(ownerId)) {
+    throw new Error('RESTAURANT_AGENT_CHECKPOINT_OWNER_INVALID');
+  }
+  return `restaurant_agent_run_checkpoint:${validateFactoryId(factoryId)}:${ownerId}`;
+}
+
+export async function saveRestaurantAgentRunCheckpoint(
+  factoryId: string,
+  ownerUserId: string,
+  checkpoint: RestaurantAgentRunCheckpoint,
+): Promise<void> {
+  if (!isRestaurantAgentRunId(checkpoint.runId) || !Number.isSafeInteger(checkpoint.lastSequence)
+    || checkpoint.lastSequence < 0) throw new Error('RESTAURANT_AGENT_CHECKPOINT_INVALID');
+  await StorageService.setObject(checkpointKey(factoryId, ownerUserId), checkpoint);
+}
+
+export async function loadRestaurantAgentRunCheckpoint(
+  factoryId: string,
+  ownerUserId: string,
+): Promise<RestaurantAgentRunCheckpoint | null> {
+  const key = checkpointKey(factoryId, ownerUserId);
+  const value = await StorageService.getObject<RestaurantAgentRunCheckpoint>(key);
+  if (value === null) return null;
+  if (!isRestaurantAgentRunId(value.runId) || !Number.isSafeInteger(value.lastSequence)
+    || value.lastSequence < 0) {
+    await StorageService.removeItem(key);
+    return null;
+  }
+  return value;
+}
+
+export async function clearRestaurantAgentRunCheckpoint(
+  factoryId: string,
+  ownerUserId: string,
+): Promise<void> {
+  await StorageService.removeItem(checkpointKey(factoryId, ownerUserId));
 }
 
 export function isRestaurantAgentRunActive(): boolean {
@@ -169,4 +216,17 @@ export async function replayGrossMarginDeclineRun(
     `${runBasePath(trustedFactoryId)}/${encodeURIComponent(runId)}/events?afterSequence=${afterSequence}`,
   );
   return parseRestaurantAgentRunReplayV1(response);
+}
+
+export async function cancelGrossMarginDeclineRun(
+  factoryId: string,
+  runId: string,
+): Promise<RestaurantAgentRunCancelResponse> {
+  requireActiveMode();
+  const trustedFactoryId = validateFactoryId(factoryId);
+  if (!isRestaurantAgentRunId(runId)) throw new Error('RUN_ID_REQUIRED');
+  const response = await apiClient.post<RestaurantAgentRunCancelResponse>(
+    `${runBasePath(trustedFactoryId)}/${encodeURIComponent(runId)}/cancel`,
+  );
+  return parseRestaurantAgentRunCancelResponse(response);
 }

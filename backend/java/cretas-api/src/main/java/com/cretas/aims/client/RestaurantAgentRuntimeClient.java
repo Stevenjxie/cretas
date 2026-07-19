@@ -1,6 +1,7 @@
 package com.cretas.aims.client;
 
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentEventV1;
+import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunCancelResponse;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunReplayResponse;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunStartRequest;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -33,8 +34,11 @@ public class RestaurantAgentRuntimeClient {
             "RUNNING", "COMPLETED", "PARTIAL", "FAILED", "CANCELLED", "BUDGET_EXCEEDED");
     private static final Set<String> EVENT_TYPES = Set.of(
             "RUN_STARTED", "ROUTE_SELECTED", "PLAN_CREATED", "STEP_STARTED",
-            "STEP_COMPLETED", "STEP_FAILED", "BUDGET_EXCEEDED", "RUN_CANCELLED",
-            "RUN_COMPLETED", "RUN_FAILED");
+            "STEP_COMPLETED", "STEP_FAILED", "EVIDENCE_RECORDED", "EVIDENCE_GAP",
+            "REPLAN", "CLARIFICATION", "CANCEL_REQUESTED", "BUDGET_EXCEEDED",
+            "RUN_CANCELLED", "RUN_COMPLETED", "RUN_FAILED");
+    private static final Set<String> CANCEL_RESULTS = Set.of(
+            "REQUESTED", "ALREADY_REQUESTED", "ALREADY_TERMINAL");
     private static final MediaType JSON = Objects.requireNonNull(
             MediaType.parse("application/json; charset=utf-8"));
 
@@ -133,6 +137,35 @@ public class RestaurantAgentRuntimeClient {
         }
     }
 
+    public RestaurantAgentRunCancelResponse cancel(
+            UUID runId,
+            TrustedContext context) throws IOException {
+        requireConfigured();
+        HttpUrl url = runsUrl.newBuilder()
+                .addPathSegment(runId.toString())
+                .addPathSegment("cancel")
+                .build();
+        Request request = withTrustedHeaders(new Request.Builder()
+                        .url(url)
+                        .post(RequestBody.create(new byte[0], JSON))
+                        .header("Accept", "application/json"),
+                context)
+                .build();
+        try (Response response = requestClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                throw new UpstreamHttpException(response.code());
+            }
+            ResponseBody responseBody = response.body();
+            if (responseBody == null) {
+                throw new IOException("Restaurant agent runtime returned an empty cancel response");
+            }
+            RestaurantAgentRunCancelResponse cancellation = objectMapper.readValue(
+                    responseBody.byteStream(), RestaurantAgentRunCancelResponse.class);
+            validateCancellation(runId, cancellation);
+            return cancellation;
+        }
+    }
+
     public void validateEventFrame(UUID expectedRunId, String expectedId, String rawData) throws IOException {
         RestaurantAgentEventV1 event = objectMapper.readValue(rawData, RestaurantAgentEventV1.class);
         validateEvent(expectedRunId, event);
@@ -183,6 +216,19 @@ public class RestaurantAgentRuntimeClient {
         }
         if (lastReturnedSequence >= 0 && replay.getNextEventSequence() < lastReturnedSequence) {
             throw new IOException("Invalid restaurant agent replay cursor");
+        }
+    }
+
+    private void validateCancellation(
+            UUID requestedRunId,
+            RestaurantAgentRunCancelResponse cancellation) throws IOException {
+        if (cancellation == null
+                || !RestaurantAgentRunStartRequest.SCHEMA_VERSION.equals(cancellation.getSchemaVersion())
+                || !requestedRunId.toString().equals(cancellation.getRunId())
+                || !CANCEL_RESULTS.contains(cancellation.getResult())
+                || !RUN_STATES.contains(cancellation.getState())
+                || cancellation.getNextEventSequence() < 0) {
+            throw new IOException("Invalid restaurant agent cancellation contract");
         }
     }
 

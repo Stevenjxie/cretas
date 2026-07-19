@@ -45,6 +45,11 @@ class AgentEventType(str, Enum):
     STEP_STARTED = "STEP_STARTED"
     STEP_COMPLETED = "STEP_COMPLETED"
     STEP_FAILED = "STEP_FAILED"
+    EVIDENCE_RECORDED = "EVIDENCE_RECORDED"
+    EVIDENCE_GAP = "EVIDENCE_GAP"
+    REPLAN = "REPLAN"
+    CLARIFICATION = "CLARIFICATION"
+    CANCEL_REQUESTED = "CANCEL_REQUESTED"
     BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
     RUN_CANCELLED = "RUN_CANCELLED"
     RUN_COMPLETED = "RUN_COMPLETED"
@@ -212,12 +217,44 @@ class NumericClaim:
 
 
 @dataclass(frozen=True)
+class EvidenceReference:
+    evidence_id: str
+    fact_id: str
+
+    def safe_dict(self) -> dict[str, str]:
+        return {"evidenceId": self.evidence_id, "factId": self.fact_id}
+
+
+@dataclass(frozen=True)
+class ActionProposal:
+    """A read-only suggestion. It is never an instruction to mutate ERP state."""
+
+    proposal_code: str
+    action_code: str
+    rationale_codes: tuple[str, ...]
+    evidence_references: tuple[EvidenceReference, ...] = ()
+    execution_mode: str = "READ_ONLY_PROPOSAL"
+
+    def safe_dict(self) -> dict[str, Any]:
+        return {
+            "proposalCode": self.proposal_code,
+            "actionCode": self.action_code,
+            "rationaleCodes": list(self.rationale_codes),
+            "evidenceReferences": [
+                reference.safe_dict() for reference in self.evidence_references
+            ],
+            "executionMode": self.execution_mode,
+        }
+
+
+@dataclass(frozen=True)
 class StructuredOutcome:
     status: OutcomeStatus
     route_code: RouteCode
     claims: tuple[NumericClaim, ...] = ()
     blockers: tuple[str, ...] = ()
     observations: tuple[str, ...] = ()
+    action_proposals: tuple[ActionProposal, ...] = ()
     attribution_supported: bool = False
 
     def safe_dict(self) -> dict[str, Any]:
@@ -227,6 +264,9 @@ class StructuredOutcome:
             "claims": [claim.safe_dict() for claim in self.claims],
             "blockers": list(self.blockers),
             "observations": list(self.observations),
+            "actionProposals": [
+                proposal.safe_dict() for proposal in self.action_proposals
+            ],
             "attributionSupported": self.attribution_supported,
         }
 
@@ -249,6 +289,9 @@ class StructuredOutcome:
             ],
             "blockers": list(self.blockers),
             "observations": list(self.observations),
+            "actionProposals": [
+                proposal.safe_dict() for proposal in self.action_proposals
+            ],
             "attributionSupported": self.attribution_supported,
         }
 
@@ -268,6 +311,7 @@ class RuntimeResult:
 class RunRecord:
     run_id: str
     factory_id: str
+    owner_user_id: str
     state: RunState
     route_code: RouteCode
     safe_request: Mapping[str, Any]

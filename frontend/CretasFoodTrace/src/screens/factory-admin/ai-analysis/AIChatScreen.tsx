@@ -841,7 +841,9 @@ export default function AIChatScreen() {
         >
           {restaurantAgentEligible ? (
             <RestaurantGrossMarginRunCard
+              key={`restaurant-agent:${String(user?.id ?? '')}:${currentFactoryId}`}
               factoryId={currentFactoryId}
+              ownerUserId={String(user?.id ?? '')}
               startDate={restaurantAgentWindow.startDate}
               endDate={restaurantAgentWindow.endDate}
             />

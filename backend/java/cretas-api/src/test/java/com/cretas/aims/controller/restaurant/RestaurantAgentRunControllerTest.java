@@ -1,5 +1,6 @@
 package com.cretas.aims.controller.restaurant;
 
+import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunCancelResponse;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunReplayResponse;
 import com.cretas.aims.filter.CorrelationIdFilter;
 import com.cretas.aims.service.restaurant.RestaurantAgentRunService;
@@ -193,6 +194,33 @@ class RestaurantAgentRunControllerTest {
         ArgumentCaptor<String> correlation = ArgumentCaptor.forClass(String.class);
         verify(service).replay(eq("R001"), eq("42"), eq("restaurant_owner"),
                 correlation.capture(), eq(runId), eq(7L));
+        assertThat(correlation.getValue()).matches("[0-9a-f-]{36}");
+    }
+
+    @Test
+    void cancelReturnsDirectDurableAcknowledgementAndTrustedContext() throws Exception {
+        UUID runId = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        RestaurantAgentRunCancelResponse response = new RestaurantAgentRunCancelResponse(
+                "1.0", runId.toString(), "REQUESTED", "RUNNING", 8L);
+        when(service.cancel(eq("R001"), eq("42"), eq("restaurant_owner"),
+                anyString(), eq(runId))).thenReturn(response);
+
+        mockMvc.perform(post("/api/mobile/R001/restaurant-agent/runs/{runId}/cancel", runId)
+                        .requestAttr("factoryId", "R001")
+                        .requestAttr("userId", 42L)
+                        .requestAttr("role", "RESTAURANT_OWNER"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.schemaVersion").value("1.0"))
+                .andExpect(jsonPath("$.runId").value(runId.toString()))
+                .andExpect(jsonPath("$.state").value("RUNNING"))
+                .andExpect(jsonPath("$.result").value("REQUESTED"))
+                .andExpect(jsonPath("$.nextEventSequence").value(8L))
+                .andExpect(jsonPath("$.success").doesNotExist());
+
+        ArgumentCaptor<String> correlation = ArgumentCaptor.forClass(String.class);
+        verify(service).cancel(eq("R001"), eq("42"), eq("restaurant_owner"),
+                correlation.capture(), eq(runId));
         assertThat(correlation.getValue()).matches("[0-9a-f-]{36}");
     }
 
