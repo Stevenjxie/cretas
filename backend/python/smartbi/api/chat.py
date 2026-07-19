@@ -19,7 +19,7 @@ import logging
 import time
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from smartbi.config import coerce_numeric_columns
@@ -99,9 +99,9 @@ async def _try_tiered_restaurant_intent(
     `session_key` (2026-07-08 clarification-loop v1, additive/optional):
     forwarded to `tiered_answer` / `parse_restaurant_query` so a user's
     answer to a clarification question from a PREVIOUS call at this same
-    call site is parsed in context instead of as a brand-new query. All 3
-    chat.py call sites pass `request.session_id` here; omitted (None) is
-    byte-identical to this function's behavior before the feature existed.
+    call site is parsed in context instead of as a brand-new query. Chat
+    callers only pass the fixed-length trusted factory/user/session key
+    produced below; absent trusted users disable clarification persistence.
 
     Return shape:
       {"kind": "clarification", "answer_text": str, "spec": spec}
@@ -286,10 +286,15 @@ async def _v2_conv_lookup(http_request, session_id: Optional[str]) -> tuple[Opti
     )
     try:
         user_id = int(raw_user_id) if raw_user_id else None
+        if user_id is not None and user_id <= 0:
+            user_id = None
     except (ValueError, TypeError):
         user_id = None
 
-    if not session_id or not factory_id:
+    # A session without an authenticated numeric user must never degrade to a
+    # factory-only lookup. Multiple users can share a factory and even a device;
+    # factory-only lookup would reintroduce cross-user conversation disclosure.
+    if not session_id or not factory_id or user_id is None:
         return (None, factory_id, user_id)
     try:
         from smartbi.services.chat_session_service import ChatSessionService
@@ -301,8 +306,8 @@ async def _v2_conv_lookup(http_request, session_id: Optional[str]) -> tuple[Opti
             session_id, factory_id, user_id=user_id
         )
         return (parent, factory_id, user_id)
-    except Exception as e:
-        logger.warning(f"[v2-conv-lookup] failed (non-fatal): {e}")
+    except Exception:
+        logger.warning("[v2-conv-lookup] failed (non-fatal): error_code=SESSION_LOOKUP_FAILED")
         return (None, factory_id, user_id)
 
 
@@ -327,7 +332,13 @@ def _v2_writeback_bg(session_id: Optional[str], factory_id: Optional[str],
     """Fire-and-forget v2 writeback. Anchored in _PENDING_BG_TASKS so survives
     generator cancellation. Skipped silently when session_id or factory_id missing.
     """
-    if not session_id or not factory_id or not answer:
+    if (
+        not session_id
+        or not factory_id
+        or user_id is None
+        or user_id <= 0
+        or not answer
+    ):
         return
     try:
         from smartbi.services.chat_session_service import ChatSessionService
@@ -348,8 +359,8 @@ def _v2_writeback_bg(session_id: Optional[str], factory_id: Optional[str],
                 user_id=user_id,
             )
         _spawn_bg(_do_upsert())
-    except Exception as e:
-        logger.warning(f"[v2-conv-writeback] failed (non-fatal): {e}")
+    except Exception:
+        logger.warning("[v2-conv-writeback] failed (non-fatal): error_code=SESSION_WRITEBACK_FAILED")
 
 
 # ============================================================================
@@ -388,6 +399,60 @@ def _chat_cache_set(key: str, payload: Any) -> None:
     """Store a chat result in InsightCache."""
     get_insight_cache().set(key, payload)
     logger.info(f"[ChatCache] SET key={key[:12]}...")
+
+
+def _trusted_chat_identity(http_request: Request) -> tuple[Optional[str], str, Optional[int], bool]:
+    """Return middleware-authenticated role/user dimensions for chat isolation.
+
+    The JSON body and raw headers are deliberately ignored. Missing/blank roles
+    are represented as least privilege, and only a positive numeric trusted user
+    may participate in conversation-memory lookup/writeback.
+    """
+    state = getattr(http_request, "state", None)
+    raw_role = getattr(state, "role", None) if state is not None else None
+    trusted_role = str(raw_role).strip().lower() if raw_role is not None else ""
+    trusted_role = trusted_role or None
+
+    raw_user_id = getattr(state, "user_id", None) if state is not None else None
+    trusted_user_key = str(raw_user_id).strip() if raw_user_id is not None else ""
+    trusted_user_key = trusted_user_key or "__NO_TRUSTED_USER__"
+    try:
+        session_user_id = int(trusted_user_key)
+        if session_user_id <= 0:
+            session_user_id = None
+    except (TypeError, ValueError):
+        session_user_id = None
+
+    from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
+
+    price_view = bool(trusted_role and trusted_role in PRICE_VIEW_ROLES)
+    return trusted_role, trusted_user_key, session_user_id, price_view
+
+
+def _trusted_restaurant_session_key(
+    factory_id: str,
+    trusted_user_id: Optional[int],
+    session_id: Optional[str],
+) -> Optional[str]:
+    """Build a bounded clarification key from authenticated identity.
+
+    ``restaurant_pending_clarifications`` stores a ``TEXT`` key scoped by
+    factory. Hashing factory, the positive middleware-authenticated user, and
+    the normalized body session keeps the key fixed at 75 characters, avoids
+    persisting the raw session identifier, and prevents shared-device users
+    from consuming each other's pending clarification. A body session alone
+    never enables clarification persistence.
+    """
+    if trusted_user_id is None or trusted_user_id <= 0 or not session_id:
+        return None
+    normalized_session_id = str(session_id).strip()
+    if not normalized_session_id:
+        return None
+    material = "\x1f".join(
+        ("v1", factory_id, str(trusted_user_id), normalized_session_id)
+    )
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()
+    return f"trusted-v1:{digest}"
 
 
 # ============================================================================
@@ -478,6 +543,14 @@ class GeneralAnalysisRequest(BaseModel):
     session_id: Optional[str] = Field(None, description="Session ID (Java compat)")
     enable_thinking: Optional[bool] = Field(None, description="Enable thinking mode (Java compat)")
     thinking_budget: Optional[int] = Field(None, description="Thinking budget (Java compat)")
+    allow_tenant_data_fallback: bool = Field(
+        True,
+        description=(
+            "Allow loading tenant-owned upload data when no request data was supplied. "
+            "Trusted browser flows default to the historical behavior; internal callers "
+            "that provide their own context should set this to false."
+        ),
+    )
 
     @property
     def effective_query(self) -> str:
@@ -535,6 +608,68 @@ def get_sheet_data(sheet_id: str) -> Optional[List[Dict[str, Any]]]:
 def cache_sheet_data(sheet_id: str, data: List[Dict[str, Any]]):
     """Cache sheet data"""
     _sheet_data_cache[sheet_id] = data
+
+
+def _require_trusted_factory_id(http_request: Request) -> str:
+    """Return the middleware-authenticated tenant or fail closed.
+
+    General analysis can read cached and persisted uploads, so a tenant supplied
+    in the JSON body is never an acceptable authorization source. The only
+    trusted identity is the value written to ``request.state`` by
+    ``JWTAuthMiddleware``.
+    """
+    raw_factory_id = (
+        getattr(http_request.state, "factory_id", None)
+        if hasattr(http_request, "state")
+        else None
+    )
+    factory_id = str(raw_factory_id).strip() if raw_factory_id is not None else ""
+    if not factory_id:
+        raise HTTPException(status_code=403, detail="TRUSTED_TENANT_REQUIRED")
+    return factory_id
+
+
+async def _require_owned_upload_id(
+    sheet_id: Optional[str],
+    factory_id: str,
+) -> Optional[int]:
+    """Validate an optional upload id without revealing cross-tenant existence."""
+    if sheet_id is None:
+        return None
+    try:
+        upload_id = int(sheet_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=404, detail="UPLOAD_NOT_FOUND") from None
+    if upload_id <= 0:
+        raise HTTPException(status_code=404, detail="UPLOAD_NOT_FOUND")
+
+    from smartbi.config import get_pg_pool
+
+    pool = await get_pg_pool()
+    if pool is None:
+        raise HTTPException(status_code=503, detail="TENANT_OWNERSHIP_UNAVAILABLE")
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id
+                FROM smart_bi_pg_excel_uploads
+                WHERE id = $1 AND factory_id = $2
+                """,
+                upload_id,
+                factory_id,
+            )
+    except Exception as exc:
+        logger.error(
+            "Upload ownership validation failed: error_code=TENANT_OWNERSHIP_DB_ERROR"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="TENANT_OWNERSHIP_UNAVAILABLE",
+        ) from exc
+    if row is None:
+        raise HTTPException(status_code=404, detail="UPLOAD_NOT_FOUND")
+    return upload_id
 
 
 # ============================================================================
@@ -968,6 +1103,25 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
     """
     start_time = time.time()
 
+    # Trusted tenant and optional upload ownership are established before any
+    # response-cache or sheet-cache lookup. Body identity fields are ignored.
+    trusted_factory_id = _require_trusted_factory_id(http_request)
+    (
+        trusted_role,
+        trusted_user_key,
+        trusted_session_user_id,
+        trusted_price_view,
+    ) = _trusted_chat_identity(http_request)
+    trusted_restaurant_session_key = _trusted_restaurant_session_key(
+        trusted_factory_id,
+        trusted_session_user_id,
+        request.session_id,
+    )
+    validated_upload_id = await _require_owned_upload_id(
+        request.sheet_id,
+        trusted_factory_id,
+    )
+
     # Cache lookup (include query text in key for general-analysis).
     # factory_id MUST be part of the key: when request.data is empty this
     # endpoint falls back to loading the tenant's own upload from DB by
@@ -976,8 +1130,15 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
     # cache pollution).
     cache_key = _make_chat_cache_key(
         "general_analysis",
-        factory_id=getattr(http_request.state, "factory_id", None),
+        factory_id=trusted_factory_id,
+        trusted_user_id=trusted_user_key,
+        trusted_role=trusted_role or "__LEAST_PRIVILEGE__",
+        price_view=trusted_price_view,
+        allow_tenant_data_fallback=request.allow_tenant_data_fallback,
         sheet_id=request.sheet_id,
+        session_id=request.session_id,
+        enable_thinking=request.enable_thinking,
+        thinking_budget=request.thinking_budget,
         query=request.effective_query,
         data=request.data,
         table_type=request.table_type,
@@ -989,10 +1150,7 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
 
     try:
         query = request.effective_query
-        factory_id_hdr = (
-            getattr(http_request.state, 'factory_id', None)
-            if hasattr(http_request, 'state') else None
-        )
+        factory_id_hdr = trusted_factory_id
         if query and factory_id_hdr:
             try:
                 from smartbi.gold.restaurant_ops_router import (
@@ -1003,12 +1161,8 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                 if ops_code:
                     pool = await _get_pool()
                     if pool:
-                        role_hdr = (
-                            getattr(http_request.state, 'role', None)
-                            if hasattr(http_request, 'state') else None
-                        )
                         ops_answer = await resolve_by_code(
-                            ops_code, pool, factory_id_hdr, role=role_hdr, query=query,
+                            ops_code, pool, factory_id_hdr, role=trusted_role, query=query,
                         )
                         if ops_answer:
                             response = GeneralAnalysisResponse(
@@ -1031,13 +1185,9 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                     # the existing fallback chain below is unaffected).
                     pool = await _get_pool()
                     if pool:
-                        role_hdr = (
-                            getattr(http_request.state, 'role', None)
-                            if hasattr(http_request, 'state') else None
-                        )
                         tiered = await _try_tiered_restaurant_intent(
-                            query, pool, factory_id_hdr, role_hdr,
-                            session_key=request.session_id,
+                            query, pool, factory_id_hdr, trusted_role,
+                            session_key=trusted_restaurant_session_key,
                         )
                         if tiered:
                             response = GeneralAnalysisResponse(
@@ -1118,14 +1268,15 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                 except Exception as review_err:
                     logger.warning(f"[general_analysis] review fast path failed: {review_err}")
 
-        # Get data from request, cache, or latest upload
+        # Upload-backed data is an explicit policy choice. Java callers that
+        # provide their own context set allow_tenant_data_fallback=false.
         data = request.data
-        if not data and request.sheet_id:
+        if request.allow_tenant_data_fallback and not data and request.sheet_id:
             data = get_sheet_data(request.sheet_id)
 
-        if not data:
+        if not data and request.allow_tenant_data_fallback:
             # Bug G fix (Apr 26 2026): fallback factory-scoped + largest non-empty upload.
-            # Old: ORDER BY created_at DESC globally → cross-tenant leak risk + 16-row file
+            # Old tenant-null selection leaked across factories and let a 16-row file
             # beats 32K-row file. New: filter by factory_id from JWT, prefer largest upload
             # (most informative for general queries) and skip failed/empty uploads.
             try:
@@ -1134,45 +1285,32 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                 pool = await get_pg_pool()
                 if pool:
                     async with pool.acquire() as conn:
-                        upload_id = None
-                        if request.sheet_id:
-                            try:
-                                upload_id = int(request.sheet_id)
-                            except (ValueError, TypeError):
-                                pass
+                        upload_id = validated_upload_id
                         if not upload_id:
-                            factory_id_for_select = (
-                                getattr(http_request.state, 'factory_id', None)
-                                if hasattr(http_request, 'state') else None
+                            row = await conn.fetchrow(
+                                """
+                                SELECT id FROM smart_bi_pg_excel_uploads
+                                WHERE factory_id = $1
+                                  AND upload_status = 'COMPLETED'
+                                  AND row_count > 0
+                                ORDER BY row_count DESC, created_at DESC
+                                LIMIT 1
+                                """,
+                                trusted_factory_id,
                             )
-                            if factory_id_for_select:
-                                row = await conn.fetchrow(
-                                    """
-                                    SELECT id FROM smart_bi_pg_excel_uploads
-                                    WHERE factory_id = $1
-                                      AND upload_status = 'COMPLETED'
-                                      AND row_count > 0
-                                    ORDER BY row_count DESC, created_at DESC
-                                    LIMIT 1
-                                    """,
-                                    factory_id_for_select,
-                                )
-                            else:
-                                row = await conn.fetchrow(
-                                    """
-                                    SELECT id FROM smart_bi_pg_excel_uploads
-                                    WHERE upload_status = 'COMPLETED'
-                                      AND row_count > 0
-                                    ORDER BY created_at DESC
-                                    LIMIT 1
-                                    """
-                                )
                             if row:
                                 upload_id = row['id']
                         if upload_id:
                             rows = await conn.fetch(
-                                "SELECT row_data FROM smart_bi_dynamic_data WHERE upload_id = $1 LIMIT 200",
-                                upload_id
+                                """
+                                SELECT d.row_data
+                                FROM smart_bi_dynamic_data d
+                                JOIN smart_bi_pg_excel_uploads u ON u.id = d.upload_id
+                                WHERE d.upload_id = $1 AND u.factory_id = $2
+                                LIMIT 200
+                                """,
+                                upload_id,
+                                trusted_factory_id,
                             )
                             if rows:
                                 import json
@@ -1529,6 +1667,20 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
       - {"event": "error", "data": "..."} — on failure
     """
 
+    # Run security checks before constructing StreamingResponse so failures are
+    # real HTTP 403/404 responses, never HTTP 200 followed by an SSE error.
+    trusted_factory_id = _require_trusted_factory_id(http_request)
+    trusted_role, _, trusted_session_user_id, _ = _trusted_chat_identity(http_request)
+    trusted_restaurant_session_key = _trusted_restaurant_session_key(
+        trusted_factory_id,
+        trusted_session_user_id,
+        request.session_id,
+    )
+    validated_upload_id = await _require_owned_upload_id(
+        request.sheet_id,
+        trusted_factory_id,
+    )
+
     def _sse_event(event: str, data) -> str:
         """Format a single SSE event. Always JSON-encodes data for consistent frontend parsing."""
         payload = _json.dumps(data, ensure_ascii=False, default=str)
@@ -1564,22 +1716,17 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
         # measured at 2.98/3.15 in S3 audit, vs main 3.94). Tenant isolated by
         # factory_id. Backward compat: no session_id → standalone path.
         chat_session_parent: Optional[Dict[str, Any]] = None
-        _session_factory_id = (
-            getattr(http_request.state, 'factory_id', None)
-            if hasattr(http_request, 'state') else None
-        )
+        _session_factory_id = trusted_factory_id
         # H2 (Apr 26 2026): also extract user_id for session binding so same
         # factory + different user on shared device → no context leak.
-        _session_user_id = (
-            getattr(http_request.state, 'user_id', None)
-            if hasattr(http_request, 'state') else None
+        _session_user_id = trusted_session_user_id
+        _session_can_persist = bool(
+            request.session_id
+            and _session_factory_id
+            and _session_user_id is not None
         )
-        try:
-            _session_user_id = int(_session_user_id) if _session_user_id else None
-        except (ValueError, TypeError):
-            _session_user_id = None
 
-        if request.session_id and _session_factory_id:
+        if _session_can_persist:
             try:
                 from smartbi.services.chat_session_service import ChatSessionService
                 from smartbi.config import get_pg_pool as _get_pool_session
@@ -1617,10 +1764,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # reaches the synthesis engine untouched.
             try:
                 user_q = (request.effective_query or "").strip()
-                factory_id_hdr = (
-                    getattr(http_request.state, 'factory_id', None)
-                    if hasattr(http_request, 'state') else None
-                )
+                factory_id_hdr = trusted_factory_id
                 if user_q and factory_id_hdr:
                     from smartbi.gold.restaurant_ops_router import (
                         match_restaurant_ops as _match_ops_trend,
@@ -1631,13 +1775,9 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                     if _t1_trend_code == "RESTAURANT_OPS_TREND_ANALYSIS":
                         pool_trend = await _get_pool_trend()
                         if pool_trend:
-                            _role_hdr = (
-                                getattr(http_request.state, 'role', None)
-                                if hasattr(http_request, 'state') else None
-                            )
                             trend_answer = await _resolve_ops_trend(
                                 "RESTAURANT_OPS_TREND_ANALYSIS",
-                                pool_trend, factory_id_hdr, role=_role_hdr,
+                                pool_trend, factory_id_hdr, role=trusted_role,
                             )
                             if trend_answer:
                                 yield _sse_event("status", f"命中餐饮运营模板:{trend_answer.title}")
@@ -1657,7 +1797,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                     "processingTimeMs": wall_ms,
                                     "log_id": None,
                                 })
-                                if request.session_id and _session_factory_id:
+                                if _session_can_persist:
                                     try:
                                         from smartbi.services.chat_session_service import (
                                             ChatSessionService as _CSS_TREND,
@@ -1695,10 +1835,6 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                         # "minimal blast radius" guarantee of this pre-check.
                         pool_trend = await _get_pool_trend()
                         if pool_trend:
-                            _role_hdr = (
-                                getattr(http_request.state, 'role', None)
-                                if hasattr(http_request, 'state') else None
-                            )
                             from smartbi.gold.restaurant_intent import (
                                 parse_restaurant_query as _peek_trend_spec,
                             )
@@ -1711,8 +1847,8 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 and not _trend_spec.clarification_needed
                             ):
                                 tiered_trend = await _try_tiered_restaurant_intent(
-                                    user_q, pool_trend, factory_id_hdr, _role_hdr,
-                                    session_key=request.session_id,
+                                    user_q, pool_trend, factory_id_hdr, trusted_role,
+                                    session_key=trusted_restaurant_session_key,
                                 )
                                 if tiered_trend and tiered_trend["kind"] == "answer":
                                     yield _sse_event(
@@ -1736,7 +1872,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                         "processingTimeMs": wall_ms,
                                         "log_id": None,
                                     })
-                                    if request.session_id and _session_factory_id:
+                                    if _session_can_persist:
                                         try:
                                             from smartbi.services.chat_session_service import (
                                                 ChatSessionService as _CSS_TREND2,
@@ -1776,10 +1912,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # Python path B mirror of the Java COMPREHENSIVE_SYNTHESIS intent).
             try:
                 user_q = (request.effective_query or "").strip()
-                factory_id_hdr = (
-                    getattr(http_request.state, 'factory_id', None)
-                    if hasattr(http_request, 'state') else None
-                )
+                factory_id_hdr = trusted_factory_id
                 if user_q and factory_id_hdr:
                     from smartbi.agent.synthesis_router import match_comprehensive_synthesis
                     if match_comprehensive_synthesis(user_q):
@@ -1833,7 +1966,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                             # also has this turn in its turns_history. Mirrors
                             # the writeback pattern used by the gold ops /
                             # gold trend routes above.
-                            if request.session_id and _session_factory_id:
+                            if _session_can_persist:
                                 try:
                                     from smartbi.services.chat_session_service import (
                                         ChatSessionService as _CSS_SYN,
@@ -1863,10 +1996,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # 配方成本 to pre-aggregated Gold tables. No upload_id needed.
             try:
                 user_q = (request.effective_query or "").strip()
-                factory_id_hdr = (
-                    getattr(http_request.state, 'factory_id', None)
-                    if hasattr(http_request, 'state') else None
-                )
+                factory_id_hdr = trusted_factory_id
                 if user_q and factory_id_hdr:
                     from smartbi.gold.restaurant_ops_router import (
                         match_restaurant_ops, resolve_by_code
@@ -1884,12 +2014,8 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                             # / chart data baked here). resolve_by_code filters
                             # kwargs to each resolver's signature, so legacy
                             # resolvers without a `role` param silently ignore it.
-                            _role_hdr = (
-                                getattr(http_request.state, 'role', None)
-                                if hasattr(http_request, 'state') else None
-                            )
                             ops_answer = await resolve_by_code(
-                                ops_code, pool, factory_id_hdr, role=_role_hdr, query=user_q,
+                                ops_code, pool, factory_id_hdr, role=trusted_role, query=user_q,
                             )
                             if ops_answer:
                                 yield _sse_event("status", f"命中餐饮运营模板:{ops_answer.title}")
@@ -1911,7 +2037,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 })
                                 # Apr 26 2026 v2 conversation memory: write back
                                 # parent context for the gold-ops cache path.
-                                if request.session_id and _session_factory_id:
+                                if _session_can_persist:
                                     try:
                                         from smartbi.services.chat_session_service import (
                                             ChatSessionService as _CSS_OPS,
@@ -1940,13 +2066,9 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                         # router above, same relative order T1 already had.
                         pool = await _get_pool()
                         if pool:
-                            _role_hdr = (
-                                getattr(http_request.state, 'role', None)
-                                if hasattr(http_request, 'state') else None
-                            )
                             tiered_ops = await _try_tiered_restaurant_intent(
-                                user_q, pool, factory_id_hdr, _role_hdr,
-                                session_key=request.session_id,
+                                user_q, pool, factory_id_hdr, trusted_role,
+                                session_key=trusted_restaurant_session_key,
                             )
                             if tiered_ops:
                                 title = tiered_ops.get("title") or "餐饮经营分析"
@@ -1970,7 +2092,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 })
                                 if (
                                     tiered_ops["kind"] == "answer"
-                                    and request.session_id and _session_factory_id
+                                    and _session_can_persist
                                 ):
                                     try:
                                         from smartbi.services.chat_session_service import (
@@ -2001,12 +2123,11 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # W2.2: Try template router first — if user query matches a known analysis,
             # stream cached result (fast, deterministic) instead of invoking LLM.
             try:
-                upload_id = None
-                if request.sheet_id:
-                    try:
-                        upload_id = int(request.sheet_id)
-                    except (ValueError, TypeError):
-                        pass
+                upload_id = (
+                    validated_upload_id
+                    if request.allow_tenant_data_fallback
+                    else None
+                )
                 user_q = (request.effective_query or "").strip()
                 # Bug G phase 2 (Apr 26 2026): template-aware upload selection.
                 # Phase 1 picked largest upload — broke for qhj where 32K 卡详情
@@ -2023,11 +2144,13 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 from smartbi.config import get_pg_pool
                 pool = await get_pg_pool()
                 matched_code = None  # captured here so cache-serve block can reuse
-                if not upload_id and user_q and pool is not None:
-                    factory_id_for_select = (
-                        getattr(http_request.state, 'factory_id', None)
-                        if hasattr(http_request, 'state') else None
-                    )
+                if (
+                    request.allow_tenant_data_fallback
+                    and not upload_id
+                    and user_q
+                    and pool is not None
+                ):
+                    factory_id_for_select = trusted_factory_id
                     if factory_id_for_select:
                         try:
                             # Step 1: query → template_code
@@ -2056,6 +2179,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                                 JOIN smart_bi_pg_excel_uploads u
                                                   ON u.id = a.upload_id
                                                 WHERE a.factory_id = $1
+                                                  AND u.factory_id = $1
                                                   AND a.template_code = 'top_n_by_dim'
                                                   AND u.upload_status = 'COMPLETED'
                                                   AND u.row_count > 0
@@ -2121,6 +2245,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                             JOIN smart_bi_pg_excel_uploads u
                                               ON u.id = a.upload_id
                                             WHERE a.factory_id = $1
+                                              AND u.factory_id = $1
                                               AND a.template_code = $2
                                               AND u.upload_status = 'COMPLETED'
                                               AND u.row_count > 0
@@ -2225,9 +2350,8 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                             load_materialization_results
                         )
                         if pool is not None:
-                            factory_id = getattr(http_request.state, 'factory_id', None) if hasattr(http_request, 'state') else None  # noqa: E501
                             cached_results = await load_materialization_results(
-                                pool, upload_id, factory_id=factory_id
+                                pool, upload_id, factory_id=trusted_factory_id
                             )
                             cached_by_code = {r["code"]: r for r in cached_results}
                             # Phase 6 P1 (Apr 26 2026): reject cache when query
@@ -2287,7 +2411,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 from smartbi.api.materialized_analytics import _spawn_bg
                                 _tpl_log_task = _spawn_bg(_log_template_hit_safe(
                                     pool, user_q,
-                                    getattr(http_request.state, 'factory_id', None) if hasattr(http_request, 'state') else None,  # noqa: E501
+                                    trusted_factory_id,
                                     upload_id, matched_code, answer_text, wall_ms,
                                 ))
                                 try:
@@ -2308,7 +2432,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 })
                                 # Apr 26 2026 v2 conversation memory: write back
                                 # parent context for the template cache path.
-                                if request.session_id and _session_factory_id:
+                                if _session_can_persist:
                                     try:
                                         from smartbi.services.chat_session_service import (
                                             ChatSessionService as _CSS_TPL,
@@ -2335,56 +2459,44 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
 
             # ── Data loading (same as general_analysis) ──
             data = request.data
-            if not data and request.sheet_id:
+            if request.allow_tenant_data_fallback and not data and request.sheet_id:
                 data = get_sheet_data(request.sheet_id)
 
-            if not data:
+            if not data and request.allow_tenant_data_fallback:
                 try:
                     from smartbi.config import get_pg_pool as _get_pg_pool
 
                     pool = await _get_pg_pool()
                     if pool:
                         async with pool.acquire() as conn:
-                            upload_id = None
-                            if request.sheet_id:
-                                try:
-                                    upload_id = int(request.sheet_id)
-                                except (ValueError, TypeError):
-                                    pass
+                            upload_id = validated_upload_id
                             if not upload_id:
                                 # Bug G fix (Apr 26 2026): factory-scoped + largest non-empty upload.
-                                factory_id_for_select = (
-                                    getattr(http_request.state, 'factory_id', None)
-                                    if hasattr(http_request, 'state') else None
+                                factory_id_for_select = trusted_factory_id
+                                row = await conn.fetchrow(
+                                    """
+                                    SELECT id FROM smart_bi_pg_excel_uploads
+                                    WHERE factory_id = $1
+                                      AND upload_status = 'COMPLETED'
+                                      AND row_count > 0
+                                    ORDER BY row_count DESC, created_at DESC
+                                    LIMIT 1
+                                    """,
+                                    factory_id_for_select,
                                 )
-                                if factory_id_for_select:
-                                    row = await conn.fetchrow(
-                                        """
-                                        SELECT id FROM smart_bi_pg_excel_uploads
-                                        WHERE factory_id = $1
-                                          AND upload_status = 'COMPLETED'
-                                          AND row_count > 0
-                                        ORDER BY row_count DESC, created_at DESC
-                                        LIMIT 1
-                                        """,
-                                        factory_id_for_select,
-                                    )
-                                else:
-                                    row = await conn.fetchrow(
-                                        """
-                                        SELECT id FROM smart_bi_pg_excel_uploads
-                                        WHERE upload_status = 'COMPLETED'
-                                          AND row_count > 0
-                                        ORDER BY created_at DESC
-                                        LIMIT 1
-                                        """
-                                    )
                                 if row:
                                     upload_id = row['id']
                             if upload_id:
                                 rows = await conn.fetch(
-                                    "SELECT row_data FROM smart_bi_dynamic_data WHERE upload_id = $1 LIMIT 200",
-                                    upload_id
+                                    """
+                                    SELECT d.row_data
+                                    FROM smart_bi_dynamic_data d
+                                    JOIN smart_bi_pg_excel_uploads u ON u.id = d.upload_id
+                                    WHERE d.upload_id = $1 AND u.factory_id = $2
+                                    LIMIT 200
+                                    """,
+                                    upload_id,
+                                    trusted_factory_id,
                                 )
                                 if rows:
                                     data = [_json.loads(r['row_data']) if isinstance(r['row_data'], str) else r['row_data'] for r in rows]  # noqa: E501
@@ -3171,7 +3283,8 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # normalized_q + upload_id), TTL 24h. ~80% of follow-ups go through
             # LLM costing 10-12s; cache hit returns in 200ms.
             _llm_cache_hit = None
-            if (not chat_session_parent and _session_factory_id
+            if (request.allow_tenant_data_fallback
+                    and not chat_session_parent and _session_factory_id
                     and request.effective_query):
                 try:
                     from smartbi.services.llm_answer_cache import LlmAnswerCache
@@ -3212,7 +3325,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 })
                 # Still write back v2 conv-memory parent context if session_id
                 # provided (cache hit ≠ skip session writeback).
-                if request.session_id and _session_factory_id:
+                if _session_can_persist:
                     try:
                         from smartbi.services.chat_session_service import ChatSessionService
                         from smartbi.api.materialized_analytics import _spawn_bg
@@ -3297,7 +3410,9 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 # empty text with the cached answer + note. Avoids forcing
                 # users to re-ask (which doubles LLM cost).
                 _cache_fallback = None
-                if _session_factory_id and request.effective_query and not chat_session_parent:
+                if (request.allow_tenant_data_fallback
+                        and _session_factory_id and request.effective_query
+                        and not chat_session_parent):
                     try:
                         from smartbi.services.llm_answer_cache import LlmAnswerCache as _LAC_FB
                         from smartbi.services.query_normalizer import normalize_for_match
@@ -3434,10 +3549,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                     _h = request.context.get("history")
                     if isinstance(_h, list):
                         _history = _h
-                _factory_for_log = (
-                    getattr(http_request.state, "factory_id", None)
-                    if hasattr(http_request, "state") else None
-                )
+                _factory_for_log = trusted_factory_id
                 _upload_for_log = None
                 try:
                     if request.sheet_id:
@@ -3493,7 +3605,8 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # yield done, so any code after yield never runs. _spawn_bg
             # schedules background task which keeps running after this
             # generator closes (anchored in _PENDING_BG_TASKS).
-            if (not chat_session_parent and _session_factory_id
+            if (request.allow_tenant_data_fallback
+                    and not chat_session_parent and _session_factory_id
                     and full_text and not _llm_truncated):
                 try:
                     from smartbi.services.llm_answer_cache import LlmAnswerCache as _LAC
@@ -3515,7 +3628,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
 
             # Apr 26 2026 v2 conversation memory: write back parent context
             # BEFORE done event for the same reason as cache write above.
-            if request.session_id and _session_factory_id and full_text:
+            if _session_can_persist and full_text:
                 try:
                     from smartbi.services.chat_session_service import ChatSessionService
                     from smartbi.config import get_pg_pool as _get_pool_writeback
