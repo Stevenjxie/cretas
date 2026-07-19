@@ -6,11 +6,16 @@
 
 ## 在飞任务
 
-- 无。
+- `CR-AI-DEMO-RUN-ALLOW-01-20260719` — `review`
+  - Base SHA: `8715e2d304f41ee5d6b72bd40232f5e9214650af`
+  - Owner: Codex `/root`
+  - Scope: `backend/java/cretas-api/src/main/java/com/cretas/aims/config/DemoReadOnlyInterceptor.java`、`backend/java/cretas-api/src/test/java/com/cretas/aims/config/DemoReadOnlyInterceptorTest.java`、`docs/dispatch/**`
+  - 验收命令: `mvn -q "-Dtest=DemoReadOnlyInterceptorTest,RestaurantAgentRunControllerTest,RestaurantAgentRunServiceTest" test`
+  - 下一动作: 已完成精确 start/cancel 放行、负向 URI/方法矩阵与 25 项目标测试；提交 PR 并完成合并门禁。
 
 ## Scope 锁地图
 
-- 无。
+- `CR-AI-DEMO-RUN-ALLOW-01-20260719` 锁定上述 Demo 只读拦截器、对应测试与 dispatch 台账；不触碰其他认证规则、Agent runtime、迁移或 ERP Controller。
 
 ## 阻塞项
 
