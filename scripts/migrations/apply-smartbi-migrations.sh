@@ -13,7 +13,9 @@
 #   --env       Target environment (test=smartbi_db, prod=smartbi_prod_db, all=both)
 #   --dry-run   Wrap each migration in BEGIN/ROLLBACK; verifies SQL parses + DDL
 #               applies cleanly without persisting changes. Tracker untouched.
-#   --target    Apply only files with version <= VERSION (inclusive). Default: all.
+#   --target    Apply only files with version <= VERSION (inclusive). VERSION
+#               must name an existing VYYYYMMDD_NN file. Fails if the tracker
+#               already contains a migration above the target. Default: all.
 #   --migs-dir  Override migrations dir (default: backend/python/smartbi/database/migrations
 #               relative to script). Used by test-runner.sh.
 #   --db-name   Override DB name (default mapped from --env). Used by test-runner.sh
@@ -50,6 +52,14 @@ while [[ $# -gt 0 ]]; do
 done
 
 [ -n "$ENV" ] || { echo "--env required" >&2; usage 2; }
+if [ -n "$TARGET" ] && [[ ! "$TARGET" =~ ^V[0-9]{8}_[0-9]{2}$ ]]; then
+    echo "--target must match VYYYYMMDD_NN" >&2
+    exit 2
+fi
+if [ -n "$TARGET" ] && [ "$ENV" = "all" ]; then
+    echo "--target cannot be combined with --env all; migrate and verify one environment at a time" >&2
+    exit 2
+fi
 
 # Resolve migrations dir relative to script (mirrors backfill-applied.sh layout).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -116,6 +126,30 @@ apply_one_env() {
     # shellcheck disable=SC2207
     files=( $(ls -1 "$MIGS_DIR"/V*.sql 2>/dev/null | sort) )
     echo "[migrations] discovered ${#files[@]} V-prefix files"
+
+    if [ -n "$TARGET" ]; then
+        local target_present=0 file_version
+        for file in "${files[@]}"; do
+            file_version=$(basename "$file" | grep -oE '^V[0-9]{8}_[0-9]{2}' || true)
+            if [ "$file_version" = "$TARGET" ]; then
+                target_present=1
+                break
+            fi
+        done
+        if [ "$target_present" != "1" ]; then
+            echo "[migrations] FAIL: target does not exist in migrations dir: $TARGET" >&2
+            return 1
+        fi
+
+        local ahead_filename
+        ahead_filename=$(psql_query "$db" -c \
+            "SELECT filename FROM smartbi_migrations WHERE version > '$TARGET' ORDER BY version, filename LIMIT 1")
+        if [ -n "$ahead_filename" ]; then
+            echo "[migrations] FAIL: database is already ahead of target $TARGET ($ahead_filename)" >&2
+            echo "[migrations] Refusing to treat a lower target as a schema rollback." >&2
+            return 1
+        fi
+    fi
 
     for file in "${files[@]}"; do
         total=$((total + 1))

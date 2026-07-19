@@ -6,11 +6,16 @@
 
 ## 在飞任务
 
-- 无。
+- `CRETAS-SMARTBI-STAGED-MIGRATION-TARGET-20260719`
+  - 状态：`review`
+  - Owner：Codex (`/root`)
+  - Base SHA：`054fec7626ec538055f6b7698c448ab1afd3301e`
+  - 目标：让标准 Python 发布入口支持受校验的 migration target 与 migration-only 阶段，以安全执行 D9/D10 code-first、expand、contract 三阶段发布；拒绝不存在/ahead target 和 `--env all` 半迁移，禁止一次性越过 V05 兼容窗口。
+  - 验收：Shell 语法；CLI/help/invalid/nonexistent target、target+all、migration-only、target-forwarding 回归；真实 PostgreSQL runner target/nonexistent/ahead 门禁；依赖缓存回归；`git diff --check`；独立只读终审。
 
 ## Scope 锁地图
 
-- 无。
+- `CRETAS-SMARTBI-STAGED-MIGRATION-TARGET-20260719`：`scripts/deploy/deploy-smartbi-python.sh`、`scripts/migrations/apply-smartbi-migrations.sh`、`scripts/migrations/test-runner.sh`、`scripts/tests/test-smartbi-python-migration-target.sh`、本任务 dispatch 记录。
 
 ## 阻塞项
 
