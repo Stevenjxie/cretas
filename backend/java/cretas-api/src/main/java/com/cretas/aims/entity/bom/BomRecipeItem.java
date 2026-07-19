@@ -71,7 +71,7 @@ public class BomRecipeItem extends BaseEntity {
     @Column(name = "actual_quantity", precision = 15, scale = 4)
     private BigDecimal actualQuantity;
 
-    /** CHECK constraint: 'g'/'kg'/'mg'/'ml'/'L'/'个'/'袋'/'箱'/'瓶'/'盒'. */
+    /** Canonical unit code resolved by UnitContractService; legacy localized rows remain readable. */
     @Column(name = "unit", nullable = false, length = 20)
     private String unit;
 

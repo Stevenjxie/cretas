@@ -11,6 +11,8 @@ import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.service.bom.NestedBomCostService;
 import com.cretas.aims.service.uom.MaterialUomConverter;
+import com.cretas.aims.service.unit.TestUnitContractFactory;
+import com.cretas.aims.service.unit.UnitContractService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -61,6 +63,8 @@ class BomRecipeServiceImplUomGuardTest {
     /** Placeholder mock so @InjectMocks constructor can inject; replaced in setUp with real converter. */
     @Mock
     private MaterialUomConverter mockUomConverter;
+    @Mock
+    private UnitContractService unitContractService;
 
     /** SP1: NestedBomCostService must be mocked so @InjectMocks can inject it. */
     @Mock
@@ -88,6 +92,10 @@ class BomRecipeServiceImplUomGuardTest {
                 com.cretas.aims.service.unit.TestUnitContractFactory.legacyFacade());
         // Replace @InjectMocks placeholder mock with real converter
         ReflectionTestUtils.setField(service, "materialUomConverter", realUomConverter);
+        UnitContractService canonicalUnits = TestUnitContractFactory.contract();
+        when(unitContractService.normalize(anyString(), anyString()))
+                .thenAnswer(invocation -> canonicalUnits.normalize(
+                        invocation.getArgument(0), invocation.getArgument(1)));
 
         // BOM recipe exists in DRAFT status
         BomRecipe recipe = new BomRecipe();
@@ -146,7 +154,7 @@ class BomRecipeServiceImplUomGuardTest {
                     BusinessException be = (BusinessException) ex;
                     assertThat(be.getMessage())
                             .contains("冷冻猪舌")    // real material name
-                            .contains("个")          // BOM unit
+                            .contains("pcs")        // canonical BOM unit
                             .contains("kg")          // canonical unit
                             .contains("BOM单位");
                     assertThat(be.getCode()).isIn(409, 400);
@@ -204,7 +212,7 @@ class BomRecipeServiceImplUomGuardTest {
     void addItem_countDimension_geVsJian_allowed() {
         BomRecipeItemDTO dto = bomItemDto(MAT_BOX, "个", new BigDecimal("100"));
         BomRecipeItem item = service.addItem(FACTORY, RECIPE_ID, dto);
-        assertThat(item.getUnit()).isEqualTo("个");
+        assertThat(item.getUnit()).isEqualTo("pcs");
     }
 
     @Test
@@ -220,9 +228,9 @@ class BomRecipeServiceImplUomGuardTest {
     // ============================================================
 
     @Test
-    @DisplayName("(d) addItem: any unit vs abaca material → ALLOWED (ABACA_SKIP fail-open)")
-    void addItem_abaca_anyUnit_allowed() {
-        BomRecipeItemDTO dto = bomItemDto(MAT_ABACA, "kg", new BigDecimal("100"));
+    @DisplayName("(d) addItem: localized abaca package alias → canonical case allowed")
+    void addItem_abacaCaseAlias_allowed() {
+        BomRecipeItemDTO dto = bomItemDto(MAT_ABACA, "箱", new BigDecimal("100"));
         BomRecipeItem item = service.addItem(FACTORY, RECIPE_ID, dto);
         assertThat(item.getMaterialTypeId()).isEqualTo(MAT_ABACA);
     }
@@ -232,20 +240,21 @@ class BomRecipeServiceImplUomGuardTest {
     // ============================================================
 
     @Test
-    @DisplayName("null BOM unit → no unit guard (backwards compat, unit may be set later)")
-    void addItem_nullUnit_noBlock() {
+    @DisplayName("null BOM unit → explicit 400 service validation")
+    void addItem_nullUnit_blocked() {
         BomRecipeItemDTO dto = bomItemDto(MAT_PORK, null, new BigDecimal("500"));
-        // Should not throw
-        BomRecipeItem item = service.addItem(FACTORY, RECIPE_ID, dto);
-        assertThat(item).isNotNull();
+        assertThatThrownBy(() -> service.addItem(FACTORY, RECIPE_ID, dto))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo("BOM_ITEM_UNIT_REQUIRED"));
     }
 
     @Test
-    @DisplayName("blank BOM unit → no unit guard")
-    void addItem_blankUnit_noBlock() {
+    @DisplayName("blank BOM unit → explicit 400 service validation")
+    void addItem_blankUnit_blocked() {
         BomRecipeItemDTO dto = bomItemDto(MAT_PORK, "  ", new BigDecimal("500"));
-        BomRecipeItem item = service.addItem(FACTORY, RECIPE_ID, dto);
-        assertThat(item).isNotNull();
+        assertThatThrownBy(() -> service.addItem(FACTORY, RECIPE_ID, dto))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo("BOM_ITEM_UNIT_REQUIRED"));
     }
 
     // ============================================================

@@ -2,13 +2,18 @@ package com.cretas.aims.service.bom.impl;
 
 import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.service.bom.BomRecipeService;
 import com.cretas.aims.service.bom.NestedBomCostService;
 import com.cretas.aims.service.uom.MaterialUomConverter;
+import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.workflow.ProductWorkflowResolutionService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -61,6 +66,12 @@ class BomRecipeDraftLifecycleJpaTest {
     private BomRecipeRepository recipeRepository;
 
     @Autowired
+    private BomRecipeItemRepository itemRepository;
+
+    @Autowired
+    private RawMaterialTypeRepository rawMaterialTypeRepository;
+
+    @Autowired
     private JdbcTemplate jdbcTemplate;
 
     @MockBean
@@ -71,6 +82,9 @@ class BomRecipeDraftLifecycleJpaTest {
 
     @MockBean
     private NestedBomCostService nestedBomCostService;
+
+    @MockBean
+    private UnitContractService unitContractService;
 
     @Test
     @DisplayName("zero versions creates an empty v1 DRAFT from SKU metadata")
@@ -142,6 +156,52 @@ class BomRecipeDraftLifecycleJpaTest {
                 .hasMessageContaining("产品不存在");
         assertThat(recipeRepository.countByFactoryIdAndProductTypeId(
                 product.getFactoryId(), product.getId())).isZero();
+    }
+
+    @Test
+    @DisplayName("activation commits without replacing the orphan-removal item collection")
+    void activationCommitsWithPersistedRawItems() {
+        ProductType product = saveProduct("ACTIVATE", "袋", new BigDecimal("500"));
+        BomRecipe draft = service.ensureDraft(product.getFactoryId(), product.getId());
+
+        RawMaterialType material = new RawMaterialType();
+        material.setId("RAW-BOM-ACTIVATE");
+        material.setFactoryId(product.getFactoryId());
+        material.setCode("RAW-ACTIVATE");
+        material.setName("激活测试原料");
+        material.setCategory("RAW");
+        material.setUnit("kg");
+        material.setIsActive(true);
+        material.setIsAbacaPackaging(false);
+        material.setCreatedBy(1L);
+        rawMaterialTypeRepository.saveAndFlush(material);
+
+        BomRecipeItem item = new BomRecipeItem();
+        item.setRecipeId(draft.getId());
+        item.setFactoryId(product.getFactoryId());
+        item.setMaterialTypeId(material.getId());
+        item.setMaterialName(material.getName());
+        item.setUnit("kg");
+        item.setMaterialCategory("RAW");
+        item.setYieldRate(new BigDecimal("100.00"));
+        item.setSortOrder(0);
+        item.setIsOptional(false);
+        item.setPerPortion(false);
+        item.setQuantityToPriceFactor(BigDecimal.ONE);
+        itemRepository.saveAndFlush(item);
+
+        BomRecipe activated = service.activateRecipe(product.getFactoryId(), draft.getId(), 1309L);
+
+        assertThat(activated.getStatus()).isEqualTo(BomRecipe.Status.ACTIVE);
+        assertThat(activated.getIsCurrent()).isTrue();
+        assertThat(recipeRepository.findById(draft.getId()))
+                .hasValueSatisfying(saved -> {
+                    assertThat(saved.getStatus()).isEqualTo(BomRecipe.Status.ACTIVE);
+                    assertThat(saved.getIsCurrent()).isTrue();
+                });
+        assertThat(itemRepository.findByRecipeIdOrderBySortOrderAsc(draft.getId()))
+                .extracting(BomRecipeItem::getMaterialTypeId)
+                .containsExactly(material.getId());
     }
 
     private ProductType saveProduct(String suffix, String unit, BigDecimal gramsPerUnit) {

@@ -26,6 +26,8 @@ import com.cretas.aims.dto.bom.ProcessInjectionConfigDTO;
 import com.cretas.aims.service.bom.BomRecipeService;
 import com.cretas.aims.service.bom.NestedBomCostService;
 import com.cretas.aims.service.uom.MaterialUomConverter;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitNormalizationResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -76,6 +78,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     private final ProductWorkProcessRepository productWorkProcessRepo;
     private final ProductWorkflowResolutionService workflowResolutionService;
     private final MaterialUomConverter materialUomConverter;
+    private final UnitContractService unitContractService;
     /** SP1: 嵌套 BOM 成本聚合 (组合装/先做后用). */
     private final NestedBomCostService nestedBomCostService;
     /** U5: BOM 调料明细 repo (BOM 统管配方+锅序, 2026-06-24). */
@@ -174,7 +177,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             items.add(buildItem(factoryId, recipe.getId(), dto));
         }
         itemRepo.saveAll(items);
-        recipe.setItems(items);
+        recipe.getItems().clear();
+        recipe.getItems().addAll(items);
 
         // Initial cost calculation (material cost only; labor/overhead deferred to Day 5).
         recomputeMaterialCost(recipe);
@@ -441,7 +445,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                         "unit");
             }
         }
-        recipe.setItems(items);
+        // Do not replace the Hibernate-managed orphanRemoval collection here.
+        // The activation transaction only validates rows; replacing PersistentBag
+        // causes a flush-time 500 even though every business condition is valid.
     }
 
     private String displayItemName(BomRecipeItem item) {
@@ -544,6 +550,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         // Look up the live material name (for 防呆 message) + canonical unit via item's materialTypeId.
         RawMaterialType mt = materialTypeRepo.findById(item.getMaterialTypeId()).orElse(null);
         if (dto.getUnit() != null && !dto.getUnit().isBlank()) {
+            normalizeItemUnit(factoryId, dto);
             if (mt != null) {
                 checkBomUnitCompatible(mt, dto.getUnit());
             }
@@ -836,15 +843,20 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         }
         item.setMaterialName(mt.get().getName());
 
-        // T159-B R3: UoM dimension guard at BOM write time.
-        checkBomUnitCompatible(mt.get(), dto.getUnit());
-
         applyPrimaryCode(dto, item, mt.get());
 
         // 包材规格自动推算: PACKAGING 行若 DTO 未手填 standardQuantity 且物料有 packQtyPerProduct,
         // 则自动写入 standardQuantity = packQtyPerProduct (每成品单位用量).
         // 手填优先 (dto.standardQuantity != null) — 向后兼容, 不破坏已有手填包材 BOM.
         applyPackagingSpecAutoInfer(dto, mt.get());
+
+        // The UI displays localized labels (盒/箱) while material masters may hold
+        // English historical codes (box/case). Resolve both through the shared unit
+        // contract and persist one canonical code before compatibility/pricing checks.
+        normalizeItemUnit(factoryId, dto);
+
+        // T159-B R3: UoM dimension guard at BOM write time.
+        checkBomUnitCompatible(mt.get(), dto.getUnit());
 
         validateItemQuantity(dto);
         applyDtoToItem(dto, item);
@@ -874,8 +886,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     }
 
     private void applyPriceUnitContract(BomRecipeItem item, String rawPriceUnit) {
-        String priceUnit = rawPriceUnit != null && !rawPriceUnit.isBlank()
-                ? rawPriceUnit.trim() : item.getUnit();
+        String requestedPriceUnit = rawPriceUnit != null && !rawPriceUnit.isBlank()
+                ? rawPriceUnit : item.getUnit();
+        String priceUnit = canonicalUnitOrThrow(item.getFactoryId(), requestedPriceUnit, "priceUnit");
         item.setPriceUnit(priceUnit);
         if (item.getUnit() == null || priceUnit == null || item.getUnit().equals(priceUnit)) {
             item.setQuantityToPriceFactor(BigDecimal.ONE);
@@ -976,6 +989,32 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         // recomputeMaterialCost will use NestedBomCostService.resolveItemCost for subProductTypeId rows.
         item.setActualQuantity(item.calculateActualQuantity());
         item.setItemCost(item.computeItemCost());
+    }
+
+    private void normalizeItemUnit(String factoryId, BomRecipeItemDTO dto) {
+        if (dto.getUnit() == null || dto.getUnit().isBlank()) {
+            throw bomError(400,
+                    "BOM 明细单位不能为空",
+                    "BOM_ITEM_UNIT_REQUIRED",
+                    "请从物料主数据或工厂单位目录选择计量单位",
+                    "unit");
+        }
+        dto.setUnit(canonicalUnitOrThrow(factoryId, dto.getUnit(), "unit"));
+    }
+
+    private String canonicalUnitOrThrow(String factoryId, String rawUnit, String hintTarget) {
+        if (rawUnit == null || rawUnit.isBlank()) {
+            return rawUnit;
+        }
+        UnitNormalizationResult normalized = unitContractService.normalize(factoryId, rawUnit);
+        if (!normalized.recognized() || normalized.code() == null) {
+            throw bomError(400,
+                    "BOM 明细单位无法识别: " + rawUnit,
+                    "BOM_ITEM_UNIT_UNKNOWN",
+                    "请从物料主数据或工厂单位目录选择有效计量单位",
+                    hintTarget);
+        }
+        return normalized.code();
     }
 
     /**
