@@ -261,3 +261,15 @@
 - CI 基线噪声：同一 full-audit 的 Python flake8、Vue build 与 RN tests 在未改动 scope 失败（Vue/RN 为 exit 134），单独治理。
 - 状态边界：代码与删除迁移已合并；生产迁移未执行，生产未部署，线上 `work_orders` 尚未删除。
 - Scope 锁：已释放。
+
+### `CR-AI-DEMO-RUN-ALLOW-01-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- Base SHA：`8715e2d304f41ee5d6b72bd40232f5e9214650af`
+- PR：[#1503](https://github.com/Stevenjxie/cretas/pull/1503)
+- `main` squash merge commit：`ccb0f72cc16c9b85da4e4686924c08bd1b933dc9`
+- 范围：为 DEMO_REST/DEMO_FACTORY 的只读锁精确放行 Restaurant Agent run start 与 canonical UUID run cancel；只允许隔离的 AI run/event 台账写入，不放行 ERP 业务写路径或其他 Agent POST。
+- 验收：Demo 拦截器、Controller 与 Service 共 25 项目标测试通过；覆盖错误 HTTP 方法、非法 UUID、额外路径后缀、未列出的 `/retry` 与普通 ERP 写入继续返回 403；独立只读安全审查无 P0/P1/P2。
+- 状态边界：代码已合并；尚未随最新 exact-main Java 制品部署生产，Restaurant Agent runtime 仍保持 `OFF`。
+- Scope 锁：已释放。
