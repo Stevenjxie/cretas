@@ -17,6 +17,21 @@
 - 状态边界：代码已合并；未部署、未执行生产 DDL、未删除任何生产数据、未重启生产服务。
 - Scope 锁：已释放。
 
+### `AIASSIST-SOP-UX-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- Base SHA：`d7c7956546a9f53c28f6f34e959f94e05ca31223`
+- 实现 PR：[#1517](https://github.com/Stevenjxie/cretas/pull/1517)，`main` squash merge commit：`83fafd64754db07cf863f3a93040170c3ca4a993`。
+- 检索修复 PR：[#1518](https://github.com/Stevenjxie/cretas/pull/1518)，`main` squash merge commit：`38b80181f03577ffe67f222dde59ce540df4f009`。
+- 产品边界：`aiassist.cretaceousfuture.com` 固定为工厂操作、SOP、字段逻辑与排错咨询助手；餐饮经营 AI `admin.cretaceousfuture.com/mobile-ai/rest/` 保持独立，未修改其应用、API 或部署。
+- 范围：重做独立移动优先 AI Assist 页面；增加 MVP/中度/全量与通用/存货/销售上下文、Markdown、截图、停止/重试、复制、会话保持和 safe-area；新增当前 F006 全链路生产 SOP、定向原子入库与 canonical-source 检索约束；生产主链问题不再混入旧版全部必投、主投入、固定转换率或 Workflow 出成率口径。
+- 本地验收：Food KB 目标套件最终 `13 passed`，Python compile 通过；Vite `4427 modules transformed`，可信 Web archive SHA-256 `66e6d45fd655c25cc3d3db388648f88d726a3ef33b0dd636a43bcd5ca954ebc1`；320/390/1280 宽度无横向溢出，停止、重试、复制、Markdown、会话恢复与 reduced-motion 通过。
+- 生产 Web：clean exact-main 复用可信 archive 原子发布，四方 index SHA-256 均为 `33d8d2708e95fbeb776accc62c489ad1b9ce452d28b375ffb4e60ad2ffd55806`，根入口和 `/lsmsop/` HTTP 200。
+- 生产 Python/KB：exact-main `38b80181f03577ffe67f222dde59ce540df4f009` 发布到 8083，119 migrations 全部已应用，健康 200；真实 worker 使用 `cretas_prod_db`，canonical SOP 为 35 行、35 个 embedding、临时 `.NEW` 为 0。首次手工入库误指向 `cretas_db` 的 35 行已按来源精确删除并回读为 0。
+- 生产问答：多个原料问题的 8/8 来源均为当前 F006 SOP，回答为至少选 1 个且无旧转换率/主原料字段；单位继承、Workflow 重叠选择和餐饮边界三条分支通过。真实 Chrome 手机验收确认全量+销售订单上下文、欢迎态收起、参考章节、复制 Toast 和 SOP 链接；仅浏览器自动请求缺失 favicon 产生非业务 404。
+- Scope 锁：已释放。
+
 ### `BOM01-WEB-ADMIN-DRAFT-LIFECYCLE-20260719`
 
 - 状态：`merged`
