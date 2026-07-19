@@ -12,16 +12,9 @@ import com.cretas.aims.service.MixedTrainingDataService.MixedTrainingDataSet;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
-import org.springframework.core.ParameterizedTypeReference;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
 import java.util.HashMap;
@@ -40,14 +33,10 @@ public class ModelTrainingScheduler {
 
     private final TrainingDataRepository trainingDataRepository;
     private final ModelVersionRepository modelVersionRepository;
-    private final RestTemplate restTemplate;
     private final SyntheticDataConfig syntheticDataConfig;
     private final SyntheticDataService syntheticDataService;
     private final FactoryAILearningConfigRepository factoryAILearningConfigRepository;
     private final MixedTrainingDataService mixedTrainingDataService;
-
-    @Value("${cretas.ai.service.url:http://localhost:8083}")
-    private String aiServiceUrl;
 
     @Value("${ml.training.min-data-count:50}")
     private int minTrainingDataCount;
@@ -55,8 +44,10 @@ public class ModelTrainingScheduler {
     @Value("${ml.training.retrain-threshold:1.2}")
     private double retrainThreshold;
 
-    @Value("${ml.training.enabled:true}")
+    @Value("${ml.training.enabled:false}")
     private boolean trainingEnabled;
+
+    static final String TRAINING_CAPABILITY = "NOT_IMPLEMENTED";
 
     /**
      * 每天凌晨2点检查是否需要训练模型
@@ -162,90 +153,8 @@ public class ModelTrainingScheduler {
      * 触发模型训练
      */
     public void triggerTraining(String factoryId, List<String> modelTypes) {
-        log.info("触发工厂 {} 的模型训练，类型: {}", factoryId, modelTypes);
-
-        try {
-            Map<String, Object> request = new HashMap<>();
-            request.put("factory_id", factoryId);
-            request.put("model_types", modelTypes);
-
-            // Java → Python internal calls must include X-Internal-Secret header
-            // (see backend/python/auth_middleware.py:115 — accepts this header and
-            //  bypasses JWT Bearer requirement for internal service-to-service traffic).
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            String internalSecret = System.getenv().getOrDefault("INTERNAL_API_SECRET", "cretas-internal-2026");
-            headers.set("X-Internal-Secret", internalSecret);
-
-            HttpEntity<Map<String, Object>> httpEntity = new HttpEntity<>(request, headers);
-            String url = aiServiceUrl + "/ml/train";
-            ResponseEntity<Map<String, Object>> responseEntity = restTemplate.exchange(
-                    url, HttpMethod.POST, httpEntity,
-                    new ParameterizedTypeReference<Map<String, Object>>() {});
-
-            Map<String, Object> response = responseEntity.getBody();
-            if (response != null) {
-                Boolean success = (Boolean) response.get("success");
-                if (Boolean.TRUE.equals(success)) {
-                    log.info("工厂 {} 模型训练请求成功: {}", factoryId, response);
-
-                    // 更新模型版本记录
-                    updateModelVersionFromResponse(factoryId, modelTypes, response);
-                } else {
-                    log.warn("工厂 {} 模型训练请求失败: {}", factoryId, response.get("error"));
-                }
-            }
-        } catch (org.springframework.web.client.HttpClientErrorException.NotFound e) {
-            // Python /ml/train endpoint not deployed yet — log once at WARN, don't pollute error.log
-            log.warn("触发工厂 {} 模型训练: Python /ml/train 端点不存在 (404),跳过", factoryId);
-        } catch (Exception e) {
-            log.error("触发工厂 {} 模型训练失败: {}", factoryId, e.getMessage(), e);
-        }
-    }
-
-    /**
-     * 根据训练响应更新模型版本
-     */
-    @SuppressWarnings("unchecked")
-    private void updateModelVersionFromResponse(String factoryId, List<String> modelTypes,
-                                                  Map<String, Object> response) {
-        Map<String, Object> results = (Map<String, Object>) response.get("results");
-        if (results == null) {
-            return;
-        }
-
-        for (String modelType : modelTypes) {
-            Map<String, Object> result = (Map<String, Object>) results.get(modelType);
-            if (result == null || !Boolean.TRUE.equals(result.get("success"))) {
-                continue;
-            }
-
-            try {
-                // 停用旧模型
-                modelVersionRepository.deactivateModelsByType(factoryId, modelType);
-
-                // 创建新模型版本记录
-                ModelVersion newVersion = ModelVersion.builder()
-                        .factoryId(factoryId)
-                        .modelType(modelType)
-                        .version((String) result.get("version"))
-                        .trainingDataCount(((Number) result.get("training_samples")).intValue())
-                        .rmse(result.get("rmse") != null
-                                ? new java.math.BigDecimal(result.get("rmse").toString()) : null)
-                        .r2Score(result.get("r2_score") != null
-                                ? new java.math.BigDecimal(result.get("r2_score").toString()) : null)
-                        .modelPath((String) result.get("model_path"))
-                        .isActive(true)
-                        .status("trained")
-                        .build();
-
-                modelVersionRepository.save(newVersion);
-                log.info("已保存工厂 {} 的 {} 模型新版本: {}", factoryId, modelType, newVersion.getVersion());
-
-            } catch (Exception e) {
-                log.error("保存模型版本记录失败: {}", e.getMessage(), e);
-            }
-        }
+        log.warn("模型训练能力不可用: factoryId={}, modelTypes={}, capability={}",
+                factoryId, modelTypes, TRAINING_CAPABILITY);
     }
 
     /**
@@ -257,6 +166,7 @@ public class ModelTrainingScheduler {
 
         result.put("factoriesChecked", factories.size());
         result.put("minDataCount", minTrainingDataCount);
+        result.put("trainingCapability", TRAINING_CAPABILITY);
 
         Map<String, Object> factoryStatus = new HashMap<>();
         for (String factoryId : factories) {
@@ -268,14 +178,9 @@ public class ModelTrainingScheduler {
             status.put("dataCount", dataCount);
             status.put("hasEfficiencyModel", hasModel);
             status.put("meetsMinimum", dataCount >= minTrainingDataCount);
+            status.put("trainingCapability", TRAINING_CAPABILITY);
 
             factoryStatus.put(factoryId, status);
-
-            // 如果满足条件，触发训练
-            if (dataCount >= minTrainingDataCount) {
-                checkAndTrainFactory(factoryId);
-                status.put("trainingTriggered", true);
-            }
         }
 
         result.put("factories", factoryStatus);
@@ -294,6 +199,7 @@ public class ModelTrainingScheduler {
         status.put("totalFactories", factories.size());
         status.put("factoriesWithModels", factoriesWithModels.size());
         status.put("trainingEnabled", trainingEnabled);
+        status.put("trainingCapability", TRAINING_CAPABILITY);
         status.put("minDataCount", minTrainingDataCount);
         status.put("retrainThreshold", retrainThreshold);
 

@@ -201,12 +201,13 @@ public class PythonSmartBIClient {
     private boolean checkAvailability() {
         try {
             Request request = new Request.Builder()
-                    .url(config.getUrl() + "/health")
+                    .url(serviceBaseUrl.newBuilder().addPathSegment("health").build())
                     .get()
                     .build();
 
             try (Response response = httpClient.newCall(request).execute()) {
-                boolean available = response.isSuccessful();
+                boolean available = response.isSuccessful()
+                        && readJsonBody(response.body(), PythonServiceHealthResponse.class).isHealthy();
                 serviceAvailable.set(available);
                 lastHealthCheck.set(System.currentTimeMillis());
 
@@ -466,6 +467,66 @@ public class PythonSmartBIClient {
         Object tableType = status.get("detectedTableType");
         if (tableType != null) pr.setTableType(tableType.toString());
         return pr;
+    }
+
+    // ==================== General analysis and health ====================
+    /**
+     * Calls the exact Python root health route and parses its typed JSON
+     * contract. HTTP success alone is not a healthy result.
+     */
+    public PythonServiceHealthResponse health() throws IOException {
+        Request request = new Request.Builder()
+                .url(serviceBaseUrl.newBuilder().addPathSegment("health").build())
+                .get()
+                .build();
+        try {
+            return executeWithRetry(request, PythonServiceHealthResponse.class);
+        } catch (IOException | PythonServiceUnavailableException failure) {
+            throw new IOException("Python SmartBI health check is unavailable");
+        }
+    }
+
+    /**
+     * Calls Python general analysis with trusted identities in headers only.
+     * POST requests are never retried by {@link #executeWithRetry(Request, Class)}.
+     */
+    public PythonGeneralAnalysisResponse analyzeGeneral(
+            String factoryId,
+            String userId,
+            PythonGeneralAnalysisRequest analysisRequest) throws IOException {
+        if (analysisRequest == null) {
+            throw new IOException("Python SmartBI general analysis request is invalid");
+        }
+        final String trustedFactoryId;
+        final String trustedUserId;
+        try {
+            trustedFactoryId = requireFactoryId(factoryId);
+            trustedUserId = optionalIdentity(userId);
+        } catch (IOException invalidIdentity) {
+            throw new IOException("Python SmartBI general analysis request is invalid");
+        }
+
+        HttpUrl url = serviceBaseUrl.newBuilder()
+                .addPathSegments("api/chat/general-analysis")
+                .build();
+        try {
+            Request.Builder builder = new Request.Builder()
+                    .url(url)
+                    .header("X-Factory-Id", trustedFactoryId)
+                    .post(RequestBody.create(JSON, objectMapper.writeValueAsString(analysisRequest)));
+            if (trustedUserId != null) {
+                builder.header("X-User-Id", trustedUserId);
+            }
+
+            PythonGeneralAnalysisResponse response = executeWithRetry(
+                    builder.build(), PythonGeneralAnalysisResponse.class);
+            if (response == null || !response.isSuccess() || !response.hasAnalysis()) {
+                throw new IOException("Python SmartBI returned an invalid general analysis response");
+            }
+            return response;
+        } catch (IOException | PythonServiceUnavailableException failure) {
+            throw new IOException("Python SmartBI general analysis is unavailable");
+        }
     }
 
     // ==================== 指标计算 ====================
@@ -2364,6 +2425,16 @@ public class PythonSmartBIClient {
             throw new IOException("factoryId is required for Python SmartBI request");
         }
         return factoryId;
+    }
+
+    private static String optionalIdentity(String identity) throws IOException {
+        if (identity == null || identity.isBlank()) {
+            return null;
+        }
+        if (!INTERNAL_IDENTITY.matcher(identity).matches()) {
+            throw new IOException("Python SmartBI request identity is invalid");
+        }
+        return identity;
     }
 
     // ==================== 辅助转换方法 ====================

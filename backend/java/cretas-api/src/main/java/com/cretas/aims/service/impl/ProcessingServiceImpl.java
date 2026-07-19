@@ -2405,15 +2405,6 @@ public class ProcessingServiceImpl implements ProcessingService {
     }
 
     /**
-     * 获取AI对话历史
-     */
-    @Override
-    public List<Map<String, Object>> getAISessionHistory(String sessionId) {
-        log.info("获取AI会话历史: sessionId={}", sessionId);
-        return aiAnalysisService.getSessionHistory(sessionId);
-    }
-
-    /**
      * 获取时间范围内的批次成本分析数据
      */
     @Override

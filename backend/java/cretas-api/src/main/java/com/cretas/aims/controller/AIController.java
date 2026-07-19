@@ -42,7 +42,6 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
  * AI统一接口控制器
@@ -293,51 +292,28 @@ public class AIController {
      * 获取AI对话历史列表
      */
     @GetMapping("/conversations")
+    @ResponseStatus(HttpStatus.NOT_IMPLEMENTED)
     @Operation(summary = "获取AI对话历史列表",
                description = "获取工厂的所有AI对话会话列表")
     public ApiResponse<List<AIResponseDTO.ConversationResponse>> getConversationList(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @RequestParam(defaultValue = "10") @Parameter(description = "限制数量") Integer limit) {
 
-        log.info("获取AI对话历史列表: factoryId={}, limit={}", factoryId, limit);
-
-        // 返回空列表（LLM不维护会话列表，会话是临时的）
-        List<AIResponseDTO.ConversationResponse> conversations = new java.util.ArrayList<>();
-
-        return ApiResponse.success(conversations);
+        return ApiResponse.error(501, "FEATURE_NOT_AVAILABLE");
     }
 
     /**
      * 获取AI对话历史
      */
     @GetMapping("/conversations/{sessionId}")
+    @ResponseStatus(HttpStatus.NOT_IMPLEMENTED)
     @Operation(summary = "获取AI对话历史",
                description = "获取指定会话的完整对话历史记录")
     public ApiResponse<AIResponseDTO.ConversationResponse> getConversation(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @PathVariable @Parameter(description = "会话ID") String sessionId) {
 
-        log.info("获取AI对话历史: factoryId={}, sessionId={}", factoryId, sessionId);
-
-        // 调用基础AI服务获取对话历史
-        List<Map<String, Object>> messages = basicAIService.getSessionHistory(sessionId);
-
-        // 转换为统一响应格式
-        AIResponseDTO.ConversationResponse response = AIResponseDTO.ConversationResponse.builder()
-                .sessionId(sessionId)
-                .messages(messages.stream()
-                        .map(msg -> AIResponseDTO.ConversationMessage.builder()
-                                .role(msg.get("role").toString())
-                                .content(msg.get("content").toString())
-                                .timestamp(LocalDateTime.now())  // 简化处理
-                                .build())
-                        .collect(Collectors.toList()))
-                .createdAt(LocalDateTime.now())
-                .updatedAt(LocalDateTime.now())
-                .status("active")
-                .build();
-
-        return ApiResponse.success(response);
+        return ApiResponse.error(501, "FEATURE_NOT_AVAILABLE");
     }
 
     /**
@@ -537,7 +513,7 @@ public class AIController {
 
         // 调用AI服务进行员工分析
         AIResponseDTO.EmployeeAnalysisResponse response = basicAIService.analyzeEmployee(
-                factoryId, employeeId, days, question, sessionId);
+                factoryId, requesterId, employeeId, days, question, sessionId);
 
         return ApiResponse.success(response);
     }
@@ -566,9 +542,12 @@ public class AIController {
         log.info("员工AI追问: factoryId={}, employeeId={}, sessionId={}, question={}",
                 factoryId, employeeId, sessionId, question);
 
+        String token = TokenUtils.extractToken(httpRequest.getHeader("Authorization"));
+        Long requesterId = (long) mobileService.getUserFromToken(token).getId();
+
         // 调用AI服务进行追问分析
         AIResponseDTO.EmployeeAnalysisResponse response = basicAIService.analyzeEmployee(
-                factoryId, employeeId, 90, question, sessionId);
+                factoryId, requesterId, employeeId, 90, question, sessionId);
 
         return ApiResponse.success(response);
     }

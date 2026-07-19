@@ -148,12 +148,13 @@ public class AIEnterpriseService {
 
             if ("historical".equals(questionType)) {
                 // 生成历史综合报告
-                aiAnalysis = generateHistoricalReport(factoryId, request.getStartDate(), request.getEndDate());
+                aiAnalysis = generateHistoricalReport(
+                        factoryId, userId, request.getStartDate(), request.getEndDate());
             } else {
                 // 获取成本数据并调用AI（传递思考模式参数）
                 Map<String, Object> costData = processingService.getBatchCostAnalysis(factoryId, request.getBatchId());
                 Map<String, Object> aiResult = basicAIService.analyzeCost(
-                        factoryId, request.getBatchId(), costData,
+                        factoryId, userId, request.getBatchId(), costData,
                         sessionId, request.getQuestion(),
                         enableThinking, thinkingBudget);
 
@@ -684,7 +685,7 @@ public class AIEnterpriseService {
             costData.put("dimension", dimension);
 
             Map<String, Object> aiResult = basicAIService.analyzeCost(
-                    factoryId, null, costData, null, promptMessage);
+                    factoryId, userId, null, costData, null, promptMessage, true, 50);
 
             if (aiResult == null || !Boolean.TRUE.equals(aiResult.get("success"))) {
                 throw new RuntimeException("AI服务返回错误: " + (aiResult != null ? aiResult.get("error") : "unknown"));
@@ -1412,7 +1413,8 @@ public class AIEnterpriseService {
 
             // 7. 调用AI分析
             Map<String, Object> aiResult = basicAIService.analyzeCost(
-                    factoryId, batchIds.get(0), virtualCostData, null, promptMessage);
+                    factoryId, userId, batchIds.get(0), virtualCostData,
+                    null, promptMessage, true, 50);
 
             String aiAnalysis = (String) aiResult.get("aiAnalysis");
             String sessionId = (String) aiResult.get("sessionId");
@@ -1696,7 +1698,8 @@ public class AIEnterpriseService {
      * 生成历史综合报告
      */
     @SuppressWarnings("unchecked")
-    private String generateHistoricalReport(String factoryId, LocalDateTime startDate, LocalDateTime endDate) {
+    private String generateHistoricalReport(String factoryId, Long userId,
+                                            LocalDateTime startDate, LocalDateTime endDate) {
         try {
             log.info("生成历史综合报告: factoryId={}, startDate={}, endDate={}",
                      factoryId, startDate, endDate);
@@ -1724,8 +1727,8 @@ public class AIEnterpriseService {
 
             // 4. 调用AI分析
             Map<String, Object> aiResult = basicAIService.analyzeCost(
-                    factoryId, null, historicalData, null, promptMessage
-            );
+                    factoryId, userId, null, historicalData,
+                    null, promptMessage, true, 50);
 
             // 5. 返回AI分析
             if (aiResult != null && Boolean.TRUE.equals(aiResult.get("success"))) {

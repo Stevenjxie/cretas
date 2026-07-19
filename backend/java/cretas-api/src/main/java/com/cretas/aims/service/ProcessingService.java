@@ -179,14 +179,6 @@ public interface ProcessingService {
                                       String sessionId, String customMessage);
 
     /**
-     * 获取AI对话历史
-     *
-     * @param sessionId 会话ID
-     * @return 对话历史
-     */
-    List<Map<String, Object>> getAISessionHistory(String sessionId);
-
-    /**
      * AI服务健康检查
      *
      * @return 健康状态
