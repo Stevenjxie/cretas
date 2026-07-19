@@ -13,6 +13,8 @@
 #   5. broken SQL → tx rollback, tracker not updated, exit 1
 #   6. --dry-run → no tracker writes, but detects new
 #   7. --target → stops at version
+#   8. duplicate filename versions remain distinct
+#   9. --target rejects nonexistent, database-ahead, and --env all cases
 
 set -euo pipefail
 
@@ -200,6 +202,28 @@ echo "$output" | sed 's/^/    /'
 assert "tracker has 2 rows"                '[ "$(tracker_count)" = "2" ]'
 assert "alpha recorded"                    'tracker_has V20260801_01__alpha.sql'
 assert "bravo recorded"                    'tracker_has V20260801_01__bravo.sql'
+
+# ── Test 9: target safety guards ────────────────────────────────────
+start_case "Test 9: --target rejects nonexistent, ahead, and env=all"
+write_fixture "V20260901_01__first.sql" "CREATE TABLE test_runner_target_first (id INT);"
+write_fixture "V20260901_02__second.sql" "CREATE TABLE test_runner_target_second (id INT);"
+run_runner --target V20260901_02 >/dev/null
+
+ahead_exit=0
+ahead_output=$(run_runner --target V20260901_01) || ahead_exit=$?
+assert "lower target exits 1 when DB is ahead"       '[ "$ahead_exit" = "1" ]'
+assert "lower target reports database ahead"         'echo "$ahead_output" | grep -q "database is already ahead"'
+assert "ahead rejection preserves tracker rows"      '[ "$(tracker_count)" = "2" ]'
+
+missing_exit=0
+missing_output=$(run_runner --target V20260901_99) || missing_exit=$?
+assert "nonexistent target exits 1"                   '[ "$missing_exit" = "1" ]'
+assert "nonexistent target is explicit"               'echo "$missing_output" | grep -q "target does not exist"'
+
+all_exit=0
+all_output=$(run_runner --env all --target V20260901_02) || all_exit=$?
+assert "target with env=all exits 2"                  '[ "$all_exit" = "2" ]'
+assert "target with env=all is explicit"              'echo "$all_output" | grep -q "cannot be combined"'
 
 # ── Summary ─────────────────────────────────────────────────────────
 echo ""

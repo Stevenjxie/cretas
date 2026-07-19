@@ -6,8 +6,10 @@
 #   ./deploy-smartbi-python.sh              # 部署代码，重启生产 Python (8083)
 #   ./deploy-smartbi-python.sh --env test   # 部署代码，重启测试 Python (8084)
 #   ./deploy-smartbi-python.sh --env all    # 部署代码，重启两套 Python
+#   ./deploy-smartbi-python.sh --env prod --migration-target V20261028_04
+#   ./deploy-smartbi-python.sh --env prod --migration-only --migration-target V20261028_04
 
-set -e
+set -eo pipefail
 
 # 加载共享函数库 (Apr 22 2026 fix: was looking for `$SCRIPT_DIR/scripts/lib/...`
 # which gave `scripts/deploy/scripts/lib/...` — doesn't exist. Use PROJECT_ROOT
@@ -43,6 +45,8 @@ SERVER_IP="${SERVER#*@}"
 
 # 参数解析
 DEPLOY_ENV="prod"
+MIGRATION_TARGET=""
+MIGRATION_ONLY="0"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --env)
@@ -53,12 +57,30 @@ while [[ $# -gt 0 ]]; do
             fi
             shift 2
             ;;
+        --migration-only)
+            MIGRATION_ONLY="1"
+            shift
+            ;;
+        --migration-target)
+            if [[ $# -lt 2 || -z "${2:-}" ]]; then
+                echo "错误: --migration-target 需要 VERSION 参数"
+                exit 1
+            fi
+            MIGRATION_TARGET="$2"
+            if [[ ! "$MIGRATION_TARGET" =~ ^V[0-9]{8}_[0-9]{2}$ ]]; then
+                echo "错误: --migration-target 必须匹配 VYYYYMMDD_NN，例如 V20261028_04"
+                exit 1
+            fi
+            shift 2
+            ;;
         -h|--help)
             echo "用法: ./deploy-smartbi-python.sh [选项]"
             echo ""
             echo "选项:"
-            echo "  --env ENV   部署环境: prod (默认), test, all"
-            echo "  -h, --help  显示帮助"
+            echo "  --env ENV                  部署环境: prod (默认), test, all"
+            echo "  --migration-target VERSION 仅执行版本 <= VERSION 的 migration"
+            echo "  --migration-only           只同步/执行 migration，不同步应用代码或重启"
+            echo "  -h, --help                 显示帮助"
             echo ""
             echo "环境说明:"
             echo "  prod   重启生产 Python (端口 8083, 数据库 smartbi_prod_db)"
@@ -67,14 +89,41 @@ while [[ $# -gt 0 ]]; do
             exit 0
             ;;
         *)
-            shift
+            echo "错误: 未知参数 $1"
+            exit 1
             ;;
     esac
 done
 
+if [[ "${SKIP_MIGRATIONS:-0}" == "1" && -n "$MIGRATION_TARGET" ]]; then
+    echo "错误: SKIP_MIGRATIONS=1 与 --migration-target 不能同时使用"
+    exit 1
+fi
+if [[ -n "$MIGRATION_TARGET" && "$DEPLOY_ENV" == "all" ]]; then
+    echo "错误: --migration-target 不支持 --env all；请逐环境迁移、重启并验证"
+    exit 1
+fi
+if [[ "$MIGRATION_ONLY" == "1" && -z "$MIGRATION_TARGET" ]]; then
+    echo "错误: --migration-only 必须同时提供 --migration-target"
+    exit 1
+fi
+if [[ -n "$MIGRATION_TARGET" ]]; then
+    TARGET_GLOB="$PROJECT_ROOT/backend/python/smartbi/database/migrations/${MIGRATION_TARGET}__*.sql"
+    if ! compgen -G "$TARGET_GLOB" >/dev/null; then
+        echo "错误: migration target 在当前 exact main 中不存在: $MIGRATION_TARGET"
+        exit 1
+    fi
+fi
+
 echo "=========================================="
 echo "Python Services 部署 (SmartBI + Modules)"
 echo "部署环境: $DEPLOY_ENV"
+if [[ -n "$MIGRATION_TARGET" ]]; then
+    echo "Migration target: $MIGRATION_TARGET"
+fi
+if [[ "$MIGRATION_ONLY" == "1" ]]; then
+    echo "Migration only: true (不发布应用代码、不重启服务)"
+fi
 echo "=========================================="
 
 # Pre-flight: git sync check (May 11 2026 stale-local-deploy bug fix)
@@ -88,6 +137,80 @@ if [[ "$DEPLOY_ENV" =~ ^(prod|all)$ ]]; then
     GIT_SYNC_STRICT="1"
 fi
 check_git_sync "$PROJECT_ROOT" "[0/5] Git sync pre-check..." "$GIT_SYNC_STRICT"
+
+RELEASE_COMMIT="$(git -C "$PROJECT_ROOT" rev-parse HEAD)"
+if [[ ! "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "错误: 无法解析 exact release commit"
+    exit 1
+fi
+REMOTE_MIGRATION_BUNDLE="/www/wwwroot/cretas/code/.release-migrations/$RELEASE_COMMIT"
+REMOTE_MIGRATION_DIR="$REMOTE_MIGRATION_BUNDLE/sql"
+REMOTE_MIGRATION_SCRIPT_DIR="$REMOTE_MIGRATION_BUNDLE/scripts"
+
+prepare_remote_migration_bundle() {
+    ssh "$SERVER" bash -s -- "$REMOTE_MIGRATION_BUNDLE" <<'REMOTE_BUNDLE'
+set -euo pipefail
+root="/www/wwwroot/cretas/code/.release-migrations"
+bundle="$1"
+if [[ ! "$bundle" =~ ^${root}/[0-9a-f]{40}$ ]]; then
+    echo "invalid release migration bundle path" >&2
+    exit 1
+fi
+if [[ "$(realpath -m "$root")" != "$root" ]]; then
+    echo "release migration root resolves outside the expected path" >&2
+    exit 1
+fi
+for path in "$root" "$bundle" "$bundle/sql" "$bundle/scripts"; do
+    if [[ -L "$path" ]]; then
+        echo "release migration path must not be a symlink: $path" >&2
+        exit 1
+    fi
+done
+mkdir -p "$bundle/sql" "$bundle/scripts"
+if [[ "$(realpath -m "$bundle")" != "$bundle" ]]; then
+    echo "release migration bundle resolves outside the expected path" >&2
+    exit 1
+fi
+REMOTE_BUNDLE
+}
+
+sync_migration_release_bundle() {
+    prepare_remote_migration_bundle
+    # The SHA-scoped narrow directories plus --delete make the remote input set
+    # byte-for-byte derived from this exact main, never a union with stale SQL.
+    rsync -az --delete --timeout=60 \
+        "$PROJECT_ROOT/backend/python/smartbi/database/migrations/" \
+        "$SERVER:$REMOTE_MIGRATION_DIR/" 2>&1 | tail -5
+    rsync -az --delete --timeout=60 \
+        "$PROJECT_ROOT/scripts/migrations/" \
+        "$SERVER:$REMOTE_MIGRATION_SCRIPT_DIR/" 2>&1 | tail -5
+    ssh "$SERVER" "chmod +x \
+        '$REMOTE_MIGRATION_SCRIPT_DIR/apply-smartbi-migrations.sh' \
+        '$REMOTE_MIGRATION_SCRIPT_DIR/backfill-applied.sh' \
+        '$REMOTE_MIGRATION_SCRIPT_DIR/test-runner.sh'"
+}
+
+run_smartbi_migrations() {
+    local migration_args=()
+    if [[ -n "$MIGRATION_TARGET" ]]; then
+        migration_args=(--target "$MIGRATION_TARGET")
+    fi
+    ssh "$SERVER" bash \
+        "$REMOTE_MIGRATION_SCRIPT_DIR/apply-smartbi-migrations.sh" \
+        --env "$DEPLOY_ENV" --migs-dir "$REMOTE_MIGRATION_DIR" \
+        "${migration_args[@]}"
+}
+
+if [[ "$MIGRATION_ONLY" == "1" ]]; then
+    log "INFO" "[migration-only] 同步 SHA 隔离的 exact-main migration bundle..."
+    sync_migration_release_bundle
+    if ! run_smartbi_migrations; then
+        log "ERROR" "[migration-only] migration FAILED；应用代码与服务进程均未改变"
+        exit 1
+    fi
+    log "INFO" "[migration-only] 完成；未同步应用代码、未安装依赖、未重启服务"
+    exit 0
+fi
 
 # 1. 检查本地文件
 log "INFO" "[1/5] 检查本地文件..."
@@ -140,24 +263,16 @@ rsync -az --timeout=60 \
 # files. On failure: abort BEFORE Python restart so old code stays on old
 # schema rather than crash on missing tables.
 #
-# SKIP_MIGRATIONS=1 escape hatch: bypasses the whole step (use only when the
-# runner itself is broken — e.g., bug in apply-smartbi-migrations.sh).
+# --migration-target is the supported path for staged expand/contract releases:
+# it still verifies the tracker and applied checksums while stopping at the
+# inclusive target. SKIP_MIGRATIONS=1 remains an emergency escape hatch only.
 log "INFO" "[3.5/5] 应用 smartbi migrations (env=$DEPLOY_ENV)..."
 if [[ "${SKIP_MIGRATIONS:-0}" == "1" ]]; then
     log "WARN" "[3.5/5] SKIP_MIGRATIONS=1 — 跳过 migrations apply (escape hatch)"
 else
-    # Sync runner + supporting scripts (not covered by Step 3 or 3b).
-    rsync -az --timeout=60 \
-        "$PROJECT_ROOT/scripts/migrations/apply-smartbi-migrations.sh" \
-        "$PROJECT_ROOT/scripts/migrations/backfill-applied.sh" \
-        "$PROJECT_ROOT/scripts/migrations/test-runner.sh" \
-        "$SERVER:/www/wwwroot/cretas/code/scripts/migrations/" 2>&1 | tail -5
-    ssh "$SERVER" "chmod +x \
-        /www/wwwroot/cretas/code/scripts/migrations/apply-smartbi-migrations.sh \
-        /www/wwwroot/cretas/code/scripts/migrations/backfill-applied.sh \
-        /www/wwwroot/cretas/code/scripts/migrations/test-runner.sh"
-
-    if ! ssh "$SERVER" "bash /www/wwwroot/cretas/code/scripts/migrations/apply-smartbi-migrations.sh --env $DEPLOY_ENV"; then
+    # Run only from the SHA-isolated exact-main bundle, never the shared code dir.
+    sync_migration_release_bundle
+    if ! run_smartbi_migrations; then
         log "ERROR" "[3.5/5] migration FAILED — Python service NOT restarted, ABORTING deploy"
         log "ERROR" "       Investigate, then either fix + re-deploy, or set SKIP_MIGRATIONS=1 to bypass"
         exit 1
