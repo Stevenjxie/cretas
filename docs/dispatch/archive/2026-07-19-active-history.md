@@ -59,3 +59,19 @@
 - 本地验收：`node --test scripts/e2e/production-readonly/tests/unit.test.js`，13/13 通过；`git diff --check` 通过；合并后实现分支 tree 与 `origin/main` tree 等价。
 - 状态边界：规则已合并并可供其他 chat 从 `origin/main` 获取；未执行任何生产业务写入、部署、迁移或服务重启。
 - Scope 锁：已释放。
+
+### `CRETAS-F006-WORKFLOW-TOPOLOGY-MATRIX-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- Base SHA：`cc210a61b4afb4f4e88338a71f37610f5467f1b6`
+- 实现 commit：`b60c7e9a99c0db1ff8096cfac1e8f94faa4856a0`
+- PR：[#1481](https://github.com/Stevenjxie/cretas/pull/1481)
+- `main` squash merge commit：`0100906ce4b84cd3c2c2217bbed42f41cf6aac2a`
+- 范围：新增任务专用 `tests/e2e-workflow-routing/f006-topology-matrix.mjs`，以 F006 受控创建并验证 1→1、1→多、多→1、多→多、可替代原料、精确匹配、最小超集、同集合歧义及无共享 Workflow 的生产计划路由矩阵；未修改生产只读 harness 或产品运行时代码。
+- 生产验证：首次写入前实时证明登录 `factoryId=F006`；夹具 53/53 次 mutation 成功，10/10 个 resolver 场景通过，创建 8 个 Workflow、11 个产品和 8 个 BOM。Playwright MCP 实际触发多→1 自动固定、1→多最小超集补全、精确重叠人工选路、无共享路线阻断及 Workflow Cell 悬浮预览。
+- 生产计划证据：UI 创建 F006 计划 `9aee62e4-e5bb-4510-a964-12cf9a6aba96`（`PLAN-1784437835291-6DB33FDC`），固定 Workflow `97@v1` 与 BOM `74ac6dfc-a9d7-4c14-8fdd-c43fd4ba06ea`；API、UI 与数据库回读一致，其他租户同测试前缀计数均为 0。
+- 本地验收：`node --check tests/e2e-workflow-routing/f006-topology-matrix.mjs`、`git diff --check` 通过；落盘报告为 `APPLY_PASS`，断言 `factoryId=F006`、53 次 mutation、10 个 resolver、8 个 Workflow、11 个产品和 8 个 BOM 全部一致。
+- GitHub 门禁：PR 显示 `MERGEABLE/CLEAN`，未报告 required checks；本次仅测试脚本与 dispatch 文档，不触发 JPA Repository 查询启动门禁。
+- 状态边界：脚本和验证记录已合并；没有部署、迁移、生产代码变更或服务重启。F006 测试数据按用户要求保留，不迁移、不自动清理。
+- Scope 锁：已释放。
