@@ -122,3 +122,21 @@
 - 验收证据：`.playwright-mcp/f006-topology-label-many-to-one-prod.png`、`.playwright-mcp/f006-topology-label-many-to-one-response.json`、`.playwright-mcp/f006-topology-label-console-errors.txt`；后端结构化发布报告为 `C:\Users\Steve\.cache\cretas\deploy-reports\backend-1784443042-13706.json`。
 - 并发边界：本次生产发布锁定 commit `0d214e9f785c01992bb579b24710249fd9b9396e`；发布后 `origin/main` 已因无关 PR #1484/#1485 前进至 `4946662c05b4b5cab37cd36be6c5afa82eed759f`，未把这些后续变更夹带部署。测试环境 10011 当时不健康，本任务未触碰。
 - Scope 锁：已释放。
+
+### `CRETAS-F006-PLAN-REPORTING-LINKAGE-E2E-20260719`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- Base SHA：`9ebe0073f9346ee190f2f5a45319c350009c529a`
+- 实现 commits：`d48afb3fca2666cabef74afe0b5051434c6a35e5`、`96842d1b15c79d46aeda1b3424afd367cc26db90`、`9a3e355613fba2e10f0f26ba782f94cb54eb098b`
+- PR：[#1489](https://github.com/Stevenjxie/cretas/pull/1489)、[#1492](https://github.com/Stevenjxie/cretas/pull/1492)、[#1493](https://github.com/Stevenjxie/cretas/pull/1493)
+- `main` squash merge commits：`c6b51523e09d8bcc76347f449a0cc86519dfec75`、`4249f60056e07de32b63f38160ee31332b8e488e`、`359f17440694328ac4ab4b8887842d6eb6a2ed10`
+- 范围：修正 RAW-only→成品 Workflow 报工表单映射；V83 将联产品批次的 Workflow pin 外键与 Workflow 归属 SKU 解耦；同一计划存在多个同 pin 联产批次时复用唯一已物化运行时，仍对不同 Workflow pin 或重复运行时保持歧义阻断。
+- F006 身份与数据边界：首次写入前实时证明 `f006_admin / factoryUser.factoryId=F006`；仅创建/修改 F006 任务专用 SKU、Workflow、生产计划、批次和报工数据，其他租户业务写入为 0；测试数据按用户要求保留，不迁移、不自动清理。
+- 选择规则验收：`ALL_REQUIRED` 场景输入 A/B 与单产出均默认选中且禁用；`EXACTLY_ONE` 场景 A/B 互斥；`AT_LEAST_ONE` 场景可同时选择 A+B 和联产品 G+H，最小选择数约束生效。
+- 正式报工验收：计划 `e5bb5007-8c5d-4dcf-b4d7-b8a57bae9b9f` 固定 Workflow `104@v2`；提交 A=2kg、B=3kg、G=2kg、H=2.5kg 返回 200，生成批次 `10585` 与 `10587`，两个批次都回读为 F006、同一计划及 `104@v2`；原料消耗只在主批次生成两条，未在联产品批次重复扣料。
+- 刷新/重开验收：部署 #1493 后再次打开同一计划“逐道录入”，`workflow-config`、仓库及调料配置请求均为 200，console error 为 0；页面恢复唯一 Workflow 实例 `43`，显示同一历史行的 G=2kg、H=2.5kg，已入账数据只读。
+- 本地验收：Web 目标测试 34/34；V83 schema contract 与真实 PostgreSQL 集成测试通过；#1492 唯一 Maven release lifecycle 42 tests 通过；#1493 唯一 Maven release lifecycle `WorkflowClerkSheetServiceTest,ProcessSheetControllerTest` 14/14 通过。
+- 可信制品与部署：#1493 后端 tree `202c9163983e772f05bc955a6e7e837f5a9b03db`，JAR SHA-256 `07f39d0b4a7b21b6585b79ba3809c3ca82d9429be65993866deab9a070dd3dcc`；生产由 blue/10010 切换至 green/10020，5/5 稳定观察通过，结构化报告 `C:\Users\Steve\.cache\cretas\deploy-reports\backend-1784450143-16975.json`。测试环境 10011 不健康，本任务未触碰。
+- 验收证据：`C:\Users\Steve\my-prototype-logistics\.playwright-mcp\f006-plan-reporting-linkage\` 下保存选择交互、正式提交、响应体、批次/消耗/运行时回读和 Workflow 激活恢复记录。
+- Scope 锁：已释放。
