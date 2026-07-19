@@ -298,3 +298,16 @@
 - 验收：全局 handler 专用 MockMvc 4/4，连同 Restaurant/AgentOps Controller/Service 共 32 项通过；独立只读终审无 P0/P1/P2。
 - 状态边界：修复已合并；生产仍运行上一份 exact-main JAR 且 runtime 为 OFF，尚未重建/部署包含本修复的新制品。
 - Scope 锁：已释放。
+
+### `REDUNDANCY-PT-01`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- Base SHA：`8715e2d304f41ee5d6b72bd40232f5e9214650af`
+- PR：[#1509](https://github.com/Stevenjxie/cretas/pull/1509)
+- `main` squash merge commit：`7070428de0d836b6828e9253cbb48f258d491652`
+- 范围：以 `work_process_tasks` 作为工序任务唯一运行时真值；删除旧 `process_tasks` Entity/Repository/Service/Controller、双写和 fallback、旧 AI create Tool、旧前端/API 调用方与失效测试；查询/汇总/分析 Tool 改接 canonical service。
+- 迁移：按依赖顺序处理旧报工和签到关联，冻结旧 create intent、ProcessTask Drools 规则和 `PROCESS_TASK` 状态机，再移除旧字段与旧表；不使用 `CASCADE`。
+- 验收：后端目标测试 40 项通过，最终 current-tree 真实 JPA Context 与 canonical 报工 3/3 通过，Tool descriptor 4/4 通过；RN 改动文件无 TypeScript 错误；Web Vite 生产构建通过。GitHub 未调度 CI，合并使用本地等价真实 JPA 证据。
+- 状态边界：代码与删除迁移已合并；生产迁移未执行，生产未部署，线上旧结构尚未删除。
+- Scope 锁：已释放。
