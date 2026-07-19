@@ -8,7 +8,7 @@
 - PR-01 实施 Base SHA：`5d0fbdab88090178afe80d576cae32856a474d91`
 - 已确认实施：CV-01 删除空历史表 `cost_variance_configs`
 - 已确认实施：PR-01 删除旧产品配方双轨，BOM 成为唯一运行时真值
-- 已完成：SH-01 分成“冻结旧写链”和“冻结后清测试数据”两个顺序发布；BS-01 按已确认设计进入合并与部署门禁
+- 已完成：SH-01 分成“冻结旧写链”和“冻结后清测试数据”两个顺序发布；BS-01 已合并并完成生产迁移、后端/Web 发布与只读验收
 - 明确保留：WF-01、SCH-01
 - 数据授权：PR-01、SH-01、BS-01 相关生产记录均为测试数据，可按已审查范围删除；不得扩展到其他业务域
 - 禁止：在旧写链 410 尚未部署时清空 `shipment_records`、保留静默 fallback、超出候选范围删除数据
@@ -360,6 +360,25 @@ BS-01 业务行，也不存在入站/出站 FK、View 依赖或业务触发器�
 
 回滚需保留 rename 前结构和字段快照；若已写入注射配置，回滚 migration 必须无损恢复
 `injection_amount_kg`，不能通过清表回滚。
+
+### 5.5 合并与生产证据
+
+- 实施 PR：[#1484](https://github.com/Stevenjxie/cretas/pull/1484)，squash merge
+  `fd89aa5093a2101239ae8ebfdcfcd048abdfb868`；台账归档 PR：
+  [#1485](https://github.com/Stevenjxie/cretas/pull/1485)。
+- exact `origin/main` 发布提交：`9ebe0073f9346ee190f2f5a45319c350009c529a`；该提交相对
+  BS-01 归档提交只增加台账归档，后端与 Web Git tree 未变化。
+- 后端可信 release 生命周期：115 tests，0 failure/error；JPA repository startup gate 通过。
+- 生产 Flyway：`20261028.82`，`success=true`、`installed_rank=542`。
+- 迁移后结构：`bom_process_seasoning` 不存在；`bom_process_injection_configs` 存在且为 0 行；
+  `bom_recipes` 三个重复 header 字段为 0；注射配置的 process ratio 字段为 0。
+- 迁移后业务数据：47 条 live seasoning 明细全部保留；12 条工序绑定、35 条整 SKU 绑定不变；
+  28 条 COOKING 的比例已落到 `bom_seasoning_items.subsequent_pot_ratio`。
+- Java 蓝绿发布：`10010 -> 10020`，5/5 切流后健康轮次通过；green active、blue inactive，
+  仅 `10020` 监听，direct health 与网关 health 均为 HTTP 200。
+- Web 原子发布：HTTP 200；local/server/gateway/public 四方 `index.html` SHA-256 一致。
+- 回滚制品：Java 发布前 JAR 备份 `aims-0.0.1-SNAPSHOT.jar.bak.20260719_145728`；
+  Web 保留原子交换备份。结构回滚仍必须使用补偿 migration，禁止修改 Flyway history。
 
 ## 6. WF-01 与 SCH-01
 
