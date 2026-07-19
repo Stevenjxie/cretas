@@ -11,7 +11,7 @@ import pytest_asyncio
 _TENANT_A = "TEST_BATCH_A"
 _TENANT_B = "TEST_BATCH_B"
 _INTERNAL_SECRET = os.getenv(
-    "INTERNAL_API_SECRET", "cretas-internal-sec-87a9caca9f57b1f2",
+    "INTERNAL_API_SECRET", "test-only-internal-secret-not-for-production",
 )
 
 

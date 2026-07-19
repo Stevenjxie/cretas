@@ -16,7 +16,7 @@ User=root
 #
 # ⚠️  .env.distill is the LLM-distillation env; these ETLs do NOT call LLM.
 #     Do not use .env.distill here — it may lack the FOOD_KB_POSTGRES_* block.
-#     Verify .env.prod has FOOD_KB_POSTGRES_PASSWORD=cretas123 (cretas_db DSN).
+#     Verify .env.prod defines FOOD_KB_POSTGRES_PASSWORD without printing it.
 # -------------------------------------------------------------------------
 EnvironmentFile=/www/wwwroot/cretas/.env.prod
 

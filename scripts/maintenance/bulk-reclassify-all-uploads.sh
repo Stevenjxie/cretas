@@ -32,9 +32,17 @@ else
     DB_NAME=smartbi_prod_db
 fi
 
-# Pull internal secret from prod systemd env (same value on test per deploy script)
-SECRET="$(grep -E '^INTERNAL_API_SECRET=' /www/wwwroot/cretas/.env.prod 2>/dev/null | cut -d= -f2)"
-SECRET="${SECRET:-cretas-internal-sec-87a9caca9f57b1f2}"
+# Load the internal secret from the target environment; fail closed when absent.
+ENV_FILE="${CRETAS_ENV_FILE:-/www/wwwroot/cretas/.env.${TARGET}}"
+if [ ! -r "$ENV_FILE" ]; then
+    echo "ERROR: missing readable environment file: $ENV_FILE" >&2
+    exit 1
+fi
+SECRET="$(sed -n 's/^INTERNAL_API_SECRET=//p' "$ENV_FILE" | tail -1)"
+if [ -z "$SECRET" ]; then
+    echo "ERROR: INTERNAL_API_SECRET is unset in $ENV_FILE" >&2
+    exit 1
+fi
 
 echo "=========================================="
 echo "Bulk reclassify — target=$TARGET port=$PY_PORT db=$DB_NAME"

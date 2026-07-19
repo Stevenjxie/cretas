@@ -16,7 +16,11 @@ NC='\033[0m'
 # 配置
 BACKEND_URL="http://localhost:10010"
 FACTORY_ID="CRETAS_2024_001"
-ACCESS_TOKEN="eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiZmFjdG9yeV9zdXBlcl9hZG1pbiIsInVzZXJJZCI6IjEiLCJzdWIiOiIxIiwiaWF0IjoxNzYzNjczOTA5LCJleHAiOjE3NjM3NjAzMDl9.sCuUPcwGA4QFwPecdrOUw5ewQUADffoRSFmmhOmcZgc"
+ACCESS_TOKEN="${ACCESS_TOKEN:-}"
+if [ -z "$ACCESS_TOKEN" ]; then
+    echo "ERROR: ACCESS_TOKEN must be supplied by the caller" >&2
+    exit 2
+fi
 
 # 计数器
 TESTS_PASSED=0

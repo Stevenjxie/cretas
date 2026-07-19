@@ -394,39 +394,40 @@ restart_prod_via_systemd() {
 }
 
 restart_test_via_nohup() {
-    # Apr 22 2026 fix: INTERNAL_API_SECRET was missing — Java sync upload path
-    # on 10011 calls Python /analytics/reclassify/{id} and auth_middleware
-    # returns 401 without it. restart-test.sh already sets it; keep this
-    # inline restart consistent.
+    # Test credentials are host-local and must never be embedded in this script.
     ssh $SERVER "
-        PID_PY=\$(lsof -ti :8084 2>/dev/null)
+        set -euo pipefail
+        ENV_FILE=$REMOTE_CRETAS_DIR/.env.test
+        if [ ! -r \"\$ENV_FILE\" ]; then
+            echo 'ERROR: missing readable /www/wwwroot/cretas/.env.test' >&2
+            exit 1
+        fi
+        set -a
+        . \"\$ENV_FILE\"
+        set +a
+        for required in POSTGRES_PASSWORD FOOD_KB_POSTGRES_PASSWORD INTERNAL_API_SECRET JWT_SECRET LLM_API_KEY; do
+            if [ -z \"\${!required:-}\" ]; then
+                echo \"ERROR: required test secret is unset: \$required\" >&2
+                exit 1
+            fi
+        done
+        PID_PY=\$(lsof -ti :8084 2>/dev/null || true)
         if [ -n \"\$PID_PY\" ]; then kill \$PID_PY 2>/dev/null; sleep 2; fi
         cd $REMOTE_CRETAS_DIR/code/backend/python
         POSTGRES_DB=smartbi_db \
-        POSTGRES_PASSWORD=smartbi_secure_password_2025 \
         POSTGRES_ENABLED=true \
         POSTGRES_HOST=localhost POSTGRES_PORT=5432 POSTGRES_USER=smartbi_user \
         FOOD_KB_POSTGRES_DB=cretas_db \
-        FOOD_KB_POSTGRES_PASSWORD=cretas123 \
         FOOD_KB_POSTGRES_USER=cretas_user \
         FOOD_KB_POSTGRES_HOST=localhost FOOD_KB_POSTGRES_PORT=5432 \
-        INTERNAL_API_SECRET=cretas-internal-sec-87a9caca9f57b1f2 \
-        LLM_API_KEY=sk-da3b827e6a00404a8bc869296f8690bc \
-        LLM_ALIYUN_A_API_KEY=sk-da3b827e6a00404a8bc869296f8690bc \
-        LLM_ALIYUN_B_API_KEY=sk-3347ece751f2451086f130840ee83177 \
-        LLM_ALIYUN_C_API_KEY=sk-6be4d53e16434ccf891b555d0010a736 \
-        LLM_ZHIPU_API_KEY=20bd1a838cf143d6a63a14190f354969.aMb9Utno1zApuUgu \
-        LLM_DEEPSEEK_API_KEY=sk-008669a2c5e04d0f90e827fbdee03892 \
         LLM_MODEL=qwen3.7-max-2026-06-08 LLM_FAST_MODEL=qwen3.5-flash \
         LLM_REASONING_MODEL=qwen3.5-flash LLM_VL_MODEL=qwen3-vl-plus-2025-12-19 \
-        JWT_SECRET=cretas-jwt-secret-key-2026-test \
         nohup $REMOTE_CRETAS_DIR/code/backend/python/venv38/bin/python \
             -m uvicorn main:app --host 0.0.0.0 --port 8084 \
             > $REMOTE_CRETAS_DIR/python-test.log 2>&1 &
         echo 'Test Python restarted (nohup)'
     "
 }
-
 case "$DEPLOY_ENV" in
     prod)
         restart_prod_via_systemd

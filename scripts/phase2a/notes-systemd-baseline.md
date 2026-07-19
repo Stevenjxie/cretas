@@ -12,7 +12,7 @@
 文件：`/etc/systemd/system/cretas-python.service`
 
 ```
-Environment=JWT_SECRET=cretas-jwt-secret-key-2026
+Environment=JWT_SECRET=<redacted historical inline value>
 ```
 
 inline 已经包含 JWT_SECRET（值与 `.env.prod` 中的同名变量相同）。
@@ -50,7 +50,7 @@ ssh root@47.100.235.168 "systemctl daemon-reload && systemctl restart cretas-pyt
 
 变更：在 `[Service]` 段后追加 `EnvironmentFile=/www/wwwroot/cretas/.env.prod`。
 
-**inline `Environment=JWT_SECRET=...` 行保留不动**——与 EnvironmentFile 中的同名变量同值，无冲突。systemd 中 inline `Environment=` 优先级高于 `EnvironmentFile=`，但因值相同实际无差异。
+**历史状态（已废止）**：inline `Environment=JWT_SECRET=...` 曾被保留。systemd 中 inline `Environment=` 会覆盖 `EnvironmentFile=`，因此凭据轮换必须删除同名 inline secret，只保留 `0600` 环境文件。
 
 未来若要让 Python 自动跟随 `.env.prod` 中的 secret 轮换，需要从 service 文件中删除 inline `Environment=JWT_SECRET=...` 行（但要先确认 `.env.prod` 包含所有 inline 中的其他变量，避免破坏服务启动）。
 

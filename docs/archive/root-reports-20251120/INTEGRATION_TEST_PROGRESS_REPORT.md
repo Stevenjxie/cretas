@@ -155,7 +155,7 @@
 
 ### 访问令牌 (示例)
 ```
-eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiZmFjdG9yeV9zdXBlcl9hZG1pbiIsInVzZXJJZCI6IjEiLCJzdWIiOiIxIiwiaWF0IjoxNzYzNjczOTA5LCJleHAiOjE3NjM3NjAzMDl9.sCuUPcwGA4QFwPecdrOUw5ewQUADffoRSFmmhOmcZgc
+<EXPIRED_REDACTED_JWT>
 ```
 
 **令牌有效期**: 3600秒 (1小时)

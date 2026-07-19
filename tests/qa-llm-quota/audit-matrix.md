@@ -12,7 +12,7 @@
 
 **Method**: Live `chat/completions` test calls with `max_tokens=5`, 25s timeout, recorded HTTP status.
 **Audit script**: `/tmp/audit-llm.sh` + `/tmp/audit-llm-2.sh` (May 13 2026)
-**Tested with prod API keys** sourced from `scripts/systemd/restart-test.sh.new`.
+**Tested with prod API keys** sourced at runtime from the gitignored host environment file; values were never committed intentionally.
 
 ---
 
@@ -100,7 +100,7 @@ Primary recovery: swap exhausted primaries to confirmed-working SKUs. Keep old S
 
 ## Live Audit Confirmation
 
-This audit was run live against production API keys before commit. Results reproducible by running `/tmp/audit-llm.sh` with the keys from `scripts/systemd/restart-test.sh.new`. Re-audit recommended before EVERY SKU change in production routing.
+This audit was run live against production API keys before commit. Re-audit with credentials loaded from the root-only host environment file; never copy them into tracked scripts. Re-audit recommended before EVERY SKU change in production routing.
 
 ---
 

@@ -15,14 +15,17 @@ import urllib.parse
 import urllib.request
 import ssl
 import json
+import os
 
-# 配置
-BT_PANEL_URL = "https://139.196.165.140:16435"
-API_KEY = "Fw3rqkRqAashK9uNDsFxvst31YSbBmUb"
+# Load credentials from the caller environment or a root-only environment file.
+BT_PANEL_URL = os.environ.get("BT_PANEL_URL", "https://139.196.165.140:16435")
+API_KEY = os.environ.get("BT_API_KEY", "")
 
 
 def generate_token():
-    """生成API签名"""
+    """Generate a short-lived API signature without logging the secret."""
+    if not API_KEY:
+        raise RuntimeError("BT_API_KEY must be supplied from a root-only credential source")
     request_time = str(int(time.time()))
     md5_api_sk = hashlib.md5(API_KEY.encode()).hexdigest()
     request_token = hashlib.md5((request_time + md5_api_sk).encode()).hexdigest()
@@ -65,7 +68,9 @@ def call_api(action, module="system", **kwargs):
     try:
         # 发送请求
         print(f"调用API: {url}")
-        print(f"参数: {dict(data)}")
+        safe_data = dict(data)
+        safe_data["request_token"] = "<redacted>"
+        print(f"Request data: {safe_data}")
         print("-" * 50)
         
         with urllib.request.urlopen(req, context=context, timeout=30) as response:
@@ -118,4 +123,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
