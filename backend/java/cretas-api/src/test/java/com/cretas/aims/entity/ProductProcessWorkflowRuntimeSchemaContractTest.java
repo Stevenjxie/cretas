@@ -163,6 +163,25 @@ class ProductProcessWorkflowRuntimeSchemaContractTest {
     }
 
     @Test
+    void v83KeepsBatchWorkflowPinTenantAndVersionSafeWithoutRequiringOwnerSku() throws Exception {
+        String sql = normalizedMigration(
+                "V20261028_83__allow_joint_output_batch_workflow_pin.sql");
+
+        assertContains(sql,
+                "CONSTRAINT uk_ppw_id_factory_version UNIQUE (id, factory_id, definition_version)",
+                "joint-output batches still need a tenant/version-safe workflow key");
+        assertContains(sql,
+                "DROP CONSTRAINT fk_production_batch_selected_workflow",
+                "the single-output-only batch FK must be replaced");
+        assertContains(sql,
+                "FOREIGN KEY ( selected_workflow_id, factory_id, selected_workflow_version ) REFERENCES product_process_workflows( id, factory_id, definition_version )",
+                "batch provenance must reference the exact workflow tenant and version");
+        assertFalse(sql.contains(
+                        "selected_workflow_id, factory_id, product_type_id, selected_workflow_version"),
+                "a joint output SKU must not be forced to equal the workflow owner SKU");
+    }
+
+    @Test
     void batchPinColumnsAreDatabaseGeneratedReadOnlyAndFetchedAfterInsert() throws Exception {
         for (String fieldName : List.of(
                 "workflowSelectionMode", "selectedWorkflowId", "selectedWorkflowVersion")) {
