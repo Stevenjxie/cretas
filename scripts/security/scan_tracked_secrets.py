@@ -169,7 +169,7 @@ def scan_repository(root: Path) -> list[Finding]:
         path = root / relative
         # A deletion staged or pending in the working tree is not part of the
         # resulting tracked tree and must not make local pre-commit scans crash.
-        if not path.exists():
+        if not path.exists() or path.is_dir():
             continue
         try:
             findings.extend(scan_content(relative, path.read_bytes()))
