@@ -4,6 +4,9 @@ import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.ai.workflow.inventory.InventoryAnalysisWorkflow;
+import com.cretas.aims.ai.workflow.inventory.InventoryAnalysisWorkflowInput;
+import com.cretas.aims.ai.workflow.inventory.InventoryAnalysisWorkflowResult;
 import com.cretas.aims.dto.skill.SkillContext;
 import com.cretas.aims.dto.skill.SkillDefinition;
 import com.cretas.aims.dto.skill.SkillResult;
@@ -63,6 +66,13 @@ public class SkillExecutorImpl implements SkillExecutor {
     @Autowired
     private com.cretas.aims.ai.tool.ToolRbacEnforcer toolRbacEnforcer;
 
+    /**
+     * Canonical inventory workflow adapter. Optional field injection preserves the legacy
+     * constructor used by focused tests; the canonical alias fails closed if this bean is absent.
+     */
+    @Autowired(required = false)
+    private InventoryAnalysisWorkflow inventoryAnalysisWorkflow;
+
     // ==================== Configuration ====================
 
     @Value("${ai.skill_executor.parallel_execution_enabled:true}")
@@ -118,6 +128,12 @@ public class SkillExecutorImpl implements SkillExecutor {
                 timeoutMs);
 
         try {
+            // Canonical alias is a fixed governed workflow. Do not validate or consume the
+            // definition's tools/DAG/prompt because database overrides are not execution policy.
+            if (InventoryAnalysisWorkflow.CANONICAL_SKILL_NAME.equals(skill.getName())) {
+                return executeInventoryAnalysis(skill, context, timeoutMs, startTime);
+            }
+
             // 1. Validate context
             String validationError = validateContext(skill, context);
             if (validationError != null) {
@@ -193,6 +209,69 @@ public class SkillExecutorImpl implements SkillExecutor {
             return SkillResult.error(skill.getName(), e.getMessage(),
                     executedTools, executionTime);
         }
+    }
+
+    private SkillResult executeInventoryAnalysis(
+            SkillDefinition skill,
+            SkillContext context,
+            long timeoutMs,
+            long startTime) {
+        if (!skill.isEnabled()) {
+            return SkillResult.error(
+                    InventoryAnalysisWorkflow.CANONICAL_SKILL_NAME,
+                    "Skill is disabled",
+                    List.of(),
+                    System.currentTimeMillis() - startTime);
+        }
+        if (inventoryAnalysisWorkflow == null) {
+            return SkillResult.error(
+                    InventoryAnalysisWorkflow.CANONICAL_SKILL_NAME,
+                    "Inventory analysis workflow is unavailable",
+                    List.of(),
+                    System.currentTimeMillis() - startTime);
+        }
+        if (context == null) {
+            return SkillResult.error(
+                    InventoryAnalysisWorkflow.CANONICAL_SKILL_NAME,
+                    "Context is null",
+                    List.of(),
+                    System.currentTimeMillis() - startTime);
+        }
+
+        long userId;
+        try {
+            userId = Long.parseLong(context.getUserId());
+        } catch (RuntimeException invalidUserId) {
+            return SkillResult.error(
+                    InventoryAnalysisWorkflow.CANONICAL_SKILL_NAME,
+                    "Valid userId is required",
+                    List.of(),
+                    System.currentTimeMillis() - startTime);
+        }
+
+        InventoryAnalysisWorkflowResult result = inventoryAnalysisWorkflow.execute(
+                new InventoryAnalysisWorkflowInput(
+                        context.getFactoryId(),
+                        userId,
+                        context.getSessionId(),
+                        context.getUserQuery(),
+                        timeoutMs));
+        long executionTime = System.currentTimeMillis() - startTime;
+        if (!result.success()) {
+            return SkillResult.error(
+                    InventoryAnalysisWorkflow.CANONICAL_SKILL_NAME,
+                    result.message(),
+                    result.executedTools(),
+                    executionTime);
+        }
+        return SkillResult.builder()
+                .success(true)
+                .skillName(InventoryAnalysisWorkflow.CANONICAL_SKILL_NAME)
+                .data(result.data())
+                .message(result.message())
+                .executedTools(result.executedTools())
+                .executionTime(executionTime)
+                .build();
     }
 
     /**
@@ -299,6 +378,10 @@ public class SkillExecutorImpl implements SkillExecutor {
     public boolean supports(SkillDefinition skill) {
         if (skill == null || skill.getName() == null) {
             return false;
+        }
+
+        if (InventoryAnalysisWorkflow.CANONICAL_SKILL_NAME.equals(skill.getName())) {
+            return inventoryAnalysisWorkflow != null;
         }
 
         // Check if all required tools are available

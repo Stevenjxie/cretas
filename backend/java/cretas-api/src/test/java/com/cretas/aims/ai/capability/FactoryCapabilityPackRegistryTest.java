@@ -49,8 +49,10 @@ class FactoryCapabilityPackRegistryTest {
     }
 
     @Test
-    void allAllowlistedToolsRemainInventoryReadLowWithoutGovernancePromotion() {
+    void allAllowlistedToolsRemainReadLowWithOnlyWorkflowToolsApproved() {
         ToolDescriptorInventory inventory = new ToolDescriptorInventoryLoader().loadDefault();
+        Set<String> approvedInventoryWorkflowTools = Set.of(
+                "material_stock_summary", "material_batch_query", "material_expired_query");
         Map<String, ToolDescriptorInventoryEntry> byName = inventory.descriptors().stream()
                 .collect(Collectors.toMap(
                         ToolDescriptorInventoryEntry::toolName, Function.identity()));
@@ -60,8 +62,10 @@ class FactoryCapabilityPackRegistryTest {
                     assertThat(entry).as(tool).isNotNull();
                     assertThat(entry.actionType()).as(tool).isEqualTo(ToolExecutor.ActionType.READ);
                     assertThat(entry.riskLevel()).as(tool).isEqualTo(ToolExecutor.RiskLevel.LOW);
-                    assertThat(entry.governanceStatus()).as(tool)
-                            .isEqualTo(ToolGovernanceStatus.REVIEW_REQUIRED);
+                    assertThat(entry.governanceStatus()).as(tool).isEqualTo(
+                            approvedInventoryWorkflowTools.contains(tool)
+                                    ? ToolGovernanceStatus.APPROVED
+                                    : ToolGovernanceStatus.REVIEW_REQUIRED);
                 }));
     }
 
@@ -76,7 +80,8 @@ class FactoryCapabilityPackRegistryTest {
         FactoryCapabilityPack warehouse = registry.findById("factory.warehouse").orElseThrow();
         assertThat(warehouse.workflowReferences()).extracting(
                         FactoryCapabilityPack.WorkflowReference::referenceId)
-                .contains("FORM:INVENTORY_INBOUND", "FORM:INVENTORY_OUTBOUND",
+                .contains("INTENT:INVENTORY_ANALYSIS",
+                        "FORM:INVENTORY_INBOUND", "FORM:INVENTORY_OUTBOUND",
                         "FORM:INVENTORY_COUNT");
 
         FactoryCapabilityPack quality = registry.findById("factory.quality").orElseThrow();

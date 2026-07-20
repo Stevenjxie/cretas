@@ -21,11 +21,11 @@ class RuntimeToolPolicyLoaderTest {
     private final RuntimeToolPolicyLoader loader = new RuntimeToolPolicyLoader();
 
     @Test
-    void loadsAllSevenCompleteExplicitRuntimePolicies() {
+    void loadsAllTenCompleteExplicitRuntimePolicies() {
         RuntimeToolPolicyManifest manifest = loader.loadDefault();
 
         assertThat(manifest.schemaVersion()).isEqualTo(1);
-        assertThat(manifest.expectedPolicyCount()).isEqualTo(7);
+        assertThat(manifest.expectedPolicyCount()).isEqualTo(10);
         assertThat(manifest.policies())
                 .extracting(RuntimeToolPolicyEntry::toolName)
                 .containsExactly(
@@ -35,7 +35,10 @@ class RuntimeToolPolicyLoaderTest {
                         "canvas_product_work_process_config",
                         "canvas_work_process_catalog",
                         "product_create",
-                        "bom_adjust");
+                        "bom_adjust",
+                        "material_stock_summary",
+                        "material_batch_query",
+                        "material_expired_query");
         assertThat(manifest.policies()).allSatisfy(policy -> {
             assertThat(policy.provenance()).isEqualTo(DescriptorProvenance.EXPLICIT);
             assertThat(policy.requiredPermissions().isEmpty() && policy.allowedRoles().isEmpty())
@@ -71,6 +74,23 @@ class RuntimeToolPolicyLoaderTest {
                     .isEqualTo(IdempotencyPolicy.REQUIRED_FOR_EXECUTION);
             assertThat(policy.allowedSources())
                     .containsExactly(ToolExecutionSource.HTTP_CONTROLLER);
+        });
+        assertThat(manifest.policies().subList(7, 10)).allSatisfy(policy -> {
+            assertThat(policy.actionType()).isEqualTo(
+                    com.cretas.aims.ai.tool.ToolExecutor.ActionType.READ);
+            assertThat(policy.riskLevel()).isEqualTo(
+                    com.cretas.aims.ai.tool.ToolExecutor.RiskLevel.LOW);
+            assertThat(policy.version()).isEqualTo("1.0.0");
+            assertThat(policy.supportsPreview()).isFalse();
+            assertThat(policy.requiredPermissions()).containsExactlyInAnyOrder(
+                    "warehouse:read", "warehouse:read_write",
+                    "inventory:read", "inventory:read_write");
+            assertThat(policy.allowedBusinessTypes())
+                    .containsExactlyInAnyOrder(FactoryType.FACTORY, FactoryType.CENTRAL_KITCHEN);
+            assertThat(policy.confirmationPolicy()).isEqualTo(ConfirmationPolicy.NOT_REQUIRED);
+            assertThat(policy.idempotencyPolicy()).isEqualTo(IdempotencyPolicy.NOT_REQUIRED);
+            assertThat(policy.allowedSources()).containsExactly(ToolExecutionSource.SKILL_WORKFLOW);
+            assertThat(policy.dataClassification()).isEqualTo(DataClassification.CONFIDENTIAL);
         });
         assertThat(manifest.policies().get(0).dataClassification())
                 .isEqualTo(DataClassification.RESTRICTED);

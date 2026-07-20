@@ -24,9 +24,9 @@ class ToolDescriptorCatalogTest {
 
         assertThat(catalog.inventory().schemaVersion()).isEqualTo(1);
         assertThat(catalog.inventory().expectedToolCount()).isEqualTo(588);
-        assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(580);
+        assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(577);
         assertThat(statistics.total()).isEqualTo(588);
-        assertThat(statistics.legacy()).isEqualTo(580);
+        assertThat(statistics.legacy()).isEqualTo(577);
         assertThat(statistics.actionTypes()).containsExactlyInAnyOrderEntriesOf(Map.of(
                 ToolExecutor.ActionType.READ, 447L,
                 ToolExecutor.ActionType.WRITE, 62L,
@@ -41,11 +41,11 @@ class ToolDescriptorCatalogTest {
                 ToolExecutor.RiskLevel.HIGH, 5L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
         assertThat(statistics.previewSupported()).isEqualTo(38);
-        assertThat(statistics.requiresPermission()).isEqualTo(39);
+        assertThat(statistics.requiresPermission()).isEqualTo(42);
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolGovernanceStatus.REVIEW_REQUIRED, 563L,
+                ToolGovernanceStatus.REVIEW_REQUIRED, 560L,
                 ToolGovernanceStatus.REVIEW_REQUIRED_P0, 18L,
-                ToolGovernanceStatus.APPROVED, 7L,
+                ToolGovernanceStatus.APPROVED, 10L,
                 ToolGovernanceStatus.WAIVED, 0L));
 
         assertThat(catalog.inventory().descriptors())
@@ -67,7 +67,10 @@ class ToolDescriptorCatalogTest {
                         "canvas_product_work_process_config",
                         "canvas_work_process_catalog",
                         "product_create",
-                        "bom_adjust");
+                        "bom_adjust",
+                        "material_stock_summary",
+                        "material_batch_query",
+                        "material_expired_query");
     }
 
     @Test

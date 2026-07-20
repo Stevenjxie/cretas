@@ -4,6 +4,7 @@ package com.cretas.aims.ai.tool.gateway;
 public enum ToolExecutionSource {
     AI_CHAT,
     AI_INTENT_DISPATCH,
+    SKILL_WORKFLOW,
     WORKFLOW,
     SCHEDULER,
     TRIGGER,

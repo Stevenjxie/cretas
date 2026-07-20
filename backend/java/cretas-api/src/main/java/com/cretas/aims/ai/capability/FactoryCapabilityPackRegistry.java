@@ -20,7 +20,7 @@ public final class FactoryCapabilityPackRegistry {
             "ai/capability-packs/operator-v1.yaml",
             "eed7d0a6c5a14ba4e514e71ba11166292200fe0c439359596fcca223832f58ad",
             "ai/capability-packs/warehouse-v1.yaml",
-            "645d39e96f4442777b01d20511fb302832babb339da203fc87c1e6b9ce238321",
+            "ada8ea1b6abea51072a25e12c980047c8381e723cc4597dea7bce17791b4dcd6",
             "ai/capability-packs/quality-v1.yaml",
             "032d51ebcf9a11423c3d76f8b62f60ece4eedc235b5fbf7aaa228b592a54e9d1",
             "ai/capability-packs/manager-v1.yaml",

@@ -3,7 +3,7 @@
 # This inventory is an independent source-audit truth and is never sufficient by itself to execute.
 schemaVersion: 1
 expectedToolCount: 588
-expectedLegacyCount: 580
+expectedLegacyCount: 577
 descriptors:
   - toolName: "restaurant_calibration_history"
     implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantCalibrationHistoryTool"
@@ -8875,24 +8875,25 @@ descriptors:
     governanceStatus: REVIEW_REQUIRED
   - toolName: "material_stock_summary"
     implementationClass: "com.cretas.aims.ai.tool.impl.material.MaterialStockSummaryTool"
-    provenance: LEGACY_INFERRED
+    provenance: EXPLICIT
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
+    requiresPermission: true
+    requiredPermissions: ["warehouse:read", "warehouse:read_write", "inventory:read", "inventory:read_write"]
+    allowedRoles: []
     version: "1.0.0"
     domainTags: ["material"]
     overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: true
+      hasPermission: true
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: APPROVED
   - toolName: "material_processing_step"
     implementationClass: "com.cretas.aims.ai.tool.impl.material.MaterialProcessingStepTool"
     provenance: LEGACY_INFERRED
@@ -9195,24 +9196,25 @@ descriptors:
     governanceStatus: REVIEW_REQUIRED
   - toolName: "material_batch_query"
     implementationClass: "com.cretas.aims.ai.tool.impl.material.MaterialBatchQueryTool"
-    provenance: LEGACY_INFERRED
+    provenance: EXPLICIT
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
+    requiresPermission: true
+    requiredPermissions: ["warehouse:read", "warehouse:read_write", "inventory:read", "inventory:read_write"]
+    allowedRoles: []
     version: "1.0.0"
     domainTags: ["material"]
     overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: true
+      hasPermission: true
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: APPROVED
   - toolName: "material_batch_supervisor"
     implementationClass: "com.cretas.aims.ai.tool.impl.material.MaterialBatchSupervisorTool"
     provenance: LEGACY_INFERRED
@@ -9495,24 +9497,25 @@ descriptors:
     governanceStatus: REVIEW_REQUIRED
   - toolName: "material_expired_query"
     implementationClass: "com.cretas.aims.ai.tool.impl.material.MaterialExpiredQueryTool"
-    provenance: LEGACY_INFERRED
+    provenance: EXPLICIT
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
+    requiresPermission: true
+    requiredPermissions: ["warehouse:read", "warehouse:read_write", "inventory:read", "inventory:read_write"]
+    allowedRoles: []
     version: "1.0.0"
     domainTags: ["material"]
     overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: true
+      hasPermission: true
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: APPROVED
   - toolName: "material_batch_workers"
     implementationClass: "com.cretas.aims.ai.tool.impl.material.MaterialBatchWorkersTool"
     provenance: LEGACY_INFERRED

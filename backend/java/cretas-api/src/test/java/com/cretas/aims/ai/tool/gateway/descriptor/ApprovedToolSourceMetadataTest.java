@@ -5,6 +5,9 @@ import com.cretas.aims.ai.tool.impl.restaurant.RestaurantDishDeleteTool;
 import com.cretas.aims.ai.tool.impl.restaurant.RestaurantOwnerActionAdvisorTool;
 import com.cretas.aims.ai.tool.impl.bom.BomAdjustTool;
 import com.cretas.aims.ai.tool.impl.dataop.ProductCreateTool;
+import com.cretas.aims.ai.tool.impl.material.MaterialBatchQueryTool;
+import com.cretas.aims.ai.tool.impl.material.MaterialExpiredQueryTool;
+import com.cretas.aims.ai.tool.impl.material.MaterialStockSummaryTool;
 import com.cretas.aims.client.RestaurantOwnerActionClient;
 import com.cretas.aims.ai.tool.impl.user.UserDisableTool;
 import org.junit.jupiter.api.Test;
@@ -14,6 +17,31 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ApprovedToolSourceMetadataTest {
+
+    @Test
+    void inventoryWorkflowToolsPublishExplicitReadOnlyPermissionMetadata() {
+        Set<String> permissions = Set.of(
+                "warehouse:read",
+                "warehouse:read_write",
+                "inventory:read",
+                "inventory:read_write");
+        assertInventoryReadTool(new MaterialStockSummaryTool(), permissions);
+        assertInventoryReadTool(new MaterialBatchQueryTool(), permissions);
+        assertInventoryReadTool(new MaterialExpiredQueryTool(), permissions);
+    }
+
+    private static void assertInventoryReadTool(
+            ToolExecutor tool, Set<String> expectedPermissions) {
+        assertThat(tool.getActionType()).isEqualTo(ToolExecutor.ActionType.READ);
+        assertThat(tool.getRiskLevel()).isEqualTo(ToolExecutor.RiskLevel.LOW);
+        assertThat(tool.supportsPreview()).isFalse();
+        assertThat(tool.requiresPermission()).isTrue();
+        assertThat(tool.hasPermission("factory_super_admin")).isFalse();
+        assertThat(tool.getRequiredPermissions())
+                .containsExactlyInAnyOrderElementsOf(expectedPermissions);
+        assertThat(tool.getVersion()).isEqualTo("1.0.0");
+        assertThat(tool.getDomainTags()).containsExactly("material");
+    }
 
     @Test
     void fixedWriteToolsPublishExplicitAnyOfPermissionsAndPreviewMetadata() {
