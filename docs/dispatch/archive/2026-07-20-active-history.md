@@ -1,5 +1,17 @@
 # Dispatch 完成记录 — 2026-07-20
 
+### `F006-M08-TRANSFER-DETAIL-UNIT-20260720`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- 登记 Base SHA：`0dc264d546bfbb498348e7dcb1b035ed38658f3d`
+- PR：[#1527](https://github.com/Stevenjxie/cretas/pull/1527)
+- 根因：调拨创建页已通过共享 `displayUnit` 显示中文单位，但详情页主明细、各状态操作确认框、签收差异表与差异处理弹窗共 8 处直接渲染 API canonical `unit`，导致 `box` 在 DRAFT 及后续状态持续泄漏给用户。
+- 范围：详情页所有用户可见调拨单位统一通过 `displayUnit`，覆盖 `box/case/slice → 盒/箱/片` 且保持 `g/kg`；API、DB 与 mutation payload 的 canonical unit 不变。未推进既有调拨 `0320fc6a-4199-4737-a7e1-8265e93a74b0` 状态，未改变库存，未触碰 LIUSHANMEN。
+- 验收：目标 Vitest 3 files / 17 tests 通过，`vue-tsc -b` 通过；唯一 Web release build 729 assets，archive SHA-256 `809aee1fa54c4ea13a9fbf8daff777a173a20bd272686e1c48a55324e24eb512`，index SHA-256 `2e703ca87c4ae697c7580a5254945062d23ce7a9f5addbef9cd4ac869af5665d`。Java tree 未变化，发布判定 no-op。
+- 生产边界：PR 合入后从 clean exact main 复用同 Web tree 制品并仅部署 Web；对既有 DRAFT 只读刷新验证单位后通知原测试 Chat 从同一 transferId 继续申请、审批、发运、签收与确认入库，绝不新建第二张。
+- Scope 锁：已释放。
+
 ### `F006-M08-FG-TRANSFER-20260720`
 
 - 状态：`merged`
