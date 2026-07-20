@@ -7,10 +7,12 @@ import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.supplier.CreateSupplierRequest;
 import com.cretas.aims.dto.supplier.UpdateSupplierRequest;
 import com.cretas.aims.dto.supplier.SupplierDTO;
+import com.cretas.aims.dto.supplier.SupplierStatusChangeRequest;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.security.PriceMaskResolver;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.SupplierService;
+import com.cretas.aims.service.supplier.SupplierImportService;
 import com.cretas.aims.util.ErrorSanitizer;
 import com.cretas.aims.utils.TokenUtils;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -52,6 +54,8 @@ public class SupplierController {
     private final SupplierService supplierService;
     private final MobileService mobileService;
     private final PriceMaskResolver priceMaskResolver;
+    private final SupplierImportService supplierImportService;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
     /**
      * 创建供应商
@@ -222,6 +226,20 @@ public class SupplierController {
         return ApiResponse.success("供应商状态更新成功", supplier);
     }
 
+    @RequirePermission({"procurement:read_write", "finance:read_write"})
+    @PutMapping("/{supplierId}/lifecycle")
+    @Operation(summary = "暂停或恢复供应商合作", description = "需要原因和乐观锁版本；重复同状态请求为幂等 no-op")
+    @com.cretas.aims.annotation.Loggable(module = "SUPPLIER", action = "UPDATE",
+            entityType = "Supplier", entityIdParam = "supplierId")
+    public ApiResponse<SupplierDTO> changeSupplierLifecycle(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String supplierId,
+            @Valid @RequestBody SupplierStatusChangeRequest request) {
+        SupplierDTO supplier = supplierService.changeSupplierStatus(factoryId, supplierId,
+                request.getIsActive(), request.getReason(), request.getVersion());
+        return ApiResponse.success(Boolean.TRUE.equals(request.getIsActive()) ? "供应商已恢复合作" : "供应商已暂停合作", supplier);
+    }
+
     /**
      * 更新供应商评级
      */
@@ -380,39 +398,87 @@ public class SupplierController {
             @Parameter(description = "Excel文件（.xlsx格式）", required = true)
             @RequestParam("file") org.springframework.web.multipart.MultipartFile file) {
 
-        log.info("从Excel批量导入供应商: factoryId={}, filename={}", factoryId, file.getOriginalFilename());
+        throw new BusinessException(409, "供应商导入必须先预览再确认")
+                .withHint("请使用 /suppliers/import/preview 预览，并通过 /suppliers/import/confirm 确认")
+                .withHintTarget("file");
+    }
 
-        // 验证文件类型
-        if (file.getOriginalFilename() == null || !file.getOriginalFilename().endsWith(".xlsx")) {
-            throw new BusinessException(400, "只支持.xlsx格式的Excel文件").withHint("请上传 .xlsx 文件 (Excel 2007+)").withHintTarget("file");
-        }
+    @GetMapping("/import/template")
+    @Operation(summary = "下载标准供应商导入模板")
+    public ResponseEntity<byte[]> downloadStandardSupplierTemplate(@PathVariable @NotBlank String factoryId) {
+        byte[] bytes = supplierImportService.generateTemplate();
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=supplier-import-template.xlsx")
+                .contentLength(bytes.length).body(bytes);
+    }
 
-        // 验证文件大小（10MB限制）
-        if (file.getSize() > 10 * 1024 * 1024) {
-            throw new BusinessException(400, "文件大小不能超过10MB").withHint("请压缩或分批上传").withHintTarget("file");
-        }
-
-        try {
-            com.cretas.aims.dto.common.ImportResult<SupplierDTO> result =
-                    supplierService.importSuppliersFromExcel(factoryId, file.getInputStream());
-
-            if (result.getIsFullSuccess()) {
-                log.info("供应商批量导入完全成功: factoryId={}, count={}", factoryId, result.getSuccessCount());
-                return ApiResponse.success("导入成功", result);
-            } else {
-                log.warn("供应商批量导入部分失败: factoryId={}, success={}, failure={}",
-                        factoryId, result.getSuccessCount(), result.getFailureCount());
-                return ApiResponse.success(
-                        String.format("导入完成：成功%d条，失败%d条",
-                                result.getSuccessCount(), result.getFailureCount()),
-                        result);
+    @RequirePermission({"procurement:read_write", "finance:read_write"})
+    @PostMapping(value = "/import/preview", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "预览供应商Excel（不写业务数据）")
+    public ApiResponse<com.cretas.aims.dto.supplier.SupplierImportPreviewDTO> previewSupplierImport(
+            @PathVariable @NotBlank String factoryId,
+            @RequestParam("file") org.springframework.web.multipart.MultipartFile file,
+            @RequestParam(defaultValue = "STANDARD") String mode,
+            @RequestParam(required = false) String columnMappingJson) {
+        byte[] fileBytes = validateSupplierImportFile(file);
+        Map<String, String> mapping = Map.of();
+        if (columnMappingJson != null && !columnMappingJson.isBlank()) {
+            try {
+                mapping = objectMapper.readValue(columnMappingJson,
+                        new com.fasterxml.jackson.core.type.TypeReference<Map<String, String>>() {});
+            } catch (Exception ex) {
+                throw new BusinessException(400, "columnMappingJson 格式不正确").withHintTarget("columnMappingJson");
             }
-        } catch (BusinessException be) {
-            throw be;
+        }
+        return ApiResponse.success("预览完成，尚未写入供应商数据",
+                supplierImportService.preview(factoryId, fileBytes, mode, mapping));
+    }
 
-        } catch (Exception e) {
-            log.error("供应商批量导入失败: factoryId={}", factoryId, e);
-            throw new BusinessException(500, "导入失败: " + ErrorSanitizer.sanitize(e), e);
+    @RequirePermission({"procurement:read_write", "finance:read_write"})
+    @PostMapping("/import/confirm")
+    @Operation(summary = "确认供应商导入（原子且幂等）")
+    @com.cretas.aims.annotation.Loggable(module = "SUPPLIER", action = "IMPORT", entityType = "Supplier")
+    public ApiResponse<com.cretas.aims.dto.supplier.SupplierImportConfirmResultDTO> confirmSupplierImport(
+            @PathVariable @NotBlank String factoryId,
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody com.cretas.aims.dto.supplier.SupplierImportConfirmRequest request) {
+        Long userId = mobileService.getUserFromToken(TokenUtils.extractToken(authorization)).getId();
+        return ApiResponse.success("供应商导入完成",
+                supplierImportService.confirm(factoryId, request, userId));
+    }
+
+    @RequirePermission({"procurement:read_write", "finance:read_write"})
+    @PostMapping("/import/error-report")
+    @Operation(summary = "下载供应商导入错误报告")
+    public ResponseEntity<byte[]> downloadSupplierImportErrorReport(
+            @PathVariable @NotBlank String factoryId,
+            @RequestBody List<com.cretas.aims.dto.supplier.SupplierImportPreviewDTO.Row> rows) {
+        byte[] bytes = supplierImportService.generateErrorReport(rows);
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=supplier-import-errors.xlsx")
+                .contentLength(bytes.length).body(bytes);
+    }
+
+    private byte[] validateSupplierImportFile(org.springframework.web.multipart.MultipartFile file) {
+        if (file == null || file.isEmpty()) throw new BusinessException(400, "请选择Excel文件").withHintTarget("file");
+        String filename = file.getOriginalFilename() == null ? "" : file.getOriginalFilename().toLowerCase(java.util.Locale.ROOT);
+        if (!(filename.endsWith(".xlsx") || filename.endsWith(".xls")) || filename.endsWith(".xlsm")) {
+            throw new BusinessException(400, "仅支持不含宏的 .xlsx 或 .xls 文件").withHintTarget("file");
+        }
+        if (file.getSize() > 10L * 1024 * 1024) {
+            throw new BusinessException(400, "Excel文件不能超过10MB").withHintTarget("file");
+        }
+        try {
+            byte[] bytes = file.getBytes();
+            boolean zip = bytes.length >= 4 && bytes[0] == 'P' && bytes[1] == 'K';
+            boolean ole = bytes.length >= 8 && (bytes[0] & 0xff) == 0xD0 && (bytes[1] & 0xff) == 0xCF
+                    && (bytes[2] & 0xff) == 0x11 && (bytes[3] & 0xff) == 0xE0;
+            if (!zip && !ole) throw new BusinessException(400, "文件内容不是有效Excel").withHintTarget("file");
+            return bytes;
+        } catch (java.io.IOException ex) {
+            throw new BusinessException(400, "无法读取Excel文件", ex).withHintTarget("file");
         }
     }
 

@@ -93,4 +93,9 @@ public interface AttachmentRepository extends JpaRepository<Attachment, String> 
      * <p>注: file_hash 可能为 null (老数据 / 客户端未算), 此时不去重.
      */
     Optional<Attachment> findByFactoryIdAndFileHash(String factoryId, String fileHash);
+
+    Optional<Attachment> findByFactoryIdAndEntityTypeAndEntityIdAndFileHash(
+            String factoryId, EntityType entityType, String entityId, String fileHash);
+
+    long countByFactoryIdAndEntityTypeAndEntityId(String factoryId, EntityType entityType, String entityId);
 }

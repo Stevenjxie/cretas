@@ -46,6 +46,9 @@ public class SupplierMapper {
                 .ratingNotes(supplier.getRatingNotes())
                 .qualityCertificates(supplier.getQualityCertificates())
                 .isActive(supplier.getIsActive())
+                .status(Boolean.TRUE.equals(supplier.getIsActive()) ? "ACTIVE" : "INACTIVE")
+                .profileComplete(com.cretas.aims.service.supplier.SupplierProfileValidator.isComplete(
+                        supplier.getName(), supplier.getContactPerson(), supplier.getPhone(), supplier.getAddress()))
                 .notes(supplier.getNotes())
                 .createdAt(supplier.getCreatedAt())
                 .updatedAt(supplier.getUpdatedAt())
@@ -69,7 +72,8 @@ public class SupplierMapper {
         }
         Supplier supplier = new Supplier();
         supplier.setFactoryId(factoryId);
-        String supplierCode = generateSupplierCode();
+        String supplierCode = request.getSupplierCode() != null
+                ? request.getSupplierCode() : generateSupplierCode();
         supplier.setSupplierCode(supplierCode);
         supplier.setCode(supplierCode);  // 设置code字段，使用相同的supplierCode
         supplier.setName(request.getName());

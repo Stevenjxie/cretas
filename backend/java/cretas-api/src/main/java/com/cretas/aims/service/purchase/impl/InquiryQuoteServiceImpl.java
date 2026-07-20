@@ -175,6 +175,11 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
         Supplier supplier = supplierRepository.findByIdAndFactoryId(request.getSupplierId(), factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         String.format("供应商不存在或不属于当前工厂: supplierId=%s", request.getSupplierId())));
+        if (!Boolean.TRUE.equals(supplier.getIsActive())) {
+            throw new BusinessException(409, "供应商已暂停合作，不能新增或更新报价")
+                    .withHint("历史报价仍可查看；如需新报价请先恢复合作")
+                    .withHintTarget("supplierId");
+        }
 
         // upsert: 同供应商已报价则 UPDATE, 否则 INSERT
         Optional<InquiryQuoteSupplierPrice> existing =
@@ -248,6 +253,11 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
                 .findByIdAndFactoryId(selectedPrice.getSupplierId(), factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "选定供应商不存在: " + selectedPrice.getSupplierId()));
+        if (!Boolean.TRUE.equals(selectedSupplier.getIsActive())) {
+            throw new BusinessException(409, "选定供应商已暂停合作，不能转化为新采购单")
+                    .withHint("历史报价仍可查看；请恢复合作或选择其他供应商")
+                    .withHintTarget("selectedSupplierId");
+        }
 
         // 调用 PurchaseService 创建采购单
         CreatePurchaseOrderRequest poRequest = new CreatePurchaseOrderRequest();

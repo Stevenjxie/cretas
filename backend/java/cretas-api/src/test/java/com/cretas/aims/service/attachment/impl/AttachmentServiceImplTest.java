@@ -4,9 +4,11 @@ import com.aliyun.oss.OSS;
 import com.cretas.aims.config.OssConfig;
 import com.cretas.aims.entity.Attachment;
 import com.cretas.aims.entity.Attachment.EntityType;
+import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.AttachmentRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.service.OssService;
 import com.cretas.aims.service.attachment.dto.RegisterAttachmentRequest;
 import com.cretas.aims.service.attachment.dto.UpdateAttachmentRequest;
@@ -45,6 +47,9 @@ class AttachmentServiceImplTest {
     private ProductionReportRepository productionReportRepository;
 
     @Mock
+    private PurchaseOrderRepository purchaseOrderRepository;
+
+    @Mock
     private OssService ossService;
 
     @Mock
@@ -63,7 +68,14 @@ class AttachmentServiceImplTest {
 
     @BeforeEach
     void setUp() {
-        service = new AttachmentServiceImpl(attachmentRepository, productionReportRepository, ossService, ossConfig);
+        service = new AttachmentServiceImpl(attachmentRepository, productionReportRepository,
+                purchaseOrderRepository, ossService, ossConfig);
+        PurchaseOrder order = new PurchaseOrder();
+        order.setId("PO-20260514-001");
+        order.setFactoryId(FACTORY_ID);
+        lenient().when(purchaseOrderRepository.findById(anyString())).thenReturn(Optional.of(order));
+        lenient().when(attachmentRepository.countByFactoryIdAndEntityTypeAndEntityId(
+                anyString(), any(EntityType.class), anyString())).thenReturn(0L);
         // ossClient is @Autowired(required=false) — inject via reflection for tests
         try {
             Field f = AttachmentServiceImpl.class.getDeclaredField("ossClient");
@@ -94,7 +106,8 @@ class AttachmentServiceImplTest {
         @Test
         @DisplayName("✅ 成功注册附件 — 无 hash 冲突")
         void register_success_noDedup() {
-            when(attachmentRepository.findByFactoryIdAndFileHash(FACTORY_ID, "sha256-abc123"))
+            when(attachmentRepository.findByFactoryIdAndEntityTypeAndEntityIdAndFileHash(
+                    FACTORY_ID, EntityType.PURCHASE_ORDER, "PO-20260514-001", "sha256-abc123"))
                     .thenReturn(Optional.empty());
             when(attachmentRepository.save(any(Attachment.class))).thenAnswer(inv -> {
                 Attachment a = inv.getArgument(0);
@@ -122,7 +135,8 @@ class AttachmentServiceImplTest {
             existing.setId("existing-uuid");
             existing.setFactoryId(FACTORY_ID);
             existing.setFileHash("sha256-abc123");
-            when(attachmentRepository.findByFactoryIdAndFileHash(FACTORY_ID, "sha256-abc123"))
+            when(attachmentRepository.findByFactoryIdAndEntityTypeAndEntityIdAndFileHash(
+                    FACTORY_ID, EntityType.PURCHASE_ORDER, "PO-20260514-001", "sha256-abc123"))
                     .thenReturn(Optional.of(existing));
 
             Attachment result = service.register(FACTORY_ID, sampleRequest(), UPLOADER_ID);
@@ -150,6 +164,41 @@ class AttachmentServiceImplTest {
 
             verify(attachmentRepository, never()).findByFactoryIdAndFileHash(any(), any());
             verify(attachmentRepository).save(any(Attachment.class));
+        }
+
+        @Test
+        void purchaseOrderAttachmentRejectsUnknownEntityId() {
+            when(purchaseOrderRepository.findById("PO-20260514-001")).thenReturn(Optional.empty());
+
+            BusinessException error = assertThrows(BusinessException.class,
+                    () -> service.register(FACTORY_ID, sampleRequest(), UPLOADER_ID));
+
+            assertEquals(404, error.getCode());
+            verify(attachmentRepository, never()).save(any());
+        }
+
+        @Test
+        void purchaseOrderAttachmentRejectsCrossFactoryBinding() {
+            PurchaseOrder otherFactory = new PurchaseOrder();
+            otherFactory.setId("PO-20260514-001"); otherFactory.setFactoryId(OTHER_FACTORY);
+            when(purchaseOrderRepository.findById("PO-20260514-001")).thenReturn(Optional.of(otherFactory));
+
+            BusinessException error = assertThrows(BusinessException.class,
+                    () -> service.register(FACTORY_ID, sampleRequest(), UPLOADER_ID));
+
+            assertEquals(403, error.getCode());
+        }
+
+        @Test
+        void purchaseOrderAttachmentEnforcesMaximumCount() {
+            when(attachmentRepository.countByFactoryIdAndEntityTypeAndEntityId(
+                    FACTORY_ID, EntityType.PURCHASE_ORDER, "PO-20260514-001")).thenReturn(10L);
+
+            BusinessException error = assertThrows(BusinessException.class,
+                    () -> service.register(FACTORY_ID, sampleRequest(), UPLOADER_ID));
+
+            assertEquals(400, error.getCode());
+            verify(attachmentRepository, never()).save(any());
         }
     }
 

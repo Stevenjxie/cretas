@@ -70,6 +70,26 @@ public class PurchaseOrderItem extends BaseEntity {
     @Column(name = "quantity_to_price_factor", nullable = false, precision = 24, scale = 12)
     private BigDecimal quantityToPriceFactor = BigDecimal.ONE;
 
+    /** Supplier/material purchase-package identity selected at order time. */
+    @Column(name = "supplier_material_id", length = 64)
+    private String supplierMaterialId;
+
+    @Column(name = "purchase_packaging_spec_id", length = 64)
+    private String purchasePackagingSpecId;
+
+    /** Immutable unit/conversion snapshots for historical receipts and copies. */
+    @Column(name = "purchase_package_unit_snapshot", length = 20)
+    private String purchasePackageUnitSnapshot;
+
+    @Column(name = "inventory_base_unit_snapshot", length = 20)
+    private String inventoryBaseUnitSnapshot;
+
+    @Column(name = "package_to_base_factor_snapshot", precision = 24, scale = 12)
+    private BigDecimal packageToBaseFactorSnapshot;
+
+    @Column(name = "inventory_quantity_snapshot", precision = 24, scale = 12)
+    private BigDecimal inventoryQuantitySnapshot;
+
     @PriceSensitive
     @Column(name = "unit_price", precision = 15, scale = 4)
     private BigDecimal unitPrice;
@@ -78,6 +98,18 @@ public class PurchaseOrderItem extends BaseEntity {
     @PriceSensitive
     @Column(name = "tax_rate", precision = 5, scale = 2)
     private BigDecimal taxRate = BigDecimal.ZERO;
+
+    @PriceSensitive
+    @Column(name = "untaxed_amount_snapshot", precision = 18, scale = 2)
+    private BigDecimal untaxedAmountSnapshot;
+
+    @PriceSensitive
+    @Column(name = "tax_amount_snapshot", precision = 18, scale = 2)
+    private BigDecimal taxAmountSnapshot;
+
+    @PriceSensitive
+    @Column(name = "tax_inclusive_amount_snapshot", precision = 18, scale = 2)
+    private BigDecimal taxInclusiveAmountSnapshot;
 
     /** 已收货数量 */
     @Column(name = "received_quantity", nullable = false, precision = 15, scale = 4)

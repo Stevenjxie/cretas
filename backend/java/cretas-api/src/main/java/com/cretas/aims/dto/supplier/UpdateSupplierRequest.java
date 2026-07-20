@@ -8,6 +8,7 @@ import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
+import com.cretas.aims.service.supplier.SupplierProfileValidator;
 import java.math.BigDecimal;
 
 /**
@@ -32,7 +33,9 @@ public class UpdateSupplierRequest {
     private String contactPerson;
 
     @Schema(description = "联系电话")
-    @Pattern(regexp = "^$|^1[3-9]\\d{9}$", message = "手机号格式不正确")
+    @Size(max = 20, message = "联系电话长度不能超过20个字符")
+    @Pattern(regexp = SupplierProfileValidator.PHONE_REGEXP,
+            message = "联系电话格式不正确，请填写手机号或带区号的固定电话（可含分机）")
     private String phone;
 
     @Schema(description = "邮箱")
@@ -42,6 +45,8 @@ public class UpdateSupplierRequest {
 
     @Schema(description = "地址")
     @Size(max = 500, message = "地址长度不能超过500个字符")
+    @Pattern(regexp = SupplierProfileValidator.READABLE_ADDRESS_REGEXP,
+            message = "地址必须包含可识别的文字或数字，不能仅填写符号")
     private String address;
 
     @Schema(description = "营业执照号")

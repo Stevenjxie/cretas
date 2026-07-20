@@ -79,6 +79,14 @@ public class CreatePurchaseOrderRequest {
         @Size(max = 191, message = "原料类型ID长度不能超过191个字符")
         private String materialTypeId;
 
+        /** Factory-scoped supplier-material relationship selected for this line. */
+        @Size(max = 64, message = "供应关系ID长度不能超过64个字符")
+        private String supplierMaterialId;
+
+        /** Active purchase-package specification under supplierMaterialId. */
+        @Size(max = 64, message = "采购包装规格ID长度不能超过64个字符")
+        private String purchasePackagingSpecId;
+
         @Size(max = 200, message = "原料名称长度不能超过200个字符")
         private String materialName;
 

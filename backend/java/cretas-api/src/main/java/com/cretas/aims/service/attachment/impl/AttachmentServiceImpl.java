@@ -12,6 +12,7 @@ import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.AttachmentRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.service.OssService;
 import com.cretas.aims.service.attachment.AttachmentService;
 import com.cretas.aims.service.attachment.dto.RegisterAttachmentRequest;
@@ -68,6 +69,7 @@ public class AttachmentServiceImpl implements AttachmentService {
 
     private final AttachmentRepository attachmentRepository;
     private final ProductionReportRepository productionReportRepository;
+    private final PurchaseOrderRepository purchaseOrderRepository;
     private final OssService ossService;
     private final OssConfig ossConfig;
 
@@ -83,11 +85,19 @@ public class AttachmentServiceImpl implements AttachmentService {
         if (userId == null) {
             throw new BusinessException(401, "未登录 — 无法注册附件");
         }
+        if (req.getFileHash() != null && !req.getFileHash().isBlank()) {
+            Optional<Attachment> replay = attachmentRepository
+                    .findByFactoryIdAndEntityTypeAndEntityIdAndFileHash(
+                            factoryId, req.getEntityType(), req.getEntityId(), req.getFileHash());
+            if (replay.isPresent()) return replay.get();
+        }
+        validateEntityBinding(factoryId, req);
 
         // 去重: 同 factory 同 hash 视为同一文件
         if (req.getFileHash() != null && !req.getFileHash().isBlank()) {
             Optional<Attachment> existing = attachmentRepository
-                    .findByFactoryIdAndFileHash(factoryId, req.getFileHash());
+                    .findByFactoryIdAndEntityTypeAndEntityIdAndFileHash(
+                            factoryId, req.getEntityType(), req.getEntityId(), req.getFileHash());
             if (existing.isPresent()) {
                 log.info("Attachment 去重命中: factory={} hash={} existingId={}",
                         factoryId, req.getFileHash(), existing.get().getId());
@@ -131,6 +141,20 @@ public class AttachmentServiceImpl implements AttachmentService {
         }
 
         return saved;
+    }
+
+    private void validateEntityBinding(String factoryId, RegisterAttachmentRequest req) {
+        if (EntityType.PURCHASE_ORDER != req.getEntityType()) return;
+        var order = purchaseOrderRepository.findById(req.getEntityId())
+                .orElseThrow(() -> new BusinessException(404, "采购订单不存在，附件不能绑定到临时或伪造ID"));
+        if (!factoryId.equals(order.getFactoryId())) {
+            throw new BusinessException(403, "采购订单附件跨工厂绑定被拒绝");
+        }
+        long count = attachmentRepository.countByFactoryIdAndEntityTypeAndEntityId(
+                factoryId, EntityType.PURCHASE_ORDER, req.getEntityId());
+        if (count >= 10) {
+            throw new BusinessException(400, "单张采购订单最多允许10个附件");
+        }
     }
 
     // ==================== 缩略图 (异步) ====================
