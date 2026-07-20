@@ -7,12 +7,10 @@
 ## 在飞任务
 
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
-- `MAIN-STARTUP-1532-20260720` — `in-progress` — Owner: Codex coordinator — Base SHA: `b587e0ee779136a5fe87f6722a61617fe1a7a0db` — 修复 #1532 多构造器 Spring bean 无法实例化导致 exact-main Java 新槽启动失败；保留旧 green upstream，验收后合入并重新蓝绿部署。
 
 ## Scope 锁地图
 
 - `SEC-CREDENTIAL-ROTATION-20260719`：`scripts/systemd/` 中遗留明文启动脚本、现有/新增 secret 扫描配置与测试、`.gitignore` / 凭证模板、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-19-active-history.md`；外部状态仅限已授权的 Cretas 47/139 服务器配置、PostgreSQL 角色密码、相关阿里云/API 凭证与必要服务重启。验收：tracked tree 与完整 Git 历史脱敏盘点、scanner gate、exact-main 发布门禁、Java/Python/网关健康、登录与 Restaurant Agent 只读 smoke、核心 ERP 零写入。
-- `MAIN-STARTUP-1532-20260720`：`backend/java/cretas-api/src/main/java/com/cretas/aims/service/restaurant/RestaurantGrossMarginChatRouteSelector.java`、对应 Spring 实例化目标测试、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-20-active-history.md`。验收：真实 Spring Context 可实例化、M09 settlement 34/34 回归、唯一 release gate、blue/green readiness 与 exact-main 服务/业务只读验证。
 ## 阻塞项
 
 - Aliyun 主账号旧 AccessKey：官方 RAM API 返回 `Forbidden` 并提示泄露风险，旧 key 的 STS 仍有效；必须由阿里云控制台主账号删除。
