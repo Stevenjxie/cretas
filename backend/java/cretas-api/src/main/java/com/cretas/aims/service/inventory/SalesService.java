@@ -2,6 +2,7 @@ package com.cretas.aims.service.inventory;
 
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.inventory.CreateDeliveryRequest;
+import com.cretas.aims.dto.inventory.CreateDeliveryShipmentRequest;
 import com.cretas.aims.dto.inventory.CreateSalesOrderRequest;
 import com.cretas.aims.dto.inventory.UpdateSalesOrderRequest;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
@@ -127,6 +128,14 @@ public interface SalesService {
     // ==================== 发货/出库 ====================
 
     SalesDeliveryRecord createDeliveryRecord(String factoryId, CreateDeliveryRequest request, Long userId);
+
+    SalesDeliveryRecord createDeliveryShipment(String factoryId, String parentDeliveryId,
+                                                 CreateDeliveryShipmentRequest request, Long userId);
+
+    List<SalesDeliveryRecord> getDeliveryShipments(String factoryId, String parentDeliveryId);
+
+    SalesDeliveryRecord cancelDeliveryShipment(String factoryId, String parentDeliveryId,
+                                                String shipmentId, Long userId);
 
     SalesDeliveryRecord shipDelivery(String factoryId, String deliveryId, Long userId);
 

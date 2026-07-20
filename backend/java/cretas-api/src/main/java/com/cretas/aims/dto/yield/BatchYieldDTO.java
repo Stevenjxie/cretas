@@ -21,6 +21,16 @@ public class BatchYieldDTO {
     private BigDecimal lastStepOutput;       // 末道总产出 (382.08 或 3184 盒)
     private String firstStepInputUnit;
     private String lastStepOutputUnit;
+    /** Last output converted to the first-step unit; null when the pinned plan cannot prove a conversion. */
+    private BigDecimal lastStepOutputInFirstUnit;
+    /** DIRECT / CONVERTED_WITH_PLAN_PIN / MISSING_PINNED_CONVERSION. */
+    private String yieldConversionStatus;
+    /** Human-readable audit basis, for example "5 box x 800 g/box = 4 kg". */
+    private String yieldConversionBasis;
+    /** Historical net weight captured on the production plan, never refreshed from current SKU data. */
+    private BigDecimal pinnedNetWeightGrams;
+    /** Count unit to which pinnedNetWeightGrams applies. */
+    private String pinnedOutputUnit;
     /** 端到端累计出成率 (折算到首道单位; 跨单位用 standardGramsPerUnit 折算) */
     private BigDecimal cumulativeYieldRate;  // 0.3828
     private List<StepYieldDTO> steps;

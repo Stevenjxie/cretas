@@ -21,6 +21,7 @@ import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
@@ -634,6 +635,13 @@ class YieldReportServiceImplTest {
                 .build();
         when(productionBatchRepo.findByIdAndFactoryId(777L, "F006")).thenReturn(Optional.of(finalBatch));
 
+        ProductionPlan pinnedPlan = plan("PLAN-MIX");
+        pinnedPlan.setPlannedUnit("盒");
+        pinnedPlan.setPlannedNetWeightGrams(new BigDecimal("120"));
+        when(productionPlanRepo.findByIdAndFactoryId("PLAN-MIX", "F006"))
+                .thenReturn(Optional.of(pinnedPlan));
+
+        // Current product data has drifted; historical yield must still use the plan pin above.
         ProductType productType = new ProductType();
         productType.setId("PT-PORK-A");
         productType.setFactoryId("F006");
@@ -661,8 +669,8 @@ class YieldReportServiceImplTest {
                 .containsExactly("炖水", "分切/包装");
         assertThat(dto.getSteps().get(1).getInputUnit()).isEqualTo("kg");
         assertThat(dto.getSteps().get(1).getOutputUnit()).isEqualTo("盒");
-        assertThat(dto.getSteps().get(1).getUnitComparable()).isFalse();
-        assertThat(dto.getSteps().get(1).getYieldRate()).isNull();
+        assertThat(dto.getSteps().get(1).getUnitComparable()).isTrue();
+        assertThat(dto.getSteps().get(1).getYieldRate()).isEqualByComparingTo("0.9231");
         assertThat(dto.getSteps().get(1).getPackagingDetail()).hasSize(2);
         assertThat(dto.getSteps().get(1).getByproducts()).hasSize(1);
         assertThat(dto.getSteps().get(1).getSampleRetainQuantity()).isEqualTo(5);
@@ -1386,8 +1394,8 @@ class YieldReportServiceImplTest {
     // ── P0-2: kg/份 单位换算 ──────────────────────────────────────────────────────
 
     @Test
-    void getYield_resolvesGramsPerUnit_crossUnitCumulativeNonNull() {
-        // 末道 kg→份 (998kg → 382份), 产品配 gramsPerUnit=120 → cumulative = (382×120/1000)/998 折算
+    void getYield_usesProductionPlanPinnedNetWeight_notCurrentProductDrift() {
+        // 末道 kg→份 (998kg → 382份), 历史计划 pin 120g/份; 当前 ProductType 漂移为 999g.
         ProductionReport r1 = ProductionReport.builder()
                 .workProcessTaskId(50L).processOrder(1).productTypeId("PT-LU")
                 .inputQuantity(new BigDecimal("998")).inputUnit("kg")
@@ -1399,8 +1407,15 @@ class YieldReportServiceImplTest {
                 .outputQuantity(new BigDecimal("382")).outputUnit("份")
                 .build();
         when(reportRepo.findYieldReportsByBatch("F006", 7L)).thenReturn(List.of(r1, r2));
+        ProductionBatch batch = batch(7L, "PLAN-PIN-120");
+        when(productionBatchRepo.findByIdAndFactoryId(7L, "F006")).thenReturn(Optional.of(batch));
+        ProductionPlan pinnedPlan = plan("PLAN-PIN-120");
+        pinnedPlan.setPlannedUnit("份");
+        pinnedPlan.setPlannedNetWeightGrams(new BigDecimal("120"));
+        when(productionPlanRepo.findByIdAndFactoryId("PLAN-PIN-120", "F006"))
+                .thenReturn(Optional.of(pinnedPlan));
         ProductType pt = new ProductType();
-        pt.setId("PT-LU"); pt.setFactoryId("F006"); pt.setGramsPerUnit(new BigDecimal("120"));
+        pt.setId("PT-LU"); pt.setFactoryId("F006"); pt.setGramsPerUnit(new BigDecimal("999"));
         when(productTypeRepo.findByIdAndFactoryId("PT-LU", "F006")).thenReturn(Optional.of(pt));
         when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
         when(processRepo.findAllById(any())).thenReturn(List.of());
@@ -1408,8 +1423,10 @@ class YieldReportServiceImplTest {
         BatchYieldDTO dto = svc.getYield("F006", 7L);
 
         // cumulative = (382 × 120 / 1000) / 998 = 45.84 / 998 = 0.0459 (非 null = 折算成功)
-        assertThat(dto.getCumulativeYieldRate()).isNotNull();
-        verify(productTypeRepo).findByIdAndFactoryId("PT-LU", "F006");
+        assertThat(dto.getCumulativeYieldRate()).isEqualByComparingTo("0.0459");
+        assertThat(dto.getYieldConversionStatus()).isEqualTo("CONVERTED_WITH_PLAN_PIN");
+        assertThat(dto.getPinnedNetWeightGrams()).isEqualByComparingTo("120");
+        verify(productTypeRepo, never()).findByIdAndFactoryId("PT-LU", "F006");
     }
 
     @Test
@@ -1426,8 +1443,15 @@ class YieldReportServiceImplTest {
                 .outputQuantity(new BigDecimal("382")).outputUnit("份")
                 .build();
         when(reportRepo.findYieldReportsByBatch("F006", 8L)).thenReturn(List.of(r1, r2));
+        ProductionBatch batch = batch(8L, "PLAN-NO-PIN");
+        when(productionBatchRepo.findByIdAndFactoryId(8L, "F006")).thenReturn(Optional.of(batch));
+        ProductionPlan unpinnedPlan = plan("PLAN-NO-PIN");
+        unpinnedPlan.setPlannedUnit("份");
+        unpinnedPlan.setPlannedNetWeightGrams(null);
+        when(productionPlanRepo.findByIdAndFactoryId("PLAN-NO-PIN", "F006"))
+                .thenReturn(Optional.of(unpinnedPlan));
         ProductType pt = new ProductType();
-        pt.setId("PT-NOGRAM"); pt.setFactoryId("F006"); pt.setGramsPerUnit(null);
+        pt.setId("PT-NOGRAM"); pt.setFactoryId("F006"); pt.setGramsPerUnit(new BigDecimal("120"));
         when(productTypeRepo.findByIdAndFactoryId("PT-NOGRAM", "F006")).thenReturn(Optional.of(pt));
         when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
         when(processRepo.findAllById(any())).thenReturn(List.of());
@@ -1436,6 +1460,60 @@ class YieldReportServiceImplTest {
 
         assertThat(dto.getCumulativeYieldRate()).isNull();
         assertThat(dto.getLastStepOutputUnit()).isEqualTo("份");
+        assertThat(dto.getYieldConversionStatus()).isEqualTo("MISSING_PINNED_CONVERSION");
+        verify(productTypeRepo, never()).findByIdAndFactoryId("PT-NOGRAM", "F006");
+    }
+
+    @Test
+    void f006MixedUnitYield_usesPinned800gForStepAndOrderRates() {
+        ProductionReport first = ProductionReport.builder()
+                .batchId(9001L).workProcessTaskId(901L).processOrder(1).productTypeId("CPF0060015")
+                .inputQuantity(new BigDecimal("5")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("4.5")).outputUnit("kg")
+                .build();
+        ProductionReport second = ProductionReport.builder()
+                .batchId(9001L).workProcessTaskId(902L).processOrder(2).productTypeId("CPF0060015")
+                .inputQuantity(new BigDecimal("4.5")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("5")).outputUnit("box")
+                .build();
+        ProductionBatch finishedBatch = batch(9001L, "PLAN-F006-M11");
+        finishedBatch.setBatchNumber("TRF-FG-20260720-8825");
+        finishedBatch.setProductTypeId("CPF0060015");
+        ProductionPlan pinnedPlan = plan("PLAN-F006-M11");
+        pinnedPlan.setPlanNumber("PLAN-1784523993145-78E6EE57");
+        pinnedPlan.setPlannedUnit("box");
+        pinnedPlan.setPlannedNetWeightGrams(new BigDecimal("800"));
+
+        when(reportRepo.findYieldReportsByBatch("F006", 9001L)).thenReturn(List.of(first, second));
+        when(productionBatchRepo.findByIdAndFactoryId(9001L, "F006"))
+                .thenReturn(Optional.of(finishedBatch));
+        when(productionPlanRepo.findByIdAndFactoryId("PLAN-F006-M11", "F006"))
+                .thenReturn(Optional.of(pinnedPlan));
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+
+        BatchYieldDTO batchYield = svc.getYield("F006", 9001L);
+
+        assertThat(batchYield.getSteps()).hasSize(2);
+        assertThat(batchYield.getSteps().get(0).getYieldRate()).isEqualByComparingTo("0.9000");
+        assertThat(batchYield.getSteps().get(1).getYieldRate()).isEqualByComparingTo("0.8889");
+        assertThat(batchYield.getSteps().get(1).getCumulativeYieldRate()).isEqualByComparingTo("0.8000");
+        assertThat(batchYield.getCumulativeYieldRate()).isEqualByComparingTo("0.8000");
+        assertThat(batchYield.getLastStepOutputInFirstUnit()).isEqualByComparingTo("4.0000");
+        assertThat(batchYield.getYieldConversionStatus()).isEqualTo("CONVERTED_WITH_PLAN_PIN");
+
+        when(productionPlanRepo.findByFactoryIdAndSourceOrderId("F006", "ORDER-F006"))
+                .thenReturn(List.of(pinnedPlan));
+        when(productionBatchRepo.findByFactoryIdAndProductionPlanIdIn(eq("F006"), any()))
+                .thenReturn(List.of(finishedBatch));
+
+        OrderYieldSummaryDTO orderYield = svc.getOrderYieldSummary("F006", "ORDER-F006");
+
+        assertThat(orderYield.getTotalFirstInput()).isEqualByComparingTo("5");
+        assertThat(orderYield.getTotalLastOutput()).isEqualByComparingTo("5");
+        assertThat(orderYield.getConvertedLastOutput()).isEqualByComparingTo("4.0000");
+        assertThat(orderYield.getOverallYieldRate()).isEqualByComparingTo("0.8000");
+        assertThat(orderYield.getYieldConversionStatus()).isEqualTo("COMPLETE");
     }
 
     @Test

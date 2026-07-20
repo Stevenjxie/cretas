@@ -124,11 +124,13 @@ public class StocktakeController {
     public ApiResponse<Void> approve(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @PathVariable @Parameter(description = "盘点任务ID") String stocktakeId,
+            @RequestBody Map<String, Object> body,
             HttpServletRequest request) {
         Long userId = extractUserId(request);
         String role = extractRole(request);
         log.info("SP7: 审批盘点通过 stocktakeId={} role={}", stocktakeId, role);
-        stocktakeService.approve(stocktakeId, factoryId, userId, role);
+        Long expectedVersion = extractExpectedVersion(body);
+        stocktakeService.approve(stocktakeId, factoryId, userId, role, expectedVersion);
         return ApiResponse.success("盘点任务已审批通过", null);
     }
 
@@ -152,11 +154,12 @@ public class StocktakeController {
     public ApiResponse<Void> apply(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @PathVariable @Parameter(description = "盘点任务ID") String stocktakeId,
+            @RequestBody Map<String, Object> body,
             HttpServletRequest request) {
         Long userId = extractUserId(request);
         log.info("SP7: 盘点生效 stocktakeId={}", stocktakeId);
-        stocktakeService.apply(stocktakeId, factoryId, userId);
-        return ApiResponse.success("盘点已生效，库存差异已调整", null);
+        stocktakeService.apply(stocktakeId, factoryId, userId, extractExpectedVersion(body));
+        return ApiResponse.success("盘点已应用完成；仅存在差异时调整库存", null);
     }
 
     @GetMapping("/{stocktakeId}/diff-preview")
@@ -185,5 +188,20 @@ public class StocktakeController {
             throw new BusinessException(401, "无法获取角色信息，请重新登录");
         }
         return role;
+    }
+
+    private Long extractExpectedVersion(Map<String, Object> body) {
+        if (body == null || body.get("expectedVersion") == null) {
+            throw new BusinessException(400, "expectedVersion 为必填字段，请刷新盘点数据后重试")
+                    .withCode("STOCKTAKE_VERSION_REQUIRED");
+        }
+        Object value = body.get("expectedVersion");
+        if (value instanceof Number number) return number.longValue();
+        try {
+            return Long.parseLong(String.valueOf(value));
+        } catch (NumberFormatException e) {
+            throw new BusinessException(400, "expectedVersion 必须是整数")
+                    .withCode("STOCKTAKE_VERSION_INVALID");
+        }
     }
 }

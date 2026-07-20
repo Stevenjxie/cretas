@@ -24,6 +24,9 @@ public class CreateDeliveryRequest {
     @Size(max = 191, message = "销售订单ID长度不能超过191个字符")
     private String salesOrderId;
 
+    @Size(max = 191, message = "幂等键长度不能超过191个字符")
+    private String idempotencyKey;
+
     @NotBlank(message = "客户ID不能为空")
     @Size(max = 191, message = "客户ID长度不能超过191个字符")
     private String customerId;

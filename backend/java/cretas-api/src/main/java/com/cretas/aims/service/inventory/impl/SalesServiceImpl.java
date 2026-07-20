@@ -3,10 +3,12 @@ package com.cretas.aims.service.inventory.impl;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.approval.ExecutionContext;
 import com.cretas.aims.dto.inventory.CreateDeliveryRequest;
+import com.cretas.aims.dto.inventory.CreateDeliveryShipmentRequest;
 import com.cretas.aims.dto.inventory.CreateSalesOrderRequest;
 import com.cretas.aims.dto.inventory.UpdateSalesOrderRequest;
 import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
+import com.cretas.aims.entity.config.ApprovalChainConfig;
 import com.cretas.aims.entity.config.ApprovalWorkflow;
 import com.cretas.aims.entity.enums.ArApTransactionType;
 import com.cretas.aims.entity.factory.WarehouseCodes;
@@ -84,6 +86,10 @@ public class SalesServiceImpl implements SalesService {
     /** P0-13 批次分配校验（可选注入，避免破坏现有构造器）。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.sales.SalesDeliveryBatchAllocationService batchAllocationService;
+
+    /** Delivery-line lock access; field injection keeps historical test constructors stable. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private SalesDeliveryItemRepository deliveryItemRepository;
 
     /** 成品预留台账（2026-07-06；可选注入，legacy 单测无此 bean 时降级为不写台账）。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -887,20 +893,58 @@ public class SalesServiceImpl implements SalesService {
 
         boolean requiresApproval = approvalChainService != null
                 && approvalChainService.requiresApproval(factoryId, DecisionType.SALES_ORDER_APPROVAL, context);
+        String decisionSnapshot = buildSalesApprovalDecisionSnapshot(factoryId, order, context, requiresApproval);
 
         if (requiresApproval) {
             checkTransitionAllowed(factoryId, order.getStatus().name(), "PENDING_FINANCE_REVIEW");
             order.setStatus(SalesOrderStatus.PENDING_FINANCE_REVIEW);
             order.setFinanceReviewedBy(null);
             order.setFinanceReviewedAt(null);
-            order.setFinanceReviewNotes(notes);
+            order.setFinanceReviewNotes(decisionSnapshot);
             SalesOrder saved = salesOrderRepository.save(order);
             log.info("销售订单触发阈值审批: orderId={}, orderNumber={}, amount={}",
                     order.getId(), saved.getOrderNumber(), saved.getTotalAmount());
             return saved;
         }
 
-        return approveFinanceForOrder(factoryId, order, "未触发销售审批阈值或满足免审配置，自动通过", null, reviewerId);
+        return approveFinanceForOrder(factoryId, order, decisionSnapshot, null, reviewerId);
+    }
+
+    private String buildSalesApprovalDecisionSnapshot(
+            String factoryId, SalesOrder order, Map<String, Object> context, boolean requiresApproval) {
+        BigDecimal amount = order.getTotalAmount() != null ? order.getTotalAmount() : BigDecimal.ZERO;
+        if (approvalChainService == null) {
+            return "判定方式：未配置销售审批规则；本单未税金额：¥" + amount.toPlainString()
+                    + "；判定结果：无需审批";
+        }
+        Optional<ApprovalChainConfig> matched = approvalChainService.findMatchingConfig(
+                factoryId, DecisionType.SALES_ORDER_APPROVAL, context);
+        List<ApprovalChainConfig> configured = approvalChainService.getConfigsByDecisionType(
+                factoryId, DecisionType.SALES_ORDER_APPROVAL);
+        if (matched.isPresent()) {
+            ApprovalChainConfig config = matched.get();
+            boolean autoApproved = approvalChainService.canAutoApprove(config, context);
+            return "判定方式：" + (autoApproved ? "命中免审配置自动通过" : "命中阈值审批")
+                    + "；本单未税金额：¥" + amount.toPlainString()
+                    + "；配置名称：" + config.getName()
+                    + "；配置版本：v" + config.getVersion()
+                    + "；审批触发条件：" + readableRule(config.getTriggerCondition())
+                    + "；免审配置：" + readableRule(config.getAutoApproveCondition())
+                    + "；判定结果：" + (requiresApproval ? "需要财务审批" : "自动通过");
+        }
+        String configuredRules = configured.isEmpty() ? "无"
+                : configured.stream().map(config -> config.getName() + " v" + config.getVersion()
+                        + " [触发=" + readableRule(config.getTriggerCondition())
+                        + ", 免审=" + readableRule(config.getAutoApproveCondition()) + "]")
+                .collect(Collectors.joining("、"));
+        return "判定方式：未命中需要审批的阈值规则"
+                + "；本单未税金额：¥" + amount.toPlainString()
+                + "；现行审批/免审配置：" + configuredRules
+                + "；判定结果：自动通过";
+    }
+
+    private String readableRule(String rule) {
+        return rule == null || rule.isBlank() ? "未配置" : rule;
     }
 
     private boolean hasSalesApprovalPolicy(String factoryId) {
@@ -2299,14 +2343,19 @@ public class SalesServiceImpl implements SalesService {
         runConfiguredValidation(factoryId, "delivery", "CREATE", validationCtx);
 
         // 验证客户
-        customerRepository.findByIdAndFactoryId(request.getCustomerId(), factoryId)
+        Customer deliveryCustomer = customerRepository.findByIdAndFactoryId(request.getCustomerId(), factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("客户不存在或不属于当前组织"));
 
         // R23 audit C3: was inline {FINANCE_APPROVED, CONFIRMED, PROCESSING, PARTIAL_DELIVERED}
         // — distinct from SO_SHIPPABLE because delivery here allows CONFIRMED (e.g.,
         // consignment / advance shipment). Centralized as SO_DELIVERABLE.
         if (request.getSalesOrderId() != null && !request.getSalesOrderId().isEmpty()) {
-            SalesOrder order = getSalesOrderById(factoryId, request.getSalesOrderId());
+            // Pessimistic order lock serializes capacity checks across rapid double-clicks
+            // and concurrent sessions. No two transactions can both consume the same
+            // remaining order-line quantity.
+            SalesOrder order = salesOrderRepository.findByIdAndFactoryIdForUpdate(
+                            request.getSalesOrderId(), factoryId)
+                    .orElseThrow(() -> new ResourceNotFoundException("销售订单不存在或不属于当前组织"));
             if (order.getStatus() == null
                     || !com.cretas.aims.domain.OrderUsageWhitelists.SO_DELIVERABLE.contains(order.getStatus())) {
                 throw new BusinessException(409, "只有财务已批准/已确认/处理中/部分发货状态的订单可以创建发货单")
@@ -2319,23 +2368,67 @@ public class SalesServiceImpl implements SalesService {
                         .add(item);
             });
 
-            // Issue #739 idempotency: if an in-progress draft already exists for this SO,
-            // return it instead of creating a duplicate (六扇门 客户手测 2026-05-17: SO-20260511-0001
-            // 有 2 个草稿 DLV — DLV-20260511-0337 / DLV-20260517-9640).
-            List<SalesDeliveryRecord> existing = deliveryRecordRepository.findInProgressBySalesOrderId(
-                    factoryId, request.getSalesOrderId(),
-                    List.of(SalesDeliveryStatus.DRAFT,
-                            SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM,
-                            SalesDeliveryStatus.PICKED));
-            if (!existing.isEmpty()) {
-                SalesDeliveryRecord prev = existing.get(0);
-                log.info("发货单幂等命中: factoryId={}, salesOrderId={}, existingDeliveryNumber={}, status={}",
-                        factoryId, request.getSalesOrderId(), prev.getDeliveryNumber(), prev.getStatus());
-                throw new BusinessException(409,
-                        "该销售订单已有草稿发货单 " + prev.getDeliveryNumber() + " (" + prev.getStatus().getDisplayName() + ")")
-                        .withHint("请查看现有发货单, 不要重复创建. 如需多次发货, 请先完成或取消现有草稿.")
-                        .withHintTarget("发货记录 Tab");
+            List<SalesDeliveryRecord> existing = deliveryRecordRepository.findBySalesOrderId(request.getSalesOrderId())
+                    .stream().filter(d -> factoryId.equals(d.getFactoryId())).toList();
+            if (request.getIdempotencyKey() != null && !request.getIdempotencyKey().isBlank()) {
+                SalesDeliveryRecord replay = existing.stream()
+                        .filter(d -> Objects.equals(request.getIdempotencyKey(), d.getIdempotencyKey()))
+                        .findFirst().orElse(null);
+                if (replay != null) {
+                    log.info("发货单幂等重放: factoryId={}, salesOrderId={}, deliveryNumber={}",
+                            factoryId, request.getSalesOrderId(), replay.getDeliveryNumber());
+                    return replay;
+                }
             }
+
+            Map<Long, BigDecimal> arrangedByOrderItem = effectiveMasterDeliveries(existing).stream()
+                    .flatMap(delivery -> delivery.getItems().stream())
+                    .filter(item -> item.getSalesOrderItemId() != null)
+                    .collect(Collectors.groupingBy(
+                            SalesDeliveryItem::getSalesOrderItemId,
+                            Collectors.reducing(BigDecimal.ZERO,
+                                    item -> item.getDeliveredQuantity() != null ? item.getDeliveredQuantity() : BigDecimal.ZERO,
+                                    BigDecimal::add)));
+            Map<Long, BigDecimal> requestedByOrderItem = new HashMap<>();
+            for (CreateDeliveryRequest.DeliveryItemDTO requested : request.getItems()) {
+                SalesOrderItem source = resolveDeliverySourceOrderItem(
+                        requested, sourceOrderItemsById, sourceOrderItemsByProduct, true);
+                BigDecimal requestedQuantity = requested.getDeliveredQuantity();
+                if (requestedQuantity == null || requestedQuantity.signum() <= 0) {
+                    throw new BusinessException(400, "发货数量必须大于0")
+                            .withCode("DELIVERY_QUANTITY_INVALID")
+                            .withHintTarget("deliveredQuantity");
+                }
+                requestedByOrderItem.merge(source.getId(), requestedQuantity, BigDecimal::add);
+            }
+            for (Map.Entry<Long, BigDecimal> requestedLine : requestedByOrderItem.entrySet()) {
+                SalesOrderItem source = sourceOrderItemsById.get(requestedLine.getKey());
+                BigDecimal ordered = source.getQuantity() != null ? source.getQuantity() : BigDecimal.ZERO;
+                BigDecimal arranged = arrangedByOrderItem.getOrDefault(source.getId(), BigDecimal.ZERO);
+                BigDecimal remaining = ordered.subtract(arranged).max(BigDecimal.ZERO);
+                if (requestedLine.getValue().compareTo(remaining) > 0) {
+                    throw new BusinessException(409,
+                            "发货数量超过订单行剩余可安排数量（剩余 " + remaining + source.getUnit() + "）")
+                            .withCode("DELIVERY_QUANTITY_EXCEEDS_REMAINING")
+                            .withHint("请刷新订单后按剩余可安排数量创建发货单")
+                            .withHintTarget("deliveredQuantity");
+                }
+            }
+
+            if (request.getDeliveryAddress() == null || request.getDeliveryAddress().isBlank()) {
+                String fallbackAddress = order.getDeliveryAddress();
+                if (fallbackAddress == null || fallbackAddress.isBlank()) {
+                    fallbackAddress = deliveryCustomer.getShippingAddress();
+                }
+                request.setDeliveryAddress(fallbackAddress);
+            }
+        }
+
+        if (request.getDeliveryAddress() == null || request.getDeliveryAddress().isBlank()) {
+            throw new BusinessException(400, "客户/订单未维护收货地址，不能创建无地址发货单")
+                    .withCode("DELIVERY_ADDRESS_REQUIRED")
+                    .withHint("请在本次发货单补充地址，或维护订单/客户主档收货地址")
+                    .withHintTarget("deliveryAddress");
         }
 
         String deliveryNumber = generateDeliveryNumber(factoryId);
@@ -2344,6 +2437,8 @@ public class SalesServiceImpl implements SalesService {
         record.setFactoryId(factoryId);
         record.setDeliveryNumber(deliveryNumber);
         record.setSalesOrderId(request.getSalesOrderId());
+        record.setRecordRole(request.getSalesOrderId() != null && !request.getSalesOrderId().isBlank() ? "MASTER" : "LEGACY");
+        record.setIdempotencyKey(request.getIdempotencyKey());
         record.setCustomerId(request.getCustomerId());
         record.setDeliveryDate(request.getDeliveryDate());
         record.setDeliveryAddress(request.getDeliveryAddress());
@@ -2352,7 +2447,7 @@ public class SalesServiceImpl implements SalesService {
         // Issue #740: 销售创建后直接进入 PENDING_WAREHOUSE_CONFIRM, 等仓库确认
         // (DRAFT 留给无 salesOrderId 的临时草稿, e.g. 内部样品 / 营销赠品).
         record.setStatus(request.getSalesOrderId() != null && !request.getSalesOrderId().isEmpty()
-                ? SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM
+                ? SalesDeliveryStatus.PENDING_SPLIT
                 : SalesDeliveryStatus.DRAFT);
         record.setShippedBy(userId);
         record.setRemark(request.getRemark());
@@ -2371,6 +2466,7 @@ public class SalesServiceImpl implements SalesService {
             SalesOrderItem sourceOrderItem = resolveDeliverySourceOrderItem(
                     itemDTO, sourceOrderItemsById, sourceOrderItemsByProduct,
                     request.getSalesOrderId() != null && !request.getSalesOrderId().isBlank());
+            item.setSalesOrderItemId(sourceOrderItem != null ? sourceOrderItem.getId() : itemDTO.getSalesOrderItemId());
             if (sourceOrderItem != null && !Objects.equals(sourceOrderItem.getUnit(), itemDTO.getUnit())) {
                 throw new BusinessException(400, "发货单位与销售订单行不一致")
                         .withCode("SALES_ORDER_ITEM_UNIT_MISMATCH")
@@ -2442,13 +2538,227 @@ public class SalesServiceImpl implements SalesService {
 
     @Override
     @Transactional
+    public SalesDeliveryRecord createDeliveryShipment(
+            String factoryId, String parentDeliveryId, CreateDeliveryShipmentRequest request, Long userId) {
+        SalesDeliveryRecord parentSnapshot = getDeliveryRecordById(factoryId, parentDeliveryId);
+        if (parentSnapshot.getSalesOrderId() == null) {
+            throw new BusinessException(409, "母发货单缺少销售订单关联");
+        }
+        salesOrderRepository.findByIdAndFactoryIdForUpdate(parentSnapshot.getSalesOrderId(), factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("销售订单不存在或不属于当前组织"));
+        SalesDeliveryRecord parent = lockDeliveryForMutation(factoryId, parentDeliveryId);
+        if (!"MASTER".equals(parent.getRecordRole()) || parent.getParentDeliveryId() != null) {
+            throw new BusinessException(409, "只能在母发货单下创建分批发运")
+                    .withCode("DELIVERY_MASTER_REQUIRED");
+        }
+        List<SalesDeliveryRecord> children = getDeliveryShipments(factoryId, parentDeliveryId);
+        if (request.getIdempotencyKey() != null && !request.getIdempotencyKey().isBlank()) {
+            SalesDeliveryRecord replay = children.stream()
+                    .filter(child -> Objects.equals(request.getIdempotencyKey(), child.getIdempotencyKey()))
+                    .findFirst().orElse(null);
+            if (replay != null) return replay;
+        }
+
+        Map<Long, SalesDeliveryItem> parentItems = parent.getItems().stream()
+                .collect(Collectors.toMap(SalesDeliveryItem::getId, item -> item));
+        Set<Long> requestedParentItemIds = new HashSet<>();
+        for (CreateDeliveryShipmentRequest.Item requested : request.getItems()) {
+            if (requested.getParentDeliveryItemId() == null
+                    || !requestedParentItemIds.add(requested.getParentDeliveryItemId())) {
+                throw new BusinessException(400, "同一母发货明细在一次子发运中只能出现一次")
+                        .withCode("DUPLICATE_PARENT_DELIVERY_ITEM")
+                        .withHintTarget("parentDeliveryItemId");
+            }
+        }
+        Map<Long, BigDecimal> arrangedByOrderItem = children.stream()
+                .filter(child -> child.getStatus() != SalesDeliveryStatus.CANCELLED
+                        && child.getStatus() != SalesDeliveryStatus.RETURNED)
+                .flatMap(child -> child.getItems().stream())
+                .filter(item -> item.getSalesOrderItemId() != null)
+                .collect(Collectors.groupingBy(
+                        SalesDeliveryItem::getSalesOrderItemId,
+                        Collectors.reducing(BigDecimal.ZERO,
+                                item -> item.getDeliveredQuantity() != null ? item.getDeliveredQuantity() : BigDecimal.ZERO,
+                                BigDecimal::add)));
+
+        int sequence = children.stream().map(SalesDeliveryRecord::getShipmentSequence)
+                .filter(Objects::nonNull).max(Integer::compareTo).orElse(0) + 1;
+        SalesDeliveryRecord child = new SalesDeliveryRecord();
+        child.setFactoryId(factoryId);
+        child.setDeliveryNumber(parent.getDeliveryNumber() + "-" + String.format("%02d", sequence));
+        child.setSalesOrderId(parent.getSalesOrderId());
+        child.setParentDeliveryId(parent.getId());
+        child.setRecordRole("SHIPMENT");
+        child.setShipmentSequence(sequence);
+        child.setIdempotencyKey(request.getIdempotencyKey());
+        child.setCustomerId(parent.getCustomerId());
+        child.setDeliveryDate(request.getActualShipmentDate() != null
+                ? request.getActualShipmentDate() : request.getPlannedShipmentDate());
+        child.setDeliveryAddress(hasText(request.getDeliveryAddress())
+                ? request.getDeliveryAddress().trim() : parent.getDeliveryAddress());
+        child.setLogisticsCompany(request.getLogisticsCompany());
+        child.setTrackingNumber(request.getTrackingNumber());
+        child.setDeliveryMethod(hasText(request.getDeliveryMethod())
+                ? request.getDeliveryMethod().trim().toUpperCase() : "LOGISTICS");
+        child.setRemark(request.getRemark());
+        child.setStatus(SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM);
+        child.setShippedBy(userId);
+        if (!hasText(child.getDeliveryAddress())) {
+            throw new BusinessException(400, "子发运单必须包含发货地址快照")
+                    .withCode("DELIVERY_ADDRESS_REQUIRED");
+        }
+
+        child.setTotalAmount(BigDecimal.ZERO);
+        SalesDeliveryRecord saved = deliveryRecordRepository.save(child);
+
+        BigDecimal totalAmount = BigDecimal.ZERO;
+        for (CreateDeliveryShipmentRequest.Item requested : request.getItems()) {
+            SalesDeliveryItem source = parentItems.get(requested.getParentDeliveryItemId());
+            if (source == null) {
+                throw new BusinessException(400, "子发运明细不属于当前母发货单")
+                        .withCode("PARENT_DELIVERY_ITEM_INVALID");
+            }
+            Long lineId = source.getSalesOrderItemId();
+            BigDecimal parentQty = source.getDeliveredQuantity() != null ? source.getDeliveredQuantity() : BigDecimal.ZERO;
+            BigDecimal arranged = arrangedByOrderItem.getOrDefault(lineId, BigDecimal.ZERO);
+            BigDecimal remaining = parentQty.subtract(arranged).max(BigDecimal.ZERO);
+            if (requested.getQuantity() == null || requested.getQuantity().compareTo(BigDecimal.ZERO) <= 0
+                    || requested.getQuantity().compareTo(remaining) > 0) {
+                throw new BusinessException(409, "子发运数量超过母单剩余可安排数量（剩余 " + remaining + source.getUnit() + "）")
+                        .withCode("SHIPMENT_QUANTITY_EXCEEDS_PARENT_REMAINING")
+                        .withHintTarget("quantity");
+            }
+            SalesDeliveryItem item = new SalesDeliveryItem();
+            item.setSalesOrderItemId(source.getSalesOrderItemId());
+            item.setProductTypeId(source.getProductTypeId());
+            item.setProductName(source.getProductName());
+            item.setDeliveredQuantity(requested.getQuantity());
+            item.setUnit(source.getUnit());
+            item.setUnitPrice(source.getUnitPrice());
+            item.setSourceWarehouseCode(source.getSourceWarehouseCode());
+            item.setPackagingSpecId(source.getPackagingSpecId());
+            item.setPackagingSpecName(source.getPackagingSpecName());
+            item.setPackagingUnit(source.getPackagingUnit());
+            item.setPackagingBaseUnit(source.getPackagingBaseUnit());
+            item.setPackagingFactor(source.getPackagingFactor());
+            item.setDeliveryRecordId(saved.getId());
+            saved.getItems().add(item);
+            if (item.getUnitPrice() != null) {
+                totalAmount = totalAmount.add(item.getUnitPrice().multiply(item.getDeliveredQuantity()));
+            }
+        }
+        saved.setTotalAmount(totalAmount);
+        saved = deliveryRecordRepository.save(saved);
+        updateMasterDeliveryStatus(parent, children, saved);
+        return saved;
+    }
+
+    @Override
+    public List<SalesDeliveryRecord> getDeliveryShipments(String factoryId, String parentDeliveryId) {
+        SalesDeliveryRecord parent = getDeliveryRecordById(factoryId, parentDeliveryId);
+        if (parent.getSalesOrderId() == null) return List.of();
+        return deliveryRecordRepository.findBySalesOrderId(parent.getSalesOrderId()).stream()
+                .filter(child -> factoryId.equals(child.getFactoryId()))
+                .filter(child -> parentDeliveryId.equals(child.getParentDeliveryId()))
+                .sorted(Comparator.comparing(child -> child.getShipmentSequence() == null ? Integer.MAX_VALUE : child.getShipmentSequence()))
+                .toList();
+    }
+
+    @Override
+    @Transactional
+    public SalesDeliveryRecord cancelDeliveryShipment(
+            String factoryId, String parentDeliveryId, String shipmentId, Long userId) {
+        SalesDeliveryRecord childSnapshot = getDeliveryRecordById(factoryId, shipmentId);
+        lockSalesOrderForDelivery(factoryId, childSnapshot);
+        SalesDeliveryRecord parent = lockDeliveryForMutation(factoryId, parentDeliveryId);
+        SalesDeliveryRecord child = lockDeliveryForMutation(factoryId, shipmentId);
+        if (!Objects.equals(parentDeliveryId, child.getParentDeliveryId()) || !"SHIPMENT".equals(child.getRecordRole())) {
+            throw new BusinessException(404, "子发运单不存在或不属于该母发货单");
+        }
+        if (child.getStatus() == SalesDeliveryStatus.CANCELLED) return child;
+        if (child.getStatus() == SalesDeliveryStatus.SHIPPED || child.getStatus() == SalesDeliveryStatus.DELIVERED) {
+            throw new BusinessException(409, "已确认发货的子发运单不能直接取消");
+        }
+        if (batchAllocationService != null) {
+            child.getItems().forEach(item -> batchAllocationService.clearAllocations(factoryId, String.valueOf(item.getId())));
+        }
+        child.setStatus(SalesDeliveryStatus.CANCELLED);
+        SalesDeliveryRecord saved = deliveryRecordRepository.save(child);
+        updateMasterDeliveryStatus(parent, getDeliveryShipments(factoryId, parentDeliveryId), null);
+        return saved;
+    }
+
+    private void updateMasterDeliveryStatus(
+            SalesDeliveryRecord parent, List<SalesDeliveryRecord> existingChildren, SalesDeliveryRecord additionalChild) {
+        List<SalesDeliveryRecord> children = new ArrayList<>(existingChildren == null ? List.of() : existingChildren);
+        if (additionalChild != null && children.stream().noneMatch(child -> child.getId().equals(additionalChild.getId()))) {
+            children.add(additionalChild);
+        }
+        List<SalesDeliveryRecord> effective = children.stream()
+                .filter(child -> child.getStatus() != SalesDeliveryStatus.CANCELLED
+                        && child.getStatus() != SalesDeliveryStatus.RETURNED).toList();
+        BigDecimal planned = parent.getItems().stream()
+                .map(SalesDeliveryItem::getDeliveredQuantity).filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal arranged = effective.stream().flatMap(child -> child.getItems().stream())
+                .map(SalesDeliveryItem::getDeliveredQuantity).filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal shipped = effective.stream()
+                .filter(child -> child.getStatus() == SalesDeliveryStatus.SHIPPED
+                        || child.getStatus() == SalesDeliveryStatus.DELIVERED)
+                .flatMap(child -> child.getItems().stream())
+                .map(SalesDeliveryItem::getDeliveredQuantity).filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal delivered = effective.stream()
+                .filter(child -> child.getStatus() == SalesDeliveryStatus.DELIVERED)
+                .flatMap(child -> child.getItems().stream())
+                .map(SalesDeliveryItem::getDeliveredQuantity).filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        SalesDeliveryStatus state;
+        if (planned.signum() > 0 && delivered.compareTo(planned) >= 0) state = SalesDeliveryStatus.DELIVERED;
+        else if (planned.signum() > 0 && shipped.compareTo(planned) >= 0) state = SalesDeliveryStatus.SHIPPED;
+        else if (shipped.signum() > 0) state = SalesDeliveryStatus.PARTIALLY_SHIPPED;
+        else if (planned.signum() > 0 && arranged.compareTo(planned) >= 0) state = SalesDeliveryStatus.FULLY_SCHEDULED;
+        else if (arranged.signum() > 0) state = SalesDeliveryStatus.PARTIALLY_SCHEDULED;
+        else state = SalesDeliveryStatus.PENDING_SPLIT;
+        parent.setStatus(state);
+        deliveryRecordRepository.save(parent);
+    }
+
+    @Override
+    @Transactional
     public SalesDeliveryRecord shipDelivery(String factoryId, String deliveryId, Long userId) {
-        SalesDeliveryRecord record = getDeliveryRecordById(factoryId, deliveryId);
+        SalesDeliveryRecord record = lockDeliveryHierarchyForMutation(factoryId, deliveryId);
+        if ("MASTER".equals(record.getRecordRole())) {
+            throw new BusinessException(409, "母发货单不能直接确认发货，请先创建子发运单")
+                    .withCode("DELIVERY_SHIPMENT_REQUIRED")
+                    .withHint("完整发货也应创建一张全量子发运单，再分配批次并确认发货");
+        }
         if (record.getStatus() != SalesDeliveryStatus.DRAFT
                 && record.getStatus() != SalesDeliveryStatus.PICKED
                 && record.getStatus() != SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM) {
             throw new BusinessException(409, "只有草稿/待仓库确认/已拣货状态的发货单可以发货")
                     .withHint("请刷新发货单列表查看最新状态");
+        }
+
+        boolean legacyMethodUnknown = !hasText(record.getDeliveryMethod())
+                && (record.getRecordRole() == null || "LEGACY".equals(record.getRecordRole()));
+        String deliveryMethod = hasText(record.getDeliveryMethod())
+                ? record.getDeliveryMethod().trim().toUpperCase()
+                : (legacyMethodUnknown ? "LEGACY" : "LOGISTICS");
+        if (record.getDeliveryDate() == null) {
+            throw new BusinessException(400, "确认发货前必须填写实际发运日期")
+                    .withCode("SHIPMENT_DATE_REQUIRED");
+        }
+        if ("LOGISTICS".equals(deliveryMethod)
+                && (!hasText(record.getLogisticsCompany()) || !hasText(record.getTrackingNumber()))) {
+            throw new BusinessException(400, "物流发运必须填写物流公司和运单号")
+                    .withCode("SHIPMENT_TRACKING_REQUIRED")
+                    .withHint("自提或自送请明确选择对应配送方式，不能用空运单号代替");
+        }
+        if (!java.util.Set.of("LOGISTICS", "SELF_PICKUP", "SELF_DELIVERY", "LEGACY").contains(deliveryMethod)) {
+            throw new BusinessException(400, "不支持的配送方式: " + deliveryMethod)
+                    .withCode("DELIVERY_METHOD_INVALID");
         }
 
         // P0-13 强制批次分配校验：发货行必须已完成批次分配才能发货
@@ -2482,6 +2792,10 @@ public class SalesServiceImpl implements SalesService {
         }
 
         record = deliveryRecordRepository.save(record);
+        if (record.getParentDeliveryId() != null) {
+            SalesDeliveryRecord parent = getDeliveryRecordById(factoryId, record.getParentDeliveryId());
+            updateMasterDeliveryStatus(parent, getDeliveryShipments(factoryId, parent.getId()), null);
+        }
         log.info("发货确认: deliveryId={}, deliveryNumber={}", deliveryId, record.getDeliveryNumber());
 
         // 自动创建应收账款（销售发货 → AR_INVOICE）
@@ -2514,14 +2828,43 @@ public class SalesServiceImpl implements SalesService {
     @Override
     @Transactional
     public SalesDeliveryRecord confirmDelivered(String factoryId, String deliveryId) {
-        SalesDeliveryRecord record = getDeliveryRecordById(factoryId, deliveryId);
+        SalesDeliveryRecord record = lockDeliveryHierarchyForMutation(factoryId, deliveryId);
         if (record.getStatus() != SalesDeliveryStatus.SHIPPED) {
             throw new BusinessException(409, "只有已发货状态的发货单可以确认签收")
                     .withHint("请刷新发货单列表查看最新状态");
         }
         record.setStatus(SalesDeliveryStatus.DELIVERED);
+        if (record.getSignedAt() == null) record.setSignedAt(LocalDateTime.now());
+        SalesDeliveryRecord saved = deliveryRecordRepository.save(record);
+        if (record.getParentDeliveryId() != null) {
+            SalesDeliveryRecord parent = getDeliveryRecordById(factoryId, record.getParentDeliveryId());
+            updateMasterDeliveryStatus(parent, getDeliveryShipments(factoryId, parent.getId()), null);
+        }
+        updateOrderTransportReceiptStatus(factoryId, record.getSalesOrderId());
         log.info("签收确认: deliveryId={}, deliveryNumber={}", deliveryId, record.getDeliveryNumber());
-        return deliveryRecordRepository.save(record);
+        return saved;
+    }
+
+    private void updateOrderTransportReceiptStatus(String factoryId, String salesOrderId) {
+        if (salesOrderId == null) return;
+        SalesOrder order = salesOrderRepository.findByIdAndFactoryIdForUpdate(salesOrderId, factoryId).orElse(null);
+        if (order == null) return;
+        List<SalesDeliveryRecord> effective = deliveryRecordRepository.findBySalesOrderId(salesOrderId).stream()
+                .filter(delivery -> factoryId.equals(delivery.getFactoryId()))
+                .filter(delivery -> !"MASTER".equals(delivery.getRecordRole()))
+                .filter(delivery -> delivery.getStatus() != SalesDeliveryStatus.CANCELLED
+                        && delivery.getStatus() != SalesDeliveryStatus.RETURNED)
+                .toList();
+        if (effective.isEmpty()) return;
+        long delivered = effective.stream().filter(delivery -> delivery.getStatus() == SalesDeliveryStatus.DELIVERED).count();
+        if (delivered == effective.size()) {
+            order.setTransportPlanStatus("RECEIVED");
+        } else if (delivered > 0) {
+            order.setTransportPlanStatus("PARTIALLY_RECEIVED");
+        } else if (effective.stream().anyMatch(delivery -> delivery.getStatus() == SalesDeliveryStatus.SHIPPED)) {
+            order.setTransportPlanStatus("IN_TRANSIT");
+        }
+        salesOrderRepository.save(order);
     }
 
     @Override
@@ -2533,6 +2876,46 @@ public class SalesServiceImpl implements SalesService {
                     .withHint("当前发货单不属于该工厂, 无法访问");
         }
         return record;
+    }
+
+    /**
+     * Locks a delivery aggregate before a state transition. Order locks are acquired first by
+     * {@link #lockDeliveryHierarchyForMutation(String, String)}; within the delivery aggregate the
+     * record is locked before its lines. This order is shared by ship, cancel and sign-off paths.
+     */
+    private SalesDeliveryRecord lockDeliveryForMutation(String factoryId, String deliveryId) {
+        Optional<SalesDeliveryRecord> locked = deliveryRecordRepository
+                .findByIdAndFactoryIdForUpdate(deliveryId, factoryId);
+        // Mockito returns null for an unstubbed Optional method in historical constructor tests.
+        // A Spring Data repository never does, so production always takes the locked query above.
+        if (locked == null) {
+            locked = deliveryRecordRepository.findById(deliveryId)
+                    .filter(record -> factoryId.equals(record.getFactoryId()));
+        }
+        SalesDeliveryRecord record = locked
+                .orElseThrow(() -> new ResourceNotFoundException("发货单不存在或不属于当前组织"));
+        if (deliveryItemRepository != null) {
+            deliveryItemRepository.findByDeliveryRecordIdForUpdate(deliveryId);
+        }
+        // Initialize the managed collection after the line locks; never replace an orphan-removal
+        // collection with the query result.
+        record.getItems().size();
+        return record;
+    }
+
+    private SalesOrder lockSalesOrderForDelivery(String factoryId, SalesDeliveryRecord delivery) {
+        if (delivery == null || delivery.getSalesOrderId() == null) return null;
+        return salesOrderRepository.findByIdAndFactoryIdForUpdate(delivery.getSalesOrderId(), factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("销售订单不存在或不属于当前组织"));
+    }
+
+    private SalesDeliveryRecord lockDeliveryHierarchyForMutation(String factoryId, String deliveryId) {
+        SalesDeliveryRecord snapshot = getDeliveryRecordById(factoryId, deliveryId);
+        lockSalesOrderForDelivery(factoryId, snapshot);
+        if (snapshot.getParentDeliveryId() != null) {
+            lockDeliveryForMutation(factoryId, snapshot.getParentDeliveryId());
+        }
+        return lockDeliveryForMutation(factoryId, deliveryId);
     }
 
     @Override
@@ -2582,7 +2965,7 @@ public class SalesServiceImpl implements SalesService {
     public SalesDeliveryRecord warehouseConfirmDelivery(String factoryId, String deliveryId,
                                                         java.util.Map<String, java.math.BigDecimal> actualQuantities,
                                                         Long userId) {
-        SalesDeliveryRecord record = getDeliveryRecordById(factoryId, deliveryId);
+        SalesDeliveryRecord record = lockDeliveryHierarchyForMutation(factoryId, deliveryId);
 
         if (record.getStatus() != SalesDeliveryStatus.DRAFT
                 && record.getStatus() != SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM
@@ -3192,7 +3575,8 @@ public class SalesServiceImpl implements SalesService {
 
         BigDecimal remaining = item.getDeliveredQuantity();
         for (com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation alloc : allocations) {
-            FinishedGoodsBatch batch = finishedGoodsBatchRepository.findById(alloc.getFinishedGoodsBatchId())
+            FinishedGoodsBatch batch = finishedGoodsBatchRepository
+                    .findByIdAndFactoryIdForUpdate(alloc.getFinishedGoodsBatchId(), factoryId)
                     .orElseThrow(() -> new BusinessException(409, "分配的成品批次不存在或已删除: "
                             + alloc.getBatchNumber())
                             .withHint("请到「发货记录 → 分配批次」重新分配后再确认发货")
@@ -3334,30 +3718,30 @@ public class SalesServiceImpl implements SalesService {
     }
 
     private void updateOrderDeliveryStatus(SalesDeliveryRecord record) {
-        SalesOrder order = salesOrderRepository.findById(record.getSalesOrderId()).orElse(null);
+        SalesOrder order = salesOrderRepository
+                .findByIdAndFactoryIdForUpdate(record.getSalesOrderId(), record.getFactoryId())
+                .orElse(null);
         if (order == null) return;
 
         List<SalesOrderItem> orderItems = salesOrderItemRepository.findBySalesOrderId(order.getId());
 
         // 累加本次发货数量
         for (SalesDeliveryItem deliveryItem : record.getItems()) {
-            for (SalesOrderItem orderItem : orderItems) {
-                if (orderItem.getProductTypeId().equals(deliveryItem.getProductTypeId())) {
-                    BigDecimal previousDelivered = orderItem.getDeliveredQuantity() != null
-                            ? orderItem.getDeliveredQuantity() : BigDecimal.ZERO;
-                    BigDecimal deliveryCostUnitPrice = computeDeliveryCostUnitPrice(record.getFactoryId(), deliveryItem);
-                    if (deliveryCostUnitPrice != null && deliveryItem.getDeliveredQuantity() != null
-                            && deliveryItem.getDeliveredQuantity().signum() > 0) {
-                        orderItem.setCostUnitPrice(blendCostUnitPrice(
-                                orderItem.getCostUnitPrice(),
-                                previousDelivered,
-                                deliveryCostUnitPrice,
-                                deliveryItem.getDeliveredQuantity()));
-                    }
-                    BigDecimal newDelivered = orderItem.getDeliveredQuantity().add(deliveryItem.getDeliveredQuantity());
-                    orderItem.setDeliveredQuantity(newDelivered);
-                }
+            SalesOrderItem orderItem = resolvePostedSalesOrderItem(deliveryItem, orderItems);
+            BigDecimal previousDelivered = orderItem.getDeliveredQuantity() != null
+                    ? orderItem.getDeliveredQuantity() : BigDecimal.ZERO;
+            BigDecimal deliveryCostUnitPrice = computeDeliveryCostUnitPrice(record.getFactoryId(), deliveryItem);
+            if (deliveryCostUnitPrice != null && deliveryItem.getDeliveredQuantity() != null
+                    && deliveryItem.getDeliveredQuantity().signum() > 0) {
+                orderItem.setCostUnitPrice(blendCostUnitPrice(
+                        orderItem.getCostUnitPrice(),
+                        previousDelivered,
+                        deliveryCostUnitPrice,
+                        deliveryItem.getDeliveredQuantity()));
             }
+            BigDecimal shippedQuantity = deliveryItem.getDeliveredQuantity() != null
+                    ? deliveryItem.getDeliveredQuantity() : BigDecimal.ZERO;
+            orderItem.setDeliveredQuantity(previousDelivered.add(shippedQuantity));
         }
         salesOrderItemRepository.saveAll(orderItems);
 
@@ -3402,6 +3786,38 @@ public class SalesServiceImpl implements SalesService {
             order.setTransportPlanStatus("IN_TRANSIT");
         }
         salesOrderRepository.save(order);
+    }
+
+    /**
+     * Posts shipment quantity to the exact persisted sales-order line. Old delivery rows that
+     * predate sales_order_item_id may fall back by product only when that identity is unique;
+     * ambiguous legacy data fails closed instead of incrementing every same-SKU line.
+     */
+    private SalesOrderItem resolvePostedSalesOrderItem(
+            SalesDeliveryItem deliveryItem, List<SalesOrderItem> orderItems) {
+        if (deliveryItem.getSalesOrderItemId() != null) {
+            return orderItems.stream()
+                    .filter(item -> Objects.equals(item.getId(), deliveryItem.getSalesOrderItemId()))
+                    .filter(item -> Objects.equals(item.getProductTypeId(), deliveryItem.getProductTypeId()))
+                    .findFirst()
+                    .orElseThrow(() -> new BusinessException(409,
+                            "发货明细关联的销售订单行不存在或产品身份不一致")
+                            .withCode("DELIVERY_ORDER_ITEM_IDENTITY_MISMATCH")
+                            .withHintTarget("salesOrderItemId"));
+        }
+        List<SalesOrderItem> candidates = orderItems.stream()
+                .filter(item -> Objects.equals(item.getProductTypeId(), deliveryItem.getProductTypeId()))
+                .toList();
+        if (candidates.size() != 1) {
+            throw new BusinessException(409, candidates.isEmpty()
+                    ? "历史发货明细在销售订单中找不到对应产品行"
+                    : "历史发货明细缺少订单行身份，且同一产品存在多行，不能安全回写")
+                    .withCode(candidates.isEmpty()
+                            ? "DELIVERY_ORDER_ITEM_NOT_FOUND"
+                            : "LEGACY_DELIVERY_ORDER_ITEM_AMBIGUOUS")
+                    .withHintTarget("salesOrderItemId");
+        }
+        return candidates.get(0);
     }
 
     /**
@@ -3606,6 +4022,16 @@ public class SalesServiceImpl implements SalesService {
                     .withHintTarget("salesOrderItemId");
         }
         return candidates.get(0);
+    }
+
+    private List<SalesDeliveryRecord> effectiveMasterDeliveries(List<SalesDeliveryRecord> deliveries) {
+        if (deliveries == null) return List.of();
+        return deliveries.stream()
+                .filter(delivery -> delivery.getParentDeliveryId() == null)
+                .filter(delivery -> !"SHIPMENT".equals(delivery.getRecordRole()))
+                .filter(delivery -> delivery.getStatus() != SalesDeliveryStatus.CANCELLED
+                        && delivery.getStatus() != SalesDeliveryStatus.RETURNED)
+                .toList();
     }
 
     // ==================== T3: 业务员双字段过渡 ====================

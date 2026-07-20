@@ -23,12 +23,14 @@ import {
   applySelectedOption,
   optionsForItemType,
   resetSelectedOption,
+  TRANSFER_TYPE_OPTIONS,
   toTransferItemPayload,
   type FinishedGoodsInventoryBatch,
   type MaterialInventoryBatch,
   type TransferCreateRow,
   type TransferItemType,
   type TransferSelectableItem,
+  type TransferType,
 } from './transferCreate';
 
 const router = useRouter();
@@ -72,7 +74,6 @@ const typeMap: Record<string, string> = {
 // T4-B4 (issue #532): backend ReferenceDataController.findMaterials now emits currentStock
 // (PR adds it via MaterialBatchRepository.sumQuantityByMaterialType bulk query — issue #540).
 // Treat as optional + accept string|number to tolerate BigDecimal-as-string JSON encoding.
-interface MaterialTypeOption { id: string; name: string; code: string; unit: string; currentStock?: number | string | null; category?: string }
 interface FactoryNetworkEntry { factoryId: string; factoryName: string }
 
 const createVisible = ref(false);
@@ -80,7 +81,7 @@ const submitting = ref(false);
 const formRef = ref();
 const today = () => new Date().toISOString().slice(0, 10);
 const form = ref({
-  transferType: 'BRANCH_TO_HQ' as 'HQ_TO_BRANCH' | 'BRANCH_TO_BRANCH' | 'BRANCH_TO_HQ' | 'WAREHOUSE_TO_WAREHOUSE',
+  transferType: 'BRANCH_TO_HQ' as TransferType,
   targetFactoryId: '',
   sourceWarehouseId: '',
   targetWarehouseId: '',
@@ -90,23 +91,20 @@ const form = ref({
   items: [] as TransferCreateRow[],
 });
 function validateWarehouseTransferSource(_rule: unknown, value: string, callback: (error?: Error) => void) {
-  if (form.value.transferType === 'WAREHOUSE_TO_WAREHOUSE' && !value) {
-    callback(new Error('仓库间调拨必须选择调出仓库'));
+  if (!value) {
+    callback(new Error('请选择调出仓库'));
     return;
   }
   callback();
 }
 
 function validateWarehouseTransferTarget(_rule: unknown, value: string, callback: (error?: Error) => void) {
-  if (form.value.transferType !== 'WAREHOUSE_TO_WAREHOUSE') {
-    callback();
-    return;
-  }
   if (!value) {
-    callback(new Error('仓库间调拨必须选择调入仓库'));
+    callback(new Error('请选择调入仓库'));
     return;
   }
-  if (form.value.sourceWarehouseId && value === form.value.sourceWarehouseId) {
+  if (form.value.transferType === 'WAREHOUSE_TO_WAREHOUSE'
+      && form.value.sourceWarehouseId && value === form.value.sourceWarehouseId) {
     callback(new Error('调入仓库不能和调出仓库相同'));
     return;
   }
@@ -114,13 +112,12 @@ function validateWarehouseTransferTarget(_rule: unknown, value: string, callback
 }
 
 const formRules = {
-  sourceWarehouseId: [{ validator: validateWarehouseTransferSource, trigger: 'change' }],
-  targetWarehouseId: [{ validator: validateWarehouseTransferTarget, trigger: 'change' }],
+  sourceWarehouseId: [{ required: true, validator: validateWarehouseTransferSource, trigger: 'change' }],
+  targetWarehouseId: [{ required: true, validator: validateWarehouseTransferTarget, trigger: 'change' }],
   transferType: [{ required: true, message: '请选择调拨类型', trigger: 'change' }],
   targetFactoryId: [{ required: true, message: '请选择调入方', trigger: 'change' }],
   transferDate: [{ required: true, message: '请选择调拨日期', trigger: 'change' }],
 };
-const materialOptions = ref<MaterialTypeOption[]>([]);
 const sourceMaterialOptions = ref<TransferSelectableItem[]>([]);
 const finishedGoodsOptions = ref<TransferSelectableItem[]>([]);
 const sourceInventoryLoading = ref(false);
@@ -128,8 +125,9 @@ const sourceInventoryLoaded = ref(false);
 const factoryNetworkOptions = ref<FactoryNetworkEntry[]>([]);
 const factoryNetworkLoading = ref(false);
 // F-FP-4: 仓库下拉 (参考 stocktakes/index.vue 写法)
-interface WarehouseOption { id: string | number; name: string; type?: string }
-const warehouseOptions = ref<WarehouseOption[]>([]);
+interface WarehouseOption { id: string | number; name: string; code?: string; type?: string }
+const sourceWarehouseOptions = ref<WarehouseOption[]>([]);
+const targetWarehouseOptions = ref<WarehouseOption[]>([]);
 
 onMounted(() => loadData());
 
@@ -150,38 +148,9 @@ async function loadData() {
   finally { loading.value = false; }
 }
 
-async function loadMaterialOptions() {
-  if (!factoryId.value) return;
-  try {
-    const res = await get<{ content: MaterialTypeOption[] } | MaterialTypeOption[]>(
-      `/${factoryId.value}/reference-data/materials`,
-      { params: { page: 1, size: 200 } }
-    );
-    const ext = <T,>(r: any): T[] => (r?.data?.content || r?.data?.list || r?.data || []) as T[];
-    materialOptions.value = ext<MaterialTypeOption>(res);
-  } catch { /* interceptor */ }
-}
-
 interface InventoryByWarehouseResponse {
   materials?: MaterialInventoryBatch[];
   products?: FinishedGoodsInventoryBatch[];
-}
-
-function extractContent<T>(response: any): T[] {
-  const content = response?.data?.content || response?.data?.list || response?.data || [];
-  return Array.isArray(content) ? content as T[] : [];
-}
-
-async function loadFinishedGoodsAcrossFactory() {
-  if (!factoryId.value) return;
-  try {
-    const res = await get(`/${factoryId.value}/sales/finished-goods`, {
-      params: { page: 1, size: 200 },
-    });
-    finishedGoodsOptions.value = aggregateFinishedGoodsOptions(
-      extractContent<FinishedGoodsInventoryBatch>(res),
-    );
-  } catch { /* interceptor */ }
 }
 
 async function loadSourceInventoryOptions() {
@@ -212,24 +181,11 @@ async function handleSourceWarehouseChange() {
 async function handleItemTypeChange(row: TransferCreateRow, itemType: TransferItemType) {
   row.itemType = itemType;
   resetSelectedOption(row);
-  if (itemType === 'FINISHED_GOODS' && finishedGoodsOptions.value.length === 0) {
-    if (form.value.sourceWarehouseId) await loadSourceInventoryOptions();
-    else await loadFinishedGoodsAcrossFactory();
-  }
+  if (form.value.sourceWarehouseId && !sourceInventoryLoaded.value) await loadSourceInventoryOptions();
 }
 
 function selectableOptions(row: TransferCreateRow): TransferSelectableItem[] {
-  const materials = sourceInventoryLoaded.value
-    ? sourceMaterialOptions.value
-    : materialOptions.value.map((option) => ({
-        id: option.id,
-        name: option.name,
-        code: option.code,
-        unit: option.unit,
-        currentStock: Number(option.currentStock ?? 0),
-        category: option.category,
-      }));
-  return optionsForItemType(row.itemType, materials, finishedGoodsOptions.value);
+  return optionsForItemType(row.itemType, sourceMaterialOptions.value, finishedGoodsOptions.value);
 }
 
 // PR #309 C2 — load visible factory network for 调入方 dropdown
@@ -243,6 +199,7 @@ async function loadFactoryNetwork() {
     // Default to own factory if only one entry visible (and form not yet filled)
     if (factoryNetworkOptions.value.length === 1 && !form.value.targetFactoryId) {
       form.value.targetFactoryId = factoryNetworkOptions.value[0].factoryId;
+      await loadTargetWarehouses();
     }
   } catch {
     // Fallback: at minimum let user fill in manually (so we keep filterable allow-create on the select)
@@ -253,12 +210,45 @@ async function loadFactoryNetwork() {
 }
 
 // F-FP-4: 加载本厂仓库列表 (同 stocktakes/index.vue loadWarehouses)
-async function loadWarehouses() {
-  if (!factoryId.value) return;
+async function loadWarehousesForFactory(targetFactoryId: string): Promise<WarehouseOption[]> {
+  if (!factoryId.value || !targetFactoryId) return [];
   try {
-    const res = await get<WarehouseOption[]>(`/${factoryId.value}/factory/warehouses`);
-    warehouseOptions.value = Array.isArray(res.data) ? res.data : [];
-  } catch { /* 失败时仓库下拉为空，用户仍可不填 (字段可选) */ }
+    const ownFactory = targetFactoryId === factoryId.value;
+    const url = ownFactory
+      ? `/${factoryId.value}/factory/warehouses`
+      : `/${factoryId.value}/inventory/warehouses`;
+    const res = await get<WarehouseOption[]>(url, ownFactory ? undefined : {
+      params: { targetFactoryId },
+    });
+    return Array.isArray(res.data) ? res.data : [];
+  } catch {
+    return [];
+  }
+}
+
+async function loadSourceWarehouses() {
+  sourceWarehouseOptions.value = factoryId.value
+    ? await loadWarehousesForFactory(factoryId.value)
+    : [];
+}
+
+async function loadTargetWarehouses() {
+  targetWarehouseOptions.value = form.value.targetFactoryId
+    ? await loadWarehousesForFactory(form.value.targetFactoryId)
+    : [];
+}
+
+async function handleTargetFactoryChange() {
+  form.value.targetWarehouseId = '';
+  await loadTargetWarehouses();
+}
+
+async function handleTransferTypeChange(value: TransferType) {
+  form.value.targetWarehouseId = '';
+  if (value === 'WAREHOUSE_TO_WAREHOUSE') {
+    form.value.targetFactoryId = factoryId.value || '';
+  }
+  await loadTargetWarehouses();
 }
 
 function openCreateDialog() {
@@ -275,9 +265,8 @@ function openCreateDialog() {
   sourceMaterialOptions.value = [];
   finishedGoodsOptions.value = [];
   sourceInventoryLoaded.value = false;
-  loadMaterialOptions();
   loadFactoryNetwork();
-  loadWarehouses();
+  loadSourceWarehouses();
   createVisible.value = true;
 }
 
@@ -288,8 +277,8 @@ function addItem() {
     materialTypeId: undefined,
     productTypeId: undefined,
     itemName: '',
-    quantity: 0,
-    unit: 'kg',
+    quantity: undefined,
+    unit: '',
     unitPrice: undefined,
     remark: '',
   });
@@ -344,8 +333,8 @@ async function submitCreate() {
       remark: form.value.remark || undefined,
       items: form.value.items.map(toTransferItemPayload),
     };
-    if (form.value.sourceWarehouseId) payload.sourceWarehouseId = form.value.sourceWarehouseId.trim();
-    if (form.value.targetWarehouseId) payload.targetWarehouseId = form.value.targetWarehouseId.trim();
+    payload.sourceWarehouseId = form.value.sourceWarehouseId.trim();
+    payload.targetWarehouseId = form.value.targetWarehouseId.trim();
     if (form.value.expectedArrivalDate) payload.expectedArrivalDate = form.value.expectedArrivalDate;
 
     const res = await post(`/${factoryId.value}/transfers`, payload);
@@ -468,13 +457,13 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="调拨类型" prop="transferType">
-              <el-select v-model="form.transferType" style="width:100%">
-                <el-option label="总部→分部 (HQ_TO_BRANCH)" value="HQ_TO_BRANCH" />
-                <el-option label="分部→分部 (BRANCH_TO_BRANCH)" value="BRANCH_TO_BRANCH" />
-                <el-option label="分部→总部 (BRANCH_TO_HQ)" value="BRANCH_TO_HQ" />
-                <!-- Fool-proof gap fix: 同厂仓库间调拨 (如原料仓→生产仓领料/退料) 之前只有 typeMap
-                     认识, create 下拉没提供, 用户无法手动建这类单. -->
-                <el-option label="仓库间调拨 (同厂, WAREHOUSE_TO_WAREHOUSE)" value="WAREHOUSE_TO_WAREHOUSE" />
+              <el-select v-model="form.transferType" style="width:100%" @change="handleTransferTypeChange">
+                <el-option
+                  v-for="option in TRANSFER_TYPE_OPTIONS"
+                  :key="option.value"
+                  :label="option.label"
+                  :value="option.value"
+                />
               </el-select>
             </el-form-item>
           </el-col>
@@ -491,11 +480,11 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
                 v-model="form.targetFactoryId"
                 :loading="factoryNetworkLoading"
                 filterable
-                allow-create
                 default-first-option
-                placeholder="选择目标工厂/门店 (无可选项时可输入 ID)"
+                placeholder="请选择调入方"
                 clearable
                 style="width:100%"
+                @change="handleTargetFactoryChange"
               >
                 <el-option
                   v-for="opt in factoryNetworkOptions"
@@ -521,16 +510,16 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
             <el-form-item label="调出仓库" prop="sourceWarehouseId">
               <el-select
                 v-model="form.sourceWarehouseId"
-                placeholder="(可选) 选择调出仓库"
+                placeholder="请选择调出仓库"
                 clearable
                 filterable
                 style="width:100%"
                 @change="handleSourceWarehouseChange"
               >
                 <el-option
-                  v-for="w in warehouseOptions"
+                  v-for="w in sourceWarehouseOptions"
                   :key="String(w.id)"
-                  :label="String(w.name)"
+                  :label="`${w.name}${w.code ? ` (${w.code})` : ''}`"
                   :value="String(w.id)"
                 />
               </el-select>
@@ -540,15 +529,16 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
             <el-form-item label="调入仓库" prop="targetWarehouseId">
               <el-select
                 v-model="form.targetWarehouseId"
-                placeholder="(可选) 选择调入仓库"
+                placeholder="请选择调入仓库"
                 clearable
                 filterable
+                :disabled="!form.targetFactoryId"
                 style="width:100%"
               >
                 <el-option
-                  v-for="w in warehouseOptions"
+                  v-for="w in targetWarehouseOptions"
                   :key="String(w.id)"
-                  :label="String(w.name)"
+                  :label="`${w.name}${w.code ? ` (${w.code})` : ''}`"
                   :value="String(w.id)"
                 />
               </el-select>
@@ -574,7 +564,7 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
         </el-form-item>
 
         <el-divider content-position="left">调拨物料</el-divider>
-        <UpstreamMissingHint v-if="materialOptions.length === 0 && finishedGoodsOptions.length === 0" description="本工厂暂无可调拨物料或成品库存" target-module="warehouse" require-write action-text="去创建物料类型" contact-text="请联系仓库管理员核对库存" @action="goCreate('/warehouse/material-types')" />
+        <UpstreamMissingHint v-if="sourceInventoryLoaded && sourceMaterialOptions.length === 0 && finishedGoodsOptions.length === 0" description="所选调出仓库暂无可调拨物料或成品库存" target-module="warehouse" require-write action-text="去创建物料类型" contact-text="请联系仓库管理员核对库存" @action="goCreate('/warehouse/material-types')" />
         <el-button size="small" :icon="Plus" @click="addItem" style="margin-bottom:8px">添加物料</el-button>
         <el-table :data="form.items" border empty-text="点击「添加物料」开始">
           <el-table-column label="类型" width="140">
@@ -595,9 +585,9 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
             <template #default="{ row, $index }">
               <el-select
                 v-model="row.selectedItemId"
-                :placeholder="row.itemType === 'FINISHED_GOODS' && !form.sourceWarehouseId ? '请先选择调出仓库' : '选择物料/成品'"
+                :placeholder="!form.sourceWarehouseId ? '请先选择调出仓库' : '选择物料/成品'"
                 :loading="sourceInventoryLoading"
-                :disabled="row.itemType === 'FINISHED_GOODS' && form.transferType === 'WAREHOUSE_TO_WAREHOUSE' && !form.sourceWarehouseId"
+                :disabled="!form.sourceWarehouseId"
                 filterable size="small" style="width:100%"
                 @change="(val: string) => handleMaterialChange($index, val)"
               >
@@ -609,15 +599,19 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
               </el-select>
             </template>
           </el-table-column>
-          <el-table-column label="数量" width="130">
+          <el-table-column label="数量 / 单位" width="190">
             <!-- F-FP-3 Rule1: :max = 现有库存，超量时橙色提示边框，超量禁提交 -->
             <template #default="{ row }">
-              <el-input-number
-                v-model="row.quantity" :min="0.001" :precision="3"
-                :max="row._currentStock != null && row._currentStock !== '' ? Number(row._currentStock) : undefined"
-                :controls="false" size="small" style="width:100%"
-                :class="{ 'over-stock': row._currentStock != null && row._currentStock !== '' && Number(row.quantity) > Number(row._currentStock) }"
-              />
+              <div class="quantity-unit-cell">
+                <el-input-number
+                  v-model="row.quantity" :min="0.01" :precision="3"
+                  :max="row._currentStock != null && row._currentStock !== '' ? Number(row._currentStock) : undefined"
+                  :controls="false" size="small" placeholder="数量"
+                  :disabled="!row.selectedItemId"
+                  :class="{ 'over-stock': row._currentStock != null && row._currentStock !== '' && Number(row.quantity) > Number(row._currentStock) }"
+                />
+                <span class="unit-chip">{{ row.selectedItemId ? displayUnit(row.unit) : '单位' }}</span>
+              </div>
             </template>
           </el-table-column>
           <!-- T4-B4 (issue #532): F006 customer asked for 现有库存 inline next to 调拨数量 so user
@@ -630,11 +624,6 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
                 {{ formatStock(row._currentStock) }} {{ displayUnit(row.unit) }}
               </span>
               <span v-else style="color: #c0c4cc">-</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="单位" width="90">
-            <template #default="{ row }">
-              <el-input :model-value="displayUnit(row.unit)" size="small" readonly />
             </template>
           </el-table-column>
           <el-table-column v-if="canViewPrice" label="单价" width="120">
@@ -681,4 +670,8 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
 .pagination-wrapper { display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #ebeef5; margin-top: 16px; }
 /* F-FP-3: 超库存时橙色边框提示 */
 :deep(.over-stock .el-input__wrapper) { box-shadow: 0 0 0 1px #e6a23c inset !important; }
+.quantity-unit-cell { display: flex; align-items: center; gap: 8px;
+  :deep(.el-input-number) { flex: 1; min-width: 0; }
+}
+.unit-chip { flex: 0 0 36px; text-align: center; color: #606266; font-weight: 600; }
 </style>

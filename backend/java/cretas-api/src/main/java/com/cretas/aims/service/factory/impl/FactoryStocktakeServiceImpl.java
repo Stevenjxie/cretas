@@ -8,6 +8,7 @@ import com.cretas.aims.dto.finance.VoucherEntrySpec;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.factory.FactoryStocktake;
@@ -18,6 +19,7 @@ import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeItemRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
@@ -39,9 +41,12 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
@@ -72,6 +77,9 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
      * 未小结的报工消耗 (报工写未结 MaterialConsumption 但不扣 usedQuantity, 小结才扣)。
      */
     private final MaterialConsumptionRepository materialConsumptionRepo;
+
+    @Autowired(required = false)
+    private UserRepository userRepository;
 
     /** SP12 §5.2: optional — 测试时不注入 (required=false 打破构造器注入限制) */
     @Autowired(required = false)
@@ -134,7 +142,9 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         // (project memory: 加枚举新值易漏迁移放宽 CHECK, 这里用轻量 boolean 规避)。
         boolean opening = importMode == FactoryStocktake.ImportMode.OPENING;
         boolean adHoc = req.isAdHoc();
-        LocalDate today = LocalDate.now();
+        LocalDateTime inventoryCutoffAt = LocalDateTime.now();
+        LocalDate today = inventoryCutoffAt.toLocalDate();
+        String periodMonth = YearMonth.from(inventoryCutoffAt).toString();
         if (!opening && !adHoc && today.getDayOfMonth() < monthEndThreshold) {
             LocalDate nextAllowedDate = today.withDayOfMonth(monthEndThreshold);
             throw new BusinessException(409,
@@ -149,7 +159,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
 
         // 防重复发起（同仓库同月份已有未完成盘点）
         long existing = stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(
-                factoryId, req.getWarehouseId(), req.getPeriodMonth());
+                factoryId, req.getWarehouseId(), periodMonth);
         if (existing > 0) {
             throw new BusinessException(409,
                     "该仓库本月已有进行中的盘点任务，请完成或拒绝后再发起")
@@ -160,10 +170,17 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         stocktake.setFactoryId(factoryId);
         stocktake.setStocktakeNo(generateStocktakeNo(factoryId));
         stocktake.setWarehouseId(req.getWarehouseId());
-        stocktake.setPeriodMonth(req.getPeriodMonth());
+        stocktake.setPeriodMonth(periodMonth);
+        stocktake.setInventoryCutoffAt(inventoryCutoffAt);
+        stocktake.setReconciliationEndAt(inventoryCutoffAt);
+        String reconciliationPreset = normalizeReconciliationPreset(req.getReconciliationPreset());
+        stocktake.setReconciliationPreset(reconciliationPreset);
+        stocktake.setReconciliationStartAt(resolveReconciliationStart(
+                factoryId, req.getWarehouseId(), inventoryCutoffAt, reconciliationPreset,
+                req.getReconciliationStartAt()));
         stocktake.setStatus(FactoryStocktake.Status.INITIATED);
         stocktake.setInitiatedBy(userId);
-        stocktake.setInitiatedAt(LocalDateTime.now());
+        stocktake.setInitiatedAt(inventoryCutoffAt);
         stocktake.setNotes(req.getNotes());
         stocktake.setImportMode(importMode); // null = 逐项 UI 盘点; NORMAL/OPENING = 批量导入
 
@@ -204,7 +221,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         FactoryStocktake saved = stocktakeRepo.save(stocktake);
         log.info("SP7: 盘点任务已创建 factoryId={} stocktakeNo={} warehouseId={}",
                 factoryId, saved.getStocktakeNo(), req.getWarehouseId());
-        return StocktakeDTO.from(saved);
+        return toDetailedDTO(saved, factoryId);
     }
 
     @Override
@@ -218,6 +235,9 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         result.put("monthEndThreshold", monthEndThreshold);
         result.put("canInitiateToday", canInitiateToday);
         result.put("today", today);
+        LocalDateTime serverNow = LocalDateTime.now();
+        result.put("serverNow", serverNow);
+        result.put("periodMonth", YearMonth.from(serverNow).toString());
         result.put("nextAllowedDate", nextAllowedDate);
         return result;
     }
@@ -225,11 +245,31 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     @Override
     @Transactional
     public void updateItems(String stocktakeId, String factoryId, List<StocktakeItemUpdateDTO> updates, Long userId) {
-        FactoryStocktake stocktake = findAndValidate(stocktakeId, factoryId);
-        assertNotApplied(stocktake);
+        FactoryStocktake stocktake = findAndValidateForUpdate(stocktakeId, factoryId);
+        if (stocktake.getStatus() != FactoryStocktake.Status.INITIATED
+                && stocktake.getStatus() != FactoryStocktake.Status.COUNTING
+                && stocktake.getStatus() != FactoryStocktake.Status.REJECTED) {
+            throw new BusinessException(409,
+                    "当前盘点任务状态 [" + stocktake.getStatus() + "] 已锁定盘点证据，不能修改实盘数量")
+                    .withCode("STOCKTAKE_COUNT_EVIDENCE_LOCKED")
+                    .withHint("待审批、已审批或已应用的盘点必须保留审批时证据；如需更正，请先由审批人驳回");
+        }
         // 状态流转到 COUNTING
-        if (stocktake.getStatus() == FactoryStocktake.Status.INITIATED) {
+        if (stocktake.getStatus() == FactoryStocktake.Status.INITIATED
+                || stocktake.getStatus() == FactoryStocktake.Status.REJECTED) {
             stocktake.setStatus(FactoryStocktake.Status.COUNTING);
+            if (stocktake.getCountingStartedAt() == null) {
+                stocktake.setCountingStartedAt(LocalDateTime.now());
+            }
+            stocktake.setCountedBy(userId);
+            // A rejected task starts a new evidence cycle. Old approval metadata must
+            // never make the revised count look as if it had already been reviewed.
+            stocktake.setSubmittedBy(null);
+            stocktake.setSubmittedAt(null);
+            stocktake.setApprovedBy(null);
+            stocktake.setApprovedAt(null);
+            stocktake.setRejectReason(null);
+            stocktake.setSelfConfirmedZeroDifference(false);
         }
 
         for (StocktakeItemUpdateDTO update : updates) {
@@ -277,17 +317,63 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         }
     }
 
+    private String normalizeReconciliationPreset(String preset) {
+        String normalized = preset == null || preset.isBlank()
+                ? "LAST_APPLIED" : preset.trim().toUpperCase();
+        if (!java.util.Set.of("LAST_APPLIED", "LAST_7_DAYS", "MONTH", "QUARTER", "YEAR", "CUSTOM")
+                .contains(normalized)) {
+            throw new BusinessException(400, "不支持的对账回溯范围: " + preset)
+                    .withCode("STOCKTAKE_RECONCILIATION_PRESET_INVALID");
+        }
+        return normalized;
+    }
+
+    private LocalDateTime resolveReconciliationStart(String factoryId, String warehouseId,
+            LocalDateTime cutoff, String preset, LocalDateTime customStart) {
+        LocalDateTime start = switch (preset) {
+            case "LAST_7_DAYS" -> cutoff.minusDays(7);
+            case "MONTH" -> cutoff.withDayOfMonth(1).toLocalDate().atStartOfDay();
+            case "QUARTER" -> {
+                int firstMonth = ((cutoff.getMonthValue() - 1) / 3) * 3 + 1;
+                yield cutoff.withMonth(firstMonth).withDayOfMonth(1).toLocalDate().atStartOfDay();
+            }
+            case "YEAR" -> cutoff.with(TemporalAdjusters.firstDayOfYear()).toLocalDate().atStartOfDay();
+            case "CUSTOM" -> {
+                if (customStart == null) {
+                    throw new BusinessException(400, "自定义对账范围必须提供开始时间")
+                            .withCode("STOCKTAKE_RECONCILIATION_START_REQUIRED");
+                }
+                yield customStart;
+            }
+            default -> stocktakeRepo
+                    .findFirstByFactoryIdAndWarehouseIdAndStatusOrderByAppliedAtDesc(
+                            factoryId, warehouseId, FactoryStocktake.Status.APPLIED)
+                    .map(previous -> previous.getInventoryCutoffAt() != null
+                            ? previous.getInventoryCutoffAt() : previous.getAppliedAt())
+                    .orElse(cutoff.withDayOfMonth(1).toLocalDate().atStartOfDay());
+        };
+        if (start == null) {
+            start = cutoff.withDayOfMonth(1).toLocalDate().atStartOfDay();
+        }
+        if (start.isAfter(cutoff)) {
+            throw new BusinessException(400, "对账回溯开始时间不能晚于盘点基准时间")
+                    .withCode("STOCKTAKE_RECONCILIATION_RANGE_INVALID");
+        }
+        return start;
+    }
+
     @Override
     @Transactional
     public void submit(String stocktakeId, String factoryId, Long userId) {
-        FactoryStocktake stocktake = findAndValidate(stocktakeId, factoryId);
+        FactoryStocktake stocktake = findAndValidateForUpdate(stocktakeId, factoryId);
         if (stocktake.getStatus() != FactoryStocktake.Status.COUNTING &&
             stocktake.getStatus() != FactoryStocktake.Status.INITIATED &&
             stocktake.getStatus() != FactoryStocktake.Status.REJECTED) {
             throw new BusinessException(409,
                     "当前盘点任务状态 [" + stocktake.getStatus() + "] 不支持提交，需要 COUNTING 或 INITIATED 或 REJECTED（重提）")
-                    .withHint("请先录入实盘数量后再提交");
+                .withHint("请先录入实盘数量后再提交");
         }
+        assertAllItemsCounted(stocktake);
         stocktake.setStatus(FactoryStocktake.Status.PENDING_APPROVAL);
         stocktake.setSubmittedBy(userId);
         stocktake.setSubmittedAt(LocalDateTime.now());
@@ -298,13 +384,31 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     @Override
     @Transactional
     public void approve(String stocktakeId, String factoryId, Long approverId, String requestRole) {
+        approve(stocktakeId, factoryId, approverId, requestRole, null);
+    }
+
+    @Override
+    @Transactional
+    public void approve(String stocktakeId, String factoryId, Long approverId, String requestRole,
+            Long expectedVersion) {
         // 角色检查（C1 孪生坑：不用 SecurityContext）
         assertApprovalRole(requestRole);
-        FactoryStocktake stocktake = findAndValidate(stocktakeId, factoryId);
+        FactoryStocktake stocktake = findAndValidateForUpdate(stocktakeId, factoryId);
+        assertExpectedVersion(stocktake, expectedVersion);
         assertStatus(stocktake, FactoryStocktake.Status.PENDING_APPROVAL, "审批");
+        boolean hasDifference = normalizeAndValidateEvidence(stocktake);
+        boolean sameMaker = Objects.equals(stocktake.getInitiatedBy(), approverId)
+                || Objects.equals(stocktake.getCountedBy(), approverId)
+                || Objects.equals(stocktake.getSubmittedBy(), approverId);
+        if (hasDifference && sameMaker) {
+            throw new BusinessException(409, "存在盘盈/盘亏时，发起人、盘点录入人或提交人不能审批自己的盘点")
+                    .withCode("STOCKTAKE_SELF_APPROVAL_FORBIDDEN")
+                    .withHint("请由另一名财务经理或工厂管理员复核审批");
+        }
         stocktake.setStatus(FactoryStocktake.Status.APPROVED);
         stocktake.setApprovedBy(approverId);
         stocktake.setApprovedAt(LocalDateTime.now());
+        stocktake.setSelfConfirmedZeroDifference(!hasDifference && sameMaker);
         stocktakeRepo.save(stocktake);
         log.info("SP7: 盘点任务已审批 stocktakeId={} approverId={}", stocktakeId, approverId);
     }
@@ -313,7 +417,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     @Transactional
     public void reject(String stocktakeId, String factoryId, String reason, Long userId, String requestRole) {
         assertApprovalRole(requestRole);
-        FactoryStocktake stocktake = findAndValidate(stocktakeId, factoryId);
+        FactoryStocktake stocktake = findAndValidateForUpdate(stocktakeId, factoryId);
         assertStatus(stocktake, FactoryStocktake.Status.PENDING_APPROVAL, "驳回");
         stocktake.setStatus(FactoryStocktake.Status.REJECTED);
         stocktake.setRejectReason(reason);
@@ -352,11 +456,14 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     @Override
     @Transactional
     public void apply(String stocktakeId, String factoryId, Long userId) {
-        FactoryStocktake stocktake = stocktakeRepo.findById(stocktakeId)
-                .orElseThrow(() -> new BusinessException(404, "盘点任务不存在: " + stocktakeId));
-        if (!factoryId.equals(stocktake.getFactoryId())) {
-            throw new BusinessException(403, "无权操作该盘点任务");
-        }
+        apply(stocktakeId, factoryId, userId, null);
+    }
+
+    @Override
+    @Transactional
+    public void apply(String stocktakeId, String factoryId, Long userId, Long expectedVersion) {
+        FactoryStocktake stocktake = findAndValidateForUpdate(stocktakeId, factoryId);
+        assertExpectedVersion(stocktake, expectedVersion);
 
         // 幂等防重
         if (stocktake.getStatus() == FactoryStocktake.Status.APPLIED) {
@@ -366,6 +473,24 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                     .withHint("查看已生效记录");
         }
         assertStatus(stocktake, FactoryStocktake.Status.APPROVED, "生效");
+        normalizeAndValidateEvidence(stocktake);
+
+        // Validate every immutable snapshot identity before any inventory mutation. This is
+        // deliberately broader than the non-zero difference set: a zero-difference apply is
+        // still a final audited lock operation and must not silently accept a cross-tenant row.
+        for (FactoryStocktakeItem item : stocktake.getItems()) {
+            MaterialBatch identityBatch = materialBatchRepo.findByIdAndFactoryId(
+                            item.getMaterialBatchId(), factoryId)
+                    .orElseThrow(() -> new BusinessException(409,
+                            "盘点批次不存在或不属于当前工厂: " + item.getMaterialBatchId())
+                            .withCode("STOCKTAKE_BATCH_IDENTITY_MISMATCH"));
+            if (!Objects.equals(stocktake.getWarehouseId(), identityBatch.getWarehouseId())
+                    || !Objects.equals(item.getRawMaterialTypeId(), identityBatch.getMaterialTypeId())) {
+                throw new BusinessException(409,
+                        "盘点批次的仓库或物料身份已不一致: " + identityBatch.getBatchNumber())
+                        .withCode("STOCKTAKE_BATCH_IDENTITY_MISMATCH");
+            }
+        }
 
         // ---------------------------------------------------------------
         // Bug2 修复: 漂移守卫 — differenceQty 是"实盘数量 − 快照 systemQty"的冻结值
@@ -534,6 +659,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
 
         stocktake.setStatus(FactoryStocktake.Status.APPLIED);
         stocktake.setAppliedAt(LocalDateTime.now());
+        stocktake.setAppliedBy(userId);
         stocktakeRepo.save(stocktake);
         log.info("SP7: 盘点任务已生效 stocktakeId={} importMode={}", stocktakeId, stocktake.getImportMode());
     }
@@ -611,6 +737,11 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         preview.setStocktakeId(stocktakeId);
         preview.setStocktakeNo(stocktake.getStocktakeNo());
         preview.setPeriodMonth(stocktake.getPeriodMonth());
+        preview.setInventoryCutoffAt(effectiveInventoryCutoff(stocktake));
+        preview.setCountingStartedAt(stocktake.getCountingStartedAt());
+        preview.setReconciliationStartAt(stocktake.getReconciliationStartAt());
+        preview.setReconciliationEndAt(stocktake.getReconciliationEndAt() != null
+                ? stocktake.getReconciliationEndAt() : effectiveInventoryCutoff(stocktake));
 
         // 🔴 Fix (materialName 空白, 2026-07): 批量反查 batch → materialTypeId → 物料名,
         // 镜像 StocktakeBulkImportServiceImpl.loadMaterialNames() 的解法, 避免 previewDiff
@@ -620,6 +751,8 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                 .filter(id -> id != null && !id.isBlank())
                 .collect(Collectors.toList());
         Map<String, MaterialBatch> batchById = materialBatchRepo.findAllById(batchIds).stream()
+                .filter(batch -> factoryId.equals(batch.getFactoryId()))
+                .filter(batch -> Objects.equals(stocktake.getWarehouseId(), batch.getWarehouseId()))
                 .collect(Collectors.toMap(MaterialBatch::getId, b -> b, (a, b) -> a));
         List<String> typeIds = batchById.values().stream()
                 .map(MaterialBatch::getMaterialTypeId)
@@ -627,6 +760,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                 .distinct()
                 .collect(Collectors.toList());
         Map<String, String> nameByTypeId = rawMaterialTypeRepo.findAllById(typeIds).stream()
+                .filter(material -> factoryId.equals(material.getFactoryId()))
                 .collect(Collectors.toMap(RawMaterialType::getId, RawMaterialType::getName, (a, b) -> a));
 
         List<StocktakeDiffPreviewDTO.DiffLine> lines = new ArrayList<>();
@@ -638,21 +772,27 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
             line.setSystemQty(item.getSystemQty());
             line.setActualQty(item.getActualQty());
             line.setDifferenceQty(item.getDifferenceQty());
-            line.setDifferenceType(item.getDifferenceType() != null ? item.getDifferenceType().name() : null);
+            String differenceType = item.getDifferenceType() != null ? item.getDifferenceType().name() : null;
+            if (differenceType == null && item.getDifferenceQty() != null
+                    && item.getDifferenceQty().compareTo(BigDecimal.ZERO) == 0) {
+                differenceType = FactoryStocktakeItem.DifferenceType.MATCH.name();
+            }
+            line.setDifferenceType(differenceType);
 
             // 获取批次号 + 物料名称用于展示
             MaterialBatch batch = batchById.get(item.getMaterialBatchId());
             if (batch != null) {
                 line.setBatchNumber(batch.getBatchNumber());
+                line.setQuantityUnit(batch.getQuantityUnit());
                 String materialTypeId = batch.getMaterialTypeId();
                 String materialName = nameByTypeId.getOrDefault(materialTypeId, materialTypeId);
                 line.setMaterialName(materialName);
             }
 
             lines.add(line);
-            if (item.getDifferenceType() == FactoryStocktakeItem.DifferenceType.SURPLUS) surplus++;
-            else if (item.getDifferenceType() == FactoryStocktakeItem.DifferenceType.SHORTAGE) shortage++;
-            else if (item.getDifferenceType() == FactoryStocktakeItem.DifferenceType.MATCH) match++;
+            if (FactoryStocktakeItem.DifferenceType.SURPLUS.name().equals(differenceType)) surplus++;
+            else if (FactoryStocktakeItem.DifferenceType.SHORTAGE.name().equals(differenceType)) shortage++;
+            else if (FactoryStocktakeItem.DifferenceType.MATCH.name().equals(differenceType)) match++;
         }
         preview.setDiffLines(lines);
         preview.setSurplusCount(surplus);
@@ -664,27 +804,28 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     @Override
     public Page<StocktakeDTO> list(String factoryId, FactoryStocktake.Status status, Pageable pageable) {
         return stocktakeRepo.findByFactoryIdAndOptionalStatus(factoryId, status, pageable)
-                .map(StocktakeDTO::from);
+                .map(stocktake -> enrichHeader(StocktakeDTO.from(stocktake), stocktake, factoryId));
     }
 
     @Override
     public StocktakeDTO getDetail(String stocktakeId, String factoryId) {
         FactoryStocktake stocktake = findAndValidate(stocktakeId, factoryId);
-        return StocktakeDTO.from(stocktake);
+        return toDetailedDTO(stocktake, factoryId);
     }
 
     @Override
     @Transactional
     public String submitForApproval(String stocktakeId, String factoryId, Long userId) {
-        FactoryStocktake stocktake = findAndValidate(stocktakeId, factoryId);
+        FactoryStocktake stocktake = findAndValidateForUpdate(stocktakeId, factoryId);
         if (stocktake.getStatus() != FactoryStocktake.Status.COUNTING &&
             stocktake.getStatus() != FactoryStocktake.Status.INITIATED &&
             stocktake.getStatus() != FactoryStocktake.Status.REJECTED) {
             throw new BusinessException(409,
                     "当前盘点任务状态 [" + stocktake.getStatus() + "] 不支持提交审批，需要 COUNTING 或 INITIATED 或 REJECTED（重提）"
                     + " — 请前往[审批中心]查看进行中的审批")
-                    .withHint("前往审批中心");
+                .withHint("前往审批中心");
         }
+        assertAllItemsCounted(stocktake);
 
         // 幂等: 如果已有 workflowInstanceId 且状态 PENDING_APPROVAL → 不重复创建
         if (stocktake.getWorkflowInstanceId() != null &&
@@ -716,6 +857,169 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         log.info("SP12: 盘点任务已提交审批 stocktakeId={} workflowInstanceId={}",
                 stocktakeId, stocktake.getWorkflowInstanceId());
         return stocktake.getWorkflowInstanceId();
+    }
+
+    private void assertAllItemsCounted(FactoryStocktake stocktake) {
+        long uncounted = stocktake.getItems() == null ? 0 : stocktake.getItems().stream()
+                .filter(item -> item.getActualQty() == null)
+                .count();
+        if (uncounted > 0) {
+            throw new BusinessException(400, "尚有" + uncounted + "行未盘点，空白不等于账实一致")
+                    .withCode("STOCKTAKE_ITEMS_UNCOUNTED")
+                    .withHint("请逐行录入，或使用“全部按账面数量填入”后保存暂存");
+        }
+    }
+
+    private void enrichItemIdentity(StocktakeDTO dto, FactoryStocktake stocktake, String factoryId) {
+        if (dto.getItems() == null || dto.getItems().isEmpty()) {
+            return;
+        }
+        List<String> batchIds = dto.getItems().stream()
+                .map(StocktakeDTO.StocktakeItemDTO::getMaterialBatchId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        Map<String, MaterialBatch> batchById = materialBatchRepo.findAllById(batchIds).stream()
+                .filter(batch -> factoryId.equals(batch.getFactoryId()))
+                .filter(batch -> Objects.equals(stocktake.getWarehouseId(), batch.getWarehouseId()))
+                .collect(Collectors.toMap(MaterialBatch::getId, batch -> batch, (left, right) -> left));
+        List<String> materialTypeIds = batchById.values().stream()
+                .map(MaterialBatch::getMaterialTypeId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        Map<String, RawMaterialType> materialById = rawMaterialTypeRepo.findAllById(materialTypeIds).stream()
+                .filter(material -> factoryId.equals(material.getFactoryId()))
+                .collect(Collectors.toMap(RawMaterialType::getId, material -> material, (left, right) -> left));
+        dto.getItems().forEach(item -> {
+            MaterialBatch batch = batchById.get(item.getMaterialBatchId());
+            if (batch == null) {
+                return;
+            }
+            item.setBatchNumber(batch.getBatchNumber());
+            item.setQuantityUnit(batch.getQuantityUnit());
+            RawMaterialType material = materialById.get(batch.getMaterialTypeId());
+            if (material != null) {
+                item.setMaterialCode(material.getCode());
+                item.setMaterialName(material.getName());
+            }
+        });
+    }
+
+    private StocktakeDTO toDetailedDTO(FactoryStocktake stocktake, String factoryId) {
+        StocktakeDTO dto = enrichHeader(StocktakeDTO.from(stocktake), stocktake, factoryId);
+        enrichItemIdentity(dto, stocktake, factoryId);
+        dto.setApprovalEvidence(buildApprovalEvidence(dto));
+        return dto;
+    }
+
+    private StocktakeDTO enrichHeader(StocktakeDTO dto, FactoryStocktake stocktake, String factoryId) {
+        LocalDateTime effectiveCutoff = effectiveInventoryCutoff(stocktake);
+        if (dto.getInventoryCutoffAt() == null) {
+            dto.setInventoryCutoffAt(effectiveCutoff);
+        }
+        if (dto.getReconciliationEndAt() == null) {
+            dto.setReconciliationEndAt(effectiveCutoff);
+        }
+        dto.setInitiatedByDisplay(actorDisplay(factoryId, stocktake.getInitiatedBy()));
+        dto.setCountedByDisplay(actorDisplay(factoryId, stocktake.getCountedBy()));
+        dto.setSubmittedByDisplay(actorDisplay(factoryId, stocktake.getSubmittedBy()));
+        dto.setApprovedByDisplay(actorDisplay(factoryId, stocktake.getApprovedBy()));
+        dto.setAppliedByDisplay(actorDisplay(factoryId, stocktake.getAppliedBy()));
+        return dto;
+    }
+
+    private LocalDateTime effectiveInventoryCutoff(FactoryStocktake stocktake) {
+        if (stocktake.getInventoryCutoffAt() != null) return stocktake.getInventoryCutoffAt();
+        if (stocktake.getInitiatedAt() != null) return stocktake.getInitiatedAt();
+        return stocktake.getCreatedAt();
+    }
+
+    private String actorDisplay(String factoryId, Long userId) {
+        if (userId == null) return null;
+        if (userRepository == null) return "用户 " + userId;
+        return userRepository.findByIdAndFactoryId(userId, factoryId)
+                .map(user -> {
+                    String username = user.getUsername();
+                    return user.getFullName() != null && !user.getFullName().isBlank()
+                            ? user.getFullName() + (username == null ? "" : "（" + username + "）")
+                            : (username != null ? username : "用户 " + userId);
+                })
+                .orElse("用户 " + userId);
+    }
+
+    private StocktakeDTO.ApprovalEvidence buildApprovalEvidence(StocktakeDTO dto) {
+        StocktakeDTO.ApprovalEvidence evidence = new StocktakeDTO.ApprovalEvidence();
+        List<StocktakeDTO.StocktakeItemDTO> items = dto.getItems() == null ? List.of() : dto.getItems();
+        Map<String, BigDecimal> surplusByUnit = new LinkedHashMap<>();
+        Map<String, BigDecimal> shortageByUnit = new LinkedHashMap<>();
+        int counted = 0, match = 0, surplus = 0, shortage = 0;
+        for (StocktakeDTO.StocktakeItemDTO item : items) {
+            if (item.getActualQty() == null) continue;
+            counted++;
+            BigDecimal difference = item.getDifferenceQty() != null
+                    ? item.getDifferenceQty() : item.getActualQty().subtract(item.getSystemQty());
+            String unit = item.getQuantityUnit() == null ? "-" : item.getQuantityUnit();
+            if (difference.signum() > 0) {
+                surplus++;
+                surplusByUnit.merge(unit, difference, BigDecimal::add);
+            } else if (difference.signum() < 0) {
+                shortage++;
+                shortageByUnit.merge(unit, difference.abs(), BigDecimal::add);
+            } else {
+                match++;
+            }
+        }
+        evidence.setTotalCount(items.size());
+        evidence.setCountedCount(counted);
+        evidence.setUncountedCount(items.size() - counted);
+        evidence.setMatchCount(match);
+        evidence.setSurplusCount(surplus);
+        evidence.setShortageCount(shortage);
+        evidence.setSurplusQuantityByUnit(surplusByUnit);
+        evidence.setShortageQuantityByUnit(shortageByUnit);
+        evidence.setInventoryImpact(surplus > 0 || shortage > 0);
+        evidence.setInventoryImpactMessage(surplus > 0 || shortage > 0
+                ? "存在盘盈/盘亏，应用差异后将调整库存"
+                : "零差异，不会调整库存；应用后完成盘点");
+        return evidence;
+    }
+
+    /** Recomputes evidence under the stocktake row lock; never trusts a UI summary. */
+    private boolean normalizeAndValidateEvidence(FactoryStocktake stocktake) {
+        assertAllItemsCounted(stocktake);
+        boolean hasDifference = false;
+        for (FactoryStocktakeItem item : stocktake.getItems()) {
+            if (item.getSystemQty() == null || item.getActualQty() == null) {
+                throw new BusinessException(409, "盘点快照或实盘数量不完整")
+                        .withCode("STOCKTAKE_EVIDENCE_INCOMPLETE");
+            }
+            BigDecimal expected = item.getActualQty().subtract(item.getSystemQty())
+                    .setScale(4, RoundingMode.HALF_UP);
+            if (item.getDifferenceQty() != null
+                    && item.getDifferenceQty().setScale(4, RoundingMode.HALF_UP).compareTo(expected) != 0) {
+                throw new BusinessException(409, "盘点差异已发生漂移，请重新打开并复核")
+                        .withCode("STOCKTAKE_EVIDENCE_DRIFT");
+            }
+            item.setDifferenceQty(expected);
+            if (expected.signum() > 0) {
+                item.setDifferenceType(FactoryStocktakeItem.DifferenceType.SURPLUS);
+                hasDifference = true;
+            } else if (expected.signum() < 0) {
+                item.setDifferenceType(FactoryStocktakeItem.DifferenceType.SHORTAGE);
+                hasDifference = true;
+            } else {
+                item.setDifferenceType(FactoryStocktakeItem.DifferenceType.MATCH);
+            }
+        }
+        return hasDifference;
+    }
+
+    private void assertExpectedVersion(FactoryStocktake stocktake, Long expectedVersion) {
+        if (expectedVersion != null && !Objects.equals(expectedVersion, stocktake.getVersion())) {
+            throw new BusinessException(409, "盘点数据已更新，请刷新后重新核对")
+                    .withCode("STALE_STOCKTAKE_VERSION");
+        }
     }
 
     /**
@@ -809,6 +1113,12 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
             throw new BusinessException(403, "无权操作该盘点任务");
         }
         return stocktake;
+    }
+
+    private FactoryStocktake findAndValidateForUpdate(String stocktakeId, String factoryId) {
+        return stocktakeRepo.findByIdAndFactoryIdForUpdate(stocktakeId, factoryId)
+                .orElseThrow(() -> new BusinessException(404,
+                        "盘点任务不存在或不属于当前工厂: " + stocktakeId));
     }
 
     private void assertStatus(FactoryStocktake stocktake, FactoryStocktake.Status expected, String action) {

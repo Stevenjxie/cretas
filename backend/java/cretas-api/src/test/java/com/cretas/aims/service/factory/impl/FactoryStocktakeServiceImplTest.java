@@ -39,6 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -85,6 +86,17 @@ class FactoryStocktakeServiceImplTest {
         ReflectionTestUtils.setField(service, "inventoryLowStockEventPublisher", inventoryLowStockEventPublisher);
         // voucherService 是 @Autowired(required=false) 字段, @InjectMocks 走构造器注入不会填充它 → 手动注入
         ReflectionTestUtils.setField(service, "voucherService", voucherService);
+        lenient().when(stocktakeRepo.findByIdAndFactoryIdForUpdate(anyString(), eq(FACTORY_ID)))
+                .thenAnswer(invocation -> stocktakeRepo.findById(invocation.getArgument(0)));
+        lenient().when(materialBatchRepo.findByIdAndFactoryId(anyString(), eq(FACTORY_ID)))
+                .thenAnswer(invocation -> {
+                    Optional<MaterialBatch> result = materialBatchRepo.findById(invocation.getArgument(0));
+                    result.ifPresent(batch -> {
+                        if (batch.getFactoryId() == null) batch.setFactoryId(FACTORY_ID);
+                        if (batch.getWarehouseId() == null) batch.setWarehouseId(WAREHOUSE_ID);
+                    });
+                    return result;
+                });
     }
 
     // -------------------------------------------------------

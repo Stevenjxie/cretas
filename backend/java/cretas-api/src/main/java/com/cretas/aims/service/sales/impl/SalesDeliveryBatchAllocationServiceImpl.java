@@ -21,9 +21,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -51,6 +53,15 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
             throw new BusinessException(400, "批次分配列表不能为空")
                     .withHint("请添加至少 1 条批次分配").withHintTarget("allocations");
         }
+        Set<String> requestedBatchIds = new HashSet<>();
+        for (BatchAllocationDTO allocation : allocations) {
+            String batchId = allocation != null ? allocation.getFinishedGoodsBatchId() : null;
+            if (batchId != null && !requestedBatchIds.add(batchId)) {
+                throw new BusinessException(400, "同一成品批次在一次分配中只能出现一次")
+                        .withCode("DUPLICATE_BATCH_ALLOCATION")
+                        .withHintTarget("finishedGoodsBatchId");
+            }
+        }
 
         // 1. 查发货行
         Long itemIdLong;
@@ -60,12 +71,33 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
             throw new BusinessException(400, "非法的 deliveryItemId: " + deliveryItemId)
                     .withHint("发货行 ID 应为数字").withHintTarget("deliveryItemId");
         }
-        SalesDeliveryItem item = deliveryItemRepository.findById(itemIdLong)
+        SalesDeliveryItem item = deliveryItemRepository.findByIdForUpdate(itemIdLong)
                 .orElseThrow(() -> new BusinessException(404, "发货行不存在: " + deliveryItemId)
                         .withHint("请刷新发货单后重新选择").withHintTarget("deliveryItemId"));
         if (item.getDeliveredQuantity() == null) {
             throw new BusinessException(409, "发货行数量未设置: " + deliveryItemId)
                     .withHint("请先在发货单中设置发货数量").withHintTarget("deliveredQuantity");
+        }
+        if (item.getDeliveryRecord() != null) {
+            String role = item.getDeliveryRecord().getRecordRole();
+            if ("MASTER".equals(role)) {
+                throw new BusinessException(409, "库存批次必须分配到子发运单，不能直接分配到母发货单")
+                        .withCode("DELIVERY_SHIPMENT_REQUIRED");
+            }
+            var status = item.getDeliveryRecord().getStatus();
+            if (status != com.cretas.aims.entity.enums.SalesDeliveryStatus.DRAFT
+                    && status != com.cretas.aims.entity.enums.SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM
+                    && status != com.cretas.aims.entity.enums.SalesDeliveryStatus.PICKED) {
+                throw new BusinessException(409, "当前发货单状态不允许新增或修改批次分配")
+                        .withCode("BATCH_ALLOCATION_FROZEN");
+            }
+        }
+
+        List<SalesDeliveryItemBatchAllocation> current = allocationRepository
+                .findByFactoryIdAndDeliveryItemId(factoryId, deliveryItemId);
+        if (sameAllocationPayload(current, allocations)) {
+            log.info("销售发货批次分配幂等重放: factoryId={}, deliveryItemId={}", factoryId, deliveryItemId);
+            return;
         }
 
         // T4-D5 (#572) + 🔴 G1 (2026-07-03): resolve the expected source warehouse for this line.
@@ -113,7 +145,8 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                 throw new BusinessException(400, "分配数量必须大于 0")
                         .withHint("请输入大于 0 的分配数量").withHintTarget("allocatedQty");
             }
-            FinishedGoodsBatch batch = finishedGoodsBatchRepository.findById(dto.getFinishedGoodsBatchId())
+            FinishedGoodsBatch batch = finishedGoodsBatchRepository
+                    .findByIdAndFactoryIdForUpdate(dto.getFinishedGoodsBatchId(), factoryId)
                     .orElseThrow(() -> new BusinessException(404, "成品批次不存在: " + dto.getFinishedGoodsBatchId())
                             .withHint("请刷新成品库存后重新选择").withHintTarget("finishedGoodsBatchId"));
             if (!factoryId.equals(batch.getFactoryId())) {
@@ -139,10 +172,13 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
             BigDecimal availableNative = batch.getProducedQuantity()
                     .subtract(batch.getShippedQuantity() == null ? BigDecimal.ZERO : batch.getShippedQuantity())
                     .subtract(batch.getReservedQuantity() == null ? BigDecimal.ZERO : batch.getReservedQuantity());
+            BigDecimal activeAllocatedNative = activeAllocatedNativeExcludingCurrent(
+                    factoryId, batch, deliveryItemId, item.getProductTypeId(), gramsPerUnit);
+            BigDecimal allocatableNative = availableNative.subtract(activeAllocatedNative).max(BigDecimal.ZERO);
             // 🔴 C1: convert batch-native available into the delivery line's unit before comparing
             // against dto.getAllocatedQty() (always item.getUnit()).
             BigDecimal available = convertBatchToDeliveryUnit(
-                    availableNative, batch, item, item.getUnit(), gramsPerUnit);
+                    allocatableNative, batch, item, item.getUnit(), gramsPerUnit);
             if (available == null) {
                 throw new BusinessException(409, "成品批次 " + batch.getBatchNumber()
                         + " 的单位（" + batch.getUnit() + "）与发货单位（" + item.getUnit() + "）不一致, 且缺少产品「每盒/份克重」配置无法换算")
@@ -298,6 +334,66 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
         return result;
     }
 
+    /**
+     * Counts soft allocations held by other active delivery lines while the batch row is locked.
+     * This serializes concurrent allocators without mutating the order-reservation ledger.
+     */
+    private BigDecimal activeAllocatedNativeExcludingCurrent(
+            String factoryId,
+            FinishedGoodsBatch batch,
+            String currentDeliveryItemId,
+            String expectedProductTypeId,
+            BigDecimal gramsPerUnit) {
+        BigDecimal total = BigDecimal.ZERO;
+        List<SalesDeliveryItemBatchAllocation> existing = allocationRepository
+                .findByFactoryIdAndFinishedGoodsBatchId(factoryId, batch.getId());
+        for (SalesDeliveryItemBatchAllocation allocation : existing) {
+            if (currentDeliveryItemId.equals(allocation.getDeliveryItemId())) continue;
+            Long otherItemId;
+            try {
+                otherItemId = Long.valueOf(allocation.getDeliveryItemId());
+            } catch (NumberFormatException error) {
+                throw new BusinessException(409, "批次存在无法识别的历史发货占用，不能继续分配")
+                        .withCode("BATCH_ALLOCATION_IDENTITY_INVALID");
+            }
+            SalesDeliveryItem otherItem = deliveryItemRepository.findById(otherItemId)
+                    .orElseThrow(() -> new BusinessException(409, "批次存在失去发货行关联的占用记录")
+                            .withCode("BATCH_ALLOCATION_IDENTITY_INVALID"));
+            var delivery = otherItem.getDeliveryRecord();
+            if (delivery != null) {
+                var status = delivery.getStatus();
+                if (status != com.cretas.aims.entity.enums.SalesDeliveryStatus.DRAFT
+                        && status != com.cretas.aims.entity.enums.SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM
+                        && status != com.cretas.aims.entity.enums.SalesDeliveryStatus.PICKED) {
+                    continue;
+                }
+            }
+            if (!expectedProductTypeId.equals(otherItem.getProductTypeId())) {
+                throw new BusinessException(409, "同一成品批次存在产品身份不一致的发货占用")
+                        .withCode("BATCH_ALLOCATION_PRODUCT_MISMATCH");
+            }
+            String allocationUnit = allocation.getUnit() != null
+                    ? allocation.getUnit() : otherItem.getUnit();
+            BigDecimal nativeQuantity = FgQuantityUnitConverter.convertWithPackaging(
+                    allocation.getAllocatedQty(),
+                    allocationUnit,
+                    batch.getUnit(),
+                    gramsPerUnit,
+                    otherItem.getPackagingUnit(),
+                    otherItem.getPackagingBaseUnit(),
+                    otherItem.getPackagingFactor(),
+                    batch.getPackagingUnit(),
+                    batch.getPackagingBaseUnit(),
+                    batch.getPackagingFactor());
+            if (nativeQuantity == null) {
+                throw new BusinessException(409, "批次存在单位无法换算的有效发货占用")
+                        .withCode("ACTIVE_BATCH_ALLOCATION_UNIT_UNRESOLVED");
+            }
+            total = total.add(nativeQuantity);
+        }
+        return total;
+    }
+
     private BigDecimal convertBatchToDeliveryUnit(
             BigDecimal quantity,
             FinishedGoodsBatch batch,
@@ -315,6 +411,26 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                 deliveryItem != null ? deliveryItem.getPackagingUnit() : null,
                 deliveryItem != null ? deliveryItem.getPackagingBaseUnit() : null,
                 deliveryItem != null ? deliveryItem.getPackagingFactor() : null);
+    }
+
+    private boolean sameAllocationPayload(
+            List<SalesDeliveryItemBatchAllocation> current, List<BatchAllocationDTO> requested) {
+        if (current == null || requested == null || current.size() != requested.size()) return false;
+        Map<String, BigDecimal> currentByBatch = current.stream().collect(java.util.stream.Collectors.toMap(
+                SalesDeliveryItemBatchAllocation::getFinishedGoodsBatchId,
+                SalesDeliveryItemBatchAllocation::getAllocatedQty,
+                BigDecimal::add));
+        Map<String, BigDecimal> requestedByBatch = requested.stream()
+                .filter(dto -> dto.getFinishedGoodsBatchId() != null && dto.getAllocatedQty() != null)
+                .collect(java.util.stream.Collectors.toMap(
+                        BatchAllocationDTO::getFinishedGoodsBatchId,
+                        BatchAllocationDTO::getAllocatedQty,
+                        BigDecimal::add));
+        if (currentByBatch.size() != requestedByBatch.size()) return false;
+        return currentByBatch.entrySet().stream().allMatch(entry -> {
+            BigDecimal requestedQty = requestedByBatch.get(entry.getKey());
+            return requestedQty != null && requestedQty.compareTo(entry.getValue()) == 0;
+        });
     }
 
     @Override

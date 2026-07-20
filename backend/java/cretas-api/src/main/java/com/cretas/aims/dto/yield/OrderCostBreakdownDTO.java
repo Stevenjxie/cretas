@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -25,6 +26,26 @@ import java.util.List;
 public class OrderCostBreakdownDTO {
 
     private String orderId;
+    /** Business order number (for example SO-20260720-0001), distinct from source order UUID. */
+    private String orderNumber;
+    private String productionPlanId;
+    private String productionPlanNumber;
+    private String finishedBatchNumber;
+    private String productSku;
+    private String productName;
+    private String pinnedBomRecipeId;
+    private Integer pinnedBomVersion;
+    private Long pinnedWorkflowId;
+    private Integer pinnedWorkflowVersion;
+    private LocalDateTime calculatedAt;
+    /** COMPLETE / PARTIAL / NO_DATA. */
+    private String calculationStatus;
+    private BigDecimal outputQuantity;
+    private String outputUnit;
+    private BigDecimal netWeightGramsPerUnit;
+    private BigDecimal convertedOutputKg;
+    private BigDecimal costDenominatorQuantity;
+    private String costDenominatorUnit;
     /** 产出盒数 (Σ 成品批次 quantity)。 */
     private Integer boxCount;
 
@@ -34,6 +55,10 @@ public class OrderCostBreakdownDTO {
     private BigDecimal laborCost;
     private BigDecimal seasoningCost;
     private BigDecimal packagingCost;
+    private BigDecimal equipmentCost;
+    private String equipmentCostStatus;
+    private BigDecimal otherCost;
+    private String otherCostStatus;
     /**
      * 外部库存投料成本 (半成品 SFI + 成品 FG 作投料; R4 2026-07-04)。
      *
@@ -88,6 +113,15 @@ public class OrderCostBreakdownDTO {
     @Builder.Default
     private boolean costComplete = true;
 
+    /** Number and identities of unknown cost inputs; never represented as zero. */
+    private Integer missingCostItemCount;
+    private List<String> missingCostItems;
+
+    /** Auditable quantity x price/rate ledgers. */
+    private List<RawMaterialDetail> rawMaterialDetails;
+    private List<PackagingDetail> packagingDetails;
+    private List<LaborDetail> laborDetails;
+
     /** 上游来源明细 (混批各批次)。 */
     private List<SourceCost> sources;
 
@@ -136,6 +170,59 @@ public class OrderCostBreakdownDTO {
         private String name;
         /** 该包材项成本 (元); masked 时 null。 */
         private BigDecimal cost;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class RawMaterialDetail {
+        private String batchNumber;
+        private String materialCode;
+        private String materialName;
+        private BigDecimal quantity;
+        private String unit;
+        private BigDecimal unitPrice;
+        private String priceSource;
+        private BigDecimal amount;
+        private String collectionStatus;
+        private String missingReason;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class PackagingDetail {
+        private String materialCode;
+        private String materialName;
+        private BigDecimal quantity;
+        private String unit;
+        private BigDecimal unitPrice;
+        private String priceSource;
+        private BigDecimal amount;
+        private String collectionStatus;
+        private String missingReason;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class LaborDetail {
+        private Integer processOrder;
+        private String processName;
+        private Integer workerCount;
+        private String startTime;
+        private String endTime;
+        private Integer durationMinutes;
+        private Integer laborMinutes;
+        private BigDecimal laborHours;
+        private BigDecimal hourlyRate;
+        private String rateSource;
+        private BigDecimal amount;
+        private String collectionStatus;
+        private String missingReason;
     }
 
     /** 辅料按锅分摊 (AUDIT-004)。本批 share = potTotalCost × batchOutput ÷ potTotalOutput。 */

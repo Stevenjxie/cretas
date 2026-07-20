@@ -11,6 +11,7 @@ import com.cretas.aims.repository.inventory.SalesDeliveryItemRepository;
 import com.cretas.aims.repository.sales.SalesDeliveryItemBatchAllocationRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -22,9 +23,11 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -51,6 +54,14 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
     @Mock ProductTypeRepository productTypeRepository;
 
     @InjectMocks SalesDeliveryBatchAllocationServiceImpl service;
+
+    @BeforeEach
+    void routeLegacyLookupStubsThroughTheNewRowLock() {
+        lenient().when(deliveryItemRepository.findByIdForUpdate(anyLong()))
+                .thenAnswer(invocation -> deliveryItemRepository.findById(invocation.getArgument(0)));
+        lenient().when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate(any(), eq(FID)))
+                .thenAnswer(invocation -> finishedGoodsBatchRepository.findById(invocation.getArgument(0)));
+    }
 
     private static final String FID = "F001";
     private static final String ITEM_ID = "42";

@@ -79,6 +79,28 @@ public class FactoryStocktake extends BaseEntity {
     @Column(name = "period_month", nullable = false, length = 7)
     private String periodMonth;
 
+    /** Server-authored inventory snapshot instant. Clients can never backdate it. */
+    @Column(name = "inventory_cutoff_at")
+    private LocalDateTime inventoryCutoffAt;
+
+    /** First authoritative count save; opening a read-only dialog does not mutate the task. */
+    @Column(name = "counting_started_at")
+    private LocalDateTime countingStartedAt;
+
+    /** Audit-only transaction review window. It never changes systemQty snapshot semantics. */
+    @Column(name = "reconciliation_start_at")
+    private LocalDateTime reconciliationStartAt;
+
+    @Column(name = "reconciliation_end_at")
+    private LocalDateTime reconciliationEndAt;
+
+    @Column(name = "reconciliation_preset", length = 30)
+    private String reconciliationPreset;
+
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version = 0L;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 30)
     private Status status = Status.INITIATED;
@@ -107,6 +129,16 @@ public class FactoryStocktake extends BaseEntity {
     /** 生效时间（库存差异正式写入后设置）*/
     @Column(name = "applied_at")
     private LocalDateTime appliedAt;
+
+    @Column(name = "counted_by")
+    private Long countedBy;
+
+    @Column(name = "applied_by")
+    private Long appliedBy;
+
+    /** Explicit audit marker when a zero-difference task is approved by its maker. */
+    @Column(name = "self_confirmed_zero_difference", nullable = false)
+    private boolean selfConfirmedZeroDifference = false;
 
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue';
+import { ref, reactive, computed, nextTick, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -11,6 +11,14 @@ import type { TableRow } from '@/types/api';
 import { warehouseTypeBadge } from '@/utils/warehouse';
 import { BIG_CATEGORY_OPTIONS, filterOptionsByBigCategory, type BigCategory } from '@/utils/materialCategory';
 import { buildStocktakeItemUpdates } from './stocktakeItemUpdates';
+import {
+  countDisplayUnit,
+  countUncountedRows,
+  fillSystemQuantities,
+  fillSystemQuantity,
+  nextCountInputIndex,
+  type StocktakeCountRow,
+} from './stocktakeCount';
 
 // Safe helpers — Vue template compiler does not support optional chaining (?.)
 // in attribute bindings; delegate to these plain functions instead.
@@ -19,6 +27,9 @@ function wBadgeColor(type: unknown): string | undefined {
 }
 function wBadgeLabel(type: unknown): string | undefined {
   return warehouseTypeBadge(String(type || ''))?.label;
+}
+function wBadgeTextColor(type: unknown): string | undefined {
+  return warehouseTypeBadge(String(type || ''))?.textColor;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -120,8 +131,9 @@ const initiateDialogVisible = ref(false);
 const initiateLoading = ref(false);
 const initiateForm = reactive({
   warehouseId: '',
-  periodMonth: currentMonth.value,
   notes: '',
+  reconciliationPreset: 'LAST_APPLIED',
+  reconciliationRange: [] as string[],
   // 临时/专项盘点 (fool-proof Rule 5: 月底约束不再是 dead-end — 月底前也有出口)
   adHoc: false,
   adHocReasonSelect: '',
@@ -153,6 +165,8 @@ interface InitiateConstraint {
   canInitiateToday: boolean;
   today: string;
   nextAllowedDate: string;
+  serverNow?: string;
+  periodMonth?: string;
 }
 const initiateConstraint = ref<InitiateConstraint | null>(null);
 const initiateConstraintLoading = ref(false);
@@ -162,15 +176,59 @@ async function loadInitiateConstraint() {
   initiateConstraintLoading.value = true;
   try {
     const res = await get(`/${factoryId.value}/stocktakes/initiate-constraint`);
-    if (res.success && res.data) initiateConstraint.value = res.data;
+    if (res.success && res.data) {
+      initiateConstraint.value = res.data;
+      const serverNow = String(res.data.serverNow || '');
+      if (serverNow) {
+        const monthStart = `${serverNow.slice(0, 7)}-01T00:00:00`;
+        initiateForm.reconciliationRange = [monthStart, serverNow];
+      }
+    }
   } catch { /* 展示态加载失败不阻塞发起 — 后端 initiate() 仍会真实校验并报错 */ }
   finally { initiateConstraintLoading.value = false; }
 }
 
+const reconciliationPresetOptions = [
+  { value: 'LAST_APPLIED', label: '自上次已应用盘点以来（默认）' },
+  { value: 'LAST_7_DAYS', label: '过去7天' },
+  { value: 'MONTH', label: '本月' },
+  { value: 'QUARTER', label: '本季度' },
+  { value: 'YEAR', label: '过去1年' },
+  { value: 'CUSTOM', label: '自定义开始时间' },
+];
+
+function onReconciliationRangeChange(value: string[] | null) {
+  if (!value?.[0]) return;
+  const lockedEnd = String(initiateConstraint.value?.serverNow || value[1] || '');
+  initiateForm.reconciliationRange = [value[0], lockedEnd];
+}
+
+function formatBusinessDateTime(value: unknown): string {
+  if (!value) return '—';
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return String(value).replace('T', ' ').slice(0, 19);
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).format(date);
+}
+
+function formatGroupedQuantity(value: unknown): string {
+  if (!value || typeof value !== 'object') return '0';
+  const entries = Object.entries(value as Record<string, number>);
+  if (!entries.length) return '0';
+  return entries.map(([unit, qty]) => `${qty}${countDisplayUnit(unit)}`).join('、');
+}
+
+function approvalEvidence(row: TableRow | null): TableRow {
+  return (row?.approvalEvidence as TableRow) || {};
+}
+
 function openInitiateDialog() {
   initiateForm.warehouseId = '';
-  initiateForm.periodMonth = currentMonth.value;
   initiateForm.notes = '';
+  initiateForm.reconciliationPreset = 'LAST_APPLIED';
+  initiateForm.reconciliationRange = [];
   initiateForm.adHoc = false;
   initiateForm.adHocReasonSelect = '';
   initiateForm.adHocReasonOther = '';
@@ -181,10 +239,6 @@ function openInitiateDialog() {
 async function submitInitiate() {
   if (!initiateForm.warehouseId) {
     ElMessage({ message: '请选择仓库', type: 'warning', duration: 3000 });
-    return;
-  }
-  if (!initiateForm.periodMonth) {
-    ElMessage({ message: '请选择盘点月份', type: 'warning', duration: 3000 });
     return;
   }
   // 防呆 Rule 1 + Rule 5: 月底约束已在弹窗打开时展示, 此处兜底拦截 (防用户在约束加载完成前抢点提交)。
@@ -203,15 +257,28 @@ async function submitInitiate() {
     const adHocReason = resolveAdHocReason();
     const res = await post(`/${factoryId.value}/stocktakes`, {
       warehouseId: initiateForm.warehouseId,
-      periodMonth: initiateForm.periodMonth,
       notes: initiateForm.notes,
+      reconciliationPreset: initiateForm.reconciliationPreset,
+      reconciliationStartAt: initiateForm.reconciliationPreset === 'CUSTOM'
+        ? initiateForm.reconciliationRange[0]
+        : null,
       adHoc: initiateForm.adHoc,
       adHocReason,
     });
     if (res.success) {
       ElMessage({ message: '盘点任务已发起', type: 'success', duration: 3000 });
       initiateDialogVisible.value = false;
-      loadData();
+      await loadData();
+      const created = res.data as TableRow | undefined;
+      if (created?.id) {
+        const opened = await openCountDialog(created);
+        if (!opened) {
+          ElMessage({
+            message: `盘点单 ${created.stocktakeNo || created.id} 已创建，但自动打开录入失败；请从列表点击“录入”继续。`,
+            type: 'warning', duration: 0, showClose: true,
+          });
+        }
+      }
     } else {
       ElMessage({ message: res.message || '发起失败', type: 'error', duration: 0, showClose: true });
     }
@@ -579,7 +646,7 @@ function diffTypeTag(t: string | null): string {
 function diffTypeLabel(t: string | null): string {
   if (t === 'SURPLUS') return '盘盈';
   if (t === 'SHORTAGE') return '盘亏';
-  if (t === 'MATCH') return '一致';
+  if (t === 'MATCH') return '账实一致';
   return '未盘点';
 }
 
@@ -621,11 +688,12 @@ async function loadDiffPreview(stocktakeId: string) {
 // ────────────────────────────────────────────────────────────────────────────
 const countDialogVisible = ref(false);
 const countLoading = ref(false);
-const countItems = ref<Array<{ id: string; batchId: string; batchNo: string; materialName: string; systemQty: number; actualQty: number | null; notes: string }>>([]);
+const countItems = ref<StocktakeCountRow[]>([]);
 const countStocktakeId = ref('');
 const countStocktakeNo = ref('');
+const countUncounted = computed(() => countUncountedRows(countItems.value));
 
-async function openCountDialog(row: TableRow) {
+async function openCountDialog(row: TableRow): Promise<boolean> {
   countStocktakeId.value = String(row.id);
   countStocktakeNo.value = String(row.stocktakeNo || row.id);
   countLoading.value = true;
@@ -638,17 +706,69 @@ async function openCountDialog(row: TableRow) {
         id: String(item.id),
         batchId: String(item.materialBatchId || ''),
         batchNo: String(item.batchNumber || item.materialBatchId || ''),
-        materialName: String(item.materialName || item.rawMaterialTypeId || ''),
+        materialCode: String(item.materialCode || item.rawMaterialTypeId || ''),
+        materialName: String(item.materialName || item.materialCode || item.rawMaterialTypeId || ''),
+        unit: String(item.quantityUnit || ''),
         systemQty: Number(item.systemQty ?? 0),
         actualQty: item.actualQty != null ? Number(item.actualQty) : null,
         notes: String(item.notes || ''),
       }));
+      return true;
     }
   } catch (e) {
     ElMessage({ message: String((e as Error).message || '加载失败'), type: 'error', duration: 0, showClose: true });
   } finally {
     countLoading.value = false;
   }
+  return false;
+}
+
+function fillAllCountRows(overwrite = false) {
+  countItems.value = fillSystemQuantities(countItems.value, overwrite);
+}
+
+async function requestFillAllCountRows() {
+  if (countItems.value.some((row) => row.actualQty != null)) {
+    try {
+      await ElMessageBox.confirm(
+        '只填充尚未盘点的空白行；已手工录入的差异行会保留。是否继续？',
+        '按账面数量快捷填充',
+        {
+          confirmButtonText: '只填空白行',
+          cancelButtonText: '取消',
+          distinguishCancelAndClose: true,
+          type: 'info',
+        },
+      );
+    } catch { return; }
+  }
+  fillAllCountRows(false);
+}
+
+async function requestOverwriteAllCountRows() {
+  await ElMessageBox.confirm(
+    '这会覆盖已手工填写的差异数量。确认将全部行改为账实一致？',
+    '覆盖全部实盘数量',
+    { confirmButtonText: '确认覆盖全部', cancelButtonText: '取消', type: 'warning' },
+  ).catch(() => { throw new Error('cancel'); });
+  fillAllCountRows(true);
+}
+
+function fillOneCountRow(row: StocktakeCountRow) {
+  Object.assign(row, fillSystemQuantity(row));
+}
+
+async function focusNextCountInput(index: number) {
+  const nextIndex = nextCountInputIndex(index, countItems.value.length);
+  if (nextIndex == null) return;
+  await nextTick();
+  document.querySelector<HTMLInputElement>(`[data-count-index="${nextIndex}"] input`)?.focus();
+}
+
+function handleCountTab(event: KeyboardEvent, index: number) {
+  if (nextCountInputIndex(index, countItems.value.length) == null) return;
+  event.preventDefault();
+  void focusNextCountInput(index);
 }
 
 async function saveCountItems() {
@@ -682,8 +802,22 @@ async function saveCountItems() {
 const submitLoading = ref(false);
 
 async function submitForApproval(row: TableRow) {
+  const detailRes = await get(`/${factoryId.value}/stocktakes/${row.id}`);
+  const detail = (detailRes.success && detailRes.data ? detailRes.data : row) as TableRow;
+  const evidence = approvalEvidence(detail);
+  const uncounted = Number(evidence.uncountedCount || 0);
+  if (uncounted > 0) {
+    ElMessage({ message: `尚有${uncounted}行未盘点；空白不等于账实一致。`, type: 'warning', duration: 4000 });
+    return;
+  }
   await ElMessageBox.confirm(
-    `确认提交盘点任务 ${row.stocktakeNo || row.id} 审批？\n仓库：${warehouseName(String(row.warehouseId))} · 月份：${row.periodMonth}`,
+    `确认提交盘点任务 ${detail.stocktakeNo || detail.id} 审批？\n`
+      + `仓库：${warehouseName(String(detail.warehouseId))}\n`
+      + `盘点基准：${formatBusinessDateTime(detail.inventoryCutoffAt)}\n`
+      + `执行开始：${formatBusinessDateTime(detail.countingStartedAt)}\n`
+      + `对账回溯：${formatBusinessDateTime(detail.reconciliationStartAt)} 至 ${formatBusinessDateTime(detail.reconciliationEndAt)}\n`
+      + `会计期间：${detail.periodMonth}；已盘${evidence.countedCount || 0}批，未盘0；`
+      + `一致${evidence.matchCount || 0}、盘盈${evidence.surplusCount || 0}、盘亏${evidence.shortageCount || 0}`,
     '提交审批',
     { confirmButtonText: '确认提交', cancelButtonText: '取消', type: 'warning' }
   ).catch(() => { throw new Error('cancel'); });
@@ -714,8 +848,9 @@ const approveLoading = ref(false);
 const approveRow = ref<TableRow | null>(null);
 const approveNote = ref('');
 
-function openApproveDialog(row: TableRow) {
-  approveRow.value = row;
+async function openApproveDialog(row: TableRow) {
+  const res = await get(`/${factoryId.value}/stocktakes/${row.id}`);
+  approveRow.value = (res.success && res.data ? res.data : row) as TableRow;
   approveNote.value = '';
   approveDialogVisible.value = true;
 }
@@ -724,7 +859,10 @@ async function submitApprove() {
   if (!approveRow.value) return;
   approveLoading.value = true;
   try {
-    const res = await post(`/${factoryId.value}/stocktakes/${approveRow.value.id}/approve`, { notes: approveNote.value });
+    const res = await post(`/${factoryId.value}/stocktakes/${approveRow.value.id}/approve`, {
+      notes: approveNote.value,
+      expectedVersion: approveRow.value.version,
+    });
     if (res.success) {
       ElMessage({ message: '审批通过', type: 'success', duration: 3000 });
       approveDialogVisible.value = false;
@@ -795,17 +933,33 @@ async function submitReject() {
 const applyLoading = ref(false);
 
 async function applyDiff(row: TableRow) {
+  const detailRes = await get(`/${factoryId.value}/stocktakes/${row.id}`);
+  const detail = (detailRes.success && detailRes.data ? detailRes.data : row) as TableRow;
+  const evidence = approvalEvidence(detail);
+  const zeroDifference = !evidence.inventoryImpact;
   await ElMessageBox.confirm(
-    `确认将盘点 ${row.stocktakeNo || row.id} 的差异应用到库存？\n仓库：${warehouseName(String(row.warehouseId))} · 月份：${row.periodMonth}\n⚠️ 此操作会调整实际库存数量，不可撤销。`,
+    zeroDifference
+      ? `确认应用盘点 ${detail.stocktakeNo || detail.id}？\n`
+        + `${evidence.matchCount || evidence.countedCount || 0}行账实一致，本次库存调整为0；应用后完成盘点并锁定审计记录。`
+      : `确认将盘点 ${detail.stocktakeNo || detail.id} 的差异应用到库存？\n`
+        + `仓库：${warehouseName(String(detail.warehouseId))}\n`
+        + `盘盈：${formatGroupedQuantity(evidence.surplusQuantityByUnit)}；`
+        + `盘亏：${formatGroupedQuantity(evidence.shortageQuantityByUnit)}\n`
+        + '此操作会调整实际库存数量，不可撤销。',
     '应用盘点差异',
     { confirmButtonText: '确认应用', cancelButtonText: '取消', type: 'warning' }
   ).catch(() => { throw new Error('cancel'); });
 
   applyLoading.value = true;
   try {
-    const res = await post(`/${factoryId.value}/stocktakes/${row.id}/apply`, {});
+    const res = await post(`/${factoryId.value}/stocktakes/${row.id}/apply`, {
+      expectedVersion: detail.version,
+    });
     if (res.success) {
-      ElMessage({ message: '盘点差异已应用到库存', type: 'success', duration: 3000 });
+      ElMessage({
+        message: zeroDifference ? '盘点已完成，库存无调整' : '盘点差异已应用到库存',
+        type: 'success', duration: 3000,
+      });
       loadData();
     } else {
       ElMessage({ message: res.message || '应用失败', type: 'error', duration: 0, showClose: true });
@@ -891,7 +1045,12 @@ onMounted(async () => {
         <el-table-column label="仓库" min-width="120">
           <template #default="{ row }">{{ warehouseName(String(row.warehouseId)) }}</template>
         </el-table-column>
-        <el-table-column label="盘点月份" prop="periodMonth" width="110" />
+        <el-table-column label="盘点基准时间" min-width="190">
+          <template #default="{ row }">
+            {{ formatBusinessDateTime(row.inventoryCutoffAt || row.initiatedAt) }}
+            <el-tag v-if="row.historicalTimingFallback" size="small" type="info">历史回显</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="110">
           <template #default="{ row }">
             <el-tag :type="(statusMap[String(row.status)]?.type as 'info' | 'warning' | 'success' | 'danger') || 'info'" size="small">
@@ -899,14 +1058,16 @@ onMounted(async () => {
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="发起人" prop="initiatedBy" width="110" />
+        <el-table-column label="发起人" min-width="150">
+          <template #default="{ row }">{{ row.initiatedByDisplay || `用户 ${row.initiatedBy}` }}</template>
+        </el-table-column>
         <el-table-column label="发起时间" prop="initiatedAt" min-width="160">
           <template #default="{ row }">
-            {{ row.initiatedAt ? String(row.initiatedAt).replace('T', ' ').slice(0, 16) : '—' }}
+            {{ formatBusinessDateTime(row.initiatedAt) }}
           </template>
         </el-table-column>
         <el-table-column label="审批人" prop="approvedBy" width="110">
-          <template #default="{ row }">{{ row.approvedBy || '—' }}</template>
+          <template #default="{ row }">{{ row.approvedByDisplay || (row.approvedBy ? `用户 ${row.approvedBy}` : '—') }}</template>
         </el-table-column>
         <el-table-column label="操作" width="280" fixed="right">
           <template #default="{ row }">
@@ -966,7 +1127,7 @@ onMounted(async () => {
     </el-card>
 
     <!-- ──────────────── Initiate Dialog ──────────────── -->
-    <el-dialog v-model="initiateDialogVisible" title="发起盘点任务" width="480px">
+    <el-dialog v-model="initiateDialogVisible" title="发起盘点任务" width="640px">
       <!-- 防呆 Rule 1: 月底约束在弹窗打开时立即展示, 不等填完表单点提交才报错 -->
       <!-- 防呆 Rule 5 (无 dead-end): 约束挡住时给出临时盘点出口, 不是纯粹拒绝 -->
       <el-alert
@@ -997,16 +1158,37 @@ onMounted(async () => {
               <el-tag
                 v-if="wBadgeLabel(w.type)"
                 size="small"
-                style="margin-left: 8px; font-size: 11px"
+                :style="{ marginLeft: '8px', fontSize: '11px', color: wBadgeTextColor(w.type) }"
                 :color="wBadgeColor(w.type)"
-                effect="plain"
+                effect="dark"
               >{{ wBadgeLabel(w.type) }}</el-tag>
             </el-option>
           </el-select>
         </el-form-item>
-        <el-form-item label="盘点月份" required>
-          <el-input v-model="initiateForm.periodMonth" placeholder="YYYY-MM" style="width: 160px" />
-          <span style="margin-left: 8px; color: #909399; font-size: 12px">格式: 2026-06</span>
+        <el-form-item label="盘点基准时间">
+          <el-input :model-value="formatBusinessDateTime(initiateConstraint?.serverNow)" disabled />
+          <div class="field-hint">当前仅为服务器时间预览；创建事务内会生成并锁定最终基准时间。</div>
+        </el-form-item>
+        <el-form-item label="对账回溯范围" required>
+          <el-select v-model="initiateForm.reconciliationPreset" style="width: 100%">
+            <el-option v-for="opt in reconciliationPresetOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="initiateForm.reconciliationPreset === 'CUSTOM'" label="自定义范围" required>
+          <el-date-picker
+            v-model="initiateForm.reconciliationRange"
+            type="datetimerange"
+            value-format="YYYY-MM-DDTHH:mm:ss"
+            range-separator="至（结束锁定为基准时间）"
+            start-placeholder="回溯开始时间"
+            end-placeholder="盘点基准时间（锁定）"
+            style="width: 100%"
+            @change="onReconciliationRangeChange"
+          />
+        </el-form-item>
+        <el-form-item label="会计期间">
+          <el-input :model-value="initiateConstraint?.periodMonth || currentMonth" disabled style="width: 160px" />
+          <span class="field-hint">由盘点基准时间自动派生，不可修改</span>
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="initiateForm.notes" type="textarea" :rows="2" placeholder="可选" />
@@ -1052,9 +1234,9 @@ onMounted(async () => {
               <el-tag
                 v-if="wBadgeLabel(w.type)"
                 size="small"
-                style="margin-left: 8px; font-size: 11px"
+                :style="{ marginLeft: '8px', fontSize: '11px', color: wBadgeTextColor(w.type) }"
                 :color="wBadgeColor(w.type)"
-                effect="plain"
+                effect="dark"
               >{{ wBadgeLabel(w.type) }}</el-tag>
             </el-option>
           </el-select>
@@ -1274,10 +1456,23 @@ onMounted(async () => {
             </el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="仓库">{{ warehouseName(String(detailData.warehouseId)) }}</el-descriptions-item>
-          <el-descriptions-item label="盘点月份">{{ detailData.periodMonth }}</el-descriptions-item>
-          <el-descriptions-item label="发起人">{{ detailData.initiatedBy }}</el-descriptions-item>
-          <el-descriptions-item label="发起时间">{{ detailData.initiatedAt ? String(detailData.initiatedAt).replace('T', ' ').slice(0, 16) : '—' }}</el-descriptions-item>
-          <el-descriptions-item v-if="detailData.approvedBy" label="审批人">{{ detailData.approvedBy }}</el-descriptions-item>
+          <el-descriptions-item label="盘点基准时间">
+            {{ formatBusinessDateTime(detailData.inventoryCutoffAt || detailData.initiatedAt) }}
+            <el-tag v-if="detailData.historicalTimingFallback" size="small" type="info">历史数据回显</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="会计期间">{{ detailData.periodMonth }}</el-descriptions-item>
+          <el-descriptions-item label="执行开始">{{ formatBusinessDateTime(detailData.countingStartedAt) }}</el-descriptions-item>
+          <el-descriptions-item label="对账回溯" :span="2">
+            {{ formatBusinessDateTime(detailData.reconciliationStartAt) }} 至
+            {{ formatBusinessDateTime(detailData.reconciliationEndAt || detailData.inventoryCutoffAt) }}
+          </el-descriptions-item>
+          <el-descriptions-item label="发起人">{{ detailData.initiatedByDisplay || `用户 ${detailData.initiatedBy}` }}</el-descriptions-item>
+          <el-descriptions-item label="发起时间">{{ formatBusinessDateTime(detailData.initiatedAt) }}</el-descriptions-item>
+          <el-descriptions-item v-if="detailData.approvedBy" label="审批人">
+            {{ detailData.approvedByDisplay || `用户 ${detailData.approvedBy}` }}
+            <el-tag v-if="detailData.selfConfirmedZeroDifference" type="warning" size="small">零差异自确认</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="detailData.appliedAt" label="应用时间">{{ formatBusinessDateTime(detailData.appliedAt) }}</el-descriptions-item>
           <el-descriptions-item v-if="detailData.rejectReason" label="驳回原因" :span="2">
             <el-text type="danger">{{ detailData.rejectReason }}</el-text>
           </el-descriptions-item>
@@ -1288,19 +1483,26 @@ onMounted(async () => {
         <div v-if="detailData.status === 'APPROVED' || detailData.status === 'APPLIED'" style="margin-top: 20px">
           <div style="font-weight: 600; margin-bottom: 8px; color: #1B65A8">
             盘点差异预览
-            <el-text v-if="detailData.status === 'APPLIED'" type="success" style="font-size: 12px; margin-left: 8px">（已应用，差异已过账）</el-text>
-            <el-text v-else type="warning" style="font-size: 12px; margin-left: 8px">（已审批，批准后生效）</el-text>
+            <el-text v-if="detailData.status === 'APPLIED'" type="success" style="font-size: 12px; margin-left: 8px">（盘点已完成）</el-text>
+            <el-text v-else type="warning" style="font-size: 12px; margin-left: 8px">（已审批，应用差异后调整库存；零差异应用时库存不调整）</el-text>
           </div>
           <el-table v-loading="diffLoading" :data="diffPreview" size="small" border>
-            <el-table-column label="批次/物料" prop="materialName" min-width="130" />
-            <el-table-column label="系统库存" prop="systemQty" width="100" align="right" />
+            <el-table-column label="批次/物料" min-width="220">
+              <template #default="{ row }">
+                <div class="identity-primary">{{ row.batchNumber || row.materialBatchId }}</div>
+                <div class="identity-secondary">{{ row.materialName || '未命名物料' }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column label="系统库存" width="120" align="right">
+              <template #default="{ row }">{{ row.systemQty }}{{ countDisplayUnit(row.quantityUnit) }}</template>
+            </el-table-column>
             <el-table-column label="实盘数量" prop="actualQty" width="100" align="right">
-              <template #default="{ row }">{{ row.actualQty ?? '—' }}</template>
+              <template #default="{ row }">{{ row.actualQty != null ? `${row.actualQty}${countDisplayUnit(row.quantityUnit)}` : '—' }}</template>
             </el-table-column>
             <el-table-column label="差异" prop="differenceQty" width="90" align="right">
               <template #default="{ row }">
                 <span :style="{ color: Number(row.differenceQty) < 0 ? '#f56c6c' : Number(row.differenceQty) > 0 ? '#67c23a' : '' }">
-                  {{ row.differenceQty != null ? (Number(row.differenceQty) > 0 ? '+' : '') + row.differenceQty : '—' }}
+                  {{ row.differenceQty != null ? `${Number(row.differenceQty) > 0 ? '+' : ''}${row.differenceQty}${countDisplayUnit(row.quantityUnit)}` : '—' }}
                 </span>
               </template>
             </el-table-column>
@@ -1308,7 +1510,7 @@ onMounted(async () => {
               <template #default="{ row }">
                 <el-tag v-if="row.differenceType === 'SURPLUS'" type="success" size="small">盘盈</el-tag>
                 <el-tag v-else-if="row.differenceType === 'SHORTAGE'" type="danger" size="small">盘亏</el-tag>
-                <el-tag v-else-if="row.differenceType === 'BALANCED'" type="info" size="small">平衡</el-tag>
+                <el-tag v-else-if="row.differenceType === 'MATCH' || (row.differenceQty != null && Number(row.differenceQty) === 0)" type="info" size="small">账实一致</el-tag>
                 <span v-else>—</span>
               </template>
             </el-table-column>
@@ -1321,35 +1523,68 @@ onMounted(async () => {
     </el-dialog>
 
     <!-- ──────────────── Count Entry Dialog ──────────────── -->
-    <el-dialog v-model="countDialogVisible" :title="`录入盘点数量 — ${countStocktakeNo}`" width="780px">
+    <el-dialog v-model="countDialogVisible" :title="`录入盘点数量 — ${countStocktakeNo}`" width="1040px">
       <el-alert
         type="info"
         show-icon
         :closable="false"
-        title="录入后为暂存状态，提交审批并批准后才正式调整库存。"
+        title="账实一致可使用快捷填充；按 Tab/Enter 跳到下一行。空白表示未盘点。保存后仍为暂存，审批并应用后才完成。"
         style="margin-bottom: 16px"
       />
+      <div class="count-toolbar">
+        <el-button type="primary" plain aria-label="全部按账面数量填入" @click="requestFillAllCountRows">
+          全部按账面数量填入
+        </el-button>
+        <el-button plain aria-label="覆盖全部为账实一致" @click="requestOverwriteAllCountRows">
+          覆盖全部
+        </el-button>
+        <el-text :type="countUncounted > 0 ? 'warning' : 'success'">
+          {{ countUncounted > 0 ? `尚有${countUncounted}行未盘点` : '全部行已盘点' }}
+        </el-text>
+      </div>
       <el-table v-loading="countLoading" :data="countItems" size="small" border>
-        <el-table-column label="批次号" prop="batchNo" min-width="120" />
-        <el-table-column label="物料名称" prop="materialName" min-width="130" />
-        <el-table-column label="系统库存" prop="systemQty" width="100" align="right" />
-        <el-table-column label="实盘数量" width="130">
+        <el-table-column label="批次号" min-width="190">
           <template #default="{ row }">
-            <el-input-number
-              v-model="row.actualQty"
-              :min="0"
-              :precision="2"
-              size="small"
-              style="width: 110px"
-              placeholder="实盘数量"
-            />
+            <div class="identity-primary">{{ row.batchNo }}</div>
+            <el-tooltip :content="`内部ID：${row.batchId}`"><span class="identity-secondary">内部ID可悬停查看</span></el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column label="差异" width="80" align="right">
+        <el-table-column label="物料名称" min-width="170">
+          <template #default="{ row }">
+            <div class="identity-primary">{{ row.materialName }}</div>
+            <div class="identity-secondary">{{ row.materialCode }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="系统库存" width="120" align="right">
+          <template #default="{ row }">{{ row.systemQty }}{{ countDisplayUnit(row.unit) }}</template>
+        </el-table-column>
+        <el-table-column label="实盘数量" width="190">
+          <template #default="{ row, $index }">
+            <div class="count-input-cell">
+              <el-input-number
+                v-model="row.actualQty"
+                :data-count-index="$index"
+                :min="0"
+                :precision="2"
+                size="small"
+                style="width: 126px"
+                placeholder="未盘点"
+                :aria-label="`${row.materialName} 实盘数量，单位${countDisplayUnit(row.unit)}`"
+                @keydown.enter.prevent="focusNextCountInput($index)"
+                @keydown.tab="handleCountTab($event, $index)"
+              />
+              <span class="unit-suffix">{{ countDisplayUnit(row.unit) }}</span>
+            </div>
+            <el-button link type="primary" size="small" :aria-label="`${row.materialName}账实一致`" @click="fillOneCountRow(row)">
+              账实一致
+            </el-button>
+          </template>
+        </el-table-column>
+        <el-table-column label="差异" width="110" align="right">
           <template #default="{ row }">
             <span v-if="row.actualQty != null">
               <span :style="{ color: row.actualQty - row.systemQty < 0 ? '#f56c6c' : row.actualQty - row.systemQty > 0 ? '#67c23a' : '' }">
-                {{ row.actualQty - row.systemQty > 0 ? '+' : '' }}{{ (row.actualQty - row.systemQty).toFixed(3) }}
+                {{ row.actualQty - row.systemQty > 0 ? '+' : '' }}{{ (row.actualQty - row.systemQty).toFixed(3) }}{{ countDisplayUnit(row.unit) }}
               </span>
             </span>
             <span v-else style="color: #c0c4cc">—</span>
@@ -1368,20 +1603,66 @@ onMounted(async () => {
     </el-dialog>
 
     <!-- ──────────────── Approve Dialog ──────────────── -->
-    <el-dialog v-model="approveDialogVisible" title="审批盘点任务" width="480px">
+    <el-dialog v-model="approveDialogVisible" title="审批盘点任务" width="760px">
       <template v-if="approveRow">
         <el-descriptions :column="2" border style="margin-bottom: 16px">
           <el-descriptions-item label="盘点单号">{{ approveRow.stocktakeNo }}</el-descriptions-item>
           <el-descriptions-item label="仓库">{{ warehouseName(String(approveRow.warehouseId)) }}</el-descriptions-item>
-          <el-descriptions-item label="盘点月份">{{ approveRow.periodMonth }}</el-descriptions-item>
-          <el-descriptions-item label="发起人">{{ approveRow.initiatedBy }}</el-descriptions-item>
+          <el-descriptions-item label="盘点基准">{{ formatBusinessDateTime(approveRow.inventoryCutoffAt || approveRow.initiatedAt) }}</el-descriptions-item>
+          <el-descriptions-item label="会计期间">{{ approveRow.periodMonth }}</el-descriptions-item>
+          <el-descriptions-item label="执行开始">{{ formatBusinessDateTime(approveRow.countingStartedAt) }}</el-descriptions-item>
+          <el-descriptions-item label="发起人">{{ approveRow.initiatedByDisplay || `用户 ${approveRow.initiatedBy}` }}</el-descriptions-item>
+          <el-descriptions-item label="对账回溯" :span="2">
+            {{ formatBusinessDateTime(approveRow.reconciliationStartAt) }} 至
+            {{ formatBusinessDateTime(approveRow.reconciliationEndAt || approveRow.inventoryCutoffAt) }}
+          </el-descriptions-item>
         </el-descriptions>
+        <el-descriptions :column="3" border style="margin-bottom: 16px">
+          <el-descriptions-item label="已盘/未盘">
+            {{ approvalEvidence(approveRow).countedCount || 0 }} / {{ approvalEvidence(approveRow).uncountedCount || 0 }} 批
+          </el-descriptions-item>
+          <el-descriptions-item label="账实一致">{{ approvalEvidence(approveRow).matchCount || 0 }}批</el-descriptions-item>
+          <el-descriptions-item label="盘盈/盘亏">
+            {{ approvalEvidence(approveRow).surplusCount || 0 }} / {{ approvalEvidence(approveRow).shortageCount || 0 }} 批
+          </el-descriptions-item>
+          <el-descriptions-item label="盘盈数量">{{ formatGroupedQuantity(approvalEvidence(approveRow).surplusQuantityByUnit) }}</el-descriptions-item>
+          <el-descriptions-item label="盘亏数量">{{ formatGroupedQuantity(approvalEvidence(approveRow).shortageQuantityByUnit) }}</el-descriptions-item>
+          <el-descriptions-item label="库存影响">{{ approvalEvidence(approveRow).inventoryImpactMessage }}</el-descriptions-item>
+        </el-descriptions>
+        <el-table
+          v-if="approvalEvidence(approveRow).inventoryImpact"
+          :data="(approveRow.items as TableRow[]) || []"
+          size="small"
+          border
+          max-height="240"
+          style="margin-bottom: 16px"
+        >
+          <el-table-column label="影响批次/物料" min-width="230">
+            <template #default="{ row }">
+              <div class="identity-primary">{{ row.batchNumber || row.materialBatchId }}</div>
+              <div class="identity-secondary">{{ row.materialName }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column label="系统→实盘" min-width="170">
+            <template #default="{ row }">
+              {{ row.systemQty }}{{ countDisplayUnit(row.quantityUnit) }} →
+              {{ row.actualQty }}{{ countDisplayUnit(row.quantityUnit) }}
+            </template>
+          </el-table-column>
+        </el-table>
         <el-form label-width="80px">
           <el-form-item label="审批备注">
             <el-input v-model="approveNote" type="textarea" :rows="2" placeholder="可选" />
           </el-form-item>
         </el-form>
-        <el-alert type="warning" show-icon :closable="false" title="审批后差异数据锁定，可进一步「应用差异」更新实际库存。" />
+        <el-alert
+          :type="approvalEvidence(approveRow).inventoryImpact ? 'warning' : 'success'"
+          show-icon
+          :closable="false"
+          :title="approvalEvidence(approveRow).inventoryImpact
+            ? '审批仅锁定复核结果；仍需执行“应用差异”后才会调整库存。'
+            : '零差异审批后仍保留“确认应用（库存不调整）”步骤，用于最终锁定与审计。'"
+        />
       </template>
       <template #footer>
         <el-button @click="approveDialogVisible = false">取消</el-button>
@@ -1440,5 +1721,34 @@ onMounted(async () => {
 }
 .el-card {
   border-radius: 10px;
+}
+.field-hint,
+.identity-secondary {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.identity-primary {
+  color: var(--el-text-color-primary);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.count-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.count-toolbar .el-text {
+  margin-left: auto;
+}
+.count-input-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.unit-suffix {
+  color: var(--el-text-color-regular);
+  min-width: 24px;
 }
 </style>

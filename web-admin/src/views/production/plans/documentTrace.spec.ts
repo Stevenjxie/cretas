@@ -24,7 +24,9 @@ describe('production document trace navigation', () => {
   });
 
   it('exposes the trace from each ordinary production-plan row', () => {
-    expect(pageSource).toContain('@click="openDocumentTrace(row)"');
+    expect(pageSource).toContain('<el-dropdown-item command="trace">单据追溯</el-dropdown-item>');
+    expect(pageSource).toContain("if (command === 'trace')");
+    expect(pageSource).toContain('void openDocumentTrace(row)');
     expect(pageSource).toContain('生产计划单据追踪');
     expect(pageSource).toContain('documentTrace.documents');
     expect(apiSource).toContain('/production-plans/${planId}/document-trace');

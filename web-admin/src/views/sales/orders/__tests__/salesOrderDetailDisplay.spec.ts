@@ -24,4 +24,18 @@ describe('sales order detail display-unit contract', () => {
     expect(profitSource).toContain('{{ displayUnit(row.unit) }}');
     expect(listSource).toContain('unit: canonicalUnitCode(item.unit');
   });
+
+  it('does not expose procurement semantics as a sales-order row action', () => {
+    expect(listSource).not.toContain('>开始采购</el-button>');
+    expect(listSource).not.toContain('<StartPurchaseDialog');
+  });
+
+  it('shows actionable shipment badge, localized audit time and explicit historical tracking gaps', () => {
+    expect(detailSource).toContain('actionableDeliveries');
+    expect(detailSource).toContain('neutral-record-count');
+    expect(detailSource).toContain(':timestamp="formatBusinessDateTime(node.time)"');
+    expect(detailSource).toContain("'系统自动审批'");
+    expect(detailSource).toContain('未填写（历史数据）');
+    expect(detailSource).toContain('shipmentForm.deliveryMethod');
+  });
 });

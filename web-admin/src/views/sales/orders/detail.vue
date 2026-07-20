@@ -17,6 +17,18 @@ import { ArrowLeft } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
 import { displayUnit } from '@/utils/unitPricing';
 import { handleCatchError } from '@/utils/errorToast';
+import { getCustomer, type Customer } from '@/api/customer';
+import {
+  actionableDeliveryCount,
+  deliveryActionState,
+  deliveryCapacityByLine,
+  deliveryMoney,
+  deliveryTransportAggregate,
+  formatBusinessDateTime,
+  productionActionState,
+  resolveDeliveryAddress,
+  shipmentValidationError,
+} from './salesOrderGuards';
 // T4-D1 (issue #525): F006 customer asked for 来源仓库 (总仓/线边仓) per line item.
 // 2026-07-02 fix: resolve against the loaded warehouse list (DB name is
 // authoritative) instead of always showing the hardcoded WH-WKS/WH-LOG label
@@ -41,6 +53,12 @@ const submitting = ref(false);
 const notFound = ref(false);
 const order = ref<TableRow | null>(null);
 const deliveries = ref<TableRow[]>([]);
+const associatedProductionPlans = ref<TableRow[]>([]);
+const productionPlansLoading = ref(false);
+const productionPlansFailed = ref(false);
+const deliveriesLoading = ref(false);
+const deliveriesFailed = ref(false);
+const customer = ref<Customer | null>(null);
 const invoices = ref<TableRow[]>([]);
 const payments = ref<TableRow[]>([]);
 const purchaseOrders = ref<TableRow[]>([]);
@@ -64,9 +82,48 @@ const customerMaterialReceiptForm = ref<CustomerMaterialReceiptForm>({
 });
 
 const deliveryDialogVisible = ref(false);
+const deliveryIdempotencyKey = ref('');
 const deliveryForm = ref<{ deliveryAddress: string; logisticsCompany: string; items: TableRow[] }>({
   deliveryAddress: '', logisticsCompany: '', items: [],
 });
+const shipmentDialogVisible = ref(false);
+const shipmentParent = ref<TableRow | null>(null);
+const shipmentForm = ref({
+  idempotencyKey: '',
+  plannedShipmentDate: new Date().toISOString().slice(0, 10),
+  deliveryMethod: 'LOGISTICS',
+  logisticsCompany: '',
+  trackingNumber: '',
+  deliveryAddress: '',
+  remark: '',
+  items: [] as TableRow[],
+});
+const allocationSummary = ref<Record<string, { allocated: number; planned: number; complete: boolean }>>({});
+const masterDeliveries = computed(() => deliveries.value.filter((row) => !row.parentDeliveryId && row.recordRole !== 'SHIPMENT'));
+const shipmentRows = computed(() => deliveries.value.filter((row) => row.parentDeliveryId || row.recordRole === 'SHIPMENT'));
+const deliveryAddressMissing = computed(() => !deliveryForm.value.deliveryAddress.trim());
+const deliveryTotals = computed(() => deliveryMoney(deliveryForm.value.items));
+const deliveryCapacity = computed(() => deliveryCapacityByLine(
+  Array.isArray(order.value?.items) ? order.value.items as TableRow[] : [],
+  deliveries.value,
+));
+const productionAction = computed(() => productionActionState(
+  Array.isArray(order.value?.items) ? order.value.items as TableRow[] : [],
+  associatedProductionPlans.value,
+  productionPlansLoading.value,
+  productionPlansFailed.value,
+));
+const deliveryAction = computed(() => deliveryActionState(
+  Array.isArray(order.value?.items) ? order.value.items as TableRow[] : [],
+  deliveries.value,
+  deliveriesLoading.value,
+  deliveriesFailed.value,
+));
+const actionableDeliveries = computed(() => actionableDeliveryCount(deliveries.value));
+const transportAggregate = computed(() => deliveryTransportAggregate(deliveries.value));
+const transportDisplayStatus = computed(() => deliveries.value.length > 0
+  ? transportAggregate.value
+  : String(order.value?.transportPlanStatus || 'PLANNING'));
 
 // T-RTA (issue #531): F006 客户反馈 第四次会议 956-1037 — 申请退货 dialog.
 // Builds CreateReturnOrderRequest with returnType=SALES_RETURN + counterpartyId=customerId
@@ -210,10 +267,15 @@ const delStatusMap: Record<string, { text: string; type: string }> = {
   DRAFT: { text: '草稿', type: 'info' },
   // Issue #740: 销售创建后等仓库 confirm 的中间态
   PENDING_WAREHOUSE_CONFIRM: { text: '待仓库确认', type: 'warning' },
+  PENDING_SPLIT: { text: '待分批', type: 'warning' },
+  PARTIALLY_SCHEDULED: { text: '部分已安排', type: 'warning' },
+  FULLY_SCHEDULED: { text: '已全部安排', type: '' },
+  PARTIALLY_SHIPPED: { text: '部分已发货', type: 'warning' },
   PICKED: { text: '已拣货', type: '' },
   SHIPPED: { text: '已发货', type: 'warning' },
   DELIVERED: { text: '已签收', type: 'success' },
   RETURNED: { text: '已退回', type: 'danger' },
+  CANCELLED: { text: '已取消', type: 'info' },
 };
 
 const invoiceStatusMap: Record<string, { text: string; type: string }> = {
@@ -246,6 +308,8 @@ const orderTransportStatusMap: Record<string, { text: string; type: string }> = 
   IN_PRODUCTION: { text: '生产中', type: 'warning' },
   IN_TRANSIT: { text: '运输中', type: 'warning' },
   DELIVERED: { text: '已发货', type: 'success' },
+  PARTIALLY_RECEIVED: { text: '部分签收', type: 'warning' },
+  RECEIVED: { text: '已签收', type: 'success' },
 };
 
 const orderFormulas = ref<TableRow>({});
@@ -347,7 +411,7 @@ async function saveEditItems() {
 
 onMounted(async () => {
   await loadOrder();
-  loadDeliveries();
+  await Promise.all([loadDeliveries(), loadAssociatedProductionPlans(), loadOrderCustomer()]);
   loadInvoices();
   loadPayments();
   loadPurchaseOrders();
@@ -415,10 +479,70 @@ function formatTaxIncludedUnitPrice(row: TableRow): string {
 
 async function loadDeliveries() {
   if (!factoryId.value || !orderId.value) return;
+  deliveriesLoading.value = true;
+  deliveriesFailed.value = false;
   try {
     const res = await get(`/${factoryId.value}/sales/deliveries/by-order/${orderId.value}`);
-    if (res.success) deliveries.value = Array.isArray(res.data) ? res.data : [];
-  } catch { /* ignore */ }
+    if (res.success) {
+      deliveries.value = Array.isArray(res.data) ? res.data : [];
+      await loadAllocationSummaries();
+    }
+  } catch {
+    deliveriesFailed.value = true;
+    deliveries.value = [];
+  } finally {
+    deliveriesLoading.value = false;
+  }
+}
+
+async function loadAllocationSummaries() {
+  const next: Record<string, { allocated: number; planned: number; complete: boolean }> = {};
+  for (const delivery of deliveries.value) {
+    if (delivery.recordRole === 'MASTER') continue;
+    const items = Array.isArray(delivery.items) ? delivery.items as TableRow[] : [];
+    let planned = 0;
+    let allocated = 0;
+    for (const item of items) {
+      planned += Number(item.deliveredQuantity || 0);
+      if (!item.id) continue;
+      try {
+        const res = await get<TableRow[]>(`/${factoryId.value}/sales-deliveries/items/${item.id}/batch-allocations`);
+        if (res.success && Array.isArray(res.data)) {
+          allocated += res.data.reduce((sum, row) => sum + Number(row.allocatedQty || 0), 0);
+        }
+      } catch { /* fail closed: leave incomplete */ }
+    }
+    next[String(delivery.id)] = { allocated, planned, complete: planned > 0 && Math.abs(allocated - planned) < 0.000001 };
+  }
+  allocationSummary.value = next;
+}
+
+async function loadAssociatedProductionPlans() {
+  if (!factoryId.value || !orderId.value) return;
+  productionPlansLoading.value = true;
+  productionPlansFailed.value = false;
+  try {
+    const res = await get(`/${factoryId.value}/production-plans/by-sales-order/${orderId.value}`);
+    associatedProductionPlans.value = res.success && Array.isArray(res.data) ? res.data : [];
+  } catch {
+    productionPlansFailed.value = true;
+    associatedProductionPlans.value = [];
+  } finally {
+    productionPlansLoading.value = false;
+  }
+}
+
+async function loadOrderCustomer() {
+  const customerId = String(order.value?.customerId ?? '');
+  if (!factoryId.value || !customerId) {
+    customer.value = null;
+    return;
+  }
+  try {
+    customer.value = await getCustomer(factoryId.value, customerId);
+  } catch {
+    customer.value = null;
+  }
 }
 
 async function loadInvoices() {
@@ -550,7 +674,7 @@ async function handleAction(action: string) {
 // 跳到生产计划页并带 salesOrderId 提示, 用户在那边新建 plan。不直接改 SO 状态(那
 // 是 plan 开始生产后的联动), 只承担"导航 + 提示"职责, 避免前端伪装后端未实现的能力。
 async function handleStartProduction() {
-  if (!order.value) return;
+  if (!order.value || productionAction.value.disabled) return;
   ElMessage.info(`请为订单 ${order.value.orderNumber || orderId.value} 创建生产计划`);
   await router.push({
     path: '/production/plans',
@@ -625,18 +749,22 @@ async function handleFinanceAction(action: 'approve' | 'reject') {
 }
 
 function openDeliveryDialog() {
-  if (!order.value?.items?.length) return;
+  if (!order.value?.items?.length || deliveryAction.value.disabled) return;
+  const remainingByItem = new Map(deliveryCapacity.value.map((line) => [line.itemId, line.remaining]));
+  const address = resolveDeliveryAddress(order.value.deliveryAddress, customer.value?.shippingAddress);
   deliveryForm.value = {
-    deliveryAddress: order.value.deliveryAddress || '',
+    deliveryAddress: address,
     logisticsCompany: '',
     items: (order.value.items as TableRow[]).map((it) => ({
       salesOrderItemId: it.id,
       productTypeId: it.productTypeId,
       productName: it.productName,
-      deliveredQuantity: it.quantity - (it.deliveredQuantity || 0),
+      deliveredQuantity: remainingByItem.get(String(it.id ?? '')) ?? 0,
+      maxDeliverableQuantity: remainingByItem.get(String(it.id ?? '')) ?? 0,
       unit: it.unit,
       packagingSpecId: it.packagingSpecId,
       unitPrice: it.unitPrice,
+      taxRate: it.taxRate,
       // T4-D5 (issue #553): propagate per-line source warehouse code from the
       // sales order item. Backend SalesServiceImpl.createDeliveryRecord stores
       // it on SalesDeliveryItem; allocation logic doesn't filter yet but the
@@ -644,7 +772,11 @@ function openDeliveryDialog() {
       sourceWarehouseCode: it.sourceWarehouseCode || '',
     })),
   };
+  deliveryIdempotencyKey.value = `web-delivery-${orderId.value}-${Date.now()}`;
   deliveryDialogVisible.value = true;
+  if (!address) {
+    ElMessage.warning('客户/订单未维护收货地址，请为本次发货单补充发货地址');
+  }
 }
 
 // T-RTA (issue #531): F006 客户反馈 — open return-order dialog from sales order detail.
@@ -726,11 +858,15 @@ async function handleCreateReturn() {
 
 async function handleCreateDelivery() {
   if (submitting.value) return;
+  if (deliveryAddressMissing.value) return ElMessage.warning('请填写发货地址；订单和客户主档均未维护地址时不能静默创建');
   const filteredItems = deliveryForm.value.items.filter(i => i.deliveredQuantity > 0);
   if (filteredItems.length === 0) return ElMessage.warning('请至少填写一个发货数量');
+  const overLimit = filteredItems.find((item) => Number(item.deliveredQuantity) > Number(item.maxDeliverableQuantity) + 0.000001);
+  if (overLimit) return ElMessage.warning(`${overLimit.productName || '产品'} 发货数量超过剩余可安排数量`);
   submitting.value = true;
   try {
     const res = await post(`/${factoryId.value}/sales/deliveries`, {
+      idempotencyKey: deliveryIdempotencyKey.value,
       salesOrderId: orderId.value,
       customerId: order.value?.customerId || '',
       deliveryDate: new Date().toISOString().slice(0, 10),
@@ -744,6 +880,64 @@ async function handleCreateDelivery() {
       loadOrder(); loadDeliveries();
     } else { ElMessage.error(res.message || '创建失败，请重试'); }
   } catch (e) { handleCatchError(e, '创建失败，请检查网络'); }
+  finally { submitting.value = false; }
+}
+
+function openShipmentDialog(parent: TableRow) {
+  const children = shipmentRows.value.filter((row) => String(row.parentDeliveryId || '') === String(parent.id || ''));
+  const arranged = new Map<string, number>();
+  children.filter((row) => !['CANCELLED', 'RETURNED'].includes(String(row.status || ''))).forEach((row) => {
+    const items = Array.isArray(row.items) ? row.items as TableRow[] : [];
+    items.forEach((item) => {
+      const key = String(item.salesOrderItemId || item.productTypeId || '');
+      arranged.set(key, (arranged.get(key) || 0) + Number(item.deliveredQuantity || 0));
+    });
+  });
+  shipmentParent.value = parent;
+  shipmentForm.value = {
+    idempotencyKey: `web-shipment-${parent.id}-${Date.now()}`,
+    plannedShipmentDate: new Date().toISOString().slice(0, 10),
+    deliveryMethod: 'LOGISTICS',
+    logisticsCompany: '',
+    trackingNumber: '',
+    deliveryAddress: String(parent.deliveryAddress || ''),
+    remark: '',
+    items: (Array.isArray(parent.items) ? parent.items as TableRow[] : []).map((item) => {
+      const key = String(item.salesOrderItemId || item.productTypeId || '');
+      const remaining = Math.max(0, Number(item.deliveredQuantity || 0) - (arranged.get(key) || 0));
+      return { ...item, parentDeliveryItemId: item.id, remaining, quantity: remaining };
+    }),
+  };
+  shipmentDialogVisible.value = true;
+}
+
+async function handleCreateShipment() {
+  if (submitting.value || !shipmentParent.value) return;
+  const validationError = shipmentValidationError(shipmentForm.value);
+  if (validationError) return ElMessage.warning(validationError);
+  const items = shipmentForm.value.items.filter((item) => Number(item.quantity || 0) > 0);
+  if (!shipmentForm.value.deliveryAddress.trim()) return ElMessage.warning('请填写子发运地址');
+  if (items.length === 0) return ElMessage.warning('请填写本次发运数量');
+  const over = items.find((item) => Number(item.quantity) > Number(item.remaining) + 0.000001);
+  if (over) return ElMessage.warning(`${over.productName || '产品'} 超过母单剩余可安排数量`);
+  submitting.value = true;
+  try {
+    const res = await post(`/${factoryId.value}/sales/deliveries/${shipmentParent.value.id}/shipments`, {
+      idempotencyKey: shipmentForm.value.idempotencyKey,
+      plannedShipmentDate: shipmentForm.value.plannedShipmentDate,
+      deliveryMethod: shipmentForm.value.deliveryMethod,
+      logisticsCompany: shipmentForm.value.logisticsCompany,
+      trackingNumber: shipmentForm.value.trackingNumber,
+      deliveryAddress: shipmentForm.value.deliveryAddress,
+      remark: shipmentForm.value.remark,
+      items: items.map((item) => ({ parentDeliveryItemId: item.parentDeliveryItemId, quantity: item.quantity })),
+    });
+    if (res.success) {
+      ElMessage.success(`子发运单 ${res.data?.deliveryNumber || ''} 创建成功`);
+      shipmentDialogVisible.value = false;
+      await loadDeliveries();
+    }
+  } catch (e) { handleCatchError(e, '子发运单创建失败，请检查网络'); }
   finally { submitting.value = false; }
 }
 
@@ -790,7 +984,7 @@ async function openBatchAllocDialog(deliveryId: string, deliveryNumber: string) 
       const productTypeId = (it.productTypeId || (it.productType as TableRow)?.id) as string;
       const deliveredQuantity = Number(it.deliveredQuantity || 0);
       const productName = (it.productName as string) || ((it.productType as TableRow)?.name as string) || '未命名产品';
-      const deliveryItemId = it.id as string;
+      const deliveryItemId = String(it.id || '');
       // 🔴 C1 (2026-07-05): 该行的计量单位 — 传给 recommend-fifo 让后端把跨单位的成品批次
       // (同产品一批记 kg 一批记 盒, F006 现场确认) 统一换算为该单位再比较/推荐, 不再裸相加.
       const unit = (it.unit as string) || '';
@@ -802,23 +996,39 @@ async function openBatchAllocDialog(deliveryId: string, deliveryNumber: string) 
       let allocations: AllocRow[] = [];
       let stockWarehouses: string[] = [];
       if (productTypeId && deliveredQuantity > 0) {
+        const existingRes = await get<Array<TableRow>>(
+          `/${factoryId.value}/sales-deliveries/items/${deliveryItemId}/batch-allocations`
+        );
+        if (existingRes.success && Array.isArray(existingRes.data) && existingRes.data.length > 0) {
+          allocations = existingRes.data.map(r => ({
+            finishedGoodsBatchId: String(r.finishedGoodsBatchId || ''),
+            batchNumber: String(r.batchNumber || ''),
+            productionDate: String(r.productionDate || ''),
+            availableQuantity: Number(r.allocatedQty || 0),
+            allocatedQty: Number(r.allocatedQty || 0),
+            unit: String(r.unit || unit || ''),
+            batchNativeUnit: String(r.unit || ''),
+          }));
+        }
         const swcParam = sourceWarehouseCode
           ? `&sourceWarehouseCode=${encodeURIComponent(sourceWarehouseCode)}`
           : '';
         const unitParam = unit ? `&unit=${encodeURIComponent(unit)}` : '';
-        const recRes = await get<Array<TableRow>>(
-          `/${factoryId.value}/sales-deliveries/items/${deliveryItemId}/batch-allocations/recommend-fifo?productTypeId=${productTypeId}&requiredQty=${deliveredQuantity}${unitParam}${swcParam}`
-        );
-        if (recRes.success && Array.isArray(recRes.data)) {
-          allocations = recRes.data.map(r => ({
-            finishedGoodsBatchId: String(r.batchId),
-            batchNumber: String(r.batchNumber || ''),
-            productionDate: String(r.productionDate || ''),
-            availableQuantity: Number(r.availableQuantity || 0),
-            allocatedQty: Number(r.recommendedQuantity || 0),
-            unit: String(r.unit || unit || ''),
-            batchNativeUnit: String(r.batchNativeUnit || ''),
-          }));
+        if (allocations.length === 0) {
+          const recRes = await get<Array<TableRow>>(
+            `/${factoryId.value}/sales-deliveries/items/${deliveryItemId}/batch-allocations/recommend-fifo?productTypeId=${productTypeId}&requiredQty=${deliveredQuantity}${unitParam}${swcParam}`
+          );
+          if (recRes.success && Array.isArray(recRes.data)) {
+            allocations = recRes.data.map(r => ({
+              finishedGoodsBatchId: String(r.batchId),
+              batchNumber: String(r.batchNumber || ''),
+              productionDate: String(r.productionDate || ''),
+              availableQuantity: Number(r.availableQuantity || 0),
+              allocatedQty: Number(r.recommendedQuantity || 0),
+              unit: String(r.unit || unit || ''),
+              batchNativeUnit: String(r.batchNativeUnit || ''),
+            }));
+          }
         }
         // 🔴 G1: 无推荐批次时查该产品实际有货的仓库, 供诚实空态提示 (成品在 X 仓 vs 真的没货).
         if (allocations.length === 0) {
@@ -1130,21 +1340,40 @@ const approvalTimeline = computed<Array<{
     nodes.push({
       type: isApproved ? 'success' : 'danger',
       title: isApproved ? '财务审核通过' : '财务审核驳回',
-      user: String(o.financeReviewedByName || `财务#${o.financeReviewedBy || '?'}`),
+      user: o.financeReviewedByName
+        ? String(o.financeReviewedByName)
+        : (o.financeReviewedBy ? `财务账号 ${o.financeReviewedBy}` : '系统自动审批'),
       time: String(o.financeReviewedAt),
       notes: o.financeReviewNotes ? String(o.financeReviewNotes) : undefined,
     });
   }
 
-  // 节点 5: 发货 (有 deliveries 记录就显示)
+  // 节点 5: 发运与签收分别留痕；优先使用叶子子发运，避免母单汇总时间冒充物流事件。
   if (deliveries.value.length > 0) {
-    const latestDelivery = deliveries.value[0];
-    nodes.push({
-      type: ['DELIVERED'].includes(String(latestDelivery.status)) ? 'success' : 'warning',
-      title: deliveries.value.length === 1 ? '已发货' : `已发货 (${deliveries.value.length} 单)`,
-      user: '仓库',
-      time: String(latestDelivery.shippedAt || latestDelivery.createdAt || latestDelivery.deliveryDate || ''),
-    });
+    const leafRows = shipmentRows.value.length > 0 ? shipmentRows.value : deliveries.value;
+    const shippedRows = leafRows.filter((row) => ['SHIPPED', 'DELIVERED'].includes(String(row.status)));
+    if (shippedRows.length > 0) {
+      const latestShipped = shippedRows[shippedRows.length - 1];
+      nodes.push({
+        type: 'warning',
+        title: shippedRows.length === 1 ? '确认发货' : `确认发货（${shippedRows.length}次）`,
+        user: String(latestShipped.shippedByName || '仓库'),
+        time: String(latestShipped.shippedAt || latestShipped.deliveryDate || latestShipped.createdAt || ''),
+        notes: latestShipped.trackingNumber
+          ? `${latestShipped.logisticsCompany || '物流'} · 运单号 ${latestShipped.trackingNumber}`
+          : '未填写运单号（历史数据）',
+      });
+    }
+    const signedRows = leafRows.filter((row) => String(row.status) === 'DELIVERED');
+    if (signedRows.length > 0) {
+      const latestSigned = signedRows[signedRows.length - 1];
+      nodes.push({
+        type: 'success',
+        title: signedRows.length === 1 ? '客户签收' : `客户签收（${signedRows.length}次）`,
+        user: String(latestSigned.signedByName || '签收确认'),
+        time: String(latestSigned.signedAt || latestSigned.updatedAt || latestSigned.deliveryDate || ''),
+      });
+    }
   }
 
   // Bug #29 fix (Apr 18 2026): 补齐开票 3 段事件 — 申请 / 审核 / 开具
@@ -1228,6 +1457,11 @@ const approvalTimeline = computed<Array<{
 
   return nodes;
 });
+
+function approvalReasonLines(notes?: string): string[] {
+  if (!notes) return [];
+  return notes.split(/\r?\n|；/).map((line) => line.trim()).filter(Boolean);
+}
 
 async function handleReceiptChange(file: { raw: File }) {
   receiptFile.value = file.raw;
@@ -1351,7 +1585,7 @@ async function handleQuickPayFull() {
               开票: {{ orderInvoiceStatusMap[order.invoiceStatus]?.text || '待开票' }}
             </el-tag>
             <el-tag v-if="order" :type="orderTransportStatusMap[order.transportPlanStatus]?.type || 'info'" size="small" style="margin-left: 4px">
-              运输: {{ orderTransportStatusMap[order.transportPlanStatus]?.text || '待出厂' }}
+              运输: {{ orderTransportStatusMap[transportDisplayStatus]?.text || '待出厂' }}
             </el-tag>
           </div>
           <div class="header-right" v-if="order && canWrite">
@@ -1359,10 +1593,44 @@ async function handleQuickPayFull() {
             <el-button v-if="order.status === 'CONFIRMED'" type="warning" :loading="submitting" @click="handleAction('submit-for-review')">提交/判定审批</el-button>
             <el-button v-if="order.status === 'PENDING_FINANCE_REVIEW'" type="success" :loading="submitting" @click="openFinanceReview('approve')">审核通过</el-button>
             <el-button v-if="order.status === 'PENDING_FINANCE_REVIEW'" type="danger" :loading="submitting" @click="openFinanceReview('reject')">审核驳回</el-button>
-            <el-button v-if="order.status === 'FINANCE_APPROVED'" type="primary" :loading="submitting" @click="handleStartProduction">开始生产</el-button>
+            <el-tooltip
+              v-if="order.status === 'FINANCE_APPROVED'"
+              :content="productionAction.tooltip"
+              :disabled="!productionAction.tooltip"
+              placement="top"
+            >
+              <span>
+                <el-button
+                  type="primary"
+                  :loading="productionPlansLoading"
+                  :disabled="productionAction.disabled"
+                  @click="handleStartProduction"
+                >{{ productionAction.label }}</el-button>
+              </span>
+            </el-tooltip>
+            <el-button
+              v-if="productionAction.relatedId"
+              link
+              type="primary"
+              @click="router.push(`/production/plans?salesOrderId=${orderId}`)"
+            >查看生产计划</el-button>
             <!-- Rule 2 (fool-proof-design): 与下方发货记录里"确认发货"(handleShip, 真正扣库存) 区分标签,
                  避免点错静默无反应 —— 这个按钮只是打开"新建发货单"对话框. -->
-            <el-button v-if="['CONFIRMED','FINANCE_APPROVED','PROCESSING','PARTIAL_DELIVERED'].includes(order.status)" type="primary" :loading="submitting" @click="openDeliveryDialog">新建{{ label('delivery') }}单</el-button>
+            <el-tooltip
+              v-if="['CONFIRMED','FINANCE_APPROVED','PROCESSING','PARTIAL_DELIVERED'].includes(order.status)"
+              :content="deliveryAction.tooltip"
+              :disabled="!deliveryAction.tooltip"
+              placement="top"
+            >
+              <span>
+                <el-button
+                  type="primary"
+                  :loading="deliveriesLoading"
+                  :disabled="deliveryAction.disabled"
+                  @click="openDeliveryDialog"
+                >{{ deliveryAction.label }}</el-button>
+              </span>
+            </el-tooltip>
             <el-button v-if="canWarehouseConfirm" type="success" plain :loading="customerMaterialReceiptSaving" @click="openCustomerMaterialReceiptDialog">客供料入库</el-button>
             <!-- T-RTA (issue #531): F006 客户反馈 第四次会议 956-1037 — 申请退货 入口.
                  Opens dialog that builds CreateReturnOrderRequest with returnType=SALES_RETURN. -->
@@ -1558,7 +1826,7 @@ async function handleQuickPayFull() {
                   v-for="(node, idx) in approvalTimeline"
                   :key="idx"
                   :type="node.type"
-                  :timestamp="node.time"
+                  :timestamp="formatBusinessDateTime(node.time)"
                   placement="top"
                   size="large"
                 >
@@ -1568,7 +1836,9 @@ async function handleQuickPayFull() {
                       <el-icon><i class="el-icon-user" /></el-icon>
                       <span>{{ node.user }}</span>
                     </div>
-                    <div v-if="node.notes" class="timeline-notes">备注: {{ node.notes }}</div>
+                    <div v-if="node.notes" class="timeline-notes">
+                      <div v-for="line in approvalReasonLines(node.notes)" :key="line">{{ line }}</div>
+                    </div>
                   </el-card>
                 </el-timeline-item>
               </el-timeline>
@@ -1643,21 +1913,32 @@ async function handleQuickPayFull() {
           <el-tab-pane name="delivery">
             <template #label>
               {{ label('delivery') }}记录
-              <el-badge v-if="deliveries.length" :value="deliveries.length" :max="99" class="tab-badge" />
+              <el-badge v-if="actionableDeliveries" :value="actionableDeliveries" :max="99" class="tab-badge" />
+              <span v-else-if="deliveries.length" class="neutral-record-count">（{{ deliveries.length }}）</span>
             </template>
 
             <div class="tab-toolbar">
-              <el-button v-if="['CONFIRMED','FINANCE_APPROVED','PROCESSING','PARTIAL_DELIVERED'].includes(order.status) && canWrite"
-                         type="primary" @click="openDeliveryDialog">
-                + 新建{{ label('delivery') }}单
-              </el-button>
+              <el-tooltip :content="deliveryAction.tooltip" :disabled="!deliveryAction.tooltip">
+                <span><el-button
+                  v-if="['CONFIRMED','FINANCE_APPROVED','PROCESSING','PARTIAL_DELIVERED'].includes(order.status) && canWrite"
+                  type="primary" :disabled="deliveryAction.disabled" @click="openDeliveryDialog"
+                >+ {{ deliveryAction.label }}</el-button></span>
+              </el-tooltip>
             </div>
 
             <el-table :data="deliveries" border stripe style="margin-top: 12px">
-              <el-table-column prop="deliveryNumber" label="发货单号" width="170" />
+              <el-table-column label="层级" width="90">
+                <template #default="{ row }">
+                  <el-tag :type="row.recordRole === 'MASTER' ? 'primary' : 'info'" size="small">
+                    {{ row.recordRole === 'MASTER' ? '母发货单' : (row.recordRole === 'SHIPMENT' ? '子发运' : '历史单') }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="deliveryNumber" label="发货/发运单号" min-width="190" class-name="semantic-text-column" />
               <el-table-column prop="deliveryDate" label="发货日期" width="120" />
-              <el-table-column prop="logisticsCompany" label="物流公司" width="120" />
-              <el-table-column prop="trackingNumber" label="运单号" width="150" />
+              <el-table-column label="配送方式" width="110"><template #default="{ row }">{{ ({ LOGISTICS: '物流配送', SELF_DELIVERY: '自送', SELF_PICKUP: '自提' } as Record<string, string>)[row.deliveryMethod] || (row.deliveryMethod ? row.deliveryMethod : '未记录（历史数据）') }}</template></el-table-column>
+              <el-table-column label="物流公司" width="140"><template #default="{ row }">{{ row.logisticsCompany || '未填写（历史数据）' }}</template></el-table-column>
+              <el-table-column label="运单号" width="170"><template #default="{ row }">{{ row.trackingNumber || '未填写（历史数据）' }}</template></el-table-column>
               <el-table-column prop="status" label="状态" width="100" align="center">
                 <template #default="{ row }">
                   <el-tag :type="(delStatusMap[row.status]?.type) || 'info'" size="small">
@@ -1668,10 +1949,26 @@ async function handleQuickPayFull() {
               <el-table-column v-if="canViewPrice" prop="totalAmount" label="金额" width="130" align="right">
                 <template #default="{ row }">{{ formatAmount(row.totalAmount) }}</template>
               </el-table-column>
-              <el-table-column label="操作" width="260" align="center">
+              <el-table-column label="批次分配" width="160" align="center">
                 <template #default="{ row }">
+                  <span v-if="row.recordRole === 'MASTER'">由子发运单分配</span>
+                  <span v-else-if="allocationSummary[String(row.id)]">
+                    已分配 {{ allocationSummary[String(row.id)].allocated }}/{{ allocationSummary[String(row.id)].planned }}
+                    {{ displayUnit((row.items || [])[0]?.unit) }}
+                  </span>
+                  <span v-else>0/0</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="330" align="center">
+                <template #default="{ row }">
+                  <el-button
+                    v-if="row.recordRole === 'MASTER' && !['SHIPPED','DELIVERED','CANCELLED'].includes(row.status) && canWrite"
+                    type="primary" link size="small" @click="openShipmentDialog(row)"
+                  >新建分批发运</el-button>
                   <!-- 分配批次: 销售/仓库均可 (planning 阶段) -->
-                  <el-button v-if="['DRAFT','PENDING_WAREHOUSE_CONFIRM','PICKED'].includes(row.status) && canWrite" type="primary" link size="small" :disabled="submitting || batchAllocLoading" :loading="batchAllocLoading" @click="openBatchAllocDialog(row.id, row.deliveryNumber)">分配批次</el-button>
+                  <el-button v-if="row.recordRole !== 'MASTER' && ['DRAFT','PENDING_WAREHOUSE_CONFIRM','PICKED'].includes(row.status) && canWrite" type="primary" link size="small" :disabled="submitting || batchAllocLoading" :loading="batchAllocLoading" @click="openBatchAllocDialog(row.id, row.deliveryNumber)">
+                    {{ allocationSummary[String(row.id)]?.complete ? '查看/修改批次' : (allocationSummary[String(row.id)]?.allocated ? '继续分配/修改批次' : '分配批次') }}
+                  </el-button>
                   <!--
                     Issue #740: 发货确认 (扣库存) 需要 warehouse:read_write 权限.
                     销售看到此按钮 disable + tooltip "请前往 仓储管理 → 出货管理 由仓库确认".
@@ -1683,7 +1980,13 @@ async function handleQuickPayFull() {
                   >
                     <el-button type="warning" link size="small" disabled>确认发货</el-button>
                   </el-tooltip>
-                  <el-button v-if="['DRAFT','PENDING_WAREHOUSE_CONFIRM','PICKED'].includes(row.status) && canWarehouseConfirm" type="warning" link size="small" :disabled="submitting" @click="handleShip(row.id)">确认发货</el-button>
+                  <el-tooltip
+                    v-if="row.recordRole !== 'MASTER' && ['DRAFT','PENDING_WAREHOUSE_CONFIRM','PICKED'].includes(row.status) && canWarehouseConfirm"
+                    :content="allocationSummary[String(row.id)]?.complete ? '' : '需先完整分配本次子发运数量'"
+                    :disabled="allocationSummary[String(row.id)]?.complete"
+                  >
+                    <span><el-button type="warning" link size="small" :disabled="submitting || !allocationSummary[String(row.id)]?.complete" @click="handleShip(row.id)">确认发货</el-button></span>
+                  </el-tooltip>
                   <el-button v-if="row.status === 'SHIPPED' && canWrite" type="success" link size="small" :disabled="submitting" @click="handleDelivered(row.id)">签收</el-button>
                 </template>
               </el-table-column>
@@ -1854,28 +2157,87 @@ async function handleQuickPayFull() {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="deliveryDialogVisible" :title="`创建${label('delivery')}单`" width="640px" destroy-on-close>
+    <el-dialog v-model="deliveryDialogVisible" :title="`创建${label('delivery')}单`" width="980px" destroy-on-close>
+      <el-alert
+        v-if="deliveryAddressMissing"
+        type="warning"
+        show-icon
+        :closable="false"
+        title="客户/订单未维护收货地址"
+        description="请为本次发货单手工补充发货地址，空地址禁止创建。"
+        style="margin-bottom: 12px"
+      />
       <el-form label-width="90px">
-        <el-form-item label="发货地址"><el-input v-model="deliveryForm.deliveryAddress" /></el-form-item>
+        <el-form-item label="发货地址" required>
+          <el-input v-model="deliveryForm.deliveryAddress" placeholder="优先使用订单交货地址；订单为空时回退客户主档收货地址" />
+        </el-form-item>
         <el-form-item label="物流公司"><el-input v-model="deliveryForm.logisticsCompany" placeholder="如：顺丰冷链" /></el-form-item>
       </el-form>
       <el-table :data="deliveryForm.items" border style="margin-top: 12px">
-        <el-table-column prop="productName" :label="label('product')" width="150" />
-        <el-table-column label="发货数量" width="160">
+        <el-table-column prop="productName" :label="label('product')" min-width="190" class-name="semantic-text-column" />
+        <el-table-column label="本次发货数量" width="170">
           <template #default="{ row }">
-            <el-input-number v-model="row.deliveredQuantity" :min="0" size="small" style="width: 130px" />
+            <el-input-number v-model="row.deliveredQuantity" :min="0" :max="row.maxDeliverableQuantity" :precision="3" size="small" style="width: 130px" />
+            <div class="delivery-capacity-hint">剩余可安排 {{ row.maxDeliverableQuantity }}{{ displayUnit(row.unit) }}</div>
           </template>
         </el-table-column>
         <el-table-column label="单位" width="80" align="center">
           <template #default="{ row }">{{ displayUnit(row.unit) }}</template>
         </el-table-column>
-        <el-table-column v-if="canViewPrice" prop="unitPrice" label="单价" width="120" align="right">
+        <el-table-column v-if="canViewPrice" prop="unitPrice" label="未税单价" width="120" align="right">
           <template #default="{ row }">{{ formatAmount(row.unitPrice) }}</template>
         </el-table-column>
+        <el-table-column v-if="canViewPrice" label="本次发货小计（未税）" width="165" align="right">
+          <template #default="{ row }">{{ formatAmount(Number(row.deliveredQuantity || 0) * Number(row.unitPrice || 0)) }}</template>
+        </el-table-column>
+        <el-table-column v-if="canViewPrice" label="税额" width="110" align="right">
+          <template #default="{ row }">{{ formatAmount(Number(row.deliveredQuantity || 0) * Number(row.unitPrice || 0) * Number(row.taxRate || 0) / 100) }}</template>
+        </el-table-column>
       </el-table>
+      <div v-if="canViewPrice" class="delivery-amount-summary">
+        <span>本次未税合计 <strong>{{ formatAmount(deliveryTotals.untaxed) }}</strong></span>
+        <span>税额 <strong>{{ formatAmount(deliveryTotals.tax) }}</strong></span>
+        <span>本次含税合计 <strong>{{ formatAmount(deliveryTotals.taxIncluded) }}</strong></span>
+      </div>
       <template #footer>
         <el-button @click="deliveryDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleCreateDelivery">创建发货单</el-button>
+        <el-button type="primary" :loading="submitting" :disabled="deliveryAddressMissing" @click="handleCreateDelivery">创建发货单</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="shipmentDialogVisible" title="新建分批发运" width="760px" destroy-on-close>
+      <el-alert type="info" :closable="false" show-icon title="本步骤只创建子发运安排，不扣库存；子单分配批次并由仓库确认后才实际发货。" style="margin-bottom: 12px" />
+      <el-form label-width="110px">
+        <el-form-item label="计划发运日期" required>
+          <el-date-picker v-model="shipmentForm.plannedShipmentDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="配送方式" required>
+          <el-radio-group v-model="shipmentForm.deliveryMethod">
+            <el-radio value="LOGISTICS">物流配送</el-radio>
+            <el-radio value="SELF_DELIVERY">自送</el-radio>
+            <el-radio value="SELF_PICKUP">客户自提</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-row :gutter="12">
+          <el-col :span="12"><el-form-item label="物流公司" :required="shipmentForm.deliveryMethod === 'LOGISTICS'"><el-input v-model="shipmentForm.logisticsCompany" :disabled="shipmentForm.deliveryMethod !== 'LOGISTICS'" /></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="物流/运单号" :required="shipmentForm.deliveryMethod === 'LOGISTICS'"><el-input v-model="shipmentForm.trackingNumber" :disabled="shipmentForm.deliveryMethod !== 'LOGISTICS'" /></el-form-item></el-col>
+        </el-row>
+        <el-form-item label="发货地址" required><el-input v-model="shipmentForm.deliveryAddress" /></el-form-item>
+        <el-form-item label="备注"><el-input v-model="shipmentForm.remark" type="textarea" :rows="2" /></el-form-item>
+      </el-form>
+      <el-table :data="shipmentForm.items" border>
+        <el-table-column prop="productName" label="成品" min-width="220" class-name="semantic-text-column" />
+        <el-table-column label="本次发运数量" width="180">
+          <template #default="{ row }">
+            <el-input-number v-model="row.quantity" :min="0" :max="row.remaining" :precision="3" style="width: 130px" />
+          </template>
+        </el-table-column>
+        <el-table-column label="单位" width="80"><template #default="{ row }">{{ displayUnit(row.unit) }}</template></el-table-column>
+        <el-table-column label="母单剩余" width="120"><template #default="{ row }">{{ row.remaining }}{{ displayUnit(row.unit) }}</template></el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="shipmentDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="submitting" @click="handleCreateShipment">创建子发运单</el-button>
       </template>
     </el-dialog>
 
@@ -2324,6 +2686,22 @@ async function handleQuickPayFull() {
 }
 .over-limit-hint--danger {
   color: #f56c6c;
+}
+.delivery-capacity-hint {
+  margin-top: 4px;
+  color: #909399;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.delivery-amount-summary {
+  display: flex;
+  justify-content: flex-end;
+  gap: 24px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: #f5f7fa;
+  border-radius: 4px;
+  color: #606266;
 }
 :deep(.over-limit-input .el-input__wrapper) {
   box-shadow: 0 0 0 1px #f56c6c inset;

@@ -144,7 +144,7 @@ def _render_items_table(items: list[dict], columns: list[tuple[str, str, str]], 
     for item in items or []:
         rows.append([str(item.get(k, "-") or "-") for k in keys])
 
-    table = Table(rows, repeatRows=1)
+    table = Table(rows, repeatRows=1, splitByRow=1)
     style_cmds: list[tuple] = [
         ("FONT", (0, 0), (-1, -1), font, 9),
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f3f4f6")),
@@ -970,6 +970,215 @@ def render_production_work_order_multi(data: dict) -> bytes:
     return buffer.getvalue()
 
 
+def render_production_document_package(data: dict) -> bytes:
+    """Render cover + selected production documents as one continuous PDF.
+
+    This is a print composition only. It does not merge the underlying work
+    order, material requisition, or batching-sheet business models.
+    """
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import cm
+    from reportlab.pdfgen import canvas
+    from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer
+
+    selected = data.get("sections") or [
+        "work-order", "material-requisition", "batching-sheet"
+    ]
+    allowed = {"work-order", "material-requisition", "batching-sheet"}
+    if not selected or any(section not in allowed for section in selected):
+        raise ValueError("生产单据包章节选择无效")
+
+    section_payloads = {
+        "work-order": ("workOrder", "生产工单"),
+        "material-requisition": ("materialRequisition", "领料单"),
+        "batching-sheet": ("batchingSheet", "配料单"),
+    }
+    missing = [
+        title for section, (key, title) in section_payloads.items()
+        if section in selected and not data.get(key)
+    ]
+    if missing:
+        raise ValueError("生产单据包缺少章节数据: " + "、".join(missing))
+
+    s = _get_styles()
+    font = s["font"]
+    if font == "Helvetica":
+        raise ValueError("服务器未安装可嵌入的中文字体，拒绝生成乱码单据包")
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=1.35 * cm,
+        rightMargin=1.35 * cm,
+        topMargin=2.25 * cm,
+        bottomMargin=1.8 * cm,
+        title=f"生产单据包 {data.get('planNumber') or data.get('planId', '')}",
+        author="Cretas",
+    )
+
+    plan_number = str(data.get("planNumber") or data.get("planId") or "-")
+    sku = str(data.get("sku") or data.get("productTypeId") or "-")
+    product_name = str(data.get("productName") or "-")
+    batch_date = str(data.get("batchDate") or "-")
+    bom_version = str(data.get("bomVersion") or "-")
+    workflow_version = str(data.get("workflowVersion") or "-")
+    generated_at = str(data.get("generatedAt") or "-")
+
+    class PackageNumberedCanvas(canvas.Canvas):
+        """Two-pass canvas for a shared header/footer and total page count."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self._saved_page_states: list[dict[str, Any]] = []
+
+        def showPage(self) -> None:  # noqa: N802 - reportlab API
+            self._saved_page_states.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self) -> None:
+            page_count = len(self._saved_page_states)
+            for state in self._saved_page_states:
+                self.__dict__.update(state)
+                self._draw_package_header_footer(page_count)
+                canvas.Canvas.showPage(self)
+            canvas.Canvas.save(self)
+
+        def _draw_package_header_footer(self, page_count: int) -> None:
+            width, height = A4
+            self.saveState()
+            self.setFont(font, 7.5)
+            self.setFillColorRGB(0.30, 0.34, 0.40)
+            header = (
+                f"计划 {plan_number}  |  SKU {sku} / {product_name}  |  "
+                f"批次 {batch_date}  |  BOM v{bom_version}  |  Workflow v{workflow_version}"
+            )
+            self.drawString(1.35 * cm, height - 1.15 * cm, header)
+            self.line(1.35 * cm, height - 1.30 * cm, width - 1.35 * cm, height - 1.30 * cm)
+            self.drawString(1.35 * cm, 0.85 * cm, f"生成时间 {generated_at}")
+            self.drawRightString(
+                width - 1.35 * cm,
+                0.85 * cm,
+                f"第 {self._pageNumber} 页 / 共 {page_count} 页",
+            )
+            self.restoreState()
+
+    labels = {
+        "work-order": "生产工单",
+        "material-requisition": "领料单",
+        "batching-sheet": "配料单",
+    }
+    story: list[Any] = [
+        Spacer(1, 1.2 * cm),
+        Paragraph(data.get("factoryName") or "白垩纪食品", s["small"]),
+        Paragraph("生产单据包", s["title"]),
+        _kv_table([
+            ("生产计划号", plan_number),
+            ("SKU / 产品", f"{sku} / {product_name}"),
+            ("批次日期", batch_date),
+            ("BOM 快照", f"{data.get('bomRecipeId') or '-'} / v{bom_version}"),
+            ("Workflow 快照", f"{data.get('workflowId') or '-'} / v{workflow_version}"),
+            ("包含章节", "、".join(labels[section] for section in selected)),
+            ("生成时间", generated_at),
+        ], font),
+        Spacer(1, 1.2 * cm),
+        Paragraph(
+            "本 PDF 仅统一打印载体；生产工单、领料单、配料单仍保持各自编号、状态、责任与审计边界。",
+            s["body"],
+        ),
+    ]
+
+    if "work-order" in selected:
+        work = data["workOrder"]
+        story.extend([
+            PageBreak(),
+            Paragraph("第 1 部分　生产工单", s["title"]),
+            _kv_table([
+                ("生产工单号", work.get("productionOrderNumber") or plan_number),
+                ("销售订单号", work.get("salesOrderNumbers") or work.get("sourceOrderId") or "-"),
+                ("产品", work.get("productName") or product_name),
+                ("计划产量", f"{_fmt_qty(work.get('plannedQuantity'))} {work.get('productUnit') or '-'}"),
+                ("生产日期", work.get("productionDate") or work.get("plannedDate") or "-"),
+                ("状态", work.get("status") or "-"),
+            ], font),
+            Spacer(1, 0.4 * cm),
+            Paragraph("工序", s["h2"]),
+            _render_items_table(
+                work.get("processes") or [],
+                [("序号", "seq", "CENTER"), ("工序名称", "name", "LEFT"),
+                 ("标准工时(h)", "standardHours", "RIGHT"), ("负责人", "operator", "LEFT")],
+                font,
+            ),
+            Spacer(1, 0.7 * cm),
+            Paragraph("制单人: ____________________　审核人: ____________________　生产负责人: ____________________", s["body"]),
+        ])
+
+    if "material-requisition" in selected:
+        requisition = data["materialRequisition"]
+        story.extend([
+            PageBreak(),
+            Paragraph("第 2 部分　领料单", s["title"]),
+            _kv_table([
+                ("生产计划号", requisition.get("planNumber") or plan_number),
+                ("销售订单号", requisition.get("salesOrderNumbers") or "-"),
+                ("产品", requisition.get("productName") or product_name),
+                ("单据状态", requisition.get("status") or "待领料"),
+                ("责任部门", "仓库 / 生产车间"),
+            ], font),
+            Spacer(1, 0.4 * cm),
+            _render_items_table(
+                requisition.get("items") or [],
+                [("物料名称", "materialName", "LEFT"), ("分类", "category", "CENTER"),
+                 ("单位", "unit", "CENTER"), ("应需", "transactedQty", "RIGHT"),
+                 ("已拣", "plannedIssueQty", "RIGHT"), ("已发", "deliveredQty", "RIGHT"),
+                 ("实际领用", "actualUsedQty", "RIGHT"), ("批次", "batchRefs", "LEFT")],
+                font,
+            ),
+            Spacer(1, 0.7 * cm),
+            Paragraph("仓管员: ____________________　领料人: ____________________　计划员: ____________________", s["body"]),
+        ])
+
+    if "batching-sheet" in selected:
+        batching = data["batchingSheet"]
+        pot_count = batching.get("potCount")
+
+        def per_pot(total: Any) -> str:
+            try:
+                value = float(str(total).replace(",", "")) / float(pot_count)
+                return f"{value:.3f}".rstrip("0").rstrip(".")
+            except (TypeError, ValueError, ZeroDivisionError):
+                return "—"
+
+        batching_rows = [
+            {**item, "perPotQty": per_pot(item.get("totalQty"))}
+            for item in (batching.get("items") or [])
+        ]
+        story.extend([
+            PageBreak(),
+            Paragraph("第 3 部分　配料单", s["title"]),
+            _kv_table([
+                ("生产计划号", batching.get("planNumber") or plan_number),
+                ("产品", batching.get("productName") or product_name),
+                ("计划产量", f"{batching.get('plannedQuantity') or '-'} {batching.get('unit') or batching.get('productUnit') or '-'}"),
+                ("单锅产能", f"{batching.get('singlePotCapacity') or '-'} {batching.get('unit') or '-'}"),
+                ("配料锅数", f"{pot_count} 锅"),
+                ("责任部门", "生产车间 / 配料岗位"),
+            ], font),
+            Spacer(1, 0.4 * cm),
+            _render_items_table(
+                batching_rows,
+                [("物料名称", "materialName", "LEFT"), ("单位", "unit", "CENTER"),
+                 ("总需求", "totalQty", "RIGHT"), ("每锅用量", "perPotQty", "RIGHT")],
+                font,
+            ),
+            Spacer(1, 0.7 * cm),
+            Paragraph("配料员: ____________________　复核人: ____________________　生产负责人: ____________________", s["body"]),
+        ])
+
+    doc.build(story, canvasmaker=PackageNumberedCanvas)
+    return buffer.getvalue()
+
+
 def render_transfer_instruction(data: dict) -> bytes:
     """调拨指示单 PDF — 客户[37:00] "无手机一天打一张纸质指示单".
 
@@ -1043,6 +1252,7 @@ RENDERERS: dict[str, Any] = {
     "consolidated-material-requisition": render_consolidated_material_requisition,
     # 六扇门 配料单 (配料员按锅配料)
     "batching-sheet": render_batching_sheet,
+    "production-document-package": render_production_document_package,
     # P1 #37 — 多 SO 合并公单
     "production-work-order-multi": render_production_work_order_multi,
     # 调拨指示单 (客户[37:00] 纸质指示单)

@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import {
   aggregateFinishedGoodsOptions,
   aggregateMaterialInventoryOptions,
   applySelectedOption,
   optionsForItemType,
+  TRANSFER_TYPE_OPTIONS,
   toTransferItemPayload,
   type TransferCreateRow,
 } from '../transferCreate';
 import { displayUnit } from '@/utils/unitPricing';
+
+const listSource = readFileSync(resolve(import.meta.dirname, '../list.vue'), 'utf8');
 
 function row(itemType: TransferCreateRow['itemType']): TransferCreateRow {
   return {
@@ -20,6 +25,21 @@ function row(itemType: TransferCreateRow['itemType']): TransferCreateRow {
 }
 
 describe('M08 手动调拨选择器契约', () => {
+  it('调拨类型只展示清晰中文语义，不向业务用户泄漏枚举代码', () => {
+    expect(TRANSFER_TYPE_OPTIONS.map((option) => option.label)).toEqual([
+      '总部调往分部', '分部之间调拨', '分部退回总部', '同一工厂仓库调拨',
+    ]);
+    expect(TRANSFER_TYPE_OPTIONS.every((option) => !/[A-Z_]{3,}/.test(option.label))).toBe(true);
+  });
+
+  it('调出/调入仓库必选，数量与只读单位相邻且现有库存在其右侧', () => {
+    expect(listSource).toContain("sourceWarehouseId: [{ required: true");
+    expect(listSource).toContain("targetWarehouseId: [{ required: true");
+    expect(listSource).toContain('<el-table-column label="数量 / 单位"');
+    expect(listSource).toContain('class="unit-chip"');
+    expect(listSource).not.toContain('v-model="row.unit"');
+    expect(listSource.indexOf('label="数量 / 单位"')).toBeLessThan(listSource.indexOf('label="现有库存"'));
+  });
   it('按所选仓库聚合唯一可用成品 SKU，并保留 canonical box / 中文显示盒', () => {
     const options = aggregateFinishedGoodsOptions([
       {

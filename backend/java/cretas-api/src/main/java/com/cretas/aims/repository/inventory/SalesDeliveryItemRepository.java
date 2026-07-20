@@ -3,14 +3,27 @@ package com.cretas.aims.repository.inventory;
 import com.cretas.aims.entity.inventory.SalesDeliveryItem;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
+import jakarta.persistence.LockModeType;
 
 @Repository
 public interface SalesDeliveryItemRepository extends JpaRepository<SalesDeliveryItem, Long> {
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT i FROM SalesDeliveryItem i WHERE i.id = :id")
+    Optional<SalesDeliveryItem> findByIdForUpdate(@Param("id") Long id);
+
+    /** Locks every line of one delivery in deterministic id order before ship/cancel mutations. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT i FROM SalesDeliveryItem i WHERE i.deliveryRecordId = :deliveryRecordId ORDER BY i.id")
+    List<SalesDeliveryItem> findByDeliveryRecordIdForUpdate(
+            @Param("deliveryRecordId") String deliveryRecordId);
 
     /**
      * 收发存(数量金额账)成品发出流水: 期内实际发货的<b>逐笔</b>发货明细, 按发货单 {@code delivery_date}

@@ -184,6 +184,19 @@ def print_batching_sheet(payload: dict[str, Any] = Body(...)) -> Response:
     return _pdf_response(pdf, f"batching-sheet-{plan_id}")
 
 
+@router.post("/production-document-package")
+def print_production_document_package(payload: dict[str, Any] = Body(...)) -> Response:
+    """Render one paginated PDF containing selected production documents.
+
+    The work order, material requisition and batching sheet remain independent
+    business documents; this endpoint only combines their locked snapshots into
+    one printable artifact.
+    """
+    pdf = _render_pdf("production-document-package", payload)
+    plan_no = payload.get("planNumber") or payload.get("planId", "na")
+    return _pdf_response(pdf, f"production-documents-{plan_no}")
+
+
 # ==================== 调拨指示单 (transfer-instruction) ====================
 
 @router.post("/transfer-instruction")
