@@ -56,7 +56,7 @@ describe('seasoning BOM integration source contract', () => {
   });
 
   it('uses category-specific material pickers and material-master pricing', () => {
-    expect(bomSource).toContain("? '选择包材' : '选择原料'");
+    expect(bomSource).toContain(':placeholder="`请选择${bomItemCategoryLabel}`"');
     expect(bomSource).toContain('所选物料为必填');
     expect(bomSource).toContain('参考单价从物料档案带入');
     expect(bomSource).toContain('bomForm.value.standardQuantity = null');

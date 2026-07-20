@@ -2,6 +2,7 @@
 import type { SeasoningBindingView, SeasoningProcessView } from '@/api/bom';
 import { Edit, Delete, Plus } from '@element-plus/icons-vue';
 import { otherProcessUsages } from './seasoningModel';
+import { canonicalUnitCode, displayUnit } from '@/utils/unitPricing';
 
 const props = defineProps<{
   process: SeasoningProcessView;
@@ -24,11 +25,24 @@ function priceOf(binding: SeasoningBindingView): number | null {
 function bindingName(binding: SeasoningBindingView): string {
   return binding.materialName || binding.name;
 }
+
+function basisLabel(): string {
+  if (props.process.basisQuantity == null || !props.process.basisUnit) return '未解析';
+  const quantity = Number(props.process.basisQuantity).toFixed(4).replace(/\.?0+$/, '');
+  const code = canonicalUnitCode(props.process.basisUnit);
+  const label = ({ kg: '千克', g: '克', L: '升', mL: '毫升' } as Record<string, string>)[code]
+    || displayUnit(code);
+  return `${quantity}${label}`;
+}
+
+function dosageLabel(binding: SeasoningBindingView): string {
+  return `${Number(binding.dosagePerKgG).toFixed(4)} 克/${basisLabel()}`;
+}
 </script>
 
 <template>
   <el-card
-    :data-testid="`seasoning-process-${process.workProcessId}`"
+    :data-testid="`seasoning-process-${process.workflowProcessNodeId}`"
     shadow="never"
     class="process-card"
   >
@@ -43,7 +57,8 @@ function bindingName(binding: SeasoningBindingView): string {
 
     <div v-show="expanded" class="process-card__body">
       <div class="process-card__actions">
-        <span>每 1 kg 本工序半成品投入量</span>
+        <span v-if="process.standardUsageSupported === true">每 {{ basisLabel() }} 本工序产出投入量</span>
+        <span v-else class="unsupported-basis">投入基准单位未解析，现有配置只读</span>
         <el-button
           v-if="editable"
           data-testid="add-seasoning-binding"
@@ -58,13 +73,13 @@ function bindingName(binding: SeasoningBindingView): string {
           <template #default="{ row }">
             <strong>{{ bindingName(row) }}</strong>
             <div
-              v-if="otherProcessUsages(processes, row.materialTypeId, process.workProcessId).length"
+              v-if="otherProcessUsages(processes, row.materialTypeId, process.workflowProcessNodeId).length"
               class="reuse-hint"
-            >另用于 {{ otherProcessUsages(processes, row.materialTypeId, process.workProcessId).length }} 个工序</div>
+            >另用于 {{ otherProcessUsages(processes, row.materialTypeId, process.workflowProcessNodeId).length }} 个工序节点</div>
           </template>
         </el-table-column>
         <el-table-column label="投入量" width="130" align="right">
-          <template #default="{ row }">{{ Number(row.dosagePerKgG).toFixed(4) }} g/kg</template>
+          <template #default="{ row }">{{ dosageLabel(row) }}</template>
         </el-table-column>
         <el-table-column label="锅序" min-width="150">
           <template #default="{ row }">
@@ -95,6 +110,7 @@ function bindingName(binding: SeasoningBindingView): string {
 .process-card__order { width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--el-color-primary-light-9); color: var(--el-color-primary); font-weight: 700; }
 .process-card__title { flex: 1; font-weight: 600; }
 .process-card__chevron, .process-card__actions, .reuse-hint { color: var(--el-text-color-secondary); font-size: 12px; }
+.unsupported-basis { color: var(--el-color-warning); }
 .process-card__actions { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .reuse-hint { margin-top: 2px; }
 </style>

@@ -4,11 +4,20 @@ import type {
   SeasoningProcessView,
 } from '@/api/bom';
 
+/** A target-specific DAG can have several roots converging on one process node. */
+export function uniqueProcessesByNode(processes: SeasoningProcessView[]): SeasoningProcessView[] {
+  const byNode = new Map<string, SeasoningProcessView>();
+  for (const process of [...processes].sort((a, b) => a.processOrder - b.processOrder)) {
+    if (!byNode.has(process.workflowProcessNodeId)) byNode.set(process.workflowProcessNodeId, process);
+  }
+  return [...byNode.values()];
+}
+
 export function groupBindingsByProcess(
   processes: SeasoningProcessView[],
 ): Record<string, SeasoningBindingView[]> {
   return Object.fromEntries(
-    processes.map((process) => [process.workProcessId, [...(process.bindings || [])]]),
+    processes.map((process) => [process.workflowProcessNodeId, [...(process.bindings || [])]]),
   );
 }
 
@@ -29,9 +38,12 @@ export function buildMaterialSummaries(
       };
       existing.usages.push({
         bindingId: binding.id,
+        workflowProcessNodeId: process.workflowProcessNodeId,
         workProcessId: process.workProcessId,
         processOrder: process.processOrder,
         processName: process.processName,
+        basisQuantity: process.basisQuantity ?? null,
+        basisUnit: process.basisUnit ?? null,
         dosagePerKgG: binding.dosagePerKgG,
         subsequentPotRatio: binding.subsequentPotRatio,
         countInSeasoning: binding.countInSeasoning,
@@ -55,11 +67,11 @@ export function findDuplicateBinding(
 export function otherProcessUsages(
   processes: SeasoningProcessView[],
   materialTypeId: string | null,
-  currentWorkProcessId: string,
+  currentWorkflowProcessNodeId: string,
 ): SeasoningProcessView[] {
   if (!materialTypeId) return [];
   return processes.filter(
-    (process) => process.workProcessId !== currentWorkProcessId
+    (process) => process.workflowProcessNodeId !== currentWorkflowProcessNodeId
       && (process.bindings || []).some((binding) => binding.materialTypeId === materialTypeId),
   );
 }

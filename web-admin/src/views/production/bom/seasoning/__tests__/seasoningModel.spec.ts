@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import type { SeasoningProcessView } from '@/api/bom';
-import { buildMaterialSummaries, findDuplicateBinding, groupBindingsByProcess, otherProcessUsages } from '../seasoningModel';
+import { buildMaterialSummaries, findDuplicateBinding, groupBindingsByProcess, otherProcessUsages, uniqueProcessesByNode } from '../seasoningModel';
 
 const processes: SeasoningProcessView[] = [
   {
-    workProcessId: 'ROLL', processOrder: 2, processName: '滚揉', bindings: [{
+    workflowProcessNodeId: 'node-roll', workProcessId: 'ROLL', processOrder: 2, processName: '滚揉', basisQuantity: 1, basisUnit: 'kg', standardUsageSupported: true, bindings: [{
       id: 1, workProcessId: 'ROLL', materialTypeId: 'M1', name: '辣椒粉', unit: 'g',
       dosagePerKgG: 5, subsequentPotRatio: 0.5, countInSeasoning: true, priceSnapshot: 18,
     }],
   },
   {
-    workProcessId: 'FRY', processOrder: 3, processName: '炸水', bindings: [{
+    workflowProcessNodeId: 'node-fry', workProcessId: 'FRY', processOrder: 3, processName: '炸水', basisQuantity: 1000, basisUnit: 'g', standardUsageSupported: true, bindings: [{
       id: 2, workProcessId: 'FRY', materialTypeId: 'M1', name: '辣椒粉', unit: 'g',
       dosagePerKgG: 1.5, subsequentPotRatio: null, countInSeasoning: true, priceSnapshot: 18,
     }],
@@ -19,8 +19,8 @@ const processes: SeasoningProcessView[] = [
 
 describe('seasoning workspace model', () => {
   it('groups bindings by workflow process', () => {
-    expect(groupBindingsByProcess(processes).ROLL).toHaveLength(1);
-    expect(groupBindingsByProcess(processes).FRY[0].dosagePerKgG).toBe(1.5);
+    expect(groupBindingsByProcess(processes)['node-roll']).toHaveLength(1);
+    expect(groupBindingsByProcess(processes)['node-fry'][0].dosagePerKgG).toBe(1.5);
   });
 
   it('deduplicates a material into one summary while preserving two independent usages', () => {
@@ -39,6 +39,12 @@ describe('seasoning workspace model', () => {
   });
 
   it('finds reuse in other processes without treating it as a duplicate', () => {
-    expect(otherProcessUsages(processes, 'M1', 'ROLL').map((process) => process.workProcessId)).toEqual(['FRY']);
+    expect(otherProcessUsages(processes, 'M1', 'node-roll').map((process) => process.workProcessId)).toEqual(['FRY']);
+  });
+
+  it('renders a process shared by two reachable roots only once', () => {
+    const duplicated = [processes[0], { ...processes[0], processOrder: 99 }];
+    expect(uniqueProcessesByNode(duplicated)).toHaveLength(1);
+    expect(buildMaterialSummaries(uniqueProcessesByNode(duplicated))[0].usages).toHaveLength(1);
   });
 });

@@ -12,6 +12,8 @@ import type {
   BomRecipeItemView,
   BomCopyCandidate,
   CopyBomToProductRequest,
+  ProductPackagingSpecView,
+  ProductConfigurationReadiness,
 } from '@/api/bom';
 import * as XLSX from 'xlsx';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -70,13 +72,27 @@ const historicalYieldLoadFailed = ref(false);
 const selectedRecipe = computed(() =>
   bomRecipes.value.find((recipe) => recipe.id === selectedRecipeId.value) ?? null,
 );
+const configurationReadiness = ref<ProductConfigurationReadiness | null>(null);
+const configurationReadinessLoaded = ref(false);
+const configurationReadinessLoading = ref(false);
+const configurationReadinessError = ref('');
+const bomConfigurationAllowed = computed(() => (
+  configurationReadinessLoaded.value
+  && configurationReadiness.value?.bomConfigurable === true
+));
+const workflowFirstGuidance = computed(() => {
+  if (configurationReadinessLoading.value) return '正在核对 Workflow 工序结构…';
+  if (configurationReadinessError.value) return 'Workflow 完整性状态读取失败，BOM 编辑已安全锁定';
+  if (bomConfigurationAllowed.value) return '';
+  return configurationReadiness.value?.issues?.[0]?.message || '请先完成 Workflow 工序配置并保存结构完整的草稿';
+});
 const recipeVersionLimitReached = computed(() => bomRecipes.value.length >= MAX_RECIPE_VERSIONS);
 const ensureDraftLoading = ref(false);
 const draftRecipe = computed(() => bomRecipes.value.find((recipe) => recipe.status === 'DRAFT') ?? null);
 const draftActionLabel = computed(() => {
   if (draftRecipe.value) return '继续编辑草稿';
   if (bomRecipes.value.some((recipe) => recipe.status === 'ACTIVE' && recipe.isCurrent)) return '新建版本';
-  return '开始编辑 BOM';
+  return '创建首版 BOM';
 });
 
 function formatFriendlyNumber(value: unknown, maxDecimals = 4): string {
@@ -127,6 +143,59 @@ async function refreshEnsuredDraft(draft: BomRecipeSummary) {
   await Promise.all([loadBomItems(), loadCostSummary()]);
 }
 
+async function loadConfigurationReadiness(recipeId?: string | null): Promise<boolean> {
+  const currentFactoryId = factoryId.value;
+  const productTypeId = selectedProductTypeId.value;
+  if (!currentFactoryId || !productTypeId) {
+    configurationReadiness.value = null;
+    configurationReadinessLoaded.value = false;
+    return false;
+  }
+  configurationReadinessLoading.value = true;
+  configurationReadinessError.value = '';
+  try {
+    const response = await bomRecipeApi.getProductConfigurationReadiness(
+      currentFactoryId,
+      productTypeId,
+      recipeId,
+    );
+    if (selectedProductTypeId.value !== productTypeId) return false;
+    if (!response.success || !response.data) throw new Error(response.message || '产品配置完整性响应为空');
+    configurationReadiness.value = response.data;
+    configurationReadinessLoaded.value = true;
+    return response.data.bomConfigurable === true;
+  } catch (error: unknown) {
+    if (selectedProductTypeId.value !== productTypeId) return false;
+    configurationReadiness.value = null;
+    configurationReadinessLoaded.value = false;
+    configurationReadinessError.value = (error as { message?: string }).message || '产品配置完整性读取失败';
+    return false;
+  } finally {
+    if (selectedProductTypeId.value === productTypeId) configurationReadinessLoading.value = false;
+  }
+}
+
+async function ensureBomConfigurable(): Promise<boolean> {
+  const allowed = configurationReadinessLoaded.value
+    ? bomConfigurationAllowed.value
+    : await loadConfigurationReadiness(selectedRecipeId.value || null);
+  if (allowed) return true;
+  ElMessage({
+    message: `${workflowFirstGuidance.value}。BOM 不会创建草稿或写入明细。`,
+    type: 'warning',
+    duration: 0,
+    showClose: true,
+  });
+  return false;
+}
+
+function goWorkflowConfiguration() {
+  router.push({
+    path: '/system/product-processes',
+    query: { productTypeId: selectedProductTypeId.value },
+  });
+}
+
 const ensureEditableDraftRequest = createBomDraftEnsurer(
   (currentFactoryId, productTypeId) => bomRecipeApi.ensureDraft(currentFactoryId, productTypeId),
   refreshEnsuredDraft,
@@ -137,6 +206,7 @@ async function ensureEditableDraft(): Promise<BomRecipeSummary | null> {
     ElMessage.warning('请先选择产品，再编辑 BOM');
     return null;
   }
+  if (!(await ensureBomConfigurable())) return null;
   ensureDraftLoading.value = true;
   try {
     return await ensureEditableDraftRequest(factoryId.value, selectedProductTypeId.value);
@@ -154,8 +224,7 @@ async function ensureEditableDraft(): Promise<BomRecipeSummary | null> {
 }
 
 async function handleEnsureDraftVersion() {
-  const draft = await ensureEditableDraft();
-  if (draft) ElMessage.success(draft.version === 1 ? 'BOM 草稿已就绪，可以直接添加明细' : `已进入 v${draft.version} 草稿`);
+  await ensureEditableDraft();
 }
 
 async function handleCloneSelectedRecipe() {
@@ -303,6 +372,7 @@ const selectedProductName = computed(() => {
 // Phase 1: 配方头产出规格改为从 SKU (ProductType) 只读带入，不再让用户手填。
 // 产出单位 ← SKU.unit（份/盒/…）；每单位产出量 ← SKU.gramsPerUnit（标准克重，克）。
 const selectedProductMeta = ref<Record<string, unknown> | null>(null);
+const productPackagingSpecs = ref<ProductPackagingSpecView[]>([]);
 const skuOutputUnit = computed(() => {
   const u = selectedProductMeta.value?.unit;
   return u ? String(u) : '份';
@@ -312,6 +382,48 @@ const skuGramsPerUnit = computed<number | null>(() => {
   if (g == null || g === '') return null;
   const n = Number(g);
   return Number.isFinite(n) && n > 0 ? n : null;
+});
+
+const skuBaseUnit = computed(() => canonicalUnitCode(selectedProductMeta.value?.unit) || 'pcs');
+const skuNetContentLabel = computed(() => {
+  const quantity = selectedProductMeta.value?.netContentQuantity ?? selectedProductMeta.value?.gramsPerUnit;
+  const unit = selectedProductMeta.value?.netContentUnit ?? 'g';
+  if (quantity == null || Number(quantity) <= 0) return '';
+  return `${formatFriendlyNumber(quantity)}${displayUnit(unit)}`;
+});
+
+interface PackagingLayerOption {
+  key: string;
+  specId: string | null;
+  name: string;
+  packageUnit: string;
+  baseUnit: string;
+  conversionFactor: number;
+  summary: string;
+}
+
+const packagingLayerOptions = computed<PackagingLayerOption[]>(() => {
+  const baseLabel = displayUnit(skuBaseUnit.value);
+  const base: PackagingLayerOption = {
+    key: '__BASE__',
+    specId: null,
+    name: '基本销售规格',
+    packageUnit: skuBaseUnit.value,
+    baseUnit: skuBaseUnit.value,
+    conversionFactor: 1,
+    summary: `1${baseLabel}${skuNetContentLabel.value ? `（净含量${skuNetContentLabel.value}）` : ''}`,
+  };
+  return [base, ...productPackagingSpecs.value
+    .filter((spec) => spec.active !== false)
+    .map((spec) => ({
+      key: spec.id,
+      specId: spec.id,
+      name: spec.name,
+      packageUnit: canonicalUnitCode(spec.packageUnit),
+      baseUnit: canonicalUnitCode(spec.baseUnit),
+      conversionFactor: Number(spec.conversionFactor),
+      summary: `1${displayUnit(spec.packageUnit)} = ${formatFriendlyNumber(spec.conversionFactor)}${displayUnit(spec.baseUnit)}`,
+    }))];
 });
 
 // Phase 1: 添加原辅料「高级选项」折叠状态（默认收起）
@@ -336,6 +448,21 @@ interface BomItemRow {
   notes?: string;
   isOptional?: boolean;
   substituteGroup?: string;
+  substitutes?: Array<{ materialTypeId: string; conversionFactor?: number | null }>;
+  substituteDetails?: Array<{
+    materialTypeId: string;
+    materialName?: string;
+    materialUnit?: string;
+    conversionFactor?: number | null;
+  }>;
+  packagingSpecId?: string | null;
+  packagingSpecNameSnapshot?: string | null;
+  packagingRole?: string | null;
+  naturalQuantity?: number | null;
+  naturalUnit?: string | null;
+  packagingPackageUnitSnapshot?: string | null;
+  packagingBaseUnitSnapshot?: string | null;
+  packagingConversionFactorSnapshot?: number | null;
   // SP4-8: 按份数投料 + 半成品引用
   perPortion?: boolean;
   semiFinishedRefCode?: string;
@@ -387,14 +514,16 @@ const bomForm = ref({
   sortOrder: 0,
   notes: '',
   isOptional: false as boolean,
-  substituteGroup: '' as string,
+  substituteMaterialTypeIds: [] as string[],
+  substituteFactors: {} as Record<string, number | null>,
+  packagingLayerKey: '__BASE__',
+  packagingRole: '' as string,
+  naturalQuantity: null as number | null,
   // SP4-8: 按份数投料 + 半成品引用
   perPortion: false as boolean,
   semiFinishedRefCode: '' as string,
   // SP12 #728: 组合装子产品/嵌套 BOM
   subProductTypeId: '' as string,
-  // #759: 包材每产品单位用量 (仅 PACKAGING 有意义; null=未配置需手填 standardQuantity)
-  packQtyPerProduct: null as number | null,
 });
 
 // SP8: 半成品产品类型列表 (用于 semiFinishedRefCode 下拉)
@@ -437,24 +566,24 @@ function recipeUnitForMaterial(material: Record<string, unknown>, category: stri
 
 function bomUnitLabel(unit?: unknown): string {
   const u = normalizeUnitValue(unit);
-  if (u === 'g') return '克 (g)';
-  if (u === 'kg') return '千克 (kg)';
-  if (u === 'mL') return '毫升 (mL)';
-  if (u === 'L') return '升 (L)';
-  if (u === 'pcs') return '件 (pcs)';
+  if (u === 'g') return '克';
+  if (u === 'kg') return '千克';
+  if (u === 'mL') return '毫升';
+  if (u === 'L') return '升';
+  if (u === 'pcs') return '件';
   return displayUnit(u) || '单位';
 }
 
 const bomFormUnitLabel = computed(() => bomUnitLabel(bomForm.value.unit));
 const bomUnitIsCounting = computed(() => isCountingUnit(bomForm.value.unit));
-const bomUnitOptions = computed(() => {
-  const materialUnit = canonicalUnitCode(selectedMaterialUnit());
-  if (isWeightUnit(materialUnit)) return ['kg', 'g'];
-  if (isVolumeUnit(materialUnit)) return ['L', 'mL'];
-  return materialUnit ? [materialUnit] : [];
-});
-
 function bomLineAmountPreview(row: BomItemRow) {
+  if (row.standardQuantity == null) {
+    return {
+      amount: null,
+      source: 'pending' as const,
+      message: '实际用量由生产报工记录',
+    };
+  }
   const yieldRate = row.yieldRate != null ? Number(row.yieldRate) : 100;
   const pricingQuantity = Number(row.standardQuantity || 0) / (yieldRate / 100 || 1);
   return pricingAmountPreview({
@@ -556,6 +685,117 @@ const filteredMaterialTypesForBomForm = computed<TableRow[]>(() => {
     return allowed.has(big);
   });
 });
+
+function packagingClassificationKey(material: Record<string, unknown> | undefined): string {
+  if (!material) return '';
+  const code = String(material.primaryCode || material.code || '').replace(/\s+/g, '');
+  if (/^\d{10,}$/.test(code)) return `code:${code.slice(0, 10)}`;
+  const category = String(material.category || '').trim();
+  return category && !['包材', 'PACKAGING'].includes(category.toUpperCase())
+    ? `category:${category}`
+    : '';
+}
+
+const substituteCandidates = computed<TableRow[]>(() => {
+  const candidates = filteredMaterialTypesForBomForm.value.filter(
+    (item) => item.id !== bomForm.value.materialTypeId,
+  );
+  if (bomForm.value.materialCategory !== 'PACKAGING') return candidates;
+  const selectedKey = packagingClassificationKey(selectedMaterialRecord());
+  if (!selectedKey) return [];
+  return candidates.filter((item) => packagingClassificationKey(item) === selectedKey);
+});
+
+function substituteUnit(materialTypeId: string): string {
+  const material = materialTypes.value.find((item) => item.id === materialTypeId);
+  return canonicalUnitCode(material?.quantityUnit || material?.unit);
+}
+
+function substituteNeedsExplicitFactor(materialTypeId: string): boolean {
+  return substituteUnit(materialTypeId) !== canonicalUnitCode(bomForm.value.quantityUnit || bomForm.value.unit);
+}
+
+function validateSubstituteInputs(): boolean {
+  if (bomForm.value.materialCategory === 'PACKAGING' && bomForm.value.substituteMaterialTypeIds.length) {
+    const parentKey = packagingClassificationKey(selectedMaterialRecord());
+    const incompatible = bomForm.value.substituteMaterialTypeIds.find((materialTypeId) => {
+      const candidate = materialTypes.value.find((item) => item.id === materialTypeId);
+      return !parentKey || packagingClassificationKey(candidate) !== parentKey;
+    });
+    if (incompatible) {
+      ElMessage.warning('包材替代必须与主包材属于同一分类/包装作用域，请重新选择');
+      return false;
+    }
+  }
+  const missingFactor = bomForm.value.substituteMaterialTypeIds.find((materialTypeId) => {
+    if (!substituteNeedsExplicitFactor(materialTypeId)) return false;
+    const factor = Number(bomForm.value.substituteFactors[materialTypeId]);
+    return !Number.isFinite(factor) || factor <= 0;
+  });
+  if (missingFactor) {
+    ElMessage.warning('不同单位的替代物料必须填写大于0的明确等价换算系数');
+    return false;
+  }
+  return true;
+}
+
+const selectedPackagingLayer = computed(() =>
+  packagingLayerOptions.value.find((layer) => layer.key === bomForm.value.packagingLayerKey)
+  ?? packagingLayerOptions.value[0],
+);
+
+const packagingNaturalQuantityLabel = computed(() => {
+  const layer = selectedPackagingLayer.value;
+  return layer ? `每1${displayUnit(layer.packageUnit)}用量` : '自然用量';
+});
+
+const packagingRoleOptions = [
+  { value: 'PRIMARY_CONTAINER', label: '直接接触容器' },
+  { value: 'SEAL', label: '封口/封膜' },
+  { value: 'OUTER_CASE', label: '外包装箱' },
+  { value: 'LABEL', label: '标签' },
+  { value: 'OTHER', label: '其他包材' },
+];
+
+const bomItemCategoryLabel = computed(() => {
+  if (bomForm.value.materialCategory === 'PACKAGING') return '包材';
+  if (bomForm.value.materialCategory === 'AUXILIARY') return '工序辅料';
+  return '原料';
+});
+
+function onPackagingLayerChange() {
+  const layer = selectedPackagingLayer.value;
+  if (!layer) return;
+  if (layer.key !== '__BASE__' && bomForm.value.packagingRole === 'PRIMARY_CONTAINER') {
+    bomForm.value.packagingRole = 'OUTER_CASE';
+  }
+}
+
+function packagingLayerSummary(row: BomItemRow): string {
+  if (row.packagingSpecId) {
+    return row.packagingSpecNameSnapshot
+      || `${displayUnit(row.packagingPackageUnitSnapshot)}装规格`;
+  }
+  return `基本规格（${displayUnit(row.packagingBaseUnitSnapshot || skuBaseUnit.value)}）`;
+}
+
+function packagingNaturalUsage(row: BomItemRow): string {
+  const quantity = row.naturalQuantity ?? row.standardQuantity;
+  const denominator = row.packagingPackageUnitSnapshot || skuBaseUnit.value;
+  return `${formatFriendlyNumber(quantity)} ${displayUnit(row.naturalUnit || row.unit)}/${displayUnit(denominator)}`;
+}
+
+function packagingBaseUsage(row: BomItemRow): string {
+  return `${formatFriendlyNumber(row.standardQuantity)} ${displayUnit(row.unit)}/${displayUnit(row.packagingBaseUnitSnapshot || skuBaseUnit.value)}`;
+}
+
+function substituteSummary(row: BomItemRow): string {
+  if (!Array.isArray(row.substituteDetails) || row.substituteDetails.length === 0) return '—';
+  return row.substituteDetails
+    .map((item) => item.materialName || item.materialTypeId)
+    .filter(Boolean)
+    .join('、');
+}
 
 function bomCopyErrorMessage(error: unknown, fallback: string) {
   return (error as { response?: { data?: { message?: string } } })?.response?.data?.message
@@ -679,7 +919,14 @@ onMounted(async () => {
 
 watch(selectedProductTypeId, async (newVal) => {
   if (newVal) {
-    await loadSelectedProductMeta(newVal);
+    configurationReadiness.value = null;
+    configurationReadinessLoaded.value = false;
+    configurationReadinessError.value = '';
+    await Promise.all([
+      loadSelectedProductMeta(newVal),
+      loadProductPackagingSpecs(newVal),
+      loadConfigurationReadiness(null),
+    ]);
     await loadBomRecipes();
     await loadBomItems();
     await loadLaborCosts();
@@ -687,6 +934,7 @@ watch(selectedProductTypeId, async (newVal) => {
     await loadHistoricalYield();
   } else {
     selectedProductMeta.value = null;
+    productPackagingSpecs.value = [];
     bomItems.value = [];
     laborCosts.value = [];
     costSummary.value = null;
@@ -696,12 +944,15 @@ watch(selectedProductTypeId, async (newVal) => {
     bomCopyDialogVisible.value = false;
     historicalYield.value = null;
     historicalYieldLoadFailed.value = false;
+    configurationReadiness.value = null;
+    configurationReadinessLoaded.value = false;
+    configurationReadinessError.value = '';
   }
 });
 
 watch(selectedRecipeId, async (nextRecipeId, previousRecipeId) => {
   if (nextRecipeId !== previousRecipeId) {
-    await loadBomItems();
+    await Promise.all([loadBomItems(), loadConfigurationReadiness(nextRecipeId || null)]);
   }
 });
 
@@ -826,6 +1077,20 @@ async function loadSelectedProductMeta(productTypeId: string) {
   }
 }
 
+async function loadProductPackagingSpecs(productTypeId: string) {
+  if (!factoryId.value || !productTypeId) {
+    productPackagingSpecs.value = [];
+    return;
+  }
+  try {
+    const response = await bomRecipeApi.getProductPackagingSpecs(factoryId.value, productTypeId);
+    productPackagingSpecs.value = response.success && Array.isArray(response.data) ? response.data : [];
+  } catch {
+    productPackagingSpecs.value = [];
+    ElMessage.warning('包装规格加载失败，包材配置暂不可保存');
+  }
+}
+
 async function loadMaterialTypes() {
   if (!factoryId.value) return;
   try {
@@ -842,6 +1107,8 @@ async function loadMaterialTypes() {
 
 function onMaterialLink(materialTypeId: string) {
   if (!materialTypeId) return;
+  bomForm.value.substituteMaterialTypeIds = [];
+  bomForm.value.substituteFactors = {};
   const material = materialTypes.value.find((m: Record<string, unknown>) => m.id === materialTypeId);
   if (material) {
     if (material.name) bomForm.value.materialName = String(material.name);
@@ -853,9 +1120,6 @@ function onMaterialLink(materialTypeId: string) {
     bomForm.value.priceUnit = canonicalUnitCode(material.priceUnit || material.unit);
     const taxRate = String(material.taxRate || '');
     bomForm.value.taxRate = taxRate === 'TAX_9' ? 9 : taxRate === 'TAX_13' ? 13 : 0;
-    if (bomForm.value.materialCategory === 'PACKAGING' && material.packQtyPerProduct != null) {
-      bomForm.value.standardQuantity = Number(material.packQtyPerProduct);
-    }
   }
 }
 
@@ -867,19 +1131,36 @@ async function loadBomItems() {
   }
   loading.value = true;
   try {
-    const response = await bomRecipeApi.getDetail(factoryId.value, selectedRecipeId.value);
+    const [response, substituteResponse] = await Promise.all([
+      bomRecipeApi.getDetail(factoryId.value, selectedRecipeId.value),
+      bomRecipeApi.listSubstitutes(factoryId.value, selectedRecipeId.value),
+    ]);
     if (response.success && response.data) {
-      bomItems.value = (response.data.items || []) as unknown as TableRow[];
+      const relations = substituteResponse.success && Array.isArray(substituteResponse.data)
+        ? substituteResponse.data
+        : [];
+      bomItems.value = (response.data.items || []).map((rawItem) => ({
+        ...rawItem,
+        substituteDetails: relations
+          .filter((relation) => relation.parentRecipeItemId === rawItem.id)
+          .map((relation) => ({
+            materialTypeId: relation.substituteMaterialTypeId,
+            materialName: relation.substituteMaterialName || relation.substituteMaterialCode || relation.substituteMaterialTypeId,
+            materialUnit: relation.substituteUnit || undefined,
+            conversionFactor: relation.conversionFactor,
+          })),
+      })) as unknown as BomItemRow[];
     }
   } catch (error: unknown) {
     const err = error as { actionHint?: string };
-    if (!err?.actionHint) ElMessage.error('Failed to load BOM data');
+    if (!err?.actionHint) ElMessage.error('BOM 明细加载失败');
   } finally {
     loading.value = false;
   }
 }
 
 async function handleAddBomItem() {
+  if (!(await ensureBomConfigurable())) return;
   if (!selectedRecipe.value || selectedRecipe.value.status !== 'DRAFT') {
     const draft = await ensureEditableDraft();
     if (!draft) return;
@@ -902,16 +1183,20 @@ async function handleAddBomItem() {
     sortOrder: bomItems.value.length,
     notes: '',
     isOptional: false,
-    substituteGroup: '',
+    substituteMaterialTypeIds: [],
+    substituteFactors: {},
+    packagingLayerKey: '__BASE__',
+    packagingRole: activeCategoryTab.value === 'PACKAGING' ? 'PRIMARY_CONTAINER' : '',
+    naturalQuantity: null,
     perPortion: false,
     semiFinishedRefCode: '',
     subProductTypeId: '',
-    packQtyPerProduct: null,
   };
   bomDialogVisible.value = true;
 }
 
-function handleEditBomItem(row: TableRow) {
+async function handleEditBomItem(row: TableRow) {
+  if (!(await ensureBomConfigurable())) return;
   if (!selectedRecipe.value || selectedRecipe.value.status !== 'DRAFT') {
     ElMessage.warning('生效版本不可直接修改，请先克隆为草稿');
     return;
@@ -923,7 +1208,7 @@ function handleEditBomItem(row: TableRow) {
     materialTypeId: row.materialTypeId,
     materialName: row.materialName,
     materialCategory: (row.materialCategory as string) || 'RAW',
-    standardQuantity: row.standardQuantity || 0,
+    standardQuantity: row.standardQuantity != null ? Number(row.standardQuantity) : null,
     // Phase A: 编辑时保留原值 (可为 null = 待评估)
     yieldRate: row.yieldRate != null ? (row.yieldRate as number) : null,
     unit: String(row.quantityUnit || row.unit || ''),
@@ -934,17 +1219,29 @@ function handleEditBomItem(row: TableRow) {
     sortOrder: row.sortOrder || 0,
     notes: row.notes || '',
     isOptional: Boolean(row.isOptional),
-    substituteGroup: String(row.substituteGroup || ''),
+    substituteMaterialTypeIds: Array.isArray(row.substituteDetails)
+      ? row.substituteDetails.map((item) => String(item.materialTypeId))
+      : [],
+    substituteFactors: Array.isArray(row.substituteDetails)
+      ? Object.fromEntries(row.substituteDetails.map((item) => [
+        String(item.materialTypeId),
+        item.conversionFactor == null ? null : Number(item.conversionFactor),
+      ]))
+      : {},
+    packagingLayerKey: String(row.packagingSpecId || '__BASE__'),
+    packagingRole: String(row.packagingRole || ''),
+    naturalQuantity: row.naturalQuantity != null ? Number(row.naturalQuantity) : null,
     perPortion: (row.perPortion as boolean) ?? false,
     semiFinishedRefCode: String(row.semiFinishedRefCode || ''),
     subProductTypeId: String(row.subProductTypeId || ''),
-    packQtyPerProduct: row.packQtyPerProduct != null ? Number(row.packQtyPerProduct) : null,
   };
   bomDialogVisible.value = true;
 }
 
 function buildRecipeItemPayload(): BomRecipeItemPayload {
   const quantityUnit = canonicalUnitCode(bomForm.value.quantityUnit || bomForm.value.unit);
+  const layer = selectedPackagingLayer.value;
+  const isPackaging = bomForm.value.materialCategory === 'PACKAGING';
   return {
     materialTypeId: String(bomForm.value.materialTypeId || ''),
     standardQuantity: bomForm.value.standardQuantity == null
@@ -957,7 +1254,16 @@ function buildRecipeItemPayload(): BomRecipeItemPayload {
     materialCategory: String(bomForm.value.materialCategory || 'RAW'),
     sortOrder: Number(bomForm.value.sortOrder || 0),
     isOptional: Boolean(bomForm.value.isOptional),
-    substituteGroup: String(bomForm.value.substituteGroup || '') || null,
+    substituteGroup: null,
+    packagingSpecId: isPackaging && layer?.specId ? layer.specId : null,
+    packagingRole: isPackaging ? String(bomForm.value.packagingRole || '') : null,
+    naturalQuantity: isPackaging ? Number(bomForm.value.naturalQuantity) : null,
+    substitutes: bomForm.value.substituteMaterialTypeIds.map((materialTypeId) => ({
+      materialTypeId,
+      conversionFactor: substituteNeedsExplicitFactor(materialTypeId)
+        ? bomForm.value.substituteFactors[materialTypeId] ?? null
+        : null,
+    })),
     remark: String(bomForm.value.notes || '') || null,
     perPortion: Boolean(bomForm.value.perPortion),
     semiFinishedRefCode: String(bomForm.value.semiFinishedRefCode || '') || null,
@@ -966,25 +1272,41 @@ function buildRecipeItemPayload(): BomRecipeItemPayload {
 }
 
 async function submitBomForm() {
+  if (!(await ensureBomConfigurable())) return;
   // 类别由当前分区锁定，不让用户在弹窗里重复选择。
   bomForm.value.materialCategory = activeCategoryTab.value;
   // Phase 1: 物料名称已改为从「关联原料」自动带入，校验改为要求选中关联原料
   if (!bomForm.value.materialTypeId) {
-    ElMessage.warning(`请选择${activeCategoryTab.value === 'PACKAGING' ? '包材' : '原料'}（名称将自动带入）`);
+    ElMessage.warning(`请选择${bomItemCategoryLabel.value}（名称将自动带入）`);
     return;
   }
-  if (bomForm.value.materialCategory === 'RAW') {
-    // 原料只建立物料关联；实际投料由操作员填写并以仓储出库记录为真值。
+  if (bomForm.value.materialCategory === 'RAW' || bomForm.value.materialCategory === 'AUXILIARY') {
+    // 原料/辅料只建立配方资格关系；实际投料由计划和正式报工记录。
     bomForm.value.standardQuantity = null;
     bomForm.value.yieldRate = null;
-  } else if (bomForm.value.standardQuantity == null || Number(bomForm.value.standardQuantity) <= 0) {
-    ElMessage.warning('请填写每个成品需要的包材数量');
-    return;
+  } else {
+    const layer = selectedPackagingLayer.value;
+    const naturalQuantity = Number(bomForm.value.naturalQuantity);
+    if (!layer || !Number.isFinite(naturalQuantity) || naturalQuantity <= 0) {
+      ElMessage.warning('请选择包装规格并填写大于0的包材用量');
+      return;
+    }
+    if (!bomForm.value.packagingRole) {
+      ElMessage.warning('请选择包材角色');
+      return;
+    }
+    const factor = Number(layer.conversionFactor);
+    if (!Number.isFinite(factor) || factor <= 0) {
+      ElMessage.warning('包装规格换算无效，请先维护 SKU 包装规格');
+      return;
+    }
+    bomForm.value.standardQuantity = naturalQuantity / factor;
   }
   // Phase 1: 辅料/包材无出成率折算，固定 100 满足后端 yield_rate NOT NULL；原料保留 null=待评估
   if (bomForm.value.materialCategory !== 'RAW') {
     bomForm.value.yieldRate = 100;
   }
+  if (!validateSubstituteInputs()) return;
   if (!(await confirmBomUnitCompatibility())) return;
   bomDialogLoading.value = true;
   try {
@@ -1000,13 +1322,13 @@ async function submitBomForm() {
       response = await bomRecipeApi.addItem(factoryId.value, selectedRecipeId.value, bomItemPayload);
     }
     if (response.success) {
-      ElMessage.success(isBomEdit.value ? 'Updated successfully' : 'Added successfully');
+      ElMessage.success(isBomEdit.value ? 'BOM 明细已更新' : 'BOM 明细已添加');
       bomDialogVisible.value = false;
       await loadBomItems();
       await loadCostSummary();
     } else {
       ElMessage({
-        message: response.message || 'Operation failed',
+        message: response.message || 'BOM 明细保存失败',
         type: 'error',
         duration: 0,
         showClose: true,
@@ -1015,7 +1337,7 @@ async function submitBomForm() {
   } catch (error: unknown) {
     const err = error as { actionHint?: string };
     if (!err?.actionHint) ElMessage({
-      message: 'Operation failed',
+      message: 'BOM 明细保存失败',
       type: 'error',
       duration: 0,
       showClose: true,
@@ -1031,10 +1353,17 @@ async function handleDeleteBomItem(row: TableRow) {
     return;
   }
   try {
-    await ElMessageBox.confirm('Are you sure you want to delete this item?', 'Confirm', { type: 'warning' });
+    const materialName = String(row.materialName || row.materialTypeId || '该物料');
+    const substituteCount = Array.isArray(row.substitutes) ? row.substitutes.length : 0;
+    const relationNotice = substituteCount > 0 ? `，并同时移除 ${substituteCount} 个替代料关系` : '';
+    await ElMessageBox.confirm(
+      `确定从当前 BOM 草稿中删除『${materialName}』${relationNotice}吗？仅删除当前草稿明细，不会删除物料档案、库存或历史已激活 BOM。`,
+      row.materialCategory === 'PACKAGING' ? '删除包材' : row.materialCategory === 'AUXILIARY' ? '删除辅料' : '删除原料',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    );
     const response = await bomRecipeApi.removeItem(factoryId.value, Number(row.id));
     if (response.success) {
-      ElMessage.success('Deleted successfully');
+      ElMessage.success('BOM 明细已删除');
       await loadBomItems();
       await loadCostSummary();
     } else {
@@ -1138,13 +1467,13 @@ async function submitLaborForm() {
       response = await post(`/${factoryId.value}/bom/labor`, laborForm.value);
     }
     if (response.success) {
-      ElMessage.success(isLaborEdit.value ? 'Updated successfully' : 'Added successfully');
+      ElMessage.success(isLaborEdit.value ? '人工费用已更新' : '人工费用已添加');
       laborDialogVisible.value = false;
       await loadLaborCosts();
       await loadCostSummary();
     } else {
       ElMessage({
-        message: response.message || 'Operation failed',
+        message: response.message || '人工费用保存失败',
         type: 'error',
         duration: 0,
         showClose: true,
@@ -1153,7 +1482,7 @@ async function submitLaborForm() {
   } catch (error: unknown) {
     const err = error as { actionHint?: string };
     if (!err?.actionHint) ElMessage({
-      message: 'Operation failed',
+      message: '人工费用保存失败',
       type: 'error',
       duration: 0,
       showClose: true,
@@ -1165,10 +1494,14 @@ async function submitLaborForm() {
 
 async function handleDeleteLaborCost(row: TableRow) {
   try {
-    await ElMessageBox.confirm('Are you sure you want to delete this item?', 'Confirm', { type: 'warning' });
+    await ElMessageBox.confirm(
+      `确定删除人工费用『${String(row.processName || row.name || '未命名费用')}』吗？`,
+      '删除人工费用',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    );
     const response = await del(`/${factoryId.value}/bom/labor/${row.id}`);
     if (response.success) {
-      ElMessage.success('Deleted successfully');
+      ElMessage.success('人工费用已删除');
       await loadLaborCosts();
       await loadCostSummary();
     } else {
@@ -1255,13 +1588,13 @@ async function submitOverheadForm() {
       response = await post(`/${factoryId.value}/bom/overhead`, overheadForm.value);
     }
     if (response.success) {
-      ElMessage.success(isOverheadEdit.value ? 'Updated successfully' : 'Added successfully');
+      ElMessage.success(isOverheadEdit.value ? '均摊费用已更新' : '均摊费用已添加');
       overheadDialogVisible.value = false;
       await loadOverheadCosts();
       await loadCostSummary();
     } else {
       ElMessage({
-        message: response.message || 'Operation failed',
+        message: response.message || '均摊费用保存失败',
         type: 'error',
         duration: 0,
         showClose: true,
@@ -1270,7 +1603,7 @@ async function submitOverheadForm() {
   } catch (error: unknown) {
     const err = error as { actionHint?: string };
     if (!err?.actionHint) ElMessage({
-      message: 'Operation failed',
+      message: '均摊费用保存失败',
       type: 'error',
       duration: 0,
       showClose: true,
@@ -1282,10 +1615,14 @@ async function submitOverheadForm() {
 
 async function handleDeleteOverheadCost(row: TableRow) {
   try {
-    await ElMessageBox.confirm('Are you sure you want to delete this item?', 'Confirm', { type: 'warning' });
+    await ElMessageBox.confirm(
+      `确定删除均摊费用『${String(row.name || '未命名费用')}』吗？`,
+      '删除均摊费用',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    );
     const response = await del(`/${factoryId.value}/bom/overhead/${row.id}`);
     if (response.success) {
-      ElMessage.success('Deleted successfully');
+      ElMessage.success('均摊费用已删除');
       await loadOverheadCosts();
       await loadCostSummary();
     } else {
@@ -1332,6 +1669,9 @@ const materialCostTotal = computed(() => {
     return sum + (yieldRate > 0 ? (qty / yieldRate) * price : 0);
   }, 0);
 });
+const hasPendingActualMaterialUsage = computed(() => bomItems.value.some((item) =>
+  item.materialCategory !== 'PACKAGING' && item.standardQuantity == null,
+));
 
 const laborCostTotal = computed(() => {
   return laborCosts.value.reduce((sum, item) => {
@@ -1889,22 +2229,14 @@ watch(adjustDialogVisible, (visible) => {
           </el-select>
           <el-button :icon="Refresh" style="margin-left: 12px;" @click="refreshData">刷新</el-button>
           <el-button style="margin-left: 12px;" @click="changeLogVisible = true" :disabled="!selectedProductTypeId">变更记录</el-button>
-          <el-button
-            v-if="canWrite"
-            type="primary"
-            :icon="Plus"
-            style="margin-left: 12px;"
-            :loading="ensureDraftLoading"
-            :disabled="!selectedProductTypeId || (recipeVersionLimitReached && !draftRecipe)"
-            @click="handleEnsureDraftVersion"
-          >{{ draftActionLabel }}</el-button>
         </div>
         <div v-if="canViewPrice" class="header-right">
           <el-card class="cost-summary-card" shadow="never">
             <div class="cost-summary">
               <div class="cost-item">
                 <span class="cost-label">原料成本:</span>
-                <span class="cost-value">{{ formatFriendlyNumber(estimatedMaterialCost, 2) }} {{ costDisplayUnit }}</span>
+                <span v-if="hasPendingActualMaterialUsage" class="cost-value cost-value--pending">待生产报工归集</span>
+                <span v-else class="cost-value">{{ formatFriendlyNumber(estimatedMaterialCost, 2) }} {{ costDisplayUnit }}</span>
               </div>
               <div class="cost-item">
                 <span class="cost-label">人工成本:</span>
@@ -1915,7 +2247,7 @@ watch(adjustDialogVisible, (visible) => {
                 <span class="cost-value">{{ formatFriendlyNumber(estimatedOverheadCost, 2) }} {{ costDisplayUnit }}</span>
               </div>
               <div class="cost-item total">
-                <span class="cost-label">总成本:</span>
+                <span class="cost-label">{{ hasPendingActualMaterialUsage ? '当前已归集成本:' : '总成本:' }}</span>
                 <span class="cost-value">{{ formatFriendlyNumber(costPerSkuUnit, 2) }} {{ costDisplayUnit }}</span>
                 <span v-if="costPerKg != null" class="cost-secondary">
                   {{ formatFriendlyNumber(costPerKg, 2) }} 元/kg
@@ -1940,7 +2272,7 @@ watch(adjustDialogVisible, (visible) => {
             <el-tag size="small" :type="recipeVersionLimitReached ? 'warning' : 'info'">
               已用 {{ bomRecipes.length }}/{{ MAX_RECIPE_VERSIONS }} 个版本
             </el-tag>
-            <el-button v-if="canWrite" type="primary" size="small" :icon="Plus" :loading="ensureDraftLoading" :disabled="recipeVersionLimitReached && !draftRecipe" @click="handleEnsureDraftVersion">
+            <el-button v-if="canWrite && bomRecipes.length > 0" type="primary" size="small" :icon="Plus" :loading="ensureDraftLoading" :disabled="recipeVersionLimitReached && !draftRecipe" @click="handleEnsureDraftVersion">
               {{ draftActionLabel }}
             </el-button>
             <el-button
@@ -1995,10 +2327,13 @@ watch(adjustDialogVisible, (visible) => {
             <span v-else class="text-secondary">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="每单位产出" width="130" align="right">
+        <el-table-column label="每单位产出" min-width="210" align="right">
           <template #default="{ row }">
             <span v-if="row.outputQuantityPerUnit != null">
               {{ formatFriendlyNumber(row.outputQuantityPerUnit) }} {{ displayUnit(row.outputUnit) }}
+              <span v-if="row.netContentQuantity != null && row.netContentUnit" class="text-secondary">
+                （净含量 {{ formatFriendlyNumber(row.netContentQuantity) }} {{ displayUnit(row.netContentUnit) }}）
+              </span>
             </span>
             <span v-else class="text-secondary">—</span>
           </template>
@@ -2032,25 +2367,7 @@ watch(adjustDialogVisible, (visible) => {
         </el-table-column>
         <el-table-column label="操作" width="260" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button
-              v-if="canWrite && row.status === 'DRAFT'"
-              type="primary"
-              link
-              size="small"
-              @click="selectedRecipeId = row.id"
-            >
-              编辑
-            </el-button>
-            <el-button
-              v-else-if="canWrite && row.isCurrent"
-              type="primary"
-              link
-              size="small"
-              @click="handleEnsureDraftVersion"
-              :disabled="recipeVersionLimitReached && !draftRecipe"
-            >
-              {{ draftRecipe ? '继续编辑草稿' : '新建版本' }}
-            </el-button>
+            <el-button type="primary" link size="small" @click="selectedRecipeId = row.id">查看</el-button>
             <el-button
               v-if="canWrite && row.status !== 'ACTIVE'"
               type="danger"
@@ -2087,13 +2404,41 @@ watch(adjustDialogVisible, (visible) => {
           <div class="table-header">
             <span class="table-title">{{ activeCategoryTab === 'AUXILIARY' ? '工序辅料明细' : activeCategoryTab === 'PACKAGING' ? '包材需求明细' : '原料需求明细' }}</span>
             <div v-if="activeCategoryTab !== 'AUXILIARY'" class="table-actions">
-              <el-button v-if="canWrite" type="primary" size="small" :icon="Plus" @click="handleAddBomItem">
-                {{ activeCategoryTab === 'PACKAGING' ? '添加包材' : '添加原料' }}
-              </el-button>
+              <el-tooltip
+                v-if="canWrite"
+                :disabled="bomConfigurationAllowed"
+                :content="workflowFirstGuidance"
+                placement="top"
+              >
+                <span>
+                  <el-button
+                    type="primary"
+                    size="small"
+                    :icon="Plus"
+                    :disabled="!bomConfigurationAllowed || configurationReadinessLoading"
+                    data-testid="add-bom-item"
+                    @click="handleAddBomItem"
+                  >{{ activeCategoryTab === 'PACKAGING' ? '添加包材' : '添加原料' }}</el-button>
+                </span>
+              </el-tooltip>
               <el-button size="small" :icon="Download" @click="exportToExcel('material')">导出</el-button>
             </div>
           </div>
         </template>
+        <el-alert
+          v-if="workflowFirstGuidance"
+          data-testid="workflow-first-bom-gate"
+          :type="configurationReadinessError ? 'error' : 'warning'"
+          show-icon
+          :closable="false"
+          :title="workflowFirstGuidance"
+          class="workflow-first-alert"
+        >
+          <template #default>
+            <span>BOM 写入已锁定，不会创建草稿或保存明细。</span>
+            <el-button link type="primary" @click="goWorkflowConfiguration">前往配置 Workflow</el-button>
+          </template>
+        </el-alert>
         <el-tabs v-model="activeCategoryTab" class="bom-category-tabs">
           <el-tab-pane name="RAW" :label="`原料 (${rawItems.length})`" />
           <el-tab-pane name="AUXILIARY" :label="`辅料 (${auxiliaryItems.length})`" />
@@ -2143,11 +2488,9 @@ watch(adjustDialogVisible, (visible) => {
           />
           <el-empty
             v-else
-            description="请先为当前 SKU 创建 BOM 配方，再配置工序调料"
+            description="请先从原料、辅料或包材页添加首条明细，系统会自动创建唯一 BOM 草稿"
             :image-size="64"
-          >
-            <el-button v-if="canWrite && selectedProductTypeId" type="primary" :loading="ensureDraftLoading" @click="handleEnsureDraftVersion">{{ draftActionLabel }}</el-button>
-          </el-empty>
+          />
         </div>
 
         <el-table v-else empty-text="暂无数据" :data="currentTabItems" v-loading="loading" stripe border size="small" style="width: 100%"
@@ -2159,15 +2502,24 @@ watch(adjustDialogVisible, (visible) => {
               <span v-else class="text-secondary">—</span>
             </template>
           </el-table-column>
-          <el-table-column prop="substituteGroup" label="替代组" width="100" show-overflow-tooltip>
+          <el-table-column label="替代物料" min-width="150" show-overflow-tooltip>
             <template #default="{ row }">
-              <span v-if="row.substituteGroup">{{ row.substituteGroup }}</span>
-              <span v-else class="text-secondary">—</span>
+              <span :class="{ 'text-secondary': !row.substituteDetails?.length }">{{ substituteSummary(row) }}</span>
             </template>
           </el-table-column>
-          <el-table-column v-if="activeCategoryTab === 'PACKAGING'" prop="standardQuantity" label="每成品用量" width="120" align="right">
+          <el-table-column v-if="activeCategoryTab === 'PACKAGING'" label="包装规格" min-width="150">
             <template #default="{ row }">
-              {{ formatFriendlyNumber(row.standardQuantity) }} {{ displayUnit(row.unit) }}
+              {{ packagingLayerSummary(row) }}
+            </template>
+          </el-table-column>
+          <el-table-column v-if="activeCategoryTab === 'PACKAGING'" label="自然用量" min-width="130" align="right">
+            <template #default="{ row }">
+              {{ packagingNaturalUsage(row) }}
+            </template>
+          </el-table-column>
+          <el-table-column v-if="activeCategoryTab === 'PACKAGING'" label="折算基础用量" min-width="140" align="right">
+            <template #default="{ row }">
+              {{ packagingBaseUsage(row) }}
             </template>
           </el-table-column>
           <el-table-column prop="unit" label="计量单位" width="90" align="center">
@@ -2194,8 +2546,9 @@ watch(adjustDialogVisible, (visible) => {
           </el-table-column>
         </el-table>
         <div v-if="canViewPrice && activeCategoryTab !== 'AUXILIARY'" class="table-footer">
-          <span class="total-label">原料成本合计:</span>
-          <span class="total-value">{{ formatFriendlyNumber(estimatedMaterialCost, 2) }} {{ costDisplayUnit }}</span>
+          <span class="total-label">{{ hasPendingActualMaterialUsage ? '成本归集状态:' : '原料成本合计:' }}</span>
+          <span v-if="hasPendingActualMaterialUsage" class="total-value">实际原料用量待生产报工</span>
+          <span v-else class="total-value">{{ formatFriendlyNumber(estimatedMaterialCost, 2) }} {{ costDisplayUnit }}</span>
         </div>
       </el-card>
 
@@ -2303,14 +2656,14 @@ watch(adjustDialogVisible, (visible) => {
     <!-- BOM Item Dialog -->
     <el-dialog
       v-model="bomDialogVisible"
-      :title="`${isBomEdit ? '编辑' : '添加'}${bomForm.materialCategory === 'PACKAGING' ? '包材' : '原料'}`"
+      :title="`${isBomEdit ? '编辑' : '添加'}${bomItemCategoryLabel}`"
       width="580px"
     >
       <el-form :model="bomForm" label-width="110px">
-        <el-form-item :label="bomForm.materialCategory === 'PACKAGING' ? '选择包材' : '选择原料'" required>
+        <el-form-item :label="`选择${bomItemCategoryLabel}`" required>
           <el-select
             v-model="bomForm.materialTypeId"
-            :placeholder="bomForm.materialCategory === 'PACKAGING' ? '请选择包材' : '请选择原料'"
+            :placeholder="`请选择${bomItemCategoryLabel}`"
             filterable
             style="width: 100%"
             @change="onMaterialLink"
@@ -2324,30 +2677,57 @@ watch(adjustDialogVisible, (visible) => {
           </el-select>
           <div class="form-tip">列表已按当前页签筛选，所选物料为必填。</div>
         </el-form-item>
-        <el-form-item v-if="bomForm.materialCategory === 'PACKAGING'" label="每成品用量" required>
+        <el-alert
+          v-if="bomForm.materialCategory !== 'PACKAGING'"
+          type="info"
+          :closable="false"
+          show-icon
+          title="原料与辅料在 BOM 中维护配方资格；本批计划投入和实际消耗由生产计划与正式报工记录。"
+          style="margin-bottom: 12px;"
+        />
+        <el-form-item v-if="bomForm.materialCategory === 'PACKAGING'" label="包装规格" required>
+          <el-select
+            v-model="bomForm.packagingLayerKey"
+            style="width: 100%"
+            placeholder="请选择该包材所属的包装规格"
+            @change="onPackagingLayerChange"
+          >
+            <el-option
+              v-for="layer in packagingLayerOptions"
+              :key="layer.key"
+              :value="layer.key"
+              :label="`${layer.name} · ${layer.summary}`"
+            />
+          </el-select>
+          <div v-if="selectedPackagingLayer" class="packaging-layer-card">
+            <strong>{{ selectedPackagingLayer.name }}</strong>
+            <span>{{ selectedPackagingLayer.summary }}</span>
+          </div>
+          <div class="form-tip">包材只配置当前层级新增的材料；外层规格不会重复计算内包装。</div>
+        </el-form-item>
+        <el-form-item v-if="bomForm.materialCategory === 'PACKAGING'" label="包材角色" required>
+          <el-select v-model="bomForm.packagingRole" style="width: 100%" placeholder="请选择包材在该规格中的作用">
+            <el-option v-for="role in packagingRoleOptions" :key="role.value" :value="role.value" :label="role.label" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="bomForm.materialCategory === 'PACKAGING'" :label="packagingNaturalQuantityLabel" required>
           <div style="display: flex; align-items: center; gap: 8px; width: 100%;">
             <el-input-number
-              v-model="bomForm.standardQuantity"
-              :min="0"
+              v-model="bomForm.naturalQuantity"
+              :min="0.000001"
               :precision="4"
               :step="0.01"
               style="flex: 1;"
             />
             <span class="unit-suffix">{{ bomFormUnitLabel }}</span>
           </div>
-          <div class="form-tip">每 1 个成品基本单位需要的包材数量。</div>
+          <div class="form-tip">
+            系统将按包装规格自动折算为每1{{ displayUnit(skuBaseUnit) }}的成本用量。
+          </div>
         </el-form-item>
         <el-form-item label="计量单位">
-          <el-select
-            v-model="bomForm.unit"
-            :disabled="bomUnitOptions.length <= 1"
-            placeholder="选择物料后自动带入"
-            style="width: 100%"
-            @change="bomForm.quantityUnit = canonicalUnitCode(bomForm.unit)"
-          >
-            <el-option v-for="unit in bomUnitOptions" :key="unit" :label="displayUnit(unit)" :value="unit" />
-          </el-select>
-          <div class="form-tip">默认使用物料主数据单位；同量纲单位可显式选择，提交时同时保存 quantityUnit。</div>
+          <el-input :model-value="bomFormUnitLabel" disabled />
+          <div class="form-tip">单位从物料档案自动继承，业务页面只显示中文；如不正确，请先维护物料档案。</div>
           <div v-if="bomUnitCompatibilityWarning()" class="form-tip form-tip--warning">
             <span>{{ bomUnitCompatibilityWarning() }}</span>
             <el-button link type="warning" size="small" @click="goMaterialUnitConfigFromBom">
@@ -2361,22 +2741,63 @@ watch(adjustDialogVisible, (visible) => {
             单位从物料字典自动带入；如不正确，请先修改物料档案。
           </div>
         </el-form-item>
-        <!-- #759: 包材每产品单位用量 (PACKAGING 专属, 配置后 BOM 标准用量可自动推算) -->
-        <el-form-item
-          v-if="bomForm.materialCategory === 'PACKAGING'"
-          label="每产品用量"
-        >
-          <el-input-number
-            v-model="bomForm.packQtyPerProduct"
-            :min="0"
-            :precision="6"
-            :step="0.1"
+        <el-form-item label="替代物料（可选）">
+          <el-select
+            v-model="bomForm.substituteMaterialTypeIds"
+            multiple
+            filterable
+            clearable
+            collapse-tags
+            collapse-tags-tooltip
             style="width: 100%"
-            placeholder="每个成品单位需要该包材多少个"
+            placeholder="选择可替代当前主项的物料"
+          >
+            <el-option
+              v-for="item in substituteCandidates"
+              :key="item.id"
+              :value="item.id"
+              :label="`${item.name} · ${displayUnit(item.quantityUnit || item.unit)}`"
+            />
+          </el-select>
+          <div class="form-tip">替代物料不会作为额外需求重复计算；实际使用时仍记录真实物料与批次。</div>
+          <el-alert
+            v-if="bomForm.materialCategory === 'PACKAGING' && bomForm.materialTypeId && !packagingClassificationKey(selectedMaterialRecord())"
+            type="warning"
+            :closable="false"
+            show-icon
+            title="主包材缺少可验证的分类/包装作用域，暂不能配置替代包材"
+            class="substitute-scope-alert"
           />
-          <div class="form-tip">
-            例：吸塑盒 1 个/成品填 1；外箱 20 盒/箱填 0.05。留空则手填成品含量
+          <div v-if="bomForm.substituteMaterialTypeIds.length" class="substitute-factor-list">
+            <div
+              v-for="materialTypeId in bomForm.substituteMaterialTypeIds"
+              :key="materialTypeId"
+              class="substitute-factor-row"
+            >
+              <span>{{ materialTypes.find((item) => item.id === materialTypeId)?.name || materialTypeId }}</span>
+              <template v-if="substituteNeedsExplicitFactor(materialTypeId)">
+                <el-input-number
+                  v-model="bomForm.substituteFactors[materialTypeId]"
+                  :min="0.000001"
+                  :precision="6"
+                  :controls="false"
+                  placeholder="等价换算系数"
+                />
+                <small>跨单位必须明确换算</small>
+              </template>
+              <el-tag v-else size="small" type="info">同单位默认 1:1</el-tag>
+            </div>
           </div>
+        </el-form-item>
+        <el-form-item label="需求性质">
+          <el-switch
+            v-model="bomForm.isOptional"
+            :active-value="false"
+            :inactive-value="true"
+            active-text="必需"
+            inactive-text="可省略"
+          />
+          <div class="form-tip">默认必需；标记可省略后，生产时允许不投入该主项。</div>
         </el-form-item>
         <el-alert
           type="info"
@@ -2390,22 +2811,7 @@ watch(adjustDialogVisible, (visible) => {
         </el-form-item>
         <!-- Phase 1: 高级字段默认收起，功能不删 -->
         <el-collapse v-model="showAdvancedBomFields" class="bom-advanced-collapse">
-          <el-collapse-item name="adv" title="高级选项（可选料 / 替代料 / 按份数投料 / 半成品引用 / 嵌套子产品）">
-        <el-form-item label="可选料">
-          <el-checkbox v-model="bomForm.isOptional">
-            可选原辅料，不作为生产计划完整性硬要求
-          </el-checkbox>
-          <div class="form-tip">适用于装饰菜、可省略配料等</div>
-        </el-form-item>
-        <el-form-item label="替代料分组">
-          <el-input
-            v-model="bomForm.substituteGroup"
-            maxlength="50"
-            show-word-limit
-            placeholder="例：MEAT_BASE / SAUCE_ALT，同组物料可互相替代"
-          />
-          <div class="form-tip">相同分组的物料可互相替代</div>
-        </el-form-item>
+          <el-collapse-item name="adv" title="高级选项（按份数投料 / 半成品引用 / 嵌套子产品）">
         <!-- SP4-8: 按份数投料 -->
         <el-form-item label="按份数投料">
           <el-tooltip
@@ -3085,6 +3491,45 @@ watch(adjustDialogVisible, (visible) => {
 .text-secondary {
   color: #c0c4cc;
   font-size: 12px;
+}
+
+.packaging-layer-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  background: var(--el-fill-color-extra-light);
+  color: var(--el-text-color-regular);
+}
+
+.workflow-first-alert,
+.substitute-scope-alert {
+  margin-bottom: 12px;
+}
+
+.substitute-factor-list {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.substitute-factor-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) 150px auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+}
+
+.cost-value--pending {
+  color: var(--el-color-warning);
+  font-size: 13px;
 }
 
 /* Excel 导入预览对话框 */
