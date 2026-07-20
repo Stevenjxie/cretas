@@ -252,6 +252,60 @@ async def pg_runtime():
 
 
 @pytest.mark.asyncio
+async def test_concurrent_start_claims_create_one_postgres_run_and_terminal_allows_new(
+    pg_runtime,
+):
+    admin, _pool, store = pg_runtime
+    tenant = context("CLAIM-A", "owner-A")
+    route = RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION
+    proposed_ids = [str(uuid.uuid4()) for _ in range(16)]
+
+    claims = await asyncio.gather(
+        *(
+            store.claim_active_run(run_id, tenant, route, request())
+            for run_id in proposed_ids
+        )
+    )
+
+    run_ids = {claim.record.run_id for claim in claims}
+    assert len(run_ids) == 1
+    assert sum(claim.created for claim in claims) == 1
+    first_run_id = next(iter(run_ids))
+    assert await admin.fetchval(
+        """
+        SELECT COUNT(*) FROM smart_bi_agent_run
+        WHERE factory_id = $1 AND owner_user_id = $2
+          AND route_code = $3 AND state = 'RUNNING'
+          AND sanitized_request = $4::jsonb
+        """,
+        tenant.factory_id,
+        tenant.user_id,
+        route.value,
+        json.dumps(request()),
+    ) == 1
+
+    outcome = StructuredOutcome(
+        OutcomeStatus.PARTIAL,
+        route,
+        blockers=("CAUSAL_ATTRIBUTION_UNSUPPORTED_BY_READ_CONTRACTS",),
+    )
+    assert await store.compare_and_set_terminal(
+        first_run_id,
+        tenant,
+        expected_state=RunState.RUNNING,
+        terminal_state=RunState.PARTIAL,
+        outcome=outcome,
+        counters=RuntimeCounters(),
+        terminal_event_type=AgentEventType.RUN_COMPLETED,
+    )
+    next_claim = await store.claim_active_run(
+        str(uuid.uuid4()), tenant, route, request()
+    )
+    assert next_claim.created
+    assert next_claim.record.run_id != first_run_id
+
+
+@pytest.mark.asyncio
 async def test_force_rls_no_tenant_and_cross_tenant_read_write(pg_runtime):
     admin, pool, store = pg_runtime
     flags = await admin.fetch(
