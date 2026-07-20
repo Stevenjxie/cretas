@@ -2,6 +2,7 @@ package com.cretas.aims.service.restaurant;
 
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunStartRequest;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.net.URLEncoder;
@@ -37,6 +38,7 @@ public class RestaurantGrossMarginChatRouteSelector {
     private final RestaurantAgentRunService runService;
     private final Clock clock;
 
+    @Autowired
     public RestaurantGrossMarginChatRouteSelector(RestaurantAgentRunService runService) {
         this(runService, Clock.system(BUSINESS_ZONE));
     }
