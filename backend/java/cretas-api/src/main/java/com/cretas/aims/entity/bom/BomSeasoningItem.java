@@ -82,6 +82,10 @@ public class BomSeasoningItem extends BaseEntity {
     @Column(name = "work_process_id", length = 50)
     private String workProcessId;
 
+    /** Stable PROCESS Cell identity inside the BOM-pinned Workflow revision. */
+    @Column(name = "workflow_process_node_id", length = 128)
+    private String workflowProcessNodeId;
+
     @Column(name = "subsequent_pot_ratio", precision = 8, scale = 4)
     private BigDecimal subsequentPotRatio;
 

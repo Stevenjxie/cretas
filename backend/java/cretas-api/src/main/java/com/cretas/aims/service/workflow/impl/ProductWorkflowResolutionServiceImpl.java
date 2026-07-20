@@ -17,6 +17,8 @@ import com.cretas.aims.service.workflow.WorkflowProcessPath;
 import com.cretas.aims.service.workflow.WorkflowPlanOutputContract;
 import com.cretas.aims.service.workflow.WorkflowTopology;
 import com.cretas.aims.service.workflow.WorkflowTopologyClassifier;
+import com.cretas.aims.service.workflow.PinnedWorkflowGraph;
+import com.cretas.aims.service.bom.BomWorkflowRevisionService;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -123,7 +125,7 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
         ProductProcessWorkflow workflow = workflowRepository
                 .findByIdAndFactoryId(candidate.getWorkflowId(), factoryId)
                 .orElseThrow(() -> invalidPath("已启用的 Workflow 不存在"));
-        return Optional.of(parseProcessPath(workflow, candidate, finishedGoodProductTypeId));
+        return Optional.of(parseProcessPath(factoryId, workflow, candidate, finishedGoodProductTypeId));
     }
 
     @Override
@@ -429,101 +431,43 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
     }
 
     private WorkflowProcessPath parseProcessPath(
+            String factoryId,
             ProductProcessWorkflow workflow,
             WorkflowOutputResolutionDTO.Candidate candidate,
             String terminalProductTypeId) {
         try {
-            List<ProductProcessWorkflowDTO.Node> nodes = objectMapper.readValue(
-                    workflow.getNodesJson(), new TypeReference<List<ProductProcessWorkflowDTO.Node>>() { });
-            List<ProductProcessWorkflowDTO.Edge> edges = objectMapper.readValue(
-                    workflow.getEdgesJson(), new TypeReference<List<ProductProcessWorkflowDTO.Edge>>() { });
-            Map<String, ProductProcessWorkflowDTO.Node> nodeById = nodes.stream()
-                    .filter(java.util.Objects::nonNull)
-                    .filter(node -> node.getId() != null)
-                    .collect(Collectors.toMap(ProductProcessWorkflowDTO.Node::getId,
-                            java.util.function.Function.identity(), (left, right) -> left));
-            Map<String, List<ProductProcessWorkflowDTO.Edge>> incoming = edges.stream()
-                    .collect(Collectors.groupingBy(ProductProcessWorkflowDTO.Edge::getTarget));
-            Set<String> hasOutgoing = edges.stream()
-                    .map(ProductProcessWorkflowDTO.Edge::getSource)
-                    .collect(Collectors.toSet());
+            ProductProcessWorkflowDTO definition = new ProductProcessWorkflowDTO();
+            definition.setId(workflow.getId());
+            definition.setFactoryId(factoryId);
+            definition.setProductTypeId(workflow.getProductTypeId());
+            definition.setSchemaVersion(workflow.getSchemaVersion());
+            definition.setVersion(workflow.getDefinitionVersion());
+            definition.setRevisionId(workflow.getCurrentRevisionId());
+            definition.setRevisionHash(workflow.getCurrentRevisionHash());
+            definition.setNodes(objectMapper.readValue(
+                    workflow.getNodesJson(), new TypeReference<List<ProductProcessWorkflowDTO.Node>>() { }));
+            definition.setEdges(objectMapper.readValue(
+                    workflow.getEdgesJson(), new TypeReference<List<ProductProcessWorkflowDTO.Edge>>() { }));
 
-            List<ProductProcessWorkflowDTO.Node> terminalNodes = nodes.stream()
-                    .filter(node -> node != null && FINISHED_GOOD.equals(node.getKind()))
-                    .filter(node -> node.getData() != null
-                            && terminalProductTypeId.equals(node.getData().get("skuId")))
-                    .filter(node -> !hasOutgoing.contains(node.getId()))
-                    .toList();
-            if (terminalNodes.size() != 1) {
-                throw invalidPath("目标成品必须恰好对应一个实际终端 Cell");
-            }
-
-            Set<String> ancestors = new LinkedHashSet<>();
-            ArrayDeque<String> pending = new ArrayDeque<>();
-            pending.add(terminalNodes.get(0).getId());
-            while (!pending.isEmpty()) {
-                String nodeId = pending.removeFirst();
-                if (!ancestors.add(nodeId)) continue;
-                for (ProductProcessWorkflowDTO.Edge edge : incoming.getOrDefault(nodeId, List.of())) {
-                    if (nodeById.containsKey(edge.getSource())) pending.addLast(edge.getSource());
-                }
-            }
-
-            List<ProductProcessWorkflowDTO.Node> rawRoots = ancestors.stream()
-                    .map(nodeById::get)
-                    .filter(java.util.Objects::nonNull)
-                    .filter(node -> "RAW_MATERIAL".equals(node.getKind()))
-                    .filter(node -> incoming.getOrDefault(node.getId(), List.of()).isEmpty())
-                    .toList();
-            if (rawRoots.size() != 1) {
-                throw invalidPath("目标成品路径必须恰好回溯到一个入口原料 Cell");
-            }
-            String rawRootId = rawRoots.get(0).getData() == null
-                    ? null : String.valueOf(rawRoots.get(0).getData().get("skuId"));
+            PinnedWorkflowGraph graph = BomWorkflowRevisionService.resolveTargetGraph(
+                    workflow.getCurrentRevisionId(), definition, terminalProductTypeId);
             if (ProductCategory.RAW_MATERIAL.equals(candidate.getOwnerProductCategory())
-                    && !candidate.getOwnerProductTypeId().equals(rawRootId)) {
+                    && !graph.rootMaterialTypeIds().contains(candidate.getOwnerProductTypeId())) {
                 throw invalidPath("入口原料与 Workflow 所属原料不一致");
             }
-
-            Map<String, Integer> indegree = new LinkedHashMap<>();
-            Map<String, List<String>> outgoing = new LinkedHashMap<>();
-            ancestors.forEach(id -> indegree.put(id, 0));
-            for (ProductProcessWorkflowDTO.Edge edge : edges) {
-                if (!ancestors.contains(edge.getSource()) || !ancestors.contains(edge.getTarget())) continue;
-                outgoing.computeIfAbsent(edge.getSource(), ignored -> new ArrayList<>()).add(edge.getTarget());
-                indegree.computeIfPresent(edge.getTarget(), (ignored, value) -> value + 1);
-            }
-            ArrayDeque<String> ready = new ArrayDeque<>();
-            indegree.forEach((id, degree) -> { if (degree == 0) ready.addLast(id); });
-            List<WorkflowProcessPath.ProcessStep> processSteps = new ArrayList<>();
-            int order = 1;
-            int visited = 0;
-            while (!ready.isEmpty()) {
-                String nodeId = ready.removeFirst();
-                visited++;
-                ProductProcessWorkflowDTO.Node node = nodeById.get(nodeId);
-                if (node != null && "PROCESS".equals(node.getKind())) {
-                    String workProcessId = node.getData() == null
-                            ? null : String.valueOf(node.getData().get("workProcessId"));
-                    if (workProcessId == null || workProcessId.isBlank() || "null".equals(workProcessId)) {
-                        throw invalidPath("工序 Cell 缺少工序主数据绑定");
-                    }
-                    processSteps.add(new WorkflowProcessPath.ProcessStep(nodeId, workProcessId, order++));
-                }
-                for (String target : outgoing.getOrDefault(nodeId, List.of())) {
-                    int next = indegree.computeIfPresent(target, (ignored, value) -> value - 1);
-                    if (next == 0) ready.addLast(target);
-                }
-            }
-            if (visited != ancestors.size() || processSteps.isEmpty()) {
-                throw invalidPath("目标成品路径存在环路或没有有效工序");
+            if (graph.processes().isEmpty()) {
+                throw invalidPath("目标成品路径没有有效工序");
             }
             String ownerType = ProductCategory.RAW_MATERIAL.equals(candidate.getOwnerProductCategory())
                     ? "RAW_MATERIAL_TYPE" : "PRODUCT_TYPE";
+            String singularRoot = graph.rootMaterialTypeIds().size() == 1
+                    ? graph.rootMaterialTypeIds().getFirst() : null;
             return new WorkflowProcessPath(
                     workflow.getId(), workflow.getDefinitionVersion(),
                     candidate.getOwnerProductTypeId(), ownerType,
-                    terminalProductTypeId, rawRootId, List.copyOf(processSteps));
+                    terminalProductTypeId, singularRoot, graph.rootMaterialTypeIds(),
+                    graph.processes().stream().map(step -> new WorkflowProcessPath.ProcessStep(
+                            step.processNodeId(), step.workProcessId(), step.order())).toList());
         } catch (BusinessException error) {
             throw error;
         } catch (Exception error) {

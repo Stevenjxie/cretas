@@ -62,6 +62,9 @@ public interface ProductProcessWorkflowRepository extends JpaRepository<ProductP
 
     List<ProductProcessWorkflow> findByFactoryIdOrderByProductTypeIdAscDefinitionVersionDesc(String factoryId);
 
+    List<ProductProcessWorkflow> findByFactoryIdAndProductTypeIdOrderByDefinitionVersionDesc(
+            String factoryId, String productTypeId);
+
     /** Shared serialization point for unit-authority writes, publishing and runtime admission. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""

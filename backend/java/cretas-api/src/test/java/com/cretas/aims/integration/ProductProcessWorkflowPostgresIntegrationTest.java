@@ -109,6 +109,9 @@ class ProductProcessWorkflowPostgresIntegrationTest {
     @Autowired
     private EntityManager entityManager;
 
+    @Autowired
+    private com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository revisionRepository;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private MockMvc mockMvc;
@@ -125,6 +128,10 @@ class ProductProcessWorkflowPostgresIntegrationTest {
                 mock(com.cretas.aims.repository.ProductProcessWorkflowActivationRepository.class);
         ProductProcessWorkflowServiceImpl service = new ProductProcessWorkflowServiceImpl(
                 repository,
+                revisionRepository,
+                new com.cretas.aims.service.workflow.WorkflowRevisionSnapshotService(
+                        revisionRepository, new ProductProcessWorkflowValidator(), objectMapper),
+                mock(com.cretas.aims.service.bom.BomWorkflowRevisionService.class),
                 activationRepository,
                 objectMapper,
                 new ProductProcessWorkflowValidator(),

@@ -64,6 +64,13 @@ public class ProductProcessWorkflow extends BaseEntity {
     @Column(name = "unit_review_required", nullable = false)
     private Boolean unitReviewRequired = false;
 
+    /** Exact immutable revision represented by the current mutable/published workflow row. */
+    @Column(name = "current_revision_id")
+    private Long currentRevisionId;
+
+    @Column(name = "current_revision_hash", length = 64)
+    private String currentRevisionHash;
+
     @Version
     @Column(name = "lock_version", nullable = false)
     private Long lockVersion = 0L;

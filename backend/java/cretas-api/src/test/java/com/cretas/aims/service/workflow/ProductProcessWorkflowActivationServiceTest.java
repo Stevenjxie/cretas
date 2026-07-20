@@ -34,6 +34,7 @@ class ProductProcessWorkflowActivationServiceTest {
     @Mock private ProductProcessWorkflowCatalogValidator catalogValidator;
     @Mock private ProductProcessWorkflowUnitValidator unitValidator;
     @Mock private ProductProcessWorkflowRuntimeCompiler compiler;
+    @Mock private com.cretas.aims.service.bom.BomWorkflowRevisionService bomWorkflowRevisionService;
 
     private ProductProcessWorkflowActivationService service;
 
@@ -41,7 +42,7 @@ class ProductProcessWorkflowActivationServiceTest {
     void setUp() {
         service = new com.cretas.aims.service.workflow.impl.ProductProcessWorkflowActivationServiceImpl(
                 activationRepository, workflowRepository, validator, catalogValidator, unitValidator, compiler,
-                new ObjectMapper());
+                bomWorkflowRevisionService, new ObjectMapper());
     }
 
     @Test
@@ -70,6 +71,26 @@ class ProductProcessWorkflowActivationServiceTest {
         verify(catalogValidator, times(2)).validateForPublish(eq("F006"), eq("PT-PIG"), any());
         // B1: activate() compiles the definition (mocked here) to run the single-output guard.
         verify(compiler, times(2)).compile(any());
+        verify(bomWorkflowRevisionService, times(2))
+                .requireExactPublishedRevisionForActiveBom("F006", 44L, "PT-PIG");
+    }
+
+    @Test
+    void activateRejectsWorkflowWhenActiveBomPinsAnotherRevision() {
+        ProductProcessWorkflow workflow = publishedWorkflow(44L, "F006", "PT-PIG", 3);
+        when(workflowRepository.findByIdAndFactoryId(44L, "F006"))
+                .thenReturn(Optional.of(workflow));
+        when(compiler.compile(any())).thenReturn(emptyCompiledWorkflow());
+        doThrow(new BusinessException(409, "生效 BOM 固定的是另一份 Workflow 修订")
+                .withCode("WORKFLOW_ACTIVE_BOM_REVISION_MISMATCH"))
+                .when(bomWorkflowRevisionService)
+                .requireExactPublishedRevisionForActiveBom("F006", 44L, "PT-PIG");
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.activate("F006", 44L, 7001L));
+
+        assertEquals("WORKFLOW_ACTIVE_BOM_REVISION_MISMATCH", error.getErrorCode());
+        verify(activationRepository, never()).saveAndFlush(any());
     }
 
     @Test

@@ -6,7 +6,9 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.Where;
+import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -140,6 +142,30 @@ public class BomRecipe extends BaseEntity {
     @Column(name = "seasoning_revision", nullable = false)
     @Builder.Default
     private Long seasoningRevision = 0L;
+
+    /** Immutable Workflow revision selected while configuring this BOM version. */
+    @Column(name = "workflow_revision_id")
+    private Long workflowRevisionId;
+
+    @Column(name = "workflow_id")
+    private Long workflowId;
+
+    @Column(name = "workflow_definition_version")
+    private Integer workflowDefinitionVersion;
+
+    @Column(name = "workflow_revision_hash", length = 64)
+    private String workflowRevisionHash;
+
+    @Column(name = "workflow_schema_version")
+    private Integer workflowSchemaVersion;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "workflow_nodes_snapshot_json", columnDefinition = "jsonb")
+    private String workflowNodesSnapshotJson;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "workflow_edges_snapshot_json", columnDefinition = "jsonb")
+    private String workflowEdgesSnapshotJson;
 
     @OneToMany(mappedBy = "recipe", cascade = CascadeType.ALL, fetch = FetchType.LAZY, orphanRemoval = true)
     @OrderBy("sortOrder ASC")

@@ -32,6 +32,8 @@ public class ProductProcessWorkflowDTO {
     private String status;
     private Integer version;
     private Long lockVersion;
+    private Long revisionId;
+    private String revisionHash;
 
     private List<WorkflowUnitIssueDTO> unitWarnings = new ArrayList<>();
     private Boolean unitReviewRequired = false;
