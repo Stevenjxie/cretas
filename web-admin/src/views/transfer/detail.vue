@@ -8,6 +8,7 @@ import { get, post, put } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { ArrowLeft, InfoFilled } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
+import { displayUnit } from '@/utils/unitPricing';
 import { handleCatchError } from '@/utils/errorToast';
 import NotFoundEmpty from '@/components/common/NotFoundEmpty.vue';
 import type { TableRow } from '@/types/api';
@@ -160,7 +161,7 @@ function buildTransferItemsSummaryHtml(): string {
   const items = (transfer.value?.items as Record<string, unknown>[] | undefined) || [];
   if (items.length === 0) return '<div style="color:#909399">（无物料明细）</div>';
   const rows = items
-    .map((it) => `<div>${transferItemName(it)} × ${it.quantity ?? 0}${it.unit || ''}</div>`)
+    .map((it) => `<div>${transferItemName(it)} × ${it.quantity ?? 0}${displayUnit(it.unit)}</div>`)
     .join('');
   return `<div style="margin-top:8px;max-height:200px;overflow-y:auto">${rows}</div>`;
 }
@@ -529,7 +530,9 @@ async function submitDecide() {
           <el-table-column label="已收数量" width="120" align="right">
             <template #default="{ row }">{{ row.receivedQuantity || 0 }}</template>
           </el-table-column>
-          <el-table-column prop="unit" label="单位" width="80" align="center" />
+          <el-table-column label="单位" width="80" align="center">
+            <template #default="{ row }">{{ displayUnit(row.unit) }}</template>
+          </el-table-column>
           <el-table-column v-if="canViewPrice" prop="unitPrice" label="单价" width="120" align="right">
             <template #default="{ row }">{{ formatAmount(row.unitPrice) }}</template>
           </el-table-column>
@@ -590,14 +593,14 @@ async function submitDecide() {
               <template #default="{ row }">{{ row.itemName || '-' }}</template>
             </el-table-column>
             <el-table-column label="发货量" width="110" align="right">
-              <template #default="{ row }">{{ row.shippedQuantity }} {{ row.unit }}</template>
+              <template #default="{ row }">{{ row.shippedQuantity }} {{ displayUnit(row.unit) }}</template>
             </el-table-column>
             <el-table-column label="实收量" width="110" align="right">
-              <template #default="{ row }">{{ row.receivedQuantity }} {{ row.unit }}</template>
+              <template #default="{ row }">{{ row.receivedQuantity }} {{ displayUnit(row.unit) }}</template>
             </el-table-column>
             <el-table-column label="差异量" width="110" align="right">
               <template #default="{ row }">
-                <span class="diff-qty">-{{ row.diffQuantity }} {{ row.unit }}</span>
+                <span class="diff-qty">-{{ row.diffQuantity }} {{ displayUnit(row.unit) }}</span>
               </template>
             </el-table-column>
             <el-table-column label="状态" width="100" align="center">
@@ -641,10 +644,10 @@ async function submitDecide() {
       <el-descriptions :column="1" border size="small" style="margin-bottom:16px">
         <el-descriptions-item label="差异单号">{{ decidingDiff.diffNumber }}</el-descriptions-item>
         <el-descriptions-item label="品名">{{ decidingDiff.itemName || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="发货量">{{ decidingDiff.shippedQuantity }} {{ decidingDiff.unit }}</el-descriptions-item>
-        <el-descriptions-item label="实收量">{{ decidingDiff.receivedQuantity }} {{ decidingDiff.unit }}</el-descriptions-item>
+        <el-descriptions-item label="发货量">{{ decidingDiff.shippedQuantity }} {{ displayUnit(decidingDiff.unit) }}</el-descriptions-item>
+        <el-descriptions-item label="实收量">{{ decidingDiff.receivedQuantity }} {{ displayUnit(decidingDiff.unit) }}</el-descriptions-item>
         <el-descriptions-item label="差异量">
-          <span class="diff-qty">-{{ decidingDiff.diffQuantity }} {{ decidingDiff.unit }}</span>
+          <span class="diff-qty">-{{ decidingDiff.diffQuantity }} {{ displayUnit(decidingDiff.unit) }}</span>
         </el-descriptions-item>
         <el-descriptions-item label="调拨单">{{ transfer?.transferNumber }}</el-descriptions-item>
       </el-descriptions>

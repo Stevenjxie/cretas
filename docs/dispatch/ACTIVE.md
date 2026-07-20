@@ -6,10 +6,12 @@
 
 ## 在飞任务
 
+- `F006-M08-TRANSFER-DETAIL-UNIT-20260720` — `in-progress` — Owner: Codex coordinator — Base SHA: `0dc264d546bfbb498348e7dcb1b035ed38658f3d` — 修复调拨详情、操作确认、差异处理中的 canonical unit 用户可见泄漏；仅修改 `web-admin/src/views/transfer/detail.vue`、对应目标测试及本任务台账/归档。验收：目标 Vitest、TypeScript 构建、唯一 Web release build、PR 合入 exact main、生产 Web 四方哈希、同一 `0320fc6a-4199-4737-a7e1-8265e93a74b0` DRAFT 只读刷新验证。
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
 
 ## Scope 锁地图
 
+- `F006-M08-TRANSFER-DETAIL-UNIT-20260720`：`web-admin/src/views/transfer/detail.vue`、`web-admin/src/views/transfer/__tests__/` 中本任务新增测试、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-20-active-history.md`；生产状态仅允许 Web exact-main 发布与对既有 DRAFT 的只读验证，禁止推进调拨状态或改变库存。
 - `SEC-CREDENTIAL-ROTATION-20260719`：`scripts/systemd/` 中遗留明文启动脚本、现有/新增 secret 扫描配置与测试、`.gitignore` / 凭证模板、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-19-active-history.md`；外部状态仅限已授权的 Cretas 47/139 服务器配置、PostgreSQL 角色密码、相关阿里云/API 凭证与必要服务重启。验收：tracked tree 与完整 Git 历史脱敏盘点、scanner gate、exact-main 发布门禁、Java/Python/网关健康、登录与 Restaurant Agent 只读 smoke、核心 ERP 零写入。
 ## 阻塞项
 
