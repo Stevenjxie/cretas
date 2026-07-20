@@ -1,6 +1,7 @@
 package com.cretas.aims.controller.agentops;
 
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.config.agent.AgentOpsRuntimeShadowRolloutPolicy;
 import com.cretas.aims.dto.agentops.AgentOpsCreateEvalSetRequest;
 import com.cretas.aims.dto.agentops.AgentOpsImportRuntimeCorpusRequest;
 import com.cretas.aims.dto.agentops.AgentOpsRerunExperimentRequest;
@@ -40,8 +41,13 @@ import java.util.regex.Pattern;
 public class AgentOpsController {
     private static final Pattern SAFE_ID = Pattern.compile("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$");
     private final AgentOpsService service;
+    private final AgentOpsRuntimeShadowRolloutPolicy runtimeShadowRollout;
 
-    public AgentOpsController(AgentOpsService service) { this.service = service; }
+    public AgentOpsController(AgentOpsService service,
+                              AgentOpsRuntimeShadowRolloutPolicy runtimeShadowRollout) {
+        this.service = service;
+        this.runtimeShadowRollout = runtimeShadowRollout;
+    }
 
     @PostMapping("/eval-sets")
     public ApiResponse<JsonNode> createEvalSet(@PathVariable String factoryId,
@@ -58,6 +64,7 @@ public class AgentOpsController {
             @Valid @RequestBody AgentOpsImportRuntimeCorpusRequest body,
             HttpServletRequest request) {
         TrustedRequest trusted = trusted(factoryId, request);
+        requireRuntimeShadowRollout(trusted);
         return ApiResponse.success(service.importRuntimeCorpus(
                 trusted.factoryId, trusted.userId, trusted.role,
                 trusted.correlationId, body));
@@ -94,6 +101,7 @@ public class AgentOpsController {
             @Valid @RequestBody AgentOpsRunRuntimeShadowRequest body,
             HttpServletRequest request) {
         TrustedRequest trusted = trusted(factoryId, request);
+        requireRuntimeShadowRollout(trusted);
         return ApiResponse.success(service.runRuntimeShadow(
                 trusted.factoryId, trusted.userId, trusted.role,
                 trusted.correlationId, body));
@@ -147,6 +155,19 @@ public class AgentOpsController {
 
     private ResponseEntity<ApiResponse<JsonNode>> noStore(JsonNode data) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(ApiResponse.success(data));
+    }
+
+    private void requireRuntimeShadowRollout(TrustedRequest trusted) {
+        AgentOpsRuntimeShadowRolloutPolicy.Decision decision = runtimeShadowRollout.evaluate(
+                trusted.factoryId, trusted.userId, trusted.role);
+        if (decision == AgentOpsRuntimeShadowRolloutPolicy.Decision.MASTER_DISABLED) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE, "AGENT_OPS_RUNTIME_SHADOW_DISABLED");
+        }
+        if (decision != AgentOpsRuntimeShadowRolloutPolicy.Decision.ELIGIBLE) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN, "AGENT_OPS_RUNTIME_SHADOW_CANARY_DENIED");
+        }
     }
 
     private TrustedRequest trusted(String pathFactoryId, HttpServletRequest request) {

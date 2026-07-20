@@ -41,7 +41,8 @@ public class AgentOpsClient {
             "promptSnapshotDigest", "modelSnapshotDigest", "toolSnapshotDigest");
     private static final Set<String> SAFE_ERROR_CODES = Set.of(
             "EVAL_SET_VERSION_EXISTS", "IDEMPOTENCY_KEY_REUSED", "EVALUATOR_BUILD_UNAVAILABLE",
-            "AGENT_OPS_RUNTIME_SHADOW_DISABLED", "RUNTIME_SHADOW_CASE_TIMEOUT");
+            "AGENT_OPS_RUNTIME_SHADOW_DISABLED", "AGENT_OPS_RUNTIME_SHADOW_CANARY_DENIED",
+            "RUNTIME_SHADOW_CASE_TIMEOUT");
 
     private final OkHttpClient client;
     private final ObjectMapper objectMapper;
