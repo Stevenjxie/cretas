@@ -6,20 +6,9 @@
 
 ## 在飞任务
 
-### F006-M09-SALES-PLAN-UNIT-DATE-20260720
-
-- 状态：in-progress
-- Base SHA：`2ac8552831d0946a4af50a47be339fabf195d886`
-- Owner：当前协调者
-- Scope 锁：Web Admin 生产计划列表/详情/销售订单转生产表单与单位展示；Java `batch-from-so` DTO/Service/受约束批次日期修复入口及目标测试；本任务归档文件
-- 验收：Web 目标测试与唯一 release build；Java 目标测试与唯一 release JAR build；PR 合入 `main`；生产 Java/Web 发布与服务级验证；仅对 `457daec1-d602-43a1-81a1-708586bfb937` 执行一次幂等 `batchDate=2026-07-20` 修复并只读核验
-- 生产写边界：除上述受约束日期元数据修复外为 0；禁止创建/取消订单或计划、报工、转批次、库存写入及触碰 LIUSHANMEN
-
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
 
 ## Scope 锁地图
-
-- `F006-M09-SALES-PLAN-UNIT-DATE-20260720` 独占上述生产计划 Web/Java scope；完成合并归档后释放。
 
 - `SEC-CREDENTIAL-ROTATION-20260719`：`scripts/systemd/` 中遗留明文启动脚本、现有/新增 secret 扫描配置与测试、`.gitignore` / 凭证模板、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-19-active-history.md`；外部状态仅限已授权的 Cretas 47/139 服务器配置、PostgreSQL 角色密码、相关阿里云/API 凭证与必要服务重启。验收：tracked tree 与完整 Git 历史脱敏盘点、scanner gate、exact-main 发布门禁、Java/Python/网关健康、登录与 Restaurant Agent 只读 smoke、核心 ERP 零写入。
 ## 阻塞项
