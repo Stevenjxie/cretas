@@ -144,6 +144,14 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         List<BatchEntry> ordered = new ArrayList<>(req.getBatches());
         ordered.sort(Comparator.comparing(BatchEntry::isFinished)); // false(0) < true(1)
 
+        // WIP identity 属于各 BatchEntry 的产出对象。先于任何写入 fail-fast，禁止从后续 RAW/SEMI
+        // provenance 中猜 first；这样同一组投入无论顺序如何都不会改变 B/D 等产出身份。
+        for (BatchEntry be : ordered) {
+            if (!be.isFinished()) {
+                requireOutputMaterialIdentity(be.getProductTypeId(), be.getClientBatchKey());
+            }
+        }
+
         // 2.5 F3: 自定义字段 schema 校验 (fail-fast, 在任何物化写入之前) —— chain 路径此前无校验,
         //   任意 key 静默落库违背诚实-400 契约。逐批逐道校验 step.customFields (仅非空时查库)。
         for (BatchEntry be : ordered) {
@@ -173,9 +181,6 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             //    新的逐行 caller 将改用 PERSISTED 批次号解析, 故 resolution 留在 caller, 不进 materializeBatch.
             //    保留拓扑预排序 (WIP 先于成品), 使 map 按序填充, 混锅来源已物化.
             List<ResolvedEdge> edges = new ArrayList<>();
-            // Fix: WIP MaterialBatch must carry a raw_material_types FK, not a product_types id.
-            // Capture the first available raw materialTypeId from this batch's lineage (step order).
-            String firstRawMaterialTypeId = null;
 
             for (StepEntry st : be.getSteps()) {
                 // 4a. 原料边 (首道领料) —— 抓取 factory-scoped raw MaterialBatch.
@@ -185,9 +190,6 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                                         ri.getMaterialBatchId(), factoryId)
                                 .orElseThrow(() -> new BusinessException(404,
                                         "原料批次不存在: " + ri.getMaterialBatchId()));
-                        if (firstRawMaterialTypeId == null && rawMb.getMaterialTypeId() != null) {
-                            firstRawMaterialTypeId = rawMb.getMaterialTypeId();
-                        }
                         edges.add(new ResolvedEdge(rawMb, nz(ri.getQuantity()), "RAW_MATERIAL"));
                     }
                 }
@@ -205,9 +207,6 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                         MaterialBatch srcMb = materialBatchRepo.findByIdAndFactoryId(srcMbId, factoryId)
                                 .orElseThrow(() -> new BusinessException(404,
                                         "WIP 批次 MaterialBatch 不存在: " + srcMbId));
-                        if (firstRawMaterialTypeId == null && srcMb.getMaterialTypeId() != null) {
-                            firstRawMaterialTypeId = srcMb.getMaterialTypeId();
-                        }
                         edges.add(new ResolvedEdge(srcMb, nz(us.getFeedQuantityKg()), "SEMI_FINISHED"));
                     }
                 }
@@ -217,7 +216,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             MaterializeContext ctx = new MaterializeContext(
                     factoryId, be.isFinished() ? planId : null, be.getProductTypeId(),
                     be.getBatchNumber(), be.isFinished(), laborRate, wksWarehouseId,
-                    firstRawMaterialTypeId, operatorId);
+                    be.isFinished() ? null
+                            : requireOutputMaterialIdentity(be.getProductTypeId(), be.getClientBatchKey()),
+                    operatorId);
 
             MaterializedBatch mat = materializeBatch(ctx, be.getSteps(), edges, warnings);
 
@@ -366,7 +367,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                     ? batchTotalCost.divide(lastOutputQty, 4, RoundingMode.HALF_UP)
                     : BigDecimal.ZERO);
             wipMbId = createWipMaterialBatch(
-                    ctx.getFactoryId(), batch, ctx.getRawMaterialTypeId(),
+                    ctx.getFactoryId(), batch,
+                    requireOutputMaterialIdentity(ctx.getRawMaterialTypeId(), batch.getBatchNumber()),
                     lastOutputQty, lastOutputUnit, wipUnitPrice, ctx.getWarehouseId(), ctx.getUserId());
         }
         applyBatchCostSummary(batch, batchMaterialCost, batchLaborCost, batchTotalCost,
@@ -470,6 +472,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                     .orElseThrow(() -> new BusinessException(404,
                             "WIP 批次不存在或无权访问: " + existingWipMbId));
             wip.setReceiptQuantity(lastOutputQty);
+            wip.setMaterialTypeId(requireOutputMaterialIdentity(
+                    ctx.getRawMaterialTypeId(), wip.getBatchNumber()));
             // 🔒 honest-null: 镜像 materializeBatch — 未计价源存在 → WIP 单价诚实 null。
             BigDecimal wipUnitPrice = anyUncosted ? null
                     : ((batchTotalCost.signum() > 0 && lastOutputQty.signum() > 0)
@@ -585,6 +589,22 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         return batchRepo.save(batch);
     }
 
+    /**
+     * Transitional note: {@link MaterializeContext#getRawMaterialTypeId()} keeps its legacy field name,
+     * but WIP materialization now carries the stable output product identity in that slot. Input batches
+     * remain independent provenance edges and are never used as an identity fallback.
+     */
+    private static String requireOutputMaterialIdentity(String outputIdentity, String outputRef) {
+        if (outputIdentity == null || outputIdentity.isBlank()) {
+            throw new BusinessException(400, "半成品产出缺少稳定物料身份，无法物化 WIP")
+                    .withCode("WIP_OUTPUT_MATERIAL_IDENTITY_REQUIRED")
+                    .withHint("请为产出 Cell 绑定明确的半成品产品后重试")
+                    .withHintTarget(outputRef != null ? outputRef : "WIP")
+                    .withSeverity("BLOCKING");
+        }
+        return outputIdentity.trim();
+    }
+
     /** 把逐产出工时时段投影到批次起止时间；跨午夜的结束时间自动顺延一天。 */
     private void applyProductionWindow(ProductionBatch batch, List<StepEntry> steps) {
         if (steps == null || steps.isEmpty()) return;
@@ -684,7 +704,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     // ─────────────────────────────────────────────────────────────
 
     private String createWipMaterialBatch(String factoryId, ProductionBatch batch,
-                                           String rawMaterialTypeId, BigDecimal outputQty,
+                                           String outputMaterialIdentity, BigDecimal outputQty,
                                            String outputUnit, BigDecimal unitPrice, String warehouseId,
                                            Long operatorId) {
         String mbId = UUID.randomUUID().toString();
@@ -698,9 +718,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         mb.setId(mbId);
         mb.setFactoryId(factoryId);
         mb.setBatchNumber(mbNumber);
-        // rawMaterialTypeId is the FK to raw_material_types (nullable when no raw lineage).
-        // Previously this was set to productTypeId which is a product_types FK — an invalid reference.
-        mb.setMaterialTypeId(rawMaterialTypeId);
+        // WIP identity belongs to this output product. All RAW/SEMI inputs remain in
+        // MaterialConsumption as provenance and cannot influence this value by list order.
+        mb.setMaterialTypeId(requireOutputMaterialIdentity(outputMaterialIdentity, mbNumber));
         mb.setWarehouseId(warehouseId);
         mb.setReceiptQuantity(outputQty);
         mb.setQuantityUnit(outputUnit);

@@ -39,15 +39,14 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * SP-F Task 1.5 — saveRow SP-E FK 防线单元测试 (Mockito)。
+ * saveRow WIP 产出身份 fail-closed 单元测试 (Mockito)。
  *
- * <p>{@code material_batches.material_type_id} 是 NOT NULL (entity @Column nullable=false),
- * 故无法在 H2 集成测试里持久化一个 null-materialTypeId 上游 WIP。这里用 mock repo 返回一个
- * materialTypeId 为 null 的上游 WIP, 直接验证 resolveRawMaterialTypeId 抛 400 且不进入物化。
+ * <p>入口 WIP 即使有 materialTypeId，也不能替代本道产出身份。缺少 productTypeId 时必须在
+ * materializeBatch 前 loud-fail，禁止退回首个入口猜测。
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
-@DisplayName("ProcessSheetServiceImpl — SP-E null-lineage 400 guard")
+@DisplayName("ProcessSheetServiceImpl — missing output identity 400 guard")
 class ProcessSheetServiceImplNullLineageTest {
 
     private static final String FACTORY = "PSF-NL-FACTORY";
@@ -73,8 +72,8 @@ class ProcessSheetServiceImplNullLineageTest {
     @Mock private com.cretas.aims.service.inventory.FinishedGoodsFeedService finishedGoodsFeedService;
 
     @Test
-    @DisplayName("3: 上游 WIP materialTypeId 为 null + 无原料行 → 400 (不物化)")
-    void saveRow_nullRawLineage_throws400() {
+    @DisplayName("3: 入口 identity 存在但产出 productTypeId 缺失 → 400 (不猜 first)")
+    void saveRow_missingOutputIdentity_throws400() {
         ProcessSheetServiceImpl service = new ProcessSheetServiceImpl(
                 clerkService, rowRepo, materialBatchRepo, productionBatchRepo,
                 consumptionRepo, reportRepo, productionPlanRepository, changeLogRepo,
@@ -102,11 +101,11 @@ class ProcessSheetServiceImplNullLineageTest {
         when(productionBatchRepo.findByFactoryIdAndBatchNumber(FACTORY, "UP-BN-NULLLIN"))
                 .thenReturn(Optional.of(upPb));
 
-        // its WIP MaterialBatch has NULL materialTypeId (the crux)
+        // Upstream has a valid identity. It is provenance only and must never become this row's output identity.
         MaterialBatch upWip = new MaterialBatch();
         upWip.setId("WIP-NULLLIN");
         upWip.setFactoryId(FACTORY);
-        upWip.setMaterialTypeId(null);
+        upWip.setMaterialTypeId("PT-UPSTREAM");
         upWip.setUnitPrice(new BigDecimal("12"));
         when(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
                 FACTORY, "PRODUCTION_BATCH", "9001"))
@@ -116,7 +115,7 @@ class ProcessSheetServiceImplNullLineageTest {
         req.setClientRowId("row-nulllin");
         req.setProcessCode("shuzhi");
         req.setProcessOrder(3);
-        req.setProductTypeId("PT-X");
+        req.setProductTypeId("  ");
         req.setOutputQuantity(new BigDecimal("40"));
         req.setInputQuantity(new BigDecimal("50"));
         UpstreamRef ur = new UpstreamRef();
@@ -126,7 +125,11 @@ class ProcessSheetServiceImplNullLineageTest {
 
         assertThatThrownBy(() -> service.saveRow(FACTORY, PLAN_ID, req, USER_ID))
                 .isInstanceOf(BusinessException.class)
-                .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(400));
+                .satisfies(ex -> {
+                    BusinessException business = (BusinessException) ex;
+                    assertThat(business.getCode()).isEqualTo(400);
+                    assertThat(business.getErrorCode()).isEqualTo("WIP_OUTPUT_MATERIAL_IDENTITY_REQUIRED");
+                });
 
         // never materialized
         verify(clerkService, never()).materializeBatch(org.mockito.ArgumentMatchers.any(),
