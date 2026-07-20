@@ -4,6 +4,7 @@ import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.enums.ArApTransactionType;
 import com.cretas.aims.entity.enums.CounterpartyType;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
+import com.cretas.aims.entity.enums.PayablePaymentStatus;
 import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.repository.CustomerRepository;
@@ -108,6 +109,10 @@ class ArApServiceImplRecordPayableIfAbsentTest {
         assertEquals(SOURCE_TYPE, result.getSourceType(), "幂等键 sourceType 应写入");
         assertEquals(RECEIVE_ID, result.getSourceId(), "幂等键 sourceId (receiveId) 应写入");
         assertEquals(0, new BigDecimal("2600.00").compareTo(result.getAmount()), "AP 应=实收值 2600, 非计划 2000");
+        assertEquals(0, new BigDecimal("0.00").compareTo(result.getSettledAmount()));
+        assertEquals(0, new BigDecimal("2600.00").compareTo(result.getOutstandingAmount()));
+        assertEquals(PayablePaymentStatus.UNPAID, result.getPaymentStatus());
+        assertEquals("CNY", result.getCurrencyCode());
         ArgumentCaptor<Supplier> supCaptor = ArgumentCaptor.forClass(Supplier.class);
         verify(supplierRepository).save(supCaptor.capture());
         assertEquals(0, new BigDecimal("2700.00").compareTo(supCaptor.getValue().getCurrentBalance()),
