@@ -1,25 +1,25 @@
 # Cretas Agent Architecture V2 — 餐饮重分析、工厂轻 Agent
 
-**状态**：Accepted / 主体代码已落地；D9/D10 生产迁移与发布待执行
+**状态**：Accepted / D9、D10 底座已落地并完成生产验证；D11 架构收口进行中
 
 **日期**：2026-07-18
 
-**仓库真值**：`origin/main` @ `a9bbd8c4fd547907bf26bcdc00723820c1adb4cc`
+**仓库审计真值**：`origin/main` @ `8d5af3daa8f7bcfa1b96c19bd1a736fc7bb4481f`（2026-07-20）
 
 **独立审查基线**：Fable 5 handoff @ `18854c456`。此后的架构裁决和实现均以仓库真值、专项测试、真实 PostgreSQL 门禁与独立终审为准。
 
 **当前产品范围**：餐饮端的数据分析与 AI Chat 是重点；工厂端暂时只做岗位型小 Agent，不建设通用数据分析 Agent Runtime。
 
-### 0.1 2026-07-19 实施状态
+### 0.1 2026-07-20 实施状态
 
 本文后续章节保留 2026-07-18 形成裁决时的代码诊断和 ADR 推导；本节是当前实施真值，出现冲突时以本节和 `origin/main` 为准。
 
-- **Gateway**：Phase 0A 安全止血、descriptor/policy、原子 confirmation、幂等账本和统一 Gateway 底座均已落地；D10A 又将 `product_create`、`bom_adjust` 两个固定写入口迁入 Gateway。直调旁路已从早期基线降到 11 个文件/12 个表达式，但并未宣称全部 601 个 Tool 已完成治理迁移。
-- **餐饮 Runtime**：已有 10 个只读 Evidence Tool、有界 `Plan → Act → Observe → Replan`、持久化 Run/Event、最多两轮 evidence gap/replan/clarification、跨进程显式取消、checkpoint/resume/replay、32 KiB Evidence drill-down 和只读 `ActionProposal`。D10B 由 PR #1491 合并；Python `V20261028_03` 与 `V20261028_05` 尚未在生产执行。
-- **AgentOps**：不可变 Eval Set、离线 Experiment、comparison、分页 detail、管理员 Run Trace、实现制品 SHA 和 response-loss-safe 幂等已由 PR #1495 合并；Python `V20261028_04` 尚未在生产执行。
-- **工厂端**：operator、warehouse、quality、manager 四个 config-only Capability Pack 已由 PR #1490 合并，只暴露 `READ + LOW + REVIEW_REQUIRED` 元数据，不接 Tool 执行、动态规划或通用 Runtime；无数据库迁移。
-- **身份收口**：D9 Python session identity 代码已由 PR #1473 合并；Python `V20261028_02` 尚未在生产执行。
-- **发布边界**：上述 D9/D10 代码均已进入 `origin/main`，但不能据此推断生产已更新。生产构建、DDL、服务切换、Web/RN 发布必须以发布前现场真值、兼容窗口、回滚点和用户确认作为独立 high-stakes 门禁。
+- **Gateway**：Phase 0A 安全止血、descriptor/policy、原子 confirmation、幂等账本和统一 Gateway 底座均已落地；D10A 又将 `product_create`、`bom_adjust` 两个固定写入口迁入 Gateway。当前 descriptor 真值为 588 个 Tool（580 legacy、8 explicit），只有 7 个 runtime-approved policy；Gateway 外仍有 11 个文件/12 个调用表达式，不能把 Gateway 宣称为唯一入口。
+- **餐饮 Runtime**：已有 10 个只读 Evidence Tool、有界 `Plan → Act → Observe → Replan`、持久化 Run/Event、最多两轮 evidence gap/replan/clarification、跨进程显式取消、checkpoint/resume/replay、32 KiB Evidence drill-down 和只读 `ActionProposal`。`V20261028_03/05/06` 已在生产执行，Java gate 已切为 `ACTIVE`，真实只读 run、owner/cross-user replay、cancel 和 ERP 零写入均通过；当前只支持 `GROSS_MARGIN_DECLINE_ATTRIBUTION` 一条固定路线。
+- **AgentOps**：不可变 Eval Set、离线 Experiment、comparison、分页 detail、管理员 Run Trace、实现制品 SHA 和 response-loss-safe 幂等已由 PR #1495 合并；`V20261028_04` 已在生产执行，后续 exact-main Web 发布已包含 AgentOps 页面。当前 experiment 仍由客户端提交 actual snapshots，尚未形成自动 shadow/eval 流水线。
+- **工厂端**：operator、warehouse、quality、manager 四个 config-only Capability Pack 已由 PR #1490 合并并进入后续 Java 生产制品，只暴露 `READ + LOW + REVIEW_REQUIRED` 元数据，不接 Tool 执行、动态规划或通用 Runtime；主 Router/Fast Path 尚未消费这些 Pack。
+- **身份收口**：D9 Python session identity 代码已由 PR #1473 合并，`V20261028_02` 已在生产执行。
+- **发布边界**：D9/D10 的 Python migration、Java、Python 与 Web 已有归档生产证据；未找到 RN/OTA 发布记录，因此餐饮 Runtime 卡片不能视为已进入所有用户客户端。后续任何构建、DDL、服务切换、Web/RN 发布仍必须以发布前现场真值、兼容窗口、回滚点和用户确认作为独立 high-stakes 门禁。
 
 ---
 
@@ -27,9 +27,9 @@
 
 Cretas 现有架构不是“完全做错了”，但 **Tool + Skill 被迫承担了 Agent、Workflow、权限策略、执行引擎和配置包等过多职责**。实际系统更接近：
 
-> 多层意图识别 + 601 个具备 literal `getToolName()` 的具体 Spring Component 工具（descriptor 审计口径）+ 若干一次性 Tool/Skill 执行路径 + 两套餐饮固定分析管线。
+> 多层意图识别 + 588 个当前 descriptor Tool + 若干一次性 Tool/Skill 执行路径 + 既有餐饮分析管线 + 一条有界餐饮 Agent Runtime 路线。
 
-在本裁决形成时，它还不是一个具备 `Plan → Act → Observe → Replan`、持久化 Run/Event、逐步预算和可评测工具轨迹的 Agent Runtime。此后餐饮只读 Runtime 和 AgentOps 已按上述边界落地；剩余重点是生产兼容发布、继续缩小 Gateway 旁路和用回归评测证明线上收益。
+在本裁决形成时，它还不是一个具备 `Plan → Act → Observe → Replan`、持久化 Run/Event、逐步预算和可评测工具轨迹的 Agent Runtime。此后餐饮只读 Runtime 和 AgentOps 已按上述边界落地并完成生产验证；剩余重点是让主 Chat 真正路由到 Runtime、继续缩小 Gateway 旁路、完成 ActionProposal→Workflow 与 Skill 三拆，并用自动回归评测证明线上收益。
 
 V2 不引入 Coze Studio、AgentScope、ADK、Qwen-Agent 或 Arkitect 作为运行依赖，也不推倒现有数百个 Tool。采用以下边界：
 
@@ -54,15 +54,15 @@ V2 不引入 Coze Studio、AgentScope、ADK、Qwen-Agent 或 Arkitect 作为运�
 | 1 | 没有通用 Observe/Replan 循环 | `ToolRouterService.java:203-220` 的 Auto-Planner 默认恒 false/null，且无实现覆写；`ToolRouterServiceImpl.java:226-253` 只按既定串并行链执行 | 确认 |
 | 2 | MCP 仍是直接执行路径，但匿名与调用方身份注入已在 Phase 0A 封住 | `MCPServerAdapter.java:42` 仅在显式启用时注册；`:69-76` 要求 API key、服务端 Principal 与 allowlist；`:216-228` 校验 allowlist/工厂启用状态；`:261-266` 只构造服务端 context 后直调 `executor.execute` | 安全风险已显著缓解；仍待 Gateway 收口 |
 | 3 | Tool 治理与 Principal 派生被复制，调用方 context 可覆盖可信字段 | `ToolDispatchService.java:218-219,697-698` 将 `request.context` 合入 params；`DynamicToolSelectionService.java:119-120,150-151` 用 `putAll` 覆盖 plan/execution context | 高优先级；Gateway 前先止血 |
-| 4 | `ToolExecutor.execute/preview` 直调存在精确旁路基线 | exact-base 静态审计确认 14 个生产文件、18 个代码物理行、19 个调用表达式，其中 14 个 execute、5 个 preview | 确认；后续门禁使用这组精确口径 |
-| 5 | 写确认双轨仍在；preview 误执行已修复 | `confirmed=true` 仍可由入站 context 提供；PreviewToken 没有生产 `createToken` 调用，confirm 是读状态后再 save，非原子消费，且未绑定 factory/tool/version/params；默认 preview 与分发穿透已由 PR #1432 修复 | 确认令牌闭环仍是高风险缺口 |
-| 6 | descriptor inventory 的分母必须按 Tool 定义统计 | exact-base 审计确认 601 个同时满足“具体 Spring Component + literal `getToolName()`”的工具；较大的 `@Component` 文件计数采用不同定义，不能与 descriptor 数混写 | 以 601 作为 Phase 0B legacy descriptor 基线 |
-| 7 | 文档规模已过期 | 当前精确 descriptor 口径为 601 个具体工具，另有 25 个内置 Skill builder、15 个 `SKILL.md`；旧规则仍写 337/16 | 确认 |
+| 4 | `ToolExecutor.execute/preview` 直调存在精确旁路基线 | 2026-07-20 exact-main 静态审计确认 Gateway 外仍有 11 个生产文件、12 个调用表达式，其中 11 个 execute、1 个 preview | 确认；每批迁移必须真实缩小同一基线 |
+| 5 | 原子确认已落地，但旧 boolean authority 未删除 | token 已绑定 factory/user/tool/version/params hash、TTL 并原子 claim/consume；固定写入口已走 Gateway。通用 `/execute` 仍接受入站 `request.context.confirmed=true`；默认 preview 与分发穿透已由 PR #1432 修复 | boolean 通道仍是高风险缺口，必须删除 |
+| 6 | descriptor inventory 的分母必须按治理清单统计 | 2026-07-20 YAML 真值为 588 个 Tool：580 legacy、8 explicit；只有 7 个 runtime-approved，其余为 `REVIEW_REQUIRED` 或 `REVIEW_REQUIRED_P0` | 以 588 作为当前 descriptor 基线，不能直接全量切入 fail-closed Gateway |
+| 7 | 测试与文档规模发生漂移 | inventory/source 测试使用 588，但 `ToolDescriptorCatalogTest` 仍断言 589/581；本文此前还保留 601 的实施前口径 | 修复 CI 门禁并统一为当前 YAML/源码真值 |
 | 8 | Skill 语义和执行职责过载 | `SkillExecutorImpl.java:55-58` 自述 Site D 绕过 Site B；`:760-839` 再次复制执行守卫；timeout 主要记录而非强制中断 | 确认 |
-| 9 | Python 已有可靠分析资产但不是 Agent Runtime | `smartbi/agent/orchestrator.py:14-18` 明确写着 narrative-only、no tool_calls；`synthesis_engine.py:573-935` 是固定步骤和规则规划；没有 agent run/event 表 | 确认，但需保留下面的细化 |
+| 9 | 旧 Python 分析资产不是 Agent Runtime；新的餐饮 Runtime 已落地 | `smartbi/agent/orchestrator.py` 与 `synthesis_engine.py` 仍是旧固定分析路径；新的 Restaurant Runtime 已提供 10 个 Read Tool、Run/Event、两轮上限、checkpoint/replay/cancel，但只有一条毛利归因路线 | 旧路径与新试点并存，主 Chat 尚未统一路由 |
 | 10 | Python 与 Cretas 写库边界当前较干净 | SmartBI 写自己的数据层；已发现的 Python→Java 业务调用是 `value_notifier_client.py:28-72` 的站内通知 | 高信心；实施前仍需用出站调用清单做自动化守门 |
 | 11 | 冗余缓存可能跨 Principal/租户复用 | `ToolDispatchService.java:343-346,418` 在 session 缺失时使用固定 `default`，缓存键依赖 tool + params；可信 factory/user/role 未稳定进入 params hash 时，相同参数可能跨租户命中 | Gateway 前先把 trusted principal 纳入隔离键并移除共享 default session |
-| 12 | 入站 `forceExecute + confirmed` 可拼接绕过审批 | `IntentExecutionOrchestrator.java:408-412,451-454,625-650` 中 `forceExecute` 跳过确认/审批，而 request context 的 `confirmed=true` 又满足写守卫 | 必须禁止调用方拼接；两者都应由服务端状态机派生 |
+| 12 | 入站 `confirmed` 仍可伪造 | `forceExecute` 已设为 Jackson `READ_ONLY`，但通用 `/execute` 仍会把 request context 的 `confirmed=true` 交给 `WriteGuardService` | 删除客户端 boolean authority；确认只能由服务端 token/内部状态派生 |
 | 13 | outbound MCP 具备条件启用后的高风险默认值 | `MCPClientAdapter.java:31,139` 可按 `cretas.mcp.external-servers` 注册外部 Tool；`MCPToolProxy.java:97` 外发完整 context，且未覆盖 metadata 时继承 `ToolExecutor` 的 `READ/LOW/无显式权限` 默认值 | 当前生产启动日志、unit 与 args 未发现启用配置；保持关闭并纳入 Gateway/出站最小化治理 |
 
 ### 2.2 对 Fable 报告的三项修正
@@ -370,28 +370,27 @@ PR #1432 完成上述安全代码切片后，已于 2026-07-18 完成生产 Java
 
 ### Phase 0B — ToolExecutionGateway
 
-**当前唯一推荐实施动作**：先封住 Principal/cache 与 `forceExecute + confirmed` 的现实绕过，再建立 Gateway 契约和旁路门禁；不能用未来重构替代当前止血。
+**当前状态**：Gateway 契约、principal、policy/descriptor、原子 confirmation、幂等账本和旁路门禁已经落地；`product_create`、`bom_adjust` 已迁入。剩余工作是删除旧 boolean confirmation authority，并按兼容批次把 11 文件/12 表达式的旁路降为零。
 
 1. **Principal/cache 与 forceExecute 止血**：禁止 `request.context` 覆盖服务端 factory/user/role；冗余缓存键绑定 trusted principal 并移除共享 `default` session；调用方不得传入可组合绕过审批的 `forceExecute + confirmed`。outbound MCP 继续保持未配置，启用前必须完成 metadata 与 context 最小化。
-2. **Gateway contracts / 门禁**：定义 `ToolExecutionCommand`、`ExecutionPrincipal`、`ToolExecutionResult` 与版本化治理描述；以 14 文件/18 物理行/19 表达式为旁路基线，用 ArchUnit 或等价静态测试限定唯一合法调用边界。
-3. **Confirmation 原子闭环**：token 绑定 factory/user/tool/version/params hash 与 TTL，通过条件更新或等价方式单次原子消费；删除入站 `confirmed=true`，审批与确认只能由服务端状态机推进。
-4. **分批迁移**：先让 `ToolDispatchService` 经 Gateway，再迁移 DynamicSelection、Skill、ToolRouter、LLM fallback，最后迁移 scheduler/trigger/SOP/controller 与 MCP adapter；每批缩小 legacy allowlist。
-5. 建立 601 个具体 Tool 的 legacy descriptor 报告，列出 action/risk/permission/preview/tenant 状态；对未知写 Tool 先 WARN + 阻塞影子统计，验证误伤后切 fail-closed，新 Tool 从第一天 fail-closed。
+2. **Gateway contracts / 门禁**：已定义 `ToolExecutionCommand`、`ExecutionPrincipal`、`ToolExecutionResult` 与版本化治理描述；当前以 11 文件/12 表达式为旁路基线，用静态测试阻止新增绕过。
+3. **Confirmation 原子闭环**：token 绑定与原子消费已完成；当前只剩删除入站 `confirmed=true`，确保审批与确认只能由服务端状态机推进。
+4. **分批迁移**：不能把全部 ToolDispatch 直接切入只有 7 个 approved policy 的 fail-closed Gateway。先增加仅接受冻结 legacy inventory、可信 principal 且策略不弱于现状的 migration lane，再迁 ToolDispatch；随后按批次迁 DynamicSelection、Skill、MCP、scheduler/trigger/SOP/ToolRouter/LLM fallback，每批缩小 baseline。
+5. 当前 588 个 descriptor 已有治理报告；新 Tool 从第一天 fail-closed。580 个 legacy Tool 必须通过冻结 inventory 与影子统计逐步收紧，不能用数据库覆盖静默放宽。
 
 ### Phase 1 — 评测与餐饮只读 Runtime
 
-1. 从 51 条意图测试和 `smart_bi_distillation_samples` 建三类 Eval：route、tool trajectory、numeric truth。
-2. 定义 Read Tool registry 和 EvidenceEnvelope。
-3. 新建 run/event 两表及 RLS/tenant 测试。
-4. 实现有界 evidence loop，首个场景“毛利下滑归因”。
-5. 旧 synthesis 与新 Runtime 双跑/影子评测，指标达标后小流量启用。
+1. **已完成**：Read Tool registry、EvidenceEnvelope、run/event、RLS/tenant isolation 与“毛利下滑归因”有界 evidence loop。
+2. **已完成**：生产 migration、Java `ACTIVE` gate、真实 run/replay/cancel 与 ERP 零写入验证。
+3. **部分完成**：route、tool trajectory、numeric truth evaluator 已有，但尚未自动接入 51 条意图集、`smart_bi_distillation_samples` 和 Runtime shadow execution。
+4. **待完成**：扩展第二条复杂餐饮路线前，先用既有毛利路线完成主 Chat 路由与自动评测闭环。
 
 ### Phase 2 — Chat UX 与 AgentOps
 
-1. SSE 直接投影真实 run events，不再用假进度文本。
-2. 前端增加取消、证据引用、澄清和 ActionProposal 卡片。
-3. 增加 Run Trace、Eval Set、Experiment 结果页面。
-4. 先复用现有 PostgreSQL；无数据证明前不引 ClickHouse、RocketMQ 或 Coze Loop 全栈。
+1. **已完成底座**：真实 run events、取消、证据引用、澄清、ActionProposal 卡片、Run Trace、Eval Set 与 Experiment 页面。
+2. **未完成产品统一**：RN 卡片是独立固定入口，不由自然语言问题触发，也未嵌入主消息流；没有 RN/OTA 发布证据。
+3. **未完成 AgentOps 闭环**：experiment 仍依赖客户端提交 actual snapshots，缺少自动语料导入、Runtime shadow execution 与合并回归门禁。
+4. 继续复用 PostgreSQL；无数据证明前不引 ClickHouse、RocketMQ 或 Coze Loop 全栈。
 
 ### Phase 3 — 写 Workflow 与 Skill 拆分
 
@@ -400,22 +399,24 @@ PR #1432 完成上述安全代码切片后，已于 2026-07-18 完成生产 Java
 3. 按使用量迁移 Skill，不做全量重写。
 4. Spring graph 框架仅在独立兼容性 Spike 通过且确有 checkpoint/HITL 需求时再评估。
 
+当前 Phase 3 尚未完成：Proposal 仍是 `READ_ONLY_PROPOSAL`，没有 `workflowKey`/结构化执行参数及 Java 白名单 mapper；`SkillExecutorImpl` 仍直接调用 ToolExecutor，现有 Skill 也尚未拆为 Workflow、Capability Pack 与 Presenter。
+
 ---
 
 ## 9. 优化后哪些部分会变好
 
 | 部分 | 当前问题 | 优化结果 | 验收信号 |
 |---|---|---|---|
-| Tool 安全 | 仍有 19 个直调表达式；普通 request context 可覆盖 Principal，默认 session/cache 可能跨租户复用；入站 MCP server context 与公开 Dictionary 写端点已修复 | 一个执行政策和审计入口，身份不可由参数伪造，缓存按 trusted principal 隔离，outbound context 最小化 | Gateway 外生产 direct execute=0；越权/跨租户/cache 隔离测试全过 |
-| 写确认 | 入站 `forceExecute + confirmed` 可拼接绕过审批；现有 token 非原子且未绑定参数；preview 误执行已修复 | 单次、参数绑定、可过期、原子消费确认；不安全 preview 直接拒绝 | preview 业务写入=0；并发确认仅一次成功；重放与参数漂移失败 |
+| Tool 安全 | Gateway 外仍有 11 文件/12 表达式；580 个 legacy Tool 尚未完成 runtime policy 收口 | 一个执行政策和审计入口，身份不可由参数伪造，legacy 兼容车道只能逐步收紧 | Gateway 外生产 direct execute=0；越权/跨租户/cache 隔离测试全过 |
+| 写确认 | 原子 token 已落地，但通用 `/execute` 仍接受 `context.confirmed=true` | 只接受单次、参数绑定、可过期、原子消费的服务端确认；不安全 preview 直接拒绝 | crafted JSON 不能确认写入；并发仅一次成功；重放与参数漂移失败 |
 | 餐饮简单查询 | 可能被重型 Agent 拖慢 | Fast Path 保持原低延迟 | p95 不高于现基线 10% |
-| 餐饮复杂分析 | 固定关键词维度、一次性生成、缺证据不再查询 | 根据证据缺口有限重规划，答案带 evidence | Gold 支持数字的无依据新增=0；轨迹达标 |
-| AI Chat | 用户只看到等待和最终文本 | 真实进度、可取消、一次澄清、证据和动作建议 | 首个进度事件目标 <1s；失败可定位到 event |
+| 餐饮复杂分析 | 毛利归因 Runtime 已有证据循环，但只有一条固定路线 | 主 Chat 先自然语言触发既有 Runtime，再按真实评测扩第二条路线 | Gold 支持数字的无依据新增=0；route/trajectory/numeric truth 达标 |
+| AI Chat | Runtime 仍是独立卡片，不由用户问题触发 | 消息流内展示真实进度、可取消、一次澄清、证据和动作建议 | 首个进度事件目标 <1s；失败可定位到 event；普通问答不误入 Runtime |
 | 数字可信度 | Reconciler 主要核对数字出现，证据归属仍有盲区 | answer 数字必须绑定 evidenceId | numeric truth regression 100% |
 | 成本 | 日预算只在整次调用前后检查 | 每步预算、工具轮和墙钟上限 | 所有 run 有 token/latency/tool-count；超限可解释终止 |
-| AgentOps | 日志分散，无法重放工具轨迹评测 | Run/Event + Eval/Experiment | 每次失败可还原 route、tool 和 evidence |
-| 工厂 AI | 容易被餐饮架构拖入过度建设 | 四岗位 Pack + Fast Path，共享安全底座 | 工厂请求不进入分析 Runtime；无额外规划延迟 |
-| 开发效率 | 增加 Tool 要在多个入口复制守卫，规模文档过期 | 新 Tool 一个 descriptor、一个 Gateway、自动清单 | CI 自动阻止无治理元数据和旁路调用 |
+| AgentOps | Run/Event 与页面已具备，actual snapshots 仍靠客户端提交 | 自动语料导入、shadow execution 与合并回归门禁 | 每次失败可还原 route、tool 和 evidence；回归无需人工拼 snapshot |
+| 工厂 AI | 四岗位 Pack 已有，但主 Router/Fast Path 尚未消费 | 四岗位 Pack + Fast Path，共享安全底座 | 工厂请求按岗位选择 Pack、不进入分析 Runtime、无额外规划延迟 |
+| 开发效率 | 增加 Tool 仍可能在多个入口复制守卫 | 新 Tool 一个 descriptor、一个 Gateway、自动清单 | CI 自动阻止无治理元数据和新增旁路调用 |
 
 `15k tokens/run` 目前只是待校准假设，不作为初始硬承诺。先用真实语料建立分位数，再确定套餐预算。
 
@@ -440,12 +441,12 @@ PR #1432 完成上述安全代码切片后，已于 2026-07-18 完成生产 Java
 - 不给餐饮 Runtime 开代码执行或浏览器自动化；
 - 不给工厂启用通用 Replan；
 - 不为了“像 Coze”引入 Milvus、NSQ、ClickHouse、RocketMQ 和 FaaS；
-- 不重写全部 601 个 descriptor 口径的具体 Tool；
+- 不重写全部 588 个当前 descriptor Tool；
 - 不把现有 `Skill` 直接改名后宣称架构完成。
 
 ---
 
-## 11. 实施前仍需回答的问题
+## 11. 后续实施仍需回答的问题
 
 1. `tool_call_records` token 字段是否有足量真实数据；否则成本基线从新 Runtime event 建。
 2. Legacy Tool descriptor 的 WARN 命中和误伤面；至少先做影子报告。
@@ -457,12 +458,12 @@ PR #1432 完成上述安全代码切片后，已于 2026-07-18 完成生产 Java
 
 ## 12. 下一步唯一推荐动作
 
-代码侧 D10A/B/C/D 已完成并合并。下一步是一个独立的 **生产兼容迁移与发布任务**，不是继续堆功能：
+D9/D10 的生产 migration 与 Runtime 验证已经完成。当前唯一推荐动作是按 **D11 安全收口 → Gateway 兼容迁移 → 餐饮 Chat 产品闭环** 的顺序推进：
 
-1. 从 clean exact `origin/main` 核验 Java/Python/Web/RN 变更树、当前生产 commit/制品、Java active slot、Python 进程和已登记 migration；
-2. 先形成 D9 `V02`、D10 `V03/V04/V05` 的 expand/contract runbook，明确暂停路由、旧进程 drain、锁超时、失败恢复和不可逆 DDL 边界；
-3. 只在用户确认后执行唯一一次可信 release build，并按兼容顺序完成 migration、Java/Python、Web/RN 和路由恢复；
-4. 用服务健康、schema/RLS/constraint、跨租户隔离、checkpoint/replay/cancel、Gateway confirmation 和 AgentOps 幂等目标断言验证；
-5. 任一步失败均停在兼容状态或回切旧槽，不以“服务能启动”替代业务与数据隔离验收。
+1. **D11A**：修复 588/580 descriptor 门禁真值，删除入站 boolean confirmation authority，移除无消费者的 `ToolExecutionManager` 并把旁路 baseline 从 11 文件降到 10；同步本文与验收测试。此批不含 migration 和部署。
+2. **D11B**：先建立受限 legacy-inventory migration lane，再迁 ToolDispatch；随后按 scope 分批迁 Skill、MCP、scheduler/trigger/SOP 等旁路。当前只有 7 个 runtime-approved policy，禁止直接全量切入导致大面积能力拒绝。
+3. **餐饮 Chat**：先让“为什么毛利下降”等自然语言问题进入既有安全 Runtime，并在同一消息流呈现事件、证据、澄清与 Proposal；随后接自动 Eval/shadow comparison，再依据数据扩展第二条复杂路线。
+4. **工厂与写流程**：把四岗位 Capability Pack 接入主 Router/Fast Path；将 ActionProposal 通过白名单 mapper 接入 Java Workflow；按使用量完成 Skill 的 Workflow/Pack/Presenter 三拆。
+5. 每一批都必须用目标测试、旁路 baseline、route/trajectory/numeric truth 与用户可见入口验证；在上述闭环完成前，不宣称“通用餐饮 Agent”或“ToolExecutionGateway 唯一入口”已经完成。
 
 生产构建、DDL、上传、重启、蓝绿切流或 OTA 前，必须先向用户报告 exact main SHA、现场版本、迁移顺序、兼容窗口、回滚点和验收清单并取得确认。
