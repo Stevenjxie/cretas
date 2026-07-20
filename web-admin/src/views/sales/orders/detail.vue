@@ -15,6 +15,7 @@ import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { ArrowLeft } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
+import { displayUnit } from '@/utils/unitPricing';
 import { handleCatchError } from '@/utils/errorToast';
 // T4-D1 (issue #525): F006 customer asked for 来源仓库 (总仓/线边仓) per line item.
 // 2026-07-02 fix: resolve against the loaded warehouse list (DB name is
@@ -1439,7 +1440,9 @@ async function handleQuickPayFull() {
                 <template #default="{ row }">{{ row.specification || '-' }}</template>
               </el-table-column>
               <el-table-column prop="quantity" label="订单数量" width="110" align="right" />
-              <el-table-column prop="unit" label="单位" width="80" align="center" />
+              <el-table-column label="单位" width="80" align="center">
+                <template #default="{ row }">{{ displayUnit(row.unit) }}</template>
+              </el-table-column>
               <el-table-column prop="boxQuantity" label="箱数" width="80" align="right">
                 <template #default="{ row }">{{ row.boxQuantity || '-' }}</template>
               </el-table-column>
@@ -1863,7 +1866,9 @@ async function handleQuickPayFull() {
             <el-input-number v-model="row.deliveredQuantity" :min="0" size="small" style="width: 130px" />
           </template>
         </el-table-column>
-        <el-table-column prop="unit" label="单位" width="80" align="center" />
+        <el-table-column label="单位" width="80" align="center">
+          <template #default="{ row }">{{ displayUnit(row.unit) }}</template>
+        </el-table-column>
         <el-table-column v-if="canViewPrice" prop="unitPrice" label="单价" width="120" align="right">
           <template #default="{ row }">{{ formatAmount(row.unitPrice) }}</template>
         </el-table-column>
@@ -1970,9 +1975,9 @@ async function handleQuickPayFull() {
         <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
           <span style="font-weight: 500;">{{ item.productName }}</span>
           <span>
-            发货数量: <strong>{{ item.deliveredQuantity }}{{ item.unit }}</strong>
+            发货数量: <strong>{{ item.deliveredQuantity }}{{ displayUnit(item.unit) }}</strong>
             <span style="margin-left: 16px;" :style="{ color: Math.abs(sumAllocated(item) - item.deliveredQuantity) < 0.001 ? '#67c23a' : '#f56c6c' }">
-              分配合计: <strong>{{ sumAllocated(item) }}{{ item.unit }}</strong>
+              分配合计: <strong>{{ sumAllocated(item) }}{{ displayUnit(item.unit) }}</strong>
             </span>
           </span>
         </div>
@@ -1985,16 +1990,16 @@ async function handleQuickPayFull() {
           <el-table-column prop="productionDate" label="生产日期" width="120" />
           <el-table-column label="可用数量" width="150" align="right">
             <template #default="{ row }">
-              {{ row.availableQuantity }}{{ row.unit || item.unit }}
+              {{ row.availableQuantity }}{{ displayUnit(row.unit || item.unit) }}
               <div v-if="row.batchNativeUnit && row.batchNativeUnit !== (row.unit || item.unit)" style="font-size: 12px; color: #909399;">
-                (批次入库单位: {{ row.batchNativeUnit }})
+                (批次入库单位: {{ displayUnit(row.batchNativeUnit) }})
               </div>
             </template>
           </el-table-column>
           <el-table-column label="分配数量" width="200" align="center">
             <template #default="{ row }">
               <el-input-number v-model="row.allocatedQty" :min="0" :max="row.availableQuantity" :precision="2" :step="1" size="small" style="width: 120px" />
-              <span style="margin-left: 4px;">{{ row.unit || item.unit }}</span>
+              <span style="margin-left: 4px;">{{ displayUnit(row.unit || item.unit) }}</span>
             </template>
           </el-table-column>
         </el-table>

@@ -24,6 +24,7 @@ import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.finance.ArApTransactionRepository;
+import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.inventory.*;
 import com.cretas.aims.event.SalesOrderConfirmedEvent;
 import com.cretas.aims.event.SalesOrderFinanceApprovedEvent;
@@ -75,6 +76,10 @@ public class SalesServiceImpl implements SalesService {
     /** D1 双仓流转 (2026-05-10 spec, PR #309 A1=A) — sales 只从 WH-LOG 出. */
     @org.springframework.beans.factory.annotation.Autowired
     private WarehouseResolver warehouseResolver;
+
+    /** Validates user-selected source warehouse codes against the current factory. */
+    @org.springframework.beans.factory.annotation.Autowired
+    private FactoryWarehouseRepository factoryWarehouseRepository;
 
     /** P0-13 批次分配校验（可选注入，避免破坏现有构造器）。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -598,6 +603,8 @@ public class SalesServiceImpl implements SalesService {
             item.setRemark(itemDTO.getRemark());
             item.setSpecification(itemDTO.getSpecification());
             item.setBoxQuantity(itemDTO.getBoxQuantity());
+            item.setSourceWarehouseCode(normalizeSourceWarehouseCode(
+                    factoryId, itemDTO.getSourceWarehouseCode()));
             // P3 多仓字段 (V20260915_01) — 全 nullable, 普通订单不传不影响现有逻辑
             item.setDestWarehouseName(itemDTO.getDestWarehouseName());
             item.setDestWarehouseCode(itemDTO.getDestWarehouseCode());
@@ -1981,6 +1988,20 @@ public class SalesServiceImpl implements SalesService {
                 item.setRemark(itemDTO.getRemark());
                 item.setSpecification(itemDTO.getSpecification());
                 item.setBoxQuantity(itemDTO.getBoxQuantity());
+                if (itemDTO.getSourceWarehouseCode() == null && previous != null) {
+                    // Legacy clients may omit this field during a DRAFT update. Preserve the
+                    // persisted shipping source instead of silently clearing it.
+                    item.setSourceWarehouseCode(previous.getSourceWarehouseCode());
+                } else {
+                    item.setSourceWarehouseCode(normalizeSourceWarehouseCode(
+                            factoryId, itemDTO.getSourceWarehouseCode()));
+                }
+                item.setDestWarehouseName(itemDTO.getDestWarehouseName());
+                item.setDestWarehouseCode(itemDTO.getDestWarehouseCode());
+                item.setExternalPoId(itemDTO.getExternalPoId());
+                item.setBarcode(itemDTO.getBarcode());
+                item.setAppointmentTime(itemDTO.getAppointmentTime());
+                item.setRequiredArrivalDate(itemDTO.getRequiredArrivalDate());
                 newItems.add(item);
                 // E-2 空价草稿: unitPrice null → getLineAmount() null, 该行贡献 0 (同 createSalesOrder 防 NPE)
                 BigDecimal lineAmount = item.getLineAmount();
@@ -2014,6 +2035,49 @@ public class SalesServiceImpl implements SalesService {
 
         log.info("更新销售订单: orderId={}, orderNumber={}", orderId, order.getOrderNumber());
         return salesOrderRepository.save(order);
+    }
+
+    @Override
+    @Transactional
+    @Loggable(module = "SALES_ORDER", action = "REPAIR_SOURCE_WAREHOUSE",
+              entityType = "SalesOrderItem", entityIdParam = "itemId")
+    public SalesOrderItem repairMissingSourceWarehouse(
+            String factoryId, String orderId, Long itemId, String sourceWarehouseCode) {
+        SalesOrder order = getSalesOrderById(factoryId, orderId);
+        if (order.getStatus() == SalesOrderStatus.DRAFT
+                || order.getStatus() == SalesOrderStatus.CANCELLED) {
+            throw new BusinessException(409, "当前订单状态不允许历史来源仓修复")
+                    .withCode("SOURCE_WAREHOUSE_REPAIR_STATUS_INVALID")
+                    .withHint("草稿请通过正常编辑保存；已取消订单不能修复来源仓");
+        }
+
+        SalesOrderItem item = salesOrderItemRepository.findById(itemId)
+                .orElseThrow(() -> new ResourceNotFoundException("销售订单行不存在"));
+        if (!orderId.equals(item.getSalesOrderId())) {
+            throw new BusinessException(409, "销售订单行与订单不匹配")
+                    .withCode("SOURCE_WAREHOUSE_REPAIR_ITEM_MISMATCH")
+                    .withHintTarget("itemId");
+        }
+
+        String normalized = normalizeSourceWarehouseCode(factoryId, sourceWarehouseCode);
+        if (normalized == null) {
+            throw new BusinessException(400, "来源仓库编码不能为空")
+                    .withCode("SOURCE_WAREHOUSE_INVALID")
+                    .withHintTarget("sourceWarehouseCode");
+        }
+        String current = item.getSourceWarehouseCode();
+        if (current != null && !current.isBlank()) {
+            if (current.equals(normalized)) {
+                return item;
+            }
+            throw new BusinessException(409, "订单行已有不同的来源仓库，拒绝覆盖")
+                    .withCode("SOURCE_WAREHOUSE_REPAIR_CONFLICT")
+                    .withHint("请核对原订单和发货记录，不要用历史修复接口改写既有仓库")
+                    .withHintTarget("sourceWarehouseCode");
+        }
+
+        item.setSourceWarehouseCode(normalized);
+        return salesOrderItemRepository.saveAndFlush(item);
     }
 
     @Override
@@ -3482,6 +3546,24 @@ public class SalesServiceImpl implements SalesService {
         target.setPackagingUnit(source.getPackagingUnit());
         target.setPackagingBaseUnit(source.getPackagingBaseUnit());
         target.setPackagingFactor(source.getPackagingFactor());
+    }
+
+    private String normalizeSourceWarehouseCode(String factoryId, String sourceWarehouseCode) {
+        if (sourceWarehouseCode == null || sourceWarehouseCode.isBlank()) {
+            return null;
+        }
+        String normalized = sourceWarehouseCode.trim();
+        if (factoryWarehouseRepository == null) {
+            throw new IllegalStateException("FactoryWarehouseRepository is required for source warehouse validation");
+        }
+        return factoryWarehouseRepository
+                .findByFactoryIdAndCodeAndDeletedAtIsNull(factoryId, normalized)
+                .filter(warehouse -> Boolean.TRUE.equals(warehouse.getIsActive()))
+                .map(warehouse -> warehouse.getCode())
+                .orElseThrow(() -> new BusinessException(400, "来源仓库不存在、已停用或不属于当前工厂")
+                        .withCode("SOURCE_WAREHOUSE_INVALID")
+                        .withHint("请重新选择当前工厂的有效来源仓库")
+                        .withHintTarget("sourceWarehouseCode"));
     }
 
     private SalesOrderItem resolveDeliverySourceOrderItem(

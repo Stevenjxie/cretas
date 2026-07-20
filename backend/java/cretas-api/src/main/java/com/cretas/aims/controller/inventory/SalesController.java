@@ -9,6 +9,7 @@ import com.cretas.aims.dto.inventory.SignatureUploadRequest;
 import com.cretas.aims.dto.inventory.CreateSalesOrderRequest;
 import com.cretas.aims.dto.inventory.FinanceCostBreakdown;
 import com.cretas.aims.dto.inventory.FinanceReviewRequest;
+import com.cretas.aims.dto.inventory.RepairSalesOrderItemSourceWarehouseRequest;
 import com.cretas.aims.dto.inventory.UpdateSalesOrderRequest;
 import com.cretas.aims.dto.material.CreateMaterialBatchRequest;
 import com.cretas.aims.dto.material.MaterialBatchDTO;
@@ -22,6 +23,7 @@ import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.BusinessLinkRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
@@ -401,6 +403,20 @@ public class SalesController {
             @PathVariable @NotBlank String orderId) {
         SalesOrder order = salesService.getSalesOrderById(factoryId, orderId);
         return ApiResponse.success("查询成功", order);
+    }
+
+    @PostMapping("/orders/{orderId}/items/{itemId}/repair-source-warehouse")
+    @Operation(summary = "幂等补齐历史销售订单行来源仓",
+            description = "只允许填充缺失值；相同值重放不写入，不同既有值拒绝覆盖")
+    @RequirePermission("sales:read_write")
+    public ApiResponse<SalesOrderItem> repairOrderItemSourceWarehouse(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String orderId,
+            @PathVariable @NotNull Long itemId,
+            @Valid @RequestBody RepairSalesOrderItemSourceWarehouseRequest request) {
+        SalesOrderItem item = salesService.repairMissingSourceWarehouse(
+                factoryId, orderId, itemId, request.sourceWarehouseCode());
+        return ApiResponse.success("来源仓库已补齐", item);
     }
 
     @GetMapping("/orders/{orderId}/formulas")

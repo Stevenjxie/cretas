@@ -117,6 +117,13 @@ public class CreateSalesOrderRequest {
         @Size(max = 36, message = "包装规格ID长度不能超过36个字符")
         private String packagingSpecId;
 
+        /**
+         * Source warehouse code used by downstream allocation and shipment.
+         * The API persists the canonical warehouse code while Web renders its configured name.
+         */
+        @Size(max = 20, message = "来源仓库编码长度不能超过20个字符")
+        private String sourceWarehouseCode;
+
         // ==================== P3 多仓字段 ====================
 
         /**

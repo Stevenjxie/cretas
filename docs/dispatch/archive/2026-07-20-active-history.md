@@ -1,5 +1,18 @@
 # Dispatch 完成记录 — 2026-07-20
 
+### `F006-M09-SALES-DETAIL-SOURCE-20260720`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- 登记 Base SHA：`7536b6f6e6122f06e60bda071a63e3c179841813`
+- PR：[#1529](https://github.com/Stevenjxie/cretas/pull/1529)
+- 根因一：`CreateSalesOrderRequest.SalesOrderItemDTO` 未声明 `sourceWarehouseCode`，导致请求字段在 JSON 反序列化边界被静默丢弃；create/update 映射也未写入该字段。实体与数据库列本身已经存在，因此详情 GET 只能回读 null。
+- 根因二：销售订单详情、快捷发货、批次分配与利润详情直接渲染 API canonical `unit`，绕过共享 `displayUnit`，导致 `box` 泄漏给用户。
+- 范围：DTO→Service→Entity→GET 补齐来源仓持久化并按当前工厂有效仓码 fail-closed；编辑缺省字段保留既有值，复制和拆单保留来源仓/包装快照；新增只允许填空、同值重放 no-op、不同值拒绝覆盖的历史桥接；Web 用户可见单位统一 `box/case/slice → 盒/箱/片` 且 payload/DB 保持 canonical。未触碰 M08、PB/FG、LIUSHANMEN。
+- 验收：Web 目标测试 4 files / 19 tests 通过；唯一 Java release 生命周期 8/8 通过，JAR SHA-256 `a70bcf0148f45cbc0fcf3ecbe057fb1086e051e1b8f16584248ec305263eaca8`；唯一 Web release build 729 assets，archive SHA-256 `eafd82ba3f95535a7e61b95693b6ecc82be45ae6d728cb936c9637d4f3a2a84d`、index SHA-256 `9b68acb69b907fa6d8eb0952ca71ab67ff97becc1002232196f4c308eab03e1b`。
+- 生产边界：exact-main 部署后只对 F006 订单 `ecd7f20b-21c2-4ea3-9103-2034d5d6547f` 的 item `726` 调用一次幂等桥接写入 `WH-LOG`；不得改变数量、价格、税率、状态、订单版本或创建生产计划。随后全部 query-only 验收并通知原测试 Chat 从同一已批准订单继续。
+- Scope 锁：已释放。
+
 ### `F006-M09-SALES-PACKAGING-UNIT-20260720`
 
 - 状态：`merged`

@@ -36,7 +36,7 @@
         <el-table-column prop="productName" label="产品" min-width="160" fixed="left">
           <template #default="{ row }">
             <span>{{ row.productName || '—' }}</span>
-            <div class="product-meta" v-if="row.unit">{{ row.unit }}</div>
+            <div class="product-meta" v-if="row.unit">{{ displayUnit(row.unit) }}</div>
           </template>
         </el-table-column>
 
@@ -114,6 +114,7 @@ import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
 import { ArrowLeft } from '@element-plus/icons-vue';
 import { formatAmount, fmtQty } from '@/utils/tableFormatters';
+import { displayUnit } from '@/utils/unitPricing';
 import { handleCatchError } from '@/utils/errorToast';
 
 interface SalesProductProfitRow {
