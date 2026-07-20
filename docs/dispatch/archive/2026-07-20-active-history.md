@@ -1,5 +1,17 @@
 # Dispatch 完成记录 — 2026-07-20
 
+### `F006-M08-FG-TRANSFER-20260720`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- 登记 Base SHA：`33025f28f3dbb9724e9c488f233f3eb5cefbdc06`
+- PR：[#1526](https://github.com/Stevenjxie/cretas/pull/1526)
+- 根因：手动调拨页所有行类型都固定消费 `/reference-data/materials`，行选择和提交也固定绑定 `materialTypeId`，因此“成品/菜品”既看不到成品库存，也无法提交后端所需的 `productTypeId`；库存上限还是全厂物料口径，单位输入直接泄漏 canonical `box`。
+- 范围：复用现有 `/inventory/by-warehouse` 分仓库存真值，按调出仓聚合可用成品 SKU 和原料/包材；成品提交 `productTypeId`、原料/包材提交 `materialTypeId`；canonical unit 继续写入，Web 用共享 `displayUnit` 展示；Java 在建草稿前校验 identity、canonical unit 与源仓可用量，SHIP 事务原子门禁保持不变。未修改 F006 生产/库存数据，未触碰 LIUSHANMEN。
+- 验收：Web 目标测试 2 files / 11 tests 与 `vue-tsc` 通过；唯一 Java release 生命周期 15/15 通过，JAR SHA-256 `657e34d0159e304c5b0fe6098becd6df3c50845e5cb5463d2f1c70b9524995df`；唯一 Web release build archive SHA-256 `5cab5ac1a0904364592a7c92466d938abb3773bf3cf508ccb029eba102b27e01`、index SHA-256 `0cafedd6f39c30b7b1edc2db87fed64d788dfd1472d766eaacb9b1776162a0a6`。
+- 生产边界：exact-main 部署后只读证明同一 F006 成品仍唯一 5 盒，再通知原测试 Chat 从未创建调拨的现场续跑；不代替 QA 创建/审批/发运/签收/入库。
+- Scope 锁：已释放。
+
 ### `BOM-M04-BLOCKERS-20260720`
 
 - 状态：`merged`
