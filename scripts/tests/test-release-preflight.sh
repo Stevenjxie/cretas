@@ -79,4 +79,29 @@ diagnostic_output=$(bash "$PREFLIGHT" --repo-root "$success_repo" --skip-fetch -
     || fail "--allow-dirty diagnostic mode failed"
 assert_contains "$diagnostic_output" "release preflight PASSED (total:"
 
-echo "PASS: release preflight success, failure, fail-fast, configuration, and timing summaries"
+# Windows CRLF is valid EOL, not trailing whitespace. Real spaces/tabs before
+# EOL must still fail the same diff gate.
+crlf_repo=$(create_fixture crlf)
+mkdir -p "$crlf_repo/web-admin/src"
+printf 'first\r\nsecond\r\n' > "$crlf_repo/web-admin/src/crlf.ts"
+git -C "$crlf_repo" add web-admin/src/crlf.ts
+git -C "$crlf_repo" commit --quiet -m "add CRLF source"
+git -C "$crlf_repo" push --quiet
+crlf_output=$(bash "$PREFLIGHT" --repo-root "$crlf_repo" --skip-fetch 2>&1) \
+    || fail "CRLF fixture was rejected as trailing whitespace"
+assert_contains "$crlf_output" "release preflight PASSED (total:"
+
+trailing_repo=$(create_fixture trailing)
+mkdir -p "$trailing_repo/web-admin/src"
+printf 'bad trailing space \n' > "$trailing_repo/web-admin/src/trailing.ts"
+git -C "$trailing_repo" add web-admin/src/trailing.ts
+git -C "$trailing_repo" commit --quiet -m "add trailing whitespace"
+git -C "$trailing_repo" push --quiet
+set +e
+trailing_output=$(bash "$PREFLIGHT" --repo-root "$trailing_repo" --skip-fetch 2>&1)
+trailing_rc=$?
+set -e
+[ "$trailing_rc" -ne 0 ] || fail "real trailing whitespace unexpectedly passed"
+assert_contains "$trailing_output" "HEAD commit diff check failed"
+
+echo "PASS: release preflight success, failure, CRLF, whitespace, configuration, and timing summaries"

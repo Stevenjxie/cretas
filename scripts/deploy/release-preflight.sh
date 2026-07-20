@@ -252,10 +252,16 @@ encoding_gate() {
 
 diff_gate() {
     cd "$REPO_ROOT" || return 1
-    git diff --check || { fail_gate "unstaged diff check failed"; return 1; }
-    git diff --cached --check || { fail_gate "staged diff check failed"; return 1; }
+    # CRLF is a valid line ending in this Windows-first repository. Treat the
+    # carriage return as part of EOL while continuing to reject spaces/tabs
+    # before it and all other whitespace errors reported by `git diff --check`.
+    git -c core.whitespace=cr-at-eol diff --check \
+        || { fail_gate "unstaged diff check failed"; return 1; }
+    git -c core.whitespace=cr-at-eol diff --cached --check \
+        || { fail_gate "staged diff check failed"; return 1; }
     if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
-        git diff --check HEAD^ HEAD || { fail_gate "HEAD commit diff check failed"; return 1; }
+        git -c core.whitespace=cr-at-eol diff --check HEAD^ HEAD \
+            || { fail_gate "HEAD commit diff check failed"; return 1; }
     fi
 }
 

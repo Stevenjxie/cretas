@@ -89,7 +89,7 @@ fi
 
 changed_files=$(git diff --name-only "$BASE_SHA..$head_sha")
 [[ -n "$changed_files" ]] || fail "no committed changes to publish"
-git diff --check "$BASE_SHA..$head_sha"
+git -c core.whitespace=cr-at-eol diff --check "$BASE_SHA..$head_sha"
 
 if [[ -f docs/dispatch/ACTIVE.md ]]; then
     in_flight=$(awk '

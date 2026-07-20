@@ -111,8 +111,19 @@ run_fastlane "$dry_repo" --base-sha "$dry_base" --confirm YES-DIRECT-MAIN --dry-
 grep -Fq 'FASTLANE_DRY_RUN: git push origin HEAD:refs/heads/main' "$TMP_ROOT/dry.log" \
     || fail "dry-run receipt missing"
 
+crlf_repo=$(create_fixture crlf)
+crlf_base=$(git -C "$crlf_repo" rev-parse origin/main)
+printf 'first\r\nsecond\r\n' > "$crlf_repo/web-admin/src/crlf.ts"
+git -C "$crlf_repo" add web-admin/src/crlf.ts
+git -C "$crlf_repo" commit --quiet -m "add CRLF source"
+crlf_head=$(git -C "$crlf_repo" rev-parse HEAD)
+run_fastlane "$crlf_repo" --base-sha "$crlf_base" --confirm YES-DIRECT-MAIN \
+    > "$TMP_ROOT/crlf.log"
+[[ "$(git --git-dir="$TMP_ROOT/crlf-remote.git" rev-parse main)" == "$crlf_head" ]] \
+    || fail "valid CRLF commit did not fast-forward main"
+
 if grep -Ev '^\s*#' "$FASTLANE" | grep -Eq 'git push.*(--force|--force-with-lease)'; then
     fail "fastlane script contains a force-push path"
 fi
 
-echo "PASS: direct-main fastlane guards confirmation, cleanliness, ACTIVE, stale base, risk, and no-force push"
+echo "PASS: direct-main fastlane guards confirmation, cleanliness, ACTIVE, stale base, risk, CRLF, and no-force push"
