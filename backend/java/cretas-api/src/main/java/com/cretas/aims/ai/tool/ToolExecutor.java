@@ -100,7 +100,7 @@ public interface ToolExecutor {
      * <p><b>背景</b> (Fable Wave5/6/7 系统性审计): #704 只给 4 个工具加了 AI 路径鉴权, 但整类敏感写工具
      * (customer_delete / order_delete / finance_invoice_approve / transfer_approve / user_*  等 118 个)
      * 在 AI 对话路径上 <b>完全无鉴权</b> —— 默认 {@link #requiresPermission()}=false +
-     * 默认 {@link #hasPermission(String)}=true, 而 {@code ToolExecutionManager} / W0 WriteGuard 只做
+     * 默认 {@link #hasPermission(String)}=true, 而 W0 WriteGuard 只做
      * 可见性过滤 / 写确认门, 都不做角色鉴权。低权角色经 AI 对话即可删客户/订单/发票、批转账。
      *
      * <p>本方法让工具声明所需权限, 由中央 {@link ToolRbacEnforcer} 在 <b>所有执行路径</b>
