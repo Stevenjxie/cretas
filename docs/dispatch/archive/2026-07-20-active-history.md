@@ -1,5 +1,17 @@
 # Dispatch 完成记录 — 2026-07-20
 
+### `F006-M09-SALES-PACKAGING-UNIT-20260720`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- 登记 Base SHA：`a49d5aac5e635270535086d17c7e0d97cf9579ad`
+- PR：[#1528](https://github.com/Stevenjxie/cretas/pull/1528)
+- 根因：销售订单页直接把 SKU 中文展示单位写入请求，并把 `packageUnit` 或 `baseUnit` 任一匹配都视为可选箱规；F006 SKU 基础单位为“盒”、唯一箱规为“箱→盒”，于是 5盒订单错误携带 `unit=盒 + packagingSpecId`，与后端只允许包装单位选择箱规的严格 identity 契约冲突。
+- 范围：表单状态和 payload 统一 canonical unit，单位下拉及箱规文案继续使用中文 display；基础单位下单显示“不涉及”且不提交 `packagingSpecId`，保留 `boxQuantity` 折算；包装单位下单才选择对应箱规；创建/编辑提交前 fail-closed 拦截 stale/mismatch。后端生产规则未放宽，只把目标测试切到真实 canonical 单位引擎并覆盖中文/canonical aliases。
+- 验收：Web 目标测试 3 files / 20 tests 通过；唯一 Java release 生命周期 52/52 通过，JAR SHA-256 `9a3be242ff97e95b5aaf172223da680982b3dfcfa0454797aeef3ef3240da0f6`；唯一 Web release build 729 assets，archive SHA-256 `c825ffd266792f3448966e53f9f574a904a0293a9269ffac9d4a5f623303250b`、index SHA-256 `607a015a96ee737ebc8a653f9de5456eef284706ae33aabef9763d844ba35500`。
+- 生产边界：部署 exact main 后只读核验同一客户仍存在、销售订单仍未创建、CPF0060015 在 WH-LOG 仍为唯一可用5盒；通知原测试 Chat 刷新同一页面创建且仅创建一单。禁止代建订单、修改客户/M08调拨/PB/FG或触碰 LIUSHANMEN。
+- Scope 锁：已释放。
+
 ### `F006-M08-TRANSFER-DETAIL-UNIT-20260720`
 
 - 状态：`merged`

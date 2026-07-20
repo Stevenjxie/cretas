@@ -14,10 +14,11 @@ describe('sales order item editor layout', () => {
     expect(source).toContain('.sticky-col { position: sticky;');
   });
 
-  it('inherits the SKU base unit and exposes packaging choices for base-unit orders', () => {
-    expect(source).toContain('item.unit = pu || item.unit');
+  it('inherits the canonical SKU base unit but only exposes specs for their package unit', () => {
+    expect(source).toContain("const pu = canonicalUnitCode(p.unit || '份')");
     expect(source).not.toContain("pu === '盒' ? '份'");
-    expect(source).toContain('spec.baseUnit === item.unit');
+    expect(source).toContain('packagingOptionsForUnit');
+    expect(source).toContain(':label="displayUnit(u)"');
   });
 
   it('blocks saving when packaging specifications failed to load', () => {
