@@ -7,12 +7,10 @@
 ## 在飞任务
 
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
-- `M09-SETTLEMENT-OUTPUT-UNIT-20260720` — `in-progress` — Owner: Codex coordinator — Base SHA: `3a37bcbf3baad8bedd3d9c0e4492c63bdffae68f` — 修复结单 canonical output unit 持久化、历史 null 安全恢复和仓库确认 box/盒 契约；验收后合入 main 并部署生产。
 
 ## Scope 锁地图
 
 - `SEC-CREDENTIAL-ROTATION-20260719`：`scripts/systemd/` 中遗留明文启动脚本、现有/新增 secret 扫描配置与测试、`.gitignore` / 凭证模板、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-19-active-history.md`；外部状态仅限已授权的 Cretas 47/139 服务器配置、PostgreSQL 角色密码、相关阿里云/API 凭证与必要服务重启。验收：tracked tree 与完整 Git 历史脱敏盘点、scanner gate、exact-main 发布门禁、Java/Python/网关健康、登录与 Restaurant Agent 只读 smoke、核心 ERP 零写入。
-- `M09-SETTLEMENT-OUTPUT-UNIT-20260720`：`backend/java/cretas-api/src/main/java/com/cretas/aims/**/ProductionPlan*`、`backend/java/cretas-api/src/test/java/com/cretas/aims/service/ProductionPlanSettlementTest.java`、必要的 Web Admin 仓库确认单位展示文件/测试、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-20-active-history.md`。验收：canonical box 持久化与 GET、历史 null 受限幂等恢复、确认请求/响应/FG unit=box、UI displayUnit=盒、唯一 release gate、exact-main 部署与同一 settlement 只读验证。
 ## 阻塞项
 
 - Aliyun 主账号旧 AccessKey：官方 RAM API 返回 `Forbidden` 并提示泄露风险，旧 key 的 STS 仍有效；必须由阿里云控制台主账号删除。

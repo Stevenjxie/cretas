@@ -13,6 +13,17 @@
 - 生产边界：exact-main 部署后只对 F006 订单 `ecd7f20b-21c2-4ea3-9103-2034d5d6547f` 的 item `726` 调用一次幂等桥接写入 `WH-LOG`；不得改变数量、价格、税率、状态、订单版本或创建生产计划。随后全部 query-only 验收并通知原测试 Chat 从同一已批准订单继续。
 - Scope 锁：已释放。
 
+### `M09-SETTLEMENT-OUTPUT-UNIT-20260720`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- 登记 Base SHA：`3a37bcbf3baad8bedd3d9c0e4492c63bdffae68f`
+- 根因：逐道报工的末道 payload 已持有 canonical `outputUnit=box`，但 confirmation-only 结单预填把 `quantityUnit` 固定留空，结单实体因此保存 null；GET settlement 原样返回 null，Web 仓库确认只能走旧兜底“件”，确认写路径也允许该展示兜底成为入库单位。
+- 范围：末道正式报工 terminal outputs 成为结单数量与 canonical unit 的共同事实源；新结单持久化 `box/case/slice/kg/g` canonical 单位并拒绝与显式结单单位冲突；历史 null 结单的 GET 仅从同一计划正式末道报工只读恢复，不修改结单/库存；仓库确认核对请求单位与权威单位，缺失或冲突 fail-closed，成功确认时在同一事务把 canonical unit 写回既有 settlement、响应、挂账与唯一 FG。Web 已有 `displayUnit` 继续把 `box` 显示为“盒”，无需改 bundle。
+- 验收：最新 `origin/main` backend tree 上唯一受控回退 release 生命周期执行 `ProductionPlanSettlementTest` 34/34 通过；backend tree `0add1c0a937c13637c814fb851d81bcc7f9917b0`，JAR SHA-256 `3f2d29140e89c687ef978164c2728c386672a772ff521d7f907daa5b7fefa6e8`。新增覆盖新结单 canonical 持久化、历史 null GET 零写恢复、中文盒请求生成 canonical box FG、单位冲突零写拒绝。
+- 生产边界：exact-main 部署后仅 query-only 核验 settlement `7254a0d3-c14f-4ad8-abbb-b7de35b647b5` 的 GET 已恢复 `quantityUnit=box`、仍待仓库确认且无新 FG/库存写；不预先修改历史 settlement。测试 Chat 刷新同一确认步骤后单击一次，确认事务才安全写回 canonical unit 并生成唯一正式成品库存。
+- Scope 锁：已释放。
+
 ### `CRETAS-AI-ARCH-V2-D11-CLOSEOUT-20260720`
 
 - 状态：`merged`
