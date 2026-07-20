@@ -148,4 +148,24 @@ class AgentOpsServiceTest {
                     });
         }
     }
+
+    @Test
+    void onlyAllowlistedRuntimeShadowCanaryDenialIsPreservedAs403() throws Exception {
+        when(client.listEvalSets(any()))
+                .thenThrow(new AgentOpsClient.UpstreamException(
+                        403, "AGENT_OPS_RUNTIME_SHADOW_CANARY_DENIED"))
+                .thenThrow(new AgentOpsClient.UpstreamException(403, "UNSAFE_DETAIL"));
+
+        assertThatThrownBy(() -> service.listEvalSets("R001", "42", "platform_admin", "corr"))
+                .isInstanceOfSatisfying(ResponseStatusException.class, status -> {
+                    assertThat(status.getStatusCode().value()).isEqualTo(403);
+                    assertThat(status.getReason())
+                            .isEqualTo("AGENT_OPS_RUNTIME_SHADOW_CANARY_DENIED");
+                });
+        assertThatThrownBy(() -> service.listEvalSets("R001", "42", "platform_admin", "corr"))
+                .isInstanceOfSatisfying(ResponseStatusException.class, status -> {
+                    assertThat(status.getStatusCode().value()).isEqualTo(502);
+                    assertThat(status.getReason()).isEqualTo("AGENT_OPS_BAD_UPSTREAM");
+                });
+    }
 }

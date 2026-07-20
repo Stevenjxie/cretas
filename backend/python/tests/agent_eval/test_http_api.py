@@ -7,7 +7,11 @@ from smartbi.agent.eval import (
     InMemoryAgentOpsStore,
     OfflineBatchRunner,
 )
-from smartbi.api.agent_ops import get_agent_ops_service, router
+from smartbi.api.agent_ops import (
+    get_agent_ops_service,
+    get_runtime_shadow_agent_ops_service,
+    router,
+)
 
 from .helpers import case, config_snapshot
 from .test_runtime_shadow import runtime_case
@@ -21,13 +25,15 @@ def app_and_store():
     async def trusted(request: Request, call_next):
         request.state.auth_method = request.headers.get("X-Test-Auth", "internal")
         request.state.factory_id = request.headers.get("X-Test-Factory", "R001")
-        request.state.user_id = "42"
+        request.state.user_id = request.headers.get("X-Test-User", "42")
         request.state.role = request.headers.get("X-Test-Role", "platform_admin")
         request.state.business_type = "RESTAURANT"
         return await call_next(request)
 
     app.include_router(router)
-    app.dependency_overrides[get_agent_ops_service] = lambda: AgentOpsService(store)
+    service_override = lambda: AgentOpsService(store)
+    app.dependency_overrides[get_agent_ops_service] = service_override
+    app.dependency_overrides[get_runtime_shadow_agent_ops_service] = service_override
     return app, store
 
 
@@ -77,6 +83,12 @@ def test_runtime_shadow_feature_flag_defaults_closed_and_gates_corpus_import(mon
 
     store.seed_runtime_corpus("R001", [runtime_case()])
     monkeypatch.setenv("AGENT_OPS_RUNTIME_SHADOW_ENABLED", "true")
+    monkeypatch.setenv("AGENT_OPS_RUNTIME_SHADOW_FACTORY_ALLOWLIST", "R001")
+    monkeypatch.setenv(
+        "AGENT_OPS_RUNTIME_SHADOW_ROLE_ALLOWLIST", "platform_admin"
+    )
+    monkeypatch.setenv("AGENT_OPS_RUNTIME_SHADOW_SAMPLE_BPS", "10000")
+    monkeypatch.setenv("AGENT_OPS_RUNTIME_SHADOW_ROLLOUT_SALT", "http-api-test")
     enabled = client.post(
         "/api/internal/smartbi/agent/runs/ops/eval-sets/import-runtime-corpus",
         json=body,

@@ -131,6 +131,9 @@ public class AgentOpsService {
             return action.apply(context);
         } catch (UpstreamException ex) {
             throw switch (ex.getStatusCode()) {
+                case 403 -> "AGENT_OPS_RUNTIME_SHADOW_CANARY_DENIED".equals(ex.getDetailCode())
+                        ? new ResponseStatusException(HttpStatus.FORBIDDEN, ex.getDetailCode())
+                        : new ResponseStatusException(HttpStatus.BAD_GATEWAY, "AGENT_OPS_BAD_UPSTREAM");
                 case 409 -> new ResponseStatusException(HttpStatus.CONFLICT, conflictCode(ex));
                 case 503 -> new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
                         "AGENT_OPS_RUNTIME_SHADOW_DISABLED".equals(ex.getDetailCode())
