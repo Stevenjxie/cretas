@@ -79,6 +79,40 @@ GREEN_PORT=10020
 GREEN_MANAGEMENT_PORT=10022
 GREEN_SERVICE="cretas-backend-green"
 
+# BEGIN_POST_SWITCH_PROBE_HELPER
+# Keep a transient SSH failure from escaping the explicit rollback path under
+# `set -e`. Each observation round gets a small bounded retry window; sustained
+# HTTP or systemd failure is still returned to the caller and triggers rollback.
+post_switch_probe() {
+    local gateway="$1"
+    local server="$2"
+    local service="$3"
+    local attempts="${CRETAS_POST_SWITCH_PROBE_ATTEMPTS:-3}"
+    local retry_seconds="${CRETAS_POST_SWITCH_PROBE_RETRY_SECONDS:-1}"
+    local attempt
+
+    case "$attempts" in
+        ''|*[!0-9]*) attempts=3 ;;
+    esac
+    [ "$attempts" -ge 1 ] 2>/dev/null || attempts=3
+
+    POST_SWITCH_HTTP=""
+    POST_SWITCH_SYSTEMD=""
+    for ((attempt = 1; attempt <= attempts; attempt++)); do
+        POST_SWITCH_HTTP=$(ssh "$gateway" "curl -sk -o /dev/null --max-time 5 -w '%{http_code}' -H 'Host: api.cretaceousfuture.com' https://127.0.0.1/api/mobile/health" 2>/dev/null || true)
+        POST_SWITCH_SYSTEMD=$(ssh "$server" "systemctl is-active $service 2>&1" 2>/dev/null || true)
+        if [ "$POST_SWITCH_HTTP" = "200" ] && [ "$POST_SWITCH_SYSTEMD" = "active" ]; then
+            return 0
+        fi
+        if [ "$attempt" -lt "$attempts" ]; then
+            echo "   ⚠️  切换后探针瞬态失败，重试 $attempt/$attempts: HTTP=${POST_SWITCH_HTTP:-empty} systemd=${POST_SWITCH_SYSTEMD:-empty}"
+            sleep "$retry_seconds"
+        fi
+    done
+    return 1
+}
+# END_POST_SWITCH_PROBE_HELPER
+
 # GitHub 镜像列表
 GITHUB_MIRRORS=(
     "ghproxy.cc"
@@ -1662,13 +1696,10 @@ deploy_jar() {
             deploy_timing_begin post_switch_observation "切流后稳定观察"
             for ROUND in 1 2 3 4 5; do
                 sleep 6
-                VERIFY=$(ssh $GATEWAY "curl -sk -o /dev/null --max-time 5 -w '%{http_code}' -H 'Host: api.cretaceousfuture.com' https://127.0.0.1/api/mobile/health" 2>/dev/null)
-                # 同时检查新 idle systemd 是否 still running (catch crashloop early)
-                IDLE_RUNNING=$(ssh $SERVER "systemctl is-active $IDLE_SERVICE 2>&1" 2>/dev/null)
-                if [ "$VERIFY" = "200" ] && [ "$IDLE_RUNNING" = "active" ]; then
-                    echo "   ✓ 切换后健康轮次 $ROUND/5: HTTP=$VERIFY systemd=$IDLE_RUNNING"
+                if post_switch_probe "$GATEWAY" "$SERVER" "$IDLE_SERVICE"; then
+                    echo "   ✓ 切换后健康轮次 $ROUND/5: HTTP=$POST_SWITCH_HTTP systemd=$POST_SWITCH_SYSTEMD"
                 else
-                    echo "   ❌ 切换后健康轮次 $ROUND/5 失败: HTTP=$VERIFY systemd=$IDLE_RUNNING"
+                    echo "   ❌ 切换后健康轮次 $ROUND/5 失败: HTTP=${POST_SWITCH_HTTP:-empty} systemd=${POST_SWITCH_SYSTEMD:-empty}"
                     POST_SWITCH_HEALTHY=false
                     break
                 fi
