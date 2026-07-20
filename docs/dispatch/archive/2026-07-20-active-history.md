@@ -24,6 +24,17 @@
 - 生产边界：exact-main 部署后仅 query-only 核验 settlement `7254a0d3-c14f-4ad8-abbb-b7de35b647b5` 的 GET 已恢复 `quantityUnit=box`、仍待仓库确认且无新 FG/库存写；不预先修改历史 settlement。测试 Chat 刷新同一确认步骤后单击一次，确认事务才安全写回 canonical unit 并生成唯一正式成品库存。
 - Scope 锁：已释放。
 
+### `MAIN-STARTUP-1532-20260720`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- 登记 Base SHA：`b587e0ee779136a5fe87f6722a61617fe1a7a0db`
+- 根因：#1532 新增的 `RestaurantGrossMarginChatRouteSelector` 同时保留运行时单参数构造器和测试用 `Clock` 双参数构造器，但没有标注 Spring 应选择哪一个；Bean 工厂因此退回无参实例化并报 `No default constructor found`，使 exact-main 新槽无法启动。日志中的 `operation_logs varchar(20)` 是 13:03 的历史异步审计错误，不属于 15:18 启动失败。
+- 范围：只给运行时单参数构造器加显式 `@Autowired`，保留测试 clock 注入能力；新增真实 `AnnotationConfigApplicationContext` 实例化回归。未改数据库、Repository、业务数据、Web 或 LIUSHANMEN。
+- 验收：唯一 Java release 生命周期同时执行 M09 `ProductionPlanSettlementTest` 34/34 与 selector 4/4，共 38/38 通过；backend tree `432d63ac28bbc6bb4d2f2ba63b419b4ad6c15353`，JAR SHA-256 `954bd71b13632343e5456925606e2a064693f4a3f960f82ea98c698523eb3bfe`。
+- 发布边界：首次 #1533 JAR 启动失败时脚本保持 green/10020 upstream 并停止 blue；本修复合入 exact main 后复用新可信 manifest 重新部署，必须以 blue core/full readiness、切流观察和 M09 同一 settlement 只读恢复为完成条件。
+- Scope 锁：已释放。
+
 ### `CRETAS-AI-ARCH-V2-D11-CLOSEOUT-20260720`
 
 - 状态：`merged`
