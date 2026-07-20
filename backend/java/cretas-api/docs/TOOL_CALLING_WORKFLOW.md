@@ -1,5 +1,12 @@
 # Tool Calling Workflow Diagram
 
+> **Historical document — do not use as the current execution architecture.**
+> `ToolExecutionManager` had no runtime consumers and was removed in D11A. The current target is
+> `ToolExecutionGateway` with a shrinking, test-frozen legacy bypass list; the authoritative status
+> and migration order are recorded in
+> [`docs/architecture/2026-07-18-cretas-agent-architecture-v2.md`](../../../../docs/architecture/2026-07-18-cretas-agent-architecture-v2.md).
+> The diagrams below are retained only to explain the retired prototype flow.
+
 ## Complete Flow
 
 ```
