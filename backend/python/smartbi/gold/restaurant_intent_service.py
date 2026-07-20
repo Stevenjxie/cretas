@@ -31,6 +31,8 @@ import asyncio
 import logging
 from typing import Any, Dict, Optional
 
+from smartbi.gold.customer_text import sanitize_customer_ai_text
+
 from smartbi.gold import answer_contract as _contract
 from smartbi.gold.restaurant_intent import (
     RestaurantQuerySpec,
@@ -140,6 +142,7 @@ async def tiered_answer(
                 f"\n\n⚠️ 提示：以上回答可能未完整覆盖{_contract.describe_missing(contract.missing)}，"
                 "如需更精确的结果，可以换个更具体的说法重新提问。"
             )
+        answer_text = sanitize_customer_ai_text(answer_text)
 
         result: Dict[str, Any] = {
             "kind": "answer",

@@ -77,7 +77,8 @@ class GoldFinanceClientTest {
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(servletRequest));
 
         Map<String, Object> result = client.fetchRestaurantOpsAnalysis(
-                "REST-OPS", "show restaurant costs", "session-ops");
+                "REST-OPS", "show restaurant costs", "session-ops",
+                "RESTAURANT_OPS_GROSS_MARGIN");
 
         assertEquals("ops answer", result.get("answer"));
         RecordedRequest request = server.takeRequest();
@@ -90,6 +91,7 @@ class GoldFinanceClientTest {
         assertEquals("show restaurant costs", body.path("query").asText());
         assertEquals("restaurant_ops", body.path("table_type").asText());
         assertEquals("session-ops", body.path("session_id").asText());
+        assertEquals("RESTAURANT_OPS_GROSS_MARGIN", body.path("expected_intent").asText());
         assertFalse(body.path("allow_tenant_data_fallback").asBoolean(true));
         assertFalse(body.has("factory_id"));
         assertFalse(body.has("user_id"));

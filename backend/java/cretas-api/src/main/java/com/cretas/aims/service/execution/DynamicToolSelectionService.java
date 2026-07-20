@@ -725,7 +725,13 @@ public class DynamicToolSelectionService {
                 || normalized.contains("工具直接调用")
                 || normalized.contains("无需多步骤")
                 || normalized.contains("无需多工具")
-                || normalized.contains("restaurant_");
+                || normalized.contains("restaurant_")
+                || normalized.contains("/api/")
+                || normalized.contains("调用工具")
+                || normalized.contains("使用工具")
+                || normalized.contains("通过工具")
+                || normalized.contains("数据表")
+                || normalized.matches("(?s).*\\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\\b.*");
     }
 
     private IntentExecuteResponse buildNoToolResponse(AIIntentConfig intent) {

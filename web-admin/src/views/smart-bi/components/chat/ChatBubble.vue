@@ -4,6 +4,7 @@ import { marked } from 'marked';
 import { ElAlert } from 'element-plus';
 import type { ChatTurn } from '@/types/restaurant-chat';
 import RestaurantChartBlock from './RestaurantChartBlock.vue';
+import { sanitizeCustomerAiText } from './customerAiText';
 
 defineProps<{
   turn: ChatTurn;
@@ -18,7 +19,7 @@ defineProps<{
 function renderMarkdown(text: string): string {
   if (!text) return '';
   try {
-    return DOMPurify.sanitize(marked.parse(text, { breaks: true, gfm: true }) as string);
+    return DOMPurify.sanitize(marked.parse(sanitizeCustomerAiText(text), { breaks: true, gfm: true }) as string);
   } catch {
     // marked can throw on pathological input; NEVER feed raw text into v-html
     // (cached answers are tenant-shared) — HTML-escape so a parse failure cannot
@@ -39,10 +40,6 @@ function alertType(level: string): 'error' | 'warning' {
   <div class="chat-bubble" :class="`bubble-${turn.role}`">
     <div v-if="turn.role === 'ai'" class="bubble-avatar">&#8478;</div>
     <div class="bubble-body">
-      <div v-if="turn.role === 'ai' && turn.toolName" class="bubble-label">
-        &#9658; {{ turn.toolName }}
-      </div>
-
       <!-- 🔒 反回扣(anti-kickback) alerts — shown ABOVE the answer (fool-proof
            Rule 1/2: visible before the narrative, never buried). -->
       <div v-if="turn.alerts && turn.alerts.length" class="bubble-alerts">
@@ -138,6 +135,9 @@ function alertType(level: string): 'error' | 'warning' {
   font-size: 14px;
   line-height: 1.7;
   color: #3d3d3d;
+}
+.bubble-user .bubble-content {
+  color: #faf7f0;
 }
 .bubble-content-markdown {
   :deep(p) { margin: 0.4em 0; }

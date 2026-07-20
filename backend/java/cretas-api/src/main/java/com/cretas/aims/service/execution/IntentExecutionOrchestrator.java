@@ -1382,6 +1382,20 @@ public class IntentExecutionOrchestrator {
             return Optional.of("RESTAURANT_OPS_STORE_MARGIN");
         }
 
+        if (containsAny(q, "净利率", "净利润率")) {
+            return Optional.of("INCOME_STATEMENT_QUERY");
+        }
+
+        if (containsAny(q, "毛利", "毛利率")
+                && containsAny(q, "趋势", "走势", "曲线", "按月", "月份", "参照线", "计划线", "预警线")) {
+            return Optional.of("RESTAURANT_OPS_GROSS_MARGIN");
+        }
+
+        if (containsAny(q, "整体毛利率", "总毛利率", "综合毛利率")
+                && containsAny(q, "多少", "怎么样", "查询", "看", "分析", "整体", "总")) {
+            return Optional.of("RESTAURANT_OPS_SALES_SUMMARY");
+        }
+
         if (containsAny(q, "毛利", "利润率", "毛利率")
                 && containsAny(q, "菜", "菜品", "产品", "哪些", "排名", "最高", "最低")) {
             return Optional.of("RESTAURANT_OPS_GROSS_MARGIN");

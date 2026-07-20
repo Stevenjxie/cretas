@@ -15,6 +15,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.lang.reflect.Field;
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.YearMonth;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -78,6 +80,8 @@ class IncomeStatementQueryToolTest {
         // grossMarginPercent = 40000 / 100000 * 100 = 40.00
         assertEquals(0, ((BigDecimal) data.get("grossMarginPercent"))
                 .compareTo(new BigDecimal("40.00")));
+        assertEquals(0, ((BigDecimal) data.get("netMarginPercent"))
+                .compareTo(new BigDecimal("25.00")));
         assertEquals("CALCULABLE", data.get("grossMarginStatus"));
         assertTrue(data.get("actionHint").toString().contains("income-statement"));
     }
@@ -112,8 +116,36 @@ class IncomeStatementQueryToolTest {
         assertNull(data.get("grossMarginPercent"));
         assertNull(data.get("operatingProfit"));
         assertNull(data.get("netProfit"));
+        assertNull(data.get("netMarginPercent"));
         assertEquals("MISSING_COST_DATA", data.get("grossMarginStatus"));
         assertTrue(result.get("message").toString().contains("请先补录或同步成本凭证"));
+    }
+
+    @Test
+    @DisplayName("UT-ISQ-04: natural-language last month is resolved instead of defaulting to current month")
+    void resolvesNaturalLanguageLastMonth() {
+        YearMonth[] period = IncomeStatementQueryTool.resolvePeriod(
+                Map.of("userInput", "上月净利率是多少"),
+                LocalDate.of(2026, 7, 20));
+
+        assertArrayEquals(
+                new YearMonth[]{YearMonth.of(2026, 6), YearMonth.of(2026, 6)},
+                period);
+    }
+
+    @Test
+    @DisplayName("UT-ISQ-05: preprocessed dates take priority over natural-language defaults")
+    void resolvesPreprocessedDateRange() {
+        YearMonth[] period = IncomeStatementQueryTool.resolvePeriod(
+                Map.of(
+                        "userInput", "查看净利率",
+                        "startDate", "2025-11-01",
+                        "endDate", "2026-01-31"),
+                LocalDate.of(2026, 7, 20));
+
+        assertArrayEquals(
+                new YearMonth[]{YearMonth.of(2025, 11), YearMonth.of(2026, 1)},
+                period);
     }
 
     // ── helpers ──

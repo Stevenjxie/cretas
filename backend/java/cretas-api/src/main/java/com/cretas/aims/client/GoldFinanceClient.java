@@ -1298,6 +1298,15 @@ public class GoldFinanceClient {
             String question,
             String sessionId
     ) throws IOException {
+        return fetchRestaurantOpsAnalysis(factoryId, question, sessionId, null);
+    }
+
+    public Map<String, Object> fetchRestaurantOpsAnalysis(
+            String factoryId,
+            String question,
+            String sessionId,
+            String expectedIntent
+    ) throws IOException {
         requireFactory(factoryId);
         if (question == null || question.trim().isEmpty()) {
             throw new IllegalArgumentException("question required");
@@ -1311,6 +1320,7 @@ public class GoldFinanceClient {
                         question,
                         null,
                         "restaurant_ops",
+                        expectedIntent,
                         sessionId != null && !sessionId.isBlank()
                                 ? sessionId : "java-restaurant-ops",
                         false,

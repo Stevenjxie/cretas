@@ -74,7 +74,8 @@ public class RestaurantOpsGoldAnalysisTool extends AbstractBusinessTool {
             sessionId = req.getSessionId();
         }
 
-        Map<String, Object> response = gold.fetchRestaurantOpsAnalysis(factoryId, question, sessionId);
+        Map<String, Object> response = gold.fetchRestaurantOpsAnalysis(
+                factoryId, question, sessionId, asString(params.get("intentCode")));
         boolean success = !Boolean.FALSE.equals(response.get("success"));
         String answer = firstNonBlank(
                 asString(response.get("answer")),

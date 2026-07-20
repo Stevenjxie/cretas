@@ -60,6 +60,13 @@ _OPS_PATTERNS: List[Tuple[str, List[List[str]]]] = [
         [["门店", "店", "分店", "店铺", "哪家"],
          ["毛利", "毛利率", "赚钱", "净赚", "利润"]],
     ),
+    # Metric-preserving margin trend. This MUST precede the generic trend
+    # matcher below; otherwise "整体毛利率趋势" silently becomes revenue trend.
+    (
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        [["毛利", "毛利率"],
+         ["趋势", "走势", "曲线", "按月", "月份", "参照线", "计划线", "预警线"]],
+    ),
     # Cross-module gross margin — dish-level (MUST come BEFORE recipe_cost since
     # "毛利" on its own = margin not cost). Plan C's signature feature.
     # Apr 25 2026 routing fix (C-2 audit follow-up): removed bare "菜" from
@@ -73,6 +80,12 @@ _OPS_PATTERNS: List[Tuple[str, List[List[str]]]] = [
         "RESTAURANT_OPS_GROSS_MARGIN",
         [["毛利", "毛利率", "净赚", "赚钱", "挣钱", "利润"],
          ["菜品", "菜系", "菜价", "哪道", "哪个", "排行", "排名", "top", "TOP", "最高", "最赚"]],
+    ),
+    # Point-in-time overall margin belongs to the business summary resolver,
+    # which returns a weighted margin together with cost coverage.
+    (
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        [["毛利", "毛利率"], ["整体", "总体", "总", "多少", "是多少"]],
     ),
     # Recipe cost (食材成本 only — 毛利 moved to gross_margin)
     (
@@ -317,6 +330,134 @@ def _compute_margin_dragger(
         cause = "毛利率偏低，可小幅提价或标准化份量"
     best["cause"] = cause
     return best
+
+
+def _build_margin_entries(
+    pos_rows: List[Any],
+    cretas_map: Dict[str, str],
+    cost_map: Dict[str, float],
+) -> List[Dict[str, Any]]:
+    """Build margin rows while preserving unknown cost as unknown."""
+    entries: List[Dict[str, Any]] = []
+    for row in pos_rows:
+        source_pk = cretas_map.get(row["normalized_name"])
+        has_cost = source_pk is not None and source_pk in cost_map and cost_map[source_pk] is not None
+        unit_cost = float(cost_map[source_pk]) if has_cost else None
+        qty = float(row["total_qty"])
+        revenue = float(row["total_revenue"])
+        total_cost = unit_cost * qty if unit_cost is not None else None
+        gross_profit = revenue - total_cost if total_cost is not None else None
+        margin_rate = gross_profit / revenue if gross_profit is not None and revenue > 0 else None
+        entries.append({
+            "name": row["dish_name"],
+            "normalized_name": row["normalized_name"],
+            "qty": qty,
+            "revenue": revenue,
+            "bills": int(row["bills"]),
+            "food_cost_unit": unit_cost,
+            "total_cost": total_cost,
+            "gross_profit": gross_profit,
+            "margin_rate": margin_rate,
+            "has_cost": has_cost,
+        })
+    return entries
+
+
+def _rank_cost_complete_margin_entries(
+    entries: List[Dict[str, Any]], top_n: int,
+) -> List[Dict[str, Any]]:
+    """Rank only cost-complete dishes by absolute gross profit."""
+    return sorted(
+        (item for item in entries if item["has_cost"] and item["gross_profit"] is not None),
+        key=lambda item: item["gross_profit"],
+        reverse=True,
+    )[:top_n]
+
+
+def _aggregate_store_margin_entries(
+    store_dish_rows: List[Any],
+    name_to_pk: Dict[str, str],
+    cost_by_pk: Dict[str, float],
+    bill_count_by_store: Optional[Dict[Any, int]] = None,
+) -> List[Dict[str, Any]]:
+    """Aggregate store margins without turning missing dish cost into zero."""
+    per_store: Dict[Any, Dict[str, Any]] = {}
+    for row in store_dish_rows:
+        source_pk = name_to_pk.get(row["normalized_name"])
+        has_cost = (
+            source_pk is not None
+            and source_pk in cost_by_pk
+            and cost_by_pk[source_pk] is not None
+        )
+        dish_cost = float(cost_by_pk[source_pk]) if has_cost else None
+        store = per_store.setdefault(row["store_id"], {
+            "store_id": row["store_id"],
+            "name": row["store_name"],
+            "revenue": 0.0,
+            "revenue_with_cost": 0.0,
+            "cost": 0.0,
+            "bills": 0,
+            "dishes": 0,
+            "dishes_with_cost": 0,
+        })
+        revenue = float(row["revenue"] or 0.0)
+        qty = float(row["qty"] or 0.0)
+        store["revenue"] += revenue
+        store["dishes"] += 1
+        if has_cost and dish_cost is not None:
+            store["revenue_with_cost"] += revenue
+            store["cost"] += dish_cost * qty
+            store["dishes_with_cost"] += 1
+
+    for store in per_store.values():
+        if bill_count_by_store is not None:
+            store["bills"] = int(bill_count_by_store.get(store["store_id"], 0))
+        else:
+            # A safe lower bound for unit fixtures/legacy callers; production
+            # passes an exact distinct bill count from a store-level query.
+            store["bills"] = max(
+                (int(row["bills"] or 0) for row in store_dish_rows
+                 if row["store_id"] == store["store_id"]),
+                default=0,
+            )
+        covered_revenue = store["revenue_with_cost"]
+        store["cost_coverage_ratio"] = (
+            covered_revenue / store["revenue"] if store["revenue"] > 0 else 0.0
+        )
+        if covered_revenue > 0:
+            store["gross_profit"] = covered_revenue - store["cost"]
+            store["margin_rate"] = store["gross_profit"] / covered_revenue
+        else:
+            store["gross_profit"] = None
+            store["margin_rate"] = None
+    return list(per_store.values())
+
+
+def _parse_margin_reference_lines(query: Optional[str]) -> List[Dict[str, float]]:
+    """Extract explicit target/warning percentages; never invent defaults."""
+    text = query or ""
+
+    def _find(label_pattern: str) -> Optional[float]:
+        patterns = (
+            rf"(\d+(?:\.\d+)?)\s*%?\s*(?:的)?(?:{label_pattern})(?:值|线|参照线)?",
+            rf"(?:{label_pattern})(?:值|线|参照线)?\s*(?:为|是|设为|设置为)?\s*(\d+(?:\.\d+)?)\s*%",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                value = float(match.group(1))
+                if 0 <= value <= 100:
+                    return value
+        return None
+
+    result: List[Dict[str, float]] = []
+    target = _find("计划|目标")
+    warning = _find("预警|警戒")
+    if target is not None:
+        result.append({"name": "计划值", "yAxis": target})
+    if warning is not None:
+        result.append({"name": "预警值", "yAxis": warning})
+    return result
 
 
 _CN_SMALL_NUMBERS = {
@@ -699,7 +840,7 @@ async def resolve_recipe_cost(
 
     answer = (
         f"菜品食材成本 Top {len(rows)}:\n{top_text}\n\n"
-        f"注: 成本 = 标准用量 × 食材单价. 售价数据可从 POS Gold (fact_pos_item) 获取后计算毛利."
+        "注：成本按标准用量乘以食材单价计算；补齐销售金额后即可计算毛利。"
     )
     charts = []
     if rows:
@@ -802,7 +943,7 @@ async def resolve_requisition_trend(
 
 async def resolve_gross_margin(
     smartbi_pool, factory_id: str, days: int = 30, top_n: int = 10,
-    *, role: Optional[str] = None,
+    *, role: Optional[str] = None, query: Optional[str] = None,
 ) -> OpsAnswer:
     """Cross-module gross margin analysis: POS sold_price × recipe food_cost.
 
@@ -835,7 +976,20 @@ async def resolve_gross_margin(
             kpis=[],
             meta={"rbac_masked": True},
         )
+    query_text = query or ""
+    trend_requested = any(token in query_text for token in (
+        "趋势", "走势", "曲线", "按月", "月份", "参照线", "计划线", "预警线",
+    ))
+    requested_period = _relative_period_match(query_text)
+    analysis_days = days
+    if trend_requested:
+        if requested_period and requested_period[1] == "月":
+            analysis_days = max(days, requested_period[0] * 31)
+        else:
+            analysis_days = max(days, 730)
+
     # Need cretas connection for product_types name↔id lookup
+    monthly_pos_rows: List[Any] = []
     async with smartbi_pool.acquire() as conn:
         await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
 
@@ -873,25 +1027,58 @@ async def resolve_gross_margin(
              GROUP BY p.product_id, p.name, p.normalized_name
              ORDER BY total_revenue DESC NULLS LAST
             """,
-            factory_id, days,
+            factory_id, analysis_days,
         )
+        if trend_requested:
+            monthly_pos_rows = await conn.fetch(
+                """
+                WITH anchor AS (
+                    SELECT MAX(t2.date) AS end_date
+                      FROM fact_pos_item i2
+                      JOIN fact_pos_transaction t2 ON t2.id = i2.transaction_id
+                      JOIN dim_product p2
+                        ON p2.product_id = i2.product_id
+                       AND p2.factory_id = i2.factory_id
+                     WHERE i2.factory_id = $1
+                       AND t2.factory_id = $1
+                )
+                SELECT date_trunc('month', t.date)::date AS month,
+                       p.name AS dish_name, p.normalized_name,
+                       SUM(i.qty)::float AS total_qty,
+                       SUM(i.amount)::float AS total_revenue,
+                       COUNT(DISTINCT i.transaction_id)::int AS bills
+                  FROM fact_pos_item i
+                  JOIN fact_pos_transaction t ON t.id = i.transaction_id
+                  JOIN dim_product p ON p.product_id = i.product_id
+                  CROSS JOIN anchor
+                 WHERE i.factory_id = $1
+                   AND t.factory_id = $1
+                   AND p.factory_id = $1
+                   AND anchor.end_date IS NOT NULL
+                   AND t.date >= anchor.end_date - ($2::int)
+                   AND t.date <= anchor.end_date
+                 GROUP BY date_trunc('month', t.date)::date,
+                          p.name, p.normalized_name
+                 ORDER BY month, p.name
+                """,
+                factory_id, analysis_days,
+            )
 
     if not pos_rows:
         return OpsAnswer(
             code="RESTAURANT_OPS_GROSS_MARGIN",
-            title=f"菜品毛利分析 (近{days}天)",
+            title=f"菜品毛利分析 (近{analysis_days}天)",
             answer_text=(
-                f"近 {days} 天无 POS 销售数据.\n"
-                f"提示: 上传 POS 账单 Excel 到 SmartBI, materialize 后会写入 fact_pos_item, "
-                f"本分析即可运行. 需要同时有配方+食材单价才能计算毛利."
+                f"近 {analysis_days} 天没有可用于计算的销售记录。\n"
+                "请确认销售数据已经同步，并补齐菜品配方和食材单价后再试。"
             ),
             charts=[], kpis=[],
-            meta={"window_days": days, "no_pos_data": True},
+            meta={"window_days": analysis_days, "no_pos_data": True},
         )
 
     window_start = min((r["window_start"] for r in pos_rows if r["window_start"]), default=None)
     window_end = max((r["window_end"] for r in pos_rows if r["window_end"]), default=None)
-    window_label = _actual_window_text(window_start, window_end, days)
+    window_label = _actual_window_text(window_start, window_end, analysis_days)
 
     # Step 2: look up cretas product_types by name (primary) + dim_product_alias (fallback).
     # P0-2: alias lets merchants bind POS name → any product_type, handles the
@@ -946,116 +1133,162 @@ async def resolve_gross_margin(
             )
             cost_map = {r["product_source_pk"]: r["food_cost"] for r in cost_rows}
 
-    # Step 4: compute margin per dish
-    enriched = []
-    for r in pos_rows:
-        source_pk = cretas_map.get(r["normalized_name"])
-        food_cost = cost_map.get(source_pk, 0) if source_pk else 0
-        total_cost = food_cost * r["total_qty"]
-        gross_profit = r["total_revenue"] - total_cost
-        margin_rate = gross_profit / r["total_revenue"] if r["total_revenue"] > 0 else 0
-        enriched.append({
-            "name": r["dish_name"],
-            "qty": r["total_qty"],
-            "revenue": r["total_revenue"],
-            "bills": r["bills"],
-            "food_cost_unit": food_cost,
-            "gross_profit": gross_profit,
-            "margin_rate": margin_rate,
-            "has_cost": food_cost > 0,
-        })
-    enriched.sort(key=lambda x: x["gross_profit"], reverse=True)
-    top_slice = enriched[:top_n]
-    # "总营收" 用全菜营收 (users want total). "平均毛利率"/"总毛利" 用仅有
-    # cost 菜, 避免无配方菜 (gross_profit=revenue) 污染真实毛利率.
-    total_rev = sum(e["revenue"] for e in enriched)
-    with_cost = [e for e in enriched if e["has_cost"]]
-    total_rev_with_cost = sum(e["revenue"] for e in with_cost)
-    total_profit = sum(e["gross_profit"] for e in with_cost)
-    avg_margin = total_profit / total_rev_with_cost if total_rev_with_cost > 0 else 0
+    # Step 4: compute only from rows whose cost is actually present.
+    enriched = _build_margin_entries(pos_rows, cretas_map, cost_map)
+    with_cost = [item for item in enriched if item["has_cost"]]
+    top_slice = _rank_cost_complete_margin_entries(enriched, top_n)
+    total_rev = sum(item["revenue"] for item in enriched)
+    total_rev_with_cost = sum(item["revenue"] for item in with_cost)
+    total_profit = sum(float(item["gross_profit"]) for item in with_cost)
+    avg_margin = (
+        total_profit / total_rev_with_cost
+        if total_rev_with_cost > 0 else None
+    )
+    coverage_ratio = total_rev_with_cost / total_rev if total_rev > 0 else 0.0
     low_margin = sorted(
-        [e for e in enriched if e["has_cost"] and e["revenue"] >= 1000],
-        key=lambda x: x["margin_rate"],
+        [item for item in with_cost if item["revenue"] >= 1000],
+        key=lambda item: item["margin_rate"],
     )[:3]
 
     # 拖毛利归因（确定性）: which single dish drags the BLENDED margin most, and
     # whether it's a rate problem or a volume-amplified one — answers "哪个菜拖
     # 毛利，是率低还是量大" directly instead of only listing bottom-rate dishes.
-    dragger = _compute_margin_dragger(with_cost, avg_margin, total_rev_with_cost)
+    dragger = (
+        _compute_margin_dragger(with_cost, avg_margin, total_rev_with_cost)
+        if avg_margin is not None else None
+    )
     dragger_text = (
         f"\n\n最拖整体毛利的菜品（拖累 = 营收占比 × 毛利率差）:\n"
         f"  - {dragger['name']}: 毛利率 {dragger['margin_rate'] * 100:.1f}% "
-        f"(低于平均 {avg_margin * 100:.1f}%), 占营收 {dragger['share'] * 100:.1f}%"
+        f"(低于平均 {avg_margin * 100:.1f}%), 占已覆盖营收 {dragger['share'] * 100:.1f}%"
         f" → 主因：{dragger['cause']}"
         if dragger else ""
     )
 
     top_text = "\n".join([
-        f"  {i+1}. {e['name']}: 营收 ¥{e['revenue']:.2f} / 成本 ¥{e['food_cost_unit'] * e['qty']:.2f} / "
+        f"  {i+1}. {e['name']}: 营收 ¥{e['revenue']:.2f} / 成本 ¥{e['total_cost']:.2f} / "
         f"毛利 ¥{e['gross_profit']:.2f} ({e['margin_rate'] * 100:.1f}%)"
-        + ("" if e["has_cost"] else " [无配方数据, 成本按0估]")
         for i, e in enumerate(top_slice)
-    ])
+    ]) or "  - 暂无成本完整、可计算毛利的菜品。"
     missing_cost_count = len([e for e in enriched if not e["has_cost"]])
     missing_note = (
-        f"\n\n注: {missing_cost_count} 个菜品缺配方/食材单价, 毛利按无成本估算. "
-        f"录入配方后 ETL 自动重算."
+        f"\n\n数据说明：{missing_cost_count} 个菜品缺少完整成本，已从毛利、毛利率、排名和图表中排除；"
+        "补齐配方和最近进价后可重新计算。"
         if missing_cost_count > 0 else ""
     )
-    answer = (
-        f"近 {days} 天菜品毛利分析:\n"
-        f"- 总营收 ¥{total_rev:,.2f}, 总毛利 ¥{total_profit:,.2f}, 平均毛利率 {avg_margin * 100:.1f}%\n"
-        f"- {len(with_cost)}/{len(enriched)} 菜品有完整成本数据\n\n"
-        f"Top {len(top_slice)} 毛利菜品 (按绝对毛利):\n{top_text}{missing_note}"
-    )
 
-    charts = [{
-        "chartType": "bar",
-        "title": f"Top {len(top_slice)} 毛利菜品 (近{days}天)",
-        "xAxis": {"data": [e["name"] for e in top_slice]},
-        "series": [
-            {"name": "营收", "type": "bar", "data": [e["revenue"] for e in top_slice]},
-            {"name": "毛利", "type": "bar", "data": [e["gross_profit"] for e in top_slice]},
-        ],
-    }]
-
-    charts[0]["title"] = f"Top {len(top_slice)} 毛利菜品 ({window_label})"
-    charts[0]["series"][0]["name"] = "营收"
-    charts[0]["series"][1]["name"] = "毛利"
+    charts: List[Dict[str, Any]] = []
+    reference_lines = _parse_margin_reference_lines(query_text)
+    reference_requested = any(token in query_text for token in ("参照线", "计划线", "预警线", "计划值", "预警值"))
+    if trend_requested and monthly_pos_rows:
+        monthly_entries: List[Dict[str, Any]] = []
+        for row in monthly_pos_rows:
+            entry = _build_margin_entries([row], cretas_map, cost_map)[0]
+            entry["month"] = _date_text(row["month"])[:7]
+            if entry["has_cost"]:
+                monthly_entries.append(entry)
+        months = sorted({entry["month"] for entry in monthly_entries})
+        per_dish = any(token in query_text for token in ("菜品", "每个菜", "每道菜", "各菜"))
+        trend_series: List[Dict[str, Any]] = []
+        if per_dish:
+            selected_names = [item["name"] for item in top_slice[:min(top_n, 10)]]
+            for dish_name in selected_names:
+                values = []
+                for month in months:
+                    rows = [item for item in monthly_entries if item["month"] == month and item["name"] == dish_name]
+                    revenue = sum(item["revenue"] for item in rows)
+                    profit = sum(float(item["gross_profit"]) for item in rows)
+                    values.append(round(profit / revenue * 100, 2) if revenue > 0 else None)
+                trend_series.append({"name": dish_name, "type": "line", "data": values, "connectNulls": False})
+        else:
+            values = []
+            for month in months:
+                rows = [item for item in monthly_entries if item["month"] == month]
+                revenue = sum(item["revenue"] for item in rows)
+                profit = sum(float(item["gross_profit"]) for item in rows)
+                values.append(round(profit / revenue * 100, 2) if revenue > 0 else None)
+            trend_series.append({"name": "加权毛利率", "type": "line", "data": values, "connectNulls": False})
+        if trend_series and reference_lines:
+            trend_series[0]["markLine"] = {
+                "silent": True,
+                "symbol": "none",
+                "lineStyle": {"type": "dashed"},
+                "data": reference_lines,
+            }
+        if months and trend_series:
+            charts.append({
+                "chartType": "line",
+                "title": "菜品毛利率月度趋势" if per_dish else "整体毛利率月度趋势",
+                "xAxis": {"data": months},
+                "yAxis": {"type": "value", "name": "毛利率(%)"},
+                "series": trend_series,
+            })
+    elif top_slice:
+        charts.append({
+            "chartType": "bar",
+            "title": f"Top {len(top_slice)} 毛利菜品 ({window_label})",
+            "xAxis": {"data": [item["name"] for item in top_slice]},
+            "series": [
+                {"name": "营收", "type": "bar", "data": [item["revenue"] for item in top_slice]},
+                {"name": "毛利", "type": "bar", "data": [item["gross_profit"] for item in top_slice]},
+            ],
+        })
 
     low_margin_text = "\n".join([
         f"  - {e['name']}: 毛利率 {e['margin_rate'] * 100:.1f}%, 营收 ¥{e['revenue']:,.2f}"
         for e in low_margin
     ]) or "  - 暂无明显低毛利菜品。"
+    margin_text = f"{avg_margin * 100:.1f}%" if avg_margin is not None else "暂不可计算"
+    reference_note = ""
+    if reference_requested and not reference_lines:
+        reference_note = "\n- 你还没有提供计划值或预警值，我没有擅自添加参照线；请直接回复具体百分比。"
+    elif reference_lines:
+        reference_note = "\n- 图中参照线：" + "、".join(
+            f"{line['name']} {line['yAxis']:.1f}%" for line in reference_lines
+        )
+    trend_note = (
+        f"\n- 趋势图仅展示毛利额前 {len(top_slice[:min(top_n, 10)])} 个成本完整菜品，避免图例失真。"
+        if trend_requested and any(token in query_text for token in ("菜品", "每个菜", "每道菜", "各菜"))
+        else ""
+    )
+    trend_basis_note = (
+        "\n- 历史趋势按当前成本卡估算，用于观察售价和销售结构变化；若历史成本曾调整，需补充历史成本后再做精确复盘。"
+        if trend_requested else ""
+    )
     answer = (
         f"菜品毛利分析（{window_label}）\n"
-        f"- 总营收 ¥{total_rev:,.2f}, 总毛利 ¥{total_profit:,.2f}, 平均毛利率 {avg_margin * 100:.1f}%\n"
-        f"- {len(with_cost)}/{len(enriched)} 个销售菜品有完整成本数据；缺成本菜品不纳入毛利率均值，避免虚高。\n\n"
+        f"- 全部销售营收 ¥{total_rev:,.2f}；其中可计算毛利的营收 ¥{total_rev_with_cost:,.2f}，营收覆盖率 {coverage_ratio * 100:.1f}%\n"
+        f"- 已覆盖部分毛利 ¥{total_profit:,.2f}，加权毛利率 {margin_text}\n"
+        f"- {len(with_cost)}/{len(enriched)} 个销售菜品有完整成本数据。{reference_note}{trend_note}{trend_basis_note}\n\n"
         f"Top {len(top_slice)} 毛利菜品（按绝对毛利）:\n{top_text}{dragger_text}\n\n"
         f"需要关注的低毛利菜品:\n{low_margin_text}\n\n"
         f"建议动作:\n"
         f"  1. 对高营收低毛利菜品先复核售价、赠品和食材规格，优先做小幅提价或份量标准化。\n"
         f"  2. 对高毛利高销量菜品加大套餐露出和门店推荐，作为拉升整体毛利率的主推款。\n"
-        f"  3. 对缺成本菜品补齐配方和最近进价，否则单表排行会误判真实利润。{missing_note}"
+        f"  3. 对缺成本菜品补齐配方和最近进价，否则利润判断会失真。{missing_note}"
     )
 
     return OpsAnswer(
         code="RESTAURANT_OPS_GROSS_MARGIN",
-        title=f"菜品毛利分析 (近{days}天)",
+        title=f"菜品毛利分析 ({window_label})",
         answer_text=answer,
         charts=charts,
         kpis=[
             {"title": "总营收", "value": f"¥{total_rev:,.0f}", "rawValue": total_rev},
             {"title": "总毛利", "value": f"¥{total_profit:,.0f}", "rawValue": total_profit},
-            {"title": "平均毛利率", "value": f"{avg_margin * 100:.1f}%", "rawValue": avg_margin},
+            {"title": "平均毛利率", "value": margin_text, "rawValue": avg_margin},
             {"title": "最赚菜品", "value": top_slice[0]["name"] if top_slice else "—", "rawValue": 0},
         ],
         meta={
-            "window_days": days, "top_n": top_n,
+            "window_days": analysis_days, "top_n": top_n,
             "window_start": _date_text(window_start) if window_start else None,
             "window_end": _date_text(window_end) if window_end else None,
             "missing_cost_count": missing_cost_count,
             "total_dishes": len(enriched),
+            "cost_covered_revenue": total_rev_with_cost,
+            "cost_coverage_ratio": coverage_ratio,
+            "trend_requested": trend_requested,
+            "reference_lines": reference_lines,
             "low_margin_dishes": [e["name"] for e in low_margin],
         },
     )
@@ -1153,12 +1386,43 @@ async def resolve_store_margin(
             """,
             factory_id, days,
         )
+        store_bill_rows = await conn.fetch(
+            """
+            WITH anchor AS (
+                SELECT MAX(t2.date) AS end_date
+                  FROM fact_pos_item i2
+                  JOIN fact_pos_transaction t2 ON t2.id = i2.transaction_id
+                  JOIN dim_product p2
+                    ON p2.product_id = i2.product_id
+                   AND p2.factory_id = i2.factory_id
+                 WHERE i2.factory_id = $1
+                   AND t2.factory_id = $1
+            ), scope AS (
+                SELECT DISTINCT store_id FROM agg_daily WHERE factory_id = $1
+                UNION
+                SELECT DISTINCT store_id
+                  FROM fact_pos_transaction
+                 WHERE factory_id = $1
+                   AND NOT EXISTS (SELECT 1 FROM agg_daily WHERE factory_id = $1)
+            )
+            SELECT t.store_id, COUNT(DISTINCT t.id)::int AS bills
+              FROM fact_pos_transaction t
+              JOIN scope ON scope.store_id = t.store_id
+              CROSS JOIN anchor
+             WHERE t.factory_id = $1
+               AND anchor.end_date IS NOT NULL
+               AND t.date >= anchor.end_date - ($2::int)
+               AND t.date <= anchor.end_date
+             GROUP BY t.store_id
+            """,
+            factory_id, days,
+        )
 
     if not store_dish_rows:
         return OpsAnswer(
             code="RESTAURANT_OPS_STORE_MARGIN",
             title=f"门店毛利分析 (近{days}天)",
-            answer_text=f"近 {days} 天无 POS 销售数据, 需先上传 POS 账单.",
+            answer_text=f"近 {days} 天没有可用的收银销售数据，请先导入营业账单。",
             charts=[], kpis=[],
             meta={"window_days": days, "no_pos_data": True},
         )
@@ -1213,82 +1477,67 @@ async def resolve_store_margin(
             )
             cost_by_pk = {r["product_source_pk"]: r["c"] for r in cr}
 
-    # Aggregate per store. Track revenue twice: all-dish (for display) and
-    # with-cost-only (for margin rate denominator — same fix as gross-margin).
-    per_store: Dict[int, Dict[str, Any]] = {}
-    for r in store_dish_rows:
-        pk = name_to_pk.get(r["normalized_name"])
-        dish_cost = cost_by_pk.get(pk, 0) if pk else 0
-        line_cost = dish_cost * r["qty"]
-        s = per_store.setdefault(r["store_id"], {
-            "store_id": r["store_id"], "name": r["store_name"],
-            "revenue": 0.0, "revenue_with_cost": 0.0, "cost": 0.0,
-            "bills": 0, "dishes": 0, "dishes_with_cost": 0,
-        })
-        s["revenue"] += r["revenue"]
-        s["bills"] += r["bills"]
-        s["dishes"] += 1
-        if dish_cost > 0:
-            s["revenue_with_cost"] += r["revenue"]
-            s["cost"] += line_cost
-            s["dishes_with_cost"] += 1
-
-    store_list = []
-    for s in per_store.values():
-        s["gross_profit"] = s["revenue_with_cost"] - s["cost"]
-        # marginRate only from with-cost dishes — avoid 89-97% inflation.
-        s["margin_rate"] = (
-            s["gross_profit"] / s["revenue_with_cost"]
-            if s["revenue_with_cost"] > 0 else 0
-        )
-        store_list.append(s)
-    store_list.sort(key=lambda x: x["gross_profit"], reverse=True)
-    top_slice = store_list[:top_n]
+    bill_count_by_store = {row["store_id"]: row["bills"] for row in store_bill_rows}
+    store_list = _aggregate_store_margin_entries(
+        store_dish_rows, name_to_pk, cost_by_pk, bill_count_by_store,
+    )
+    ranked_store_list = sorted(
+        (store for store in store_list if store["gross_profit"] is not None),
+        key=lambda item: item["gross_profit"],
+        reverse=True,
+    )
+    top_slice = ranked_store_list[:top_n]
 
     total_rev = sum(s["revenue"] for s in store_list)
     total_rev_with_cost = sum(s["revenue_with_cost"] for s in store_list)
-    total_profit = sum(s["gross_profit"] for s in store_list)
-    avg_rate = total_profit / total_rev_with_cost if total_rev_with_cost > 0 else 0
+    total_profit = (
+        sum(float(s["gross_profit"]) for s in ranked_store_list)
+        if total_rev_with_cost > 0 else None
+    )
+    avg_rate = total_profit / total_rev_with_cost if total_profit is not None else None
+    coverage_ratio = total_rev_with_cost / total_rev if total_rev > 0 else 0.0
 
     top_text = "\n".join([
-        f"  {i+1}. {s['name']}: 营收 ¥{s['revenue']:,.2f} / 毛利 ¥{s['gross_profit']:,.2f} ({s['margin_rate'] * 100:.1f}%), {s['bills']} 单"  # noqa: E501
+        f"  {i+1}. {s['name']}: 已覆盖营收 ¥{s['revenue_with_cost']:,.2f} / "
+        f"毛利 ¥{s['gross_profit']:,.2f} ({s['margin_rate'] * 100:.1f}%), {s['bills']} 单"
         for i, s in enumerate(top_slice)
-    ])
-    answer = (
-        f"近 {days} 天门店毛利对比 ({len(store_list)} 家店):\n"
-        f"- 总营收 ¥{total_rev:,.2f}, 总毛利 ¥{total_profit:,.2f}, 平均毛利率 {avg_rate * 100:.1f}%\n\n"
-        f"Top {len(top_slice)} 毛利门店:\n{top_text}"
-    )
+    ]) or "  - 暂无成本完整、可参与毛利排名的门店。"
 
     charts = [{
         "chartType": "bar",
         "title": f"Top {len(top_slice)} 毛利门店",
         "xAxis": {"data": [s["name"] for s in top_slice]},
         "series": [
-            {"name": "营收", "type": "bar", "data": [s["revenue"] for s in top_slice]},
+            {"name": "已覆盖营收", "type": "bar", "data": [s["revenue_with_cost"] for s in top_slice]},
             {"name": "毛利", "type": "bar", "data": [s["gross_profit"] for s in top_slice]},
         ],
-    }]
+    }] if top_slice else []
 
     weak_store_text = ""
-    if len(store_list) > 1:
-        weakest = sorted(store_list, key=lambda s: s["margin_rate"])[0]
+    if len(ranked_store_list) > 1:
+        weakest = sorted(ranked_store_list, key=lambda s: s["margin_rate"])[0]
         weak_store_text = (
             f"\n需要复盘的门店: {weakest['name']} 毛利率 {weakest['margin_rate'] * 100:.1f}%, "
             f"先查低毛利菜品占比、套餐折扣和损耗领料是否偏高。"
         )
+    margin_summary = (
+        f"已覆盖部分毛利 ¥{total_profit:,.2f}，加权毛利率 {avg_rate * 100:.1f}%"
+        if total_profit is not None and avg_rate is not None
+        else "成本完整的销售数据不足，毛利和毛利率暂不可计算"
+    )
     answer = (
         f"门店毛利对比（{window_label}，{len(store_list)} 家店）\n"
-        f"- 总营收 ¥{total_rev:,.2f}, 总毛利 ¥{total_profit:,.2f}, 平均毛利率 {avg_rate * 100:.1f}%\n\n"
+        f"- 全部营收 ¥{total_rev:,.2f}；可计算毛利的营收 ¥{total_rev_with_cost:,.2f}，"
+        f"覆盖率 {coverage_ratio * 100:.1f}%\n"
+        f"- {margin_summary}。缺成本菜品已排除，不会按零成本计算。\n\n"
         f"Top {len(top_slice)} 毛利门店:\n{top_text}{weak_store_text}\n\n"
         f"建议动作:\n"
         f"  1. 把第一名门店的高毛利菜品组合、套餐结构和时段客流拆出来，作为其他门店对标模板。\n"
         f"  2. 对毛利率低但营收不低的门店，优先查折扣、赠品和后厨出品标准，避免销售越多利润越薄。\n"
         f"  3. 对菜品成本覆盖率低的门店，先补齐配方成本再做绩效排序。"
     )
-    charts[0]["title"] = f"Top {len(top_slice)} 毛利门店 ({window_label})"
-    charts[0]["series"][0]["name"] = "营收"
-    charts[0]["series"][1]["name"] = "毛利"
+    if charts:
+        charts[0]["title"] = f"Top {len(top_slice)} 毛利门店 ({window_label})"
 
     return OpsAnswer(
         code="RESTAURANT_OPS_STORE_MARGIN",
@@ -1298,7 +1547,7 @@ async def resolve_store_margin(
         kpis=[
             {"title": "门店数", "value": len(store_list), "rawValue": len(store_list)},
             {"title": "总营收", "value": f"¥{total_rev:,.0f}", "rawValue": total_rev},
-            {"title": "总毛利", "value": f"¥{total_profit:,.0f}", "rawValue": total_profit},
+            {"title": "已覆盖毛利", "value": f"¥{total_profit:,.0f}" if total_profit is not None else "暂不可计算", "rawValue": total_profit},
             {"title": "最赚门店", "value": top_slice[0]["name"] if top_slice else "—", "rawValue": 0},
         ],
         meta={
@@ -1307,6 +1556,7 @@ async def resolve_store_margin(
             "window_end": _date_text(window_end) if window_end else None,
             "totalRevenue": total_rev, "totalRevenueWithCost": total_rev_with_cost,
             "totalProfit": total_profit, "avgRate": avg_rate,
+            "costCoverageRatio": coverage_ratio,
             "stores": [
                 {"storeId": s["store_id"], "name": s["name"],
                  "revenue": s["revenue"],
@@ -1355,7 +1605,7 @@ async def resolve_sales_summary(
             code="RESTAURANT_OPS_SALES_SUMMARY",
             title="经营销售概览",
             answer_text=(
-                f"{window_label}还没有可用的 POS 营收和订单数据。建议先确认营业流水已经进入 Gold 层，"
+                f"{window_label}还没有可用的营收和订单数据。建议先确认营业流水已经同步，"
                 "再看总营收、平均每单和门店差异。"
             ),
             charts=[],
@@ -1407,7 +1657,7 @@ async def resolve_sales_summary(
                 rate_text = f"，毛利率约 {float(avg_rate) * 100:.1f}%" if avg_rate is not None else ""
                 margin_line = f"{verdict}毛利约 {_money(float(total_profit))}{rate_text}（按已配置成本卡的菜品估算）。"
             else:
-                margin_line = "毛利暂时无法可靠计算，原因是这段时间的菜品成本卡或 POS 明细还不完整。"
+                margin_line = "毛利暂时无法可靠计算，原因是这段时间的菜品成本卡或收银明细还不完整。"
         else:
             margin_line = "毛利属于成本/价格权限，当前角色不能查看金额；可以先看订单、客单价和门店差异。"
 
@@ -1508,7 +1758,10 @@ async def resolve_trend_analysis(
     can_see_money = bool(role) and role in PRICE_VIEW_ROLES
 
     bundle = await trend_bundle(smartbi_pool, factory_id, (None, None))
-    monthly: List[Dict[str, Any]] = bundle.get("monthlyTrend") or []
+    monthly: List[Dict[str, Any]] = sorted(
+        bundle.get("monthlyTrend") or [], key=lambda item: str(item.get("month") or "")
+    )
+    daily: List[Dict[str, Any]] = bundle.get("dailyTrend") or []
     ww: Dict[str, Any] = bundle.get("weekdayWeekend") or {}
 
     def _money(v: float) -> str:
@@ -1519,23 +1772,96 @@ async def resolve_trend_analysis(
             code="RESTAURANT_OPS_TREND_ANALYSIS",
             title="营收趋势分析",
             answer_text=(
-                "暂无按时间拆分的营收数据 (Gold 层 agg_daily 为空)。\n"
-                "提示: 上传带日期的 POS 营业数据并完成 materialize 后, "
-                "本分析即可展示月度趋势 + 同比环比。"
+                "暂无按日期拆分的营业数据，暂时无法计算月度趋势和同比环比。\n"
+                "请先导入包含营业日期和实收金额的完整数据。"
             ),
             charts=[], kpis=[],
             meta={"all_history": True, "no_data": True},
         )
 
-    # Peak / trough months by revenue.
-    peak = max(monthly, key=lambda m: m["revenue"])
-    trough = min(monthly, key=lambda m: m["revenue"])
+    def _parse_daily_date(item: Dict[str, Any]) -> Optional[date]:
+        raw = item.get("date") or item.get("statDate") or item.get("stat_date")
+        if isinstance(raw, date):
+            return raw
+        try:
+            return date.fromisoformat(str(raw)[:10])
+        except (TypeError, ValueError):
+            return None
+
+    dated_daily = [
+        (parsed, float(item.get("revenue") or 0.0))
+        for item in daily
+        if (parsed := _parse_daily_date(item)) is not None
+    ]
+    latest_month = str(monthly[-1].get("month") or "")
+    latest_month_days = [item for item in dated_daily if item[0].strftime("%Y-%m") == latest_month]
+    latest_data_date = max((item[0] for item in latest_month_days), default=None)
+    latest_month_partial = False
+    if latest_data_date is not None:
+        next_month = (
+            date(latest_data_date.year + 1, 1, 1)
+            if latest_data_date.month == 12
+            else date(latest_data_date.year, latest_data_date.month + 1, 1)
+        )
+        latest_month_partial = latest_data_date < next_month - timedelta(days=1)
+
+    # A partial latest month cannot fairly compete with completed months for
+    # the peak/trough or the overall first-to-last direction.
+    comparable_monthly = monthly[:-1] if latest_month_partial and len(monthly) > 1 else monthly
+    peak = max(comparable_monthly, key=lambda m: m["revenue"])
+    trough = min(comparable_monthly, key=lambda m: m["revenue"])
     total_rev = sum(m["revenue"] for m in monthly)
     n_months = len(monthly)
 
-    # MoM (环比): latest month vs previous month.
+    # MoM / YoY use equal-day MTD windows when the latest month is incomplete.
     mom_line = ""
-    if n_months >= 2:
+    yoy_line = ""
+    comparison_basis = "完整月"
+    if latest_month_partial and latest_data_date is not None:
+        comparison_basis = f"截至{latest_data_date.day}日的同天数口径"
+        current_start = latest_data_date.replace(day=1)
+        previous_month_end = current_start - timedelta(days=1)
+        previous_start = previous_month_end.replace(day=1)
+        previous_cutoff = min(
+            previous_start + timedelta(days=latest_data_date.day - 1), previous_month_end
+        )
+        previous_year_start = current_start.replace(year=current_start.year - 1)
+        next_previous_year_month = (
+            date(previous_year_start.year + 1, 1, 1)
+            if previous_year_start.month == 12
+            else date(previous_year_start.year, previous_year_start.month + 1, 1)
+        )
+        previous_year_end = next_previous_year_month - timedelta(days=1)
+        previous_year_cutoff = min(
+            previous_year_start + timedelta(days=latest_data_date.day - 1), previous_year_end
+        )
+
+        def _daily_sum(start: date, end: date) -> float:
+            return sum(value for day, value in dated_daily if start <= day <= end)
+
+        current_mtd = _daily_sum(current_start, latest_data_date)
+        previous_mtd = _daily_sum(previous_start, previous_cutoff)
+        previous_year_mtd = _daily_sum(previous_year_start, previous_year_cutoff)
+        if previous_mtd > 0:
+            mom_rate = (current_mtd - previous_mtd) / previous_mtd * 100
+            direction = "增长" if mom_rate >= 0 else "下降"
+            mom_line = (
+                f"- 同口径环比（截至{latest_data_date.day}日，{latest_month} vs "
+                f"{previous_start.strftime('%Y-%m')}）：{direction} {abs(mom_rate):.1f}%\n"
+            )
+        else:
+            mom_line = (
+                f"- 最新月仅统计到{latest_data_date.day}日；上月同期数据不足，"
+                "本次不计算环比。\n"
+            )
+        if previous_year_mtd > 0:
+            yoy_rate = (current_mtd - previous_year_mtd) / previous_year_mtd * 100
+            direction = "增长" if yoy_rate >= 0 else "下降"
+            yoy_line = (
+                f"- 同口径同比（截至{latest_data_date.day}日，{latest_month} vs "
+                f"{previous_year_start.strftime('%Y-%m')}）：{direction} {abs(yoy_rate):.1f}%\n"
+            )
+    elif n_months >= 2:
         last, prev = monthly[-1], monthly[-2]
         if prev["revenue"] > 0:
             mom_rate = (last["revenue"] - prev["revenue"]) / prev["revenue"] * 100
@@ -1545,9 +1871,8 @@ async def resolve_trend_analysis(
                 f"{direction} {abs(mom_rate):.1f}%\n"
             )
 
-    # YoY (同比): latest month vs same month last year, if present.
-    yoy_line = ""
-    if monthly:
+    # Complete-month YoY: latest month vs same month last year, if present.
+    if not latest_month_partial and monthly:
         last = monthly[-1]
         try:
             ly, lm = last["month"].split("-")
@@ -1564,21 +1889,23 @@ async def resolve_trend_analysis(
                     f"{direction} {abs(yoy_rate):.1f}%\n"
                 )
 
-    # Overall direction: first vs last month.
+    # Overall direction uses completed comparable months only.
     overall_line = ""
-    if n_months >= 2 and monthly[0]["revenue"] > 0:
+    if len(comparable_monthly) >= 2 and comparable_monthly[0]["revenue"] > 0:
         overall_rate = (
-            (monthly[-1]["revenue"] - monthly[0]["revenue"])
-            / monthly[0]["revenue"] * 100
+            (comparable_monthly[-1]["revenue"] - comparable_monthly[0]["revenue"])
+            / comparable_monthly[0]["revenue"] * 100
         )
         direction = "上升" if overall_rate >= 0 else "下降"
         overall_line = (
-            f"- 整体走势({monthly[0]['month']} → {monthly[-1]['month']}): "
+            f"- 完整月整体走势({comparable_monthly[0]['month']} → "
+            f"{comparable_monthly[-1]['month']}): "
             f"{direction} {abs(overall_rate):.1f}%\n"
         )
 
     month_list_text = "\n".join([
-        f"  {m['month']}: {_money(m['revenue'])}" for m in monthly
+        f"  {m['month']}{f'（截至{latest_data_date.day}日）' if latest_month_partial and m is monthly[-1] and latest_data_date else ''}: "
+        f"{_money(m['revenue'])}" for m in monthly
     ])
 
     weekday_avg = ww.get("weekdayAvg") or 0.0
@@ -1611,7 +1938,14 @@ async def resolve_trend_analysis(
     charts = [{
         "chartType": "line",
         "title": "月度营收趋势 (全部历史)",
-        "xAxis": {"data": [m["month"] for m in monthly]},
+        "xAxis": {"data": [
+            (
+                f"{m['month']}（截至{latest_data_date.day}日）"
+                if latest_month_partial and m is monthly[-1] and latest_data_date
+                else m["month"]
+            )
+            for m in monthly
+        ]},
         "series": [{
             "name": "营收",
             "type": "line",
@@ -1642,6 +1976,9 @@ async def resolve_trend_analysis(
             "peak_month": peak["month"],
             "trough_month": trough["month"],
             "price_view": can_see_money,
+            "latest_month_partial": latest_month_partial,
+            "latest_data_date": latest_data_date.isoformat() if latest_data_date else None,
+            "comparison_basis": comparison_basis,
         },
     )
 
@@ -1914,6 +2251,11 @@ _RESOLVERS = {
     "RESTAURANT_OPS_INVENTORY_WARNING": resolve_inventory_warning,
     "RESTAURANT_OPS_STAFFING_ADVICE": resolve_staffing_advice,
 }
+
+
+def is_supported_restaurant_ops_code(code: Optional[str]) -> bool:
+    """Return whether an internal caller supplied a known restaurant intent."""
+    return isinstance(code, str) and code in _RESOLVERS
 
 
 async def resolve_by_code(

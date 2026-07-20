@@ -315,6 +315,16 @@ class RestaurantOpsGoldRouteTest {
                 .contains("RESTAURANT_OPS_REQUISITION_TREND");
         assertThat(orchestrator.matchRestaurantOpsIntent("哪些菜毛利最高，有什么建议", "RESTAURANT"))
                 .contains("RESTAURANT_OPS_GROSS_MARGIN");
+        assertThat(orchestrator.matchRestaurantOpsIntent("按月份绘制整体毛利率趋势曲线", "RESTAURANT"))
+                .contains("RESTAURANT_OPS_GROSS_MARGIN");
+        assertThat(orchestrator.matchRestaurantOpsIntent("在整体毛利率趋势图中添加70%计划线和60%预警线", "RESTAURANT"))
+                .contains("RESTAURANT_OPS_GROSS_MARGIN");
+        assertThat(orchestrator.matchRestaurantOpsIntent("整体毛利率是多少", "RESTAURANT"))
+                .contains("RESTAURANT_OPS_SALES_SUMMARY");
+        assertThat(orchestrator.matchRestaurantOpsIntent("上月净利率是多少", "RESTAURANT"))
+                .contains("INCOME_STATEMENT_QUERY");
+        assertThat(orchestrator.matchRestaurantOpsIntent("整体净利率", "RESTAURANT"))
+                .contains("INCOME_STATEMENT_QUERY");
         assertThat(orchestrator.matchRestaurantOpsIntent("哪家店最赚钱，需要复盘哪家店", "RESTAURANT"))
                 .contains("RESTAURANT_OPS_STORE_MARGIN");
         assertThat(orchestrator.matchRestaurantOpsIntent("哪家门店净赚最多", "RESTAURANT"))

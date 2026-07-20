@@ -810,6 +810,9 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("营收金额", "MONTHLY_FINANCIAL_CLOSE");
 
         phraseToIntentMapping.put("本季度净利润率", "INCOME_STATEMENT_QUERY");
+        phraseToIntentMapping.put("上月净利润率", "INCOME_STATEMENT_QUERY");
+        phraseToIntentMapping.put("上月净利率", "INCOME_STATEMENT_QUERY");
+        phraseToIntentMapping.put("整体净利率", "INCOME_STATEMENT_QUERY");
         phraseToIntentMapping.put("本月净利润率", "INCOME_STATEMENT_QUERY");
         phraseToIntentMapping.put("本月毛利率", "INCOME_STATEMENT_QUERY");
         phraseToIntentMapping.put("净利润率", "INCOME_STATEMENT_QUERY");
@@ -5350,7 +5353,7 @@ public class IntentKnowledgeBase {
 
         // v29: 财务/成本 — 毛利率已在 Part1 映射到 SKU_GROSS_MARGIN（有 tool 绑定），不再覆盖
         // phraseToIntentMapping.put("毛利率", "PROFIT_TREND_ANALYSIS");  // 已移至 SKU_GROSS_MARGIN
-        phraseToIntentMapping.put("净利率", "PROFIT_TREND_ANALYSIS");
+        phraseToIntentMapping.put("净利率", "INCOME_STATEMENT_QUERY");
         phraseToIntentMapping.put("利润率", "SKU_GROSS_MARGIN");
         phraseToIntentMapping.put("利润分析", "PROFIT_TREND_ANALYSIS");
         phraseToIntentMapping.put("利润趋势", "PROFIT_TREND_ANALYSIS");

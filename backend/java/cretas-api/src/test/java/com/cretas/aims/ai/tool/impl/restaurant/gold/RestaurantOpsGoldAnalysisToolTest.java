@@ -12,6 +12,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class RestaurantOpsGoldAnalysisToolTest {
@@ -20,7 +21,8 @@ class RestaurantOpsGoldAnalysisToolTest {
     @DisplayName("restaurant ops report response carries owner decision bridge followups")
     void opsReportCarriesOwnerDecisionBridgeFollowups() throws Exception {
         GoldFinanceClient gold = mock(GoldFinanceClient.class);
-        when(gold.fetchRestaurantOpsAnalysis(eq("DEMO_REST"), any(), any()))
+        when(gold.fetchRestaurantOpsAnalysis(
+                eq("DEMO_REST"), any(), any(), eq("RESTAURANT_OPS_WASTAGE_TOP")))
                 .thenReturn(Map.of(
                         "success", true,
                         "answer", "损耗金额排名已经算好，活鱼和底料是主要风险。",
@@ -50,5 +52,7 @@ class RestaurantOpsGoldAnalysisToolTest {
         List<Map<String, Object>> followups = (List<Map<String, Object>>) result.get("suggestedFollowups");
         assertThat(followups).isNotEmpty();
         assertThat(followups.get(0)).containsEntry("ownerActionScenario", "cost_margin");
+        verify(gold).fetchRestaurantOpsAnalysis(
+                eq("DEMO_REST"), any(), any(), eq("RESTAURANT_OPS_WASTAGE_TOP"));
     }
 }

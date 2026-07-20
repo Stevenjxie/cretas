@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -89,11 +90,25 @@ public class IncomeStatementQueryTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId,
             Map<String, Object> params, Map<String, Object> context) throws Exception {
-        LocalDate today = LocalDate.now();
-        Integer startYear = getInteger(params, "startYear", today.getYear());
-        Integer startMonth = getInteger(params, "startMonth", today.getMonthValue());
-        Integer endYear = getInteger(params, "endYear", startYear);
-        Integer endMonth = getInteger(params, "endMonth", startMonth);
+        Map<String, Object> periodParams = new HashMap<>(params == null ? Map.of() : params);
+        if (context != null) {
+            for (String key : List.of("userInput", "startDate", "endDate", "month")) {
+                if (!periodParams.containsKey(key) && context.get(key) != null) {
+                    periodParams.put(key, context.get(key));
+                }
+            }
+            Object requestObject = context.get("request");
+            if (!periodParams.containsKey("userInput")
+                    && requestObject instanceof com.cretas.aims.dto.ai.IntentExecuteRequest request
+                    && request.getUserInput() != null) {
+                periodParams.put("userInput", request.getUserInput());
+            }
+        }
+        YearMonth[] period = resolvePeriod(periodParams, LocalDate.now());
+        Integer startYear = period[0].getYear();
+        Integer startMonth = period[0].getMonthValue();
+        Integer endYear = period[1].getYear();
+        Integer endMonth = period[1].getMonthValue();
 
         if (startMonth < 1 || startMonth > 12 || endMonth < 1 || endMonth > 12) {
             throw new IllegalArgumentException("month 范围必须 1-12");
@@ -160,6 +175,14 @@ public class IncomeStatementQueryTool extends AbstractBusinessTool {
         } else {
             data.put("grossMarginPercent", null);
         }
+        java.math.BigDecimal netMarginPercent = null;
+        if (marginStatus == IncomeStatementDTO.GrossMarginStatus.CALCULABLE
+                && dto.getTotalRevenue() != null && dto.getTotalRevenue().signum() > 0
+                && dto.getNetProfit() != null) {
+            netMarginPercent = dto.getNetProfit().multiply(java.math.BigDecimal.valueOf(100))
+                    .divide(dto.getTotalRevenue(), 2, java.math.RoundingMode.HALF_UP);
+        }
+        data.put("netMarginPercent", netMarginPercent);
 
         data.put("actionHint", "/finance/three-statements?type=income-statement"
                 + "&startYear=" + startYear + "&startMonth=" + startMonth
@@ -169,14 +192,114 @@ public class IncomeStatementQueryTool extends AbstractBusinessTool {
                 ? String.format("%d-%02d", startYear, startMonth)
                 : String.format("%d-%02d 至 %d-%02d", startYear, startMonth, endYear, endMonth);
 
-        String message = missingCostData
-                ? String.format("%s 利润表: 营业收入 ¥%s；%s。请先补录或同步成本凭证后再查询毛利率和利润",
-                    periodLabel, dto.getTotalRevenue(), marginStatusMessage)
-                : String.format(
+        String message;
+        if (missingCostData) {
+            message = String.format(
+                    "%s 利润表: 营业收入 ¥%s；%s。请先补录或同步成本凭证后再查询毛利率和利润",
+                    periodLabel, dto.getTotalRevenue(), marginStatusMessage);
+        } else {
+            message = String.format(
                     "%s 利润表: 营业收入 ¥%s / 营业成本 ¥%s / 毛利 ¥%s / 营业利润 ¥%s / 净利润 ¥%s",
                     periodLabel,
                     dto.getTotalRevenue(), dto.getTotalCost(), dto.getGrossProfit(),
                     dto.getOperatingProfit(), dto.getNetProfit());
+            message += netMarginPercent != null
+                    ? " / 净利率 " + netMarginPercent + "%"
+                    : " / 净利率暂不可计算";
+        }
         return buildSimpleResult(message, data);
+    }
+
+    static YearMonth[] resolvePeriod(Map<String, Object> params, LocalDate today) {
+        Map<String, Object> safeParams = params == null ? Map.of() : params;
+        YearMonth current = YearMonth.from(today);
+
+        boolean hasExplicitParts = safeParams.containsKey("startYear")
+                || safeParams.containsKey("startMonth")
+                || safeParams.containsKey("endYear")
+                || safeParams.containsKey("endMonth");
+        if (hasExplicitParts) {
+            int startYear = integerValue(safeParams.get("startYear"), current.getYear());
+            int startMonth = integerValue(safeParams.get("startMonth"), current.getMonthValue());
+            YearMonth start = YearMonth.of(startYear, startMonth);
+            int endYear = integerValue(safeParams.get("endYear"), start.getYear());
+            int endMonth = integerValue(safeParams.get("endMonth"), start.getMonthValue());
+            return orderedPeriod(start, YearMonth.of(endYear, endMonth));
+        }
+
+        YearMonth startDateMonth = parseDateMonth(safeParams.get("startDate"));
+        YearMonth endDateMonth = parseDateMonth(safeParams.get("endDate"));
+        if (startDateMonth != null || endDateMonth != null) {
+            YearMonth start = startDateMonth != null ? startDateMonth : endDateMonth;
+            YearMonth end = endDateMonth != null ? endDateMonth : start;
+            return orderedPeriod(start, end);
+        }
+
+        String userInput = String.valueOf(safeParams.getOrDefault("userInput", ""));
+        java.util.regex.Matcher absoluteMonth = java.util.regex.Pattern
+                .compile("(20\\d{2})[年/-](1[0-2]|0?[1-9])月?")
+                .matcher(userInput);
+        YearMonth first = null;
+        YearMonth last = null;
+        while (absoluteMonth.find()) {
+            YearMonth matched = YearMonth.of(
+                    Integer.parseInt(absoluteMonth.group(1)),
+                    Integer.parseInt(absoluteMonth.group(2)));
+            if (first == null) {
+                first = matched;
+            }
+            last = matched;
+        }
+        if (first != null) {
+            return orderedPeriod(first, last);
+        }
+        if (userInput.contains("上月") || userInput.contains("上个月")) {
+            YearMonth previous = current.minusMonths(1);
+            return new YearMonth[]{previous, previous};
+        }
+        if (userInput.contains("本月") || userInput.contains("这个月") || userInput.contains("当月")) {
+            return new YearMonth[]{current, current};
+        }
+
+        YearMonth monthParam = parseDateMonth(safeParams.get("month"));
+        if (monthParam != null) {
+            return new YearMonth[]{monthParam, monthParam};
+        }
+        return new YearMonth[]{current, current};
+    }
+
+    private static YearMonth[] orderedPeriod(YearMonth start, YearMonth end) {
+        if (end.isBefore(start)) {
+            throw new IllegalArgumentException("结束月份不能早于起始月份");
+        }
+        return new YearMonth[]{start, end};
+    }
+
+    private static int integerValue(Object value, int fallback) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value != null) {
+            try {
+                return Integer.parseInt(value.toString().trim());
+            } catch (NumberFormatException ignored) {
+                // Fall through to the established default below.
+            }
+        }
+        return fallback;
+    }
+
+    private static YearMonth parseDateMonth(Object raw) {
+        if (raw == null) {
+            return null;
+        }
+        String value = raw.toString().trim();
+        try {
+            return value.length() >= 10
+                    ? YearMonth.from(LocalDate.parse(value.substring(0, 10)))
+                    : YearMonth.parse(value.substring(0, Math.min(7, value.length())));
+        } catch (RuntimeException ignored) {
+            return null;
+        }
     }
 }
