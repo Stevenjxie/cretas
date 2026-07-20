@@ -36,6 +36,11 @@ from typing import Dict, List, Optional
 
 import asyncpg
 
+from smartbi.gold.supplier_price_ingest_etl import (
+    MAX_SANE_UNIT_PRICE,
+    _is_sane_unit_price,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -118,10 +123,14 @@ async def sync_dim_ingredient(
         if real is not None:
             unit_prices.append(real)
             cost_sources.append("real_purchase")
-        elif r["moving_avg_price"] is not None:
+        elif _is_sane_unit_price(
+            float(r["moving_avg_price"]) if r["moving_avg_price"] is not None else None
+        ):
             unit_prices.append(float(r["moving_avg_price"]))
             cost_sources.append("moving_avg")
-        elif r["unit_price"] is not None:
+        elif _is_sane_unit_price(
+            float(r["unit_price"]) if r["unit_price"] is not None else None
+        ):
             unit_prices.append(float(r["unit_price"]))
             cost_sources.append("list_price")
         else:
@@ -217,9 +226,12 @@ async def _get_latest_real_purchase_prices(
                  WHERE factory_id = $1::varchar
                    AND raw_material_type_id IS NOT NULL
                    AND unit_price IS NOT NULL
-                 ORDER BY raw_material_type_id, delivery_date DESC, id DESC
+                   AND unit_price > 0
+                   AND unit_price < $2
+                ORDER BY raw_material_type_id, delivery_date DESC, id DESC
                 """,
                 factory_id,
+                MAX_SANE_UNIT_PRICE,
             )
     return {
         r["raw_material_type_id"]: float(r["unit_price"])
@@ -508,6 +520,16 @@ async def sync_fact_recipe(
     async with smartbi_pool.acquire() as dst:
         async with dst.transaction():
             await _set_tenant(dst, factory_id)
+            # Clear stale derived values first so a newly rejected source price
+            # cannot survive in yesterday's recipe-line cost.
+            await dst.execute(
+                """
+                UPDATE fact_restaurant_recipe_line
+                   SET line_cost = NULL
+                 WHERE factory_id = $1
+                """,
+                factory_id,
+            )
             await dst.execute(
                 """
                 UPDATE fact_restaurant_recipe_line r

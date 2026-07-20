@@ -48,6 +48,7 @@ LEGITIMATE_TRIGGERS = [
     ("按月份绘制整体毛利率趋势曲线", "RESTAURANT_OPS_GROSS_MARGIN"),
     ("在整体毛利率趋势图中添加70%计划线和60%预警线", "RESTAURANT_OPS_GROSS_MARGIN"),
     ("计算每个菜品的毛利率趋势曲线", "RESTAURANT_OPS_GROSS_MARGIN"),
+    ("整体毛利率是多少", "RESTAURANT_OPS_GROSS_MARGIN"),
     # Apr 25 2026: 菜系 should still trigger margin analysis when paired with
     # an explicit margin keyword (legitimate "菜系" = dish-category scope).
     ("菜系毛利率", "RESTAURANT_OPS_GROSS_MARGIN"),
@@ -566,6 +567,28 @@ def test_missing_cost_dish_never_gets_profit_or_enters_margin_ranking():
     assert [item["name"] for item in ranked] == ["完整成本菜"]
 
 
+def test_implausible_cost_card_is_excluded_from_margin_and_ranking():
+    entries = _r._build_margin_entries(
+        [
+            {"dish_name": "异常成本菜", "normalized_name": "异常成本菜",
+             "total_qty": 10, "total_revenue": 1000.0, "bills": 5},
+            {"dish_name": "正常成本菜", "normalized_name": "正常成本菜",
+             "total_qty": 10, "total_revenue": 900.0, "bills": 4},
+        ],
+        {"异常成本菜": "P-BAD", "正常成本菜": "P-OK"},
+        {"P-BAD": 119998.8, "P-OK": 30.0},
+    )
+
+    abnormal = next(item for item in entries if item["name"] == "异常成本菜")
+    assert abnormal["invalid_cost"] is True
+    assert abnormal["has_cost"] is False
+    assert abnormal["gross_profit"] is None
+    assert abnormal["margin_rate"] is None
+    assert [item["name"] for item in _r._rank_cost_complete_margin_entries(entries, 10)] == [
+        "正常成本菜"
+    ]
+
+
 def test_store_margin_excludes_missing_cost_and_uses_distinct_bill_count():
     aggregate = getattr(_r, "_aggregate_store_margin_entries", None)
     assert callable(aggregate)
@@ -591,6 +614,24 @@ def test_store_margin_excludes_missing_cost_and_uses_distinct_bill_count():
     assert missing["cost_coverage_ratio"] == 0
     assert complete["gross_profit"] == 1000.0
     assert complete["bills"] == 9  # not the per-dish sum 7 + 4
+
+
+def test_store_margin_excludes_cost_far_above_realized_unit_price():
+    stores = _r._aggregate_store_margin_entries(
+        [
+            {"store_id": 1, "store_name": "测试店", "dish_name": "异常成本菜",
+             "normalized_name": "异常成本菜", "qty": 10, "revenue": 1000.0, "bills": 5},
+        ],
+        {"异常成本菜": "P-BAD"},
+        {"P-BAD": 50000.0},
+        {1: 5},
+    )
+
+    store = stores[0]
+    assert store["invalid_cost_dishes"] == 1
+    assert store["revenue_with_cost"] == 0
+    assert store["gross_profit"] is None
+    assert store["margin_rate"] is None
 
 
 def test_margin_reference_lines_only_use_explicit_user_values():
