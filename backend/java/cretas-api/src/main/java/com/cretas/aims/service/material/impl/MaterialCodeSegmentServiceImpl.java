@@ -12,11 +12,14 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.dao.DataIntegrityViolationException;
 
+import java.text.Normalizer;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
 import java.util.stream.Collectors;
 
 /**
@@ -71,6 +74,9 @@ public class MaterialCodeSegmentServiceImpl implements MaterialCodeSegmentServic
     @Transactional
     public MaterialCodeSegmentDTO create(String factoryId, CreateMaterialCodeSegmentRequest req) {
         validateHierarchy(factoryId, req.getLevel(), req.getSegmentCode(), req.getParentCode());
+        String label = requireLabel(req.getSegmentLabel());
+        String normalizedLabel = normalizeLabel(label);
+        rejectDuplicateLabel(factoryId, req.getLevel(), req.getParentCode(), normalizedLabel, null);
         // Validate segment_code uniqueness
         if (repo.existsByFactoryIdAndSegmentCode(factoryId, req.getSegmentCode())) {
             throw new BusinessException(409, "编码段 " + req.getSegmentCode() + " 在该工厂已存在")
@@ -91,7 +97,8 @@ public class MaterialCodeSegmentServiceImpl implements MaterialCodeSegmentServic
                 .factoryId(factoryId)
                 .level(req.getLevel())
                 .segmentCode(req.getSegmentCode())
-                .segmentLabel(req.getSegmentLabel())
+                .segmentLabel(label)
+                .normalizedLabel(normalizedLabel)
                 .parentCode(req.getParentCode())
                 .sortOrder(req.getSortOrder() != null ? req.getSortOrder() : 0)
                 .isActive(req.getIsActive() != null ? req.getIsActive() : true)
@@ -99,7 +106,12 @@ public class MaterialCodeSegmentServiceImpl implements MaterialCodeSegmentServic
         entity.setCreatedAt(LocalDateTime.now());
         entity.setUpdatedAt(LocalDateTime.now());
 
-        entity = repo.save(entity);
+        try {
+            entity = repo.save(entity);
+            repo.flush();
+        } catch (DataIntegrityViolationException conflict) {
+            throw duplicateLabel(label);
+        }
         log.info("SP8: 创建物料编码段 factoryId={} code={} label={}", factoryId, entity.getSegmentCode(), entity.getSegmentLabel());
         return toDTO(entity);
     }
@@ -117,6 +129,10 @@ public class MaterialCodeSegmentServiceImpl implements MaterialCodeSegmentServic
         String effectiveCode = req.getSegmentCode() != null ? req.getSegmentCode() : entity.getSegmentCode();
         String effectiveParent = req.getParentCode() != null ? req.getParentCode() : entity.getParentCode();
         validateHierarchy(factoryId, effectiveLevel, effectiveCode, effectiveParent);
+        String effectiveLabel = req.getSegmentLabel() == null
+                ? entity.getSegmentLabel() : requireLabel(req.getSegmentLabel());
+        String normalizedLabel = normalizeLabel(effectiveLabel);
+        rejectDuplicateLabel(factoryId, effectiveLevel, effectiveParent, normalizedLabel, entity.getId());
 
         // If segmentCode changes, check new code uniqueness
         if (req.getSegmentCode() != null && !req.getSegmentCode().equals(entity.getSegmentCode())) {
@@ -127,13 +143,21 @@ public class MaterialCodeSegmentServiceImpl implements MaterialCodeSegmentServic
             entity.setSegmentCode(req.getSegmentCode());
         }
 
-        if (req.getSegmentLabel() != null) entity.setSegmentLabel(req.getSegmentLabel());
+        if (req.getSegmentLabel() != null) {
+            entity.setSegmentLabel(effectiveLabel);
+            entity.setNormalizedLabel(normalizedLabel);
+        }
         if (req.getParentCode() != null) entity.setParentCode(req.getParentCode());
         if (req.getSortOrder() != null) entity.setSortOrder(req.getSortOrder());
         if (req.getIsActive() != null) entity.setIsActive(req.getIsActive());
         entity.setUpdatedAt(LocalDateTime.now());
 
-        entity = repo.save(entity);
+        try {
+            entity = repo.save(entity);
+            repo.flush();
+        } catch (DataIntegrityViolationException conflict) {
+            throw duplicateLabel(effectiveLabel);
+        }
         return toDTO(entity);
     }
 
@@ -238,5 +262,50 @@ public class MaterialCodeSegmentServiceImpl implements MaterialCodeSegmentServic
                     .withHint("请选择启用的直属父节点")
                     .withHintTarget("parentCode");
         }
+    }
+
+    private String requireLabel(String label) {
+        if (label == null || label.trim().isEmpty()) {
+            throw new BusinessException(400, "分类名称不能为空").withHintTarget("segmentLabel");
+        }
+        return label.trim();
+    }
+
+    private String normalizeLabel(String label) {
+        return Normalizer.normalize(label, Normalizer.Form.NFKC)
+                .trim().toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
+    }
+
+    private void rejectDuplicateLabel(
+            String factoryId, short level, String parentCode, String normalizedLabel, Long excludeId) {
+        if (repo.existsNormalizedLabelWithinParent(
+                factoryId, level, parentCode, normalizedLabel, excludeId)) {
+            throw duplicateLabel(normalizedLabel);
+        }
+
+        // V20261028_92 deliberately leaves normalizedLabel NULL on every member of
+        // a historical collision instead of choosing a winner or rewriting master
+        // data.  Those legacy rows must still block a new duplicate, so compare the
+        // source labels with the same Java/NFKC contract used for new writes.
+        List<MaterialCodeSegment> siblings = level == 1
+                ? repo.findByFactoryIdAndLevelOrderBySortOrderAscSegmentCodeAsc(factoryId, level)
+                : repo.findByFactoryIdAndParentCodeOrderBySortOrderAscSegmentCodeAsc(factoryId, parentCode);
+        boolean legacyConflict = siblings.stream()
+                .filter(segment -> segment.getDeletedAt() == null)
+                .filter(segment -> segment.getLevel() != null && segment.getLevel() == level)
+                .filter(segment -> excludeId == null || !excludeId.equals(segment.getId()))
+                .map(MaterialCodeSegment::getSegmentLabel)
+                .filter(label -> label != null && !label.isBlank())
+                .map(this::normalizeLabel)
+                .anyMatch(normalizedLabel::equals);
+        if (legacyConflict) {
+            throw duplicateLabel(normalizedLabel);
+        }
+    }
+
+    private BusinessException duplicateLabel(String label) {
+        return new BusinessException(409, "同一父级下已存在同名分类: " + label)
+                .withHint("请选择现有共享分类，或使用语义不同的分类名称")
+                .withHintTarget("segmentLabel");
     }
 }
