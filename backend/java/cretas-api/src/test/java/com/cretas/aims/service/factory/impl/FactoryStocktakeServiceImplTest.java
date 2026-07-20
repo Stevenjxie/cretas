@@ -13,6 +13,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeItemRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
@@ -72,6 +73,7 @@ class FactoryStocktakeServiceImplTest {
     @Mock private MaterialBatchRepository materialBatchRepo;
     @Mock private MaterialBatchAdjustmentRepository adjustmentRepo;
     @Mock private MaterialConsumptionRepository materialConsumptionRepo;
+    @Mock private RawMaterialTypeRepository rawMaterialTypeRepo;
     @Mock private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
     @Mock private VoucherService voucherService;
 
@@ -565,7 +567,8 @@ class FactoryStocktakeServiceImplTest {
 
         when(stocktakeRepo.findById(stocktake.getId())).thenReturn(Optional.of(stocktake));
         when(stocktakeRepo.save(any())).thenReturn(stocktake);
-        // 差异=0 的行不进漂移守卫/主循环 → 无需 stub materialBatchRepo.findById
+        when(materialBatchRepo.findById("BATCH-CONSUMED"))
+                .thenReturn(Optional.of(batchIdentity("BATCH-CONSUMED", item)));
 
         service.apply(stocktake.getId(), FACTORY_ID, USER_ID);
 
@@ -704,7 +707,8 @@ class FactoryStocktakeServiceImplTest {
 
         when(stocktakeRepo.findById(stocktake.getId())).thenReturn(Optional.of(stocktake));
         when(stocktakeRepo.save(any())).thenReturn(stocktake);
-        // 差异=0 的行不进漂移守卫/主循环 → 无需 stub materialBatchRepo.findById
+        when(materialBatchRepo.findById("BATCH-RESERVED"))
+                .thenReturn(Optional.of(batchIdentity("BATCH-RESERVED", item)));
 
         service.apply(stocktake.getId(), FACTORY_ID, USER_ID);
 
@@ -844,6 +848,8 @@ class FactoryStocktakeServiceImplTest {
 
         when(stocktakeRepo.findById(stocktake.getId())).thenReturn(Optional.of(stocktake));
         when(stocktakeRepo.save(any())).thenReturn(stocktake);
+        when(materialBatchRepo.findById("BATCH-WKS"))
+                .thenReturn(Optional.of(batchIdentity("BATCH-WKS", item)));
         // 差异=0 → 不进漂移守卫/主循环 → 不查未结消耗, 不动 receipt
 
         service.apply(stocktake.getId(), FACTORY_ID, USER_ID);
@@ -1211,6 +1217,15 @@ class FactoryStocktakeServiceImplTest {
     // -------------------------------------------------------
     // helpers
     // -------------------------------------------------------
+
+    private MaterialBatch batchIdentity(String id, FactoryStocktakeItem item) {
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(id);
+        batch.setFactoryId(FACTORY_ID);
+        batch.setWarehouseId(WAREHOUSE_ID);
+        batch.setMaterialTypeId(item.getRawMaterialTypeId());
+        return batch;
+    }
 
     private FactoryStocktake buildStocktake(FactoryStocktake.Status status) {
         FactoryStocktake st = new FactoryStocktake();
