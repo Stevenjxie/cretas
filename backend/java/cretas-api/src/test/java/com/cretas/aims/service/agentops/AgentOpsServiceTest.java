@@ -2,6 +2,7 @@ package com.cretas.aims.service.agentops;
 
 import com.cretas.aims.client.agentops.AgentOpsClient;
 import com.cretas.aims.dto.agentops.AgentOpsRerunExperimentRequest;
+import com.cretas.aims.dto.agentops.AgentOpsRunRuntimeShadowRequest;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -9,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.UUID;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -40,6 +42,28 @@ class AgentOpsServiceTest {
         service.trace("R001", "42", "PLATFORM_ADMIN", "corr-1", runId, 10, 20);
         verify(client).getTrace(runId, 10, 20,
                 new AgentOpsClient.TrustedContext("R001", "42", "platform_admin", "corr-1"));
+    }
+
+    @Test
+    void runtimeShadowForwardsOnlyServerDerivedTrustedContext() throws Exception {
+        AgentOpsRunRuntimeShadowRequest body = new AgentOpsRunRuntimeShadowRequest();
+        body.setSchemaVersion("1.0");
+        body.setRequestId(UUID.fromString("00000000-0000-4000-8000-000000000091"));
+        body.setEvalSetId(UUID.fromString("00000000-0000-4000-8000-000000000092"));
+        body.setConfigSnapshot(Map.of(
+                "promptSnapshotDigest", "1".repeat(64),
+                "modelSnapshotDigest", "2".repeat(64),
+                "toolSnapshotDigest", "3".repeat(64)));
+        AgentOpsClient.TrustedContext trusted = new AgentOpsClient.TrustedContext(
+                "R001", "42", "platform_admin", "corr-shadow");
+        when(client.runRuntimeShadow(body, trusted))
+                .thenReturn(new ObjectMapper().readTree("{\"operationKind\":\"RUNTIME_SHADOW\"}"));
+
+        var result = service.runRuntimeShadow(
+                "R001", "42", "PLATFORM_ADMIN", "corr-shadow", body);
+
+        assertThat(result.path("operationKind").asText()).isEqualTo("RUNTIME_SHADOW");
+        verify(client).runRuntimeShadow(body, trusted);
     }
 
     @Test

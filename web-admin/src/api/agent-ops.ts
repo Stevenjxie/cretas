@@ -8,6 +8,9 @@ export interface EvalCase {
   numericTruthRefs: Record<string, string>;
   maxRounds: number;
   maxToolCalls: number;
+  inputSnapshot?: { startDate: string; endDate: string; storeTopN: number; dishTopN: number };
+  sourceRunId?: string;
+  evidenceDigests?: Record<string, string>;
 }
 
 export interface EvalSetSummary {
@@ -39,7 +42,7 @@ export interface ExperimentSummary {
   evaluatorVersion: string;
   evaluatorBuild: string;
   snapshotDigest: string;
-  operationKind: 'RUN' | 'RERUN';
+  operationKind: 'RUN' | 'RERUN' | 'RUNTIME_SHADOW';
   sourceExperimentId: string | null;
   configSnapshot: SnapshotDigests;
   runnerBounds: RunnerBounds;
@@ -103,6 +106,23 @@ export interface RunExperimentRequest {
   evalSetId: string;
   configSnapshot: SnapshotDigests;
   actualSnapshots: Record<string, ActualSnapshot>;
+  bounds: RunnerBounds;
+}
+
+export interface ImportRuntimeCorpusRequest {
+  schemaVersion: '1.0';
+  requestId: string;
+  name: string;
+  version: number;
+  description: string;
+  maxCases: number;
+}
+
+export interface RunRuntimeShadowRequest {
+  schemaVersion: '1.0';
+  requestId: string;
+  evalSetId: string;
+  configSnapshot: SnapshotDigests;
   bounds: RunnerBounds;
 }
 
@@ -178,6 +198,12 @@ export const getEvalSet = (factoryId: string, id: string, offset = 0, limit = 25
 export const createEvalSet = (factoryId: string, body: CreateEvalSetRequest): Promise<ApiResponse<EvalSetSummary>> =>
   boundedPost(`${base(factoryId)}/eval-sets`, body);
 
+export const importRuntimeCorpus = (
+  factoryId: string,
+  body: ImportRuntimeCorpusRequest,
+): Promise<ApiResponse<EvalSetSummary>> =>
+  boundedPost(`${base(factoryId)}/eval-sets/import-runtime-corpus`, body);
+
 export const listExperiments = (factoryId: string): Promise<ApiResponse<{ items: ExperimentSummary[] }>> =>
   get(`${base(factoryId)}/experiments`);
 
@@ -186,6 +212,12 @@ export const runExperiment = (
   body: RunExperimentRequest,
 ): Promise<ApiResponse<ExperimentSummary>> =>
   boundedPost(`${base(factoryId)}/experiments`, body);
+
+export const runRuntimeShadow = (
+  factoryId: string,
+  body: RunRuntimeShadowRequest,
+): Promise<ApiResponse<ExperimentSummary>> =>
+  boundedPost(`${base(factoryId)}/experiments/runtime-shadow`, body);
 
 export const getExperiment = (
   factoryId: string,

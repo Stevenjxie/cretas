@@ -141,6 +141,76 @@ class AgentOpsControllerTest {
     }
 
     @Test
+    void runtimeShadowUsesTrustedRequestIdentityAndRejectsClientActualSnapshots() throws Exception {
+        when(service.runRuntimeShadow(anyString(), anyString(), anyString(), anyString(), any()))
+                .thenReturn(new ObjectMapper().readTree(
+                        "{\"operationKind\":\"RUNTIME_SHADOW\"}"));
+        String valid = """
+                {"schemaVersion":"1.0",
+                 "requestId":"00000000-0000-4000-8000-000000000091",
+                 "evalSetId":"00000000-0000-4000-8000-000000000092",
+                 "configSnapshot":{
+                   "promptSnapshotDigest":"1111111111111111111111111111111111111111111111111111111111111111",
+                   "modelSnapshotDigest":"2222222222222222222222222222222222222222222222222222222222222222",
+                   "toolSnapshotDigest":"3333333333333333333333333333333333333333333333333333333333333333"},
+                 "bounds":{"maxCases":20,"maxConcurrency":2,"perCaseTimeoutMs":75000}}
+                """;
+
+        mvc.perform(post("/api/mobile/R001/agent-ops/experiments/runtime-shadow")
+                        .requestAttr("factoryId", "R001")
+                        .requestAttr("userId", 42L)
+                        .requestAttr("role", "PLATFORM_ADMIN")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(valid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.operationKind").value("RUNTIME_SHADOW"));
+        verify(service).runRuntimeShadow(
+                eq("R001"), eq("42"), eq("platform_admin"), anyString(), any());
+
+        String withActual = valid.substring(0, valid.lastIndexOf('}'))
+                + ",\"actualSnapshots\":{}}";
+        mvc.perform(post("/api/mobile/R001/agent-ops/experiments/runtime-shadow")
+                        .requestAttr("factoryId", "R001")
+                        .requestAttr("userId", 42L)
+                        .requestAttr("role", "platform_admin")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(withActual))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void runtimeCorpusImportDerivesIdentityAndRejectsClientCases() throws Exception {
+        when(service.importRuntimeCorpus(anyString(), anyString(), anyString(), anyString(), any()))
+                .thenReturn(new ObjectMapper().readTree("{\"caseCount\":2}"));
+        String valid = """
+                {"schemaVersion":"1.0",
+                 "requestId":"00000000-0000-4000-8000-000000000093",
+                 "name":"runtime corpus","version":1,"description":"trusted",
+                 "maxCases":20}
+                """;
+        mvc.perform(post("/api/mobile/R001/agent-ops/eval-sets/import-runtime-corpus")
+                        .requestAttr("factoryId", "R001")
+                        .requestAttr("userId", 42L)
+                        .requestAttr("role", "PLATFORM_ADMIN")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(valid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.caseCount").value(2));
+        verify(service).importRuntimeCorpus(
+                eq("R001"), eq("42"), eq("platform_admin"), anyString(), any());
+
+        String withCases = valid.substring(0, valid.lastIndexOf('}'))
+                + ",\"cases\":[]}";
+        mvc.perform(post("/api/mobile/R001/agent-ops/eval-sets/import-runtime-corpus")
+                        .requestAttr("factoryId", "R001")
+                        .requestAttr("userId", 42L)
+                        .requestAttr("role", "platform_admin")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(withCases))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void tracePassesOnlyTrustedPrincipalAndBoundedLimit() throws Exception {
         UUID id = UUID.fromString("00000000-0000-0000-0000-000000000001");
         when(service.trace(anyString(), anyString(), anyString(), anyString(), eq(id), eq(10L), eq(20)))

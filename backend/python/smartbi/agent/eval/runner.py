@@ -106,18 +106,7 @@ class OfflineBatchRunner:
                 )
 
         results = tuple(await asyncio.gather(*(one(case) for case in eval_set.cases)))
-        total = len(results)
-        passed = sum(1 for item in results if item["passed"])
-        aggregate = {
-            "caseCount": total,
-            "passedCount": passed,
-            "failedCount": total - passed,
-            "passRate": format(passed / total, ".6f"),
-            "routePassCount": sum(1 for item in results if item["routeOk"]),
-            "trajectoryPassCount": sum(1 for item in results if item["trajectoryOk"]),
-            "numericTruthPassCount": sum(1 for item in results if item["numericTruthOk"]),
-        }
-        return aggregate, results
+        return aggregate_case_results(results), results
 
     @staticmethod
     def _evaluate(case: Mapping[str, Any], actual_raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -180,3 +169,23 @@ class EvaluatorRegistry:
             return self._runners[(version, build)]
         except KeyError as exc:
             raise EvaluatorBuildUnavailableError() from exc
+
+
+def aggregate_case_results(
+    results: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    total = len(results)
+    if total == 0:
+        raise AgentOpsValidationError("RUNNER_REQUIRES_CASES")
+    passed = sum(1 for item in results if item["passed"])
+    return {
+        "caseCount": total,
+        "passedCount": passed,
+        "failedCount": total - passed,
+        "passRate": format(passed / total, ".6f"),
+        "routePassCount": sum(1 for item in results if item["routeOk"]),
+        "trajectoryPassCount": sum(1 for item in results if item["trajectoryOk"]),
+        "numericTruthPassCount": sum(
+            1 for item in results if item["numericTruthOk"]
+        ),
+    }

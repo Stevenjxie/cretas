@@ -1,7 +1,9 @@
 package com.cretas.aims.client.agentops;
 
 import com.cretas.aims.dto.agentops.AgentOpsCreateEvalSetRequest;
+import com.cretas.aims.dto.agentops.AgentOpsImportRuntimeCorpusRequest;
 import com.cretas.aims.dto.agentops.AgentOpsRerunExperimentRequest;
+import com.cretas.aims.dto.agentops.AgentOpsRunRuntimeShadowRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.OkHttpClient;
@@ -53,6 +55,49 @@ class AgentOpsClientTest {
         assertThat(outbound.has("userId")).isFalse();
         assertThat(outbound.has("tenantId")).isFalse();
         assertThat(outbound.path("requestId").asText()).isEqualTo(body().getRequestId().toString());
+    }
+
+    @Test
+    void runtimeCorpusAndShadowUseTrustedHeadersAndNeverSendIdentityOrActualSnapshots() throws Exception {
+        server.enqueue(json(201, "{\"evalSetId\":\"00000000-0000-4000-8000-000000000001\"}"));
+        AgentOpsImportRuntimeCorpusRequest importBody = new AgentOpsImportRuntimeCorpusRequest();
+        importBody.setSchemaVersion("1.0");
+        importBody.setRequestId(UUID.fromString("00000000-0000-4000-8000-000000000091"));
+        importBody.setName("runtime corpus");
+        importBody.setVersion(1);
+        importBody.setMaxCases(20);
+        client.importRuntimeCorpus(importBody, context());
+
+        RecordedRequest imported = server.takeRequest(1, TimeUnit.SECONDS);
+        assertThat(imported.getPath()).isEqualTo(
+                "/api/internal/smartbi/agent/runs/ops/eval-sets/import-runtime-corpus");
+        assertThat(imported.getHeader("X-Factory-Id")).isEqualTo("R001");
+        assertThat(imported.getHeader("X-User-Id")).isEqualTo("42");
+        assertThat(imported.getHeader("X-User-Role")).isEqualTo("platform_admin");
+        assertThat(imported.getHeader("X-Correlation-ID")).isEqualTo("corr-001");
+        JsonNode importJson = mapper.readTree(imported.getBody().readUtf8());
+        assertThat(importJson.has("factoryId")).isFalse();
+        assertThat(importJson.has("userId")).isFalse();
+        assertThat(importJson.has("cases")).isFalse();
+
+        server.enqueue(json(201, "{\"operationKind\":\"RUNTIME_SHADOW\"}"));
+        AgentOpsRunRuntimeShadowRequest shadowBody = new AgentOpsRunRuntimeShadowRequest();
+        shadowBody.setSchemaVersion("1.0");
+        shadowBody.setRequestId(UUID.fromString("00000000-0000-4000-8000-000000000092"));
+        shadowBody.setEvalSetId(UUID.fromString("00000000-0000-4000-8000-000000000001"));
+        shadowBody.setConfigSnapshot(Map.of(
+                "promptSnapshotDigest", "1".repeat(64),
+                "modelSnapshotDigest", "2".repeat(64),
+                "toolSnapshotDigest", "3".repeat(64)));
+        client.runRuntimeShadow(shadowBody, context());
+
+        RecordedRequest shadow = server.takeRequest(1, TimeUnit.SECONDS);
+        assertThat(shadow.getPath()).isEqualTo(
+                "/api/internal/smartbi/agent/runs/ops/experiments/runtime-shadow");
+        JsonNode shadowJson = mapper.readTree(shadow.getBody().readUtf8());
+        assertThat(shadowJson.has("actualSnapshots")).isFalse();
+        assertThat(shadowJson.has("factoryId")).isFalse();
+        assertThat(shadowJson.has("userId")).isFalse();
     }
 
     @Test

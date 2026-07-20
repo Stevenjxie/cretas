@@ -10,6 +10,7 @@ from smartbi.agent.eval import (
 from smartbi.api.agent_ops import get_agent_ops_service, router
 
 from .helpers import case, config_snapshot
+from .test_runtime_shadow import runtime_case
 
 
 def app_and_store():
@@ -53,6 +54,35 @@ def test_api_rejects_non_internal_and_tenant_query_injection():
     )
     assert response.status_code == 422
     assert response.json()["detail"] == "TENANT_PARAMETER_FORBIDDEN"
+
+
+def test_runtime_shadow_feature_flag_defaults_closed_and_gates_corpus_import(monkeypatch):
+    app, store = app_and_store()
+    client = TestClient(app)
+    body = {
+        "schemaVersion": "1.0",
+        "requestId": "00000000-0000-4000-8000-000000000090",
+        "name": "runtime corpus",
+        "version": 1,
+        "description": "trusted",
+        "maxCases": 20,
+    }
+    monkeypatch.delenv("AGENT_OPS_RUNTIME_SHADOW_ENABLED", raising=False)
+    disabled = client.post(
+        "/api/internal/smartbi/agent/runs/ops/eval-sets/import-runtime-corpus",
+        json=body,
+    )
+    assert disabled.status_code == 503
+    assert disabled.json()["detail"] == "AGENT_OPS_RUNTIME_SHADOW_DISABLED"
+
+    store.seed_runtime_corpus("R001", [runtime_case()])
+    monkeypatch.setenv("AGENT_OPS_RUNTIME_SHADOW_ENABLED", "true")
+    enabled = client.post(
+        "/api/internal/smartbi/agent/runs/ops/eval-sets/import-runtime-corpus",
+        json=body,
+    )
+    assert enabled.status_code == 201
+    assert enabled.json()["caseCount"] == 1
 
 
 def test_all_writes_require_request_id_and_total_request_budget_stays_bounded():

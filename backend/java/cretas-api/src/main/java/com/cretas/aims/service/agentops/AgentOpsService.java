@@ -4,8 +4,10 @@ import com.cretas.aims.client.agentops.AgentOpsClient;
 import com.cretas.aims.client.agentops.AgentOpsClient.TrustedContext;
 import com.cretas.aims.client.agentops.AgentOpsClient.UpstreamException;
 import com.cretas.aims.dto.agentops.AgentOpsCreateEvalSetRequest;
+import com.cretas.aims.dto.agentops.AgentOpsImportRuntimeCorpusRequest;
 import com.cretas.aims.dto.agentops.AgentOpsRerunExperimentRequest;
 import com.cretas.aims.dto.agentops.AgentOpsRunExperimentRequest;
+import com.cretas.aims.dto.agentops.AgentOpsRunRuntimeShadowRequest;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.http.HttpStatus;
@@ -43,6 +45,13 @@ public class AgentOpsService {
         return call(context(factoryId, userId, role, correlationId), client::listEvalSets);
     }
 
+    public JsonNode importRuntimeCorpus(String factoryId, String userId, String role,
+                                        String correlationId,
+                                        AgentOpsImportRuntimeCorpusRequest body) {
+        return call(context(factoryId, userId, role, correlationId),
+                c -> client.importRuntimeCorpus(body, c));
+    }
+
     public JsonNode getEvalSet(String factoryId, String userId, String role, String correlationId,
                                UUID id, int offset, int limit) {
         return call(context(factoryId, userId, role, correlationId),
@@ -52,6 +61,13 @@ public class AgentOpsService {
     public JsonNode runExperiment(String factoryId, String userId, String role, String correlationId,
                                   AgentOpsRunExperimentRequest body) {
         return call(context(factoryId, userId, role, correlationId), c -> client.runExperiment(body, c));
+    }
+
+    public JsonNode runRuntimeShadow(String factoryId, String userId, String role,
+                                     String correlationId,
+                                     AgentOpsRunRuntimeShadowRequest body) {
+        return call(context(factoryId, userId, role, correlationId),
+                c -> client.runRuntimeShadow(body, c));
     }
 
     public JsonNode listExperiments(String factoryId, String userId, String role, String correlationId) {
@@ -116,7 +132,11 @@ public class AgentOpsService {
         } catch (UpstreamException ex) {
             throw switch (ex.getStatusCode()) {
                 case 409 -> new ResponseStatusException(HttpStatus.CONFLICT, conflictCode(ex));
-                case 503 -> new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "AGENT_OPS_STORE_UNAVAILABLE");
+                case 503 -> new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                        "AGENT_OPS_RUNTIME_SHADOW_DISABLED".equals(ex.getDetailCode())
+                                ? ex.getDetailCode() : "AGENT_OPS_STORE_UNAVAILABLE");
+                case 504 -> new ResponseStatusException(HttpStatus.GATEWAY_TIMEOUT,
+                        "RUNTIME_SHADOW_CASE_TIMEOUT");
                 default -> new ResponseStatusException(HttpStatus.BAD_GATEWAY, "AGENT_OPS_BAD_UPSTREAM");
             };
         } catch (IOException ex) {

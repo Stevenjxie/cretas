@@ -2,8 +2,8 @@
 import { onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/store/modules/auth';
-import { createEvalSet, listEvalSets } from '@/api/agent-ops';
-import type { CreateEvalSetRequest, EvalSetSummary } from '@/api/agent-ops';
+import { importRuntimeCorpus, listEvalSets } from '@/api/agent-ops';
+import type { EvalSetSummary, ImportRuntimeCorpusRequest } from '@/api/agent-ops';
 import { InMemoryIdempotencyAttempts, stableBusinessSignature } from './idempotency';
 
 const auth = useAuthStore();
@@ -14,8 +14,7 @@ const createOpen = ref(false);
 const saving = ref(false);
 const idempotency = new InMemoryIdempotencyAttempts();
 const form = reactive({
-  name: '', version: 1, description: '', caseId: '',
-  requiredTools: '', numericTruthRefs: '', maxRounds: 2, maxToolCalls: 10,
+  name: '', version: 1, description: '', maxCases: 20,
 });
 
 async function load() {
@@ -32,46 +31,29 @@ async function load() {
   }
 }
 
-function parseRefs(raw: string): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const line of raw.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
-    const separator = line.indexOf('=');
-    if (separator < 1) throw new Error('数值真值必须使用 ref=value，每行一条');
-    result[line.slice(0, separator).trim()] = line.slice(separator + 1).trim();
-  }
-  return result;
-}
-
 async function save() {
-  if (!auth.factoryId || !form.name.trim() || !form.caseId.trim()) {
-    ElMessage.warning('请填写名称和 Case ID');
+  if (!auth.factoryId || !form.name.trim()) {
+    ElMessage.warning('请填写 Eval Set 名称');
     return;
   }
   saving.value = true;
   try {
-    const businessBody: Omit<CreateEvalSetRequest, 'requestId'> = {
+    const businessBody: Omit<ImportRuntimeCorpusRequest, 'requestId'> = {
       schemaVersion: '1.0',
       name: form.name.trim(),
       version: form.version,
       description: form.description.trim(),
-      cases: [{
-        caseId: form.caseId.trim(),
-        expectedRoute: 'GROSS_MARGIN_DECLINE_ATTRIBUTION',
-        requiredTools: form.requiredTools.split(',').map((item) => item.trim()).filter(Boolean),
-        numericTruthRefs: parseRefs(form.numericTruthRefs),
-        maxRounds: form.maxRounds,
-        maxToolCalls: form.maxToolCalls,
-      }],
+      maxCases: form.maxCases,
     };
-    const action = 'create-eval-set';
+    const action = 'import-runtime-corpus';
     const requestId = idempotency.requestId(action, stableBusinessSignature({
       factoryId: auth.factoryId,
       body: businessBody,
     }));
-    await createEvalSet(auth.factoryId, { ...businessBody, requestId });
+    await importRuntimeCorpus(auth.factoryId, { ...businessBody, requestId });
     idempotency.complete(action, requestId);
     createOpen.value = false;
-    ElMessage.success('Eval Set 版本已冻结');
+    ElMessage.success('已从可信 Runtime runs 导入并冻结 Eval Set');
     await load();
   } catch (reason) {
     ElMessage.error(reason instanceof Error ? reason.message : '创建失败');
@@ -88,14 +70,14 @@ onMounted(load);
     <div class="panel-head">
       <div>
         <h2>版本化 Eval Sets</h2>
-        <p>版本创建后不可修改；Case 固定预期路由、工具轨迹和数值证据引用。</p>
+        <p>从当前餐饮租户的可信 durable runs 自动冻结输入、轨迹、数值真值与证据摘要。</p>
       </div>
-      <el-button type="primary" @click="createOpen = true">新建冻结版本</el-button>
+      <el-button type="primary" @click="createOpen = true">导入 Runtime Corpus</el-button>
     </div>
 
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon data-testid="eval-error" />
     <el-skeleton v-else-if="loading" :rows="4" animated />
-    <el-empty v-else-if="items.length === 0" description="尚无 Eval Set。先冻结一组可重复的基准 Case。" data-testid="eval-empty" />
+    <el-empty v-else-if="items.length === 0" description="尚无 Eval Set。先从可信 Runtime runs 导入基准 Case。" data-testid="eval-empty" />
     <el-table v-else :data="items" stripe>
       <el-table-column prop="name" label="名称" min-width="180" />
       <el-table-column prop="version" label="版本" width="90"><template #default="scope">v{{ scope.row.version }}</template></el-table-column>
@@ -104,23 +86,16 @@ onMounted(load);
       <el-table-column prop="createdAt" label="冻结时间" min-width="180" />
     </el-table>
 
-    <el-dialog v-model="createOpen" title="新建不可变 Eval Set 版本" width="620px">
+    <el-dialog v-model="createOpen" title="导入不可变 Runtime Eval Set" width="620px">
       <el-form label-position="top">
         <div class="form-grid">
           <el-form-item label="名称"><el-input v-model="form.name" maxlength="96" /></el-form-item>
           <el-form-item label="版本"><el-input-number v-model="form.version" :min="1" :max="1000000" /></el-form-item>
         </div>
         <el-form-item label="说明"><el-input v-model="form.description" maxlength="500" /></el-form-item>
-        <el-divider content-position="left">首个 Case</el-divider>
-        <el-form-item label="Case ID"><el-input v-model="form.caseId" maxlength="128" /></el-form-item>
-        <el-form-item label="必需工具（按顺序，逗号分隔）"><el-input v-model="form.requiredTools" placeholder="restaurant_margin_read, restaurant_cost_read" /></el-form-item>
-        <el-form-item label="数值真值引用（每行 ref=value）"><el-input v-model="form.numericTruthRefs" type="textarea" :rows="3" placeholder="evidence-1:fact-1=12.50" /></el-form-item>
-        <div class="form-grid">
-          <el-form-item label="最大轮次"><el-input-number v-model="form.maxRounds" :min="1" :max="2" /></el-form-item>
-          <el-form-item label="最大 Tool 调用"><el-input-number v-model="form.maxToolCalls" :min="1" :max="10" /></el-form-item>
-        </div>
+        <el-form-item label="最多导入 Cases（1-20）"><el-input-number data-testid="import-max-cases" v-model="form.maxCases" :min="1" :max="20" /></el-form-item>
       </el-form>
-      <template #footer><el-button @click="createOpen = false">取消</el-button><el-button type="primary" :loading="saving" @click="save">冻结版本</el-button></template>
+      <template #footer><el-button @click="createOpen = false">取消</el-button><el-button data-testid="import-runtime-corpus" type="primary" :loading="saving" @click="save">导入并冻结</el-button></template>
     </el-dialog>
   </div>
 </template>
