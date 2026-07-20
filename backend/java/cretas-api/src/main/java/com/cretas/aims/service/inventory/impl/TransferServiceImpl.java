@@ -21,6 +21,7 @@ import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.TransferDiffService;
 import com.cretas.aims.service.inventory.TransferService;
+import com.cretas.aims.service.unit.UnitContractService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -85,6 +86,10 @@ public class TransferServiceImpl implements TransferService {
      */
     @Autowired(required = false)
     private UserRepository userRepository;
+
+    /** 调拨 payload 单位只保存 canonical code；中文仅属于 Web displayUnit。 */
+    @Autowired(required = false)
+    private UnitContractService unitContractService;
 
     /**
      * 🟢 PURE DISPLAY (fool-proof-design Rule 1, 2026-07-05): 用于 getAvailableBatchesForItem
@@ -166,6 +171,8 @@ public class TransferServiceImpl implements TransferService {
                     .withHint("如需查看已有调拨单请打开 " + existing.getTransferNumber())
                     .withHintTarget(existing.getId());
         }
+
+        validateAndNormalizeCreateItems(factoryId, request, transferType);
 
         String transferNumber = generateTransferNumber(factoryId);
 
@@ -276,6 +283,99 @@ public class TransferServiceImpl implements TransferService {
         }
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /**
+     * M08: 创建草稿前锁定 item identity + 源仓可用量契约。
+     *
+     * <p>FINISHED_GOODS 必须提交 productTypeId，原料/包材必须提交 materialTypeId；
+     * 仓库间调拨还会按所选 sourceWarehouseId 做一次只读库存快照校验。SHIP 阶段仍会在
+     * 同一事务内重新校验并扣减，因此这里是 fail-fast UX gate，不取代最终原子门禁。
+     */
+    private void validateAndNormalizeCreateItems(String factoryId, CreateTransferRequest request,
+                                                 TransferType transferType) {
+        if (request.getItems() == null || request.getItems().isEmpty()) {
+            throw new BusinessException(400, "调拨行项目不能为空")
+                    .withHint("请至少添加一行要调拨的原料、包材或成品");
+        }
+        String sourceWarehouseId = trimToNull(request.getSourceWarehouseId());
+        for (CreateTransferRequest.TransferItemDTO item : request.getItems()) {
+            TransferItemType itemType;
+            try {
+                itemType = TransferItemType.valueOf(item.getItemType());
+            } catch (RuntimeException ex) {
+                throw new BusinessException(400, "不支持的调拨物品类型: " + item.getItemType())
+                        .withHint("请选择原料/食材、包材或成品/菜品");
+            }
+
+            String canonicalUnit = canonicalTransferUnit(factoryId, item.getUnit());
+            item.setUnit(canonicalUnit);
+            if (itemType == TransferItemType.FINISHED_GOODS) {
+                String productTypeId = trimToNull(item.getProductTypeId());
+                if (productTypeId == null) {
+                    throw new BusinessException(400, "成品调拨必须提交 productTypeId")
+                            .withHint("请重新选择成品/菜品；不要使用原辅料/包材的 materialTypeId 契约");
+                }
+                if (transferType == TransferType.WAREHOUSE_TO_WAREHOUSE) {
+                    BigDecimal available = finishedGoodsBatchRepository
+                            .findAvailableBatchesByWarehouse(factoryId, productTypeId, sourceWarehouseId)
+                            .stream()
+                            .filter(batch -> canonicalUnit.equals(canonicalTransferUnit(factoryId, batch.getUnit())))
+                            .map(FinishedGoodsBatch::getAvailableQuantity)
+                            .filter(Objects::nonNull)
+                            .reduce(BigDecimal.ZERO, BigDecimal::add);
+                    ensureCreateQuantityAvailable(item, available, "成品", productTypeId);
+                }
+            } else {
+                String materialTypeId = trimToNull(item.getMaterialTypeId());
+                if (materialTypeId == null) {
+                    throw new BusinessException(400, "原料/包材调拨必须提交 materialTypeId")
+                            .withHint("请重新选择与当前类型匹配的物料");
+                }
+                if (transferType == TransferType.WAREHOUSE_TO_WAREHOUSE) {
+                    BigDecimal available = materialBatchRepository
+                            .findAvailableBatchesFEFOByWarehouse(factoryId, materialTypeId, sourceWarehouseId)
+                            .stream()
+                            .filter(batch -> canonicalUnit.equals(canonicalTransferUnit(factoryId, batch.getQuantityUnit())))
+                            .map(batch -> {
+                                BigDecimal receipt = batch.getReceiptQuantity() != null
+                                        ? batch.getReceiptQuantity() : BigDecimal.ZERO;
+                                BigDecimal used = batch.getUsedQuantity() != null
+                                        ? batch.getUsedQuantity() : BigDecimal.ZERO;
+                                BigDecimal reserved = batch.getReservedQuantity() != null
+                                        ? batch.getReservedQuantity() : BigDecimal.ZERO;
+                                return receipt.subtract(used).subtract(reserved).max(BigDecimal.ZERO);
+                            })
+                            .reduce(BigDecimal.ZERO, BigDecimal::add);
+                    ensureCreateQuantityAvailable(item, available,
+                            itemType == TransferItemType.PACKAGING_MATERIAL ? "包材" : "原料", materialTypeId);
+                }
+            }
+        }
+    }
+
+    private void ensureCreateQuantityAvailable(CreateTransferRequest.TransferItemDTO item,
+                                               BigDecimal available, String label, String id) {
+        BigDecimal requested = item.getQuantity() != null ? item.getQuantity() : BigDecimal.ZERO;
+        if (requested.signum() <= 0) {
+            throw new BusinessException(400, "调拨数量必须大于0")
+                    .withHint("请填写有效的调拨数量");
+        }
+        if (available.compareTo(requested) < 0) {
+            throw new BusinessException(409, String.format(
+                    "%s源仓库存不足: %s 可用 %s %s, 申请调拨 %s %s",
+                    label, id, available.stripTrailingZeros().toPlainString(), item.getUnit(),
+                    requested.stripTrailingZeros().toPlainString(), item.getUnit()))
+                    .withHint("请减少调拨数量或选择有库存的调出仓库");
+        }
+    }
+
+    private String canonicalTransferUnit(String factoryId, String unit) {
+        String value = trimToNull(unit);
+        if (value == null) return "";
+        if (unitContractService == null) return value;
+        var normalized = unitContractService.normalize(factoryId, value);
+        return normalized.recognized() ? normalized.code() : value;
     }
 
     @Override

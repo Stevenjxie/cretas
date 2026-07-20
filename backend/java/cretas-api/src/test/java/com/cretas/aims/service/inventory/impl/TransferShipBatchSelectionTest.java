@@ -1,5 +1,6 @@
 package com.cretas.aims.service.inventory.impl;
 
+import com.cretas.aims.dto.inventory.CreateTransferRequest;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.TransferItemType;
@@ -38,6 +39,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -316,6 +318,113 @@ class TransferShipBatchSelectionTest {
     }
 
     // ===== MES↔ERP Fix #4: 同厂成品调拨不污染 shippedQuantity + 保 unitCost =====
+
+    @Test
+    @DisplayName("M08: 5盒成品从生产仓完整调拨到成品仓 — productTypeId/canonical unit/总量/幂等")
+    void finishedGoodsWarehouseTransfer_fullLifecycle_preservesFiveBoxesExactlyOnce() {
+        FinishedGoodsBatch source = finishedGoodsBatch("FG-F006-ONLY", new BigDecimal("5"));
+        source.setFactoryId("F006");
+        source.setProductTypeId("CPF0060015");
+        source.setProductName("E2E-MVP-20260719-2111-黄油鸡-成品800g");
+        source.setWarehouseId("WH-PRODUCTION");
+        source.setUnit("box");
+        source.setUnitCost(new BigDecimal("11.2000"));
+
+        CreateTransferRequest.TransferItemDTO line = new CreateTransferRequest.TransferItemDTO();
+        line.setItemType("FINISHED_GOODS");
+        line.setProductTypeId("CPF0060015");
+        line.setItemName(source.getProductName());
+        line.setQuantity(new BigDecimal("5"));
+        line.setUnit("box");
+        CreateTransferRequest request = new CreateTransferRequest();
+        request.setTransferType("WAREHOUSE_TO_WAREHOUSE");
+        request.setTargetFactoryId("F006");
+        request.setSourceWarehouseId("WH-PRODUCTION");
+        request.setTargetWarehouseId("WH-FINISHED");
+        request.setTransferDate(LocalDate.now());
+        request.setItems(List.of(line));
+
+        when(transferRepository.findRecentDuplicates(eq("F006"), eq("F006"), eq(99L), any(), any()))
+                .thenReturn(List.of());
+        when(finishedGoodsBatchRepository.findAvailableBatchesByWarehouse(
+                "F006", "CPF0060015", "WH-PRODUCTION"))
+                .thenReturn(List.of(source));
+        when(transferRepository.save(any(InternalTransfer.class))).thenAnswer(invocation -> {
+            InternalTransfer transfer = invocation.getArgument(0);
+            if (transfer.getId() == null) transfer.setId("TR-M08-F006");
+            return transfer;
+        });
+
+        InternalTransfer transfer = service.createTransfer("F006", request, 99L);
+        when(transferRepository.findByIdAndEitherFactoryId("TR-M08-F006", "F006"))
+                .thenReturn(Optional.of(transfer));
+        when(finishedGoodsBatchRepository.findById("FG-F006-ONLY")).thenReturn(Optional.of(source));
+        List<FinishedGoodsBatch> savedBatches = new ArrayList<>();
+        when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class))).thenAnswer(invocation -> {
+            FinishedGoodsBatch saved = invocation.getArgument(0);
+            savedBatches.add(saved);
+            return saved;
+        });
+        when(transferItemRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertThat(transfer.getItems()).singleElement().satisfies(item -> {
+            assertThat(item.getItemType()).isEqualTo(TransferItemType.FINISHED_GOODS);
+            assertThat(item.getProductTypeId()).isEqualTo("CPF0060015");
+            assertThat(item.getMaterialTypeId()).isNull();
+            assertThat(item.getQuantity()).isEqualByComparingTo("5");
+            assertThat(item.getUnit()).isEqualTo("box");
+        });
+
+        service.requestTransfer("F006", transfer.getId(), 99L);
+        service.approveTransfer("F006", transfer.getId(), 99L);
+        service.shipTransfer("F006", transfer.getId(), 99L);
+        assertThat(source.getProducedQuantity()).isEqualByComparingTo("0");
+        assertThat(source.getShippedQuantity()).isEqualByComparingTo("0");
+        assertThat(source.getStatus()).isEqualTo("DEPLETED");
+
+        service.receiveTransfer("F006", transfer.getId(), 99L);
+        service.confirmTransfer("F006", transfer.getId(), 99L);
+        FinishedGoodsBatch target = savedBatches.stream()
+                .filter(batch -> batch != source)
+                .findFirst()
+                .orElseThrow();
+        assertThat(target.getProductTypeId()).isEqualTo("CPF0060015");
+        assertThat(target.getWarehouseId()).isEqualTo("WH-FINISHED");
+        assertThat(target.getProducedQuantity()).isEqualByComparingTo("5");
+        assertThat(target.getUnit()).isEqualTo("box");
+        assertThat(source.getProducedQuantity().add(target.getProducedQuantity()))
+                .isEqualByComparingTo("5");
+
+        assertThatThrownBy(() -> service.confirmTransfer("F006", transfer.getId(), 99L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("不允许确认");
+        verify(finishedGoodsBatchRepository, never()).findAvailableBatchesByWarehouse(
+                "F006", null, "WH-PRODUCTION");
+    }
+
+    @Test
+    @DisplayName("M08: 成品误用 materialTypeId 在创建阶段返回明确 400")
+    void createFinishedGoods_withMaterialIdentityOnly_rejectedBeforeDraft() {
+        CreateTransferRequest.TransferItemDTO line = new CreateTransferRequest.TransferItemDTO();
+        line.setItemType("FINISHED_GOODS");
+        line.setMaterialTypeId("WRONG-MATERIAL-ID");
+        line.setQuantity(BigDecimal.ONE);
+        line.setUnit("box");
+        CreateTransferRequest request = new CreateTransferRequest();
+        request.setTransferType("WAREHOUSE_TO_WAREHOUSE");
+        request.setTargetFactoryId("F006");
+        request.setSourceWarehouseId("WH-PRODUCTION");
+        request.setTargetWarehouseId("WH-FINISHED");
+        request.setTransferDate(LocalDate.now());
+        request.setItems(List.of(line));
+        when(transferRepository.findRecentDuplicates(eq("F006"), eq("F006"), eq(99L), any(), any()))
+                .thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.createTransfer("F006", request, 99L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("productTypeId");
+        verify(transferRepository, never()).save(any());
+    }
 
     @Test
     @DisplayName("Fix#4: 同厂成品调拨 (生产仓→物流仓) — 源 shippedQuantity 不动 + 减 producedQuantity + 目标继承 unitCost + Σproduced 守恒")
