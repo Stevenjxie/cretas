@@ -7,10 +7,8 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.product.ProductPackagingSpecRepository;
 import com.cretas.aims.service.product.ProductPackagingSpecService;
-import com.cretas.aims.service.unit.CanonicalUnit;
+import com.cretas.aims.service.unit.TestUnitContractFactory;
 import com.cretas.aims.service.unit.UnitContractService;
-import com.cretas.aims.service.unit.UnitDimension;
-import com.cretas.aims.service.unit.UnitNormalizationResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -24,7 +22,6 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -38,20 +35,12 @@ class ProductPackagingSpecServiceImplTest {
     private ProductPackagingSpecRepository repository;
     @Mock
     private ProductTypeRepository productTypeRepository;
-    @Mock
-    private UnitContractService unitContractService;
-
     private ProductPackagingSpecServiceImpl service;
 
     @BeforeEach
     void setUp() {
+        UnitContractService unitContractService = TestUnitContractFactory.contract();
         service = new ProductPackagingSpecServiceImpl(repository, productTypeRepository, unitContractService);
-        when(unitContractService.normalize(anyString(), anyString())).thenAnswer(invocation -> {
-            String raw = invocation.getArgument(1);
-            CanonicalUnit unit = new CanonicalUnit(
-                    raw, UnitDimension.COUNT, raw, BigDecimal.ONE, raw, 2);
-            return new UnitNormalizationResult(raw, raw, unit);
-        });
     }
 
     @Test
@@ -83,6 +72,28 @@ class ProductPackagingSpecServiceImplTest {
         assertThat(selected.required()).isTrue();
         assertThat(selected.spec().getConversionFactor()).isEqualByComparingTo("24");
         assertThat(baseUnit.spec()).isNull();
+    }
+
+    @Test
+    void resolveSelectionUsesCanonicalAliasesWithoutRelaxingPackageIdentity() {
+        ProductPackagingSpec caseToBox = spec("spec-case-box", "8盒/箱", "case", "box", "8", 0L);
+        when(repository.findByFactoryIdAndProductTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(
+                FACTORY_ID, PRODUCT_ID)).thenReturn(List.of(caseToBox));
+        when(repository.findByIdAndFactoryIdAndProductTypeIdAndActiveTrue(
+                "spec-case-box", FACTORY_ID, PRODUCT_ID)).thenReturn(Optional.of(caseToBox));
+
+        assertThat(service.resolveSelection(FACTORY_ID, PRODUCT_ID, "箱", "spec-case-box").spec())
+                .isSameAs(caseToBox);
+        assertThat(service.resolveSelection(FACTORY_ID, PRODUCT_ID, "case", "spec-case-box").spec())
+                .isSameAs(caseToBox);
+        assertThat(service.resolveSelection(FACTORY_ID, PRODUCT_ID, "盒", null).spec()).isNull();
+        assertThat(service.resolveSelection(FACTORY_ID, PRODUCT_ID, "box", null).spec()).isNull();
+
+        assertThatThrownBy(() -> service.resolveSelection(
+                FACTORY_ID, PRODUCT_ID, "盒", "spec-case-box"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getErrorCode())
+                                .isEqualTo("PACKAGING_SPEC_UNIT_MISMATCH"));
     }
 
     @Test

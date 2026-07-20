@@ -7,10 +7,12 @@
 ## 在飞任务
 
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
+- `F006-M09-SALES-PACKAGING-UNIT-20260720` — `in-progress` — Owner: Codex coordinator — Base SHA: `a49d5aac5e635270535086d17c7e0d97cf9579ad` — 修复销售订单中文展示单位泄漏到 canonical payload、基础单位下单误选包装规格及提交前兼容校验；目标测试、唯一制品构建、PR 合并、生产发布与零写入只读验收后回交 F006 测试 Chat。
 
 ## Scope 锁地图
 
 - `SEC-CREDENTIAL-ROTATION-20260719`：`scripts/systemd/` 中遗留明文启动脚本、现有/新增 secret 扫描配置与测试、`.gitignore` / 凭证模板、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-19-active-history.md`；外部状态仅限已授权的 Cretas 47/139 服务器配置、PostgreSQL 角色密码、相关阿里云/API 凭证与必要服务重启。验收：tracked tree 与完整 Git 历史脱敏盘点、scanner gate、exact-main 发布门禁、Java/Python/网关健康、登录与 Restaurant Agent 只读 smoke、核心 ERP 零写入。
+- `F006-M09-SALES-PACKAGING-UNIT-20260720`：`web-admin/src/views/sales/orders/`、销售订单单位/包装规格相关 Web helper 与目标测试、`backend/java/cretas-api/src/test/` 中包装规格真实契约测试、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-20-active-history.md`；生产只允许部署和 query-only 验收，禁止创建订单或修改 F006 客户、库存、M08 调拨、PB/FG，禁止触碰 LIUSHANMEN。验收：box/case/slice 与中文别名 canonical payload、g/kg 回归、箱规兼容前置门禁、Java 真实契约、Web/Java 唯一制品与生产指纹。
 ## 阻塞项
 
 - Aliyun 主账号旧 AccessKey：官方 RAM API 返回 `Forbidden` 并提示泄露风险，旧 key 的 STS 仍有效；必须由阿里云控制台主账号删除。

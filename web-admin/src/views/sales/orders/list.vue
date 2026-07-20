@@ -47,6 +47,12 @@ import { TableFooter } from '@/components/list';
 import { useListSummary } from '@/composables/useListSummary';
 import { formatSummaryForAI } from '@/utils/aiSummaryContext';
 import type { ListSummaryRequest } from '@/types/listSummary';
+import { canonicalUnitCode, displayUnit, mergeCanonicalUnitOptions } from '@/utils/unitPricing';
+import {
+  canonicalSalesOrderItemPayload,
+  packagingOptionsForUnit,
+  packagingSelectionError,
+} from './salesOrderUnitContract';
 
 // G1: 税率分组开票对话框 (客户原话 2645-2660s)
 // Sprint 4 W2 S-INVOICE-CLIENT-1: defaultInvoiceType 字段从 SO 行带过来 (后端在 SO 创建时已 prefill 自 customer)
@@ -906,7 +912,7 @@ function onProductSelect(item: TableRow, productId: string) {
   if (p) {
     item.specification = p.specification || p.packageSpec || '';
     // 销售单位继承 SKU 基本单位。包装单位（箱等）是额外可选换算，不能把「盒」改写为「份」。
-    const pu = String(p.unit || '份');
+    const pu = canonicalUnitCode(p.unit || '份');
     item.unit = pu || item.unit || '份';
     if (p.unitPrice != null && (item.unitPrice == null || item.unitPrice === 0)) {
       item.unitPrice = Number(p.unitPrice);
@@ -973,9 +979,7 @@ async function loadPackagingSpecs(item: OrderItem, productId: string) {
 }
 
 function packagingOptions(item: OrderItem) {
-  return (item.packagingSpecs || []).filter((spec) => (
-    spec.packageUnit === item.unit || spec.baseUnit === item.unit
-  ));
+  return packagingOptionsForUnit<NonNullable<OrderItem['packagingSpecs']>[number]>(item);
 }
 
 function requiresPackagingSelection(item: OrderItem): boolean {
@@ -983,7 +987,7 @@ function requiresPackagingSelection(item: OrderItem): boolean {
 }
 
 function packagingOptionLabel(spec: NonNullable<OrderItem['packagingSpecs']>[number]): string {
-  return `1${spec.packageUnit}=${Number(spec.conversionFactor)}${spec.baseUnit}`;
+  return `1${displayUnit(spec.packageUnit)}=${Number(spec.conversionFactor)}${displayUnit(spec.baseUnit)}`;
 }
 
 function onOrderUnitChange(item: OrderItem) {
@@ -1117,11 +1121,11 @@ function calcBox(item: TableRow) {
   // T130 Feature D — 两分支口径:
   //   一级单位 (份, 或与产品单位一致) → 箱数 = 数量 / 箱规系数
   //   二级单位 (箱)                   → 箱数 = 数量本身 (用户直接按箱下单)
-  const unit = String(item.unit || '');
-  const pu = String(p.unit || '份');
-  if (!unit || unit === pu || unit === '份') {
+  const unit = canonicalUnitCode(item.unit);
+  const pu = canonicalUnitCode(p.unit || '份');
+  if (!unit || unit === pu || unit === canonicalUnitCode('份')) {
     item.boxQuantity = Math.round((qty / coeff) * 100) / 100;
-  } else if (unit === String(selectedSpec?.packageUnit || p.level1Unit || '箱')) {
+  } else if (unit === canonicalUnitCode(selectedSpec?.packageUnit || p.level1Unit || '箱')) {
     item.boxQuantity = qty;
   }
   // 其他单位 → 不动 (defensive)
@@ -1145,16 +1149,15 @@ function specDisplay(item: TableRow): string {
 // 单位下拉先使用 SKU 基本单位，再追加该 SKU 的包装单位；仅未选 SKU 时保留旧的「份」占位。
 function unitOptions(item: TableRow): string[] {
   const p = products.value.find((x: TableRow) => x.id === item.productTypeId);
-  const baseUnit = String(p?.unit || item.unit || '份');
-  const opts = [baseUnit];
+  const baseUnit = canonicalUnitCode(p?.unit || item.unit || '份');
+  const sources: unknown[] = [baseUnit];
   if (p && Number(p.boxConversionCoefficient) > 0) {
-    const legacyPackageUnit = String(p.level1Unit || '箱');
-    if (!opts.includes(legacyPackageUnit)) opts.push(legacyPackageUnit);
+    sources.push(p.level1Unit || '箱');
   }
   for (const spec of ((item.packagingSpecs || []) as NonNullable<OrderItem['packagingSpecs']>)) {
-    if (spec.packageUnit && !opts.includes(spec.packageUnit)) opts.push(spec.packageUnit);
+    sources.push(spec.packageUnit);
   }
-  return opts;
+  return mergeCanonicalUnitOptions(sources);
 }
 
 // T130 Feature B — 客户选择 → 智能预填业务员 (frontend-only).
@@ -1200,17 +1203,8 @@ function handleQuantityTab(e: KeyboardEvent, idx: number) {
   }
 }
 
-function toOrderItemPayload(items: OrderItem[]): OrderItem[] {
-  return items.map((item) => {
-    const payload = { ...item };
-    delete payload.packagingSpecs;
-    delete payload.packagingSpecName;
-    delete payload.packagingUnit;
-    delete payload.packagingBaseUnit;
-    delete payload.packagingFactor;
-    delete payload.packagingLoadError;
-    return payload;
-  });
+function toOrderItemPayload(items: OrderItem[]): Array<Record<string, unknown>> {
+  return items.map(canonicalSalesOrderItemPayload);
 }
 
 async function handleCreate() {
@@ -1224,6 +1218,10 @@ async function handleCreate() {
   if (selectedItems.some((i) => !i.unit)) return ElMessage.warning('请填写所有明细的单位');
   if (selectedItems.some((i) => i.packagingLoadError)) {
     return ElMessage.warning('包装规格加载失败，请重试后再创建订单');
+  }
+  const incompatiblePackaging = selectedItems.find((i) => packagingSelectionError(i));
+  if (incompatiblePackaging) {
+    return ElMessage.warning(packagingSelectionError(incompatiblePackaging) || '包装规格与下单单位不一致');
   }
   if (selectedItems.some((i) => requiresPackagingSelection(i) && !i.packagingSpecId)) {
     return ElMessage.warning('存在多种装箱规格，请为对应产品选择本次使用的箱规');
@@ -1684,7 +1682,7 @@ function handleEdit(row: TableRow) {
       ? row.items.map((item: TableRow) => ({
           productTypeId: String(item.productTypeId || item.productType?.id || ''),
           quantity: Number(item.quantity || 0),
-          unit: String(item.unit || '份'),
+          unit: canonicalUnitCode(item.unit || '份'),
           unitPrice: Number(item.unitPrice || 0),
           // PR #173 reviewer follow-up M-4 (May 9 2026): preserve specification + boxQuantity
           // on edit. 旧 bug: handleEdit 重建 form.items 时漏了这两字段, 用户编辑现有订单后
@@ -1732,6 +1730,10 @@ async function handleSave() {
     if (selectedItems.length === 0) return ElMessage.warning('请至少添加一个订单明细');
     if (selectedItems.some((i) => !i.quantity || Number(i.quantity) <= 0)) return ElMessage.warning('产品数量必须大于0');
     if (selectedItems.some((i) => !i.unit)) return ElMessage.warning('请填写所有明细的单位');
+    const incompatiblePackaging = selectedItems.find((i) => packagingSelectionError(i));
+    if (incompatiblePackaging) {
+      return ElMessage.warning(packagingSelectionError(incompatiblePackaging) || '包装规格与下单单位不一致');
+    }
     if (selectedItems.some((i) => requiresPackagingSelection(i) && !i.packagingSpecId)) {
       return ElMessage.warning('存在多种装箱规格，请为对应产品选择本次使用的箱规');
     }
@@ -1847,7 +1849,7 @@ function handleAiFill(params: TableRow) {
       return {
         productTypeId: productResolution.id,
         quantity: Number(item.quantity || 0),
-        unit: String(item.unit || 'kg'),
+        unit: canonicalUnitCode(item.unit || 'kg'),
         unitPrice: Number(item.unitPrice || 0),
         taxRate: item.taxRate != null ? Number(item.taxRate) : 13,
       };
@@ -2586,7 +2588,7 @@ function handleMergePurchase() {
           />
           <!-- T130 Feature D — 单位下拉: 份 + (产品配箱规才给 箱). NO allow-create. 默认 份. -->
           <el-select v-model="item.unit" class="sticky-col sticky-unit" filterable style="width: 80px" @change="() => onOrderUnitChange(item)">
-            <el-option v-for="u in unitOptions(item)" :key="u" :label="u" :value="u" />
+            <el-option v-for="u in unitOptions(item)" :key="u" :label="displayUnit(u)" :value="u" />
           </el-select>
           <div v-if="item.packagingLoadError" style="width: 150px; text-align: center;">
             <el-button type="danger" link size="small" @click="loadPackagingSpecs(item, item.productTypeId)">

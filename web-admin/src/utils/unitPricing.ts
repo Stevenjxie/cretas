@@ -21,7 +21,7 @@ const UNIT_ALIASES: Record<string, string> = {
 };
 
 const UNIT_LABELS: Record<string, string> = {
-  kg: 'kg', g: 'g', box: '盒', case: '箱', slice: '片', bag: '袋', pcs: '件', L: 'L', mL: 'mL',
+  kg: 'kg', g: 'g', box: '盒', case: '箱', slice: '片', bag: '袋', pcs: '件', portion: '份', L: 'L', mL: 'mL',
 };
 
 export function canonicalUnitCode(value: unknown): string {
