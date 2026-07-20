@@ -1812,7 +1812,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         settlement.setPlannedQuantity(zeroIfNull(plan.getPlannedQuantity()));
         settlement.setActualFinishedQuantity(zeroIfNull(effectiveRequest.getActualFinishedQuantity()));
         settlement.setActualSemiFinishedQuantity(zeroIfNull(effectiveRequest.getActualSemiFinishedQuantity()));
-        settlement.setQuantityUnit(trimToNull(effectiveRequest.getQuantityUnit()));
+        settlement.setQuantityUnit(resolveSettlementRequestUnit(effectiveRequest));
         settlement.setQuantityVarianceReason(trimToNull(effectiveRequest.getQuantityVarianceReason()));
         settlement.setQuantityVarianceNote(trimToNull(effectiveRequest.getQuantityVarianceNote()));
         settlement.setMaterialVarianceReason(trimToNull(effectiveRequest.getMaterialVarianceReason()));
@@ -2151,7 +2151,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .map(ProductionSettlementRequest.OutputLine::getUnit)
                 .map(this::trimToNull)
                 .filter(Objects::nonNull)
-                .map(unit -> unit.toLowerCase(Locale.ROOT))
+                .map(this::canonicalReceiptUnit)
                 .distinct()
                 .count();
         if (terminalUnitCount > 1) {
@@ -2213,7 +2213,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .idempotencyKey(null)
                 .actualFinishedQuantity(actualFinished)
                 .actualSemiFinishedQuantity(BigDecimal.ZERO)
-                .quantityUnit(null)
+                .quantityUnit(resolveTerminalOutputUnit(terminalOutputs))
                 .quantityVarianceReason(varianceReason)
                 .laborDeferredReason(laborDeferredReason)
                 .rawMaterialConsumptions(rawLines)
@@ -2324,7 +2324,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .map(ProductionSettlementRequest.OutputLine::getUnit)
                 .map(this::trimToNull)
                 .filter(Objects::nonNull)
-                .map(unit -> unit.toLowerCase(Locale.ROOT))
+                .map(this::canonicalReceiptUnit)
                 .collect(Collectors.toSet());
         if (units.size() > 1) {
             return null;
@@ -2333,6 +2333,32 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .map(ProductionSettlementRequest.OutputLine::getQuantity)
                 .filter(Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private String resolveTerminalOutputUnit(List<ProductionSettlementRequest.OutputLine> outputs) {
+        if (outputs == null || outputs.isEmpty()) {
+            return null;
+        }
+        Set<String> units = outputs.stream()
+                .map(ProductionSettlementRequest.OutputLine::getUnit)
+                .map(this::trimToNull)
+                .filter(Objects::nonNull)
+                .map(this::canonicalReceiptUnit)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        return units.size() == 1 ? units.iterator().next() : null;
+    }
+
+    private String resolveSettlementRequestUnit(ProductionSettlementRequest request) {
+        String requestedUnit = canonicalReceiptUnit(trimToNull(request.getQuantityUnit()));
+        String terminalUnit = resolveTerminalOutputUnit(request.getTerminalOutputs());
+        if (requestedUnit != null && terminalUnit != null && !requestedUnit.equals(terminalUnit)) {
+            throw new BusinessException(409, "结单单位与末道产出单位不一致")
+                    .withCode("PRODUCTION_SETTLEMENT_OUTPUT_UNIT_MISMATCH")
+                    .withHint("结单单位: " + requestedUnit + ", 末道产出单位: " + terminalUnit)
+                    .withHintTarget("成品产出");
+        }
+        return firstNonBlank(terminalUnit, requestedUnit);
     }
 
     private List<ProductionSettlementRequest.ConsumptionLine> deriveRawConsumptionsFromProcessSheetRows(
@@ -2901,9 +2927,20 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHintTarget("仓库实收");
         }
 
-        String unit = firstNonBlank(request.getQuantityUnit(), settlement.getQuantityUnit(), "件");
-        if (plan.getSourceType() == PlanSourceType.SAFETY_STOCK) {
-            unit = canonicalReceiptUnit(unit);
+        String authoritativeUnit = resolveSettlementQuantityUnit(settlement);
+        String requestedUnit = canonicalReceiptUnit(trimToNull(request.getQuantityUnit()));
+        if (authoritativeUnit != null && requestedUnit != null && !authoritativeUnit.equals(requestedUnit)) {
+            throw new BusinessException(409, "仓库实收单位与生产报产单位不一致")
+                    .withCode("PRODUCTION_RECEIPT_UNIT_MISMATCH")
+                    .withHint("生产报产单位: " + authoritativeUnit + ", 仓库实收单位: " + requestedUnit)
+                    .withHintTarget("仓库实收");
+        }
+        String unit = firstNonBlank(authoritativeUnit, requestedUnit);
+        if (unit == null) {
+            throw new BusinessException(409, "生产结单缺少可核验的成品计量单位，不能确认入库")
+                    .withCode("PRODUCTION_RECEIPT_UNIT_REQUIRED")
+                    .withHint("请核对末道正式报工的产出单位；系统未改动成品库存")
+                    .withHintTarget("仓库实收");
         }
         BigDecimal variance = reported.subtract(received);
         BigDecimal tolerance = receiptTolerance(unit);
@@ -3539,7 +3576,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .plannedQuantity(settlement.getPlannedQuantity())
                 .actualFinishedQuantity(settlement.getActualFinishedQuantity())
                 .actualSemiFinishedQuantity(settlement.getActualSemiFinishedQuantity())
-                .quantityUnit(settlement.getQuantityUnit())
+                .quantityUnit(resolveSettlementQuantityUnit(settlement))
                 .postingStatus(settlement.getPostingStatus())
                 .postingMessage(settlement.getPostingMessage())
                 .warehouseReceivedQuantity(settlement.getWarehouseReceivedQuantity())
@@ -3562,6 +3599,37 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
         return productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId)
                 .orElseThrow(this::missingProductionSettlement);
+    }
+
+    /**
+     * Historical settlements may predate quantity-unit persistence. Recover the
+     * canonical unit from the same submitted terminal process rows that produced
+     * the settlement quantity. This method is intentionally read-only: warehouse
+     * confirmation persists the resolved unit in the existing settlement atomically.
+     */
+    private String resolveSettlementQuantityUnit(ProductionSettlement settlement) {
+        String persisted = canonicalReceiptUnit(trimToNull(settlement.getQuantityUnit()));
+        if (persisted != null || processSheetRowRepository == null
+                || isBlank(settlement.getFactoryId()) || isBlank(settlement.getProductionPlanId())) {
+            return persisted;
+        }
+        List<ProcessSheetRow> rows = processSheetRowRepository.findByFactoryIdAndPlanId(
+                settlement.getFactoryId(), settlement.getProductionPlanId());
+        if (rows == null || rows.isEmpty()) {
+            return null;
+        }
+        List<ProductionSettlementPrefillResponse.Issue> ignoredIssues = new ArrayList<>();
+        List<ParsedProcessSheetRow> parsedRows = rows.stream()
+                .filter(this::isUsableProcessSheetRow)
+                .map(row -> new ParsedProcessSheetRow(row, parseProcessSheetRowPayload(row, ignoredIssues)))
+                .filter(parsed -> parsed.request() != null)
+                .toList();
+        String recovered = resolveTerminalOutputUnit(deriveTerminalProcessSheetOutputs(parsedRows));
+        if (recovered != null) {
+            log.info("只读恢复历史结单成品单位: factoryId={}, planId={}, settlementId={}, quantityUnit={}",
+                    settlement.getFactoryId(), settlement.getProductionPlanId(), settlement.getId(), recovered);
+        }
+        return recovered;
     }
 
     /**

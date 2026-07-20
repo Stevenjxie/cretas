@@ -679,7 +679,32 @@ class ProductionPlanSettlementTest {
         ProductionSettlementResponse response = service.settleProduction(FACTORY_ID, PLAN_ID, request, 10L);
 
         assertEquals(new BigDecimal("10"), response.getActualFinishedQuantity());
+        assertEquals("box", response.getQuantityUnit());
         assertEquals(new BigDecimal("10"), plan.getActualQuantity());
+    }
+
+    @Test
+    @DisplayName("历史结单单位为空时 GET 从末道正式报工只读恢复 canonical box")
+    void getProductionSettlement_nullUnitRecoversSubmittedTerminalUnitReadOnly() {
+        ProductionSettlement settlement = settled();
+        settlement.setActualFinishedQuantity(new BigDecimal("5"));
+        settlement.setQuantityUnit(null);
+        ProcessSheetRow submitted = feedRow("FG-BOX", "1", false, false);
+        submitted.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        submitted.setRowPayload("""
+                {"clientRowId":"terminal-box","processCode":"pack","processOrder":2,"productTypeId":"PT-1","batchNumber":"FG-BOX","outputQuantity":5,"inputUnit":"kg","outputUnit":"box","unit":"box"}
+                """);
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(submitted));
+
+        ProductionSettlementResponse response = service.getProductionSettlement(FACTORY_ID, PLAN_ID);
+
+        assertEquals("box", response.getQuantityUnit());
+        assertNull(settlement.getQuantityUnit(), "只读 GET 不应修改历史结单实体");
+        verify(productionSettlementRepository, never()).save(any());
+        verify(finishedGoodsBatchRepository, never()).save(any());
     }
 
     @Test
@@ -763,6 +788,71 @@ class ProductionPlanSettlementTest {
         assertEquals(null, response.getTransitLedgerId());
         assertEquals(new BigDecimal("90"), response.getWarehouseReceivedQuantity());
         verify(productionTransitLedgerRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("历史 null 结单确认入库沿末道 box 原子写回并生成 canonical box 成品")
+    void confirmWarehouseReceipt_nullUnitUsesSubmittedTerminalBox() {
+        ProductionPlan plan = plan();
+        ProductionSettlement settlement = settled();
+        settlement.setActualFinishedQuantity(new BigDecimal("5"));
+        settlement.setQuantityUnit(null);
+        ProcessSheetRow submitted = feedRow("FG-BOX", "1", false, false);
+        submitted.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        submitted.setRowPayload("""
+                {"clientRowId":"terminal-box","processCode":"pack","processOrder":2,"productTypeId":"PT-1","batchNumber":"FG-BOX","outputQuantity":5,"inputUnit":"kg","outputUnit":"box","unit":"box"}
+                """);
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(submitted));
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-P-001"))
+                .thenReturn(Optional.empty());
+        when(productTypeRepository.findById("PT-1")).thenReturn(Optional.empty());
+        when(warehouseResolver.resolveFinishedGoodsId(FACTORY_ID)).thenReturn("WH-FG-ID");
+        when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class))).thenAnswer(inv -> {
+            FinishedGoodsBatch batch = inv.getArgument(0);
+            batch.setId("fg-box");
+            return batch;
+        });
+        when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        ProductionWarehouseReceiptResponse response = service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID, receiptRequest("receipt-box", "5", "盒", null, null), 11L);
+
+        ArgumentCaptor<FinishedGoodsBatch> batchCaptor = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(finishedGoodsBatchRepository).save(batchCaptor.capture());
+        assertEquals("box", response.getQuantityUnit());
+        assertEquals("box", settlement.getQuantityUnit());
+        assertEquals("box", batchCaptor.getValue().getUnit());
+        assertEquals(new BigDecimal("5"), batchCaptor.getValue().getProducedQuantity());
+    }
+
+    @Test
+    @DisplayName("仓库确认单位与末道 canonical 单位冲突时 fail closed 且不写库存")
+    void confirmWarehouseReceipt_terminalUnitMismatchRejected() {
+        ProductionPlan plan = plan();
+        ProductionSettlement settlement = settled();
+        settlement.setActualFinishedQuantity(new BigDecimal("5"));
+        settlement.setQuantityUnit(null);
+        ProcessSheetRow submitted = feedRow("FG-BOX", "1", false, false);
+        submitted.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        submitted.setRowPayload("""
+                {"clientRowId":"terminal-box","processCode":"pack","processOrder":2,"productTypeId":"PT-1","batchNumber":"FG-BOX","outputQuantity":5,"inputUnit":"kg","outputUnit":"box","unit":"box"}
+                """);
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(submitted));
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID, receiptRequest("receipt-case", "5", "case", null, null), 11L));
+
+        assertEquals("PRODUCTION_RECEIPT_UNIT_MISMATCH", ex.getErrorCode());
+        verify(productionSettlementRepository, never()).save(any());
+        verify(finishedGoodsBatchRepository, never()).save(any());
     }
 
     @Test
