@@ -2,6 +2,10 @@ from pathlib import Path
 
 
 MIGRATION = Path(__file__).parents[2] / "smartbi/database/migrations/V20261028_04__restaurant_agent_eval_experiments.sql"
+RUNTIME_SHADOW_MIGRATION = (
+    Path(__file__).parents[2]
+    / "smartbi/database/migrations/V20261028_07__agentops_runtime_shadow_constraints.sql"
+)
 
 
 def test_forward_migration_has_rls_immutability_and_tenant_uniqueness():
@@ -37,3 +41,18 @@ def test_migration_does_not_copy_run_or_event_truth():
     assert "smart_bi_agent_run" not in sql.replace(
         "-- Run traces continue to read smart_bi_agent_run/event as the single truth.", ""
     )
+
+
+def test_forward_migration_adds_operation_specific_runtime_shadow_constraints():
+    sql = RUNTIME_SHADOW_MIGRATION.read_text(encoding="utf-8")
+    assert "ALTER COLUMN operation_kind TYPE VARCHAR(32)" in sql
+    assert "operation_kind IN ('RUN', 'RERUN', 'RUNTIME_SHADOW')" in sql
+    assert "operation_kind = 'RUNTIME_SHADOW'" in sql
+    assert "operation_kind IN ('RUN', 'RERUN')" in sql
+    assert "smart_bi_agentops_bounds_are_safe(runner_bounds)" in sql
+    assert "smart_bi_agentops_shadow_bounds_are_safe(runner_bounds)" in sql
+    assert "(value->>'maxCases')::INTEGER BETWEEN 1 AND 20" in sql
+    assert "(value->>'maxConcurrency')::INTEGER BETWEEN 1 AND 2" in sql
+    assert "(value->>'perCaseTimeoutMs')::INTEGER BETWEEN 1000 AND 75000" in sql
+    assert "source_experiment_id IS NULL" in sql
+    assert "source_experiment_id IS NOT NULL" in sql

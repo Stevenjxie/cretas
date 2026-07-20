@@ -138,6 +138,18 @@ class AgentOpsClientTest {
     }
 
     @Test
+    void runtimeShadowCanaryDenialCodeIsPreservedForTheTrustedJavaFacade() {
+        server.enqueue(json(403, "{\"detail\":\"AGENT_OPS_RUNTIME_SHADOW_CANARY_DENIED\"}"));
+
+        assertThatThrownBy(() -> client.listEvalSets(context()))
+                .isInstanceOfSatisfying(AgentOpsClient.UpstreamException.class, ex -> {
+                    assertThat(ex.getStatusCode()).isEqualTo(403);
+                    assertThat(ex.getDetailCode())
+                            .isEqualTo("AGENT_OPS_RUNTIME_SHADOW_CANARY_DENIED");
+                });
+    }
+
+    @Test
     void emptyJsonConflictReturnsSafe409WithoutNullPointerException() {
         server.enqueue(json(409, "{}"));
 

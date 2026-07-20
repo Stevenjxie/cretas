@@ -18,7 +18,14 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 import pytest
 
-from smartbi.agent.eval import AgentOpsService, PostgresAgentOpsStore, RunnerBounds
+from smartbi.agent.eval import (
+    AgentOpsService,
+    OfflineBatchRunner,
+    PostgresAgentOpsStore,
+    RunnerBounds,
+    RuntimeShadowBounds,
+)
+from smartbi.agent.eval.runner import aggregate_case_results
 from smartbi.agent.eval.store import AgentOpsConflictError
 from smartbi.agent.eval.validation import canonical_digest, validate_cases
 
@@ -35,6 +42,55 @@ pytestmark = pytest.mark.skipif(
 )
 MIGRATIONS = Path(__file__).parents[2] / "smartbi/database/migrations"
 V04 = MIGRATIONS / "V20261028_04__restaurant_agent_eval_experiments.sql"
+V07 = MIGRATIONS / "V20261028_07__agentops_runtime_shadow_constraints.sql"
+
+
+def _runtime_case():
+    refs = {"ref:" + "1" * 64: "12.5"}
+    tools = ["restaurant_period_comparison_read.v1"]
+    input_snapshot = {
+        "startDate": "2026-01-01",
+        "endDate": "2026-01-31",
+        "storeTopN": 20,
+        "dishTopN": 10,
+    }
+    return {
+        "caseId": "runtime-00000000-0000-4000-8000-000000000010",
+        "inputSnapshot": input_snapshot,
+        "expectedRoute": "GROSS_MARGIN_DECLINE_ATTRIBUTION",
+        "requiredTools": tools,
+        "numericTruthRefs": refs,
+        "maxRounds": 1,
+        "maxToolCalls": 1,
+        "sourceRunId": "00000000-0000-4000-8000-000000000010",
+        "evidenceDigests": {
+            "inputDigest": canonical_digest(input_snapshot),
+            "trajectoryDigest": canonical_digest(tools),
+            "numericTruthDigest": canonical_digest(refs),
+            "evidenceDigest": "4" * 64,
+            "sourceRunDigest": "5" * 64,
+        },
+    }
+
+
+class _RuntimeShadowRunner:
+    evaluator_version = "restaurant-runtime-shadow-v1"
+    evaluator_build = "a" * 64
+
+    async def run(self, eval_set, trusted_context, *, bounds):
+        actuals = {}
+        results = []
+        for eval_case in eval_set.cases:
+            actual_snapshot = {
+                "routeCode": eval_case["expectedRoute"],
+                "tools": list(eval_case["requiredTools"]),
+                "numericTruthRefs": dict(eval_case["numericTruthRefs"]),
+                "roundsUsed": 1,
+                "toolCallsUsed": 1,
+            }
+            actuals[eval_case["caseId"]] = actual_snapshot
+            results.append(OfflineBatchRunner._evaluate(eval_case, actual_snapshot))
+        return aggregate_case_results(results), tuple(results), actuals
 
 
 def _app_dsn(admin_dsn: str, role: str, password: str) -> str:
@@ -78,7 +134,7 @@ async def test_v04_fresh_and_v01_v02_upgrade_security_contract():
     app_pool = None
     try:
         database = str(await admin.fetchval("SELECT current_database()"))
-        if database.lower() not in {"postgres", "smartbi_db"} and "test" not in database.lower():
+        if database.lower() != "postgres" and "test" not in database.lower():
             pytest.fail("disposable PostgreSQL gate refuses this database name")
         await admin.execute(f'CREATE ROLE "{role}" LOGIN PASSWORD \'{password}\'')
         role_created = True
@@ -89,7 +145,9 @@ async def test_v04_fresh_and_v01_v02_upgrade_security_contract():
         await admin.execute(f'GRANT USAGE ON SCHEMA "{fresh_schema}", "{upgrade_schema}" TO "{role}"')
 
         rendered_v04 = _render(V04.read_text(encoding="utf-8"), role)
+        rendered_v07 = _render(V07.read_text(encoding="utf-8"), role)
         await _apply(admin, fresh_schema, rendered_v04)
+        await _apply(admin, fresh_schema, rendered_v07)
 
         await admin.execute(f'SET search_path TO "{upgrade_schema}", public')
         for filename in (
@@ -107,6 +165,7 @@ async def test_v04_fresh_and_v01_v02_upgrade_security_contract():
         await admin.execute(rendered_v04)
         if trace_contract_applied:
             await admin.execute(_render(v05.read_text(encoding="utf-8"), role))
+        await admin.execute(rendered_v07)
         assert await admin.fetchval(
             "SELECT to_regclass('smart_bi_agent_eval_set') IS NOT NULL"
         )
@@ -142,6 +201,15 @@ async def test_v04_fresh_and_v01_v02_upgrade_security_contract():
             assert (
                 "smart_bi_agent_experiment", "source_experiment_id", "YES"
             ) in columns
+            operation_kind_width = await admin.fetchval(
+                """SELECT character_maximum_length
+                   FROM information_schema.columns
+                   WHERE table_schema=$1
+                     AND table_name='smart_bi_agent_experiment'
+                     AND column_name='operation_kind'""",
+                schema,
+            )
+            assert operation_kind_width == 32
 
         await admin.execute(f'SET search_path TO "{fresh_schema}", public')
         constraint_defs = "\n".join(
@@ -166,6 +234,8 @@ async def test_v04_fresh_and_v01_v02_upgrade_security_contract():
             in constraint_defs
         )
         assert "source_experiment_id <> experiment_id" in constraint_defs
+        assert "RUNTIME_SHADOW" in constraint_defs
+        assert "smart_bi_agentops_shadow_bounds_are_safe(runner_bounds)" in constraint_defs
 
         await admin.execute(f'SET search_path TO "{fresh_schema}", public')
         flags = await admin.fetch(
@@ -310,7 +380,8 @@ async def test_v04_fresh_and_v01_v02_upgrade_security_contract():
             max_size=4,
             setup=initialize_agentops_connection,
         )
-        service = AgentOpsService(PostgresAgentOpsStore(app_pool))
+        store = PostgresAgentOpsStore(app_pool)
+        service = AgentOpsService(store)
 
         async def create_atomic(
             ctx=context(), *, name="Atomic", description="same"
@@ -389,6 +460,40 @@ async def test_v04_fresh_and_v01_v02_upgrade_security_contract():
         assert rerun.operation_kind == "RERUN"
         assert rerun.source_experiment_id == experiment.experiment_id
 
+        shadow_service = AgentOpsService(
+            store, runtime_shadow_runner=_RuntimeShadowRunner()
+        )
+        shadow_eval_set = await shadow_service.create_eval_set(
+            context(),
+            request_id=request_id(205),
+            name="Runtime shadow",
+            version=1,
+            description="PostgreSQL runtime shadow gate",
+            cases=[_runtime_case()],
+        )
+        shadow_experiment = await shadow_service.run_runtime_shadow(
+            context(),
+            request_id=request_id(206),
+            eval_set_id=shadow_eval_set.eval_set_id,
+            config_snapshot=config_snapshot(),
+            bounds=RuntimeShadowBounds(
+                max_cases=20,
+                max_concurrency=2,
+                per_case_timeout_seconds=75.0,
+            ),
+        )
+        assert shadow_experiment.operation_kind == "RUNTIME_SHADOW"
+        assert shadow_experiment.source_experiment_id is None
+        persisted_shadow = await store.get_experiment(
+            context(), shadow_experiment.experiment_id
+        )
+        assert persisted_shadow.experiment_id == shadow_experiment.experiment_id
+        assert persisted_shadow.runner_bounds == {
+            "maxCases": 20,
+            "maxConcurrency": 2,
+            "perCaseTimeoutMs": 75000,
+        }
+
         tenant_experiment = await service.run_experiment(
             context("R002"),
             request_id=request_id(204),
@@ -421,6 +526,84 @@ async def test_v04_fresh_and_v01_v02_upgrade_security_contract():
                 str(uuid.uuid4()), str(uuid.uuid4()), "d" * 64,
                 experiment.experiment_id,
             )
+
+        await admin.execute(f'SET search_path TO "{fresh_schema}", public')
+
+        async def insert_with_operation_and_bounds(
+            *, operation_kind, source_experiment_id, runner_bounds
+        ):
+            await admin.execute(
+                """
+                INSERT INTO smart_bi_agent_experiment (
+                    experiment_id,factory_id,eval_set_id,eval_set_name,
+                    eval_set_version,eval_set_digest,evaluator_version,
+                    evaluator_build,snapshot_digest,config_snapshot,
+                    actual_snapshots,runner_bounds,aggregate,case_results,
+                    request_id,request_digest,operation_kind,
+                    source_experiment_id,created_by
+                )
+                SELECT $1::uuid,factory_id,eval_set_id,eval_set_name,
+                       eval_set_version,eval_set_digest,evaluator_version,
+                       evaluator_build,snapshot_digest,config_snapshot,
+                       actual_snapshots,$2::jsonb,aggregate,case_results,
+                       $3::uuid,$4,$5,$6::uuid,created_by
+                FROM smart_bi_agent_experiment
+                WHERE experiment_id=$7::uuid
+                """,
+                str(uuid.uuid4()),
+                json.dumps(runner_bounds),
+                str(uuid.uuid4()),
+                uuid.uuid4().hex + uuid.uuid4().hex,
+                operation_kind,
+                source_experiment_id,
+                shadow_experiment.experiment_id,
+            )
+
+        invalid_rows = (
+            {
+                "operation_kind": "RUNTIME_SHADOW",
+                "source_experiment_id": experiment.experiment_id,
+                "runner_bounds": {
+                    "maxCases": 20, "maxConcurrency": 2,
+                    "perCaseTimeoutMs": 75000,
+                },
+            },
+            {
+                "operation_kind": "RUN",
+                "source_experiment_id": None,
+                "runner_bounds": {
+                    "maxCases": 100, "maxConcurrency": 4,
+                    "perCaseTimeoutMs": 5001,
+                },
+            },
+            {
+                "operation_kind": "RUNTIME_SHADOW",
+                "source_experiment_id": None,
+                "runner_bounds": {
+                    "maxCases": 20, "maxConcurrency": 2,
+                    "perCaseTimeoutMs": 999,
+                },
+            },
+            {
+                "operation_kind": "RUNTIME_SHADOW",
+                "source_experiment_id": None,
+                "runner_bounds": {
+                    "maxCases": 21, "maxConcurrency": 2,
+                    "perCaseTimeoutMs": 1000,
+                },
+            },
+            {
+                "operation_kind": "RUNTIME_SHADOW",
+                "source_experiment_id": None,
+                "runner_bounds": {
+                    "maxCases": 20, "maxConcurrency": 3,
+                    "perCaseTimeoutMs": 1000,
+                },
+            },
+        )
+        for invalid_row in invalid_rows:
+            with pytest.raises(asyncpg.CheckViolationError):
+                await insert_with_operation_and_bounds(**invalid_row)
 
         with pytest.raises(asyncpg.ForeignKeyViolationError):
             await admin.execute(

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 import uuid
-import os
 from typing import Any, Literal, Mapping
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -23,6 +22,7 @@ from smartbi.agent.eval import (
 from smartbi.agent.eval.store import AgentOpsAccessError, AgentOpsConflictError
 from smartbi.agent.eval.runner import EvaluatorBuildUnavailableError
 from smartbi.agent.eval.validation import AgentOpsValidationError, ensure_payload_budget
+from smartbi.agent.rollout import RuntimeShadowRolloutPolicy
 from smartbi.config import get_pg_pool
 
 router = APIRouter(prefix="/api/internal/smartbi/agent/runs/ops")
@@ -122,31 +122,32 @@ class RerunExperimentBody(BaseModel):
 
 
 async def get_agent_ops_service() -> AgentOpsService:
+    pool = await _require_pg_pool()
+    return AgentOpsService(PostgresAgentOpsStore(pool), OfflineBatchRunner())
+
+
+async def _require_pg_pool():
     try:
         pool = await get_pg_pool()
     except Exception as exc:
         raise HTTPException(status_code=503, detail="AGENT_OPS_STORE_UNAVAILABLE") from exc
     if pool is None:
         raise HTTPException(status_code=503, detail="AGENT_OPS_STORE_UNAVAILABLE")
-    shadow_runner = (
-        RuntimeShadowBatchRunner(pool) if _runtime_shadow_enabled() else None
-    )
-    return AgentOpsService(
-        PostgresAgentOpsStore(pool),
-        OfflineBatchRunner(),
-        runtime_shadow_runner=shadow_runner,
-    )
+    return pool
 
 
-def _runtime_shadow_enabled() -> bool:
-    return os.getenv("AGENT_OPS_RUNTIME_SHADOW_ENABLED", "false").strip().lower() in {
-        "1", "true", "yes", "on"
-    }
+def require_runtime_shadow_context(request: Request) -> AgentOpsContext:
+    """Apply trusted identity validation and canary policy before service wiring."""
 
-
-def require_runtime_shadow_enabled() -> None:
-    if not _runtime_shadow_enabled():
+    context = require_agent_ops_context(request)
+    policy = RuntimeShadowRolloutPolicy.from_environ()
+    if not policy.master_enabled:
         raise HTTPException(status_code=503, detail="AGENT_OPS_RUNTIME_SHADOW_DISABLED")
+    if not policy.allows(context):
+        raise HTTPException(
+            status_code=403, detail="AGENT_OPS_RUNTIME_SHADOW_CANARY_DENIED"
+        )
+    return context
 
 
 def require_agent_ops_context(request: Request) -> AgentOpsContext:
@@ -174,6 +175,19 @@ def require_agent_ops_context(request: Request) -> AgentOpsContext:
     return AgentOpsContext(factory_id, user_id, role.lower(), correlation_id)
 
 
+async def get_runtime_shadow_agent_ops_service(
+    _context: AgentOpsContext = Depends(require_runtime_shadow_context),
+) -> AgentOpsService:
+    """Build the Runtime Shadow runner only after its request gate succeeds."""
+
+    pool = await _require_pg_pool()
+    return AgentOpsService(
+        PostgresAgentOpsStore(pool),
+        OfflineBatchRunner(),
+        runtime_shadow_runner=RuntimeShadowBatchRunner(pool),
+    )
+
+
 @router.post("/eval-sets", status_code=201)
 async def create_eval_set(
     body: CreateEvalSetBody,
@@ -199,10 +213,9 @@ async def create_eval_set(
 @router.post("/eval-sets/import-runtime-corpus", status_code=201)
 async def import_runtime_corpus(
     body: ImportRuntimeCorpusBody,
-    context: AgentOpsContext = Depends(require_agent_ops_context),
-    service: AgentOpsService = Depends(get_agent_ops_service),
+    context: AgentOpsContext = Depends(require_runtime_shadow_context),
+    service: AgentOpsService = Depends(get_runtime_shadow_agent_ops_service),
 ):
-    require_runtime_shadow_enabled()
     try:
         record = await service.import_runtime_corpus(
             context,
@@ -283,10 +296,9 @@ async def run_experiment(
 @router.post("/experiments/runtime-shadow", status_code=201)
 async def run_runtime_shadow(
     body: RunRuntimeShadowBody,
-    context: AgentOpsContext = Depends(require_agent_ops_context),
-    service: AgentOpsService = Depends(get_agent_ops_service),
+    context: AgentOpsContext = Depends(require_runtime_shadow_context),
+    service: AgentOpsService = Depends(get_runtime_shadow_agent_ops_service),
 ):
-    require_runtime_shadow_enabled()
     try:
         record = await service.run_runtime_shadow(
             context,

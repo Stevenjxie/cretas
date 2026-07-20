@@ -1,5 +1,6 @@
 package com.cretas.aims.controller.agentops;
 
+import com.cretas.aims.config.agent.AgentOpsRuntimeShadowRolloutPolicy;
 import com.cretas.aims.service.agentops.AgentOpsService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,14 +28,21 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 class AgentOpsControllerTest {
     private AgentOpsService service;
+    private AgentOpsRuntimeShadowRolloutPolicy runtimeShadowRollout;
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() throws Exception {
         service = mock(AgentOpsService.class);
+        runtimeShadowRollout = new AgentOpsRuntimeShadowRolloutPolicy();
+        runtimeShadowRollout.setEnabled(true);
+        runtimeShadowRollout.setFactoryAllowlist("*");
+        runtimeShadowRollout.setRoleAllowlist("*");
+        runtimeShadowRollout.setSampleBps(10_000);
         when(service.listEvalSets(anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(new ObjectMapper().readTree("{\"items\":[]}"));
-        mvc = MockMvcBuilders.standaloneSetup(new AgentOpsController(service)).build();
+        mvc = MockMvcBuilders.standaloneSetup(
+                new AgentOpsController(service, runtimeShadowRollout)).build();
     }
 
     @Test
@@ -208,6 +216,43 @@ class AgentOpsControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(withCases))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void runtimeShadowAndCorpusFailBeforeServiceWhenMasterOrCanaryDenies() throws Exception {
+        String shadow = """
+                {"schemaVersion":"1.0",
+                 "requestId":"00000000-0000-4000-8000-000000000091",
+                 "evalSetId":"00000000-0000-4000-8000-000000000092",
+                 "configSnapshot":{
+                   "promptSnapshotDigest":"1111111111111111111111111111111111111111111111111111111111111111",
+                   "modelSnapshotDigest":"2222222222222222222222222222222222222222222222222222222222222222",
+                   "toolSnapshotDigest":"3333333333333333333333333333333333333333333333333333333333333333"},
+                 "bounds":{"maxCases":20,"maxConcurrency":2,"perCaseTimeoutMs":75000}}
+                """;
+        runtimeShadowRollout.setEnabled(false);
+        mvc.perform(post("/api/mobile/R001/agent-ops/experiments/runtime-shadow")
+                        .requestAttr("factoryId", "R001").requestAttr("userId", 42L)
+                        .requestAttr("role", "platform_admin")
+                        .contentType(MediaType.APPLICATION_JSON).content(shadow))
+                .andExpect(status().isServiceUnavailable());
+        verify(service, never()).runRuntimeShadow(
+                anyString(), anyString(), anyString(), anyString(), any());
+
+        runtimeShadowRollout.setEnabled(true);
+        runtimeShadowRollout.setFactoryAllowlist("R002");
+        String corpus = """
+                {"schemaVersion":"1.0",
+                 "requestId":"00000000-0000-4000-8000-000000000093",
+                 "name":"runtime corpus","version":1,"description":"trusted","maxCases":20}
+                """;
+        mvc.perform(post("/api/mobile/R001/agent-ops/eval-sets/import-runtime-corpus")
+                .requestAttr("factoryId", "R001").requestAttr("userId", 42L)
+                        .requestAttr("role", "platform_admin")
+                        .contentType(MediaType.APPLICATION_JSON).content(corpus))
+                .andExpect(status().isForbidden());
+        verify(service, never()).importRuntimeCorpus(
+                anyString(), anyString(), anyString(), anyString(), any());
     }
 
     @Test
