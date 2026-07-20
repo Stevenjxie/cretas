@@ -7,6 +7,7 @@ import com.cretas.aims.service.unit.UnitConversionContext;
 import com.cretas.aims.service.unit.UnitConversionResult;
 import com.cretas.aims.service.unit.UnitConversionStatus;
 import com.cretas.aims.service.unit.UnitGovernanceAuditService;
+import com.cretas.aims.service.unit.UnitUsageScope;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -69,5 +70,18 @@ class UnitContractControllerTest {
 
         assertTrue(response.getBody().getData().isEmpty());
         verify(unitGovernanceAuditService).scan("F1");
+    }
+
+    @Test
+    void catalogDelegatesUsageScopeToTheSharedContract() {
+        UnitContractController controller = new UnitContractController(
+                unitContractService, productUnitConversionService, unitGovernanceAuditService);
+        when(unitContractService.catalog("F1", UnitUsageScope.INVENTORY_QUANTITY))
+                .thenReturn(List.of());
+
+        var response = controller.catalog("F1", UnitUsageScope.INVENTORY_QUANTITY);
+
+        assertTrue(response.getBody().getData().isEmpty());
+        verify(unitContractService).catalog("F1", UnitUsageScope.INVENTORY_QUANTITY);
     }
 }

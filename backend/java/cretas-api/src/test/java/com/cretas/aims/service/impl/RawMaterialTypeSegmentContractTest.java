@@ -11,6 +11,7 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialPackagingHierarchyRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.material.MaterialCodeSegmentRepository;
+import com.cretas.aims.service.material.MaterialBusinessCodeService;
 import com.cretas.aims.service.workflow.WorkflowUnitReviewService;
 import com.cretas.aims.utils.ExcelUtil;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,6 +22,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -46,6 +48,7 @@ class RawMaterialTypeSegmentContractTest {
     @Mock MaterialCodeSegmentRepository segmentRepository;
     @Mock ExcelUtil excelUtil;
     @Mock WorkflowUnitReviewService workflowUnitReviewService;
+    @Mock MaterialBusinessCodeService materialBusinessCodeService;
 
     private RawMaterialTypeServiceImpl service;
 
@@ -54,6 +57,9 @@ class RawMaterialTypeSegmentContractTest {
         service = new RawMaterialTypeServiceImpl(materialTypeRepository, materialBatchRepository,
                 conversionRepository, packagingRepository, segmentRepository, excelUtil,
                 workflowUnitReviewService);
+        ReflectionTestUtils.setField(service, "materialBusinessCodeService", materialBusinessCodeService);
+        lenient().when(materialBusinessCodeService.allocateBusinessCode(FACTORY_ID, L3))
+                .thenReturn("RMSEA000001");
     }
 
     @Test
@@ -81,6 +87,24 @@ class RawMaterialTypeSegmentContractTest {
         assertEquals("原料", result.getCategory());
         assertEquals(L1, result.getPrimaryCode());
         assertEquals(L3 + "000001", result.getCode());
+        assertEquals(L3 + "000001", result.getLegacyClassificationCode());
+        assertEquals("RMSEA000001", result.getBusinessCode());
+        assertEquals("RMSEA000001", result.getDisplayCode());
+        assertFalse(result.isHistoricalCodeFallback());
+    }
+
+    @Test
+    void createRejectsCategoryThatDoesNotMatchValidatedL1() {
+        stubValidChain();
+        RawMaterialTypeDTO request = validRequest(L3);
+        request.setCategory("包材");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.createMaterialType(FACTORY_ID, request));
+
+        assertEquals(400, ex.getCode());
+        assertEquals("category", ex.getHintTarget());
+        verify(materialTypeRepository, never()).save(any());
     }
 
     @Test
@@ -167,7 +191,7 @@ class RawMaterialTypeSegmentContractTest {
     private RawMaterialTypeDTO validRequest(String segmentCode) {
         return RawMaterialTypeDTO.builder()
                 .name("牛肉")
-                .category("错误类别")
+                .category("原料")
                 .unit("kg")
                 .taxTreatment(TaxTreatment.EXEMPT)
                 .taxExemptionReason("自产免税")

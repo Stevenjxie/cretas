@@ -39,7 +39,7 @@ public class MaterialCodeSegmentController {
 
     @GetMapping
     @Operation(summary = "按层级列表查询")
-    @RequirePermission({"production:read_write"})
+    @RequirePermission({"production:read_write", "warehouse:read_write", "system:read_write"})
     public ApiResponse<List<MaterialCodeSegmentDTO>> listByLevel(
             @PathVariable String factoryId,
             @RequestParam(required = false, defaultValue = "1") short level) {
@@ -48,14 +48,14 @@ public class MaterialCodeSegmentController {
 
     @GetMapping("/tree")
     @Operation(summary = "完整3层树形 (前端级联一次 fetch)")
-    @RequirePermission({"production:read_write"})
+    @RequirePermission({"production:read_write", "warehouse:read_write", "system:read_write"})
     public ApiResponse<List<MaterialCodeSegmentDTO>> getTree(@PathVariable String factoryId) {
         return ApiResponse.success(service.getTree(factoryId));
     }
 
     @PostMapping
     @Operation(summary = "创建分段节点")
-    @RequirePermission({"production:read_write"})
+    @RequirePermission({"system:read_write"})
     public ApiResponse<MaterialCodeSegmentDTO> create(
             @PathVariable String factoryId,
             @Valid @RequestBody CreateMaterialCodeSegmentRequest req) {
@@ -64,7 +64,7 @@ public class MaterialCodeSegmentController {
 
     @PutMapping("/{id}")
     @Operation(summary = "更新分段节点")
-    @RequirePermission({"production:read_write"})
+    @RequirePermission({"system:read_write"})
     public ApiResponse<MaterialCodeSegmentDTO> update(
             @PathVariable String factoryId,
             @PathVariable Long id,
@@ -74,7 +74,7 @@ public class MaterialCodeSegmentController {
 
     @DeleteMapping("/{id}")
     @Operation(summary = "软删除分段节点")
-    @RequirePermission({"production:read_write"})
+    @RequirePermission({"system:read_write"})
     public ApiResponse<Void> delete(
             @PathVariable String factoryId,
             @PathVariable Long id) {

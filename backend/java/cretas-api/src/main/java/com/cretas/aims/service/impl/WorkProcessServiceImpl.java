@@ -150,7 +150,9 @@ public class WorkProcessServiceImpl implements WorkProcessService {
         log.info("Updating work process {} for factory: {}", id, factoryId);
         WorkProcess entity = workProcessRepository.findByFactoryIdAndId(factoryId, id)
                 .orElseThrow(() -> new ResourceNotFoundException("WorkProcess", "id", id));
-        String category = validateCategory(factoryId, dto.getProcessCategory());
+        String category = validateCategory(
+                factoryId,
+                dto.getProcessCategory() != null ? dto.getProcessCategory() : entity.getProcessCategory());
 
         // audit Finding 4 修复: 改名时防重名 —— 调料配方按工序靠工序名跨模式(legacy/workflow)定位,
         // 两个同名工序会让报工成本读错工序的调料/锅序参数。create() 已有唯一性校验, update() 之前缺。
@@ -291,7 +293,7 @@ public class WorkProcessServiceImpl implements WorkProcessService {
         // Existing factories already have a category taxonomy derived from their process catalog.
         // An empty catalog is the only bootstrap case; once a taxonomy exists, fail closed.
         if (!categories.isEmpty() && categories.stream().noneMatch(category::equals)) {
-            throw new BusinessException(400, "工序类别不存在或不属于当前工厂: " + category)
+            throw new BusinessException(400, "工序类别字典中不存在或不属于当前工厂: " + category)
                     .withHint("请从工序类别下拉中选择有效类别")
                     .withHintTarget("processCategory");
         }

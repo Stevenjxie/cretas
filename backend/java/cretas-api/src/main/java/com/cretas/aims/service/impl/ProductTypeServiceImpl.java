@@ -191,7 +191,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         productType.setImageUrl(dto.getImageUrl());
         productType.setProductCategory(dto.getProductCategory());
         productType.setTemperatureZone(dto.getTemperatureZone());
-        productType.setGramsPerUnit(dto.getGramsPerUnit());
+        applyNetContentContract(productType, dto, false);
         productType.setWipToFgYield(dto.getWipToFgYield());
         productType.setQuotedLaborCostPerKg(dto.getQuotedLaborCostPerKg()); // SP9-M1
         productType.setStandardCost(dto.getStandardCost());
@@ -319,7 +319,11 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         if (dto.getImageUrl() != null) productType.setImageUrl(dto.getImageUrl());
         if (dto.getProductCategory() != null) productType.setProductCategory(dto.getProductCategory());
         if (dto.getTemperatureZone() != null) productType.setTemperatureZone(dto.getTemperatureZone());
-        if (dto.isGramsPerUnitPresent()) productType.setGramsPerUnit(dto.getGramsPerUnit());
+        if (dto.isGramsPerUnitPresent()
+                || dto.isNetContentQuantityPresent()
+                || dto.isNetContentUnitPresent()) {
+            applyNetContentContract(productType, dto, true);
+        }
         if (dto.getWipToFgYield() != null) productType.setWipToFgYield(dto.getWipToFgYield());
         if (dto.getQuotedLaborCostPerKg() != null) productType.setQuotedLaborCostPerKg(dto.getQuotedLaborCostPerKg()); // SP9-M1
         if (dto.isStandardCostPresent()) productType.setStandardCost(dto.getStandardCost());
@@ -1044,6 +1048,8 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                 .productCategory(productType.getProductCategory())
                 .temperatureZone(productType.getTemperatureZone())
                 .gramsPerUnit(productType.getGramsPerUnit())
+                .netContentQuantity(productType.getNetContentQuantity())
+                .netContentUnit(productType.getNetContentUnit())
                 .wipToFgYield(productType.getWipToFgYield())
                 .quotedLaborCostPerKg(productType.getQuotedLaborCostPerKg()) // SP9-M1
                 .standardCost(productType.getStandardCost())
@@ -1072,6 +1078,77 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                 .taxRate(productType.getTaxRate())
                 .taxIncludedUnitPrice(productType.getTaxIncludedUnitPrice())
                 .build();
+    }
+
+    /**
+     * 统一 SKU 净含量契约。质量型同时维护 gramsPerUnit 兼容桥；容量型绝不伪装为克重。
+     */
+    private void applyNetContentContract(ProductType entity, ProductTypeDTO dto, boolean update) {
+        boolean structuredPresent = dto.isNetContentQuantityPresent() || dto.isNetContentUnitPresent();
+        if (structuredPresent) {
+            if (!dto.isNetContentQuantityPresent() || !dto.isNetContentUnitPresent()) {
+                throw new BusinessException(400, "净含量数量和单位必须同时提供")
+                        .withCode("PRODUCT_NET_CONTENT_PAIR_REQUIRED")
+                        .withHintTarget("netContentQuantity");
+            }
+            BigDecimal quantity = dto.getNetContentQuantity();
+            String unit = canonicalNetContentUnit(dto.getNetContentUnit());
+            if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new BusinessException(400, "净含量必须大于 0")
+                        .withCode("PRODUCT_NET_CONTENT_INVALID")
+                        .withHintTarget("netContentQuantity");
+            }
+            entity.setNetContentQuantity(quantity.stripTrailingZeros());
+            entity.setNetContentUnit(unit);
+            entity.setGramsPerUnit(toGrams(quantity, unit));
+            return;
+        }
+
+        // 兼容旧客户端：只传 gramsPerUnit 时，结构化为 g；显式 null 仍允许清空历史克重。
+        if (dto.isGramsPerUnitPresent() || !update) {
+            BigDecimal grams = dto.getGramsPerUnit();
+            entity.setGramsPerUnit(grams);
+            if (grams == null) {
+                if (dto.isGramsPerUnitPresent()) {
+                    entity.setNetContentQuantity(null);
+                    entity.setNetContentUnit(null);
+                }
+            } else {
+                if (grams.compareTo(BigDecimal.ZERO) <= 0) {
+                    throw new BusinessException(400, "净含量必须大于 0")
+                            .withCode("PRODUCT_NET_CONTENT_INVALID")
+                            .withHintTarget("gramsPerUnit");
+                }
+                entity.setNetContentQuantity(grams.stripTrailingZeros());
+                entity.setNetContentUnit("g");
+            }
+        }
+    }
+
+    private String canonicalNetContentUnit(String rawUnit) {
+        if (rawUnit == null) {
+            throw new BusinessException(400, "净含量单位不能为空")
+                    .withCode("PRODUCT_NET_CONTENT_UNIT_REQUIRED")
+                    .withHintTarget("netContentUnit");
+        }
+        return switch (rawUnit.trim().toLowerCase(java.util.Locale.ROOT)) {
+            case "g", "克" -> "g";
+            case "kg", "千克", "公斤" -> "kg";
+            case "ml", "毫升" -> "ml";
+            case "l", "升" -> "L";
+            default -> throw new BusinessException(400, "净含量单位仅允许 g/kg/ml/L")
+                    .withCode("PRODUCT_NET_CONTENT_UNIT_INVALID")
+                    .withHintTarget("netContentUnit");
+        };
+    }
+
+    private BigDecimal toGrams(BigDecimal quantity, String unit) {
+        return switch (unit) {
+            case "g" -> quantity.stripTrailingZeros();
+            case "kg" -> quantity.multiply(BigDecimal.valueOf(1000)).stripTrailingZeros();
+            case "ml", "L" -> null;
+            default -> throw new IllegalStateException("Unexpected net content unit: " + unit);
+        };
     }
 
     // ==================== Phase 5: JSON Serialization/Deserialization Helpers ====================

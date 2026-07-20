@@ -11,6 +11,11 @@ import com.cretas.aims.repository.MaterialPackagingHierarchyRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.material.MaterialCodeSegmentRepository;
 import com.cretas.aims.service.workflow.WorkflowUnitReviewService;
+import com.cretas.aims.service.unit.CanonicalUnit;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitDimension;
+import com.cretas.aims.service.unit.UnitNormalizationResult;
+import com.cretas.aims.service.unit.UnitUsageScope;
 import com.cretas.aims.utils.ExcelUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -18,6 +23,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -45,6 +51,7 @@ class RawMaterialTypeMasterDataGuardTest {
     @Mock MaterialCodeSegmentRepository segmentRepository;
     @Mock ExcelUtil excelUtil;
     @Mock WorkflowUnitReviewService workflowUnitReviewService;
+    @Mock UnitContractService unitContractService;
 
     private RawMaterialTypeServiceImpl service;
 
@@ -52,6 +59,18 @@ class RawMaterialTypeMasterDataGuardTest {
     void setUp() {
         service = new RawMaterialTypeServiceImpl(repository, batchRepository, conversionRepository,
                 packagingRepository, segmentRepository, excelUtil, workflowUnitReviewService);
+        ReflectionTestUtils.setField(service, "unitContractService", unitContractService);
+        org.mockito.Mockito.lenient().when(unitContractService.normalize(any(), any()))
+                .thenAnswer(invocation -> {
+                    String raw = invocation.getArgument(1);
+                    String code = raw == null || raw.isBlank() ? "kg" : raw.trim();
+                    CanonicalUnit unit = new CanonicalUnit(
+                            code, UnitDimension.MASS, code, BigDecimal.ONE, code, 3);
+                    return new UnitNormalizationResult(raw, code, unit);
+                });
+        org.mockito.Mockito.lenient().when(unitContractService.supportsUsage(
+                any(), any(), org.mockito.ArgumentMatchers.eq(UnitUsageScope.INVENTORY_QUANTITY)))
+                .thenReturn(true);
     }
 
     @Test
@@ -103,6 +122,22 @@ class RawMaterialTypeMasterDataGuardTest {
                     assertThat(business.getCode()).isEqualTo(409);
                     assertThat(business.getHintTarget()).isEqualTo("name");
                 });
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void createRejectsUnitOutsideInventoryUsageScope() {
+        // Validation fails before code allocation/persistence, so only the
+        // authoritative classification chain is required for this case.
+        stubSegmentChain("原料");
+        RawMaterialTypeDTO dto = baseCreateDto("温控原料");
+        dto.setUnit("minute");
+        when(unitContractService.supportsUsage(
+                FACTORY, "minute", UnitUsageScope.INVENTORY_QUANTITY)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.createMaterialType(FACTORY, dto))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getHintTarget()).isEqualTo("unit"));
         verify(repository, never()).save(any());
     }
 

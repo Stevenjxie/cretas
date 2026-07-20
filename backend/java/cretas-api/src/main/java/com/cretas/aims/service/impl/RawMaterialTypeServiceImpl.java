@@ -4,6 +4,7 @@ import com.cretas.aims.dto.common.ImportResult;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.material.MaterialSuggestDTO;
+import com.cretas.aims.dto.material.MaterialTaxonomyCandidateDTO;
 import com.cretas.aims.dto.material.RawMaterialTypeDTO;
 import com.cretas.aims.dto.materialtype.MaterialTypeExportDTO;
 import com.cretas.aims.entity.RawMaterialType;
@@ -19,7 +20,11 @@ import com.cretas.aims.repository.material.MaterialCodeSegmentRepository;
 import com.cretas.aims.entity.MaterialPackagingHierarchy;
 import com.cretas.aims.entity.material.MaterialCodeSegment;
 import com.cretas.aims.service.RawMaterialTypeService;
+import com.cretas.aims.service.material.MaterialBusinessCodeService;
 import com.cretas.aims.service.workflow.WorkflowUnitReviewService;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitNormalizationResult;
+import com.cretas.aims.service.unit.UnitUsageScope;
 import com.cretas.aims.utils.ExcelUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -34,8 +39,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
+import org.springframework.beans.factory.annotation.Autowired;
 import java.io.InputStream;
 import java.math.BigDecimal;
+import java.text.Normalizer;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -59,6 +66,18 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
     private final MaterialCodeSegmentRepository materialCodeSegmentRepository; // SP8: 16位分段字典
     private final ExcelUtil excelUtil;
     private final WorkflowUnitReviewService workflowUnitReviewService;
+
+    /** Optional field injection preserves compatibility with narrow legacy unit tests. */
+    @Autowired
+    private UnitContractService unitContractService;
+
+    /**
+     * Optional field injection keeps the long-lived narrow constructor tests source-compatible.
+     * Production always provides the allocator; new classified materials then receive an
+     * immutable business code while the legacy 16-digit code remains untouched.
+     */
+    @Autowired(required = false)
+    private MaterialBusinessCodeService materialBusinessCodeService;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -99,13 +118,14 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                 ? dto.getTaxTreatment() : com.cretas.aims.entity.enums.TaxTreatment.TAXABLE;
         MaterialSegmentChain segmentChain = requireValidSegmentChain(factoryId, dto.getSegmentCode());
         String materialCategory = segmentChain.l1().getSegmentLabel();
+        ensureCategoryMatchesSegment(dto.getCategory(), materialCategory);
         boolean packaging = isPackagingCategory(materialCategory);
         String normalizedName = normalizeRequiredName(dto.getName());
         if (materialTypeRepository.existsByFactoryIdAndNormalizedName(factoryId, normalizedName)) {
             throw duplicateMaterialName(normalizedName);
         }
         dto.setName(normalizedName);
-        dto.setUnit(normalizeUnit(dto.getUnit()));
+        dto.setUnit(normalizeInventoryUnit(factoryId, dto.getUnit()));
         if (taxTreatment != com.cretas.aims.entity.enums.TaxTreatment.EXEMPT && dto.getTaxRate() == null) {
             dto.setTaxRate(TaxRate.TAX_13);
         }
@@ -145,6 +165,10 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         }
         materialType.setFactoryId(factoryId);
         materialType.setCode(dto.getCode());
+        if (materialBusinessCodeService != null) {
+            materialType.setBusinessCode(materialBusinessCodeService.allocateBusinessCode(
+                    factoryId, segmentChain.l3().getSegmentCode()));
+        }
         materialType.setName(dto.getName());
         materialType.setCategory(materialCategory);
         materialType.setUnit(dto.getUnit());
@@ -212,6 +236,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
             requestedSegment = materialType.getCode().substring(0, 10);
         }
         MaterialSegmentChain segmentChain = requireValidSegmentChain(factoryId, requestedSegment);
+        ensureCategoryMatchesSegment(dto.getCategory(), segmentChain.l1().getSegmentLabel());
         if (materialType.getCode() == null || !materialType.getCode().matches("[0-9]{16}")) {
             materialCodeSegmentRepository.lockByFactoryIdAndSegmentCode(factoryId, segmentChain.l3().getSegmentCode())
                     .orElseThrow(() -> invalidSegment("L3编码在生成过程中已失效", segmentChain.l3().getSegmentCode()));
@@ -239,7 +264,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
             materialType.setName(normalizedName);
         }
         // category is derived exclusively from the validated L1 ancestor.
-        if (dto.getUnit() != null) materialType.setUnit(normalizeUnit(dto.getUnit()));
+        if (dto.getUnit() != null) materialType.setUnit(normalizeInventoryUnit(factoryId, dto.getUnit()));
         if (packaging) {
             materialType.setStorageType(null);
         } else if (dto.getStorageType() != null) {
@@ -349,8 +374,42 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         return name.trim();
     }
 
-    private String normalizeUnit(String unit) {
-        return unit == null || unit.trim().isEmpty() ? "kg" : unit.trim();
+    private String normalizeInventoryUnit(String factoryId, String unit) {
+        String value = unit == null || unit.trim().isEmpty() ? "kg" : unit.trim();
+        if (unitContractService == null) {
+            return value;
+        }
+        UnitNormalizationResult normalized = unitContractService.normalize(factoryId, value);
+        if (!normalized.recognized()
+                || !unitContractService.supportsUsage(factoryId, value, UnitUsageScope.INVENTORY_QUANTITY)) {
+            throw new BusinessException(400, "该单位不能用于入库计量: " + value)
+                    .withHint("请选择质量、体积、件数或合法包装单位；时间、温度、比例及未授权长度单位不可用于入库数量")
+                    .withHintTarget("unit");
+        }
+        return normalized.code();
+    }
+
+    private void ensureCategoryMatchesSegment(String requestedCategory, String l1Category) {
+        if (requestedCategory == null || requestedCategory.isBlank()) {
+            return;
+        }
+        String requested = materialFamily(requestedCategory);
+        String expected = materialFamily(l1Category);
+        if (!requested.equals(expected)) {
+            throw new BusinessException(400, "类别与 L1 大类不匹配")
+                    .withHint("顶部类别与 L1/L2/L3 必须属于同一分类链")
+                    .withHintTarget("category");
+        }
+    }
+
+    private String materialFamily(String value) {
+        String normalized = value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
+        return switch (normalized) {
+            case "PACKAGING", "PACKAGE", "包材" -> "PACKAGING";
+            case "RAW_MATERIAL", "RAW", "主材", "原料" -> "RAW_MATERIAL";
+            case "AUXILIARY", "SEASONING", "辅料", "调料", "添加剂" -> "AUXILIARY";
+            default -> normalized;
+        };
     }
 
     private BusinessException duplicateMaterialName(String name) {
@@ -670,6 +729,8 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                 .id(materialType.getId())
                 .factoryId(materialType.getFactoryId())
                 .code(materialType.getCode())
+                .legacyClassificationCode(materialType.getCode())
+                .businessCode(materialType.getBusinessCode())
                 .name(materialType.getName())
                 .category(materialType.getCategory())
                 .unit(materialType.getUnit())
@@ -841,10 +902,10 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         String keyword = name.trim();
         String categoryFilter = (category != null && !category.trim().isEmpty()) ? category.trim() : null;
         // 全限定 Spring PageRequest 避免跟 com.cretas.aims.dto.common.PageRequest 二义
-        Pageable top1 = org.springframework.data.domain.PageRequest.of(0, 1);
+        Pageable top3 = org.springframework.data.domain.PageRequest.of(0, 3);
 
         List<RawMaterialType> matches = materialTypeRepository.findSimilarByNameAndCategory(
-                factoryId, keyword, categoryFilter, top1);
+                factoryId, keyword, categoryFilter, top3);
         if (!matches.isEmpty()) {
             return matches.get(0).getUnit();
         }
@@ -852,7 +913,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         // 退化: 全名没匹配时取首字符再试一次 (e.g. 输入"三文鱼柳"时找"三文鱼")
         if (keyword.length() >= 2) {
             matches = materialTypeRepository.findSimilarByNameAndCategory(
-                    factoryId, keyword.substring(0, Math.min(2, keyword.length())), categoryFilter, top1);
+                    factoryId, keyword.substring(0, Math.min(2, keyword.length())), categoryFilter, top3);
             if (!matches.isEmpty()) {
                 return matches.get(0).getUnit();
             }
@@ -1065,15 +1126,15 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         }
         String keyword = name.trim();
         String categoryFilter = (category != null && !category.trim().isEmpty()) ? category.trim() : null;
-        Pageable top1 = org.springframework.data.domain.PageRequest.of(0, 1);
+        Pageable top3 = org.springframework.data.domain.PageRequest.of(0, 3);
 
         List<RawMaterialType> matches = materialTypeRepository.findSimilarByNameAndCategory(
-                factoryId, keyword, categoryFilter, top1);
+                factoryId, keyword, categoryFilter, top3);
 
         // 退化: 取前2字再匹配
         if (matches.isEmpty() && keyword.length() >= 2) {
             matches = materialTypeRepository.findSimilarByNameAndCategory(
-                    factoryId, keyword.substring(0, Math.min(2, keyword.length())), categoryFilter, top1);
+                    factoryId, keyword.substring(0, Math.min(2, keyword.length())), categoryFilter, top3);
         }
 
         if (matches.isEmpty()) {
@@ -1081,11 +1142,30 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         }
 
         RawMaterialType match = matches.get(0);
+        boolean exactName = normalizeSuggestionName(match.getName()).equals(normalizeSuggestionName(keyword));
+        String confidence = exactName ? "HIGH" : "MEDIUM";
+        List<MaterialTaxonomyCandidateDTO> taxonomyCandidates = matches.stream()
+                .map(candidate -> taxonomyCandidate(factoryId, keyword, candidate))
+                .filter(Objects::nonNull)
+                .collect(Collectors.collectingAndThen(
+                        Collectors.toMap(MaterialTaxonomyCandidateDTO::getL3Code, item -> item, (left, right) -> left,
+                                LinkedHashMap::new),
+                        map -> List.copyOf(map.values())));
+        MaterialTaxonomyCandidateDTO selectedTaxonomy = taxonomyCandidates.isEmpty()
+                ? null : taxonomyCandidates.get(0);
         MaterialSuggestDTO.MaterialSuggestDTOBuilder builder = MaterialSuggestDTO.builder()
                 .unit(match.getUnit())
+                .matchedMaterialName(match.getName())
+                .unitConfidence(confidence)
                 .category(match.getCategory())
                 .storageType(match.getStorageType())
-                .shelfLifeDays(match.getShelfLifeDays());
+                .shelfLifeDays(match.getShelfLifeDays())
+                .segmentL1Code(selectedTaxonomy == null ? null : selectedTaxonomy.getL1Code())
+                .segmentL2Code(selectedTaxonomy == null ? null : selectedTaxonomy.getL2Code())
+                .segmentL3Code(selectedTaxonomy == null ? null : selectedTaxonomy.getL3Code())
+                .classificationConfidence(selectedTaxonomy == null ? "LOW" : selectedTaxonomy.getConfidence())
+                .classificationReason(selectedTaxonomy == null ? null : selectedTaxonomy.getReason())
+                .classificationCandidates(taxonomyCandidates);
 
         // Enrich packaging hierarchy fields (same pattern as getMaterialTypeById)
         packagingRepository.findByMaterialTypeId(match.getId()).ifPresent(pkg -> {
@@ -1094,6 +1174,39 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         });
 
         return builder.build();
+    }
+
+    private MaterialTaxonomyCandidateDTO taxonomyCandidate(
+            String factoryId, String keyword, RawMaterialType material) {
+        String code = material.getCode();
+        if (code == null || !code.matches("[0-9]{16}")) {
+            return null;
+        }
+        try {
+            MaterialSegmentChain chain = requireValidSegmentChain(factoryId, code.substring(0, 10));
+            boolean exact = normalizeSuggestionName(material.getName())
+                    .equals(normalizeSuggestionName(keyword));
+            return MaterialTaxonomyCandidateDTO.builder()
+                    .l1Code(chain.l1().getSegmentCode())
+                    .l1Label(chain.l1().getSegmentLabel())
+                    .l2Code(chain.l2().getSegmentCode())
+                    .l2Label(chain.l2().getSegmentLabel())
+                    .l3Code(chain.l3().getSegmentCode())
+                    .l3Label(chain.l3().getSegmentLabel())
+                    .confidence(exact ? "HIGH" : "MEDIUM")
+                    .reason(exact
+                            ? "同工厂已确认物料名称精确匹配: " + material.getName()
+                            : "同工厂已确认物料名称关键词匹配: " + material.getName())
+                    .build();
+        } catch (BusinessException ignored) {
+            return null;
+        }
+    }
+
+    private String normalizeSuggestionName(String value) {
+        return value == null ? "" : Normalizer.normalize(value, Normalizer.Form.NFKC)
+                .trim().toLowerCase(Locale.ROOT)
+                .replaceAll("[\\s\\p{Punct}，。；：/\\\\]+", "");
     }
 
     @Override

@@ -7,10 +7,12 @@ import com.cretas.aims.dto.unit.UnitGovernanceConflictDTO;
 import com.cretas.aims.dto.unit.UnitCatalogItemDTO;
 import com.cretas.aims.dto.unit.UnitConversionRequest;
 import com.cretas.aims.service.unit.ProductUnitConversionService;
+import com.cretas.aims.service.unit.CanonicalUnit;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitConversionContext;
 import com.cretas.aims.service.unit.UnitConversionResult;
 import com.cretas.aims.service.unit.UnitGovernanceAuditService;
+import com.cretas.aims.service.unit.UnitUsageScope;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -44,8 +46,13 @@ public class UnitContractController {
     }
 
     @GetMapping("/units/catalog")
-    public ResponseEntity<ApiResponse<List<UnitCatalogItemDTO>>> catalog(@PathVariable String factoryId) {
-        List<UnitCatalogItemDTO> result = unitContractService.catalog(factoryId).stream()
+    public ResponseEntity<ApiResponse<List<UnitCatalogItemDTO>>> catalog(
+            @PathVariable String factoryId,
+            @RequestParam(required = false) UnitUsageScope usageScope) {
+        List<CanonicalUnit> catalog = usageScope == null
+                ? unitContractService.catalog(factoryId)
+                : unitContractService.catalog(factoryId, usageScope);
+        List<UnitCatalogItemDTO> result = catalog.stream()
                 .map(UnitCatalogItemDTO::from)
                 .toList();
         return ResponseEntity.ok(ApiResponse.success(result));

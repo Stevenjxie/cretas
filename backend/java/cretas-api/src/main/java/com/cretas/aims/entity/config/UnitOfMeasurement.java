@@ -98,6 +98,18 @@ public class UnitOfMeasurement extends BaseEntity {
     @Column(name = "category", length = 50)
     private String category;
 
+    /** Business fields where this unit may be selected. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "usage_scopes_json", columnDefinition = "jsonb")
+    private List<String> usageScopesJson;
+
+    /**
+     * Conversion family. Automatic conversion is only allowed inside this
+     * family or through an explicit product packaging conversion.
+     */
+    @Column(name = "conversion_family", length = 50)
+    private String conversionFamily;
+
     /**
      * 小数位数 (显示精度)
      */

@@ -208,6 +208,17 @@ public class ProductType extends BaseEntity {
     @Column(name = "grams_per_unit", precision = 10, scale = 2)
     private java.math.BigDecimal gramsPerUnit;
 
+    /**
+     * SKU 每个基本销售单位的净含量快照。与 {@link #unit} 的销售/库存单位相互独立：
+     * 例如 1 box = 800 g，或 1 bottle = 500 ml。
+     * gramsPerUnit 仅作为历史质量桥保留，容量 SKU 不得写入 gramsPerUnit。
+     */
+    @Column(name = "net_content_quantity", precision = 15, scale = 6)
+    private java.math.BigDecimal netContentQuantity;
+
+    @Column(name = "net_content_unit", length = 20)
+    private String netContentUnit;
+
     /** 在产半成品折成品下游出率系数 (备货看板 WIP 估算; null = 按 1.0). */
     @Column(name = "wip_to_fg_yield", precision = 5, scale = 4)
     private java.math.BigDecimal wipToFgYield;
