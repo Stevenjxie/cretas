@@ -1,6 +1,14 @@
 import { canonicalUnitCode } from '@/utils/unitPricing';
 
 export type TransferItemType = 'RAW_MATERIAL' | 'FINISHED_GOODS' | 'PACKAGING_MATERIAL';
+export type TransferType = 'HQ_TO_BRANCH' | 'BRANCH_TO_BRANCH' | 'BRANCH_TO_HQ' | 'WAREHOUSE_TO_WAREHOUSE';
+
+export const TRANSFER_TYPE_OPTIONS: ReadonlyArray<{ value: TransferType; label: string }> = [
+  { value: 'HQ_TO_BRANCH', label: '总部调往分部' },
+  { value: 'BRANCH_TO_BRANCH', label: '分部之间调拨' },
+  { value: 'BRANCH_TO_HQ', label: '分部退回总部' },
+  { value: 'WAREHOUSE_TO_WAREHOUSE', label: '同一工厂仓库调拨' },
+];
 
 export interface TransferCreateRow {
   itemType: TransferItemType;
@@ -8,7 +16,7 @@ export interface TransferCreateRow {
   materialTypeId?: string;
   productTypeId?: string;
   itemName: string;
-  quantity: number;
+  quantity?: number;
   unit: string;
   unitPrice?: number;
   remark?: string;
@@ -163,6 +171,8 @@ export function resetSelectedOption(row: TransferCreateRow): void {
   row.materialTypeId = undefined;
   row.productTypeId = undefined;
   row.itemName = '';
+  row.quantity = undefined;
+  row.unit = '';
   row._currentStock = null;
 }
 

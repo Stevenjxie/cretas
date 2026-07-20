@@ -7,7 +7,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put } from '@/api/request';
 import { ElMessage, ElMessageBox, ElSelect } from 'element-plus';
-import { Plus, Search, Refresh, VideoPlay, VideoPause, CircleCheck, CircleClose, Download, Upload, ChatDotRound, Printer, Warning } from '@element-plus/icons-vue';
+import { Plus, Search, Refresh, VideoPause, CircleCheck, Download, ChatDotRound, Printer, Warning, ArrowDown } from '@element-plus/icons-vue';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
 import { handleCatchError } from '@/utils/errorToast';
 import { confirmDiscardIfDirty } from '@/utils/confirmDiscardChanges';
@@ -51,8 +51,7 @@ import { WorkflowBar } from '@/components/workflow';
 import { useWorkflowStats } from '@/composables/useWorkflowStats';
 import { getBucketPrimaryStatus, getBucketLabel } from '@/types/workflow';
 import type { TableRow } from '@/types/api';
-import { RowActionMenu, TableFooter } from '@/components/list';
-import { computeRowActions } from '@/composables/useRowActions';
+import { TableFooter } from '@/components/list';
 import { useListSummary } from '@/composables/useListSummary';
 import { formatSummaryForAI } from '@/utils/aiSummaryContext';
 import type { ListSummaryRequest } from '@/types/listSummary';
@@ -83,6 +82,18 @@ import type { ProductionDocumentTrace, ProductionTraceDocument } from '@/types/p
 import { productionPlanAiGuard, findUniqueProductByName } from '@/utils/aiEntryGuards';
 import { canonicalUnitCode, displayUnit } from '@/utils/unitPricing';
 import { enumLabel } from '@/utils/enumDisplay';
+import {
+  formatPlanActualQuantity,
+  sourceOrderBusinessNumber,
+  sourceOrderDisplay,
+  sourceOrderTarget,
+} from './productionPlanListPresentation';
+import {
+  DEFAULT_PRODUCTION_DOCUMENT_CHAPTERS,
+  PRODUCTION_DOCUMENT_CHAPTERS,
+  downloadProductionDocumentPack,
+  type ProductionDocumentChapter,
+} from './productionDocumentPack';
 
 const router = useRouter();
 const route = useRoute();
@@ -97,59 +108,6 @@ const canConfirmReceiptWrite = computed(() =>
   || permissionStore.canWrite('scheduling')
 );
 const canViewPrice = computed(() => permissionStore.canViewPrice);
-
-function rowActionsFor(row: TableRow) {
-  // #751: 删除 dropdown 中的 'view-detail' (页面已有独立"查看" button, 避免 3 button 跳同页)
-  // fool-proof-design Rule 5: 'lock' 后端 API 未实装 — 灰显 + hover 原因, 不再让用户
-  // 点了才弹 toast (#747 与 production/batches 的 'lock' 同款处理)。
-  const all = computeRowActions(
-    'productionPlan',
-    { status: String(row.status || ''), id: String(row.id || '') },
-    {
-      canViewPrice: canViewPrice.value,
-      forceDisabled: {
-        lock: '锁定功能后端 API 对接中，暂不可用',
-      },
-    }
-  );
-  const filtered = all.filter((a) => a.id !== 'view-detail');
-  // 6.12 N1b: PC 主流程砍掉"待生产→点开工"中间态。
-  // PENDING 计划直接在未完成列表核对结单；需要逐道报工时使用行内 APP 报工按钮。
-  return filtered;
-}
-function handleRowActionClick(actionId: string, row: TableRow) {
-  switch (actionId) {
-    case 'view-detail': handleViewPlan(row); break;
-    case 'edit': void handleEditPlan(row); break;
-    case 'cancel': handleCancel(row); break;
-    case 'print-pdf': void safePrint('production-task', factoryId.value, String(row.id), { fileName: `生产计划_${row.planNumber || row.id}` }); break;
-    case 'copy': void handleCopyPlan(row); break;
-    // PENDING_APPROVAL (ProductionPlanStatus) 是"申请撤回/取消"进入的状态, 由
-    // PRODUCTION_REVERSAL 审批流驱动 — 真正的审批入口是下方"撤销小结审批"列表
-    // (openReversalApproval), 不是逐行单独审批。之前这两个 action 列在菜单里但
-    // switch 没有对应 case, 点了直接落到 debug toast — 同一类"菜单列了但没接线"
-    // 的死菜单症状。改为打开真正的审批入口。
-    case 'approve':
-    case 'reject':
-      ElMessage.info(`计划 ${row.planNumber || row.id} 的撤销/取消申请请在下方「撤销小结审批」列表中处理`);
-      void openReversalApproval();
-      break;
-    case 'lock':
-      // 'lock' 已在 rowActionsFor() 用 forceDisabled 灰显; 保留仅作防御 (禁用项
-      // el-dropdown 不会派发 command)。
-      ElMessageBox.alert(
-        '锁定后该生产计划将不再允许修改数量/日期，进入排产保护阶段（避免生产中误改）。\n\n后端 API 正在对接中，暂时不可用。',
-        '锁定生产计划',
-        { confirmButtonText: '我知道了' }
-      ).catch(() => { /* dismiss */ });
-      break;
-    default: ElMessage.warning(`该操作暂不支持: ${actionId}`);
-  }
-}
-function openAiForRow(row: TableRow) {
-  console.info('[RowAction AI]', { entityType: 'productionPlan', entityId: row.id, planNumber: row.planNumber });
-  aiEntryVisible.value = true;
-}
 
 // U-NAV-1 业务流程图导航 (Sprint 2 Track G + FU Chat 3 bucket-filter)
 const { stats: workflowStats, loading: workflowLoading } = useWorkflowStats(factoryId, 'production');
@@ -169,6 +127,13 @@ const materialAdvisoryMap = ref<Record<string, ProductionPlanMaterialAdvisory>>(
 const settlementStatusMap = ref<Record<string, ProductionSettlementStatus>>({});
 // #726 SP12: 批量合并打印工单 — 多选状态
 const selectedPlans = ref<TableRow[]>([]);
+const importInputRef = ref<HTMLInputElement | null>(null);
+const documentPackVisible = ref(false);
+const documentPackLoading = ref(false);
+const documentPackPlan = ref<TableRow | null>(null);
+const selectedDocumentChapters = ref<ProductionDocumentChapter[]>([
+  ...DEFAULT_PRODUCTION_DOCUMENT_CHAPTERS,
+]);
 const documentTraceVisible = ref(false);
 const documentTraceLoading = ref(false);
 const documentTrace = ref<ProductionDocumentTrace | null>(null);
@@ -214,6 +179,101 @@ async function handleMultiPrint() {
   const ids = selectedPlans.value.map((r) => String(r.id));
   await printWorkOrderMulti(factoryId.value, ids);
 }
+
+function handleDataCommand(command: 'template' | 'import' | 'export') {
+  if (command === 'template') {
+    void handleDownloadTemplate();
+  } else if (command === 'import') {
+    importInputRef.value?.click();
+  } else {
+    void handleExport();
+  }
+}
+
+function handleNativeImportChange(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (file) void handleImportFile({ raw: file });
+  input.value = '';
+}
+
+function handleBatchCommand(command: 'print-work-orders') {
+  if (command === 'print-work-orders') void handleMultiPrint();
+}
+
+type ProductionDocumentCommand =
+  | 'work-order'
+  | 'material-requisition'
+  | 'batching-sheet'
+  | 'document-pack';
+
+function handleProductionDocumentCommand(command: ProductionDocumentCommand, row: TableRow) {
+  if (!canPrintPlanDocuments(String(row.status || ''))) {
+    ElMessage.warning('计划尚未形成可打印快照，暂不能查看生产单据');
+    return;
+  }
+  if (command === 'document-pack') {
+    documentPackPlan.value = row;
+    selectedDocumentChapters.value = [...DEFAULT_PRODUCTION_DOCUMENT_CHAPTERS];
+    documentPackVisible.value = true;
+    return;
+  }
+  const docType = command === 'work-order'
+    ? 'production-work-order'
+    : command === 'material-requisition'
+      ? 'consolidated-material-requisition'
+      : 'batching-sheet';
+  const label = command === 'work-order' ? '生产工单' : command === 'material-requisition' ? '领料单' : '配料单';
+  void safePrint(docType, factoryId.value, String(row.id), {
+    fileName: `${label}_${row.planNumber || row.id}`,
+  });
+}
+
+async function submitProductionDocumentPack() {
+  const row = documentPackPlan.value;
+  if (!row || !factoryId.value) return;
+  documentPackLoading.value = true;
+  try {
+    await downloadProductionDocumentPack(
+      factoryId.value,
+      String(row.id),
+      String(row.planNumber || row.id),
+      selectedDocumentChapters.value,
+    );
+    documentPackVisible.value = false;
+  } catch {
+    // downloadProductionDocumentPack already gives a fail-closed, actionable error.
+  } finally {
+    documentPackLoading.value = false;
+  }
+}
+
+type TraceAndCostCommand = 'trace' | 'yield-cost' | 'summary';
+
+function handleTraceAndCostCommand(command: TraceAndCostCommand, row: TableRow) {
+  if (command === 'trace') {
+    void openDocumentTrace(row);
+    return;
+  }
+  if (command === 'summary') {
+    void handleOpenSummary(row);
+    return;
+  }
+  const orderNumberOrId = sourceOrderBusinessNumber(row) || String(row.sourceOrderId || '').trim();
+  if (!orderNumberOrId) {
+    ElMessage.warning('该计划未关联销售订单，无法按订单打开成品出厂核算');
+    return;
+  }
+  void router.push({
+    path: '/production-analytics/yield-cost',
+    query: { orderId: orderNumberOrId },
+  });
+}
+
+function openSourceOrder(row: TableRow) {
+  const target = sourceOrderTarget(row);
+  if (target) void router.push(target);
+}
 const pagination = ref({ page: 1, size: 10, total: 0 });
 const searchForm = ref({
   keyword: '',
@@ -235,9 +295,13 @@ const emptyText = computed(() => {
   return '暂无数据';
 });
 
-// U-FOOTER-1
+// Keep list and footer on the exact same filter contract. The backend groups quantities
+// by canonical unit and only computes completion rates inside a comparable unit group.
 const summaryRequest = computed<ListSummaryRequest>(() => ({
-  filterConditions: searchForm.value.status ? { status: searchForm.value.status } : {},
+  filterConditions: {
+    ...(searchForm.value.status ? { status: searchForm.value.status } : {}),
+    ...(searchForm.value.keyword.trim() ? { keyword: searchForm.value.keyword.trim() } : {}),
+  },
 }));
 const { summary: footerSummary, loading: footerLoading } = useListSummary('productionPlan', summaryRequest);
 
@@ -3135,32 +3199,42 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             <span class="data-count">共 {{ pagination.total }} 条记录</span>
           </div>
           <div class="header-right">
-            <el-button type="success" :icon="Download" @click="handleDownloadTemplate">
-              下载模板
-            </el-button>
-            <el-upload
-              :auto-upload="false"
-              :show-file-list="false"
+            <input
+              ref="importInputRef"
+              type="file"
               accept=".xlsx,.xls"
-              :on-change="handleImportFile"
-              style="display: inline-block; margin-left: 8px;"
+              class="native-file-input"
+              @change="handleNativeImportChange"
             >
-              <el-button type="warning" :icon="Upload">
-                导入Excel
+            <el-dropdown trigger="click" @command="handleDataCommand">
+              <el-button :icon="Download">
+                导入/导出<el-icon class="el-icon--right"><ArrowDown /></el-icon>
               </el-button>
-            </el-upload>
-            <el-button type="info" :icon="Download" @click="handleExport" style="margin-left: 8px;">
-              导出Excel
-            </el-button>
-            <!-- #726 SP12: 合并打印公单 — 需先勾选计划, 多选 → 调 production-work-order-multi 端点 -->
-            <el-button
-              type="info"
-              :icon="Printer"
-              :disabled="selectedPlans.length === 0"
-              :title="selectedPlans.length === 0 ? '请先勾选要打印的计划' : `合并打印 ${selectedPlans.length} 份工单`"
-              @click="handleMultiPrint"
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="template">下载导入模板</el-dropdown-item>
+                  <el-dropdown-item v-if="canWrite" command="import">导入 Excel</el-dropdown-item>
+                  <el-dropdown-item command="export">导出当前筛选</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+            <el-dropdown
+              v-if="selectedPlans.length > 0"
+              trigger="click"
               style="margin-left: 8px;"
-            >合并打印公单{{ selectedPlans.length > 0 ? ` (${selectedPlans.length})` : '' }}</el-button>
+              @command="handleBatchCommand"
+            >
+              <el-button type="info" :icon="Printer">
+                批量操作 ({{ selectedPlans.length }})<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="print-work-orders">
+                    合并下载所选生产工单
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
             <el-button v-if="canWrite" type="success" :icon="ChatDotRound" @click="aiEntryVisible = true" style="margin-left: 8px;">
               AI对话创建
             </el-button>
@@ -3239,7 +3313,9 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         <el-table-column label="计划成品" width="110" align="right">
           <template #default="{ row }">{{ formatPlanDisplayQuantity(row) }}</template>
         </el-table-column>
-        <el-table-column prop="actualQuantity" label="实际数量" width="100" align="right" />
+        <el-table-column label="实际数量" width="120" align="right">
+          <template #default="{ row }">{{ formatPlanActualQuantity(row) }}</template>
+        </el-table-column>
         <el-table-column prop="plannedDate" label="计划日期" width="120" />
         <el-table-column prop="status" label="状态" width="100" align="center">
           <template #default="{ row }">
@@ -3307,7 +3383,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         </el-table-column>
         <el-table-column prop="estimatedWorkers" label="预计工人" width="90" align="center" />
         <el-table-column prop="assignedSupervisorName" label="指派主管" width="100" show-overflow-tooltip />
-        <el-table-column prop="sourceType" label="来源" width="90" align="center">
+        <el-table-column prop="sourceType" label="来源" min-width="170" align="center">
           <template #default="{ row }">
             <!-- SP2: planNumber 前缀 SEC- 标识独立再加工/返工 (planSourceType 字段未暴露在 DTO) -->
             <el-tag v-if="String(row.planNumber || '').startsWith('SEC-')" type="warning" size="small">独立再加工</el-tag>
@@ -3317,6 +3393,15 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             <el-tag v-else-if="row.sourceType === 'CUSTOMER_ORDER'" type="primary" size="small">销售订单</el-tag>
             <el-tag v-else-if="row.sourceType === 'AI_FORECAST'" type="success" size="small">AI预测</el-tag>
             <el-tag v-else size="small">手动</el-tag>
+            <el-button
+              v-if="row.sourceType === 'CUSTOMER_ORDER' && row.sourceOrderId"
+              type="primary"
+              link
+              size="small"
+              class="source-order-link"
+              :title="sourceOrderBusinessNumber(row) ? '打开销售订单' : '业务订单号尚未同步，点击仍可打开关联订单'"
+              @click="openSourceOrder(row)"
+            >{{ sourceOrderDisplay(row) }}</el-button>
           </template>
         </el-table-column>
         <!-- Wave2: 报工模式 badge -->
@@ -3337,156 +3422,51 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           </template>
         </el-table-column>
         <el-table-column prop="createdAt" label="创建时间" width="180" :formatter="formatDateTimeCell" />
-        <el-table-column label="操作" width="340" fixed="right" align="center">
+        <el-table-column label="操作" width="300" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button type="primary" link size="small" @click="handleViewPlan(row)">查看</el-button>
-            <el-button type="primary" link size="small" @click="openDocumentTrace(row)">单据追踪</el-button>
-            <!-- 非存货生产结单 (原逻辑不变) -->
-            <el-button
-              v-if="canWrite && isUnfinishedStatus(row.status) && row.sourceType !== 'SAFETY_STOCK'"
-              type="primary"
-              size="small"
-              :icon="CircleCheck"
-              :disabled="actionLoading"
-              title="PC 文员核对实际产量、领用和工时后结单"
-              @click="handleComplete(row)"
-            >核对结单</el-button>
-            <!-- 存货生产 (SAFETY_STOCK) 小结 (替换结单, 计划继续挂起) -->
-            <el-button
-              v-if="canWrite && isUnfinishedStatus(row.status) && row.sourceType === 'SAFETY_STOCK'"
-              type="primary"
-              size="small"
-              :icon="CircleCheck"
-              :disabled="interimSettleLoadingId === String(row.id)"
-              :loading="interimSettleLoadingId === String(row.id)"
-              title="增量入库成品并扣料，计划继续开放，可多次小结"
-              @click="handleInterimSettle(row)"
-            >小结</el-button>
-            <!-- 存货生产 (SAFETY_STOCK) 撤销小结-申请 (申请→审批→执行治理; 此处仅提交申请, 零库存副作用) -->
-            <el-button
-              v-if="canWrite && isUnfinishedStatus(row.status) && row.sourceType === 'SAFETY_STOCK'"
-              type="warning"
-              size="small"
-              link
-              :disabled="reverseInterimSettleLoadingId === String(row.id)"
-              :loading="reverseInterimSettleLoadingId === String(row.id)"
-              title="申请撤销最近一次小结（需审批, 通过后才逆转入库+还回消耗）；仅限小结后24小时内，需填原因"
-              @click="handleReverseInterimSettle(row)"
-            >申请撤销小结</el-button>
-            <!-- 存货生产 (SAFETY_STOCK) 停产 (关闭计划) -->
-            <el-button
-              v-if="canWrite && isUnfinishedStatus(row.status) && row.sourceType === 'SAFETY_STOCK'"
-              type="danger"
-              size="small"
-              link
-              :disabled="stopProductionLoadingId === String(row.id)"
-              :loading="stopProductionLoadingId === String(row.id)"
-              title="停产后计划关闭，不可再小结"
-              @click="handleStopProduction(row)"
-            >停产</el-button>
-            <el-button
-              v-if="canWrite && isUnfinishedStatus(row.status)"
-              type="success"
-              link
-              size="small"
-              title="文员逐道工序录入（批次链/混锅来源/投入产出）"
-              @click="openProcessEntry(row)"
-            >逐道录入</el-button>
-            <el-button
-              v-if="canConfirmReceipt(row)"
-              type="success"
-              size="small"
-              :icon="CircleCheck"
-              :disabled="actionLoading"
-              :title="getSettlementStatus(row)?.finishedGoodsBatchId
-                ? '小结成品批次已存在；确认实收不会重复创建成品库存'
-                : '仓库确认实际收到数量后，成品才正式入库；差异进入中转挂账'"
-              @click="handleWarehouseReceipt(row)"
-            >确认入库</el-button>
-            <el-button
-              v-if="canClearTransit(row)"
-              type="danger"
-              size="small"
-              :icon="Warning"
-              :disabled="actionLoading"
-              title="处理差异并关闭生产中转挂账"
-              @click="handleTransitClearing(row)"
-            >清账</el-button>
-            <!-- 6.12 复核: PC 主路径是未完成列表直接完成；转批次保留给 APP 逐道报工。 -->
-            <el-button
-              v-if="canWrite && isStartable(row.status)"
-              type="success"
-              link
-              size="small"
-              :icon="VideoPlay"
-              :disabled="actionLoading"
-              title="转为生产批次并开工(建批次+工序任务, 用于 APP 逐道报工)"
-              @click="handleCreateBatch(row)"
-            >APP报工</el-button>
-            <!-- 生成调拨单: 需要明确计划量 (BOM × 计划量 展开). 存货生产(SAFETY_STOCK)
-                 计划量=0 (产量在逐道录入/小结时才定), 展开全 0 会落地死调拨单 → 对其隐藏. -->
-            <el-button
-              v-if="canWrite && isStartable(row.status) && row.sourceType !== 'SAFETY_STOCK'"
-              type="warning"
-              link
-              size="small"
-              :disabled="actionLoading"
-              @click="handleGenerateTransfer(row)"
-            >生成调拨单</el-button>
-            <el-button
-              v-if="canWrite && (isPendingStatus(row.status) || row.status === 'IN_PROGRESS')"
-              type="danger"
-              link
-              size="small"
-              :icon="CircleClose"
-              :disabled="actionLoading"
-              @click="handleCancel(row)"
-            >取消</el-button>
-            <!-- SP12: 打印生产工单 (PrintController /print/production-work-order/{planId}) -->
-            <el-button
-              v-if="canPrintPlanDocuments(row.status)"
-              type="info"
-              link
-              size="small"
-              @click="safePrint('production-work-order', factoryId, String(row.id), { fileName: `生产工单_${row.planNumber || row.id}` })"
-            >打印工单</el-button>
-            <!-- SP12: 打印汇总领料单 (PrintController /print/consolidated-material-requisition/{planId}) -->
-            <el-button
-              v-if="canPrintPlanDocuments(row.status)"
-              type="info"
-              link
-              size="small"
-              @click="safePrint('consolidated-material-requisition', factoryId, String(row.id), { fileName: `汇总领料单_${row.planNumber || row.id}` })"
-            >领料单</el-button>
-            <!-- 六扇门: 打印配料单 (按锅配料, PrintController /print/batching-sheet/{planId}) -->
-            <el-button
-              v-if="canPrintPlanDocuments(row.status)"
-              type="info"
-              link
-              size="small"
-              @click="safePrint('batching-sheet', factoryId, String(row.id), { fileName: `配料单_${row.planNumber || row.id}` })"
-            >配料单</el-button>
-            <el-button
-              v-if="String(row.status || '').toUpperCase() === 'COMPLETED'"
-              type="primary"
-              link
-              size="small"
-              title="查看该批次的出成率与成本核算"
-              @click="router.push({ path: '/production-analytics/yield-cost', query: { orderId: row.sourceOrderId } })"
-            >看成本核算</el-button>
-            <el-button
-              type="info"
-              link
-              size="small"
-              title="查看该生产计划的汇总：总投入原料 / 产出成品 / 真实出成率 / 总成本"
-              @click="handleOpenSummary(row)"
-            >阅读汇总</el-button>
-            <RowActionMenu
-              :actions="rowActionsFor(row)"
-              button-label="更多"
-              @action-click="(id: string) => handleRowActionClick(id, row)"
-              @ai-trigger="() => openAiForRow(row)"
-            />
+            <el-button type="primary" link size="small" @click="handleViewPlan(row)">查看详情</el-button>
+            <el-dropdown
+              trigger="click"
+              @command="(command: ProductionDocumentCommand) => handleProductionDocumentCommand(command, row)"
+            >
+              <el-button type="info" link size="small">
+                生产单据<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="work-order" :disabled="!canPrintPlanDocuments(row.status)">
+                    查看/下载生产工单
+                  </el-dropdown-item>
+                  <el-dropdown-item command="material-requisition" :disabled="!canPrintPlanDocuments(row.status)">
+                    查看/下载领料单
+                  </el-dropdown-item>
+                  <el-dropdown-item command="batching-sheet" :disabled="!canPrintPlanDocuments(row.status)">
+                    查看/下载配料单
+                  </el-dropdown-item>
+                  <el-dropdown-item command="document-pack" divided :disabled="!canPrintPlanDocuments(row.status)">
+                    下载单文件生产单据包
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+            <el-dropdown
+              trigger="click"
+              @command="(command: TraceAndCostCommand) => handleTraceAndCostCommand(command, row)"
+            >
+              <el-button type="primary" link size="small">
+                追溯与核算<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="trace">单据追溯</el-dropdown-item>
+                  <el-dropdown-item
+                    command="yield-cost"
+                    :disabled="String(row.status || '').toUpperCase() !== 'COMPLETED'"
+                  >成品出厂核算</el-dropdown-item>
+                  <el-dropdown-item command="summary">生产计划汇总</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </template>
         </el-table-column>
       </el-table>
@@ -3495,7 +3475,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         :stats="footerSummary?.stats ?? []"
         :loading="footerLoading"
         :show-export="false"
-        @ai-analyze="() => ElMessage.info({ message: `AI 分析 (待接 SmartBI): 分析当前生产计划${formatSummaryForAI(footerSummary, { filter: { status: searchForm.status } })}`, duration: 8000, showClose: true })"
+        @ai-analyze="() => ElMessage.info({ message: `AI 分析 (待接 SmartBI): 分析当前生产计划${formatSummaryForAI(footerSummary, { filter: { status: searchForm.status, keyword: searchForm.keyword } })}`, duration: 8000, showClose: true })"
       />
 
       <div class="pagination-wrapper">
@@ -3510,6 +3490,56 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         />
       </div>
     </el-card>
+
+    <el-dialog
+      v-model="documentPackVisible"
+      title="下载生产单据包"
+      width="520px"
+      destroy-on-close
+    >
+      <el-alert
+        title="系统将一次生成一个 PDF；封面后各单据章节从新页开始，不会打开三个打印窗口。"
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 16px;"
+      />
+      <el-descriptions v-if="documentPackPlan" :column="1" border size="small" style="margin-bottom: 16px;">
+        <el-descriptions-item label="生产计划">
+          {{ documentPackPlan.planNumber || documentPackPlan.id }}
+        </el-descriptions-item>
+        <el-descriptions-item label="销售订单">
+          {{ sourceOrderDisplay(documentPackPlan) }}
+        </el-descriptions-item>
+      </el-descriptions>
+      <div class="document-pack-chapters">
+        <div class="document-pack-label">选择章节（默认全选）</div>
+        <el-checkbox-group v-model="selectedDocumentChapters">
+          <el-checkbox
+            v-for="chapter in PRODUCTION_DOCUMENT_CHAPTERS"
+            :key="chapter.value"
+            :value="chapter.value"
+          >{{ chapter.label }}</el-checkbox>
+        </el-checkbox-group>
+      </div>
+      <el-alert
+        v-if="selectedDocumentChapters.length === 0"
+        title="请至少选择一章；系统不会生成空白或不完整 PDF。"
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-top: 14px;"
+      />
+      <template #footer>
+        <el-button @click="documentPackVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="documentPackLoading"
+          :disabled="selectedDocumentChapters.length === 0"
+          @click="submitProductionDocumentPack"
+        >下载单文件 PDF</el-button>
+      </template>
+    </el-dialog>
 
     <el-drawer v-model="documentTraceVisible" title="生产计划单据追踪" size="620px">
       <div v-loading="documentTraceLoading" class="document-trace">
@@ -3577,7 +3607,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             <el-descriptions-item label="客户">{{ viewPlan.sourceCustomerName || '-' }}</el-descriptions-item>
             <el-descriptions-item label="指派主管">{{ viewPlan.assignedSupervisorName || '-' }}</el-descriptions-item>
             <el-descriptions-item label="计划成品">{{ formatPlanDisplayQuantity(viewPlan) }}</el-descriptions-item>
-            <el-descriptions-item label="实际数量">{{ viewPlan.actualQuantity || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="实际数量">{{ formatPlanActualQuantity(viewPlan) }}</el-descriptions-item>
             <el-descriptions-item label="状态">
               <el-tag :type="getStatusType(viewPlan.status as string)" size="small">{{ getStatusText(viewPlan.status as string) }}</el-tag>
             </el-descriptions-item>
@@ -3591,20 +3621,26 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               <el-tag v-else-if="viewPlan.sourceType === 'AI_FORECAST'" type="success" size="small">AI预测</el-tag>
               <el-tag v-else size="small">手动</el-tag>
             </el-descriptions-item>
-            <!-- SP5 多SO合并: 显示合并的全部销售订单ID -->
+            <el-descriptions-item
+              v-if="viewPlan.sourceType === 'CUSTOMER_ORDER'"
+              label="销售订单"
+              :span="2"
+            >
+              <el-button
+                v-if="viewPlan.sourceOrderId"
+                type="primary"
+                link
+                @click="openSourceOrder(viewPlan)"
+              >{{ sourceOrderDisplay(viewPlan) }}</el-button>
+              <span v-else>—</span>
+            </el-descriptions-item>
+            <!-- 多订单计划只展示数量；完整业务单号通过单据追溯读取，避免泄漏内部 UUID。 -->
             <el-descriptions-item
               v-if="Array.isArray((viewPlan as any).sourceOrderIds) && (viewPlan as any).sourceOrderIds.length > 1"
               label="合并订单"
               :span="2"
             >
-              <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                <el-tag
-                  v-for="soId in (viewPlan as any).sourceOrderIds"
-                  :key="soId"
-                  size="small"
-                  type="warning"
-                >{{ soId }}</el-tag>
-              </div>
+              共 {{ (viewPlan as any).sourceOrderIds.length }} 张销售订单，完整业务单号请查看「单据追溯」。
             </el-descriptions-item>
           </el-descriptions>
         </div>
@@ -5581,6 +5617,39 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 .trace-document-meta {
   color: var(--text-color-secondary, #909399);
   font-size: 12px;
+}
+
+.native-file-input {
+  display: none;
+}
+
+.source-order-link {
+  display: block;
+  max-width: 155px;
+  margin: 4px auto 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-pack-chapters {
+  padding: 14px 16px;
+  border: 1px solid var(--border-color-lighter, #ebeef5);
+  border-radius: 8px;
+  background: var(--fill-color-lighter, #fafafa);
+}
+
+.document-pack-label {
+  margin-bottom: 10px;
+  color: var(--text-color-primary, #303133);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.document-pack-chapters :deep(.el-checkbox-group) {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .selected-workflow-route {

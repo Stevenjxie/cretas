@@ -4,6 +4,7 @@ import com.cretas.aims.entity.factory.FactoryStocktake;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -16,6 +17,15 @@ import java.util.Optional;
  */
 @Repository
 public interface FactoryStocktakeRepository extends JpaRepository<FactoryStocktake, String> {
+
+    @Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT s FROM FactoryStocktake s WHERE s.id = :id AND s.factoryId = :factoryId")
+    Optional<FactoryStocktake> findByIdAndFactoryIdForUpdate(
+            @Param("id") String id,
+            @Param("factoryId") String factoryId);
+
+    Optional<FactoryStocktake> findFirstByFactoryIdAndWarehouseIdAndStatusOrderByAppliedAtDesc(
+            String factoryId, String warehouseId, FactoryStocktake.Status status);
 
     Page<FactoryStocktake> findByFactoryIdOrderByCreatedAtDesc(String factoryId, Pageable pageable);
 

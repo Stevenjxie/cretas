@@ -84,6 +84,8 @@ public interface FactoryStocktakeService {
      */
     void approve(String stocktakeId, String factoryId, Long approverId, String requestRole);
 
+    void approve(String stocktakeId, String factoryId, Long approverId, String requestRole, Long expectedVersion);
+
     /**
      * 驳回 (PENDING_APPROVAL → REJECTED).
      *
@@ -104,6 +106,8 @@ public interface FactoryStocktakeService {
      * @param userId      操作人 ID
      */
     void apply(String stocktakeId, String factoryId, Long userId);
+
+    void apply(String stocktakeId, String factoryId, Long userId, Long expectedVersion);
 
     /**
      * 差异预览（生效前展示变化，只读）。

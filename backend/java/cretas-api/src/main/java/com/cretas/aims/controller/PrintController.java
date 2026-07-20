@@ -72,6 +72,14 @@ import java.util.Set;
 @CrossOrigin(origins = {"https://www.cretaceousfuture.com", "http://139.196.165.140:8086", "http://localhost:5173"})
 public class PrintController {
 
+    private static final String DOCUMENT_SECTION_WORK_ORDER = "work-order";
+    private static final String DOCUMENT_SECTION_MATERIAL_REQUISITION = "material-requisition";
+    private static final String DOCUMENT_SECTION_BATCHING_SHEET = "batching-sheet";
+    private static final List<String> DEFAULT_PRODUCTION_DOCUMENT_SECTIONS = List.of(
+            DOCUMENT_SECTION_WORK_ORDER,
+            DOCUMENT_SECTION_MATERIAL_REQUISITION,
+            DOCUMENT_SECTION_BATCHING_SHEET);
+
     /** Sentinel value used in printed PDFs for users without procurement:price:view permission. */
     private static final String PRICE_MASK = "—";
 
@@ -367,6 +375,160 @@ public class PrintController {
         Map<String, Object> payload = buildBatchingSheetPayload(factoryId, planId, overrides);
         applyPrintAudit(payload, authorization);
         return proxyToPython("batching-sheet", payload, "batching-sheet-" + planId, authorization);
+    }
+
+    /**
+     * Generate one production-document package PDF while preserving the three
+     * independent document models. The Python renderer starts every selected
+     * section on a new page and keeps one continuous page-number sequence.
+     *
+     * <p>The package is deliberately fail-closed: it is never emitted when a
+     * requested section has no authoritative plan data. Requiring both read
+     * permissions prevents this convenience endpoint from bypassing either
+     * the production-document or warehouse-document gates.</p>
+     */
+    @GetMapping("/production-document-pack/{planId}")
+    @RequirePermission(
+            value = {"production:read", "warehouse:read"},
+            requireAll = true,
+            message = "生产单据包包含生产与仓库单据，请先取得对应章节的查看权限")
+    public ResponseEntity<byte[]> printProductionDocumentPackage(
+            @PathVariable String factoryId,
+            @PathVariable String planId,
+            @RequestParam(name = "chapters", required = false) List<String> sections,
+            @RequestParam(required = false) Map<String, String> overrides,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
+        List<String> selectedSections = normalizeProductionDocumentSections(sections);
+        Map<String, Object> payload = buildProductionDocumentPackagePayload(
+                factoryId, planId, selectedSections, overrides);
+        applyPrintAudit(payload, authorization);
+        return proxyToPython("production-document-package", payload,
+                "production-documents-" + planId, authorization);
+    }
+
+    private List<String> normalizeProductionDocumentSections(List<String> sections) {
+        if (sections == null || sections.isEmpty()) {
+            return DEFAULT_PRODUCTION_DOCUMENT_SECTIONS;
+        }
+        LinkedHashSet<String> selected = new LinkedHashSet<>();
+        for (String raw : sections) {
+            if (raw == null) continue;
+            for (String token : raw.split(",")) {
+                String section = token.trim().toLowerCase(java.util.Locale.ROOT);
+                if (section.isEmpty()) continue;
+                if (!DEFAULT_PRODUCTION_DOCUMENT_SECTIONS.contains(section)) {
+                    throw new BusinessException(400, "未知生产单据章节: " + token)
+                            .withHint("可选章节: work-order, material-requisition, batching-sheet");
+                }
+                selected.add(section);
+            }
+        }
+        if (selected.isEmpty()) {
+            throw new BusinessException(400, "至少选择一个生产单据章节");
+        }
+        return List.copyOf(selected);
+    }
+
+    private Map<String, Object> buildProductionDocumentPackagePayload(
+            String factoryId,
+            String planId,
+            List<String> sections,
+            Map<String, String> overrides) {
+        if (productionPlanService == null) {
+            throw new BusinessException(503, "生产计划服务不可用 — 无法生成生产单据包");
+        }
+
+        final ProductionPlanDTO plan;
+        try {
+            plan = productionPlanService.getProductionPlanById(factoryId, planId);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new BusinessException(404, "生产计划不存在或不可访问 — 无法生成生产单据包: " + planId);
+        }
+        if (plan.getSelectedBomRecipeId() == null || plan.getSelectedBomVersion() == null
+                || plan.getSelectedWorkflowId() == null || plan.getSelectedWorkflowVersion() == null) {
+            throw new BusinessException(409, "生产计划缺少锁定的 BOM 或 Workflow 版本，不能生成单据包")
+                    .withHint("请先完成生产计划的 BOM/Workflow 版本锁定");
+        }
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("factoryName", "白垩纪食品 — " + factoryId);
+        payload.put("planId", planId);
+        payload.put("planNumber", plan.getPlanNumber() != null ? plan.getPlanNumber() : planId);
+        payload.put("productTypeId", plan.getProductTypeId());
+        payload.put("sku", resolveProductCode(factoryId, plan.getProductTypeId()));
+        payload.put("productName", plan.getProductName() != null ? plan.getProductName() : "-");
+        payload.put("batchDate", plan.getBatchDate() != null ? plan.getBatchDate().toString() : "-");
+        payload.put("bomRecipeId", plan.getSelectedBomRecipeId());
+        payload.put("bomVersion", plan.getSelectedBomVersion());
+        payload.put("workflowId", plan.getSelectedWorkflowId());
+        payload.put("workflowVersion", plan.getSelectedWorkflowVersion());
+        payload.put("generatedAt", java.time.LocalDateTime.now().toString());
+        payload.put("sections", sections);
+
+        if (sections.contains(DOCUMENT_SECTION_WORK_ORDER)) {
+            Map<String, Object> workOrder = buildProductionWorkOrderPayload(factoryId, planId, overrides);
+            applyPinnedPlanSnapshot(workOrder, plan);
+            requireDocumentRows(workOrder, "processes", "生产工单缺少工序数据");
+            payload.put("workOrder", workOrder);
+        }
+        if (sections.contains(DOCUMENT_SECTION_MATERIAL_REQUISITION)) {
+            Map<String, Object> requisition = buildConsolidatedMaterialRequisitionPayload(
+                    factoryId, planId, overrides);
+            applyPinnedPlanSnapshot(requisition, plan);
+            requireDocumentRows(requisition, "items", "领料单缺少物料需求数据");
+            payload.put("materialRequisition", requisition);
+        }
+        if (sections.contains(DOCUMENT_SECTION_BATCHING_SHEET)) {
+            Map<String, Object> batching = buildBatchingSheetPayload(factoryId, planId, overrides);
+            applyPinnedPlanSnapshot(batching, plan);
+            requireDocumentRows(batching, "items", "配料单缺少物料需求数据");
+            if (batching.get("potCount") == null) {
+                throw new BusinessException(409, "配料单缺少单锅产能，不能生成完整生产单据包")
+                        .withHint("请先在产品配置中维护单锅产能");
+            }
+            payload.put("batchingSheet", batching);
+        }
+        return payload;
+    }
+
+    private void applyPinnedPlanSnapshot(Map<String, Object> section, ProductionPlanDTO plan) {
+        section.put("planNumber", plan.getPlanNumber());
+        section.put("productTypeId", plan.getProductTypeId());
+        section.put("productName", plan.getProductName());
+        section.put("productUnit", firstNonBlank(
+                plan.getPlannedUnit(), plan.getWorkflowOutputUnit(), plan.getProductUnit(), "kg"));
+        section.put("plannedQuantity", plan.getPlannedQuantity() != null
+                ? formatQty(plan.getPlannedQuantity()) : "0");
+        section.put("batchDate", plan.getBatchDate() != null ? plan.getBatchDate().toString() : "-");
+        section.put("bomRecipeId", plan.getSelectedBomRecipeId());
+        section.put("bomVersion", plan.getSelectedBomVersion());
+        section.put("workflowId", plan.getSelectedWorkflowId());
+        section.put("workflowVersion", plan.getSelectedWorkflowVersion());
+    }
+
+    private void requireDocumentRows(Map<String, Object> section, String key, String message) {
+        Object value = section.get(key);
+        if (!(value instanceof List<?> rows) || rows.isEmpty()) {
+            throw new BusinessException(409, message)
+                    .withHint("单据包不会以空白章节伪装为完整单据，请先补齐该章节数据");
+        }
+    }
+
+    private String resolveProductCode(String factoryId, String productTypeId) {
+        if (productTypeRepository == null || productTypeId == null) return productTypeId;
+        return productTypeRepository.findByIdAndFactoryId(productTypeId, factoryId)
+                .map(com.cretas.aims.entity.ProductType::getCode)
+                .filter(code -> !code.isBlank())
+                .orElse(productTypeId);
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) return value;
+        }
+        return null;
     }
 
     /**

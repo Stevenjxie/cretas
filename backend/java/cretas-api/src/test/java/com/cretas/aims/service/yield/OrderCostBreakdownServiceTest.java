@@ -7,11 +7,13 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.bom.BomVersion;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.bom.BomVersionRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -23,6 +25,7 @@ import org.mockito.quality.Strictness;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 
@@ -49,6 +52,7 @@ class OrderCostBreakdownServiceTest {
     @Mock private MaterialBatchRepository materialBatchRepository;
     @Mock private ProductionReportRepository productionReportRepository;
     @Mock private YieldReportService yieldReportService;
+    @Mock private BomVersionRepository bomVersionRepository;
     @InjectMocks private OrderCostBreakdownService service;
 
     private ProductionPlan plan(String id) {
@@ -632,5 +636,177 @@ class OrderCostBreakdownServiceTest {
         OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
         assertThat(dto.isHasData()).isFalse();
         assertThat(dto.getBoxCount()).isZero();
+    }
+
+    @Test
+    void pinnedBomPackagingAndLaborAudit_areTraceableForFiveBoxes() {
+        stubPinnedF006Audit(pinnedBomSnapshot(true));
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
+
+        assertThat(dto.isCostComplete()).isTrue();
+        assertThat(dto.getCalculationStatus()).isEqualTo("COMPLETE");
+        assertThat(dto.getOrderNumber()).isEqualTo("SO-20260720-0001");
+        assertThat(dto.getProductionPlanNumber()).isEqualTo("PLAN-1784523993145-78E6EE57");
+        assertThat(dto.getOutputQuantity()).isEqualByComparingTo("5");
+        assertThat(dto.getOutputUnit()).isEqualTo("box");
+        assertThat(dto.getNetWeightGramsPerUnit()).isEqualByComparingTo("800");
+        assertThat(dto.getConvertedOutputKg()).isEqualByComparingTo("4.0000");
+        assertThat(dto.getCostDenominatorQuantity()).isEqualByComparingTo("5");
+        assertThat(dto.getPackagingCost()).isEqualByComparingTo("4.25");
+        assertThat(dto.getPackagingDetails()).hasSize(3);
+        assertThat(dto.getPackagingDetails().get(0).getQuantity()).isEqualByComparingTo("5");
+        assertThat(dto.getPackagingDetails().get(1).getQuantity()).isEqualByComparingTo("5");
+        assertThat(dto.getPackagingDetails().get(2).getQuantity()).isEqualByComparingTo("0.625");
+        assertThat(dto.getPackagingDetails()).extracting(OrderCostBreakdownDTO.PackagingDetail::getCollectionStatus)
+                .containsOnly("COLLECTED");
+        assertThat(dto.getEquipmentCostStatus()).isEqualTo("CONFIRMED_ZERO");
+        assertThat(dto.getOtherCostStatus()).isEqualTo("CONFIRMED_ZERO");
+        assertThat(dto.getLaborDetails()).hasSize(2);
+        assertThat(dto.getLaborDetails()).extracting(OrderCostBreakdownDTO.LaborDetail::getLaborMinutes)
+                .containsExactly(120, 100);
+        BigDecimal personMinutes = dto.getLaborDetails().stream()
+                .map(detail -> BigDecimal.valueOf(detail.getLaborMinutes()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal personHours = dto.getLaborDetails().stream()
+                .map(OrderCostBreakdownDTO.LaborDetail::getLaborHours)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(personMinutes).isEqualByComparingTo("220");
+        assertThat(personHours).isEqualByComparingTo("3.6667");
+        assertThat(dto.getMissingCostItemCount()).isZero();
+    }
+
+    @Test
+    void pinnedBomMissingPackagingPrice_marksPartialAndDoesNotPretendZeroOrComplete() {
+        stubPinnedF006Audit(pinnedBomSnapshot(false));
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
+
+        assertThat(dto.isCostComplete()).isFalse();
+        assertThat(dto.getCalculationStatus()).isEqualTo("PARTIAL");
+        assertThat(dto.getPackagingCost()).isEqualByComparingTo("3.00");
+        assertThat(dto.getPackagingDetails()).hasSize(3);
+        OrderCostBreakdownDTO.PackagingDetail missing = dto.getPackagingDetails().get(2);
+        assertThat(missing.getMaterialName()).isEqualTo("外箱");
+        assertThat(missing.getCollectionStatus()).isEqualTo("MISSING_PRICE");
+        assertThat(missing.getAmount()).isNull();
+        assertThat(dto.getMissingCostItems()).contains("PACKAGING_PRICE:PKG-CASE");
+        assertThat(dto.getTotalCost()).isNull();
+        assertThat(dto.getPerBoxCost()).isNull();
+        assertThat(dto.getNetTotalCost()).isNull();
+    }
+
+    @Test
+    void computeByPlan_keepsM07AndM09CostLedgersIsolated() {
+        ProductionBatch m07 = batch(707L, "5");
+        ProductionBatch m09 = batch(909L, "5");
+        when(batchRepository.findByFactoryIdAndProductionPlanId(F, "M07")).thenReturn(List.of(m07));
+        when(batchRepository.findByFactoryIdAndProductionPlanId(F, "M09")).thenReturn(List.of(m09));
+        when(yieldReportService.getYield(F, 707L)).thenReturn(batchYield("10", BigDecimal.ZERO));
+        when(yieldReportService.getYield(F, 909L)).thenReturn(batchYield("20", BigDecimal.ZERO));
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(707L, F))
+                .thenReturn(List.of(cons("RAW-M07", "1", "100", "100")));
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(909L, F))
+                .thenReturn(List.of(cons("RAW-M09", "1", "900", "900")));
+        when(materialBatchRepository.findByIdAndFactoryId("RAW-M07", F))
+                .thenReturn(Optional.of(mb("RAW-M07", "M07原料", null, null)));
+        when(materialBatchRepository.findByIdAndFactoryId("RAW-M09", F))
+                .thenReturn(Optional.of(mb("RAW-M09", "M09原料", null, null)));
+
+        OrderCostBreakdownDTO m07Cost = service.computeByPlan(F, "M07", false);
+        OrderCostBreakdownDTO m09Cost = service.computeByPlan(F, "M09", false);
+
+        assertThat(m07Cost.getRawMaterialCost()).isEqualByComparingTo("100");
+        assertThat(m07Cost.getLaborCost()).isEqualByComparingTo("10");
+        assertThat(m07Cost.getSources()).extracting(OrderCostBreakdownDTO.SourceCost::getBatchId)
+                .containsExactly("RAW-M07");
+        assertThat(m09Cost.getRawMaterialCost()).isEqualByComparingTo("900");
+        assertThat(m09Cost.getLaborCost()).isEqualByComparingTo("20");
+        assertThat(m09Cost.getSources()).extracting(OrderCostBreakdownDTO.SourceCost::getBatchId)
+                .containsExactly("RAW-M09");
+    }
+
+    private void stubPinnedF006Audit(Map<String, Object> snapshot) {
+        ProductionPlan p = plan("PLAN-F006-M11");
+        p.setFactoryId(F);
+        p.setPlanNumber("PLAN-1784523993145-78E6EE57");
+        p.setCustomerOrderNumber("SO-20260720-0001");
+        p.setProductTypeId("CPF0060015");
+        p.setPlannedUnit("box");
+        p.setPlannedNetWeightGrams(new BigDecimal("800"));
+        p.setSelectedBomRecipeId("BOM-F006-V1");
+        p.setSelectedBomVersion(1);
+        p.setSelectedWorkflowId(11L);
+        p.setSelectedWorkflowVersion(3);
+        when(planRepository.findByFactoryIdAndSourceOrderId(F, ORDER)).thenReturn(List.of(p));
+        when(planRepository.findByIdAndFactoryId("PLAN-F006-M11", F)).thenReturn(Optional.of(p));
+
+        ProductionBatch b = batch(9001L, "5");
+        b.setFactoryId(F);
+        b.setProductionPlanId(p.getId());
+        b.setBatchNumber("TRF-FG-20260720-8825");
+        b.setProductTypeId("CPF0060015");
+        b.setActualQuantity(new BigDecimal("5"));
+        b.setUnit("box");
+        b.setEquipmentCost(BigDecimal.ZERO);
+        b.setOtherCost(BigDecimal.ZERO);
+        when(batchRepository.findByFactoryIdAndProductionPlanIdIn(eq(F), any())).thenReturn(List.of(b));
+
+        StepYieldDTO first = StepYieldDTO.builder()
+                .processOrder(1).processName("第一道")
+                .totalInput(new BigDecimal("5")).inputUnit("kg")
+                .totalOutput(new BigDecimal("4.5")).outputUnit("kg")
+                .materialCost(BigDecimal.ZERO).costCategory("RAW_MATERIAL")
+                .laborCost(new BigDecimal("120"))
+                .laborSegments(List.of(Map.of("startTime", "08:00", "endTime", "09:00", "headcount", 2)))
+                .build();
+        StepYieldDTO second = StepYieldDTO.builder()
+                .processOrder(2).processName("第二道")
+                .totalInput(new BigDecimal("4.5")).inputUnit("kg")
+                .totalOutput(new BigDecimal("5")).outputUnit("box")
+                .materialCost(BigDecimal.ZERO).costCategory("PACKAGING")
+                .laborCost(new BigDecimal("100"))
+                .laborSegments(List.of(Map.of("startTime", "09:00", "endTime", "09:50", "headcount", 2)))
+                .build();
+        when(yieldReportService.getYield(F, 9001L)).thenReturn(BatchYieldDTO.builder()
+                .batchId(9001L).batchNumber(b.getBatchNumber())
+                .firstStepInput(new BigDecimal("5")).firstStepInputUnit("kg")
+                .lastStepOutput(new BigDecimal("5")).lastStepOutputUnit("box")
+                .lastStepOutputInFirstUnit(new BigDecimal("4"))
+                .totalLaborCost(new BigDecimal("220"))
+                .steps(List.of(first, second)).build());
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(9001L, F)).thenReturn(List.of());
+
+        BomVersion version = new BomVersion();
+        version.setFactoryId(F);
+        version.setBomRecipeId("BOM-F006-V1");
+        version.setVersionNumber(1);
+        version.setSnapshotJson(snapshot);
+        when(bomVersionRepository.findByFactoryIdAndBomRecipeIdOrderByVersionNumberDesc(F, "BOM-F006-V1"))
+                .thenReturn(List.of(version));
+    }
+
+    private Map<String, Object> pinnedBomSnapshot(boolean allPrices) {
+        Map<String, Object> box = packagingItem("PKG-BOX", "成品盒", "1", "box", "0.50");
+        Map<String, Object> film = packagingItem("PKG-FILM", "封膜", "1", "slice", "0.10");
+        Map<String, Object> outerCase = packagingItem("PKG-CASE", "外箱", "0.125", "case",
+                allPrices ? "0.25" : null);
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("outputQuantityPerUnit", new BigDecimal("800"));
+        snapshot.put("outputUnit", "g");
+        snapshot.put("items", List.of(box, film, outerCase));
+        return snapshot;
+    }
+
+    private Map<String, Object> packagingItem(String code, String name, String quantity,
+                                               String unit, String itemCost) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("materialCategory", "PACKAGING");
+        item.put("materialTypeId", code);
+        item.put("materialName", name);
+        item.put("standardQuantity", new BigDecimal(quantity));
+        item.put("unit", unit);
+        item.put("itemCost", itemCost == null ? null : new BigDecimal(itemCost));
+        return item;
     }
 }

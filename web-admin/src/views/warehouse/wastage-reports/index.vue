@@ -23,6 +23,9 @@ function wBadgeColor(type: unknown): string | undefined {
 function wBadgeLabel(type: unknown): string | undefined {
   return warehouseTypeBadge(String(type || ''))?.label;
 }
+function wBadgeTextColor(type: unknown): string | undefined {
+  return warehouseTypeBadge(String(type || ''))?.textColor;
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Auth / permissions
@@ -637,9 +640,9 @@ onMounted(async () => {
               <el-tag
                 v-if="wBadgeLabel(w.type)"
                 size="small"
-                style="margin-left: 8px; font-size: 11px"
+                :style="{ marginLeft: '8px', fontSize: '11px', color: wBadgeTextColor(w.type) }"
                 :color="wBadgeColor(w.type)"
-                effect="plain"
+                effect="dark"
               >{{ wBadgeLabel(w.type) }}</el-tag>
             </el-option>
           </el-select>

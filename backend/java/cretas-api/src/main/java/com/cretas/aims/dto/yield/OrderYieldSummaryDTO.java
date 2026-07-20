@@ -37,6 +37,10 @@ public class OrderYieldSummaryDTO {
 
     /** Σ 各批次末道总产出 (仅所有批次 lastStepOutputUnit 一致时; 否则 null)。 */
     private BigDecimal totalLastOutput;
+    /** Sum of batch outputs converted into firstInputUnit using each plan's pinned conversion. */
+    private BigDecimal convertedLastOutput;
+    /** COMPLETE when every batch has a provable conversion; otherwise UNAVAILABLE. */
+    private String yieldConversionStatus;
 
     /**
      * 订单整体出成率 = totalLastOutput / totalFirstInput (scale 4, HALF_UP)。

@@ -106,7 +106,7 @@ class ProductionPlanSalesBatchDateTest {
         when(normalizer.normalize(new BigDecimal("5"), item, product))
                 .thenReturn(new SalesOrderPlanQuantityNormalizer.PlanQuantity(
                         new BigDecimal("5"), "盒", new BigDecimal("5"), "box"));
-        when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY_ID)).thenReturn(Optional.of(order));
         when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID)).thenReturn(List.of(item));
         when(productTypeRepository.findByIdAndFactoryId(PRODUCT_ID, FACTORY_ID)).thenReturn(Optional.of(product));
 
@@ -134,6 +134,42 @@ class ProductionPlanSalesBatchDateTest {
         assertThat(result.getPlannedDate()).isEqualTo(PLANNED_DATE);
         assertThat(result.getSourceDisplayUnit()).isEqualTo("box");
         assertPins(result);
+    }
+
+    @Test
+    void existingEffectivePlanCoversOrderLineAndBlocksDuplicateCreationUnderOrderLock() {
+        SalesOrder order = new SalesOrder();
+        order.setId(ORDER_ID);
+        order.setFactoryId(FACTORY_ID);
+        SalesOrderItem item = new SalesOrderItem();
+        item.setId(726L);
+        item.setSalesOrderId(ORDER_ID);
+        item.setProductTypeId(PRODUCT_ID);
+        item.setProductName("黄油鸡-成品800g");
+        item.setQuantity(new BigDecimal("5"));
+        item.setDeliveredQuantity(BigDecimal.ZERO);
+        item.setUnit("box");
+        ProductionPlan existing = existingPlan();
+        existing.setSourceOrderId(ORDER_ID);
+        existing.setSourceOrderItemId("726");
+        existing.setSourceDisplayQuantity(new BigDecimal("5"));
+        existing.setStatus(ProductionPlanStatus.COMPLETED);
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY_ID)).thenReturn(Optional.of(order));
+        when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID)).thenReturn(List.of(item));
+        when(planRepository.findByFactoryIdAndSourceOrderIdExact(FACTORY_ID, ORDER_ID)).thenReturn(List.of(existing));
+
+        BatchPlanFromSalesOrderRequest request = new BatchPlanFromSalesOrderRequest();
+        request.setSourceOrderId(ORDER_ID);
+        request.setItemIds(List.of("726"));
+        request.setBatchDate(BATCH_DATE);
+        request.setPlannedDate(PLANNED_DATE);
+
+        assertThatThrownBy(() -> service.createPlansFromSalesOrder(FACTORY_ID, request, 1L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                        .isEqualTo("SALES_ORDER_ITEM_PLAN_ALREADY_EXISTS"));
+        verify(salesOrderRepository).findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY_ID);
+        verify(planRepository, never()).save(any());
     }
 
     @Test

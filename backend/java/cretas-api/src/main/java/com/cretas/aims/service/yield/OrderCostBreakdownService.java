@@ -18,9 +18,17 @@ import org.springframework.stereotype.Service;
 
 import com.cretas.aims.dto.yield.OrderCostBreakdownDTO.ByproductLine;
 import com.cretas.aims.dto.yield.OrderCostBreakdownDTO.PackagingItem;
+import com.cretas.aims.dto.yield.OrderCostBreakdownDTO.LaborDetail;
+import com.cretas.aims.dto.yield.OrderCostBreakdownDTO.PackagingDetail;
+import com.cretas.aims.dto.yield.OrderCostBreakdownDTO.RawMaterialDetail;
+import com.cretas.aims.entity.bom.BomVersion;
+import com.cretas.aims.repository.bom.BomVersionRepository;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -59,6 +67,7 @@ public class OrderCostBreakdownService {
     private final com.cretas.aims.service.wip.WipInventoryService wipInventoryService;
     private final com.cretas.aims.service.inventory.FinishedGoodsFeedService finishedGoodsFeedService;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    private final BomVersionRepository bomVersionRepository;
 
     private static final BigDecimal HUNDRED = new BigDecimal("100");
     private static final int MAX_DEPTH = 10;
@@ -115,6 +124,8 @@ public class OrderCostBreakdownService {
         BigDecimal labor = BigDecimal.ZERO;
         BigDecimal seasoning = BigDecimal.ZERO;
         BigDecimal packaging = BigDecimal.ZERO;
+        BigDecimal equipment = BigDecimal.ZERO;
+        BigDecimal other = BigDecimal.ZERO;
         BigDecimal raw = BigDecimal.ZERO;
         int boxCount = 0;
         int sampleRetain = 0;             // 留样数 (不可售; Σ各道, 通常仅末道)
@@ -135,15 +146,39 @@ public class OrderCostBreakdownService {
         BigDecimal semiFeedCost = BigDecimal.ZERO;
         boolean anySemiFeed = false;
         boolean semiFeedUnknown = false;
+        boolean auditEligible = false;
+        boolean anyPinnedPackaging = false;
+        boolean equipmentComplete = true;
+        boolean otherComplete = true;
+        List<String> missingCostItems = new ArrayList<>();
+        List<RawMaterialDetail> rawMaterialDetails = new ArrayList<>();
+        List<PackagingDetail> packagingDetails = new ArrayList<>();
+        List<LaborDetail> laborDetails = new ArrayList<>();
+        List<ProductionPlan> auditPlans = new ArrayList<>();
+        List<ProductionBatch> auditBatches = new ArrayList<>();
+        BigDecimal auditOutputQuantity = BigDecimal.ZERO;
+        BigDecimal auditConvertedOutputKg = BigDecimal.ZERO;
+        boolean outputConversionComplete = true;
+        String auditOutputUnit = null;
 
         for (ProductionBatch b : batches) {
+            auditBatches.add(b);
+            ProductionPlan plan = b.getProductionPlanId() == null ? null
+                    : planRepository.findByIdAndFactoryId(b.getProductionPlanId(), factoryId).orElse(null);
+            if (plan != null) {
+                auditPlans.add(plan);
+                auditEligible = auditEligible || plan.getSelectedBomRecipeId() != null
+                        || plan.getPlannedNetWeightGrams() != null || plan.getSelectedWorkflowId() != null;
+            }
             BatchYieldDTO y = yieldReportService.getYield(factoryId, b.getId());
+            BigDecimal reportedPackagingBefore = packaging;
             if (y != null) {
                 if (y.getTotalLaborCost() != null) {
                     labor = labor.add(y.getTotalLaborCost());
                 }
                 List<StepYieldDTO> steps = y.getSteps() == null ? List.of() : y.getSteps();
                 for (int i = 0; i < steps.size(); i++) {
+                    accumulateLaborDetails(laborDetails, missingCostItems, steps.get(i), auditEligible);
                     accumulateByproducts(byproductAcc, steps.get(i).getByproducts());
                     if (steps.get(i).getSampleRetainQuantity() != null) {
                         sampleRetain += steps.get(i).getSampleRetainQuantity();
@@ -186,6 +221,40 @@ public class OrderCostBreakdownService {
                     }
                     // "SKIP" → 原料由上游 traced consumption 承载, 不计 (避免双计)
                 }
+
+                BigDecimal output = positiveOrNull(y.getLastStepOutput(), b.getActualQuantity(), b.getQuantity());
+                if (output != null) {
+                    auditOutputQuantity = auditOutputQuantity.add(output);
+                    auditOutputUnit = mergeUnit(auditOutputUnit, y.getLastStepOutputUnit());
+                    BigDecimal outputKg = toPinnedKilograms(output, y.getLastStepOutputUnit(), plan);
+                    if (outputKg == null) {
+                        outputConversionComplete = false;
+                    } else {
+                        auditConvertedOutputKg = auditConvertedOutputKg.add(outputKg);
+                    }
+                }
+
+                PinnedPackagingResult pinnedPackaging = resolvePinnedPackaging(
+                        factoryId, plan, output, y.getLastStepOutputUnit());
+                if (pinnedPackaging.pinned()) {
+                    anyPinnedPackaging = true;
+                    BigDecimal reportedContribution = packaging.subtract(reportedPackagingBefore);
+                    packaging = packaging.subtract(reportedContribution).add(pinnedPackaging.knownCost());
+                    packagingDetails.addAll(pinnedPackaging.details());
+                    missingCostItems.addAll(pinnedPackaging.missingItems());
+                }
+            }
+            if (b.getEquipmentCost() == null) {
+                equipmentComplete = false;
+                if (auditEligible) missingCostItems.add("EQUIPMENT_COST:" + b.getBatchNumber());
+            } else {
+                equipment = equipment.add(b.getEquipmentCost());
+            }
+            if (b.getOtherCost() == null) {
+                otherComplete = false;
+                if (auditEligible) missingCostItems.add("OTHER_COST:" + b.getBatchNumber());
+            } else {
+                other = other.add(b.getOtherCost());
             }
             if (b.getQuantity() != null) {
                 boxCount += b.getQuantity().intValue();
@@ -207,6 +276,23 @@ public class OrderCostBreakdownService {
                         .unitPrice(c.getUnitPrice())
                         .cost(cost)
                         .depth(depth)
+                        .build());
+                boolean rawPriceKnown = c.getTotalCost() != null || c.getUnitPrice() != null
+                        || cost.signum() != 0;
+                if (!rawPriceKnown && auditEligible) {
+                    missingCostItems.add("RAW_MATERIAL_PRICE:" + c.getBatchId());
+                }
+                rawMaterialDetails.add(RawMaterialDetail.builder()
+                        .batchNumber(mb != null ? mb.getBatchNumber() : c.getBatchId())
+                        .materialCode(mb != null ? mb.getMaterialTypeId() : null)
+                        .materialName(mb != null ? mb.getBatchNumber() : c.getBatchId())
+                        .quantity(c.getQuantity())
+                        .unit(mb != null ? mb.getQuantityUnit() : "kg")
+                        .unitPrice(c.getUnitPrice())
+                        .priceSource("MATERIAL_CONSUMPTION_SNAPSHOT")
+                        .amount(rawPriceKnown ? cost : null)
+                        .collectionStatus(rawPriceKnown ? "COLLECTED" : "MISSING_PRICE")
+                        .missingReason(rawPriceKnown ? null : "实际耗用记录缺少可验证单价/金额")
                         .build());
 
                 // ★ SP-F ①b: 沿 WIP 链回溯上游 *生产批次* 的 人工/调料, 按与 traceCost 相同的
@@ -233,13 +319,18 @@ public class OrderCostBreakdownService {
         // 包装总额: 若无 PACKAGING materialCost 报工(packaging==0)但有包装明细 → 用明细总额。
         // 文员逐道录入(SP-F)的气调步只写 packaging_detail 明细不写 materialCost-PACKAGING;
         // M67 等有 materialCost-PACKAGING 的批 packaging>0 → 不重复加明细。严格测试 2026-06-24 抓到。
-        if (packaging.signum() == 0 && !packagingAcc.isEmpty()) {
+        if (!anyPinnedPackaging && packaging.signum() == 0 && !packagingAcc.isEmpty()) {
             packaging = packagingAcc.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add);
         }
         // R4: total 含 SFI/FG 投料成本 (已知部分)。诚实 null: 有 SFI/FG 投料但任一成本未知 →
         //   costComplete=false, 下方派生成本字段 (total/perBox/net.../semiFeedCost) 全置 null (不伪造 ¥0)。
-        boolean costComplete = !semiFeedUnknown;
-        BigDecimal total = labor.add(seasoning).add(packaging).add(raw).add(semiFeedCost);
+        if (semiFeedUnknown) {
+            missingCostItems.add("SEMI_FINISHED_OR_FINISHED_FEED_PRICE");
+        }
+        missingCostItems = missingCostItems.stream().distinct().collect(Collectors.toCollection(ArrayList::new));
+        boolean costComplete = !semiFeedUnknown && (!auditEligible || missingCostItems.isEmpty());
+        BigDecimal total = labor.add(seasoning).add(packaging).add(raw).add(semiFeedCost)
+                .add(equipment).add(other);
         BigDecimal perBox = boxCount > 0 ? total.divide(BigDecimal.valueOf(boxCount), 2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
 
         List<ByproductLine> byproducts = new ArrayList<>(byproductAcc.values());
@@ -255,10 +346,20 @@ public class OrderCostBreakdownService {
                 ? netTotal.divide(BigDecimal.valueOf(sellableBoxCount), 2, RoundingMode.HALF_UP) : netPerBox;
 
         // AUDIT-002 包装明细 (按名称归集成本; null=未拆)
-        List<PackagingItem> packagingDetail = packagingAcc.isEmpty() ? null
-                : packagingAcc.entrySet().stream()
-                        .map(e -> PackagingItem.builder().name(e.getKey()).cost(e.getValue()).build())
-                        .collect(Collectors.toList());
+        List<PackagingItem> packagingDetail;
+        if (anyPinnedPackaging) {
+            packagingDetail = packagingDetails.stream()
+                    .map(item -> PackagingItem.builder()
+                            .name(item.getMaterialName())
+                            .cost(item.getAmount())
+                            .build())
+                    .collect(Collectors.toList());
+        } else {
+            packagingDetail = packagingAcc.isEmpty() ? null
+                    : packagingAcc.entrySet().stream()
+                            .map(e -> PackagingItem.builder().name(e.getKey()).cost(e.getValue()).build())
+                            .collect(Collectors.toList());
+        }
 
         // AUDIT-004 辅料按锅分摊明细 (null=无共享锅)
         List<OrderCostBreakdownDTO.AuxiliaryAllocation> auxiliaryAllocations =
@@ -272,8 +373,39 @@ public class OrderCostBreakdownService {
                     ? nz(s.getCost()).multiply(HUNDRED).divide(raw, 1, RoundingMode.HALF_UP) : null);
         }
 
+        ProductionPlan auditPlan = uniqueOrNull(auditPlans, ProductionPlan::getId);
+        ProductionBatch auditBatch = uniqueOrNull(auditBatches, ProductionBatch::getId);
+        String normalizedAuditOutputUnit = "__MIXED__".equals(auditOutputUnit) ? null : auditOutputUnit;
+        BigDecimal netWeight = auditPlan == null ? null : auditPlan.getPlannedNetWeightGrams();
+        String equipmentStatus = !auditEligible ? "NOT_EVALUATED"
+                : (!equipmentComplete ? "UNCOLLECTED"
+                : (equipment.signum() == 0 ? "CONFIRMED_ZERO" : "COLLECTED"));
+        String otherStatus = !auditEligible ? "NOT_EVALUATED"
+                : (!otherComplete ? "UNCOLLECTED"
+                : (other.signum() == 0 ? "CONFIRMED_ZERO" : "COLLECTED"));
+
         OrderCostBreakdownDTO dto = OrderCostBreakdownDTO.builder()
                 .orderId(label)
+                .orderNumber(auditPlan == null ? null : auditPlan.getCustomerOrderNumber())
+                .productionPlanId(auditPlan == null ? null : auditPlan.getId())
+                .productionPlanNumber(auditPlan == null ? null : auditPlan.getPlanNumber())
+                .finishedBatchNumber(auditBatch == null ? null : auditBatch.getBatchNumber())
+                .productSku(auditPlan != null ? auditPlan.getProductTypeId()
+                        : (auditBatch == null ? null : auditBatch.getProductTypeId()))
+                .productName(auditBatch == null ? null : auditBatch.getProductName())
+                .pinnedBomRecipeId(auditPlan == null ? null : auditPlan.getSelectedBomRecipeId())
+                .pinnedBomVersion(auditPlan == null ? null : auditPlan.getSelectedBomVersion())
+                .pinnedWorkflowId(auditPlan == null ? null : auditPlan.getSelectedWorkflowId())
+                .pinnedWorkflowVersion(auditPlan == null ? null : auditPlan.getSelectedWorkflowVersion())
+                .calculatedAt(LocalDateTime.now())
+                .calculationStatus(costComplete ? "COMPLETE" : "PARTIAL")
+                .outputQuantity(auditOutputQuantity.signum() > 0 ? auditOutputQuantity : null)
+                .outputUnit(normalizedAuditOutputUnit)
+                .netWeightGramsPerUnit(netWeight)
+                .convertedOutputKg(outputConversionComplete && auditOutputQuantity.signum() > 0
+                        ? auditConvertedOutputKg : null)
+                .costDenominatorQuantity(auditOutputQuantity.signum() > 0 ? auditOutputQuantity : null)
+                .costDenominatorUnit(normalizedAuditOutputUnit)
                 .boxCount(boxCount)
                 .hasData(true)
                 .priceMasked(maskPrice)
@@ -281,8 +413,17 @@ public class OrderCostBreakdownService {
                 .laborCost(labor)
                 .seasoningCost(seasoning)
                 .packagingCost(packaging)
+                .equipmentCost(equipmentComplete || equipment.signum() != 0 ? equipment : null)
+                .equipmentCostStatus(equipmentStatus)
+                .otherCost(otherComplete || other.signum() != 0 ? other : null)
+                .otherCostStatus(otherStatus)
                 .semiFeedCost(anySemiFeed ? semiFeedCost : null)   // null = 无 SFI/FG 投料 (N/A)
                 .costComplete(costComplete)
+                .missingCostItemCount(missingCostItems.size())
+                .missingCostItems(missingCostItems)
+                .rawMaterialDetails(rawMaterialDetails)
+                .packagingDetails(packagingDetails)
+                .laborDetails(laborDetails)
                 .totalCost(total)
                 .perBoxCost(perBox)
                 .byproductCredit(byproductCredit)
@@ -642,6 +783,251 @@ public class OrderCostBreakdownService {
         }
     }
 
+    private PinnedPackagingResult resolvePinnedPackaging(String factoryId, ProductionPlan plan,
+                                                          BigDecimal outputQuantity, String outputUnit) {
+        if (plan == null || plan.getSelectedBomRecipeId() == null || plan.getSelectedBomVersion() == null) {
+            return PinnedPackagingResult.notPinned();
+        }
+        List<String> missing = new ArrayList<>();
+        if (bomVersionRepository == null) {
+            missing.add("PINNED_BOM_SNAPSHOT_UNAVAILABLE:" + plan.getId());
+            return new PinnedPackagingResult(true, BigDecimal.ZERO, List.of(), missing);
+        }
+        BomVersion version = bomVersionRepository
+                .findByFactoryIdAndBomRecipeIdOrderByVersionNumberDesc(factoryId, plan.getSelectedBomRecipeId())
+                .stream()
+                .filter(item -> Objects.equals(item.getVersionNumber(), plan.getSelectedBomVersion()))
+                .findFirst()
+                .orElse(null);
+        if (version == null || version.getSnapshotJson() == null) {
+            missing.add("PINNED_BOM_SNAPSHOT_MISSING:" + plan.getSelectedBomRecipeId()
+                    + ":v" + plan.getSelectedBomVersion());
+            return new PinnedPackagingResult(true, BigDecimal.ZERO, List.of(), missing);
+        }
+        Map<String, Object> snapshot = version.getSnapshotJson();
+        BigDecimal recipeOutput = toBigDecimal(snapshot.get("outputQuantityPerUnit"));
+        String recipeOutputUnit = snapshot.get("outputUnit") == null ? null
+                : String.valueOf(snapshot.get("outputUnit"));
+        BigDecimal outputInRecipeUnit = convertPinnedOutputQuantity(
+                outputQuantity, outputUnit, recipeOutputUnit, plan);
+        if (outputInRecipeUnit == null || outputInRecipeUnit.signum() <= 0 || recipeOutput == null
+                || recipeOutput.signum() <= 0) {
+            missing.add("PINNED_BOM_OUTPUT_BASIS_UNVERIFIABLE:" + plan.getSelectedBomRecipeId()
+                    + ":v" + plan.getSelectedBomVersion());
+            return new PinnedPackagingResult(true, BigDecimal.ZERO, List.of(), missing);
+        }
+        BigDecimal scale = outputInRecipeUnit.divide(recipeOutput, 12, RoundingMode.HALF_UP);
+        Object rawItems = snapshot.get("items");
+        if (!(rawItems instanceof List<?> items)) {
+            missing.add("PINNED_BOM_ITEMS_MISSING:" + plan.getSelectedBomRecipeId()
+                    + ":v" + plan.getSelectedBomVersion());
+            return new PinnedPackagingResult(true, BigDecimal.ZERO, List.of(), missing);
+        }
+        List<PackagingDetail> details = new ArrayList<>();
+        BigDecimal knownCost = BigDecimal.ZERO;
+        for (Object rawItem : items) {
+            if (!(rawItem instanceof Map<?, ?> item)
+                    || !"PACKAGING".equalsIgnoreCase(String.valueOf(item.get("materialCategory")))) {
+                continue;
+            }
+            String materialCode = stringValue(item.get("materialTypeId"));
+            String materialName = stringValue(item.get("materialName"));
+            BigDecimal standardQuantity = toBigDecimal(item.get("standardQuantity"));
+            BigDecimal quantity = standardQuantity == null ? null : standardQuantity.multiply(scale);
+            BigDecimal pinnedItemCost = toBigDecimal(item.get("itemCost"));
+            BigDecimal amount = pinnedItemCost == null ? null : pinnedItemCost.multiply(scale);
+            BigDecimal effectiveUnitPrice = pinnedItemCost != null && standardQuantity != null
+                    && standardQuantity.signum() > 0
+                    ? pinnedItemCost.divide(standardQuantity, 8, RoundingMode.HALF_UP)
+                    : null;
+            boolean collected = quantity != null && amount != null;
+            String missingKey = "PACKAGING_PRICE:" + (materialCode == null ? materialName : materialCode);
+            if (!collected) missing.add(missingKey);
+            if (amount != null) knownCost = knownCost.add(amount);
+            details.add(PackagingDetail.builder()
+                    .materialCode(materialCode)
+                    .materialName(materialName)
+                    .quantity(quantity)
+                    .unit(stringValue(item.get("unit")))
+                    .unitPrice(effectiveUnitPrice)
+                    .priceSource("PINNED_BOM_ITEM_COST:v" + version.getVersionNumber())
+                    .amount(amount)
+                    .collectionStatus(collected ? "COLLECTED" : "MISSING_PRICE")
+                    .missingReason(collected ? null : "pinned BOM 缺少可验证 itemCost/标准耗用量")
+                    .build());
+        }
+        return new PinnedPackagingResult(true, knownCost, details, missing);
+    }
+
+    private void accumulateLaborDetails(List<LaborDetail> details, List<String> missing,
+                                        StepYieldDTO step, boolean auditEligible) {
+        List<Map<String, Object>> segments = step.getLaborSegments();
+        if (segments == null || segments.isEmpty()) {
+            if (step.getTotalWorkMinutes() == null && step.getTotalWorkers() == null
+                    && step.getLaborCost() == null) {
+                return;
+            }
+            int workers = step.getTotalWorkers() == null ? 0 : step.getTotalWorkers();
+            int duration = step.getTotalWorkMinutes() == null ? 0 : step.getTotalWorkMinutes();
+            addLaborDetail(details, missing, step, workers, null, null, duration,
+                    workers * duration, step.getLaborCost(), auditEligible);
+            return;
+        }
+        int totalLaborMinutes = 0;
+        for (Map<String, Object> segment : segments) {
+            Integer workers = toInteger(segment.get("headcount"));
+            Integer duration = durationMinutes(stringValue(segment.get("startTime")),
+                    stringValue(segment.get("endTime")));
+            if (workers != null && duration != null) totalLaborMinutes += workers * duration;
+        }
+        BigDecimal rate = step.getLaborCost() != null && totalLaborMinutes > 0
+                ? step.getLaborCost().multiply(BigDecimal.valueOf(60))
+                        .divide(BigDecimal.valueOf(totalLaborMinutes), 8, RoundingMode.HALF_UP)
+                : null;
+        for (Map<String, Object> segment : segments) {
+            Integer workers = toInteger(segment.get("headcount"));
+            String start = stringValue(segment.get("startTime"));
+            String end = stringValue(segment.get("endTime"));
+            Integer duration = durationMinutes(start, end);
+            int laborMinutes = workers == null || duration == null ? 0 : workers * duration;
+            addLaborDetail(details, missing, step, workers == null ? 0 : workers, start, end,
+                    duration == null ? 0 : duration, laborMinutes, rate == null ? null
+                            : rate.multiply(BigDecimal.valueOf(laborMinutes))
+                                    .divide(BigDecimal.valueOf(60), 4, RoundingMode.HALF_UP), auditEligible);
+        }
+    }
+
+    private void addLaborDetail(List<LaborDetail> details, List<String> missing, StepYieldDTO step,
+                                int workers, String start, String end, int duration, int laborMinutes,
+                                BigDecimal amount, boolean auditEligible) {
+        BigDecimal hours = laborMinutes > 0
+                ? BigDecimal.valueOf(laborMinutes).divide(BigDecimal.valueOf(60), 4, RoundingMode.HALF_UP)
+                : null;
+        BigDecimal rate = amount != null && hours != null && hours.signum() > 0
+                ? amount.divide(hours, 8, RoundingMode.HALF_UP) : null;
+        boolean collected = workers > 0 && duration > 0 && rate != null;
+        if (!collected && auditEligible) {
+            missing.add("LABOR_RATE_OR_TIME:process-" + step.getProcessOrder());
+        }
+        details.add(LaborDetail.builder()
+                .processOrder(step.getProcessOrder())
+                .processName(step.getProcessName())
+                .workerCount(workers > 0 ? workers : null)
+                .startTime(start)
+                .endTime(end)
+                .durationMinutes(duration > 0 ? duration : null)
+                .laborMinutes(laborMinutes > 0 ? laborMinutes : null)
+                .laborHours(hours)
+                .hourlyRate(rate)
+                .rateSource(rate == null ? null : "DERIVED_FROM_PERSISTED_REPORT_LABOR_COST")
+                .amount(amount)
+                .collectionStatus(collected ? "COLLECTED" : "UNCOLLECTED")
+                .missingReason(collected ? null : "缺少可验证工时段或持久化人工成本")
+                .build());
+    }
+
+    private BigDecimal toPinnedKilograms(BigDecimal quantity, String unit, ProductionPlan plan) {
+        if (quantity == null || unit == null) return null;
+        String normalized = normalizeUnit(unit);
+        if ("kg".equals(normalized)) return quantity;
+        if ("g".equals(normalized)) {
+            return quantity.divide(BigDecimal.valueOf(1000), 4, RoundingMode.HALF_UP);
+        }
+        if (plan == null || plan.getPlannedNetWeightGrams() == null
+                || plan.getPlannedNetWeightGrams().signum() <= 0
+                || !sameUnit(unit, plan.getPlannedUnit())) {
+            return null;
+        }
+        return quantity.multiply(plan.getPlannedNetWeightGrams())
+                .divide(BigDecimal.valueOf(1000), 4, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal convertPinnedOutputQuantity(BigDecimal quantity, String fromUnit,
+                                                    String toUnit, ProductionPlan plan) {
+        if (quantity == null || fromUnit == null || toUnit == null) return null;
+        if (sameUnit(fromUnit, toUnit)) return quantity;
+        BigDecimal kilograms = toPinnedKilograms(quantity, fromUnit, plan);
+        if (kilograms == null) return null;
+        String normalizedTarget = normalizeUnit(toUnit);
+        if ("kg".equals(normalizedTarget)) return kilograms;
+        if ("g".equals(normalizedTarget)) return kilograms.multiply(BigDecimal.valueOf(1000));
+        if (plan == null || plan.getPlannedNetWeightGrams() == null
+                || plan.getPlannedNetWeightGrams().signum() <= 0
+                || !sameUnit(toUnit, plan.getPlannedUnit())) {
+            return null;
+        }
+        return kilograms.multiply(BigDecimal.valueOf(1000))
+                .divide(plan.getPlannedNetWeightGrams(), 8, RoundingMode.HALF_UP);
+    }
+
+    private static String mergeUnit(String current, String next) {
+        if (next == null) return current;
+        if (current == null) return next;
+        if ("__MIXED__".equals(current)) return current;
+        return sameUnit(current, next) ? current : "__MIXED__";
+    }
+
+    private static boolean sameUnit(String left, String right) {
+        return left != null && right != null && Objects.equals(normalizeUnit(left), normalizeUnit(right));
+    }
+
+    private static String normalizeUnit(String unit) {
+        if (unit == null || unit.isBlank()) return null;
+        return switch (unit.trim().toLowerCase()) {
+            case "kg", "kilogram", "kilograms", "千克", "公斤" -> "kg";
+            case "g", "gram", "grams", "克" -> "g";
+            case "box", "boxes", "盒" -> "box";
+            case "case", "cases", "箱" -> "case";
+            case "slice", "slices", "片" -> "slice";
+            default -> unit.trim().toLowerCase();
+        };
+    }
+
+    private static Integer durationMinutes(String start, String end) {
+        if (start == null || end == null) return null;
+        try {
+            LocalTime from = LocalTime.parse(start);
+            LocalTime to = LocalTime.parse(end);
+            long minutes = ChronoUnit.MINUTES.between(from, to);
+            if (minutes < 0) minutes += 24 * 60;
+            return Math.toIntExact(minutes);
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static Integer toInteger(Object value) {
+        BigDecimal decimal = toBigDecimal(value);
+        return decimal == null ? null : decimal.intValue();
+    }
+
+    private static String stringValue(Object value) {
+        if (value == null) return null;
+        String text = String.valueOf(value).trim();
+        return text.isEmpty() ? null : text;
+    }
+
+    private static BigDecimal positiveOrNull(BigDecimal... values) {
+        for (BigDecimal value : values) {
+            if (value != null && value.signum() > 0) return value;
+        }
+        return null;
+    }
+
+    private static <T, K> T uniqueOrNull(List<T> values, java.util.function.Function<T, K> key) {
+        if (values == null || values.isEmpty()) return null;
+        T first = values.get(0);
+        K firstKey = key.apply(first);
+        return values.stream().allMatch(value -> Objects.equals(firstKey, key.apply(value))) ? first : null;
+    }
+
+    private record PinnedPackagingResult(boolean pinned, BigDecimal knownCost,
+                                         List<PackagingDetail> details, List<String> missingItems) {
+        private static PinnedPackagingResult notPinned() {
+            return new PinnedPackagingResult(false, BigDecimal.ZERO, List.of(), List.of());
+        }
+    }
+
     /**
      * CALC-003: 解析本道材料成本归入哪个桶 — PACKAGING(包装) / SEASONING(调料) / SKIP(原料, 由上游 traced 承载不计)。
      * 显式 costCategory 优先 (分类不依赖工序顺序); null 或未知值 → 回退 step-index 启发式 (末道=包装, 中间道=调料, 首道=原料)。
@@ -698,6 +1084,8 @@ public class OrderCostBreakdownService {
         dto.setLaborCost(null);
         dto.setSeasoningCost(null);
         dto.setPackagingCost(null);
+        dto.setEquipmentCost(null);
+        dto.setOtherCost(null);
         dto.setSemiFeedCost(null);
         dto.setTotalCost(null);
         dto.setPerBoxCost(null);
@@ -729,12 +1117,34 @@ public class OrderCostBreakdownService {
                 a.setBatchShare(null);   // 金额敏感; 保留 potNo/method/产出量/占比 (物理量)
             }
         }
+        if (dto.getRawMaterialDetails() != null) {
+            for (RawMaterialDetail detail : dto.getRawMaterialDetails()) {
+                detail.setUnitPrice(null);
+                detail.setAmount(null);
+            }
+        }
+        if (dto.getPackagingDetails() != null) {
+            for (PackagingDetail detail : dto.getPackagingDetails()) {
+                detail.setUnitPrice(null);
+                detail.setAmount(null);
+            }
+        }
+        if (dto.getLaborDetails() != null) {
+            for (LaborDetail detail : dto.getLaborDetails()) {
+                detail.setHourlyRate(null);
+                detail.setAmount(null);
+            }
+        }
     }
 
     private OrderCostBreakdownDTO empty(String orderId, boolean maskPrice) {
         return OrderCostBreakdownDTO.builder()
                 .orderId(orderId).boxCount(0).hasData(false).priceMasked(maskPrice)
-                .sources(List.of()).byproducts(List.of()).build();
+                .calculatedAt(LocalDateTime.now()).calculationStatus("NO_DATA")
+                .missingCostItemCount(0).missingCostItems(List.of())
+                .sources(List.of()).byproducts(List.of())
+                .rawMaterialDetails(List.of()).packagingDetails(List.of()).laborDetails(List.of())
+                .build();
     }
 
     private static BigDecimal nz(BigDecimal v) {

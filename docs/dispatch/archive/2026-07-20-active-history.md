@@ -13,6 +13,17 @@
 - 生产边界：exact-main 部署后只对 F006 订单 `ecd7f20b-21c2-4ea3-9103-2034d5d6547f` 的 item `726` 调用一次幂等桥接写入 `WH-LOG`；不得改变数量、价格、税率、状态、订单版本或创建生产计划。随后全部 query-only 验收并通知原测试 Chat 从同一已批准订单继续。
 - Scope 锁：已释放。
 
+### `F006-M10-M12-WORKFLOW-CLOSEOUT-20260720`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)；协作任务：M10 Sales/Delivery、M11 Yield/Cost、M12 Stocktake、Production Plan/PDF、QA review。
+- 登记 Base SHA：`0e3c979fe0a153405daed3fab9f2b81a78b036f9`
+- 实现提交：`dbb4783a5758445570fb20a912f4c8ea45ffc18b`；测试对齐提交：`c77a58f7e2407f6180042acfc779ef40f3b04e53`。
+- 范围：完成调拨/销售/母子发运、批次分配与物流审计，M11 混合单位出成率和包材成本可审计核算，M12 盘点时点/CAS/单位/批次身份/审批证据与快捷录入，以及生产计划操作区、单位安全汇总和同一 pinned 快照的分页生产单据包 PDF；零差异盘点保持 `PENDING_APPROVAL → APPROVED → APPLIED` 两步确认，不自动完成。
+- 验收：Web 联合目标测试 41/41、生产计划目标测试 44/44、`vue-tsc` 与唯一 Web release build 通过；Java 唯一 release 生命周期 13 个目标测试类 242/242（含真实 JPA Context 启动门禁）通过；Python printing 目标测试通过。JAR SHA-256 `98a5607cc513b9cdcc7d3a8f04806dc3ee298f37ffaff95118846fd458759109`；Web archive SHA-256 `46516425cf2b007aae1063f42c3fa6964c3a0741afa71cdb891883106e8c9db6`、index SHA-256 `de70370ffc9f609e9d51a7354c7297ad7bc631959804c1ad8576271798934042`。
+- 生产边界：用户已在代码与唯一制品验证完成后明确授权部署 Java/Web/Python；发布只执行服务级健康和制品验收，不执行 F006 业务写入、历史桥接或 LIUSHANMEN 操作。
+- Scope 锁：已释放。
+
 ### `M09-SETTLEMENT-OUTPUT-UNIT-20260720`
 
 - 状态：`merged`

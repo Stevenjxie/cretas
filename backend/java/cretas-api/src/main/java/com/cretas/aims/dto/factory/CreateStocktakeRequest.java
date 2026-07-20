@@ -1,8 +1,9 @@
 package com.cretas.aims.dto.factory;
 
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Pattern;
 import lombok.Data;
+
+import java.time.LocalDateTime;
 
 /**
  * 发起盘点任务请求 DTO (SP7 T1).
@@ -13,10 +14,17 @@ public class CreateStocktakeRequest {
     @NotBlank(message = "仓库 ID 不能为空")
     private String warehouseId;
 
-    /** 盘点月份，格式 "2026-06" */
-    @NotBlank(message = "盘点月份不能为空")
-    @Pattern(regexp = "\\d{4}-\\d{2}", message = "月份格式应为 YYYY-MM")
+    /**
+     * Legacy compatibility only. The server ignores this value and derives the accounting
+     * period from inventoryCutoffAt, which is always generated inside initiate().
+     */
     private String periodMonth;
+
+    /** LAST_APPLIED(default), LAST_7_DAYS, MONTH, QUARTER, YEAR, CUSTOM. */
+    private String reconciliationPreset;
+
+    /** Accepted only for CUSTOM and only as the review-window start. */
+    private LocalDateTime reconciliationStartAt;
 
     private String notes;
 

@@ -5,15 +5,27 @@ import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
 import java.util.Optional;
+import jakarta.persistence.LockModeType;
 
 @Repository
 public interface SalesDeliveryRecordRepository extends JpaRepository<SalesDeliveryRecord, String> {
+
+    /**
+     * Mutation lock for shipment state transitions. The factory predicate is part of the query so
+     * a caller cannot lock, and subsequently mutate, another tenant's delivery row.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT d FROM SalesDeliveryRecord d WHERE d.id = :id AND d.factoryId = :factoryId")
+    Optional<SalesDeliveryRecord> findByIdAndFactoryIdForUpdate(
+            @Param("id") String id,
+            @Param("factoryId") String factoryId);
 
     Page<SalesDeliveryRecord> findByFactoryIdOrderByCreatedAtDesc(String factoryId, Pageable pageable);
 

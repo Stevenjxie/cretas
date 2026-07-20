@@ -14,6 +14,10 @@ public class StocktakeDiffPreviewDTO {
     private String stocktakeId;
     private String stocktakeNo;
     private String periodMonth;
+    private java.time.LocalDateTime inventoryCutoffAt;
+    private java.time.LocalDateTime countingStartedAt;
+    private java.time.LocalDateTime reconciliationStartAt;
+    private java.time.LocalDateTime reconciliationEndAt;
     private List<DiffLine> diffLines;
     private int surplusCount;
     private int shortageCount;
@@ -25,6 +29,7 @@ public class StocktakeDiffPreviewDTO {
         private String materialBatchId;
         private String batchNumber;
         private String materialName;
+        private String quantityUnit;
         private BigDecimal systemQty;
         private BigDecimal actualQty;
         private BigDecimal differenceQty;

@@ -68,6 +68,9 @@ def test_print_router_can_be_imported():
     assert "/consolidated-material-requisition" in route_paths, (
         f"consolidated-material-requisition route missing; got {route_paths}"
     )
+    assert "/production-document-package" in route_paths, (
+        f"production-document-package route missing; got {route_paths}"
+    )
     # P1 #37 — multi-SO work order route must be registered
     assert "/production-work-order-multi" in route_paths, (
         f"production-work-order-multi route missing; got {route_paths}"

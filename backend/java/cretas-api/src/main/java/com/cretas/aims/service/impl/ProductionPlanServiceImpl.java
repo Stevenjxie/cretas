@@ -1082,10 +1082,29 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     public java.util.List<ProductionPlanDTO> createPlansFromSalesOrder(
             String factoryId, com.cretas.aims.dto.production.BatchPlanFromSalesOrderRequest req, Long userId) {
         // 跨租户校验: SO 须属当前工厂
-        SalesOrder so = salesOrderRepository.findById(req.getSourceOrderId())
-                .filter(o -> factoryId.equals(o.getFactoryId()))
+        // Lock the SO row so two tabs cannot both observe "no plan" and create
+        // duplicate effective plans for the same order line.
+        SalesOrder so = salesOrderRepository.findByIdAndFactoryIdForUpdate(req.getSourceOrderId(), factoryId)
                 .orElseThrow(() -> new com.cretas.aims.exception.EntityNotFoundException(
                         "销售订单不存在或不属于当前工厂: " + req.getSourceOrderId()));
+
+        java.util.List<ProductionPlan> relatedPlans = new java.util.ArrayList<>(
+                productionPlanRepository.findByFactoryIdAndSourceOrderIdExact(factoryId, so.getId()));
+        productionPlanRepository.findByFactoryIdAndSourceOrderIdsContaining(
+                        factoryId, "[\"" + so.getId().replace("\"", "\\\"") + "\"]")
+                .stream().filter(plan -> relatedPlans.stream().noneMatch(existing -> existing.getId().equals(plan.getId())))
+                .forEach(relatedPlans::add);
+        java.util.Map<String, BigDecimal> effectivePlannedByItem = relatedPlans.stream()
+                .filter(plan -> plan.getStatus() != ProductionPlanStatus.CANCELLED)
+                .filter(plan -> plan.getSourceOrderItemId() != null && !plan.getSourceOrderItemId().isBlank())
+                .collect(java.util.stream.Collectors.groupingBy(
+                        ProductionPlan::getSourceOrderItemId,
+                        java.util.stream.Collectors.reducing(
+                                BigDecimal.ZERO,
+                                plan -> plan.getSourceDisplayQuantity() != null
+                                        ? plan.getSourceDisplayQuantity()
+                                        : (plan.getPlannedQuantity() != null ? plan.getPlannedQuantity() : BigDecimal.ZERO),
+                                BigDecimal::add)));
 
         // SO 行 (权威来源): 按 id 索引, 只接受属于本 SO 的行
         java.util.Map<String, SalesOrderItem> itemById = new java.util.HashMap<>();
@@ -1109,11 +1128,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             // 转录"据销售领用量算出需领量"。全部已交付 → 拒绝该行 (防呆: 提示取消)。
             BigDecimal ordered = item.getQuantity() != null ? item.getQuantity() : BigDecimal.ZERO;
             BigDecimal delivered = item.getDeliveredQuantity() != null ? item.getDeliveredQuantity() : BigDecimal.ZERO;
-            BigDecimal remaining = ordered.subtract(delivered);
+            BigDecimal alreadyPlanned = effectivePlannedByItem.getOrDefault(itemId, BigDecimal.ZERO);
+            BigDecimal remaining = ordered.subtract(delivered).subtract(alreadyPlanned);
             if (remaining.compareTo(BigDecimal.ZERO) <= 0) {
-                throw new com.cretas.aims.exception.BusinessException(400,
-                        "产品行已全部交付, 无需生产: " + (item.getProductName() != null ? item.getProductName() : itemId))
-                        .withHint("请在产品行多选中取消该已交付产品");
+                throw new com.cretas.aims.exception.BusinessException(409,
+                        "产品行已被有效生产计划完整覆盖: " + (item.getProductName() != null ? item.getProductName() : itemId))
+                        .withCode("SALES_ORDER_ITEM_PLAN_ALREADY_EXISTS")
+                        .withHint("请查看现有生产计划；已取消计划不占用生产数量")
+                        .withHintTarget("sourceOrderItemId");
             }
             ProductType product = productTypeRepository
                     .findByIdAndFactoryId(item.getProductTypeId(), factoryId)

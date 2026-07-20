@@ -14,6 +14,7 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.WorkProcess;
@@ -1361,9 +1362,15 @@ public class YieldReportServiceImpl implements YieldReportService {
     public BatchYieldDTO getYield(String factoryId, Long batchId) {
         List<ProductionReport> reports = reportRepo.findYieldReportsByBatch(factoryId, batchId);
         // P0-2: 解析末道产品标准克重, 打通 kg↔份 折算 (跨单位且无克重时 cumulative 保持 null, 诚实)
-        BigDecimal gramsPerUnit = resolveGramsPerUnit(factoryId, reports);
-        BatchYieldDTO dto = calcSvc.calculateBatchYield(reports, gramsPerUnit);
+        ProductionBatch batch = productionBatchRepository.findByIdAndFactoryId(batchId, factoryId).orElse(null);
+        YieldUnitConversion conversion = resolvePinnedUnitConversion(factoryId, batch);
+        BatchYieldDTO dto = calcSvc.calculateBatchYield(reports, null);
+        if (batch != null) {
+            dto.setBatchId(batch.getId());
+            dto.setBatchNumber(batch.getBatchNumber());
+        }
         enrichFromProcessSheetRows(factoryId, batchId, dto);
+        applyPinnedUnitConversion(dto, conversion);
         // Process-sheet enrichment can replace the sparse report steps. Resolve names afterwards
         // so workflow-based clerk rows also receive their configured process names.
         enrichProcessNames(factoryId, batchId, dto);
@@ -1473,11 +1480,17 @@ public class YieldReportServiceImpl implements YieldReportService {
         BigDecimal totalLastOutput = lastOutputUnit == null ? null
                 : sumNonNull(batchYields, BatchYieldDTO::getLastStepOutput);
 
+        boolean everyBatchConverted = firstInputUnit != null && batchYields.stream()
+                .allMatch(batch -> batch.getLastStepOutputInFirstUnit() != null);
+        BigDecimal convertedLastOutput = everyBatchConverted
+                ? sumNonNull(batchYields, BatchYieldDTO::getLastStepOutputInFirstUnit)
+                : null;
+
         // 整体出成率 = 总产出 / 总投入 (scale 4 HALF_UP); 单位不可比或总投入 ≤ 0 → null
         BigDecimal overallYieldRate = null;
-        if (totalFirstInput != null && totalLastOutput != null
+        if (totalFirstInput != null && convertedLastOutput != null
                 && totalFirstInput.signum() > 0) {
-            overallYieldRate = totalLastOutput.divide(totalFirstInput, 4, RoundingMode.HALF_UP);
+            overallYieldRate = convertedLastOutput.divide(totalFirstInput, 4, RoundingMode.HALF_UP);
         }
 
         // 成本 null-safe 累加 (全 null → null, 绝不默认 0)
@@ -1490,6 +1503,8 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .batches(batchYields)
                 .totalFirstInput(totalFirstInput)
                 .totalLastOutput(totalLastOutput)
+                .convertedLastOutput(convertedLastOutput)
+                .yieldConversionStatus(everyBatchConverted ? "COMPLETE" : "UNAVAILABLE")
                 .overallYieldRate(overallYieldRate)
                 .firstInputUnit(firstInputUnit)
                 .lastOutputUnit(lastOutputUnit)
@@ -1670,24 +1685,6 @@ public class YieldReportServiceImpl implements YieldReportService {
     }
 
     /**
-     * P0-2: 取末道报工的 productTypeId → ProductType.gramsPerUnit (份/盒→kg 折算系数).
-     * reports 为空 / 无 productTypeId / 产品无克重 → null (calc 据此保持 cumulative=null, 不臆造).
-     */
-    private BigDecimal resolveGramsPerUnit(String factoryId, List<ProductionReport> reports) {
-        if (reports == null || reports.isEmpty()) return null;
-        // 同批同产品, 取任一 report 的 productTypeId 即可
-        String productTypeId = reports.stream()
-                .map(ProductionReport::getProductTypeId)
-                .filter(Objects::nonNull)
-                .findFirst()
-                .orElse(null);
-        if (productTypeId == null) return null;
-        return productTypeRepository.findByIdAndFactoryId(productTypeId, factoryId)
-                .map(pt -> pt.getGramsPerUnit())
-                .orElse(null);
-    }
-
-    /**
      * Clerk process-sheet rows are the source of truth for mixed-SKU / mixed-step entry.
      * A finished batch may only have a sparse final ProductionReport, so the summary API
      * must fill units and cumulative yield from the saved sheet rows for the same plan/SKU.
@@ -1743,15 +1740,13 @@ public class YieldReportServiceImpl implements YieldReportService {
         dto.setLastStepOutput(target.outputQuantity());
         dto.setLastStepOutputUnit(target.outputUnit());
 
-        BigDecimal gramsPerUnit = productTypeRepository.findByIdAndFactoryId(batch.getProductTypeId(), factoryId)
-                .map(ProductType::getGramsPerUnit)
-                .orElse(null);
-        BigDecimal cumulative = first == null ? null
-                : calculateCumulativeYieldRate(first.inputQuantity(), first.inputUnit(),
-                        target.outputQuantity(), target.outputUnit(), gramsPerUnit);
-        dto.setCumulativeYieldRate(cumulative);
+        Map<Integer, StepYieldDTO> reportStepsByOrder = dto.getSteps() == null ? Map.of()
+                : dto.getSteps().stream()
+                        .filter(step -> step.getProcessOrder() != null)
+                        .collect(Collectors.toMap(StepYieldDTO::getProcessOrder, step -> step, (left, right) -> left));
         dto.setSteps(sheetRows.stream()
-                .map(row -> toStepYield(row, first, gramsPerUnit))
+                .map(this::toStepYield)
+                .map(step -> mergeStepAudit(step, reportStepsByOrder.get(step.getProcessOrder())))
                 .toList());
         dto.setComplete(sheetRows.stream()
                 .allMatch(row -> positive(row.inputQuantity()) && row.outputQuantity() != null));
@@ -1842,15 +1837,7 @@ public class YieldReportServiceImpl implements YieldReportService {
         }
     }
 
-    private StepYieldDTO toStepYield(SheetYieldRow row, SheetYieldRow first, BigDecimal gramsPerUnit) {
-        boolean unitComparable = Objects.equals(row.inputUnit(), row.outputUnit());
-        BigDecimal stepYield = null;
-        if (unitComparable && positive(row.inputQuantity()) && row.outputQuantity() != null) {
-            stepYield = row.outputQuantity().divide(row.inputQuantity(), 4, RoundingMode.HALF_UP);
-        }
-        BigDecimal cumulative = first == null ? null
-                : calculateCumulativeYieldRate(first.inputQuantity(), first.inputUnit(),
-                        row.outputQuantity(), row.outputUnit(), gramsPerUnit);
+    private StepYieldDTO toStepYield(SheetYieldRow row) {
         return StepYieldDTO.builder()
                 .processOrder(row.processOrder())
                 .processName(row.processName())
@@ -1858,13 +1845,39 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .totalOutput(row.outputQuantity())
                 .inputUnit(row.inputUnit())
                 .outputUnit(row.outputUnit())
-                .yieldRate(stepYield)
-                .unitComparable(unitComparable)
-                .cumulativeYieldRate(cumulative)
+                .yieldRate(null)
+                .unitComparable(false)
+                .cumulativeYieldRate(null)
                 .byproducts(row.byproducts())
                 .sampleRetainQuantity(row.sampleRetainQuantity())
                 .packagingDetail(row.packagingDetail())
                 .build();
+    }
+
+    private StepYieldDTO mergeStepAudit(StepYieldDTO quantityStep, StepYieldDTO reportStep) {
+        if (reportStep == null) return quantityStep;
+        quantityStep.setWorkProcessTaskId(reportStep.getWorkProcessTaskId());
+        if (quantityStep.getProcessName() == null) quantityStep.setProcessName(reportStep.getProcessName());
+        quantityStep.setTotalWorkMinutes(reportStep.getTotalWorkMinutes());
+        quantityStep.setTotalWorkers(reportStep.getTotalWorkers());
+        quantityStep.setLaborCost(reportStep.getLaborCost());
+        quantityStep.setMaterialCost(reportStep.getMaterialCost());
+        quantityStep.setStepCost(reportStep.getStepCost());
+        quantityStep.setPhotos(reportStep.getPhotos());
+        quantityStep.setLaborSegments(reportStep.getLaborSegments());
+        quantityStep.setInputPhotos(reportStep.getInputPhotos());
+        quantityStep.setOutputPhotos(reportStep.getOutputPhotos());
+        quantityStep.setInputPhotoAnnotations(reportStep.getInputPhotoAnnotations());
+        quantityStep.setOutputPhotoAnnotations(reportStep.getOutputPhotoAnnotations());
+        quantityStep.setCostCategory(reportStep.getCostCategory());
+        if (quantityStep.getPackagingDetail() == null) {
+            quantityStep.setPackagingDetail(reportStep.getPackagingDetail());
+        }
+        quantityStep.setAuxPotNo(reportStep.getAuxPotNo());
+        quantityStep.setAuxPotTotalCost(reportStep.getAuxPotTotalCost());
+        quantityStep.setAuxAllocMethod(reportStep.getAuxAllocMethod());
+        quantityStep.setPhase(reportStep.getPhase());
+        return quantityStep;
     }
 
     private List<Map<String, Object>> convertByproducts(
@@ -1877,30 +1890,111 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .toList();
     }
 
-    private BigDecimal calculateCumulativeYieldRate(BigDecimal firstInput, String firstUnit,
-                                                     BigDecimal output, String outputUnit,
-                                                     BigDecimal gramsPerUnit) {
-        if (!positive(firstInput) || output == null) {
+    private YieldUnitConversion resolvePinnedUnitConversion(String factoryId, ProductionBatch batch) {
+        if (batch == null || batch.getProductionPlanId() == null) {
             return null;
         }
-        BigDecimal converted = convertToFirstStepUnit(output, outputUnit, firstUnit, gramsPerUnit);
-        if (converted == null) {
+        ProductionPlan plan = productionPlanRepository
+                .findByIdAndFactoryId(batch.getProductionPlanId(), factoryId)
+                .orElse(null);
+        if (plan == null) {
             return null;
         }
-        return converted.divide(firstInput, 4, RoundingMode.HALF_UP);
+        return new YieldUnitConversion(plan.getPlannedUnit(), plan.getPlannedNetWeightGrams(),
+                plan.getId(), plan.getSelectedWorkflowId(), plan.getSelectedWorkflowVersion());
     }
 
-    private BigDecimal convertToFirstStepUnit(BigDecimal output, String outputUnit,
-                                               String firstUnit, BigDecimal gramsPerUnit) {
-        if (output == null) return null;
-        if (outputUnit == null || firstUnit == null || outputUnit.equals(firstUnit)) {
-            return output;
+    /** Recalculate every rate using only the production plan's historical unit authority. */
+    private void applyPinnedUnitConversion(BatchYieldDTO dto, YieldUnitConversion conversion) {
+        if (dto == null) return;
+        dto.setPinnedOutputUnit(conversion == null ? null : conversion.countUnit());
+        dto.setPinnedNetWeightGrams(conversion == null ? null : conversion.gramsPerUnit());
+        List<StepYieldDTO> steps = dto.getSteps() == null ? List.of() : dto.getSteps();
+        BigDecimal firstInput = dto.getFirstStepInput();
+        String firstUnit = dto.getFirstStepInputUnit();
+        for (StepYieldDTO step : steps) {
+            BigDecimal convertedStepOutput = convertQuantity(
+                    step.getTotalOutput(), step.getOutputUnit(), step.getInputUnit(), conversion);
+            boolean comparable = positive(step.getTotalInput()) && convertedStepOutput != null;
+            step.setUnitComparable(comparable);
+            step.setYieldRate(comparable
+                    ? convertedStepOutput.divide(step.getTotalInput(), 4, RoundingMode.HALF_UP)
+                    : null);
+            BigDecimal convertedCumulativeOutput = convertQuantity(
+                    step.getTotalOutput(), step.getOutputUnit(), firstUnit, conversion);
+            step.setCumulativeYieldRate(positive(firstInput) && convertedCumulativeOutput != null
+                    ? convertedCumulativeOutput.divide(firstInput, 4, RoundingMode.HALF_UP)
+                    : null);
         }
-        if (gramsPerUnit == null || gramsPerUnit.compareTo(BigDecimal.ZERO) <= 0) {
+        BigDecimal convertedLast = convertQuantity(dto.getLastStepOutput(), dto.getLastStepOutputUnit(),
+                firstUnit, conversion);
+        dto.setLastStepOutputInFirstUnit(convertedLast);
+        dto.setCumulativeYieldRate(positive(firstInput) && convertedLast != null
+                ? convertedLast.divide(firstInput, 4, RoundingMode.HALF_UP)
+                : null);
+
+        String from = normalizeUnit(dto.getLastStepOutputUnit());
+        String to = normalizeUnit(firstUnit);
+        if (convertedLast == null) {
+            dto.setYieldConversionStatus("MISSING_PINNED_CONVERSION");
+            dto.setYieldConversionBasis(null);
+        } else if (Objects.equals(from, to)) {
+            dto.setYieldConversionStatus("DIRECT");
+            dto.setYieldConversionBasis(dto.getLastStepOutput() + " " + dto.getLastStepOutputUnit());
+        } else {
+            dto.setYieldConversionStatus("CONVERTED_WITH_PLAN_PIN");
+            dto.setYieldConversionBasis(dto.getLastStepOutput() + " " + dto.getLastStepOutputUnit()
+                    + " x " + conversion.gramsPerUnit() + " g/" + conversion.countUnit()
+                    + " = " + convertedLast.stripTrailingZeros().toPlainString() + " " + firstUnit);
+        }
+    }
+
+    private BigDecimal convertQuantity(BigDecimal quantity, String fromUnit, String toUnit,
+                                       YieldUnitConversion conversion) {
+        if (quantity == null) return null;
+        String from = normalizeUnit(fromUnit);
+        String to = normalizeUnit(toUnit);
+        if (from == null || to == null) return null;
+        if (from.equals(to)) return quantity;
+        BigDecimal kilograms = toKilograms(quantity, from, conversion);
+        if (kilograms == null) return null;
+        if ("kg".equals(to)) return kilograms;
+        if ("g".equals(to)) return kilograms.multiply(BigDecimal.valueOf(1000));
+        if (conversion == null || conversion.gramsPerUnit() == null
+                || conversion.gramsPerUnit().signum() <= 0
+                || !to.equals(normalizeUnit(conversion.countUnit()))) {
             return null;
         }
-        return output.multiply(gramsPerUnit)
+        return kilograms.multiply(BigDecimal.valueOf(1000))
+                .divide(conversion.gramsPerUnit(), 4, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal toKilograms(BigDecimal quantity, String unit, YieldUnitConversion conversion) {
+        if ("kg".equals(unit)) return quantity;
+        if ("g".equals(unit)) return quantity.divide(BigDecimal.valueOf(1000), 4, RoundingMode.HALF_UP);
+        if (conversion == null || conversion.gramsPerUnit() == null
+                || conversion.gramsPerUnit().signum() <= 0
+                || !unit.equals(normalizeUnit(conversion.countUnit()))) {
+            return null;
+        }
+        return quantity.multiply(conversion.gramsPerUnit())
                 .divide(BigDecimal.valueOf(1000), 4, RoundingMode.HALF_UP);
+    }
+
+    private String normalizeUnit(String unit) {
+        if (unit == null || unit.isBlank()) return null;
+        return switch (unit.trim().toLowerCase()) {
+            case "kg", "kilogram", "kilograms", "千克", "公斤" -> "kg";
+            case "g", "gram", "grams", "克" -> "g";
+            case "box", "boxes", "盒" -> "box";
+            case "case", "cases", "箱" -> "case";
+            case "slice", "slices", "片" -> "slice";
+            default -> unit.trim().toLowerCase();
+        };
+    }
+
+    private record YieldUnitConversion(String countUnit, BigDecimal gramsPerUnit,
+                                       String planId, Long workflowId, Integer workflowVersion) {
     }
 
     private BigDecimal firstPositiveOrNull(BigDecimal... values) {

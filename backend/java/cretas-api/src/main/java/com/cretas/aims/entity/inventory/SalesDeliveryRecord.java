@@ -69,6 +69,22 @@ public class SalesDeliveryRecord extends BaseEntity {
     @Column(name = "sales_order_id", length = 191)
     private String salesOrderId;
 
+    /** 母发货单 ID。NULL 表示母单/历史单；非 NULL 表示一次实际子发运。 */
+    @Column(name = "parent_delivery_id", length = 191)
+    private String parentDeliveryId;
+
+    /** MASTER / SHIPMENT / LEGACY。历史数据默认 LEGACY，保持原有单层流程。 */
+    @Column(name = "record_role", nullable = false, length = 16)
+    private String recordRole = "LEGACY";
+
+    /** 子发运顺序号，用于生成母单号-01/-02。 */
+    @Column(name = "shipment_sequence")
+    private Integer shipmentSequence;
+
+    /** 客户端幂等键；同一业务主体和键只生成一次。 */
+    @Column(name = "idempotency_key", length = 191)
+    private String idempotencyKey;
+
     /**
      * headed-audit fix (2026-07-03): same rationale as {@link #customerName} — the
      * {@link #salesOrder} relation is {@code @JsonIgnore}d, so the 待确认发货单 list
@@ -108,6 +124,10 @@ public class SalesDeliveryRecord extends BaseEntity {
     /** 物流单号 */
     @Column(name = "tracking_number", length = 100)
     private String trackingNumber;
+
+    /** LOGISTICS / SELF_PICKUP / SELF_DELIVERY. Null means legacy data. */
+    @Column(name = "delivery_method", length = 30)
+    private String deliveryMethod;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 32)

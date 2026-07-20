@@ -642,3 +642,32 @@ textarea:focus-visible {
   font-style: italic;
   user-select: none;
 }
+
+/* Global semantic table sizing (2026-07-20).
+ * Business names, SKU descriptions, addresses and remarks must remain readable.
+ * Element Plus' default single-line ellipsis hid identity-bearing text and forced
+ * every screen to guess a fixed width. Let content establish the natural width,
+ * keep short numeric/status columns compact, and wrap when the viewport is the
+ * limiting factor. Tables still retain their native horizontal scrollbar. */
+.el-table .el-table__header,
+.el-table .el-table__body,
+.el-table .el-table__footer {
+  table-layout: auto !important;
+  min-width: 100% !important;
+}
+
+.el-table .cell {
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.el-table td.semantic-text-column .cell,
+.el-table td[class*="name"] .cell,
+.el-table td[class*="address"] .cell,
+.el-table td[class*="remark"] .cell {
+  min-width: max-content;
+  max-width: 32rem;
+}

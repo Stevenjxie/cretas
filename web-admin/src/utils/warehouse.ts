@@ -99,20 +99,21 @@ export function warehouseNameByCode(
 export type WarehouseTypeBadge = {
   label: string;
   color: string;
+  textColor: string;
 };
 
 const WAREHOUSE_TYPE_BADGE_MAP: Record<string, WarehouseTypeBadge> = {
-  RAW:       { label: '原料仓', color: '#409eff' },
-  WIP:       { label: '生产仓', color: '#e6a23c' },
-  FINISHED:  { label: '生产仓', color: '#e6a23c' },
-  LINESIDE:  { label: '生产仓', color: '#e6a23c' },
-  OUTSOURCE: { label: '外仓',   color: '#909399' },
-  TRANSFER:  { label: '外仓',   color: '#909399' },
-  SALTED:    { label: '盐化仓', color: '#67c23a' },
-  RETURNS:   { label: '退货仓', color: '#f56c6c' },
-  SCRAP:     { label: '报废仓', color: '#f56c6c' },
-  TEMP:      { label: '临时仓', color: '#909399' },
-  QC:        { label: '质检仓', color: '#9b59b6' },
+  RAW:       { label: '原料仓', color: '#005EA8', textColor: '#FFFFFF' },
+  WIP:       { label: '生产仓', color: '#714800', textColor: '#FFFFFF' },
+  FINISHED:  { label: '生产仓', color: '#714800', textColor: '#FFFFFF' },
+  LINESIDE:  { label: '生产仓', color: '#714800', textColor: '#FFFFFF' },
+  OUTSOURCE: { label: '外仓',   color: '#4B5563', textColor: '#FFFFFF' },
+  TRANSFER:  { label: '外仓',   color: '#4B5563', textColor: '#FFFFFF' },
+  SALTED:    { label: '盐化仓', color: '#176B3A', textColor: '#FFFFFF' },
+  RETURNS:   { label: '退货仓', color: '#9D211C', textColor: '#FFFFFF' },
+  SCRAP:     { label: '报废仓', color: '#9D211C', textColor: '#FFFFFF' },
+  TEMP:      { label: '临时仓', color: '#4B5563', textColor: '#FFFFFF' },
+  QC:        { label: '质检仓', color: '#6521A7', textColor: '#FFFFFF' },
 };
 
 export function warehouseTypeBadge(type: string | null | undefined): WarehouseTypeBadge | null {

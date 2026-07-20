@@ -74,6 +74,8 @@ class StocktakeWorkflowIntegrationTest {
                 materialConsumptionRepo);
         // Inject optional workflowEngine via ReflectionTestUtils
         ReflectionTestUtils.setField(service, "workflowEngine", workflowEngine);
+        lenient().when(stocktakeRepo.findByIdAndFactoryIdForUpdate(anyString(), eq(FACTORY_ID)))
+                .thenAnswer(invocation -> stocktakeRepo.findById(invocation.getArgument(0)));
     }
 
     // -------------------------------------------------------

@@ -7,6 +7,7 @@ import lombok.Data;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -20,15 +21,31 @@ public class StocktakeDTO {
     private String stocktakeNo;
     private String warehouseId;
     private String periodMonth;
+    private LocalDateTime inventoryCutoffAt;
+    private LocalDateTime countingStartedAt;
+    private LocalDateTime reconciliationStartAt;
+    private LocalDateTime reconciliationEndAt;
+    private String reconciliationPreset;
+    private Long version;
     private String status;
     private Long initiatedBy;
+    private String initiatedByDisplay;
     private LocalDateTime initiatedAt;
     private Long submittedBy;
+    private String submittedByDisplay;
     private LocalDateTime submittedAt;
     private Long approvedBy;
+    private String approvedByDisplay;
     private LocalDateTime approvedAt;
     private String rejectReason;
     private LocalDateTime appliedAt;
+    private Long countedBy;
+    private String countedByDisplay;
+    private Long appliedBy;
+    private String appliedByDisplay;
+    private boolean selfConfirmedZeroDifference;
+    private boolean historicalTimingFallback;
+    private ApprovalEvidence approvalEvidence;
     private String notes;
     private LocalDateTime createdAt;
     private String workflowInstanceId;
@@ -37,11 +54,31 @@ public class StocktakeDTO {
     private List<StocktakeItemDTO> items;
 
     @Data
+    public static class ApprovalEvidence {
+        private int totalCount;
+        private int countedCount;
+        private int uncountedCount;
+        private int matchCount;
+        private int surplusCount;
+        private int shortageCount;
+        private Map<String, BigDecimal> surplusQuantityByUnit;
+        private Map<String, BigDecimal> shortageQuantityByUnit;
+        private boolean inventoryImpact;
+        private String inventoryImpactMessage;
+    }
+
+    @Data
     public static class StocktakeItemDTO {
         private String id;
         private String stocktakeId;
         private String materialBatchId;
         private String rawMaterialTypeId;
+        /** Business-facing batch identity. materialBatchId remains the internal UUID. */
+        private String batchNumber;
+        private String materialCode;
+        private String materialName;
+        /** Canonical inventory unit, e.g. kg/box/case/slice. */
+        private String quantityUnit;
         private BigDecimal systemQty;
         private BigDecimal actualQty;
         private BigDecimal differenceQty;
@@ -72,6 +109,12 @@ public class StocktakeDTO {
         dto.setStocktakeNo(stocktake.getStocktakeNo());
         dto.setWarehouseId(stocktake.getWarehouseId());
         dto.setPeriodMonth(stocktake.getPeriodMonth());
+        dto.setInventoryCutoffAt(stocktake.getInventoryCutoffAt());
+        dto.setCountingStartedAt(stocktake.getCountingStartedAt());
+        dto.setReconciliationStartAt(stocktake.getReconciliationStartAt());
+        dto.setReconciliationEndAt(stocktake.getReconciliationEndAt());
+        dto.setReconciliationPreset(stocktake.getReconciliationPreset());
+        dto.setVersion(stocktake.getVersion());
         dto.setStatus(stocktake.getStatus() != null ? stocktake.getStatus().name() : null);
         dto.setInitiatedBy(stocktake.getInitiatedBy());
         dto.setInitiatedAt(stocktake.getInitiatedAt());
@@ -81,6 +124,10 @@ public class StocktakeDTO {
         dto.setApprovedAt(stocktake.getApprovedAt());
         dto.setRejectReason(stocktake.getRejectReason());
         dto.setAppliedAt(stocktake.getAppliedAt());
+        dto.setCountedBy(stocktake.getCountedBy());
+        dto.setAppliedBy(stocktake.getAppliedBy());
+        dto.setSelfConfirmedZeroDifference(stocktake.isSelfConfirmedZeroDifference());
+        dto.setHistoricalTimingFallback(stocktake.getInventoryCutoffAt() == null);
         dto.setNotes(stocktake.getNotes());
         dto.setCreatedAt(stocktake.getCreatedAt());
         dto.setWorkflowInstanceId(stocktake.getWorkflowInstanceId());

@@ -40,6 +40,10 @@ public class SalesDeliveryItem extends BaseEntity {
     @Column(name = "delivery_record_id", nullable = false, length = 191)
     private String deliveryRecordId;
 
+    /** 精确关联销售订单行；多行同 SKU 时不可退化为 productTypeId 猜测。 */
+    @Column(name = "sales_order_item_id")
+    private Long salesOrderItemId;
+
     @Column(name = "product_type_id", nullable = false, length = 191)
     private String productTypeId;
 

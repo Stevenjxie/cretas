@@ -70,7 +70,8 @@ class OrderCostBreakdownSfiFeedTest {
         service = new OrderCostBreakdownService(
                 planRepository, batchRepository, consumptionRepository, materialBatchRepository,
                 productionReportRepository, yieldReportService,
-                processSheetRowRepository, wipInventoryService, finishedGoodsFeedService, objectMapper);
+                processSheetRowRepository, wipInventoryService, finishedGoodsFeedService, objectMapper,
+                null);
 
         ProductionBatch b = new ProductionBatch();
         b.setId(batchId);

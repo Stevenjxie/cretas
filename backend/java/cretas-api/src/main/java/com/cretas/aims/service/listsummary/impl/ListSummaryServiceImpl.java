@@ -3,6 +3,7 @@ package com.cretas.aims.service.listsummary.impl;
 import com.cretas.aims.dto.listsummary.ListSummaryRequest;
 import com.cretas.aims.dto.listsummary.ListSummaryResponse;
 import com.cretas.aims.dto.listsummary.ListSummaryResponse.SummaryStat;
+import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.listsummary.ListSummaryService;
 import jakarta.persistence.EntityManager;
@@ -296,26 +297,91 @@ public class ListSummaryServiceImpl implements ListSummaryService {
 
     private ListSummaryResponse computeProductionPlanSummary(String factoryId, Map<String, Object> filter,
                                                               LocalDate from, LocalDate to) {
+        // Keep the footer on exactly the same search/status semantics as
+        // ProductionPlanServiceImpl#getProductionPlanList. In particular,
+        // UNFINISHED/ACTIVE are virtual filters and keyword searches both the
+        // plan number and product name. Quantities are grouped by canonical
+        // unit so kg/box/case are never silently added together.
+        String canonicalUnitSql = "CASE lower(btrim(p.planned_unit)) " +
+                "WHEN '盒' THEN 'box' WHEN '箱' THEN 'case' WHEN '片' THEN 'slice' " +
+                "WHEN '公斤' THEN 'kg' WHEN '千克' THEN 'kg' WHEN '克' THEN 'g' " +
+                "ELSE lower(btrim(p.planned_unit)) END";
         StringBuilder sql = new StringBuilder(
-                "SELECT COUNT(*), COALESCE(SUM(planned_quantity), 0), COALESCE(SUM(actual_quantity), 0) " +
-                "FROM production_plans WHERE factory_id = :fid AND deleted_at IS NULL");
-        appendStatusFilter(sql, filter);
-        appendDateRange(sql, "planned_date", from, to);
+                "SELECT " + canonicalUnitSql + " AS canonical_unit, COUNT(*), " +
+                "COALESCE(SUM(p.planned_quantity), 0), COALESCE(SUM(p.actual_quantity), 0) " +
+                "FROM production_plans p " +
+                "LEFT JOIN product_types pt ON pt.id = p.product_type_id AND pt.factory_id = p.factory_id " +
+                "WHERE p.factory_id = :fid AND p.deleted_at IS NULL");
+
+        String keyword = filter.get("keyword") == null ? null : String.valueOf(filter.get("keyword")).trim();
+        if (keyword != null && !keyword.isBlank()) {
+            sql.append(" AND (LOWER(p.plan_number) LIKE LOWER(CONCAT('%', :keyword, '%'))")
+                    .append(" OR LOWER(pt.name) LIKE LOWER(CONCAT('%', :keyword, '%')))");
+        }
+
+        String status = filter.get("status") == null ? null : String.valueOf(filter.get("status")).trim();
+        boolean bindStatus = false;
+        if (status != null && !status.isBlank()) {
+            String normalized = status.toUpperCase(java.util.Locale.ROOT);
+            if ("UNFINISHED".equals(normalized) || "ACTIVE".equals(normalized)) {
+                sql.append(" AND UPPER(p.status) IN ('PENDING', 'IN_PROGRESS')");
+            } else {
+                try {
+                    ProductionPlanStatus.valueOf(normalized);
+                    sql.append(" AND UPPER(p.status) = UPPER(:status)");
+                    bindStatus = true;
+                    status = normalized;
+                } catch (IllegalArgumentException ignored) {
+                    // Match the list endpoint: an unknown status falls back to
+                    // the unfiltered list instead of returning a misleading 0.
+                }
+            }
+        }
+        appendDateRange(sql, "p.planned_date", from, to);
+        sql.append(" GROUP BY ").append(canonicalUnitSql).append(" ORDER BY canonical_unit");
+
         Query q = em.createNativeQuery(sql.toString());
-        bindParams(q, factoryId, filter, from, to);
-        Object[] row = (Object[]) q.getSingleResult();
-        long count = ((Number) row[0]).longValue();
-        BigDecimal planned = (BigDecimal) row[1];
-        BigDecimal actual = (BigDecimal) row[2];
-        BigDecimal completionRate = planned.signum() > 0
-                ? actual.multiply(BigDecimal.valueOf(100)).divide(planned, 1, RoundingMode.HALF_UP)
-                : BigDecimal.ZERO;
+        q.setParameter("fid", factoryId);
+        if (keyword != null && !keyword.isBlank()) q.setParameter("keyword", keyword);
+        if (bindStatus) q.setParameter("status", status);
+        if (from != null) q.setParameter("dateFrom", from);
+        if (to != null) q.setParameter("dateTo", to);
+
+        @SuppressWarnings("unchecked")
+        List<Object[]> rows = q.getResultList();
+        long count = rows.stream().mapToLong(row -> ((Number) row[1]).longValue()).sum();
         List<SummaryStat> stats = new ArrayList<>();
         stats.add(stat("共", count, "number", "条", false));
-        stats.add(stat("计划数量", planned, "number", "", false));
-        stats.add(stat("完成数量", actual, "number", "", false));
-        stats.add(stat("完成率", completionRate, "percent", "%", false));
+        boolean multipleUnits = rows.size() > 1;
+        for (Object[] row : rows) {
+            String canonicalUnit = row[0] == null ? "unknown" : String.valueOf(row[0]);
+            String displayUnit = displayUnit(canonicalUnit);
+            BigDecimal planned = toBigDecimal(row[2]);
+            BigDecimal actual = toBigDecimal(row[3]);
+            BigDecimal completionRate = planned.signum() > 0
+                    ? actual.multiply(BigDecimal.valueOf(100)).divide(planned, 1, RoundingMode.HALF_UP)
+                    : BigDecimal.ZERO;
+            String suffix = multipleUnits ? "（" + displayUnit + "）" : "";
+            stats.add(stat("计划数量" + suffix, planned, "number", displayUnit, false));
+            stats.add(stat("完成数量" + suffix, actual, "number", displayUnit, false));
+            stats.add(stat("完成率" + suffix, completionRate, "percent", "%", false));
+        }
         return ListSummaryResponse.builder().entityType("productionPlan").stats(stats).build();
+    }
+
+    private static BigDecimal toBigDecimal(Object value) {
+        if (value == null) return BigDecimal.ZERO;
+        return value instanceof BigDecimal decimal ? decimal : new BigDecimal(value.toString());
+    }
+
+    private static String displayUnit(String canonicalUnit) {
+        return switch (canonicalUnit.toLowerCase(java.util.Locale.ROOT)) {
+            case "box" -> "盒";
+            case "case" -> "箱";
+            case "slice" -> "片";
+            case "unknown", "" -> "未归类";
+            default -> canonicalUnit;
+        };
     }
 
     // ==================== 发货 ====================
