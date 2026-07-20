@@ -1,6 +1,8 @@
 package com.cretas.aims.service.bom;
 
+import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.dto.bom.BomSeasoningWorkspaceResponse;
+import com.cretas.aims.dto.bom.BomSubstituteInput;
 import com.cretas.aims.dto.bom.SeasoningBindingCreateRequest;
 import com.cretas.aims.dto.workflow.WorkflowRevisionCandidateDTO;
 import com.cretas.aims.entity.ProductWorkProcess;
@@ -27,7 +29,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -46,6 +51,7 @@ class BomSeasoningWorkspaceServiceTest {
     @Mock RawMaterialTypeRepository materialTypeRepository;
     @Mock ProductWorkflowResolutionService workflowResolutionService;
     @Mock BomWorkflowRevisionService bomWorkflowRevisionService;
+    @Mock BomItemSubstituteService substituteService;
     @InjectMocks BomSeasoningWorkspaceServiceImpl service;
 
     @Test
@@ -75,6 +81,9 @@ class BomSeasoningWorkspaceServiceTest {
         assertEquals(1, response.getWorkflowTargetCount());
         assertEquals("product-1", response.getWorkflowTargetProductTypeId());
         assertEquals(3, response.getProcesses().size());
+        assertEquals(BigDecimal.ONE, response.getProcesses().get(0).getStandardBasisQuantity());
+        assertEquals("kg", response.getProcesses().get(0).getStandardBasisUnit());
+        assertTrue(response.getProcesses().get(0).isStandardUsageSupported());
         assertTrue(response.getProcesses().get(2).getBindings().isEmpty());
         assertEquals(1, response.getMaterialSummaries().size());
         assertEquals(2, response.getMaterialSummaries().get(0).getProcessUsages().size());
@@ -100,6 +109,22 @@ class BomSeasoningWorkspaceServiceTest {
                 .map(BomSeasoningWorkspaceResponse.ProcessView::getWorkProcessId).toList());
         verify(productWorkProcessRepository, never())
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(anyString(), anyString());
+        verifyNoInteractions(workflowResolutionService);
+    }
+
+    @Test
+    void workspaceKeepsActiveBomOnItsPinnedRevisionWhenCurrentWorkflowHasMoved() {
+        BomRecipe recipe = recipe(BomRecipe.Status.ACTIVE, 3L);
+        when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
+        pin(recipe, "pinned-v1");
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY), anyList())).thenReturn(List.of(
+                workProcess("pinned-v1", "历史固定工序")));
+        when(seasoningItemRepository.findByRecipeIdOrderBySeqAsc(RECIPE)).thenReturn(List.of());
+        when(materialTypeRepository.findAllById(any())).thenReturn(List.of());
+        BomSeasoningWorkspaceResponse response = service.getWorkspace(FACTORY, RECIPE);
+
+        assertEquals(List.of("pinned-v1"), response.getProcesses().stream()
+                .map(BomSeasoningWorkspaceResponse.ProcessView::getWorkProcessId).toList());
         verifyNoInteractions(workflowResolutionService);
     }
 
@@ -132,6 +157,35 @@ class BomSeasoningWorkspaceServiceTest {
         assertNull(captor.getValue().getPriceSource2());
         assertEquals("p2", captor.getValue().getWorkProcessId());
         assertEquals("node-p2", captor.getValue().getWorkflowProcessNodeId());
+        verify(substituteService).replaceForSeasoningItem(FACTORY, RECIPE, 22L, List.of());
+    }
+
+    @Test
+    void createPersistsSeasoningAndItsNodeScopedSubstitutesAsOneServiceOperation() {
+        BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 4L);
+        when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
+        pin(recipe, "p2");
+        when(materialTypeRepository.findById("salt")).thenReturn(Optional.of(material("salt")));
+        when(seasoningItemRepository.findByRecipeIdAndWorkflowProcessNodeIdAndMaterialTypeId(
+                RECIPE, "node-p2", "salt")).thenReturn(Optional.empty());
+        when(seasoningItemRepository.findByRecipeIdAndWorkflowProcessNodeIdOrderBySeqAsc(RECIPE, "node-p2"))
+                .thenReturn(List.of());
+        when(recipeRepository.claimSeasoningRevision(RECIPE, FACTORY, 4L)).thenReturn(1);
+        when(seasoningItemRepository.save(any())).thenAnswer(inv -> {
+            BomSeasoningItem saved = inv.getArgument(0);
+            saved.setId(23L);
+            return saved;
+        });
+        BomSubstituteInput substitute = new BomSubstituteInput();
+        substitute.setMaterialTypeId("pepper");
+        substitute.setConversionFactor(new BigDecimal("1.25"));
+        SeasoningBindingCreateRequest request = createRequest(4L, "node-p2");
+        request.setSubstitutes(List.of(substitute));
+
+        service.createBinding(FACTORY, RECIPE, "p2", request);
+
+        verify(substituteService).replaceForSeasoningItem(
+                FACTORY, RECIPE, 23L, request.getSubstitutes());
     }
 
     @Test
@@ -231,13 +285,21 @@ class BomSeasoningWorkspaceServiceTest {
     }
 
     private void pin(BomRecipe recipe, String... processIds) {
-        List<PinnedWorkflowGraph.ProcessStep> steps = new java.util.ArrayList<>();
+        List<PinnedWorkflowGraph.ProcessStep> steps = new ArrayList<>();
+        List<ProductProcessWorkflowDTO.Node> nodes = new ArrayList<>();
         for (int i = 0; i < processIds.length; i++) {
             steps.add(new PinnedWorkflowGraph.ProcessStep("node-" + processIds[i], processIds[i], i + 1));
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("workProcessId", processIds[i]);
+            data.put("outputUnit", "kg");
+            data.put("ports", List.of(Map.of("direction", "OUTPUT", "unit", "kg")));
+            nodes.add(new ProductProcessWorkflowDTO.Node(
+                    "node-" + processIds[i], "PROCESS",
+                    new ProductProcessWorkflowDTO.Position((double) i, 0D), data));
         }
         when(bomWorkflowRevisionService.resolvePinnedGraph(FACTORY, recipe)).thenReturn(
                 new PinnedWorkflowGraph(101L, 41L, 1, "hash-101", "product-1", "finished",
-                        List.of("raw-1"), steps, List.of(), List.of()));
+                        List.of("raw-1"), steps, nodes, List.of()));
         lenient().when(bomWorkflowRevisionService.listCompatible(FACTORY, RECIPE)).thenReturn(List.of(
                 WorkflowRevisionCandidateDTO.builder()
                         .revisionId(101L)

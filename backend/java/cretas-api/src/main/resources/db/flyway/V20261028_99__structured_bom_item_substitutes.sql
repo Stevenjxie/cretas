@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS bom_item_substitutes (
     parent_material_name_snapshot       VARCHAR(200) NOT NULL,
     material_category_snapshot          VARCHAR(32)  NOT NULL,
     work_process_id_snapshot            VARCHAR(50),
+    workflow_process_node_id_snapshot   VARCHAR(128),
     packaging_spec_id_snapshot          VARCHAR(36),
     packaging_role_snapshot             VARCHAR(64),
     substitute_material_type_id         VARCHAR(191) NOT NULL,
@@ -51,7 +52,8 @@ CREATE TABLE IF NOT EXISTS bom_item_substitutes (
     CONSTRAINT chk_bis_parent_scope CHECK (
         (parent_kind = 'SEASONING_ITEM'
             AND material_category_snapshot = 'AUXILIARY'
-            AND work_process_id_snapshot IS NOT NULL)
+            AND work_process_id_snapshot IS NOT NULL
+            AND workflow_process_node_id_snapshot IS NOT NULL)
         OR
         (parent_kind = 'RECIPE_ITEM'
             AND material_category_snapshot IN ('RAW', 'PACKAGING'))

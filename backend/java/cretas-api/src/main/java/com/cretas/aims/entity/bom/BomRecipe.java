@@ -96,6 +96,13 @@ public class BomRecipe extends BaseEntity {
     @Builder.Default
     private String outputUnit = "g";
 
+    /** 该 BOM 版本固定的 SKU 净含量；不得与每单位产出数量混用。 */
+    @Column(name = "net_content_quantity", precision = 15, scale = 6)
+    private BigDecimal netContentQuantity;
+
+    @Column(name = "net_content_unit", length = 20)
+    private String netContentUnit;
+
     /** Sum of bom_recipe_items.itemCost. @PriceSensitive: stripped for non-procurement-price roles. */
     @PriceSensitive
     @Column(name = "total_material_cost", precision = 15, scale = 4)

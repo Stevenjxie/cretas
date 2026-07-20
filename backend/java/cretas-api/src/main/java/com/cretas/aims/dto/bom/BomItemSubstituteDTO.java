@@ -21,6 +21,7 @@ public class BomItemSubstituteDTO {
     private String parentMaterialName;
     private String materialCategory;
     private String workProcessId;
+    private String workflowProcessNodeId;
     private String packagingSpecId;
     private String packagingRole;
     private String substituteMaterialTypeId;

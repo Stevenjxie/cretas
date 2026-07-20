@@ -190,7 +190,7 @@ public class BomItemSubstituteServiceImpl implements BomItemSubstituteService {
                 throw error(400, "物料不能替代自身", "BOM_SUBSTITUTE_SELF_REFERENCE");
             }
             RawMaterialType substitute = ownedActiveMaterial(parent.factoryId(), substituteId);
-            ensureSameMaterialFamily(parent.parentMaterial(), substitute);
+            ensureCompatibleMaterialFamily(parent, substitute);
 
             String parentUnit = canonicalUnit(parent.factoryId(), parent.unit(), "主项");
             String substituteUnit = canonicalUnit(parent.factoryId(), substitute.getUnit(), "替代物料");
@@ -233,6 +233,7 @@ public class BomItemSubstituteServiceImpl implements BomItemSubstituteService {
                 .parentMaterialNameSnapshot(parent.materialName())
                 .materialCategorySnapshot(parent.materialCategory())
                 .workProcessIdSnapshot(parent.workProcessId())
+                .workflowProcessNodeIdSnapshot(parent.workflowProcessNodeId())
                 .packagingSpecIdSnapshot(parent.packagingSpecId())
                 .packagingRoleSnapshot(parent.packagingRole())
                 .substituteMaterialTypeId(substitute.getId())
@@ -276,7 +277,7 @@ public class BomItemSubstituteServiceImpl implements BomItemSubstituteService {
                 factoryId, recipeId, BomItemSubstitute.ParentKind.RECIPE_ITEM,
                 item.getId(), null, material.getId(),
                 valueOrFallback(item.getMaterialName(), material.getName()), category,
-                null, item.getPackagingSpecId(), item.getPackagingRole(), item.getUnit(), material);
+                null, null, item.getPackagingSpecId(), item.getPackagingRole(), item.getUnit(), material);
     }
 
     private ParentContext ownedSeasoningItem(
@@ -296,6 +297,11 @@ public class BomItemSubstituteServiceImpl implements BomItemSubstituteService {
                     "工序辅料尚未绑定工序，不能配置替代物料",
                     "BOM_SUBSTITUTE_AUXILIARY_PROCESS_REQUIRED");
         }
+        if (trimToNull(item.getWorkflowProcessNodeId()) == null) {
+            throw error(409,
+                    "工序辅料缺少 Workflow 工序节点快照，不能配置替代物料",
+                    "BOM_SUBSTITUTE_AUXILIARY_NODE_REQUIRED");
+        }
         if (trimToNull(item.getMaterialTypeId()) == null) {
             throw error(409,
                     "历史工序辅料缺少物料身份，请先补齐后再配置替代物料",
@@ -306,7 +312,8 @@ public class BomItemSubstituteServiceImpl implements BomItemSubstituteService {
                 factoryId, recipeId, BomItemSubstitute.ParentKind.SEASONING_ITEM,
                 null, item.getId(), material.getId(),
                 valueOrFallback(item.getName(), material.getName()), "AUXILIARY",
-                item.getWorkProcessId(), null, null, material.getUnit(), material);
+                item.getWorkProcessId(), item.getWorkflowProcessNodeId(),
+                null, null, material.getUnit(), material);
     }
 
     private ParentContext mappedTargetParent(
@@ -344,6 +351,7 @@ public class BomItemSubstituteServiceImpl implements BomItemSubstituteService {
                 .parentMaterialNameSnapshot(target.materialName())
                 .materialCategorySnapshot(target.materialCategory())
                 .workProcessIdSnapshot(target.workProcessId())
+                .workflowProcessNodeIdSnapshot(target.workflowProcessNodeId())
                 .packagingSpecIdSnapshot(target.packagingSpecId())
                 .packagingRoleSnapshot(target.packagingRole())
                 .substituteMaterialTypeId(source.getSubstituteMaterialTypeId())
@@ -360,6 +368,7 @@ public class BomItemSubstituteServiceImpl implements BomItemSubstituteService {
         if (!Objects.equals(source.getParentMaterialTypeIdSnapshot(), target.materialTypeId())
                 || !Objects.equals(source.getMaterialCategorySnapshot(), target.materialCategory())
                 || !Objects.equals(source.getWorkProcessIdSnapshot(), target.workProcessId())
+                || !Objects.equals(source.getWorkflowProcessNodeIdSnapshot(), target.workflowProcessNodeId())
                 || !Objects.equals(source.getPackagingSpecIdSnapshot(), target.packagingSpecId())
                 || !Objects.equals(source.getPackagingRoleSnapshot(), target.packagingRole())) {
             throw error(409,
@@ -468,7 +477,23 @@ public class BomItemSubstituteServiceImpl implements BomItemSubstituteService {
         return material;
     }
 
-    private void ensureSameMaterialFamily(RawMaterialType parent, RawMaterialType substitute) {
+    private void ensureCompatibleMaterialFamily(ParentContext context, RawMaterialType substitute) {
+        RawMaterialType parent = context.parentMaterial();
+        if ("PACKAGING".equals(context.materialCategory())) {
+            String parentFamily = packagingClassificationFamily(parent);
+            String substituteFamily = packagingClassificationFamily(substitute);
+            if (parentFamily == null || substituteFamily == null) {
+                throw error(409,
+                        "包材主项或替代物料缺少可验证的包装分类，不能确认包装角色兼容性",
+                        "BOM_SUBSTITUTE_PACKAGING_CLASSIFICATION_REQUIRED");
+            }
+            if (!parentFamily.equals(substituteFamily)) {
+                throw error(400,
+                        "替代包材必须与主包材属于同一包装分类和角色",
+                        "BOM_SUBSTITUTE_PACKAGING_ROLE_MISMATCH");
+            }
+            return;
+        }
         String parentFamily = trimToNull(parent.getPrimaryCode());
         String substituteFamily = trimToNull(substitute.getPrimaryCode());
         if (parentFamily != null && substituteFamily != null && !parentFamily.equals(substituteFamily)) {
@@ -476,6 +501,25 @@ public class BomItemSubstituteServiceImpl implements BomItemSubstituteService {
                     "替代物料与主项业务类别不兼容",
                     "BOM_SUBSTITUTE_MATERIAL_CATEGORY_MISMATCH");
         }
+    }
+
+    /**
+     * Returns a fail-closed packaging family. The stable 16-digit classification code carries the
+     * L1/L2/L3 path in its first ten digits. Older descriptive categories are accepted only when
+     * they are more specific than the broad PACKAGING bucket.
+     */
+    private String packagingClassificationFamily(RawMaterialType material) {
+        String code = trimToNull(material.getCode());
+        if (code != null && code.matches("\\d{16}")) {
+            return "code:" + code.substring(0, 10);
+        }
+        String category = trimToNull(material.getCategory());
+        if (category == null) return null;
+        String normalized = category.toUpperCase(Locale.ROOT);
+        if (Set.of("PACKAGING", "PACKAGE", "包材", "包装").contains(normalized)) {
+            return null;
+        }
+        return "category:" + normalized;
     }
 
     private String canonicalUnit(String factoryId, String rawUnit, String label) {
@@ -556,6 +600,7 @@ public class BomItemSubstituteServiceImpl implements BomItemSubstituteService {
                 .parentMaterialName(relation.getParentMaterialNameSnapshot())
                 .materialCategory(relation.getMaterialCategorySnapshot())
                 .workProcessId(relation.getWorkProcessIdSnapshot())
+                .workflowProcessNodeId(relation.getWorkflowProcessNodeIdSnapshot())
                 .packagingSpecId(relation.getPackagingSpecIdSnapshot())
                 .packagingRole(relation.getPackagingRoleSnapshot())
                 .substituteMaterialTypeId(relation.getSubstituteMaterialTypeId())
@@ -600,6 +645,7 @@ public class BomItemSubstituteServiceImpl implements BomItemSubstituteService {
             String materialName,
             String materialCategory,
             String workProcessId,
+            String workflowProcessNodeId,
             String packagingSpecId,
             String packagingRole,
             String unit,

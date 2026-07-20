@@ -5,6 +5,7 @@ import com.cretas.aims.dto.bom.SeasoningBindingCreateRequest;
 import com.cretas.aims.dto.bom.SeasoningBindingMutationResponse;
 import com.cretas.aims.dto.bom.SeasoningBindingUpdateRequest;
 import com.cretas.aims.dto.workflow.WorkflowRevisionCandidateDTO;
+import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.WorkProcess;
@@ -18,6 +19,7 @@ import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.service.bom.BomSeasoningWorkspaceService;
+import com.cretas.aims.service.bom.BomItemSubstituteService;
 import com.cretas.aims.service.bom.BomWorkflowRevisionService;
 import com.cretas.aims.service.workflow.PinnedWorkflowGraph;
 import com.cretas.aims.service.workflow.ProductWorkflowResolutionService;
@@ -52,6 +54,7 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
     private final RawMaterialTypeRepository materialTypeRepository;
     private final ProductWorkflowResolutionService workflowResolutionService;
     private final BomWorkflowRevisionService bomWorkflowRevisionService;
+    private final BomItemSubstituteService substituteService;
 
     @Override
     @Transactional(readOnly = true)
@@ -98,6 +101,9 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
                     master != null ? master.getProcessName() : configured.workProcessId(),
                     master != null ? master.getProcessCategory() : null,
                     configured.processOrder(),
+                    configured.standardBasisQuantity(),
+                    configured.standardBasisUnit(),
+                    configured.standardUsageSupported(),
                     processBindings));
         }
 
@@ -166,8 +172,11 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
                 recipeId, process.processNodeId()).size());
         apply(binding, material, request.getDosagePerKgG(), request.getSubsequentPotRatio(),
                 request.getCountInSeasoning(), request.getRemark());
-        return new SeasoningBindingMutationResponse(request.getExpectedRevision() + 1,
-                seasoningItemRepository.save(binding));
+        BomSeasoningItem saved = seasoningItemRepository.save(binding);
+        substituteService.replaceForSeasoningItem(
+                factoryId, recipeId, saved.getId(),
+                request.getSubstitutes() == null ? List.of() : request.getSubstitutes());
+        return new SeasoningBindingMutationResponse(request.getExpectedRevision() + 1, saved);
     }
 
     @Override
@@ -187,8 +196,12 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
         binding.setMaterialTypeId(material.getId());
         apply(binding, material, request.getDosagePerKgG(), request.getSubsequentPotRatio(),
                 request.getCountInSeasoning(), request.getRemark());
-        return new SeasoningBindingMutationResponse(request.getExpectedRevision() + 1,
-                seasoningItemRepository.save(binding));
+        BomSeasoningItem saved = seasoningItemRepository.save(binding);
+        if (request.getSubstitutes() != null) {
+            substituteService.replaceForSeasoningItem(
+                    factoryId, recipeId, saved.getId(), request.getSubstitutes());
+        }
+        return new SeasoningBindingMutationResponse(request.getExpectedRevision() + 1, saved);
     }
 
     @Override
@@ -198,6 +211,7 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
         BomRecipe recipe = editableRecipe(factoryId, recipeId);
         BomSeasoningItem binding = loadBinding(recipeId, bindingId);
         claimRevision(recipe, factoryId, expectedRevision);
+        substituteService.replaceForSeasoningItem(factoryId, recipeId, bindingId, List.of());
         binding.softDelete();
         seasoningItemRepository.save(binding);
         return new SeasoningBindingMutationResponse(expectedRevision + 1, null);
@@ -269,13 +283,12 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
 
     private List<ResolvedProcess> resolveProcesses(
             String factoryId, BomRecipe recipe, PinnedWorkflowGraph pinnedGraph) {
-        if (recipe.getStatus() == BomRecipe.Status.DRAFT) {
+        if (pinnedGraph != null || recipe.getStatus() == BomRecipe.Status.DRAFT) {
             PinnedWorkflowGraph graph = pinnedGraph != null
                     ? pinnedGraph
                     : bomWorkflowRevisionService.resolvePinnedGraph(factoryId, recipe);
             return graph.processes().stream()
-                    .map(step -> new ResolvedProcess(
-                            step.processNodeId(), step.workProcessId(), step.order()))
+                    .map(step -> resolvedProcess(step, graph))
                     .toList();
         }
         Optional<WorkflowProcessPath> activePath = workflowResolutionService
@@ -283,15 +296,68 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
         if (activePath.isPresent()) {
             return activePath.get().processes().stream()
                     .map(step -> new ResolvedProcess(
-                            step.processNodeId(), step.workProcessId(), step.order()))
+                            step.processNodeId(), step.workProcessId(), step.order(),
+                            null, null, false))
                     .toList();
         }
         return productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, recipe.getProductTypeId())
                 .stream()
                 .map(process -> new ResolvedProcess(
-                        "legacy:" + process.getId(), process.getWorkProcessId(), process.getProcessOrder()))
+                        "legacy:" + process.getId(), process.getWorkProcessId(), process.getProcessOrder(),
+                        null, null, false))
             .toList();
+    }
+
+    private ResolvedProcess resolvedProcess(
+            PinnedWorkflowGraph.ProcessStep step, PinnedWorkflowGraph graph) {
+        StandardBasis basis = standardBasis(graph, step.processNodeId());
+        return new ResolvedProcess(
+                step.processNodeId(), step.workProcessId(), step.order(),
+                basis.quantity(), basis.unit(), basis.supported());
+    }
+
+    private StandardBasis standardBasis(PinnedWorkflowGraph graph, String processNodeId) {
+        ProductProcessWorkflowDTO.Node node = graph.nodes().stream()
+                .filter(candidate -> Objects.equals(processNodeId, candidate.getId()))
+                .findFirst().orElse(null);
+        if (node == null || node.getData() == null) return StandardBasis.unsupported();
+
+        Set<String> outputUnits = new java.util.LinkedHashSet<>();
+        Object rawPorts = node.getData().get("ports");
+        if (rawPorts instanceof List<?> ports) {
+            for (Object rawPort : ports) {
+                if (!(rawPort instanceof Map<?, ?> port)
+                        || !"OUTPUT".equalsIgnoreCase(Objects.toString(port.get("direction"), ""))) {
+                    continue;
+                }
+                String unit = canonicalWorkflowUnit(Objects.toString(port.get("unit"), null));
+                if (unit != null) outputUnits.add(unit);
+            }
+        }
+        if (outputUnits.isEmpty()) {
+            String unit = canonicalWorkflowUnit(Objects.toString(node.getData().get("outputUnit"), null));
+            if (unit != null) outputUnits.add(unit);
+        }
+        if (outputUnits.size() != 1) return StandardBasis.unsupported();
+        String unit = outputUnits.iterator().next();
+        if ("kg".equals(unit)) return new StandardBasis(BigDecimal.ONE, "kg", true);
+        if ("g".equals(unit)) return new StandardBasis(new BigDecimal("1000"), "g", true);
+        return new StandardBasis(BigDecimal.ONE, unit, false);
+    }
+
+    private String canonicalWorkflowUnit(String rawUnit) {
+        if (rawUnit == null || rawUnit.isBlank()) return null;
+        return switch (rawUnit.trim().toLowerCase(Locale.ROOT)) {
+            case "公斤", "千克", "kg" -> "kg";
+            case "克", "g" -> "g";
+            case "盒", "box" -> "box";
+            case "箱", "case" -> "case";
+            case "片", "slice" -> "slice";
+            case "毫升", "ml" -> "ml";
+            case "升", "l" -> "l";
+            default -> rawUnit.trim();
+        };
     }
 
     private void populatePinnedRevisionSummary(
@@ -325,7 +391,19 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
         return candidate.getStatus();
     }
 
-    private record ResolvedProcess(String processNodeId, String workProcessId, Integer processOrder) { }
+    private record ResolvedProcess(
+            String processNodeId,
+            String workProcessId,
+            Integer processOrder,
+            BigDecimal standardBasisQuantity,
+            String standardBasisUnit,
+            boolean standardUsageSupported) { }
+
+    private record StandardBasis(BigDecimal quantity, String unit, boolean supported) {
+        private static StandardBasis unsupported() {
+            return new StandardBasis(null, null, false);
+        }
+    }
 
     private RawMaterialType validateMaterial(String factoryId, String materialTypeId) {
         RawMaterialType material = materialTypeRepository.findById(materialTypeId)

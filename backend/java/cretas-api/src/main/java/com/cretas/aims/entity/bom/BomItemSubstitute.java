@@ -77,6 +77,10 @@ public class BomItemSubstitute extends BaseEntity {
     @Column(name = "work_process_id_snapshot", length = 50)
     private String workProcessIdSnapshot;
 
+    /** Stable PROCESS Cell identity inside the BOM-pinned Workflow revision. */
+    @Column(name = "workflow_process_node_id_snapshot", length = 128)
+    private String workflowProcessNodeIdSnapshot;
+
     /** Present for packaging parents above the base selling level. */
     @Column(name = "packaging_spec_id_snapshot", length = 36)
     private String packagingSpecIdSnapshot;

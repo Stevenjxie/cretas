@@ -88,6 +88,9 @@ class BomWorkflowRevisionServiceTest {
         assertEquals(List.of("RM-A"), graph.rootMaterialTypeIds());
         assertEquals(PRODUCT, graph.targetProductTypeId());
         assertEquals("split", graph.processes().getFirst().processNodeId());
+        assertTrue(graph.nodes().stream().anyMatch(node -> "finished".equals(node.getId())));
+        assertFalse(graph.nodes().stream().anyMatch(node -> "byproduct".equals(node.getId())),
+                "the sibling output must not leak into the selected target-SKU slice");
     }
 
     @Test
@@ -110,6 +113,9 @@ class BomWorkflowRevisionServiceTest {
         assertEquals(List.of("RM-A", "RM-B"), graph.rootMaterialTypeIds());
         assertEquals(List.of("blend", "split"), graph.processes().stream()
                 .map(PinnedWorkflowGraph.ProcessStep::processNodeId).toList());
+        assertTrue(graph.nodes().stream().anyMatch(node -> "finished".equals(node.getId())));
+        assertFalse(graph.nodes().stream().anyMatch(node -> "byproduct".equals(node.getId())),
+                "the pinned readback must remain isolated to the BOM target SKU");
     }
 
     @Test

@@ -465,6 +465,14 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         WorkflowClerkSheetConfigDTO workflowConfig =
                 validateWorkflowRowIfApplicable(factoryId, planId, req);
 
+        // Positive intermediate outputs must own a stable identity before source validation.
+        // This keeps malformed output identity from being reported as an unrelated source conflict
+        // and prevents stock-fed rows from reaching an SFI anchor with a blank product identity.
+        String outputMaterialIdentity = null;
+        if (!req.isFinished() && req.getOutputQuantity() != null && req.getOutputQuantity().signum() > 0) {
+            outputMaterialIdentity = resolveOutputMaterialIdentity(req);
+        }
+
         // 2. upsert 键查重: 已存在 → 委托 re-save (Task 1.6 stub)
         Optional<ProcessSheetRow> existing = rowRepo
                 .findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
@@ -510,7 +518,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         }
 
         // 4. WIP identity 来自本道产出产品；edges 仅保留完整投入 provenance。
-        String outputMaterialIdentity = resolveOutputMaterialIdentity(req);
+        if (outputMaterialIdentity == null) {
+            outputMaterialIdentity = resolveOutputMaterialIdentity(req);
+        }
 
         // 5. 映射单个 StepEntry
         StepEntry step = buildStepEntry(factoryId, req);

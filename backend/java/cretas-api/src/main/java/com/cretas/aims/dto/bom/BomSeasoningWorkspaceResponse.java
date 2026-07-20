@@ -42,6 +42,11 @@ public class BomSeasoningWorkspaceResponse {
         private String processName;
         private String processCategory;
         private Integer processOrder;
+        /** Standard denominator inherited from the pinned Workflow process node. */
+        private BigDecimal standardBasisQuantity;
+        private String standardBasisUnit;
+        /** False when the legacy g-per-kg seasoning model cannot represent this node safely. */
+        private boolean standardUsageSupported;
         private List<BomSeasoningItem> bindings;
     }
 

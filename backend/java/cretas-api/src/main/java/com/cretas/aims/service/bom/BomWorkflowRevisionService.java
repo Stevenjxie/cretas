@@ -434,7 +434,7 @@ public class BomWorkflowRevisionService {
             for (Map<?, ?> output : outputs) {
                 String role = value(output.get("outputRole"));
                 BigDecimal ratio = decimal(output.get("costAllocationRatio"));
-                if (!OUTPUT_ROLES.contains(role) || ratio == null || ratio.signum() <= 0) {
+                if (role == null || !OUTPUT_ROLES.contains(role) || ratio == null || ratio.signum() <= 0) {
                     throw invalid(409, "多产出工序必须为每个产出配置角色和成本分摊比例",
                             "BOM_WORKFLOW_MULTI_OUTPUT_CONTRACT_REQUIRED");
                 }
@@ -491,7 +491,7 @@ public class BomWorkflowRevisionService {
         }
     }
 
-    private BusinessException invalid(int status, String message, String code) {
+    private static BusinessException invalid(int status, String message, String code) {
         return new BusinessException(status, message).withCode(code).withSeverity("warning");
     }
 }

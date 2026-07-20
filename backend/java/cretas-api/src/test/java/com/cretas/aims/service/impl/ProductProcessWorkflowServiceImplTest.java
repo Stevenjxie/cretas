@@ -155,8 +155,8 @@ class ProductProcessWorkflowServiceImplTest {
         ProductProcessWorkflowDTO saved = service.saveDraft(FACTORY_ID, PRODUCT_ID, request);
 
         ArgumentCaptor<ProductProcessWorkflow> captor = ArgumentCaptor.forClass(ProductProcessWorkflow.class);
-        verify(repository).saveAndFlush(captor.capture());
-        assertTrue(captor.getValue().getNodesJson().contains("红烧熟制"));
+        verify(repository, times(2)).saveAndFlush(captor.capture());
+        assertTrue(captor.getAllValues().get(0).getNodesJson().contains("红烧熟制"));
         assertEquals(7, saved.getNodes().size());
         assertEquals(6, saved.getEdges().size());
         assertEquals("kg", saved.getNodes().get(2).getData().get("inputUnit"));
@@ -182,7 +182,7 @@ class ProductProcessWorkflowServiceImplTest {
         ProductProcessWorkflowDTO nextDraft = service.snapshot(FACTORY_ID, PRODUCT_ID, 3L);
 
         ArgumentCaptor<ProductProcessWorkflow> rows = ArgumentCaptor.forClass(ProductProcessWorkflow.class);
-        verify(repository, times(2)).saveAndFlush(rows.capture());
+        verify(repository, times(3)).saveAndFlush(rows.capture());
         ProductProcessWorkflow snapshot = rows.getAllValues().get(0);
         assertEquals(ProductProcessWorkflow.Status.SNAPSHOT, snapshot.getStatus());
         assertEquals(2, snapshot.getDefinitionVersion());

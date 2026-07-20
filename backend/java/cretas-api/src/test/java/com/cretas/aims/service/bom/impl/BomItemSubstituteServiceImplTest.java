@@ -187,7 +187,8 @@ class BomItemSubstituteServiceImplTest {
         BomSeasoningItem seasoning = BomSeasoningItem.builder()
                 .id(20L).factoryId(FACTORY).recipeId(RECIPE)
                 .materialTypeId("AUX-A").name("辅料A")
-                .workProcessId("process-1").section(BomSeasoningItem.SECTION_COOKING)
+                .workProcessId("process-1").workflowProcessNodeId("node-process-1")
+                .section(BomSeasoningItem.SECTION_COOKING)
                 .dosagePerKgG(BigDecimal.ONE).build();
         when(entityManager.find(BomSeasoningItem.class, 20L, LockModeType.PESSIMISTIC_WRITE))
                 .thenReturn(seasoning);
@@ -202,6 +203,7 @@ class BomItemSubstituteServiceImplTest {
 
         assertEquals("AUXILIARY", result.getMaterialCategory());
         assertEquals("process-1", result.getWorkProcessId());
+        assertEquals("node-process-1", result.getWorkflowProcessNodeId());
         assertEquals(BomItemSubstitute.ParentKind.SEASONING_ITEM, result.getParentKind());
     }
 
@@ -219,6 +221,48 @@ class BomItemSubstituteServiceImplTest {
         assertEquals("PACKAGING", result.getMaterialCategory());
         assertEquals("OUTER_CARTON", result.getPackagingRole());
         assertEquals("spec-case", result.getPackagingSpecId());
+    }
+
+    @Test
+    @DisplayName("packaging substitutions reject a different classification family even with the same unit")
+    void rejectsCrossPackagingRoleSubstitution() {
+        stubDraftAndRecipeParent(31L, "PK-BOX", "box", "PACKAGING", "OUTER_CARTON");
+        RawMaterialType parent = material("PK-BOX", "外箱", "box", "003", FACTORY, true);
+        parent.setCode("0030010001000001");
+        parent.setCategory("外箱");
+        RawMaterialType film = material("PK-FILM", "封膜", "box", "003", FACTORY, true);
+        film.setCode("0030010002000001");
+        film.setCategory("封膜");
+        when(materialRepository.findById("PK-BOX")).thenReturn(Optional.of(parent));
+        when(materialRepository.findById("PK-FILM")).thenReturn(Optional.of(film));
+
+        BusinessException mismatch = assertThrows(BusinessException.class,
+                () -> service.replaceForRecipeItem(
+                        FACTORY, RECIPE, 31L,
+                        List.of(new BomSubstituteInput("PK-FILM", null))));
+
+        assertEquals("BOM_SUBSTITUTE_PACKAGING_ROLE_MISMATCH", mismatch.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("packaging substitutions fail closed when classification cannot prove the role")
+    void rejectsUnclassifiedPackagingSubstitution() {
+        stubDraftAndRecipeParent(32L, "PK-LEGACY-A", "box", "PACKAGING", "OUTER_CARTON");
+        RawMaterialType parent = material("PK-LEGACY-A", "历史外箱", "box", "003", FACTORY, true);
+        parent.setCode("PK-LEGACY-A");
+        parent.setCategory("包材");
+        RawMaterialType substitute = material("PK-LEGACY-B", "历史替代箱", "box", "003", FACTORY, true);
+        substitute.setCode("PK-LEGACY-B");
+        substitute.setCategory("包材");
+        when(materialRepository.findById("PK-LEGACY-A")).thenReturn(Optional.of(parent));
+        when(materialRepository.findById("PK-LEGACY-B")).thenReturn(Optional.of(substitute));
+
+        BusinessException mismatch = assertThrows(BusinessException.class,
+                () -> service.replaceForRecipeItem(
+                        FACTORY, RECIPE, 32L,
+                        List.of(new BomSubstituteInput("PK-LEGACY-B", null))));
+
+        assertEquals("BOM_SUBSTITUTE_PACKAGING_CLASSIFICATION_REQUIRED", mismatch.getErrorCode());
     }
 
     @Test
@@ -292,7 +336,7 @@ class BomItemSubstituteServiceImplTest {
         String primaryCode = "PACKAGING".equals(category) ? "003" : "001";
         when(materialRepository.findById(materialId))
                 .thenReturn(Optional.of(material(materialId, "主项" + materialId, unit, primaryCode, FACTORY, true)));
-        when(repository.findByFactoryIdAndRecipeIdAndParentKindAndParentRecipeItemIdOrderByCreatedAtAsc(
+        lenient().when(repository.findByFactoryIdAndRecipeIdAndParentKindAndParentRecipeItemIdOrderByCreatedAtAsc(
                 FACTORY, RECIPE, BomItemSubstitute.ParentKind.RECIPE_ITEM, id))
                 .thenReturn(List.of());
     }
@@ -322,10 +366,13 @@ class BomItemSubstituteServiceImplTest {
         RawMaterialType material = new RawMaterialType();
         material.setId(id);
         material.setFactoryId(factoryId);
-        material.setCode("CODE-" + id);
+        material.setCode("003".equals(primaryCode)
+                ? "003001000100000" + (Math.abs(id.hashCode()) % 9 + 1)
+                : "CODE-" + id);
         material.setName(name);
         material.setUnit(unit);
         material.setPrimaryCode(primaryCode);
+        if ("003".equals(primaryCode)) material.setCategory("外箱");
         material.setIsActive(active);
         return material;
     }
