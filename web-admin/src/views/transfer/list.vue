@@ -16,6 +16,20 @@ import { useListSummary } from '@/composables/useListSummary';
 import { formatSummaryForAI } from '@/utils/aiSummaryContext';
 import type { ListSummaryRequest } from '@/types/listSummary';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
+import { displayUnit } from '@/utils/unitPricing';
+import {
+  aggregateFinishedGoodsOptions,
+  aggregateMaterialInventoryOptions,
+  applySelectedOption,
+  optionsForItemType,
+  resetSelectedOption,
+  toTransferItemPayload,
+  type FinishedGoodsInventoryBatch,
+  type MaterialInventoryBatch,
+  type TransferCreateRow,
+  type TransferItemType,
+  type TransferSelectableItem,
+} from './transferCreate';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -55,19 +69,10 @@ const typeMap: Record<string, string> = {
 };
 
 // PR #289 §B9 — manual transfer create dialog state
-interface ManualTransferItem {
-  itemType: 'RAW_MATERIAL' | 'FINISHED_GOODS' | 'PACKAGING_MATERIAL';
-  materialTypeId: string;
-  itemName: string;
-  quantity: number;
-  unit: string;
-  unitPrice?: number;
-  remark?: string;
-}
 // T4-B4 (issue #532): backend ReferenceDataController.findMaterials now emits currentStock
 // (PR adds it via MaterialBatchRepository.sumQuantityByMaterialType bulk query — issue #540).
 // Treat as optional + accept string|number to tolerate BigDecimal-as-string JSON encoding.
-interface MaterialTypeOption { id: string; name: string; code: string; unit: string; currentStock?: number | string | null }
+interface MaterialTypeOption { id: string; name: string; code: string; unit: string; currentStock?: number | string | null; category?: string }
 interface FactoryNetworkEntry { factoryId: string; factoryName: string }
 
 const createVisible = ref(false);
@@ -82,7 +87,7 @@ const form = ref({
   transferDate: today(),
   expectedArrivalDate: '',
   remark: '',
-  items: [] as ManualTransferItem[],
+  items: [] as TransferCreateRow[],
 });
 function validateWarehouseTransferSource(_rule: unknown, value: string, callback: (error?: Error) => void) {
   if (form.value.transferType === 'WAREHOUSE_TO_WAREHOUSE' && !value) {
@@ -116,6 +121,10 @@ const formRules = {
   transferDate: [{ required: true, message: '请选择调拨日期', trigger: 'change' }],
 };
 const materialOptions = ref<MaterialTypeOption[]>([]);
+const sourceMaterialOptions = ref<TransferSelectableItem[]>([]);
+const finishedGoodsOptions = ref<TransferSelectableItem[]>([]);
+const sourceInventoryLoading = ref(false);
+const sourceInventoryLoaded = ref(false);
 const factoryNetworkOptions = ref<FactoryNetworkEntry[]>([]);
 const factoryNetworkLoading = ref(false);
 // F-FP-4: 仓库下拉 (参考 stocktakes/index.vue 写法)
@@ -151,6 +160,76 @@ async function loadMaterialOptions() {
     const ext = <T,>(r: any): T[] => (r?.data?.content || r?.data?.list || r?.data || []) as T[];
     materialOptions.value = ext<MaterialTypeOption>(res);
   } catch { /* interceptor */ }
+}
+
+interface InventoryByWarehouseResponse {
+  materials?: MaterialInventoryBatch[];
+  products?: FinishedGoodsInventoryBatch[];
+}
+
+function extractContent<T>(response: any): T[] {
+  const content = response?.data?.content || response?.data?.list || response?.data || [];
+  return Array.isArray(content) ? content as T[] : [];
+}
+
+async function loadFinishedGoodsAcrossFactory() {
+  if (!factoryId.value) return;
+  try {
+    const res = await get(`/${factoryId.value}/sales/finished-goods`, {
+      params: { page: 1, size: 200 },
+    });
+    finishedGoodsOptions.value = aggregateFinishedGoodsOptions(
+      extractContent<FinishedGoodsInventoryBatch>(res),
+    );
+  } catch { /* interceptor */ }
+}
+
+async function loadSourceInventoryOptions() {
+  sourceMaterialOptions.value = [];
+  finishedGoodsOptions.value = [];
+  sourceInventoryLoaded.value = Boolean(form.value.sourceWarehouseId);
+  if (!factoryId.value || !form.value.sourceWarehouseId) return;
+  sourceInventoryLoading.value = true;
+  try {
+    const res = await get<InventoryByWarehouseResponse>(`/${factoryId.value}/inventory/by-warehouse`, {
+      params: {
+        targetFactoryId: factoryId.value,
+        warehouseId: form.value.sourceWarehouseId,
+      },
+    });
+    const inventory = res?.data;
+    sourceMaterialOptions.value = aggregateMaterialInventoryOptions(inventory?.materials || []);
+    finishedGoodsOptions.value = aggregateFinishedGoodsOptions(inventory?.products || []);
+  } catch { /* interceptor */ }
+  finally { sourceInventoryLoading.value = false; }
+}
+
+async function handleSourceWarehouseChange() {
+  form.value.items.forEach(resetSelectedOption);
+  await loadSourceInventoryOptions();
+}
+
+async function handleItemTypeChange(row: TransferCreateRow, itemType: TransferItemType) {
+  row.itemType = itemType;
+  resetSelectedOption(row);
+  if (itemType === 'FINISHED_GOODS' && finishedGoodsOptions.value.length === 0) {
+    if (form.value.sourceWarehouseId) await loadSourceInventoryOptions();
+    else await loadFinishedGoodsAcrossFactory();
+  }
+}
+
+function selectableOptions(row: TransferCreateRow): TransferSelectableItem[] {
+  const materials = sourceInventoryLoaded.value
+    ? sourceMaterialOptions.value
+    : materialOptions.value.map((option) => ({
+        id: option.id,
+        name: option.name,
+        code: option.code,
+        unit: option.unit,
+        currentStock: Number(option.currentStock ?? 0),
+        category: option.category,
+      }));
+  return optionsForItemType(row.itemType, materials, finishedGoodsOptions.value);
 }
 
 // PR #309 C2 — load visible factory network for 调入方 dropdown
@@ -193,6 +272,9 @@ function openCreateDialog() {
     remark: '',
     items: [],
   };
+  sourceMaterialOptions.value = [];
+  finishedGoodsOptions.value = [];
+  sourceInventoryLoaded.value = false;
   loadMaterialOptions();
   loadFactoryNetwork();
   loadWarehouses();
@@ -202,7 +284,9 @@ function openCreateDialog() {
 function addItem() {
   form.value.items.push({
     itemType: 'RAW_MATERIAL',
-    materialTypeId: '',
+    selectedItemId: '',
+    materialTypeId: undefined,
+    productTypeId: undefined,
     itemName: '',
     quantity: 0,
     unit: 'kg',
@@ -215,14 +299,11 @@ function removeItem(idx: number) {
   form.value.items.splice(idx, 1);
 }
 
-function handleMaterialChange(idx: number, materialId: string) {
-  const m = materialOptions.value.find(o => o.id === materialId);
+function handleMaterialChange(idx: number, selectedId: string) {
+  const row = form.value.items[idx];
+  const m = selectableOptions(row).find(o => o.id === selectedId);
   if (m) {
-    form.value.items[idx].itemName = m.name;
-    if (m.unit) form.value.items[idx].unit = m.unit;
-    // T4-B4 (issue #532): project currentStock onto the row so dialog 现有库存 column renders.
-    // Underscore prefix marks frontend-only (not submitted to backend on create).
-    (form.value.items[idx] as any)._currentStock = m.currentStock ?? null;
+    applySelectedOption(row, m);
   }
 }
 
@@ -242,7 +323,9 @@ async function submitCreate() {
     return;
   }
   for (const it of form.value.items) {
-    if (!it.materialTypeId) { ElMessage.warning('请为每行选择物料'); return; }
+    if (!it.selectedItemId || (it.itemType === 'FINISHED_GOODS' ? !it.productTypeId : !it.materialTypeId)) {
+      ElMessage.warning('请为每行选择与类型匹配的物料或成品'); return;
+    }
     if (!it.quantity || it.quantity <= 0) { ElMessage.warning('每行数量必须大于 0'); return; }
     if (!it.unit) { ElMessage.warning('每行必须有单位'); return; }
     // F-FP-3 Rule1: 超过现有库存时阻止提交，边界前置
@@ -259,15 +342,7 @@ async function submitCreate() {
       targetFactoryId: form.value.targetFactoryId.trim(),
       transferDate: form.value.transferDate,
       remark: form.value.remark || undefined,
-      items: form.value.items.map(it => ({
-        itemType: it.itemType,
-        materialTypeId: it.materialTypeId,
-        itemName: it.itemName,
-        quantity: it.quantity,
-        unit: it.unit,
-        unitPrice: it.unitPrice,
-        remark: it.remark || undefined,
-      })),
+      items: form.value.items.map(toTransferItemPayload),
     };
     if (form.value.sourceWarehouseId) payload.sourceWarehouseId = form.value.sourceWarehouseId.trim();
     if (form.value.targetWarehouseId) payload.targetWarehouseId = form.value.targetWarehouseId.trim();
@@ -450,6 +525,7 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
                 clearable
                 filterable
                 style="width:100%"
+                @change="handleSourceWarehouseChange"
               >
                 <el-option
                   v-for="w in warehouseOptions"
@@ -498,12 +574,17 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
         </el-form-item>
 
         <el-divider content-position="left">调拨物料</el-divider>
-        <UpstreamMissingHint v-if="materialOptions.length === 0" description="本工厂暂无物料，无法调拨" target-module="warehouse" require-write action-text="去创建物料类型" contact-text="请联系仓库管理员先创建物料类型" @action="goCreate('/warehouse/material-types')" />
+        <UpstreamMissingHint v-if="materialOptions.length === 0 && finishedGoodsOptions.length === 0" description="本工厂暂无可调拨物料或成品库存" target-module="warehouse" require-write action-text="去创建物料类型" contact-text="请联系仓库管理员核对库存" @action="goCreate('/warehouse/material-types')" />
         <el-button size="small" :icon="Plus" @click="addItem" style="margin-bottom:8px">添加物料</el-button>
         <el-table :data="form.items" border empty-text="点击「添加物料」开始">
           <el-table-column label="类型" width="140">
             <template #default="{ row }">
-              <el-select v-model="row.itemType" size="small" style="width:100%">
+              <el-select
+                v-model="row.itemType"
+                size="small"
+                style="width:100%"
+                @change="(value: TransferItemType) => handleItemTypeChange(row, value)"
+              >
                 <el-option label="原料/食材" value="RAW_MATERIAL" />
                 <el-option label="成品/菜品" value="FINISHED_GOODS" />
                 <el-option label="包材" value="PACKAGING_MATERIAL" />
@@ -513,13 +594,16 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
           <el-table-column label="物料" min-width="220">
             <template #default="{ row, $index }">
               <el-select
-                v-model="row.materialTypeId" placeholder="选择物料"
+                v-model="row.selectedItemId"
+                :placeholder="row.itemType === 'FINISHED_GOODS' && !form.sourceWarehouseId ? '请先选择调出仓库' : '选择物料/成品'"
+                :loading="sourceInventoryLoading"
+                :disabled="row.itemType === 'FINISHED_GOODS' && form.transferType === 'WAREHOUSE_TO_WAREHOUSE' && !form.sourceWarehouseId"
                 filterable size="small" style="width:100%"
                 @change="(val: string) => handleMaterialChange($index, val)"
               >
                 <el-option
-                  v-for="m in materialOptions" :key="m.id"
-                  :label="`${m.name}${m.code ? ' (' + m.code + ')' : ''}`"
+                  v-for="m in selectableOptions(row)" :key="m.id"
+                  :label="`${m.name}${m.code ? ' (' + m.code + ')' : ''} · 可用 ${formatStock(m.currentStock)} ${displayUnit(m.unit)}`"
                   :value="m.id"
                 />
               </el-select>
@@ -543,14 +627,14 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
             <template #default="{ row }">
               <span v-if="row._currentStock != null && row._currentStock !== ''"
                     :style="{ color: Number(row._currentStock) < Number(row.quantity || 0) ? '#f56c6c' : '#67c23a' }">
-                {{ formatStock(row._currentStock) }}
+                {{ formatStock(row._currentStock) }} {{ displayUnit(row.unit) }}
               </span>
               <span v-else style="color: #c0c4cc">-</span>
             </template>
           </el-table-column>
           <el-table-column label="单位" width="90">
             <template #default="{ row }">
-              <el-input v-model="row.unit" size="small" maxlength="20" />
+              <el-input :model-value="displayUnit(row.unit)" size="small" readonly />
             </template>
           </el-table-column>
           <el-table-column v-if="canViewPrice" label="单价" width="120">
