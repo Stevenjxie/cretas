@@ -22,6 +22,7 @@ import { Search, Refresh } from '@element-plus/icons-vue';
 // `name` (customer-configured) instead of a hardcoded WH-WKS/WH-LOG label —
 // see utils/warehouse.ts for the LIUSHANMEN "同仓库多名字" incident.
 import { warehouseDisplayName } from '@/utils/warehouse';
+import { displayUnit } from '@/utils/unitPricing';
 
 const authStore = useAuthStore();
 const ownFactoryId = computed(() => authStore.factoryId);
@@ -395,7 +396,7 @@ onMounted(async () => {
             </el-table-column>
             <el-table-column label="单位" width="80" align="center">
               <template #default="{ row }">
-                {{ row.quantityUnit || row.unit || '-' }}
+                {{ displayUnit(row.quantityUnit || row.unit) || '-' }}
               </template>
             </el-table-column>
             <el-table-column label="仓库" width="150">
@@ -457,7 +458,11 @@ onMounted(async () => {
                 <strong>{{ getProductAvailable(row) }}</strong>
               </template>
             </el-table-column>
-            <el-table-column prop="unit" label="单位" width="80" align="center" />
+            <el-table-column label="单位" width="80" align="center">
+              <template #default="{ row }">
+                {{ displayUnit(row.unit) || '-' }}
+              </template>
+            </el-table-column>
             <el-table-column prop="storageLocation" label="存储位置" width="130" show-overflow-tooltip />
             <el-table-column label="生产日期" width="110">
               <template #default="{ row }">
