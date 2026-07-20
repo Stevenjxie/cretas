@@ -170,3 +170,16 @@
 - 验收：唯一 Java release 生命周期执行 `ProductionPlanSettlementTest` 31/31 通过并生成可信 JAR；backend tree `cd911fd1b14cdbca20ae710e0ee77c0f2ac25147`，JAR SHA-256 `3e94c636a03e828dee52b5a64b57b6b24d68002f597b921c8b8ced78ef89d2b2`。
 - 生产边界：exact-main 部署后仅 query-only 核验计划 `457daec1-d602-43a1-81a1-708586bfb937` 仍为唯一 IN_PROGRESS、两道报工各一行、PB 批次唯一且 settlement 不存在；不代测试重试结单。随后通知原测试 Chat 使用新的前端幂等键从同一记录继续一次结单。
 - Scope 锁：已释放。
+
+### `AGENT-CANARY-SHADOW-P1-20260720`
+
+- 状态：`merged`
+- Owner：Codex coordinator (`/root`)
+- 登记 Base SHA：`7eeb0d2d763fe47f4a3ef05b0e92e92a45084df4`
+- PR：[#1537](https://github.com/Stevenjxie/cretas/pull/1537)
+- 根因：AgentOps Runtime Shadow 原先只有二值总开关，没有租户、角色与稳定百分比灰度；同时 Python 运行时允许写入 `RUNTIME_SHADOW` 与 75 秒 case timeout，但 V04 PostgreSQL 列宽和 CHECK 仅允许 `RUN/RERUN` 与 5 秒 timeout，既有 InMemory 测试未暴露真实持久化冲突。
+- 范围：Java/Python 双边增加默认关闭、配置不完整即拒绝的 tenant/role allowlist 与 basis-point canary；使用统一 SHA-256 前 32 bit、`% 10000`、`bucket < sampleBps` 契约，并统一 role 小写、salt trim 和安全 403 透传。V07 前向迁移只替换 operation/source/bounds CHECK，保留 RUN/RERUN 原限制与既有 FK/self-check，为 Runtime Shadow 单独限定 20 cases、并发 2、1–75 秒。普通 AgentOps 不构造 Shadow runner，也不受灰度影响。
+- 安全收口：disabled、非 internal、tenant/role/sample 拒绝均在 PostgreSQL pool/store/runner 或 Java service 调用前终止；只有精确 `AGENT_OPS_RUNTIME_SHADOW_CANARY_DENIED` 可作为 403 穿透 Java facade，其他上游 403 仍脱敏为 502。PostgreSQL 门禁移除 `smartbi_db` 允许项，避免 SSH tunnel 将生产库伪装成 loopback 后误跑迁移测试。
+- 验收：一次性 PostgreSQL 16 真实门禁 1/1 通过并清理容器，证明 Runtime Shadow 75000ms 可持久化且非法 source/bounds 被数据库拒绝；Python AgentEval 38 passed、1 skipped；Java clean 目标测试 32/32；跨语言固定 bucket vectors 一致；`V20261028_07` 唯一；最终只读终审 P0=0、P1=0；GitHub tracked-secret-scan 通过。
+- 发布边界：本 PR 只合并代码、迁移与测试；未部署 Java/Python，未在生产执行 V07，未重启或切流，未启用任何 Runtime Shadow flag，未触碰 Web、RN 或 OTA。部署必须从 clean exact `origin/main` 重新路由并取得独立确认。
+- Scope 锁：已释放。
