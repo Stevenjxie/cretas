@@ -9,7 +9,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
-import { Plus, Search, Refresh } from '@element-plus/icons-vue';
+import { Search, Refresh } from '@element-plus/icons-vue';
 import { formatDateTimeCell, fmtQty, formatAmount } from '@/utils/tableFormatters';
 import type { FormInstance } from 'element-plus';
 import type { TableRow } from '@/types/api';
@@ -446,84 +446,14 @@ async function handleGenerateLabel(row: TableRow) {
   }
 }
 
-// ==================== 续入到已有批次 (方案A 严格匹配续入, F006 采购补货) ====================
-// 把本次到货并进指定的已有批次 (沿用其单价/保质期/供应商), 而不是每次新建批次 —— 解决
-// "同一原料入很多次批次散着列看着重复"。防呆: 仅可用且未过期批次可续入, 否则引导新建;
-// dialog 显式展示沿用的单价/保质期, 让用户确认新到货口径一致再续入 (fool-proof Rule 1/2)。
-const replenishDialogVisible = ref(false);
-const replenishSaving = ref(false);
-const replenishTarget = ref<TableRow | null>(null);
-const replenishForm = reactive<{ addQuantity: number | null; sourceDocType: string; sourceDocId: string; note: string }>({
-  addQuantity: null,
-  sourceDocType: '',
-  sourceDocId: '',
-  note: '',
-});
-const replenishUnit = computed(() => {
-  const r = replenishTarget.value;
-  return r ? String(r.quantityUnit || r.unit || '') : '';
-});
-
-function handleReplenish(row: TableRow) {
-  const status = String(row.status || '');
-  // 前置防呆: 非可用批次直接引导新建 (后端也会 409, 前端提前拦更友好)
-  if (status && status !== 'AVAILABLE') {
-    ElMessage({
-      message: `该批次状态为「${getStatusText(row.status)}」，不支持续入。请改用上方「入库登记」新建批次。`,
-      type: 'warning', duration: 0, showClose: true,
-    });
-    return;
-  }
-  replenishTarget.value = row;
-  replenishForm.addQuantity = null;
-  replenishForm.sourceDocType = '';
-  replenishForm.sourceDocId = '';
-  replenishForm.note = '';
-  replenishDialogVisible.value = true;
-}
-
-async function handleReplenishSubmit() {
-  const row = replenishTarget.value;
-  if (!row) return;
-  const batchId = String(row.id || '');
-  if (!batchId) { ElMessage.warning('无效批次 ID'); return; }
-  if (!replenishForm.addQuantity || replenishForm.addQuantity <= 0) {
-    ElMessage.warning('请填写续入数量（必须大于 0）');
-    return;
-  }
-  replenishSaving.value = true;
-  try {
-    const res = await post(`/${factoryId.value}/material-batches/${batchId}/replenish`, {
-      addQuantity: replenishForm.addQuantity,
-      sourceDocType: replenishForm.sourceDocType || undefined,
-      sourceDocId: replenishForm.sourceDocId || undefined,
-      note: replenishForm.note || undefined,
-    });
-    if (res.success) {
-      ElMessage({
-        message: `续入成功，批次「${row.batchNumber || batchId}」已增加 ${replenishForm.addQuantity} ${replenishUnit.value}`,
-        type: 'success', duration: 4000, showClose: true,
-      });
-      replenishDialogVisible.value = false;
-      if (viewMode.value === 'summary') loadSummaryData(); else loadData();
-    } else {
-      ElMessage({ message: res.message || '续入失败', type: 'error', duration: 0, showClose: true });
-    }
-  } catch (err: unknown) {
-    const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
-    ElMessage({ message: msg || '续入失败，请重试', type: 'error', duration: 0, showClose: true });
-  } finally {
-    replenishSaving.value = false;
-  }
-}
 </script>
 
 <template>
   <CanvasAwareWrapper module-code="material_batch">
   <div class="page-wrapper">
     <ConceptDisambiguationAlert
-      here-name="原料 / 物料"
-      here="采购入库的原材料、包材、辅料（如「冻猪蹄」「吸塑盒」）"
+      here-name="原料 / 物料批次"
+      here="由采购收货、客供料、调拨、退货或受控调整形成的原材料、包材、辅料批次"
       other-name="生产管理 → 成品 / SKU (本厂生产)"
       other="本厂生产的成品 / SKU（如「叮咚好食光卤猪蹄 200g」）"
       other-path="/system/products"
@@ -532,7 +462,7 @@ async function handleReplenishSubmit() {
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <span class="page-title">原料 / 物料管理 (采购入库)</span>
+            <span class="page-title">原料 / 物料批次</span>
             <span class="data-count">共 {{ pagination.total }} 条记录</span>
           </div>
           <div class="header-right">
@@ -550,10 +480,17 @@ async function handleReplenishSubmit() {
             <el-button v-if="canWrite" @click="router.push('/warehouse/manufacturers')">
               厂商登记表
             </el-button>
-            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleCreate">入库登记</el-button>
           </div>
         </div>
       </template>
+
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        class="source-only-hint"
+        title="批次数量仅由仓储待收货、退货、调拨、盘点或受控调整任务写入；本页用于查询、追溯与标签管理。"
+      />
 
       <div class="search-bar">
         <el-radio-group v-model="viewMode" @change="handleViewModeChange">
@@ -606,11 +543,10 @@ async function handleReplenishSubmit() {
                 </el-table-column>
                 <el-table-column prop="expiryDate" label="过期日期" width="120" />
                 <el-table-column prop="createdAt" label="入库时间" width="180" :formatter="formatDateTimeCell" />
-                <el-table-column label="操作" width="240" fixed="right" align="center">
+                <el-table-column label="操作" width="180" fixed="right" align="center">
                   <template #default="{ row: b }">
                     <el-button type="primary" link size="small" @click="handleView(b)">查看</el-button>
                     <el-button v-if="canWrite" type="primary" link size="small" @click="handleEdit(b)">编辑</el-button>
-                    <el-button v-if="canWrite" type="warning" link size="small" @click="handleReplenish(b)">续入</el-button>
                     <el-button
                       v-if="canWrite"
                       type="success"
@@ -677,12 +613,10 @@ async function handleReplenishSubmit() {
         <el-table-column prop="originPlace" label="产地" width="110" show-overflow-tooltip>
           <template #default="{ row }">{{ row.originPlace || '-' }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="240" fixed="right" align="center">
+        <el-table-column label="操作" width="180" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="handleView(row)">查看</el-button>
             <el-button v-if="canWrite" type="primary" link size="small" @click="handleEdit(row)">编辑</el-button>
-            <!-- 续入到已有批次 (方案A 严格匹配续入, F006 采购补货) -->
-            <el-button v-if="canWrite" type="warning" link size="small" @click="handleReplenish(row)">续入</el-button>
             <!-- A5: 生成物料批次标签 (SP4) -->
             <el-button
               v-if="canWrite"
@@ -837,51 +771,6 @@ async function handleReplenishSubmit() {
       </template>
     </el-dialog>
 
-    <!-- 续入到已有批次 dialog (方案A 严格匹配续入, F006 采购补货) -->
-    <el-dialog
-      v-model="replenishDialogVisible"
-      :title="replenishTarget ? `续入到批次 — ${replenishTarget.materialTypeName || replenishTarget.materialName || ''}（${replenishTarget.batchNumber || ''}）` : '续入到已有批次'"
-      width="520px"
-    >
-      <template v-if="replenishTarget">
-        <!-- fool-proof Rule 2: 上下文必带身份信息 + Rule 1: 显式展示将沿用的单价/保质期 -->
-        <el-alert type="info" :closable="false" show-icon class="replenish-hint">
-          <template #title>
-            本次续入将<strong>沿用该批次的单价与保质期</strong>，只累加数量。<br />
-            如新到货的<strong>单价 / 保质期 / 供应商与本批次不同</strong>，请<strong>取消并改用「入库登记」新建批次</strong>，以保证成本核算与溯源正确。
-          </template>
-        </el-alert>
-        <el-descriptions :column="2" border size="small" class="replenish-desc">
-          <el-descriptions-item label="供应商">{{ replenishTarget.supplierName || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="当前数量">
-            {{ replenishTarget.quantity ?? replenishTarget.currentQuantity ?? replenishTarget.receiptQuantity ?? '-' }} {{ replenishUnit }}
-          </el-descriptions-item>
-          <el-descriptions-item v-if="canViewPrice" label="单价（沿用）">
-            {{ replenishTarget.unitPrice != null ? formatAmount(replenishTarget.unitPrice) : '-' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="保质期（沿用）">{{ replenishTarget.expiryDate || '-' }}</el-descriptions-item>
-        </el-descriptions>
-        <el-form label-width="110px" class="replenish-form">
-          <el-form-item label="续入数量" required>
-            <el-input-number v-model="replenishForm.addQuantity" :min="0.01" :precision="2" :controls="false" style="width: 200px" />
-            <span class="replenish-unit">{{ replenishUnit }}</span>
-          </el-form-item>
-          <el-form-item label="发起单类型">
-            <el-input v-model="replenishForm.sourceDocType" placeholder="如：采购单（可选，记入续入流水供溯源）" />
-          </el-form-item>
-          <el-form-item label="发起单号">
-            <el-input v-model="replenishForm.sourceDocId" placeholder="本次到货的采购单/送货单号（可选）" />
-          </el-form-item>
-          <el-form-item label="备注">
-            <el-input v-model="replenishForm.note" type="textarea" :rows="2" placeholder="可选" />
-          </el-form-item>
-        </el-form>
-      </template>
-      <template #footer>
-        <el-button @click="replenishDialogVisible = false">取消</el-button>
-        <el-button type="warning" :loading="replenishSaving" @click="handleReplenishSubmit">确认续入</el-button>
-      </template>
-    </el-dialog>
   </div>
   </CanvasAwareWrapper>
 </template>

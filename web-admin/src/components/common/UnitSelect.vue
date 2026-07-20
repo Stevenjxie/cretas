@@ -19,12 +19,16 @@ const props = withDefaults(defineProps<{
   placeholder?: string;
   clearable?: boolean;
   disabled?: boolean;
+  usageScope?: string;
+  showSymbol?: boolean;
 }>(), {
   modelValue: '',
   factoryId: '',
   placeholder: '请选择单位',
   clearable: true,
   disabled: false,
+  usageScope: '',
+  showSymbol: true,
 });
 
 const emit = defineEmits<{
@@ -54,7 +58,11 @@ const filteredUnits = computed(() => {
   return activeUnits.value.filter((unit) => unitAliases(unit).some((alias) => normalizeUnitIdentity(alias).includes(needle)));
 });
 const exactMatch = computed(() => findDuplicateUnit(activeUnits.value, [query.value]));
-const canCreate = computed(() => Boolean(query.value.trim()) && !exactMatch.value);
+const canCreate = computed(() => !props.usageScope && Boolean(query.value.trim()) && !exactMatch.value);
+const selectedModelValue = computed(() => {
+  const current = findDuplicateUnit(activeUnits.value, [props.modelValue]);
+  return current?.unitCode || props.modelValue || '';
+});
 
 const categoryOptions: Array<{ value: SystemUnitCategory; label: string }> = [
   { value: 'COUNT', label: '数量' },
@@ -73,7 +81,7 @@ async function loadUnits(): Promise<void> {
   if (!props.factoryId) return;
   loading.value = true;
   try {
-    const response = await listSystemUnits(props.factoryId);
+    const response = await listSystemUnits(props.factoryId, props.usageScope || undefined);
     units.value = response.success && Array.isArray(response.data) ? response.data : [];
   } catch (error) {
     handleCatchError(error, '加载计量单位失败');
@@ -91,8 +99,9 @@ function selectValue(value: string): void {
     openCreateDialog(query.value);
     return;
   }
-  emit('update:modelValue', value || '');
-  emit('change', value || '');
+  const canonical = findDuplicateUnit(activeUnits.value, [value])?.unitCode || value || '';
+  emit('update:modelValue', canonical);
+  emit('change', canonical);
   query.value = '';
 }
 
@@ -106,7 +115,7 @@ function openCreateDialog(name: string): void {
 }
 
 function selectExisting(unit: SystemUnit): void {
-  const value = unit.unitName.trim();
+  const value = unit.unitCode.trim();
   emit('update:modelValue', value);
   emit('change', value);
 }
@@ -173,14 +182,14 @@ async function submitUnit(): Promise<void> {
   }
 }
 
-watch(() => props.factoryId, (): void => { void loadUnits(); });
+watch(() => [props.factoryId, props.usageScope], (): void => { void loadUnits(); });
 onMounted((): void => { void loadUnits(); });
 </script>
 
 <template>
   <div class="unit-select">
     <el-select
-      :model-value="modelValue || ''"
+      :model-value="selectedModelValue"
       :placeholder="placeholder"
       :clearable="clearable"
       :disabled="disabled"
@@ -200,8 +209,8 @@ onMounted((): void => { void loadUnits(); });
       <el-option
         v-for="unit in filteredUnits"
         :key="unit.unitCode"
-        :label="unit.unitSymbol && unit.unitSymbol !== unit.unitName ? `${unit.unitName}（${unit.unitSymbol}）` : unit.unitName"
-        :value="unit.unitName"
+        :label="showSymbol && unit.unitSymbol && unit.unitSymbol !== unit.unitName ? `${unit.unitName}（${unit.unitSymbol}）` : unit.unitName"
+        :value="unit.unitCode"
       />
     </el-select>
 

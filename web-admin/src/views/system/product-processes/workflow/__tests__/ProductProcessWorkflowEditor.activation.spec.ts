@@ -10,8 +10,12 @@ import type {
 const apiMocks = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
+  createWorkProcess: vi.fn(),
   getActiveWorkProcesses: vi.fn(),
+  getWorkProcessCategories: vi.fn(),
   getProductWorkProcesses: vi.fn(),
+  updateWorkProcess: vi.fn(),
+  updateWorkProcessOutputKind: vi.fn(),
   getProductProcessWorkflow: vi.fn(),
   getProductProcessWorkflowActivation: vi.fn(),
   publishProductProcessWorkflow: vi.fn(),
@@ -23,8 +27,12 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock('@/api/request', () => ({ get: apiMocks.get, post: apiMocks.post }));
 vi.mock('@/api/processProduction', () => ({
+  createWorkProcess: apiMocks.createWorkProcess,
   getActiveWorkProcesses: apiMocks.getActiveWorkProcesses,
+  getWorkProcessCategories: apiMocks.getWorkProcessCategories,
   getProductWorkProcesses: apiMocks.getProductWorkProcesses,
+  updateWorkProcess: apiMocks.updateWorkProcess,
+  updateWorkProcessOutputKind: apiMocks.updateWorkProcessOutputKind,
 }));
 vi.mock('../workflowApi', () => ({
   getProductProcessWorkflow: apiMocks.getProductProcessWorkflow,
@@ -41,6 +49,7 @@ vi.mock('@vue-flow/core', async () => {
   const { defineComponent } = await import('vue');
   return {
     MarkerType: { ArrowClosed: 'arrow-closed' },
+    SelectionMode: { Partial: 'partial' },
     VueFlow: defineComponent({ name: 'VueFlow', template: '<div />' }),
     useVueFlow: () => ({
       fitView: vi.fn(),
@@ -76,6 +85,7 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     }));
     apiMocks.post.mockResolvedValue({ success: true, data: null });
     apiMocks.getActiveWorkProcesses.mockResolvedValue({ success: true, data: [] });
+    apiMocks.getWorkProcessCategories.mockResolvedValue({ success: true, data: [] });
     apiMocks.getProductWorkProcesses.mockResolvedValue({ success: true, data: [] });
     apiMocks.getProductProcessWorkflow.mockResolvedValue({
       success: true,

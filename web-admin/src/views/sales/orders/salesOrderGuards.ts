@@ -169,7 +169,7 @@ export function roundMoney(value: number): number {
 }
 
 export function deliveryMoney(items: RowLike[]): { untaxed: number; tax: number; taxIncluded: number } {
-  return items.reduce((sum, item) => {
+  return items.reduce<{ untaxed: number; tax: number; taxIncluded: number }>((sum, item) => {
     const untaxed = roundMoney(quantity(item.deliveredQuantity) * quantity(item.unitPrice));
     const tax = roundMoney(untaxed * quantity(item.taxRate) / 100);
     return {

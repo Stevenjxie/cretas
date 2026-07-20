@@ -28,7 +28,7 @@
  *   4. 单位下拉统一使用 UnitSelect，支持搜索、查重和现场创建
  *   foldable #1: 批次列表单位列 → 修 materials/list.vue 显示 quantityUnit 而非 unit
  */
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -37,6 +37,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Edit, Delete as DeleteIcon, Search, Refresh, Lock, View } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
 import { bigCategoryOf } from '@/utils/materialCategory';
+import { displayUnit } from '@/utils/unitPricing';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import UnitSelect from '@/components/common/UnitSelect.vue';
@@ -48,6 +49,7 @@ const permissionStore = usePermissionStore();
 const route = useRoute();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('warehouse'));
+const canManageClassification = computed(() => permissionStore.canWrite('system'));
 // T2-5b (issue #534): expose movingAvgPrice — gate by canViewPrice RBAC
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 const { goCreate } = useCreateAndReturn();
@@ -221,21 +223,37 @@ const createL3Submitting = ref(false);
 const createL3Form = ref({ label: '' });
 const l3MatchHint = ref('');
 const l3ManuallyEdited = ref(false);
+const unitSuggestionHint = ref('');
+interface TaxonomyCandidate {
+  l1Code: string;
+  l1Label: string;
+  l2Code: string;
+  l2Label: string;
+  l3Code: string;
+  l3Label: string;
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  reason: string;
+}
+const taxonomyCandidates = ref<TaxonomyCandidate[]>([]);
+let segmentTreeRequestVersion = 0;
 
 async function loadSegmentTree() {
   if (!factoryId.value) return;
+  const requestFactoryId = factoryId.value;
+  const requestVersion = ++segmentTreeRequestVersion;
   segmentLoading.value = true;
   try {
-    const res = await get<SegmentNode[]>(`/${factoryId.value}/material-segments/tree`);
+    const res = await get<SegmentNode[]>(`/${requestFactoryId}/material-segments/tree`);
+    if (requestVersion !== segmentTreeRequestVersion || requestFactoryId !== factoryId.value) return;
     if (res.success && Array.isArray(res.data)) {
       segmentTree.value = res.data;
     } else {
       segmentTree.value = [];
     }
   } catch {
-    segmentTree.value = [];
+    if (requestVersion === segmentTreeRequestVersion) segmentTree.value = [];
   } finally {
-    segmentLoading.value = false;
+    if (requestVersion === segmentTreeRequestVersion) segmentLoading.value = false;
   }
 }
 
@@ -308,6 +326,12 @@ function syncMaterialFamilyFromCategory(category: string | null | undefined) {
   if (option && segmentL1.value !== option.segmentCode) segmentL1.value = option.segmentCode;
 }
 
+// The tree is fetched asynchronously. Re-run the category → L1 synchronization
+// after its options arrive instead of leaving L2 disabled with a stale placeholder.
+watch(materialFamilyOptions, () => {
+  if (dialogVisible.value && !editingId.value) syncMaterialFamilyFromCategory(form.value.category);
+});
+
 function syncMaterialFamilyFromSegment(segmentCode: string) {
   if (editingId.value || !segmentCode) return;
   const option = materialFamilyOptions.value.find((item) => item.segmentCode === segmentCode);
@@ -363,15 +387,46 @@ const nextL3Code = computed(() => (
 function handleL3Change(value: string): void {
   if (value === QUICK_CREATE_L3) {
     segmentL3.value = '';
-    createL3Form.value = { label: form.value.name.trim() };
+    // L3 is shared taxonomy, not the current purchasable MaterialType.
+    // Never copy the material name into a new shared classification.
+    createL3Form.value = { label: '' };
     createL3DialogVisible.value = true;
     return;
   }
   l3ManuallyEdited.value = true;
   l3MatchHint.value = '';
+  taxonomyCandidates.value = [];
+}
+
+async function applyTaxonomyCandidate(candidate: TaxonomyCandidate, manual: boolean): Promise<void> {
+  cascadeWriting.value = true;
+  try {
+    segmentL1.value = candidate.l1Code;
+    await nextTick();
+    segmentL2.value = candidate.l2Code;
+    await nextTick();
+    segmentL3.value = candidate.l3Code;
+    l3ManuallyEdited.value = manual;
+    taxonomyCandidates.value = [];
+    l3MatchHint.value = `${manual ? '已确认分类' : '已根据名称智能匹配'}：${candidate.l1Label} > ${candidate.l2Label} > ${candidate.l3Label}；${candidate.reason}`;
+  } finally {
+    cascadeWriting.value = false;
+  }
+}
+
+function rematchTaxonomy(): void {
+  l3ManuallyEdited.value = false;
+  segmentL3.value = '';
+  l3MatchHint.value = '已允许重新匹配，请继续编辑名称或稍候系统重新推荐';
+  suggestionRefreshToken.value += 1;
 }
 
 async function handleCreateL3(): Promise<void> {
+  if (!canManageClassification.value) {
+    ElMessage.error('没有共享分类维护权限，请联系系统管理员新增 L3 分类');
+    createL3DialogVisible.value = false;
+    return;
+  }
   const label = createL3Form.value.label.trim();
   if (!segmentL2.value) { ElMessage.warning('请先选择 L2 中类'); return; }
   if (!label) { ElMessage.warning('请输入新品类名称'); return; }
@@ -416,9 +471,11 @@ async function handleCreateL3(): Promise<void> {
 }
 
 let l3MatchTimer: ReturnType<typeof setTimeout> | undefined;
+let l3MatchRequestVersion = 0;
 watch(
   () => [form.value.name, segmentL1.value, segmentL2.value, dialogVisible.value, editingId.value] as const,
   ([name, _l1, l2, visible, currentEditingId]) => {
+    const requestVersion = ++l3MatchRequestVersion;
     if (l3MatchTimer) clearTimeout(l3MatchTimer);
     l3MatchHint.value = '';
     const normalizedName = String(name || '').trim();
@@ -428,10 +485,12 @@ watch(
         const response = await get<{ content: TableRow[] }>(`/${factoryId.value}/raw-material-types`, {
           params: { page: 1, size: 20, codePrefix: l2, keyword: normalizedName },
         });
+        if (requestVersion !== l3MatchRequestVersion) return;
         const rows = response.success && Array.isArray(response.data?.content) ? response.data.content : [];
         const query = normalizedName.toLocaleLowerCase();
-        const matched = rows.find((row) => String(row.name || '').trim().toLocaleLowerCase() === query)
-          ?? rows.find((row) => String(row.name || '').toLocaleLowerCase().includes(query));
+        // Only an exact same-factory historic identity may be auto-selected.
+        // Fuzzy results are exposed by the explainable candidate UI instead.
+        const matched = rows.find((row) => String(row.name || '').trim().toLocaleLowerCase() === query);
         const matchedL3 = String(matched?.code || '').slice(0, 10);
         const option = segmentL3Options.value.find((node) => node.segmentCode === matchedL3);
         if (option && !l3ManuallyEdited.value) {
@@ -519,10 +578,14 @@ const storageTypeManuallyEdited = ref(false);
 const shelfLifeManuallyEdited = ref(false);
 const packagingManuallyEdited = ref(false); // covers level1PerLevel2 + level2Unit together
 
-// Watch each field — if cascadeWriting, skip flagging as manual (cascade write)
-watch(() => form.value.unit, () => {
-  if (!cascadeWriting.value) unitManuallyEdited.value = true;
-});
+// Unit manual state is driven by UnitSelect's user-only change event. Watching
+// v-model cannot distinguish form initialization from a real user action.
+function handleUnitUserChange(value: string): void {
+  if (cascadeWriting.value) return;
+  unitManuallyEdited.value = true;
+  unitSuggestionHint.value = '';
+  form.value.unit = value;
+}
 watch(() => form.value.category, (category) => {
   if (!cascadeWriting.value) categoryManuallyEdited.value = true;
   syncMaterialFamilyFromCategory(category);
@@ -550,6 +613,8 @@ function resetManuallyEditedFlags() {
   storageTypeManuallyEdited.value = false;
   shelfLifeManuallyEdited.value = false;
   packagingManuallyEdited.value = false;
+  unitSuggestionHint.value = '';
+  taxonomyCandidates.value = [];
 }
 
 // clearCascadeFields: when name is cleared entirely, reset cascade-filled fields
@@ -575,9 +640,12 @@ function clearCascadeFields() {
 // null fields from suggest → leave as-is (don't overwrite with null).
 // Endpoint 404/error → fallback to suggest-unit only (backward compat).
 let suggestTimer: number | undefined;
+let suggestRequestVersion = 0;
+const suggestionRefreshToken = ref(0);
 watch(
-  () => [form.value.name, form.value.category, dialogVisible.value, editingId.value] as const,
+  () => [form.value.name, form.value.category, dialogVisible.value, editingId.value, suggestionRefreshToken.value] as const,
   ([name, _cat, visible, eid]) => {
+    const requestVersion = ++suggestRequestVersion;
     if (!visible || eid) return; // edit mode: no cascade
     if (suggestTimer) clearTimeout(suggestTimer);
     const trimmedName = String(name || '').trim();
@@ -598,12 +666,21 @@ watch(
         // Try full suggest endpoint (T159-B-codegen provides this)
         const res = await get<{
           unit?: string | null;
+          matchedMaterialName?: string | null;
+          unitConfidence?: 'HIGH' | 'MEDIUM' | 'LOW' | null;
           category?: string | null;
           storageType?: string | null;
           shelfLifeDays?: number | null;
           level1PerLevel2?: number | null;
           level2Unit?: string | null;
+          segmentL1Code?: string | null;
+          segmentL2Code?: string | null;
+          segmentL3Code?: string | null;
+          classificationConfidence?: 'HIGH' | 'MEDIUM' | 'LOW' | null;
+          classificationReason?: string | null;
+          classificationCandidates?: TaxonomyCandidate[] | null;
         }>(`/${factoryId.value}/raw-material-types/suggest`, { params });
+        if (requestVersion !== suggestRequestVersion) return;
 
         if (!res.success) {
           // Fallback: old suggest-unit endpoint (original behavior)
@@ -613,7 +690,10 @@ watch(
           );
           if (unitRes.success && unitRes.data && !unitManuallyEdited.value) {
             cascadeWriting.value = true;
-            try { form.value.unit = unitRes.data; } finally { cascadeWriting.value = false; }
+            try {
+              form.value.unit = unitRes.data;
+              unitSuggestionHint.value = `已根据同工厂相似原料智能匹配为「${displayUnit(unitRes.data)}」，可手动修改`;
+            } finally { cascadeWriting.value = false; }
           }
           return;
         }
@@ -621,10 +701,27 @@ watch(
         const d = res.data;
         if (!d) return;
 
+        const candidates = (d.classificationCandidates || []).slice(0, 3);
+        if (l3ManuallyEdited.value) {
+          taxonomyCandidates.value = [];
+          l3MatchHint.value = '名称已变化，但分类已手动修改；如需采用新名称建议，请点击“重新匹配分类”';
+        } else if (d.classificationConfidence === 'HIGH' && candidates[0]) {
+          await applyTaxonomyCandidate(candidates[0], false);
+        } else if (d.classificationConfidence === 'MEDIUM') {
+          taxonomyCandidates.value = candidates;
+          l3MatchHint.value = '找到可能的现有分类，请确认后再保存；系统不会自动创建分类';
+        } else {
+          taxonomyCandidates.value = [];
+        }
+
         // Apply cascade — only fields user hasn't manually edited, skip null values
         cascadeWriting.value = true;
         try {
-          if (d.unit != null && !unitManuallyEdited.value) form.value.unit = d.unit;
+          if (d.unit != null && !unitManuallyEdited.value && d.unitConfidence !== 'LOW') {
+            form.value.unit = d.unit;
+            const source = d.matchedMaterialName ? `，参考相似原料「${d.matchedMaterialName}」` : '';
+            unitSuggestionHint.value = `已根据同工厂相似原料智能匹配为「${displayUnit(d.unit)}」${source}，可手动修改`;
+          }
           if (d.category != null && !categoryManuallyEdited.value) {
             const family = resolveMaterialFamily(d.category);
             if (family) form.value.category = family;
@@ -733,18 +830,18 @@ async function openEdit(row: TableRow) {
 // 「1 [二级单位] = [换算数] [一级单位]」
 const packagingL2Preview = computed(() => {
   const qty = Number(packaging.value.level1PerLevel2);
-  const l1 = form.value.unit || '主单位';
+  const l1 = form.value.unit ? displayUnit(form.value.unit) : '主单位';
   const l2 = packaging.value.level2Unit;
   if (!l2 || !qty || qty <= 0) return '';
-  return `1 ${l2} = ${qty} ${l1}`;
+  return `1 ${displayUnit(l2)} = ${qty} ${l1}`;
 });
 
 const packagingL3Preview = computed(() => {
   const qty = Number(packaging.value.level2PerLevel3);
-  const l2 = packaging.value.level2Unit || '二级单位';
+  const l2 = packaging.value.level2Unit ? displayUnit(packaging.value.level2Unit) : '二级单位';
   const l3 = packaging.value.level3Unit;
   if (!l3 || !qty || qty <= 0) return '';
-  return `1 ${l3} = ${qty} ${l2}`;
+  return `1 ${displayUnit(l3)} = ${qty} ${l2}`;
 });
 
 const submitting = ref(false);
@@ -1004,7 +1101,9 @@ function handleSizeChange(size: number) {
         <el-table-column prop="code" label="原料编码" width="160" />
         <el-table-column prop="name" label="原料名称" min-width="180" />
         <el-table-column prop="category" label="类别" width="120" />
-        <el-table-column prop="unit" label="单位" width="80" />
+        <el-table-column prop="unit" label="单位" width="80">
+          <template #default="{ row }">{{ displayUnit(row.unit) }}</template>
+        </el-table-column>
         <el-table-column prop="storageType" label="储存类型" width="100" />
         <el-table-column prop="shelfLifeDays" label="保质期 (天)" width="120">
           <template #default="{ row }">{{ row.shelfLifeDays ?? '-' }}</template>
@@ -1095,10 +1194,16 @@ function handleSizeChange(size: number) {
           <UnitSelect
             v-model="form.unit"
             :factory-id="factoryId"
+            usage-scope="INVENTORY_QUANTITY"
+            :show-symbol="false"
             placeholder="请选择或搜索入库计量单位"
             :clearable="false"
+            @change="handleUnitUserChange"
           />
           <div class="field-hint">新建默认 kg（公斤），可按实际入库计量单位修改</div>
+          <div v-if="unitSuggestionHint && !unitManuallyEdited && !editingId" class="field-hint field-hint--matched">
+            {{ unitSuggestionHint }}
+          </div>
           <div v-if="unitManuallyEdited && !editingId" class="field-hint field-hint--manual">
             已手动设置，自动填充将不再覆盖此字段
           </div>
@@ -1241,7 +1346,7 @@ function handleSizeChange(size: number) {
             <el-form-item label="L2 中类" required>
               <el-select
                 v-model="segmentL2"
-                placeholder="请先选择 L1 大类"
+                :placeholder="segmentL1 ? '请选择 L2 中类' : '请先选择 L1 大类'"
                 clearable
                 filterable
                 style="width: 100%"
@@ -1266,8 +1371,9 @@ function handleSizeChange(size: number) {
                 @change="handleL3Change"
               >
                 <el-option
+                  v-if="canManageClassification"
                   :key="QUICK_CREATE_L3"
-                  label="＋ 快捷创建新品类"
+                  label="＋ 新建共享 L3 分类"
                   :value="QUICK_CREATE_L3"
                 />
                 <el-option
@@ -1277,8 +1383,26 @@ function handleSizeChange(size: number) {
                   :value="opt.segmentCode"
                 />
               </el-select>
-              <div class="field-hint">L3 是原料类型共用的具体品类；单位、规格、储存方式等仍在原料类型中维护。</div>
+              <div class="field-hint">L3 是多个具体原料共用的稳定分类（如“鱼类原料”）；当前原料名称、规格、单位等仍维护在原料类型中。</div>
+              <div v-if="!canManageClassification" class="field-hint">没有共享分类维护权限；如无合适分类，请联系系统管理员在“物料编码分类”中新增。</div>
               <div v-if="l3MatchHint" class="field-hint field-hint--matched">{{ l3MatchHint }}</div>
+              <div v-if="taxonomyCandidates.length" class="taxonomy-candidates" aria-label="分类建议">
+                <el-button
+                  v-for="candidate in taxonomyCandidates"
+                  :key="candidate.l3Code"
+                  size="small"
+                  plain
+                  @click="applyTaxonomyCandidate(candidate, true)"
+                >
+                  {{ candidate.l1Label }} &gt; {{ candidate.l2Label }} &gt; {{ candidate.l3Label }}
+                </el-button>
+              </div>
+              <el-button
+                v-if="l3ManuallyEdited && l3MatchHint.includes('名称已变化')"
+                link
+                type="primary"
+                @click="rematchTaxonomy"
+              >重新匹配分类</el-button>
             </el-form-item>
             <el-form-item v-if="segmentL1 && segmentL2 && segmentL3" label="编码预览">
               <div class="code-preview-row">
@@ -1323,7 +1447,7 @@ function handleSizeChange(size: number) {
         <!-- 一级: 显示主单位 (read-only echo — single source of truth = 上方单位字段) -->
           <el-form-item label="一级 (主单位)">
           <div class="packaging-inline-row">
-            <el-tag type="info" class="unit-tag">{{ form.unit || '请先填单位' }}</el-tag>
+            <el-tag type="info" class="unit-tag">{{ form.unit ? displayUnit(form.unit) : '请先填单位' }}</el-tag>
             <span class="packaging-equals-hint">← 同「单位」字段（主数据 canonical 单位，不可单独更改）</span>
           </div>
           </el-form-item>
@@ -1347,7 +1471,7 @@ function handleSizeChange(size: number) {
               placeholder="换算数"
               style="width: 100px"
             />
-            <el-tag type="info" class="unit-tag-echo">{{ form.unit || '主单位' }}</el-tag>
+            <el-tag type="info" class="unit-tag-echo">{{ form.unit ? displayUnit(form.unit) : '主单位' }}</el-tag>
           </div>
           <!-- Live preview summary (SKU-style) -->
           <div v-if="packagingL2Preview" class="packaging-preview">
@@ -1381,7 +1505,7 @@ function handleSizeChange(size: number) {
               style="width: 100px"
               :disabled="!packaging.level2Unit"
             />
-            <el-tag type="info" class="unit-tag-echo">{{ packaging.level2Unit || '二级单位' }}</el-tag>
+            <el-tag type="info" class="unit-tag-echo">{{ packaging.level2Unit ? displayUnit(packaging.level2Unit) : '二级单位' }}</el-tag>
           </div>
           <!-- Live preview summary -->
           <div v-if="packagingL3Preview" class="packaging-preview">
@@ -1402,11 +1526,19 @@ function handleSizeChange(size: number) {
 
     <el-dialog
       v-model="createL3DialogVisible"
-      title="快捷创建 L3 小类"
+      title="新建共享 L3 分类"
       width="460px"
       append-to-body
       :close-on-click-modal="false"
     >
+      <el-alert
+        title="这里创建的是可被多个原料复用的共享分类，不是当前具体原料"
+        description="例如 L3 可填写“鱼类原料”或“鸡胸肉”；具体规格、供应商形态和包装信息请填写在原料类型中。系统不会复制当前原料名称。"
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 16px"
+      />
       <el-form label-width="110px">
         <el-form-item label="所属 L2 中类">
           <el-input :model-value="segmentL2" disabled />
@@ -1416,7 +1548,7 @@ function handleSizeChange(size: number) {
           <div class="field-hint">系统已检查当前 L2 下的编码并自动生成，无需手工填写。</div>
         </el-form-item>
         <el-form-item label="小类名称" required>
-          <el-input v-model="createL3Form.label" maxlength="100" placeholder="例如：黄油鸡 / 食盐 / 纸盒" />
+          <el-input v-model="createL3Form.label" maxlength="100" placeholder="例如：鱼类原料 / 鸡胸肉 / 箱类包材" />
         </el-form-item>
       </el-form>
       <template #footer>

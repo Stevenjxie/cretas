@@ -11,8 +11,10 @@ vi.mock('@/api/request', () => ({ default: requestMock }));
 
 import {
   createSupplierMaterial,
+  createSupplierPurchaseSpec,
   downloadSupplierImportErrors,
   listSupplierMaterials,
+  listSupplierPurchaseSpecs,
   previewSupplierImport,
   updateSupplierStatus,
 } from './supplierManagement';
@@ -66,6 +68,28 @@ describe('supplier management API boundary', () => {
     expect(requestMock.get).toHaveBeenCalledWith('/F006/suppliers/S1/materials');
     expect(requestMock.post).toHaveBeenCalledWith('/F006/suppliers/S1/materials', expect.objectContaining({
       materialTypeId: 'M2', supplierMaterialCode: 'SUP-M2', preferred: true,
+    }));
+  });
+
+  it('uses relation-scoped purchase-spec endpoints and sends the authoritative base unit', async () => {
+    requestMock.get.mockResolvedValueOnce({ data: [{ id: 'P1', supplierMaterialId: 'R1' }] });
+    requestMock.post.mockResolvedValueOnce({ data: { id: 'P2', supplierMaterialId: 'R1' } });
+
+    await listSupplierPurchaseSpecs('F006', 'S1', 'R1');
+    await createSupplierPurchaseSpec('F006', 'S1', 'R1', {
+      name: '10kg/箱',
+      purchasePackageUnit: 'case',
+      inventoryBaseUnit: 'kg',
+      factor: 10,
+      currency: 'CNY',
+      defaultSpec: true,
+      active: true,
+    });
+
+    const endpoint = '/F006/suppliers/S1/materials/R1/purchase-specs';
+    expect(requestMock.get).toHaveBeenCalledWith(endpoint);
+    expect(requestMock.post).toHaveBeenCalledWith(endpoint, expect.objectContaining({
+      purchasePackageUnit: 'case', inventoryBaseUnit: 'kg', factor: 10,
     }));
   });
 

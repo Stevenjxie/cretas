@@ -147,6 +147,8 @@ interface ProductType {
   // 六扇门扩展字段
   boxConversionCoefficient?: number;
   gramsPerUnit?: number;   // P0-2: 标准克重(克/份), 报工末道份→kg折算用
+  netContentQuantity?: number | null;
+  netContentUnit?: NetContentUnit | null;
   wipToFgYield?: number;   // T133: 半成品→成品出成率 (0~1), 备货看板 WIP 估算; null=按 1.0
   quotedLaborCostPerKg?: number; // SP9-M1: 研发预估人工成本(元/kg), 人效双口径对比报价侧
   standardCost?: number | null; // SP5: standard unit cost for margin redline
@@ -312,8 +314,15 @@ const netContentAmount = ref<number | null>(null);
 const netContentUnit = ref<NetContentUnit>('g');
 let previousNetContentUnit: NetContentUnit = 'g';
 
-function hydrateNetContent(gramsPerUnit?: number | null, specification?: string | null): void {
-  const parsed = parseNetContent(specification, gramsPerUnit);
+function hydrateNetContent(
+  gramsPerUnit?: number | null,
+  specification?: string | null,
+  structuredQuantity?: number | null,
+  structuredUnit?: NetContentUnit | null,
+): void {
+  const parsed = structuredQuantity != null && structuredUnit
+    ? { amount: Number(structuredQuantity), unit: structuredUnit }
+    : parseNetContent(specification, gramsPerUnit);
   netContentAmount.value = parsed.amount > 0 ? parsed.amount : null;
   netContentUnit.value = parsed.unit;
   previousNetContentUnit = parsed.unit;
@@ -947,7 +956,12 @@ async function handleEdit(row: ProductType) {
     Object.assign(formData, product);
     formData.productCategory = product.productCategory || activeTab.value;
     formData.gramsPerUnit = product.gramsPerUnit ?? undefined;
-    hydrateNetContent(product.gramsPerUnit, product.specification);
+    hydrateNetContent(
+      product.gramsPerUnit,
+      product.specification,
+      product.netContentQuantity,
+      product.netContentUnit,
+    );
     formData.standardCost = product.standardCost ?? null;
     formData.targetGrossMargin = product.targetGrossMargin ?? null;
     formData.targetGrossMarginPercent = product.targetGrossMargin != null
@@ -1023,6 +1037,10 @@ async function handleSubmit() {
   try {
     await formRef.value.validate();
     applyCategoryUnitContract();
+    if (!isSemiFinishedSku.value && (!Number.isFinite(Number(netContentAmount.value)) || Number(netContentAmount.value) <= 0)) {
+      ElMessage.warning('请填写大于 0 的净含量');
+      return;
+    }
     // 提交前再次收敛，保证 API 永远收到规范文本和与基本单位一致的包装右侧单位。
     synchronizeSpecificationFields();
     const partiallyConfigured = packagingSpecs.value.some((spec) => {
@@ -1079,6 +1097,10 @@ async function handleSubmit() {
       level1Unit: formData.level1Unit ?? null,
       boxConversionCoefficient: formData.boxConversionCoefficient ?? null,
       packagingSpecs: submittedPackagingSpecs,
+      ...(!isSemiFinishedSku.value ? {
+        netContentQuantity: Number(netContentAmount.value),
+        netContentUnit: netContentUnit.value,
+      } : {}),
     };
     if (canEditMarginRedline.value) {
       const marginPercent = nullableNumber(formData.targetGrossMarginPercent);

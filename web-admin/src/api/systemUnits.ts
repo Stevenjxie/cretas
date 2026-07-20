@@ -17,6 +17,8 @@ export interface SystemUnit {
   isActive?: boolean | null;
   isSystem?: boolean | null;
   sortOrder?: number | null;
+  usageScopes?: string[] | null;
+  conversionFamily?: string | null;
 }
 
 export interface UnitCatalogItem {
@@ -25,6 +27,9 @@ export interface UnitCatalogItem {
   dimension: string;
   baseCode: string;
   displayScale: number;
+  usageScopes?: string[];
+  conversionFamily?: string | null;
+  active?: boolean;
 }
 
 /**
@@ -57,6 +62,8 @@ export function mergeSystemUnitSources(
         decimalPlaces: item.displayScale,
         isActive: true,
         isSystem: true,
+        usageScopes: item.usageScopes,
+        conversionFamily: item.conversionFamily,
       });
       continue;
     }
@@ -79,6 +86,8 @@ export function mergeSystemUnitSources(
       baseUnit: item.baseCode,
       category: item.dimension,
       decimalPlaces: item.displayScale,
+      usageScopes: item.usageScopes,
+      conversionFamily: item.conversionFamily,
     };
   }
 
@@ -105,14 +114,22 @@ export interface CreateSystemUnitPayload {
   sortOrder?: number;
 }
 
-export async function listSystemUnits(factoryId: string) {
+export async function listSystemUnits(factoryId: string, usageScope?: string) {
   const [configured, catalog] = await Promise.all([
     get<SystemUnit[]>(`/${factoryId}/system-config/units`),
-    get<UnitCatalogItem[]>(`/${factoryId}/units/catalog`),
+    get<UnitCatalogItem[]>(`/${factoryId}/units/catalog`, {
+      params: usageScope ? { usageScope } : undefined,
+    }),
   ]);
-  const merged = mergeSystemUnitSources(configured.data || [], catalog.data || []);
+  const catalogItems = catalog.data || [];
+  const allowedCodes = new Set(catalogItems.map((item) => normalizeUnitIdentity(item.code)));
+  const configuredUnits = usageScope
+    ? (configured.data || []).filter((unit) => allowedCodes.has(normalizeUnitIdentity(unit.unitCode)))
+    : (configured.data || []);
+  const merged = mergeSystemUnitSources(configuredUnits, catalogItems);
   for (const alias of COMMON_DISPLAY_ALIASES) {
-    if (!merged.some((unit) => normalizeUnitIdentity(unit.unitName) === normalizeUnitIdentity(alias.unitName))) {
+    if ((!usageScope || allowedCodes.has(normalizeUnitIdentity(alias.unitCode.split(':')[0])))
+      && !merged.some((unit) => normalizeUnitIdentity(unit.unitName) === normalizeUnitIdentity(alias.unitName))) {
       merged.push(alias);
     }
   }
