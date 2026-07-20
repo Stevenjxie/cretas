@@ -2448,7 +2448,7 @@ function handleMergePurchase() {
         <el-form-item label="计划发货数量">
           <div v-for="(item, idx) in deliveryForm.items" :key="idx" style="margin-bottom: 4px">
             {{ Number(idx) + 1 }}. {{ item.productName || '产品' }} —
-            <el-input-number v-model="item.deliveredQuantity" :min="1" size="small" style="width: 120px" /> {{ item.unit }}
+            <el-input-number v-model="item.deliveredQuantity" :min="1" size="small" style="width: 120px" /> {{ displayUnit(item.unit) }}
           </div>
         </el-form-item>
         <el-form-item label="备注">

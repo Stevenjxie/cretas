@@ -224,6 +224,18 @@ public class SplitOrderTool extends AbstractBusinessTool {
         copy.setRemark(src.getRemark());
         copy.setSpecification(src.getSpecification());
         copy.setBoxQuantity(src.getBoxQuantity());
+        copy.setPackagingSpecId(src.getPackagingSpecId());
+        copy.setPackagingSpecName(src.getPackagingSpecName());
+        copy.setPackagingUnit(src.getPackagingUnit());
+        copy.setPackagingBaseUnit(src.getPackagingBaseUnit());
+        copy.setPackagingFactor(src.getPackagingFactor());
+        copy.setSourceWarehouseCode(src.getSourceWarehouseCode());
+        copy.setDestWarehouseName(src.getDestWarehouseName());
+        copy.setDestWarehouseCode(src.getDestWarehouseCode());
+        copy.setExternalPoId(src.getExternalPoId());
+        copy.setBarcode(src.getBarcode());
+        copy.setAppointmentTime(src.getAppointmentTime());
+        copy.setRequiredArrivalDate(src.getRequiredArrivalDate());
         return copy;
     }
 }

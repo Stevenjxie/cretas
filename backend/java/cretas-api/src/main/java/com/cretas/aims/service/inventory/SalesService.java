@@ -8,6 +8,7 @@ import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.entity.inventory.SalesOrderItem;
 
 import java.util.List;
 import java.util.Map;
@@ -77,6 +78,13 @@ public interface SalesService {
             String factoryId, String productTypeId, int limit);
 
     SalesOrder updateSalesOrder(String factoryId, String orderId, UpdateSalesOrderRequest request);
+
+    /**
+     * Idempotently fills a missing source warehouse on one historical order item.
+     * Existing non-matching values are never overwritten and the parent order is not updated.
+     */
+    SalesOrderItem repairMissingSourceWarehouse(
+            String factoryId, String orderId, Long itemId, String sourceWarehouseCode);
 
     /**
      * 取消销售订单。
