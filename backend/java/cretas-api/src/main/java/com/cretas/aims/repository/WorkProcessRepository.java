@@ -4,7 +4,12 @@ import com.cretas.aims.entity.WorkProcess;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+
+import jakarta.persistence.LockModeType;
 
 import java.util.List;
 import java.util.Optional;
@@ -16,7 +21,7 @@ public interface WorkProcessRepository extends JpaRepository<WorkProcess, String
 
     List<WorkProcess> findByFactoryId(String factoryId);
 
-    List<WorkProcess> findByFactoryIdAndIsActiveTrueOrderBySortOrderAsc(String factoryId);
+    List<WorkProcess> findByFactoryIdAndIsActiveTrueAndMergedIntoIdIsNullOrderByProcessNameAsc(String factoryId);
 
     Optional<WorkProcess> findByFactoryIdAndId(String factoryId, String id);
 
@@ -29,12 +34,18 @@ public interface WorkProcessRepository extends JpaRepository<WorkProcess, String
      */
     List<WorkProcess> findByFactoryIdAndProcessName(String factoryId, String processName);
 
-    /**
-     * C5: near-dup detection — find processes with the same name + category + unit
-     * (excluding the caller's own ID on update; pass null for create).
-     */
-    List<WorkProcess> findByFactoryIdAndProcessNameAndProcessCategoryAndUnit(
-            String factoryId, String processName, String processCategory, String unit);
-
     List<WorkProcess> findByFactoryIdAndIdIn(String factoryId, List<String> ids);
+
+    @Query("select distinct trim(wp.processCategory) from WorkProcess wp "
+            + "where wp.factoryId = :factoryId and wp.processCategory is not null "
+            + "and trim(wp.processCategory) <> '' order by trim(wp.processCategory)")
+    List<String> findDistinctProcessCategories(@Param("factoryId") String factoryId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select wp from WorkProcess wp where wp.factoryId = :factoryId and wp.id in :ids order by wp.id")
+    List<WorkProcess> lockByFactoryIdAndIdIn(
+            @Param("factoryId") String factoryId,
+            @Param("ids") List<String> ids);
+
+    boolean existsByFactoryIdAndMergedIntoId(String factoryId, String mergedIntoId);
 }

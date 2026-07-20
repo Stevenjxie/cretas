@@ -68,14 +68,14 @@ describe('product process workflow model', () => {
       position: { x: 256, y: 32 },
       data: {
         inputUnit: 'kg',
-        outputUnit: '盒',
+        outputUnit: '',
         ports: [
           { id: 'input:100', materialNodeId: 'raw', unit: 'kg' },
           {
             id: 'output:100',
             materialNodeId: 'material:semi:100',
             materialKind: 'SEMI_FINISHED',
-            unit: '盒',
+            unit: '',
           },
         ],
       },
@@ -88,7 +88,7 @@ describe('product process workflow model', () => {
         name: '切配后半成品',
         skuId: '',
         bound: false,
-        baseUnit: '盒',
+        baseUnit: '',
       },
     });
     expect(branch.edges).toEqual([
@@ -115,6 +115,7 @@ describe('product process workflow model', () => {
       workProcess: processOption({ defaultOutputMaterialKind: 'FINISHED_GOOD' }),
       productTypeId: 'PT-PIG-400',
       productName: '五香去骨猪蹄 400g',
+      productUnit: 'box',
       timestamp: 101,
     });
 
@@ -133,9 +134,27 @@ describe('product process workflow model', () => {
         direction: 'OUTPUT',
         materialNodeId: 'material:finished:101',
         materialKind: 'FINISHED_GOOD',
+        unit: 'box',
       }),
     ]));
+    expect(branch.processNode.data).toMatchObject({ inputUnit: 'kg', outputUnit: 'box' });
     expect(branch.edges).toHaveLength(2);
+  });
+
+  it('does not inherit a unit from the work-process action template', () => {
+    const branch = createProcessBranch({
+      source: materialNode('semi', 'SEMI_FINISHED', { x: 32, y: 48 }, 'kg'),
+      workProcess: processOption({ defaultOutputMaterialKind: 'SEMI_FINISHED' }),
+      productTypeId: 'PT-PIG-400',
+      productName: '中间产物',
+      timestamp: 102,
+    });
+
+    expect(branch.processNode.data).toMatchObject({ inputUnit: 'kg', outputUnit: '' });
+    expect(branch.processNode.data.ports).toEqual(expect.arrayContaining([
+      expect.objectContaining({ direction: 'INPUT', unit: 'kg' }),
+      expect.objectContaining({ direction: 'OUTPUT', unit: '' }),
+    ]));
   });
 
   it('lays out branches and joins by topological depth', () => {
@@ -474,16 +493,12 @@ function processOption(
   overrides: Partial<{
     id: string;
     processName: string;
-    unit: string;
-    outputUnit: string | null;
     defaultOutputMaterialKind: 'SEMI_FINISHED' | 'FINISHED_GOOD';
   }> = {},
 ) {
   return {
     id: 'WP-CUT',
     processName: '切配',
-    unit: 'kg',
-    outputUnit: '盒',
     defaultOutputMaterialKind: 'SEMI_FINISHED' as const,
     ...overrides,
   };

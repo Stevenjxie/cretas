@@ -46,7 +46,7 @@ public class WorkProcessController {
             @PathVariable String factoryId,
             @RequestParam(defaultValue = "1") Integer page,
             @RequestParam(defaultValue = "20") Integer size,
-            @RequestParam(defaultValue = "sortOrder") String sortBy,
+            @RequestParam(defaultValue = "processName") String sortBy,
             @RequestParam(defaultValue = "ASC") String sortDirection) {
         Sort.Direction direction = "ASC".equalsIgnoreCase(sortDirection) ? Sort.Direction.ASC : Sort.Direction.DESC;
         Pageable pageable = PageRequest.of(Math.max(0, page - 1), size, Sort.by(direction, sortBy));
@@ -58,6 +58,12 @@ public class WorkProcessController {
     public ApiResponse<List<WorkProcessDTO>> listActive(
             @PathVariable String factoryId) {
         return ApiResponse.success(workProcessService.listActive(factoryId));
+    }
+
+    @GetMapping("/categories")
+    @Operation(summary = "获取本工厂工序类别 taxonomy")
+    public ApiResponse<List<String>> listCategories(@PathVariable String factoryId) {
+        return ApiResponse.success(workProcessService.listCategories(factoryId));
     }
 
     @GetMapping("/{id}")
@@ -128,13 +134,23 @@ public class WorkProcessController {
 
     /**
      * C5: Detect duplicate work-process clusters.
-     * Returns groups of work-processes that share the same (processName, processCategory, unit).
+     * Returns groups sharing the same normalized (processName, processCategory).
      * Only groups with ≥ 2 members are returned.
      */
     @GetMapping("/duplicates")
-    @Operation(summary = "检测重复工序（同名称+类别+单位）")
+    @Operation(summary = "检测重复工序（同名称+类别）")
     public ApiResponse<List<WorkProcessDTO.DuplicateGroup>> detectDuplicates(
             @PathVariable String factoryId) {
         return ApiResponse.success(workProcessService.detectDuplicates(factoryId));
+    }
+
+    @RequirePermission({"production:read_write"})
+    @PostMapping("/duplicates/govern")
+    @Operation(summary = "治理重复工序（仅影响未来选择，不迁移已有引用）")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    public ApiResponse<WorkProcessDTO.GovernanceResult> governDuplicates(
+            @PathVariable String factoryId,
+            @RequestBody @Valid WorkProcessDTO.GovernanceRequest request) {
+        return ApiResponse.success(workProcessService.governDuplicates(factoryId, request));
     }
 }

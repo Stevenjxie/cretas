@@ -17,6 +17,10 @@ export function getActiveWorkProcesses(factoryId: string) {
   return get<WorkProcessItem[]>(`/${factoryId}/work-processes/active`);
 }
 
+export function getWorkProcessCategories(factoryId: string) {
+  return get<string[]>(`/${factoryId}/work-processes/categories`);
+}
+
 export function createWorkProcess(factoryId: string, data: Partial<WorkProcessItem>) {
   return post<WorkProcessItem>(`/${factoryId}/work-processes`, data);
 }
@@ -43,9 +47,16 @@ export function toggleWorkProcessStatus(factoryId: string, id: string) {
   return put<WorkProcessItem>(`/${factoryId}/work-processes/${id}/toggle-status`);
 }
 
-/** C5: Fetch duplicate clusters — groups sharing same (processName, processCategory, unit). */
+/** C5: Fetch duplicate clusters — groups sharing normalized name + category. */
 export function getWorkProcessDuplicates(factoryId: string) {
   return get<WorkProcessDuplicateGroup[]>(`/${factoryId}/work-processes/duplicates`);
+}
+
+export function governWorkProcessDuplicates(
+  factoryId: string,
+  data: WorkProcessGovernanceRequest,
+) {
+  return post<WorkProcessGovernanceResult>(`/${factoryId}/work-processes/duplicates/govern`, data);
 }
 
 export interface SystemUnitOption {
@@ -157,13 +168,29 @@ export function batchApproveReports(factoryId: string, reportIds: number[]) {
 
 // === Types ===
 
-/** C5: A cluster of duplicate work-processes sharing the same name + category + unit. */
+/** C5: A cluster of duplicate work-processes sharing the same normalized name + category. */
 export interface WorkProcessDuplicateGroup {
   processName: string;
   processCategory: string | null;
-  unit: string;
   /** Always ≥ 2 members. */
   members: WorkProcessItem[];
+}
+
+export type WorkProcessGovernanceMode = 'MERGE' | 'DEACTIVATE_OTHERS';
+
+export interface WorkProcessGovernanceRequest {
+  masterProcessId: string;
+  duplicateProcessIds: string[];
+  mode: WorkProcessGovernanceMode;
+  idempotencyKey: string;
+  reason?: string;
+}
+
+export interface WorkProcessGovernanceResult {
+  masterProcessId: string;
+  governedProcessIds: string[];
+  mode: WorkProcessGovernanceMode;
+  replayed: boolean;
 }
 
 export type WorkProcessOutputMaterialKind = 'SEMI_FINISHED' | 'FINISHED_GOOD';
@@ -172,14 +199,17 @@ export interface WorkProcessItem {
   id: string;
   processName: string;
   processCategory: string;
-  unit: string;
+  /** @deprecated Work-process master no longer returns this; units live on Workflow nodes. */
+  unit?: string;
   estimatedMinutes: number | null;
-  sortOrder: number;
+  /** @deprecated Workflow step order is authoritative. */
+  sortOrder?: number;
   isActive: boolean;
   standardYieldMin: number | null;   // P0-3: 标准出成率下限 (0.30 = 30%)
   standardYieldMax: number | null;   // P0-3: 标准出成率上限 (1.35 = 135%, 超收预检基准)
   needsInput: boolean;               // 该工序是否需录投入量 (默认 true)
-  outputUnit: string | null;         // 产出单位 (kg→盒/份; 空则沿用 unit)
+  /** @deprecated Work-process master no longer returns this; output unit lives on Workflow nodes. */
+  outputUnit?: string | null;
   defaultOutputMaterialKind: WorkProcessOutputMaterialKind;
   semiFinishedOutputCode?: string | null;
   standardHourlyRate: number | null; // 标准时薪 (元/小时; null=未配置, 绝不默认 0)
@@ -190,6 +220,17 @@ export interface WorkProcessItem {
   customFieldSchema?: ProcessSheetCustomFieldDef[] | null;
   createdAt: string;
   updatedAt: string;
+  mergedIntoId?: string | null;
+  mergedAt?: string | null;
+  mergedBy?: string | null;
+  governanceReason?: string | null;
+  lockVersion?: number;
+  selectableForNew?: boolean;
+  referenceStats?: {
+    skuAssociationCount: number;
+    workflowVersionCount: number;
+    productionTaskCount: number;
+  };
 }
 
 /** G2: 工序自定义字段定义 (mirror WorkProcess.customFieldSchema 元素 shape). */

@@ -34,4 +34,6 @@ public interface ProductWorkProcessRepository extends JpaRepository<ProductWorkP
             String factoryId, String productTypeId, String workProcessId);
 
     List<ProductWorkProcess> findByFactoryIdAndWorkProcessId(String factoryId, String workProcessId);
+
+    long countByFactoryIdAndWorkProcessId(String factoryId, String workProcessId);
 }

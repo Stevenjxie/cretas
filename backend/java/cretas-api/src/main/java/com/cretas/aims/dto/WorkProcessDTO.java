@@ -3,6 +3,7 @@ package com.cretas.aims.dto;
 import com.cretas.aims.entity.enums.WorkProcessOutputMaterialKind;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -29,17 +30,23 @@ public class WorkProcessDTO {
     @Size(max = 100, message = "工序名称不能超过100个字符")
     private String processName;
 
+    @NotBlank(message = "请选择工序类别")
     @Size(max = 50, message = "工序类别不能超过50个字符")
     private String processCategory;
 
     @Size(max = 500, message = "描述不能超过500个字符")
     private String description;
 
-    @Size(max = 20, message = "单位不能超过20个字符")
+    /** Legacy write-only compatibility; ignored by create/update. Units belong to Workflow nodes. */
+    @Deprecated
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
     private String unit;
 
     private Integer estimatedMinutes;
 
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    /** Legacy write-only compatibility; ignored. Ordering belongs to Workflow steps. */
+    @Deprecated
     private Integer sortOrder;
 
     private Boolean isActive;
@@ -57,9 +64,18 @@ public class WorkProcessDTO {
     /** 该工序是否需录投入量 (默认 true; 纯包装/检验可 false). */
     private Boolean needsInput;
 
-    /** 产出单位 (kg→盒/份; 为空沿用 unit). */
-    @Size(max = 20, message = "产出单位不能超过20个字符")
+    /** Legacy write-only compatibility; ignored by create/update. */
+    @Deprecated
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
     private String outputUnit;
+
+    private String mergedIntoId;
+    private LocalDateTime mergedAt;
+    private String mergedBy;
+    private String governanceReason;
+    private Long lockVersion;
+    private Boolean selectableForNew;
+    private ReferenceStats referenceStats;
 
     private WorkProcessOutputMaterialKind defaultOutputMaterialKind;
 
@@ -118,7 +134,7 @@ public class WorkProcessDTO {
 
     /**
      * C5: A cluster of duplicate work-processes that share the same
-     * processName + processCategory + unit within a factory.
+     * normalized processName + processCategory within a factory.
      */
     @Data
     @Builder
@@ -129,9 +145,49 @@ public class WorkProcessDTO {
         private String processName;
         /** The shared category (may be null). */
         private String processCategory;
-        /** The shared unit. */
-        private String unit;
         /** All members of this duplicate cluster (always ≥ 2). */
         private List<WorkProcessDTO> members;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ReferenceStats {
+        private long skuAssociationCount;
+        private long workflowVersionCount;
+        private long productionTaskCount;
+    }
+
+    public enum GovernanceMode {
+        MERGE,
+        DEACTIVATE_OTHERS
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class GovernanceRequest {
+        @NotBlank(message = "masterProcessId must not be blank")
+        private String masterProcessId;
+        private List<String> duplicateProcessIds;
+        private GovernanceMode mode;
+        @NotBlank(message = "idempotencyKey must not be blank")
+        @Size(max = 100)
+        private String idempotencyKey;
+        @Size(max = 500)
+        private String reason;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class GovernanceResult {
+        private String masterProcessId;
+        private GovernanceMode mode;
+        private List<String> governedProcessIds;
+        private boolean replayed;
     }
 }

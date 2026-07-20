@@ -9,6 +9,7 @@ const apiMocks = vi.hoisted(() => ({
   post: vi.fn(),
   put: vi.fn(),
   getActiveWorkProcesses: vi.fn(),
+  getWorkProcessCategories: vi.fn(),
   createWorkProcess: vi.fn(),
   updateWorkProcess: vi.fn(),
   getProductProcessWorkflow: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock('@/api/request', () => ({
 
 vi.mock('@/api/processProduction', () => ({
   getActiveWorkProcesses: apiMocks.getActiveWorkProcesses,
+  getWorkProcessCategories: apiMocks.getWorkProcessCategories,
   getProductWorkProcesses: apiMocks.getProductWorkProcesses,
   createWorkProcess: apiMocks.createWorkProcess,
   updateWorkProcess: apiMocks.updateWorkProcess,
@@ -44,6 +46,7 @@ vi.mock('@vue-flow/core', async () => {
   const { defineComponent } = await import('vue');
   return {
     MarkerType: { ArrowClosed: 'arrow-closed' },
+    SelectionMode: { Partial: 'partial' },
     VueFlow: defineComponent({ name: 'VueFlow', template: '<div />' }),
     useVueFlow: () => ({
       fitView: vi.fn(),
@@ -70,7 +73,7 @@ interface EditorVm {
   outputSkuOptions: SkuOption[];
   selectedWorkProcessId: string;
   processCreateMode: 'existing' | 'create';
-  newProcessForm: { name: string; outputKind: 'SEMI_FINISHED' | 'FINISHED_GOOD' };
+  newProcessForm: { name: string; processCategory: string; outputKind: 'SEMI_FINISHED' | 'FINISHED_GOOD' };
   openAddProcess: (materialNodeId: string) => void;
   confirmAddProcess: () => void;
   confirmCreateAndAddProcess: () => Promise<void>;
@@ -83,7 +86,7 @@ interface EditorVm {
   openQuickEditProcess: (processNodeId: string) => void;
   saveQuickEditProcess: () => Promise<void>;
   processEditForm: {
-    processName: string; processCategory: string; unit: string; outputUnit: string;
+    processName: string; processCategory: string;
     defaultOutputMaterialKind: 'SEMI_FINISHED' | 'FINISHED_GOOD'; needsInput: boolean;
   };
   confirmCreateSku: () => Promise<void>;
@@ -189,6 +192,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
       },
     });
     apiMocks.getProductWorkProcesses.mockResolvedValue({ success: true, data: [] });
+    apiMocks.getWorkProcessCategories.mockResolvedValue({ success: true, data: ['前处理', '加工', '包装', 'PACKING'] });
     apiMocks.getActiveWorkProcesses.mockResolvedValue({
       success: true,
       data: [{
@@ -368,7 +372,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     expect(vm.dirty).toBe(false);
   });
 
-  it('uses the upstream material unit only as the onsite-created process legacy payload', async () => {
+  it('requires a taxonomy category and does not submit a unit for onsite process creation', async () => {
     const vm = await mountEditor();
     const raw = vm.flowNodes.find((node) => node.id === 'raw');
     if (!raw) throw new Error('Expected raw source');
@@ -376,12 +380,15 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     vm.openAddProcess('raw');
     vm.processCreateMode = 'create';
     vm.newProcessForm.name = '现场切分';
+    vm.newProcessForm.processCategory = '加工';
 
     await vm.confirmCreateAndAddProcess();
 
     expect(apiMocks.createWorkProcess).toHaveBeenCalledWith('F006', expect.objectContaining({
-      processName: '现场切分', unit: 'g', outputUnit: 'g',
+      processName: '现场切分', processCategory: '加工',
     }));
+    expect(apiMocks.createWorkProcess.mock.calls[0]?.[1]).not.toHaveProperty('unit');
+    expect(apiMocks.createWorkProcess.mock.calls[0]?.[1]).not.toHaveProperty('outputUnit');
   });
 
   it('binds a semi-finished SKU on both the port and material Cell', async () => {
@@ -629,7 +636,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     expect(secondRaw.data.skuId).toBe('');
   });
 
-  it('normalizes every multi-input process to a non-empty per-batch free-choice group', async () => {
+  it('preserves existing input groups instead of rewriting them to AT_LEAST_ONE', async () => {
     const vm = await mountEditor();
     vm.openAddProcess('raw');
     vm.selectedWorkProcessId = 'WP-PACK';
@@ -647,16 +654,15 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     }];
     vm.addInputToProcess(process.id);
 
-    const inputPorts = process.data.ports?.filter((port) => port.direction === 'INPUT') ?? [];
-    expect(inputPorts).toHaveLength(3);
+    expect(process.data.ports?.filter((port) => port.direction === 'INPUT')).toHaveLength(3);
     expect(process.data.portGroups?.filter((group) => group.direction === 'INPUT')).toEqual([{
       id: 'legacy-exact-one',
       direction: 'INPUT',
-      label: '批次自由选择',
-      mode: 'AT_LEAST_ONE',
+      label: '互相替代',
+      mode: 'EXACTLY_ONE',
       minSelections: 1,
-      maxSelections: 3,
-      portIds: inputPorts.map((port) => port.id),
+      maxSelections: 1,
+      portIds: firstTwoInputIds,
     }]);
   });
 
@@ -671,14 +677,16 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
 
     vm.openQuickEditProcess(process.id);
     Object.assign(vm.processEditForm, {
-      processName: '定量包装', processCategory: '包装', unit: 'kg', outputUnit: '盒',
+      processName: '定量包装', processCategory: '包装',
       defaultOutputMaterialKind: 'FINISHED_GOOD', needsInput: true,
     });
     await vm.saveQuickEditProcess();
 
     expect(apiMocks.updateWorkProcess).toHaveBeenCalledWith('F006', 'WP-PACK', expect.objectContaining({
-      processName: '定量包装', processCategory: '包装', unit: 'kg', outputUnit: '盒',
+      processName: '定量包装', processCategory: '包装',
     }));
+    expect(apiMocks.updateWorkProcess.mock.calls.at(-1)?.[2]).not.toHaveProperty('unit');
+    expect(apiMocks.updateWorkProcess.mock.calls.at(-1)?.[2]).not.toHaveProperty('outputUnit');
     expect(process.data.processName).toBe('定量包装');
     expect(vm.flowEdges).toEqual(edgesBefore);
   });

@@ -9,8 +9,9 @@ import WorkProcessAIChatPanel from './WorkProcessAIChatPanel.vue';
 import {
   getWorkProcesses, createWorkProcess, updateWorkProcess,
   deleteWorkProcess, toggleWorkProcessStatus, getWorkProcessDuplicates,
+  governWorkProcessDuplicates, getWorkProcessCategories,
   type WorkProcessItem, type WorkProcessDuplicateGroup,
-  type WorkProcessOutputMaterialKind
+  type WorkProcessOutputMaterialKind, type WorkProcessGovernanceMode,
 } from '@/api/processProduction';
 import {
   WORK_PROCESS_OUTPUT_KIND_OPTIONS,
@@ -28,17 +29,12 @@ const allData = ref<WorkProcessItem[]>([]);
 const pagination = ref({ page: 1, size: 20, total: 0 });
 const searchKeyword = ref('');
 
-// 筛选 (实时按当前数据里实际存在的 类别/单位/默认产出类型 生成选项, 非固定枚举)
+// 筛选（实时按当前数据里的类别/默认产出类型生成选项，非固定枚举）
 const filterCategory = ref('');
-const filterUnit = ref('');
 const filterOutputKind = ref<'' | 'SEMI' | 'FINISHED'>('');
 
 const categoryOptions = computed(() => {
   const set = new Set(allData.value.map(r => r.processCategory).filter((v): v is string => !!v));
-  return Array.from(set).sort();
-});
-const unitOptions = computed(() => {
-  const set = new Set(allData.value.map(r => r.unit).filter((v): v is string => !!v));
   return Array.from(set).sort();
 });
 // 产出类型本质二元 (半成品/成品), 但仍按"当前数据里实际存在哪种"决定要不要显示该选项
@@ -53,7 +49,6 @@ const outputKindOptions = computed(() => {
 
 const filteredData = computed(() => allData.value.filter(row => {
   if (filterCategory.value && row.processCategory !== filterCategory.value) return false;
-  if (filterUnit.value && row.unit !== filterUnit.value) return false;
   if (filterOutputKind.value) {
     const isSemi = usesSemiFinishedCode(normalizeOutputMaterialKind(row.defaultOutputMaterialKind));
     if (filterOutputKind.value === 'SEMI' && !isSemi) return false;
@@ -73,7 +68,6 @@ function handleFilterChange() {
 
 function handleFilterReset() {
   filterCategory.value = '';
-  filterUnit.value = '';
   filterOutputKind.value = '';
   pagination.value.page = 1;
 }
@@ -85,14 +79,7 @@ const isEditing = ref(false);
 const formRef = ref();
 const submitting = ref(false);
 
-const CATEGORIES = [
-  '前处理', '加工', '熟制', '注射', '包装', '灭菌', '质检', '存储', '配送', '其他'
-];
-
-const processCategoryOptions = computed(() => Array.from(new Set([
-  ...CATEGORIES,
-  ...allData.value.map((item) => item.processCategory).filter((value): value is string => Boolean(value)),
-])).sort());
+const processCategoryOptions = ref<string[]>([]);
 
 type WorkProcessForm = Partial<WorkProcessItem>;
 
@@ -100,13 +87,10 @@ const formData = reactive<WorkProcessForm>({
   id: '',
   processName: '',
   processCategory: '',
-  unit: 'kg',
   estimatedMinutes: null,
-  sortOrder: 0,
   standardYieldMin: null,
   standardYieldMax: null,
   needsInput: true,
-  outputUnit: '',
   defaultOutputMaterialKind: normalizeOutputMaterialKind(undefined),
   semiFinishedOutputCode: null,
   standardHourlyRate: null
@@ -137,13 +121,6 @@ function queryProcessNames(query: string, callback: (items: Array<{ value: strin
     .map((value) => ({ value })));
 }
 
-function queryProcessCategories(query: string, callback: (items: Array<{ value: string }>) => void): void {
-  const normalizedQuery = query.trim().toLocaleLowerCase();
-  callback(processCategoryOptions.value
-    .filter((category) => !normalizedQuery || category.toLocaleLowerCase().includes(normalizedQuery))
-    .map((value) => ({ value })));
-}
-
 // P0-3: 百分比 ↔ 小数转换 (表单按百分比录入, payload 存小数 0.0001..99.9999)
 const minPct = computed<number | null>({
   get: () => formData.standardYieldMin != null ? +(formData.standardYieldMin * 100).toFixed(2) : null,
@@ -160,7 +137,7 @@ const formRules = {
     { max: 100, message: '不能超过100个字符', trigger: 'blur' }
   ],
   processCategory: [
-    { required: true, message: '请选择或输入工序类别', trigger: ['blur', 'change'] }
+    { required: true, message: '请选择工序类别', trigger: ['blur', 'change'] }
   ],
   defaultOutputMaterialKind: [
     { required: true, message: '请选择默认产出类型', trigger: 'change' }
@@ -196,6 +173,8 @@ const formRules = {
 const dupGroups = ref<WorkProcessDuplicateGroup[]>([]);
 const dupLoading = ref(false);
 const dupPanelVisible = ref(false);
+const duplicateMasters = reactive<Record<number, string>>({});
+const governingGroup = ref<number | null>(null);
 
 async function handleDetectDuplicates() {
   if (!factoryId.value) return;
@@ -205,6 +184,20 @@ async function handleDetectDuplicates() {
     const response = await getWorkProcessDuplicates(factoryId.value);
     if (response.success && response.data) {
       dupGroups.value = response.data;
+      dupGroups.value.forEach((group, index) => {
+        if (!duplicateMasters[index] && group.members.length > 0) {
+          duplicateMasters[index] = [...group.members]
+            .sort((left, right) => {
+              const leftRefs = (left.referenceStats?.skuAssociationCount || 0)
+                + (left.referenceStats?.workflowVersionCount || 0)
+                + (left.referenceStats?.productionTaskCount || 0);
+              const rightRefs = (right.referenceStats?.skuAssociationCount || 0)
+                + (right.referenceStats?.workflowVersionCount || 0)
+                + (right.referenceStats?.productionTaskCount || 0);
+              return rightRefs - leftRefs || left.createdAt.localeCompare(right.createdAt);
+            })[0]?.id || '';
+        }
+      });
       if (dupGroups.value.length === 0) {
         ElMessage.success('未检测到重复工序');
         dupPanelVisible.value = false;
@@ -218,22 +211,36 @@ async function handleDetectDuplicates() {
   }
 }
 
-async function handleDupToggle(member: WorkProcessItem) {
-  if (!factoryId.value) return;
-  const action = member.isActive ? '停用' : '启用';
+async function governDuplicateGroup(
+  group: WorkProcessDuplicateGroup,
+  groupIndex: number,
+  mode: WorkProcessGovernanceMode,
+) {
+  if (!factoryId.value || !duplicateMasters[groupIndex]) return;
+  const masterId = duplicateMasters[groupIndex];
+  const duplicateIds = group.members.filter(member => member.id !== masterId).map(member => member.id);
+  const action = mode === 'MERGE' ? '合并重复项' : '停用其余';
   try {
     await ElMessageBox.confirm(
-      `确定${action}重复工序「${member.processName}」（ID: ${member.id}）？`,
+      `主工序：${masterId}\n${action}不会修改现有流程和正在生产的任务，仅影响今后新建/新增选择。`,
       `${action}确认`,
-      { type: 'warning' }
+      { type: 'warning', confirmButtonText: action },
     );
-    await toggleWorkProcessStatus(factoryId.value, member.id);
-    ElMessage.success(`已${action}`);
-    // Refresh both main list and dup panel
+    governingGroup.value = groupIndex;
+    await governWorkProcessDuplicates(factoryId.value, {
+      masterProcessId: masterId,
+      duplicateProcessIds: duplicateIds,
+      mode,
+      idempotencyKey: `web-wp-govern-${mode}-${masterId}-${Date.now()}`,
+      reason: '工序主数据重复治理，仅影响未来选择',
+    });
+    ElMessage.success(`${action}完成；已有流程和生产记录未修改`);
     await loadData();
     await handleDetectDuplicates();
-  } catch (e) {
-    if (e !== 'cancel') handleCatchError(e, `${action}失败`);
+  } catch (error) {
+    if (error !== 'cancel') handleCatchError(error, `${action}失败`);
+  } finally {
+    governingGroup.value = null;
   }
 }
 
@@ -251,15 +258,21 @@ async function loadData() {
   loading.value = true;
   try {
     // 全量拉取 (工序目录条目数有限, 非高基数表) 供筛选下拉的"当前有的"选项 + 客户端筛选/分页用。
-    const response = await getWorkProcesses(factoryId.value, {
-      page: 1,
-      size: 1000,
-      sortBy: 'sortOrder',
-      sortDirection: 'ASC'
-    });
+    const [response, categoryResponse] = await Promise.all([
+      getWorkProcesses(factoryId.value, {
+        page: 1,
+        size: 1000,
+        sortBy: 'processName',
+        sortDirection: 'ASC'
+      }),
+      getWorkProcessCategories(factoryId.value),
+    ]);
     if (response.success && response.data) {
       allData.value = response.data.content || [];
       pagination.value.page = 1;
+    }
+    if (categoryResponse.success && categoryResponse.data) {
+      processCategoryOptions.value = categoryResponse.data;
     }
   } catch (e) {
     // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
@@ -275,8 +288,8 @@ function handleAdd() {
   isEditing.value = false;
   Object.assign(formData, {
     id: '', processName: '', processCategory: '',
-    unit: 'kg', estimatedMinutes: null, sortOrder: 0,
-    standardYieldMin: null, standardYieldMax: null, needsInput: true, outputUnit: 'kg',
+    estimatedMinutes: null,
+    standardYieldMin: null, standardYieldMax: null, needsInput: true,
     defaultOutputMaterialKind: normalizeOutputMaterialKind(undefined),
     semiFinishedOutputCode: null,
     standardHourlyRate: null
@@ -291,7 +304,6 @@ function handleEdit(row: WorkProcessItem) {
   const outputKind = normalizeOutputMaterialKind(row.defaultOutputMaterialKind);
   Object.assign(formData, {
     ...row,
-    outputUnit: row.outputUnit || row.unit,
     defaultOutputMaterialKind: outputKind,
     semiFinishedOutputCode: usesSemiFinishedCode(outputKind) ? semiOutputCodeOf(row) : null,
   });
@@ -423,7 +435,7 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
         <div style="display: flex; justify-content: space-between; align-items: center">
           <span style="font-weight: 600; color: #e6a23c">
             <el-icon style="vertical-align: middle; margin-right: 4px"><Warning /></el-icon>
-            检测到 {{ dupGroups.length }} 组重复工序（同名称+类别+单位）
+            检测到 {{ dupGroups.length }} 组重复工序（规范化名称+类别）
           </span>
           <el-button text size="small" @click="dupPanelVisible = false">关闭</el-button>
         </div>
@@ -436,17 +448,41 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
           <el-tag v-if="group.processCategory" size="small" type="info" style="margin-left: 4px">
             {{ group.processCategory }}
           </el-tag>
-          <el-tag size="small" type="warning" style="margin-left: 4px">{{ group.unit }}</el-tag>
           <span class="text-muted" style="margin-left: 8px; font-size: 12px">
-            {{ group.members.length }} 条记录 — 请保留 1 条，停用其余
+            {{ group.members.length }} 条记录 — 请选择主工序后治理
           </span>
+          <div v-if="canWrite" class="dup-actions">
+            <el-button
+              type="primary"
+              size="small"
+              :loading="governingGroup === gi"
+              @click="governDuplicateGroup(group, gi, 'MERGE')"
+            >合并重复项</el-button>
+            <el-button
+              type="warning"
+              size="small"
+              :loading="governingGroup === gi"
+              @click="governDuplicateGroup(group, gi, 'DEACTIVATE_OTHERS')"
+            >停用其余</el-button>
+          </div>
         </div>
         <el-table :data="group.members" size="small" style="margin-top: 8px">
+          <el-table-column label="主工序" width="78" v-if="canWrite">
+            <template #default="{ row }">
+              <el-radio v-model="duplicateMasters[gi]" :value="row.id" aria-label="选择为主工序" />
+            </template>
+          </el-table-column>
           <el-table-column prop="id" label="ID" width="220" />
           <el-table-column prop="processName" label="名称" min-width="100" />
           <el-table-column prop="processCategory" label="类别" width="90" />
-          <el-table-column prop="unit" label="单位" width="70" />
-          <el-table-column prop="sortOrder" label="排序" width="60" />
+          <el-table-column prop="createdAt" label="创建时间" width="165" />
+          <el-table-column label="引用" min-width="220">
+            <template #default="{ row }">
+              SKU {{ row.referenceStats?.skuAssociationCount || 0 }} ·
+              Workflow {{ row.referenceStats?.workflowVersionCount || 0 }} ·
+              生产任务 {{ row.referenceStats?.productionTaskCount || 0 }}
+            </template>
+          </el-table-column>
           <el-table-column prop="isActive" label="状态" width="70">
             <template #default="{ row }">
               <el-tag :type="row.isActive ? 'success' : 'info'" size="small">
@@ -454,20 +490,12 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="120" v-if="canWrite">
-            <template #default="{ row }">
-              <el-button type="warning" text size="small" @click="handleDupToggle(row)">
-                {{ row.isActive ? '停用' : '启用' }}
-              </el-button>
-              <el-button type="primary" text size="small" @click="handleEdit(row)">编辑</el-button>
-            </template>
-          </el-table-column>
         </el-table>
       </div>
     </el-card>
 
     <el-card style="margin-top: 16px">
-      <!-- 筛选: 按当前数据里实际存在的 类别/单位/默认产出类型 生成选项, 非固定枚举 -->
+          <!-- 筛选：按当前数据里的类别/默认产出类型生成选项，非固定枚举 -->
       <div class="filter-bar">
         <el-select
           v-model="filterCategory"
@@ -477,15 +505,6 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
           @change="handleFilterChange"
         >
           <el-option v-for="cat in categoryOptions" :key="cat" :label="cat" :value="cat" />
-        </el-select>
-        <el-select
-          v-model="filterUnit"
-          placeholder="全部单位"
-          clearable
-          style="width: 120px"
-          @change="handleFilterChange"
-        >
-          <el-option v-for="u in unitOptions" :key="u" :label="u" :value="u" />
         </el-select>
         <el-select
           v-model="filterOutputKind"
@@ -507,7 +526,6 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
             <span v-else class="text-muted">-</span>
           </template>
         </el-table-column>
-        <el-table-column prop="unit" label="单位" width="80" />
         <el-table-column label="默认产出类型" width="130">
           <template #default="{ row }">
             <el-tag v-if="usesSemiFinishedCode(outputKindOf(row))" type="success" size="small">半成品</el-tag>
@@ -584,13 +602,20 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
           />
         </el-form-item>
         <el-form-item label="工序类别" prop="processCategory">
-          <el-autocomplete
+          <el-select
             v-model="formData.processCategory"
-            :fetch-suggestions="queryProcessCategories"
-            placeholder="选择或输入历史类别"
+            filterable
+            placeholder="选择工序类别"
             clearable
             style="width: 100%"
-          />
+          >
+            <el-option
+              v-for="category in processCategoryOptions"
+              :key="category"
+              :label="category"
+              :value="category"
+            />
+          </el-select>
         </el-form-item>
         <el-form-item label="默认产出类型" prop="defaultOutputMaterialKind">
           <el-radio-group
@@ -639,9 +664,6 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
               <el-input-number v-model="formData.standardHourlyRate" :min="0" :step="1" :precision="2"
                 placeholder="留空表示不计算人工成本" style="width: 100%" />
             </el-form-item>
-            <el-form-item label="排序">
-              <el-input-number v-model="formData.sortOrder" :min="0" style="width: 100%" />
-            </el-form-item>
           </el-collapse-item>
         </el-collapse>
       </el-form>
@@ -667,4 +689,5 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
 .dup-group { margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid #f0f0f0; }
 .dup-group:last-child { border-bottom: none; margin-bottom: 0; }
 .dup-group-title { font-size: 13px; font-weight: 500; }
+.dup-actions { display: inline-flex; gap: 8px; margin-left: 16px; }
 </style>

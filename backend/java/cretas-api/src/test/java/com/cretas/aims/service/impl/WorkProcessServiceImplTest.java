@@ -7,6 +7,11 @@ import com.cretas.aims.entity.enums.WorkProcessOutputMaterialKind;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.repository.WorkProcessGovernanceAuditRepository;
+import com.cretas.aims.repository.ProductWorkProcessRepository;
+import com.cretas.aims.repository.ProductProcessWorkflowRepository;
+import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -50,6 +55,21 @@ class WorkProcessServiceImplTest {
 
     @Mock
     private WorkProcessRepository workProcessRepository;
+
+    @Mock
+    private WorkProcessGovernanceAuditRepository governanceAuditRepository;
+
+    @Mock
+    private ProductWorkProcessRepository productWorkProcessRepository;
+
+    @Mock
+    private ProductProcessWorkflowRepository workflowRepository;
+
+    @Mock
+    private WorkProcessTaskRepository workProcessTaskRepository;
+
+    @Mock
+    private ObjectMapper objectMapper;
 
     @Mock
     private com.cretas.aims.repository.bom.BomSeasoningItemRepository bomSeasoningItemRepository;
@@ -117,9 +137,9 @@ class WorkProcessServiceImplTest {
             assertEquals(FACTORY_ID, saved.getFactoryId());
             assertEquals("炸制", saved.getProcessName());
             assertEquals("加工", saved.getProcessCategory());
-            assertEquals("件", saved.getUnit());
+            assertEquals("unitless", saved.getUnit());
             assertEquals(30, saved.getEstimatedMinutes());
-            assertEquals(1, saved.getSortOrder());
+            assertEquals(0, saved.getSortOrder());
             assertTrue(saved.getIsActive(), "新创建的工序应为 active");
 
             assertEquals("炸制", result.getProcessName());
@@ -155,7 +175,7 @@ class WorkProcessServiceImplTest {
 
             // Assert
             verify(workProcessRepository).save(workProcessCaptor.capture());
-            assertEquals("kg", workProcessCaptor.getValue().getUnit(), "unit 为 null 时应默认为 kg");
+            assertEquals("unitless", workProcessCaptor.getValue().getUnit());
         }
 
         @Test
@@ -180,7 +200,7 @@ class WorkProcessServiceImplTest {
             assertEquals(0, new BigDecimal("0.30").compareTo(saved.getStandardYieldMin()));
             assertEquals(0, new BigDecimal("0.60").compareTo(saved.getStandardYieldMax()));
             assertFalse(saved.getNeedsInput(), "needsInput=false 应被映射");
-            assertEquals("盒", saved.getOutputUnit());
+            assertNull(saved.getOutputUnit());
             assertEquals(0, new BigDecimal("0.60").compareTo(result.getStandardYieldMax()), "返回 DTO 含上限");
         }
 
@@ -277,14 +297,14 @@ class WorkProcessServiceImplTest {
                     .isActive(true)
                     .build();
 
-            when(workProcessRepository.findByFactoryIdAndIsActiveTrueOrderBySortOrderAsc(FACTORY_ID))
+            when(workProcessRepository.findByFactoryIdAndIsActiveTrueAndMergedIntoIdIsNullOrderByProcessNameAsc(FACTORY_ID))
                     .thenReturn(List.of(wp1, wp2));
 
             // Act
             List<WorkProcessDTO> result = service.listActive(FACTORY_ID);
 
             // Assert
-            verify(workProcessRepository).findByFactoryIdAndIsActiveTrueOrderBySortOrderAsc(FACTORY_ID);
+            verify(workProcessRepository).findByFactoryIdAndIsActiveTrueAndMergedIntoIdIsNullOrderByProcessNameAsc(FACTORY_ID);
             assertEquals(2, result.size());
             assertEquals("炸制", result.get(0).getProcessName());
             assertEquals("包装", result.get(1).getProcessName());
@@ -315,9 +335,9 @@ class WorkProcessServiceImplTest {
             assertEquals(WP_ID, result.getId());
             assertEquals("炸制", result.getProcessName());
             assertEquals("加工", result.getProcessCategory());
-            assertEquals("kg", result.getUnit());
+            assertNull(result.getUnit());
             assertEquals(30, result.getEstimatedMinutes());
-            assertEquals(1, result.getSortOrder());
+            assertNull(result.getSortOrder());
             assertTrue(result.getIsActive());
         }
 
@@ -431,7 +451,7 @@ class WorkProcessServiceImplTest {
             assertEquals(0, new BigDecimal("1.0000").compareTo(result.getStandardYieldMin()));
             assertEquals(0, new BigDecimal("1.3500").compareTo(result.getStandardYieldMax()));
             assertFalse(result.getNeedsInput());
-            assertEquals("份", result.getOutputUnit());
+            assertNull(result.getOutputUnit());
         }
 
         @Test
@@ -553,14 +573,14 @@ class WorkProcessServiceImplTest {
         void testDifferentFactoryReturnsEmpty() {
             // Arrange
             String otherFactory = "F999";
-            when(workProcessRepository.findByFactoryIdAndIsActiveTrueOrderBySortOrderAsc(otherFactory))
+            when(workProcessRepository.findByFactoryIdAndIsActiveTrueAndMergedIntoIdIsNullOrderByProcessNameAsc(otherFactory))
                     .thenReturn(Collections.emptyList());
 
             // Act
             List<WorkProcessDTO> result = service.listActive(otherFactory);
 
             // Assert
-            verify(workProcessRepository).findByFactoryIdAndIsActiveTrueOrderBySortOrderAsc(otherFactory);
+            verify(workProcessRepository).findByFactoryIdAndIsActiveTrueAndMergedIntoIdIsNullOrderByProcessNameAsc(otherFactory);
             assertTrue(result.isEmpty(), "不同工厂应返回空列表");
         }
     }
@@ -590,83 +610,81 @@ class WorkProcessServiceImplTest {
         }
 
         @Test
-        @DisplayName("UT-WP-C5-02: create() 名称唯一但 name+category+unit 全匹配 → 409 near-dup")
-        void testCreateNearDupNameCategoryUnitBlocked() {
-            // Arrange: exact-name check passes (false), but name+category+unit matches
+        @DisplayName("UT-WP-C5-02: create() 忽略旧客户端提交的单位和全局排序")
+        void testCreateIgnoresLegacyUnitAndSortFields() {
             WorkProcessDTO dto = buildDefaultCreateDTO();
             dto.setProcessCategory("前处理");
             dto.setUnit("kg");
+            dto.setOutputUnit("box");
+            dto.setSortOrder(99);
 
             when(workProcessRepository.existsByFactoryIdAndProcessName(FACTORY_ID, "炸制"))
                     .thenReturn(false);
+            when(workProcessRepository.save(any(WorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            WorkProcess existing = WorkProcess.builder()
-                    .id("existing-1")
-                    .factoryId(FACTORY_ID)
-                    .processName("炸制")
-                    .processCategory("前处理")
-                    .unit("kg")
-                    .isActive(true)
-                    .sortOrder(1)
-                    .build();
-            when(workProcessRepository.findByFactoryIdAndProcessNameAndProcessCategoryAndUnit(
-                    FACTORY_ID, "炸制", "前处理", "kg"))
-                    .thenReturn(List.of(existing));
+            WorkProcessDTO result = service.create(FACTORY_ID, dto);
 
-            // Act & Assert
-            BusinessException ex = assertThrows(BusinessException.class,
-                    () -> service.create(FACTORY_ID, dto));
-            assertEquals(409, ex.getCode());
-            assertTrue(ex.getMessage().contains("已存在相同名称+类别+单位的工序"));
-            verify(workProcessRepository, never()).save(any());
+            ArgumentCaptor<WorkProcess> saved = ArgumentCaptor.forClass(WorkProcess.class);
+            verify(workProcessRepository).save(saved.capture());
+            assertEquals("unitless", saved.getValue().getUnit());
+            assertNull(saved.getValue().getOutputUnit());
+            assertEquals(0, saved.getValue().getSortOrder());
+            assertNull(result.getUnit());
+            assertNull(result.getOutputUnit());
+            assertNull(result.getSortOrder());
         }
 
         @Test
-        @DisplayName("UT-WP-C5-03: create() name+category+unit 无匹配 → 正常创建（近重复检测不误报）")
-        void testCreateNearDupCheckPassesWhenNoMatch() {
-            // Arrange
+        @DisplayName("UT-WP-C5-03: create() 类别仍可保存且不依赖单位")
+        void testCreateWithCategoryDoesNotDependOnUnit() {
             WorkProcessDTO dto = buildDefaultCreateDTO();
             dto.setProcessCategory("前处理");
-            dto.setUnit("kg");
+            dto.setUnit(null);
 
             when(workProcessRepository.existsByFactoryIdAndProcessName(FACTORY_ID, "炸制"))
                     .thenReturn(false);
-            when(workProcessRepository.findByFactoryIdAndProcessNameAndProcessCategoryAndUnit(
-                    FACTORY_ID, "炸制", "前处理", "kg"))
-                    .thenReturn(Collections.emptyList());
             when(workProcessRepository.save(any(WorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            // Act — should not throw
             WorkProcessDTO result = service.create(FACTORY_ID, dto);
 
-            // Assert
             assertNotNull(result);
             verify(workProcessRepository).save(any(WorkProcess.class));
         }
 
         @Test
-        @DisplayName("UT-WP-C5-04: create() 无 category → 跳过近重复检测（防呆：category 为空不触发）")
-        void testCreateSkipsNearDupCheckWhenCategoryBlank() {
-            // Arrange: no category provided
+        @DisplayName("UT-WP-C5-04: create() 类别为空时明确拒绝")
+        void testCreateRejectsBlankCategory() {
             WorkProcessDTO dto = buildDefaultCreateDTO();
-            dto.setProcessCategory(null); // no category
+            dto.setProcessCategory(null);
 
-            when(workProcessRepository.existsByFactoryIdAndProcessName(FACTORY_ID, "炸制"))
-                    .thenReturn(false);
-            when(workProcessRepository.save(any(WorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.create(FACTORY_ID, dto));
 
-            // Act — should not throw, and near-dup repo method never called
-            service.create(FACTORY_ID, dto);
+            assertEquals(400, ex.getCode());
+            assertTrue(ex.getMessage().contains("工序类别"));
+            verify(workProcessRepository, never()).save(any(WorkProcess.class));
+        }
 
-            // Assert: findByFactoryIdAndProcessNameAndProcessCategoryAndUnit never called
-            verify(workProcessRepository, never())
-                    .findByFactoryIdAndProcessNameAndProcessCategoryAndUnit(any(), any(), any(), any());
+        @Test
+        @DisplayName("UT-WP-C5-04B: create() 拒绝不属于本工厂类别字典的值")
+        void testCreateRejectsCategoryOutsideFactoryTaxonomy() {
+            WorkProcessDTO dto = buildDefaultCreateDTO();
+            dto.setProcessCategory("包装");
+            when(workProcessRepository.findDistinctProcessCategories(FACTORY_ID))
+                    .thenReturn(List.of("加工", "前处理"));
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.create(FACTORY_ID, dto));
+
+            assertEquals(400, ex.getCode());
+            assertTrue(ex.getMessage().contains("类别字典"));
+            verify(workProcessRepository, never()).save(any(WorkProcess.class));
         }
 
         // ---- detectDuplicates() tests ----
 
         @Test
-        @DisplayName("UT-WP-C5-05: detectDuplicates() 两条 name+category+unit 相同 → 返回 1 组 2 成员")
+        @DisplayName("UT-WP-C5-05: detectDuplicates() 按名称+类别分组，不受旧单位字段影响")
         void testDetectDuplicatesTwoMatchingItems() {
             // Arrange
             WorkProcess wp1 = WorkProcess.builder()
@@ -675,7 +693,7 @@ class WorkProcessServiceImplTest {
                     .sortOrder(1).isActive(true).build();
             WorkProcess wp2 = WorkProcess.builder()
                     .id("dup-2").factoryId(FACTORY_ID)
-                    .processName("焯水").processCategory("前处理").unit("kg")
+                    .processName("焯水").processCategory("前处理").unit("box")
                     .sortOrder(2).isActive(true).build();
             // A third with different category — should NOT be in the dup group
             WorkProcess wp3 = WorkProcess.builder()
@@ -689,12 +707,11 @@ class WorkProcessServiceImplTest {
             // Act
             List<WorkProcessDTO.DuplicateGroup> groups = service.detectDuplicates(FACTORY_ID);
 
-            // Assert: exactly 1 dup group (焯水/前处理/kg), with 2 members; wp3 not included
+            // Assert: exactly 1 dup group (焯水/前处理), despite legacy unit differences.
             assertEquals(1, groups.size(), "应有 1 组重复");
             WorkProcessDTO.DuplicateGroup group = groups.get(0);
             assertEquals("焯水", group.getProcessName());
             assertEquals("前处理", group.getProcessCategory());
-            assertEquals("kg", group.getUnit());
             assertEquals(2, group.getMembers().size(), "重复组应有 2 条成员");
             List<String> memberIds = group.getMembers().stream()
                     .map(WorkProcessDTO::getId).toList();
@@ -727,7 +744,7 @@ class WorkProcessServiceImplTest {
         }
 
         @Test
-        @DisplayName("UT-WP-C5-07: detectDuplicates() 三条相同 name+category+unit → 1 组 3 成员")
+        @DisplayName("UT-WP-C5-07: detectDuplicates() 已停用项不再作为待治理候选")
         void testDetectDuplicatesThreeCopies() {
             // Arrange: simulate the 掌中宝 焯水 real-world scenario
             WorkProcess wp1 = WorkProcess.builder()
@@ -751,7 +768,7 @@ class WorkProcessServiceImplTest {
 
             // Assert
             assertEquals(1, groups.size());
-            assertEquals(3, groups.get(0).getMembers().size(), "应有 3 条成员（含已禁用的也算重复）");
+            assertEquals(2, groups.get(0).getMembers().size(), "仅返回仍可供未来选择的重复项");
         }
 
         @Test
@@ -801,7 +818,7 @@ class WorkProcessServiceImplTest {
         }
 
         @Test
-        @DisplayName("updateSortOrder() 更新多个工序的排序")
+        @DisplayName("updateSortOrder() 旧接口兼容为 no-op")
         void testUpdateSortOrderMultipleItems() {
             // Arrange
             WorkProcess wp1 = buildDefaultWorkProcess();
@@ -816,12 +833,6 @@ class WorkProcessServiceImplTest {
                     .isActive(true)
                     .build();
 
-            when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, "wp-1"))
-                    .thenReturn(Optional.of(wp1));
-            when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, "wp-2"))
-                    .thenReturn(Optional.of(wp2));
-            when(workProcessRepository.save(any(WorkProcess.class))).thenAnswer(inv -> inv.getArgument(0));
-
             List<WorkProcessDTO.SortOrderUpdate> updates = List.of(
                     WorkProcessDTO.SortOrderUpdate.builder().id("wp-1").sortOrder(3).build(),
                     WorkProcessDTO.SortOrderUpdate.builder().id("wp-2").sortOrder(1).build()
@@ -831,9 +842,9 @@ class WorkProcessServiceImplTest {
             service.updateSortOrder(FACTORY_ID, updates);
 
             // Assert
-            verify(workProcessRepository, times(2)).save(any(WorkProcess.class));
-            assertEquals(3, wp1.getSortOrder());
-            assertEquals(1, wp2.getSortOrder());
+            verify(workProcessRepository, never()).save(any(WorkProcess.class));
+            assertEquals(1, wp1.getSortOrder());
+            assertEquals(2, wp2.getSortOrder());
         }
     }
 }

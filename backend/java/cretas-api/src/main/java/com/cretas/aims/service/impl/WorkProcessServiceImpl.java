@@ -3,10 +3,16 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.dto.WorkProcessDTO;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.WorkProcess;
+import com.cretas.aims.entity.WorkProcessGovernanceAudit;
+import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.enums.WorkProcessOutputMaterialKind;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.repository.WorkProcessGovernanceAuditRepository;
+import com.cretas.aims.repository.ProductWorkProcessRepository;
+import com.cretas.aims.repository.ProductProcessWorkflowRepository;
+import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.repository.bom.BomProcessInjectionConfigRepository;
 import com.cretas.aims.service.WorkProcessService;
@@ -17,13 +23,20 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.security.core.context.SecurityContextHolder;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -33,6 +46,11 @@ public class WorkProcessServiceImpl implements WorkProcessService {
 
     private static final Logger log = LoggerFactory.getLogger(WorkProcessServiceImpl.class);
     private final WorkProcessRepository workProcessRepository;
+    private final WorkProcessGovernanceAuditRepository governanceAuditRepository;
+    private final ProductWorkProcessRepository productWorkProcessRepository;
+    private final ProductProcessWorkflowRepository workflowRepository;
+    private final WorkProcessTaskRepository workProcessTaskRepository;
+    private final ObjectMapper objectMapper;
     /** 孤儿守卫 (2026-07-13): 删工序前检查是否被调料配方引用。 */
     private final BomSeasoningItemRepository bomSeasoningItemRepository;
     private final BomProcessInjectionConfigRepository bomProcessInjectionConfigRepository;
@@ -41,31 +59,12 @@ public class WorkProcessServiceImpl implements WorkProcessService {
     @Transactional
     public WorkProcessDTO create(String factoryId, WorkProcessDTO dto) {
         log.info("Creating work process '{}' for factory: {}", dto.getProcessName(), factoryId);
+        String category = validateCategory(factoryId, dto.getProcessCategory());
 
         // C5 Step 1a: exact name block (existing behaviour)
         if (workProcessRepository.existsByFactoryIdAndProcessName(factoryId, dto.getProcessName())) {
             throw new BusinessException(409, "工序名称已存在: " + dto.getProcessName())
                     .withHint("请使用其他工序名称").withHintTarget("processName");
-        }
-
-        // C5 Step 1b: name + category + unit near-dup warning (block with 409 so the user is
-        // aware and can choose to reuse the existing process instead of creating another copy).
-        // Only fires when category and unit are both provided and all three match an existing one.
-        String incomingUnit = dto.getUnit() != null ? dto.getUnit() : "kg";
-        if (dto.getProcessCategory() != null && !dto.getProcessCategory().isBlank()) {
-            List<WorkProcess> nearDups = workProcessRepository
-                    .findByFactoryIdAndProcessNameAndProcessCategoryAndUnit(
-                            factoryId, dto.getProcessName(), dto.getProcessCategory(), incomingUnit);
-            if (!nearDups.isEmpty()) {
-                // This branch is logically unreachable when exact-name check above fires first,
-                // but may catch category/unit drift (same name, different category passed in earlier).
-                // Keep as defence-in-depth; in practice exact-name check covers the common case.
-                throw new BusinessException(409,
-                        "已存在相同名称+类别+单位的工序: " + dto.getProcessName()
-                                + "（" + dto.getProcessCategory() + "/" + incomingUnit + "）")
-                        .withHint("请直接使用已有工序，或修改名称/类别/单位后重试")
-                        .withHintTarget("processName");
-            }
         }
 
         validateYieldRange(dto.getStandardYieldMin(), dto.getStandardYieldMax());
@@ -74,16 +73,16 @@ public class WorkProcessServiceImpl implements WorkProcessService {
                 .id(UUID.randomUUID().toString())
                 .factoryId(factoryId)
                 .processName(dto.getProcessName())
-                .processCategory(dto.getProcessCategory())
+                .processCategory(category)
                 .description(dto.getDescription())
-                .unit(dto.getUnit() != null ? dto.getUnit() : "kg")
+                .unit("unitless")
                 .estimatedMinutes(dto.getEstimatedMinutes())
-                .sortOrder(dto.getSortOrder() != null ? dto.getSortOrder() : 0)
+                .sortOrder(0)
                 .isActive(true)
                 .standardYieldMin(dto.getStandardYieldMin())
                 .standardYieldMax(dto.getStandardYieldMax())
                 .needsInput(dto.getNeedsInput() != null ? dto.getNeedsInput() : true)
-                .outputUnit(dto.getOutputUnit())
+                .outputUnit(null)
                 .defaultOutputMaterialKind(dto.getDefaultOutputMaterialKind() != null
                         ? dto.getDefaultOutputMaterialKind()
                         : WorkProcessOutputMaterialKind.SEMI_FINISHED)
@@ -127,10 +126,15 @@ public class WorkProcessServiceImpl implements WorkProcessService {
     @Override
     public List<WorkProcessDTO> listActive(String factoryId) {
         log.debug("Listing active work processes for factory: {}", factoryId);
-        return workProcessRepository.findByFactoryIdAndIsActiveTrueOrderBySortOrderAsc(factoryId)
+        return workProcessRepository.findByFactoryIdAndIsActiveTrueAndMergedIntoIdIsNullOrderByProcessNameAsc(factoryId)
                 .stream()
                 .map(this::toDTO)
                 .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<String> listCategories(String factoryId) {
+        return workProcessRepository.findDistinctProcessCategories(factoryId);
     }
 
     @Override
@@ -146,6 +150,7 @@ public class WorkProcessServiceImpl implements WorkProcessService {
         log.info("Updating work process {} for factory: {}", id, factoryId);
         WorkProcess entity = workProcessRepository.findByFactoryIdAndId(factoryId, id)
                 .orElseThrow(() -> new ResourceNotFoundException("WorkProcess", "id", id));
+        String category = validateCategory(factoryId, dto.getProcessCategory());
 
         // audit Finding 4 修复: 改名时防重名 —— 调料配方按工序靠工序名跨模式(legacy/workflow)定位,
         // 两个同名工序会让报工成本读错工序的调料/锅序参数。create() 已有唯一性校验, update() 之前缺。
@@ -158,11 +163,9 @@ public class WorkProcessServiceImpl implements WorkProcessService {
             }
         }
         if (dto.getProcessName() != null) entity.setProcessName(dto.getProcessName());
-        if (dto.getProcessCategory() != null) entity.setProcessCategory(dto.getProcessCategory());
-        if (dto.getUnit() != null) entity.setUnit(dto.getUnit());
+        entity.setProcessCategory(category);
         if (dto.getEstimatedMinutes() != null) entity.setEstimatedMinutes(dto.getEstimatedMinutes());
         if (dto.getDescription() != null) entity.setDescription(dto.getDescription());
-        if (dto.getSortOrder() != null) entity.setSortOrder(dto.getSortOrder());
 
         // P0-3: 出成率配置 — if != null 模式无法清空已配值 (防误清取舍)
         // 跨字段校验取"合并后"值 (新值优先, 否则保留已配)
@@ -172,7 +175,6 @@ public class WorkProcessServiceImpl implements WorkProcessService {
         if (dto.getStandardYieldMin() != null) entity.setStandardYieldMin(dto.getStandardYieldMin());
         if (dto.getStandardYieldMax() != null) entity.setStandardYieldMax(dto.getStandardYieldMax());
         if (dto.getNeedsInput() != null) entity.setNeedsInput(dto.getNeedsInput());
-        if (dto.getOutputUnit() != null) entity.setOutputUnit(dto.getOutputUnit());
         if (dto.getDefaultOutputMaterialKind() != null) {
             entity.setDefaultOutputMaterialKind(dto.getDefaultOutputMaterialKind());
         }
@@ -212,6 +214,15 @@ public class WorkProcessServiceImpl implements WorkProcessService {
                     .withHint("请先在「生产 → BOM 配方 → 调料配方」移除引用该工序的调料配置")
                     .withHintTarget("id");
         }
+        WorkProcessDTO.ReferenceStats references = referenceStats(factoryId, id);
+        if (references.getSkuAssociationCount() > 0
+                || references.getWorkflowVersionCount() > 0
+                || references.getProductionTaskCount() > 0
+                || workProcessRepository.existsByFactoryIdAndMergedIntoId(factoryId, id)) {
+            throw new BusinessException(409, "该工序已有业务引用，不能删除")
+                    .withHint("请停用或使用重复治理；已有流程和生产历史会继续保留原工序 ID")
+                    .withHintTarget("id");
+        }
         workProcessRepository.delete(entity);
     }
 
@@ -229,20 +240,14 @@ public class WorkProcessServiceImpl implements WorkProcessService {
     @Override
     @Transactional
     public void updateSortOrder(String factoryId, List<WorkProcessDTO.SortOrderUpdate> updates) {
-        log.info("Updating sort order for {} work processes in factory: {}", updates.size(), factoryId);
-        for (WorkProcessDTO.SortOrderUpdate update : updates) {
-            workProcessRepository.findByFactoryIdAndId(factoryId, update.getId())
-                    .ifPresent(wp -> {
-                        wp.setSortOrder(update.getSortOrder());
-                        workProcessRepository.save(wp);
-                    });
-        }
+        log.info("Ignoring legacy work-process sort update for factory {}. Workflow step order is authoritative.",
+                factoryId);
     }
 
     /**
      * C5: Detect duplicate clusters in-memory.
-     * Groups all processes for the factory by (processName, processCategory, unit) —
-     * categories/units are normalised to empty-string so null and "" are treated the same.
+     * Groups future-selectable processes by normalized (processName, processCategory).
+     * Measurement units belong to Workflow nodes/output objects and are deliberately absent here.
      * Returns only groups with ≥ 2 members.
      */
     @Override
@@ -250,12 +255,14 @@ public class WorkProcessServiceImpl implements WorkProcessService {
         log.debug("Detecting duplicate work processes for factory: {}", factoryId);
         List<WorkProcess> all = workProcessRepository.findByFactoryId(factoryId);
 
-        // Key = "processName|processCategory|unit" (null-safe)
+        // Key = "processName|processCategory" (null-safe)
         Map<String, List<WorkProcess>> grouped = new LinkedHashMap<>();
         for (WorkProcess wp : all) {
-            String key = wp.getProcessName()
-                    + "|" + Objects.toString(wp.getProcessCategory(), "")
-                    + "|" + Objects.toString(wp.getUnit(), "");
+            if (!wp.isSelectableForNew()) {
+                continue;
+            }
+            String key = normalize(wp.getProcessName())
+                    + "|" + normalize(wp.getProcessCategory());
             grouped.computeIfAbsent(key, k -> new ArrayList<>()).add(wp);
         }
 
@@ -266,33 +273,233 @@ public class WorkProcessServiceImpl implements WorkProcessService {
                 result.add(WorkProcessDTO.DuplicateGroup.builder()
                         .processName(first.getProcessName())
                         .processCategory(first.getProcessCategory())
-                        .unit(first.getUnit())
-                        .members(cluster.stream().map(this::toDTO).collect(Collectors.toList()))
+                        .members(cluster.stream().map(wp -> toDTO(wp, factoryId)).collect(Collectors.toList()))
                         .build());
             }
         }
         return result;
     }
 
+    private String validateCategory(String factoryId, String rawCategory) {
+        String category = rawCategory == null ? "" : rawCategory.trim();
+        if (category.isEmpty()) {
+            throw new BusinessException(400, "请选择工序类别")
+                    .withHint("工序类别必须从工序类别字典中选择")
+                    .withHintTarget("processCategory");
+        }
+        List<String> categories = workProcessRepository.findDistinctProcessCategories(factoryId);
+        // Existing factories already have a category taxonomy derived from their process catalog.
+        // An empty catalog is the only bootstrap case; once a taxonomy exists, fail closed.
+        if (!categories.isEmpty() && categories.stream().noneMatch(category::equals)) {
+            throw new BusinessException(400, "工序类别不存在或不属于当前工厂: " + category)
+                    .withHint("请从工序类别下拉中选择有效类别")
+                    .withHintTarget("processCategory");
+        }
+        return category;
+    }
+
+    @Override
+    @Transactional
+    public WorkProcessDTO.GovernanceResult governDuplicates(
+            String factoryId,
+            WorkProcessDTO.GovernanceRequest request) {
+        if (request.getMode() == null) {
+            throw new BusinessException(400, "请选择治理方式")
+                    .withHintTarget("mode");
+        }
+
+        List<String> governedIds = request.getDuplicateProcessIds() == null
+                ? List.of()
+                : request.getDuplicateProcessIds().stream()
+                        .filter(Objects::nonNull)
+                        .map(String::trim)
+                        .filter(id -> !id.isEmpty() && !id.equals(request.getMasterProcessId()))
+                        .distinct()
+                        .sorted()
+                        .toList();
+        if (governedIds.isEmpty()) {
+            throw new BusinessException(400, "至少选择一条重复工序")
+                    .withHintTarget("duplicateProcessIds");
+        }
+
+        var replay = governanceAuditRepository.findByFactoryIdAndIdempotencyKey(
+                factoryId, request.getIdempotencyKey());
+        if (replay.isPresent()) {
+            WorkProcessGovernanceAudit audit = replay.get();
+            String requestedIds = String.join(",", governedIds);
+            if (!Objects.equals(audit.getMasterProcessId(), request.getMasterProcessId())
+                    || audit.getMode() != request.getMode()
+                    || !Objects.equals(audit.getGovernedProcessIds(), requestedIds)) {
+                throw new BusinessException(409, "幂等键已被其他治理请求使用")
+                        .withHintTarget("idempotencyKey");
+            }
+            return WorkProcessDTO.GovernanceResult.builder()
+                    .masterProcessId(audit.getMasterProcessId())
+                    .mode(audit.getMode())
+                    .governedProcessIds(governedIds)
+                    .replayed(true)
+                    .build();
+        }
+
+        List<String> lockIds = new ArrayList<>(governedIds);
+        lockIds.add(request.getMasterProcessId());
+        lockIds = lockIds.stream().distinct().sorted().toList();
+        List<WorkProcess> locked = workProcessRepository.lockByFactoryIdAndIdIn(factoryId, lockIds);
+        if (locked.size() != lockIds.size()) {
+            throw new BusinessException(404, "部分工序不存在或不属于当前工厂");
+        }
+        Map<String, WorkProcess> byId = locked.stream()
+                .collect(Collectors.toMap(WorkProcess::getId, wp -> wp));
+        WorkProcess master = byId.get(request.getMasterProcessId());
+        if (master == null || master.getMergedIntoId() != null) {
+            throw new BusinessException(409, "主工序必须是尚未合并的记录")
+                    .withHintTarget("masterProcessId");
+        }
+
+        String expectedKey = duplicateKey(master);
+        for (String duplicateId : governedIds) {
+            WorkProcess duplicate = byId.get(duplicateId);
+            if (!expectedKey.equals(duplicateKey(duplicate))) {
+                throw new BusinessException(409, "所选记录不属于同一名称和类别的重复组")
+                        .withHintTarget("duplicateProcessIds");
+            }
+            if (duplicate.getMergedIntoId() != null
+                    && !duplicate.getMergedIntoId().equals(master.getId())) {
+                throw new BusinessException(409, "重复工序已归并到其他主工序")
+                        .withHintTarget("duplicateProcessIds");
+            }
+            if (request.getMode() == WorkProcessDTO.GovernanceMode.MERGE
+                    && !sameCriticalConfiguration(master, duplicate)) {
+                throw new BusinessException(409, "重复工序存在关键动作配置差异，不能自动合并")
+                        .withHint("请核对产出类型、质检/自定义字段、预期副产物和模板参数")
+                        .withHintTarget("duplicateProcessIds");
+            }
+        }
+
+        String operator = currentOperator();
+        LocalDateTime governedAt = LocalDateTime.now();
+        for (String duplicateId : governedIds) {
+            WorkProcess duplicate = byId.get(duplicateId);
+            duplicate.setIsActive(false);
+            duplicate.setGovernanceReason(blankToNull(request.getReason()));
+            if (request.getMode() == WorkProcessDTO.GovernanceMode.MERGE) {
+                duplicate.setMergedIntoId(master.getId());
+                duplicate.setMergedAt(governedAt);
+                duplicate.setMergedBy(operator);
+            }
+        }
+        master.setIsActive(true);
+        workProcessRepository.saveAll(locked);
+
+        governanceAuditRepository.save(WorkProcessGovernanceAudit.builder()
+                .id(UUID.randomUUID().toString())
+                .factoryId(factoryId)
+                .idempotencyKey(request.getIdempotencyKey())
+                .mode(request.getMode())
+                .masterProcessId(master.getId())
+                .governedProcessIds(String.join(",", governedIds))
+                .operator(operator)
+                .reason(blankToNull(request.getReason()))
+                .build());
+
+        return WorkProcessDTO.GovernanceResult.builder()
+                .masterProcessId(master.getId())
+                .mode(request.getMode())
+                .governedProcessIds(governedIds)
+                .replayed(false)
+                .build();
+    }
+
+    private WorkProcessDTO.ReferenceStats referenceStats(String factoryId, String workProcessId) {
+        long skuAssociations = productWorkProcessRepository == null
+                ? 0L : productWorkProcessRepository.countByFactoryIdAndWorkProcessId(factoryId, workProcessId);
+        long productionTasks = workProcessTaskRepository == null
+                ? 0L : workProcessTaskRepository.countByFactoryIdAndWorkProcessId(factoryId, workProcessId);
+        long workflowVersions = workflowRepository == null
+                ? 0L : workflowRepository.findByFactoryIdOrderByProductTypeIdAscDefinitionVersionDesc(factoryId)
+                        .stream()
+                        .filter(workflow -> workflowContains(workflow, workProcessId))
+                        .count();
+        return WorkProcessDTO.ReferenceStats.builder()
+                .skuAssociationCount(skuAssociations)
+                .workflowVersionCount(workflowVersions)
+                .productionTaskCount(productionTasks)
+                .build();
+    }
+
+    private boolean workflowContains(ProductProcessWorkflow workflow, String workProcessId) {
+        if (workflow.getNodesJson() == null || workflow.getNodesJson().isBlank()) {
+            return false;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(workflow.getNodesJson());
+            for (JsonNode node : root) {
+                JsonNode data = node.path("data");
+                if (workProcessId.equals(data.path("workProcessId").asText())
+                        || workProcessId.equals(node.path("workProcessId").asText())) {
+                    return true;
+                }
+            }
+        } catch (Exception exception) {
+            log.warn("Unable to inspect workflow {} for work-process references", workflow.getId(), exception);
+        }
+        return false;
+    }
+
+    private boolean sameCriticalConfiguration(WorkProcess left, WorkProcess right) {
+        return Objects.equals(left.getProcessCategory(), right.getProcessCategory())
+                && Objects.equals(left.getNeedsInput(), right.getNeedsInput())
+                && Objects.equals(left.getDefaultOutputMaterialKind(), right.getDefaultOutputMaterialKind())
+                && Objects.equals(left.getSemiFinishedOutputCode(), right.getSemiFinishedOutputCode())
+                && Objects.equals(left.getExpectedByproducts(), right.getExpectedByproducts())
+                && Objects.equals(left.getCustomFieldSchema(), right.getCustomFieldSchema())
+                && Objects.equals(left.getStandardYieldMin(), right.getStandardYieldMin())
+                && Objects.equals(left.getStandardYieldMax(), right.getStandardYieldMax())
+                && Objects.equals(left.getStandardHourlyRate(), right.getStandardHourlyRate());
+    }
+
+    private String duplicateKey(WorkProcess workProcess) {
+        return normalize(workProcess.getProcessName()) + "|" + normalize(workProcess.getProcessCategory());
+    }
+
+    private String normalize(String value) {
+        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private String currentOperator() {
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        return authentication == null || authentication.getName() == null
+                ? "system"
+                : authentication.getName();
+    }
+
     private WorkProcessDTO toDTO(WorkProcess entity) {
+        return toDTO(entity, entity.getFactoryId());
+    }
+
+    private WorkProcessDTO toDTO(WorkProcess entity, String factoryId) {
         return WorkProcessDTO.builder()
                 .id(entity.getId())
                 .processName(entity.getProcessName())
                 .processCategory(entity.getProcessCategory())
                 .description(entity.getDescription())
-                .unit(entity.getUnit())
                 .estimatedMinutes(entity.getEstimatedMinutes())
-                .sortOrder(entity.getSortOrder())
                 .isActive(entity.getIsActive())
                 .standardYieldMin(entity.getStandardYieldMin())
                 .standardYieldMax(entity.getStandardYieldMax())
                 .needsInput(entity.getNeedsInput())
-                .outputUnit(entity.getOutputUnit())
                 .defaultOutputMaterialKind(entity.getDefaultOutputMaterialKind())
                 .semiFinishedOutputCode(entity.getSemiFinishedOutputCode())
                 .standardHourlyRate(entity.getStandardHourlyRate())
                 .expectedByproducts(entity.getExpectedByproducts())
                 .customFieldSchema(entity.getCustomFieldSchema())
+                .mergedIntoId(entity.getMergedIntoId())
+                .mergedAt(entity.getMergedAt())
+                .mergedBy(entity.getMergedBy())
+                .governanceReason(entity.getGovernanceReason())
+                .lockVersion(entity.getLockVersion())
+                .selectableForNew(entity.isSelectableForNew())
+                .referenceStats(referenceStats(factoryId, entity.getId()))
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();

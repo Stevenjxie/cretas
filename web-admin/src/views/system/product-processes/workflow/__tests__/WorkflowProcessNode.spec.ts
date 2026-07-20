@@ -78,27 +78,12 @@ function withPorts(overrides: Partial<ProcessNodeData>): ProcessNodeData {
 }
 
 describe('WorkflowProcessNode output gestures', () => {
-  it.each(['add-output-inline', 'add-output-edge'])(
-    '%s emits the same addOutput action once',
-    async (testId) => {
-      const wrapper = mountNode();
-
-      await wrapper.get(`[data-testid="${testId}"]`).trigger('click');
-
-      expect(wrapper.emitted('addOutput')).toHaveLength(1);
-    },
-  );
-
-  it('keeps the inline action visible and reveals the edge action on hover', async () => {
+  it('uses one inline add-output action and emits addOutput once', async () => {
     const wrapper = mountNode(false);
 
     expect(wrapper.find('[data-testid="add-output-inline"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="add-output-edge"]').exists()).toBe(false);
-
-    await wrapper.get('.process-node').trigger('mouseenter');
-
-    expect(wrapper.find('[data-testid="add-output-edge"]').exists()).toBe(true);
-    await wrapper.get('[data-testid="add-output-edge"]').trigger('click');
+    await wrapper.get('[data-testid="add-output-inline"]').trigger('click');
     expect(wrapper.emitted('addOutput')).toHaveLength(1);
   });
 
@@ -164,31 +149,12 @@ describe('WorkflowProcessNode output gestures', () => {
     expect(wrapper.emitted('addOutput')).toBeUndefined();
   });
 
-  it('keeps the edge action separated from the source handle without a hover gap', () => {
+  it('keeps the source handle for drawing edges without restoring the duplicate plus action', () => {
     const wrapper = mountNode();
-    const processNode = wrapper.get('.process-node');
     const sourceHandle = wrapper.get('[data-handle-type="source"]');
-    const edgeAction = wrapper.get('[data-testid="add-output-edge"]');
 
     expect(sourceHandle.attributes('data-position')).toBe('right');
-    const sourceTopPercent = Number.parseFloat((sourceHandle.element as HTMLElement).style.top);
-    const nodeMinHeight = Number.parseFloat((processNode.element as HTMLElement).style.minHeight);
-    const edgeTop = Number.parseFloat((edgeAction.element as HTMLElement).style.top);
-    const edgeRight = Number.parseFloat((edgeAction.element as HTMLElement).style.right);
-    expect({ sourceTopPercent, nodeMinHeight, edgeTop, edgeRight }).toEqual({
-      sourceTopPercent: 50,
-      nodeMinHeight: 96,
-      edgeTop: 12,
-      edgeRight: -14,
-    });
-
-    const sourceCenterY = nodeMinHeight * sourceTopPercent / 100;
-    const sourceTop = sourceCenterY - 10 / 2;
-    const edgeBottom = edgeTop + 28;
-    expect(edgeBottom).toBeLessThanOrEqual(sourceTop);
-
-    const edgeLeftFromNodeRight = -edgeRight - 28;
-    expect(edgeLeftFromNodeRight).toBeLessThanOrEqual(0);
+    expect(wrapper.find('[data-testid="add-output-edge"]').exists()).toBe(false);
   });
 });
 
@@ -378,7 +344,7 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     expect(wrapper.get('[data-testid="output-unit-chip"]').text()).toBe('kg');
   });
 
-  it('fixes multi-inputs to per-batch free choice while retaining the output relationship selector', async () => {
+  it('shows BOM-pending instead of guessing a free-choice input rule', async () => {
     const ports: ProcessPort[] = [
       { id: 'in-1', direction: 'INPUT', unit: 'kg', ordinal: 0 },
       { id: 'in-2', direction: 'INPUT', unit: 'kg', ordinal: 1 },
@@ -387,10 +353,10 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     ];
     const wrapper = mountNode(true, withPorts({ ports, portGroups: [] }));
 
-    expect(wrapper.get('[data-testid="input-free-choice-mode"]').text()).toBe('批次自由选择（至少1个）');
+    expect(wrapper.get('[data-testid="input-requirement-pending"]').text()).toBe('待 BOM 配置');
     expect(wrapper.find('[data-testid="input-relation-select"]').exists()).toBe(false);
     expect(wrapper.get('[data-testid="output-port-relation"]').text()).toContain('全部产出');
-    expect(wrapper.get('[data-testid="input-relation-help"]').text()).toBe('每个批次至少选择1种，可选择1种、多种或全部。');
+    expect(wrapper.get('[data-testid="input-relation-help"]').text()).toBe('BOM 尚未返回完整投入要求，暂不推断必选关系。');
     expect(wrapper.get('[data-testid="output-relation-help"]').text()).toBe('所有产出都会生成。');
     wrapper.get('[data-testid="output-port-relation"]')
       .findComponent({ name: 'ElSelect' }).vm.$emit('change', 'OPTIONAL');
@@ -401,5 +367,38 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
       id: 'port-group:output:all', direction: 'OUTPUT', label: '产出关系', mode: 'OPTIONAL',
       minSelections: 0, maxSelections: 2, portIds: ['out-1', 'out-2'],
     }]);
+  });
+
+  it('renders structured BOM input requirement groups without rewriting their modes', () => {
+    const ports: ProcessPort[] = [
+      { id: 'in-required', direction: 'INPUT', unit: 'kg', ordinal: 0 },
+      { id: 'in-choice-a', direction: 'INPUT', unit: 'kg', ordinal: 1 },
+      { id: 'in-choice-b', direction: 'INPUT', unit: 'kg', ordinal: 2 },
+      { id: 'in-optional', direction: 'INPUT', unit: 'kg', ordinal: 3 },
+      { id: 'out-1', direction: 'OUTPUT', unit: 'box', ordinal: 0 },
+    ];
+    const wrapper = mountNode(true, withPorts({
+      ports,
+      inputRequirementGroups: [
+        {
+          id: 'required', direction: 'INPUT', label: '主料', mode: 'ALL_REQUIRED',
+          minSelections: 1, maxSelections: 1, portIds: ['in-required'],
+        },
+        {
+          id: 'choice', direction: 'INPUT', label: '辅料候选', mode: 'EXACTLY_ONE',
+          minSelections: 1, maxSelections: 1, portIds: ['in-choice-a', 'in-choice-b'],
+        },
+        {
+          id: 'optional', direction: 'INPUT', label: '可选料', mode: 'OPTIONAL',
+          minSelections: 0, maxSelections: 1, portIds: ['in-optional'],
+        },
+      ],
+    }));
+
+    const text = wrapper.get('[data-testid="input-requirement-groups"]').text();
+    expect(text).toContain('必需');
+    expect(text).toContain('必选其一');
+    expect(text).toContain('可选');
+    expect(wrapper.find('[data-testid="input-requirement-pending"]').exists()).toBe(false);
   });
 });

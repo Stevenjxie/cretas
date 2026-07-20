@@ -42,7 +42,7 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
     @Override
     public String getDescription() {
         return "工序管理页用于新增或修改工序主数据。支持字段: 工序名称、类别、标准工时、"
-                + "出成率上下限、需录投入量、标准时薪、排序。"
+                + "出成率上下限、需录投入量、标准时薪。"
                 + "投入/产出单位由 Workflow/SKU 端口决定，不在工序主数据重复维护。"
                 + "新增前会按名称+类别查重，避免重复创建。"
                 + "出成率请传小数，例如 30% 传 0.30。";
@@ -82,10 +82,6 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
         properties.put("standardHourlyRate", Map.of(
                 "type", "number",
                 "description", "标准时薪，单位元/小时"));
-        properties.put("sortOrder", Map.of(
-                "type", "integer",
-                "description", "排序值"));
-
         schema.put("properties", properties);
         schema.put("required", List.of("action"));
         return schema;
@@ -212,10 +208,10 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
     /**
      * B-2 fix: query ALL work-processes (including disabled) to detect duplicates.
      * Previously used listActive() which missed disabled entries — a disabled work-process
-     * with the same name/category/unit would slip through, causing create() to throw 409
+     * with the same name/category would slip through, causing create() to throw 409
      * which surfaced to the user as a generic "操作失败" error.
      * Using list(..., Pageable.unpaged()) returns all records regardless of active status,
-     * consistent with C5 detectDuplicates semantics (full scan, not active-only).
+     * consistent with name/category identity semantics.
      */
     private WorkProcessDTO findExisting(String factoryId, WorkProcessDTO incoming) {
         String processName = normalize(incoming.getProcessName());
@@ -233,7 +229,6 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
                 .processName(getString(params, "processName"))
                 .processCategory(getString(params, "processCategory"))
                 .estimatedMinutes(getInteger(params, "estimatedMinutes"))
-                .sortOrder(getInteger(params, "sortOrder"))
                 .standardYieldMin(getBigDecimal(params, "standardYieldMin"))
                 .standardYieldMax(getBigDecimal(params, "standardYieldMax"))
                 .needsInput(getBoolean(params, "needsInput"))

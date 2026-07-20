@@ -60,6 +60,8 @@ export interface ProcessNodeData extends Record<string, unknown> {
   ports: ProcessPort[];
   /** Optional for legacy workflow JSON. Missing groups mean every port is required. */
   portGroups?: ProcessPortGroup[];
+  /** Read-only BOM-derived input requirements; absence means the BOM contract is not configured. */
+  inputRequirementGroups?: ProcessPortGroup[];
   conversionRule: {
     mode: ConversionMode;
     expression?: string | null;
@@ -93,12 +95,12 @@ export interface ProcessBranchInput {
   workProcess: {
     id: string;
     processName: string;
-    unit: string;
-    outputUnit?: string | null;
     defaultOutputMaterialKind: 'SEMI_FINISHED' | 'FINISHED_GOOD';
   };
   productTypeId: string;
   productName: string;
+  /** Bound finished-product identity owns its unit; an unbound semi-finished output has no unit yet. */
+  productUnit?: string;
   timestamp: number;
 }
 

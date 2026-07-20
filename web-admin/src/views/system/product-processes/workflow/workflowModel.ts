@@ -47,8 +47,11 @@ export function createProcessBranch(input: ProcessBranchInput): {
   const outputId = `material:${outputKind === 'FINISHED_GOOD' ? 'finished' : 'semi'}:${timestamp}`;
   const inputPortId = `input:${timestamp}`;
   const outputPortId = `output:${timestamp}`;
-  const inputUnit = String(source.data.baseUnit || workProcess.unit || '');
-  const outputUnit = workProcess.outputUnit || workProcess.unit || inputUnit;
+  // The process catalog is an action template and owns no measurement unit.
+  // Port units come only from their bound material/product identity. A new,
+  // unbound semi-finished output therefore stays blank until the user binds a SKU.
+  const inputUnit = String(source.data.baseUnit || '');
+  const outputUnit = outputKind === 'FINISHED_GOOD' ? String(input.productUnit || '') : '';
 
   const processNode: ProductProcessWorkflowNode = {
     id: processId,
@@ -438,7 +441,7 @@ const portSelectionModes = new Set(['ALL_REQUIRED', 'EXACTLY_ONE', 'AT_LEAST_ONE
 const materialDataKeys = new Set(['name', 'skuId', 'skuCode', 'specification', 'baseUnit', 'bound']);
 const processDataKeys = new Set([
   'workProcessId', 'processName', 'processCategory', 'inputUnit', 'outputUnit', 'standardTime',
-  'ports', 'portGroups', 'conversionRule', 'reportingRequired', 'allowMultipleUpstreamSources',
+  'ports', 'portGroups', 'inputRequirementGroups', 'conversionRule', 'reportingRequired', 'allowMultipleUpstreamSources',
   'allowFinishedGoodsSource',
 ]);
 const portKeys = new Set([
@@ -540,6 +543,8 @@ function isProcessNodeData(value: Record<string, unknown>): value is ProcessNode
     && value.ports.every(isProcessPort)
     && (value.portGroups === undefined
       || (Array.isArray(value.portGroups) && value.portGroups.every(isProcessPortGroup)))
+    && (value.inputRequirementGroups === undefined
+      || (Array.isArray(value.inputRequirementGroups) && value.inputRequirementGroups.every(isProcessPortGroup)))
     && isConversionRule(value.conversionRule)
     && typeof value.reportingRequired === 'boolean'
     && optionalNullableString(value.processCategory)

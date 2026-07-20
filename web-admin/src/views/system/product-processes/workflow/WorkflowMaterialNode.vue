@@ -15,7 +15,7 @@
     <Handle v-if="kind !== 'FINISHED_GOOD'" type="source" :position="Position.Right" id="output" />
 
     <button
-      v-if="canWrite && selected"
+      v-if="canWrite"
       type="button"
       class="cell-delete nodrag"
       title="删除此 Cell"
@@ -346,7 +346,7 @@ const kindMark = computed(() => ({
   .material-node, .material-node :deep(.vue-flow__handle) { transition: none; }
   .material-node.validation-attention { animation: none; }
 }
-/* #9 删除 Cell 按钮 (选中时出现, 右上角) */
+/* Cell actions: hover/focus/selected reveal; touch devices keep them visible. */
 .cell-delete {
   position: absolute; top: -10px; right: -10px; z-index: 5;
   padding: 2px 8px; font-size: 12px; line-height: 1.4;
@@ -354,6 +354,16 @@ const kindMark = computed(() => ({
   cursor: pointer; box-shadow: 0 2px 6px rgba(245, 108, 108, 0.4);
 }
 .cell-delete:hover { background: #f23c3c; }
+.cell-delete, .quick-edit { opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
+.material-node:hover .cell-delete,
+.material-node:hover .quick-edit,
+.material-node:focus-within .cell-delete,
+.material-node:focus-within .quick-edit,
+.material-node.selected .cell-delete,
+.material-node.selected .quick-edit { opacity: 1; pointer-events: auto; }
+@media (hover: none) {
+  .material-node .cell-delete, .material-node .quick-edit { opacity: 1; pointer-events: auto; }
+}
 
 .material-node {
   width: 210px;

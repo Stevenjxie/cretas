@@ -141,7 +141,6 @@ function buildInstruction(userMessage: string): string {
 - standardYieldMin / standardYieldMax: 标准出成率上下限，用小数表达，例如 30% = 0.30
 - needsInput: 是否需要录投入量
 - standardHourlyRate: 标准时薪，元/小时
-- sortOrder: 排序
 
 若用户表达“新建/新增/加一道”，使用 action=create。若表达“修改/更新/把某工序改为”，使用 action=update，并尽量从上下文保留或要求用户提供 id。
 工序主数据不填写投入/产出单位；单位由 SKU 与 Workflow 端口绑定，禁止生成 unit/outputUnit 参数。

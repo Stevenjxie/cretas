@@ -120,7 +120,7 @@
           :pan-on-drag="interactionMode === 'PAN' ? true : [1, 2]"
           :selection-key-code="canEdit && interactionMode === 'SELECT' ? true : false"
           multi-selection-key-code="Control"
-          selection-mode="partial"
+          :selection-mode="SelectionMode.Partial"
           :zoom-on-scroll="true"
           :prevent-scrolling="true"
           :zoom-on-pinch="true"
@@ -321,6 +321,17 @@
           <el-form-item label="工序名称" required>
             <el-input v-model="newProcessForm.name" placeholder="例：真空封口" data-testid="new-process-name" />
           </el-form-item>
+          <el-form-item label="工序类别" required>
+            <el-select
+              v-model="newProcessForm.processCategory"
+              filterable
+              placeholder="从工序类别字典选择"
+              style="width: 100%"
+              data-testid="new-process-category"
+            >
+              <el-option v-for="category in workProcessCategories" :key="category" :label="category" :value="category" />
+            </el-select>
+          </el-form-item>
           <!-- #13 相似检测防重: 有相似工序时提示复用, 不硬禁创建 -->
           <el-alert
             v-if="similarProcesses.length"
@@ -368,7 +379,7 @@
           v-else
           type="primary"
           :loading="creatingProcess"
-          :disabled="!newProcessForm.name.trim()"
+          :disabled="!newProcessForm.name.trim() || !newProcessForm.processCategory"
           @click="confirmCreateAndAddProcess"
         >创建并增加</el-button>
       </template>
@@ -437,7 +448,15 @@
           <el-input v-model="processEditForm.processName" maxlength="100" />
         </el-form-item>
         <el-form-item label="工序类别" required>
-          <el-input v-model="processEditForm.processCategory" maxlength="50" />
+          <el-select
+            v-model="processEditForm.processCategory"
+            filterable
+            placeholder="从工序类别字典选择"
+            style="width: 100%"
+            data-testid="edit-process-category"
+          >
+            <el-option v-for="category in workProcessCategories" :key="category" :label="category" :value="category" />
+          </el-select>
         </el-form-item>
         <el-form-item label="默认产出类型" required>
           <el-radio-group v-model="processEditForm.defaultOutputMaterialKind">
@@ -493,11 +512,14 @@ import gsap from 'gsap';
 import { prefersReducedMotion } from '@/utils/motion/prefersReducedMotion';
 import {
   MarkerType,
+  SelectionMode,
   VueFlow,
   useVueFlow,
   type Connection,
   type Edge,
+  type EdgeMouseEvent,
   type Node,
+  type NodeMouseEvent,
   type ViewportTransform,
 } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
@@ -508,6 +530,7 @@ import { getUnitCatalog, type UnitCatalogItem } from '@/api/unitContract';
 import {
   createWorkProcess,
   getActiveWorkProcesses,
+  getWorkProcessCategories,
   getProductWorkProcesses,
   updateWorkProcess,
   updateWorkProcessOutputKind,
@@ -563,7 +586,6 @@ import type {
   ProductProcessWorkflowActivation,
   ProcessNodeData,
   ProcessPort,
-  ProcessPortGroup,
   ProductProcessNodeKind,
   ProductProcessWorkflowDefinition,
   ProductProcessWorkflowEdge,
@@ -633,9 +655,13 @@ const activationChanging = ref(false);
 const dirty = ref(false);
 const selectedNodeId = ref('');
 const interactionMode = ref<'PAN' | 'SELECT'>('PAN');
-const selectedCellIds = computed(() => flowNodes.value.filter((node) => node.selected).map((node) => node.id));
+function isCanvasElementSelected(element: Node | Edge): boolean {
+  return Boolean((element as { selected?: boolean }).selected);
+}
+
+const selectedCellIds = computed(() => flowNodes.value.filter(isCanvasElementSelected).map((node) => node.id));
 const selectedCellCount = computed(() => selectedCellIds.value.length);
-const selectedEdgeIds = computed(() => flowEdges.value.filter((edge) => edge.selected).map((edge) => edge.id));
+const selectedEdgeIds = computed(() => flowEdges.value.filter(isCanvasElementSelected).map((edge) => edge.id));
 const selectedEdgeCount = computed(() => selectedEdgeIds.value.length);
 const selectedSelectionCount = computed(() => selectedCellCount.value + selectedEdgeCount.value);
 // #8 拖拽连线态: connectingFromKind 驱动画布上非法目标 cell 灰化; selectedEdgeId 支持连错删边
@@ -656,6 +682,7 @@ const versionLoading = ref(false);
 const history = ref<ProductProcessWorkflowDefinition[]>([]);
 const dragStartSnapshot = ref<ProductProcessWorkflowDefinition | null>(null);
 const workProcessOptions = ref<WorkProcessItem[]>([]);
+const workProcessCategories = ref<string[]>([]);
 const skuOptions = ref<SkuOption[]>([]);
 const rawMaterialOptions = ref<RawMaterialPickerOption[]>([]);
 const rawMaterialSegments = ref<MaterialSegmentNode[]>([]);
@@ -694,8 +721,8 @@ const selectedWorkProcessId = ref('');
 // #13: 现场创建工序 + 相似检测防重复建。工序本身不持有业务单位；legacy payload 继承上游端口单位。
 const processCreateMode = ref<'existing' | 'create'>('existing');
 const creatingProcess = ref(false);
-const newProcessForm = ref<{ name: string; outputKind: 'SEMI_FINISHED' | 'FINISHED_GOOD' }>(
-  { name: '', outputKind: 'SEMI_FINISHED' },
+const newProcessForm = ref<{ name: string; processCategory: string; outputKind: 'SEMI_FINISHED' | 'FINISHED_GOOD' }>(
+  { name: '', processCategory: '', outputKind: 'SEMI_FINISHED' },
 );
 function normProcessName(s: string): string { return s.replace(/\s+/g, ''); } // 中文不 lowercase
 // 相似 = 同名 / 一个包含另一个 / 共享 >=2 连续字 → 提示复用避免重复建。
@@ -719,19 +746,17 @@ function reuseSimilarProcess(p: WorkProcessItem): void {
 async function confirmCreateAndAddProcess(): Promise<void> {
   const identity = currentLoadedIdentity();
   const name = newProcessForm.value.name.trim();
-  if (!identity || !name || creatingProcess.value) return;
-  const source = flowNodes.value.find((node) => node.id === processSourceMaterialId.value);
-  const compatibilityUnit = String(source?.data?.baseUnit || '').trim();
-  if (!compatibilityUnit) {
-    ElMessage.warning('上游物料缺少单位，请先绑定物料 SKU');
+  const processCategory = newProcessForm.value.processCategory.trim();
+  if (!identity || !name || !processCategory || creatingProcess.value) return;
+  if (!workProcessCategories.value.includes(processCategory)) {
+    ElMessage.warning('请选择有效的工序类别');
     return;
   }
   creatingProcess.value = true;
   try {
     const payload: Partial<WorkProcessItem> = {
       processName: name,
-      unit: compatibilityUnit,
-      outputUnit: compatibilityUnit,
+      processCategory,
       defaultOutputMaterialKind: newProcessForm.value.outputKind,
       isActive: true,
     };
@@ -773,8 +798,6 @@ const processEditNodeId = ref('');
 const processEditForm = ref({
   processName: '',
   processCategory: '',
-  unit: 'kg',
-  outputUnit: 'kg',
   defaultOutputMaterialKind: 'SEMI_FINISHED' as WorkProcessOutputMaterialKind,
   needsInput: true,
 });
@@ -1006,8 +1029,9 @@ async function loadCatalogs(): Promise<void> {
       console.error('[ProductProcessWorkflow] unit catalog loading failed; using built-in scientific units', error);
       return null;
     });
-    const [processResponse, productResponse, rawResponse, segmentResponse, unitCatalogResponse] = await Promise.all([
+    const [processResponse, categoryResponse, productResponse, rawResponse, segmentResponse, unitCatalogResponse] = await Promise.all([
       getActiveWorkProcesses(factoryId),
+      getWorkProcessCategories(factoryId),
       // 精简「选项」端点 (7 字段: id/name/code/unit/specification/productCategory/isActive + @Cacheable) —
       // SkuOption 只需这些字段; 避开重 DTO 的 ~3s/422KB 全量加载 (顶部选择器已先命中缓存, 这里秒回)。
       get<{ content: SkuOption[] }>(`/${factoryId}/product-types/options`),
@@ -1018,6 +1042,8 @@ async function loadCatalogs(): Promise<void> {
     if (!isCurrentCatalogLoad(generation, factoryId)) return;
     if (!processResponse.success
       || !Array.isArray(processResponse.data)
+      || !categoryResponse.success
+      || !Array.isArray(categoryResponse.data)
       || !productResponse.success
       || !Array.isArray(productResponse.data?.content)
       || !rawResponse.success
@@ -1027,6 +1053,7 @@ async function loadCatalogs(): Promise<void> {
       throw new Error('Workflow catalog response is incomplete');
     }
     workProcessOptions.value = processResponse.data;
+    workProcessCategories.value = categoryResponse.data;
     skuOptions.value = productResponse.data.content.map((option) => ({
       ...option,
       detailLoaded: Object.prototype.hasOwnProperty.call(option, 'gramsPerUnit'),
@@ -1057,6 +1084,7 @@ function invalidateCatalogs(): void {
   catalogLoading.value = false;
   loadedCatalogFactoryId.value = null;
   workProcessOptions.value = [];
+  workProcessCategories.value = [];
   skuOptions.value = [];
   rawMaterialOptions.value = [];
   rawMaterialSegments.value = [];
@@ -1186,7 +1214,6 @@ async function reconcileForPersistence(
   identity: WorkflowIdentity,
   showErrors: boolean,
 ): Promise<ProductProcessWorkflowDefinition | null> {
-  if (normalizeFreeChoiceInputGroups()) dirty.value = true;
   let current = currentDefinition();
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const seq = editSeq;
@@ -1470,51 +1497,7 @@ function hydrate(nextDefinition: ProductProcessWorkflowDefinition): boolean {
     style: { stroke: '#1b65a8', strokeWidth: 2 },
   }));
   refreshPortMaterialMetadata();
-  return normalizeFreeChoiceInputGroups();
-}
-
-/**
- * 多投入不是固定配方约束：每个生产批次可以选择任意非空子集。
- * 旧草稿可能保存为 ALL_REQUIRED / EXACTLY_ONE / OPTIONAL；加载和每次图编辑时
- * 都统一迁移为 AT_LEAST_ONE(min=1,max=当前投入数)，避免 UI 与报工运行时分叉。
- */
-function normalizeFreeChoiceInputGroups(): boolean {
-  let changed = false;
-  flowNodes.value.forEach((node) => {
-    if (nodeKind(node) !== 'PROCESS') return;
-    const data = node.data as ProcessNodeData;
-    const inputPortIds = data.ports
-      .filter((port) => port.direction === 'INPUT')
-      .sort((left, right) => left.ordinal - right.ordinal)
-      .map((port) => port.id);
-    const groups = data.portGroups ?? [];
-    const inputGroups = groups.filter((group) => group.direction === 'INPUT');
-    const outputGroups = groups.filter((group) => group.direction === 'OUTPUT');
-
-    if (inputPortIds.length < 2) {
-      if (inputGroups.length > 0) {
-        data.portGroups = outputGroups;
-        changed = true;
-      }
-      return;
-    }
-
-    const freeChoiceGroup: ProcessPortGroup = {
-      id: inputGroups[0]?.id || 'port-group:input:all',
-      direction: 'INPUT',
-      label: '批次自由选择',
-      mode: 'AT_LEAST_ONE',
-      minSelections: 1,
-      maxSelections: inputPortIds.length,
-      portIds: inputPortIds,
-    };
-    const nextGroups = [...outputGroups, freeChoiceGroup];
-    if (JSON.stringify(groups) !== JSON.stringify(nextGroups)) {
-      data.portGroups = nextGroups;
-      changed = true;
-    }
-  });
-  return changed;
+  return false;
 }
 
 function currentDefinition(): ProductProcessWorkflowDefinition {
@@ -1567,7 +1550,6 @@ function mutate(action: () => void): void {
   if (!canEdit.value) return;
   remember();
   action();
-  normalizeFreeChoiceInputGroups();
   refreshPortMaterialMetadata();
   editSeq += 1;
   dirty.value = true;
@@ -1584,7 +1566,7 @@ function undo(): void {
   scheduleAutoSave();
 }
 
-function onNodeClick({ node, event }: { node: Node; event?: MouseEvent }): void {
+function onNodeClick({ node, event }: NodeMouseEvent): void {
   closeCanvasDropdowns(event);
   selectedNodeId.value = node.id;
   acknowledgePublishBindingError(node.id);
@@ -1719,10 +1701,10 @@ function onConnectEnd(event?: MouseEvent | TouchEvent): void {
 }
 
 // ── 连错可删 ────────────────────────────────────────────────
-function onEdgeClick({ edge, event }: { edge: Edge; event?: MouseEvent }): void {
+function onEdgeClick({ edge, event }: EdgeMouseEvent): void {
   closeCanvasDropdowns(event);
   flowNodes.value = flowNodes.value.map((node) => (
-    node.selected ? { ...node, selected: false } : node
+    isCanvasElementSelected(node) ? { ...node, selected: false } : node
   ));
   selectedNodeId.value = '';
   selectedEdgeId.value = edge.id;
@@ -1747,7 +1729,9 @@ async function onSelectionEnd(): Promise<void> {
 
 function clearEdgeSelection(): void {
   selectedEdgeId.value = '';
-  flowEdges.value = flowEdges.value.map((edge) => edge.selected ? { ...edge, selected: false } : edge);
+  flowEdges.value = flowEdges.value.map((edge) => (
+    isCanvasElementSelected(edge) ? { ...edge, selected: false } : edge
+  ));
 }
 
 function onPaneClick(): void {
@@ -1756,7 +1740,7 @@ function onPaneClick(): void {
   clearEdgeSelection();
 }
 
-function closeCanvasDropdowns(event?: MouseEvent): void {
+function closeCanvasDropdowns(event?: MouseEvent | TouchEvent): void {
   const target = event?.target;
   if (target instanceof Element && target.closest(
     '.workflow-sku-picker, .workflow-sku-picker-popper, .raw-selector, .raw-category-filter-shell',
@@ -1814,14 +1798,12 @@ function removeNode(nodeId: string): void {
     if (!flowEdges.value.some((edge) => edge.id === selectedEdgeId.value)) clearEdgeSelection();
     clearPublishBindingError(nodeId);
   };
-  // 有连线才二次确认 (防呆: 别误删一整条链路); 孤立 Cell 直接删。
-  if (touching > 0) {
-    ElMessageBox.confirm(`删除「${label}」及其 ${touching} 条连线？删除后可用「撤销」恢复。`, '删除 Cell', {
-      type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消',
-    }).then(doRemove).catch(() => { /* 取消 */ });
-  } else {
-    doRemove();
-  }
+  const impact = touching > 0 ? `并同时移除 ${touching} 条相连连线` : '（当前没有相连连线）';
+  ElMessageBox.confirm(
+    `确认从当前 Workflow 草稿移除「${label}」${impact}？这不会删除工序/SKU 主数据，删除后可用「撤销」恢复。`,
+    '移除 Workflow Cell',
+    { type: 'warning', confirmButtonText: '从草稿移除', cancelButtonText: '取消' },
+  ).then(doRemove).catch(() => { /* 取消 */ });
 }
 
 function removeSelectedElements(): void {
@@ -1916,7 +1898,7 @@ function openAddProcess(materialNodeId: string): void {
   processSourceMaterialId.value = materialNodeId;
   selectedWorkProcessId.value = '';
   processCreateMode.value = 'existing';
-  newProcessForm.value = { name: '', outputKind: 'SEMI_FINISHED' };
+  newProcessForm.value = { name: '', processCategory: '', outputKind: 'SEMI_FINISHED' };
   processDialogVisible.value = true;
 }
 
@@ -1930,6 +1912,7 @@ function confirmAddProcess(): void {
       workProcess,
       productTypeId: props.productTypeId,
       productName: props.productName || props.productTypeId,
+      productUnit: finishedGoodSkuOptions.value.find((option) => option.id === props.productTypeId)?.unit || '',
       timestamp: nextGraphIdSeed(),
     });
     flowNodes.value.push(
@@ -2259,8 +2242,6 @@ function openQuickEditProcess(processNodeId: string): void {
   processEditForm.value = {
     processName: master.processName,
     processCategory: master.processCategory || '',
-    unit: master.unit || data.inputUnit || 'kg',
-    outputUnit: master.outputUnit || data.outputUnit || master.unit || 'kg',
     defaultOutputMaterialKind: master.defaultOutputMaterialKind,
     needsInput: master.needsInput !== false,
   };
@@ -2274,6 +2255,10 @@ async function saveQuickEditProcess(): Promise<void> {
   const form = processEditForm.value;
   if (!form.processName.trim() || !form.processCategory.trim()) {
     ElMessage.warning('请完整填写工序名称和类别');
+    return;
+  }
+  if (!workProcessCategories.value.includes(form.processCategory.trim())) {
+    ElMessage.warning('请选择有效的工序类别');
     return;
   }
   const data = node.data as ProcessNodeData;
@@ -2309,8 +2294,6 @@ async function saveQuickEditProcess(): Promise<void> {
     const response = await updateWorkProcess(identity.factoryId, data.workProcessId, {
       processName: form.processName.trim(),
       processCategory: form.processCategory.trim(),
-      unit: form.unit,
-      outputUnit: form.outputUnit,
       defaultOutputMaterialKind: form.defaultOutputMaterialKind,
       needsInput: form.needsInput,
     });
@@ -2911,7 +2894,7 @@ async function applyWorkflowAIDraft(
 
 interface WorkflowSpecOutput { kind?: string; name?: string; unit?: string }
 // #4 合流 (N→1): inputs = 本步除主链上游外**额外**投入的原料名 (混批/拼装). 每个建一个 RAW cell + INPUT 端口。
-interface WorkflowSpecStep { process?: string; inputs?: string[]; outputs?: WorkflowSpecOutput[] }
+interface WorkflowSpecStep { process?: string; processCategory?: string; inputs?: string[]; outputs?: WorkflowSpecOutput[] }
 interface WorkflowSpec { rawMaterials?: string[]; steps?: WorkflowSpecStep[] }
 
 /**
@@ -2940,10 +2923,14 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
     }
     if (!wp) {
       const outKind = step.outputs?.[0]?.kind === 'FINISHED_GOOD' ? 'FINISHED_GOOD' : 'SEMI_FINISHED';
-      const unit = step.outputs?.[0]?.unit || '';
+      const processCategory = (step.processCategory || '').trim();
+      if (!workProcessCategories.value.includes(processCategory)) {
+        ElMessage.error(`工序「${name}」缺少有效类别，请先在工序管理中维护或在 AI 规格中选择已有类别`);
+        return;
+      }
       try {
         const resp = await createWorkProcess(identity.factoryId, {
-          processName: name, unit, outputUnit: unit,
+          processName: name, processCategory,
           defaultOutputMaterialKind: outKind as WorkProcessItem['defaultOutputMaterialKind'],
           isActive: true,
         });
@@ -2991,6 +2978,7 @@ async function buildWorkflowFromSpec(spec: WorkflowSpec, identity: WorkflowIdent
         workProcess: resolved[i],
         productTypeId: identity.productTypeId,
         productName: props.productName || identity.productTypeId,
+        productUnit: finishedGoodSkuOptions.value.find((option) => option.id === identity.productTypeId)?.unit || '',
         timestamp: nextGraphIdSeed(),
       });
       const outputs = Array.isArray(step.outputs) && step.outputs.length ? step.outputs : [{}];

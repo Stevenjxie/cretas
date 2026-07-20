@@ -1447,7 +1447,6 @@ const processLoading = ref(false);
 const addingProcessId = ref('');
 const processKeyword = ref('');
 const processCategoryFilter = ref('');
-const processOutputUnitFilter = ref('');
 const processRelationFilter = ref<ProcessRelationFilter>('ALL');
 const processCatalogPage = ref(1);
 const processCatalogPageSize = 30;
@@ -1457,16 +1456,12 @@ const linkedProcessById = computed(() => new Map(linkedProcesses.value.map((item
 const processCategoryOptions = computed(() => Array.from(new Set(
   availableProcesses.value.map((item) => item.processCategory).filter(Boolean),
 )).sort((a, b) => a.localeCompare(b, 'zh-CN')));
-const processOutputUnitOptions = computed(() => Array.from(new Set(
-  availableProcesses.value.map((item) => item.outputUnit || item.unit).filter(Boolean),
-)).sort());
 const filteredProcessCatalog = computed(() => filterProcessCatalog(
   availableProcesses.value,
   linkedProcessIds.value,
   {
     keyword: processKeyword.value,
     category: processCategoryFilter.value,
-    outputUnit: processOutputUnitFilter.value,
     relation: processRelationFilter.value,
   },
 ));
@@ -1479,13 +1474,12 @@ const pagedProcessCatalog = computed(() => pageProcessCatalog(
 function resetProcessCatalogFilters(): void {
   processKeyword.value = '';
   processCategoryFilter.value = '';
-  processOutputUnitFilter.value = '';
   processRelationFilter.value = 'ALL';
   processCatalogPage.value = 1;
 }
 
 watch(
-  [processKeyword, processCategoryFilter, processOutputUnitFilter, processRelationFilter],
+  [processKeyword, processCategoryFilter, processRelationFilter],
   () => { processCatalogPage.value = 1; },
 );
 
@@ -2537,9 +2531,6 @@ watch(aiProductDialogVisible, (visible) => {
             <el-select v-model="processCategoryFilter" clearable placeholder="全部类别" aria-label="工序类别筛选">
               <el-option v-for="category in processCategoryOptions" :key="category" :label="category" :value="category" />
             </el-select>
-            <el-select v-model="processOutputUnitFilter" clearable placeholder="全部产出单位" aria-label="工序产出单位筛选">
-              <el-option v-for="unit in processOutputUnitOptions" :key="unit" :label="displayUnit(unit)" :value="unit" />
-            </el-select>
             <el-segmented
               v-model="processRelationFilter"
               :options="[
@@ -2562,7 +2553,6 @@ watch(aiProductDialogVisible, (visible) => {
                 <span class="available-name">{{ proc.processName }}</span>
                 <el-tag size="small" type="info">{{ proc.processCategory }}</el-tag>
                 <span class="available-code">{{ proc.id }}</span>
-                <span class="available-unit">产出 {{ displayUnit(proc.outputUnit || proc.unit) }}</span>
               </div>
               <el-tag v-if="linkedProcessIds.has(proc.id)" type="success" size="small">
                 已关联 · 第 {{ linkedProcessById.get(proc.id)?.processOrder }} 道

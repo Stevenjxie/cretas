@@ -15,6 +15,8 @@ public interface WorkProcessService {
 
     List<WorkProcessDTO> listActive(String factoryId);
 
+    List<String> listCategories(String factoryId);
+
     WorkProcessDTO getById(String factoryId, String id);
 
     WorkProcessDTO update(String factoryId, String id, WorkProcessDTO dto);
@@ -32,8 +34,12 @@ public interface WorkProcessService {
 
     /**
      * C5: Return all duplicate clusters — groups of existing work-processes
-     * that share the same (processName, processCategory, unit) within the factory.
+     * that share the same normalized (processName, processCategory) within the factory.
      * Only groups with ≥ 2 members are included.
      */
     List<WorkProcessDTO.DuplicateGroup> detectDuplicates(String factoryId);
+
+    WorkProcessDTO.GovernanceResult governDuplicates(
+            String factoryId,
+            WorkProcessDTO.GovernanceRequest request);
 }

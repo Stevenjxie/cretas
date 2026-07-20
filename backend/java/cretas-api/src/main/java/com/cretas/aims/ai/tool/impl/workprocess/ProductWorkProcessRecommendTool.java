@@ -137,7 +137,7 @@ public class ProductWorkProcessRecommendTool extends AbstractBusinessTool {
                     process.getId(),
                     process.getProcessName(),
                     process.getProcessCategory(),
-                    process.getUnit(),
+                    nodeOutputUnit(node),
                     process.getEstimatedMinutes(),
                     index + 1,
                     100,
@@ -166,7 +166,7 @@ public class ProductWorkProcessRecommendTool extends AbstractBusinessTool {
                 .toList();
         Map<String, WorkProcess> masters = workProcessRepository
                 .findByFactoryIdAndIdIn(factoryId, workProcessIds).stream()
-                .filter(process -> Boolean.TRUE.equals(process.getIsActive()))
+                .filter(WorkProcess::isSelectableForNew)
                 .collect(Collectors.toMap(WorkProcess::getId, process -> process, (left, right) -> left));
         return workProcessIds.stream().allMatch(masters::containsKey)
                 ? Optional.of(new ResolvedCandidate(candidate, masters))
@@ -406,6 +406,14 @@ public class ProductWorkProcessRecommendTool extends AbstractBusinessTool {
         return value.toLowerCase(Locale.ROOT)
                 .replaceAll("\\d+(?:\\.\\d+)?\\s*(?:kg|g|克|千克|公斤|斤|ml|l|毫升|升|只|件|个|盒|袋|瓶|箱|份)", "")
                 .replaceAll("[\\s\\p{Punct}，。；：、·×（）【】]+", "");
+    }
+
+    private String nodeOutputUnit(ProductProcessWorkflowDTO.Node node) {
+        if (node.getData() == null) {
+            return null;
+        }
+        Object outputUnit = node.getData().get("outputUnit");
+        return outputUnit == null ? null : outputUnit.toString();
     }
 
     private String safeText(String value) {
