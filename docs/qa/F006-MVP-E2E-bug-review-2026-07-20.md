@@ -16,8 +16,8 @@
   - `web-admin/src/views/inventory/by-warehouse/index.vue`
   - `web-admin/src/views/inventory/by-warehouse/__tests__/inventoryUnitDisplay.spec.ts`
   - `docs/qa/F006-MVP-E2E-bug-review-2026-07-20.md`
-- **测试**：`npx vitest run src/views/inventory/by-warehouse/__tests__/inventoryUnitDisplay.spec.ts src/utils/__tests__/unitPricing.spec.ts`，2 个测试文件、13 项断言全部通过；覆盖 `box/case/slice → 盒/箱/片` 与 `g/kg` 保持，并断言原料、成品单位列均通过 `displayUnit`。
-- **Commit/PR/main 状态**：实现与只读审查完成，待记录精确 commit/PR/main 结果。
+- **测试**：`npx vitest run src/views/inventory/by-warehouse/__tests__/inventoryUnitDisplay.spec.ts src/utils/__tests__/unitPricing.spec.ts`，2 个测试文件、13 项断言全部通过；覆盖 `box/case/slice → 盒/箱/片` 与 `g/kg` 保持，并断言原料、成品单位列均通过 `displayUnit`。唯一一次 Vite 生产构建成功，4429 modules transformed；Web tree 为 `bc8c221d3e715f87aba69559cf7c5fa82effb25c`。
+- **Commit/PR/main 状态**：实现 commit `ac560a82ba02d9d44c3c280674103cc1dd54395e`；PR [#1536](https://github.com/Stevenjxie/cretas/pull/1536)；main 状态 `MERGED_TO_MAIN`（本条目随该 PR 合入后生效）。
 - **部署状态**：`NOT_DEPLOYED`。
 - **回归状态**：待 main 合入并由用户明确授权部署后，测试 Chat 在同一 F006 现场刷新验证。
 - **数据边界**：本修复只调整 Web 展示；不修改 API payload、数据库、库存、预留、仓位、批次、调拨或订单，不触碰 LIUSHANMEN。
