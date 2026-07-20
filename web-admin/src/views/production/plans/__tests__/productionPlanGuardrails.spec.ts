@@ -30,6 +30,15 @@ describe('production plan operator guardrails', () => {
     expect(source).toContain('超出可用量');
   });
 
+  it('keeps warehouse receipt units canonical in payload while localizing BY_STOCK receipt truth', () => {
+    expect(source).toContain("import { canonicalUnitCode, displayUnit } from '@/utils/unitPricing'");
+    expect(source).toContain('quantityUnit: canonicalUnitCode(res.data.quantityUnit || row.unit || row.quantityUnit)');
+    expect(source).toContain('const receiptDisplayUnit = computed(() => displayUnit(receiptUnit.value))');
+    expect(source).toContain('{{ receiptReportedQuantity }} {{ receiptDisplayUnit }}');
+    expect(source).toContain('本步骤仅确认仓库实收，不会重复创建成品批次');
+    expect(source).toContain('quantityUnit: receiptUnit.value');
+  });
+
   it('shows backfill time-window guidance on production plan entry', () => {
     expect(source).toContain('补录时效');
     expect(source).toContain('今天/昨天可补');

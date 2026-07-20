@@ -81,7 +81,7 @@ import {
 } from './documentTrace';
 import type { ProductionDocumentTrace, ProductionTraceDocument } from '@/types/productionDocumentTrace';
 import { productionPlanAiGuard, findUniqueProductByName } from '@/utils/aiEntryGuards';
-import { canonicalUnitCode } from '@/utils/unitPricing';
+import { canonicalUnitCode, displayUnit } from '@/utils/unitPricing';
 import { enumLabel } from '@/utils/enumDisplay';
 
 const router = useRouter();
@@ -2038,7 +2038,12 @@ const receiptReceivedQuantity = computed(() =>
   Number(receiptForm.value.receivedQuantity || 0)
 );
 const receiptUnit = computed(() =>
-  receiptForm.value.quantityUnit || receiptSettlement.value?.quantityUnit || '件'
+  canonicalUnitCode(receiptForm.value.quantityUnit || receiptSettlement.value?.quantityUnit) || '件'
+);
+const receiptDisplayUnit = computed(() => displayUnit(receiptUnit.value));
+const receiptUsesInterimFinishedGoods = computed(() =>
+  Boolean(receiptSettlement.value?.finishedGoodsBatchId)
+  && receiptSettlement.value?.postingStatus === 'PENDING_WAREHOUSE_RECEIPT'
 );
 const receiptTolerance = computed(() => {
   const unit = receiptUnit.value.toLowerCase();
@@ -2111,7 +2116,9 @@ async function handleWarehouseReceipt(row: TableRow) {
     receiptSettlement.value = res.data;
     receiptForm.value = {
       receivedQuantity: Number(res.data.actualFinishedQuantity || 0),
-      quantityUnit: String(row.unit || row.quantityUnit || ''),
+      // API settlement is the quantity contract. Keep canonical payload (box/case/slice)
+      // while rendering a localized label in the dialog.
+      quantityUnit: canonicalUnitCode(res.data.quantityUnit || row.unit || row.quantityUnit),
       varianceReason: '',
       otherVarianceReason: '',
       responsibilitySide: '',
@@ -3386,7 +3393,9 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               size="small"
               :icon="CircleCheck"
               :disabled="actionLoading"
-              title="仓库确认实际收到数量后，成品才正式入库；差异进入中转挂账"
+              :title="getSettlementStatus(row)?.finishedGoodsBatchId
+                ? '小结成品批次已存在；确认实收不会重复创建成品库存'
+                : '仓库确认实际收到数量后，成品才正式入库；差异进入中转挂账'"
               @click="handleWarehouseReceipt(row)"
             >确认入库</el-button>
             <el-button
@@ -4558,19 +4567,21 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           <div>
             <div class="settlement-context-label">生产报产</div>
             <div class="settlement-context-value">
-              {{ receiptReportedQuantity }} {{ receiptUnit }}
+              {{ receiptReportedQuantity }} {{ receiptDisplayUnit }}
             </div>
           </div>
           <div>
             <div class="settlement-context-label">容差</div>
             <div class="settlement-context-value">
-              {{ receiptTolerance }} {{ receiptUnit }}
+              {{ receiptTolerance }} {{ receiptDisplayUnit }}
             </div>
           </div>
         </div>
 
         <el-alert
-          title="生产结单后不直接入成品库存；仓库确认实收后才入库。实收短少超过容差会生成中转挂账，待责任归属清账。"
+          :title="receiptUsesInterimFinishedGoods
+            ? '存货生产小结已生成唯一成品库存；本步骤仅确认仓库实收，不会重复创建成品批次。'
+            : '生产结单后不直接入成品库存；仓库确认实收后才入库。实收短少超过容差会生成中转挂账，待责任归属清账。'"
           type="warning"
           show-icon
           :closable="false"
@@ -4586,22 +4597,22 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             style="width: 100%"
           />
           <div class="settlement-help">
-            上限为生产报产 {{ receiptReportedQuantity }} {{ receiptUnit }}，超过上限需先退回生产修正结单。
+            上限为生产报产 {{ receiptReportedQuantity }} {{ receiptDisplayUnit }}，超过上限需先退回生产修正结单。
           </div>
         </el-form-item>
 
         <div class="receipt-diff-panel">
           <div>
             <span>生产报产</span>
-            <strong>{{ receiptReportedQuantity }} {{ receiptUnit }}</strong>
+            <strong>{{ receiptReportedQuantity }} {{ receiptDisplayUnit }}</strong>
           </div>
           <div>
             <span>仓库实收</span>
-            <strong>{{ receiptReceivedQuantity }} {{ receiptUnit }}</strong>
+            <strong>{{ receiptReceivedQuantity }} {{ receiptDisplayUnit }}</strong>
           </div>
           <div :class="{ danger: receiptVarianceQuantity > receiptTolerance }">
             <span>待核差异</span>
-            <strong>{{ receiptVarianceQuantity }} {{ receiptUnit }}</strong>
+            <strong>{{ receiptVarianceQuantity }} {{ receiptDisplayUnit }}</strong>
           </div>
         </div>
 

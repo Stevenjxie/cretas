@@ -5,6 +5,7 @@ import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.ProductionInterimSettlementRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -50,7 +51,10 @@ class ProductionPlanServiceImplStopProductionStatusGuardTest {
                 args[i] = null;
             }
         }
-        return (ProductionPlanServiceImpl) ctor.newInstance(args);
+        ProductionPlanServiceImpl service = (ProductionPlanServiceImpl) ctor.newInstance(args);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,
+                "productionInterimSettlementRepository", mock(ProductionInterimSettlementRepository.class));
+        return service;
     }
 
     /** processSheetRowRepository is field-injected @Autowired(required=false); default null via

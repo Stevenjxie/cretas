@@ -9,6 +9,7 @@ import com.cretas.aims.dto.production.ProductionWarehouseReceiptRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptResponse;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.ProductionInterimSettlement;
 import com.cretas.aims.entity.ProductionSettlement;
 import com.cretas.aims.entity.ProductionTransitLedger;
 import com.cretas.aims.entity.SemiFinishedInventory;
@@ -27,6 +28,7 @@ import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionLineRepository;
 import com.cretas.aims.repository.ProductionPlanBatchUsageRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.ProductionInterimSettlementRepository;
 import com.cretas.aims.repository.ProductionSettlementConsumptionRepository;
 import com.cretas.aims.repository.ProductionSettlementLaborRepository;
 import com.cretas.aims.repository.ProductionSettlementRepository;
@@ -59,9 +61,12 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -72,6 +77,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -100,6 +106,7 @@ class ProductionPlanSettlementTest {
     @Mock private SalesOrderItemRepository salesOrderItemRepository;
     @Mock private BomService bomService;
     @Mock private ProductionSettlementRepository productionSettlementRepository;
+    @Mock private ProductionInterimSettlementRepository productionInterimSettlementRepository;
     @Mock private ProductionSettlementConsumptionRepository productionSettlementConsumptionRepository;
     @Mock private ProductionSettlementLaborRepository productionSettlementLaborRepository;
     @Mock private SemiFinishedInventoryRepository semiFinishedInventoryRepository;
@@ -130,6 +137,7 @@ class ProductionPlanSettlementTest {
                 productionLineRepository, userRepository, excelUtil,
                 salesOrderRepository, salesOrderItemRepository);
         ReflectionTestUtils.setField(service, "productionSettlementRepository", productionSettlementRepository);
+        ReflectionTestUtils.setField(service, "productionInterimSettlementRepository", productionInterimSettlementRepository);
         ReflectionTestUtils.setField(service, "productionSettlementConsumptionRepository", productionSettlementConsumptionRepository);
         ReflectionTestUtils.setField(service, "productionSettlementLaborRepository", productionSettlementLaborRepository);
         ReflectionTestUtils.setField(service, "semiFinishedInventoryRepository", semiFinishedInventoryRepository);
@@ -141,6 +149,7 @@ class ProductionPlanSettlementTest {
         ReflectionTestUtils.setField(service, "inventoryLowStockEventPublisher", inventoryLowStockEventPublisher);
         ReflectionTestUtils.setField(service, "applicationEventPublisher", applicationEventPublisher);
         ReflectionTestUtils.setField(service, "orderCostBreakdownService", orderCostBreakdownService);
+        ReflectionTestUtils.setField(service, "processSheetRowRepository", processSheetRowRepository);
         lenient().when(conversionRepository.findAll()).thenReturn(Collections.emptyList());
     }
 
@@ -672,6 +681,129 @@ class ProductionPlanSettlementTest {
     }
 
     @Test
+    @DisplayName("BY_STOCK 已小结停产计划显式补建唯一待仓库确认元数据，刷新读取不重复创建")
+    void bridgeByStockSettlement_thenReadIsIdempotent() {
+        ProductionPlan plan = completedSafetyStockPlan();
+        ProcessSheetRow row = submittedInterimRow();
+        ProductionInterimSettlement interim = interimSettlement();
+        FinishedGoodsBatch fg = interimFinishedGoods();
+        AtomicReference<ProductionSettlement> stored = new AtomicReference<>();
+
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenAnswer(inv -> Optional.ofNullable(stored.get()));
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, PLAN_ID)).thenReturn(List.of(row));
+        when(productionInterimSettlementRepository
+                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNullOrderBySessionSeqAsc(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(interim));
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-P-001-S1-PT-1"))
+                .thenReturn(Optional.of(fg));
+        when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> {
+            ProductionSettlement saved = inv.getArgument(0);
+            stored.set(saved);
+            return saved;
+        });
+
+        ProductionSettlementResponse first = service.bridgeByStockSettlement(FACTORY_ID, PLAN_ID);
+        ProductionSettlementResponse replay = service.bridgeByStockSettlement(FACTORY_ID, PLAN_ID);
+        ProductionSettlementResponse refreshed = service.getProductionSettlement(FACTORY_ID, PLAN_ID);
+
+        assertEquals(first.getSettlementId(), refreshed.getSettlementId());
+        assertEquals(first.getSettlementId(), replay.getSettlementId());
+        assertEquals("PENDING_WAREHOUSE_RECEIPT", first.getPostingStatus());
+        assertEquals(new BigDecimal("5.0000"), first.getActualFinishedQuantity());
+        assertEquals("box", first.getQuantityUnit());
+        assertEquals("fg-interim-1", first.getFinishedGoodsBatchId());
+        verify(productionSettlementRepository, times(1)).save(any(ProductionSettlement.class));
+        verify(finishedGoodsBatchRepository, never()).save(any());
+        verify(materialBatchRepository, never()).save(any());
+        verify(materialConsumptionRepository, never()).save(any());
+        verify(processSheetRowRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("结单状态 GET 保持只读，缺失记录不隐式补建其他历史计划")
+    void getProductionSettlement_missingRemainsReadOnly() {
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.getProductionSettlement(FACTORY_ID, PLAN_ID));
+
+        assertEquals(404, ex.getCode());
+        verify(productionPlanRepository, never()).findByIdForUpdate(any());
+        verify(productionSettlementRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("BY_STOCK 仓库确认复用小结唯一 FG；同幂等键重放不建第二批次也不双入库")
+    void confirmWarehouseReceipt_safetyStockReusesInterimFinishedGoodsAndIsIdempotent() {
+        ProductionPlan plan = completedSafetyStockPlan();
+        ProcessSheetRow row = submittedInterimRow();
+        ProductionInterimSettlement interim = interimSettlement();
+        FinishedGoodsBatch fg = interimFinishedGoods();
+        AtomicReference<ProductionSettlement> stored = new AtomicReference<>();
+
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenAnswer(inv -> Optional.ofNullable(stored.get()));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenAnswer(inv -> Optional.ofNullable(stored.get()));
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, PLAN_ID)).thenReturn(List.of(row));
+        when(productionInterimSettlementRepository
+                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNullOrderBySessionSeqAsc(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(interim));
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-P-001-S1-PT-1"))
+                .thenReturn(Optional.of(fg));
+        when(finishedGoodsBatchRepository.findById("fg-interim-1")).thenReturn(Optional.of(fg));
+        when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> {
+            ProductionSettlement saved = inv.getArgument(0);
+            stored.set(saved);
+            return saved;
+        });
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(Collections.emptyList());
+
+        ProductionWarehouseReceiptRequest request = receiptRequest("receipt-stock-1", "5", "盒", null, null);
+        ProductionWarehouseReceiptResponse first = service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID, request, 11L);
+        ProductionWarehouseReceiptResponse replay = service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID, request, 11L);
+
+        assertEquals("POSTED", first.getPostingStatus());
+        assertEquals("fg-interim-1", first.getFinishedGoodsBatchId());
+        assertEquals("fg-interim-1", replay.getFinishedGoodsBatchId());
+        assertEquals(new BigDecimal("5"), first.getWarehouseReceivedQuantity());
+        assertEquals("box", first.getQuantityUnit());
+        verify(finishedGoodsBatchRepository, never()).save(any());
+        verify(materialBatchRepository, never()).save(any());
+        verify(materialConsumptionRepository, never()).save(any());
+        verify(productionSettlementRepository, times(2)).save(any(ProductionSettlement.class));
+    }
+
+    @Test
+    @DisplayName("BY_STOCK 历史桥接遇到未正式提交报工时明确拒绝且零库存写入")
+    void bridgeByStockSettlement_safetyStockIncompleteRowsRejectedWithoutSideEffects() {
+        ProductionPlan plan = completedSafetyStockPlan();
+        ProcessSheetRow draft = submittedInterimRow();
+        draft.setSubmissionStatus(ProcessSheetRow.SUBMISSION_DRAFT);
+
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, PLAN_ID)).thenReturn(List.of(draft));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.bridgeByStockSettlement(FACTORY_ID, PLAN_ID));
+
+        assertEquals("BY_STOCK_SETTLEMENT_ROWS_INCOMPLETE", ex.getErrorCode());
+        verify(productionSettlementRepository, never()).save(any());
+        verify(finishedGoodsBatchRepository, never()).save(any());
+        verify(materialBatchRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("raw-centric multi-output receipt never creates a finished batch for the raw owner")
     void confirmWarehouseReceipt_rawCentricMultiOutput_doesNotCreateRawOwnerBatch() {
         ProductionPlan plan = plan();
@@ -859,6 +991,55 @@ class ProductionPlanSettlementTest {
         assertEquals("fg-1", response.getFinishedGoodsBatchId());
         verify(finishedGoodsBatchRepository, never()).save(any());
         verify(productionTransitLedgerRepository, never()).save(any());
+    }
+
+    private ProductionPlan completedSafetyStockPlan() {
+        ProductionPlan plan = plan();
+        plan.setSourceType(com.cretas.aims.entity.enums.PlanSourceType.SAFETY_STOCK);
+        plan.setStatus(ProductionPlanStatus.COMPLETED);
+        plan.setPlannedQuantity(new BigDecimal("5"));
+        plan.setPlannedUnit("盒");
+        return plan;
+    }
+
+    private ProcessSheetRow submittedInterimRow() {
+        ProcessSheetRow row = new ProcessSheetRow();
+        row.setFactoryId(FACTORY_ID);
+        row.setPlanId(PLAN_ID);
+        row.setClientRowId("row-1");
+        row.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        row.setInterimSettledAt(LocalDateTime.of(2026, 7, 20, 5, 32));
+        return row;
+    }
+
+    private ProductionInterimSettlement interimSettlement() {
+        return ProductionInterimSettlement.builder()
+                .id("interim-1")
+                .factoryId(FACTORY_ID)
+                .productionPlanId(PLAN_ID)
+                .sessionSeq(1)
+                .postedAt(LocalDateTime.of(2026, 7, 20, 5, 32))
+                .postedBy(10L)
+                .summary(Map.of(
+                        "sessionSeq", 1,
+                        "finishedQuantity", new BigDecimal("5"),
+                        "finishedGoodsBatchNumbers", List.of("FG-P-001-S1-PT-1")))
+                .build();
+    }
+
+    private FinishedGoodsBatch interimFinishedGoods() {
+        FinishedGoodsBatch batch = new FinishedGoodsBatch();
+        batch.setId("fg-interim-1");
+        batch.setFactoryId(FACTORY_ID);
+        batch.setProductionPlanId(PLAN_ID);
+        batch.setBatchNumber("FG-P-001-S1-PT-1");
+        batch.setProductTypeId("PT-1");
+        batch.setProducedQuantity(new BigDecimal("5.0000"));
+        batch.setShippedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        batch.setUnit("box");
+        batch.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
+        return batch;
     }
 
     private ProductionPlan plan() {
