@@ -195,3 +195,17 @@
 - 验收：一次性 PostgreSQL 16 真实门禁 1/1 通过并清理容器，证明 Runtime Shadow 75000ms 可持久化且非法 source/bounds 被数据库拒绝；Python AgentEval 38 passed、1 skipped；Java clean 目标测试 32/32；跨语言固定 bucket vectors 一致；`V20261028_07` 唯一；最终只读终审 P0=0、P1=0；GitHub tracked-secret-scan 通过。
 - 发布边界：本 PR 只合并代码、迁移与测试；未部署 Java/Python，未在生产执行 V07，未重启或切流，未启用任何 Runtime Shadow flag，未触碰 Web、RN 或 OTA。部署必须从 clean exact `origin/main` 重新路由并取得独立确认。
 - Scope 锁：已释放。
+
+### F006 R2 Workflow/BOM topology closeout
+
+- 状态：`merged`
+- Owner：Codex coordinator (`/root`)
+- 登记 Base SHA：`a362fac0c` / `5c2b30249` / `202b481c1` / `9318305f4c146f5b253f3e920a7d8978868a33f2`
+- 归档任务：`BLOCKER-F006-R2-BOM-WORKFLOW-DRAFT-PIN`、`BLOCKER-F006-R2-WORKFLOW-TOPOLOGY-RESOLUTION`、`AUDIT-F006-R2-WORKFLOW-TOPOLOGY-SAME-CAUSE-001`、`FIX-F006-R2-BOM-WEB-FAIL-CLOSED-001`、`FIX-F006-R2-BOM-READINESS-PINNED-NODE-001`、`FIX-F006-R2-WIP-IDENTITY-TOPOLOGY-001`、`FIX-F006-R2-BOM-COPY-MULTIROOT-001`。
+- PR/main：[#1545](https://github.com/Stevenjxie/cretas/pull/1545) 已合入；代码 main commit `409aab41db0d031bc508ca528ac1d3c5e3c16cdf`。
+- 根因与修复：移除 Workflow→BOM 解析器“目标产品必须恰好一个入口”的单链假设；按 pinned revision 和目标 SKU 做完整 DAG 反向切片，保留多入口、合流、分流、精确 process-node 与多 root 身份；BOM 辅料/readiness/copy、WIP identity 和 Web fail-closed 统一使用同一不可变拓扑真值。
+- Depth 验证：A 1→1=`medium`、B 2→1=`deep`、C 1→2=`medium`、D 2→2=`deep`、E 合流→半成品→分流=`medium`；覆盖 revision 保存/pin、严格入口/工序集合、辅料提交/fresh readback、目标隔离、非法图 4xx 与 snapshot 不漂移。
+- 最终验证：Java 单 release 生命周期 221/221；真实 JPA startup gate 通过；同因后端回归 139/139；Web BOM 30/30 + 边界回归 58/58；完整 Web Vitest 1673/1673（另 5 skipped）；Web release build 735 assets。
+- 同因边界：线性出成率/成本/多成品 settlement 等尚未具备完整非线性领域模型的路径继续 fail-closed/列入后续 deep/medium 验证，不冒充已支持。
+- 生产边界：`NOT_DEPLOYED`；生产业务 mutation=0；未修改 F006 `CPF0060016`、BOM/Workflow 记录，未做历史桥接，未触碰 LIUSHANMEN。
+- Scope 锁：已释放。
