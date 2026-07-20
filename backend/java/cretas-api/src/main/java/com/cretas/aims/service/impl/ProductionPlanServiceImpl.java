@@ -206,6 +206,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ProductionSettlementRepository productionSettlementRepository;
 
+    /**
+     * BY_STOCK 小结与仓库确认桥接。小结已经完成库存过账，本仓库只读取其会话摘要来补建
+     * {@link ProductionSettlement} 元数据，绝不重放小结库存动作。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ProductionInterimSettlementRepository productionInterimSettlementRepository;
+
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ProductionSettlementConsumptionRepository productionSettlementConsumptionRepository;
 
@@ -2788,6 +2795,15 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
     @Override
     @Transactional
+    public ProductionSettlementResponse bridgeByStockSettlement(String factoryId, String planId) {
+        ProductionSettlement settlement = productionSettlementRepository
+                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId)
+                .orElseGet(() -> bridgeProductionSettlementForWarehouse(factoryId, planId));
+        return toSettlementResponse(settlement, Collections.emptyList());
+    }
+
+    @Override
+    @Transactional
     public ProductionWarehouseReceiptResponse confirmWarehouseReceipt(String factoryId, String planId,
                                                                       ProductionWarehouseReceiptRequest request,
                                                                       Long receivedBy) {
@@ -2805,7 +2821,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
         ProductionSettlement settlement = productionSettlementRepository
                 .findByFactoryIdAndProductionPlanIdForUpdate(factoryId, planId)
-                .orElseThrow(() -> new ResourceNotFoundException("生产结单", "productionPlanId", planId));
+                .orElseGet(() -> bridgeProductionSettlementForWarehouse(factoryId, planId));
 
         if (settlement.getWarehouseReceivedAt() != null) {
             if (request.getIdempotencyKey().equals(settlement.getWarehouseReceiptIdempotencyKey())) {
@@ -2836,6 +2852,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         String unit = firstNonBlank(request.getQuantityUnit(), settlement.getQuantityUnit(), "件");
+        if (plan.getSourceType() == PlanSourceType.SAFETY_STOCK) {
+            unit = canonicalReceiptUnit(unit);
+        }
         BigDecimal variance = reported.subtract(received);
         BigDecimal tolerance = receiptTolerance(unit);
         boolean hasVariance = variance.compareTo(BigDecimal.ZERO) != 0;
@@ -2855,7 +2874,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHintTarget("责任侧");
         }
 
-        FinishedGoodsBatch fgBatch = createFinishedGoodsFromReceipt(plan, settlement, received, unit, receivedBy);
+        FinishedGoodsBatch fgBatch = plan.getSourceType() == PlanSourceType.SAFETY_STOCK
+                ? requireInterimFinishedGoodsForReceipt(plan, settlement, reported, received, unit)
+                : createFinishedGoodsFromReceipt(plan, settlement, received, unit, receivedBy);
         ProductionTransitLedger ledger = needsTransitLedger
                 ? createTransitLedger(settlement, reported, received, variance, tolerance, unit, request, receivedBy)
                 : null;
@@ -3464,9 +3485,204 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHintTarget("生产结单");
         }
         return productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId)
-                .orElseThrow(() -> new BusinessException(404, "该生产计划尚未结单, 不能确认入库")
-                        .withHint("请先由生产文员录入实际产量、实际领用和人效并提交结单")
-                        .withHintTarget("仓库实收"));
+                .orElseThrow(this::missingProductionSettlement);
+    }
+
+    /**
+     * 把 BY_STOCK 小结的库存真值桥接为仓库确认所需的唯一结单元数据。
+     *
+     * <p>历史上 {@code interim-settle} 与普通 {@code settle} 各写一张互不相通的表：前者已经扣料并
+     * 创建可用 FG，后者才是仓库列表 GET/确认入口读取的表。这里在计划行悲观锁内做一次严格派生，
+     * 只插入缺失的 {@link ProductionSettlement}；不会调用小结、扣料、保存报工行或创建 FG。
+     */
+    private ProductionSettlement bridgeProductionSettlementForWarehouse(String factoryId, String planId) {
+        ProductionPlan plan = productionPlanRepository.findByIdForUpdate(planId)
+                .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
+                .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+
+        // 所有补建入口都锁同一 plan；拿锁后必须重读，保证重复 GET/刷新只创建一行。
+        Optional<ProductionSettlement> raced = productionSettlementRepository
+                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId);
+        if (raced.isPresent()) {
+            return raced.get();
+        }
+        if (plan.getSourceType() != PlanSourceType.SAFETY_STOCK) {
+            throw missingProductionSettlement();
+        }
+        if (productionInterimSettlementRepository == null
+                || finishedGoodsBatchRepository == null || processSheetRowRepository == null) {
+            throw new BusinessException(500, "存货生产仓库确认桥接服务未初始化")
+                    .withCode("BY_STOCK_SETTLEMENT_BRIDGE_UNAVAILABLE")
+                    .withHint("请联系管理员检查小结、报工和成品库存组件")
+                    .withHintTarget("仓库实收");
+        }
+        if (plan.getStatus() != ProductionPlanStatus.COMPLETED) {
+            throw new BusinessException(409, "存货生产计划尚未停产, 不能由仓库确认入库")
+                    .withCode("BY_STOCK_RECEIPT_REQUIRES_STOPPED_PLAN")
+                    .withHint("请先完成本次小结并停产")
+                    .withHintTarget("仓库实收");
+        }
+
+        List<ProcessSheetRow> rows = processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, planId);
+        if (isEmpty(rows) || rows.stream().anyMatch(row ->
+                !ProcessSheetRow.SUBMISSION_SUBMITTED.equals(row.getSubmissionStatus())
+                        || row.getInterimSettledAt() == null)) {
+            throw new BusinessException(409, "存货生产报工尚未全部正式提交并小结, 不能补建仓库确认")
+                    .withCode("BY_STOCK_SETTLEMENT_ROWS_INCOMPLETE")
+                    .withHint("请核对逐道报工和小结状态；系统不会重放库存动作")
+                    .withHintTarget("仓库实收");
+        }
+
+        List<ProductionInterimSettlement> sessions = productionInterimSettlementRepository
+                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNullOrderBySessionSeqAsc(factoryId, planId);
+        if (isEmpty(sessions)) {
+            throw new BusinessException(409, "该存货生产计划没有可核验的小结会话")
+                    .withCode("BY_STOCK_INTERIM_SETTLEMENT_REQUIRED")
+                    .withHint("系统不会用报工行猜测库存结果；请先完成小结")
+                    .withHintTarget("仓库实收");
+        }
+        for (int i = 0; i < sessions.size(); i++) {
+            Integer sessionSeq = sessions.get(i).getSessionSeq();
+            if (sessionSeq == null || sessionSeq != i + 1) {
+                throw new BusinessException(409, "存货生产小结会话序号不连续, 不能安全补建仓库确认")
+                        .withCode("BY_STOCK_INTERIM_SETTLEMENT_SEQUENCE_INVALID")
+                        .withHint("请联系管理员核对小结审计记录；系统未改动任何库存")
+                        .withHintTarget("仓库实收");
+            }
+        }
+
+        LinkedHashSet<String> batchNumbers = new LinkedHashSet<>();
+        BigDecimal summarizedFinishedQuantity = BigDecimal.ZERO;
+        for (ProductionInterimSettlement session : sessions) {
+            Map<String, Object> summary = session.getSummary();
+            if (summary == null) {
+                throw invalidInterimFinishedGoods("小结摘要缺失");
+            }
+            Object numbers = summary.get("finishedGoodsBatchNumbers");
+            if (numbers instanceof Collection<?> collection) {
+                collection.stream()
+                        .map(value -> value != null ? String.valueOf(value) : null)
+                        .map(this::trimToNull)
+                        .filter(Objects::nonNull)
+                        .forEach(batchNumbers::add);
+            }
+            BigDecimal sessionFinished = asBigDecimal(summary.get("finishedQuantity"));
+            if (sessionFinished == null || sessionFinished.signum() < 0) {
+                throw invalidInterimFinishedGoods("小结成品数量无效");
+            }
+            summarizedFinishedQuantity = summarizedFinishedQuantity.add(sessionFinished);
+        }
+        if (batchNumbers.size() != 1 || summarizedFinishedQuantity.signum() <= 0) {
+            throw invalidInterimFinishedGoods("仓库单数量确认仅支持唯一成品批次, 当前批次数=" + batchNumbers.size());
+        }
+
+        String batchNumber = batchNumbers.iterator().next();
+        FinishedGoodsBatch finishedGoods = finishedGoodsBatchRepository
+                .findByFactoryIdAndBatchNumber(factoryId, batchNumber)
+                .orElseThrow(() -> invalidInterimFinishedGoods("小结记录的成品批次不存在: " + batchNumber));
+        validateInterimFinishedGoods(plan, finishedGoods, summarizedFinishedQuantity);
+
+        ProductionInterimSettlement latestSession = sessions.get(sessions.size() - 1);
+        ProductionSettlement settlement = new ProductionSettlement();
+        settlement.setId(UUID.randomUUID().toString());
+        settlement.setFactoryId(factoryId);
+        settlement.setProductionPlanId(planId);
+        settlement.setPlanNumber(plan.getPlanNumber());
+        settlement.setIdempotencyKey("by-stock-interim:" + latestSession.getId());
+        settlement.setPlannedQuantity(zeroIfNull(plan.getPlannedQuantity()));
+        settlement.setActualFinishedQuantity(finishedGoods.getProducedQuantity());
+        settlement.setActualSemiFinishedQuantity(BigDecimal.ZERO);
+        settlement.setQuantityUnit(trimToNull(finishedGoods.getUnit()));
+        settlement.setPlanStatusAfter(ProductionPlanStatus.COMPLETED);
+        settlement.setPostingStatus("PENDING_WAREHOUSE_RECEIPT");
+        settlement.setPostingMessage("存货生产小结已完成扣料并生成唯一成品批次; 等待仓库确认实收, 确认不会重复创建成品库存");
+        settlement.setFinishedGoodsBatchId(finishedGoods.getId());
+        settlement.setSettledBy(latestSession.getPostedBy());
+        settlement.setSettledAt(latestSession.getPostedAt());
+        ProductionSettlement saved = productionSettlementRepository.save(settlement);
+        log.info("BY_STOCK 结单桥接仅补建元数据: factoryId={}, planId={}, settlementId={}, sessions={}, fgBatch={}, quantity={} {}",
+                factoryId, planId, saved.getId(), sessions.size(), finishedGoods.getBatchNumber(),
+                finishedGoods.getProducedQuantity(), finishedGoods.getUnit());
+        return saved;
+    }
+
+    private void validateInterimFinishedGoods(ProductionPlan plan, FinishedGoodsBatch finishedGoods,
+                                              BigDecimal summarizedFinishedQuantity) {
+        if (!plan.getId().equals(finishedGoods.getProductionPlanId())) {
+            throw invalidInterimFinishedGoods("小结成品批次不属于当前生产计划");
+        }
+        List<String> targetIds = Optional.ofNullable(plan.getTargetFinishedGoodIds()).orElseGet(ArrayList::new)
+                .stream().map(this::trimToNull).filter(Objects::nonNull).distinct().toList();
+        if (targetIds.size() > 1) {
+            throw invalidInterimFinishedGoods("多成品计划不能合并为一条仓库实收");
+        }
+        String expectedProductTypeId = targetIds.isEmpty()
+                ? trimToNull(plan.getProductTypeId()) : targetIds.get(0);
+        if (!Objects.equals(expectedProductTypeId, trimToNull(finishedGoods.getProductTypeId()))) {
+            throw invalidInterimFinishedGoods("小结成品 SKU 与计划终端 SKU 不一致");
+        }
+        BigDecimal produced = zeroIfNull(finishedGoods.getProducedQuantity());
+        if (produced.signum() <= 0 || produced.compareTo(summarizedFinishedQuantity) != 0) {
+            throw invalidInterimFinishedGoods("小结摘要数量与唯一成品批次数量不一致");
+        }
+        if (isBlank(finishedGoods.getUnit())) {
+            throw invalidInterimFinishedGoods("小结成品批次缺少计量单位");
+        }
+    }
+
+    /** BY_STOCK 仓库确认只确认小结已创建的唯一 FG，禁止再建第二个成品批次。 */
+    private FinishedGoodsBatch requireInterimFinishedGoodsForReceipt(ProductionPlan plan,
+                                                                     ProductionSettlement settlement,
+                                                                     BigDecimal reported,
+                                                                     BigDecimal received,
+                                                                     String unit) {
+        if (received.compareTo(reported) != 0) {
+            throw new BusinessException(409, "存货生产小结已按报产数量生成成品库存, 仓库实收差异不能直接覆盖")
+                    .withCode("BY_STOCK_RECEIPT_VARIANCE_REQUIRES_RECONCILIATION")
+                    .withHint("请先由生产侧撤销/修正小结后再确认；系统未改动现有成品库存")
+                    .withHintTarget("仓库实收");
+        }
+        if (isBlank(settlement.getFinishedGoodsBatchId())) {
+            throw invalidInterimFinishedGoods("桥接结单没有关联小结成品批次");
+        }
+        FinishedGoodsBatch batch = finishedGoodsBatchRepository.findById(settlement.getFinishedGoodsBatchId())
+                .filter(candidate -> settlement.getFactoryId().equals(candidate.getFactoryId()))
+                .orElseThrow(() -> invalidInterimFinishedGoods("桥接关联的成品批次不存在"));
+        validateInterimFinishedGoods(plan, batch, reported);
+        if (!Objects.equals(canonicalReceiptUnit(unit), canonicalReceiptUnit(batch.getUnit()))) {
+            throw new BusinessException(409, "仓库实收单位与小结成品批次单位不一致")
+                    .withCode("BY_STOCK_RECEIPT_UNIT_MISMATCH")
+                    .withHint("小结批次单位: " + batch.getUnit() + ", 本次实收单位: " + unit)
+                    .withHintTarget("仓库实收");
+        }
+        return batch;
+    }
+
+    private String canonicalReceiptUnit(String unit) {
+        if (unit == null) {
+            return null;
+        }
+        return switch (unit.trim().toLowerCase(Locale.ROOT)) {
+            case "盒", "box" -> "box";
+            case "箱", "case" -> "case";
+            case "片", "slice" -> "slice";
+            case "公斤", "千克", "kg" -> "kg";
+            case "克", "g" -> "g";
+            default -> unit.trim().toLowerCase(Locale.ROOT);
+        };
+    }
+
+    private BusinessException invalidInterimFinishedGoods(String detail) {
+        return new BusinessException(409, "存货生产小结成品真值无法唯一核验: " + detail)
+                .withCode("BY_STOCK_INTERIM_FINISHED_GOODS_INVALID")
+                .withHint("请联系管理员核对小结会话与成品批次；系统未改动任何库存")
+                .withHintTarget("仓库实收");
+    }
+
+    private BusinessException missingProductionSettlement() {
+        return new BusinessException(404, "该生产计划尚未结单, 不能确认入库")
+                .withHint("请先由生产文员录入实际产量、实际领用和人效并提交结单")
+                .withHintTarget("仓库实收");
     }
 
     private void ensurePostingDependencies() {
@@ -4829,6 +5045,17 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             plan.setStartTime(LocalDateTime.now());
         }
         productionPlanRepository.save(plan);
+        if (productionInterimSettlementRepository == null) {
+            throw new BusinessException(500, "存货生产小结服务未初始化, 无法建立仓库确认桥接")
+                    .withCode("BY_STOCK_SETTLEMENT_BRIDGE_UNAVAILABLE")
+                    .withHintTarget("停产");
+        }
+        List<ProductionInterimSettlement> completedSessions = productionInterimSettlementRepository
+                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNullOrderBySessionSeqAsc(factoryId, planId);
+        if (!isEmpty(completedSessions)) {
+            // 小结已经完成全部库存动作；停产只额外创建仓库确认所需的元数据，绝不重放小结。
+            bridgeProductionSettlementForWarehouse(factoryId, planId);
+        }
         log.info("停产 (存货生产纯状态关闭, 无扣料无事件): factoryId={}, planId={}", factoryId, planId);
         // NO completeProduction, NO settleProduction, NO BatchCompletedEvent, NO consumption posting.
     }

@@ -1,10 +1,13 @@
 package com.cretas.aims.service.production;
 
 import com.cretas.aims.entity.MaterialConsumption;
+import com.cretas.aims.entity.ProductionInterimSettlement;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.ProductionSettlement;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
+import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.mapper.ProductionPlanMapper;
@@ -17,9 +20,12 @@ import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionLineRepository;
 import com.cretas.aims.repository.ProductionPlanBatchUsageRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.ProductionInterimSettlementRepository;
+import com.cretas.aims.repository.ProductionSettlementRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.BomService;
 import com.cretas.aims.service.SchedulingService;
 import com.cretas.aims.service.impl.ProductionPlanServiceImpl;
@@ -39,6 +45,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -75,6 +82,9 @@ class ProductionPlanStopProductionTest {
     @Mock private BomService                       bomService;
     @Mock private ApplicationEventPublisher        applicationEventPublisher;
     @Mock private ProcessSheetRowRepository        processSheetRowRepository;
+    @Mock private ProductionInterimSettlementRepository productionInterimSettlementRepository;
+    @Mock private ProductionSettlementRepository productionSettlementRepository;
+    @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
 
     private ProductionPlanServiceImpl service;
 
@@ -88,6 +98,9 @@ class ProductionPlanStopProductionTest {
                 salesOrderRepository, salesOrderItemRepository);
         ReflectionTestUtils.setField(service, "applicationEventPublisher", applicationEventPublisher);
         ReflectionTestUtils.setField(service, "processSheetRowRepository", processSheetRowRepository);
+        ReflectionTestUtils.setField(service, "productionInterimSettlementRepository", productionInterimSettlementRepository);
+        ReflectionTestUtils.setField(service, "productionSettlementRepository", productionSettlementRepository);
+        ReflectionTestUtils.setField(service, "finishedGoodsBatchRepository", finishedGoodsBatchRepository);
         lenient().when(conversionRepository.findAll()).thenReturn(Collections.emptyList());
     }
 
@@ -258,5 +271,62 @@ class ProductionPlanStopProductionTest {
 
         assertEquals(ProductionPlanStatus.COMPLETED, plan.getStatus());
         verify(productionPlanRepository).save(plan);
+    }
+
+    @Test
+    @DisplayName("BY_STOCK 小结后停产在同一事务补建待仓库确认元数据且不重复创建 FG")
+    void stopProduction_afterInterimSettlement_bridgesWarehouseMetadataOnly() {
+        ProductionPlan plan = byStockPlan();
+        plan.setPlannedQuantity(new BigDecimal("5"));
+        plan.setStartTime(LocalDateTime.now().minusHours(2));
+        ProcessSheetRow row = new ProcessSheetRow();
+        row.setBatchId(777L);
+        row.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        row.setInterimSettledAt(LocalDateTime.of(2026, 7, 20, 5, 32));
+        ProductionInterimSettlement interim = ProductionInterimSettlement.builder()
+                .id("interim-1")
+                .factoryId(FACTORY_ID)
+                .productionPlanId(PLAN_ID)
+                .sessionSeq(1)
+                .postedAt(LocalDateTime.of(2026, 7, 20, 5, 32))
+                .postedBy(10L)
+                .summary(Map.of(
+                        "finishedQuantity", new BigDecimal("5"),
+                        "finishedGoodsBatchNumbers", List.of("FG-PN-STOP-1-S1-PT-1")))
+                .build();
+        FinishedGoodsBatch fg = new FinishedGoodsBatch();
+        fg.setId("fg-1");
+        fg.setFactoryId(FACTORY_ID);
+        fg.setProductionPlanId(PLAN_ID);
+        fg.setBatchNumber("FG-PN-STOP-1-S1-PT-1");
+        fg.setProductTypeId("PT-1");
+        fg.setProducedQuantity(new BigDecimal("5"));
+        fg.setUnit("box");
+
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, PLAN_ID)).thenReturn(List.of(row));
+        when(materialConsumptionRepository
+                .findByFactoryIdAndProductionBatchIdInAndInterimSettledAtIsNull(eq(FACTORY_ID), anyList()))
+                .thenReturn(Collections.emptyList());
+        when(productionInterimSettlementRepository
+                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNullOrderBySessionSeqAsc(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(interim));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(
+                FACTORY_ID, "FG-PN-STOP-1-S1-PT-1")).thenReturn(Optional.of(fg));
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.stopProduction(FACTORY_ID, PLAN_ID);
+
+        assertEquals(ProductionPlanStatus.COMPLETED, plan.getStatus());
+        verify(productionSettlementRepository).save(argThat(settlement ->
+                "PENDING_WAREHOUSE_RECEIPT".equals(settlement.getPostingStatus())
+                        && "fg-1".equals(settlement.getFinishedGoodsBatchId())
+                        && new BigDecimal("5").compareTo(settlement.getActualFinishedQuantity()) == 0));
+        verify(finishedGoodsBatchRepository, never()).save(any());
+        verify(materialBatchRepository, never()).save(any());
     }
 }

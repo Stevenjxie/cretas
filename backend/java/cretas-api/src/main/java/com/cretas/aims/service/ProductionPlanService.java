@@ -159,6 +159,12 @@ public interface ProductionPlanService {
 
     ProductionSettlementResponse getProductionSettlement(String factoryId, String planId);
 
+    /**
+     * 为已完成小结并停产、但历史上缺少仓库确认元数据的 BY_STOCK 计划幂等补建结单桥接。
+     * 只创建缺失的 ProductionSettlement，不重放扣料、报工或成品入库。
+     */
+    ProductionSettlementResponse bridgeByStockSettlement(String factoryId, String planId);
+
     ProductionWarehouseReceiptResponse confirmWarehouseReceipt(String factoryId, String planId,
                                                                ProductionWarehouseReceiptRequest request,
                                                                Long receivedBy);

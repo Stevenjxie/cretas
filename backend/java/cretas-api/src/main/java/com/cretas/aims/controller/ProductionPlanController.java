@@ -616,6 +616,22 @@ public class ProductionPlanController {
         return ApiResponse.success("生产结单状态", response);
     }
 
+    @RequirePermission({"production:read_write", "scheduling:read_write"})
+    @RequireModule("production_plan")
+    @PostMapping("/{planId}/settlement/bridge-by-stock")
+    @Operation(summary = "补建存货生产仓库确认桥接",
+            description = "仅用于已小结并停产的 SAFETY_STOCK 历史计划；幂等补建缺失结单元数据，不重放任何库存动作")
+    public ApiResponse<ProductionSettlementResponse> bridgeByStockSettlement(
+            @Parameter(description = "工厂ID", required = true, example = "F006")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "计划ID", required = true)
+            @PathVariable @NotNull String planId) {
+
+        ProductionSettlementResponse response =
+                productionPlanService.bridgeByStockSettlement(factoryId, planId);
+        return ApiResponse.success("存货生产仓库确认桥接已就绪", response);
+    }
+
     /**
      * Phase 2A (报工→核算自动化): 从逐道报工 derive 出核对结单预填表单 + 审计。
      * 只读, 不扣库存; 前端核对结单 dialog 打开时调用, 一键带入省去二次手敲。
