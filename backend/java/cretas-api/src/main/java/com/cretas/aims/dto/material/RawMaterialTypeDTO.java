@@ -10,7 +10,9 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 /**
@@ -36,6 +38,35 @@ public class RawMaterialTypeDTO {
     @JsonProperty("code")
     @JsonAlias("materialCode")  // 支持前端发送 materialCode
     private String code;
+
+    /** Server-generated ASCII business code. API/DB legacy {@link #code} remains unchanged. */
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    @Pattern(regexp = "^[A-Z0-9]+$", message = "物料业务编码只能包含大写英文字母和数字")
+    @Size(max = 14, message = "物料业务编码长度不能超过14位")
+    private String businessCode;
+
+    /** Explicit compatibility name for the existing 16-digit classification code. */
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    private String legacyClassificationCode;
+
+    /** User-facing code: business code first, legacy code for historical records. */
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    public String getDisplayCode() {
+        return businessCode == null || businessCode.isBlank()
+                ? getLegacyClassificationCode()
+                : businessCode;
+    }
+
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    public boolean isHistoricalCodeFallback() {
+        return businessCode == null || businessCode.isBlank();
+    }
+
+    public String getLegacyClassificationCode() {
+        return legacyClassificationCode == null || legacyClassificationCode.isBlank()
+                ? code
+                : legacyClassificationCode;
+    }
 
     @NotBlank(message = "原材料名称不能为空")
     private String name;
