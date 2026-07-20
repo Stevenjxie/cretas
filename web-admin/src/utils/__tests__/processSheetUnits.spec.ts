@@ -112,6 +112,7 @@ describe('processSheetUnits', () => {
   it('renders persisted English packaging aliases with Chinese business labels', () => {
     expect(displayProcessUnit('box')).toBe('盒');
     expect(displayProcessUnit('case')).toBe('箱');
+    expect(displayProcessUnit('slice')).toBe('片');
     expect(displayProcessUnit('bag')).toBe('袋');
     expect(formatPlannedOutput(500, 'box')).toBe('计划成品 500 盒');
   });
@@ -125,6 +126,8 @@ describe('processSheetUnits', () => {
   it('uses kg for raw and semi-finished workflow ports and Chinese SKU units for finished ports', () => {
     expect(workflowPortDisplayUnit({ materialKind: 'SEMI_FINISHED', unit: 'g' })).toBe('kg');
     expect(workflowPortDisplayUnit({ materialKind: 'FINISHED_GOOD', finished: true, unit: 'box' })).toBe('盒');
+    expect(workflowPortDisplayUnit({ materialKind: 'FINISHED_GOOD', finished: true, unit: 'case' })).toBe('箱');
+    expect(workflowPortDisplayUnit({ materialKind: 'FINISHED_GOOD', finished: true, unit: 'slice' })).toBe('片');
   });
 
   it('renders missing units as unconfigured instead of kilograms', () => {

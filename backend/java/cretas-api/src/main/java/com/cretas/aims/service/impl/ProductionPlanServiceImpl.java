@@ -1124,9 +1124,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         .withCode("SALES_PLAN_NORMALIZER_UNAVAILABLE");
             }
             var normalizedPlanQuantity = salesOrderPlanQuantityNormalizer.normalize(remaining, item, product);
-            // reviewer Issue1: CUSTOMER_ORDER 来源在 createProductionPlan 强制要求 processName + batchDate
-            // (P1-4 gate)。批量路径补齐: processName 取该产品工序名 (镜像前端, 0 工序→两点报工);
-            // batchDate 沿用共享计划生产日 (新建计划未开工, 批次日=计划日合理)。
+            // CUSTOMER_ORDER 来源在 createProductionPlan 强制要求 processName + batchDate。
+            // 批量路径补齐 processName；batchDate 是实际转批次日，必须与计划生产日独立保存。
             String processName = "两点报工";
             if (productWorkProcessService != null) {
                 try {
@@ -1154,7 +1153,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             one.setSourceCustomerName(so.getCustomerName());
             one.setCustomerOrderNumber(so.getOrderNumber());
             one.setProcessName(processName);
-            one.setBatchDate(req.getPlannedDate());
+            one.setBatchDate(req.getBatchDate());
             // 计划级共享设置
             one.setPlannedDate(req.getPlannedDate());
             one.setExpectedCompletionDate(req.getExpectedCompletionDate());
@@ -1169,6 +1168,57 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         log.info("以销定产批量建计划: factoryId={}, soId={}, 产品行={}, 创建计划={}",
                 factoryId, so.getId(), req.getItemIds().size(), created.size());
         return created;
+    }
+
+    @Override
+    @org.springframework.transaction.annotation.Transactional
+    public ProductionPlanDTO repairSalesPlanBatchDate(
+            String factoryId, String planId, LocalDate expectedCurrentBatchDate, LocalDate targetBatchDate) {
+        ProductionPlan plan = productionPlanRepository.findByIdForUpdate(planId)
+                .filter(p -> factoryId.equals(p.getFactoryId()))
+                .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+
+        if (plan.getSourceType() != PlanSourceType.CUSTOMER_ORDER
+                || plan.getStatus() != ProductionPlanStatus.PENDING) {
+            throw new BusinessException(409, "仅允许修复尚未开工的销售来源计划")
+                    .withCode("PLAN_BATCH_DATE_REPAIR_STATUS_INVALID")
+                    .withHint("请刷新计划状态；已开工计划必须走正式业务更正流程");
+        }
+        if (!productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId).isEmpty()
+                || (processSheetRowRepository != null
+                    && !processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, planId).isEmpty())) {
+            throw new BusinessException(409, "计划已有批次或报工，拒绝修改批次日期")
+                    .withCode("PLAN_BATCH_DATE_REPAIR_ALREADY_STARTED")
+                    .withHint("不得通过历史修复接口改写已开始生产的计划");
+        }
+
+        LocalDate current = plan.getBatchDate();
+        if (targetBatchDate.equals(current)) {
+            return productionPlanMapper.toDTO(plan);
+        }
+        // 该桥接只修复旧 batch-from-so 把 plannedDate 误写进 batchDate 的已知形态。
+        // 一旦已校正为独立日期，除相同目标重放外，任何再次改写都必须走正式业务更正流程。
+        if (!java.util.Objects.equals(current, plan.getPlannedDate())) {
+            throw new BusinessException(409, "计划批次日期已完成历史校正，拒绝再次覆盖")
+                    .withCode("PLAN_BATCH_DATE_REPAIR_ALREADY_CORRECTED")
+                    .withHint("相同目标可安全重放；不同日期请走正式业务更正流程")
+                    .withHintTarget("targetBatchDate");
+        }
+        if (!java.util.Objects.equals(expectedCurrentBatchDate, current)) {
+            throw new BusinessException(409, "批次日期已变化，拒绝覆盖")
+                    .withCode("PLAN_BATCH_DATE_REPAIR_CONFLICT")
+                    .withHint("请重新读取计划后核对批次日期")
+                    .withHintTarget("expectedCurrentBatchDate");
+        }
+        if (plan.getPlannedDate() == null || targetBatchDate.isAfter(plan.getPlannedDate())) {
+            throw new BusinessException(400, "批次日期不能晚于计划生产日")
+                    .withCode("PLAN_BATCH_DATE_INVALID")
+                    .withHintTarget("targetBatchDate");
+        }
+
+        plan.setBatchDate(targetBatchDate);
+        ProductionPlan saved = productionPlanRepository.saveAndFlush(plan);
+        return productionPlanMapper.toDTO(saved);
     }
 
     /**

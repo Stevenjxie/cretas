@@ -47,6 +47,14 @@ public interface ProductionPlanService {
             String factoryId, com.cretas.aims.dto.production.BatchPlanFromSalesOrderRequest request, Long userId);
 
     /**
+     * 幂等修复历史以销定产计划的批次日期。
+     * 只允许尚未开工、没有批次/逐道报工的 PENDING 计划按 expected-current 做一次 CAS 修复。
+     */
+    ProductionPlanDTO repairSalesPlanBatchDate(
+            String factoryId, String planId, java.time.LocalDate expectedCurrentBatchDate,
+            java.time.LocalDate targetBatchDate);
+
+    /**
      * 获取工厂级"免工序报工默认值" (Fable 审计修复 2026-06-11 — 问题1).
      *
      * <p>web 新建计划对话框初始化"免工序报工"开关时调用: F006 返 true (默认勾选两点),
