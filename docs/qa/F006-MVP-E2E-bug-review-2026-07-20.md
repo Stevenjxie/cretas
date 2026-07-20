@@ -432,7 +432,7 @@
 - **根因**：Workflow 草稿缺少不可变 revision 身份；BOM 仅保存产品/版本级引用，辅料仍按 master workProcess 粗粒度绑定。
 - **修改文件**：`ProductProcessWorkflowRevision`/repository、`BomWorkflowRevisionService`/controller/DTO、`BomRecipe` revision snapshot、`BomSeasoningWorkspaceServiceImpl`、发布/启用门禁、Web revision selector 及 Flyway `V20261028_98`。
 - **测试**：保存 revision hash、同 revision 幂等 pin、跨工厂/SKU 拒绝、刷新快照稳定、ACTIVE BOM 与发布/启用 exact revision 双向门禁、无草稿重复发布 409、真实 JPA startup gate。
-- **Commit/PR/main 状态**：revision/pin 核心 commit `9f5cb804f`，拓扑与 pinned-node 收口 commit `301fcb0cd`；`TARGET_TEST_PASSED_PENDING_MAIN`。
+- **Commit/PR/main 状态**：revision/pin 核心 commit `9f5cb804f`，拓扑与 pinned-node 收口 commit `301fcb0cd`；PR [#1545](https://github.com/Stevenjxie/cretas/pull/1545) 已合入，代码 main commit `409aab41db0d031bc508ca528ac1d3c5e3c16cdf`，状态 `MERGED_TO_MAIN`。
 - **部署状态**：`NOT_DEPLOYED`。
 - **回归状态**：revision/pin、跨厂/SKU、刷新稳定、发布/启用 exact revision、真实 JPA 均已通过；clean rebase 后 Java 最终单生命周期 `221/221` 通过并生成可信 manifest（backend tree `ace4f31d1fe9529ed2e4dabb27d30ed1f0ccb7f0`，JAR SHA-256 `81eeffa3123350fe5d86b403db6c1a82115920e6b8900b9cf99314fac5a2ed79`）。生产 `CPF0060016`/BOM/Workflow 零写入、无历史桥接。
 
@@ -446,9 +446,9 @@
 - **终审补强**：ACTIVE BOM 与 DRAFT 一样始终从自身 pinned revision 解析工序，不得回落到产品当前 Workflow；工序辅料替代关系同时快照 master `workProcessId` 与精确 `workflowProcessNodeId`，同一工序模板在两个节点不串配置；辅料标准分母从 pinned 节点端口单位读取，现有仅能可靠表达 g/kg 的 legacy 剂量模型对盒/升等量纲明确 fail-closed，不再伪装为“每1kg”。
 - **depth-first-e2e 矩阵**：A 1→1=`medium`；B 2→1=`deep`；C 1→2=`medium`；D 2→2=`deep`；E 合流→半成品→分流=`medium`。`BomWorkflowRevisionServiceTest` 的 A-E 五个具名矩阵场景全部通过：覆盖 revision 保存/pin、入口/工序严格集合、目标反向切片、共享节点去重、跨目标隔离、多产出角色/分摊门禁、环/孤儿/无入口/重复目标/跨厂 SKU 明确拒绝及 snapshot 不漂移。`BomSeasoningWorkspaceServiceTest` 覆盖 2→1 多入口摘要、精确 process-node 绑定、提交与 fresh readback；Web workspace 目标测试覆盖加载失败锁写、revision 状态与中文单位。
 - **测试证据**：后端拓扑/BOM/辅料/替代料首组 30/30，通过单独真实 JPA repository startup gate 1/1；readiness/copy/process-sheet/unit/material-source 等同因回归 139/139；Web BOM workspace 30/30，单位/分类/来源边界补充回归 58/58。clean rebase 后 Java 最终 release 单生命周期 `221/221` 通过并生成可信 JAR manifest；Web 在 exact HEAD 干净 release worktree构建成功，735 assets，web tree `197b94e5ec84792106a3679e0c5b154f034ccdbd`，archive SHA-256 `623d3737ce2e56d0449edfb174144be946337456df73131adcf545313db6ce17`，index SHA-256 `61ba51d378309706a6d97d6da808e5f83cfe36ac2c357fb87eff0ea17474149c`。CI 首轮完整 Vitest 暴露 4 条已漂移的源契约断言后，同批校正为“工序单位已移除、类别使用受控 taxonomy、采购编辑保留原下单日、Workflow 模式由画布识别”；本地完整 Web Vitest 最终 `1673/1673` 通过（另 5 skipped）。
-- **Commit/PR/main 状态**：revision 与 DAG 核心 `9f5cb804f`，拓扑/辅料作用域/门禁收口 `301fcb0cd`，Web fail-closed `e7beda5f8`；PR [#1545](https://github.com/Stevenjxie/cretas/pull/1545)，`TARGET_TEST_PASSED_PENDING_MAIN`。
+- **Commit/PR/main 状态**：revision 与 DAG 核心 `9f5cb804f`，拓扑/辅料作用域/门禁收口 `301fcb0cd`，Web fail-closed `e7beda5f8`；PR [#1545](https://github.com/Stevenjxie/cretas/pull/1545) 已合入，代码 main commit `409aab41db0d031bc508ca528ac1d3c5e3c16cdf`，状态 `MERGED_TO_MAIN`。
 - **部署状态**：`NOT_DEPLOYED`。
-- **回归状态**：`FINAL_RELEASE_GATE_PASSED_PENDING_MAIN`；严格生产业务 mutation=0。
+- **回归状态**：`FINAL_RELEASE_GATE_PASSED`；严格生产业务 mutation=0。
 
 ### AUDIT-F006-R2-WORKFLOW-TOPOLOGY-SAME-CAUSE-001
 
@@ -462,8 +462,17 @@
   - `ProductionSettlement` 仍为 singular finished quantity/batch；D 多目标完整结单需行级 settlement 模型，当前应 fail-closed，不得直接放宽。
 - **证据/方法**：对 Base `5c2b30249` 与当前拓扑 commit 做代码差异核验；逐文件/行号分类 vulnerable、safe、needs verification；未访问生产、未写业务数据。
 - **测试状态**：`READ_ONLY_AUDIT_COMPLETE`；已确认脆弱点中 resolver、辅料 node identity、BOM copy roots、WIP output identity 与 Web candidate 已有目标回归。同批不冒充已支持的非线性出成率/成本/多成品结单仍保留为具体 deep/medium 测试与 fail-closed 清单。
-- **Commit/PR/main 状态**：审计零文件修改；修复 commits 随对应条目记录。
+- **Commit/PR/main 状态**：审计零文件修改；对应修复已随 PR [#1545](https://github.com/Stevenjxie/cretas/pull/1545) 合入代码 main `409aab41db0d031bc508ca528ac1d3c5e3c16cdf`。
 - **部署状态**：`NOT_DEPLOYED`。
+
+### 本轮拓扑同因修复收口
+
+- `FIX-F006-R2-BOM-WEB-FAIL-CLOSED-001`：替代关系/Workflow revision 加载失败锁定写入，跨单位替代、包材作用域与 unsupported basis fail-closed；Web 目标回归通过。
+- `FIX-F006-R2-BOM-READINESS-PINNED-NODE-001`：readiness 使用 recipe pin 的不可变目标子图，并以 `workflowProcessNodeId` 区分同一工序模板的不同节点；ACTIVE BOM 不再依赖可变 DRAFT。
+- `FIX-F006-R2-WIP-IDENTITY-TOPOLOGY-001`：2→1/2→2 合流 WIP identity 取产出半成品/节点快照并保留全部入口 provenance，不再压缩成首原料身份。
+- `FIX-F006-R2-BOM-COPY-MULTIROOT-001`：BOM 复制候选比较规范化完整 root 集合，A+B 与 B+A 等价，辅料按精确 process node 复制。
+- **Commit/PR/main 状态**：以上四项均随 PR [#1545](https://github.com/Stevenjxie/cretas/pull/1545) 合入代码 main `409aab41db0d031bc508ca528ac1d3c5e3c16cdf`，状态 `MERGED_TO_MAIN`。
+- **部署/数据状态**：`NOT_DEPLOYED`；生产业务 mutation=0；未修改 `CPF0060016`、`BOM-20260720-004/005` 或现有 Workflow revision，未做历史桥接，未触碰 LIUSHANMEN。
 
 ### FEATURE-F006-R2-BOM-SUBSTITUTE-001 / FEATURE-F006-R2-BOM-MULTIPACK-001
 
@@ -482,9 +491,9 @@
 - **期望/实际/业务影响**：Workflow 结构未完成前禁止 BOM 写入；BOM 完整性必须按 pinned target 子图逐工序判断辅料/明确无需辅料，并按每个启用包装层判断包材。实际按 mutable latest DRAFT 和 master workProcessId 判断，会漏检重复工序节点并使 ACTIVE BOM 依赖后续草稿。
 - **修改文件**：`ProductConfigurationReadinessService`、`ProductConfigurationCompletenessReport`、activation/publish/plan gates 与目标测试。
 - **测试**：越级调用4xx且零部分写、ACTIVE 无 DRAFT 仍按快照校验、同 master process 多节点分离、缺辅料/包材明确定位、历史 snapshot 不漂移。
-- **Commit/PR/main 状态**：核心门禁/精确 pinned node `301fcb0cd`，Web 入口锁写 `e7beda5f8`；`TARGET_TEST_PASSED_PENDING_MAIN`。
+- **Commit/PR/main 状态**：精确 pinned-node/readiness 子修复 `301fcb0cd` 与 Web 入口锁写 `e7beda5f8` 已随 PR [#1545](https://github.com/Stevenjxie/cretas/pull/1545) 合入代码 main `409aab41db0d031bc508ca528ac1d3c5e3c16cdf`；更大范围的 Workflow-first/BOM completeness 父任务仍按 ACTIVE 台账继续，不在本条冒充全部完成。
 - **部署状态**：`NOT_DEPLOYED`。
-- **回归状态**：目标回归已纳入后端 139/139 与 Web 30/30；clean rebase 后 Java 最终单生命周期 221/221 与 Web release build 均已通过，待合入 main。
+- **回归状态**：目标回归已纳入后端 139/139 与 Web 30/30；clean rebase 后 Java 最终单生命周期 221/221 与 Web release build 均已通过，精确子修复已合入 main。
 
 ### FIX-F006-R2-TAXONOMY-MIGRATION-CONFLICT-001
 
