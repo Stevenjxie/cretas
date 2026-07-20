@@ -92,7 +92,6 @@ export interface SupplierMaterialRelation {
   materialTypeId: string;
   materialName?: string | null;
   materialCode?: string | null;
-  specification?: string | null;
   baseUnit?: string | null;
   supplierMaterialCode?: string | null;
   defaultPurchasePrice?: number | null;
@@ -114,6 +113,37 @@ export interface SupplierMaterialPayload {
   minOrderQuantity?: number | null;
   leadTimeDays?: number | null;
   preferred: boolean;
+  active: boolean;
+  version?: number;
+}
+
+export interface SupplierPurchaseSpec {
+  id: string;
+  supplierMaterialId: string;
+  materialTypeId: string;
+  name: string;
+  purchasePackageUnit: string;
+  inventoryBaseUnit: string;
+  factor: number;
+  quotedPrice?: number | null;
+  currency?: string | null;
+  minOrderQuantity?: number | null;
+  leadTimeDays?: number | null;
+  defaultSpec?: boolean | null;
+  active?: boolean | null;
+  version?: number | null;
+}
+
+export interface SupplierPurchaseSpecPayload {
+  name: string;
+  purchasePackageUnit: string;
+  inventoryBaseUnit: string;
+  factor: number;
+  quotedPrice?: number | null;
+  currency: string;
+  minOrderQuantity?: number | null;
+  leadTimeDays?: number | null;
+  defaultSpec: boolean;
   active: boolean;
   version?: number;
 }
@@ -269,6 +299,58 @@ export async function deleteSupplierMaterial(
   version?: number | null,
 ): Promise<void> {
   await request.delete(`/${factoryId}/suppliers/${supplierId}/materials/${relationId}`, {
+    params: version == null ? undefined : { version },
+  });
+}
+
+function supplierPurchaseSpecsPath(factoryId: string, supplierId: string, relationId: string): string {
+  return `/${factoryId}/suppliers/${supplierId}/materials/${relationId}/purchase-specs`;
+}
+
+export async function listSupplierPurchaseSpecs(
+  factoryId: string,
+  supplierId: string,
+  relationId: string,
+): Promise<SupplierPurchaseSpec[]> {
+  const response = await request.get<SupplierPurchaseSpec[]>(
+    supplierPurchaseSpecsPath(factoryId, supplierId, relationId),
+  );
+  return response.data ?? [];
+}
+
+export async function createSupplierPurchaseSpec(
+  factoryId: string,
+  supplierId: string,
+  relationId: string,
+  payload: SupplierPurchaseSpecPayload,
+): Promise<SupplierPurchaseSpec> {
+  const response = await request.post<SupplierPurchaseSpec>(
+    supplierPurchaseSpecsPath(factoryId, supplierId, relationId), payload,
+  );
+  return response.data;
+}
+
+export async function updateSupplierPurchaseSpec(
+  factoryId: string,
+  supplierId: string,
+  relationId: string,
+  specId: string,
+  payload: SupplierPurchaseSpecPayload,
+): Promise<SupplierPurchaseSpec> {
+  const response = await request.put<SupplierPurchaseSpec>(
+    `${supplierPurchaseSpecsPath(factoryId, supplierId, relationId)}/${specId}`, payload,
+  );
+  return response.data;
+}
+
+export async function deleteSupplierPurchaseSpec(
+  factoryId: string,
+  supplierId: string,
+  relationId: string,
+  specId: string,
+  version?: number | null,
+): Promise<void> {
+  await request.delete(`${supplierPurchaseSpecsPath(factoryId, supplierId, relationId)}/${specId}`, {
     params: version == null ? undefined : { version },
   });
 }

@@ -95,9 +95,6 @@
                 <small>{{ row.materialCode || row.materialTypeId }}</small>
               </template>
             </el-table-column>
-            <el-table-column prop="specification" label="规格" min-width="100">
-              <template #default="{ row }">{{ row.specification || '-' }}</template>
-            </el-table-column>
             <el-table-column label="供应商料号" width="130">
               <template #default="{ row }">{{ row.supplierMaterialCode || '-' }}</template>
             </el-table-column>
@@ -119,10 +116,11 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column v-if="canWrite && isActive" label="操作" width="125" fixed="right">
+            <el-table-column label="操作" width="210" fixed="right">
               <template #default="{ row }">
-                <el-button type="primary" link @click="openRelationEdit(row)">编辑</el-button>
-                <el-button v-if="row.active !== false" type="warning" link @click="removeRelation(row)">停用</el-button>
+                <el-button type="primary" link @click="openSpecManager(row)">采购规格</el-button>
+                <el-button v-if="canWrite && isActive" type="primary" link @click="openRelationEdit(row)">编辑</el-button>
+                <el-button v-if="canWrite && isActive && row.active !== false" type="warning" link @click="removeRelation(row)">停用</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -193,6 +191,56 @@
         <el-button type="primary" :loading="relationSaving" @click="saveRelation">保存</el-button>
       </template>
     </el-dialog>
+    <el-dialog
+      v-model="specDialogVisible"
+      title="采购规格"
+      width="760px"
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <el-alert
+        :closable="false"
+        type="info"
+        show-icon
+        :title="`${specRelation?.materialName || '当前物料'} · 库存基本单位 ${displayUnit(specRelation?.baseUnit)}`"
+        description="采购订单选择规格后按包装数量下单，系统按换算系数折合库存基本单位；换算系数由后端快照锁定。"
+        style="margin-bottom: 12px"
+      />
+      <el-table :data="purchaseSpecs" border stripe empty-text="暂无采购规格；采购订单将按库存基本单位直采">
+        <el-table-column prop="name" label="规格名称" min-width="130" />
+        <el-table-column label="采购包装单位" width="120"><template #default="{ row }">{{ displayUnit(row.purchasePackageUnit) }}</template></el-table-column>
+        <el-table-column label="换算" min-width="150"><template #default="{ row }">1 {{ displayUnit(row.purchasePackageUnit) }} = {{ row.factor }} {{ displayUnit(row.inventoryBaseUnit) }}</template></el-table-column>
+        <el-table-column label="报价" width="120"><template #default="{ row }">{{ row.quotedPrice == null ? '-' : `${row.currency || 'CNY'} ${Number(row.quotedPrice).toFixed(2)}` }}</template></el-table-column>
+        <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="row.active === false ? 'info' : 'success'">{{ row.active === false ? '停用' : row.defaultSpec ? '默认' : '启用' }}</el-tag></template></el-table-column>
+        <el-table-column v-if="canWrite && isActive" label="操作" width="130">
+          <template #default="{ row }">
+            <el-button type="primary" link @click="editPurchaseSpec(row)">编辑</el-button>
+            <el-button v-if="row.active !== false" type="warning" link @click="removePurchaseSpec(row)">停用</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-divider v-if="canWrite && isActive">{{ specEditingId ? '编辑规格' : '新增规格' }}</el-divider>
+      <el-form v-if="canWrite && isActive" label-width="125px" :model="specForm">
+        <el-form-item label="规格名称" required><el-input v-model="specForm.name" maxlength="100" placeholder="例如 10kg/箱" /></el-form-item>
+        <el-form-item label="采购包装单位" required>
+          <UnitSelect v-model="specForm.purchasePackageUnit" :factory-id="factoryId" usage-scope="PURCHASE" />
+        </el-form-item>
+        <el-form-item label="换算系数" required>
+          <el-input-number v-model="specForm.factor" :min="0.0001" :precision="4" style="width: 220px" />
+          <span class="field-hint">1 {{ displayUnit(specForm.purchasePackageUnit) }} = {{ specForm.factor || '?' }} {{ displayUnit(specRelation?.baseUnit) }}</span>
+        </el-form-item>
+        <el-form-item label="未税报价"><el-input-number v-model="specForm.quotedPrice" :min="0" :precision="4" style="width: 220px" /></el-form-item>
+        <el-form-item label="币种" required><el-input v-model="specForm.currency" maxlength="10" style="width: 220px" /></el-form-item>
+        <el-form-item label="最小起订量"><el-input-number v-model="specForm.minOrderQuantity" :min="0.0001" :precision="4" style="width: 220px" /></el-form-item>
+        <el-form-item label="交期（天）"><el-input-number v-model="specForm.leadTimeDays" :min="0" :precision="0" style="width: 220px" /></el-form-item>
+        <el-form-item label="默认规格"><el-switch v-model="specForm.defaultSpec" /></el-form-item>
+        <el-form-item label="启用"><el-switch v-model="specForm.active" /></el-form-item>
+        <el-form-item>
+          <el-button v-if="specEditingId" @click="resetSpecForm">取消编辑</el-button>
+          <el-button type="primary" :loading="specSaving" @click="savePurchaseSpec">{{ specEditingId ? '保存规格' : '新增规格' }}</el-button>
+        </el-form-item>
+      </el-form>
+    </el-dialog>
   </el-drawer>
 </template>
 
@@ -200,16 +248,23 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus';
 import { get } from '@/api/request';
+import UnitSelect from '@/components/common/UnitSelect.vue';
 import {
   getSupplier,
   listSupplierMaterials,
   createSupplierMaterial,
   updateSupplierMaterial,
   deleteSupplierMaterial,
+  listSupplierPurchaseSpecs,
+  createSupplierPurchaseSpec,
+  updateSupplierPurchaseSpec,
+  deleteSupplierPurchaseSpec,
   updateSupplier,
   updateSupplierStatus,
   type SupplierMaterialPayload,
   type SupplierMaterialRelation,
+  type SupplierPurchaseSpec,
+  type SupplierPurchaseSpecPayload,
   type SupplierRecord,
   type SupplierSavePayload,
 } from '@/api/supplierManagement';
@@ -240,6 +295,15 @@ const relationSaving = ref(false);
 const relationForm = reactive<SupplierMaterialPayload>({
   materialTypeId: '', supplierMaterialCode: '', defaultPurchasePrice: null, currency: 'CNY', purchaseUnit: '',
   minOrderQuantity: null, leadTimeDays: null, preferred: false, active: true,
+});
+const specDialogVisible = ref(false);
+const specRelation = ref<SupplierMaterialRelation | null>(null);
+const purchaseSpecs = ref<SupplierPurchaseSpec[]>([]);
+const specEditingId = ref('');
+const specSaving = ref(false);
+const specForm = reactive<SupplierPurchaseSpecPayload>({
+  name: '', purchasePackageUnit: '', inventoryBaseUnit: '', factor: 1, quotedPrice: null, currency: 'CNY',
+  minOrderQuantity: null, leadTimeDays: null, defaultSpec: false, active: true,
 });
 const formRef = ref<FormInstance>();
 const originalForm = ref('');
@@ -428,6 +492,77 @@ async function removeRelation(row: SupplierMaterialRelation): Promise<void> {
   ElMessage.success('供应原料关系已停用');
 }
 
+async function openSpecManager(row: SupplierMaterialRelation): Promise<void> {
+  if (!detail.value) return;
+  specRelation.value = row;
+  purchaseSpecs.value = await listSupplierPurchaseSpecs(props.factoryId, detail.value.id, row.id);
+  resetSpecForm();
+  specDialogVisible.value = true;
+}
+
+function resetSpecForm(): void {
+  specEditingId.value = '';
+  Object.assign(specForm, {
+    name: '', purchasePackageUnit: '', inventoryBaseUnit: specRelation.value?.baseUnit || '', factor: 1, quotedPrice: null, currency: 'CNY',
+    minOrderQuantity: null, leadTimeDays: null, defaultSpec: false, active: true, version: undefined,
+  });
+}
+
+function editPurchaseSpec(row: SupplierPurchaseSpec): void {
+  specEditingId.value = row.id;
+  Object.assign(specForm, {
+    name: row.name,
+    purchasePackageUnit: row.purchasePackageUnit,
+    inventoryBaseUnit: row.inventoryBaseUnit,
+    factor: Number(row.factor),
+    quotedPrice: row.quotedPrice ?? null,
+    currency: row.currency || 'CNY',
+    minOrderQuantity: row.minOrderQuantity ?? null,
+    leadTimeDays: row.leadTimeDays ?? null,
+    defaultSpec: Boolean(row.defaultSpec),
+    active: row.active !== false,
+    version: row.version ?? undefined,
+  });
+}
+
+async function savePurchaseSpec(): Promise<void> {
+  if (!detail.value || !specRelation.value) return;
+  if (!isActive.value) return void ElMessage.warning('供应商已暂停合作，不能维护采购规格');
+  if (!specForm.name.trim()) return void ElMessage.warning('请输入规格名称');
+  if (!specForm.purchasePackageUnit) return void ElMessage.warning('请选择采购包装单位');
+  if (!(Number(specForm.factor) > 0)) return void ElMessage.warning('换算系数必须大于 0');
+  const payload: SupplierPurchaseSpecPayload = {
+    ...specForm,
+    name: specForm.name.trim(),
+    inventoryBaseUnit: specRelation.value.baseUnit || specForm.inventoryBaseUnit,
+    currency: specForm.currency.trim().toUpperCase(),
+  };
+  specSaving.value = true;
+  try {
+    if (specEditingId.value) {
+      await updateSupplierPurchaseSpec(
+        props.factoryId, detail.value.id, specRelation.value.id, specEditingId.value, payload,
+      );
+    } else {
+      await createSupplierPurchaseSpec(props.factoryId, detail.value.id, specRelation.value.id, payload);
+    }
+    purchaseSpecs.value = await listSupplierPurchaseSpecs(props.factoryId, detail.value.id, specRelation.value.id);
+    resetSpecForm();
+    ElMessage.success('采购规格已保存');
+  } finally {
+    specSaving.value = false;
+  }
+}
+
+async function removePurchaseSpec(row: SupplierPurchaseSpec): Promise<void> {
+  if (!detail.value || !specRelation.value) return;
+  await ElMessageBox.confirm('停用后，新采购订单不能再选择该规格；历史订单快照不受影响。', '停用采购规格', { type: 'warning' });
+  await deleteSupplierPurchaseSpec(
+    props.factoryId, detail.value.id, specRelation.value.id, row.id, row.version,
+  );
+  purchaseSpecs.value = await listSupplierPurchaseSpecs(props.factoryId, detail.value.id, specRelation.value.id);
+}
+
 function formatMoney(value: number | null | undefined): string {
   return value == null ? '-' : `¥${Number(value).toFixed(2)}`;
 }
@@ -443,4 +578,5 @@ function formatMoney(value: number | null | undefined): string {
 .edit-actions { justify-content: flex-end; }
 .tab-toolbar { justify-content: space-between; margin-bottom: 12px; color: var(--el-text-color-secondary); font-size: 13px; }
 .contract-alert { margin-top: 12px; }
+.field-hint { margin-left: 10px; color: var(--el-text-color-secondary); font-size: 12px; }
 </style>

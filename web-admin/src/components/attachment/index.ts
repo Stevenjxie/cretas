@@ -12,3 +12,4 @@
  */
 export { default as AttachmentList } from './AttachmentList.vue';
 export { default as AttachmentUploadButton } from './AttachmentUploadButton.vue';
+export { default as AttachmentDropZone } from './AttachmentDropZone.vue';
