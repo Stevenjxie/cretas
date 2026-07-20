@@ -43,6 +43,9 @@ public class SupplierServiceImpl implements SupplierService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.inventory.PurchaseOrderItemRepository purchaseOrderItemRepository;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.datacenter.OperationLogService operationLogService;
+
     /** Canvas V2: DB-driven validation rules */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.engine.ValidationRuleEvaluator validationRuleEvaluator;
@@ -69,14 +72,18 @@ public class SupplierServiceImpl implements SupplierService {
     @Override
     @Transactional
     public SupplierDTO createSupplier(String factoryId, CreateSupplierRequest request, Long userId) {
+        normalizeCreateRequest(request);
+        com.cretas.aims.service.supplier.SupplierProfileValidator.validateOrThrow(
+                request.getName(), request.getContactPerson(), request.getPhone(), request.getAddress());
         runConfiguredValidation(factoryId, "CREATE", java.util.Map.of(
             "supplierName", request.getName() != null ? request.getName() : "",
             "phoneNumber", request.getPhone() != null ? request.getPhone() : ""));
         log.info("创建供应商: factoryId={}, name={}", factoryId, request.getName());
-        // 检查供应商名称是否重复
-        if (supplierRepository.existsByFactoryIdAndName(factoryId, request.getName())) {
-            throw new BusinessException(409, "供应商名称已存在")
-                    .withHint("请使用其他供应商名称").withHintTarget("supplierName");
+        ensureNoDuplicateProfile(factoryId, request.getName(), request.getTaxNumber(), null);
+        if (request.getSupplierCode() != null
+                && supplierRepository.existsByFactoryIdAndSupplierCode(factoryId, request.getSupplierCode())) {
+            throw new BusinessException(409, "供应商编码已存在")
+                    .withHint("请留空由系统生成或使用其他编码").withHintTarget("supplierCode");
         }
         // 创建供应商实体
         Supplier supplier = supplierMapper.toEntity(request, factoryId, userId);
@@ -85,7 +92,8 @@ public class SupplierServiceImpl implements SupplierService {
         // 确保供应商代码唯一
         String baseCode = "SUP";//supplier.getSupplierCode();
         int counter = 0;
-        while (supplierRepository.existsBySupplierCode(supplier.getSupplierCode())) {
+        while (request.getSupplierCode() == null
+                && supplierRepository.existsBySupplierCode(supplier.getSupplierCode())) {
             counter++;
             supplier.setSupplierCode(baseCode + "-" + counter);
         }
@@ -104,19 +112,22 @@ public class SupplierServiceImpl implements SupplierService {
         log.info("更新供应商: factoryId={}, supplierId={}", factoryId, supplierId);
         Supplier supplier = supplierRepository.findByIdAndFactoryId(supplierId, factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("Supplier", supplierId));
+        normalizeUpdateRequest(request);
+        String mergedName = request.getName() != null ? request.getName() : supplier.getName();
+        String mergedContact = request.getContactPerson() != null
+                ? request.getContactPerson() : supplier.getContactPerson();
+        String mergedPhone = request.getPhone() != null ? request.getPhone() : supplier.getPhone();
+        String mergedAddress = request.getAddress() != null ? request.getAddress() : supplier.getAddress();
+        com.cretas.aims.service.supplier.SupplierProfileValidator.validateOrThrow(
+                mergedName, mergedContact, mergedPhone, mergedAddress);
         // Optimistic lock: explicit version compare (see CustomerServiceImpl — setVersion()
         // on managed entity is silently ignored by Hibernate, must compare manually).
         if (request.getVersion() != null && !request.getVersion().equals(supplier.getVersion())) {
             throw new org.springframework.orm.ObjectOptimisticLockingFailureException(
                 Supplier.class, supplierId);
         }
-        // 检查名称是否与其他供应商重复
-        if (request.getName() != null && !request.getName().equals(supplier.getName())) {
-            if (supplierRepository.existsByFactoryIdAndNameAndIdNot(factoryId, request.getName(), supplierId)) {
-                throw new BusinessException(409, "供应商名称已存在")
-                    .withHint("请使用其他供应商名称").withHintTarget("supplierName");
-            }
-        }
+        ensureNoDuplicateProfile(factoryId, mergedName,
+                request.getTaxNumber() != null ? request.getTaxNumber() : supplier.getTaxNumber(), supplierId);
         // 更新供应商信息
         supplierMapper.updateEntity(supplier, request);
         supplier = supplierRepository.save(supplier);
@@ -129,10 +140,16 @@ public class SupplierServiceImpl implements SupplierService {
         log.info("删除供应商: factoryId={}, supplierId={}", factoryId, supplierId);
         Supplier supplier = supplierRepository.findByIdAndFactoryId(supplierId, factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("Supplier", supplierId));
-        // 检查是否有关联的原材料批次
+        // Any historical business association makes physical deletion unsafe.
         if (supplierRepository.hasRelatedMaterialBatches(supplierId)) {
             throw new BusinessException(409, "供应商有关联的原材料批次，无法删除")
                     .withHint("请先归档或转移该供应商的原材料批次后再删除");
+        }
+        if (purchaseOrderRepository != null
+                && !purchaseOrderRepository.findByFactoryIdAndSupplierId(factoryId, supplierId).isEmpty()) {
+            throw new BusinessException(409, "供应商已有采购历史，不能物理删除")
+                    .withHint("请改为暂停合作，历史采购、入库、应付与追溯将继续保留")
+                    .withHintTarget("supplierStatus");
         }
         supplierRepository.delete(supplier);
         log.info("供应商删除成功: id={}", supplierId);
@@ -210,15 +227,94 @@ public class SupplierServiceImpl implements SupplierService {
     @Override
     @Transactional
     public SupplierDTO toggleSupplierStatus(String factoryId, String supplierId, Boolean isActive) {
+        throw new BusinessException(409, "旧状态接口已停用，状态变更必须填写原因并携带版本")
+                .withCode("SUPPLIER_LIFECYCLE_REASON_REQUIRED")
+                .withHint("请改用 PUT /suppliers/{supplierId}/lifecycle")
+                .withHintTarget("reason");
+    }
+
+    @Override
+    @Transactional
+    public SupplierDTO changeSupplierStatus(String factoryId, String supplierId, Boolean isActive,
+                                            String reason, Long expectedVersion) {
         log.info("切换供应商状态: factoryId={}, supplierId={}, isActive={}",
                 factoryId, supplierId, isActive);
+        if (isActive == null) {
+            throw new BusinessException(400, "isActive 是必需的").withHintTarget("isActive");
+        }
+        String normalizedReason = com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(reason);
+        if (normalizedReason == null) {
+            throw new BusinessException(400, "状态变更原因不能为空").withHintTarget("reason");
+        }
         Supplier supplier = supplierRepository.findByIdAndFactoryId(supplierId, factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("Supplier", supplierId));
+        if (expectedVersion != null && !expectedVersion.equals(supplier.getVersion())) {
+            throw new org.springframework.orm.ObjectOptimisticLockingFailureException(Supplier.class, supplierId);
+        }
+        if (Objects.equals(supplier.getIsActive(), isActive)) {
+            return supplierMapper.toDTO(supplier);
+        }
+        Boolean previous = supplier.getIsActive();
         supplier.setIsActive(isActive);
+        supplier.setAdmissionStatus(Boolean.TRUE.equals(isActive) ? "APPROVED" : "SUSPENDED");
         supplier.setUpdatedAt(LocalDateTime.now());
         supplier = supplierRepository.save(supplier);
+        if (operationLogService != null) {
+            operationLogService.recordDiff(factoryId, "SUPPLIER", "Supplier", supplierId,
+                    Map.of("isActive", previous, "status", Boolean.TRUE.equals(previous) ? "ACTIVE" : "INACTIVE"),
+                    Map.of("isActive", isActive, "status", Boolean.TRUE.equals(isActive) ? "ACTIVE" : "INACTIVE"),
+                    (Boolean.TRUE.equals(isActive) ? "恢复合作：" : "暂停合作：") + normalizedReason);
+        }
         log.info("供应商状态更新成功: id={}, isActive={}", supplier.getId(), isActive);
         return supplierMapper.toDTO(supplier);
+    }
+
+    private static void normalizeCreateRequest(CreateSupplierRequest request) {
+        request.setSupplierCode(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getSupplierCode()));
+        request.setName(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getName()));
+        request.setContactPerson(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getContactPerson()));
+        request.setPhone(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getPhone()));
+        request.setAddress(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getAddress()));
+        request.setEmail(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getEmail()));
+        request.setTaxNumber(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getTaxNumber()));
+        request.setBankName(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getBankName()));
+        request.setBankAccount(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getBankAccount()));
+        request.setNotes(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getNotes()));
+    }
+
+    private static void normalizeUpdateRequest(UpdateSupplierRequest request) {
+        if (request.getName() != null) request.setName(request.getName().trim());
+        if (request.getContactPerson() != null) request.setContactPerson(request.getContactPerson().trim());
+        if (request.getPhone() != null) request.setPhone(request.getPhone().trim());
+        if (request.getAddress() != null) request.setAddress(request.getAddress().trim());
+        if (request.getEmail() != null) request.setEmail(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getEmail()));
+        if (request.getTaxNumber() != null) request.setTaxNumber(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getTaxNumber()));
+        if (request.getBankName() != null) request.setBankName(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getBankName()));
+        if (request.getBankAccount() != null) request.setBankAccount(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getBankAccount()));
+        if (request.getNotes() != null) request.setNotes(com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(request.getNotes()));
+    }
+
+    private void ensureNoDuplicateProfile(String factoryId, String name, String taxNumber, String excludedId) {
+        String normalizedName = normalizeIdentity(name);
+        String normalizedTax = normalizeIdentity(taxNumber);
+        for (Supplier existing : supplierRepository.findByFactoryId(factoryId)) {
+            if (Objects.equals(existing.getId(), excludedId)) continue;
+            if (normalizedName != null && normalizedName.equals(normalizeIdentity(existing.getName()))) {
+                throw new BusinessException(409, "供应商名称已存在")
+                        .withHint("请核对名称中的空格与大小写，避免重复供应商")
+                        .withHintTarget("name");
+            }
+            if (normalizedTax != null && normalizedTax.equals(normalizeIdentity(existing.getTaxNumber()))) {
+                throw new BusinessException(409, "供应商税号已存在")
+                        .withHint("同一工厂内非空税号必须唯一")
+                        .withHintTarget("taxNumber");
+            }
+        }
+    }
+
+    private static String normalizeIdentity(String value) {
+        String trimmed = com.cretas.aims.service.supplier.SupplierProfileValidator.trimToNull(value);
+        return trimmed == null ? null : trimmed.replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
     }
     @Override
     @Transactional

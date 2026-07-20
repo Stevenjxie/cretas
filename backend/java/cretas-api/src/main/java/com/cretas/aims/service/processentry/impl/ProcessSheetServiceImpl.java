@@ -79,7 +79,7 @@ import java.util.stream.Collectors;
  * <ul>
  *   <li>跨租户守卫 (plan 归属 factory)</li>
  *   <li>factory-scoped 上游/原料边解析 (rawMaterialInputs → RAW; upstreamSources → SEMI via 持久化 batchNumber)</li>
- *   <li>SP-E FK 防线: WIP 批 materialTypeId 必从原料或上游 WIP 派生 (空 → 400)</li>
+ *   <li>WIP 身份防线: 产出批 materialTypeId 来自本行产出产品快照，投入边仅保留 provenance</li>
  *   <li>把请求映射为单个 StepEntry (含 multi-segment laborSegments)</li>
  *   <li>写/更新 process_sheet_rows 行追踪表</li>
  * </ul>
@@ -465,6 +465,14 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         WorkflowClerkSheetConfigDTO workflowConfig =
                 validateWorkflowRowIfApplicable(factoryId, planId, req);
 
+        // Positive intermediate outputs must own a stable identity before source validation.
+        // This keeps malformed output identity from being reported as an unrelated source conflict
+        // and prevents stock-fed rows from reaching an SFI anchor with a blank product identity.
+        String outputMaterialIdentity = null;
+        if (!req.isFinished() && req.getOutputQuantity() != null && req.getOutputQuantity().signum() > 0) {
+            outputMaterialIdentity = resolveOutputMaterialIdentity(req);
+        }
+
         // 2. upsert 键查重: 已存在 → 委托 re-save (Task 1.6 stub)
         Optional<ProcessSheetRow> existing = rowRepo
                 .findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
@@ -509,8 +517,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             return buildResult(req, null, anchor, yieldRate(req), null, null, false, true, warnings);
         }
 
-        // 4. SP-E FK 防线: WIP 批 material_type_id 必从原料或上游 WIP 派生 (空 → 400)
-        String rawMaterialTypeId = resolveRawMaterialTypeId(req, edges);
+        // 4. WIP identity 来自本道产出产品；edges 仅保留完整投入 provenance。
+        if (outputMaterialIdentity == null) {
+            outputMaterialIdentity = resolveOutputMaterialIdentity(req);
+        }
 
         // 5. 映射单个 StepEntry
         StepEntry step = buildStepEntry(factoryId, req);
@@ -524,7 +534,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 req.isFinished(),
                 clerkService.resolveLaborRate(factoryId, warnings),
                 clerkService.resolveWarehouseId(factoryId, WarehouseCodes.WH_WKS, warnings),
-                rawMaterialTypeId,
+                outputMaterialIdentity,
                 userId);
 
         MaterializedBatch mat = materializeSheetBatch(
@@ -1093,8 +1103,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             BigDecimal totalCost = unitCost == null ? null : unitCost.multiply(one.getOutputQuantity());
             return new OneOutputOutcome(null, anchor, totalCost, anchor, unitCost);
         }
-        // 成品不建 WIP → 无需 material_type_id; 半成品(有投入)从投入派生。
-        String rawMaterialTypeId = one.isFinished() ? null : resolveRawMaterialTypeId(one, edges);
+        // 成品不建 WIP → 无需 material_type_id; 半成品 identity 必须来自本道产出快照。
+        String outputMaterialIdentity = one.isFinished() ? null : resolveOutputMaterialIdentity(one);
         StepEntry step = buildStepEntry(factoryId, one);
         MaterializeContext ctx = new MaterializeContext(
                 factoryId,
@@ -1104,7 +1114,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 one.isFinished(),
                 clerkService.resolveLaborRate(factoryId, warnings),
                 clerkService.resolveWarehouseId(factoryId, WarehouseCodes.WH_WKS, warnings),
-                rawMaterialTypeId,
+                outputMaterialIdentity,
                 userId);
         MaterializedBatch mat = materializeSheetBatch(
                 ctx, List.of(step), edges, warnings, workflowConfig);
@@ -1773,7 +1783,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 return buildResult(req, null, anchor, yieldRate(req), null, null, true, true, warnings);
             }
             // DRAFT → 物化: legacy 计划新建批次；Workflow 成品道复用计划已有运行批次。
-            String rawMaterialTypeId = resolveRawMaterialTypeId(req, edges);
+            String outputMaterialIdentity = resolveOutputMaterialIdentity(req);
             StepEntry step = buildStepEntry(factoryId, req);
             MaterializeContext ctx = new MaterializeContext(
                     factoryId,
@@ -1783,7 +1793,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     req.isFinished(),
                     clerkService.resolveLaborRate(factoryId, warnings),
                     clerkService.resolveWarehouseId(factoryId, WarehouseCodes.WH_WKS, warnings),
-                    rawMaterialTypeId,
+                    outputMaterialIdentity,
                     userId);
             MaterializedBatch mat = materializeSheetBatch(
                     ctx, List.of(step), edges, warnings, workflowConfig);
@@ -1824,7 +1834,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // B2 仅软删旧边/报工 (WIP + ProductionBatch 原地更新, 不软删): 先清旧消耗再重物化。
         consumptionRepo.softDeleteByFactoryIdAndProductionBatchId(factoryId, existing.getBatchId());
         reportRepo.softDeleteByFactoryIdAndBatchId(factoryId, existing.getBatchId());
-        String rawMaterialTypeId = resolveRawMaterialTypeId(req, edges);
+        String outputMaterialIdentity = resolveOutputMaterialIdentity(req);
         StepEntry step = buildStepEntry(factoryId, req);
         MaterializeContext ctx = new MaterializeContext(
                 factoryId,
@@ -1834,7 +1844,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 req.isFinished(),
                 clerkService.resolveLaborRate(factoryId, warnings),
                 clerkService.resolveWarehouseId(factoryId, WarehouseCodes.WH_WKS, warnings),
-                rawMaterialTypeId,
+                outputMaterialIdentity,
                 userId);
 
         String existingWipMbId = wipOpt.map(MaterialBatch::getId).orElse(null);
@@ -3623,42 +3633,22 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     }
 
     /**
-     * SP-E FK 防线: WIP 产出 MaterialBatch.material_type_id 必须指向 raw_material_types。
-     * 优先取首个 RAW 边的 materialTypeId; 否则取首个 SEMI 边上游 WIP 的 materialTypeId;
-     * 仍为空 → 400 (H2 不会捕获 null FK, 代码层强制)。
+     * WIP 的物料身份属于本道产出，而不是任一投入来源。
+     *
+     * <p>Workflow 行的 {@code productTypeId} 已在端口校验中与产出 Cell 的稳定 SKU identity 对齐；
+     * legacy 行同样把 {@code productTypeId} 作为该行产出对象。RAW/SEMI 边只承载完整投入 provenance，
+     * 因此输入数量、顺序或首项都不得影响 WIP identity。缺少产出身份时 loud-fail，禁止回退猜首个入口。
      */
-    private String resolveRawMaterialTypeId(ProcessSheetRowRequest req, List<ResolvedEdge> edges) {
-        // 首个 RAW
-        for (ResolvedEdge e : edges) {
-            if ("RAW_MATERIAL".equals(e.getSourceType())
-                    && e.getSourceBatch().getMaterialTypeId() != null) {
-                return e.getSourceBatch().getMaterialTypeId();
-            }
+    private String resolveOutputMaterialIdentity(ProcessSheetRowRequest req) {
+        String outputIdentity = req == null ? null : req.getProductTypeId();
+        if (outputIdentity == null || outputIdentity.isBlank()) {
+            throw new BusinessException(400, "本道产出缺少稳定物料身份，无法物化半成品批次")
+                    .withCode("WIP_OUTPUT_MATERIAL_IDENTITY_REQUIRED")
+                    .withHint("请刷新并按 Workflow 产出 Cell 重新选择半成品；旧流程请明确填写本道产出产品")
+                    .withHintTarget(req != null ? req.getProcessCode() : "产出")
+                    .withSeverity("BLOCKING");
         }
-        // 否则首个 SEMI 上游 WIP
-        for (ResolvedEdge e : edges) {
-            if ("SEMI_FINISHED".equals(e.getSourceType())
-                    && e.getSourceBatch().getMaterialTypeId() != null) {
-                return e.getSourceBatch().getMaterialTypeId();
-            }
-        }
-        // 半成品库存(SFI)投料: SFI 只有 productType 维度, 无 raw_material_types FK,
-        //   且 SFI 边已在 resolveEdges 跳过 → 无 RAW/in-plan-SEMI 边可派生 materialTypeId。
-        //   成品道 (气调) 不物化 WIP MaterialBatch (materializeBatch 仅 !finished 时建 WIP), 此返回值不被使用
-        //   → 返回 null (诚实, 无 raw lineage)。
-        //   [option F] 非成品的「纯 SFI 中间道」已在 saveRow/resaveRow 上游拦截 (isPureSemiFinishedFed):
-        //   不物化 WIP, 产出直接入 SFI, 根本不会走到这里。因此下面的 400 现在只作为防御, 仅对
-        //   「非成品 + 含 SFI 投料 + 但混有无法派生 materialTypeId 的在制来源」这类残余不可解场景兜底。
-        if (hasSemiFinishedUpstream(req) || hasFinishedGoodsUpstream(req)) {
-            if (req.isFinished()) {
-                return null;
-            }
-            throw new BusinessException(400,
-                    "半成品(SFI)/成品(FG)库存投料无法确定物料类型: 该道混有无法派生物料类型的来源")
-                    .withHint("请检查该道来源; 纯半成品/成品喂的中间道应不含其他无物料类型的在制来源")
-                    .withHintTarget(req.getProcessCode());
-        }
-        throw new BusinessException(400, "无法确定原料类型，无法物化批次");
+        return outputIdentity.trim();
     }
 
     /** 该行是否含 SFI(半成品库存)投料来源 (semiFinished=true)。 */

@@ -19,6 +19,8 @@ import java.util.Optional;
 @Repository
 public interface WorkProcessTaskRepository extends JpaRepository<WorkProcessTask, Long> {
 
+    long countByFactoryIdAndWorkProcessId(String factoryId, String workProcessId);
+
     /**
      * 列出某批次的全部工序任务 (按 processOrder 升序).
      */

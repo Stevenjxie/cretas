@@ -63,6 +63,9 @@ public interface SupplierService {
      * 激活/停用供应商
       */
     SupplierDTO toggleSupplierStatus(String factoryId, String supplierId, Boolean isActive);
+
+    SupplierDTO changeSupplierStatus(String factoryId, String supplierId, Boolean isActive,
+                                     String reason, Long expectedVersion);
      /**
      * 更新供应商评级
       */

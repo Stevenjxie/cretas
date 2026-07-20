@@ -12,6 +12,7 @@ import com.cretas.aims.service.unit.UnitConversionStatus;
 import com.cretas.aims.service.unit.UnitConversionStep;
 import com.cretas.aims.service.unit.UnitDimension;
 import com.cretas.aims.service.unit.UnitNormalizationResult;
+import com.cretas.aims.service.unit.UnitUsageScope;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -22,6 +23,7 @@ import java.text.Normalizer;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -64,6 +66,17 @@ public class UnitContractServiceImpl implements UnitContractService {
     }
 
     @Override
+    public List<CanonicalUnit> catalog(String factoryId, UnitUsageScope usageScope) {
+        if (usageScope == null) {
+            return catalog(factoryId);
+        }
+        return catalog(factoryId).stream()
+                .filter(CanonicalUnit::active)
+                .filter(unit -> unit.usageScopes().contains(usageScope))
+                .toList();
+    }
+
+    @Override
     public UnitNormalizationResult normalize(String factoryId, String rawUnit) {
         return normalize(rawUnit, factoryCatalog(factoryId));
     }
@@ -97,6 +110,17 @@ public class UnitContractServiceImpl implements UnitContractService {
         String leftCode = normalize(factoryId, leftUnit).code();
         String rightCode = normalize(factoryId, rightUnit).code();
         return leftCode != null && leftCode.equals(rightCode);
+    }
+
+    @Override
+    public boolean supportsUsage(String factoryId, String rawUnit, UnitUsageScope usageScope) {
+        if (usageScope == null) {
+            return false;
+        }
+        return describe(factoryId, rawUnit)
+                .filter(CanonicalUnit::active)
+                .map(unit -> unit.usageScopes().contains(usageScope))
+                .orElse(false);
     }
 
     @Override
@@ -567,17 +591,58 @@ public class UnitContractServiceImpl implements UnitContractService {
                     systemUnit.baseCode(),
                     systemUnit.factorToBase(),
                     unit.getUnitName(),
-                    unit.getDecimalPlaces() == null ? systemUnit.displayScale() : unit.getDecimalPlaces()
+                    unit.getDecimalPlaces() == null ? systemUnit.displayScale() : unit.getDecimalPlaces(),
+                    usageScopes(unit, systemUnit.dimension()),
+                    hasText(unit.getConversionFamily()) ? unit.getConversionFamily() : systemUnit.conversionFamily(),
+                    !Boolean.FALSE.equals(unit.getIsActive())
             );
         }
+        UnitDimension unitDimension = dimension(unit.getCategory());
         return new CanonicalUnit(
                 code,
-                dimension(unit.getCategory()),
+                unitDimension,
                 code,
                 null,
                 unit.getUnitName(),
-                unit.getDecimalPlaces() == null ? 0 : unit.getDecimalPlaces()
+                unit.getDecimalPlaces() == null ? 0 : unit.getDecimalPlaces(),
+                usageScopes(unit, unitDimension),
+                hasText(unit.getConversionFamily()) ? unit.getConversionFamily() : unitDimension.name(),
+                !Boolean.FALSE.equals(unit.getIsActive())
         );
+    }
+
+    private static Set<UnitUsageScope> usageScopes(UnitOfMeasurement unit, UnitDimension dimension) {
+        List<String> configured = unit.getUsageScopesJson();
+        if (configured == null) {
+            return defaultUsageScopes(dimension);
+        }
+        EnumSet<UnitUsageScope> scopes = EnumSet.noneOf(UnitUsageScope.class);
+        for (String value : configured) {
+            if (!hasText(value)) {
+                continue;
+            }
+            try {
+                scopes.add(UnitUsageScope.valueOf(value.trim().toUpperCase(Locale.ROOT)));
+            } catch (IllegalArgumentException ignored) {
+                // Unknown future scopes are fail-closed until this runtime knows them.
+            }
+        }
+        return Set.copyOf(scopes);
+    }
+
+    private static Set<UnitUsageScope> defaultUsageScopes(UnitDimension dimension) {
+        return switch (dimension) {
+            case MASS, VOLUME, COUNT, PACKAGE -> Set.of(
+                    UnitUsageScope.INVENTORY_QUANTITY,
+                    UnitUsageScope.PURCHASE_QUANTITY,
+                    UnitUsageScope.BOM_QUANTITY,
+                    UnitUsageScope.SPECIFICATION);
+            case LENGTH, AREA -> Set.of(UnitUsageScope.SPECIFICATION);
+            case TIME -> Set.of(UnitUsageScope.PROCESS_DURATION);
+            case TEMPERATURE -> Set.of(UnitUsageScope.STORAGE_TEMPERATURE);
+            case RATIO -> Set.of(UnitUsageScope.YIELD_RATE);
+            case UNKNOWN -> Set.of();
+        };
     }
 
     private static UnitDimension dimension(String category) {
@@ -588,8 +653,12 @@ public class UnitContractServiceImpl implements UnitContractService {
             case "MASS", "WEIGHT" -> UnitDimension.MASS;
             case "VOLUME" -> UnitDimension.VOLUME;
             case "LENGTH" -> UnitDimension.LENGTH;
+            case "AREA" -> UnitDimension.AREA;
             case "COUNT" -> UnitDimension.COUNT;
-            case "PACKAGE" -> UnitDimension.PACKAGE;
+            case "PACKAGE", "PACKAGING" -> UnitDimension.PACKAGE;
+            case "TIME" -> UnitDimension.TIME;
+            case "TEMPERATURE" -> UnitDimension.TEMPERATURE;
+            case "RATIO" -> UnitDimension.RATIO;
             default -> UnitDimension.UNKNOWN;
         };
     }
@@ -646,7 +715,10 @@ public class UnitContractServiceImpl implements UnitContractService {
                 baseCode,
                 factorToBase == null ? null : new BigDecimal(factorToBase),
                 displayName,
-                displayScale
+                displayScale,
+                defaultUsageScopes(dimension),
+                baseCode,
+                true
         ));
     }
 

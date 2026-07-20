@@ -6,6 +6,7 @@ import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.enums.ArApTransactionType;
 import com.cretas.aims.entity.enums.CounterpartyType;
 import com.cretas.aims.entity.enums.PaymentMethod;
+import com.cretas.aims.entity.enums.PayablePaymentStatus;
 import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
@@ -272,6 +273,7 @@ public class ArApServiceImpl implements ArApService {
         // per-receive 幂等键 (可空: recordPayable 手工挂账无 source, 走 PO 级 409 防重复)。
         if (sourceType != null) transaction.setSourceType(sourceType);
         if (sourceId != null) transaction.setSourceId(sourceId);
+        initializePayableOpenItem(transaction);
 
         log.info("应付挂账: factoryId={}, supplierId={}, sourceId={}, amount={}, balance={}",
                 factoryId, supplierId, sourceId, amount, newBalance);
@@ -325,6 +327,7 @@ public class ArApServiceImpl implements ArApService {
                 amount, newBalance, dueDate, operatedBy, remark);
         transaction.setSourceType(sourceType);
         transaction.setSourceId(sourceId);
+        initializePayableOpenItem(transaction);
 
         ArApTransaction saved = transactionRepository.save(transaction);
         log.info("应付挂账: factoryId={}, supplierId={}, sourceType={}, sourceId={}, amount={}, balance={}",
@@ -1001,7 +1004,10 @@ public class ArApServiceImpl implements ArApService {
             });
 
             Map<String, Object> row = agingMap.get(cpId);
-            BigDecimal amt = invoice.getAmount();
+            BigDecimal amt = counterpartyType == CounterpartyType.SUPPLIER
+                    && invoice.getOutstandingAmount() != null
+                    ? invoice.getOutstandingAmount()
+                    : invoice.getAmount();
             String bucket = getBucket(invoice.getDueDate(), today);
             row.put(bucket, ((BigDecimal) row.get(bucket)).add(amt));
             row.put("total", ((BigDecimal) row.get("total")).add(amt));
@@ -1104,6 +1110,22 @@ public class ArApServiceImpl implements ArApService {
         transaction.setOperatedBy(operatedBy);
         transaction.setRemark(remark);
         return transaction;
+    }
+
+    /** Initialize every newly-created AP invoice as an auditable open item. */
+    private void initializePayableOpenItem(ArApTransaction transaction) {
+        BigDecimal amount = transaction.getAmount() != null
+                ? transaction.getAmount().abs().setScale(2, java.math.RoundingMode.UNNECESSARY)
+                : null;
+        transaction.setCurrencyCode("CNY");
+        if (amount == null) {
+            return;
+        }
+        transaction.setSettledAmount(BigDecimal.ZERO.setScale(2));
+        transaction.setOutstandingAmount(amount);
+        transaction.setPaymentStatus(amount.signum() == 0
+                ? PayablePaymentStatus.PAID
+                : PayablePaymentStatus.UNPAID);
     }
 
     private String generateTransactionNumber(ArApTransactionType type) {

@@ -11,7 +11,7 @@ import { handleCatchError } from '@/utils/errorToast';
 import { formatAmount } from '@/utils/tableFormatters';
 import NotFoundEmpty from '@/components/common/NotFoundEmpty.vue';
 import AttachmentList from '@/components/attachment/AttachmentList.vue';
-import AttachmentUploadButton from '@/components/attachment/AttachmentUploadButton.vue';
+import AttachmentDropZone from '@/components/attachment/AttachmentDropZone.vue';
 import type { TableRow } from '@/types/api';
 import { enumLabel } from '@/utils/enumDisplay';
 import { canonicalUnitCode, formatPriceUnit, pricingAmountPreview } from '@/utils/unitPricing';
@@ -32,23 +32,6 @@ const order = ref<TableRow | null>(null);
 const notFound = ref(false);
 const notFoundMessage = ref('');
 const receives = ref<TableRow[]>([]);
-const receiveDialogVisible = ref(false);
-// Issue #741 — Preview hint 字段 (orderedQuantity / alreadyReceived) carried forward to dialog so
-// 用户可在输入收货数前看到 上限 (含 30% 抄收). Backend validates same upper bound at /confirm step.
-interface ReceiveFormItem {
-  materialTypeId: string;
-  materialName: string;
-  receivedQuantity: number;
-  unit: string;
-  unitPrice: number;
-  orderedQuantity: number;      // 下单总量 (从 PO item.quantity)
-  alreadyReceived: number;      // 已收 (PO item.receivedQuantity)
-  maxAllowed: number;           // 含 30% 抄收上限 = orderedQuantity * 1.3 - alreadyReceived
-}
-const receiveForm = ref<{ supplierId: string; receiveDate: string; items: ReceiveFormItem[] }>({ supplierId: '', receiveDate: '', items: [] });
-
-// Issue #741: 30% 抄收宽容上限 — 与后端 PurchaseReceiveService 一致.
-const OVER_RECEIVE_TOLERANCE = 1.3;
 const attachmentRefreshKey = ref(0);
 
 // 三价对比
@@ -139,27 +122,20 @@ async function loadReceives() {
   } catch { /* ignore */ }
 }
 
-// 🔴 fool-proof-design Rule 5 fix: 申请付款入口的显示条件，镜像后端 D-9 G2
-// (PaymentRequestServiceImpl.create) 的入库前置检查 — PREPAID 结算方式不限状态；
-// 其余结算方式需订单已全量入库（COMPLETED）才能申请付款。
-const canRequestPayment = computed(() => {
-  if (!order.value) return false;
-  if (order.value.settlementType === 'PREPAID') return true;
-  return order.value.status === 'COMPLETED';
-});
-
-// 跳转到付款申请页并预填供应商/采购单/金额，自动打开新建弹窗（Rule 2: 带上下文，不让用户
-// 落地后从零开始选）。
-function goRequestPayment() {
-  if (!order.value) return;
+function goFinanceDetails(): void {
   router.push({
-    path: '/procurement/payment-requests',
+    path: '/finance/ar-ap',
     query: {
-      open: 'create',
-      supplierId: order.value.supplierId,
-      poId: order.value.id,
-      amount: order.value.totalAmount != null ? String(order.value.totalAmount) : undefined
-    }
+      direction: 'AP',
+      purchaseOrderId: orderId.value,
+    },
+  });
+}
+
+function goApprovalProgress(): void {
+  router.push({
+    path: '/workflow/my-participated',
+    query: { businessEntityType: 'PURCHASE_ORDER', businessEntityId: orderId.value },
   });
 }
 
@@ -167,11 +143,7 @@ async function handleAction(action: string) {
   if (submitting.value) return;
   const map: Record<string, { label: string; url: string }> = {
     submit: { label: '提交', url: `/${factoryId.value}/purchase/orders/${orderId.value}/submit` },
-    approve: { label: '审批通过', url: `/${factoryId.value}/purchase/orders/${orderId.value}/approve` },
     cancel: { label: '取消', url: `/${factoryId.value}/purchase/orders/${orderId.value}/cancel` },
-    submitFinance: { label: '提交财务审核', url: `/${factoryId.value}/purchase/orders/${orderId.value}/submit-for-finance-review` },
-    financeApprove: { label: '财务审核通过', url: `/${factoryId.value}/purchase/orders/${orderId.value}/finance-approve` },
-    financeReject: { label: '财务驳回', url: `/${factoryId.value}/purchase/orders/${orderId.value}/finance-reject` },
   };
   const a = map[action];
   if (!a) return;
@@ -187,63 +159,8 @@ async function handleAction(action: string) {
   finally { submitting.value = false; }
 }
 
-function openReceiveDialog() {
-  if (!order.value?.items?.length) return;
-  // Auto-populate supplierId from PO and default receiveDate to today
-  receiveForm.value.supplierId = (order.value.supplierId as string) || '';
-  receiveForm.value.receiveDate = new Date().toISOString().slice(0, 10);
-  receiveForm.value.items = (order.value.items as TableRow[]).map((it) => {
-    const ordered = Number(it.quantity) || 0;
-    const already = Number(it.receivedQuantity) || 0;
-    const maxAllowed = Math.max(0, +(ordered * OVER_RECEIVE_TOLERANCE - already).toFixed(3));
-    return {
-      materialTypeId: it.materialTypeId,
-      materialName: it.materialName,
-      // Default to remaining (ordered - already), capped at maxAllowed
-      receivedQuantity: Math.min(Math.max(0, ordered - already), maxAllowed),
-      unit: it.unit,
-      unitPrice: it.unitPrice,
-      orderedQuantity: ordered,
-      alreadyReceived: already,
-      maxAllowed,
-    };
-  });
-  receiveDialogVisible.value = true;
-}
-
-// Issue #741: 计算剩余可入余量 (>= 0)
-function remainingAllowed(row: ReceiveFormItem): number {
-  return Math.max(0, +(row.maxAllowed - (Number(row.receivedQuantity) || 0)).toFixed(3));
-}
-
-function isOverLimit(row: ReceiveFormItem): boolean {
-  return (Number(row.receivedQuantity) || 0) > row.maxAllowed;
-}
-
-async function handleCreateReceive() {
-  if (submitting.value) return;
-  submitting.value = true;
-  try {
-    const res = await post(`/${factoryId.value}/purchase/receives`, {
-      purchaseOrderId: orderId.value,
-      supplierId: receiveForm.value.supplierId,
-      receiveDate: receiveForm.value.receiveDate,
-      items: receiveForm.value.items.filter(i => i.receivedQuantity > 0),
-    });
-    if (res.success) {
-      ElMessage.success('收货单创建成功');
-      receiveDialogVisible.value = false;
-      loadOrder();
-      loadReceives();
-      // Issue #781: 入库 (新建收货) 后强制刷新三价对比缓存.
-      // 入库价是三价对比的"当前价"数据源 (May 7 part1 line 27-31), 入库完必须重拉,
-      // 否则 collapse 已展开过的用户看到的还是上一次的 stale comparison.
-      if (priceComparisons.value.length > 0 || priceLoading.value) {
-        loadPriceComparison();
-      }
-    } else { ElMessage.error(res.message || '创建失败，请重试'); }
-  } catch (e) { handleCatchError(e, '创建失败，请检查网络'); }
-  finally { submitting.value = false; }
+function goWarehouseReceive(): void {
+  router.push({ path: '/procurement/receives', query: { purchaseOrderId: orderId.value } });
 }
 
 async function loadPriceComparison() {
@@ -332,27 +249,6 @@ async function handleDownloadPdf(externalVersion: boolean) {
   }
 }
 
-async function confirmReceive(receiveId: string) {
-  if (submitting.value) return;
-  try {
-    await ElMessageBox.confirm('确认入库？将生成物料批次', '确认');
-  } catch { return; }
-  submitting.value = true;
-  try {
-    const res = await post(`/${factoryId.value}/purchase/receives/${receiveId}/confirm`);
-    if (res.success) {
-      ElMessage.success('入库确认成功');
-      loadReceives();
-      loadOrder();
-      // Issue #781: 确认入库后入库价被记入 raw_material — 强制刷新三价对比.
-      if (priceComparisons.value.length > 0 || priceLoading.value) {
-        loadPriceComparison();
-      }
-    }
-    else { ElMessage.error(res.message || '入库确认失败，请重试'); }
-  } catch (e) { handleCatchError(e, '入库确认失败，请检查网络'); }
-  finally { submitting.value = false; }
-}
 </script>
 
 <template>
@@ -377,20 +273,7 @@ async function confirmReceive(receiveId: string) {
             <template v-if="canWrite">
             <el-button v-if="order.status === 'DRAFT'" :icon="Edit" @click="goEditDraft">编辑草稿</el-button>
             <el-button v-if="order.status === 'DRAFT'" type="warning" :loading="submitting" @click="handleAction('submit')">提交审批</el-button>
-            <el-button v-if="order.status === 'SUBMITTED'" type="success" :loading="submitting" @click="handleAction('approve')">审批通过</el-button>
-            <el-button v-if="order.status === 'APPROVED'" type="warning" :loading="submitting" @click="handleAction('submitFinance')">提交财务审核</el-button>
-            <el-button v-if="order.status === 'PENDING_FINANCE_REVIEW'" type="success" :loading="submitting" @click="handleAction('financeApprove')">财务通过</el-button>
-            <el-button v-if="order.status === 'PENDING_FINANCE_REVIEW'" type="danger" :loading="submitting" @click="handleAction('financeReject')">财务驳回</el-button>
-            <el-button v-if="['FINANCE_APPROVED','PARTIAL_RECEIVED'].includes(order.status)" type="primary" :loading="submitting" @click="openReceiveDialog">{{ label('receive') }}</el-button>
-            <!-- 🔴 fool-proof-design Rule 5 fix (2026-07-05): 之前 PO 详情页无任何入口跳到
-                 付款申请 — 结算方式为【预付款】的订单不限状态可申请；其余需全量入库完成
-                 （与 PaymentRequestServiceImpl.create() 的 D-9 G2 检查口径一致，未满足时
-                 提交会由后端返回具体提示，此处只做正向引导，不重复校验业务规则）。 -->
-            <el-button
-              v-if="canRequestPayment"
-              type="success"
-              @click="goRequestPayment"
-            >申请付款</el-button>
+            <el-button v-if="order.status !== 'DRAFT'" plain @click="goApprovalProgress">查看审批进度 / 前往 OA</el-button>
             <el-button v-if="['DRAFT','SUBMITTED'].includes(order.status)" type="danger" :disabled="submitting" @click="handleAction('cancel')">取消</el-button>
             </template>
           </div>
@@ -407,6 +290,8 @@ async function confirmReceive(receiveId: string) {
           <el-descriptions-item v-if="canViewPrice" label="总金额">{{ formatAmount(order.totalAmount) }}</el-descriptions-item>
           <el-descriptions-item v-if="canViewPrice" label="税额">{{ formatAmount(order.taxAmount) }}</el-descriptions-item>
           <el-descriptions-item label="审批人">{{ order.approvedBy || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="当前审批节点">{{ order.currentApprovalNodeName || order.approvalNodeName || (order.status === 'PENDING_FINANCE_REVIEW' ? '财务审核' : '-') }}</el-descriptions-item>
+          <el-descriptions-item label="待处理角色/人员">{{ order.currentApproverName || order.currentApproverRole || order.approverName || '-' }}</el-descriptions-item>
           <el-descriptions-item label="合同号">{{ order.contractNumber || '-' }}</el-descriptions-item>
           <el-descriptions-item label="结算方式">
             <span v-if="order.settlementType">{{ ({ PREPAID: '预付', CREDIT_FIRST: '赊销先入库', NO_INVOICE: '未到票', MONTHLY: '月结', CREDIT_PERIOD: '账期', IMMEDIATE: '现结' } as Record<string, string>)[order.settlementType] || enumLabel(order.settlementType) }}</span>
@@ -417,6 +302,21 @@ async function confirmReceive(receiveId: string) {
             <span v-else>使用工厂默认</span>
           </el-descriptions-item>
           <el-descriptions-item label="备注" :span="3">{{ order.remark || '-' }}</el-descriptions-item>
+        </el-descriptions>
+
+        <div class="section-heading finance-heading">
+          <h3>采购履约与财务状态（只读）</h3>
+          <el-button plain @click="goFinanceDetails">查看财务详情</el-button>
+        </div>
+        <el-descriptions :column="4" border>
+          <el-descriptions-item label="采购状态">{{ statusMap[order.status]?.text || enumLabel(order.status) }}</el-descriptions-item>
+          <el-descriptions-item label="收货状态">{{ order.receiptStatus ? enumLabel(order.receiptStatus) : (receives.length ? '已有收货记录' : '尚无收货记录') }}</el-descriptions-item>
+          <el-descriptions-item label="发票状态">{{ order.invoiceStatus ? enumLabel(order.invoiceStatus) : '未归集' }}</el-descriptions-item>
+          <el-descriptions-item label="付款状态">{{ order.paymentStatus ? enumLabel(order.paymentStatus) : '未归集' }}</el-descriptions-item>
+          <el-descriptions-item v-if="canViewPrice" label="应付金额">{{ order.payableAmount == null ? '-' : formatAmount(order.payableAmount) }}</el-descriptions-item>
+          <el-descriptions-item v-if="canViewPrice" label="已付金额">{{ order.paidAmount == null ? '-' : formatAmount(order.paidAmount) }}</el-descriptions-item>
+          <el-descriptions-item v-if="canViewPrice" label="未付金额">{{ order.unpaidAmount == null ? '-' : formatAmount(order.unpaidAmount) }}</el-descriptions-item>
+          <el-descriptions-item label="付款到期日">{{ order.paymentDueDate || order.dueDate || '-' }}</el-descriptions-item>
         </el-descriptions>
 
         <h3 style="margin: 20px 0 12px">{{ label('rawMaterial') }}明细</h3>
@@ -511,7 +411,10 @@ async function confirmReceive(receiveId: string) {
           </el-collapse-item>
         </el-collapse>
 
-        <h3 style="margin: 20px 0 12px">{{ label('receive') }}记录</h3>
+        <div class="section-heading">
+          <h3>{{ label('receive') }}记录（只读）</h3>
+          <el-button type="primary" plain @click="goWarehouseReceive">前往仓储收货任务</el-button>
+        </div>
         <el-table :data="receives" border stripe>
           <el-table-column prop="receiveNumber" label="收货单号" width="170" />
           <el-table-column prop="receiveDate" label="收货日期" width="120" />
@@ -525,11 +428,9 @@ async function confirmReceive(receiveId: string) {
           <el-table-column v-if="canViewPrice" prop="totalAmount" label="金额" width="130" align="right">
             <template #default="{ row }">{{ formatAmount(row.totalAmount) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="120" align="center">
-            <template #default="{ row }">
-              <el-button v-if="['DRAFT','PENDING_QC'].includes(row.status) && canWrite" type="success" link size="small" :disabled="submitting" @click="confirmReceive(row.id)">确认入库</el-button>
-            </template>
-          </el-table-column>
+          <el-table-column prop="warehouseName" label="收货仓库" min-width="120"><template #default="{ row }">{{ row.warehouseName || '-' }}</template></el-table-column>
+          <el-table-column prop="receivedByName" label="收货人" min-width="110"><template #default="{ row }">{{ row.receivedByName || row.receivedBy || '-' }}</template></el-table-column>
+          <el-table-column prop="confirmedAt" label="确认时间" min-width="160"><template #default="{ row }">{{ row.confirmedAt || '-' }}</template></el-table-column>
         </el-table>
 
         <!-- 附件 (C-ATT-1) — 收货单 / 合同 / 现场照片 -->
@@ -541,7 +442,7 @@ async function confirmReceive(receiveId: string) {
           :refresh-key="attachmentRefreshKey"
         />
         <div style="margin-top: 12px">
-          <AttachmentUploadButton
+          <AttachmentDropZone
             entity-type="PURCHASE_ORDER"
             :entity-id="String(orderId)"
             :factory-id="factoryId"
@@ -552,56 +453,6 @@ async function confirmReceive(receiveId: string) {
       </template>
     </el-card>
 
-    <el-dialog v-model="receiveDialogVisible" title="创建收货单" width="820px" destroy-on-close>
-      <!-- Issue #741: 入库防呆 — 在输入收货数前预先显示 下单/已收/可入(含30%抄收), 避免 submit 后才看到 toast -->
-      <el-alert type="info" show-icon :closable="false" style="margin-bottom: 12px"
-        title="入库上限说明"
-        description="系统允许超收 30% 作为抄收宽容 (与采购订单一致). 「可入」= 下单量 × 1.3 − 已收量. 超过此上限提交将被驳回." />
-      <el-table :data="receiveForm.items" border>
-        <el-table-column prop="materialName" :label="label('rawMaterial')" min-width="140" show-overflow-tooltip />
-        <el-table-column label="下单" width="80" align="right">
-          <template #default="{ row }">{{ row.orderedQuantity }}</template>
-        </el-table-column>
-        <el-table-column label="已收" width="80" align="right">
-          <template #default="{ row }">{{ row.alreadyReceived }}</template>
-        </el-table-column>
-        <el-table-column label="可入 (含30%抄收)" width="140" align="right">
-          <template #default="{ row }">
-            <span :style="{ color: '#67c23a', fontWeight: 600 }">{{ row.maxAllowed }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="本次收货" width="180">
-          <template #default="{ row }">
-            <el-input-number
-              v-model="row.receivedQuantity"
-              :min="0"
-              :max="row.maxAllowed"
-              :precision="3"
-              :controls="false"
-              size="small"
-              style="width: 130px" />
-            <div v-if="isOverLimit(row)" style="color:#f56c6c; font-size:12px; margin-top:2px">
-              超出上限 (最多 {{ row.maxAllowed }})
-            </div>
-            <div v-else-if="row.receivedQuantity > 0" style="color:#909399; font-size:12px; margin-top:2px">
-              剩余可入 {{ remainingAllowed(row) }}
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column prop="unit" label="单位" width="70" align="center" />
-        <el-table-column v-if="canViewPrice" prop="unitPrice" label="单价" width="110" align="right">
-          <template #default="{ row }">{{ formatAmount(row.unitPrice) }}</template>
-        </el-table-column>
-      </el-table>
-      <template #footer>
-        <el-button @click="receiveDialogVisible = false">取消</el-button>
-        <el-button
-          type="primary"
-          :loading="submitting"
-          :disabled="receiveForm.items.some(isOverLimit)"
-          @click="handleCreateReceive">创建收货单</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -617,6 +468,9 @@ async function confirmReceive(receiveId: string) {
   }
   .header-right { display: flex; gap: 8px; }
 }
+.section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 20px 0 12px; }
+.section-heading h3 { margin: 0; }
+.finance-heading { margin-top: 20px; }
 // 三价对比样式
 :deep(.price-alert-row) {
   background-color: #fef0f0 !important;

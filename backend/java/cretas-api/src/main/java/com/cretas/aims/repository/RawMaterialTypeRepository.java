@@ -22,6 +22,9 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
      * 根据工厂ID和代码查找
      */
     Optional<RawMaterialType> findByFactoryIdAndCode(String factoryId, String code);
+
+    /** Find by the new human-readable code without changing legacy code resolution. */
+    Optional<RawMaterialType> findByFactoryIdAndBusinessCodeIgnoreCase(String factoryId, String businessCode);
      /**
      * 查找工厂的所有原材料类型
       */
@@ -42,6 +45,7 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
            "AND (CAST(:codePrefix AS string) IS NULL OR r.code LIKE CONCAT(:codePrefix, '%')) " +
            "AND (CAST(:keyword AS string) IS NULL OR LOWER(r.name) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
            "OR LOWER(r.code) LIKE LOWER(CONCAT(:keyword, '%')) " +
+           "OR LOWER(r.businessCode) LIKE LOWER(CONCAT(:keyword, '%')) " +
            "OR LOWER(r.category) LIKE LOWER(CONCAT('%', :keyword, '%'))) ")
     Page<RawMaterialType> filterBySegmentPrefixAndKeyword(
             @Param("factoryId") String factoryId,
@@ -68,6 +72,7 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
     @Query("SELECT r FROM RawMaterialType r WHERE r.factoryId = :factoryId AND " +
            "(LOWER(r.name) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
            "LOWER(r.code) LIKE LOWER(CONCAT(:keyword, '%')) ESCAPE '\\' OR " +
+           "LOWER(r.businessCode) LIKE LOWER(CONCAT(:keyword, '%')) ESCAPE '\\' OR " +
            "LOWER(r.category) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\')")
     Page<RawMaterialType> searchMaterialTypes(@Param("factoryId") String factoryId,
                                               @Param("keyword") String keyword,
@@ -79,6 +84,7 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
     @Query("SELECT r FROM RawMaterialType r WHERE r.factoryId = :factoryId AND r.isActive = true AND " +
            "(LOWER(r.name) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
            "LOWER(r.code) LIKE LOWER(CONCAT(:keyword, '%')) ESCAPE '\\' OR " +
+           "LOWER(r.businessCode) LIKE LOWER(CONCAT(:keyword, '%')) ESCAPE '\\' OR " +
            "LOWER(r.category) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\')")
     Page<RawMaterialType> searchActiveMaterialTypes(@Param("factoryId") String factoryId,
                                                     @Param("keyword") String keyword,
@@ -87,6 +93,8 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
      * 检查代码是否存在
       */
     boolean existsByFactoryIdAndCode(String factoryId, String code);
+
+    boolean existsByFactoryIdAndBusinessCodeIgnoreCase(String factoryId, String businessCode);
 
     @Query("SELECT CASE WHEN COUNT(r) > 0 THEN true ELSE false END FROM RawMaterialType r " +
            "WHERE r.factoryId = :factoryId AND LOWER(TRIM(r.name)) = LOWER(TRIM(:name))")

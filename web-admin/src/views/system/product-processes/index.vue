@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -45,6 +45,8 @@ const products = ref<WorkflowOwnerOption[]>([]);
 const rawMaterials = ref<WorkflowOwnerOption[]>([]);
 const selectedProductId = ref('');
 const productsLoading = ref(false);
+// 兼容链只在需要核对旧报工链路时展开，默认不占用 Workflow 画布的工作高度。
+const legacyCompatibilityExpanded = ref<string[]>([]);
 
 const FINISHED_WORKFLOW_OWNER_CATEGORIES = new Set([
   'FINISHED_PRODUCT', 'CONTRACT_MANUFACTURING', 'CUSTOMER_MATERIAL', 'DISH', 'COMBO',
@@ -343,6 +345,7 @@ async function handleSave() {
 // ─────────────────────────────────────────────
 
 onMounted(async () => {
+  window.addEventListener('keydown', onWorkflowViewportKeydown);
   await loadProducts();
   await loadAllProcesses();
   await loadOperators();
@@ -351,6 +354,15 @@ onMounted(async () => {
   }
   await applyRouteRecommendationDraft();
 });
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', onWorkflowViewportKeydown);
+});
+
+function onWorkflowViewportKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape' || event.defaultPrevented || legacyCompatibilityExpanded.value.length === 0) return;
+  legacyCompatibilityExpanded.value = [];
+}
 
 // flag: suppress watch reload when guard-rejecting a product switch
 let suppressNextWatch = false;
@@ -1148,6 +1160,7 @@ async function saveCustomFieldConfig() {
               :value="p.id"
             />
           </el-select>
+          <span class="workflow-mode-hint">无需选择模式，发布时由画布自动识别</span>
         </div>
         <div class="toolbar-right">
           <!-- C4 status indicator + save button -->
@@ -1174,16 +1187,22 @@ async function saveCustomFieldConfig() {
       </div>
     </el-card>
 
-    <ProductProcessWorkflowEditor
-      class="workflow-section"
-      :factory-id="factoryId || ''"
-      :product-type-id="selectedProductId"
-      :product-name="selectedProductName"
-      :can-write="canWrite"
-      :raw-owner-mode="selectedOwnerIsRaw"
-    />
+    <section class="workflow-viewport">
+      <ProductProcessWorkflowEditor
+        class="workflow-section"
+        :factory-id="factoryId || ''"
+        :product-type-id="selectedProductId"
+        :product-name="selectedProductName"
+        :can-write="canWrite"
+        :raw-owner-mode="selectedOwnerIsRaw"
+      />
 
-    <el-collapse v-if="!selectedOwnerIsRaw" class="legacy-compatibility">
+    <el-collapse
+      v-if="!selectedOwnerIsRaw"
+      v-model="legacyCompatibilityExpanded"
+      class="legacy-compatibility"
+      data-testid="workflow-legacy-compatibility"
+    >
       <el-collapse-item name="legacy">
         <template #title>
           <div class="legacy-title">
@@ -1444,6 +1463,7 @@ async function saveCustomFieldConfig() {
     </div>
       </el-collapse-item>
     </el-collapse>
+    </section>
 
     <!-- 工序成本配置 dialog (报工自动继承) -->
     <el-dialog v-model="costDialogVisible" :title="`工序成本配置 — ${costEditName}`" width="540px">
@@ -1576,11 +1596,20 @@ async function saveCustomFieldConfig() {
 .toolbar-right { display: flex; align-items: center; gap: 8px; }
 .workflow-mode-hint { margin: 0 6px 0 4px; color: #909399; cursor: pointer; vertical-align: middle; }
 .workflow-mode-hint:hover, .workflow-mode-hint:focus { color: #409eff; outline: none; }
-.workflow-section { margin-top: 12px; }
-.legacy-compatibility { margin-top: 12px; border: 1px solid #edf2f7; border-radius: 10px; background: #fff; }
+.workflow-viewport { position: relative; isolation: isolate; margin-top: 12px; }
+.workflow-section { margin: 0; }
+.legacy-compatibility {
+  position: absolute; left: 12px; bottom: 12px; z-index: 48;
+  width: min(620px, calc(100% - 430px)); max-height: min(56%, 420px);
+  overflow: auto; border: 1px solid #edf2f7; border-radius: 10px; background: #fff;
+  box-shadow: 0 6px 24px rgb(27 101 168 / 14%);
+}
 .legacy-compatibility :deep(.el-collapse-item__header) { padding: 0 16px; border-radius: 10px; }
-.legacy-compatibility :deep(.el-collapse-item__content) { padding: 0 16px 16px; }
+.legacy-compatibility :deep(.el-collapse-item__content) { padding: 0 16px 16px; max-height: 360px; overflow: auto; }
 .legacy-title { display: flex; align-items: center; gap: 8px; color: #475467; font-weight: 600; }
+@media (max-width: 900px) {
+  .legacy-compatibility { position: relative; left: auto; bottom: auto; width: auto; max-height: none; margin-top: 12px; }
+}
 
 /* C4 status indicators */
 .dirty-indicator { font-size: 13px; color: #e6a23c; font-weight: 500; }

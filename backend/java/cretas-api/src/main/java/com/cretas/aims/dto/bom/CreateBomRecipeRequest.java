@@ -36,13 +36,10 @@ public class CreateBomRecipeRequest {
     @Schema(description = "已废弃：整体出成率由正式批次历史自动计算，人工传值会被忽略", deprecated = true)
     private BigDecimal overallYieldRate;
 
-    @Schema(description = "单份成品克数/件数 (客户: 200g/份)", required = true)
-    @NotNull(message = "单份成品量不能为空")
-    @DecimalMin(value = "0.0001", message = "单份成品量必须 > 0")
+    @Schema(description = "已废弃：每单位产出由服务端按 SKU 基本单位固定为 1", deprecated = true)
     private BigDecimal outputQuantityPerUnit;
 
-    @Schema(description = "成品计量单位", required = true, defaultValue = "g")
-    @NotBlank(message = "成品计量单位不能为空")
+    @Schema(description = "已废弃：产出单位由服务端继承 SKU canonical 基本单位", deprecated = true)
     @Size(max = 20)
     private String outputUnit;
 
@@ -71,7 +68,7 @@ public class CreateBomRecipeRequest {
         @Size(max = 191)
         private String materialTypeId;
 
-        @Schema(description = "每成品用量；RAW 只建立物料关联时可空，其他类别必须 > 0")
+        @Schema(description = "标准参考用量；RAW/AUXILIARY 可空，PACKAGING 必须 > 0")
         private BigDecimal standardQuantity;
 
         @Schema(description = "已废弃：单行出成率不由 BOM 人工维护，传值会被忽略", deprecated = true)
@@ -102,8 +99,25 @@ public class CreateBomRecipeRequest {
         private Boolean isOptional;
 
         @Schema(description = "替代分组 (同组互可替换)")
+        @Deprecated
         @Size(max = 50)
         private String substituteGroup;
+
+        @Schema(description = "当前主项允许使用的结构化替代物料；不作为额外需求重复计算")
+        @Valid
+        private List<BomSubstituteInput> substitutes;
+
+        @Schema(description = "包装规格层级ID；空表示基本销售规格")
+        @Size(max = 36)
+        private String packagingSpecId;
+
+        @Schema(description = "包材业务角色，例如 PRIMARY_CONTAINER/SEAL/OUTER_CASE")
+        @Size(max = 64)
+        private String packagingRole;
+
+        @Schema(description = "所在包装层级的自然用量，例如每箱1个外箱")
+        @Positive(message = "包材自然用量必须大于0")
+        private BigDecimal naturalQuantity;
 
         @Schema(description = "备注")
         @Size(max = 500)

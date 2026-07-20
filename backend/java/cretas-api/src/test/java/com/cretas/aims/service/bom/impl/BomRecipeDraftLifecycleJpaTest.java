@@ -11,10 +11,16 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.service.bom.BomRecipeService;
+import com.cretas.aims.service.bom.BomItemSubstituteService;
 import com.cretas.aims.service.bom.NestedBomCostService;
 import com.cretas.aims.service.uom.MaterialUomConverter;
+import com.cretas.aims.service.unit.CanonicalUnit;
 import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitDimension;
+import com.cretas.aims.service.unit.UnitNormalizationResult;
+import com.cretas.aims.service.validation.ProductConfigurationReadinessService;
 import com.cretas.aims.service.workflow.ProductWorkflowResolutionService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -41,6 +47,8 @@ import java.util.concurrent.Future;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
@@ -86,10 +94,47 @@ class BomRecipeDraftLifecycleJpaTest {
     @MockBean
     private UnitContractService unitContractService;
 
+    @MockBean
+    private ProductConfigurationReadinessService productConfigurationReadinessService;
+
+    @MockBean
+    private BomItemSubstituteService bomItemSubstituteService;
+
+    @BeforeEach
+    void stubUnitContract() {
+        when(unitContractService.normalize(anyString(), anyString())).thenAnswer(invocation -> {
+            String raw = invocation.getArgument(1);
+            String code = switch (raw) {
+                case "盒" -> "box";
+                case "袋" -> "bag";
+                case "包" -> "pack";
+                case "瓶" -> "bottle";
+                case "克" -> "g";
+                case "千克" -> "kg";
+                case "毫升" -> "ml";
+                case "升" -> "L";
+                default -> raw;
+            };
+            UnitDimension dimension = switch (code) {
+                case "g", "kg" -> UnitDimension.MASS;
+                case "ml", "L" -> UnitDimension.VOLUME;
+                default -> UnitDimension.PACKAGE;
+            };
+            return new UnitNormalizationResult(raw, code,
+                    new CanonicalUnit(code, dimension, code, BigDecimal.ONE, code, 6));
+        });
+        when(unitContractService.areEquivalent(anyString(), anyString(), anyString()))
+                .thenAnswer(invocation -> {
+                    String left = invocation.getArgument(1);
+                    String right = invocation.getArgument(2);
+                    return canonicalUnit(left).equals(canonicalUnit(right));
+                });
+    }
+
     @Test
     @DisplayName("zero versions creates an empty v1 DRAFT from SKU metadata")
     void createsEmptyFirstDraft() {
-        ProductType product = saveProduct("FIRST", "袋", new BigDecimal("500"));
+        ProductType product = saveProduct("FIRST", "盒", new BigDecimal("500"));
 
         BomRecipe draft = service.ensureDraft(product.getFactoryId(), product.getId());
 
@@ -97,9 +142,39 @@ class BomRecipeDraftLifecycleJpaTest {
         assertThat(draft.getStatus()).isEqualTo(BomRecipe.Status.DRAFT);
         assertThat(draft.getIsCurrent()).isFalse();
         assertThat(draft.getProductName()).isEqualTo(product.getName());
-        assertThat(draft.getOutputUnit()).isEqualTo("袋");
-        assertThat(draft.getOutputQuantityPerUnit()).isEqualByComparingTo("500");
+        assertThat(draft.getOutputUnit()).isEqualTo("box");
+        assertThat(draft.getOutputQuantityPerUnit()).isEqualByComparingTo("1");
+        assertThat(draft.getNetContentQuantity()).isEqualByComparingTo("500");
+        assertThat(draft.getNetContentUnit()).isEqualTo("g");
         assertThat(draft.getItems()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("volume SKU snapshots one bottle output and 500 ml net content")
+    void snapshotsVolumeSkuWithoutTurningNetContentIntoOutputQuantity() {
+        ProductType product = saveStructuredProduct(
+                "VOLUME", "瓶", new BigDecimal("500"), "ml");
+
+        BomRecipe draft = service.ensureDraft(product.getFactoryId(), product.getId());
+
+        assertThat(draft.getOutputQuantityPerUnit()).isEqualByComparingTo("1");
+        assertThat(draft.getOutputUnit()).isEqualTo("bottle");
+        assertThat(draft.getNetContentQuantity()).isEqualByComparingTo("500");
+        assertThat(draft.getNetContentUnit()).isEqualTo("ml");
+    }
+
+    @Test
+    @DisplayName("kg-base SKU still snapshots one base unit instead of its net weight")
+    void snapshotsKgBaseSkuAsOneKgUnit() {
+        ProductType product = saveStructuredProduct(
+                "KG-BASE", "kg", BigDecimal.ONE, "kg");
+
+        BomRecipe draft = service.ensureDraft(product.getFactoryId(), product.getId());
+
+        assertThat(draft.getOutputQuantityPerUnit()).isEqualByComparingTo("1");
+        assertThat(draft.getOutputUnit()).isEqualTo("kg");
+        assertThat(draft.getNetContentQuantity()).isEqualByComparingTo("1");
+        assertThat(draft.getNetContentUnit()).isEqualTo("kg");
     }
 
     @Test
@@ -204,7 +279,63 @@ class BomRecipeDraftLifecycleJpaTest {
                 .containsExactly(material.getId());
     }
 
+    @Test
+    @DisplayName("packaging item without a positive fixed quantity cannot activate")
+    void activationRejectsPackagingWithoutFixedQuantity() {
+        ProductType product = saveProduct("PACKAGING-GATE", "盒", new BigDecimal("800"));
+        BomRecipe draft = service.ensureDraft(product.getFactoryId(), product.getId());
+
+        RawMaterialType packaging = new RawMaterialType();
+        packaging.setId("PACKAGING-BOM-GATE");
+        packaging.setFactoryId(product.getFactoryId());
+        packaging.setCode("PACKAGING-GATE");
+        packaging.setName("成品盒");
+        packaging.setCategory("PACKAGING");
+        packaging.setUnit("box");
+        packaging.setIsActive(true);
+        packaging.setIsAbacaPackaging(false);
+        packaging.setCreatedBy(1L);
+        rawMaterialTypeRepository.saveAndFlush(packaging);
+
+        BomRecipeItem item = new BomRecipeItem();
+        item.setRecipeId(draft.getId());
+        item.setFactoryId(product.getFactoryId());
+        item.setMaterialTypeId(packaging.getId());
+        item.setMaterialName(packaging.getName());
+        item.setUnit("box");
+        item.setMaterialCategory("PACKAGING");
+        item.setYieldRate(new BigDecimal("100.00"));
+        item.setSortOrder(0);
+        item.setIsOptional(false);
+        item.setPerPortion(false);
+        item.setQuantityToPriceFactor(BigDecimal.ONE);
+        itemRepository.saveAndFlush(item);
+
+        assertThatThrownBy(() -> service.activateRecipe(product.getFactoryId(), draft.getId(), 1309L))
+                .hasMessageContaining("成品盒")
+                .hasMessageContaining("缺少有效数量");
+        assertThat(recipeRepository.findById(draft.getId()))
+                .hasValueSatisfying(saved -> assertThat(saved.getStatus()).isEqualTo(BomRecipe.Status.DRAFT));
+    }
+
     private ProductType saveProduct(String suffix, String unit, BigDecimal gramsPerUnit) {
+        ProductType product = newProduct(suffix, unit);
+        product.setGramsPerUnit(gramsPerUnit);
+        return productTypeRepository.saveAndFlush(product);
+    }
+
+    private ProductType saveStructuredProduct(
+            String suffix,
+            String unit,
+            BigDecimal netContentQuantity,
+            String netContentUnit) {
+        ProductType product = newProduct(suffix, unit);
+        product.setNetContentQuantity(netContentQuantity);
+        product.setNetContentUnit(netContentUnit);
+        return productTypeRepository.saveAndFlush(product);
+    }
+
+    private ProductType newProduct(String suffix, String unit) {
         jdbcTemplate.execute("SET REFERENTIAL_INTEGRITY FALSE");
         String factoryId = "F-BOM-" + suffix;
         Factory factory = new Factory();
@@ -218,9 +349,22 @@ class BomRecipeDraftLifecycleJpaTest {
         product.setCode("SKU-" + suffix);
         product.setName("测试 SKU " + suffix);
         product.setUnit(unit);
-        product.setGramsPerUnit(gramsPerUnit);
         product.setIsActive(true);
         product.setCreatedBy(1L);
-        return productTypeRepository.saveAndFlush(product);
+        return product;
+    }
+
+    private String canonicalUnit(String raw) {
+        return switch (raw) {
+            case "盒" -> "box";
+            case "袋" -> "bag";
+            case "包" -> "pack";
+            case "瓶" -> "bottle";
+            case "克" -> "g";
+            case "千克" -> "kg";
+            case "毫升" -> "ml";
+            case "升" -> "L";
+            default -> raw;
+        };
     }
 }

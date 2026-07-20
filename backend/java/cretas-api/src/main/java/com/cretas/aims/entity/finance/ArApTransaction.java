@@ -6,6 +6,7 @@ import com.cretas.aims.entity.enums.ArApApprovalStatus;
 import com.cretas.aims.entity.enums.ArApTransactionType;
 import com.cretas.aims.entity.enums.CounterpartyType;
 import com.cretas.aims.entity.enums.PaymentMethod;
+import com.cretas.aims.entity.enums.PayablePaymentStatus;
 import lombok.*;
 
 import jakarta.persistence.*;
@@ -113,6 +114,25 @@ public class ArApTransaction extends BaseEntity {
     @Column(name = "balance_after", nullable = false, precision = 15, scale = 2)
     private BigDecimal balanceAfter;
 
+    /** Amount already settled against this AP invoice. Null for non-payable ledger rows. */
+    @PriceSensitive
+    @Column(name = "settled_amount", precision = 15, scale = 2)
+    private BigDecimal settledAmount;
+
+    /** Remaining amount of this AP invoice. Null for non-payable ledger rows. */
+    @PriceSensitive
+    @Column(name = "outstanding_amount", precision = 15, scale = 2)
+    private BigDecimal outstandingAmount;
+
+    /** Settlement state of this AP invoice. Null for non-payable ledger rows. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "payment_status", length = 32)
+    private PayablePaymentStatus paymentStatus;
+
+    /** ISO-4217 currency snapshot used for fail-closed settlement matching. */
+    @Column(name = "currency_code", length = 3)
+    private String currencyCode;
+
     /** 付款方式（仅付款类交易填写） */
     @Enumerated(EnumType.STRING)
     @Column(name = "payment_method", length = 32)
@@ -151,4 +171,9 @@ public class ArApTransaction extends BaseEntity {
 
     @Column(name = "approved_at")
     private LocalDateTime approvedAt;
+
+    /** Optimistic-lock fallback in addition to the settlement row lock. */
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
 }

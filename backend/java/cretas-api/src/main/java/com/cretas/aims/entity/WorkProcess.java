@@ -8,6 +8,7 @@ import org.hibernate.annotations.Type;
 import org.hibernate.annotations.Where;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -40,6 +41,8 @@ public class WorkProcess extends BaseEntity {
     @Column(name = "description", length = 500)
     private String description;
 
+    /** Legacy compatibility only. Units belong to Workflow node snapshots. */
+    @Deprecated
     @Column(name = "unit", nullable = false, length = 20)
     @Builder.Default
     private String unit = "kg";
@@ -47,6 +50,8 @@ public class WorkProcess extends BaseEntity {
     @Column(name = "estimated_minutes")
     private Integer estimatedMinutes;
 
+    /** Legacy compatibility only. Execution order belongs to Workflow steps. */
+    @Deprecated
     @Column(name = "sort_order")
     @Builder.Default
     private Integer sortOrder = 0;
@@ -69,8 +74,32 @@ public class WorkProcess extends BaseEntity {
     private Boolean needsInput = true;
 
     /** 产出单位 (kg→盒; 为空沿用 unit) */
+    /** Legacy compatibility only. Output units belong to Workflow node snapshots. */
+    @Deprecated
     @Column(name = "output_unit", length = 20)
     private String outputUnit;
+
+    /** Canonical process offered for future selection after duplicate governance. */
+    @Column(name = "merged_into_id", length = 50)
+    private String mergedIntoId;
+
+    @Column(name = "merged_at")
+    private LocalDateTime mergedAt;
+
+    @Column(name = "merged_by", length = 100)
+    private String mergedBy;
+
+    @Column(name = "governance_reason", length = 500)
+    private String governanceReason;
+
+    @Version
+    @Column(name = "lock_version", nullable = false)
+    @Builder.Default
+    private Long lockVersion = 0L;
+
+    public boolean isSelectableForNew() {
+        return Boolean.TRUE.equals(isActive) && mergedIntoId == null;
+    }
 
     @Enumerated(EnumType.STRING)
     @Column(

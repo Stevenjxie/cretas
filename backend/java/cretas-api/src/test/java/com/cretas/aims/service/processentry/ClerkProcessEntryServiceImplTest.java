@@ -439,6 +439,105 @@ class ClerkProcessEntryServiceImplTest {
                 .isEqualByComparingTo("600.00");
     }
 
+    @Test
+    @DisplayName("WIP identity deep contract: A+C → B,D keeps both provenance edges and ignores input order")
+    void multiInputMultiOutput_wipIdentityComesFromEachOutput() {
+        stubNoIdempotency("WIP-IDENTITY-2X2");
+        stubPlan();
+        stubWarehouse();
+        stubBatchSave();
+        stubMbSave();
+        stubConsumptionSave();
+        stubIdempotencySave();
+        stubNoRecipe();
+
+        MaterialBatch rawA = rawMb("RAW-IDENTITY-A", FACTORY, new BigDecimal("10"));
+        rawA.setMaterialTypeId("RAW-SKU-A");
+        MaterialBatch rawC = rawMb("RAW-IDENTITY-C", FACTORY, new BigDecimal("8"));
+        rawC.setMaterialTypeId("RAW-SKU-C");
+        when(materialBatchRepo.findByIdAndFactoryId("RAW-IDENTITY-A", FACTORY))
+                .thenReturn(Optional.of(rawA));
+        when(materialBatchRepo.findByIdAndFactoryId("RAW-IDENTITY-C", FACTORY))
+                .thenReturn(Optional.of(rawC));
+
+        BatchEntry inputA = wipBatch("A", "PT-A", List.of(
+                rawStep(1, "60", "60", List.of(rawInput("RAW-IDENTITY-A", "60")))
+        ));
+        BatchEntry inputC = wipBatch("C", "PT-C", List.of(
+                rawStep(1, "40", "40", List.of(rawInput("RAW-IDENTITY-C", "40")))
+        ));
+        BatchEntry outputB = wipBatch("B", "PT-B", List.of(
+                blendStep(2, "100", "90", List.of(
+                        upstreamSource("A", "60"),
+                        upstreamSource("C", "40")))
+        ));
+        BatchEntry outputD = wipBatch("D", "PT-D", List.of(
+                blendStep(2, "100", "88", List.of(
+                        upstreamSource("C", "40"),
+                        upstreamSource("A", "60")))
+        ));
+
+        ProcessChainEntryResult result = service.recordChain(
+                FACTORY, PLAN_ID,
+                req("WIP-IDENTITY-2X2", List.of(inputA, inputC, outputB, outputD)),
+                OPERATOR_ID);
+
+        ArgumentCaptor<MaterialBatch> wipCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(materialBatchRepo, times(4)).save(wipCaptor.capture());
+        List<MaterialBatch> savedWips = wipCaptor.getAllValues();
+        MaterialBatch wipA = savedWips.stream()
+                .filter(batch -> "PT-A".equals(batch.getMaterialTypeId()))
+                .findFirst().orElseThrow();
+        MaterialBatch wipC = savedWips.stream()
+                .filter(batch -> "PT-C".equals(batch.getMaterialTypeId()))
+                .findFirst().orElseThrow();
+        assertThat(savedWips).extracting(MaterialBatch::getMaterialTypeId)
+                .as("A/C are inputs; B/D identities still come from their own output objects")
+                .containsExactly("PT-A", "PT-C", "PT-B", "PT-D")
+                .doesNotContain("RAW-SKU-A", "RAW-SKU-C");
+
+        ArgumentCaptor<MaterialConsumption> provenanceCaptor =
+                ArgumentCaptor.forClass(MaterialConsumption.class);
+        verify(consumptionRepo, times(6)).save(provenanceCaptor.capture());
+        List<MaterialConsumption> bProvenance = provenanceCaptor.getAllValues().stream()
+                .filter(edge -> result.getBatchIdsByKey().get("B").equals(edge.getProductionBatchId()))
+                .toList();
+        List<MaterialConsumption> dProvenance = provenanceCaptor.getAllValues().stream()
+                .filter(edge -> result.getBatchIdsByKey().get("D").equals(edge.getProductionBatchId()))
+                .toList();
+        assertThat(bProvenance).extracting(MaterialConsumption::getBatchId)
+                .as("B keeps A,C provenance in submitted order")
+                .containsExactly(wipA.getId(), wipC.getId());
+        assertThat(dProvenance).extracting(MaterialConsumption::getBatchId)
+                .as("D keeps the same provenance even when inputs are reversed")
+                .containsExactly(wipC.getId(), wipA.getId());
+        assertThat(bProvenance).allMatch(edge -> "SEMI_FINISHED".equals(edge.getSourceType()));
+        assertThat(dProvenance).allMatch(edge -> "SEMI_FINISHED".equals(edge.getSourceType()));
+    }
+
+    @Test
+    @DisplayName("WIP identity fail-closed: missing output product never falls back to first raw input")
+    void missingWipOutputIdentity_failsBeforeAnyWrite() {
+        stubNoIdempotency("WIP-IDENTITY-MISSING");
+        stubPlan();
+
+        BatchEntry missing = wipBatch("B", "  ", List.of(
+                rawStep(1, "10", "9", List.of(rawInput("RAW-WOULD-BE-FIRST", "10")))
+        ));
+
+        assertThatThrownBy(() -> service.recordChain(
+                FACTORY, PLAN_ID, req("WIP-IDENTITY-MISSING", List.of(missing)), OPERATOR_ID))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> {
+                    BusinessException business = (BusinessException) error;
+                    assertThat(business.getCode()).isEqualTo(400);
+                    assertThat(business.getErrorCode()).isEqualTo("WIP_OUTPUT_MATERIAL_IDENTITY_REQUIRED");
+                });
+        verify(batchRepo, never()).save(any());
+        verify(materialBatchRepo, never()).save(any());
+        verify(consumptionRepo, never()).save(any());
+    }
+
     /**
      * T3 — 幂等重放.
      *

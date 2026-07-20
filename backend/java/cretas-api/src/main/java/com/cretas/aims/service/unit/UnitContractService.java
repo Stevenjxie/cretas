@@ -9,11 +9,15 @@ public interface UnitContractService {
 
     List<CanonicalUnit> catalog(String factoryId);
 
+    List<CanonicalUnit> catalog(String factoryId, UnitUsageScope usageScope);
+
     UnitNormalizationResult normalize(String factoryId, String rawUnit);
 
     Optional<CanonicalUnit> describe(String factoryId, String rawUnit);
 
     boolean areEquivalent(String factoryId, String leftUnit, String rightUnit);
+
+    boolean supportsUsage(String factoryId, String rawUnit, UnitUsageScope usageScope);
 
     UnitConversionResult convert(UnitConversionContext context);
 

@@ -43,6 +43,22 @@ public class ProductProcessWorkflowCatalogValidator {
             String factoryId,
             String productTypeId,
             ProductProcessWorkflowDTO definition) {
+        validateStructureCatalog(factoryId, productTypeId, definition, true);
+    }
+
+    /** Catalog validation used before BOM configuration; it must not require ACTIVE BOM. */
+    public void validateForBomConfiguration(
+            String factoryId,
+            String productTypeId,
+            ProductProcessWorkflowDTO definition) {
+        validateStructureCatalog(factoryId, productTypeId, definition, false);
+    }
+
+    private void validateStructureCatalog(
+            String factoryId,
+            String productTypeId,
+            ProductProcessWorkflowDTO definition,
+            boolean requireActiveBom) {
         Map<String, ProductProcessWorkflowDTO.Node> nodesById = definition.getNodes().stream()
                 .collect(Collectors.toMap(
                         ProductProcessWorkflowDTO.Node::getId,
@@ -159,7 +175,9 @@ public class ProductProcessWorkflowCatalogValidator {
         validateMaterialProducers(definition, outputBindingsByMaterialId);
         List<OutputBinding> outputBindings = new ArrayList<>(outputBindingsByMaterialId.values());
         validateOutputSkus(factoryId, productTypeId, outputBindings);
-        validateFinishedOutputBoms(factoryId, outputBindings);
+        if (requireActiveBom) {
+            validateFinishedOutputBoms(factoryId, outputBindings);
+        }
         // Terminal/root counts are graph properties. productTypeId remains a legacy
         // persistence anchor and no longer constrains the graph's topology.
     }

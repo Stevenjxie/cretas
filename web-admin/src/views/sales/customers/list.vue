@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, reactive } from 'vue';
-import { useRouter } from 'vue-router';
+import { ref, computed, nextTick, onMounted, reactive } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put, del } from '@/api/request';
@@ -12,6 +12,15 @@ import type { FieldConfig } from '@/config/entityFieldConfigs';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import CreditPanel from './components/CreditPanel.vue';
 import type { TableRow } from '@/types/api';
+import {
+  CUSTOMER_ADVANCED_FIELDS,
+  CUSTOMER_TYPE_OPTIONS,
+  countFilledCustomerAdvancedFields,
+  customerTypeLabel,
+  isCustomerAdvancedField,
+  isSupportedCustomerPhone,
+  normalizeCustomerPayload,
+} from './customerFormModel';
 
 // P1 #23 S-CREDIT-1 — 信用状态映射
 type CreditStatusValue = 'NORMAL' | 'WARNING' | 'SUSPENDED';
@@ -54,21 +63,46 @@ const customerExtendedFields: FieldConfig[] = [
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const router = useRouter();
+const route = useRoute();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('sales'));
 
 const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
-const pagination = ref({ page: 1, size: 10, total: 0 });
-const searchKeyword = ref('');
+const pagination = ref({ page: Math.max(1, Number(route.query.page) || 1), size: Math.max(1, Number(route.query.size) || 10), total: 0 });
+const searchKeyword = ref(String(route.query.keyword || ''));
 // Sprint 4 W2 S-CRM-FULL-1 — list filters (R3 dropdown, 任一为空 = 不过滤)
-const filterCustomerStatus = ref<CustomerStatusValue | ''>('');
-const filterImportance = ref<CustomerImportanceValue | ''>('');
-const filterSource = ref<CustomerSourceValue | ''>('');
+const filterCustomerStatus = ref<CustomerStatusValue | ''>((route.query.customerStatus as CustomerStatusValue) || '');
+const filterImportance = ref<CustomerImportanceValue | ''>((route.query.importance as CustomerImportanceValue) || '');
+const filterSource = ref<CustomerSourceValue | ''>((route.query.source as CustomerSourceValue) || '');
+const filterCustomerType = ref(String(route.query.customerType || ''));
+const advancedFiltersVisible = ref(Boolean(filterCustomerStatus.value || filterImportance.value || filterSource.value));
 
-onMounted(() => {
-  loadData();
+onMounted(async () => {
+  await loadData();
+  const scrollY = Math.max(0, Number(route.query.scrollY) || 0);
+  if (scrollY) {
+    await nextTick();
+    window.scrollTo({ top: scrollY });
+  }
 });
+
+function listRouteQuery(includeScroll = false): Record<string, string> {
+  const query: Record<string, string> = {};
+  if (pagination.value.page !== 1) query.page = String(pagination.value.page);
+  if (pagination.value.size !== 10) query.size = String(pagination.value.size);
+  if (searchKeyword.value.trim()) query.keyword = searchKeyword.value.trim();
+  if (filterCustomerType.value) query.customerType = filterCustomerType.value;
+  if (filterCustomerStatus.value) query.customerStatus = filterCustomerStatus.value;
+  if (filterImportance.value) query.importance = filterImportance.value;
+  if (filterSource.value) query.source = filterSource.value;
+  if (includeScroll && window.scrollY > 0) query.scrollY = String(Math.round(window.scrollY));
+  return query;
+}
+
+async function syncListRoute(includeScroll = false): Promise<void> {
+  await router.replace({ path: '/sales/customers', query: listRouteQuery(includeScroll) });
+}
 
 async function loadData() {
   if (!factoryId.value) return;
@@ -80,6 +114,7 @@ async function loadData() {
         page: pagination.value.page,
         size: pagination.value.size,
         keyword: searchKeyword.value || undefined,
+        type: filterCustomerType.value || undefined,
         // Sprint 4 W2 S-CRM-FULL-1 — 3 个 CRM 过滤器 (空字符串 → undefined → 后端 IS NULL 分支)
         customerStatus: filterCustomerStatus.value || undefined,
         importance: filterImportance.value || undefined,
@@ -100,29 +135,35 @@ async function loadData() {
   }
 }
 
-function handleSearch() {
+async function handleSearch() {
   pagination.value.page = 1;
-  loadData();
+  await syncListRoute();
+  await loadData();
 }
 
-function handleRefresh() {
+async function handleRefresh() {
   searchKeyword.value = '';
   filterCustomerStatus.value = '';
   filterImportance.value = '';
   filterSource.value = '';
+  filterCustomerType.value = '';
+  advancedFiltersVisible.value = false;
   pagination.value.page = 1;
-  loadData();
+  await syncListRoute();
+  await loadData();
 }
 
-function handlePageChange(page: number) {
+async function handlePageChange(page: number) {
   pagination.value.page = page;
-  loadData();
+  await syncListRoute();
+  await loadData();
 }
 
-function handleSizeChange(size: number) {
+async function handleSizeChange(size: number) {
   pagination.value.size = size;
   pagination.value.page = 1;
-  loadData();
+  await syncListRoute();
+  await loadData();
 }
 
 // Dialog state
@@ -130,6 +171,7 @@ const dialogVisible = ref(false);
 const dialogMode = ref<'add' | 'edit' | 'view'>('add');
 const formRef = ref<FormInstance>();
 const submitting = ref(false);
+const advancedSections = ref<string[]>([]);
 
 const defaultForm = {
   id: '',
@@ -144,27 +186,52 @@ const defaultForm = {
   notes: '',
   status: 'ACTIVE',  // T10: status field default
   // Sprint 4 W2 S-CRM-FULL-1 — 4 CRM 字段 (新增/编辑 dialog 内)
-  customerStatus: 'LEAD' as CustomerStatusValue,
-  importance: 'NORMAL' as CustomerImportanceValue,
+  customerStatus: '' as CustomerStatusValue | '',
+  importance: '' as CustomerImportanceValue | '',
   source: '' as CustomerSourceValue | '',
   lastContactedAt: null as string | null,
   // Sprint 4 W2 S-INVOICE-CLIENT-1 — 客户级开票默认 (Option 3 三层链第 1 层)
   defaultTaxRate: null as number | null,
   defaultInvoiceType: '' as InvoiceTypeValue | '',
   // P1 #23 S-CREDIT-1 — 信用状态 (creditLimit/creditPeriodDays 走 extendedFields)
-  creditStatus: 'NORMAL' as CreditStatusValue,
+  creditStatus: '' as CreditStatusValue | '',
   version: null as number | null,  // optimistic lock — echoed on PUT, server returns 409 on mismatch
 };
 const formData = reactive({ ...defaultForm });
 
+function requiredTextRule(label: string) {
+  return {
+    validator: (_rule: unknown, value: unknown, callback: (error?: Error) => void) => {
+      if (!String(value ?? '').trim()) callback(new Error(`请输入${label}`));
+      else callback();
+    },
+    trigger: ['blur', 'change'],
+  };
+}
+
 const formRules = {
-  // T10 / spec P2.1: only customer name remains required; contact info optional per docx feedback
-  name: [{ required: true, message: '请输入客户名称', trigger: 'blur' }],
+  name: [requiredTextRule('客户名称')],
+  contactPerson: [requiredTextRule('联系人')],
   phone: [
-    // Format check kept; required removed per docx P2.1
-    { pattern: /^1[3-9]\d{9}$|^0\d{2,3}-?\d{7,8}$/, message: '请输入正确的手机号或座机号', trigger: 'blur' },
+    requiredTextRule('联系电话'),
+    {
+      validator: (_rule: unknown, value: unknown, callback: (error?: Error) => void) => {
+        if (!String(value ?? '').trim() || isSupportedCustomerPhone(value)) callback();
+        else callback(new Error('支持手机号、企业座机/分机或国际电话号码'));
+      },
+      trigger: ['blur', 'change'],
+    },
   ],
+  shippingAddress: [requiredTextRule('收货地址')],
+  status: [{ required: true, message: '请选择客户状态', trigger: 'change' }],
+  email: [{ type: 'email', message: '请输入有效邮箱地址', trigger: ['blur', 'change'] }],
 };
+
+const advancedFieldKeys = Array.from(new Set([
+  ...CUSTOMER_ADVANCED_FIELDS,
+  ...customerExtendedFields.map((field) => field.key),
+]));
+const advancedFilledCount = computed(() => countFilledCustomerAdvancedFields(formData as TableRow, advancedFieldKeys));
 
 const dialogTitle = computed(() => {
   // S-CRM-FULL-1 防呆 R2: edit/view dialog title 必带客户身份信息 (name + code)
@@ -179,13 +246,25 @@ const isViewMode = computed(() => dialogMode.value === 'view');
 
 function handleAdd() {
   dialogMode.value = 'add';
-  Object.assign(formData, defaultForm);
+  Object.assign(
+    formData,
+    defaultForm,
+    Object.fromEntries(customerExtendedFields.map((field): [string, null] => [field.key, null])),
+  );
+  advancedSections.value = [];
   dialogVisible.value = true;
+  void nextTick(() => formRef.value?.clearValidate());
 }
 
-function handleView(row: TableRow) {
+async function handleView(row: TableRow) {
   // Bug #6 fix: 跳转到 21-tab 客户 360° 详情页, 而非打开 basic dialog
-  router.push({ name: 'SalesCustomerDetail', params: { id: row.id as string } });
+  await syncListRoute(true);
+  const returnTarget = router.resolve({ path: '/sales/customers', query: listRouteQuery(true) }).fullPath;
+  await router.push({
+    name: 'SalesCustomerDetail',
+    params: { id: row.id as string },
+    query: { from: returnTarget },
+  });
 }
 
 function handleEdit(row: TableRow) {
@@ -204,49 +283,42 @@ function handleEdit(row: TableRow) {
     notes: row.notes || '',
     status: (row.status as string) || 'ACTIVE',  // T10
     // Sprint 4 W2 S-CRM-FULL-1
-    customerStatus: (row.customerStatus as CustomerStatusValue) || 'LEAD',
-    importance: (row.importance as CustomerImportanceValue) || 'NORMAL',
+    customerStatus: (row.customerStatus as CustomerStatusValue) || '',
+    importance: (row.importance as CustomerImportanceValue) || '',
     source: (row.source as CustomerSourceValue) || '',
     lastContactedAt: (row.lastContactedAt as string) || null,
     // Sprint 4 W2 S-INVOICE-CLIENT-1
     defaultTaxRate: (row.defaultTaxRate as number | null) ?? null,
     defaultInvoiceType: (row.defaultInvoiceType as InvoiceTypeValue) || '',
     // P1 #23 S-CREDIT-1
-    creditStatus: (row.creditStatus as CreditStatusValue) || 'NORMAL',
+    creditStatus: (row.creditStatus as CreditStatusValue) || '',
+    ...Object.fromEntries(customerExtendedFields.map((field) => [field.key, row[field.key] ?? null] as const)),
   });
+  advancedSections.value = [];
   dialogVisible.value = true;
+  void nextTick(() => formRef.value?.clearValidate());
 }
 
 async function handleSubmit() {
-  if (!formRef.value) return;
-  await formRef.value.validate();
+  if (!formRef.value || submitting.value) return;
+  try {
+    await formRef.value.validate();
+  } catch (fields) {
+    const invalidFields = Object.keys((fields as Record<string, unknown>) || {});
+    const advancedInvalid = invalidFields.find(isCustomerAdvancedField);
+    if (advancedInvalid) {
+      advancedSections.value = ['advanced'];
+      await nextTick();
+      formRef.value?.scrollToField(advancedInvalid);
+    }
+    return;
+  }
   submitting.value = true;
   try {
-    const payload: TableRow = {
-      name: formData.name,
-      contactPerson: formData.contactPerson,
-      phone: formData.phone,
-      shippingAddress: formData.shippingAddress,
-      email: formData.email || undefined,
-      type: formData.type || undefined,
-      industry: formData.industry || undefined,
-      notes: formData.notes || undefined,
-      status: formData.status,  // T10: P2.2 状态可编辑
-      // Sprint 4 W2 S-CRM-FULL-1
-      customerStatus: formData.customerStatus,
-      importance: formData.importance,
-      source: formData.source || undefined,
-      lastContactedAt: formData.lastContactedAt || undefined,
-      // Sprint 4 W2 S-INVOICE-CLIENT-1
-      defaultTaxRate: formData.defaultTaxRate ?? undefined,
-      defaultInvoiceType: formData.defaultInvoiceType || undefined,
-      // P1 #23 S-CREDIT-1
-      creditStatus: formData.creditStatus || undefined,
-      // 扩展字段自动收集
-      ...Object.fromEntries(
-        customerExtendedFields.map(f => [f.key, (formData as TableRow)[f.key] ?? null])
-      ),
-    };
+    const payload: TableRow = normalizeCustomerPayload(
+      formData as TableRow,
+      customerExtendedFields.map((field) => field.key),
+    );
     let res;
     if (dialogMode.value === 'add') {
       res = await post(`/${factoryId.value}/customers`, payload);
@@ -341,10 +413,23 @@ async function handleDelete(row: TableRow) {
           style="width: 240px"
           @keyup.enter="handleSearch"
         />
-        <!-- Sprint 4 W2 S-CRM-FULL-1 — 防呆 R3: 3 个 enum-based filter dropdown -->
         <el-select
+          v-model="filterCustomerType"
+          placeholder="全部客户类型"
+          clearable
+          style="width: 150px"
+          @change="handleSearch"
+        >
+          <el-option v-for="opt in CUSTOMER_TYPE_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
+        </el-select>
+        <el-button plain @click="advancedFiltersVisible = !advancedFiltersVisible">
+          {{ advancedFiltersVisible ? '收起高级筛选' : '高级筛选' }}
+        </el-button>
+        <!-- CRM 字段降级为高级筛选，避免列表默认界面混淆客户类型与生命周期。 -->
+        <el-select
+          v-if="advancedFiltersVisible"
           v-model="filterCustomerStatus"
-          placeholder="全部状态"
+          placeholder="全部生命周期"
           clearable
           style="width: 150px"
           @change="handleSearch"
@@ -357,6 +442,7 @@ async function handleDelete(row: TableRow) {
           />
         </el-select>
         <el-select
+          v-if="advancedFiltersVisible"
           v-model="filterImportance"
           placeholder="全部重要度"
           clearable
@@ -371,6 +457,7 @@ async function handleDelete(row: TableRow) {
           />
         </el-select>
         <el-select
+          v-if="advancedFiltersVisible"
           v-model="filterSource"
           placeholder="全部来源"
           clearable
@@ -403,18 +490,8 @@ async function handleDelete(row: TableRow) {
             </el-tag>
           </template>
         </el-table-column>
-        <!-- Sprint 4 W2 S-CRM-FULL-1 — 3 个 CRM 列 (R2 visibility) -->
-        <el-table-column label="生命周期" width="100" align="center">
-          <template #default="{ row }">
-            <el-tag
-              v-if="getCustomerStatusOption(row.customerStatus as string)"
-              :type="getCustomerStatusOption(row.customerStatus as string)?.tagType"
-              size="small"
-            >
-              {{ getCustomerStatusOption(row.customerStatus as string)?.label }}
-            </el-tag>
-            <span v-else class="cell-empty">未分类</span>
-          </template>
+        <el-table-column label="客户类型" width="110" align="center">
+          <template #default="{ row }">{{ customerTypeLabel(row.type) }}</template>
         </el-table-column>
         <el-table-column label="重要度" width="80" align="center">
           <template #default="{ row }">
@@ -468,7 +545,7 @@ async function handleDelete(row: TableRow) {
       </div>
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="640px" destroy-on-close>
+    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="min(720px, calc(100vw - 24px))" destroy-on-close>
       <!-- P1 #23 S-CREDIT-1: view/edit 模式下 mount 信用面板 (在 context bar 之上) -->
       <CreditPanel
         v-if="dialogMode !== 'add' && formData.id"
@@ -501,23 +578,20 @@ async function handleDelete(row: TableRow) {
       </div>
 
       <el-form ref="formRef" :model="formData" :rules="formRules" label-width="90px" :disabled="isViewMode">
-        <el-form-item label="客户名称" prop="name">
+        <el-form-item label="客户名称" prop="name" required>
           <el-input v-model="formData.name" placeholder="请输入客户名称" />
         </el-form-item>
-        <el-form-item label="联系人" prop="contactPerson">
+        <el-form-item label="联系人" prop="contactPerson" required>
           <el-input v-model="formData.contactPerson" placeholder="请输入联系人" />
         </el-form-item>
-        <el-form-item label="联系电话" prop="phone">
+        <el-form-item label="联系电话" prop="phone" required>
           <el-input v-model="formData.phone" placeholder="请输入联系电话" />
         </el-form-item>
-        <el-form-item label="邮箱" prop="email">
-          <el-input v-model="formData.email" placeholder="请输入邮箱" />
-        </el-form-item>
-        <el-form-item label="收货地址" prop="shippingAddress">
+        <el-form-item label="收货地址" prop="shippingAddress" required>
           <el-input v-model="formData.shippingAddress" placeholder="请输入收货地址" type="textarea" :rows="2" />
         </el-form-item>
         <!-- T10 P2.2: status field editable in form (was view-only via list column badge) -->
-        <el-form-item label="状态" prop="status">
+        <el-form-item label="状态" prop="status" required>
           <el-select v-model="formData.status" :disabled="isViewMode" style="width: 100%">
             <el-option label="合作中" value="ACTIVE" />
             <el-option label="已停用" value="INACTIVE" />
@@ -525,20 +599,27 @@ async function handleDelete(row: TableRow) {
         </el-form-item>
         <el-form-item label="客户类型" prop="type">
           <el-select v-model="formData.type" placeholder="请选择客户类型" clearable style="width: 100%">
-            <el-option label="经销商" value="DEALER" />
-            <el-option label="零售商" value="RETAILER" />
-            <el-option label="餐饮企业" value="RESTAURANT" />
-            <el-option label="企业客户" value="ENTERPRISE" />
+            <el-option v-for="opt in CUSTOMER_TYPE_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
           </el-select>
-        </el-form-item>
-        <el-form-item label="所属行业" prop="industry">
-          <el-input v-model="formData.industry" placeholder="请输入所属行业" />
         </el-form-item>
         <el-form-item label="备注" prop="notes">
           <el-input v-model="formData.notes" placeholder="请输入备注" type="textarea" :rows="2" />
         </el-form-item>
 
-        <!-- Sprint 4 W2 S-CRM-FULL-1 — 4 CRM 字段 (R3 全 dropdown, R2 选项 label 带具体释义) -->
+        <el-collapse v-model="advancedSections" class="advanced-collapse">
+          <el-collapse-item name="advanced">
+            <template #title>
+              <span class="advanced-title">高级资料</span>
+              <el-tag v-if="advancedFilledCount" size="small" type="info">已填 {{ advancedFilledCount }} 项</el-tag>
+              <span v-else class="advanced-empty">选填</span>
+            </template>
+        <el-form-item label="邮箱" prop="email">
+          <el-input v-model="formData.email" placeholder="请输入邮箱" />
+        </el-form-item>
+        <el-form-item label="所属行业" prop="industry">
+          <el-input v-model="formData.industry" placeholder="请输入所属行业" />
+        </el-form-item>
+
         <el-divider content-position="left">CRM 跟进</el-divider>
         <el-form-item label="生命周期" prop="customerStatus">
           <el-select v-model="formData.customerStatus" placeholder="请选择客户生命周期阶段" style="width: 100%">
@@ -638,6 +719,8 @@ async function handleDelete(row: TableRow) {
           :columns="2"
           label-width="110px"
         />
+          </el-collapse-item>
+        </el-collapse>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">{{ isViewMode ? '关闭' : '取消' }}</el-button>
@@ -757,6 +840,11 @@ async function handleDelete(row: TableRow) {
   color: var(--text-color-disabled, #c0c4cc);
   font-size: 12px;
 }
+
+.advanced-collapse { margin-top: 12px; border-top: 1px solid var(--el-border-color-lighter); }
+.advanced-title { margin-right: 8px; font-weight: 600; color: var(--el-text-color-primary); }
+.advanced-empty { color: var(--el-text-color-secondary); font-size: 12px; }
+.advanced-collapse :deep(.el-collapse-item__content) { padding: 8px 4px 2px; }
 
 /* Sprint 4 W2 S-INVOICE-CLIENT-1 — form hint under input */
 .form-hint {

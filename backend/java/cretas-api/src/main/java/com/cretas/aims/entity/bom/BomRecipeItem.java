@@ -116,6 +116,35 @@ public class BomRecipeItem extends BaseEntity {
     @Column(name = "substitute_group", length = 50)
     private String substituteGroup;
 
+    /**
+     * Packaging level identity. {@code null} means the SKU base selling unit;
+     * a non-null value points to the snapshotted ProductPackagingSpec level.
+     */
+    @Column(name = "packaging_spec_id", length = 36)
+    private String packagingSpecId;
+
+    @Column(name = "packaging_spec_name_snapshot", length = 100)
+    private String packagingSpecNameSnapshot;
+
+    @Column(name = "packaging_role", length = 64)
+    private String packagingRole;
+
+    /** Natural business expression, e.g. 1 outer carton per case. */
+    @Column(name = "natural_quantity", precision = 15, scale = 6)
+    private BigDecimal naturalQuantity;
+
+    @Column(name = "natural_unit", length = 20)
+    private String naturalUnit;
+
+    @Column(name = "packaging_package_unit_snapshot", length = 20)
+    private String packagingPackageUnitSnapshot;
+
+    @Column(name = "packaging_base_unit_snapshot", length = 20)
+    private String packagingBaseUnitSnapshot;
+
+    @Column(name = "packaging_conversion_factor_snapshot", precision = 20, scale = 8)
+    private BigDecimal packagingConversionFactorSnapshot;
+
     @Column(name = "remark", length = 500)
     private String remark;
 
@@ -207,7 +236,9 @@ public class BomRecipeItem extends BaseEntity {
     @PriceSensitive
     public BigDecimal computeItemCost() {
         if (standardQuantity == null) {
-            return BigDecimal.ZERO;
+            // 原料/辅料可仅维护配方资格，实际用量由计划与正式报工记录。
+            // 未配置参考用量时成本是“尚未归集”，不能伪装成 0 元。
+            return null;
         }
         BigDecimal factor = quantityToPriceFactor != null ? quantityToPriceFactor : BigDecimal.ONE;
         return CostRollupUtil.calcItemCost(calculateActualQuantity().multiply(factor), unitPrice);

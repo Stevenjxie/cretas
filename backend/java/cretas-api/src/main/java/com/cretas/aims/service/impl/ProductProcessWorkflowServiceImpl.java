@@ -7,18 +7,22 @@ import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.dto.ProductProcessWorkflowVersionSummaryDTO;
 import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.ProductProcessWorkflowActivation;
+import com.cretas.aims.entity.ProductProcessWorkflowRevision;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.ProductCategory;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductProcessWorkflowActivationRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
+import com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.service.ProductProcessWorkflowService;
+import com.cretas.aims.service.bom.BomWorkflowRevisionService;
 import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
+import com.cretas.aims.service.workflow.WorkflowRevisionSnapshotService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,6 +37,9 @@ import java.util.stream.Collectors;
 public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflowService {
 
     private final ProductProcessWorkflowRepository repository;
+    private final ProductProcessWorkflowRevisionRepository revisionRepository;
+    private final WorkflowRevisionSnapshotService revisionSnapshotService;
+    private final BomWorkflowRevisionService bomWorkflowRevisionService;
     private final ProductProcessWorkflowActivationRepository activationRepository;
     private final ObjectMapper objectMapper;
     private final ProductProcessWorkflowValidator validator;
@@ -87,6 +94,10 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         entity.setNodesJson(writeJson(definition.getNodes()));
         entity.setEdgesJson(writeJson(definition.getEdges()));
         entity.setViewportJson(writeJson(definition.getViewport()));
+        entity = repository.saveAndFlush(entity);
+        ProductProcessWorkflowRevision revision = revisionSnapshotService.capture(entity);
+        entity.setCurrentRevisionId(revision.getId());
+        entity.setCurrentRevisionHash(revision.getRevisionHash());
         ProductProcessWorkflowDTO saved = toDTO(repository.saveAndFlush(entity));
         saved.setUnitWarnings(definition.getUnitWarnings());
         return saved;
@@ -111,8 +122,17 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         validator.validateForPublish(definition);
         catalogValidator.validateForPublish(factoryId, productTypeId, definition);
         unitValidator.validateForPublish(factoryId, definition);
+        ProductProcessWorkflowRevision revision = requireCurrentRevision(draft);
+        if (!Boolean.TRUE.equals(revision.getStructurallyComplete())) {
+            throw new BusinessException(409, "当前 Workflow 保存修订结构不完整")
+                    .withCode("PRODUCT_PROCESS_WORKFLOW_REVISION_INCOMPLETE")
+                    .withHint(revision.getValidationMessage());
+        }
+        bomWorkflowRevisionService.requireActiveBomPinsRevision(factoryId, productTypeId, revision);
         draft.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
         draft.setUnitReviewRequired(false);
+        revision.setStatus(ProductProcessWorkflowRevision.Status.PUBLISHED);
+        revisionRepository.save(revision);
         return toDTO(repository.saveAndFlush(draft));
     }
 
@@ -145,6 +165,10 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         snapshot.setEdgesJson(draft.getEdgesJson());
         snapshot.setViewportJson(draft.getViewportJson());
         snapshot.setUnitReviewRequired(draft.getUnitReviewRequired());
+        snapshot = repository.saveAndFlush(snapshot);
+        ProductProcessWorkflowRevision snapshotRevision = revisionSnapshotService.capture(snapshot);
+        snapshot.setCurrentRevisionId(snapshotRevision.getId());
+        snapshot.setCurrentRevisionHash(snapshotRevision.getRevisionHash());
         repository.saveAndFlush(snapshot);
 
         draft.setDefinitionVersion(draft.getDefinitionVersion() + 1);
@@ -258,6 +282,8 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         dto.setStatus(entity.getStatus().name());
         dto.setVersion(entity.getDefinitionVersion());
         dto.setLockVersion(entity.getLockVersion());
+        dto.setRevisionId(entity.getCurrentRevisionId());
+        dto.setRevisionHash(entity.getCurrentRevisionHash());
         dto.setUnitReviewRequired(entity.getUnitReviewRequired());
         dto.setNodes(readJson(
                 entity.getNodesJson(),
@@ -272,6 +298,21 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
                 new TypeReference<ProductProcessWorkflowDTO.Viewport>() {},
                 "viewport"));
         return dto;
+    }
+
+    private ProductProcessWorkflowRevision requireCurrentRevision(ProductProcessWorkflow workflow) {
+        Long revisionId = workflow.getCurrentRevisionId();
+        if (revisionId == null) {
+            ProductProcessWorkflowRevision revision = revisionSnapshotService.capture(workflow);
+            workflow.setCurrentRevisionId(revision.getId());
+            workflow.setCurrentRevisionHash(revision.getRevisionHash());
+            return revision;
+        }
+        return revisionRepository.findByIdAndFactoryId(revisionId, workflow.getFactoryId())
+                .filter(revision -> workflow.getId().equals(revision.getWorkflowId()))
+                .filter(revision -> workflow.getProductTypeId().equals(revision.getProductTypeId()))
+                .orElseThrow(() -> new BusinessException(409, "Workflow 当前修订不存在或身份不一致")
+                        .withCode("PRODUCT_PROCESS_WORKFLOW_REVISION_INVALID"));
     }
 
     private ProductProcessWorkflowDTO toDTOWithUnitWarnings(ProductProcessWorkflow entity) {

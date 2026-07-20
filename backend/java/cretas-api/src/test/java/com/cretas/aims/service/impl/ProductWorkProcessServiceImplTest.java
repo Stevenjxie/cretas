@@ -2,6 +2,7 @@ package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.ProductWorkProcessDTO;
 import com.cretas.aims.entity.ProductWorkProcess;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
@@ -9,6 +10,7 @@ import com.cretas.aims.entity.ProductWorkProcessAssignee;
 import com.cretas.aims.repository.ProductWorkProcessAssigneeRepository;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -49,6 +51,9 @@ class ProductWorkProcessServiceImplTest {
 
     @Mock
     private WorkProcessRepository workProcessRepository;
+
+    @Mock
+    private ProductTypeRepository productTypeRepository;
 
     @Mock
     private ProductWorkProcessAssigneeRepository assigneeRepository;
@@ -467,6 +472,10 @@ class ProductWorkProcessServiceImplTest {
                     .thenReturn(List.of(assoc1, assoc2));
             when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), anyList()))
                     .thenReturn(List.of(wp1, wp2));
+            ProductType product = mock(ProductType.class);
+            when(product.getUnit()).thenReturn("box");
+            when(productTypeRepository.findByIdAndFactoryId(PRODUCT_TYPE_ID, FACTORY_ID))
+                    .thenReturn(Optional.of(product));
 
             // Act
             List<ProductWorkProcessDTO> result = service.listByProduct(FACTORY_ID, PRODUCT_TYPE_ID);
@@ -484,7 +493,7 @@ class ProductWorkProcessServiceImplTest {
             assertEquals(1, first.getProcessOrder());
             assertEquals("炸制", first.getProcessName(), "应从 WorkProcess 富化 processName");
             assertEquals("加工", first.getProcessCategory(), "应从 WorkProcess 富化 processCategory");
-            assertEquals("kg", first.getDefaultUnit(), "应从 WorkProcess 富化 defaultUnit");
+            assertEquals("box", first.getDefaultUnit(), "单位应从产品对象继承，而不是从工序主数据读取");
             assertEquals(30, first.getDefaultEstimatedMinutes(), "应从 WorkProcess 富化 defaultEstimatedMinutes");
 
             // Second item: has overrides + enriched with wp2

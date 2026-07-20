@@ -32,6 +32,8 @@ export interface BomRecipeSummary {
   overallYieldRate?: number | null;
   outputQuantityPerUnit?: number | null;
   outputUnit?: string | null;
+  netContentQuantity?: number | null;
+  netContentUnit?: string | null;
   notes?: string | null;
   activatedAt?: string | null;
   activatedBy?: number | null;
@@ -41,12 +43,37 @@ export interface BomRecipeSummary {
   totalOverheadCost?: number | null;
   createdAt?: string | null;
   updatedAt?: string | null;
+  workflowRevisionId?: number | null;
+  workflowId?: number | null;
+  workflowDefinitionVersion?: number | null;
+  workflowRevisionHash?: string | null;
   items?: BomRecipeItemView[];
+}
+
+export interface WorkflowRevisionCandidate {
+  revisionId?: number | null;
+  workflowId: number;
+  definitionVersion?: number | null;
+  revisionNumber?: number | null;
+  revisionHash: string;
+  status: 'DRAFT' | 'PUBLISHED' | string;
+  savedAt?: string | null;
+  processCount?: number | null;
+  enabled?: boolean;
+  compatible: boolean;
+  incompatibilityReason?: string | null;
+  recommended?: boolean;
+}
+
+export interface BomWorkflowRevisionPinPayload {
+  revisionId?: number | null;
+  workflowId?: number | null;
+  revisionHash: string;
 }
 
 export interface BomRecipeItemPayload {
   materialTypeId: string;
-  /** RAW 仅建立物料关联时为空；包材/辅料仍需提供计划基准量。 */
+  /** RAW/AUXILIARY 仅建立物料关系时可空；PACKAGING 必须提供固定用量。 */
   standardQuantity: number | null;
   yieldRate?: number | null;
   unit: string;
@@ -55,7 +82,12 @@ export interface BomRecipeItemPayload {
   materialCategory?: string | null;
   sortOrder?: number | null;
   isOptional?: boolean | null;
+  /** @deprecated legacy free-text grouping; new writes use substitutes. */
   substituteGroup?: string | null;
+  packagingSpecId?: string | null;
+  packagingRole?: string | null;
+  naturalQuantity?: number | null;
+  substitutes?: BomSubstituteInput[];
   remark?: string | null;
   perPortion?: boolean | null;
   semiFinishedRefCode?: string | null;
@@ -73,14 +105,78 @@ export interface BomRecipeItemView extends BomRecipeItemPayload {
   quantityToPriceFactor?: number | null;
   primaryCode?: string | null;
   primaryCodeRef?: string | null;
+  packagingSpecNameSnapshot?: string | null;
+  naturalUnit?: string | null;
+  packagingPackageUnitSnapshot?: string | null;
+  packagingBaseUnitSnapshot?: string | null;
+  packagingConversionFactorSnapshot?: number | null;
+  substituteDetails?: BomItemSubstituteView[];
+}
+
+export interface BomSubstituteInput {
+  materialTypeId: string;
+  conversionFactor?: number | null;
+}
+
+export interface BomItemSubstituteView {
+  id: string;
+  recipeId: string;
+  parentKind: 'RECIPE_ITEM' | 'SEASONING_ITEM';
+  parentRecipeItemId?: number | null;
+  parentSeasoningItemId?: number | null;
+  parentMaterialTypeId: string;
+  parentMaterialName?: string | null;
+  materialCategory: string;
+  workProcessId?: string | null;
+  packagingSpecId?: string | null;
+  packagingRole?: string | null;
+  substituteMaterialTypeId: string;
+  substituteMaterialCode?: string | null;
+  substituteMaterialName?: string | null;
+  parentUnit?: string | null;
+  substituteUnit?: string | null;
+  conversionFactor: number;
+  conversionExplicit?: boolean;
+}
+
+export interface ProductPackagingSpecView {
+  id: string;
+  name: string;
+  packageUnit: string;
+  baseUnit: string;
+  conversionFactor: number;
+  defaultSpec?: boolean;
+  active?: boolean;
+  sortOrder?: number;
+}
+
+export interface ProductConfigurationReadinessIssue {
+  code: string;
+  message: string;
+  target?: string | null;
+}
+
+export interface ProductConfigurationReadiness {
+  factoryId: string;
+  productTypeId: string;
+  stage: string;
+  bomState: string;
+  workflowDraftComplete: boolean;
+  bomConfigurable: boolean;
+  bomComplete: boolean;
+  bomActive: boolean;
+  workflowEnabled: boolean;
+  issues: ProductConfigurationReadinessIssue[];
 }
 
 export interface CreateBomRecipeRequest {
   productTypeId: string;
   productName?: string | null;
   overallYieldRate?: number | null;
-  outputQuantityPerUnit: number;
-  outputUnit: string;
+  /** @deprecated server derives output identity from the SKU */
+  outputQuantityPerUnit?: number;
+  /** @deprecated server derives output identity from the SKU */
+  outputUnit?: string;
   sourceType?: 'MANUAL' | 'SAMPLE_AUTOGEN' | 'AI_GENERATED' | 'IMPORTED';
   sourceSampleId?: string | null;
   items: BomRecipeItemPayload[];
@@ -165,6 +261,17 @@ export interface CopyBomToProductRequest {
 const recipeBase = (factoryId: string) => `/${factoryId}/bom/recipes`;
 
 export const bomRecipeApi = {
+  getProductConfigurationReadiness: (
+    factoryId: string,
+    productTypeId: string,
+    recipeId?: string | null,
+  ) => get<ProductConfigurationReadiness>(
+    `/${factoryId}/product-configuration-readiness/${productTypeId}`,
+    { params: recipeId ? { recipeId } : {} },
+  ),
+
+  getProductPackagingSpecs: (factoryId: string, productTypeId: string) =>
+    get<ProductPackagingSpecView[]>(`/${factoryId}/product-types/${productTypeId}/packaging-specs`),
   /**
    * 分页查询 BOM 配方列表, 可按 status 过滤.
    * 对应: GET /api/mobile/{factoryId}/bom/recipes
@@ -180,6 +287,15 @@ export const bomRecipeApi = {
 
   getDetail: (factoryId: string, recipeId: string) =>
     get<BomRecipeSummary>(`${recipeBase(factoryId)}/${recipeId}`),
+
+  listSubstitutes: (factoryId: string, recipeId: string) =>
+    get<BomItemSubstituteView[]>(`${recipeBase(factoryId)}/${recipeId}/substitutes`),
+
+  listWorkflowRevisions: (factoryId: string, recipeId: string) =>
+    get<WorkflowRevisionCandidate[]>(`${recipeBase(factoryId)}/${recipeId}/workflow-revisions`),
+
+  pinWorkflowRevision: (factoryId: string, recipeId: string, payload: BomWorkflowRevisionPinPayload) =>
+    put<BomRecipeSummary>(`${recipeBase(factoryId)}/${recipeId}/workflow-revisions/pin`, payload),
 
   /** Idempotently reuse/create the one editable draft for a factory-scoped SKU. */
   ensureDraft: (factoryId: string, productTypeId: string) =>
@@ -378,6 +494,8 @@ export interface BomSeasoningItem {
   seq: number;
   name: string;
   dosagePerKgG: number | null;
+  /** 后续工序带入比例；旧数据或不涉及续锅时为空。 */
+  subsequentPotRatio?: number | null;
   priceSource1: number | null;
   priceSource2: number | null;
   /** false for 老汤 (老汤不计入调料成本) */
@@ -508,6 +626,7 @@ export const bomSeasoningApi = {
 
 export interface SeasoningBindingView {
   id: number;
+  workflowProcessNodeId: string;
   workProcessId: string;
   materialTypeId: string | null;
   name: string;
@@ -524,18 +643,26 @@ export interface SeasoningBindingView {
 }
 
 export interface SeasoningProcessView {
+  workflowProcessNodeId: string;
   workProcessId: string;
   processOrder: number;
   processName: string;
   processCategory?: string | null;
+  /** Pinned Workflow node output basis. Unsupported or ambiguous dimensions are read-only. */
+  basisQuantity?: number | null;
+  basisUnit?: string | null;
+  standardUsageSupported?: boolean;
   bindings: SeasoningBindingView[];
 }
 
 export interface SeasoningMaterialUsage {
   bindingId?: number;
+  workflowProcessNodeId?: string;
   workProcessId: string;
   processOrder: number;
   processName: string;
+  basisQuantity?: number | null;
+  basisUnit?: string | null;
   dosagePerKgG: number;
   subsequentPotRatio: number | null;
   countInSeasoning: boolean;
@@ -566,17 +693,29 @@ export interface SeasoningWorkspace {
   status: BomRecipeStatus;
   editable: boolean;
   seasoningRevision: number;
+  workflowRevisionId?: number | null;
+  workflowId?: number | null;
+  workflowDefinitionVersion?: number | null;
+  workflowRevisionHash?: string | null;
+  workflowRevisionStatus?: string | null;
+  workflowRevisionSavedAt?: string | null;
+  workflowRootCount?: number | null;
+  workflowTargetCount?: number | null;
+  workflowProcessCount?: number | null;
+  workflowTargetProductTypeId?: string | null;
   processes: SeasoningProcessView[];
   materialSummaries: SeasoningMaterialSummary[];
   anomalies: SeasoningAnomaly[];
 }
 
 export interface SeasoningBindingMutation {
+  workflowProcessNodeId?: string;
   materialTypeId: string;
   dosagePerKgG: number;
   subsequentPotRatio: number | null;
   countInSeasoning: boolean;
   remark?: string | null;
+  substitutes?: BomSubstituteInput[];
   expectedRevision: number;
 }
 

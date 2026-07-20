@@ -14,8 +14,10 @@ describe('SKU editor dialog UX', () => {
     expect(source).toContain('aria-label="上移工序"');
     expect(source).toContain('aria-label="下移工序"');
     expect(source).toContain('aria-label="移除工序"');
-    expect(source).toContain('class="standard-weight-row"');
-    expect(source).toContain("1 {{ formData.unit || '基本单位' }} =");
+    expect(source).toContain('label="销售单位 / 净含量"');
+    expect(source).toContain('class="sku-measure-row"');
+    expect(source).toContain('v-model="netContentUnit"');
+    expect(source).toContain('g/kg/ml/L');
     expect(source).not.toContain('标准单位换算（1${formData.unit');
   });
 
@@ -50,5 +52,17 @@ describe('SKU editor dialog UX', () => {
     expect(source).toContain("recommendation?.source === 'PUBLISHED_WORKFLOW'");
     expect(source).toContain("recommendation?.reasonCode === 'COMPLETE_PUBLISHED_WORKFLOW'");
     expect(source).not.toContain("ElMessage.warning(res.message || res.data?.message || '暂未生成推荐工序");
+  });
+
+  it('keeps the quick process drawer with searchable, filterable and paginated catalog UX', () => {
+    expect(source).toContain('@click="handleConfigProcesses(row)"');
+    expect(source).toContain('placeholder="搜索工序名称 / 编码 / 类别标签"');
+    expect(source).toContain('v-model="processCategoryFilter"');
+    // 工序主数据不再承载计量单位；快捷关联只按类别和关联状态筛选。
+    expect(source).not.toContain('v-model="processOutputUnitFilter"');
+    expect(source).toContain('v-model="processRelationFilter"');
+    expect(source).toContain('结果 {{ filteredProcessCatalog.length }} / 总计 {{ availableProcesses.length }}');
+    expect(source).toContain('v-model:current-page="processCatalogPage"');
+    expect(source).toContain('已关联 · 第 {{ linkedProcessById.get(proc.id)?.processOrder }} 道');
   });
 });

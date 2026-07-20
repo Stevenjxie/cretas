@@ -4,6 +4,7 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.inventory.PaymentRequestApprovedDTO;
 import com.cretas.aims.entity.inventory.PaymentRequest;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.inventory.PaymentRequestService;
 import com.cretas.aims.utils.TokenUtils;
@@ -40,24 +41,14 @@ public class PaymentRequestController {
     // ─── 创建付款申请 ──────────────────────────────────────────────────────────
 
     @PostMapping
-    @Operation(summary = "创建付款申请", description = "同一 PO 已有 PENDING/FINANCE_REVIEW/APPROVED 时返回 409")
+    @Operation(summary = "旧采购付款申请入口（已停用）",
+            description = "采购不再手工创建付款申请；财务从应付账款处理付款")
     @RequirePermission({"procurement:read_write"})
     public ApiResponse<PaymentRequest> createPaymentRequest(
             @PathVariable @NotBlank String factoryId,
             @RequestHeader("Authorization") String authorization,
             @RequestBody Map<String, Object> body) {
-        Long userId = extractUserId(authorization);
-        String purchaseOrderId = getString(body, "purchaseOrderId");
-        String supplierId = getString(body, "supplierId");
-        BigDecimal amount = getBigDecimal(body, "amount");
-        String paymentMethod = getString(body, "paymentMethod");
-        String remark = getString(body, "remark");
-
-        log.info("[SP6] 创建付款申请: factoryId={}, poId={}, amount={}", factoryId, purchaseOrderId, amount);
-        PaymentRequest pr = paymentRequestService.create(
-                factoryId, purchaseOrderId, supplierId, amount,
-                paymentMethod, userId, remark);
-        return ApiResponse.success("付款申请已创建", pr);
+        throw legacyWriteDisabled("采购付款申请");
     }
 
     // ─── 创建销售方向付款申请（#29 对客户 outbound 退款/返利/销售费用）─────────────
@@ -96,67 +87,52 @@ public class PaymentRequestController {
     // ─── 提交（PENDING → FINANCE_REVIEW）──────────────────────────────────────
 
     @PutMapping("/{requestId}/submit")
-    @Operation(summary = "提交付款申请至财务审核")
+    @Operation(summary = "旧提交付款审批入口（已停用）")
     @RequirePermission({"procurement:read_write", "sales:read_write"})
     public ApiResponse<PaymentRequest> submit(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String requestId,
             @RequestHeader("Authorization") String authorization) {
-        Long userId = extractUserId(authorization);
-        log.info("[SP6] 提交付款申请: factoryId={}, requestId={}, userId={}", factoryId, requestId, userId);
-        PaymentRequest pr = paymentRequestService.submit(factoryId, requestId, userId);
-        return ApiResponse.success("已提交财务审核", pr);
+        throw legacyWriteDisabled("提交付款审批");
     }
 
     // ─── 财务审批（FINANCE_REVIEW → APPROVED）────────────────────────────────
 
     @PutMapping("/{requestId}/finance-approve")
-    @Operation(summary = "财务审批付款申请")
+    @Operation(summary = "旧付款审批通过入口（已停用）")
     @RequirePermission({"finance:read_write"})
     public ApiResponse<PaymentRequest> financeApprove(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String requestId,
             @RequestHeader("Authorization") String authorization,
             @RequestBody(required = false) Map<String, String> body) {
-        Long userId = extractUserId(authorization);
-        String reviewNote = body != null ? body.get("reviewNote") : null;
-        log.info("[SP6] 财务审批付款申请: factoryId={}, requestId={}, userId={}", factoryId, requestId, userId);
-        PaymentRequest pr = paymentRequestService.financeApprove(factoryId, requestId, userId, reviewNote);
-        return ApiResponse.success("审批通过", pr);
+        throw legacyWriteDisabled("付款审批通过");
     }
 
     // ─── 驳回（PENDING|FINANCE_REVIEW → REJECTED）────────────────────────────
 
     @PutMapping("/{requestId}/reject")
-    @Operation(summary = "驳回付款申请")
+    @Operation(summary = "旧付款审批驳回入口（已停用）")
     @RequirePermission({"finance:read_write", "procurement:read_write", "sales:read_write"})
     public ApiResponse<PaymentRequest> reject(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String requestId,
             @RequestHeader("Authorization") String authorization,
             @RequestBody(required = false) Map<String, String> body) {
-        Long userId = extractUserId(authorization);
-        String rejectReason = body != null ? body.get("rejectReason") : null;
-        log.info("[SP6] 驳回付款申请: factoryId={}, requestId={}, userId={}", factoryId, requestId, userId);
-        PaymentRequest pr = paymentRequestService.reject(factoryId, requestId, userId, rejectReason);
-        return ApiResponse.success("已驳回", pr);
+        throw legacyWriteDisabled("付款审批驳回");
     }
 
     // ─── 确认付款（APPROVED → PAID）：三写原子 ───────────────────────────────
 
     @PutMapping("/{requestId}/mark-paid")
-    @Operation(summary = "出纳确认付款（三写原子：status=PAID + ArApTransaction + Supplier余额）")
+    @Operation(summary = "旧确认付款入口（已停用）")
     @RequirePermission({"finance:read_write"})
     public ApiResponse<PaymentRequest> markPaid(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String requestId,
             @RequestHeader("Authorization") String authorization,
             @RequestBody(required = false) Map<String, String> body) {
-        Long userId = extractUserId(authorization);
-        String evidence = body != null ? body.get("evidence") : null;
-        log.info("[SP6] 确认付款: factoryId={}, requestId={}, userId={}", factoryId, requestId, userId);
-        PaymentRequest pr = paymentRequestService.markPaid(factoryId, requestId, userId, evidence);
-        return ApiResponse.success("付款已确认", pr);
+        throw legacyWriteDisabled("确认付款");
     }
 
     // ─── 查询已审批待付款列表 ─────────────────────────────────────────────────
@@ -206,6 +182,21 @@ public class PaymentRequestController {
     private Long extractUserId(String authorization) {
         String token = TokenUtils.extractToken(authorization);
         return mobileService.getUserFromToken(token).getId();
+    }
+
+    /**
+     * Legacy business-page payment writes are deliberately fail-closed.
+     * Payment execution now starts from an audited AP open item, while approval
+     * transitions are performed by the OA workflow adapter at its current node.
+     * Keeping the old URLs as explicit tombstones prevents stale clients from
+     * silently creating unallocated payments during the migration window.
+     */
+    private BusinessException legacyWriteDisabled(String action) {
+        return new BusinessException(
+                410, action + "入口已停用，不能从采购或业务详情直接执行")
+                .withCode("PAYMENT_REQUEST_LEGACY_WRITE_DISABLED")
+                .withHint("请从财务应付账款选择未清应付进行付款；审批请前往 OA 审批中心")
+                .withSeverity("BLOCKING");
     }
 
     private String getString(Map<String, Object> body, String key) {

@@ -1,6 +1,7 @@
 package com.cretas.aims.repository.material;
 
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.config.UnitOfMeasurementRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
@@ -20,10 +21,12 @@ class MaterialContractRepositoryQueryValidationTest {
 
     @Autowired MaterialCodeSegmentRepository segmentRepository;
     @Autowired RawMaterialTypeRepository materialTypeRepository;
+    @Autowired UnitOfMeasurementRepository unitOfMeasurementRepository;
 
     @Test
     void repositoriesBootAndAllDeclaredQueriesParse() {
         assertNotNull(segmentRepository);
         assertNotNull(materialTypeRepository);
+        assertNotNull(unitOfMeasurementRepository);
     }
 }

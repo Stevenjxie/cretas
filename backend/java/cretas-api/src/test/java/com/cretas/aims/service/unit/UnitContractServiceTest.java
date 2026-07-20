@@ -75,6 +75,34 @@ class UnitContractServiceTest {
     }
 
     @Test
+    void inventoryCatalogExcludesLengthTimeTemperatureAndRatio() {
+        UnitOfMeasurement minute = catalogUnit("minute", "TIME", "分钟");
+        UnitOfMeasurement celsius = catalogUnit("celsius", "TEMPERATURE", "摄氏度");
+        UnitOfMeasurement percent = catalogUnit("percent", "RATIO", "百分比");
+        when(unitRepository.findAllByFactoryId(FACTORY_ID))
+                .thenReturn(List.of(minute, celsius, percent));
+
+        assertThat(service.catalog(FACTORY_ID, UnitUsageScope.INVENTORY_QUANTITY))
+                .extracting(CanonicalUnit::code)
+                .contains("g", "kg", "box", "case", "slice")
+                .doesNotContain("mm", "cm", "m", "km", "minute", "celsius", "percent");
+    }
+
+    @Test
+    void explicitlyScopedLengthUnitCanBeUsedForInventory() {
+        UnitOfMeasurement metre = catalogUnit("m", "LENGTH", "米");
+        metre.setUsageScopesJson(List.of("INVENTORY_QUANTITY", "SPECIFICATION"));
+        metre.setConversionFamily("LENGTH");
+        when(unitRepository.findAllByFactoryId(FACTORY_ID)).thenReturn(List.of(metre));
+
+        assertThat(service.supportsUsage(FACTORY_ID, "米", UnitUsageScope.INVENTORY_QUANTITY))
+                .isTrue();
+        assertThat(service.catalog(FACTORY_ID, UnitUsageScope.INVENTORY_QUANTITY))
+                .extracting(CanonicalUnit::code)
+                .contains("m");
+    }
+
+    @Test
     void boxAndPcsAreNotEquivalent() {
         assertThat(service.areEquivalent(FACTORY_ID, "盒", "件")).isFalse();
     }

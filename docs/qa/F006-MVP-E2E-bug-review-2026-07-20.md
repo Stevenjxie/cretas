@@ -422,3 +422,86 @@
 - **部署状态**：`DEPLOYED_PROD_2026-07-20`。
 - **回归状态**：待 main 合入并由用户明确授权部署后，测试 Chat 在同一 F006 现场刷新验证。
 - **数据边界**：本修复只调整 Web 展示；不修改 API payload、数据库、库存、预留、仓位、批次、调拨或订单，不触碰 LIUSHANMEN。
+
+## F006 R2 — Workflow/BOM 拓扑与配置契约（2026-07-20）
+
+### BLOCKER-F006-R2-BOM-WORKFLOW-DRAFT-PIN
+
+- **发现阶段/页面/步骤**：R2，SKU `CPF0060016`；Workflow 已保存但 BOM v2 辅料页只能读取已发布/启用 Workflow，形成 Workflow-first 与 BOM-complete 的循环依赖。
+- **期望/实际/业务影响**：BOM 草稿必须显式选择并固定已保存、结构完整的 Workflow revision；实际读取可变状态或 ACTIVE-only，导致草稿无法配置辅料并可能随后续编辑漂移。
+- **根因**：Workflow 草稿缺少不可变 revision 身份；BOM 仅保存产品/版本级引用，辅料仍按 master workProcess 粗粒度绑定。
+- **修改文件**：`ProductProcessWorkflowRevision`/repository、`BomWorkflowRevisionService`/controller/DTO、`BomRecipe` revision snapshot、`BomSeasoningWorkspaceServiceImpl`、发布/启用门禁、Web revision selector 及 Flyway `V20261028_98`。
+- **测试**：保存 revision hash、同 revision 幂等 pin、跨工厂/SKU 拒绝、刷新快照稳定、ACTIVE BOM 与发布/启用 exact revision 双向门禁、无草稿重复发布 409、真实 JPA startup gate。
+- **Commit/PR/main 状态**：revision/pin 核心 commit `9f5cb804f`，拓扑与 pinned-node 收口 commit `301fcb0cd`；`TARGET_TEST_PASSED_PENDING_MAIN`。
+- **部署状态**：`NOT_DEPLOYED`。
+- **回归状态**：revision/pin、跨厂/SKU、刷新稳定、发布/启用 exact revision、真实 JPA 均已通过；clean rebase 后 Java 最终单生命周期 `221/221` 通过并生成可信 manifest（backend tree `ace4f31d1fe9529ed2e4dabb27d30ed1f0ccb7f0`，JAR SHA-256 `81eeffa3123350fe5d86b403db6c1a82115920e6b8900b9cf99314fac5a2ed79`）。生产 `CPF0060016`/BOM/Workflow 零写入、无历史桥接。
+
+### BLOCKER-F006-R2-WORKFLOW-TOPOLOGY-RESOLUTION
+
+- **发现阶段/页面/步骤**：R2，`CPF0060016` 的合法链路 `原料A + 原料B → 原料处理 → 半成品 → 定量包装 → 成品`；BOM v2 辅料页报“目标成品路径必须恰好可溯到一个入口原料 Cell”。
+- **期望/实际/业务影响**：按目标 SKU 对 pinned Workflow revision 反向解析完整 DAG 子图；实际解析器硬编码单入口，使 2→1、2→2、合流/分流全部误判并阻断辅料配置。
+- **根因**：旧 `ProductWorkflowResolutionServiceImpl` 使用 `rawRoots.size() != 1` 和 `rawRoots.get(0)`，把入口身份、工序路径和辅料作用域混为单链。
+- **修改文件**：`BomWorkflowRevisionService`、`PinnedWorkflowGraph`、`ProductWorkflowResolutionServiceImpl`、`WorkflowProcessPath`、`BomSeasoningWorkspaceServiceImpl`/response、Web `BomAuxiliaryWorkspace.vue`/API 类型及 A-E 测试。
+- **修复契约**：目标 SKU 唯一 terminal 是合法身份门禁，但入口可为 N；反向切片收集所有可达入口和工序、保留合流/分流边、节点去重并拓扑排序；环、无入口、孤儿、跨厂/SKU、重复同目标 terminal 明确 4xx；多产出缺角色/成本分摊 fail-closed。
+- **终审补强**：ACTIVE BOM 与 DRAFT 一样始终从自身 pinned revision 解析工序，不得回落到产品当前 Workflow；工序辅料替代关系同时快照 master `workProcessId` 与精确 `workflowProcessNodeId`，同一工序模板在两个节点不串配置；辅料标准分母从 pinned 节点端口单位读取，现有仅能可靠表达 g/kg 的 legacy 剂量模型对盒/升等量纲明确 fail-closed，不再伪装为“每1kg”。
+- **depth-first-e2e 矩阵**：A 1→1=`medium`；B 2→1=`deep`；C 1→2=`medium`；D 2→2=`deep`；E 合流→半成品→分流=`medium`。`BomWorkflowRevisionServiceTest` 的 A-E 五个具名矩阵场景全部通过：覆盖 revision 保存/pin、入口/工序严格集合、目标反向切片、共享节点去重、跨目标隔离、多产出角色/分摊门禁、环/孤儿/无入口/重复目标/跨厂 SKU 明确拒绝及 snapshot 不漂移。`BomSeasoningWorkspaceServiceTest` 覆盖 2→1 多入口摘要、精确 process-node 绑定、提交与 fresh readback；Web workspace 目标测试覆盖加载失败锁写、revision 状态与中文单位。
+- **测试证据**：后端拓扑/BOM/辅料/替代料首组 30/30，通过单独真实 JPA repository startup gate 1/1；readiness/copy/process-sheet/unit/material-source 等同因回归 139/139；Web BOM workspace 30/30，单位/分类/来源边界补充回归 58/58。clean rebase 后 Java 最终 release 单生命周期 `221/221` 通过并生成可信 JAR manifest；Web 在 exact HEAD 干净 release worktree构建成功，735 assets，web tree `197b94e5ec84792106a3679e0c5b154f034ccdbd`，archive SHA-256 `623d3737ce2e56d0449edfb174144be946337456df73131adcf545313db6ce17`，index SHA-256 `61ba51d378309706a6d97d6da808e5f83cfe36ac2c357fb87eff0ea17474149c`。CI 首轮完整 Vitest 暴露 4 条已漂移的源契约断言后，同批校正为“工序单位已移除、类别使用受控 taxonomy、采购编辑保留原下单日、Workflow 模式由画布识别”；本地完整 Web Vitest 最终 `1673/1673` 通过（另 5 skipped）。
+- **Commit/PR/main 状态**：revision 与 DAG 核心 `9f5cb804f`，拓扑/辅料作用域/门禁收口 `301fcb0cd`，Web fail-closed `e7beda5f8`；PR [#1545](https://github.com/Stevenjxie/cretas/pull/1545)，`TARGET_TEST_PASSED_PENDING_MAIN`。
+- **部署状态**：`NOT_DEPLOYED`。
+- **回归状态**：`FINAL_RELEASE_GATE_PASSED_PENDING_MAIN`；严格生产业务 mutation=0。
+
+### AUDIT-F006-R2-WORKFLOW-TOPOLOGY-SAME-CAUSE-001
+
+- **扫描范围**：Workflow→BOM→辅料→计划→报工→WIP→出成率→成本→结单，以及对应 Web 消费路径；逐项搜索 single input/output、first raw/product、`size==1`、`get(0)`、`findFirst`。
+- **已确认并同批修复**：旧 ACTIVE resolver 单入口；BOM 辅料按 `workflowProcessNodeId`；BOM 复制完整 root 集合；多入口 WIP identity 不再取首原料；无兼容 Workflow revision 时 Web 不再预选错误候选。
+- **保留的安全门禁**：目标 SKU terminal 唯一、多个可用 Workflow 必须显式消歧、端口输出单位唯一、混合输出单位不能压成计划头 singular unit、多产出缺角色/分摊拒绝；这些不是应删除的“单入口假设”。
+- **需进入具体 deep/medium 回归而不能声称已解决**：
+  - `YieldCalculationServiceImpl`/`YieldReportServiceImpl`：线性 `prevOutput`、首输入量与首 WIP unit；B/D deep、C/E medium 验证 target DAG、diamond 去重与单位安全聚合。
+  - `CostReconcileService`/`OrderCostBreakdownService`：首末工序与单链成本；非线性未支持时必须明确不可核算，禁止静默重复共享上游或包材成本。
+  - `ProcessSheet.vue`/`ProcessDataTable.vue`：`idx===0` 不能代表所有 DAG 根工序；按真实入边/port 推导，B/D/E 页面深测。
+  - `ProductionSettlement` 仍为 singular finished quantity/batch；D 多目标完整结单需行级 settlement 模型，当前应 fail-closed，不得直接放宽。
+- **证据/方法**：对 Base `5c2b30249` 与当前拓扑 commit 做代码差异核验；逐文件/行号分类 vulnerable、safe、needs verification；未访问生产、未写业务数据。
+- **测试状态**：`READ_ONLY_AUDIT_COMPLETE`；已确认脆弱点中 resolver、辅料 node identity、BOM copy roots、WIP output identity 与 Web candidate 已有目标回归。同批不冒充已支持的非线性出成率/成本/多成品结单仍保留为具体 deep/medium 测试与 fail-closed 清单。
+- **Commit/PR/main 状态**：审计零文件修改；修复 commits 随对应条目记录。
+- **部署状态**：`NOT_DEPLOYED`。
+
+### FEATURE-F006-R2-BOM-SUBSTITUTE-001 / FEATURE-F006-R2-BOM-MULTIPACK-001
+
+- **发现阶段/期望**：BOM 的 RAW、工序辅料、PACKAGING 统一使用 parent item→multiple substitutes；包材按 SKU packaging level/role，辅料按 Workflow process node，禁止自由文本替代组和需求/成本双算。
+- **根因**：旧 `substituteGroup` 只是不可解释文本，缺稳定 parent identity、作用域、换算、唯一/循环/版本克隆契约；包材重复录入自然用量和单位。
+- **修改文件**：`BomItemSubstitute`/DTO/repository/service、Flyway `V20261028_99`、BOM recipe/clone/seasoning workspace、Web BOM 表单/树形摘要/packaging cards/替代选择器及测试。
+- **测试**：自替代/同父重复/作用域/单位换算/循环拒绝、原料/辅料/包材共用关系、版本克隆、同工序辅料替代、1箱8盒折算0.125、无数量原料合法与包材正数门禁；目标 30/30 与真实 JPA startup gate 1/1 已通过。
+- **终审补强**：替代关系读取失败在 Web 标记为未加载并禁止编辑/保存，不能把失败误作空集合后删除既有关系；同单位省略换算时按1:1，跨单位必须显式输入正换算系数；包材替代除包装层级/角色快照外，还必须能证明同一稳定分类族，分类缺失或跨外箱/封膜等角色均 fail-closed。
+- **Commit/PR/main 状态**：核心 `785a2d908`，主流程集成 `301fcb0cd`，Web fail-closed `e7beda5f8`；`TARGET_TEST_PASSED_PENDING_MAIN`。
+- **部署状态**：`NOT_DEPLOYED`。
+- **回归状态**：`FINAL_RELEASE_GATE_PASSED_PENDING_MAIN`；未修改生产 `BOM-20260720-004/005`。
+
+### F006-R2-WORKFLOW-FIRST-BOM-GATE / F006-R2-BOM-COMPLETENESS-GATE
+
+- **最终状态机**：`SKU_CREATED → WORKFLOW_DRAFT_STRUCTURALLY_COMPLETE → BOM_DRAFT_CONFIGURABLE → BOM_COMPLETE → BOM_ACTIVE → WORKFLOW_ENABLED`；运行态仍只消费 ACTIVE BOM/已启用 Workflow。
+- **期望/实际/业务影响**：Workflow 结构未完成前禁止 BOM 写入；BOM 完整性必须按 pinned target 子图逐工序判断辅料/明确无需辅料，并按每个启用包装层判断包材。实际按 mutable latest DRAFT 和 master workProcessId 判断，会漏检重复工序节点并使 ACTIVE BOM 依赖后续草稿。
+- **修改文件**：`ProductConfigurationReadinessService`、`ProductConfigurationCompletenessReport`、activation/publish/plan gates 与目标测试。
+- **测试**：越级调用4xx且零部分写、ACTIVE 无 DRAFT 仍按快照校验、同 master process 多节点分离、缺辅料/包材明确定位、历史 snapshot 不漂移。
+- **Commit/PR/main 状态**：核心门禁/精确 pinned node `301fcb0cd`，Web 入口锁写 `e7beda5f8`；`TARGET_TEST_PASSED_PENDING_MAIN`。
+- **部署状态**：`NOT_DEPLOYED`。
+- **回归状态**：目标回归已纳入后端 139/139 与 Web 30/30；clean rebase 后 Java 最终单生命周期 221/221 与 Web release build 均已通过，待合入 main。
+
+### FIX-F006-R2-TAXONOMY-MIGRATION-CONFLICT-001
+
+- **发现阶段/影响**：R2 分类身份迁移审查；历史规范化名称可能在同一父级发生冲突，若直接建立唯一索引会导致启动失败，若自动合并则会改写历史分类真值。
+- **根因/修复**：迁移先把冲突的历史 `normalized_label` 安全隔离为 `NULL`，仅对 active 且非空记录建立部分唯一索引；服务层用 NFKC 规范化检查历史标签并返回明确 409。历史分类不合并、不重命名、不删除。
+- **修改文件**：`V20261028_92__material_taxonomy_identity.sql`、`MaterialCodeSegmentServiceImpl`、repository 与 migration/JPA contract tests。
+- **测试**：23 项通过，包含真实 Spring Data JPA Context；commit `288960d91`。
+- **Commit/PR/main 状态**：`COMMITTED_PENDING_MAIN`。
+- **部署状态**：`NOT_DEPLOYED`；生产业务写入 0。
+- **回归状态**：`TARGET_TEST_PASSED`。
+
+### BUG-F006-PURCHASE-AP-PAYMENT-BOUNDARY-001-CORE
+
+- **发现阶段/影响**：R2 采购付款审查；旧采购侧 PaymentRequest 写入口可绕过唯一 AP 应付/核销真值，且历史未分配付款不应被自动桥接或伪装成可再次全额支付。
+- **根因/修复**：采购侧 legacy create/submit/finance-approve/reject/mark-paid 统一 fail-closed 410；付款从 AP open item 发起并强绑定 supplier/PO/receipt/currency，支持部分/全额核销、悲观锁、幂等和余额上限。历史 identity/分配不完整记录标记 `NEEDS_RECONCILIATION`，只读保留且结算 409，不自动匹配。
+- **修改文件**：AP settlement controller/DTO/entity/repository/service、`V20261028_94__ap_payable_settlement_core.sql`、PaymentRequest legacy boundary 与相关 tests。
+- **测试**：Controller/Service/Migration 21 项通过；真实 Spring/Hibernate JPA Context 2 项通过；commit `1befab078`。
+- **Commit/PR/main 状态**：`COMMITTED_PENDING_MAIN`。
+- **部署状态**：`NOT_DEPLOYED`；未修改生产 PO/RCV/AP/PaymentRequest。
+- **回归状态**：`TARGET_TEST_PASSED`。

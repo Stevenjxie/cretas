@@ -6,12 +6,14 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
 import java.util.Optional;
+import jakarta.persistence.LockModeType;
 
 /**
  * BomRecipe Repository (Track D1 / M-BOM-1).
@@ -29,6 +31,20 @@ public interface BomRecipeRepository extends JpaRepository<BomRecipe, String> {
     /** 取产品的当前生效 BOM (status=ACTIVE + is_current=TRUE). */
     Optional<BomRecipe> findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
             String factoryId, String productTypeId, Status status);
+
+    Optional<BomRecipe> findFirstByFactoryIdAndProductTypeIdAndWorkflowRevisionIdAndStatusOrderByVersionDesc(
+            String factoryId, String productTypeId, Long workflowRevisionId, Status status);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select recipe
+              from BomRecipe recipe
+             where recipe.id = :recipeId
+               and recipe.factoryId = :factoryId
+            """)
+    Optional<BomRecipe> lockByIdAndFactoryId(
+            @Param("recipeId") String recipeId,
+            @Param("factoryId") String factoryId);
 
     /** 取产品当前 BOM (is_current=TRUE, 不论 DRAFT/ACTIVE) — picker 软过滤用, 定义即生效无需激活仪式. */
     Optional<BomRecipe> findByFactoryIdAndProductTypeIdAndIsCurrentTrue(

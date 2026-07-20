@@ -181,6 +181,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Autowired(required = false)
     private com.cretas.aims.service.workflow.ProductWorkflowResolutionService workflowResolutionService;
 
+    /** Workflow-governed products must never silently fall back to the legacy plan path. */
+    @Autowired(required = false)
+    private ProductProcessWorkflowRepository productProcessWorkflowRepository;
+
+    /** Shared BOM/Workflow readiness source of truth for plan admission. */
+    @Autowired(required = false)
+    private com.cretas.aims.service.validation.ProductConfigurationReadinessService configurationReadinessService;
+
     /** 以销定产批量建计划: 取产品工序名拼 processName (镜像前端 loadBomProcesses). required=false 兼容单测. */
     @Autowired(required = false)
     private com.cretas.aims.service.ProductWorkProcessService productWorkProcessService;
@@ -372,6 +380,17 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         value.workflowId(), value.definitionVersion());
             }
         }
+        if (productProcessWorkflowRepository != null) {
+            boolean governed = productProcessWorkflowRepository
+                    .findByFactoryIdOrderByProductTypeIdAscDefinitionVersionDesc(factoryId).stream()
+                    .anyMatch(row -> Objects.equals(productTypeId, row.getProductTypeId()));
+            if (governed) {
+                throw new BusinessException(409, "该产品已有 Workflow 配置，但尚无可用于生产的启用版本")
+                        .withCode("WORKFLOW_ENABLED_REQUIRED")
+                        .withHint("请先完成 BOM、发布并启用其固定的 Workflow 版本")
+                        .withHintTarget("selectedWorkflowId");
+            }
+        }
         return new PlanUnitAuthority(productionBaseUnit, productionBaseUnit,
                 resolveNetWeightGramsForProduct(factoryId, productTypeId),
                 ProductionBatch.WorkflowSelectionMode.LEGACY, null, null);
@@ -391,11 +410,16 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         plan.setWorkflowSelectionMode(authority.mode());
         plan.setSelectedWorkflowId(authority.workflowId());
         plan.setSelectedWorkflowVersion(authority.workflowVersion());
+        if (authority.mode() == ProductionBatch.WorkflowSelectionMode.WORKFLOW
+                && configurationReadinessService != null) {
+            configurationReadinessService.requireActiveBomComplete(
+                    plan.getFactoryId(), plan.getProductTypeId());
+        }
         if (bomRecipeRepository == null) {
             return;
         }
-        bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(
-                        plan.getFactoryId(), plan.getProductTypeId())
+        bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                        plan.getFactoryId(), plan.getProductTypeId(), BomRecipe.Status.ACTIVE)
                 .ifPresentOrElse(recipe -> {
                     plan.setSelectedBomRecipeId(recipe.getId());
                     plan.setSelectedBomVersion(recipe.getVersion());

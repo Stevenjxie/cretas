@@ -70,4 +70,10 @@ class BomRecipeItemTest {
     void itemCost_nullPrice() {
         assertNull(item("200", "58.00", null).computeItemCost());
     }
+
+    @Test
+    @DisplayName("computeItemCost: null standard quantity is uncollected, not zero")
+    void itemCost_nullStandardQuantity() {
+        assertNull(item(null, "100.00", "10.00").computeItemCost());
+    }
 }

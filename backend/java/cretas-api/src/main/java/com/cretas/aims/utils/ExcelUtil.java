@@ -12,6 +12,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Excel工具类
@@ -24,6 +27,50 @@ import java.util.List;
 @Slf4j
 @Component
 public class ExcelUtil {
+
+    /** Generic, business-agnostic first-sheet reader used by preview-before-commit imports. */
+    public RawSheet readFirstSheetAsRows(InputStream inputStream, int maxRows) {
+        if (maxRows < 1) throw new IllegalArgumentException("maxRows 必须大于0");
+        try {
+            @SuppressWarnings("unchecked")
+            List<Map<Integer, String>> raw = (List<Map<Integer, String>>) (List<?>) EasyExcel
+                    .read(inputStream)
+                    .headRowNumber(0)
+                    .sheet(0)
+                    .doReadSync();
+            if (raw.isEmpty()) return new RawSheet(List.of(), List.of());
+            if (raw.size() - 1 > maxRows) {
+                throw new IllegalArgumentException("Excel 数据行不能超过 " + maxRows + " 行");
+            }
+            Map<Integer, String> headerRow = raw.get(0);
+            int lastColumn = headerRow.keySet().stream().mapToInt(Integer::intValue).max().orElse(-1);
+            List<String> headers = new ArrayList<>();
+            for (int i = 0; i <= lastColumn; i++) {
+                headers.add(normalizeCell(headerRow.get(i)));
+            }
+            List<Map<String, String>> rows = new ArrayList<>();
+            for (int rowIndex = 1; rowIndex < raw.size(); rowIndex++) {
+                Map<Integer, String> source = raw.get(rowIndex);
+                Map<String, String> row = new LinkedHashMap<>();
+                for (int column = 0; column < headers.size(); column++) {
+                    String header = headers.get(column);
+                    if (!header.isEmpty()) row.put(header, normalizeCell(source.get(column)));
+                }
+                rows.add(row);
+            }
+            return new RawSheet(List.copyOf(headers), List.copyOf(rows));
+        } catch (IllegalArgumentException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new RuntimeException("Excel文件解析失败: " + ex.getMessage(), ex);
+        }
+    }
+
+    private static String normalizeCell(String value) {
+        return value == null ? "" : value.trim();
+    }
+
+    public record RawSheet(List<String> headers, List<Map<String, String>> rows) {}
 
     /**
      * 导出Excel文件（单个Sheet）

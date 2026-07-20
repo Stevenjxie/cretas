@@ -5,6 +5,9 @@ import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.Where;
 
+import java.text.Normalizer;
+import java.util.Locale;
+
 /**
  * SP8: 物料16位分段编码字典.
  *
@@ -59,6 +62,10 @@ public class MaterialCodeSegment extends BaseEntity {
     @Column(name = "segment_label", nullable = false, length = 100)
     private String segmentLabel;
 
+    /** NFKC/lower-case/whitespace-free identity used for parent-scoped deduplication. */
+    @Column(name = "normalized_label", nullable = false, length = 100)
+    private String normalizedLabel;
+
     /**
      * 上级累积编码: L2 → 指向 L1 segmentCode; L3 → 指向 L2 segmentCode; L1 为 null.
      */
@@ -72,4 +79,14 @@ public class MaterialCodeSegment extends BaseEntity {
     @Column(name = "is_active", nullable = false)
     @Builder.Default
     private Boolean isActive = true;
+
+    @PrePersist
+    @PreUpdate
+    void normalizeIdentity() {
+        if (segmentLabel != null) {
+            segmentLabel = segmentLabel.trim();
+            normalizedLabel = Normalizer.normalize(segmentLabel, Normalizer.Form.NFKC)
+                    .trim().toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
+        }
+    }
 }

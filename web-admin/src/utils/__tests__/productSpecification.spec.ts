@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { composeProductSpecification } from '@/utils/productSpecification';
+import {
+  composeProductSpecification,
+  composeProductSpecificationFromNetContent,
+  convertNetContent,
+  displayProductSpecification,
+  parseNetContent,
+} from '@/utils/productSpecification';
 
 describe('composeProductSpecification', () => {
   it('使用中文克和产品基本单位生成规范规格', () => {
@@ -26,5 +32,30 @@ describe('composeProductSpecification', () => {
       { packageUnit: '件', baseUnit: '件', conversionFactor: 10 },
       { packageUnit: '箱', baseUnit: '件', conversionFactor: 0 },
     ])).toBe('');
+  });
+
+  it('支持重量和容量的同维度等值换算，并拒绝跨维度换算', () => {
+    expect(convertNetContent(800, 'g', 'kg')).toBe(0.8);
+    expect(convertNetContent(1, 'kg', 'g')).toBe(1000);
+    expect(convertNetContent(1000, 'ml', 'L')).toBe(1);
+    expect(convertNetContent(1, 'L', 'ml')).toBe(1000);
+    expect(convertNetContent(800, 'g', 'ml')).toBeNull();
+  });
+
+  it('用中文销售/包装单位生成容量规格，canonical unit 不泄漏', () => {
+    expect(composeProductSpecificationFromNetContent(500, 'ml', 'box', [
+      { packageUnit: 'case', baseUnit: 'box', conversionFactor: 12 },
+    ])).toBe('500ml/盒 12盒/箱 6L/箱');
+  });
+
+  it('编辑时从既有规格恢复净含量单位，不用新建默认值覆盖', () => {
+    expect(parseNetContent('0.8kg/盒 8盒/箱', 800)).toEqual({ amount: 0.8, unit: 'kg' });
+    expect(parseNetContent('500ml/瓶 12瓶/箱', null)).toEqual({ amount: 500, unit: 'ml' });
+    expect(parseNetContent('', 800)).toEqual({ amount: 800, unit: 'g' });
+  });
+
+  it('只转换规格中的 canonical 包装单位供用户查看', () => {
+    expect(displayProductSpecification('800g/box 8box/case 1slice/box')).toBe('800g/盒 8盒/箱 1片/盒');
+    expect(displayProductSpecification('1kg/袋')).toBe('1kg/袋');
   });
 });

@@ -26,6 +26,12 @@ public interface BomSeasoningItemRepository extends JpaRepository<BomSeasoningIt
     Optional<BomSeasoningItem> findByRecipeIdAndWorkProcessIdAndMaterialTypeId(
             String recipeId, String workProcessId, String materialTypeId);
 
+    List<BomSeasoningItem> findByRecipeIdAndWorkflowProcessNodeIdOrderBySeqAsc(
+            String recipeId, String workflowProcessNodeId);
+
+    Optional<BomSeasoningItem> findByRecipeIdAndWorkflowProcessNodeIdAndMaterialTypeId(
+            String recipeId, String workflowProcessNodeId, String materialTypeId);
+
     /** 整 SKU 路径只取未绑定工序的明细，按工序明细由工序路径独占核算。 */
     List<BomSeasoningItem> findByRecipeIdAndWorkProcessIdIsNullOrderBySeqAsc(String recipeId);
 

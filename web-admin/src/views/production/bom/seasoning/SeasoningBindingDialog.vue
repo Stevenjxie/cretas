@@ -3,9 +3,10 @@ import { computed, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { showSingletonNotification } from '@/utils/singletonNotification';
 import { useRoute, useRouter } from 'vue-router';
-import { bomSeasoningApi, type SeasoningBindingView, type SeasoningProcessView } from '@/api/bom';
+import { bomSeasoningApi, type BomItemSubstituteView, type SeasoningBindingView, type SeasoningProcessView } from '@/api/bom';
 import { get } from '@/api/request';
 import { convertUnit } from '@/api/unitContract';
+import { canonicalUnitCode, displayUnit } from '@/utils/unitPricing';
 import { findDuplicateBinding } from './seasoningModel';
 
 export interface SeasoningMaterialOption {
@@ -16,15 +17,18 @@ export interface SeasoningMaterialOption {
   movingAvgPrice?: number | null;
 }
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   modelValue: boolean;
   factoryId: string;
   recipeId: string;
   process: SeasoningProcessView | null;
   binding: SeasoningBindingView | null;
   materials: SeasoningMaterialOption[];
+  substituteRelations?: BomItemSubstituteView[];
   revision: number;
-}>();
+}>(), {
+  substituteRelations: () => [],
+});
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean];
@@ -41,6 +45,8 @@ const form = reactive({
   subsequentPercent: 50 as number | null,
   countInSeasoning: true,
   remark: '',
+  substituteMaterialTypeIds: [] as string[],
+  substituteFactors: {} as Record<string, number | null>,
 });
 const saving = reactive({ value: false });
 const dosageUnit = ref('kg');
@@ -48,6 +54,16 @@ const dosageUnitFactorsToG = ref<Record<string, number>>({ g: 1, kg: 1000 });
 const materialUnitLoading = ref(false);
 const selectedMaterial = computed(() => props.materials.find((item) => item.id === form.materialTypeId));
 const selectedMaterialUnit = computed(() => selectedMaterial.value?.unit?.trim() || '');
+const businessUnitLabel = (unit: string): string => {
+  const code = canonicalUnitCode(unit);
+  return ({ kg: '千克', g: '克', L: '升', mL: '毫升' } as Record<string, string>)[code]
+    || displayUnit(code);
+};
+const basisLabel = computed(() => {
+  if (props.process?.basisQuantity == null || !props.process.basisUnit) return '未解析';
+  const quantity = Number(props.process.basisQuantity).toFixed(4).replace(/\.?0+$/, '');
+  return `${quantity}${businessUnitLabel(props.process.basisUnit)}`;
+});
 const dosageUnitOptions = computed(() => {
   const options = ['kg', 'g'];
   const materialUnit = selectedMaterialUnit.value;
@@ -86,6 +102,11 @@ watch(() => [props.modelValue, props.binding] as const, () => {
   form.subsequentPercent = props.binding?.subsequentPotRatio == null ? 50 : props.binding.subsequentPotRatio * 100;
   form.countInSeasoning = props.binding?.countInSeasoning ?? true;
   form.remark = props.binding?.remark || '';
+  form.substituteMaterialTypeIds = props.substituteRelations.map((relation) => relation.substituteMaterialTypeId);
+  form.substituteFactors = Object.fromEntries(props.substituteRelations.map((relation) => [
+    relation.substituteMaterialTypeId,
+    relation.conversionFactor == null ? null : Number(relation.conversionFactor),
+  ]));
 }, { immediate: true });
 watch(() => form.materialTypeId, () => {
   refreshedMovingAvgPrice.value = undefined;
@@ -126,6 +147,9 @@ function isRevisionConflict(error: unknown): boolean {
 
 async function submit() {
   if (!props.process) return;
+  if (props.process.standardUsageSupported !== true) {
+    return ElMessage.warning('该工序的投入基准单位尚未形成可换算契约，暂不能保存标准辅料用量');
+  }
   if (!form.materialTypeId) return ElMessage.warning('请选择调料');
   if (form.dosagePerKgG == null || form.dosagePerKgG <= 0) return ElMessage.warning('投入量必须大于 0');
   if (form.potEnabled && (form.subsequentPercent == null || form.subsequentPercent < 0 || form.subsequentPercent > 100)) {
@@ -141,15 +165,29 @@ async function submit() {
     });
     return;
   }
+  const missingFactor = form.substituteMaterialTypeIds.find((materialTypeId) => {
+    const candidate = props.materials.find((item) => item.id === materialTypeId);
+    return canonicalUnitCode(candidate?.unit) !== canonicalUnitCode(selectedMaterial.value?.unit)
+      && (!form.substituteFactors[materialTypeId] || Number(form.substituteFactors[materialTypeId]) <= 0);
+  });
+  if (missingFactor) return ElMessage.warning('不同单位的替代辅料必须填写明确的等价换算系数');
 
   saving.value = true;
   try {
     const payload = {
+      workflowProcessNodeId: props.process.workflowProcessNodeId,
       materialTypeId: form.materialTypeId,
       dosagePerKgG: form.dosagePerKgG,
       subsequentPotRatio: form.potEnabled ? Number(form.subsequentPercent) / 100 : null,
       countInSeasoning: form.countInSeasoning,
       remark: form.remark.trim() || null,
+      substitutes: form.substituteMaterialTypeIds.map((materialTypeId) => ({
+        materialTypeId,
+        conversionFactor: canonicalUnitCode(props.materials.find((item) => item.id === materialTypeId)?.unit)
+          === canonicalUnitCode(selectedMaterial.value?.unit)
+          ? null
+          : form.substituteFactors[materialTypeId] ?? null,
+      })),
       expectedRevision: props.revision,
     };
     if (props.binding) {
@@ -208,15 +246,53 @@ async function refreshSelectedMaterialPrice() {
           <el-option v-for="material in materials" :key="material.id" :label="material.name" :value="material.id" />
         </el-select>
       </el-form-item>
+      <el-form-item label="替代辅料（可选）">
+        <el-select
+          v-model="form.substituteMaterialTypeIds"
+          multiple
+          filterable
+          collapse-tags
+          collapse-tags-tooltip
+          placeholder="选择可替代本辅料的物料"
+          style="width: 100%"
+          data-testid="seasoning-substitute-select"
+        >
+          <el-option
+            v-for="material in materials.filter((item) => item.id !== form.materialTypeId)"
+            :key="material.id"
+            :label="`${material.name}${material.code ? `（${material.code}）` : ''}`"
+            :value="material.id"
+          />
+        </el-select>
+        <div class="form-tip">替代辅料仅适用于当前 Workflow 工序；不会作为额外需求或重复计入成本。</div>
+        <div v-if="form.substituteMaterialTypeIds.length" class="substitute-factors">
+          <div v-for="materialTypeId in form.substituteMaterialTypeIds" :key="materialTypeId" class="substitute-factor-row">
+            <span>{{ materials.find((item) => item.id === materialTypeId)?.name }}</span>
+            <el-input-number
+              v-model="form.substituteFactors[materialTypeId]"
+              :data-testid="`seasoning-substitute-factor-${materialTypeId}`"
+              :min="0.000001"
+              :precision="6"
+              :controls="false"
+              :placeholder="canonicalUnitCode(materials.find((item) => item.id === materialTypeId)?.unit) === canonicalUnitCode(selectedMaterial?.unit) ? '同单位默认1:1' : '填写等价系数'"
+            />
+          </div>
+        </div>
+      </el-form-item>
       <el-form-item label="投入数量" required>
         <div class="dosage-sentence" data-testid="seasoning-dosage-sentence">
-          <span>每生产 1 kg 本工序半成品，需要投入</span>
+          <span>每生产 {{ basisLabel }} 本工序产出，需要投入</span>
           <el-input-number v-model="dosageDisplayValue" :min="0" :precision="4" :controls="false" />
-          <el-select v-model="dosageUnit" :loading="materialUnitLoading" style="width: 96px">
-            <el-option v-for="unit in dosageUnitOptions" :key="unit" :label="unit" :value="unit" />
+          <el-select
+            v-model="dosageUnit"
+            :loading="materialUnitLoading"
+            style="width: 96px"
+            data-testid="seasoning-dosage-unit"
+          >
+            <el-option v-for="unit in dosageUnitOptions" :key="unit" :label="businessUnitLabel(unit)" :value="unit" />
           </el-select>
         </div>
-        <div class="form-tip">默认 1 kg；可切换为该调料的物料单位，保存时系统统一换算为 g/kg。</div>
+        <div class="form-tip">分母来自已固定 Workflow 工序节点；物料单位可切换显示，保存时按同一重量口径换算。</div>
       </el-form-item>
       <el-form-item label="按锅序计算"><el-switch v-model="form.potEnabled" /></el-form-item>
       <template v-if="form.potEnabled">
@@ -256,4 +332,8 @@ async function refreshSelectedMaterialPrice() {
 .suffix { margin-left: 6px; }
 .dosage-sentence { display: flex; align-items: center; gap: 8px; width: 100%; flex-wrap: wrap; }
 .dosage-sentence :deep(.el-input-number) { width: 130px; }
+.substitute-factors { display: grid; gap: 6px; width: 100%; margin-top: 8px; }
+.substitute-factor-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.substitute-factor-row span { overflow: hidden; color: var(--el-text-color-regular); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.substitute-factor-row :deep(.el-input-number) { width: 150px; }
 </style>

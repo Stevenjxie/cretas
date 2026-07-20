@@ -23,6 +23,8 @@ public class BomCopyCandidateDTO {
     private Integer sourceRecipeVersion;
     private String rawRootMaterialTypeId;
     @Builder.Default
+    private List<String> rawRootMaterialTypeIds = new ArrayList<>();
+    @Builder.Default
     private List<SharedProcessDTO> sharedProcesses = new ArrayList<>();
     @Builder.Default
     private List<BomItemRuleDTO> bomItems = new ArrayList<>();
@@ -36,6 +38,7 @@ public class BomCopyCandidateDTO {
     @NoArgsConstructor
     @AllArgsConstructor
     public static class SharedProcessDTO {
+        private String workflowProcessNodeId;
         private String workProcessId;
         private String processName;
         private Integer targetOrder;
@@ -74,6 +77,8 @@ public class BomCopyCandidateDTO {
         private BigDecimal dosagePerKgG;
         private Integer seq;
         private String workProcessId;
+        private String workflowProcessNodeId;
+        private String sourceWorkflowProcessNodeId;
         private String workProcessName;
         private Boolean countInSeasoning;
         private String remark;

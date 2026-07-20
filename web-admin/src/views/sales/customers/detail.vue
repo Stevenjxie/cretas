@@ -15,6 +15,13 @@
 -->
 <template>
   <div class="customer-detail">
+    <div class="customer-detail-nav">
+      <el-button :icon="ArrowLeft" @click="goBackCustomerList">返回客户列表</el-button>
+      <el-breadcrumb separator="/">
+        <el-breadcrumb-item><button class="breadcrumb-link" @click="goBackCustomerList">客户管理</button></el-breadcrumb-item>
+        <el-breadcrumb-item>{{ customer?.name || '客户详情' }}</el-breadcrumb-item>
+      </el-breadcrumb>
+    </div>
     <CustomerHeader
       :customer="customer"
       :loading="customerLoading"
@@ -58,6 +65,7 @@
 import { ref, computed, onMounted, watch, defineAsyncComponent, type Component } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
+import { ArrowLeft } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { storeToRefs } from 'pinia';
 import { getCustomer, type Customer } from '@/api/customer';
@@ -82,6 +90,18 @@ const { factoryId } = storeToRefs(authStore);
 
 const customerId = computed(() => route.params.id as string);
 const activeTab = ref<string>((route.query.tab as string) || 'tracking');
+const customerListTarget = computed(() => {
+  const from = String(route.query.from || '');
+  return /^\/sales\/customers(?:\?|$)/.test(from) ? from : '/sales/customers';
+});
+
+function goBackCustomerList(): void {
+  if (window.history.state?.back === customerListTarget.value) {
+    router.back();
+    return;
+  }
+  void router.replace(customerListTarget.value);
+}
 
 const customer = ref<Customer | null>(null);
 const customerLoading = ref(false);
@@ -179,7 +199,7 @@ async function refreshCustomer() {
 onMounted(async () => {
   if (!customerId.value) {
     ElMessage.error('客户 ID 缺失');
-    router.replace('/sales/customers');
+    router.replace(customerListTarget.value);
     return;
   }
   if (!factoryId.value) {
@@ -195,7 +215,7 @@ onMounted(async () => {
     const msg = e?.message || e?.response?.data?.message || '加载失败';
     if (status === 404) {
       ElMessage.error('客户不存在');
-      router.replace('/sales/customers');
+      router.replace(customerListTarget.value);
     } else if (status === 403) {
       ElMessage({
         message: '无权访问此客户',
@@ -203,7 +223,7 @@ onMounted(async () => {
         duration: 0,
         showClose: true,
       });
-      router.replace('/sales/customers');
+      router.replace(customerListTarget.value);
     } else {
       // 4 位一体: backend message + sticky
       ElMessage({
@@ -221,6 +241,21 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.customer-detail-nav {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+.breadcrumb-link {
+  border: 0;
+  padding: 0;
+  color: var(--el-color-primary);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+}
+.breadcrumb-link:hover { text-decoration: underline; }
 .customer-detail {
   padding: 16px;
 }

@@ -270,6 +270,64 @@ class MaterialCodeSegmentServiceTest {
                     () -> service.create(FACTORY_ID, req));
             assertEquals(409, ex.getCode());
         }
+
+        @Test
+        @DisplayName("同一父级规范化同名分类 -> 409")
+        void create_duplicateNormalizedLabelWithinParent_throws409() {
+            MaterialCodeSegment parent = buildSegment(1L, FACTORY_ID, (short) 2,
+                    "001001", "水产原料", "001");
+            when(repo.findByFactoryIdAndSegmentCode(FACTORY_ID, "001001"))
+                    .thenReturn(Optional.of(parent));
+            when(repo.existsNormalizedLabelWithinParent(
+                    FACTORY_ID, (short) 3, "001001", "鱼类原料", null))
+                    .thenReturn(true);
+            CreateMaterialCodeSegmentRequest req = CreateMaterialCodeSegmentRequest.builder()
+                    .level((short) 3)
+                    .segmentCode("0010010002")
+                    .segmentLabel(" 鱼 类 原 料 ")
+                    .parentCode("001001")
+                    .build();
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.create(FACTORY_ID, req));
+
+            assertEquals(409, ex.getCode());
+            assertEquals("segmentLabel", ex.getHintTarget());
+            verify(repo, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("历史冲突 normalizedLabel 为空时仍按源名称规范化拒绝新重复")
+        void create_conflictsWithQuarantinedLegacyLabel_throws409() {
+            MaterialCodeSegment parent = buildSegment(1L, FACTORY_ID, (short) 2,
+                    "001001", "水产原料", "001");
+            MaterialCodeSegment legacy = buildSegment(2L, FACTORY_ID, (short) 3,
+                    "0010010001", "Ｆｉｓｈ　原料", "001001");
+            legacy.setNormalizedLabel(null);
+
+            when(repo.findByFactoryIdAndSegmentCode(FACTORY_ID, "001001"))
+                    .thenReturn(Optional.of(parent));
+            when(repo.existsNormalizedLabelWithinParent(
+                    FACTORY_ID, (short) 3, "001001", "fish原料", null))
+                    .thenReturn(false);
+            when(repo.findByFactoryIdAndParentCodeOrderBySortOrderAscSegmentCodeAsc(
+                    FACTORY_ID, "001001"))
+                    .thenReturn(List.of(legacy));
+
+            CreateMaterialCodeSegmentRequest req = CreateMaterialCodeSegmentRequest.builder()
+                    .level((short) 3)
+                    .segmentCode("0010010002")
+                    .segmentLabel(" Fish 原料 ")
+                    .parentCode("001001")
+                    .build();
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.create(FACTORY_ID, req));
+
+            assertEquals(409, ex.getCode());
+            assertEquals("segmentLabel", ex.getHintTarget());
+            verify(repo, never()).save(any());
+        }
     }
 
     // ─────────────────────────────────────────────────────────────

@@ -12,6 +12,7 @@ import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.enums.PurchaseReceiveStatus;
@@ -112,6 +113,12 @@ public class PurchaseServiceImpl implements PurchaseService {
     /** 开始采购: 从 SO 展开原料需求. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private SalesOrderItemRepository salesOrderItemRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.SupplierMaterialRepository supplierMaterialRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.SupplierMaterialPurchaseSpecRepository supplierMaterialPurchaseSpecRepository;
 
     /**
      * 销售订单采购建议必须与以销定产使用同一包装换算契约：先把销售展示单位
@@ -272,8 +279,7 @@ public class PurchaseServiceImpl implements PurchaseService {
 
         // DRAFT may be created before supplier assignment; submission remains fail-closed below.
         if (request.getSupplierId() != null && !request.getSupplierId().isBlank()) {
-            supplierRepository.findByIdAndFactoryId(request.getSupplierId(), factoryId)
-                    .orElseThrow(() -> new ResourceNotFoundException("供应商不存在或不属于当前组织"));
+            requireActiveSupplier(factoryId, request.getSupplierId());
         }
 
         // 防呆 R4 (幂等防双击, edge-case 审计 2026-06-24): 60s 内同买手对同供应商重复建 DRAFT 单 → 409。
@@ -333,10 +339,9 @@ public class PurchaseServiceImpl implements PurchaseService {
             }
             item.setMaterialName(materialName);
             item.setQuantity(itemDTO.getQuantity());
-            applyPurchasePriceContract(factoryId, item, itemDTO.getQuantityUnit(), itemDTO.getUnit(),
-                    itemDTO.getPriceUnit());
-            item.setUnitPrice(itemDTO.getUnitPrice());
-            item.setTaxRate(itemDTO.getTaxRate() != null ? itemDTO.getTaxRate() : BigDecimal.ZERO);
+            applySupplierPurchaseContract(factoryId, request.getSupplierId(), item, itemDTO);
+            if (itemDTO.getUnitPrice() != null) item.setUnitPrice(itemDTO.getUnitPrice());
+            applyPurchaseTaxContract(item, itemDTO.getTaxRate());
             item.setRemark(itemDTO.getRemark());
             item.setSpecification(itemDTO.getSpecification());
             item.setBoxQuantity(itemDTO.getBoxQuantity());
@@ -924,9 +929,13 @@ public class PurchaseServiceImpl implements PurchaseService {
         // Partial update — only touch fields the caller sent
         if (request.getSupplierId() != null) {
             // Validate supplier only when changed
-            supplierRepository.findByIdAndFactoryId(request.getSupplierId(), factoryId)
-                    .orElseThrow(() -> new ResourceNotFoundException("供应商不存在或不属于当前组织"));
+            requireActiveSupplier(factoryId, request.getSupplierId());
             order.setSupplierId(request.getSupplierId());
+            if (request.getItems() == null) {
+                for (PurchaseOrderItem existingItem : purchaseOrderItemRepository.findByPurchaseOrderId(orderId)) {
+                    assertSupplierMaterialActive(factoryId, request.getSupplierId(), existingItem.getMaterialTypeId());
+                }
+            }
         }
         if (request.getPurchaseType() != null) {
             order.setPurchaseType(PurchaseType.valueOf(request.getPurchaseType()));
@@ -974,10 +983,9 @@ public class PurchaseServiceImpl implements PurchaseService {
             item.setMaterialTypeId(itemDTO.getMaterialTypeId());
             item.setMaterialName(itemDTO.getMaterialName());
             item.setQuantity(itemDTO.getQuantity());
-            applyPurchasePriceContract(factoryId, item, itemDTO.getQuantityUnit(), itemDTO.getUnit(),
-                    itemDTO.getPriceUnit());
-            item.setUnitPrice(itemDTO.getUnitPrice());
-            item.setTaxRate(itemDTO.getTaxRate() != null ? itemDTO.getTaxRate() : BigDecimal.ZERO);
+            applySupplierPurchaseContract(factoryId, order.getSupplierId(), item, itemDTO);
+            if (itemDTO.getUnitPrice() != null) item.setUnitPrice(itemDTO.getUnitPrice());
+            applyPurchaseTaxContract(item, itemDTO.getTaxRate());
             item.setRemark(itemDTO.getRemark());
             items.add(item);
 
@@ -1027,6 +1035,9 @@ public class PurchaseServiceImpl implements PurchaseService {
         newOrder.setFactoryId(factoryId);
         newOrder.setOrderNumber(newOrderNumber);
         // 复制业务字段
+        if (source.getSupplierId() != null) {
+            requireActiveSupplier(factoryId, source.getSupplierId());
+        }
         newOrder.setSupplierId(source.getSupplierId());
         newOrder.setPurchaseType(source.getPurchaseType());
         newOrder.setIsImported(source.getIsImported());
@@ -1056,11 +1067,18 @@ public class PurchaseServiceImpl implements PurchaseService {
             newItem.setPriceUnit(srcItem.getPriceUnit() != null ? srcItem.getPriceUnit() : srcItem.getUnit());
             newItem.setQuantityToPriceFactor(srcItem.getQuantityToPriceFactor() != null
                     ? srcItem.getQuantityToPriceFactor() : BigDecimal.ONE);
+            newItem.setSupplierMaterialId(srcItem.getSupplierMaterialId());
+            newItem.setPurchasePackagingSpecId(srcItem.getPurchasePackagingSpecId());
+            newItem.setPurchasePackageUnitSnapshot(srcItem.getPurchasePackageUnitSnapshot());
+            newItem.setInventoryBaseUnitSnapshot(srcItem.getInventoryBaseUnitSnapshot());
+            newItem.setPackageToBaseFactorSnapshot(srcItem.getPackageToBaseFactorSnapshot());
+            newItem.setInventoryQuantitySnapshot(srcItem.getInventoryQuantitySnapshot());
             newItem.setUnitPrice(srcItem.getUnitPrice());
             newItem.setTaxRate(srcItem.getTaxRate() != null ? srcItem.getTaxRate() : BigDecimal.ZERO);
             newItem.setRemark(srcItem.getRemark());
             newItem.setSpecification(srcItem.getSpecification());
             newItem.setBoxQuantity(srcItem.getBoxQuantity());
+            snapshotPurchaseAmounts(newItem);
             // receivedQuantity 默认 ZERO — 不复制源 receivedQuantity
             newItems.add(newItem);
 
@@ -2400,5 +2418,137 @@ public class PurchaseServiceImpl implements PurchaseService {
             order.setStatus(PurchaseOrderStatus.PARTIAL_RECEIVED);
         }
         purchaseOrderRepository.save(order);
+    }
+
+    private Supplier requireActiveSupplier(String factoryId, String supplierId) {
+        Supplier supplier = supplierRepository.findByIdAndFactoryId(supplierId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("供应商不存在或不属于当前组织"));
+        if (!Boolean.TRUE.equals(supplier.getIsActive())) {
+            throw new com.cretas.aims.exception.BusinessException(409,
+                    "供应商已暂停合作，不能创建或改绑新的采购单")
+                    .withHint("请先在供应商详情中恢复合作，历史采购单仍可只读查看")
+                    .withHintTarget("supplierId");
+        }
+        return supplier;
+    }
+
+    private void assertSupplierMaterialActive(String factoryId, String supplierId, String materialTypeId) {
+        if (supplierId == null || supplierId.isBlank()) return;
+        if (materialTypeId == null || materialTypeId.isBlank()) {
+            throw new BusinessException(400, "采购物料不能为空").withHintTarget("materialTypeId");
+        }
+        if (supplierMaterialRepository == null
+                || !supplierMaterialRepository.existsByFactoryIdAndSupplierIdAndMaterialTypeIdAndActiveTrue(
+                        factoryId, supplierId, materialTypeId)) {
+            throw new BusinessException(409, "该供应商未启用所选物料的供应关系")
+                    .withHint("请先在供应商详情的“供应原料”中启用该物料")
+                    .withHintTarget("materialTypeId");
+        }
+    }
+
+    private void applySupplierPurchaseContract(String factoryId, String supplierId, PurchaseOrderItem item,
+            CreatePurchaseOrderRequest.PurchaseOrderItemDTO request) {
+        RawMaterialType material = materialTypeRepository.findById(item.getMaterialTypeId())
+                .orElseThrow(() -> new ResourceNotFoundException("采购物料不存在: " + item.getMaterialTypeId()));
+        if (!factoryId.equals(material.getFactoryId())) throw new BusinessException(403, "采购物料不属于当前工厂");
+
+        if (supplierId == null || supplierId.isBlank()) {
+            applyPurchasePriceContract(factoryId, item, request.getQuantityUnit(), request.getUnit(), request.getPriceUnit());
+            snapshotBaseUnit(factoryId, item, material);
+            return;
+        }
+        assertSupplierMaterialActive(factoryId, supplierId, item.getMaterialTypeId());
+        com.cretas.aims.entity.SupplierMaterial relation = supplierMaterialRepository
+                .findByFactoryIdAndSupplierIdAndMaterialTypeId(factoryId, supplierId, item.getMaterialTypeId())
+                .orElseThrow(() -> new BusinessException(409, "供应商与物料的供应关系不存在"));
+        if (request.getSupplierMaterialId() != null && !request.getSupplierMaterialId().equals(relation.getId())) {
+            throw new BusinessException(400, "供应关系与所选供应商/物料不一致")
+                    .withCode("SUPPLIER_MATERIAL_IDENTITY_MISMATCH").withHintTarget("supplierMaterialId");
+        }
+        item.setSupplierMaterialId(relation.getId());
+        List<com.cretas.aims.entity.SupplierMaterialPurchaseSpec> specs = supplierMaterialPurchaseSpecRepository == null
+                ? List.of() : supplierMaterialPurchaseSpecRepository
+                .findByFactoryIdAndSupplierMaterialIdAndActiveTrue(factoryId, relation.getId());
+        if (specs.isEmpty()) {
+            applyPurchasePriceContract(factoryId, item, request.getQuantityUnit(), request.getUnit(), request.getPriceUnit());
+            String baseUnit = canonicalUnit(factoryId, material.getUnit(), "库存基本单位");
+            if (!baseUnit.equals(item.getUnit())) {
+                throw new BusinessException(400, "未配置采购包装规格时只能按库存基本单位下单")
+                        .withCode("PURCHASE_SPEC_REQUIRED_FOR_PACKAGE_UNIT").withHintTarget("quantityUnit");
+            }
+            item.setPurchasePackageUnitSnapshot(baseUnit);
+            item.setInventoryBaseUnitSnapshot(baseUnit);
+            item.setPackageToBaseFactorSnapshot(BigDecimal.ONE);
+            item.setInventoryQuantitySnapshot(item.getQuantity());
+            if (item.getUnitPrice() == null) item.setUnitPrice(relation.getDefaultPurchasePrice());
+            return;
+        }
+        if (request.getPurchasePackagingSpecId() == null || request.getPurchasePackagingSpecId().isBlank()) {
+            throw new BusinessException(422, "该供应关系已配置采购包装规格，必须选择具体规格")
+                    .withCode("PURCHASE_PACKAGING_SPEC_REQUIRED").withHintTarget("purchasePackagingSpecId");
+        }
+        com.cretas.aims.entity.SupplierMaterialPurchaseSpec spec = specs.stream()
+                .filter(x -> request.getPurchasePackagingSpecId().equals(x.getId())).findFirst()
+                .orElseThrow(() -> new BusinessException(400, "采购包装规格不属于当前供应商和物料")
+                        .withCode("PURCHASE_PACKAGING_SPEC_IDENTITY_MISMATCH")
+                        .withHintTarget("purchasePackagingSpecId"));
+        String requestUnit = canonicalUnit(factoryId,
+                firstNonBlank(request.getQuantityUnit(), request.getUnit()), "采购数量单位");
+        if (!spec.getPurchasePackageUnit().equals(requestUnit)) {
+            throw new BusinessException(400, "采购数量单位与所选包装规格不一致")
+                    .withCode("PURCHASE_PACKAGING_SPEC_UNIT_MISMATCH").withHintTarget("quantityUnit");
+        }
+        if (request.getPriceUnit() != null
+                && !spec.getPurchasePackageUnit().equals(canonicalUnit(factoryId, request.getPriceUnit(), "采购计价单位"))) {
+            throw new BusinessException(400, "计价单位必须与所选采购包装规格一致")
+                    .withCode("PURCHASE_PRICE_UNIT_SPEC_MISMATCH").withHintTarget("priceUnit");
+        }
+        item.setUnit(spec.getPurchasePackageUnit());
+        item.setPriceUnit(spec.getPurchasePackageUnit());
+        item.setQuantityToPriceFactor(BigDecimal.ONE);
+        item.setPurchasePackagingSpecId(spec.getId());
+        item.setPurchasePackageUnitSnapshot(spec.getPurchasePackageUnit());
+        item.setInventoryBaseUnitSnapshot(spec.getInventoryBaseUnit());
+        item.setPackageToBaseFactorSnapshot(spec.getConversionFactor());
+        item.setInventoryQuantitySnapshot(item.getQuantity().multiply(spec.getConversionFactor()));
+        if (item.getUnitPrice() == null) item.setUnitPrice(spec.getQuotedPrice());
+    }
+
+    private void snapshotBaseUnit(String factoryId, PurchaseOrderItem item, RawMaterialType material) {
+        String base = canonicalUnit(factoryId, material.getUnit(), "库存基本单位");
+        item.setPurchasePackageUnitSnapshot(item.getUnit());
+        item.setInventoryBaseUnitSnapshot(base);
+        BigDecimal factor = conversionFactor(factoryId, material.getId(), item.getUnit(), base);
+        item.setPackageToBaseFactorSnapshot(factor);
+        item.setInventoryQuantitySnapshot(item.getQuantity().multiply(factor));
+    }
+
+    private void applyPurchaseTaxContract(PurchaseOrderItem item, BigDecimal explicitTaxRate) {
+        RawMaterialType material = materialTypeRepository.findById(item.getMaterialTypeId())
+                .orElseThrow(() -> new ResourceNotFoundException("采购物料不存在: " + item.getMaterialTypeId()));
+        BigDecimal taxRate = explicitTaxRate;
+        if (taxRate == null) {
+            if (material.getTaxTreatment() == com.cretas.aims.entity.enums.TaxTreatment.EXEMPT) {
+                taxRate = BigDecimal.ZERO;
+            } else if (material.getTaxRate() != null) {
+                taxRate = material.getTaxRate().getRate().multiply(new BigDecimal("100"));
+            } else {
+                throw new BusinessException(422, "物料未配置采购税率，不能静默按0%下单")
+                        .withCode("PURCHASE_TAX_RATE_REQUIRED").withHintTarget("taxRate");
+            }
+        }
+        if (taxRate.compareTo(BigDecimal.ZERO) < 0 || taxRate.compareTo(new BigDecimal("100")) > 0) {
+            throw new BusinessException(400, "采购税率必须在0到100之间").withHintTarget("taxRate");
+        }
+        item.setTaxRate(taxRate);
+        snapshotPurchaseAmounts(item);
+    }
+
+    private void snapshotPurchaseAmounts(PurchaseOrderItem item) {
+        BigDecimal untaxed = item.getLineAmount();
+        BigDecimal taxInclusive = item.getLineAmountWithTax();
+        item.setUntaxedAmountSnapshot(untaxed);
+        item.setTaxInclusiveAmountSnapshot(taxInclusive);
+        item.setTaxAmountSnapshot(untaxed == null || taxInclusive == null ? null : taxInclusive.subtract(untaxed));
     }
 }

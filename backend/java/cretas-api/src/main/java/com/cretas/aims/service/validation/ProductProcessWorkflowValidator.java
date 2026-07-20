@@ -76,6 +76,16 @@ public class ProductProcessWorkflowValidator {
     }
 
     public void validateForPublish(ProductProcessWorkflowDTO definition) {
+        validateStructureComplete(definition);
+    }
+
+    /**
+     * Validate that a DRAFT already describes a complete executable process chain.
+     *
+     * <p>This deliberately excludes BOM activation/catalog checks. It is the gate that
+     * opens BOM configuration in the workflow-first product-definition state machine.
+     */
+    public void validateStructureComplete(ProductProcessWorkflowDTO definition) {
         validateForDraft(definition);
         long rawCount = definition.getNodes().stream()
                 .filter(node -> "RAW_MATERIAL".equals(node.getKind()))

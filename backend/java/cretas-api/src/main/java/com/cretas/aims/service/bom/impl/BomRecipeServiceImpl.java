@@ -15,19 +15,21 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
-import com.cretas.aims.repository.ProductWorkProcessRepository;
-import com.cretas.aims.service.workflow.ProductWorkflowResolutionService;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.repository.bom.BomProcessInjectionConfigRepository;
+import com.cretas.aims.repository.product.ProductPackagingSpecRepository;
+import com.cretas.aims.entity.product.ProductPackagingSpec;
 import com.cretas.aims.entity.bom.BomProcessInjectionConfig;
 import com.cretas.aims.dto.bom.ProcessInjectionConfigDTO;
 import com.cretas.aims.service.bom.BomRecipeService;
+import com.cretas.aims.service.bom.BomItemSubstituteService;
 import com.cretas.aims.service.bom.NestedBomCostService;
 import com.cretas.aims.service.uom.MaterialUomConverter;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitNormalizationResult;
+import com.cretas.aims.service.validation.ProductConfigurationReadinessService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -42,7 +44,9 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -75,10 +79,11 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     private final BomRecipeItemRepository itemRepo;
     private final ProductTypeRepository productTypeRepo;
     private final RawMaterialTypeRepository materialTypeRepo;
-    private final ProductWorkProcessRepository productWorkProcessRepo;
-    private final ProductWorkflowResolutionService workflowResolutionService;
     private final MaterialUomConverter materialUomConverter;
     private final UnitContractService unitContractService;
+    private final ProductPackagingSpecRepository packagingSpecRepository;
+    private final ProductConfigurationReadinessService readinessService;
+    private final BomItemSubstituteService substituteService;
     /** SP1: 嵌套 BOM 成本聚合 (组合装/先做后用). */
     private final NestedBomCostService nestedBomCostService;
     /** U5: BOM 调料明细 repo (BOM 统管配方+锅序, 2026-06-24). */
@@ -88,6 +93,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Override
     @Transactional
     public BomRecipe ensureDraft(String factoryId, String productTypeId) {
+        readinessService.requireWorkflowDraftCompleteForBomWrite(factoryId, productTypeId);
         ProductType product = loadProductForUpdate(factoryId, productTypeId);
         validateProductOutputMetadata(product);
 
@@ -121,8 +127,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             draft.setVersion(1);
             draft.setIsCurrent(false);
             draft.setOverallYieldRate(null);
-            draft.setOutputQuantityPerUnit(product.getGramsPerUnit());
-            draft.setOutputUnit(product.getUnit());
+            applyProductOutputSnapshot(draft, product);
             draft.setStatus(BomRecipe.Status.DRAFT);
             draft.setSourceType(BomRecipe.SourceType.MANUAL);
             draft.setTotalMaterialCost(BigDecimal.ZERO);
@@ -150,19 +155,21 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         log.info("Creating BOM recipe: factory={}, product={}, items={}",
                 factoryId, req.getProductTypeId(), req.getItems().size());
 
+        readinessService.requireWorkflowDraftCompleteForBomWrite(factoryId, req.getProductTypeId());
         assertVersionCapacity(factoryId, req.getProductTypeId());
+        ProductType product = loadProductForUpdate(factoryId, req.getProductTypeId());
+        validateProductOutputMetadata(product);
         BomRecipe recipe = new BomRecipe();
         recipe.setFactoryId(factoryId);
         recipe.setRecipeCode(generateRecipeCode(factoryId));
         recipe.setProductTypeId(req.getProductTypeId());
-        recipe.setProductName(req.getProductName() != null ? req.getProductName() : req.getProductTypeId());
+        recipe.setProductName(product.getName());
         recipe.setVersion(recipeRepo.findMaxVersion(factoryId, req.getProductTypeId()) + 1);
         // 草稿不占用“当前生效”槽位；只有 activateRecipe 能设置 isCurrent=true。
         recipe.setIsCurrent(false);
         // 整体出成率由正式批次报工历史自动学习，配方头不接收人工初始值。
         recipe.setOverallYieldRate(null);
-        recipe.setOutputQuantityPerUnit(req.getOutputQuantityPerUnit());
-        recipe.setOutputUnit(req.getOutputUnit());
+        applyProductOutputSnapshot(recipe, product);
         recipe.setStatus(BomRecipe.Status.DRAFT);
         recipe.setSourceType(req.getSourceType() != null ? req.getSourceType() : BomRecipe.SourceType.MANUAL);
         recipe.setSourceSampleId(req.getSourceSampleId());
@@ -174,7 +181,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         // Build items with rehydrated material_name + denormalized unit if not provided.
         List<BomRecipeItem> items = new ArrayList<>();
         for (BomRecipeItemDTO dto : req.getItems()) {
-            items.add(buildItem(factoryId, recipe.getId(), dto));
+            items.add(buildItem(factoryId, recipe, dto));
         }
         itemRepo.saveAll(items);
         recipe.getItems().clear();
@@ -194,11 +201,13 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                     "只有 DRAFT 状态的 BOM 配方可以修改; 当前 status=" + recipe.getStatus()
                     + ", 请克隆为新版本后再改");
         }
+        readinessService.requireWorkflowDraftCompleteForBomWrite(factoryId, recipe.getProductTypeId());
 
         if (req.getProductName() != null) recipe.setProductName(req.getProductName());
         // overallYieldRate 是系统学习字段，草稿编辑不可人工覆盖。
-        if (req.getOutputQuantityPerUnit() != null) recipe.setOutputQuantityPerUnit(req.getOutputQuantityPerUnit());
-        if (req.getOutputUnit() != null) recipe.setOutputUnit(req.getOutputUnit());
+        ProductType product = loadProductForUpdate(factoryId, recipe.getProductTypeId());
+        validateProductOutputMetadata(product);
+        applyProductOutputSnapshot(recipe, product);
         if (req.getNotes() != null) recipe.setNotes(req.getNotes());
 
         // PUT is full-replace for items: soft-delete existing, persist new list.
@@ -211,7 +220,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
 
             List<BomRecipeItem> newItems = new ArrayList<>();
             for (BomRecipeItemDTO dto : req.getItems()) {
-                newItems.add(buildItem(factoryId, recipe.getId(), dto));
+                newItems.add(buildItem(factoryId, recipe, dto));
             }
             itemRepo.saveAll(newItems);
             // IMPORTANT: keep same Hibernate PersistentBag reference (clear+addAll, not setItems).
@@ -235,7 +244,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         // 也必须在同一事务中归档，确保状态文案与真实生效语义一致。
         ProductType product = loadProductForUpdate(factoryId, recipe.getProductTypeId());
         validateProductOutputMetadata(product);
+        validateRecipeOutputContract(factoryId, recipe, product);
         validateActivatableItems(recipe);
+        readinessService.requireBomCompleteForActivation(factoryId, recipe);
 
         List<BomRecipe> others = recipeRepo.findCompetingVersionsForActivation(
                 factoryId, recipe.getProductTypeId(), recipe.getId(), BomRecipe.Status.ACTIVE);
@@ -262,6 +273,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Transactional
     public BomRecipe cloneRecipe(String factoryId, String recipeId) {
         BomRecipe source = loadRecipe(factoryId, recipeId);
+        readinessService.requireWorkflowDraftCompleteForBomWrite(factoryId, source.getProductTypeId());
         assertVersionCapacity(factoryId, source.getProductTypeId());
         return cloneRecipeInternal(factoryId, source);
     }
@@ -279,6 +291,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         clone.setOverallYieldRate(source.getOverallYieldRate());
         clone.setOutputQuantityPerUnit(source.getOutputQuantityPerUnit());
         clone.setOutputUnit(source.getOutputUnit());
+        clone.setNetContentQuantity(source.getNetContentQuantity());
+        clone.setNetContentUnit(source.getNetContentUnit());
         clone.setStatus(BomRecipe.Status.DRAFT);
         clone.setSourceType(BomRecipe.SourceType.MANUAL);
         clone.setNotes("克隆自 " + source.getRecipeCode() + " (v" + source.getVersion() + ")");
@@ -314,9 +328,21 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             item.setSubProductTypeId(src.getSubProductTypeId());
             item.setPrimaryCode(src.getPrimaryCode());
             item.setPrimaryCodeRef(src.getPrimaryCodeRef());
+            item.setPackagingSpecId(src.getPackagingSpecId());
+            item.setPackagingSpecNameSnapshot(src.getPackagingSpecNameSnapshot());
+            item.setPackagingRole(src.getPackagingRole());
+            item.setNaturalQuantity(src.getNaturalQuantity());
+            item.setNaturalUnit(src.getNaturalUnit());
+            item.setPackagingPackageUnitSnapshot(src.getPackagingPackageUnitSnapshot());
+            item.setPackagingBaseUnitSnapshot(src.getPackagingBaseUnitSnapshot());
+            item.setPackagingConversionFactorSnapshot(src.getPackagingConversionFactorSnapshot());
             clonedItems.add(item);
         }
         itemRepo.saveAll(clonedItems);
+        Map<Long, Long> clonedRecipeItemIds = new HashMap<>();
+        for (int i = 0; i < sourceItems.size(); i++) {
+            clonedRecipeItemIds.put(sourceItems.get(i).getId(), clonedItems.get(i).getId());
+        }
         // IMPORTANT: keep same Hibernate PersistentBag reference (clear+addAll, not setItems).
         clone.getItems().clear();
         clone.getItems().addAll(clonedItems);
@@ -338,10 +364,21 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             cs.setCountInSeasoning(s.getCountInSeasoning());
             cs.setRemark(s.getRemark());
             cs.setWorkProcessId(s.getWorkProcessId()); // 调料配方按工序 (2026-07-13): 保工序分配
+            cs.setWorkflowProcessNodeId(s.getWorkflowProcessNodeId());
             cs.setSubsequentPotRatio(s.getSubsequentPotRatio());
             clonedSeasoning.add(cs);
         }
         seasoningItemRepo.saveAll(clonedSeasoning);
+        Map<Long, Long> clonedSeasoningItemIds = new HashMap<>();
+        for (int i = 0; i < sourceSeasoning.size(); i++) {
+            clonedSeasoningItemIds.put(sourceSeasoning.get(i).getId(), clonedSeasoning.get(i).getId());
+        }
+        substituteService.cloneRelations(
+                factoryId,
+                source.getId(),
+                clone.getId(),
+                clonedRecipeItemIds,
+                clonedSeasoningItemIds);
 
         List<BomProcessInjectionConfig> clonedConfigs = new ArrayList<>();
         for (BomProcessInjectionConfig p : processInjectionConfigRepo
@@ -396,13 +433,54 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                     "请先在产品档案中填写基本单位",
                     "productUnit");
         }
-        if (product.getGramsPerUnit() == null
-                || product.getGramsPerUnit().compareTo(BigDecimal.ZERO) <= 0) {
+        BigDecimal netContent = product.getNetContentQuantity() != null
+                ? product.getNetContentQuantity() : product.getGramsPerUnit();
+        String netContentUnit = product.getNetContentUnit() != null
+                ? product.getNetContentUnit() : (product.getGramsPerUnit() == null ? null : "g");
+        if (netContent == null || netContent.compareTo(BigDecimal.ZERO) <= 0 || netContentUnit == null) {
             throw bomError(409,
-                    "SKU 未配置有效标准克重，不能创建或激活 BOM",
-                    "BOM_SKU_GRAMS_PER_UNIT_REQUIRED",
-                    "请先在产品档案中填写大于 0 的标准克重",
-                    "gramsPerUnit");
+                    "SKU 未配置有效净含量，不能创建或激活 BOM",
+                    "BOM_SKU_NET_CONTENT_REQUIRED",
+                    "请先在产品档案中填写大于 0 的净含量及单位",
+                    "netContentQuantity");
+        }
+    }
+
+    private void applyProductOutputSnapshot(BomRecipe recipe, ProductType product) {
+        UnitNormalizationResult outputUnit = unitContractService.normalize(product.getFactoryId(), product.getUnit());
+        if (!outputUnit.recognized()) {
+            throw bomError(409, "SKU 基本单位无法识别，不能创建或激活 BOM",
+                    "BOM_SKU_UNIT_UNKNOWN", "请修正 SKU 基本单位", "productUnit");
+        }
+        recipe.setOutputQuantityPerUnit(BigDecimal.ONE);
+        recipe.setOutputUnit(outputUnit.code());
+        if (product.getNetContentQuantity() != null && product.getNetContentUnit() != null) {
+            recipe.setNetContentQuantity(product.getNetContentQuantity());
+            recipe.setNetContentUnit(product.getNetContentUnit());
+        } else {
+            recipe.setNetContentQuantity(product.getGramsPerUnit());
+            recipe.setNetContentUnit(product.getGramsPerUnit() == null ? null : "g");
+        }
+    }
+
+    private void validateRecipeOutputContract(String factoryId, BomRecipe recipe, ProductType product) {
+        if (recipe.getOutputQuantityPerUnit() == null
+                || recipe.getOutputQuantityPerUnit().compareTo(BigDecimal.ONE) != 0) {
+            throw bomError(409,
+                    "BOM 每单位产出必须是 1 个 SKU 基本单位，不能使用净含量作为产出数量",
+                    "BOM_OUTPUT_QUANTITY_MISMATCH",
+                    "请重新保存当前草稿，使每单位产出恢复为 1 " + product.getUnit(),
+                    "outputQuantityPerUnit");
+        }
+        if (!unitContractService.areEquivalent(factoryId, recipe.getOutputUnit(), product.getUnit())) {
+            throw bomError(409, "BOM 产出单位与 SKU 基本单位不一致",
+                    "BOM_OUTPUT_UNIT_MISMATCH", "请按 SKU 基本单位保存 BOM", "outputUnit");
+        }
+        if (recipe.getNetContentQuantity() == null
+                || recipe.getNetContentQuantity().compareTo(BigDecimal.ZERO) <= 0
+                || recipe.getNetContentUnit() == null || recipe.getNetContentUnit().isBlank()) {
+            throw bomError(409, "BOM 缺少可追溯的 SKU 净含量快照",
+                    "BOM_NET_CONTENT_SNAPSHOT_REQUIRED", "请重新保存当前草稿后再激活", "netContentQuantity");
         }
     }
 
@@ -423,18 +501,20 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                         "请为每一行选择有效物料",
                         "bomItems");
             }
-            boolean rawMaterial = item.getMaterialCategory() == null
-                    || item.getMaterialCategory().isBlank()
-                    || "RAW".equalsIgnoreCase(item.getMaterialCategory());
+            boolean packagingMaterial = "PACKAGING".equalsIgnoreCase(item.getMaterialCategory());
             boolean invalidQuantity = item.getStandardQuantity() != null
                     && item.getStandardQuantity().compareTo(BigDecimal.ZERO) <= 0;
-            boolean missingRequiredQuantity = !rawMaterial && item.getStandardQuantity() == null;
+            // 原料与工序辅料的 BOM 行表达资格/关系，固定用量可留空；
+            // 包材是确定性消耗，激活前必须有正数用量。
+            boolean missingRequiredQuantity = packagingMaterial && item.getStandardQuantity() == null;
             if (invalidQuantity || missingRequiredQuantity) {
-                String category = rawMaterial ? "原料" : item.getMaterialCategory();
+                String category = packagingMaterial ? "包材" : "原料/辅料";
                 throw bomError(409,
                         category + "明细「" + displayItemName(item) + "」缺少有效数量，不能激活",
                         "BOM_ACTIVATION_QUANTITY_REQUIRED",
-                        "请填写大于 0 的标准用量；包材数量也不能为空",
+                        packagingMaterial
+                                ? "请填写该包装规格下大于 0 的固定包材用量"
+                                : "参考用量如填写必须大于 0；实际投料以生产计划和报工为准",
                         "standardQuantity");
             }
             if (item.getUnit() == null || item.getUnit().isBlank()) {
@@ -507,6 +587,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Transactional
     public BomRecipe calculateCost(String factoryId, String recipeId) {
         BomRecipe recipe = loadRecipe(factoryId, recipeId);
+        if (recipe.getStatus() == BomRecipe.Status.DRAFT) {
+            readinessService.requireWorkflowDraftCompleteForBomWrite(factoryId, recipe.getProductTypeId());
+        }
         // IMPORTANT: use refreshItemsInPlace to keep Hibernate PersistentBag reference intact.
         refreshItemsInPlace(recipe);
         recomputeMaterialCost(recipe);
@@ -522,8 +605,14 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             throw new IllegalStateException(
                     "只有 DRAFT 状态可加 item; 当前 status=" + recipe.getStatus());
         }
-        BomRecipeItem item = buildItem(factoryId, recipe.getId(), dto);
+        readinessService.requireWorkflowDraftCompleteForBomWrite(factoryId, recipe.getProductTypeId());
+        BomRecipeItem item = buildItem(factoryId, recipe, dto);
         item = itemRepo.save(item);
+        substituteService.replaceForRecipeItem(
+                factoryId,
+                recipeId,
+                item.getId(),
+                dto.getSubstitutes() == null ? List.of() : dto.getSubstitutes());
         // Touch recipe to mark updated + recompute cost.
         // IMPORTANT: must NOT replace the Hibernate-managed collection reference (orphanRemoval=true).
         // Using clear+addAll keeps the same List instance so Hibernate's orphan tracking stays intact.
@@ -546,17 +635,19 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             throw new IllegalStateException(
                     "只有 DRAFT 状态可改 item; 当前 status=" + recipe.getStatus());
         }
+        readinessService.requireWorkflowDraftCompleteForBomWrite(factoryId, recipe.getProductTypeId());
         // T159-B R3: UoM dimension guard on update path.
         // Look up the live material name (for 防呆 message) + canonical unit via item's materialTypeId.
         RawMaterialType mt = materialTypeRepo.findById(item.getMaterialTypeId()).orElse(null);
-        if (dto.getUnit() != null && !dto.getUnit().isBlank()) {
-            normalizeItemUnit(factoryId, dto);
-            if (mt != null) {
-                checkBomUnitCompatible(mt, dto.getUnit());
-            }
+        if (mt != null) {
+            prepareItemUnit(factoryId, dto, mt);
+            checkBomUnitCompatible(mt, dto.getUnit());
         }
         if (mt != null) {
             applyPrimaryCode(dto, item, mt);
+        }
+        if (mt != null) {
+            applyPackagingLevel(factoryId, recipe.getProductTypeId(), dto, mt, item);
         }
         validateItemQuantity(dto);
         applyDtoToItem(dto, item);
@@ -564,6 +655,10 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             applyMaterialMasterPricing(item, mt);
         }
         item = itemRepo.save(item);
+        if (dto.getSubstitutes() != null) {
+            substituteService.replaceForRecipeItem(
+                    factoryId, recipe.getId(), item.getId(), dto.getSubstitutes());
+        }
         refreshItemsInPlace(recipe);
         recomputeMaterialCost(recipe);
         recipeRepo.save(recipe);
@@ -583,6 +678,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             throw new IllegalStateException(
                     "只有 DRAFT 状态可删 item; 当前 status=" + recipe.getStatus());
         }
+        readinessService.requireWorkflowDraftCompleteForBomWrite(factoryId, recipe.getProductTypeId());
         item.softDelete();
         itemRepo.save(item);
         refreshItemsInPlace(recipe);
@@ -600,7 +696,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
 
     @Override
     public Optional<BomSeasoningResponse> getSeasoningByProduct(String factoryId, String productTypeId) {
-        Optional<BomRecipe> opt = recipeRepo.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, productTypeId);
+        Optional<BomRecipe> opt = recipeRepo.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                factoryId, productTypeId, BomRecipe.Status.ACTIVE);
         return opt.map(recipe ->
                 buildSeasoningResponse(recipe, seasoningItemRepo.findByRecipeIdOrderBySeqAsc(recipe.getId())));
     }
@@ -615,6 +712,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                     "只有 DRAFT 状态可修改调料配方; 当前 status=" + recipe.getStatus()
                     + ", 请克隆为新版本后再改");
         }
+        readinessService.requireWorkflowDraftCompleteForBomWrite(factoryId, recipe.getProductTypeId());
 
         // Validate sections and resolve authoritative material snapshots before any write.
         List<SeasoningItemDTO> items = req.getSeasoningItems();
@@ -763,11 +861,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                     .withHint("请选择该 SKU 配置的有效工序")
                     .withHintTarget("workProcessId");
         }
-        boolean valid = workflowResolutionService.resolveProcessPath(factoryId, recipe.getProductTypeId())
-                .map(path -> path.processes().stream()
-                        .anyMatch(step -> workProcessId.equals(step.workProcessId())))
-                .orElseGet(() -> productWorkProcessRepo.existsByFactoryIdAndProductTypeIdAndWorkProcessId(
-                        factoryId, recipe.getProductTypeId(), workProcessId));
+        boolean valid = readinessService.requireWorkflowDraftCompleteForBomWrite(
+                        factoryId, recipe.getProductTypeId())
+                .workProcessIds().contains(workProcessId);
         if (!valid) {
             throw new BusinessException(400, "所选工序不是该 SKU 的有效工序: " + workProcessId)
                     .withHint("请重新选择该 SKU 工序路线中的工序")
@@ -824,9 +920,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     }
 
     /** Build new item from DTO with material_name + default unit rehydrated from raw_material_types. */
-    private BomRecipeItem buildItem(String factoryId, String recipeId, BomRecipeItemDTO dto) {
+    private BomRecipeItem buildItem(String factoryId, BomRecipe recipe, BomRecipeItemDTO dto) {
         BomRecipeItem item = new BomRecipeItem();
-        item.setRecipeId(recipeId);
+        item.setRecipeId(recipe.getId());
         item.setFactoryId(factoryId);
         item.setMaterialTypeId(dto.getMaterialTypeId());
 
@@ -845,18 +941,15 @@ public class BomRecipeServiceImpl implements BomRecipeService {
 
         applyPrimaryCode(dto, item, mt.get());
 
-        // 包材规格自动推算: PACKAGING 行若 DTO 未手填 standardQuantity 且物料有 packQtyPerProduct,
-        // 则自动写入 standardQuantity = packQtyPerProduct (每成品单位用量).
-        // 手填优先 (dto.standardQuantity != null) — 向后兼容, 不破坏已有手填包材 BOM.
-        applyPackagingSpecAutoInfer(dto, mt.get());
-
         // The UI displays localized labels (盒/箱) while material masters may hold
         // English historical codes (box/case). Resolve both through the shared unit
         // contract and persist one canonical code before compatibility/pricing checks.
-        normalizeItemUnit(factoryId, dto);
+        prepareItemUnit(factoryId, dto, mt.get());
 
         // T159-B R3: UoM dimension guard at BOM write time.
         checkBomUnitCompatible(mt.get(), dto.getUnit());
+
+        applyPackagingLevel(factoryId, recipe.getProductTypeId(), dto, mt.get(), item);
 
         validateItemQuantity(dto);
         applyDtoToItem(dto, item);
@@ -864,13 +957,97 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         return item;
     }
 
+    /**
+     * Canonicalize units before persistence. Packaging units are inherited
+     * from the selected material master and cannot be independently selected
+     * in a BOM row.
+     */
+    private void prepareItemUnit(String factoryId, BomRecipeItemDTO dto, RawMaterialType material) {
+        if ("PACKAGING".equalsIgnoreCase(dto.getMaterialCategory())) {
+            String materialUnit = canonicalUnitOrThrow(factoryId, material.getUnit(), "unit");
+            if (dto.getUnit() != null && !dto.getUnit().isBlank()
+                    && !unitContractService.areEquivalent(factoryId, dto.getUnit(), materialUnit)) {
+                throw bomError(400, "包材单位必须继承物料档案，不能在 BOM 中另选",
+                        "BOM_PACKAGING_UNIT_MISMATCH", "请先修正包材档案的库存单位", "unit");
+            }
+            dto.setUnit(materialUnit);
+            return;
+        }
+        normalizeItemUnit(factoryId, dto);
+    }
+
     private void validateItemQuantity(BomRecipeItemDTO dto) {
         String category = dto.getMaterialCategory() == null ? "RAW" : dto.getMaterialCategory();
         BigDecimal quantity = dto.getStandardQuantity();
-        if ((quantity == null && !"RAW".equalsIgnoreCase(category))
+        if ((quantity == null && "PACKAGING".equalsIgnoreCase(category))
                 || (quantity != null && quantity.compareTo(BigDecimal.ZERO) <= 0)) {
-            throw new IllegalArgumentException("非原料 BOM 的每成品用量必须大于 0");
+            throw new IllegalArgumentException("包材用量必须大于 0；原料和工序辅料可由计划/报工确定实际用量");
         }
+    }
+
+    private void applyPackagingLevel(
+            String factoryId,
+            String productTypeId,
+            BomRecipeItemDTO dto,
+            RawMaterialType material,
+            BomRecipeItem item) {
+        if (!"PACKAGING".equalsIgnoreCase(dto.getMaterialCategory())) {
+            item.setPackagingSpecId(null);
+            item.setPackagingSpecNameSnapshot(null);
+            item.setPackagingRole(null);
+            item.setNaturalQuantity(null);
+            item.setNaturalUnit(null);
+            item.setPackagingPackageUnitSnapshot(null);
+            item.setPackagingBaseUnitSnapshot(null);
+            item.setPackagingConversionFactorSnapshot(null);
+            return;
+        }
+        if (dto.getPackagingRole() == null || dto.getPackagingRole().isBlank()) {
+            throw bomError(400, "包材必须选择所在包装层级的业务角色",
+                    "BOM_PACKAGING_ROLE_REQUIRED", "请选择成品容器、封装或外包装等角色", "packagingRole");
+        }
+        String materialUnit = canonicalUnitOrThrow(factoryId, material.getUnit(), "unit");
+        if (dto.getUnit() != null && !dto.getUnit().isBlank()
+                && !unitContractService.areEquivalent(factoryId, dto.getUnit(), materialUnit)) {
+            throw bomError(400, "包材单位必须继承物料档案，不能在 BOM 中另选",
+                    "BOM_PACKAGING_UNIT_MISMATCH", "请先修正包材档案的库存单位", "unit");
+        }
+        dto.setUnit(materialUnit);
+        BigDecimal naturalQuantity = dto.getNaturalQuantity() != null
+                ? dto.getNaturalQuantity() : dto.getStandardQuantity();
+        if (naturalQuantity == null || naturalQuantity.compareTo(BigDecimal.ZERO) <= 0) {
+            throw bomError(400, "包材自然用量必须大于 0",
+                    "BOM_PACKAGING_QUANTITY_REQUIRED", "请填写每个当前包装规格所需的包材数量", "naturalQuantity");
+        }
+
+        item.setPackagingRole(dto.getPackagingRole().trim());
+        item.setNaturalQuantity(naturalQuantity);
+        item.setNaturalUnit(materialUnit);
+        if (dto.getPackagingSpecId() == null || dto.getPackagingSpecId().isBlank()) {
+            dto.setStandardQuantity(naturalQuantity);
+            item.setPackagingSpecId(null);
+            item.setPackagingSpecNameSnapshot("基本规格");
+            item.setPackagingPackageUnitSnapshot(null);
+            item.setPackagingBaseUnitSnapshot(null);
+            item.setPackagingConversionFactorSnapshot(BigDecimal.ONE);
+            return;
+        }
+
+        ProductPackagingSpec spec = packagingSpecRepository
+                .findByIdAndFactoryIdAndProductTypeIdAndActiveTrue(
+                        dto.getPackagingSpecId(), factoryId, productTypeId)
+                .orElseThrow(() -> bomError(400, "所选包装规格不存在、已停用或不属于当前 SKU",
+                        "BOM_PACKAGING_SPEC_INVALID", "请刷新 SKU 包装规格后重新选择", "packagingSpecId"));
+        if (spec.getConversionFactor() == null || spec.getConversionFactor().compareTo(BigDecimal.ZERO) <= 0) {
+            throw bomError(409, "SKU 包装规格换算系数无效",
+                    "BOM_PACKAGING_SPEC_CONVERSION_INVALID", "请先修正 SKU 包装规格", "packagingSpecId");
+        }
+        dto.setStandardQuantity(naturalQuantity.divide(spec.getConversionFactor(), 8, RoundingMode.HALF_UP));
+        item.setPackagingSpecId(spec.getId());
+        item.setPackagingSpecNameSnapshot(spec.getName());
+        item.setPackagingPackageUnitSnapshot(spec.getPackageUnit());
+        item.setPackagingBaseUnitSnapshot(spec.getBaseUnit());
+        item.setPackagingConversionFactorSnapshot(spec.getConversionFactor());
     }
 
     /** BOM 价格只读继承物料主数据/库存移动均价，禁止形成第二套人工价格真值。 */
@@ -901,54 +1078,6 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                     "BOM 数量单位无法换算到计价单位: " + item.getUnit() + " → " + priceUnit);
         }
         item.setQuantityToPriceFactor(conversion.getQuantity());
-    }
-
-    /**
-     * 包材规格自动推算 (Packaging Spec Auto-Inference).
-     *
-     * <p>触发条件 (AND):
-     * <ol>
-     *   <li>{@code dto.materialCategory} 为 {@code PACKAGING}</li>
-     *   <li>{@code dto.standardQuantity} 为 {@code null} (未手填)</li>
-     *   <li>{@code mt.packQtyPerProduct} 不为 {@code null} (物料已配置规格)</li>
-     * </ol>
-     *
-     * <p>当条件满足时, 将 {@code dto.standardQuantity} 设为 {@code mt.packQtyPerProduct},
-     * 后续 {@link #applyDtoToItem} 正常按手填路径处理.
-     *
-     * <p>手填优先 — 若 {@code dto.standardQuantity != null} 直接跳过, 不覆盖用户明确输入.
-     * unit 为 null 时同步从物料主数据回填 (包材单位通常是"个/袋/盒").
-     *
-     * @param dto DTO (mutated in-place when auto-infer applies)
-     * @param mt  已查出的原料主数据
-     */
-    private void applyPackagingSpecAutoInfer(BomRecipeItemDTO dto, RawMaterialType mt) {
-        boolean isPackaging = "PACKAGING".equals(dto.getMaterialCategory());
-        if (!isPackaging) {
-            return;
-        }
-        if (dto.getStandardQuantity() != null) {
-            // 手填优先 — 用户已明确给了数量, 尊重用户
-            return;
-        }
-        BigDecimal packQty = mt.getPackQtyPerProduct();
-        if (packQty == null) {
-            // 物料未配置规格 — 维持诚实 null, 让上层 @NotNull 校验拒绝或用户手填
-            return;
-        }
-        // 自动推算: standardQuantity = packQtyPerProduct
-        dto.setStandardQuantity(packQty);
-        log.info("[PackagingSpecInfer] materialTypeId={} name={} packQtyPerProduct={} → BOM standardQuantity auto-set",
-                mt.getId(), mt.getName(), packQty);
-
-        // unit 回填: 若 DTO 未给单位, 从物料主数据取 (包材通常是"个"/"袋"/"盒")
-        if (dto.getUnit() == null || dto.getUnit().isBlank()) {
-            String matUnit = mt.getUnit();
-            if (matUnit != null && !matUnit.isBlank()) {
-                dto.setUnit(matUnit);
-                log.debug("[PackagingSpecInfer] unit auto-set from material: {}", matUnit);
-            }
-        }
     }
 
     /** Apply DTO fields to entity (used by add + update). */

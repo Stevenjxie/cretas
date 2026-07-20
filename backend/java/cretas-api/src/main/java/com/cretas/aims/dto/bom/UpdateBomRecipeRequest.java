@@ -27,11 +27,10 @@ public class UpdateBomRecipeRequest {
     @Schema(description = "已废弃：整体出成率由正式批次历史自动计算，人工传值会被忽略", deprecated = true)
     private BigDecimal overallYieldRate;
 
-    @Schema(description = "单份成品量")
-    @DecimalMin(value = "0.0001")
+    @Schema(description = "已废弃：服务端按 SKU 基本单位固定为 1", deprecated = true)
     private BigDecimal outputQuantityPerUnit;
 
-    @Schema(description = "成品计量单位")
+    @Schema(description = "已废弃：服务端继承 SKU canonical 基本单位", deprecated = true)
     @Size(max = 20)
     private String outputUnit;
 

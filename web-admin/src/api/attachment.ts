@@ -182,16 +182,15 @@ export async function uploadAndRegister(
   entityId: string,
   extras?: { businessTag?: string; description?: string; fileCategory?: AttachmentFileCategory },
   factoryId?: string,
+  onProgress?: (percentage: number) => void,
 ): Promise<Attachment> {
+  onProgress?.(2);
   const urlResp = await getUploadUrl(file.name, file.type, factoryId);
   const { uploadUrl, fileUrl } = urlResp.data;
-
-  const putRes = await fetch(uploadUrl, {
-    method: 'PUT',
-    headers: { 'Content-Type': file.type },
-    body: file,
+  await putFileWithProgress(uploadUrl, file, (percentage) => {
+    onProgress?.(Math.min(90, 5 + Math.round(percentage * 0.85)));
   });
-  if (!putRes.ok) throw new Error(`OSS 上传失败 HTTP ${putRes.status}`);
+  onProgress?.(94);
 
   const saved = await registerAttachment(
     {
@@ -208,5 +207,38 @@ export async function uploadAndRegister(
     },
     factoryId,
   );
+  onProgress?.(100);
   return saved.data;
+}
+
+export async function putFileWithProgress(
+  uploadUrl: string,
+  file: File,
+  onProgress?: (percentage: number) => void,
+): Promise<void> {
+  if (typeof XMLHttpRequest === 'undefined') {
+    const response = await fetch(uploadUrl, {
+      method: 'PUT', headers: { 'Content-Type': file.type }, body: file,
+    });
+    if (!response.ok) throw new Error(`OSS 上传失败 HTTP ${response.status}`);
+    onProgress?.(100);
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', uploadUrl, true);
+    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) {
+        onProgress?.(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else reject(new Error(`OSS 上传失败 HTTP ${xhr.status}`));
+    };
+    xhr.onerror = () => reject(new Error('OSS 上传网络失败'));
+    xhr.onabort = () => reject(new Error('OSS 上传已取消'));
+    xhr.send(file);
+  });
 }

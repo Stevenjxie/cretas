@@ -4,6 +4,7 @@ import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.enums.ArApTransactionType;
 import com.cretas.aims.entity.enums.CounterpartyType;
+import com.cretas.aims.entity.enums.PayablePaymentStatus;
 import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.CustomerRepository;
@@ -69,6 +70,10 @@ class ArApServiceImplRestaurantSourceTest {
         assertEquals(SOURCE_ID, result.getSourceId());
         assertNull(result.getPurchaseOrderId());
         assertEquals(0, new BigDecimal("125.00").compareTo(result.getAmount()));
+        assertEquals(0, new BigDecimal("0.00").compareTo(result.getSettledAmount()));
+        assertEquals(0, new BigDecimal("125.00").compareTo(result.getOutstandingAmount()));
+        assertEquals(PayablePaymentStatus.UNPAID, result.getPaymentStatus());
+        assertEquals("CNY", result.getCurrencyCode());
         assertEquals(0, new BigDecimal("145.00").compareTo(supplier.getCurrentBalance()));
         verify(supplierRepository).save(supplier);
     }

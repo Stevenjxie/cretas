@@ -3,6 +3,7 @@ package com.cretas.aims.controller;
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.bom.BomCopyCandidateDTO;
+import com.cretas.aims.dto.bom.BomItemSubstituteDTO;
 import com.cretas.aims.dto.bom.BomCopyToDraftRequest;
 import com.cretas.aims.dto.bom.BomSeasoningResponse;
 import com.cretas.aims.dto.bom.BomSeasoningSaveRequest;
@@ -18,6 +19,7 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.service.bom.BomCopyService;
+import com.cretas.aims.service.bom.BomItemSubstituteService;
 import com.cretas.aims.service.bom.BomRecipeService;
 import com.cretas.aims.service.bom.BomSeasoningWorkspaceService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -57,6 +59,7 @@ public class BomRecipeController {
     private final BomRecipeService recipeService;
     private final BomCopyService bomCopyService;
     private final BomSeasoningWorkspaceService seasoningWorkspaceService;
+    private final BomItemSubstituteService substituteService;
 
     // ========== List / detail ==========
 
@@ -78,6 +81,14 @@ public class BomRecipeController {
             @PathVariable String factoryId,
             @PathVariable String recipeId) {
         return ApiResponse.success(recipeService.getRecipe(factoryId, recipeId));
+    }
+
+    @GetMapping("/{recipeId}/substitutes")
+    @Operation(summary = "读取 BOM 主项的结构化替代关系")
+    public ApiResponse<List<BomItemSubstituteDTO>> listSubstitutes(
+            @PathVariable String factoryId,
+            @PathVariable String recipeId) {
+        return ApiResponse.success(substituteService.listByRecipe(factoryId, recipeId));
     }
 
     @GetMapping("/by-product/{productTypeId}/current")

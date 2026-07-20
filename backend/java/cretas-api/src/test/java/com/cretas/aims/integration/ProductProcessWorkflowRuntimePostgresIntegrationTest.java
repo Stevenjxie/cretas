@@ -143,6 +143,7 @@ class ProductProcessWorkflowRuntimePostgresIntegrationTest {
     @MockBean private ProductProcessWorkflowCatalogValidator catalogValidator;
     @MockBean private com.cretas.aims.repository.unit.ProductUnitConversionRepository conversionRepository;
     @MockBean private com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator unitValidator;
+    @MockBean private com.cretas.aims.service.bom.BomWorkflowRevisionService bomWorkflowRevisionService;
     @MockBean private com.cretas.aims.service.unit.UnitContractService unitContractService;
 
     @Test

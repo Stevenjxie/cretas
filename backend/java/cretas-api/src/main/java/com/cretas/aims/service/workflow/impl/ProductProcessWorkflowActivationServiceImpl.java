@@ -13,6 +13,7 @@ import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
 import com.cretas.aims.service.workflow.CompiledProductProcessWorkflow;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowActivationService;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowRuntimeCompiler;
+import com.cretas.aims.service.bom.BomWorkflowRevisionService;
 import com.cretas.aims.service.workflow.WorkflowTopology;
 import com.cretas.aims.service.workflow.WorkflowTopologyClassifier;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -40,6 +41,7 @@ public class ProductProcessWorkflowActivationServiceImpl
     private final ProductProcessWorkflowCatalogValidator catalogValidator;
     private final ProductProcessWorkflowUnitValidator unitValidator;
     private final ProductProcessWorkflowRuntimeCompiler compiler;
+    private final BomWorkflowRevisionService bomWorkflowRevisionService;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -66,6 +68,9 @@ public class ProductProcessWorkflowActivationServiceImpl
         // 2B.2: 多产出已放开 (原 B1 single-output guard 移除)。仍编译一次校验发布版本可编译,
         // 编译失败即拒绝激活 (禁止降级处理)。
         compiler.compile(definition);
+        // Runtime may only enable the exact revision frozen by the ACTIVE BOM.
+        bomWorkflowRevisionService.requireExactPublishedRevisionForActiveBom(
+                factoryId, workflow.getId(), workflow.getProductTypeId());
 
         // Serialize activation decisions inside one factory. The legacy activation table is
         // unique by anchor, so cross-anchor single-output uniqueness must be enforced here.

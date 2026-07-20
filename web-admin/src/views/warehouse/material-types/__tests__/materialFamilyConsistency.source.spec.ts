@@ -67,7 +67,9 @@ describe('material type family source contract', () => {
 
   it('matches historical L3 under the selected L1/L2 and reuses the real dictionary create endpoint', () => {
     expect(source).toContain('params: { page: 1, size: 20, codePrefix: l2, keyword: normalizedName }');
-    expect(source).toContain('label="＋ 快捷创建新品类"');
+    expect(source).toContain('label="＋ 新建共享 L3 分类"');
+    expect(source).toContain('v-if="canManageClassification"');
+    expect(source).toContain('系统不会复制当前原料名称');
     expect(source).toContain('`/${factoryId.value}/material-segments`');
     expect(source).toContain('level: 3');
     expect(source).toContain('parentCode: segmentL2.value');

@@ -165,14 +165,7 @@ public class MaterialBatchController {
             @Parameter(description = "访问令牌", required = true, example = "Bearer eyJhbGciOiJIUzI1NiJ9...")
             @RequestHeader("Authorization") String authorization,
             @Valid @RequestBody CreateMaterialBatchRequest request) {
-
-        // 获取当前用户ID
-        String token = TokenUtils.extractToken(authorization);
-        Long userId = mobileService.getUserFromToken(token).getId();
-
-        log.info("创建原材料批次: factoryId={}, materialTypeId={}", factoryId, request.getMaterialTypeId());
-        MaterialBatchDTO batch = materialBatchService.createMaterialBatch(factoryId, request, userId);
-        return ApiResponse.success("原材料批次创建成功", batch);
+        throw directInventoryWriteDisabled();
     }
 
     /**
@@ -645,16 +638,7 @@ public class MaterialBatchController {
             @Parameter(description = "访问令牌")
             @RequestHeader("Authorization") String authorization,
             @Valid @RequestBody ReplenishMaterialBatchRequest request) {
-
-        String token = TokenUtils.extractToken(authorization);
-        Long userId = mobileService.getUserFromToken(token).getId();
-
-        log.info("续入到已有批次: factoryId={}, batchId={}, addQuantity={}, sourceDoc={}#{}",
-                factoryId, batchId, request.getAddQuantity(), request.getSourceDocType(), request.getSourceDocId());
-        MaterialBatchDTO batch = materialBatchService.replenishExistingBatch(
-                factoryId, batchId, request.getAddQuantity(),
-                request.getSourceDocType(), request.getSourceDocId(), request.getNote(), userId);
-        return ApiResponse.success("续入成功", batch);
+        throw directInventoryWriteDisabled();
     }
 
     /**
@@ -1153,14 +1137,14 @@ public class MaterialBatchController {
             @Parameter(description = "访问令牌", required = true, example = "Bearer eyJhbGciOiJIUzI1NiJ9...")
             @RequestHeader("Authorization") String authorization,
             @Valid @RequestBody List<CreateMaterialBatchRequest> requests) {
+        throw directInventoryWriteDisabled();
+    }
 
-        // 获取当前用户ID
-        String token = TokenUtils.extractToken(authorization);
-        Long userId = mobileService.getUserFromToken(token).getId();
-
-        log.info("批量创建材料批次: factoryId={}, count={}", factoryId, requests.size());
-        List<MaterialBatchDTO> batches = materialBatchService.batchCreateMaterialBatches(factoryId, requests, userId);
-        return ApiResponse.success("批量创建成功", batches);
+    private BusinessException directInventoryWriteDisabled() {
+        return new BusinessException(409, "普通批次页面已关闭无来源入库与续入")
+                .withHint("请从仓储待收货、客供料、调拨、退货、盘点或受控调整任务进入；期初建账使用独立入口")
+                .withHintTarget("sourceTaskId")
+                .withSeverity("BLOCKING");
     }
 
     /**

@@ -11,6 +11,7 @@ import com.cretas.aims.repository.ProductWorkProcessAssigneeRepository;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.ProductWorkProcessService;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -32,6 +33,7 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
     private static final Logger log = LoggerFactory.getLogger(ProductWorkProcessServiceImpl.class);
     private final ProductWorkProcessRepository repository;
     private final WorkProcessRepository workProcessRepository;
+    private final ProductTypeRepository productTypeRepository;
     private final ProductWorkProcessAssigneeRepository assigneeRepository;
     private final UserRepository userRepository;
 
@@ -47,8 +49,13 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         }
 
         // Validate work process exists
-        workProcessRepository.findByFactoryIdAndId(factoryId, dto.getWorkProcessId())
+        WorkProcess selectedProcess = workProcessRepository.findByFactoryIdAndId(factoryId, dto.getWorkProcessId())
                 .orElseThrow(() -> new ResourceNotFoundException("WorkProcess", "id", dto.getWorkProcessId()));
+        if (!selectedProcess.isSelectableForNew()) {
+            throw new BusinessException(409, "该工序已停用或已合并，不能用于新的 SKU 关联")
+                    .withHint("已有 SKU、Workflow 和生产任务不受影响；请选择治理后的主工序")
+                    .withHintTarget("workProcessId");
+        }
 
         // T121: if assigneeWorkerIds provided, use assignees[0] as primary; else fall back to responsibleWorkerId field.
         List<Long> assignees = dto.getAssigneeWorkerIds();
@@ -117,6 +124,9 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         Map<String, WorkProcess> wpMap = workProcessRepository.findByFactoryIdAndIdIn(factoryId, wpIds)
                 .stream()
                 .collect(Collectors.toMap(WorkProcess::getId, Function.identity()));
+        String productUnit = productTypeRepository.findByIdAndFactoryId(productTypeId, factoryId)
+                .map(product -> product.getUnit())
+                .orElse(null);
 
         // T121: pre-load all assignees for these product_work_process ids in one query
         List<Long> pwpIds = associations.stream().map(ProductWorkProcess::getId).collect(Collectors.toList());
@@ -138,7 +148,7 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         return associations.stream()
                 .map(a -> {
                     ProductWorkProcessDTO dto = toDTO(a, wpMap.get(a.getWorkProcessId()),
-                            assigneeMap.getOrDefault(a.getId(), List.of()));
+                            assigneeMap.getOrDefault(a.getId(), List.of()), productUnit);
                     if (a.getResponsibleWorkerId() != null) {
                         dto.setResponsibleWorkerName(workerNameMap.get(a.getResponsibleWorkerId()));
                     }
@@ -240,6 +250,18 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         if (source.isEmpty()) {
             throw new BusinessException(400, "源产品没有工序链可复制, 请先给源产品配置工序");
         }
+        List<String> sourceProcessIds = source.stream()
+                .map(ProductWorkProcess::getWorkProcessId)
+                .distinct()
+                .toList();
+        boolean hasGovernedProcess = workProcessRepository
+                .findByFactoryIdAndIdIn(factoryId, sourceProcessIds)
+                .stream()
+                .anyMatch(process -> !process.isSelectableForNew());
+        if (hasGovernedProcess) {
+            throw new BusinessException(409, "源产品包含已停用或已合并工序，不能复制为新的工序链")
+                    .withHint("源产品和既有生产仍可继续使用；新配置请选择当前可用的主工序");
+        }
         List<ProductWorkProcess> existing = repository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, targetProductId);
         if (!existing.isEmpty()) {
@@ -278,10 +300,18 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
 
     /** Legacy overload — called from batchSort / delete (no assignee enrichment needed). */
     private ProductWorkProcessDTO toDTO(ProductWorkProcess entity, WorkProcess wp) {
-        return toDTO(entity, wp, List.of());
+        return toDTO(entity, wp, List.of(), null);
     }
 
     private ProductWorkProcessDTO toDTO(ProductWorkProcess entity, WorkProcess wp, List<Long> assigneeIds) {
+        return toDTO(entity, wp, assigneeIds, null);
+    }
+
+    private ProductWorkProcessDTO toDTO(
+            ProductWorkProcess entity,
+            WorkProcess wp,
+            List<Long> assigneeIds,
+            String productUnit) {
         ProductWorkProcessDTO.ProductWorkProcessDTOBuilder builder = ProductWorkProcessDTO.builder()
                 .id(entity.getId())
                 .productTypeId(entity.getProductTypeId())
@@ -307,8 +337,8 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         if (wp != null) {
             builder.processName(wp.getProcessName())
                     .processCategory(wp.getProcessCategory())
-                    .defaultUnit(wp.getUnit())
-                    .defaultOutputUnit(wp.getOutputUnit())
+                    .defaultUnit(entity.getUnitOverride() != null ? entity.getUnitOverride() : productUnit)
+                    .defaultOutputUnit(productUnit)
                     .defaultEstimatedMinutes(wp.getEstimatedMinutes())
                     .customFieldSchema(wp.getCustomFieldSchema());
         }

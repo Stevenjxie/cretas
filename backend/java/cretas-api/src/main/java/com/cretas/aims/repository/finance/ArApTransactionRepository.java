@@ -6,6 +6,7 @@ import com.cretas.aims.entity.finance.ArApTransaction;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -14,9 +15,20 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
+import jakarta.persistence.LockModeType;
 
 @Repository
 public interface ArApTransactionRepository extends JpaRepository<ArApTransaction, String> {
+
+    /** Serialize all settlements of one AP invoice and keep factory isolation in the lock query. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT t FROM ArApTransaction t WHERE t.id = :transactionId " +
+            "AND t.factoryId = :factoryId " +
+            "AND t.transactionType = com.cretas.aims.entity.enums.ArApTransactionType.AP_INVOICE " +
+            "AND t.deletedAt IS NULL")
+    Optional<ArApTransaction> findPayableForSettlement(
+            @Param("factoryId") String factoryId,
+            @Param("transactionId") String transactionId);
 
     Page<ArApTransaction> findByFactoryIdOrderByTransactionDateDesc(String factoryId, Pageable pageable);
 
@@ -80,6 +92,7 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
     /** 逾期应付 */
     @Query("SELECT t FROM ArApTransaction t WHERE t.factoryId = :factoryId " +
             "AND t.transactionType = 'AP_INVOICE' " +
+            "AND t.outstandingAmount IS NOT NULL AND t.outstandingAmount > 0 " +
             "AND t.dueDate IS NOT NULL AND t.dueDate < :today " +
             "ORDER BY t.dueDate ASC")
     List<ArApTransaction> findOverduePayables(
@@ -237,6 +250,22 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
 
     /** 收款幂等检查：同一 paymentReference 不能重复 */
     boolean existsByFactoryIdAndPaymentReference(String factoryId, String paymentReference);
+
+    /** Legacy/unallocated payment detection for a specific PO and supplier. */
+    List<ArApTransaction> findByFactoryIdAndPurchaseOrderIdAndCounterpartyIdAndTransactionTypeAndDeletedAtIsNull(
+            String factoryId,
+            String purchaseOrderId,
+            String counterpartyId,
+            ArApTransactionType transactionType);
+
+    /** Historical AP_PAYMENT rows without an explicit payable allocation are read-only anomalies. */
+    @Query("SELECT p FROM ArApTransaction p WHERE p.factoryId = :factoryId " +
+            "AND p.transactionType = com.cretas.aims.entity.enums.ArApTransactionType.AP_PAYMENT " +
+            "AND p.deletedAt IS NULL " +
+            "AND NOT EXISTS (SELECT a.id FROM com.cretas.aims.entity.finance.ArApPaymentAllocation a " +
+            "WHERE a.factoryId = p.factoryId AND a.paymentTransactionId = p.id AND a.deletedAt IS NULL) " +
+            "ORDER BY p.transactionDate DESC, p.createdAt DESC")
+    List<ArApTransaction> findUnallocatedApPayments(@Param("factoryId") String factoryId);
 
     /**
      * Issue #739: AR_PAYMENT idempotency for SO-bound 快速收款 (no paymentReference).

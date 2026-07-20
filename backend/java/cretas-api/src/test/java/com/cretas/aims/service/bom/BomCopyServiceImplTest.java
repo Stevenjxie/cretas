@@ -16,6 +16,10 @@ import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.service.bom.impl.BomCopyServiceImpl;
+import com.cretas.aims.service.unit.CanonicalUnit;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitDimension;
+import com.cretas.aims.service.unit.UnitNormalizationResult;
 import com.cretas.aims.service.workflow.ProductWorkflowResolutionService;
 import com.cretas.aims.service.workflow.WorkflowProcessPath;
 import org.junit.jupiter.api.BeforeEach;
@@ -59,6 +63,7 @@ class BomCopyServiceImplTest {
     @Mock ProductTypeRepository productTypeRepo;
     @Mock WorkProcessRepository workProcessRepo;
     @Mock ProductWorkflowResolutionService workflowResolutionService;
+    @Mock UnitContractService unitContractService;
     @InjectMocks BomCopyServiceImpl service;
 
     private ProductType target;
@@ -116,6 +121,147 @@ class BomCopyServiceImplTest {
     }
 
     @Test
+    void candidatesCompareNormalizedCompleteRawRootSetsWithoutOrder() {
+        BomRecipe equivalent = source;
+        BomRecipe different = activeRecipe("recipe-different-roots", "different-roots", FACTORY);
+        ProductType equivalentProduct = product(SOURCE, FACTORY, "equivalent", "袋", "350");
+        ProductType differentProduct = product("different-roots", FACTORY, "different", "袋", "300");
+        when(productTypeRepo.findByIdAndFactoryId(TARGET, FACTORY)).thenReturn(Optional.of(target));
+        when(recipeRepo.findByFactoryIdAndStatus(eq(FACTORY), eq(BomRecipe.Status.ACTIVE), any()))
+                .thenReturn(new PageImpl<>(List.of(equivalent, different)));
+        when(productTypeRepo.findByIdIn(any())).thenReturn(List.of(equivalentProduct, differentProduct));
+        when(workflowResolutionService.resolveProcessPath(FACTORY, TARGET)).thenReturn(Optional.of(path(
+                10L, 3, TARGET, "legacy-target-must-not-win", List.of(" raw-a ", "raw-b", "raw-a"),
+                step("target-p1", "p1", 1))));
+        when(workflowResolutionService.resolveProcessPath(FACTORY, SOURCE)).thenReturn(Optional.of(path(
+                20L, 5, SOURCE, null, List.of("raw-b", "raw-a"),
+                step("source-p1", "p1", 1))));
+        when(workflowResolutionService.resolveProcessPath(FACTORY, "different-roots"))
+                .thenReturn(Optional.of(path(
+                        30L, 1, "different-roots", "legacy-must-not-win", List.of("raw-a", "raw-c"),
+                        step("different-p1", "p1", 1))));
+        when(workProcessRepo.findByFactoryIdAndIdIn(eq(FACTORY), anyList())).thenReturn(List.of());
+
+        List<BomCopyCandidateDTO> candidates = service.listCandidates(FACTORY, TARGET);
+
+        assertThat(candidates).singleElement().satisfies(candidate -> {
+            assertThat(candidate.getSourceProductTypeId()).isEqualTo(SOURCE);
+            assertThat(candidate.getRawRootMaterialTypeId()).isNull();
+            assertThat(candidate.getRawRootMaterialTypeIds()).containsExactly("raw-a", "raw-b");
+        });
+    }
+
+    @Test
+    void candidatesFallbackToLegacySingularRootOnlyWhenCompleteRootSetIsEmpty() {
+        ProductType sourceProduct = product(SOURCE, FACTORY, "legacy-source", "袋", "350");
+        when(productTypeRepo.findByIdAndFactoryId(TARGET, FACTORY)).thenReturn(Optional.of(target));
+        when(recipeRepo.findByFactoryIdAndStatus(eq(FACTORY), eq(BomRecipe.Status.ACTIVE), any()))
+                .thenReturn(new PageImpl<>(List.of(source)));
+        when(productTypeRepo.findByIdIn(any())).thenReturn(List.of(sourceProduct));
+        when(workflowResolutionService.resolveProcessPath(FACTORY, TARGET)).thenReturn(Optional.of(path(
+                1L, 1, TARGET, " raw-chicken ", List.of(), step("node-p1", "p1", 1))));
+        when(workflowResolutionService.resolveProcessPath(FACTORY, SOURCE))
+                .thenReturn(Optional.of(path(SOURCE, "raw-chicken", "p1")));
+        when(workProcessRepo.findByFactoryIdAndIdIn(eq(FACTORY), anyList())).thenReturn(List.of());
+
+        assertThat(service.listCandidates(FACTORY, TARGET)).singleElement()
+                .extracting(BomCopyCandidateDTO::getRawRootMaterialTypeIds)
+                .isEqualTo(List.of("raw-chicken"));
+    }
+
+    @Test
+    void candidateSeasoningsStayIsolatedWhenOneMasterProcessHasMultipleNodesInSameRevision() {
+        ProductType sourceProduct = product(SOURCE, FACTORY, "multi-node-source", "袋", "350");
+        WorkflowProcessPath duplicatedMasterPath = path(
+                50L, 7, TARGET, null, List.of("raw-chicken"),
+                step("node-p1-first", "p1", 1), step("node-p1-second", "p1", 2));
+        WorkflowProcessPath sourcePath = path(
+                50L, 7, SOURCE, null, List.of("raw-chicken"),
+                step("node-p1-first", "p1", 1), step("node-p1-second", "p1", 2));
+        when(productTypeRepo.findByIdAndFactoryId(TARGET, FACTORY)).thenReturn(Optional.of(target));
+        when(recipeRepo.findByFactoryIdAndStatus(eq(FACTORY), eq(BomRecipe.Status.ACTIVE), any()))
+                .thenReturn(new PageImpl<>(List.of(source)));
+        when(productTypeRepo.findByIdIn(any())).thenReturn(List.of(sourceProduct));
+        when(workflowResolutionService.resolveProcessPath(FACTORY, TARGET))
+                .thenReturn(Optional.of(duplicatedMasterPath));
+        when(workflowResolutionService.resolveProcessPath(FACTORY, SOURCE))
+                .thenReturn(Optional.of(sourcePath));
+        when(workProcessRepo.findByFactoryIdAndIdIn(eq(FACTORY), anyList())).thenReturn(List.of());
+        when(seasoningRepo.findByRecipeIdOrderBySeqAsc(SOURCE_RECIPE)).thenReturn(List.of(
+                seasoning(11L, "p1", "node-p1-first"),
+                seasoning(12L, "p1", "node-p1-second"),
+                seasoning(13L, "p1", "unknown-node")));
+
+        BomCopyCandidateDTO candidate = service.listCandidates(FACTORY, TARGET).getFirst();
+
+        assertThat(candidate.getSharedProcesses())
+                .extracting(BomCopyCandidateDTO.SharedProcessDTO::getWorkflowProcessNodeId)
+                .containsExactly("node-p1-first", "node-p1-second");
+        assertThat(candidate.getSeasoningItems())
+                .extracting(BomCopyCandidateDTO.SeasoningRuleDTO::getId,
+                        BomCopyCandidateDTO.SeasoningRuleDTO::getWorkflowProcessNodeId,
+                        BomCopyCandidateDTO.SeasoningRuleDTO::getSourceWorkflowProcessNodeId)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(11L, "node-p1-first", "node-p1-first"),
+                        org.assertj.core.groups.Tuple.tuple(12L, "node-p1-second", "node-p1-second"));
+    }
+
+    @Test
+    void copyFailsClosedWhenCrossRevisionTargetNodeMappingIsNotUnique() {
+        prepareCopyBase();
+        when(workflowResolutionService.resolveProcessPath(FACTORY, TARGET)).thenReturn(Optional.of(path(
+                60L, 2, TARGET, null, List.of("raw-chicken"),
+                step("target-p1-first", "p1", 1), step("target-p1-second", "p1", 2))));
+        when(workflowResolutionService.resolveProcessPath(FACTORY, SOURCE)).thenReturn(Optional.of(path(
+                50L, 1, SOURCE, null, List.of("raw-chicken"),
+                step("source-p1", "p1", 1))));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc(SOURCE_RECIPE)).thenReturn(List.of());
+        when(seasoningRepo.findByRecipeIdOrderBySeqAsc(SOURCE_RECIPE))
+                .thenReturn(List.of(seasoning(11L, "p1", "source-p1")));
+        when(processInjectionConfigRepo.findByRecipeIdAndDeletedAtIsNull(SOURCE_RECIPE))
+                .thenReturn(List.of());
+
+        assertBusinessCode(() -> service.copySelectedRulesToDraft(
+                FACTORY, request(List.of(), List.of(11L), List.of())),
+                "BOM_COPY_AMBIGUOUS_PROCESS_NODE");
+        verify(seasoningRepo, never()).saveAll(anyList());
+    }
+
+    @Test
+    void copyRemapsSeasoningToTheUniqueTargetNodeAcrossRevisions() {
+        prepareCopyBase();
+        when(workflowResolutionService.resolveProcessPath(FACTORY, TARGET)).thenReturn(Optional.of(path(
+                60L, 2, TARGET, null, List.of("raw-chicken"),
+                step("target-p1", "p1", 1))));
+        when(workflowResolutionService.resolveProcessPath(FACTORY, SOURCE)).thenReturn(Optional.of(path(
+                50L, 1, SOURCE, null, List.of("raw-chicken"),
+                step("source-p1", "p1", 1))));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc(SOURCE_RECIPE)).thenReturn(List.of());
+        when(seasoningRepo.findByRecipeIdOrderBySeqAsc(SOURCE_RECIPE))
+                .thenReturn(List.of(seasoning(11L, "p1", "source-p1")));
+        when(processInjectionConfigRepo.findByRecipeIdAndDeletedAtIsNull(SOURCE_RECIPE))
+                .thenReturn(List.of());
+        when(recipeRepo.findMaxVersion(FACTORY, TARGET)).thenReturn(null);
+        when(recipeRepo.countByRecipeCodePrefix(eq(FACTORY), any())).thenReturn(0L);
+        when(recipeRepo.save(any(BomRecipe.class))).thenAnswer(invocation -> {
+            BomRecipe recipe = invocation.getArgument(0);
+            if (recipe.getId() == null) recipe.setId("new-draft");
+            return recipe;
+        });
+
+        service.copySelectedRulesToDraft(
+                FACTORY, request(List.of(), List.of(11L), List.of()));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<BomSeasoningItem>> captor = ArgumentCaptor.forClass(List.class);
+        verify(seasoningRepo).saveAll(captor.capture());
+        assertThat(captor.getValue()).singleElement().satisfies(copied -> {
+            assertThat(copied.getWorkProcessId()).isEqualTo("p1");
+            assertThat(copied.getWorkflowProcessNodeId()).isEqualTo("target-p1");
+        });
+    }
+
+    @Test
     void copyCreatesEditableDraftFromOnlySelectedRulesUsingTargetSkuFieldsAndPreservingSubProduct() {
         prepareCopyBase();
         BomRecipeItem selected = item(1L, "mat-selected");
@@ -143,8 +289,10 @@ class BomCopyServiceImplTest {
         assertThat(result.getVersion()).isEqualTo(1);
         assertThat(result.getProductTypeId()).isEqualTo(TARGET);
         assertThat(result.getProductName()).isEqualTo("干式熟成鸡 400g");
-        assertThat(result.getOutputUnit()).isEqualTo("袋");
-        assertThat(result.getOutputQuantityPerUnit()).isEqualByComparingTo("400");
+        assertThat(result.getOutputUnit()).isEqualTo("bag");
+        assertThat(result.getOutputQuantityPerUnit()).isEqualByComparingTo("1");
+        assertThat(result.getNetContentQuantity()).isEqualByComparingTo("400");
+        assertThat(result.getNetContentUnit()).isEqualTo("g");
         assertThat(result.getNotes()).contains("source-product", "source-recipe", "请核对数量");
 
         @SuppressWarnings("unchecked")
@@ -161,6 +309,8 @@ class BomCopyServiceImplTest {
         assertThat(seasoningCaptor.getValue()).extracting(BomSeasoningItem::getId).containsOnlyNulls();
         assertThat(seasoningCaptor.getValue()).extracting(BomSeasoningItem::getMaterialTypeId)
                 .containsExactly("seasoning-11");
+        assertThat(seasoningCaptor.getValue()).extracting(BomSeasoningItem::getWorkflowProcessNodeId)
+                .containsExactly("node-p1");
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<BomProcessInjectionConfig>> configCaptor = ArgumentCaptor.forClass(List.class);
         verify(processInjectionConfigRepo).saveAll(configCaptor.capture());
@@ -245,6 +395,10 @@ class BomCopyServiceImplTest {
                 .thenReturn(Optional.of(path(TARGET, "raw-chicken", "p1", "p2")));
         when(workflowResolutionService.resolveProcessPath(FACTORY, SOURCE))
                 .thenReturn(Optional.of(path(SOURCE, "raw-chicken", "p1", "p3")));
+        CanonicalUnit bag = new CanonicalUnit(
+                "bag", UnitDimension.PACKAGE, "bag", BigDecimal.ONE, "袋", 0);
+        when(unitContractService.normalize(FACTORY, target.getUnit()))
+                .thenReturn(new UnitNormalizationResult(target.getUnit(), "bag", bag));
     }
 
     private BomCopyToDraftRequest request(List<Long> items, List<Long> seasonings, List<Long> params) {
@@ -294,6 +448,28 @@ class BomCopyServiceImplTest {
         return new WorkflowProcessPath(1L, 1, rawRoot, "RAW_MATERIAL_TYPE", terminal, rawRoot, steps);
     }
 
+    private WorkflowProcessPath path(
+            long workflowId,
+            int definitionVersion,
+            String terminal,
+            String legacyRawRoot,
+            List<String> rawRoots,
+            WorkflowProcessPath.ProcessStep... steps) {
+        return new WorkflowProcessPath(
+                workflowId,
+                definitionVersion,
+                "workflow-owner",
+                "RAW_MATERIAL_TYPE",
+                terminal,
+                legacyRawRoot,
+                rawRoots,
+                List.of(steps));
+    }
+
+    private WorkflowProcessPath.ProcessStep step(String nodeId, String workProcessId, int order) {
+        return new WorkflowProcessPath.ProcessStep(nodeId, workProcessId, order);
+    }
+
     private BomRecipeItem item(Long id, String materialId) {
         BomRecipeItem item = new BomRecipeItem();
         item.setId(id);
@@ -319,6 +495,12 @@ class BomCopyServiceImplTest {
         item.setDosagePerKgG(new BigDecimal("3.5000"));
         item.setCountInSeasoning(true);
         item.setWorkProcessId(processId);
+        return item;
+    }
+
+    private BomSeasoningItem seasoning(Long id, String processId, String processNodeId) {
+        BomSeasoningItem item = seasoning(id, processId);
+        item.setWorkflowProcessNodeId(processNodeId);
         return item;
     }
 

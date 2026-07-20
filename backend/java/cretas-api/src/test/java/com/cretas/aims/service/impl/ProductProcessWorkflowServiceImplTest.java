@@ -39,6 +39,7 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @DisplayName("产品工序 Workflow 服务")
@@ -66,6 +67,15 @@ class ProductProcessWorkflowServiceImplTest {
     @Mock
     private ProductProcessWorkflowUnitValidator unitValidator;
 
+    @Mock
+    private com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository revisionRepository;
+
+    @Mock
+    private com.cretas.aims.service.workflow.WorkflowRevisionSnapshotService revisionSnapshotService;
+
+    @Mock
+    private com.cretas.aims.service.bom.BomWorkflowRevisionService bomWorkflowRevisionService;
+
     private ProductProcessWorkflowValidator validator;
     private ProductProcessWorkflowServiceImpl service;
 
@@ -74,8 +84,21 @@ class ProductProcessWorkflowServiceImplTest {
         ObjectMapper objectMapper = new ObjectMapper();
         validator = new ProductProcessWorkflowValidator();
         service = new ProductProcessWorkflowServiceImpl(
-                repository, activationRepository, objectMapper, validator, catalogValidator, unitValidator,
+                repository, revisionRepository, revisionSnapshotService, bomWorkflowRevisionService,
+                activationRepository,
+                objectMapper, validator, catalogValidator, unitValidator,
                 productTypeRepository, rawMaterialTypeRepository);
+        com.cretas.aims.entity.ProductProcessWorkflowRevision revision =
+                new com.cretas.aims.entity.ProductProcessWorkflowRevision();
+        revision.setId(91L);
+        revision.setFactoryId(FACTORY_ID);
+        revision.setProductTypeId(PRODUCT_ID);
+        revision.setWorkflowId(1L);
+        revision.setRevisionHash("test-revision");
+        revision.setStructurallyComplete(true);
+        lenient().when(revisionSnapshotService.capture(any())).thenReturn(revision);
+        lenient().when(revisionRepository.findByIdAndFactoryId(91L, FACTORY_ID))
+                .thenReturn(Optional.of(revision));
         ProductType owner = new ProductType();
         owner.setId(PRODUCT_ID);
         owner.setFactoryId(FACTORY_ID);
@@ -132,8 +155,8 @@ class ProductProcessWorkflowServiceImplTest {
         ProductProcessWorkflowDTO saved = service.saveDraft(FACTORY_ID, PRODUCT_ID, request);
 
         ArgumentCaptor<ProductProcessWorkflow> captor = ArgumentCaptor.forClass(ProductProcessWorkflow.class);
-        verify(repository).saveAndFlush(captor.capture());
-        assertTrue(captor.getValue().getNodesJson().contains("红烧熟制"));
+        verify(repository, times(2)).saveAndFlush(captor.capture());
+        assertTrue(captor.getAllValues().get(0).getNodesJson().contains("红烧熟制"));
         assertEquals(7, saved.getNodes().size());
         assertEquals(6, saved.getEdges().size());
         assertEquals("kg", saved.getNodes().get(2).getData().get("inputUnit"));
@@ -159,7 +182,7 @@ class ProductProcessWorkflowServiceImplTest {
         ProductProcessWorkflowDTO nextDraft = service.snapshot(FACTORY_ID, PRODUCT_ID, 3L);
 
         ArgumentCaptor<ProductProcessWorkflow> rows = ArgumentCaptor.forClass(ProductProcessWorkflow.class);
-        verify(repository, times(2)).saveAndFlush(rows.capture());
+        verify(repository, times(3)).saveAndFlush(rows.capture());
         ProductProcessWorkflow snapshot = rows.getAllValues().get(0);
         assertEquals(ProductProcessWorkflow.Status.SNAPSHOT, snapshot.getStatus());
         assertEquals(2, snapshot.getDefinitionVersion());
@@ -350,7 +373,25 @@ class ProductProcessWorkflowServiceImplTest {
         assertEquals(1, published.getVersion());
         assertEquals(4L, published.getLockVersion());
         verify(catalogValidator).validateForPublish(eq(FACTORY_ID), eq(PRODUCT_ID), any());
+        verify(bomWorkflowRevisionService).requireActiveBomPinsRevision(
+                eq(FACTORY_ID), eq(PRODUCT_ID), any());
         verify(repository).saveAndFlush(draft);
+    }
+
+    @Test
+    @DisplayName("已发布且没有新草稿时再次发布明确返回 409，且不产生任何写入")
+    void publishWithoutDraftIsRejectedWithoutMutation() {
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
+                .thenReturn(Optional.empty());
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.publish(FACTORY_ID, PRODUCT_ID, 3L));
+
+        assertEquals(409, error.getCode());
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_DRAFT_MISSING", error.getErrorCode());
+        verify(repository, never()).saveAndFlush(any());
+        verifyNoInteractions(bomWorkflowRevisionService);
     }
 
     @Test
@@ -455,7 +496,9 @@ class ProductProcessWorkflowServiceImplTest {
                         mock(com.cretas.aims.repository.bom.BomRecipeRepository.class),
                         mock(com.cretas.aims.repository.bom.BomRecipeItemRepository.class));
         ProductProcessWorkflowServiceImpl realService = new ProductProcessWorkflowServiceImpl(
-                repository, activationRepository, new ObjectMapper(), validator, realCatalogValidator, unitValidator,
+                repository, revisionRepository, revisionSnapshotService, bomWorkflowRevisionService,
+                activationRepository,
+                new ObjectMapper(), validator, realCatalogValidator, unitValidator,
                 productTypeRepository, mock(com.cretas.aims.repository.RawMaterialTypeRepository.class));
 
         BusinessException error = assertThrows(BusinessException.class,

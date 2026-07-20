@@ -11,7 +11,7 @@ import request, { get, post, put } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Search, Refresh, ChatDotRound, Download, QuestionFilled } from '@element-plus/icons-vue';
 import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue';
-import AuditLogDrawer from '@/components/AuditLogDrawer.vue';
+import AttachmentDropZone from '@/components/attachment/AttachmentDropZone.vue';
 import { PURCHASE_ORDER_CONFIG } from '@/components/ai-entry/types';
 import { WorkflowBar } from '@/components/workflow';
 import { useWorkflowStats } from '@/composables/useWorkflowStats';
@@ -21,7 +21,7 @@ import CanvasDynamicFields from '@/components/canvas/CanvasDynamicFields.vue';
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import type { TableRow } from '@/types/api';
-import { RowActionMenu, TableFooter, ViewModeSwitcher, GridView, KanbanView, TimelinePlaceholder, CalendarPlaceholder, InlineRowIcons, RowMarkerCell } from '@/components/list';
+import { RowActionMenu, TableFooter, ViewModeSwitcher, GridView, KanbanView, TimelinePlaceholder, CalendarPlaceholder, RowMarkerCell } from '@/components/list';
 // Sprint 6 W3-A — inline 3-chip link counter (文件 / 图片 / 合同).
 import LinkChipCell from '@/components/list/LinkChipCell.vue';
 import { useLinkChipCounts } from '@/composables/useLinkChipCounts';
@@ -34,14 +34,20 @@ import { resolveReferenceByName } from '@/utils/referenceResolver';
 import ForwardShareDialog from '@/components/dialog/ForwardShareDialog.vue';
 import type { ViewMode } from '@/types/viewMode';
 import type { CreateMode } from '@/types/createMode';
-import type { InlineIconId } from '@/types/inlineIcons';
 import type { RowMarkerColor } from '@/types/rowMarker';
 import { computeRowActions } from '@/composables/useRowActions';
 import { useListSummary } from '@/composables/useListSummary';
 import { formatSummaryForAI } from '@/utils/aiSummaryContext';
 import type { ListSummaryRequest } from '@/types/listSummary';
-import { canonicalUnitCode, formatPriceUnit, mergeCanonicalUnitOptions, pricingAmountPreview } from '@/utils/unitPricing';
+import { canonicalUnitCode, displayUnit, formatPriceUnit, mergeCanonicalUnitOptions, pricingAmountPreview } from '@/utils/unitPricing';
 import { enumLabel } from '@/utils/enumDisplay';
+import { canSubmitPurchaseOrder, purchaseOrderMoreActions } from './purchaseOrderActionIa';
+import {
+  listSupplierMaterials,
+  listSupplierPurchaseSpecs,
+  type SupplierMaterialRelation,
+  type SupplierPurchaseSpec,
+} from '@/api/supplierManagement';
 
 const router = useRouter();
 const route = useRoute();
@@ -158,43 +164,6 @@ async function submitBomPurchaseOrder(parent: BomPurchaseOrderParent, children: 
   }
   await loadData();
 }
-// U-ICON-1 (Sprint 4 Wave 2 Chat L) — inline 7-icon hover toolbar handler.
-async function handleInlineIconClick(id: InlineIconId, row: TableRow): Promise<void> {
-  switch (id) {
-    case 'copy':
-      handleRowActionClick('copy', row);
-      break;
-    case 'mark':
-      // U-MARKER-1 — primary entry is the marker column dot; icon is parity fallback.
-      ElMessage.info(`点击行首色点选择标记 (采购单 ${row.orderNumber})`);
-      break;
-    case 'lock':
-      handleRowActionClick('lock', row);
-      break;
-    case 'forward':
-      // PR #872 (#860 follow-up): generate share link + clipboard URL.
-      forwardEntityId.value = String(row.id || '');
-      forwardEntityLabel.value = String(row.orderNumber || row.id || '');
-      forwardDialogVisible.value = true;
-      break;
-    case 'delete':
-      try {
-        await ElMessageBox.confirm(`确认删除采购单 ${row.orderNumber}？`, '删除确认', { type: 'warning' });
-        handleRowActionClick('delete', row);
-      } catch {
-        // user cancelled
-      }
-      break;
-    case 'audit':
-      // PR #861: open AuditLogDrawer scoped to this row. Backend
-      // OperationLogController filters by entityType + entityId.
-      auditEntityId.value = String(row.id || '');
-      auditEntityLabel.value = String(row.orderNumber || row.id || '');
-      auditDrawerVisible.value = true;
-      break;
-  }
-}
-
 // U-MARKER-1 (Sprint 4 Wave 2 Chat L) — PATCH marker color to backend.
 async function handleMarkerSelect(row: TableRow, color: RowMarkerColor | null): Promise<void> {
   try {
@@ -224,9 +193,12 @@ async function submitBatchPurchaseOrders(orders: Array<{ supplierId: string; pur
 function rowActionsFor(row: TableRow) {
   return computeRowActions(
     'purchaseOrder',
-    { status: String(row.status || ''), id: String(row.id || '') },
+    { status: String(row.status || ''), id: String(row.id || ''), canEdit: canWrite.value },
     { canViewPrice: canViewPrice.value }
   );
+}
+function moreRowActionsFor(row: TableRow) {
+  return purchaseOrderMoreActions(rowActionsFor(row));
 }
 // 退货 dialog state (#860 follow-up — wires existing backend ReturnOrderController).
 const returnDialogVisible = ref(false);
@@ -267,8 +239,6 @@ function handleRowActionClick(actionId: string, row: TableRow) {
       router.push({ path: '/procurement/orders', query: { edit: String(row.id) } });
       break;
     case 'submit': handleAction(String(row.id), 'submit'); break;
-    case 'approve': handleAction(String(row.id), 'approve'); break;
-    case 'reject': handleAction(String(row.id), 'reject'); break;
     case 'cancel': handleAction(String(row.id), 'cancel'); break;
     case 'print-pdf': handleDownloadPdf(row); break;
     case 'copy': void handleCopyOrder(row); break;
@@ -280,6 +250,14 @@ function handleRowActionClick(actionId: string, row: TableRow) {
     case 'view-price-history':
       ElMessage.info(`请在采购单 ${row.orderNumber || row.id} 详情页查看价格上下文`);
       router.push(`/procurement/orders/${row.id}`);
+      break;
+    case 'forward':
+      forwardEntityId.value = String(row.id || '');
+      forwardEntityLabel.value = String(row.orderNumber || row.id || '');
+      forwardDialogVisible.value = true;
+      break;
+    case 'mark':
+      ElMessage.info(`请点击采购单 ${row.orderNumber || row.id} 行首色点设置标记`);
       break;
     case 'undo-approval':
       ElMessage({
@@ -340,6 +318,13 @@ const statusFilter = ref('');
 const searchKeyword = ref('');
 const dateRange = ref<[string, string] | null>(null);
 const dialogVisible = ref(false);
+interface AttachmentDropZoneExposed {
+  uploadQueued: (entityId?: string) => Promise<{ succeeded: number; failed: number }>;
+  clear: () => void;
+}
+const createAttachmentRef = ref<AttachmentDropZoneExposed>();
+const createdOrderId = ref('');
+const attachmentQueue = ref({ total: 0, pending: 0, failed: 0 });
 
 // U-FOOTER-1: sticky summary stats
 const summaryRequest = computed<ListSummaryRequest>(() => ({
@@ -348,6 +333,8 @@ const summaryRequest = computed<ListSummaryRequest>(() => ({
 const { summary: footerSummary, loading: footerLoading } = useListSummary('purchaseOrder', summaryRequest);
 
 interface ProcurementOrderItem {
+  supplierMaterialId?: string;
+  purchasePackagingSpecId?: string | null;
   materialTypeId: string;
   quantity: number;
   unit: string;
@@ -357,8 +344,6 @@ interface ProcurementOrderItem {
   lineAmount?: number | null;
   convertedPricingQuantity?: number | null;
   taxRate?: number | string | null;
-  specification?: string;
-  boxQuantity?: number;
 }
 
 const commonTaxRateOptions = [
@@ -368,7 +353,7 @@ const commonTaxRateOptions = [
 ];
 
 function validateTaxRate(rate: unknown): string | null {
-  if (rate == null || rate === '') return null;
+  if (rate == null || rate === '') return '请选择税率（免税请选择 0%）';
   const numeric = Number(rate);
   if (!Number.isFinite(numeric) || numeric < 0 || numeric > 100) {
     return '税率必须是 0-100 之间的数字';
@@ -376,10 +361,9 @@ function validateTaxRate(rate: unknown): string | null {
   return null;
 }
 
-function normalizeTaxRateForPayload(rate: unknown): number | null {
+function normalizeTaxRateForPayload(rate: unknown): number {
   const message = validateTaxRate(rate);
   if (message) throw new Error(message);
-  if (rate == null || rate === '') return null;
   return Number(rate);
 }
 
@@ -392,7 +376,7 @@ const form = ref({
   contractNumber: '',       // SP6 合同号（选填，对应纸质/框架合同）
   settlementType: '',       // SP6 结算方式
   invoiceReminderDays: null as number | null,  // SP6 开票提醒天数
-  items: [{ materialTypeId: '', quantity: 0, unit: 'kg', quantityUnit: 'kg', unitPrice: 0, priceUnit: 'kg', taxRate: null }] as ProcurementOrderItem[],
+  items: [newPurchaseItem()] as ProcurementOrderItem[],
   customFields: {} as TableRow,
 });
 const editingOrderId = ref('');
@@ -404,121 +388,101 @@ function itemAmountPreview(item: ProcurementOrderItem) {
   return pricingAmountPreview(item);
 }
 
+function itemTaxPreview(item: ProcurementOrderItem): { untaxed: number; tax: number; taxed: number } | null {
+  const amount = itemAmountPreview(item).amount;
+  const rate = Number(item.taxRate);
+  if (amount == null || !Number.isFinite(rate)) return null;
+  const untaxed = Number(amount);
+  const tax = Number((untaxed * rate / 100).toFixed(2));
+  return { untaxed, tax, taxed: Number((untaxed + tax).toFixed(2)) };
+}
+
 function getPriceUnitOptionsForItem(item: TableRow): { value: string; label: string }[] {
-  const units = mergeCanonicalUnitOptions(
-    getUnitOptionsForItem(item).map((option) => option.value),
-    item.priceUnit,
-  );
+  const units = mergeCanonicalUnitOptions([String(item.unit || '')], item.priceUnit);
   return units.map((unit) => ({ value: unit, label: formatPriceUnit(unit) }));
 }
 const suppliers = ref<TableRow[]>([]);
 const materials = ref<TableRow[]>([]);
 const salesOrders = ref<TableRow[]>([]);
+const supplierMaterialRelations = ref<SupplierMaterialRelation[]>([]);
+const purchaseSpecCache = ref<Record<string, SupplierPurchaseSpec[]>>({});
 
-// 包装层级缓存: materialTypeId → { level1Unit, level2Unit, level3Unit, level1PerLevel2 }
-// 选原料后调 /material-packaging/by-material/{id} 拉取, 用于单位下拉 + 自动算箱数 (P1-2)
-const packagingCache = ref<Record<string, {
-  level1Unit?: string;
-  level2Unit?: string | null;
-  level3Unit?: string | null;
-  level1PerLevel2?: number | null;
-}>>({});
+function materialTaxRate(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const match = String(value).match(/^TAX_(\d+(?:\.\d+)?)$/i);
+  const numeric = match ? Number(match[1]) : Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 && numeric <= 100 ? numeric : null;
+}
 
-async function ensurePackagingLoaded(materialId: string) {
-  if (!materialId || packagingCache.value[materialId]) return;
-  try {
-    const res = await get<{
-      level1Unit?: string;
-      level2Unit?: string | null;
-      level3Unit?: string | null;
-      level1PerLevel2?: number | null;
-    } | null>(
-      `/${factoryId.value}/material-packaging/by-material/${materialId}`,
-    );
-    packagingCache.value[materialId] = res.data || {};
-  } catch {
-    packagingCache.value[materialId] = {};
+async function onSupplierChange(): Promise<void> {
+  supplierMaterialRelations.value = form.value.supplierId
+    ? (await listSupplierMaterials(factoryId.value, form.value.supplierId)).filter((row) => row.active !== false)
+    : [];
+  purchaseSpecCache.value = {};
+  form.value.items = [newPurchaseItem()];
+}
+
+function newPurchaseItem(): ProcurementOrderItem {
+  return {
+    supplierMaterialId: '', purchasePackagingSpecId: null, materialTypeId: '', quantity: 0,
+    unit: '', quantityUnit: '', unitPrice: 0, priceUnit: '', taxRate: null,
+  };
+}
+
+async function loadPurchaseSpecs(relationId: string): Promise<SupplierPurchaseSpec[]> {
+  if (!purchaseSpecCache.value[relationId]) {
+    purchaseSpecCache.value[relationId] = (
+      await listSupplierPurchaseSpecs(factoryId.value, form.value.supplierId, relationId)
+    ).filter((row) => row.active !== false);
+  }
+  return purchaseSpecCache.value[relationId];
+}
+
+function specsForItem(item: ProcurementOrderItem): SupplierPurchaseSpec[] {
+  return item.supplierMaterialId ? (purchaseSpecCache.value[item.supplierMaterialId] ?? []) : [];
+}
+
+async function onSupplierMaterialChange(item: ProcurementOrderItem): Promise<void> {
+  const relation = supplierMaterialRelations.value.find((row) => row.id === item.supplierMaterialId);
+  if (!relation) return;
+  item.materialTypeId = relation.materialTypeId;
+  item.purchasePackagingSpecId = null;
+  const baseUnit = canonicalUnitCode(relation.baseUnit || relation.purchaseUnit);
+  item.unit = baseUnit;
+  item.quantityUnit = baseUnit;
+  item.priceUnit = baseUnit;
+  item.unitPrice = Number(relation.defaultPurchasePrice || 0);
+  const material = materials.value.find((row) => String(row.id) === relation.materialTypeId);
+  item.taxRate = materialTaxRate(material?.taxRate);
+  const specs = await loadPurchaseSpecs(relation.id);
+  const defaultSpec = specs.find((row) => row.defaultSpec);
+  if (defaultSpec) {
+    item.purchasePackagingSpecId = defaultSpec.id;
+    onPurchaseSpecChange(item);
   }
 }
 
-function getUnitOptionsForItem(item: TableRow): { value: string; label: string }[] {
-  const matId = String(item.materialTypeId || '');
-  const set = new Set<string>();
-  // 优先该原料的 1/2/3 级单位
-  const pkg = packagingCache.value[matId];
-  if (pkg) {
-    if (pkg.level1Unit) set.add(pkg.level1Unit);
-    if (pkg.level2Unit) set.add(pkg.level2Unit);
-    if (pkg.level3Unit) set.add(pkg.level3Unit);
-  }
-  // 兜底: 该原料的默认 unit (如果有 packaging 已经在内)
-  const mat = materials.value.find((m) => m.id === matId);
-  if (mat && mat.unit) set.add(String(mat.unit));
-  // 当前已选的 unit (历史值兼容)
-  const cur = String(item.unit || '');
-  if (cur && !set.has(cur)) set.add(cur);
-  return Array.from(set).map((u) => ({ value: u, label: u }));
+function onPurchaseSpecChange(item: ProcurementOrderItem): void {
+  const spec = specsForItem(item).find((row) => row.id === item.purchasePackagingSpecId);
+  const relation = supplierMaterialRelations.value.find((row) => row.id === item.supplierMaterialId);
+  const unit = canonicalUnitCode(spec?.purchasePackageUnit || relation?.baseUnit || relation?.purchaseUnit);
+  item.unit = unit;
+  item.quantityUnit = unit;
+  item.priceUnit = unit;
+  if (spec?.quotedPrice != null) item.unitPrice = Number(spec.quotedPrice);
 }
 
-function onItemMaterialChange(item: TableRow) {
-  const matId = String(item.materialTypeId || '');
-  if (!matId) return;
-  ensurePackagingLoaded(matId).then(() => {
-    // 选原料后默认带入该原料的一级单位 (除非用户已经填了)
-    const mat = materials.value.find((m) => m.id === matId);
-    if (mat && mat.unit && !item.unit) item.unit = canonicalUnitCode(mat.unit);
-    item.quantityUnit = canonicalUnitCode(item.unit);
-    if (mat && !item.priceUnit) item.priceUnit = canonicalUnitCode(mat.priceUnit || mat.unit);
-    if (mat && mat.taxRate != null && item.taxRate == null && !validateTaxRate(mat.taxRate)) {
-      item.taxRate = Number(mat.taxRate);
-    }
-    recalcBoxQuantity(item);  // P1-2: packaging 拉到后立即算箱数
-  });
+function inventoryQuantityPreview(item: ProcurementOrderItem): string {
+  const spec = specsForItem(item).find((row) => row.id === item.purchasePackagingSpecId);
+  const relation = supplierMaterialRelations.value.find((row) => row.id === item.supplierMaterialId);
+  const quantity = Number(item.quantity || 0);
+  const baseUnit = spec?.inventoryBaseUnit || relation?.baseUnit || relation?.purchaseUnit;
+  const inventoryQuantity = spec ? quantity * Number(spec.factor) : quantity;
+  return quantity > 0 && baseUnit ? `${Number(inventoryQuantity.toFixed(4))} ${displayUnit(baseUnit)}` : '-';
 }
 
-/**
- * P1-2/3 (audio May 7 客户通话): 箱数自动算 + 抄码品识别.
- *
- * 客户原话: "規格寫是抄码那我在折算箱數的時候比如說那個規格是抄码,
- * 那個箱數自動會顯示抄码品, 然後就不顯示多少箱". 抄码 = 餐饮/食品行业
- * 称重商品 (每箱重量不一致, 如鲜牛肉/鲜鱼), 不能按箱计.
- *
- * 双轨说明: 这是 LEGACY 实现. CANVAS DynamicModulePage 等 Phase B C-6
- * 框架落地 (ReferenceSelector projectFields + SpEL evaluator), 见
- * docs/superpowers/specs/2026-05-09-canvas-c6-reactive-default-framework.md
- */
-/**
- * R2 fix #3: 精确匹配 trim() === '抄码', 不用 includes.
- * 旧: includes 误报 — "抄码区限量款" / "抄码加工标识" 都会被识别为抄码品.
- * 客户原话 "規格寫是抄码" 暗示 spec 字面值就是 "抄码", 而非含 "抄码" 子串.
- * 后续如客户报漏匹配 (繁体 "抄碼" / 含空格), 改加 normalize: trim + lower + 简繁同义.
- */
-function isAbacaItem(item: TableRow): boolean {
-  return String(item.specification || '').trim() === '抄码';
-}
-
-function recalcBoxQuantity(item: TableRow) {
-  if (isAbacaItem(item)) {
-    item.boxQuantity = null;  // 抄码品: 不算箱数
-    return;
-  }
-  const matId = String(item.materialTypeId || '');
-  const qty = Number(item.quantity || 0);
-  const pkg = packagingCache.value[matId];
-  if (!pkg || qty <= 0) return;
-
-  // I-1 reviewer fix: 用户选 1/2/3 级单位决定如何算箱数, 不再硬编码假设一级单位.
-  // 旧逻辑: 任何 unit 都按 qty / level1PerLevel2 算 → 用户选"箱"时 5 箱被算成 0.5 箱.
-  const unit = String(item.unit || '');
-  if (!unit || unit === pkg.level1Unit) {
-    // 一级单位 (如 kg) → 按转换系数算箱: box = qty / level1PerLevel2
-    if (!pkg.level1PerLevel2 || Number(pkg.level1PerLevel2) <= 0) return;
-    item.boxQuantity = Math.round((qty / Number(pkg.level1PerLevel2)) * 100) / 100;
-  } else if (unit === pkg.level2Unit) {
-    // 二级单位 (如 箱) → 数量本身就是箱数, 直接赋值
-    item.boxQuantity = qty;
-  }
-  // 其他单位 (level3 柜 / 用户自定义 allow-create 单位) → 不自动算, 保留用户手动填值
+function requiresPurchaseSpec(item: ProcurementOrderItem): boolean {
+  return specsForItem(item).length > 0 && !item.purchasePackagingSpecId;
 }
 
 const statusMap: Record<string, { text: string; type: string }> = {
@@ -619,7 +583,7 @@ async function loadSalesOrders() {
 }
 
 function addItem() {
-  form.value.items.push({ materialTypeId: '', quantity: 0, unit: 'kg', quantityUnit: 'kg', unitPrice: 0, priceUnit: 'kg', taxRate: null });
+  form.value.items.push(newPurchaseItem());
 }
 
 function removeItem(index: number) {
@@ -630,11 +594,30 @@ const submitting = ref(false);
 
 async function handleCreate() {
   if (submitting.value) return; // P-2: prevent double-submit
+  if (createdOrderId.value) {
+    submitting.value = true;
+    try {
+      const result = await createAttachmentRef.value?.uploadQueued(createdOrderId.value);
+      if ((result?.failed ?? 0) > 0) {
+        ElMessage.error('采购订单已创建，但仍有附件上传失败；请重试失败文件，系统不会重复创建订单');
+        return;
+      }
+      ElMessage.success('采购订单及附件已保存');
+      dialogVisible.value = false;
+      resetForm();
+      loadData();
+    } finally {
+      submitting.value = false;
+    }
+    return;
+  }
   if (!form.value.supplierId) return ElMessage.warning('请选择供应商');
   if (!Array.isArray(form.value.items) || form.value.items.length === 0) {
     return ElMessage.warning('请至少添加一行原料明细');
   }
-  if (form.value.items.some(i => !i.materialTypeId)) return ElMessage.warning('请选择所有原料');
+  if (form.value.items.some(i => !i.supplierMaterialId || !i.materialTypeId)) return ElMessage.warning('请选择当前供应商可供的所有原料');
+  const missingSpecIndex = form.value.items.findIndex(requiresPurchaseSpec);
+  if (missingSpecIndex >= 0) return ElMessage.warning(`第 ${missingSpecIndex + 1} 行已配置采购规格，请选择规格`);
   const invalidQtyIndex = form.value.items.findIndex(i => !(Number(i.quantity) > 0));
   if (invalidQtyIndex >= 0) {
     return ElMessage.warning(`第 ${invalidQtyIndex + 1} 行采购数量必须大于 0`);
@@ -645,7 +628,7 @@ async function handleCreate() {
   }
   const invalidTaxRateIndex = form.value.items.findIndex((i) => validateTaxRate(i.taxRate));
   if (invalidTaxRateIndex >= 0) {
-    return ElMessage.warning(`第 ${invalidTaxRateIndex + 1} 行税率必须是 0-100 之间的数字`);
+    return ElMessage.warning(`第 ${invalidTaxRateIndex + 1} 行${validateTaxRate(form.value.items[invalidTaxRateIndex].taxRate)}`);
   }
   submitting.value = true;
   try {
@@ -680,7 +663,20 @@ async function handleCreate() {
       ? await put(`/${factoryId.value}/purchase/orders/${editingOrderId.value}`, payload)
       : await post(`/${factoryId.value}/purchase/orders`, payload);
     if (res.success) {
-      ElMessage.success(isEditing.value ? '采购草稿已更新' : '创建成功');
+      const savedOrderId = String((res.data as TableRow | undefined)?.id || editingOrderId.value || '');
+      if (!isEditing.value && attachmentQueue.value.total > 0) {
+        if (!savedOrderId) {
+          ElMessage.error('采购订单已创建，但响应缺少订单 ID，附件无法安全绑定；请从订单详情上传附件');
+          return;
+        }
+        createdOrderId.value = savedOrderId;
+        const uploadResult = await createAttachmentRef.value?.uploadQueued(savedOrderId);
+        if ((uploadResult?.failed ?? 0) > 0) {
+          ElMessage.error('采购订单已创建一次，但部分附件上传失败；请重试附件，勿再次创建订单');
+          return;
+        }
+      }
+      ElMessage.success(isEditing.value ? '采购草稿已更新' : '采购订单及附件已创建');
       dialogVisible.value = false;
       resetForm();
       await clearEditQuery();
@@ -700,7 +696,12 @@ function resetForm() {
   editingOrderId.value = '';
   editingVersion.value = null;
   editingOrderDate.value = '';
-  form.value = { supplierId: '', purchaseType: 'DIRECT', expectedDeliveryDate: '', remark: '', relatedSalesOrderId: '', contractNumber: '', settlementType: '', invoiceReminderDays: null, items: [{ materialTypeId: '', quantity: 0, unit: 'kg', quantityUnit: 'kg', unitPrice: 0, priceUnit: 'kg', taxRate: null }], customFields: {} as TableRow };
+  form.value = { supplierId: '', purchaseType: 'DIRECT', expectedDeliveryDate: '', remark: '', relatedSalesOrderId: '', contractNumber: '', settlementType: '', invoiceReminderDays: null, items: [newPurchaseItem()], customFields: {} as TableRow };
+  supplierMaterialRelations.value = [];
+  purchaseSpecCache.value = {};
+  createdOrderId.value = '';
+  attachmentQueue.value = { total: 0, pending: 0, failed: 0 };
+  createAttachmentRef.value?.clear();
 }
 
 // 张权 Apr 28 反馈: "基础数据已经新建了 但是采购订单 下拉没有选项"
@@ -721,6 +722,15 @@ async function clearEditQuery() {
 }
 
 async function closeOrderEditor() {
+  if (createdOrderId.value && (attachmentQueue.value.pending > 0 || attachmentQueue.value.failed > 0)) {
+    try {
+      await ElMessageBox.confirm(
+        '采购订单已经创建，但附件尚未全部上传。关闭后可在订单详情继续上传，订单不会回滚或重复创建。',
+        '附件尚未完成',
+        { type: 'warning', confirmButtonText: '仍然关闭', cancelButtonText: '继续处理附件' },
+      );
+    } catch { return; }
+  }
   dialogVisible.value = false;
   resetForm();
   await clearEditQuery();
@@ -740,8 +750,14 @@ async function openEditDialog(orderId: string) {
   editingOrderId.value = orderId;
   editingVersion.value = Number(order.version);
   editingOrderDate.value = String(order.orderDate || factoryToday());
+  const orderSupplierId = String(order.supplierId || '');
+  form.value.supplierId = orderSupplierId;
+  supplierMaterialRelations.value = (
+    await listSupplierMaterials(factoryId.value, orderSupplierId)
+  ).filter((row) => row.active !== false);
+  await Promise.all(supplierMaterialRelations.value.map((relation) => loadPurchaseSpecs(relation.id)));
   form.value = {
-    supplierId: String(order.supplierId || ''),
+    supplierId: orderSupplierId,
     purchaseType: String(order.purchaseType || 'DIRECT'),
     expectedDeliveryDate: String(order.expectedDeliveryDate || ''),
     remark: String(order.remark || ''),
@@ -753,6 +769,8 @@ async function openEditDialog(orderId: string) {
       const item = raw as TableRow;
       const quantityUnit = canonicalUnitCode(item.quantityUnit || item.unit);
       return {
+        supplierMaterialId: String(item.supplierMaterialId || supplierMaterialRelations.value.find((relation) => relation.materialTypeId === String(item.materialTypeId || ''))?.id || ''),
+        purchasePackagingSpecId: item.purchasePackagingSpecId ? String(item.purchasePackagingSpecId) : null,
         materialTypeId: String(item.materialTypeId || ''),
         quantity: Number(item.quantity || 0),
         unit: quantityUnit,
@@ -762,8 +780,6 @@ async function openEditDialog(orderId: string) {
         lineAmount: item.lineAmount == null ? null : Number(item.lineAmount),
         convertedPricingQuantity: item.convertedPricingQuantity == null ? null : Number(item.convertedPricingQuantity),
         taxRate: item.taxRate == null ? null : Number(item.taxRate),
-        specification: String(item.specification || ''),
-        boxQuantity: item.boxQuantity == null ? undefined : Number(item.boxQuantity),
       };
     }),
     customFields: (order.customFields as TableRow) || {},
@@ -775,7 +791,6 @@ async function openEditDialog(orderId: string) {
 async function handleAction(orderId: string, action: string) {
   const actionMap: Record<string, { label: string; url: string }> = {
     submit: { label: '提交', url: `/${factoryId.value}/purchase/orders/${orderId}/submit` },
-    approve: { label: '审批', url: `/${factoryId.value}/purchase/orders/${orderId}/approve` },
     cancel: { label: '取消', url: `/${factoryId.value}/purchase/orders/${orderId}/cancel` },
   };
   const a = actionMap[action];
@@ -854,12 +869,6 @@ function handleRefresh() {
 
 // ==================== AI Entry ====================
 const aiEntryVisible = ref(false);
-
-// ==================== Audit Log Drawer (PR #861) ====================
-// State for AuditLogDrawer — scoped to the row clicked via 审计 inline chip.
-const auditDrawerVisible = ref(false);
-const auditEntityId = ref('');
-const auditEntityLabel = ref('');
 
 // ==================== Forward Share Dialog (PR #872) ====================
 // State for ForwardShareDialog — scoped to the row clicked via 转发 inline chip.
@@ -1081,18 +1090,9 @@ function handleAiFill(params: TableRow) {
             <el-button type="info" link size="small" :icon="Download"
               :loading="pdfDownloadingIds.has(String(row.id))"
               @click="handleDownloadPdf(row)">对外供货单</el-button>
-            <el-button v-if="row.status === 'DRAFT' && canWrite" type="warning" link size="small" @click="handleAction(row.id, 'submit')">提交</el-button>
-            <el-button v-if="row.status === 'SUBMITTED' && canWrite" type="success" link size="small" @click="handleAction(row.id, 'approve')">审批</el-button>
-            <el-button v-if="['DRAFT','SUBMITTED'].includes(row.status) && canWrite" type="danger" link size="small" @click="handleAction(row.id, 'cancel')">取消</el-button>
-            <!-- U-ICON-1 (Sprint 4 Wave 2 Chat L) inline 7-icon hover toolbar -->
-            <InlineRowIcons
-              :row-actions="rowActionsFor(row)"
-              entity-type="purchaseOrder"
-              class="row-inline-icons"
-              @icon-click="(id: InlineIconId) => handleInlineIconClick(id, row)"
-            />
+            <el-button v-if="canSubmitPurchaseOrder(row.status, canWrite)" type="warning" link size="small" @click="handleAction(row.id, 'submit')">提交</el-button>
             <RowActionMenu
-              :actions="rowActionsFor(row)"
+              :actions="moreRowActionsFor(row)"
               button-label="更多"
               @action-click="(id: string) => handleRowActionClick(id, row)"
               @ai-trigger="() => openAiForRow(row)"
@@ -1121,7 +1121,14 @@ function handleAiFill(params: TableRow) {
     <el-dialog :model-value="dialogVisible" :title="`${isEditing ? '编辑草稿' : '新建'}${label('purchaseOrder')}`" fullscreen destroy-on-close @update:model-value="(open: boolean) => { if (!open) closeOrderEditor() }">
       <el-form :model="form" label-width="100px">
         <el-form-item :label="label('supplier')" required>
-          <el-select v-model="form.supplierId" placeholder="请选择" filterable style="width: 100%">
+          <el-select
+            v-model="form.supplierId"
+            placeholder="请选择"
+            filterable
+            :disabled="isEditing"
+            style="width: 100%"
+            @change="onSupplierChange"
+          >
             <el-option v-for="s in suppliers" :key="s.id" :label="s.name" :value="s.id" />
           </el-select>
           <UpstreamMissingHint
@@ -1187,51 +1194,81 @@ function handleAiFill(params: TableRow) {
           <el-input v-model="form.remark" type="textarea" :rows="2" />
         </el-form-item>
         <CanvasDynamicFields v-model="form.customFields" module-code="purchase_order" />
+        <template v-if="!isEditing">
+          <el-divider>附件</el-divider>
+          <el-alert
+            v-if="createdOrderId"
+            type="warning"
+            :closable="false"
+            show-icon
+            title="采购订单已经创建，当前只处理附件重试；不会再次创建订单。"
+            style="margin-bottom: 10px"
+          />
+          <AttachmentDropZone
+            ref="createAttachmentRef"
+            entity-type="PURCHASE_ORDER"
+            :entity-id="createdOrderId"
+            :factory-id="factoryId"
+            business-tag="PURCHASE_DOC"
+            :auto-upload="false"
+            @queue-change="attachmentQueue = $event"
+          />
+        </template>
         <el-divider>{{ label('rawMaterial') }}明细</el-divider>
+        <el-alert
+          v-if="form.supplierId && supplierMaterialRelations.length === 0"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="该供应商尚未维护可采购原料，请先在供应商详情的“供应原料”中建立关系。"
+          style="margin-bottom: 12px"
+        />
         <div class="item-row item-header">
           <!-- May 7 2026 用户反馈: 数量/单价/箱数 input-number 控件 -/+ 占两端,
                value 字段被挤压看不到数字. fullscreen dialog 1200px+ 有充足空间,
                把所有列加宽确保 3 位以上数字 + 小数点 + -/+ 控件都能完整显示. -->
-          <span style="width: 220px"><span class="req-star">*</span>原料名称</span>
-          <span style="width: 140px">规格</span>
-          <span style="width: 140px"><span class="req-star">*</span>数量</span>
-          <span style="width: 130px"><span class="req-star">*</span>单位</span>
-          <span style="width: 210px">未税采购单价 / 金额预览</span>
-          <span style="width: 130px">税率</span>
-          <span style="width: 140px">箱数</span>
+          <span style="width: 220px"><span class="req-star">*</span>供应原料</span>
+          <span style="width: 180px"><span class="req-star">*</span>采购规格</span>
+          <span style="width: 140px"><span class="req-star">*</span>采购数量</span>
+          <span style="width: 110px">采购单位</span>
+          <span style="width: 140px">折合入库量</span>
+          <span style="width: 230px">未税单价 / 金额</span>
+          <span style="width: 150px"><span class="req-star">*</span>税率 / 含税金额</span>
           <span style="width: 70px">操作</span>
         </div>
         <div v-for="(item, idx) in form.items" :key="idx" class="item-row">
           <el-select
-            v-model="item.materialTypeId"
-            placeholder="选择原料"
+            v-model="item.supplierMaterialId"
+            placeholder="选择该供应商的原料"
             filterable
+            :disabled="!form.supplierId"
             style="width: 220px"
-            @change="onItemMaterialChange(item)"
-          >
-            <el-option v-for="m in materials" :key="m.id" :label="m.name" :value="m.id" />
-          </el-select>
-          <el-input v-model="item.specification" placeholder="规格" style="width: 140px" @change="recalcBoxQuantity(item)" />
-          <el-input-number v-model="item.quantity" :min="1" placeholder="数量" style="width: 140px" @change="recalcBoxQuantity(item)" />
-          <!-- 单位下拉: 选定原料后显示该原料的 1/2/3 级单位; 未选时退化空选项 -->
-          <!-- M-2 reviewer fix: @change 触发箱数重算, 用户切单位时同步更新 boxQuantity -->
-          <el-select
-            v-model="item.unit"
-            placeholder="单位"
-            :disabled="!item.materialTypeId"
-            style="width: 130px"
-            filterable
-            allow-create
-            default-first-option
-            @change="item.quantityUnit = canonicalUnitCode(item.unit); recalcBoxQuantity(item)"
+            @change="onSupplierMaterialChange(item)"
           >
             <el-option
-              v-for="opt in getUnitOptionsForItem(item)"
-              :key="opt.value"
-              :label="opt.label"
-              :value="opt.value"
+              v-for="relation in supplierMaterialRelations"
+              :key="relation.id"
+              :label="`${relation.materialName}${relation.supplierMaterialCode ? ` · ${relation.supplierMaterialCode}` : ''}`"
+              :value="relation.id"
             />
           </el-select>
+          <el-select
+            v-model="item.purchasePackagingSpecId"
+            :placeholder="specsForItem(item).length > 0 ? '选择采购规格' : '不涉及（按基本单位）'"
+            :disabled="!item.supplierMaterialId || specsForItem(item).length === 0"
+            style="width: 180px"
+            @change="onPurchaseSpecChange(item)"
+          >
+            <el-option
+              v-for="spec in specsForItem(item)"
+              :key="spec.id"
+              :label="`${spec.name} · 1${displayUnit(spec.purchasePackageUnit)}=${spec.factor}${displayUnit(spec.inventoryBaseUnit)}`"
+              :value="spec.id"
+            />
+          </el-select>
+          <el-input-number v-model="item.quantity" :min="0.001" :precision="3" placeholder="采购数量" style="width: 140px" />
+          <el-input :model-value="displayUnit(item.unit) || '-'" disabled style="width: 110px" />
+          <div class="inventory-preview" style="width: 140px">{{ inventoryQuantityPreview(item) }}</div>
           <div class="pricing-editor">
             <div class="pricing-inputs">
               <el-input-number v-model="item.unitPrice" :min="0" :precision="2" placeholder="未税采购单价" style="width: 120px" />
@@ -1247,11 +1284,10 @@ function handleAiFill(params: TableRow) {
             <span v-if="itemAmountPreview(item).amount != null" class="pricing-preview">金额 {{ itemAmountPreview(item).amount?.toFixed(2) }} 元</span>
             <span v-else class="pricing-preview pricing-preview--pending">{{ itemAmountPreview(item).message }}</span>
           </div>
-          <div style="width: 130px">
+          <div style="width: 150px">
             <el-select
               v-model="item.taxRate"
-              placeholder="未配置"
-              clearable
+              placeholder="请选择税率"
               filterable
               allow-create
               default-first-option
@@ -1267,17 +1303,19 @@ function handleAiFill(params: TableRow) {
             <div v-if="validateTaxRate(item.taxRate)" class="field-error">
               {{ validateTaxRate(item.taxRate) }}
             </div>
+            <div v-else-if="itemTaxPreview(item)" class="tax-preview">
+              税 {{ itemTaxPreview(item)?.tax.toFixed(2) }} · 含税 {{ itemTaxPreview(item)?.taxed.toFixed(2) }} 元
+            </div>
           </div>
-          <!-- P1-2/3 R2 fix: el-tag 替换 inline-styled div, 跟随 Element Plus 主题 + 暗模式 -->
-          <el-tag v-if="isAbacaItem(item)" type="warning" effect="light" size="default" style="width: 140px; text-align: center;">抄码品</el-tag>
-          <el-input-number v-else v-model="item.boxQuantity" :min="0" :precision="2" placeholder="箱" style="width: 140px" />
           <el-button type="danger" link @click="removeItem(idx)" :disabled="form.items.length <= 1" style="width: 70px">删除</el-button>
         </div>
         <el-button style="width: 100%; margin-top: 8px" @click="addItem">+ 添加行</el-button>
       </el-form>
       <template #footer>
         <el-button @click="closeOrderEditor">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleCreate">{{ isEditing ? '保存修改' : '创建' }}</el-button>
+        <el-button type="primary" :loading="submitting" @click="handleCreate">
+          {{ createdOrderId ? (attachmentQueue.failed ? '重试附件并完成' : '完成') : (isEditing ? '保存修改' : '创建') }}
+        </el-button>
       </template>
     </el-dialog>
 
@@ -1427,15 +1465,6 @@ function handleAiFill(params: TableRow) {
       </template>
     </BomExpansionDialog>
 
-    <!-- PR #865: per-row operation log timeline (replaces the disabled "审计" chip). -->
-    <AuditLogDrawer
-      v-model:visible="auditDrawerVisible"
-      entity-type="PurchaseOrder"
-      entity-type-label="采购单"
-      :entity-id="auditEntityId"
-      :entity-label="auditEntityLabel"
-    />
-
     <!-- PR #872 (#860 follow-up) — 转发分享链接 dialog (replaces (开发中) chip). -->
     <ForwardShareDialog
       v-model:visible="forwardDialogVisible"
@@ -1479,10 +1508,12 @@ function handleAiFill(params: TableRow) {
 .search-bar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
 .pagination-wrapper { display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #ebeef5; margin-top: 16px; }
 .item-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
-.pricing-editor { width: 210px; display: flex; flex-direction: column; gap: 3px; }
+.pricing-editor { width: 230px; display: flex; flex-direction: column; gap: 3px; }
 .pricing-inputs { display: flex; gap: 6px; }
 .pricing-preview { color: #606266; font-size: 12px; line-height: 18px; }
 .pricing-preview--pending { color: #909399; }
+.inventory-preview { color: #303133; font-size: 13px; text-align: center; }
+.tax-preview { color: #606266; font-size: 11px; line-height: 16px; margin-top: 2px; }
 .item-header { font-size: 13px; font-weight: 600; color: #606266; margin-bottom: 4px;
   span { text-align: center; display: inline-block; }
 }

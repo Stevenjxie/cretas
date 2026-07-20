@@ -200,8 +200,8 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
                 productWorkProcessService.listByProduct(factoryId, productTypeId);
 
         // E1: Deduplicated catalog — when multiple entries have the same normalized name
-        // (e.g. "焯水" appears 3 times across different product-specific catalogs),
-        // keep the entry with the smallest sort_order to break ties deterministically.
+        // (e.g. "焯水" appears 3 times across legacy catalogs). Catalog order is already
+        // deterministic; global sort is not a WorkProcess master-data concept.
         List<WorkProcessDTO> deduplicatedCatalog = deduplicateCatalogByName(catalog);
 
         // E2: Segment-driven matching: split user input into ordered segments first,
@@ -244,7 +244,6 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
                         null,
                         candidate,
                         null,
-                        null,
                         i + 1,
                         assignee != null ? assignee.getId() : null,
                         assignee != null ? displayUserName(assignee) : null));
@@ -256,7 +255,6 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
                         sm.catalogEntry().getId(),
                         sm.catalogEntry().getProcessName(),
                         sm.catalogEntry().getProcessCategory(),
-                        sm.catalogEntry().getUnit(),
                         i + 1,
                         assignee != null ? assignee.getId() : null,
                         assignee != null ? displayUserName(assignee) : null));
@@ -275,7 +273,7 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
      * E1: Deduplicate catalog entries by normalized process name.
      * When the factory has the same process name in multiple product-specific catalogs
      * (e.g. "焯水" for 猪舌, 牛腱 and 掌中宝 are three separate rows), keep only the
-     * entry with the smallest sort_order so downstream logic sees each name exactly once.
+     * first future-selectable catalog entry so downstream logic sees each name exactly once.
      */
     private List<WorkProcessDTO> deduplicateCatalogByName(List<WorkProcessDTO> catalog) {
         Map<String, WorkProcessDTO> byNormalizedName = new LinkedHashMap<>();
@@ -283,12 +281,7 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
             if (wp.getId() == null || wp.getProcessName() == null) continue;
             String key = normalize(wp.getProcessName());
             if (key.isBlank()) continue;
-            byNormalizedName.merge(key, wp, (existing, incoming) -> {
-                // Keep the one with the smaller sort_order (treat null as MAX)
-                int existingOrder = existing.getSortOrder() != null ? existing.getSortOrder() : Integer.MAX_VALUE;
-                int incomingOrder = incoming.getSortOrder() != null ? incoming.getSortOrder() : Integer.MAX_VALUE;
-                return incomingOrder < existingOrder ? incoming : existing;
-            });
+            byNormalizedName.putIfAbsent(key, wp);
         }
         return new ArrayList<>(byNormalizedName.values());
     }
@@ -521,7 +514,6 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
             String workProcessId,
             String processName,
             String processCategory,
-            String unit,
             Integer processOrder,
             Long responsibleWorkerId,
             String responsibleWorkerName) {
@@ -533,7 +525,6 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
             row.put("workProcessId", workProcessId);
             row.put("processName", processName);
             row.put("processCategory", processCategory);
-            row.put("unit", unit);
             row.put("processOrder", processOrder);
             row.put("responsibleWorkerId", responsibleWorkerId);
             row.put("responsibleWorkerName", responsibleWorkerName);

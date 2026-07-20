@@ -5,9 +5,11 @@ import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
+import jakarta.validation.Valid;
 import lombok.Data;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 @Data
 public class SeasoningBindingUpdateRequest {
@@ -21,4 +23,6 @@ public class SeasoningBindingUpdateRequest {
     private BigDecimal subsequentPotRatio;
     private Boolean countInSeasoning;
     private String remark;
+    @Valid
+    private List<BomSubstituteInput> substitutes;
 }

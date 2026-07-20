@@ -7,6 +7,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -19,16 +20,33 @@ public class BomSeasoningWorkspaceResponse {
     private BomRecipe.Status status;
     private boolean editable;
     private Long seasoningRevision;
+    /** Exact immutable Workflow revision pinned by this BOM version. */
+    private Long workflowRevisionId;
+    private Long workflowId;
+    private Integer workflowDefinitionVersion;
+    private String workflowRevisionHash;
+    private String workflowRevisionStatus;
+    private LocalDateTime workflowRevisionSavedAt;
+    private Integer workflowRootCount;
+    private Integer workflowProcessCount;
+    private Integer workflowTargetCount;
+    private String workflowTargetProductTypeId;
     private List<ProcessView> processes = new ArrayList<>();
     private List<MaterialSummary> materialSummaries = new ArrayList<>();
     private List<Anomaly> anomalies = new ArrayList<>();
 
     @Data @NoArgsConstructor @AllArgsConstructor
     public static class ProcessView {
+        private String workflowProcessNodeId;
         private String workProcessId;
         private String processName;
         private String processCategory;
         private Integer processOrder;
+        /** Standard denominator inherited from the pinned Workflow process node. */
+        private BigDecimal standardBasisQuantity;
+        private String standardBasisUnit;
+        /** False when the legacy g-per-kg seasoning model cannot represent this node safely. */
+        private boolean standardUsageSupported;
         private List<BomSeasoningItem> bindings;
     }
 
@@ -45,6 +63,7 @@ public class BomSeasoningWorkspaceResponse {
 
     @Data @NoArgsConstructor @AllArgsConstructor
     public static class ProcessUsage {
+        private String workflowProcessNodeId;
         private String workProcessId;
         private String processName;
         private BigDecimal dosagePerKgG;

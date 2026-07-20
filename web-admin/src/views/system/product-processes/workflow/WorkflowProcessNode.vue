@@ -3,8 +3,6 @@
     class="process-node"
     :class="{ selected, 'wf-dim': isConnectDimmed, 'wf-valid': isValidConnectTarget }"
     :style="processNodeStyle"
-    @mouseenter="hovered = true"
-    @mouseleave="hovered = false"
   >
     <Handle
       v-for="(port, index) in inputPorts"
@@ -24,23 +22,13 @@
     />
 
     <button
-      v-if="canWrite && (selected || hovered)"
+      v-if="canWrite"
       type="button"
       class="cell-delete nodrag"
       title="删除此工序 Cell"
       data-testid="delete-process-cell"
       @click.stop="emit('delete')"
     >✕ 删除</button>
-
-    <button
-      v-if="canWrite && (selected || hovered)"
-      type="button"
-      class="edge-output-add nodrag"
-      data-testid="add-output-edge"
-      aria-label="添加一个产出 Cell"
-      :style="edgeOutputStyle"
-      @click.stop="emit('addOutput')"
-    >+</button>
 
     <div class="process-heading">
       <span class="step-mark">序</span>
@@ -72,13 +60,24 @@
         <el-button v-if="canWrite && allowAddInput" text size="small" type="primary" class="nodrag" @click="emit('addInput')">+ 来源 Cell（合流）</el-button>
       </div>
       <div v-if="inputPorts.length > 1" class="port-relation nodrag" data-testid="input-port-relation">
-        <div class="port-relation-control">
-          <span>投入方式</span>
-          <el-tag type="primary" effect="light" data-testid="input-free-choice-mode">批次自由选择（至少1个）</el-tag>
-        </div>
-        <div class="port-relation-help" data-testid="input-relation-help">
-          每个批次至少选择1种，可选择1种、多种或全部。
-        </div>
+        <template v-if="inputRequirementGroups.length > 0">
+          <div class="port-relation-control">
+            <span>投入要求</span>
+            <div class="port-relation-labels" data-testid="input-requirement-groups">
+              <el-tag v-for="group in inputRequirementGroups" :key="group.id" type="primary" effect="light">
+                {{ group.label }} · {{ inputRequirementLabel(group.mode) }}
+              </el-tag>
+            </div>
+          </div>
+          <div class="port-relation-help" data-testid="input-relation-help">按 BOM 返回的投入要求执行，不在画布中猜测。</div>
+        </template>
+        <template v-else>
+          <div class="port-relation-control">
+            <span>投入要求</span>
+            <el-tag type="warning" effect="light" data-testid="input-requirement-pending">待 BOM 配置</el-tag>
+          </div>
+          <div class="port-relation-help" data-testid="input-relation-help">BOM 尚未返回完整投入要求，暂不推断必选关系。</div>
+        </template>
       </div>
       <div v-for="port in inputPorts" :key="port.id" class="port-row">
         <el-input
@@ -227,12 +226,18 @@ const emit = defineEmits<{
 }>();
 
 const processNodeStyle = { minHeight: '96px' } as const;
-const edgeOutputStyle = { top: '12px', right: '-14px' } as const;
-const hovered = ref(false);
 const inputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'INPUT'));
 const outputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'OUTPUT'));
 const inputPortGroups = computed(() => (props.data.portGroups ?? []).filter((group) => group.direction === 'INPUT'));
+const inputRequirementGroups = computed(() => (props.data.inputRequirementGroups ?? [])
+  .filter((group) => group.direction === 'INPUT'));
 const outputPortGroups = computed(() => (props.data.portGroups ?? []).filter((group) => group.direction === 'OUTPUT'));
+
+function inputRequirementLabel(mode: PortSelectionMode): string {
+  if (mode === 'ALL_REQUIRED') return '必需';
+  if (mode === 'EXACTLY_ONE' || mode === 'AT_LEAST_ONE') return '必选其一';
+  return '可选';
+}
 const primaryOutput = computed(() => [...outputPorts.value].sort((a, b) => a.ordinal - b.ordinal)[0]);
 const secondaryOutputs = computed(() => outputPorts.value.filter((port) => port.id !== primaryOutput.value?.id));
 const unitRelationshipSummary = computed(() => {
@@ -350,6 +355,16 @@ function handleStyle(index: number, count: number): Record<string, string> {
   cursor: pointer; box-shadow: 0 2px 6px rgba(245, 108, 108, 0.4);
 }
 .cell-delete:hover { background: #f23c3c; }
+.cell-delete, .quick-edit-process { opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
+.process-node:hover .cell-delete,
+.process-node:hover .quick-edit-process,
+.process-node:focus-within .cell-delete,
+.process-node:focus-within .quick-edit-process,
+.process-node.selected .cell-delete,
+.process-node.selected .quick-edit-process { opacity: 1; pointer-events: auto; }
+@media (hover: none) {
+  .process-node .cell-delete, .process-node .quick-edit-process { opacity: 1; pointer-events: auto; }
+}
 
 .process-node {
   position: relative;

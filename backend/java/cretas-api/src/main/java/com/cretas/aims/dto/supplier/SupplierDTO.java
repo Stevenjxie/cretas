@@ -45,6 +45,8 @@ public class SupplierDTO {
     private String qualityCertificates;
     // 状态信息
     private Boolean isActive;
+    private String status;
+    private Boolean profileComplete;
     private String notes;
     // 统计信息
     private Integer totalOrders;

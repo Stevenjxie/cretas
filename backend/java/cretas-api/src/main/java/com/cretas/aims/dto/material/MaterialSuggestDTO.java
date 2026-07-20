@@ -4,6 +4,7 @@ import lombok.Builder;
 import lombok.Data;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 /**
  * T159-B-codegen: 原料智能建议多字段响应 DTO.
@@ -42,4 +43,17 @@ public class MaterialSuggestDTO {
      * null 表示该历史原料未配置包装层级.
      */
     private String level2Unit;
+
+    /** Same-factory material used as an explainable source; never cross-tenant. */
+    private String matchedMaterialName;
+
+    /** HIGH/MEDIUM/LOW. LOW suggestions are never silently written. */
+    private String unitConfidence;
+
+    private String segmentL1Code;
+    private String segmentL2Code;
+    private String segmentL3Code;
+    private String classificationConfidence;
+    private String classificationReason;
+    private List<MaterialTaxonomyCandidateDTO> classificationCandidates;
 }

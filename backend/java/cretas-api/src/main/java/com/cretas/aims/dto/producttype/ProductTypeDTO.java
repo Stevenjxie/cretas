@@ -64,6 +64,18 @@ public class ProductTypeDTO {
     @JsonIgnore
     private boolean gramsPerUnitPresent;
 
+    @Schema(description = "每个基本销售单位的净含量数量；必须与 netContentUnit 同时提供")
+    private BigDecimal netContentQuantity;
+
+    @Schema(description = "净含量 canonical 单位，仅允许 g/kg/ml/L")
+    private String netContentUnit;
+
+    @JsonIgnore
+    private boolean netContentQuantityPresent;
+
+    @JsonIgnore
+    private boolean netContentUnitPresent;
+
     @Schema(description = "T133 半成品→成品出成率 (0~1 乘数; null=备货看板按 1.0 即偏乐观; 如 0.55 表示 55% 出成率)")
     private BigDecimal wipToFgYield;
 
@@ -241,6 +253,16 @@ public class ProductTypeDTO {
     public void setGramsPerUnit(BigDecimal gramsPerUnit) {
         this.gramsPerUnit = gramsPerUnit;
         this.gramsPerUnitPresent = true;
+    }
+
+    public void setNetContentQuantity(BigDecimal netContentQuantity) {
+        this.netContentQuantity = netContentQuantity;
+        this.netContentQuantityPresent = true;
+    }
+
+    public void setNetContentUnit(String netContentUnit) {
+        this.netContentUnit = netContentUnit;
+        this.netContentUnitPresent = true;
     }
 
     public void setBoxConversionCoefficient(BigDecimal boxConversionCoefficient) {

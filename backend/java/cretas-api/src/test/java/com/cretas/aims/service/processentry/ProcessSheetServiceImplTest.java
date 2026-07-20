@@ -57,9 +57,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *
  * <p>覆盖:
  * <ol>
- *   <li>修油单行 (rawInputs + output>0) → RAW consumption + WIP 批 (CLERK_WIP, materialTypeId from raw)</li>
- *   <li>熟制混锅多源 + seasoningStep → 2 SEMI edges + SEASONING report + materialTypeId from upstream WIP</li>
- *   <li>edges 全无 materialTypeId → 400 (SP-E FK 防线)</li>
+ *   <li>修油单行 (rawInputs + output>0) → RAW consumption + WIP 批 (CLERK_WIP, identity from output)</li>
+ *   <li>熟制混锅多源 + seasoningStep → 2 SEMI edges + SEASONING report + output identity</li>
+ *   <li>产出 productTypeId 缺失 → 400 (fail-closed)</li>
  *   <li>output<=0 → DRAFT 行不物化</li>
  *   <li>跨租户 planId → 403; 未知上游 batchNumber → 409</li>
  * </ol>
@@ -231,7 +231,13 @@ class ProcessSheetServiceImplTest {
 
     /** Saves a xiuyou-style row and returns its result (materialized WIP). */
     private ProcessSheetRowResult saveXiuyou(String clientRowId, String rawQty, String output) {
+        return saveXiuyou(clientRowId, rawQty, output, PRODUCT_TYPE_ID);
+    }
+
+    private ProcessSheetRowResult saveXiuyou(
+            String clientRowId, String rawQty, String output, String outputProductTypeId) {
         ProcessSheetRowRequest req = baseReq(clientRowId, "xiuyou", 1, output);
+        req.setProductTypeId(outputProductTypeId);
         req.setInputQuantity(new BigDecimal(rawQty));
         req.setRawMaterialInputs(List.of(rawInput(rawBatchId, rawQty)));
         return processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
@@ -242,7 +248,7 @@ class ProcessSheetServiceImplTest {
     // ─────────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("1: 修油行 → RAW consumption + CLERK_WIP 批, materialTypeId 来自原料")
+    @DisplayName("1: 修油行 → RAW provenance + CLERK_WIP 批, materialTypeId 来自产出产品")
     void saveRow_xiuyou_writesRawConsumptionAndWipBatch() {
         ProcessSheetRowResult result = saveXiuyou("row-xiuyou-1", "100", "80");
 
@@ -270,8 +276,8 @@ class ProcessSheetServiceImplTest {
         MaterialBatch wip = materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
                 FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(result.getBatchId())).orElseThrow();
         assertThat(wip.getMaterialTypeId())
-                .as("WIP materialTypeId == raw's materialTypeId (SP-E FK safety)")
-                .isEqualTo(RAW_MATERIAL_TYPE_ID);
+                .as("WIP identity == row output product; raw only remains provenance")
+                .isEqualTo(PRODUCT_TYPE_ID);
         assertThat(wip.getReceiptQuantity()).isEqualByComparingTo("80");
         // unitPrice = rowTotalCost / output = 1000 / 80 = 12.5
         assertThat(wip.getUnitPrice()).isEqualByComparingTo("12.5");
@@ -283,11 +289,17 @@ class ProcessSheetServiceImplTest {
     }
 
     @Test
-    @DisplayName("2: 熟制混锅 2 上游 + seasoningStep → 2 SEMI edges + SEASONING 报工, materialTypeId 来自上游 WIP")
+    @DisplayName("2: 熟制混锅 2 上游 + seasoningStep → provenance 全保留且 WIP identity 来自产出")
     void saveRow_shuzhi_mixedPots_writesSemiEdgesAndSeasoning() {
         // Two upstream 修油 WIP batches
-        ProcessSheetRowResult up1 = saveXiuyou("row-x1", "60", "50");
-        ProcessSheetRowResult up2 = saveXiuyou("row-x2", "60", "50");
+        ProcessSheetRowResult up1 = saveXiuyou("row-x1", "60", "50", "PT-UPSTREAM-A");
+        ProcessSheetRowResult up2 = saveXiuyou("row-x2", "60", "50", "PT-UPSTREAM-C");
+        MaterialBatch upstreamA = materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(up1.getBatchId())).orElseThrow();
+        MaterialBatch upstreamC = materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(up2.getBatchId())).orElseThrow();
+        assertThat(upstreamA.getMaterialTypeId()).isEqualTo("PT-UPSTREAM-A");
+        assertThat(upstreamC.getMaterialTypeId()).isEqualTo("PT-UPSTREAM-C");
 
         // Recipe so seasoning cost > 0 (ACTIVE for PRODUCT_TYPE_ID)
         seedSeasoningRecipe();
@@ -327,18 +339,17 @@ class ProcessSheetServiceImplTest {
                         && r.getMaterialCost() != null
                         && r.getMaterialCost().signum() > 0);
 
-        // materialTypeId derived from an upstream WIP (no rawInputs on shuzhi)
+        // materialTypeId belongs to the cooked output, never either upstream WIP.
         MaterialBatch cookedWip = materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
                 FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(result.getBatchId())).orElseThrow();
         assertThat(cookedWip.getMaterialTypeId())
-                .as("materialTypeId from upstream WIP == raw's (SP-E FK safety)")
-                .isEqualTo(RAW_MATERIAL_TYPE_ID);
+                .as("2→1 merge identity follows output product, not first input")
+                .isEqualTo(PRODUCT_TYPE_ID);
     }
 
-    // Test 3 (null-lineage → 400) lives in ProcessSheetServiceImplNullLineageTest (Mockito):
-    // material_batches.material_type_id is NOT NULL (entity @Column nullable=false) so a
-    // null-materialTypeId upstream WIP cannot be persisted in H2 — the SP-E guard is exercised
-    // with a mocked repo returning a null-materialTypeId batch instead.
+    // Test 3 (missing output identity → 400) lives in ProcessSheetServiceImplNullLineageTest
+    // (legacy filename retained): a mocked upstream with a valid identity proves the service
+    // still fails closed instead of borrowing that first provenance value.
 
     @Test
     @DisplayName("4: output<=0 → DRAFT 行不物化")
@@ -493,10 +504,10 @@ class ProcessSheetServiceImplTest {
         assertThat(cons.get(0).getBatchId()).isEqualTo(rawBatchId);
         // 无任何 SEMI_FINISHED 消耗边 (SFI 不解析为 in-plan WIP)
         assertThat(cons).noneMatch(c -> "SEMI_FINISHED".equals(c.getSourceType()));
-        // WIP materialTypeId 来自 raw (SFI 不参与派生)
+        // WIP materialTypeId 来自产出产品 (RAW/SFI 都只保留为 provenance)
         MaterialBatch wip = materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
                 FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(result.getBatchId())).orElseThrow();
-        assertThat(wip.getMaterialTypeId()).isEqualTo(RAW_MATERIAL_TYPE_ID);
+        assertThat(wip.getMaterialTypeId()).isEqualTo(PRODUCT_TYPE_ID);
         // 行 payload 持久化 semiFinished 标记 (跨保存往返 → 小结时 consumeClerkSemi 可识别)
         var views = processSheetService.getRows(FACTORY_ID, planId, "shuzhi", 2);
         assertThat(views).hasSize(1);
@@ -506,7 +517,7 @@ class ProcessSheetServiceImplTest {
     }
 
     @Test
-    @DisplayName("SFI-2: 半成品直接产成品 — 成品道仅 SFI 投料 → 物化(无 WIP/无消耗边), resolveRawMaterialTypeId 不抛 400")
+    @DisplayName("SFI-2: 半成品直接产成品 — 成品道仅 SFI 投料 → 物化(无 WIP/无消耗边)")
     void saveRow_finishedSfiOnly_materializesWithNoConsumption() {
         seedSfi("SFI-STANDING-2", "100");   // 保存需 SFI 真实存在
         ProcessSheetRowRequest req = baseReq("row-sfi-finished", "qidiao", 5, "50");
