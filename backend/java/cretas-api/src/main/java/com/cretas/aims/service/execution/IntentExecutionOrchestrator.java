@@ -158,6 +158,11 @@ public class IntentExecutionOrchestrator {
     @Autowired
     private AuthenticatedToolPrincipalFactory authenticatedToolPrincipalFactory;
 
+    /** Main Chat selector for the single bounded restaurant Runtime route. */
+    @Autowired(required = false)
+    private com.cretas.aims.service.restaurant.RestaurantGrossMarginChatRouteSelector
+            restaurantGrossMarginChatRouteSelector;
+
     // W0 write-guard (intent-w0): confidence-independent write detection. Inserted at the
     // explicit-intent convergence point so a misroute to a write intent cannot silently execute,
     // INCLUDING via forceExecute=true (multi-intent / conversation-continuation hard-set true).
@@ -253,6 +258,22 @@ public class IntentExecutionOrchestrator {
         // 0. 显式意图代码
         if (request.getIntentCode() != null && !request.getIntentCode().isEmpty()) {
             return executeWithExplicitIntent(factoryId, request, userId, userRole);
+        }
+
+        // The bounded restaurant Runtime is selected before owner-advice, report shortcuts,
+        // conversation inheritance, cache and general intent recognition. This branch returns
+        // launch metadata only; the JWT-protected run facade performs the actual start and repeats
+        // every tenant/role/rollout check.
+        if (!Boolean.TRUE.equals(request.getPreviewOnly())
+                && restaurantGrossMarginChatRouteSelector != null) {
+            Optional<IntentExecuteResponse> restaurantAgentRoute =
+                    restaurantGrossMarginChatRouteSelector.select(
+                            factoryId, request.getUserInput(), userRole);
+            if (restaurantAgentRoute.isPresent()) {
+                log.info("[restaurant-agent-chat] selected bounded route: factoryId={}, userId={}",
+                        factoryId, userId);
+                return restaurantAgentRoute.get();
+            }
         }
 
         // 0.1. W1b: early VETO gate in the execution layer. The orchestrator's own phrase shortcut

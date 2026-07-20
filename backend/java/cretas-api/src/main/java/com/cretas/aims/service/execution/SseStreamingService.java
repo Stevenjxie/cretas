@@ -72,6 +72,10 @@ public class SseStreamingService {
     @Autowired
     private BusinessTypeGate businessTypeGate;
 
+    @Autowired(required = false)
+    private com.cretas.aims.service.restaurant.RestaurantGrossMarginChatRouteSelector
+            restaurantGrossMarginChatRouteSelector;
+
     @Autowired
     public SseStreamingService(@Lazy AIIntentService aiIntentService,
                                SemanticCacheService semanticCacheService,
@@ -143,6 +147,33 @@ public class SseStreamingService {
             ));
 
             String userInput = request.getUserInput();
+
+            // Keep the stream front door aligned with /execute. This returns a bounded launch
+            // instruction only; it never proxies the restaurant Runtime's own SSE stream.
+            if (!Boolean.TRUE.equals(request.getPreviewOnly())
+                    && (request.getIntentCode() == null || request.getIntentCode().isBlank())) {
+                Optional<IntentExecuteResponse> restaurantAgentRoute =
+                        restaurantGrossMarginChatRouteSelector == null
+                                ? Optional.empty()
+                                : restaurantGrossMarginChatRouteSelector.select(
+                                        factoryId, userInput, userRole);
+                if (restaurantAgentRoute.isPresent()) {
+                    IntentExecuteResponse response = restaurantAgentRoute.get();
+                    sendSseEvent(emitter, "intent_recognized", Map.of(
+                            "intentCode", response.getIntentCode(),
+                            "intentName", response.getIntentName(),
+                            "intentCategory", response.getIntentCategory(),
+                            "confidence", response.getConfidence(),
+                            "matchMethod", response.getMatchMethod()));
+                    sendSseEvent(emitter, "result", response);
+                    sendSseEvent(emitter, "complete", Map.of(
+                            "status", response.getStatus(),
+                            "cacheHit", false,
+                            "totalLatencyMs", System.currentTimeMillis() - startTime));
+                    emitter.complete();
+                    return;
+                }
+            }
 
             // 1.5. 早期问题类型检测
             if (userInput != null && !userInput.isEmpty()) {

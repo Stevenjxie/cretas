@@ -22,6 +22,42 @@ interface RestaurantGrossMarginRunCardProps {
   ownerUserId: string;
   startDate: string;
   endDate: string;
+  autoStart?: boolean;
+}
+
+interface RestaurantAgentStartLease {
+  key: string;
+  token: symbol;
+}
+
+const restaurantAgentStartLeases = new Map<string, symbol>();
+
+function restaurantAgentStartLeaseKey(
+  factoryId: string,
+  ownerUserId: string,
+  startDate: string,
+  endDate: string,
+): string {
+  return JSON.stringify([
+    factoryId,
+    ownerUserId,
+    RESTAURANT_AGENT_RUN_ROUTE,
+    startDate,
+    endDate,
+  ]);
+}
+
+function acquireRestaurantAgentStartLease(key: string): RestaurantAgentStartLease | null {
+  if (restaurantAgentStartLeases.has(key)) return null;
+  const lease = { key, token: Symbol(key) };
+  restaurantAgentStartLeases.set(key, lease.token);
+  return lease;
+}
+
+function releaseRestaurantAgentStartLease(lease: RestaurantAgentStartLease): void {
+  if (restaurantAgentStartLeases.get(lease.key) === lease.token) {
+    restaurantAgentStartLeases.delete(lease.key);
+  }
 }
 
 const EVENT_LABELS: Record<RestaurantAgentEventV1['eventType'], string> = {
@@ -67,6 +103,7 @@ export function RestaurantGrossMarginRunCard({
   ownerUserId,
   startDate,
   endDate,
+  autoStart = false,
 }: RestaurantGrossMarginRunCardProps) {
   const [events, setEvents] = useState<RestaurantAgentEventV1[]>([]);
   const [runState, setRunState] = useState<RestaurantAgentRunState | null>(null);
@@ -74,6 +111,8 @@ export function RestaurantGrossMarginRunCard({
   const [failureCode, setFailureCode] = useState<string | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [status, setStatus] = useState('');
+  const [initializing, setInitializing] = useState(true);
+  const [startLeaseBlocked, setStartLeaseBlocked] = useState(false);
   const [receiving, setReceiving] = useState(false);
   const [cancelRequested, setCancelRequested] = useState(false);
   const [cancelAlreadyTerminal, setCancelAlreadyTerminal] = useState(false);
@@ -84,6 +123,8 @@ export function RestaurantGrossMarginRunCard({
   const cancelInFlightRef = useRef(false);
   const stopRequestedRef = useRef(false);
   const lastSequenceRef = useRef(0);
+  const initializationStartedRef = useRef(false);
+  const startLeaseRef = useRef<RestaurantAgentStartLease | null>(null);
 
   const mergeEvents = useCallback((incoming: RestaurantAgentEventV1[]) => {
     setEvents((previous) => {
@@ -140,28 +181,14 @@ export function RestaurantGrossMarginRunCard({
     }
   }, [applyReplay, cancelRequested, factoryId, runId, runState]);
 
-  useEffect(() => {
-    let active = true;
-    void loadRestaurantAgentRunCheckpoint(factoryId, ownerUserId).then(async (checkpoint) => {
-      if (!active || !checkpoint) return;
-      runIdRef.current = checkpoint.runId;
-      lastSequenceRef.current = checkpoint.lastSequence;
-      setRunId(checkpoint.runId);
-      setRunState('RUNNING');
-      try {
-        await applyReplay(checkpoint.runId, 0);
-      } catch (error) {
-        if (active) setStatus(error instanceof Error ? error.message : '恢复后台分析失败');
-      }
-    }).catch((error: unknown) => {
-      if (active) setStatus(error instanceof Error ? error.message : '恢复后台分析失败');
-    });
-    return () => { active = false; };
-  }, [applyReplay, factoryId, ownerUserId]);
-
   useEffect(() => () => {
     stopRequestedRef.current = true;
     subscriptionRef.current?.stopReceiving();
+    const lease = startLeaseRef.current;
+    if (lease) {
+      releaseRestaurantAgentStartLease(lease);
+      startLeaseRef.current = null;
+    }
   }, []);
 
   const startRun = useCallback(async () => {
@@ -237,11 +264,16 @@ export function RestaurantGrossMarginRunCard({
           // Keep the durable checkpoint for an explicit retry after reconnection.
         }
       }
+      if (!recoverableRunId && !stopRequestedRef.current) {
+        setRunState(null);
+      }
       setStatus(
         stopRequestedRef.current
           ? '已停止接收'
           : error instanceof Error
-            ? error.message
+            ? error.message === 'RESTAURANT_AGENT_RUNS_OFF'
+              ? '当前客户端未启用餐饮分析，请更新发布配置'
+              : error.message
             : '毛利下降分析连接失败',
       );
     } finally {
@@ -249,6 +281,95 @@ export function RestaurantGrossMarginRunCard({
       setReceiving(false);
     }
   }, [applyReplay, endDate, factoryId, mergeEvents, ownerUserId, receiving, startDate]);
+
+  const startRunWithLease = useCallback(async (checkpointAlreadyChecked: boolean) => {
+    const leaseKey = restaurantAgentStartLeaseKey(
+      factoryId,
+      ownerUserId,
+      startDate,
+      endDate,
+    );
+    const lease = acquireRestaurantAgentStartLease(leaseKey);
+    if (!lease) {
+      setStartLeaseBlocked(true);
+      setStatus('同一账号已有本期毛利归因正在启动，本消息不会重复发起');
+      return;
+    }
+    startLeaseRef.current = lease;
+    setStartLeaseBlocked(false);
+
+    try {
+      if (!checkpointAlreadyChecked) {
+        let checkpoint;
+        try {
+          checkpoint = await loadRestaurantAgentRunCheckpoint(factoryId, ownerUserId);
+        } catch (error) {
+          setStatus(error instanceof Error ? error.message : '恢复后台分析失败');
+          return;
+        }
+        if (checkpoint) {
+          runIdRef.current = checkpoint.runId;
+          lastSequenceRef.current = checkpoint.lastSequence;
+          setRunId(checkpoint.runId);
+          setRunState('RUNNING');
+          try {
+            await applyReplay(checkpoint.runId, 0);
+          } catch (error) {
+            setStatus(error instanceof Error ? error.message : '恢复后台分析失败');
+          }
+          return;
+        }
+      }
+      await startRun();
+    } finally {
+      releaseRestaurantAgentStartLease(lease);
+      if (startLeaseRef.current?.token === lease.token) {
+        startLeaseRef.current = null;
+      }
+    }
+  }, [applyReplay, endDate, factoryId, ownerUserId, startDate, startRun]);
+
+  useEffect(() => {
+    if (initializationStartedRef.current) return;
+    initializationStartedRef.current = true;
+    let active = true;
+
+    void (async () => {
+      let checkpoint;
+      try {
+        checkpoint = await loadRestaurantAgentRunCheckpoint(factoryId, ownerUserId);
+      } catch (error) {
+        if (active) {
+          setInitializing(false);
+          setStatus(error instanceof Error ? error.message : '恢复后台分析失败');
+        }
+        return;
+      }
+      if (!active) return;
+      if (checkpoint) {
+        runIdRef.current = checkpoint.runId;
+        lastSequenceRef.current = checkpoint.lastSequence;
+        setRunId(checkpoint.runId);
+        setRunState('RUNNING');
+        try {
+          await applyReplay(checkpoint.runId, 0);
+        } catch (error) {
+          if (active) setStatus(error instanceof Error ? error.message : '恢复后台分析失败');
+        } finally {
+          if (active) setInitializing(false);
+        }
+        return;
+      }
+      if (autoStart && active) {
+        setInitializing(false);
+        await startRunWithLease(true);
+      } else if (active) {
+        setInitializing(false);
+      }
+    })();
+
+    return () => { active = false; };
+  }, [applyReplay, autoStart, factoryId, ownerUserId, startRunWithLease]);
 
   const resumeRun = useCallback(async () => {
     if (!runId || receiving) return;
@@ -284,12 +405,12 @@ export function RestaurantGrossMarginRunCard({
         </View>
         <TouchableOpacity
           testID={runState === 'RUNNING' ? 'restaurant-agent-cancel' : 'restaurant-agent-start'}
-          style={[styles.button, runState === 'RUNNING' && (!runId || cancelRequested || cancelInFlight) ? styles.buttonDisabled : null]}
-          onPress={runState === 'RUNNING' ? requestCancellation : startRun}
-          disabled={runState === 'RUNNING' && (!runId || cancelRequested || cancelInFlight)}
+          style={[styles.button, initializing || (runState === 'RUNNING' && (!runId || cancelRequested || cancelInFlight)) ? styles.buttonDisabled : null]}
+          onPress={runState === 'RUNNING' ? requestCancellation : () => { void startRunWithLease(false); }}
+          disabled={initializing || (runState === 'RUNNING' && (!runId || cancelRequested || cancelInFlight))}
         >
           <Text style={styles.buttonText}>
-            {runState === 'RUNNING' ? (cancelAlreadyTerminal ? '运行已经结束' : cancelRequested ? '正在取消' : runId ? '取消分析' : '分析已启动') : '分析毛利下降原因'}
+            {initializing ? '正在恢复分析' : runState === 'RUNNING' ? (cancelAlreadyTerminal ? '运行已经结束' : cancelRequested ? '正在取消' : runId ? '取消分析' : '分析已启动') : startLeaseBlocked ? '检查已有分析并重试' : '分析毛利下降原因'}
           </Text>
         </TouchableOpacity>
       </View>

@@ -122,6 +122,25 @@ public class RestaurantAgentRunService {
         }
     }
 
+    /**
+     * Read-only admission check used by the main Chat front door before it advertises the
+     * bounded restaurant runtime. The run facade repeats every check when a client follows the
+     * returned endpoint; this method never creates a run or contacts Python.
+     */
+    public boolean isAvailableTo(String factoryId, String role) {
+        if (!properties.isActive() || !hasPriceViewRole(role)) {
+            return false;
+        }
+        try {
+            return runtimeClient.isConfigured()
+                    && RESTAURANT.equals(intentConfigManagementService.resolveBusinessDomain(factoryId));
+        } catch (RuntimeException ex) {
+            log.warn("Restaurant agent Chat admission failed closed: factoryId={}, reason={}",
+                    factoryId, ex.getClass().getSimpleName());
+            return false;
+        }
+    }
+
     private TrustedContext requireTrustedContext(
             String factoryId,
             String userId,
@@ -133,8 +152,8 @@ public class RestaurantAgentRunService {
                 || correlationId == null || correlationId.isBlank()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "TRUSTED_JWT_CONTEXT_REQUIRED");
         }
-        String normalizedRole = role.toLowerCase(Locale.ROOT);
-        if (!PRICE_VIEW_ROLES.contains(normalizedRole)) {
+        String normalizedRole = role.trim().toLowerCase(Locale.ROOT);
+        if (!hasPriceViewRole(normalizedRole)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "FINANCIAL_ACCESS_REQUIRED");
         }
         final String businessType;
@@ -147,6 +166,10 @@ public class RestaurantAgentRunService {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "RESTAURANT_BUSINESS_REQUIRED");
         }
         return new TrustedContext(factoryId, userId, normalizedRole, RESTAURANT, correlationId);
+    }
+
+    private boolean hasPriceViewRole(String role) {
+        return role != null && PRICE_VIEW_ROLES.contains(role.trim().toLowerCase(Locale.ROOT));
     }
 
     private void requireAvailable() {
