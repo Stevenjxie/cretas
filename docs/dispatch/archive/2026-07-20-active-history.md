@@ -46,3 +46,14 @@
 - 范围：yield-card 用 `productWeight` 做 kg/g/mg 可比产出换算；写入端按 ProductionBatch 总成本/产量补全解析单价；读端保证总成本不低于继承成本并重算单价；历史行统一 display-only 单位格式化。未修改 canonical payload/数据库，未触碰 F006 生产记录与 LIUSHANMEN。
 - 验收：Web 目标测试 3 files / 30 tests 通过；唯一 Java release 生命周期 46/46 通过并生成可信 JAR；唯一 Web release build 与可信 archive 通过。生产同一 planId 仅做只读核验。
 - Scope 锁：已释放。
+
+### `F006-M07-BY-STOCK-SETTLEMENT-20260720`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- 登记 Base SHA：`8d5af3daa8f7bcfa1b96c19bd1a736fc7bb4481f`
+- 根因：BY_STOCK 的 `interim-settle` 只写 `production_interim_settlement` 并已直接生成 FG 库存；仓库状态/确认却只读取普通核对结单写入的 `production_settlements`，两条模型没有桥接。若直接复用普通仓库确认，又会再创建 `FG-{planNo}` 第二批成品库存。
+- 范围：停产事务从连续小结会话、全部 SUBMITTED/已小结报工行和唯一 FG 批次严格派生一条 `PENDING_WAREHOUSE_RECEIPT` 元数据；提供受权限保护的幂等单计划历史桥接端点；BY_STOCK 仓库确认只复用既有小结 FG，差异 fail-closed，重复确认沿既有幂等/409 规则；普通核对结单路径保持原逻辑。Web 以 canonical unit 提交、中文 displayUnit 展示，并明确小结 FG 不会重复建批。
+- 验收：唯一 Java release 生命周期 46/46 通过，JAR SHA-256 `ff4013deb67c0024043a7eab386cb1afaea26515bfdb960cfaf14a7d3e27a0e0`；Web 目标测试 2 files / 17 tests 通过，唯一 release build 729 assets，archive SHA-256 `9d99f011087abfc5d18b071b7dc4611b15f53ce15dd28365a5b0279989eb2ef9`、index SHA-256 `a063ad6573391647b7cb1e6a70e8f668d5917d4f5fffad070575a94f31426ec0`。
+- 生产边界：部署 exact main 后，仅对 F006 指定 plan `1ff1bd66-627f-47c0-b890-2f54a2e8b529` 调用一次幂等历史桥接，补建缺失 settlement 元数据；不得重放小结、报工、停产或改动 PB/FG/原料/WIP/yield/cost。随后只读核验并通知原测试 Chat 单击一次仓库确认。
+- Scope 锁：已释放。
