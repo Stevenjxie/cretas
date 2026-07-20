@@ -6,12 +6,10 @@
 
 ## 在飞任务
 
-- `M09-SETTLEMENT-PINNED-BOM-20260720` — `in-progress` — Owner: Codex coordinator — Base SHA: `9cb0aafa507ed25f2203ab17eb93188974c996b7` — 修复销售来源计划结单错误使用原料 identity 查 BOM；统一 eligibility/settle 的 pinned BOM source of truth，并覆盖失败后续跑与原子性。验收：唯一 release Maven 生命周期运行目标测试、PR 合入 exact main、生产蓝绿发布、指定 planId 只读验证后通知原测试 Chat 续跑。
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
 
 ## Scope 锁地图
 
-- `M09-SETTLEMENT-PINNED-BOM-20260720`：`backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/ProductionPlanServiceImpl.java`、结单/BOM eligibility 直接依赖的生产计划 service/DTO（仅按真实调用链扩展）、对应 Java 目标测试、`docs/dispatch/ACTIVE.md` 与 `docs/dispatch/archive/2026-07-20-active-history.md`。验收命令：`./scripts/deploy/release-jar-manifest.sh build --tests '<settlement target tests>'`；禁止修改或写入 LIUSHANMEN、指定 F006 订单/计划/报工/库存。
 - `SEC-CREDENTIAL-ROTATION-20260719`：`scripts/systemd/` 中遗留明文启动脚本、现有/新增 secret 扫描配置与测试、`.gitignore` / 凭证模板、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-19-active-history.md`；外部状态仅限已授权的 Cretas 47/139 服务器配置、PostgreSQL 角色密码、相关阿里云/API 凭证与必要服务重启。验收：tracked tree 与完整 Git 历史脱敏盘点、scanner gate、exact-main 发布门禁、Java/Python/网关健康、登录与 Restaurant Agent 只读 smoke、核心 ERP 零写入。
 ## 阻塞项
 
