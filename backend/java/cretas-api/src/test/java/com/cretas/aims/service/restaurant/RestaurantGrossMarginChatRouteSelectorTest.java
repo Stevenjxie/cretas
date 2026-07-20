@@ -2,6 +2,7 @@ package com.cretas.aims.service.restaurant;
 
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -17,6 +18,18 @@ class RestaurantGrossMarginChatRouteSelectorTest {
 
     private static final Clock CLOCK = Clock.fixed(
             Instant.parse("2026-07-20T04:00:00Z"), ZoneId.of("Asia/Shanghai"));
+
+    @Test
+    void springContextSelectsTheRuntimeConstructorWhenTestClockConstructorAlsoExists() {
+        RestaurantAgentRunService runService = mock(RestaurantAgentRunService.class);
+        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+            context.registerBean(RestaurantAgentRunService.class, () -> runService);
+            context.register(RestaurantGrossMarginChatRouteSelector.class);
+            context.refresh();
+
+            assertThat(context.getBean(RestaurantGrossMarginChatRouteSelector.class)).isNotNull();
+        }
+    }
 
     @Test
     void selectsOnlyHighPrecisionDeclineAttributionAndReturnsBoundedLaunchMetadata() {
