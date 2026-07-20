@@ -210,10 +210,42 @@ const kpiBullets = computed(() => kpiOverviewBullets(kpiBulletsInput.value));
 const kpiSummaryStr = computed(() => kpiOverviewSummary(kpiBulletsInput.value));
 
 const analysisContexts = computed<AnalysisChartContext[]>(() => [
-  { key: 'finance', title: '财务概览', dataSummary: financeSummaryStr.value },
-  { key: 'sales', title: '销售概览', dataSummary: salesSummaryStr.value },
-  { key: 'trend', title: '趋势概览', dataSummary: trendSummaryStr.value },
-  { key: 'kpi', title: 'KPI概览', dataSummary: kpiSummaryStr.value },
+  {
+    key: 'finance',
+    title: '财务概览',
+    dataSummary: financeSummaryStr.value,
+    dataScope: financeData.value
+      ? `Gold 销售汇总 ${financeData.value.startDate} 至 ${financeData.value.endDate}；仅含营收、订单、客单价和门店排行，不是利润表`
+      : 'Gold 销售汇总；当前未返回有效期间',
+    unavailableMetrics: ['营业成本', '毛利', '毛利率', '营业利润', '净利润'],
+  },
+  {
+    key: 'sales',
+    title: '销售概览',
+    dataSummary: salesSummaryStr.value,
+    dataScope: salesData.value
+      ? `Gold 菜品销量与营收汇总 ${salesData.value.startMonth} 至 ${salesData.value.endMonth}`
+      : 'Gold 菜品销量与营收汇总；当前未返回有效期间',
+    unavailableMetrics: ['菜品成本', '菜品毛利率'],
+  },
+  {
+    key: 'trend',
+    title: '趋势概览',
+    dataSummary: trendSummaryStr.value,
+    dataScope: trendData.value
+      ? `Gold 营收趋势 ${trendData.value.startDate ?? '未知起始日'} 至 ${trendData.value.endDate ?? '未知结束日'}`
+      : 'Gold 营收趋势；当前未返回有效期间',
+    unavailableMetrics: ['成本趋势', '毛利率趋势'],
+  },
+  {
+    key: 'kpi',
+    title: 'KPI概览',
+    dataSummary: kpiSummaryStr.value,
+    dataScope: kpiData.value
+      ? `Gold 经营 KPI ${kpiData.value.startDate} 至 ${kpiData.value.endDate}`
+      : 'Gold 经营 KPI；当前未返回有效期间',
+    unavailableMetrics: ['成本', '毛利率', '利润'],
+  },
 ]);
 
 const analysisChatPanelRef = ref<InstanceType<typeof AnalysisChatPanel> | null>(null);

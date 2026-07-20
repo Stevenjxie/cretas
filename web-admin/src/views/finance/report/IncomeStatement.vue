@@ -45,6 +45,16 @@
           </template>
         </el-alert>
 
+        <el-alert
+          v-if="data.grossMarginStatus === 'MISSING_COST_DATA'"
+          type="warning"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 16px;"
+          :title="data.grossMarginStatusMessage || '期间没有已过账营业成本，利润与毛利率不可计算'"
+          description="下方成本、毛利、营业利润和净利润显示为 —；请补录或同步成本凭证后重新生成。"
+        />
+
         <!-- 4 张关键 KPI 卡片 -->
         <el-row :gutter="16" class="kpi-row">
           <el-col :span="6">
@@ -56,19 +66,19 @@
           <el-col :span="6">
             <el-card class="kpi-card">
               <div class="kpi-label">营业毛利</div>
-              <div class="kpi-value gross">¥ {{ fmt(data.grossProfit) }}</div>
+              <div class="kpi-value gross">¥ {{ fmt(displayGrossProfit) }}</div>
             </el-card>
           </el-col>
           <el-col :span="6">
             <el-card class="kpi-card">
               <div class="kpi-label">营业利润</div>
-              <div class="kpi-value operating">¥ {{ fmt(data.operatingProfit) }}</div>
+              <div class="kpi-value operating">¥ {{ fmt(displayOperatingProfit) }}</div>
             </el-card>
           </el-col>
           <el-col :span="6">
             <el-card class="kpi-card">
               <div class="kpi-label">净利润</div>
-              <div class="kpi-value net" :class="netProfitClass">¥ {{ fmt(data.netProfit) }}</div>
+              <div class="kpi-value net" :class="netProfitClass">¥ {{ fmt(displayNetProfit) }}</div>
             </el-card>
           </el-col>
         </el-row>
@@ -162,7 +172,7 @@ function fmt(v: number | null | undefined): string {
 
 interface Row {
   label: string;
-  value: number;
+  value: number | null;
   indent?: boolean;
   isTotal?: boolean;
 }
@@ -172,18 +182,24 @@ const rows = computed<Row[]>(() => {
   const d = data.value;
   return [
     { label: '一、营业收入', value: d.totalRevenue, isTotal: false },
-    { label: '减: 营业成本', value: d.totalCost, indent: true },
-    { label: '二、营业毛利 (= 营业收入 - 营业成本)', value: d.grossProfit, isTotal: true },
+    { label: '减: 营业成本', value: displayTotalCost.value, indent: true },
+    { label: '二、营业毛利 (= 营业收入 - 营业成本)', value: displayGrossProfit.value, isTotal: true },
     { label: '减: 营业费用 / 管理费用 / 财务费用', value: d.totalExpense, indent: true },
-    { label: '三、营业利润 (= 营业毛利 - 营业费用)', value: d.operatingProfit, isTotal: true },
+    { label: '三、营业利润 (= 营业毛利 - 营业费用)', value: displayOperatingProfit.value, isTotal: true },
     { label: '减: 所得税', value: d.incomeTax, indent: true },
-    { label: '四、净利润 (= 营业利润 - 所得税)', value: d.netProfit, isTotal: true },
+    { label: '四、净利润 (= 营业利润 - 所得税)', value: displayNetProfit.value, isTotal: true },
   ];
 });
 
+const profitMetricsCalculable = computed(() => data.value?.grossMarginStatus !== 'MISSING_COST_DATA');
+const displayTotalCost = computed(() => profitMetricsCalculable.value ? data.value?.totalCost ?? null : null);
+const displayGrossProfit = computed(() => profitMetricsCalculable.value ? data.value?.grossProfit ?? null : null);
+const displayOperatingProfit = computed(() => profitMetricsCalculable.value ? data.value?.operatingProfit ?? null : null);
+const displayNetProfit = computed(() => profitMetricsCalculable.value ? data.value?.netProfit ?? null : null);
+
 const netProfitClass = computed(() => {
-  if (!data.value) return '';
-  return data.value.netProfit < 0 ? 'negative' : '';
+  if (displayNetProfit.value == null) return '';
+  return displayNetProfit.value < 0 ? 'negative' : '';
 });
 
 async function load() {

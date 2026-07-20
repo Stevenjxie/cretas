@@ -41,6 +41,18 @@ import java.util.List;
 @NoArgsConstructor
 public class IncomeStatementDTO {
 
+    /** Whether the requested period contains at least one posted COST line. */
+    private boolean costDataAvailable;
+
+    /**
+     * Truth status for gross-margin percentage. A zero posted cost line is
+     * calculable; an entirely absent cost section is not the same as cost=0.
+     */
+    private GrossMarginStatus grossMarginStatus;
+
+    /** Human-readable explanation for clients and AI tools. */
+    private String grossMarginStatusMessage;
+
     private String factoryId;
     private Integer startYear;
     private Integer startMonth;
@@ -85,4 +97,10 @@ public class IncomeStatementDTO {
      * POSTED-only, 本字段让财务人员看到"为什么数字比预期少". 0 = 无待办.
      */
     private Long pendingDraftVoucherCount;
+
+    public enum GrossMarginStatus {
+        CALCULABLE,
+        MISSING_COST_DATA,
+        NO_REVENUE
+    }
 }

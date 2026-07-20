@@ -48,6 +48,13 @@ export interface RestaurantSynthesisResult {
   error?: string;
 }
 
+export interface RestaurantSynthesisContext {
+  /** Display context is kept separate from the user question so it cannot pollute routing/date parsing. */
+  pageContext?: string;
+  /** Controlled routing hints; backend ignores unknown values. */
+  dimensionHints?: string[];
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -122,15 +129,19 @@ function normalizeAlerts(rawAlerts: unknown): SynthesisAlert[] {
 export async function askRestaurantSynthesis(
   question: string,
   sessionId?: string,
+  context?: RestaurantSynthesisContext,
 ): Promise<RestaurantSynthesisResult> {
   try {
+    const body: Record<string, unknown> = {
+      question,
+      session_id: sessionId,
+    };
+    if (context?.pageContext) body.page_context = context.pageContext;
+    if (context?.dimensionHints?.length) body.dimension_hints = context.dimensionHints;
     const raw = await pythonFetch<Record<string, unknown>>('/api/smartbi/synthesis/comprehensive', {
       method: 'POST',
       timeoutMs: PYTHON_LLM_TIMEOUT_MS,
-      body: JSON.stringify({
-        question,
-        session_id: sessionId,
-      }),
+      body: JSON.stringify(body),
     });
     const answer = typeof raw.answer === 'string' ? raw.answer : '';
     return {

@@ -578,6 +578,8 @@ class ComprehensiveSynthesisEngine:
         *,
         cache_ttl_hours: int = 24,
         conversation_history: Optional[List[Dict[str, Any]]] = None,
+        page_context: Optional[str] = None,
+        dimension_hints: Optional[List[str]] = None,
     ) -> SynthesisResponse:
         """
         P2 multi-turn memory (2026-07-09): conversation_history is an
@@ -608,7 +610,18 @@ class ComprehensiveSynthesisEngine:
         t0 = time.monotonic()
         start, end = date_range
         start_iso, end_iso = start.isoformat(), end.isoformat()
-        q_hash = compute_question_hash(question, start_iso, end_iso, factory_id)
+        # Exact cache entries must not cross page-focus contexts. Semantic cache
+        # is skipped below for contextual requests because its vector/index key
+        # represents the user's literal question, not the focused chart.
+        cache_material = question
+        if page_context:
+            cache_material += "\n\n[PAGE_CONTEXT]\n" + page_context[:2000]
+        normalized_hints = sorted(
+            {str(h).strip().lower() for h in (dimension_hints or []) if h}
+        )
+        if normalized_hints:
+            cache_material += "\n\n[DIMENSION_HINTS]\n" + ",".join(normalized_hints)
+        q_hash = compute_question_hash(cache_material, start_iso, end_iso, factory_id)
 
         # 1. Cache check — same answer for same question+range+factory.
         # Skipped entirely when conversation_history is present (see
@@ -645,7 +658,11 @@ class ComprehensiveSynthesisEngine:
             )
 
         # 3. Dimension plan (rules-first, no LLM).
-        plan = self.plan_dimensions(question, has_history=bool(conversation_history))
+        plan = self.plan_dimensions(
+            question,
+            has_history=bool(conversation_history),
+            dimension_hints=dimension_hints,
+        )
 
         # 3b. Semantic cache fallback (2026-07-10) — computed right after plan
         # (before factbook assembly mutates plan's dims to False on empty
@@ -664,7 +681,7 @@ class ComprehensiveSynthesisEngine:
         window_key = f"{start_iso}|{end_iso}"
         plan_key = ",".join(sorted(k for k, v in plan.items() if v is True))
         q_emb: Optional[List[float]] = None
-        if not conversation_history:
+        if not conversation_history and not page_context and not normalized_hints:
             q_emb = await _get_embedding(question)
             if q_emb is not None:
                 sem = await self._cache.get_semantic(factory_id, q_emb, window_key, plan_key)
@@ -726,7 +743,13 @@ class ComprehensiveSynthesisEngine:
                     insight_summary=insight_summary, fact_check=fc_meta)
 
         # 6. LLM grounded narrative — inside RedactionScope (P0 数据主权).
-        prompt = self._build_prompt(question, factbook, insight_summary, conversation_history)
+        prompt = self._build_prompt(
+            question,
+            factbook,
+            insight_summary,
+            conversation_history,
+            page_context=page_context,
+        )
         try:
             with redaction_scope():
                 register_values_for_egress(factbook.collect_sensitive_names())
@@ -788,7 +811,13 @@ class ComprehensiveSynthesisEngine:
     # =====================================================================
     # Step 1: dimension planning (rules-first, no LLM per feedback_rules_first)
     # =====================================================================
-    def plan_dimensions(self, q: str, *, has_history: bool = False) -> Dict[str, Any]:
+    def plan_dimensions(
+        self,
+        q: str,
+        *,
+        has_history: bool = False,
+        dimension_hints: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
         """Decide {review, finance, sales, attribution, weather, cross[]} from the question.
 
         Rule coverage is sufficient for synthesis questions (limited dimension
@@ -859,6 +888,19 @@ class ComprehensiveSynthesisEngine:
                 "比去年", "去年同期")):
             plan["period_comparison"] = True
             plan["finance"] = True  # F2: pc 的绝对值(营收/加权毛利率)必须由 finance 维度 grounded
+        # Controlled page-focus hints supplement ambiguous questions such as
+        # "这个数据说明什么" without injecting an entire chart summary into q.
+        # Unknown hints are ignored; they can never become free-form routing text.
+        hints = {str(h).strip().lower() for h in (dimension_hints or []) if h}
+        if hints & {"finance", "kpi"}:
+            plan["finance"] = True
+        if "trend" in hints:
+            plan["finance"] = True
+            plan["period_comparison"] = True
+        if hints & {"sales", "product", "channel", "discount"}:
+            plan["sales"] = True
+        if hints & {"review", "member", "rating"}:
+            plan["review"] = True
         # Store 拖后腿 attribution — the per-store 客流×客单价 decomposition. Needs
         # a store reference AND either a lag cue or a traffic/ticket cue, so a
         # generic "门店营收" question stays on the plain finance path.
@@ -1338,6 +1380,7 @@ class ComprehensiveSynthesisEngine:
     def _build_prompt(
         self, question: str, factbook: FactBook, insight_summary: str,
         conversation_history: Optional[List[Dict[str, Any]]] = None,
+        *, page_context: Optional[str] = None,
     ) -> str:
         lines: List[str] = []
         # P2 multi-turn memory: prepend the bounded history block (if any)
@@ -1353,6 +1396,17 @@ class ComprehensiveSynthesisEngine:
         lines.extend([
             f"用户问：{question}",
             "",
+        ])
+        if page_context:
+            lines.extend([
+                "## 页面聚焦上下文（仅用于理解“这个/这张图”的指代）",
+                "页面上下文可说明当前界面展示范围；若其中数字或口径与本轮 FactBook 冲突，"
+                "必须以 FactBook 为准。页面标明未提供的指标不得按 0 推算；只有 FactBook "
+                "另有真实且覆盖完整的数据时才可回答，否则明确说不可计算。",
+                page_context[:2000],
+                "",
+            ])
+        lines.extend([
             "以下是该餐饮连锁的真实经营+评价数据摘要（所有数字均来自确定性聚合，"
             "你必须严格基于这些数字回答，不得编造门店名/菜名/数字）：",
             "",
@@ -1429,6 +1483,38 @@ class ComprehensiveSynthesisEngine:
         fin = factbook.finance or {}
         sales = factbook.sales or {}
 
+        def _period_baseline_chart(
+            metric: Dict[str, Any], title: str, series_name: str,
+        ) -> Optional[Dict[str, Any]]:
+            """Return current-vs-previous chart only when both values are grounded.
+
+            ``mom_pct`` is a percentage-point delta rounded by the deterministic
+            Gold query, so previous = current - delta. The markLine is an actual
+            prior-period baseline, never a fabricated target or warning value.
+            """
+            current = metric.get("current")
+            delta = metric.get("mom_pct")
+            if current is None or delta is None or not metric.get("mom_available"):
+                return None
+            previous = round(float(current) - float(delta), 1)
+            return {
+                "chartType": "bar",
+                "title": title,
+                "xAxis": {"data": ["上一等长周期", "当前周期"]},
+                "series": [{
+                    "name": series_name,
+                    "type": "bar",
+                    "data": [previous, float(current)],
+                    "markLine": {
+                        "silent": True,
+                        "symbol": ["none", "none"],
+                        "lineStyle": {"type": "dashed", "color": "#E6A23C"},
+                        "label": {"formatter": "上期实绩 {c}%"},
+                        "data": [{"yAxis": previous, "name": "上期实绩"}],
+                    },
+                }],
+            }
+
         # Review: 维度评分 bar (星级/服务/环境/口味, same 5-point scale).
         dims = (rv.get("summary") or {}).get("dimension_scores") or []
         if dims:
@@ -1473,6 +1559,25 @@ class ComprehensiveSynthesisEngine:
                             "data": [round((s.get("revenue") or 0) / 10000.0, 1)
                                      for s in stores]}],
             })
+
+        # Finance comparison: actual previous-period reference lines. Gold only
+        # exposes these metrics when cost coverage is sufficient, so an absent
+        # cost series produces no chart rather than a false zero/100% baseline.
+        pc = factbook.period_comparison or {}
+        gm_chart = _period_baseline_chart(
+            pc.get("gross_margin_pct") or {},
+            "加权毛利率环比（%，成本覆盖完整）",
+            "加权毛利率",
+        )
+        if gm_chart:
+            charts.append(gm_chart)
+        cost_ratio_chart = _period_baseline_chart(
+            pc.get("cost_ratio") or {},
+            "领料成本率环比（%，实际用料口径）",
+            "领料成本率",
+        )
+        if cost_ratio_chart:
+            charts.append(cost_ratio_chart)
 
         # Sales: channel pie.
         channels = sales.get("channels") or []

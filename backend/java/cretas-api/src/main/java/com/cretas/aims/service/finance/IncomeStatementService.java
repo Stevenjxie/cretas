@@ -138,11 +138,28 @@ public class IncomeStatementService {
         BigDecimal operatingProfit = grossProfit.subtract(totalExpense).setScale(2, RoundingMode.HALF_UP);
         BigDecimal netProfit = operatingProfit.subtract(incomeTax).setScale(2, RoundingMode.HALF_UP);
 
+        boolean costDataAvailable = !costs.isEmpty();
+        IncomeStatementDTO.GrossMarginStatus grossMarginStatus;
+        String grossMarginStatusMessage;
+        if (totalRevenue.signum() <= 0) {
+            grossMarginStatus = IncomeStatementDTO.GrossMarginStatus.NO_REVENUE;
+            grossMarginStatusMessage = "期间营业收入为零或缺失，毛利率不可计算";
+        } else if (!costDataAvailable) {
+            grossMarginStatus = IncomeStatementDTO.GrossMarginStatus.MISSING_COST_DATA;
+            grossMarginStatusMessage = "期间没有已过账的营业成本分录，不能把缺失成本当作 0 计算毛利率";
+        } else {
+            grossMarginStatus = IncomeStatementDTO.GrossMarginStatus.CALCULABLE;
+            grossMarginStatusMessage = "毛利率可按已过账营业收入和营业成本计算";
+        }
+
         // 待过账 (DRAFT) 凭证数 — 见 pendingDraftVoucherCount javadoc。
         long pendingDraftCount = voucherRepo.countByFactoryIdAndStatusAndVoucherDateBetweenAndDeletedAtIsNull(
                 factoryId, VoucherStatus.DRAFT, startDate, endDate);
 
         return IncomeStatementDTO.builder()
+                .costDataAvailable(costDataAvailable)
+                .grossMarginStatus(grossMarginStatus)
+                .grossMarginStatusMessage(grossMarginStatusMessage)
                 .factoryId(factoryId)
                 .startYear(startYear)
                 .startMonth(startMonth)

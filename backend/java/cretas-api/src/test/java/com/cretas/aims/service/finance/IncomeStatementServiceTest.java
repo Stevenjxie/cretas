@@ -160,6 +160,8 @@ class IncomeStatementServiceTest {
         assertEquals(new BigDecimal("50000.00"), dto.getTotalRevenue());
         assertEquals(new BigDecimal("20000.00"), dto.getTotalCost());
         assertEquals(new BigDecimal("30000.00"), dto.getGrossProfit());
+        assertTrue(dto.isCostDataAvailable());
+        assertEquals(IncomeStatementDTO.GrossMarginStatus.CALCULABLE, dto.getGrossMarginStatus());
         assertEquals(2L, dto.getPendingDraftVoucherCount());
 
         org.mockito.Mockito.verify(voucherEntryRepo, org.mockito.Mockito.never())
@@ -184,6 +186,9 @@ class IncomeStatementServiceTest {
         assertEquals(BigDecimal.ZERO.setScale(2), dto.getTotalCost());
         assertEquals(new BigDecimal("10000.00"), dto.getGrossProfit());
         assertEquals(0, dto.getCosts().size(), "cash account excluded");
+        assertFalse(dto.isCostDataAvailable());
+        assertEquals(IncomeStatementDTO.GrossMarginStatus.MISSING_COST_DATA, dto.getGrossMarginStatus());
+        assertTrue(dto.getGrossMarginStatusMessage().contains("不能把缺失成本当作 0"));
     }
 
     @Test
@@ -240,6 +245,7 @@ class IncomeStatementServiceTest {
 
         assertEquals(BigDecimal.ZERO.setScale(2), dto.getTotalRevenue());
         assertEquals(BigDecimal.ZERO.setScale(2), dto.getNetProfit());
+        assertEquals(IncomeStatementDTO.GrossMarginStatus.NO_REVENUE, dto.getGrossMarginStatus());
         assertEquals(0, dto.getRevenues().size());
         assertEquals(0, dto.getCosts().size());
         assertEquals(0, dto.getExpenses().size());

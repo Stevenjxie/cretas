@@ -105,6 +105,26 @@ public class IncomeStatementQueryTool extends AbstractBusinessTool {
         IncomeStatementDTO dto = incomeStatementService.generate(
                 factoryId, startYear, startMonth, endYear, endMonth);
 
+        IncomeStatementDTO.GrossMarginStatus marginStatus = dto.getGrossMarginStatus();
+        if (marginStatus == null) {
+            boolean hasRevenue = dto.getTotalRevenue() != null && dto.getTotalRevenue().signum() > 0;
+            boolean hasCostLines = dto.getCosts() != null && !dto.getCosts().isEmpty();
+            marginStatus = !hasRevenue
+                    ? IncomeStatementDTO.GrossMarginStatus.NO_REVENUE
+                    : hasCostLines
+                        ? IncomeStatementDTO.GrossMarginStatus.CALCULABLE
+                        : IncomeStatementDTO.GrossMarginStatus.MISSING_COST_DATA;
+        }
+        boolean missingCostData = marginStatus == IncomeStatementDTO.GrossMarginStatus.MISSING_COST_DATA;
+        String marginStatusMessage = dto.getGrossMarginStatusMessage();
+        if (marginStatusMessage == null || marginStatusMessage.isBlank()) {
+            marginStatusMessage = switch (marginStatus) {
+                case CALCULABLE -> "毛利率可按已过账营业收入和营业成本计算";
+                case MISSING_COST_DATA -> "期间没有已过账的营业成本分录，不能把缺失成本当作 0 计算毛利率";
+                case NO_REVENUE -> "期间营业收入为零或缺失，毛利率不可计算";
+            };
+        }
+
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("factoryId", dto.getFactoryId());
         data.put("startYear", dto.getStartYear());
@@ -115,20 +135,30 @@ public class IncomeStatementQueryTool extends AbstractBusinessTool {
         data.put("costs", dto.getCosts());
         data.put("expenses", dto.getExpenses());
         data.put("totalRevenue", dto.getTotalRevenue());
-        data.put("totalCost", dto.getTotalCost());
-        data.put("grossProfit", dto.getGrossProfit());
+        // Missing cost postings are unknown, not zero. Withhold every derived
+        // profit metric so the LLM cannot reconstruct a false 100% margin.
+        data.put("totalCost", missingCostData ? null : dto.getTotalCost());
+        data.put("grossProfit", missingCostData ? null : dto.getGrossProfit());
         data.put("totalExpense", dto.getTotalExpense());
-        data.put("operatingProfit", dto.getOperatingProfit());
+        data.put("operatingProfit", missingCostData ? null : dto.getOperatingProfit());
         data.put("incomeTax", dto.getIncomeTax());
-        data.put("netProfit", dto.getNetProfit());
+        data.put("netProfit", missingCostData ? null : dto.getNetProfit());
         data.put("generatedAt", dto.getGeneratedAt());
+        data.put("costDataAvailable", !missingCostData && dto.isCostDataAvailable());
+        data.put("grossMarginStatus", marginStatus.name());
+        data.put("grossMarginStatusMessage", marginStatusMessage);
+        data.put("metricWarnings", marginStatus == IncomeStatementDTO.GrossMarginStatus.CALCULABLE
+                ? List.of() : List.of(marginStatusMessage));
 
         // 计算毛利率 (R2 context, 方便 LLM 输出)
-        if (dto.getTotalRevenue() != null && dto.getTotalRevenue().signum() > 0
+        if (marginStatus == IncomeStatementDTO.GrossMarginStatus.CALCULABLE
+                && dto.getTotalRevenue() != null && dto.getTotalRevenue().signum() > 0
                 && dto.getGrossProfit() != null) {
             data.put("grossMarginPercent",
                     dto.getGrossProfit().multiply(java.math.BigDecimal.valueOf(100))
                             .divide(dto.getTotalRevenue(), 2, java.math.RoundingMode.HALF_UP));
+        } else {
+            data.put("grossMarginPercent", null);
         }
 
         data.put("actionHint", "/finance/three-statements?type=income-statement"
@@ -139,11 +169,14 @@ public class IncomeStatementQueryTool extends AbstractBusinessTool {
                 ? String.format("%d-%02d", startYear, startMonth)
                 : String.format("%d-%02d 至 %d-%02d", startYear, startMonth, endYear, endMonth);
 
-        String message = String.format(
-                "%s 利润表: 营业收入 ¥%s / 营业成本 ¥%s / 毛利 ¥%s / 营业利润 ¥%s / 净利润 ¥%s",
-                periodLabel,
-                dto.getTotalRevenue(), dto.getTotalCost(), dto.getGrossProfit(),
-                dto.getOperatingProfit(), dto.getNetProfit());
+        String message = missingCostData
+                ? String.format("%s 利润表: 营业收入 ¥%s；%s。请先补录或同步成本凭证后再查询毛利率和利润",
+                    periodLabel, dto.getTotalRevenue(), marginStatusMessage)
+                : String.format(
+                    "%s 利润表: 营业收入 ¥%s / 营业成本 ¥%s / 毛利 ¥%s / 营业利润 ¥%s / 净利润 ¥%s",
+                    periodLabel,
+                    dto.getTotalRevenue(), dto.getTotalCost(), dto.getGrossProfit(),
+                    dto.getOperatingProfit(), dto.getNetProfit());
         return buildSimpleResult(message, data);
     }
 }
