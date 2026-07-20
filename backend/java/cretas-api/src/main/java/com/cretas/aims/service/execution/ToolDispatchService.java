@@ -7,6 +7,14 @@ import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRbacEnforcer;
 import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.ai.tool.gateway.AuthenticatedToolPrincipalFactory;
+import com.cretas.aims.ai.tool.gateway.ExecutionPrincipal;
+import com.cretas.aims.ai.tool.gateway.LegacyToolMigrationRegistry;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionCommand;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionGateway;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionResult;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
 import com.cretas.aims.config.TimeNormalizationRules;
 import com.cretas.aims.dev.faultinjection.ToolExecutionFaultInjector;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
@@ -29,8 +37,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
@@ -86,6 +96,18 @@ public class ToolDispatchService {
      */
     @Autowired(required = false)
     private ToolExecutionFaultInjector toolExecutionFaultInjector;
+
+    @Autowired
+    private ToolExecutionGateway toolExecutionGateway;
+
+    @Autowired
+    private LegacyToolMigrationRegistry legacyToolMigrationRegistry;
+
+    @Autowired
+    private AuthenticatedToolPrincipalFactory authenticatedToolPrincipalFactory;
+
+    @Value("${cretas.ai.tool-gateway.intent-dispatch-migration.enabled:false}")
+    private boolean intentDispatchGatewayMigrationEnabled;
 
     // ==================== 公开方法 ====================
 
@@ -332,6 +354,15 @@ public class ToolDispatchService {
             // Learned rules, LLM extraction and resolved references are all untrusted inputs.
             // Re-bind the authenticated principal immediately before hashing and Tool execution.
             TrustedExecutionContext.enforcePrincipal(params, factoryId, userId, userRole);
+
+            // D11B migration lane: once the default-off flag and the independent allowlist both
+            // select a Tool, Gateway owns the attempt. Do not consult the legacy result cache,
+            // retry/correction loop, or direct executor afterwards, including on deny/timeout/fail.
+            if (intentDispatchGatewayMigrationEnabled
+                    && legacyToolMigrationRegistry.contains(tool.getToolName())) {
+                return executeThroughMigrationGateway(
+                        tool, factoryId, params, intent, userId, userRole);
+            }
 
             String argumentsJson = objectMapper.writeValueAsString(params);
             ToolCall toolCall = ToolCall.of(
@@ -832,6 +863,84 @@ public class ToolDispatchService {
     /**
      * 使用 LLM Tool Calling 从用户输入中提取参数
      */
+    private IntentExecuteResponse executeThroughMigrationGateway(
+            ToolExecutor selectedTool,
+            String factoryId,
+            Map<String, Object> parameters,
+            AIIntentConfig intent,
+            Long userId,
+            String userRole) {
+        String toolName = selectedTool.getToolName();
+        try {
+            String expectedVersion = legacyToolMigrationRegistry.expectedVersion(toolName)
+                    .orElseThrow(() -> new SecurityException(
+                            "Legacy migration manifest binding disappeared"));
+            String callId = "intent-dispatch-" + java.util.UUID.randomUUID();
+            ExecutionPrincipal principal = authenticatedToolPrincipalFactory.create(
+                    factoryId, userId, userRole);
+            ToolExecutionCommand command = new ToolExecutionCommand(
+                    callId,
+                    callId,
+                    callId + "-trace",
+                    toolName,
+                    expectedVersion,
+                    objectMapper.valueToTree(parameters),
+                    principal,
+                    ToolExecutionSource.AI_INTENT_DISPATCH,
+                    ToolExecutionMode.EXECUTE,
+                    Optional.empty(),
+                    Optional.empty(),
+                    Optional.empty(),
+                    Instant.now().plusSeconds(30));
+            ToolExecutionResult gatewayResult = toolExecutionGateway.execute(command);
+
+            IntentExecuteResponse response;
+            if (gatewayResult.payload().isObject()
+                    && gatewayResult.payload().path("success").isBoolean()) {
+                response = parseToolResultToResponse(
+                        objectMapper.writeValueAsString(gatewayResult.payload()), intent);
+            } else {
+                response = IntentExecuteResponse.builder()
+                        .intentRecognized(true)
+                        .intentCode(intent.getIntentCode())
+                        .intentName(intent.getIntentName())
+                        .intentCategory(intent.getIntentCategory())
+                        .status(gatewayResult.status().name())
+                        .message(gatewayResult.message())
+                        .formattedText(gatewayResult.message())
+                        .executedAt(LocalDateTime.now())
+                        .build();
+            }
+            Map<String, Object> metadata = response.getMetadata() == null
+                    ? new HashMap<>()
+                    : new HashMap<>(response.getMetadata());
+            metadata.put("toolName", toolName);
+            metadata.put("executionBoundary", "TOOL_EXECUTION_GATEWAY");
+            metadata.put("gatewayStatus", gatewayResult.status().name());
+            metadata.put("gatewayAuditEventId", gatewayResult.auditEventId());
+            response.setMetadata(metadata);
+            return response;
+        } catch (Exception gatewayFailure) {
+            // A selected migration call never re-enters legacy cache/retry/correction paths.
+            log.error("D11B Gateway migration execution failed: tool={}",
+                    toolName, gatewayFailure);
+            return IntentExecuteResponse.builder()
+                    .intentRecognized(true)
+                    .intentCode(intent.getIntentCode())
+                    .intentName(intent.getIntentName())
+                    .intentCategory(intent.getIntentCategory())
+                    .status("FAILED")
+                    .message("Tool gateway execution failed")
+                    .formattedText("Tool gateway execution failed")
+                    .metadata(Map.of(
+                            "toolName", toolName,
+                            "executionBoundary", "TOOL_EXECUTION_GATEWAY",
+                            "gatewayStatus", "FAILED"))
+                    .executedAt(LocalDateTime.now())
+                    .build();
+        }
+    }
+
     Map<String, Object> extractParametersWithLLM(String userInput, ToolExecutor tool,
                                                           Map<String, Object> existingParams) {
         Map<String, Object> extractedParams = new HashMap<>();

@@ -80,13 +80,27 @@ public class ToolRuntimeRegistry {
                 return Optional.empty();
             }
             // No override row deliberately inherits the globally registered/enabled Tool state.
-            return Optional.of(new ResolvedTool(descriptor, executor));
+            return Optional.of(new ResolvedTool(
+                    descriptor, executor, ResolutionLane.APPROVED_POLICY));
         } catch (RuntimeException unavailableRuntimeTruth) {
             return Optional.empty();
         }
     }
 
-    public record ResolvedTool(ToolDescriptor descriptor, ToolExecutor executor) {
+    public record ResolvedTool(
+            ToolDescriptor descriptor,
+            ToolExecutor executor,
+            ResolutionLane lane) {
+
+        /** Keeps existing explicit-policy tests and callers source compatible. */
+        public ResolvedTool(ToolDescriptor descriptor, ToolExecutor executor) {
+            this(descriptor, executor, ResolutionLane.APPROVED_POLICY);
+        }
+    }
+
+    public enum ResolutionLane {
+        APPROVED_POLICY,
+        LEGACY_INTENT_DISPATCH_MIGRATION
     }
 
     private static boolean hasExactRoleBehavior(

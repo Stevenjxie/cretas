@@ -172,7 +172,40 @@ class DefaultToolExecutionGatewayTest {
     }
 
     @Test
-    void nonMutatingSuccessFalseFailsClosedWithFixedEmptyResult() throws Exception {
+    void nonMutatingSuccessFalsePreservesStructuredPayloadForLegacyParser() throws Exception {
+        descriptor = nonMutatingDescriptor(
+                ToolExecutor.ActionType.READ,
+                ConfirmationPolicy.NOT_REQUIRED,
+                ApprovalPolicy.NOT_REQUIRED,
+                IdempotencyPolicy.NOT_REQUIRED,
+                ToolEgressPolicy.denyAll(),
+                DescriptorProvenance.LEGACY_INFERRED,
+                false);
+        ToolExecutionCommand command = nonMutatingCommand(ToolExecutionMode.EXECUTE);
+        stubPolicy(command, new ResolvedTool(
+                descriptor,
+                executor,
+                ToolRuntimeRegistry.ResolutionLane.LEGACY_INTENT_DISPATCH_MIGRATION));
+        when(executor.execute(any(), any())).thenReturn(
+                "{\"success\":false,\"status\":\"NEED_MORE_INFO\","
+                        + "\"needMoreInfo\":true,\"message\":\"请选择门店\"}");
+
+        ToolExecutionResult result = gateway.execute(command);
+
+        assertThat(result.status()).isEqualTo(ToolExecutionStatus.FAILED);
+        assertThat(result.payload().path("success").booleanValue()).isFalse();
+        assertThat(result.payload().path("status").asText()).isEqualTo("NEED_MORE_INFO");
+        assertThat(result.payload().path("message").asText()).isEqualTo("请选择门店");
+        assertThat(result.message()).isEqualTo("Tool execution failed");
+        verify(ledgerService).completeAudit(
+                "audit-1",
+                ToolExecutionStatus.FAILED,
+                GatewayResultCode.TOOL_EXECUTION_FAILED);
+        assertNoWriteSecurityState();
+    }
+
+    @Test
+    void approvedNonMutatingFailurePayloadRemainsFullyRedacted() throws Exception {
         descriptor = nonMutatingDescriptor(ToolExecutor.ActionType.READ);
         ToolExecutionCommand command = nonMutatingCommand(ToolExecutionMode.EXECUTE);
         stubPolicy(command);
@@ -184,10 +217,77 @@ class DefaultToolExecutionGatewayTest {
         assertThat(result.status()).isEqualTo(ToolExecutionStatus.FAILED);
         assertThat(result.payload()).isEmpty();
         assertThat(result.message()).isEqualTo("Tool execution failed").doesNotContain("secret");
-        verify(ledgerService).completeAudit(
-                "audit-1",
-                ToolExecutionStatus.FAILED,
-                GatewayResultCode.TOOL_EXECUTION_FAILED);
+        assertNoWriteSecurityState();
+    }
+
+    @Test
+    void migrationFailurePayloadDropsEveryNonWhitelistedField() throws Exception {
+        descriptor = nonMutatingDescriptor(
+                ToolExecutor.ActionType.READ,
+                ConfirmationPolicy.NOT_REQUIRED,
+                ApprovalPolicy.NOT_REQUIRED,
+                IdempotencyPolicy.NOT_REQUIRED,
+                ToolEgressPolicy.denyAll(),
+                DescriptorProvenance.LEGACY_INFERRED,
+                false);
+        ToolExecutionCommand command = nonMutatingCommand(ToolExecutionMode.EXECUTE);
+        stubPolicy(command, new ResolvedTool(
+                descriptor,
+                executor,
+                ToolRuntimeRegistry.ResolutionLane.LEGACY_INTENT_DISPATCH_MIGRATION));
+        when(executor.execute(any(), any())).thenReturn(
+                "{\"success\":false,\"status\":\"NEED_MORE_INFO\","
+                        + "\"needMoreInfo\":true,\"message\":\"select store\","
+                        + "\"clarificationQuestions\":[\"which store\"],"
+                        + "\"missingParameters\":[\"storeId\"],"
+                        + "\"error\":\"database secret detail\","
+                        + "\"data\":{\"password\":\"secret\"},\"stackTrace\":\"secret\"}");
+
+        ToolExecutionResult result = gateway.execute(command);
+
+        assertThat(result.status()).isEqualTo(ToolExecutionStatus.FAILED);
+        assertThat(result.payload().size()).isEqualTo(4);
+        assertThat(result.payload().has("success")).isTrue();
+        assertThat(result.payload().has("status")).isTrue();
+        assertThat(result.payload().has("needMoreInfo")).isTrue();
+        assertThat(result.payload().has("message")).isTrue();
+        assertThat(result.payload().has("clarificationQuestions")).isFalse();
+        assertThat(result.payload().has("missingParameters")).isFalse();
+        assertThat(result.payload().path("status").asText()).isEqualTo("NEED_MORE_INFO");
+        assertThat(result.payload().toString())
+                .doesNotContain("database", "password", "stackTrace", "secret");
+        assertNoWriteSecurityState();
+    }
+
+    @Test
+    void migrationFailurePayloadDropsOversizedStatusAndMessage() throws Exception {
+        descriptor = nonMutatingDescriptor(
+                ToolExecutor.ActionType.READ,
+                ConfirmationPolicy.NOT_REQUIRED,
+                ApprovalPolicy.NOT_REQUIRED,
+                IdempotencyPolicy.NOT_REQUIRED,
+                ToolEgressPolicy.denyAll(),
+                DescriptorProvenance.LEGACY_INFERRED,
+                false);
+        ToolExecutionCommand command = nonMutatingCommand(ToolExecutionMode.EXECUTE);
+        stubPolicy(command, new ResolvedTool(
+                descriptor,
+                executor,
+                ToolRuntimeRegistry.ResolutionLane.LEGACY_INTENT_DISPATCH_MIGRATION));
+        when(executor.execute(any(), any())).thenReturn(
+                "{\"success\":false,\"needMoreInfo\":true,\"status\":\""
+                        + "S".repeat(65)
+                        + "\",\"message\":\""
+                        + "M".repeat(1_001)
+                        + "\"}");
+
+        ToolExecutionResult result = gateway.execute(command);
+
+        assertThat(result.payload().size()).isEqualTo(2);
+        assertThat(result.payload().path("success").booleanValue()).isFalse();
+        assertThat(result.payload().path("needMoreInfo").booleanValue()).isTrue();
+        assertThat(result.payload().has("status")).isFalse();
+        assertThat(result.payload().has("message")).isFalse();
         assertNoWriteSecurityState();
     }
 
@@ -770,10 +870,14 @@ class DefaultToolExecutionGatewayTest {
     }
 
     private void stubPolicy(ToolExecutionCommand command) {
+        stubPolicy(command, new ResolvedTool(descriptor, executor));
+    }
+
+    private void stubPolicy(ToolExecutionCommand command, ResolvedTool resolvedTool) {
         when(principalPolicy.rehydrate(command.principal())).thenReturn(Optional.of(current));
         when(ledgerService.beginAudit(command, currentPrincipal)).thenReturn("audit-1");
         when(runtimeRegistry.resolve(command, currentPrincipal))
-                .thenReturn(Optional.of(new ResolvedTool(descriptor, executor)));
+                .thenReturn(Optional.of(resolvedTool));
     }
 
     private void stubExecutable(
