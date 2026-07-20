@@ -1,7 +1,7 @@
 <template>
-  <div class="workflow-editor">
+  <div class="workflow-editor" data-testid="workflow-viewport-editor">
     <div class="workflow-main">
-      <div class="workflow-toolbar">
+      <div class="workflow-toolbar" aria-label="Workflow 编辑工具栏">
         <div class="toolbar-status">
           <el-tag v-if="definition" :type="definition.status === 'PUBLISHED' ? 'success' : 'warning'">
             {{ definition.status === 'PUBLISHED' ? '已发布' : '草稿' }} v{{ definition.version }}
@@ -253,21 +253,38 @@
       </div>
     </div>
 
-    <aside id="workflow-ai-panel" class="ai-floating-bar" aria-label="Workflow AI 助手">
-      <WorkProcessAIChatPanel
-        v-if="factoryId"
-        :key="`${factoryId}:${productTypeId}`"
-        :factory-id="factoryId"
-        :product-type-id="productTypeId"
-        :endpoint="`/${factoryId}/config/v2/ai/chat`"
-        module-code="product_process_workflow_config"
-        title="Workflow AI 助手"
-        :disabled="!canEdit"
-        :context="selectedNodeContext"
-        :context-label="aiContextLabel"
-        :quick-prompts="aiQuickPrompts"
-        @apply-draft="applyWorkflowAIDraft"
-      />
+    <aside
+      id="workflow-ai-panel"
+      :class="['ai-floating-bar', { 'is-collapsed': aiCollapsed }]"
+      aria-label="Workflow AI 助手"
+    >
+      <div class="ai-sidebar-header">
+        <span>Workflow AI</span>
+        <el-button
+          text
+          size="small"
+          class="ai-sidebar-toggle"
+          :aria-expanded="!aiCollapsed"
+          aria-controls="workflow-ai-composer"
+          @click="aiCollapsed = !aiCollapsed"
+        >{{ aiCollapsed ? '展开' : '收起' }}</el-button>
+      </div>
+      <div id="workflow-ai-composer" v-show="!aiCollapsed" class="ai-sidebar-composer">
+        <WorkProcessAIChatPanel
+          v-if="factoryId"
+          :key="`${factoryId}:${productTypeId}`"
+          :factory-id="factoryId"
+          :product-type-id="productTypeId"
+          :endpoint="`/${factoryId}/config/v2/ai/chat`"
+          module-code="product_process_workflow_config"
+          title="Workflow AI 助手"
+          :disabled="!canEdit"
+          :context="selectedNodeContext"
+          :context-label="aiContextLabel"
+          :quick-prompts="aiQuickPrompts"
+          @apply-draft="applyWorkflowAIDraft"
+        />
+      </div>
     </aside>
 
     <el-dialog v-model="processDialogVisible" title="增加后续工序" width="480px" destroy-on-close>
@@ -797,6 +814,8 @@ const workflowClassificationLabel = computed(() => {
 });
 // #12b 预览历史版本标志 (非空=正在只读预览某历史版本); 提前声明供 canEdit 引用
 const previewingVersion = ref<number | null>(null);
+// AI 输入默认可见；用户显式收起后仍保留可键盘访问的展开按钮。
+const aiCollapsed = ref(false);
 const unitReviewPending = ref(false);
 const unitIssues = ref<WorkflowUnitIssue[]>([]);
 const publishBindingErrors = ref<WorkflowValidationError[]>([]);
@@ -3196,32 +3215,42 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
 
 /* 画布始终使用完整宽度；AI 是按需覆盖层，展开时不会重新挤压/缩放流程图。 */
 .workflow-editor {
+  --workflow-editor-height: calc(100dvh - var(--header-height, 64px) - 156px);
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  min-height: calc(100vh - 200px);
+  grid-template-columns: minmax(0, 1fr) clamp(320px, 23vw, 380px);
+  gap: 12px;
+  height: max(360px, var(--workflow-editor-height));
+  min-height: 0;
+  max-height: none;
+  overflow: hidden;
 }
 .workflow-main {
   width: 100%;
   min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 .workflow-toolbar {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  min-height: 52px; padding: 8px 12px; border: 1px solid #edf2f7; border-radius: 10px 10px 0 0; background: #fff;
+  position: sticky; top: 0; z-index: 40;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-height: 48px; padding: 6px 10px; border: 1px solid #edf2f7; border-radius: 10px 10px 0 0; background: #fff;
 }
-.toolbar-status, .toolbar-actions { display: flex; align-items: center; gap: 8px; }
-.toolbar-actions { flex-wrap: wrap; justify-content: flex-end; }
+.toolbar-status, .toolbar-actions { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.toolbar-status { overflow: hidden; white-space: nowrap; }
+.toolbar-actions { flex-wrap: nowrap; justify-content: flex-end; overflow-x: auto; padding-bottom: 1px; }
 .disabled-action-tooltip { display: inline-flex; }
 .dirty-status { color: #e6a23c; font-size: 12px; }
 .saved-status { color: #67c23a; font-size: 12px; }
-.stage-note { color: #7a8599; font-size: 11px; }
+.stage-note { color: #7a8599; font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
 .canvas-shell {
-  position: relative; flex: 1; min-height: calc(100vh - 256px); overflow: hidden;
+  position: relative; flex: 1; min-height: 0; height: 0; overflow: hidden;
   border: 1px solid #dce8f3; border-top: none; border-radius: 0 0 10px 10px; background: #fbfdff;
 }
-.workflow-canvas { width: 100%; height: 100%; min-height: calc(100vh - 256px); }
+.workflow-canvas { width: 100%; height: 100%; min-height: 0; }
 .workflow-canvas.is-batch-selecting :deep(.vue-flow__pane) { cursor: crosshair; }
 .workflow-canvas.is-batch-selecting :deep(.vue-flow__selection) {
   border: 2px dashed #1677ff;
@@ -3268,11 +3297,31 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
 .empty-canvas-action { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
 .empty-canvas-action :deep(.el-button) { pointer-events: auto; }
 .ai-floating-bar {
-  position: absolute; left: 50%; bottom: 18px; z-index: 45;
-  width: min(820px, calc(100% - 48px)); transform: translateX(-50%);
-  pointer-events: none;
+  position: relative; z-index: 45;
+  min-width: 0; min-height: 0; height: 100%;
+  display: flex; flex-direction: column;
+  overflow-y: auto;
+  border: 1px solid #dce8f3; border-radius: 10px; background: #fff;
+  box-shadow: 0 2px 12px rgb(27 101 168 / 6%);
 }
-.ai-floating-bar :deep(.work-process-ai-chat-panel) { pointer-events: auto; }
+.ai-sidebar-header {
+  position: sticky; top: 0; z-index: 1;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-height: 42px; padding: 0 10px; border-bottom: 1px solid #edf2f7; background: #fff;
+  color: #1a2332; font-size: 13px; font-weight: 600;
+}
+.ai-sidebar-composer { padding: 10px; }
+.ai-floating-bar.is-collapsed { height: auto; align-self: start; overflow: hidden; }
+.ai-floating-bar :deep(.work-process-ai-chat-panel) { pointer-events: auto; width: 100%; }
+@media (max-width: 1180px) {
+  .workflow-editor { grid-template-columns: minmax(0, 1fr) 300px; gap: 8px; }
+  .toolbar-status .stage-note { display: none; }
+}
+@media (max-width: 900px) {
+  .workflow-editor { grid-template-columns: minmax(0, 1fr); height: auto; max-height: none; overflow: visible; }
+  .workflow-main { min-height: 480px; }
+  .ai-floating-bar { height: auto; max-height: 260px; }
+}
 :deep(.vue-flow__edge-path) { stroke-linecap: round; }
 :deep(.vue-flow__node) { border: 0; background: transparent; }
 </style>

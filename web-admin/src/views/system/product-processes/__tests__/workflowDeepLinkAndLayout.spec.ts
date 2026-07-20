@@ -14,13 +14,29 @@ describe('workflow deep link and workspace layout', () => {
     expect(pageSource).toContain('applyRouteProductSelection');
   });
 
-  it('starts with the AI panel collapsed and only restores an explicit expanded preference', () => {
-    expect(editorSource).toContain('const aiCollapsed = ref(true)');
-    expect(editorSource).toContain("localStorage.getItem(aiStorageKey.value) !== 'false'");
+  it('uses a fixed viewport work area instead of allowing the graph to grow the document', () => {
+    expect(editorSource).toContain('--workflow-editor-height: calc(100dvh - var(--header-height, 64px) - 156px);');
+    expect(editorSource).toContain('min-height: 0;');
+    expect(editorSource).toContain('overflow: hidden;');
+    expect(editorSource).toContain('position: sticky; top: 0; z-index: 40;');
+    expect(editorSource).toContain('flex: 1; min-height: 0; height: 0; overflow: hidden;');
+  });
+
+  it('keeps mode controls and the AI compose input in independently scrollable workspace regions', () => {
+    expect(editorSource).toContain('data-testid="canvas-floating-tools"');
+    expect(editorSource).toContain('id="workflow-ai-composer"');
+    expect(editorSource).toContain('const aiCollapsed = ref(false)');
     expect(editorSource).toContain(':aria-expanded="!aiCollapsed"');
-    expect(editorSource).toContain('aria-controls="workflow-ai-panel"');
-    expect(editorSource).toContain('grid-template-columns: minmax(0, 1fr);');
-    expect(editorSource).toContain('position: absolute;');
-    expect(editorSource).toContain('width: calc(100% - 44px);');
+    expect(editorSource).toContain('aria-controls="workflow-ai-composer"');
+    expect(editorSource).toContain('grid-template-columns: minmax(0, 1fr) clamp(320px, 23vw, 380px);');
+    expect(editorSource).toContain('overflow-y: auto;');
+  });
+
+  it('keeps the legacy compatibility chain collapsed by default and closes it with Escape', () => {
+    expect(pageSource).toContain('const legacyCompatibilityExpanded = ref<string[]>([])');
+    expect(pageSource).toContain('v-model="legacyCompatibilityExpanded"');
+    expect(pageSource).toContain("event.key !== 'Escape'");
+    expect(pageSource).toContain('legacyCompatibilityExpanded.value = []');
+    expect(pageSource).toContain('position: absolute; left: 12px; bottom: 12px; z-index: 48;');
   });
 });

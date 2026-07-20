@@ -12,10 +12,23 @@ import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue';
 import { PRODUCT_CONFIG } from '@/components/ai-entry/types';
 import DynamicEntityForm from '@/components/DynamicEntityForm.vue';
 import type { FieldConfig } from '@/config/entityFieldConfigs';
-import { composeProductSpecification } from '@/utils/productSpecification';
+import {
+  composeProductSpecificationFromNetContent,
+  convertNetContent,
+  displayProductSpecification,
+  netContentDimension,
+  parseNetContent,
+  type NetContentUnit,
+} from '@/utils/productSpecification';
+import { displayUnit } from '@/utils/unitPricing';
 import UnitSelect from '@/components/common/UnitSelect.vue';
 import { showSingletonNotification } from '@/utils/singletonNotification';
 import { isCurrentCategorySuggestion, reconcilePackagingSpecs } from './productDialogState';
+import {
+  filterProcessCatalog,
+  pageProcessCatalog,
+  type ProcessRelationFilter,
+} from './processCatalogModel';
 
 // T137: 转换数 placeholder 动态显示实际单位名 ("1 筐 = ? 盒 填 20")
 const conversionPlaceholder = computed(() => {
@@ -289,6 +302,57 @@ const formData = reactive<Partial<ProductType>>({
   notes: ''
 });
 
+const NET_CONTENT_UNIT_OPTIONS: Array<{ value: NetContentUnit; label: string }> = [
+  { value: 'g', label: 'g' },
+  { value: 'kg', label: 'kg' },
+  { value: 'ml', label: 'ml' },
+  { value: 'L', label: 'L' },
+];
+const netContentAmount = ref<number | null>(null);
+const netContentUnit = ref<NetContentUnit>('g');
+let previousNetContentUnit: NetContentUnit = 'g';
+
+function hydrateNetContent(gramsPerUnit?: number | null, specification?: string | null): void {
+  const parsed = parseNetContent(specification, gramsPerUnit);
+  netContentAmount.value = parsed.amount > 0 ? parsed.amount : null;
+  netContentUnit.value = parsed.unit;
+  previousNetContentUnit = parsed.unit;
+}
+
+function syncNetContentToCanonical(): void {
+  const amount = Number(netContentAmount.value);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    formData.gramsPerUnit = undefined;
+  } else if (netContentDimension(netContentUnit.value) === 'MASS') {
+    formData.gramsPerUnit = convertNetContent(amount, netContentUnit.value, 'g') ?? undefined;
+  } else {
+    // gramsPerUnit is a mass bridge. Volume net content remains in specification and must not masquerade as grams.
+    formData.gramsPerUnit = undefined;
+  }
+  synchronizeSpecificationFields();
+}
+
+function handleNetContentAmountChange(): void {
+  gramsPerUnitManuallyEdited.value = true;
+  syncNetContentToCanonical();
+}
+
+function handleNetContentUnitChange(nextUnit: NetContentUnit): void {
+  const amount = Number(netContentAmount.value);
+  if (Number.isFinite(amount) && amount > 0) {
+    const converted = convertNetContent(amount, previousNetContentUnit, nextUnit);
+    if (converted == null) {
+      netContentAmount.value = null;
+      ElMessage.info('重量与容量不能自动互转，请重新填写净含量');
+    } else {
+      netContentAmount.value = Number(converted.toFixed(6));
+    }
+  }
+  previousNetContentUnit = nextUnit;
+  gramsPerUnitManuallyEdited.value = true;
+  syncNetContentToCanonical();
+}
+
 const packagingSpecs = ref<PackagingSpec[]>([]);
 
 function blankPackagingSpec(index = 0): PackagingSpec {
@@ -320,7 +384,7 @@ function removePackagingSpec(index: number) {
 function packagingSpecText(spec: PackagingSpec): string {
   const factor = Number(spec.conversionFactor);
   if (!spec.packageUnit || !spec.baseUnit || !Number.isFinite(factor) || factor <= 0) return '';
-  return `1 ${spec.packageUnit} = ${factor} ${spec.baseUnit}`;
+  return `1 ${displayUnit(spec.packageUnit)} = ${factor} ${displayUnit(spec.baseUnit)}`;
 }
 
 // T123: baseProductName autocomplete 建议 (从已加载产品名/baseProductName 去重)
@@ -586,6 +650,7 @@ async function fetchSuggest() {
       if (!gramsPerUnitManuallyEdited.value) {
         const newGrams = s.gramsPerUnit ?? undefined;
         if (formData.gramsPerUnit !== newGrams) { formData.gramsPerUnit = newGrams; filledAny = true; }
+        hydrateNetContent(newGrams, s.specification || formData.specification);
       }
       // 半成品出成率: 未手动改过 → 写入或清空
       if (!wipToFgYieldManuallyEdited.value) {
@@ -630,7 +695,12 @@ watch(() => formData.name, () => {
 // 格式: {克重}克/{基本单位} {装箱系数}{基本单位}/{包装单位} → 如 "80克/盒 20盒/框".
 // 产品基本单位是唯一权威；包装行里残留的旧 baseUnit 不得污染展示规格。
 function composeSpecification(): string {
-  return composeProductSpecification(formData.gramsPerUnit, formData.unit, packagingSpecs.value);
+  return composeProductSpecificationFromNetContent(
+    netContentAmount.value,
+    netContentUnit.value,
+    formData.unit,
+    packagingSpecs.value,
+  );
 }
 
 function synchronizeSpecificationFields(): void {
@@ -840,6 +910,9 @@ function resetForm() {
   formData.standardCost = null;
   formData.targetGrossMargin = null;
   formData.targetGrossMarginPercent = null;
+  netContentAmount.value = null;
+  netContentUnit.value = 'g';
+  previousNetContentUnit = 'g';
   packagingSpecs.value = [blankPackagingSpec(0)];
   applyCategoryUnitContract();
 }
@@ -874,6 +947,7 @@ async function handleEdit(row: ProductType) {
     Object.assign(formData, product);
     formData.productCategory = product.productCategory || activeTab.value;
     formData.gramsPerUnit = product.gramsPerUnit ?? undefined;
+    hydrateNetContent(product.gramsPerUnit, product.specification);
     formData.standardCost = product.standardCost ?? null;
     formData.targetGrossMargin = product.targetGrossMargin ?? null;
     formData.targetGrossMarginPercent = product.targetGrossMargin != null
@@ -1371,9 +1445,53 @@ const availableProcesses = ref<WorkProcessItem[]>([]);
 const linkedProcesses = ref<ProductWorkProcessItem[]>([]);
 const processLoading = ref(false);
 const addingProcessId = ref('');
+const processKeyword = ref('');
+const processCategoryFilter = ref('');
+const processOutputUnitFilter = ref('');
+const processRelationFilter = ref<ProcessRelationFilter>('ALL');
+const processCatalogPage = ref(1);
+const processCatalogPageSize = 30;
+
+const linkedProcessIds = computed(() => new Set(linkedProcesses.value.map((item) => item.workProcessId)));
+const linkedProcessById = computed(() => new Map(linkedProcesses.value.map((item) => [item.workProcessId, item])));
+const processCategoryOptions = computed(() => Array.from(new Set(
+  availableProcesses.value.map((item) => item.processCategory).filter(Boolean),
+)).sort((a, b) => a.localeCompare(b, 'zh-CN')));
+const processOutputUnitOptions = computed(() => Array.from(new Set(
+  availableProcesses.value.map((item) => item.outputUnit || item.unit).filter(Boolean),
+)).sort());
+const filteredProcessCatalog = computed(() => filterProcessCatalog(
+  availableProcesses.value,
+  linkedProcessIds.value,
+  {
+    keyword: processKeyword.value,
+    category: processCategoryFilter.value,
+    outputUnit: processOutputUnitFilter.value,
+    relation: processRelationFilter.value,
+  },
+));
+const pagedProcessCatalog = computed(() => pageProcessCatalog(
+  filteredProcessCatalog.value,
+  processCatalogPage.value,
+  processCatalogPageSize,
+));
+
+function resetProcessCatalogFilters(): void {
+  processKeyword.value = '';
+  processCategoryFilter.value = '';
+  processOutputUnitFilter.value = '';
+  processRelationFilter.value = 'ALL';
+  processCatalogPage.value = 1;
+}
+
+watch(
+  [processKeyword, processCategoryFilter, processOutputUnitFilter, processRelationFilter],
+  () => { processCatalogPage.value = 1; },
+);
 
 async function handleConfigProcesses(row: ProductType) {
   processDrawerProduct.value = row;
+  resetProcessCatalogFilters();
   processDrawerVisible.value = true;
   processLoading.value = true;
   try {
@@ -1391,11 +1509,6 @@ async function handleConfigProcesses(row: ProductType) {
     processLoading.value = false;
   }
 }
-
-const unlinkedProcesses = computed(() => {
-  const linkedIds = new Set(linkedProcesses.value.map(lp => lp.workProcessId));
-  return availableProcesses.value.filter(p => !linkedIds.has(p.id));
-});
 
 async function handleAddProcess(processId: string) {
   if (!processDrawerProduct.value) return;
@@ -1721,7 +1834,7 @@ watch(aiProductDialogVisible, (visible) => {
           style="width: 120px"
           @change="handleFilterChange"
         >
-          <el-option v-for="u in unitFilterOptions" :key="u" :label="u" :value="u" />
+          <el-option v-for="u in unitFilterOptions" :key="u" :label="displayUnit(u)" :value="u" />
         </el-select>
         <el-select
           v-model="filterTemperatureZone"
@@ -1757,10 +1870,12 @@ watch(aiProductDialogVisible, (visible) => {
         <el-table-column prop="name" label="产品名称" min-width="180" show-overflow-tooltip />
         <el-table-column prop="specification" label="规格" width="160" show-overflow-tooltip>
           <template #default="{ row }">
-            {{ row.specification || '-' }}
+            {{ displayProductSpecification(row.specification) || '-' }}
           </template>
         </el-table-column>
-        <el-table-column prop="unit" label="单位" width="80" align="center" />
+        <el-table-column prop="unit" label="单位" width="80" align="center">
+          <template #default="{ row }">{{ displayUnit(row.unit) }}</template>
+        </el-table-column>
         <el-table-column prop="productCategory" label="产品大类" width="130" align="center">
           <template #default="{ row }">
             <el-tag size="small" type="info">
@@ -1895,32 +2010,38 @@ watch(aiProductDialogVisible, (visible) => {
           show-icon
           title="这里定义库存/销售规格；保存后系统会自动生成明确的单位换算，Workflow 可直接绑定。工序报工单位仍以 Workflow 端口为准。"
         />
-        <!-- 基本单位(unit) = 最小计量/售卖单位 (成品如 盒/包; 原料如 kg) -->
-        <el-form-item label="基本单位" prop="unit">
-          <UnitSelect
-            v-model="formData.unit"
-            :factory-id="factoryId"
-            placeholder="搜索基本单位；无匹配可新增"
-            @change="markUnitEdited"
-          />
-          <div class="form-tip" v-if="isSemiFinishedSku">半成品只维护基本单位；g/kg 等重量单位在生产报工时统一按 kg，非重量单位（如只、件）保留 SKU 单位</div>
-          <div class="form-tip" v-else>基本单位 = 最小计量/售卖单位（成品如「盒」「袋」）；修改后会同步标准克重和所有装箱换算右侧单位</div>
-        </el-form-item>
-        <!-- 标准单位换算明确展示完整等式，避免动态长标签在窄弹窗中折行。 -->
-        <el-form-item v-if="!isSemiFinishedSku" label="标准单位换算" label-width="120px">
-          <div class="standard-weight-row">
-            <span class="standard-weight-unit">1 {{ formData.unit || '基本单位' }} =</span>
-            <el-input-number
-              v-model="formData.gramsPerUnit"
-              :min="0"
-              :precision="3"
-              :controls="false"
-              :placeholder="gramsPerUnitPlaceholder"
-              @change="gramsPerUnitManuallyEdited = true"
+        <el-form-item label="销售单位 / 净含量" prop="unit" class="sku-measure-form-item">
+          <div class="sku-measure-row">
+            <UnitSelect
+              v-model="formData.unit"
+              :factory-id="factoryId"
+              placeholder="选择销售单位"
+              class="sales-unit-select"
+              @change="markUnitEdited"
             />
-            <span>克</span>
+            <template v-if="!isSemiFinishedSku">
+              <span class="measure-separator">每 {{ displayUnit(formData.unit) || '销售单位' }}</span>
+              <el-input-number
+                v-model="netContentAmount"
+                :min="0.001"
+                :precision="3"
+                :controls="false"
+                placeholder="净含量"
+                class="net-content-input"
+                @change="handleNetContentAmountChange"
+              />
+              <el-select
+                v-model="netContentUnit"
+                aria-label="净含量单位"
+                class="net-content-unit-select"
+                @change="handleNetContentUnitChange"
+              >
+                <el-option v-for="option in NET_CONTENT_UNIT_OPTIONS" :key="option.value" :label="option.label" :value="option.value" />
+              </el-select>
+            </template>
           </div>
-          <div class="form-tip">只填写数字；规格和每箱总重会按此换算并自动以 g/kg 展示</div>
+          <div class="form-tip" v-if="isSemiFinishedSku">半成品只维护销售单位；重量型报工单位在 Workflow 中统一约束</div>
+          <div class="form-tip" v-else>销售单位用于库存和销售；净含量仅支持 g/kg/ml/L，同维度自动等值换算，重量与容量不互转</div>
         </el-form-item>
         <!-- 同一 SKU 允许多条装箱换算；标准克重仍保持唯一。第一条是默认箱规。 -->
         <el-form-item v-if="!isSemiFinishedSku" label="装箱换算" label-width="120px">
@@ -1938,7 +2059,7 @@ watch(aiProductDialogVisible, (visible) => {
                 <span class="spec-conversion-eq">＝</span>
                 <el-input-number v-model="spec.conversionFactor" :min="1" :precision="0" :controls="false"
                   placeholder="换算数" class="spec-coef-input" @change="markBoxCoefEdited" />
-                <el-input :model-value="formData.unit" disabled placeholder="基本单位" class="spec-unit-select" />
+                <el-input :model-value="displayUnit(formData.unit)" disabled placeholder="销售单位" class="spec-unit-select" />
                 <el-button v-if="index > 0" link type="danger" @click="removePackagingSpec(index)">删除</el-button>
               </div>
               <div v-if="spec.packageUnit && formData.unit && spec.packageUnit === formData.unit" class="spec-same-warn">
@@ -2382,7 +2503,7 @@ watch(aiProductDialogVisible, (visible) => {
                 <div class="linked-name">{{ item.processName }}</div>
                 <div class="linked-meta">
                   <el-tag size="small" type="info">{{ item.processCategory }}</el-tag>
-                  <span class="linked-unit">{{ item.unitOverride || item.defaultUnit }}</span>
+                  <span class="linked-unit">{{ displayUnit(item.unitOverride || item.defaultUnit) }}</span>
                   <span v-if="item.estimatedMinutesOverride || item.defaultEstimatedMinutes" class="linked-time">
                     {{ item.estimatedMinutesOverride || item.defaultEstimatedMinutes }}分钟
                   </span>
@@ -2399,23 +2520,55 @@ watch(aiProductDialogVisible, (visible) => {
 
         <el-divider />
 
-        <!-- 可选工序（左侧） -->
+        <!-- 快捷工序目录：与完整 Workflow 编辑器并存，适合连续关联基础工序。 -->
         <div class="process-section">
           <div class="section-title">
-            <span>可选工序</span>
-            <el-tag size="small">{{ unlinkedProcesses.length }} 个</el-tag>
+            <span>工序目录</span>
+            <el-tag size="small">结果 {{ filteredProcessCatalog.length }} / 总计 {{ availableProcesses.length }}</el-tag>
+            <el-button link type="primary" @click="resetProcessCatalogFilters">清空筛选</el-button>
           </div>
-          <div v-if="unlinkedProcesses.length === 0" class="process-empty">
-            所有工序已关联，或暂无可用工序
+          <div class="process-catalog-filters">
+            <el-input
+              v-model="processKeyword"
+              clearable
+              placeholder="搜索工序名称 / 编码 / 类别标签"
+              aria-label="搜索快捷工序"
+            />
+            <el-select v-model="processCategoryFilter" clearable placeholder="全部类别" aria-label="工序类别筛选">
+              <el-option v-for="category in processCategoryOptions" :key="category" :label="category" :value="category" />
+            </el-select>
+            <el-select v-model="processOutputUnitFilter" clearable placeholder="全部产出单位" aria-label="工序产出单位筛选">
+              <el-option v-for="unit in processOutputUnitOptions" :key="unit" :label="displayUnit(unit)" :value="unit" />
+            </el-select>
+            <el-segmented
+              v-model="processRelationFilter"
+              :options="[
+                { label: '全部', value: 'ALL' },
+                { label: '已关联', value: 'LINKED' },
+                { label: '未关联', value: 'UNLINKED' },
+              ]"
+              aria-label="工序关联状态筛选"
+            />
+          </div>
+          <div v-if="availableProcesses.length === 0" class="process-empty">
+            暂无可用工序，请先在工序字典维护启用工序
+          </div>
+          <div v-else-if="filteredProcessCatalog.length === 0" class="process-empty">
+            没有符合当前条件的工序，请调整或清空筛选
           </div>
           <div v-else class="available-list">
-            <div v-for="proc in unlinkedProcesses" :key="proc.id" class="available-item">
+            <div v-for="proc in pagedProcessCatalog" :key="proc.id" class="available-item" :class="{ 'is-linked': linkedProcessIds.has(proc.id) }">
               <div class="available-info">
                 <span class="available-name">{{ proc.processName }}</span>
                 <el-tag size="small" type="info">{{ proc.processCategory }}</el-tag>
-                <span class="available-unit">{{ proc.unit }}</span>
+                <span class="available-code">{{ proc.id }}</span>
+                <span class="available-unit">产出 {{ displayUnit(proc.outputUnit || proc.unit) }}</span>
               </div>
+              <el-tag v-if="linkedProcessIds.has(proc.id)" type="success" size="small">
+                已关联 · 第 {{ linkedProcessById.get(proc.id)?.processOrder }} 道
+              </el-tag>
               <el-button
+                v-else
                 type="primary"
                 size="small"
                 :icon="Plus"
@@ -2425,6 +2578,15 @@ watch(aiProductDialogVisible, (visible) => {
                 添加
               </el-button>
             </div>
+            <el-pagination
+              v-if="filteredProcessCatalog.length > processCatalogPageSize"
+              v-model:current-page="processCatalogPage"
+              :page-size="processCatalogPageSize"
+              :total="filteredProcessCatalog.length"
+              layout="prev, pager, next"
+              small
+              class="process-catalog-pagination"
+            />
           </div>
         </div>
       </div>
@@ -2615,6 +2777,25 @@ watch(aiProductDialogVisible, (visible) => {
   font-weight: 500;
 }
 
+.sku-measure-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.25fr) auto minmax(110px, .75fr) 84px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.sales-unit-select,
+.net-content-input,
+.net-content-unit-select {
+  width: 100%;
+}
+
+.measure-separator {
+  color: var(--el-text-color-regular, #606266);
+  white-space: nowrap;
+}
+
 :global(.product-edit-modal .el-dialog__body) {
   max-height: calc(100vh - 190px);
   overflow-y: auto;
@@ -2762,6 +2943,22 @@ watch(aiProductDialogVisible, (visible) => {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  max-height: min(48vh, 620px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
+.process-catalog-filters {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) minmax(110px, .8fr) minmax(120px, .8fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.process-catalog-filters :deep(.el-segmented) {
+  grid-column: 1 / -1;
+  justify-self: start;
 }
 
 .available-item {
@@ -2772,6 +2969,11 @@ watch(aiProductDialogVisible, (visible) => {
   border: 1px solid #EBEEF5;
   border-radius: 6px;
   background: #fff;
+
+  &.is-linked {
+    border-color: var(--el-color-success-light-5, #b3e19d);
+    background: var(--el-color-success-light-9, #f0f9eb);
+  }
 
   .available-info {
     display: flex;
@@ -2787,7 +2989,28 @@ watch(aiProductDialogVisible, (visible) => {
       font-size: 12px;
       color: #909399;
     }
+
+    .available-code {
+      color: var(--el-text-color-secondary, #909399);
+      font: 11px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
   }
+}
+
+.process-catalog-pagination {
+  position: sticky;
+  bottom: 0;
+  justify-content: center;
+  padding: 8px 0;
+  background: var(--el-bg-color, #fff);
+}
+
+@media (max-width: 720px) {
+  .sku-measure-row,
+  .process-catalog-filters {
+    grid-template-columns: 1fr;
+  }
+  .measure-separator { display: none; }
 }
 
 /* AI 智能建产品 dialog 内部标题 */

@@ -28,7 +28,8 @@ describe('shared UnitSelect contract', () => {
 
   it('is shared by SKU while work-process master data no longer owns port units', () => {
     expect(productSource).toContain('<UnitSelect');
-    expect(productSource).toContain(':placeholder="gramsPerUnitPlaceholder"');
+    expect(productSource).toContain('label="销售单位 / 净含量"');
+    expect(productSource).toContain('placeholder="选择销售单位"');
     expect(processSource).not.toContain('<UnitSelect');
     expect(processSource).not.toContain('label="投入单位"');
     expect(processSource).not.toContain('label="产出单位"');
