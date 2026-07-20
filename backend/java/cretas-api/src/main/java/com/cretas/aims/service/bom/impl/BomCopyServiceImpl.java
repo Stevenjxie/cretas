@@ -17,6 +17,7 @@ import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.service.bom.BomCopyService;
+import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.workflow.ProductWorkflowResolutionService;
 import com.cretas.aims.service.workflow.WorkflowProcessPath;
 import lombok.RequiredArgsConstructor;
@@ -52,6 +53,7 @@ public class BomCopyServiceImpl implements BomCopyService {
     private final ProductTypeRepository productTypeRepo;
     private final WorkProcessRepository workProcessRepo;
     private final ProductWorkflowResolutionService workflowResolutionService;
+    private final UnitContractService unitContractService;
 
     @Override
     @Transactional(readOnly = true)
@@ -153,10 +155,17 @@ public class BomCopyServiceImpl implements BomCopyService {
                 sourceSeasoning, seasoningIds, BomSeasoningItem::getId, "seasoningItemIds");
         List<BomProcessInjectionConfig> selectedConfigs = selectOwned(
                 sourceConfigs, configIds, BomProcessInjectionConfig::getId, "processInjectionConfigIds");
+        List<SeasoningCopySelection> seasoningSelections = new ArrayList<>();
         for (BomSeasoningItem item : selectedSeasoning) {
-            if (item.getWorkProcessId() == null || !sharedProcessIds.contains(item.getWorkProcessId())) {
+            ProcessNodeResolution resolution = resolveTargetSeasoningNode(sourcePath, targetPath, item);
+            if (resolution.status() == ProcessNodeMappingStatus.AMBIGUOUS) {
+                throw businessError(409, "所选调味规则无法唯一映射到目标 Workflow 工序节点: " + item.getId(),
+                        "BOM_COPY_AMBIGUOUS_PROCESS_NODE");
+            }
+            if (resolution.status() != ProcessNodeMappingStatus.MAPPED) {
                 throw businessError(400, "所选调味规则绑定了非共享工序: " + item.getId(), "BOM_COPY_INCOMPATIBLE_RULE");
             }
+            seasoningSelections.add(new SeasoningCopySelection(item, resolution.targetStep()));
         }
         for (BomProcessInjectionConfig config : selectedConfigs) {
             if (!sharedProcessIds.contains(config.getWorkProcessId())) {
@@ -173,8 +182,16 @@ public class BomCopyServiceImpl implements BomCopyService {
         draft.setVersion(maxVersion == null ? 1 : maxVersion + 1);
         draft.setIsCurrent(false);
         draft.setOverallYieldRate(null);
-        draft.setOutputQuantityPerUnit(target.getGramsPerUnit());
-        draft.setOutputUnit(target.getUnit());
+        var canonicalOutputUnit = unitContractService.normalize(factoryId, target.getUnit());
+        if (!canonicalOutputUnit.recognized()) {
+            throw businessError(409, "目标 SKU 基本单位无法识别", "BOM_SKU_UNIT_UNKNOWN");
+        }
+        draft.setOutputQuantityPerUnit(BigDecimal.ONE);
+        draft.setOutputUnit(canonicalOutputUnit.code());
+        draft.setNetContentQuantity(target.getNetContentQuantity() != null
+                ? target.getNetContentQuantity() : target.getGramsPerUnit());
+        draft.setNetContentUnit(target.getNetContentUnit() != null
+                ? target.getNetContentUnit() : (target.getGramsPerUnit() == null ? null : "g"));
         draft.setStatus(BomRecipe.Status.DRAFT);
         draft.setSourceType(BomRecipe.SourceType.MANUAL);
         draft.setNotes("参考复制自 " + source.getProductName() + " / " + source.getRecipeCode()
@@ -187,8 +204,9 @@ public class BomCopyServiceImpl implements BomCopyService {
         itemRepo.saveAll(copiedItems);
         draft.getItems().clear();
         draft.getItems().addAll(copiedItems);
-        seasoningRepo.saveAll(selectedSeasoning.stream()
-                .map(item -> copySeasoning(factoryId, draftId, item)).toList());
+        seasoningRepo.saveAll(seasoningSelections.stream()
+                .map(selection -> copySeasoning(
+                        factoryId, draftId, selection.source(), selection.targetStep())).toList());
         processInjectionConfigRepo.saveAll(selectedConfigs.stream()
                 .map(config -> copyInjectionConfig(factoryId, draftId, config)).toList());
         return recipeRepo.save(draft);
@@ -199,16 +217,21 @@ public class BomCopyServiceImpl implements BomCopyService {
         List<BomCopyCandidateDTO.SharedProcessDTO> sharedProcesses = targetPath.processes().stream()
                 .filter(step -> context.sharedProcessIds().contains(step.workProcessId()))
                 .map(step -> BomCopyCandidateDTO.SharedProcessDTO.builder()
+                        .workflowProcessNodeId(step.processNodeId())
                         .workProcessId(step.workProcessId()).processName(processNames.get(step.workProcessId()))
                         .targetOrder(step.order()).build()).toList();
         List<BomCopyCandidateDTO.BomItemRuleDTO> items = itemRepo
                 .findByRecipeIdOrderBySortOrderAsc(context.sourceRecipe().getId()).stream()
                 .map(this::toItemRule).toList();
-        List<BomCopyCandidateDTO.SeasoningRuleDTO> seasonings = seasoningRepo
-                .findByRecipeIdOrderBySeqAsc(context.sourceRecipe().getId()).stream()
-                .filter(item -> item.getWorkProcessId() != null
-                        && context.sharedProcessIds().contains(item.getWorkProcessId()))
-                .map(item -> toSeasoningRule(item, processNames)).toList();
+        List<BomCopyCandidateDTO.SeasoningRuleDTO> seasonings = new ArrayList<>();
+        for (BomSeasoningItem item : seasoningRepo
+                .findByRecipeIdOrderBySeqAsc(context.sourceRecipe().getId())) {
+            ProcessNodeResolution resolution = resolveTargetSeasoningNode(
+                    context.sourcePath(), targetPath, item);
+            if (resolution.status() == ProcessNodeMappingStatus.MAPPED) {
+                seasonings.add(toSeasoningRule(item, resolution.targetStep(), processNames));
+            }
+        }
         List<BomCopyCandidateDTO.ProcessInjectionConfigRuleDTO> configs = processInjectionConfigRepo
                 .findByRecipeIdAndDeletedAtIsNull(context.sourceRecipe().getId()).stream()
                 .filter(config -> context.sharedProcessIds().contains(config.getWorkProcessId()))
@@ -220,6 +243,8 @@ public class BomCopyServiceImpl implements BomCopyService {
                 .sourceRecipeCode(context.sourceRecipe().getRecipeCode())
                 .sourceRecipeVersion(context.sourceRecipe().getVersion())
                 .rawRootMaterialTypeId(context.sourcePath().rawRootMaterialTypeId())
+                .rawRootMaterialTypeIds(normalizedRawRootMaterialTypeIds(context.sourcePath()).stream()
+                        .sorted().toList())
                 .sharedProcesses(sharedProcesses).bomItems(items).seasoningItems(seasonings)
                 .processInjectionConfigs(configs).build();
     }
@@ -235,12 +260,17 @@ public class BomCopyServiceImpl implements BomCopyService {
                 .subProductTypeId(item.getSubProductTypeId()).primaryCode(item.getPrimaryCode()).build();
     }
 
-    private BomCopyCandidateDTO.SeasoningRuleDTO toSeasoningRule(BomSeasoningItem item,
-                                                                  Map<String, String> processNames) {
+    private BomCopyCandidateDTO.SeasoningRuleDTO toSeasoningRule(
+            BomSeasoningItem item,
+            WorkflowProcessPath.ProcessStep targetStep,
+            Map<String, String> processNames) {
         return BomCopyCandidateDTO.SeasoningRuleDTO.builder().id(item.getId())
                 .materialTypeId(item.getMaterialTypeId()).name(item.getName()).section(item.getSection())
                 .dosagePerKgG(item.getDosagePerKgG()).seq(item.getSeq())
-                .workProcessId(item.getWorkProcessId()).workProcessName(processNames.get(item.getWorkProcessId()))
+                .workProcessId(targetStep.workProcessId())
+                .workflowProcessNodeId(targetStep.processNodeId())
+                .sourceWorkflowProcessNodeId(item.getWorkflowProcessNodeId())
+                .workProcessName(processNames.get(targetStep.workProcessId()))
                 .countInSeasoning(item.getCountInSeasoning()).remark(item.getRemark()).build();
     }
 
@@ -278,7 +308,11 @@ public class BomCopyServiceImpl implements BomCopyService {
         return copy;
     }
 
-    private BomSeasoningItem copySeasoning(String factoryId, String recipeId, BomSeasoningItem source) {
+    private BomSeasoningItem copySeasoning(
+            String factoryId,
+            String recipeId,
+            BomSeasoningItem source,
+            WorkflowProcessPath.ProcessStep targetStep) {
         BomSeasoningItem copy = new BomSeasoningItem();
         copy.setRecipeId(recipeId);
         copy.setFactoryId(factoryId);
@@ -291,7 +325,8 @@ public class BomCopyServiceImpl implements BomCopyService {
         copy.setPriceSource2(source.getPriceSource2());
         copy.setCountInSeasoning(source.getCountInSeasoning());
         copy.setRemark(source.getRemark());
-        copy.setWorkProcessId(source.getWorkProcessId());
+        copy.setWorkProcessId(targetStep.workProcessId());
+        copy.setWorkflowProcessNodeId(targetStep.processNodeId());
         copy.setSubsequentPotRatio(source.getSubsequentPotRatio());
         return copy;
     }
@@ -331,11 +366,96 @@ public class BomCopyServiceImpl implements BomCopyService {
     }
 
     private boolean sameSource(WorkflowProcessPath left, WorkflowProcessPath right) {
-        return left.rawRootMaterialTypeId() != null
-                && !left.rawRootMaterialTypeId().isBlank()
-                && right.rawRootMaterialTypeId() != null
-                && !right.rawRootMaterialTypeId().isBlank()
-                && left.rawRootMaterialTypeId().equals(right.rawRootMaterialTypeId());
+        Set<String> leftRoots = normalizedRawRootMaterialTypeIds(left);
+        Set<String> rightRoots = normalizedRawRootMaterialTypeIds(right);
+        return !leftRoots.isEmpty() && leftRoots.equals(rightRoots);
+    }
+
+    private Set<String> normalizedRawRootMaterialTypeIds(WorkflowProcessPath path) {
+        Set<String> roots = path.rawRootMaterialTypeIds() == null
+                ? new LinkedHashSet<>()
+                : path.rawRootMaterialTypeIds().stream()
+                        .map(this::normalizeIdentifier)
+                        .filter(Objects::nonNull)
+                        .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (!roots.isEmpty()) {
+            return roots;
+        }
+        String legacyRoot = normalizeIdentifier(path.rawRootMaterialTypeId());
+        return legacyRoot == null ? Set.of() : Set.of(legacyRoot);
+    }
+
+    private ProcessNodeResolution resolveTargetSeasoningNode(
+            WorkflowProcessPath sourcePath,
+            WorkflowProcessPath targetPath,
+            BomSeasoningItem item) {
+        String workProcessId = normalizeIdentifier(item.getWorkProcessId());
+        if (workProcessId == null) {
+            return ProcessNodeResolution.incompatible();
+        }
+        List<WorkflowProcessPath.ProcessStep> sourceMasterMatches = sourcePath.processes().stream()
+                .filter(step -> workProcessId.equals(normalizeIdentifier(step.workProcessId())))
+                .toList();
+        String sourceNodeId = normalizeIdentifier(item.getWorkflowProcessNodeId());
+        WorkflowProcessPath.ProcessStep sourceStep;
+        if (sourceNodeId == null) {
+            if (sourceMasterMatches.size() > 1) {
+                return ProcessNodeResolution.ambiguous();
+            }
+            if (sourceMasterMatches.isEmpty()) {
+                return ProcessNodeResolution.incompatible();
+            }
+            sourceStep = sourceMasterMatches.getFirst();
+        } else {
+            List<WorkflowProcessPath.ProcessStep> sourceIdentityMatches = sourceMasterMatches.stream()
+                    .filter(step -> sourceNodeId.equals(normalizeIdentifier(step.processNodeId())))
+                    .toList();
+            if (sourceIdentityMatches.size() > 1) {
+                return ProcessNodeResolution.ambiguous();
+            }
+            if (sourceIdentityMatches.isEmpty()) {
+                return ProcessNodeResolution.incompatible();
+            }
+            sourceStep = sourceIdentityMatches.getFirst();
+        }
+
+        List<WorkflowProcessPath.ProcessStep> targetMatches;
+        if (sameWorkflowRevision(sourcePath, targetPath)) {
+            String exactNodeId = normalizeIdentifier(sourceStep.processNodeId());
+            if (exactNodeId == null) {
+                return ProcessNodeResolution.incompatible();
+            }
+            targetMatches = targetPath.processes().stream()
+                    .filter(step -> workProcessId.equals(normalizeIdentifier(step.workProcessId())))
+                    .filter(step -> exactNodeId.equals(normalizeIdentifier(step.processNodeId())))
+                    .toList();
+        } else {
+            if (sourceMasterMatches.size() > 1) {
+                return ProcessNodeResolution.ambiguous();
+            }
+            targetMatches = targetPath.processes().stream()
+                    .filter(step -> workProcessId.equals(normalizeIdentifier(step.workProcessId())))
+                    .toList();
+        }
+        if (targetMatches.size() > 1) {
+            return ProcessNodeResolution.ambiguous();
+        }
+        if (targetMatches.isEmpty()
+                || normalizeIdentifier(targetMatches.getFirst().processNodeId()) == null) {
+            return ProcessNodeResolution.incompatible();
+        }
+        return ProcessNodeResolution.mapped(targetMatches.getFirst());
+    }
+
+    private boolean sameWorkflowRevision(WorkflowProcessPath left, WorkflowProcessPath right) {
+        return left.workflowId() == right.workflowId()
+                && left.definitionVersion() == right.definitionVersion();
+    }
+
+    private String normalizeIdentifier(String value) {
+        if (value == null) return null;
+        String normalized = value.trim();
+        return normalized.isEmpty() ? null : normalized;
     }
 
     private Set<String> sharedProcessIds(WorkflowProcessPath left, WorkflowProcessPath right) {
@@ -380,4 +500,25 @@ public class BomCopyServiceImpl implements BomCopyService {
 
     private record CandidateContext(ProductType sourceProduct, BomRecipe sourceRecipe,
                                     WorkflowProcessPath sourcePath, Set<String> sharedProcessIds) { }
+
+    private record SeasoningCopySelection(
+            BomSeasoningItem source, WorkflowProcessPath.ProcessStep targetStep) { }
+
+    private enum ProcessNodeMappingStatus { MAPPED, INCOMPATIBLE, AMBIGUOUS }
+
+    private record ProcessNodeResolution(
+            ProcessNodeMappingStatus status, WorkflowProcessPath.ProcessStep targetStep) {
+
+        private static ProcessNodeResolution mapped(WorkflowProcessPath.ProcessStep targetStep) {
+            return new ProcessNodeResolution(ProcessNodeMappingStatus.MAPPED, targetStep);
+        }
+
+        private static ProcessNodeResolution incompatible() {
+            return new ProcessNodeResolution(ProcessNodeMappingStatus.INCOMPATIBLE, null);
+        }
+
+        private static ProcessNodeResolution ambiguous() {
+            return new ProcessNodeResolution(ProcessNodeMappingStatus.AMBIGUOUS, null);
+        }
+    }
 }
