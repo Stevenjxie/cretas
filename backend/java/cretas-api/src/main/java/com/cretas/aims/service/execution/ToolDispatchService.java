@@ -208,6 +208,12 @@ public class ToolDispatchService {
                 }
             }
 
+            // The process-local confirmation marker exists only long enough for W0 and RBAC to
+            // inspect it. Never serialize or forward it to a Tool; keep the separate legacy
+            // business parameter confirmed=true for tools that still require that second check.
+            request.setContext(com.cretas.aims.ai.tool.WriteGuardService
+                    .withoutServerConfirmationMarker(request.getContext()));
+
             // 1.5. 预览模式（不支持预览的请求已在上方 fail closed）
             if (Boolean.TRUE.equals(request.getPreviewOnly())) {
                 log.info("Tool preview 模式: tool={}, intentCode={}", tool.getToolName(), intent.getIntentCode());

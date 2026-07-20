@@ -643,8 +643,9 @@ public class IntentExecutionOrchestrator {
         // multi-intent / phrase-shortcut / conversation-continuation paths funnel through. The guard
         // is deliberately NOT conditioned on request.getForceExecute() (which is hard-set true by the
         // multi-intent and conversation-continuation paths and is exactly what must NOT skip the
-        // guard). previewOnly requests are allowed (they preview, not execute); a confirmed=true
-        // signal in the request context means the user already confirmed → allow.
+        // guard). previewOnly requests are allowed (they preview, not execute). Confirmation is
+        // process-local authority issued only after an atomic single-use token claim; raw request
+        // context values such as confirmed=true are never trusted.
         java.util.Map<String, Object> ctx = request.getContext() != null ? request.getContext() : java.util.Map.of();
         if (writeGuardService.isWriteIntent(intent)
                 && !Boolean.TRUE.equals(request.getPreviewOnly())
@@ -818,14 +819,16 @@ public class IntentExecutionOrchestrator {
             }
 
             Map<String, Object> context = claimResult.getParameters() != null
-                    ? new HashMap<>(claimResult.getParameters()) : new HashMap<>();
+                    ? com.cretas.aims.ai.tool.WriteGuardService.withoutCallerConfirmation(
+                            claimResult.getParameters())
+                    : new HashMap<>();
             // Identity and authorization are re-established from the trusted path/JWT. The token
             // deliberately does not persist the original role, so current JWT role is rechecked by
             // ToolDispatch/RBAC instead of accepting any client parameter as authority.
             for (String reservedKey : List.of(
                     "factoryId", "factory_id", "tenantId", "tenant_id",
                     "userId", "user_id", "userRole", "role",
-                    "permissions", "scopes", "principal", "confirmed")) {
+                    "permissions", "scopes", "principal")) {
                 context.remove(reservedKey);
             }
             context.put("factoryId", token.getFactoryId());
@@ -834,7 +837,11 @@ public class IntentExecutionOrchestrator {
             context.put("user_id", token.getUserId());
             context.put("userRole", userRole);
             context.put("role", userRole);
+            // Some legacy destructive tools still require a boolean business argument in addition
+            // to the platform guard. It is safe here because the atomic token claim already bound
+            // tenant, user, command digest, tool and descriptor version.
             context.put("confirmed", true);
+            context = writeGuardService.withServerConfirmation(context);
 
             IntentExecuteRequest execRequest = IntentExecuteRequest.builder()
                     .userInput("确认执行: " + intentCode)

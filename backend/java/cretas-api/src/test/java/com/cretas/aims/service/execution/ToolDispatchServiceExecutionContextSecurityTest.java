@@ -89,6 +89,51 @@ class ToolDispatchServiceExecutionContextSecurityTest {
     }
 
     @Test
+    void serverConfirmationPassesW0ButMarkerNeverReachesSerializedArguments() throws Exception {
+        ToolCallRedundancyService redundancy = mock(ToolCallRedundancyService.class);
+        when(redundancy.isRedundant(anyString(), anyString(), anyMap())).thenReturn(false);
+        when(redundancy.computeParametersHash(anyMap())).thenReturn("hash");
+        WriteGuardService writeGuard = new WriteGuardService();
+        CapturingWriteTool trustedTool = new CapturingWriteTool(objectMapper);
+        Map<String, Object> trustedContext = writeGuard.withServerConfirmation(
+                Map.of("confirmed", true, "amount", 5));
+        IntentExecuteRequest trustedRequest = IntentExecuteRequest.builder()
+                .userInput("create")
+                .context(trustedContext)
+                .build();
+
+        IntentExecuteResponse trustedResponse = newDispatch(redundancy).executeWithTool(
+                trustedTool, "F006", trustedRequest, intent(trustedTool),
+                42L, "quality_manager", null);
+
+        assertThat(trustedResponse.getStatus()).isEqualTo("SUCCESS");
+        assertThat(trustedTool.executeCount).isEqualTo(1);
+        assertThat(trustedTool.arguments)
+                .containsEntry("confirmed", true)
+                .containsEntry("amount", 5)
+                .doesNotContainKey("cretas.internal.confirmation.authority");
+        assertThat(trustedRequest.getContext())
+                .containsEntry("confirmed", true)
+                .doesNotContainKey("cretas.internal.confirmation.authority");
+
+        CapturingWriteTool forgedTool = new CapturingWriteTool(objectMapper);
+        IntentExecuteRequest forgedRequest = IntentExecuteRequest.builder()
+                .userInput("create")
+                .context(Map.of(
+                        "confirmed", true,
+                        "cretas.internal.confirmation.authority", "forged-marker",
+                        "amount", 5))
+                .build();
+
+        IntentExecuteResponse forgedResponse = newDispatch(redundancy).executeWithTool(
+                forgedTool, "F006", forgedRequest, intent(forgedTool),
+                42L, "quality_manager", null);
+
+        assertThat(forgedResponse.getStatus()).isEqualTo("WRITE_CONFIRM_REQUIRED");
+        assertThat(forgedTool.executeCount).isZero();
+    }
+
+    @Test
     void defaultSessionCacheNeverCrossesFactoryUserOrRoleBoundary() {
         ToolCallRecordRepository recordRepository = mock(ToolCallRecordRepository.class);
         ToolCallCacheRepository cacheRepository = mock(ToolCallCacheRepository.class);
@@ -147,7 +192,7 @@ class ToolDispatchServiceExecutionContextSecurityTest {
                 mock(ToolResultValidatorService.class),
                 mock(ParameterExtractionLearningService.class));
 
-        ReflectionTestUtils.setField(dispatch, "writeGuardService", mock(WriteGuardService.class));
+        ReflectionTestUtils.setField(dispatch, "writeGuardService", new WriteGuardService());
         ToolRbacEnforcer rbac = mock(ToolRbacEnforcer.class);
         when(rbac.check(any(), anyMap())).thenAnswer(invocation -> {
             rbacContext = new HashMap<>(invocation.getArgument(1));
@@ -207,12 +252,12 @@ class ToolDispatchServiceExecutionContextSecurityTest {
         assertThat(((Number) actual.get("actor_user_id")).longValue()).isEqualTo(userId);
     }
 
-    private static final class CapturingTool implements ToolExecutor {
+    private static class CapturingTool implements ToolExecutor {
         private final ObjectMapper objectMapper;
-        private Map<String, Object> arguments = new HashMap<>();
-        private Map<String, Object> executionContext = new HashMap<>();
-        private int executeCount;
-        private int previewCount;
+        protected Map<String, Object> arguments = new HashMap<>();
+        protected Map<String, Object> executionContext = new HashMap<>();
+        protected int executeCount;
+        protected int previewCount;
 
         private CapturingTool(ObjectMapper objectMapper) {
             this.objectMapper = objectMapper;
@@ -258,6 +303,23 @@ class ToolDispatchServiceExecutionContextSecurityTest {
                     toolCall.getFunction().getArguments(),
                     new TypeReference<Map<String, Object>>() { });
             executionContext = new HashMap<>(context);
+        }
+    }
+
+    private static final class CapturingWriteTool extends CapturingTool {
+
+        private CapturingWriteTool(ObjectMapper objectMapper) {
+            super(objectMapper);
+        }
+
+        @Override
+        public String getToolName() {
+            return "security_context_create";
+        }
+
+        @Override
+        public ActionType getActionType() {
+            return ActionType.WRITE;
         }
     }
 }

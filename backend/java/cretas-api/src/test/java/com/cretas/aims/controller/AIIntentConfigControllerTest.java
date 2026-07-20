@@ -375,6 +375,56 @@ class AIIntentConfigControllerTest {
     }
 
     @Test
+    @DisplayName("execute strips caller-controlled confirmation authority before service dispatch")
+    void execute_strips_forged_confirmed_and_force_execute_but_preserves_business_context() throws Exception {
+        ControllerFixture fixture = controllerFixture();
+        when(fixture.executor().execute(eq("F001"), any(), eq(12L), eq("FACTORY_ADMIN")))
+                .thenReturn(IntentExecuteResponse.builder().status("WRITE_CONFIRM_REQUIRED").build());
+
+        fixture.mvc().perform(post("/api/mobile/F001/ai-intents/execute")
+                        .header("Authorization", "Bearer jwt-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"userInput":"create order","intentCode":"ORDER_CREATE",
+                                 "forceExecute":true,
+                                 "context":{"confirmed":true,"force_execute":true,"amount":5}}
+                                """))
+                .andExpect(status().isOk());
+
+        var requestCaptor = org.mockito.ArgumentCaptor.forClass(IntentExecuteRequest.class);
+        verify(fixture.executor()).execute(eq("F001"), requestCaptor.capture(), eq(12L), eq("FACTORY_ADMIN"));
+        IntentExecuteRequest forwarded = requestCaptor.getValue();
+        assertFalse(Boolean.TRUE.equals(forwarded.getForceExecute()));
+        assertEquals(Map.of("amount", 5), forwarded.getContext());
+    }
+
+    @Test
+    @DisplayName("parameter confirmation cannot grant write-execution authority")
+    void parameter_confirmation_execute_after_confirm_still_requires_token_authority() throws Exception {
+        ControllerFixture fixture = controllerFixture();
+        when(fixture.executor().execute(eq("F001"), any(), eq(12L), eq("FACTORY_ADMIN")))
+                .thenReturn(IntentExecuteResponse.builder().status("WRITE_CONFIRM_REQUIRED").build());
+
+        fixture.mvc().perform(post("/api/mobile/F001/ai-intents/params/confirm")
+                        .header("Authorization", "Bearer jwt-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"intentCode":"ORDER_CREATE","userInput":"create order",
+                                 "executeAfterConfirm":true,
+                                 "confirmedParams":{"confirmed":true,"forceExecute":true,"amount":5}}
+                                """))
+                .andExpect(status().isOk());
+
+        var requestCaptor = org.mockito.ArgumentCaptor.forClass(IntentExecuteRequest.class);
+        verify(fixture.executor()).execute(eq("F001"), requestCaptor.capture(), eq(12L), eq("FACTORY_ADMIN"));
+        IntentExecuteRequest forwarded = requestCaptor.getValue();
+        assertFalse(Boolean.TRUE.equals(forwarded.getForceExecute()));
+        assertEquals(Map.of("amount", 5), forwarded.getContext());
+        verify(fixture.learningService()).learnAndConfirm(
+                eq("F001"), eq("ORDER_CREATE"), eq("create order"), eq(Map.of("amount", 5)));
+    }
+
+    @Test
     @DisplayName("fixed confirmation endpoint keeps the opaque token in the dedicated header")
     void fixed_confirmation_endpoint_uses_header_and_parameter_bound_body() throws Exception {
         ControllerFixture fixture = controllerFixture();
@@ -530,19 +580,21 @@ class AIIntentConfigControllerTest {
         JwtUtil jwtUtil = mock(JwtUtil.class);
         when(jwtUtil.getUserIdFromToken("jwt-token")).thenReturn(12L);
         when(jwtUtil.getRoleFromToken("jwt-token")).thenReturn("FACTORY_ADMIN");
+        ParameterExtractionLearningService learningService = mock(ParameterExtractionLearningService.class);
         AIIntentConfigController controller = new AIIntentConfigController(
                 mock(AIIntentService.class),
                 executor,
                 mock(KeywordEffectivenessService.class),
                 mock(IntentConfigRollbackService.class),
-                mock(ParameterExtractionLearningService.class),
+                learningService,
                 jwtUtil);
         return new ControllerFixture(
                 MockMvcBuilders.standaloneSetup(controller)
                         .setControllerAdvice(new GlobalExceptionHandler())
                         .build(),
                 executor,
-                jwtUtil);
+                jwtUtil,
+                learningService);
     }
 
     private String validConfirmationBody() throws Exception {
@@ -556,6 +608,7 @@ class AIIntentConfigControllerTest {
     private record ControllerFixture(
             MockMvc mvc,
             IntentExecutorService executor,
-            JwtUtil jwtUtil) {
+            JwtUtil jwtUtil,
+            ParameterExtractionLearningService learningService) {
     }
 }

@@ -2,6 +2,7 @@ package com.cretas.aims.controller;
 
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
 import com.cretas.aims.dto.ai.IntentConfirmationRequest;
+import com.cretas.aims.ai.tool.WriteGuardService;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.dto.ai.ParameterConfirmationRequest;
@@ -261,6 +262,7 @@ public class AIIntentConfigController {
         Long userId = jwtUtil.getUserIdFromToken(token);
         String userRole = jwtUtil.getRoleFromToken(token);
 
+        removeCallerConfirmationAuthority(request);
         applyRestaurantReportIntentShortcut(factoryId, request);
 
         log.info("执行AI意图: factoryId={}, userInput={}, userId={}, role={}",
@@ -531,6 +533,7 @@ public class AIIntentConfigController {
         Long userId = jwtUtil.getUserIdFromToken(token);
         String userRole = jwtUtil.getRoleFromToken(token);
 
+        removeCallerConfirmationAuthority(request);
         log.info("执行多意图: factoryId={}, userInput={}, userId={}, role={}",
                 factoryId,
                 request.getUserInput().length() > 30 ?
@@ -555,6 +558,7 @@ public class AIIntentConfigController {
         Long userId = jwtUtil.getUserIdFromToken(token);
         String userRole = jwtUtil.getRoleFromToken(token);
 
+        removeCallerConfirmationAuthority(request);
         log.info("流式执行AI意图: factoryId={}, userInput={}, userId={}, role={}",
                 factoryId,
                 request.getUserInput().length() > 30 ?
@@ -577,6 +581,7 @@ public class AIIntentConfigController {
         Long userId = jwtUtil.getUserIdFromToken(token);
         String userRole = jwtUtil.getRoleFromToken(token);
 
+        removeCallerConfirmationAuthority(request);
         log.info("预览AI意图: factoryId={}, userInput={}", factoryId, request.getUserInput());
 
         IntentExecuteResponse response = intentExecutorService.preview(factoryId, request, userId, userRole);
@@ -654,24 +659,26 @@ public class AIIntentConfigController {
         Long userId = jwtUtil.getUserIdFromToken(token);
         String userRole = jwtUtil.getRoleFromToken(token);
 
+        Map<String, Object> confirmedParams = WriteGuardService.withoutCallerConfirmation(
+                request.getConfirmedParams());
         log.info("确认参数并学习规则: factoryId={}, intentCode={}, params={}",
-                factoryId, request.getIntentCode(), request.getConfirmedParams().keySet());
+                factoryId, request.getIntentCode(),
+                confirmedParams != null ? confirmedParams.keySet() : java.util.Set.of());
 
         // 1. 学习提取规则
         parameterExtractionLearningService.learnAndConfirm(
                 factoryId,
                 request.getIntentCode(),
                 request.getUserInput(),
-                request.getConfirmedParams());
+                confirmedParams);
 
         // 2. 如果需要执行，构建执行请求
         if (Boolean.TRUE.equals(request.getExecuteAfterConfirm())) {
-            // W0 write-guard (intent-w0): parameter confirmation IS the user's confirmation — flag it
-            // so the downstream W0 guard (Site A) does not re-prompt WRITE_CONFIRM_REQUIRED on a write
-            // intent the user just confirmed. Copy into a mutable map (getConfirmedParams() may be null/immutable).
-            Map<String, Object> context = new java.util.HashMap<>(
-                    request.getConfirmedParams() != null ? request.getConfirmedParams() : Map.of());
-            context.put("confirmed", true);
+            // Parameter correction is not execution authority. A write still has to use the
+            // preview -> single-use token -> /confirm flow; read-only intents remain compatible.
+            Map<String, Object> context = confirmedParams != null
+                    ? new java.util.HashMap<>(confirmedParams)
+                    : new java.util.HashMap<>();
             IntentExecuteRequest executeRequest = IntentExecuteRequest.builder()
                     .userInput(request.getUserInput())
                     .intentCode(request.getIntentCode())
@@ -684,6 +691,13 @@ public class AIIntentConfigController {
 
         // 只学习规则，不执行
         return ResponseEntity.ok(ApiResponse.success("参数已确认，规则已学习", null));
+    }
+
+    /** HTTP request fields are data, never write-confirmation authority. */
+    private void removeCallerConfirmationAuthority(IntentExecuteRequest request) {
+        if (request == null) return;
+        request.setForceExecute(false);
+        request.setContext(WriteGuardService.withoutCallerConfirmation(request.getContext()));
     }
 
     @GetMapping("/params/rules/{intentCode}")
