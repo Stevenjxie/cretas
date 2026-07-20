@@ -320,7 +320,7 @@ class RestaurantOpsGoldRouteTest {
         assertThat(orchestrator.matchRestaurantOpsIntent("在整体毛利率趋势图中添加70%计划线和60%预警线", "RESTAURANT"))
                 .contains("RESTAURANT_OPS_GROSS_MARGIN");
         assertThat(orchestrator.matchRestaurantOpsIntent("整体毛利率是多少", "RESTAURANT"))
-                .contains("RESTAURANT_OPS_SALES_SUMMARY");
+                .contains("RESTAURANT_OPS_GROSS_MARGIN");
         assertThat(orchestrator.matchRestaurantOpsIntent("上月净利率是多少", "RESTAURANT"))
                 .contains("INCOME_STATEMENT_QUERY");
         assertThat(orchestrator.matchRestaurantOpsIntent("整体净利率", "RESTAURANT"))

@@ -1393,7 +1393,7 @@ public class IntentExecutionOrchestrator {
 
         if (containsAny(q, "整体毛利率", "总毛利率", "综合毛利率")
                 && containsAny(q, "多少", "怎么样", "查询", "看", "分析", "整体", "总")) {
-            return Optional.of("RESTAURANT_OPS_SALES_SUMMARY");
+            return Optional.of("RESTAURANT_OPS_GROSS_MARGIN");
         }
 
         if (containsAny(q, "毛利", "利润率", "毛利率")

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import math
 import re
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -80,12 +81,6 @@ _OPS_PATTERNS: List[Tuple[str, List[List[str]]]] = [
         "RESTAURANT_OPS_GROSS_MARGIN",
         [["毛利", "毛利率", "净赚", "赚钱", "挣钱", "利润"],
          ["菜品", "菜系", "菜价", "哪道", "哪个", "排行", "排名", "top", "TOP", "最高", "最赚"]],
-    ),
-    # Point-in-time overall margin belongs to the business summary resolver,
-    # which returns a weighted margin together with cost coverage.
-    (
-        "RESTAURANT_OPS_SALES_SUMMARY",
-        [["毛利", "毛利率"], ["整体", "总体", "总", "多少", "是多少"]],
     ),
     # Recipe cost (食材成本 only — 毛利 moved to gross_margin)
     (
@@ -259,6 +254,14 @@ def match_restaurant_ops(query: str) -> Optional[str]:
     if not query:
         return None
     q = query.strip()
+    # Preserve an explicit overall-margin metric, but keep mixed
+    # revenue-plus-margin questions on the richer sales summary resolver.
+    if (
+        any(token in q for token in ("毛利", "毛利率"))
+        and any(token in q for token in ("整体", "总体", "总毛利", "多少", "是多少"))
+        and not any(token in q for token in ("营收", "营业额", "销售额", "客单价", "订单", "单量"))
+    ):
+        return "RESTAURANT_OPS_GROSS_MARGIN"
     for code, groups in _OPS_PATTERNS:
         if all(any(kw in q for kw in group) for group in groups):
             return code
@@ -332,6 +335,25 @@ def _compute_margin_dragger(
     return best
 
 
+_MAX_SANE_DISH_UNIT_COST = 99999.0
+_MAX_COST_TO_REALIZED_PRICE_RATIO = 10.0
+
+
+def _is_plausible_dish_unit_cost(
+    unit_cost: Optional[float], qty: float, revenue: float,
+) -> bool:
+    """Reject corrupted cost cards before they can poison a margin answer."""
+    if unit_cost is None or not math.isfinite(unit_cost):
+        return False
+    if unit_cost < 0 or unit_cost >= _MAX_SANE_DISH_UNIT_COST:
+        return False
+    if qty > 0 and revenue > 0:
+        realized_unit_revenue = revenue / qty
+        if unit_cost > realized_unit_revenue * _MAX_COST_TO_REALIZED_PRICE_RATIO:
+            return False
+    return True
+
+
 def _build_margin_entries(
     pos_rows: List[Any],
     cretas_map: Dict[str, str],
@@ -341,10 +363,19 @@ def _build_margin_entries(
     entries: List[Dict[str, Any]] = []
     for row in pos_rows:
         source_pk = cretas_map.get(row["normalized_name"])
-        has_cost = source_pk is not None and source_pk in cost_map and cost_map[source_pk] is not None
-        unit_cost = float(cost_map[source_pk]) if has_cost else None
         qty = float(row["total_qty"])
         revenue = float(row["total_revenue"])
+        cost_present = (
+            source_pk is not None
+            and source_pk in cost_map
+            and cost_map[source_pk] is not None
+        )
+        candidate_cost = float(cost_map[source_pk]) if cost_present else None
+        invalid_cost = cost_present and not _is_plausible_dish_unit_cost(
+            candidate_cost, qty, revenue,
+        )
+        has_cost = cost_present and not invalid_cost
+        unit_cost = candidate_cost if has_cost else None
         total_cost = unit_cost * qty if unit_cost is not None else None
         gross_profit = revenue - total_cost if total_cost is not None else None
         margin_rate = gross_profit / revenue if gross_profit is not None and revenue > 0 else None
@@ -359,6 +390,7 @@ def _build_margin_entries(
             "gross_profit": gross_profit,
             "margin_rate": margin_rate,
             "has_cost": has_cost,
+            "invalid_cost": invalid_cost,
         })
     return entries
 
@@ -384,12 +416,19 @@ def _aggregate_store_margin_entries(
     per_store: Dict[Any, Dict[str, Any]] = {}
     for row in store_dish_rows:
         source_pk = name_to_pk.get(row["normalized_name"])
-        has_cost = (
+        cost_present = (
             source_pk is not None
             and source_pk in cost_by_pk
             and cost_by_pk[source_pk] is not None
         )
-        dish_cost = float(cost_by_pk[source_pk]) if has_cost else None
+        candidate_cost = float(cost_by_pk[source_pk]) if cost_present else None
+        revenue = float(row["revenue"] or 0.0)
+        qty = float(row["qty"] or 0.0)
+        invalid_cost = cost_present and not _is_plausible_dish_unit_cost(
+            candidate_cost, qty, revenue,
+        )
+        has_cost = cost_present and not invalid_cost
+        dish_cost = candidate_cost if has_cost else None
         store = per_store.setdefault(row["store_id"], {
             "store_id": row["store_id"],
             "name": row["store_name"],
@@ -399,11 +438,12 @@ def _aggregate_store_margin_entries(
             "bills": 0,
             "dishes": 0,
             "dishes_with_cost": 0,
+            "invalid_cost_dishes": 0,
         })
-        revenue = float(row["revenue"] or 0.0)
-        qty = float(row["qty"] or 0.0)
         store["revenue"] += revenue
         store["dishes"] += 1
+        if invalid_cost:
+            store["invalid_cost_dishes"] += 1
         if has_cost and dish_cost is not None:
             store["revenue_with_cost"] += revenue
             store["cost"] += dish_cost * qty
@@ -806,11 +846,14 @@ async def resolve_recipe_cost(
             """
             SELECT c.product_source_pk, c.food_cost, c.ingredient_count, c.has_price_data
               FROM agg_restaurant_product_cost c
-             WHERE c.factory_id = $1 AND c.food_cost > 0
+             WHERE c.factory_id = $1
+               AND c.food_cost > 0
+               AND c.food_cost < $3
+               AND c.has_price_data = TRUE
              ORDER BY c.food_cost DESC NULLS LAST
              LIMIT $2
             """,
-            factory_id, top_n,
+            factory_id, top_n, _MAX_SANE_DISH_UNIT_COST,
         )
     source_pks = [r["product_source_pk"] for r in rows]
 
@@ -1127,7 +1170,9 @@ async def resolve_gross_margin(
                 """
                 SELECT product_source_pk, food_cost::float AS food_cost
                   FROM agg_restaurant_product_cost
-                 WHERE factory_id = $1 AND product_source_pk = ANY($2::text[])
+                 WHERE factory_id = $1
+                   AND product_source_pk = ANY($2::text[])
+                   AND has_price_data = TRUE
                 """,
                 factory_id, list(cretas_map.values()),
             )
@@ -1170,11 +1215,19 @@ async def resolve_gross_margin(
         f"毛利 ¥{e['gross_profit']:.2f} ({e['margin_rate'] * 100:.1f}%)"
         for i, e in enumerate(top_slice)
     ]) or "  - 暂无成本完整、可计算毛利的菜品。"
-    missing_cost_count = len([e for e in enriched if not e["has_cost"]])
+    invalid_cost_count = len([e for e in enriched if e["invalid_cost"]])
+    missing_cost_count = len([
+        e for e in enriched if not e["has_cost"] and not e["invalid_cost"]
+    ])
+    exclusion_notes: List[str] = []
+    if missing_cost_count > 0:
+        exclusion_notes.append(f"{missing_cost_count} 个菜品缺少完整成本")
+    if invalid_cost_count > 0:
+        exclusion_notes.append(f"{invalid_cost_count} 个菜品成本值明显异常")
     missing_note = (
-        f"\n\n数据说明：{missing_cost_count} 个菜品缺少完整成本，已从毛利、毛利率、排名和图表中排除；"
-        "补齐配方和最近进价后可重新计算。"
-        if missing_cost_count > 0 else ""
+        f"\n\n数据说明：{'；'.join(exclusion_notes)}，已从毛利、毛利率、排名和图表中排除；"
+        "请补齐配方，或复核食材单位和最近进价后重新计算。"
+        if exclusion_notes else ""
     )
 
     charts: List[Dict[str, Any]] = []
@@ -1284,6 +1337,7 @@ async def resolve_gross_margin(
             "window_start": _date_text(window_start) if window_start else None,
             "window_end": _date_text(window_end) if window_end else None,
             "missing_cost_count": missing_cost_count,
+            "invalid_cost_count": invalid_cost_count,
             "total_dishes": len(enriched),
             "cost_covered_revenue": total_rev_with_cost,
             "cost_coverage_ratio": coverage_ratio,
@@ -1471,7 +1525,9 @@ async def resolve_store_margin(
                 """
                 SELECT product_source_pk, food_cost::float AS c
                   FROM agg_restaurant_product_cost
-                 WHERE factory_id = $1 AND product_source_pk = ANY($2::text[])
+                 WHERE factory_id = $1
+                   AND product_source_pk = ANY($2::text[])
+                   AND has_price_data = TRUE
                 """,
                 factory_id, list(name_to_pk.values()),
             )
@@ -1496,6 +1552,7 @@ async def resolve_store_margin(
     )
     avg_rate = total_profit / total_rev_with_cost if total_profit is not None else None
     coverage_ratio = total_rev_with_cost / total_rev if total_rev > 0 else 0.0
+    invalid_cost_count = sum(s["invalid_cost_dishes"] for s in store_list)
 
     top_text = "\n".join([
         f"  {i+1}. {s['name']}: 已覆盖营收 ¥{s['revenue_with_cost']:,.2f} / "
@@ -1525,11 +1582,15 @@ async def resolve_store_margin(
         if total_profit is not None and avg_rate is not None
         else "成本完整的销售数据不足，毛利和毛利率暂不可计算"
     )
+    invalid_cost_note = (
+        f"另有 {invalid_cost_count} 个菜品成本值明显异常，已排除；请复核食材单位和最近进价。"
+        if invalid_cost_count > 0 else ""
+    )
     answer = (
         f"门店毛利对比（{window_label}，{len(store_list)} 家店）\n"
         f"- 全部营收 ¥{total_rev:,.2f}；可计算毛利的营收 ¥{total_rev_with_cost:,.2f}，"
         f"覆盖率 {coverage_ratio * 100:.1f}%\n"
-        f"- {margin_summary}。缺成本菜品已排除，不会按零成本计算。\n\n"
+        f"- {margin_summary}。缺成本菜品已排除，不会按零成本计算。{invalid_cost_note}\n\n"
         f"Top {len(top_slice)} 毛利门店:\n{top_text}{weak_store_text}\n\n"
         f"建议动作:\n"
         f"  1. 把第一名门店的高毛利菜品组合、套餐结构和时段客流拆出来，作为其他门店对标模板。\n"
@@ -1557,13 +1618,15 @@ async def resolve_store_margin(
             "totalRevenue": total_rev, "totalRevenueWithCost": total_rev_with_cost,
             "totalProfit": total_profit, "avgRate": avg_rate,
             "costCoverageRatio": coverage_ratio,
+            "invalidCostCount": invalid_cost_count,
             "stores": [
                 {"storeId": s["store_id"], "name": s["name"],
                  "revenue": s["revenue"],
                  "revenueWithCost": s["revenue_with_cost"],
                  "grossProfit": s["gross_profit"],
                  "marginRate": s["margin_rate"], "bills": s["bills"],
-                 "dishesWithCost": s["dishes_with_cost"], "totalDishes": s["dishes"]}
+                 "dishesWithCost": s["dishes_with_cost"], "totalDishes": s["dishes"],
+                 "invalidCostDishes": s["invalid_cost_dishes"]}
                 for s in store_list
             ],
         },
