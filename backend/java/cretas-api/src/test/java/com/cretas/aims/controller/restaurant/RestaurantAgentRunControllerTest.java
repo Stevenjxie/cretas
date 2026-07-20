@@ -2,7 +2,10 @@ package com.cretas.aims.controller.restaurant;
 
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunCancelResponse;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunReplayResponse;
+import com.cretas.aims.dto.restaurantagent.RestaurantAgentActionPreviewResponse;
+import com.cretas.aims.dto.restaurantagent.RestaurantAgentActionWorkflowResponse;
 import com.cretas.aims.filter.CorrelationIdFilter;
+import com.cretas.aims.service.restaurant.RestaurantAgentActionWorkflowService;
 import com.cretas.aims.service.restaurant.RestaurantAgentRunService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
@@ -17,6 +20,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
 import java.util.UUID;
+import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -38,12 +42,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class RestaurantAgentRunControllerTest {
 
     private RestaurantAgentRunService service;
+    private RestaurantAgentActionWorkflowService actionWorkflowService;
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
         service = mock(RestaurantAgentRunService.class);
-        mockMvc = MockMvcBuilders.standaloneSetup(new RestaurantAgentRunController(service)).build();
+        actionWorkflowService = mock(RestaurantAgentActionWorkflowService.class);
+        mockMvc = MockMvcBuilders.standaloneSetup(
+                new RestaurantAgentRunController(service, actionWorkflowService)).build();
     }
 
     @AfterEach
@@ -222,6 +229,72 @@ class RestaurantAgentRunControllerTest {
         verify(service).cancel(eq("R001"), eq("42"), eq("restaurant_owner"),
                 correlation.capture(), eq(runId));
         assertThat(correlation.getValue()).matches("[0-9a-f-]{36}");
+    }
+
+    @Test
+    void previewUsesTrustedContextAndReturnsNoStoreDirectContract() throws Exception {
+        UUID runId = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        RestaurantAgentActionPreviewResponse response = new RestaurantAgentActionPreviewResponse(
+                "1.0", runId.toString(), "COMPLETE_DISH_COST_DATA_PROPOSAL",
+                "REVIEW_DISH_COST_DATA", "READ_ONLY_PROPOSAL",
+                List.of("DISH_MARGIN_UNAVAILABLE"),
+                List.of(new RestaurantAgentActionPreviewResponse.EvidenceReference(
+                        "evidence-1", "fact-1", "GROSS_MARGIN_DECLINE_OBSERVED")),
+                "restaurant.dish-cost-data-review.v1",
+                "00000000-0000-0000-0000-000000000099",
+                LocalDateTime.of(2026, 7, 20, 12, 0));
+        when(actionWorkflowService.preview(eq("R001"), eq("42"), eq("restaurant_owner"),
+                anyString(), eq(runId), eq("COMPLETE_DISH_COST_DATA_PROPOSAL")))
+                .thenReturn(response);
+
+        mockMvc.perform(post("/api/mobile/R001/restaurant-agent/runs/{runId}/action-proposals/{proposalCode}/preview",
+                        runId, "COMPLETE_DISH_COST_DATA_PROPOSAL")
+                        .requestAttr("factoryId", "R001")
+                        .requestAttr("userId", 42L)
+                        .requestAttr("role", "RESTAURANT_OWNER"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.proposalCode").value("COMPLETE_DISH_COST_DATA_PROPOSAL"))
+                .andExpect(jsonPath("$.executionMode").value("READ_ONLY_PROPOSAL"))
+                .andExpect(jsonPath("$.evidenceReferences[0].factId").value("fact-1"));
+    }
+
+    @Test
+    void confirmAcceptsOnlyPreviewTokenAndDoesNotExposeNavigationBeforeApproval() throws Exception {
+        UUID runId = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        String token = "00000000-0000-0000-0000-000000000099";
+        RestaurantAgentActionWorkflowResponse response = new RestaurantAgentActionWorkflowResponse(
+                "1.0", runId.toString(), "COMPLETE_DISH_COST_DATA_PROPOSAL",
+                "restaurant.dish-cost-data-review.v1", "workflow-instance-1", "RUNNING",
+                false, null);
+        when(actionWorkflowService.confirm(eq("R001"), eq("42"), eq("restaurant_owner"),
+                anyString(), eq(runId), eq("COMPLETE_DISH_COST_DATA_PROPOSAL"), eq(token)))
+                .thenReturn(response);
+
+        mockMvc.perform(post("/api/mobile/R001/restaurant-agent/runs/{runId}/action-proposals/{proposalCode}/confirm",
+                        runId, "COMPLETE_DISH_COST_DATA_PROPOSAL")
+                        .requestAttr("factoryId", "R001")
+                        .requestAttr("userId", 42L)
+                        .requestAttr("role", "RESTAURANT_OWNER")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"previewToken\":\"" + token + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.workflowStatus").value("RUNNING"))
+                .andExpect(jsonPath("$.navigationTarget").doesNotExist());
+
+        mockMvc.perform(post("/api/mobile/R001/restaurant-agent/runs/{runId}/action-proposals/{proposalCode}/confirm",
+                        runId, "COMPLETE_DISH_COST_DATA_PROPOSAL")
+                        .requestAttr("factoryId", "R001")
+                        .requestAttr("userId", 42L)
+                        .requestAttr("role", "RESTAURANT_OWNER")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"previewToken\":\"" + token
+                                + "\",\"actionCode\":\"WRITE_RECIPE\"}"))
+                .andExpect(status().isBadRequest());
+
+        verify(actionWorkflowService).confirm(eq("R001"), eq("42"), eq("restaurant_owner"),
+                anyString(), eq(runId), eq("COMPLETE_DISH_COST_DATA_PROPOSAL"), eq(token));
     }
 
     private String validBody() throws Exception {

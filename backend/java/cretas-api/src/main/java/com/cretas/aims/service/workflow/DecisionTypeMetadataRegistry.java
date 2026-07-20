@@ -409,6 +409,17 @@ public class DecisionTypeMetadataRegistry {
                 .wired(false)
                 .build());
 
+        register(DecisionTypeMetadata.builder()
+                .decisionType(DecisionType.RESTAURANT_AGENT_ACTION_REVIEW)
+                .chineseName("餐饮智能建议复核")
+                .description("仅复核菜品成本资料补全建议；通过后只允许导航到菜谱资料页")
+                .category(Category.OTHER)
+                .defaultApproverRoles(List.of(
+                        "restaurant_owner", "restaurant_manager", "finance_manager"))
+                .moduleCode("restaurant.dish-cost-data-review.v1")
+                .wired(true)
+                .build());
+
         // ============================================
         // 其他 (1)
         // ============================================

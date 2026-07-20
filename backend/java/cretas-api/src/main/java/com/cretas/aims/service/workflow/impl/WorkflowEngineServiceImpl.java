@@ -333,8 +333,8 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
     public Optional<ApprovalWorkflowInstance> getCurrentInstance(String factoryId,
                                                                  String moduleCode,
                                                                  String businessEntityId) {
-        return instanceRepository.findByFactoryIdAndModuleCodeAndBusinessEntityId(
-                factoryId, moduleCode, businessEntityId);
+        return instanceRepository.findByFactoryIdAndModuleCodeAndBusinessEntityIdAndStatus(
+                factoryId, moduleCode, businessEntityId, InstanceStatus.RUNNING);
     }
 
     @Override

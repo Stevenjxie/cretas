@@ -30,8 +30,11 @@ public interface ApprovalWorkflowInstanceRepository
      * <p>同一 (factory, module, business entity) 理论上至多 1 个 active 实例 (业务约束).
      * 历史归档实例也命中 — caller 应进一步 filter by status 如需排除终态.
      */
-    Optional<ApprovalWorkflowInstance> findByFactoryIdAndModuleCodeAndBusinessEntityId(
-            String factoryId, String moduleCode, String businessEntityId);
+    Optional<ApprovalWorkflowInstance> findByFactoryIdAndModuleCodeAndBusinessEntityIdAndStatus(
+            String factoryId,
+            String moduleCode,
+            String businessEntityId,
+            InstanceStatus status);
 
     /**
      * 工厂维度按 status 查 — 用于 factory 级别统计或定向恢复.
