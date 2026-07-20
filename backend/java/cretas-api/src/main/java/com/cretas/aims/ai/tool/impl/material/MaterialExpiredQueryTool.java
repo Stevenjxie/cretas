@@ -39,6 +39,50 @@ public class MaterialExpiredQueryTool extends AbstractBusinessTool {
     }
 
     @Override
+    public ActionType getActionType() {
+        return ActionType.READ;
+    }
+
+    @Override
+    public RiskLevel getRiskLevel() {
+        return RiskLevel.LOW;
+    }
+
+    @Override
+    public boolean supportsPreview() {
+        return false;
+    }
+
+    @Override
+    public boolean requiresPermission() {
+        return true;
+    }
+
+    @Override
+    public boolean hasPermission(String userRole) {
+        return false;
+    }
+
+    @Override
+    public Set<String> getRequiredPermissions() {
+        return Set.of(
+                "warehouse:read",
+                "warehouse:read_write",
+                "inventory:read",
+                "inventory:read_write");
+    }
+
+    @Override
+    public String getVersion() {
+        return "1.0.0";
+    }
+
+    @Override
+    public Set<String> getDomainTags() {
+        return Set.of("material");
+    }
+
+    @Override
     public Map<String, Object> getParametersSchema() {
         Map<String, Object> schema = new HashMap<>();
         schema.put("type", "object");

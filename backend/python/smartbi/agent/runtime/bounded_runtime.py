@@ -84,10 +84,13 @@ class BoundedRestaurantRuntime:
         *,
         run_id: str | None = None,
         cancelled: Callable[[], bool] | None = None,
+        already_created: bool = False,
     ) -> RuntimeResult:
         if not isinstance(context, TrustedExecutionContext):
             raise TypeError("trusted execution context is required")
         plan = gross_margin_decline_plan(request)
+        if already_created and run_id is None:
+            raise ValueError("a claimed run requires an explicit run_id")
         run_id = self._validated_run_id(run_id or self._id_factory())
         run_context = replace(context, run_id=run_id, step_id=None)
         counters = RuntimeCounters()
@@ -95,12 +98,24 @@ class BoundedRestaurantRuntime:
         started = self._monotonic()
         is_cancelled = cancelled or (lambda: False)
 
-        # If create_run itself fails, no durable run is claimed and the store
-        # error propagates. Every operation after creation is covered by the
-        # best-effort terminal failure path below.
-        await self._store.create_run(
-            run_id, run_context, plan.route_code, request.safe_dict()
-        )
+        # The HTTP start boundary may have atomically claimed the durable run
+        # before scheduling this worker. Direct callers retain the historical
+        # create-on-execute behavior by default.
+        if already_created:
+            claimed = await self._store.load_run(run_id, run_context)
+            if (
+                claimed.state is not RunState.RUNNING
+                or claimed.route_code is not plan.route_code
+                or claimed.safe_request != request.safe_dict()
+            ):
+                raise RunStoreError("claimed run does not match runtime request")
+        else:
+            # If create_run itself fails, no durable run is claimed and the
+            # error propagates. Every operation after creation is covered by
+            # the best-effort terminal failure path below.
+            await self._store.create_run(
+                run_id, run_context, plan.route_code, request.safe_dict()
+            )
         try:
             await self._event(
                 run_id,

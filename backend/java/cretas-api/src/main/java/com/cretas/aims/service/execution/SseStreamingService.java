@@ -1,10 +1,13 @@
 package com.cretas.aims.service.execution;
 
 import com.cretas.aims.ai.client.DashScopeClient;
+import com.cretas.aims.ai.capability.FactoryCapabilityPack;
+import com.cretas.aims.ai.capability.FactoryCapabilityPackRoutingPolicy;
 import com.cretas.aims.ai.dto.ChatCompletionRequest;
 import com.cretas.aims.ai.dto.ChatMessage;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.ai.tool.WriteGuardService;
 import com.cretas.aims.config.DashScopeConfig;
 import com.cretas.aims.config.IntentKnowledgeBase;
 import com.cretas.aims.config.IntentKnowledgeBase.QuestionType;
@@ -31,6 +34,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import jakarta.annotation.PreDestroy;
 import java.io.IOException;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -71,6 +75,17 @@ public class SseStreamingService {
     // Sprint 13 #305 业态门控: shared gate so the SSE path gates identically to /execute.
     @Autowired
     private BusinessTypeGate businessTypeGate;
+
+    /** Default-off boundary shared with the non-streaming execute path. */
+    @Autowired
+    private FactoryCapabilityPackRoutingPolicy factoryCapabilityPackRoutingPolicy;
+
+    @Autowired
+    private WriteGuardService writeGuardService;
+
+    @Autowired(required = false)
+    private com.cretas.aims.service.restaurant.RestaurantGrossMarginChatRouteSelector
+            restaurantGrossMarginChatRouteSelector;
 
     @Autowired
     public SseStreamingService(@Lazy AIIntentService aiIntentService,
@@ -144,8 +159,82 @@ public class SseStreamingService {
 
             String userInput = request.getUserInput();
 
+            FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute =
+                    evaluateFactoryPackRoute(factoryId, request, userRole);
+            if (factoryPackRoute.shouldBlock()) {
+                streamTerminalResponse(
+                        emitter,
+                        buildFactoryPackNoMatch(factoryPackRoute, factoryPackRoute.reason()),
+                        startTime);
+                return;
+            }
+            boolean factoryPackConstrained = factoryPackRoute.isConstrained();
+
+            // The stream historically ignored explicit intent codes. A constrained Factory Pack
+            // must converge explicit and recognized intents before any Restaurant/general/skill
+            // route can run, without adding an LLM call.
+            if (factoryPackConstrained
+                    && request.getIntentCode() != null
+                    && !request.getIntentCode().isBlank()) {
+                Optional<AIIntentConfig> explicitIntent =
+                        aiIntentService.getIntentByCode(factoryId, request.getIntentCode());
+                if (explicitIntent.isEmpty()) {
+                    streamTerminalResponse(
+                            emitter,
+                            buildFactoryPackNoMatch(factoryPackRoute, "explicit-intent-not-found"),
+                            startTime);
+                    return;
+                }
+                AIIntentConfig intent = explicitIntent.get();
+                IntentMatchResult explicitMatch = IntentMatchResult.builder()
+                        .bestMatch(intent)
+                        .confidence(1.0d)
+                        .matchMethod(IntentMatchResult.MatchMethod.EXACT)
+                        .requiresConfirmation(false)
+                        .questionType(QuestionType.OPERATIONAL_COMMAND)
+                        .build();
+                sendSseEvent(emitter, "intent_recognized", Map.of(
+                        "intentCode", intent.getIntentCode(),
+                        "intentName", intent.getIntentName(),
+                        "intentCategory", intent.getIntentCategory(),
+                        "confidence", 1.0d,
+                        "matchMethod", "EXPLICIT"));
+                executeAndStreamResult(
+                        emitter, factoryId, request, intent, userId, userRole, startTime,
+                        explicitMatch, factoryPackRoute);
+                return;
+            }
+
+            // Keep the stream front door aligned with /execute. This returns a bounded launch
+            // instruction only; it never proxies the restaurant Runtime's own SSE stream.
+            if (!factoryPackConstrained
+                    && !Boolean.TRUE.equals(request.getPreviewOnly())
+                    && (request.getIntentCode() == null || request.getIntentCode().isBlank())) {
+                Optional<IntentExecuteResponse> restaurantAgentRoute =
+                        restaurantGrossMarginChatRouteSelector == null
+                                ? Optional.empty()
+                                : restaurantGrossMarginChatRouteSelector.select(
+                                        factoryId, userInput, userRole);
+                if (restaurantAgentRoute.isPresent()) {
+                    IntentExecuteResponse response = restaurantAgentRoute.get();
+                    sendSseEvent(emitter, "intent_recognized", Map.of(
+                            "intentCode", response.getIntentCode(),
+                            "intentName", response.getIntentName(),
+                            "intentCategory", response.getIntentCategory(),
+                            "confidence", response.getConfidence(),
+                            "matchMethod", response.getMatchMethod()));
+                    sendSseEvent(emitter, "result", response);
+                    sendSseEvent(emitter, "complete", Map.of(
+                            "status", response.getStatus(),
+                            "cacheHit", false,
+                            "totalLatencyMs", System.currentTimeMillis() - startTime));
+                    emitter.complete();
+                    return;
+                }
+            }
+
             // 1.5. 早期问题类型检测
-            if (userInput != null && !userInput.isEmpty()) {
+            if (!factoryPackConstrained && userInput != null && !userInput.isEmpty()) {
                 QuestionType earlyQuestionType = knowledgeBase.detectQuestionType(userInput);
                 if (earlyQuestionType == QuestionType.GENERAL_QUESTION ||
                     earlyQuestionType == QuestionType.CONVERSATIONAL) {
@@ -165,9 +254,11 @@ public class SseStreamingService {
             }
 
             // 2. 查询语义缓存
-            SemanticCacheHit cacheHit = semanticCacheService.queryCache(factoryId, userInput);
+            SemanticCacheHit cacheHit = factoryPackConstrained
+                    ? SemanticCacheHit.miss(0L)
+                    : semanticCacheService.queryCache(factoryId, userInput);
 
-            if (cacheHit.isHit()) {
+            if (!factoryPackConstrained && cacheHit.isHit()) {
                 sendSseEvent(emitter, "cache_hit", Map.of(
                         "hitType", cacheHit.getHitType(),
                         "similarity", cacheHit.getSimilarity() != null ? cacheHit.getSimilarity() : 1.0,
@@ -197,7 +288,7 @@ public class SseStreamingService {
                             "matchMethod", "CACHE"
                     ));
                     executeAndStreamResult(emitter, factoryId, request, cachedMatch.getBestMatch(),
-                            userId, userRole, startTime, cachedMatch);
+                            userId, userRole, startTime, cachedMatch, factoryPackRoute);
                     return;
                 }
             }
@@ -231,14 +322,23 @@ public class SseStreamingService {
 
             // 5. 处理识别结果
             if (!matchResult.hasMatch()) {
-                IntentExecuteResponse noMatchResponse = buildNoMatchResponseForStream(matchResult, factoryId);
-                sendSseEvent(emitter, "result", noMatchResponse);
-                sendSseEvent(emitter, "complete", Map.of(
-                        "status", noMatchCompleteStatus(matchResult),
-                        "cacheHit", false,
-                        "totalLatencyMs", System.currentTimeMillis() - startTime
-                ));
-                emitter.complete();
+                if (factoryPackConstrained) {
+                    String reason = matchResult.getQuestionType() == QuestionType.GENERAL_QUESTION
+                            || matchResult.getQuestionType() == QuestionType.CONVERSATIONAL
+                            ? "general-analysis-not-allowed"
+                            : "intent-not-allowed";
+                    streamTerminalResponse(
+                            emitter, buildFactoryPackNoMatch(factoryPackRoute, reason), startTime);
+                } else {
+                    IntentExecuteResponse noMatchResponse = buildNoMatchResponseForStream(matchResult, factoryId);
+                    sendSseEvent(emitter, "result", noMatchResponse);
+                    sendSseEvent(emitter, "complete", Map.of(
+                            "status", noMatchCompleteStatus(matchResult),
+                            "cacheHit", false,
+                            "totalLatencyMs", System.currentTimeMillis() - startTime
+                    ));
+                    emitter.complete();
+                }
                 return;
             }
 
@@ -250,6 +350,16 @@ public class SseStreamingService {
                     "confidence", matchResult.getConfidence(),
                     "matchMethod", matchResult.getMatchMethod() != null ? matchResult.getMatchMethod().name() : "UNKNOWN"
             ));
+
+            // Pack-constrained intents authorize and terminate here. This deliberately precedes
+            // generic confirmation, legacy Skill and slot-filling branches so none can bypass the
+            // Pack allowlist or turn a declared workflow mutation into execution.
+            if (factoryPackConstrained) {
+                executeAndStreamResult(
+                        emitter, factoryId, request, intent, userId, userRole, startTime,
+                        matchResult, factoryPackRoute);
+                return;
+            }
 
             // 6. 需要确认的情况
             if (Boolean.TRUE.equals(matchResult.getRequiresConfirmation())
@@ -331,7 +441,9 @@ public class SseStreamingService {
             }
 
             // 7c. 执行意图 (Tool)
-            executeAndStreamResult(emitter, factoryId, request, intent, userId, userRole, startTime, matchResult);
+            executeAndStreamResult(
+                    emitter, factoryId, request, intent, userId, userRole, startTime,
+                    matchResult, factoryPackRoute);
 
         } catch (Exception e) {
             log.error("SSE 执行失败: factoryId={}, error={}", factoryId, e.getMessage(), e);
@@ -352,7 +464,9 @@ public class SseStreamingService {
     private void executeAndStreamResult(SseEmitter emitter, String factoryId,
                                          IntentExecuteRequest request, AIIntentConfig intent,
                                          Long userId, String userRole, long startTime,
-                                         IntentMatchResult matchResult) throws IOException {
+                                         IntentMatchResult matchResult,
+                                         FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute)
+            throws IOException {
         // 权限检查
         if (!aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
             IntentExecuteResponse noPermissionResponse = IntentExecuteResponse.builder()
@@ -369,6 +483,13 @@ public class SseStreamingService {
                     "totalLatencyMs", System.currentTimeMillis() - startTime
             ));
             emitter.complete();
+            return;
+        }
+
+        IntentExecuteResponse factoryPackResponse =
+                applyFactoryPackDecision(factoryPackRoute, intent);
+        if (factoryPackResponse != null) {
+            streamTerminalResponse(emitter, factoryPackResponse, startTime);
             return;
         }
 
@@ -394,16 +515,18 @@ public class SseStreamingService {
 
         // 业态门控 (Sprint 13 #305): domain-exclusive intent on a mismatched factory.type →
         // honest empty-state + domain next-action, instead of executing a tool with no data.
-        Optional<IntentExecuteResponse> gate = businessTypeGate.check(factoryId, intent);
-        if (gate.isPresent()) {
-            IntentExecuteResponse gateResponse = gate.get();
-            sendSseEvent(emitter, "result", gateResponse);
-            sendSseEvent(emitter, "complete", Map.of(
-                    "status", gateResponse.getStatus() != null ? gateResponse.getStatus() : "NOT_APPLICABLE",
-                    "totalLatencyMs", System.currentTimeMillis() - startTime
-            ));
-            emitter.complete();
-            return;
+        if (!factoryPackRoute.isConstrained()) {
+            Optional<IntentExecuteResponse> gate = businessTypeGate.check(factoryId, intent);
+            if (gate.isPresent()) {
+                IntentExecuteResponse gateResponse = gate.get();
+                sendSseEvent(emitter, "result", gateResponse);
+                sendSseEvent(emitter, "complete", Map.of(
+                        "status", gateResponse.getStatus() != null ? gateResponse.getStatus() : "NOT_APPLICABLE",
+                        "totalLatencyMs", System.currentTimeMillis() - startTime
+                ));
+                emitter.complete();
+                return;
+            }
         }
 
         // 发送执行中事件
@@ -591,6 +714,119 @@ public class SseStreamingService {
     }
 
     // ==================== 工具方法 ====================
+
+    private FactoryCapabilityPackRoutingPolicy.Route evaluateFactoryPackRoute(
+            String factoryId, IntentExecuteRequest request, String userRole) {
+        if (factoryCapabilityPackRoutingPolicy == null) {
+            return new FactoryCapabilityPackRoutingPolicy.Route(
+                    FactoryCapabilityPackRoutingPolicy.RouteStatus.DISABLED,
+                    null,
+                    null,
+                    null,
+                    "feature-disabled");
+        }
+        return factoryCapabilityPackRoutingPolicy.evaluate(
+                factoryId, userRole, request != null ? request.getUserInput() : null);
+    }
+
+    private IntentExecuteResponse applyFactoryPackDecision(
+            FactoryCapabilityPackRoutingPolicy.Route route, AIIntentConfig intent) {
+        if (route == null || !route.isConstrained()) {
+            return null;
+        }
+        boolean writeIntent = writeGuardService.isWriteIntent(intent);
+        FactoryCapabilityPackRoutingPolicy.ExecutionDecision decision =
+                factoryCapabilityPackRoutingPolicy.authorize(
+                        route, intent.getIntentCode(), intent.getToolName(), writeIntent);
+        return switch (decision.status()) {
+            case ALLOW_READ, NOT_APPLICABLE -> null;
+            case GUIDANCE -> buildFactoryPackWorkflowGuidance(
+                    route, intent, decision.workflowReference());
+            case NO_MATCH -> buildFactoryPackNoMatch(route, decision.reason());
+        };
+    }
+
+    private IntentExecuteResponse buildFactoryPackNoMatch(
+            FactoryCapabilityPackRoutingPolicy.Route route, String reason) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("routeType", "FACTORY_CAPABILITY_PACK");
+        metadata.put("policyResult", "NO_MATCH");
+        metadata.put("reason", reason == null ? "not-allowed" : reason);
+        if (route != null && route.pack() != null) {
+            metadata.put("packId", route.pack().packId());
+            metadata.put("packVersion", route.pack().version());
+        }
+        String message = "该请求不在当前工厂岗位能力包的受控范围内。"
+                + "请改为询问本岗位已配置的查询、表单或固定导航事项。";
+        return IntentExecuteResponse.builder()
+                .intentRecognized(false)
+                .status("FACTORY_PACK_NO_MATCH")
+                .message(message)
+                .formattedText(message)
+                .metadata(Map.copyOf(metadata))
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
+
+    private IntentExecuteResponse buildFactoryPackWorkflowGuidance(
+            FactoryCapabilityPackRoutingPolicy.Route route,
+            AIIntentConfig intent,
+            FactoryCapabilityPack.WorkflowReference reference) {
+        boolean mutation = reference.mutation();
+        String message = mutation
+                ? "该请求涉及业务写入，AI 助手不会代为执行。请通过受控入口「"
+                        + reference.referenceId() + "」核对并确认。"
+                : "请通过能力包声明的固定入口「" + reference.referenceId() + "」继续。";
+
+        Map<String, Object> parameters = new LinkedHashMap<>();
+        parameters.put("workflowReference", reference.referenceId());
+        parameters.put("workflowType", reference.type().name());
+        parameters.put("requiresUserConfirmation", mutation);
+        parameters.put("approvalRequired", reference.approvalRequired());
+
+        IntentExecuteResponse.SuggestedAction action =
+                IntentExecuteResponse.SuggestedAction.builder()
+                        .actionCode("OPEN_FACTORY_WORKFLOW")
+                        .actionName(mutation ? "打开确认入口" : "打开固定入口")
+                        .description(message)
+                        .parameters(Map.copyOf(parameters))
+                        .build();
+
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("routeType", "FACTORY_CAPABILITY_PACK");
+        metadata.put("policyResult", "WORKFLOW_GUIDANCE");
+        metadata.put("packId", route.pack().packId());
+        metadata.put("packVersion", route.pack().version());
+        metadata.put("workflowReference", reference.referenceId());
+        metadata.put("workflowType", reference.type().name());
+        metadata.put("mutation", mutation);
+        metadata.put("approvalRequired", reference.approvalRequired());
+
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode(intent.getIntentCode())
+                .intentName(intent.getIntentName())
+                .intentCategory(intent.getIntentCategory())
+                .sensitivityLevel(intent.getSensitivityLevel())
+                .status("FACTORY_PACK_WORKFLOW_GUIDANCE")
+                .message(message)
+                .formattedText(message)
+                .requiresApproval(reference.approvalRequired())
+                .suggestedActions(List.of(action))
+                .metadata(Map.copyOf(metadata))
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
+
+    private void streamTerminalResponse(
+            SseEmitter emitter, IntentExecuteResponse response, long startTime) throws IOException {
+        sendSseEvent(emitter, "result", response);
+        sendSseEvent(emitter, "complete", Map.of(
+                "status", response.getStatus() != null ? response.getStatus() : "COMPLETED",
+                "cacheHit", false,
+                "totalLatencyMs", System.currentTimeMillis() - startTime));
+        emitter.complete();
+    }
 
     void sendSseEvent(SseEmitter emitter, String eventName, Object data) throws IOException {
         try {

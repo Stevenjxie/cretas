@@ -4,7 +4,11 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunReplayResponse;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunCancelResponse;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunStartRequest;
+import com.cretas.aims.dto.restaurantagent.RestaurantAgentActionConfirmRequest;
+import com.cretas.aims.dto.restaurantagent.RestaurantAgentActionPreviewResponse;
+import com.cretas.aims.dto.restaurantagent.RestaurantAgentActionWorkflowResponse;
 import com.cretas.aims.filter.CorrelationIdFilter;
+import com.cretas.aims.service.restaurant.RestaurantAgentActionWorkflowService;
 import com.cretas.aims.service.restaurant.RestaurantAgentRunService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -41,9 +45,13 @@ public class RestaurantAgentRunController {
     private static final Pattern SAFE_ROLE = Pattern.compile("^[a-z0-9_]{1,64}$");
 
     private final RestaurantAgentRunService service;
+    private final RestaurantAgentActionWorkflowService actionWorkflowService;
 
-    public RestaurantAgentRunController(RestaurantAgentRunService service) {
+    public RestaurantAgentRunController(
+            RestaurantAgentRunService service,
+            RestaurantAgentActionWorkflowService actionWorkflowService) {
         this.service = service;
+        this.actionWorkflowService = actionWorkflowService;
     }
 
     @PostMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -86,6 +94,41 @@ public class RestaurantAgentRunController {
         TrustedRequest trusted = trustedRequest(factoryId, servletRequest);
         RestaurantAgentRunCancelResponse response = service.cancel(
                 trusted.factoryId(), trusted.userId(), trusted.role(), trusted.correlationId(), runId);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
+                .body(response);
+    }
+
+    @PostMapping(
+            value = "/{runId}/action-proposals/{proposalCode}/preview",
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<RestaurantAgentActionPreviewResponse> previewActionProposal(
+            @PathVariable String factoryId,
+            @PathVariable UUID runId,
+            @PathVariable String proposalCode,
+            HttpServletRequest servletRequest) {
+        TrustedRequest trusted = trustedRequest(factoryId, servletRequest);
+        RestaurantAgentActionPreviewResponse response = actionWorkflowService.preview(
+                trusted.factoryId(), trusted.userId(), trusted.role(), trusted.correlationId(),
+                runId, proposalCode);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
+                .body(response);
+    }
+
+    @PostMapping(
+            value = "/{runId}/action-proposals/{proposalCode}/confirm",
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<RestaurantAgentActionWorkflowResponse> confirmActionProposal(
+            @PathVariable String factoryId,
+            @PathVariable UUID runId,
+            @PathVariable String proposalCode,
+            @Valid @RequestBody RestaurantAgentActionConfirmRequest body,
+            HttpServletRequest servletRequest) {
+        TrustedRequest trusted = trustedRequest(factoryId, servletRequest);
+        RestaurantAgentActionWorkflowResponse response = actionWorkflowService.confirm(
+                trusted.factoryId(), trusted.userId(), trusted.role(), trusted.correlationId(),
+                runId, proposalCode, body.getPreviewToken());
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL, "no-store")
                 .body(response);

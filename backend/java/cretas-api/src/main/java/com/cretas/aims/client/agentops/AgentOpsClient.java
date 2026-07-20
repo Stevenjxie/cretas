@@ -1,8 +1,10 @@
 package com.cretas.aims.client.agentops;
 
 import com.cretas.aims.dto.agentops.AgentOpsCreateEvalSetRequest;
+import com.cretas.aims.dto.agentops.AgentOpsImportRuntimeCorpusRequest;
 import com.cretas.aims.dto.agentops.AgentOpsRerunExperimentRequest;
 import com.cretas.aims.dto.agentops.AgentOpsRunExperimentRequest;
+import com.cretas.aims.dto.agentops.AgentOpsRunRuntimeShadowRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -37,8 +39,9 @@ public class AgentOpsClient {
             Pattern.CASE_INSENSITIVE);
     private static final Set<String> SAFE_DIGEST_KEYS = Set.of(
             "promptSnapshotDigest", "modelSnapshotDigest", "toolSnapshotDigest");
-    private static final Set<String> SAFE_CONFLICT_CODES = Set.of(
-            "EVAL_SET_VERSION_EXISTS", "IDEMPOTENCY_KEY_REUSED", "EVALUATOR_BUILD_UNAVAILABLE");
+    private static final Set<String> SAFE_ERROR_CODES = Set.of(
+            "EVAL_SET_VERSION_EXISTS", "IDEMPOTENCY_KEY_REUSED", "EVALUATOR_BUILD_UNAVAILABLE",
+            "AGENT_OPS_RUNTIME_SHADOW_DISABLED", "RUNTIME_SHADOW_CASE_TIMEOUT");
 
     private final OkHttpClient client;
     private final ObjectMapper objectMapper;
@@ -68,12 +71,22 @@ public class AgentOpsClient {
         return get(url("eval-sets"), context);
     }
 
+    public JsonNode importRuntimeCorpus(AgentOpsImportRuntimeCorpusRequest body,
+                                        TrustedContext context) throws IOException {
+        return post(url("eval-sets", "import-runtime-corpus"), body, context);
+    }
+
     public JsonNode getEvalSet(UUID id, int offset, int limit, TrustedContext context) throws IOException {
         return get(pageUrl(url("eval-sets", id.toString()), offset, limit), context);
     }
 
     public JsonNode runExperiment(AgentOpsRunExperimentRequest body, TrustedContext context) throws IOException {
         return post(url("experiments"), body, context);
+    }
+
+    public JsonNode runRuntimeShadow(AgentOpsRunRuntimeShadowRequest body,
+                                     TrustedContext context) throws IOException {
+        return post(url("experiments", "runtime-shadow"), body, context);
     }
 
     public JsonNode rerunExperiment(UUID id, AgentOpsRerunExperimentRequest body,
@@ -138,14 +151,13 @@ public class AgentOpsClient {
     }
 
     private UpstreamException upstreamException(Response response) throws IOException {
-        if (response.code() != 409) return new UpstreamException(response.code(), null);
         String type = response.header("Content-Type", "").toLowerCase();
-        if (!type.startsWith("application/json")) return new UpstreamException(409, null);
+        if (!type.startsWith("application/json")) return new UpstreamException(response.code(), null);
         JsonNode body = readBounded(response.body());
         String detailCode = body != null && body.path("detail").isTextual()
                 ? body.path("detail").asText() : null;
-        return new UpstreamException(409,
-                detailCode != null && SAFE_CONFLICT_CODES.contains(detailCode) ? detailCode : null);
+        return new UpstreamException(response.code(),
+                detailCode != null && SAFE_ERROR_CODES.contains(detailCode) ? detailCode : null);
     }
 
     private JsonNode readBounded(ResponseBody body) throws IOException {

@@ -2,8 +2,10 @@ package com.cretas.aims.controller.agentops;
 
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.agentops.AgentOpsCreateEvalSetRequest;
+import com.cretas.aims.dto.agentops.AgentOpsImportRuntimeCorpusRequest;
 import com.cretas.aims.dto.agentops.AgentOpsRerunExperimentRequest;
 import com.cretas.aims.dto.agentops.AgentOpsRunExperimentRequest;
+import com.cretas.aims.dto.agentops.AgentOpsRunRuntimeShadowRequest;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.filter.CorrelationIdFilter;
 import com.cretas.aims.service.agentops.AgentOpsService;
@@ -50,6 +52,17 @@ public class AgentOpsController {
                 trusted.role, trusted.correlationId, body));
     }
 
+    @PostMapping("/eval-sets/import-runtime-corpus")
+    public ApiResponse<JsonNode> importRuntimeCorpus(
+            @PathVariable String factoryId,
+            @Valid @RequestBody AgentOpsImportRuntimeCorpusRequest body,
+            HttpServletRequest request) {
+        TrustedRequest trusted = trusted(factoryId, request);
+        return ApiResponse.success(service.importRuntimeCorpus(
+                trusted.factoryId, trusted.userId, trusted.role,
+                trusted.correlationId, body));
+    }
+
     @GetMapping("/eval-sets")
     public ResponseEntity<ApiResponse<JsonNode>> listEvalSets(@PathVariable String factoryId, HttpServletRequest request) {
         TrustedRequest trusted = trusted(factoryId, request);
@@ -73,6 +86,17 @@ public class AgentOpsController {
         TrustedRequest trusted = trusted(factoryId, request);
         return ApiResponse.success(service.runExperiment(trusted.factoryId, trusted.userId,
                 trusted.role, trusted.correlationId, body));
+    }
+
+    @PostMapping("/experiments/runtime-shadow")
+    public ApiResponse<JsonNode> runRuntimeShadow(
+            @PathVariable String factoryId,
+            @Valid @RequestBody AgentOpsRunRuntimeShadowRequest body,
+            HttpServletRequest request) {
+        TrustedRequest trusted = trusted(factoryId, request);
+        return ApiResponse.success(service.runRuntimeShadow(
+                trusted.factoryId, trusted.userId, trusted.role,
+                trusted.correlationId, body));
     }
 
     @GetMapping("/experiments")

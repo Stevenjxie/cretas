@@ -13,6 +13,24 @@
 - 生产边界：exact-main 部署后只对 F006 订单 `ecd7f20b-21c2-4ea3-9103-2034d5d6547f` 的 item `726` 调用一次幂等桥接写入 `WH-LOG`；不得改变数量、价格、税率、状态、订单版本或创建生产计划。随后全部 query-only 验收并通知原测试 Chat 从同一已批准订单继续。
 - Scope 锁：已释放。
 
+### `CRETAS-AI-ARCH-V2-D11-CLOSEOUT-20260720`
+
+- 状态：`merged`
+- Owner：Codex coordinator (`/root`)；用户授权多代理加速，所有代码/只读代理均已回收。
+- 登记 Base SHA：`8d5af3daa8f7bcfa1b96c19bd1a736fc7bb4481f`
+- PR：[#1532](https://github.com/Stevenjxie/cretas/pull/1532)
+- 覆盖任务：`CRETAS-AI-ARCH-TRUTH-AUDIT`、confirmation boundary、descriptor drift、dead bypass、D11B Gateway design/implementation/review、Restaurant Chat route/review/RN lease/server idempotency、AgentOps Runtime Shadow/production-wiring gate、Factory Pack sync/SSE Router、Restaurant Action Workflow/provisioning、Inventory Skill split、integration/final read-only review 与架构文档收口。
+- Gateway 收口：删除客户端 boolean confirmation authority 与无消费者的 `ToolExecutionManager`；descriptor 真值为 588 total / 577 legacy / 11 explicit / 10 runtime-approved；首批 3 个餐饮只读 Tool 进入默认关闭的 legacy migration lane，Gateway deny 不回退旧 direct path。
+- 餐饮 Runtime/Chat：同步与 SSE 主入口确定性选择既有毛利归因 Runtime，RN assistant 消息展示真实 Run/Event；客户端使用有界 module lease，服务端按可信 factory/owner/route/window 原子 claim-or-reuse，避免跨进程重复 durable run。
+- AgentOps：服务端可信 corpus 通过隔离 `InMemoryRunStore` 和 read-only Gateway 生成 actual，三轮 evaluator 可作为自动回归门禁；正常 run/event 与 ERP 写入为 0，旧 client-actual experiment 仅保留手工兼容语义。
+- 工厂端：四岗位 Capability Pack 接入同步与 SSE 前门，仅服务 FACTORY/CENTRAL_KITCHEN；read allowlist，write 只给 Workflow/Form/Navigation guidance，Restaurant 路由互斥，开关默认关闭。
+- Action Workflow：首批只允许缺失菜品成本数据 proposal；preview token 原子 claim/replay，审批通过只导航配方管理。新增/复活租户由激活预置和 confirm 懒预置覆盖，Factory 行锁保证跨进程幂等；canonical graph、exact workflow 行锁、服务端 definition digest 与 transition 写前复核共同关闭配置漂移和 TOCTOU，且不覆盖已有租户配置。
+- Skill 三拆：`inventory-analysis` 成为首个固定 `Workflow → warehouse Pack → Gateway → Presenter` 实例，只执行 3 个只读 Tool、零 LLM，数据库额外 Tool/DAG/prompt 注入无效。
+- 终审：第一轮只读审查发现并阻断 RN remount 重复 start、缺服务器端跨进程 claim、Factory SSE 旁路、未来租户缺 Workflow、canonical graph 漂移与 definition TOCTOU；修复后最终 P0=0、P1=0。
+- 验收：latest `origin/main` rebase 后 Java 34 类/250 tests 通过；Python Restaurant Runtime 88 passed；Python AgentOps 31 passed/1 skipped；React Native 20 passed；Web AgentOps 16 passed；独立 PostgreSQL 16 RunStore suite 15 项执行到 100%，并清理 disposable schema/role/container；Java Flyway 无重复，Python 重复集与 main 相同；direct-call baseline 无增长；`git diff --check` 通过。
+- 发布边界：本 PR 只合并代码与文档。未构建/上传生产制品，未执行 `V20261028_86`，未重启、切流、发布 Web 或 RN/OTA，所有相关 flag 保持默认关闭。部署必须从 clean exact `origin/main` 重新读取现场真值并取得独立确认。
+- Scope 锁：全部 D11 scope 已释放。
+
 ### `F006-M09-SALES-PACKAGING-UNIT-20260720`
 
 - 状态：`merged`

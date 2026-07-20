@@ -141,6 +141,12 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
     }
 
     @Override
+    @Transactional
+    public Optional<ApprovalWorkflow> getByIdForUpdate(String factoryId, String id) {
+        return workflowRepository.findByFactoryIdAndIdForUpdate(factoryId, id);
+    }
+
+    @Override
     public List<ApprovalWorkflow> getAllByFactory(String factoryId) {
         return workflowRepository.findByFactoryIdOrderByDecisionTypeAscPriorityDesc(factoryId);
     }

@@ -5,9 +5,11 @@ const state = vi.hoisted(() => ({ factoryId: 'R001', businessDomain: 'RESTAURANT
 const api = vi.hoisted(() => ({
   listEvalSets: vi.fn(),
   createEvalSet: vi.fn(),
+  importRuntimeCorpus: vi.fn(),
   listExperiments: vi.fn(),
   compareExperiments: vi.fn(),
   runExperiment: vi.fn(),
+  runRuntimeShadow: vi.fn(),
   rerunExperiment: vi.fn(),
   getRunTrace: vi.fn(),
 }));
@@ -88,13 +90,13 @@ describe('AgentOps views', () => {
     expect(failed.get('[data-testid="eval-error"]').text()).toContain('STORE_UNAVAILABLE');
   });
 
-  it('submits the complete real experiment request without a client evaluator version', async () => {
+  it('submits a server-generated runtime shadow request without client actual snapshots', async () => {
     const evalSetId = '00000000-0000-4000-8000-000000000010';
     api.listEvalSets.mockResolvedValue({ data: { items: [{
       evalSetId, name: 'margin', version: 1, description: '', caseCount: 1,
       contentDigest: 'a'.repeat(64), createdBy: '1', createdAt: 'now',
     }] } });
-    api.runExperiment.mockResolvedValue({ data: {} });
+    api.runRuntimeShadow.mockResolvedValue({ data: {} });
     const wrapper = mount(ExperimentsView, { global: { stubs } });
     await flushPromises();
     await wrapper.get('[data-testid="run-eval-set"]').setValue(evalSetId);
@@ -103,16 +105,18 @@ describe('AgentOps views', () => {
     await wrapper.get('[data-testid="tool-digest"]').setValue('3'.repeat(64));
     await wrapper.get('[data-testid="run-experiment"]').trigger('click');
     await flushPromises();
-    expect(api.runExperiment).toHaveBeenCalledOnce();
-    const sent = api.runExperiment.mock.calls[0][1];
+    expect(api.runRuntimeShadow).toHaveBeenCalledOnce();
+    const sent = api.runRuntimeShadow.mock.calls[0][1];
     expect(sent.evalSetId).toBe(evalSetId);
     expect(sent.configSnapshot.promptSnapshotDigest).toBe('1'.repeat(64));
     expect(sent.requestId).toMatch(/^[0-9a-f-]{36}$/);
     expect(sent).not.toHaveProperty('evaluatorVersion');
+    expect(sent).not.toHaveProperty('actualSnapshots');
+    expect(wrapper.find('[data-testid="actual-snapshots"]').exists()).toBe(false);
   });
 
   it('reuses create request IDs after failure and rotates them after input change or success', async () => {
-    api.createEvalSet
+    api.importRuntimeCorpus
       .mockRejectedValueOnce(new Error('NETWORK'))
       .mockRejectedValueOnce(new Error('NETWORK'))
       .mockRejectedValueOnce(new Error('NETWORK'))
@@ -122,23 +126,22 @@ describe('AgentOps views', () => {
     await flushPromises();
     const inputs = wrapper.findAll('input');
     await inputs[0].setValue('baseline');
-    await inputs[3].setValue('case-1');
-    const submit = wrapper.findAll('button').at(-1)!;
+    const submit = wrapper.get('[data-testid="import-runtime-corpus"]');
 
     await submit.trigger('click'); await flushPromises();
     await submit.trigger('click'); await flushPromises();
-    const firstId = api.createEvalSet.mock.calls[0][1].requestId;
-    expect(api.createEvalSet.mock.calls[1][1].requestId).toBe(firstId);
+    const firstId = api.importRuntimeCorpus.mock.calls[0][1].requestId;
+    expect(api.importRuntimeCorpus.mock.calls[1][1].requestId).toBe(firstId);
 
     await inputs[2].setValue('changed');
     await submit.trigger('click'); await flushPromises();
-    const changedId = api.createEvalSet.mock.calls[2][1].requestId;
+    const changedId = api.importRuntimeCorpus.mock.calls[2][1].requestId;
     expect(changedId).not.toBe(firstId);
 
     await submit.trigger('click'); await flushPromises();
-    expect(api.createEvalSet.mock.calls[3][1].requestId).toBe(changedId);
+    expect(api.importRuntimeCorpus.mock.calls[3][1].requestId).toBe(changedId);
     await submit.trigger('click'); await flushPromises();
-    expect(api.createEvalSet.mock.calls[4][1].requestId).not.toBe(changedId);
+    expect(api.importRuntimeCorpus.mock.calls[4][1].requestId).not.toBe(changedId);
   });
 
   it('reuses run request IDs after failure and rotates them after input change or success', async () => {
@@ -147,7 +150,7 @@ describe('AgentOps views', () => {
       evalSetId, name: 'margin', version: 1, description: '', caseCount: 1,
       contentDigest: 'a'.repeat(64), createdBy: '1', createdAt: 'now',
     }] } });
-    api.runExperiment
+    api.runRuntimeShadow
       .mockRejectedValueOnce(new Error('NETWORK'))
       .mockRejectedValueOnce(new Error('NETWORK'))
       .mockRejectedValueOnce(new Error('NETWORK'))
@@ -163,17 +166,17 @@ describe('AgentOps views', () => {
 
     await submit.trigger('click'); await flushPromises();
     await submit.trigger('click'); await flushPromises();
-    const firstId = api.runExperiment.mock.calls[0][1].requestId;
-    expect(api.runExperiment.mock.calls[1][1].requestId).toBe(firstId);
+    const firstId = api.runRuntimeShadow.mock.calls[0][1].requestId;
+    expect(api.runRuntimeShadow.mock.calls[1][1].requestId).toBe(firstId);
 
     await wrapper.get('[data-testid="tool-digest"]').setValue('4'.repeat(64));
     await submit.trigger('click'); await flushPromises();
-    const changedId = api.runExperiment.mock.calls[2][1].requestId;
+    const changedId = api.runRuntimeShadow.mock.calls[2][1].requestId;
     expect(changedId).not.toBe(firstId);
     await submit.trigger('click'); await flushPromises();
-    expect(api.runExperiment.mock.calls[3][1].requestId).toBe(changedId);
+    expect(api.runRuntimeShadow.mock.calls[3][1].requestId).toBe(changedId);
     await submit.trigger('click'); await flushPromises();
-    expect(api.runExperiment.mock.calls[4][1].requestId).not.toBe(changedId);
+    expect(api.runRuntimeShadow.mock.calls[4][1].requestId).not.toBe(changedId);
   });
 
   it('reuses a rerun request ID after failure and clears it after success', async () => {

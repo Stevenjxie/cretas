@@ -339,6 +339,18 @@ class DecisionTypeMetadataRegistryTest {
     }
 
     @Test
+    @DisplayName("Restaurant Agent action review is wired to the exact allowlisted module")
+    void restaurantAgentActionReviewMetadata() {
+        DecisionTypeMetadata metadata = registry.get(DecisionType.RESTAURANT_AGENT_ACTION_REVIEW);
+        assertNotNull(metadata);
+        assertEquals(Category.OTHER, metadata.getCategory());
+        assertTrue(metadata.isWired());
+        assertEquals("restaurant.dish-cost-data-review.v1", metadata.getModuleCode());
+        assertEquals(DecisionType.RESTAURANT_AGENT_ACTION_REVIEW,
+                registry.lookupByModuleCode("restaurant.dish-cost-data-review.v1"));
+    }
+
+    @Test
     @DisplayName("UT-MR-29: lookupByModuleCode — 未知 moduleCode 返 null")
     void lookupByModuleCodeMiss() {
         assertNull(registry.lookupByModuleCode("UNKNOWN_MODULE"));

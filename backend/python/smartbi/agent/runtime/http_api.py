@@ -33,6 +33,7 @@ from .http_contracts import (
     stale_reconciliation_v1,
 )
 from .restaurant_read_tools import build_restaurant_read_registry
+from .run_contracts import RouteCode
 from .run_store import PostgresRunStore, RunAccessError, RunStore
 
 logger = logging.getLogger(__name__)
@@ -40,8 +41,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/internal/smartbi/agent/runs")
 
 _POLL_SECONDS = 0.2
-_START_POLL_SECONDS = 0.01
-_START_TIMEOUT_SECONDS = 5.0
 _BACKGROUND_RUNS: set[asyncio.Task] = set()
 _SAFE_CORRELATION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
@@ -117,30 +116,34 @@ async def start_restaurant_run(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="INVALID_RUN_WINDOW") from exc
 
-    run_id = str(uuid.uuid4())
-    cancellation_requested = asyncio.Event()
-    task = asyncio.create_task(
-        components.runtime.execute(
-            domain_request,
-            context,
-            run_id=run_id,
-            cancelled=cancellation_requested.is_set,
-        ),
-        name=f"restaurant-agent-run:{run_id}",
-    )
-    _track_background_run(task, run_id)
-
-    # Do not return 200/SSE until the run itself exists durably. create_run is
-    # the runtime's first store operation; failures remain an HTTP 503 rather
-    # than an empty successful stream.
+    proposed_run_id = str(uuid.uuid4())
     try:
-        await _wait_until_durable(components.store, run_id, context, task)
-    except HTTPException:
-        cancellation_requested.set()
-        raise
-    except asyncio.CancelledError:
-        cancellation_requested.set()
-        raise
+        claim = await components.store.claim_active_run(
+            proposed_run_id,
+            context,
+            RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION,
+            domain_request.safe_dict(),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503, detail="AGENT_RUN_STORE_UNAVAILABLE"
+        ) from exc
+
+    run_id = claim.record.run_id
+    task: asyncio.Task | None = None
+    if claim.created:
+        cancellation_requested = asyncio.Event()
+        task = asyncio.create_task(
+            components.runtime.execute(
+                domain_request,
+                context,
+                run_id=run_id,
+                cancelled=cancellation_requested.is_set,
+                already_created=True,
+            ),
+            name=f"restaurant-agent-run:{run_id}",
+        )
+        _track_background_run(task, run_id)
 
     response = StreamingResponse(
         _persisted_event_stream(
@@ -231,43 +234,12 @@ async def reconcile_stale_restaurant_run(
     return stale_reconciliation_v1(run_key, result)
 
 
-async def _wait_until_durable(
-    store: RunStore,
-    run_id: str,
-    context: TrustedExecutionContext,
-    task: asyncio.Task,
-) -> None:
-    deadline = asyncio.get_running_loop().time() + _START_TIMEOUT_SECONDS
-    while True:
-        try:
-            await store.load_run(run_id, context)
-            return
-        except RunAccessError:
-            if task.done():
-                try:
-                    task.result()
-                except Exception as exc:
-                    raise HTTPException(
-                        status_code=503, detail="AGENT_RUN_START_FAILED"
-                    ) from exc
-                raise HTTPException(status_code=503, detail="AGENT_RUN_NOT_PERSISTED")
-            if asyncio.get_running_loop().time() >= deadline:
-                raise HTTPException(status_code=503, detail="AGENT_RUN_START_TIMEOUT")
-            await asyncio.sleep(_START_POLL_SECONDS)
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise HTTPException(
-                status_code=503, detail="AGENT_RUN_STORE_UNAVAILABLE"
-            ) from exc
-
-
 async def _persisted_event_stream(
     request: Request,
     store: RunStore,
     run_id: str,
     context: TrustedExecutionContext,
-    task: asyncio.Task,
+    task: asyncio.Task | None,
 ) -> AsyncIterator[str]:
     cursor = 0
     try:
@@ -297,7 +269,7 @@ async def _persisted_event_stream(
 
             if record.state.terminal and cursor >= record.next_event_sequence:
                 return
-            if task.done() and not record.state.terminal:
+            if task is not None and task.done() and not record.state.terminal:
                 # The done callback records the controlled failure. There is no
                 # truthful terminal Event v1 to emit if persistence itself failed.
                 logger.error(

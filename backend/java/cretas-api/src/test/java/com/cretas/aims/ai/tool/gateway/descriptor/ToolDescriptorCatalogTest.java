@@ -23,13 +23,13 @@ class ToolDescriptorCatalogTest {
         ToolDescriptorStatistics statistics = catalog.statistics();
 
         assertThat(catalog.inventory().schemaVersion()).isEqualTo(1);
-        assertThat(catalog.inventory().expectedToolCount()).isEqualTo(589);
-        assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(581);
-        assertThat(statistics.total()).isEqualTo(589);
-        assertThat(statistics.legacy()).isEqualTo(581);
+        assertThat(catalog.inventory().expectedToolCount()).isEqualTo(588);
+        assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(577);
+        assertThat(statistics.total()).isEqualTo(588);
+        assertThat(statistics.legacy()).isEqualTo(577);
         assertThat(statistics.actionTypes()).containsExactlyInAnyOrderEntriesOf(Map.of(
                 ToolExecutor.ActionType.READ, 447L,
-                ToolExecutor.ActionType.WRITE, 63L,
+                ToolExecutor.ActionType.WRITE, 62L,
                 ToolExecutor.ActionType.UPDATE, 27L,
                 ToolExecutor.ActionType.DELETE, 11L,
                 ToolExecutor.ActionType.ANALYZE, 19L,
@@ -37,15 +37,15 @@ class ToolDescriptorCatalogTest {
                 ToolExecutor.ActionType.NOTIFY, 7L));
         assertThat(statistics.riskLevels()).containsExactlyInAnyOrderEntriesOf(Map.of(
                 ToolExecutor.RiskLevel.LOW, 511L,
-                ToolExecutor.RiskLevel.MEDIUM, 73L,
+                ToolExecutor.RiskLevel.MEDIUM, 72L,
                 ToolExecutor.RiskLevel.HIGH, 5L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
-        assertThat(statistics.previewSupported()).isEqualTo(39);
-        assertThat(statistics.requiresPermission()).isEqualTo(39);
+        assertThat(statistics.previewSupported()).isEqualTo(38);
+        assertThat(statistics.requiresPermission()).isEqualTo(42);
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolGovernanceStatus.REVIEW_REQUIRED, 564L,
+                ToolGovernanceStatus.REVIEW_REQUIRED, 560L,
                 ToolGovernanceStatus.REVIEW_REQUIRED_P0, 18L,
-                ToolGovernanceStatus.APPROVED, 7L,
+                ToolGovernanceStatus.APPROVED, 10L,
                 ToolGovernanceStatus.WAIVED, 0L));
 
         assertThat(catalog.inventory().descriptors())
@@ -67,7 +67,10 @@ class ToolDescriptorCatalogTest {
                         "canvas_product_work_process_config",
                         "canvas_work_process_catalog",
                         "product_create",
-                        "bom_adjust");
+                        "bom_adjust",
+                        "material_stock_summary",
+                        "material_batch_query",
+                        "material_expired_query");
     }
 
     @Test

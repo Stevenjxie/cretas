@@ -1,6 +1,6 @@
 schemaVersion: 1
 packId: "factory.warehouse"
-version: "1.0.0"
+version: "1.1.0"
 status: PUBLISHED
 businessTypes: [FACTORY, CENTRAL_KITCHEN]
 roles: [warehouse_worker, warehouse_manager]
@@ -13,6 +13,10 @@ readToolAllowlist:
   - "material_batch_wip_query"
   - "material_expired_query"
 workflowReferences:
+  - referenceId: "INTENT:INVENTORY_ANALYSIS"
+    type: INTENT
+    mutation: false
+    approvalRequired: false
   - referenceId: "INTENT:MATERIAL_BATCH_QUERY"
     type: INTENT
     mutation: false
@@ -70,9 +74,9 @@ matchTerms: ["库存", "入库", "出库", "盘点", "仓库", "库位", "批次
 fewShots:
   - userQuery: "这个物料还有多少库存，哪些快过期"
     expectedMode: READ_SUMMARY
-    expectedReadTools: ["material_stock_summary", "material_expired_query"]
-    expectedWorkflowReference: "NONE"
-    assistantResponse: "按仓库、单位和批次汇总只读库存与效期；缺少物料编码时先要求补充。"
+    expectedReadTools: ["material_stock_summary", "material_batch_query", "material_expired_query"]
+    expectedWorkflowReference: "INTENT:INVENTORY_ANALYSIS"
+    assistantResponse: "通过固定只读库存工作流按库存汇总、批次和效期顺序展示证据。"
   - userQuery: "把这批原料入库"
     expectedMode: WORKFLOW_GUIDANCE
     expectedReadTools: ["material_batch_query"]
@@ -82,8 +86,8 @@ evalCases:
   - caseId: "warehouse-stock-expiry"
     query: "查库存和临期批次"
     expectedMode: READ_SUMMARY
-    expectedReadTools: ["material_stock_summary", "material_expired_query"]
-    expectedWorkflowReference: "NONE"
+    expectedReadTools: ["material_stock_summary", "material_batch_query", "material_expired_query"]
+    expectedWorkflowReference: "INTENT:INVENTORY_ANALYSIS"
     expectedOutcome: MATCH
   - caseId: "warehouse-count-guidance"
     query: "开始盘点"

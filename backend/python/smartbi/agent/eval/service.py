@@ -6,6 +6,7 @@ from typing import Any, Mapping, Sequence
 
 from .contracts import AgentOpsContext, EvalSetRecord, ExperimentRecord
 from .runner import EvaluatorRegistry, OfflineBatchRunner, RunnerBounds
+from .runtime_shadow import RuntimeShadowBatchRunner, RuntimeShadowBounds
 from .store import AgentOpsStore, new_eval_set_record, new_experiment_record
 from .validation import (
     AgentOpsValidationError,
@@ -15,6 +16,7 @@ from .validation import (
     validate_actual_snapshots,
     validate_name,
     validate_request_id,
+    validate_runtime_shadow_cases,
 )
 
 
@@ -25,11 +27,38 @@ class AgentOpsService:
         runner: OfflineBatchRunner | None = None,
         *,
         registry: EvaluatorRegistry | None = None,
+        runtime_shadow_runner: RuntimeShadowBatchRunner | None = None,
     ) -> None:
         if runner is not None and registry is not None:
             raise ValueError("provide runner or registry, not both")
         self._store = store
         self._registry = registry or EvaluatorRegistry((runner or OfflineBatchRunner(),))
+        self._runtime_shadow_runner = runtime_shadow_runner
+
+    async def import_runtime_corpus(
+        self,
+        context: AgentOpsContext,
+        *,
+        request_id: str,
+        name: str,
+        version: int,
+        description: str,
+        max_cases: int,
+    ) -> EvalSetRecord:
+        if isinstance(max_cases, bool) or not 1 <= max_cases <= 20:
+            raise AgentOpsValidationError("RUNTIME_CORPUS_LIMIT_OUT_OF_BOUNDS")
+        cases = await self._store.load_runtime_corpus(context, limit=max_cases)
+        if not cases:
+            raise AgentOpsValidationError("TRUSTED_RUNTIME_CORPUS_EMPTY")
+        validate_runtime_shadow_cases(cases)
+        return await self.create_eval_set(
+            context,
+            request_id=request_id,
+            name=name,
+            version=version,
+            description=description,
+            cases=cases,
+        )
 
     async def create_eval_set(
         self,
@@ -115,6 +144,54 @@ class AgentOpsService:
             source_experiment_id=None,
         )
 
+    async def run_runtime_shadow(
+        self,
+        context: AgentOpsContext,
+        *,
+        request_id: str,
+        eval_set_id: str,
+        config_snapshot: Mapping[str, Any],
+        bounds: RuntimeShadowBounds,
+    ) -> ExperimentRecord:
+        if self._runtime_shadow_runner is None:
+            raise AgentOpsValidationError("RUNTIME_SHADOW_RUNNER_UNAVAILABLE")
+        eval_set = await self._store.get_eval_set(context, eval_set_id)
+        validate_runtime_shadow_cases(eval_set.cases)
+        config = validate_config_snapshot(config_snapshot)
+        bounds_snapshot = bounds.snapshot()
+        safe_request_id = validate_request_id(request_id)
+        request_digest = canonical_digest({
+            "schemaVersion": "1.0",
+            "operationKind": "RUNTIME_SHADOW",
+            "evalSetId": eval_set.eval_set_id,
+            "configSnapshot": config,
+            "runnerBounds": bounds_snapshot,
+        })
+        existing = await self._store.preflight_experiment_request(
+            context, safe_request_id, request_digest
+        )
+        if existing is not None:
+            return existing
+        aggregate, case_results, normalized_actual = (
+            await self._runtime_shadow_runner.run(
+                eval_set, context, bounds=bounds
+            )
+        )
+        return await self._save_evaluated(
+            context,
+            runner=self._runtime_shadow_runner,
+            eval_set=eval_set,
+            config=config,
+            normalized_actual=normalized_actual,
+            bounds_snapshot=bounds_snapshot,
+            aggregate=aggregate,
+            case_results=case_results,
+            request_id=safe_request_id,
+            request_digest=request_digest,
+            operation_kind="RUNTIME_SHADOW",
+            source_experiment_id=None,
+        )
+
     async def _run_with(
         self,
         context: AgentOpsContext,
@@ -133,6 +210,37 @@ class AgentOpsService:
         aggregate, case_results = await runner.run(
             eval_set, normalized_actual, bounds=bounds
         )
+        return await self._save_evaluated(
+            context,
+            runner=runner,
+            eval_set=eval_set,
+            config=config,
+            normalized_actual=normalized_actual,
+            bounds_snapshot=bounds_snapshot,
+            aggregate=aggregate,
+            case_results=case_results,
+            request_id=request_id,
+            request_digest=request_digest,
+            operation_kind=operation_kind,
+            source_experiment_id=source_experiment_id,
+        )
+
+    async def _save_evaluated(
+        self,
+        context: AgentOpsContext,
+        *,
+        runner,
+        eval_set: EvalSetRecord,
+        config: Mapping[str, Any],
+        normalized_actual: Mapping[str, Mapping[str, Any]],
+        bounds_snapshot: Mapping[str, Any],
+        aggregate: Mapping[str, Any],
+        case_results: Sequence[Mapping[str, Any]],
+        request_id: str,
+        request_digest: str,
+        operation_kind: str,
+        source_experiment_id: str | None,
+    ) -> ExperimentRecord:
         snapshot_digest = canonical_digest({
             "evalSetDigest": eval_set.content_digest,
             "evaluatorVersion": runner.evaluator_version,
@@ -163,6 +271,8 @@ class AgentOpsService:
         self, context: AgentOpsContext, experiment_id: str, *, request_id: str
     ) -> ExperimentRecord:
         source = await self._store.get_experiment(context, experiment_id)
+        if source.operation_kind == "RUNTIME_SHADOW":
+            raise AgentOpsValidationError("RUNTIME_SHADOW_RERUN_REQUIRES_NEW_RUN")
         safe_request_id = validate_request_id(request_id)
         request_digest = canonical_digest({
             "schemaVersion": "1.0",

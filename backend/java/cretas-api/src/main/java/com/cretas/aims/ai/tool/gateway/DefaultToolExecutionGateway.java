@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
 
@@ -26,11 +27,18 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class DefaultToolExecutionGateway implements ToolExecutionGateway {
 
+    private static final int LEGACY_FAILURE_STATUS_MAX_LENGTH = 64;
+    private static final int LEGACY_FAILURE_MESSAGE_MAX_LENGTH = 1_000;
+
     private final ToolPrincipalPolicy principalPolicy;
     private final ToolRuntimeRegistry runtimeRegistry;
     private final ToolConfirmationLease confirmationLease;
     private final ToolExecutionLedgerService ledgerService;
     private final ObjectMapper objectMapper;
+
+    /** Separate, fail-closed D11B lane; deliberately not part of the approved policy registry. */
+    @Autowired
+    private LegacyToolMigrationRegistry legacyToolMigrationRegistry;
 
     @Override
     public ToolExecutionResult execute(ToolExecutionCommand command) {
@@ -59,6 +67,9 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
 
         Optional<ResolvedTool> resolvedOptional =
                 runtimeRegistry.resolve(command, current.principal());
+        if (resolvedOptional.isEmpty() && legacyToolMigrationRegistry != null) {
+            resolvedOptional = legacyToolMigrationRegistry.resolve(command, current.principal());
+        }
         if (resolvedOptional.isEmpty()) {
             ledgerService.completeAudit(
                     auditEventId, ToolExecutionStatus.DENIED, GatewayResultCode.POLICY_DENIED);
@@ -262,7 +273,13 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
             ResolvedTool resolved,
             String auditEventId) {
         ToolDescriptor descriptor = resolved.descriptor();
-        boolean exactNonMutatingPolicy = descriptor.provenance() == DescriptorProvenance.EXPLICIT
+        boolean allowedResolutionLane =
+                (resolved.lane() == ToolRuntimeRegistry.ResolutionLane.APPROVED_POLICY
+                        && descriptor.provenance() == DescriptorProvenance.EXPLICIT)
+                || (resolved.lane()
+                        == ToolRuntimeRegistry.ResolutionLane.LEGACY_INTENT_DISPATCH_MIGRATION
+                        && descriptor.provenance() == DescriptorProvenance.LEGACY_INFERRED);
+        boolean exactNonMutatingPolicy = allowedResolutionLane
                 && command.mode() == ToolExecutionMode.EXECUTE
                 && descriptor.confirmationPolicy() == ConfirmationPolicy.NOT_REQUIRED
                 && descriptor.approvalPolicy() == ApprovalPolicy.NOT_REQUIRED
@@ -281,14 +298,18 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
         try {
             payload = executeResolved(command, current, resolved, command.parameters());
         } catch (Exception executionFailure) {
-            return finishNonMutatingFailure(command, auditEventId);
+            return finishNonMutatingFailure(command, auditEventId, emptyPayload());
         }
         if (payload == null || !payload.isObject() || !payload.has("success")
                 || !payload.get("success").isBoolean()) {
-            return finishNonMutatingFailure(command, auditEventId);
+            return finishNonMutatingFailure(command, auditEventId, emptyPayload());
         }
         if (!payload.get("success").booleanValue()) {
-            return finishNonMutatingFailure(command, auditEventId);
+            JsonNode safeFailurePayload = resolved.lane()
+                    == ToolRuntimeRegistry.ResolutionLane.LEGACY_INTENT_DISPATCH_MIGRATION
+                    ? migrationFailurePayload(payload)
+                    : emptyPayload();
+            return finishNonMutatingFailure(command, auditEventId, safeFailurePayload);
         }
         ledgerService.completeAudit(
                 auditEventId, ToolExecutionStatus.SUCCEEDED, GatewayResultCode.TOOL_SUCCEEDED);
@@ -298,13 +319,47 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
 
     private ToolExecutionResult finishNonMutatingFailure(
             ToolExecutionCommand command,
-            String auditEventId) {
+            String auditEventId,
+            JsonNode payload) {
         ledgerService.completeAudit(
                 auditEventId,
                 ToolExecutionStatus.FAILED,
                 GatewayResultCode.TOOL_EXECUTION_FAILED);
         return result(command, auditEventId, ToolExecutionStatus.FAILED,
-                emptyPayload(), "Tool execution failed", false);
+                payload, "Tool execution failed", false);
+    }
+
+    /**
+     * The legacy parser needs a very small failure envelope. Never expose Tool-specific data,
+     * diagnostics, exception details, or arbitrary extension fields across the Gateway boundary.
+     */
+    private static JsonNode migrationFailurePayload(JsonNode payload) {
+        ObjectNode sanitized = JsonNodeFactory.instance.objectNode();
+        sanitized.put("success", false);
+        copyIfBoundedTextual(
+                payload, sanitized, "status", LEGACY_FAILURE_STATUS_MAX_LENGTH);
+        copyIfBoolean(payload, sanitized, "needMoreInfo");
+        copyIfBoundedTextual(
+                payload, sanitized, "message", LEGACY_FAILURE_MESSAGE_MAX_LENGTH);
+        return sanitized;
+    }
+
+    private static void copyIfBoundedTextual(
+            JsonNode source,
+            ObjectNode target,
+            String field,
+            int maxLength) {
+        JsonNode value = source.get(field);
+        if (value != null && value.isTextual() && value.textValue().length() <= maxLength) {
+            target.set(field, value);
+        }
+    }
+
+    private static void copyIfBoolean(JsonNode source, ObjectNode target, String field) {
+        JsonNode value = source.get(field);
+        if (value != null && value.isBoolean()) {
+            target.set(field, value);
+        }
     }
 
     private JsonNode executeResolved(

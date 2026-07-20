@@ -3,6 +3,7 @@ package com.cretas.aims.service.workflow;
 import com.cretas.aims.entity.workflow.ApprovalHistory;
 import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import com.cretas.aims.entity.config.ApprovalWorkflow;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
@@ -68,6 +69,15 @@ public interface WorkflowEngineService {
                                            String businessEntityId,
                                            Map<String, Object> contextJson,
                                            Long initiatorUserId);
+
+    /** Start from one exact caller-validated definition, rechecked by the engine. */
+    ApprovalWorkflowInstance startWorkflowWithDefinition(
+            String factoryId,
+            String moduleCode,
+            String businessEntityId,
+            Map<String, Object> contextJson,
+            Long initiatorUserId,
+            ApprovalWorkflow expectedWorkflow);
 
     /**
      * 推进一个节点 (用户审批 / 自动转换 / 超时).

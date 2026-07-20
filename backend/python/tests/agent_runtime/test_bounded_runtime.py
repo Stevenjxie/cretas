@@ -220,6 +220,80 @@ class PeerCancelledStore(InMemoryRunStore):
         return await super().compare_and_set_terminal(*args, **kwargs)
 
 
+class CreateCountingStore(InMemoryRunStore):
+    def __init__(self):
+        super().__init__()
+        self.create_calls = 0
+
+    async def create_run(self, *args, **kwargs):
+        self.create_calls += 1
+        return await super().create_run(*args, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_runtime_claimed_run_skips_second_create_and_default_still_creates():
+    route = RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION
+    request = GrossMarginDeclineRequest("2026-01-01", "2026-01-31")
+    claimed_store = CreateCountingStore()
+    claimed = await claimed_store.claim_active_run(
+        "41414141-4141-4141-8141-414141414141",
+        context(),
+        route,
+        request.safe_dict(),
+    )
+    claimed_runtime = BoundedRestaurantRuntime(
+        FakeGateway(route_evidence()), claimed_store
+    )
+
+    claimed_result = await claimed_runtime.execute(
+        request,
+        context(),
+        run_id=claimed.record.run_id,
+        already_created=True,
+    )
+
+    assert claimed_store.create_calls == 0
+    assert claimed_result.run_id == claimed.record.run_id
+    assert claimed_result.state.terminal
+
+    default_store = CreateCountingStore()
+    default_runtime = BoundedRestaurantRuntime(
+        FakeGateway(route_evidence()),
+        default_store,
+        id_factory=lambda: "42424242-4242-4242-8242-424242424242",
+    )
+    await default_runtime.execute(request, context())
+    assert default_store.create_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_claimed_run_validation_fails_without_mutating_wrong_run():
+    store = InMemoryRunStore()
+    route = RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION
+    original = GrossMarginDeclineRequest("2026-01-01", "2026-01-31")
+    claimed = await store.claim_active_run(
+        "43434343-4343-4343-8343-434343434343",
+        context(),
+        route,
+        original.safe_dict(),
+    )
+    runtime = BoundedRestaurantRuntime(FakeGateway(route_evidence()), store)
+
+    with pytest.raises(RunStoreError, match="does not match"):
+        await runtime.execute(
+            GrossMarginDeclineRequest("2026-02-01", "2026-02-28"),
+            context(),
+            run_id=claimed.record.run_id,
+            already_created=True,
+        )
+    with pytest.raises(ValueError, match="explicit run_id"):
+        await runtime.execute(original, context(), already_created=True)
+
+    record = await store.load_run(claimed.record.run_id, context())
+    assert record.state is RunState.RUNNING
+    assert await store.events_for(claimed.record.run_id, context()) == ()
+
+
 @pytest.mark.asyncio
 async def test_runtime_executes_period_store_dish_and_refuses_unsupported_attribution():
     store = InMemoryRunStore()

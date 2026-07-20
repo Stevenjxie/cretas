@@ -2,8 +2,8 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/store/modules/auth';
-import { compareExperiments, listEvalSets, listExperiments, rerunExperiment, runExperiment } from '@/api/agent-ops';
-import type { ActualSnapshot, EvalSetSummary, ExperimentCompare, ExperimentSummary } from '@/api/agent-ops';
+import { compareExperiments, listEvalSets, listExperiments, rerunExperiment, runRuntimeShadow } from '@/api/agent-ops';
+import type { EvalSetSummary, ExperimentCompare, ExperimentSummary } from '@/api/agent-ops';
 import { InMemoryIdempotencyAttempts, stableBusinessSignature } from './idempotency';
 
 const auth = useAuthStore();
@@ -23,12 +23,12 @@ const runForm = reactive({
   promptSnapshotDigest: '',
   modelSnapshotDigest: '',
   toolSnapshotDigest: '',
-  actualSnapshotsJson: '{\n  "case-id": {\n    "routeCode": "GROSS_MARGIN_DECLINE_ATTRIBUTION",\n    "tools": [],\n    "numericTruthRefs": {},\n    "roundsUsed": 0,\n    "toolCallsUsed": 0\n  }\n}',
-  maxCases: 100,
+  maxCases: 20,
   maxConcurrency: 2,
-  perCaseTimeoutMs: 1000,
+  perCaseTimeoutMs: 75000,
 });
 const canCompare = computed(() => currentId.value && baselineId.value && currentId.value !== baselineId.value);
+const rerunnableItems = computed(() => items.value.filter((item) => item.operationKind !== 'RUNTIME_SHADOW'));
 
 async function load() {
   if (!auth.factoryId) return;
@@ -44,14 +44,6 @@ async function load() {
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : 'Experiments 加载失败';
   } finally { loading.value = false; }
-}
-
-function actualSnapshots(raw: string): Record<string, ActualSnapshot> {
-  const parsed: unknown = JSON.parse(raw);
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('Actual snapshots 必须是以 Case ID 为 key 的 JSON 对象');
-  }
-  return parsed as Record<string, ActualSnapshot>;
 }
 
 async function run() {
@@ -78,21 +70,20 @@ async function run() {
         modelSnapshotDigest: runForm.modelSnapshotDigest,
         toolSnapshotDigest: runForm.toolSnapshotDigest,
       },
-      actualSnapshots: actualSnapshots(runForm.actualSnapshotsJson),
       bounds: {
         maxCases: runForm.maxCases,
         maxConcurrency: runForm.maxConcurrency,
         perCaseTimeoutMs: runForm.perCaseTimeoutMs,
       },
     } as const;
-    const action = 'run-experiment';
+    const action = 'run-runtime-shadow';
     const requestId = idempotency.requestId(action, stableBusinessSignature({
       factoryId: auth.factoryId,
       body: businessBody,
     }));
-    await runExperiment(auth.factoryId, { ...businessBody, requestId });
+    await runRuntimeShadow(auth.factoryId, { ...businessBody, requestId });
     idempotency.complete(action, requestId);
-    ElMessage.success('离线实验已完成并冻结快照');
+    ElMessage.success('Runtime Shadow 已完成，actual snapshots 已由服务端冻结');
     await load();
   } catch (reason) {
     ElMessage.error(reason instanceof Error ? reason.message : '实验运行失败');
@@ -144,11 +135,11 @@ onMounted(load);
 
 <template>
   <div class="panel" data-testid="experiments-view">
-    <div class="panel-head"><div><h2>Experiments</h2><p>比较相同租户下的离线评测结果；模型、Prompt 和 Tool 配置只保存安全快照摘要。</p></div></div>
+    <div class="panel-head"><div><h2>Experiments</h2><p>比较相同租户下的 Runtime Shadow 结果；actual snapshots 只由服务端真实运行生成。</p></div></div>
     <section class="run-card" data-testid="experiment-run-form">
       <div class="run-head">
-        <div><h3>运行可复现离线实验</h3><p>Evaluator 版本与 build 由服务端固定；客户端只提交三个 SHA-256 摘要、严格 Actual Snapshots 和 RunnerBounds。</p></div>
-        <el-button data-testid="run-experiment" type="primary" :loading="running" @click="run">运行并冻结</el-button>
+        <div><h3>运行 Runtime Shadow</h3><p>服务端直接复用 bounded read-only runtime；客户端不提交逐条 actual，正常 run/event 不会被写入。</p></div>
+        <el-button data-testid="run-experiment" type="primary" :loading="running" @click="run">自动运行并冻结</el-button>
       </div>
       <el-form label-position="top">
         <el-form-item label="Eval Set">
@@ -161,13 +152,10 @@ onMounted(load);
           <el-form-item label="Model Snapshot SHA-256"><el-input data-testid="model-digest" v-model="runForm.modelSnapshotDigest" maxlength="64" /></el-form-item>
           <el-form-item label="Tool Snapshot SHA-256"><el-input data-testid="tool-digest" v-model="runForm.toolSnapshotDigest" maxlength="64" /></el-form-item>
         </div>
-        <el-form-item label="Actual Snapshots（Case ID → 严格快照 JSON）">
-          <el-input data-testid="actual-snapshots" v-model="runForm.actualSnapshotsJson" type="textarea" :rows="9" />
-        </el-form-item>
         <div class="bounds-grid">
-          <el-form-item label="Max Cases"><el-input-number v-model="runForm.maxCases" :min="1" :max="100" /></el-form-item>
-          <el-form-item label="Concurrency"><el-input-number v-model="runForm.maxConcurrency" :min="1" :max="4" /></el-form-item>
-          <el-form-item label="Per-case Timeout (ms)"><el-input-number v-model="runForm.perCaseTimeoutMs" :min="50" :max="5000" /></el-form-item>
+          <el-form-item label="Max Cases"><el-input-number v-model="runForm.maxCases" :min="1" :max="20" /></el-form-item>
+          <el-form-item label="Concurrency"><el-input-number v-model="runForm.maxConcurrency" :min="1" :max="2" /></el-form-item>
+          <el-form-item label="Per-case Timeout (ms)"><el-input-number v-model="runForm.perCaseTimeoutMs" :min="1000" :max="75000" /></el-form-item>
         </div>
       </el-form>
     </section>
@@ -205,7 +193,7 @@ onMounted(load);
       </el-table>
       <div class="rerun-list" aria-label="Experiment rerun actions">
         <el-button
-          v-for="item in items"
+          v-for="item in rerunnableItems"
           :key="item.experimentId"
           :data-testid="`rerun-${item.experimentId}`"
           :loading="rerunningId === item.experimentId"

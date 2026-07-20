@@ -99,6 +99,28 @@ class RestaurantAgentRunServiceTest {
     }
 
     @Test
+    void chatAdmissionIsReadOnlyAndFailsClosedForRoleDomainAndRollout() throws Exception {
+        assertThat(service.isAvailableTo("R001", "restaurant_owner")).isFalse();
+        verifyNoInteractions(configService, client);
+
+        active();
+        when(client.isConfigured()).thenReturn(false);
+        assertThat(service.isAvailableTo("R001", "restaurant_owner")).isFalse();
+        verifyNoInteractions(configService);
+
+        when(client.isConfigured()).thenReturn(true);
+        assertThat(service.isAvailableTo("R001", "viewer")).isFalse();
+        verifyNoInteractions(configService);
+
+        when(configService.resolveBusinessDomain("R001")).thenReturn("FACTORY");
+        assertThat(service.isAvailableTo("R001", "restaurant_owner")).isFalse();
+
+        when(configService.resolveBusinessDomain("R001")).thenReturn("RESTAURANT");
+        assertThat(service.isAvailableTo("R001", " Restaurant_Owner ")).isTrue();
+        verify(client, never()).openStartStream(any(), any());
+    }
+
+    @Test
     void activeStreamForwardsOnlyPersistedEventAndCleansUpOnce() throws Exception {
         active();
         when(client.isConfigured()).thenReturn(true);

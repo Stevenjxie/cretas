@@ -2,6 +2,7 @@ package com.cretas.aims.ai.tool;
 
 import com.cretas.aims.entity.config.AIIntentConfig;
 import org.springframework.stereotype.Service;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 
@@ -12,6 +13,13 @@ import java.util.Set;
  */
 @Service
 public class WriteGuardService {
+
+    /**
+     * Process-local authority marker. JSON deserialization can reproduce the key but can never
+     * reproduce this object identity, so request context is not an authentication channel.
+     */
+    private static final String SERVER_CONFIRMATION_KEY = "cretas.internal.confirmation.authority";
+    private static final Object SERVER_CONFIRMATION_MARKER = new Object();
 
     // Confidence-independent write-verb allowlist. matched via upper.contains(suffix) on the
     // tool/intent NAME. getActionType() only recognizes _create/_update/_delete and defaults the
@@ -77,9 +85,60 @@ public class WriteGuardService {
         return false;
     }
 
+    /**
+     * Removes confirmation-like authority from an untrusted HTTP/request context while retaining
+     * ordinary business parameters. Key comparison ignores case and separators so aliases such as
+     * {@code force_execute} cannot survive the boundary.
+     */
+    public static Map<String, Object> withoutCallerConfirmation(Map<String, Object> context) {
+        if (context == null || context.isEmpty()) {
+            return context == null ? null : new HashMap<>();
+        }
+        Map<String, Object> sanitized = new HashMap<>(context);
+        sanitized.keySet().removeIf(WriteGuardService::isCallerConfirmationKey);
+        return sanitized;
+    }
+
+    /**
+     * Adds confirmation authority only after a server-side proof has been atomically claimed.
+     * Package callers must keep the returned map intact until the write guard has inspected it.
+     */
+    public Map<String, Object> withServerConfirmation(Map<String, Object> context) {
+        Map<String, Object> trusted = context != null ? new HashMap<>(context) : new HashMap<>();
+        trusted.put(SERVER_CONFIRMATION_KEY, SERVER_CONFIRMATION_MARKER);
+        return trusted;
+    }
+
+    /**
+     * Removes only the process-local authority carrier after W0/RBAC have consumed it. The legacy
+     * business parameter {@code confirmed=true} remains available to destructive tools, while the
+     * private marker can never enter ToolCall JSON, preview JSON, hashes, caches or tool arguments.
+     */
+    public static Map<String, Object> withoutServerConfirmationMarker(Map<String, Object> context) {
+        if (context == null || context.isEmpty()) {
+            return context == null ? null : new HashMap<>();
+        }
+        Map<String, Object> sanitized = new HashMap<>(context);
+        sanitized.keySet().removeIf(WriteGuardService::isServerConfirmationKey);
+        return sanitized;
+    }
+
+    /** Raw booleans/strings in request context are never confirmation authority. */
     public boolean isConfirmed(Map<String, Object> context) {
-        if (context == null) return false;
-        Object v = context.get("confirmed");
-        return Boolean.TRUE.equals(v) || "true".equalsIgnoreCase(String.valueOf(v));
+        return context != null && context.get(SERVER_CONFIRMATION_KEY) == SERVER_CONFIRMATION_MARKER;
+    }
+
+    private static boolean isCallerConfirmationKey(String key) {
+        if (key == null) return false;
+        String normalized = key.replaceAll("[^A-Za-z0-9]", "").toLowerCase(java.util.Locale.ROOT);
+        return "confirmed".equals(normalized)
+                || "forceexecute".equals(normalized)
+                || isServerConfirmationKey(key);
+    }
+
+    private static boolean isServerConfirmationKey(String key) {
+        if (key == null) return false;
+        String normalized = key.replaceAll("[^A-Za-z0-9]", "").toLowerCase(java.util.Locale.ROOT);
+        return "cretasinternalconfirmationauthority".equals(normalized);
     }
 }

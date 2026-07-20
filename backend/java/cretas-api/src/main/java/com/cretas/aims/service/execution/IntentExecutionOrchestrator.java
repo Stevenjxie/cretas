@@ -1,6 +1,8 @@
 package com.cretas.aims.service.execution;
 
 import com.cretas.aims.ai.client.DashScopeClient;
+import com.cretas.aims.ai.capability.FactoryCapabilityPack;
+import com.cretas.aims.ai.capability.FactoryCapabilityPackRoutingPolicy;
 import com.cretas.aims.ai.dto.ChatCompletionRequest;
 import com.cretas.aims.ai.dto.ChatCompletionResponse;
 import com.cretas.aims.ai.dto.ChatMessage;
@@ -158,6 +160,15 @@ public class IntentExecutionOrchestrator {
     @Autowired
     private AuthenticatedToolPrincipalFactory authenticatedToolPrincipalFactory;
 
+    /** Main Chat selector for the single bounded restaurant Runtime route. */
+    @Autowired(required = false)
+    private com.cretas.aims.service.restaurant.RestaurantGrossMarginChatRouteSelector
+            restaurantGrossMarginChatRouteSelector;
+
+    /** Default-off boundary for the version-controlled factory capability packs. */
+    @Autowired
+    private FactoryCapabilityPackRoutingPolicy factoryCapabilityPackRoutingPolicy;
+
     // W0 write-guard (intent-w0): confidence-independent write detection. Inserted at the
     // explicit-intent convergence point so a misroute to a write intent cannot silently execute,
     // INCLUDING via forceExecute=true (multi-intent / conversation-continuation hard-set true).
@@ -250,9 +261,36 @@ public class IntentExecutionOrchestrator {
                         request.getUserInput().substring(0, 50) + "..." : request.getUserInput(),
                 request.getIntentCode(), userId, userRole);
 
+        FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute =
+                evaluateFactoryPackRoute(factoryId, request, userRole);
+        if (factoryPackRoute.shouldBlock()) {
+            return buildFactoryPackNoMatch(factoryPackRoute, factoryPackRoute.reason());
+        }
+        boolean factoryPackConstrained = factoryPackRoute.isConstrained();
+
         // 0. 显式意图代码
         if (request.getIntentCode() != null && !request.getIntentCode().isEmpty()) {
-            return executeWithExplicitIntent(factoryId, request, userId, userRole);
+            return factoryPackConstrained
+                    ? executeWithExplicitIntent(
+                            factoryId, request, userId, userRole, factoryPackRoute)
+                    : executeWithExplicitIntent(factoryId, request, userId, userRole);
+        }
+
+        // The bounded restaurant Runtime is selected before owner-advice, report shortcuts,
+        // conversation inheritance, cache and general intent recognition. This branch returns
+        // launch metadata only; the JWT-protected run facade performs the actual start and repeats
+        // every tenant/role/rollout check.
+        if (!factoryPackConstrained
+                && !Boolean.TRUE.equals(request.getPreviewOnly())
+                && restaurantGrossMarginChatRouteSelector != null) {
+            Optional<IntentExecuteResponse> restaurantAgentRoute =
+                    restaurantGrossMarginChatRouteSelector.select(
+                            factoryId, request.getUserInput(), userRole);
+            if (restaurantAgentRoute.isPresent()) {
+                log.info("[restaurant-agent-chat] selected bounded route: factoryId={}, userId={}",
+                        factoryId, userId);
+                return restaurantAgentRoute.get();
+            }
         }
 
         // 0.1. W1b: early VETO gate in the execution layer. The orchestrator's own phrase shortcut
@@ -265,12 +303,14 @@ public class IntentExecutionOrchestrator {
         //                  (OUT_OF_DOMAIN / read-twin, never an executed write).
         boolean negationVetoWrite = false;
         String userInput = request.getUserInput();
-        if (shouldRouteRestaurantOwnerAction(factoryId, userInput, request.getContext())) {
+        if (!factoryPackConstrained
+                && shouldRouteRestaurantOwnerAction(factoryId, userInput, request.getContext())) {
             log.info("[restaurant-owner-action] force-route before restaurant report shortcuts: factoryId={}, input={}",
                     factoryId, userInput);
             return executeRestaurantOwnerActionChat(factoryId, request, userId, userRole);
         }
-        if (userInput != null && !userInput.isEmpty() && !hasExplicitReadVeto(userInput)) {
+        if (!factoryPackConstrained
+                && userInput != null && !userInput.isEmpty() && !hasExplicitReadVeto(userInput)) {
             IntentMatchResult restaurantOpsMatch = tryRestaurantOpsPhraseShortcut(userInput, factoryId);
             if (restaurantOpsMatch != null && restaurantOpsMatch.hasMatch()) {
                 AIIntentConfig phraseIntent = restaurantOpsMatch.getBestMatch();
@@ -296,7 +336,8 @@ public class IntentExecutionOrchestrator {
                 log.warn("[W1b] orchestrator detectNegationVeto failed, fail-open NONE for input='{}': {}", vInput, e.toString());
                 vk = QueryPreprocessorService.NegationKind.NONE;
             }
-            if (vk == QueryPreprocessorService.NegationKind.VETO_READ
+            if (!factoryPackConstrained
+                    && vk == QueryPreprocessorService.NegationKind.VETO_READ
                     && shouldRouteRestaurantOwnerAction(factoryId, userInput, request.getContext())) {
                 log.info("[restaurant-owner-action] route before VETO_READ clarification: factoryId={}, input={}",
                         factoryId, userInput);
@@ -316,7 +357,8 @@ public class IntentExecutionOrchestrator {
         // "不要套餐，今天排班和备货怎么调？" through this path even when negation
         // pre-processing marks the wording as VETO_WRITE; otherwise it falls into a
         // low-level report intent and returns "missing month_summary" instead of a decision.
-        if (shouldRouteRestaurantOwnerAction(factoryId, userInput, request.getContext())) {
+        if (!factoryPackConstrained
+                && shouldRouteRestaurantOwnerAction(factoryId, userInput, request.getContext())) {
             log.info("[restaurant-owner-action] route before generic intent matching: factoryId={}, input={}",
                     factoryId, userInput);
             return executeRestaurantOwnerActionChat(factoryId, request, userId, userRole);
@@ -349,7 +391,8 @@ public class IntentExecutionOrchestrator {
         //
         // Phrase confidence is 0.96 (matching v33.1 EarlyPhrase tier so /recognize and /execute
         // produce consistent routing).
-        if (!negationVetoWrite && userInput != null && !userInput.isEmpty()) {
+        if (!factoryPackConstrained
+                && !negationVetoWrite && userInput != null && !userInput.isEmpty()) {
             IntentMatchResult restaurantOpsMatch = tryRestaurantOpsPhraseShortcut(userInput, factoryId);
             if (restaurantOpsMatch != null && restaurantOpsMatch.hasMatch()) {
                 AIIntentConfig phraseIntent = restaurantOpsMatch.getBestMatch();
@@ -363,12 +406,16 @@ public class IntentExecutionOrchestrator {
                         .thinkingBudget(request.getThinkingBudget())
                         .context(request.getContext())
                         .build();
-                return executeWithExplicitIntent(factoryId, phraseRequest, userId, userRole);
+                return executeWithExplicitIntent(
+                        factoryId, phraseRequest, userId, userRole, factoryPackRoute);
             }
         }
         if (!negationVetoWrite && userInput != null && !userInput.isEmpty()
                 && !shouldBypassEarlyPhraseShortcutForStoreReference(userInput)) {
-            IntentMatchResult earlyPhraseMatch = tryOrchestratorPhraseShortcut(userInput, factoryId);
+            IntentMatchResult earlyPhraseMatch = tryOrchestratorPhraseShortcut(
+                    userInput,
+                    factoryId,
+                    factoryPackConstrained ? "FACTORY" : null);
             if (earlyPhraseMatch != null && earlyPhraseMatch.hasMatch()) {
                 AIIntentConfig phraseIntent = earlyPhraseMatch.getBestMatch();
                 log.info("[Sprint12-CacheFix-EarlyPhrase] Pre-continuation phrase shortcut: input='{}', intentCode={}",
@@ -381,12 +428,14 @@ public class IntentExecutionOrchestrator {
                         .thinkingBudget(request.getThinkingBudget())
                         .context(request.getContext())
                         .build();
-                return executeWithExplicitIntent(factoryId, phraseRequest, userId, userRole);
+                return executeWithExplicitIntent(
+                        factoryId, phraseRequest, userId, userRole, factoryPackRoute);
             }
         }
 
         // 0.3. 多轮对话延续 (runs AFTER phrase shortcut per Sprint 12 cache-fix Phase C)
-        if (request.getSessionId() != null && !request.getSessionId().isEmpty()) {
+        if (!factoryPackConstrained
+                && request.getSessionId() != null && !request.getSessionId().isEmpty()) {
             IntentExecuteResponse conversationResponse = handleConversationContinuation(
                     factoryId, request, userId, userRole);
             if (conversationResponse != null) {
@@ -395,7 +444,8 @@ public class IntentExecutionOrchestrator {
         }
 
         // 0.3. 早期问题类型检测
-        if (!negationVetoWrite && userInput != null && !userInput.isEmpty()) {
+        if (!factoryPackConstrained
+                && !negationVetoWrite && userInput != null && !userInput.isEmpty()) {
             IntentExecuteResponse earlyRouteResponse = handleEarlyQuestionTypeDetection(
                     factoryId, userInput, request, userId, userRole);
             if (earlyRouteResponse != null) {
@@ -422,8 +472,15 @@ public class IntentExecutionOrchestrator {
             }
         }
 
+        if (factoryPackConstrained
+                && (matchResult.getQuestionType() == QuestionType.GENERAL_QUESTION
+                || matchResult.getQuestionType() == QuestionType.CONVERSATIONAL)) {
+            return buildFactoryPackNoMatch(factoryPackRoute, "general-analysis-not-allowed");
+        }
+
         // 2. 二次确认
-        if (matchResult.hasMatch() && Boolean.TRUE.equals(matchResult.getRequiresConfirmation())
+        if (!factoryPackConstrained
+                && matchResult.hasMatch() && Boolean.TRUE.equals(matchResult.getRequiresConfirmation())
                 && !Boolean.TRUE.equals(request.getForceExecute())) {
             return buildClarificationResponse(matchResult, factoryId);
         }
@@ -444,13 +501,31 @@ public class IntentExecutionOrchestrator {
 
         // 3. 无匹配
         if (!matchResult.hasMatch()) {
-            return buildNoMatchResponse(matchResult, factoryId, request, userId, userRole);
+            return factoryPackConstrained
+                    ? buildFactoryPackNoMatch(factoryPackRoute, "recognizer-no-match")
+                    : buildNoMatchResponse(matchResult, factoryId, request, userId, userRole);
         }
 
         AIIntentConfig intent = matchResult.getBestMatch();
         log.info("识别到意图: code={}, category={}, sensitivity={}, matchMethod={}, confidence={}",
                 intent.getIntentCode(), intent.getIntentCategory(), intent.getSensitivityLevel(),
                 matchResult.getMatchMethod(), matchResult.getConfidence());
+
+        if (factoryPackConstrained) {
+            if (!aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
+                return buildNoPermissionResponse(intent);
+            }
+            IntentExecuteResponse factoryPackDecision = applyFactoryPackDecision(
+                    factoryPackRoute, intent);
+            if (factoryPackDecision != null) {
+                return factoryPackDecision;
+            }
+            if (Boolean.TRUE.equals(matchResult.getRequiresConfirmation())
+                    && !Boolean.TRUE.equals(request.getForceExecute())) {
+                return buildFactoryPackNoMatch(
+                        factoryPackRoute, "recognizer-confirmation-required");
+            }
+        }
 
         if (requiresStoreReferenceClarification(request, matchResult, intent)) {
             return buildStoreReferenceClarificationResponse(request);
@@ -461,7 +536,8 @@ public class IntentExecutionOrchestrator {
         }
 
         // 权限检查
-        if (!aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
+        if (!factoryPackConstrained
+                && !aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
             return buildNoPermissionResponse(intent);
         }
 
@@ -473,9 +549,11 @@ public class IntentExecutionOrchestrator {
         // 业态门控 (Sprint 13 #305): a domain-exclusive intent (business_type RESTAURANT/FACTORY)
         // matched on a mismatched factory.type → honest "本厂非该业态" empty-state + appropriate
         // next-action, instead of executing a tool that returns a misleading half-broken "数据不可用".
-        IntentExecuteResponse businessTypeGate = checkBusinessTypeGate(factoryId, intent);
-        if (businessTypeGate != null) {
-            return businessTypeGate;
+        if (!factoryPackConstrained) {
+            IntentExecuteResponse businessTypeGate = checkBusinessTypeGate(factoryId, intent);
+            if (businessTypeGate != null) {
+                return businessTypeGate;
+            }
         }
 
         // Drools 验证
@@ -619,12 +697,31 @@ public class IntentExecutionOrchestrator {
      * 使用显式意图代码执行 (跳过意图识别)
      */
     public IntentExecuteResponse executeWithExplicitIntent(String factoryId, IntentExecuteRequest request,
-                                                            Long userId, String userRole) {
+                                                             Long userId, String userRole) {
+        FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute =
+                evaluateFactoryPackRoute(factoryId, request, userRole);
+        if (factoryPackRoute.shouldBlock()) {
+            return buildFactoryPackNoMatch(factoryPackRoute, factoryPackRoute.reason());
+        }
+        return executeWithExplicitIntent(
+                factoryId, request, userId, userRole, factoryPackRoute);
+    }
+
+    private IntentExecuteResponse executeWithExplicitIntent(
+            String factoryId,
+            IntentExecuteRequest request,
+            Long userId,
+            String userRole,
+            FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute) {
         String intentCode = request.getIntentCode();
         log.info("使用显式意图代码执行: intentCode={}, factoryId={}", intentCode, factoryId);
 
         Optional<AIIntentConfig> intentOpt = getIntentByCodeWithPlatformFallback(factoryId, intentCode);
         if (intentOpt.isEmpty()) {
+            if (factoryPackRoute.isConstrained()) {
+                return buildFactoryPackNoMatch(
+                        factoryPackRoute, "explicit-intent-not-found");
+            }
             return IntentExecuteResponse.builder()
                     .intentRecognized(false)
                     .status("FAILED")
@@ -639,12 +736,19 @@ public class IntentExecutionOrchestrator {
             return buildNoPermissionResponse(intent);
         }
 
+        IntentExecuteResponse factoryPackDecision = applyFactoryPackDecision(
+                factoryPackRoute, intent);
+        if (factoryPackDecision != null) {
+            return factoryPackDecision;
+        }
+
         // W0 write-guard (intent-w0) — SITE A: the convergence point all explicit-code / forced /
         // multi-intent / phrase-shortcut / conversation-continuation paths funnel through. The guard
         // is deliberately NOT conditioned on request.getForceExecute() (which is hard-set true by the
         // multi-intent and conversation-continuation paths and is exactly what must NOT skip the
-        // guard). previewOnly requests are allowed (they preview, not execute); a confirmed=true
-        // signal in the request context means the user already confirmed → allow.
+        // guard). previewOnly requests are allowed (they preview, not execute). Confirmation is
+        // process-local authority issued only after an atomic single-use token claim; raw request
+        // context values such as confirmed=true are never trusted.
         java.util.Map<String, Object> ctx = request.getContext() != null ? request.getContext() : java.util.Map.of();
         if (writeGuardService.isWriteIntent(intent)
                 && !Boolean.TRUE.equals(request.getPreviewOnly())
@@ -671,9 +775,11 @@ public class IntentExecutionOrchestrator {
         // bypassing the gate in the main matching flow. Gate here too so a domain-exclusive
         // intent (e.g. RESTAURANT_ECONOMICS_ANALYSIS) on a mismatched factory.type returns the
         // honest "本厂非该业态" empty-state instead of executing a tool with no data.
-        IntentExecuteResponse businessTypeGate = checkBusinessTypeGate(factoryId, intent);
-        if (businessTypeGate != null) {
-            return businessTypeGate;
+        if (!factoryPackRoute.isConstrained()) {
+            IntentExecuteResponse businessTypeGate = checkBusinessTypeGate(factoryId, intent);
+            if (businessTypeGate != null) {
+                return businessTypeGate;
+            }
         }
 
         // Preview mode
@@ -818,14 +924,16 @@ public class IntentExecutionOrchestrator {
             }
 
             Map<String, Object> context = claimResult.getParameters() != null
-                    ? new HashMap<>(claimResult.getParameters()) : new HashMap<>();
+                    ? com.cretas.aims.ai.tool.WriteGuardService.withoutCallerConfirmation(
+                            claimResult.getParameters())
+                    : new HashMap<>();
             // Identity and authorization are re-established from the trusted path/JWT. The token
             // deliberately does not persist the original role, so current JWT role is rechecked by
             // ToolDispatch/RBAC instead of accepting any client parameter as authority.
             for (String reservedKey : List.of(
                     "factoryId", "factory_id", "tenantId", "tenant_id",
                     "userId", "user_id", "userRole", "role",
-                    "permissions", "scopes", "principal", "confirmed")) {
+                    "permissions", "scopes", "principal")) {
                 context.remove(reservedKey);
             }
             context.put("factoryId", token.getFactoryId());
@@ -834,7 +942,11 @@ public class IntentExecutionOrchestrator {
             context.put("user_id", token.getUserId());
             context.put("userRole", userRole);
             context.put("role", userRole);
+            // Some legacy destructive tools still require a boolean business argument in addition
+            // to the platform guard. It is safe here because the atomic token claim already bound
+            // tenant, user, command digest, tool and descriptor version.
             context.put("confirmed", true);
+            context = writeGuardService.withServerConfirmation(context);
 
             IntentExecuteRequest execRequest = IntentExecuteRequest.builder()
                     .userInput("确认执行: " + intentCode)
@@ -1108,9 +1220,16 @@ public class IntentExecutionOrchestrator {
      * @return phrase-matched IntentMatchResult, or null if no phrase match
      */
     private IntentMatchResult tryOrchestratorPhraseShortcut(String userInput, String factoryId) {
+        return tryOrchestratorPhraseShortcut(userInput, factoryId, null);
+    }
+
+    private IntentMatchResult tryOrchestratorPhraseShortcut(
+            String userInput, String factoryId, String trustedBusinessDomain) {
         try {
             String normalized = userInput.toLowerCase().trim();
-            String businessDomain = resolvePhraseBusinessDomain(factoryId);
+            String businessDomain = trustedBusinessDomain != null
+                    ? trustedBusinessDomain
+                    : resolvePhraseBusinessDomain(factoryId);
 
             Optional<String> restaurantOpsMatch = matchRestaurantOpsIntent(normalized, businessDomain);
             if (restaurantOpsMatch.isPresent()) {
@@ -1426,6 +1545,109 @@ public class IntentExecutionOrchestrator {
     }
 
     // ==================== 响应构建 ====================
+
+    private FactoryCapabilityPackRoutingPolicy.Route evaluateFactoryPackRoute(
+            String factoryId, IntentExecuteRequest request, String userRole) {
+        if (factoryCapabilityPackRoutingPolicy == null) {
+            return new FactoryCapabilityPackRoutingPolicy.Route(
+                    FactoryCapabilityPackRoutingPolicy.RouteStatus.DISABLED,
+                    null,
+                    null,
+                    null,
+                    "feature-disabled");
+        }
+        return factoryCapabilityPackRoutingPolicy.evaluate(
+                factoryId, userRole, request != null ? request.getUserInput() : null);
+    }
+
+    private IntentExecuteResponse applyFactoryPackDecision(
+            FactoryCapabilityPackRoutingPolicy.Route route, AIIntentConfig intent) {
+        if (route == null || !route.isConstrained()) {
+            return null;
+        }
+        boolean writeIntent = writeGuardService.isWriteIntent(intent);
+        FactoryCapabilityPackRoutingPolicy.ExecutionDecision decision =
+                factoryCapabilityPackRoutingPolicy.authorize(
+                        route, intent.getIntentCode(), intent.getToolName(), writeIntent);
+        return switch (decision.status()) {
+            case ALLOW_READ, NOT_APPLICABLE -> null;
+            case GUIDANCE -> buildFactoryPackWorkflowGuidance(
+                    route, intent, decision.workflowReference());
+            case NO_MATCH -> buildFactoryPackNoMatch(route, decision.reason());
+        };
+    }
+
+    private IntentExecuteResponse buildFactoryPackNoMatch(
+            FactoryCapabilityPackRoutingPolicy.Route route, String reason) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("routeType", "FACTORY_CAPABILITY_PACK");
+        metadata.put("policyResult", "NO_MATCH");
+        metadata.put("reason", reason == null ? "not-allowed" : reason);
+        if (route != null && route.pack() != null) {
+            metadata.put("packId", route.pack().packId());
+            metadata.put("packVersion", route.pack().version());
+        }
+        String message = "该请求不在当前工厂岗位能力包的受控范围内。"
+                + "请改为询问本岗位已配置的查询、表单或固定导航事项。";
+        return IntentExecuteResponse.builder()
+                .intentRecognized(false)
+                .status("FACTORY_PACK_NO_MATCH")
+                .message(message)
+                .formattedText(message)
+                .metadata(Map.copyOf(metadata))
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
+
+    private IntentExecuteResponse buildFactoryPackWorkflowGuidance(
+            FactoryCapabilityPackRoutingPolicy.Route route,
+            AIIntentConfig intent,
+            FactoryCapabilityPack.WorkflowReference reference) {
+        boolean mutation = reference.mutation();
+        String message = mutation
+                ? "该请求涉及业务写入，AI 助手不会代为执行。请通过受控入口「"
+                        + reference.referenceId() + "」核对并确认。"
+                : "请通过能力包声明的固定入口「" + reference.referenceId() + "」继续。";
+
+        Map<String, Object> parameters = new LinkedHashMap<>();
+        parameters.put("workflowReference", reference.referenceId());
+        parameters.put("workflowType", reference.type().name());
+        parameters.put("requiresUserConfirmation", mutation);
+        parameters.put("approvalRequired", reference.approvalRequired());
+
+        IntentExecuteResponse.SuggestedAction action =
+                IntentExecuteResponse.SuggestedAction.builder()
+                        .actionCode("OPEN_FACTORY_WORKFLOW")
+                        .actionName(mutation ? "打开确认入口" : "打开固定入口")
+                        .description(message)
+                        .parameters(Map.copyOf(parameters))
+                        .build();
+
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("routeType", "FACTORY_CAPABILITY_PACK");
+        metadata.put("policyResult", "WORKFLOW_GUIDANCE");
+        metadata.put("packId", route.pack().packId());
+        metadata.put("packVersion", route.pack().version());
+        metadata.put("workflowReference", reference.referenceId());
+        metadata.put("workflowType", reference.type().name());
+        metadata.put("mutation", mutation);
+        metadata.put("approvalRequired", reference.approvalRequired());
+
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode(intent.getIntentCode())
+                .intentName(intent.getIntentName())
+                .intentCategory(intent.getIntentCategory())
+                .sensitivityLevel(intent.getSensitivityLevel())
+                .status("FACTORY_PACK_WORKFLOW_GUIDANCE")
+                .message(message)
+                .formattedText(message)
+                .requiresApproval(reference.approvalRequired())
+                .suggestedActions(List.of(action))
+                .metadata(Map.copyOf(metadata))
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
 
     private IntentExecuteResponse buildNoPermissionResponse(AIIntentConfig intent) {
         String msg = "您没有权限执行此操作。需要角色: " + intent.getRequiredRoles();

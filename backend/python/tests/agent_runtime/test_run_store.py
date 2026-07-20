@@ -75,6 +75,113 @@ def request():
 
 
 @pytest.mark.asyncio
+async def test_in_memory_start_claim_is_atomic_under_concurrency():
+    store = InMemoryRunStore()
+    tenant = ctx("A")
+    proposed_ids = [f"10000000-0000-4000-8000-{index:012d}" for index in range(20)]
+
+    claims = await asyncio.gather(
+        *(
+            store.claim_active_run(
+                run_id,
+                tenant,
+                RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION,
+                request(),
+            )
+            for run_id in proposed_ids
+        )
+    )
+
+    assert len({claim.record.run_id for claim in claims}) == 1
+    assert sum(claim.created for claim in claims) == 1
+    assert all(claim.record.state is RunState.RUNNING for claim in claims)
+
+
+@pytest.mark.asyncio
+async def test_in_memory_start_claim_is_exactly_tenant_owner_route_and_request_bound():
+    store = InMemoryRunStore()
+    route = RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION
+    base = await store.claim_active_run(
+        "11000000-0000-4000-8000-000000000001", ctx("A", "owner-A"), route, request()
+    )
+
+    variants = []
+    for run_id, tenant, payload in (
+        ("11000000-0000-4000-8000-000000000002", ctx("B", "owner-A"), request()),
+        ("11000000-0000-4000-8000-000000000003", ctx("A", "owner-B"), request()),
+        (
+            "11000000-0000-4000-8000-000000000004",
+            ctx("A", "owner-A"),
+            {**request(), "endDate": "2026-02-01"},
+        ),
+        (
+            "11000000-0000-4000-8000-000000000005",
+            ctx("A", "owner-A"),
+            {**request(), "storeTopN": 19},
+        ),
+    ):
+        variants.append(
+            await store.claim_active_run(run_id, tenant, route, payload)
+        )
+
+    assert base.created
+    assert all(claim.created for claim in variants)
+    assert len({base.record.run_id, *(claim.record.run_id for claim in variants)}) == 5
+    with pytest.raises(TypeError, match="RouteCode"):
+        await store.claim_active_run(
+            "11000000-0000-4000-8000-000000000006",
+            ctx("A", "owner-A"),
+            "GROSS_MARGIN_DECLINE_ATTRIBUTION",
+            request(),
+        )
+    with pytest.raises(UnsafeRunPayloadError, match="unsupported route"):
+        await store.claim_active_run(
+            "11000000-0000-4000-8000-000000000007",
+            ctx("A", "owner-A"),
+            route,
+            {**request(), "routeCode": "OTHER_ROUTE"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_terminal_start_is_not_reused_and_invalid_claim_never_mutates_store():
+    store = InMemoryRunStore()
+    tenant = ctx("A")
+    route = RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION
+    first = await store.claim_active_run(
+        "12000000-0000-4000-8000-000000000001", tenant, route, request()
+    )
+    outcome = StructuredOutcome(
+        OutcomeStatus.PARTIAL,
+        route,
+        blockers=("CAUSAL_ATTRIBUTION_UNSUPPORTED_BY_READ_CONTRACTS",),
+    )
+    assert await store.compare_and_set_terminal(
+        first.record.run_id,
+        tenant,
+        expected_state=RunState.RUNNING,
+        terminal_state=RunState.PARTIAL,
+        outcome=outcome,
+        counters=RuntimeCounters(),
+        terminal_event_type=AgentEventType.RUN_COMPLETED,
+    )
+
+    second = await store.claim_active_run(
+        "12000000-0000-4000-8000-000000000002", tenant, route, request()
+    )
+    assert second.created
+    assert second.record.run_id != first.record.run_id
+
+    invalid_id = "12000000-0000-4000-8000-000000000003"
+    with pytest.raises(UnsafeRunPayloadError):
+        await store.claim_active_run(
+            invalid_id, tenant, route, {**request(), "rawPrompt": "secret"}
+        )
+    with pytest.raises(RunAccessError):
+        await store.load_run(invalid_id, tenant)
+
+
+@pytest.mark.asyncio
 async def test_in_memory_store_refuses_cross_tenant_and_terminal_mutation():
     store = InMemoryRunStore()
     run_id = "11111111-1111-1111-1111-111111111111"
@@ -580,12 +687,84 @@ class FakeConnection:
 
 
 class FakePool:
-    def __init__(self):
-        self.connection = FakeConnection()
+    def __init__(self, connection=None):
+        self.connection = connection or FakeConnection()
         self.log = []
 
     def acquire(self):
         return _Ctx(self.connection, self.log, "pool")
+
+
+class ClaimConnection(FakeConnection):
+    def __init__(self, *, active_row=None):
+        super().__init__()
+        self.active_row = active_row
+
+    async def fetchrow(self, sql, *args):
+        self.fetchrows.append((sql, args))
+        if "state = 'RUNNING'" in sql and "sanitized_request = $4::jsonb" in sql:
+            return self.active_row
+        if "INSERT INTO smart_bi_agent_run" in sql:
+            row = _persisted_run_row()
+            row.update(
+                run_id=args[0],
+                factory_id=args[1],
+                owner_user_id=args[2],
+                sanitized_request=args[5],
+            )
+            return row
+        raise AssertionError("unexpected fetchrow")
+
+
+@pytest.mark.asyncio
+async def test_postgres_start_claim_binds_rls_locks_exact_identity_and_inserts_once():
+    connection = ClaimConnection()
+    pool = FakePool(connection)
+    store = PostgresRunStore(pool)
+
+    claim = await store.claim_active_run(
+        "13000000-0000-4000-8000-000000000001",
+        ctx("A", "owner-A"),
+        RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION,
+        request(),
+    )
+
+    assert claim.created
+    assert connection.executes[0][1] == ("A",)
+    assert connection.executes[1][1] == ("owner-A",)
+    advisory_sql, advisory_args = connection.executes[2]
+    assert "pg_advisory_xact_lock" in advisory_sql
+    lock_identity = json.loads(advisory_args[0])
+    assert lock_identity == {
+        "businessType": "RESTAURANT",
+        "factoryId": "A",
+        "ownerUserId": "owner-A",
+        "routeCode": "GROSS_MARGIN_DECLINE_ATTRIBUTION",
+        "safeRequest": request(),
+    }
+    active_sql, active_args = connection.fetchrows[0]
+    assert "owner_user_id = $2" in active_sql
+    assert "state = 'RUNNING'" in active_sql
+    assert "sanitized_request = $4::jsonb" in active_sql
+    assert active_args[:3] == (
+        "A",
+        "owner-A",
+        "GROSS_MARGIN_DECLINE_ATTRIBUTION",
+    )
+    assert "INSERT INTO smart_bi_agent_run" in connection.fetchrows[1][0]
+
+    active = _persisted_run_row()
+    active["owner_user_id"] = "owner-A"
+    reused_connection = ClaimConnection(active_row=active)
+    reused = await PostgresRunStore(FakePool(reused_connection)).claim_active_run(
+        "13000000-0000-4000-8000-000000000002",
+        ctx("A", "owner-A"),
+        RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION,
+        request(),
+    )
+    assert not reused.created
+    assert reused.record.run_id == active["run_id"]
+    assert len(reused_connection.fetchrows) == 1
 
 
 @pytest.mark.asyncio

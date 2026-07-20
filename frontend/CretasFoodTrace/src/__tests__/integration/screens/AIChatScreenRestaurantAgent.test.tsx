@@ -4,7 +4,6 @@ import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 
 let mockUser: any;
 let mockRole: string | null;
-let mockRunActive = false;
 const mockExecuteIntentStream = jest.fn();
 const mockStartRun = jest.fn();
 const mockReplayRun = jest.fn();
@@ -24,8 +23,6 @@ jest.mock('../../../store/authStore', () => ({
 }));
 
 jest.mock('../../../services/api/restaurantAgentRuns', () => ({
-  currentMonthRestaurantAgentWindow: () => ({ startDate: '2026-07-01', endDate: '2026-07-19' }),
-  isRestaurantAgentRunActive: () => mockRunActive,
   startGrossMarginDeclineRun: (...args: unknown[]) => mockStartRun(...args),
   replayGrossMarginDeclineRun: (...args: unknown[]) => mockReplayRun(...args),
   cancelGrossMarginDeclineRun: (...args: unknown[]) => mockCancelRun(...args),
@@ -102,8 +99,14 @@ paperMock.IconButton = (props: any) => {
   return <Text>{props.icon}</Text>;
 };
 const AIChatScreen = require('../../../screens/factory-admin/ai-analysis/AIChatScreen').default;
+const {
+  RestaurantGrossMarginRunCard,
+  __resetRestaurantAgentStartLeasesForTests,
+} = require('../../../components/ai/RestaurantGrossMarginRunCard');
 
 const RUN_ID = '11111111-1111-4111-8111-111111111111';
+const SHANGHAI_TODAY = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+const SHANGHAI_MONTH_START = `${SHANGHAI_TODAY.slice(0, 7)}-01`;
 const runEvent = (sequence: number, eventType: string) => ({
   schemaVersion: '1.0',
   runId: RUN_ID,
@@ -127,11 +130,48 @@ function restaurantUser(factoryId = 'REST-1', id = 1) {
   };
 }
 
+function installAgentRouteResponse(overrides: Record<string, unknown> = {}) {
+  mockExecuteIntentStream.mockImplementation(async (
+    _message: string,
+    callbacks: any,
+    factoryId: string,
+  ) => {
+    callbacks.onResult?.({
+      status: 'READY',
+      message: '已为你准备本月毛利下降归因，将在当前消息中启动只读分析。',
+      intentCode: 'GROSS_MARGIN_DECLINE_ATTRIBUTION',
+      intentCategory: 'ANALYSIS',
+      metadata: {
+        agentRun: {
+          schemaVersion: '1.0',
+          routeCode: 'GROSS_MARGIN_DECLINE_ATTRIBUTION',
+          startDate: SHANGHAI_MONTH_START,
+          endDate: SHANGHAI_TODAY,
+          startEndpoint: `/api/mobile/${encodeURIComponent(factoryId)}/restaurant-agent/runs`,
+          autoStart: true,
+          ...overrides,
+        },
+      },
+    });
+    callbacks.onComplete?.({ status: 'READY', cacheHit: false, totalLatencyMs: 5 });
+  });
+}
+
+async function requestGrossMarginAnalysis(screen: ReturnType<typeof render>) {
+  if (!screen.queryByTestId('ai-chat-input')) {
+    fireEvent.press(screen.getByTestId('keyboard-toggle-btn'));
+  }
+  fireEvent.changeText(screen.getByTestId('ai-chat-input'), '为什么本月毛利下降？');
+  await act(async () => {
+    fireEvent.press(screen.getByTestId('ai-chat-send-btn'));
+  });
+}
+
 describe('AIChatScreen restaurant agent run', () => {
   beforeEach(() => {
+    __resetRestaurantAgentStartLeasesForTests();
     mockUser = restaurantUser();
     mockRole = 'restaurant_owner';
-    mockRunActive = false;
     mockExecuteIntentStream.mockReset();
     mockStartRun.mockReset();
     mockReplayRun.mockReset();
@@ -141,12 +181,11 @@ describe('AIChatScreen restaurant agent run', () => {
     mockClearCheckpoint.mockReset().mockResolvedValue(undefined);
   });
 
-  it('renders no Run entry when OFF, non-restaurant, or outside the price-role allowlist', () => {
+  it('does not mount a permanent Run entry for any tenant or role', () => {
     const off = render(<AIChatScreen />);
     expect(off.queryByTestId('restaurant-agent-run-card')).toBeNull();
     off.unmount();
 
-    mockRunActive = true;
     mockUser = { ...restaurantUser(), factoryUser: { ...restaurantUser().factoryUser, factoryType: 'FACTORY' } };
     const factory = render(<AIChatScreen />);
     expect(factory.queryByTestId('restaurant-agent-run-card')).toBeNull();
@@ -159,9 +198,9 @@ describe('AIChatScreen restaurant agent run', () => {
     expect(mockStartRun).not.toHaveBeenCalled();
   });
 
-  it('shows the explicit local-month window and de-duplicates SSE plus replay', async () => {
-    mockRunActive = true;
+  it('mounts the server-selected Run in its assistant message, auto-starts, and de-duplicates replay', async () => {
     mockRole = ' Restaurant_Owner ';
+    installAgentRouteResponse();
     mockStartRun.mockImplementation(async (_factoryId, _body, callbacks) => {
       callbacks.onEvent(runEvent(1, 'RUN_STARTED'));
       return {
@@ -188,23 +227,23 @@ describe('AIChatScreen restaurant agent run', () => {
       failureCode: null,
     });
     const screen = render(<AIChatScreen />);
-    expect(screen.getByText('本月：2026-07-01 至 2026-07-19')).toBeTruthy();
-
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('restaurant-agent-start'));
-    });
+    expect(screen.queryByTestId('restaurant-agent-run-card')).toBeNull();
+    await requestGrossMarginAnalysis(screen);
     await waitFor(() => expect(screen.getByTestId('restaurant-agent-outcome')).toBeTruthy());
 
+    expect(screen.getByText(`本月：${SHANGHAI_MONTH_START} 至 ${SHANGHAI_TODAY}`)).toBeTruthy();
     expect(mockStartRun).toHaveBeenCalledWith(
       'REST-1',
       {
         schemaVersion: '1.0',
         routeCode: 'GROSS_MARGIN_DECLINE_ATTRIBUTION',
-        startDate: '2026-07-01',
-        endDate: '2026-07-19',
+        startDate: SHANGHAI_MONTH_START,
+        endDate: SHANGHAI_TODAY,
       },
       expect.any(Object),
     );
+    expect(mockLoadCheckpoint.mock.invocationCallOrder[0])
+      .toBeLessThan(mockStartRun.mock.invocationCallOrder[0]);
     expect(mockReplayRun).toHaveBeenCalledWith('REST-1', RUN_ID, 1);
     expect(screen.getAllByText('#1 运行已创建')).toHaveLength(1);
     expect(screen.getByText('#2 运行完成')).toBeTruthy();
@@ -212,7 +251,7 @@ describe('AIChatScreen restaurant agent run', () => {
   });
 
   it('persists cancellation explicitly and suppresses repeated taps', async () => {
-    mockRunActive = true;
+    installAgentRouteResponse();
     let callbacksRef: any;
     let resolveCompletion: (value: any) => void = () => undefined;
     const stopReceiving = jest.fn();
@@ -243,7 +282,7 @@ describe('AIChatScreen restaurant agent run', () => {
     });
 
     const screen = render(<AIChatScreen />);
-    await act(async () => { fireEvent.press(screen.getByTestId('restaurant-agent-start')); });
+    await requestGrossMarginAnalysis(screen);
     await waitFor(() => expect(screen.getByTestId('restaurant-agent-cancel')).toBeTruthy());
 
     await act(async () => {
@@ -263,7 +302,7 @@ describe('AIChatScreen restaurant agent run', () => {
   });
 
   it('renders clarification, expandable bounded evidence, and read-only proposals', async () => {
-    mockRunActive = true;
+    installAgentRouteResponse();
     const evidenceEvent = {
       ...runEvent(2, 'EVIDENCE_RECORDED'),
       toolName: 'restaurant.store_margin_summary',
@@ -333,7 +372,7 @@ describe('AIChatScreen restaurant agent run', () => {
     });
 
     const screen = render(<AIChatScreen />);
-    await act(async () => { fireEvent.press(screen.getByTestId('restaurant-agent-start')); });
+    await requestGrossMarginAnalysis(screen);
     await waitFor(() => expect(screen.getByTestId('restaurant-agent-clarification')).toBeTruthy());
     expect(screen.getByTestId('restaurant-agent-proposal-proposal-1')).toBeTruthy();
     expect(screen.getByTestId('restaurant-agent-action-readonly')).toBeTruthy();
@@ -345,7 +384,7 @@ describe('AIChatScreen restaurant agent run', () => {
   });
 
   it('restores a durable running checkpoint without starting a duplicate run', async () => {
-    mockRunActive = true;
+    installAgentRouteResponse();
     mockLoadCheckpoint.mockResolvedValue({ runId: RUN_ID, lastSequence: 2 });
     mockReplayRun.mockResolvedValue({
       schemaVersion: '1.0',
@@ -359,6 +398,7 @@ describe('AIChatScreen restaurant agent run', () => {
     });
 
     const screen = render(<AIChatScreen />);
+    await requestGrossMarginAnalysis(screen);
 
     await waitFor(() => expect(mockReplayRun).toHaveBeenCalledWith('REST-1', RUN_ID, 0));
     expect(mockLoadCheckpoint).toHaveBeenCalledWith('REST-1', '1');
@@ -367,8 +407,91 @@ describe('AIChatScreen restaurant agent run', () => {
     expect(screen.getByTestId('restaurant-agent-resume')).toBeTruthy();
   });
 
-  it('stops and clears the old run before loading a same-factory new owner', async () => {
-    mockRunActive = true;
+  it('fails closed when checkpoint loading fails and never auto-starts a possibly duplicate run', async () => {
+    installAgentRouteResponse();
+    mockLoadCheckpoint.mockRejectedValue(new Error('checkpoint storage unavailable'));
+    const screen = render(<AIChatScreen />);
+
+    await requestGrossMarginAnalysis(screen);
+
+    await waitFor(() => expect(screen.getByText('checkpoint storage unavailable')).toBeTruthy());
+    expect(mockStartRun).not.toHaveBeenCalled();
+  });
+
+  it('does not auto-start the same message twice after a same-identity rerender', async () => {
+    installAgentRouteResponse();
+    mockStartRun.mockResolvedValue({
+      stopReceiving: jest.fn(),
+      completion: new Promise(() => undefined),
+    });
+    const screen = render(<AIChatScreen />);
+
+    await requestGrossMarginAnalysis(screen);
+    await waitFor(() => expect(mockStartRun).toHaveBeenCalledTimes(1));
+    screen.rerender(<AIChatScreen />);
+
+    await act(async () => undefined);
+    expect(mockLoadCheckpoint).toHaveBeenCalledTimes(1);
+    expect(mockStartRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('coalesces two assistant route messages before either run writes a checkpoint', async () => {
+    installAgentRouteResponse();
+    mockStartRun.mockResolvedValue({
+      stopReceiving: jest.fn(),
+      completion: new Promise(() => undefined),
+    });
+    const screen = render(<AIChatScreen />);
+
+    await requestGrossMarginAnalysis(screen);
+    await waitFor(() => expect(mockStartRun).toHaveBeenCalledTimes(1));
+    await requestGrossMarginAnalysis(screen);
+
+    await waitFor(() => expect(screen.getAllByTestId('restaurant-agent-run-card')).toHaveLength(2));
+    await waitFor(() => expect(screen.getByText('同一账号已有本期毛利归因正在启动，本消息不会重复发起')).toBeTruthy());
+    expect(mockLoadCheckpoint).toHaveBeenCalledTimes(2);
+    expect(mockStartRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an unmounted request lease so remount cannot create a duplicate durable run', async () => {
+    let resolveFirstCompletion: (value: any) => void = () => undefined;
+    mockStartRun
+      .mockResolvedValueOnce({
+        stopReceiving: jest.fn(),
+        completion: new Promise((resolve) => { resolveFirstCompletion = resolve; }),
+      })
+      .mockResolvedValueOnce({
+        stopReceiving: jest.fn(),
+        completion: new Promise(() => undefined),
+      });
+    const props = {
+      factoryId: 'REST-1',
+      ownerUserId: '1',
+      startDate: SHANGHAI_MONTH_START,
+      endDate: SHANGHAI_TODAY,
+      autoStart: true,
+    };
+
+    const first = render(<RestaurantGrossMarginRunCard {...props} />);
+    await waitFor(() => expect(mockStartRun).toHaveBeenCalledTimes(1));
+    first.unmount();
+
+    const second = render(<RestaurantGrossMarginRunCard {...props} />);
+    await waitFor(() => expect(second.getByText('同一账号已有本期毛利归因正在启动，本消息不会重复发起')).toBeTruthy());
+    expect(mockStartRun).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveFirstCompletion({ runId: null, lastSequence: 0, stoppedReceiving: true });
+    });
+
+    const third = render(<RestaurantGrossMarginRunCard {...props} />);
+    await waitFor(() => expect(third.getByText('同一账号已有本期毛利归因正在启动，本消息不会重复发起')).toBeTruthy());
+    expect(mockStartRun).toHaveBeenCalledTimes(1);
+    second.unmount();
+    third.unmount();
+  });
+
+  it('unmounts the old run without starting it for a same-factory new owner', async () => {
+    installAgentRouteResponse();
     let callbacksRef: any;
     const stopReceiving = jest.fn();
     mockStartRun.mockImplementation(async (_factoryId, _body, callbacks) => {
@@ -378,7 +501,7 @@ describe('AIChatScreen restaurant agent run', () => {
     });
 
     const screen = render(<AIChatScreen />);
-    await act(async () => { fireEvent.press(screen.getByTestId('restaurant-agent-start')); });
+    await requestGrossMarginAnalysis(screen);
     await waitFor(() => expect(screen.getByText(`Run ${RUN_ID}`)).toBeTruthy());
     expect(callbacksRef).toBeTruthy();
 
@@ -386,14 +509,15 @@ describe('AIChatScreen restaurant agent run', () => {
     screen.rerender(<AIChatScreen />);
 
     await waitFor(() => expect(stopReceiving).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(mockLoadCheckpoint).toHaveBeenCalledWith('REST-1', '2'));
+    await waitFor(() => expect(screen.queryByTestId('restaurant-agent-run-card')).toBeNull());
     expect(screen.queryByText(`Run ${RUN_ID}`)).toBeNull();
     expect(screen.queryByTestId('restaurant-agent-cancel')).toBeNull();
-    expect(screen.getByTestId('restaurant-agent-start')).toBeTruthy();
+    expect(mockLoadCheckpoint).not.toHaveBeenCalledWith('REST-1', '2');
+    expect(mockStartRun).toHaveBeenCalledTimes(1);
   });
 
-  it('clears the old factory checkpoint view before loading the new factory', async () => {
-    mockRunActive = true;
+  it('hides the old factory run without loading it under the new factory', async () => {
+    installAgentRouteResponse();
     mockLoadCheckpoint.mockImplementation(async (factoryId: string) => (
       factoryId === 'REST-1' ? { runId: RUN_ID, lastSequence: 2 } : null
     ));
@@ -403,14 +527,72 @@ describe('AIChatScreen restaurant agent run', () => {
       events: [runEvent(2, 'EVIDENCE_GAP')], terminalOutcome: null, failureCode: null,
     });
     const screen = render(<AIChatScreen />);
+    await requestGrossMarginAnalysis(screen);
     await waitFor(() => expect(screen.getByText(`Run ${RUN_ID}`)).toBeTruthy());
 
     mockUser = restaurantUser('REST-2', 1);
     screen.rerender(<AIChatScreen />);
 
-    await waitFor(() => expect(mockLoadCheckpoint).toHaveBeenCalledWith('REST-2', '1'));
+    await waitFor(() => expect(screen.queryByTestId('restaurant-agent-run-card')).toBeNull());
     expect(screen.queryByText(`Run ${RUN_ID}`)).toBeNull();
-    expect(screen.getByTestId('restaurant-agent-start')).toBeTruthy();
+    expect(mockLoadCheckpoint).not.toHaveBeenCalledWith('REST-2', '1');
+  });
+
+  it.each([
+    ['endpoint', { startEndpoint: '/api/mobile/OTHER/restaurant-agent/runs' }],
+    ['schema', { schemaVersion: '2.0' }],
+    ['route', { routeCode: 'RESTAURANT_MONTHLY_REPORT' }],
+    ['autoStart', { autoStart: false }],
+    ['impossible date', { startDate: '2026-99-99' }],
+    ['non-current month', { startDate: '2000-01-01', endDate: '2000-01-20' }],
+  ])('rejects malformed or mismatched %s launch metadata without starting a run', async (_case, overrides) => {
+    installAgentRouteResponse(overrides);
+    const screen = render(<AIChatScreen />);
+
+    await requestGrossMarginAnalysis(screen);
+
+    expect(screen.queryByTestId('restaurant-agent-run-card')).toBeNull();
+    expect(mockStartRun).not.toHaveBeenCalled();
+  });
+
+  it('shows an explicit card error instead of silently swallowing server READY when the client cannot start', async () => {
+    installAgentRouteResponse();
+    mockStartRun.mockRejectedValue(new Error('RESTAURANT_AGENT_RUNS_OFF'));
+    const screen = render(<AIChatScreen />);
+
+    await requestGrossMarginAnalysis(screen);
+
+    await waitFor(() => expect(screen.getByTestId('restaurant-agent-run-card')).toBeTruthy());
+    expect(screen.getByText('当前客户端未启用餐饮分析，请更新发布配置')).toBeTruthy();
+    expect(mockStartRun).toHaveBeenCalledTimes(1);
+
+    mockStartRun.mockResolvedValue({
+      stopReceiving: jest.fn(),
+      completion: new Promise(() => undefined),
+    });
+    fireEvent.press(screen.getByTestId('restaurant-agent-start'));
+    await waitFor(() => expect(mockStartRun).toHaveBeenCalledTimes(2));
+  });
+
+  it('keeps ordinary Chat responses free of the restaurant Runtime card', async () => {
+    mockExecuteIntentStream.mockImplementation(async (_message, callbacks) => {
+      callbacks.onResult?.({
+        status: 'COMPLETED',
+        message: '本月毛利为 23%。',
+        intentCode: 'RESTAURANT_MONTHLY_REPORT',
+        metadata: {},
+      });
+      callbacks.onComplete?.({ status: 'COMPLETED', cacheHit: false, totalLatencyMs: 5 });
+    });
+    const screen = render(<AIChatScreen />);
+
+    fireEvent.press(screen.getByTestId('keyboard-toggle-btn'));
+    fireEvent.changeText(screen.getByTestId('ai-chat-input'), '本月毛利是多少');
+    await act(async () => { fireEvent.press(screen.getByTestId('ai-chat-send-btn')); });
+
+    expect(screen.getByText('本月毛利为 23%。')).toBeTruthy();
+    expect(screen.queryByTestId('restaurant-agent-run-card')).toBeNull();
+    expect(mockStartRun).not.toHaveBeenCalled();
   });
 
   it('fails free chat explicitly when factory identity is missing and never uses F001', async () => {

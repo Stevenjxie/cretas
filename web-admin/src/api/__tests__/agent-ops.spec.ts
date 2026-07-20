@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../request', () => ({ get: vi.fn(), post: vi.fn() }));
 
 import { get, post } from '../request';
-import { compareExperiments, createEvalSet, getRunTrace, listEvalSets, rerunExperiment, runExperiment } from '../agent-ops';
+import { compareExperiments, createEvalSet, getRunTrace, importRuntimeCorpus, listEvalSets, rerunExperiment, runExperiment, runRuntimeShadow } from '../agent-ops';
 
 const mockedGet = vi.mocked(get);
 const mockedPost = vi.mocked(post);
@@ -72,6 +72,40 @@ describe('AgentOps API', () => {
     await runExperiment('R001', body);
     expect(mockedPost).toHaveBeenCalledWith('/R001/agent-ops/experiments', body);
     expect(mockedPost.mock.calls[0][1]).not.toHaveProperty('evaluatorVersion');
+  });
+
+  it('uses automatic corpus and runtime-shadow paths without client identity or actual snapshots', async () => {
+    const imported = {
+      schemaVersion: '1.0' as const,
+      requestId: REQUEST_ID,
+      name: 'runtime baseline',
+      version: 1,
+      description: '',
+      maxCases: 20,
+    };
+    await importRuntimeCorpus('R001', imported);
+    expect(mockedPost).toHaveBeenLastCalledWith(
+      '/R001/agent-ops/eval-sets/import-runtime-corpus', imported,
+    );
+
+    const shadow = {
+      schemaVersion: '1.0' as const,
+      requestId: REQUEST_ID,
+      evalSetId: ID1,
+      configSnapshot: {
+        promptSnapshotDigest: '1'.repeat(64),
+        modelSnapshotDigest: '2'.repeat(64),
+        toolSnapshotDigest: '3'.repeat(64),
+      },
+      bounds: { maxCases: 20, maxConcurrency: 2, perCaseTimeoutMs: 75000 },
+    };
+    await runRuntimeShadow('R001', shadow);
+    expect(mockedPost).toHaveBeenLastCalledWith(
+      '/R001/agent-ops/experiments/runtime-shadow', shadow,
+    );
+    expect(shadow).not.toHaveProperty('actualSnapshots');
+    expect(shadow).not.toHaveProperty('factoryId');
+    expect(shadow).not.toHaveProperty('userId');
   });
 
   it('sends a versioned idempotent rerun body', async () => {

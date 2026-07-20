@@ -143,16 +143,16 @@ public class SkillRegistryImpl implements SkillRegistry {
     private int initializeDefaultSkills() {
         int count = 0;
 
-        // 库存分析Skill — 物料库存查询 + 低库存预警
+        // 库存分析Skill — 兼容别名；执行计划由 InventoryAnalysisWorkflow 固定治理
         registerWithSource(SkillDefinition.builder()
                 .name("inventory-analysis")
                 .displayName("库存分析")
-                .description("分析库存数据，包括库存量、库存周转、预警等")
-                .version("2.0.0")
+                .description("确定性查询库存汇总、原料批次和过期批次")
+                .version("3.0.0")
                 .triggers(Arrays.asList("库存分析", "库存预警", "低库存", "过期物料", "库存量", "还有多少", "存货"))
-                .tools(Arrays.asList("material_batch_query", "material_low_stock_alert", "material_expired_query"))
+                .tools(Arrays.asList("material_stock_summary", "material_batch_query", "material_expired_query"))
                 .contextNeeded(Arrays.asList("factoryId"))
-                .promptTemplate("分析工厂${factoryId}的库存情况，用户问题：${userQuery}")
+                .promptTemplate("由固定库存分析工作流执行；禁止 LLM 编排或扩展工具。")
                 .source("default")
                 .enabled(true)
                 .build());

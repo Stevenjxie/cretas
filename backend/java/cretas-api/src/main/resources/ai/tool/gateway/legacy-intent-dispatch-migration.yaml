@@ -1,0 +1,41 @@
+# Temporary D11B migration lane. This file is intersected with the frozen legacy inventory and
+# exact Spring runtime metadata; it is not a replacement for runtime-tool-policies.yaml.
+schemaVersion: 1
+expectedToolCount: 3
+tools:
+  - implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantDishListTool"
+    toolName: "restaurant_dish_list"
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: []
+    allowedRoles: []
+    allowedBusinessTypes: [RESTAURANT, BRANCH]
+    version: "1.0.0"
+    domainTags: ["restaurant"]
+    dataClassification: CONFIDENTIAL
+  - implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantIngredientStockTool"
+    toolName: "restaurant_ingredient_stock"
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: []
+    allowedRoles: []
+    allowedBusinessTypes: [RESTAURANT, BRANCH]
+    version: "1.0.0"
+    domainTags: ["restaurant"]
+    dataClassification: CONFIDENTIAL
+  - implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantOrderStatisticsTool"
+    toolName: "restaurant_order_statistics"
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: []
+    allowedRoles: []
+    allowedBusinessTypes: [RESTAURANT, BRANCH]
+    version: "1.0.0"
+    domainTags: ["restaurant"]
+    dataClassification: CONFIDENTIAL

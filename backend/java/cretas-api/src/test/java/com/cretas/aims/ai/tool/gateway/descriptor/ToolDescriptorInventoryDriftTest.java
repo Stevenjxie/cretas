@@ -135,14 +135,14 @@ class ToolDescriptorInventoryDriftTest {
                     "com.cretas.aims.ai.tool.impl.workprocess.ProductProcessWorkflowConfigTool");
             assertThat(tool.toolName()).isEqualTo("canvas_product_process_workflow_config");
         });
-        assertThat(countOverride(tools, flags -> flags.actionType())).isEqualTo(53);
-        assertThat(countOverride(tools, flags -> flags.riskLevel())).isEqualTo(36);
-        assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(41);
-        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(47);
-        assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(36);
-        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(7);
-        assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(7);
-        assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(21);
+        assertThat(countOverride(tools, flags -> flags.actionType())).isEqualTo(56);
+        assertThat(countOverride(tools, flags -> flags.riskLevel())).isEqualTo(39);
+        assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(44);
+        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(50);
+        assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(39);
+        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(10);
+        assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(10);
+        assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(24);
 
         assertThat(countActions(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
                 ToolExecutor.ActionType.READ, 447L,

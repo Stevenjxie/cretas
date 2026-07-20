@@ -7,9 +7,11 @@ import json
 import re
 import uuid
 from dataclasses import replace
+from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping, Protocol, Sequence
 
 from .contracts import AgentOpsContext, EvalSetRecord, ExperimentRecord, utc_iso
+from .runtime_shadow import numeric_truth_ref_key
 from .validation import (
     canonical_digest,
     validate_actual_snapshots,
@@ -18,6 +20,7 @@ from .validation import (
     validate_evaluator,
     validate_name,
     validate_request_id,
+    validate_runtime_shadow_cases,
     validate_runner_bounds_snapshot,
 )
 
@@ -49,6 +52,9 @@ class AgentOpsStore(Protocol):
     ) -> ExperimentRecord | None: ...
     async def list_experiments(self, context: AgentOpsContext) -> tuple[ExperimentRecord, ...]: ...
     async def get_experiment(self, context: AgentOpsContext, experiment_id: str) -> ExperimentRecord: ...
+    async def load_runtime_corpus(
+        self, context: AgentOpsContext, *, limit: int
+    ) -> tuple[Mapping[str, Any], ...]: ...
     async def load_trace(
         self, context: AgentOpsContext, run_id: str, *, after_sequence: int, limit: int
     ) -> Mapping[str, Any]: ...
@@ -130,10 +136,16 @@ class InMemoryAgentOpsStore:
         self._eval_requests: dict[tuple[str, str, str], str] = {}
         self._experiment_requests: dict[tuple[str, str, str], str] = {}
         self._traces: dict[str, Mapping[str, Any]] = {}
+        self._runtime_corpus: dict[str, tuple[Mapping[str, Any], ...]] = {}
         self._lock = asyncio.Lock()
 
     def seed_trace(self, factory_id: str, run_id: str, trace: Mapping[str, Any]) -> None:
         self._traces[run_id] = {**dict(trace), "factoryId": factory_id}
+
+    def seed_runtime_corpus(
+        self, factory_id: str, cases: Sequence[Mapping[str, Any]]
+    ) -> None:
+        self._runtime_corpus[factory_id] = validate_runtime_shadow_cases(cases)
 
     async def create_eval_set(self, context, record):
         _require_context(context)
@@ -232,6 +244,15 @@ class InMemoryAgentOpsStore:
             if item is None or item.factory_id != context.factory_id:
                 raise AgentOpsAccessError("experiment not found")
             return _validate_experiment_record(item)
+
+    async def load_runtime_corpus(self, context, *, limit):
+        _require_admin_context(context)
+        _require_runtime_corpus_limit(limit)
+        async with self._lock:
+            return tuple(
+                dict(case)
+                for case in self._runtime_corpus.get(context.factory_id, ())[:limit]
+            )
 
     async def load_trace(self, context, run_id, *, after_sequence, limit):
         _require_admin_context(context)
@@ -415,6 +436,55 @@ class PostgresAgentOpsStore:
         if row is None:
             raise AgentOpsAccessError("experiment not found")
         return self._experiment(row)
+
+    async def load_runtime_corpus(self, context, *, limit):
+        _require_admin_context(context)
+        _require_runtime_corpus_limit(limit)
+        async with self._pool.acquire() as connection:
+            async with connection.transaction(readonly=True):
+                await self._bind_trace(connection, context)
+                runs = await connection.fetch(
+                    """SELECT run_id,factory_id,route_code,state,sanitized_request,
+                              outcome_summary,failure_code,rounds_used,tool_calls_used,
+                              created_at,completed_at
+                       FROM smart_bi_agent_run
+                       WHERE factory_id=$1
+                         AND state IN ('COMPLETED','PARTIAL')
+                         AND route_code='GROSS_MARGIN_DECLINE_ATTRIBUTION'
+                         AND failure_code IS NULL
+                         AND outcome_summary IS NOT NULL
+                         AND completed_at IS NOT NULL
+                       ORDER BY completed_at DESC
+                       LIMIT $2""",
+                    context.factory_id,
+                    min(limit * 3, 60),
+                )
+                run_ids = [row["run_id"] for row in runs]
+                events = []
+                if run_ids:
+                    events = await connection.fetch(
+                        """SELECT run_id,event_sequence,event_type,step_id,tool_name,payload
+                           FROM smart_bi_agent_event
+                           WHERE factory_id=$1 AND run_id=ANY($2::uuid[])
+                           ORDER BY run_id,event_sequence""",
+                        context.factory_id,
+                        run_ids,
+                    )
+        grouped: dict[str, list[Mapping[str, Any]]] = {}
+        for event in events:
+            grouped.setdefault(str(event["run_id"]), []).append(event)
+        cases: list[Mapping[str, Any]] = []
+        for run in runs:
+            case = _trusted_runtime_case(
+                run,
+                grouped.get(str(run["run_id"]), ()),
+                value_loader=self._value,
+            )
+            if case is not None:
+                cases.append(case)
+            if len(cases) == limit:
+                break
+        return validate_runtime_shadow_cases(cases) if cases else ()
 
     async def load_trace(self, context, run_id, *, after_sequence, limit):
         _require_admin_context(context)
@@ -687,6 +757,198 @@ def _require_limit(limit: int) -> None:
         raise AgentOpsStoreError("trace limit out of bounds")
 
 
+def _require_runtime_corpus_limit(limit: int) -> None:
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
+        raise AgentOpsStoreError("runtime corpus limit out of bounds")
+
+
+def _trusted_runtime_case(
+    run: Mapping[str, Any],
+    events: Sequence[Mapping[str, Any]],
+    *,
+    value_loader,
+) -> Mapping[str, Any] | None:
+    """Freeze one complete durable run into a digest-backed replay case."""
+
+    try:
+        run_id = str(uuid.UUID(str(run["run_id"])))
+        if run["factory_id"] is None or run["failure_code"] is not None:
+            return None
+        if run["state"] not in {"COMPLETED", "PARTIAL"}:
+            return None
+        if run["route_code"] != "GROSS_MARGIN_DECLINE_ATTRIBUTION":
+            return None
+        request = value_loader(run["sanitized_request"])
+        if not isinstance(request, Mapping) or set(request) != {
+            "routeCode", "startDate", "endDate", "storeTopN", "dishTopN"
+        }:
+            return None
+        if request["routeCode"] != run["route_code"]:
+            return None
+        input_snapshot = {
+            "startDate": request["startDate"],
+            "endDate": request["endDate"],
+            "storeTopN": request["storeTopN"],
+            "dishTopN": request["dishTopN"],
+        }
+        outcome = value_loader(run["outcome_summary"])
+        if not isinstance(outcome, Mapping) or outcome.get("routeCode") != run["route_code"]:
+            return None
+        sequences = [int(event["event_sequence"]) for event in events]
+        if not sequences or sequences != list(range(1, len(sequences) + 1)):
+            return None
+        event_types = [str(event["event_type"]) for event in events]
+        if event_types[-1] != "RUN_COMPLETED" or any(
+            event_type in {"STEP_FAILED", "RUN_FAILED", "RUN_CANCELLED", "BUDGET_EXCEEDED"}
+            for event_type in event_types
+        ):
+            return None
+        required_tools = [
+            str(event["tool_name"])
+            for event in events
+            if event["event_type"] == "STEP_COMPLETED" and event["tool_name"]
+        ]
+        rounds_used = int(run["rounds_used"])
+        tool_calls_used = int(run["tool_calls_used"])
+        if (
+            not required_tools
+            or not 1 <= rounds_used <= 2
+            or not len(required_tools) <= tool_calls_used <= 10
+        ):
+            return None
+
+        evidence_facts: dict[tuple[str, str], Mapping[str, Any]] = {}
+        evidence_digest_rows: list[Mapping[str, Any]] = []
+        for event in events:
+            if event["event_type"] != "EVIDENCE_RECORDED":
+                continue
+            payload = value_loader(event["payload"])
+            if not isinstance(payload, Mapping) or not isinstance(
+                payload.get("factReferences"), list
+            ):
+                return None
+            evidence_id = payload.get("evidenceId")
+            tool_name = event["tool_name"]
+            if not isinstance(evidence_id, str) or not isinstance(tool_name, str):
+                return None
+            safe_facts: list[Mapping[str, Any]] = []
+            for fact in payload["factReferences"]:
+                if not isinstance(fact, Mapping):
+                    return None
+                fact_id = fact.get("factId")
+                metric = fact.get("metric")
+                dimensions = fact.get("dimensions", {})
+                if (
+                    not isinstance(fact_id, str)
+                    or not isinstance(metric, str)
+                    or not isinstance(dimensions, Mapping)
+                ):
+                    return None
+                normalized_fact = {
+                    "factId": fact_id,
+                    "metric": metric,
+                    "value": fact.get("value"),
+                    "dimensions": {
+                        str(key): str(value) for key, value in sorted(dimensions.items())
+                    },
+                }
+                evidence_facts[(evidence_id, fact_id)] = {
+                    **normalized_fact,
+                    "toolName": tool_name,
+                }
+                safe_facts.append(normalized_fact)
+            evidence_digest_rows.append({
+                "toolName": tool_name,
+                "evidenceId": evidence_id,
+                "facts": safe_facts,
+            })
+
+        claims = outcome.get("claims", [])
+        if not isinstance(claims, list):
+            return None
+        numeric_truth_refs: dict[str, str] = {}
+        for claim in claims:
+            if not isinstance(claim, Mapping):
+                return None
+            evidence_id = claim.get("evidenceId")
+            fact_id = claim.get("factId")
+            statement_code = claim.get("statementCode")
+            metric = claim.get("metric")
+            value = claim.get("value")
+            if not all(
+                isinstance(item, str)
+                for item in (evidence_id, fact_id, statement_code, metric, value)
+            ):
+                return None
+            fact = evidence_facts.get((evidence_id, fact_id))
+            if fact is None or fact["metric"] != metric:
+                return None
+            if not _same_decimal(fact.get("value"), value):
+                return None
+            key = numeric_truth_ref_key(
+                tool_name=str(fact["toolName"]),
+                statement_code=statement_code,
+                metric=metric,
+                dimensions=fact["dimensions"],
+            )
+            if key in numeric_truth_refs and not _same_decimal(
+                numeric_truth_refs[key], value
+            ):
+                return None
+            numeric_truth_refs[key] = value
+
+        trajectory_digest = canonical_digest(required_tools)
+        numeric_digest = canonical_digest(numeric_truth_refs)
+        evidence_digest = canonical_digest(evidence_digest_rows)
+        input_digest = canonical_digest(input_snapshot)
+        source_run_digest = canonical_digest({
+            "runId": run_id,
+            "routeCode": run["route_code"],
+            "state": run["state"],
+            "inputDigest": input_digest,
+            "trajectoryDigest": trajectory_digest,
+            "numericTruthDigest": numeric_digest,
+            "evidenceDigest": evidence_digest,
+            "roundsUsed": rounds_used,
+            "toolCallsUsed": tool_calls_used,
+            "completedAt": run["completed_at"].isoformat(),
+        })
+        return {
+            "caseId": f"runtime-{run_id}",
+            "inputSnapshot": input_snapshot,
+            "expectedRoute": run["route_code"],
+            "requiredTools": required_tools,
+            "numericTruthRefs": numeric_truth_refs,
+            "maxRounds": rounds_used,
+            "maxToolCalls": tool_calls_used,
+            "sourceRunId": run_id,
+            "evidenceDigests": {
+                "inputDigest": input_digest,
+                "trajectoryDigest": trajectory_digest,
+                "numericTruthDigest": numeric_digest,
+                "evidenceDigest": evidence_digest,
+                "sourceRunDigest": source_run_digest,
+            },
+        }
+    except (KeyError, TypeError, ValueError, InvalidOperation, OverflowError):
+        return None
+
+
+def _same_decimal(left: Any, right: Any) -> bool:
+    if left is None or right is None:
+        return False
+    try:
+        left_decimal = Decimal(str(left))
+        right_decimal = Decimal(str(right))
+    except InvalidOperation:
+        return False
+    return (
+        left_decimal.is_finite()
+        and right_decimal.is_finite()
+        and left_decimal == right_decimal
+    )
+
+
 def _validate_request_lookup(
     request_id: str, request_digest: str
 ) -> tuple[str, str]:
@@ -761,6 +1023,18 @@ def _validate_experiment_record(record: ExperimentRecord) -> ExperimentRecord:
             "operationKind": "RERUN",
             "sourceExperimentId": source_experiment_id,
             "sourceSnapshotDigest": record.snapshot_digest,
+        }
+    elif (
+        record.operation_kind == "RUNTIME_SHADOW"
+        and record.source_experiment_id is None
+    ):
+        source_experiment_id = None
+        request_payload = {
+            "schemaVersion": "1.0",
+            "operationKind": "RUNTIME_SHADOW",
+            "evalSetId": record.eval_set_id,
+            "configSnapshot": config_snapshot,
+            "runnerBounds": runner_bounds,
         }
     else:
         raise AgentOpsStoreError("persisted experiment operation is invalid")

@@ -40,13 +40,8 @@ import type { FAAIStackParamList } from '../../../types/navigation';
 import { QuickActionCardGrid } from '../../../components/ai/QuickActionCardGrid';
 import { feedbackSounds } from '../../../services/audio/feedbackSounds';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { isRestaurant } from '../../../utils/factoryType';
 import {
-  currentMonthRestaurantAgentWindow,
-  isRestaurantAgentRunActive,
-} from '../../../services/api/restaurantAgentRuns';
-import {
-  RESTAURANT_AGENT_PRICE_VIEW_ROLES,
+  RESTAURANT_AGENT_RUN_ROUTE,
 } from '../../../types/restaurantAgentRun';
 import { RestaurantGrossMarginRunCard } from '../../../components/ai/RestaurantGrossMarginRunCard';
 
@@ -57,6 +52,58 @@ interface SuggestedAction {
   description?: string;
   params?: Record<string, unknown>;
   data?: Record<string, unknown>;
+}
+
+interface RestaurantAgentLaunch {
+  schemaVersion: '1.0';
+  routeCode: typeof RESTAURANT_AGENT_RUN_ROUTE;
+  startDate: string;
+  endDate: string;
+  startEndpoint: string;
+  autoStart: true;
+}
+
+function isRealIsoDate(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month - 1
+    && parsed.getUTCDate() === day;
+}
+
+function currentShanghaiIsoDate(): string {
+  const shanghaiOffsetMs = 8 * 60 * 60 * 1000;
+  return new Date(Date.now() + shanghaiOffsetMs).toISOString().slice(0, 10);
+}
+
+function parseRestaurantAgentLaunch(
+  value: unknown,
+  factoryId: string,
+): RestaurantAgentLaunch | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  const expectedEndpoint = `/api/mobile/${encodeURIComponent(factoryId)}/restaurant-agent/runs`;
+  const today = currentShanghaiIsoDate();
+  const currentMonth = today.slice(0, 7);
+  if (
+    candidate.schemaVersion !== '1.0'
+    || candidate.routeCode !== RESTAURANT_AGENT_RUN_ROUTE
+    || candidate.autoStart !== true
+    || candidate.startEndpoint !== expectedEndpoint
+    || typeof candidate.startDate !== 'string'
+    || typeof candidate.endDate !== 'string'
+    || !isRealIsoDate(candidate.startDate)
+    || !isRealIsoDate(candidate.endDate)
+    || candidate.startDate !== `${currentMonth}-01`
+    || !candidate.endDate.startsWith(`${currentMonth}-`)
+    || candidate.endDate > today
+    || candidate.endDate < candidate.startDate
+  ) return undefined;
+  return candidate as unknown as RestaurantAgentLaunch;
 }
 
 // 消息类型
@@ -84,6 +131,11 @@ interface Message {
   foodKbMetadata?: FoodKBQueryMetadata;
   /** 结构化数据（用于富组件渲染：表格/卡片/统计） */
   richData?: RichData;
+  /** 服务端授权并选择的有界餐饮分析启动说明 */
+  agentRun?: RestaurantAgentLaunch;
+  /** Bind launch metadata to the authenticated UI identity that received it. */
+  agentRunFactoryId?: string;
+  agentRunOwnerUserId?: string;
 }
 
 type AIChatRouteProp = RouteProp<FAAIStackParamList, 'AIChat'>;
@@ -214,16 +266,6 @@ export default function AIChatScreen() {
   const resolvedUserRole = getUserRole();
   const userRole = resolvedUserRole || 'factory_super_admin';
   const currentFactoryId = user?.userType === 'factory' ? user.factoryUser.factoryId : '';
-  const restaurantAgentWindow = useMemo(() => currentMonthRestaurantAgentWindow(), []);
-  const restaurantAgentEligible = (
-    isRestaurantAgentRunActive()
-    && isRestaurant(user)
-    && RESTAURANT_AGENT_PRICE_VIEW_ROLES.has((resolvedUserRole || '').trim().toLowerCase())
-    && Boolean(currentFactoryId)
-    && Boolean(restaurantAgentWindow.startDate)
-    && Boolean(restaurantAgentWindow.endDate)
-  );
-
   // P1: Voice result handler — show preview then auto-send
   const handleVoiceResult = (text: string) => {
     setPreviewText(text);
@@ -541,6 +583,13 @@ export default function AIChatScreen() {
 
           // 检测结构化数据用于富组件渲染
           const richData = detectRichData(resultInner);
+          const metadata = result.metadata;
+          const agentRun = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+            ? parseRestaurantAgentLaunch(
+                (metadata as Record<string, unknown>).agentRun,
+                factoryId,
+              )
+            : undefined;
 
           // 场景过滤：只保留当前场景允许的建议操作
           if (sceneConfig && suggestedActions.length > 0) {
@@ -561,6 +610,9 @@ export default function AIChatScreen() {
                     suggestedActions: suggestedActions.length > 0 ? suggestedActions : undefined,
                     foodKbMetadata: foodKbMeta,
                     richData,
+                    agentRun,
+                    agentRunFactoryId: agentRun ? factoryId : undefined,
+                    agentRunOwnerUserId: agentRun ? String(user?.id ?? '') : undefined,
                   }
                 : msg
             )
@@ -737,6 +789,19 @@ export default function AIChatScreen() {
               <RichContentRenderer data={message.richData} />
             )}
           </View>
+          {!message.isLoading
+            && message.agentRun
+            && message.agentRunFactoryId === currentFactoryId
+            && message.agentRunOwnerUserId === String(user?.id ?? '') ? (
+            <RestaurantGrossMarginRunCard
+              key={`restaurant-agent:${message.id}:${String(user?.id ?? '')}:${currentFactoryId}`}
+              factoryId={currentFactoryId}
+              ownerUserId={String(user?.id ?? '')}
+              startDate={message.agentRun.startDate}
+              endDate={message.agentRun.endDate}
+              autoStart={message.agentRun.autoStart}
+            />
+          ) : null}
           {/* 显示建议操作按钮 (当需要澄清时) */}
           {!message.isLoading && message.suggestedActions && message.suggestedActions.length > 0 && (
             <View style={styles.suggestedActionsContainer}>
@@ -839,15 +904,6 @@ export default function AIChatScreen() {
           contentContainerStyle={styles.messagesContent}
           onContentSizeChange={scrollToBottom}
         >
-          {restaurantAgentEligible ? (
-            <RestaurantGrossMarginRunCard
-              key={`restaurant-agent:${String(user?.id ?? '')}:${currentFactoryId}`}
-              factoryId={currentFactoryId}
-              ownerUserId={String(user?.id ?? '')}
-              startDate={restaurantAgentWindow.startDate}
-              endDate={restaurantAgentWindow.endDate}
-            />
-          ) : null}
           {messages.length === 0 ? renderWelcome() : messages.map(renderMessage)}
         </ScrollView>
 

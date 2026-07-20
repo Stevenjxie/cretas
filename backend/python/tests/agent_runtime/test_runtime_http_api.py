@@ -78,6 +78,7 @@ class PersistingRuntime:
         self.store = store
         self.received_run_id = None
         self.received_context = None
+        self.execute_calls = 0
 
     async def execute(
         self,
@@ -86,13 +87,13 @@ class PersistingRuntime:
         *,
         run_id: str,
         cancelled,
+        already_created: bool = False,
     ) -> RuntimeResult:
+        assert already_created
+        self.execute_calls += 1
         self.received_run_id = run_id
         self.received_context = context
         plan = gross_margin_decline_plan(request)
-        await self.store.create_run(
-            run_id, context, plan.route_code, request.safe_dict()
-        )
         counters = RuntimeCounters()
         await self.store.append_event(
             run_id,
@@ -123,6 +124,52 @@ class PersistingRuntime:
             (),
             counters,
         )
+
+
+class BlockingPersistingRuntime(PersistingRuntime):
+    def __init__(self, store: InMemoryRunStore) -> None:
+        super().__init__(store)
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def execute(self, *args, **kwargs):
+        self.started.set()
+        await self.release.wait()
+        return await super().execute(*args, **kwargs)
+
+
+class ObservedClaimStore(InMemoryRunStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.claim_calls = 0
+        self.two_claims = asyncio.Event()
+
+    async def claim_active_run(self, *args, **kwargs):
+        result = await super().claim_active_run(*args, **kwargs)
+        self.claim_calls += 1
+        if self.claim_calls >= 2:
+            self.two_claims.set()
+        return result
+
+
+class NeverCalledRuntime:
+    def __init__(self) -> None:
+        self.execute_calls = 0
+
+    async def execute(self, *args, **kwargs):
+        self.execute_calls += 1
+        raise AssertionError("reused or failed claims must not start a runtime task")
+
+
+def _application_for(runtime, store) -> FastAPI:
+    application = FastAPI()
+    application.include_router(router)
+    application.add_middleware(JWTAuthMiddleware, jwt_secret=JWT_SECRET, enabled=True)
+    application.add_middleware(CorrelationIdMiddleware)
+    application.dependency_overrides[
+        get_runtime_components
+    ] = lambda: RuntimeComponents(runtime, store)
+    return application
 
 
 @pytest.fixture
@@ -164,6 +211,7 @@ async def test_post_streams_only_persisted_event_v1_and_get_replays_after_sequen
     run_id = response.headers["X-Agent-Run-Id"]
     assert str(uuid.UUID(run_id)) == run_id
     assert app.state.test_runtime.received_run_id == run_id
+    assert app.state.test_runtime.execute_calls == 1
     frames = _parse_sse(response.text)
     assert [frame["id"] for frame in frames] == ["1", "2"]
     assert all(frame["event"] == "agent.event.v1" for frame in frames)
@@ -186,6 +234,143 @@ async def test_post_streams_only_persisted_event_v1_and_get_replays_after_sequen
     assert [event["sequence"] for event in body["events"]] == [2]
     assert body["terminalOutcome"]["status"] == "PARTIAL"
     assert "evidence" not in body
+
+
+@pytest.mark.asyncio
+async def test_concurrent_identical_posts_share_one_durable_run_and_one_worker(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_SECRET", SECRET)
+    store = ObservedClaimStore()
+    runtime = BlockingPersistingRuntime(store)
+    application = _application_for(runtime, store)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application), base_url="http://test"
+    ) as concurrent_client:
+        first_task = asyncio.create_task(
+            concurrent_client.post(
+                "/api/internal/smartbi/agent/runs",
+                json=VALID_BODY,
+                headers=BASE_HEADERS,
+            )
+        )
+        await asyncio.wait_for(runtime.started.wait(), timeout=1)
+        second_task = asyncio.create_task(
+            concurrent_client.post(
+                "/api/internal/smartbi/agent/runs",
+                json=VALID_BODY,
+                headers=BASE_HEADERS,
+            )
+        )
+        await asyncio.wait_for(store.two_claims.wait(), timeout=1)
+        runtime.release.set()
+        first, second = await asyncio.wait_for(
+            asyncio.gather(first_task, second_task), timeout=3
+        )
+
+    assert first.status_code == second.status_code == 200
+    assert first.headers["X-Agent-Run-Id"] == second.headers["X-Agent-Run-Id"]
+    assert store.claim_calls == 2
+    assert runtime.execute_calls == 1
+    assert [frame["data"]["eventType"] for frame in _parse_sse(first.text)] == [
+        "RUN_STARTED",
+        "RUN_COMPLETED",
+    ]
+    assert [frame["data"]["eventType"] for frame in _parse_sse(second.text)] == [
+        "RUN_STARTED",
+        "RUN_COMPLETED",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reused_post_starts_no_local_task_and_polls_store_until_terminal(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_SECRET", SECRET)
+    store = InMemoryRunStore()
+    runtime = NeverCalledRuntime()
+    tenant = _trusted_context()
+    claim = await store.claim_active_run(
+        "51515151-5151-4151-8151-515151515151",
+        tenant,
+        RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION,
+        {key: value for key, value in VALID_BODY.items() if key != "schemaVersion"},
+    )
+    assert claim.created
+
+    async def finish_from_other_worker():
+        await asyncio.sleep(0.05)
+        counters = RuntimeCounters()
+        await store.append_event(
+            claim.record.run_id,
+            tenant,
+            AgentEventType.RUN_STARTED,
+            {"routeCode": RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION.value},
+            counters=counters,
+        )
+        outcome = StructuredOutcome(
+            OutcomeStatus.PARTIAL,
+            RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION,
+            blockers=("CAUSAL_ATTRIBUTION_UNSUPPORTED_BY_READ_CONTRACTS",),
+        )
+        assert await store.compare_and_set_terminal(
+            claim.record.run_id,
+            tenant,
+            expected_state=RunState.RUNNING,
+            terminal_state=RunState.PARTIAL,
+            outcome=outcome,
+            counters=counters,
+            terminal_event_type=AgentEventType.RUN_COMPLETED,
+        )
+
+    application = _application_for(runtime, store)
+    finisher = asyncio.create_task(finish_from_other_worker())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application), base_url="http://test"
+    ) as reused_client:
+        response = await asyncio.wait_for(
+            reused_client.post(
+                "/api/internal/smartbi/agent/runs",
+                json=VALID_BODY,
+                headers=BASE_HEADERS,
+            ),
+            timeout=3,
+        )
+        replay = await reused_client.get(
+            f"/api/internal/smartbi/agent/runs/{claim.record.run_id}/events",
+            headers=BASE_HEADERS,
+        )
+    await finisher
+
+    assert response.status_code == replay.status_code == 200
+    assert response.headers["X-Agent-Run-Id"] == claim.record.run_id
+    assert runtime.execute_calls == 0
+    assert [frame["data"]["eventType"] for frame in _parse_sse(response.text)] == [
+        "RUN_STARTED",
+        "RUN_COMPLETED",
+    ]
+    assert replay.json()["state"] == "PARTIAL"
+
+
+@pytest.mark.asyncio
+async def test_start_claim_failure_is_controlled_and_starts_no_task(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_SECRET", SECRET)
+
+    class BrokenClaimStore:
+        async def claim_active_run(self, *args, **kwargs):
+            raise RuntimeError("raw database secret")
+
+    runtime = NeverCalledRuntime()
+    application = _application_for(runtime, BrokenClaimStore())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application), base_url="http://test"
+    ) as failed_client:
+        response = await failed_client.post(
+            "/api/internal/smartbi/agent/runs",
+            json=VALID_BODY,
+            headers=BASE_HEADERS,
+        )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "AGENT_RUN_STORE_UNAVAILABLE"}
+    assert "secret" not in response.text
+    assert runtime.execute_calls == 0
 
 
 @pytest.mark.asyncio

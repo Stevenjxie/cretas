@@ -5,9 +5,11 @@ import com.cretas.aims.entity.enums.FactoryType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import jakarta.persistence.LockModeType;
 import java.util.List;
 import java.util.Optional;
 /**
@@ -19,6 +21,11 @@ import java.util.Optional;
  */
 @Repository
 public interface FactoryRepository extends JpaRepository<Factory, String> {
+    /** Serialize code-owned tenant provisioning across application processes. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT f FROM Factory f WHERE f.id = :factoryId")
+    Optional<Factory> findByIdForUpdate(@Param("factoryId") String factoryId);
+
     /**
      * 根据工厂名称查找
      */

@@ -9,9 +9,10 @@ import uuid
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping, Sequence
 
-from smartbi.agent.runtime.run_contracts import RouteCode
+from smartbi.agent.runtime.run_contracts import GrossMarginDeclineRequest, RouteCode
 
 MAX_CASES = 100
+MAX_RUNTIME_SHADOW_CASES = 20
 MAX_CASE_BYTES = 32_768
 MAX_SNAPSHOT_BYTES = 64_000
 MAX_AGENT_OPS_PAYLOAD_BYTES = 4 * 1024 * 1024
@@ -27,6 +28,14 @@ _FORBIDDEN_KEYS = re.compile(
 )
 _SAFE_SNAPSHOT_DIGEST_KEYS = {
     "promptSnapshotDigest", "modelSnapshotDigest", "toolSnapshotDigest",
+}
+_RUNTIME_CASE_EXTRA_KEYS = {"inputSnapshot", "sourceRunId", "evidenceDigests"}
+_RUNTIME_EVIDENCE_DIGEST_KEYS = {
+    "inputDigest",
+    "trajectoryDigest",
+    "numericTruthDigest",
+    "evidenceDigest",
+    "sourceRunDigest",
 }
 
 
@@ -79,7 +88,10 @@ def validate_case(case: Mapping[str, Any]) -> dict[str, Any]:
         "caseId", "expectedRoute", "requiredTools", "numericTruthRefs",
         "maxRounds", "maxToolCalls",
     }
-    if not isinstance(case, Mapping) or set(case) != expected_keys:
+    if not isinstance(case, Mapping) or set(case) not in (
+        expected_keys,
+        expected_keys | _RUNTIME_CASE_EXTRA_KEYS,
+    ):
         raise AgentOpsValidationError("INVALID_EVAL_CASE_SCHEMA")
     case_id = _identifier(case["caseId"], "INVALID_CASE_ID")
     if case["expectedRoute"] != RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION.value:
@@ -96,8 +108,46 @@ def validate_case(case: Mapping[str, Any]) -> dict[str, Any]:
         "maxRounds": max_rounds,
         "maxToolCalls": max_calls,
     }
+    if _RUNTIME_CASE_EXTRA_KEYS.issubset(case):
+        normalized.update({
+            "inputSnapshot": validate_runtime_input_snapshot(case["inputSnapshot"]),
+            "sourceRunId": validate_request_id(case["sourceRunId"]),
+            "evidenceDigests": _runtime_evidence_digests(case["evidenceDigests"]),
+        })
     _bounded_json(normalized, MAX_CASE_BYTES, "EVAL_CASE_TOO_LARGE")
     return normalized
+
+
+def validate_runtime_shadow_cases(
+    cases: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    if not 1 <= len(cases) <= MAX_RUNTIME_SHADOW_CASES:
+        raise AgentOpsValidationError("RUNTIME_SHADOW_CASE_COUNT_OUT_OF_BOUNDS")
+    normalized = validate_cases(cases)
+    if any(not _RUNTIME_CASE_EXTRA_KEYS.issubset(case) for case in normalized):
+        raise AgentOpsValidationError("RUNTIME_SHADOW_CASE_REQUIRED")
+    return normalized
+
+
+def validate_runtime_input_snapshot(value: Mapping[str, Any]) -> dict[str, Any]:
+    expected = {"startDate", "endDate", "storeTopN", "dishTopN"}
+    if not isinstance(value, Mapping) or set(value) != expected:
+        raise AgentOpsValidationError("INVALID_RUNTIME_INPUT_SNAPSHOT")
+    try:
+        request = GrossMarginDeclineRequest(
+            start_date=value["startDate"],
+            end_date=value["endDate"],
+            store_top_n=value["storeTopN"],
+            dish_top_n=value["dishTopN"],
+        )
+    except (TypeError, ValueError, KeyError) as exc:
+        raise AgentOpsValidationError("INVALID_RUNTIME_INPUT_SNAPSHOT") from exc
+    return {
+        "startDate": request.start_date,
+        "endDate": request.end_date,
+        "storeTopN": request.store_top_n,
+        "dishTopN": request.dish_top_n,
+    }
 
 
 def validate_actual_snapshot(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -172,7 +222,24 @@ def validate_runner_bounds_snapshot(value: Mapping[str, Any]) -> dict[str, Any]:
             value["maxConcurrency"], 1, 4, "INVALID_MAX_CONCURRENCY"
         ),
         "perCaseTimeoutMs": _bounded_int(
-            value["perCaseTimeoutMs"], 50, 5000, "INVALID_CASE_TIMEOUT"
+            value["perCaseTimeoutMs"], 50, 75_000, "INVALID_CASE_TIMEOUT"
+        ),
+    }
+
+
+def validate_runtime_shadow_bounds_snapshot(value: Mapping[str, Any]) -> dict[str, Any]:
+    expected = {"maxCases", "maxConcurrency", "perCaseTimeoutMs"}
+    if not isinstance(value, Mapping) or set(value) != expected:
+        raise AgentOpsValidationError("INVALID_RUNNER_BOUNDS_SCHEMA")
+    return {
+        "maxCases": _bounded_int(
+            value["maxCases"], 1, MAX_RUNTIME_SHADOW_CASES, "INVALID_MAX_CASES"
+        ),
+        "maxConcurrency": _bounded_int(
+            value["maxConcurrency"], 1, 2, "INVALID_MAX_CONCURRENCY"
+        ),
+        "perCaseTimeoutMs": _bounded_int(
+            value["perCaseTimeoutMs"], 1_000, 75_000, "INVALID_CASE_TIMEOUT"
         ),
     }
 
@@ -223,6 +290,18 @@ def _numeric_refs(value: Any) -> dict[str, str]:
             rendered = rendered.rstrip("0").rstrip(".")
         result[key] = rendered or "0"
     return result
+
+
+def _runtime_evidence_digests(value: Any) -> dict[str, str]:
+    if not isinstance(value, Mapping) or set(value) != _RUNTIME_EVIDENCE_DIGEST_KEYS:
+        raise AgentOpsValidationError("INVALID_RUNTIME_EVIDENCE_DIGESTS")
+    normalized: dict[str, str] = {}
+    for key in sorted(_RUNTIME_EVIDENCE_DIGEST_KEYS):
+        digest = value[key]
+        if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
+            raise AgentOpsValidationError("INVALID_RUNTIME_EVIDENCE_DIGESTS")
+        normalized[key] = digest
+    return normalized
 
 
 def _identifier(value: Any, code: str) -> str:

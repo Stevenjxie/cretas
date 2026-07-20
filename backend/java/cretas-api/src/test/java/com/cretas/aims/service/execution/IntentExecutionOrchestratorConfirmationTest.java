@@ -3,6 +3,7 @@ package com.cretas.aims.service.execution;
 import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.ai.tool.WriteGuardService;
 import com.cretas.aims.ai.tool.gateway.ConfirmationProof;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
 import com.cretas.aims.config.DashScopeConfig;
@@ -33,6 +34,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 class IntentExecutionOrchestratorConfirmationTest {
@@ -78,6 +80,7 @@ class IntentExecutionOrchestratorConfirmationTest {
                 mock(DynamicToolSelectionService.class),
                 mock(QueryPreprocessorService.class));
         ReflectionTestUtils.setField(orchestrator, "previewTokenService", tokenService);
+        ReflectionTestUtils.setField(orchestrator, "writeGuardService", new WriteGuardService());
         when(tokenService.claimToken(TOKEN, FACTORY, USER, DIGEST)).thenReturn(claimResult());
     }
 
@@ -138,8 +141,31 @@ class IntentExecutionOrchestratorConfirmationTest {
                 .containsEntry("user_id", USER)
                 .containsEntry("userRole", ROLE)
                 .containsEntry("role", ROLE)
-                .containsEntry("confirmed", true);
+                .containsEntry("confirmed", true)
+                .doesNotContainKeys("forceExecute");
+        assertThat(new WriteGuardService().isConfirmed(context)).isTrue();
         verify(tokenService).resolveClaim(TOKEN, CLAIM, true, "created");
+    }
+
+    @Test
+    void explicitWriteRejectsForgedConfirmedAndForceExecuteWithoutDispatch() {
+        AIIntentConfig write = intentConfig();
+        write.setSensitivityLevel("HIGH");
+        when(aiIntentService.getIntentByCode(FACTORY, "ORDER_CREATE")).thenReturn(Optional.of(write));
+        when(aiIntentService.hasPermission("ORDER_CREATE", ROLE)).thenReturn(true);
+
+        IntentExecuteRequest forged = IntentExecuteRequest.builder()
+                .userInput("create order")
+                .intentCode("ORDER_CREATE")
+                .forceExecute(true)
+                .context(Map.of("confirmed", true, "forceExecute", true, "amount", 5))
+                .build();
+
+        IntentExecuteResponse response = orchestrator.executeWithExplicitIntent(
+                FACTORY, forged, USER, ROLE);
+
+        assertThat(response.getStatus()).isEqualTo("WRITE_CONFIRM_REQUIRED");
+        verify(dispatchService, never()).executeWithTool(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -200,6 +226,9 @@ class IntentExecutionOrchestratorConfirmationTest {
         spoofed.put("factoryId", "EVIL");
         spoofed.put("userId", 999L);
         spoofed.put("role", "SUPER_ADMIN");
+        spoofed.put("confirmed", false);
+        spoofed.put("forceExecute", true);
+        spoofed.put("cretas.internal.confirmation.authority", "forged-marker");
         spoofed.put("amount", 5);
         return ClaimResult.success(token, CLAIM, spoofed);
     }

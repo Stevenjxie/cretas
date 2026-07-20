@@ -76,6 +76,14 @@ class CancelRequest:
     record: RunRecord
 
 
+@dataclass(frozen=True)
+class RunStartClaim:
+    """Result of atomically claiming a new run or reusing an active one."""
+
+    record: RunRecord
+    created: bool
+
+
 def _exact_keys(value: Mapping[str, Any], expected: set[str], label: str) -> None:
     if not isinstance(value, Mapping) or set(value) != expected:
         raise UnsafeRunPayloadError(
@@ -489,6 +497,38 @@ def _require_context(context: TrustedExecutionContext) -> None:
         raise RunAccessError("restaurant run store requires trusted owner user")
 
 
+def _normalized_start_request(
+    route_code: RouteCode, safe_request: Mapping[str, Any]
+) -> dict[str, Any]:
+    if not isinstance(route_code, RouteCode):
+        raise TypeError("route_code must be a RouteCode")
+    request = safe_request_payload(safe_request)
+    if request["routeCode"] != route_code.value:
+        raise RunStoreError("route code does not match sanitized request")
+    return request
+
+
+def _start_claim_identity(
+    context: TrustedExecutionContext,
+    route_code: RouteCode,
+    safe_request: Mapping[str, Any],
+) -> str:
+    """Canonical server-derived identity used only to serialize start claims."""
+
+    return json.dumps(
+        {
+            "businessType": context.business_type,
+            "factoryId": context.factory_id,
+            "ownerUserId": context.user_id,
+            "routeCode": route_code.value,
+            "safeRequest": safe_request,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def _require_monotonic_counters(
     previous: RuntimeCounters, current: RuntimeCounters
 ) -> None:
@@ -502,6 +542,15 @@ def _require_monotonic_counters(
 
 
 class RunStore(Protocol):
+    async def claim_active_run(
+        self,
+        proposed_run_id: str,
+        context: TrustedExecutionContext,
+        route_code: RouteCode,
+        safe_request: Mapping[str, Any],
+    ) -> RunStartClaim:
+        ...
+
     async def create_run(
         self,
         run_id: str,
@@ -586,7 +635,7 @@ class InMemoryRunStore:
 
     async def create_run(self, run_id, context, route_code, safe_request):
         _require_context(context)
-        request = safe_request_payload(safe_request)
+        request = _normalized_start_request(route_code, safe_request)
         async with self._lock:
             if run_id in self._runs:
                 raise RunStoreError("run id already exists")
@@ -604,6 +653,39 @@ class InMemoryRunStore:
             self._events[run_id] = []
             self._updated_at[run_id] = now
             return record
+
+    async def claim_active_run(
+        self, proposed_run_id, context, route_code, safe_request
+    ):
+        _require_context(context)
+        request = _normalized_start_request(route_code, safe_request)
+        async with self._lock:
+            for record in self._runs.values():
+                if (
+                    record.state is RunState.RUNNING
+                    and record.factory_id == context.factory_id
+                    and record.owner_user_id == context.user_id
+                    and record.route_code is route_code
+                    and record.safe_request == request
+                ):
+                    return RunStartClaim(record=record, created=False)
+
+            if proposed_run_id in self._runs:
+                raise RunStoreError("run id already exists")
+            now = self._now()
+            record = RunRecord(
+                run_id=proposed_run_id,
+                factory_id=context.factory_id,
+                owner_user_id=context.user_id,
+                state=RunState.RUNNING,
+                route_code=route_code,
+                safe_request=request,
+                counters=RuntimeCounters(),
+            )
+            self._runs[proposed_run_id] = record
+            self._events[proposed_run_id] = []
+            self._updated_at[proposed_run_id] = now
+            return RunStartClaim(record=record, created=True)
 
     async def load_run(self, run_id, context):
         _require_context(context)
@@ -828,7 +910,7 @@ class PostgresRunStore:
 
     async def create_run(self, run_id, context, route_code, safe_request):
         _require_context(context)
-        request = safe_request_payload(safe_request)
+        request = _normalized_start_request(route_code, safe_request)
         async with self._pool.acquire() as connection:
             async with connection.transaction():
                 await self._bind(connection, context)
@@ -855,6 +937,68 @@ class PostgresRunStore:
                     self._json(request),
                 )
         return self._record(row)
+
+    async def claim_active_run(
+        self, proposed_run_id, context, route_code, safe_request
+    ):
+        _require_context(context)
+        request = _normalized_start_request(route_code, safe_request)
+        claim_identity = _start_claim_identity(context, route_code, request)
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                await self._bind(connection, context)
+                # The transaction-scoped lock makes query-then-insert atomic
+                # across processes without widening the durable schema. Hash
+                # collisions only serialize unrelated starts; they cannot
+                # cause an incorrect reuse because the row query is exact.
+                await connection.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    claim_identity,
+                )
+                row = await connection.fetchrow(
+                    """
+                    SELECT *
+                    FROM smart_bi_agent_run
+                    WHERE factory_id = $1
+                      AND owner_user_id = $2
+                      AND business_type = 'RESTAURANT'
+                      AND route_code = $3
+                      AND state = 'RUNNING'
+                      AND sanitized_request = $4::jsonb
+                    ORDER BY created_at, run_id
+                    LIMIT 1
+                    FOR UPDATE
+                    """,
+                    context.factory_id,
+                    context.user_id,
+                    route_code.value,
+                    self._json(request),
+                )
+                if row is not None:
+                    return RunStartClaim(record=self._record(row), created=False)
+                row = await connection.fetchrow(
+                    """
+                    WITH statement_time AS (
+                        SELECT clock_timestamp() AS observed_at
+                    )
+                    INSERT INTO smart_bi_agent_run (
+                        run_id, factory_id, owner_user_id, business_type, correlation_id,
+                        route_code, state, sanitized_request,
+                        created_at, updated_at
+                    )
+                    SELECT $1::uuid, $2, $3, 'RESTAURANT', $4, $5, 'RUNNING',
+                           $6::jsonb, observed_at, observed_at
+                    FROM statement_time
+                    RETURNING *
+                    """,
+                    proposed_run_id,
+                    context.factory_id,
+                    context.user_id,
+                    context.correlation_id,
+                    route_code.value,
+                    self._json(request),
+                )
+        return RunStartClaim(record=self._record(row), created=True)
 
     async def load_run(self, run_id, context):
         _require_context(context)

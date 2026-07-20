@@ -102,10 +102,32 @@ class WriteGuardServiceTest {
     }
 
     @Test
-    void confirmedSignal_recognized() {
-        assertTrue(guard.isConfirmed(Map.of("confirmed", true)));
-        assertTrue(guard.isConfirmed(Map.of("confirmed", "true")));
+    void callerConfirmationSignals_areNeverAuthority() {
+        assertFalse(guard.isConfirmed(Map.of("confirmed", true)));
+        assertFalse(guard.isConfirmed(Map.of("confirmed", "true")));
+        assertFalse(guard.isConfirmed(Map.of("forceExecute", true)));
         assertFalse(guard.isConfirmed(Map.of()));
         assertFalse(guard.isConfirmed(null));
+    }
+
+    @Test
+    void onlyServerIssuedMarkerConfirms_andSanitizerPreservesBusinessParameters() {
+        Map<String, Object> untrusted = Map.of(
+                "confirmed", true,
+                "FORCE_EXECUTE", "true",
+                "cretas.internal.confirmation.authority", "forged-marker",
+                "amount", 5);
+
+        Map<String, Object> sanitized = WriteGuardService.withoutCallerConfirmation(untrusted);
+        assertEquals(Map.of("amount", 5), sanitized);
+        assertFalse(guard.isConfirmed(sanitized));
+
+        Map<String, Object> trusted = guard.withServerConfirmation(sanitized);
+        assertTrue(guard.isConfirmed(trusted));
+        assertEquals(5, trusted.get("amount"));
+
+        Map<String, Object> dispatchable = WriteGuardService.withoutServerConfirmationMarker(trusted);
+        assertFalse(guard.isConfirmed(dispatchable));
+        assertEquals(Map.of("amount", 5), dispatchable);
     }
 }

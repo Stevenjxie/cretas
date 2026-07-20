@@ -377,6 +377,12 @@ public class ApprovalChainConfig extends BaseEntity {
         WASTAGE_APPROVAL,
 
         /**
+         * Human review of the single allowlisted Restaurant Agent action proposal.
+         * Approval never applies ERP mutations; it may only unlock a safe navigation target.
+         */
+        RESTAURANT_AGENT_ACTION_REVIEW,
+
+        /**
          * 其他自定义
          */
         CUSTOM
