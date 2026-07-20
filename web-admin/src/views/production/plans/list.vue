@@ -1020,12 +1020,17 @@ async function submitPlan() {
       ElMessage.warning('请至少保留一个产品行 (在「产品行」多选中至少选 1 项)');
       return;
     }
+    if (!planForm.value.batchDate) {
+      ElMessage.warning('请选择批次日期');
+      return;
+    }
     dialogLoading.value = true;
     try {
       const payload = {
         sourceOrderId: planForm.value.sourceOrderId,
         itemIds: planForm.value.sourceOrderItemIds,
         plannedDate: planForm.value.plannedDate,
+        batchDate: planForm.value.batchDate,
         estimatedWorkers: planForm.value.estimatedWorkers,
         assignedSupervisorId: planForm.value.assignedSupervisorId || undefined,
         notes: planForm.value.notes || undefined,
@@ -2852,7 +2857,7 @@ function getStatusText(status: string) {
 // 明确区分"没有这个字段"(—) 与"真实数量为 0"(理论不会出现于 UI，但同样降级显示避免误读)。
 function formatPlannedQuantity(v: number | null | undefined, unit?: string | null): string {
   if (v == null || v === 0) return '—';
-  return unit ? `${v} ${unit}` : `${v}（单位未配置）`;
+  return unit ? `${v} ${displayUnit(unit)}` : `${v}（单位未配置）`;
 }
 
 function formatPlanDisplayQuantity(row: TableRow | null | undefined): string {
@@ -4220,7 +4225,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           <div class="settlement-reconciliation-grid">
             <div class="settlement-reconciliation-card">
               <span>实际成品产出</span>
-              <strong>{{ completeActualQuantity }} {{ completePlannedUnit || '' }}</strong>
+              <strong>{{ completeActualQuantity }} {{ displayUnit(completePlannedUnit) }}</strong>
             </div>
             <div class="settlement-reconciliation-card">
               <span>原料批次</span>
@@ -4239,7 +4244,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               class="settlement-reconciliation-row"
             >
               <span>{{ output.productTypeId || '未识别 SKU' }} · {{ output.batchNumber || '未识别批次' }}</span>
-              <strong>{{ output.quantity }} {{ output.unit }}</strong>
+              <strong>{{ output.quantity }} {{ displayUnit(output.unit) }}</strong>
             </div>
           </div>
           <div class="settlement-reconciliation-section">
@@ -4250,7 +4255,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               class="settlement-reconciliation-row"
             >
               <span>{{ line.batchNumber || line.materialBatchId }}</span>
-              <strong>{{ line.quantity }} {{ line.unit || '' }}</strong>
+              <strong>{{ line.quantity }} {{ displayUnit(line.unit) }}</strong>
             </div>
           </div>
           <div class="settlement-reconciliation-section">
@@ -4457,7 +4462,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             <el-option
               v-for="wip in wipList"
               :key="wip.id"
-              :label="`${wip.intermediateBatchNo} | 可用 ${wip.availableQuantity}${wip.unit || ''}`"
+              :label="`${wip.intermediateBatchNo} | 可用 ${wip.availableQuantity}${displayUnit(wip.unit)}`"
               :value="wip.id"
             />
           </el-select>
@@ -4481,12 +4486,12 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             当前可用
             <strong>
               {{ selectedWipForSettlement(line.semiFinishedInventoryId)?.availableQuantity }}
-              {{ selectedWipForSettlement(line.semiFinishedInventoryId)?.unit || '' }}
+              {{ displayUnit(selectedWipForSettlement(line.semiFinishedInventoryId)?.unit) }}
             </strong>
             ，本行最多领用
             <strong>
               {{ selectedWipForSettlement(line.semiFinishedInventoryId)?.availableQuantity }}
-              {{ selectedWipForSettlement(line.semiFinishedInventoryId)?.unit || '' }}
+              {{ displayUnit(selectedWipForSettlement(line.semiFinishedInventoryId)?.unit) }}
             </strong>
             ；超出可用量会被拦截。
           </div>
@@ -4905,17 +4910,17 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               v-for="wip in wipList"
               :key="wip.id"
               :value="wip.id"
-              :label="`${wip.intermediateBatchNo} | 可用 ${wip.availableQuantity}${wip.unit || ''}`"
+              :label="`${wip.intermediateBatchNo} | 可用 ${wip.availableQuantity}${displayUnit(wip.unit)}`"
             >
               <span style="float: left; font-weight: 500;">{{ wip.intermediateBatchNo }}</span>
               <span style="float: right; font-size: 12px; color: #909399; margin-left: 12px;">
-                可用 {{ wip.availableQuantity }}{{ wip.unit || '' }}
+                可用 {{ wip.availableQuantity }}{{ displayUnit(wip.unit) }}
               </span>
             </el-option>
           </el-select>
           <!-- 防呆 Rule 1: 实时显示所选 WIP 可用量 -->
           <div v-if="selectedWip" style="margin-top: 6px; font-size: 12px; color: var(--el-color-success);">
-            可用余量: <strong>{{ selectedWip.availableQuantity }} {{ selectedWip.unit || '' }}</strong>
+            可用余量: <strong>{{ selectedWip.availableQuantity }} {{ displayUnit(selectedWip.unit) }}</strong>
             <template v-if="selectedWip.unitCost != null">
               ｜ 单位成本: ¥{{ Number(selectedWip.unitCost).toFixed(4) }}
             </template>
@@ -4935,7 +4940,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             style="width: 100%"
           />
           <div v-if="selectedWip" style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 4px;">
-            最大可用 {{ selectedWip.availableQuantity }} {{ selectedWip.unit || '' }}（超出将被后端拒绝）
+            最大可用 {{ selectedWip.availableQuantity }} {{ displayUnit(selectedWip.unit) }}（超出将被后端拒绝）
           </div>
         </el-form-item>
 

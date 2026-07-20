@@ -33,6 +33,10 @@ public class BatchPlanFromSalesOrderRequest {
     @Schema(description = "计划生产日 (共享到所有生成的计划)")
     private LocalDate plannedDate;
 
+    @jakarta.validation.constraints.NotNull(message = "批次日期不能为空")
+    @Schema(description = "实际转批次日期 (共享到所有生成的计划，与计划生产日相互独立)")
+    private LocalDate batchDate;
+
     @Schema(description = "预计完成日 (可选, 共享)")
     private LocalDate expectedCompletionDate;
 

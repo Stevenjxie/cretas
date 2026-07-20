@@ -39,6 +39,21 @@ describe('production plan operator guardrails', () => {
     expect(source).toContain('quantityUnit: receiptUnit.value');
   });
 
+  it('submits an independent local-date batchDate for sales-derived plans', () => {
+    expect(source).toContain("ElMessage.warning('请选择批次日期')");
+    expect(source).toContain('batchDate: planForm.value.batchDate');
+    expect(source).toContain('plannedDate: planForm.value.plannedDate');
+    expect(source).toContain('value-format="YYYY-MM-DD"');
+  });
+
+  it('localizes canonical units throughout plan list, detail and settlement display', () => {
+    expect(source).toContain('`${v} ${displayUnit(unit)}`');
+    expect(source).toContain('{{ completeActualQuantity }} {{ displayUnit(completePlannedUnit) }}');
+    expect(source).toContain('{{ output.quantity }} {{ displayUnit(output.unit) }}');
+    expect(source).toContain('{{ line.quantity }} {{ displayUnit(line.unit) }}');
+    expect(source).toContain('{{ displayUnit(selectedWip.unit) }}');
+  });
+
   it('shows backfill time-window guidance on production plan entry', () => {
     expect(source).toContain('补录时效');
     expect(source).toContain('今天/昨天可补');

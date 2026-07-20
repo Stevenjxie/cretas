@@ -31,8 +31,8 @@ type LabelColumn = { key: string; label: string };
 const INPUT_KEYS = new Set(['outWeight', 'feedWeight', 'before', 'input', 'remain']);
 const OUTPUT_KEYS = new Set(['output', 'after', 'storage', 'sample', 'remainBox', 'claim', 'actualProd']);
 const DISPLAY_UNIT_ALIASES: Record<string, string> = {
-  box: '盒', case: '箱', bag: '袋', pcs: '件', each: '件', piece: '件', portion: '份', bottle: '瓶',
-  '盒': '盒', '箱': '箱', '袋': '袋', '件': '件', '份': '份', '瓶': '瓶',
+  box: '盒', case: '箱', slice: '片', bag: '袋', pcs: '件', each: '件', piece: '件', portion: '份', bottle: '瓶',
+  '盒': '盒', '箱': '箱', '片': '片', '袋': '袋', '件': '件', '份': '份', '瓶': '瓶',
   g: 'g', '克': 'g', kg: 'kg', '千克': 'kg', '公斤': 'kg',
 };
 

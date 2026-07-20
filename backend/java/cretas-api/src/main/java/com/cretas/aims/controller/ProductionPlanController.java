@@ -141,6 +141,22 @@ public class ProductionPlanController {
         return ApiResponse.success("已生成 " + plans.size() + " 张生产计划", plans);
     }
 
+    @RequirePermission({"production:read_write", "scheduling:read_write"})
+    @RequireModule("production_plan")
+    @PostMapping("/{planId}/repair-batch-date")
+    @Operation(summary = "幂等修复历史以销定产计划批次日期",
+            description = "仅允许 PENDING 且未转批次/未报工的销售来源计划按原值比较后修复；相同目标重放为 no-op")
+    @com.cretas.aims.annotation.Loggable(module = "PRODUCTION_PLAN", action = "REPAIR_BATCH_DATE",
+            entityType = "ProductionPlan", entityIdParam = "planId")
+    public ApiResponse<ProductionPlanDTO> repairSalesPlanBatchDate(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String planId,
+            @Valid @RequestBody com.cretas.aims.dto.production.RepairProductionPlanBatchDateRequest request) {
+        ProductionPlanDTO plan = productionPlanService.repairSalesPlanBatchDate(
+                factoryId, planId, request.expectedCurrentBatchDate(), request.targetBatchDate());
+        return ApiResponse.success("批次日期已校正", plan);
+    }
+
     /**
      * 获取工厂级"免工序报工默认值" (Fable 审计修复 2026-06-11 — 问题1).
      *

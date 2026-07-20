@@ -2707,7 +2707,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                   style="width:160px"
                   size="small"
                 />
-                <span data-testid="input-unit-readonly" class="sp-fixed-unit">{{ item.unit }}</span>
+                <span data-testid="input-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(item.unit) }}</span>
                 <span style="font-size:11px;color:#909399">来源批次由系统按生产库入库顺序自动分摊</span>
               </div>
             </template>
@@ -2982,11 +2982,11 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               <span v-else-if="col.type === 'auto' && col.autoCalc === 'totalHours'" />
 
               <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedInbound'" class="sp-readonly">
-                {{ finishedInboundQuantity(row) ?? '—' }} {{ processUnits.outputUnit }}
+                {{ finishedInboundQuantity(row) ?? '—' }} {{ displayProcessUnit(processUnits.outputUnit) }}
               </span>
 
               <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedRemaining'" class="sp-readonly">
-                {{ finishedInboundQuantity(row) ?? '—' }} {{ processUnits.outputUnit }}
+                {{ finishedInboundQuantity(row) ?? '—' }} {{ displayProcessUnit(processUnits.outputUnit) }}
               </span>
 
               <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedWeight'" class="sp-readonly">
@@ -3038,9 +3038,9 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 <label data-testid="output-start-time">开始时间<el-time-picker v-model="o.startTime" value-format="HH:mm" format="HH:mm" placeholder="开始" size="small" /></label>
                 <label data-testid="output-end-time">结束时间<el-time-picker v-model="o.endTime" value-format="HH:mm" format="HH:mm" placeholder="结束" size="small" /></label>
                 <label data-testid="output-worker-count">人数<el-input-number v-model="o.workerCount" :min="1" :precision="0" controls-position="right" size="small" /></label>
-                <label data-testid="output-quantity">产出数量<span class="sp-inline-input"><el-input-number v-model="o.quantity" :min="0" :precision="outputLinePrecision(o)" controls-position="right" size="small" /><span data-testid="output-unit-readonly" class="sp-fixed-unit">{{ o.unit }}</span></span></label>
+                <label data-testid="output-quantity">产出数量<span class="sp-inline-input"><el-input-number v-model="o.quantity" :min="0" :precision="outputLinePrecision(o)" controls-position="right" size="small" /><span data-testid="output-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(o.unit) }}</span></span></label>
                 <label>出成率<span class="sp-readonly">{{ outputLineYield(row, o) == null ? '—' : `${outputLineYield(row, o)!.toFixed(2)}%` }}</span></label>
-                <label data-testid="byproduct-quantity">副产数量<span class="sp-inline-input"><el-input-number v-model="o.byproductQuantity" :min="0" :precision="6" controls-position="right" size="small" /><span data-testid="byproduct-unit-readonly" class="sp-fixed-unit">{{ o.byproductUnit }}</span></span></label>
+                <label data-testid="byproduct-quantity">副产数量<span class="sp-inline-input"><el-input-number v-model="o.byproductQuantity" :min="0" :precision="6" controls-position="right" size="small" /><span data-testid="byproduct-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(o.byproductUnit) }}</span></span></label>
                 <label data-testid="byproduct-unit-price">副产回收单价<el-input-number v-model="o.byproductUnitPrice" :min="0" :precision="4" controls-position="right" size="small" /></label>
                 <label v-if="requiresManualCostAllocation(row)" data-testid="cost-allocation-ratio">成本分摊比例(%)<el-input-number v-model="o.costAllocationRatio" :min="0" :max="100" :precision="4" controls-position="right" size="small" /></label>
                 <label>总工时<span class="sp-readonly">{{ outputLineTotalHours(o).toFixed(2) }} h</span></label>
@@ -3274,7 +3274,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                         style="width:110px"
                         size="small"
                       />
-                      <span data-testid="input-unit-readonly" class="sp-fixed-unit">{{ item.unit }}</span>
+                      <span data-testid="input-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(item.unit) }}</span>
                     </div>
                   </td>
                 </template>
@@ -3490,11 +3490,11 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                   <span v-else-if="col.type === 'auto' && col.autoCalc === 'totalHours'" />
 
                   <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedInbound'" class="sp-readonly">
-                    {{ finishedInboundQuantity(row) ?? '—' }} {{ processUnits.outputUnit }}
+                    {{ finishedInboundQuantity(row) ?? '—' }} {{ displayProcessUnit(processUnits.outputUnit) }}
                   </span>
 
                   <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedRemaining'" class="sp-readonly">
-                    {{ finishedInboundQuantity(row) ?? '—' }} {{ processUnits.outputUnit }}
+                    {{ finishedInboundQuantity(row) ?? '—' }} {{ displayProcessUnit(processUnits.outputUnit) }}
                   </span>
 
                   <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedWeight'" class="sp-readonly">
@@ -3601,9 +3601,9 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                       <label data-testid="output-start-time">开始时间<el-time-picker v-model="o.startTime" value-format="HH:mm" format="HH:mm" placeholder="开始" size="small" /></label>
                       <label data-testid="output-end-time">结束时间<el-time-picker v-model="o.endTime" value-format="HH:mm" format="HH:mm" placeholder="结束" size="small" /></label>
                       <label data-testid="output-worker-count">人数<el-input-number v-model="o.workerCount" :min="1" :precision="0" controls-position="right" size="small" /></label>
-                      <label data-testid="output-quantity">产出数量<span class="sp-inline-input"><el-input-number v-model="o.quantity" :min="0" :precision="outputLinePrecision(o)" controls-position="right" size="small" /><span data-testid="output-unit-readonly" class="sp-fixed-unit">{{ o.unit }}</span></span></label>
+                      <label data-testid="output-quantity">产出数量<span class="sp-inline-input"><el-input-number v-model="o.quantity" :min="0" :precision="outputLinePrecision(o)" controls-position="right" size="small" /><span data-testid="output-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(o.unit) }}</span></span></label>
                       <label>出成率<span class="sp-readonly">{{ outputLineYield(row, o) == null ? '—' : `${outputLineYield(row, o)!.toFixed(2)}%` }}</span></label>
-                      <label data-testid="byproduct-quantity">副产数量<span class="sp-inline-input"><el-input-number v-model="o.byproductQuantity" :min="0" :precision="6" controls-position="right" size="small" /><span data-testid="byproduct-unit-readonly" class="sp-fixed-unit">{{ o.byproductUnit }}</span></span></label>
+                      <label data-testid="byproduct-quantity">副产数量<span class="sp-inline-input"><el-input-number v-model="o.byproductQuantity" :min="0" :precision="6" controls-position="right" size="small" /><span data-testid="byproduct-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(o.byproductUnit) }}</span></span></label>
                       <label data-testid="byproduct-unit-price">副产回收单价<el-input-number v-model="o.byproductUnitPrice" :min="0" :precision="4" controls-position="right" size="small" /></label>
                       <label v-if="requiresManualCostAllocation(row)" data-testid="cost-allocation-ratio">成本分摊比例(%)<el-input-number v-model="o.costAllocationRatio" :min="0" :max="100" :precision="4" controls-position="right" size="small" /></label>
                       <label>总工时<span class="sp-readonly">{{ outputLineTotalHours(o).toFixed(2) }} h</span></label>

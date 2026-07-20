@@ -106,3 +106,16 @@
 - 验收：唯一 Java release 生命周期 46/46 通过，JAR SHA-256 `ff4013deb67c0024043a7eab386cb1afaea26515bfdb960cfaf14a7d3e27a0e0`；Web 目标测试 2 files / 17 tests 通过，唯一 release build 729 assets，archive SHA-256 `9d99f011087abfc5d18b071b7dc4611b15f53ce15dd28365a5b0279989eb2ef9`、index SHA-256 `a063ad6573391647b7cb1e6a70e8f668d5917d4f5fffad070575a94f31426ec0`。
 - 生产边界：部署 exact main 后，仅对 F006 指定 plan `1ff1bd66-627f-47c0-b890-2f54a2e8b529` 调用一次幂等历史桥接，补建缺失 settlement 元数据；不得重放小结、报工、停产或改动 PB/FG/原料/WIP/yield/cost。随后只读核验并通知原测试 Chat 单击一次仓库确认。
 - Scope 锁：已释放。
+
+### `F006-M09-SALES-PLAN-UNIT-DATE-20260720`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- 登记 Base SHA：`2ac8552831d0946a4af50a47be339fabf195d886`
+- PR：[#1530](https://github.com/Stevenjxie/cretas/pull/1530)
+- 根因一：销售来源计划表单虽然维护独立的批次日期，但 `batch-from-so` payload 未携带该字段；Java 请求 DTO 也没有 `batchDate`，Service 明确把 `plannedDate` 同时写进两个日期列，导致实际转批次日被静默覆盖。
+- 根因二：生产计划列表/详情优先使用 canonical `sourceDisplayUnit=box`，结单预览与逐道报工若干位置也直接渲染 canonical 单位，绕过已存在的 display formatter。
+- 范围：Web 以 `YYYY-MM-DD` 原样提交独立 `batchDate`，Java DTO/Service 按 `LocalDate` 独立持久化；计划列表/详情、结单预览、WIP 提示与逐道报工单位统一 display-only 映射，API/DB canonical 快照不变；新增仅允许 CUSTOMER_ORDER/PENDING/无批次/无报工且符合旧 `batchDate==plannedDate` 形态的 CAS 历史桥接，相同目标重放 no-op、不同目标拒绝覆盖。未触碰 M08、PB/FG、LIUSHANMEN。
+- 验收：Web 目标测试 3 files / 37 tests 通过；唯一 Java release 生命周期 3/3 通过，JAR SHA-256 `5977caa4513054c1e58e610733a5ce42f67aca0220bb57ca3cc00efd08b023ed`；唯一 Web release build 729 assets，archive SHA-256 `6dd2e1b4d491c231aad984993bce514b5e120a3943815c91e1d19590328f07a8`、index SHA-256 `f2f7e0c391348d0e784305c74c00b01acd66fbb2d1cac84aa92b4ff0147b5fb8`。
+- 生产边界：exact-main 部署后只对 F006 计划 `457daec1-d602-43a1-81a1-708586bfb937` 调用一次受约束桥接，将 `batchDate` 从 `2026-07-21` 校正为 `2026-07-20`；不得改变 plannedDate、数量、状态、Workflow/BOM pin，不创建订单/计划/批次/报工或库存写入。随后全部 query-only 验收并通知原测试 Chat 从同一唯一 PENDING 计划继续。
+- Scope 锁：已释放。
