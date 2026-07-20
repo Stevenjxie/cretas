@@ -191,6 +191,78 @@ async def test_cache_key_contains_trusted_factory_and_fallback_policy(monkeypatc
     assert [item[1]["session_id"] for item in seen] == ["session-7", "session-7"]
     assert [item[1]["enable_thinking"] for item in seen] == [False, False]
     assert [item[1]["thinking_budget"] for item in seen] == [23, 23]
+    assert [item[1]["expected_intent"] for item in seen] == [None, None]
+
+
+async def test_trusted_restaurant_intent_is_preserved_across_java_python_boundary(monkeypatch):
+    """The inner text matcher must not silently change the metric Java selected."""
+    _cache_miss(monkeypatch)
+    observed = []
+
+    async def _pool():
+        return object()
+
+    async def _resolve(code, pool, factory_id, **kwargs):
+        observed.append((code, factory_id, kwargs.get("query")))
+        return SimpleNamespace(
+            answer_text="毛利率趋势回答",
+            charts=[{"chartType": "line"}],
+        )
+
+    monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
+    monkeypatch.setattr(
+        "smartbi.gold.restaurant_ops_router.match_restaurant_ops",
+        lambda _query: "RESTAURANT_OPS_TREND_ANALYSIS",
+    )
+    monkeypatch.setattr("smartbi.gold.restaurant_ops_router.resolve_by_code", _resolve)
+
+    response = await chat_mod.general_analysis(
+        chat_mod.GeneralAnalysisRequest(
+            query="按月份绘制整体毛利率趋势曲线",
+            table_type="restaurant_ops",
+            expected_intent="RESTAURANT_OPS_GROSS_MARGIN",
+            allow_tenant_data_fallback=False,
+        ),
+        _Request("F001", user_id="7", role="restaurant_manager"),
+    )
+
+    assert response.answer == "毛利率趋势回答"
+    assert observed == [(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "F001",
+        "按月份绘制整体毛利率趋势曲线",
+    )]
+
+
+async def test_untrusted_expected_intent_is_ignored(monkeypatch):
+    _cache_miss(monkeypatch)
+    observed = []
+
+    async def _pool():
+        return object()
+
+    async def _resolve(code, *_args, **_kwargs):
+        observed.append(code)
+        return SimpleNamespace(answer_text="正常回答", charts=[])
+
+    monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
+    monkeypatch.setattr(
+        "smartbi.gold.restaurant_ops_router.match_restaurant_ops",
+        lambda _query: "RESTAURANT_OPS_SALES_SUMMARY",
+    )
+    monkeypatch.setattr("smartbi.gold.restaurant_ops_router.resolve_by_code", _resolve)
+
+    await chat_mod.general_analysis(
+        chat_mod.GeneralAnalysisRequest(
+            query="整体毛利率是多少",
+            table_type="restaurant_ops",
+            expected_intent="DROP_TABLES",
+            allow_tenant_data_fallback=False,
+        ),
+        _Request("F001", user_id="7", role="restaurant_manager"),
+    )
+
+    assert observed == ["RESTAURANT_OPS_SALES_SUMMARY"]
 
 
 @pytest.mark.parametrize(

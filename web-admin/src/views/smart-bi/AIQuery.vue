@@ -79,6 +79,8 @@ import SmartBIEmptyState from '@/components/smartbi/SmartBIEmptyState.vue';
 import MaterializedAnalysisPanel from '@/components/smart-bi/MaterializedAnalysisPanel.vue';
 import ChartInsightProvider from './components/ChartInsightProvider.vue';
 import type { ChartWithMeta } from './components/chartInsight';
+import { sanitizeCustomerAiText } from './components/chat/customerAiText';
+import { buildJavaIntentChartOption } from './components/chat/javaIntentChartAdapter';
 import {
   inferOwnerActionScenario,
   isOwnerActionFollowupText,
@@ -87,10 +89,11 @@ import {
 // Render markdown content safely
 function renderMarkdown(text: string): string {
   if (!text) return '';
+  const customerText = customerSafeAnswer(text);
   try {
-    return DOMPurify.sanitize(marked(text) as string);
+    return DOMPurify.sanitize(marked(customerText) as string);
   } catch {
-    return text;
+    return DOMPurify.sanitize(customerText);
   }
 }
 
@@ -608,6 +611,10 @@ function inferDomainFromFilename(name: string): string {
 // grouped catalog (rendered separately in the template). This flat list is used
 // as a fallback for non-restaurant tenants and the autocomplete list.
 const isRestaurantTenant = computed(() => authStore.businessDomain === 'RESTAURANT');
+
+function customerSafeAnswer(text: string): string {
+  return isRestaurantTenant.value ? sanitizeCustomerAiText(text) : text;
+}
 const ownerActionSessionId = ref('');
 const currentOwnerActionScenario = ref('');
 const pendingOwnerActionScenario = ref('');
@@ -1182,20 +1189,7 @@ async function tryJavaIntentChat(
           }
           if (!c.series && !c.data) continue;
           const ct = c.chartType || c.type || 'bar';
-          const opt: Record<string, unknown> = { title: { text: c.title, left: 'center' } };
-          if (ct === 'pie') {
-            const pd = (Array.isArray(c.series) && c.series[0]?.data) || c.data || [];
-            opt.tooltip = { trigger: 'item', formatter: '{b}: {c} ({d}%)' };
-            opt.legend = { top: 'bottom' };
-            opt.series = [{ type: 'pie', radius: '60%', data: pd }];
-          } else {
-            opt.tooltip = { trigger: 'axis' };
-            opt.xAxis = { type: 'category', data: (c.xAxis && c.xAxis.data) || c.xAxis || [] };
-            opt.yAxis = c.yAxis || { type: 'value' };
-            opt.series = (c.series || []).map((s: any) => ({
-              name: s.name, type: s.type || ct, data: s.data,
-            }));
-          }
+          const opt = buildJavaIntentChartOption(c);
           built.push({ type: ct, title: c.title, option: opt } as ChartConfig);
         }
         if (built.length) msg.charts = built;
@@ -1636,7 +1630,7 @@ async function handleSendMessage() {
         }
 
         // Direct mutation instead of object spread
-        msg.content = finalContent;
+        msg.content = customerSafeAnswer(finalContent);
         msg.chart = chartData;
         msg.chartConfig = msg.chartConfig || result.charts?.[0];
         msg.insights = result.insights;
@@ -2304,7 +2298,7 @@ function handleKeydown(event: KeyboardEvent) {
                 <el-button type="primary" size="small" :icon="Refresh" @click="handleSseRetry">重新提问</el-button>
               </div>
               <template v-else>
-                <div v-if="message.role === 'assistant' && message.streaming" class="message-text streaming-text">{{ message.content }}</div>
+                <div v-if="message.role === 'assistant' && message.streaming" class="message-text streaming-text">{{ customerSafeAnswer(message.content) }}</div>
                 <div v-else-if="message.role === 'assistant'" class="message-text markdown-body" v-html="renderMarkdown(message.content)"></div>
                 <div v-else class="message-text">{{ message.content }}</div>
 

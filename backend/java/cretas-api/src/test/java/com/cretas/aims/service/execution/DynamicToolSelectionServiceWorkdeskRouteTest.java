@@ -117,6 +117,20 @@ class DynamicToolSelectionServiceWorkdeskRouteTest {
     }
 
     @Test
+    void routerInternalMessageDetectsGenericIdentifiersAndApiPaths() throws Exception {
+        Method method = DynamicToolSelectionService.class.getDeclaredMethod(
+                "isRouterInternalMessage", String.class);
+        method.setAccessible(true);
+
+        assertThat((Boolean) method.invoke(service,
+                "通过调用 income_statement_query 工具获取利润表数据")).isTrue();
+        assertThat((Boolean) method.invoke(service,
+                "来源 /api/smartbi/gold/finance-summary")).isTrue();
+        assertThat((Boolean) method.invoke(service,
+                "Black Pepper Beef 本月毛利率为 62.5%")).isFalse();
+    }
+
+    @Test
     void tryExplicitSkillRouteForIntent_workdeskSkillRegistered_executesSkillAndReturnsResponse() {
         when(mockSkillRouter.isSkillsEnabled()).thenReturn(true);
 

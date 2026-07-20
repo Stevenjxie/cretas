@@ -23,6 +23,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from smartbi.config import coerce_numeric_columns
+from smartbi.gold.customer_text import sanitize_customer_ai_text
 
 
 # Services
@@ -546,6 +547,10 @@ class GeneralAnalysisRequest(BaseModel):
     context: Optional[Dict[str, Any]] = Field(None, description="Additional context")
     fields: Optional[List[Dict[str, str]]] = Field(None, description="Field mappings")
     table_type: Optional[str] = Field(None, description="Table type hint")
+    expected_intent: Optional[str] = Field(
+        None,
+        description="Validated restaurant intent selected by the trusted Java router",
+    )
     user_id: Optional[str] = Field(None, description="User ID (Java compat)")
     session_id: Optional[str] = Field(None, description="Session ID (Java compat)")
     enable_thinking: Optional[bool] = Field(None, description="Enable thinking mode (Java compat)")
@@ -577,7 +582,6 @@ class GeneralAnalysisResponse(BaseModel):
     insights: List[Dict[str, Any]] = []
     charts: List[Dict[str, Any]] = []
     processing_time_ms: int = 0
-
 
 class MultiDimensionRequest(BaseModel):
     """Request for multi-dimensional insight analysis"""
@@ -1177,6 +1181,7 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
         query=request.effective_query,
         data=request.data,
         table_type=request.table_type,
+        expected_intent=request.expected_intent,
     )
     cached = _chat_cache_get(cache_key)
     if cached is not None:
@@ -1189,10 +1194,18 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
         if query and factory_id_hdr:
             try:
                 from smartbi.gold.restaurant_ops_router import (
-                    match_restaurant_ops, resolve_by_code
+                    is_supported_restaurant_ops_code,
+                    match_restaurant_ops,
+                    resolve_by_code,
                 )
                 from smartbi.config import get_pg_pool as _get_pool
-                ops_code = match_restaurant_ops(query)
+                expected_ops_code = (
+                    request.expected_intent
+                    if request.table_type == "restaurant_ops"
+                    and is_supported_restaurant_ops_code(request.expected_intent)
+                    else None
+                )
+                ops_code = expected_ops_code or match_restaurant_ops(query)
                 if ops_code:
                     pool = await _get_pool()
                     if pool:
@@ -1200,10 +1213,11 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                             ops_code, pool, factory_id_hdr, role=trusted_role, query=query,
                         )
                         if ops_answer:
+                            customer_answer = sanitize_customer_ai_text(ops_answer.answer_text)
                             response = GeneralAnalysisResponse(
                                 success=True,
-                                answer=ops_answer.answer_text,
-                                aiAnalysis=ops_answer.answer_text,
+                                answer=customer_answer,
+                                aiAnalysis=customer_answer,
                                 sessionId=request.session_id,
                                 thinkingEnabled=request.enable_thinking,
                                 insights=[],
@@ -1802,11 +1816,18 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 factory_id_hdr = trusted_factory_id
                 if user_q and factory_id_hdr:
                     from smartbi.gold.restaurant_ops_router import (
+                        is_supported_restaurant_ops_code as _is_supported_ops_trend,
                         match_restaurant_ops as _match_ops_trend,
                         resolve_by_code as _resolve_ops_trend,
                     )
                     from smartbi.config import get_pg_pool as _get_pool_trend
-                    _t1_trend_code = _match_ops_trend(user_q)
+                    _expected_trend_code = (
+                        request.expected_intent
+                        if request.table_type == "restaurant_ops"
+                        and _is_supported_ops_trend(request.expected_intent)
+                        else None
+                    )
+                    _t1_trend_code = _expected_trend_code or _match_ops_trend(user_q)
                     if _t1_trend_code == "RESTAURANT_OPS_TREND_ANALYSIS":
                         pool_trend = await _get_pool_trend()
                         if pool_trend:
@@ -1815,16 +1836,17 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 pool_trend, factory_id_hdr, role=trusted_role,
                             )
                             if trend_answer:
-                                yield _sse_event("status", f"命中餐饮运营模板:{trend_answer.title}")
+                                customer_answer = sanitize_customer_ai_text(trend_answer.answer_text)
+                                yield _sse_event("status", "正在计算营业趋势...")
                                 chunk_size = 40
-                                for i in range(0, len(trend_answer.answer_text), chunk_size):
-                                    yield _sse_event("chunk", trend_answer.answer_text[i:i + chunk_size])
+                                for i in range(0, len(customer_answer), chunk_size):
+                                    yield _sse_event("chunk", customer_answer[i:i + chunk_size])
                                 if trend_answer.charts:
                                     yield _sse_event("charts", trend_answer.charts)
                                 wall_ms = int((time.time() - start_time) * 1000)
                                 yield _sse_event("done", {
                                     "success": True,
-                                    "answer": trend_answer.answer_text,
+                                    "answer": customer_answer,
                                     "charts": trend_answer.charts,
                                     "kpis": trend_answer.kpis,
                                     "source": "restaurant_ops_gold",
@@ -1844,7 +1866,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                             session_id=request.session_id,
                                             factory_id=_session_factory_id,
                                             parent_query=user_q,
-                                            parent_answer_summary=trend_answer.answer_text,
+                                            parent_answer_summary=customer_answer,
                                             parent_template_code="RESTAURANT_OPS_TREND_ANALYSIS",
                                             parent_upload_id=None,
                                             user_id=_session_user_id,
@@ -2034,10 +2056,18 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 factory_id_hdr = trusted_factory_id
                 if user_q and factory_id_hdr:
                     from smartbi.gold.restaurant_ops_router import (
-                        match_restaurant_ops, resolve_by_code
+                        is_supported_restaurant_ops_code,
+                        match_restaurant_ops,
+                        resolve_by_code,
                     )
                     from smartbi.config import get_pg_pool as _get_pool
-                    ops_code = match_restaurant_ops(user_q)
+                    expected_ops_code = (
+                        request.expected_intent
+                        if request.table_type == "restaurant_ops"
+                        and is_supported_restaurant_ops_code(request.expected_intent)
+                        else None
+                    )
+                    ops_code = expected_ops_code or match_restaurant_ops(user_q)
                     if ops_code:
                         pool = await _get_pool()
                         if pool:
@@ -2053,16 +2083,17 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 ops_code, pool, factory_id_hdr, role=trusted_role, query=user_q,
                             )
                             if ops_answer:
-                                yield _sse_event("status", f"命中餐饮运营模板:{ops_answer.title}")
+                                customer_answer = sanitize_customer_ai_text(ops_answer.answer_text)
+                                yield _sse_event("status", "正在整理餐饮经营数据...")
                                 chunk_size = 40
-                                for i in range(0, len(ops_answer.answer_text), chunk_size):
-                                    yield _sse_event("chunk", ops_answer.answer_text[i:i + chunk_size])
+                                for i in range(0, len(customer_answer), chunk_size):
+                                    yield _sse_event("chunk", customer_answer[i:i + chunk_size])
                                 if ops_answer.charts:
                                     yield _sse_event("charts", ops_answer.charts)
                                 wall_ms = int((time.time() - start_time) * 1000)
                                 yield _sse_event("done", {
                                     "success": True,
-                                    "answer": ops_answer.answer_text,
+                                    "answer": customer_answer,
                                     "charts": ops_answer.charts,
                                     "kpis": ops_answer.kpis,
                                     "source": "restaurant_ops_gold",
@@ -2082,7 +2113,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                             session_id=request.session_id,
                                             factory_id=_session_factory_id,
                                             parent_query=user_q,
-                                            parent_answer_summary=ops_answer.answer_text,
+                                            parent_answer_summary=customer_answer,
                                             parent_template_code=ops_code,
                                             parent_upload_id=None,
                                             user_id=_session_user_id,  # H2 binding
@@ -2107,7 +2138,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                             )
                             if tiered_ops:
                                 title = tiered_ops.get("title") or "餐饮经营分析"
-                                yield _sse_event("status", f"命中餐饮运营模板:{title}")
+                                yield _sse_event("status", "正在整理餐饮经营数据...")
                                 chunk_size = 40
                                 answer_text_ops = tiered_ops["answer_text"]
                                 for i in range(0, len(answer_text_ops), chunk_size):
@@ -2424,9 +2455,9 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                     tpl, user_q, intent_signals=intent_signals
                                 )
                                 # Stream as SSE
-                                yield _sse_event("status", f"命中预计算模板:{tpl['title']}")
+                                yield _sse_event("status", "正在整理已有经营分析...")
                                 # Chunk the answer in small pieces for streaming feel
-                                answer_text = payload["answer"]
+                                answer_text = sanitize_customer_ai_text(payload["answer"])
                                 chunk_size = 40
                                 for i in range(0, len(answer_text), chunk_size):
                                     yield _sse_event("chunk", answer_text[i:i + chunk_size])
@@ -3349,7 +3380,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             if _llm_cache_hit:
                 # Stream cached answer as if it were freshly generated.
                 _cached_text = _llm_cache_hit["answer_text"]
-                yield _sse_event("status", "⚡ 命中已有分析 (24h 内已问过同样问题)")
+                yield _sse_event("status", "正在读取近期分析结果...")
                 _chunk_size = 80
                 for i in range(0, len(_cached_text), _chunk_size):
                     yield _sse_event("chunk", _cached_text[i:i + _chunk_size])

@@ -748,10 +748,23 @@ public class PythonSmartBIClient {
             String query,
             List<Map<String, Object>> data,
             @JsonProperty("table_type") String tableType,
+            @JsonProperty("expected_intent") String expectedIntent,
             @JsonProperty("session_id") String sessionId,
             @JsonProperty("enable_thinking") Boolean enableThinking,
             @JsonProperty("thinking_budget") Integer thinkingBudget,
             @JsonProperty("allow_tenant_data_fallback") Boolean allowTenantDataFallback) {
+
+        public GeneralAnalysisCall(
+                String query,
+                List<Map<String, Object>> data,
+                String tableType,
+                String sessionId,
+                Boolean enableThinking,
+                Integer thinkingBudget,
+                Boolean allowTenantDataFallback) {
+            this(query, data, tableType, null, sessionId, enableThinking,
+                    thinkingBudget, allowTenantDataFallback);
+        }
 
         public GeneralAnalysisCall {
             if (query == null || query.isBlank() || query.length() > 65_536) {

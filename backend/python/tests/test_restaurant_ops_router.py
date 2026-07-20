@@ -45,6 +45,9 @@ LEGITIMATE_TRIGGERS = [
     # GROSS_MARGIN (dish-level)
     ("哪道菜毛利最高", "RESTAURANT_OPS_GROSS_MARGIN"),
     ("菜品毛利率排行", "RESTAURANT_OPS_GROSS_MARGIN"),
+    ("按月份绘制整体毛利率趋势曲线", "RESTAURANT_OPS_GROSS_MARGIN"),
+    ("在整体毛利率趋势图中添加70%计划线和60%预警线", "RESTAURANT_OPS_GROSS_MARGIN"),
+    ("计算每个菜品的毛利率趋势曲线", "RESTAURANT_OPS_GROSS_MARGIN"),
     # Apr 25 2026: 菜系 should still trigger margin analysis when paired with
     # an explicit margin keyword (legitimate "菜系" = dish-category scope).
     ("菜系毛利率", "RESTAURANT_OPS_GROSS_MARGIN"),
@@ -534,6 +537,100 @@ def test_price_view_role_passes_margin_gate():
     price_role = next(iter(PRICE_VIEW_ROLES))
     with pytest.raises(AttributeError):
         asyncio.run(_r.resolve_gross_margin(None, "F_TEST", role=price_role))
+
+
+def test_missing_cost_dish_never_gets_profit_or_enters_margin_ranking():
+    """缺成本是未知值，不是零成本；不能进入利润/毛利率排名。"""
+    build_entries = getattr(_r, "_build_margin_entries", None)
+    rank_entries = getattr(_r, "_rank_cost_complete_margin_entries", None)
+    assert callable(build_entries)
+    assert callable(rank_entries)
+
+    pos_rows = [
+        {"dish_name": "缺成本菜", "normalized_name": "缺成本菜", "total_qty": 10,
+         "total_revenue": 1000.0, "bills": 5},
+        {"dish_name": "完整成本菜", "normalized_name": "完整成本菜", "total_qty": 10,
+         "total_revenue": 900.0, "bills": 4},
+    ]
+    entries = build_entries(
+        pos_rows,
+        {"缺成本菜": "P-MISSING", "完整成本菜": "P-OK"},
+        {"P-OK": 30.0},
+    )
+
+    missing = next(item for item in entries if item["name"] == "缺成本菜")
+    assert missing["has_cost"] is False
+    assert missing["gross_profit"] is None
+    assert missing["margin_rate"] is None
+    ranked = rank_entries(entries, 10)
+    assert [item["name"] for item in ranked] == ["完整成本菜"]
+
+
+def test_store_margin_excludes_missing_cost_and_uses_distinct_bill_count():
+    aggregate = getattr(_r, "_aggregate_store_margin_entries", None)
+    assert callable(aggregate)
+    rows = [
+        {"store_id": 1, "store_name": "缺成本店", "dish_name": "A", "normalized_name": "A",
+         "qty": 10, "revenue": 1000.0, "bills": 8},
+        {"store_id": 2, "store_name": "完整成本店", "dish_name": "B", "normalized_name": "B",
+         "qty": 10, "revenue": 900.0, "bills": 7},
+        {"store_id": 2, "store_name": "完整成本店", "dish_name": "C", "normalized_name": "C",
+         "qty": 5, "revenue": 500.0, "bills": 4},
+    ]
+    stores = aggregate(
+        rows,
+        {"A": "P-A", "B": "P-B", "C": "P-C"},
+        {"P-B": 30.0, "P-C": 20.0},
+        {1: 8, 2: 9},
+    )
+
+    missing = next(item for item in stores if item["store_id"] == 1)
+    complete = next(item for item in stores if item["store_id"] == 2)
+    assert missing["gross_profit"] is None
+    assert missing["margin_rate"] is None
+    assert missing["cost_coverage_ratio"] == 0
+    assert complete["gross_profit"] == 1000.0
+    assert complete["bills"] == 9  # not the per-dish sum 7 + 4
+
+
+def test_margin_reference_lines_only_use_explicit_user_values():
+    parse_lines = getattr(_r, "_parse_margin_reference_lines", None)
+    assert callable(parse_lines)
+
+    assert parse_lines("添加70%计划线和60%预警线") == [
+        {"name": "计划值", "yAxis": 70.0},
+        {"name": "预警值", "yAxis": 60.0},
+    ]
+    assert parse_lines("加入计划值和预警值参照线") == []
+
+
+def test_partial_latest_month_uses_same_day_count_comparison(monkeypatch):
+    """7 月只有 11 天时，不能拿它和完整 6 月直接计算环比。"""
+    daily = []
+    for day in range(1, 12):
+        daily.append({"date": f"2026-06-{day:02d}", "revenue": 1000.0, "bill_count": 10})
+        daily.append({"date": f"2026-07-{day:02d}", "revenue": 1200.0, "bill_count": 12})
+    bundle = {
+        "weekdayWeekend": {},
+        "dailyTrend": daily,
+        "monthlyTrend": [
+            {"month": "2026-06", "revenue": 30000.0},
+            {"month": "2026-07", "revenue": 13200.0},
+        ],
+    }
+
+    async def _fake_trend_bundle(pool, factory_id, date_range):
+        return bundle
+
+    import smartbi.gold.queries as _q
+    monkeypatch.setattr(_q, "trend_bundle", _fake_trend_bundle)
+    ans = asyncio.run(_r.resolve_trend_analysis(object(), "RES_TEST", role="restaurant_manager"))
+
+    assert "截至11日" in ans.answer_text
+    assert "同口径环比" in ans.answer_text
+    assert "增长 20.0%" in ans.answer_text
+    assert "下降 56.0%" not in ans.answer_text
+    assert ans.meta["latest_month_partial"] is True
 
 
 # --------------------------------------------------------------------------
