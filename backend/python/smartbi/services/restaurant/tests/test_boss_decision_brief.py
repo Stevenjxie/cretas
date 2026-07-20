@@ -7,6 +7,7 @@ from smartbi.services.restaurant.sections.boss_decision_brief import (
 from smartbi.api.restaurant_sections import (
     _OWNER_ACTION_CHAT_SESSIONS,
     _owner_action_session_key,
+    _owner_plain_reason,
     OwnerActionChatRequest,
     owner_action_chat,
 )
@@ -722,6 +723,42 @@ def test_owner_action_chat_cost_margin_mentions_review_and_quality_risk() -> Non
     assert "差评" in answer or "评价" in answer
     assert "BOM" in answer
     assert "毛利" in answer
+
+
+def test_cost_margin_reason_does_not_invent_gross_margin_when_missing() -> None:
+    answer = _owner_plain_reason(
+        {
+            "demoParams": {
+                "financial_summary": {
+                    "foodCostRatio": 0.49,
+                    "grossMarginPct": None,
+                }
+            }
+        },
+        "cost_margin",
+        "",
+    )
+
+    assert "毛利率因成本或营收口径不完整暂不可计算" in answer
+    assert "51%" not in answer
+
+
+def test_cost_margin_reason_preserves_real_zero_gross_margin() -> None:
+    answer = _owner_plain_reason(
+        {
+            "demoParams": {
+                "financial_summary": {
+                    "foodCostRatio": 1,
+                    "grossMarginPct": 0,
+                }
+            }
+        },
+        "cost_margin",
+        "",
+    )
+
+    assert "毛利率约 0" in answer
+    assert "51%" not in answer
 
 
 def test_owner_action_chat_routes_bom_variance_question_to_cost_margin() -> None:

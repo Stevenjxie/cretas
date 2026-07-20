@@ -22,7 +22,8 @@ The endpoint auto-detects available sheets and extracts what it can:
 
 import logging
 import os
-from datetime import datetime
+import re
+from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter
@@ -47,6 +48,50 @@ def _safe_num(val, default=0):
         return default if f != f else f
     except (ValueError, TypeError):
         return default
+
+
+def _optional_num(val):
+    """Parse a numeric cell without turning missing/invalid data into zero."""
+    if val is None or (isinstance(val, str) and not val.strip()):
+        return None
+    try:
+        number = float(val)
+        return None if number != number else number
+    except (ValueError, TypeError):
+        return None
+
+
+def _normalize_record_date(value) -> Optional[str]:
+    if isinstance(value, datetime):
+        return value.strftime('%Y-%m-%d')
+    if isinstance(value, date):
+        return value.isoformat()
+    if value is None:
+        return None
+    text = str(value).strip()
+    match = re.search(r'(20\d{2})[年./-](\d{1,2})(?:[月./-](\d{1,2}))?', text)
+    if not match:
+        return None
+    year, month, day = (int(match.group(1)), int(match.group(2)), int(match.group(3) or 1))
+    try:
+        return date(year, month, day).isoformat()
+    except ValueError:
+        return None
+
+
+def _find_sheet_record_date(ws) -> Optional[str]:
+    """Find an explicit business period in the sheet; never use today's date."""
+    for row in ws.iter_rows(
+        min_row=1,
+        max_row=min(ws.max_row, 10),
+        min_col=1,
+        max_col=min(ws.max_column, 12),
+    ):
+        for cell in row:
+            parsed = _normalize_record_date(cell.value)
+            if parsed:
+                return parsed
+    return None
 
 
 def _safe_str(val, max_len=200):
@@ -118,6 +163,12 @@ def _extract_sales(wb, factory_id):
             col_map['quantity'] = i
         elif '单价' in h:
             col_map['unit_price'] = i
+        elif '毛利率' in h:
+            col_map['gross_margin'] = i
+        elif '成本' in h:
+            col_map['cost'] = i
+        elif '利润' in h or '毛利额' in h:
+            col_map['profit'] = i
         elif '金额' in h:
             col_map['amount'] = i
         elif '区域' in h:
@@ -154,9 +205,33 @@ def _extract_sales(wb, factory_id):
         region = _safe_str(vals[col_map['region']] if 'region' in col_map else None, 100)
         salesperson = _safe_str(vals[col_map['salesperson']] if 'salesperson' in col_map else None, 100)
 
-        cost = round(amount * 0.67, 2) if amount > 0 else 0
-        profit = round(amount - cost, 2)
-        gross_margin = round(profit / amount, 4) if amount > 0 else 0
+        cost = _optional_num(vals[col_map['cost']]) if 'cost' in col_map else None
+        profit = _optional_num(vals[col_map['profit']]) if 'profit' in col_map else None
+        gross_margin = (
+            _optional_num(vals[col_map['gross_margin']])
+            if 'gross_margin' in col_map
+            else None
+        )
+        if gross_margin is not None and abs(gross_margin) > 1:
+            gross_margin /= 100
+
+        # Only derive one financial field from another value supplied by the
+        # workbook. A sales-only sheet has no defensible cost basis, so keep all
+        # three fields NULL instead of silently assuming a 67% cost ratio.
+        if cost is not None and profit is None:
+            profit = amount - cost
+        elif profit is not None and cost is None:
+            cost = amount - profit
+        elif gross_margin is not None and cost is None and profit is None:
+            profit = amount * gross_margin
+            cost = amount - profit
+
+        if gross_margin is None and profit is not None and amount != 0:
+            gross_margin = profit / amount
+
+        cost = round(cost, 2) if cost is not None else None
+        profit = round(profit, 2) if profit is not None else None
+        gross_margin = round(gross_margin, 4) if gross_margin is not None else None
 
         rows.append({
             'factory_id': factory_id,
@@ -209,6 +284,10 @@ def _extract_ar(wb, factory_id):
             h = str(h).strip()
             if '客户' in h:
                 col_map['customer'] = i
+            elif '日期' in h or '期间' in h:
+                col_map['date'] = i
+            elif '回款' in h or '已收' in h:
+                col_map['collection'] = i
             elif '应收' in h:
                 col_map['balance'] = i
             elif '0-30' in h:
@@ -230,6 +309,14 @@ def _extract_ar(wb, factory_id):
         if customer is None or (isinstance(customer, str) and ('合计' in customer or '占比' in customer)):
             continue
 
+        record_date = (
+            _normalize_record_date(vals[col_map['date']])
+            if 'date' in col_map
+            else _find_sheet_record_date(ws)
+        )
+        if record_date is None:
+            continue
+
         balance = _safe_num(vals[col_map.get('balance', 1)] if 'balance' in col_map else 0)
         if balance <= 0:
             continue
@@ -242,11 +329,15 @@ def _extract_ar(wb, factory_id):
 
         total_weighted = d0_30 * 15 + d31_60 * 45 + d61_90 * 75 + d91_180 * 135 + d180plus * 270
         avg_aging = int(total_weighted / balance) if balance > 0 else 0
-        collection = round(balance * 0.3, 2)
+        collection = (
+            _optional_num(vals[col_map['collection']])
+            if 'collection' in col_map
+            else None
+        )
 
         rows.append({
             'factory_id': factory_id,
-            'record_date': '2025-12-31',
+            'record_date': record_date,
             'record_type': 'AR',
             'customer_name': _safe_str(customer),
             'receivable_amount': balance,
@@ -266,6 +357,9 @@ def _extract_department(wb, factory_id):
 
     if '月度经营分析' in wb.sheetnames:
         ws = wb['月度经营分析']
+        record_date = _find_sheet_record_date(ws)
+        if record_date is None:
+            return [], "月度经营分析缺少明确期间，未同步部门指标"
         for r in range(1, ws.max_row + 1):
             for check_col in [8, 1]:
                 val = ws.cell(r, check_col).value
@@ -274,35 +368,40 @@ def _extract_department(wb, factory_id):
                 val_str = str(val).strip()
                 if '分部' in val_str or '区域' in val_str or '省区' in val_str:
                     if check_col == 8:
-                        revenue = _safe_num(ws.cell(r, 9).value) * 10000
-                        net_profit = _safe_num(ws.cell(r, 10).value) * 10000
-                        achievement = _safe_num(ws.cell(r, 12).value)
+                        revenue_raw = _optional_num(ws.cell(r, 9).value)
+                        net_profit_raw = _optional_num(ws.cell(r, 10).value)
+                        achievement = _optional_num(ws.cell(r, 12).value)
                     else:
-                        revenue = _safe_num(ws.cell(r, 2).value) * 10000
-                        net_profit = _safe_num(ws.cell(r, 3).value) * 10000
-                        achievement = _safe_num(ws.cell(r, 5).value)
+                        revenue_raw = _optional_num(ws.cell(r, 2).value)
+                        net_profit_raw = _optional_num(ws.cell(r, 3).value)
+                        achievement = _optional_num(ws.cell(r, 5).value)
 
-                    if revenue <= 0:
+                    if revenue_raw is None or revenue_raw <= 0:
                         continue
+                    revenue = revenue_raw * 10000
+                    net_profit = net_profit_raw * 10000 if net_profit_raw is not None else None
 
                     dept_name = val_str
                     if any(d['department'] == dept_name for d in rows):
                         continue
 
-                    cost = round(revenue - net_profit, 2)
-                    headcount = max(5, int(revenue / 350000))
-                    sales_target = round(revenue / achievement, 2) if achievement > 0 else round(revenue * 0.98, 2)
+                    cost = round(revenue - net_profit, 2) if net_profit is not None else None
+                    sales_target = (
+                        round(revenue / achievement, 2)
+                        if achievement is not None and achievement > 0
+                        else None
+                    )
 
                     rows.append({
                         'factory_id': factory_id,
-                        'record_date': '2025-12-31',
+                        'record_date': record_date,
                         'department': dept_name,
-                        'headcount': headcount,
+                        'headcount': None,
                         'sales_amount': revenue,
                         'sales_target': sales_target,
                         'cost_amount': cost,
-                        'per_capita_sales': round(revenue / headcount, 2),
-                        'per_capita_cost': round(cost / headcount, 2),
+                        'per_capita_sales': None,
+                        'per_capita_cost': None,
                         'created_at': now,
                         'updated_at': now,
                     })
@@ -312,37 +411,7 @@ def _extract_department(wb, factory_id):
 
     # Fallback to 收入及净利简表
     if '收入及净利简表' in wb.sheetnames:
-        ws = wb['收入及净利简表']
-        for r in range(1, ws.max_row + 1):
-            val = ws.cell(r, 1).value
-            if val is None:
-                continue
-            val_str = str(val).strip()
-            if '分部' in val_str or '区域' in val_str or '省区' in val_str:
-                total = 0
-                for c in range(2, ws.max_column + 1):
-                    total += _safe_num(ws.cell(r, c).value)
-                if total <= 0:
-                    continue
-                if any(d['department'] == val_str for d in rows):
-                    continue
-
-                cost = round(total * 0.93, 2)
-                headcount = max(5, int(total / 350000))
-
-                rows.append({
-                    'factory_id': factory_id,
-                    'record_date': '2025-12-31',
-                    'department': val_str,
-                    'headcount': headcount,
-                    'sales_amount': total,
-                    'sales_target': round(total * 0.98, 2),
-                    'cost_amount': cost,
-                    'per_capita_sales': round(total / headcount, 2),
-                    'per_capita_cost': round(cost / headcount, 2),
-                    'created_at': now,
-                    'updated_at': now,
-                })
+        return [], "收入及净利简表缺少受控列映射，未自动推造成本、人数或目标"
 
     return rows, "No suitable sheets" if not rows else None
 
@@ -361,10 +430,26 @@ def _persist_to_db(db_url: str, factory_id: str, sales, ar_rows, dept_rows):
     dept_count = 0
 
     try:
-        # Clean existing data for this factory
-        session.execute(text("DELETE FROM smart_bi_sales_data WHERE factory_id = :fid"), {'fid': factory_id})
-        session.execute(text("DELETE FROM smart_bi_finance_data WHERE factory_id = :fid"), {'fid': factory_id})
-        session.execute(text("DELETE FROM smart_bi_department_data WHERE factory_id = :fid"), {'fid': factory_id})
+        # Replace only domains for which this workbook produced verified rows.
+        # AR synchronization must never erase governed REVENUE/COST records.
+        if sales:
+            session.execute(
+                text("DELETE FROM smart_bi_sales_data WHERE factory_id = :fid"),
+                {'fid': factory_id},
+            )
+        if ar_rows:
+            session.execute(
+                text(
+                    "DELETE FROM smart_bi_finance_data "
+                    "WHERE factory_id = :fid AND record_type = 'AR'"
+                ),
+                {'fid': factory_id},
+            )
+        if dept_rows:
+            session.execute(
+                text("DELETE FROM smart_bi_department_data WHERE factory_id = :fid"),
+                {'fid': factory_id},
+            )
 
         # Insert sales
         for row in sales:

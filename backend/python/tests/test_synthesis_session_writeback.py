@@ -30,14 +30,29 @@ class _FakeResponse:
 
 
 class _FakeEngine:
+    calls: list[dict] = []
+
     def __init__(self, pool):
         self.pool = pool
 
-    async def synthesize(self, factory_id, question, window, conversation_history=None):
+    async def synthesize(
+        self,
+        factory_id,
+        question,
+        window,
+        conversation_history=None,
+        page_context=None,
+        dimension_hints=None,
+    ):
         assert factory_id == "DEMO_REST"
         assert question
         assert window == (date(2026, 5, 1), date(2026, 6, 30))
         assert conversation_history is None
+        self.calls.append({
+            "question": question,
+            "page_context": page_context,
+            "dimension_hints": dimension_hints,
+        })
         return _FakeResponse()
 
 
@@ -45,6 +60,7 @@ class _FakeEngine:
 def synthesis_mocks(monkeypatch):
     calls = []
     lookup_calls = []
+    _FakeEngine.calls = []
 
     async def fake_get_pg_pool():
         return object()
@@ -109,6 +125,23 @@ async def test_comprehensive_writes_back_when_session_id_present(synthesis_mocks
     assert lookup_calls == [
         {"session_id": "sid-001", "factory_id": "DEMO_REST", "user_id": 42}
     ]
+
+
+@pytest.mark.asyncio
+async def test_comprehensive_passes_page_context_without_rewriting_question(synthesis_mocks):
+    body = syn.SynthesisRequest(
+        question="这个数据说明什么？",
+        page_context="当前模块：财务概览；成本数据暂不可用",
+        dimension_hints=["finance", "kpi"],
+    )
+
+    await syn.comprehensive(_request(), body)
+
+    assert _FakeEngine.calls == [{
+        "question": "这个数据说明什么？",
+        "page_context": "当前模块：财务概览；成本数据暂不可用",
+        "dimension_hints": ["finance", "kpi"],
+    }]
 
 
 @pytest.mark.asyncio

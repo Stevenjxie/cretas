@@ -16,6 +16,7 @@ import pytest
 
 import smartbi.agent.synthesis_engine as se
 from smartbi.agent.synthesis_engine import ComprehensiveSynthesisEngine, SynthesisResponse
+from smartbi.agent.factbook import FactBook
 from smartbi.agent.budget_tracker import BudgetCheckResult
 from common.llm_redactor import current_redaction_scope
 
@@ -295,6 +296,51 @@ class TestCharts:
         # all charts are valid ECharts-ish (type + series)
         for c in charts:
             assert "chartType" in c and "series" in c
+
+    def test_period_chart_uses_actual_previous_value_as_reference_line(self, monkeypatch):
+        eng = _engine(monkeypatch)
+        fb = FactBook(period_comparison={
+            "gross_margin_pct": {
+                "current": 34.0,
+                "mom_pct": 4.0,
+                "mom_available": True,
+            },
+            "cost_ratio": {
+                "current": None,
+                "mom_pct": None,
+                "mom_available": False,
+            },
+        })
+
+        charts = eng.collect_charts(fb, {"period_comparison": True})
+
+        margin_chart = next(c for c in charts if "加权毛利率环比" in c["title"])
+        series = margin_chart["series"][0]
+        assert series["data"] == [30.0, 34.0]
+        assert series["markLine"]["data"] == [{"yAxis": 30.0, "name": "上期实绩"}]
+
+    def test_period_chart_absent_when_cost_coverage_is_missing(self, monkeypatch):
+        eng = _engine(monkeypatch)
+        fb = FactBook(period_comparison={
+            "gross_margin_pct": {
+                "current": None,
+                "mom_pct": None,
+                "mom_available": False,
+            },
+        })
+
+        charts = eng.collect_charts(fb, {"period_comparison": True})
+
+        assert not any("毛利率" in c["title"] for c in charts)
+
+    def test_page_dimension_hint_routes_without_context_keyword_pollution(self, monkeypatch):
+        eng = _engine(monkeypatch)
+
+        plan = eng.plan_dimensions("这个数据说明什么", dimension_hints=["finance"])
+
+        assert plan["finance"] is True
+        assert plan["review"] is False
+        assert plan["sales"] is False
 
 
 # --------------------------------------------------------------------------

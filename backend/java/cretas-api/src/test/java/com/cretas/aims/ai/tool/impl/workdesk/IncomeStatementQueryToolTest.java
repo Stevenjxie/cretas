@@ -1,6 +1,7 @@
 package com.cretas.aims.ai.tool.impl.workdesk;
 
 import com.cretas.aims.dto.finance.report.IncomeStatementDTO;
+import com.cretas.aims.dto.finance.report.BalanceSheetDTO;
 import com.cretas.aims.service.finance.IncomeStatementService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -55,7 +56,11 @@ class IncomeStatementQueryToolTest {
     void computesMargin() throws Exception {
         IncomeStatementDTO dto = IncomeStatementDTO.builder()
                 .factoryId(FACTORY_ID).startYear(2026).startMonth(5).endYear(2026).endMonth(5)
-                .revenues(List.of()).costs(List.of()).expenses(List.of())
+                .costDataAvailable(true)
+                .grossMarginStatus(IncomeStatementDTO.GrossMarginStatus.CALCULABLE)
+                .revenues(List.of()).costs(List.of(BalanceSheetDTO.LineItem.builder()
+                        .accountCode("5401").accountName("主营业务成本")
+                        .amount(new BigDecimal("60000")).build())).expenses(List.of())
                 .totalRevenue(new BigDecimal("100000"))
                 .totalCost(new BigDecimal("60000"))
                 .grossProfit(new BigDecimal("40000"))
@@ -73,7 +78,42 @@ class IncomeStatementQueryToolTest {
         // grossMarginPercent = 40000 / 100000 * 100 = 40.00
         assertEquals(0, ((BigDecimal) data.get("grossMarginPercent"))
                 .compareTo(new BigDecimal("40.00")));
+        assertEquals("CALCULABLE", data.get("grossMarginStatus"));
         assertTrue(data.get("actionHint").toString().contains("income-statement"));
+    }
+
+    @Test
+    @DisplayName("UT-ISQ-03: missing cost postings never become 0 or 100% margin")
+    @SuppressWarnings("unchecked")
+    void missingCostIsNotComputable() throws Exception {
+        IncomeStatementDTO dto = IncomeStatementDTO.builder()
+                .factoryId(FACTORY_ID).startYear(2026).startMonth(5).endYear(2026).endMonth(5)
+                .costDataAvailable(false)
+                .grossMarginStatus(IncomeStatementDTO.GrossMarginStatus.MISSING_COST_DATA)
+                .grossMarginStatusMessage("期间没有已过账的营业成本分录，不能把缺失成本当作 0 计算毛利率")
+                .revenues(List.of()).costs(List.of()).expenses(List.of())
+                .totalRevenue(new BigDecimal("100000"))
+                .totalCost(BigDecimal.ZERO)
+                .grossProfit(new BigDecimal("100000"))
+                .totalExpense(BigDecimal.ZERO)
+                .operatingProfit(new BigDecimal("100000"))
+                .incomeTax(BigDecimal.ZERO)
+                .netProfit(new BigDecimal("100000"))
+                .generatedAt("2026-05-20T10:00:00").build();
+        when(incomeStatementService.generate(anyString(), eq(2026), eq(5), eq(2026), eq(5)))
+                .thenReturn(dto);
+
+        Map<String, Object> result = invoke("doExecute", FACTORY_ID,
+                Map.of("startYear", 2026, "startMonth", 5), ctx());
+        Map<String, Object> data = (Map<String, Object>) result.get("data");
+
+        assertNull(data.get("totalCost"));
+        assertNull(data.get("grossProfit"));
+        assertNull(data.get("grossMarginPercent"));
+        assertNull(data.get("operatingProfit"));
+        assertNull(data.get("netProfit"));
+        assertEquals("MISSING_COST_DATA", data.get("grossMarginStatus"));
+        assertTrue(result.get("message").toString().contains("请先补录或同步成本凭证"));
     }
 
     // ── helpers ──

@@ -31,6 +31,10 @@ export interface AnalysisChartContext {
   key: string;
   title: string;
   dataSummary: string;
+  /** Exact period/source/semantic scope of this display context. */
+  dataScope?: string;
+  /** Metrics absent from this display summary (absence must never be treated as zero). */
+  unavailableMetrics?: string[];
 }
 
 // ============================================================

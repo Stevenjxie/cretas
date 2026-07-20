@@ -27,6 +27,23 @@ describe('askRestaurantSynthesis', () => {
     );
   });
 
+  it('sends page context separately so routing receives the raw user question', async () => {
+    pythonFetchMock.mockResolvedValue({ answer: 'x', charts: [], alerts: [] });
+
+    await askRestaurantSynthesis('这个数据说明什么', 'sess-2', {
+      pageContext: '【页面焦点】财务概览\n【页面摘要未提供】毛利率；未提供不等于0',
+      dimensionHints: ['finance'],
+    });
+
+    const request = pythonFetchMock.mock.calls[0][1] as { body: string };
+    expect(JSON.parse(request.body)).toEqual({
+      question: '这个数据说明什么',
+      session_id: 'sess-2',
+      page_context: '【页面焦点】财务概览\n【页面摘要未提供】毛利率；未提供不等于0',
+      dimension_hints: ['finance'],
+    });
+  });
+
   it('normalizes a flat {chartType,title,xAxis,series} chart into {type,title,option}', async () => {
     pythonFetchMock.mockResolvedValue({
       answer: '本店上月营收上升。',
@@ -56,6 +73,27 @@ describe('askRestaurantSynthesis', () => {
         yAxis: { type: 'value' },
       },
     });
+  });
+
+  it('preserves grounded markLine reference values from synthesis charts', async () => {
+    const markLine = {
+      silent: true,
+      data: [{ yAxis: 30, name: '上期实绩' }],
+    };
+    pythonFetchMock.mockResolvedValue({
+      answer: '毛利率较上期提升。',
+      charts: [{
+        chartType: 'bar',
+        title: '加权毛利率环比',
+        xAxis: { data: ['上一等长周期', '当前周期'] },
+        series: [{ name: '加权毛利率', type: 'bar', data: [30, 34], markLine }],
+      }],
+      alerts: [],
+    });
+
+    const result = await askRestaurantSynthesis('毛利率环比如何');
+
+    expect((result.charts[0].option.series as Array<Record<string, unknown>>)[0].markLine).toEqual(markLine);
   });
 
   it('passes through 反回扣 alerts unmodified when title+detail are present', async () => {

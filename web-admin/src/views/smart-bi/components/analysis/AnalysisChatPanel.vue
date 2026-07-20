@@ -8,11 +8,9 @@
  * LLM router + billing caps + caching, see @/api/smartbi/restaurant-synthesis).
  * This component adds NO new LLM endpoint; it only changes WHAT gets asked.
  *
- * Grounding trick (needs no backend change): the currently-focused chart's
- * `dataSummary` (real numbers from the page's own refs, see
- * analysisBullets.ts's `*Summary()` builders) is prepended to the user's
- * question before it is sent, so the LLM reasons over exactly what the user
- * is looking at. Switching focus re-scopes the conversation (new session).
+ * The focused chart context is sent in a dedicated `page_context` field rather
+ * than prepended to `question`. This keeps display copy out of routing, date
+ * parsing and semantic-cache matching while preserving chart-aware answers.
  *
  * Markdown + chart rendering is reused as-is from the existing chat UI
  * (ChatBubble.vue + ChatTypingIndicator.vue, same components
@@ -47,16 +45,46 @@ const chatContainer = ref<HTMLElement | null>(null);
 const sessionId = ref<string>(crypto.randomUUID());
 
 /** Resolved focus target: either the whole page (all contexts concatenated) or one chart. */
-const focusedContext = computed<{ title: string; dataSummary: string }>(() => {
+interface FocusedAnalysisContext {
+  title: string;
+  dataSummary: string;
+  dataScope: string;
+  unavailableMetrics: string[];
+  dimensionHints: string[];
+}
+
+const focusedContext = computed<FocusedAnalysisContext>(() => {
   if (focusKey.value === ALL_FOCUS) {
     const combined = props.contexts
       .filter((c) => c.dataSummary)
       .map((c) => `【${c.title}】${c.dataSummary}`)
       .join('\n');
-    return { title: props.pageTitle, dataSummary: combined };
+    const scopes = props.contexts.map((c) => c.dataScope).filter((v): v is string => Boolean(v));
+    const unavailableMetrics = [...new Set(props.contexts.flatMap((c) => c.unavailableMetrics ?? []))];
+    return {
+      title: props.pageTitle,
+      dataSummary: combined,
+      dataScope: scopes.join('；'),
+      unavailableMetrics,
+      dimensionHints: props.contexts.map((c) => c.key),
+    };
   }
   const ctx = props.contexts.find((c) => c.key === focusKey.value);
-  return ctx ? { title: ctx.title, dataSummary: ctx.dataSummary } : { title: props.pageTitle, dataSummary: '' };
+  return ctx
+    ? {
+        title: ctx.title,
+        dataSummary: ctx.dataSummary,
+        dataScope: ctx.dataScope ?? '',
+        unavailableMetrics: ctx.unavailableMetrics ?? [],
+        dimensionHints: [ctx.key],
+      }
+    : {
+        title: props.pageTitle,
+        dataSummary: '',
+        dataScope: '',
+        unavailableMetrics: [],
+        dimensionHints: [],
+      };
 });
 
 const focusLabel = computed(() =>
@@ -81,12 +109,23 @@ function onFocusChange() {
   resetConversation();
 }
 
-/** Embed the focused chart's real numbers ahead of the user's question (grounding trick). */
-function buildEmbeddedQuery(question: string): string {
-  const { title, dataSummary } = focusedContext.value;
-  const scope = focusKey.value === ALL_FOCUS ? `整页「${title}」` : `这张「${title}」图`;
-  const dataPart = dataSummary ? `[${title}数据] ${dataSummary}` : `[${title}]`;
-  return `${dataPart}\n\n请针对${scope}: ${question}`;
+/** Build bounded display context; the raw user question remains untouched. */
+function buildPageContext(): string {
+  const { title, dataSummary, dataScope, unavailableMetrics } = focusedContext.value;
+  const lines = [
+    `【页面焦点】${focusKey.value === ALL_FOCUS ? `整页「${title}」` : `图表「${title}」`}`,
+    `【页面展示数据】${dataSummary || '暂无数据'}`,
+  ];
+  if (dataScope) lines.push(`【数据口径】${dataScope}`);
+  if (unavailableMetrics.length) {
+    lines.push(
+      `【页面摘要未提供】${unavailableMetrics.join('、')}。未提供不等于 0；不得仅凭页面摘要推算这些指标。`,
+    );
+  }
+  const context = lines.join('\n');
+  return context.length <= 1900
+    ? context
+    : `${context.slice(0, 1860)}\n【提示】页面上下文过长，已安全截断`;
 }
 
 async function sendMessage(text?: string) {
@@ -105,8 +144,10 @@ async function sendMessage(text?: string) {
 
   isTyping.value = true;
   try {
-    const embeddedQuery = buildEmbeddedQuery(question);
-    const response = await askRestaurantSynthesis(embeddedQuery, sessionId.value);
+    const response = await askRestaurantSynthesis(question, sessionId.value, {
+      pageContext: buildPageContext(),
+      dimensionHints: focusedContext.value.dimensionHints,
+    });
 
     if (!response.success) {
       // Honest failure: real backend/network message, never a fabricated answer.
@@ -225,6 +266,7 @@ defineExpose({ setFocus, sendMessage, clearConversation });
   border: 1px solid var(--el-border-color-lighter, #ebeef5);
   border-radius: 8px;
   overflow: hidden;
+  --el-radio-button-checked-text-color: #fff;
 }
 .acp-header {
   padding: 12px 16px;
@@ -289,9 +331,38 @@ defineExpose({ setFocus, sendMessage, clearConversation });
   gap: 8px;
 }
 
-@media (prefers-color-scheme: dark) {
-  .acp-panel { background: #1d1e1f; border-color: #363637; }
+:global(:root[data-theme='dark']) .acp-panel {
+  background: #1d1e1f;
+  border-color: #4c4d4f;
+  --el-bg-color: #1d1e1f;
+  --el-fill-color-blank: #1d1e1f;
+  --el-text-color-primary: #f2f3f5;
+  --el-text-color-regular: #dcdfe6;
+  --el-text-color-secondary: #b1b3b8;
+  --el-border-color: #4c4d4f;
+  --el-border-color-lighter: #363637;
 }
-:root[data-theme='dark'] .acp-panel { background: #1d1e1f; border-color: #363637; }
-:root[data-theme='light'] .acp-panel { background: #fff; }
+:global(:root[data-theme='dark']) .acp-panel :deep(.el-radio-button__inner) {
+  color: #dcdfe6;
+  background: #262727;
+  border-color: #4c4d4f;
+}
+:global(:root[data-theme='dark']) .acp-panel :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) {
+  color: #fff;
+  background: var(--el-color-primary, #409eff);
+  border-color: var(--el-color-primary, #409eff);
+}
+:global(:root[data-theme='dark']) .acp-panel :deep(.el-radio-button.is-active .el-radio-button__inner) {
+  color: #fff;
+  background: var(--el-color-primary, #409eff);
+  border-color: var(--el-color-primary, #409eff);
+}
+:global(:root[data-theme='dark']) .acp-panel :deep(.el-input__wrapper) {
+  background: #262727;
+  box-shadow: 0 0 0 1px #4c4d4f inset;
+}
+:global(:root[data-theme='dark']) .acp-panel :deep(.el-input__inner) {
+  color: #f2f3f5;
+}
+:global(:root[data-theme='light']) .acp-panel { background: #fff; }
 </style>

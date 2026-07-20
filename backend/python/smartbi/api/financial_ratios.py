@@ -31,11 +31,20 @@ def _get_db_connection():
     return None
 
 
-def _safe_div(a: float, b: float, default: float = 0.0) -> float:
-    return round(a / b, 2) if b != 0 else default
+def _safe_ratio(
+    numerator: Optional[float],
+    denominator: Optional[float],
+    scale: float = 1.0,
+) -> Optional[float]:
+    """Return None when a ratio cannot be supported by source data."""
+    if numerator is None or denominator is None or denominator == 0:
+        return None
+    return round(numerator / denominator * scale, 2)
 
 
-def _status(value: float, benchmark: float, higher_is_better: bool = True) -> str:
+def _status(value: Optional[float], benchmark: float, higher_is_better: bool = True) -> str:
+    if value is None:
+        return "unavailable"
     if higher_is_better:
         if value >= benchmark * 1.1:
             return "good"
@@ -58,41 +67,55 @@ async def get_financial_ratios(
 ):
     """
     Compute financial ratios from finance data.
-    Falls back to demo data if DB unavailable.
+    Missing source metrics stay unavailable; demo values are never substituted.
     """
+    if not factory_id:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "data": None, "message": "缺少 factoryId，无法计算财务比率"},
+        )
+
     try:
         conn = _get_db_connection()
-        if conn and factory_id:
-            result = _compute_ratios_from_db(conn, factory_id, start_date, end_date)
-            if result:
-                return JSONResponse(content={"success": True, "data": result, "message": "财务比率分析完成"})
-    except Exception as e:
-        logger.warning(f"Ratio computation failed, using demo: {e}")
+        if conn is None:
+            return JSONResponse(
+                status_code=503,
+                content={"success": False, "data": None, "message": "财务数据库不可用，未生成财务比率"},
+            )
 
-    return JSONResponse(content={
-        "success": True,
-        "data": _generate_demo_ratios(),
-        "message": "财务比率分析（演示数据）",
-    })
+        result = _compute_ratios_from_db(conn, factory_id, start_date, end_date)
+        if result is None:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "success": False,
+                    "data": None,
+                    "message": "当前期间没有足够的真实财务指标，未生成财务比率",
+                },
+            )
+        return JSONResponse(content={"success": True, "data": result, "message": "财务比率分析完成"})
+    except Exception as e:
+        logger.exception("Ratio computation failed")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "data": None, "message": f"财务比率计算失败：{type(e).__name__}"},
+        )
 
 
 def _compute_ratios_from_db(conn, factory_id: str, start_date: Optional[str], end_date: Optional[str]):
-    """Try to compute real ratios from smartbi_finance_data."""
+    """Compute only ratios supported by the real smart_bi_finance_data schema."""
+    cursor = None
     try:
         cursor = conn.cursor()
         query = """
         SELECT
-            COALESCE(SUM(CASE WHEN metric_type = 'revenue' THEN amount END), 0) as revenue,
-            COALESCE(SUM(CASE WHEN metric_type = 'cost' THEN amount END), 0) as cost,
-            COALESCE(SUM(CASE WHEN metric_type = 'net_profit' THEN amount END), 0) as net_profit,
-            COALESCE(SUM(CASE WHEN metric_type = 'total_assets' THEN amount END), 0) as total_assets,
-            COALESCE(SUM(CASE WHEN metric_type = 'total_equity' THEN amount END), 0) as total_equity,
-            COALESCE(SUM(CASE WHEN metric_type = 'total_liabilities' THEN amount END), 0) as total_liabilities,
-            COALESCE(SUM(CASE WHEN metric_type = 'current_assets' THEN amount END), 0) as current_assets,
-            COALESCE(SUM(CASE WHEN metric_type = 'current_liabilities' THEN amount END), 0) as current_liabilities,
-            COALESCE(SUM(CASE WHEN metric_type = 'inventory' THEN amount END), 0) as inventory,
-            COALESCE(SUM(CASE WHEN metric_type = 'cash' THEN amount END), 0) as cash
-        FROM smartbi_finance_data
+            SUM(CASE WHEN record_type = 'REVENUE' THEN actual_amount END) as revenue,
+            SUM(
+                CASE WHEN record_type = 'COST'
+                     THEN COALESCE(NULLIF(actual_amount, 0), total_cost, actual_amount)
+                END
+            ) as cost
+        FROM smart_bi_finance_data
         WHERE factory_id = %s AND deleted_at IS NULL
         """
         params = [factory_id]
@@ -106,129 +129,92 @@ def _compute_ratios_from_db(conn, factory_id: str, start_date: Optional[str], en
         cursor.execute(query, params)
         row = cursor.fetchone()
 
-        if not row or row[0] == 0:
-            cursor.close()
+        if not row or all(value is None for value in row):
             return None
 
-        cols = ["revenue", "cost", "net_profit", "total_assets", "total_equity",
-                "total_liabilities", "current_assets", "current_liabilities", "inventory", "cash"]
-        data = dict(zip(cols, [float(v or 0) for v in row]))
-
-        gross_profit = data["revenue"] - data["cost"]
+        data = {
+            "revenue": float(row[0]) if row[0] is not None else None,
+            "cost": float(row[1]) if row[1] is not None else None,
+            # The current table has no governed balance-sheet/net-profit fields.
+            "net_profit": None,
+            "total_assets": None,
+            "total_equity": None,
+            "total_liabilities": None,
+            "current_assets": None,
+            "current_liabilities": None,
+            "inventory": None,
+            "cash": None,
+        }
+        gross_profit = (
+            data["revenue"] - data["cost"]
+            if data["revenue"] is not None and data["cost"] is not None
+            else None
+        )
 
         categories = [
             {
                 "title": "盈利能力", "icon": "trending-up", "color": "#10B981",
                 "ratios": [
-                    {"name": "ROE (净资产收益率)", "value": _safe_div(data["net_profit"], data["total_equity"]) * 100,
+                    {"name": "ROE (净资产收益率)", "value": _safe_ratio(data["net_profit"], data["total_equity"], 100),
                      "unit": "%", "benchmark": 12.0, "status": "", "description": "每单位净资产创造的净利润"},
-                    {"name": "ROA (总资产收益率)", "value": _safe_div(data["net_profit"], data["total_assets"]) * 100,
+                    {"name": "ROA (总资产收益率)", "value": _safe_ratio(data["net_profit"], data["total_assets"], 100),
                      "unit": "%", "benchmark": 6.5, "status": "", "description": "每单位总资产创造的净利润"},
-                    {"name": "毛利率", "value": _safe_div(gross_profit, data["revenue"]) * 100,
+                    {"name": "毛利率", "value": _safe_ratio(gross_profit, data["revenue"], 100),
                      "unit": "%", "benchmark": 30.0, "status": "", "description": "销售毛利占销售收入的比率"},
-                    {"name": "净利率", "value": _safe_div(data["net_profit"], data["revenue"]) * 100,
+                    {"name": "净利率", "value": _safe_ratio(data["net_profit"], data["revenue"], 100),
                      "unit": "%", "benchmark": 8.0, "status": "", "description": "净利润占销售收入的比率"},
                 ]
             },
             {
                 "title": "流动性", "icon": "water", "color": "#3B82F6",
                 "ratios": [
-                    {"name": "流动比率", "value": _safe_div(data["current_assets"], data["current_liabilities"]),
+                    {"name": "流动比率", "value": _safe_ratio(data["current_assets"], data["current_liabilities"]),
                      "unit": "", "benchmark": 2.0, "status": "", "description": "流动资产/流动负债"},
-                    {"name": "速动比率", "value": _safe_div(data["current_assets"] - data["inventory"], data["current_liabilities"]),  # noqa: E501
-                     "unit": "", "benchmark": 1.0, "status": "", "description": "(流动资产-存货)/流动负债"},
-                    {"name": "现金比率", "value": _safe_div(data["cash"], data["current_liabilities"]),
+                    {"name": "速动比率", "value": _safe_ratio(
+                        data["current_assets"] - data["inventory"]
+                        if data["current_assets"] is not None and data["inventory"] is not None
+                        else None,
+                        data["current_liabilities"],
+                    ), "unit": "", "benchmark": 1.0, "status": "", "description": "(流动资产-存货)/流动负债"},
+                    {"name": "现金比率", "value": _safe_ratio(data["cash"], data["current_liabilities"]),
                      "unit": "", "benchmark": 0.5, "status": "", "description": "现金及等价物/流动负债"},
                 ]
             },
             {
                 "title": "运营效率", "icon": "cog-sync", "color": "#F59E0B",
                 "ratios": [
-                    {"name": "存货周转率", "value": _safe_div(data["cost"], data["inventory"]),
+                    {"name": "存货周转率", "value": _safe_ratio(data["cost"], data["inventory"]),
                      "unit": "次", "benchmark": 6.0, "status": "", "description": "年销售成本/平均存货"},
-                    {"name": "总资产周转率", "value": _safe_div(data["revenue"], data["total_assets"]),
+                    {"name": "总资产周转率", "value": _safe_ratio(data["revenue"], data["total_assets"]),
                      "unit": "次", "benchmark": 1.2, "status": "", "description": "年销售收入/平均总资产"},
                 ]
             },
             {
                 "title": "偿债能力", "icon": "shield-account", "color": "#EF4444",
                 "ratios": [
-                    {"name": "资产负债率", "value": _safe_div(data["total_liabilities"], data["total_assets"]) * 100,
+                    {"name": "资产负债率", "value": _safe_ratio(data["total_liabilities"], data["total_assets"], 100),
                      "unit": "%", "benchmark": 50.0, "status": "", "description": "总负债/总资产"},
-                    {"name": "权益乘数", "value": _safe_div(data["total_assets"], data["total_equity"]),
+                    {"name": "权益乘数", "value": _safe_ratio(data["total_assets"], data["total_equity"]),
                      "unit": "", "benchmark": 2.0, "status": "", "description": "总资产/净资产"},
                 ]
             },
         ]
 
-        # Compute status for each ratio
-        for cat in categories:
-            for r in cat["ratios"]:
-                higher = not (r["name"] == "资产负债率")
-                r["status"] = _status(r["value"], r["benchmark"], higher)
+        for category in categories:
+            for ratio in category["ratios"]:
+                higher = ratio["name"] != "资产负债率"
+                ratio["status"] = _status(ratio["value"], ratio["benchmark"], higher)
+                ratio["available"] = ratio["value"] is not None
+                if ratio["value"] is None:
+                    ratio["unavailableReason"] = "缺少计算该比率所需的真实财务指标"
 
         return {"categories": categories, "analysisDate": datetime.now().strftime("%Y-%m-%d")}
 
     except Exception as e:
         logger.error(f"Ratio SQL error: {e}")
-        return None
+        raise
     finally:
         try:
             cursor.close()
         except Exception:
             pass
-
-
-def _generate_demo_ratios():
-    """Generate demo financial ratios data."""
-    return {
-        "categories": [
-            {
-                "title": "盈利能力", "icon": "trending-up", "color": "#10B981",
-                "ratios": [
-                    {"name": "ROE (净资产收益率)", "value": 15.8, "unit": "%", "benchmark": 12.0, "status": "good",
-                     "description": "每单位净资产创造的净利润"},
-                    {"name": "ROA (总资产收益率)", "value": 8.2, "unit": "%", "benchmark": 6.5, "status": "good",
-                     "description": "每单位总资产创造的净利润"},
-                    {"name": "毛利率", "value": 35.6, "unit": "%", "benchmark": 30.0, "status": "good",
-                     "description": "销售毛利占销售收入的比率"},
-                    {"name": "净利率", "value": 12.3, "unit": "%", "benchmark": 8.0, "status": "good",
-                     "description": "净利润占销售收入的比率"},
-                ]
-            },
-            {
-                "title": "流动性", "icon": "water", "color": "#3B82F6",
-                "ratios": [
-                    {"name": "流动比率", "value": 1.85, "unit": "", "benchmark": 2.0, "status": "warning",
-                     "description": "流动资产/流动负债"},
-                    {"name": "速动比率", "value": 1.2, "unit": "", "benchmark": 1.0, "status": "good",
-                     "description": "(流动资产-存货)/流动负债"},
-                    {"name": "现金比率", "value": 0.65, "unit": "", "benchmark": 0.5, "status": "good",
-                     "description": "现金及等价物/流动负债"},
-                ]
-            },
-            {
-                "title": "运营效率", "icon": "cog-sync", "color": "#F59E0B",
-                "ratios": [
-                    {"name": "存货周转率", "value": 8.5, "unit": "次", "benchmark": 6.0, "status": "good",
-                     "description": "年销售成本/平均存货"},
-                    {"name": "应收账款周转率", "value": 12.3, "unit": "次", "benchmark": 10.0, "status": "good",
-                     "description": "年销售收入/平均应收账款"},
-                    {"name": "总资产周转率", "value": 1.5, "unit": "次", "benchmark": 1.2, "status": "good",
-                     "description": "年销售收入/平均总资产"},
-                ]
-            },
-            {
-                "title": "偿债能力", "icon": "shield-account", "color": "#EF4444",
-                "ratios": [
-                    {"name": "资产负债率", "value": 42.5, "unit": "%", "benchmark": 50.0, "status": "good",
-                     "description": "总负债/总资产"},
-                    {"name": "利息保障倍数", "value": 5.8, "unit": "倍", "benchmark": 3.0, "status": "good",
-                     "description": "EBIT/利息支出"},
-                    {"name": "权益乘数", "value": 1.74, "unit": "", "benchmark": 2.0, "status": "good",
-                     "description": "总资产/净资产"},
-                ]
-            },
-        ],
-        "analysisDate": datetime.now().strftime("%Y-%m-%d"),
-    }

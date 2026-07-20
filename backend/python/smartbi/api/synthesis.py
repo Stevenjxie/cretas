@@ -30,7 +30,7 @@ import json
 import logging
 import time
 from datetime import date, datetime, timedelta
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -64,6 +64,19 @@ class SynthesisRequest(BaseModel):
     # default) → no history lookup → behavior identical to before this field
     # existed (backward compat).
     session_id: Optional[str] = Field(None, description="v2 conv memory session_id (optional)")
+    # Page context is deliberately separate from ``question``. The old web
+    # panel prepended chart summaries to the question, which polluted routing,
+    # relative-date parsing and semantic-cache matching.
+    page_context: Optional[str] = Field(
+        None,
+        max_length=2000,
+        description="页面展示上下文；仅用于回答阶段，不参与日期解析",
+    )
+    dimension_hints: List[str] = Field(
+        default_factory=list,
+        max_length=16,
+        description="受控页面维度提示，如 finance/sales/trend/kpi",
+    )
 
     @property
     def effective_question(self) -> str:
@@ -232,7 +245,14 @@ async def comprehensive(request: Request, body: SynthesisRequest):
         fid,
         user_id,
     )
-    resp = await engine.synthesize(fid, q, window, conversation_history=conversation_history)
+    resp = await engine.synthesize(
+        fid,
+        q,
+        window,
+        conversation_history=conversation_history,
+        page_context=body.page_context,
+        dimension_hints=body.dimension_hints,
+    )
     await _write_conversation_turn(
         pool,
         body.session_id,
@@ -287,7 +307,14 @@ async def comprehensive_stream(request: Request, body: SynthesisRequest):
                 fid,
                 user_id,
             )
-            resp = await engine.synthesize(fid, q, window, conversation_history=conversation_history)
+            resp = await engine.synthesize(
+                fid,
+                q,
+                window,
+                conversation_history=conversation_history,
+                page_context=body.page_context,
+                dimension_hints=body.dimension_hints,
+            )
             # Stream the (already redaction-restored) answer in fixed slices.
             answer = resp.answer or ""
             chunk_size = 40

@@ -1561,10 +1561,14 @@ class BossDecisionBriefHandler(AbstractSectionHandler):
         hard_cost_problem = False
         if isinstance(financial, dict):
             food_cost_ratio = BossDecisionBriefHandler._safe_float(
-                financial.get("foodCostRatio") or financial.get("food_cost_ratio")
+                financial.get("foodCostRatio")
+                if financial.get("foodCostRatio") is not None
+                else financial.get("food_cost_ratio")
             )
             gross_margin_pct = BossDecisionBriefHandler._safe_float(
-                financial.get("grossMarginPct") or financial.get("gross_margin_pct")
+                financial.get("grossMarginPct")
+                if financial.get("grossMarginPct") is not None
+                else financial.get("gross_margin_pct")
             )
             if food_cost_ratio is not None:
                 normalized_ratio = food_cost_ratio * 100 if food_cost_ratio <= 1 else food_cost_ratio

@@ -874,7 +874,8 @@ def _owner_plain_reason(owner_page: dict[str, Any], scenario: str, fallback: str
 
     if scenario == "cost_margin":
         food_cost = _owner_pct(financial.get("foodCostRatio"))
-        gross = financial.get("grossMarginPct")
+        gross_value = _owner_float(financial.get("grossMarginPct"))
+        gross = _owner_metric(gross_value, 1) if gross_value is not None else None
         review = params.get("review_summary") if isinstance(params.get("review_summary"), dict) else {}
         losses = "、".join(str(item) for item in (stocktake.get("topLossItems") or [])[:2])
         variance = "、".join(str(item) for item in (stocktake.get("varianceItems") or [])[:2])
@@ -888,7 +889,13 @@ def _owner_plain_reason(owner_page: dict[str, Any], scenario: str, fallback: str
         )
         parts = []
         if food_cost is not None:
-            parts.append(f"食材成本率大约 {food_cost}%，毛利率约 {gross or 51}%，比健康状态更紧。")
+            if gross is not None:
+                parts.append(f"食材成本率大约 {food_cost}%，毛利率约 {gross}%，比健康状态更紧。")
+            else:
+                parts.append(
+                    f"食材成本率大约 {food_cost}%；毛利率因成本或营收口径不完整暂不可计算，"
+                    "不能用默认值代替。"
+                )
         if losses:
             parts.append(f"月盘点先指向 {losses} 这些损耗点。")
         if variance:
