@@ -4,16 +4,21 @@ import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentActionProposalContext;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentActionWorkflowResponse;
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunReplayResponse;
+import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
 import com.cretas.aims.entity.config.ApprovalWorkflow;
+import com.cretas.aims.entity.enums.FactoryType;
 import com.cretas.aims.entity.intent.IntentPreviewToken;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.service.PreviewTokenService;
 import com.cretas.aims.service.PreviewTokenService.BoundTokenRequest;
 import com.cretas.aims.service.PreviewTokenService.ClaimResult;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -45,6 +50,9 @@ class RestaurantAgentActionWorkflowServiceTest {
     private final PreviewTokenService previewTokenService = mock(PreviewTokenService.class);
     private final WorkflowEngineService workflowEngineService = mock(WorkflowEngineService.class);
     private final ApprovalWorkflowService approvalWorkflowService = mock(ApprovalWorkflowService.class);
+    private final FactoryRepository factoryRepository = mock(FactoryRepository.class);
+    private final RestaurantAgentActionWorkflowProvisioner workflowProvisioner =
+            mock(RestaurantAgentActionWorkflowProvisioner.class);
 
     @Test
     void featureFlagDefaultsFailClosedBeforeReplayOrPersistence() {
@@ -115,9 +123,9 @@ class RestaurantAgentActionWorkflowServiceTest {
                 .id("workflow-instance-1")
                 .status(ApprovalWorkflowInstance.InstanceStatus.RUNNING)
                 .build();
-        when(workflowEngineService.startWorkflow(
+        when(workflowEngineService.startWorkflowWithDefinition(
                 eq("R001"), eq(RestaurantAgentActionProposalMapper.WORKFLOW_KEY),
-                eq("restaurant-agent:" + RUN_ID + ":" + PROPOSAL), any(), eq(42L)))
+                eq("restaurant-agent:" + RUN_ID + ":" + PROPOSAL), any(), eq(42L), eq(workflow)))
                 .thenReturn(instance);
         when(previewTokenService.resolveClaim(
                 TOKEN, "claim-1", true, "WORKFLOW_INSTANCE:workflow-instance-1"))
@@ -134,17 +142,17 @@ class RestaurantAgentActionWorkflowServiceTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> workflowContext = ArgumentCaptor.forClass(Map.class);
-        verify(workflowEngineService).startWorkflow(
+        verify(workflowEngineService).startWorkflowWithDefinition(
                 eq("R001"), eq(RestaurantAgentActionProposalMapper.WORKFLOW_KEY),
                 eq("restaurant-agent:" + RUN_ID + ":" + PROPOSAL),
-                workflowContext.capture(), eq(42L));
+                workflowContext.capture(), eq(42L), eq(workflow));
         assertThat(workflowContext.getValue()).containsEntry("executionMode", "READ_ONLY_PROPOSAL");
         assertThat(workflowContext.getValue()).doesNotContainKeys(
                 "navigationTarget", "recipeId", "price", "toolName");
     }
 
     @Test
-    void confirmReusesExistingActiveInstanceWithoutConfigurationLookupOrStart() {
+    void confirmReusesExistingActiveInstanceAfterCanonicalConfigurationValidation() {
         RestaurantAgentActionWorkflowService service = service(true);
         String digest = "a".repeat(64);
         IntentPreviewToken token = boundToken(digest);
@@ -163,6 +171,15 @@ class RestaurantAgentActionWorkflowServiceTest {
                 "R001", RestaurantAgentActionProposalMapper.WORKFLOW_KEY,
                 "restaurant-agent:" + RUN_ID + ":" + PROPOSAL))
                 .thenReturn(Optional.of(existing));
+        ApprovalWorkflow canonical = ApprovalWorkflow.builder()
+                .name(RestaurantAgentActionProposalMapper.WORKFLOW_KEY)
+                .publishStatus("published")
+                .enabled(true)
+                .startNodeId("start")
+                .build();
+        when(approvalWorkflowService.getActiveByDecisionType(
+                "R001", DecisionType.RESTAURANT_AGENT_ACTION_REVIEW))
+                .thenReturn(Optional.of(canonical));
         when(previewTokenService.resolveClaim(
                 TOKEN, "claim-1", true, "WORKFLOW_INSTANCE:workflow-instance-existing"))
                 .thenReturn(true);
@@ -176,8 +193,9 @@ class RestaurantAgentActionWorkflowServiceTest {
                 "R001", "42", "restaurant_owner", "corr-1", RUN_ID, PROPOSAL, TOKEN))
                 .isSameAs(response);
 
-        verifyNoInteractions(approvalWorkflowService);
-        verify(workflowEngineService, never()).startWorkflow(any(), any(), any(), any(), any());
+        verify(workflowProvisioner).isCanonical(canonical);
+        verify(workflowEngineService, never()).startWorkflowWithDefinition(
+                any(), any(), any(), any(), any(), any());
         verify(mapper).toWorkflowResponse(context, existing, true);
     }
 
@@ -209,7 +227,8 @@ class RestaurantAgentActionWorkflowServiceTest {
                         .enabled(true)
                         .startNodeId("start")
                         .build()));
-        when(workflowEngineService.startWorkflow(any(), any(), any(), any(), any()))
+        when(workflowEngineService.startWorkflowWithDefinition(
+                any(), any(), any(), any(), any(), any()))
                 .thenThrow(new IllegalStateException("unique active instance race"));
         when(previewTokenService.resolveClaim(
                 TOKEN, "claim-1", true, "WORKFLOW_INSTANCE:workflow-instance-winner"))
@@ -224,9 +243,9 @@ class RestaurantAgentActionWorkflowServiceTest {
                 "R001", "42", "restaurant_owner", "corr-1", RUN_ID, PROPOSAL, TOKEN))
                 .isSameAs(response);
 
-        verify(workflowEngineService).startWorkflow(
+        verify(workflowEngineService).startWorkflowWithDefinition(
                 eq("R001"), eq(RestaurantAgentActionProposalMapper.WORKFLOW_KEY),
-                eq("restaurant-agent:" + RUN_ID + ":" + PROPOSAL), any(), eq(42L));
+                eq("restaurant-agent:" + RUN_ID + ":" + PROPOSAL), any(), eq(42L), any());
         verify(mapper).toWorkflowResponse(context, winner, true);
     }
 
@@ -243,6 +262,38 @@ class RestaurantAgentActionWorkflowServiceTest {
 
         verifyNoInteractions(runService, mapper, workflowEngineService, approvalWorkflowService);
         verify(previewTokenService, never()).resolveClaim(any(), any(), anyBoolean(), any());
+    }
+
+    @ParameterizedTest
+    @CsvSource({"FACTORY,true", "RESTAURANT,false"})
+    void confirmFailsClosedForNonRestaurantOrInactiveTenant(
+            FactoryType factoryType, boolean active) {
+        RestaurantAgentActionWorkflowService service = service(true);
+        String digest = "a".repeat(64);
+        IntentPreviewToken token = boundToken(digest);
+        when(previewTokenService.claimToken(TOKEN, "R001", 42L))
+                .thenReturn(ClaimResult.success(token, "claim-1", tokenParameters(digest)));
+        RestaurantAgentRunReplayResponse replay = mock(RestaurantAgentRunReplayResponse.class);
+        when(runService.replay("R001", "42", "restaurant_owner", "corr-1", RUN_ID, 0L))
+                .thenReturn(replay);
+        when(mapper.fromReplay(RUN_ID, PROPOSAL, replay)).thenReturn(context(digest));
+        Factory ineligible = new Factory();
+        ineligible.setId("R001");
+        ineligible.setType(factoryType);
+        ineligible.setIsActive(active);
+        when(factoryRepository.findById("R001")).thenReturn(Optional.of(ineligible));
+
+        assertThatThrownBy(() -> service.confirm(
+                "R001", "42", "restaurant_owner", "corr-1", RUN_ID, PROPOSAL, TOKEN))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("RESTAURANT_AGENT_ACTION_WORKFLOW_TENANT_NOT_ELIGIBLE");
+
+        verify(previewTokenService).resolveClaim(
+                TOKEN, "claim-1", false,
+                "RESTAURANT_AGENT_ACTION_WORKFLOW_TENANT_NOT_ELIGIBLE");
+        verifyNoInteractions(workflowProvisioner, approvalWorkflowService);
+        verify(workflowEngineService, never()).startWorkflowWithDefinition(
+                any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -264,14 +315,22 @@ class RestaurantAgentActionWorkflowServiceTest {
 
         verify(previewTokenService).resolveClaim(
                 TOKEN, "claim-1", false, "RESTAURANT_AGENT_ACTION_OUTCOME_CHANGED");
-        verify(workflowEngineService, never()).startWorkflow(any(), any(), any(), any(), any());
+        verify(workflowEngineService, never()).startWorkflowWithDefinition(
+                any(), any(), any(), any(), any(), any());
         verifyNoInteractions(approvalWorkflowService);
     }
 
     private RestaurantAgentActionWorkflowService service(boolean enabled) {
+        Factory restaurant = new Factory();
+        restaurant.setId("R001");
+        restaurant.setType(FactoryType.RESTAURANT);
+        restaurant.setIsActive(true);
+        when(factoryRepository.findById("R001")).thenReturn(Optional.of(restaurant));
+        when(workflowProvisioner.isCanonical(any())).thenReturn(true);
         return new RestaurantAgentActionWorkflowService(
                 runService, mapper, previewTokenService,
-                workflowEngineService, approvalWorkflowService, enabled);
+                workflowEngineService, approvalWorkflowService,
+                factoryRepository, workflowProvisioner, enabled);
     }
 
     private RestaurantAgentActionProposalContext context(String digest) {

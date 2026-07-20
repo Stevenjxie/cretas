@@ -10,6 +10,7 @@ import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.DroolsRuleRepository;
 import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.service.FactoryService;
+import com.cretas.aims.service.restaurant.RestaurantAgentActionWorkflowProvisioner;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,6 +41,7 @@ public class FactoryServiceImpl implements FactoryService {
 
     private final FactoryRepository factoryRepository;
     private final DroolsRuleRepository droolsRuleRepository;
+    private final RestaurantAgentActionWorkflowProvisioner restaurantActionWorkflowProvisioner;
 
     /**
      * 获取所有工厂列表（不推荐，使用分页版本）
@@ -169,6 +171,7 @@ public class FactoryServiceImpl implements FactoryService {
         factory.setUpdatedAt(LocalDateTime.now());
 
         Factory updatedFactory = factoryRepository.save(factory);
+        restaurantActionWorkflowProvisioner.provisionIfEligible(updatedFactory);
         log.info("工厂更新成功，factoryId: {}", updatedFactory.getId());
 
         return convertToDTO(updatedFactory);
@@ -201,6 +204,7 @@ public class FactoryServiceImpl implements FactoryService {
         factory.setUpdatedAt(LocalDateTime.now());
 
         Factory updatedFactory = factoryRepository.save(factory);
+        restaurantActionWorkflowProvisioner.provisionIfEligible(updatedFactory);
         log.info("工厂已激活，factoryId: {}", factoryId);
 
         return convertToDTO(updatedFactory);

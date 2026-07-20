@@ -4,11 +4,13 @@ import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
 import com.cretas.aims.entity.config.ApprovalWorkflow;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
 import java.util.Optional;
+import jakarta.persistence.LockModeType;
 
 /**
  * Graph-native 审批工作流 Repository.
@@ -43,6 +45,13 @@ public interface ApprovalWorkflowRepository extends JpaRepository<ApprovalWorkfl
     /** 工厂+decisionType+name 唯一性校验 (创建前 dup check). */
     boolean existsByFactoryIdAndDecisionTypeAndName(
             String factoryId, DecisionType decisionType, String name);
+
+    /** Exact definition lock used to bind a validated snapshot to instance creation. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT w FROM ApprovalWorkflow w WHERE w.factoryId = :factoryId AND w.id = :id")
+    Optional<ApprovalWorkflow> findByFactoryIdAndIdForUpdate(
+            @Param("factoryId") String factoryId,
+            @Param("id") String id);
 
     /** 统计 — 每 decisionType 多少 workflow (含 draft, 不含软删除). */
     @Query("SELECT w.decisionType, COUNT(w) FROM ApprovalWorkflow w " +

@@ -37,6 +37,9 @@ public interface ApprovalWorkflowService {
 
     Optional<ApprovalWorkflow> getById(String factoryId, String id);
 
+    /** Exact pessimistic lock for validated-definition instance creation. */
+    Optional<ApprovalWorkflow> getByIdForUpdate(String factoryId, String id);
+
     List<ApprovalWorkflow> getAllByFactory(String factoryId);
 
     List<ApprovalWorkflow> getByDecisionType(String factoryId, DecisionType decisionType);

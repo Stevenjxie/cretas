@@ -25,6 +25,7 @@ import com.cretas.aims.service.workflow.DecisionTypeMetadataRegistry;
 import com.cretas.aims.service.workflow.SandboxedSpelEvaluator;
 import com.cretas.aims.service.workflow.SandboxedSpelEvaluator.SpelEvaluationFailure;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
+import com.cretas.aims.service.workflow.WorkflowDefinitionChangedException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -40,6 +41,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.*;
 
 /**
@@ -93,6 +98,10 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
 
     /** Walk hop 上限 — 防御性 (graph validation 已禁环, 此处兜底). */
     private static final int MAX_WALK_HOPS = 200;
+
+    /** Reserved context key set only by exact-bound starts. */
+    private static final String BOUND_DEFINITION_DIGEST_CONTEXT_KEY =
+            "_cretas_bound_workflow_definition_sha256";
 
     private final ApprovalWorkflowInstanceRepository instanceRepository;
     private final ApprovalHistoryRepository historyRepository;
@@ -165,6 +174,120 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
                         "请在 Canvas 审批 Tab 中创建并发布 workflow.",
                         factoryId, moduleCode, decisionType)));
 
+        return startWorkflowWithResolvedDefinition(
+                factoryId, moduleCode, businessEntityId, contextJson, initiatorUserId,
+                workflow, null);
+    }
+
+    @Override
+    @Transactional
+    public ApprovalWorkflowInstance startWorkflowWithDefinition(
+            String factoryId,
+            String moduleCode,
+            String businessEntityId,
+            Map<String, Object> contextJson,
+            Long initiatorUserId,
+            ApprovalWorkflow expectedWorkflow) {
+        Objects.requireNonNull(factoryId, "factoryId must not be null");
+        Objects.requireNonNull(moduleCode, "moduleCode must not be null");
+        Objects.requireNonNull(businessEntityId, "businessEntityId must not be null");
+        Objects.requireNonNull(expectedWorkflow, "expectedWorkflow must not be null");
+
+        DecisionType decisionType = lookupDecisionType(moduleCode);
+        ApprovalWorkflow locked = workflowService
+                .getByIdForUpdate(factoryId, expectedWorkflow.getId())
+                .filter(candidate -> candidate.getDecisionType() == decisionType)
+                .filter(candidate -> "published".equals(candidate.getPublishStatus()))
+                .filter(candidate -> Boolean.TRUE.equals(candidate.getEnabled()))
+                .orElseThrow(() -> new WorkflowDefinitionChangedException(
+                        "Expected workflow is no longer active for this tenant"));
+        if (!sameDefinitionSnapshot(expectedWorkflow, locked)) {
+            throw new WorkflowDefinitionChangedException(
+                    "Expected workflow definition changed before instance creation");
+        }
+
+        return startWorkflowWithResolvedDefinition(
+                factoryId, moduleCode, businessEntityId, contextJson, initiatorUserId,
+                locked, definitionDigest(locked));
+    }
+
+    private boolean sameDefinitionSnapshot(
+            ApprovalWorkflow expected,
+            ApprovalWorkflow locked) {
+        return Objects.equals(expected.getId(), locked.getId())
+                && Objects.equals(expected.getFactoryId(), locked.getFactoryId())
+                && expected.getDecisionType() == locked.getDecisionType()
+                && Objects.equals(expected.getName(), locked.getName())
+                && Objects.equals(expected.getVersion(), locked.getVersion())
+                && Objects.equals(expected.getPublishStatus(), locked.getPublishStatus())
+                && Objects.equals(expected.getEnabled(), locked.getEnabled())
+                && Objects.equals(expected.getStartNodeId(), locked.getStartNodeId())
+                && Objects.equals(expected.getNodesJson(), locked.getNodesJson())
+                && Objects.equals(expected.getEdgesJson(), locked.getEdgesJson());
+    }
+
+    private String definitionDigest(ApprovalWorkflow workflow) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            updateDigest(digest, workflow.getId());
+            updateDigest(digest, workflow.getFactoryId());
+            updateDigest(digest, workflow.getDecisionType() == null
+                    ? null : workflow.getDecisionType().name());
+            updateDigest(digest, workflow.getName());
+            updateDigest(digest, String.valueOf(workflow.getVersion()));
+            updateDigest(digest, workflow.getPublishStatus());
+            updateDigest(digest, String.valueOf(workflow.getEnabled()));
+            updateDigest(digest, workflow.getStartNodeId());
+            updateDigest(digest, workflow.getNodesJson());
+            updateDigest(digest, workflow.getEdgesJson());
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable", impossible);
+        }
+    }
+
+    private void updateDigest(MessageDigest digest, String value) {
+        byte[] bytes = String.valueOf(value).getBytes(StandardCharsets.UTF_8);
+        digest.update(ByteBuffer.allocate(Integer.BYTES).putInt(bytes.length).array());
+        digest.update(bytes);
+    }
+
+    private String boundDefinitionDigest(ApprovalWorkflowInstance instance) {
+        Object value = instance.getContextJson() == null
+                ? null
+                : instance.getContextJson().get(BOUND_DEFINITION_DIGEST_CONTEXT_KEY);
+        if (value == null) {
+            return null;
+        }
+        if (!(value instanceof String digest) || !digest.matches("^[0-9a-f]{64}$")) {
+            throw new BusinessException(409, "WORKFLOW_BOUND_DEFINITION_INVALID");
+        }
+        return digest;
+    }
+
+    private void verifyBoundDefinition(
+            ApprovalWorkflowInstance instance,
+            ApprovalWorkflow workflow,
+            String expectedDigest) {
+        if (expectedDigest == null) {
+            return;
+        }
+        if (!"published".equals(workflow.getPublishStatus())
+                || !Boolean.TRUE.equals(workflow.getEnabled())
+                || !expectedDigest.equals(definitionDigest(workflow))) {
+            throw new BusinessException(409, "WORKFLOW_BOUND_DEFINITION_CHANGED");
+        }
+    }
+
+    private ApprovalWorkflowInstance startWorkflowWithResolvedDefinition(
+            String factoryId,
+            String moduleCode,
+            String businessEntityId,
+            Map<String, Object> contextJson,
+            Long initiatorUserId,
+            ApprovalWorkflow workflow,
+            String boundDefinitionDigest) {
+
         // 3. 解析 graph
         List<ApprovalWorkflowNode> nodes = workflowService.deserializeNodes(workflow.getNodesJson());
         List<ApprovalWorkflowEdge> edges = workflowService.deserializeEdges(workflow.getEdgesJson());
@@ -174,6 +297,10 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         Map<String, Object> safeContext = contextJson == null
                 ? new HashMap<>()
                 : new HashMap<>(contextJson);
+        safeContext.remove(BOUND_DEFINITION_DIGEST_CONTEXT_KEY);
+        if (boundDefinitionDigest != null) {
+            safeContext.put(BOUND_DEFINITION_DIGEST_CONTEXT_KEY, boundDefinitionDigest);
+        }
 
         ApprovalWorkflowInstance instance = ApprovalWorkflowInstance.builder()
                 .id(instanceId)
@@ -255,9 +382,14 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         String fromNodeId = instance.getCurrentNodeIds().get(0);
 
         // 3. 取 workflow + 索引 graph
-        ApprovalWorkflow workflow = workflowService.getById(instance.getFactoryId(), instance.getWorkflowId())
+        String expectedDefinitionDigest = boundDefinitionDigest(instance);
+        Optional<ApprovalWorkflow> workflowLookup = expectedDefinitionDigest == null
+                ? workflowService.getById(instance.getFactoryId(), instance.getWorkflowId())
+                : workflowService.getByIdForUpdate(instance.getFactoryId(), instance.getWorkflowId());
+        ApprovalWorkflow workflow = workflowLookup
                 .orElseThrow(() -> new BusinessException(404,
                         "工作流配置不存在 — workflowId=" + instance.getWorkflowId()));
+        verifyBoundDefinition(instance, workflow, expectedDefinitionDigest);
         List<ApprovalWorkflowNode> nodes = workflowService.deserializeNodes(workflow.getNodesJson());
         List<ApprovalWorkflowEdge> edges = workflowService.deserializeEdges(workflow.getEdgesJson());
         GraphIndex graph = indexGraph(nodes, edges);

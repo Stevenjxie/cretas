@@ -8,13 +8,17 @@ import com.cretas.aims.dto.restaurantagent.RestaurantAgentActionWorkflowResponse
 import com.cretas.aims.dto.restaurantagent.RestaurantAgentRunReplayResponse;
 import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
 import com.cretas.aims.entity.config.ApprovalWorkflow;
+import com.cretas.aims.entity.Factory;
+import com.cretas.aims.entity.enums.FactoryType;
 import com.cretas.aims.entity.intent.IntentPreviewToken;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.service.PreviewTokenService;
 import com.cretas.aims.service.PreviewTokenService.BoundTokenRequest;
 import com.cretas.aims.service.PreviewTokenService.ClaimResult;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
+import com.cretas.aims.service.workflow.WorkflowDefinitionChangedException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -43,6 +47,8 @@ public class RestaurantAgentActionWorkflowService {
     private final PreviewTokenService previewTokenService;
     private final WorkflowEngineService workflowEngineService;
     private final ApprovalWorkflowService approvalWorkflowService;
+    private final FactoryRepository factoryRepository;
+    private final RestaurantAgentActionWorkflowProvisioner workflowProvisioner;
     private final boolean enabled;
 
     public RestaurantAgentActionWorkflowService(
@@ -51,12 +57,16 @@ public class RestaurantAgentActionWorkflowService {
             PreviewTokenService previewTokenService,
             WorkflowEngineService workflowEngineService,
             ApprovalWorkflowService approvalWorkflowService,
+            FactoryRepository factoryRepository,
+            RestaurantAgentActionWorkflowProvisioner workflowProvisioner,
             @Value("${cretas.restaurant-agent.action-workflow-enabled:false}") boolean enabled) {
         this.runService = runService;
         this.mapper = mapper;
         this.previewTokenService = previewTokenService;
         this.workflowEngineService = workflowEngineService;
         this.approvalWorkflowService = approvalWorkflowService;
+        this.factoryRepository = factoryRepository;
+        this.workflowProvisioner = workflowProvisioner;
         this.enabled = enabled;
     }
 
@@ -168,6 +178,8 @@ public class RestaurantAgentActionWorkflowService {
             String factoryId,
             Long actorId,
             RestaurantAgentActionProposalContext context) {
+        ensureWorkflowProvisioned(factoryId);
+        ApprovalWorkflow configured = requireCanonicalWorkflow(factoryId);
         String entityId = businessEntityId(context);
         ApprovalWorkflowInstance existing = workflowEngineService
                 .getCurrentInstance(
@@ -177,29 +189,20 @@ public class RestaurantAgentActionWorkflowService {
             return new WorkflowStartResult(existing, true);
         }
 
-        ApprovalWorkflow configured = approvalWorkflowService
-                .getActiveByDecisionType(factoryId, DecisionType.RESTAURANT_AGENT_ACTION_REVIEW)
-                .filter(workflow -> RestaurantAgentActionProposalMapper.WORKFLOW_KEY
-                        .equals(workflow.getName()))
-                .filter(workflow -> "published".equals(workflow.getPublishStatus()))
-                .filter(workflow -> Boolean.TRUE.equals(workflow.getEnabled()))
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.SERVICE_UNAVAILABLE,
-                        "RESTAURANT_AGENT_ACTION_WORKFLOW_NOT_CONFIGURED"));
-        if (configured.getStartNodeId() == null || configured.getStartNodeId().isBlank()) {
-            throw new ResponseStatusException(
-                    HttpStatus.SERVICE_UNAVAILABLE,
-                    "RESTAURANT_AGENT_ACTION_WORKFLOW_INVALID");
-        }
-
         try {
-            ApprovalWorkflowInstance started = workflowEngineService.startWorkflow(
+            ApprovalWorkflowInstance started = workflowEngineService.startWorkflowWithDefinition(
                     factoryId,
                     RestaurantAgentActionProposalMapper.WORKFLOW_KEY,
                     entityId,
                     workflowContext(context),
-                    actorId);
+                    actorId,
+                    configured);
             return new WorkflowStartResult(started, false);
+        } catch (WorkflowDefinitionChangedException definitionChanged) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "RESTAURANT_AGENT_ACTION_WORKFLOW_INVALID",
+                    definitionChanged);
         } catch (RuntimeException startFailure) {
             ApprovalWorkflowInstance raced = workflowEngineService
                     .getCurrentInstance(
@@ -210,6 +213,35 @@ public class RestaurantAgentActionWorkflowService {
             }
             throw startFailure;
         }
+    }
+
+    private ApprovalWorkflow requireCanonicalWorkflow(String factoryId) {
+        ApprovalWorkflow configured = approvalWorkflowService
+                .getActiveByDecisionType(factoryId, DecisionType.RESTAURANT_AGENT_ACTION_REVIEW)
+                .filter(workflow -> RestaurantAgentActionProposalMapper.WORKFLOW_KEY
+                        .equals(workflow.getName()))
+                .filter(workflow -> "published".equals(workflow.getPublishStatus()))
+                .filter(workflow -> Boolean.TRUE.equals(workflow.getEnabled()))
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.SERVICE_UNAVAILABLE,
+                        "RESTAURANT_AGENT_ACTION_WORKFLOW_NOT_CONFIGURED"));
+        if (!workflowProvisioner.isCanonical(configured)) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "RESTAURANT_AGENT_ACTION_WORKFLOW_INVALID");
+        }
+        return configured;
+    }
+
+    private void ensureWorkflowProvisioned(String factoryId) {
+        Factory factory = factoryRepository.findById(factoryId)
+                .filter(candidate -> Boolean.TRUE.equals(candidate.getIsActive()))
+                .filter(candidate -> candidate.getType() == FactoryType.RESTAURANT
+                        || candidate.getType() == FactoryType.BRANCH)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.SERVICE_UNAVAILABLE,
+                        "RESTAURANT_AGENT_ACTION_WORKFLOW_TENANT_NOT_ELIGIBLE"));
+        workflowProvisioner.provisionIfEligible(factory);
     }
 
     private TokenBinding requireTokenBinding(
