@@ -119,3 +119,14 @@
 - 验收：Web 目标测试 3 files / 37 tests 通过；唯一 Java release 生命周期 3/3 通过，JAR SHA-256 `5977caa4513054c1e58e610733a5ce42f67aca0220bb57ca3cc00efd08b023ed`；唯一 Web release build 729 assets，archive SHA-256 `6dd2e1b4d491c231aad984993bce514b5e120a3943815c91e1d19590328f07a8`、index SHA-256 `f2f7e0c391348d0e784305c74c00b01acd66fbb2d1cac84aa92b4ff0147b5fb8`。
 - 生产边界：exact-main 部署后只对 F006 计划 `457daec1-d602-43a1-81a1-708586bfb937` 调用一次受约束桥接，将 `batchDate` 从 `2026-07-21` 校正为 `2026-07-20`；不得改变 plannedDate、数量、状态、Workflow/BOM pin，不创建订单/计划/批次/报工或库存写入。随后全部 query-only 验收并通知原测试 Chat 从同一唯一 PENDING 计划继续。
 - Scope 锁：已释放。
+
+### `M09-SETTLEMENT-PINNED-BOM-20260720`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- 登记 Base SHA：`9cb0aafa507ed25f2203ab17eb93188974c996b7`
+- 根因：结单写路径用 `firstNonBlank(consumptionLine.productTypeId, plan.productTypeId)` 解析 BOM，逐道报工预填行携带的原料/SKU identity 因优先级更高而覆盖计划成品 identity；只读 eligibility 却固定使用计划成品，造成同一计划只读判定 `bomFound=true`、提交却错误 409 `PRODUCTION_BOM_REQUIRED`。
+- 范围：计划存在 `selectedBomRecipeId/selectedBomVersion` 时，eligibility 与 settle 共用 pinned recipe resolver，并核对 factory、计划成品 identity、版本；忽略消费行 identity 和后续 current BOM 变化。仅未 pin 的旧混 SKU 计划保留行级 product identity 兼容。缺失/错配 pin 在任何 settlement、库存、计划写入前 fail-closed；未修改 Repository/Entity/迁移，未触碰 F006 生产记录与 LIUSHANMEN。
+- 验收：唯一 Java release 生命周期执行 `ProductionPlanSettlementTest` 31/31 通过并生成可信 JAR；backend tree `cd911fd1b14cdbca20ae710e0ee77c0f2ac25147`，JAR SHA-256 `3e94c636a03e828dee52b5a64b57b6b24d68002f597b921c8b8ced78ef89d2b2`。
+- 生产边界：exact-main 部署后仅 query-only 核验计划 `457daec1-d602-43a1-81a1-708586bfb937` 仍为唯一 IN_PROGRESS、两道报工各一行、PB 批次唯一且 settlement 不存在；不代测试重试结单。随后通知原测试 Chat 使用新的前端幂等键从同一记录继续一次结单。
+- Scope 锁：已释放。

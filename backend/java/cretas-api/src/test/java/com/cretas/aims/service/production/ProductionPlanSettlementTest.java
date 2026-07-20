@@ -538,6 +538,91 @@ class ProductionPlanSettlementTest {
     }
 
     @Test
+    @DisplayName("计划已 pin BOM 时消费行 product identity 不得覆盖计划成品 BOM")
+    void settleProduction_pinnedBomWinsOverConsumptionLineProductIdentity() {
+        ProductionPlan plan = plan();
+        plan.setSelectedBomRecipeId("bom-pinned-v1");
+        plan.setSelectedBomVersion(1);
+        MaterialBatch batch = materialBatch();
+
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID, "idem-pinned")).thenReturn(Optional.empty());
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+        when(materialBatchRepository.findByIdAndFactoryId("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(materialBatchRepository.findByIdAndFactoryIdForUpdate("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(warehouseResolver.resolveLogisticsId(FACTORY_ID)).thenReturn("WH-LOG-ID");
+        stubPinnedBom("bom-pinned-v1", "PT-1", 1, "RM-1");
+        when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementConsumptionRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementLaborRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+
+        ProductionSettlementRequest request = rawOnlyRequest("idem-pinned", "RMT_1784467467288");
+        ProductionSettlementResponse response = service.settleProduction(
+                FACTORY_ID, PLAN_ID, request, 10L);
+
+        assertEquals("PENDING_WAREHOUSE_RECEIPT", response.getPostingStatus());
+        assertEquals(ProductionPlanStatus.COMPLETED, plan.getStatus());
+        assertEquals(new BigDecimal("16"), batch.getUsedQuantity());
+        verify(bomRecipeRepository).findById("bom-pinned-v1");
+        verify(bomRecipeRepository, never())
+                .findByFactoryIdAndProductTypeIdAndIsCurrentTrue(any(), any());
+        verify(materialBatchRepository).save(batch);
+        verify(productionSettlementRepository).save(any(ProductionSettlement.class));
+    }
+
+    @Test
+    @DisplayName("只读 eligibility 与结单写路径共同使用计划 pinned BOM")
+    void getSettlementBomEligibility_usesPinnedBomSourceOfTruth() {
+        ProductionPlan plan = plan();
+        plan.setSelectedBomRecipeId("bom-pinned-v1");
+        plan.setSelectedBomVersion(1);
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        stubPinnedBom("bom-pinned-v1", "PT-1", 1, "RM-1");
+
+        var response = service.getSettlementBomEligibility(FACTORY_ID, PLAN_ID);
+
+        assertTrue(response.isRestricted());
+        assertTrue(response.isBomFound());
+        assertEquals(List.of("RM-1"), response.getMaterialTypeIds());
+        verify(bomRecipeRepository).findById("bom-pinned-v1");
+        verify(bomRecipeRepository, never())
+                .findByFactoryIdAndProductTypeIdAndIsCurrentTrue(any(), any());
+    }
+
+    @Test
+    @DisplayName("缺失或错配的 pinned BOM 在任何结单写入前 fail-closed")
+    void settleProduction_missingPinnedBom_rejectedBeforeAnyWrite() {
+        ProductionPlan plan = plan();
+        plan.setSelectedBomRecipeId("bom-missing");
+        plan.setSelectedBomVersion(1);
+        MaterialBatch batch = materialBatch();
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID, "idem-pinned-missing")).thenReturn(Optional.empty());
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+        when(materialBatchRepository.findByIdAndFactoryId("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(warehouseResolver.resolveLogisticsId(FACTORY_ID)).thenReturn("WH-LOG-ID");
+        when(bomRecipeRepository.findById("bom-missing")).thenReturn(Optional.empty());
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.settleProduction(
+                        FACTORY_ID, PLAN_ID,
+                        rawOnlyRequest("idem-pinned-missing", "RMT_1784467467288"), 10L));
+
+        assertEquals("PRODUCTION_BOM_REQUIRED", ex.getErrorCode());
+        assertEquals(ProductionPlanStatus.IN_PROGRESS, plan.getStatus());
+        verify(productionSettlementRepository, never()).save(any());
+        verify(productionSettlementConsumptionRepository, never()).saveAll(anyList());
+        verify(materialBatchRepository, never()).save(any());
+        verify(productionPlanRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("同一幂等键重复提交返回原结单")
     void settleProduction_sameIdempotency_returnsExistingSettlement() {
         when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan()));
@@ -1141,6 +1226,43 @@ class ProductionPlanSettlementTest {
                 .thenReturn(Optional.of(recipe));
         when(bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(recipeId))
                 .thenReturn(List.of(item));
+    }
+
+    private void stubPinnedBom(String recipeId, String productTypeId, int version, String materialTypeId) {
+        BomRecipe recipe = BomRecipe.builder()
+                .id(recipeId)
+                .factoryId(FACTORY_ID)
+                .recipeCode("BOM-PINNED-" + productTypeId)
+                .productTypeId(productTypeId)
+                .productName("Pinned Product")
+                .version(version)
+                .outputQuantityPerUnit(BigDecimal.ONE)
+                .build();
+        BomRecipeItem item = BomRecipeItem.builder()
+                .recipeId(recipeId)
+                .factoryId(FACTORY_ID)
+                .materialTypeId(materialTypeId)
+                .standardQuantity(BigDecimal.ONE)
+                .unit("kg")
+                .build();
+        when(bomRecipeRepository.findById(recipeId)).thenReturn(Optional.of(recipe));
+        when(bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc(recipeId))
+                .thenReturn(List.of(item));
+    }
+
+    private ProductionSettlementRequest rawOnlyRequest(String idempotencyKey, String lineProductTypeId) {
+        return ProductionSettlementRequest.builder()
+                .idempotencyKey(idempotencyKey)
+                .actualFinishedQuantity(new BigDecimal("90"))
+                .actualSemiFinishedQuantity(BigDecimal.ZERO)
+                .rawMaterialConsumptions(List.of(ProductionSettlementRequest.ConsumptionLine.builder()
+                        .materialBatchId("MB-1")
+                        .productTypeId(lineProductTypeId)
+                        .quantity(new BigDecimal("12"))
+                        .unit("kg")
+                        .build()))
+                .laborDeferredReason("工时稍后补录")
+                .build();
     }
 
     private SemiFinishedInventory wip() {

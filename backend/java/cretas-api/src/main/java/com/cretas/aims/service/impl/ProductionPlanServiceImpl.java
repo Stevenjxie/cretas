@@ -3239,25 +3239,25 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHintTarget(hintTarget);
         }
 
-        String productTypeId = firstNonBlank(productTypeIdOverride, plan != null ? plan.getProductTypeId() : null);
-        BomSettlementEligibility eligibility = resolveBomEligibilityForSettlement(factoryId, productTypeId);
+        BomSettlementEligibility eligibility = resolveBomEligibilityForSettlement(
+                factoryId, plan, productTypeIdOverride);
         if (!eligibility.restricted()) {
             return;
         }
         if (!eligibility.bomFound()) {
-            throw new BusinessException(409, "该产品没有当前 BOM，不能直接核对原料领用")
+            throw new BusinessException(409, "该生产计划没有可用 BOM，不能直接核对原料领用")
                     .withCode("PRODUCTION_BOM_REQUIRED")
-                    .withHint("请先维护产品 BOM，或由主管确认物料差异后再结单")
+                    .withHint("请核对计划固化的 BOM，或由主管确认物料差异后再结单")
                     .withHintTarget(hintTarget);
         }
         if (eligibility.materialTypeIds().isEmpty()) {
-            throw new BusinessException(409, "该产品当前 BOM 没有原料明细，不能直接核对原料领用")
+            throw new BusinessException(409, "该生产计划 BOM 没有原料明细，不能直接核对原料领用")
                     .withCode("PRODUCTION_BOM_ITEMS_REQUIRED")
                     .withHint("请先维护 BOM 原料明细")
                     .withHintTarget(hintTarget);
         }
         if (!eligibility.materialTypeIds().contains(batch.getMaterialTypeId())) {
-            throw new BusinessException(409, "所选原料批次不属于该产品当前 BOM")
+            throw new BusinessException(409, "所选原料批次不属于该生产计划 BOM")
                     .withCode("PRODUCTION_CONSUMPTION_NOT_IN_BOM")
                     .withHint("请按产品 BOM 选择原料批次，避免结单扣错料")
                     .withHintTarget(hintTarget);
@@ -3278,15 +3278,41 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     }
 
     /**
-     * 解析产品当前 BOM 对结单原料领用的限制 (与写路径守卫判定逻辑 1:1 一致, 详见类上方
+     * 解析生产计划 BOM 对结单原料领用的限制 (与写路径守卫判定逻辑 1:1 一致, 详见类上方
      * {@link #ensureMaterialBatchAllowedForSettlement} 调用处)。
+     *
+     * <p>计划创建时已经固化 {@code selectedBomRecipeId/selectedBomVersion}，结单必须优先按该
+     * pinned recipe 校验，不能被逐道报工消费行里的 product identity 覆盖，也不能因产品后来激活了
+     * 新版本而改写历史计划的校验口径。仅旧计划没有 pin 时，才保留行级 productTypeId 对混 SKU
+     * 计划的兼容，并最终回退计划成品 productTypeId。
      */
-    private BomSettlementEligibility resolveBomEligibilityForSettlement(String factoryId, String productTypeId) {
-        if (isBlank(productTypeId) || bomRecipeRepository == null || bomRecipeItemRepository == null) {
+    private BomSettlementEligibility resolveBomEligibilityForSettlement(String factoryId,
+                                                                        ProductionPlan plan,
+                                                                        String productTypeIdOverride) {
+        if (bomRecipeRepository == null || bomRecipeItemRepository == null) {
             return BomSettlementEligibility.UNRESTRICTED;
         }
-        Optional<BomRecipe> recipe = bomRecipeRepository
-                .findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, productTypeId);
+
+        String pinnedRecipeId = plan == null ? null : trimToNull(plan.getSelectedBomRecipeId());
+        Optional<BomRecipe> recipe;
+        if (pinnedRecipeId != null) {
+            String planProductTypeId = trimToNull(plan.getProductTypeId());
+            Integer pinnedVersion = plan.getSelectedBomVersion();
+            recipe = bomRecipeRepository.findById(pinnedRecipeId)
+                    .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
+                    .filter(candidate -> Objects.equals(planProductTypeId, trimToNull(candidate.getProductTypeId())))
+                    .filter(candidate -> pinnedVersion == null
+                            || Objects.equals(pinnedVersion, candidate.getVersion()));
+        } else {
+            String productTypeId = firstNonBlank(
+                    productTypeIdOverride,
+                    plan != null ? plan.getProductTypeId() : null);
+            if (isBlank(productTypeId)) {
+                return BomSettlementEligibility.UNRESTRICTED;
+            }
+            recipe = bomRecipeRepository
+                    .findByFactoryIdAndProductTypeIdAndIsCurrentTrue(factoryId, productTypeId);
+        }
         if (recipe.isEmpty()) {
             return new BomSettlementEligibility(true, false, Set.of());
         }
@@ -3304,7 +3330,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
         BomSettlementEligibility eligibility =
-                resolveBomEligibilityForSettlement(factoryId, plan.getProductTypeId());
+                resolveBomEligibilityForSettlement(factoryId, plan, null);
         return ProductionSettlementBomEligibilityResponse.builder()
                 .restricted(eligibility.restricted())
                 .bomFound(eligibility.bomFound())
