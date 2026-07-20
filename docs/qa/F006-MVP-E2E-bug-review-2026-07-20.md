@@ -434,7 +434,7 @@
 - **测试**：保存 revision hash、同 revision 幂等 pin、跨工厂/SKU 拒绝、刷新快照稳定、ACTIVE BOM 与发布/启用 exact revision 双向门禁、无草稿重复发布 409、真实 JPA startup gate。
 - **Commit/PR/main 状态**：revision/pin 核心 commit `9f5cb804f`，拓扑与 pinned-node 收口 commit `301fcb0cd`；`TARGET_TEST_PASSED_PENDING_MAIN`。
 - **部署状态**：`NOT_DEPLOYED`。
-- **回归状态**：revision/pin、跨厂/SKU、刷新稳定、发布/启用 exact revision、真实 JPA 均已通过；最终 release 单生命周期门禁待 rebase 后统一执行。生产 `CPF0060016`/BOM/Workflow 零写入、无历史桥接。
+- **回归状态**：revision/pin、跨厂/SKU、刷新稳定、发布/启用 exact revision、真实 JPA 均已通过；clean rebase 后 Java 最终单生命周期 `221/221` 通过并生成可信 manifest（backend tree `ace4f31d1fe9529ed2e4dabb27d30ed1f0ccb7f0`，JAR SHA-256 `81eeffa3123350fe5d86b403db6c1a82115920e6b8900b9cf99314fac5a2ed79`）。生产 `CPF0060016`/BOM/Workflow 零写入、无历史桥接。
 
 ### BLOCKER-F006-R2-WORKFLOW-TOPOLOGY-RESOLUTION
 
@@ -445,10 +445,10 @@
 - **修复契约**：目标 SKU 唯一 terminal 是合法身份门禁，但入口可为 N；反向切片收集所有可达入口和工序、保留合流/分流边、节点去重并拓扑排序；环、无入口、孤儿、跨厂/SKU、重复同目标 terminal 明确 4xx；多产出缺角色/成本分摊 fail-closed。
 - **终审补强**：ACTIVE BOM 与 DRAFT 一样始终从自身 pinned revision 解析工序，不得回落到产品当前 Workflow；工序辅料替代关系同时快照 master `workProcessId` 与精确 `workflowProcessNodeId`，同一工序模板在两个节点不串配置；辅料标准分母从 pinned 节点端口单位读取，现有仅能可靠表达 g/kg 的 legacy 剂量模型对盒/升等量纲明确 fail-closed，不再伪装为“每1kg”。
 - **depth-first-e2e 矩阵**：A 1→1=`medium`；B 2→1=`deep`；C 1→2=`medium`；D 2→2=`deep`；E 合流→半成品→分流=`medium`。`BomWorkflowRevisionServiceTest` 的 A-E 五个具名矩阵场景全部通过：覆盖 revision 保存/pin、入口/工序严格集合、目标反向切片、共享节点去重、跨目标隔离、多产出角色/分摊门禁、环/孤儿/无入口/重复目标/跨厂 SKU 明确拒绝及 snapshot 不漂移。`BomSeasoningWorkspaceServiceTest` 覆盖 2→1 多入口摘要、精确 process-node 绑定、提交与 fresh readback；Web workspace 目标测试覆盖加载失败锁写、revision 状态与中文单位。
-- **测试证据**：后端拓扑/BOM/辅料/替代料首组 30/30，通过单独真实 JPA repository startup gate 1/1；readiness/copy/process-sheet/unit/material-source 等同因回归 139/139；Web BOM workspace 30/30，单位/分类/来源边界补充回归 58/58。最终 clean rebase 后 release manifest 单生命周期门禁仍须执行，未以当前数字替代最终构建。
+- **测试证据**：后端拓扑/BOM/辅料/替代料首组 30/30，通过单独真实 JPA repository startup gate 1/1；readiness/copy/process-sheet/unit/material-source 等同因回归 139/139；Web BOM workspace 30/30，单位/分类/来源边界补充回归 58/58。clean rebase 后 Java 最终 release 单生命周期 `221/221` 通过并生成可信 JAR manifest；Web 在 exact HEAD 干净 release worktree 构建成功，735 assets，archive SHA-256 `997ca98d89239a3a695cfcda5fa2637832ff596f78a445e28064ea3a7bf183e8`，index SHA-256 `669abc9c62cfa64d7dc4f44629a0b6636ca7ce0d91e0817bf4ff509a01560a54`。
 - **Commit/PR/main 状态**：revision 与 DAG 核心 `9f5cb804f`，拓扑/辅料作用域/门禁收口 `301fcb0cd`，Web fail-closed `e7beda5f8`；`TARGET_TEST_PASSED_PENDING_MAIN`。
 - **部署状态**：`NOT_DEPLOYED`。
-- **回归状态**：`TARGET_TEST_PASSED_PENDING_FINAL_RELEASE_GATE`；严格生产业务 mutation=0。
+- **回归状态**：`FINAL_RELEASE_GATE_PASSED_PENDING_MAIN`；严格生产业务 mutation=0。
 
 ### AUDIT-F006-R2-WORKFLOW-TOPOLOGY-SAME-CAUSE-001
 
@@ -474,7 +474,7 @@
 - **终审补强**：替代关系读取失败在 Web 标记为未加载并禁止编辑/保存，不能把失败误作空集合后删除既有关系；同单位省略换算时按1:1，跨单位必须显式输入正换算系数；包材替代除包装层级/角色快照外，还必须能证明同一稳定分类族，分类缺失或跨外箱/封膜等角色均 fail-closed。
 - **Commit/PR/main 状态**：核心 `785a2d908`，主流程集成 `301fcb0cd`，Web fail-closed `e7beda5f8`；`TARGET_TEST_PASSED_PENDING_MAIN`。
 - **部署状态**：`NOT_DEPLOYED`。
-- **回归状态**：`TARGET_TEST_PASSED_PENDING_FINAL_RELEASE_GATE`；未修改生产 `BOM-20260720-004/005`。
+- **回归状态**：`FINAL_RELEASE_GATE_PASSED_PENDING_MAIN`；未修改生产 `BOM-20260720-004/005`。
 
 ### F006-R2-WORKFLOW-FIRST-BOM-GATE / F006-R2-BOM-COMPLETENESS-GATE
 
@@ -484,7 +484,7 @@
 - **测试**：越级调用4xx且零部分写、ACTIVE 无 DRAFT 仍按快照校验、同 master process 多节点分离、缺辅料/包材明确定位、历史 snapshot 不漂移。
 - **Commit/PR/main 状态**：核心门禁/精确 pinned node `301fcb0cd`，Web 入口锁写 `e7beda5f8`；`TARGET_TEST_PASSED_PENDING_MAIN`。
 - **部署状态**：`NOT_DEPLOYED`。
-- **回归状态**：目标回归已纳入后端 139/139 与 Web 30/30；最终 release 单生命周期门禁待 rebase 后执行。
+- **回归状态**：目标回归已纳入后端 139/139 与 Web 30/30；clean rebase 后 Java 最终单生命周期 221/221 与 Web release build 均已通过，待合入 main。
 
 ### FIX-F006-R2-TAXONOMY-MIGRATION-CONFLICT-001
 
