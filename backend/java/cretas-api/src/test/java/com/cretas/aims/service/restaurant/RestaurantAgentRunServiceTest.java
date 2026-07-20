@@ -99,7 +99,7 @@ class RestaurantAgentRunServiceTest {
     }
 
     @Test
-    void chatAdmissionIsReadOnlyAndFailsClosedForRoleDomainAndRollout() {
+    void chatAdmissionIsReadOnlyAndFailsClosedForRoleDomainAndRollout() throws Exception {
         assertThat(service.isAvailableTo("R001", "restaurant_owner")).isFalse();
         verifyNoInteractions(configService, client);
 
