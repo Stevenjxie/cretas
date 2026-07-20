@@ -30,7 +30,9 @@ describe('work process output kind', () => {
 
   it('suggests history and blocks exact duplicate process names', () => {
     expect(source).toContain(':fetch-suggestions="queryProcessNames"');
-    expect(source).toContain(':fetch-suggestions="queryProcessCategories"');
+    // 类别来自统一 taxonomy，下拉可搜索但不允许自由文本制造新类别。
+    expect(source).toContain('v-for="category in processCategoryOptions"');
+    expect(source).toContain('placeholder="选择工序类别"');
     expect(source).toContain('const exactNameDuplicate = computed');
     expect(source).toContain('已存在同名工序');
     expect(source).toContain('if (exactNameDuplicate.value)');

@@ -26,7 +26,7 @@ describe('order creation contracts', () => {
     for (const text of [purchase, startPurchase, mergePurchase]) {
       expect(text).toContain("new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' })");
     }
-    expect(purchase).toContain('orderDate: factoryToday()');
+    expect(purchase).toContain('orderDate: isEditing.value ? editingOrderDate.value : factoryToday()');
     expect(startPurchase).not.toContain("new Date().toISOString().slice(0, 10)");
     expect(mergePurchase).not.toContain("new Date().toISOString().slice(0, 10)");
   });

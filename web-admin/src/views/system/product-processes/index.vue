@@ -1160,6 +1160,7 @@ async function saveCustomFieldConfig() {
               :value="p.id"
             />
           </el-select>
+          <span class="workflow-mode-hint">无需选择模式，发布时由画布自动识别</span>
         </div>
         <div class="toolbar-right">
           <!-- C4 status indicator + save button -->

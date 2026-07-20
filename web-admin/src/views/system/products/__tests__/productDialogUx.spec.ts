@@ -58,7 +58,8 @@ describe('SKU editor dialog UX', () => {
     expect(source).toContain('@click="handleConfigProcesses(row)"');
     expect(source).toContain('placeholder="搜索工序名称 / 编码 / 类别标签"');
     expect(source).toContain('v-model="processCategoryFilter"');
-    expect(source).toContain('v-model="processOutputUnitFilter"');
+    // 工序主数据不再承载计量单位；快捷关联只按类别和关联状态筛选。
+    expect(source).not.toContain('v-model="processOutputUnitFilter"');
     expect(source).toContain('v-model="processRelationFilter"');
     expect(source).toContain('结果 {{ filteredProcessCatalog.length }} / 总计 {{ availableProcesses.length }}');
     expect(source).toContain('v-model:current-page="processCatalogPage"');
