@@ -159,3 +159,14 @@
 - 验收：唯一 Java release 生命周期执行 `ProductionPlanSettlementTest` 31/31 通过并生成可信 JAR；backend tree `cd911fd1b14cdbca20ae710e0ee77c0f2ac25147`，JAR SHA-256 `3e94c636a03e828dee52b5a64b57b6b24d68002f597b921c8b8ced78ef89d2b2`。
 - 生产边界：exact-main 部署后仅 query-only 核验计划 `457daec1-d602-43a1-81a1-708586bfb937` 仍为唯一 IN_PROGRESS、两道报工各一行、PB 批次唯一且 settlement 不存在；不代测试重试结单。随后通知原测试 Chat 使用新的前端幂等键从同一记录继续一次结单。
 - Scope 锁：已释放。
+
+### `AGENT-HOTFIX-SPRING-CTOR-20260720`
+
+- 状态：`merged`
+- Owner：Codex (`/root`)
+- 登记 Base SHA：`b587e0ee779136a5fe87f6722a61617fe1a7a0db`
+- PR：[#1535](https://github.com/Stevenjxie/cretas/pull/1535)
+- 根因：`RestaurantGrossMarginChatRouteSelector` 同时暴露生产单参构造器和测试双参构造器，却未标注 Spring 注入候选；普通单元测试直接实例化均通过，但生产 BeanFactory 尝试默认构造器并导致蓝槽启动失败。
+- 范围：仅为生产构造器增加显式 `@Autowired`，并以真实 `AnnotationConfigApplicationContext` 注册依赖、刷新上下文和取得 Bean，覆盖 Spring 构造解析回归；未改变路由逻辑、API、数据库、功能开关或 ERP 写路径。
+- 验收：目标测试 4/4 通过；独立只读终审 P0/P1/P2 均为 0；合并后由 clean exact-main release worktree 执行唯一 Java release 生命周期并重新进行蓝绿发布与只读线上验收。
+- Scope 锁：已释放。
