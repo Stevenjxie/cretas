@@ -99,7 +99,10 @@ paperMock.IconButton = (props: any) => {
   return <Text>{props.icon}</Text>;
 };
 const AIChatScreen = require('../../../screens/factory-admin/ai-analysis/AIChatScreen').default;
-const { RestaurantGrossMarginRunCard } = require('../../../components/ai/RestaurantGrossMarginRunCard');
+const {
+  RestaurantGrossMarginRunCard,
+  __resetRestaurantAgentStartLeasesForTests,
+} = require('../../../components/ai/RestaurantGrossMarginRunCard');
 
 const RUN_ID = '11111111-1111-4111-8111-111111111111';
 const SHANGHAI_TODAY = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -166,6 +169,7 @@ async function requestGrossMarginAnalysis(screen: ReturnType<typeof render>) {
 
 describe('AIChatScreen restaurant agent run', () => {
   beforeEach(() => {
+    __resetRestaurantAgentStartLeasesForTests();
     mockUser = restaurantUser();
     mockRole = 'restaurant_owner';
     mockExecuteIntentStream.mockReset();
@@ -449,7 +453,7 @@ describe('AIChatScreen restaurant agent run', () => {
     expect(mockStartRun).toHaveBeenCalledTimes(1);
   });
 
-  it('does not let a stale unmounted lease owner release a newer component lease', async () => {
+  it('keeps an unmounted request lease so remount cannot create a duplicate durable run', async () => {
     let resolveFirstCompletion: (value: any) => void = () => undefined;
     mockStartRun
       .mockResolvedValueOnce({
@@ -473,14 +477,15 @@ describe('AIChatScreen restaurant agent run', () => {
     first.unmount();
 
     const second = render(<RestaurantGrossMarginRunCard {...props} />);
-    await waitFor(() => expect(mockStartRun).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(second.getByText('同一账号已有本期毛利归因正在启动，本消息不会重复发起')).toBeTruthy());
+    expect(mockStartRun).toHaveBeenCalledTimes(1);
     await act(async () => {
       resolveFirstCompletion({ runId: null, lastSequence: 0, stoppedReceiving: true });
     });
 
     const third = render(<RestaurantGrossMarginRunCard {...props} />);
     await waitFor(() => expect(third.getByText('同一账号已有本期毛利归因正在启动，本消息不会重复发起')).toBeTruthy());
-    expect(mockStartRun).toHaveBeenCalledTimes(2);
+    expect(mockStartRun).toHaveBeenCalledTimes(1);
     second.unmount();
     third.unmount();
   });

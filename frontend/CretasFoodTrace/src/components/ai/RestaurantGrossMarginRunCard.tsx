@@ -28,9 +28,19 @@ interface RestaurantGrossMarginRunCardProps {
 interface RestaurantAgentStartLease {
   key: string;
   token: symbol;
+  expiresAtMs: number;
 }
 
-const restaurantAgentStartLeases = new Map<string, symbol>();
+const RESTAURANT_AGENT_START_LEASE_TTL_MS = 2 * 60 * 1000;
+const restaurantAgentStartLeases = new Map<
+  string,
+  Pick<RestaurantAgentStartLease, 'token' | 'expiresAtMs'>
+>();
+
+/** Test isolation only; production callers must never clear an active start lease. */
+export function __resetRestaurantAgentStartLeasesForTests(): void {
+  restaurantAgentStartLeases.clear();
+}
 
 function restaurantAgentStartLeaseKey(
   factoryId: string,
@@ -48,14 +58,24 @@ function restaurantAgentStartLeaseKey(
 }
 
 function acquireRestaurantAgentStartLease(key: string): RestaurantAgentStartLease | null {
-  if (restaurantAgentStartLeases.has(key)) return null;
-  const lease = { key, token: Symbol(key) };
-  restaurantAgentStartLeases.set(key, lease.token);
+  const now = Date.now();
+  const existing = restaurantAgentStartLeases.get(key);
+  if (existing && existing.expiresAtMs > now) return null;
+  if (existing) restaurantAgentStartLeases.delete(key);
+  const lease = {
+    key,
+    token: Symbol(key),
+    expiresAtMs: now + RESTAURANT_AGENT_START_LEASE_TTL_MS,
+  };
+  restaurantAgentStartLeases.set(key, {
+    token: lease.token,
+    expiresAtMs: lease.expiresAtMs,
+  });
   return lease;
 }
 
 function releaseRestaurantAgentStartLease(lease: RestaurantAgentStartLease): void {
-  if (restaurantAgentStartLeases.get(lease.key) === lease.token) {
+  if (restaurantAgentStartLeases.get(lease.key)?.token === lease.token) {
     restaurantAgentStartLeases.delete(lease.key);
   }
 }
@@ -184,11 +204,9 @@ export function RestaurantGrossMarginRunCard({
   useEffect(() => () => {
     stopRequestedRef.current = true;
     subscriptionRef.current?.stopReceiving();
-    const lease = startLeaseRef.current;
-    if (lease) {
-      releaseRestaurantAgentStartLease(lease);
-      startLeaseRef.current = null;
-    }
+    // Do not release the module lease here. Closing the local EventSource does not cancel the
+    // durable server run, so a remounted card must remain coalesced until the original request
+    // finishes or the bounded lease expires.
   }, []);
 
   const startRun = useCallback(async () => {
@@ -322,7 +340,9 @@ export function RestaurantGrossMarginRunCard({
       }
       await startRun();
     } finally {
-      releaseRestaurantAgentStartLease(lease);
+      if (!stopRequestedRef.current) {
+        releaseRestaurantAgentStartLease(lease);
+      }
       if (startLeaseRef.current?.token === lease.token) {
         startLeaseRef.current = null;
       }
