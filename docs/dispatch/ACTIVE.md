@@ -7,10 +7,17 @@
 ## 在飞任务
 
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
+- `CRETAS-AI-ARCH-V2-D11-CLOSEOUT-20260720` — `in-progress` — Owner: Codex coordinator (`/root`) — Base SHA: `8d5af3daa8f7bcfa1b96c19bd1a736fc7bb4481f` — D11A/B/C/D 的 confirmation、descriptor、Gateway migration、Restaurant Chat/Runtime、AgentOps Shadow、Factory Pack Router、Action Workflow、Inventory Skill 三拆及终审 P1 修复已进入同一协调分支；当前只剩 latest-main 同步、统一目标验证、PR 合并与归档。生产构建、迁移、服务切流、Web/RN 发布均未授权，必须保留为合并后的独立确认门。
 
 ## Scope 锁地图
 
 - `SEC-CREDENTIAL-ROTATION-20260719`：`scripts/systemd/` 中遗留明文启动脚本、现有/新增 secret 扫描配置与测试、`.gitignore` / 凭证模板、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-19-active-history.md`；外部状态仅限已授权的 Cretas 47/139 服务器配置、PostgreSQL 角色密码、相关阿里云/API 凭证与必要服务重启。验收：tracked tree 与完整 Git 历史脱敏盘点、scanner gate、exact-main 发布门禁、Java/Python/网关健康、登录与 Restaurant Agent 只读 smoke、核心 ERP 零写入。
+- `CRETAS-AI-ARCH-V2-D11-CLOSEOUT-20260720`：本分支已登记并集成的 Java Gateway/AI Intent/Workflow/AgentOps facade、Python Restaurant Runtime/AgentOps、RN Chat、Web AgentOps、Flyway V86、Tool/Pack/Skill 配置与直接测试，以及 `docs/architecture/2026-07-18-cretas-agent-architecture-v2.md`、本 ACTIVE 和 `docs/dispatch/archive/2026-07-20-active-history.md`。仅允许最终验证发现的同族回归修复与文档/台账收口；禁止新增第二条 Restaurant Runtime、工厂通用 Runtime、ERP writer、部署或生产业务写请求。PR 合并并归档后释放。
+
+## 临时 WIP 扩容
+
+- 用户于 2026-07-20 明确要求加速并放开平台并发；代码子任务均已回收，当前只保留 1 个只读/测试代理并行执行 Python/RN/Web 与静态门禁。其回执完成或阻塞后立即释放，不再启动新的代码子任务。
+
 ## 阻塞项
 
 - Aliyun 主账号旧 AccessKey：官方 RAM API 返回 `Forbidden` 并提示泄露风险，旧 key 的 STS 仍有效；必须由阿里云控制台主账号删除。
