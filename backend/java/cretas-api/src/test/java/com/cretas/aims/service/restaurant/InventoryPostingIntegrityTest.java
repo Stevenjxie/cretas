@@ -529,16 +529,6 @@ class InventoryPostingIntegrityTest {
                 return batchDtoForFake(batchId, newQty);
             }
 
-            @Override
-            public com.cretas.aims.dto.material.MaterialBatchDTO replenishExistingBatch(
-                    String factoryId, String batchId, BigDecimal addQuantity,
-                    String sourceDocType, String sourceDocId, String note, Long adjustedBy) {
-                BigDecimal current = balances.getOrDefault(batchId, BigDecimal.ZERO);
-                BigDecimal updated = current.add(addQuantity == null ? BigDecimal.ZERO : addQuantity);
-                balances.put(batchId, updated);
-                return batchDtoForFake(batchId, updated);
-            }
-
             // ── Unused interface methods (not called by the posting service) ──
 
             @Override public com.cretas.aims.dto.material.MaterialBatchDTO
@@ -575,8 +565,6 @@ class InventoryPostingIntegrityTest {
             @Override public BigDecimal calculateInventoryValue(String f) { return BigDecimal.ZERO; }
             @Override public Map<String, BigDecimal> getInventoryByMaterialType(String f) { return Map.of(); }
             @Override public List<Map<String, Object>> getLowStockWarnings(String f) { return List.of(); }
-            @Override public List<com.cretas.aims.dto.material.MaterialBatchDTO>
-            batchCreateMaterialBatches(String f, List<com.cretas.aims.dto.material.CreateMaterialBatchRequest> r, Long u) { return List.of(); }
             @Override public List<Map<String, Object>> getBatchUsageHistory(String f, String id) { return List.of(); }
             @Override public boolean checkBatchNumberExists(String n) { return false; }
             @Override public void autoCheckAndUpdateExpiredBatches() {}

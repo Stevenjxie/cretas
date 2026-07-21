@@ -1172,14 +1172,6 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     }
 
     @Override
-    @Transactional
-    public List<MaterialBatchDTO> batchCreateMaterialBatches(String factoryId, List<CreateMaterialBatchRequest> requests, Long userId) {
-        return requests.stream()
-                .map(request -> createMaterialBatch(factoryId, request, userId))
-                .collect(Collectors.toList());
-    }
-
-    @Override
     public byte[] exportInventoryReport(String factoryId) {
         return exportInventoryReport(factoryId, null, null, false);
     }
@@ -1479,80 +1471,6 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         if (adjustment.compareTo(BigDecimal.ZERO) < 0) {
             publishStockChangedEventIfApplicable(factoryId, batch, "ADJUST");
         }
-        return materialBatchMapper.toDTO(batch);
-    }
-
-    /**
-     * 续入到已有批次 (方案A 严格匹配续入). 见 {@link MaterialBatchService#replenishExistingBatch}.
-     * 沿用目标批次单价/保质期/供应商, 只累加数量 + 写 REPLENISH 审计 —— 不碰 🔒 成本口径。
-     */
-    @Override
-    @Transactional
-    public MaterialBatchDTO replenishExistingBatch(String factoryId, String batchId, BigDecimal addQuantity,
-                                                   String sourceDocType, String sourceDocId, String note, Long adjustedBy) {
-        MaterialBatch batch = materialBatchRepository.findById(batchId)
-                .orElseThrow(() -> new ResourceNotFoundException("原材料批次", "id", batchId));
-
-        // 验证工厂ID
-        if (!batch.getFactoryId().equals(factoryId)) {
-            throw new BusinessException(403, "无权操作该批次")
-                    .withHint("请联系管理员确认批次归属或切换工厂账号");
-        }
-
-        // 续入数量必须 > 0
-        if (addQuantity == null || addQuantity.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new BusinessException(400, "续入数量必须大于0")
-                    .withHint("请填写本次到货要续入的数量").withHintTarget("addQuantity");
-        }
-
-        // 防呆 (Rule 5 dead-end→引导): 只允许续入到「可用」批次, 否则引导新建批次
-        if (batch.getStatus() != MaterialBatchStatus.AVAILABLE) {
-            throw new BusinessException(409, "该批次当前状态为「" + batch.getStatus().getDisplayName()
-                    + "」, 不支持续入。请改为「新建批次」录入本次到货。")
-                    .withHint("续入仅支持可用批次; 已耗尽/过期/预留的批次请新建");
-        }
-
-        // 防呆: 已过保质期的批次不允许续入 (会让新货挂在一个已过期的 expireDate 下 → 食品安全风险)
-        if (batch.getExpireDate() != null && batch.getExpireDate().isBefore(java.time.LocalDate.now())) {
-            throw new BusinessException(409, "该批次已过保质期 (" + batch.getExpireDate()
-                    + "), 不支持续入。请改为「新建批次」录入本次到货。")
-                    .withHint("续入会沿用旧批次保质期; 新到货请新建批次以保证正确的保质期");
-        }
-
-        BigDecimal oldQuantity = batch.getReceiptQuantity();
-        // 只累加数量; 单价/保质期/供应商/产地等批次级单值字段一律沿用 (不重算, 不覆盖) —— 保证成本与溯源不被静默弄错
-        batch.setReceiptQuantity(oldQuantity.add(addQuantity));
-        // 🔒 后置校验: used+reserved ≤ receipt (续入只会放大 receipt, 恒成立, 防御性断言)
-        batch.assertConsumptionInvariant();
-
-        // 记录续入审计流水 (type=REPLENISH, reason 含发起单信息供溯源)
-        StringBuilder reason = new StringBuilder("续入到已有批次");
-        if (sourceDocType != null && !sourceDocType.isBlank()) {
-            reason.append(" [发起单 ").append(sourceDocType);
-            if (sourceDocId != null && !sourceDocId.isBlank()) {
-                reason.append('#').append(sourceDocId);
-            }
-            reason.append(']');
-        }
-        if (note != null && !note.isBlank()) {
-            reason.append(' ').append(note);
-        }
-
-        MaterialBatchAdjustment adjustmentRecord = new MaterialBatchAdjustment();
-        adjustmentRecord.setId(java.util.UUID.randomUUID().toString());
-        adjustmentRecord.setMaterialBatchId(batchId);
-        adjustmentRecord.setAdjustmentType("REPLENISH");
-        adjustmentRecord.setQuantityBefore(oldQuantity);
-        adjustmentRecord.setQuantityAfter(batch.getReceiptQuantity());
-        adjustmentRecord.setAdjustmentQuantity(addQuantity);
-        adjustmentRecord.setReason(reason.toString());
-        adjustmentRecord.setAdjustedBy(adjustedBy);
-        adjustmentRecord.setAdjustmentTime(LocalDateTime.now());
-        materialBatchAdjustmentRepository.save(adjustmentRecord);
-
-        batch = materialBatchRepository.save(batch);
-        // 库存增加 → 下游 (未来计划自动匹配) 需重新评估
-        publishStockChangedEventIfApplicable(factoryId, batch, "REPLENISH");
         return materialBatchMapper.toDTO(batch);
     }
 

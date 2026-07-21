@@ -117,46 +117,18 @@ public class MaterialBatchController {
     private final com.cretas.aims.service.inventory.OpeningInventoryService openingInventoryService;
 
     /**
-     * 创建原材料批次（入库）
+     * 兼容墓碑：普通页面的无来源单批次写入口已关闭。
      *
-     * <p>创建新的原材料批次，记录入库信息。批次号如果不提供会自动生成。</p>
-     *
-     * <h4>请求示例</h4>
-     * <pre>
-     * POST /api/mobile/F001/material-batches
-     * Content-Type: application/json
-     *
-     * {
-     *   "materialTypeId": "MT001",
-     *   "batchNumber": "MAT-20251120-001",  // 可选，不填自动生成
-     *   "quantity": 100,
-     *   "unit": "kg",
-     *   "supplierId": "SUP001",
-     *   "purchasePrice": 50.00,
-     *   "receiveDate": "2025-11-20",
-     *   "expiryDate": "2025-12-20",
-     *   "storageLocation": "A区-01货架",
-     *   "qualityGrade": "A"
-     * }
-     * </pre>
-     *
-     * <h4>业务规则</h4>
-     * <ul>
-     *   <li>批次号在系统内必须唯一</li>
-     *   <li>过期日期必须在接收日期之后</li>
-     *   <li>数量必须大于0</li>
-     *   <li>初始状态为 AVAILABLE（可用）</li>
-     * </ul>
-     *
-     * @param factoryId 工厂ID
-     * @param authorization JWT令牌
-     * @param request 创建请求参数
-     * @return 创建成功的批次信息
+     * <p>保留路由只为让旧客户端收到带迁移提示的 409，而不是误判 404 后重试或改走其他
+     * 无来源写路径。新库存只能由仓储来源任务、盘点/受控调整或独立期初建账写入；这里不得
+     * 恢复 Service 调用。</p>
      */
     @RequirePermission({"warehouse:read_write", "inventory:read_write"})
     @RequireModule("warehouse")
     @PostMapping
-    @Operation(summary = "创建原材料批次", description = "创建新的原材料批次，记录入库信息")
+    @Deprecated
+    @Operation(summary = "旧无来源单批次写入口（已停用）",
+            description = "兼容旧客户端并返回迁移提示；请使用仓储来源任务、受控调整或期初建账")
     @com.cretas.aims.annotation.Loggable(module = "MATERIAL_BATCH", action = "CREATE",
             entityType = "MaterialBatch")
     public ApiResponse<MaterialBatchDTO> createMaterialBatch(
@@ -621,15 +593,15 @@ public class MaterialBatchController {
     }
 
     /**
-     * 续入到已有批次 (方案A 严格匹配续入, 六扇门 F006 采购补货场景).
-     *
-     * <p>把本次到货并进指定批次 (沿用其单价/保质期/供应商), 而不是新建批次 —— 解决同一原料
-     * 多次入库"批次散着列看着重复"的痛点。仅支持可用且未过期批次, 否则 409 引导新建。
+     * 兼容墓碑：旧“续入已有批次”会丢失本次来源、价格、保质期与所有权快照，已永久关闭。
+     * 保留路由只为给旧客户端明确迁移提示；后端不再保留可达的续入 Service 实现。
      */
     @RequirePermission({"warehouse:read_write", "inventory:read_write"})
     @RequireModule("warehouse")
     @PostMapping("/{batchId}/replenish")
-    @Operation(summary = "续入到已有批次")
+    @Deprecated
+    @Operation(summary = "旧批次续入口（已停用）",
+            description = "兼容旧客户端并返回迁移提示；请从有来源的仓储任务进入")
     public ApiResponse<MaterialBatchDTO> replenishExistingBatch(
             @Parameter(description = "工厂ID", example = "F001")
             @PathVariable @NotBlank String factoryId,
@@ -1125,12 +1097,15 @@ public class MaterialBatchController {
     }
 
     /**
-     * 批量创建材料批次
+     * 兼容墓碑：普通页面的无来源批量入库已关闭。
+     * 保留路由只为给旧客户端明确迁移提示；真正的批量期初库存使用 /opening。
      */
     @RequirePermission({"warehouse:read_write", "inventory:read_write"})
     @RequireModule("warehouse")
     @PostMapping("/batch")
-    @Operation(summary = "批量创建材料批次")
+    @Deprecated
+    @Operation(summary = "旧无来源批量入库入口（已停用）",
+            description = "兼容旧客户端并返回迁移提示；期初库存请使用 /opening")
     public ApiResponse<List<MaterialBatchDTO>> batchCreateMaterialBatches(
             @Parameter(description = "工厂ID", required = true, example = "F001")
             @PathVariable @NotBlank String factoryId,
