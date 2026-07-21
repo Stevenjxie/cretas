@@ -36,8 +36,8 @@
       if (sec.closest('.v6-hero, .ai-hero, .c-hero, .d-hero')) return;
       if (sec.classList.contains('v6-hero')) return;
       gsap.to(sec, {
-        opacity: .3, y: -34, ease: 'none',
-        scrollTrigger: { trigger: sec, start: 'bottom 26%', end: 'bottom -8%', scrub: true }
+        opacity: .12, y: -90, scale: .965, ease: 'none',
+        scrollTrigger: { trigger: sec, start: 'bottom 30%', end: 'bottom -10%', scrub: true }
       });
     });
   }
@@ -53,7 +53,7 @@
     h.classList.add('v6-lines');
     h.classList.remove('v6-reveal');
     gsap.from(h.querySelectorAll('.v6-li'), {
-      yPercent: 115, duration: .7, ease: 'power4.out', stagger: .08,
+      yPercent: 130, duration: .95, ease: 'expo.out', stagger: .12,
       scrollTrigger: { trigger: h, start: 'top 88%', once: true }
     });
   });
@@ -92,11 +92,11 @@
 
   /* Hero image settle + drift; copy drifts away; full-bleed band drift */
   document.querySelectorAll('.v6-hero-mask img').forEach(function(img){
-    gsap.fromTo(img, { scale: 1.14, yPercent: -5 }, { scale: 1, yPercent: 9, ease: 'none',
+    gsap.fromTo(img, { scale: 1.22, yPercent: -8 }, { scale: 1, yPercent: 12, ease: 'none',
       scrollTrigger: { trigger: img.closest('.v6-hero'), start: 'top top', end: 'bottom top', scrub: 0.8 } });
   });
   document.querySelectorAll('.v6-hero .hero-copy').forEach(function(copy){
-    gsap.to(copy, { yPercent: -34, opacity: 0.1, ease: 'none',
+    gsap.to(copy, { yPercent: -60, opacity: 0.08, ease: 'none',
       scrollTrigger: { trigger: copy.closest('.v6-hero'), start: 'top top', end: 'bottom 22%', scrub: 0.8 } });
   });
   document.querySelectorAll('.v6-photo-card img').forEach(function(img){
@@ -168,7 +168,7 @@
   }
   var band = document.querySelector('.band');
   if (band) {
-    gsap.fromTo(band, { scale: .94, borderRadius: '28px' }, { scale: 1, borderRadius: '0px', ease: 'none',
+    gsap.fromTo(band, { scale: .86, borderRadius: '40px' }, { scale: 1, borderRadius: '0px', ease: 'none',
       scrollTrigger: { trigger: band, start: 'top 85%', end: 'top 25%', scrub: 0.8 } });
     gsap.from(band.querySelectorAll('.bcopy > *'), { y: 26, opacity: 0, duration: .8,
       ease: 'power4.out', stagger: .09,
@@ -373,12 +373,12 @@
     mani.innerHTML = frag.join('');
     mani.classList.remove('v6-reveal'); mani.classList.add('in');
     gsap.from(mani.querySelectorAll('.v6-ch'), {
-      yPercent: 60, opacity: 0, duration: .7, ease: 'power4.out', stagger: .028, delay: .15
+      yPercent: 120, opacity: 0, duration: .9, ease: 'expo.out', stagger: .04, delay: .15
     });
   }
   document.querySelectorAll('.crow').forEach(function(row, i){
     row.classList.remove('v6-reveal'); row.classList.add('in');
-    gsap.from(row, { x: i % 2 ? 56 : -56, opacity: 0, duration: .9, ease: 'power4.out',
+    gsap.from(row, { x: DESKTOP ? (i % 2 ? 140 : -140) : 0, y: DESKTOP ? 0 : 48, opacity: 0, duration: 1.05, ease: 'expo.out',
       scrollTrigger: { trigger: row, start: 'top 88%', once: true } });
   });
 

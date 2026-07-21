@@ -56,12 +56,12 @@ function v6RevealInit(){
     entries.forEach(function(en){
       if(!en.isIntersecting) return;
       var el = en.target;
-      var d = Math.min(el.__v6i || 0, 7) * 50;
+      var d = Math.min(el.__v6i || 0, 7) * 75;
       el.style.transitionDelay = d + 'ms';
       el.classList.add('in');
       io.unobserve(el);
       /* clear delay after it has played so hover/other transitions aren't lagged */
-      setTimeout(function(){ el.style.transitionDelay = ''; }, d + 1100);
+      setTimeout(function(){ el.style.transitionDelay = ''; }, d + 1350);
     });
   }, { threshold: 0.01, rootMargin: '0px 0px -8% 0px' });
   els.forEach(function(e){ io.observe(e); });
