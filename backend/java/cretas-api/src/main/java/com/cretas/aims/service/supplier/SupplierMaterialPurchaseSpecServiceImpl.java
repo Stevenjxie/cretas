@@ -10,6 +10,7 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.SupplierMaterialPurchaseSpecRepository;
 import com.cretas.aims.repository.SupplierMaterialRepository;
 import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitUsageScope;
 import lombok.RequiredArgsConstructor;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
@@ -76,9 +77,12 @@ public class SupplierMaterialPurchaseSpecServiceImpl implements SupplierMaterial
 
     private void apply(String factoryId, RawMaterialType material, SupplierMaterialPurchaseSpec spec,
                        SupplierMaterialPurchaseSpecRequest request) {
-        String packageUnit = canonical(factoryId, request.getPurchasePackageUnit());
-        String inventoryUnit = canonical(factoryId, request.getInventoryBaseUnit());
-        String materialUnit = canonical(factoryId, material.getUnit());
+        String packageUnit = canonical(factoryId, request.getPurchasePackageUnit(),
+                UnitUsageScope.PURCHASE_QUANTITY, "purchasePackageUnit");
+        String inventoryUnit = canonical(factoryId, request.getInventoryBaseUnit(),
+                UnitUsageScope.INVENTORY_QUANTITY, "inventoryBaseUnit");
+        String materialUnit = canonical(factoryId, material.getUnit(),
+                UnitUsageScope.INVENTORY_QUANTITY, "materialTypeId");
         if (!materialUnit.equals(inventoryUnit)) {
             throw new BusinessException(400, "库存基本单位必须与物料主数据单位一致")
                     .withCode("PURCHASE_SPEC_BASE_UNIT_MISMATCH").withHintTarget("inventoryBaseUnit");
@@ -86,6 +90,17 @@ public class SupplierMaterialPurchaseSpecServiceImpl implements SupplierMaterial
         spec.setName(request.getName().trim());
         spec.setPurchasePackageUnit(packageUnit);
         spec.setInventoryBaseUnit(inventoryUnit);
+        if (request.getFactor() == null || request.getFactor().compareTo(java.math.BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(400, "采购包装换算系数必须大于0")
+                    .withCode("PURCHASE_SPEC_FACTOR_INVALID")
+                    .withHintTarget("factor");
+        }
+        if (request.getQuotedPrice() != null
+                && request.getQuotedPrice().compareTo(java.math.BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(400, "采购规格报价必须大于0")
+                    .withCode("PURCHASE_SPEC_PRICE_INVALID")
+                    .withHintTarget("quotedPrice");
+        }
         spec.setConversionFactor(request.getFactor());
         spec.setQuotedPrice(request.getQuotedPrice());
         spec.setCurrency(request.getCurrency() == null ? "CNY" : request.getCurrency());
@@ -125,15 +140,21 @@ public class SupplierMaterialPurchaseSpecServiceImpl implements SupplierMaterial
         if (!relationId.equals(spec.getSupplierMaterialId())) throw new BusinessException(403, "采购包装规格不属于该供应关系");
         return spec;
     }
-    private String canonical(String factoryId, String unit) {
+    private String canonical(String factoryId, String unit, UnitUsageScope usageScope, String hintTarget) {
         var normalized = unitContractService.normalize(factoryId, unit);
         if (!normalized.recognized()) throw new BusinessException(400, "未登记的计量单位: " + unit);
+        if (!unitContractService.supportsUsage(factoryId, normalized.code(), usageScope)) {
+            throw new BusinessException(400, "该计量单位不允许用于当前采购规格字段: " + normalized.code())
+                    .withCode("PURCHASE_SPEC_UNIT_SCOPE_INVALID")
+                    .withHintTarget(hintTarget);
+        }
         return normalized.code();
     }
     private SupplierMaterialPurchaseSpecDTO toDto(SupplierMaterialPurchaseSpec s) {
         return SupplierMaterialPurchaseSpecDTO.builder().id(s.getId()).supplierMaterialId(s.getSupplierMaterialId())
                 .materialTypeId(s.getMaterialTypeId()).name(s.getName()).purchasePackageUnit(s.getPurchasePackageUnit())
                 .inventoryBaseUnit(s.getInventoryBaseUnit()).factor(s.getConversionFactor()).quotedPrice(s.getQuotedPrice())
+                .quotedPriceUnit(s.getPurchasePackageUnit())
                 .currency(s.getCurrency()).minOrderQuantity(s.getMinOrderQuantity()).leadTimeDays(s.getLeadTimeDays())
                 .defaultSpec(s.getDefaultSpec()).active(s.getActive()).version(s.getVersion()).build();
     }

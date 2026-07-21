@@ -36,6 +36,13 @@ public interface ApprovalWorkflowInstanceRepository
             String businessEntityId,
             InstanceStatus status);
 
+    /** Latest instance for a business document, including terminal instances. */
+    Optional<ApprovalWorkflowInstance>
+            findFirstByFactoryIdAndModuleCodeAndBusinessEntityIdOrderByInitiatedAtDesc(
+                    String factoryId,
+                    String moduleCode,
+                    String businessEntityId);
+
     /**
      * 工厂维度按 status 查 — 用于 factory 级别统计或定向恢复.
      */
@@ -103,33 +110,56 @@ public interface ApprovalWorkflowInstanceRepository
     /**
      * Sprint 5 Track A — "我参与的工作流" personal view query.
      *
-     * <p>列出当前 user 作为 actor 参与过的所有 workflow 实例 (通过 ApprovalHistory join).
+     * <p>列出当前 user 发起或作为 actor 处理过的所有 workflow 实例.
      * Distinct 因为同一 user 可能多次操作同一实例 (APPROVE → DELEGATE 等).
      *
-     * <p>不限定 status — 用户看自己审批过的所有 (含已完成).
+     * <p>不限定 status — 用户查看自己发起或处理过的所有实例 (含已完成).
      * 默认按 initiatedAt DESC 排序 — 实例发起时间, 不是参与时间 (UI 显示一致).
      *
      * @param factoryId 工厂 id
-     * @param actorId user.id (history.actor_id)
+     * @param actorId user.id (instance.initiated_by 或 history.actor_id)
      * @param pageable 分页参数
      * @return Page of instances sorted by initiatedAt DESC
      * @since 2026-05-19 (Sprint 5 Track A)
      */
     @Query(value = "SELECT DISTINCT i FROM ApprovalWorkflowInstance i " +
+                   "WHERE i.factoryId = :factoryId AND (i.initiatedBy = :actorId OR i.id IN (" +
+                   "  SELECT h.instanceId FROM com.cretas.aims.entity.workflow.ApprovalHistory h " +
+                   "  WHERE h.factoryId = :factoryId AND h.actorId = :actorId" +
+                   ")) " +
+                   "ORDER BY i.initiatedAt DESC",
+           countQuery = "SELECT COUNT(DISTINCT i) FROM ApprovalWorkflowInstance i " +
+                        "WHERE i.factoryId = :factoryId AND (i.initiatedBy = :actorId OR i.id IN (" +
+                        "  SELECT h.instanceId FROM com.cretas.aims.entity.workflow.ApprovalHistory h " +
+                        "  WHERE h.factoryId = :factoryId AND h.actorId = :actorId" +
+                        "))")
+    Page<ApprovalWorkflowInstance> findParticipatedBy(
+            @Param("factoryId") String factoryId,
+            @Param("actorId") Long actorId,
+            Pageable pageable);
+
+    /**
+     * Personal OA "已处理" view. Unlike findParticipatedBy, this query does not
+     * include instances merely because the current user initiated them.
+     */
+    @Query(value = "SELECT DISTINCT i FROM ApprovalWorkflowInstance i " +
                    "WHERE i.factoryId = :factoryId AND i.id IN (" +
                    "  SELECT h.instanceId FROM com.cretas.aims.entity.workflow.ApprovalHistory h " +
                    "  WHERE h.factoryId = :factoryId AND h.actorId = :actorId" +
-                   ") " +
-                   "ORDER BY i.initiatedAt DESC",
+                   ") ORDER BY i.initiatedAt DESC",
            countQuery = "SELECT COUNT(DISTINCT i) FROM ApprovalWorkflowInstance i " +
                         "WHERE i.factoryId = :factoryId AND i.id IN (" +
                         "  SELECT h.instanceId FROM com.cretas.aims.entity.workflow.ApprovalHistory h " +
                         "  WHERE h.factoryId = :factoryId AND h.actorId = :actorId" +
                         ")")
-    Page<ApprovalWorkflowInstance> findParticipatedBy(
+    Page<ApprovalWorkflowInstance> findActedBy(
             @Param("factoryId") String factoryId,
             @Param("actorId") Long actorId,
             Pageable pageable);
+
+    /** Factory-scoped lookup used by the OA copied-to-me read model. */
+    List<ApprovalWorkflowInstance> findByFactoryIdAndIdIn(
+            String factoryId, List<String> ids);
 
     /**
      * Sprint 6 W1-B — admin view "工作流处理" query.

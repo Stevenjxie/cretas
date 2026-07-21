@@ -1197,7 +1197,7 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
             try:
                 from smartbi.gold.restaurant_ops_router import (
                     is_supported_restaurant_ops_code,
-                    match_restaurant_ops,
+                    reconcile_restaurant_ops_code,
                     resolve_by_code,
                 )
                 from smartbi.gold.restaurant_intent import contextualize_restaurant_followup
@@ -1273,7 +1273,10 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
 
                 # Fail-open compatibility for a parser/contract infrastructure
                 # outage.  Normal restaurant requests return above.
-                ops_code = expected_ops_code or match_restaurant_ops(effective_ops_query)
+                ops_code = reconcile_restaurant_ops_code(
+                    effective_ops_query,
+                    expected_ops_code,
+                )
                 if ops_code and pool:
                     ops_answer = await resolve_by_code(
                         ops_code, pool, factory_id_hdr, role=trusted_role, query=effective_ops_query,
@@ -1860,7 +1863,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 if user_q and factory_id_hdr:
                     from smartbi.gold.restaurant_ops_router import (
                         is_supported_restaurant_ops_code as _is_supported_ops_trend,
-                        match_restaurant_ops as _match_ops_trend,
+                        reconcile_restaurant_ops_code as _reconcile_ops_trend,
                         resolve_by_code as _resolve_ops_trend,
                     )
                     from smartbi.config import get_pg_pool as _get_pool_trend
@@ -1870,7 +1873,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                         and _is_supported_ops_trend(request.expected_intent)
                         else None
                     )
-                    _t1_trend_code = _expected_trend_code or _match_ops_trend(user_q)
+                    _t1_trend_code = _reconcile_ops_trend(user_q, _expected_trend_code)
                     if _t1_trend_code == "RESTAURANT_OPS_TREND_ANALYSIS":
                         pool_trend = await _get_pool_trend()
                         if pool_trend:
@@ -2100,7 +2103,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 if user_q and factory_id_hdr:
                     from smartbi.gold.restaurant_ops_router import (
                         is_supported_restaurant_ops_code,
-                        match_restaurant_ops,
+                        reconcile_restaurant_ops_code,
                         resolve_by_code,
                     )
                     from smartbi.config import get_pg_pool as _get_pool
@@ -2116,7 +2119,10 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                         effective_user_q, inherited_context = contextualize_restaurant_followup(
                             user_q, chat_session_parent,
                         )
-                        ops_code = expected_ops_code or match_restaurant_ops(effective_user_q)
+                        ops_code = reconcile_restaurant_ops_code(
+                            effective_user_q,
+                            expected_ops_code,
+                        )
                         tiered_ops = (
                             await _try_tiered_restaurant_intent(
                                 effective_user_q, pool, factory_id_hdr, trusted_role,

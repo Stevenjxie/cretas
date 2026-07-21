@@ -17,6 +17,17 @@ describe('purchase order supplier and execution boundaries', () => {
     expect(listSource).not.toContain('recalcBoxQuantity(item)');
   });
 
+  it('binds purchase quantity and price units to the supplier relation or selected spec', () => {
+    expect(listSource).toContain('relation.purchaseUnit || relation.baseUnit');
+    expect(listSource).toContain("item.priceSource = 'SUPPLIER_RELATION'");
+    expect(listSource).toContain("item.priceSource = 'SUPPLIER_SPEC'");
+    expect(listSource).toContain("item.priceSource = 'MISSING'");
+    expect(listSource).toContain('元/{{ displayUnit(item.priceUnit) || \'-\' }}');
+    expect(listSource).toContain('第 ${missingPriceIndex + 1} 行尚未配置采购价');
+    expect(listSource).not.toContain('Number(relation.defaultPurchasePrice || 0)');
+    expect(listSource).not.toContain('v-model="item.priceUnit"');
+  });
+
   it('creates the order once and retries only queued attachments', () => {
     expect(listSource).toContain('createdOrderId.value = savedOrderId');
     expect(listSource).toContain('uploadQueued(savedOrderId)');

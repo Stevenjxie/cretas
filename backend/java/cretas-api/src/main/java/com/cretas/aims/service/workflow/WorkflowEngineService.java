@@ -3,6 +3,7 @@ package com.cretas.aims.service.workflow;
 import com.cretas.aims.entity.workflow.ApprovalHistory;
 import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.config.ApprovalWorkflow;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -108,6 +109,17 @@ public interface WorkflowEngineService {
                                                           String moduleCode,
                                                           String businessEntityId);
 
+    /** Latest instance for read models and idempotency checks, including terminal state. */
+    Optional<ApprovalWorkflowInstance> getLatestInstance(String factoryId,
+                                                         String moduleCode,
+                                                         String businessEntityId);
+
+    /** Factory-scoped instance lookup for the unified OA action endpoint. */
+    Optional<ApprovalWorkflowInstance> getInstance(String factoryId, String instanceId);
+
+    /** Whether the user may operate the active node, including factory scope. */
+    boolean canTransition(ApprovalWorkflowInstance instance, User user);
+
     /**
      * 时间线 UI — 实例完整历史按时间升序.
      */
@@ -196,6 +208,17 @@ public interface WorkflowEngineService {
      */
     Page<ApprovalWorkflowInstance> findParticipatedBy(
             String factoryId, Long userId, Pageable pageable);
+
+    /** Personal OA "已处理": instances on which this user performed an action. */
+    Page<ApprovalWorkflowInstance> findActedBy(
+            String factoryId, Long userId, Pageable pageable);
+
+    /**
+     * Personal OA "抄送我的": persisted notify-node transitions addressed to the
+     * current user explicitly or through the user's role.
+     */
+    Page<ApprovalWorkflowInstance> findCopiedTo(
+            String factoryId, Long userId, String userRole, Pageable pageable);
 
     /**
      * Sprint 6 W1-B — "工作流处理" admin view (super-admin only).

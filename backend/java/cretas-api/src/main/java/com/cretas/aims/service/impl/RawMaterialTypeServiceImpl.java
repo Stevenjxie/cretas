@@ -189,17 +189,8 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                 ? null : dto.getTaxRate());
         materialType.setTaxTreatment(taxTreatment);
         materialType.setTaxExemptionReason(dto.getTaxExemptionReason());
-        if (packaging) {
-            materialType.setTaxIncludedUnitPrice(dto.getTaxIncludedUnitPrice());
-            if (taxTreatment == com.cretas.aims.entity.enums.TaxTreatment.EXEMPT) {
-                materialType.setUnitPrice(dto.getTaxIncludedUnitPrice());
-            } else {
-                materialType.setUnitPrice(dto.getTaxRate().preTaxPrice(dto.getTaxIncludedUnitPrice()));
-            }
-        } else {
-            materialType.setTaxIncludedUnitPrice(null);
-            materialType.setUnitPrice(null);
-        }
+        applyReferencePricing(materialType, dto.getMaterialReferencePrice(),
+                dto.getTaxIncludedUnitPrice(), packaging);
 
         materialType.setPrimaryCode(segmentChain.l1().getSegmentCode());
 
@@ -285,24 +276,19 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                 && materialType.getTaxRate() == null) {
             materialType.setTaxRate(TaxRate.TAX_13);
         }
+        if (materialType.getTaxTreatment() == com.cretas.aims.entity.enums.TaxTreatment.EXEMPT) {
+            materialType.setTaxRate(null);
+        }
+        if (dto.getMaterialReferencePrice() != null || dto.getTaxIncludedUnitPrice() != null) {
+            applyReferencePricing(materialType, dto.getMaterialReferencePrice(),
+                    dto.getTaxIncludedUnitPrice(), packaging);
+        } else if (dto.getTaxRate() != null || dto.getTaxTreatment() != null) {
+            refreshReferencePriceForTaxChange(materialType);
+        }
         if (packaging) {
-            if (dto.getTaxIncludedUnitPrice() != null) {
-                materialType.setTaxIncludedUnitPrice(dto.getTaxIncludedUnitPrice());
-            }
-            if (materialType.getTaxTreatment() == com.cretas.aims.entity.enums.TaxTreatment.EXEMPT) {
-                materialType.setTaxRate(null);
-                materialType.setUnitPrice(materialType.getTaxIncludedUnitPrice());
-            } else if (materialType.getTaxIncludedUnitPrice() != null) {
-                materialType.setUnitPrice(materialType.getTaxRate().preTaxPrice(materialType.getTaxIncludedUnitPrice()));
-            }
             validateRequiredPricing(materialType.getTaxTreatment(), materialType.getTaxRate(),
                     materialType.getTaxIncludedUnitPrice(), materialType.getTaxExemptionReason());
         } else {
-            if (materialType.getTaxTreatment() == com.cretas.aims.entity.enums.TaxTreatment.EXEMPT) {
-                materialType.setTaxRate(null);
-            }
-            materialType.setTaxIncludedUnitPrice(null);
-            materialType.setUnitPrice(null);
             validateTaxMetadata(materialType.getTaxTreatment(), materialType.getTaxRate(),
                     materialType.getTaxExemptionReason());
         }
@@ -336,6 +322,85 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
 
         log.info("原材料类型更新成功: id={}", materialType.getId());
         return convertToDTO(materialType);
+    }
+
+    private void applyReferencePricing(RawMaterialType materialType,
+                                       BigDecimal preTaxPrice,
+                                       BigDecimal taxIncludedPrice,
+                                       boolean required) {
+        if (preTaxPrice == null && taxIncludedPrice == null) {
+            if (required) {
+                throw new BusinessException(400, "含税采购参考价必须大于0")
+                        .withCode("MATERIAL_REFERENCE_PRICE_REQUIRED")
+                        .withHintTarget("taxIncludedUnitPrice");
+            }
+            materialType.setUnitPrice(null);
+            materialType.setTaxIncludedUnitPrice(null);
+            return;
+        }
+        requirePositivePrice(preTaxPrice, "materialReferencePrice");
+        requirePositivePrice(taxIncludedPrice, "taxIncludedUnitPrice");
+
+        if (materialType.getTaxTreatment() == com.cretas.aims.entity.enums.TaxTreatment.EXEMPT) {
+            BigDecimal resolved = preTaxPrice != null ? preTaxPrice : taxIncludedPrice;
+            if (preTaxPrice != null && taxIncludedPrice != null
+                    && preTaxPrice.compareTo(taxIncludedPrice) != 0) {
+                throw new BusinessException(400, "免税物料的未税价与含税价必须一致")
+                        .withCode("MATERIAL_REFERENCE_PRICE_MISMATCH")
+                        .withHintTarget("materialReferencePrice");
+            }
+            materialType.setUnitPrice(resolved);
+            materialType.setTaxIncludedUnitPrice(resolved);
+            return;
+        }
+
+        TaxRate taxRate = materialType.getTaxRate();
+        if (taxRate == null) {
+            throw new BusinessException(400, "维护采购参考价前必须配置采购税率")
+                    .withCode("MATERIAL_REFERENCE_TAX_RATE_REQUIRED")
+                    .withHintTarget("taxRate");
+        }
+        if (preTaxPrice != null && taxIncludedPrice != null) {
+            BigDecimal expectedTaxIncluded = taxRate.withTaxPrice(preTaxPrice);
+            if (expectedTaxIncluded.compareTo(taxIncludedPrice) != 0) {
+                throw new BusinessException(400, "未税采购参考价与含税采购参考价不一致")
+                        .withCode("MATERIAL_REFERENCE_PRICE_MISMATCH")
+                        .withHintTarget("taxIncludedUnitPrice");
+            }
+            materialType.setUnitPrice(preTaxPrice);
+            materialType.setTaxIncludedUnitPrice(taxIncludedPrice);
+        } else if (preTaxPrice != null) {
+            materialType.setUnitPrice(preTaxPrice);
+            materialType.setTaxIncludedUnitPrice(taxRate.withTaxPrice(preTaxPrice));
+        } else {
+            materialType.setTaxIncludedUnitPrice(taxIncludedPrice);
+            materialType.setUnitPrice(taxRate.preTaxPrice(taxIncludedPrice));
+        }
+    }
+
+    private void refreshReferencePriceForTaxChange(RawMaterialType materialType) {
+        BigDecimal preTaxPrice = materialType.getUnitPrice();
+        BigDecimal taxIncludedPrice = materialType.getTaxIncludedUnitPrice();
+        if (preTaxPrice == null && taxIncludedPrice == null) {
+            return;
+        }
+        if (materialType.getTaxTreatment() == com.cretas.aims.entity.enums.TaxTreatment.EXEMPT) {
+            BigDecimal resolved = taxIncludedPrice != null ? taxIncludedPrice : preTaxPrice;
+            materialType.setUnitPrice(resolved);
+            materialType.setTaxIncludedUnitPrice(resolved);
+        } else if (taxIncludedPrice != null) {
+            materialType.setUnitPrice(materialType.getTaxRate().preTaxPrice(taxIncludedPrice));
+        } else {
+            materialType.setTaxIncludedUnitPrice(materialType.getTaxRate().withTaxPrice(preTaxPrice));
+        }
+    }
+
+    private void requirePositivePrice(BigDecimal price, String hintTarget) {
+        if (price != null && price.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(400, "采购参考价必须大于0")
+                    .withCode("MATERIAL_REFERENCE_PRICE_INVALID")
+                    .withHintTarget(hintTarget);
+        }
     }
 
     private void validateRequiredPricing(com.cretas.aims.entity.enums.TaxTreatment taxTreatment,
@@ -735,6 +800,8 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                 .name(materialType.getName())
                 .category(materialType.getCategory())
                 .unit(materialType.getUnit())
+                .materialReferencePrice(materialType.getUnitPrice())
+                .materialReferencePriceUnit(materialType.getUnit())
                 .storageType(materialType.getStorageType())
                 .shelfLifeDays(materialType.getShelfLifeDays())
                 .minStock(materialType.getMinStock())

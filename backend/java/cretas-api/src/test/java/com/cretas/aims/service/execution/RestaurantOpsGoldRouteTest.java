@@ -333,6 +333,20 @@ class RestaurantOpsGoldRouteTest {
                 .contains("RESTAURANT_OPS_SALES_SUMMARY");
         assertThat(orchestrator.matchRestaurantOpsIntent("查询本周营收", "RESTAURANT"))
                 .contains("RESTAURANT_OPS_SALES_SUMMARY");
+        assertThat(orchestrator.matchRestaurantOpsIntent("昨天的营业额是高于前天还是低于前天？", "RESTAURANT"))
+                .contains("RESTAURANT_OPS_SALES_SUMMARY");
+        assertThat(orchestrator.matchRestaurantOpsIntent(
+                "最近7天晚市出餐慢，是订单集中、人员不足还是工序瓶颈？请分别用数据判断。",
+                "RESTAURANT"))
+                .contains("RESTAURANT_OPS_SALES_SUMMARY");
+        assertThat(orchestrator.matchRestaurantOpsIntent("成本毛利先查哪几项？", "RESTAURANT"))
+                .contains("RESTAURANT_OPS_GROSS_MARGIN");
+        assertThat(orchestrator.matchRestaurantOpsIntent("要提升毛利率，哪些事情今天先不要做？", "RESTAURANT"))
+                .contains("RESTAURANT_OPS_GROSS_MARGIN");
+        assertThat(orchestrator.matchRestaurantOpsIntent(
+                "那毛利呢？请沿用刚才比较的两个日期。",
+                "RESTAURANT"))
+                .contains("RESTAURANT_OPS_GROSS_MARGIN");
         assertThat(orchestrator.matchRestaurantOpsIntent("周末周中营业额对比如何", "RESTAURANT"))
                 .contains("RESTAURANT_WEEKDAY_WEEKEND");
         assertThat(orchestrator.matchRestaurantOpsIntent("哪个月营收最高，为什么", "RESTAURANT"))

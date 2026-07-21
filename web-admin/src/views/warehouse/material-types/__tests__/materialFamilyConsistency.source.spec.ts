@@ -32,7 +32,8 @@ describe('material type family source contract', () => {
   it('requires a complete L1-L3 selection for new and legacy-code material types', () => {
     expect(source).toContain('const showSegmentEditor = computed(() => !editingId.value || editingNeedsSegmentRepair.value)');
     expect(source).toContain("if (showSegmentEditor.value && (!segmentL1.value || !segmentL2.value || !segmentL3.value))");
-    expect(source).toContain('16位编码级联（必填）');
+    expect(source).toContain('物料分类与业务编码（必填）');
+    expect(source).not.toContain('>16位编码级联（必填）<');
     expect(source).not.toContain('16位编码级联（可选）');
   });
 
@@ -58,9 +59,36 @@ describe('material type family source contract', () => {
     expect(source).toContain('raw-material-types/preview-code');
     expect(source).toContain('segmentCode: segmentL3.value');
     expect(source).toContain('businessCodePreview.value = res.data.businessCode');
-    expect(source).toContain('16位分类编码（兼容）');
+    expect(source).toContain('历史兼容编码（16位）');
     expect(source).toContain('if (!editingId.value && !(await generateSP8Code(true)))');
     expect(source).toContain('不会按分类名称猜测或覆盖历史前缀');
+  });
+
+  it('uses the short business code as the primary user-visible material identity', () => {
+    expect(source).toContain('function materialDisplayCode(row: TableRow)');
+    expect(source).toContain('row.displayCode || row.businessCode || row.code');
+    expect(source).toContain('<el-table-column label="业务编码"');
+    expect(source).toContain('{{ materialDisplayCode(row) }}');
+    expect(source).toContain('v-if="!materialHasBusinessCode(row)"');
+    expect(source).toContain('历史编码</el-tag>');
+    expect(source).toContain('历史兼容编码：${row.code}');
+    expect(source).not.toContain('<el-table-column prop="code" label="原料编码"');
+    expect(source).toContain('placeholder="搜索原料名称 / 业务编码 / 历史编码"');
+  });
+
+  it('presents classification names before their internal numeric category codes', () => {
+    expect(source).toContain('function formatSegmentOptionLabel');
+    expect(source).toContain('（分类码 ${option.segmentCode}）');
+    expect(source).toContain(':label="formatSegmentOptionLabel(opt)"');
+    expect(source).not.toContain(':label="`${opt.segmentCode} — ${opt.segmentLabel}`"');
+  });
+
+  it('shows the business code in edit mode and keeps a clear historical fallback', () => {
+    expect(source).toContain('editingDisplayCode.value = materialDisplayCode(row)');
+    expect(source).toContain('<el-form-item v-if="editingId" label="业务编码">');
+    expect(source).toContain(':model-value="editingDisplayCode"');
+    expect(source).toContain('该历史记录尚未分配业务编码，当前回退显示原16位编码');
+    expect(source).not.toContain('<el-input v-model="form.code" disabled');
   });
 
   it('does not add a second error toast after the request interceptor handled the failure', () => {

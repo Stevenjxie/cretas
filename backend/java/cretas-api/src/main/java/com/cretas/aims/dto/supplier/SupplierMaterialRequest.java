@@ -11,7 +11,7 @@ public class SupplierMaterialRequest {
     private String materialTypeId;
     @Size(max = 100, message = "供应商料号不能超过100字符")
     private String supplierMaterialCode;
-    @PositiveOrZero(message = "默认采购价不能为负数")
+    @Positive(message = "默认采购价必须大于0")
     private BigDecimal defaultPurchasePrice;
     @Pattern(regexp = "^[A-Z]{3}$", message = "币种必须是3位大写代码")
     private String currency;

@@ -38,6 +38,8 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -338,7 +340,7 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         }
 
         // 7. 写入 Redis (fail-open)
-        writeRedis(saved);
+        writeRedisAfterCommit(saved);
 
         // 8. 写 START history
         writeHistory(saved.getFactoryId(), saved.getId(),
@@ -438,7 +440,7 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
             throw new BusinessException(409, "并发审批冲突, 请刷新后重试")
                     .withHint("另一审批人已操作此实例, 请刷新页面查看最新状态后再继续");
         }
-        writeRedis(saved);
+        writeRedisAfterCommit(saved);
 
         return saved;
     }
@@ -467,6 +469,23 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
                                                                  String businessEntityId) {
         return instanceRepository.findByFactoryIdAndModuleCodeAndBusinessEntityIdAndStatus(
                 factoryId, moduleCode, businessEntityId, InstanceStatus.RUNNING);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<ApprovalWorkflowInstance> getLatestInstance(String factoryId,
+                                                                String moduleCode,
+                                                                String businessEntityId) {
+        return instanceRepository
+                .findFirstByFactoryIdAndModuleCodeAndBusinessEntityIdOrderByInitiatedAtDesc(
+                        factoryId, moduleCode, businessEntityId);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<ApprovalWorkflowInstance> getInstance(String factoryId, String instanceId) {
+        return instanceRepository.findById(instanceId)
+                .filter(instance -> factoryId.equals(instance.getFactoryId()));
     }
 
     @Override
@@ -538,7 +557,7 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
             throw new BusinessException(409, "并发审批冲突, 请刷新后重试")
                     .withHint("另一审批人已操作此实例, 请刷新页面查看最新状态后再继续");
         }
-        writeRedis(saved);
+        writeRedisAfterCommit(saved);
 
         log.info("取消 workflow 实例 - instanceId={}, canceller={}, reason={}",
                 instanceId, cancellerUserId, reason);
@@ -662,6 +681,100 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         Objects.requireNonNull(userId, "userId must not be null");
         Objects.requireNonNull(pageable, "pageable must not be null");
         return instanceRepository.findParticipatedBy(factoryId, userId, pageable);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Page<ApprovalWorkflowInstance> findActedBy(
+            String factoryId, Long userId, Pageable pageable) {
+        Objects.requireNonNull(factoryId, "factoryId must not be null");
+        Objects.requireNonNull(userId, "userId must not be null");
+        Objects.requireNonNull(pageable, "pageable must not be null");
+        return instanceRepository.findActedBy(factoryId, userId, pageable);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Page<ApprovalWorkflowInstance> findCopiedTo(
+            String factoryId, Long userId, String userRole, Pageable pageable) {
+        Objects.requireNonNull(factoryId, "factoryId must not be null");
+        Objects.requireNonNull(userId, "userId must not be null");
+        Objects.requireNonNull(userRole, "userRole must not be null");
+        Objects.requireNonNull(pageable, "pageable must not be null");
+
+        List<ApprovalHistory> notifyHistory = historyRepository
+                .findByFactoryIdAndActionOrderByCreatedAtDesc(
+                        factoryId, HistoryAction.AUTO_TRANSITION);
+
+        Map<String, Set<String>> notifyNodeIdsByInstance = new LinkedHashMap<>();
+        for (ApprovalHistory row : notifyHistory) {
+            String notes = row.getNotes();
+            if (notes == null || !notes.toLowerCase(Locale.ROOT).startsWith("notify")) {
+                continue;
+            }
+            notifyNodeIdsByInstance
+                    .computeIfAbsent(row.getInstanceId(), ignored -> new LinkedHashSet<>())
+                    .add(row.getNodeId());
+        }
+        if (notifyNodeIdsByInstance.isEmpty()) {
+            return new PageImpl<>(List.of(), pageable, 0);
+        }
+
+        List<ApprovalWorkflowInstance> candidates = instanceRepository
+                .findByFactoryIdAndIdIn(factoryId,
+                        new ArrayList<>(notifyNodeIdsByInstance.keySet()));
+        Map<String, Map<String, ApprovalWorkflowNode>> workflowNodes = new HashMap<>();
+        List<ApprovalWorkflowInstance> matched = candidates.stream()
+                .filter(instance -> copiedToUser(
+                        instance,
+                        notifyNodeIdsByInstance.getOrDefault(instance.getId(), Set.of()),
+                        userId,
+                        userRole,
+                        workflowNodes))
+                .sorted(Comparator.comparing(
+                        ApprovalWorkflowInstance::getInitiatedAt,
+                        Comparator.nullsLast(Comparator.reverseOrder())))
+                .toList();
+
+        int total = matched.size();
+        int offset = (int) Math.min(pageable.getOffset(), total);
+        int endIndex = Math.min(offset + pageable.getPageSize(), total);
+        return new PageImpl<>(matched.subList(offset, endIndex), pageable, total);
+    }
+
+    private boolean copiedToUser(
+            ApprovalWorkflowInstance instance,
+            Set<String> notifyNodeIds,
+            Long userId,
+            String userRole,
+            Map<String, Map<String, ApprovalWorkflowNode>> workflowNodes) {
+        Map<String, ApprovalWorkflowNode> nodes = workflowNodes.computeIfAbsent(
+                instance.getWorkflowId(),
+                ignored -> loadWorkflowNodesById(instance.getFactoryId(), instance.getWorkflowId()));
+        for (String nodeId : notifyNodeIds) {
+            ApprovalWorkflowNode node = nodes.get(nodeId);
+            if (node == null || !"notify".equals(node.getType())) {
+                continue;
+            }
+            Map<String, Object> config = node.getConfig() == null ? Map.of() : node.getConfig();
+            if (containsIdentity(config.get("recipients"), userId.toString())
+                    || containsIdentity(config.get("notifyRoles"), userRole)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean containsIdentity(Object configured, String expected) {
+        if (!(configured instanceof Iterable<?> values)) {
+            return false;
+        }
+        for (Object value : values) {
+            if (value != null && expected.equals(String.valueOf(value))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
@@ -1120,6 +1233,7 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
      * @since 2026-05-18 (Phase 2 issue #13)
      */
     @SuppressWarnings("unchecked")
+    @Override
     public boolean canTransition(ApprovalWorkflowInstance instance, User user) {
         if (instance == null || user == null) {
             return false;
@@ -1438,6 +1552,23 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
                     e.getPriority() == null ? Integer.MAX_VALUE : e.getPriority()));
         }
         return new GraphIndex(nodesById, outgoing, incoming);
+    }
+
+    /**
+     * 仅在数据库事务提交成功后刷新 Redis，避免回滚事务留下幽灵实例/状态。
+     */
+    private void writeRedisAfterCommit(ApprovalWorkflowInstance instance) {
+        if (TransactionSynchronizationManager.isActualTransactionActive()
+                && TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    writeRedis(instance);
+                }
+            });
+            return;
+        }
+        writeRedis(instance);
     }
 
     /**

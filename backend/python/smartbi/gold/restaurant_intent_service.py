@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from smartbi.gold.customer_text import (
     has_displayable_business_result,
@@ -51,6 +51,128 @@ logger = logging.getLogger(__name__)
 # 本模块已 import 它, 反向会循环)。should_delegate 规则 3 与
 # answer_contract.required_elements 共用同一份表, 两处判断保持一致。
 _MARGIN_CAPABLE_INTENTS = _contract.MARGIN_CAPABLE_INTENTS
+
+_PLAN_LABELS = {
+    "RESTAURANT_OPS_RECIPE_COST": "菜品成本",
+    "RESTAURANT_OPS_WASTAGE_TOP": "食材损耗",
+    "RESTAURANT_OPS_GROSS_MARGIN": "菜品毛利",
+    "RESTAURANT_OPS_STORE_MARGIN": "门店毛利",
+    "RESTAURANT_OPS_SALES_SUMMARY": "营收与订单",
+    "RESTAURANT_OPS_STAFFING_ADVICE": "排班人效",
+}
+
+
+def _resolver_kwargs(
+    spec: RestaurantQuerySpec,
+    role: Optional[str],
+    query: str,
+) -> Dict[str, Any]:
+    kwargs: Dict[str, Any] = {"role": role, "query": query}
+    start, end = spec.date_range
+    if start is not None and end is not None and hasattr(end, "__sub__"):
+        try:
+            kwargs["days"] = max(1, min((end - start).days + 1, 365))
+            kwargs["date_range"] = (start, end)
+        except (AttributeError, TypeError):
+            pass
+    return kwargs
+
+
+def _priority_section(results: List[Tuple[str, Any]]) -> str:
+    by_code = {code: result for code, result in results}
+    codes = tuple(code for code, _ in results)
+    cost_diagnostic_codes = {
+        "RESTAURANT_OPS_RECIPE_COST",
+        "RESTAURANT_OPS_WASTAGE_TOP",
+        "RESTAURANT_OPS_STORE_MARGIN",
+    }
+    if not cost_diagnostic_codes.issubset(by_code):
+        labels = [_PLAN_LABELS.get(code, "经营指标") for code in codes]
+        if set(codes) == {
+            "RESTAURANT_OPS_SALES_SUMMARY",
+            "RESTAURANT_OPS_STAFFING_ADVICE",
+        }:
+            labels = ["营收与订单", "排班人效"]
+            reason = "先确认订单峰谷和业务量，再核对相同时段的人效与人员配置。"
+        else:
+            reason = "先核对结果指标，再沿问题中要求的驱动指标逐项下钻，避免只凭单一指标行动。"
+        ordered = "\n".join(f"{index}. {label}" for index, label in enumerate(labels, 1))
+        return f"\n\n联合分析优先级与依据：\n{ordered}\n依据：{reason}"
+
+    store_meta = getattr(by_code.get("RESTAURANT_OPS_STORE_MARGIN"), "meta", {}) or {}
+    wastage_meta = getattr(by_code.get("RESTAURANT_OPS_WASTAGE_TOP"), "meta", {}) or {}
+    coverage = store_meta.get("costCoverageRatio")
+    if coverage is None:
+        coverage = store_meta.get("cost_coverage_ratio")
+    wastage_cost = float(wastage_meta.get("total_cost") or 0.0)
+
+    if coverage is not None and float(coverage) < 0.8:
+        order = ("菜品成本", "食材损耗", "门店毛利")
+        reason = "成本覆盖不足会先污染毛利判断，必须先补齐成本口径。"
+    elif wastage_cost > 0:
+        order = ("食材损耗", "门店毛利", "菜品成本")
+        reason = "已有可量化损耗金额，先止损，再验证门店毛利和菜品成本结构。"
+    else:
+        order = ("门店毛利", "菜品成本", "食材损耗")
+        reason = "先从结果指标定位问题门店，再向菜品成本和损耗原因下钻。"
+    return (
+        "\n\n联合排查优先级与依据：\n"
+        f"1. {order[0]}\n2. {order[1]}\n3. {order[2]}\n"
+        f"依据：{reason}"
+    )
+
+
+def _combine_planned_answers(
+    spec: RestaurantQuerySpec,
+    results: List[Tuple[str, Any]],
+) -> Any:
+    from smartbi.gold.restaurant_ops_router import OpsAnswer
+
+    sections: List[str] = []
+    charts: List[Dict[str, Any]] = []
+    kpis: List[Dict[str, Any]] = []
+    combined_meta: Dict[str, Any] = {
+        "plan_complete": len(results) == len(spec.planned_intents),
+        "planned_count": len(spec.planned_intents),
+        "completed_count": len(results),
+        "sub_results": {},
+    }
+    for code, result in results:
+        label = _PLAN_LABELS.get(code, result.title or "经营分析")
+        sections.append(f"{label}\n{result.answer_text}")
+        charts.extend(result.charts or [])
+        kpis.extend(result.kpis or [])
+        sub_meta = result.meta or {}
+        combined_meta["sub_results"][code] = sub_meta
+        for key in ("stores", "weak_stores", "low_margin_dishes"):
+            if sub_meta.get(key):
+                combined_meta.setdefault(key, []).extend(sub_meta[key])
+        for key in ("rbac_masked", "no_pos_data", "no_data"):
+            if sub_meta.get(key) is True:
+                combined_meta[key] = True
+        if code in ("RESTAURANT_OPS_GROSS_MARGIN", "RESTAURANT_OPS_STORE_MARGIN"):
+            if sub_meta.get("marginInvariantPass") is not None:
+                combined_meta["marginInvariantPass"] = bool(
+                    combined_meta.get("marginInvariantPass", True)
+                    and sub_meta["marginInvariantPass"]
+                )
+            if sub_meta.get("scope_matches_request") is not None:
+                combined_meta["scope_matches_request"] = bool(
+                    combined_meta.get("scope_matches_request", True)
+                    and sub_meta["scope_matches_request"]
+                )
+
+    answer_text = "\n\n".join(sections)
+    if spec.asks_priority:
+        answer_text += _priority_section(results)
+    return OpsAnswer(
+        code=spec.intent,
+        title="餐饮经营联合分析",
+        answer_text=answer_text,
+        charts=charts,
+        kpis=kpis,
+        meta=combined_meta,
+    )
 
 
 async def tiered_answer(
@@ -125,16 +247,36 @@ async def tiered_answer(
             }
 
         resolver_query = build_resolver_query(query, spec)
-        tiered_result = await _resolve_tiered(
-            spec.intent, pool, factory_id, role=role, query=resolver_query,
+        execution_kwargs = _resolver_kwargs(spec, role, resolver_query)
+        plan = spec.planned_intents or (spec.intent,)
+        planned_results: List[Tuple[str, Any]] = []
+        for code in plan:
+            resolved = await _resolve_tiered(
+                code,
+                pool,
+                factory_id,
+                **execution_kwargs,
+            )
+            if resolved is not None:
+                planned_results.append((code, resolved))
+        tiered_result = (
+            _combine_planned_answers(spec, planned_results)
+            if len(plan) > 1
+            else (planned_results[0][1] if planned_results else None)
         )
         if not tiered_result:
             return None
 
+        result_kpis = getattr(tiered_result, "kpis", None) or []
+        result_meta = getattr(tiered_result, "meta", None) or {}
+        result_charts = getattr(tiered_result, "charts", None) or []
+        answer_text = str(getattr(tiered_result, "answer_text", "") or "")
         contract = _contract.validate(
-            spec, tiered_result.answer_text, tiered_result.kpis, tiered_result.meta,
+            spec,
+            answer_text,
+            result_kpis,
+            result_meta,
         )
-        answer_text = tiered_result.answer_text
         if not contract.passed:
             answer_text += (
                 f"\n\n本次结果没有可靠覆盖{_contract.describe_missing(contract.missing)}，"
@@ -146,9 +288,9 @@ async def tiered_answer(
         result: Dict[str, Any] = {
             "kind": "answer",
             "answer_text": answer_text,
-            "charts": tiered_result.charts,
-            "kpis": tiered_result.kpis,
-            "title": tiered_result.title,
+            "charts": result_charts,
+            "kpis": result_kpis,
+            "title": str(getattr(tiered_result, "title", "") or "经营分析"),
             "code": spec.intent,
             "contract_pass": contract_pass,
             "spec": spec,
@@ -209,6 +351,8 @@ def should_delegate(
     if spec is None:
         return False
     if spec.clarification_needed:
+        return True
+    if len(spec.planned_intents) > 1:
         return True
     if spec.comparison and spec.intent == "RESTAURANT_OPS_SALES_SUMMARY":
         return True

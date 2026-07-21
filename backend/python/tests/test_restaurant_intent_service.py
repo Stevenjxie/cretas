@@ -120,6 +120,18 @@ def test_should_delegate_sales_summary_relative_window_true():
     assert should_delegate(spec) is True
 
 
+def test_should_delegate_multi_resolver_plan_true():
+    spec = _spec(
+        intent="RESTAURANT_OPS_STORE_MARGIN",
+        planned_intents=(
+            "RESTAURANT_OPS_RECIPE_COST",
+            "RESTAURANT_OPS_WASTAGE_TOP",
+            "RESTAURANT_OPS_STORE_MARGIN",
+        ),
+    )
+    assert should_delegate(spec) is True
+
+
 def test_should_delegate_sales_summary_absolute_window_false():
     """Rule 4 requires relative_window=True -- an absolute-month
     SALES_SUMMARY query with no margin/profit ask falls to rule 5 -> False."""
@@ -356,6 +368,102 @@ async def test_tiered_answer_internal_only_text_is_not_a_success(monkeypatch):
     assert result["contract_pass"] is False
     assert result["answer_text"] == "没有获得可展示的业务结果，本次不生成结论。"
     assert "已完成" not in result["answer_text"]
+
+
+@pytest.mark.asyncio
+async def test_tiered_answer_executes_and_combines_multi_resolver_plan(monkeypatch):
+    spec = _spec(
+        intent="RESTAURANT_OPS_STORE_MARGIN",
+        requested_metrics=("recipe_cost", "wastage", "gross_margin"),
+        planned_intents=(
+            "RESTAURANT_OPS_RECIPE_COST",
+            "RESTAURANT_OPS_WASTAGE_TOP",
+            "RESTAURANT_OPS_STORE_MARGIN",
+        ),
+        asks_priority=True,
+    )
+    calls = []
+
+    async def _fake_resolve(code, pool, factory_id, **kwargs):
+        calls.append((code, kwargs))
+        answers = {
+            "RESTAURANT_OPS_RECIPE_COST": "菜品成本：招牌菜 ¥18。",
+            "RESTAURANT_OPS_WASTAGE_TOP": "食材损耗：近30天 ¥300。",
+            "RESTAURANT_OPS_STORE_MARGIN": "门店毛利：A店毛利率68%。",
+        }
+        return OpsAnswer(
+            code=code,
+            title=code,
+            answer_text=answers[code],
+            charts=[],
+            kpis=[],
+            meta={"marginInvariantPass": True} if code.endswith("STORE_MARGIN") else {},
+        )
+
+    monkeypatch.setattr(svc, "parse_restaurant_query", AsyncMock(return_value=spec))
+    monkeypatch.setattr(svc, "_resolve_tiered", _fake_resolve)
+    monkeypatch.setattr(svc, "log_intent_capture", AsyncMock(return_value=1))
+
+    result = await tiered_answer(
+        "最近30天把菜品成本、食材损耗和门店毛利都查一下，告诉我先查哪项",
+        object(),
+        "QHJ01",
+        "restaurant_owner",
+    )
+    await asyncio.sleep(0)
+
+    assert [code for code, _ in calls] == list(spec.planned_intents)
+    assert "菜品成本" in result["answer_text"]
+    assert "食材损耗" in result["answer_text"]
+    assert "门店毛利" in result["answer_text"]
+    assert "优先级" in result["answer_text"]
+    assert result["contract_pass"] is True
+
+
+def test_priority_section_uses_actual_non_cost_plan():
+    results = [
+        ("RESTAURANT_OPS_SALES_SUMMARY", SimpleNamespace(meta={})),
+        ("RESTAURANT_OPS_STAFFING_ADVICE", SimpleNamespace(meta={})),
+    ]
+
+    section = svc._priority_section(results)
+
+    assert "营收与订单" in section
+    assert "排班人效" in section
+    assert "订单峰谷" in section
+    assert "菜品成本" not in section
+    assert "食材损耗" not in section
+
+
+def test_combined_margin_integrity_is_false_when_any_sub_result_fails():
+    spec = _spec(
+        intent="RESTAURANT_OPS_GROSS_MARGIN",
+        planned_intents=(
+            "RESTAURANT_OPS_GROSS_MARGIN",
+            "RESTAURANT_OPS_STORE_MARGIN",
+        ),
+    )
+    results = [
+        (
+            "RESTAURANT_OPS_GROSS_MARGIN",
+            OpsAnswer("a", "菜品毛利", "菜品毛利", [], [], {
+                "marginInvariantPass": False,
+                "scope_matches_request": True,
+            }),
+        ),
+        (
+            "RESTAURANT_OPS_STORE_MARGIN",
+            OpsAnswer("b", "门店毛利", "门店毛利", [], [], {
+                "marginInvariantPass": True,
+                "scope_matches_request": True,
+            }),
+        ),
+    ]
+
+    combined = svc._combine_planned_answers(spec, results)
+
+    assert combined.meta["marginInvariantPass"] is False
+    assert combined.meta["scope_matches_request"] is True
 
 
 # ─── 3. POST /api/smartbi/gold/restaurant/tiered-answer endpoint ──────────

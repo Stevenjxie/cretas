@@ -340,7 +340,6 @@ public class PurchaseServiceImpl implements PurchaseService {
             item.setMaterialName(materialName);
             item.setQuantity(itemDTO.getQuantity());
             applySupplierPurchaseContract(factoryId, request.getSupplierId(), item, itemDTO);
-            if (itemDTO.getUnitPrice() != null) item.setUnitPrice(itemDTO.getUnitPrice());
             applyPurchaseTaxContract(item, itemDTO.getTaxRate());
             item.setRemark(itemDTO.getRemark());
             item.setSpecification(itemDTO.getSpecification());
@@ -483,9 +482,27 @@ public class PurchaseServiceImpl implements PurchaseService {
     @Transactional
     @Loggable(module = "PURCHASE_ORDER", action = "SUBMIT", entityType = "PurchaseOrder",
               entityIdParam = "orderId")
-    public PurchaseOrder submitOrder(String factoryId, String orderId) {
-        PurchaseOrder order = getPurchaseOrderById(factoryId, orderId);
+    public PurchaseOrder submitOrder(String factoryId, String orderId, Long initiatorUserId) {
+        PurchaseOrder order = purchaseOrderRepository.findByIdAndFactoryIdForUpdate(orderId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在: " + orderId));
+
+        // Same document is the idempotency boundary.  A replay after the first
+        // transaction returns the already projected truth and never creates a second instance.
         if (order.getStatus() != PurchaseOrderStatus.DRAFT) {
+            Optional<ApprovalWorkflowInstance> existing = workflowEngine == null
+                    ? Optional.empty()
+                    : workflowEngine.getLatestInstance(factoryId, "PURCHASE_ORDER", orderId);
+            if (existing.isPresent() && EnumSet.of(
+                    PurchaseOrderStatus.WORKFLOW_RUNNING,
+                    PurchaseOrderStatus.FINANCE_APPROVED,
+                    PurchaseOrderStatus.FINANCE_REJECTED).contains(order.getStatus())) {
+                return order;
+            }
+            if (order.getStatus() == PurchaseOrderStatus.SUBMITTED && existing.isEmpty()) {
+                throw new BusinessException(409, "采购单已提交但缺少 OA 审批实例")
+                        .withCode("PURCHASE_APPROVAL_INSTANCE_MISSING")
+                        .withHint("请由管理员使用受限的审批恢复工具处理，禁止重复提交或重建采购单");
+            }
             throw new BusinessException(409, "只有草稿状态的订单可以提交")
                     .withHint("请刷新订单列表查看最新状态");
         }
@@ -495,15 +512,194 @@ public class PurchaseServiceImpl implements PurchaseService {
                     .withHint("请编辑采购草稿并选择供应商后再提交")
                     .withHintTarget("supplierId");
         }
+        requireActiveSupplier(factoryId, order.getSupplierId());
+        validateOrderLinesBeforeApproval(factoryId, order);
+
+        if (workflowEngine == null || !workflowEngine.hasActiveWorkflow(factoryId, "PURCHASE_ORDER")) {
+            throw new BusinessException(422, "当前工厂未配置可用的采购 OA 审批流程")
+                    .withCode("PURCHASE_APPROVAL_ROUTE_REQUIRED")
+                    .withHint("请管理员先发布并启用 PURCHASE_ORDER 审批流程；采购单仍保持草稿");
+        }
         // Phase 4a follow-up (issue #45): Option A wrap. The annotated helper
         // evaluateOrderRules() must be invoked through the Spring proxy ({@code self}, not
         // {@code this}) so the @RuleEvaluate aspect intercepts. The helper receives the
         // loaded PurchaseOrder POJO; aspect binds target="order" parameter name → runs
         // ORDER scope rules against it.
         self.evaluateOrderRules(factoryId, order);
-        order.setStatus(PurchaseOrderStatus.SUBMITTED);
-        log.info("提交采购订单: orderId={}, orderNumber={}", orderId, order.getOrderNumber());
+
+        ApprovalWorkflowInstance instance = workflowEngine.startWorkflow(
+                factoryId,
+                "PURCHASE_ORDER",
+                order.getId(),
+                buildPurchaseWorkflowContext(factoryId, order),
+                initiatorUserId);
+        validateRunnableApprovalRoute(factoryId, instance);
+        projectWorkflowState(order, instance, initiatorUserId);
+        log.info("提交采购订单并启动 OA: orderId={}, orderNumber={}, instanceId={}, workflowStatus={}",
+                orderId, order.getOrderNumber(), instance.getId(), instance.getStatus());
         return purchaseOrderRepository.save(order);
+    }
+
+    @Override
+    @Transactional
+    @Loggable(module = "PURCHASE_ORDER", action = "OA_ACTION", entityType = "PurchaseOrder",
+              entityIdParam = "orderId")
+    public PurchaseOrder applyWorkflowAction(String factoryId,
+                                             String orderId,
+                                             String instanceId,
+                                             Long actorId,
+                                             String actorRole,
+                                             HistoryAction action,
+                                             String notes) {
+        PurchaseOrder order = purchaseOrderRepository.findByIdAndFactoryIdForUpdate(orderId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在: " + orderId));
+        if (workflowEngine == null) {
+            throw new BusinessException(503, "OA 审批服务不可用");
+        }
+        ApprovalWorkflowInstance instance = workflowEngine.getInstance(factoryId, instanceId)
+                .orElseThrow(() -> new ResourceNotFoundException("OA 审批实例不存在: " + instanceId));
+        if (!"PURCHASE_ORDER".equals(instance.getModuleCode())
+                || !orderId.equals(instance.getBusinessEntityId())) {
+            throw new BusinessException(400, "审批实例与采购单不匹配")
+                    .withCode("PURCHASE_APPROVAL_IDENTITY_MISMATCH");
+        }
+        if (instance.getStatus() != InstanceStatus.RUNNING) {
+            // Terminal replays are pure reads. Do not refresh approval timestamps,
+            // append history, or bump the purchase-order version on a duplicate action.
+            return order;
+        }
+        if (actorId != null && actorId.equals(instance.getInitiatedBy())) {
+            throw new BusinessException(403, "发起人不能审批自己的采购单")
+                    .withCode("PURCHASE_SELF_APPROVAL_FORBIDDEN")
+                    .withHint("请由当前 OA 节点授权的其他审批人处理");
+        }
+        if (action == HistoryAction.REJECT && (notes == null || notes.isBlank())) {
+            throw new BusinessException(422, "驳回采购单必须填写原因").withHintTarget("notes");
+        }
+        ApprovalWorkflowInstance updated = workflowEngine.transitionNode(
+                instanceId, actorId, actorRole, action, notes);
+        projectWorkflowState(order, updated, actorId);
+        return purchaseOrderRepository.save(order);
+    }
+
+    private void validateOrderLinesBeforeApproval(String factoryId, PurchaseOrder order) {
+        List<PurchaseOrderItem> items = purchaseOrderItemRepository.findByPurchaseOrderId(order.getId());
+        if (items.isEmpty()) {
+            throw new BusinessException(422, "采购单至少需要一条物料明细")
+                    .withCode("PURCHASE_ITEMS_REQUIRED");
+        }
+        for (PurchaseOrderItem item : items) {
+            assertSupplierMaterialActive(factoryId, order.getSupplierId(), item.getMaterialTypeId());
+            if (item.getUnitPrice() == null || item.getUnitPrice().compareTo(BigDecimal.ZERO) <= 0) {
+                throw new BusinessException(422, "采购物料未配置有效采购价: " + item.getMaterialName())
+                        .withCode("PURCHASE_PRICE_REQUIRED")
+                        .withHint("请在供应商—物料关系或采购包装规格中维护大于0的未税采购价")
+                        .withHintTarget("unitPrice");
+            }
+            String quantityUnit = canonicalUnit(factoryId, item.getUnit(), "采购数量单位");
+            String priceUnit = canonicalUnit(factoryId, item.getPriceUnit(), "采购计价单位");
+            if (item.getQuantityToPriceFactor() == null
+                    || item.getQuantityToPriceFactor().compareTo(BigDecimal.ZERO) <= 0) {
+                throw new BusinessException(422, "采购数量单位与计价单位缺少有效换算: "
+                        + quantityUnit + " → " + priceUnit)
+                        .withCode("PURCHASE_PRICE_CONVERSION_REQUIRED");
+            }
+            if (item.getPurchasePackagingSpecId() != null) {
+                com.cretas.aims.entity.SupplierMaterialPurchaseSpec spec =
+                        supplierMaterialPurchaseSpecRepository == null
+                                ? null
+                                : supplierMaterialPurchaseSpecRepository
+                                .findById(item.getPurchasePackagingSpecId()).orElse(null);
+                if (spec == null || !Boolean.TRUE.equals(spec.getActive())
+                        || !factoryId.equals(spec.getFactoryId())
+                        || !Objects.equals(item.getSupplierMaterialId(), spec.getSupplierMaterialId())) {
+                    throw new BusinessException(409, "采购包装规格已停用或与供应关系不匹配")
+                            .withCode("PURCHASE_PACKAGING_SPEC_INACTIVE")
+                            .withHintTarget("purchasePackagingSpecId");
+                }
+            }
+        }
+    }
+
+    private Map<String, Object> buildPurchaseWorkflowContext(String factoryId, PurchaseOrder order) {
+        Map<String, Object> context = new HashMap<>();
+        context.put("amount", order.getTotalAmount() != null ? order.getTotalAmount() : BigDecimal.ZERO);
+        context.put("totalAmount", order.getTotalAmount() != null ? order.getTotalAmount() : BigDecimal.ZERO);
+        context.put("taxAmount", order.getTaxAmount() != null ? order.getTaxAmount() : BigDecimal.ZERO);
+        context.put("orderId", order.getId());
+        context.put("orderNumber", order.getOrderNumber());
+        context.put("supplierId", order.getSupplierId());
+        context.put("priceVarianceItemCount", countPriceAlertItems(factoryId, order));
+        context.put("approvalChain", "BUSINESS_AND_FINANCE");
+        return context;
+    }
+
+    private void validateRunnableApprovalRoute(String factoryId, ApprovalWorkflowInstance instance) {
+        if (instance.getStatus() != InstanceStatus.RUNNING) return;
+        if (instance.getCurrentNodeIds() == null || instance.getCurrentNodeIds().isEmpty()) {
+            throw new BusinessException(422, "采购 OA 流程没有可处理的当前节点")
+                    .withCode("PURCHASE_APPROVAL_NODE_REQUIRED");
+        }
+        if (approvalWorkflowService == null || userRepository == null) {
+            throw new BusinessException(503, "采购 OA 路由解析服务不可用");
+        }
+        ApprovalWorkflow workflow = approvalWorkflowService
+                .getById(factoryId, instance.getWorkflowId())
+                .orElseThrow(() -> new BusinessException(422, "采购 OA 流程定义不存在")
+                        .withCode("PURCHASE_APPROVAL_DEFINITION_MISSING"));
+        Map<String, ApprovalWorkflowNode> nodes = approvalWorkflowService
+                .deserializeNodes(workflow.getNodesJson()).stream()
+                .collect(Collectors.toMap(ApprovalWorkflowNode::getId, node -> node));
+        for (String nodeId : instance.getCurrentNodeIds()) {
+            ApprovalWorkflowNode node = nodes.get(nodeId);
+            if (node == null || !"approval".equalsIgnoreCase(node.getType())) {
+                throw new BusinessException(422, "采购 OA 当前节点不可审批: " + nodeId)
+                        .withCode("PURCHASE_APPROVAL_NODE_INVALID");
+            }
+            Object configuredRoles = node.getConfig() == null
+                    ? null : node.getConfig().get("approverRoles");
+            List<String> roles = new ArrayList<>();
+            if (configuredRoles instanceof Iterable<?> iterable) {
+                iterable.forEach(value -> {
+                    if (value != null && !String.valueOf(value).isBlank()) {
+                        roles.add(String.valueOf(value));
+                    }
+                });
+            }
+            if (roles.isEmpty()) {
+                throw new BusinessException(422, "采购 OA 节点未配置审批角色: "
+                        + (node.getLabel() == null ? nodeId : node.getLabel()))
+                        .withCode("PURCHASE_APPROVER_ROLE_REQUIRED");
+            }
+            boolean hasActiveAssignee = roles.stream()
+                    .flatMap(role -> userRepository.findByFactoryIdAndRoleCode(factoryId, role).stream())
+                    .anyMatch(user -> Boolean.TRUE.equals(user.getIsActive()));
+            if (!hasActiveAssignee) {
+                throw new BusinessException(422, "采购 OA 节点没有可用审批人: "
+                        + (node.getLabel() == null ? nodeId : node.getLabel()))
+                        .withCode("PURCHASE_APPROVER_ASSIGNEE_REQUIRED")
+                        .withHint("请为当前工厂配置匹配审批角色的有效账号；采购单仍保持草稿");
+            }
+        }
+    }
+
+    private void projectWorkflowState(PurchaseOrder order,
+                                      ApprovalWorkflowInstance instance,
+                                      Long actorId) {
+        PurchaseOrderStatus status = switch (instance.getStatus()) {
+            case RUNNING -> PurchaseOrderStatus.WORKFLOW_RUNNING;
+            // The configured PURCHASE_ORDER workflow is the complete OA chain.  Reaching
+            // APPROVED therefore includes any configured finance node or its audited skip.
+            case APPROVED -> PurchaseOrderStatus.FINANCE_APPROVED;
+            case REJECTED, CANCELLED, TIMEOUT -> PurchaseOrderStatus.FINANCE_REJECTED;
+        };
+        order.setStatus(status);
+        if (status == PurchaseOrderStatus.FINANCE_APPROVED) {
+            order.setApprovedBy(actorId);
+            order.setApprovedAt(LocalDateTime.now());
+            order.setFinanceReviewedBy(actorId);
+            order.setFinanceReviewedAt(LocalDateTime.now());
+        }
     }
 
     /**
@@ -607,11 +803,12 @@ public class PurchaseServiceImpl implements PurchaseService {
                     existing.get().getId(), approvedBy, "factory_super_admin",
                     HistoryAction.APPROVE, "采购订单审批");
         } else {
-            // Start new workflow — pre-check 已确认 hasActiveWorkflow=true, 此处不应抛.
-            // 若仍 IllegalArgumentException (race condition: workflow 刚被 disable), 让异常
-            // 自然往上抛 → controller 返 4xx → 用户重试 (此时 hasActiveWorkflow 返 false → legacy).
-            instance = workflowEngine.startWorkflow(
-                    factoryId, "PURCHASE_ORDER", order.getId(), context, approvedBy);
+            // The only legal creation boundary is submitOrder.  Starting an instance from
+            // an approve endpoint would recreate the exact "submitted but invisible OA"
+            // split-brain and bypass the initiator/audit contract.
+            throw new BusinessException(409, "采购单缺少可处理的 OA 审批实例")
+                    .withCode("PURCHASE_APPROVAL_INSTANCE_MISSING")
+                    .withHint("请返回 OA 审批中心刷新；禁止从采购详情重新发起审批");
         }
 
         // Translate workflow instance status to PO status
@@ -984,7 +1181,6 @@ public class PurchaseServiceImpl implements PurchaseService {
             item.setMaterialName(itemDTO.getMaterialName());
             item.setQuantity(itemDTO.getQuantity());
             applySupplierPurchaseContract(factoryId, order.getSupplierId(), item, itemDTO);
-            if (itemDTO.getUnitPrice() != null) item.setUnitPrice(itemDTO.getUnitPrice());
             applyPurchaseTaxContract(item, itemDTO.getTaxRate());
             item.setRemark(itemDTO.getRemark());
             items.add(item);
@@ -2470,17 +2666,30 @@ public class PurchaseServiceImpl implements PurchaseService {
                 ? List.of() : supplierMaterialPurchaseSpecRepository
                 .findByFactoryIdAndSupplierMaterialIdAndActiveTrue(factoryId, relation.getId());
         if (specs.isEmpty()) {
-            applyPurchasePriceContract(factoryId, item, request.getQuantityUnit(), request.getUnit(), request.getPriceUnit());
-            String baseUnit = canonicalUnit(factoryId, material.getUnit(), "库存基本单位");
-            if (!baseUnit.equals(item.getUnit())) {
-                throw new BusinessException(400, "未配置采购包装规格时只能按库存基本单位下单")
-                        .withCode("PURCHASE_SPEC_REQUIRED_FOR_PACKAGE_UNIT").withHintTarget("quantityUnit");
+            String purchaseUnit = canonicalUnit(factoryId, relation.getPurchaseUnit(), "供应关系采购单位");
+            String requestedUnit = firstNonBlank(request.getQuantityUnit(), request.getUnit());
+            if (requestedUnit != null
+                    && !purchaseUnit.equals(canonicalUnit(factoryId, requestedUnit, "采购数量单位"))) {
+                throw new BusinessException(400, "采购数量单位必须与供应关系的采购单位一致")
+                        .withCode("PURCHASE_SUPPLIER_UNIT_MISMATCH").withHintTarget("quantityUnit");
             }
-            item.setPurchasePackageUnitSnapshot(baseUnit);
+            if (request.getPriceUnit() != null
+                    && !purchaseUnit.equals(canonicalUnit(factoryId, request.getPriceUnit(), "采购计价单位"))) {
+                throw new BusinessException(400, "计价单位必须与供应关系的采购单位一致")
+                        .withCode("PURCHASE_PRICE_UNIT_RELATION_MISMATCH").withHintTarget("priceUnit");
+            }
+            item.setUnit(purchaseUnit);
+            item.setPriceUnit(purchaseUnit);
+            item.setQuantityToPriceFactor(BigDecimal.ONE);
+            String baseUnit = canonicalUnit(factoryId, material.getUnit(), "库存基本单位");
+            BigDecimal purchaseToBaseFactor = conversionFactor(
+                    factoryId, material.getId(), purchaseUnit, baseUnit);
+            item.setPurchasePackageUnitSnapshot(purchaseUnit);
             item.setInventoryBaseUnitSnapshot(baseUnit);
-            item.setPackageToBaseFactorSnapshot(BigDecimal.ONE);
-            item.setInventoryQuantitySnapshot(item.getQuantity());
-            if (item.getUnitPrice() == null) item.setUnitPrice(relation.getDefaultPurchasePrice());
+            item.setPackageToBaseFactorSnapshot(purchaseToBaseFactor);
+            item.setInventoryQuantitySnapshot(item.getQuantity().multiply(purchaseToBaseFactor));
+            item.setUnitPrice(resolvePurchaseUnitPrice(
+                    factoryId, material, relation, request, purchaseUnit, null));
             return;
         }
         if (request.getPurchasePackagingSpecId() == null || request.getPurchasePackagingSpecId().isBlank()) {
@@ -2511,7 +2720,80 @@ public class PurchaseServiceImpl implements PurchaseService {
         item.setInventoryBaseUnitSnapshot(spec.getInventoryBaseUnit());
         item.setPackageToBaseFactorSnapshot(spec.getConversionFactor());
         item.setInventoryQuantitySnapshot(item.getQuantity().multiply(spec.getConversionFactor()));
-        if (item.getUnitPrice() == null) item.setUnitPrice(spec.getQuotedPrice());
+        item.setUnitPrice(resolvePurchaseUnitPrice(
+                factoryId, material, relation, request, spec.getPurchasePackageUnit(), spec));
+    }
+
+    /**
+     * Resolve one authoritative price together with its denominator unit.
+     * A configured supplier/spec price is never reinterpreted as a base-unit price,
+     * and an absent price remains absent instead of silently becoming zero.
+     */
+    private BigDecimal resolvePurchaseUnitPrice(
+            String factoryId,
+            RawMaterialType material,
+            com.cretas.aims.entity.SupplierMaterial relation,
+            CreatePurchaseOrderRequest.PurchaseOrderItemDTO request,
+            String targetPurchaseUnit,
+            com.cretas.aims.entity.SupplierMaterialPurchaseSpec spec) {
+        BigDecimal explicit = positivePriceOrNull(request.getUnitPrice());
+        if (request.getUnitPrice() != null && explicit == null) {
+            throw new BusinessException(400, "采购单价必须大于0")
+                    .withCode("PURCHASE_UNIT_PRICE_INVALID").withHintTarget("unitPrice");
+        }
+        if (explicit != null) {
+            String explicitUnit = canonicalUnit(factoryId,
+                    firstNonBlank(request.getPriceUnit(), targetPurchaseUnit), "采购计价单位");
+            if (!targetPurchaseUnit.equals(explicitUnit)) {
+                throw new BusinessException(400, "采购单价的计价单位与采购数量单位不一致")
+                        .withCode("PURCHASE_PRICE_UNIT_MISMATCH").withHintTarget("priceUnit");
+            }
+            return explicit;
+        }
+
+        if (spec != null && positivePriceOrNull(spec.getQuotedPrice()) != null) {
+            return spec.getQuotedPrice();
+        }
+
+        BigDecimal relationPrice = positivePriceOrNull(relation.getDefaultPurchasePrice());
+        if (relationPrice != null) {
+            String relationUnit = canonicalUnit(factoryId, relation.getPurchaseUnit(), "供应关系采购单位");
+            return convertAuthoritativePrice(factoryId, material.getId(), relationPrice,
+                    relationUnit, targetPurchaseUnit, spec);
+        }
+
+        BigDecimal referencePrice = positivePriceOrNull(material.getUnitPrice());
+        if (referencePrice != null) {
+            String referenceUnit = canonicalUnit(factoryId, material.getUnit(), "物料参考价单位");
+            return convertAuthoritativePrice(factoryId, material.getId(), referencePrice,
+                    referenceUnit, targetPurchaseUnit, spec);
+        }
+        return null;
+    }
+
+    private BigDecimal convertAuthoritativePrice(
+            String factoryId,
+            String materialTypeId,
+            BigDecimal sourcePrice,
+            String sourceUnit,
+            String targetUnit,
+            com.cretas.aims.entity.SupplierMaterialPurchaseSpec spec) {
+        if (sourceUnit.equals(targetUnit)) return sourcePrice;
+        if (spec != null) {
+            String specBaseUnit = canonicalUnit(factoryId, spec.getInventoryBaseUnit(), "采购规格库存单位");
+            String specPackageUnit = canonicalUnit(factoryId, spec.getPurchasePackageUnit(), "采购规格包装单位");
+            if (targetUnit.equals(specPackageUnit)) {
+                BigDecimal pricePerBase = sourceUnit.equals(specBaseUnit)
+                        ? sourcePrice
+                        : convertPricePerUnit(factoryId, materialTypeId, sourcePrice, sourceUnit, specBaseUnit);
+                return pricePerBase.multiply(spec.getConversionFactor());
+            }
+        }
+        return convertPricePerUnit(factoryId, materialTypeId, sourcePrice, sourceUnit, targetUnit);
+    }
+
+    private BigDecimal positivePriceOrNull(BigDecimal price) {
+        return price != null && price.compareTo(BigDecimal.ZERO) > 0 ? price : null;
     }
 
     private void snapshotBaseUnit(String factoryId, PurchaseOrderItem item, RawMaterialType material) {

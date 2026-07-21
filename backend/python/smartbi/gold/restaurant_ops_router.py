@@ -245,6 +245,47 @@ SAMPLE_QUERIES: Dict[str, List[str]] = {
 }
 
 
+_SALES_VALUE_TOKENS = (
+    "营收", "营业额", "营业收入", "销售额", "销售收入", "流水",
+    "销售", "订单", "单量", "客单价", "平均每单",
+)
+_COMPARISON_DIRECTION_TOKENS = (
+    "对比", "比较", "相比", "比", "较", "高于", "低于", "上升", "下降",
+    "增加", "减少", "高还是低", "多还是少", "旺不旺", "环比",
+    "哪个高", "哪个低", "更高", "更低", "高了", "低了",
+)
+
+
+def _has_explicit_sales_period_pair(query: str) -> bool:
+    """Whether the question names both sides of a sales comparison.
+
+    This intentionally detects period *pairs* instead of enumerating complete
+    sentences.  It therefore survives particles, formal wording and common
+    owner synonyms without turning a generic "增长趋势" question into a
+    point-in-time comparison.
+    """
+    pairs = (
+        (("昨天", "昨日"), ("前天", "前日", "前一天", "前一日")),
+        (("今天", "今日"), ("昨天", "昨日")),
+        (("本周", "这周", "本星期", "这星期"), ("上周", "上星期", "上个星期")),
+        (("本月", "这个月", "当月"), ("上个月", "上月")),
+        (("上个月", "上月"), ("上上个月", "上上月")),
+    )
+    return any(
+        any(token in query for token in primary)
+        and any(token in query for token in baseline)
+        for primary, baseline in pairs
+    )
+
+
+def _is_explicit_sales_period_comparison(query: str) -> bool:
+    return bool(
+        any(token in query for token in _SALES_VALUE_TOKENS)
+        and _has_explicit_sales_period_pair(query)
+        and any(token in query for token in _COMPARISON_DIRECTION_TOKENS)
+    )
+
+
 def match_restaurant_ops(query: str) -> Optional[str]:
     """Return the ops template code if query matches, else None.
 
@@ -257,13 +298,7 @@ def match_restaurant_ops(query: str) -> Optional[str]:
     # Time comparisons are a sales-summary question, not the generic
     # all-history trend report.  This must run before the broad "环比/趋势"
     # pattern so "上个月和上上个月营收相比" keeps both requested periods.
-    if (
-        any(token in q for token in ("营收", "营业额", "销售额", "销售", "订单", "单量", "客单价"))
-        and any(token in q for token in ("对比", "比较", "相比", "比前", "比上", "和前", "和上", "与前", "与上", "环比"))
-        and any(token in q for token in (
-            "今天", "昨天", "前天", "本周", "上周", "本月", "上月", "上个月", "上上月", "上上个月",
-        ))
-    ):
+    if _is_explicit_sales_period_comparison(q):
         return "RESTAURANT_OPS_SALES_SUMMARY"
     # Preserve an explicit overall-margin metric, but keep mixed
     # revenue-plus-margin questions on the richer sales summary resolver.
@@ -273,10 +308,53 @@ def match_restaurant_ops(query: str) -> Optional[str]:
         and not any(token in q for token in ("营收", "营业额", "销售额", "客单价", "订单", "单量"))
     ):
         return "RESTAURANT_OPS_GROSS_MARGIN"
+    # Owner action questions such as "提升毛利率，今天先不要做什么" are
+    # already specific enough to use the dish-margin diagnosis.  Do not send
+    # them to generic optimization clarification or a broad sales summary.
+    if (
+        any(token in q for token in ("毛利", "毛利率", "利润"))
+        and any(token in q for token in (
+            "提升", "提高", "改善", "优化", "怎么做", "如何做",
+            "先不要做", "不要做", "先别做", "避免做",
+        ))
+        and not any(token in q for token in ("门店", "分店", "店铺", "哪家店"))
+    ):
+        return "RESTAURANT_OPS_GROSS_MARGIN"
     for code, groups in _OPS_PATTERNS:
         if all(any(kw in q for kw in group) for group in groups):
             return code
     return None
+
+
+_GENERIC_RESTAURANT_OPS_CODES = frozenset({
+    "RESTAURANT_OPS_SALES_SUMMARY",
+    "RESTAURANT_OPS_TREND_ANALYSIS",
+})
+
+
+def reconcile_restaurant_ops_code(
+    query: str,
+    expected_code: Optional[str],
+) -> Optional[str]:
+    """Reconcile a trusted upstream hint with current-query semantics.
+
+    A more specific current-query match beats a stale generic hint, while a
+    specific trusted hint still beats a generic text match.  Explicit named
+    period comparisons are the strongest case because serving an all-history
+    trend there changes the user's requested dates.
+    """
+    matched = match_restaurant_ops(query)
+    if not expected_code:
+        return matched
+    if not matched or matched == expected_code:
+        return expected_code
+
+    def _specificity(code: str) -> int:
+        if code == "RESTAURANT_OPS_SALES_SUMMARY" and _is_explicit_sales_period_comparison(query):
+            return 3
+        return 1 if code in _GENERIC_RESTAURANT_OPS_CODES else 2
+
+    return matched if _specificity(matched) > _specificity(expected_code) else expected_code
 
 
 @dataclass
@@ -678,7 +756,7 @@ def _resolve_sales_comparison(
 
     if (
         any(token in text for token in ("昨天", "昨日"))
-        and any(token in text for token in ("前天", "前日"))
+        and any(token in text for token in ("前天", "前日", "前一天", "前一日"))
     ):
         target = anchor - timedelta(days=2)
         return (target, target), "前天", "previous_day"
@@ -735,7 +813,7 @@ def _uses_relative_sales_window(query: Optional[str]) -> bool:
         _relative_period_match(text)
         or any(token in text for token in (
             "今天", "今日", "本周", "这周", "本星期", "这星期", "本月", "这个月",
-            "昨天", "昨日", "前天", "前日", "上周", "上星期", "上个星期",
+            "昨天", "昨日", "前天", "前日", "前一天", "前一日", "上周", "上星期", "上个星期",
             "上个月", "上月", "上上个月", "上上月", "半年", "对比", "比较", "相比", "环比",
         ))
     )
@@ -866,7 +944,13 @@ async def resolve_wastage_top(
             {"title": "损耗金额", "value": f"¥{total['total_cost']:.2f}", "rawValue": total["total_cost"]},
             {"title": "损耗最多食材", "value": top_rows[0]["name"] if top_rows else "—", "rawValue": 0},
         ],
-        meta={"window_days": days, "top_n": top_n},
+        meta={
+            "window_days": days,
+            "top_n": top_n,
+            "total_qty": float(total["total_qty"] or 0.0),
+            "total_cost": float(total["total_cost"] or 0.0),
+            "total_count": int(total["total_count"] or 0),
+        },
     )
 
 
@@ -1128,6 +1212,9 @@ async def resolve_gross_margin(
             meta={"rbac_masked": True},
         )
     query_text = query or ""
+    prohibited_actions_requested = any(token in query_text for token in (
+        "先不要做", "不要做", "先别做", "不该做", "避免做", "暂时别",
+    ))
     trend_requested = any(token in query_text for token in (
         "趋势", "走势", "曲线", "按月", "月份", "参照线", "计划线", "预警线",
     ))
@@ -1216,12 +1303,16 @@ async def resolve_gross_margin(
             )
 
     if not pos_rows:
+        no_data_guard = (
+            "今天先不要做：不要在销售明细缺失时批量提价、下架菜品或取消套餐；先完成数据同步。"
+            if prohibited_actions_requested else ""
+        )
         return OpsAnswer(
             code="RESTAURANT_OPS_GROSS_MARGIN",
             title=f"菜品毛利分析 (近{analysis_days}天)",
             answer_text=(
                 f"近 {analysis_days} 天没有可用于计算的销售记录。\n"
-                "请确认销售数据已经同步，并补齐菜品配方和食材单价后再试。"
+                f"请确认销售数据已经同步，并补齐菜品配方和食材单价后再试。{no_data_guard}"
             ),
             charts=[], kpis=[],
             meta={"window_days": analysis_days, "no_pos_data": True},
@@ -1440,6 +1531,40 @@ async def resolve_gross_margin(
         "\n- 历史趋势按当前成本卡估算，用于观察售价和销售结构变化；若历史成本曾调整，需补充历史成本后再做精确复盘。"
         if trend_requested else ""
     )
+    joint_priority_text = ""
+    if (
+        any(token in query_text for token in ("菜品销量", "销量", "销售量"))
+        and any(token in query_text for token in ("毛利", "毛利率", "利润"))
+        and with_cost
+    ):
+        promote = max(
+            with_cost,
+            key=lambda item: (item["qty"] * max(float(item["margin_rate"]), 0.0), item["gross_profit"]),
+        )
+        repair_pool = [
+            item for item in with_cost
+            if avg_margin is not None and float(item["margin_rate"]) < avg_margin
+        ]
+        repair = max(repair_pool, key=lambda item: item["qty"], default=None)
+        joint_priority_text = (
+            "\n\n销量与毛利联合优先级与依据：\n"
+            f"1. 优先推广 {promote['name']}：销量 {promote['qty']:.0f}，"
+            f"毛利率 {promote['margin_rate'] * 100:.1f}%，依据是销量与毛利率的联合贡献最高。"
+        )
+        if repair is not None and repair["name"] != promote["name"]:
+            joint_priority_text += (
+                f"\n2. 优先整改 {repair['name']}：销量 {repair['qty']:.0f}，"
+                f"毛利率 {repair['margin_rate'] * 100:.1f}%，依据是销量不低但毛利率低于整体平均。"
+            )
+        joint_priority_text += "\n3. 其余菜品先小范围验证，不按单一销量或单一毛利率直接下架。"
+    prohibited_actions_text = ""
+    if prohibited_actions_requested:
+        prohibited_actions_text = (
+            "\n\n今天先不要做：\n"
+            "1. 不要只看单一毛利率就批量下架菜品，必须同时看销量和绝对毛利。\n"
+            "2. 不要在成本缺失或成本异常的菜品上直接调价。\n"
+            "3. 不要做全店无差别打折，先在高销量低毛利菜品上小范围验证。"
+        )
     answer = (
         f"菜品毛利分析（{window_label}）\n"
         f"- 全部销售营收 ¥{total_rev:,.2f}；其中可计算毛利的营收 ¥{total_rev_with_cost:,.2f}，营收覆盖率 {coverage_ratio * 100:.1f}%\n"
@@ -1447,7 +1572,7 @@ async def resolve_gross_margin(
         f"- 计算口径：毛利 = 可计算毛利的营收 - 对应菜品成本；期间与菜品范围完全一致。\n"
         f"- {len(with_cost)}/{len(enriched)} 个销售菜品有完整成本数据。{reference_note}{trend_note}{trend_basis_note}\n\n"
         f"毛利前 {len(top_slice)} 名菜品（按绝对毛利）:\n{top_text}{dragger_text}\n\n"
-        f"需要关注的低毛利菜品:\n{low_margin_text}\n\n"
+        f"需要关注的低毛利菜品:\n{low_margin_text}{joint_priority_text}{prohibited_actions_text}\n\n"
         f"建议动作:\n"
         f"  1. 对高营收低毛利菜品先复核售价、赠品和食材规格，优先做小幅提价或份量标准化。\n"
         f"  2. 对高毛利高销量菜品加大套餐露出和门店推荐，作为拉升整体毛利率的主推款。\n"
@@ -1860,6 +1985,9 @@ async def resolve_sales_summary(
     # like a result for the requested period.  ``today`` is injectable only for
     # deterministic tests; production callers use the server's current date.
     spec = _resolve_sales_query_spec(query, today=today)
+    asks_prohibited_actions = any(token in (query or "") for token in (
+        "先不要做", "不要做", "先别做", "不该做", "避免做", "暂时别",
+    ))
     date_range, window_label = spec.date_range, spec.window_label
     summary = await finance_summary(smartbi_pool, factory_id, date_range, top_n_stores=5)
     comparison_summary: Optional[Dict[str, Any]] = None
@@ -1906,12 +2034,35 @@ async def resolve_sales_summary(
         return f"¥{float(v):,.2f}"
 
     if bill_count <= 0:
+        comparison_note = ""
+        if comparison_meta:
+            comparison_window = (
+                f"{comparison_meta['baseline_label']}（{comparison_meta['baseline_start']} 至 "
+                f"{comparison_meta['baseline_end']}）"
+            )
+            comparison_bill_count = int((comparison_summary or {}).get("bill_count") or 0)
+            if comparison_bill_count > 0:
+                comparison_note = (
+                    f"{comparison_window}有可用记录，但{actual_window}没有数据，"
+                    "因此不能可靠判断两个日期谁高谁低。"
+                )
+            else:
+                comparison_note = (
+                    f"{comparison_window}也没有可用的营收和订单数据，"
+                    "因此不能可靠判断两个日期谁高谁低。"
+                )
+        no_data_guard = (
+            "今天先不要做：不要依据缺失数据调整价格、下架菜品或重排人员；"
+            "先确认营业流水同步完整。"
+            if asks_prohibited_actions else ""
+        )
         return OpsAnswer(
             code="RESTAURANT_OPS_SALES_SUMMARY",
             title="经营销售概览",
             answer_text=(
-                f"{actual_window}没有可用的营收和订单数据，没有用全部历史或其他日期替代。"
-                "请先确认营业流水已经同步，再按同一时间范围重试。"
+                f"{actual_window}没有可用的营收和订单数据。{comparison_note}"
+                "没有用全部历史或其他日期替代。"
+                f"请先确认营业流水已经同步，再按同一时间范围重试。{no_data_guard}"
             ),
             charts=[],
             kpis=[],
@@ -2039,6 +2190,12 @@ async def resolve_sales_summary(
             else:
                 comparison_line = f"与{baseline_range_text}相比，{order_text}。"
 
+    prohibited_actions_line = ""
+    if asks_prohibited_actions:
+        prohibited_actions_line = (
+            "今天先不要做：不要只凭总营收立即下架菜品；不要在没有毛利依据时做全店无差别打折；"
+            "不要把单一门店或单一时段的波动直接推广到全部门店。先完成菜品毛利、门店差异和时段拆分再行动。"
+        )
     answer = (
         f"{actual_window}经营能看：覆盖 {day_count} 天、{store_count} 家门店，共 {bill_count:,} 单。"
         f"总营收 {_money(total_revenue)}，平均每单 {avg_text}。"
@@ -2046,7 +2203,7 @@ async def resolve_sales_summary(
         f"{margin_line}"
         f"{top_line}{weak_line}"
         "建议：先把低于中位的门店拉出来，看是客流少、平均每单低，还是折扣过重；"
-        "再对照高门店的菜品结构和时段，把能复制的动作做小范围试点。"
+        f"再对照高门店的菜品结构和时段，把能复制的动作做小范围试点。{prohibited_actions_line}"
     )
 
     chart_stores = top_stores[:5]

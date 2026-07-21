@@ -25,21 +25,18 @@ import { RowActionMenu, TableFooter, ViewModeSwitcher, GridView, KanbanView, Tim
 // Sprint 6 W3-A — inline 3-chip link counter (文件 / 图片 / 合同).
 import LinkChipCell from '@/components/list/LinkChipCell.vue';
 import { useLinkChipCounts } from '@/composables/useLinkChipCounts';
-import { CreateModeSelector, BatchCreateDialog, QuickCreateDialog, BomExpansionDialog } from '@/components/dialog';
 import CreateReturnOrderDialog from '@/components/dialog/CreateReturnOrderDialog.vue';
 import { copyPurchaseOrder } from '@/api/orderCopy';
-import { buildBomPurchaseOrderPayload } from '@/utils/orderPayloadBuilders';
 import { resolveReferenceByName } from '@/utils/referenceResolver';
 // PR #878 (#860 follow-up) — 转发 / 分享链接 dialog.
 import ForwardShareDialog from '@/components/dialog/ForwardShareDialog.vue';
 import type { ViewMode } from '@/types/viewMode';
-import type { CreateMode } from '@/types/createMode';
 import type { RowMarkerColor } from '@/types/rowMarker';
 import { computeRowActions } from '@/composables/useRowActions';
 import { useListSummary } from '@/composables/useListSummary';
 import { formatSummaryForAI } from '@/utils/aiSummaryContext';
 import type { ListSummaryRequest } from '@/types/listSummary';
-import { canonicalUnitCode, displayUnit, formatPriceUnit, mergeCanonicalUnitOptions, pricingAmountPreview } from '@/utils/unitPricing';
+import { canonicalUnitCode, displayUnit, pricingAmountPreview } from '@/utils/unitPricing';
 import { enumLabel } from '@/utils/enumDisplay';
 import { canSubmitPurchaseOrder, purchaseOrderMoreActions } from './purchaseOrderActionIa';
 import {
@@ -63,107 +60,8 @@ const canViewPrice = computed(() => permissionStore.canViewPrice);
 // U-VIEW-1 (Sprint 4 Wave 2 Chat L) — view-mode switcher (5 modes).
 const viewMode = ref<ViewMode>('table');
 
-// U-NEW-1 — create-mode selector (4 modes).
-// Sprint 4 W2 Chat L shipped normal+batch. P1 #58 finishes quick + bom.
-const createModeSelectorVisible = ref(false);
-const batchCreateVisible = ref(false);
-const quickCreateVisible = ref(false);
-const bomCreateVisible = ref(false);
 const factoryToday = () =>
   new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
-function openCreateModeSelector(): void {
-  createModeSelectorVisible.value = true;
-}
-async function handleCreateModeSelected(mode: CreateMode): Promise<void> {
-  if (mode === 'normal') {
-    await openCreateDialog();
-  } else if (mode === 'batch') {
-    await Promise.all([loadSuppliers(), loadMaterials(), loadSalesOrders()]);
-    batchCreateVisible.value = true;
-  } else if (mode === 'quick') {
-    // P1 #58: minimal fields (supplier + type) for fast consecutive entry.
-    await loadSuppliers();
-    quickCreateVisible.value = true;
-  } else if (mode === 'bom') {
-    // P1 #58: parent PO + child items expanded from material template.
-    await Promise.all([loadSuppliers(), loadMaterials()]);
-    bomCreateVisible.value = true;
-  }
-}
-
-// P1 #58 — Quick create (一维): supplier + type + expectedDate + remark.
-interface QuickPurchaseOrderRow {
-  supplierId: string;
-  purchaseType: string;
-  expectedDate: string;
-  remark: string;
-}
-function quickPurchaseOrderFactory(): QuickPurchaseOrderRow {
-  return { supplierId: '', purchaseType: 'NORMAL', expectedDate: '', remark: '' };
-}
-async function submitQuickPurchaseOrder(row: QuickPurchaseOrderRow): Promise<void> {
-  void row;
-  throw new Error('采购订单必须至少包含 1 项物料明细；请使用“普通新建”或“BOM 展开”。');
-}
-
-// P1 #58 — BOM 展开: parent PO + child items from material template.
-interface BomPurchaseOrderParent {
-  supplierId: string;
-  purchaseType: string;
-  expectedDate: string;
-  remark: string;
-}
-interface BomPurchaseOrderChild {
-  materialId: string;
-  materialName: string;
-  quantity: number | string;
-  unit: string;
-  unitPrice: number | string;
-  taxRate?: number | string | null;
-}
-function bomPurchaseOrderParentFactory(): BomPurchaseOrderParent {
-  return { supplierId: '', purchaseType: 'NORMAL', expectedDate: '', remark: '' };
-}
-const bomPurchaseTemplates = computed(() =>
-  (materials.value || []).map((m) => ({
-    id: String(m.id || ''),
-    name: String(m.name || m.code || ''),
-    description: m.category ? `分类 ${m.category}` : '',
-  }))
-);
-async function expandBomPurchaseTemplate(materialId: string): Promise<BomPurchaseOrderChild[]> {
-  const tpl = materials.value.find((m) => String(m.id) === materialId);
-  if (!tpl) return [];
-  return [
-    {
-      materialId: String(tpl.id || ''),
-      materialName: String(tpl.name || ''),
-      quantity: 1,
-      unit: String((tpl as Record<string, unknown>).unit || 'kg'),
-      unitPrice: Number((tpl as Record<string, unknown>).referencePrice ?? (tpl as Record<string, unknown>).price ?? 0) || 0,
-      taxRate: normalizeTaxRateForPayload(tpl.taxRate),
-    },
-  ];
-}
-async function submitBomPurchaseOrder(parent: BomPurchaseOrderParent, children: BomPurchaseOrderChild[]): Promise<void> {
-  if (!parent.supplierId) {
-    throw new Error('请选择供应商');
-  }
-  if (!children.length) {
-    throw new Error('请至少添加 1 项明细');
-  }
-  const invalidChildIndex = children.findIndex((c) => validateTaxRate(c.taxRate));
-  if (invalidChildIndex >= 0) {
-    throw new Error(`第 ${invalidChildIndex + 1} 行税率必须是 0-100 之间的数字`);
-  }
-  const orderDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
-  const payload = buildBomPurchaseOrderPayload(parent, children, orderDate);
-  const res = await post(`/${factoryId.value}/purchase/orders`, payload);
-  if (!res?.success) {
-    throw new Error(res?.message || '提交失败');
-  }
-  await loadData();
-}
 // U-MARKER-1 (Sprint 4 Wave 2 Chat L) — PATCH marker color to backend.
 async function handleMarkerSelect(row: TableRow, color: RowMarkerColor | null): Promise<void> {
   try {
@@ -180,14 +78,6 @@ async function handleMarkerSelect(row: TableRow, color: RowMarkerColor | null): 
     const msg = e instanceof Error ? e.message : '标记请求失败';
     ElMessage.error(msg);
   }
-}
-
-function batchPurchaseFactory(): { supplierId: string; purchaseType: string; expectedDate: string; remark: string } {
-  return { supplierId: '', purchaseType: 'NORMAL', expectedDate: '', remark: '' };
-}
-async function submitBatchPurchaseOrders(orders: Array<{ supplierId: string; purchaseType: string; expectedDate: string; remark: string }>): Promise<void> {
-  void orders;
-  throw new Error('批量采购必须逐单填写物料明细；当前二维模式已停用，请使用“普通新建”或“BOM 展开”。');
 }
 
 function rowActionsFor(row: TableRow) {
@@ -339,8 +229,9 @@ interface ProcurementOrderItem {
   quantity: number;
   unit: string;
   quantityUnit: string;
-  unitPrice: number;
+  unitPrice: number | null;
   priceUnit: string;
+  priceSource?: string | null;
   lineAmount?: number | null;
   convertedPricingQuantity?: number | null;
   taxRate?: number | string | null;
@@ -397,10 +288,6 @@ function itemTaxPreview(item: ProcurementOrderItem): { untaxed: number; tax: num
   return { untaxed, tax, taxed: Number((untaxed + tax).toFixed(2)) };
 }
 
-function getPriceUnitOptionsForItem(item: TableRow): { value: string; label: string }[] {
-  const units = mergeCanonicalUnitOptions([String(item.unit || '')], item.priceUnit);
-  return units.map((unit) => ({ value: unit, label: formatPriceUnit(unit) }));
-}
 const suppliers = ref<TableRow[]>([]);
 const materials = ref<TableRow[]>([]);
 const salesOrders = ref<TableRow[]>([]);
@@ -425,7 +312,7 @@ async function onSupplierChange(): Promise<void> {
 function newPurchaseItem(): ProcurementOrderItem {
   return {
     supplierMaterialId: '', purchasePackagingSpecId: null, materialTypeId: '', quantity: 0,
-    unit: '', quantityUnit: '', unitPrice: 0, priceUnit: '', taxRate: null,
+    unit: '', quantityUnit: '', unitPrice: null, priceUnit: '', priceSource: null, taxRate: null,
   };
 }
 
@@ -442,16 +329,60 @@ function specsForItem(item: ProcurementOrderItem): SupplierPurchaseSpec[] {
   return item.supplierMaterialId ? (purchaseSpecCache.value[item.supplierMaterialId] ?? []) : [];
 }
 
+function hasConfiguredPrice(value: unknown): boolean {
+  return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
+}
+
+function applyRelationPrice(
+  item: ProcurementOrderItem,
+  relation: SupplierMaterialRelation,
+  expectedPriceUnit: string,
+): void {
+  const expectedUnit = canonicalUnitCode(expectedPriceUnit);
+  const effectiveUnit = canonicalUnitCode(relation.effectivePriceUnit);
+  const relationUnit = canonicalUnitCode(relation.purchaseUnit || relation.baseUnit);
+  if (hasConfiguredPrice(relation.effectivePurchasePrice) && effectiveUnit === expectedUnit) {
+    item.unitPrice = Number(relation.effectivePurchasePrice);
+    item.priceUnit = effectiveUnit;
+    item.priceSource = relation.priceSource || 'MATERIAL_REFERENCE';
+    return;
+  }
+  if (hasConfiguredPrice(relation.defaultPurchasePrice) && relationUnit === expectedUnit) {
+    item.unitPrice = Number(relation.defaultPurchasePrice);
+    item.priceUnit = relationUnit;
+    item.priceSource = 'SUPPLIER_RELATION';
+    return;
+  }
+  item.unitPrice = null;
+  item.priceUnit = expectedUnit;
+  item.priceSource = 'MISSING';
+}
+
+function priceSourceLabel(source: string | null | undefined): string {
+  const labels: Record<string, string> = {
+    SUPPLIER_SPEC: '供应商采购规格报价',
+    SUPPLIER_RELATION: '供应商—物料默认采购价',
+    MATERIAL_REFERENCE: '原料档案采购参考价',
+    MANUAL: '本单手动价格',
+    ORDER_SNAPSHOT: '订单历史价格快照',
+    MISSING: '未配置采购价',
+  };
+  return labels[String(source || '')] || '价格来源待确认';
+}
+
+function onUnitPriceEdited(item: ProcurementOrderItem): void {
+  item.priceSource = hasConfiguredPrice(item.unitPrice) ? 'MANUAL' : 'MISSING';
+}
+
 async function onSupplierMaterialChange(item: ProcurementOrderItem): Promise<void> {
   const relation = supplierMaterialRelations.value.find((row) => row.id === item.supplierMaterialId);
   if (!relation) return;
   item.materialTypeId = relation.materialTypeId;
   item.purchasePackagingSpecId = null;
-  const baseUnit = canonicalUnitCode(relation.baseUnit || relation.purchaseUnit);
-  item.unit = baseUnit;
-  item.quantityUnit = baseUnit;
-  item.priceUnit = baseUnit;
-  item.unitPrice = Number(relation.defaultPurchasePrice || 0);
+  const purchaseUnit = canonicalUnitCode(relation.purchaseUnit || relation.baseUnit);
+  item.unit = purchaseUnit;
+  item.quantityUnit = purchaseUnit;
+  applyRelationPrice(item, relation, purchaseUnit);
   const material = materials.value.find((row) => String(row.id) === relation.materialTypeId);
   item.taxRate = materialTaxRate(material?.taxRate);
   const specs = await loadPurchaseSpecs(relation.id);
@@ -465,11 +396,17 @@ async function onSupplierMaterialChange(item: ProcurementOrderItem): Promise<voi
 function onPurchaseSpecChange(item: ProcurementOrderItem): void {
   const spec = specsForItem(item).find((row) => row.id === item.purchasePackagingSpecId);
   const relation = supplierMaterialRelations.value.find((row) => row.id === item.supplierMaterialId);
-  const unit = canonicalUnitCode(spec?.purchasePackageUnit || relation?.baseUnit || relation?.purchaseUnit);
+  if (!relation) return;
+  const unit = canonicalUnitCode(spec?.purchasePackageUnit || relation.purchaseUnit || relation.baseUnit);
   item.unit = unit;
   item.quantityUnit = unit;
   item.priceUnit = unit;
-  if (spec?.quotedPrice != null) item.unitPrice = Number(spec.quotedPrice);
+  if (hasConfiguredPrice(spec?.quotedPrice)) {
+    item.unitPrice = Number(spec?.quotedPrice);
+    item.priceSource = 'SUPPLIER_SPEC';
+  } else {
+    applyRelationPrice(item, relation, unit);
+  }
 }
 
 function inventoryQuantityPreview(item: ProcurementOrderItem): string {
@@ -623,8 +560,12 @@ async function handleCreate() {
     return ElMessage.warning(`第 ${invalidQtyIndex + 1} 行采购数量必须大于 0`);
   }
   if (form.value.items.some(i => !i.unit)) return ElMessage.warning('请填写所有明细的单位');
-  if (form.value.items.some(i => Number(i.unitPrice) > 0 && !canonicalUnitCode(i.priceUnit))) {
-    return ElMessage.warning('有采购单价的明细必须选择计价单位');
+  const missingPriceIndex = form.value.items.findIndex((i) => !hasConfiguredPrice(i.unitPrice));
+  if (missingPriceIndex >= 0) {
+    return ElMessage.warning(`第 ${missingPriceIndex + 1} 行尚未配置采购价，请维护供应商关系/采购规格报价或明确填写本单价格`);
+  }
+  if (form.value.items.some(i => !canonicalUnitCode(i.priceUnit))) {
+    return ElMessage.warning('采购价必须绑定明确的计价单位');
   }
   const invalidTaxRateIndex = form.value.items.findIndex((i) => validateTaxRate(i.taxRate));
   if (invalidTaxRateIndex >= 0) {
@@ -775,8 +716,9 @@ async function openEditDialog(orderId: string) {
         quantity: Number(item.quantity || 0),
         unit: quantityUnit,
         quantityUnit,
-        unitPrice: Number(item.unitPrice || 0),
+        unitPrice: item.unitPrice == null ? null : Number(item.unitPrice),
         priceUnit: canonicalUnitCode(item.priceUnit || item.unit),
+        priceSource: String(item.priceSource || 'ORDER_SNAPSHOT'),
         lineAmount: item.lineAmount == null ? null : Number(item.lineAmount),
         convertedPricingQuantity: item.convertedPricingQuantity == null ? null : Number(item.convertedPricingQuantity),
         taxRate: item.taxRate == null ? null : Number(item.taxRate),
@@ -905,8 +847,9 @@ function handleAiFill(params: TableRow) {
         quantity: Number(item.quantity || 0),
         unit: canonicalUnitCode(item.quantityUnit || item.unit || 'kg'),
         quantityUnit: canonicalUnitCode(item.quantityUnit || item.unit || 'kg'),
-        unitPrice: Number(item.unitPrice || 0),
+        unitPrice: item.unitPrice == null ? null : Number(item.unitPrice),
         priceUnit: canonicalUnitCode(item.priceUnit || item.unit || 'kg'),
+        priceSource: item.unitPrice == null ? 'MISSING' : 'MANUAL',
         taxRate: validateTaxRate(item.taxRate) ? null : normalizeTaxRateForPayload(item.taxRate),
       };
       });
@@ -950,7 +893,7 @@ function handleAiFill(params: TableRow) {
             <el-button v-if="canWrite" type="success" :icon="ChatDotRound" @click="aiEntryVisible = true">
               AI录入
             </el-button>
-            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreateModeSelector">
+            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreateDialog">
               新建{{ label('purchaseOrder') }}
             </el-button>
           </div>
@@ -1271,16 +1214,19 @@ function handleAiFill(params: TableRow) {
           <div class="inventory-preview" style="width: 140px">{{ inventoryQuantityPreview(item) }}</div>
           <div class="pricing-editor">
             <div class="pricing-inputs">
-              <el-input-number v-model="item.unitPrice" :min="0" :precision="2" placeholder="未税采购单价" style="width: 120px" />
-              <el-select v-model="item.priceUnit" style="width: 84px" placeholder="计价单位">
-                <el-option
-                  v-for="option in getPriceUnitOptionsForItem(item)"
-                  :key="option.value"
-                  :label="option.label"
-                  :value="option.value"
-                />
-              </el-select>
+              <el-input-number
+                v-model="item.unitPrice"
+                :min="0"
+                :precision="2"
+                placeholder="未配置采购价"
+                style="width: 140px"
+                @change="onUnitPriceEdited(item)"
+              />
+              <span class="price-unit-readonly">元/{{ displayUnit(item.priceUnit) || '-' }}</span>
             </div>
+            <span :class="['price-source', { 'price-source--missing': item.priceSource === 'MISSING' }]">
+              {{ priceSourceLabel(item.priceSource) }}
+            </span>
             <span v-if="itemAmountPreview(item).amount != null" class="pricing-preview">金额 {{ itemAmountPreview(item).amount?.toFixed(2) }} 元</span>
             <span v-else class="pricing-preview pricing-preview--pending">{{ itemAmountPreview(item).message }}</span>
           </div>
@@ -1325,145 +1271,6 @@ function handleAiFill(params: TableRow) {
       :config="PURCHASE_ORDER_CONFIG"
       @fill-form="handleAiFill"
     />
-
-    <!-- U-NEW-1 — create-mode selector + 4 mode dialogs.
-         普通 + 二维 = Sprint 4 W2 Chat L. 一维 + BOM = P1 #58. -->
-    <CreateModeSelector
-      v-model="createModeSelectorVisible"
-      :entity-label="label('purchaseOrder')"
-      :disabled-modes="['quick', 'batch']"
-      @mode-selected="handleCreateModeSelected"
-    />
-    <BatchCreateDialog
-      v-model="batchCreateVisible"
-      :title="`批量新建 ${label('purchaseOrder')}`"
-      :columns="[
-        { prop: 'supplierId', label: '供应商', required: true, slotName: 'supplier' },
-        { prop: 'purchaseType', label: '类型', width: 130, slotName: 'type' },
-        { prop: 'expectedDate', label: '期望交货日', width: 160, slotName: 'date' },
-        { prop: 'remark', label: '备注' },
-      ]"
-      :row-factory="batchPurchaseFactory"
-      :submit="submitBatchPurchaseOrders"
-    >
-      <template #supplier="{ row }">
-        <el-select v-model="row.supplierId" filterable size="small" placeholder="选择供应商" style="width: 100%">
-          <el-option v-for="s in suppliers" :key="s.id" :label="s.name" :value="s.id" />
-        </el-select>
-      </template>
-      <template #type="{ row }">
-        <el-select v-model="row.purchaseType" size="small" style="width: 100%">
-          <el-option label="统一" value="NORMAL" />
-          <el-option label="直接" value="DIRECT" />
-          <el-option label="紧急" value="URGENT" />
-        </el-select>
-      </template>
-      <template #date="{ row }">
-        <el-date-picker v-model="row.expectedDate" type="date" size="small" value-format="YYYY-MM-DD" style="width: 100%" />
-      </template>
-    </BatchCreateDialog>
-
-    <!-- P1 #58 — Quick (一维): supplier + type + expectedDate + remark -->
-    <QuickCreateDialog
-      v-model="quickCreateVisible"
-      :title="`快速新建 ${label('purchaseOrder')}`"
-      :context-hint="`供应商范围: ${suppliers.length} 个可选 — 回车连续录入`"
-      :fields="[
-        { prop: 'supplierId', label: '供应商', required: true, slotName: 'supplier' },
-        { prop: 'purchaseType', label: '采购类型', slotName: 'type' },
-        { prop: 'expectedDate', label: '期望交货日', slotName: 'date' },
-        { prop: 'remark', label: '备注', placeholder: '可选, 简短备注' },
-      ]"
-      :row-factory="quickPurchaseOrderFactory"
-      :submit="submitQuickPurchaseOrder"
-      :session-max="20"
-    >
-      <template #supplier="{ row }">
-        <el-select v-model="row.supplierId" filterable placeholder="选择供应商" style="width: 100%">
-          <el-option v-for="s in suppliers" :key="s.id" :label="s.name" :value="s.id" />
-        </el-select>
-      </template>
-      <template #type="{ row }">
-        <el-select v-model="row.purchaseType" style="width: 100%">
-          <el-option label="统一采购" value="NORMAL" />
-          <el-option label="直接采购" value="DIRECT" />
-          <el-option label="紧急采购" value="URGENT" />
-        </el-select>
-      </template>
-      <template #date="{ row }">
-        <el-date-picker v-model="row.expectedDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
-      </template>
-    </QuickCreateDialog>
-
-    <!-- P1 #58 — BOM 展开: parent PO + child material items -->
-    <BomExpansionDialog
-      v-model="bomCreateVisible"
-      :title="`BOM 展开新建 ${label('purchaseOrder')}`"
-      :entity-label="label('purchaseOrder')"
-      :templates="bomPurchaseTemplates"
-      :parent-factory="bomPurchaseOrderParentFactory"
-      :expand-template="expandBomPurchaseTemplate"
-      :submit="submitBomPurchaseOrder"
-      :child-columns="[
-        { prop: 'materialName', label: '物料名称', width: 200 },
-        { prop: 'quantity', label: '数量', width: 120, slotName: 'quantity' },
-        { prop: 'unit', label: '单位', width: 100 },
-        { prop: 'unitPrice', label: '未税采购单价（元/所选单位）', width: 210, slotName: 'price' },
-        { prop: 'taxRate', label: '税率', width: 140, slotName: 'taxRate' },
-      ]"
-      :max-children="50"
-    >
-      <template #parent-fields="{ parent }">
-        <el-form label-position="top">
-          <el-form-item label="供应商" required>
-            <el-select v-model="parent.supplierId" filterable placeholder="选择供应商" style="width: 100%">
-              <el-option v-for="s in suppliers" :key="s.id" :label="s.name" :value="s.id" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="采购类型">
-            <el-select v-model="parent.purchaseType" style="width: 100%">
-              <el-option label="统一采购" value="NORMAL" />
-              <el-option label="直接采购" value="DIRECT" />
-              <el-option label="紧急采购" value="URGENT" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="期望交货日">
-            <el-date-picker v-model="parent.expectedDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
-          </el-form-item>
-          <el-form-item label="备注">
-            <el-input v-model="parent.remark" type="textarea" :rows="2" placeholder="可选" />
-          </el-form-item>
-        </el-form>
-      </template>
-      <template #quantity="{ row }">
-        <el-input-number v-model="row.quantity" :min="0" :step="0.5" size="small" style="width: 100%" />
-      </template>
-      <template #price="{ row }">
-        <el-input-number v-model="row.unitPrice" :min="0" :step="0.01" :precision="2" size="small" style="width: 100%" />
-      </template>
-      <template #taxRate="{ row }">
-        <el-select
-          v-model="row.taxRate"
-          placeholder="未配置"
-          clearable
-          filterable
-          allow-create
-          default-first-option
-          size="small"
-          style="width: 100%"
-        >
-          <el-option
-            v-for="opt in commonTaxRateOptions"
-            :key="opt.value"
-            :label="opt.label"
-            :value="opt.value"
-          />
-        </el-select>
-        <div v-if="validateTaxRate(row.taxRate)" class="field-error">
-          {{ validateTaxRate(row.taxRate) }}
-        </div>
-      </template>
-    </BomExpansionDialog>
 
     <!-- PR #872 (#860 follow-up) — 转发分享链接 dialog (replaces (开发中) chip). -->
     <ForwardShareDialog
@@ -1510,6 +1317,9 @@ function handleAiFill(params: TableRow) {
 .item-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
 .pricing-editor { width: 230px; display: flex; flex-direction: column; gap: 3px; }
 .pricing-inputs { display: flex; gap: 6px; }
+.price-unit-readonly { min-width: 72px; align-self: center; color: #606266; font-size: 12px; white-space: nowrap; }
+.price-source { color: #909399; font-size: 11px; line-height: 16px; }
+.price-source--missing { color: #e6a23c; }
 .pricing-preview { color: #606266; font-size: 12px; line-height: 18px; }
 .pricing-preview--pending { color: #909399; }
 .inventory-preview { color: #303133; font-size: 13px; text-align: center; }

@@ -8,6 +8,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * "我待审" widget 单行 DTO — issue #20.
@@ -56,4 +57,13 @@ public class WorkflowInstancePendingDTO {
 
     @Schema(description = "发起人 username (PO 创建者). 系统触发时为 null.")
     private String initiatedByUsername;
+
+    @Schema(description = "实例状态", example = "RUNNING")
+    private String status;
+
+    @Schema(description = "终态时间")
+    private LocalDateTime completedAt;
+
+    @Schema(description = "当前节点授权角色")
+    private List<String> approverRoles;
 }

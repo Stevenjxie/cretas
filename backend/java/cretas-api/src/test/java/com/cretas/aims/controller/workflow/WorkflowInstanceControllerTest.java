@@ -304,4 +304,39 @@ class WorkflowInstanceControllerTest {
         assertEquals(1, pageCap.getValue().getPageNumber(), "page 2 → spring 1-based");
         assertEquals(5, pageCap.getValue().getPageSize());
     }
+
+    @Test
+    @DisplayName("personal OA acted and copied endpoints use current user identity and role")
+    void personal_oa_acted_and_copied_use_current_user() {
+        mockAuth(108L, "f006_finance", "finance_manager");
+        Pageable pageable = PageRequest.of(0, 20);
+        ApprovalWorkflowInstance instance = buildInstance(
+                "inst-personal", "wf-personal", "PURCHASE_ORDER", "po-personal",
+                List.of("approval_finance"), 200L);
+        Page<ApprovalWorkflowInstance> result =
+                new PageImpl<>(List.of(instance), pageable, 1L);
+
+        when(workflowEngine.findActedBy(
+                eq(FACTORY_ID), eq(108L), any(Pageable.class))).thenReturn(result);
+        when(workflowEngine.findCopiedTo(
+                eq(FACTORY_ID), eq(108L), eq("finance_manager"), any(Pageable.class)))
+                .thenReturn(result);
+        buildWorkflow("wf-personal", "财务审批", "finance_manager");
+        when(purchaseOrderRepository.findAllById(any())).thenReturn(List.of());
+        when(userRepository.findAllById(any())).thenReturn(List.of());
+
+        ApiResponse<PageResponse<WorkflowInstancePendingDTO>> acted =
+                controller.getActed(FACTORY_ID, AUTH_HEADER, 1, 20);
+        ApiResponse<PageResponse<WorkflowInstancePendingDTO>> copied =
+                controller.getCopied(FACTORY_ID, AUTH_HEADER, 1, 20);
+
+        assertTrue(acted.getSuccess());
+        assertEquals(1, acted.getData().getTotalElements());
+        assertTrue(copied.getSuccess());
+        assertEquals(1, copied.getData().getTotalElements());
+        verify(workflowEngine).findActedBy(
+                eq(FACTORY_ID), eq(108L), any(Pageable.class));
+        verify(workflowEngine).findCopiedTo(
+                eq(FACTORY_ID), eq(108L), eq("finance_manager"), any(Pageable.class));
+    }
 }

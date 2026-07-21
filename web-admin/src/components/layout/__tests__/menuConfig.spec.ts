@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { menuConfig, type MenuItem } from '../menuConfig';
+import { financeManagerMenu, menuConfig, type MenuItem } from '../menuConfig';
 
 function findGroup(path: string): MenuItem | undefined {
   return menuConfig.find((m) => m.path === path);
@@ -504,5 +504,30 @@ describe('menuConfig - platform-only governance entries', () => {
     const item = systemPaths().find((child) => child.path === path);
     expect(item, `missing ${path}`).toBeDefined();
     expect(item!.roles).toEqual(['platform_admin']);
+  });
+});
+
+describe('menuConfig — personal OA workbench', () => {
+  it('exposes one personal OA group with the four user-facing queues', () => {
+    const oa = findGroup('/workflow');
+    expect(oa?.title).toBe('个人 OA');
+    expect(oa?.module).toBe('dashboard');
+    expect(oa?.children?.map((item) => item.path)).toEqual([
+      '/workflow/pending',
+      '/workflow/my-created',
+      '/workflow/acted',
+      '/workflow/copied',
+    ]);
+    expect(oa?.children?.every((item) => item.module === 'dashboard')).toBe(true);
+  });
+
+  it('keeps the same personal OA entry in the finance-specific menu', () => {
+    const oa = financeManagerMenu.find((item) => item.path === '/workflow');
+    expect(oa?.children?.map((item) => item.title)).toEqual([
+      '待我审批',
+      '我发起的',
+      '已处理',
+      '抄送我的',
+    ]);
   });
 });
