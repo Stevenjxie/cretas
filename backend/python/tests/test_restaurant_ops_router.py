@@ -377,7 +377,16 @@ def test_sales_summary_keeps_time_margin_and_profitability(
             answer_text="ok",
             charts=[],
             kpis=[],
-            meta={"totalProfit": 1700.0, "avgRate": 0.42},
+            meta={
+                "totalProfit": 1700.0,
+                "totalRevenueWithCost": 4000.0,
+                "totalRevenue": 10000.0,
+                "avgRate": 0.425,
+                "requested_window_start": date_range[0].isoformat(),
+                "requested_window_end": date_range[1].isoformat(),
+                "marginInvariantPass": True,
+                "scope_matches_request": True,
+            },
         )
 
     import smartbi.gold.queries as _q
@@ -401,12 +410,80 @@ def test_sales_summary_keeps_time_margin_and_profitability(
     assert captured["margin_days"] == expected_margin_days
     assert captured["margin_date_range"] == expected_range
     assert expected_label in ans.answer_text
-    assert "毛利约" in ans.answer_text
+    assert "对应毛利" in ans.answer_text
+    assert "可计算毛利的营收" in ans.answer_text
+    assert "不以全部营收为分母" in ans.answer_text
     assert "1,700" in ans.answer_text
     if expects_verdict:
-        assert "是赚钱的" in ans.answer_text
-    assert any(kpi["title"] == "毛利" for kpi in ans.kpis)
-    assert any(kpi["title"] == "毛利率" for kpi in ans.kpis)
+        assert "已覆盖的销售是赚钱的" in ans.answer_text
+    assert any(kpi["title"] == "已覆盖毛利" for kpi in ans.kpis)
+    assert any(kpi["title"] == "已覆盖毛利率" for kpi in ans.kpis)
+
+
+def test_sales_summary_all_history_locks_margin_to_actual_revenue_scope(monkeypatch):
+    captured = {}
+
+    async def _fake_finance_summary(pool, factory_id, date_range, top_n_stores=5):
+        assert date_range == (None, None)
+        return {
+            "total_revenue": 100000.0,
+            "bill_count": 500,
+            "avg_bill_value": 200.0,
+            "day_count": 60,
+            "store_count": 2,
+            "actual_start_date": "2026-01-01",
+            "actual_end_date": "2026-03-01",
+            "top_stores": [],
+        }
+
+    async def _fake_store_comparison(pool, factory_id, date_range):
+        return {"stores": [], "weakStores": []}
+
+    async def _fake_store_margin(
+        pool, factory_id, days=30, top_n=5, *, role=None, date_range=None,
+    ):
+        captured["date_range"] = date_range
+        captured["days"] = days
+        return OpsAnswer(
+            code="RESTAURANT_OPS_STORE_MARGIN",
+            title="门店毛利",
+            answer_text="ok",
+            charts=[],
+            kpis=[],
+            meta={
+                "totalProfit": 24000.0,
+                "totalRevenueWithCost": 30000.0,
+                "totalRevenue": 100000.0,
+                "avgRate": 0.8,
+                "requested_window_start": "2026-01-01",
+                "requested_window_end": "2026-03-01",
+                "marginInvariantPass": True,
+                "scope_matches_request": True,
+            },
+        )
+
+    import smartbi.gold.queries as _q
+    import smartbi.gold.restaurant_ops_router as _router
+
+    monkeypatch.setattr(_q, "finance_summary", _fake_finance_summary)
+    monkeypatch.setattr(_q, "store_comparison", _fake_store_comparison)
+    monkeypatch.setattr(_router, "resolve_store_margin", _fake_store_margin)
+
+    answer = asyncio.run(resolve_sales_summary(
+        object(),
+        "RES_TEST",
+        role="restaurant_manager",
+        query="整体营收和毛利率是多少？",
+        today=date(2026, 7, 21),
+    ))
+
+    assert captured["date_range"] == (date(2026, 1, 1), date(2026, 3, 1))
+    assert captured["days"] == 60
+    assert "总营收 ¥100,000.00" in answer.answer_text
+    assert "可计算毛利的营收 ¥30,000.00" in answer.answer_text
+    assert "已覆盖部分毛利率 80.0%" in answer.answer_text
+    assert answer.meta["margin"]["outer_window_start"] == "2026-01-01"
+    assert answer.meta["margin"]["outer_window_end"] == "2026-03-01"
 
 
 def test_sales_summary_uses_current_calendar_for_comparison_not_latest_data_date(monkeypatch):

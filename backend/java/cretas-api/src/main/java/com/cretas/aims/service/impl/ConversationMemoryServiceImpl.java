@@ -84,7 +84,10 @@ public class ConversationMemoryServiceImpl implements ConversationMemoryService 
      * resolvePatternReference 只在对应 slotType 存在时替换，天然隔离。
      */
     private static final Pattern DISH_REFERENCE_PATTERN = Pattern.compile(
-            "(那道菜|这道菜|该菜品|这个菜|那个菜|这款菜|那款菜|它)"
+            "(那道菜|这道菜|该菜品|这个菜|那个菜|这款菜|那款菜|(?:那)?它)"
+    );
+    private static final Pattern AMBIGUOUS_ENTITY_REFERENCE_PATTERN = Pattern.compile(
+            "((?:那)?它)"
     );
 
     /**
@@ -253,6 +256,9 @@ public class ConversationMemoryServiceImpl implements ConversationMemoryService 
         // 注意顺序：DISH 先于 STORE/SUPPLIER，防止"它"被错误匹配到非菜品实体
         result = resolvePatternReference(result, BATCH_REFERENCE_PATTERN, slots, EntitySlot.SlotType.BATCH.name());
         result = resolvePatternReference(result, DISH_REFERENCE_PATTERN,  slots, EntitySlot.SlotType.DISH.name());
+        // 若没有可用 DISH 槽，上一步保持原文；此时允许最近的 STORE 槽接管“它/那它”。
+        // 若 DISH 已成功替换，原文中已无该代词，本行自然无操作。
+        result = resolvePatternReference(result, AMBIGUOUS_ENTITY_REFERENCE_PATTERN, slots, EntitySlot.SlotType.STORE.name());
         result = resolvePatternReference(result, STORE_REFERENCE_PATTERN, slots, EntitySlot.SlotType.STORE.name());
         result = resolvePatternReference(result, SUPPLIER_REFERENCE_PATTERN, slots, EntitySlot.SlotType.SUPPLIER.name());
         result = resolvePatternReference(result, CUSTOMER_REFERENCE_PATTERN, slots, EntitySlot.SlotType.CUSTOMER.name());

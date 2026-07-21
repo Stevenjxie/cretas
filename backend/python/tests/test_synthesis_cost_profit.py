@@ -205,7 +205,7 @@ def test_factbook_renders_profit_and_indexes_profit_facts():
     assert idx["食材成本"] == 330.0
 
 
-def test_factbook_renders_dish_margin_and_indexes_top_dish_facts():
+def test_factbook_does_not_ground_unreliable_dish_margin():
     fb = FactBook(dish_margin={
         "top_margin": [{
             "dish_name": "招牌青花椒鱼",
@@ -221,8 +221,8 @@ def test_factbook_renders_dish_margin_and_indexes_top_dish_facts():
     text = fb.to_prompt_text()
     idx = fb.to_facts_index()
 
-    assert "单品毛利" in text
-    assert "招牌青花椒鱼" in text
-    assert "黑鱼片" in text
-    assert idx["单品最高毛利"] == 59.5
-    assert idx["单品最高毛利率"] == 67.61
+    assert "单品毛利" not in text
+    assert "招牌青花椒鱼" not in text
+    assert "黑鱼片" not in text
+    assert "单品最高毛利" not in idx
+    assert "单品最高毛利率" not in idx

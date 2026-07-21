@@ -1100,6 +1100,8 @@ async def finance_summary(
               COALESCE(SUM(a.bill_count), 0)                 AS bill_count,
               COUNT(DISTINCT a.store_id)                     AS store_count,
               COUNT(DISTINCT a.date)                         AS day_count,
+              MIN(a.date)                                    AS actual_start_date,
+              MAX(a.date)                                    AS actual_end_date,
               SUM(c.material_cost)::numeric(18,2)            AS material_cost,
               SUM(c.labor_cost)::numeric(18,2)               AS labor_cost,
               SUM(c.overhead_cost)::numeric(18,2)            AS overhead_cost
@@ -1142,6 +1144,14 @@ async def finance_summary(
         "avg_bill_value": float(avg_bill_value) if avg_bill_value is not None else None,
         "store_count": int(totals["store_count"]),
         "day_count": int(totals["day_count"]),
+        "actual_start_date": (
+            totals.get("actual_start_date").isoformat()
+            if totals.get("actual_start_date") is not None else None
+        ),
+        "actual_end_date": (
+            totals.get("actual_end_date").isoformat()
+            if totals.get("actual_end_date") is not None else None
+        ),
         "top_stores": [
             {
                 "store_id": int(r["store_id"]),

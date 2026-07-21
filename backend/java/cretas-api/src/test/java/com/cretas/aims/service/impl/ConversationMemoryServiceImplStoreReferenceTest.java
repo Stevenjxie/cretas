@@ -33,6 +33,23 @@ class ConversationMemoryServiceImplStoreReferenceTest {
     }
 
     @Test
+    @DisplayName("STORE slot without DISH slot: 那它 resolves to the latest store")
+    void storeSlotWithoutDish_resolvesAmbiguousPronounToStore() {
+        ConversationMemoryRepository repo = mock(ConversationMemoryRepository.class);
+        ConversationMemory memory = memoryWithSlots(Map.of(
+                "STORE", slot("STORE", "101", "人民广场店", "门店 人民广场店")
+        ));
+        when(repo.findBySessionId("sid-store-pronoun")).thenReturn(Optional.of(memory));
+        ConversationMemoryServiceImpl service = new ConversationMemoryServiceImpl(repo, null);
+
+        String resolved = service.resolveReference(
+                "sid-store-pronoun",
+                "那它的毛利率也是第一吗？");
+
+        assertThat(resolved).isEqualTo("门店 人民广场店的毛利率也是第一吗？");
+    }
+
+    @Test
     @DisplayName("no STORE slot: 那家 still resolves as supplier, preserving factory CRM behavior")
     void noStoreSlot_supplierReferenceStillWorks() {
         ConversationMemoryRepository repo = mock(ConversationMemoryRepository.class);

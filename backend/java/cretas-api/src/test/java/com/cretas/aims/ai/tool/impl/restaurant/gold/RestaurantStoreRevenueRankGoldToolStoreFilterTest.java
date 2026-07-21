@@ -53,6 +53,24 @@ class RestaurantStoreRevenueRankGoldToolStoreFilterTest {
     }
 
     @Test
+    @DisplayName("natural best-store question is concise without requiring prompt wording")
+    void naturalBestStoreQuestionIsConcise() {
+        Map<String, Object> input = goldResult();
+        input.put("userInput", "哪家店业绩最好？");
+
+        Map<String, Object> result = tool.format(input);
+
+        assertThat(result.get("message").toString())
+                .contains("第一名是人民广场店")
+                .contains("核心依据")
+                .doesNotContain("2. 陆家嘴店")
+                .doesNotContain("建议：");
+        assertThat(result).containsEntry("suppressActionAdvice", true);
+        assertThat(result).doesNotContainKey("chartConfig");
+        assertThat(tool.shouldDelegateToTieredIntent("哪家店业绩最好？")).isFalse();
+    }
+
+    @Test
     @DisplayName("store_id filter returns only the selected store row")
     void storeIdFilterReturnsSingleStore() {
         Map<String, Object> input = goldResult();

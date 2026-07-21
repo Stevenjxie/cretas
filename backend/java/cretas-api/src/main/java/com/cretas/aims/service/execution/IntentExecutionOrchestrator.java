@@ -304,13 +304,25 @@ public class IntentExecutionOrchestrator {
         boolean negationVetoWrite = false;
         String userInput = request.getUserInput();
         if (!factoryPackConstrained
+                && isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))
+                && isAmbiguousRestaurantTurnoverMetricQuestion(userInput)) {
+            return buildRestaurantTurnoverMetricClarificationResponse(request);
+        }
+        if (!factoryPackConstrained
+                && isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))
+                && isUnsupportedRestaurantStoreNetProfitQuestion(userInput)) {
+            return buildRestaurantStoreNetProfitGapResponse(request);
+        }
+        if (!factoryPackConstrained
                 && shouldRouteRestaurantOwnerAction(factoryId, userInput, request.getContext())) {
             log.info("[restaurant-owner-action] force-route before restaurant report shortcuts: factoryId={}, input={}",
                     factoryId, userInput);
             return executeRestaurantOwnerActionChat(factoryId, request, userId, userRole);
         }
         if (!factoryPackConstrained
-                && userInput != null && !userInput.isEmpty() && !hasExplicitReadVeto(userInput)) {
+                && userInput != null && !userInput.isEmpty()
+                && !hasExplicitReadVeto(userInput)
+                && !shouldBypassEarlyPhraseShortcutForStoreReference(userInput)) {
             IntentMatchResult restaurantOpsMatch = tryRestaurantOpsPhraseShortcut(userInput, factoryId);
             if (restaurantOpsMatch != null && restaurantOpsMatch.hasMatch()) {
                 AIIntentConfig phraseIntent = restaurantOpsMatch.getBestMatch();
@@ -392,7 +404,8 @@ public class IntentExecutionOrchestrator {
         // Phrase confidence is 0.96 (matching v33.1 EarlyPhrase tier so /recognize and /execute
         // produce consistent routing).
         if (!factoryPackConstrained
-                && !negationVetoWrite && userInput != null && !userInput.isEmpty()) {
+                && !negationVetoWrite && userInput != null && !userInput.isEmpty()
+                && !shouldBypassEarlyPhraseShortcutForStoreReference(userInput)) {
             IntentMatchResult restaurantOpsMatch = tryRestaurantOpsPhraseShortcut(userInput, factoryId);
             if (restaurantOpsMatch != null && restaurantOpsMatch.hasMatch()) {
                 AIIntentConfig phraseIntent = restaurantOpsMatch.getBestMatch();
@@ -1769,7 +1782,63 @@ public class IntentExecutionOrchestrator {
     }
 
     boolean shouldBypassEarlyPhraseShortcutForStoreReference(String userInput) {
-        return userInput != null && STORE_REFERENCE_PATTERN.matcher(userInput).find();
+        return userInput != null && (
+                STORE_REFERENCE_PATTERN.matcher(userInput).find()
+                        || DISH_REFERENCE_PATTERN.matcher(userInput).find()
+        );
+    }
+
+    boolean isAmbiguousRestaurantTurnoverMetricQuestion(String userInput) {
+        if (userInput == null || userInput.isBlank() || !userInput.contains("翻台")) {
+            return false;
+        }
+        boolean namesBothMetrics = userInput.contains("翻台率") && userInput.contains("翻台次数");
+        boolean asksForClarification = containsAny(
+                userInput, "先判断", "先澄清", "无法确定", "还是", "哪个指标", "不要直接");
+        return namesBothMetrics && asksForClarification;
+    }
+
+    IntentExecuteResponse buildRestaurantTurnoverMetricClarificationResponse(IntentExecuteRequest request) {
+        final String msg = "你说的‘翻台’可能指两个不同指标：翻台率，或翻台次数。"
+                + "请先选一个；当前不会拿营业额替代。"
+                + "如果看翻台率，需要桌数或座位数、营业时长和已结账桌次；"
+                + "如果看翻台次数，需要每桌的开台和结账记录。";
+        return IntentExecuteResponse.builder()
+                .intentRecognized(false)
+                .status("NEED_CLARIFICATION")
+                .message(msg)
+                .formattedText(msg)
+                .sessionId(request != null ? request.getSessionId() : null)
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
+
+    boolean isUnsupportedRestaurantStoreNetProfitQuestion(String userInput) {
+        if (userInput == null || userInput.isBlank()) {
+            return false;
+        }
+        boolean asksNetProfit = containsAny(
+                userInput, "净利润", "净利率", "净利润率", "经营利润", "实际利润", "净赚");
+        boolean asksStoreBreakdown = containsAny(
+                userInput, "各门店", "每家店", "各店", "分店净利润", "门店净利润");
+        boolean forbidsSubstitution = containsAny(
+                userInput, "不要用营业额", "不要用营收", "不要用毛利", "不拿毛利", "不要替代");
+        return asksNetProfit && (asksStoreBreakdown || forbidsSubstitution);
+    }
+
+    IntentExecuteResponse buildRestaurantStoreNetProfitGapResponse(IntentExecuteRequest request) {
+        final String msg = "当前还没有按门店归集的费用、税费及其他收支，"
+                + "因此不能可靠计算各门店净利润，也不会用营业额或毛利替代。"
+                + "补齐门店级费用、税费和其他收支后可以按同一日期范围计算；"
+                + "目前可以单独查看门店营业额，或已覆盖销售的毛利。";
+        return IntentExecuteResponse.builder()
+                .intentRecognized(false)
+                .status("NEED_CLARIFICATION")
+                .message(msg)
+                .formattedText(msg)
+                .sessionId(request != null ? request.getSessionId() : null)
+                .executedAt(LocalDateTime.now())
+                .build();
     }
 
     IntentExecuteResponse buildStoreReferenceClarificationResponse(IntentExecuteRequest request) {
@@ -2211,11 +2280,25 @@ public class IntentExecutionOrchestrator {
     }
 
     private boolean isRestaurantAnalyticalReadQuestion(String input) {
-        return isExplicitRestaurantSalesPeriodComparison(input)
+        return isExplicitRestaurantMetricReadQuestion(input)
+                || isExplicitRestaurantSalesPeriodComparison(input)
                 || isEvidenceBasedRestaurantDiagnosis(input)
                 || isCostMarginClarificationQuestion(input)
                 || isRestaurantContextualMarginFollowup(input)
                 || isMarginProhibitedActionAnalysis(input);
+    }
+
+    private boolean isExplicitRestaurantMetricReadQuestion(String input) {
+        boolean hasPeriod = containsAny(input,
+                "今天", "今日", "昨天", "昨日", "前天", "本周", "上周",
+                "本月", "这个月", "上月", "上个月", "上上月", "近7天", "近30天");
+        boolean hasMetric = containsAny(input,
+                "营收", "营业额", "营业收入", "销售额", "销售收入", "流水",
+                "毛利", "毛利率", "净利润", "净利率", "净利润率",
+                "订单", "单量", "客单价", "经营情况");
+        boolean asksForResult = containsAny(input,
+                "给出", "告诉", "多少", "情况", "怎么样", "如何", "查询", "看一下", "分析");
+        return hasPeriod && hasMetric && asksForResult;
     }
 
     private boolean isExplicitRestaurantSalesPeriodComparison(String input) {
