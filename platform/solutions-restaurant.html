@@ -205,6 +205,48 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   color:var(--v6-tag);background:rgba(0,226,138,.08);border:1px solid rgba(0,226,138,.2);padding:5px 12px;border-radius:99px}
 
 
+
+/* 黑箱数据模块: 系统孤岛 → 归一 */
+.silo{max-width:1120px;margin:0 auto;padding:clamp(44px,6.5vw,96px) clamp(16px,4vw,48px)}
+.silo .wrap{display:grid;grid-template-columns:1fr auto 1fr;gap:clamp(16px,2.6vw,40px);align-items:center;margin-top:26px}
+.silo .frags{display:flex;flex-wrap:wrap;gap:10px;max-width:340px}
+.silo .frag{border:1.5px dashed rgba(0,0,0,.22);border-radius:8px;padding:10px 14px;font-size:12.5px;
+  color:var(--v6-ink-2);background:#fff}
+.silo .frag:nth-child(1){transform:rotate(-3deg)}
+.silo .frag:nth-child(2){transform:rotate(2deg) translateY(6px)}
+.silo .frag:nth-child(3){transform:rotate(-1.5deg)}
+.silo .frag:nth-child(4){transform:rotate(2.5deg) translateY(-4px)}
+.silo .frag:nth-child(5){transform:rotate(-2deg) translateY(4px)}
+.silo .frag small{display:block;font-family:var(--v6-mono);font-size:9.5px;color:#b0a894;margin-top:2px}
+.silo .arr{color:var(--v6-cta-ink)}
+.silo .one{background:linear-gradient(160deg,#0d1210,#0a1a13);border-radius:14px;padding:clamp(16px,2vw,24px);
+  color:#fff;box-shadow:0 22px 48px -22px rgba(10,40,28,.4);max-width:380px}
+.silo .one .bl{font-family:var(--v6-mono);font-size:10.5px;color:var(--v6-tag);letter-spacing:1.4px;margin-bottom:10px}
+.silo .one .qa{font-size:13px;line-height:1.75;color:rgba(255,255,255,.88)}
+.silo .one .qa b{color:var(--v6-tag)}
+.silo .one .tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.silo .one .tags span{font-family:var(--v6-mono);font-size:10px;color:rgba(255,255,255,.75);
+  background:rgba(255,255,255,.08);padding:3px 9px;border-radius:99px}
+.silo .quotes{margin-top:26px;display:grid;grid-template-columns:1fr 1fr;gap:clamp(14px,2.4vw,30px)}
+.silo .qt{font-size:clamp(13.5px,1.4vw,15.5px);color:var(--v6-ink-2);line-height:1.85;border-top:1px solid rgba(0,0,0,.09);padding-top:12px}
+.silo .qt b{color:var(--v6-ink)}
+
+/* 内控老师案例（引用+对照） */
+.auditor{max-width:920px;margin:0 auto;padding:clamp(44px,6.5vw,92px) clamp(16px,4vw,48px)}
+.auditor .kicker{font-family:var(--v6-mono);font-size:12px;color:var(--v6-cta-ink);letter-spacing:2px;margin-bottom:10px}
+.auditor .lead-story{font-size:clamp(14px,1.55vw,17px);color:var(--v6-ink-2);line-height:1.9;max-width:60ch;margin:18px 0 0}
+.auditor .lead-story b{color:var(--v6-ink)}
+.auditor .daily{margin-top:22px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:clamp(12px,2vw,24px)}
+.auditor .dy{background:rgba(0,179,119,.06);border-radius:12px;padding:16px 18px}
+.auditor .dy .t{font-weight:900;font-size:clamp(14px,1.5vw,16.5px);margin-bottom:6px}
+.auditor .dy p{margin:0;font-size:clamp(12.5px,1.3vw,14px);color:var(--v6-ink-2);line-height:1.7}
+@media (max-width:900px){
+  .silo .wrap{grid-template-columns:1fr}
+  .silo .arr{transform:rotate(90deg);justify-self:center}
+  .silo .quotes{grid-template-columns:1fr}
+  .auditor .daily{grid-template-columns:1fr}
+}
+
 /* 案例段: 一次复盘（时间线体） */
 .replay{max-width:920px;margin:0 auto;padding:clamp(48px,7vw,104px) clamp(16px,4vw,48px)}
 .replay .kicker{font-family:var(--v6-mono);font-size:12px;color:var(--v6-cta-ink);letter-spacing:2px;margin-bottom:10px}
@@ -399,6 +441,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
       <p class="cap">同一份数据，一屏看清 — 归因结论直接落在驾驶舱上，点开就能顺着往下钻。</p>
     </div>
   </div>
+  <p class="pain v6-reveal" style="margin-top:22px">不止营收 — <b>从营业额到净利的每一层</b>：房租、工资、食材占比、损耗，都能这样层层点开。"食材占比偏高"点进去，就知道是损耗的问题还是采购价的问题。</p>
 </section>
 
 <!-- 模块 3 · 供应商的账，暗箱翻不了 -->
@@ -521,6 +564,31 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   </div>
 </section>
 
+<!-- 黑箱数据: 系统孤岛 -->
+<section class="silo">
+  <h2 class="v6-reveal">你的数据，锁在四五套系统的黑箱里</h2>
+  <p class="pain v6-reveal">财务一套、收银一套、进销存一套、预订一套、内控一套 — <b>"我们刚开店，就有四五个系统，全是录入导入。"</b>每套系统都说自己有数据，就是拼不出你要的那张账。</p>
+  <div class="wrap">
+    <div class="frags v6-reveal">
+      <span class="frag">财务系统<small>月底才见账</small></span>
+      <span class="frag">收银 POS<small>流水在里面</small></span>
+      <span class="frag">进销存<small>查不了单品</small></span>
+      <span class="frag">预订/会员<small>各管各的</small></span>
+      <span class="frag">内控软件<small>又一套账</small></span>
+    </div>
+    <svg class="arr v6-reveal" width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
+    <div class="one v6-reveal">
+      <div class="bl">CRETAS · 归一之后</div>
+      <div class="qa">"胡萝卜这个月一共买了多少钱，比上月贵了多少？"<br><b>→ 直接出数，按品类追到每一单。</b></div>
+      <div class="tags"><span>全量接入归一</span><span>品类主数据</span><span>秤/拍照半自动采集</span><span>大白话查询</span></div>
+    </div>
+  </div>
+  <div class="quotes">
+    <p class="qt v6-reveal">"想查胡萝卜的采购价 — 数据<b>跟着订单走，不跟品类走</b>，一个品类直接查不到。"一个蔬菜四五十个品种，全靠鼠标一行一行点。</p>
+    <p class="qt v6-reveal">"秤、传感器、摄像头都装了，数据却进不了系统 — 物联网卡没流量，<b>最后还是拿着单子手工录</b>。"设备不是问题，链路断了才是。</p>
+  </div>
+</section>
+
 <!-- 案例: 一次复盘 -->
 <section class="replay">
   <div class="kicker v6-reveal">真实案例 · 一次涨价的复盘</div>
@@ -532,6 +600,29 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
     <div class="tstep good v6-reveal"><div class="when">接入后</div><div class="what">进价一偏离历史区间，<b>入库那一刻老板手机就响</b> — 仓管报不报，账都翻不了暗箱。</div></div>
   </div>
   <blockquote class="v6-reveal">这里面存在很多潜规则 — 老板没有信息渠道。<cite>— 某连锁餐饮投资人，聊起他为什么最看重这个功能</cite></blockquote>
+</section>
+
+<section class="replay">
+  <div class="kicker v6-reveal">真实案例 · 被账期困住的一个月</div>
+  <h2>做这套报表，搞跑了好几个人</h2>
+  <div class="tl">
+    <div class="tstep v6-reveal"><div class="when">5 号前</div><div class="what">所有供应商轮流来对账 — <b>3、4 个人对着 2、3 套系统</b>核单子。</div></div>
+    <div class="tstep v6-reveal"><div class="when">10/20/30 号</div><div class="what">每旬一次全店盘点，成本卡<b>全靠人一张张手写</b> — "搞了一两个，不想干了。"</div></div>
+    <div class="tstep v6-reveal"><div class="when">下月 10 号</div><div class="what">报表终于出来 — 营收、毛利、占比都齐了，可<b>那已经是上个月的事了</b>，想调整只剩十来天。</div></div>
+    <div class="tstep good v6-reveal"><div class="when">接入后</div><div class="what">数据当天完结、报表 <b>1 号自动出</b>，损耗次日可见 — 同一批人，从抄数改成看数、做决定。</div></div>
+  </div>
+</section>
+
+<!-- 内控老师 -->
+<section class="auditor">
+  <div class="kicker v6-reveal">真实案例 · 十万一个月的内控老师</div>
+  <h2>老板花十万请人盯的事，系统应该天天自动做</h2>
+  <p class="lead-story v6-reveal">一位连锁老板每月花<b>十万块请内控老师对赌降成本</b> — 保底净利、超额分润。内控老师进场先要三样东西：三次盘存记录、每道菜的成本卡、各项占比红线。<b>值钱的不是他这个人，是他盯的那套纪律。</b>Cretas 把这套纪律做进了系统：</p>
+  <div class="daily">
+    <div class="dy v6-reveal"><div class="t">盘存自动留痕</div><p>每旬盘点手机上做，三次记录自动归档 — 内控要的底账，天天都是现成的。</p></div>
+    <div class="dy v6-reveal"><div class="t">成本卡不用手写</div><p>配方录一次，进价变了成本卡自动重算 — 不再"搞跑"任何一个做卡的人。</p></div>
+    <div class="dy v6-reveal"><div class="t">占比红线天天盯</div><p>食材占比、人工占比、损耗率 — 越线当天报警，不等月底复盘。</p></div>
+  </div>
 </section>
 
 <!-- 差异化对比条 -->

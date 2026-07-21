@@ -148,6 +148,47 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .opsfeed li .warn{color:#ffb84d}
 @keyframes opsScroll{to{transform:translateY(-50%)}}
 
+
+/* 护城河三条 */
+.moat{max-width:1200px;margin:0 auto;padding:clamp(52px,8vw,110px) clamp(16px,4vw,48px) clamp(30px,4vw,56px)}
+.moat h2{font-size:clamp(24px,3.4vw,40px);font-weight:900;letter-spacing:-0.015em;margin:0 0 10px;text-wrap:balance}
+.moat .sub{font-size:clamp(14px,1.5vw,17px);color:var(--v6-ink-2);margin:0 0 clamp(26px,3.4vw,44px);max-width:56ch;line-height:1.7}
+.moat .trio{display:grid;grid-template-columns:1fr 1fr 1fr;border-top:1px solid rgba(0,0,0,.09)}
+.moat .mo{padding:clamp(22px,2.8vw,36px) clamp(6px,1.6vw,28px) 8px}
+.moat .mo + .mo{border-left:1px solid rgba(0,0,0,.09)}
+.moat .mo svg{display:block;margin-bottom:14px}
+.moat .mo h3{font-size:clamp(17px,1.9vw,22px);font-weight:900;margin:0 0 8px}
+.moat .mo p{font-size:clamp(13px,1.35vw,15px);color:var(--v6-ink-2);line-height:1.8;margin:0}
+.moat .mo p b{color:var(--v6-ink)}
+
+/* 案例精选 */
+.picks{max-width:1000px;margin:0 auto;padding:clamp(30px,4.5vw,64px) clamp(16px,4vw,48px) clamp(52px,7vw,100px)}
+.picks h2{font-size:clamp(24px,3.4vw,40px);font-weight:900;letter-spacing:-0.015em;margin:0 0 24px;text-wrap:balance}
+.pick{display:grid;grid-template-columns:1fr auto;gap:clamp(14px,3vw,40px);align-items:center;
+  padding:clamp(18px,2.4vw,26px) 4px;border-top:1px solid rgba(0,0,0,.09);text-decoration:none;transition:background .3s ease}
+.pick:last-of-type{border-bottom:1px solid rgba(0,0,0,.09)}
+.pick:hover{background:rgba(0,179,119,.045)}
+.pick q{quotes:none;font-size:clamp(15px,1.7vw,19px);font-weight:800;color:var(--v6-ink);line-height:1.65;display:block}
+.pick q small{display:block;font-size:12.5px;font-weight:400;color:#8a857e;margin-top:6px}
+.pick .go{color:var(--v6-cta-ink);font-weight:800;font-size:14px;white-space:nowrap}
+
+/* 上线三步 */
+.onboard{background:linear-gradient(180deg,rgba(0,179,119,.05),transparent);
+  padding:clamp(52px,7.5vw,104px) clamp(16px,4vw,48px)}
+.onboard .inner{max-width:1100px;margin:0 auto}
+.onboard h2{font-size:clamp(24px,3.4vw,40px);font-weight:900;letter-spacing:-0.015em;margin:0 0 8px;text-wrap:balance}
+.onboard .sub{font-size:clamp(14px,1.5vw,17px);color:var(--v6-ink-2);margin:0 0 30px;max-width:52ch;line-height:1.7}
+.onboard .steps{display:grid;grid-template-columns:1fr 1fr 1fr;gap:clamp(16px,2.4vw,30px)}
+.onboard .os{position:relative;padding-top:16px;border-top:2px solid rgba(0,179,119,.35)}
+.onboard .os .n{font-family:var(--v6-mono);font-size:12px;color:var(--v6-cta-ink);letter-spacing:1px;margin-bottom:8px}
+.onboard .os h4{margin:0 0 8px;font-size:clamp(16px,1.8vw,20px);font-weight:900}
+.onboard .os p{margin:0;font-size:clamp(13px,1.35vw,15px);color:var(--v6-ink-2);line-height:1.8}
+@media (max-width:900px){
+  .moat .trio,.onboard .steps{grid-template-columns:1fr}
+  .moat .mo + .mo{border-left:none;border-top:1px solid rgba(0,0,0,.09)}
+  .pick{grid-template-columns:1fr}
+}
+
 /* 定制开发 --------------------------------------------------------------- */
 .custom{max-width:1000px;margin:0 auto;padding:clamp(52px,8vw,116px) clamp(16px,4vw,48px);text-align:center}
 .custom h2{font-size:clamp(27px,4.1vw,48px);font-weight:900;line-height:1.38;letter-spacing:-0.02em;
@@ -378,16 +419,67 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   </div>
 </section>
 
+<!-- 护城河三条 -->
+<section class="moat">
+  <h2 class="v6-reveal">AI 谁都在讲，这三件事别人做不到</h2>
+  <p class="sub v6-reveal">工具可以抄，立场和根基抄不走。</p>
+  <div class="trio">
+    <div class="mo v6-reveal">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#00875c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      <h3>你的数据，在你手里</h3>
+      <p>支持<b>本地部署</b>，经营数据不喂平台、不喂别人的模型。我们靠软件收费，不靠你的数据赚钱 — 立场干净，账才敢全给系统。</p>
+    </div>
+    <div class="mo v6-reveal">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#00875c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      <h3>出了事，追得到人</h3>
+      <p>每一笔收货、报工、出库都有<b>经手人和时间戳</b>。溯源不是给监管看的表面功夫，是真能在 30 秒内回答"这批货谁碰过"。</p>
+    </div>
+    <div class="mo v6-reveal">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#00875c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 15V6l5-3 5 3v9M7 15v-4h2v4M13 15V8l2 1v6M2 19h20"/></svg>
+      <h3>扎在你的车间里</h3>
+      <p>我们的人<b>跟着仓管收过货、跟着调度排过线</b>。功能不是猜出来的，是被客户原话教出来的 — 这也是为什么一线零培训能上手。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 案例精选 -->
+<section class="picks">
+  <h2 class="v6-reveal">客户教我们做产品</h2>
+  <a class="pick v6-reveal" href="/solutions-factory.html">
+    <q>"你告诉他要收多少，就行了。"<small>一家卤味工厂的收货台，怎么变成防呆设计的起点</small></q>
+    <span class="go">看工厂的故事 →</span>
+  </a>
+  <a class="pick v6-reveal" href="/solutions-restaurant.html">
+    <q>"这里面存在很多潜规则 — 老板没有信息渠道。"<small>一次供应商涨价复盘：从月底才发现，到入库那刻就报警</small></q>
+    <span class="go">看餐饮的故事 →</span>
+  </a>
+  <a class="pick v6-reveal" href="/solutions-logistics.html">
+    <q>写错一个路名，多跑九十公里。<small>一个错地址的学费，换来 AI 排线前的"地址体检"</small></q>
+    <span class="go">看物流的故事 →</span>
+  </a>
+  <a class="pick v6-reveal" href="/solutions-ai.html">
+    <q>三周，从"只敢问"到第一次点下「确认执行」。<small>写操作预览 + 角色限权，怎么赢下老板的信任</small></q>
+    <span class="go">看 AI 的故事 →</span>
+  </a>
+</section>
+
+<!-- 上线三步 -->
+<section class="onboard">
+  <div class="inner">
+    <h2 class="v6-reveal">接入没有想象中重</h2>
+    <p class="sub v6-reveal">不用换掉现有系统，不用停业切换 — 从第一天起就在你的真实数据上干活。</p>
+    <div class="steps">
+      <div class="os v6-reveal"><div class="n">第 1 步 · 当天</div><h4>把痛点讲给我们听</h4><p>一小时，讲清楚你最疼的两三件事 — 收货老出错？账出不来？车调不动？我们当场给出解法思路。</p></div>
+      <div class="os v6-reveal"><div class="n">第 2 步 · 第一周</div><h4>接上你的数据</h4><p>Excel、收银导出、现有系统 — 有什么接什么，AI 自动归一。脏数据不用先洗，边用边变干净。</p></div>
+      <div class="os v6-reveal"><div class="n">第 3 步 · 两周内</div><h4>见到第一版在跑</h4><p>先上最疼的那个场景，见效了再铺开。多数客户第一周就有"原来能这样"的时刻。</p></div>
+    </div>
+  </div>
+</section>
+
 <!-- 能力词流带 -->
 <section class="mq" aria-hidden="true">
-  <div class="row r1">
-    <span class="hot">生产报工</span><span>批次溯源</span><span class="hot">智能排产</span><span>原料库存</span><span>BOM 配方</span><span>质检 HACCP</span><span>设备冷链</span><span class="hot">经营分析</span><span>采购比价</span><span>供应商对账</span>
-    <span class="hot">生产报工</span><span>批次溯源</span><span class="hot">智能排产</span><span>原料库存</span><span>BOM 配方</span><span>质检 HACCP</span><span>设备冷链</span><span class="hot">经营分析</span><span>采购比价</span><span>供应商对账</span>
-  </div>
-  <div class="row r2">
-    <span>销售订单</span><span>开票收款</span><span>出货发运</span><span class="hot">物流调度</span><span>排班考勤</span><span>计件薪酬</span><span>门店运营</span><span class="hot">菜品毛利</span><span>损耗预警</span><span>缺料预警</span>
-    <span>销售订单</span><span>开票收款</span><span>出货发运</span><span class="hot">物流调度</span><span>排班考勤</span><span>计件薪酬</span><span>门店运营</span><span class="hot">菜品毛利</span><span>损耗预警</span><span>缺料预警</span>
-  </div>
+  <div class="row r1"><div class="set"><span class="hot">生产报工</span><span>批次溯源</span><span class="hot">智能排产</span><span>原料库存</span><span>BOM 配方</span><span>质检 HACCP</span><span>设备冷链</span><span class="hot">经营分析</span><span>采购比价</span><span>供应商对账</span></div><div class="set"><span class="hot">生产报工</span><span>批次溯源</span><span class="hot">智能排产</span><span>原料库存</span><span>BOM 配方</span><span>质检 HACCP</span><span>设备冷链</span><span class="hot">经营分析</span><span>采购比价</span><span>供应商对账</span></div></div>
+  <div class="row r2"><div class="set"><span>销售订单</span><span>开票收款</span><span>出货发运</span><span class="hot">物流调度</span><span>排班考勤</span><span>计件薪酬</span><span>门店运营</span><span class="hot">菜品毛利</span><span>损耗预警</span><span>缺料预警</span></div><div class="set"><span>销售订单</span><span>开票收款</span><span>出货发运</span><span class="hot">物流调度</span><span>排班考勤</span><span>计件薪酬</span><span>门店运营</span><span class="hot">菜品毛利</span><span>损耗预警</span><span>缺料预警</span></div></div>
 </section>
 
 <!-- 定制开发 -->
