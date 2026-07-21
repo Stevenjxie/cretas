@@ -7,6 +7,7 @@ import com.cretas.aims.dto.inventory.UpdatePurchaseOrderRequest;
 import com.cretas.aims.dto.inventory.MaterialPriceComparisonDTO;
 import com.cretas.aims.dto.inventory.PurchaseSuggestionResponse;
 import com.cretas.aims.dto.inventory.PurchaseSuggestionMultiResponse;
+import com.cretas.aims.dto.inventory.PurchaseApprovalRecoveryResponse;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
@@ -542,6 +543,91 @@ public class PurchaseServiceImpl implements PurchaseService {
 
     @Override
     @Transactional
+    @Loggable(module = "PURCHASE_ORDER", action = "RECOVER_APPROVAL_INSTANCE",
+            entityType = "PurchaseOrder", entityIdParam = "orderId",
+            summary = "'受限恢复采购单 OA 实例：' + #reason")
+    public PurchaseApprovalRecoveryResponse recoverMissingApprovalInstance(
+            String factoryId,
+            String orderId,
+            Long operatorUserId,
+            String expectedOrderNumber,
+            String idempotencyKey,
+            String reason,
+            boolean confirm) {
+        PurchaseOrder order = purchaseOrderRepository.findByIdAndFactoryIdForUpdate(orderId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在: " + orderId));
+        if (operatorUserId == null) {
+            throw new BusinessException(401, "无法识别执行恢复的管理员身份")
+                    .withCode("PURCHASE_APPROVAL_RECOVERY_OPERATOR_REQUIRED");
+        }
+        if (!confirm) {
+            throw new BusinessException(422, "必须明确确认执行 OA 审批实例恢复")
+                    .withCode("PURCHASE_APPROVAL_RECOVERY_CONFIRM_REQUIRED")
+                    .withHintTarget("confirm");
+        }
+        String expectedNumber = requireRecoveryText(expectedOrderNumber, "采购订单号", 100);
+        String recoveryKey = requireRecoveryText(idempotencyKey, "幂等键", 120);
+        String recoveryReason = requireRecoveryText(reason, "恢复原因", 500);
+        if (!recoveryKey.matches("^[A-Za-z0-9._:-]{8,120}$")) {
+            throw new BusinessException(422, "幂等键格式无效")
+                    .withCode("PURCHASE_APPROVAL_RECOVERY_KEY_INVALID")
+                    .withHintTarget("idempotencyKey");
+        }
+        if (!Objects.equals(order.getOrderNumber(), expectedNumber)) {
+            throw new BusinessException(409, "采购订单号与目标记录不一致")
+                    .withCode("PURCHASE_APPROVAL_RECOVERY_IDENTITY_MISMATCH")
+                    .withHint("请重新核对订单 ID 与业务订单号，恢复操作未执行");
+        }
+        if (workflowEngine == null) {
+            throw new BusinessException(503, "OA 审批服务不可用")
+                    .withCode("PURCHASE_APPROVAL_SERVICE_UNAVAILABLE");
+        }
+
+        Optional<ApprovalWorkflowInstance> existing = workflowEngine.getLatestInstance(
+                factoryId, "PURCHASE_ORDER", orderId);
+        if (existing.isPresent()) {
+            ApprovalWorkflowInstance instance = existing.get();
+            if (recoveryKey.equals(readRecoveryKey(instance))
+                    && order.getStatus() != PurchaseOrderStatus.SUBMITTED) {
+                return recoveryResponse(order, instance, false);
+            }
+            throw new BusinessException(409, "采购订单已存在 OA 审批实例，禁止重复恢复")
+                    .withCode("PURCHASE_APPROVAL_RECOVERY_CONFLICT")
+                    .withHint("请只读查看现有审批实例；不同幂等键不会覆盖原实例");
+        }
+        if (order.getStatus() != PurchaseOrderStatus.SUBMITTED) {
+            throw new BusinessException(409, "只有已提交且缺少 OA 实例的采购订单可以恢复")
+                    .withCode("PURCHASE_APPROVAL_RECOVERY_STATUS_INVALID");
+        }
+        if (!workflowEngine.hasActiveWorkflow(factoryId, "PURCHASE_ORDER")) {
+            throw new BusinessException(422, "当前工厂没有可用的采购 OA 审批流程")
+                    .withCode("PURCHASE_APPROVAL_ROUTE_REQUIRED");
+        }
+        validateRecoverySnapshot(order);
+
+        Map<String, Object> context = buildPurchaseWorkflowContext(factoryId, order);
+        Map<String, Object> recoveryAudit = new LinkedHashMap<>();
+        recoveryAudit.put("idempotencyKey", recoveryKey);
+        recoveryAudit.put("reason", recoveryReason);
+        recoveryAudit.put("operatorUserId", operatorUserId);
+        recoveryAudit.put("recoveredAt", LocalDateTime.now().toString());
+        recoveryAudit.put("originalOrderCreatedAt",
+                order.getCreatedAt() == null ? null : order.getCreatedAt().toString());
+        context.put("approvalRecovery", recoveryAudit);
+
+        Long originalInitiator = order.getCreatedBy() != null ? order.getCreatedBy() : operatorUserId;
+        ApprovalWorkflowInstance instance = workflowEngine.startWorkflow(
+                factoryId, "PURCHASE_ORDER", orderId, context, originalInitiator);
+        validateRunnableApprovalRoute(factoryId, instance);
+        projectWorkflowState(order, instance, originalInitiator);
+        purchaseOrderRepository.save(order);
+        log.warn("受限恢复采购单 OA 实例: factoryId={}, orderId={}, orderNumber={}, instanceId={}, operatorUserId={}",
+                factoryId, orderId, order.getOrderNumber(), instance.getId(), operatorUserId);
+        return recoveryResponse(order, instance, true);
+    }
+
+    @Override
+    @Transactional
     @Loggable(module = "PURCHASE_ORDER", action = "OA_ACTION", entityType = "PurchaseOrder",
               entityIdParam = "orderId")
     public PurchaseOrder applyWorkflowAction(String factoryId,
@@ -632,6 +718,57 @@ public class PurchaseServiceImpl implements PurchaseService {
         context.put("priceVarianceItemCount", countPriceAlertItems(factoryId, order));
         context.put("approvalChain", "BUSINESS_AND_FINANCE");
         return context;
+    }
+
+    private String requireRecoveryText(String value, String fieldName, int maxLength) {
+        String normalized = value == null ? "" : value.trim();
+        if (normalized.isEmpty() || normalized.length() > maxLength) {
+            throw new BusinessException(422, fieldName + "不能为空且长度不能超过" + maxLength + "个字符")
+                    .withCode("PURCHASE_APPROVAL_RECOVERY_FIELD_INVALID");
+        }
+        return normalized;
+    }
+
+    private void validateRecoverySnapshot(PurchaseOrder order) {
+        if (order.getSupplierId() == null || order.getSupplierId().isBlank()) {
+            throw new BusinessException(422, "采购订单缺少供应商身份，不能恢复审批")
+                    .withCode("PURCHASE_APPROVAL_RECOVERY_SNAPSHOT_INVALID");
+        }
+        List<PurchaseOrderItem> items = purchaseOrderItemRepository.findByPurchaseOrderId(order.getId());
+        boolean invalidItem = items.isEmpty() || items.stream().anyMatch(item ->
+                item.getMaterialTypeId() == null || item.getMaterialTypeId().isBlank()
+                        || item.getQuantity() == null
+                        || item.getQuantity().compareTo(BigDecimal.ZERO) <= 0
+                        || item.getUnit() == null || item.getUnit().isBlank());
+        if (invalidItem) {
+            throw new BusinessException(422, "采购订单明细快照不完整，不能恢复审批")
+                    .withCode("PURCHASE_APPROVAL_RECOVERY_SNAPSHOT_INVALID")
+                    .withHint("恢复工具不会修改订单数量、单位或物料身份");
+        }
+    }
+
+    private String readRecoveryKey(ApprovalWorkflowInstance instance) {
+        if (instance.getContextJson() == null) return null;
+        Object rawAudit = instance.getContextJson().get("approvalRecovery");
+        if (!(rawAudit instanceof Map<?, ?> audit)) return null;
+        Object rawKey = audit.get("idempotencyKey");
+        return rawKey == null ? null : String.valueOf(rawKey);
+    }
+
+    private PurchaseApprovalRecoveryResponse recoveryResponse(
+            PurchaseOrder order,
+            ApprovalWorkflowInstance instance,
+            boolean recovered) {
+        return PurchaseApprovalRecoveryResponse.builder()
+                .orderId(order.getId())
+                .orderNumber(order.getOrderNumber())
+                .orderStatus(order.getStatus())
+                .workflowInstanceId(instance.getId())
+                .workflowStatus(instance.getStatus())
+                .currentNodeIds(instance.getCurrentNodeIds() == null
+                        ? List.of() : List.copyOf(instance.getCurrentNodeIds()))
+                .recovered(recovered)
+                .build();
     }
 
     private void validateRunnableApprovalRoute(String factoryId, ApprovalWorkflowInstance instance) {

@@ -136,9 +136,9 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 
 
 /* 案例段: 一个地址的学费（对照体） */
-.tuition{max-width:1000px;margin:0 auto;padding:clamp(44px,6.5vw,92px) clamp(16px,4vw,48px)}
+.tuition{max-width:1180px;margin:0 auto;padding:clamp(44px,6.5vw,92px) clamp(16px,4vw,48px)}
 .tuition .kicker{font-family:var(--v6-mono);font-size:12px;color:var(--v6-cta-ink);letter-spacing:2px;margin-bottom:10px}
-.tuition .ba{display:grid;grid-template-columns:1fr 1fr;gap:clamp(16px,2.5vw,32px);margin-top:24px}
+.tuition .ba{display:grid;grid-template-columns:1fr 1fr .92fr;gap:clamp(16px,2.5vw,32px);margin-top:24px;align-items:stretch}
 .tuition .col{padding:clamp(18px,2.4vw,28px)}
 .tuition .col.before{background:rgba(180,83,9,.06);border-radius:14px}
 .tuition .col.after{background:rgba(0,179,119,.07);border-radius:14px}
@@ -147,7 +147,21 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .tuition .after h3{color:var(--v6-cta-ink)}
 .tuition .col p{margin:0;font-size:clamp(13.5px,1.45vw,15.5px);color:var(--v6-ink-2);line-height:1.85}
 .tuition .col p b{color:var(--v6-ink)}
-@media (max-width:768px){.tuition .ba{grid-template-columns:1fr}}
+
+/* 地址体检拟物卡 */
+.addrchk{background:#fff;border-radius:14px;box-shadow:0 20px 48px -26px rgba(40,40,40,.28);padding:clamp(16px,1.8vw,22px);display:flex;flex-direction:column}
+.addrchk .ph{font-family:var(--v6-mono);font-size:11px;color:#847e75;letter-spacing:1.2px;margin-bottom:12px}
+.addrchk .ar{display:flex;gap:9px;align-items:flex-start;padding:9px 2px;border-bottom:1px solid rgba(0,0,0,.06);font-size:12.5px;line-height:1.55}
+.addrchk .ar:last-of-type{border-bottom:none}
+.addrchk .ar .dot{flex:0 0 8px;width:8px;height:8px;border-radius:50%;margin-top:5px;background:var(--v6-cta)}
+.addrchk .ar.warn .dot{background:#f59e0b}
+.addrchk .ar .a{color:var(--v6-ink);font-weight:700}
+.addrchk .ar small{display:block;font-family:var(--v6-mono);font-size:10.5px;color:#847e75;margin-top:2px;letter-spacing:.3px}
+.addrchk .ar.warn small{color:#b45309}
+.addrchk .foot{margin-top:auto;padding-top:12px;font-size:12px;font-weight:800;color:var(--v6-cta-ink)}
+
+@media (max-width:980px){.tuition .ba{grid-template-columns:1fr 1fr}.tuition .addrchk{grid-column:1/-1}}
+@media (max-width:768px){.tuition .ba{grid-template-columns:1fr}.tuition .addrchk{grid-column:auto}}
 
 /* versus 差异化条 */
 .versus{background:linear-gradient(180deg,rgba(0,179,119,.05),transparent);padding:clamp(44px,6.5vw,88px) clamp(16px,4vw,48px)}
@@ -340,6 +354,13 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
     <div class="col after v6-reveal">
       <h3>AFTER</h3>
       <p>现在 AI 排线之前先做<b>地址体检</b>：跨城疑似、门牌缺失、和历史签收位置对不上的，全部标黄等人工确认。之后再没为一个错地址跑过冤枉路。</p>
+    </div>
+    <div class="addrchk v6-reveal">
+      <div class="ph">排线前 · 地址体检</div>
+      <div class="ar"><span class="dot"></span><div><span class="a">XX 大道 12 号 · 门店 A</span><small>与历史签收位置一致 ✓</small></div></div>
+      <div class="ar warn"><span class="dot"></span><div><span class="a">XX 路 88 号 · 门店 B</span><small>跨城疑似 · 距历史签收 92km — 待确认</small></div></div>
+      <div class="ar"><span class="dot"></span><div><span class="a">幸福街 6 号 · 门店 C</span><small>坐标已校准 ✓</small></div></div>
+      <div class="foot">1 条标黄拦下，其余 27 条直接排线</div>
     </div>
   </div>
 </section>

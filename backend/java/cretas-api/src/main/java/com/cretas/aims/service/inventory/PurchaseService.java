@@ -4,6 +4,7 @@ import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.inventory.CreatePurchaseOrderRequest;
 import com.cretas.aims.dto.inventory.CreateReceiveRecordRequest;
 import com.cretas.aims.dto.inventory.UpdatePurchaseOrderRequest;
+import com.cretas.aims.dto.inventory.PurchaseApprovalRecoveryResponse;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
@@ -46,6 +47,16 @@ public interface PurchaseService {
 
     /** Submit once and atomically start the unified OA workflow. */
     PurchaseOrder submitOrder(String factoryId, String orderId, Long initiatorUserId);
+
+    /** Repair one historical SUBMITTED order that has no OA workflow instance. */
+    PurchaseApprovalRecoveryResponse recoverMissingApprovalInstance(
+            String factoryId,
+            String orderId,
+            Long operatorUserId,
+            String expectedOrderNumber,
+            String idempotencyKey,
+            String reason,
+            boolean confirm);
 
     /** Apply an OA action and project the workflow state back to the purchase order. */
     PurchaseOrder applyWorkflowAction(String factoryId,
