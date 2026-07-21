@@ -5,13 +5,17 @@ import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
-import com.cretas.aims.dto.material.MaterialSuggestDTO;
 import com.cretas.aims.dto.material.MaterialCodePreviewDTO;
+import com.cretas.aims.dto.material.MaterialBusinessCodeBackfillReportDTO;
+import com.cretas.aims.dto.material.MaterialBusinessCodeBackfillRequest;
+import com.cretas.aims.dto.material.MaterialSuggestDTO;
 import com.cretas.aims.dto.material.RawMaterialTypeDTO;
 import com.cretas.aims.dto.supplier.SupplierDTO;
+import com.cretas.aims.config.RequireRole;
+import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.RawMaterialTypeService;
 import com.cretas.aims.service.SupplierService;
-import com.cretas.aims.service.MobileService;
+import com.cretas.aims.service.material.MaterialBusinessCodeBackfillService;
 import com.cretas.aims.utils.TokenUtils;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import io.swagger.v3.oas.annotations.Operation;
@@ -43,6 +47,7 @@ import com.cretas.aims.util.ErrorSanitizer;
 public class RawMaterialTypeController {
 
     private final RawMaterialTypeService materialTypeService;
+    private final MaterialBusinessCodeBackfillService businessCodeBackfillService;
     private final MobileService mobileService;
     private final SupplierService supplierService;
 
@@ -336,6 +341,29 @@ public class RawMaterialTypeController {
         MaterialCodePreviewDTO preview = materialTypeService.previewMaterialCodeContract(
                 factoryId, category, segmentCode);
         return ApiResponse.success("编码预览成功", preview);
+    }
+
+    @RequirePermission({"system:read_write"})
+    @RequireRole({"factory_super_admin", "permission_admin"})
+    @GetMapping("/business-code-backfill/preview")
+    @Operation(summary = "预览历史物料业务编码映射",
+            description = "按当前工厂启用的L3分类和新建物料同源规则生成只读报告；不预占号码、不修改旧16位编码或任何业务数据。")
+    public ApiResponse<MaterialBusinessCodeBackfillReportDTO> previewBusinessCodeBackfill(
+            @PathVariable String factoryId) {
+        return ApiResponse.success("历史物料业务编码映射预览成功",
+                businessCodeBackfillService.preview(factoryId));
+    }
+
+    @RequirePermission({"system:read_write"})
+    @RequireRole({"factory_super_admin", "permission_admin"})
+    @PostMapping("/business-code-backfill")
+    @Operation(summary = "回填历史物料业务编码",
+            description = "仅为当前工厂中businessCode为空且能映射启用L3的历史物料分配新码；既有码、旧16位码和历史关联永不覆盖。")
+    public ApiResponse<MaterialBusinessCodeBackfillReportDTO> backfillBusinessCodes(
+            @PathVariable String factoryId,
+            @Valid @RequestBody MaterialBusinessCodeBackfillRequest request) {
+        return ApiResponse.success("历史物料业务编码回填完成",
+                businessCodeBackfillService.backfill(factoryId, request.getIdempotencyKey()));
     }
 
     /**

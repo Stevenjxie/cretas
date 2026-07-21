@@ -5,8 +5,11 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import jakarta.persistence.LockModeType;
 import java.util.List;
 import java.util.Optional;
 /**
@@ -29,6 +32,28 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
      * 查找工厂的所有原材料类型
       */
     List<RawMaterialType> findByFactoryId(String factoryId);
+
+    /** Serializes a factory-scoped historical business-code backfill. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT r FROM RawMaterialType r WHERE r.factoryId = :factoryId " +
+           "ORDER BY r.code ASC, r.id ASC")
+    List<RawMaterialType> lockByFactoryIdForBusinessCodeBackfill(
+            @Param("factoryId") String factoryId);
+
+    /**
+     * Explicit one-way assignment for historical rows. The entity field remains immutable for
+     * ordinary JPA updates; this guarded statement is the only supported backfill write boundary.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(value = "UPDATE raw_material_types SET business_code = :businessCode, " +
+                   "updated_at = CURRENT_TIMESTAMP " +
+                   "WHERE factory_id = :factoryId AND id = :materialId " +
+                   "AND business_code IS NULL AND deleted_at IS NULL",
+           nativeQuery = true)
+    int assignBusinessCodeIfMissing(
+            @Param("factoryId") String factoryId,
+            @Param("materialId") String materialId,
+            @Param("businessCode") String businessCode);
      /**
      * 查找工厂的激活原材料类型
       */
