@@ -69,7 +69,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .ai-note .eye{flex:0 0 auto;width:9px;height:9px;border-radius:99px;background:var(--v6-cta);
   box-shadow:0 0 0 4px rgba(0,179,119,.16)}
 .ai-note em{font-style:normal;color:var(--v6-ink);font-weight:700}
-.ai-note s{text-decoration:none;color:#8a857e}
+.ai-note .mut{color:#8a857e}
 
 /* phone frame (module 1) */
 .phone{width:clamp(230px,25vw,286px);margin:0 auto;border-radius:38px;padding:11px;
@@ -166,12 +166,16 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .bom-row.warn{background:rgba(214,120,20,.06)}
 .bom-row.warn .qt{color:#b26a12}
 
-/* MODULE 6 — quality flow ------------------------------------------------- */
-.qflow{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(14px,2vw,22px);margin-top:clamp(30px,4vw,48px)}
-.qstep{padding:24px 22px;border-radius:15px;background:#fff;border:1px solid rgba(0,0,0,.07)}
-.qstep .n{font-family:var(--v6-mono);font-size:12px;color:var(--v6-cta-ink);letter-spacing:.1em}
-.qstep h4{font-size:clamp(17px,1.8vw,20px);font-weight:800;margin:12px 0 8px;letter-spacing:-0.01em}
-.qstep p{font-size:14px;color:var(--v6-ink-2);line-height:1.7;margin:0}
+/* MODULE 6 — quality inspection flow (process chain, node + connector) --- */
+.qchain{position:relative;margin-top:clamp(38px,5vw,64px);display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(18px,3vw,44px)}
+.qchain::before{content:"";position:absolute;top:32px;left:16%;right:16%;height:2px;z-index:0;
+  background:linear-gradient(90deg,rgba(0,179,119,.12),rgba(0,179,119,.42),rgba(0,179,119,.12))}
+.qstage{position:relative;z-index:1;text-align:center;padding:0 8px}
+.qstage .node{width:66px;height:66px;border-radius:99px;margin:0 auto 20px;display:grid;place-items:center;
+  color:#fff;background:var(--v6-cta);box-shadow:0 10px 22px rgba(0,179,119,.24)}
+.qstage .step{font-family:var(--v6-mono);font-size:12px;color:var(--v6-cta-ink);letter-spacing:.08em}
+.qstage h4{font-size:clamp(17px,1.9vw,21px);font-weight:800;margin:9px 0 9px;letter-spacing:-0.01em}
+.qstage p{font-size:14px;color:var(--v6-ink-2);line-height:1.7;margin:0 auto;max-width:30ch}
 
 /* MODULE 7 — pipeline (deep band) ---------------------------------------- */
 .pipe{background:linear-gradient(165deg,#0a0f0d,#08130d);color:#eafff5;overflow:hidden;position:relative}
@@ -226,7 +230,8 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 @media (max-width:900px){
   .eye-stage{grid-template-columns:1fr}
   .caps{grid-template-columns:1fr}
-  .qflow{grid-template-columns:1fr}
+  .qchain{grid-template-columns:1fr;gap:28px}
+  .qchain::before{display:none}
   .versus-pts{grid-template-columns:1fr}
   .rail{grid-template-columns:1fr}
   .rail li:not(:last-child)::after{content:"↓";right:auto;left:50%;top:auto;bottom:-14px;transform:translateX(-50%)}
@@ -312,7 +317,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
       <p class="v6-reveal">收货前，系统先算好这一票能收多少，直接把数字摆在他面前 — 不用查订单、不用背规则、不怕多收漏收。超过上限，提交按钮直接锁死，错误挡在发生之前。</p>
       <div class="ai-note v6-reveal">
         <span class="eye"></span>
-        <span>下单 <em>100</em> · 已收 <em>30</em> · 还可入 <em>70</em> <s>（含 30% 超收）</s></span>
+        <span>下单 <em>100</em> · 已收 <em>30</em> · 还可入 <em>70</em> <span class="mut">（含 30% 超收）</span></span>
       </div>
     </div>
     <div class="mod-visual v6-reveal">
@@ -334,9 +339,9 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
       <h2 class="v6-reveal">报工不用教</h2>
       <p class="v6-reveal">工序不是写死的产线，是画出来的流程图。产品变了，拖两下就改好；工人在工位刷一下卡就开工，报数按工序走、良率自动算，谁都不用培训。</p>
       <ul class="pts">
-        <li class="v6-reveal"><span class="dot">✓</span><span><b>可视化工作流编辑器</b><small>拖拽即配工序链，一句话让 AI 生成草稿，改配方不用求 IT。</small></span></li>
-        <li class="v6-reveal"><span class="dot">✓</span><span><b>多工序良率报工</b><small>按工序维度累积上报，投入产出、良率、损耗自动结算。</small></span></li>
-        <li class="v6-reveal"><span class="dot">✓</span><span><b>NFC 打卡开工</b><small>工位刷卡即认领工序，谁在做、做了多少，全程留痕。</small></span></li>
+        <li class="v6-reveal"><span class="dot"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span><span><b>可视化工作流编辑器</b><small>拖拽即配工序链，一句话让 AI 生成草稿，改配方不用求 IT。</small></span></li>
+        <li class="v6-reveal"><span class="dot"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span><span><b>多工序良率报工</b><small>按工序维度累积上报，投入产出、良率、损耗自动结算。</small></span></li>
+        <li class="v6-reveal"><span class="dot"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span><span><b>NFC 打卡开工</b><small>工位刷卡即认领工序，谁在做、做了多少，全程留痕。</small></span></li>
       </ul>
     </div>
     <div class="mod-visual v6-reveal">
@@ -430,9 +435,9 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
       <h2 class="v6-reveal">配方是本清楚账</h2>
       <p class="v6-reveal">原料、辅料、包材分层管理，再多也不糊。配方改一次留一道痕，出成率提前预览，料快过期、库存见底 AI 主动提醒 — 账清了，成本才算得清。</p>
       <ul class="pts">
-        <li class="v6-reveal"><span class="dot">✓</span><span><b>BOM 版本 / ECN 审批</b><small>每次配方变更走审批、留版本，改了什么一目了然。</small></span></li>
-        <li class="v6-reveal"><span class="dot">✓</span><span><b>一句话转 BOM</b><small>把配方说给 AI，自动拆成结构化物料清单，不用一行行敲。</small></span></li>
-        <li class="v6-reveal"><span class="dot">✓</span><span><b>FIFO 推荐 + 过期低库存预警</b><small>先进先出自动推荐批次，临期、见底提前预警。</small></span></li>
+        <li class="v6-reveal"><span class="dot"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span><span><b>BOM 版本 / ECN 审批</b><small>每次配方变更走审批、留版本，改了什么一目了然。</small></span></li>
+        <li class="v6-reveal"><span class="dot"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span><span><b>一句话转 BOM</b><small>把配方说给 AI，自动拆成结构化物料清单，不用一行行敲。</small></span></li>
+        <li class="v6-reveal"><span class="dot"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span><span><b>FIFO 推荐 + 过期低库存预警</b><small>先进先出自动推荐批次，临期、见底提前预警。</small></span></li>
       </ul>
     </div>
     <div class="mod-visual v6-reveal">
@@ -454,10 +459,22 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
     <h2 class="v6-reveal">质检长在流程里</h2>
     <p class="v6-reveal" style="font-size:clamp(15px,1.5vw,17.5px);color:var(--v6-ink-2);line-height:1.85;margin:0">质检不是事后补一张表，而是卡在工序节点上 — 该测的测了才能往下走，不合格自动拦截、闭环处置。拍张照、说句话，记录就成了。</p>
   </div>
-  <div class="qflow">
-    <div class="qstep v6-reveal"><div class="n">节点监控</div><h4>CCP 关键控制点</h4><p>温度、时间等关键控制点卡在工序上，漏检直接拦住，不放行。</p></div>
-    <div class="qstep v6-reveal"><div class="n">现场取证</div><h4>拍照 + 语音质检</h4><p>拍张照、说句话就录入，一线工人零门槛，证据自动归档。</p></div>
-    <div class="qstep v6-reveal"><div class="n">闭环处置</div><h4>不合格自动流转</h4><p>判不合格自动发起返工 / 报废 / 隔离，处置到底、责任到人。</p></div>
+  <div class="qchain">
+    <div class="qstage v6-reveal">
+      <div class="node"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="2"/></svg></div>
+      <div class="step">检验</div><h4>CCP 关键控制点</h4>
+      <p>温度、时间等关键控制点卡在工序上，漏检直接拦住，不放行。</p>
+    </div>
+    <div class="qstage v6-reveal">
+      <div class="node"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l1.6-2.2h6.8L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.2"/></svg></div>
+      <div class="step">记录</div><h4>拍照 + 语音质检</h4>
+      <p>拍张照、说句话就录入，一线工人零门槛，证据自动归档。</p>
+    </div>
+    <div class="qstage v6-reveal">
+      <div class="node"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-1.6 5.3"/><path d="M20 5v6h-6"/></svg></div>
+      <div class="step">处置闭环</div><h4>不合格自动流转</h4>
+      <p>判不合格自动发起返工 / 报废 / 隔离，处置到底、责任到人。</p>
+    </div>
   </div>
 </section>
 
@@ -480,9 +497,9 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 <section class="versus">
   <p class="lead v6-reveal"><span class="q">传统 ERP 让工厂适应产品；</span><br><b>Cretas 让产品适应工厂。</b></p>
   <div class="versus-pts">
-    <div class="vpt v6-reveal"><div class="ck">✓</div><b>零培训上手</b><p>系统直接告诉工人该做什么、该收多少，不背规则、不怕做错。</p></div>
-    <div class="vpt v6-reveal"><div class="ck">✓</div><b>没有固定产线也能管</b><p>工序动态认领、按需报工，非标加工的真实节奏照样管得住。</p></div>
-    <div class="vpt v6-reveal"><div class="ck">✓</div><b>AI 主动预警，不等你来查</b><p>库存见底、料快过期、温度异常、违规操作，AI 先一步提醒。</p></div>
+    <div class="vpt v6-reveal"><div class="ck"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></div><b>零培训上手</b><p>系统直接告诉工人该做什么、该收多少，不背规则、不怕做错。</p></div>
+    <div class="vpt v6-reveal"><div class="ck"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></div><b>没有固定产线也能管</b><p>工序动态认领、按需报工，非标加工的真实节奏照样管得住。</p></div>
+    <div class="vpt v6-reveal"><div class="ck"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></div><b>AI 主动预警，不等你来查</b><p>库存见底、料快过期、温度异常、违规操作，AI 先一步提醒。</p></div>
   </div>
 </section>
 
