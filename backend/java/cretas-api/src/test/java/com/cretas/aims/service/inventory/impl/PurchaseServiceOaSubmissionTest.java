@@ -271,6 +271,9 @@ class PurchaseServiceOaSubmissionTest {
 
     @Test
     void recoveryIsFactoryScopedAndCannotSeeAnotherFactoryOrder() {
+        doReturn(Optional.empty()).when(orderRepository)
+                .findByIdAndFactoryIdForUpdate("po-1", "F007");
+
         assertThatThrownBy(() -> service.recoverMissingApprovalInstance(
                 "F007", "po-1", 1309L, "PO-TEST-1",
                 "recovery:F007:po-1:1", "跨工厂恢复必须拒绝", true))
