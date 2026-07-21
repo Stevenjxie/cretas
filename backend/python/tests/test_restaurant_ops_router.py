@@ -803,6 +803,93 @@ def test_price_view_role_passes_margin_gate():
         asyncio.run(_r.resolve_gross_margin(None, "F_TEST", role=price_role))
 
 
+def test_gross_margin_prohibited_actions_uses_real_low_margin_candidate(monkeypatch):
+    """有真实销售/成本时，禁做事项必须引用计算出的低毛利菜，不得异常或编造。"""
+
+    pos_rows = [
+        {
+            "product_id": "POS-LOW",
+            "dish_name": "低毛利菜",
+            "normalized_name": "低毛利菜",
+            "total_qty": 100.0,
+            "total_revenue": 2000.0,
+            "bills": 20,
+            "window_start": date(2026, 7, 1),
+            "window_end": date(2026, 7, 21),
+        },
+        {
+            "product_id": "POS-HIGH",
+            "dish_name": "高毛利菜",
+            "normalized_name": "高毛利菜",
+            "total_qty": 100.0,
+            "total_revenue": 5000.0,
+            "bills": 40,
+            "window_start": date(2026, 7, 1),
+            "window_end": date(2026, 7, 21),
+        },
+    ]
+    cost_rows = [
+        {"product_source_pk": "PT-LOW", "food_cost": 18.0},
+        {"product_source_pk": "PT-HIGH", "food_cost": 20.0},
+    ]
+
+    class _SmartBIConnection:
+        async def execute(self, *_args):
+            return None
+
+        async def fetch(self, query, *_args):
+            if "FROM fact_pos_item" in query:
+                return pos_rows
+            if "FROM agg_restaurant_product_cost" in query:
+                return cost_rows
+            raise AssertionError(f"unexpected SmartBI query: {query}")
+
+    class _AcquireContext:
+        async def __aenter__(self):
+            return _SmartBIConnection()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class _SmartBIPool:
+        def acquire(self):
+            return _AcquireContext()
+
+    class _CretasConnection:
+        async def fetch(self, query, *_args):
+            if "FROM product_types" in query:
+                return [
+                    {"id": "PT-LOW", "name": "低毛利菜"},
+                    {"id": "PT-HIGH", "name": "高毛利菜"},
+                ]
+            raise AssertionError(f"unexpected Cretas query: {query}")
+
+        async def close(self):
+            return None
+
+    async def _connect(_url):
+        return _CretasConnection()
+
+    import asyncpg
+    monkeypatch.setattr(asyncpg, "connect", _connect)
+
+    result = asyncio.run(
+        _r.resolve_gross_margin(
+            _SmartBIPool(),
+            "RES_TEST",
+            role="restaurant_manager",
+            query="提升毛利率，哪些事情今天先不要做",
+        )
+    )
+
+    assert "低毛利菜" in result.answer_text
+    assert "暂无可确认对象" not in result.answer_text
+    assert "适用前提" in result.answer_text
+    assert "风险" in result.answer_text
+    assert "最小验证" in result.answer_text
+    assert "当前低毛利候选是低毛利菜" in result.answer_text
+
+
 def test_missing_cost_dish_never_gets_profit_or_enters_margin_ranking():
     """缺成本是未知值，不是零成本；不能进入利润/毛利率排名。"""
     build_entries = getattr(_r, "_build_margin_entries", None)

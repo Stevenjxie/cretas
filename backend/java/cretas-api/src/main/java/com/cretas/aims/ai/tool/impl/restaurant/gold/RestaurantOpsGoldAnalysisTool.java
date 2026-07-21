@@ -1,10 +1,15 @@
 package com.cretas.aims.ai.tool.impl.restaurant.gold;
 
+import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.client.GoldFinanceClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -55,6 +60,37 @@ public class RestaurantOpsGoldAnalysisTool extends AbstractBusinessTool {
         return Collections.emptyList();
     }
 
+    /**
+     * A readable data-gap answer is still an unsuccessful query result. The shared business-tool
+     * wrapper normally marks every returned map as successful, so this tool narrows that contract:
+     * only an explicit {@code dataAvailable=false} result is surfaced as outer success=false while
+     * preserving its customer-safe message and structured data.
+     */
+    @Override
+    @SuppressWarnings("unchecked")
+    public String execute(ToolCall toolCall, Map<String, Object> context) throws Exception {
+        String responseJson = super.execute(toolCall, context);
+        Map<String, Object> envelope = objectMapper.readValue(responseJson, Map.class);
+        if (!Boolean.TRUE.equals(envelope.get("success"))) {
+            return responseJson;
+        }
+        Object dataObject = envelope.get("data");
+        if (!(dataObject instanceof Map<?, ?> data)
+                || !Boolean.FALSE.equals(data.get("dataAvailable"))) {
+            return responseJson;
+        }
+
+        String message = firstNonBlank(
+                asString(data.get("message")),
+                asString(data.get("answer")),
+                "本次查询没有获得可展示的经营结果。");
+        Map<String, Object> unavailableEnvelope = new LinkedHashMap<>();
+        unavailableEnvelope.put("success", false);
+        unavailableEnvelope.put("message", message);
+        unavailableEnvelope.put("data", dataObject);
+        return objectMapper.writeValueAsString(unavailableEnvelope);
+    }
+
     @Override
     protected Map<String, Object> doExecute(
             String factoryId,
@@ -74,8 +110,18 @@ public class RestaurantOpsGoldAnalysisTool extends AbstractBusinessTool {
             sessionId = req.getSessionId();
         }
 
-        Map<String, Object> response = gold.fetchRestaurantOpsAnalysis(
-                factoryId, question, sessionId, asString(params.get("intentCode")));
+        String intentCode = asString(params.get("intentCode"));
+        Map<String, Object> response;
+        try {
+            response = gold.fetchRestaurantOpsAnalysis(
+                    factoryId, question, sessionId, intentCode);
+        } catch (IOException transportFailure) {
+            String unavailableAnswer = unavailableAnswer(question);
+            if (unavailableAnswer == null) {
+                throw transportFailure;
+            }
+            return unavailableResult(question, intentCode, unavailableAnswer);
+        }
         boolean success = !Boolean.FALSE.equals(response.get("success"));
         String answer = firstNonBlank(
                 asString(response.get("answer")),
@@ -101,6 +147,74 @@ public class RestaurantOpsGoldAnalysisTool extends AbstractBusinessTool {
         result.put("decisionBridge", decisionBridge(scenario));
         result.put("suggestedFollowups", decisionFollowups(scenario));
         return result;
+    }
+
+    private static Map<String, Object> unavailableResult(
+            String question,
+            String intentCode,
+            String answer) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("dataAvailable", false);
+        result.put("message", answer);
+        result.put("answer", answer);
+        result.put("source", "restaurant_ops_gold");
+        result.put("intentCode", intentCode);
+        result.put("charts", Collections.emptyList());
+        result.put("insights", Collections.emptyList());
+        result.put("processingTimeMs", 0);
+        String scenario = ownerActionScenario(question, intentCode);
+        result.put("decisionBridge", decisionBridge(scenario));
+        result.put("suggestedFollowups", decisionFollowups(scenario));
+        return result;
+    }
+
+    /**
+     * Returns a truthful, question-specific answer only when the missing downstream result can be
+     * described without inventing a metric. Unknown questions deliberately return {@code null} so
+     * the original exception remains visible to the normal tool failure path.
+     */
+    private static String unavailableAnswer(String question) {
+        String text = question == null ? "" : question.toLowerCase();
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Shanghai"));
+        DateTimeFormatter date = DateTimeFormatter.ISO_LOCAL_DATE;
+
+        if (containsAny(text, "今天", "今日")
+                && containsAny(text, "营收", "营业额", "销售额")
+                && containsAny(text, "毛利", "毛利率")) {
+            return "今天（" + today.format(date)
+                    + "）的营收、毛利和毛利率目前无法可靠读取，因此不能给出结论，也不会拿其他日期的数据替代。请稍后重试。";
+        }
+
+        if (text.contains("昨天") && text.contains("前天")
+                && containsAny(text, "营收", "营业额", "销售额")) {
+            return "昨天（" + today.minusDays(1).format(date) + "）和前天（"
+                    + today.minusDays(2).format(date)
+                    + "）的营业额目前无法可靠读取，因此不能判断哪天更高，也不会用其他日期替代。请稍后重试。";
+        }
+
+        if (containsAny(text, "服务", "出餐", "上菜")
+                && containsAny(text, "速度", "慢", "原因", "根因", "瓶颈")) {
+            return "目前可用的经营数据只能支持营业额、订单量、客单价、成本和毛利分析；"
+                    + "缺少点单、备餐、出餐、上菜各环节的时间记录，以及桌台、员工排班和顾客反馈数据，"
+                    + "因此不能可靠判断服务、出餐或上菜慢的根因，也不会用营业额代替这些过程数据。";
+        }
+
+        if (containsAny(text, "门店", "该店", "这家店", "这家门店")
+                && containsAny(text, "毛利", "毛利率")) {
+            return "已识别到您问的是该店的毛利率，但目前无法可靠取得该店的成本覆盖和毛利排名数据，"
+                    + "因此不能给出结论，也不会用营业额替代毛利率。请稍后重试。";
+        }
+
+        return null;
+    }
+
+    private static boolean containsAny(String text, String... candidates) {
+        for (String candidate : candidates) {
+            if (text.contains(candidate)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String ownerActionScenario(String question, String intentCode) {
