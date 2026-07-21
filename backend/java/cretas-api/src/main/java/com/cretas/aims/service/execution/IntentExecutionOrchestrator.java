@@ -1782,7 +1782,10 @@ public class IntentExecutionOrchestrator {
     }
 
     boolean shouldBypassEarlyPhraseShortcutForStoreReference(String userInput) {
-        return userInput != null && STORE_REFERENCE_PATTERN.matcher(userInput).find();
+        return userInput != null && (
+                STORE_REFERENCE_PATTERN.matcher(userInput).find()
+                        || DISH_REFERENCE_PATTERN.matcher(userInput).find()
+        );
     }
 
     boolean isAmbiguousRestaurantTurnoverMetricQuestion(String userInput) {
