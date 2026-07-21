@@ -320,6 +320,9 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
         if (result == null) {
             return null;
         }
+        if (Boolean.TRUE.equals(result.remove("suppressActionAdvice"))) {
+            return result;
+        }
         Object msgObj = result.get("message");
         if (!(msgObj instanceof String message) || message.isBlank()) {
             return result;

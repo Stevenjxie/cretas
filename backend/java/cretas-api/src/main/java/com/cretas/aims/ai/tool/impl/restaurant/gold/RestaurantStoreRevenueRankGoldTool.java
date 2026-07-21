@@ -31,6 +31,7 @@ public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool
 
     private static final String FILTER_STORE_NAME = "store_name";
     private static final String FILTER_STORE_ID = "store_id";
+    private static final String USER_INPUT = "userInput";
 
     @Override
     public String getToolName() {
@@ -86,6 +87,9 @@ public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool
             if (params.get(FILTER_STORE_ID) != null) {
                 copy.put(FILTER_STORE_ID, params.get(FILTER_STORE_ID));
             }
+            if (params.get(USER_INPUT) != null) {
+                copy.put(USER_INPUT, params.get(USER_INPUT));
+            }
         }
         return copy;
     }
@@ -134,18 +138,34 @@ public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool
             storeRank.add(entry);
         }
 
+        boolean directTopAnswer = isDirectTopStoreQuestion(goldResult.get(USER_INPUT));
         StringBuilder sb = new StringBuilder();
-        sb.append("门店营收排行（").append(period).append("，共").append(storeCount).append("家）：\n");
-        for (int i = 0; i < storeRank.size(); i++) {
-            Map<String, Object> entry = storeRank.get(i);
-            Object rev = entry.get("营收");
-            Object bills = entry.get("单数");
-            double revD = rev instanceof Number ? ((Number) rev).doubleValue() : 0.0;
-            sb.append(i + 1).append(". ").append(entry.get("门店"))
-                    .append(" — 营收").append(fmtAmt(revD))
-                    .append("，").append(bills != null ? bills : 0).append("单");
-            if (entry.get("客单价") != null) sb.append("，客单价 ¥").append(entry.get("客单价"));
-            if (i < storeRank.size() - 1) sb.append("\n");
+        if (directTopAnswer && !storeRank.isEmpty()) {
+            Map<String, Object> top = storeRank.get(0);
+            Object revenue = top.get("营收");
+            Object bills = top.get("单数");
+            double revenueValue = revenue instanceof Number ? ((Number) revenue).doubleValue() : 0.0;
+            sb.append("第一名是").append(top.get("门店")).append("。核心依据：在 ")
+                    .append(period).append(" 的 ").append(storeCount).append(" 家门店中，营收 ")
+                    .append(fmtAmt(revenueValue)).append(" 最高；同期 ")
+                    .append(bills != null ? bills : 0).append(" 单");
+            if (top.get("客单价") != null) {
+                sb.append("，客单价 ¥").append(top.get("客单价"));
+            }
+            sb.append("。");
+        } else {
+            sb.append("门店营收排行（").append(period).append("，共").append(storeCount).append("家）：\n");
+            for (int i = 0; i < storeRank.size(); i++) {
+                Map<String, Object> entry = storeRank.get(i);
+                Object rev = entry.get("营收");
+                Object bills = entry.get("单数");
+                double revD = rev instanceof Number ? ((Number) rev).doubleValue() : 0.0;
+                sb.append(i + 1).append(". ").append(entry.get("门店"))
+                        .append(" — 营收").append(fmtAmt(revD))
+                        .append("，").append(bills != null ? bills : 0).append("单");
+                if (entry.get("客单价") != null) sb.append("，客单价 ¥").append(entry.get("客单价"));
+                if (i < storeRank.size() - 1) sb.append("\n");
+            }
         }
 
         // Build chartConfig: horizontal bar — store name vs revenue in 万元
@@ -169,11 +189,30 @@ public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool
         }
         result.put("dataAvailable", true);
         result.put("message", sb.toString());
+        if (directTopAnswer) {
+            result.put("suppressActionAdvice", true);
+        }
         if (!chartNames.isEmpty()) {
             result.put("chartConfig", barChartConfig(
                     "门店营收排行 (万元)", chartNames, chartVals, "万元"));
         }
         return result;
+    }
+
+    private static boolean isDirectTopStoreQuestion(Object rawInput) {
+        if (rawInput == null) {
+            return false;
+        }
+        String input = rawInput.toString().replaceAll("\\s+", "");
+        boolean asksForTop = input.contains("第一名")
+                || input.contains("哪家店业绩最好")
+                || input.contains("哪家门店业绩最好")
+                || input.contains("冠军");
+        boolean asksForDirectAnswer = input.contains("直接")
+                || input.contains("先告诉")
+                || input.contains("只告诉")
+                || input.contains("核心依据");
+        return asksForTop && asksForDirectAnswer;
     }
 
     private static boolean matchesStore(Map<String, Object> row, Object storeId, Object storeName) {

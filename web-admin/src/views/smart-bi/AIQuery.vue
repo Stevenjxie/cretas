@@ -1111,8 +1111,9 @@ async function tryJavaIntentChat(
     const ownerActionSessionForRequest = (
       pendingScenario || isOwnerActionFollowupText(query)
     ) ? (ownerActionSessionId.value || undefined) : undefined;
+    const intentSessionForRequest = javaIntentSessionId.value || getOrCreateChatSessionId();
     const res = await executeIntent(factoryId, query, {
-      sessionId: javaIntentSessionId.value,
+      sessionId: intentSessionForRequest,
       context: ownerActionQuery ? {
         ownerActionSessionId: ownerActionSessionForRequest,
         ownerActionScenario,
@@ -1148,13 +1149,18 @@ async function tryJavaIntentChat(
       const isOwnerActionResponse = resultDataAny?.source === 'restaurant_owner_action'
         || resultDataAny?.advisorSource === 'restaurant_owner_action_advisor';
       if (isOwnerActionResponse) {
+        // Owner-action keeps a separate session in resultData. Preserve the
+        // normal analysis session so later data questions remain contextual.
+        javaIntentSessionId.value = intentSessionForRequest;
         ownerActionSessionId.value = String(resultDataAny.sessionId || ownerActionSessionId.value || '');
         currentOwnerActionScenario.value = String(resultDataAny.scenario || ownerActionScenario || currentOwnerActionScenario.value || '');
         msg.source = 'restaurant_owner_action';
         msg.templateCode = `owner_action_${resultDataAny.scenario || 'general'}`;
         msg.logId = resultDataAny.log_id ?? resultDataAny.logId ?? null;
       } else {
-        javaIntentSessionId.value = res.sessionId ?? undefined;
+        // Tool responses often omit the top-level session even though Python
+        // persisted the turn under the request session. Do not erase it.
+        javaIntentSessionId.value = res.sessionId ?? intentSessionForRequest;
       }
       if (toolData?.download_url) {
         downloadUrl = toolData.download_url;
@@ -2177,6 +2183,7 @@ function handleClearHistory() {
   // v2 conversation memory: 清空对话同时重置服务端 session_id, 让下一句问从零
   // 上下文开始(否则上轮 parent_answer_summary 还会注入到下一个 LLM prompt).
   resetChatSession();
+  javaIntentSessionId.value = undefined;
 
   chatHistory.value = [{
     id: 'welcome',
@@ -2191,6 +2198,7 @@ function handleClearHistory() {
 // 与"清空对话"的区别: 后者销毁图表+清屏+重置 session.
 function handleNewTopic() {
   resetChatSession();
+  javaIntentSessionId.value = undefined;
   // 加一条系统消息说明 (用 assistant 风格但内容是状态提示).
   chatHistory.value.push({
     id: `topic-reset-${Date.now()}`,

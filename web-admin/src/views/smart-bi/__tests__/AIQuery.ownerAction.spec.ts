@@ -136,6 +136,33 @@ describe('AIQuery restaurant owner-action routing', () => {
     expect(executeIntentMock.mock.calls[1][2]?.context).toBeUndefined();
   });
 
+  it('keeps one analysis session when Java responses omit sessionId', async () => {
+    executeIntentMock
+      .mockResolvedValueOnce({
+        status: 'SUCCESS',
+        intentCode: 'RESTAURANT_OPS_SALES_SUMMARY',
+        message: '昨天营业额高于前天。',
+        resultData: { source: 'restaurant_ops_gold' },
+      })
+      .mockResolvedValueOnce({
+        status: 'SUCCESS',
+        intentCode: 'RESTAURANT_OPS_SALES_SUMMARY',
+        message: '同一日期范围的毛利对比已给出。',
+        resultData: { source: 'restaurant_ops_gold' },
+      });
+
+    await askOnSameThread([
+      '昨天营业额比前天高还是低？',
+      '那毛利呢？请沿用刚才比较的两个日期。',
+    ]);
+
+    const firstSession = executeIntentMock.mock.calls[0][2]?.sessionId;
+    const secondSession = executeIntentMock.mock.calls[1][2]?.sessionId;
+    expect(firstSession).toEqual(expect.any(String));
+    expect(firstSession).not.toBe('');
+    expect(secondSession).toBe(firstSession);
+  });
+
   it('sends package scenario only when the user asks for a calculated owner action', async () => {
     executeIntentMock.mockResolvedValue({
       status: 'SUCCESS',
