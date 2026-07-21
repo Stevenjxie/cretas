@@ -3,543 +3,252 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="light">
 <title>白垩纪 Cretas · 餐饮与食品工厂的 AI 运营中枢</title>
 <meta name="description" content="白垩纪 Cretas — 餐饮门店与食品工厂通用的 AI 运营中枢。成本自动对账、损耗实时预警、全链路可追溯。不是又一个报表工具，是真正属于你的运营底座。">
 <meta name="keywords" content="餐饮运营,食品工厂,溯源,经营驾驶舱,成本对账,损耗管理,AI经营分析,SmartBI">
 <meta property="og:type" content="website">
 <meta property="og:title" content="白垩纪 Cretas · 餐饮与食品工厂的 AI 运营中枢">
-<meta property="og:description" content="后厨与车间的每一笔钱、每一克料，从此清清楚楚。成本自动对账 · 损耗实时预警 · 全链路可追溯。">
+<meta property="og:description" content="你的生意，AI 亲眼盯着。把 AI 装进车间、后厨、货车和账本 — 看得见每道工序，算得清每一分钱。">
 <meta property="og:url" content="https://cretaceousfuture.com/">
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230A0A0C'/%3E%3Cpath d='M21 9.5C19.6 8 17.9 7 15.5 7 11 7 7.5 10.4 7.5 15S11 23 15.5 23c2.4 0 4.1-1 5.5-2.5' stroke='%23E8732E' stroke-width='3' fill='none' stroke-linecap='round'/%3E%3Ccircle cx='22' cy='15.5' r='2.5' fill='%230EA5E9'/%3E%3C/svg%3E">
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/css/cretas-site.css">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 15 15'%3E%3Crect x='1' y='1' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='8.5' y='1' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='1' y='8.5' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='8.5' y='8.5' width='5.5' height='5.5' rx='2.75' fill='%2300b377'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/css/v6.css">
+<script>document.documentElement.classList.add('v6-js')</script>
 <style>
-/* homepage-specific */
-.hero{position:relative;padding:160px 0 80px;overflow:hidden;min-height:100vh;display:flex;align-items:center}
-.hero-bg{position:absolute;inset:0;z-index:0;overflow:hidden}
-#particles{position:absolute;inset:0;z-index:0;opacity:.8}
-.hero-inner{display:grid;grid-template-columns:1.02fr 1.08fr;gap:46px;align-items:center;width:100%}
-.hero-eyebrow{margin-bottom:24px}
-.hero h1{font-size:clamp(34px,5vw,60px);margin-bottom:24px}
-.hero .lead{max-width:540px;margin-bottom:18px}
-.hero-actions{display:flex;gap:14px;flex-wrap:wrap;margin:28px 0 24px}
-.vtoggle{display:inline-flex;padding:5px;gap:5px;border:1px solid var(--line);border-radius:14px;background:rgba(255,255,255,.03);margin-bottom:32px}
-.vtoggle button{font-family:var(--font-display);font-weight:600;font-size:14px;color:var(--text-2);padding:9px 20px;border:none;background:none;border-radius:10px;cursor:pointer;transition:all .3s var(--ease);display:flex;align-items:center;gap:8px}
-.vtoggle button .dot{width:7px;height:7px;border-radius:50%;background:currentColor;opacity:.5}
-.vtoggle button.active{color:#120A05;background:linear-gradient(100deg,var(--amber),var(--amber-deep))}
-.vtoggle button.active.fac-btn{background:linear-gradient(100deg,var(--cyan),#0B82BC);color:#04121A}
-.vtoggle button.active .dot{opacity:1}
-.hero-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;border-top:1px solid var(--line);padding-top:24px}
-.hstat .n{font-family:var(--font-display);font-weight:700;font-size:clamp(19px,2vw,26px);color:var(--text)}
-.hstat .n .u{color:var(--amber);font-size:.7em}
-.hstat .l{font-size:12.5px;color:var(--text-3);margin-top:3px}
-.hero-visual{position:relative}
-.hero-dash{display:none}.hero-dash.active{display:block;animation:fadeUp .5s var(--ease)}
-.dash-halo{position:absolute;width:90%;height:70%;border-radius:50%;filter:blur(80px);opacity:.5;z-index:0;top:14%;left:5%;background:radial-gradient(circle,var(--amber-glow),transparent 70%)}
-.hero-visual.fac .dash-halo{background:radial-gradient(circle,var(--cyan-glow),transparent 70%)}
-.float-card{position:absolute;background:rgba(20,20,26,.85);border:1px solid var(--line-strong);border-radius:14px;padding:12px 16px;backdrop-filter:blur(12px);box-shadow:0 20px 50px -20px rgba(0,0,0,.7);z-index:6}
-.float-card .fc-label{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;color:var(--text-3);text-transform:uppercase}
-.float-card .fc-val{font-family:var(--font-display);font-weight:700;font-size:19px;margin-top:2px}
-.fc-1{top:-22px;left:-30px;animation:floaty 5s ease-in-out infinite}
-.fc-2{bottom:-20px;right:-24px;animation:floaty 6s ease-in-out infinite .8s}
-@keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-12px)}}
-.fc-val.up{color:#4ade80}.fc-val.amber{color:var(--amber)}.fc-val.cyan{color:var(--cyan-soft)}
-.pain-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:18px}
-.pain-card{padding:26px 22px;border:1px solid var(--line);border-radius:var(--radius);background:linear-gradient(180deg,rgba(255,255,255,.02),transparent);transition:border-color .3s}
-.pain-card:hover{border-color:rgba(232,115,46,.4)}
-.pain-card .px{font-family:var(--font-mono);font-size:13px;color:var(--amber);margin-bottom:14px}
-.pain-card h4{font-family:var(--font-display);font-size:17px;font-weight:600;margin-bottom:8px}
-.pain-card p{font-size:14px;color:var(--text-3);line-height:1.6}
-.pcard.feature{display:grid;grid-template-columns:1.15fr 1fr;gap:24px;align-items:center}
-.fp-mock{border:1px solid var(--line-strong);border-radius:12px;padding:16px;background:#0c0c10}
-.fp-mock .fl{font-size:12px;color:var(--text-3);font-family:var(--font-mono);margin-bottom:7px}
-.fp-input{display:flex;align-items:center;justify-content:space-between;border:1px solid var(--amber);border-radius:9px;padding:10px 14px;background:rgba(232,115,46,.06)}
-.fp-input .v{font-family:var(--font-display);font-weight:700;font-size:22px;color:var(--text)}
-.fp-input .u{font-size:12px;color:var(--text-3)}
-.fp-hint{margin-top:10px;font-size:12px;color:var(--amber-soft);display:flex;align-items:center;gap:7px}
-.fp-meta{margin-top:8px;font-size:11px;color:var(--text-3);font-family:var(--font-mono)}
-.sc-toggle{display:inline-flex;padding:5px;gap:5px;border:1px solid var(--line);border-radius:14px;background:rgba(255,255,255,.03);margin:0 auto 48px}
-.sc-toggle button{font-family:var(--font-display);font-weight:600;font-size:15px;color:var(--text-2);padding:11px 28px;border:none;background:none;border-radius:10px;cursor:pointer;transition:all .3s var(--ease)}
-.sc-toggle button.active{color:#120A05;background:linear-gradient(100deg,var(--amber),var(--amber-deep))}
-.sc-toggle button.active[data-v="factory"]{background:linear-gradient(100deg,var(--cyan),#0B82BC);color:#04121A}
-.sc-panel{display:none}.sc-panel.active{display:block;animation:fadeUp .6s var(--ease)}
-.sc-layout{display:grid;grid-template-columns:1.18fr 1fr;gap:48px;align-items:center}
-.sc-feats h3{font-size:clamp(24px,2.6vw,32px);margin-bottom:10px}
-.sc-feats .sub{color:var(--text-2);margin-bottom:26px;max-width:440px}
-.feat{display:flex;gap:16px;padding:16px 0;border-top:1px solid var(--line)}
-.feat .fnum{font-family:var(--font-mono);font-size:13px;color:var(--amber);flex:0 0 auto;padding-top:2px}
-.sc-panel[data-v="factory"] .feat .fnum{color:var(--cyan-soft)}
-.feat h5{font-family:var(--font-display);font-size:16px;font-weight:600;margin-bottom:5px}
-.feat p{font-size:13.5px;color:var(--text-3)}
-.sc-cta{margin-top:26px}
-.insight{position:relative;overflow:hidden}
-.insight-glow{position:absolute;width:700px;height:400px;background:radial-gradient(ellipse,rgba(14,165,233,.2),transparent 70%);top:10%;left:50%;transform:translateX(-50%);filter:blur(60px);z-index:0}
-.insight-layout{display:grid;grid-template-columns:1fr 1fr;gap:54px;align-items:center}
-.insight ul.ins-list{list-style:none;margin-top:26px}
-.insight ul.ins-list li{display:flex;gap:14px;padding:14px 0;border-top:1px solid var(--line);color:var(--text-2);font-size:15px}
-.insight ul.ins-list li b{color:var(--text)}
-.insight .chk{flex:0 0 auto;width:22px;height:22px;border-radius:7px;background:rgba(232,115,46,.14);border:1px solid rgba(232,115,46,.3);display:flex;align-items:center;justify-content:center;color:var(--amber);font-size:13px}
-.bi-stack{position:relative;border:1px solid var(--line-strong);border-radius:var(--radius);background:linear-gradient(165deg,var(--surface-2),var(--bg));padding:22px;box-shadow:0 40px 90px -40px rgba(0,0,0,.8)}
-.bi-row{display:flex;gap:12px;margin-bottom:12px}
-.bi-kpi{flex:1;border:1px solid var(--line);border-radius:12px;padding:14px;background:rgba(255,255,255,.02)}
-.bi-kpi .l{font-size:11px;color:var(--text-3);font-family:var(--font-mono);letter-spacing:.06em}
-.bi-kpi .v{font-family:var(--font-display);font-weight:700;font-size:24px;margin-top:4px}
-.bi-kpi .v small{font-size:13px;color:#4ade80;margin-left:6px}
-.bi-chart{border:1px solid var(--line);border-radius:12px;padding:16px;background:rgba(255,255,255,.02)}
-.bars{display:flex;align-items:flex-end;gap:11px;height:118px;margin-top:10px}
-.bar{flex:1;border-radius:6px 6px 0 0;background:linear-gradient(180deg,var(--amber),var(--amber-deep));height:6px;transition:height 1s var(--ease)}
-.bar:nth-child(even){background:linear-gradient(180deg,var(--cyan-soft),var(--cyan))}
-@media(max-width:980px){.hero-inner,.sc-layout,.insight-layout{grid-template-columns:1fr;gap:46px}.hero-visual{order:-1}.pain-grid{grid-template-columns:repeat(2,1fr)}.pcard.feature{grid-template-columns:1fr}.hero-stats{grid-template-columns:repeat(2,1fr);gap:22px}}
-@media(max-width:560px){.pain-grid{grid-template-columns:1fr}.hero{padding:130px 0 60px}.float-card{display:none}}
+/* Reveal must never gate content: without JS (or if the observer never fires)
+   everything stays fully visible; JS opt-in re-enables the hidden→fade entrance. */
+html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
+/* ---- page-level composition (colors/radii/fonts come from v6.css vars) ---- */
+.v6-nav a:hover{color:var(--v6-ink)}
+.v6-nav .nav-links{display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+
+/* HERO ------------------------------------------------------------------- */
+.hero-wrap{position:relative}
+.hero-wrap .v6-glow{top:20px;height:420px}
+.v6-hero{height:min(78vh,640px)}
+.v6-hero-mask img{object-position:center 32%}
+.hero-copy{position:absolute;left:clamp(24px,5.5vw,80px);top:50%;transform:translateY(-50%);
+  max-width:min(48%,560px);z-index:2}
+.hero-copy h1{font-size:clamp(34px,5.4vw,62px);font-weight:900;color:#fff;line-height:1.26;
+  letter-spacing:-0.01em;margin:0 0 20px;text-shadow:0 2px 26px rgba(0,0,0,.3);text-wrap:balance}
+.hero-copy p{font-size:clamp(15px,1.55vw,19px);color:rgba(255,255,255,.92);line-height:1.85;
+  margin:0 0 28px;max-width:34ch;text-wrap:pretty}
+.hero-cta{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+.hero-cta .v6-link{color:#fff;font-weight:600;font-size:15px;text-decoration:none;opacity:.94}
+.hero-cta .v6-link:hover{opacity:1}
+
+/* AI 识别框 (desktop overlay) */
+.ai-box-1{right:26%;top:13%;width:clamp(150px,15vw,210px);height:52%}
+.ai-box-2{right:7%;top:54%;width:clamp(110px,11vw,150px);height:20%}
+.ai-box-1 .v6-ai-tag{top:-16px;left:0}
+.ai-box-2 .v6-ai-tag{bottom:-16px;left:0}
+
+/* LIVE 条 ticker */
+.v6-live-bar #liveTicker{transition:opacity .26s ease}
+
+/* 四业务 ----------------------------------------------------------------- */
+.biz{max-width:1320px;margin:0 auto;padding:clamp(44px,7vw,96px) clamp(16px,4vw,48px) clamp(24px,4vw,44px)}
+.biz h2{font-size:clamp(24px,3.4vw,40px);font-weight:900;letter-spacing:-0.015em;margin:0 0 10px;text-wrap:balance}
+.biz .sub{font-size:clamp(14px,1.5vw,17px);color:var(--v6-ink-2);margin:0 0 clamp(26px,3.4vw,44px);max-width:52ch;line-height:1.7}
+.biz-grid{display:grid;grid-template-columns:1.4fr 1fr 1fr 1.15fr;gap:clamp(12px,1.4vw,20px);
+  grid-auto-rows:clamp(260px,30vw,330px)}
+.biz-grid .v6-photo-card,.biz-grid .ai-card{height:100%}
+.card-tag{position:absolute;top:14px;left:14px;z-index:2;border:1px solid rgba(0,226,138,.6);
+  background:rgba(4,20,13,.5);backdrop-filter:blur(4px);color:var(--v6-tag);font-family:var(--v6-mono);
+  font-size:clamp(10px,1vw,12.5px);padding:4px 11px;border-radius:99px;white-space:nowrap;letter-spacing:.2px}
+.biz-grid .v6-photo-card .title{bottom:16px;left:18px;right:14px}
+.biz-grid .v6-photo-card .title b{font-size:clamp(17px,1.7vw,21px);letter-spacing:-0.01em}
+.biz-grid .v6-photo-card .title small{font-size:clamp(12.5px,1.2vw,14px);line-height:1.5;margin-top:3px;display:block}
+.v6-photo-card{transition:transform .5s cubic-bezier(.22,1,.36,1)}
+.v6-photo-card:hover{transform:translateY(-4px)}
+
+/* AI 对话卡 */
+.ai-card{position:relative;border-radius:var(--v6-r-card);overflow:hidden;text-decoration:none;
+  background:linear-gradient(160deg,#0d1210 0%,#0a1a13 100%);box-shadow:0 18px 40px rgba(10,40,28,.28);
+  padding:clamp(16px,1.6vw,22px);display:flex;flex-direction:column}
+.ai-card .brandline{font-family:var(--v6-mono);font-size:clamp(10px,1vw,12px);color:var(--v6-tag);
+  letter-spacing:1.4px;margin-bottom:clamp(12px,1.5vw,18px)}
+.ai-card .bub{border-radius:12px;padding:9px 13px;margin-bottom:9px;line-height:1.55;
+  font-size:clamp(12.5px,1.2vw,14.5px)}
+.ai-card .bub-q{align-self:flex-start;max-width:90%;background:rgba(255,255,255,.08);
+  border-radius:12px 12px 12px 4px;color:rgba(255,255,255,.92)}
+.ai-card .bub-a{align-self:flex-end;max-width:94%;background:rgba(0,226,138,.1);
+  border:1px solid rgba(0,226,138,.2);border-radius:12px 12px 4px 12px;color:#c8f5e3}
+.ai-card .title{margin-top:auto;padding-top:16px}
+.ai-card .title b{font-size:clamp(17px,1.7vw,21px);color:#fff;display:block;letter-spacing:-0.01em}
+.ai-card .title small{font-size:clamp(12.5px,1.2vw,14px);color:rgba(255,255,255,.62);margin-top:3px;display:block}
+
+/* 定制开发 --------------------------------------------------------------- */
+.custom{max-width:1000px;margin:0 auto;padding:clamp(52px,8vw,116px) clamp(16px,4vw,48px);text-align:center}
+.custom h2{font-size:clamp(27px,4.1vw,48px);font-weight:900;line-height:1.38;letter-spacing:-0.02em;
+  margin:0 0 20px;text-wrap:balance}
+.custom h2 .nb{white-space:nowrap}
+.custom p{font-size:clamp(15px,1.6vw,19px);color:var(--v6-ink-2);line-height:1.8;
+  max-width:56ch;margin:0 auto 30px;text-wrap:pretty}
+
+/* 客户原话收尾 ----------------------------------------------------------- */
+.quote-band{max-width:1200px;margin:0 auto;padding:clamp(44px,7vw,92px) clamp(16px,4vw,48px);
+  display:flex;justify-content:space-between;align-items:flex-end;gap:clamp(24px,4vw,48px);
+  flex-wrap:wrap;border-top:1px solid rgba(0,0,0,.07)}
+.quote-band .v6-quote{max-width:40ch}
+.quote-cta{flex:0 0 auto;color:var(--v6-cta-ink);font-weight:700;text-decoration:none;font-size:15px;
+  background:rgba(0,179,119,.09);padding:11px 22px;border-radius:99px;white-space:nowrap;transition:background .3s ease}
+.quote-cta:hover{background:rgba(0,179,119,.16)}
+
+/* footer ----------------------------------------------------------------- */
+.v6-foot{border-top:1px solid rgba(0,0,0,.07);padding:clamp(28px,4vw,44px) clamp(16px,4vw,48px);
+  max-width:1320px;margin:0 auto;display:flex;justify-content:space-between;align-items:center;
+  gap:20px;flex-wrap:wrap;color:#8a857e;font-size:13px}
+.v6-foot a{color:#57534e;text-decoration:none;margin-left:20px}
+.v6-foot a:hover{color:var(--v6-ink)}
+.v6-foot .foot-links{display:flex;flex-wrap:wrap}
+
+/* responsive ------------------------------------------------------------- */
+@media (max-width:768px){
+  .v6-nav{flex-direction:column;gap:12px;align-items:flex-start}
+  .v6-nav .nav-links{justify-content:flex-start}
+  .v6-nav a{margin-left:0;margin-right:18px}
+  .v6-hero{height:74vh;min-height:440px}
+  .v6-hero-scrim{background:linear-gradient(175deg,rgba(12,10,8,.28) 0%,rgba(12,10,8,.55) 46%,rgba(12,10,8,.9) 100%)}
+  .hero-copy{left:clamp(20px,6vw,32px);right:clamp(20px,6vw,32px);top:auto;bottom:14%;transform:none;max-width:none}
+  .hero-copy p{max-width:100%}
+  .v6-ai-box{display:none}
+  .biz-grid{grid-template-columns:1fr 1fr;grid-auto-rows:clamp(190px,42vw,240px)}
+  .ai-card{grid-column:1 / -1;grid-auto-rows:auto;min-height:230px}
+  .quote-band{flex-direction:column;align-items:flex-start}
+}
+@media (max-width:768px){ .v6-live-bar{gap:14px} }
+@media (prefers-reduced-motion: reduce){
+  .v6-photo-card,.v6-photo-card:hover{transition:none;transform:none}
+}
 </style>
 </head>
 <body>
 
-<header class="nav" id="nav">
-  <div class="bar">
-    <a href="/" class="logo" aria-label="白垩纪 Cretas">
-      <svg class="mark" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="lg" x1="0" y1="0" x2="32" y2="32"><stop stop-color="#F0A36B"/><stop offset=".55" stop-color="#E8732E"/><stop offset="1" stop-color="#0EA5E9"/></linearGradient></defs><path d="M16 2.5C9 2.5 3.5 8 3.5 15.5S9 29.5 16 29.5c4.2 0 7-1.6 9.2-4.2l-3.5-2.6c-1.4 1.6-3.1 2.5-5.5 2.5-4.6 0-7.8-3.6-7.8-8.2S11.4 7 16 7c2.4 0 4.1.9 5.5 2.5l3.5-2.6C22.9 4.1 20.2 2.5 16 2.5Z" fill="url(#lg)"/><circle cx="23.5" cy="15.5" r="3" fill="#0EA5E9"/></svg>
-      <span>白垩纪<small>CRETAS</small></span>
-    </a>
-    <nav class="nav-links">
-      <div class="nav-drop"><span>产品功能</span>
-        <div class="menu">
-          <a href="/smartbi.html" class="cy"><div class="di cy"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M2 13l3-4 3 2 5-7"/><path d="M2 2v12h12"/></svg></div><div><div class="dt">SmartBI 智能分析</div><div class="dd">Excel 秒变报表 · 对话式分析</div></div></a>
-          <a href="/cockpit.html" class="cy"><div class="di cy"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg></div><div><div class="dt">实时经营驾驶舱</div><div class="dd">一屏看清经营全貌</div></div></a>
-          <a href="#value"><div class="di"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 1.5 2 4.5v4c0 3.5 2.5 5.5 6 7 3.5-1.5 6-3.5 6-7v-4L8 1.5Z"/></svg></div><div><div class="dt">运营中枢 &amp; 全链路溯源</div><div class="dd">成本对账 · 批次追溯</div></div></a>
-        </div>
-      </div>
-      <div class="nav-drop"><span>解决方案</span>
-        <div class="menu">
-          <a href="/solutions-factory.html"><div class="di"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M2 15V6l5-3 5 3v9M7 15v-4h2v4M13 15V8l2 1v6"/></svg></div><div><div class="dt">食品加工厂</div><div class="dd">非标生产 · 防呆 · 全链路追溯</div></div></a>
-          <a href="/solutions-restaurant.html"><div class="di"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 2h10v4H3zM5 6v9M11 6v9M3 15h10"/></svg></div><div><div class="dt">餐饮门店 / 连锁</div><div class="dd">POS 经营分析 · 数据可信</div></div></a>
-        </div>
-      </div>
-      <a href="/demo.html">在线演示</a>
-      <a href="#why">为什么选我们</a>
-      <a href="#contact">联系我们</a>
-    </nav>
-    <div class="nav-cta">
-      <a href="/client-request/" class="btn btn-primary">预约演示</a>
-      <button class="menu-btn" id="menuBtn" aria-label="菜单"><svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
-    </div>
+<nav class="v6-nav">
+  <a href="/" style="display:flex;align-items:center;gap:8px;margin:0;text-decoration:none">
+    <svg width="18" height="18" viewBox="0 0 15 15" fill="none"><rect x="1" y="1" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="8.5" y="1" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="1" y="8.5" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="8.5" y="8.5" width="5.5" height="5.5" rx="2.75" fill="#00b377"/></svg>
+    <b style="color:#111;font-size:17px">白垩纪</b><small style="color:#999;letter-spacing:2px;font-size:11px">CRETAS</small>
+  </a>
+  <div class="nav-links">
+    <a href="/solutions-factory.html">食品工厂</a>
+    <a href="/solutions-restaurant.html">餐饮连锁</a>
+    <a href="/solutions-logistics.html">物流配送</a>
+    <a href="/solutions-ai.html">AI 中枢</a>
+    <a href="/solutions-custom.html">定制开发</a>
+    <a href="/demo.html">在线演示</a>
+    <a class="v6-btn-ghost" href="mailto:stevenj4xie@gmail.com">预约演示</a>
   </div>
-</header>
-<div class="mobile-menu" id="mobileMenu">
-  <a href="/smartbi.html">SmartBI 智能分析</a><a href="/cockpit.html">实时驾驶舱</a><a href="/solutions-factory.html">食品加工厂方案</a><a href="/solutions-restaurant.html">餐饮方案</a><a href="/demo.html">在线演示</a><a href="#why">为什么选我们</a><a href="#contact">联系我们</a>
-  <a href="/client-request/" class="btn btn-primary">预约演示</a>
-</div>
+</nav>
 
 <!-- HERO -->
-<section class="hero" id="home">
-  <div class="hero-bg"><div class="aurora a1"></div><div class="aurora a2"></div><div class="aurora a3"></div><div class="grid-overlay"></div><canvas id="particles"></canvas></div>
-  <div class="wrap">
-    <div class="hero-inner">
-      <div class="hero-text">
-        <div class="hero-eyebrow eyebrow">白垩纪 CRETAS · AI 运营中枢</div>
-        <h1>后厨与车间的<br><span class="grad">每一笔钱、每一克料</span><br>从此清清楚楚</h1>
-        <p class="lead">从原料入库到成品出餐——成本自动对账、损耗实时预警、全链路可追溯。不是又一个报表工具，是真正属于你的运营底座。<b style="color:var(--text)">餐饮门店与食品工厂通用。</b></p>
-        <div class="vtoggle" id="heroToggle" role="tablist" aria-label="业态切换">
-          <button class="active" data-v="rest"><span class="dot"></span>餐饮门店</button>
-          <button data-v="factory" class="fac-btn"><span class="dot"></span>食品工厂</button>
-        </div>
-        <div class="hero-actions">
-          <a href="/client-request/" class="btn btn-primary">预约演示 <span class="arr">→</span></a>
-          <a href="/demo.html" class="btn btn-ghost">看真实产品</a>
-        </div>
-        <div class="hero-stats">
-          <div class="hstat"><div class="n">全链路</div><div class="l">从供应商到餐桌可追溯</div></div>
-          <div class="hstat"><div class="n">实时</div><div class="l">成本 / 损耗经营看板</div></div>
-          <!-- TODO(Steve): 确认真实数据 / 可替换为客户授权数字 -->
-          <div class="hstat"><div class="n">2000<span class="u">万+</span></div><div class="l">年流水全量入账</div></div>
-          <div class="hstat"><div class="n">0<span class="u">门槛</span></div><div class="l">一线员工零培训上手</div></div>
-        </div>
+<section class="hero-wrap">
+  <div class="v6-glow"></div>
+  <div class="v6-hero">
+    <div class="v6-hero-mask">
+      <img src="/assets/img/hero-kitchen.jpg" alt="后厨师傅在暖光下的操作台前逐盘出品，AI 正在识别每道工序">
+    </div>
+    <div class="v6-hero-scrim"></div>
+
+    <div class="v6-ai-box ai-box-1">
+      <span class="v6-ai-tag">操作员 · 装盘工序 98.2%</span>
+    </div>
+    <div class="v6-ai-box ai-box-2" style="border-color:rgba(0,226,138,.55);box-shadow:none">
+      <span class="v6-ai-tag v6-ai-tag--dark">出品 ×3 · 已计数</span>
+    </div>
+
+    <div class="hero-copy">
+      <h1>你的生意，AI 亲眼盯着。</h1>
+      <p>白垩纪把 AI 装进车间、后厨、货车和账本 — 看得见每道工序，算得清每一分钱。</p>
+      <div class="hero-cta">
+        <a class="v6-btn" href="mailto:stevenj4xie@gmail.com">预约演示</a>
+        <a class="v6-link" href="/demo.html">3 分钟了解 Cretas →</a>
       </div>
-      <div class="hero-visual" id="heroVisual">
-        <div class="dash-halo"></div>
-        <div class="float-card fc-1"><div class="fc-label" id="fcL1">今日营收</div><div class="fc-val up" id="fcV1">¥ 86,420 ▲</div></div>
-        <div class="float-card fc-2"><div class="fc-label" id="fcL2">损耗预警</div><div class="fc-val amber" id="fcV2">3 项待处理</div></div>
-        <!-- 餐饮 -->
-        <div class="hero-dash active" data-v="rest">
-          <div class="browser"><div class="browser-bar"><div class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></div><div class="url">cretas.app · 经营驾驶舱</div></div>
-            <div class="browser-body"><div class="dash rest">
-              <div class="dash-top"><div class="dt">经营驾驶舱<span>· 连锁门店</span></div><div class="dash-chips"><span class="dash-chip">日</span><span class="dash-chip">周</span><span class="dash-chip on">月</span></div></div>
-              <div class="kpis">
-                <div class="kpi"><div class="kl">营业收入</div><div class="kv">¥193<span style="font-size:11px">万</span></div><div class="kd up">▲ 12.4%</div></div>
-                <div class="kpi"><div class="kl">订单数</div><div class="kv">14.1<span style="font-size:11px">万</span></div><div class="kd up">▲ 8.1%</div></div>
-                <div class="kpi"><div class="kl">客单价</div><div class="kv">¥137</div><div class="kd up">▲ 3.6%</div></div>
-                <div class="kpi"><div class="kl">综合毛利率</div><div class="kv">58.2%</div><div class="kd up">▲ 2.1pt</div></div>
-              </div>
-              <div class="dash-main">
-                <div class="dpanel"><div class="ph"><span>近 30 日营收趋势</span><span style="color:var(--amber-soft)">¥ / 日</span></div>
-                  <div class="mbars"><div class="mbar" style="height:48%"></div><div class="mbar" style="height:66%"></div><div class="mbar" style="height:54%"></div><div class="mbar" style="height:78%"></div><div class="mbar" style="height:62%"></div><div class="mbar" style="height:88%"></div><div class="mbar" style="height:72%"></div><div class="mbar" style="height:95%"></div></div>
-                </div>
-                <div class="dpanel"><div class="ph"><span>门店营收排行</span></div>
-                  <div class="rank"><span class="ri">1</span><span class="rn">旗舰 · 体育中心店</span><span class="rv">¥38万</span></div>
-                  <div class="rank"><span class="ri">2</span><span class="rn">万象城店</span><span class="rv">¥31万</span></div>
-                  <div class="rank"><span class="ri">3</span><span class="rn">高新区店</span><span class="rv">¥27万</span></div>
-                  <div class="rank"><span class="ri">4</span><span class="rn">老城中心店</span><span class="rv">¥22万</span></div>
-                </div>
-              </div>
-              <div class="ai-strip"><div class="ab">AI</div><div class="at">检测到 <b>3 号门店</b> 净菜损耗高于均值 18%，建议核对验收流程。</div></div>
-            </div></div>
-          </div>
-        </div>
-        <!-- 工厂 -->
-        <div class="hero-dash" data-v="factory">
-          <div class="browser"><div class="browser-bar"><div class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></div><div class="url">cretas.app · 生产驾驶舱</div></div>
-            <div class="browser-body"><div class="dash fac">
-              <div class="dash-top"><div class="dt">生产驾驶舱<span>· 食品工厂</span></div><div class="dash-chips"><span class="dash-chip">日</span><span class="dash-chip">周</span><span class="dash-chip on">月</span></div></div>
-              <div class="kpis">
-                <div class="kpi"><div class="kl">总产量</div><div class="kv">386<span style="font-size:11px">吨</span></div><div class="kd up">▲ 6.8%</div></div>
-                <div class="kpi"><div class="kl">综合良率</div><div class="kv">97.6%</div><div class="kd up">▲ 0.9pt</div></div>
-                <div class="kpi"><div class="kl">单位成本</div><div class="kv">¥18.4</div><div class="kd down">▼ 2.3%</div></div>
-                <div class="kpi"><div class="kl">出成率</div><div class="kv">82.5%</div><div class="kd flat">— 持平</div></div>
-              </div>
-              <div class="dash-main">
-                <div class="dpanel"><div class="ph"><span>近 30 日产量趋势</span><span style="color:var(--cyan-soft)">吨 / 日</span></div>
-                  <div class="mbars"><div class="mbar" style="height:58%"></div><div class="mbar" style="height:72%"></div><div class="mbar" style="height:64%"></div><div class="mbar" style="height:80%"></div><div class="mbar" style="height:70%"></div><div class="mbar" style="height:90%"></div><div class="mbar" style="height:76%"></div><div class="mbar" style="height:84%"></div></div>
-                </div>
-                <div class="dpanel"><div class="ph"><span>产线产出排行</span></div>
-                  <div class="rank"><span class="ri">1</span><span class="rn">分割车间 A 线</span><span class="rv">142吨</span></div>
-                  <div class="rank"><span class="ri">2</span><span class="rn">熟食线</span><span class="rv">98吨</span></div>
-                  <div class="rank"><span class="ri">3</span><span class="rn">净菜线</span><span class="rv">86吨</span></div>
-                  <div class="rank"><span class="ri">4</span><span class="rn">冷冻调理线</span><span class="rv">60吨</span></div>
-                </div>
-              </div>
-              <div class="ai-strip"><div class="ab">AI</div><div class="at">检测到 <b>熟食线</b> 单位成本环比上升 4.2%，疑似辅料投料偏差，建议核对配方。</div></div>
-            </div></div>
-          </div>
-        </div>
-      </div>
+    </div>
+
+    <div class="v6-live-bar">
+      <span class="v6-live-dot">● LIVE</span>
+      <span id="liveTicker">酱卤车间 · 第 3 道工序进行中</span>
     </div>
   </div>
 </section>
 
-<!-- PAIN -->
-<section class="tone-soft" id="pain">
-  <div class="wrap">
-    <div class="sec-head reveal"><div class="eyebrow">问题在哪</div><h2 class="h-sec">你的后厨与车间，<span class="muted">钱和料还是个黑盒？</span></h2></div>
-    <div class="pain-grid">
-      <div class="pain-card reveal d1"><div class="px">// 01</div><h4>月底才发现亏了</h4><p>损耗成了糊涂账，钱漏在哪、漏了多少，等盘点完才知道，早就来不及。</p></div>
-      <div class="pain-card reveal d2"><div class="px">// 02</div><h4>成本靠 Excel 拼</h4><p>门店一多、SKU 一杂，表格越拉越长，数字对不上，越管越乱。</p></div>
-      <div class="pain-card reveal d3"><div class="px">// 03</div><h4>平台只帮你导流</h4><p>外卖平台的工具关心的是它的单量，不会帮你管后厨的成本和供应链。</p></div>
-      <div class="pain-card reveal d4"><div class="px">// 04</div><h4>老 ERP 太复杂</h4><p>功能堆得满满当当，一线员工根本不会用，最后又退回纸笔和微信群。</p></div>
-    </div>
+<!-- 四业务 -->
+<section class="biz">
+  <h2 class="v6-reveal">四门生意，一个 AI 底座</h2>
+  <p class="sub v6-reveal">每一条业务线，AI 都在里面干活 — 不是挂名的“智能”。</p>
+  <div class="biz-grid">
+
+    <a class="v6-photo-card v6-reveal" href="/solutions-factory.html" style="box-shadow:0 16px 38px rgba(92,64,38,.22)">
+      <img src="/assets/img/warehouse.jpg" alt="食品工厂立体货架仓储，AI 逐个库位核对入库物料">
+      <span class="card-tag">库位 A-12 · 猪前腿 300kg ✓</span>
+      <div class="shade"></div>
+      <div class="title"><b>食品工厂</b><small>从一块原料到一张发票，AI 全程跟单</small></div>
+    </a>
+
+    <a class="v6-photo-card v6-reveal" href="/solutions-restaurant.html" style="box-shadow:0 16px 38px rgba(70,42,26,.24);transition-delay:.05s">
+      <img src="/assets/img/noodles.jpg" alt="连锁门店后厨出品的一碗热汤面，AI 实时核算单品毛利">
+      <span class="card-tag">单品毛利 62% · 正常</span>
+      <div class="shade"></div>
+      <div class="title"><b>餐饮连锁</b><small>每家店的账，AI 替你盯</small></div>
+    </a>
+
+    <a class="v6-photo-card v6-reveal" href="/solutions-logistics.html" style="box-shadow:0 16px 38px rgba(60,74,90,.2);transition-delay:.1s">
+      <img src="/assets/img/truck.jpg" alt="冷链配送货车行驶在公路上，AI 优化装载与路线">
+      <span class="card-tag">6 趟 → 5 趟 · 省 ¥430/天</span>
+      <div class="shade"></div>
+      <div class="title"><b>物流配送</b><small>十辆车，一个人调</small></div>
+    </a>
+
+    <a class="ai-card v6-reveal" href="/solutions-ai.html" style="transition-delay:.15s">
+      <div class="brandline">CRETAS AI</div>
+      <div class="bub bub-q"><span>“上个月哪个客户回款最慢？”</span></div>
+      <div class="bub bub-a"><span>华东经销-B，平均 47 天。已生成催款清单，要发出吗？</span></div>
+      <div class="title"><b>AI 中枢</b><small>大白话问，直接办事</small></div>
+    </a>
+
   </div>
 </section>
 
-<!-- VALUE -->
-<section id="value">
-  <div class="wrap">
-    <div class="sec-head reveal"><div class="eyebrow">核心价值</div><h2 class="h-sec">一套底座，<span class="grad">把钱和料管到底</span></h2><p class="lead">不是又一个报表插件。我们把后厨与车间的运营现实，做成一个结构化、可追溯、真正属于你的底座。</p></div>
-    <div class="pillars">
-      <div class="pcard amber col-7 reveal">
-        <div class="pico"><svg width="24" height="24" fill="none" stroke="#E8732E" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 4v16"/></svg></div>
-        <h3>运营中枢 · 一个底座管住所有</h3>
-        <p>成本、物料、工序、单据全在一处联动。告别软件孤岛和 Excel 拼凑，每一笔进出都自动入账、自动对齐。</p>
-        <div class="tags"><span class="tag">成本自动对账</span><span class="tag">出入库联动</span><span class="tag">单据一处管</span><span class="tag">多门店 / 多车间</span></div>
-      </div>
-      <div class="pcard cyan col-5 reveal d1">
-        <div class="pico"><svg width="24" height="24" fill="none" stroke="#0EA5E9" stroke-width="1.7"><path d="M12 2 4 6v6c0 5 3.4 7.7 8 10 4.6-2.3 8-5 8-10V6l-8-4Z"/><path d="m9 12 2 2 4-4"/></svg></div>
-        <h3>全链路溯源</h3>
-        <p>每一批料从供应商到餐桌，去哪了、用在哪、谁经手，一查到底。合规、放心、出了问题能倒查。</p>
-        <div class="tags"><span class="tag">批次追溯</span><span class="tag">可审计</span><span class="tag">食安合规</span></div>
-      </div>
-      <div class="pcard cyan col-5 reveal">
-        <div class="pico"><svg width="24" height="24" fill="none" stroke="#0EA5E9" stroke-width="1.7"><path d="M3 3v18h18"/><path d="m7 14 3-4 3 3 5-7"/></svg></div>
-        <h3>AI 经营洞察</h3>
-        <p>自动算账、主动预警、给你建议。AI 帮你盯着哪里在漏钱、哪道菜不赚钱、哪天该多备货。</p>
-        <div class="tags"><span class="tag">损耗预警</span><span class="tag">毛利分析</span><span class="tag">经营建议</span></div>
-      </div>
-      <div class="pcard amber col-7 feature reveal d1">
-        <div>
-          <div class="pico"><svg width="24" height="24" fill="none" stroke="#E8732E" stroke-width="1.7"><path d="M9 11V7a3 3 0 0 1 6 0v4"/><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M12 15v2"/></svg></div>
-          <h3>防呆易用 · 一线零门槛</h3>
-          <p>仓管、店员不用培训。系统直接告诉他"该收多少、该做什么"，把出错挡在发生之前——这是平台免费工具和传统 ERP 给不了的。</p>
-        </div>
-        <div class="fp-mock">
-          <div class="fl">// 入库 — 系统直接告诉他该收多少</div>
-          <div class="fp-input"><span class="v">70 <span class="u">件</span></span><span class="u">本次可入库</span></div>
-          <div class="fp-hint">✓ 在上限内，可直接提交</div>
-          <div class="fp-meta">订单 100 · 已收 30 · 含 30% 超收上限 130</div>
-        </div>
-      </div>
-    </div>
-  </div>
+<!-- 定制开发 -->
+<section class="custom">
+  <h2 class="v6-reveal"><span class="nb">你的业务没有现成软件？</span><span class="nb">我们连业务一起做。</span></h2>
+  <p class="v6-reveal">进销存、配额治理、小程序商城、低代码表单 — 让产品适应工厂，而不是工厂适应产品。</p>
+  <a class="v6-btn v6-reveal" href="/solutions-custom.html">看看定制开发怎么做</a>
 </section>
 
-<!-- SHOWCASE -->
-<section class="tone-soft" id="showcase">
-  <div class="wrap">
-    <div class="sec-head center reveal"><div class="eyebrow" style="justify-content:center">真实产品 · 双业态</div><h2 class="h-sec">餐饮门店 · 食品工厂，<span class="grad">同一套运营底座</span></h2></div>
-    <div style="text-align:center" class="reveal"><div class="sc-toggle" id="scToggle"><button class="active" data-v="rest">餐饮门店</button><button data-v="factory">食品工厂</button></div></div>
-    <div class="sc-panel active" data-v="rest">
-      <div class="sc-layout">
-        <div class="reveal">
-          <div class="browser"><div class="browser-bar"><div class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></div><div class="url">cretas.app · 餐饮 · 成本与毛利</div></div>
-            <div class="browser-body"><div class="dash rest">
-              <div class="dash-top"><div class="dt">菜品成本 &amp; 毛利<span>· 本月</span></div><div class="dash-chips"><span class="dash-chip on">毛利</span><span class="dash-chip">销量</span></div></div>
-              <div class="kpis">
-                <div class="kpi"><div class="kl">在售菜品</div><div class="kv">186</div><div class="kd flat">SKU</div></div>
-                <div class="kpi"><div class="kl">平均毛利率</div><div class="kv">58%</div><div class="kd up">▲ 2pt</div></div>
-                <div class="kpi"><div class="kl">负毛利菜品</div><div class="kv" style="color:#f87171">7</div><div class="kd down">需调整</div></div>
-                <div class="kpi"><div class="kl">本月损耗</div><div class="kv">¥4.2万</div><div class="kd down">▼ 9%</div></div>
-              </div>
-              <div class="dash-main">
-                <div class="dpanel"><div class="ph"><span>Top 菜品毛利贡献</span></div><div class="mbars"><div class="mbar" style="height:92%"></div><div class="mbar" style="height:80%"></div><div class="mbar" style="height:70%"></div><div class="mbar" style="height:58%"></div><div class="mbar" style="height:50%"></div><div class="mbar" style="height:40%"></div><div class="mbar" style="height:30%"></div></div></div>
-                <div class="dpanel"><div class="ph"><span>待关注</span></div>
-                  <div class="rank"><span class="ri">!</span><span class="rn">某招牌菜 毛利 -3%</span><span class="rv" style="color:#f87171">亏</span></div>
-                  <div class="rank"><span class="ri">!</span><span class="rn">净菜损耗偏高</span><span class="rv" style="color:var(--amber)">↑18%</span></div>
-                  <div class="rank"><span class="ri">✓</span><span class="rn">主推套餐毛利</span><span class="rv" style="color:#4ade80">64%</span></div>
-                </div>
-              </div>
-              <div class="ai-strip"><div class="ab">AI</div><div class="at">建议下架或重新定价 <b>3 道</b> 持续负毛利菜品，预计月增利 ¥2.1 万。</div></div>
-            </div></div>
-          </div>
-        </div>
-        <div class="sc-feats reveal d1">
-          <div class="eyebrow" style="margin-bottom:14px">FOR RESTAURANTS</div>
-          <h3>从一家店到一条连锁，<br>经营尽在掌心</h3>
-          <p class="sub">营收、成本、损耗、菜品毛利，门店与总部看同一份实时数据。</p>
-          <div class="feat"><div class="fnum">01</div><div><h5>经营驾驶舱</h5><p>营收、客单、渠道占比、门店排行，一屏看完，告别月底拉表。</p></div></div>
-          <div class="feat"><div class="fnum">02</div><div><h5>菜品成本与毛利</h5><p>每道菜的真实成本和赚不赚钱，一目了然，定价不再拍脑袋。</p></div></div>
-          <div class="feat"><div class="fnum">03</div><div><h5>原料与损耗</h5><p>领用、损耗、库存实时对账，哪里在漏钱主动提醒你。</p></div></div>
-          <div class="sc-cta"><a href="/restaurantbi-example/" class="btn btn-ghost">查看餐饮演示 <span class="arr">→</span></a></div>
-        </div>
-      </div>
-    </div>
-    <div class="sc-panel" data-v="factory">
-      <div class="sc-layout">
-        <div class="reveal">
-          <div class="browser"><div class="browser-bar"><div class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></div><div class="url">cretas.app · 工厂 · 生产追溯</div></div>
-            <div class="browser-body"><div class="dash fac">
-              <div class="dash-top"><div class="dt">生产追溯 &amp; 库存<span>· 实时</span></div><div class="dash-chips"><span class="dash-chip on">批次</span><span class="dash-chip">库存</span></div></div>
-              <div class="kpis">
-                <div class="kpi"><div class="kl">在产批次</div><div class="kv">24</div><div class="kd flat">进行中</div></div>
-                <div class="kpi"><div class="kl">今日报工</div><div class="kv">312</div><div class="kd up">▲ 工序</div></div>
-                <div class="kpi"><div class="kl">质检合格</div><div class="kv">98.1%</div><div class="kd up">▲ 0.6pt</div></div>
-                <div class="kpi"><div class="kl">库存预警</div><div class="kv" style="color:var(--amber)">5</div><div class="kd down">待补货</div></div>
-              </div>
-              <div class="dash-main">
-                <div class="dpanel"><div class="ph"><span>批次工序进度</span></div>
-                  <div class="rank"><span class="ri">B1</span><span class="rn">原料分割</span><span class="rv" style="color:#4ade80">已完成</span></div>
-                  <div class="rank"><span class="ri">B2</span><span class="rn">腌制 / 调理</span><span class="rv" style="color:var(--cyan-soft)">进行中</span></div>
-                  <div class="rank"><span class="ri">B3</span><span class="rn">熟化</span><span class="rv" style="color:var(--text-3)">待开始</span></div>
-                  <div class="rank"><span class="ri">B4</span><span class="rn">包装入库</span><span class="rv" style="color:var(--text-3)">待开始</span></div>
-                </div>
-                <div class="dpanel"><div class="ph"><span>三级库存</span></div>
-                  <div class="mbars"><div class="mbar" style="height:70%"></div><div class="mbar" style="height:88%"></div><div class="mbar" style="height:54%"></div><div class="mbar" style="height:62%"></div><div class="mbar" style="height:40%"></div></div>
-                  <div style="font-size:10px;color:var(--text-3);font-family:var(--font-mono);margin-top:8px">原料 · 半成品 · 成品</div>
-                </div>
-              </div>
-              <div class="ai-strip"><div class="ab">AI</div><div class="at">批次 <b>B2</b> 投料量低于配方 5%，可能影响出成率，已提醒车间主管复核。</div></div>
-            </div></div>
-          </div>
-        </div>
-        <div class="sc-feats reveal d1">
-          <div class="eyebrow cyan" style="margin-bottom:14px">FOR FOOD FACTORIES</div>
-          <h3>从原料到成品，<br>生产全程可追溯</h3>
-          <p class="sub">投料、报工、质检、出入库全程记录，成本与产量算得清清楚楚。</p>
-          <div class="feat"><div class="fnum">01</div><div><h5>生产全程追溯</h5><p>每个批次投了什么料、谁报的工、出成率多少，全链路留痕。</p></div></div>
-          <div class="feat"><div class="fnum">02</div><div><h5>出入库与库存</h5><p>原料、半成品、成品三级库存实时联动，负库存、超收自动拦。</p></div></div>
-          <div class="feat"><div class="fnum">03</div><div><h5>报工与质检</h5><p>一线扫码报工、移动端质检，数据当场进系统，不再纸质回填。</p></div></div>
-          <div class="sc-cta"><a href="/factorybi-example/" class="btn btn-ghost">查看工厂演示 <span class="arr">→</span></a></div>
-        </div>
-      </div>
-    </div>
+<!-- 客户原话收尾 -->
+<section class="quote-band">
+  <div class="v6-quote v6-reveal">
+    “你告诉他要收多少，就行了。”
+    <small>— 我们把系统做到仓管大叔零培训上手，这是客户教我们的。</small>
   </div>
+  <a class="quote-cta v6-reveal" href="/demo.html">看看 AI 怎么干活 →</a>
 </section>
 
-<!-- INSIGHT -->
-<section class="insight" id="insight">
-  <div class="insight-glow"></div>
-  <div class="wrap">
-    <div class="insight-layout">
-      <div class="reveal">
-        <div class="eyebrow cyan">AI 经营洞察 · SmartBI</div>
-        <h2 class="h-sec" style="margin:18px 0">AI 帮你算账、<br><span class="grad">找问题、给建议</span></h2>
-        <p class="lead">数据不只是堆成图表。白垩纪的 AI 会主动读懂你的经营数据，告诉你发生了什么、为什么、接下来该怎么做。</p>
-        <ul class="ins-list">
-          <li><span class="chk">✓</span><div><b>主动预警：</b>损耗异常、毛利下滑、库存积压，第一时间提醒，不用你天天盯。</div></li>
-          <li><span class="chk">✓</span><div><b>一句话问数据：</b>"这个月哪道菜最亏钱？"直接问，直接答，不用懂报表。</div></li>
-          <li><span class="chk">✓</span><div><b>给到行动建议：</b>不止告诉你"亏了"，还告诉你"该怎么调"。</div></li>
-        </ul>
-        <div style="margin-top:26px"><a href="/smartbi.html" class="btn btn-ghost">了解 SmartBI 智能分析 <span class="arr">→</span></a></div>
-      </div>
-      <div class="bi-stack reveal d1">
-        <div class="bi-row">
-          <div class="bi-kpi"><div class="l">本月营收</div><div class="v" data-count="193" data-suffix=" 万"><span class="cv">0</span> 万<small>▲ 12%</small></div></div>
-          <div class="bi-kpi"><div class="l">综合毛利率</div><div class="v" data-count="58" data-suffix="%"><span class="cv">0</span>%<small>▲ 3pt</small></div></div>
-        </div>
-        <div class="bi-chart">
-          <div class="l" style="font-family:var(--font-mono);font-size:11px;color:var(--text-3)">近 7 日营收趋势</div>
-          <div class="bars" id="bars"><div class="bar" data-h="55"></div><div class="bar" data-h="72"></div><div class="bar" data-h="48"></div><div class="bar" data-h="85"></div><div class="bar" data-h="66"></div><div class="bar" data-h="94"></div><div class="bar" data-h="78"></div></div>
-        </div>
-        <div class="bi-chart" style="margin-top:14px;display:flex;align-items:center;gap:14px">
-          <div class="chk" style="background:rgba(14,165,233,.14);border-color:rgba(14,165,233,.3);color:var(--cyan)">AI</div>
-          <div style="font-size:13.5px;color:var(--text-2)">检测到 <b style="color:var(--amber-soft)">3 号门店</b> 净菜损耗高于均值 18%，建议核对验收流程。</div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- EXPLORE / HUB -->
-<section class="tone-soft" id="explore">
-  <div class="wrap">
-    <div class="sec-head center reveal"><div class="eyebrow" style="justify-content:center">深入了解</div><h2 class="h-sec">想看得更深？<span class="grad">点进去看</span></h2></div>
-    <div class="hub-grid">
-      <a href="/smartbi.html" class="hub-card cy reveal">
-        <div class="pico" style="background:rgba(14,165,233,.12);border-color:rgba(14,165,233,.28)"><svg width="24" height="24" fill="none" stroke="#0EA5E9" stroke-width="1.7"><path d="M3 13l4-5 3 2 6-8"/><path d="M3 3v16h16"/></svg></div>
-        <h3>SmartBI 智能分析</h3>
-        <p>Excel 秒变报表，像聊天一样问数据，10+ 图表按需生成，AI 主动找出哪里在漏钱。</p>
-        <span class="go">了解 SmartBI <span class="arr">→</span></span>
-      </a>
-      <a href="/cockpit.html" class="hub-card cy reveal d1">
-        <div class="pico" style="background:rgba(14,165,233,.12);border-color:rgba(14,165,233,.28)"><svg width="24" height="24" fill="none" stroke="#0EA5E9" stroke-width="1.7"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></div>
-        <h3>实时经营驾驶舱</h3>
-        <p>从生产到经营，11 大模块实时联动，一屏看清经营全貌。</p>
-        <span class="go">查看驾驶舱 <span class="arr">→</span></span>
-      </a>
-      <a href="/demo.html" class="hub-card reveal d2">
-        <div class="pico"><svg width="24" height="24" fill="none" stroke="#E8732E" stroke-width="1.7"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="m10 9 4 2.5-4 2.5V9Z"/></svg></div>
-        <h3>在线演示中心</h3>
-        <p>不用安装，点开就能体验餐饮 / 工厂的真实产品界面。</p>
-        <span class="go">进入演示 <span class="arr">→</span></span>
-      </a>
-    </div>
-  </div>
-</section>
-
-<!-- WHY -->
-<section id="why">
-  <div class="wrap">
-    <div class="sec-head center reveal"><div class="eyebrow" style="justify-content:center">为什么选白垩纪</div><h2 class="h-sec">不是更便宜，<span class="grad">是真正属于你</span></h2><p class="lead">平台工具为它的流量服务，传统 ERP 为总部流程服务。白垩纪，为你的一线运营服务。</p></div>
-    <div class="compare-wrap reveal">
-      <table class="compare">
-        <thead><tr><th></th><th class="dim">平台免费工具</th><th class="dim">传统 ERP</th><th class="us">白垩纪 Cretas</th></tr></thead>
-        <tbody>
-          <tr><td>为谁服务</td><td class="dim">平台导流</td><td class="dim">总部流程</td><td class="us"><b>你的一线运营</b></td></tr>
-          <tr><td>钱和料</td><td class="dim">基本不管</td><td class="dim">能管，但复杂</td><td class="us">自动对账 + 主动预警</td></tr>
-          <tr><td>全链路溯源</td><td class="dim">无</td><td class="dim">部分</td><td class="us">全链路 · 可审计</td></tr>
-          <tr><td>一线易用</td><td class="dim">尚可</td><td class="dim">门槛高</td><td class="us">防呆 · 零培训</td></tr>
-          <tr><td>数据归属</td><td class="dim">归平台</td><td class="dim">归你</td><td class="us"><b>归你自己</b></td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-</section>
-
-<!-- AI 时代为什么是白垩纪 — 数据主权 / 责任锚点 / 线下物理嵌入 -->
-<section id="moat">
-  <div class="wrap">
-    <div class="sec-head center reveal">
-      <div class="eyebrow" style="justify-content:center">AI 时代，为什么是白垩纪</div>
-      <h2 class="h-sec">直接用 AI 问数据就够了？<span class="grad">有三件事它做不到</span></h2>
-      <p class="lead">AI 越来越聪明，你或许会想——把 Excel 丢给 AI 直接问不就行了？纯查数，确实够了。但真正经营一家店、一座厂，有三件事，任何通用 AI、任何云端 Agent 都替你做不了。</p>
-    </div>
-    <div class="pillars">
-      <div class="pcard amber col-4 reveal">
-        <div class="pico"><svg width="24" height="24" fill="none" stroke="#E8732E" stroke-width="1.7"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><circle cx="12" cy="15.5" r="1.5"/></svg></div>
-        <h3>你的数据，始终在你手里</h3>
-        <p>经营、成本、客户数据是你的命根子。白垩纪把它放在属于你的环境里，不喂给任何公有大模型、不外流。通用 AI 要你把数据交出去——我们不要。</p>
-        <div class="tags"><span class="tag">数据不外流</span><span class="tag">隔离环境</span><span class="tag">隐私可控</span></div>
-      </div>
-      <div class="pcard cyan col-4 reveal d1">
-        <div class="pico"><svg width="24" height="24" fill="none" stroke="#0EA5E9" stroke-width="1.7"><path d="M5 3h11l3 3v15H5z"/><path d="m8.5 13 2.5 2.5 5-5"/></svg></div>
-        <h3>出了事，追得到人</h3>
-        <p>食品安全、批次召回、谁验收谁签字——每一步责任留痕、可审计、可倒查。AI 给得了答案，但担不了责。出事时你需要的是一条追到底的链，不是一句"抱歉"。</p>
-        <div class="tags"><span class="tag">责任留痕</span><span class="tag">签字担责</span><span class="tag">可审计倒查</span></div>
-      </div>
-      <div class="pcard amber col-4 reveal d2">
-        <div class="pico"><svg width="24" height="24" fill="none" stroke="#E8732E" stroke-width="1.7"><path d="M3 21V8l6-4 6 4v13M9 21v-5h2v5M19 21V11l2 1.2V21M3 21h18"/></svg></div>
-        <h3>扎在你的车间和门店里</h3>
-        <p>报工终端、电子秤、摄像头人效、一线防呆操作——白垩纪长在你真实的物理流程里，不是云上一个聊天框。AI 进不了你的车间，我们已经在里面了。</p>
-        <div class="tags"><span class="tag">报工 / 过秤</span><span class="tag">摄像头人效</span><span class="tag">一线防呆</span></div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- TRUST -->
-<section class="tone-soft" id="trust">
-  <div class="wrap">
-    <div class="sec-head center reveal"><div class="eyebrow" style="justify-content:center">谁在用</div><h2 class="h-sec">服务于真实的<span class="grad">餐桌与车间</span></h2></div>
-    <!-- TODO(Steve): 替换为客户授权的真实品牌 / Logo / 数据 -->
-    <div class="chips reveal">
-      <div class="chip"><span>●</span>卤味连锁</div><div class="chip"><span>●</span>餐饮连锁门店</div><div class="chip"><span>●</span>食品加工厂</div><div class="chip"><span>●</span>熟食加工</div>
-    </div>
-    <div class="quote reveal d1">
-      <div class="q-mark">"</div>
-      <p>做仓管的年纪都偏大，你不能太依赖他们——最好的方式，就是系统直接告诉他这个东西要收多少。白垩纪做到了。</p>
-      <cite>— 某连锁食品企业 · 运营负责人</cite>
-    </div>
-  </div>
-</section>
-
-<!-- FINAL CTA -->
-<section class="cta-band" id="contact">
-  <div class="glow"></div>
-  <div class="wrap reveal">
-    <h2>把你的运营，<br>交给会算账的 AI</h2>
-    <p>一次演示，看清你的后厨与车间到底在赚钱还是漏钱。</p>
-    <div class="acts"><a href="/client-request/" class="btn btn-primary">预约演示 <span class="arr">→</span></a><a href="mailto:stevenj4xie@gmail.com" class="btn btn-ghost">邮件联系我们</a></div>
-  </div>
-</section>
-
-<footer>
-  <div class="wrap">
-    <div class="foot-grid">
-      <div class="foot-brand">
-        <a href="/" class="logo"><svg class="mark" viewBox="0 0 32 32" fill="none"><path d="M16 2.5C9 2.5 3.5 8 3.5 15.5S9 29.5 16 29.5c4.2 0 7-1.6 9.2-4.2l-3.5-2.6c-1.4 1.6-3.1 2.5-5.5 2.5-4.6 0-7.8-3.6-7.8-8.2S11.4 7 16 7c2.4 0 4.1.9 5.5 2.5l3.5-2.6C22.9 4.1 20.2 2.5 16 2.5Z" fill="#E8732E"/><circle cx="23.5" cy="15.5" r="3" fill="#0EA5E9"/></svg><span>白垩纪<small>CRETAS</small></span></a>
-        <p>餐饮门店与食品工厂通用的 AI 运营中枢。让后厨与车间的每一笔钱、每一克料，清清楚楚。</p>
-      </div>
-      <div class="foot-col"><h6>解决方案</h6><a href="/solutions-factory.html">食品加工厂</a><a href="/solutions-restaurant.html">餐饮门店 / 连锁</a></div>
-      <div class="foot-col"><h6>产品</h6><a href="/smartbi.html">SmartBI 智能分析</a><a href="/cockpit.html">实时经营驾驶舱</a><a href="/demo.html">在线演示</a><a href="/#why">为什么选我们</a></div>
-      <div class="foot-col"><h6>联系</h6><a href="mailto:stevenj4xie@gmail.com">stevenj4xie@gmail.com</a><a href="/client-request/">商务合作</a><a href="/privacy.html">隐私政策</a></div>
-    </div>
-    <div class="foot-bottom"><div>© 2026 白垩纪 Cretas · cretaceousfuture.com</div><div>餐饮 · 食品工厂 · 全链路溯源</div></div>
+<footer class="v6-foot">
+  <div>© 2026 白垩纪 Cretas · cretaceousfuture.com</div>
+  <div class="foot-links">
+    <a href="/solutions-factory.html">食品工厂</a>
+    <a href="/solutions-restaurant.html">餐饮连锁</a>
+    <a href="/solutions-logistics.html">物流配送</a>
+    <a href="/solutions-ai.html">AI 中枢</a>
+    <a href="mailto:stevenj4xie@gmail.com">联系我们</a>
   </div>
 </footer>
 
-<script src="/js/cretas-site.js"></script>
+<script src="/js/v6.js"></script>
 <script>
-/* hero vertical toggle */
-var heroFC={rest:{l1:'今日营收',v1:'¥ 86,420 ▲',c1:'up',l2:'损耗预警',v2:'3 项待处理',c2:'amber'},factory:{l1:'当日产量',v1:'14.2 吨 ▲',c1:'up',l2:'综合良率',v2:'97.6%',c2:'cyan'}};
-var hv=document.getElementById('heroVisual');
-document.querySelectorAll('#heroToggle button').forEach(function(b){b.addEventListener('click',function(){
-  document.querySelectorAll('#heroToggle button').forEach(function(x){x.classList.remove('active')});b.classList.add('active');
-  var v=b.dataset.v;
-  document.querySelectorAll('.hero-dash').forEach(function(d){d.classList.toggle('active',d.dataset.v===v)});
-  hv.classList.toggle('fac',v==='factory');
-  var f=heroFC[v];
-  document.getElementById('fcL1').textContent=f.l1;var v1=document.getElementById('fcV1');v1.textContent=f.v1;v1.className='fc-val '+f.c1;
-  document.getElementById('fcL2').textContent=f.l2;var v2=document.getElementById('fcV2');v2.textContent=f.v2;v2.className='fc-val '+f.c2;
-})});
-/* showcase toggle */
-document.querySelectorAll('#scToggle button').forEach(function(b){b.addEventListener('click',function(){
-  var v=b.dataset.v;document.querySelectorAll('#scToggle button').forEach(function(x){x.classList.remove('active')});b.classList.add('active');
-  document.querySelectorAll('.sc-panel').forEach(function(p){p.classList.toggle('active',p.dataset.v===v)});
-})});
-/* count up */
-var counted=new Set();
-var cio=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting&&!counted.has(e.target)){counted.add(e.target);
-  var el=e.target,target=+el.dataset.count,cv=el.querySelector('.cv');if(!cv)return;var n=0,step=target/45;
-  var t=setInterval(function(){n+=step;if(n>=target){n=target;clearInterval(t)}cv.textContent=Math.round(n)},20)}})},{threshold:.5});
-document.querySelectorAll('[data-count]').forEach(function(el){cio.observe(el)});
-/* bars */
-var bio=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){document.querySelectorAll('#bars .bar').forEach(function(b){b.style.height=b.dataset.h+'%'});bio.disconnect()}})},{threshold:.4});
-var barsEl=document.getElementById('bars');if(barsEl)bio.observe(barsEl);
-/* particles */
-(function(){var c=document.getElementById('particles');if(!c)return;var x=c.getContext('2d'),w,h,pts=[];
-  function size(){w=c.width=c.offsetWidth;h=c.height=c.offsetHeight;pts=Array.from({length:Math.min(46,Math.floor(w/30))},function(){return{x:Math.random()*w,y:Math.random()*h,vx:(Math.random()-.5)*.3,vy:(Math.random()-.5)*.3,r:Math.random()*1.6+.4}})}
-  function loop(){x.clearRect(0,0,w,h);for(var i=0;i<pts.length;i++){var p=pts[i];p.x+=p.vx;p.y+=p.vy;if(p.x<0||p.x>w)p.vx*=-1;if(p.y<0||p.y>h)p.vy*=-1;x.beginPath();x.arc(p.x,p.y,p.r,0,6.28);x.fillStyle='rgba(232,115,46,.5)';x.fill()}
-    for(var a=0;a<pts.length;a++)for(var b2=a+1;b2<pts.length;b2++){var p1=pts[a],p2=pts[b2],d=Math.hypot(p1.x-p2.x,p1.y-p2.y);if(d<120){x.beginPath();x.moveTo(p1.x,p1.y);x.lineTo(p2.x,p2.y);x.strokeStyle='rgba(232,115,46,'+(.12*(1-d/120))+')';x.stroke()}}
-    requestAnimationFrame(loop)}
-  size();loop();addEventListener('resize',size)})();
+/* Safety net: guarantee no reveal section ever stays hidden (slow JS / headless / IO miss). */
+window.addEventListener('load', function(){
+  setTimeout(function(){
+    document.querySelectorAll('.v6-reveal:not(.in)').forEach(function(e){ e.classList.add('in'); });
+  }, 1200);
+});
+v6LiveTicker(
+  document.getElementById('liveTicker'),
+  ['酱卤车间 · 第 3 道工序进行中','冷链 4 号车 · 装载率 87% · 准点','今日毛利 AI 已核算 · 异常 0']
+);
 </script>
 </body>
 </html>
