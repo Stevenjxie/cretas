@@ -52,3 +52,12 @@
 - 证据：gitignored `.playwright-mcp/restaurant-sheet-20260721/live-regression/report.json` 与对应截图；发布结构化报告保存在本机 `.cache/cretas/deploy-reports/`。
 - Scope 锁：已释放。
 - `ARCH-CRETAS-UNIFIED-OA-APPROVAL-001` — `merged` — 个人 OA 四队列、工厂/用户/角色可见性与采购动作边界已随 PR [#1560](https://github.com/Stevenjxie/cretas/pull/1560) 合入 `main` `481b57f3b07755f0ad6fd7b0a68e9208e9093f90`；实现 commit `9d48e91ba61feada2fb356da44958002fd9516c6`，Web 64/64、Java 19/19、真实 JPA Context 与 Web production build 通过；生产业务写入 0，`NOT_DEPLOYED`。
+
+## F006-OA-RECOVERY-001 — 历史采购单 OA 受限恢复边界
+
+- 状态：`merged+deployed+verified`；Owner：`/root`；登记 Base SHA：`d21d1312e79313c800e9e8336519416b46a8a4b2`。
+- 实现：PR [#1567](https://github.com/Stevenjxie/cretas/pull/1567) / main `c93e31a63d860db8e98996c705c5ee25dfa93108`；仅 `factory_super_admin` 可调用，要求精确订单号、显式确认、幂等键和原因，并验证同厂订单快照及可执行 OA 路由。
+- 验证：正式 release lifecycle 16/16 PASS；backend tree `25802487482a3c1605c28becc5eb44f39d2df326`；JAR SHA-256 `0bd4a698095af829a8f1d984015089dcf24bbc770c5221782c21d6e05ca8167c`。
+- 生产：版本 `v20260721_233852`，active `green/10020`，5/5 切流后健康通过；统一 verify-release 的 systemd、直连健康和 `approval-recovery` JAR marker 全部通过。
+- 历史现场：部署后 query-only 证明 `PO-20260721-0001` 仍为 `SUBMITTED`、`workflowInstanceId` 空、`hasInstance=false`；生产业务 mutation=0，恢复写入继续等待用户单独明确授权，未触碰 LIUSHANMEN。
+- Scope 锁：已释放。
