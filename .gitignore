@@ -150,6 +150,10 @@ audit-screenshots/
 !platform/assets/img/**/*.jpg
 !platform/assets/img/**/*.jpeg
 !platform/assets/img/**/*.png
+!platform/restaurantbi-example/screenshots/
+!platform/restaurantbi-example/screenshots/**
+!platform/factorybi-example/screenshots/
+!platform/factorybi-example/screenshots/**
 !frontend/CretasFoodTrace/assets/**/*.png
 !frontend/CretasFoodTrace/android/app/src/main/res/**/*.png
 # 审计证据截图 (Sprint 11 MealClaw 等)

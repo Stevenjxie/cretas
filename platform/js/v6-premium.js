@@ -121,19 +121,24 @@
     cards.forEach(function(c){ c.classList.remove('v6-reveal'); c.classList.add('in'); });
     document.querySelector('.biz').classList.add('biz-h');
     var travel = function(){ return Math.max(0, bizGrid.scrollWidth - bizGrid.clientWidth); };
+    function spotlight(){
+      /* the card nearest viewport center is "lit"; others recede slightly */
+      var vc = window.innerWidth / 2;
+      cards.forEach(function(c){
+        var r = c.getBoundingClientRect();
+        var d = Math.min(1, Math.abs((r.left + r.width/2) - vc) / (window.innerWidth * .7));
+        gsap.set(c, { scale: 1 - d * .06, filter: 'brightness(' + (1.04 - d * .18) + ')' });
+      });
+    }
     gsap.to(bizGrid, {
       x: function(){ return -travel(); }, ease: 'none',
       scrollTrigger: {
         trigger: '.biz', start: 'top top', end: function(){ return '+=' + (travel() + 200); },
-        pin: true, scrub: 0.8, invalidateOnRefresh: true
+        pin: true, scrub: 0.8, invalidateOnRefresh: true,
+        onUpdate: spotlight, onRefresh: spotlight
       }
     });
-    /* cards breathe in as they travel into view */
-    cards.forEach(function(c, i){
-      gsap.from(c, { scale: .94, opacity: .7, duration: .6, ease: 'power2.out',
-        scrollTrigger: { trigger: '.biz', start: 'top top', toggleActions: 'play none none none' },
-        delay: i * .06 });
-    });
+    spotlight();
   }
   var band = document.querySelector('.band');
   if (band) {

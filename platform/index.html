@@ -81,12 +81,15 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 
 
 /* 横向画廊（JS 在桌面端加 .biz-h） */
-.biz-h{max-width:none;overflow:hidden;padding-left:clamp(24px,6vw,96px);padding-right:0}
+.biz-h{max-width:none;overflow:hidden;padding:clamp(20px,3vh,36px) 0 clamp(20px,3vh,36px) clamp(24px,6vw,96px);
+  min-height:100vh;display:flex;flex-direction:column;justify-content:center}
+.biz-h h2{margin-bottom:6px}
+.biz-h .sub{margin-bottom:clamp(18px,2.6vh,30px)}
 .biz-h h2,.biz-h .sub{max-width:1220px}
 .biz-h .biz-grid{display:flex;gap:clamp(18px,2vw,30px);grid-auto-rows:unset;will-change:transform;
-  padding-right:14vw;align-items:stretch}
-.biz-h .biz-grid>a{flex:0 0 min(36vw,500px);height:min(64vh,600px)}
-.biz-h .biz-grid .ai-card{flex:0 0 min(31vw,440px)}
+  padding-right:16vw;align-items:stretch}
+.biz-h .biz-grid>a{flex:0 0 min(40vw,560px);height:clamp(420px,calc(100vh - 300px),680px)}
+.biz-h .biz-grid .ai-card{flex:0 0 min(33vw,470px)}
 
 /* 视觉 AI 全宽带 ---------------------------------------------------------- */
 .band{position:relative;margin-top:clamp(48px,8vw,110px);height:min(92vh,760px)}
@@ -288,14 +291,14 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
     </a>
 
     <a class="v6-photo-card v6-reveal" href="/solutions-restaurant.html" style="box-shadow:0 16px 38px rgba(70,42,26,.24);transition-delay:.05s">
-      <img src="/assets/img/noodles.jpg" alt="连锁门店后厨出品的一碗热汤面，AI 实时核算单品毛利">
+      <img src="/assets/img/dining.jpg" alt="连锁餐厅门店内景，明档后厨与整齐餐台，AI 实时核算每家店的账">
       <span class="card-tag">单品毛利 62% · 正常</span>
       <div class="shade"></div>
       <div class="title"><b>餐饮连锁</b><small>每家店的账，AI 替你盯</small></div>
     </a>
 
     <a class="v6-photo-card v6-reveal" href="/solutions-logistics.html" style="box-shadow:0 16px 38px rgba(60,74,90,.2);transition-delay:.1s">
-      <img src="/assets/img/truck.jpg" style="object-position:center 72%" alt="冷链配送货车行驶在公路上，AI 优化装载与路线">
+      <img src="/assets/img/truck.jpg" style="object-position:center 88%" alt="冷链配送货车行驶在公路上，AI 优化装载与路线">
       <span class="card-tag">6 趟 → 5 趟 · 省 ¥430/天</span>
       <div class="shade"></div>
       <div class="title"><b>物流配送</b><small>十辆车，一个人调</small></div>

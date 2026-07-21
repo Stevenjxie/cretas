@@ -82,18 +82,46 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .m3-chips .chip.warn{color:#ffb84d;background:rgba(255,184,77,.1)}
 .m3 .maps{margin-top:26px;font-size:13px;color:rgba(255,255,255,.55);line-height:1.7}
 
-/* M4 Excel 导入：表头映射平铺（无盒子） */
-.m4 .flow{display:grid;grid-template-columns:1fr auto 1fr;gap:clamp(14px,2.5vw,30px);align-items:center;max-width:900px}
+/* M4 Excel 导入: 皱表 → AI 核 → 系统窗口 */
+.m4 .flow{display:grid;grid-template-columns:1.05fr .55fr 1.3fr;gap:clamp(16px,2.4vw,36px);
+  align-items:center;margin-top:6px}
+.m4 .doc{background:#fffdf7;border:1px solid rgba(180,83,9,.25);border-radius:4px;padding:16px 16px 20px;
+  transform:rotate(-2.2deg);box-shadow:0 16px 36px -18px rgba(120,80,30,.35);position:relative}
+.m4 .doc .tab{position:absolute;top:-11px;left:14px;background:#b45309;color:#fff;font-family:var(--v6-mono);
+  font-size:10.5px;padding:3px 10px;border-radius:3px;letter-spacing:.5px}
 .m4 table{border-collapse:collapse;width:100%;font-size:12.5px}
-.m4 td,.m4 th{padding:7px 10px;text-align:left}
-.m4 .raw th{font-family:var(--v6-mono);color:#b45309;background:rgba(180,83,9,.07);font-weight:600;border-bottom:2px dashed rgba(180,83,9,.3)}
+.m4 td,.m4 th{padding:7px 9px;text-align:left}
+.m4 .raw th{font-family:var(--v6-mono);color:#b45309;background:rgba(180,83,9,.07);font-weight:600;border-bottom:2px dashed rgba(180,83,9,.35)}
 .m4 .raw td{color:var(--v6-ink-2);border-bottom:1px solid rgba(0,0,0,.06)}
+.m4 .doc .smudge{margin-top:10px;font-size:11px;color:#b0a894;font-style:italic}
+.m4 .proc{display:flex;flex-direction:column;align-items:center;gap:12px}
+.m4 .core{position:relative;width:74px;height:74px;display:grid;place-items:center}
+.m4 .core svg.logo{width:34px;height:34px}
+.m4 .core .ring{position:absolute;inset:0;border-radius:50%;border:2px dashed rgba(0,179,119,.5);
+  animation:m4spin 7s linear infinite}
+@keyframes m4spin{to{transform:rotate(360deg)}}
+.m4 .proc .chips{display:flex;flex-direction:column;gap:6px}
+.m4 .proc .chips span{font-family:var(--v6-mono);font-size:10.5px;color:var(--v6-cta-ink);
+  background:rgba(0,179,119,.08);padding:4px 12px;border-radius:99px;white-space:nowrap;text-align:center}
+.m4 .sys{background:#fff;border-radius:12px;overflow:hidden;border:1px solid rgba(0,0,0,.07);
+  box-shadow:0 22px 48px -22px rgba(40,60,50,.3)}
+.m4 .sys .bar{display:flex;gap:5px;align-items:center;background:#f4f8f6;padding:8px 12px;border-bottom:1px solid rgba(0,0,0,.05)}
+.m4 .sys .bar i{width:8px;height:8px;border-radius:50%;background:#dde5e1;display:inline-block}
+.m4 .sys .bar em{font-style:normal;font-size:10.5px;color:#8fa09a;font-family:var(--v6-mono);margin-left:6px}
+.m4 .sys .body{padding:12px 14px 14px}
 .m4 .clean th{color:var(--v6-cta-ink);background:rgba(0,179,119,.08);font-weight:700;border-bottom:2px solid rgba(0,179,119,.35)}
 .m4 .clean td{color:var(--v6-ink);border-bottom:1px solid rgba(0,0,0,.06)}
-.m4 .arrow{display:flex;flex-direction:column;align-items:center;gap:6px;color:var(--v6-cta-ink)}
-.m4 .arrow small{font-family:var(--v6-mono);font-size:10.5px;color:var(--v6-ink-2);white-space:nowrap}
-.m4 .geo{margin-top:20px;font-size:clamp(13.5px,1.4vw,15.5px);color:var(--v6-ink-2);line-height:1.75;max-width:56ch}
+.m4 .clean td .rt{font-family:var(--v6-mono);font-size:10.5px;color:var(--v6-cta-ink);
+  background:rgba(0,179,119,.08);padding:2px 8px;border-radius:99px;white-space:nowrap}
+.m4 .sys .ok{display:flex;gap:8px;align-items:center;margin-top:10px;font-size:12px;color:var(--v6-cta-ink);font-weight:700}
+.m4 .geo{margin-top:22px;font-size:clamp(13.5px,1.4vw,15.5px);color:var(--v6-ink-2);line-height:1.75;max-width:56ch}
 .m4 .geo b{color:var(--v6-cta-ink)}
+@media (max-width:900px){
+  .m4 .flow{grid-template-columns:1fr;max-width:560px}
+  .m4 .doc{transform:none}
+  .m4 .proc{flex-direction:row;flex-wrap:wrap;justify-content:center}
+  .m4 .proc .chips{flex-direction:row;flex-wrap:wrap;justify-content:center}
+}
 
 /* M5 异常与准点：窄幅收束 */
 .m5{max-width:1200px;margin:0 auto;padding:clamp(24px,4vw,52px) clamp(16px,4vw,48px) clamp(44px,6vw,80px);
@@ -261,20 +289,39 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   <h2 class="v6-reveal">客户发来什么表，都能直接用</h2>
   <p class="pain v6-reveal">每个客户的订单表格式都不一样，以前靠人肉重新录一遍。现在<b>整张表扔进来</b>，AI 认得懂。</p>
   <div class="flow v6-reveal">
-    <table class="raw">
-      <tr><th>收货方</th><th>品名/规格</th><th>件</th></tr>
-      <tr><td>XX路店（新）</td><td>卤味礼盒*6</td><td>12</td></tr>
-      <tr><td>城西二店</td><td>酱鸭 500g</td><td>30</td></tr>
-    </table>
-    <div class="arrow">
-      <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
-      <small>AI 识别表头 · 自动映射</small>
+    <div class="doc">
+      <span class="tab">客户发来的 EXCEL</span>
+      <table class="raw">
+        <tr><th>收货方</th><th>品名/规格</th><th>件</th></tr>
+        <tr><td>XX路店（新）</td><td>卤味礼盒*6</td><td>12</td></tr>
+        <tr><td>城西二店</td><td>酱鸭 500g</td><td>30</td></tr>
+        <tr><td>高新店(急)</td><td>藕带 箱</td><td>8</td></tr>
+      </table>
+      <p class="smudge">— 表头随客户心情变，地址一半是简称</p>
     </div>
-    <table class="clean">
-      <tr><th>门店</th><th>SKU</th><th>数量</th><th>路线</th></tr>
-      <tr><td>XX路店</td><td>卤味礼盒×6</td><td>12</td><td>3 号线</td></tr>
-      <tr><td>城西二店</td><td>酱鸭 500g</td><td>30</td><td>1 号线</td></tr>
-    </table>
+    <div class="proc">
+      <div class="core">
+        <span class="ring"></span>
+        <svg class="logo" viewBox="0 0 15 15" fill="none"><rect x="1" y="1" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="8.5" y="1" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="1" y="8.5" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="8.5" y="8.5" width="5.5" height="5.5" rx="2.75" fill="#00b377"/></svg>
+      </div>
+      <div class="chips">
+        <span>表头识别</span>
+        <span>单位归一</span>
+        <span>地址纠错</span>
+      </div>
+    </div>
+    <div class="sys">
+      <div class="bar"><i></i><i></i><i></i><em>Cretas · 订单导入</em></div>
+      <div class="body">
+        <table class="clean">
+          <tr><th>门店</th><th>SKU</th><th>数量</th><th>路线</th></tr>
+          <tr><td>XX路店</td><td>卤味礼盒×6</td><td>12</td><td><span class="rt">3 号线</span></td></tr>
+          <tr><td>城西二店</td><td>酱鸭 500g</td><td>30</td><td><span class="rt">1 号线</span></td></tr>
+          <tr><td>高新店</td><td>藕带 ×1 箱</td><td>8</td><td><span class="rt">3 号线</span></td></tr>
+        </table>
+        <div class="ok"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>3 单已入库 · 自动分入 2 条路线</div>
+      </div>
+    </div>
   </div>
   <p class="geo v6-reveal">复制粘贴也行 — 粘一段文字，AI 预览映射结果，你确认了才入库。<b>地址智能纠错</b>连"写了隔壁城市同名路"这种坑都能抓出来。</p>
 </section>
