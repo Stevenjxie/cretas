@@ -114,31 +114,26 @@
     window.v6Eye(host, { gap: host.classList.contains('ai-hero') ? 34 : 30 });
   });
 
-  /* ============ HOME — deck fan-out + band materialize =================== */
+  /* ============ HOME — pinned horizontal gallery ========================= */
   var bizGrid = document.querySelector('.biz-grid');
   if (bizGrid && DESKTOP) {
     var cards = gsap.utils.toArray(bizGrid.children);
-    var gr = bizGrid.getBoundingClientRect();
-    var cxg = gr.left + gr.width / 2;
-    cards.forEach(function(c, i){
-      var r = c.getBoundingClientRect();
-      c.__dx = (cxg - (r.left + r.width/2)) * .82;
-      c.__rot = (i - (cards.length-1)/2) * 3.2;
-    });
-    gsap.set(cards, {
-      x: function(i){ return cards[i].__dx; },
-      rotation: function(i){ return cards[i].__rot; },
-      scale: .88, opacity: function(i){ return i === 0 ? 1 : .55; },
-      transformOrigin: '50% 85%'
-    });
-    gsap.timeline({
-      scrollTrigger: { trigger: '.biz', start: 'top top', end: '+=110%', pin: true, scrub: 0.9 }
-    })
-    .to(cards, { x: 0, rotation: 0, scale: 1, opacity: 1,
-      stagger: .09, ease: 'power2.inOut', duration: 1 })
-    .to(cards, { duration: .15 }); /* settle beat before unpin */
-    /* deck cards must not run the entrance reveal on top of the deck transform */
     cards.forEach(function(c){ c.classList.remove('v6-reveal'); c.classList.add('in'); });
+    document.querySelector('.biz').classList.add('biz-h');
+    var travel = function(){ return Math.max(0, bizGrid.scrollWidth - bizGrid.clientWidth); };
+    gsap.to(bizGrid, {
+      x: function(){ return -travel(); }, ease: 'none',
+      scrollTrigger: {
+        trigger: '.biz', start: 'top top', end: function(){ return '+=' + (travel() + 200); },
+        pin: true, scrub: 0.8, invalidateOnRefresh: true
+      }
+    });
+    /* cards breathe in as they travel into view */
+    cards.forEach(function(c, i){
+      gsap.from(c, { scale: .94, opacity: .7, duration: .6, ease: 'power2.out',
+        scrollTrigger: { trigger: '.biz', start: 'top top', toggleActions: 'play none none none' },
+        delay: i * .06 });
+    });
   }
   var band = document.querySelector('.band');
   if (band) {
@@ -228,24 +223,34 @@
     });
   }
 
-  /* ============ LOGISTICS — truck bound to scroll ======================== */
+  /* ============ LOGISTICS — truck: scroll-eased, then free cruise ======== */
   var route = document.querySelector('.route');
   if (route) {
     var truck = route.querySelector('.truckpos');
     var stops = [].slice.call(route.querySelectorAll('.stop')).filter(function(s){ return s !== truck; });
     var spos = stops.map(function(s){ return parseFloat(s.style.left); });
-    var tloop = null, tp = 62;
-    function place(p){
-      tp = p;
-      truck.style.left = p + '%';
-      route.style.background = 'linear-gradient(90deg, var(--v6-cta) 0%, var(--v6-cta) ' + p + '%, rgba(255,255,255,.16) ' + p + '%)';
-      stops.forEach(function(s, i){ s.classList.toggle('todo', spos[i] > p); });
+    var tstate = { p: 5 }, cruise = null;
+    function paint(){
+      truck.style.left = tstate.p + '%';
+      route.style.background = 'linear-gradient(90deg, var(--v6-cta) 0%, var(--v6-cta) ' + tstate.p + '%, rgba(255,255,255,.16) ' + tstate.p + '%)';
+      stops.forEach(function(s, i){ s.classList.toggle('todo', spos[i] > tstate.p); });
     }
+    /* one smoothed tween retargeted by scroll — no CSS transition to fight, no jumps */
+    var glide = gsap.quickTo(tstate, 'p', { duration: .55, ease: 'power2.out', onUpdate: paint });
     ScrollTrigger.create({
-      trigger: route.closest('.m3') || route, start: 'top 75%', end: 'bottom 35%', scrub: true,
-      onUpdate: function(self){ if (!tloop) place(5 + self.progress * 90); },
-      onLeave: function(){ if (!tloop) tloop = setInterval(function(){ place(tp + .35 > 97 ? 5 : tp + .35); }, 120); }
+      trigger: route.closest('.m3') || route, start: 'top 78%', end: 'bottom 40%', scrub: true,
+      onUpdate: function(self){
+        if (cruise) return;
+        glide(5 + self.progress * 88);
+      },
+      onLeave: function(){
+        if (cruise) return;
+        cruise = gsap.to(tstate, { p: 96, duration: 14, ease: 'none', repeat: -1, onUpdate: paint,
+          onRepeat: function(){ tstate.p = 5; } });
+      },
+      onEnterBack: function(){ if (cruise) { cruise.kill(); cruise = null; } }
     });
+    paint();
   }
   /* load bars grow + count up (kept) */
   var trips = document.querySelector('.m2 .trips');
@@ -263,6 +268,30 @@
               onUpdate: function(){ bar.textContent = tpl.replace(/\d+%/, Math.round(obj.v) + '%'); } });
           });
         } } });
+  }
+
+  /* LOGISTICS — Excel mapping demo: rows get scanned across, forever ------ */
+  var flow = document.querySelector('.m4 .flow');
+  if (flow) {
+    var rawRows = [].slice.call(flow.querySelectorAll('.raw tr')).slice(1);
+    var cleanRows = [].slice.call(flow.querySelectorAll('.clean tr')).slice(1);
+    var arrow = flow.querySelector('.arrow svg');
+    if (rawRows.length && cleanRows.length) {
+      gsap.set(cleanRows, { opacity: 0, x: -14 });
+      var mtl = gsap.timeline({ paused: true, repeat: -1, repeatDelay: 2.2 });
+      rawRows.forEach(function(rr, i){
+        var cr = cleanRows[i];
+        if (!cr) return;
+        mtl.fromTo(rr, { backgroundColor: 'rgba(180,83,9,0)' },
+            { backgroundColor: 'rgba(180,83,9,.12)', duration: .3, ease: 'power1.inOut' }, i * 1.15)
+           .to(arrow, { x: 6, duration: .18, yoyo: true, repeat: 1, ease: 'power2.out' }, i * 1.15 + .3)
+           .to(cr, { opacity: 1, x: 0, duration: .5, ease: 'power3.out' }, i * 1.15 + .5)
+           .to(rr, { backgroundColor: 'rgba(180,83,9,0)', duration: .4 }, i * 1.15 + .8);
+      });
+      mtl.to(cleanRows, { opacity: 0, x: -14, duration: .4, delay: 1.6 });
+      ScrollTrigger.create({ trigger: flow, start: 'top 80%', once: true,
+        onEnter: function(){ mtl.play(0); } });
+    }
   }
 
   /* ============ AI — capability wall ripples from center ================= */

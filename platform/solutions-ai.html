@@ -103,6 +103,19 @@ html.v6-js .ai-hero .inner>div:first-child>*:nth-child(3){animation-delay:.24s}
 .alerts .msg b{color:#b45309}
 .alerts .msg .okk{color:var(--v6-cta-ink)}
 
+
+/* 案例段: 第一次点下确认 */
+.firstok{max-width:920px;margin:0 auto;padding:clamp(44px,6.5vw,92px) clamp(16px,4vw,48px)}
+.firstok .kicker{font-family:var(--v6-mono);font-size:12px;color:var(--v6-cta-ink);letter-spacing:2px;margin-bottom:10px}
+.firstok .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(14px,2vw,26px);margin-top:26px}
+.firstok .stp{border-top:2px solid rgba(0,179,119,.3);padding-top:14px}
+.firstok .stp .w{font-family:var(--v6-mono);font-size:11.5px;color:#8a857e;margin-bottom:6px}
+.firstok .stp p{margin:0;font-size:clamp(13px,1.35vw,15px);color:var(--v6-ink-2);line-height:1.75}
+.firstok .stp p b{color:var(--v6-ink)}
+.firstok .lead-story{font-size:clamp(14px,1.55vw,17px);color:var(--v6-ink-2);line-height:1.9;max-width:60ch;margin:18px 0 0}
+.firstok .lead-story b{color:var(--v6-ink)}
+@media (max-width:768px){.firstok .steps{grid-template-columns:1fr}}
+
 /* 越用越懂你 + versus */
 .learn{max-width:900px;margin:0 auto;text-align:center;padding:clamp(48px,7vw,96px) clamp(16px,4vw,48px) clamp(24px,3vw,40px)}
 .learn p{font-size:clamp(19px,2.6vw,30px);font-weight:800;line-height:1.65;letter-spacing:-0.01em;margin:0;text-wrap:balance}
@@ -232,6 +245,18 @@ html.v6-js .ai-hero .inner>div:first-child>*:nth-child(3){animation-delay:.24s}
     <div class="row"><span class="k">酱鸭翅 150g</span><span><span class="old">周一午班</span><span class="new">周二早班</span></span></div>
     <div class="row"><span class="k">影响</span><span>产能缺口 0 · 交期无风险</span></div>
     <div class="btns"><span class="ok">确认执行</span><span class="no">再想想</span></div>
+  </div>
+</section>
+
+<!-- 案例: 第一次点下确认 -->
+<section class="firstok">
+  <div class="kicker v6-reveal">真实案例 · 第一次点下「确认执行」</div>
+  <h2>从"只敢问"到"放心让它办"</h2>
+  <p class="lead-story v6-reveal">一位工厂老板刚上线时只让 AI 查数 — "改数据？那不行。"<b>三周后他第一次点了「确认执行」</b>，让 AI 重排了周一的生产计划。问他为什么敢了，他说：因为每一次它都先给我看预览、告诉我影响、还能撤回。</p>
+  <div class="steps">
+    <div class="stp v6-reveal"><div class="w">第 1 周</div><p>只问不动：<b>"昨天产量多少？"</b>每一个答案都去后台核对过。</p></div>
+    <div class="stp v6-reveal"><div class="w">第 3 周</div><p>第一次授权：AI 起草排产调整，<b>预览确认后执行</b>，全程留痕。</p></div>
+    <div class="stp v6-reveal"><div class="w">第 3 个月</div><p>现在厂里 <b>6 成的排产调整由 AI 起草</b>，他只做拍板那一下。</p></div>
   </div>
 </section>
 

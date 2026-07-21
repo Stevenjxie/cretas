@@ -192,6 +192,20 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .pipe-note{margin-top:26px;display:inline-flex;gap:10px;align-items:center;font-family:var(--v6-mono);
   font-size:13px;color:#c8f5e3;background:rgba(0,226,138,.07);border:1px solid rgba(0,226,138,.2);padding:11px 18px;border-radius:12px}
 
+
+/* 案例段: 客户教我们的（引用叙事体） */
+.lesson{max-width:1000px;margin:0 auto;padding:clamp(48px,7vw,104px) clamp(16px,4vw,48px)}
+.lesson .kicker{font-family:var(--v6-mono);font-size:12px;color:var(--v6-cta-ink);letter-spacing:2px;margin-bottom:18px}
+.lesson blockquote{margin:0 0 18px;font-size:clamp(20px,2.8vw,32px);font-weight:900;line-height:1.6;
+  letter-spacing:-0.01em;text-wrap:balance;position:relative;padding-left:clamp(18px,3vw,34px)}
+.lesson blockquote::before{content:'\201C';position:absolute;left:-6px;top:-12px;font-size:2.2em;color:rgba(0,179,119,.35);font-weight:900}
+.lesson cite{display:block;font-style:normal;font-size:13.5px;color:#8a857e;margin-bottom:26px;padding-left:clamp(18px,3vw,34px)}
+.lesson .story{font-size:clamp(14px,1.5vw,16.5px);color:var(--v6-ink-2);line-height:1.95;max-width:62ch;margin:0 0 14px}
+.lesson .story b{color:var(--v6-ink)}
+.lesson .result{display:inline-flex;gap:10px;align-items:baseline;margin-top:10px;font-size:clamp(14px,1.5vw,16.5px);
+  font-weight:800;color:var(--v6-cta-ink);background:rgba(0,179,119,.08);padding:10px 20px;border-radius:99px}
+.lesson + .lesson{padding-top:0}
+
 /* 差异化对比条 ----------------------------------------------------------- */
 .versus{max-width:1120px;margin:0 auto;padding:clamp(56px,8vw,120px) clamp(16px,4vw,48px);text-align:center}
 .versus .lead{font-size:clamp(24px,3.6vw,42px);font-weight:900;line-height:1.35;letter-spacing:-0.02em;margin:0 auto 40px;max-width:20ch;text-wrap:balance}
@@ -493,6 +507,23 @@ html.v6-js .feed .det{animation:v6BoxTrack 8s ease-in-out infinite}
     </ol>
     <div class="pipe-note v6-reveal"><span class="eye" style="width:9px;height:9px;border-radius:99px;background:var(--v6-tag);box-shadow:0 0 0 4px rgba(0,226,138,.16)"></span>冷链设备监控 · 温度异常实时告警，整条线上的货始终在安全区间</div>
   </div>
+</section>
+
+<!-- 案例: 客户教我们的 -->
+<section class="lesson">
+  <div class="kicker v6-reveal">真实案例 · 一家卤味工厂的收货台</div>
+  <blockquote class="v6-reveal">做仓管的年纪都比较大，你不能太依赖他们 — 最好的办法，就是你告诉他要收多少，就行了。</blockquote>
+  <cite class="v6-reveal">— 某卤味工厂创始人，第一次见面就给我们上了一课</cite>
+  <p class="story v6-reveal">我们回去把收货页面改到只剩一句话：<b>今天收猪前腿 300kg。</b>供应商是谁、超收上限多少、差多少要打差异单 — 全部系统兜底，老师傅只管核对眼前这批货。</p>
+  <p class="story v6-reveal">这就是后来「防呆设计」成为 Cretas 铁律的起点：<b>不是用户错了报错，而是让用户没机会错。</b></p>
+  <span class="result v6-reveal">收货差错单：月均 17 张 → 2 张</span>
+</section>
+
+<section class="lesson">
+  <div class="kicker v6-reveal">真实案例 · 仓库里的 7 种酱油</div>
+  <p class="story v6-reveal">盘点那天我们跟着下仓库，系统里同名的"酱油"有 <b>7 条记录</b>、香菇有 6 条 — 每换一任厨师长，就多一套叫法。账对不上，不是人偷懒，是名字先乱了。</p>
+  <p class="story v6-reveal">AI 物料归一 + 别名映射上线后，老名字照样搜得到，但账只算到同一条上。<b>历史数据不用推倒重来，脏数据当场开始变干净。</b></p>
+  <span class="result v6-reveal">全仓盘点：6 张纸一下午 → 手机上 40 分钟</span>
 </section>
 
 <!-- 差异化对比条 -->

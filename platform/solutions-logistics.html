@@ -72,7 +72,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .route .stop{transition:border-color .5s ease;position:absolute;top:50%;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;
   background:#0d1210;border:3px solid var(--v6-cta)}
 .route .stop.todo{border-color:rgba(255,255,255,.3)}
-.route .stop.truckpos{transition:left .12s linear;width:34px;height:34px;background:var(--v6-cta);border:none;display:flex;
+.route .stop.truckpos{width:34px;height:34px;background:var(--v6-cta);border:none;display:flex;
   align-items:center;justify-content:center;box-shadow:0 0 24px rgba(0,226,138,.4)}
 .route .slabel{position:absolute;top:16px;transform:translateX(-50%);font-size:11.5px;color:rgba(255,255,255,.65);white-space:nowrap}
 .m3-chips{display:flex;gap:10px;flex-wrap:wrap;margin-top:44px}
@@ -103,6 +103,21 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .m5 .it{display:flex;gap:10px;align-items:flex-start;margin-bottom:10px;font-size:clamp(13.5px,1.4vw,15.5px);
   color:var(--v6-ink-2);line-height:1.65}
 .m5 .it svg{flex:0 0 17px;margin-top:3px}
+
+
+/* 案例段: 一个地址的学费（对照体） */
+.tuition{max-width:1000px;margin:0 auto;padding:clamp(44px,6.5vw,92px) clamp(16px,4vw,48px)}
+.tuition .kicker{font-family:var(--v6-mono);font-size:12px;color:var(--v6-cta-ink);letter-spacing:2px;margin-bottom:10px}
+.tuition .ba{display:grid;grid-template-columns:1fr 1fr;gap:clamp(16px,2.5vw,32px);margin-top:24px}
+.tuition .col{padding:clamp(18px,2.4vw,28px)}
+.tuition .col.before{background:rgba(180,83,9,.06);border-radius:14px}
+.tuition .col.after{background:rgba(0,179,119,.07);border-radius:14px}
+.tuition .col h5{margin:0 0 10px;font-family:var(--v6-mono);font-size:12px;letter-spacing:1.5px}
+.tuition .before h5{color:#b45309}
+.tuition .after h5{color:var(--v6-cta-ink)}
+.tuition .col p{margin:0;font-size:clamp(13.5px,1.45vw,15.5px);color:var(--v6-ink-2);line-height:1.85}
+.tuition .col p b{color:var(--v6-ink)}
+@media (max-width:768px){.tuition .ba{grid-template-columns:1fr}}
 
 /* versus 差异化条 */
 .versus{background:linear-gradient(180deg,rgba(0,179,119,.05),transparent);padding:clamp(44px,6.5vw,88px) clamp(16px,4vw,48px)}
@@ -262,6 +277,22 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
     </table>
   </div>
   <p class="geo v6-reveal">复制粘贴也行 — 粘一段文字，AI 预览映射结果，你确认了才入库。<b>地址智能纠错</b>连"写了隔壁城市同名路"这种坑都能抓出来。</p>
+</section>
+
+<!-- 案例: 一个地址的学费 -->
+<section class="tuition">
+  <div class="kicker v6-reveal">真实案例 · 一个地址的学费</div>
+  <h2>写错一个路名，多跑九十公里</h2>
+  <div class="ba">
+    <div class="col before v6-reveal">
+      <h5>BEFORE</h5>
+      <p>客户订单表里写着"XX 路 88 号"，系统照字面排线 — 那是<b>隔壁城市的同名路</b>。司机导航到了才发现，一辆车白跑 90 公里，一整条线的门店全部延误。</p>
+    </div>
+    <div class="col after v6-reveal">
+      <h5>AFTER</h5>
+      <p>现在 AI 排线之前先做<b>地址体检</b>：跨城疑似、门牌缺失、和历史签收位置对不上的，全部标黄等人工确认。之后再没为一个错地址跑过冤枉路。</p>
+    </div>
+  </div>
 </section>
 
 <!-- M5 异常与准点 -->

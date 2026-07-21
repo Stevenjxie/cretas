@@ -79,6 +79,15 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .ai-card .title b{font-size:clamp(17px,1.7vw,21px);color:#fff;display:block;letter-spacing:-0.01em}
 .ai-card .title small{font-size:clamp(12.5px,1.2vw,14px);color:rgba(255,255,255,.62);margin-top:3px;display:block}
 
+
+/* 横向画廊（JS 在桌面端加 .biz-h） */
+.biz-h{max-width:none;overflow:hidden;padding-left:clamp(24px,6vw,96px);padding-right:0}
+.biz-h h2,.biz-h .sub{max-width:1220px}
+.biz-h .biz-grid{display:flex;gap:clamp(18px,2vw,30px);grid-auto-rows:unset;will-change:transform;
+  padding-right:14vw;align-items:stretch}
+.biz-h .biz-grid>a{flex:0 0 min(36vw,500px);height:min(64vh,600px)}
+.biz-h .biz-grid .ai-card{flex:0 0 min(31vw,440px)}
+
 /* 视觉 AI 全宽带 ---------------------------------------------------------- */
 .band{position:relative;margin-top:clamp(48px,8vw,110px);height:min(92vh,760px)}
 .band .bmask{position:absolute;inset:0;overflow:hidden;

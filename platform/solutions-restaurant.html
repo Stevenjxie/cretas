@@ -26,7 +26,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .hero-wrap{position:relative}
 .hero-wrap .v6-glow{top:20px;height:420px}
 .v6-hero{height:min(76vh,620px)}
-.v6-hero-mask img{object-position:center 46%}
+.v6-hero-mask img{object-position:center 85%}
 .hero-copy{position:absolute;left:clamp(24px,5.5vw,80px);top:50%;transform:translateY(-50%);
   max-width:min(50%,580px);z-index:2}
 .hero-copy h1{font-size:clamp(33px,5.4vw,60px);font-weight:900;color:#fff;line-height:1.2;
@@ -36,8 +36,8 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .hero-cta{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
 .hero-cta .v6-link{color:#fff;font-weight:600;font-size:15px;text-decoration:none;opacity:.94}
 .hero-cta .v6-link:hover{opacity:1}
-.ai-box-1{right:24%;top:14%;width:clamp(150px,16vw,214px);height:48%}
-.ai-box-2{right:7%;top:56%;width:clamp(120px,12vw,160px);height:20%}
+.ai-box-1{right:12%;top:18%;width:clamp(150px,16vw,214px);height:42%}
+.ai-box-2{left:44%;bottom:16%;width:clamp(130px,13vw,180px);height:26%}
 .ai-box-1 .v6-ai-tag{top:-16px;left:0}
 .ai-box-2 .v6-ai-tag{bottom:-16px;left:0}
 .v6-live-bar #liveTicker{transition:opacity .26s ease}
@@ -203,6 +203,23 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .box3d .label b{color:#fff;font-weight:800;display:block;font-size:14px;margin-bottom:2px;letter-spacing:.02em}
 .box3d .plug{display:inline-flex;align-items:center;gap:7px;font-family:var(--v6-mono);font-size:11px;
   color:var(--v6-tag);background:rgba(0,226,138,.08);border:1px solid rgba(0,226,138,.2);padding:5px 12px;border-radius:99px}
+
+
+/* 案例段: 一次复盘（时间线体） */
+.replay{max-width:920px;margin:0 auto;padding:clamp(48px,7vw,104px) clamp(16px,4vw,48px)}
+.replay .kicker{font-family:var(--v6-mono);font-size:12px;color:var(--v6-cta-ink);letter-spacing:2px;margin-bottom:10px}
+.replay .tl{position:relative;margin:26px 0 0 8px;border-left:2px solid rgba(180,83,9,.3);padding-left:clamp(20px,3vw,32px)}
+.replay .tstep{position:relative;padding-bottom:22px}
+.replay .tstep::before{content:'';position:absolute;left:calc(-1 * clamp(20px,3vw,32px) - 7px);top:4px;
+  width:12px;height:12px;border-radius:99px;background:#b45309}
+.replay .tstep.good::before{background:var(--v6-cta)}
+.replay .when{font-family:var(--v6-mono);font-size:12px;color:#a8a29e;margin-bottom:4px}
+.replay .what{font-size:clamp(14px,1.5vw,16.5px);color:var(--v6-ink);line-height:1.8}
+.replay .what b{color:#b45309}
+.replay .tstep.good .what b{color:var(--v6-cta-ink)}
+.replay blockquote{margin:26px 0 0;font-size:clamp(15px,1.7vw,19px);font-weight:700;color:var(--v6-ink-2);
+  line-height:1.8;border:none;padding:0}
+.replay blockquote cite{display:block;font-style:normal;font-size:13px;color:#8a857e;font-weight:400;margin-top:8px}
 
 /* 差异化对比条 ----------------------------------------------------------- */
 .versus{max-width:1120px;margin:0 auto;padding:clamp(56px,8vw,120px) clamp(16px,4vw,48px);text-align:center}
@@ -502,6 +519,19 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
       </div>
     </div>
   </div>
+</section>
+
+<!-- 案例: 一次复盘 -->
+<section class="replay">
+  <div class="kicker v6-reveal">真实案例 · 一次涨价的复盘</div>
+  <h2>老板最后一个知道的涨价</h2>
+  <div class="tl">
+    <div class="tstep v6-reveal"><div class="when">周一</div><div class="what">供应商临时把猪前腿单价<b>上调 8%</b>，只在送货单上改了数字。</div></div>
+    <div class="tstep v6-reveal"><div class="when">周三</div><div class="what">仓管照单验收入库 — <b>没人觉得需要上报</b>，流程里也没这一步。</div></div>
+    <div class="tstep v6-reveal"><div class="when">月底</div><div class="what">财务对账才发现，这一个月多付了<b>四万七</b>。类似的事，一年不止一次。</div></div>
+    <div class="tstep good v6-reveal"><div class="when">接入后</div><div class="what">进价一偏离历史区间，<b>入库那一刻老板手机就响</b> — 仓管报不报，账都翻不了暗箱。</div></div>
+  </div>
+  <blockquote class="v6-reveal">这里面存在很多潜规则 — 老板没有信息渠道。<cite>— 某连锁餐饮投资人，聊起他为什么最看重这个功能</cite></blockquote>
 </section>
 
 <!-- 差异化对比条 -->
