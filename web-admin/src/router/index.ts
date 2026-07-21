@@ -1448,9 +1448,15 @@ const businessRoutes: RouteRecordRaw[] = [
       {
         path: 'workflow',
         name: 'Workflow',
-        redirect: '/workflow/my-created',
+        redirect: '/workflow/pending',
         meta: { requiresAuth: true, title: '工作流', icon: 'Connection', module: 'system' },
         children: [
+          {
+            path: 'pending',
+            name: 'WorkflowPending',
+            component: () => import('@/views/workflow/pending.vue'),
+            meta: { requiresAuth: true, title: '待我审批', module: 'system' }
+          },
           {
             path: 'my-created',
             name: 'WorkflowMyCreated',

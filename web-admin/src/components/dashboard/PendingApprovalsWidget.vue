@@ -73,12 +73,8 @@ async function load(): Promise<void> {
 }
 
 function goToDetail(row: PendingInstance): void {
-  if (row.moduleCode === 'PURCHASE_ORDER' && row.businessEntityId) {
-    router.push(`/procurement/orders/${row.businessEntityId}`);
-  } else if (row.moduleCode === 'SALES_ORDER' && row.businessEntityId) {
-    router.push(`/sales/orders/${row.businessEntityId}`);
-  }
-  // 其他 module → 后续 phase 加路由映射
+  // 审批动作统一在 OA 中完成；业务详情只读展示状态与轨迹。
+  router.push({ path: '/workflow/pending', query: { instanceId: row.instanceId } });
 }
 
 function formatTime(iso: string | null): string {

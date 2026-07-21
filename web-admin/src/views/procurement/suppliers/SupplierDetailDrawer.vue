@@ -166,7 +166,7 @@
     >
       <el-form label-width="120px">
         <el-form-item label="物料" required>
-          <el-select v-model="relationForm.materialTypeId" filterable :disabled="Boolean(relationEditingId)" style="width: 100%">
+          <el-select v-model="relationForm.materialTypeId" filterable :disabled="Boolean(relationEditingId)" style="width: 100%" @change="onRelationMaterialChange">
             <el-option
               v-for="material in materialOptions"
               :key="material.id"
@@ -176,9 +176,18 @@
           </el-select>
         </el-form-item>
         <el-form-item label="供应商料号"><el-input v-model="relationForm.supplierMaterialCode" maxlength="100" /></el-form-item>
-        <el-form-item label="采购单位" required><el-input v-model="relationForm.purchaseUnit" maxlength="20" /></el-form-item>
-        <el-form-item label="默认采购价">
+        <el-form-item label="采购单位" required>
+          <UnitSelect
+            v-model="relationForm.purchaseUnit"
+            :factory-id="factoryId"
+            usage-scope="PURCHASE_QUANTITY"
+            placeholder="请选择采购单位"
+          />
+          <div class="field-hint">采购订单将沿用该单位；系统内部保存标准单位代码，页面只显示中文业务单位。</div>
+        </el-form-item>
+        <el-form-item :label="`默认采购价（元/${displayUnit(relationForm.purchaseUnit) || '采购单位'}）`">
           <el-input-number v-model="relationForm.defaultPurchasePrice" :min="0" :precision="4" controls-position="right" style="width: 100%" />
+          <div class="field-hint">价格与采购单位绑定；未配置时采购单会明确提示，不会静默按 0 元处理。</div>
         </el-form-item>
         <el-form-item label="币种" required><el-input v-model="relationForm.currency" maxlength="10" /></el-form-item>
         <el-form-item label="最小起订量"><el-input-number v-model="relationForm.minOrderQuantity" :min="0.0001" :precision="4" style="width: 100%" /></el-form-item>
@@ -210,7 +219,7 @@
         <el-table-column prop="name" label="规格名称" min-width="130" />
         <el-table-column label="采购包装单位" width="120"><template #default="{ row }">{{ displayUnit(row.purchasePackageUnit) }}</template></el-table-column>
         <el-table-column label="换算" min-width="150"><template #default="{ row }">1 {{ displayUnit(row.purchasePackageUnit) }} = {{ row.factor }} {{ displayUnit(row.inventoryBaseUnit) }}</template></el-table-column>
-        <el-table-column label="报价" width="120"><template #default="{ row }">{{ row.quotedPrice == null ? '-' : `${row.currency || 'CNY'} ${Number(row.quotedPrice).toFixed(2)}` }}</template></el-table-column>
+        <el-table-column label="报价" width="150"><template #default="{ row }">{{ row.quotedPrice == null ? '-' : `${row.currency || 'CNY'} ${Number(row.quotedPrice).toFixed(2)}/${displayUnit(row.purchasePackageUnit)}` }}</template></el-table-column>
         <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="row.active === false ? 'info' : 'success'">{{ row.active === false ? '停用' : row.defaultSpec ? '默认' : '启用' }}</el-tag></template></el-table-column>
         <el-table-column v-if="canWrite && isActive" label="操作" width="130">
           <template #default="{ row }">
@@ -223,13 +232,13 @@
       <el-form v-if="canWrite && isActive" label-width="125px" :model="specForm">
         <el-form-item label="规格名称" required><el-input v-model="specForm.name" maxlength="100" placeholder="例如 10kg/箱" /></el-form-item>
         <el-form-item label="采购包装单位" required>
-          <UnitSelect v-model="specForm.purchasePackageUnit" :factory-id="factoryId" usage-scope="PURCHASE" />
+          <UnitSelect v-model="specForm.purchasePackageUnit" :factory-id="factoryId" usage-scope="PURCHASE_QUANTITY" />
         </el-form-item>
         <el-form-item label="换算系数" required>
           <el-input-number v-model="specForm.factor" :min="0.0001" :precision="4" style="width: 220px" />
           <span class="field-hint">1 {{ displayUnit(specForm.purchasePackageUnit) }} = {{ specForm.factor || '?' }} {{ displayUnit(specRelation?.baseUnit) }}</span>
         </el-form-item>
-        <el-form-item label="未税报价"><el-input-number v-model="specForm.quotedPrice" :min="0" :precision="4" style="width: 220px" /></el-form-item>
+        <el-form-item :label="`未税报价（元/${displayUnit(specForm.purchasePackageUnit) || '采购包装单位'}）`"><el-input-number v-model="specForm.quotedPrice" :min="0" :precision="4" style="width: 220px" /></el-form-item>
         <el-form-item label="币种" required><el-input v-model="specForm.currency" maxlength="10" style="width: 220px" /></el-form-item>
         <el-form-item label="最小起订量"><el-input-number v-model="specForm.minOrderQuantity" :min="0.0001" :precision="4" style="width: 220px" /></el-form-item>
         <el-form-item label="交期（天）"><el-input-number v-model="specForm.leadTimeDays" :min="0" :precision="0" style="width: 220px" /></el-form-item>
@@ -435,6 +444,12 @@ async function openRelationCreate(): Promise<void> {
     minOrderQuantity: null, leadTimeDays: null, preferred: false, active: true, version: undefined,
   });
   relationDialogVisible.value = true;
+}
+
+function onRelationMaterialChange(materialTypeId: string): void {
+  if (relationEditingId.value || relationForm.purchaseUnit) return;
+  const material = materialOptions.value.find((row) => row.id === materialTypeId);
+  relationForm.purchaseUnit = material?.unit || '';
 }
 
 async function openRelationEdit(row: SupplierMaterialRelation): Promise<void> {

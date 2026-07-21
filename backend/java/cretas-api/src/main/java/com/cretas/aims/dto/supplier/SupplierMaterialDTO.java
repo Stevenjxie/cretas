@@ -15,10 +15,15 @@ public class SupplierMaterialDTO {
     private String materialCode;
     private String materialName;
     private String baseUnit;
+    @PriceSensitive private BigDecimal materialReferencePrice;
+    private String materialReferencePriceUnit;
     private String supplierMaterialCode;
     @PriceSensitive private BigDecimal defaultPurchasePrice;
     private String currency;
     private String purchaseUnit;
+    @PriceSensitive private BigDecimal effectivePurchasePrice;
+    private String effectivePriceUnit;
+    private String priceSource;
     private BigDecimal minOrderQuantity;
     private Integer leadTimeDays;
     private Boolean preferred;

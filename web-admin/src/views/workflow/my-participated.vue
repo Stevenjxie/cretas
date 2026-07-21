@@ -3,8 +3,8 @@
  * 我参与的工作流 — Sprint 6 W1-B (C-MENU-PERSONAL-VIEW deferred sub 1).
  *
  * Round 12 §D X4 finding: HJ 工作流 6 sub-menu, Sprint 5 ship 1 (my-created),
- * 本视图填补 personal view 第 2 个 — 用户看自己作为 actor 参与过的所有 workflow
- * 实例 (跨 status, distinct via ApprovalHistory.actor_id join).
+ * 本视图填补 personal view 第 2 个 — 用户查看自己发起或作为 actor 处理过的所有 workflow
+ * 实例（跨 status，后端按发起人或历史处理人去重）。
  *
  * 数据源: GET /api/mobile/{factoryId}/workflow/instances/my-participated
  *   - Backend shipped in Sprint 5 (commit 9105dbc70)
@@ -12,7 +12,7 @@
  *
  * 与 my-created.vue 差异:
  *   - my-created: 按 initiator 过滤 (我起的所有, 跨 status)
- *   - my-participated: 按 actorId join history 过滤 (我审过/操作过, 含他人发起的)
+ *   - my-participated: 我发起或我处理过（含他人发起、由我处理的实例）
  *
  * @since 2026-05-19 (Sprint 6 W1-B)
  */

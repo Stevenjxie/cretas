@@ -22,6 +22,9 @@ import com.cretas.aims.service.workflow.WorkflowEngineService;
 import com.cretas.aims.service.workflow.impl.WorkflowEngineServiceImpl;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus;
+import com.cretas.aims.entity.config.ApprovalWorkflow;
+import com.cretas.aims.entity.config.ApprovalWorkflowNode;
+import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.utils.TokenUtils;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -43,6 +46,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import com.cretas.aims.annotation.RequireModule;
 
 @Slf4j
@@ -60,6 +68,9 @@ public class PurchaseController {
     private final UserRepository userRepository;
     private final com.cretas.aims.service.factory.WarehouseResolver warehouseResolver;
     private final com.cretas.aims.repository.factory.FactoryWarehouseRepository factoryWarehouseRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ApprovalWorkflowService approvalWorkflowService;
 
     /**
      * Phase 2 issue #13 — workflow-scoped RBAC for {@link #approveOrder}.
@@ -242,66 +253,95 @@ public class PurchaseController {
     @RequirePermission("procurement:read_write")
     public ApiResponse<PurchaseOrder> submitOrder(
             @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String orderId,
+            @RequestHeader("Authorization") String authorization) {
+        Long initiatorUserId = extractUserId(authorization);
+        PurchaseOrder order = purchaseService.submitOrder(factoryId, orderId, initiatorUserId);
+        return ApiResponse.success(order.getStatus() == PurchaseOrderStatus.WORKFLOW_RUNNING
+                ? "采购订单已提交至 OA 审批中心"
+                : "采购订单审批流程已自动完成", order);
+    }
+
+    @RequireModule("purchase_order")
+    @GetMapping("/orders/{orderId}/approval-progress")
+    @Operation(summary = "采购订单 OA 审批进度（只读）")
+    @RequirePermission({"procurement:read_write", "procurement:read"})
+    public ApiResponse<Map<String, Object>> getApprovalProgress(
+            @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String orderId) {
-        PurchaseOrder order = purchaseService.submitOrder(factoryId, orderId);
-        return ApiResponse.success("采购订单已提交", order);
+        purchaseService.getPurchaseOrderById(factoryId, orderId);
+        if (workflowEngine == null) {
+            return ApiResponse.success(Map.of(
+                    "hasInstance", false,
+                    "message", "OA 审批服务不可用"));
+        }
+        Optional<ApprovalWorkflowInstance> found = workflowEngine.getLatestInstance(
+                factoryId, "PURCHASE_ORDER", orderId);
+        if (found.isEmpty()) {
+            return ApiResponse.success(Map.of(
+                    "hasInstance", false,
+                    "message", "尚未创建 OA 审批实例"));
+        }
+        ApprovalWorkflowInstance instance = found.get();
+        List<String> nodeNames = new ArrayList<>();
+        Set<String> roles = new LinkedHashSet<>();
+        if (approvalWorkflowService != null) {
+            Optional<ApprovalWorkflow> workflow = approvalWorkflowService.getById(
+                    factoryId, instance.getWorkflowId());
+            if (workflow.isPresent()) {
+                Map<String, ApprovalWorkflowNode> nodes = new java.util.HashMap<>();
+                for (ApprovalWorkflowNode node : approvalWorkflowService.deserializeNodes(
+                        workflow.get().getNodesJson())) {
+                    nodes.put(node.getId(), node);
+                }
+                for (String nodeId : instance.getCurrentNodeIds()) {
+                    ApprovalWorkflowNode node = nodes.get(nodeId);
+                    nodeNames.add(node == null || node.getLabel() == null ? nodeId : node.getLabel());
+                    if (node != null && node.getConfig() != null) {
+                        Object configured = node.getConfig().get("approverRoles");
+                        if (configured instanceof Iterable<?> iterable) {
+                            iterable.forEach(value -> roles.add(String.valueOf(value)));
+                        }
+                    }
+                }
+            }
+        }
+        Set<String> assignees = new LinkedHashSet<>();
+        for (String role : roles) {
+            userRepository.findByFactoryIdAndRoleCode(factoryId, role).stream()
+                    .filter(user -> Boolean.TRUE.equals(user.getIsActive()))
+                    .map(User::getUsername)
+                    .filter(java.util.Objects::nonNull)
+                    .forEach(assignees::add);
+        }
+        LocalDateTime now = LocalDateTime.now();
+        long stayMinutes = instance.getInitiatedAt() == null
+                ? 0L : Math.max(0L, Duration.between(instance.getInitiatedAt(), now).toMinutes());
+        Map<String, Object> progress = new java.util.LinkedHashMap<>();
+        progress.put("hasInstance", true);
+        progress.put("instanceId", instance.getId());
+        progress.put("workflowId", instance.getWorkflowId());
+        progress.put("status", instance.getStatus().name());
+        progress.put("currentNodeIds", instance.getCurrentNodeIds());
+        progress.put("currentNodeNames", nodeNames);
+        progress.put("approverRoles", roles);
+        progress.put("assignees", assignees);
+        progress.put("initiatedBy", instance.getInitiatedBy());
+        progress.put("initiatedAt", instance.getInitiatedAt());
+        progress.put("completedAt", instance.getCompletedAt());
+        progress.put("stayMinutes", stayMinutes);
+        progress.put("deepLink", "/workflow/my-created?instanceId=" + instance.getId());
+        return ApiResponse.success(progress);
     }
 
     @RequireModule("purchase_order")
     @PostMapping("/orders/{orderId}/approve")
-    @Operation(summary = "审批采购订单",
-            description = "RBAC (issue #13): 有 RUNNING workflow instance 时按 active node "
-                    + "approverRoles 授权 (workflow-scoped); 否则回退 procurement:read_write 静态权限. "
-                    + "factory_super_admin 总是放行.")
-    // @RequirePermission removed (issue #13): RBAC moved into method body for workflow-aware check.
-    // Legacy branch (no workflow instance) still enforces procurement:read_write via permissionService.hasPermission.
+    @Operation(summary = "已停用：请在 OA 审批中心处理采购审批")
     public ApiResponse<PurchaseOrder> approveOrder(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String orderId,
             @RequestHeader("Authorization") String authorization) {
-        // TODO (Phase 2 / Sprint 4): 增加 @RequestParam(required=false) String fromNodeId
-        // 让 parallel 场景下前端能精确指定本次审批操作的 active node id.
-        // 目前 WorkflowEngineService.transitionNode 从 instance.currentNodeIds[0] 取 fromNode (B.4 简化).
-        User currentUser = resolveCurrentUser(authorization);
-        if (currentUser == null) {
-            throw new BusinessException(401, "用户未登录或会话已过期");
-        }
-
-        // Phase 2 issue #13 — workflow-scoped RBAC:
-        // 1. 有 RUNNING workflow instance → 检查当前 active node 的 approverRoles (canTransition).
-        // 2. 无 instance → 静态 procurement:read_write (legacy path, 跟其他 PO endpoint 一致).
-        // 3. factory_super_admin 总是放行 (canTransition 内已 cover; legacy 路径走 hasPermission).
-        Optional<ApprovalWorkflowInstance> instanceOpt = (workflowEngine != null)
-                ? workflowEngine.getCurrentInstance(factoryId, "PURCHASE_ORDER", orderId)
-                : Optional.empty();
-
-        if (instanceOpt.isPresent() && instanceOpt.get().getStatus() == InstanceStatus.RUNNING) {
-            // Workflow path — 按 active node approverRoles 授权.
-            boolean allowed = workflowEngineImpl != null
-                    && workflowEngineImpl.canTransition(instanceOpt.get(), currentUser);
-            if (!allowed) {
-                String roleLabel = currentUser.getRoleEnum() == null
-                        ? "未知角色" : currentUser.getRoleEnum().getDisplayName();
-                throw new BusinessException(403,
-                        String.format("您的角色 [%s] 不在当前审批节点的授权列表中", roleLabel))
-                        .withHint("请联系工厂管理员在 Canvas → 审批工作流 中将本角色加入审批节点 approverRoles, "
-                                + "或切换到有权限的账号 (e.g. factory_super_admin) 重试");
-            }
-        } else {
-            // Legacy path — 静态权限 (跟原 @RequirePermission("procurement:read_write") 行为一致).
-            boolean allowed = permissionService.hasPermission(currentUser, "procurement:read_write");
-            if (!allowed) {
-                String roleLabel = currentUser.getRoleEnum() == null
-                        ? "未知角色" : currentUser.getRoleEnum().getDisplayName();
-                throw new BusinessException(403,
-                        String.format("您的角色 [%s] 在 [采购管理] 模块无 [读写] 权限", roleLabel))
-                        .withHint("请联系工厂管理员在 Canvas → 模块权限 矩阵为角色 ["
-                                + roleLabel + "] 开通 [采购管理] 的 [读写] 权限, 或切换到有权限的账号重试");
-            }
-        }
-
-        PurchaseOrder order = purchaseService.approveOrder(factoryId, orderId, currentUser.getId());
-        return ApiResponse.success("采购订单已审批", order);
+        throw legacyApprovalEndpointDisabled();
     }
 
     @RequireModule("purchase_order")
@@ -337,47 +377,42 @@ public class PurchaseController {
 
     @RequireModule("purchase_order")
     @PostMapping("/orders/{orderId}/submit-for-finance-review")
-    @Operation(summary = "提交采购订单财务审核")
+    @Operation(summary = "已停用：财务节点由同一 OA 流程自动推进")
     @RequirePermission("procurement:read_write")
     public ApiResponse<PurchaseOrder> submitForFinanceReview(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String orderId) {
-        PurchaseOrder order = purchaseService.submitForFinanceReview(factoryId, orderId);
-        return ApiResponse.success("已提交财务审核", order);
+        throw legacyApprovalEndpointDisabled();
     }
 
     @RequireModule("purchase_order")
     @PostMapping("/orders/{orderId}/finance-approve")
-    @Operation(summary = "采购订单财务审核通过")
+    @Operation(summary = "已停用：请在 OA 审批中心处理财务节点")
     @RequirePermission("finance:read_write")
     public ApiResponse<PurchaseOrder> financeApprove(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String orderId,
             @RequestHeader(value = "Authorization", required = false) String authorization,
             @RequestBody(required = false) java.util.Map<String, String> body) {
-        Long userId = extractUserId(authorization);
-        String notes = body != null ? body.get("notes") : null;
-        PurchaseOrder order = purchaseService.financeApproveOrder(factoryId, orderId, userId, notes);
-        return ApiResponse.success("财务审核通过", order);
+        throw legacyApprovalEndpointDisabled();
     }
 
     @RequireModule("purchase_order")
     @PostMapping("/orders/{orderId}/finance-reject")
-    @Operation(summary = "采购订单财务审核驳回")
+    @Operation(summary = "已停用：请在 OA 审批中心处理财务节点")
     @RequirePermission("finance:read_write")
     public ApiResponse<PurchaseOrder> financeReject(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String orderId,
             @RequestHeader(value = "Authorization", required = false) String authorization,
             @RequestBody java.util.Map<String, String> body) {
-        // Smoke v3 P2 fix (2026-05-17): 驳回必须给原因, 空 notes 拒绝
-        String notes = body.get("notes");
-        if (notes == null || notes.trim().isEmpty()) {
-            throw new BusinessException(400, "驳回必须填写原因 (notes 不能为空)");
-        }
-        Long userId = extractUserId(authorization);
-        PurchaseOrder order = purchaseService.financeRejectOrder(factoryId, orderId, userId, notes);
-        return ApiResponse.success("财务审核已驳回", order);
+        throw legacyApprovalEndpointDisabled();
+    }
+
+    private BusinessException legacyApprovalEndpointDisabled() {
+        return new BusinessException(410, "采购审批只能在 OA 审批中心处理")
+                .withCode("PURCHASE_APPROVAL_OA_ONLY")
+                .withHint("请打开工作台 → 待我审批；业务详情页仅展示审批进度");
     }
 
     // ==================== 入库管理 ====================

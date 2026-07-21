@@ -73,8 +73,21 @@ public class RawMaterialTypeDTO {
     private String category;
 
     private String unit;
-    // unitPrice 不再 expose: 价格按采购批次浮动, 走 movingAvgPrice / 采购单价.
-    // entity 字段保留以兼容历史数据.
+
+    /**
+     * Optional untaxed purchase reference price maintained on material master data.
+     * The denominator is always {@link #unit}; supplier-specific quotes override it.
+     */
+    @PriceSensitive
+    @Positive(message = "采购参考价必须大于0")
+    @JsonAlias("unitPrice")
+    private BigDecimal materialReferencePrice;
+
+    /** Read-only denominator of {@link #materialReferencePrice}. */
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    private String materialReferencePriceUnit;
+    // Actual purchase prices still come from supplier relations/orders/batches.
+    // The material-level value above is only an explicitly labelled fallback reference price.
     private String storageType; // fresh, frozen, dry
 
     @JsonProperty("shelfLifeDays")

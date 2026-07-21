@@ -21,6 +21,8 @@ class SupplierRepositoryQueryValidationTest {
     @Autowired SupplierMaterialRepository supplierMaterialRepository;
     @Autowired SupplierMaterialPurchaseSpecRepository purchaseSpecRepository;
     @Autowired AttachmentRepository attachmentRepository;
+    @Autowired com.cretas.aims.repository.inventory.PurchaseOrderRepository purchaseOrderRepository;
+    @Autowired com.cretas.aims.repository.workflow.ApprovalWorkflowInstanceRepository workflowInstanceRepository;
 
     @Test
     void repositoriesBootAndAllDerivedQueriesParse() {
@@ -28,5 +30,7 @@ class SupplierRepositoryQueryValidationTest {
         assertNotNull(supplierMaterialRepository);
         assertNotNull(purchaseSpecRepository);
         assertNotNull(attachmentRepository);
+        assertNotNull(purchaseOrderRepository);
+        assertNotNull(workflowInstanceRepository);
     }
 }

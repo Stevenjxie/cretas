@@ -559,3 +559,70 @@
 - **Commit/PR/main 状态**：实现 commit `8a39acecd045a6338659f8a7e71eefe125bc1fdb`；PR [#1552](https://github.com/Stevenjxie/cretas/pull/1552)；状态 `READY_FOR_MAIN`。
 - **部署状态**：`NOT_DEPLOYED`。
 - **回归状态**：`TARGET_TEST_PASSED`；生产业务 mutation=0，未创建/修改原料、分类或业务编码，未执行历史回填，未触碰 LIUSHANMEN。
+
+### ENH-F006-MATERIAL-SUPPLIER-BIDIRECTIONAL-001 — 供应商与物料缺少双向多对多维护
+
+- **发现阶段/时间**：F006 R3 原料/供应商主数据人工回归，2026-07-21。
+- **页面/步骤**：原料类型字典 → 供应商；供应商详情 → 供应原料。原料侧只有只读空列表，供应商侧原入口实际是采购历史汇总，均不能维护正式关系。
+- **期望/实际/业务影响**：一个供应商可关联多个物料，一个物料可关联多个供应商，同厂 `(factoryId, supplierId, materialTypeId)` 不得重复；实际用户无法建立关系，采购单也无法取得供应商限定的物料、采购单位和报价。
+- **证据路径**：`D:/Temp/codex-clipboard-ebfc75cd-353f-4008-a1a4-a878865396a2.png`、`D:/Temp/codex-clipboard-a0fd5205-c3de-4d16-ac0b-e112d88123d5.png`、`D:/Temp/codex-clipboard-dbdd9cc9-97d6-490a-bc8c-b21aa73f0529.png`。
+- **根因**：后端已有独立 `SupplierMaterial` 多对多实体/API和同厂唯一约束，但两个前端入口仍使用采购历史/只读查询；关系 DTO 对采购单位、价格来源和物料参考价信息不完整。
+- **修复**：原料侧和供应商详情统一调用同一 `SupplierMaterial` API，支持搜索关联、编辑关系属性、唯一首选、停用与双向刷新；已关联供应商从候选排除，后端继续执行同厂身份、状态、重复和首选唯一门禁。采购历史继续作为独立只读语义，不冒充关系配置。
+- **修改文件**：`web-admin/src/api/supplierManagement.ts`、`web-admin/src/views/warehouse/material-types/list.vue`、`web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue`、`SupplierMaterialDTO/Request/ServiceImpl` 及目标测试。
+- **测试**：`SupplierMaterialServiceImplTest`、`SupplierMaterialPurchaseSpecServiceImplTest` 与 Web `supplierMaterialRelation.source.spec.ts`；已纳入本批后端37项/Web14项目标测试并通过。Repository 变更的真实 JPA Context `SupplierRepositoryQueryValidationTest` 1/1 PASS。
+- **Commit/PR/main 状态**：`TARGET_TEST_PASSED_PENDING_PR_MAIN`；精确 commit/PR/main 在合入回执中给出。
+- **部署状态**：`NOT_DEPLOYED`。
+- **回归状态**：`CODE_AND_TARGET_TEST_COMPLETE`；生产业务 mutation=0，未修改任何现有供应商、物料或关系，未触碰 LIUSHANMEN。
+
+### BUG-F006-PURCHASE-SUPPLIER-PRICE-UNIT-CONTRACT-001 — 采购单位与供应价格未和物料/供应关系联通
+
+- **发现阶段/时间**：F006 R3 供应原料关系及采购订单人工回归，2026-07-21。
+- **页面/步骤**：新增供应原料关系时采购单位为普通输入框、采购价无计价单位；采购订单选择物料后仍可形成与供应关系不一致的单位/价格或把缺失价格静默写成0。
+- **期望/实际/业务影响**：MaterialType 提供库存基本单位与可选参考价，SupplierMaterial 提供该供应商的采购单位/默认报价，PurchaseSpec 提供受约束包装换算；选中供应商+物料后采购行应继承同一真值，价格显示“元/单位”，后端拒绝错配且缺价保持未配置。
+- **证据路径**：`D:/Temp/codex-clipboard-e44de6bf-3973-4c18-af53-86eaf4453275.png`。
+- **根因**：供应关系页面使用自由文本单位；采购单前端直接维护独立 unit/price，后端只有零散兜底且外层赋值会绕过统一解析，缺失值还可能被前端转为0。
+- **修复**：供应关系复用共享 `UnitSelect/displayUnit`；默认采购价按采购单位明确标注；原料参考价作为所有物料类型可选档案值；采购单只能选择当前供应商 ACTIVE 关系和规格，自动带入供应关系/规格/物料参考价并标注来源；后端按 `PurchaseSpec → SupplierMaterial → MaterialType` 受控解析单位、换算与价格，非法单位/规格明确拒绝，null 不再变0，订单行继续保存快照。
+- **修改文件**：`RawMaterialTypeDTO/ServiceImpl`、`SupplierMaterial*DTO/Request/ServiceImpl`、`SupplierMaterialPurchaseSpec*`、`PurchaseServiceImpl`、采购/原料/供应商 Web 页面及对应目标测试。
+- **测试**：覆盖供应关系单位价格、物料参考价兜底、规格包装换算、单位错配拒绝、缺价不伪造；已纳入本批后端37项/Web14项目标测试并通过。
+- **Commit/PR/main 状态**：`TARGET_TEST_PASSED_PENDING_PR_MAIN`；精确 commit/PR/main 在合入回执中给出。
+- **部署状态**：`NOT_DEPLOYED`。
+- **回归状态**：`CODE_AND_TARGET_TEST_COMPLETE`；未修改生产采购单、供应商、物料或价格。
+
+### BUG-F006-PURCHASE-ORDER-CREATE-ENTRY-001 — 新建采购订单仍弹出多录入方式
+
+- **发现阶段/时间**：F006 R3 采购订单入口人工回归，2026-07-21。
+- **页面/步骤**：采购管理 → 采购订单 → 新建采购订单；仍弹出普通新建、一键快速、二维表格、BOM展开四选一。
+- **期望/实际/业务影响**：产品已确认当前只保留普通新建，主按钮应直接进入完整普通表单，独立 AI 录入保持；旧选择弹窗增加无效决策和误导入口。
+- **证据路径**：`D:/Temp/codex-clipboard-9d870df6-6bff-4ee0-a511-ca4455b99e8d.png`。
+- **根因**：采购列表仍保留旧 `CreateModeSelector` 与多入口状态机，之前需求只登记、未在现行页面落地。
+- **修复**：主按钮直接调用普通新建表单；移除方式选择弹窗及三项废弃入口；AI 录入入口与普通表单原业务契约保持。
+- **修改文件**：`web-admin/src/views/procurement/orders/list.vue`、采购入口源契约测试。
+- **测试**：Web `orderCreationContracts.source.spec.ts` 覆盖直接打开、废弃入口不可见与 AI 入口保留；已纳入本批 Web14项目标测试并通过。
+- **Commit/PR/main 状态**：`TARGET_TEST_PASSED_PENDING_PR_MAIN`；精确 commit/PR/main 在合入回执中给出。
+- **部署状态**：`NOT_DEPLOYED`。
+- **回归状态**：`CODE_AND_TARGET_TEST_COMPLETE`；未创建或修改生产采购订单。
+
+### BUG-F006-R3-OA-PROCUREMENT-001 — 采购提交后没有 OA 实例/节点/待办
+
+- **发现阶段/时间**：F006 R3 采购订单审批闭环，2026-07-21。
+- **页面/步骤**：`PO-20260721-0001` 仅提交一次后状态为已提交，但详情审批人/节点为空；进入“我参与的工作流”显示0条。
+- **期望/实际/业务影响**：首次提交应在同一事务创建唯一 OA 实例与首节点待办，发起人可在“我发起的”查看、审批人在“待我审批”处理，后续业务/财务节点连续推进；实际 `submitOrder()` 只改采购状态，OA 启动被错误放在旧直接审批路径，产生不可继续的孤儿 `SUBMITTED`。
+- **证据路径**：`D:/Temp/codex-clipboard-1dca4a61-f74a-4527-a149-790ea215e98c.png`、`D:/Temp/codex-clipboard-5200e993-de32-4fbb-8366-b27c30738b40.png`。
+- **根因**：采购提交与 Workflow Engine 没有事务边界；详情链接指向错误个人视图；待办 DTO/读模型缺少当前节点、角色和完成状态；采购/财务旧端点仍允许业务页旁路。
+- **修复**：提交对采购单加悲观锁，先校验供应商、行、ACTIVE 模板、首节点角色及同厂可用处理人，再在同一事务启动唯一实例并投影领域状态；重复提交返回同一流程真值，已有 `SUBMITTED` 但无实例明确409，事务失败整体回滚。详情新增只读 `approval-progress`；新增统一“待我审批”，“我参与的”同时包含发起人和历史处理人且去重，发起人也可从“我发起的”查看；OA 动作要求当前节点+幂等键并用 optimistic/CAS 防双批，采购业务/财务旧直接审批端点统一410 fail-closed；业务节点通过后同一实例自动继续到财务节点或完成；Workflow Redis 状态仅在数据库事务 afterCommit 后刷新，回滚不留下幽灵实例。
+- **修改文件**：`PurchaseController/Service/Repository`、`WorkflowInstanceController`、`WorkflowEngineService/Impl`、`ApprovalWorkflowInstanceRepository`、OA DTO、采购详情/待办/路由/工作台及目标测试。
+- **测试**：`PurchaseServiceOaSubmissionTest` 覆盖首次提交、自动完成、重复幂等、孤儿已提交拒绝、缺处理人事务回滚、终态动作纯读；`PurchaseControllerOaOnlyTest` 覆盖所有旧审批入口410；WorkflowEngineServiceImplTest 的 Redis afterCommit 精确测试 1/1 PASS；Web OA 契约测试覆盖正确个人视图、待办入口、节点CAS与无业务页审批。已纳入本批后端37项/Web14项目标测试并通过；真实 JPA Context 1/1 PASS。
+- **历史单安全恢复方案**：当前任务不操作 `PO-20260721-0001`。部署后仍先 query-only 证明它严格为同厂 `SUBMITTED` 且无实例；只有用户另行授权后，才允许使用代码支持的受限修复事务，以订单ID+当时唯一有效模板摘要构造幂等键，只补缺失 OA instance/首节点任务/审计读模型，不改订单行、金额、收货、库存或财务事实；同摘要重放 no-op，不同/歧义模板拒绝。
+- **Commit/PR/main 状态**：`TARGET_TEST_PASSED_PENDING_PR_MAIN`；精确 commit/PR/main 在合入回执中给出。
+- **部署状态**：`NOT_DEPLOYED`。
+- **回归状态**：`CODE_AND_TARGET_TEST_COMPLETE`；生产业务 mutation=0，未取消、重提、重建或桥接 `PO-20260721-0001`。
+
+### 2026-07-21 本轮严格审计边界与业务纠正
+
+- 本轮只把有当前代码/截图/目标测试证据的四项标为完成；昨天跨 M10-M12、BOM、Workflow、财务等大量需求未逐项得到现行代码证据的，不推断为 PASS，后续需按独立 scope 核对。
+- 用户要求核对的是昨天另一个测试 Chat 的需求，不是 Google Sheet；此前 Sheet 审计项撤回，不作为本批完成依据。
+- 工序主数据的最终真值是“工序本身没有单位”，不是给工序补单位选择器；已登记的工序单位删除需求保持，不在本批反向新增单位。
+- 零差异盘点仍保留 `PENDING_APPROVAL → APPROVED → APPLIED`，自动完成建议已撤回。
+- Workflow 运行态只消费 ACTIVE BOM；存在 DRAFT 时仅改进文案，不允许 Workflow 消费草稿。
+- 原料名称智能建议 `case` 本身可以正确；缺陷是英文 canonical 泄漏和错误标成 manual override，不得改成“原料一律 kg”。
+- BOM 原料/辅料固定数量默认可空，实际投料来自计划/报工；包材固定用量仍是激活门禁。以上纠正不得被旧建议覆盖。

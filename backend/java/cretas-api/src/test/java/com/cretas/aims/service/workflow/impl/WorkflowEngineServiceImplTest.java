@@ -23,7 +23,11 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.*;
 
@@ -426,6 +430,43 @@ class WorkflowEngineServiceImplTest {
         assertEquals(409, ex.getCode());
         assertTrue(ex.getMessage().contains("并发审批冲突") || ex.getMessage().contains("刷新"),
                 "expect 409 message, got: " + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("Redis cache is written only after the surrounding transaction commits")
+    @SuppressWarnings("unchecked")
+    void redis_cache_waits_for_transaction_commit() {
+        RedisTemplate<String, Object> redis = mock(RedisTemplate.class);
+        ValueOperations<String, Object> values = mock(ValueOperations.class);
+        when(redis.opsForValue()).thenReturn(values);
+        engine = new WorkflowEngineServiceImpl(
+                instanceRepository, historyRepository, workflowService, spelEvaluator, redis);
+        buildWorkflow(
+                List.of(
+                        node("start", "start", null),
+                        node("approve1", "approval", approvalCfg()),
+                        node("end_ok", "end", Map.of("outcome", "APPROVED"))),
+                List.of(
+                        edge("e1", "start", "approve1", null, 0, null),
+                        edge("e2", "approve1", "end_ok", null, 0, null)),
+                "start");
+
+        TransactionSynchronizationManager.initSynchronization();
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            ApprovalWorkflowInstance instance = engine.startWorkflow(
+                    FACTORY_ID, "PURCHASE_ORDER", "PO-COMMIT-CACHE", Map.of(), INITIATOR_ID);
+
+            verifyNoInteractions(values);
+            List<TransactionSynchronization> synchronizations =
+                    TransactionSynchronizationManager.getSynchronizations();
+            assertEquals(1, synchronizations.size());
+            synchronizations.forEach(TransactionSynchronization::afterCommit);
+            verify(values).set(anyString(), same(instance));
+        } finally {
+            TransactionSynchronizationManager.setActualTransactionActive(false);
+            TransactionSynchronizationManager.clearSynchronization();
+        }
     }
 
     @Test
