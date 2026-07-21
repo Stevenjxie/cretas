@@ -1151,12 +1151,20 @@ async def post_restaurant_tiered_answer(
       {"delegate": True, "answer_text": str, "charts": [...], "kpis": [...],
        "code": str, "contract_pass": bool}
     """
-    from smartbi.gold.restaurant_intent import parse_restaurant_query
+    from smartbi.gold.restaurant_intent import (
+        contextualize_restaurant_followup,
+        parse_restaurant_query,
+    )
     from smartbi.gold.restaurant_intent_service import should_delegate, tiered_answer
     from smartbi.gold.restaurant_ops_router import (
         _profit_intent,
         _uses_relative_sales_window,
         match_restaurant_ops,
+    )
+    from smartbi.services.chat_session_service import (
+        ChatSessionService,
+        build_trusted_restaurant_session_key,
+        parse_trusted_user_id,
     )
 
     try:
@@ -1165,6 +1173,11 @@ async def post_restaurant_tiered_answer(
         query = (body.query or "").strip()
         if not query:
             return {"delegate": False}
+        state = getattr(request, "state", None)
+        trusted_user_id = parse_trusted_user_id(
+            getattr(state, "user_id", None) if state is not None else None
+        )
+        has_trusted_session = bool(body.session_id and trusted_user_id is not None)
 
         # 2026-07-08 audit fix C-2 (延迟缓解): should_delegate 只可能经
         # 规则 3 (利润信号 + 毛利可答 intent) 或规则 4 (SALES_SUMMARY +
@@ -1190,6 +1203,8 @@ async def post_restaurant_tiered_answer(
             and not asks_profit_pre
             and not _uses_relative_sales_window(query)
             and match_restaurant_ops(query) is None
+            and not has_trusted_session
+            and "优化" not in query
         ):
             return {"delegate": False}
 
@@ -1197,8 +1212,29 @@ async def post_restaurant_tiered_answer(
         if not pool:
             return {"delegate": False}
 
-        spec = await parse_restaurant_query(query, pool, factory_id=fid, session_key=body.session_id)
-        if not should_delegate(spec, body.java_tool_name):
+        effective_query = query
+        inherited_context = False
+        if body.session_id and trusted_user_id is not None:
+            parent = await ChatSessionService(pool).lookup(
+                body.session_id,
+                fid,
+                user_id=trusted_user_id,
+            )
+            effective_query, inherited_context = contextualize_restaurant_followup(
+                query, parent,
+            )
+
+        clarification_session_key = build_trusted_restaurant_session_key(
+            fid, trusted_user_id, body.session_id,
+        )
+
+        spec = await parse_restaurant_query(
+            effective_query,
+            pool,
+            factory_id=fid,
+            session_key=clarification_session_key,
+        )
+        if not inherited_context and not should_delegate(spec, body.java_tool_name):
             return {"delegate": False}
 
         # 2026-07-08 clarification-loop v1: `parse_restaurant_query` above
@@ -1212,11 +1248,11 @@ async def post_restaurant_tiered_answer(
         # pre-existing caller), this branch is skipped entirely and the
         # call below is byte-identical to before this feature existed.
         extra_kwargs: Dict[str, Any] = {}
-        if body.session_id:
-            extra_kwargs["session_key"] = body.session_id
+        if clarification_session_key:
+            extra_kwargs["session_key"] = clarification_session_key
             extra_kwargs["precomputed_spec"] = spec
         result = await tiered_answer(
-            query, pool, fid, role, java_tool_name=body.java_tool_name,
+            effective_query, pool, fid, role, java_tool_name=body.java_tool_name,
             **extra_kwargs,
         )
         if not result:
@@ -1231,6 +1267,17 @@ async def post_restaurant_tiered_answer(
                 "kind": "clarification",
                 "answer_text": result["answer_text"],
             }
+
+        if body.session_id and trusted_user_id is not None:
+            await ChatSessionService(pool).upsert(
+                session_id=body.session_id,
+                factory_id=fid,
+                parent_query=effective_query if inherited_context else query,
+                parent_answer_summary=result["answer_text"],
+                parent_template_code=result.get("code"),
+                parent_upload_id=None,
+                user_id=trusted_user_id,
+            )
 
         return {
             "delegate": True,

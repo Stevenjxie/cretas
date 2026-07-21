@@ -84,7 +84,8 @@ public class RestaurantOpsGoldAnalysisTool extends AbstractBusinessTool {
                 asString(response.get("error")));
 
         if (answer == null || answer.isBlank()) {
-            answer = "餐饮经营分析已完成，但返回内容为空。请换一个更具体的问题，例如“损耗金额排名和原因占比”或“最近哪些食材盘亏最严重”。";
+            success = false;
+            answer = "这次没有获得可展示的经营结果，因此没有生成结论。请换一个更具体的问题，例如“损耗金额排名和原因占比”或“最近哪些食材盘亏最严重”。";
         }
 
         Map<String, Object> result = new LinkedHashMap<>();
@@ -122,7 +123,7 @@ public class RestaurantOpsGoldAnalysisTool extends AbstractBusinessTool {
         Map<String, Object> bridge = new LinkedHashMap<>();
         bridge.put("answerMode", "report_with_owner_action");
         bridge.put("ownerActionScenario", scenario);
-        bridge.put("plainDecision", "这条是经营报表回答；如果老板继续追问，我会基于同一份数据直接给今天动作、不要做什么和明天看什么。");
+        bridge.put("plainDecision", "继续追问时会沿用本会话最近的经营主题和时间范围；如果要换一个问题，请使用“新话题”。");
         return bridge;
     }
 

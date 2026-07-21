@@ -50,8 +50,8 @@ def _spec(**overrides) -> RestaurantQuerySpec:
     return RestaurantQuerySpec(**defaults)
 
 
-def _fake_request(role=None):
-    return SimpleNamespace(state=SimpleNamespace(role=role))
+def _fake_request(role=None, user_id=None):
+    return SimpleNamespace(state=SimpleNamespace(role=role, user_id=user_id))
 
 
 # ─── 1. should_delegate decision matrix (design doc section 3) ────────────
@@ -326,6 +326,38 @@ async def test_tiered_answer_capture_omits_source_without_java_tool_name(monkeyp
     assert capture_mock.call_args.kwargs["source"] is None
 
 
+@pytest.mark.asyncio
+async def test_tiered_answer_internal_only_text_is_not_a_success(monkeypatch):
+    spec = _spec(intent="RESTAURANT_OPS_TREND_ANALYSIS")
+
+    monkeypatch.setattr(
+        svc,
+        "parse_restaurant_query",
+        AsyncMock(return_value=spec),
+    )
+    monkeypatch.setattr(
+        svc,
+        "_resolve_tiered",
+        AsyncMock(return_value=OpsAnswer(
+            code=spec.intent,
+            title="经营分析",
+            answer_text="通过调用 income_statement_query 工具获取数据表。",
+            charts=[],
+            kpis=[],
+            meta={},
+        )),
+    )
+    monkeypatch.setattr(svc, "log_intent_capture", AsyncMock(return_value=1))
+
+    result = await tiered_answer("营收趋势", object(), "QHJ01", "restaurant_manager")
+    await asyncio.sleep(0)
+
+    assert result is not None
+    assert result["contract_pass"] is False
+    assert result["answer_text"] == "没有获得可展示的业务结果，本次不生成结论。"
+    assert "已完成" not in result["answer_text"]
+
+
 # ─── 3. POST /api/smartbi/gold/restaurant/tiered-answer endpoint ──────────
 
 @pytest.mark.asyncio
@@ -386,6 +418,78 @@ async def test_endpoint_delegate_true_answer_shape(monkeypatch):
         "code": spec.intent,
         "contract_pass": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_endpoint_dependent_followup_uses_trusted_context_and_session_key(monkeypatch):
+    monkeypatch.setattr(gold_reads_mod, "get_factory_id", lambda: "QHJ01")
+    pool = object()
+    monkeypatch.setattr(gold_reads_mod, "get_pg_pool", AsyncMock(return_value=pool))
+
+    from smartbi.services.chat_session_service import ChatSessionService
+
+    parent = {
+        "parent_query": "上个月营收怎么样",
+        "parent_answer_summary": "上个月营收已完成分析",
+        "parent_template_code": "RESTAURANT_OPS_SALES_SUMMARY",
+    }
+    lookup = AsyncMock(return_value=parent)
+    upsert = AsyncMock(return_value=None)
+    monkeypatch.setattr(ChatSessionService, "lookup", lookup)
+    monkeypatch.setattr(ChatSessionService, "upsert", upsert)
+
+    parse_calls = []
+    spec = _spec(intent="RESTAURANT_OPS_TREND_ANALYSIS", relative_window=False)
+
+    async def _fake_parse(query, pool_arg, **kwargs):
+        parse_calls.append((query, pool_arg, kwargs))
+        return spec
+
+    monkeypatch.setattr(
+        "smartbi.gold.restaurant_intent.parse_restaurant_query",
+        _fake_parse,
+    )
+
+    tiered_calls = []
+
+    async def _fake_tiered(query, pool_arg, factory_id, role, **kwargs):
+        tiered_calls.append((query, pool_arg, factory_id, role, kwargs))
+        return {
+            "kind": "answer",
+            "answer_text": "上个月营收的原因分析",
+            "charts": [],
+            "kpis": [],
+            "title": "经营分析",
+            "code": spec.intent,
+            "contract_pass": True,
+            "spec": spec,
+        }
+
+    monkeypatch.setattr(
+        "smartbi.gold.restaurant_intent_service.tiered_answer",
+        _fake_tiered,
+    )
+
+    body = TieredIntentAnswerRequest(
+        factory_id="QHJ01",
+        query="那为什么呢",
+        java_tool_name="restaurant_revenue_trend_gold",
+        session_id="shared-device-session",
+    )
+    result = await post_restaurant_tiered_answer(
+        _fake_request("restaurant_manager", user_id="88"),
+        body,
+    )
+
+    assert result["delegate"] is True
+    assert parse_calls[0][0] == "上个月营收怎么样；继续追问：那为什么呢"
+    session_key = parse_calls[0][2]["session_key"]
+    assert session_key.startswith("trusted-v1:")
+    assert "shared-device-session" not in session_key
+    assert tiered_calls[0][4]["session_key"] == session_key
+    assert tiered_calls[0][4]["precomputed_spec"] is spec
+    lookup.assert_awaited_once_with("shared-device-session", "QHJ01", user_id=88)
+    upsert.assert_awaited_once()
 
 
 @pytest.mark.asyncio

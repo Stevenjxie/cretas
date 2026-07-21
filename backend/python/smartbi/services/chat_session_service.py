@@ -23,6 +23,7 @@ TTL: 1 hour rolling. Each turn refreshes expires_at. Cron prunes expired rows.
 from __future__ import annotations
 
 import json as _json
+import hashlib
 import logging
 from typing import Any, Dict, Optional
 
@@ -91,6 +92,24 @@ def parse_trusted_user_id(value: Any) -> Optional[int]:
     if user_id <= 0 or user_id > POSTGRES_BIGINT_MAX:
         return None
     return user_id
+
+
+def build_trusted_restaurant_session_key(
+    factory_id: str,
+    trusted_user_id: Optional[int],
+    session_id: Optional[str],
+) -> Optional[str]:
+    """Build a bounded clarification key from authenticated identity."""
+    if trusted_user_id is None or trusted_user_id <= 0 or not session_id:
+        return None
+    normalized_session_id = str(session_id).strip()
+    if not normalized_session_id:
+        return None
+    material = "\x1f".join(
+        ("v1", factory_id, str(trusted_user_id), normalized_session_id)
+    )
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()
+    return f"trusted-v1:{digest}"
 
 
 def sanitize_for_storage(text: str) -> str:

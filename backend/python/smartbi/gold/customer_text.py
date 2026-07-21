@@ -10,8 +10,10 @@ _TOOL_EXPLANATION = re.compile(
     r"(?:通过|经由)?\s*(?:调用|使用)\s*[^，。；\n]{0,80}?(?:工具|接口|数据表)(?:来|进行|获取|查询)?"
 )
 _TECH_ONLY = re.compile(
-    r"^[\s，。；：、]*(?:(?:来源|内部意图|意图|与|和|来自)[\s，。；：、]*)*$"
+    r"^[\s，。；：、]*(?:(?:来源|内部意图|意图|与|和|来自|数据表|利润表数据|"
+    r"业务数据|经营数据|数据|结果)[\s，。；：、]*)*$"
 )
+NO_DISPLAYABLE_BUSINESS_RESULT = "没有获得可展示的业务结果，本次不生成结论。"
 
 
 def sanitize_customer_ai_text(value: Optional[str]) -> str:
@@ -35,4 +37,10 @@ def sanitize_customer_ai_text(value: Optional[str]) -> str:
         if line and not _TECH_ONLY.fullmatch(line):
             cleaned_lines.append(line)
     cleaned = "\n".join(cleaned_lines).strip()
-    return cleaned or "分析已完成，请查看业务结果。"
+    return cleaned or NO_DISPLAYABLE_BUSINESS_RESULT
+
+
+def has_displayable_business_result(value: Optional[str]) -> bool:
+    """Return false when sanitization removed every business-facing fact."""
+    text = (value or "").strip()
+    return bool(text and text != NO_DISPLAYABLE_BUSINESS_RESULT)

@@ -265,6 +265,62 @@ async def test_untrusted_expected_intent_is_ignored(monkeypatch):
     assert observed == ["RESTAURANT_OPS_SALES_SUMMARY"]
 
 
+async def test_restaurant_general_analysis_inherits_only_dependent_session_followup(monkeypatch):
+    observed = {"lookup": [], "upsert": [], "queries": []}
+
+    async def _pool():
+        return object()
+
+    class _SessionService:
+        def __init__(self, _pool):
+            pass
+
+        async def lookup(self, session_id, factory_id, user_id=None):
+            observed["lookup"].append((session_id, factory_id, user_id))
+            return {
+                "parent_query": "本月营收怎么样",
+                "parent_template_code": "RESTAURANT_OPS_SALES_SUMMARY",
+            }
+
+        async def upsert(self, **kwargs):
+            observed["upsert"].append(kwargs)
+
+    async def _tiered(query, *_args, **_kwargs):
+        observed["queries"].append(query)
+        return {
+            "kind": "answer",
+            "answer_text": "本月与上个月相比，营收更高。",
+            "charts": [],
+            "kpis": [],
+            "code": "RESTAURANT_OPS_SALES_SUMMARY",
+            "contract_pass": True,
+        }
+
+    monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
+    monkeypatch.setattr("smartbi.services.chat_session_service.ChatSessionService", _SessionService)
+    monkeypatch.setattr(chat_mod, "_try_tiered_restaurant_intent", _tiered)
+    monkeypatch.setattr(
+        chat_mod,
+        "_chat_cache_get",
+        lambda _key: pytest.fail("session-dependent restaurant answer must bypass response cache"),
+    )
+
+    response = await chat_mod.general_analysis(
+        chat_mod.GeneralAnalysisRequest(
+            query="那和上个月比呢",
+            table_type="restaurant_ops",
+            session_id="session-7",
+            allow_tenant_data_fallback=False,
+        ),
+        _Request("F001", user_id="7", role="restaurant_manager"),
+    )
+
+    assert response.success is True
+    assert observed["lookup"] == [("session-7", "F001", 7)]
+    assert observed["queries"] == ["本月营收怎么样；继续追问：那和上个月比呢"]
+    assert observed["upsert"][0]["parent_query"] == observed["queries"][0]
+
+
 @pytest.mark.parametrize(
     "role_order",
     [
