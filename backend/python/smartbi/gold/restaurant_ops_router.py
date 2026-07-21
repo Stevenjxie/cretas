@@ -770,19 +770,6 @@ def _resolve_sales_query_spec(query: Optional[str], *, today: Optional[date] = N
     )
 
 
-async def _latest_sales_anchor(smartbi_pool, factory_id: str) -> Optional[date]:
-    try:
-        async with smartbi_pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT MAX(date) AS max_date FROM agg_daily WHERE factory_id = $1",
-                factory_id,
-            )
-        return row["max_date"] if row and row["max_date"] else None
-    except Exception as exc:
-        logger.warning("[restaurant-ops] latest sales anchor lookup failed: %s", exc)
-        return None
-
-
 async def resolve_wastage_top(
     smartbi_pool, factory_id: str, days: int = 30, top_n: int = 10,
 ) -> OpsAnswer:
@@ -1856,15 +1843,23 @@ async def resolve_store_margin(
 
 
 async def resolve_sales_summary(
-    smartbi_pool, factory_id: str, *, role: Optional[str] = None, query: Optional[str] = None,
+    smartbi_pool,
+    factory_id: str,
+    *,
+    role: Optional[str] = None,
+    query: Optional[str] = None,
+    today: Optional[date] = None,
 ) -> OpsAnswer:
     from smartbi.gold.queries import finance_summary, store_comparison
     from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
 
     can_see_money = bool(role) and role in PRICE_VIEW_ROLES
-    initial_spec = _resolve_sales_query_spec(query)
-    anchor = await _latest_sales_anchor(smartbi_pool, factory_id) if initial_spec.relative_window else None
-    spec = _resolve_sales_query_spec(query, today=anchor)
+    # User calendar words must use the current business date.  Re-anchoring
+    # them to MAX(agg_daily.date) silently changes "yesterday" or "last month"
+    # whenever ingestion is delayed, which makes a truthful no-data answer look
+    # like a result for the requested period.  ``today`` is injectable only for
+    # deterministic tests; production callers use the server's current date.
+    spec = _resolve_sales_query_spec(query, today=today)
     date_range, window_label = spec.date_range, spec.window_label
     summary = await finance_summary(smartbi_pool, factory_id, date_range, top_n_stores=5)
     comparison_summary: Optional[Dict[str, Any]] = None
