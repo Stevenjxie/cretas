@@ -1449,25 +1449,37 @@ const businessRoutes: RouteRecordRaw[] = [
         path: 'workflow',
         name: 'Workflow',
         redirect: '/workflow/pending',
-        meta: { requiresAuth: true, title: '工作流', icon: 'Connection', module: 'system' },
+        meta: { requiresAuth: true, title: '个人 OA', icon: 'Connection', module: 'dashboard' },
         children: [
           {
             path: 'pending',
             name: 'WorkflowPending',
             component: () => import('@/views/workflow/pending.vue'),
-            meta: { requiresAuth: true, title: '待我审批', module: 'system' }
+            meta: { requiresAuth: true, title: '待我审批', module: 'dashboard' }
           },
           {
             path: 'my-created',
             name: 'WorkflowMyCreated',
             component: () => import('@/views/workflow/my-created.vue'),
-            meta: { requiresAuth: true, title: '我创建的工作流', module: 'system' }
+            meta: { requiresAuth: true, title: '我发起的', module: 'dashboard' }
+          },
+          {
+            path: 'acted',
+            name: 'WorkflowActed',
+            component: () => import('@/views/workflow/acted.vue'),
+            meta: { requiresAuth: true, title: '已处理', module: 'dashboard' }
+          },
+          {
+            path: 'copied',
+            name: 'WorkflowCopied',
+            component: () => import('@/views/workflow/copied.vue'),
+            meta: { requiresAuth: true, title: '抄送我的', module: 'dashboard' }
           },
           {
             path: 'my-participated',
             name: 'WorkflowMyParticipated',
-            component: () => import('@/views/workflow/my-participated.vue'),
-            meta: { requiresAuth: true, title: '我参与的工作流', module: 'system' }
+            redirect: '/workflow/acted',
+            meta: { requiresAuth: true, title: '已处理', module: 'dashboard' }
           },
           {
             path: 'admin-running',

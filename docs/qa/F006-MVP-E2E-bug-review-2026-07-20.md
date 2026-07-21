@@ -626,3 +626,18 @@
 - Workflow 运行态只消费 ACTIVE BOM；存在 DRAFT 时仅改进文案，不允许 Workflow 消费草稿。
 - 原料名称智能建议 `case` 本身可以正确；缺陷是英文 canonical 泄漏和错误标成 manual override，不得改成“原料一律 kg”。
 - BOM 原料/辅料固定数量默认可空，实际投料来自计划/报工；包材固定用量仍是激活门禁。以上纠正不得被旧建议覆盖。
+
+## Cretas 全系统个人 OA 工作台（2026-07-21）
+
+### FEATURE-CRETAS-OA-PERSONAL-WORKBENCH-001
+
+- **发现阶段/时间/页面/步骤**：F006 R3 采购 OA 修复后的入口审计，2026-07-21；路由已有 /workflow/pending、my-created、my-participated，但侧边栏没有独立个人 OA 模块，财务/采购等审批角色无法稳定进入统一待办。
+- **期望/实际/业务影响**：所有登录角色都应拥有“个人 OA”，含待我审批、我发起的、已处理、抄送我的；任务仍必须按工厂、当前节点角色/明确用户过滤。实际工作流页面被归入 system 权限且没有菜单入口，“我参与的”又把仅由本人发起的实例混入“已处理”，无法形成可信个人审批工作台。
+- **参考核对**：只读参考 PomeloX 已有审批首页的四队列信息架构和逐用户任务过滤；Cretas 继续复用现有 ApprovalWorkflowDefinition/Instance/History 与节点角色契约，不复制 PomeloX 状态机、不创建平行审批引擎。
+- **根因**：个人审批路由错误绑定 system 模块，finance/procurement 等合法审批角色可能被前端权限挡住；menuConfig 与财务专用菜单均缺 OA；后端只有“我发起或处理过”的混合查询，没有 actor-only 已处理视图；notify 节点虽写 append-only history，却没有面向个人 OA 的抄送读模型。
+- **修复**：新增顶级“个人 OA”及四个队列，统一使用所有登录角色具备的 dashboard 访问边界，真正的数据可见性由后端工厂/角色/用户过滤决定。新增 actor-only acted 查询；copied 从已持久化 notify-node transition 与节点 recipients/notifyRoles 推导，显式用户或当前角色命中才可见。my-participated 旧深链重定向到“已处理”。非采购业务域的待办可只读展示进度，但在领域 adapter 完成前不显示可写审批按钮，避免伪造通用领域回写。
+- **修改文件**：WorkflowInstanceController、WorkflowEngineService/Impl、ApprovalWorkflowInstanceRepository、ApprovalHistoryRepository；Web router/index.ts、menuConfig.ts、pending.vue、my-created.vue、acted.vue、copied.vue；Java/Web/JPA 目标测试。
+- **测试**：Web 菜单/路由/动作门禁 64/64 PASS；Java clean package 19/19 PASS（Controller 5、Service 13、真实 Hibernate JPA Context 1），BUILD SUCCESS；Web production build PASS，739 个资源。可信 manifest：Java JAR SHA-256 `6b5c19590f87773b8a8a294fbc0dca83ae4d482b5be58220c196e5d07612d957`，Web archive SHA-256 `2f79e87bdcf2e4539cd9c76d587639cf663fb004afad37d9df6f4899980ee5e2`。
+- **Commit/PR/main 状态**：实现与门禁 commit `9d48e91ba61feada2fb356da44958002fd9516c6`；PR/main 合入待受控门禁完成。
+- **部署状态**：NOT_DEPLOYED。
+- **回归状态**：TARGET_TEST_PASS；生产业务 mutation=0，未创建/处理/桥接任何 F006 或 LIUSHANMEN 审批实例。

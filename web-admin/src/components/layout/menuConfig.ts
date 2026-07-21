@@ -17,6 +17,15 @@ const PLATFORM_ADMIN_ONLY = ['platform_admin'];
 // 财务主管专用菜单 - 简化版
 // WS4: 财务看板/财务分析/销售分析 合并为单一「经营分析」hub (财务/销售/趋势/KPI tab)。
 export const financeManagerMenu: MenuItem[] = [
+  {
+    path: '/workflow', title: '个人 OA', icon: 'Checked', module: 'dashboard',
+    children: [
+      { path: '/workflow/pending', title: '待我审批', icon: '', module: 'dashboard' },
+      { path: '/workflow/my-created', title: '我发起的', icon: '', module: 'dashboard' },
+      { path: '/workflow/acted', title: '已处理', icon: '', module: 'dashboard' },
+      { path: '/workflow/copied', title: '抄送我的', icon: '', module: 'dashboard' },
+    ],
+  },
   { path: '/smart-bi/dashboard', title: '经营驾驶舱', icon: 'Odometer', module: 'analytics' },
   { path: '/smart-bi/analysis-hub', title: '经营分析', icon: 'TrendCharts', module: 'analytics' },
   { path: '/smart-bi/query', title: 'AI问答', icon: 'ChatDotRound', module: 'analytics' },
@@ -48,6 +57,17 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/workdesk/warehouse-keeper', title: '仓管员工作台', icon: '', module: 'warehouse', groupLabel: '一线执行' },
       { path: '/workdesk/purchaser', title: '采购员工作台', icon: '', module: 'procurement' },
       { path: '/workdesk/quality-chief', title: '质检主管工作台', icon: '', module: 'quality' },
+    ],
+  },
+  {
+    // Personal OA is available to every authenticated role through dashboard access.
+    // Backend workflow role/user/factory rules decide which tasks are visible/actionable.
+    path: '/workflow', title: '个人 OA', icon: 'Checked', module: 'dashboard',
+    children: [
+      { path: '/workflow/pending', title: '待我审批', icon: '', module: 'dashboard' },
+      { path: '/workflow/my-created', title: '我发起的', icon: '', module: 'dashboard' },
+      { path: '/workflow/acted', title: '已处理', icon: '', module: 'dashboard' },
+      { path: '/workflow/copied', title: '抄送我的', icon: '', module: 'dashboard' },
     ],
   },
   {
@@ -382,6 +402,7 @@ const rawMenuConfig: MenuItem[] = [
 const TOP_LEVEL_FLOW_ORDER: Record<string, number> = {
   '/dashboard': 10,
   '/workdesk': 20,
+  '/workflow': 25,
   '/procurement': 30,
   '/sales': 40,
   '/finance': 50,

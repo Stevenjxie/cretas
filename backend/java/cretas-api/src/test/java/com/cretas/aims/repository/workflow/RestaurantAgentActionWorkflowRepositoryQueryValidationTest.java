@@ -2,6 +2,7 @@ package com.cretas.aims.repository.workflow;
 
 import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
 import com.cretas.aims.entity.config.ApprovalWorkflow;
+import com.cretas.aims.entity.workflow.ApprovalHistory;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.repository.config.ApprovalWorkflowRepository;
 import com.cretas.aims.service.impl.ApprovalWorkflowServiceImpl;
@@ -15,6 +16,7 @@ import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -122,6 +124,28 @@ class RestaurantAgentActionWorkflowRepositoryQueryValidationTest {
                 .isEqualTo(started.getId());
         assertThat(historyRepository.findByFactoryIdAndInstanceIdOrderByCreatedAtAsc(
                 FACTORY_ID, started.getId())).hasSize(1);
+
+        historyRepository.saveAndFlush(ApprovalHistory.builder()
+                .factoryId(FACTORY_ID)
+                .instanceId(started.getId())
+                .nodeId("human_review")
+                .action(ApprovalHistory.HistoryAction.APPROVE)
+                .actorId(42L)
+                .actorRole("restaurant_owner")
+                .notes("repository query gate")
+                .build());
+        assertThat(instanceRepository.findActedBy(
+                FACTORY_ID, 42L, PageRequest.of(0, 10)).getContent())
+                .extracting(ApprovalWorkflowInstance::getId)
+                .containsExactly(started.getId());
+        assertThat(instanceRepository.findByFactoryIdAndIdIn(
+                FACTORY_ID, List.of(started.getId())))
+                .extracting(ApprovalWorkflowInstance::getId)
+                .containsExactly(started.getId());
+        assertThat(historyRepository.findByFactoryIdAndActionOrderByCreatedAtDesc(
+                FACTORY_ID, ApprovalHistory.HistoryAction.APPROVE))
+                .extracting(ApprovalHistory::getInstanceId)
+                .contains(started.getId());
         assertThat(snapshotBusinessTables()).isEqualTo(before);
         assertThat(before).hasSize(FORBIDDEN_BUSINESS_TABLES.size());
     }

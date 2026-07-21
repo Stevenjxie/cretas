@@ -122,8 +122,13 @@ onMounted(loadPending);
         <el-table-column prop="initiatedAt" label="提交时间" min-width="180" />
         <el-table-column label="操作" width="170" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" :loading="operatingId === row.instanceId" @click="act(row, 'APPROVE')">通过</el-button>
-            <el-button link type="danger" :disabled="Boolean(operatingId)" @click="act(row, 'REJECT')">驳回</el-button>
+            <template v-if="row.moduleCode === 'PURCHASE_ORDER'">
+              <el-button link type="primary" :loading="operatingId === row.instanceId" @click="act(row, 'APPROVE')">通过</el-button>
+              <el-button link type="danger" :disabled="Boolean(operatingId)" @click="act(row, 'REJECT')">驳回</el-button>
+            </template>
+            <el-tooltip v-else content="该业务域正在接入统一 OA，当前仅可查看审批进度">
+              <el-tag type="info">只读</el-tag>
+            </el-tooltip>
           </template>
         </el-table-column>
       </el-table>

@@ -209,6 +209,17 @@ public interface WorkflowEngineService {
     Page<ApprovalWorkflowInstance> findParticipatedBy(
             String factoryId, Long userId, Pageable pageable);
 
+    /** Personal OA "已处理": instances on which this user performed an action. */
+    Page<ApprovalWorkflowInstance> findActedBy(
+            String factoryId, Long userId, Pageable pageable);
+
+    /**
+     * Personal OA "抄送我的": persisted notify-node transitions addressed to the
+     * current user explicitly or through the user's role.
+     */
+    Page<ApprovalWorkflowInstance> findCopiedTo(
+            String factoryId, Long userId, String userRole, Pageable pageable);
+
     /**
      * Sprint 6 W1-B — "工作流处理" admin view (super-admin only).
      *
