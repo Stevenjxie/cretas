@@ -1126,8 +1126,9 @@ async function tryJavaIntentChat(
     const i = idx();
     if (i === -1) return 'handled';
     const msg = chatHistory.value[i];
+    const responseStatus = String(res.status || '').toUpperCase();
 
-    if (res.status === 'SUCCESS') {
+    if (responseStatus === 'SUCCESS' || responseStatus === 'COMPLETED') {
       // Two response shapes:
       //   FRESH (cache miss): res.message = clean text, res.resultData.data
       //     = {download_url, summary, ...} ← Tool's structured result
@@ -1336,7 +1337,7 @@ async function tryJavaIntentChat(
           };
         }
       }
-      msg.content = displayMessage;
+      msg.content = customerSafeAnswer(displayMessage);
       msg.loading = false;
       // After Vue renders the chart container (v-if message.chartConfig),
       // mount the ECharts instance.
@@ -1352,19 +1353,33 @@ async function tryJavaIntentChat(
       return 'handled';
     }
 
-    if (res.status === 'NEED_MORE_INFO' || res.status === 'CONVERSATION_CONTINUE') {
-      msg.content = res.message || res.formattedText || '请补充信息后继续。';
+    if (
+      responseStatus === 'NEED_MORE_INFO' ||
+      (responseStatus === 'NEED_CLARIFICATION' && res.intentRecognized !== false) ||
+      responseStatus === 'CONVERSATION_CONTINUE'
+    ) {
+      msg.content = customerSafeAnswer(res.message || res.formattedText || '请补充信息后继续。');
       msg.loading = false;
       return 'handled';
     }
 
     if (
-      res.status === 'WRITE_CONFIRM_REQUIRED' ||
-      res.status === 'TOOL_DISABLED' ||
-      res.status === 'PERMISSION_DENIED' ||
-      res.status === 'ERROR'
+      responseStatus === 'WRITE_CONFIRM_REQUIRED' ||
+      responseStatus === 'TOOL_DISABLED' ||
+      responseStatus === 'PERMISSION_DENIED' ||
+      responseStatus === 'FAILED' ||
+      responseStatus === 'ERROR'
     ) {
-      msg.content = res.message || res.formattedText || '该意图已识别，但暂时无法执行。';
+      msg.content = customerSafeAnswer(res.message || res.formattedText || '已理解您的问题，但暂时无法完成分析。');
+      msg.loading = false;
+      return 'handled';
+    }
+
+    // A recognized Java response must never be reinterpreted by the Python
+    // upload-analysis fallback. Unknown future statuses are still rendered
+    // safely, while only a genuine no-match may fall through.
+    if (res.intentRecognized !== false) {
+      msg.content = customerSafeAnswer(res.message || res.formattedText || '已理解您的问题，但暂时无法完成分析。');
       msg.loading = false;
       return 'handled';
     }
@@ -1374,7 +1389,9 @@ async function tryJavaIntentChat(
       currentData.value.length > 0 ||
       Boolean(selectedUploadId.value);
     if (!hasDataSource) {
-      msg.content = res.message || '抱歉，没听明白。试试："本月收入管理报表" / "哪家店亏损"';
+      msg.content = customerSafeAnswer(
+        res.message || res.formattedText || '没有理解您的问题，请补充具体的门店、菜品、指标和时间范围。',
+      );
       msg.loading = false;
       return 'handled';
     }

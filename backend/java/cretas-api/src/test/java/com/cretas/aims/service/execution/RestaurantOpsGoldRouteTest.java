@@ -16,6 +16,7 @@ import com.cretas.aims.ai.tool.gateway.ToolExecutionStatus;
 import com.cretas.aims.config.DashScopeConfig;
 import com.cretas.aims.config.IntentKnowledgeBase;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
+import com.cretas.aims.dto.ai.PreprocessedQuery;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.entity.config.AIIntentConfig;
@@ -699,7 +700,7 @@ class RestaurantOpsGoldRouteTest {
     @Test
     @DisplayName("store net profit never falls through to revenue or gross margin substitution")
     void storeNetProfitGetsHonestCapabilityGap() {
-        String query = "请给出昨天各门店净利润，不要用营业额或毛利替代";
+        String query = "请给出昨天和前天各门店净利润，不要用营业额或毛利替代";
 
         assertThat(orchestrator.isUnsupportedRestaurantStoreNetProfitQuestion(query)).isTrue();
         IntentExecuteResponse response = orchestrator.buildRestaurantStoreNetProfitGapResponse(
@@ -707,6 +708,8 @@ class RestaurantOpsGoldRouteTest {
 
         assertThat(response.getStatus()).isEqualTo("NEED_CLARIFICATION");
         assertThat(response.getMessage())
+                .contains("昨天")
+                .contains("前天")
                 .contains("按门店归集的费用、税费及其他收支")
                 .contains("不能可靠计算各门店净利润")
                 .contains("不会用营业额或毛利替代")
@@ -724,6 +727,149 @@ class RestaurantOpsGoldRouteTest {
     void storePronounRequiresContextResolutionBeforeShortcut() {
         assertThat(orchestrator.shouldBypassEarlyPhraseShortcutForStoreReference(
                 "那它的毛利率也是第一吗？请沿用刚才的门店和日期范围")).isTrue();
+    }
+
+    @Test
+    @DisplayName("price elasticity request returns explicit capability gap and missing fields")
+    void priceElasticityGetsHonestCapabilityGap() {
+        String query = "请给出菜品价格弹性、95%置信区间和因果效果；缺字段就明确说明";
+
+        assertThat(orchestrator.isUnsupportedRestaurantPriceElasticityQuestion(query)).isTrue();
+        IntentExecuteResponse response = orchestrator.buildRestaurantPriceElasticityGapResponse(
+                IntentExecuteRequest.builder().userInput(query).sessionId("elasticity-1").build());
+
+        assertThat(response.getStatus()).isEqualTo("NEED_CLARIFICATION");
+        assertThat(response.getMessage())
+                .contains("不能可靠计算价格弹性")
+                .contains("95%置信区间")
+                .contains("多次真实价格变动")
+                .contains("销量、订单量和曝光")
+                .contains("促销、折扣、门店和日期")
+                .contains("控制因素")
+                .doesNotContain("已计算");
+    }
+
+    @Test
+    @DisplayName("cost-margin planning explains objective and a deterministic check order")
+    void costMarginPlanningReturnsOrderedChecks() {
+        IntentExecuteResponse response = orchestrator.buildRestaurantCostMarginCheckOrderResponse(
+                IntentExecuteRequest.builder().userInput("成本毛利先查哪几项？").build());
+
+        assertThat(response.getStatus()).isEqualTo("COMPLETED");
+        assertThat(response.getMessage())
+                .contains("我理解的目标")
+                .contains("1. 先看收入、订单和折扣")
+                .contains("2. 再核对配方用量和最新进价")
+                .contains("3. 再看领料、报损和盘点差异")
+                .contains("4. 最后按门店和菜品")
+                .contains("明确标出缺口")
+                .doesNotContain("请选择");
+    }
+
+    @Test
+    @DisplayName("margin safety answer gives premise risk and minimum validation without invented benefit")
+    void prohibitedMarginActionsReturnBoundedAdvice() {
+        IntentExecuteResponse response = orchestrator.buildRestaurantMarginProhibitedActionsResponse(
+                IntentExecuteRequest.builder()
+                        .userInput("要提升毛利率，哪些事情今天先不要做？")
+                        .build());
+
+        assertThat(response.getStatus()).isEqualTo("COMPLETED");
+        assertThat(response.getMessage())
+                .contains("今天先不要做")
+                .contains("前提")
+                .contains("风险")
+                .contains("最小验证")
+                .contains("不会凭空估算收益金额")
+                .doesNotContain("预计提升")
+                .doesNotContain("预计避免");
+    }
+
+    @Test
+    @DisplayName("resolved store pronoun remaps generic margin recognition to store margin")
+    void resolvedStoreFollowupUsesStoreMarginIntent() {
+        AIIntentConfig genericMargin = AIIntentConfig.builder()
+                .intentCode("RESTAURANT_OPS_GROSS_MARGIN")
+                .intentName("整体毛利")
+                .build();
+        AIIntentConfig storeMargin = AIIntentConfig.builder()
+                .intentCode("RESTAURANT_OPS_STORE_MARGIN")
+                .intentName("门店毛利")
+                .build();
+        when(aiIntentService.getIntentByCode(eq("DEMO_REST"), eq("RESTAURANT_OPS_STORE_MARGIN")))
+                .thenReturn(Optional.of(storeMargin));
+
+        PreprocessedQuery preprocessed = PreprocessedQuery.builder()
+                .originalInput("那它的毛利率也是第一吗？")
+                .finalQuery("鲜行者打浦桥日月光店的毛利率也是第一吗？")
+                .resolvedReferences(Map.of(
+                        "它",
+                        PreprocessedQuery.ResolvedReference.builder()
+                                .entityType("STORE")
+                                .entityId("store-001")
+                                .entityName("鲜行者打浦桥日月光店")
+                                .originalReference("它")
+                                .build()))
+                .build();
+        IntentMatchResult matchResult = IntentMatchResult.builder()
+                .bestMatch(genericMargin)
+                .requiresConfirmation(true)
+                .preprocessedQuery(preprocessed)
+                .build();
+
+        AIIntentConfig remapped = orchestrator.remapRestaurantStoreMarginIntentIfNeeded(
+                "DEMO_REST", "那它的毛利率也是第一吗？", matchResult, genericMargin);
+
+        assertThat(remapped).isSameAs(storeMargin);
+        assertThat(matchResult.getBestMatch()).isSameAs(storeMargin);
+        assertThat(matchResult.getRequiresConfirmation()).isFalse();
+    }
+
+
+    @Test
+    @DisplayName("restaurant contract answers execute before generic recognition and tool fallback")
+    void deterministicRestaurantContractsRunAtExecuteEntry() {
+        IntentConfigManagementService configService = mock(IntentConfigManagementService.class);
+        ReflectionTestUtils.setField(orchestrator, "configService", configService);
+        when(configService.resolveBusinessDomain("DEMO_REST")).thenReturn("RESTAURANT");
+
+        IntentExecuteResponse turnover = orchestrator.execute(
+                "DEMO_REST",
+                IntentExecuteRequest.builder()
+                        .userInput("最近翻台拉胯，先判断是翻台率还是翻台次数，不要拿营业额替代")
+                        .build(),
+                7L,
+                "admin");
+        IntentExecuteResponse netProfit = orchestrator.execute(
+                "DEMO_REST",
+                IntentExecuteRequest.builder()
+                        .userInput("昨天和前天各门店净利润，不要用营业额或毛利替代")
+                        .build(),
+                7L,
+                "admin");
+        IntentExecuteResponse elasticity = orchestrator.execute(
+                "DEMO_REST",
+                IntentExecuteRequest.builder().userInput("菜品价格弹性和95%置信区间").build(),
+                7L,
+                "admin");
+        IntentExecuteResponse costMargin = orchestrator.execute(
+                "DEMO_REST",
+                IntentExecuteRequest.builder().userInput("成本毛利先查哪几项？").build(),
+                7L,
+                "admin");
+        IntentExecuteResponse prohibited = orchestrator.execute(
+                "DEMO_REST",
+                IntentExecuteRequest.builder().userInput("要提升毛利率，哪些事情今天先不要做？").build(),
+                7L,
+                "admin");
+
+        assertThat(List.of(turnover, netProfit, elasticity, costMargin, prohibited))
+                .allSatisfy(response -> assertThat(response.getIntentRecognized()).isTrue());
+        assertThat(turnover.getMessage()).contains("翻台率").contains("翻台次数");
+        assertThat(netProfit.getMessage()).contains("昨天").contains("前天");
+        assertThat(elasticity.getMessage()).contains("95%置信区间").contains("缺少的数据");
+        assertThat(costMargin.getMessage()).contains("我理解的目标").contains("检查顺序");
+        assertThat(prohibited.getMessage()).contains("最小验证").doesNotContain("预计提升");
     }
 
     private void stubOwnerGateway(Map<String, Object> data) {

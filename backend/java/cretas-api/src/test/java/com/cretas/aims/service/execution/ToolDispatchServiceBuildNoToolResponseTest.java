@@ -66,13 +66,12 @@ class ToolDispatchServiceBuildNoToolResponseTest {
         assertThat(response.getStatus()).isEqualTo("FAILED");
         assertThat(response.getIntentRecognized()).isTrue();
         assertThat(response.getIntentCode()).isEqualTo("RESTAURANT_OPS_QUERY");
-        // Round 3 regression: must NOT be the generic Sprint 10.5 message
-        assertThat(response.getMessage()).doesNotContain("暂不支持此类型的意图执行: RESTAURANT_OPS");
-        // Must mention intent context + category + actionable hint
-        assertThat(response.getMessage()).contains("餐饮运营查询");
-        assertThat(response.getMessage()).contains("RESTAURANT_OPS_QUERY");
-        assertThat(response.getMessage()).contains("RESTAURANT_OPS");
+        assertThat(response.getMessage()).contains("已理解您的问题");
         assertThat(response.getMessage()).contains("管理员");
+        assertThat(response.getMessage()).doesNotContain("餐饮运营查询");
+        assertThat(response.getMessage()).doesNotContain("RESTAURANT_OPS_QUERY");
+        assertThat(response.getMessage()).doesNotContain("RESTAURANT_OPS");
+        assertThat(response.getMessage()).doesNotContain("Tool");
         assertThat(response.getFormattedText()).isEqualTo(response.getMessage());
     }
 
@@ -90,12 +89,11 @@ class ToolDispatchServiceBuildNoToolResponseTest {
 
         assertThat(response).isNotNull();
         assertThat(response.getStatus()).isEqualTo("FAILED");
-        // Must surface the Tool name so admin can investigate the missing @Component
-        assertThat(response.getMessage()).contains("nonexistent_tool");
-        assertThat(response.getMessage()).contains("菜品成本分析");
-        assertThat(response.getMessage()).contains("RESTAURANT_DISH_COST_ANALYSIS");
-        // Should NOT just say generic "暂不支持"
-        assertThat(response.getMessage()).doesNotContain("暂不支持此类型的意图执行");
+        assertThat(response.getMessage()).contains("分析能力暂时不可用");
+        assertThat(response.getMessage()).contains("管理员");
+        assertThat(response.getMessage()).doesNotContain("nonexistent_tool");
+        assertThat(response.getMessage()).doesNotContain("菜品成本分析");
+        assertThat(response.getMessage()).doesNotContain("RESTAURANT_DISH_COST_ANALYSIS");
     }
 
     @Test
@@ -110,7 +108,26 @@ class ToolDispatchServiceBuildNoToolResponseTest {
 
         IntentExecuteResponse response = service.buildNoToolResponse(intent);
 
-        assertThat(response.getMessage()).contains("MYSTERY_INTENT");
-        assertThat(response.getMessage()).contains("UNKNOWN");
+        assertThat(response.getMessage()).contains("已理解您的问题");
+        assertThat(response.getMessage()).doesNotContain("MYSTERY_INTENT");
+        assertThat(response.getMessage()).doesNotContain("UNKNOWN");
+    }
+
+    @Test
+    @DisplayName("failed tool result never exposes an English intent display name")
+    void parseFailedToolResultUsesCustomerSafeChineseMessage() {
+        AIIntentConfig intent = AIIntentConfig.builder()
+                .intentCode("RESTAURANT_OPS_GROSS_MARGIN")
+                .intentName("Restaurant gross margin")
+                .build();
+
+        IntentExecuteResponse response = service.parseToolResultToResponse(
+                "{\"success\":false}", intent);
+
+        assertThat(response.getStatus()).isEqualTo("FAILED");
+        assertThat(response.getMessage())
+                .contains("没有获得可展示的结果")
+                .doesNotContain("Restaurant gross margin")
+                .doesNotContain("RESTAURANT_OPS_GROSS_MARGIN");
     }
 }

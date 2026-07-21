@@ -813,10 +813,8 @@ public class ToolDispatchService {
                 if (success) {
                     message = "操作已完成。";
                 } else {
-                    String intentName = intent != null && intent.getIntentName() != null ? intent.getIntentName() : "本次操作";
-                    message = String.format(
-                            "%s 执行未成功。可能原因: (1) 参数缺失或格式不符, 请补充具体的批次号 / 物料 / 时段 / 客户; (2) 当前没有匹配的数据; (3) 系统短暂繁忙。请尝试更具体的描述或稍后重试。",
-                            intentName);
+                    message = "本次查询没有获得可展示的结果。请补充明确的业务对象、指标和时间范围后重试；"
+                            + "如果这些条件已经明确，可能是当前没有匹配数据或服务暂时繁忙。";
                 }
             }
 
@@ -1069,6 +1067,7 @@ public class ToolDispatchService {
                 : intent.getIntentCode();
         String boundTool = intent.getToolName();
         String diagnostic;
+        String customerMessage;
         if (boundTool != null && !boundTool.isBlank()) {
             // tool_name configured but Tool not registered — likely missing @Component
             // or naming mismatch.
@@ -1076,6 +1075,8 @@ public class ToolDispatchService {
                 "意图\"%s\"(%s)已识别，但配置的 Tool [%s] 未注册。"
                 + "请联系管理员检查 Tool 注册或意图配置。",
                 intentName, intent.getIntentCode(), boundTool);
+            customerMessage = "已理解您的问题，但这项分析能力暂时不可用。请稍后重试；"
+                    + "如果持续出现，请联系管理员检查分析能力配置。";
         } else {
             // tool_name=NULL and all dispatch paths exhausted — intent recognized
             // but no executor wired (Tool/Skill/dynamic selection all failed).
@@ -1083,15 +1084,18 @@ public class ToolDispatchService {
                 "意图\"%s\"(%s)已识别，但暂未配置执行器（类别: %s）。"
                 + "请联系管理员配置 Tool 或 Skill，或尝试更具体的提问方式。",
                 intentName, intent.getIntentCode(), intent.getIntentCategory());
+            customerMessage = "已理解您的问题，但当前还不能完成这项分析。"
+                    + "请补充具体的业务对象、指标和时间范围后重试；如果条件已经明确，请联系管理员。";
         }
+        log.warn("[ToolDispatch] customer-safe no-tool response; diagnostic={}", diagnostic);
         return IntentExecuteResponse.builder()
                 .intentRecognized(true)
                 .intentCode(intent.getIntentCode())
                 .intentName(intent.getIntentName())
                 .intentCategory(intent.getIntentCategory())
                 .status("FAILED")
-                .message(diagnostic)
-                .formattedText(diagnostic)
+                .message(customerMessage)
+                .formattedText(customerMessage)
                 .executedAt(LocalDateTime.now())
                 .build();
     }
