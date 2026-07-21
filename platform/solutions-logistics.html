@@ -42,7 +42,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .sec .pain b{color:var(--v6-ink)}
 
 /* M1 智能调度：左文右调度台大图 */
-.m1{display:grid;grid-template-columns:1fr 1.35fr;gap:clamp(24px,4vw,56px);align-items:center}
+.m1{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.35fr);gap:clamp(24px,4vw,56px);align-items:center}
 .m1 .pts{list-style:none;margin:0;padding:0}
 .m1 .pts li{display:flex;gap:10px;align-items:flex-start;font-size:clamp(14px,1.45vw,16.5px);
   color:var(--v6-ink);line-height:1.7;margin-bottom:13px}
@@ -53,7 +53,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .m2 .trips{max-width:760px}
 .m2 .trow{display:flex;align-items:center;gap:14px;margin-bottom:12px}
 .m2 .tlabel{flex:0 0 74px;font-family:var(--v6-mono);font-size:12.5px;color:var(--v6-ink-2);text-align:right}
-.m2 .tbar{height:30px;border-radius:7px;background:linear-gradient(90deg,rgba(0,179,119,.18),rgba(0,179,119,.3));
+.m2 .tbar{height:30px;min-width:0;overflow:hidden;border-radius:7px;background:linear-gradient(90deg,rgba(0,179,119,.18),rgba(0,179,119,.3));
   position:relative;display:flex;align-items:center;padding-left:12px;font-size:12.5px;color:var(--v6-cta-ink);font-weight:700}
 .m2 .tbar.full{background:linear-gradient(90deg,rgba(0,179,119,.5),var(--v6-cta));color:#fff}
 .m2 .tbar.ghost{background:repeating-linear-gradient(45deg,rgba(0,0,0,.05) 0 6px,transparent 6px 12px);
@@ -208,12 +208,12 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   <h2 class="v6-reveal">装得更满，就少跑一趟</h2>
   <p class="pain v6-reveal">每辆车的装载率差几个点，一个月下来就是好几趟白跑。AI 按体积、重量、温层把货装到刚刚好。</p>
   <div class="trips v6-reveal">
-    <div class="trow"><span class="tlabel">1 号车</span><div class="tbar full" style="flex:0 0 92%">装载率 92%</div></div>
-    <div class="trow"><span class="tlabel">2 号车</span><div class="tbar full" style="flex:0 0 89%">装载率 89%</div></div>
-    <div class="trow"><span class="tlabel">3 号车</span><div class="tbar full" style="flex:0 0 88%">装载率 88%</div></div>
-    <div class="trow"><span class="tlabel">4 号车</span><div class="tbar full" style="flex:0 0 87%">装载率 87%</div></div>
-    <div class="trow"><span class="tlabel">5 号车</span><div class="tbar full" style="flex:0 0 85%">装载率 85%</div></div>
-    <div class="trow"><span class="tlabel">6 号车</span><div class="tbar ghost" style="flex:0 0 38%">不用跑了</div></div>
+    <div class="trow"><span class="tlabel">1 号车</span><div class="tbar full" style="flex:0 1 92%">装载率 92%</div></div>
+    <div class="trow"><span class="tlabel">2 号车</span><div class="tbar full" style="flex:0 1 89%">装载率 89%</div></div>
+    <div class="trow"><span class="tlabel">3 号车</span><div class="tbar full" style="flex:0 1 88%">装载率 88%</div></div>
+    <div class="trow"><span class="tlabel">4 号车</span><div class="tbar full" style="flex:0 1 87%">装载率 87%</div></div>
+    <div class="trow"><span class="tlabel">5 号车</span><div class="tbar full" style="flex:0 1 85%">装载率 85%</div></div>
+    <div class="trow"><span class="tlabel">6 号车</span><div class="tbar ghost" style="flex:0 1 38%">不用跑了</div></div>
     <p class="verdict">同样的货，<span>6 趟并成 5 趟</span> — 运力不够时，AI 还会先告诉你缺几辆、缺在哪条线。</p>
   </div>
 </section>

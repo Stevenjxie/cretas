@@ -48,4 +48,4 @@
   .v6-live-bar{position:static;margin:12px 14px 0;transform:none}
   .v6-hero{margin:0}
 }
-.v6-shot{border-radius:12px;box-shadow:0 14px 34px rgba(60,60,60,.18);overflow:hidden}
+.v6-shot{border-radius:12px;box-shadow:0 14px 34px rgba(60,60,60,.18);overflow:hidden;display:block;width:100%;max-width:100%;height:auto}
