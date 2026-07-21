@@ -34,6 +34,21 @@ const notFoundMessage = ref('');
 const receives = ref<TableRow[]>([]);
 const attachmentRefreshKey = ref(0);
 
+interface ApprovalProgress {
+  hasInstance: boolean;
+  instanceId?: string;
+  status?: string;
+  currentNodeNames?: string[];
+  approverRoles?: string[];
+  assignees?: string[];
+  initiatedAt?: string;
+  completedAt?: string;
+  stayMinutes?: number;
+  deepLink?: string;
+  message?: string;
+}
+const approvalProgress = ref<ApprovalProgress>({ hasInstance: false });
+
 // 三价对比
 interface PriceComparison {
   materialTypeId: string;
@@ -62,6 +77,7 @@ const priceLoading = ref(false);
 const statusMap: Record<string, { text: string; type: string }> = {
   DRAFT: { text: '草稿', type: 'info' },
   SUBMITTED: { text: '已提交', type: 'warning' },
+  WORKFLOW_RUNNING: { text: '审批中', type: 'warning' },
   APPROVED: { text: '已审批', type: '' },
   PENDING_FINANCE_REVIEW: { text: '待财务审核', type: 'warning' },
   FINANCE_APPROVED: { text: '财务已审核', type: 'success' },
@@ -94,7 +110,7 @@ function goEditDraft() {
   router.push({ path: '/procurement/orders', query: { edit: orderId.value } });
 }
 
-onMounted(() => { loadOrder(); loadReceives(); });
+onMounted(() => { loadOrder(); loadReceives(); loadApprovalProgress(); });
 
 async function loadOrder() {
   if (!factoryId.value || !orderId.value) return;
@@ -132,10 +148,22 @@ function goFinanceDetails(): void {
   });
 }
 
+async function loadApprovalProgress() {
+  if (!factoryId.value || !orderId.value) return;
+  try {
+    const res = await get(`/${factoryId.value}/purchase/orders/${orderId.value}/approval-progress`);
+    if (res.success) approvalProgress.value = res.data || { hasInstance: false };
+  } catch {
+    approvalProgress.value = { hasInstance: false, message: '审批进度暂不可用' };
+  }
+}
+
 function goApprovalProgress(): void {
   router.push({
-    path: '/workflow/my-participated',
-    query: { businessEntityType: 'PURCHASE_ORDER', businessEntityId: orderId.value },
+    path: '/workflow/my-created',
+    query: approvalProgress.value.instanceId
+      ? { instanceId: approvalProgress.value.instanceId }
+      : { businessEntityType: 'PURCHASE_ORDER', businessEntityId: orderId.value },
   });
 }
 
@@ -153,7 +181,10 @@ async function handleAction(action: string) {
   submitting.value = true;
   try {
     const res = await post(a.url);
-    if (res.success) { ElMessage.success(`${a.label}成功`); loadOrder(); }
+    if (res.success) {
+      ElMessage.success(`${a.label}成功`);
+      await Promise.all([loadOrder(), loadApprovalProgress()]);
+    }
     else { ElMessage.error(res.message || `${a.label}失败，请重试`); }
   } catch (e) { handleCatchError(e, `${a.label}失败，请检查网络`); }
   finally { submitting.value = false; }
@@ -273,9 +304,9 @@ async function handleDownloadPdf(externalVersion: boolean) {
             <template v-if="canWrite">
             <el-button v-if="order.status === 'DRAFT'" :icon="Edit" @click="goEditDraft">编辑草稿</el-button>
             <el-button v-if="order.status === 'DRAFT'" type="warning" :loading="submitting" @click="handleAction('submit')">提交审批</el-button>
-            <el-button v-if="order.status !== 'DRAFT'" plain @click="goApprovalProgress">查看审批进度 / 前往 OA</el-button>
             <el-button v-if="['DRAFT','SUBMITTED'].includes(order.status)" type="danger" :disabled="submitting" @click="handleAction('cancel')">取消</el-button>
             </template>
+            <el-button v-if="order.status !== 'DRAFT'" plain @click="goApprovalProgress">查看审批进度 / 前往 OA</el-button>
           </div>
         </div>
       </template>
@@ -289,9 +320,13 @@ async function handleDownloadPdf(externalVersion: boolean) {
           <el-descriptions-item label="期望交货">{{ order.expectedDeliveryDate || '-' }}</el-descriptions-item>
           <el-descriptions-item v-if="canViewPrice" label="总金额">{{ formatAmount(order.totalAmount) }}</el-descriptions-item>
           <el-descriptions-item v-if="canViewPrice" label="税额">{{ formatAmount(order.taxAmount) }}</el-descriptions-item>
-          <el-descriptions-item label="审批人">{{ order.approvedBy || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="当前审批节点">{{ order.currentApprovalNodeName || order.approvalNodeName || (order.status === 'PENDING_FINANCE_REVIEW' ? '财务审核' : '-') }}</el-descriptions-item>
-          <el-descriptions-item label="待处理角色/人员">{{ order.currentApproverName || order.currentApproverRole || order.approverName || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="OA 状态">{{ approvalProgress.hasInstance ? enumLabel(approvalProgress.status) : (approvalProgress.message || '尚未发起') }}</el-descriptions-item>
+          <el-descriptions-item label="当前审批节点">{{ approvalProgress.currentNodeNames?.join('、') || (approvalProgress.status === 'APPROVED' ? '审批完成' : '-') }}</el-descriptions-item>
+          <el-descriptions-item label="待处理角色/人员">
+            {{ approvalProgress.assignees?.join('、') || approvalProgress.approverRoles?.map(role => enumLabel(role)).join('、') || '-' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="提交时间">{{ approvalProgress.initiatedAt || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="节点停留">{{ approvalProgress.hasInstance && approvalProgress.status === 'RUNNING' ? `${approvalProgress.stayMinutes || 0} 分钟` : '-' }}</el-descriptions-item>
           <el-descriptions-item label="合同号">{{ order.contractNumber || '-' }}</el-descriptions-item>
           <el-descriptions-item label="结算方式">
             <span v-if="order.settlementType">{{ ({ PREPAID: '预付', CREDIT_FIRST: '赊销先入库', NO_INVOICE: '未到票', MONTHLY: '月结', CREDIT_PERIOD: '账期', IMMEDIATE: '现结' } as Record<string, string>)[order.settlementType] || enumLabel(order.settlementType) }}</span>

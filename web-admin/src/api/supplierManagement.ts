@@ -89,12 +89,18 @@ export interface SupplierImportResult {
 export interface SupplierMaterialRelation {
   id: string;
   supplierId?: string;
+  supplierName?: string | null;
   materialTypeId: string;
   materialName?: string | null;
   materialCode?: string | null;
   baseUnit?: string | null;
   supplierMaterialCode?: string | null;
   defaultPurchasePrice?: number | null;
+  materialReferencePrice?: number | null;
+  materialReferencePriceUnit?: string | null;
+  effectivePurchasePrice?: number | null;
+  effectivePriceUnit?: string | null;
+  priceSource?: string | null;
   currency?: string | null;
   purchaseUnit?: string | null;
   minOrderQuantity?: number | null;
@@ -166,6 +172,11 @@ export async function listSuppliers(factoryId: string): Promise<SupplierRecord[]
     params: { page: 1, size: 500 },
   });
   return response.data?.content ?? [];
+}
+
+export async function listActiveSuppliers(factoryId: string): Promise<SupplierRecord[]> {
+  const response = await request.get<SupplierRecord[]>(`/${factoryId}/suppliers/active`);
+  return response.data ?? [];
 }
 
 export async function getSupplier(factoryId: string, supplierId: string): Promise<SupplierRecord> {
@@ -263,6 +274,16 @@ export async function listSupplierMaterials(
 ): Promise<SupplierMaterialRelation[]> {
   const response = await request.get<SupplierMaterialRelation[]>(
     `/${factoryId}/suppliers/${supplierId}/materials`,
+  );
+  return response.data ?? [];
+}
+
+export async function listMaterialSuppliers(
+  factoryId: string,
+  materialTypeId: string,
+): Promise<SupplierMaterialRelation[]> {
+  const response = await request.get<SupplierMaterialRelation[]>(
+    `/${factoryId}/materials/${materialTypeId}/suppliers`,
   );
   return response.data ?? [];
 }

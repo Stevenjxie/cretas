@@ -7,6 +7,7 @@ import com.cretas.aims.dto.inventory.UpdatePurchaseOrderRequest;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
+import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 
 import com.cretas.aims.dto.inventory.MaterialPriceComparisonDTO;
 import com.cretas.aims.dto.inventory.PurchaseSuggestionResponse;
@@ -39,7 +40,21 @@ public interface PurchaseService {
     /** W-12 fix: filter by linked sales order id (for SO detail "关联采购" tab). */
     PageResponse<PurchaseOrder> getPurchaseOrdersBySalesOrder(String factoryId, String salesOrderId, int page, int size);
 
-    PurchaseOrder submitOrder(String factoryId, String orderId);
+    default PurchaseOrder submitOrder(String factoryId, String orderId) {
+        return submitOrder(factoryId, orderId, null);
+    }
+
+    /** Submit once and atomically start the unified OA workflow. */
+    PurchaseOrder submitOrder(String factoryId, String orderId, Long initiatorUserId);
+
+    /** Apply an OA action and project the workflow state back to the purchase order. */
+    PurchaseOrder applyWorkflowAction(String factoryId,
+                                      String orderId,
+                                      String instanceId,
+                                      Long actorId,
+                                      String actorRole,
+                                      HistoryAction action,
+                                      String notes);
 
     /**
      * Phase 4a follow-up (issue #45) — RuleEngine bridge method, invoked by submitOrder

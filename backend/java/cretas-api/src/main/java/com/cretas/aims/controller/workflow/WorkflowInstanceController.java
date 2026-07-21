@@ -15,6 +15,8 @@ import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
+import com.cretas.aims.service.inventory.PurchaseService;
+import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.utils.TokenUtils;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -30,8 +32,10 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -72,6 +76,7 @@ public class WorkflowInstanceController {
     private final ApprovalWorkflowService approvalWorkflowService;
     private final UserRepository userRepository;
     private final MobileService mobileService;
+    private final PurchaseService purchaseService;
 
     /** Optional — 用于 hydrate PURCHASE_ORDER businessSummary. */
     @Autowired(required = false)
@@ -209,6 +214,77 @@ public class WorkflowInstanceController {
     }
 
     /**
+     * Unified OA action boundary.  Business detail pages are read-only; they link here
+     * instead of maintaining a second approve/reject state machine.
+     */
+    @PostMapping("/{instanceId}/actions")
+    @Operation(summary = "在 OA 审批中心处理当前节点")
+    public ApiResponse<Map<String, Object>> executeAction(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String instanceId,
+            @RequestHeader("Authorization") String authorization,
+            @RequestBody WorkflowActionRequest request) {
+        User user = resolveCurrentUser(authorization);
+        if (user == null) throw new BusinessException(401, "未授权 — JWT 解析失败");
+        ApprovalWorkflowInstance instance = workflowEngine.getInstance(factoryId, instanceId)
+                .orElseThrow(() -> new BusinessException(404, "OA 审批实例不存在"));
+        if (request == null || request.idempotencyKey() == null || request.idempotencyKey().isBlank()) {
+            throw new BusinessException(400, "OA 审批动作缺少幂等键")
+                    .withCode("OA_IDEMPOTENCY_KEY_REQUIRED").withHintTarget("idempotencyKey");
+        }
+        if (request.expectedNodeId() == null || request.expectedNodeId().isBlank()) {
+            throw new BusinessException(400, "OA 审批动作缺少预期节点")
+                    .withCode("OA_EXPECTED_NODE_REQUIRED").withHintTarget("expectedNodeId");
+        }
+        if (instance.getCurrentNodeIds() == null
+                || !instance.getCurrentNodeIds().contains(request.expectedNodeId())) {
+            throw new BusinessException(409, "审批节点已变化，请刷新待办后重试")
+                    .withCode("OA_TASK_NODE_CHANGED");
+        }
+        if (instance.getStatus() == ApprovalWorkflowInstance.InstanceStatus.RUNNING
+                && !workflowEngine.canTransition(instance, user)) {
+            throw new BusinessException(403, "您不属于当前审批节点的处理角色")
+                    .withCode("OA_TASK_FORBIDDEN");
+        }
+        HistoryAction action;
+        try {
+            action = HistoryAction.valueOf(request.action().trim().toUpperCase());
+        } catch (Exception invalid) {
+            throw new BusinessException(400, "不支持的审批动作").withHintTarget("action");
+        }
+        if (action != HistoryAction.APPROVE && action != HistoryAction.REJECT) {
+            throw new BusinessException(400, "当前入口只支持审批通过或驳回")
+                    .withHintTarget("action");
+        }
+        if (!"PURCHASE_ORDER".equals(instance.getModuleCode())) {
+            throw new BusinessException(422, "该业务域尚未迁移到统一 OA 动作适配器")
+                    .withCode("OA_DOMAIN_ADAPTER_REQUIRED");
+        }
+        PurchaseOrder order = purchaseService.applyWorkflowAction(
+                factoryId,
+                instance.getBusinessEntityId(),
+                instanceId,
+                user.getId(),
+                user.getRoleCode(),
+                action,
+                request.notes());
+        ApprovalWorkflowInstance updated = workflowEngine.getLatestInstance(
+                factoryId, instance.getModuleCode(), instance.getBusinessEntityId())
+                .orElse(instance);
+        return ApiResponse.success(Map.of(
+                "instanceId", updated.getId(),
+                "workflowStatus", updated.getStatus().name(),
+                "businessEntityId", order.getId(),
+                "businessStatus", order.getStatus().name()));
+    }
+
+    public record WorkflowActionRequest(
+            String action,
+            String notes,
+            String idempotencyKey,
+            String expectedNodeId) {}
+
+    /**
      * Sprint 5 Track A — "我创建的工作流" 列表 (personal view).
      *
      * <p>HJ ERP 工作流 6 sub-menu 之一. 列出当前 user 作为 initiator 的 workflow
@@ -252,11 +328,11 @@ public class WorkflowInstanceController {
     /**
      * Sprint 5 Track A — "我参与的工作流" 列表 (personal view).
      *
-     * <p>HJ ERP 工作流 6 sub-menu 之一. 列出当前 user 作为 actor 参与过的 workflow
+     * <p>HJ ERP 工作流 6 sub-menu 之一. 列出当前 user 发起或作为 actor 处理过的 workflow
      * 实例 (通过 ApprovalHistory). distinct 因同一 user 可能多次操作同一实例.
      *
-     * <p>差异 vs {@code /my-created}: my-created 按 initiator 过滤 (发起人视角); my-participated
-     * 按 actorId join history 过滤 (审批人视角, 含已完成).
+     * <p>差异 vs {@code /my-created}: my-created 只按 initiator 过滤; my-participated
+     * 同时包含我发起及我作为 actor 处理过的实例 (含已完成).
      *
      * @param factoryId 工厂 id
      * @param authorization Bearer JWT
@@ -394,6 +470,8 @@ public class WorkflowInstanceController {
                     .businessEntityId(inst.getBusinessEntityId())
                     .initiatedAt(inst.getInitiatedAt())
                     .businessSummary(buildBusinessSummary(inst, poById))
+                    .status(inst.getStatus().name())
+                    .completedAt(inst.getCompletedAt())
                     .build();
 
             // currentNodeId + label
@@ -407,6 +485,13 @@ public class WorkflowInstanceController {
                 if (node != null) {
                     dto.setCurrentNodeLabel(node.getLabel() != null
                             ? node.getLabel() : node.getId());
+                    Object configuredRoles = node.getConfig() == null
+                            ? null : node.getConfig().get("approverRoles");
+                    if (configuredRoles instanceof Iterable<?> iterable) {
+                        List<String> approverRoles = new ArrayList<>();
+                        iterable.forEach(value -> approverRoles.add(String.valueOf(value)));
+                        dto.setApproverRoles(approverRoles);
+                    }
                 }
             }
 

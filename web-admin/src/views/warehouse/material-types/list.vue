@@ -28,7 +28,7 @@
  *   4. 单位下拉统一使用 UnitSelect，支持搜索、查重和现场创建
  *   foldable #1: 批次列表单位列 → 修 materials/list.vue 显示 quantityUnit 而非 unit
  */
-import { ref, computed, onMounted, watch, nextTick } from 'vue';
+import { ref, reactive, computed, onMounted, watch, nextTick } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -44,12 +44,23 @@ import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import UnitSelect from '@/components/common/UnitSelect.vue';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import type { TableRow } from '@/types/api';
+import {
+  listActiveSuppliers,
+  listMaterialSuppliers,
+  createSupplierMaterial,
+  updateSupplierMaterial,
+  deleteSupplierMaterial,
+  type SupplierMaterialPayload,
+  type SupplierMaterialRelation,
+  type SupplierRecord,
+} from '@/api/supplierManagement';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const route = useRoute();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('warehouse'));
+const canManageSupplierRelations = computed(() => permissionStore.canWrite('procurement'));
 const canManageClassification = computed(() => permissionStore.canWrite('system'));
 // T2-5b (issue #534): expose movingAvgPrice — gate by canViewPrice RBAC
 const canViewPrice = computed(() => permissionStore.canViewPrice);
@@ -898,12 +909,9 @@ async function handleSave() {
     if (form.value.taxTreatment === 'EXEMPT' && !form.value.taxExemptionReason.trim()) {
       return ElMessage.warning('免税物料必须填写免税依据');
     }
-    if (isPackagingMaterial.value
-      && (form.value.taxIncludedUnitPrice == null || Number(form.value.taxIncludedUnitPrice) <= 0)) {
-      return ElMessage.warning('请填写大于 0 的含税单价');
+    if (form.value.taxIncludedUnitPrice != null && Number(form.value.taxIncludedUnitPrice) <= 0) {
+      return ElMessage.warning('采购参考价如填写，必须大于 0；未知价格请留空');
     }
-  } else if (isPackagingMaterial.value && !editingId.value) {
-    return ElMessage.warning('新建包材必须配置含税单价，请联系有价格权限的人员创建');
   }
   if (showSegmentEditor.value && (!segmentL1.value || !segmentL2.value || !segmentL3.value)) {
     return ElMessage.error('每个原料类型都必须选择 L1大类、L2中类、L3小类后保存');
@@ -926,10 +934,15 @@ async function handleSave() {
     let materialId: string;
     const materialPayload: Record<string, unknown> = { ...form.value };
     delete materialPayload.code;
+    if (!canViewPrice.value) {
+      delete materialPayload.taxTreatment;
+      delete materialPayload.taxRate;
+      delete materialPayload.taxExemptionReason;
+      delete materialPayload.taxIncludedUnitPrice;
+    }
     if (isPackagingMaterial.value) {
       delete materialPayload.storageType;
     } else {
-      delete materialPayload.taxIncludedUnitPrice;
       delete materialPayload.associatedCustomerId;
       delete materialPayload.packQtyPerProduct;
     }
@@ -978,37 +991,138 @@ async function handleSave() {
   }
 }
 
-// ==================== Issue #779: 反查供应商 ====================
-// 客户要求 (May 7 part2 L222-240): "原料的话那个加一个对应的供应商, 加个字段, 对应是哪家供应商供的吗"
-// 复用 backend GET /suppliers/by-material?materialType={name} (SupplierController:179 已有).
+// ==================== SupplierMaterial 双向关系 ====================
+// 原料侧与供应商详情共用同一 SupplierMaterial 关系实体/API；采购历史不是关系配置真值。
 const suppliersDialogVisible = ref(false);
-const suppliersForMaterial = ref<Array<{ id: string; name: string; contactPerson?: string; phone?: string }>>([]);
+const suppliersForMaterial = ref<SupplierMaterialRelation[]>([]);
 const suppliersLoading = ref(false);
 const suppliersDialogMaterialName = ref('');
+const suppliersDialogMaterial = ref<{ id: string; name: string; code?: string; unit?: string } | null>(null);
+const activeSupplierOptions = ref<SupplierRecord[]>([]);
+const relationDialogVisible = ref(false);
+const relationEditing = ref<SupplierMaterialRelation | null>(null);
+const relationSaving = ref(false);
+const relationForm = reactive({
+  supplierId: '', supplierMaterialCode: '', purchaseUnit: '', defaultPurchasePrice: null as number | null,
+  currency: 'CNY', minOrderQuantity: null as number | null, leadTimeDays: null as number | null,
+  preferred: false, active: true,
+});
+
+const availableSupplierOptions = computed(() => {
+  const linked = new Set(suppliersForMaterial.value.map((row) => String(row.supplierId || '')));
+  return activeSupplierOptions.value.filter((supplier) => !linked.has(String(supplier.id)));
+});
+
+async function reloadMaterialSuppliers(): Promise<void> {
+  const material = suppliersDialogMaterial.value;
+  if (!material) return;
+  suppliersForMaterial.value = await listMaterialSuppliers(factoryId.value, material.id);
+}
 
 async function openSuppliersForMaterial(row: TableRow) {
+  const materialId = String(row.id || '').trim();
   const materialName = String(row.name || '').trim();
-  if (!materialName) {
-    ElMessage.warning('原料名称为空, 无法查询关联供应商');
+  if (!materialId || !materialName) {
+    ElMessage.warning('物料身份不完整，无法查询关联供应商');
     return;
   }
   suppliersDialogMaterialName.value = materialName;
+  suppliersDialogMaterial.value = {
+    id: materialId,
+    name: materialName,
+    code: String(row.businessCode || row.displayCode || row.code || ''),
+    unit: String(row.unit || ''),
+  };
   suppliersForMaterial.value = [];
   suppliersDialogVisible.value = true;
   suppliersLoading.value = true;
   try {
-    const res = await get<Array<{ id: string; name: string; contactPerson?: string; phone?: string }>>(
-      `/${factoryId.value}/suppliers/by-material`,
-      { params: { materialType: materialName } },
-    );
-    if (res.success && Array.isArray(res.data)) {
-      suppliersForMaterial.value = res.data;
-    }
+    await reloadMaterialSuppliers();
   } catch {
     /* interceptor */
   } finally {
     suppliersLoading.value = false;
   }
+}
+
+async function ensureActiveSupplierOptions(): Promise<void> {
+  activeSupplierOptions.value = await listActiveSuppliers(factoryId.value);
+}
+
+async function openMaterialRelationCreate(): Promise<void> {
+  if (!canManageSupplierRelations.value) return;
+  await ensureActiveSupplierOptions();
+  relationEditing.value = null;
+  Object.assign(relationForm, {
+    supplierId: '', supplierMaterialCode: '', purchaseUnit: suppliersDialogMaterial.value?.unit || '',
+    defaultPurchasePrice: null, currency: 'CNY', minOrderQuantity: null, leadTimeDays: null,
+    preferred: false, active: true,
+  });
+  relationDialogVisible.value = true;
+}
+
+async function openMaterialRelationEdit(row: SupplierMaterialRelation): Promise<void> {
+  if (!canManageSupplierRelations.value) return;
+  await ensureActiveSupplierOptions();
+  relationEditing.value = row;
+  Object.assign(relationForm, {
+    supplierId: String(row.supplierId || ''),
+    supplierMaterialCode: row.supplierMaterialCode || '',
+    purchaseUnit: row.purchaseUnit || row.baseUnit || suppliersDialogMaterial.value?.unit || '',
+    defaultPurchasePrice: row.defaultPurchasePrice ?? null,
+    currency: row.currency || 'CNY',
+    minOrderQuantity: row.minOrderQuantity ?? null,
+    leadTimeDays: row.leadTimeDays ?? null,
+    preferred: Boolean(row.preferred),
+    active: row.active !== false,
+  });
+  relationDialogVisible.value = true;
+}
+
+async function saveMaterialRelation(): Promise<void> {
+  const material = suppliersDialogMaterial.value;
+  if (!material) return;
+  if (!relationForm.supplierId) return void ElMessage.warning('请选择供应商');
+  if (!relationForm.purchaseUnit) return void ElMessage.warning('请选择采购单位');
+  if (!relationForm.currency.trim()) return void ElMessage.warning('请输入币种');
+  const payload: SupplierMaterialPayload = {
+    materialTypeId: material.id,
+    supplierMaterialCode: relationForm.supplierMaterialCode.trim() || undefined,
+    purchaseUnit: relationForm.purchaseUnit,
+    defaultPurchasePrice: relationForm.defaultPurchasePrice,
+    currency: relationForm.currency.trim().toUpperCase(),
+    minOrderQuantity: relationForm.minOrderQuantity,
+    leadTimeDays: relationForm.leadTimeDays,
+    preferred: relationForm.preferred,
+    active: relationForm.active,
+    version: relationEditing.value?.version ?? undefined,
+  };
+  relationSaving.value = true;
+  try {
+    if (relationEditing.value) {
+      await updateSupplierMaterial(factoryId.value, relationForm.supplierId, relationEditing.value.id, payload);
+    } else {
+      await createSupplierMaterial(factoryId.value, relationForm.supplierId, payload);
+    }
+    await reloadMaterialSuppliers();
+    relationDialogVisible.value = false;
+    ElMessage.success('供应商—物料关系已保存');
+  } finally {
+    relationSaving.value = false;
+  }
+}
+
+async function deactivateMaterialRelation(row: SupplierMaterialRelation): Promise<void> {
+  const supplierId = String(row.supplierId || '');
+  if (!supplierId) return void ElMessage.warning('供应商身份缺失，无法停用关系');
+  await ElMessageBox.confirm(
+    `确定停用「${row.supplierName || supplierId}」与当前物料的供应关系吗？历史采购记录不会被删除。`,
+    '停用供应关系',
+    { type: 'warning', confirmButtonText: '停用', cancelButtonText: '取消' },
+  );
+  await deleteSupplierMaterial(factoryId.value, supplierId, row.id, row.version);
+  await reloadMaterialSuppliers();
+  ElMessage.success('供应关系已停用');
 }
 
 async function handleDelete(row: TableRow) {
@@ -1291,17 +1405,18 @@ function handleSizeChange(size: number) {
           <el-form-item v-else label="免税依据" required>
             <el-input v-model="form.taxExemptionReason" placeholder="填写政策、票据或业务依据" maxlength="255" />
           </el-form-item>
-          <el-form-item v-if="isPackagingMaterial" :label="form.taxTreatment === 'EXEMPT' ? '免税采购参考价 (元/库存主单位)' : '含税采购参考价 (元/库存主单位)'" required>
+          <el-form-item :label="form.taxTreatment === 'EXEMPT' ? `免税采购参考价（元/${displayUnit(form.unit) || '库存主单位'}）` : `含税采购参考价（元/${displayUnit(form.unit) || '库存主单位'}）`">
             <el-input-number
               v-model="form.taxIncludedUnitPrice"
               :min="0.0001"
               :precision="4"
               :controls="false"
-              placeholder="请输入含税单价"
+              placeholder="选填；未知价格请留空"
               style="width: 100%"
             />
+            <div class="field-hint">价格按库存主单位维护，并可作为供应关系未单独报价时的采购参考；空值不会被当作 0 元。</div>
           </el-form-item>
-          <el-form-item v-if="isPackagingMaterial && form.taxIncludedUnitPrice != null && (form.taxRate || form.taxTreatment === 'EXEMPT')" label="未税采购参考价 (元/库存主单位)">
+          <el-form-item v-if="form.taxIncludedUnitPrice != null && (form.taxRate || form.taxTreatment === 'EXEMPT')" :label="`未税采购参考价（元/${displayUnit(form.unit) || '库存主单位'}）`">
             <el-input
               :model-value="preTaxUnitPrice != null ? preTaxUnitPrice.toFixed(4) : '—'"
               disabled
@@ -1616,30 +1731,118 @@ function handleSizeChange(size: number) {
       </template>
     </el-dialog>
 
-    <!-- Issue #779: 反查供应商对话框 -->
+    <!-- SupplierMaterial 双向关系：原料侧维护入口 -->
     <el-dialog
       v-model="suppliersDialogVisible"
-      :title="`${suppliersDialogMaterialName} — 关联供应商`"
-      width="640px"
+      :title="`${suppliersDialogMaterialName} — 供应商关系`"
+      width="980px"
       destroy-on-close
     >
+      <div class="supplier-relation-toolbar">
+        <span>一个物料可关联多个供应商；关系价格与采购单位将直接用于采购订单。</span>
+        <el-button
+          v-if="canManageSupplierRelations"
+          type="primary"
+          :icon="Plus"
+          @click="openMaterialRelationCreate"
+        >关联供应商</el-button>
+      </div>
       <el-table
         v-loading="suppliersLoading"
         :data="suppliersForMaterial"
-        empty-text="该原料暂无关联供应商"
+        empty-text="该物料暂无供应商关系"
         stripe
         size="small"
       >
-        <el-table-column prop="name" label="供应商名称" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="contactPerson" label="联系人" width="120">
-          <template #default="{ row }">{{ row.contactPerson || '-' }}</template>
+        <el-table-column prop="supplierName" label="供应商" min-width="170" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.supplierName || row.supplierId }}</template>
         </el-table-column>
-        <el-table-column prop="phone" label="联系电话" width="140">
-          <template #default="{ row }">{{ row.phone || '-' }}</template>
+        <el-table-column prop="supplierMaterialCode" label="供应商料号" width="130">
+          <template #default="{ row }">{{ row.supplierMaterialCode || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="采购单位" width="100">
+          <template #default="{ row }">{{ displayUnit(row.purchaseUnit || row.baseUnit) }}</template>
+        </el-table-column>
+        <el-table-column label="默认采购价" width="155" align="right">
+          <template #default="{ row }">
+            {{ row.defaultPurchasePrice == null ? '未配置' : `${row.currency || 'CNY'} ${Number(row.defaultPurchasePrice).toFixed(2)}/${displayUnit(row.purchaseUnit || row.baseUnit)}` }}
+          </template>
+        </el-table-column>
+        <el-table-column label="最小起订量" width="120" align="right">
+          <template #default="{ row }">{{ row.minOrderQuantity ?? '-' }} {{ displayUnit(row.purchaseUnit || row.baseUnit) }}</template>
+        </el-table-column>
+        <el-table-column label="交期" width="90">
+          <template #default="{ row }">{{ row.leadTimeDays == null ? '-' : `${row.leadTimeDays}天` }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            <el-tag :type="row.active === false ? 'info' : 'success'" size="small">
+              {{ row.active === false ? '已停用' : row.preferred ? '首选' : '启用' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="canManageSupplierRelations" label="操作" width="125" fixed="right">
+          <template #default="{ row }">
+            <el-button type="primary" link @click="openMaterialRelationEdit(row)">编辑</el-button>
+            <el-button v-if="row.active !== false" type="warning" link @click="deactivateMaterialRelation(row)">停用</el-button>
+          </template>
         </el-table-column>
       </el-table>
       <template #footer>
         <el-button @click="suppliersDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="relationDialogVisible"
+      :title="relationEditing ? '编辑供应商—物料关系' : '关联供应商'"
+      width="620px"
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <el-form label-width="145px">
+        <el-form-item label="供应商" required>
+          <el-select v-model="relationForm.supplierId" filterable :disabled="Boolean(relationEditing)" style="width: 100%" placeholder="请选择当前工厂的合作中供应商">
+            <el-option
+              v-if="relationEditing"
+              :label="relationEditing.supplierName || relationEditing.supplierId"
+              :value="relationEditing.supplierId"
+            />
+            <el-option
+              v-for="supplier in availableSupplierOptions"
+              :key="supplier.id"
+              :label="`${supplier.name}${supplier.supplierCode || supplier.code ? ` (${supplier.supplierCode || supplier.code})` : ''}`"
+              :value="supplier.id"
+            />
+          </el-select>
+          <div class="field-hint">已关联的供应商不会再次出现，后端唯一约束同时阻止重复关系。</div>
+        </el-form-item>
+        <el-form-item label="物料">
+          <el-input :model-value="`${suppliersDialogMaterial?.name || '-'} (${suppliersDialogMaterial?.code || suppliersDialogMaterial?.id || '-'})`" disabled />
+        </el-form-item>
+        <el-form-item label="供应商料号"><el-input v-model="relationForm.supplierMaterialCode" maxlength="100" /></el-form-item>
+        <el-form-item label="采购单位" required>
+          <UnitSelect
+            v-model="relationForm.purchaseUnit"
+            :factory-id="factoryId"
+            usage-scope="PURCHASE_QUANTITY"
+            placeholder="请选择采购单位"
+          />
+          <div class="field-hint">采购订单沿用此单位；页面显示中文，API 保存标准单位代码。</div>
+        </el-form-item>
+        <el-form-item :label="`默认采购价（元/${displayUnit(relationForm.purchaseUnit) || '采购单位'}）`">
+          <el-input-number v-model="relationForm.defaultPurchasePrice" :min="0" :precision="4" controls-position="right" style="width: 100%" />
+          <div class="field-hint">价格与采购单位绑定；未配置时采购单明确提示，不会静默变成 0 元。</div>
+        </el-form-item>
+        <el-form-item label="币种" required><el-input v-model="relationForm.currency" maxlength="3" /></el-form-item>
+        <el-form-item label="最小起订量"><el-input-number v-model="relationForm.minOrderQuantity" :min="0.0001" :precision="4" style="width: 100%" /></el-form-item>
+        <el-form-item label="交期（天）"><el-input-number v-model="relationForm.leadTimeDays" :min="0" :precision="0" style="width: 100%" /></el-form-item>
+        <el-form-item label="首选供应商"><el-switch v-model="relationForm.preferred" /></el-form-item>
+        <el-form-item label="关系启用"><el-switch v-model="relationForm.active" /></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="relationDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="relationSaving" @click="saveMaterialRelation">保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -1652,6 +1855,7 @@ function handleSizeChange(size: number) {
 .page-title { font-size: 18px; font-weight: 600; }
 .data-count { font-size: 13px; color: #909399; }
 .search-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.supplier-relation-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; color: #606266; font-size: 13px; }
 .divider-title { font-size: 14px; color: #606266; font-weight: 500; }
 
 /* T159-A: Code preview row */

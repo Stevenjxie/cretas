@@ -38,6 +38,8 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -338,7 +340,7 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         }
 
         // 7. 写入 Redis (fail-open)
-        writeRedis(saved);
+        writeRedisAfterCommit(saved);
 
         // 8. 写 START history
         writeHistory(saved.getFactoryId(), saved.getId(),
@@ -438,7 +440,7 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
             throw new BusinessException(409, "并发审批冲突, 请刷新后重试")
                     .withHint("另一审批人已操作此实例, 请刷新页面查看最新状态后再继续");
         }
-        writeRedis(saved);
+        writeRedisAfterCommit(saved);
 
         return saved;
     }
@@ -467,6 +469,23 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
                                                                  String businessEntityId) {
         return instanceRepository.findByFactoryIdAndModuleCodeAndBusinessEntityIdAndStatus(
                 factoryId, moduleCode, businessEntityId, InstanceStatus.RUNNING);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<ApprovalWorkflowInstance> getLatestInstance(String factoryId,
+                                                                String moduleCode,
+                                                                String businessEntityId) {
+        return instanceRepository
+                .findFirstByFactoryIdAndModuleCodeAndBusinessEntityIdOrderByInitiatedAtDesc(
+                        factoryId, moduleCode, businessEntityId);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<ApprovalWorkflowInstance> getInstance(String factoryId, String instanceId) {
+        return instanceRepository.findById(instanceId)
+                .filter(instance -> factoryId.equals(instance.getFactoryId()));
     }
 
     @Override
@@ -538,7 +557,7 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
             throw new BusinessException(409, "并发审批冲突, 请刷新后重试")
                     .withHint("另一审批人已操作此实例, 请刷新页面查看最新状态后再继续");
         }
-        writeRedis(saved);
+        writeRedisAfterCommit(saved);
 
         log.info("取消 workflow 实例 - instanceId={}, canceller={}, reason={}",
                 instanceId, cancellerUserId, reason);
@@ -1120,6 +1139,7 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
      * @since 2026-05-18 (Phase 2 issue #13)
      */
     @SuppressWarnings("unchecked")
+    @Override
     public boolean canTransition(ApprovalWorkflowInstance instance, User user) {
         if (instance == null || user == null) {
             return false;
@@ -1438,6 +1458,23 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
                     e.getPriority() == null ? Integer.MAX_VALUE : e.getPriority()));
         }
         return new GraphIndex(nodesById, outgoing, incoming);
+    }
+
+    /**
+     * 仅在数据库事务提交成功后刷新 Redis，避免回滚事务留下幽灵实例/状态。
+     */
+    private void writeRedisAfterCommit(ApprovalWorkflowInstance instance) {
+        if (TransactionSynchronizationManager.isActualTransactionActive()
+                && TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    writeRedis(instance);
+                }
+            });
+            return;
+        }
+        writeRedis(instance);
     }
 
     /**

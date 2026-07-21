@@ -3,6 +3,7 @@ package com.cretas.aims.service.workflow;
 import com.cretas.aims.entity.workflow.ApprovalHistory;
 import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.config.ApprovalWorkflow;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -107,6 +108,17 @@ public interface WorkflowEngineService {
     Optional<ApprovalWorkflowInstance> getCurrentInstance(String factoryId,
                                                           String moduleCode,
                                                           String businessEntityId);
+
+    /** Latest instance for read models and idempotency checks, including terminal state. */
+    Optional<ApprovalWorkflowInstance> getLatestInstance(String factoryId,
+                                                         String moduleCode,
+                                                         String businessEntityId);
+
+    /** Factory-scoped instance lookup for the unified OA action endpoint. */
+    Optional<ApprovalWorkflowInstance> getInstance(String factoryId, String instanceId);
+
+    /** Whether the user may operate the active node, including factory scope. */
+    boolean canTransition(ApprovalWorkflowInstance instance, User user);
 
     /**
      * 时间线 UI — 实例完整历史按时间升序.

@@ -14,6 +14,7 @@ public class SupplierMaterialPurchaseSpecDTO {
     private String inventoryBaseUnit;
     private BigDecimal factor;
     @PriceSensitive private BigDecimal quotedPrice;
+    private String quotedPriceUnit;
     private String currency;
     private BigDecimal minOrderQuantity;
     private Integer leadTimeDays;

@@ -29,6 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 /**
@@ -92,7 +93,7 @@ class RawMaterialTypeServiceTaxRateTest {
                 .thenReturn(List.of());
         when(materialTypeRepository.existsByFactoryIdAndCode(anyString(), anyString()))
                 .thenReturn(false);
-        when(materialTypeRepository.save(any(RawMaterialType.class)))
+        lenient().when(materialTypeRepository.save(any(RawMaterialType.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
     }
 
@@ -140,6 +141,8 @@ class RawMaterialTypeServiceTaxRateTest {
         // Expected: 100.00 / 1.09 = 91.7431192... → HALF_UP scale 4 = 91.7431
         BigDecimal expected = new BigDecimal("91.7431");
         assertThat(result).isNotNull();
+        assertThat(result.getMaterialReferencePrice()).isEqualByComparingTo(expected);
+        assertThat(result.getMaterialReferencePriceUnit()).isEqualTo("kg");
         // The saved entity's unitPrice should be the pre-tax value.
         // Since save mock returns the entity passed to it, we need to capture
         // what was set on the entity. We verify via the convertToDTO pathway
@@ -275,8 +278,8 @@ class RawMaterialTypeServiceTaxRateTest {
     // =========================================================================
 
     @Test
-    @DisplayName("T2-S7: 非包材 update 不传税率 → 默认TAX_13并清除历史参考价")
-    void update_nonPackagingDefaultsTaxAndClearsLegacyReferencePrice() {
+    @DisplayName("T2-S7: 非包材 update 不传价格 → 保留历史采购参考价")
+    void update_nonPackagingPreservesExistingReferencePrice() {
         stubForUpdate();
         BigDecimal existingUnitPrice = new BigDecimal("50.0000");
         // Entity has NO taxRate (null), so condition `taxRate != null && taxIncludedUnitPrice != null` is false
@@ -292,7 +295,35 @@ class RawMaterialTypeServiceTaxRateTest {
         RawMaterialTypeDTO result = service.updateMaterialType(FACTORY_ID, MATERIAL_ID, dto);
 
         assertThat(result.getTaxRate()).isEqualTo(TaxRate.TAX_13);
+        assertThat(result.getMaterialReferencePrice()).isEqualByComparingTo(existingUnitPrice);
+        assertThat(result.getMaterialReferencePriceUnit()).isEqualTo("kg");
         assertThat(result.getTaxIncludedUnitPrice()).isNull();
+    }
+
+    @Test
+    @DisplayName("非包材可仅维护未税采购参考价，并按物料基本单位返回")
+    void create_nonPackagingAcceptsUntaxedReferencePrice() {
+        stubForCreate();
+        RawMaterialTypeDTO dto = buildCreateDto(TaxRate.TAX_13, null);
+        dto.setMaterialReferencePrice(new BigDecimal("10.00"));
+
+        RawMaterialTypeDTO result = service.createMaterialType(FACTORY_ID, dto);
+
+        assertThat(result.getMaterialReferencePrice()).isEqualByComparingTo("10.00");
+        assertThat(result.getTaxIncludedUnitPrice()).isEqualByComparingTo("11.3000");
+        assertThat(result.getMaterialReferencePriceUnit()).isEqualTo("kg");
+    }
+
+    @Test
+    @DisplayName("未税与含税采购参考价不一致时拒绝")
+    void create_rejectsInconsistentReferencePrices() {
+        stubForCreate();
+        RawMaterialTypeDTO dto = buildCreateDto(TaxRate.TAX_13, new BigDecimal("12.00"));
+        dto.setMaterialReferencePrice(new BigDecimal("10.00"));
+
+        assertThatThrownBy(() -> service.createMaterialType(FACTORY_ID, dto))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("不一致");
     }
 
     // =========================================================================

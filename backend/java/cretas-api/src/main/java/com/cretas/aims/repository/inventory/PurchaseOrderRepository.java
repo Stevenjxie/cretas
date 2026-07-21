@@ -7,6 +7,7 @@ import com.cretas.aims.entity.inventory.PurchaseOrder;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -14,6 +15,8 @@ import org.springframework.stereotype.Repository;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
+
+import jakarta.persistence.LockModeType;
 
 @Repository
 public interface PurchaseOrderRepository extends JpaRepository<PurchaseOrder, String> {
@@ -49,6 +52,16 @@ public interface PurchaseOrderRepository extends JpaRepository<PurchaseOrder, St
      * 但以单个 SQL 完成，消除 audit 扫描的 "findById without factoryId guard" 误报。
      */
     Optional<PurchaseOrder> findByIdAndFactoryId(String id, String factoryId);
+
+    /**
+     * OA submit boundary lock.  The purchase order and its workflow instance must be
+     * created as one atomic transition; two browser tabs must not both observe DRAFT.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT po FROM PurchaseOrder po WHERE po.id = :id AND po.factoryId = :factoryId")
+    Optional<PurchaseOrder> findByIdAndFactoryIdForUpdate(
+            @Param("id") String id,
+            @Param("factoryId") String factoryId);
 
     List<PurchaseOrder> findByFactoryIdAndSupplierId(String factoryId, String supplierId);
 

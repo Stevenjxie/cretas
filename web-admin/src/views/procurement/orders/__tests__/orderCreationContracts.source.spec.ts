@@ -14,12 +14,21 @@ describe('order creation contracts', () => {
   const bom = source('src/views/production/bom/index.vue');
 
   it('never posts header-only purchase or sales orders', () => {
-    expect(purchase).toContain(':disabled-modes="[\'quick\', \'batch\']"');
+    expect(purchase).toContain('请至少添加一行原料明细');
     expect(sales).toContain(':disabled-modes="[\'quick\', \'batch\']"');
     expect(purchase).not.toContain('items: [] as unknown[]');
     expect(sales).not.toContain('items: [] as unknown[]');
-    expect(purchase).toContain('采购订单必须至少包含 1 项物料明细');
     expect(sales).toContain('批量销售订单必须逐单填写商品明细');
+  });
+
+  it('opens the only supported normal purchase form directly and keeps AI entry', () => {
+    expect(purchase).toContain('@click="openCreateDialog"');
+    expect(purchase).toContain('@click="aiEntryVisible = true"');
+    expect(purchase).not.toContain('CreateModeSelector');
+    expect(purchase).not.toContain('BatchCreateDialog');
+    expect(purchase).not.toContain('QuickCreateDialog');
+    expect(purchase).not.toContain('BomExpansionDialog');
+    expect(purchase).not.toContain('选择录入方式');
   });
 
   it('uses the Shanghai factory-local calendar date for purchase creation', () => {

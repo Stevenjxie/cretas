@@ -9,17 +9,27 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.SupplierMaterialRepository;
 import com.cretas.aims.repository.SupplierRepository;
+import com.cretas.aims.service.unit.CanonicalUnit;
 import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitDimension;
+import com.cretas.aims.service.unit.UnitNormalizationResult;
+import com.cretas.aims.service.unit.UnitUsageScope;
 import lombok.RequiredArgsConstructor;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.List;
+import java.util.Objects;
 
 @Service
 @RequiredArgsConstructor
 public class SupplierMaterialServiceImpl implements SupplierMaterialService {
+    private static final String PRICE_SOURCE_RELATION = "SUPPLIER_RELATION";
+    private static final String PRICE_SOURCE_MATERIAL = "MATERIAL_REFERENCE";
+    private static final String PRICE_SOURCE_UNCONFIGURED = "UNCONFIGURED";
     private final SupplierMaterialRepository repository;
     private final SupplierRepository supplierRepository;
     private final RawMaterialTypeRepository materialRepository;
@@ -93,7 +103,14 @@ public class SupplierMaterialServiceImpl implements SupplierMaterialService {
 
     private void apply(SupplierMaterial target, SupplierMaterialRequest request, RawMaterialType material) {
         if (request.getSupplierMaterialCode() != null) target.setSupplierMaterialCode(SupplierProfileValidator.trimToNull(request.getSupplierMaterialCode()));
-        if (request.getDefaultPurchasePrice() != null) target.setDefaultPurchasePrice(request.getDefaultPurchasePrice());
+        if (request.getDefaultPurchasePrice() != null) {
+            if (request.getDefaultPurchasePrice().compareTo(BigDecimal.ZERO) <= 0) {
+                throw new BusinessException(400, "默认采购价必须大于0")
+                        .withCode("SUPPLIER_MATERIAL_PRICE_INVALID")
+                        .withHintTarget("defaultPurchasePrice");
+            }
+            target.setDefaultPurchasePrice(request.getDefaultPurchasePrice());
+        }
         target.setCurrency(request.getCurrency() != null ? request.getCurrency() : target.getCurrency() != null ? target.getCurrency() : "CNY");
         String requestedUnit = request.getPurchaseUnit() != null
                 ? request.getPurchaseUnit()
@@ -103,6 +120,35 @@ public class SupplierMaterialServiceImpl implements SupplierMaterialService {
             throw new BusinessException(400, "未登记的采购计量单位: " + requestedUnit)
                     .withCode("SUPPLIER_MATERIAL_UNIT_UNRECOGNIZED")
                     .withHintTarget("purchaseUnit");
+        }
+        if (!unitContractService.supportsUsage(material.getFactoryId(), normalizedUnit.code(),
+                UnitUsageScope.PURCHASE_QUANTITY)) {
+            throw new BusinessException(400, "该计量单位不允许用于采购数量: " + normalizedUnit.code())
+                    .withCode("SUPPLIER_MATERIAL_UNIT_SCOPE_INVALID")
+                    .withHintTarget("purchaseUnit");
+        }
+        UnitNormalizationResult materialUnit = unitContractService.normalize(material.getFactoryId(), material.getUnit());
+        if (!materialUnit.recognized()
+                || !unitContractService.supportsUsage(material.getFactoryId(), materialUnit.code(),
+                UnitUsageScope.INVENTORY_QUANTITY)) {
+            throw new BusinessException(400, "物料库存基本单位配置无效")
+                    .withCode("SUPPLIER_MATERIAL_BASE_UNIT_INVALID")
+                    .withHintTarget("materialTypeId");
+        }
+        if (!isDirectPurchaseUnitCompatible(normalizedUnit.unit(), materialUnit.unit())) {
+            throw new BusinessException(400,
+                    "采购单位与物料库存基本单位不兼容；包装采购请配置明确的采购包装规格")
+                    .withCode("SUPPLIER_MATERIAL_UNIT_REQUIRES_SPEC")
+                    .withHintTarget("purchaseUnit");
+        }
+        if (request.getPurchaseUnit() != null
+                && target.getPurchaseUnit() != null
+                && !Objects.equals(target.getPurchaseUnit(), normalizedUnit.code())
+                && target.getDefaultPurchasePrice() != null
+                && request.getDefaultPurchasePrice() == null) {
+            throw new BusinessException(400, "修改采购单位时必须重新确认对应单位的默认采购价")
+                    .withCode("SUPPLIER_MATERIAL_PRICE_UNIT_RECONFIRM_REQUIRED")
+                    .withHintTarget("defaultPurchasePrice");
         }
         target.setPurchaseUnit(normalizedUnit.code());
         if (request.getMinOrderQuantity() != null) target.setMinOrderQuantity(request.getMinOrderQuantity());
@@ -135,13 +181,66 @@ public class SupplierMaterialServiceImpl implements SupplierMaterialService {
     private SupplierMaterialDTO toDto(SupplierMaterial relation) {
         Supplier supplier = supplierRepository.findByIdAndFactoryId(relation.getSupplierId(), relation.getFactoryId()).orElse(null);
         RawMaterialType material = materialRepository.findById(relation.getMaterialTypeId()).orElse(null);
+        PriceResolution price = resolveEffectivePrice(relation, material);
         return SupplierMaterialDTO.builder().id(relation.getId()).factoryId(relation.getFactoryId())
                 .supplierId(relation.getSupplierId()).supplierName(supplier == null ? null : supplier.getName())
                 .materialTypeId(relation.getMaterialTypeId()).materialCode(material == null ? null : material.getCode())
                 .materialName(material == null ? null : material.getName()).baseUnit(material == null ? null : material.getUnit())
+                .materialReferencePrice(material == null ? null : positiveOrNull(material.getUnitPrice()))
+                .materialReferencePriceUnit(material == null ? null : material.getUnit())
                 .supplierMaterialCode(relation.getSupplierMaterialCode()).defaultPurchasePrice(relation.getDefaultPurchasePrice())
-                .currency(relation.getCurrency()).purchaseUnit(relation.getPurchaseUnit()).minOrderQuantity(relation.getMinOrderQuantity())
+                .currency(relation.getCurrency()).purchaseUnit(relation.getPurchaseUnit())
+                .effectivePurchasePrice(price.price()).effectivePriceUnit(price.unit()).priceSource(price.source())
+                .minOrderQuantity(relation.getMinOrderQuantity())
                 .leadTimeDays(relation.getLeadTimeDays()).preferred(relation.getPreferred()).active(relation.getActive())
                 .version(relation.getVersion()).build();
     }
+
+    private boolean isDirectPurchaseUnitCompatible(CanonicalUnit purchaseUnit, CanonicalUnit materialUnit) {
+        if (purchaseUnit == null || materialUnit == null) return false;
+        if (purchaseUnit.code().equals(materialUnit.code())) return true;
+        return purchaseUnit.dimension() == materialUnit.dimension()
+                && isIntrinsicDimension(purchaseUnit.dimension())
+                && purchaseUnit.factorToBase() != null
+                && materialUnit.factorToBase() != null;
+    }
+
+    private boolean isIntrinsicDimension(UnitDimension dimension) {
+        return dimension == UnitDimension.MASS
+                || dimension == UnitDimension.VOLUME
+                || dimension == UnitDimension.LENGTH;
+    }
+
+    private PriceResolution resolveEffectivePrice(SupplierMaterial relation, RawMaterialType material) {
+        BigDecimal relationPrice = positiveOrNull(relation.getDefaultPurchasePrice());
+        if (relationPrice != null) {
+            return new PriceResolution(relationPrice, relation.getPurchaseUnit(), PRICE_SOURCE_RELATION);
+        }
+        BigDecimal materialPrice = material == null ? null : positiveOrNull(material.getUnitPrice());
+        if (materialPrice == null || material.getUnit() == null || relation.getPurchaseUnit() == null) {
+            return new PriceResolution(null, relation.getPurchaseUnit(), PRICE_SOURCE_UNCONFIGURED);
+        }
+        UnitNormalizationResult purchaseUnit = unitContractService.normalize(
+                relation.getFactoryId(), relation.getPurchaseUnit());
+        UnitNormalizationResult materialUnit = unitContractService.normalize(
+                relation.getFactoryId(), material.getUnit());
+        if (!purchaseUnit.recognized() || !materialUnit.recognized()
+                || !isDirectPurchaseUnitCompatible(purchaseUnit.unit(), materialUnit.unit())) {
+            return new PriceResolution(null, relation.getPurchaseUnit(), PRICE_SOURCE_UNCONFIGURED);
+        }
+        if (purchaseUnit.code().equals(materialUnit.code())) {
+            return new PriceResolution(materialPrice, purchaseUnit.code(), PRICE_SOURCE_MATERIAL);
+        }
+        BigDecimal purchaseToMaterialFactor = purchaseUnit.unit().factorToBase()
+                .divide(materialUnit.unit().factorToBase(), 12, RoundingMode.HALF_UP);
+        BigDecimal convertedPrice = materialPrice.multiply(purchaseToMaterialFactor)
+                .setScale(8, RoundingMode.HALF_UP).stripTrailingZeros();
+        return new PriceResolution(convertedPrice, purchaseUnit.code(), PRICE_SOURCE_MATERIAL);
+    }
+
+    private BigDecimal positiveOrNull(BigDecimal value) {
+        return value != null && value.compareTo(BigDecimal.ZERO) > 0 ? value : null;
+    }
+
+    private record PriceResolution(BigDecimal price, String unit, String source) {}
 }

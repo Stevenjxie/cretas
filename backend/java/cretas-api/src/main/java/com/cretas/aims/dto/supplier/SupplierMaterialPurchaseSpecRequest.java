@@ -10,7 +10,7 @@ public class SupplierMaterialPurchaseSpecRequest {
     @NotBlank @Size(max = 20) private String purchasePackageUnit;
     @NotBlank @Size(max = 20) private String inventoryBaseUnit;
     @NotNull @DecimalMin(value = "0.000000000001") private BigDecimal factor;
-    @PositiveOrZero private BigDecimal quotedPrice;
+    @Positive(message = "采购规格报价必须大于0") private BigDecimal quotedPrice;
     @Pattern(regexp = "^[A-Z]{3}$") private String currency;
     @Positive private BigDecimal minOrderQuantity;
     @PositiveOrZero private Integer leadTimeDays;

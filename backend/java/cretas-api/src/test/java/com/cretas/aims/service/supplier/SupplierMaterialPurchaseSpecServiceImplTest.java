@@ -37,6 +37,7 @@ class SupplierMaterialPurchaseSpecServiceImplTest {
     void setUp() {
         service = new SupplierMaterialPurchaseSpecServiceImpl(repository, relationRepository,
                 materialRepository, unitContractService);
+        lenient().when(unitContractService.supportsUsage(eq("F006"), anyString(), any())).thenReturn(true);
     }
 
     @Test
@@ -62,6 +63,7 @@ class SupplierMaterialPurchaseSpecServiceImplTest {
         assertThat(result.getPurchasePackageUnit()).isEqualTo("case");
         assertThat(result.getInventoryBaseUnit()).isEqualTo("kg");
         assertThat(result.getFactor()).isEqualByComparingTo("10");
+        assertThat(result.getQuotedPriceUnit()).isEqualTo("case");
         assertThat(previous.getDefaultSpec()).isFalse();
     }
 
@@ -85,6 +87,40 @@ class SupplierMaterialPurchaseSpecServiceImplTest {
         assertThatThrownBy(() -> service.create("F006", "sup", "rel", request("case", "kg", false)))
                 .isInstanceOf(BusinessException.class);
         verifyNoInteractions(materialRepository);
+    }
+
+    @Test
+    void rejectsTimeUnitForPurchasePackage() {
+        when(relationRepository.findByIdAndFactoryId("rel", "F006")).thenReturn(Optional.of(relation(true)));
+        when(materialRepository.findById("mat")).thenReturn(Optional.of(material("kg")));
+        when(unitContractService.normalize(eq("F006"), anyString())).thenAnswer(invocation -> {
+            String raw = invocation.getArgument(1);
+            return new UnitNormalizationResult(raw, raw, mock(com.cretas.aims.service.unit.CanonicalUnit.class));
+        });
+        when(unitContractService.supportsUsage("F006", "minute",
+                com.cretas.aims.service.unit.UnitUsageScope.PURCHASE_QUANTITY)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.create("F006", "sup", "rel", request("minute", "kg", false)))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("不允许用于当前采购规格字段");
+        verify(repository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void rejectsZeroQuotedPriceAtServiceBoundary() {
+        when(relationRepository.findByIdAndFactoryId("rel", "F006")).thenReturn(Optional.of(relation(true)));
+        when(materialRepository.findById("mat")).thenReturn(Optional.of(material("kg")));
+        when(unitContractService.normalize(eq("F006"), anyString())).thenAnswer(invocation -> {
+            String raw = invocation.getArgument(1);
+            return new UnitNormalizationResult(raw, raw, mock(com.cretas.aims.service.unit.CanonicalUnit.class));
+        });
+        SupplierMaterialPurchaseSpecRequest request = request("case", "kg", false);
+        request.setQuotedPrice(BigDecimal.ZERO);
+
+        assertThatThrownBy(() -> service.create("F006", "sup", "rel", request))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("报价必须大于0");
+        verify(repository, never()).saveAndFlush(any());
     }
 
     private SupplierMaterial relation(boolean active) {
