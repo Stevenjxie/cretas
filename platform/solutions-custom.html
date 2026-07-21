@@ -151,7 +151,10 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 <script>
 window.addEventListener('load', function(){
   setTimeout(function(){
-    document.querySelectorAll('.v6-reveal:not(.in)').forEach(function(e){ e.classList.add('in'); });
+    var vb = window.innerHeight + 40;
+    document.querySelectorAll('.v6-reveal:not(.in)').forEach(function(e){
+      if (e.getBoundingClientRect().top < vb) e.classList.add('in');
+    });
   }, 1200);
 });
 </script>
