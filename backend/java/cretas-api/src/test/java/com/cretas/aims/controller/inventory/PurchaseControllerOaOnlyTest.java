@@ -3,7 +3,7 @@ package com.cretas.aims.controller.inventory;
 import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.inventory.PurchaseApprovalRecoveryResponse;
 import com.cretas.aims.dto.inventory.RecoverPurchaseApprovalRequest;
-import com.cretas.aims.entity.User;
+import com.cretas.aims.dto.user.UserDTO;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.exception.BusinessException;
@@ -57,7 +57,7 @@ class PurchaseControllerOaOnlyTest {
 
     @Test
     void restrictedRecoveryUsesAuthenticatedOperatorAndReturnsWorkflowTruth() {
-        User operator = new User();
+        UserDTO operator = new UserDTO();
         operator.setId(1309L);
         when(mobileService.getUserFromToken("token")).thenReturn(operator);
         PurchaseApprovalRecoveryResponse serviceResult = PurchaseApprovalRecoveryResponse.builder()
