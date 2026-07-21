@@ -31,7 +31,10 @@ import asyncio
 import logging
 from typing import Any, Dict, Optional
 
-from smartbi.gold.customer_text import sanitize_customer_ai_text
+from smartbi.gold.customer_text import (
+    has_displayable_business_result,
+    sanitize_customer_ai_text,
+)
 
 from smartbi.gold import answer_contract as _contract
 from smartbi.gold.restaurant_intent import (
@@ -133,16 +136,12 @@ async def tiered_answer(
         )
         answer_text = tiered_result.answer_text
         if not contract.passed:
-            # Spec section 4: missing element(s) get ONE supplemental-fetch
-            # opportunity in the resolver itself (resolve_sales_summary
-            # already does this for margin via wants_margin); if still
-            # missing after that, explicitly disclose rather than silently
-            # dropping it.
             answer_text += (
-                f"\n\n⚠️ 提示：以上回答可能未完整覆盖{_contract.describe_missing(contract.missing)}，"
-                "如需更精确的结果，可以换个更具体的说法重新提问。"
+                f"\n\n本次结果没有可靠覆盖{_contract.describe_missing(contract.missing)}，"
+                "因此不把它当作完整结论，也没有用其他时间或指标替代。请补充具体范围后重试。"
             )
         answer_text = sanitize_customer_ai_text(answer_text)
+        contract_pass = contract.passed and has_displayable_business_result(answer_text)
 
         result: Dict[str, Any] = {
             "kind": "answer",
@@ -151,13 +150,13 @@ async def tiered_answer(
             "kpis": tiered_result.kpis,
             "title": tiered_result.title,
             "code": spec.intent,
-            "contract_pass": contract.passed,
+            "contract_pass": contract_pass,
             "spec": spec,
         }
         capture_source = "java_entry_delegate" if java_tool_name else None
         asyncio.create_task(log_intent_capture(
             pool, spec, factory_id=factory_id, query=query,
-            answer=answer_text, contract_pass=contract.passed, served=True,
+            answer=answer_text, contract_pass=contract_pass, served=True,
             source=capture_source,
         ))
         return result
@@ -210,6 +209,8 @@ def should_delegate(
     if spec is None:
         return False
     if spec.clarification_needed:
+        return True
+    if spec.comparison and spec.intent == "RESTAURANT_OPS_SALES_SUMMARY":
         return True
     if (
         (spec.asks_profitability or spec.wants_margin)

@@ -1466,6 +1466,10 @@ public class GoldFinanceClient {
                 if (userRole != null && !userRole.isEmpty()) {
                     reqBuilder.addHeader("X-User-Role", userRole);
                 }
+                String userId = currentUserId();
+                if (userId != null && !userId.isBlank()) {
+                    reqBuilder.addHeader("X-User-Id", userId);
+                }
             }
             Request req = reqBuilder.build();
 

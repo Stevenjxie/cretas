@@ -73,6 +73,8 @@ LEGITIMATE_TRIGGERS = [
     ("查询本周营收", "RESTAURANT_OPS_SALES_SUMMARY"),
     ("今天查订单", "RESTAURANT_OPS_SALES_SUMMARY"),
     ("本月营业额", "RESTAURANT_OPS_SALES_SUMMARY"),
+    ("昨天营业额比前天高还是低", "RESTAURANT_OPS_SALES_SUMMARY"),
+    ("上个月和上上个月营收相比怎么样", "RESTAURANT_OPS_SALES_SUMMARY"),
 ]
 
 # Queries that MUST NOT match any ops template (ambiguous or unrelated to ops)
@@ -167,6 +169,8 @@ def test_revenue_amount_query_routes_to_sales_summary_not_trend():
     "query,expected_range,expected_label",
     [
         ("今天查订单", (date(2026, 7, 6), date(2026, 7, 6)), "今天"),
+        ("昨天营业额", (date(2026, 7, 5), date(2026, 7, 5)), "昨天"),
+        ("前天营业额", (date(2026, 7, 4), date(2026, 7, 4)), "前天"),
         ("查询本周营收", (date(2026, 7, 6), date(2026, 7, 6)), "本周"),
         ("本月营业额", (date(2026, 7, 1), date(2026, 7, 6)), "本月"),
         ("最近一个月的营收情况如何？毛利有多少", (date(2026, 6, 7), date(2026, 7, 6)), "最近30天"),
@@ -192,6 +196,33 @@ def test_sales_query_spec_extracts_time_margin_and_profitability():
     assert spec.wants_margin is True
     assert spec.asks_profitability is True
     assert spec.relative_window is True
+
+
+@pytest.mark.parametrize(
+    "query,primary,baseline,baseline_label",
+    [
+        (
+            "昨天营业额比前天高还是低",
+            (date(2026, 7, 20), date(2026, 7, 20)),
+            (date(2026, 7, 19), date(2026, 7, 19)),
+            "前天",
+        ),
+        (
+            "上个月和上上个月营收相比怎么样",
+            (date(2026, 6, 1), date(2026, 6, 30)),
+            (date(2026, 5, 1), date(2026, 5, 31)),
+            "上上个月",
+        ),
+    ],
+)
+def test_sales_query_spec_resolves_explicit_comparison_periods(
+    query, primary, baseline, baseline_label,
+):
+    spec = _resolve_sales_query_spec(query, today=date(2026, 7, 21))
+    assert spec.date_range == primary
+    assert spec.comparison_range == baseline
+    assert spec.comparison_label == baseline_label
+    assert spec.comparison_kind in ("previous_day", "previous_month")
 
 
 @pytest.mark.parametrize(
@@ -230,12 +261,15 @@ def test_sales_summary_keeps_time_margin_and_profitability(
     async def _fake_latest_anchor(pool, factory_id):
         return date(2025, 12, 31)
 
-    async def _fake_store_margin(pool, factory_id, days=30, top_n=5, *, role=None):
+    async def _fake_store_margin(
+        pool, factory_id, days=30, top_n=5, *, role=None, date_range=None,
+    ):
         # role kwarg added 2026-07-08 (RBAC audit fix): sales_summary now
         # forwards role so the real resolve_store_margin's PRICE_VIEW_ROLES
         # gate stays consistent with the caller's can_see_money branch.
         captured["margin_role"] = role
         captured["margin_days"] = days
+        captured["margin_date_range"] = date_range
         return OpsAnswer(
             code="RESTAURANT_OPS_STORE_MARGIN",
             title="门店毛利",
@@ -264,6 +298,7 @@ def test_sales_summary_keeps_time_margin_and_profitability(
 
     assert captured["date_range"] == expected_range
     assert captured["margin_days"] == expected_margin_days
+    assert captured["margin_date_range"] == expected_range
     assert expected_label in ans.answer_text
     assert "毛利约" in ans.answer_text
     assert "1,700" in ans.answer_text
@@ -271,6 +306,60 @@ def test_sales_summary_keeps_time_margin_and_profitability(
         assert "是赚钱的" in ans.answer_text
     assert any(kpi["title"] == "毛利" for kpi in ans.kpis)
     assert any(kpi["title"] == "毛利率" for kpi in ans.kpis)
+
+
+def test_sales_summary_executes_both_periods_and_reports_auditable_delta(monkeypatch):
+    calls = []
+
+    async def _fake_finance_summary(pool, factory_id, date_range, top_n_stores=5):
+        calls.append(date_range)
+        if date_range == (date(2025, 12, 30), date(2025, 12, 30)):
+            return {
+                "total_revenue": 12000.0,
+                "bill_count": 60,
+                "avg_bill_value": 200.0,
+                "day_count": 1,
+                "store_count": 2,
+                "top_stores": [],
+            }
+        return {
+            "total_revenue": 10000.0,
+            "bill_count": 50,
+            "avg_bill_value": 200.0,
+            "day_count": 1,
+            "store_count": 2,
+            "top_stores": [],
+        }
+
+    async def _fake_store_comparison(pool, factory_id, date_range):
+        return {"stores": [], "weakStores": []}
+
+    async def _fake_latest_anchor(pool, factory_id):
+        return date(2025, 12, 31)
+
+    import smartbi.gold.queries as _q
+    import smartbi.gold.restaurant_ops_router as _r
+
+    monkeypatch.setattr(_q, "finance_summary", _fake_finance_summary)
+    monkeypatch.setattr(_q, "store_comparison", _fake_store_comparison)
+    monkeypatch.setattr(_r, "_latest_sales_anchor", _fake_latest_anchor)
+
+    ans = asyncio.run(resolve_sales_summary(
+        object(),
+        "RES_TEST",
+        role="restaurant_manager",
+        query="昨天营业额比前天高还是低",
+    ))
+
+    assert calls == [
+        (date(2025, 12, 30), date(2025, 12, 30)),
+        (date(2025, 12, 29), date(2025, 12, 29)),
+    ]
+    assert "2025-12-30" in ans.answer_text
+    assert "2025-12-29" in ans.answer_text
+    assert "营收高 ¥2,000.00（20.0%）" in ans.answer_text
+    assert ans.meta["comparison"]["answered"] is True
+    assert ans.meta["comparison"]["revenue_delta"] == 2000.0
 
 
 # ──────────────────────────────────────────────────────────────────────────

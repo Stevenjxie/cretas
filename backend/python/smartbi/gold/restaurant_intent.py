@@ -168,6 +168,18 @@ def _detect_dimensions(text: str) -> Tuple[str, ...]:
 
 
 def _detect_comparison(text: str) -> Optional[str]:
+    if (
+        any(tok in text for tok in ("昨天", "昨日"))
+        and any(tok in text for tok in ("前天", "前日"))
+    ):
+        return "previous_day"
+    if "上上个月" in text or "上上月" in text:
+        return "previous_month"
+    if (
+        any(tok in text for tok in ("本月", "这个月", "当月"))
+        and any(tok in text for tok in ("上个月", "上月"))
+    ):
+        return "previous_month"
     if "同比" in text:
         return "yoy"
     if "环比" in text:
@@ -175,6 +187,71 @@ def _detect_comparison(text: str) -> Optional[str]:
     if any(tok in text for tok in ("比上周", "周比", "跟上周比")):
         return "wow"
     return None
+
+
+_OPTIMIZATION_OBJECTIVE_TOKENS = (
+    "营收", "营业额", "销售额", "销量", "订单", "单量", "客单价", "转化率",
+    "毛利", "利润", "成本", "损耗", "浪费", "库存", "缺货", "周转", "排班",
+    "人效", "评分", "评价", "差评", "退菜", "退款", "出餐", "等位", "复购",
+    "慢销", "滞销", "菜品结构", "套餐", "连带率", "替代率", "采购",
+)
+
+
+def optimization_clarification_question(query: str) -> Optional[str]:
+    """Ask for the business objective instead of guessing what to optimise."""
+    text = (query or "").strip()
+    if not any(token in text for token in ("优化", "改善", "提升经营", "经营建议")):
+        return None
+    if any(token in text for token in _OPTIMIZATION_OBJECTIVE_TOKENS):
+        return None
+    return (
+        "你想优先优化哪一个目标？可以直接选：营收、毛利率、订单与客单价、"
+        "慢销菜品、损耗与库存、排班人效，或顾客评价。不同目标的做法和判断指标不一样。"
+    )
+
+
+_FOLLOWUP_PREFIXES = (
+    "那", "这个", "那个", "它", "刚才", "继续", "再", "为什么", "怎么做", "怎么办",
+    "哪些动作", "先别", "明天看", "和上", "与上", "跟上", "比上", "呢",
+)
+_NEW_TOPIC_TOKENS = ("换个话题", "换一个问题", "另一个问题", "另外问", "新话题")
+
+
+def contextualize_restaurant_followup(
+    query: str,
+    parent: Optional[Dict[str, Any]],
+) -> Tuple[str, bool]:
+    """Carry restaurant context only for an explicit dependent follow-up.
+
+    This is deliberately conservative: a standalone question with its own
+    metric and time range starts a fresh topic even when a session exists.
+    """
+    current = (query or "").strip()
+    if not current or not parent or any(token in current for token in _NEW_TOPIC_TOKENS):
+        return current, False
+    parent_query = str(parent.get("parent_query") or "").strip()
+    parent_code = str(parent.get("parent_template_code") or "").strip()
+    if not parent_query or not parent_code.startswith("RESTAURANT_OPS_"):
+        return current, False
+
+    has_followup_signal = (
+        len(current) <= 32
+        and (
+            current.startswith(_FOLLOWUP_PREFIXES)
+            or current.endswith(("呢", "吗", "怎么办", "为什么"))
+            or any(token in current for token in ("相比", "对比", "比呢", "高还是低"))
+        )
+    )
+    if not has_followup_signal:
+        return current, False
+
+    # A fully specified new metric + time phrase is self-contained.  Leading
+    # pronouns such as "那毛利呢" remain dependent and intentionally inherit.
+    standalone_code = match_restaurant_ops(current)
+    leading_dependent = current.startswith(("那", "这个", "那个", "它", "刚才", "继续", "再"))
+    if standalone_code and _uses_relative_sales_window(current) and not leading_dependent:
+        return current, False
+    return f"{parent_query}；继续追问：{current}", True
 
 
 _DEFAULT_METRICS_BY_CODE: Dict[str, Tuple[str, ...]] = {
@@ -713,6 +790,19 @@ async def parse_restaurant_query(
         pending = await _pending_pop(pool, factory_id, session_key)
         if pending is not None:
             return await _parse_continuation(norm_query, pool, factory_id=factory_id, pending=pending)
+
+    optimization_question = optimization_clarification_question(norm_query)
+    if optimization_question:
+        spec = _build_spec(
+            "",
+            norm_query,
+            confidence=1.0,
+            tier="keyword",
+            clarification_needed=True,
+            clarification_question=optimization_question,
+        )
+        await _maybe_register_pending(pool, norm_query, spec, factory_id, session_key)
+        return spec
 
     # ── T1: keyword (ungated, unchanged, <1ms) ──
     try:

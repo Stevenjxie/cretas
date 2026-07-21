@@ -1,4 +1,7 @@
-from smartbi.gold.customer_text import sanitize_customer_ai_text
+from smartbi.gold.customer_text import (
+    has_displayable_business_result,
+    sanitize_customer_ai_text,
+)
 
 
 def test_removes_tool_intent_api_and_table_identifiers():
@@ -28,3 +31,13 @@ def test_removes_tool_intent_api_and_table_identifiers():
 def test_keeps_legitimate_english_business_name():
     cleaned = sanitize_customer_ai_text("Black Pepper Beef 本月毛利率为 62.5%。")
     assert "Black Pepper Beef" in cleaned
+
+
+def test_internal_only_text_never_becomes_fake_completion():
+    cleaned = sanitize_customer_ai_text(
+        "通过调用 income_statement_query 工具获取数据表。"
+    )
+
+    assert cleaned == "没有获得可展示的业务结果，本次不生成结论。"
+    assert "已完成" not in cleaned
+    assert has_displayable_business_result(cleaned) is False

@@ -1,13 +1,9 @@
 """Answer Contract: post-hoc checks that a served OpsAnswer actually covers
 what the RestaurantQuerySpec asked for (design section 4).
 
-Pure text/heuristic validation -- no LLM judge. Tier-agnostic by design
-(validate() accepts any spec+answer), but in v1 the chat.py call sites only
-run it on answers served through the tiered helper (T2 vector / T3 LLM):
-T1 keyword hits keep their legacy byte-identical serve path per the spec's
-zero-regression principle (section 1.3 rule 5 beats section 4 where they
-conflict). Extending enforcement to T1 answers is a deliberate follow-up
-once the contract has soaked on the new tiers.
+Pure text/heuristic validation -- no LLM judge. Tier-agnostic by design.
+All restaurant tiers, including deterministic keyword hits, must pass this
+same contract before they are served.
 """
 from __future__ import annotations
 
@@ -25,6 +21,9 @@ _ELEMENT_LABELS_CN = {
     "margin_value": "毛利数据",
     "store_name": "具体门店",
     "dish_name": "具体菜品",
+    "non_empty_answer": "实际分析结果",
+    "comparison": "您要求的对比周期和高低结论",
+    "margin_integrity": "毛利与营收的一致口径校验",
 }
 
 
@@ -107,6 +106,47 @@ def _dimension_object_named(dimension_label: str, answer_text: str, entities: Li
     return any(name in answer_text for name in entities if name)
 
 
+def _comparison_present(
+    spec: RestaurantQuerySpec,
+    answer_text: str,
+    meta: Optional[Dict[str, Any]],
+) -> bool:
+    comparison = (meta or {}).get("comparison")
+    if not isinstance(comparison, dict) or comparison.get("answered") is not True:
+        return False
+    required_scope = (
+        "primary_start", "primary_end", "baseline_start", "baseline_end",
+    )
+    if not all(comparison.get(key) for key in required_scope):
+        return False
+    has_result = bool(
+        comparison.get("baseline_no_data") is True
+        or (
+            comparison.get("primary_bills") is not None
+            and comparison.get("baseline_bills") is not None
+        )
+    )
+    baseline_label = str(comparison.get("baseline_label") or "")
+    return has_result and bool(
+        (baseline_label and baseline_label in answer_text)
+        or "对比期" in answer_text
+        or "相比" in answer_text
+    )
+
+
+def _margin_integrity_present(meta: Optional[Dict[str, Any]]) -> bool:
+    payload = meta or {}
+    if any(payload.get(key) is True for key in ("rbac_masked", "no_pos_data", "no_data")):
+        return True
+    margin = payload.get("margin")
+    if isinstance(margin, dict):
+        payload = margin
+    return bool(
+        payload.get("marginInvariantPass") is True
+        and payload.get("scope_matches_request", True) is not False
+    )
+
+
 # 2026-07-08 audit fix A-3: resolver 能力表 —— 契约只要求 resolver 真正能满足
 # 的元素。8 码里只有 SALES_SUMMARY 的 resolver 接受 query 并按解析出的时间窗
 # 取数/回显; 只有下面三个能产出毛利金额与盈亏判断。对其余 resolver 提这些
@@ -142,6 +182,9 @@ def required_elements(spec: RestaurantQuerySpec) -> List[str]:
         elements.append("profitability_verdict")
     if spec.wants_margin and spec.intent in MARGIN_CAPABLE_INTENTS:
         elements.append("margin_value")
+        elements.append("margin_integrity")
+    if spec.comparison and spec.intent == "RESTAURANT_OPS_SALES_SUMMARY":
+        elements.append("comparison")
     if "store" in spec.dimensions:
         elements.append("store_name")
     if "dish" in spec.dimensions:
@@ -182,6 +225,8 @@ def validate(
     entities = _collect_named_entities(kpis, meta)
 
     missing: List[str] = []
+    if not text.strip():
+        missing.append("non_empty_answer")
     for element in required:
         if element == "window_label":
             if not _window_echoed(spec, text):
@@ -197,5 +242,11 @@ def validate(
                 missing.append(element)
         elif element == "dish_name":
             if not _dimension_object_named("dish", text, entities):
+                missing.append(element)
+        elif element == "comparison":
+            if not _comparison_present(spec, text, meta):
+                missing.append(element)
+        elif element == "margin_integrity":
+            if not _margin_integrity_present(meta):
                 missing.append(element)
     return ContractResult(missing=missing)

@@ -38,13 +38,13 @@ _OPS_PATTERNS: List[Tuple[str, List[List[str]]]] = [
     (
         "RESTAURANT_OPS_WASTAGE_TOP",
         [["损耗", "浪费", "报损", "腐坏", "过期"],
-         ["最多", "排名", "top", "TOP", "哪个", "哪种", "类型", "占比", "分布", "原因", "多少"]],
+         ["最多", "排名", "前", "top", "TOP", "哪个", "哪种", "类型", "占比", "分布", "原因", "多少"]],
     ),
     # Stocktaking shortage: "盘点/盘亏/亏损" + "哪/top/最多"
     (
         "RESTAURANT_OPS_STOCK_SHORTAGE",
         [["盘点", "盘亏", "盘损", "库存差异", "账实差"],
-         ["哪个", "哪些", "最多", "top", "TOP", "排名", "频率", "经常"]],
+         ["哪个", "哪些", "最多", "前", "top", "TOP", "排名", "频率", "经常"]],
     ),
     # Per-store margin (MUST come BEFORE dish-level gross_margin):
     # "哪家店赚钱" = store scope, not dish scope. Group-1 = store scope,
@@ -86,13 +86,13 @@ _OPS_PATTERNS: List[Tuple[str, List[List[str]]]] = [
     (
         "RESTAURANT_OPS_RECIPE_COST",
         [["食材成本", "配方成本", "菜品成本", "食材费用"],
-         ["最高", "最低", "哪道", "哪个", "top", "TOP", "排名", "多少"]],
+         ["最高", "最低", "前", "哪道", "哪个", "top", "TOP", "排名", "多少"]],
     ),
     # Requisition trend: "领料/领/领用" + "趋势/最多/食材"
     (
         "RESTAURANT_OPS_REQUISITION_TREND",
         [["领料", "领用", "用料", "食材用量"],
-         ["趋势", "最多", "top", "TOP", "哪个食材", "哪些食材", "排名"]],
+         ["趋势", "最多", "前", "top", "TOP", "哪个食材", "哪些食材", "排名"]],
     ),
     # Revenue trend / YoY / MoM analysis (Jun 2026 WS6 routing fix):
     # "同比/环比/趋势/增长/下降/月度变化" → revenue trend served from Gold
@@ -165,11 +165,11 @@ SAMPLE_QUERIES: Dict[str, List[str]] = {
         "这个月损耗分布如何",
         "浪费最多的菜是哪些",
         "报损原因占比",
-        "损耗食材 top 10",
+        "损耗食材前 10 名",
     ],
     "RESTAURANT_OPS_STOCK_SHORTAGE": [
         "最近哪个食材盘亏最严重",
-        "盘点差异最大的食材 top 10",
+        "盘点差异最大的食材前 10 名",
         "盘亏金额排名",
         "哪些食材经常盘亏",
         "账实差距最大的是哪些食材",
@@ -177,7 +177,7 @@ SAMPLE_QUERIES: Dict[str, List[str]] = {
     ],
     "RESTAURANT_OPS_RECIPE_COST": [
         "食材成本最高的菜是哪些",
-        "配方成本 top 10",
+        "配方成本前 10 名",
         "毛利最低的菜品",
         "哪道菜食材费用最贵",
         "菜品成本排行",
@@ -186,7 +186,7 @@ SAMPLE_QUERIES: Dict[str, List[str]] = {
     "RESTAURANT_OPS_REQUISITION_TREND": [
         "最近30天领料趋势",
         "领用最多的食材是哪些",
-        "本月食材用量 top 10",
+        "本月食材用量前 10 名",
         "哪些食材领料频率最高",
         "领料数量趋势",
         "食材消耗排名",
@@ -194,7 +194,7 @@ SAMPLE_QUERIES: Dict[str, List[str]] = {
     "RESTAURANT_OPS_GROSS_MARGIN": [
         "哪道菜毛利最高",
         "菜品毛利率排行",
-        "最赚钱的菜 top 10",
+        "最赚钱的菜前 10 名",
         # Apr 25 2026: tightened from "哪些菜净赚最多" (bare 菜 was removed
         # from group-2 to stop 菜单/菜谱 false-positives) — explicit dish
         # marker now required.
@@ -254,6 +254,17 @@ def match_restaurant_ops(query: str) -> Optional[str]:
     if not query:
         return None
     q = query.strip()
+    # Time comparisons are a sales-summary question, not the generic
+    # all-history trend report.  This must run before the broad "环比/趋势"
+    # pattern so "上个月和上上个月营收相比" keeps both requested periods.
+    if (
+        any(token in q for token in ("营收", "营业额", "销售额", "销售", "订单", "单量", "客单价"))
+        and any(token in q for token in ("对比", "比较", "相比", "比前", "比上", "和前", "和上", "与前", "与上", "环比"))
+        and any(token in q for token in (
+            "今天", "昨天", "前天", "本周", "上周", "本月", "上月", "上个月", "上上月", "上上个月",
+        ))
+    ):
+        return "RESTAURANT_OPS_SALES_SUMMARY"
     # Preserve an explicit overall-margin metric, but keep mixed
     # revenue-plus-margin questions on the richer sales summary resolver.
     if (
@@ -284,6 +295,9 @@ class SalesQuerySpec:
     """Stable query contract for owner-facing sales/profit questions."""
     date_range: Tuple[Optional[date], Optional[date]]
     window_label: str
+    comparison_range: Tuple[Optional[date], Optional[date]]
+    comparison_label: Optional[str]
+    comparison_kind: Optional[str]
     wants_margin: bool
     asks_profitability: bool
     relative_window: bool
@@ -575,6 +589,19 @@ def _resolve_sales_date_range(
     text = (query or "").strip()
     anchor = today or date.today()
 
+    # Calendar-day phrases are resolved before rolling ranges.  They used to
+    # fall through to "全部历史", which made questions such as "昨天营业额比前天
+    # 高还是低" look successful while answering a completely different scope.
+    if (
+        any(token in text for token in ("昨天", "昨日"))
+        and not any(token in text for token in ("今天", "今日"))
+    ):
+        target = anchor - timedelta(days=1)
+        return (target, target), "昨天"
+    if any(token in text for token in ("前天", "前日")):
+        target = anchor - timedelta(days=2)
+        return (target, target), "前天"
+
     relative_match = _relative_period_match(text)
     if relative_match:
         count, unit = relative_match
@@ -621,28 +648,122 @@ def _resolve_sales_date_range(
     return (None, None), "全部历史"
 
 
+def _previous_calendar_month(anchor: date, months_back: int = 1) -> Tuple[date, date]:
+    """Return a complete calendar month before ``anchor`` without dateutil."""
+    first_this_month = anchor.replace(day=1)
+    end = first_this_month - timedelta(days=1)
+    for _ in range(max(0, months_back - 1)):
+        end = end.replace(day=1) - timedelta(days=1)
+    return end.replace(day=1), end
+
+
+def _resolve_sales_comparison(
+    query: Optional[str],
+    *,
+    anchor: date,
+    primary_range: Tuple[Optional[date], Optional[date]],
+    primary_label: str,
+) -> Tuple[Tuple[Optional[date], Optional[date]], Optional[str], Optional[str]]:
+    """Resolve an explicitly requested comparison period.
+
+    The resolver only creates a baseline when the wording actually asks for a
+    comparison.  It never substitutes all history or a convenient rolling
+    window for an unavailable baseline.
+    """
+    text = (query or "").strip()
+    compare_signal = any(token in text for token in (
+        "对比", "比较", "相比", "比前", "比上", "和前", "和上", "与前", "与上",
+        "较前", "较上", "环比",
+    ))
+
+    if (
+        any(token in text for token in ("昨天", "昨日"))
+        and any(token in text for token in ("前天", "前日"))
+    ):
+        target = anchor - timedelta(days=2)
+        return (target, target), "前天", "previous_day"
+
+    if (
+        any(token in text for token in ("今天", "今日"))
+        and any(token in text for token in ("昨天", "昨日"))
+    ):
+        target = anchor - timedelta(days=1)
+        return (target, target), "昨天", "previous_day"
+
+    if "上上个月" in text or "上上月" in text:
+        start, end = _previous_calendar_month(anchor, 2)
+        return (start, end), "上上个月", "previous_month"
+
+    if (
+        any(token in text for token in ("本月", "这个月", "当月"))
+        and any(token in text for token in ("上个月", "上月"))
+    ):
+        start, end = _previous_calendar_month(anchor, 1)
+        return (start, end), "上个月", "previous_month"
+
+    if (
+        any(token in text for token in ("本周", "这周", "本星期", "这星期"))
+        and any(token in text for token in ("上周", "上星期", "上个星期"))
+    ):
+        this_monday = anchor - timedelta(days=anchor.weekday())
+        return (
+            this_monday - timedelta(days=7),
+            this_monday - timedelta(days=1),
+        ), "上周", "previous_week"
+
+    if compare_signal and any(token in text for token in ("上个月", "上月")):
+        # "营收和上个月比" has an implicit current-month primary period.
+        # Preserve an explicitly parsed primary; otherwise make that implicit
+        # period explicit and auditable in _resolve_sales_query_spec below.
+        start, end = _previous_calendar_month(anchor, 1)
+        return (start, end), "上个月", "previous_month"
+
+    if compare_signal and primary_range[0] is not None and primary_range[1] is not None:
+        span = (primary_range[1] - primary_range[0]).days + 1
+        end = primary_range[0] - timedelta(days=1)
+        return (end - timedelta(days=span - 1), end), "上一同长度周期", "previous_period"
+
+    return (None, None), None, None
+
+
 def _uses_relative_sales_window(query: Optional[str]) -> bool:
-    # 2026-07-08 audit fix A-2: "上周" 家族补入 —— _resolve_sales_date_range
-    # 支持上周窗口但这里漏了, 导致 spec.relative_window=False, Phase 2
-    # should_delegate 规则 4 不委托, Java 侧又不认识 "上周" → 纯 "上周营收多少"
-    # 落 Java 全历史窗口。"上个月/上月" 故意不加: Java parseMonthLabel 原生
-    # 支持上月, 留在 Java 是 by-design (Phase 2 spec §3)。
+    # Relative and named calendar windows must be delegated to the Python
+    # resolver so the requested scope and any comparison baseline remain one
+    # auditable contract instead of being split across Java and Python.
     text = (query or "").strip()
     return bool(
         _relative_period_match(text)
         or any(token in text for token in (
             "今天", "今日", "本周", "这周", "本星期", "这星期", "本月", "这个月",
-            "上周", "上星期", "上个星期", "半年",
+            "昨天", "昨日", "前天", "前日", "上周", "上星期", "上个星期",
+            "上个月", "上月", "上上个月", "上上月", "半年", "对比", "比较", "相比", "环比",
         ))
     )
 
 
 def _resolve_sales_query_spec(query: Optional[str], *, today: Optional[date] = None) -> SalesQuerySpec:
-    date_range, window_label = _resolve_sales_date_range(query, today=today)
+    anchor = today or date.today()
+    date_range, window_label = _resolve_sales_date_range(query, today=anchor)
+    comparison_range, comparison_label, comparison_kind = _resolve_sales_comparison(
+        query,
+        anchor=anchor,
+        primary_range=date_range,
+        primary_label=window_label,
+    )
+    # "营收和上个月比" omits the current-month wording, but comparison grammar
+    # makes the primary period unambiguous.  Do not compare all history against
+    # one month.
+    if comparison_label == "上个月" and window_label == "上个月" and not any(
+        token in (query or "") for token in ("本月", "这个月", "当月", "上上个月", "上上月")
+    ):
+        date_range, window_label = (anchor.replace(day=1), anchor), "本月"
     wants_margin, asks_profitability = _profit_intent(query)
     return SalesQuerySpec(
         date_range=date_range,
         window_label=window_label,
+        comparison_range=comparison_range,
+        comparison_label=comparison_label,
+        comparison_kind=comparison_kind,
         wants_margin=wants_margin,
         asks_profitability=asks_profitability,
         relative_window=_uses_relative_sales_window(query),
@@ -722,10 +843,10 @@ async def resolve_wastage_top(
         f"近 {days} 天损耗总览:\n"
         f"- 总损耗 {total['total_count']} 次, {total['total_qty']:.2f} 单位, 损失 ¥{total['total_cost']:.2f}\n"
         f"- 损耗类型分布: {type_summary}\n\n"
-        f"Top {len(top_rows)} 损耗食材 (按数量):\n{top_list_text}\n\n"
+        f"损耗食材前 {len(top_rows)} 名（按数量）:\n{top_list_text}\n\n"
         f"建议动作:\n"
         f"  1. 先把损耗金额最高的类型拆到门店和班次，确认是保存、加工还是报损登记问题。\n"
-        f"  2. 对 Top 损耗食材设一周复盘线，超过日均用量或报损阈值时要求后厨说明原因。\n"
+        f"  2. 对损耗靠前的食材设一周复盘线，超过日均用量或报损阈值时要求后厨说明原因。\n"
         f"  3. 对水产、肉类等高价值食材优先复核收货净重和分切标准，避免损耗被当成正常用料。"
     )
 
@@ -733,7 +854,7 @@ async def resolve_wastage_top(
     if top_rows:
         charts.append({
             "chartType": "bar",
-            "title": f"Top {len(top_rows)} 损耗食材 (近{days}天)",
+            "title": f"近{days}天损耗食材前 {len(top_rows)} 名",
             "xAxis": {"data": [r["name"] for r in top_rows]},
             "series": [{"name": "损耗量", "type": "bar", "data": [r["qty"] for r in top_rows]}],
         })
@@ -756,7 +877,7 @@ async def resolve_wastage_top(
             {"title": "损耗次数", "value": total["total_count"], "rawValue": total["total_count"]},
             {"title": "损耗量", "value": f"{total['total_qty']:.1f}", "rawValue": total["total_qty"]},
             {"title": "损耗金额", "value": f"¥{total['total_cost']:.2f}", "rawValue": total["total_cost"]},
-            {"title": "Top 食材", "value": top_rows[0]["name"] if top_rows else "—", "rawValue": 0},
+            {"title": "损耗最多食材", "value": top_rows[0]["name"] if top_rows else "—", "rawValue": 0},
         ],
         meta={"window_days": days, "top_n": top_n},
     )
@@ -802,7 +923,7 @@ async def resolve_stock_shortage(
     answer = (
         f"近 {days} 天盘点总览:\n"
         f"- 盘点 {total['count']} 次, 盘亏总量 {total['shortage']:.2f}, 盘盈总量 {total['surplus']:.2f}\n\n"
-        f"Top {len(rows)} 盘亏食材:\n{top_text}\n\n"
+        f"盘亏食材前 {len(rows)} 名:\n{top_text}\n\n"
         f"建议动作:\n"
         f"  1. 对盘亏最高的食材先核查领料单、报损单和实际库存照片，找出未登记消耗。\n"
         f"  2. 把连续盘亏食材纳入每日闭店抽盘，连续两天异常就回溯到班组和菜品。\n"
@@ -812,7 +933,7 @@ async def resolve_stock_shortage(
     if rows:
         charts.append({
             "chartType": "bar",
-            "title": f"Top {len(rows)} 盘亏食材 (近{days}天)",
+            "title": f"近{days}天盘亏食材前 {len(rows)} 名",
             "xAxis": {"data": [r["name"] for r in rows]},
             "series": [{"name": "盘亏量", "type": "bar", "data": [r["shortage_qty"] for r in rows]}],
         })
@@ -826,7 +947,7 @@ async def resolve_stock_shortage(
             {"title": "盘点次数", "value": total["count"], "rawValue": total["count"]},
             {"title": "盘亏总量", "value": f"{total['shortage']:.1f}", "rawValue": total["shortage"]},
             {"title": "盘盈总量", "value": f"{total['surplus']:.1f}", "rawValue": total["surplus"]},
-            {"title": "Top 盘亏", "value": rows[0]["name"] if rows else "—", "rawValue": 0},
+            {"title": "盘亏最多食材", "value": rows[0]["name"] if rows else "—", "rawValue": 0},
         ],
         meta={"window_days": days, "top_n": top_n},
     )
@@ -882,14 +1003,14 @@ async def resolve_recipe_cost(
     ]) or "  (尚未录入配方数据或食材单价为空)"
 
     answer = (
-        f"菜品食材成本 Top {len(rows)}:\n{top_text}\n\n"
+        f"菜品食材成本前 {len(rows)} 名:\n{top_text}\n\n"
         "注：成本按标准用量乘以食材单价计算；补齐销售金额后即可计算毛利。"
     )
     charts = []
     if rows:
         charts.append({
             "chartType": "bar",
-            "title": f"Top {len(rows)} 高成本菜品",
+            "title": f"高成本菜品前 {len(rows)} 名",
             "xAxis": {"data": [name_map.get(r["product_source_pk"], r["product_source_pk"]) for r in rows]},
             "series": [{"name": "食材成本", "type": "bar", "data": [r["food_cost"] for r in rows]}],
         })
@@ -902,7 +1023,7 @@ async def resolve_recipe_cost(
         kpis=[
             {"title": "菜品数", "value": len(rows), "rawValue": len(rows)},
             {"title": "最高成本", "value": f"¥{rows[0]['food_cost']:.2f}" if rows else "—", "rawValue": rows[0]["food_cost"] if rows else 0},  # noqa: E501
-            {"title": "Top 菜品", "value": name_map.get(rows[0]["product_source_pk"], "—") if rows else "—", "rawValue": 0},  # noqa: E501
+            {"title": "成本最高菜品", "value": name_map.get(rows[0]["product_source_pk"], "—") if rows else "—", "rawValue": 0},  # noqa: E501
         ],
         meta={"top_n": top_n},
     )
@@ -949,9 +1070,9 @@ async def resolve_requisition_trend(
     answer = (
         f"近 {days} 天领料总览:\n"
         f"- 总量 {total_qty:.2f} 单位, 估算成本 ¥{total_cost:.2f}, {len(trend)} 天有活动\n\n"
-        f"Top {len(top)} 领用食材:\n{top_text}\n\n"
+        f"领用食材前 {len(top)} 名:\n{top_text}\n\n"
         f"建议动作:\n"
-        f"  1. 把 Top 领用食材和畅销菜、损耗榜交叉看，判断是销量驱动还是领用过量。\n"
+        f"  1. 把领用靠前的食材和畅销菜、损耗榜交叉看，判断是销量驱动还是领用过量。\n"
         f"  2. 对领用量稳定但销售没有同步增长的食材，先查备料标准和退料记录。\n"
         f"  3. 对成本占比高的食材设置日领用上限，超过上限需店长复核。"
     )
@@ -964,21 +1085,21 @@ async def resolve_requisition_trend(
     if top:
         charts.append({
             "chartType": "bar",
-            "title": f"Top {len(top)} 领用食材",
+            "title": f"领用食材前 {len(top)} 名",
             "xAxis": {"data": [r["name"] for r in top]},
             "series": [{"name": "领用量", "type": "bar", "data": [r["qty"] for r in top]}],
         })
 
     return OpsAnswer(
         code="RESTAURANT_OPS_REQUISITION_TREND",
-        title=f"近{days}天领料趋势+食材 Top {top_n}",
+        title=f"近{days}天领料趋势与食材前 {top_n} 名",
         answer_text=answer,
         charts=charts,
         kpis=[
             {"title": "总领料量", "value": f"{total_qty:.1f}", "rawValue": total_qty},
             {"title": "估算成本", "value": f"¥{total_cost:.2f}", "rawValue": total_cost},
             {"title": "活动天数", "value": len(trend), "rawValue": len(trend)},
-            {"title": "Top 食材", "value": top[0]["name"] if top else "—", "rawValue": 0},
+            {"title": "领用最多食材", "value": top[0]["name"] if top else "—", "rawValue": 0},
         ],
         meta={"window_days": days, "top_n": top_n},
     )
@@ -1185,6 +1306,30 @@ async def resolve_gross_margin(
     total_rev = sum(item["revenue"] for item in enriched)
     total_rev_with_cost = sum(item["revenue"] for item in with_cost)
     total_profit = sum(float(item["gross_profit"]) for item in with_cost)
+    margin_invariant_pass = bool(
+        math.isfinite(total_profit)
+        and total_profit <= total_rev_with_cost + 0.01
+    )
+    if not margin_invariant_pass:
+        logger.error(
+            "[gross_margin] blocked impossible aggregate factory=%s profit=%s covered_revenue=%s",
+            factory_id, total_profit, total_rev_with_cost,
+        )
+        return OpsAnswer(
+            code="RESTAURANT_OPS_GROSS_MARGIN",
+            title="菜品毛利分析",
+            answer_text=(
+                "毛利口径自检未通过：已覆盖毛利不能高于对应营收。"
+                "本次没有展示异常金额，请先复核食材单位、最近进价和销售范围后重试。"
+            ),
+            charts=[],
+            kpis=[],
+            meta={
+                "marginInvariantPass": False,
+                "marginFormula": "毛利=可计算毛利的营收-对应菜品成本",
+                "cost_covered_revenue": total_rev_with_cost,
+            },
+        )
     avg_margin = (
         total_profit / total_rev_with_cost
         if total_rev_with_cost > 0 else None
@@ -1279,7 +1424,7 @@ async def resolve_gross_margin(
     elif top_slice:
         charts.append({
             "chartType": "bar",
-            "title": f"Top {len(top_slice)} 毛利菜品 ({window_label})",
+            "title": f"毛利前 {len(top_slice)} 名菜品（{window_label}）",
             "xAxis": {"data": [item["name"] for item in top_slice]},
             "series": [
                 {"name": "营收", "type": "bar", "data": [item["revenue"] for item in top_slice]},
@@ -1312,8 +1457,9 @@ async def resolve_gross_margin(
         f"菜品毛利分析（{window_label}）\n"
         f"- 全部销售营收 ¥{total_rev:,.2f}；其中可计算毛利的营收 ¥{total_rev_with_cost:,.2f}，营收覆盖率 {coverage_ratio * 100:.1f}%\n"
         f"- 已覆盖部分毛利 ¥{total_profit:,.2f}，加权毛利率 {margin_text}\n"
+        f"- 计算口径：毛利 = 可计算毛利的营收 - 对应菜品成本；期间与菜品范围完全一致。\n"
         f"- {len(with_cost)}/{len(enriched)} 个销售菜品有完整成本数据。{reference_note}{trend_note}{trend_basis_note}\n\n"
-        f"Top {len(top_slice)} 毛利菜品（按绝对毛利）:\n{top_text}{dragger_text}\n\n"
+        f"毛利前 {len(top_slice)} 名菜品（按绝对毛利）:\n{top_text}{dragger_text}\n\n"
         f"需要关注的低毛利菜品:\n{low_margin_text}\n\n"
         f"建议动作:\n"
         f"  1. 对高营收低毛利菜品先复核售价、赠品和食材规格，优先做小幅提价或份量标准化。\n"
@@ -1340,6 +1486,9 @@ async def resolve_gross_margin(
             "invalid_cost_count": invalid_cost_count,
             "total_dishes": len(enriched),
             "cost_covered_revenue": total_rev_with_cost,
+            "covered_cost": total_rev_with_cost - total_profit,
+            "marginFormula": "毛利=可计算毛利的营收-对应菜品成本",
+            "marginInvariantPass": margin_invariant_pass,
             "cost_coverage_ratio": coverage_ratio,
             "trend_requested": trend_requested,
             "reference_lines": reference_lines,
@@ -1351,6 +1500,7 @@ async def resolve_gross_margin(
 async def resolve_store_margin(
     smartbi_pool, factory_id: str, days: int = 30, top_n: int = 10,
     *, role: Optional[str] = None,
+    date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
 ) -> OpsAnswer:
     """Per-store gross margin: fact_pos_item × fact_pos_transaction.store_id
     × dim_store.name × recipe food_cost. Connects POS bill → store → dish → cost
@@ -1373,6 +1523,11 @@ async def resolve_store_margin(
             kpis=[],
             meta={"rbac_masked": True},
         )
+    exact_start = date_range[0] if date_range else None
+    exact_end = date_range[1] if date_range else None
+    if (exact_start is None) != (exact_end is None):
+        raise ValueError("date_range must include both start and end")
+
     async with smartbi_pool.acquire() as conn:
         await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
         # Per-store per-dish aggregation — need this granularity to compute
@@ -1380,7 +1535,7 @@ async def resolve_store_margin(
         store_dish_rows = await conn.fetch(
             """
             WITH anchor AS (
-                SELECT MAX(t2.date) AS end_date
+                SELECT COALESCE($4::date, MAX(t2.date)) AS end_date
                   FROM fact_pos_item i2
                   JOIN fact_pos_transaction t2 ON t2.id = i2.transaction_id
                   JOIN dim_product p2
@@ -1434,16 +1589,16 @@ async def resolve_store_margin(
               CROSS JOIN anchor
              WHERE i.factory_id = $1 AND t.factory_id = $1
                AND anchor.end_date IS NOT NULL
-               AND t.date >= anchor.end_date - ($2::int)
-               AND t.date <= anchor.end_date
+               AND t.date >= COALESCE($3::date, anchor.end_date - ($2::int))
+               AND t.date <= COALESCE($4::date, anchor.end_date)
              GROUP BY s.store_id, s.name, p.name, p.normalized_name
             """,
-            factory_id, days,
+            factory_id, days, exact_start, exact_end,
         )
         store_bill_rows = await conn.fetch(
             """
             WITH anchor AS (
-                SELECT MAX(t2.date) AS end_date
+                SELECT COALESCE($4::date, MAX(t2.date)) AS end_date
                   FROM fact_pos_item i2
                   JOIN fact_pos_transaction t2 ON t2.id = i2.transaction_id
                   JOIN dim_product p2
@@ -1465,25 +1620,39 @@ async def resolve_store_margin(
               CROSS JOIN anchor
              WHERE t.factory_id = $1
                AND anchor.end_date IS NOT NULL
-               AND t.date >= anchor.end_date - ($2::int)
-               AND t.date <= anchor.end_date
+               AND t.date >= COALESCE($3::date, anchor.end_date - ($2::int))
+               AND t.date <= COALESCE($4::date, anchor.end_date)
              GROUP BY t.store_id
             """,
-            factory_id, days,
+            factory_id, days, exact_start, exact_end,
         )
 
     if not store_dish_rows:
+        requested_label = (
+            f"{_date_text(exact_start)} 至 {_date_text(exact_end)}"
+            if exact_start and exact_end else f"近 {days} 天"
+        )
         return OpsAnswer(
             code="RESTAURANT_OPS_STORE_MARGIN",
-            title=f"门店毛利分析 (近{days}天)",
-            answer_text=f"近 {days} 天没有可用的收银销售数据，请先导入营业账单。",
+            title=f"门店毛利分析（{requested_label}）",
+            answer_text=f"{requested_label}没有可用的收银销售数据，没有用其他时间范围替代。请先确认营业账单已同步。",
             charts=[], kpis=[],
-            meta={"window_days": days, "no_pos_data": True},
+            meta={
+                "window_days": days,
+                "window_start": _date_text(exact_start) if exact_start else None,
+                "window_end": _date_text(exact_end) if exact_end else None,
+                "scope_matches_request": True,
+                "no_pos_data": True,
+            },
         )
 
     window_start = min((r["window_start"] for r in store_dish_rows if r["window_start"]), default=None)
     window_end = max((r["window_end"] for r in store_dish_rows if r["window_end"]), default=None)
-    window_label = _actual_window_text(window_start, window_end, days)
+    window_label = (
+        f"{_date_text(exact_start)} 至 {_date_text(exact_end)}"
+        if exact_start and exact_end
+        else _actual_window_text(window_start, window_end, days)
+    )
 
     # Lookup cretas product_types + dim_product_alias (P0-2) + agg_product_cost for food cost.
     dish_names = list({r["normalized_name"] for r in store_dish_rows})
@@ -1551,6 +1720,41 @@ async def resolve_store_margin(
         if total_rev_with_cost > 0 else None
     )
     avg_rate = total_profit / total_rev_with_cost if total_profit is not None else None
+    margin_invariant_pass = bool(
+        total_profit is None
+        or (
+            math.isfinite(float(total_profit))
+            and float(total_profit) <= float(total_rev_with_cost) + 0.01
+        )
+    )
+    covered_cost = (
+        total_rev_with_cost - float(total_profit)
+        if total_profit is not None and margin_invariant_pass else None
+    )
+    if not margin_invariant_pass:
+        logger.error(
+            "[store_margin] blocked impossible aggregate factory=%s profit=%s covered_revenue=%s range=%s..%s",
+            factory_id, total_profit, total_rev_with_cost, exact_start, exact_end,
+        )
+        return OpsAnswer(
+            code="RESTAURANT_OPS_STORE_MARGIN",
+            title=f"门店毛利对比（{window_label}）",
+            answer_text=(
+                "毛利口径自检未通过：已覆盖毛利不能高于对应营收。"
+                "本次没有展示异常金额、排名或图表，请先复核食材单位、最近进价和销售范围后重试。"
+            ),
+            charts=[],
+            kpis=[],
+            meta={
+                "window_days": days,
+                "requested_window_start": _date_text(exact_start) if exact_start else None,
+                "requested_window_end": _date_text(exact_end) if exact_end else None,
+                "scope_matches_request": True,
+                "totalRevenueWithCost": total_rev_with_cost,
+                "marginFormula": "毛利=可计算毛利的营收-对应菜品成本",
+                "marginInvariantPass": False,
+            },
+        )
     coverage_ratio = total_rev_with_cost / total_rev if total_rev > 0 else 0.0
     invalid_cost_count = sum(s["invalid_cost_dishes"] for s in store_list)
 
@@ -1562,7 +1766,7 @@ async def resolve_store_margin(
 
     charts = [{
         "chartType": "bar",
-        "title": f"Top {len(top_slice)} 毛利门店",
+        "title": f"毛利前 {len(top_slice)} 名门店",
         "xAxis": {"data": [s["name"] for s in top_slice]},
         "series": [
             {"name": "已覆盖营收", "type": "bar", "data": [s["revenue_with_cost"] for s in top_slice]},
@@ -1580,7 +1784,11 @@ async def resolve_store_margin(
     margin_summary = (
         f"已覆盖部分毛利 ¥{total_profit:,.2f}，加权毛利率 {avg_rate * 100:.1f}%"
         if total_profit is not None and avg_rate is not None
-        else "成本完整的销售数据不足，毛利和毛利率暂不可计算"
+        else (
+            "毛利口径自检未通过，已停止展示异常金额"
+            if not margin_invariant_pass
+            else "成本完整的销售数据不足，毛利和毛利率暂不可计算"
+        )
     )
     invalid_cost_note = (
         f"另有 {invalid_cost_count} 个菜品成本值明显异常，已排除；请复核食材单位和最近进价。"
@@ -1591,18 +1799,20 @@ async def resolve_store_margin(
         f"- 全部营收 ¥{total_rev:,.2f}；可计算毛利的营收 ¥{total_rev_with_cost:,.2f}，"
         f"覆盖率 {coverage_ratio * 100:.1f}%\n"
         f"- {margin_summary}。缺成本菜品已排除，不会按零成本计算。{invalid_cost_note}\n\n"
-        f"Top {len(top_slice)} 毛利门店:\n{top_text}{weak_store_text}\n\n"
+        f"毛利前 {len(top_slice)} 名门店:\n{top_text}{weak_store_text}\n\n"
+        f"计算口径：毛利 = 可计算毛利的营收 - 对应菜品成本；"
+        f"仅使用同一时间范围、同一门店范围的数据。\n\n"
         f"建议动作:\n"
         f"  1. 把第一名门店的高毛利菜品组合、套餐结构和时段客流拆出来，作为其他门店对标模板。\n"
         f"  2. 对毛利率低但营收不低的门店，优先查折扣、赠品和后厨出品标准，避免销售越多利润越薄。\n"
         f"  3. 对菜品成本覆盖率低的门店，先补齐配方成本再做绩效排序。"
     )
     if charts:
-        charts[0]["title"] = f"Top {len(top_slice)} 毛利门店 ({window_label})"
+        charts[0]["title"] = f"毛利前 {len(top_slice)} 名门店（{window_label}）"
 
     return OpsAnswer(
         code="RESTAURANT_OPS_STORE_MARGIN",
-        title=f"门店毛利对比 (近{days}天)",
+        title=f"门店毛利对比（{window_label}）",
         answer_text=answer,
         charts=charts,
         kpis=[
@@ -1615,8 +1825,20 @@ async def resolve_store_margin(
             "window_days": days, "store_count": len(store_list),
             "window_start": _date_text(window_start) if window_start else None,
             "window_end": _date_text(window_end) if window_end else None,
+            "requested_window_start": _date_text(exact_start) if exact_start else None,
+            "requested_window_end": _date_text(exact_end) if exact_end else None,
+            "scope_matches_request": bool(
+                exact_start is None
+                or (
+                    window_start is not None and window_end is not None
+                    and window_start >= exact_start and window_end <= exact_end
+                )
+            ),
             "totalRevenue": total_rev, "totalRevenueWithCost": total_rev_with_cost,
             "totalProfit": total_profit, "avgRate": avg_rate,
+            "coveredCost": covered_cost,
+            "marginFormula": "毛利=可计算毛利的营收-对应菜品成本",
+            "marginInvariantPass": margin_invariant_pass,
             "costCoverageRatio": coverage_ratio,
             "invalidCostCount": invalid_cost_count,
             "stores": [
@@ -1645,6 +1867,14 @@ async def resolve_sales_summary(
     spec = _resolve_sales_query_spec(query, today=anchor)
     date_range, window_label = spec.date_range, spec.window_label
     summary = await finance_summary(smartbi_pool, factory_id, date_range, top_n_stores=5)
+    comparison_summary: Optional[Dict[str, Any]] = None
+    if spec.comparison_label and spec.comparison_range[0] and spec.comparison_range[1]:
+        comparison_summary = await finance_summary(
+            smartbi_pool,
+            factory_id,
+            spec.comparison_range,
+            top_n_stores=5,
+        )
     stores_data = await store_comparison(smartbi_pool, factory_id, date_range)
     stores = stores_data.get("stores") or []
     weak_stores = stores_data.get("weakStores") or []
@@ -1655,6 +1885,23 @@ async def resolve_sales_summary(
     day_count = int(summary.get("day_count") or 0)
     store_count = int(summary.get("store_count") or 0)
     top_stores = summary.get("top_stores") or []
+    actual_window = (
+        f"{window_label}（{_date_text(date_range[0])} 至 {_date_text(date_range[1])}）"
+        if date_range[0] and date_range[1] else window_label
+    )
+
+    comparison_meta: Optional[Dict[str, Any]] = None
+    if spec.comparison_label and spec.comparison_range[0] and spec.comparison_range[1]:
+        comparison_meta = {
+            "answered": True,
+            "kind": spec.comparison_kind,
+            "primary_label": window_label,
+            "primary_start": _date_text(date_range[0]) if date_range[0] else None,
+            "primary_end": _date_text(date_range[1]) if date_range[1] else None,
+            "baseline_label": spec.comparison_label,
+            "baseline_start": _date_text(spec.comparison_range[0]),
+            "baseline_end": _date_text(spec.comparison_range[1]),
+        }
 
     def _money(v: Optional[float]) -> str:
         if not can_see_money:
@@ -1668,12 +1915,18 @@ async def resolve_sales_summary(
             code="RESTAURANT_OPS_SALES_SUMMARY",
             title="经营销售概览",
             answer_text=(
-                f"{window_label}还没有可用的营收和订单数据。建议先确认营业流水已经同步，"
-                "再看总营收、平均每单和门店差异。"
+                f"{actual_window}没有可用的营收和订单数据，没有用全部历史或其他日期替代。"
+                "请先确认营业流水已经同步，再按同一时间范围重试。"
             ),
             charts=[],
             kpis=[],
-            meta={"no_data": True},
+            meta={
+                "no_data": True,
+                "window_label": window_label,
+                "window_start": _date_text(date_range[0]) if date_range[0] else None,
+                "window_end": _date_text(date_range[1]) if date_range[1] else None,
+                "comparison": comparison_meta,
+            },
         )
 
     top_line = ""
@@ -1698,17 +1951,26 @@ async def resolve_sales_summary(
             # role 必传 (2026-07-08 audit fix): resolve_store_margin 现在自带
             # PRICE_VIEW_ROLES 门, 不传 role 会拿到脱敏空结果破坏本函数的毛利段;
             # 此分支本就在 can_see_money=True 内, 透传保持行为一致。
+            margin_kwargs: Dict[str, Any] = {
+                "days": margin_days,
+                "top_n": 5,
+                "role": role,
+            }
+            if "date_range" in inspect.signature(resolve_store_margin).parameters:
+                margin_kwargs["date_range"] = (
+                    date_range if date_range[0] and date_range[1] else None
+                )
             margin_result = await resolve_store_margin(
                 smartbi_pool,
                 factory_id,
-                days=margin_days,
-                top_n=5,
-                role=role,
+                **margin_kwargs,
             )
             margin_meta = margin_result.meta or {}
             total_profit = margin_meta.get("totalProfit")
             avg_rate = margin_meta.get("avgRate")
-            if total_profit is not None:
+            scope_ok = bool(margin_meta.get("scope_matches_request", True))
+            invariant_ok = bool(margin_meta.get("marginInvariantPass", True))
+            if total_profit is not None and scope_ok and invariant_ok:
                 verdict = ""
                 if spec.asks_profitability:
                     if float(total_profit) > 0:
@@ -1719,14 +1981,73 @@ async def resolve_sales_summary(
                         verdict = "按已配置成本卡看，这段时间基本打平。"
                 rate_text = f"，毛利率约 {float(avg_rate) * 100:.1f}%" if avg_rate is not None else ""
                 margin_line = f"{verdict}毛利约 {_money(float(total_profit))}{rate_text}（按已配置成本卡的菜品估算）。"
+            elif not scope_ok:
+                margin_line = "毛利与营收的时间范围不一致，已停止展示，避免把不同口径的数据放在一起比较。"
+            elif not invariant_ok:
+                margin_line = "毛利口径自检未通过，已停止展示异常金额；请先复核成本单位和销售范围。"
             else:
                 margin_line = "毛利暂时无法可靠计算，原因是这段时间的菜品成本卡或收银明细还不完整。"
         else:
             margin_line = "毛利属于成本/价格权限，当前角色不能查看金额；可以先看订单、客单价和门店差异。"
 
+    comparison_line = ""
+    if comparison_meta is not None:
+        baseline = comparison_summary or {}
+        baseline_revenue = float(baseline.get("total_revenue") or 0.0)
+        baseline_bills = int(baseline.get("bill_count") or 0)
+        baseline_avg_bill = baseline.get("avg_bill_value")
+        baseline_range_text = (
+            f"{spec.comparison_label}（{comparison_meta['baseline_start']} 至 {comparison_meta['baseline_end']}）"
+        )
+        if baseline_bills <= 0:
+            comparison_meta.update({"baseline_no_data": True})
+            comparison_line = (
+                f"对比期{baseline_range_text}没有可用数据，因此不能判断高低；"
+                "没有用全部历史或其他月份代替。"
+            )
+        else:
+            bill_delta = bill_count - baseline_bills
+            bill_pct = (bill_delta / baseline_bills * 100.0) if baseline_bills else None
+            comparison_meta.update({
+                "baseline_no_data": False,
+                "primary_revenue": total_revenue if can_see_money else None,
+                "baseline_revenue": baseline_revenue if can_see_money else None,
+                "primary_bills": bill_count,
+                "baseline_bills": baseline_bills,
+                "bill_delta": bill_delta,
+                "bill_change_pct": bill_pct,
+            })
+            order_direction = "增加" if bill_delta > 0 else "减少" if bill_delta < 0 else "持平"
+            order_text = (
+                f"订单数{order_direction} {abs(bill_delta):,} 单"
+                + (f"（{abs(bill_pct):.1f}%）" if bill_pct is not None else "")
+            )
+            if can_see_money:
+                revenue_delta = total_revenue - baseline_revenue
+                revenue_pct = (
+                    revenue_delta / baseline_revenue * 100.0
+                    if baseline_revenue else None
+                )
+                comparison_meta.update({
+                    "revenue_delta": revenue_delta,
+                    "revenue_change_pct": revenue_pct,
+                    "primary_avg_bill": float(avg_bill) if avg_bill is not None else None,
+                    "baseline_avg_bill": float(baseline_avg_bill) if baseline_avg_bill is not None else None,
+                })
+                direction = "高" if revenue_delta > 0 else "低" if revenue_delta < 0 else "持平"
+                revenue_text = f"营收{direction} {_money(abs(revenue_delta))}"
+                if revenue_pct is not None:
+                    revenue_text += f"（{abs(revenue_pct):.1f}%）"
+                comparison_line = (
+                    f"与{baseline_range_text}相比，{revenue_text}，{order_text}。"
+                )
+            else:
+                comparison_line = f"与{baseline_range_text}相比，{order_text}。"
+
     answer = (
-        f"{window_label}经营能看：覆盖 {day_count} 天、{store_count} 家门店，共 {bill_count:,} 单。"
+        f"{actual_window}经营能看：覆盖 {day_count} 天、{store_count} 家门店，共 {bill_count:,} 单。"
         f"总营收 {_money(total_revenue)}，平均每单 {avg_text}。"
+        f"{comparison_line}"
         f"{margin_line}"
         f"{top_line}{weak_line}"
         "建议：先把低于中位的门店拉出来，看是客流少、平均每单低，还是折扣过重；"
@@ -1736,7 +2057,7 @@ async def resolve_sales_summary(
     chart_stores = top_stores[:5]
     charts = [{
         "chartType": "bar",
-        "title": "门店营收 Top 5" if can_see_money else "门店订单 Top 5",
+        "title": "门店营收前 5 名" if can_see_money else "门店订单前 5 名",
         "xAxis": {"data": [s["store_name"] for s in chart_stores]},
         "series": [{
             "name": "营收" if can_see_money else "订单数",
@@ -1756,7 +2077,12 @@ async def resolve_sales_summary(
          "rawValue": float(avg_bill) if can_see_money and avg_bill is not None else None},
         {"title": "门店数", "value": store_count, "rawValue": store_count},
     ]
-    if spec.wants_margin and margin_meta.get("totalProfit") is not None:
+    if (
+        spec.wants_margin
+        and margin_meta.get("totalProfit") is not None
+        and margin_meta.get("scope_matches_request", True) is not False
+        and margin_meta.get("marginInvariantPass", True) is not False
+    ):
         kpis.append({
             "title": "毛利",
             "value": _money(float(margin_meta["totalProfit"])) if can_see_money else None,
@@ -1785,6 +2111,7 @@ async def resolve_sales_summary(
             "price_view": can_see_money,
             "store_comparison_count": len(stores),
             "margin": margin_meta if spec.wants_margin else None,
+            "comparison": comparison_meta,
             "asks_profitability": spec.asks_profitability,
         },
     )

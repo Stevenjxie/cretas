@@ -21,6 +21,8 @@ from smartbi.gold.restaurant_intent import (
     build_resolver_query,
     clear_route_cache,
     clear_tenant_gate_cache,
+    contextualize_restaurant_followup,
+    optimization_clarification_question,
     parse_restaurant_query,
     _build_spec,
     _detect_comparison,
@@ -490,7 +492,9 @@ def test_contract_missing_profitability_verdict():
 def test_contract_profitability_verdict_present_passes():
     spec = _spec(asks_profitability=True, wants_margin=True)
     answer = "这段时间是赚钱的，毛利¥30万，毛利率30%"
-    result = contract.validate(spec, answer, kpis=[], meta={})
+    result = contract.validate(
+        spec, answer, kpis=[], meta={"marginInvariantPass": True},
+    )
     assert result.passed
 
 
@@ -506,7 +510,7 @@ def test_contract_margin_explicit_gap_disclosure_passes():
     itself compliant -- not a contract failure."""
     spec = _spec(wants_margin=True)
     answer = "毛利属于成本/价格权限，当前角色不能查看金额；可以先看订单、客单价和门店差异。"
-    result = contract.validate(spec, answer, kpis=[], meta={})
+    result = contract.validate(spec, answer, kpis=[], meta={"rbac_masked": True})
     assert "margin_value" not in result.missing
 
 
@@ -532,14 +536,106 @@ def test_contract_all_satisfied_passes():
         asks_profitability=True, wants_margin=True,
     )
     answer = "今天总营收¥5万，是赚钱的，毛利¥1.5万，毛利率30%"
-    result = contract.validate(spec, answer, kpis=[], meta={})
+    result = contract.validate(
+        spec,
+        answer,
+        kpis=[],
+        meta={"marginInvariantPass": True, "scope_matches_request": True},
+    )
     assert result.passed
     assert result.missing == []
+
+
+def test_contract_requires_explicit_margin_self_check():
+    spec = _spec(wants_margin=True)
+    result = contract.validate(
+        spec,
+        "毛利为¥30万，毛利率30%",
+        kpis=[],
+        meta={},
+    )
+
+    assert "margin_integrity" in result.missing
 
 
 def test_required_elements_empty_for_bare_query():
     spec = _spec()  # no time, no margin, no profitability, no dimensions
     assert contract.required_elements(spec) == []
+
+
+def test_contract_rejects_empty_answer_even_for_bare_query():
+    result = contract.validate(_spec(), "", kpis=[], meta={})
+    assert result.passed is False
+    assert result.missing == ["non_empty_answer"]
+
+
+def test_contextualize_only_dependent_restaurant_followups():
+    parent = {
+        "parent_query": "本月营收趋势怎么样",
+        "parent_template_code": "RESTAURANT_OPS_SALES_SUMMARY",
+    }
+    effective, inherited = contextualize_restaurant_followup("那和上个月比呢", parent)
+    assert inherited is True
+    assert "本月营收趋势怎么样" in effective
+    assert "那和上个月比呢" in effective
+
+    standalone, inherited = contextualize_restaurant_followup("昨天营业额是多少", parent)
+    assert inherited is False
+    assert standalone == "昨天营业额是多少"
+
+    switched, inherited = contextualize_restaurant_followup("换个话题，看看库存预警", parent)
+    assert inherited is False
+    assert switched.startswith("换个话题")
+
+
+def test_generic_optimization_requires_business_objective():
+    question = optimization_clarification_question("帮我优化一下餐厅经营")
+    assert question is not None
+    assert "营收" in question and "毛利率" in question and "损耗" in question
+    assert optimization_clarification_question("优化慢销菜品") is None
+
+
+@pytest.mark.asyncio
+async def test_generic_optimization_parses_as_clarification_without_llm():
+    spec = await parse_restaurant_query(
+        "帮我优化一下餐厅经营",
+        object(),
+        factory_id="F_REST",
+    )
+    assert spec is not None
+    assert spec.intent == ""
+    assert spec.clarification_needed is True
+    assert "优先优化哪一个目标" in spec.clarification_question
+
+
+def test_contract_requires_executed_comparison_metadata():
+    spec = _spec(comparison="previous_month")
+    missing = contract.validate(
+        spec,
+        "本月营收比上个月高",
+        kpis=[],
+        meta={},
+    )
+    assert "comparison" in missing.missing
+
+    passed = contract.validate(
+        spec,
+        "本月营收与上个月相比更高",
+        kpis=[],
+        meta={
+            "comparison": {
+                "answered": True,
+                "primary_start": "2026-07-01",
+                "primary_end": "2026-07-21",
+                "baseline_start": "2026-06-01",
+                "baseline_end": "2026-06-30",
+                "baseline_label": "上个月",
+                "primary_bills": 100,
+                "baseline_bills": 80,
+            },
+        },
+    )
+    assert "comparison" not in passed.missing
 
 
 # ─── 7. 2026-07-07 live-verify follow-ups (paraphrase slot gaps + cache) ───
@@ -706,7 +802,7 @@ def test_contract_scoping_by_resolver_capability():
         wants_margin=True, asks_profitability=True,
     )
     assert contract.required_elements(sales_spec) == [
-        "window_label", "profitability_verdict", "margin_value",
+        "window_label", "profitability_verdict", "margin_value", "margin_integrity",
     ]
 
     dish_margin_spec = _spec_for_contract(
@@ -716,7 +812,9 @@ def test_contract_scoping_by_resolver_capability():
     )
     # window not required (resolver fixed 30d window), margin IS required,
     # dish naming still required.
-    assert contract.required_elements(dish_margin_spec) == ["margin_value", "dish_name"]
+    assert contract.required_elements(dish_margin_spec) == [
+        "margin_value", "margin_integrity", "dish_name",
+    ]
 
 
 def _spec_for_contract(**overrides):

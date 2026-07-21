@@ -231,11 +231,17 @@ class GoldFinanceClientTest {
     @Test
     void fetchTieredIntentAnswer_4arg_withSessionId_includesSessionIdInBody() throws Exception {
         server.enqueue(new MockResponse().setResponseCode(200).setBody("{\"delegate\":false}"));
+        MockHttpServletRequest servletRequest = new MockHttpServletRequest();
+        servletRequest.setAttribute("userId", 88L);
+        servletRequest.setAttribute("role", "restaurant_manager");
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(servletRequest));
 
         client.fetchTieredIntentAnswer("F001", "最近两个月", "restaurant_peak_month_gold", "sess-abc-123");
 
         RecordedRequest req = server.takeRequest();
         String body = req.getBody().readUtf8();
+        assertEquals("88", req.getHeader("X-User-Id"));
+        assertEquals("restaurant_manager", req.getHeader("X-User-Role"));
         assertTrue(body.contains("\"session_id\":\"sess-abc-123\""), body);
         assertTrue(body.contains("\"factory_id\":\"F001\""), body);
         assertTrue(body.contains("\"query\":\"最近两个月\""), body);
