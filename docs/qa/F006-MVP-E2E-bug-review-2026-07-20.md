@@ -570,7 +570,7 @@
 - **修复**：原料侧和供应商详情统一调用同一 `SupplierMaterial` API，支持搜索关联、编辑关系属性、唯一首选、停用与双向刷新；已关联供应商从候选排除，后端继续执行同厂身份、状态、重复和首选唯一门禁。采购历史继续作为独立只读语义，不冒充关系配置。
 - **修改文件**：`web-admin/src/api/supplierManagement.ts`、`web-admin/src/views/warehouse/material-types/list.vue`、`web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue`、`SupplierMaterialDTO/Request/ServiceImpl` 及目标测试。
 - **测试**：`SupplierMaterialServiceImplTest`、`SupplierMaterialPurchaseSpecServiceImplTest` 与 Web `supplierMaterialRelation.source.spec.ts`；已纳入本批后端37项/Web14项目标测试并通过。Repository 变更的真实 JPA Context `SupplierRepositoryQueryValidationTest` 1/1 PASS。
-- **Commit/PR/main 状态**：`TARGET_TEST_PASSED_PENDING_PR_MAIN`；精确 commit/PR/main 在合入回执中给出。
+- **Commit/PR/main 状态**：实现提交 `94bfdb74071d94e41c87426e91b190bf471ece12`；PR [#1557](https://github.com/Stevenjxie/cretas/pull/1557) 已合入；main `9de6436d1fe49eb9cadfa24c6de893cb9eb74cfc`。
 - **部署状态**：`NOT_DEPLOYED`。
 - **回归状态**：`CODE_AND_TARGET_TEST_COMPLETE`；生产业务 mutation=0，未修改任何现有供应商、物料或关系，未触碰 LIUSHANMEN。
 
@@ -584,7 +584,7 @@
 - **修复**：供应关系复用共享 `UnitSelect/displayUnit`；默认采购价按采购单位明确标注；原料参考价作为所有物料类型可选档案值；采购单只能选择当前供应商 ACTIVE 关系和规格，自动带入供应关系/规格/物料参考价并标注来源；后端按 `PurchaseSpec → SupplierMaterial → MaterialType` 受控解析单位、换算与价格，非法单位/规格明确拒绝，null 不再变0，订单行继续保存快照。
 - **修改文件**：`RawMaterialTypeDTO/ServiceImpl`、`SupplierMaterial*DTO/Request/ServiceImpl`、`SupplierMaterialPurchaseSpec*`、`PurchaseServiceImpl`、采购/原料/供应商 Web 页面及对应目标测试。
 - **测试**：覆盖供应关系单位价格、物料参考价兜底、规格包装换算、单位错配拒绝、缺价不伪造；已纳入本批后端37项/Web14项目标测试并通过。
-- **Commit/PR/main 状态**：`TARGET_TEST_PASSED_PENDING_PR_MAIN`；精确 commit/PR/main 在合入回执中给出。
+- **Commit/PR/main 状态**：实现提交 `94bfdb74071d94e41c87426e91b190bf471ece12`；PR [#1557](https://github.com/Stevenjxie/cretas/pull/1557) 已合入；main `9de6436d1fe49eb9cadfa24c6de893cb9eb74cfc`。
 - **部署状态**：`NOT_DEPLOYED`。
 - **回归状态**：`CODE_AND_TARGET_TEST_COMPLETE`；未修改生产采购单、供应商、物料或价格。
 
@@ -598,7 +598,7 @@
 - **修复**：主按钮直接调用普通新建表单；移除方式选择弹窗及三项废弃入口；AI 录入入口与普通表单原业务契约保持。
 - **修改文件**：`web-admin/src/views/procurement/orders/list.vue`、采购入口源契约测试。
 - **测试**：Web `orderCreationContracts.source.spec.ts` 覆盖直接打开、废弃入口不可见与 AI 入口保留；已纳入本批 Web14项目标测试并通过。
-- **Commit/PR/main 状态**：`TARGET_TEST_PASSED_PENDING_PR_MAIN`；精确 commit/PR/main 在合入回执中给出。
+- **Commit/PR/main 状态**：实现提交 `94bfdb74071d94e41c87426e91b190bf471ece12`；PR [#1557](https://github.com/Stevenjxie/cretas/pull/1557) 已合入；main `9de6436d1fe49eb9cadfa24c6de893cb9eb74cfc`。
 - **部署状态**：`NOT_DEPLOYED`。
 - **回归状态**：`CODE_AND_TARGET_TEST_COMPLETE`；未创建或修改生产采购订单。
 
@@ -613,7 +613,7 @@
 - **修改文件**：`PurchaseController/Service/Repository`、`WorkflowInstanceController`、`WorkflowEngineService/Impl`、`ApprovalWorkflowInstanceRepository`、OA DTO、采购详情/待办/路由/工作台及目标测试。
 - **测试**：`PurchaseServiceOaSubmissionTest` 覆盖首次提交、自动完成、重复幂等、孤儿已提交拒绝、缺处理人事务回滚、终态动作纯读；`PurchaseControllerOaOnlyTest` 覆盖所有旧审批入口410；WorkflowEngineServiceImplTest 的 Redis afterCommit 精确测试 1/1 PASS；Web OA 契约测试覆盖正确个人视图、待办入口、节点CAS与无业务页审批。已纳入本批后端37项/Web14项目标测试并通过；真实 JPA Context 1/1 PASS。
 - **历史单安全恢复方案**：当前任务不操作 `PO-20260721-0001`。部署后仍先 query-only 证明它严格为同厂 `SUBMITTED` 且无实例；只有用户另行授权后，才允许使用代码支持的受限修复事务，以订单ID+当时唯一有效模板摘要构造幂等键，只补缺失 OA instance/首节点任务/审计读模型，不改订单行、金额、收货、库存或财务事实；同摘要重放 no-op，不同/歧义模板拒绝。
-- **Commit/PR/main 状态**：`TARGET_TEST_PASSED_PENDING_PR_MAIN`；精确 commit/PR/main 在合入回执中给出。
+- **Commit/PR/main 状态**：实现提交 `94bfdb74071d94e41c87426e91b190bf471ece12`；PR [#1557](https://github.com/Stevenjxie/cretas/pull/1557) 已合入；main `9de6436d1fe49eb9cadfa24c6de893cb9eb74cfc`。
 - **部署状态**：`NOT_DEPLOYED`。
 - **回归状态**：`CODE_AND_TARGET_TEST_COMPLETE`；生产业务 mutation=0，未取消、重提、重建或桥接 `PO-20260721-0001`。
 

@@ -32,3 +32,12 @@
 - 验收：Web 目标测试 13/13 PASS；`vue-tsc -b` PASS；正式 Web release build PASS（735 assets），构建仅执行一次并生成可信清单。
 - 生产边界：后端、数据库和生产物料均未修改；没有执行历史回填；生产业务 mutation=0；未触碰 LIUSHANMEN。合入后仅发布 Web。
 - Scope 锁：已释放。
+
+## F006 供应关系、采购契约与统一 OA 收尾
+
+- 状态：`merged`；Owner：`/root`。
+- 实现 commit：`94bfdb74071d94e41c87426e91b190bf471ece12`；PR：[#1557](https://github.com/Stevenjxie/cretas/pull/1557)；main：`9de6436d1fe49eb9cadfa24c6de893cb9eb74cfc`。
+- 完成范围：`ENH-F006-MATERIAL-SUPPLIER-BIDIRECTIONAL-001`、`BUG-F006-PURCHASE-ORDER-CREATE-ENTRY-001`、`BUG-F006-PURCHASE-ORDER-MATERIAL-SPEC-001`（含供应商价格/单位契约）、`BUG-F006-R3-OA-PROCUREMENT-001`。
+- 验证：后端目标测试37项、Web目标测试14项、真实JPA Context 1项、`vue-tsc`、Web release manifest build 均通过。
+- 边界：`NOT_DEPLOYED`；生产业务 mutation=0；`PO-20260721-0001` 未取消、重提、重建或桥接；未触碰 LIUSHANMEN。
+- Scope 锁：以上四项已归档并释放。
