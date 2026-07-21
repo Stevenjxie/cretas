@@ -1,5 +1,8 @@
 package com.cretas.aims.service.workflow.impl;
 
+import com.cretas.aims.entity.config.ApprovalWorkflow;
+import com.cretas.aims.entity.config.ApprovalWorkflowNode;
+import com.cretas.aims.entity.workflow.ApprovalHistory;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus;
 import com.cretas.aims.repository.workflow.ApprovalHistoryRepository;
@@ -21,6 +24,8 @@ import org.springframework.data.domain.Pageable;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -183,6 +188,84 @@ class WorkflowEngineServiceImplPersonalViewTest {
         verifyNoInteractions(instanceRepository);
     }
 
+    @Test
+    @DisplayName("findActedBy: excludes initiator-only records by delegating to actor query")
+    void findActedBy_delegates_to_actor_query() {
+        Pageable pageable = PageRequest.of(0, 20);
+        ApprovalWorkflowInstance acted = ApprovalWorkflowInstance.builder()
+                .id("inst-acted")
+                .factoryId(FACTORY_ID)
+                .workflowId("wf-acted")
+                .moduleCode("PURCHASE_ORDER")
+                .businessEntityId("PO-ACTED")
+                .status(InstanceStatus.APPROVED)
+                .currentNodeIds(List.of())
+                .initiatedBy(999L)
+                .build();
+        when(instanceRepository.findActedBy(FACTORY_ID, USER_ID, pageable))
+                .thenReturn(new PageImpl<>(List.of(acted), pageable, 1));
+
+        Page<ApprovalWorkflowInstance> result =
+                engine.findActedBy(FACTORY_ID, USER_ID, pageable);
+
+        assertEquals(List.of("inst-acted"),
+                result.getContent().stream().map(ApprovalWorkflowInstance::getId).toList());
+        verify(instanceRepository).findActedBy(FACTORY_ID, USER_ID, pageable);
+    }
+
+    @Test
+    @DisplayName("findCopiedTo: matches persisted notify transition by role and keeps factory scope")
+    void findCopiedTo_matches_notify_role() {
+        Pageable pageable = PageRequest.of(0, 20);
+        ApprovalHistory notify = ApprovalHistory.builder()
+                .factoryId(FACTORY_ID)
+                .instanceId("inst-copied")
+                .nodeId("notify-finance")
+                .action(ApprovalHistory.HistoryAction.AUTO_TRANSITION)
+                .notes("notify dispatched: IN_APP=SENT")
+                .build();
+        when(historyRepository.findByFactoryIdAndActionOrderByCreatedAtDesc(
+                FACTORY_ID, ApprovalHistory.HistoryAction.AUTO_TRANSITION))
+                .thenReturn(List.of(notify));
+
+        ApprovalWorkflowInstance copied = ApprovalWorkflowInstance.builder()
+                .id("inst-copied")
+                .factoryId(FACTORY_ID)
+                .workflowId("wf-copied")
+                .moduleCode("SALES_ORDER")
+                .businessEntityId("SO-001")
+                .status(InstanceStatus.APPROVED)
+                .currentNodeIds(List.of())
+                .initiatedAt(LocalDateTime.now())
+                .build();
+        when(instanceRepository.findByFactoryIdAndIdIn(
+                FACTORY_ID, List.of("inst-copied"))).thenReturn(List.of(copied));
+
+        ApprovalWorkflow workflow = ApprovalWorkflow.builder()
+                .id("wf-copied")
+                .factoryId(FACTORY_ID)
+                .nodesJson("[]")
+                .build();
+        when(workflowService.getById(FACTORY_ID, "wf-copied"))
+                .thenReturn(Optional.of(workflow));
+        when(workflowService.deserializeNodes("[]"))
+                .thenReturn(List.of(ApprovalWorkflowNode.builder()
+                        .id("notify-finance")
+                        .type("notify")
+                        .config(Map.of("notifyRoles", List.of("finance_manager")))
+                        .build()));
+
+        Page<ApprovalWorkflowInstance> result = engine.findCopiedTo(
+                FACTORY_ID, USER_ID, "finance_manager", pageable);
+        Page<ApprovalWorkflowInstance> unrelated = engine.findCopiedTo(
+                FACTORY_ID, USER_ID, "quality_manager", pageable);
+
+        assertEquals(1, result.getTotalElements());
+        assertEquals("inst-copied", result.getContent().get(0).getId());
+        assertTrue(unrelated.isEmpty());
+        verify(instanceRepository, times(2)).findByFactoryIdAndIdIn(
+                FACTORY_ID, List.of("inst-copied"));
+    }
     // ==================== Sprint 6 W1-B: listAllRunning (admin view) ====================
 
     @Test

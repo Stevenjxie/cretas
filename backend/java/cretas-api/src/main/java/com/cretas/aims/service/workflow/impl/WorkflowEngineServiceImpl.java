@@ -685,6 +685,100 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
 
     @Override
     @Transactional(readOnly = true)
+    public Page<ApprovalWorkflowInstance> findActedBy(
+            String factoryId, Long userId, Pageable pageable) {
+        Objects.requireNonNull(factoryId, "factoryId must not be null");
+        Objects.requireNonNull(userId, "userId must not be null");
+        Objects.requireNonNull(pageable, "pageable must not be null");
+        return instanceRepository.findActedBy(factoryId, userId, pageable);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Page<ApprovalWorkflowInstance> findCopiedTo(
+            String factoryId, Long userId, String userRole, Pageable pageable) {
+        Objects.requireNonNull(factoryId, "factoryId must not be null");
+        Objects.requireNonNull(userId, "userId must not be null");
+        Objects.requireNonNull(userRole, "userRole must not be null");
+        Objects.requireNonNull(pageable, "pageable must not be null");
+
+        List<ApprovalHistory> notifyHistory = historyRepository
+                .findByFactoryIdAndActionOrderByCreatedAtDesc(
+                        factoryId, HistoryAction.AUTO_TRANSITION);
+
+        Map<String, Set<String>> notifyNodeIdsByInstance = new LinkedHashMap<>();
+        for (ApprovalHistory row : notifyHistory) {
+            String notes = row.getNotes();
+            if (notes == null || !notes.toLowerCase(Locale.ROOT).startsWith("notify")) {
+                continue;
+            }
+            notifyNodeIdsByInstance
+                    .computeIfAbsent(row.getInstanceId(), ignored -> new LinkedHashSet<>())
+                    .add(row.getNodeId());
+        }
+        if (notifyNodeIdsByInstance.isEmpty()) {
+            return new PageImpl<>(List.of(), pageable, 0);
+        }
+
+        List<ApprovalWorkflowInstance> candidates = instanceRepository
+                .findByFactoryIdAndIdIn(factoryId,
+                        new ArrayList<>(notifyNodeIdsByInstance.keySet()));
+        Map<String, Map<String, ApprovalWorkflowNode>> workflowNodes = new HashMap<>();
+        List<ApprovalWorkflowInstance> matched = candidates.stream()
+                .filter(instance -> copiedToUser(
+                        instance,
+                        notifyNodeIdsByInstance.getOrDefault(instance.getId(), Set.of()),
+                        userId,
+                        userRole,
+                        workflowNodes))
+                .sorted(Comparator.comparing(
+                        ApprovalWorkflowInstance::getInitiatedAt,
+                        Comparator.nullsLast(Comparator.reverseOrder())))
+                .toList();
+
+        int total = matched.size();
+        int offset = (int) Math.min(pageable.getOffset(), total);
+        int endIndex = Math.min(offset + pageable.getPageSize(), total);
+        return new PageImpl<>(matched.subList(offset, endIndex), pageable, total);
+    }
+
+    private boolean copiedToUser(
+            ApprovalWorkflowInstance instance,
+            Set<String> notifyNodeIds,
+            Long userId,
+            String userRole,
+            Map<String, Map<String, ApprovalWorkflowNode>> workflowNodes) {
+        Map<String, ApprovalWorkflowNode> nodes = workflowNodes.computeIfAbsent(
+                instance.getWorkflowId(),
+                ignored -> loadWorkflowNodesById(instance.getFactoryId(), instance.getWorkflowId()));
+        for (String nodeId : notifyNodeIds) {
+            ApprovalWorkflowNode node = nodes.get(nodeId);
+            if (node == null || !"notify".equals(node.getType())) {
+                continue;
+            }
+            Map<String, Object> config = node.getConfig() == null ? Map.of() : node.getConfig();
+            if (containsIdentity(config.get("recipients"), userId.toString())
+                    || containsIdentity(config.get("notifyRoles"), userRole)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean containsIdentity(Object configured, String expected) {
+        if (!(configured instanceof Iterable<?> values)) {
+            return false;
+        }
+        for (Object value : values) {
+            if (value != null && expected.equals(String.valueOf(value))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public Page<ApprovalWorkflowInstance> listAllRunning(
             String factoryId, Pageable pageable) {
         Objects.requireNonNull(factoryId, "factoryId must not be null");

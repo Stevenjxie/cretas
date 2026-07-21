@@ -37,4 +37,11 @@ public interface ApprovalHistoryRepository extends JpaRepository<ApprovalHistory
     Page<ApprovalHistory> findByFactoryIdAndActionAndCreatedAtBetween(
             String factoryId, HistoryAction action,
             LocalDateTime from, LocalDateTime to, Pageable pageable);
+
+    /**
+     * OA copied-to-me read model source. Notify nodes are append-only
+     * AUTO_TRANSITION rows whose notes start with "notify".
+     */
+    List<ApprovalHistory> findByFactoryIdAndActionOrderByCreatedAtDesc(
+            String factoryId, HistoryAction action);
 }

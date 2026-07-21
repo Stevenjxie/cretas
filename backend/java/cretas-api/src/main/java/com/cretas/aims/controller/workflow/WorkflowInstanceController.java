@@ -365,6 +365,50 @@ public class WorkflowInstanceController {
         return ApiResponse.success(response);
     }
 
+    /** Personal OA "已处理": only instances on which the current user acted. */
+    @GetMapping("/acted")
+    @Operation(summary = "已处理审批 — 当前用户实际执行过审批动作的实例")
+    public ApiResponse<PageResponse<WorkflowInstancePendingDTO>> getActed(
+            @PathVariable @NotBlank String factoryId,
+            @RequestHeader("Authorization") String authorization,
+            @RequestParam(defaultValue = "1") @Min(1) int page,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+        User user = resolveCurrentUser(authorization);
+        if (user == null) {
+            throw new BusinessException(401, "未授权 — JWT 解析失败");
+        }
+        Pageable pageable = PageRequest.of(page - 1, size);
+        Page<ApprovalWorkflowInstance> instances = workflowEngine.findActedBy(
+                factoryId, user.getId(), pageable);
+        return ApiResponse.success(PageResponse.of(
+                hydrateInstances(factoryId, instances.getContent()),
+                page, size, instances.getTotalElements()));
+    }
+
+    /**
+     * Personal OA "抄送我的". The read model is derived from persisted notify-node
+     * history and the node's explicit recipients/notifyRoles configuration.
+     */
+    @GetMapping("/copied")
+    @Operation(summary = "抄送我的 — 通知节点按用户或角色匹配的审批实例")
+    public ApiResponse<PageResponse<WorkflowInstancePendingDTO>> getCopied(
+            @PathVariable @NotBlank String factoryId,
+            @RequestHeader("Authorization") String authorization,
+            @RequestParam(defaultValue = "1") @Min(1) int page,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+        User user = resolveCurrentUser(authorization);
+        if (user == null) {
+            throw new BusinessException(401, "未授权 — JWT 解析失败");
+        }
+        String role = user.getRoleCode() == null ? "" : user.getRoleCode();
+        Pageable pageable = PageRequest.of(page - 1, size);
+        Page<ApprovalWorkflowInstance> instances = workflowEngine.findCopiedTo(
+                factoryId, user.getId(), role, pageable);
+        return ApiResponse.success(PageResponse.of(
+                hydrateInstances(factoryId, instances.getContent()),
+                page, size, instances.getTotalElements()));
+    }
+
     /**
      * Sprint 6 W1-B — "工作流处理" admin view (super-admin only).
      *

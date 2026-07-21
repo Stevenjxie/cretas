@@ -139,6 +139,29 @@ public interface ApprovalWorkflowInstanceRepository
             Pageable pageable);
 
     /**
+     * Personal OA "已处理" view. Unlike findParticipatedBy, this query does not
+     * include instances merely because the current user initiated them.
+     */
+    @Query(value = "SELECT DISTINCT i FROM ApprovalWorkflowInstance i " +
+                   "WHERE i.factoryId = :factoryId AND i.id IN (" +
+                   "  SELECT h.instanceId FROM com.cretas.aims.entity.workflow.ApprovalHistory h " +
+                   "  WHERE h.factoryId = :factoryId AND h.actorId = :actorId" +
+                   ") ORDER BY i.initiatedAt DESC",
+           countQuery = "SELECT COUNT(DISTINCT i) FROM ApprovalWorkflowInstance i " +
+                        "WHERE i.factoryId = :factoryId AND i.id IN (" +
+                        "  SELECT h.instanceId FROM com.cretas.aims.entity.workflow.ApprovalHistory h " +
+                        "  WHERE h.factoryId = :factoryId AND h.actorId = :actorId" +
+                        ")")
+    Page<ApprovalWorkflowInstance> findActedBy(
+            @Param("factoryId") String factoryId,
+            @Param("actorId") Long actorId,
+            Pageable pageable);
+
+    /** Factory-scoped lookup used by the OA copied-to-me read model. */
+    List<ApprovalWorkflowInstance> findByFactoryIdAndIdIn(
+            String factoryId, List<String> ids);
+
+    /**
      * Sprint 6 W1-B — admin view "工作流处理" query.
      *
      * <p>列出当前 factory 下所有指定 status (通常 RUNNING) workflow 实例, 跨 module
