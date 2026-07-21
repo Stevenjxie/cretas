@@ -59,5 +59,5 @@
 - 实现：PR [#1567](https://github.com/Stevenjxie/cretas/pull/1567) / main `c93e31a63d860db8e98996c705c5ee25dfa93108`；仅 `factory_super_admin` 可调用，要求精确订单号、显式确认、幂等键和原因，并验证同厂订单快照及可执行 OA 路由。
 - 验证：正式 release lifecycle 16/16 PASS；backend tree `25802487482a3c1605c28becc5eb44f39d2df326`；JAR SHA-256 `0bd4a698095af829a8f1d984015089dcf24bbc770c5221782c21d6e05ca8167c`。
 - 生产：版本 `v20260721_233852`，active `green/10020`，5/5 切流后健康通过；统一 verify-release 的 systemd、直连健康和 `approval-recovery` JAR marker 全部通过。
-- 历史现场：部署后 query-only 证明 `PO-20260721-0001` 仍为 `SUBMITTED`、`workflowInstanceId` 空、`hasInstance=false`；生产业务 mutation=0，恢复写入继续等待用户单独明确授权，未触碰 LIUSHANMEN。
+- 历史现场：部署后先 query-only 证明 `PO-20260721-0001` 为 `SUBMITTED`、`workflowInstanceId` 空、`hasInstance=false`；用户随后单独明确授权，受限恢复 POST 严格执行1次并成功创建唯一实例 `6949ac9a-fd33-40e2-a45e-26db666035d2`。默认流程 `awf-f006-po-default` 自动完成为 `APPROVED`，订单投影为 `FINANCE_APPROVED`；刷新后业务单匹配实例严格1个、历史1条、待办0，金额 `1440.00`、税额 `187.20`、9行不变，未触碰 LIUSHANMEN。
 - Scope 锁：已释放。
