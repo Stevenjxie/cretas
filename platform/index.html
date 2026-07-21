@@ -113,8 +113,9 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   .hero-copy{left:clamp(20px,6vw,32px);right:clamp(20px,6vw,32px);top:auto;bottom:14%;transform:none;max-width:none}
   .hero-copy p{max-width:100%}
   .v6-ai-box{display:none}
-  .biz-grid{grid-template-columns:1fr 1fr;grid-auto-rows:clamp(190px,42vw,240px)}
-  .ai-card{grid-column:1 / -1;grid-auto-rows:auto;min-height:230px}
+  .biz-grid{grid-template-columns:1fr;grid-auto-rows:auto;gap:14px}
+  .biz-grid .v6-photo-card{height:clamp(200px,56vw,290px)}
+  .biz-grid .ai-card{height:auto;min-height:200px}
   .quote-band{flex-direction:column;align-items:flex-start}
 }
 @media (max-width:768px){ .v6-live-bar{gap:14px} }
