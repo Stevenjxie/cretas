@@ -514,3 +514,20 @@
 - **Commit/PR/main 状态**：`COMMITTED_PENDING_MAIN`。
 - **部署状态**：`NOT_DEPLOYED`；未修改生产 PO/RCV/AP/PaymentRequest。
 - **回归状态**：`TARGET_TEST_PASSED`。
+
+## F006 R3 原料分类编码阻塞（2026-07-21）
+
+### BUG-F006-R3-MATERIAL-CATEGORY-PREFIX-001
+
+- **发现阶段/时间**：F006 R3 人工 MVP，2026-07-21；仓储管理 → 原料类型字典 → 新建原料类型，完整选择 `001 / 001007 / 0010070004` 后保存。
+- **页面/步骤/证据**：页面已展示16位编码预览 `0010070002000002`，保存却连续出现三次“当前物料分类尚未配置业务编码前缀”。证据：`D:\Temp\codex-clipboard-7c2f3f97-c2c0-48a4-bff0-a3e7eebcd1a4.png`。
+- **期望/实际**：可选择的启用 L3 应能使用稳定编码契约创建，且预览与保存同源；实际 Web 预览只解析旧16位分类码，创建边界再调用独立业务前缀分配器。相同 API 错误又被页面 catch 重复展示。
+- **业务影响**：阻断新原料建档；同时使用户无法判断分类不可用还是编码服务故障，并存在重复点击风险。
+- **根因**：双码能力引入后，`material-segments/generate-code` 与 `MaterialBusinessCodeService.allocateBusinessCode` 仍是两条不一致的 resolver；前缀表没有为全部历史 L3 预置配置，而旧分配器对此一律 409。Web 同时由请求拦截器和页面 `ElMessage.error` 处理同一 4xx，造成重复 Toast。
+- **修复**：新增只读 `MaterialCodePreviewDTO` 契约，预览和创建共同调用 `MaterialBusinessCodeService`。显式、启用的最具体祖先前缀优先；没有显式前缀的启用 L3 按不可变10位数字 identity 的 base36 生成稳定 ASCII 前缀，首次创建在 L3 悲观锁下原子持久化并分配序号。预览严格零写；停用前缀、跨厂/非 L3/停用分类及前缀冲突 fail-closed，不覆盖或猜测历史配置。
+- **前端修复**：完整 L1-L3 选定后同时显示“业务编码”和“16位分类编码（兼容）”；保存前复用同一只读契约，快速切换时丢弃 stale 响应；统一使用 `handleCatchError`，服务端业务错误由拦截器仅显示一次，网络错误仅显示一个兜底提示。
+- **修改文件**：`MaterialBusinessCodeService/Impl`、`MaterialBusinessCodePrefixRepository`、`RawMaterialTypeService/Impl/Controller`、`MaterialCodePreviewDTO`、原料类型字典 `list.vue` 及对应 Java JPA/Service、Web source/error-toast 测试；复盘与 dispatch 归档。
+- **测试**：`mvn "-Dtest=RawMaterialTypeSegmentContractTest,MaterialBusinessCodeRepositoryQueryValidationTest" test`：19/19 PASS，其中真实 Spring/Hibernate JPA Context 8/8；覆盖显式前缀、缺省稳定前缀、预览零写、12并发首次分配唯一、跨厂隔离、停用前缀拒绝、重复名称零分配。`npm test -- src/views/warehouse/material-types/__tests__/materialFamilyConsistency.source.spec.ts src/utils/__tests__/errorToast.spec.ts`：12/12 PASS。`npm run build:check`：PASS，`vue-tsc` 与 Vite 4452 modules 构建成功。
+- **Commit/PR/main 状态**：实现 commit `83deeba16f7c91693e443666951b878758300945`；PR [#1547](https://github.com/Stevenjxie/cretas/pull/1547)；当前 `TARGET_TEST_PASSED_PENDING_MAIN`，最终合并状态以该 PR 与 `origin/main` 为准。
+- **部署状态**：`NOT_DEPLOYED`。
+- **回归状态**：`TARGET_TEST_PASSED`；生产业务 mutation=0，未创建或修改 F006 原料/分类，未做历史桥接，未触碰 LIUSHANMEN。部署后由测试 Chat 在同一未创建现场刷新，重新选择原分类并完成唯一一次建档验证。
