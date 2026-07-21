@@ -143,7 +143,9 @@
       scrollTrigger: {
         trigger: '.biz', start: 'top top', end: function(){ return '+=' + (travel() + 200); },
         pin: true, scrub: 0.8, invalidateOnRefresh: true,
-        onUpdate: spotlight, onRefresh: spotlight
+        onUpdate: spotlight, onRefresh: spotlight,
+        onLeave: function(){ gsap.to(cards, {scale:1, filter:'brightness(1)', duration:.5, ease:'power2.out'});
+          cards.forEach(function(c){ var im=c.querySelector('img'); if(im) gsap.to(im,{xPercent:0,duration:.5}); }); }
       }
     });
     spotlight();
@@ -164,13 +166,18 @@
     var d1 = stage.querySelector('.det.d1 span');
     var d2 = stage.querySelector('.det.d2 span');
     var d2box = stage.querySelector('.det.d2');
+    var d1el = stage.querySelector('.det.d1');
+    var d2el = stage.querySelector('.det.d2');
     var CH = [
       { t:'① 认得出工序', d:'画面里正在做哪道工序，AI 自己判断 — 装盘、分割、包装，11 类工序无需人工登记，产线节奏第一次自动留痕。',
-        m:['11 类工序自动识别','无需人工登记','节奏留痕'], a:'工人 · 装盘工序', b:'工序置信度 97.6%', warn:false },
+        m:['11 类工序自动识别','无需人工登记','节奏留痕'], a:'工人 · 装盘工序', b:'工序置信度 97.6%', warn:false,
+        p1:{left:'40%',top:'10%',width:'26%',height:'58%'}, p2:{left:'12%',top:'58%',width:'22%',height:'24%'} },
       { t:'② 数得清动作', d:'每一次装盘、每一件出品，AI 从画面里数出来当产量。谁在干活谁在空，节拍多少秒一件，车间产能看得见。',
-        m:['动作计件','干活 / 空闲','节拍 6.2s/件','效率评分'], a:'出品 ×12 · 已计件', b:'在岗 4 · 空闲 1', warn:false },
+        m:['动作计件','干活 / 空闲','节拍 6.2s/件','效率评分'], a:'出品 ×12 · 已计件', b:'在岗 4 · 空闲 1', warn:false,
+        p1:{left:'8%',top:'52%',width:'30%',height:'34%'}, p2:{left:'58%',top:'16%',width:'24%',height:'34%'} },
       { t:'③ 盯得住合规', d:'帽子、口罩、手套没戴齐，AI 当场识别当场记录；画面异物实时报警 — 食品安全的红线，不靠人盯。',
-        m:['穿戴合规检测','异物检测','当场记录'], a:'未戴手套 · 已记录', b:'合规复查已推送', warn:true }
+        m:['穿戴合规检测','异物检测','当场记录'], a:'未戴手套 · 已记录', b:'合规复查已推送', warn:true,
+        p1:{left:'30%',top:'42%',width:'26%',height:'40%'}, p2:{left:'62%',top:'56%',width:'22%',height:'26%'} }
     ];
     var cur = -1;
     function chapter(i){
@@ -184,6 +191,8 @@
         if (d1) d1.textContent = c.a;
         if (d2) d2.textContent = c.b;
         if (d2box) d2box.classList.toggle('warn', c.warn);
+        if (d1el && c.p1) gsap.to(d1el, Object.assign({duration:.55, ease:'power3.inOut'}, c.p1));
+        if (d2el && c.p2) gsap.to(d2el, Object.assign({duration:.55, ease:'power3.inOut'}, c.p2));
         gsap.to(cap, { opacity: 1, y: 0, duration: .38, ease: 'power3.out' });
       }});
     }

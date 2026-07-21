@@ -19,8 +19,8 @@
     .from('#v6Intro .ibox', {scale:1.6, opacity:0, duration:.6, ease:'expo.out'}, '-=.15')
     .from('#v6Intro .ibox .c', {scale:0, duration:.35, stagger:.05, ease:'back.out(3)'}, '<')
     .from('#v6Intro .itag', {opacity:0, y:8, duration:.4}, '-=.2')
-    .from('#v6Intro .icheck li', {opacity:0, x:-14, duration:.45, stagger:.28}, '+=.1')
-    .from('#v6Intro .ihint', {opacity:0, y:10, duration:.6}, '+=.2');
+    .from('#v6Intro .icheck li', {opacity:0, x:-14, duration:.4, stagger:.22}, '+=.05')
+    .from('#v6Intro .ihint', {opacity:0, y:10, duration:.5}, '+=.1');
 
   function reveal(){
     if(revealed) return;
