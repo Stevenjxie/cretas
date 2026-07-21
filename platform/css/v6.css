@@ -47,7 +47,7 @@
 .v6-photo-card .title b{font-size:17px;display:block}
 .v6-photo-card .title small{font-size:12px;opacity:.78}
 .v6-quote{font-size:clamp(20px,3vw,28px);font-weight:800;line-height:1.6}
-.v6-quote small{font-size:14px;font-weight:400;color:#888;display:block;margin-top:8px}
+.v6-quote small{font-size:14px;font-weight:400;color:#6d6862;display:block;margin-top:8px}
 .v6-section{padding:clamp(28px,6vw,72px) clamp(16px,4vw,48px)}
 /* Reveal: small distance + long expo ease = glide, not pop. JS staggers siblings. */
 .v6-reveal{opacity:0;transform:translateY(22px);transition:opacity .85s ease-out,transform 1.05s cubic-bezier(.16,1,.3,1)}
@@ -72,6 +72,11 @@ html.v6-js .v6-ai-box{animation:v6HeroFade 1.3s ease-out .65s both}
 @media (max-width:768px){
   .v6-live-bar{position:static;margin:12px 14px 0;transform:none}
   .v6-hero{margin:0}
+  nav.v6-nav div.nav-links{flex-wrap:nowrap;overflow-x:auto;justify-content:flex-start;width:100%;
+    scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,#000 88%,transparent);mask-image:linear-gradient(90deg,#000 88%,transparent);
+    padding-bottom:4px}
+  nav.v6-nav div.nav-links::-webkit-scrollbar{display:none}
+  nav.v6-nav div.nav-links a{flex:0 0 auto;white-space:nowrap}
 }
 .v6-shot{border-radius:12px;box-shadow:0 14px 34px rgba(60,60,60,.18);overflow:hidden;display:block;width:100%;max-width:100%;height:auto}
 
@@ -131,9 +136,9 @@ html.v6-lock{overflow:hidden}
 #v6Intro{position:fixed;inset:0;z-index:99;background:#070a08;display:flex;align-items:center;justify-content:center;
   clip-path:inset(0 0 0 0);cursor:pointer}
 #v6Intro .icore{position:relative;text-align:center;padding:40px}
-#v6Intro .ilogo{position:relative;width:96px;height:96px;margin:0 auto 26px}
+#v6Intro .ilogo{position:relative;width:80px;height:80px;margin:0 auto 24px}
 #v6Intro .ilogo svg{width:100%;height:100%;display:block}
-#v6Intro .ibox{position:absolute;inset:-26px;pointer-events:none}
+#v6Intro .ibox{position:absolute;inset:-22px;pointer-events:none}
 #v6Intro .ibox .c{position:absolute;width:16px;height:16px;border:2.5px solid #00e28a}
 #v6Intro .ibox .c1{top:0;left:0;border-right:none;border-bottom:none}
 #v6Intro .ibox .c2{top:0;right:0;border-left:none;border-bottom:none}
