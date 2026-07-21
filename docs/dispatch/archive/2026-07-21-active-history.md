@@ -41,3 +41,13 @@
 - 验证：后端目标测试37项、Web目标测试14项、真实JPA Context 1项、`vue-tsc`、Web release manifest build 均通过。
 - 边界：`NOT_DEPLOYED`；生产业务 mutation=0；`PO-20260721-0001` 未取消、重提、重建或桥接；未触碰 LIUSHANMEN。
 - Scope 锁：以上四项已归档并释放。
+## RTAI-S2 — 餐饮 AI Google Sheet 生产回归收口
+
+- 状态：`merged+deployed+verified`；Owner：`/root`；登记 Base SHA：`a11f4bb46a73b0f8c1137731c5aad50f46af65b4`。
+- 实现：PR [#1555](https://github.com/Stevenjxie/cretas/pull/1555) / main `79cd6604ac78402e78d4c4384c59ab2288e06865`，生产残留增量 PR [#1556](https://github.com/Stevenjxie/cretas/pull/1556) / main `cc85bd72458e638caf571bb9a2b162134ac5a775`。
+- 修复：分析型只读问题优先于老板动作强制路由；相对日期、出餐能力边界、成本毛利澄清和禁止动作问题进入正确数据契约；Web 保留同一分析 session；门店冠军直答只返回第一名与核心依据；无数据比较同时写明主日期和基准日期，不用其他周期代替。
+- 验证：首批 Java 27 项、Web 10 项、残留 Java 6 项、Python 1 项全部通过；Java 与 Web 可信 release manifest 均通过，PR secret gate 通过。
+- 生产：Java 蓝绿最终 active `green/10020`，Python `8083` 健康，Web HTTP 200；Google Sheet 餐饮 AI 全量 11 场景首轮 9 项通过，剩余 2 项修复后定向通过，多轮日期继承通过。
+- 安全：生产回归 `blockedMutationAttempts=0`、`actualBusinessWrites=0`、`safetyPassed=true`；没有数据库迁移、权限变更或业务数据写入。
+- 证据：gitignored `.playwright-mcp/restaurant-sheet-20260721/live-regression/report.json` 与对应截图；发布结构化报告保存在本机 `.cache/cretas/deploy-reports/`。
+- Scope 锁：已释放。
