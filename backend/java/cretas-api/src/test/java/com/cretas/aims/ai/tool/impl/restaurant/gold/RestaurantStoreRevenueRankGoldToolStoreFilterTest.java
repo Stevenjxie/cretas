@@ -33,6 +33,24 @@ class RestaurantStoreRevenueRankGoldToolStoreFilterTest {
     }
 
     @Test
+    @DisplayName("direct best-store question returns only the winner and evidence")
+    void directBestStoreQuestionIsConcise() {
+        Map<String, Object> input = goldResult();
+        input.put("userInput", "哪家店业绩最好？先直接告诉我第一名和核心依据。");
+
+        Map<String, Object> result = tool.format(input);
+
+        assertThat(result.get("message").toString())
+                .contains("第一名是人民广场店")
+                .contains("核心依据")
+                .contains("2 家门店")
+                .contains("营收 2000 最高")
+                .doesNotContain("2. 陆家嘴店")
+                .doesNotContain("建议：");
+        assertThat(result).containsEntry("suppressActionAdvice", true);
+    }
+
+    @Test
     @DisplayName("store_id filter returns only the selected store row")
     void storeIdFilterReturnsSingleStore() {
         Map<String, Object> input = goldResult();

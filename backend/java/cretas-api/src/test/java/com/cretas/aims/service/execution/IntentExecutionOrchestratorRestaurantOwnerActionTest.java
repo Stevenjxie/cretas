@@ -179,6 +179,31 @@ class IntentExecutionOrchestratorRestaurantOwnerActionTest {
                 .isFalse();
         assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
                 "DEMO_REST",
+                "昨天的营业额是高于前天还是低于前天？",
+                Collections.emptyMap()))
+                .isFalse();
+        assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
+                "DEMO_REST",
+                "最近7天晚市出餐慢，是订单集中、人员不足还是工序瓶颈？请分别用数据判断。",
+                Map.of("ownerActionSessionId", "stale-owner-session")))
+                .isFalse();
+        assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
+                "DEMO_REST",
+                "成本毛利先查哪几项？",
+                Map.of("ownerActionScenario", "cost_margin")))
+                .isFalse();
+        assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
+                "DEMO_REST",
+                "要提升毛利率，哪些事情今天先不要做？",
+                Collections.emptyMap()))
+                .isFalse();
+        assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
+                "DEMO_REST",
+                "那毛利呢？请沿用刚才比较的两个日期。",
+                Map.of("ownerActionSessionId", "stale-owner-session")))
+                .isFalse();
+        assertThat(orchestrator.shouldRouteRestaurantOwnerAction(
+                "DEMO_REST",
                 "\u4eca\u5929\u5546\u5708\u5ba2\u6d41\u753b\u50cf\u5bf9\u95e8\u5e97\u7ecf\u8425\u6709\u4ec0\u4e48\u5f71\u54cd\uff1f",
                 Collections.emptyMap()))
                 .isTrue();

@@ -1334,6 +1334,21 @@ public class IntentExecutionOrchestrator {
             return Optional.empty();
         }
         String unicodeSafeInput = normalizedInput.replaceAll("\\s+", "");
+        if (isExplicitRestaurantSalesPeriodComparison(unicodeSafeInput)) {
+            return Optional.of("RESTAURANT_OPS_SALES_SUMMARY");
+        }
+        if (isEvidenceBasedRestaurantDiagnosis(unicodeSafeInput)) {
+            // The Python tiered parser will return an honest capability result
+            // when service/process timestamps are missing.  SALES_SUMMARY is an
+            // existing, read-only bridge binding; the original question is still
+            // forwarded in full and is not reduced to a revenue report.
+            return Optional.of("RESTAURANT_OPS_SALES_SUMMARY");
+        }
+        if (isCostMarginClarificationQuestion(unicodeSafeInput)
+                || isRestaurantContextualMarginFollowup(unicodeSafeInput)
+                || isMarginProhibitedActionAnalysis(unicodeSafeInput)) {
+            return Optional.of("RESTAURANT_OPS_GROSS_MARGIN");
+        }
         if (containsAny(unicodeSafeInput, "\u8425\u6536", "\u8425\u4e1a\u989d", "\u9500\u552e\u989d", "\u9500\u552e", "\u5ba2\u5355\u4ef7", "\u8ba2\u5355")
                 && containsAny(unicodeSafeInput, "\u67e5\u8be2", "\u67e5\u4e00\u4e0b", "\u770b\u4e00\u4e0b", "\u770b\u770b",
                         "\u672c\u5468", "\u8fd9\u5468", "\u4eca\u5929", "\u672c\u6708", "\u8868\u73b0", "\u600e\u4e48\u6837",
@@ -2081,7 +2096,8 @@ public class IntentExecutionOrchestrator {
         }
         String normalizedInput = userInput.toLowerCase(Locale.ROOT);
         if (isPureRestaurantReviewRemedyQuestion(normalizedInput)
-                || isPlainRestaurantReadQuestion(normalizedInput)) {
+                || isPlainRestaurantReadQuestion(normalizedInput)
+                || isRestaurantAnalyticalReadQuestion(normalizedInput)) {
             return false;
         }
         if (hasOwnerActionContinuationContext(context)) {
@@ -2192,6 +2208,66 @@ public class IntentExecutionOrchestrator {
                 "\u5efa\u8bae", "\u52a8\u4f5c", "\u5148\u6539", "\u5148\u505a",
                 "\u5148\u7ba1", "\u5148\u67e5\u54ea", "\u54ea\u4e09\u4e2a", "\u5f71\u54cd", "\u98ce\u9669");
         return ((hasReadVerb && hasPlainReadObject) || hasReviewSummary) && !hasDecisionSignal;
+    }
+
+    private boolean isRestaurantAnalyticalReadQuestion(String input) {
+        return isExplicitRestaurantSalesPeriodComparison(input)
+                || isEvidenceBasedRestaurantDiagnosis(input)
+                || isCostMarginClarificationQuestion(input)
+                || isRestaurantContextualMarginFollowup(input)
+                || isMarginProhibitedActionAnalysis(input);
+    }
+
+    private boolean isExplicitRestaurantSalesPeriodComparison(String input) {
+        boolean hasSalesMetric = containsAny(input,
+                "\u8425\u6536", "\u8425\u4e1a\u989d", "\u8425\u4e1a\u6536\u5165",
+                "\u9500\u552e\u989d", "\u9500\u552e\u6536\u5165", "\u6d41\u6c34",
+                "\u8ba2\u5355", "\u5355\u91cf", "\u5ba2\u5355\u4ef7");
+        boolean hasDirection = containsAny(input,
+                "\u5bf9\u6bd4", "\u6bd4\u8f83", "\u76f8\u6bd4", "\u9ad8\u4e8e", "\u4f4e\u4e8e",
+                "\u9ad8\u8fd8\u662f\u4f4e", "\u4e0a\u5347", "\u4e0b\u964d", "\u66f4\u9ad8", "\u66f4\u4f4e",
+                "\u591a\u8fd8\u662f\u5c11", "\u6bd4");
+        boolean hasPeriodPair = (
+                containsAny(input, "\u6628\u5929", "\u6628\u65e5")
+                        && containsAny(input, "\u524d\u5929", "\u524d\u65e5", "\u524d\u4e00\u5929", "\u524d\u4e00\u65e5"))
+                || (containsAny(input, "\u4eca\u5929", "\u4eca\u65e5")
+                        && containsAny(input, "\u6628\u5929", "\u6628\u65e5"))
+                || (containsAny(input, "\u672c\u6708", "\u8fd9\u4e2a\u6708", "\u5f53\u6708")
+                        && containsAny(input, "\u4e0a\u4e2a\u6708", "\u4e0a\u6708"))
+                || (containsAny(input, "\u4e0a\u4e2a\u6708", "\u4e0a\u6708")
+                        && containsAny(input, "\u4e0a\u4e0a\u4e2a\u6708", "\u4e0a\u4e0a\u6708"));
+        return hasSalesMetric && hasDirection && hasPeriodPair;
+    }
+
+    private boolean isEvidenceBasedRestaurantDiagnosis(String input) {
+        boolean asksForEvidence = containsAny(input,
+                "\u7528\u6570\u636e\u5224\u65ad", "\u5206\u522b\u7528\u6570\u636e", "\u5206\u522b\u5224\u65ad",
+                "\u6839\u636e\u6570\u636e\u5224\u65ad", "\u9010\u9879\u5224\u65ad");
+        boolean hasDiagnosticAlternatives = containsAny(input,
+                "\u8ba2\u5355\u96c6\u4e2d", "\u4eba\u5458\u4e0d\u8db3", "\u4eba\u624b\u4e0d\u8db3",
+                "\u5de5\u5e8f\u74f6\u9888", "\u6d41\u7a0b\u74f6\u9888", "\u51fa\u9910\u6162", "\u4e0a\u83dc\u6162");
+        return asksForEvidence && hasDiagnosticAlternatives;
+    }
+
+    private boolean isCostMarginClarificationQuestion(String input) {
+        return input.contains("\u6210\u672c")
+                && containsAny(input, "\u6bdb\u5229", "\u5229\u6da6")
+                && containsAny(input, "\u5148\u67e5", "\u4f18\u5148", "\u54ea\u51e0\u9879", "\u54ea\u9879")
+                && !containsAny(input, "\u83dc\u54c1\u6210\u672c", "\u98df\u6750\u6210\u672c", "\u98df\u6750\u635f\u8017",
+                        "\u95e8\u5e97\u6bdb\u5229", "\u83dc\u54c1\u6bdb\u5229");
+    }
+
+    private boolean isRestaurantContextualMarginFollowup(String input) {
+        return containsAny(input, "\u6bdb\u5229", "\u6bdb\u5229\u7387", "\u5229\u6da6\u7387")
+                && containsAny(input,
+                        "\u6cbf\u7528", "\u521a\u624d", "\u4e0a\u9762", "\u4e4b\u524d",
+                        "\u540c\u4e00\u65e5\u671f", "\u8fd9\u4e24\u4e2a\u65e5\u671f", "\u90a3\u6bdb\u5229");
+    }
+
+    private boolean isMarginProhibitedActionAnalysis(String input) {
+        return containsAny(input, "\u6bdb\u5229", "\u6bdb\u5229\u7387", "\u5229\u6da6")
+                && containsAny(input, "\u63d0\u5347", "\u63d0\u9ad8", "\u6539\u5584", "\u4f18\u5316")
+                && containsAny(input, "\u5148\u4e0d\u8981\u505a", "\u4e0d\u8981\u505a", "\u5148\u522b\u505a", "\u907f\u514d\u505a");
     }
 
     boolean isRestaurantOwnerActionFactory(String factoryId, String factoryDomain) {
