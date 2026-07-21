@@ -98,7 +98,7 @@ class PurchaseServiceOaSubmissionTest {
         supplier.setIsActive(true);
         lenient().when(supplierRepository.findByIdAndFactoryId("supplier-1", "F006"))
                 .thenReturn(Optional.of(supplier));
-        when(orderRepository.findByIdAndFactoryIdForUpdate("po-1", "F006"))
+        lenient().when(orderRepository.findByIdAndFactoryIdForUpdate("po-1", "F006"))
                 .thenReturn(Optional.of(order));
         lenient().when(orderRepository.save(any(PurchaseOrder.class))).thenAnswer(inv -> inv.getArgument(0));
 
