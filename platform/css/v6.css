@@ -90,3 +90,18 @@ html.v6-js .v6-ai-box{animation:v6HeroFade 1.3s ease-out .65s both,v6BoxTrack 7.
   html.v6-js .v6-ai-box{animation:none}
   .v6-chat-in{animation:none}
 }
+
+/* ---- Premium layer support ---- */
+.v6-spot{position:absolute;top:0;left:0;width:600px;height:600px;pointer-events:none;z-index:1;
+  opacity:0;transition:opacity .6s ease;border-radius:50%;
+  background:radial-gradient(circle at center,rgba(0,226,138,.09) 0%,rgba(0,226,138,.03) 40%,transparent 68%)}
+.ladder .lstep .node,.trace-chain .tnode .pin{transition:box-shadow .5s ease,background .5s ease}
+.ladder .lstep .node.lit{background:var(--v6-tag) !important;box-shadow:0 0 0 6px rgba(0,226,138,.18),0 0 18px rgba(0,226,138,.45)}
+.trace-chain .tnode .pin.lit{box-shadow:0 0 0 6px rgba(0,179,119,.22),0 0 18px rgba(0,226,138,.5)}
+@keyframes v6BtnBreath{0%,100%{box-shadow:0 0 0 0 rgba(0,179,119,.35)}50%{box-shadow:0 0 0 7px rgba(0,179,119,0)}}
+.preview-card .ok{animation:v6BtnBreath 2.8s ease-out infinite}
+@media (prefers-reduced-motion: reduce){
+  .v6-spot{display:none}
+  .preview-card .ok{animation:none}
+  .ladder .lstep .node,.trace-chain .tnode .pin{transition:none}
+}
