@@ -280,7 +280,7 @@
   if (flow) {
     var rawRows = [].slice.call(flow.querySelectorAll('.raw tr')).slice(1);
     var cleanRows = [].slice.call(flow.querySelectorAll('.clean tr')).slice(1);
-    var arrow = flow.querySelector('.arrow svg');
+    var core = flow.querySelector('.core');
     if (rawRows.length && cleanRows.length) {
       gsap.set(cleanRows, { opacity: 0, x: -14 });
       var mtl = gsap.timeline({ paused: true, repeat: -1, repeatDelay: 2.2 });
@@ -289,7 +289,7 @@
         if (!cr) return;
         mtl.fromTo(rr, { backgroundColor: 'rgba(180,83,9,0)' },
             { backgroundColor: 'rgba(180,83,9,.12)', duration: .3, ease: 'power1.inOut' }, i * 1.15)
-           .to(arrow, { x: 6, duration: .18, yoyo: true, repeat: 1, ease: 'power2.out' }, i * 1.15 + .3)
+           .to(core, { scale: 1.12, duration: .18, yoyo: true, repeat: 1, ease: 'power2.out' }, i * 1.15 + .3)
            .to(cr, { opacity: 1, x: 0, duration: .5, ease: 'power3.out' }, i * 1.15 + .5)
            .to(rr, { backgroundColor: 'rgba(180,83,9,0)', duration: .4 }, i * 1.15 + .8);
       });

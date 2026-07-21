@@ -4,12 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="color-scheme" content="light">
+<meta name="theme-color" content="#fdfcfa">
 <title>白垩纪 Cretas · 餐饮与食品工厂的 AI 运营中枢</title>
 <meta name="description" content="白垩纪 Cretas，餐饮门店与食品工厂通用的 AI 运营中枢。成本自动对账、损耗实时预警、全链路可追溯。不是又一个报表工具，是真正属于你的运营底座。">
 <meta name="keywords" content="餐饮运营,食品工厂,溯源,经营驾驶舱,成本对账,损耗管理,AI经营分析,SmartBI">
 <meta property="og:type" content="website">
 <meta property="og:title" content="白垩纪 Cretas · 餐饮与食品工厂的 AI 运营中枢">
 <meta property="og:description" content="你的生意，AI 亲眼盯着。把 AI 装进车间、后厨、货车和账本，看得见每道工序，算得清每一分钱。">
+<meta property="og:image" content="https://cretaceousfuture.com/assets/img/band-kitchen.jpg">
 <meta property="og:url" content="https://cretaceousfuture.com/">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 15 15'%3E%3Crect x='1' y='1' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='8.5' y='1' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='1' y='8.5' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='8.5' y='8.5' width='5.5' height='5.5' rx='2.75' fill='%2300b377'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/css/v6.css">
@@ -181,7 +183,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .onboard .steps{display:grid;grid-template-columns:1fr 1fr 1fr;gap:clamp(16px,2.4vw,30px)}
 .onboard .os{position:relative;padding-top:16px;border-top:2px solid rgba(0,179,119,.35)}
 .onboard .os .n{font-family:var(--v6-mono);font-size:12px;color:var(--v6-cta-ink);letter-spacing:1px;margin-bottom:8px}
-.onboard .os h4{margin:0 0 8px;font-size:clamp(16px,1.8vw,20px);font-weight:900}
+.onboard .os h3{margin:0 0 8px;font-size:clamp(16px,1.8vw,20px);font-weight:900}
 .onboard .os p{margin:0;font-size:clamp(13px,1.35vw,15px);color:var(--v6-ink-2);line-height:1.8}
 @media (max-width:900px){
   .moat .trio,.onboard .steps{grid-template-columns:1fr}
@@ -290,7 +292,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   <div class="v6-glow"></div>
   <div class="v6-hero" data-v6-eye>
     <div class="v6-hero-mask">
-      <img src="/assets/img/hero-kitchen.jpg" alt="后厨师傅在暖光下的操作台前逐盘出品，AI 正在识别每道工序">
+      <img fetchpriority="high" decoding="async" src="/assets/img/hero-kitchen.jpg" alt="后厨师傅在暖光下的操作台前逐盘出品，AI 正在识别每道工序">
     </div>
     <div class="v6-hero-scrim"></div>
 
@@ -325,21 +327,21 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   <div class="biz-grid">
 
     <a class="v6-photo-card v6-reveal" href="/solutions-factory.html" style="box-shadow:0 16px 38px rgba(92,64,38,.22)">
-      <img src="/assets/img/warehouse.jpg" style="object-position:center 30%" alt="食品工厂立体货架仓储，AI 逐个库位核对入库物料">
+      <img loading="lazy" decoding="async" src="/assets/img/warehouse.jpg" style="object-position:center 30%" alt="食品工厂立体货架仓储，AI 逐个库位核对入库物料">
       <span class="card-tag">库位 A-12 · 猪前腿 300kg ✓</span>
       <div class="shade"></div>
       <div class="title"><b>食品工厂</b><small>从一块原料到一张发票，AI 全程跟单</small></div>
     </a>
 
     <a class="v6-photo-card v6-reveal" href="/solutions-restaurant.html" style="box-shadow:0 16px 38px rgba(70,42,26,.24);transition-delay:.05s">
-      <img src="/assets/img/dining.jpg" alt="连锁餐厅门店内景，明档后厨与整齐餐台，AI 实时核算每家店的账">
+      <img loading="lazy" decoding="async" src="/assets/img/dining.jpg" alt="连锁餐厅门店内景，明档后厨与整齐餐台，AI 实时核算每家店的账">
       <span class="card-tag">单品毛利 62% · 正常</span>
       <div class="shade"></div>
       <div class="title"><b>餐饮连锁</b><small>每家店的账，AI 替你盯</small></div>
     </a>
 
     <a class="v6-photo-card v6-reveal" href="/solutions-logistics.html" style="box-shadow:0 16px 38px rgba(60,74,90,.2);transition-delay:.1s">
-      <img src="/assets/img/truck.jpg" style="object-position:center 88%" alt="冷链配送货车行驶在公路上，AI 优化装载与路线">
+      <img loading="lazy" decoding="async" src="/assets/img/truck.jpg" style="object-position:center 88%" alt="冷链配送货车行驶在公路上，AI 优化装载与路线">
       <span class="card-tag">6 趟 → 5 趟 · 省 ¥430/天</span>
       <div class="shade"></div>
       <div class="title"><b>物流配送</b><small>十辆车，一个人调</small></div>
@@ -357,7 +359,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 
 <!-- 视觉 AI 全宽带 -->
 <section class="band">
-  <div class="bmask"><img src="/assets/img/band-kitchen.jpg" alt="后厨灶台实时画面，火光中 AI 识别框正在跟踪厨师作业"></div>
+  <div class="bmask"><img loading="lazy" decoding="async" src="/assets/img/band-kitchen.jpg" alt="后厨灶台实时画面，火光中 AI 识别框正在跟踪厨师作业"></div>
   <div class="bscrim"></div>
   <div class="bscan"></div>
   <div class="bdet bd1"><span>操作员 · 分割工序 97.6%</span></div>
@@ -374,11 +376,11 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   <h2 class="v6-reveal">不是概念图，是每天在跑的系统</h2>
   <p class="sub v6-reveal">下面每一张都是真实界面，驾驶舱、工作流编辑器、调度地图，客户每天就用这些干活。</p>
   <div class="srow">
-    <figure><img class="v6-shot" src="/assets/img/shots/dashboard.png" alt="餐饮经营驾驶舱：营收、客单、订单与品类占比一屏看清">
+    <figure><img loading="lazy" decoding="async" class="v6-shot" src="/assets/img/shots/dashboard.png" alt="餐饮经营驾驶舱：营收、客单、订单与品类占比一屏看清">
       <figcaption><b>经营驾驶舱</b>，营收、毛利、门店对比，一屏看清</figcaption></figure>
-    <figure><img class="v6-shot" src="/assets/img/shots/workflow.png" alt="可视化工作流编辑器：拖拽编排工序与物料流转">
+    <figure><img loading="lazy" decoding="async" class="v6-shot" src="/assets/img/shots/workflow.png" alt="可视化工作流编辑器：拖拽编排工序与物料流转">
       <figcaption><b>工作流编辑器</b>，工序怎么走，拖一拖就改</figcaption></figure>
-    <figure><img class="v6-shot" src="/assets/img/shots/logistics.png" alt="物流调度工作台：地图路线与车次列表并排">
+    <figure><img loading="lazy" decoding="async" class="v6-shot" src="/assets/img/shots/logistics.png" alt="物流调度工作台：地图路线与车次列表并排">
       <figcaption><b>调度工作台</b>，十辆车的排线，AI 一分钟出方案</figcaption></figure>
   </div>
 </section>
@@ -469,9 +471,9 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
     <h2 class="v6-reveal">接入没有想象中重</h2>
     <p class="sub v6-reveal">不用换掉现有系统，不用停业切换，从第一天起就在你的真实数据上干活。</p>
     <div class="steps">
-      <div class="os v6-reveal"><div class="n">第 1 步 · 当天</div><h4>把痛点讲给我们听</h4><p>一小时，讲清楚你最疼的两三件事，收货老出错？账出不来？车调不动？我们当场给出解法思路。</p></div>
-      <div class="os v6-reveal"><div class="n">第 2 步 · 第一周</div><h4>接上你的数据</h4><p>Excel、收银导出、现有系统，有什么接什么，AI 自动归一。脏数据不用先洗，边用边变干净。</p></div>
-      <div class="os v6-reveal"><div class="n">第 3 步 · 两周内</div><h4>见到第一版在跑</h4><p>先上最疼的那个场景，见效了再铺开。多数客户第一周就有"原来能这样"的时刻。</p></div>
+      <div class="os v6-reveal"><div class="n">第 1 步 · 当天</div><h3>把痛点讲给我们听</h3><p>一小时，讲清楚你最疼的两三件事，收货老出错？账出不来？车调不动？我们当场给出解法思路。</p></div>
+      <div class="os v6-reveal"><div class="n">第 2 步 · 第一周</div><h3>接上你的数据</h3><p>Excel、收银导出、现有系统，有什么接什么，AI 自动归一。脏数据不用先洗，边用边变干净。</p></div>
+      <div class="os v6-reveal"><div class="n">第 3 步 · 两周内</div><h3>见到第一版在跑</h3><p>先上最疼的那个场景，见效了再铺开。多数客户第一周就有"原来能这样"的时刻。</p></div>
     </div>
   </div>
 </section>
@@ -505,6 +507,8 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
     <a href="/solutions-restaurant.html">餐饮连锁</a>
     <a href="/solutions-logistics.html">物流配送</a>
     <a href="/solutions-ai.html">AI 中枢</a>
+    <a href="/solutions-custom.html">定制开发</a>
+    <a href="/demo.html">在线演示</a>
     <a href="mailto:stevenj4xie@gmail.com">联系我们</a>
   </div>
 </footer>
