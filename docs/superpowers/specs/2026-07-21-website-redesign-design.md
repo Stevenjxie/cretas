@@ -112,6 +112,18 @@ demo.html / privacy.html      保留
 
 ## 7. 实施约束
 
+### 7.0 设计 skill 路由（HARD — Steve 2026-07-21 要求）
+
+文案与排版设计**必须通过设计 skill 完成**，不徒手写：
+
+| 环节 | 必用 skill | 用途 |
+|---|---|---|
+| 每页排版/布局开工前 | `design`（创意展示页路由）+ `impeccable`（craft/shape） | 页面结构、版式、register 校准 |
+| 设计 token / 组件规范 | `ui-ux-pro-max`（--design-system 落 MASTER.md）| v6.css tokens 统一 |
+| 文案 | `impeccable` clarify + 本 spec §5 场景话术 + 录音提炼原话 | 全人话、无技术腔、无模板语法 |
+| 动效 | `apple-design`（材质/衔接）+ `gsap-frameworks` | 光晕视差、识别框渐入、reduced-motion |
+| 每页完成后 | `impeccable` audit/polish | 对比度/响应式/AI slop test 把关 |
+
 - 纯静态 HTML/CSS/JS，延续 platform/ 现有形态；共享设计 tokens 抽 `css/v6.css`
 - 响应式 375/768/1024/1440；照片 WebP + lazy；`prefers-reduced-motion` 全覆盖
 - 部署仅到 139（`server-operations` skill 规范）；工作在独立 worktree，commit 用 scoped `git commit -- <files>`
