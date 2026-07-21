@@ -37,7 +37,7 @@
     h.classList.add('v6-lines');
     h.classList.remove('v6-reveal');
     gsap.from(h.querySelectorAll('.v6-li'), {
-      yPercent: 115, duration: .9, ease: 'power4.out', stagger: .12,
+      yPercent: 115, duration: .7, ease: 'power4.out', stagger: .08,
       scrollTrigger: { trigger: h, start: 'top 88%', once: true }
     });
   });

@@ -26,7 +26,7 @@ function v6RevealInit(){
     entries.forEach(function(en){
       if(!en.isIntersecting) return;
       var el = en.target;
-      var d = Math.min(el.__v6i || 0, 7) * 60;
+      var d = Math.min(el.__v6i || 0, 7) * 50;
       el.style.transitionDelay = d + 'ms';
       el.classList.add('in');
       io.unobserve(el);
@@ -103,7 +103,7 @@ function v6ChatLoop(el, sets, beforeSel){
   var anchor = beforeSel ? el.querySelector(beforeSel) : null;
   el.querySelectorAll('.bub, .act, .a, .q').forEach(function(n){ n.setAttribute('data-chat',''); });
   var si = 0, timers = [];
-  function put(node){ anchor ? el.insertBefore(node, anchor) : el.appendChild(node); }
+  function put(node){ node.__fresh = true; anchor ? el.insertBefore(node, anchor) : el.appendChild(node); }
   function mk(m){
     var d = document.createElement('div');
     d.setAttribute('data-chat','');
@@ -112,13 +112,18 @@ function v6ChatLoop(el, sets, beforeSel){
     return d;
   }
   function play(){
-    el.querySelectorAll('[data-chat]').forEach(function(n){ n.remove(); });
     var seq = sets[si]; si = (si+1) % sets.length;
+    var cleared = false;
+    function clearOld(){
+      if(cleared) return; cleared = true;
+      el.querySelectorAll('[data-chat]').forEach(function(n){ if(!n.__fresh) n.remove(); });
+    }
     var t = 500;
     seq.forEach(function(m){
       if(m.t === 'a'){
         (function(tt){
           timers.push(setTimeout(function(){
+            clearOld();
             var ty = document.createElement('div');
             ty.setAttribute('data-chat','');
             ty.className = 'bub ' + 'bub-a a' + ' v6-typing v6-chat-in';
@@ -129,11 +134,14 @@ function v6ChatLoop(el, sets, beforeSel){
         })(t);
         t += 1600;
       } else {
-        (function(tt, mm){ timers.push(setTimeout(function(){ put(mk(mm)); }, tt)); })(t, m);
+        (function(tt, mm){ timers.push(setTimeout(function(){ clearOld(); put(mk(mm)); }, tt)); })(t, m);
         t += (m.t === 'act') ? 900 : 700;
       }
     });
-    timers.push(setTimeout(play, t + 3800));
+    timers.push(setTimeout(function(){
+      el.querySelectorAll('[data-chat]').forEach(function(n){ n.__fresh = false; });
+      play();
+    }, t + 3800));
   }
   play();
 }
