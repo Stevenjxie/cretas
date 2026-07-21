@@ -22,3 +22,13 @@
 - 验收：最新 main 基线上 Maven 17/17 PASS，包含真实 Spring/Hibernate JPA Context、预览零写、正式映射、旧码保持、displayCode切换、无效映射跳过、并发只分配一次与 Controller 确认门禁；最终只读代码审查 P0=0、P1=0。
 - 生产边界：`NOT_DEPLOYED`；生产业务 mutation=0；未执行任何历史回填，未修改生产物料或分类。
 - Scope 锁：已释放；后续若要正式执行历史映射，必须在部署后按工厂先预览，并取得单独生产写入授权。
+
+## BUG-F006-R3-MATERIAL-DISPLAY-CODE-002
+
+- 状态：`merged-ready`；Owner：Codex coordinator (`/root`)；登记 Base SHA：`6c259992d89cd8e1a9709975ccb084d50d8236d1`。
+- 实现 commit：`8a39acecd045a6338659f8a7e71eefe125bc1fdb`；PR：[#1552](https://github.com/Stevenjxie/cretas/pull/1552)。
+- 根因：后端创建、DTO 与搜索已经支持 `businessCode/displayCode`，但 Web 列表、编辑态和分类文案仍以16位兼容 `code` 为主，导致新双码能力在用户界面看似没有生效。
+- 修复：物料身份统一优先显示 `displayCode → businessCode → legacy code`；有短码时16位编码仅作为“兼容码”次级信息，历史未映射行安全回退并标“历史编码”。分类选择器以名称为主、分类码为次级说明，创建区和搜索文案同步双码契约。
+- 验收：Web 目标测试 13/13 PASS；`vue-tsc -b` PASS；正式 Web release build PASS（735 assets），构建仅执行一次并生成可信清单。
+- 生产边界：后端、数据库和生产物料均未修改；没有执行历史回填；生产业务 mutation=0；未触碰 LIUSHANMEN。合入后仅发布 Web。
+- Scope 锁：已释放。

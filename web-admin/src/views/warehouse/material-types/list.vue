@@ -211,6 +211,19 @@ interface SegmentNode {
   isActive: boolean;
   children?: SegmentNode[];
 }
+
+function formatSegmentOptionLabel(option: { segmentCode: string; segmentLabel?: string; label?: string }): string {
+  const label = String(option.segmentLabel || option.label || '').trim();
+  return `${label || '未命名分类'}（分类码 ${option.segmentCode}）`;
+}
+
+function materialDisplayCode(row: TableRow): string {
+  return String(row.displayCode || row.businessCode || row.code || '-').trim() || '-';
+}
+
+function materialHasBusinessCode(row: TableRow): boolean {
+  return Boolean(String(row.businessCode || '').trim());
+}
 const segmentTree = ref<SegmentNode[]>([]);
 const segmentL1 = ref(''); // L1 大类
 const segmentL2 = ref(''); // L2 中类
@@ -221,6 +234,8 @@ const businessCodePreview = ref('');
 const businessCodePrefixSource = ref('');
 const codeContractHint = ref('');
 const codeContractReady = ref(false);
+const editingBusinessCode = ref('');
+const editingDisplayCode = ref('');
 const sp8PreviewLoading = ref(false);
 const QUICK_CREATE_L3 = '__quick_create_l3__';
 const createL3DialogVisible = ref(false);
@@ -791,6 +806,8 @@ function openCreate() {
   segmentL3.value = '';
   segmentCodePreview.value = '';
   resetCodeContractPreview();
+  editingBusinessCode.value = '';
+  editingDisplayCode.value = '';
   l3MatchHint.value = '';
   l3ManuallyEdited.value = false;
   if (segmentTree.value.length === 0) loadSegmentTree();
@@ -815,6 +832,8 @@ async function openEdit(row: TableRow) {
     associatedCustomerId: (row.associatedCustomerId as string | null) ?? null,
     packQtyPerProduct: row.packQtyPerProduct != null ? Number(row.packQtyPerProduct) : null,
   };
+  editingBusinessCode.value = String(row.businessCode || '').trim();
+  editingDisplayCode.value = materialDisplayCode(row);
   loadCustomers();
   resetPackaging();
   resetManuallyEditedFlags();
@@ -1062,7 +1081,7 @@ function handleSizeChange(size: number) {
       </template>
 
       <div class="search-bar">
-        <!-- 16位编码层级筛选：按累计编码前缀逐级收窄 -->
+        <!-- 分类层级筛选：分类名称为主，稳定分类码仅作为次级识别信息。 -->
         <el-select
           v-model="filterSegmentL1"
           placeholder="全部 L1 大类"
@@ -1073,7 +1092,7 @@ function handleSizeChange(size: number) {
           <el-option
             v-for="opt in materialFamilyOptions"
             :key="opt.segmentCode"
-            :label="`${opt.segmentCode} — ${opt.label}`"
+            :label="formatSegmentOptionLabel(opt)"
             :value="opt.segmentCode"
           />
         </el-select>
@@ -1089,7 +1108,7 @@ function handleSizeChange(size: number) {
           <el-option
             v-for="opt in filterSegmentL2Options"
             :key="opt.segmentCode"
-            :label="`${opt.segmentCode} — ${opt.segmentLabel}`"
+            :label="formatSegmentOptionLabel(opt)"
             :value="opt.segmentCode"
           />
         </el-select>
@@ -1105,13 +1124,13 @@ function handleSizeChange(size: number) {
           <el-option
             v-for="opt in filterSegmentL3Options"
             :key="opt.segmentCode"
-            :label="`${opt.segmentCode} — ${opt.segmentLabel}`"
+            :label="formatSegmentOptionLabel(opt)"
             :value="opt.segmentCode"
           />
         </el-select>
         <el-input
           v-model="searchKeyword"
-          placeholder="搜索原料名称 / 编码"
+          placeholder="搜索原料名称 / 业务编码 / 历史编码"
           clearable
           style="width: 280px"
           @keyup.enter="handleSearch"
@@ -1121,7 +1140,21 @@ function handleSizeChange(size: number) {
       </div>
 
       <el-table v-loading="loading" :data="tableData" stripe>
-        <el-table-column prop="code" label="原料编码" width="160" />
+        <el-table-column label="业务编码" min-width="180">
+          <template #default="{ row }">
+            <div class="material-code-cell">
+              <span class="material-code-value">{{ materialDisplayCode(row) }}</span>
+              <el-tag v-if="!materialHasBusinessCode(row)" size="small" type="info">历史编码</el-tag>
+              <el-tooltip
+                v-else-if="row.code && String(row.code) !== materialDisplayCode(row)"
+                :content="`历史兼容编码：${row.code}`"
+                placement="top"
+              >
+                <el-tag size="small" type="info" effect="plain">兼容码</el-tag>
+              </el-tooltip>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column prop="name" label="原料名称" min-width="180" />
         <el-table-column prop="category" label="类别" width="120" />
         <el-table-column prop="unit" label="单位" width="80">
@@ -1165,12 +1198,18 @@ function handleSizeChange(size: number) {
     <el-dialog v-model="dialogVisible" :title="dialogTitle" width="660px" destroy-on-close>
       <el-form :model="form" label-width="120px">
 
-        <!-- 编码: 创建时显示实时预览, 编辑时只读锁定 -->
-        <el-form-item v-if="editingId" label="原料编码">
-          <el-input v-model="form.code" disabled :prefix-icon="Lock" />
+        <!-- 业务编码为用户主视图；旧16位编码仅保留兼容和分类修复用途。 -->
+        <el-form-item v-if="editingId" label="业务编码">
+          <el-input :model-value="editingDisplayCode" disabled :prefix-icon="Lock" />
+          <div v-if="editingBusinessCode" class="field-hint">
+            业务编码不可修改；历史兼容编码可在列表“兼容码”提示中查看。
+          </div>
+          <div v-else class="field-hint field-hint--legacy">
+            该历史记录尚未分配业务编码，当前回退显示原16位编码。
+          </div>
         </el-form-item>
-        <el-form-item v-else label="原料编码">
-          <span class="code-preview-hint">选择完整 L1-L3 分类后，系统将在下方显示与保存一致的业务编码和兼容分类编码。</span>
+        <el-form-item v-else label="业务编码">
+          <span class="code-preview-hint">选择完整 L1-L3 分类后，系统将在下方生成并优先展示短业务编码。</span>
         </el-form-item>
 
         <el-form-item label="原料名称" required>
@@ -1324,11 +1363,11 @@ function handleSizeChange(size: number) {
           </el-form-item>
         </template>
 
-        <!-- SP8: 16位编码级联 (创建模式下显示, 编辑模式只读) -->
+        <!-- 物料分类 + 双码契约：业务编码主显示，16位编码仅用于历史兼容。 -->
         <!-- SP8 兜底 (Tier0 #15 minimal): 字典未配置时隐藏级联入口防 dead-end (fool-proof Rule 5).
              generate-code 端点 P1 上线; 当前 tree 为空时显示诚实空态而非空下拉组合. -->
         <el-divider v-if="showSegmentEditor">
-          <span class="divider-title">16位编码级联（必填）</span>
+          <span class="divider-title">物料分类与业务编码（必填）</span>
         </el-divider>
         <template v-if="showSegmentEditor">
           <!-- 字典已配置: 展示完整级联 -->
@@ -1345,7 +1384,7 @@ function handleSizeChange(size: number) {
                 <el-option
                   v-for="opt in segmentL1Options"
                   :key="opt.segmentCode"
-                  :label="`${opt.segmentCode} — ${opt.segmentLabel}`"
+                  :label="formatSegmentOptionLabel(opt)"
                   :value="opt.segmentCode"
                 />
               </el-select>
@@ -1362,7 +1401,7 @@ function handleSizeChange(size: number) {
                 <el-option
                   v-for="opt in segmentL2Options"
                   :key="opt.segmentCode"
-                  :label="`${opt.segmentCode} — ${opt.segmentLabel}`"
+                  :label="formatSegmentOptionLabel(opt)"
                   :value="opt.segmentCode"
                 />
               </el-select>
@@ -1386,7 +1425,7 @@ function handleSizeChange(size: number) {
                 <el-option
                   v-for="opt in segmentL3Options"
                   :key="opt.segmentCode"
-                  :label="`${opt.segmentCode} — ${opt.segmentLabel}`"
+                  :label="formatSegmentOptionLabel(opt)"
                   :value="opt.segmentCode"
                 />
               </el-select>
@@ -1421,7 +1460,7 @@ function handleSizeChange(size: number) {
                   <span v-else class="field-hint">正在校验编码契约…</span>
                 </div>
                 <div class="code-preview-row">
-                  <span class="code-preview-label">16位分类编码（兼容）</span>
+                  <span class="code-preview-label">历史兼容编码（16位）</span>
                   <el-tag v-if="segmentCodePreview" type="info" class="code-preview-tag">
                     {{ segmentCodePreview }}
                   </el-tag>
@@ -1443,7 +1482,7 @@ function handleSizeChange(size: number) {
           <!-- 字典未配置: 诚实空态 + 跳转配置引导 (fool-proof Rule 5: dead-end 改导航) -->
           <el-form-item v-else label="">
             <el-alert
-              title="16位编码字典尚未配置，暂不可用"
+              title="物料分类编码字典尚未配置，暂不可用"
               type="info"
               :closable="false"
               show-icon
@@ -1646,6 +1685,20 @@ function handleSizeChange(size: number) {
   color: #909399;
 }
 
+.material-code-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.material-code-value {
+  color: #303133;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  overflow-wrap: anywhere;
+}
+
 /* T159-A: Field hints */
 .field-hint {
   font-size: 12px;
@@ -1654,6 +1707,10 @@ function handleSizeChange(size: number) {
   line-height: 1.4;
 }
 .field-hint--manual {
+  color: #e6a23c;
+}
+
+.field-hint--legacy {
   color: #e6a23c;
 }
 
