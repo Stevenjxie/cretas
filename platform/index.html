@@ -107,8 +107,17 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .band .bcopy p{font-size:clamp(14.5px,1.5vw,18px);color:rgba(255,255,255,.88);line-height:1.85;margin:0 0 24px;max-width:36ch}
 .band .bcopy .v6-link{color:#fff;font-weight:700;font-size:15px;text-decoration:none;
   border-bottom:2px solid rgba(0,226,138,.7);padding-bottom:3px}
-.band .bdet{position:absolute;border:1.5px solid rgba(0,226,138,.85);border-radius:10px;z-index:2;
-  box-shadow:0 0 26px rgba(0,226,138,.15)}
+.band .bdet{position:absolute;border:1px solid rgba(0,226,138,.25);border-radius:6px;
+  background:
+    linear-gradient(#00e28a,#00e28a) left 0 top 0/12px 2px,
+    linear-gradient(#00e28a,#00e28a) left 0 top 0/2px 12px,
+    linear-gradient(#00e28a,#00e28a) right 0 top 0/12px 2px,
+    linear-gradient(#00e28a,#00e28a) right 0 top 0/2px 12px,
+    linear-gradient(#00e28a,#00e28a) left 0 bottom 0/12px 2px,
+    linear-gradient(#00e28a,#00e28a) left 0 bottom 0/2px 12px,
+    linear-gradient(#00e28a,#00e28a) right 0 bottom 0/12px 2px,
+    linear-gradient(#00e28a,#00e28a) right 0 bottom 0/2px 12px;
+  background-repeat:no-repeat;z-index:2;box-shadow:0 0 20px rgba(0,226,138,.12)}
 .band .bdet span{position:absolute;top:-16px;left:0;background:var(--v6-tag);color:#04140d;
   font-family:var(--v6-mono);font-size:12px;font-weight:800;padding:3px 11px;border-radius:99px;white-space:nowrap}
 .band .bd1{right:24%;top:16%;width:clamp(150px,15vw,220px);height:50%}

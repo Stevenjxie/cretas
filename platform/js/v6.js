@@ -60,14 +60,39 @@ function v6LiveTicker(el, items){
   if(v6ReducedMotion()){ el.textContent = items.join(' · '); return; }
   setInterval(function(){
     i = (i + 1) % items.length;
-    el.style.opacity = 0;
-    setTimeout(function(){ el.textContent = items[i]; el.style.opacity = 1; }, 260);
+    el.classList.add('tick-out');                    /* roll up + fade */
+    setTimeout(function(){
+      el.textContent = items[i];
+      el.classList.remove('tick-out');
+      el.classList.add('tick-in');                   /* jump below, then ease in */
+      void el.offsetWidth;
+      el.classList.remove('tick-in');
+    }, 300);
   }, 4200);
+}
+
+/* Thin scroll progress line at the very top */
+function v6ProgressInit(){
+  if(v6ReducedMotion()) return;
+  var bar = document.createElement('div');
+  bar.id = 'v6Progress';
+  document.body.appendChild(bar);
+  var ticking = false;
+  function frame(){
+    ticking = false;
+    var h = document.documentElement.scrollHeight - window.innerHeight;
+    bar.style.width = (h > 0 ? (window.scrollY / h) * 100 : 0) + '%';
+  }
+  window.addEventListener('scroll', function(){
+    if(!ticking){ ticking = true; requestAnimationFrame(frame); }
+  }, { passive: true });
+  frame();
 }
 
 document.addEventListener('DOMContentLoaded', function(){
   v6RevealInit();
   v6GlowDrift();
+  v6ProgressInit();
 });
 
 /* Chat replay: the AI demo answers questions on loop — the site itself is "working".

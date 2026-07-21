@@ -108,7 +108,17 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   align-items:center;font-family:var(--v6-mono);font-size:11px;color:#d6ffee;z-index:3}
 .feed .cam-top .live{display:flex;align-items:center;gap:7px;color:var(--v6-tag);font-weight:700}
 .feed .cam-top .live i{width:7px;height:7px;border-radius:99px;background:var(--v6-tag);animation:eyePulse 2.4s ease-in-out infinite}
-.det{position:absolute;border:1.5px solid rgba(0,226,138,.92);border-radius:9px;box-shadow:0 0 14px rgba(0,226,138,.12);z-index:2}
+.det{position:absolute;border:1px solid rgba(0,226,138,.25);border-radius:6px;
+  background:
+    linear-gradient(#00e28a,#00e28a) left 0 top 0/12px 2px,
+    linear-gradient(#00e28a,#00e28a) left 0 top 0/2px 12px,
+    linear-gradient(#00e28a,#00e28a) right 0 top 0/12px 2px,
+    linear-gradient(#00e28a,#00e28a) right 0 top 0/2px 12px,
+    linear-gradient(#00e28a,#00e28a) left 0 bottom 0/12px 2px,
+    linear-gradient(#00e28a,#00e28a) left 0 bottom 0/2px 12px,
+    linear-gradient(#00e28a,#00e28a) right 0 bottom 0/12px 2px,
+    linear-gradient(#00e28a,#00e28a) right 0 bottom 0/2px 12px;
+  background-repeat:no-repeat;box-shadow:0 0 14px rgba(0,226,138,.12);z-index:2}
 .det span{position:absolute;top:-15px;left:-1px;background:var(--v6-tag);color:#04140d;font-family:var(--v6-mono);
   font-size:10.5px;font-weight:800;padding:2px 9px;border-radius:99px;white-space:nowrap}
 .det.d1{left:9%;top:22%;width:30%;height:52%}

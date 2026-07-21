@@ -67,6 +67,11 @@
       rx(-((e.clientY - r.top) / r.height - .5) * 6);
     });
     card.addEventListener('pointerleave', function(){ rx(0); ry(0); });
+    var img = card.querySelector('img');
+    if (img) {
+      card.addEventListener('pointerenter', function(){ gsap.to(img, {scale: 1.24, duration: .8, ease: 'power3.out'}); });
+      card.addEventListener('pointerleave', function(){ gsap.to(img, {scale: 1.18, duration: .8, ease: 'power3.out'}); });
+    }
   });
 
   /* Hero image settle + drift; copy drifts away; full-bleed band drift */
@@ -126,8 +131,11 @@
       var vc = window.innerWidth / 2;
       cards.forEach(function(c){
         var r = c.getBoundingClientRect();
-        var d = Math.min(1, Math.abs((r.left + r.width/2) - vc) / (window.innerWidth * .7));
+        var off = (r.left + r.width/2) - vc;
+        var d = Math.min(1, Math.abs(off) / (window.innerWidth * .7));
         gsap.set(c, { scale: 1 - d * .06, filter: 'brightness(' + (1.04 - d * .18) + ')' });
+        var im = c.querySelector('img');
+        if (im) gsap.set(im, { xPercent: Math.max(-5, Math.min(5, off / window.innerWidth * -10)) });
       });
     }
     gsap.to(bizGrid, {
