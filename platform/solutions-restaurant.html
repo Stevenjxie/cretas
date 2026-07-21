@@ -234,7 +234,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .silo .qt b{color:var(--v6-ink)}
 
 /* 内控老师案例（引用+对照） */
-.auditor{max-width:920px;margin:0 auto;padding:clamp(44px,6.5vw,92px) clamp(16px,4vw,48px)}
+.auditor{max-width:1060px;margin:0 auto;padding:clamp(44px,6.5vw,92px) clamp(16px,4vw,48px)}
 .auditor .kicker{font-family:var(--v6-mono);font-size:12px;color:var(--v6-cta-ink);letter-spacing:2px;margin-bottom:10px}
 .auditor .lead-story{font-size:clamp(14px,1.55vw,17px);color:var(--v6-ink-2);line-height:1.9;max-width:60ch;margin:18px 0 0}
 .auditor .lead-story b{color:var(--v6-ink)}
@@ -264,6 +264,32 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .replay blockquote{margin:26px 0 0;font-size:clamp(15px,1.7vw,19px);font-weight:700;color:var(--v6-ink-2);
   line-height:1.8;border:none;padding:0}
 .replay blockquote cite{display:block;font-style:normal;font-size:13px;color:#6d6862;font-weight:400;margin-top:8px}
+
+
+/* replay 双栏: 左时间线右证据拟物 */
+.replay{max-width:1120px}
+.replay .rwrap{display:grid;grid-template-columns:1.05fr .95fr;gap:clamp(28px,4.5vw,72px);align-items:center}
+.replay .rvis{justify-self:center;width:100%;max-width:400px}
+/* 手机推送拟物 */
+.pushcard{background:#101613;border-radius:20px;padding:16px 16px 18px;box-shadow:0 26px 60px -28px rgba(10,30,20,.5)}
+.pushcard .pt{font-family:var(--v6-mono);font-size:10.5px;color:rgba(255,255,255,.45);letter-spacing:1.5px;text-align:center;margin-bottom:12px}
+.pushcard .note{background:rgba(255,255,255,.08);border-radius:13px;padding:12px 14px;margin-bottom:9px}
+.pushcard .note .h{display:flex;gap:8px;align-items:center;margin-bottom:6px}
+.pushcard .note .h svg{flex:0 0 15px}
+.pushcard .note .h b{color:#fff;font-size:13px}
+.pushcard .note .h small{margin-left:auto;font-size:10.5px;color:rgba(255,255,255,.4)}
+.pushcard .note p{margin:0;font-size:12.5px;color:rgba(255,255,255,.78);line-height:1.65}
+.pushcard .note p b{color:#ffb84d}
+.pushcard .note.ok p b{color:var(--v6-tag)}
+/* 报表日历拟物 */
+.repcard{background:#fff;border-radius:16px;box-shadow:0 24px 56px -28px rgba(40,40,40,.3);padding:clamp(18px,2vw,24px)}
+.repcard .ph{font-family:var(--v6-mono);font-size:11px;color:#847e75;letter-spacing:1.2px;margin-bottom:12px}
+.repcard .row{display:flex;justify-content:space-between;align-items:baseline;font-size:13.5px;padding:9px 2px;border-bottom:1px solid rgba(0,0,0,.06)}
+.repcard .row .k{color:var(--v6-ink-2)}
+.repcard .row b{font-weight:800}
+.repcard .row b.g{color:var(--v6-cta-ink)}
+.repcard .foot{margin-top:12px;font-size:12px;color:var(--v6-cta-ink);font-weight:700;display:flex;gap:7px;align-items:center}
+@media (max-width:900px){.replay .rwrap{grid-template-columns:1fr}}
 
 /* 差异化对比条 ----------------------------------------------------------- */
 .versus{max-width:1120px;margin:0 auto;padding:clamp(56px,8vw,120px) clamp(16px,4vw,48px);text-align:center}
@@ -595,11 +621,26 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 <section class="replay">
   <div class="kicker v6-reveal">真实案例 · 一次涨价的复盘</div>
   <h2>老板最后一个知道的涨价</h2>
+  <div class="rwrap">
   <div class="tl">
     <div class="tstep v6-reveal"><div class="when">周一</div><div class="what">供应商临时把猪前腿单价<b>上调 8%</b>，只在送货单上改了数字。</div></div>
     <div class="tstep v6-reveal"><div class="when">周三</div><div class="what">仓管照单验收入库，<b>没人觉得需要上报</b>，流程里也没这一步。</div></div>
     <div class="tstep v6-reveal"><div class="when">月底</div><div class="what">财务对账才发现，这一个月多付了<b>四万七</b>。类似的事，一年不止一次。</div></div>
     <div class="tstep good v6-reveal"><div class="when">接入后</div><div class="what">进价一偏离历史区间，<b>入库那一刻老板手机就响</b>，仓管报不报，账都翻不了暗箱。</div></div>
+  </div>
+  <div class="rvis v6-reveal">
+    <div class="pushcard">
+      <div class="pt">CRETAS · 实时推送</div>
+      <div class="note">
+        <div class="h"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#ffb84d" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg><b>进价异常</b><small>刚刚</small></div>
+        <p>猪前腿 ¥23.8/kg，<b>比 30 天均价高 8%</b>，本单多付 ¥312</p>
+      </div>
+      <div class="note ok">
+        <div class="h"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#00e28a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><b>已同步老板</b><small>刚刚</small></div>
+        <p>入库暂缓，<b>等价格确认</b>后再验收</p>
+      </div>
+    </div>
+  </div>
   </div>
   <blockquote class="v6-reveal">这里面存在很多潜规则，老板没有信息渠道。<cite>— 某连锁餐饮投资人，聊起他为什么最看重这个功能</cite></blockquote>
 </section>
@@ -607,11 +648,24 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 <section class="replay">
   <div class="kicker v6-reveal">真实案例 · 被账期困住的一个月</div>
   <h2>做这套报表，搞跑了好几个人</h2>
+  <div class="rwrap">
   <div class="tl">
     <div class="tstep v6-reveal"><div class="when">5 号前</div><div class="what">所有供应商轮流来对账，<b>3、4 个人对着 2、3 套系统</b>核单子。</div></div>
     <div class="tstep v6-reveal"><div class="when">10/20/30 号</div><div class="what">每旬一次全店盘点，成本卡<b>全靠人一张张手写</b>，"搞了一两个，不想干了。"</div></div>
     <div class="tstep v6-reveal"><div class="when">下月 10 号</div><div class="what">报表终于出来，营收、毛利、占比都齐了，可<b>那已经是上个月的事了</b>，想调整只剩十来天。</div></div>
     <div class="tstep good v6-reveal"><div class="when">接入后</div><div class="what">数据当天完结、报表 <b>1 号自动出</b>，损耗次日可见，同一批人，从抄数改成看数、做决定。</div></div>
+  </div>
+  <div class="rvis v6-reveal">
+    <div class="repcard">
+      <div class="ph">月度经营报表 · 自动生成</div>
+      <div class="row"><span class="k">生成时间</span><b class="g">1 号 06:00</b></div>
+      <div class="row"><span class="k">营收 / 毛利</span><b>已核算</b></div>
+      <div class="row"><span class="k">食材 / 人工占比</span><b>已核算</b></div>
+      <div class="row"><span class="k">损耗明细</span><b class="g">次日可见</b></div>
+      <div class="row"><span class="k">人工整理</span><b class="g">0 小时</b></div>
+      <div class="foot"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>调整窗口：10 天 → 29 天</div>
+    </div>
+  </div>
   </div>
 </section>
 

@@ -197,7 +197,7 @@
       }});
     }
     ScrollTrigger.create({
-      trigger: stage, start: 'top 12%', end: '+=140%', pin: true, scrub: true,
+      trigger: stage, start: 'center center', end: '+=140%', pin: true, scrub: true,
       onUpdate: function(self){ chapter(Math.min(2, Math.floor(self.progress * 3))); }
     });
     chapter(0);
