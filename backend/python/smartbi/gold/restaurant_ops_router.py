@@ -1581,8 +1581,8 @@ async def resolve_gross_margin(
 
     if prohibited_actions_requested:
         low_margin_name = (
-            low_margin_candidates[0]["name"]
-            if low_margin_candidates else "暂无可确认对象"
+            low_margin[0]["name"]
+            if low_margin else "暂无可确认对象"
         )
         answer = (
             f"{window_label}先不要做三件事。判断依据：全部销售营收 ¥{total_rev:,.2f}，"

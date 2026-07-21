@@ -5,6 +5,10 @@
 
 ## 在飞任务
 
+- `RTAI-S4` — `in-progress` — Owner: 当前协调者 — Base SHA: `c7cd3edb09ba8b0d8b66dca5f3f308ce19d87505` — 收口餐饮 AI 生产严格复验剩余问题：修复低毛利候选未定义异常，在下游分析短暂不可用时按今日、日期对比、服务速度与门店追问的真实语义返回不编造结果，并将最近完整日演示聚合数据纳入每日可审计刷新；验收为 Java/Python/脚本目标测试、单生命周期发布构建、生产只读复验且业务写入为 0。
+- `RTAI-S4-JAVA` — `claimed` — Owner: `/root/rtai_r4_java` — Base SHA: `c7cd3edb09ba8b0d8b66dca5f3f308ce19d87505` — 下游餐饮分析不可用时，仅对今日、昨日/前天、服务速度、门店毛利追问返回不编造且不泄漏内部标识的语义化答案。
+- `RTAI-S4-PYTHON` — `claimed` — Owner: `/root/rtai_r4_python` — Base SHA: `c7cd3edb09ba8b0d8b66dca5f3f308ce19d87505` — 修复低毛利候选未定义异常并补真实解析器回归。
+- `RTAI-S4-CRON` — `claimed` — Owner: `/root/rtai_r4_cron` — Base SHA: `c7cd3edb09ba8b0d8b66dca5f3f308ce19d87505` — 将最近完整日演示聚合安全纳入日刷新，仅限演示租户、默认到昨日、需要双重确认且保留可审计回滚标记。
 - `RTAI-S3` — `in-progress` — Owner: 当前协调者 — Base SHA: `5c2eb1ce94ac3d46e3a34a6dc05f2541657da430` — 修复餐饮 AI 7/21 严格生产审计中的指标口径混用、自然问法错误路由、能力维度遗漏、跨 Java/Python 多轮上下文串线与固定模板冗长；验收为 Java/Python 目标回归、单生命周期发布构建、生产只读复验且业务写入为 0。
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
 - `ENH-F006-SUPPLIER-IMPORT-001`（含 `REQ-F006-SUPPLIER-REQUIRED-CONTACT-001`、`ENH-F006-SUPPLIER-DETAIL-STATUS-001`）— `in-progress` — Owner: `/root` — Base SHA: `3ddf6751603476205457fcf8aa0ee9f1adbea792` — 复用现有供应链 Excel 共享能力，统一供应商必填资料、导入预览/幂等确认、状态生命周期、采购门禁与详情信息架构；只合入 `main`，严格 `NOT_DEPLOYED`，生产业务写入为 0。
@@ -38,6 +42,10 @@
 - `BUG-F006-R2-WORKFLOW-INPUT-MODE-DERIVATION` — `in-progress` — Owner: `/root` — Base SHA: `457b3b5e9` — BOM 未完整前 Workflow 投入方式只显示“待 BOM 配置”，不得猜测 AT_LEAST_ONE；BOM 完整后由必需主项、替代集合与可选项结构化派生每组 ALL_REQUIRED/EXACTLY_ONE/OPTIONAL 只读规则，发布与报工共用同一 pinned 快照，严格 `NOT_DEPLOYED`。
 
 ## Scope 锁地图
+- `RTAI-S4`：仅餐饮 AI Java Gold 分析工具及其目标测试、Python 餐饮毛利解析器及其目标测试、`scripts/cron/refresh-demo-rest.sh`、最近完整日演示聚合刷新测试、餐饮只读生产验收证据、ACTIVE 与当日归档。验收：异常不再吞掉问题语义，缺数据/依赖不可用时不用其他日期或其他指标替代，演示聚合仅补至昨日且可审计回滚，生产只读复验 `actualBusinessWrites=0`、`blockedMutationAttempts=0`。
+- `RTAI-S4-JAVA`：仅 `backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/restaurant/gold/RestaurantOpsGoldAnalysisTool.java` 与同名目标测试；验收 `mvn -Dtest=RestaurantOpsGoldAnalysisToolTest test`。
+- `RTAI-S4-PYTHON`：仅 `backend/python/smartbi/gold/restaurant_ops_router.py` 与 `backend/python/tests/test_restaurant_ops_router.py`；验收 `pytest -q backend/python/tests/test_restaurant_ops_router.py`。
+- `RTAI-S4-CRON`：仅 `scripts/cron/refresh-demo-rest.sh` 与该脚本直接目标测试；验收 shell 语法、参数门禁与日期上界断言。
 - `RTAI-S3`：仅餐饮 AI Java 路由/会话引用/门店榜单工具及其目标测试，SmartBI 餐饮意图/路由/答案契约/财务汇总查询及其目标测试，餐饮只读生产验收证据、ACTIVE 与当日归档。验收：同日期范围与分母口径、数值自洽、歧义澄清、能力边界、简洁回答、多轮门店指代、生产只读复验且 `actualBusinessWrites=0`、`blockedMutationAttempts=0`。
 - `SEC-CREDENTIAL-ROTATION-20260719`：`scripts/systemd/` 中遗留明文启动脚本、现有/新增 secret 扫描配置与测试、`.gitignore` / 凭证模板、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-19-active-history.md`；外部状态仅限已授权的 Cretas 47/139 服务器配置、PostgreSQL 角色密码、相关阿里云/API 凭证与必要服务重启。验收：tracked tree 与完整 Git 历史脱敏盘点、scanner gate、exact-main 发布门禁、Java/Python/网关健康、登录与 Restaurant Agent 只读 smoke、核心 ERP 零写入。
 - `ENH-F006-SUPPLIER-IMPORT-001`：供应商 Java Entity/DTO/Controller/Service/Repository、采购下单与供应关系门禁、共享 Excel 导入基础设施及目标测试；Web Admin 供应商列表/统一详情/新增编辑/导入与 API/types/tests；`docs/qa/F006-MVP-E2E-bug-review-2026-07-20.md`、`docs/dispatch/ACTIVE.md` 与当日归档。验收：真实 JPA Context（如触及 Entity/Repository）、Java API/Service、Web 组件/payload/build、预览零业务写、幂等与跨工厂隔离、历史只读兼容、`NOT_DEPLOYED`。
