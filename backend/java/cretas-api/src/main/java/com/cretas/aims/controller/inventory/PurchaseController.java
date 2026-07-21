@@ -7,6 +7,8 @@ import com.cretas.aims.dto.inventory.CreateReceiveRecordRequest;
 import com.cretas.aims.dto.inventory.UpdatePurchaseOrderRequest;
 import com.cretas.aims.dto.inventory.MaterialPriceComparisonDTO;
 import com.cretas.aims.dto.inventory.PurchaseSuggestionResponse;
+import com.cretas.aims.dto.inventory.PurchaseApprovalRecoveryResponse;
+import com.cretas.aims.dto.inventory.RecoverPurchaseApprovalRequest;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
@@ -52,6 +54,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import com.cretas.aims.annotation.RequireModule;
+import com.cretas.aims.config.RequireRole;
 
 @Slf4j
 @RestController
@@ -260,6 +263,30 @@ public class PurchaseController {
         return ApiResponse.success(order.getStatus() == PurchaseOrderStatus.WORKFLOW_RUNNING
                 ? "采购订单已提交至 OA 审批中心"
                 : "采购订单审批流程已自动完成", order);
+    }
+
+    @RequireModule("purchase_order")
+    @PostMapping("/orders/{orderId}/approval-recovery")
+    @Operation(summary = "受限恢复采购订单 OA 审批实例")
+    @RequirePermission("procurement:read_write")
+    @RequireRole({"factory_super_admin"})
+    public ApiResponse<PurchaseApprovalRecoveryResponse> recoverApprovalInstance(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String orderId,
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody RecoverPurchaseApprovalRequest request) {
+        Long operatorUserId = extractUserId(authorization);
+        PurchaseApprovalRecoveryResponse result = purchaseService.recoverMissingApprovalInstance(
+                factoryId,
+                orderId,
+                operatorUserId,
+                request.getExpectedOrderNumber(),
+                request.getIdempotencyKey(),
+                request.getReason(),
+                request.isConfirm());
+        return ApiResponse.success(result.isRecovered()
+                ? "采购订单 OA 审批实例恢复成功"
+                : "该恢复请求已执行，返回原 OA 审批实例", result);
     }
 
     @RequireModule("purchase_order")

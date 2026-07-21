@@ -641,3 +641,18 @@
 - **Commit/PR/main 状态**：实现与门禁 commit `9d48e91ba61feada2fb356da44958002fd9516c6`；PR [#1560](https://github.com/Stevenjxie/cretas/pull/1560) 已合入；exact main `481b57f3b07755f0ad6fd7b0a68e9208e9093f90`。
 - **部署状态**：NOT_DEPLOYED。
 - **回归状态**：TARGET_TEST_PASS；生产业务 mutation=0，未创建/处理/桥接任何 F006 或 LIUSHANMEN 审批实例。
+
+## F006 历史采购单 OA 恢复边界（2026-07-21）
+
+### F006-OA-RECOVERY-001
+
+- **发现阶段/时间/页面/步骤**：F006 R3 采购 OA 修复上线后的历史单续跑审计，2026-07-21；`PO-20260721-0001` 已处于 `SUBMITTED`，但没有关联 OA instance、当前节点或待办。
+- **期望/实际/业务影响**：历史 split-brain 记录应能在严格受限、可审计、幂等的管理员事务中仅补齐缺失 OA 实例；实际现有提交入口对该状态正确 fail-closed，但没有安全恢复边界，订单永久无法继续审批。
+- **证据路径**：`D:/Temp/codex-clipboard-1dca4a61-f74a-4527-a149-790ea215e98c.png`、`D:/Temp/codex-clipboard-5200e993-de32-4fbb-8366-b27c30738b40.png`。
+- **根因**：采购提交原子化修复只覆盖未来首次提交；为避免自动桥接历史生产数据，旧 `SUBMITTED + workflowInstanceId=null` 被保留为冲突状态，但缺少独立的高权限恢复命令和订单快照/路由复核。
+- **修复**：新增仅 `factory_super_admin` 可调用的采购 OA 恢复端点；强制校验工厂、订单 UUID、精确业务单号、`confirm=true`、幂等键与非空原因，并在行锁事务内验证订单仍为 `SUBMITTED`、仍无实例、冻结供应商/订单行 identity 完整、当前 PURCHASE_ORDER 流程可产生可执行节点。实例以原始创建人为发起人，恢复操作者、原因、幂等键和时间写入 workflow context；同 key 重放不重复创建，不同 key、已有实例、跨厂、无路由或无可执行节点全部 fail-closed，状态投影前失败不保存采购单。
+- **修改文件**：`RecoverPurchaseApprovalRequest`、`PurchaseApprovalRecoveryResponse`、`PurchaseController`、`PurchaseService`、`PurchaseServiceImpl` 及对应 Controller/Service 目标测试。
+- **测试**：待最终 release lifecycle 写回；覆盖首次恢复、原始发起人、审计 context、同 key 幂等、不同 key 冲突、确认/业务单号门禁、跨厂拒绝、缺路由与空节点事务失败。
+- **Commit/PR/main 状态**：待合入。
+- **部署状态**：`NOT_DEPLOYED`。
+- **回归状态**：`PENDING_TARGET_TEST`；生产业务 mutation=0，未对 `PO-20260721-0001` 执行恢复、取消、重提、重建或桥接，未触碰 LIUSHANMEN。
