@@ -232,29 +232,41 @@ def optimization_clarification_question(query: str) -> Optional[str]:
 
 
 _REQUEST_METRIC_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("net_profit", ("净利润", "净利率", "净利润率", "经营利润", "实际利润", "净赚")),
     ("recipe_cost", ("菜品成本", "食材成本", "配方成本", "单品成本")),
     ("wastage", ("食材损耗", "损耗", "浪费", "报损", "腐坏", "过期")),
     ("sales_volume", ("菜品销量", "销量", "销售量", "卖得好", "卖得慢", "慢销", "滞销")),
-    ("gross_margin", ("毛利率", "毛利", "利润", "盈利", "赚钱", "净赚")),
+    ("gross_margin", ("毛利率", "毛利", "利润", "盈利", "赚钱")),
     ("revenue", ("营业收入", "销售收入", "营业额", "销售额", "营收", "流水")),
     ("orders", ("订单集中", "订单数", "订单", "单量", "客单价")),
     ("staffing", ("人员不足", "人手不足", "人手", "人员", "排班", "人效", "在岗人数")),
     ("return_rate", ("退菜率", "退菜", "退款率", "退款")),
+    ("customer_review", ("顾客评价", "顾客评分", "差评", "好评", "评分", "口碑")),
+    ("production_time", ("制作时长", "制作时间", "加工时长", "烹饪时长")),
     ("service_speed", ("出餐慢", "出餐速度", "出餐时长", "上菜慢", "等餐")),
     ("process_bottleneck", ("工序瓶颈", "流程瓶颈", "工序耗时", "工序")),
 )
 
 _UNSUPPORTED_REQUIREMENTS = frozenset({
-    "return_rate", "service_speed", "process_bottleneck",
+    "net_profit", "return_rate", "customer_review", "production_time",
+    "service_speed", "process_bottleneck",
 })
 
 
 def _detect_requested_metrics(text: str) -> Tuple[str, ...]:
-    return tuple(
+    detected = tuple(
         metric
         for metric, tokens in _REQUEST_METRIC_RULES
         if any(token in text for token in tokens)
     )
+    rejects_gross_substitution = any(token in text for token in (
+        "不要用毛利", "不能用毛利", "不用毛利", "不拿毛利", "毛利替代",
+    ))
+    if "net_profit" in detected and (
+        "毛利" not in text or rejects_gross_substitution
+    ):
+        detected = tuple(metric for metric in detected if metric != "gross_margin")
+    return detected
 
 
 def _plan_requested_intents(
@@ -313,30 +325,54 @@ def _plan_requested_intents(
     return tuple(planned)
 
 
-def _unsupported_requirement_question(requirements: Tuple[str, ...]) -> str:
-    if "service_speed" in requirements or "process_bottleneck" in requirements:
-        return (
-            "当前可以核对订单集中程度和排班人效，但还没有逐单出餐时长及各工序节点时间，"
-            "因此不能可靠判断出餐慢或工序瓶颈，也不会用营收概览代替。"
-            "请先接入下单、开始制作、出餐完成及工序节点时间；在此之前可以先分析订单集中与人员配置。"
-        )
-    if "return_rate" in requirements:
-        return (
-            "当前可以分析菜品销量和毛利，但退菜明细与退菜率尚未接入，"
-            "不能把两个目标一起判定，也不会只回答毛利后声称已经完成。"
-            "请先接入退菜时间、菜品、数量、原因和责任门店，或者明确先做毛利分析。"
-        )
-    return "当前数据能力还不能完整覆盖这个问题，请补充对应明细数据后再分析。"
+def _unsupported_requirement_question(
+    requirements: Tuple[str, ...],
+    requested_metrics: Tuple[str, ...] = (),
+) -> str:
+    missing_labels = {
+        "net_profit": "净利润（还缺费用、税费及其他收支）",
+        "return_rate": "退菜率（还缺退菜时间、菜品、数量、原因和责任门店）",
+        "customer_review": "顾客评价（还缺评分、评价文本、时间、菜品与门店）",
+        "production_time": "菜品制作时长（还缺开始制作和完成时间）",
+        "service_speed": "逐单出餐时长（还缺下单、开始制作和出餐完成时间）",
+        "process_bottleneck": "工序瓶颈（还缺各工序节点及耗时）",
+    }
+    available_labels = {
+        "recipe_cost": "菜品成本",
+        "wastage": "食材损耗",
+        "sales_volume": "菜品销量",
+        "gross_margin": "已覆盖销售的毛利",
+        "revenue": "营业收入",
+        "orders": "订单与客单价",
+        "staffing": "排班人效",
+    }
+    available = [
+        label for metric, label in available_labels.items()
+        if metric in requested_metrics
+    ]
+    if not available:
+        available = ["订单集中程度", "排班人效", "菜品销量", "已覆盖销售的毛利"]
+    missing = [missing_labels[item] for item in requirements if item in missing_labels]
+    return (
+        f"当前可以可靠分析：{'、'.join(available)}。"
+        f"当前不能可靠分析：{'；'.join(missing)}。"
+        "不会用营业额、毛利或其他相近指标替代这些缺失指标，也不会把部分完成说成全部完成。"
+        "补齐括号内明细后可以继续；也可以明确只分析当前已有的维度。"
+    )
 
 
 def capability_clarification_question(query: str) -> Optional[str]:
     """Honest fallback for analyses that are not implemented in chat yet."""
     text = (query or "").strip()
-    if any(token in text for token in ("线性回归", "回归曲线", "决定系数", "R²", "R2")):
+    if any(token in text for token in (
+        "线性回归", "回归曲线", "决定系数", "R²", "R2", "价格弹性", "提价影响", "降价影响",
+    )):
         return (
-            "当前对话还不能可靠完成菜品销量与价格的回归计算或生成回归图。"
-            "可以导出的基础字段包括：菜品名称、日期、销量、成交单价、销售额、订单数和门店；"
-            "决定系数需要在这些明细样本完整后计算。这里不会把没有生成的图表描述为成功。"
+            "当前对话还不能可靠完成价格弹性、因果影响或回归图。"
+            "需要可导出的菜品名称、日期、门店、价格变动、销量、销售额、订单数、促销、渠道、"
+            "营业时段、缺货情况，以及可比较的对照门店或对照时段；只有相关性还不能证明因果。"
+            "字段完整后才能计算弹性、置信区间和决定系数。这里不会用简单涨跌替代因果结论，"
+            "也不会把没有生成的图表描述为成功。"
         )
     return None
 
@@ -463,7 +499,10 @@ def _build_spec(
     ))
     if unsupported_requirements and not clarification_needed:
         clarification_needed = True
-        clarification_question = _unsupported_requirement_question(unsupported_requirements)
+        clarification_question = _unsupported_requirement_question(
+            unsupported_requirements,
+            requested_metrics,
+        )
 
     return RestaurantQuerySpec(
         intent=code or "",
@@ -982,7 +1021,10 @@ async def parse_restaurant_query(
             confidence=1.0,
             tier="keyword",
             clarification_needed=True,
-            clarification_question=_unsupported_requirement_question(early_unsupported),
+            clarification_question=_unsupported_requirement_question(
+                early_unsupported,
+                early_requirements,
+            ),
         )
 
     optimization_question = optimization_clarification_question(norm_query)

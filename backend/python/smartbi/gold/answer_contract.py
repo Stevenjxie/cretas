@@ -7,6 +7,7 @@ same contract before they are served.
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Optional
 
 from smartbi.gold.restaurant_intent import RestaurantQuerySpec
@@ -50,6 +51,9 @@ _EXPLICIT_GAP_TOKENS = (
 _MARGIN_TOKENS = ("毛利", "毛利率", "利润")
 
 _REQUEST_TEXT_TOKENS = {
+    "net_profit": ("净利润", "净利率", "费用", "税费"),
+    "customer_review": ("顾客评价", "顾客评分", "差评", "评分"),
+    "production_time": ("制作时长", "制作时间", "加工时长"),
     "recipe_cost": ("菜品成本", "食材成本", "配方成本", "成本"),
     "wastage": ("食材损耗", "损耗", "浪费", "报损"),
     "sales_volume": ("菜品销量", "销量", "销售量", "高销量", "低销量"),
@@ -155,10 +159,47 @@ def _margin_integrity_present(meta: Optional[Dict[str, Any]]) -> bool:
     margin = payload.get("margin")
     if isinstance(margin, dict):
         payload = margin
-    return bool(
+    declared_ok = bool(
         payload.get("marginInvariantPass") is True
         and payload.get("scope_matches_request", True) is not False
     )
+    if not declared_ok:
+        return False
+
+    outer_start = payload.get("outer_window_start")
+    outer_end = payload.get("outer_window_end")
+    requested_start = payload.get("requested_window_start")
+    requested_end = payload.get("requested_window_end")
+    if outer_start and requested_start and outer_start != requested_start:
+        return False
+    if outer_end and requested_end and outer_end != requested_end:
+        return False
+
+    numeric_keys = ("totalProfit", "totalRevenueWithCost", "totalRevenue")
+    if not all(payload.get(key) is not None for key in numeric_keys):
+        return True
+    try:
+        profit = float(payload["totalProfit"])
+        covered_revenue = float(payload["totalRevenueWithCost"])
+        total_revenue = float(payload["totalRevenue"])
+        values = [profit, covered_revenue, total_revenue]
+        if payload.get("avgRate") is not None:
+            values.append(float(payload["avgRate"]))
+    except (TypeError, ValueError):
+        return False
+    if not all(math.isfinite(value) for value in values):
+        return False
+    if (
+        covered_revenue < -0.01
+        or total_revenue < -0.01
+        or profit > covered_revenue + 0.01
+        or covered_revenue > total_revenue + 0.01
+    ):
+        return False
+    if payload.get("avgRate") is not None and covered_revenue > 0:
+        if abs(float(payload["avgRate"]) - profit / covered_revenue) > 0.001:
+            return False
+    return True
 
 
 def _request_coverage_present(

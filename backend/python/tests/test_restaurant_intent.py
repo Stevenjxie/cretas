@@ -19,6 +19,7 @@ from smartbi.gold import answer_contract as contract
 from smartbi.gold.restaurant_intent import (
     RestaurantQuerySpec,
     build_resolver_query,
+    capability_clarification_question,
     clear_route_cache,
     clear_tenant_gate_cache,
     contextualize_restaurant_followup,
@@ -558,6 +559,48 @@ def test_contract_requires_explicit_margin_self_check():
     assert "margin_integrity" in result.missing
 
 
+def test_contract_recomputes_margin_arithmetic_instead_of_trusting_flags():
+    spec = _spec(wants_margin=True)
+    result = contract.validate(
+        spec,
+        "已覆盖毛利为¥120，毛利率120%",
+        kpis=[],
+        meta={
+            "marginInvariantPass": True,
+            "scope_matches_request": True,
+            "totalProfit": 120.0,
+            "totalRevenueWithCost": 100.0,
+            "totalRevenue": 1000.0,
+            "avgRate": 1.2,
+        },
+    )
+
+    assert "margin_integrity" in result.missing
+
+
+def test_contract_rejects_outer_and_margin_window_mismatch():
+    spec = _spec(wants_margin=True)
+    result = contract.validate(
+        spec,
+        "已覆盖毛利为¥20，毛利率20%",
+        kpis=[],
+        meta={
+            "marginInvariantPass": True,
+            "scope_matches_request": True,
+            "outer_window_start": "2026-01-01",
+            "outer_window_end": "2026-03-01",
+            "requested_window_start": "2026-02-01",
+            "requested_window_end": "2026-03-01",
+            "totalProfit": 20.0,
+            "totalRevenueWithCost": 100.0,
+            "totalRevenue": 1000.0,
+            "avgRate": 0.2,
+        },
+    )
+
+    assert "margin_integrity" in result.missing
+
+
 def test_required_elements_empty_for_bare_query():
     spec = _spec()  # no time, no margin, no profitability, no dimensions
     assert contract.required_elements(spec) == []
@@ -650,7 +693,7 @@ async def test_parse_catches_service_speed_capability_gap_before_tenant_gate():
     assert spec.intent == ""
     assert spec.clarification_needed is True
     assert spec.unsupported_requirements == ("service_speed", "process_bottleneck")
-    assert "不会用营收概览代替" in (spec.clarification_question or "")
+    assert "不会用营业额" in (spec.clarification_question or "")
 
 
 def test_margin_and_return_rate_query_discloses_missing_capability():
@@ -664,6 +707,55 @@ def test_margin_and_return_rate_query_discloses_missing_capability():
     assert spec.clarification_needed is True
     assert spec.unsupported_requirements == ("return_rate",)
     assert "退菜" in (spec.clarification_question or "")
+
+
+def test_net_profit_is_not_silently_reduced_to_revenue_or_gross_margin():
+    spec = _build_spec(
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        "请给出昨天各门店净利润，不要用营业额或毛利替代",
+        confidence=1.0,
+        tier="test",
+    )
+
+    assert "net_profit" in spec.requested_metrics
+    assert "gross_margin" not in spec.requested_metrics
+    assert spec.unsupported_requirements == ("net_profit",)
+    assert spec.clarification_needed is True
+    assert "净利润" in (spec.clarification_question or "")
+    assert "费用、税费及其他收支" in (spec.clarification_question or "")
+    assert "不会用营业额" in (spec.clarification_question or "")
+
+
+def test_dish_optimization_reports_every_missing_dimension_together():
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "请按菜品销量、销售额、毛利率、退菜率、顾客评价、制作时长和食材损耗优化菜品结构",
+        confidence=1.0,
+        tier="test",
+    )
+
+    assert set(spec.unsupported_requirements) == {
+        "return_rate", "customer_review", "production_time",
+    }
+    question = spec.clarification_question or ""
+    assert "退菜率" in question
+    assert "顾客评价" in question
+    assert "菜品制作时长" in question
+    assert "菜品销量" in question
+    assert "营业收入" in question
+    assert "已覆盖销售的毛利" in question
+    assert "食材损耗" in question
+    assert "部分完成说成全部完成" in question
+
+
+def test_price_elasticity_discloses_required_controls_and_does_not_claim_causality():
+    question = capability_clarification_question("分析提价影响和价格弹性") or ""
+
+    assert "价格变动" in question
+    assert "促销" in question
+    assert "缺货" in question
+    assert "对照门店或对照时段" in question
+    assert "相关性还不能证明因果" in question
 
 
 def test_dish_sales_and_margin_share_one_deterministic_resolver():

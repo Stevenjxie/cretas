@@ -1579,6 +1579,28 @@ async def resolve_gross_margin(
         f"  3. 对缺成本菜品补齐配方和最近进价，否则利润判断会失真。{missing_note}"
     )
 
+    if prohibited_actions_requested:
+        low_margin_name = (
+            low_margin_candidates[0]["name"]
+            if low_margin_candidates else "暂无可确认对象"
+        )
+        answer = (
+            f"{window_label}先不要做三件事。判断依据：全部销售营收 ¥{total_rev:,.2f}，"
+            f"可计算毛利的营收 ¥{total_rev_with_cost:,.2f}，覆盖率 {coverage_ratio * 100:.1f}%；"
+            f"已覆盖毛利 ¥{total_profit:,.2f}，加权毛利率 {margin_text}。\n"
+            "1. 不要按单一毛利率批量下架。"
+            f"适用前提：同时核对销量、绝对毛利和门店差异；当前低毛利候选是{low_margin_name}。"
+            "风险：可能误删引流款或套餐关键菜。最小验证：选一家店、一个菜、观察一周再决定。\n"
+            "2. 不要给全店统一涨价或打折。"
+            "适用前提：先确认单菜价格、销量与促销记录。"
+            "风险：会把高毛利菜的收益一并让掉，或伤害高频菜销量。"
+            "最小验证：只选一类高销量低毛利菜做小幅调整并设对照。\n"
+            "3. 不要对成本不完整的菜直接做利润决策。"
+            f"适用前提：先补齐成本；当前缺成本 {missing_cost_count} 个、成本异常 {invalid_cost_count} 个。"
+            "风险：毛利率会被高估或低估。最小验证：补齐配方和最近进价后再重算。"
+        )
+        charts = []
+
     return OpsAnswer(
         code="RESTAURANT_OPS_GROSS_MARGIN",
         title=f"菜品毛利分析 ({window_label})",
@@ -1613,6 +1635,7 @@ async def resolve_store_margin(
     smartbi_pool, factory_id: str, days: int = 30, top_n: int = 10,
     *, role: Optional[str] = None,
     date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
+    query: Optional[str] = None,
 ) -> OpsAnswer:
     """Per-store gross margin: fact_pos_item × fact_pos_transaction.store_id
     × dim_store.name × recipe food_cost. Connects POS bill → store → dish → cost
@@ -1832,6 +1855,13 @@ async def resolve_store_margin(
         if total_rev_with_cost > 0 else None
     )
     avg_rate = total_profit / total_rev_with_cost if total_profit is not None else None
+    scope_matches_request = bool(
+        exact_start is None
+        or (
+            window_start is not None and window_end is not None
+            and window_start >= exact_start and window_end <= exact_end
+        )
+    )
     margin_invariant_pass = bool(
         total_profit is None
         or (
@@ -1869,6 +1899,127 @@ async def resolve_store_margin(
         )
     coverage_ratio = total_rev_with_cost / total_rev if total_rev > 0 else 0.0
     invalid_cost_count = sum(s["invalid_cost_dishes"] for s in store_list)
+
+    query_text = (query or "").strip()
+    mentioned_store = next(
+        (
+            store
+            for store in store_list
+            if store.get("name") and str(store["name"]) in query_text
+        ),
+        None,
+    )
+    asks_target_margin_rank = bool(
+        mentioned_store
+        and any(token in query_text for token in ("毛利率", "毛利排名", "也是第一", "第几"))
+    )
+    if asks_target_margin_rank:
+        target_store = mentioned_store
+        if target_store.get("margin_rate") is None:
+            target_revenue = float(target_store["revenue"])
+            target_covered_revenue = float(target_store["revenue_with_cost"])
+            target_coverage = (
+                target_covered_revenue / target_revenue if target_revenue > 0 else 0.0
+            )
+            return OpsAnswer(
+                code="RESTAURANT_OPS_STORE_MARGIN",
+                title=f"{target_store['name']}毛利率比较（{window_label}）",
+                answer_text=(
+                    f"{target_store['name']}在{window_label}有营收 ¥{target_revenue:,.2f}，"
+                    f"其中可计算毛利的营收 ¥{target_covered_revenue:,.2f}，"
+                    f"成本覆盖率 {target_coverage * 100:.1f}%。"
+                    "该店成本数据不足，当前不能可靠计算毛利率或判断排名；"
+                    "不会用营收排名替代毛利率排名。请先补齐该店菜品配方和最近进价。"
+                ),
+                charts=[],
+                kpis=[
+                    {
+                        "title": "成本覆盖率",
+                        "value": f"{target_coverage * 100:.1f}%",
+                        "rawValue": target_coverage,
+                    },
+                ],
+                meta={
+                    "window_days": days,
+                    "window_start": _date_text(window_start) if window_start else None,
+                    "window_end": _date_text(window_end) if window_end else None,
+                    "requested_window_start": _date_text(exact_start) if exact_start else None,
+                    "requested_window_end": _date_text(exact_end) if exact_end else None,
+                    "scope_matches_request": scope_matches_request,
+                    "marginInvariantPass": margin_invariant_pass,
+                    "targetStore": target_store,
+                    "targetStoreComparable": False,
+                },
+            )
+        rate_ranked = sorted(
+            ranked_store_list,
+            key=lambda store: float(store["margin_rate"]),
+            reverse=True,
+        )
+        target_rank = next(
+            index
+            for index, store in enumerate(rate_ranked, start=1)
+            if store["store_id"] == target_store["store_id"]
+        )
+        leader = rate_ranked[0]
+        target_rate = float(target_store["margin_rate"])
+        target_coverage = (
+            float(target_store["revenue_with_cost"]) / float(target_store["revenue"])
+            if float(target_store["revenue"]) > 0 else 0.0
+        )
+        rank_sentence = (
+            "也是第一名。"
+            if target_rank == 1
+            else (
+                f"不是第一名，在 {len(rate_ranked)} 家成本可比较门店中排第 {target_rank}；"
+                f"第一名是{leader['name']}，毛利率 {float(leader['margin_rate']) * 100:.1f}%。"
+            )
+        )
+        targeted_answer = (
+            f"{target_store['name']}在{window_label}的已覆盖销售毛利率为 {target_rate * 100:.1f}%，"
+            f"{rank_sentence}"
+            f"该店全部营收 ¥{float(target_store['revenue']):,.2f}，"
+            f"其中可计算毛利的营收 ¥{float(target_store['revenue_with_cost']):,.2f}，"
+            f"成本覆盖率 {target_coverage * 100:.1f}%。"
+            "排名只比较同一时间范围内成本完整的销售，不用营收排名替代毛利率排名。"
+        )
+        return OpsAnswer(
+            code="RESTAURANT_OPS_STORE_MARGIN",
+            title=f"{target_store['name']}毛利率比较（{window_label}）",
+            answer_text=targeted_answer,
+            charts=[],
+            kpis=[
+                {"title": "毛利率排名", "value": target_rank, "rawValue": target_rank},
+                {"title": "已覆盖毛利率", "value": f"{target_rate * 100:.1f}%", "rawValue": target_rate},
+                {"title": "成本覆盖率", "value": f"{target_coverage * 100:.1f}%", "rawValue": target_coverage},
+            ],
+            meta={
+                "window_days": days,
+                "window_start": _date_text(window_start) if window_start else None,
+                "window_end": _date_text(window_end) if window_end else None,
+                "requested_window_start": _date_text(exact_start) if exact_start else None,
+                "requested_window_end": _date_text(exact_end) if exact_end else None,
+                "scope_matches_request": scope_matches_request,
+                "totalRevenue": total_rev,
+                "totalRevenueWithCost": total_rev_with_cost,
+                "totalProfit": total_profit,
+                "avgRate": avg_rate,
+                "coveredCost": covered_cost,
+                "marginFormula": "毛利=可计算毛利的营收-对应菜品成本",
+                "marginInvariantPass": margin_invariant_pass,
+                "costCoverageRatio": coverage_ratio,
+                "invalidCostCount": invalid_cost_count,
+                "targetStore": target_store,
+                "stores": [
+                    {"storeId": store["store_id"], "name": store["name"],
+                     "revenue": store["revenue"],
+                     "revenueWithCost": store["revenue_with_cost"],
+                     "grossProfit": store["gross_profit"],
+                     "marginRate": store["margin_rate"], "bills": store["bills"]}
+                    for store in store_list
+                ],
+            },
+        )
 
     top_text = "\n".join([
         f"  {i+1}. {s['name']}: 已覆盖营收 ¥{s['revenue_with_cost']:,.2f} / "
@@ -1939,13 +2090,7 @@ async def resolve_store_margin(
             "window_end": _date_text(window_end) if window_end else None,
             "requested_window_start": _date_text(exact_start) if exact_start else None,
             "requested_window_end": _date_text(exact_end) if exact_end else None,
-            "scope_matches_request": bool(
-                exact_start is None
-                or (
-                    window_start is not None and window_end is not None
-                    and window_start >= exact_start and window_end <= exact_end
-                )
-            ),
+            "scope_matches_request": scope_matches_request,
             "totalRevenue": total_rev, "totalRevenueWithCost": total_rev_with_cost,
             "totalProfit": total_profit, "avgRate": avg_rate,
             "coveredCost": covered_cost,
@@ -2008,9 +2153,28 @@ async def resolve_sales_summary(
     day_count = int(summary.get("day_count") or 0)
     store_count = int(summary.get("store_count") or 0)
     top_stores = summary.get("top_stores") or []
+
+    def _summary_date(key: str) -> Optional[date]:
+        raw_value = summary.get(key)
+        if isinstance(raw_value, date):
+            return raw_value
+        if raw_value:
+            try:
+                return date.fromisoformat(str(raw_value))
+            except ValueError:
+                return None
+        return None
+
+    sales_scope_start = date_range[0] or _summary_date("actual_start_date")
+    sales_scope_end = date_range[1] or _summary_date("actual_end_date")
+    sales_scope = (
+        (sales_scope_start, sales_scope_end)
+        if sales_scope_start is not None and sales_scope_end is not None
+        else (None, None)
+    )
     actual_window = (
-        f"{window_label}（{_date_text(date_range[0])} 至 {_date_text(date_range[1])}）"
-        if date_range[0] and date_range[1] else window_label
+        f"{window_label}（{_date_text(sales_scope_start)} 至 {_date_text(sales_scope_end)}）"
+        if sales_scope_start and sales_scope_end else window_label
     )
 
     comparison_meta: Optional[Dict[str, Any]] = None
@@ -2091,48 +2255,95 @@ async def resolve_sales_summary(
     margin_meta: Dict[str, Any] = {}
     if spec.wants_margin:
         if can_see_money:
-            margin_days = 30
-            if date_range[0] is not None and date_range[1] is not None:
-                margin_days = max(1, min((date_range[1] - date_range[0]).days + 1, 365))
-            # role 必传 (2026-07-08 audit fix): resolve_store_margin 现在自带
-            # PRICE_VIEW_ROLES 门, 不传 role 会拿到脱敏空结果破坏本函数的毛利段;
-            # 此分支本就在 can_see_money=True 内, 透传保持行为一致。
-            margin_kwargs: Dict[str, Any] = {
-                "days": margin_days,
-                "top_n": 5,
-                "role": role,
-            }
-            if "date_range" in inspect.signature(resolve_store_margin).parameters:
-                margin_kwargs["date_range"] = (
-                    date_range if date_range[0] and date_range[1] else None
+            if sales_scope[0] is None or sales_scope[1] is None:
+                margin_line = (
+                    "营收的实际时间范围无法确定，已停止展示毛利，"
+                    "避免把不同时间口径的数据放在一起。"
                 )
-            margin_result = await resolve_store_margin(
-                smartbi_pool,
-                factory_id,
-                **margin_kwargs,
-            )
-            margin_meta = margin_result.meta or {}
-            total_profit = margin_meta.get("totalProfit")
-            avg_rate = margin_meta.get("avgRate")
-            scope_ok = bool(margin_meta.get("scope_matches_request", True))
-            invariant_ok = bool(margin_meta.get("marginInvariantPass", True))
-            if total_profit is not None and scope_ok and invariant_ok:
-                verdict = ""
-                if spec.asks_profitability:
-                    if float(total_profit) > 0:
-                        verdict = "按已配置成本卡看，这段时间是赚钱的。"
-                    elif float(total_profit) < 0:
-                        verdict = "按已配置成本卡看，这段时间是亏损的。"
-                    else:
-                        verdict = "按已配置成本卡看，这段时间基本打平。"
-                rate_text = f"，毛利率约 {float(avg_rate) * 100:.1f}%" if avg_rate is not None else ""
-                margin_line = f"{verdict}毛利约 {_money(float(total_profit))}{rate_text}（按已配置成本卡的菜品估算）。"
-            elif not scope_ok:
-                margin_line = "毛利与营收的时间范围不一致，已停止展示，避免把不同口径的数据放在一起比较。"
-            elif not invariant_ok:
-                margin_line = "毛利口径自检未通过，已停止展示异常金额；请先复核成本单位和销售范围。"
             else:
-                margin_line = "毛利暂时无法可靠计算，原因是这段时间的菜品成本卡或收银明细还不完整。"
+                margin_days = max(1, min((sales_scope[1] - sales_scope[0]).days + 1, 365))
+                margin_kwargs: Dict[str, Any] = {
+                    "days": margin_days,
+                    "top_n": 5,
+                    "role": role,
+                }
+                if "date_range" in inspect.signature(resolve_store_margin).parameters:
+                    margin_kwargs["date_range"] = sales_scope
+                margin_result = await resolve_store_margin(
+                    smartbi_pool,
+                    factory_id,
+                    **margin_kwargs,
+                )
+                margin_meta = margin_result.meta or {}
+                margin_meta["outer_window_start"] = sales_scope[0].isoformat()
+                margin_meta["outer_window_end"] = sales_scope[1].isoformat()
+                total_profit_raw = margin_meta.get("totalProfit")
+                covered_revenue_raw = margin_meta.get("totalRevenueWithCost")
+                margin_revenue_raw = margin_meta.get("totalRevenue")
+                avg_rate_raw = margin_meta.get("avgRate")
+                try:
+                    total_profit = (
+                        float(total_profit_raw) if total_profit_raw is not None else None
+                    )
+                    covered_revenue = (
+                        float(covered_revenue_raw) if covered_revenue_raw is not None else None
+                    )
+                    margin_revenue = (
+                        float(margin_revenue_raw) if margin_revenue_raw is not None else None
+                    )
+                    avg_rate = float(avg_rate_raw) if avg_rate_raw is not None else None
+                except (TypeError, ValueError):
+                    total_profit = None
+                    covered_revenue = None
+                    margin_revenue = None
+                    avg_rate = None
+                requested_start = margin_meta.get("requested_window_start")
+                requested_end = margin_meta.get("requested_window_end")
+                scope_ok = bool(
+                    margin_meta.get("scope_matches_request", True)
+                    and (not requested_start or requested_start == sales_scope[0].isoformat())
+                    and (not requested_end or requested_end == sales_scope[1].isoformat())
+                )
+                arithmetic_ok = bool(
+                    total_profit is not None
+                    and covered_revenue is not None
+                    and margin_revenue is not None
+                    and total_profit <= covered_revenue + 0.01
+                    and covered_revenue <= margin_revenue + 0.01
+                    and (
+                        avg_rate is None
+                        or covered_revenue <= 0
+                        or abs(avg_rate - total_profit / covered_revenue) <= 0.001
+                    )
+                )
+                invariant_ok = bool(
+                    margin_meta.get("marginInvariantPass", True) and arithmetic_ok
+                )
+                margin_meta["scope_matches_request"] = scope_ok
+                margin_meta["marginInvariantPass"] = invariant_ok
+                if total_profit is not None and covered_revenue is not None and scope_ok and invariant_ok:
+                    verdict = ""
+                    if spec.asks_profitability:
+                        if total_profit > 0:
+                            verdict = "按已配置成本卡看，这段时间已覆盖的销售是赚钱的。"
+                        elif total_profit < 0:
+                            verdict = "按已配置成本卡看，这段时间已覆盖的销售是亏损的。"
+                        else:
+                            verdict = "按已配置成本卡看，这段时间已覆盖的销售基本打平。"
+                    coverage = covered_revenue / margin_revenue if margin_revenue > 0 else 0.0
+                    rate_text = f"，已覆盖部分毛利率 {avg_rate * 100:.1f}%" if avg_rate is not None else ""
+                    margin_line = (
+                        f"{verdict}同期可计算毛利的营收 {_money(covered_revenue)}，"
+                        f"覆盖同期菜品营收的 {coverage * 100:.1f}%；"
+                        f"对应毛利 {_money(total_profit)}{rate_text}。"
+                        "毛利率以可计算毛利的营收为分母，不以全部营收为分母。"
+                    )
+                elif not scope_ok:
+                    margin_line = "毛利与营收的时间范围不一致，已停止展示，避免把不同口径的数据放在一起比较。"
+                elif not invariant_ok:
+                    margin_line = "毛利口径自检未通过，已停止展示异常金额；请先复核成本单位和销售范围。"
+                else:
+                    margin_line = "毛利暂时无法可靠计算，原因是这段时间的菜品成本卡或收银明细还不完整。"
         else:
             margin_line = "毛利属于成本/价格权限，当前角色不能查看金额；可以先看订单、客单价和门店差异。"
 
@@ -2236,13 +2447,13 @@ async def resolve_sales_summary(
         and margin_meta.get("marginInvariantPass", True) is not False
     ):
         kpis.append({
-            "title": "毛利",
+            "title": "已覆盖毛利",
             "value": _money(float(margin_meta["totalProfit"])) if can_see_money else None,
             "rawValue": float(margin_meta["totalProfit"]) if can_see_money else None,
         })
         if margin_meta.get("avgRate") is not None:
             kpis.append({
-                "title": "毛利率",
+                "title": "已覆盖毛利率",
                 "value": f"{float(margin_meta['avgRate']) * 100:.1f}%" if can_see_money else None,
                 "rawValue": float(margin_meta["avgRate"]) if can_see_money else None,
             })
@@ -2257,8 +2468,8 @@ async def resolve_sales_summary(
             "day_count": day_count,
             "store_count": store_count,
             "window_label": window_label,
-            "window_start": date_range[0].isoformat() if date_range[0] else None,
-            "window_end": date_range[1].isoformat() if date_range[1] else None,
+            "window_start": sales_scope_start.isoformat() if sales_scope_start else None,
+            "window_end": sales_scope_end.isoformat() if sales_scope_end else None,
             "weak_stores": weak_stores,
             "price_view": can_see_money,
             "store_comparison_count": len(stores),
