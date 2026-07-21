@@ -11,3 +11,14 @@
 - 验收：Java 19/19，通过真实 Spring/Hibernate JPA Context，覆盖显式前缀、缺省稳定前缀、预览零写、并发首次分配、跨厂隔离、停用前缀拒绝、重复名称先拒绝；Web 12/12；`vue-tsc -b && vite build` 成功（4452 modules）。最终只读代码审查 P0=0、P1=0。
 - 生产边界：`NOT_DEPLOYED`；生产业务 mutation=0；没有创建/修改分类或原料，没有历史桥接，未触碰 LIUSHANMEN。
 - Scope 锁：已释放；`ENH-F006-MATERIAL-BUSINESS-CODE-001` 父任务仍在 ACTIVE，不因本阻塞子修复冒充整体完成。
+
+## ENH-F006-MATERIAL-BUSINESS-CODE-001 — 按当前 L3 受控映射历史编码
+
+- 状态：`merged-ready`；Owner：Codex coordinator (`/root`)。
+- 登记 Base SHA：`c7fb4f9ad3c8f86894b8edb3b04c05534aac83a4`；最新 main 重放基线：`c257d8fdf780797835a352f2c9c76dce5925e9d1`。
+- 实现状态：目标代码与文档合为单一安全提交；PR 在创建后补记。
+- 只读结论：历史记录的当前 L3 可证明性因工厂而异；可证明行使用同源 resolver，不能证明的行只报告、不猜测。精确生产计数不进入公开仓库。历史16位 `code` 全部保留，`displayCode` 继续由 `businessCode` 优先、旧码兜底动态派生。
+- 修复：增加只读预览与显式确认回填接口；悲观锁和条件更新保证并发唯一、重放 no-op；既有码、非法旧码和无启用 L3 行安全跳过；普通新增/编辑路径不能改写历史业务码。
+- 验收：最新 main 基线上 Maven 17/17 PASS，包含真实 Spring/Hibernate JPA Context、预览零写、正式映射、旧码保持、displayCode切换、无效映射跳过、并发只分配一次与 Controller 确认门禁；最终只读代码审查 P0=0、P1=0。
+- 生产边界：`NOT_DEPLOYED`；生产业务 mutation=0；未执行任何历史回填，未修改生产物料或分类。
+- Scope 锁：已释放；后续若要正式执行历史映射，必须在部署后按工厂先预览，并取得单独生产写入授权。
