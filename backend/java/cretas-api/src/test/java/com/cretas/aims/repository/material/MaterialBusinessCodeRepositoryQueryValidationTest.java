@@ -1,6 +1,7 @@
 package com.cretas.aims.repository.material;
 
 import com.cretas.aims.dto.material.RawMaterialTypeDTO;
+import com.cretas.aims.dto.material.MaterialBusinessCodeBackfillReportDTO;
 import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.User;
@@ -10,6 +11,8 @@ import com.cretas.aims.entity.material.MaterialBusinessCodePrefix;
 import com.cretas.aims.entity.material.MaterialCodeSegment;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.service.material.MaterialBusinessCodeService;
+import com.cretas.aims.service.material.MaterialBusinessCodeBackfillService;
+import com.cretas.aims.service.material.impl.MaterialBusinessCodeBackfillServiceImpl;
 import com.cretas.aims.service.material.impl.MaterialBusinessCodeServiceImpl;
 import jakarta.persistence.EntityManager;
 import jakarta.validation.ConstraintViolationException;
@@ -46,7 +49,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @ActiveProfiles("test")
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
-@Import(MaterialBusinessCodeServiceImpl.class)
+@Import({MaterialBusinessCodeServiceImpl.class, MaterialBusinessCodeBackfillServiceImpl.class})
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class MaterialBusinessCodeRepositoryQueryValidationTest {
 
@@ -56,6 +59,7 @@ class MaterialBusinessCodeRepositoryQueryValidationTest {
     @Autowired MaterialBusinessCodePrefixRepository prefixRepository;
     @Autowired MaterialBusinessCodeCounterRepository counterRepository;
     @Autowired MaterialBusinessCodeService businessCodeService;
+    @Autowired MaterialBusinessCodeBackfillService businessCodeBackfillService;
 
     @Test
     void repositoriesBootAndSearchBothBusinessAndLegacyCodes() {
@@ -259,6 +263,117 @@ class MaterialBusinessCodeRepositoryQueryValidationTest {
                 .isInstanceOf(ConstraintViolationException.class);
     }
 
+    @Test
+    void historicalBackfillPreviewsUniqueCodesThenMapsWithoutChangingLegacyCode() {
+        String factoryId = "F-JPA-MBC-BACKFILL";
+        createFixture(factoryId, null, false);
+        persistLegacyMaterial(factoryId, "BACKFILL-1", "0010050003000001");
+        persistLegacyMaterial(factoryId, "BACKFILL-2", "0010050003000002");
+        String prefix = stablePrefix("0010050003");
+
+        MaterialBusinessCodeBackfillReportDTO preview =
+                businessCodeBackfillService.preview(factoryId);
+
+        assertThat(preview.isDryRun()).isTrue();
+        assertThat(preview.getTotal()).isEqualTo(2);
+        assertThat(preview.getEligible()).isEqualTo(2);
+        assertThat(preview.getMapped()).isZero();
+        assertThat(preview.getItems())
+                .extracting(MaterialBusinessCodeBackfillReportDTO.Item::getBusinessCode)
+                .containsExactly(prefix + "000001", prefix + "000002");
+        assertThat(materialRepository.findById("BACKFILL-1")).get()
+                .extracting(RawMaterialType::getBusinessCode)
+                .isNull();
+        assertThat(prefixRepository.findByFactoryIdAndClassificationSegmentCode(
+                factoryId, "0010050003")).isEmpty();
+
+        MaterialBusinessCodeBackfillReportDTO applied =
+                businessCodeBackfillService.backfill(factoryId, "test-backfill-1");
+
+        assertThat(applied.isDryRun()).isFalse();
+        assertThat(applied.getMapped()).isEqualTo(2);
+        assertThat(applied.getSkipped()).isZero();
+        assertThat(applied.getItems())
+                .extracting(MaterialBusinessCodeBackfillReportDTO.Item::getDisplayCode)
+                .containsExactly(prefix + "000001", prefix + "000002");
+        assertThat(materialRepository.findById("BACKFILL-1")).get()
+                .satisfies(material -> {
+                    assertThat(material.getCode()).isEqualTo("0010050003000001");
+                    assertThat(material.getBusinessCode()).isEqualTo(prefix + "000001");
+                    assertThat(material.getDisplayCode()).isEqualTo(prefix + "000001");
+                });
+
+        MaterialBusinessCodeBackfillReportDTO replay =
+                businessCodeBackfillService.backfill(factoryId, "test-backfill-1");
+        assertThat(replay.getMapped()).isZero();
+        assertThat(replay.getAlreadyMapped()).isEqualTo(2);
+        assertThat(counterRepository.findByFactoryIdAndCodePrefix(factoryId, prefix))
+                .get()
+                .extracting(MaterialBusinessCodeCounter::getLastAllocated)
+                .isEqualTo(2L);
+    }
+
+    @Test
+    void historicalBackfillSkipsRowsWithoutAnActiveL3InsteadOfGuessing() {
+        String factoryId = "F-JPA-MBC-SKIP";
+        createFixture(factoryId, null, false);
+        persistLegacyMaterial(factoryId, "BACKFILL-NO-L3", "0090090001000001");
+        persistLegacyMaterial(factoryId, "BACKFILL-NON16", "LEGACY-A");
+
+        MaterialBusinessCodeBackfillReportDTO preview =
+                businessCodeBackfillService.preview(factoryId);
+
+        assertThat(preview.getEligible()).isZero();
+        assertThat(preview.getSkipped()).isEqualTo(2);
+        assertThat(preview.getItems())
+                .extracting(MaterialBusinessCodeBackfillReportDTO.Item::getStatus)
+                .containsExactlyInAnyOrder("INVALID_LEGACY_CODE", "MISSING_ACTIVE_L3");
+
+        MaterialBusinessCodeBackfillReportDTO applied =
+                businessCodeBackfillService.backfill(factoryId, "test-backfill-skip");
+        assertThat(applied.getMapped()).isZero();
+        assertThat(applied.getSkipped()).isEqualTo(2);
+        assertThat(materialRepository.findById("BACKFILL-NO-L3")).get()
+                .extracting(RawMaterialType::getBusinessCode)
+                .isNull();
+        assertThat(prefixRepository.findMatchingPrefixes(factoryId, "0090090001")).isEmpty();
+    }
+
+    @Test
+    void concurrentHistoricalBackfillMapsEachRowOnlyOnce() throws Exception {
+        String factoryId = "F-JPA-MBC-BACKFILL-CONCURRENT";
+        createFixture(factoryId, null, false);
+        persistLegacyMaterial(factoryId, "BACKFILL-CONCURRENT", "0010050003000001");
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            Future<MaterialBusinessCodeBackfillReportDTO> first = executor.submit(() -> {
+                start.await(5, TimeUnit.SECONDS);
+                return businessCodeBackfillService.backfill(factoryId, "concurrent-1");
+            });
+            Future<MaterialBusinessCodeBackfillReportDTO> second = executor.submit(() -> {
+                start.await(5, TimeUnit.SECONDS);
+                return businessCodeBackfillService.backfill(factoryId, "concurrent-2");
+            });
+            start.countDown();
+
+            assertThat(List.of(first.get(15, TimeUnit.SECONDS).getMapped(),
+                            second.get(15, TimeUnit.SECONDS).getMapped()))
+                    .containsExactlyInAnyOrder(0, 1);
+            assertThat(materialRepository.findById("BACKFILL-CONCURRENT")).get()
+                    .extracting(RawMaterialType::getBusinessCode)
+                    .isEqualTo(stablePrefix("0010050003") + "000001");
+            assertThat(counterRepository.findByFactoryIdAndCodePrefix(
+                    factoryId, stablePrefix("0010050003")))
+                    .get()
+                    .extracting(MaterialBusinessCodeCounter::getLastAllocated)
+                    .isEqualTo(1L);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
     private void createFixture(String factoryId, String codePrefix, boolean withMaterial) {
         inTransaction(() -> {
             Factory factory = new Factory();
@@ -318,6 +433,26 @@ class MaterialBusinessCodeRepositoryQueryValidationTest {
                 .sortOrder((int) level)
                 .isActive(true)
                 .build());
+    }
+
+    private void persistLegacyMaterial(String factoryId, String id, String legacyCode) {
+        inTransaction(() -> {
+            Long createdBy = entityManager.createQuery(
+                            "SELECT u.id FROM User u WHERE u.factoryId = :factoryId", Long.class)
+                    .setParameter("factoryId", factoryId)
+                    .setMaxResults(1)
+                    .getSingleResult();
+            RawMaterialType material = new RawMaterialType();
+            material.setId(id);
+            material.setFactoryId(factoryId);
+            material.setCode(legacyCode);
+            material.setName("历史物料-" + id);
+            material.setCategory("原料");
+            material.setUnit("kg");
+            material.setIsActive(true);
+            material.setCreatedBy(createdBy);
+            entityManager.persist(material);
+        });
     }
 
     private void inTransaction(Runnable action) {
