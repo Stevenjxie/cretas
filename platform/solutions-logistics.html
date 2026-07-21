@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#fdfcfa">
+<title>物流配送解决方案 · 白垩纪 Cretas</title>
+<meta name="description" content="白垩纪 Cretas 物流配送，十辆车一个人调。AI 智能排线、装载率优化、多地图路线、冷链温层与执行跟踪，任意 Excel 一键导入订单。">
+<meta name="keywords" content="城配调度,智能排线,装载率优化,冷链配送,TMS,配送执行跟踪,Excel订单导入">
+<meta property="og:type" content="website">
+<meta property="og:title" content="物流配送解决方案 · 白垩纪 Cretas">
+<meta property="og:description" content="十辆车，一个人调。订单扔进来，AI 排线、装车、跟车，少跑一趟，就是省下真金白银。">
+<meta property="og:image" content="https://cretaceousfuture.com/assets/img/band-kitchen.jpg">
+<meta property="og:url" content="https://cretaceousfuture.com/solutions-logistics.html">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 15 15'%3E%3Crect x='1' y='1' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='8.5' y='1' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='1' y='8.5' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='8.5' y='8.5' width='5.5' height='5.5' rx='2.75' fill='%2300b377'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/css/v6.css">
+<script>document.documentElement.classList.add('v6-js')</script>
+<style>
+html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
+.v6-nav a:hover{color:var(--v6-ink)}
+.v6-nav .nav-links{display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+
+/* HERO */
+.hero-wrap{position:relative}
+.hero-wrap .v6-glow{top:20px;height:420px;background:radial-gradient(ellipse 75% 55% at 50% 42%,rgba(70,100,140,.14) 0%,rgba(70,100,140,.05) 45%,transparent 72%)}
+.v6-hero{height:min(72vh,600px)}
+.v6-hero-mask img{object-position:center 58%}
+.hero-copy{position:absolute;left:clamp(24px,5.5vw,80px);top:50%;transform:translateY(-50%);
+  max-width:min(50%,560px);z-index:2}
+.hero-copy h1{font-size:clamp(34px,5.4vw,62px);font-weight:900;color:#fff;line-height:1.26;
+  letter-spacing:-0.01em;margin:0 0 20px;text-shadow:0 2px 26px rgba(0,0,0,.35);text-wrap:balance}
+.hero-copy p{font-size:clamp(15px,1.55vw,19px);color:rgba(255,255,255,.92);line-height:1.85;
+  margin:0 0 28px;max-width:34ch;text-wrap:pretty}
+.hero-cta{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+.hero-cta .v6-link{color:#fff;font-weight:600;font-size:15px;text-decoration:none;opacity:.94}
+.ai-box-1{right:9%;top:22%;width:clamp(170px,20vw,280px);height:44%}
+.ai-box-1 .v6-ai-tag{top:-16px;left:0}
+
+/* 通用 section 骨架 */
+.sec{max-width:1200px;margin:0 auto;padding:clamp(40px,6.5vw,88px) clamp(16px,4vw,48px)}
+.sec h2{font-size:clamp(23px,3.2vw,38px);font-weight:900;letter-spacing:-0.015em;margin:0 0 8px;text-wrap:balance}
+.sec .pain{font-size:clamp(14px,1.5vw,17px);color:var(--v6-ink-2);line-height:1.75;margin:0 0 26px;max-width:56ch}
+.sec .pain b{color:var(--v6-ink)}
+
+/* M1 智能调度：左文右调度台大图 */
+.m1{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.35fr);gap:clamp(24px,4vw,56px);align-items:center}
+.m1 .pts{list-style:none;margin:0;padding:0}
+.m1 .pts li{display:flex;gap:10px;align-items:flex-start;font-size:clamp(14px,1.45vw,16.5px);
+  color:var(--v6-ink);line-height:1.7;margin-bottom:13px}
+.m1 .pts svg{flex:0 0 18px;margin-top:4px}
+.m1 .pts small{display:block;color:var(--v6-ink-2);font-size:.88em}
+
+/* M2 装载率：趟次条图（无卡片，直接长在页面上） */
+.m2 .trips{max-width:760px}
+.m2 .trow{display:flex;align-items:center;gap:14px;margin-bottom:12px}
+.m2 .tlabel{flex:0 0 74px;font-family:var(--v6-mono);font-size:12.5px;color:var(--v6-ink-2);text-align:right}
+.m2 .tbar{height:30px;min-width:0;overflow:hidden;border-radius:7px;background:linear-gradient(90deg,rgba(0,179,119,.18),rgba(0,179,119,.3));
+  position:relative;display:flex;align-items:center;padding-left:12px;font-size:12.5px;color:var(--v6-cta-ink);font-weight:700}
+.m2 .tbar.full{background:linear-gradient(90deg,rgba(0,179,119,.5),var(--v6-cta));color:#fff}
+.m2 .tbar.ghost{background:repeating-linear-gradient(45deg,rgba(0,0,0,.05) 0 6px,transparent 6px 12px);
+  color:#a8a29e;font-weight:600;text-decoration:line-through}
+.m2 .verdict{margin-top:18px;font-size:clamp(15px,1.6vw,18px);font-weight:800}
+.m2 .verdict span{color:var(--v6-cta-ink)}
+
+/* M3 路线跟踪：深底高潮段 */
+.m3-band{background:linear-gradient(160deg,#0d1210 0%,#0a1a13 100%)}
+.m3{max-width:1200px;margin:0 auto;padding:clamp(48px,7vw,100px) clamp(16px,4vw,48px);color:#fff}
+.m3 h2{color:#fff}
+.m3 .pain{color:rgba(255,255,255,.72)}
+.m3 .pain b{color:#fff}
+.route{position:relative;margin:34px 0 26px;height:4px;border-radius:2px;
+  background:linear-gradient(90deg,var(--v6-cta) 0%,var(--v6-cta) 62%,rgba(255,255,255,.16) 62%)}
+.route .stop{transition:border-color .5s ease;position:absolute;top:50%;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;
+  background:#0d1210;border:3px solid var(--v6-cta)}
+.route .stop.todo{border-color:rgba(255,255,255,.3)}
+.route .stop.truckpos{width:34px;height:34px;background:var(--v6-cta);border:none;display:flex;
+  align-items:center;justify-content:center;box-shadow:0 0 12px rgba(0,226,138,.25)}
+.route .slabel{position:absolute;top:16px;transform:translateX(-50%);font-size:11.5px;color:rgba(255,255,255,.65);white-space:nowrap}
+.m3-chips{display:flex;gap:10px;flex-wrap:wrap;margin-top:44px}
+.m3-chips .chip{font-family:var(--v6-mono);font-size:12.5px;padding:7px 14px;border-radius:99px;
+  background:rgba(255,255,255,.06);color:rgba(255,255,255,.85)}
+.m3-chips .chip.ok{color:var(--v6-tag);background:rgba(0,226,138,.1)}
+.m3-chips .chip.warn{color:#ffb84d;background:rgba(255,184,77,.1)}
+.m3 .maps{margin-top:26px;font-size:13px;color:rgba(255,255,255,.55);line-height:1.7}
+
+/* M4 Excel 导入: 皱表 → AI 核 → 系统窗口 */
+.m4 .flow{display:grid;grid-template-columns:1.05fr .55fr 1.3fr;gap:clamp(16px,2.4vw,36px);
+  align-items:center;margin-top:6px}
+.m4 .doc{background:#fffdf7;border:1px solid rgba(180,83,9,.25);border-radius:4px;padding:16px 16px 20px;
+  transform:rotate(-2.2deg);box-shadow:0 16px 36px -18px rgba(120,80,30,.35);position:relative}
+.m4 .doc .tab{position:absolute;top:-11px;left:14px;background:#b45309;color:#fff;font-family:var(--v6-mono);
+  font-size:10.5px;padding:3px 10px;border-radius:3px;letter-spacing:.5px}
+.m4 table{border-collapse:collapse;width:100%;font-size:12.5px}
+.m4 td,.m4 th{padding:7px 9px;text-align:left}
+.m4 .raw th{font-family:var(--v6-mono);color:#b45309;background:rgba(180,83,9,.07);font-weight:600;border-bottom:2px dashed rgba(180,83,9,.35)}
+.m4 .raw td{color:var(--v6-ink-2);border-bottom:1px solid rgba(0,0,0,.06)}
+.m4 .doc .smudge{margin-top:10px;font-size:11px;color:#b0a894;font-style:italic}
+.m4 .proc{display:flex;flex-direction:column;align-items:center;gap:12px}
+.m4 .core{position:relative;width:74px;height:74px;display:grid;place-items:center}
+.m4 .core svg.logo{width:34px;height:34px}
+.m4 .core .ring{position:absolute;inset:0;border-radius:50%;border:2px dashed rgba(0,179,119,.5);
+  animation:m4spin 7s linear infinite}
+@keyframes m4spin{to{transform:rotate(360deg)}}
+.m4 .proc .chips{display:flex;flex-direction:column;gap:6px}
+.m4 .proc .chips span{font-family:var(--v6-mono);font-size:10.5px;color:var(--v6-cta-ink);
+  background:rgba(0,179,119,.08);padding:4px 12px;border-radius:99px;white-space:nowrap;text-align:center}
+.m4 .sys{background:#fff;border-radius:12px;overflow:hidden;border:1px solid rgba(0,0,0,.07);
+  box-shadow:0 22px 48px -22px rgba(40,60,50,.3)}
+.m4 .sys .bar{display:flex;gap:5px;align-items:center;background:#f4f8f6;padding:8px 12px;border-bottom:1px solid rgba(0,0,0,.05)}
+.m4 .sys .bar i{width:8px;height:8px;border-radius:50%;background:#dde5e1;display:inline-block}
+.m4 .sys .bar em{font-style:normal;font-size:10.5px;color:#8fa09a;font-family:var(--v6-mono);margin-left:6px}
+.m4 .sys .body{padding:12px 14px 14px}
+.m4 .clean th{color:var(--v6-cta-ink);background:rgba(0,179,119,.08);font-weight:700;border-bottom:2px solid rgba(0,179,119,.35)}
+.m4 .clean td{color:var(--v6-ink);border-bottom:1px solid rgba(0,0,0,.06)}
+.m4 .clean td .rt{font-family:var(--v6-mono);font-size:10.5px;color:var(--v6-cta-ink);
+  background:rgba(0,179,119,.08);padding:2px 8px;border-radius:99px;white-space:nowrap}
+.m4 .sys .ok{display:flex;gap:8px;align-items:center;margin-top:10px;font-size:12px;color:var(--v6-cta-ink);font-weight:700}
+.m4 .geo{margin-top:22px;font-size:clamp(13.5px,1.4vw,15.5px);color:var(--v6-ink-2);line-height:1.75;max-width:56ch}
+.m4 .geo b{color:var(--v6-cta-ink)}
+@media (max-width:900px){
+  .m4 .flow{grid-template-columns:1fr;max-width:560px}
+  .m4 .doc{transform:none}
+  .m4 .proc{flex-direction:row;flex-wrap:wrap;justify-content:center}
+  .m4 .proc .chips{flex-direction:row;flex-wrap:wrap;justify-content:center}
+}
+
+/* M5 异常与准点：窄幅收束 */
+.m5{max-width:1200px;margin:0 auto;padding:clamp(24px,4vw,52px) clamp(16px,4vw,48px) clamp(44px,6vw,80px);
+  display:flex;gap:clamp(20px,4vw,56px);align-items:center;flex-wrap:wrap;border-top:1px solid rgba(0,0,0,.07)}
+.m5 .lead{font-size:clamp(17px,2vw,23px);font-weight:800;line-height:1.6;max-width:26ch}
+.m5 .items{flex:1;min-width:260px}
+.m5 .it{display:flex;gap:10px;align-items:flex-start;margin-bottom:10px;font-size:clamp(13.5px,1.4vw,15.5px);
+  color:var(--v6-ink-2);line-height:1.65}
+.m5 .it svg{flex:0 0 17px;margin-top:3px}
+
+
+/* 案例段: 一个地址的学费（对照体） */
+.tuition{max-width:1000px;margin:0 auto;padding:clamp(44px,6.5vw,92px) clamp(16px,4vw,48px)}
+.tuition .kicker{font-family:var(--v6-mono);font-size:12px;color:var(--v6-cta-ink);letter-spacing:2px;margin-bottom:10px}
+.tuition .ba{display:grid;grid-template-columns:1fr 1fr;gap:clamp(16px,2.5vw,32px);margin-top:24px}
+.tuition .col{padding:clamp(18px,2.4vw,28px)}
+.tuition .col.before{background:rgba(180,83,9,.06);border-radius:14px}
+.tuition .col.after{background:rgba(0,179,119,.07);border-radius:14px}
+.tuition .col h3{margin:0 0 10px;font-family:var(--v6-mono);font-size:12px;letter-spacing:1.5px}
+.tuition .before h3{color:#b45309}
+.tuition .after h3{color:var(--v6-cta-ink)}
+.tuition .col p{margin:0;font-size:clamp(13.5px,1.45vw,15.5px);color:var(--v6-ink-2);line-height:1.85}
+.tuition .col p b{color:var(--v6-ink)}
+@media (max-width:768px){.tuition .ba{grid-template-columns:1fr}}
+
+/* versus 差异化条 */
+.versus{background:linear-gradient(180deg,rgba(0,179,119,.05),transparent);padding:clamp(44px,6.5vw,88px) clamp(16px,4vw,48px)}
+.versus .inner{max-width:900px;margin:0 auto;text-align:center}
+.versus h2{font-size:clamp(22px,3.2vw,36px);font-weight:900;line-height:1.5;letter-spacing:-0.015em;margin:0 0 14px;text-wrap:balance}
+.versus h2 span{color:var(--v6-cta-ink)}
+.versus p{color:var(--v6-ink-2);font-size:clamp(14px,1.5vw,17px);line-height:1.8;max-width:46ch;margin:0 auto 26px}
+
+/* footer */
+.v6-foot{border-top:1px solid rgba(0,0,0,.07);padding:clamp(28px,4vw,44px) clamp(16px,4vw,48px);
+  max-width:1320px;margin:0 auto;display:flex;justify-content:space-between;align-items:center;
+  gap:20px;flex-wrap:wrap;color:#8a857e;font-size:13px}
+.v6-foot a{color:#57534e;text-decoration:none;margin-left:20px}
+.v6-foot a:hover{color:var(--v6-ink)}
+.v6-foot .foot-links{display:flex;flex-wrap:wrap}
+
+/* responsive */
+@media (max-width:900px){
+  .m1{grid-template-columns:1fr}
+  .m4 .flow{grid-template-columns:1fr;max-width:560px}
+  .m4 .arrow{flex-direction:row;justify-content:center;transform:rotate(90deg);height:44px}
+  .m4 .arrow small{transform:rotate(-90deg) translateX(-4px);display:none}
+}
+@media (max-width:768px){
+  .v6-nav{flex-direction:column;gap:12px;align-items:flex-start}
+  .v6-nav .nav-links{justify-content:flex-start}
+  .v6-nav a{margin-left:0;margin-right:18px}
+  .v6-hero{height:68vh;min-height:420px}
+  .v6-hero-scrim{background:linear-gradient(175deg,rgba(12,10,8,.28) 0%,rgba(12,10,8,.55) 46%,rgba(12,10,8,.9) 100%)}
+  .hero-copy{left:clamp(20px,6vw,32px);right:clamp(20px,6vw,32px);top:auto;bottom:14%;transform:none;max-width:none}
+  .hero-copy p{max-width:100%}
+  .v6-ai-box{display:none}
+  .route .slabel{display:none}
+  .m5{flex-direction:column;align-items:flex-start}
+}
+@media (prefers-reduced-motion: reduce){
+  .v6-photo-card,.v6-photo-card:hover{transition:none;transform:none}
+}
+</style>
+</head>
+<body>
+
+<nav class="v6-nav">
+  <a href="/" style="display:flex;align-items:center;gap:8px;margin:0;text-decoration:none">
+    <svg width="18" height="18" viewBox="0 0 15 15" fill="none"><rect x="1" y="1" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="8.5" y="1" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="1" y="8.5" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="8.5" y="8.5" width="5.5" height="5.5" rx="2.75" fill="#00b377"/></svg>
+    <b style="color:#111;font-size:17px">白垩纪</b><small style="color:#999;letter-spacing:2px;font-size:11px">CRETAS</small>
+  </a>
+  <div class="nav-links">
+    <a href="/solutions-factory.html">食品工厂</a>
+    <a href="/solutions-restaurant.html">餐饮连锁</a>
+    <a href="/solutions-logistics.html" class="active" aria-current="page">物流配送</a>
+    <a href="/solutions-ai.html">AI 中枢</a>
+    <a href="/solutions-custom.html">定制开发</a>
+    <a href="/demo.html">在线演示</a>
+    <a class="v6-btn-ghost" href="mailto:stevenj4xie@gmail.com">预约演示</a>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="hero-wrap">
+  <div class="v6-glow"></div>
+  <div class="v6-hero">
+    <div class="v6-hero-mask">
+      <img fetchpriority="high" decoding="async" src="/assets/img/truck.jpg" alt="配送货车行驶在公路上，AI 实时优化装载与路线">
+    </div>
+    <div class="v6-hero-scrim"></div>
+    <div class="v6-ai-box ai-box-1">
+      <span class="v6-ai-tag">6 趟 → 5 趟 · 省 ¥430/天</span>
+    </div>
+    <div class="hero-copy">
+      <h1>十辆车，一个人调。</h1>
+      <p>订单扔进来，AI 排线、装车、跟车，少跑一趟，就是省下真金白银。</p>
+      <div class="hero-cta">
+        <a class="v6-btn" href="mailto:stevenj4xie@gmail.com">预约演示</a>
+        <a class="v6-link" href="/demo.html">3 分钟了解 Cretas →</a>
+      </div>
+    </div>
+    <div class="v6-live-bar">
+      <span class="v6-live-dot">● LIVE</span>
+      <span id="liveTicker">冷链 4 号车 · 装载率 87% · 准点</span>
+    </div>
+  </div>
+</section>
+
+<!-- M1 智能调度 -->
+<section class="sec">
+  <div class="m1">
+    <div>
+      <h2 class="v6-reveal">十辆车的排线，AI 一分钟出方案</h2>
+      <p class="pain v6-reveal">以前排线靠调度老师傅一早上的经验和电话。<b>人一请假，全乱。</b></p>
+      <ul class="pts v6-reveal">
+        <li><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#00875c" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span><b>一键生成配送计划</b><small>按门店、时窗、车型自动分单排线，人只做确认和微调</small></span></li>
+        <li><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#00875c" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span><b>派车派司机，按天管运力</b><small>谁休假、哪辆车保养，当天可用运力一目了然</small></span></li>
+        <li><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#00875c" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span><b>拖一拖就能改</b><small>移站点、换车次，AI 实时重算里程和时效</small></span></li>
+      </ul>
+    </div>
+    <img loading="lazy" decoding="async" class="v6-shot v6-reveal" src="/assets/img/shots/logistics.png" alt="Cretas 物流调度工作台：地图路线与车次列表并排，AI 生成的配送计划待确认">
+  </div>
+</section>
+
+<!-- M2 装载率优化 -->
+<section class="sec m2">
+  <h2 class="v6-reveal">装得更满，就少跑一趟</h2>
+  <p class="pain v6-reveal">每辆车的装载率差几个点，一个月下来就是好几趟白跑。AI 按体积、重量、温层把货装到刚刚好。</p>
+  <div class="trips v6-reveal">
+    <div class="trow"><span class="tlabel">1 号车</span><div class="tbar full" style="flex:0 1 92%">装载率 92%</div></div>
+    <div class="trow"><span class="tlabel">2 号车</span><div class="tbar full" style="flex:0 1 89%">装载率 89%</div></div>
+    <div class="trow"><span class="tlabel">3 号车</span><div class="tbar full" style="flex:0 1 88%">装载率 88%</div></div>
+    <div class="trow"><span class="tlabel">4 号车</span><div class="tbar full" style="flex:0 1 87%">装载率 87%</div></div>
+    <div class="trow"><span class="tlabel">5 号车</span><div class="tbar full" style="flex:0 1 85%">装载率 85%</div></div>
+    <div class="trow"><span class="tlabel">6 号车</span><div class="tbar ghost" style="flex:0 1 38%">不用跑了</div></div>
+    <p class="verdict">同样的货，<span>6 趟并成 5 趟</span>，运力不够时，AI 还会先告诉你缺几辆、缺在哪条线。</p>
+  </div>
+</section>
+
+<!-- M3 路线与执行跟踪（深底高潮） -->
+<div class="m3-band">
+  <section class="m3">
+    <h2 class="v6-reveal">车在哪、货多凉，看一眼就知道</h2>
+    <p class="pain v6-reveal">发车之后就"失联"，到没到全靠司机报？<b>每一站的送达状态独立跟踪</b>，冷链温层全程盯着。</p>
+    <div class="route v6-reveal">
+      <span class="stop" style="left:4%"></span><span class="slabel" style="left:4%">总仓 06:30</span>
+      <span class="stop" style="left:24%"></span><span class="slabel" style="left:24%">门店 A 已送达</span>
+      <span class="stop" style="left:44%"></span><span class="slabel" style="left:44%">门店 B 已送达</span>
+      <span class="stop truckpos" style="left:62%"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#04140d" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 18H3V8h11v10h-2"/><path d="M14 11h4l3 4v3h-2"/><circle cx="7.5" cy="18" r="1.8"/><circle cx="16.5" cy="18" r="1.8"/></svg></span>
+      <span class="stop todo" style="left:80%"></span><span class="slabel" style="left:80%">门店 C 11:20 预计</span>
+      <span class="stop todo" style="left:96%"></span><span class="slabel" style="left:96%">门店 D</span>
+    </div>
+    <div class="m3-chips v6-reveal">
+      <span class="chip ok">冷藏区 2.8℃ · 正常</span>
+      <span class="chip ok">门店 B 签收 09:41</span>
+      <span class="chip warn">门店 C 前方拥堵 · 已重算路线</span>
+      <span class="chip">今日准点率 96%</span>
+    </div>
+    <p class="maps v6-reveal">路线计算接入多家地图服务商互为备份，地址写错了？AI 先纠偏再排线，不让一个错地址拖垮整条线。</p>
+  </section>
+</div>
+
+<!-- M4 任意 Excel 一键导入 -->
+<section class="sec m4">
+  <h2 class="v6-reveal">客户发来什么表，都能直接用</h2>
+  <p class="pain v6-reveal">每个客户的订单表格式都不一样，以前靠人肉重新录一遍。现在<b>整张表扔进来</b>，AI 认得懂。</p>
+  <div class="flow v6-reveal">
+    <div class="doc">
+      <span class="tab">客户发来的 EXCEL</span>
+      <table class="raw">
+        <tr><th>收货方</th><th>品名/规格</th><th>件</th></tr>
+        <tr><td>XX路店（新）</td><td>卤味礼盒*6</td><td>12</td></tr>
+        <tr><td>城西二店</td><td>酱鸭 500g</td><td>30</td></tr>
+        <tr><td>高新店(急)</td><td>藕带 箱</td><td>8</td></tr>
+      </table>
+      <p class="smudge">— 表头随客户心情变，地址一半是简称</p>
+    </div>
+    <div class="proc">
+      <div class="core">
+        <span class="ring"></span>
+        <svg class="logo" viewBox="0 0 15 15" fill="none"><rect x="1" y="1" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="8.5" y="1" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="1" y="8.5" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="8.5" y="8.5" width="5.5" height="5.5" rx="2.75" fill="#00b377"/></svg>
+      </div>
+      <div class="chips">
+        <span>表头识别</span>
+        <span>单位归一</span>
+        <span>地址纠错</span>
+      </div>
+    </div>
+    <div class="sys">
+      <div class="bar"><i></i><i></i><i></i><em>Cretas · 订单导入</em></div>
+      <div class="body">
+        <table class="clean">
+          <tr><th>门店</th><th>SKU</th><th>数量</th><th>路线</th></tr>
+          <tr><td>XX路店</td><td>卤味礼盒×6</td><td>12</td><td><span class="rt">3 号线</span></td></tr>
+          <tr><td>城西二店</td><td>酱鸭 500g</td><td>30</td><td><span class="rt">1 号线</span></td></tr>
+          <tr><td>高新店</td><td>藕带 ×1 箱</td><td>8</td><td><span class="rt">3 号线</span></td></tr>
+        </table>
+        <div class="ok"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>3 单已入库 · 自动分入 2 条路线</div>
+      </div>
+    </div>
+  </div>
+  <p class="geo v6-reveal">复制粘贴也行，粘一段文字，AI 预览映射结果，你确认了才入库。<b>地址智能纠错</b>连"写了隔壁城市同名路"这种坑都能抓出来。</p>
+</section>
+
+<!-- 案例: 一个地址的学费 -->
+<section class="tuition">
+  <div class="kicker v6-reveal">真实案例 · 一个地址的学费</div>
+  <h2>写错一个路名，多跑九十公里</h2>
+  <div class="ba">
+    <div class="col before v6-reveal">
+      <h3>BEFORE</h3>
+      <p>客户订单表里写着"XX 路 88 号"，系统照字面排线，那是<b>隔壁城市的同名路</b>。司机导航到了才发现，一辆车白跑 90 公里，一整条线的门店全部延误。</p>
+    </div>
+    <div class="col after v6-reveal">
+      <h3>AFTER</h3>
+      <p>现在 AI 排线之前先做<b>地址体检</b>：跨城疑似、门牌缺失、和历史签收位置对不上的，全部标黄等人工确认。之后再没为一个错地址跑过冤枉路。</p>
+    </div>
+  </div>
+</section>
+
+<!-- M5 异常与准点 -->
+<section class="m5">
+  <p class="lead v6-reveal">出了状况，AI 比客户先找你。</p>
+  <div class="items">
+    <div class="it v6-reveal"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#b45309" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg><span>迟到风险、温度越线、漏送，异常主动推送到调度和老板手机</span></div>
+    <div class="it v6-reveal"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#00875c" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span>每天收工自动出准点率、装载率、公里成本，不用等月底对账才知道亏在哪</span></div>
+  </div>
+</section>
+
+<!-- 差异化条 -->
+<section class="versus">
+  <div class="inner">
+    <h2 class="v6-reveal">调度靠老师傅的经验；<br><span>Cretas 把经验变成算法，还比他快。</span></h2>
+    <p class="v6-reveal">老师傅退休不带走排线能力，新人来了第一天就能上手。</p>
+    <a class="v6-btn v6-reveal" href="mailto:stevenj4xie@gmail.com">预约演示</a>
+  </div>
+</section>
+
+<footer class="v6-foot">
+  <div>© 2026 白垩纪 Cretas · cretaceousfuture.com</div>
+  <div class="foot-links">
+    <a href="/solutions-factory.html">食品工厂</a>
+    <a href="/solutions-restaurant.html">餐饮连锁</a>
+    <a href="/solutions-logistics.html">物流配送</a>
+    <a href="/solutions-ai.html">AI 中枢</a>
+    <a href="/solutions-custom.html">定制开发</a>
+    <a href="/demo.html">在线演示</a>
+    <a href="mailto:stevenj4xie@gmail.com">联系我们</a>
+  </div>
+</footer>
+
+<script src="/js/v6.js"></script>
+<script src="/js/gsap.min.js"></script>
+<script src="/js/ScrollTrigger.min.js"></script>
+<script src="/js/lenis.min.js"></script>
+<script src="/js/v6-premium.js"></script>
+<script>
+window.addEventListener('load', function(){
+  setTimeout(function(){
+    var vb = window.innerHeight + 40;
+    document.querySelectorAll('.v6-reveal:not(.in)').forEach(function(e){
+      if (e.getBoundingClientRect().top < vb) e.classList.add('in');
+    });
+  }, 1200);
+});
+(function(){
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  var route = document.querySelector('.route'); if(!route) return;
+  var truck = route.querySelector('.truckpos');
+  var stops = [].slice.call(route.querySelectorAll('.stop')).filter(function(s){ return s !== truck; });
+  var pos = stops.map(function(s){ return parseFloat(s.style.left); });
+  var p = 62;
+  setInterval(function(){
+    p += 0.35; if (p > 97) p = 5;
+    truck.style.left = p + '%';
+    route.style.background = 'linear-gradient(90deg, var(--v6-cta) 0%, var(--v6-cta) ' + p + '%, rgba(255,255,255,.16) ' + p + '%)';
+    stops.forEach(function(s, i){ s.classList.toggle('todo', pos[i] > p); });
+  }, 120);
+})();
+v6LiveTicker(
+  document.getElementById('liveTicker'),
+  ['冷链 4 号车 · 装载率 87% · 准点','门店 B 签收 09:41 · 温层正常','今日 5 条线 · 准点率 96%']
+);
+</script>
+</body>
+</html>

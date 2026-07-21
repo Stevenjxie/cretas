@@ -146,6 +146,14 @@ audit-screenshots/
 
 # 但保留项目资产PNG
 !platform/assets/images/**/*.png
+# 官网 V6 改版本地化摄影资产 + 产品截图 (2026-07-21)
+!platform/assets/img/**/*.jpg
+!platform/assets/img/**/*.jpeg
+!platform/assets/img/**/*.png
+!platform/restaurantbi-example/screenshots/
+!platform/restaurantbi-example/screenshots/**
+!platform/factorybi-example/screenshots/
+!platform/factorybi-example/screenshots/**
 !frontend/CretasFoodTrace/assets/**/*.png
 !frontend/CretasFoodTrace/android/app/src/main/res/**/*.png
 # 审计证据截图 (Sprint 11 MealClaw 等)
