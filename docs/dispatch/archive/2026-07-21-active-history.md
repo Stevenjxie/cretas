@@ -51,3 +51,4 @@
 - 安全：生产回归 `blockedMutationAttempts=0`、`actualBusinessWrites=0`、`safetyPassed=true`；没有数据库迁移、权限变更或业务数据写入。
 - 证据：gitignored `.playwright-mcp/restaurant-sheet-20260721/live-regression/report.json` 与对应截图；发布结构化报告保存在本机 `.cache/cretas/deploy-reports/`。
 - Scope 锁：已释放。
+- `ARCH-CRETAS-UNIFIED-OA-APPROVAL-001` — `merged` — 个人 OA 四队列、工厂/用户/角色可见性与采购动作边界已随 PR [#1560](https://github.com/Stevenjxie/cretas/pull/1560) 合入 `main` `481b57f3b07755f0ad6fd7b0a68e9208e9093f90`；实现 commit `9d48e91ba61feada2fb356da44958002fd9516c6`，Web 64/64、Java 19/19、真实 JPA Context 与 Web production build 通过；生产业务写入 0，`NOT_DEPLOYED`。
