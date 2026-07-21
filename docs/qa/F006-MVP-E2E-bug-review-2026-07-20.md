@@ -542,9 +542,9 @@
 - **权限/接口**：`GET .../raw-material-types/business-code-backfill/preview` 只读；`POST .../raw-material-types/business-code-backfill` 要求 `system:read_write` 且角色为 `factory_super_admin`/`permission_admin`，并要求显式 `confirm=true` 与幂等键。普通新增/编辑接口不能借此改写历史业务码。
 - **修改文件**：`MaterialBusinessCodeBackfillService/Impl`、回填 request/report DTO、`RawMaterialTypeRepository` 受控锁与条件更新、`RawMaterialTypeController` 管理接口，以及真实 JPA/Controller 目标测试。
 - **测试**：`mvn -Dtest=MaterialBusinessCodeRepositoryQueryValidationTest,RawMaterialTypeFoolproofMvcTest test`：17/17 PASS；真实 Spring/Hibernate JPA Context 覆盖预览零写、唯一预览、正式映射、旧码保持、displayCode切换、重复回填 no-op、无效 L3/非法旧码跳过、并发只分配一次；Controller 覆盖未确认400和确认后调用。
-- **Commit/PR/main 状态**：`TARGET_TEST_PASSED_PENDING_MAIN`；精确 commit/PR/main 在合入后更新。
-- **部署状态**：`NOT_DEPLOYED`；未执行生产回填、未修改任何生产物料或分类。
-- **回归状态**：`CODE_AND_TARGET_TEST_COMPLETE`；部署后也必须按工厂先预览，任何正式历史映射仍需用户单独授权，不能随部署自动执行。
+- **Commit/PR/main 状态**：实现 commit `c3708592581d5b9c8c25a8d6a1ebc0ae0d47fa97` 已通过 PR #1550 合入 `main`，部署源码 commit 为 `5d8cf88fd46cc8c412457f6718cf1498848c5a0a`。
+- **部署状态**：`DEPLOYED_PROD_2026-07-21`；Java 已切换至 green/10020，release JAR SHA-256 `c2714199d194837c432a1c0ea31f0003687c89babbc73f63cbc302ce8b8eff54`、MD5 `2692df0e1f705986a07f0d52937a53bd`，健康检查与 `business-code-backfill` 运行制品 marker 均通过。Web/Python 未变更、未部署。
+- **回归状态**：`DEPLOYED_SERVICE_VERIFIED_BACKFILL_NOT_EXECUTED`；17/17 目标测试通过，生产切流后5轮健康检查通过。部署过程未调用正式回填接口，未修改任何生产物料、分类或业务编码；任何正式历史映射仍须按工厂先只读预览并取得用户单独授权。
 
 ### BUG-F006-R3-MATERIAL-DISPLAY-CODE-002 — 新建原料仍以前台16位编码为主
 
