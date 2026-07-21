@@ -205,8 +205,11 @@ async def test_trusted_restaurant_intent_is_preserved_across_java_python_boundar
     async def _resolve(code, pool, factory_id, **kwargs):
         observed.append((code, factory_id, kwargs.get("query")))
         return SimpleNamespace(
-            answer_text="毛利率趋势回答",
+            answer_text="毛利率趋势回答 70%",
             charts=[{"chartType": "line"}],
+            kpis=[],
+            meta={"marginInvariantPass": True},
+            title="毛利率趋势",
         )
 
     monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
@@ -226,7 +229,7 @@ async def test_trusted_restaurant_intent_is_preserved_across_java_python_boundar
         _Request("F001", user_id="7", role="restaurant_manager"),
     )
 
-    assert response.answer == "毛利率趋势回答"
+    assert response.answer == "毛利率趋势回答 70%"
     assert observed == [(
         "RESTAURANT_OPS_GROSS_MARGIN",
         "F001",
@@ -243,7 +246,13 @@ async def test_untrusted_expected_intent_is_ignored(monkeypatch):
 
     async def _resolve(code, *_args, **_kwargs):
         observed.append(code)
-        return SimpleNamespace(answer_text="正常回答", charts=[])
+        return SimpleNamespace(
+            answer_text="整体毛利率 70%",
+            charts=[],
+            kpis=[],
+            meta={"marginInvariantPass": True},
+            title="整体毛利率",
+        )
 
     monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
     monkeypatch.setattr(
@@ -251,6 +260,7 @@ async def test_untrusted_expected_intent_is_ignored(monkeypatch):
         lambda _query: "RESTAURANT_OPS_SALES_SUMMARY",
     )
     monkeypatch.setattr("smartbi.gold.restaurant_ops_router.resolve_by_code", _resolve)
+    monkeypatch.setattr("smartbi.gold.restaurant_intent_service._resolve_tiered", _resolve)
 
     await chat_mod.general_analysis(
         chat_mod.GeneralAnalysisRequest(
@@ -262,7 +272,7 @@ async def test_untrusted_expected_intent_is_ignored(monkeypatch):
         _Request("F001", user_id="7", role="restaurant_manager"),
     )
 
-    assert observed == ["RESTAURANT_OPS_SALES_SUMMARY"]
+    assert observed == ["RESTAURANT_OPS_GROSS_MARGIN"]
 
 
 async def test_restaurant_general_analysis_inherits_only_dependent_session_followup(monkeypatch):

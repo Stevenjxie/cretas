@@ -595,6 +595,91 @@ def test_generic_optimization_requires_business_objective():
     assert optimization_clarification_question("优化慢销菜品") is None
 
 
+def test_ambiguous_cost_margin_priority_requires_scope_choice():
+    question = optimization_clarification_question(
+        "为了降低成本、提高毛利，成本毛利先查哪几项？"
+    )
+    assert question is not None
+    assert "菜品成本" in question
+    assert "食材损耗" in question
+    assert "门店毛利" in question
+
+
+def test_compound_cost_margin_query_builds_a_multi_resolver_plan():
+    spec = _build_spec(
+        "RESTAURANT_OPS_STORE_MARGIN",
+        "为了降低成本提高毛利，最近30天把菜品成本、食材损耗和门店毛利都查一下，告诉我先查哪项",
+        confidence=1.0,
+        tier="test",
+    )
+
+    assert spec.requested_metrics == ("recipe_cost", "wastage", "gross_margin")
+    assert spec.planned_intents == (
+        "RESTAURANT_OPS_RECIPE_COST",
+        "RESTAURANT_OPS_WASTAGE_TOP",
+        "RESTAURANT_OPS_STORE_MARGIN",
+    )
+    assert spec.asks_priority is True
+    assert spec.unsupported_requirements == ()
+    assert spec.clarification_needed is False
+
+
+def test_service_speed_root_cause_query_is_not_silently_reduced_to_sales():
+    spec = _build_spec(
+        "RESTAURANT_OPS_SALES_SUMMARY",
+        "最近7天晚市出餐慢，是订单集中、人员不足还是工序瓶颈？请分别用数据判断",
+        confidence=1.0,
+        tier="test",
+    )
+
+    assert spec.clarification_needed is True
+    assert spec.unsupported_requirements == ("service_speed", "process_bottleneck")
+    assert "工序" in (spec.clarification_question or "")
+    assert "订单" in (spec.clarification_question or "")
+
+
+@pytest.mark.asyncio
+async def test_parse_catches_service_speed_capability_gap_before_tenant_gate():
+    spec = await parse_restaurant_query(
+        "最近7天晚市出餐慢，是订单集中、人员不足还是工序瓶颈？请分别用数据判断",
+        object(),
+        factory_id="DEMO_REST",
+    )
+
+    assert spec is not None
+    assert spec.intent == ""
+    assert spec.clarification_needed is True
+    assert spec.unsupported_requirements == ("service_speed", "process_bottleneck")
+    assert "不会用营收概览代替" in (spec.clarification_question or "")
+
+
+def test_margin_and_return_rate_query_discloses_missing_capability():
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "优化菜品结构，以提高毛利率并降低退菜率为目标",
+        confidence=1.0,
+        tier="test",
+    )
+
+    assert spec.clarification_needed is True
+    assert spec.unsupported_requirements == ("return_rate",)
+    assert "退菜" in (spec.clarification_question or "")
+
+
+def test_dish_sales_and_margin_share_one_deterministic_resolver():
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "请同时优化菜品销量和毛利率，给出优先级和依据",
+        confidence=1.0,
+        tier="test",
+    )
+
+    assert spec.requested_metrics == ("sales_volume", "gross_margin")
+    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+    assert spec.asks_priority is True
+    assert spec.clarification_needed is False
+
+
 @pytest.mark.asyncio
 async def test_generic_optimization_parses_as_clarification_without_llm():
     spec = await parse_restaurant_query(
@@ -606,6 +691,20 @@ async def test_generic_optimization_parses_as_clarification_without_llm():
     assert spec.intent == ""
     assert spec.clarification_needed is True
     assert "优先优化哪一个目标" in spec.clarification_question
+
+
+@pytest.mark.asyncio
+async def test_regression_chart_request_returns_exportable_fields_not_false_success():
+    spec = await parse_restaurant_query(
+        "计算每个菜品销量与价格的线性回归曲线，并给出决定系数；如果不能绘图请给出可导出的字段",
+        object(),
+        factory_id="F_REST",
+    )
+    assert spec is not None
+    assert spec.clarification_needed is True
+    assert "不能可靠完成" in (spec.clarification_question or "")
+    assert "菜品名称" in (spec.clarification_question or "")
+    assert "决定系数" in (spec.clarification_question or "")
 
 
 def test_contract_requires_executed_comparison_metadata():
@@ -636,6 +735,32 @@ def test_contract_requires_executed_comparison_metadata():
         },
     )
     assert "comparison" not in passed.missing
+
+
+def test_contract_rejects_partial_multi_objective_answer():
+    spec = _build_spec(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        "请同时优化菜品销量和毛利率，给出优先级和依据",
+        confidence=1.0,
+        tier="test",
+    )
+    meta = {"marginInvariantPass": True}
+
+    partial = contract.validate(
+        spec,
+        "菜品毛利率为72%，建议提高价格。",
+        kpis=[],
+        meta=meta,
+    )
+    assert "request_coverage" in partial.missing
+
+    complete = contract.validate(
+        spec,
+        "优先级1：先推广高销量高毛利菜品；依据是销量和毛利率同时领先。",
+        kpis=[],
+        meta=meta,
+    )
+    assert "request_coverage" not in complete.missing
 
 
 # ─── 7. 2026-07-07 live-verify follow-ups (paraphrase slot gaps + cache) ───

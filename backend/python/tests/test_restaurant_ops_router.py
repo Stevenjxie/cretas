@@ -27,6 +27,7 @@ from smartbi.gold.restaurant_ops_router import (
     _resolve_sales_date_range,
     _resolve_sales_query_spec,
     match_restaurant_ops,
+    reconcile_restaurant_ops_code,
     resolve_by_code,
     resolve_sales_summary,
 )
@@ -74,7 +75,13 @@ LEGITIMATE_TRIGGERS = [
     ("今天查订单", "RESTAURANT_OPS_SALES_SUMMARY"),
     ("本月营业额", "RESTAURANT_OPS_SALES_SUMMARY"),
     ("昨天营业额比前天高还是低", "RESTAURANT_OPS_SALES_SUMMARY"),
+    ("昨天的营业额是高于前天还是低于前天？", "RESTAURANT_OPS_SALES_SUMMARY"),
+    ("昨日营业额较前日上升还是下降？", "RESTAURANT_OPS_SALES_SUMMARY"),
+    ("昨天营业收入比前天高吗？", "RESTAURANT_OPS_SALES_SUMMARY"),
+    ("昨天流水比前一日旺不旺？", "RESTAURANT_OPS_SALES_SUMMARY"),
+    ("本月和上月营业额哪个高？", "RESTAURANT_OPS_SALES_SUMMARY"),
     ("上个月和上上个月营收相比怎么样", "RESTAURANT_OPS_SALES_SUMMARY"),
+    ("提升毛利率，哪些事情今天先不要做？", "RESTAURANT_OPS_GROSS_MARGIN"),
 ]
 
 # Queries that MUST NOT match any ops template (ambiguous or unrelated to ops)
@@ -165,6 +172,20 @@ def test_revenue_amount_query_routes_to_sales_summary_not_trend():
     assert match_restaurant_ops("本月营业额") == "RESTAURANT_OPS_SALES_SUMMARY"
 
 
+def test_explicit_period_comparison_beats_stale_trend_hint():
+    assert reconcile_restaurant_ops_code(
+        "昨日营业额较前日上升还是下降？",
+        "RESTAURANT_OPS_TREND_ANALYSIS",
+    ) == "RESTAURANT_OPS_SALES_SUMMARY"
+
+
+def test_specific_margin_hint_beats_generic_trend_match():
+    assert reconcile_restaurant_ops_code(
+        "营收趋势",
+        "RESTAURANT_OPS_GROSS_MARGIN",
+    ) == "RESTAURANT_OPS_GROSS_MARGIN"
+
+
 @pytest.mark.parametrize(
     "query,expected_range,expected_label",
     [
@@ -198,6 +219,39 @@ def test_sales_query_spec_extracts_time_margin_and_profitability():
     assert spec.relative_window is True
 
 
+def test_sales_summary_no_data_answers_what_not_to_do(monkeypatch):
+    async def _fake_finance_summary(pool, factory_id, date_range, top_n_stores=5):
+        return {
+            "total_revenue": 0.0,
+            "bill_count": 0,
+            "avg_bill_value": None,
+            "day_count": 0,
+            "store_count": 0,
+            "top_stores": [],
+        }
+
+    async def _fake_store_comparison(pool, factory_id, date_range):
+        return {"stores": [], "weakStores": []}
+
+    import smartbi.gold.queries as _q
+
+    monkeypatch.setattr(_q, "finance_summary", _fake_finance_summary)
+    monkeypatch.setattr(_q, "store_comparison", _fake_store_comparison)
+
+    answer = asyncio.run(resolve_sales_summary(
+        object(),
+        "RES_TEST",
+        role="restaurant_owner",
+        query="提升毛利率哪些事情今天先不要做？",
+        today=date(2026, 7, 21),
+    ))
+
+    assert "2026-07-21" in answer.answer_text
+    assert "今天先不要做" in answer.answer_text
+    assert "不要依据缺失数据" in answer.answer_text
+    assert "其他日期替代" in answer.answer_text
+
+
 @pytest.mark.parametrize(
     "query,primary,baseline,baseline_label",
     [
@@ -206,6 +260,24 @@ def test_sales_query_spec_extracts_time_margin_and_profitability():
             (date(2026, 7, 20), date(2026, 7, 20)),
             (date(2026, 7, 19), date(2026, 7, 19)),
             "前天",
+        ),
+        (
+            "昨日营业额较前日上升还是下降？",
+            (date(2026, 7, 20), date(2026, 7, 20)),
+            (date(2026, 7, 19), date(2026, 7, 19)),
+            "前天",
+        ),
+        (
+            "昨天流水比前一日旺不旺？",
+            (date(2026, 7, 20), date(2026, 7, 20)),
+            (date(2026, 7, 19), date(2026, 7, 19)),
+            "前天",
+        ),
+        (
+            "本月和上月营业额哪个高？",
+            (date(2026, 7, 1), date(2026, 7, 21)),
+            (date(2026, 6, 1), date(2026, 6, 30)),
+            "上个月",
         ),
         (
             "上个月和上上个月营收相比怎么样",

@@ -24,6 +24,7 @@ _ELEMENT_LABELS_CN = {
     "non_empty_answer": "实际分析结果",
     "comparison": "您要求的对比周期和高低结论",
     "margin_integrity": "毛利与营收的一致口径校验",
+    "request_coverage": "问题中要求的全部指标和动作",
 }
 
 
@@ -47,6 +48,19 @@ _EXPLICIT_GAP_TOKENS = (
 )
 
 _MARGIN_TOKENS = ("毛利", "毛利率", "利润")
+
+_REQUEST_TEXT_TOKENS = {
+    "recipe_cost": ("菜品成本", "食材成本", "配方成本", "成本"),
+    "wastage": ("食材损耗", "损耗", "浪费", "报损"),
+    "sales_volume": ("菜品销量", "销量", "销售量", "高销量", "低销量"),
+    "gross_margin": ("毛利率", "毛利", "利润"),
+    "revenue": ("营收", "营业额", "营业收入", "销售额", "流水"),
+    "orders": ("订单", "单量", "客单价"),
+    "staffing": ("排班", "人效", "人员", "人手", "在岗"),
+    "return_rate": ("退菜", "退款"),
+    "service_speed": ("出餐", "上菜", "等餐"),
+    "process_bottleneck": ("工序", "流程瓶颈"),
+}
 
 
 def _contains_any(text: str, tokens: tuple) -> bool:
@@ -147,6 +161,34 @@ def _margin_integrity_present(meta: Optional[Dict[str, Any]]) -> bool:
     )
 
 
+def _request_coverage_present(
+    spec: RestaurantQuerySpec,
+    answer_text: str,
+    meta: Optional[Dict[str, Any]],
+) -> bool:
+    if len(spec.planned_intents) > 1 and (meta or {}).get("plan_complete") is not True:
+        return False
+    for requirement in spec.requested_metrics:
+        tokens = _REQUEST_TEXT_TOKENS.get(requirement, ())
+        if tokens and not _contains_any(answer_text, tokens):
+            return False
+    if spec.asks_priority and not (
+        "优先级" in answer_text and "依据" in answer_text
+    ):
+        return False
+    if spec.asks_prohibited_actions and not _contains_any(
+        answer_text,
+        ("先不要做", "不要", "先别", "避免"),
+    ):
+        return False
+    if spec.asks_export and not _contains_any(
+        answer_text,
+        ("导出字段", "可导出", "下载", "文件"),
+    ):
+        return False
+    return True
+
+
 # 2026-07-08 audit fix A-3: resolver 能力表 —— 契约只要求 resolver 真正能满足
 # 的元素。8 码里只有 SALES_SUMMARY 的 resolver 接受 query 并按解析出的时间窗
 # 取数/回显; 只有下面三个能产出毛利金额与盈亏判断。对其余 resolver 提这些
@@ -189,6 +231,13 @@ def required_elements(spec: RestaurantQuerySpec) -> List[str]:
         elements.append("store_name")
     if "dish" in spec.dimensions:
         elements.append("dish_name")
+    if (
+        spec.requested_metrics
+        or spec.asks_priority
+        or spec.asks_prohibited_actions
+        or spec.asks_export
+    ):
+        elements.append("request_coverage")
     return elements
 
 
@@ -248,5 +297,8 @@ def validate(
                 missing.append(element)
         elif element == "margin_integrity":
             if not _margin_integrity_present(meta):
+                missing.append(element)
+        elif element == "request_coverage":
+            if not _request_coverage_present(spec, text, meta):
                 missing.append(element)
     return ContractResult(missing=missing)

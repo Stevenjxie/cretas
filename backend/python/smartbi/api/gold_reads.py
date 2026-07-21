@@ -1152,6 +1152,7 @@ async def post_restaurant_tiered_answer(
        "code": str, "contract_pass": bool}
     """
     from smartbi.gold.restaurant_intent import (
+        capability_clarification_question,
         contextualize_restaurant_followup,
         parse_restaurant_query,
     )
@@ -1205,6 +1206,7 @@ async def post_restaurant_tiered_answer(
             and match_restaurant_ops(query) is None
             and not has_trusted_session
             and "优化" not in query
+            and capability_clarification_question(query) is None
         ):
             return {"delegate": False}
 

@@ -289,6 +289,30 @@ async def test_prefilter_allows_t1_hit_query_through(monkeypatch, query: str):
 
 
 @pytest.mark.asyncio
+async def test_prefilter_allows_regression_export_capability_clarification(monkeypatch):
+    """A chart/regression request must reach the deterministic capability
+    response even though it has no profit token, relative time window, or T1
+    resolver match.  Otherwise the Java delegate gate silently discards the
+    export fallback before ``parse_restaurant_query`` can return it.
+    """
+    import smartbi.api.gold_reads as gold_reads_mod
+    from smartbi.api.gold_reads import TieredIntentAnswerRequest, post_restaurant_tiered_answer
+
+    monkeypatch.setattr(gold_reads_mod, "get_factory_id", lambda: "DEMO_REST")
+    monkeypatch.setattr(gold_reads_mod, "get_pg_pool", AsyncMock(return_value=object()))
+    parse_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr("smartbi.gold.restaurant_intent.parse_restaurant_query", parse_mock)
+
+    body = TieredIntentAnswerRequest(
+        factory_id="DEMO_REST",
+        query="帮我画销量和价格的回归曲线并给出R²，不能画就导出数据",
+    )
+    await post_restaurant_tiered_answer(_fake_request(), body)
+
+    assert parse_mock.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_prefilter_still_blocks_truly_signal_free_query(monkeypatch):
     """Regression guard: a query with no profit token, no relative window,
     AND no T1 keyword hit must still be blocked before parse_restaurant_query
