@@ -555,7 +555,7 @@
 - **根因**：后端创建、DTO 与搜索已支持 `businessCode/displayCode`，但 Web 只完成预览接入，列表、编辑态和分类文案未切换到双码展示契约。
 - **修复**：列表和编辑态统一优先 `displayCode → businessCode → legacy code`；有短码时旧16位仅在“兼容码”提示中查看，历史未映射行回退旧码并标“历史编码”。新建区改为“物料分类与业务编码”，分类下拉以名称为主、内部分类码为次级说明；搜索文案明确同时支持名称、业务编码和历史编码。
 - **修改文件**：`web-admin/src/views/warehouse/material-types/list.vue`、`materialFamilyConsistency.source.spec.ts`；后端、数据库和生产物料均未修改。
-- **测试**：物料分类/双码 Web 目标测试 13/13 PASS；`vue-tsc` PASS；正式 Web release build 在最终 commit 前执行并记录。
-- **Commit/PR/main 状态**：`TARGET_TEST_PASSED_PENDING_MAIN`；合入后更新精确 main。
+- **测试**：物料分类/双码 Web 目标测试 13/13 PASS；`vue-tsc -b` PASS；正式 Web release build PASS（735 assets），可信制品清单已生成且未重复构建。
+- **Commit/PR/main 状态**：实现 commit `8a39acecd045a6338659f8a7e71eefe125bc1fdb`；PR [#1552](https://github.com/Stevenjxie/cretas/pull/1552)；状态 `READY_FOR_MAIN`。
 - **部署状态**：`NOT_DEPLOYED`。
 - **回归状态**：`TARGET_TEST_PASSED`；生产业务 mutation=0，未创建/修改原料、分类或业务编码，未执行历史回填，未触碰 LIUSHANMEN。
