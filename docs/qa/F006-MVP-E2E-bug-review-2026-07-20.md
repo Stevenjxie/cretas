@@ -531,3 +531,17 @@
 - **Commit/PR/main 状态**：实现 commit `83deeba16f7c91693e443666951b878758300945`；PR [#1547](https://github.com/Stevenjxie/cretas/pull/1547)；当前 `TARGET_TEST_PASSED_PENDING_MAIN`，最终合并状态以该 PR 与 `origin/main` 为准。
 - **部署状态**：`NOT_DEPLOYED`。
 - **回归状态**：`TARGET_TEST_PASSED`；生产业务 mutation=0，未创建或修改 F006 原料/分类，未做历史桥接，未触碰 LIUSHANMEN。部署后由测试 Chat 在同一未创建现场刷新，重新选择原分类并完成唯一一次建档验证。
+
+### ENH-F006-MATERIAL-BUSINESS-CODE-001 — 按当前 L3 受控映射历史编码
+
+- **发现阶段/时间**：F006 R3 编码阻塞修复后的双码兼容核对，2026-07-21；用户确认需要依据当前 L3 为既有物料映射 `businessCode`，并厘清 `displayCode` 与旧16位编码的关系。
+- **期望/实际/业务影响**：历史 `code` 必须继续作为不可变 `legacyClassificationCode`，新业务码只能在 L3 身份可证明时分配；`displayCode` 应优先显示 `businessCode`、缺失时回退旧码。现有 V93 迁移出于安全原因没有历史回填，因此既有记录全部仍通过16位码展示，不能仅靠新建路径自动获得新码。
+- **只读审计结论**：不同工厂的历史分类完整度并不一致；有的记录能完整匹配当前启用 L3，也存在无法证明当前 L3 身份的旧行。生产精确计数仅保留在受控测试证据中，不进入公开仓库。本次审计只执行查询，业务 mutation=0。
+- **安全裁决**：禁止改写16位 `code`、历史外键或分类身份；任何无法证明当前启用 L3 的历史行均只报告、不按名称或旧前缀猜测回填。`displayCode` 不是新增数据库列，而是稳定派生值：有 `businessCode` 时显示新码，否则显示旧16位码。
+- **根因/修复**：新增工厂隔离的只读预览和显式确认回填边界，共用 `MaterialBusinessCodeService` 的显式前缀/L3稳定前缀 resolver。预览不占号、不写计数器；正式回填悲观锁定工厂物料行，仅对 `business_code IS NULL`、16位旧码合法且 L3 当前启用的行原子赋码。既有码跳过、无有效 L3/非法旧码逐项报告；同值重放成为 no-op，并发执行只能分配一次；任一冲突整事务回滚。
+- **权限/接口**：`GET .../raw-material-types/business-code-backfill/preview` 只读；`POST .../raw-material-types/business-code-backfill` 要求 `system:read_write` 且角色为 `factory_super_admin`/`permission_admin`，并要求显式 `confirm=true` 与幂等键。普通新增/编辑接口不能借此改写历史业务码。
+- **修改文件**：`MaterialBusinessCodeBackfillService/Impl`、回填 request/report DTO、`RawMaterialTypeRepository` 受控锁与条件更新、`RawMaterialTypeController` 管理接口，以及真实 JPA/Controller 目标测试。
+- **测试**：`mvn -Dtest=MaterialBusinessCodeRepositoryQueryValidationTest,RawMaterialTypeFoolproofMvcTest test`：17/17 PASS；真实 Spring/Hibernate JPA Context 覆盖预览零写、唯一预览、正式映射、旧码保持、displayCode切换、重复回填 no-op、无效 L3/非法旧码跳过、并发只分配一次；Controller 覆盖未确认400和确认后调用。
+- **Commit/PR/main 状态**：`TARGET_TEST_PASSED_PENDING_MAIN`；精确 commit/PR/main 在合入后更新。
+- **部署状态**：`NOT_DEPLOYED`；未执行生产回填、未修改任何生产物料或分类。
+- **回归状态**：`CODE_AND_TARGET_TEST_COMPLETE`；部署后也必须按工厂先预览，任何正式历史映射仍需用户单独授权，不能随部署自动执行。

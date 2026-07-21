@@ -2,10 +2,12 @@ package com.cretas.aims.controller;
 
 import com.cretas.aims.config.EnumCoercionJacksonConfig;
 import com.cretas.aims.dto.material.RawMaterialTypeDTO;
+import com.cretas.aims.dto.material.MaterialBusinessCodeBackfillReportDTO;
 import com.cretas.aims.exception.GlobalExceptionHandler;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.RawMaterialTypeService;
 import com.cretas.aims.service.SupplierService;
+import com.cretas.aims.service.material.MaterialBusinessCodeBackfillService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -62,6 +64,8 @@ class RawMaterialTypeFoolproofMvcTest {
     @Mock
     private RawMaterialTypeService materialTypeService;
     @Mock
+    private MaterialBusinessCodeBackfillService businessCodeBackfillService;
+    @Mock
     private MobileService mobileService;
     @Mock
     private SupplierService supplierService;
@@ -69,11 +73,14 @@ class RawMaterialTypeFoolproofMvcTest {
     private MockMvc mockMvc;
 
     private static final String CREATE_URL = "/api/mobile/F006/raw-material-types";
+    private static final String BACKFILL_URL =
+            "/api/mobile/F006/raw-material-types/business-code-backfill";
 
     @BeforeEach
     void setUp() {
         RawMaterialTypeController controller =
-                new RawMaterialTypeController(materialTypeService, mobileService, supplierService);
+                new RawMaterialTypeController(materialTypeService, businessCodeBackfillService,
+                        mobileService, supplierService);
 
         // 复刻 prod 的 @RequestBody ObjectMapper: 应用全局枚举空串→null coercion customizer
         // 到 Jackson2ObjectMapperBuilder 后 build。这是 MVC 真正用来反序列化请求体的那个 mapper。
@@ -93,6 +100,42 @@ class RawMaterialTypeFoolproofMvcTest {
                 .setMessageConverters(converter)                     // 真实 @RequestBody 转换器 (含 coercion)
                 .setValidator(validator)                             // 真实 @Valid
                 .build();
+    }
+
+    @Test
+    @DisplayName("历史业务编码回填必须显式确认，未确认不调用写服务")
+    void businessCodeBackfill_requiresExplicitConfirmation() throws Exception {
+        mockMvc.perform(post(BACKFILL_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"idempotencyKey\":\"web-backfill-1\",\"confirm\":false}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.containsString("明确确认")));
+
+        verify(businessCodeBackfillService, never()).backfill(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("历史业务编码回填确认后透传工厂和幂等键")
+    void businessCodeBackfill_confirmedRequestUsesControlledService() throws Exception {
+        MaterialBusinessCodeBackfillReportDTO report =
+                MaterialBusinessCodeBackfillReportDTO.builder()
+                        .factoryId("F006")
+                        .dryRun(false)
+                        .total(2)
+                        .mapped(2)
+                        .build();
+        when(businessCodeBackfillService.backfill("F006", "web-backfill-2"))
+                .thenReturn(report);
+
+        mockMvc.perform(post(BACKFILL_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"idempotencyKey\":\"web-backfill-2\",\"confirm\":true}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.factoryId").value("F006"))
+                .andExpect(jsonPath("$.data.mapped").value(2));
+
+        verify(businessCodeBackfillService).backfill("F006", "web-backfill-2");
     }
 
     /**
