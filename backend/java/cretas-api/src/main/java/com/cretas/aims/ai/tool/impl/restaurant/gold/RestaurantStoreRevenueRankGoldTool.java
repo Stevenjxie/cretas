@@ -215,6 +215,11 @@ public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool
         return asksForTop && asksForDirectAnswer;
     }
 
+    @Override
+    protected boolean shouldDelegateToTieredIntent(String userInput) {
+        return !isDirectTopStoreQuestion(userInput);
+    }
+
     private static boolean matchesStore(Map<String, Object> row, Object storeId, Object storeName) {
         if (hasText(storeId)) {
             Object rowStoreId = row.get("store_id");
