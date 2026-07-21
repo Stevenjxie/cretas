@@ -47,11 +47,11 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .v6-live-bar #liveTicker{transition:opacity .26s ease}
 
 /* 四业务 ----------------------------------------------------------------- */
-.biz{max-width:1320px;margin:0 auto;padding:clamp(44px,7vw,96px) clamp(16px,4vw,48px) clamp(24px,4vw,44px)}
+.biz{position:relative;max-width:1320px;margin:0 auto;padding:clamp(44px,7vw,96px) clamp(16px,4vw,48px) clamp(24px,4vw,44px)}
 .biz h2{font-size:clamp(24px,3.4vw,40px);font-weight:900;letter-spacing:-0.015em;margin:0 0 10px;text-wrap:balance}
 .biz .sub{font-size:clamp(14px,1.5vw,17px);color:var(--v6-ink-2);margin:0 0 clamp(26px,3.4vw,44px);max-width:52ch;line-height:1.7}
 .biz-grid{display:grid;grid-template-columns:1.4fr 1fr 1fr 1.15fr;gap:clamp(12px,1.4vw,20px);
-  grid-auto-rows:clamp(260px,30vw,330px)}
+  grid-auto-rows:clamp(320px,36vw,450px)}
 .biz-grid .v6-photo-card,.biz-grid .ai-card{height:100%}
 .card-tag{position:absolute;top:14px;left:14px;z-index:2;border:1px solid rgba(0,226,138,.6);
   background:rgba(4,20,13,.5);backdrop-filter:blur(4px);color:var(--v6-tag);font-family:var(--v6-mono);
@@ -77,6 +77,63 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .ai-card .title{margin-top:auto;padding-top:16px}
 .ai-card .title b{font-size:clamp(17px,1.7vw,21px);color:#fff;display:block;letter-spacing:-0.01em}
 .ai-card .title small{font-size:clamp(12.5px,1.2vw,14px);color:rgba(255,255,255,.62);margin-top:3px;display:block}
+
+/* 视觉 AI 全宽带 ---------------------------------------------------------- */
+.band{position:relative;margin-top:clamp(48px,8vw,110px);height:min(92vh,760px)}
+.band .bmask{position:absolute;inset:0;overflow:hidden;
+  -webkit-mask-image:linear-gradient(180deg,transparent 0%,#000 14%,#000 84%,transparent 100%);
+  mask-image:linear-gradient(180deg,transparent 0%,#000 14%,#000 84%,transparent 100%)}
+.band .bmask img{width:100%;height:122%;object-fit:cover;object-position:center 42%}
+.band .bscrim{position:absolute;inset:0;background:linear-gradient(90deg,rgba(10,9,7,.8) 0%,rgba(10,9,7,.4) 50%,rgba(10,9,7,.06) 78%)}
+.band .bcopy{position:absolute;left:clamp(24px,6vw,96px);top:50%;transform:translateY(-50%);
+  max-width:min(52%,540px);color:#fff;z-index:2}
+.band .bcopy h2{font-size:clamp(27px,3.9vw,46px);font-weight:900;line-height:1.32;letter-spacing:-0.015em;
+  margin:0 0 16px;text-wrap:balance;text-shadow:0 2px 24px rgba(0,0,0,.35)}
+.band .bcopy p{font-size:clamp(14.5px,1.5vw,18px);color:rgba(255,255,255,.88);line-height:1.85;margin:0 0 24px;max-width:36ch}
+.band .bcopy .v6-link{color:#fff;font-weight:700;font-size:15px;text-decoration:none;
+  border-bottom:2px solid rgba(0,226,138,.7);padding-bottom:3px}
+.band .bdet{position:absolute;border:1.5px solid rgba(0,226,138,.85);border-radius:10px;z-index:2;
+  box-shadow:0 0 26px rgba(0,226,138,.15)}
+.band .bdet span{position:absolute;top:-16px;left:0;background:var(--v6-tag);color:#04140d;
+  font-family:var(--v6-mono);font-size:12px;font-weight:800;padding:3px 11px;border-radius:99px;white-space:nowrap}
+.band .bd1{right:24%;top:16%;width:clamp(150px,15vw,220px);height:50%}
+.band .bd2{right:6%;top:56%;width:clamp(120px,11vw,170px);height:20%}
+.band .bd2 span{top:auto;bottom:-16px;background:rgba(4,20,13,.8);color:var(--v6-tag)}
+.band .bscan{position:absolute;left:0;right:0;height:2px;z-index:2;
+  background:linear-gradient(90deg,transparent,rgba(0,226,138,.85),transparent);
+  animation:bandScan 5s cubic-bezier(.6,.02,.4,.98) infinite}
+@keyframes bandScan{0%{top:12%}100%{top:88%}}
+
+/* 产品实拍带 -------------------------------------------------------------- */
+.shots{max-width:1320px;margin:0 auto;padding:clamp(56px,8.5vw,120px) clamp(16px,4vw,48px) clamp(30px,4vw,56px);position:relative}
+.shots h2{font-size:clamp(24px,3.4vw,40px);font-weight:900;letter-spacing:-0.015em;margin:0 0 10px;text-wrap:balance}
+.shots .sub{font-size:clamp(14px,1.5vw,17px);color:var(--v6-ink-2);margin:0 0 clamp(30px,4vw,52px);max-width:52ch;line-height:1.7}
+.shots .srow{display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:clamp(16px,2.2vw,30px);align-items:start}
+.shots figure{margin:0}
+.shots figcaption{font-size:clamp(12.5px,1.25vw,14px);color:var(--v6-ink-2);margin-top:12px;line-height:1.6}
+.shots figcaption b{color:var(--v6-ink)}
+
+/* LIVE 运营流带 ----------------------------------------------------------- */
+.opsband{background:linear-gradient(160deg,#0d1210 0%,#0a1a13 100%);margin-top:clamp(40px,6vw,80px);
+  padding:clamp(56px,8.5vw,120px) clamp(16px,4vw,48px);position:relative;overflow:hidden}
+.opsband .haze{position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse 55% 45% at 78% 40%,rgba(0,226,138,.1),transparent 70%)}
+.ops-inner{max-width:1200px;margin:0 auto;display:grid;grid-template-columns:1fr 1.15fr;
+  gap:clamp(28px,5vw,80px);align-items:center;position:relative}
+.ops-inner h2{font-size:clamp(26px,3.7vw,44px);font-weight:900;color:#fff;line-height:1.35;
+  letter-spacing:-0.015em;margin:0 0 16px;text-wrap:balance}
+.ops-inner h2 span{color:var(--v6-tag)}
+.ops-inner p{font-size:clamp(14.5px,1.5vw,17.5px);color:rgba(255,255,255,.72);line-height:1.85;margin:0 0 24px;max-width:36ch}
+.opsfeed{height:clamp(300px,38vw,400px);overflow:hidden;position:relative;
+  -webkit-mask-image:linear-gradient(180deg,transparent 0%,#000 16%,#000 84%,transparent 100%);
+  mask-image:linear-gradient(180deg,transparent 0%,#000 16%,#000 84%,transparent 100%)}
+.opsfeed ul{list-style:none;margin:0;padding:0;animation:opsScroll 30s linear infinite}
+.opsfeed li{display:flex;gap:14px;align-items:baseline;font-size:clamp(12.5px,1.25vw,14.5px);
+  color:rgba(255,255,255,.82);padding:13px 2px;border-bottom:1px dashed rgba(255,255,255,.09);line-height:1.6}
+.opsfeed li .t{font-family:var(--v6-mono);font-size:.88em;color:rgba(255,255,255,.4);flex:0 0 46px}
+.opsfeed li b{color:var(--v6-tag);font-weight:700}
+.opsfeed li .warn{color:#ffb84d}
+@keyframes opsScroll{to{transform:translateY(-50%)}}
 
 /* 定制开发 --------------------------------------------------------------- */
 .custom{max-width:1000px;margin:0 auto;padding:clamp(52px,8vw,116px) clamp(16px,4vw,48px);text-align:center}
@@ -104,6 +161,14 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .v6-foot .foot-links{display:flex;flex-wrap:wrap}
 
 /* responsive ------------------------------------------------------------- */
+@media (max-width:900px){
+  .band{height:min(72vh,560px)}
+  .band .bcopy{left:clamp(20px,6vw,32px);right:clamp(20px,6vw,32px);max-width:none}
+  .band .bdet{display:none}
+  .shots .srow{grid-template-columns:1fr;max-width:640px}
+  .ops-inner{grid-template-columns:1fr}
+  .opsfeed{height:280px}
+}
 @media (max-width:768px){
   .v6-nav{flex-direction:column;gap:12px;align-items:flex-start}
   .v6-nav .nav-links{justify-content:flex-start}
@@ -121,6 +186,8 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 @media (max-width:768px){ .v6-live-bar{gap:14px} }
 @media (prefers-reduced-motion: reduce){
   .v6-photo-card,.v6-photo-card:hover{transition:none;transform:none}
+  .band .bscan{display:none}
+  .opsfeed ul{animation:none}
 }
 </style>
 </head>
@@ -176,6 +243,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 
 <!-- 四业务 -->
 <section class="biz">
+  <div class="v6-glow" style="top:-60px;height:115%"></div>
   <h2 class="v6-reveal">四门生意，一个 AI 底座</h2>
   <p class="sub v6-reveal">每一条业务线，AI 都在里面干活 — 不是挂名的“智能”。</p>
   <div class="biz-grid">
@@ -208,6 +276,70 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
       <div class="title"><b>AI 中枢</b><small>大白话问，直接办事</small></div>
     </a>
 
+  </div>
+</section>
+
+<!-- 视觉 AI 全宽带 -->
+<section class="band">
+  <div class="bmask"><img src="/assets/img/band-kitchen.jpg" alt="后厨灶台实时画面，火光中 AI 识别框正在跟踪厨师作业"></div>
+  <div class="bscrim"></div>
+  <div class="bscan"></div>
+  <div class="bdet bd1"><span>操作员 · 分割工序 97.6%</span></div>
+  <div class="bdet bd2"><span>出品 ×12 · 已计件</span></div>
+  <div class="bcopy">
+    <h2>摄像头，就是 AI 的眼睛。</h2>
+    <p>接上你现有的监控，AI 认得出工序、数得清动作、盯得住穿戴合规 — 车间里发生什么，它替你亲眼看着。</p>
+    <a class="v6-link" href="/solutions-factory.html">看看车间视觉 AI →</a>
+  </div>
+</section>
+
+<!-- 产品实拍带 -->
+<section class="shots">
+  <h2 class="v6-reveal">不是概念图，是每天在跑的系统</h2>
+  <p class="sub v6-reveal">下面每一张都是真实界面 — 驾驶舱、工作流编辑器、调度地图，客户每天就用这些干活。</p>
+  <div class="srow">
+    <figure><img class="v6-shot" src="/assets/img/shots/dashboard.png" alt="餐饮经营驾驶舱：营收、客单、订单与品类占比一屏看清">
+      <figcaption><b>经营驾驶舱</b> — 营收、毛利、门店对比，一屏看清</figcaption></figure>
+    <figure><img class="v6-shot" src="/assets/img/shots/workflow.png" alt="可视化工作流编辑器：拖拽编排工序与物料流转">
+      <figcaption><b>工作流编辑器</b> — 工序怎么走，拖一拖就改</figcaption></figure>
+    <figure><img class="v6-shot" src="/assets/img/shots/logistics.png" alt="物流调度工作台：地图路线与车次列表并排">
+      <figcaption><b>调度工作台</b> — 十辆车的排线，AI 一分钟出方案</figcaption></figure>
+  </div>
+</section>
+
+<!-- LIVE 运营流带 -->
+<section class="opsband">
+  <div class="haze"></div>
+  <div class="ops-inner">
+    <div>
+      <h2 class="v6-reveal">此刻，<span>AI 正在干活。</span></h2>
+      <p class="v6-reveal">这不是演示数据的样子 — 接入 Cretas 后，你的系统里每天就是这样一条条滚过去的。</p>
+      <a class="v6-btn v6-reveal" href="mailto:stevenj4xie@gmail.com">预约演示</a>
+    </div>
+    <div class="opsfeed" aria-hidden="true">
+      <ul>
+        <li><span class="t">07:02</span><span>今日经营早报已推送 · <b>5 家门店</b></span></li>
+        <li><span class="t">08:11</span><span>收货核验 猪前腿 300kg <b>✓ 差异 0</b></span></li>
+        <li><span class="t">09:26</span><span>单品毛利核算完成 · <span class="warn">异常 1</span> 已推送老板</span></li>
+        <li><span class="t">10:40</span><span>3 号线装载率 <b>91%</b> · 排线已优化</span></li>
+        <li><span class="t">11:05</span><span>视觉识别 装盘工序 <b>×214 件</b> · 效率正常</span></li>
+        <li><span class="t">12:30</span><span>午市翻台 2.1 · 高峰预测已更新</span></li>
+        <li><span class="t">14:18</span><span>供应商报价 <span class="warn">+8% 异常</span> · 已拦截提醒</span></li>
+        <li><span class="t">15:44</span><span>质检拍照 12 批 · CCP <b>全部通过</b></span></li>
+        <li><span class="t">17:20</span><span>明日排产建议已生成 · 待确认</span></li>
+        <li><span class="t">18:00</span><span>收工汇报已发 · <b>异常 0</b></span></li>
+        <li><span class="t">07:02</span><span>今日经营早报已推送 · <b>5 家门店</b></span></li>
+        <li><span class="t">08:11</span><span>收货核验 猪前腿 300kg <b>✓ 差异 0</b></span></li>
+        <li><span class="t">09:26</span><span>单品毛利核算完成 · <span class="warn">异常 1</span> 已推送老板</span></li>
+        <li><span class="t">10:40</span><span>3 号线装载率 <b>91%</b> · 排线已优化</span></li>
+        <li><span class="t">11:05</span><span>视觉识别 装盘工序 <b>×214 件</b> · 效率正常</span></li>
+        <li><span class="t">12:30</span><span>午市翻台 2.1 · 高峰预测已更新</span></li>
+        <li><span class="t">14:18</span><span>供应商报价 <span class="warn">+8% 异常</span> · 已拦截提醒</span></li>
+        <li><span class="t">15:44</span><span>质检拍照 12 批 · CCP <b>全部通过</b></span></li>
+        <li><span class="t">17:20</span><span>明日排产建议已生成 · 待确认</span></li>
+        <li><span class="t">18:00</span><span>收工汇报已发 · <b>异常 0</b></span></li>
+      </ul>
+    </div>
   </div>
 </section>
 

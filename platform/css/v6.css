@@ -39,7 +39,7 @@
 .v6-quote small{font-size:14px;font-weight:400;color:#888;display:block;margin-top:8px}
 .v6-section{padding:clamp(28px,6vw,72px) clamp(16px,4vw,48px)}
 /* Reveal: small distance + long expo ease = glide, not pop. JS staggers siblings. */
-.v6-reveal{opacity:0;transform:translateY(8px);transition:opacity .85s ease-out,transform 1.05s cubic-bezier(.16,1,.3,1)}
+.v6-reveal{opacity:0;transform:translateY(22px);transition:opacity .85s ease-out,transform 1.05s cubic-bezier(.16,1,.3,1)}
 .v6-reveal.in{opacity:1;transform:none}
 
 /* Hero entrance choreography — the one signature moment per page */
@@ -92,6 +92,7 @@ html.v6-js .v6-ai-box{animation:v6HeroFade 1.3s ease-out .65s both,v6BoxTrack 7.
 }
 
 /* ---- Premium layer support ---- */
+.hero-wrap,.ai-hero{overflow-x:clip}
 .v6-spot{position:absolute;top:0;left:0;width:600px;height:600px;pointer-events:none;z-index:1;
   opacity:0;transition:opacity .6s ease;border-radius:50%;
   background:radial-gradient(circle at center,rgba(0,226,138,.09) 0%,rgba(0,226,138,.03) 40%,transparent 68%)}
