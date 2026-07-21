@@ -89,7 +89,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   color:#eafff5;overflow:hidden;margin-top:clamp(20px,3vw,40px)}
 .eye::before{content:"";position:absolute;inset:0;pointer-events:none;
   background:radial-gradient(ellipse 60% 50% at 78% 24%,rgba(0,226,138,.16),transparent 60%)}
-.eye-inner{position:relative;max-width:1200px;margin:0 auto;padding:clamp(60px,8vw,128px) clamp(16px,4vw,48px);z-index:1}
+.eye-inner{position:relative;max-width:1320px;margin:0 auto;padding:clamp(60px,8vw,128px) clamp(16px,4vw,48px);z-index:1}
 .eye-badge{display:inline-flex;gap:9px;align-items:center;font-family:var(--v6-mono);font-size:12px;
   letter-spacing:.14em;color:var(--v6-tag);margin-bottom:20px}
 .eye-badge .rec{width:8px;height:8px;border-radius:99px;background:var(--v6-tag);box-shadow:0 0 0 5px rgba(0,226,138,.18);animation:eyePulse 2.4s ease-in-out infinite}
@@ -121,8 +121,8 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   background-repeat:no-repeat;box-shadow:0 0 14px rgba(0,226,138,.12);z-index:2}
 .det span{position:absolute;top:-15px;left:-1px;background:var(--v6-tag);color:#04140d;font-family:var(--v6-mono);
   font-size:10.5px;font-weight:800;padding:2px 9px;border-radius:99px;white-space:nowrap}
-.det.d1{left:9%;top:22%;width:30%;height:52%}
-.det.d2{right:11%;top:30%;width:26%;height:40%}
+.det.d1{left:36%;top:5%;width:26%;height:58%}
+.det.d2{left:8%;top:62%;width:28%;height:30%}
 .det.d2 span{background:rgba(4,20,13,.72);color:var(--v6-tag);backdrop-filter:blur(4px)}
 .feed .scan{position:absolute;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,rgba(0,226,138,.85),transparent);
   z-index:2;animation:scanY 4.6s cubic-bezier(.6,.02,.4,.98) infinite}
@@ -217,6 +217,31 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .lesson .result{display:inline-flex;gap:10px;align-items:baseline;margin-top:10px;font-size:clamp(14px,1.5vw,16.5px);
   font-weight:800;color:var(--v6-cta-ink);background:rgba(0,179,119,.08);padding:10px 20px;border-radius:99px}
 .lesson + .lesson{padding-top:0}
+
+
+/* lesson 双栏: 左叙事右证据拟物 */
+.lesson{display:grid;grid-template-columns:1.1fr .9fr;gap:clamp(28px,4.5vw,72px);align-items:center}
+.lesson .lvis{justify-self:center;width:100%;max-width:420px}
+/* 收货确认拟物卡 */
+.rcvcard{background:#fff;border-radius:16px;box-shadow:0 24px 56px -28px rgba(40,40,40,.32);padding:clamp(18px,2vw,26px)}
+.rcvcard .ph{font-family:var(--v6-mono);font-size:11px;color:#847e75;letter-spacing:1.2px;margin-bottom:14px}
+.rcvcard .big{font-size:clamp(24px,2.6vw,32px);font-weight:900;letter-spacing:-0.01em;line-height:1.35}
+.rcvcard .big b{color:var(--v6-cta-ink)}
+.rcvcard .sub{font-size:13px;color:var(--v6-ink-2);margin-top:8px;line-height:1.7}
+.rcvcard .sub b{color:#b45309}
+.rcvcard .btns{display:flex;gap:10px;margin-top:18px}
+.rcvcard .ok{flex:1;text-align:center;background:var(--v6-cta);color:#fff;font-size:14px;font-weight:800;padding:12px 0;border-radius:10px}
+.rcvcard .alt{flex:0 0 auto;padding:12px 18px;font-size:13px;color:var(--v6-ink-2);background:rgba(0,0,0,.05);border-radius:10px}
+/* 物料归一拟物 */
+.mergevis{display:flex;flex-direction:column;gap:14px}
+.mergevis .alias{display:flex;flex-wrap:wrap;gap:8px}
+.mergevis .alias span{border:1.5px dashed rgba(180,83,9,.4);color:#8a5a2b;font-size:12px;padding:6px 13px;border-radius:99px;background:#fffdf7}
+.mergevis .down{align-self:center;color:var(--v6-cta-ink)}
+.mergevis .master{background:linear-gradient(160deg,#0d1210,#0a1a13);color:#fff;border-radius:12px;padding:14px 18px;
+  box-shadow:0 18px 40px -20px rgba(10,40,28,.4)}
+.mergevis .master b{color:var(--v6-tag);font-size:15px}
+.mergevis .master small{display:block;font-family:var(--v6-mono);font-size:10.5px;color:rgba(255,255,255,.55);margin-top:5px;letter-spacing:.5px}
+@media (max-width:900px){.lesson{grid-template-columns:1fr}.lesson .lvis{max-width:460px}}
 
 /* 差异化对比条 ----------------------------------------------------------- */
 .versus{max-width:1120px;margin:0 auto;padding:clamp(56px,8vw,120px) clamp(16px,4vw,48px);text-align:center}
@@ -523,19 +548,40 @@ html.v6-js .feed .det{animation:v6BoxTrack 8s ease-in-out infinite}
 
 <!-- 案例: 客户教我们的 -->
 <section class="lesson">
+  <div class="lcopy">
   <div class="kicker v6-reveal">真实案例 · 一家卤味工厂的收货台</div>
   <blockquote class="v6-reveal">做仓管的年纪都比较大，你不能太依赖他们，最好的办法，就是你告诉他要收多少，就行了。</blockquote>
   <cite class="v6-reveal">— 某卤味工厂创始人，第一次见面就给我们上了一课</cite>
   <p class="story v6-reveal">我们回去把收货页面改到只剩一句话：<b>今天收猪前腿 300kg。</b>供应商是谁、超收上限多少、差多少要打差异单，全部系统兜底，老师傅只管核对眼前这批货。</p>
   <p class="story v6-reveal">这就是后来「防呆设计」成为 Cretas 铁律的起点：<b>不是用户错了报错，而是让用户没机会错。</b></p>
   <span class="result v6-reveal">收货差错单：月均 17 张 → 2 张</span>
+  </div>
+  <div class="lvis v6-reveal">
+    <div class="rcvcard">
+      <div class="ph">仓管端 · 今日收货</div>
+      <div class="big">收 <b>猪前腿 300kg</b></div>
+      <p class="sub">供应商 A · 已收 0kg<br>超收上限 390kg，<b>超了系统自动拦</b></p>
+      <div class="btns"><span class="ok">核对无误</span><span class="alt">打差异单</span></div>
+    </div>
+  </div>
 </section>
 
 <section class="lesson">
+  <div class="lcopy">
   <div class="kicker v6-reveal">真实案例 · 仓库里的 7 种酱油</div>
   <p class="story v6-reveal">盘点那天我们跟着下仓库，系统里同名的"酱油"有 <b>7 条记录</b>、香菇有 6 条，每换一任厨师长，就多一套叫法。账对不上，不是人偷懒，是名字先乱了。</p>
   <p class="story v6-reveal">AI 物料归一 + 别名映射上线后，老名字照样搜得到，但账只算到同一条上。<b>历史数据不用推倒重来，脏数据当场开始变干净。</b></p>
   <span class="result v6-reveal">全仓盘点：6 张纸一下午 → 手机上 40 分钟</span>
+  </div>
+  <div class="lvis v6-reveal">
+    <div class="mergevis">
+      <div class="alias">
+        <span>酱油</span><span>黄豆酱油</span><span>3 号酱油</span><span>厨用酱油</span><span>宴会酱油</span><span>老酱油</span><span>酱油(新)</span>
+      </div>
+      <svg class="down" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m6 13 6 6 6-6"/></svg>
+      <div class="master"><b>酱油 · 主数据 M-0117</b><small>7 个别名已映射 · 老名字照样搜得到</small></div>
+    </div>
+  </div>
 </section>
 
 <!-- 差异化对比条 -->

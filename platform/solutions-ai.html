@@ -107,7 +107,7 @@ html.v6-js .ai-hero .inner>div:first-child>*:nth-child(3){animation-delay:.24s}
 
 
 /* 案例段: 第一次点下确认 */
-.firstok{max-width:920px;margin:0 auto;padding:clamp(44px,6.5vw,92px) clamp(16px,4vw,48px)}
+.firstok{max-width:1120px;margin:0 auto;padding:clamp(44px,6.5vw,92px) clamp(16px,4vw,48px)}
 .firstok .kicker{font-family:var(--v6-mono);font-size:12px;color:var(--v6-cta-ink);letter-spacing:2px;margin-bottom:10px}
 .firstok .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(14px,2vw,26px);margin-top:26px}
 .firstok .stp{border-top:2px solid rgba(0,179,119,.3);padding-top:14px}
@@ -116,6 +116,26 @@ html.v6-js .ai-hero .inner>div:first-child>*:nth-child(3){animation-delay:.24s}
 .firstok .stp p b{color:var(--v6-ink)}
 .firstok .lead-story{font-size:clamp(14px,1.55vw,17px);color:var(--v6-ink-2);line-height:1.9;max-width:60ch;margin:18px 0 0}
 .firstok .lead-story b{color:var(--v6-ink)}
+
+.firstok .fwrap{display:grid;grid-template-columns:1.05fr .95fr;gap:clamp(28px,4.5vw,72px);align-items:center;margin-top:6px}
+.firstok .fvis{justify-self:center;width:100%;max-width:400px}
+/* 写操作预览确认拟物 */
+.okcard{background:#101613;border-radius:18px;padding:clamp(18px,2vw,24px);box-shadow:0 26px 60px -28px rgba(10,30,20,.5)}
+.okcard .ph{font-family:var(--v6-mono);font-size:10.5px;color:rgba(255,255,255,.45);letter-spacing:1.5px;margin-bottom:14px}
+.okcard .diff{background:rgba(255,255,255,.06);border-radius:12px;padding:13px 15px;margin-bottom:10px}
+.okcard .diff .t{font-size:13px;font-weight:800;color:#fff;margin-bottom:8px}
+.okcard .diff .ln{display:flex;justify-content:space-between;font-family:var(--v6-mono);font-size:12px;padding:5px 0;border-bottom:1px dashed rgba(255,255,255,.12)}
+.okcard .diff .ln:last-child{border-bottom:none}
+.okcard .diff .ln .k{color:rgba(255,255,255,.55)}
+.okcard .diff .ln .old{color:rgba(255,255,255,.4);text-decoration:line-through;margin-right:8px}
+.okcard .diff .ln .new{color:var(--v6-tag);font-weight:700}
+.okcard .impact{font-size:12px;color:rgba(255,255,255,.6);line-height:1.7;margin-bottom:14px}
+.okcard .impact b{color:#ffb84d}
+.okcard .obtns{display:flex;gap:10px;align-items:center}
+.okcard .go{flex:1;text-align:center;background:var(--v6-tag);color:#04140d;font-size:13.5px;font-weight:800;padding:11px 0;border-radius:10px}
+.okcard .undo{flex:0 0 auto;font-size:12.5px;color:rgba(255,255,255,.6);padding:11px 16px;background:rgba(255,255,255,.08);border-radius:10px}
+@media (max-width:900px){.firstok .fwrap{grid-template-columns:1fr}}
+
 @media (max-width:768px){.firstok .steps{grid-template-columns:1fr}}
 
 /* 越用越懂你 + versus */
@@ -254,11 +274,28 @@ html.v6-js .ai-hero .inner>div:first-child>*:nth-child(3){animation-delay:.24s}
 <section class="firstok">
   <div class="kicker v6-reveal">真实案例 · 第一次点下「确认执行」</div>
   <h2>从"只敢问"到"放心让它办"</h2>
+  <div class="fwrap">
+  <div class="fcopy">
   <p class="lead-story v6-reveal">一位工厂老板刚上线时只让 AI 查数，"改数据？那不行。"<b>三周后他第一次点了「确认执行」</b>，让 AI 重排了周一的生产计划。问他为什么敢了，他说：因为每一次它都先给我看预览、告诉我影响、还能撤回。</p>
   <div class="steps">
     <div class="stp v6-reveal"><div class="w">第 1 周</div><p>只问不动：<b>"昨天产量多少？"</b>每一个答案都去后台核对过。</p></div>
     <div class="stp v6-reveal"><div class="w">第 3 周</div><p>第一次授权：AI 起草排产调整，<b>预览确认后执行</b>，全程留痕。</p></div>
     <div class="stp v6-reveal"><div class="w">第 3 个月</div><p>现在厂里 <b>6 成的排产调整由 AI 起草</b>，他只做拍板那一下。</p></div>
+  </div>
+  </div>
+  <div class="fvis v6-reveal">
+    <div class="okcard">
+      <div class="ph">CRETAS AI · 写操作预览</div>
+      <div class="diff">
+        <div class="t">起草周三采购单 · 3 项</div>
+        <div class="ln"><span class="k">猪前腿</span><span><span class="new">1.2t · 供应商 A</span></span></div>
+        <div class="ln"><span class="k">八角 / 桂皮</span><span><span class="new">按安全库存补齐</span></span></div>
+        <div class="ln"><span class="k">参考价</span><span><span class="old">¥23.8</span><span class="new">¥23.1/kg · 30 天均价内</span></span></div>
+      </div>
+      <p class="impact">依据：下周排产需求 + 现有库存；<b>金额超 ¥5 万需老板复核</b></p>
+      <div class="obtns"><span class="go">确认执行</span><span class="undo">可撤回</span></div>
+    </div>
+  </div>
   </div>
 </section>
 
