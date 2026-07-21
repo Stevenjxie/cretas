@@ -5,7 +5,7 @@
 
 ## 在飞任务
 
-- `F006-OA-RECOVERY-001` — `in-progress` — Owner: `/root` — Base SHA: `d21d1312e79313c800e9e8336519416b46a8a4b2` — 为历史 `SUBMITTED` 但缺少 OA 实例的采购单提供仅 `factory_super_admin` 可调用的受限、幂等、可审计恢复边界；先完成代码、测试、合入与部署，生产订单恢复需用户另行明确授权。
+- `F006-OA-RECOVERY-001` — `review` — Owner: `/root` — Base SHA: `d21d1312e79313c800e9e8336519416b46a8a4b2` — 为历史 `SUBMITTED` 但缺少 OA 实例的采购单提供仅 `factory_super_admin` 可调用的受限、幂等、可审计恢复边界；目标 release gate 16/16 PASS，待 PR 合入与部署；生产订单恢复需用户另行明确授权。
 
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
 - `ENH-F006-SUPPLIER-IMPORT-001`（含 `REQ-F006-SUPPLIER-REQUIRED-CONTACT-001`、`ENH-F006-SUPPLIER-DETAIL-STATUS-001`）— `in-progress` — Owner: `/root` — Base SHA: `3ddf6751603476205457fcf8aa0ee9f1adbea792` — 复用现有供应链 Excel 共享能力，统一供应商必填资料、导入预览/幂等确认、状态生命周期、采购门禁与详情信息架构；只合入 `main`，严格 `NOT_DEPLOYED`，生产业务写入为 0。
