@@ -19,6 +19,8 @@ class IntentRecognitionPipelineStoreReferenceTest {
         assertThat(IntentRecognitionPipelineServiceImpl
                 .shouldBypassEarlyPhraseShortcutForStoreReference("这家的客单价呢")).isTrue();
         assertThat(IntentRecognitionPipelineServiceImpl
+                .shouldBypassEarlyPhraseShortcutForStoreReference("那它的毛利率也是第一吗")).isTrue();
+        assertThat(IntentRecognitionPipelineServiceImpl
                 .shouldBypassEarlyPhraseShortcutForStoreReference("客单价")).isFalse();
         assertThat(IntentRecognitionPipelineServiceImpl
                 .shouldBypassEarlyPhraseShortcutForStoreReference("哪家店业绩最好")).isFalse();
@@ -46,5 +48,27 @@ class IntentRecognitionPipelineStoreReferenceTest {
         assertThat(reference.getEntityType()).isEqualTo("STORE");
         assertThat(reference.getEntityId()).isEqualTo("11");
         assertThat(reference.getEntityName()).isEqualTo("青花椒大丸百货店");
+    }
+
+    @Test
+    @DisplayName("ambiguous pronoun is copied as STORE when there is no DISH slot")
+    void ambiguousPronounUsesStoreSlotWhenDishSlotIsAbsent() {
+        ConversationContext context = ConversationContext.builder()
+                .sessionId("sid-store-pronoun")
+                .build();
+        context.setSlot(EntitySlot.SlotType.STORE, EntitySlot.store("11", "青花椒大丸百货店"));
+
+        PreprocessedQuery result = IntentRecognitionPipelineServiceImpl.ensureStoreReferenceResolved(
+                "那它的毛利率也是第一吗",
+                "门店 青花椒大丸百货店的毛利率也是第一吗",
+                context,
+                PreprocessedQuery.builder()
+                        .originalInput("那它的毛利率也是第一吗")
+                        .finalQuery("门店 青花椒大丸百货店的毛利率也是第一吗")
+                        .build());
+
+        assertThat(result.getResolvedReferences()).containsKey("那它");
+        assertThat(result.getResolvedReferences().get("那它").getEntityType()).isEqualTo("STORE");
+        assertThat(result.getResolvedReferences().get("那它").getEntityName()).isEqualTo("青花椒大丸百货店");
     }
 }

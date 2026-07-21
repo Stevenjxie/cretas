@@ -192,7 +192,7 @@ public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool
         if (directTopAnswer) {
             result.put("suppressActionAdvice", true);
         }
-        if (!chartNames.isEmpty()) {
+        if (!directTopAnswer && !chartNames.isEmpty()) {
             result.put("chartConfig", barChartConfig(
                     "门店营收排行 (万元)", chartNames, chartVals, "万元"));
         }
@@ -208,11 +208,7 @@ public class RestaurantStoreRevenueRankGoldTool extends GoldBackedRestaurantTool
                 || input.contains("哪家店业绩最好")
                 || input.contains("哪家门店业绩最好")
                 || input.contains("冠军");
-        boolean asksForDirectAnswer = input.contains("直接")
-                || input.contains("先告诉")
-                || input.contains("只告诉")
-                || input.contains("核心依据");
-        return asksForTop && asksForDirectAnswer;
+        return asksForTop;
     }
 
     @Override

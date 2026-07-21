@@ -100,6 +100,8 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
 
     private static final Pattern STORE_REFERENCE_PATTERN = Pattern.compile(
             "那家店|这家店|该店|那个店|这个店|该门店|那家|这家");
+    private static final Pattern AMBIGUOUS_ENTITY_REFERENCE_PATTERN = Pattern.compile(
+            "(?:那)?它");
 
     /**
      * T108/D2 fix: mirror of STORE_REFERENCE_PATTERN for dish coref.
@@ -820,12 +822,21 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
     }
 
     static boolean shouldBypassEarlyPhraseShortcutForStoreReference(String userInput) {
-        return userInput != null && STORE_REFERENCE_PATTERN.matcher(userInput).find();
+        return userInput != null && (
+                STORE_REFERENCE_PATTERN.matcher(userInput).find()
+                        || AMBIGUOUS_ENTITY_REFERENCE_PATTERN.matcher(userInput).find()
+        );
     }
 
     static PreprocessedQuery ensureStoreReferenceResolved(String originalInput, String processedInput,
             ConversationContext context, PreprocessedQuery preprocessedQuery) {
-        if (originalInput == null || context == null || !STORE_REFERENCE_PATTERN.matcher(originalInput).find()) {
+        if (originalInput == null || context == null) {
+            return preprocessedQuery;
+        }
+        boolean explicitStoreReference = STORE_REFERENCE_PATTERN.matcher(originalInput).find();
+        boolean storePronounFallback = AMBIGUOUS_ENTITY_REFERENCE_PATTERN.matcher(originalInput).find()
+                && context.getSlot(EntitySlot.SlotType.DISH) == null;
+        if (!explicitStoreReference && !storePronounFallback) {
             return preprocessedQuery;
         }
         EntitySlot slot = context.getSlot(EntitySlot.SlotType.STORE);
@@ -847,7 +858,13 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
             return pq;
         }
         Matcher matcher = STORE_REFERENCE_PATTERN.matcher(originalInput);
-        String reference = matcher.find() ? matcher.group() : originalInput;
+        String reference;
+        if (matcher.find()) {
+            reference = matcher.group();
+        } else {
+            Matcher ambiguousMatcher = AMBIGUOUS_ENTITY_REFERENCE_PATTERN.matcher(originalInput);
+            reference = ambiguousMatcher.find() ? ambiguousMatcher.group() : originalInput;
+        }
         pq.addResolvedReference(reference, "STORE", slot.getId(), slot.getName());
         if (pq.getUnresolvedReferences() != null) {
             pq.getUnresolvedReferences().remove(reference);

@@ -668,6 +668,64 @@ class RestaurantOpsGoldRouteTest {
                 any());
     }
 
+    @Test
+    @DisplayName("today revenue and margin request stays on analytical read route")
+    void todayRevenueAndMarginQuestionIsAnalyticalRead() {
+        Boolean analytical = ReflectionTestUtils.invokeMethod(
+                orchestrator,
+                "isRestaurantAnalyticalReadQuestion",
+                "请给出今天的整体经营情况：营业额、毛利额、毛利率；如果今天没有数据就明确说明");
+
+        assertThat(analytical).isTrue();
+    }
+
+    @Test
+    @DisplayName("ambiguous turnover metric asks for clarification without revenue substitution")
+    void ambiguousTurnoverMetricGetsDeterministicClarification() {
+        String query = "最近翻台拉胯，先判断我说的是翻台率还是翻台次数；如果无法确定先澄清，不要直接拿营业额替代";
+
+        assertThat(orchestrator.isAmbiguousRestaurantTurnoverMetricQuestion(query)).isTrue();
+        IntentExecuteResponse response = orchestrator.buildRestaurantTurnoverMetricClarificationResponse(
+                IntentExecuteRequest.builder().userInput(query).sessionId("turnover-1").build());
+
+        assertThat(response.getStatus()).isEqualTo("NEED_CLARIFICATION");
+        assertThat(response.getMessage())
+                .contains("翻台率")
+                .contains("翻台次数")
+                .contains("不会拿营业额替代")
+                .contains("开台和结账记录");
+    }
+
+    @Test
+    @DisplayName("store net profit never falls through to revenue or gross margin substitution")
+    void storeNetProfitGetsHonestCapabilityGap() {
+        String query = "请给出昨天各门店净利润，不要用营业额或毛利替代";
+
+        assertThat(orchestrator.isUnsupportedRestaurantStoreNetProfitQuestion(query)).isTrue();
+        IntentExecuteResponse response = orchestrator.buildRestaurantStoreNetProfitGapResponse(
+                IntentExecuteRequest.builder().userInput(query).sessionId("net-profit-1").build());
+
+        assertThat(response.getStatus()).isEqualTo("NEED_CLARIFICATION");
+        assertThat(response.getMessage())
+                .contains("按门店归集的费用、税费及其他收支")
+                .contains("不能可靠计算各门店净利润")
+                .contains("不会用营业额或毛利替代")
+                .contains("已覆盖销售的毛利");
+
+        Boolean analytical = ReflectionTestUtils.invokeMethod(
+                orchestrator,
+                "isRestaurantAnalyticalReadQuestion",
+                query);
+        assertThat(analytical).isTrue();
+    }
+
+    @Test
+    @DisplayName("store pronoun bypasses both early restaurant phrase shortcuts")
+    void storePronounRequiresContextResolutionBeforeShortcut() {
+        assertThat(orchestrator.shouldBypassEarlyPhraseShortcutForStoreReference(
+                "那它的毛利率也是第一吗？请沿用刚才的门店和日期范围")).isTrue();
+    }
+
     private void stubOwnerGateway(Map<String, Object> data) {
         when(toolExecutionGateway.execute(any(ToolExecutionCommand.class)))
                 .thenAnswer(invocation -> {
