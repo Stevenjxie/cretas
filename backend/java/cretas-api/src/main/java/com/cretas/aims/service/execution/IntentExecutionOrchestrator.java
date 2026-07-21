@@ -314,6 +314,23 @@ public class IntentExecutionOrchestrator {
             return buildRestaurantStoreNetProfitGapResponse(request);
         }
         if (!factoryPackConstrained
+                && isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))
+                && isUnsupportedRestaurantPriceElasticityQuestion(userInput)) {
+            return buildRestaurantPriceElasticityGapResponse(request);
+        }
+        if (!factoryPackConstrained
+                && userInput != null
+                && isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))
+                && isCostMarginClarificationQuestion(userInput)) {
+            return buildRestaurantCostMarginCheckOrderResponse(request);
+        }
+        if (!factoryPackConstrained
+                && userInput != null
+                && isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))
+                && isMarginProhibitedActionAnalysis(userInput)) {
+            return buildRestaurantMarginProhibitedActionsResponse(request);
+        }
+        if (!factoryPackConstrained
                 && shouldRouteRestaurantOwnerAction(factoryId, userInput, request.getContext())) {
             log.info("[restaurant-owner-action] force-route before restaurant report shortcuts: factoryId={}, input={}",
                     factoryId, userInput);
@@ -519,7 +536,8 @@ public class IntentExecutionOrchestrator {
                     : buildNoMatchResponse(matchResult, factoryId, request, userId, userRole);
         }
 
-        AIIntentConfig intent = matchResult.getBestMatch();
+        AIIntentConfig intent = remapRestaurantStoreMarginIntentIfNeeded(
+                factoryId, userInput, matchResult, matchResult.getBestMatch());
         log.info("识别到意图: code={}, category={}, sensitivity={}, matchMethod={}, confidence={}",
                 intent.getIntentCode(), intent.getIntentCategory(), intent.getSensitivityLevel(),
                 matchResult.getMatchMethod(), matchResult.getConfidence());
@@ -1804,7 +1822,7 @@ public class IntentExecutionOrchestrator {
                 + "如果看翻台率，需要桌数或座位数、营业时长和已结账桌次；"
                 + "如果看翻台次数，需要每桌的开台和结账记录。";
         return IntentExecuteResponse.builder()
-                .intentRecognized(false)
+                .intentRecognized(true)
                 .status("NEED_CLARIFICATION")
                 .message(msg)
                 .formattedText(msg)
@@ -1827,12 +1845,18 @@ public class IntentExecutionOrchestrator {
     }
 
     IntentExecuteResponse buildRestaurantStoreNetProfitGapResponse(IntentExecuteRequest request) {
-        final String msg = "当前还没有按门店归集的费用、税费及其他收支，"
+        String input = request != null ? request.getUserInput() : null;
+        String requestedRange = input != null
+                && containsAny(input, "昨天", "昨日")
+                && containsAny(input, "前天", "前日", "前一日")
+                ? "针对你问的昨天和前天，"
+                : "";
+        final String msg = requestedRange + "当前还没有按门店归集的费用、税费及其他收支，"
                 + "因此不能可靠计算各门店净利润，也不会用营业额或毛利替代。"
                 + "补齐门店级费用、税费和其他收支后可以按同一日期范围计算；"
                 + "目前可以单独查看门店营业额，或已覆盖销售的毛利。";
         return IntentExecuteResponse.builder()
-                .intentRecognized(false)
+                .intentRecognized(true)
                 .status("NEED_CLARIFICATION")
                 .message(msg)
                 .formattedText(msg)
@@ -1841,10 +1865,103 @@ public class IntentExecutionOrchestrator {
                 .build();
     }
 
+    boolean isUnsupportedRestaurantPriceElasticityQuestion(String userInput) {
+        if (userInput == null || userInput.isBlank()) {
+            return false;
+        }
+        return userInput.contains("价格弹性")
+                || (containsAny(userInput, "调价", "价格变化", "涨价", "降价")
+                && containsAny(userInput, "弹性", "置信区间", "因果效果", "因果影响", "回归估计"))
+                || (containsAny(userInput, "95%", "95％")
+                && containsAny(userInput, "置信区间", "价格", "销量"));
+    }
+
+    IntentExecuteResponse buildRestaurantPriceElasticityGapResponse(IntentExecuteRequest request) {
+        final String msg = "当前数据还不能可靠计算价格弹性、95%置信区间或因果效果，"
+                + "我不会把普通销量波动当成定价结论。缺少的数据包括："
+                + "1. 同一菜品多次真实价格变动；"
+                + "2. 各价格阶段的销量、订单量和曝光；"
+                + "3. 同期促销、折扣、门店和日期；"
+                + "4. 节假日、天气、缺货等控制因素。"
+                + "补齐这些字段后，才能做回归估计并给出区间和适用范围。";
+        return buildRestaurantDeterministicResponse(request, "NEED_CLARIFICATION", true, msg);
+    }
+
+    IntentExecuteResponse buildRestaurantCostMarginCheckOrderResponse(IntentExecuteRequest request) {
+        final String msg = "我理解的目标：用最少的检查，判断毛利下降来自售价与折扣、配方与进价、损耗，"
+                + "还是门店和菜品结构。检查顺序：\n"
+                + "1. 先看收入、订单和折扣，确认是否由售价、折扣或销量变化造成；\n"
+                + "2. 再核对配方用量和最新进价，确认标准成本是否准确；\n"
+                + "3. 再看领料、报损和盘点差异，确认实际损耗是否偏高；\n"
+                + "4. 最后按门店和菜品看已覆盖销售的毛利，定位影响范围。\n"
+                + "如果门店、菜品、日期或成本覆盖不完整，我会明确标出缺口，不给出虚假的整体结论。";
+        return buildRestaurantDeterministicResponse(request, "COMPLETED", true, msg);
+    }
+
+    IntentExecuteResponse buildRestaurantMarginProhibitedActionsResponse(IntentExecuteRequest request) {
+        final String msg = "今天先不要做：\n"
+                + "1. 不要全店统一调价或统一满减。前提：当前只有整体毛利，缺少门店和菜品成本覆盖；"
+                + "风险：误伤高毛利菜和正常门店；最小验证：选1至2家店、3至5道菜观察7天。\n"
+                + "2. 不要一次性下架所有低销量菜。前提：尚未核对单品毛利、引流和搭售作用；"
+                + "风险：误删高毛利或带动加购的菜；最小验证：先核对销量、毛利和连带订单。\n"
+                + "3. 不要扩大采购或备货。前提：损耗、领料和库存差异还没有验证；"
+                + "风险：增加积压和报损；最小验证：先核对近7天库存周转和报损。\n"
+                + "当前先补齐最新门店、菜品成本及损耗覆盖，再决定具体动作；不会凭空估算收益金额。";
+        return buildRestaurantDeterministicResponse(request, "COMPLETED", true, msg);
+    }
+
+    private IntentExecuteResponse buildRestaurantDeterministicResponse(
+            IntentExecuteRequest request, String status, boolean recognized, String message) {
+        return IntentExecuteResponse.builder()
+                .intentRecognized(recognized)
+                .status(status)
+                .message(message)
+                .formattedText(message)
+                .sessionId(request != null ? request.getSessionId() : null)
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
+
+    AIIntentConfig remapRestaurantStoreMarginIntentIfNeeded(
+            String factoryId,
+            String userInput,
+            IntentMatchResult matchResult,
+            AIIntentConfig currentIntent) {
+        if (currentIntent == null
+                || "RESTAURANT_OPS_STORE_MARGIN".equals(currentIntent.getIntentCode())
+                || !isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))
+                || userInput == null
+                || !containsAny(userInput, "毛利", "毛利率", "利润", "利润率")
+                || matchResult == null
+                || matchResult.getPreprocessedQuery() == null
+                || matchResult.getPreprocessedQuery().getResolvedReferences() == null) {
+            return currentIntent;
+        }
+        boolean hasResolvedStore = matchResult.getPreprocessedQuery().getResolvedReferences().values().stream()
+                .anyMatch(ref -> ref != null && "STORE".equalsIgnoreCase(ref.getEntityType()));
+        boolean hasReferenceWording = STORE_REFERENCE_PATTERN.matcher(userInput).find()
+                || userInput.contains("它")
+                || userInput.contains("沿用刚才的门店");
+        if (!hasResolvedStore || !hasReferenceWording) {
+            return currentIntent;
+        }
+        Optional<AIIntentConfig> storeMarginIntent = getIntentByCodeWithPlatformFallback(
+                factoryId, "RESTAURANT_OPS_STORE_MARGIN");
+        if (storeMarginIntent.isEmpty()) {
+            return currentIntent;
+        }
+        AIIntentConfig remapped = storeMarginIntent.get();
+        matchResult.setBestMatch(remapped);
+        matchResult.setRequiresConfirmation(false);
+        log.info("[RestaurantStoreFollowup] resolved STORE reference remapped intent {} -> {}",
+                currentIntent.getIntentCode(), remapped.getIntentCode());
+        return remapped;
+    }
+
     IntentExecuteResponse buildStoreReferenceClarificationResponse(IntentExecuteRequest request) {
         final String msg = "请问您指的是哪家店？";
         return IntentExecuteResponse.builder()
-                .intentRecognized(false)
+                .intentRecognized(true)
                 .status("NEED_CLARIFICATION")
                 .message(msg)
                 .formattedText(msg)
@@ -1879,7 +1996,7 @@ public class IntentExecutionOrchestrator {
     IntentExecuteResponse buildDishReferenceClarificationResponse(IntentExecuteRequest request) {
         final String msg = "请问您指的是哪道菜？";
         return IntentExecuteResponse.builder()
-                .intentRecognized(false)
+                .intentRecognized(true)
                 .status("NEED_CLARIFICATION")
                 .message(msg)
                 .formattedText(msg)
@@ -2283,6 +2400,7 @@ public class IntentExecutionOrchestrator {
         return isExplicitRestaurantMetricReadQuestion(input)
                 || isExplicitRestaurantSalesPeriodComparison(input)
                 || isEvidenceBasedRestaurantDiagnosis(input)
+                || isUnsupportedRestaurantPriceElasticityQuestion(input)
                 || isCostMarginClarificationQuestion(input)
                 || isRestaurantContextualMarginFollowup(input)
                 || isMarginProhibitedActionAnalysis(input);
