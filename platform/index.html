@@ -47,7 +47,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .v6-live-bar #liveTicker{transition:opacity .26s ease}
 
 /* 四业务 ----------------------------------------------------------------- */
-.biz{position:relative;max-width:1320px;margin:0 auto;padding:clamp(44px,7vw,96px) clamp(16px,4vw,48px) clamp(24px,4vw,44px)}
+.biz{position:relative;max-width:1320px;margin:0 auto;padding:clamp(30px,4.5vw,64px) clamp(16px,4vw,48px) clamp(18px,2.5vw,32px)}
 .biz h2{font-size:clamp(24px,3.4vw,40px);font-weight:900;letter-spacing:-0.015em;margin:0 0 10px;text-wrap:balance}
 .biz .sub{font-size:clamp(14px,1.5vw,17px);color:var(--v6-ink-2);margin:0 0 clamp(26px,3.4vw,44px);max-width:52ch;line-height:1.7}
 .biz-grid{display:grid;grid-template-columns:1.4fr 1fr 1fr 1.15fr;gap:clamp(12px,1.4vw,20px);
@@ -59,6 +59,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .biz-grid .v6-photo-card .title{bottom:16px;left:18px;right:14px}
 .biz-grid .v6-photo-card .title b{font-size:clamp(17px,1.7vw,21px);letter-spacing:-0.01em}
 .biz-grid .v6-photo-card .title small{font-size:clamp(12.5px,1.2vw,14px);line-height:1.5;margin-top:3px;display:block}
+.v6-photo-card img{filter:saturate(1.06) contrast(1.03)}
 .v6-photo-card{transition:transform .5s cubic-bezier(.22,1,.36,1)}
 .v6-photo-card:hover{transform:translateY(-4px)}
 
@@ -193,6 +194,28 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 </head>
 <body>
 
+<!-- 开场序章「AI 开机」 -->
+<div id="v6Intro" aria-hidden="true">
+  <div class="icore">
+    <div class="ilogo">
+      <svg viewBox="0 0 15 15" fill="none">
+        <rect class="iblk" x="1" y="1" width="5.5" height="5.5" rx="1.5" fill="#e8e6e1"/>
+        <rect class="iblk" x="8.5" y="1" width="5.5" height="5.5" rx="1.5" fill="#e8e6e1"/>
+        <rect class="iblk" x="1" y="8.5" width="5.5" height="5.5" rx="1.5" fill="#e8e6e1"/>
+        <rect class="iblk" x="8.5" y="8.5" width="5.5" height="5.5" rx="2.75" fill="#00e28a"/>
+      </svg>
+      <div class="ibox"><span class="c c1"></span><span class="c c2"></span><span class="c c3"></span><span class="c c4"></span></div>
+    </div>
+    <div class="itag">CRETAS AI · 在线</div>
+    <ul class="icheck">
+      <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00e28a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>视觉识别 就绪</li>
+      <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00e28a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>600+ 业务能力 已加载</li>
+      <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00e28a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>数据主权 · 在你手里</li>
+    </ul>
+    <div class="ihint"><span>滚动 · 进入</span><span class="ar"></span></div>
+  </div>
+</div>
+
 <nav class="v6-nav">
   <a href="/" style="display:flex;align-items:center;gap:8px;margin:0;text-decoration:none">
     <svg width="18" height="18" viewBox="0 0 15 15" fill="none"><rect x="1" y="1" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="8.5" y="1" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="1" y="8.5" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="8.5" y="8.5" width="5.5" height="5.5" rx="2.75" fill="#00b377"/></svg>
@@ -212,7 +235,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 <!-- HERO -->
 <section class="hero-wrap">
   <div class="v6-glow"></div>
-  <div class="v6-hero">
+  <div class="v6-hero" data-v6-eye>
     <div class="v6-hero-mask">
       <img src="/assets/img/hero-kitchen.jpg" alt="后厨师傅在暖光下的操作台前逐盘出品，AI 正在识别每道工序">
     </div>
@@ -249,7 +272,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   <div class="biz-grid">
 
     <a class="v6-photo-card v6-reveal" href="/solutions-factory.html" style="box-shadow:0 16px 38px rgba(92,64,38,.22)">
-      <img src="/assets/img/warehouse.jpg" alt="食品工厂立体货架仓储，AI 逐个库位核对入库物料">
+      <img src="/assets/img/warehouse.jpg" style="object-position:center 30%" alt="食品工厂立体货架仓储，AI 逐个库位核对入库物料">
       <span class="card-tag">库位 A-12 · 猪前腿 300kg ✓</span>
       <div class="shade"></div>
       <div class="title"><b>食品工厂</b><small>从一块原料到一张发票，AI 全程跟单</small></div>
@@ -263,7 +286,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
     </a>
 
     <a class="v6-photo-card v6-reveal" href="/solutions-logistics.html" style="box-shadow:0 16px 38px rgba(60,74,90,.2);transition-delay:.1s">
-      <img src="/assets/img/truck.jpg" alt="冷链配送货车行驶在公路上，AI 优化装载与路线">
+      <img src="/assets/img/truck.jpg" style="object-position:center 72%" alt="冷链配送货车行驶在公路上，AI 优化装载与路线">
       <span class="card-tag">6 趟 → 5 趟 · 省 ¥430/天</span>
       <div class="shade"></div>
       <div class="title"><b>物流配送</b><small>十辆车，一个人调</small></div>
@@ -343,6 +366,18 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   </div>
 </section>
 
+<!-- 能力词流带 -->
+<section class="mq" aria-hidden="true">
+  <div class="row r1">
+    <span class="hot">生产报工</span><span>批次溯源</span><span class="hot">智能排产</span><span>原料库存</span><span>BOM 配方</span><span>质检 HACCP</span><span>设备冷链</span><span class="hot">经营分析</span><span>采购比价</span><span>供应商对账</span>
+    <span class="hot">生产报工</span><span>批次溯源</span><span class="hot">智能排产</span><span>原料库存</span><span>BOM 配方</span><span>质检 HACCP</span><span>设备冷链</span><span class="hot">经营分析</span><span>采购比价</span><span>供应商对账</span>
+  </div>
+  <div class="row r2">
+    <span>销售订单</span><span>开票收款</span><span>出货发运</span><span class="hot">物流调度</span><span>排班考勤</span><span>计件薪酬</span><span>门店运营</span><span class="hot">菜品毛利</span><span>损耗预警</span><span>缺料预警</span>
+    <span>销售订单</span><span>开票收款</span><span>出货发运</span><span class="hot">物流调度</span><span>排班考勤</span><span>计件薪酬</span><span>门店运营</span><span class="hot">菜品毛利</span><span>损耗预警</span><span>缺料预警</span>
+  </div>
+</section>
+
 <!-- 定制开发 -->
 <section class="custom">
   <h2 class="v6-reveal"><span class="nb">你的业务没有现成软件？</span><span class="nb">我们连业务一起做。</span></h2>
@@ -373,7 +408,10 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 <script src="/js/v6.js"></script>
 <script src="/js/gsap.min.js"></script>
 <script src="/js/ScrollTrigger.min.js"></script>
+<script src="/js/lenis.min.js"></script>
+<script src="/js/v6-eye.js"></script>
 <script src="/js/v6-premium.js"></script>
+<script src="/js/v6-intro.js"></script>
 <script>
 /* Safety net: guarantee no reveal section ever stays hidden (slow JS / headless / IO miss). */
 window.addEventListener('load', function(){

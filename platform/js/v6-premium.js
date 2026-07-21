@@ -1,100 +1,317 @@
-/* V6 premium motion layer — GSAP ScrollTrigger driven.
-   Philosophy: scroll-scrubbed depth on imagery, earned set-pieces per page,
-   ambient pulses that reinforce "AI 一直在干活". Decorative layers only —
-   body copy never moves with scroll. Fully disabled under reduced motion. */
+/* V6 premium motion layer — Lenis + GSAP ScrollTrigger.
+   Foundations: inertia smooth-scroll, line-mask headings, magnetic CTAs, card tilt.
+   Signatures (one per page, each different):
+     home    — card deck fans out under pin; band materializes; marquee flows
+     factory — vision section pinned 3-chapter story; trace pulse scroll-driven
+     restau  — attribution ladder drills down with scroll
+     logi    — truck position bound to scroll progress
+     ai      — capability wall ripples in from center
+     custom  — manifesto reveals char-by-char; ledger rows alternate sides
+   Decorative layers only; body copy never scrubs. reduced-motion: none of this runs. */
 (function(){
   if (!window.gsap || !window.ScrollTrigger) return;
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   gsap.registerPlugin(ScrollTrigger);
+  var DESKTOP = window.matchMedia('(min-width: 900px)').matches;
+  var FINE = window.matchMedia('(pointer: fine)').matches;
 
-  /* A. Hero image: slow settle + drift (photo pages) ---------------------- */
+  /* ============ Lenis smooth scroll (the premium-feel foundation) ========= */
+  if (window.Lenis) {
+    var lenis = new Lenis({ autoRaf: false, lerp: 0.1 });
+    gsap.ticker.add(function(t){ lenis.raf(t * 1000); });
+    gsap.ticker.lagSmoothing(0);
+    lenis.on('scroll', ScrollTrigger.update);
+    window.__v6lenis = lenis;
+    if (document.documentElement.classList.contains('v6-lock')) lenis.stop();
+  }
+
+  /* ============ Foundations ============================================== */
+
+  /* Line-mask heading reveal (all section h2, incl. <br> multi-line) */
+  document.querySelectorAll('h2:not(.no-lines)').forEach(function(h){
+    if (h.closest('.v6-nav,.v6-foot')) return;
+    var parts = h.innerHTML.split(/<br\s*\/?>/i);
+    h.innerHTML = parts.map(function(p){
+      return '<span class="v6-lm"><span class="v6-li">' + p + '</span></span>';
+    }).join('');
+    h.classList.add('v6-lines');
+    h.classList.remove('v6-reveal');
+    gsap.from(h.querySelectorAll('.v6-li'), {
+      yPercent: 115, duration: .9, ease: 'power4.out', stagger: .12,
+      scrollTrigger: { trigger: h, start: 'top 88%', once: true }
+    });
+  });
+
+  /* Magnetic CTAs (desktop) */
+  if (FINE) document.querySelectorAll('.v6-btn').forEach(function(btn){
+    var xTo = gsap.quickTo(btn, 'x', {duration:.4, ease:'power3.out'});
+    var yTo = gsap.quickTo(btn, 'y', {duration:.4, ease:'power3.out'});
+    btn.addEventListener('pointermove', function(e){
+      var r = btn.getBoundingClientRect();
+      xTo((e.clientX - r.left - r.width/2) * .3);
+      yTo((e.clientY - r.top - r.height/2) * .35);
+    });
+    btn.addEventListener('pointerleave', function(){
+      gsap.to(btn, {x:0, y:0, duration:.7, ease:'elastic.out(1,.45)'});
+    });
+  });
+
+  /* Photo-card 3D tilt (desktop) */
+  if (FINE) document.querySelectorAll('.v6-photo-card').forEach(function(card){
+    var rx = gsap.quickTo(card, 'rotationX', {duration:.5, ease:'power3.out'});
+    var ry = gsap.quickTo(card, 'rotationY', {duration:.5, ease:'power3.out'});
+    gsap.set(card, {transformPerspective: 900});
+    card.addEventListener('pointermove', function(e){
+      var r = card.getBoundingClientRect();
+      ry(((e.clientX - r.left) / r.width - .5) * 6);
+      rx(-((e.clientY - r.top) / r.height - .5) * 6);
+    });
+    card.addEventListener('pointerleave', function(){ rx(0); ry(0); });
+  });
+
+  /* Hero image settle + drift; copy drifts away; full-bleed band drift */
   document.querySelectorAll('.v6-hero-mask img').forEach(function(img){
-    gsap.fromTo(img,
-      { scale: 1.08, yPercent: -3 },
-      { scale: 1, yPercent: 5, ease: 'none',
-        scrollTrigger: { trigger: img.closest('.v6-hero'), start: 'top top', end: 'bottom top', scrub: 0.6 } });
+    gsap.fromTo(img, { scale: 1.14, yPercent: -5 }, { scale: 1, yPercent: 9, ease: 'none',
+      scrollTrigger: { trigger: img.closest('.v6-hero'), start: 'top top', end: 'bottom top', scrub: 0.8 } });
   });
-
-  /* B. Photo cards: inner parallax depth ---------------------------------- */
+  document.querySelectorAll('.v6-hero .hero-copy').forEach(function(copy){
+    gsap.to(copy, { yPercent: -34, opacity: 0.1, ease: 'none',
+      scrollTrigger: { trigger: copy.closest('.v6-hero'), start: 'top top', end: 'bottom 22%', scrub: 0.8 } });
+  });
   document.querySelectorAll('.v6-photo-card img').forEach(function(img){
-    gsap.set(img, { scale: 1.12 });
-    gsap.fromTo(img, { yPercent: -5 }, { yPercent: 5, ease: 'none',
-      scrollTrigger: { trigger: img.closest('.v6-photo-card'), start: 'top bottom', end: 'bottom top', scrub: 0.5 } });
+    gsap.set(img, { scale: 1.18 });
+    gsap.fromTo(img, { yPercent: -9 }, { yPercent: 9, ease: 'none',
+      scrollTrigger: { trigger: img.closest('.v6-photo-card'), start: 'top bottom', end: 'bottom top', scrub: 0.8 } });
+  });
+  document.querySelectorAll('.band .bmask img').forEach(function(img){
+    gsap.fromTo(img, { yPercent: -9 }, { yPercent: 9, ease: 'none',
+      scrollTrigger: { trigger: img.closest('.band'), start: 'top bottom', end: 'bottom top', scrub: 0.8 } });
   });
 
-  /* C. Pointer-follow spotlight in hero (desktop only) -------------------- */
-  if (window.matchMedia('(pointer: fine)').matches) {
-    document.querySelectorAll('.hero-wrap, .ai-hero').forEach(function(hero){
-      var spot = document.createElement('div');
-      spot.className = 'v6-spot';
-      hero.appendChild(spot);
-      var tx = 0, ty = 0, cx = 0, cy = 0, raf = null, inside = false;
-      function tick(){
-        cx += (tx - cx) * 0.08; cy += (ty - cy) * 0.08;
-        spot.style.transform = 'translate3d(' + cx + 'px,' + cy + 'px,0)';
-        if (Math.abs(tx - cx) > 0.5 || Math.abs(ty - cy) > 0.5 || inside) raf = requestAnimationFrame(tick);
-        else raf = null;
-      }
-      hero.addEventListener('pointermove', function(e){
-        var r = hero.getBoundingClientRect();
-        tx = e.clientX - r.left - 300; ty = e.clientY - r.top - 300;
-        inside = true;
-        spot.style.opacity = 1;
-        if (!raf) raf = requestAnimationFrame(tick);
-      });
-      hero.addEventListener('pointerleave', function(){ inside = false; spot.style.opacity = 0; });
+  /* Pointer spotlight in heroes (desktop) */
+  if (FINE) document.querySelectorAll('.hero-wrap, .ai-hero').forEach(function(hero){
+    var spot = document.createElement('div');
+    spot.className = 'v6-spot';
+    hero.appendChild(spot);
+    var tx=0, ty=0, cx=0, cy=0, raf=null, inside=false;
+    function tick(){
+      cx += (tx-cx)*.08; cy += (ty-cy)*.08;
+      spot.style.transform = 'translate3d(' + cx + 'px,' + cy + 'px,0)';
+      if (Math.abs(tx-cx) > .5 || Math.abs(ty-cy) > .5 || inside) raf = requestAnimationFrame(tick);
+      else raf = null;
+    }
+    hero.addEventListener('pointermove', function(e){
+      var r = hero.getBoundingClientRect();
+      tx = e.clientX - r.left - 300; ty = e.clientY - r.top - 300;
+      inside = true; spot.style.opacity = 1;
+      if (!raf) raf = requestAnimationFrame(tick);
+    });
+    hero.addEventListener('pointerleave', function(){ inside = false; spot.style.opacity = 0; });
+  });
+
+  /* Pixel-eye particle canvas on heroes that ask for it */
+  if (window.v6Eye) document.querySelectorAll('[data-v6-eye]').forEach(function(host){
+    window.v6Eye(host, { gap: host.classList.contains('ai-hero') ? 34 : 30 });
+  });
+
+  /* ============ HOME — deck fan-out + band materialize =================== */
+  var bizGrid = document.querySelector('.biz-grid');
+  if (bizGrid && DESKTOP) {
+    var cards = gsap.utils.toArray(bizGrid.children);
+    var gr = bizGrid.getBoundingClientRect();
+    var cxg = gr.left + gr.width / 2;
+    cards.forEach(function(c, i){
+      var r = c.getBoundingClientRect();
+      c.__dx = (cxg - (r.left + r.width/2)) * .82;
+      c.__rot = (i - (cards.length-1)/2) * 3.2;
+    });
+    gsap.set(cards, {
+      x: function(i){ return cards[i].__dx; },
+      rotation: function(i){ return cards[i].__rot; },
+      scale: .88, opacity: function(i){ return i === 0 ? 1 : .55; },
+      transformOrigin: '50% 85%'
+    });
+    gsap.timeline({
+      scrollTrigger: { trigger: '.biz', start: 'top top', end: '+=110%', pin: true, scrub: 0.9 }
+    })
+    .to(cards, { x: 0, rotation: 0, scale: 1, opacity: 1,
+      stagger: .09, ease: 'power2.inOut', duration: 1 })
+    .to(cards, { duration: .15 }); /* settle beat before unpin */
+    /* deck cards must not run the entrance reveal on top of the deck transform */
+    cards.forEach(function(c){ c.classList.remove('v6-reveal'); c.classList.add('in'); });
+  }
+  var band = document.querySelector('.band');
+  if (band) {
+    gsap.fromTo(band, { scale: .94, borderRadius: '28px' }, { scale: 1, borderRadius: '0px', ease: 'none',
+      scrollTrigger: { trigger: band, start: 'top 85%', end: 'top 25%', scrub: 0.8 } });
+    gsap.from(band.querySelectorAll('.bcopy > *'), { y: 26, opacity: 0, duration: .8,
+      ease: 'power4.out', stagger: .09,
+      scrollTrigger: { trigger: band, start: 'top 55%', once: true } });
+  }
+
+  /* ============ FACTORY — pinned 3-chapter vision story ================== */
+  var stage = document.querySelector('.eye-stage');
+  if (stage && DESKTOP) {
+    var cap = stage.querySelector('.eye-hero-cap');
+    var d1 = stage.querySelector('.det.d1 span');
+    var d2 = stage.querySelector('.det.d2 span');
+    var d2box = stage.querySelector('.det.d2');
+    var CH = [
+      { t:'① 认得出工序', d:'画面里正在做哪道工序，AI 自己判断 — 装盘、分割、包装，11 类工序无需人工登记，产线节奏第一次自动留痕。',
+        m:['11 类工序自动识别','无需人工登记','节奏留痕'], a:'工人 · 装盘工序', b:'工序置信度 97.6%', warn:false },
+      { t:'② 数得清动作', d:'每一次装盘、每一件出品，AI 从画面里数出来当产量。谁在干活谁在空，节拍多少秒一件，车间产能看得见。',
+        m:['动作计件','干活 / 空闲','节拍 6.2s/件','效率评分'], a:'出品 ×12 · 已计件', b:'在岗 4 · 空闲 1', warn:false },
+      { t:'③ 盯得住合规', d:'帽子、口罩、手套没戴齐，AI 当场识别当场记录；画面异物实时报警 — 食品安全的红线，不靠人盯。',
+        m:['穿戴合规检测','异物检测','当场记录'], a:'未戴手套 · 已记录', b:'合规复查已推送', warn:true }
+    ];
+    var cur = -1;
+    function chapter(i){
+      if (i === cur || !cap) return;
+      cur = i;
+      var c = CH[i];
+      gsap.to(cap, { opacity: 0, y: 10, duration: .22, ease: 'power2.in', onComplete: function(){
+        cap.querySelector('.t').textContent = c.t;
+        cap.querySelector('.d').textContent = c.d;
+        cap.querySelector('.metrics').innerHTML = c.m.map(function(x){ return '<span>' + x + '</span>'; }).join('');
+        if (d1) d1.textContent = c.a;
+        if (d2) d2.textContent = c.b;
+        if (d2box) d2box.classList.toggle('warn', c.warn);
+        gsap.to(cap, { opacity: 1, y: 0, duration: .38, ease: 'power3.out' });
+      }});
+    }
+    ScrollTrigger.create({
+      trigger: stage, start: 'top 12%', end: '+=140%', pin: true, scrub: true,
+      onUpdate: function(self){ chapter(Math.min(2, Math.floor(self.progress * 3))); }
+    });
+    chapter(0);
+  }
+
+  /* Factory trace chain: pulse follows scroll, then free-runs */
+  var pins = document.querySelectorAll('.trace-chain .tnode .pin');
+  if (pins.length) {
+    var pi = -1, ploop = null;
+    function plight(i){
+      if (i === pi) return;
+      if (pi >= 0) pins[pi].classList.remove('lit');
+      pi = i; if (pi >= 0) pins[pi].classList.add('lit');
+    }
+    ScrollTrigger.create({
+      trigger: '.trace-chain', start: 'top 85%', end: 'bottom 45%', scrub: true,
+      onUpdate: function(self){ if (!ploop) plight(Math.min(pins.length-1, Math.floor(self.progress * pins.length))); },
+      onLeave: function(){ if (!ploop) ploop = setInterval(function(){ plight((pi+1) % pins.length); }, 1100); }
     });
   }
 
-  /* D. Logistics: load bars grow + numbers count up ------------------------ */
+  /* ============ RESTAURANT — scroll-driven drill-down ==================== */
+  var lsteps = document.querySelectorAll('.ladder .lstep');
+  if (lsteps.length) {
+    var lit = -1, lloop = null, lnodes = [];
+    lsteps.forEach(function(s){ lnodes.push(s.querySelector('.node')); gsap.set(s, {opacity:.3}); });
+    function drill(n){ /* cumulative: light everything up to n */
+      lsteps.forEach(function(s, i){
+        gsap.to(s, { opacity: i <= n ? 1 : .3, duration: .35, ease: 'power2.out' });
+        if (lnodes[i]) lnodes[i].classList.toggle('lit', i === n);
+      });
+      lit = n;
+    }
+    ScrollTrigger.create({
+      trigger: '.ladder', start: 'top 80%', end: 'bottom 45%', scrub: true,
+      onUpdate: function(self){ if (!lloop) drill(Math.min(lsteps.length-1, Math.floor(self.progress * lsteps.length))); },
+      onLeave: function(){
+        lsteps.forEach(function(s){ gsap.to(s, {opacity:1, duration:.3}); });
+        if (!lloop) lloop = setInterval(function(){
+          var n = (lit+1) % lsteps.length;
+          lnodes.forEach(function(nd, i){ if (nd) nd.classList.toggle('lit', i === n); });
+          lit = n;
+        }, 1300);
+      }
+    });
+  }
+
+  /* ============ LOGISTICS — truck bound to scroll ======================== */
+  var route = document.querySelector('.route');
+  if (route) {
+    var truck = route.querySelector('.truckpos');
+    var stops = [].slice.call(route.querySelectorAll('.stop')).filter(function(s){ return s !== truck; });
+    var spos = stops.map(function(s){ return parseFloat(s.style.left); });
+    var tloop = null, tp = 62;
+    function place(p){
+      tp = p;
+      truck.style.left = p + '%';
+      route.style.background = 'linear-gradient(90deg, var(--v6-cta) 0%, var(--v6-cta) ' + p + '%, rgba(255,255,255,.16) ' + p + '%)';
+      stops.forEach(function(s, i){ s.classList.toggle('todo', spos[i] > p); });
+    }
+    ScrollTrigger.create({
+      trigger: route.closest('.m3') || route, start: 'top 75%', end: 'bottom 35%', scrub: true,
+      onUpdate: function(self){ if (!tloop) place(5 + self.progress * 90); },
+      onLeave: function(){ if (!tloop) tloop = setInterval(function(){ place(tp + .35 > 97 ? 5 : tp + .35); }, 120); }
+    });
+  }
+  /* load bars grow + count up (kept) */
   var trips = document.querySelector('.m2 .trips');
   if (trips) {
     var bars = trips.querySelectorAll('.tbar');
     gsap.from(bars, { scaleX: 0, transformOrigin: 'left center', duration: 1.1,
-      ease: 'power3.out', stagger: 0.12,
+      ease: 'power3.out', stagger: .12,
       scrollTrigger: { trigger: trips, start: 'top 80%', once: true,
         onEnter: function(){
           bars.forEach(function(bar, bi){
             var m = bar.textContent.match(/(\d+)%/);
             if (!m) return;
-            var target = +m[1], obj = { v: 0 }, tpl = bar.textContent;
-            gsap.to(obj, { v: target, duration: 1.1, delay: bi * 0.12, ease: 'power3.out',
+            var target = +m[1], obj = {v:0}, tpl = bar.textContent;
+            gsap.to(obj, { v: target, duration: 1.1, delay: bi*.12, ease: 'power3.out',
               onUpdate: function(){ bar.textContent = tpl.replace(/\d+%/, Math.round(obj.v) + '%'); } });
           });
         } } });
   }
 
-  /* E. Restaurant: attribution ladder lights step by step, forever --------- */
-  var lnodes = document.querySelectorAll('.ladder .lstep .node');
-  if (lnodes.length) {
-    var li = -1;
-    ScrollTrigger.create({ trigger: '.ladder', start: 'top 85%', once: true, onEnter: function(){
-      setInterval(function(){
-        if (li >= 0) lnodes[li].classList.remove('lit');
-        li = (li + 1) % lnodes.length;
-        lnodes[li].classList.add('lit');
-      }, 1300);
-    }});
+  /* ============ AI — capability wall ripples from center ================= */
+  var wall = document.querySelector('.dwall');
+  if (wall) {
+    var chips = gsap.utils.toArray(wall.children);
+    var wr = wall.getBoundingClientRect();
+    var wcx = wr.width/2, wcy = wr.height/2;
+    var order = chips.map(function(c){
+      var r = c.getBoundingClientRect();
+      var dx = (r.left - wr.left + r.width/2) - wcx, dy = (r.top - wr.top + r.height/2) - wcy;
+      return Math.sqrt(dx*dx + dy*dy);
+    });
+    gsap.from(chips, {
+      opacity: 0, scale: .5, y: 8, duration: .55, ease: 'back.out(1.8)',
+      stagger: function(i){ return order[i] * .0022; },
+      scrollTrigger: { trigger: wall, start: 'top 82%', once: true }
+    });
   }
-
-  /* F. Factory: a pulse travels the traceability chain, forever ------------ */
-  var pins = document.querySelectorAll('.trace-chain .tnode .pin');
-  if (pins.length) {
-    var pi = -1;
-    ScrollTrigger.create({ trigger: '.trace-chain', start: 'top 85%', once: true, onEnter: function(){
-      setInterval(function(){
-        if (pi >= 0) pins[pi].classList.remove('lit');
-        pi = (pi + 1) % pins.length;
-        pins[pi].classList.add('lit');
-      }, 1100);
-    }});
-  }
-
-  /* G. AI page: preview rows cascade in; confirm button breathes ----------- */
   var pcard = document.querySelector('.preview-card');
   if (pcard) {
-    gsap.from(pcard.querySelectorAll('.row, .btns'), { opacity: 0, y: 10, duration: 0.7,
-      ease: 'power3.out', stagger: 0.1,
+    gsap.from(pcard.querySelectorAll('.row, .btns'), { opacity: 0, y: 10, duration: .7,
+      ease: 'power3.out', stagger: .1,
       scrollTrigger: { trigger: pcard, start: 'top 80%', once: true } });
   }
+
+  /* ============ CUSTOM — manifesto char reveal + alternating ledger ====== */
+  var mani = document.querySelector('.c-hero h1');
+  if (mani) {
+    var frag = [];
+    mani.childNodes.forEach(function(n){
+      if (n.nodeType === 3) frag.push(splitChars(n.textContent, ''));
+      else if (n.tagName === 'BR') frag.push('<br>');
+      else frag.push(splitChars(n.textContent, n.className || ''));
+    });
+    function splitChars(text, cls){
+      return text.split('').map(function(ch){
+        return '<span class="v6-ch' + (cls ? ' ' + cls : '') + '">' + ch + '</span>';
+      }).join('');
+    }
+    mani.innerHTML = frag.join('');
+    mani.classList.remove('v6-reveal'); mani.classList.add('in');
+    gsap.from(mani.querySelectorAll('.v6-ch'), {
+      yPercent: 60, opacity: 0, duration: .7, ease: 'power4.out', stagger: .028, delay: .15
+    });
+  }
+  document.querySelectorAll('.crow').forEach(function(row, i){
+    row.classList.remove('v6-reveal'); row.classList.add('in');
+    gsap.from(row, { x: i % 2 ? 56 : -56, opacity: 0, duration: .9, ease: 'power4.out',
+      scrollTrigger: { trigger: row, start: 'top 88%', once: true } });
+  });
 })();
