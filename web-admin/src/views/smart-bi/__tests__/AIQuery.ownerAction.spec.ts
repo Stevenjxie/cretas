@@ -3,6 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 
 const executeIntentMock = vi.fn();
+const chatAnalysisStreamMock = vi.fn(() => ({ abort: vi.fn() }));
 vi.mock('@/api/smartbi/intent-chat', () => ({
   executeIntent: (...args: unknown[]) => executeIntentMock(...args),
   fetchCachedXlsx: vi.fn(),
@@ -11,7 +12,7 @@ vi.mock('@/api/smartbi/intent-chat', () => ({
 
 vi.mock('@/api/smartbi', () => ({
   chatAnalysis: vi.fn(async () => ({ summary: '', charts: [] })),
-  chatAnalysisStream: vi.fn(() => ({ abort: vi.fn() })),
+  chatAnalysisStream: (...args: unknown[]) => chatAnalysisStreamMock(...args),
   getUploadHistory: vi.fn(async () => []),
   deduplicateUploads: vi.fn(async () => ({})),
   nl2sql: vi.fn(async () => ({})),
@@ -75,6 +76,21 @@ async function ask(question: string) {
   await flushPromises();
 }
 
+async function askWithDataSource(question: string) {
+  const wrapper = mount(AIQuery, { global: { stubs: globalStubs } });
+  await flushPromises();
+  const vm = wrapper.vm as unknown as {
+    inputQuery: string;
+    selectedUploadId: number | null;
+    handleSendMessage: () => Promise<void>;
+  };
+  vm.selectedUploadId = 1;
+  vm.inputQuery = question;
+  await vm.handleSendMessage();
+  await flushPromises();
+  return wrapper;
+}
+
 async function askOnSameThread(questions: string[]) {
   const wrapper = mount(AIQuery, { global: { stubs: globalStubs } });
   await flushPromises();
@@ -93,6 +109,8 @@ describe('AIQuery restaurant owner-action routing', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     executeIntentMock.mockReset();
+    chatAnalysisStreamMock.mockReset();
+    chatAnalysisStreamMock.mockImplementation(() => ({ abort: vi.fn() }));
   });
 
   it('sends inferred scenario context for the first typed seating question', async () => {
@@ -388,5 +406,47 @@ describe('AIQuery restaurant owner-action routing', () => {
         ownerActionScenario: 'package',
       },
     });
+  });
+
+  it.each([
+    ['NEED_CLARIFICATION', true, '请先确认翻台率还是翻台次数。'],
+    ['FAILED', true, '本次查询没有获得可展示的结果。'],
+    ['COMPLETED', true, '已给出今天先不要做的三项动作。'],
+    ['FUTURE_STATUS', true, '已识别的新状态答复。'],
+  ])(
+    'handles Java status %s without falling through to uploaded-data analysis',
+    async (status, intentRecognized, message) => {
+      executeIntentMock.mockResolvedValue({
+        status,
+        intentRecognized,
+        intentCode: null,
+        intentName: null,
+        message,
+        formattedText: message,
+        resultData: null,
+      });
+
+      const wrapper = await askWithDataSource('餐饮分析测试问题');
+
+      expect(executeIntentMock).toHaveBeenCalledTimes(1);
+      expect(chatAnalysisStreamMock).not.toHaveBeenCalled();
+      expect(wrapper.text()).toContain(message);
+    },
+  );
+
+  it('falls through only for a genuine unrecognized Java clarification', async () => {
+    executeIntentMock.mockResolvedValue({
+      status: 'NEED_CLARIFICATION',
+      intentRecognized: false,
+      intentCode: null,
+      intentName: null,
+      message: '没有识别出可执行的业务意图。',
+      formattedText: '没有识别出可执行的业务意图。',
+      resultData: null,
+    });
+
+    await askWithDataSource('请分析我刚上传的数据');
+
+    expect(chatAnalysisStreamMock).toHaveBeenCalledTimes(1);
   });
 });

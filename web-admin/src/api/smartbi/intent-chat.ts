@@ -11,7 +11,7 @@ export interface IntentExecuteResponse {
   intentRecognized: boolean;
   intentCode: string | null;
   intentName: string | null;
-  status: string;            // SUCCESS / NEED_MORE_INFO / CONVERSATION_CONTINUE / ERROR
+  status: string;            // SUCCESS / COMPLETED / NEED_MORE_INFO / NEED_CLARIFICATION / CONVERSATION_CONTINUE / FAILED / ERROR
   message: string;
   formattedText: string;
   clarificationQuestions?: string[] | null;
