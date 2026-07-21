@@ -140,38 +140,35 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .alert .recon .ok{width:20px;height:20px;flex:0 0 auto;border-radius:99px;display:grid;place-items:center;
   background:rgba(0,179,119,.12);color:var(--v6-cta-ink)}
 
-/* MODULE 4 — 单品毛利 ledger ------------------------------------------- */
-.mgn{border-radius:16px;background:#fff;overflow:hidden;box-shadow:0 22px 50px -30px rgba(80,60,30,.4)}
-.mgn .mh{display:flex;justify-content:space-between;align-items:center;padding:16px 22px;
-  border-bottom:1px solid rgba(0,0,0,.06);font-weight:800;font-size:15px}
+/* MODULE 4 — 单品毛利 ledger (de-boxed: 纸质台账, 无卡无阴影, 细横线分隔) --- */
+.mgn{background:transparent;border-top:2px solid rgba(40,26,14,.22)}
+.mgn .mh{display:flex;justify-content:space-between;align-items:baseline;padding:14px 2px 12px;
+  border-bottom:1px solid rgba(40,26,14,.2);font-weight:900;font-size:15px;letter-spacing:-0.01em}
 .mgn .mh .y{font-family:var(--v6-mono);font-size:12px;color:var(--v6-cta-ink);font-weight:700}
-.mrow{display:flex;align-items:center;gap:14px;padding:13px 22px;font-size:14.5px}
-.mrow+.mrow{border-top:1px solid rgba(0,0,0,.05)}
+.mrow{display:flex;align-items:center;gap:14px;padding:14px 8px;font-size:14.5px;
+  border-bottom:1px dashed rgba(40,26,14,.16)}
 .mrow .nm{flex:1;color:var(--v6-ink);font-weight:600}
 .mrow .pct{font-weight:800;color:var(--v6-ink);font-variant-numeric:tabular-nums;width:52px;text-align:right}
-.mrow .st{font-family:var(--v6-mono);font-size:11px;padding:3px 9px;border-radius:99px;white-space:nowrap;
-  background:rgba(0,179,119,.1);color:var(--v6-cta-ink)}
-.mrow.warn{background:rgba(214,120,20,.06)}
-.mrow.warn .pct{color:#b26a12}
-.mrow.warn .st{background:rgba(214,120,20,.12);color:#b26a12}
-.mrow.dead .st{background:rgba(120,113,108,.14);color:#6b6660}
+.mrow .st{font-family:var(--v6-mono);font-size:11px;color:var(--v6-cta-ink);white-space:nowrap}
+.mrow.warn{background:rgba(214,120,20,.07)}
+.mrow.warn .pct,.mrow.warn .st{color:#b26a12}
+.mrow.dead .st{color:#6b6660}
 .voice{margin-top:18px;display:flex;gap:11px;align-items:center;font-size:13.5px;color:var(--v6-ink-2);
   background:rgba(0,179,119,.06);border:1px solid rgba(0,179,119,.2);padding:11px 16px;border-radius:12px;line-height:1.5}
 .voice .mic{width:26px;height:26px;flex:0 0 auto;border-radius:99px;display:grid;place-items:center;
   background:var(--v6-cta);color:#fff}
 .voice b{color:var(--v6-ink);font-weight:800}
 
-/* MODULE 5 — 烂表格识别 (header mapping) + smartbi shot ------------------ */
-.mapbox{border-radius:16px;background:#fff;padding:clamp(18px,2vw,24px);box-shadow:0 20px 46px -30px rgba(80,60,30,.4);margin-bottom:16px}
-.mapbox .ml{font-family:var(--v6-mono);font-size:12px;color:var(--v6-cta-ink);margin-bottom:14px}
-.maprow{display:flex;align-items:center;gap:12px}
-.maprow+.maprow{margin-top:11px}
+/* MODULE 5 — 烂表格识别 (de-boxed: 变形过程横向平铺, 无卡无阴影) ---------- */
+.mapbox{background:transparent;padding:0;margin-bottom:20px}
+.mapbox .ml{font-family:var(--v6-mono);font-size:12px;color:var(--v6-cta-ink);margin-bottom:6px}
+.maprow{display:flex;align-items:center;gap:12px;padding:13px 2px;border-bottom:1px solid rgba(40,26,14,.12)}
+.maprow:first-of-type{border-top:1px solid rgba(40,26,14,.12)}
 .maprow .raw{display:flex;flex-wrap:wrap;gap:6px;flex:1}
 .maprow .raw span{font-family:var(--v6-mono);font-size:12px;padding:4px 9px;border-radius:7px;
-  background:#f3f1ec;color:#6b6660}
+  background:rgba(40,26,14,.05);color:#6b6660}
 .maprow .to{flex:0 0 auto;color:var(--v6-cta-ink)}
-.maprow .std{flex:0 0 auto;font-size:13.5px;font-weight:800;color:var(--v6-ink);
-  background:rgba(0,179,119,.1);padding:5px 12px;border-radius:8px;white-space:nowrap}
+.maprow .std{flex:0 0 auto;font-size:14px;font-weight:800;color:var(--v6-cta-ink);white-space:nowrap;letter-spacing:-0.01em}
 .mod-visual .v6-shot img{width:100%;display:block}
 
 /* MODULE 6 — 数据主权 (dark climax band) -------------------------------- */
@@ -237,9 +234,6 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .v6-foot a:hover{color:var(--v6-ink)}
 .v6-foot .foot-links{display:flex;flex-wrap:wrap}
 
-/* motion ----------------------------------------------------------------- */
-@keyframes eyePulse{0%,100%{opacity:1}50%{opacity:.4}}
-
 /* responsive ------------------------------------------------------------- */
 @media (max-width:900px){
   .attrib{grid-template-columns:1fr;gap:32px}
@@ -259,9 +253,6 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   .mod-split.rev .mod-visual{order:0}
   .alert .crow{flex-wrap:wrap;gap:8px}
   .quote-band{flex-direction:column;align-items:flex-start}
-}
-@media (prefers-reduced-motion: reduce){
-  .lstep .node,.box3d .unit .bar.on{animation:none}
 }
 </style>
 </head>
