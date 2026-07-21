@@ -69,10 +69,10 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 .m3 .pain b{color:#fff}
 .route{position:relative;margin:34px 0 26px;height:4px;border-radius:2px;
   background:linear-gradient(90deg,var(--v6-cta) 0%,var(--v6-cta) 62%,rgba(255,255,255,.16) 62%)}
-.route .stop{position:absolute;top:50%;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;
+.route .stop{transition:border-color .5s ease;position:absolute;top:50%;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;
   background:#0d1210;border:3px solid var(--v6-cta)}
 .route .stop.todo{border-color:rgba(255,255,255,.3)}
-.route .stop.truckpos{width:34px;height:34px;background:var(--v6-cta);border:none;display:flex;
+.route .stop.truckpos{transition:left .12s linear;width:34px;height:34px;background:var(--v6-cta);border:none;display:flex;
   align-items:center;justify-content:center;box-shadow:0 0 24px rgba(0,226,138,.4)}
 .route .slabel{position:absolute;top:16px;transform:translateX(-50%);font-size:11.5px;color:rgba(255,255,255,.65);white-space:nowrap}
 .m3-chips{display:flex;gap:10px;flex-wrap:wrap;margin-top:44px}
@@ -303,6 +303,20 @@ window.addEventListener('load', function(){
     });
   }, 1200);
 });
+(function(){
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  var route = document.querySelector('.route'); if(!route) return;
+  var truck = route.querySelector('.truckpos');
+  var stops = [].slice.call(route.querySelectorAll('.stop')).filter(function(s){ return s !== truck; });
+  var pos = stops.map(function(s){ return parseFloat(s.style.left); });
+  var p = 62;
+  setInterval(function(){
+    p += 0.35; if (p > 97) p = 5;
+    truck.style.left = p + '%';
+    route.style.background = 'linear-gradient(90deg, var(--v6-cta) 0%, var(--v6-cta) ' + p + '%, rgba(255,255,255,.16) ' + p + '%)';
+    stops.forEach(function(s, i){ s.classList.toggle('todo', pos[i] > p); });
+  }, 120);
+})();
 v6LiveTicker(
   document.getElementById('liveTicker'),
   ['冷链 4 号车 · 装载率 87% · 准点','门店 B 签收 09:41 · 温层正常','今日 5 条线 · 准点率 96%']

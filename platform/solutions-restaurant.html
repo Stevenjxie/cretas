@@ -545,6 +545,24 @@ window.addEventListener('load', function(){
     });
   }, 1200);
 });
+(function(){
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  var list = document.querySelector('.brief-list');
+  if(!list || list.children.length < 2) return;
+  setInterval(function(){
+    var first = list.firstElementChild;
+    first.style.transition = 'opacity .4s ease';
+    first.style.opacity = 0;
+    setTimeout(function(){
+      list.appendChild(first);
+      first.style.opacity = '';
+      first.style.transition = '';
+      var top = list.firstElementChild;
+      top.classList.remove('v6-chat-in'); void top.offsetWidth; top.classList.add('v6-chat-in');
+      var now = top.querySelector('.now'); if(now) now.textContent = '刚刚';
+    }, 420);
+  }, 6500);
+})();
 v6LiveTicker(
   document.getElementById('liveTicker'),
   ['今日早报 · 5 条经营建议已送达','藤椒鸡 · 毛利跌破 45% · 已提醒老板','城东店 · 周一午市客流偏低 · 建议已给','本月进货对账 · 42 笔匹配 · 待确认 1']

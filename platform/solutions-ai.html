@@ -282,6 +282,19 @@ window.addEventListener('load', function(){
     });
   }, 1200);
 });
+v6ChatLoop(document.querySelector('.chatdemo'), [
+  [{t:'q',html:'“帮我把下周一的排产按新订单重排一下”'},
+   {t:'a',html:'已按 3 张新订单重排：卤猪蹄提前到周一早班，酱鸭翅移至周二。产能缺口 0，预览已生成 — 确认后生效。'},
+   {t:'act',html:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00e28a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span>已执行 · 排产计划 v2 已生效 · 通知车间主管</span>'},
+   {t:'q',html:'“上个月损耗最高的是哪家店？”'},
+   {t:'a',html:'城西二店，损耗率 4.8%（高于均值 1.9 个点），主要在叶菜类。要看逐日明细吗？'}],
+  [{t:'q',html:'“给华东区价目表加 5% 上浮，下周生效”'},
+   {t:'a',html:'已生成新价目表预览：涉及 38 个 SKU。写操作需要你确认后才会生效。'},
+   {t:'act',html:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00e28a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span>待确认 · 预览已发到你的工作台</span>'},
+   {t:'q',html:'“冷库温度现在正常吗？”'},
+   {t:'a',html:'B 区 2.8℃ 正常；A 区传感器 12 分钟未上报，已提醒设备管理员检查。'}]
+]);
+v6Roam('.dwall span:not(.more)');
 </script>
 </body>
 </html>

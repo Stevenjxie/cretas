@@ -225,6 +225,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 /* motion ----------------------------------------------------------------- */
 @keyframes eyePulse{0%,100%{opacity:1}50%{opacity:.35}}
 @keyframes scanY{0%{top:6%}100%{top:92%}}
+html.v6-js .feed .det{animation:v6BoxTrack 8s ease-in-out infinite}
 
 /* responsive ------------------------------------------------------------- */
 @media (max-width:900px){
@@ -255,6 +256,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
 @media (prefers-reduced-motion: reduce){
   .eye-badge .rec,.feed .cam-top .live i{animation:none}
   .feed .scan{display:none}
+  html.v6-js .feed .det{animation:none}
 }
 </style>
 </head>

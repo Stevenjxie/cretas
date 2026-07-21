@@ -249,6 +249,11 @@ window.addEventListener('load', function(){
     });
   }, 1200);
 });
+v6ChatLoop(document.querySelector('.ai-card'), [
+  [{t:'q',html:'<span>“上个月哪个客户回款最慢？”</span>'},{t:'a',html:'<span>华东经销-B，平均 47 天。已生成催款清单，要发出吗？</span>'}],
+  [{t:'q',html:'<span>“明天要收哪些货？”</span>'},{t:'a',html:'<span>3 张采购单到货：猪前腿 300kg、鸭翅 120kg…已推给仓管。</span>'}],
+  [{t:'q',html:'<span>“周四的订单来得及吗？”</span>'},{t:'a',html:'<span>缺 2 小时产能 — 已给出 3 个补班方案，看一下？</span>'}]
+], '.title');
 v6LiveTicker(
   document.getElementById('liveTicker'),
   ['酱卤车间 · 第 3 道工序进行中','冷链 4 号车 · 装载率 87% · 准点','今日毛利 AI 已核算 · 异常 0']

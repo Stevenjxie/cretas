@@ -69,3 +69,61 @@ document.addEventListener('DOMContentLoaded', function(){
   v6RevealInit();
   v6GlowDrift();
 });
+
+/* Chat replay: the AI demo answers questions on loop — the site itself is "working".
+   sets: array of conversations; each = array of {t:'q'|'a'|'act', html}.
+   Existing static bubbles stay for no-JS / reduced-motion. */
+function v6ChatLoop(el, sets, beforeSel){
+  if(!el || !sets || !sets.length || v6ReducedMotion()) return;
+  var anchor = beforeSel ? el.querySelector(beforeSel) : null;
+  el.querySelectorAll('.bub, .act, .a, .q').forEach(function(n){ n.setAttribute('data-chat',''); });
+  var si = 0, timers = [];
+  function put(node){ anchor ? el.insertBefore(node, anchor) : el.appendChild(node); }
+  function mk(m){
+    var d = document.createElement('div');
+    d.setAttribute('data-chat','');
+    d.className = (m.t==='act') ? 'act v6-chat-in' : 'bub ' + (m.t==='q'?'bub-q q':'bub-a a') + ' v6-chat-in';
+    d.innerHTML = m.html;
+    return d;
+  }
+  function play(){
+    el.querySelectorAll('[data-chat]').forEach(function(n){ n.remove(); });
+    var seq = sets[si]; si = (si+1) % sets.length;
+    var t = 500;
+    seq.forEach(function(m){
+      if(m.t === 'a'){
+        (function(tt){
+          timers.push(setTimeout(function(){
+            var ty = document.createElement('div');
+            ty.setAttribute('data-chat','');
+            ty.className = 'bub ' + 'bub-a a' + ' v6-typing v6-chat-in';
+            ty.innerHTML = '<span class="tdots"><i></i><i></i><i></i></span>';
+            put(ty);
+            timers.push(setTimeout(function(){ ty.remove(); put(mk(m)); }, 950));
+          }, tt));
+        })(t);
+        t += 1600;
+      } else {
+        (function(tt, mm){ timers.push(setTimeout(function(){ put(mk(mm)); }, tt)); })(t, m);
+        t += (m.t === 'act') ? 900 : 700;
+      }
+    });
+    timers.push(setTimeout(play, t + 3800));
+  }
+  play();
+}
+
+/* Roaming highlight: a different capability chip lights up every beat. */
+function v6Roam(sel){
+  if(v6ReducedMotion()) return;
+  var chips = Array.prototype.slice.call(document.querySelectorAll(sel));
+  if(chips.length < 4) return;
+  var cur = -1;
+  setInterval(function(){
+    if(cur >= 0) chips[cur].classList.remove('v6-roam');
+    var next;
+    do { next = Math.floor(Math.random() * chips.length); } while(next === cur);
+    cur = next;
+    chips[cur].classList.add('v6-roam');
+  }, 2100);
+}
