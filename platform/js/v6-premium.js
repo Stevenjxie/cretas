@@ -25,6 +25,22 @@
     if (document.documentElement.classList.contains('v6-lock')) lenis.stop();
   }
 
+  /* ---- Section exit: as a block's bottom nears the viewport top it lifts and
+     dims (scrub, fully reversible on scroll-back) — gives leave-motion, not just
+     enter-motion. Pinned stages and heroes are excluded: pins own their motion. */
+  function initSectionExit(){
+    if (!DESKTOP) return;
+    var secs = document.querySelectorAll('section, .band, .quote-band, .v6-ops');
+    secs.forEach(function(sec){
+      if (sec.querySelector('.eye-stage, .biz-h')) return;      /* pinned stages */
+      if (sec.closest('.v6-hero, .ai-hero, .c-hero, .d-hero')) return;
+      if (sec.classList.contains('v6-hero')) return;
+      gsap.to(sec, {
+        opacity: .3, y: -34, ease: 'none',
+        scrollTrigger: { trigger: sec, start: 'bottom 26%', end: 'bottom -8%', scrub: true }
+      });
+    });
+  }
   /* ============ Foundations ============================================== */
 
   /* Line-mask heading reveal (all section h2, incl. <br> multi-line) */
@@ -365,4 +381,10 @@
     gsap.from(row, { x: i % 2 ? 56 : -56, opacity: 0, duration: .9, ease: 'power4.out',
       scrollTrigger: { trigger: row, start: 'top 88%', once: true } });
   });
+
+  /* Exit triggers must be created after every pin above so their start positions
+     include pin-spacer heights; sort + refresh settles the final layout. */
+  initSectionExit();
+  ScrollTrigger.sort();
+  ScrollTrigger.refresh();
 })();

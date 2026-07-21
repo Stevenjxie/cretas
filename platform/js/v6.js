@@ -7,7 +7,37 @@ function v6ReducedMotion(){
   return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
+/* Variant auto-assignment: element type -> reveal style, so one screen mixes
+   several entrance gestures without any per-page markup changes.
+   First matching rule wins; elements keep the default fade-up otherwise. */
+function v6RevealVariants(){
+  var MAP = [
+    ['.kicker.v6-reveal', 'rv-clipx'],                                   /* mono 眉题: 扫描式横擦 */
+    ['blockquote.v6-reveal', 'rv-blur'],                                 /* 引语: 模糊聚焦 */
+    ['.lvis.v6-reveal, .rvis.v6-reveal, .fvis.v6-reveal, .addrchk.v6-reveal', 'rv-pop'], /* 证据拟物卡: 弹性放大 */
+    ['.result.v6-reveal', 'rv-pop'],
+    ['.tl .tstep.v6-reveal', 'rv-l'],                                    /* 时间线: 自左滑入 */
+    ['.ba .col.before.v6-reveal', 'rv-l'],
+    ['.ba .col.after.v6-reveal', 'rv-r'],
+    ['.srow figure', 'rv-tilt'],                                         /* 实拍卡: 斜角起身 */
+    ['.pick.v6-reveal', 'rv-l'],
+    ['.lcopy .v6-reveal, .fcopy .v6-reveal', 'rv-l'],                    /* 双栏左叙事整列左入 */
+    ['.dlist .drow:nth-child(odd)', 'rv-l'],                             /* demo 行: 左右交替 */
+    ['.dlist .drow:nth-child(even)', 'rv-r'],
+    ['.d-note.v6-reveal', 'rv-blur'],
+  ];
+  MAP.forEach(function(rule){
+    document.querySelectorAll(rule[0]).forEach(function(el){
+      if(!/(^| )rv-/.test(el.className)){
+        el.classList.add('v6-reveal');   /* variants imply reveal (srow figures lack it) */
+        el.classList.add(rule[1]);
+      }
+    });
+  });
+}
+
 function v6RevealInit(){
+  v6RevealVariants();
   var els = document.querySelectorAll('.v6-reveal');
   if(!('IntersectionObserver' in window) || v6ReducedMotion()){
     els.forEach(function(e){ e.classList.add('in'); });

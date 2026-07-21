@@ -51,7 +51,16 @@
 .v6-section{padding:clamp(28px,6vw,72px) clamp(16px,4vw,48px)}
 /* Reveal: small distance + long expo ease = glide, not pop. JS staggers siblings. */
 .v6-reveal{opacity:0;transform:translateY(22px);transition:opacity .85s ease-out,transform 1.05s cubic-bezier(.16,1,.3,1)}
-.v6-reveal.in{opacity:1;transform:none}
+/* 进场变体 — v6.js 按元素类型自动分配, 同一屏混排不同手法 */
+.v6-reveal.rv-l{transform:translateX(-34px)}
+.v6-reveal.rv-r{transform:translateX(34px)}
+.v6-reveal.rv-pop{transform:scale(.88) translateY(18px);transition:opacity .6s ease-out,transform .95s cubic-bezier(.3,1.45,.4,1)}
+.v6-reveal.rv-blur{transform:translateY(10px);filter:blur(12px);transition:opacity .8s ease-out,transform 1s cubic-bezier(.16,1,.3,1),filter .95s ease-out}
+.v6-reveal.rv-clipx{transform:none;clip-path:inset(0 100% 0 0);transition:opacity .5s ease-out,clip-path .85s cubic-bezier(.6,.05,.15,1)}
+.v6-reveal.rv-tilt{transform:rotate(-2.2deg) translateY(28px) scale(.97);transition:opacity .8s ease-out,transform 1.1s cubic-bezier(.2,1.2,.3,1)}
+.v6-reveal.rv-rise{transform:translateY(52px)}
+@media (max-width:768px){.v6-reveal.rv-l,.v6-reveal.rv-r{transform:translateY(22px)}}
+.v6-reveal.in{opacity:1;transform:none;filter:none;clip-path:inset(0 0 0 0)}
 
 /* Hero entrance choreography — the one signature moment per page */
 @keyframes v6HeroRise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
@@ -64,7 +73,7 @@ html.v6-js .v6-ai-box{animation:v6HeroFade 1.3s ease-out .65s both}
 .v6-glow{transition:transform .2s linear;will-change:transform}
 
 @media (prefers-reduced-motion: reduce){
-  .v6-reveal{opacity:1;transform:none;transition:none}
+  .v6-reveal{opacity:1;transform:none;filter:none;clip-path:none;transition:none}
   .v6-live-bar{overflow-x:auto}
   html.v6-js .hero-copy>*,html.v6-js .v6-hero .v6-live-bar,html.v6-js .v6-ai-box{animation:none}
   .v6-glow{transform:none !important;transition:none}
