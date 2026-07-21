@@ -50,18 +50,18 @@
 .v6-quote small{font-size:14px;font-weight:400;color:#6d6862;display:block;margin-top:8px}
 .v6-section{padding:clamp(28px,6vw,72px) clamp(16px,4vw,48px)}
 /* Reveal: small distance + long expo ease = glide, not pop. JS staggers siblings. */
-.v6-reveal{opacity:0;transform:translateY(64px);transition:opacity .9s ease-out,transform 1.2s cubic-bezier(.16,1,.3,1)}
+.v6-reveal{opacity:0;transform:translateY(130px);transition:opacity .95s ease-out,transform 1.35s cubic-bezier(.16,1,.3,1)}
 /* 进场变体 — v6.js 按元素类型自动分配, 同一屏混排不同手法 */
-.v6-reveal.rv-l{transform:translateX(-110px);transition:opacity .9s ease-out,transform 1.25s cubic-bezier(.16,1,.3,1)}
-.v6-reveal.rv-r{transform:translateX(110px);transition:opacity .9s ease-out,transform 1.25s cubic-bezier(.16,1,.3,1)}
-.v6-reveal.rv-pop{transform:scale(.62) translateY(56px);transition:opacity .55s ease-out,transform 1.05s cubic-bezier(.3,1.4,.4,1)}
-.v6-reveal.rv-blur{transform:translateY(36px) scale(1.04);filter:blur(22px);transition:opacity .85s ease-out,transform 1.1s cubic-bezier(.16,1,.3,1),filter 1.05s ease-out}
+.v6-reveal.rv-l{transform:translateX(-22vw);transition:opacity .95s ease-out,transform 1.4s cubic-bezier(.16,1,.3,1)}
+.v6-reveal.rv-r{transform:translateX(22vw);transition:opacity .95s ease-out,transform 1.4s cubic-bezier(.16,1,.3,1)}
+.v6-reveal.rv-pop{transform:scale(.35) translateY(140px);transition:opacity .6s ease-out,transform 1.25s cubic-bezier(.3,1.35,.4,1)}
+.v6-reveal.rv-blur{transform:translateY(90px) scale(1.12);filter:blur(38px);transition:opacity .9s ease-out,transform 1.3s cubic-bezier(.16,1,.3,1),filter 1.25s ease-out}
 .v6-reveal.rv-clipx{transform:none;clip-path:inset(0 100% 0 0);transition:opacity .5s ease-out,clip-path 1.05s cubic-bezier(.7,0,.2,1)}
-.v6-reveal.rv-tilt{transform:rotate(-6deg) translateY(90px) scale(.93);transition:opacity .85s ease-out,transform 1.25s cubic-bezier(.2,1.2,.3,1)}
-.v6-reveal.rv-rise{transform:translateY(130px);transition:opacity .95s ease-out,transform 1.3s cubic-bezier(.16,1,.3,1)}
+.v6-reveal.rv-tilt{transform:rotate(-11deg) translateY(190px) scale(.85);transition:opacity .9s ease-out,transform 1.45s cubic-bezier(.2,1.2,.3,1)}
+.v6-reveal.rv-rise{transform:translateY(38vh);transition:opacity 1s ease-out,transform 1.5s cubic-bezier(.16,1,.3,1)}
 @media (max-width:768px){
-  .v6-reveal.rv-l,.v6-reveal.rv-r{transform:translateY(44px)}
-  .v6-reveal.rv-blur{transform:translateY(30px)}
+  .v6-reveal.rv-l,.v6-reveal.rv-r{transform:translateY(80px)}
+  .v6-reveal.rv-blur{transform:translateY(60px)}
 }
 html,body{overflow-x:clip}
 .v6-reveal.in{opacity:1;transform:none;filter:none;clip-path:inset(0 0 0 0)}
