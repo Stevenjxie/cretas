@@ -159,3 +159,10 @@ html.v6-lock{overflow:hidden}
   .mq .row.r1,.mq .row.r2{animation:none}
   .v6-eye{display:none}
 }
+
+/* ---- Polish: a11y + 细节 ---- */
+::selection{background:rgba(0,179,119,.22)}
+:where(a,button):focus-visible{outline:2.5px solid var(--v6-cta);outline-offset:3px;border-radius:4px}
+body{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+.v6-foot a{transition:color .25s ease}
+.v6-nav a{transition:color .25s ease}
