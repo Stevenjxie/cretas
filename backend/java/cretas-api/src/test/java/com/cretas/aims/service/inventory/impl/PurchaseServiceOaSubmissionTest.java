@@ -88,6 +88,7 @@ class PurchaseServiceOaSubmissionTest {
         order.setOrderNumber("PO-TEST-1");
         order.setSupplierId("supplier-1");
         order.setStatus(PurchaseOrderStatus.DRAFT);
+        order.setCreatedBy(1400L);
         order.setTotalAmount(new BigDecimal("100"));
         order.setTaxAmount(new BigDecimal("13"));
 
@@ -97,7 +98,7 @@ class PurchaseServiceOaSubmissionTest {
         supplier.setIsActive(true);
         lenient().when(supplierRepository.findByIdAndFactoryId("supplier-1", "F006"))
                 .thenReturn(Optional.of(supplier));
-        when(orderRepository.findByIdAndFactoryIdForUpdate("po-1", "F006"))
+        lenient().when(orderRepository.findByIdAndFactoryIdForUpdate("po-1", "F006"))
                 .thenReturn(Optional.of(order));
         lenient().when(orderRepository.save(any(PurchaseOrder.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -182,6 +183,141 @@ class PurchaseServiceOaSubmissionTest {
 
         assertThat(result).isSameAs(order);
         verify(workflowEngine, never()).startWorkflow(anyString(), anyString(), anyString(), anyMap(), any());
+    }
+
+    @Test
+    void restrictedRecoveryCreatesOneInstanceWithOriginalInitiatorAndAuditContext() {
+        order.setStatus(PurchaseOrderStatus.SUBMITTED);
+        when(workflowEngine.getLatestInstance("F006", "PURCHASE_ORDER", "po-1"))
+                .thenReturn(Optional.empty());
+        when(workflowEngine.hasActiveWorkflow("F006", "PURCHASE_ORDER")).thenReturn(true);
+        when(workflowEngine.startWorkflow(eq("F006"), eq("PURCHASE_ORDER"), eq("po-1"),
+                argThat(context -> {
+                    Object raw = context.get("approvalRecovery");
+                    if (!(raw instanceof Map<?, ?> audit)) return false;
+                    return "recovery:F006:po-1:1".equals(audit.get("idempotencyKey"))
+                            && "修复历史提交缺少 OA 实例".equals(audit.get("reason"))
+                            && Long.valueOf(1309L).equals(audit.get("operatorUserId"));
+                }), eq(1400L)))
+                .thenReturn(instance(ApprovalWorkflowInstance.InstanceStatus.RUNNING));
+
+        var result = service.recoverMissingApprovalInstance(
+                "F006", "po-1", 1309L, "PO-TEST-1",
+                "recovery:F006:po-1:1", "修复历史提交缺少 OA 实例", true);
+
+        assertThat(result.isRecovered()).isTrue();
+        assertThat(result.getWorkflowInstanceId()).isEqualTo("instance-1");
+        assertThat(result.getOrderStatus()).isEqualTo(PurchaseOrderStatus.WORKFLOW_RUNNING);
+        verify(workflowEngine, times(1)).startWorkflow(
+                eq("F006"), eq("PURCHASE_ORDER"), eq("po-1"), anyMap(), eq(1400L));
+        verify(orderRepository, times(1)).save(order);
+    }
+
+    @Test
+    void sameRecoveryKeyReplayReturnsExistingInstanceWithoutWrites() {
+        order.setStatus(PurchaseOrderStatus.WORKFLOW_RUNNING);
+        ApprovalWorkflowInstance existing = instance(ApprovalWorkflowInstance.InstanceStatus.RUNNING);
+        existing.setContextJson(Map.of("approvalRecovery",
+                Map.of("idempotencyKey", "recovery:F006:po-1:1")));
+        when(workflowEngine.getLatestInstance("F006", "PURCHASE_ORDER", "po-1"))
+                .thenReturn(Optional.of(existing));
+
+        var result = service.recoverMissingApprovalInstance(
+                "F006", "po-1", 1309L, "PO-TEST-1",
+                "recovery:F006:po-1:1", "修复历史提交缺少 OA 实例", true);
+
+        assertThat(result.isRecovered()).isFalse();
+        assertThat(result.getWorkflowInstanceId()).isEqualTo("instance-1");
+        verify(workflowEngine, never()).startWorkflow(anyString(), anyString(), anyString(), anyMap(), any());
+        verify(orderRepository, never()).save(any(PurchaseOrder.class));
+    }
+
+    @Test
+    void differentRecoveryKeyCannotReplaceExistingInstance() {
+        order.setStatus(PurchaseOrderStatus.WORKFLOW_RUNNING);
+        ApprovalWorkflowInstance existing = instance(ApprovalWorkflowInstance.InstanceStatus.RUNNING);
+        existing.setContextJson(Map.of("approvalRecovery",
+                Map.of("idempotencyKey", "recovery:F006:po-1:1")));
+        when(workflowEngine.getLatestInstance("F006", "PURCHASE_ORDER", "po-1"))
+                .thenReturn(Optional.of(existing));
+
+        assertThatThrownBy(() -> service.recoverMissingApprovalInstance(
+                "F006", "po-1", 1309L, "PO-TEST-1",
+                "recovery:F006:po-1:2", "另一恢复请求不能覆盖", true))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode")
+                .isEqualTo("PURCHASE_APPROVAL_RECOVERY_CONFLICT");
+        verify(orderRepository, never()).save(any(PurchaseOrder.class));
+    }
+
+    @Test
+    void recoveryRequiresExplicitConfirmationAndExactBusinessNumber() {
+        order.setStatus(PurchaseOrderStatus.SUBMITTED);
+
+        assertThatThrownBy(() -> service.recoverMissingApprovalInstance(
+                "F006", "po-1", 1309L, "PO-TEST-1",
+                "recovery:F006:po-1:1", "修复历史提交缺少 OA 实例", false))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode")
+                .isEqualTo("PURCHASE_APPROVAL_RECOVERY_CONFIRM_REQUIRED");
+        assertThatThrownBy(() -> service.recoverMissingApprovalInstance(
+                "F006", "po-1", 1309L, "PO-WRONG",
+                "recovery:F006:po-1:1", "修复历史提交缺少 OA 实例", true))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode")
+                .isEqualTo("PURCHASE_APPROVAL_RECOVERY_IDENTITY_MISMATCH");
+        verify(workflowEngine, never()).startWorkflow(anyString(), anyString(), anyString(), anyMap(), any());
+    }
+
+    @Test
+    void recoveryIsFactoryScopedAndCannotSeeAnotherFactoryOrder() {
+        doReturn(Optional.empty()).when(orderRepository)
+                .findByIdAndFactoryIdForUpdate("po-1", "F007");
+
+        assertThatThrownBy(() -> service.recoverMissingApprovalInstance(
+                "F007", "po-1", 1309L, "PO-TEST-1",
+                "recovery:F007:po-1:1", "跨工厂恢复必须拒绝", true))
+                .isInstanceOf(com.cretas.aims.exception.ResourceNotFoundException.class);
+        verify(workflowEngine, never()).startWorkflow(anyString(), anyString(), anyString(), anyMap(), any());
+        verify(orderRepository, never()).save(any(PurchaseOrder.class));
+    }
+
+    @Test
+    void recoveryFailsClosedWhenRouteIsMissingWithoutChangingSubmittedOrder() {
+        order.setStatus(PurchaseOrderStatus.SUBMITTED);
+        when(workflowEngine.getLatestInstance("F006", "PURCHASE_ORDER", "po-1"))
+                .thenReturn(Optional.empty());
+        when(workflowEngine.hasActiveWorkflow("F006", "PURCHASE_ORDER")).thenReturn(false);
+
+        assertThatThrownBy(() -> service.recoverMissingApprovalInstance(
+                "F006", "po-1", 1309L, "PO-TEST-1",
+                "recovery:F006:po-1:1", "修复历史提交缺少 OA 实例", true))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode")
+                .isEqualTo("PURCHASE_APPROVAL_ROUTE_REQUIRED");
+        assertThat(order.getStatus()).isEqualTo(PurchaseOrderStatus.SUBMITTED);
+        verify(orderRepository, never()).save(any(PurchaseOrder.class));
+    }
+
+    @Test
+    void recoveryRejectsUnroutableStartedInstanceBeforeProjectingOrderState() {
+        order.setStatus(PurchaseOrderStatus.SUBMITTED);
+        when(workflowEngine.getLatestInstance("F006", "PURCHASE_ORDER", "po-1"))
+                .thenReturn(Optional.empty());
+        when(workflowEngine.hasActiveWorkflow("F006", "PURCHASE_ORDER")).thenReturn(true);
+        ApprovalWorkflowInstance unroutable = instance(ApprovalWorkflowInstance.InstanceStatus.RUNNING);
+        unroutable.setCurrentNodeIds(List.of());
+        when(workflowEngine.startWorkflow(eq("F006"), eq("PURCHASE_ORDER"), eq("po-1"),
+                anyMap(), eq(1400L))).thenReturn(unroutable);
+
+        assertThatThrownBy(() -> service.recoverMissingApprovalInstance(
+                "F006", "po-1", 1309L, "PO-TEST-1",
+                "recovery:F006:po-1:1", "修复历史提交缺少 OA 实例", true))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode")
+                .isEqualTo("PURCHASE_APPROVAL_NODE_REQUIRED");
+        assertThat(order.getStatus()).isEqualTo(PurchaseOrderStatus.SUBMITTED);
+        verify(orderRepository, never()).save(any(PurchaseOrder.class));
     }
 
     @Test
