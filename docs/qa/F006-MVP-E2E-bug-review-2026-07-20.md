@@ -545,3 +545,17 @@
 - **Commit/PR/main 状态**：`TARGET_TEST_PASSED_PENDING_MAIN`；精确 commit/PR/main 在合入后更新。
 - **部署状态**：`NOT_DEPLOYED`；未执行生产回填、未修改任何生产物料或分类。
 - **回归状态**：`CODE_AND_TARGET_TEST_COMPLETE`；部署后也必须按工厂先预览，任何正式历史映射仍需用户单独授权，不能随部署自动执行。
+
+### BUG-F006-R3-MATERIAL-DISPLAY-CODE-002 — 新建原料仍以前台16位编码为主
+
+- **发现阶段/时间**：F006 R3 后端双码能力部署后的生产只读 UI 核对，2026-07-21。
+- **页面/步骤**：仓储管理 → 原料类型字典 → 新建原料类型；分类区标题仍为“16位编码级联”，L1-L3 选项数字编码在前，列表与编辑框继续显示旧 `code`。
+- **期望/实际/业务影响**：新原料应以短 `businessCode/displayCode` 作为用户主身份，16位 `code` 只承担历史兼容；实际 Web 列表直接绑定 `row.code`，造成“新编码没有生效”的正确观感，并增加日常识别负担。
+- **证据路径**：`D:/Temp/codex-clipboard-42e8b470-897b-4a59-8eac-cd5268aa856e.png`。
+- **根因**：后端创建、DTO 与搜索已支持 `businessCode/displayCode`，但 Web 只完成预览接入，列表、编辑态和分类文案未切换到双码展示契约。
+- **修复**：列表和编辑态统一优先 `displayCode → businessCode → legacy code`；有短码时旧16位仅在“兼容码”提示中查看，历史未映射行回退旧码并标“历史编码”。新建区改为“物料分类与业务编码”，分类下拉以名称为主、内部分类码为次级说明；搜索文案明确同时支持名称、业务编码和历史编码。
+- **修改文件**：`web-admin/src/views/warehouse/material-types/list.vue`、`materialFamilyConsistency.source.spec.ts`；后端、数据库和生产物料均未修改。
+- **测试**：物料分类/双码 Web 目标测试 13/13 PASS；`vue-tsc -b` PASS；正式 Web release build PASS（735 assets），可信制品清单已生成且未重复构建。
+- **Commit/PR/main 状态**：实现 commit `8a39acecd045a6338659f8a7e71eefe125bc1fdb`；PR [#1552](https://github.com/Stevenjxie/cretas/pull/1552)；状态 `READY_FOR_MAIN`。
+- **部署状态**：`NOT_DEPLOYED`。
+- **回归状态**：`TARGET_TEST_PASSED`；生产业务 mutation=0，未创建/修改原料、分类或业务编码，未执行历史回填，未触碰 LIUSHANMEN。
