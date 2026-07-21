@@ -54,6 +54,20 @@ describe('material type family source contract', () => {
     expect(source).not.toContain('segmentCodePreview.value = `${segmentL1.value}-${segmentL2.value}-${segmentL3.value}`');
   });
 
+  it('previews and saves through the same material code contract', () => {
+    expect(source).toContain('raw-material-types/preview-code');
+    expect(source).toContain('segmentCode: segmentL3.value');
+    expect(source).toContain('businessCodePreview.value = res.data.businessCode');
+    expect(source).toContain('16位分类编码（兼容）');
+    expect(source).toContain('if (!editingId.value && !(await generateSP8Code(true)))');
+    expect(source).toContain('不会按分类名称猜测或覆盖历史前缀');
+  });
+
+  it('does not add a second error toast after the request interceptor handled the failure', () => {
+    expect(source).toContain("handleCatchError(e, '原料类型保存失败，请稍后重试')");
+    expect(source).not.toContain('if (e instanceof Error) ElMessage.error(e.message)');
+  });
+
   it('uses the requested material-family form defaults and visibility contracts', () => {
     expect(source).toContain("taxRate: 'TAX_13'");
     expect(source).toContain('label="入库计量单位"');

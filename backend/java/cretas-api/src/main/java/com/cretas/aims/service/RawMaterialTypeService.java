@@ -4,6 +4,7 @@ import com.cretas.aims.dto.common.ImportResult;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.material.MaterialSuggestDTO;
+import com.cretas.aims.dto.material.MaterialCodePreviewDTO;
 import com.cretas.aims.dto.material.RawMaterialTypeDTO;
 import com.cretas.aims.entity.RawMaterialType;
 import java.io.InputStream;
@@ -131,6 +132,13 @@ public interface RawMaterialTypeService {
      * @return 16位编码 (如 "0010010001000007") 或 SP4 扁平编码 (如 "RL001")
      */
     String previewMaterialCode(String factoryId, String category, String segmentCode);
+
+    /**
+     * Preview both the immutable business code and the legacy classification code through the
+     * same business-code resolver used by create.
+     */
+    MaterialCodePreviewDTO previewMaterialCodeContract(
+            String factoryId, String category, String segmentCode);
 
     /**
      * T159-B-codegen: 多字段智能建议 (扩展自 suggestUnit).

@@ -95,9 +95,55 @@ class MaterialBusinessCodeRepositoryQueryValidationTest {
     }
 
     @Test
-    void concurrentAllocationIsUniqueAndUsesSixDigitsWithoutSeparators() throws Exception {
-        String factoryId = "F-JPA-MBC-CONCURRENT";
+    void previewUsesConfiguredAncestorWithoutWritingCounterOrPrefix() {
+        String factoryId = "F-JPA-MBC-PREVIEW";
         createFixture(factoryId, "RMSEA", false);
+
+        MaterialBusinessCodeService.BusinessCodePreview preview =
+                businessCodeService.previewBusinessCode(factoryId, "0010050003");
+
+        assertThat(preview.code()).isEqualTo("RMSEA000001");
+        assertThat(preview.codePrefix()).isEqualTo("RMSEA");
+        assertThat(preview.prefixSource()).isEqualTo("CONFIGURED");
+        assertThat(preview.sourceSegmentCode()).isEqualTo("001005");
+        assertThat(counterRepository.findByFactoryIdAndCodePrefix(factoryId, "RMSEA")).isEmpty();
+        assertThat(prefixRepository.findByFactoryIdAndClassificationSegmentCode(
+                factoryId, "001005")).isPresent();
+    }
+
+    @Test
+    void missingPrefixUsesStableL3IdentityAndPreviewRemainsReadOnly() {
+        String factoryId = "F-JPA-MBC-STABLE";
+        createFixture(factoryId, null, false);
+        String expectedPrefix = stablePrefix("0010050003");
+
+        MaterialBusinessCodeService.BusinessCodePreview preview =
+                businessCodeService.previewBusinessCode(factoryId, "0010050003");
+
+        assertThat(preview.code()).isEqualTo(expectedPrefix + "000001");
+        assertThat(preview.prefixSource()).isEqualTo("SYSTEM_STABLE");
+        assertThat(prefixRepository.findByFactoryIdAndClassificationSegmentCode(
+                factoryId, "0010050003")).isEmpty();
+        assertThat(counterRepository.findByFactoryIdAndCodePrefix(factoryId, expectedPrefix)).isEmpty();
+
+        assertThat(businessCodeService.allocateBusinessCode(factoryId, "0010050003"))
+                .isEqualTo(preview.code());
+        assertThat(prefixRepository.findByFactoryIdAndClassificationSegmentCode(
+                factoryId, "0010050003"))
+                .get()
+                .extracting(MaterialBusinessCodePrefix::getCodePrefix)
+                .isEqualTo(expectedPrefix);
+        assertThat(counterRepository.findByFactoryIdAndCodePrefix(factoryId, expectedPrefix))
+                .get()
+                .extracting(MaterialBusinessCodeCounter::getLastAllocated)
+                .isEqualTo(1L);
+    }
+
+    @Test
+    void concurrentFirstAllocationWithoutConfiguredPrefixIsUnique() throws Exception {
+        String factoryId = "F-JPA-MBC-CONCURRENT";
+        createFixture(factoryId, null, false);
+        String expectedPrefix = stablePrefix("0010050003");
 
         int allocationCount = 12;
         ExecutorService executor = Executors.newFixedThreadPool(6);
@@ -118,16 +164,63 @@ class MaterialBusinessCodeRepositoryQueryValidationTest {
             }
 
             assertThat(codes).hasSize(allocationCount)
-                    .allMatch(code -> code.matches("^RMSEA[0-9]{6}$"))
-                    .doesNotContain("RMSEA-000001");
-            assertThat(codes).contains("RMSEA000001", "RMSEA000012");
-            assertThat(counterRepository.findByFactoryIdAndCodePrefix(factoryId, "RMSEA"))
+                    .allMatch(code -> code.matches("^" + expectedPrefix + "[0-9]{6}$"))
+                    .doesNotContain(expectedPrefix + "-000001");
+            assertThat(codes).contains(expectedPrefix + "000001", expectedPrefix + "000012");
+            assertThat(counterRepository.findByFactoryIdAndCodePrefix(factoryId, expectedPrefix))
                     .get()
                     .extracting(MaterialBusinessCodeCounter::getLastAllocated)
                     .isEqualTo(12L);
         } finally {
             executor.shutdownNow();
         }
+    }
+
+    @Test
+    void stableFallbackIsFactoryScoped() {
+        String firstFactory = "F-JPA-MBC-TENANT-A";
+        String secondFactory = "F-JPA-MBC-TENANT-B";
+        createFixture(firstFactory, null, false);
+        createFixture(secondFactory, null, false);
+
+        assertThat(businessCodeService.allocateBusinessCode(firstFactory, "0010050003"))
+                .isEqualTo(stablePrefix("0010050003") + "000001");
+        assertThat(businessCodeService.allocateBusinessCode(secondFactory, "0010050003"))
+                .isEqualTo(stablePrefix("0010050003") + "000001");
+        assertThat(prefixRepository.findByFactoryIdAndClassificationSegmentCode(
+                firstFactory, "0010050003")).isPresent();
+        assertThat(prefixRepository.findByFactoryIdAndClassificationSegmentCode(
+                secondFactory, "0010050003")).isPresent();
+    }
+
+    @Test
+    void inactiveExactPrefixIsNotSilentlyReactivatedOrDuplicated() {
+        String factoryId = "F-JPA-MBC-INACTIVE";
+        createFixture(factoryId, null, false);
+        inTransaction(() -> prefixRepository.saveAndFlush(MaterialBusinessCodePrefix.builder()
+                .factoryId(factoryId)
+                .classificationSegmentCode("0010050003")
+                .codePrefix(stablePrefix("0010050003"))
+                .sequenceLength(6)
+                .isActive(false)
+                .build()));
+
+        assertThatThrownBy(() -> businessCodeService.previewBusinessCode(
+                factoryId, "0010050003"))
+                .isInstanceOf(com.cretas.aims.exception.BusinessException.class)
+                .hasMessageContaining("稳定业务编码前缀与现有配置冲突");
+        assertThatThrownBy(() -> businessCodeService.allocateBusinessCode(
+                factoryId, "0010050003"))
+                .isInstanceOf(com.cretas.aims.exception.BusinessException.class)
+                .hasMessageContaining("稳定业务编码前缀与现有配置冲突");
+
+        assertThat(prefixRepository.findByFactoryIdAndClassificationSegmentCode(
+                factoryId, "0010050003"))
+                .get()
+                .extracting(MaterialBusinessCodePrefix::getIsActive)
+                .isEqualTo(false);
+        assertThat(counterRepository.findByFactoryIdAndCodePrefix(
+                factoryId, stablePrefix("0010050003"))).isEmpty();
     }
 
     @Test
@@ -229,5 +322,10 @@ class MaterialBusinessCodeRepositoryQueryValidationTest {
 
     private void inTransaction(Runnable action) {
         new TransactionTemplate(transactionManager).executeWithoutResult(status -> action.run());
+    }
+
+    private String stablePrefix(String classificationSegmentCode) {
+        return "M" + Long.toString(Long.parseLong(classificationSegmentCode), 36)
+                .toUpperCase(java.util.Locale.ROOT);
     }
 }

@@ -20,6 +20,15 @@ public interface MaterialBusinessCodePrefixRepository
 
     boolean existsByFactoryIdAndCodePrefixIgnoreCase(String factoryId, String codePrefix);
 
+    /** Read-only equivalent of {@link #lockMatchingPrefixes(String, String)} for previews. */
+    @Query("SELECT p FROM MaterialBusinessCodePrefix p " +
+            "WHERE p.factoryId = :factoryId AND p.isActive = true " +
+            "AND :classificationSegmentCode LIKE CONCAT(p.classificationSegmentCode, '%') " +
+            "ORDER BY LENGTH(p.classificationSegmentCode) DESC")
+    List<MaterialBusinessCodePrefix> findMatchingPrefixes(
+            @Param("factoryId") String factoryId,
+            @Param("classificationSegmentCode") String classificationSegmentCode);
+
     /**
      * Locks every configured ancestor and returns the most specific match first. The lock also
      * serializes creation of the first counter row, closing the usual absent-row race.

@@ -6,6 +6,7 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.material.MaterialSuggestDTO;
+import com.cretas.aims.dto.material.MaterialCodePreviewDTO;
 import com.cretas.aims.dto.material.RawMaterialTypeDTO;
 import com.cretas.aims.dto.supplier.SupplierDTO;
 import com.cretas.aims.service.RawMaterialTypeService;
@@ -325,15 +326,16 @@ public class RawMaterialTypeController {
      * @return { "success": true, "data": { "code": "0010010001000007" } }
      */
     @GetMapping("/preview-code")
-    @Operation(summary = "预览原料编码 (T159-B / SP8)",
-            description = "根据类别预览将自动生成的原料编码, 不写库. 传 segmentCode (10位) 时走16位路径, 否则 SP4 扁平 (YL/RL/BC/WL+3位).")
-    public ApiResponse<Map<String, String>> previewMaterialCode(
+    @Operation(summary = "预览原料编码契约",
+            description = "根据当前工厂中启用的 L3 分类，只读预览与创建边界同源的业务编码和16位兼容分类编码，不预占号码、不写库。")
+    public ApiResponse<MaterialCodePreviewDTO> previewMaterialCode(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @RequestParam(required = false, defaultValue = "") @Parameter(description = "原料类别 (SP4 fallback 用)", example = "原料") String category,
-            @RequestParam(required = false) @Parameter(description = "L3 cumulative segment code (10位, 可选)", example = "0010010001") String segmentCode) {
+            @RequestParam @Parameter(description = "L3 cumulative segment code (10位)", example = "0010010001") String segmentCode) {
         log.info("预览原料编码: factoryId={}, category={}, segmentCode={}", factoryId, category, segmentCode);
-        String code = materialTypeService.previewMaterialCode(factoryId, category, segmentCode);
-        return ApiResponse.success("编码预览成功", Map.of("code", code));
+        MaterialCodePreviewDTO preview = materialTypeService.previewMaterialCodeContract(
+                factoryId, category, segmentCode);
+        return ApiResponse.success("编码预览成功", preview);
     }
 
     /**

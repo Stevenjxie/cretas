@@ -4,6 +4,7 @@ import com.cretas.aims.dto.common.ImportResult;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.material.MaterialSuggestDTO;
+import com.cretas.aims.dto.material.MaterialCodePreviewDTO;
 import com.cretas.aims.dto.material.MaterialTaxonomyCandidateDTO;
 import com.cretas.aims.dto.material.RawMaterialTypeDTO;
 import com.cretas.aims.dto.materialtype.MaterialTypeExportDTO;
@@ -1117,6 +1118,33 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
     @Override
     public String previewMaterialCode(String factoryId, String category, String segmentCode) {
         return generateNextCode(factoryId, category, segmentCode);
+    }
+
+    @Override
+    public MaterialCodePreviewDTO previewMaterialCodeContract(
+            String factoryId, String category, String segmentCode) {
+        MaterialSegmentChain chain = requireValidSegmentChain(factoryId, segmentCode);
+        if (materialBusinessCodeService == null) {
+            throw new BusinessException(503, "物料业务编码服务暂不可用")
+                    .withCode("MATERIAL_BUSINESS_CODE_SERVICE_UNAVAILABLE")
+                    .withHint("请稍后重试，系统不会在编码契约未确认时创建物料");
+        }
+        MaterialBusinessCodeService.BusinessCodePreview businessPreview =
+                materialBusinessCodeService.previewBusinessCode(factoryId, chain.l3().getSegmentCode());
+        String legacyPreview = generateNextCode(factoryId, category, chain.l3().getSegmentCode());
+        String guidance = "CONFIGURED".equals(businessPreview.prefixSource())
+                ? "使用主数据已配置的业务编码前缀"
+                : "该分类未单独配置前缀，系统将按不可变 L3 编码使用稳定前缀";
+        return MaterialCodePreviewDTO.builder()
+                .code(legacyPreview)
+                .businessCode(businessPreview.code())
+                .businessCodePrefix(businessPreview.codePrefix())
+                .businessCodePrefixSource(businessPreview.prefixSource())
+                .businessCodePrefixSourceSegment(businessPreview.sourceSegmentCode())
+                .classificationSegmentCode(chain.l3().getSegmentCode())
+                .selectable(true)
+                .guidance(guidance)
+                .build();
     }
 
     @Override
