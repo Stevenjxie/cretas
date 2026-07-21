@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light">
+<title>定制开发 · 白垩纪 Cretas</title>
+<meta name="description" content="白垩纪 Cretas 定制开发 — 让产品适应工厂，而不是工厂适应产品。细颗粒模块 + AI 编排，把传统上动辄数百万的定制开发做成快速、可负担的事。">
+<meta name="keywords" content="定制开发,进销存,配额管理,小程序商城,低代码表单,AI打印模板">
+<meta property="og:type" content="website">
+<meta property="og:title" content="定制开发 · 白垩纪 Cretas">
+<meta property="og:description" content="让产品适应工厂，而不是工厂适应产品。你的业务没有现成软件？我们连业务一起做。">
+<meta property="og:url" content="https://cretaceousfuture.com/solutions-custom.html">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 15 15'%3E%3Crect x='1' y='1' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='8.5' y='1' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='1' y='8.5' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='8.5' y='8.5' width='5.5' height='5.5' rx='2.75' fill='%2300b377'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/css/v6.css">
+<script>document.documentElement.classList.add('v6-js')</script>
+<style>
+html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
+.v6-nav a:hover{color:var(--v6-ink)}
+.v6-nav .nav-links{display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+
+/* HERO：纯排版声明 */
+.c-hero{max-width:1000px;margin:0 auto;text-align:center;
+  padding:clamp(56px,9vw,132px) clamp(16px,4vw,48px) clamp(40px,6vw,84px);position:relative}
+.c-hero .v6-glow{top:0;height:100%;background:radial-gradient(ellipse 70% 50% at 50% 30%,rgba(0,179,119,.08),transparent 70%)}
+.c-hero h1{font-size:clamp(30px,4.6vw,54px);font-weight:900;line-height:1.42;letter-spacing:-0.02em;
+  margin:0 0 22px;text-wrap:balance;position:relative}
+.c-hero h1 span{color:var(--v6-cta-ink)}
+.c-hero p{font-size:clamp(15px,1.65vw,20px);color:var(--v6-ink-2);line-height:1.85;
+  max-width:52ch;margin:0 auto 30px;text-wrap:pretty;position:relative}
+.c-hero p b{color:var(--v6-ink)}
+
+/* 为什么能便宜快：一句话带 */
+.why{max-width:860px;margin:0 auto;padding:0 clamp(16px,4vw,48px) clamp(44px,6vw,84px);text-align:center}
+.why p{font-size:clamp(14px,1.5vw,17px);color:var(--v6-ink-2);line-height:1.9;margin:0}
+.why p b{color:var(--v6-ink)}
+
+/* 案例：横线台账列表（非卡片阵） */
+.cases{max-width:960px;margin:0 auto;padding:0 clamp(16px,4vw,48px) clamp(52px,7vw,104px)}
+.cases h2{font-size:clamp(22px,3vw,34px);font-weight:900;letter-spacing:-0.015em;margin:0 0 6px}
+.cases .sub{font-size:clamp(13.5px,1.4vw,16px);color:var(--v6-ink-2);margin:0 0 26px;line-height:1.7}
+.crow{display:grid;grid-template-columns:minmax(150px,220px) 1fr;gap:clamp(14px,3vw,44px);
+  padding:clamp(18px,2.2vw,26px) 4px;border-top:1px solid rgba(0,0,0,.09);align-items:baseline}
+.crow:last-of-type{border-bottom:1px solid rgba(0,0,0,.09)}
+.crow b{font-size:clamp(16px,1.8vw,20px);font-weight:900;letter-spacing:-0.01em}
+.crow p{margin:0;font-size:clamp(13.5px,1.4vw,15.5px);color:var(--v6-ink-2);line-height:1.75}
+.crow .tagline{font-family:var(--v6-mono);font-size:11px;color:var(--v6-cta-ink);display:block;margin-top:4px;letter-spacing:.4px}
+
+/* CTA 收尾 */
+.c-cta{background:linear-gradient(160deg,#0d1210 0%,#0a1a13 100%);text-align:center;
+  padding:clamp(52px,8vw,108px) clamp(16px,4vw,48px)}
+.c-cta h2{font-size:clamp(24px,3.6vw,42px);font-weight:900;color:#fff;line-height:1.45;
+  letter-spacing:-0.015em;margin:0 0 14px;text-wrap:balance}
+.c-cta p{color:rgba(255,255,255,.72);font-size:clamp(14px,1.5vw,17px);line-height:1.8;
+  max-width:44ch;margin:0 auto 28px}
+.c-cta .v6-btn{box-shadow:0 8px 26px rgba(0,179,119,.4)}
+
+/* footer */
+.v6-foot{border-top:1px solid rgba(0,0,0,.07);padding:clamp(28px,4vw,44px) clamp(16px,4vw,48px);
+  max-width:1320px;margin:0 auto;display:flex;justify-content:space-between;align-items:center;
+  gap:20px;flex-wrap:wrap;color:#8a857e;font-size:13px}
+.v6-foot a{color:#57534e;text-decoration:none;margin-left:20px}
+.v6-foot a:hover{color:var(--v6-ink)}
+.v6-foot .foot-links{display:flex;flex-wrap:wrap}
+
+@media (max-width:768px){
+  .v6-nav{flex-direction:column;gap:12px;align-items:flex-start}
+  .v6-nav .nav-links{justify-content:flex-start}
+  .v6-nav a{margin-left:0;margin-right:18px}
+  .crow{grid-template-columns:1fr;gap:6px}
+}
+</style>
+</head>
+<body>
+
+<nav class="v6-nav">
+  <a href="/" style="display:flex;align-items:center;gap:8px;margin:0;text-decoration:none">
+    <svg width="18" height="18" viewBox="0 0 15 15" fill="none"><rect x="1" y="1" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="8.5" y="1" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="1" y="8.5" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="8.5" y="8.5" width="5.5" height="5.5" rx="2.75" fill="#00b377"/></svg>
+    <b style="color:#111;font-size:17px">白垩纪</b><small style="color:#999;letter-spacing:2px;font-size:11px">CRETAS</small>
+  </a>
+  <div class="nav-links">
+    <a href="/solutions-factory.html">食品工厂</a>
+    <a href="/solutions-restaurant.html">餐饮连锁</a>
+    <a href="/solutions-logistics.html">物流配送</a>
+    <a href="/solutions-ai.html">AI 中枢</a>
+    <a href="/solutions-custom.html" class="active">定制开发</a>
+    <a href="/demo.html">在线演示</a>
+    <a class="v6-btn-ghost" href="mailto:stevenj4xie@gmail.com">预约演示</a>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="c-hero">
+  <div class="v6-glow"></div>
+  <h1 class="v6-reveal">让产品适应工厂，<br><span>而不是工厂适应产品。</span></h1>
+  <p class="v6-reveal">同一个产品，每家工厂的做法都不一样 — 硬套现成软件，最后是人迁就系统。传统定制开发动辄数百万；<b>Cretas 用细颗粒模块 + AI 编排，把定制做成快速、可负担的事。</b></p>
+  <a class="v6-btn v6-reveal" href="mailto:stevenj4xie@gmail.com">聊聊你的业务</a>
+</section>
+
+<!-- 为什么快 -->
+<section class="why">
+  <p class="v6-reveal">秘密不在写代码快，而在<b>不用从头写</b>：几百个业务颗粒已经在跑，你描述清楚流程，AI 把颗粒搭成你的系统，剩下的只是校准。</p>
+</section>
+
+<!-- 案例台账 -->
+<section class="cases">
+  <h2 class="v6-reveal">做过的事，说明我们能做什么</h2>
+  <p class="sub v6-reveal">按保密约定不写客户名字 — 只讲能力本身。</p>
+
+  <div class="crow v6-reveal">
+    <b>进销存一体</b>
+    <p>采购、销售、成品、调拨、应收应付、价目、退货，一套连起来 — 工厂管理层在手机上就把货和账都盯住了。<span class="tagline">PSI · 移动端全流程</span></p>
+  </div>
+  <div class="crow v6-reveal">
+    <b>AI 用量配额治理</b>
+    <p>企业内不同角色、不同场景的 AI 调用额度可配置、可审计 — AI 能力放开用，成本不失控。<span class="tagline">配额规则 · 用量看板</span></p>
+  </div>
+  <div class="crow v6-reveal">
+    <b>商城 + 小程序</b>
+    <p>面向消费者的商城小程序，带扫码溯源和 AI 导购 — 商家自己用对话就能"装修"店铺页面。<span class="tagline">微信小程序 · AI 店铺装修</span></p>
+  </div>
+  <div class="crow v6-reveal">
+    <b>低代码页面与表单</b>
+    <p>业务单据长什么样、审批怎么走，拖一拖就改 — 流程变了不用等开发排期。<span class="tagline">画布编辑器 · 字段/子表/公式</span></p>
+  </div>
+  <div class="crow v6-reveal">
+    <b>AI 生成打印模板</b>
+    <p>标签、单据要什么版式，说一句话 AI 出模板，产线打印机直接用。<span class="tagline">标签打印 · 一句话建模板</span></p>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="c-cta">
+  <h2 class="v6-reveal">你的业务没有现成软件？<br>我们连业务一起做。</h2>
+  <p class="v6-reveal">把你的流程讲给我们听 — 多数需求，第一版原型比你想的来得快。</p>
+  <a class="v6-btn v6-reveal" href="mailto:stevenj4xie@gmail.com">聊聊你的业务</a>
+</section>
+
+<footer class="v6-foot">
+  <div>© 2026 白垩纪 Cretas · cretaceousfuture.com</div>
+  <div class="foot-links">
+    <a href="/solutions-factory.html">食品工厂</a>
+    <a href="/solutions-restaurant.html">餐饮连锁</a>
+    <a href="/solutions-logistics.html">物流配送</a>
+    <a href="/solutions-ai.html">AI 中枢</a>
+    <a href="mailto:stevenj4xie@gmail.com">联系我们</a>
+  </div>
+</footer>
+
+<script src="/js/v6.js"></script>
+<script>
+window.addEventListener('load', function(){
+  setTimeout(function(){
+    document.querySelectorAll('.v6-reveal:not(.in)').forEach(function(e){ e.classList.add('in'); });
+  }, 1200);
+});
+</script>
+</body>
+</html>
