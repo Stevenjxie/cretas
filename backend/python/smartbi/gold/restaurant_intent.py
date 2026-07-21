@@ -122,6 +122,15 @@ class RestaurantQuerySpec:
     # a fresh single-turn parse. Additive-only (default False preserves every
     # existing construction of this dataclass).
     is_clarification_continuation: bool = False
+    # Semantic coverage plan derived from the original user wording.  The
+    # selected ``intent`` remains backward compatible, while these fields stop
+    # a compound question from being silently reduced to that one intent.
+    requested_metrics: Tuple[str, ...] = ()
+    planned_intents: Tuple[str, ...] = ()
+    unsupported_requirements: Tuple[str, ...] = ()
+    asks_priority: bool = False
+    asks_prohibited_actions: bool = False
+    asks_export: bool = False
 
 
 # ─── Intent catalogue (used by the T3 prompt) ──────────────────────────────
@@ -170,7 +179,7 @@ def _detect_dimensions(text: str) -> Tuple[str, ...]:
 def _detect_comparison(text: str) -> Optional[str]:
     if (
         any(tok in text for tok in ("昨天", "昨日"))
-        and any(tok in text for tok in ("前天", "前日"))
+        and any(tok in text for tok in ("前天", "前日", "前一天", "前一日"))
     ):
         return "previous_day"
     if "上上个月" in text or "上上月" in text:
@@ -200,6 +209,18 @@ _OPTIMIZATION_OBJECTIVE_TOKENS = (
 def optimization_clarification_question(query: str) -> Optional[str]:
     """Ask for the business objective instead of guessing what to optimise."""
     text = (query or "").strip()
+    if (
+        "成本" in text
+        and any(token in text for token in ("毛利", "利润"))
+        and any(token in text for token in ("先查", "优先", "哪几项", "哪项"))
+        and not any(token in text for token in (
+            "菜品成本", "食材成本", "食材损耗", "门店毛利", "菜品毛利",
+        ))
+    ):
+        return (
+            "你想先查哪一类问题：菜品成本是否异常、食材损耗是否偏高，还是门店毛利是否偏低？"
+            "这三类需要不同数据；也可以直接说“最近30天三项都查，并给出优先级”。"
+        )
     if not any(token in text for token in ("优化", "改善", "提升经营", "经营建议")):
         return None
     if any(token in text for token in _OPTIMIZATION_OBJECTIVE_TOKENS):
@@ -208,6 +229,116 @@ def optimization_clarification_question(query: str) -> Optional[str]:
         "你想优先优化哪一个目标？可以直接选：营收、毛利率、订单与客单价、"
         "慢销菜品、损耗与库存、排班人效，或顾客评价。不同目标的做法和判断指标不一样。"
     )
+
+
+_REQUEST_METRIC_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("recipe_cost", ("菜品成本", "食材成本", "配方成本", "单品成本")),
+    ("wastage", ("食材损耗", "损耗", "浪费", "报损", "腐坏", "过期")),
+    ("sales_volume", ("菜品销量", "销量", "销售量", "卖得好", "卖得慢", "慢销", "滞销")),
+    ("gross_margin", ("毛利率", "毛利", "利润", "盈利", "赚钱", "净赚")),
+    ("revenue", ("营业收入", "销售收入", "营业额", "销售额", "营收", "流水")),
+    ("orders", ("订单集中", "订单数", "订单", "单量", "客单价")),
+    ("staffing", ("人员不足", "人手不足", "人手", "人员", "排班", "人效", "在岗人数")),
+    ("return_rate", ("退菜率", "退菜", "退款率", "退款")),
+    ("service_speed", ("出餐慢", "出餐速度", "出餐时长", "上菜慢", "等餐")),
+    ("process_bottleneck", ("工序瓶颈", "流程瓶颈", "工序耗时", "工序")),
+)
+
+_UNSUPPORTED_REQUIREMENTS = frozenset({
+    "return_rate", "service_speed", "process_bottleneck",
+})
+
+
+def _detect_requested_metrics(text: str) -> Tuple[str, ...]:
+    return tuple(
+        metric
+        for metric, tokens in _REQUEST_METRIC_RULES
+        if any(token in text for token in tokens)
+    )
+
+
+def _plan_requested_intents(
+    text: str,
+    selected_code: str,
+    requested_metrics: Tuple[str, ...],
+    dimensions: Tuple[str, ...],
+) -> Tuple[str, ...]:
+    """Build a deterministic, deduplicated multi-resolver plan.
+
+    A resolver can satisfy more than one requested metric.  For example, the
+    dish-margin resolver already reads both dish sales volume and margin, and
+    the sales-summary resolver can satisfy a revenue + margin owner question.
+    """
+    planned: List[str] = []
+    has_revenue_scope = any(metric in requested_metrics for metric in ("revenue", "orders"))
+    explicit_store_margin = any(token in text for token in (
+        "门店毛利", "分店毛利", "店铺毛利", "门店利润", "分店利润", "店铺利润",
+    ))
+
+    for metric in requested_metrics:
+        code: Optional[str] = None
+        if metric == "recipe_cost":
+            code = "RESTAURANT_OPS_RECIPE_COST"
+        elif metric == "wastage":
+            code = "RESTAURANT_OPS_WASTAGE_TOP"
+        elif metric == "sales_volume":
+            code = (
+                "RESTAURANT_OPS_GROSS_MARGIN"
+                if "gross_margin" in requested_metrics and "dish" in dimensions
+                else "RESTAURANT_OPS_SALES_SUMMARY"
+            )
+        elif metric == "gross_margin":
+            if selected_code == "RESTAURANT_OPS_SALES_SUMMARY" and has_revenue_scope:
+                code = "RESTAURANT_OPS_SALES_SUMMARY"
+            elif explicit_store_margin or (
+                selected_code == "RESTAURANT_OPS_STORE_MARGIN" and "store" in dimensions
+            ):
+                code = "RESTAURANT_OPS_STORE_MARGIN"
+            else:
+                code = "RESTAURANT_OPS_GROSS_MARGIN"
+        elif metric in ("revenue", "orders"):
+            code = (
+                "RESTAURANT_OPS_TREND_ANALYSIS"
+                if selected_code == "RESTAURANT_OPS_TREND_ANALYSIS"
+                else "RESTAURANT_OPS_SALES_SUMMARY"
+            )
+        elif metric == "staffing":
+            code = "RESTAURANT_OPS_STAFFING_ADVICE"
+
+        if code and code not in planned:
+            planned.append(code)
+
+    if not planned and selected_code:
+        planned.append(selected_code)
+    return tuple(planned)
+
+
+def _unsupported_requirement_question(requirements: Tuple[str, ...]) -> str:
+    if "service_speed" in requirements or "process_bottleneck" in requirements:
+        return (
+            "当前可以核对订单集中程度和排班人效，但还没有逐单出餐时长及各工序节点时间，"
+            "因此不能可靠判断出餐慢或工序瓶颈，也不会用营收概览代替。"
+            "请先接入下单、开始制作、出餐完成及工序节点时间；在此之前可以先分析订单集中与人员配置。"
+        )
+    if "return_rate" in requirements:
+        return (
+            "当前可以分析菜品销量和毛利，但退菜明细与退菜率尚未接入，"
+            "不能把两个目标一起判定，也不会只回答毛利后声称已经完成。"
+            "请先接入退菜时间、菜品、数量、原因和责任门店，或者明确先做毛利分析。"
+        )
+    return "当前数据能力还不能完整覆盖这个问题，请补充对应明细数据后再分析。"
+
+
+def capability_clarification_question(query: str) -> Optional[str]:
+    """Honest fallback for analyses that are not implemented in chat yet."""
+    text = (query or "").strip()
+    if any(token in text for token in ("线性回归", "回归曲线", "决定系数", "R²", "R2")):
+        return (
+            "当前对话还不能可靠完成菜品销量与价格的回归计算或生成回归图。"
+            "可以导出的基础字段包括：菜品名称、日期、销量、成交单价、销售额、订单数和门店；"
+            "决定系数需要在这些明细样本完整后计算。这里不会把没有生成的图表描述为成功。"
+        )
+    return None
 
 
 _FOLLOWUP_PREFIXES = (
@@ -309,6 +440,30 @@ def _build_spec(
     dimensions = _detect_dimensions(effective_query)
     comparison = _detect_comparison(effective_query)
     metrics = _default_metrics_for_code(code, wants_margin) if code else ()
+    requested_metrics = _detect_requested_metrics(effective_query)
+    planned_intents = _plan_requested_intents(
+        effective_query,
+        code,
+        requested_metrics,
+        dimensions,
+    )
+    unsupported_requirements = tuple(
+        requirement
+        for requirement in requested_metrics
+        if requirement in _UNSUPPORTED_REQUIREMENTS
+    )
+    asks_priority = any(token in effective_query for token in (
+        "优先级", "优先", "先查", "先做", "首先", "哪项先", "先看哪",
+    ))
+    asks_prohibited_actions = any(token in effective_query for token in (
+        "先不要做", "不要做", "先别做", "不该做", "避免做", "暂时别",
+    ))
+    asks_export = any(token in effective_query for token in (
+        "导出", "下载", "生成文件", "可导出的字段",
+    ))
+    if unsupported_requirements and not clarification_needed:
+        clarification_needed = True
+        clarification_question = _unsupported_requirement_question(unsupported_requirements)
 
     return RestaurantQuerySpec(
         intent=code or "",
@@ -326,6 +481,12 @@ def _build_spec(
         clarification_needed=clarification_needed,
         clarification_question=clarification_question,
         is_clarification_continuation=is_continuation,
+        requested_metrics=requested_metrics,
+        planned_intents=planned_intents,
+        unsupported_requirements=unsupported_requirements,
+        asks_priority=asks_priority,
+        asks_prohibited_actions=asks_prohibited_actions,
+        asks_export=asks_export,
     )
 
 
@@ -791,6 +952,39 @@ async def parse_restaurant_query(
         if pending is not None:
             return await _parse_continuation(norm_query, pool, factory_id=factory_id, pending=pending)
 
+    capability_question = capability_clarification_question(norm_query)
+    if capability_question:
+        spec = _build_spec(
+            "",
+            norm_query,
+            confidence=1.0,
+            tier="keyword",
+            clarification_needed=True,
+            clarification_question=capability_question,
+        )
+        await _maybe_register_pending(pool, norm_query, spec, factory_id, session_key)
+        return spec
+
+    # Capability gaps are query semantics, not an intent-classification task.
+    # Detect them before the tenant gate/T2/T3 so a fully scoped question about
+    # service time, process nodes, or returns cannot be silently reduced to a
+    # nearby sales/margin intent when those source facts are unavailable.
+    early_requirements = _detect_requested_metrics(norm_query)
+    early_unsupported = tuple(
+        requirement
+        for requirement in early_requirements
+        if requirement in _UNSUPPORTED_REQUIREMENTS
+    )
+    if early_unsupported:
+        return _build_spec(
+            "",
+            norm_query,
+            confidence=1.0,
+            tier="keyword",
+            clarification_needed=True,
+            clarification_question=_unsupported_requirement_question(early_unsupported),
+        )
+
     optimization_question = optimization_clarification_question(norm_query)
     if optimization_question:
         spec = _build_spec(
@@ -1044,6 +1238,12 @@ async def log_intent_capture(
             "served": served,
             "window_label": spec.window_label,
             "clarification_needed": spec.clarification_needed,
+            "requested_metrics": list(spec.requested_metrics),
+            "planned_intents": list(spec.planned_intents),
+            "unsupported_requirements": list(spec.unsupported_requirements),
+            "asks_priority": spec.asks_priority,
+            "asks_prohibited_actions": spec.asks_prohibited_actions,
+            "asks_export": spec.asks_export,
         }
         if source:
             agg_meta["source"] = source
