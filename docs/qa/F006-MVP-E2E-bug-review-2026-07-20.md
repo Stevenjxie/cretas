@@ -638,6 +638,6 @@
 - **修复**：新增顶级“个人 OA”及四个队列，统一使用所有登录角色具备的 dashboard 访问边界，真正的数据可见性由后端工厂/角色/用户过滤决定。新增 actor-only acted 查询；copied 从已持久化 notify-node transition 与节点 recipients/notifyRoles 推导，显式用户或当前角色命中才可见。my-participated 旧深链重定向到“已处理”。非采购业务域的待办可只读展示进度，但在领域 adapter 完成前不显示可写审批按钮，避免伪造通用领域回写。
 - **修改文件**：WorkflowInstanceController、WorkflowEngineService/Impl、ApprovalWorkflowInstanceRepository、ApprovalHistoryRepository；Web router/index.ts、menuConfig.ts、pending.vue、my-created.vue、acted.vue、copied.vue；Java/Web/JPA 目标测试。
 - **测试**：Web 菜单/路由/动作门禁 64/64 PASS；Java clean package 19/19 PASS（Controller 5、Service 13、真实 Hibernate JPA Context 1），BUILD SUCCESS；Web production build PASS，739 个资源。可信 manifest：Java JAR SHA-256 `6b5c19590f87773b8a8a294fbc0dca83ae4d482b5be58220c196e5d07612d957`，Web archive SHA-256 `2f79e87bdcf2e4539cd9c76d587639cf663fb004afad37d9df6f4899980ee5e2`。
-- **Commit/PR/main 状态**：实现与门禁 commit `9d48e91ba61feada2fb356da44958002fd9516c6`；PR/main 合入待受控门禁完成。
+- **Commit/PR/main 状态**：实现与门禁 commit `9d48e91ba61feada2fb356da44958002fd9516c6`；PR [#1560](https://github.com/Stevenjxie/cretas/pull/1560) 已合入；exact main `481b57f3b07755f0ad6fd7b0a68e9208e9093f90`。
 - **部署状态**：NOT_DEPLOYED。
 - **回归状态**：TARGET_TEST_PASS；生产业务 mutation=0，未创建/处理/桥接任何 F006 或 LIUSHANMEN 审批实例。
