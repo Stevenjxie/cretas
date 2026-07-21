@@ -2034,6 +2034,23 @@ async def resolve_sales_summary(
         return f"¥{float(v):,.2f}"
 
     if bill_count <= 0:
+        comparison_note = ""
+        if comparison_meta:
+            comparison_window = (
+                f"{comparison_meta['baseline_label']}（{comparison_meta['baseline_start']} 至 "
+                f"{comparison_meta['baseline_end']}）"
+            )
+            comparison_bill_count = int((comparison_summary or {}).get("bill_count") or 0)
+            if comparison_bill_count > 0:
+                comparison_note = (
+                    f"{comparison_window}有可用记录，但{actual_window}没有数据，"
+                    "因此不能可靠判断两个日期谁高谁低。"
+                )
+            else:
+                comparison_note = (
+                    f"{comparison_window}也没有可用的营收和订单数据，"
+                    "因此不能可靠判断两个日期谁高谁低。"
+                )
         no_data_guard = (
             "今天先不要做：不要依据缺失数据调整价格、下架菜品或重排人员；"
             "先确认营业流水同步完整。"
@@ -2043,7 +2060,8 @@ async def resolve_sales_summary(
             code="RESTAURANT_OPS_SALES_SUMMARY",
             title="经营销售概览",
             answer_text=(
-                f"{actual_window}没有可用的营收和订单数据，没有用全部历史或其他日期替代。"
+                f"{actual_window}没有可用的营收和订单数据。{comparison_note}"
+                "没有用全部历史或其他日期替代。"
                 f"请先确认营业流水已经同步，再按同一时间范围重试。{no_data_guard}"
             ),
             charts=[],

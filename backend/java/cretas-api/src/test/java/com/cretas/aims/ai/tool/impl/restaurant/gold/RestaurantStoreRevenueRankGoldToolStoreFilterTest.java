@@ -48,6 +48,8 @@ class RestaurantStoreRevenueRankGoldToolStoreFilterTest {
                 .doesNotContain("2. 陆家嘴店")
                 .doesNotContain("建议：");
         assertThat(result).containsEntry("suppressActionAdvice", true);
+        assertThat(tool.shouldDelegateToTieredIntent(input.get("userInput").toString())).isFalse();
+        assertThat(tool.shouldDelegateToTieredIntent("查询本月门店营收排行")).isTrue();
     }
 
     @Test

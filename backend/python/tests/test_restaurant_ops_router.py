@@ -252,6 +252,38 @@ def test_sales_summary_no_data_answers_what_not_to_do(monkeypatch):
     assert "其他日期替代" in answer.answer_text
 
 
+def test_sales_summary_no_data_names_both_comparison_dates(monkeypatch):
+    async def _fake_finance_summary(pool, factory_id, date_range, top_n_stores=5):
+        return {
+            "total_revenue": 0.0,
+            "bill_count": 0,
+            "avg_bill_value": None,
+            "day_count": 0,
+            "store_count": 0,
+            "top_stores": [],
+        }
+
+    async def _fake_store_comparison(pool, factory_id, date_range):
+        return {"stores": [], "weakStores": []}
+
+    import smartbi.gold.queries as _q
+
+    monkeypatch.setattr(_q, "finance_summary", _fake_finance_summary)
+    monkeypatch.setattr(_q, "store_comparison", _fake_store_comparison)
+
+    answer = asyncio.run(resolve_sales_summary(
+        object(),
+        "RES_TEST",
+        role="restaurant_owner",
+        query="昨天营业额比前天高还是低？",
+        today=date(2026, 7, 21),
+    ))
+
+    assert "昨天（2026-07-20 至 2026-07-20）" in answer.answer_text
+    assert "前天（2026-07-19 至 2026-07-19）" in answer.answer_text
+    assert "不能可靠判断两个日期谁高谁低" in answer.answer_text
+
+
 @pytest.mark.parametrize(
     "query,primary,baseline,baseline_label",
     [

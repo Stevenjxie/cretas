@@ -144,7 +144,7 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
         // javadoc). Any miss/exception here falls straight through to the
         // unchanged original flow.
         String userInput = getString(params, "userInput");
-        if (userInput != null && !userInput.isBlank()) {
+        if (userInput != null && !userInput.isBlank() && shouldDelegateToTieredIntent(userInput)) {
             Map<String, Object> delegated = tryDelegateToTieredIntent(
                     factoryId, userInput, extractSessionId(context));
             if (delegated != null) {
@@ -183,6 +183,15 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
         // 4. Format and return. The restaurant demo is used by operators who need
         // next actions, not just rankings, so keep every Gold answer actionable.
         return ensureActionableMessage(format(g));
+    }
+
+    /**
+     * Lets a concrete Gold tool retain deterministic ownership of queries that
+     * already have an exact local answer contract. Most tools should continue
+     * to use the Python tiered router, so the default remains enabled.
+     */
+    protected boolean shouldDelegateToTieredIntent(String userInput) {
+        return true;
     }
 
     /**
