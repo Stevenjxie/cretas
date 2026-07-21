@@ -1,6 +1,7 @@
 package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.material.RawMaterialTypeDTO;
+import com.cretas.aims.dto.material.MaterialCodePreviewDTO;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.TaxTreatment;
@@ -105,6 +106,39 @@ class RawMaterialTypeSegmentContractTest {
         assertEquals(400, ex.getCode());
         assertEquals("category", ex.getHintTarget());
         verify(materialTypeRepository, never()).save(any());
+    }
+
+    @Test
+    void createRejectsDuplicateNormalizedNameBeforeAllocatingCodes() {
+        stubValidChain();
+        when(materialTypeRepository.existsByFactoryIdAndNormalizedName(FACTORY_ID, "牛肉"))
+                .thenReturn(true);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.createMaterialType(FACTORY_ID, validRequest(L3)));
+
+        assertEquals(409, ex.getCode());
+        verify(materialBusinessCodeService, never()).allocateBusinessCode(anyString(), anyString());
+        verify(materialTypeRepository, never()).save(any());
+    }
+
+    @Test
+    void previewAndCreateShareTheBusinessCodeResolver() {
+        stubValidChain();
+        when(materialTypeRepository.findCodesByFactoryIdAndSegmentPrefix(FACTORY_ID, L3))
+                .thenReturn(Collections.emptyList());
+        when(materialBusinessCodeService.previewBusinessCode(FACTORY_ID, L3))
+                .thenReturn(new MaterialBusinessCodeService.BusinessCodePreview(
+                        "M4NZN7000001", "M4NZN7", "SYSTEM_STABLE", L3));
+
+        MaterialCodePreviewDTO preview = service.previewMaterialCodeContract(
+                FACTORY_ID, "原料", L3);
+
+        assertEquals(L3 + "000001", preview.getCode());
+        assertEquals("M4NZN7000001", preview.getBusinessCode());
+        assertEquals("SYSTEM_STABLE", preview.getBusinessCodePrefixSource());
+        assertTrue(preview.getSelectable());
+        verify(materialBusinessCodeService).previewBusinessCode(FACTORY_ID, L3);
     }
 
     @Test

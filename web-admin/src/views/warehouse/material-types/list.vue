@@ -15,8 +15,8 @@
  * 5. 包装层级: 一级 (kg, 必填=unit) + 二/三级 (10kg/箱, 12箱/柜)
  *
  * T159-A-form (2026-06-08): 防呆复刻 SKU 表单模式
- *   1. 编码预览 (create mode): GET .../raw-material-types/preview-code?category=
- *      → 实时展示预期编码 (如 YL006), category 变化时重新 fetch
+ *   1. 编码预览 (create mode): GET .../raw-material-types/preview-code?category=&segmentCode=
+ *      → 完整 L1-L3 选定后，实时展示与保存同源的业务编码及16位兼容分类编码
  *   2. 全字段智能匹配 cascade: GET .../raw-material-types/suggest?name=&category=
  *      → 填 unit/category/storageType/shelfLifeDays/level1PerLevel2/level2Unit
  *      + *ManuallyEdited flags + cascadeWriting guard (exact SKU pattern)
@@ -38,6 +38,7 @@ import { Plus, Edit, Delete as DeleteIcon, Search, Refresh, Lock, View } from '@
 import { formatAmount } from '@/utils/tableFormatters';
 import { bigCategoryOf } from '@/utils/materialCategory';
 import { displayUnit } from '@/utils/unitPricing';
+import { handleCatchError } from '@/utils/errorToast';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import UnitSelect from '@/components/common/UnitSelect.vue';
@@ -216,6 +217,10 @@ const segmentL2 = ref(''); // L2 中类
 const segmentL3 = ref(''); // L3 小类（原料类型复用）
 const segmentLoading = ref(false);
 const segmentCodePreview = ref(''); // SP8 生成的编码预览
+const businessCodePreview = ref('');
+const businessCodePrefixSource = ref('');
+const codeContractHint = ref('');
+const codeContractReady = ref(false);
 const sp8PreviewLoading = ref(false);
 const QUICK_CREATE_L3 = '__quick_create_l3__';
 const createL3DialogVisible = ref(false);
@@ -364,13 +369,22 @@ watch(segmentL1, (segmentCode) => {
   segmentL2.value = '';
   segmentL3.value = '';
   segmentCodePreview.value = '';
+  resetCodeContractPreview();
   syncMaterialFamilyFromSegment(segmentCode);
 });
 watch(segmentL2, () => {
   segmentL3.value = '';
   segmentCodePreview.value = '';
+  resetCodeContractPreview();
   l3MatchHint.value = '';
   l3ManuallyEdited.value = false;
+});
+
+watch(segmentL3, (value) => {
+  resetCodeContractPreview();
+  if (dialogVisible.value && !editingId.value && /^\d{10}$/.test(value)) {
+    void generateSP8Code(false);
+  }
 });
 
 function nextL3Suffix(): string {
@@ -464,7 +478,7 @@ async function handleCreateL3(): Promise<void> {
     createL3DialogVisible.value = false;
     ElMessage.success(`已创建新品类「${response.data.segmentLabel}」`);
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '创建 L3 小类失败');
+    handleCatchError(error, '创建 L3 小类失败');
   } finally {
     createL3Submitting.value = false;
   }
@@ -504,68 +518,74 @@ watch(
   },
 );
 
-async function generateSP8Code() {
+interface MaterialCodePreview {
+  code: string;
+  businessCode: string;
+  businessCodePrefix: string;
+  businessCodePrefixSource: 'CONFIGURED' | 'SYSTEM_STABLE';
+  businessCodePrefixSourceSegment: string;
+  classificationSegmentCode: string;
+  selectable: boolean;
+  guidance: string;
+}
+
+let codeContractRequestVersion = 0;
+
+function resetCodeContractPreview(): void {
+  segmentCodePreview.value = '';
+  businessCodePreview.value = '';
+  businessCodePrefixSource.value = '';
+  codeContractHint.value = '';
+  codeContractReady.value = false;
+}
+
+async function generateSP8Code(notifyError = true): Promise<boolean> {
   if (!segmentL1.value || !segmentL2.value || !segmentL3.value) {
-    ElMessage.warning('请先选择 L1大类、L2中类、L3小类后再生成编码');
-    return;
+    if (notifyError) ElMessage.warning('请先选择 L1大类、L2中类、L3小类后再生成编码');
+    return false;
   }
-  if (!factoryId.value) return;
+  if (!factoryId.value) return false;
+  const requestVersion = ++codeContractRequestVersion;
+  const requestedSegment = segmentL3.value;
   sp8PreviewLoading.value = true;
   try {
-    const res = await get<{ code: string }>(
-      `/${factoryId.value}/material-segments/generate-code`,
-      { params: { l1: segmentL1.value, l2: segmentL2.value, l3: segmentL3.value } },
-    );
-    if (res.success && res.data?.code) {
-      segmentCodePreview.value = res.data.code;
-    } else {
-      segmentCodePreview.value = '';
-      ElMessage.error(res.message || '16位编码预览失败，请检查编码字典配置');
-    }
-  } catch {
-    segmentCodePreview.value = '';
-    ElMessage.error('16位编码预览失败，请稍后重试');
-  } finally {
-    sp8PreviewLoading.value = false;
-  }
-}
-
-// ==================== T159-A: Code Preview ====================
-// Create mode only: when category changes → fetch preview code.
-// Degrades gracefully if endpoint not yet deployed (404/error → silent).
-const codePreview = ref('');
-const codePreviewLoading = ref(false);
-
-async function fetchCodePreview(category: string) {
-  if (!factoryId.value || !category.trim()) { codePreview.value = ''; return; }
-  if (segmentTree.value.length > 0) { codePreview.value = ''; return; }
-  codePreviewLoading.value = true;
-  try {
-    const res = await get<{ code: string }>(
+    const res = await get<MaterialCodePreview>(
       `/${factoryId.value}/raw-material-types/preview-code`,
-      { params: { category } },
+      {
+        params: { category: form.value.category, segmentCode: segmentL3.value },
+        _silent: !notifyError,
+      },
     );
-    if (res.success && res.data?.code) {
-      codePreview.value = res.data.code;
-    } else {
-      codePreview.value = '';
+    if (requestVersion !== codeContractRequestVersion || requestedSegment !== segmentL3.value) {
+      return false;
     }
-  } catch {
-    // endpoint not yet deployed — degrade gracefully, don't break the form
-    codePreview.value = '';
+    if (res.success && res.data?.code && res.data.businessCode && res.data.selectable) {
+      segmentCodePreview.value = res.data.code;
+      businessCodePreview.value = res.data.businessCode;
+      businessCodePrefixSource.value = res.data.businessCodePrefixSource;
+      codeContractHint.value = res.data.guidance;
+      codeContractReady.value = true;
+      return true;
+    } else {
+      resetCodeContractPreview();
+      codeContractHint.value = res.message || '当前分类的编码契约不可用';
+      if (notifyError) ElMessage.error(codeContractHint.value);
+      return false;
+    }
+  } catch (error) {
+    if (requestVersion !== codeContractRequestVersion || requestedSegment !== segmentL3.value) {
+      return false;
+    }
+    resetCodeContractPreview();
+    codeContractHint.value = '编码契约校验暂不可用，请稍后重试';
+    if (notifyError) handleCatchError(error, codeContractHint.value);
+    return false;
   } finally {
-    codePreviewLoading.value = false;
+    if (requestVersion === codeContractRequestVersion) {
+      sp8PreviewLoading.value = false;
+    }
   }
 }
-
-// Watch category in create mode for code preview
-watch(
-  () => [form.value.category, dialogVisible.value, editingId.value] as const,
-  ([cat, visible, eid]) => {
-    if (!visible || eid) { codePreview.value = ''; return; }
-    fetchCodePreview(String(cat || ''));
-  },
-);
 
 // ==================== T159-A: *ManuallyEdited flags + cascadeWriting guard ====================
 // Exact mirror of SKU's pattern:
@@ -765,12 +785,12 @@ function openCreate() {
   };
   resetPackaging();
   resetManuallyEditedFlags();
-  codePreview.value = '';
   // SP8: reset cascade
   segmentL1.value = '';
   segmentL2.value = '';
   segmentL3.value = '';
   segmentCodePreview.value = '';
+  resetCodeContractPreview();
   l3MatchHint.value = '';
   l3ManuallyEdited.value = false;
   if (segmentTree.value.length === 0) loadSegmentTree();
@@ -798,12 +818,12 @@ async function openEdit(row: TableRow) {
   loadCustomers();
   resetPackaging();
   resetManuallyEditedFlags();
-  codePreview.value = '';
   // SP8: reset cascade (edit mode — code already exists, cascade is create-only)
   segmentL1.value = '';
   segmentL2.value = '';
   segmentL3.value = '';
   segmentCodePreview.value = '';
+  resetCodeContractPreview();
   l3MatchHint.value = '';
   l3ManuallyEdited.value = false;
   if (segmentTree.value.length === 0) loadSegmentTree();
@@ -869,6 +889,9 @@ async function handleSave() {
   if (showSegmentEditor.value && (!segmentL1.value || !segmentL2.value || !segmentL3.value)) {
     return ElMessage.error('每个原料类型都必须选择 L1大类、L2中类、L3小类后保存');
   }
+  if (!editingId.value && !(await generateSP8Code(true))) {
+    return;
+  }
 
   // 包装层级仅包材校验并提交；原料/辅料完全不发送 hierarchy。
   const hasL2Unit = !!packaging.value.level2Unit?.trim();
@@ -930,7 +953,7 @@ async function handleSave() {
     loadData();
   } catch (e) {
     console.error(e);
-    if (e instanceof Error) ElMessage.error(e.message);
+    handleCatchError(e, '原料类型保存失败，请稍后重试');
   } finally {
     submitting.value = false;
   }
@@ -1147,23 +1170,7 @@ function handleSizeChange(size: number) {
           <el-input v-model="form.code" disabled :prefix-icon="Lock" />
         </el-form-item>
         <el-form-item v-else label="原料编码">
-          <!-- T159-A: code preview — re-fetches whenever category changes -->
-          <div class="code-preview-row">
-            <el-tag
-              v-if="codePreview"
-              type="info"
-              class="code-preview-tag"
-              :class="{ 'code-preview-loading': codePreviewLoading }"
-            >
-              预计编码: {{ codePreview }}
-            </el-tag>
-            <span v-else-if="form.category" class="code-preview-hint">
-              {{ codePreviewLoading ? '生成中...' : '编码将在保存后自动生成' }}
-            </span>
-            <span v-else class="code-preview-hint">
-              选择类别后可预览自动编码（如 YL006）
-            </span>
-          </div>
+          <span class="code-preview-hint">选择完整 L1-L3 分类后，系统将在下方显示与保存一致的业务编码和兼容分类编码。</span>
         </el-form-item>
 
         <el-form-item label="原料名称" required>
@@ -1405,19 +1412,32 @@ function handleSizeChange(size: number) {
               >重新匹配分类</el-button>
             </el-form-item>
             <el-form-item v-if="segmentL1 && segmentL2 && segmentL3" label="编码预览">
-              <div class="code-preview-row">
-                <el-tag v-if="segmentCodePreview" type="success" class="code-preview-tag">
-                  {{ segmentCodePreview }}
-                </el-tag>
+              <div class="code-preview-stack">
+                <div class="code-preview-row">
+                  <span class="code-preview-label">业务编码</span>
+                  <el-tag v-if="businessCodePreview" type="success" class="code-preview-tag">
+                    {{ businessCodePreview }}
+                  </el-tag>
+                  <span v-else class="field-hint">正在校验编码契约…</span>
+                </div>
+                <div class="code-preview-row">
+                  <span class="code-preview-label">16位分类编码（兼容）</span>
+                  <el-tag v-if="segmentCodePreview" type="info" class="code-preview-tag">
+                    {{ segmentCodePreview }}
+                  </el-tag>
+                </div>
                 <el-button
                   size="small"
                   :loading="sp8PreviewLoading"
-                  @click="generateSP8Code"
+                  @click="generateSP8Code(true)"
                 >
-                  生成预览
+                  刷新预览
                 </el-button>
               </div>
-              <div class="field-hint">点击「生成预览」查看将生成的16位编码</div>
+              <div v-if="codeContractHint" class="field-hint" :class="{ 'field-hint--matched': codeContractReady }">
+                {{ codeContractHint }}
+                <template v-if="businessCodePrefixSource === 'SYSTEM_STABLE'">；不会按分类名称猜测或覆盖历史前缀</template>
+              </div>
             </el-form-item>
           </template>
           <!-- 字典未配置: 诚实空态 + 跳转配置引导 (fool-proof Rule 5: dead-end 改导航) -->
@@ -1599,7 +1619,19 @@ function handleSizeChange(size: number) {
 .code-preview-row {
   display: flex;
   align-items: center;
+  gap: 8px;
   min-height: 32px;
+}
+.code-preview-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.code-preview-label {
+  min-width: 132px;
+  color: #606266;
+  font-size: 12px;
 }
 .code-preview-tag {
   font-size: 14px;
