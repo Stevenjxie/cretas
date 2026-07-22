@@ -2912,8 +2912,22 @@ function handleKeydown(event: KeyboardEvent) {
       white-space: normal;
 
       :deep(p) { margin: 0.4em 0; }
+      // 客户反馈 (Sheet 7/21): 大小标题需颜色区分, 快速识别重点。
+      // 层级: h1/h2 主色+左侧强调条 (章节), h3 深灰加粗 (小节), 正文默认色。
       :deep(h1), :deep(h2), :deep(h3) { margin: 0.6em 0 0.3em; font-weight: 600; }
-      :deep(h3) { font-size: 15px; }
+      :deep(h1) {
+        font-size: 16px;
+        color: var(--el-color-primary, #2D8B57);
+        border-left: 3px solid var(--el-color-primary, #2D8B57);
+        padding-left: 8px;
+      }
+      :deep(h2) {
+        font-size: 15px;
+        color: var(--el-color-primary, #2D8B57);
+        border-left: 3px solid var(--el-color-primary, #2D8B57);
+        padding-left: 8px;
+      }
+      :deep(h3) { font-size: 15px; color: var(--el-text-color-primary, #303133); }
       :deep(ul), :deep(ol) { padding-left: 1.5em; margin: 0.3em 0; }
       :deep(li) { margin: 0.15em 0; }
       :deep(strong) { font-weight: 600; }
