@@ -27,6 +27,9 @@ import java.util.stream.Collectors;
 public class RestaurantDishSalesRankingTool extends AbstractBusinessTool {
 
     @Autowired
+    private TieredIntentDelegate tieredDelegate;
+
+    @Autowired
     private SalesOrderRepository salesOrderRepository;
 
     @Autowired
@@ -75,6 +78,10 @@ public class RestaurantDishSalesRankingTool extends AbstractBusinessTool {
 
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
+        Map<String, Object> delegated = tieredDelegate.tryDelegate(factoryId, params, context, getToolName());
+        if (delegated != null) {
+            return delegated;
+        }
         log.info("执行菜品销量排行查询 - 工厂ID: {}, 参数: {}", factoryId, params);
 
         LocalDate endDate = LocalDate.now();
@@ -89,7 +96,7 @@ public class RestaurantDishSalesRankingTool extends AbstractBusinessTool {
         if (orders.isEmpty()) {
             return buildSimpleResult(
                     String.format("近 %d 天（%s 至 %s）暂无销售记录，无法生成排行。",
-                            startDate.until(endDate).getDays(), startDate, endDate), null);
+                            java.time.temporal.ChronoUnit.DAYS.between(startDate, endDate), startDate, endDate), null);
         }
 
         // 汇总每道菜的销售数量

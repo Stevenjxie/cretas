@@ -38,6 +38,9 @@ import java.util.*;
 public class RestaurantDishCostQueryTool extends AbstractBusinessTool {
 
     @Autowired
+    private TieredIntentDelegate tieredDelegate;
+
+    @Autowired
     private DishCostCardService dishCostCardService;
 
     @Autowired
@@ -86,6 +89,10 @@ public class RestaurantDishCostQueryTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                             Map<String, Object> context) throws Exception {
+        Map<String, Object> delegated = tieredDelegate.tryDelegate(factoryId, params, context, getToolName());
+        if (delegated != null) {
+            return delegated;
+        }
         String productName = getString(params, "productName");
         int portions = Math.max(1, getInteger(params, "portions", 1));
 
