@@ -511,6 +511,26 @@ const RESTAURANT_TIME_FOLLOWUPS: Array<{
   followups: Array<{ label: string; question: string }>;
 }> = [
   {
+    // L1 行业参考做法 (Sheet 7/20 经营分析深度 L1): 诊断类问题挂可点问的
+    // 方法论入口, 不自动追加进回答正文 (准确性优先)。
+    patterns: ['毛利率', '毛利'],
+    followups: [
+      { label: '行业参考做法', question: '毛利率偏低的行业参考做法' },
+    ],
+  },
+  {
+    patterns: ['损耗', '浪费', '报损'],
+    followups: [
+      { label: '行业参考做法', question: '食材损耗偏高的行业参考做法' },
+    ],
+  },
+  {
+    patterns: ['出餐', '上菜'],
+    followups: [
+      { label: '行业参考做法', question: '出餐慢的行业参考做法' },
+    ],
+  },
+  {
     patterns: ['营收趋势', '收入趋势', '月度趋势'],
     followups: [
       { label: '本季度', question: '本季度营收趋势' },
@@ -543,6 +563,7 @@ const RESTAURANT_TIME_FOLLOWUPS: Array<{
       { label: '上个月', question: '上个月慢销菜品' },
       { label: '本季度', question: '本季度慢销菜品' },
       { label: '近60天', question: '近60天慢销菜品' },
+      { label: '行业参考做法', question: '慢销菜品的行业参考做法' },
     ],
   },
   {
@@ -553,6 +574,7 @@ const RESTAURANT_TIME_FOLLOWUPS: Array<{
       { label: '本季度', question: '本季度哪家店业绩最好' },
       { label: '今年', question: '今年哪家店业绩最好' },
       { label: '近30天', question: '近30天哪家店业绩最好' },
+      { label: '行业参考做法', question: '门店业绩差距的行业参考做法' },
     ],
   },
   {
@@ -562,6 +584,7 @@ const RESTAURANT_TIME_FOLLOWUPS: Array<{
       { label: '本季度', question: '本季度门店业绩对比' },
       { label: '今年', question: '今年各门店营收排名' },
       { label: '近30天', question: '近30天门店销售对比' },
+      { label: '行业参考做法', question: '门店业绩差距的行业参考做法' },
     ],
   },
   {
@@ -571,6 +594,7 @@ const RESTAURANT_TIME_FOLLOWUPS: Array<{
       { label: '差评门店', question: '哪家店差评最多' },
       { label: '高频好评词', question: '高频好评词有哪些' },
       { label: '回复率', question: '平台评价回复率' },
+      { label: '行业参考做法', question: '差评偏多的行业参考做法' },
     ],
   },
   {
@@ -587,6 +611,7 @@ const RESTAURANT_TIME_FOLLOWUPS: Array<{
       { label: '上个月', question: '上个月客单价' },
       { label: '本季度', question: '本季度客单价' },
       { label: '门店对比', question: '各门店客单价对比' },
+      { label: '行业参考做法', question: '客单价偏低的行业参考做法' },
     ],
   },
   {
