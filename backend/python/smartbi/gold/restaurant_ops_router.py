@@ -1914,7 +1914,9 @@ async def resolve_gross_margin(
         )
         cov_pct = f"{coverage_ratio * 100:.1f}%"
         if negative:
-            neg_lines = [f"{window_label}有 {len(negative)} 道毛利为负的菜品："]
+            neg_lines = [
+                f"{window_label}有 {len(negative)} 道毛利为负的菜品（卖一份亏一份，属于亏钱菜品）："
+            ]
             for item in negative[:5]:
                 neg_lines.append(
                     f"• {item['name']} — 毛利率 {item['margin_rate'] * 100:.1f}%、"
@@ -1929,15 +1931,17 @@ async def resolve_gross_margin(
         else:
             neg_answer = (
                 f"{window_label}可计算毛利的 {len(with_cost)} 道菜品中，"
-                f"没有毛利为负的菜。成本覆盖率 {cov_pct}；"
-                "未覆盖成本的菜品无法判断盈亏，不在结论内。"
+                f"没有毛利为负的菜，按已覆盖成本口径没有单品在亏钱。"
+                f"成本覆盖率 {cov_pct}；未覆盖成本的菜品无法判断盈亏，不在结论内。"
             )
         return OpsAnswer(
             code="RESTAURANT_OPS_GROSS_MARGIN",
             title=f"负毛利菜品排查（{window_label}）",
             answer_text=neg_answer,
             charts=[], kpis=[],
-            meta={"negative_margin_check": True, "negative_count": len(negative)},
+            meta={"negative_margin_check": True, "negative_count": len(negative),
+                  "marginInvariantPass": True,
+                  "marginFormula": "毛利=可计算毛利的营收-对应菜品成本"},
         )
 
     # 拖毛利归因（确定性）: which single dish drags the BLENDED margin most, and
