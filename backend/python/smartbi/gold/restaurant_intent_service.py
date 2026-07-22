@@ -235,12 +235,18 @@ async def tiered_answer(
     calls ``parse_restaurant_query`` itself exactly as before.
     """
     try:
-        from smartbi.gold.restaurant_playbook import PLAYBOOK_TRIGGERS
+        from smartbi.gold.restaurant_playbook import PLAYBOOK_CODE, PLAYBOOK_TRIGGERS
         if any(trigger in (query or "") for trigger in PLAYBOOK_TRIGGERS):
-            # Explicit playbook phrases are served by the deterministic T1
-            # keyword resolver; the tiered parser doesn't know the code and
-            # would degrade the request to a clarification. Fail open so the
-            # caller's resolve_by_code fallback answers it.
+            # R16b: 此前 fail-open 依赖 chat.py 的 resolve_by_code 兜底; 反转后
+            # Java 委托路径没有那个兜底 (fail-open → delegate:false → Java LLM
+            # 误匹配工厂工具)。playbook 零 DB 零租户数据, 直接解析原文返回。
+            resolved = await _resolve_tiered(PLAYBOOK_CODE, pool, factory_id, query=query)
+            if resolved is not None:
+                return {
+                    "kind": "clarification",
+                    "answer_text": str(getattr(resolved, "answer_text", "") or ""),
+                    "spec": None,
+                }
             return None
         from smartbi.gold.restaurant_ops_router import (
             RESTAURANT_CAPABILITIES_TEXT,
@@ -473,6 +479,11 @@ def should_delegate(
         # 词典里, 规则 3 接不住; 存在性正则命中即放行 (R15b)。
         from smartbi.gold.restaurant_ops_router import _NEGATIVE_MARGIN_EXISTENCE_RE
         if _NEGATIVE_MARGIN_EXISTENCE_RE.search(query):
+            return True
+        # 行业参考做法 (playbook) — intent 不在 MARGIN_CAPABLE, 规则 3 不放行;
+        # 触发词命中即委托, tiered 层零 DB 直答 (R16b)。
+        from smartbi.gold.restaurant_playbook import PLAYBOOK_TRIGGERS as _PB_TRIGGERS
+        if any(t in query for t in _PB_TRIGGERS):
             return True
     if spec is None:
         return False
