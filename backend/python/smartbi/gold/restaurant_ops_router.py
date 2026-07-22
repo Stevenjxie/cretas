@@ -1218,7 +1218,9 @@ def _resolve_sales_comparison(
         end = this_monday - timedelta(days=8)
         return (start, end), "上上周", "previous_week"
 
-    if compare_signal and "今年" in text and "去年" in text:
+    # 双周期同时点名 ("今年比去年增长多少") 本身就是比较信号 — compare_signal
+    # 词表只有 对比/相比 等双字词, 接不住「比去年」(R15c)。
+    if "今年" in text and "去年" in text:
         return (
             (date(anchor.year - 1, 1, 1), date(anchor.year - 1, 12, 31)),
             "去年",
