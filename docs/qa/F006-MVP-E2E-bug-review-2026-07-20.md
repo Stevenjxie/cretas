@@ -682,7 +682,7 @@
 - **根因**：销售订单、订单行、生产计划、原料批次和成品批次之间缺少统一的加工/供料/所有权快照；销售侧旧客供收货入口可直接写库存；通用 FEFO、库存汇总、反向调拨和报工自动分配默认把所有可用批次视为公司资产。
 - **修复**：新增 `STANDARD_SALE/TOLL_PROCESSING`、`FACTORY_SUPPLIED/CUSTOMER_SUPPLIED` 与 `COMPANY_OWNED/CUSTOMER_OWNED` 契约；普通销售+客供料 fail-closed，当前 MVP 不允许订单内混合供料模式。结构化来料需求行本身作为唯一仓储任务 identity，不新增平行任务表；只有审批完成状态投影到统一 `/warehouse/receiving/tasks`。仓储按任务行锁、剩余量、单位、同厂仓库、附件和幂等键确认收货，直接形成带 customer/sales-order lineage 的客户所有批次；旧销售侧直接收货接口固定返回 410 且零写。销售复制保留供料契约但重置实收事实。生产计划冻结客户、供料方式与产出所有权；原料库存、正式报工自动分配、显式批次、结单扣减及成品入库均按同一客户+销售单精确校验；普通公司库存查询、低库存/价值汇总、调拨和销售可售池排除客户所有批次。Web 销售新建/编辑/详情贯通中文字段和结构化客供需求，仓储统一页面复用原采购收货区域并区分采购两阶段与客供一步确认；RN 快速销售表单显式提交普通销售+工厂备料，避免旧客户端产生含糊订单。
 - **主要修改文件**：`SalesOrder/SalesOrderItem/ProductionPlan/MaterialBatch/FinishedGoodsBatch` 及 DTO/Repository/Service/Flyway；`WarehouseReceivingController`、`SalesController`、附件权限；`ProductionPlanServiceImpl`、`ProductionStockAllocationServiceImpl`、供应链/缺料监听；Web `sales/orders/list.vue`、`detail.vue`、`warehouse/materials/PendingPurchaseReceivingPanel.vue`、共享 API/contract；RN `SalesOrderCreateScreen.tsx`/`salesApiClient.ts`。
-- **测试**：覆盖销售供料字段与非法组合、需求唯一/跨厂/数量精度、审批前不可收、附件必需、部分收货、重复幂等、跨任务 key 冲突、旧入口 410、真实 JPA Repository 启动、公司/客户库存隔离、生产计划快照、报工自动/显式领用、结单与客户成品所有权；Web 覆盖销售三页、统一仓储入口、采购原路径回归、客供一次确认和中文单位。最终测试结果随本条所在合入批次记录。
-- **Commit/PR/main 状态**：本条所在 `codex/customer-supplied-receiving-20260722` 最终 PR 合入后以 exact main 回执为准。
+- **测试**：Java 单一发布生命周期共执行 17 个测试类、131/131 通过，覆盖销售供料字段与非法组合、需求唯一/跨厂/数量精度、审批前不可收、附件必需、部分收货、重复幂等、跨任务 key 冲突、旧入口 410、3 组真实 JPA Repository 启动、公司/客户库存隔离、生产计划快照、报工自动/显式领用、结单与客户成品所有权；Web Vitest 3 个目标文件 14/14 通过，覆盖销售三页、统一仓储入口、采购原路径回归、客供一次确认和中文单位，`vue-tsc --noEmit` 通过；Java/Web 不可变发布构建均通过。JPA 门禁真实发现并修复了成品仓库字段路径错误及库存月度查询 `LocalDate`/`LocalDateTime` 类型不匹配，最终启动校验全绿。
+- **Commit/PR/main 状态**：代码 commit `c673fc9e94f54cf17e8935bfc7742c8debf61512`；本条所在 `codex/customer-supplied-receiving-20260722` 最终 PR 合入后，以回执中的 exact main 为准。
 - **部署状态**：`NOT_DEPLOYED`。
-- **回归状态**：`FINAL_RELEASE_GATE_RUNNING`；生产业务 mutation=0，未做历史桥接，未触碰 LIUSHANMEN。
+- **回归状态**：`TARGET_TESTS_PASSED_AWAITING_USER_PLAYWRIGHT`；按用户决定不由 Codex 运行 Playwright；生产业务 mutation=0，未做历史桥接，未触碰 LIUSHANMEN。
