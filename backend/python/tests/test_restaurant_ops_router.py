@@ -1222,8 +1222,19 @@ def test_extract_store_mention(query, expected):
     assert _r.extract_store_mention(query) == expected
 
 
+class _NoopTransaction:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+
 def _mention_pool(exact_names, contains_names):
     class _Conn:
+        def transaction(self):
+            return _NoopTransaction()
+
         async def execute(self, *_args):
             return None
 
@@ -1277,6 +1288,9 @@ def test_store_mention_ambiguous_asks_for_clarification():
 
 def test_store_mention_canonical_single_match_scopes_answer(monkeypatch):
     class _Conn:
+        def transaction(self):
+            return _NoopTransaction()
+
         async def execute(self, *_args):
             return None
 
