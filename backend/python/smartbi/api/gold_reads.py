@@ -1208,8 +1208,8 @@ async def post_restaurant_tiered_answer(
             and "优化" not in query
             and capability_clarification_question(query) is None
         ):
-            from smartbi.gold.restaurant_ops_router import extract_dish_candidate
-            if extract_dish_candidate(query) is None:
+            from smartbi.gold.restaurant_ops_router import extract_dish_candidates
+            if not extract_dish_candidates(query):
                 return {"delegate": False}
 
         pool = await get_pg_pool()

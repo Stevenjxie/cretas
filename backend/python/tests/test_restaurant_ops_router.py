@@ -1706,3 +1706,30 @@ def test_elliptical_entity_switch_beats_parent_inheritance():
     assert _r.extract_dish_candidate(combined) == "招牌藤椒味"
     assert _r.extract_dish_candidate("米饭的销量是多少；继续追问：成本如何") == "米饭"
     assert _r.extract_dish_candidate("那毛利呢") is None
+
+
+def test_r14_dish_compare_accepts_zhuanqian():
+    cands = _r.extract_dish_candidates("米饭和招牌藤椒味(单人份)哪个赚钱")
+    assert cands == ["米饭", "招牌藤椒味(单人份)"]
+    assert _r.extract_dish_candidates("米饭和面条哪个毛利率高") == ["米饭", "面条"]
+
+
+def test_r14_dish_ranking_direction():
+    assert _r.dish_ranking_direction("上周哪道菜卖得最差") == "worst"
+    assert _r.dish_ranking_direction("哪个菜卖得最好") == "best"
+    assert _r.dish_ranking_direction("哪家店业绩最好") is None
+    assert _r.dish_ranking_direction("各门店销量最高的是哪家") is None
+    assert _r.match_restaurant_ops("上周哪道菜卖得最差") == "RESTAURANT_OPS_GROSS_MARGIN"
+
+
+def test_r14_capability_question():
+    assert _r.is_capability_question("你们能做什么")
+    assert _r.is_capability_question("有什么功能")
+    assert not _r.is_capability_question("最近亏钱了吗")
+    assert _r.match_restaurant_ops("你们能做什么") == "RESTAURANT_OPS_CAPABILITIES"
+
+
+def test_r14_negative_margin_existence_regex():
+    assert _r._NEGATIVE_MARGIN_EXISTENCE_RE.search("有没有毛利率是负的菜")
+    assert _r._NEGATIVE_MARGIN_EXISTENCE_RE.search("哪些菜亏钱")
+    assert not _r._NEGATIVE_MARGIN_EXISTENCE_RE.search("整体毛利率是多少")
