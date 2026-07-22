@@ -1,9 +1,12 @@
 package com.cretas.aims.entity;
 
 import com.cretas.aims.entity.enums.MixedBatchType;
+import com.cretas.aims.entity.enums.InventoryOwnership;
+import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.enums.ProductionPlanType;
+import com.cretas.aims.entity.enums.SalesProcessingMode;
 import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -256,6 +259,28 @@ public class ProductionPlan extends BaseEntity {
      */
     @Column(name = "source_order_item_id", length = 50)
     private String sourceOrderItemId;
+
+    /** Customer ID frozen from the authoritative sales order at plan creation/copy time. */
+    @Column(name = "customer_id", length = 191)
+    private String customerId;
+
+    /** Sales processing-mode snapshot; null is retained only for legacy source orders. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "processing_mode", length = 32)
+    private SalesProcessingMode processingMode;
+
+    /** Material-supply-mode snapshot; null is retained only for legacy source orders. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "material_supply_mode", length = 32)
+    private MaterialSupplyMode materialSupplyMode;
+
+    /**
+     * Legal ownership of output inventory. New non-customer plans default to
+     * company-owned; legacy customer-order contracts with unknown modes remain null.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "output_ownership", length = 32)
+    private InventoryOwnership outputOwnership = InventoryOwnership.COMPANY_OWNED;
 
     /**
      * 客户名称

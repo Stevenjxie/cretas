@@ -8,6 +8,7 @@ import com.cretas.aims.dto.inventory.MaterialPriceComparisonDTO;
 import com.cretas.aims.dto.inventory.PurchaseSuggestionResponse;
 import com.cretas.aims.dto.inventory.PurchaseSuggestionMultiResponse;
 import com.cretas.aims.dto.inventory.PurchaseApprovalRecoveryResponse;
+import com.cretas.aims.dto.inventory.PurchaseReceivingTaskResponse;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
@@ -31,6 +32,7 @@ import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus;
 import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.AttachmentRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.SupplierRepository;
@@ -71,7 +73,8 @@ public class PurchaseServiceImpl implements PurchaseService {
     private static final Logger log = LoggerFactory.getLogger(PurchaseServiceImpl.class);
 
     /**
-     * 抄收上限率（默认 30%，per audio May 7 客户通话 "餐饮/物业行业正常抄收应该是30%以内"）。
+     * 超收上限率。默认 0%，只有工厂显式配置后才允许超收；无配置时
+     * 必须 fail-closed，不能把某一行业经验值静默套用于全部采购收货。
      *
      * 实际累计收货量上限 = 下单量 × (1 + overReceiveRate)。超过则 confirmReceive 抛
      * BusinessException 409 + 事务回滚，要求采购另下新订单。
@@ -85,7 +88,7 @@ public class PurchaseServiceImpl implements PurchaseService {
      * Ops 调整：在 application.properties 设 cretas.purchase.over-receive-rate=0.50
      * 等可临时放宽，无需 rebuild。
      */
-    @org.springframework.beans.factory.annotation.Value("${cretas.purchase.over-receive-rate:0.30}")
+    @org.springframework.beans.factory.annotation.Value("${cretas.purchase.over-receive-rate:0.00}")
     private BigDecimal overReceiveRate;
 
     private final PurchaseOrderRepository purchaseOrderRepository;
@@ -138,6 +141,10 @@ public class PurchaseServiceImpl implements PurchaseService {
     /** D-6: 责任绑定 — 查询 PO 创建人的用户名供异常单展示（required=false 兼容旧 context） */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.UserRepository userRepository;
+
+    /** 收货凭证门禁：正式确认前至少保留一份供应商送货/收货证据。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AttachmentRepository attachmentRepository;
 
     /** Canvas V2: DB-driven validation rules */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -1438,6 +1445,131 @@ public class PurchaseServiceImpl implements PurchaseService {
     // ==================== 采购入库 ====================
 
     @Override
+    @Transactional(readOnly = true)
+    public List<PurchaseReceivingTaskResponse> getPendingReceivingTasks(
+            String factoryId, String purchaseOrderId, String orderNumber) {
+        LinkedHashMap<String, PurchaseOrder> candidates = new LinkedHashMap<>();
+        if (purchaseOrderId != null && !purchaseOrderId.isBlank()) {
+            PurchaseOrder order = purchaseOrderRepository.findByIdAndFactoryId(purchaseOrderId, factoryId)
+                    .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在或不属于当前组织"));
+            candidates.put(order.getId(), order);
+        } else if (orderNumber != null && !orderNumber.isBlank()) {
+            PurchaseOrder order = purchaseOrderRepository.findByFactoryIdAndOrderNumber(factoryId, orderNumber.trim())
+                    .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在或不属于当前组织"));
+            candidates.put(order.getId(), order);
+        } else {
+            PageRequest page = PageRequest.of(0, 500, Sort.by(Sort.Direction.ASC, "expectedDeliveryDate")
+                    .and(Sort.by(Sort.Direction.DESC, "createdAt")));
+            purchaseOrderRepository.findByFactoryIdAndStatusOrderByCreatedAtDesc(
+                    factoryId, PurchaseOrderStatus.FINANCE_APPROVED, page)
+                    .forEach(order -> candidates.put(order.getId(), order));
+            purchaseOrderRepository.findByFactoryIdAndStatusOrderByCreatedAtDesc(
+                    factoryId, PurchaseOrderStatus.PARTIAL_RECEIVED, page)
+                    .forEach(order -> candidates.put(order.getId(), order));
+        }
+
+        return candidates.values().stream()
+                .filter(order -> order.getStatus() == PurchaseOrderStatus.FINANCE_APPROVED
+                        || order.getStatus() == PurchaseOrderStatus.PARTIAL_RECEIVED)
+                .map(this::toReceivingTask)
+                .filter(Objects::nonNull)
+                .sorted(Comparator
+                        .comparing(PurchaseReceivingTaskResponse::getExpectedDeliveryDate,
+                                Comparator.nullsLast(Comparator.naturalOrder()))
+                        .thenComparing(PurchaseReceivingTaskResponse::getOrderNumber,
+                                Comparator.nullsLast(Comparator.naturalOrder())))
+                .toList();
+    }
+
+    private PurchaseReceivingTaskResponse toReceivingTask(PurchaseOrder order) {
+        List<PurchaseOrderItem> orderItems = purchaseOrderItemRepository.findByPurchaseOrderId(order.getId());
+        List<PurchaseReceiveRecord> receipts = receiveRecordRepository
+                .findByFactoryIdAndPurchaseOrderIdOrderByCreatedAtAsc(order.getFactoryId(), order.getId());
+        List<PurchaseReceiveRecord> activeReceipts = receipts.stream()
+                .filter(this::isActiveReceipt)
+                .toList();
+        PurchaseReceiveRecord activeReceipt = activeReceipts.stream().findFirst().orElse(null);
+
+        Map<Long, BigDecimal> activeAllocatedByOrderItem = new HashMap<>();
+        Map<String, BigDecimal> legacyAllocatedByMaterial = new HashMap<>();
+        for (PurchaseReceiveRecord receipt : activeReceipts) {
+            if (receipt.getItems() == null) continue;
+            for (PurchaseReceiveItem item : receipt.getItems()) {
+                if (item.getPurchaseOrderItemId() != null) {
+                    activeAllocatedByOrderItem.merge(item.getPurchaseOrderItemId(),
+                            zeroIfNull(item.getReceivedQuantity()), BigDecimal::add);
+                } else {
+                    legacyAllocatedByMaterial.merge(item.getMaterialTypeId(),
+                            zeroIfNull(item.getReceivedQuantity()), BigDecimal::add);
+                }
+            }
+        }
+
+        List<PurchaseReceivingTaskResponse.Item> lines = new ArrayList<>();
+        BigDecimal remainingTotal = BigDecimal.ZERO;
+        for (PurchaseOrderItem item : orderItems) {
+            BigDecimal ordered = zeroIfNull(item.getQuantity());
+            BigDecimal received = zeroIfNull(item.getReceivedQuantity());
+            BigDecimal openBeforeDraft = ordered.subtract(received).max(BigDecimal.ZERO);
+            BigDecimal exactAllocation = activeAllocatedByOrderItem.getOrDefault(item.getId(), BigDecimal.ZERO);
+            BigDecimal materialAllocation = exactAllocation.add(legacyAllocatedByMaterial
+                    .getOrDefault(item.getMaterialTypeId(), BigDecimal.ZERO));
+            BigDecimal allocated = materialAllocation.min(openBeforeDraft);
+            BigDecimal legacyConsumed = allocated.subtract(exactAllocation.min(allocated)).max(BigDecimal.ZERO);
+            if (legacyConsumed.signum() > 0) {
+                legacyAllocatedByMaterial.put(item.getMaterialTypeId(),
+                        legacyAllocatedByMaterial.getOrDefault(item.getMaterialTypeId(), BigDecimal.ZERO)
+                                .subtract(legacyConsumed).max(BigDecimal.ZERO));
+            }
+            BigDecimal remaining = ordered.subtract(received).subtract(allocated).max(BigDecimal.ZERO);
+            remainingTotal = remainingTotal.add(remaining);
+            lines.add(PurchaseReceivingTaskResponse.Item.builder()
+                    .purchaseOrderItemId(item.getId())
+                    .materialTypeId(item.getMaterialTypeId())
+                    .materialName(item.getMaterialName())
+                    .orderedQuantity(ordered)
+                    .receivedQuantity(received)
+                    .activeDraftAllocatedQuantity(allocated)
+                    .remainingReceivableQuantity(remaining)
+                    .unit(item.getUnit())
+                    .specification(item.getSpecification())
+                    .build());
+        }
+
+        if (activeReceipt == null && remainingTotal.signum() <= 0) {
+            return null;
+        }
+        boolean receiving = activeReceipt != null;
+        return PurchaseReceivingTaskResponse.builder()
+                .taskId(order.getId())
+                .sourceType("PURCHASE")
+                .purchaseOrderId(order.getId())
+                .orderNumber(order.getOrderNumber())
+                .supplierId(order.getSupplierId())
+                .supplierName(order.getSupplierName())
+                .expectedDeliveryDate(order.getExpectedDeliveryDate())
+                .status(receiving ? "RECEIVING" : "WAITING_RECEIVE")
+                .statusLabel(receiving ? "收货中" : "待收货")
+                .warehouseId(activeReceipt != null ? activeReceipt.getWarehouseId() : null)
+                .responsibleName(receiving ? "仓储处理中" : "待仓储认领")
+                .activeReceiptId(activeReceipt != null ? activeReceipt.getId() : null)
+                .activeReceiptNumber(activeReceipt != null ? activeReceipt.getReceiveNumber() : null)
+                .activeReceiptCount(activeReceipts.size())
+                .receiptConflict(activeReceipts.size() > 1)
+                .items(lines)
+                .build();
+    }
+
+    private boolean isActiveReceipt(PurchaseReceiveRecord receipt) {
+        return receipt.getStatus() == PurchaseReceiveStatus.DRAFT
+                || receipt.getStatus() == PurchaseReceiveStatus.PENDING_QC;
+    }
+
+    private BigDecimal zeroIfNull(BigDecimal value) {
+        return value != null ? value : BigDecimal.ZERO;
+    }
+
+    @Override
     @Transactional
     public PurchaseReceiveRecord createReceiveRecord(String factoryId, CreateReceiveRecordRequest request, Long userId) {
         // Round 11 T1: Canvas Integration Template hook 1 — DB-driven validation
@@ -1460,8 +1592,10 @@ public class PurchaseServiceImpl implements PurchaseService {
         // excludes PENDING_FINANCE_REVIEW (only operational receive). Centralized as PO_OPS_RECEIVABLE.
         // BUG-RCV (2026-06-11): hoist order 到方法作用域, 供下方收货行从 PO 行价继承复用 (避免二次加载).
         PurchaseOrder order = null;
+        List<PurchaseOrderItem> poLines = List.of();
         if (request.getPurchaseOrderId() != null && !request.getPurchaseOrderId().isEmpty()) {
-            order = getPurchaseOrderById(factoryId, request.getPurchaseOrderId());
+            order = purchaseOrderRepository.findByIdAndFactoryIdForUpdate(request.getPurchaseOrderId(), factoryId)
+                    .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在或不属于当前组织"));
             if (order.getStatus() == null
                     || !com.cretas.aims.domain.OrderUsageWhitelists.PO_OPS_RECEIVABLE.contains(order.getStatus())) {
                 throw new BusinessException(409, "只有已审批、财务已审核或部分到货状态的订单可以入库")
@@ -1477,6 +1611,29 @@ public class PurchaseServiceImpl implements PurchaseService {
             // (防止 DRAFT → PENDING_QC → CONFIRMED 期间另一并发入库已 commit, 致使原本合法的草稿在
             // confirm 时变非法).
             validateOverReceiveCap(order, request.getItems());
+
+            List<PurchaseReceiveRecord> activeReceipts = receiveRecordRepository
+                    .findByFactoryIdAndPurchaseOrderIdOrderByCreatedAtAsc(factoryId, order.getId()).stream()
+                    .filter(this::isActiveReceipt)
+                    .toList();
+            if (!activeReceipts.isEmpty()) {
+                PurchaseReceiveRecord active = activeReceipts.get(0);
+                throw new BusinessException(409,
+                        "该采购订单已有未完成收货单 " + active.getReceiveNumber() + "，不能重复创建")
+                        .withCode("PURCHASE_RECEIPT_ACTIVE_EXISTS")
+                        .withHint("请在仓储待收货任务中继续处理现有收货单");
+            }
+            if (!Objects.equals(order.getSupplierId(), request.getSupplierId())) {
+                throw new BusinessException(400, "收货供应商与采购订单不一致")
+                        .withCode("PURCHASE_RECEIPT_SUPPLIER_MISMATCH")
+                        .withHint("请从仓储待收货任务进入，系统会自动带入订单供应商");
+            }
+            poLines = purchaseOrderItemRepository.findByPurchaseOrderId(order.getId());
+            for (CreateReceiveRecordRequest.ReceiveItemDTO line : request.getItems()) {
+                PurchaseOrderItem poLine = resolvePurchaseOrderItem(
+                        poLines, line.getPurchaseOrderItemId(), line.getMaterialTypeId());
+                line.setPurchaseOrderItemId(poLine.getId());
+            }
         }
 
         // 显式目标仓必须在 DRAFT 创建前完成归属/启用状态/仓型校验。
@@ -1513,10 +1670,10 @@ public class PurchaseServiceImpl implements PurchaseService {
         Map<String, PurchasePriceQuote> poLinePrices = Collections.emptyMap();
         if (order != null) {
             poLinePrices = new HashMap<>();
-            for (var poItem : purchaseOrderItemRepository.findByPurchaseOrderId(order.getId())) {
+            for (var poItem : poLines) {
                 // PO 行价是合同价, 收货未填价时的权威来源. 同物料多行取首个非空价.
                 if (poItem.getMaterialTypeId() != null && poItem.getUnitPrice() != null) {
-                    poLinePrices.putIfAbsent(poItem.getMaterialTypeId(), new PurchasePriceQuote(
+                    poLinePrices.put(String.valueOf(poItem.getId()), new PurchasePriceQuote(
                             poItem.getUnitPrice(),
                             poItem.getPriceUnit() != null ? poItem.getPriceUnit() : poItem.getUnit()));
                 }
@@ -1528,13 +1685,14 @@ public class PurchaseServiceImpl implements PurchaseService {
         for (CreateReceiveRecordRequest.ReceiveItemDTO itemDTO : request.getItems()) {
             PurchaseReceiveItem item = new PurchaseReceiveItem();
             item.setReceiveRecordId(record.getId());
+            item.setPurchaseOrderItemId(itemDTO.getPurchaseOrderItemId());
             item.setMaterialTypeId(itemDTO.getMaterialTypeId());
             item.setMaterialName(itemDTO.getMaterialName());
             item.setReceivedQuantity(itemDTO.getReceivedQuantity());
             String quantityUnit = canonicalUnit(factoryId, itemDTO.getUnit(), "收货数量单位");
             item.setUnit(quantityUnit);
             // BUG-RCV: 行价为空 → 继承 PO 行价 (合同价); 无 PO / PO 无此物料价 → 保持 null (诚实, 不伪造 0).
-            PurchasePriceQuote inheritedQuote = poLinePrices.get(itemDTO.getMaterialTypeId());
+            PurchasePriceQuote inheritedQuote = poLinePrices.get(String.valueOf(itemDTO.getPurchaseOrderItemId()));
             BigDecimal sourcePrice = itemDTO.getUnitPrice() != null
                     ? itemDTO.getUnitPrice()
                     : inheritedQuote != null ? inheritedQuote.unitPrice() : null;
@@ -1594,10 +1752,18 @@ public class PurchaseServiceImpl implements PurchaseService {
     @Override
     @Transactional
     public PurchaseReceiveRecord confirmReceive(String factoryId, String receiveId, Long userId) {
-        PurchaseReceiveRecord record = getReceiveRecordById(factoryId, receiveId);
+        PurchaseReceiveRecord record = receiveRecordRepository.findByIdAndFactoryIdForUpdate(receiveId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("入库单不存在或不属于当前组织"));
         if (record.getStatus() != PurchaseReceiveStatus.DRAFT && record.getStatus() != PurchaseReceiveStatus.PENDING_QC) {
             throw new BusinessException(409, "只有草稿或待质检状态的入库单可以确认")
                     .withHint("请刷新入库单列表查看最新状态");
+        }
+
+        if (attachmentRepository != null && attachmentRepository.countByFactoryIdAndEntityTypeAndEntityId(
+                factoryId, com.cretas.aims.entity.Attachment.EntityType.PURCHASE_RECEIPT, receiveId) <= 0) {
+            throw new BusinessException(409, "确认收货前必须上传供应商供货单或收货凭证")
+                    .withCode("PURCHASE_RECEIPT_ATTACHMENT_REQUIRED")
+                    .withHint("请在仓储收货任务中拍照或上传 PDF、图片等凭证后再确认");
         }
 
         // 🔒 doomed-tx 修复 (六扇门 2026-06-15, #774 族复发): 超收上限 fail-fast.
@@ -1609,6 +1775,8 @@ public class PurchaseServiceImpl implements PurchaseService {
         // (createReceiveRecord 已有早返校验, 但 DRAFT → PENDING_QC 期间并发入库 commit 可使
         //  原合法草稿在 confirm 时变非法; confirm 时再校验一次保证 fail-fast 不依赖创建期。)
         if (record.getPurchaseOrderId() != null) {
+            purchaseOrderRepository.findByIdAndFactoryIdForUpdate(record.getPurchaseOrderId(), factoryId)
+                    .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在或不属于当前组织"));
             validateOverReceiveCapForConfirm(record);
         }
 
@@ -1708,14 +1876,6 @@ public class PurchaseServiceImpl implements PurchaseService {
         if (purchaseExceptionService != null && record.getPurchaseOrderId() != null) {
             List<PurchaseOrderItem> poItems =
                     purchaseOrderItemRepository.findByPurchaseOrderId(record.getPurchaseOrderId());
-            // 按 materialTypeId 建索引，快速查 PO 计划数量
-            Map<String, PurchaseOrderItem> poItemMap = new HashMap<>();
-            for (PurchaseOrderItem pi : poItems) {
-                if (pi.getMaterialTypeId() != null) {
-                    poItemMap.put(pi.getMaterialTypeId(), pi);
-                }
-            }
-
             // D-6 责任绑定：取 PO 创建人作为异常单责任人
             Long ownerUserId = null;
             String ownerName = null;
@@ -1738,8 +1898,8 @@ public class PurchaseServiceImpl implements PurchaseService {
             final String finalOwnerName = ownerName;
             for (PurchaseReceiveItem item : record.getItems()) {
                 try {
-                    PurchaseOrderItem poItem =
-                            item.getMaterialTypeId() != null ? poItemMap.get(item.getMaterialTypeId()) : null;
+                    PurchaseOrderItem poItem = resolvePurchaseOrderItem(
+                            poItems, item.getPurchaseOrderItemId(), item.getMaterialTypeId());
                     BigDecimal poQty = poItem != null ? poItem.getQuantity() : null;
                     purchaseExceptionService.generateExceptionsForReceive(
                             factoryId,
@@ -1794,16 +1954,9 @@ public class PurchaseServiceImpl implements PurchaseService {
 
         List<PurchaseOrderItem> poItems =
                 purchaseOrderItemRepository.findByPurchaseOrderId(record.getPurchaseOrderId());
-        Map<String, PurchaseOrderItem> poItemMap = new HashMap<>();
-        for (PurchaseOrderItem pi : poItems) {
-            if (pi.getMaterialTypeId() != null) {
-                poItemMap.put(pi.getMaterialTypeId(), pi);
-            }
-        }
-
         for (PurchaseReceiveItem item : record.getItems()) {
-            PurchaseOrderItem poItem =
-                    item.getMaterialTypeId() != null ? poItemMap.get(item.getMaterialTypeId()) : null;
+            PurchaseOrderItem poItem = resolvePurchaseOrderItem(
+                    poItems, item.getPurchaseOrderItemId(), item.getMaterialTypeId());
             if (poItem == null || poItem.getQuantity() == null) {
                 continue; // 未关联 PO 行，跳过差异检查
             }
@@ -1858,8 +2011,10 @@ public class PurchaseServiceImpl implements PurchaseService {
     }
 
     @Override
-    public List<PurchaseReceiveRecord> getReceiveRecordsByOrder(String purchaseOrderId) {
-        return receiveRecordRepository.findByPurchaseOrderId(purchaseOrderId);
+    public List<PurchaseReceiveRecord> getReceiveRecordsByOrder(String factoryId, String purchaseOrderId) {
+        getPurchaseOrderById(factoryId, purchaseOrderId);
+        return receiveRecordRepository
+                .findByFactoryIdAndPurchaseOrderIdOrderByCreatedAtAsc(factoryId, purchaseOrderId);
     }
 
     @Override
@@ -2639,15 +2794,13 @@ public class PurchaseServiceImpl implements PurchaseService {
 
         List<PurchaseOrderItem> orderItems = purchaseOrderItemRepository.findByPurchaseOrderId(order.getId());
         for (CreateReceiveRecordRequest.ReceiveItemDTO receiveItem : items) {
-            for (PurchaseOrderItem orderItem : orderItems) {
-                if (orderItem.getMaterialTypeId().equals(receiveItem.getMaterialTypeId())) {
-                    checkOverReceiveCap(
-                            receiveItem.getMaterialName(),
-                            orderItem.getReceivedQuantity(),
-                            receiveItem.getReceivedQuantity(),
-                            orderItem.getQuantity());
-                }
-            }
+            PurchaseOrderItem orderItem = resolvePurchaseOrderItem(
+                    orderItems, receiveItem.getPurchaseOrderItemId(), receiveItem.getMaterialTypeId());
+            checkOverReceiveCap(
+                    receiveItem.getMaterialName(),
+                    orderItem.getReceivedQuantity(),
+                    receiveItem.getReceivedQuantity(),
+                    orderItem.getQuantity());
         }
     }
 
@@ -2667,16 +2820,49 @@ public class PurchaseServiceImpl implements PurchaseService {
         List<PurchaseOrderItem> orderItems =
                 purchaseOrderItemRepository.findByPurchaseOrderId(record.getPurchaseOrderId());
         for (PurchaseReceiveItem receiveItem : record.getItems()) {
-            for (PurchaseOrderItem orderItem : orderItems) {
-                if (orderItem.getMaterialTypeId().equals(receiveItem.getMaterialTypeId())) {
-                    checkOverReceiveCap(
-                            receiveItem.getMaterialName(),
-                            orderItem.getReceivedQuantity(),
-                            receiveItem.getReceivedQuantity(),
-                            orderItem.getQuantity());
-                }
-            }
+            PurchaseOrderItem orderItem = resolvePurchaseOrderItem(
+                    orderItems, receiveItem.getPurchaseOrderItemId(), receiveItem.getMaterialTypeId());
+            checkOverReceiveCap(
+                    receiveItem.getMaterialName(),
+                    orderItem.getReceivedQuantity(),
+                    receiveItem.getReceivedQuantity(),
+                    orderItem.getQuantity());
         }
+    }
+
+    /**
+     * Resolve a receipt line to one exact PO line. Legacy callers without a line
+     * id remain compatible only when the material occurs exactly once; ambiguous
+     * same-material orders fail closed instead of consuming both lines.
+     */
+    private PurchaseOrderItem resolvePurchaseOrderItem(List<PurchaseOrderItem> orderItems,
+            Long purchaseOrderItemId, String materialTypeId) {
+        if (purchaseOrderItemId != null) {
+            PurchaseOrderItem match = orderItems.stream()
+                    .filter(item -> purchaseOrderItemId.equals(item.getId()))
+                    .findFirst()
+                    .orElseThrow(() -> new BusinessException(400, "收货行不属于当前采购订单")
+                            .withCode("PURCHASE_RECEIPT_ORDER_ITEM_MISMATCH")
+                            .withHintTarget("purchaseOrderItemId"));
+            if (!Objects.equals(match.getMaterialTypeId(), materialTypeId)) {
+                throw new BusinessException(400, "收货行物料与采购订单行不一致")
+                        .withCode("PURCHASE_RECEIPT_MATERIAL_MISMATCH")
+                        .withHintTarget("materialTypeId");
+            }
+            return match;
+        }
+        List<PurchaseOrderItem> matches = orderItems.stream()
+                .filter(item -> Objects.equals(item.getMaterialTypeId(), materialTypeId))
+                .toList();
+        if (matches.size() == 1) return matches.get(0);
+        if (matches.isEmpty()) {
+            throw new BusinessException(400, "收货物料不属于当前采购订单")
+                    .withCode("PURCHASE_RECEIPT_MATERIAL_MISMATCH")
+                    .withHintTarget("materialTypeId");
+        }
+        throw new BusinessException(400, "采购订单存在多条相同物料，收货时必须指定采购订单行")
+                .withCode("PURCHASE_RECEIPT_ORDER_ITEM_REQUIRED")
+                .withHintTarget("purchaseOrderItemId");
     }
 
     /**
@@ -2719,8 +2905,8 @@ public class PurchaseServiceImpl implements PurchaseService {
 
         // 累加本次入库数量到订单行项目
         for (PurchaseReceiveItem receiveItem : record.getItems()) {
-            for (PurchaseOrderItem orderItem : orderItems) {
-                if (orderItem.getMaterialTypeId().equals(receiveItem.getMaterialTypeId())) {
+            PurchaseOrderItem orderItem = resolvePurchaseOrderItem(
+                    orderItems, receiveItem.getPurchaseOrderItemId(), receiveItem.getMaterialTypeId());
                     // May 9 fix (audio P1-7): 抄收上限校验 (二次防御).
                     // 旧逻辑无上限 → 分批入库时累计可任意超出下单量.
                     // 客户原话: "正常抄收应该是30%以内, 如果有特殊情况, 那采购另外再下个单子".
@@ -2736,8 +2922,6 @@ public class PurchaseServiceImpl implements PurchaseService {
 
                     orderItem.setReceivedQuantity(
                             orderItem.getReceivedQuantity().add(receiveItem.getReceivedQuantity()));
-                }
-            }
         }
         purchaseOrderItemRepository.saveAll(orderItems);
 

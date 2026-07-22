@@ -28,6 +28,7 @@ export type PrintDocType =
   | 'quotation'
   | 'production-task'
   | 'material-requisition'
+  | 'purchase-receipt'
   | 'production-work-order'         // SP12: 生产工单 (PrintController)
   | 'consolidated-material-requisition' // SP12: 汇总领料单 (PrintController)
   | 'batching-sheet';               // 六扇门: 配料单 (按锅配料, PrintController)
@@ -48,6 +49,7 @@ const DEFAULT_FILENAMES: Record<PrintDocType, string> = {
   quotation: '报价单',
   'production-task': '生产任务单',
   'material-requisition': '领料单',
+  'purchase-receipt': '收货单',
   'production-work-order': '生产工单',
   'consolidated-material-requisition': '汇总领料单',
   'batching-sheet': '配料单',
@@ -113,6 +115,8 @@ export const printApi = {
     downloadPdf(factoryId, 'production-task', id, options),
   printMaterialRequisition: (factoryId: string, id: string, options?: PrintOptions) =>
     downloadPdf(factoryId, 'material-requisition', id, options),
+  printPurchaseReceipt: (factoryId: string, id: string, options?: PrintOptions) =>
+    downloadPdf(factoryId, 'purchase-receipt', id, options),
 };
 
 /**

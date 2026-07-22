@@ -28,6 +28,7 @@ import org.hibernate.annotations.Where;
 @Table(name = "purchase_receive_items",
         indexes = {
                 @Index(name = "idx_pri_record", columnList = "receive_record_id"),
+                @Index(name = "idx_pri_order_item", columnList = "purchase_order_item_id"),
                 @Index(name = "idx_pri_material", columnList = "material_type_id"),
                 @Index(name = "idx_pri_batch", columnList = "material_batch_id")
         }
@@ -41,6 +42,10 @@ public class PurchaseReceiveItem extends BaseEntity {
 
     @Column(name = "receive_record_id", nullable = false, length = 191)
     private String receiveRecordId;
+
+    /** Stable PO line identity. Historical rows can be null. */
+    @Column(name = "purchase_order_item_id")
+    private Long purchaseOrderItemId;
 
     @Column(name = "material_type_id", nullable = false, length = 191)
     private String materialTypeId;

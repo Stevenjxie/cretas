@@ -53,6 +53,9 @@ public class CreateReceiveRecordRequest {
     @AllArgsConstructor
     public static class ReceiveItemDTO {
 
+        /** Required for PO-backed receipts; nullable only for legacy/non-PO callers. */
+        private Long purchaseOrderItemId;
+
         @NotBlank(message = "原料类型ID不能为空")
         @Size(max = 191, message = "原料类型ID长度不能超过191个字符")
         private String materialTypeId;

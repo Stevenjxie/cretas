@@ -97,7 +97,9 @@ class PurchaseServiceImplReceivePriceInheritTest {
         po.setId(PO_ID);
         po.setFactoryId(FACTORY);
         po.setStatus(PurchaseOrderStatus.APPROVED);
-        lenient().when(purchaseOrderRepository.findById(PO_ID)).thenReturn(Optional.of(po));
+        lenient().when(purchaseOrderRepository.findByIdAndFactoryIdForUpdate(PO_ID, FACTORY)).thenReturn(Optional.of(po));
+        lenient().when(receiveRecordRepository.findByFactoryIdAndPurchaseOrderIdOrderByCreatedAtAsc(FACTORY, PO_ID))
+                .thenReturn(List.of());
 
         // PO 行: A=32.00 (合同价), B=无价. validateOverReceiveCap + 价继承都读这个 repository.
         lenient().when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID))

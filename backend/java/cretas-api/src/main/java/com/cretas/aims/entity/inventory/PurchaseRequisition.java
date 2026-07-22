@@ -49,7 +49,8 @@ import java.util.UUID;
         indexes = {
                 @Index(name = "idx_pr_factory", columnList = "factory_id"),
                 @Index(name = "idx_pr_status", columnList = "factory_id, status"),
-                @Index(name = "idx_pr_requester", columnList = "factory_id, requester_id")
+                @Index(name = "idx_pr_requester", columnList = "factory_id, requester_id"),
+                @Index(name = "idx_pr_source", columnList = "factory_id, source_type, source_id")
         }
 )
 @Where(clause = "deleted_at IS NULL")
@@ -125,6 +126,20 @@ public class PurchaseRequisition extends BaseEntity {
 
     @Column(name = "remark", columnDefinition = "TEXT")
     private String remark;
+
+    /**
+     * Structured origin for demand-driven requisitions. Historical/manual
+     * requisitions keep these fields null. Business relations still use the
+     * immutable source id; sourceNo is display-only.
+     */
+    @Column(name = "source_type", length = 64)
+    private String sourceType;
+
+    @Column(name = "source_id", length = 191)
+    private String sourceId;
+
+    @Column(name = "source_no", length = 100)
+    private String sourceNo;
 
     /** Optimistic lock version */
     @Version

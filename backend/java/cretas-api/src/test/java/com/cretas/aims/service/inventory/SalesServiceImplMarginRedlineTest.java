@@ -269,6 +269,8 @@ class SalesServiceImplMarginRedlineTest {
     private CreateSalesOrderRequest buildRequest(String unitPrice) {
         CreateSalesOrderRequest req = new CreateSalesOrderRequest();
         req.setCustomerId(CUSTOMER_ID);
+        req.setProcessingMode(com.cretas.aims.entity.enums.SalesProcessingMode.STANDARD_SALE);
+        req.setMaterialSupplyMode(com.cretas.aims.entity.enums.MaterialSupplyMode.FACTORY_SUPPLIED);
 
         CreateSalesOrderRequest.SalesOrderItemDTO item =
                 new CreateSalesOrderRequest.SalesOrderItemDTO();

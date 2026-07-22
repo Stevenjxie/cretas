@@ -345,6 +345,8 @@ class SalesServiceImplEmptyPriceE2Test {
         com.cretas.aims.dto.inventory.CreateSalesOrderRequest req =
                 new com.cretas.aims.dto.inventory.CreateSalesOrderRequest();
         req.setCustomerId(CUSTOMER_ID);
+        req.setProcessingMode(com.cretas.aims.entity.enums.SalesProcessingMode.STANDARD_SALE);
+        req.setMaterialSupplyMode(com.cretas.aims.entity.enums.MaterialSupplyMode.FACTORY_SUPPLIED);
 
         com.cretas.aims.dto.inventory.CreateSalesOrderRequest.SalesOrderItemDTO item =
                 new com.cretas.aims.dto.inventory.CreateSalesOrderRequest.SalesOrderItemDTO();

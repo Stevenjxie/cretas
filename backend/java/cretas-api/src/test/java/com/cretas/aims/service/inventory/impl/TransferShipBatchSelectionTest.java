@@ -2,6 +2,7 @@ package com.cretas.aims.service.inventory.impl;
 
 import com.cretas.aims.dto.inventory.CreateTransferRequest;
 import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.TransferItemType;
 import com.cretas.aims.entity.enums.TransferStatus;
@@ -329,6 +330,10 @@ class TransferShipBatchSelectionTest {
         source.setWarehouseId("WH-PRODUCTION");
         source.setUnit("box");
         source.setUnitCost(new BigDecimal("11.2000"));
+        source.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        source.setOwnerCustomerId("CUSTOMER-001");
+        source.setSourceSalesOrderId("SO-001");
+        source.setSourceSalesOrderItemId("101");
 
         CreateTransferRequest.TransferItemDTO line = new CreateTransferRequest.TransferItemDTO();
         line.setItemType("FINISHED_GOODS");
@@ -392,6 +397,10 @@ class TransferShipBatchSelectionTest {
         assertThat(target.getWarehouseId()).isEqualTo("WH-FINISHED");
         assertThat(target.getProducedQuantity()).isEqualByComparingTo("5");
         assertThat(target.getUnit()).isEqualTo("box");
+        assertThat(target.getOwnership()).isEqualTo(InventoryOwnership.CUSTOMER_OWNED);
+        assertThat(target.getOwnerCustomerId()).isEqualTo("CUSTOMER-001");
+        assertThat(target.getSourceSalesOrderId()).isEqualTo("SO-001");
+        assertThat(target.getSourceSalesOrderItemId()).isEqualTo("101");
         assertThat(source.getProducedQuantity().add(target.getProducedQuantity()))
                 .isEqualByComparingTo("5");
 
@@ -486,6 +495,40 @@ class TransferShipBatchSelectionTest {
         // 工厂 Σproduced 守恒: 源 90 + 目标 10 = 100 (未因内部搬库 +10 膨胀)
         assertThat(src.getProducedQuantity().add(target.getProducedQuantity()))
                 .isEqualByComparingTo("100");
+    }
+
+    @Test
+    @DisplayName("原料调拨目标批次完整继承库存归属与销售来源")
+    void rawMaterialTransferTarget_preservesOwnershipAndSalesLineage() {
+        InternalTransferItem item = rawMaterialItem(401L, "MT-001", new BigDecimal("3"), "MB-SOURCE");
+        item.setReceivedQuantity(new BigDecimal("3"));
+        InternalTransfer transfer = buildTransfer("F001", "WH-SOURCE", TransferStatus.RECEIVED, item);
+        transfer.setTargetWarehouseId("WH-TARGET");
+
+        MaterialBatch source = materialBatch("MB-SOURCE", "F001", "WH-SOURCE",
+                "MT-001", new BigDecimal("10"), BigDecimal.ZERO, LocalDate.now().plusDays(30));
+        source.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        source.setOwnerCustomerId("CUSTOMER-RAW");
+        source.setSourceSalesOrderId("SO-RAW");
+        source.setSourceSalesOrderItemId("201");
+
+        when(transferRepository.findByIdAndEitherFactoryId("T_B1_001", "F002"))
+                .thenReturn(Optional.of(transfer));
+        when(materialBatchRepository.findById("MB-SOURCE")).thenReturn(Optional.of(source));
+        when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(rawMaterialTypeRepository.findById("MT-001")).thenReturn(Optional.empty());
+        when(transferRepository.save(any(InternalTransfer.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.confirmTransfer("F002", "T_B1_001", 99L);
+
+        org.mockito.ArgumentCaptor<MaterialBatch> captor =
+                org.mockito.ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(materialBatchRepository).save(captor.capture());
+        MaterialBatch target = captor.getValue();
+        assertThat(target.getOwnership()).isEqualTo(InventoryOwnership.CUSTOMER_OWNED);
+        assertThat(target.getOwnerCustomerId()).isEqualTo("CUSTOMER-RAW");
+        assertThat(target.getSourceSalesOrderId()).isEqualTo("SO-RAW");
+        assertThat(target.getSourceSalesOrderItemId()).isEqualTo("201");
     }
 
     @Test

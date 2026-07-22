@@ -1,8 +1,11 @@
 package com.cretas.aims.dto.production;
 
 import com.cretas.aims.entity.enums.MixedBatchType;
+import com.cretas.aims.entity.enums.InventoryOwnership;
+import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionPlanType;
+import com.cretas.aims.entity.enums.SalesProcessingMode;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
@@ -96,7 +99,7 @@ public class CreateProductionPlanRequest {
     private String notes;
 
     @Schema(description = "客户ID")
-    private Integer customerId;
+    private String customerId;
 
     @Schema(description = "原材料批次ID列表")
     private String[] materialBatchIds;
@@ -147,6 +150,15 @@ public class CreateProductionPlanRequest {
     @Schema(description = "关联销售订单行ID (P0-12 字段粒度修正; CUSTOMER_ORDER 必填)")
     @Size(max = 50, message = "关联销售订单行ID不能超过50个字符")
     private String sourceOrderItemId;
+
+    @Schema(description = "销售处理模式快照（服务端从销售订单覆盖）", accessMode = Schema.AccessMode.READ_ONLY)
+    private SalesProcessingMode processingMode;
+
+    @Schema(description = "供料模式快照（服务端从销售订单覆盖）", accessMode = Schema.AccessMode.READ_ONLY)
+    private MaterialSupplyMode materialSupplyMode;
+
+    @Schema(description = "产出库存归属快照（服务端按销售处理模式派生）", accessMode = Schema.AccessMode.READ_ONLY)
+    private InventoryOwnership outputOwnership;
 
     @Schema(description = "客户名称")
     @Size(max = 100, message = "客户名称不能超过100个字符")

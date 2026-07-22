@@ -6,6 +6,8 @@ import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
+import com.cretas.aims.entity.enums.InventoryOwnership;
+import com.cretas.aims.entity.enums.SalesProcessingMode;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
@@ -136,6 +138,9 @@ public class InventoryMatchingService {
                         .map(com.cretas.aims.entity.ProductType::getGramsPerUnit).orElse(null);
                 available = BigDecimal.ZERO;
                 for (FinishedGoodsBatch batch : candidateBatches) {
+                    if (!isBatchOwnershipAllowed(so, item, batch)) {
+                        continue;
+                    }
                     BigDecimal converted = convertBatchToUnit(
                             batch.getAvailableQuantity(), batch, matchingUnit, gramsPerUnit);
                     if (converted != null) available = available.add(converted);
@@ -229,11 +234,20 @@ public class InventoryMatchingService {
                 ? null
                 : productTypeRepository.findById(productTypeId)
                         .map(com.cretas.aims.entity.ProductType::getGramsPerUnit).orElse(null);
+        SalesOrder sourceOrder = salesOrderId == null
+                ? null
+                : salesOrderRepository.findById(salesOrderId)
+                        .filter(order -> factoryId.equals(order.getFactoryId()))
+                        .orElseThrow(() -> new BusinessException(404, "销售订单不存在或不属于当前工厂")
+                                .withHintTarget("salesOrderId"));
 
         BigDecimal remaining = quantity;
         for (FinishedGoodsBatch batch : batches) {
             if (remaining.compareTo(BigDecimal.ZERO) <= 0) {
                 break;
+            }
+            if (!isBatchOwnershipAllowed(sourceOrder, sourceOrderItem, batch)) {
+                continue;
             }
 
             BigDecimal availableNative = batch.getAvailableQuantity();
@@ -272,6 +286,30 @@ public class InventoryMatchingService {
         if (remaining.compareTo(BigDecimal.ZERO) > 0) {
             log.warn("库存预留不完全: SO={}, productType={}, 仍需={}", salesOrderId, productTypeId, remaining);
         }
+    }
+
+    private boolean isBatchOwnershipAllowed(
+            SalesOrder order, SalesOrderItem item, FinishedGoodsBatch batch) {
+        if (batch == null) {
+            return false;
+        }
+        boolean customerOwned = batch.getOwnership() == InventoryOwnership.CUSTOMER_OWNED;
+        boolean tollProcessing = order != null
+                && order.getProcessingMode() == SalesProcessingMode.TOLL_PROCESSING;
+        if (!tollProcessing) {
+            return !customerOwned;
+        }
+        if (!customerOwned
+                || order.getCustomerId() == null
+                || !order.getFactoryId().equals(batch.getFactoryId())
+                || !order.getCustomerId().equals(batch.getOwnerCustomerId())
+                || !order.getId().equals(batch.getSourceSalesOrderId())) {
+            return false;
+        }
+        return item == null
+                || item.getId() == null
+                || batch.getSourceSalesOrderItemId() == null
+                || String.valueOf(item.getId()).equals(batch.getSourceSalesOrderItemId());
     }
 
     private boolean isPackagingLine(SalesOrderItem item) {

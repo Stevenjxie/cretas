@@ -1,9 +1,12 @@
 package com.cretas.aims.dto.production;
 
 import com.cretas.aims.entity.enums.MixedBatchType;
+import com.cretas.aims.entity.enums.InventoryOwnership;
+import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.enums.ProductionPlanType;
+import com.cretas.aims.entity.enums.SalesProcessingMode;
 import com.cretas.aims.security.PriceSensitive;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;
@@ -212,6 +215,18 @@ public class ProductionPlanDTO {
 
     @Schema(description = "关联销售订单行ID (P0-12)")
     private String sourceOrderItemId;
+
+    @Schema(description = "客户ID快照")
+    private String customerId;
+
+    @Schema(description = "销售处理模式快照")
+    private SalesProcessingMode processingMode;
+
+    @Schema(description = "供料模式快照")
+    private MaterialSupplyMode materialSupplyMode;
+
+    @Schema(description = "产出库存法律归属快照")
+    private InventoryOwnership outputOwnership;
 
     @Schema(description = "客户名称")
     private String sourceCustomerName;

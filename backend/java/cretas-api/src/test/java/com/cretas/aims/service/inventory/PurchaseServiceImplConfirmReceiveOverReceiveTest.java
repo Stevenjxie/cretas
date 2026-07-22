@@ -2,11 +2,14 @@ package com.cretas.aims.service.inventory;
 
 import com.cretas.aims.entity.enums.PurchaseReceiveStatus;
 import com.cretas.aims.entity.inventory.PurchaseOrderItem;
+import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.PurchaseReceiveItem;
 import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
+import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
+import com.cretas.aims.repository.AttachmentRepository;
 import com.cretas.aims.service.MaterialBatchService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -48,9 +51,11 @@ import static org.mockito.Mockito.*;
 class PurchaseServiceImplConfirmReceiveOverReceiveTest {
 
     @Mock private PurchaseReceiveRecordRepository receiveRecordRepository;
+    @Mock private PurchaseOrderRepository purchaseOrderRepository;
     @Mock private PurchaseOrderItemRepository purchaseOrderItemRepository;
     @Mock private MaterialBatchService materialBatchService;
     @Mock private com.cretas.aims.repository.MaterialBatchRepository materialBatchRepository;
+    @Mock private AttachmentRepository attachmentRepository;
 
     private com.cretas.aims.service.inventory.impl.PurchaseServiceImpl service;
 
@@ -66,7 +71,7 @@ class PurchaseServiceImplConfirmReceiveOverReceiveTest {
         // 和 purchaseOrderItemRepository (cap 查询). materialBatchService / materialBatchRepository
         // 作为 mock 传入, 用于 verify 它们在超收时从未被调用 (证明 fail-fast).
         service = new com.cretas.aims.service.inventory.impl.PurchaseServiceImpl(
-                /* purchaseOrderRepository  */ null,
+                purchaseOrderRepository,
                 purchaseOrderItemRepository,
                 receiveRecordRepository,
                 /* supplierRepository       */ null,
@@ -77,6 +82,28 @@ class PurchaseServiceImplConfirmReceiveOverReceiveTest {
                 /* applicationEventPublisher*/ null,
                 materialBatchService);
         ReflectionTestUtils.setField(service, "overReceiveRate", new BigDecimal("0.30"));
+        ReflectionTestUtils.setField(service, "attachmentRepository", attachmentRepository);
+        lenient().when(attachmentRepository.countByFactoryIdAndEntityTypeAndEntityId(
+                FACTORY_ID, com.cretas.aims.entity.Attachment.EntityType.PURCHASE_RECEIPT, RECEIVE_ID))
+                .thenReturn(1L);
+    }
+
+    @Test
+    @DisplayName("未上传供应商供货单或收货凭证时 fail-closed，且库存零写")
+    void confirmReceive_withoutAttachment_rejectedBeforeInventoryWrite() {
+        mockDraftReceive(new BigDecimal("20"), BigDecimal.ZERO, new BigDecimal("20"));
+        when(attachmentRepository.countByFactoryIdAndEntityTypeAndEntityId(
+                FACTORY_ID, com.cretas.aims.entity.Attachment.EntityType.PURCHASE_RECEIPT, RECEIVE_ID))
+                .thenReturn(0L);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.confirmReceive(FACTORY_ID, RECEIVE_ID, 1L));
+
+        assertEquals(409, ex.getCode());
+        assertEquals("PURCHASE_RECEIPT_ATTACHMENT_REQUIRED", ex.getErrorCode());
+        verifyNoInteractions(materialBatchService);
+        verifyNoInteractions(materialBatchRepository);
+        verify(receiveRecordRepository, never()).save(any());
     }
 
     /**
@@ -96,7 +123,14 @@ class PurchaseServiceImplConfirmReceiveOverReceiveTest {
         item.setReceivedQuantity(thisReceive);
         item.setUnit("kg");
         record.getItems().add(item);
-        when(receiveRecordRepository.findById(RECEIVE_ID)).thenReturn(Optional.of(record));
+        when(receiveRecordRepository.findByIdAndFactoryIdForUpdate(RECEIVE_ID, FACTORY_ID))
+                .thenReturn(Optional.of(record));
+
+        PurchaseOrder order = new PurchaseOrder();
+        order.setId(PO_ID);
+        order.setFactoryId(FACTORY_ID);
+        lenient().when(purchaseOrderRepository.findByIdAndFactoryIdForUpdate(PO_ID, FACTORY_ID))
+                .thenReturn(Optional.of(order));
 
         PurchaseOrderItem poItem = new PurchaseOrderItem();
         poItem.setPurchaseOrderId(PO_ID);
@@ -104,7 +138,7 @@ class PurchaseServiceImplConfirmReceiveOverReceiveTest {
         poItem.setMaterialName(MAT_NAME);
         poItem.setQuantity(orderedQty);
         poItem.setReceivedQuantity(alreadyReceived);
-        when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of(poItem));
+        lenient().when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of(poItem));
     }
 
     @Test
@@ -186,7 +220,8 @@ class PurchaseServiceImplConfirmReceiveOverReceiveTest {
         record.setFactoryId(FACTORY_ID);
         record.setPurchaseOrderId(PO_ID);
         record.setStatus(PurchaseReceiveStatus.CONFIRMED);
-        when(receiveRecordRepository.findById(RECEIVE_ID)).thenReturn(Optional.of(record));
+        when(receiveRecordRepository.findByIdAndFactoryIdForUpdate(RECEIVE_ID, FACTORY_ID))
+                .thenReturn(Optional.of(record));
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.confirmReceive(FACTORY_ID, RECEIVE_ID, 1L));

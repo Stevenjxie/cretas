@@ -4,6 +4,8 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.entity.enums.InventoryOwnership;
+import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition.Status;
@@ -90,6 +92,12 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
     @BeforeEach
     void setup() {
         batchStore.clear();
+        ProductionPlan defaultPlan = new ProductionPlan();
+        defaultPlan.setId(PLAN_ID);
+        defaultPlan.setFactoryId(FACTORY_ID);
+        defaultPlan.setMaterialSupplyMode(MaterialSupplyMode.FACTORY_SUPPLIED);
+        lenient().when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
+                .thenReturn(Optional.of(defaultPlan));
         InternalTransfer stubTransfer = new InternalTransfer();
         stubTransfer.setId("tr-stub-1");
         lenient().when(transferService.createTransfer(any(), any(), any())).thenReturn(stubTransfer);
@@ -274,6 +282,63 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
                 () -> service.transferToFactory(FACTORY_ID, MR_ID, OPERATOR));
         assertTrue(ex.getMessage().contains("不足"));
         verify(repository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("factory-supplied plan rejects manually selected customer-owned stock")
+    void transferToFactory_factoryPlanRejectsCustomerOwnedBatch() {
+        MaterialBatch customerBatch = batch("batch-1", "MAT-001", WH_LOGISTICS, "10.00", "0.00", "3.50");
+        customerBatch.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        customerBatch.setOwnerCustomerId("customer-1");
+        customerBatch.setSourceSalesOrderId("so-1");
+        batchStore.put("batch-1", customerBatch);
+        batchStore.put("batch-2", batch("batch-2", "MAT-002", WH_LOGISTICS, "5.00", "0.00", "2.00"));
+        FactoryMaterialRequisition mr = buildMrInPicking();
+        when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.transferToFactory(FACTORY_ID, MR_ID, OPERATOR));
+
+        assertEquals("PRODUCTION_REQUISITION_BATCH_OWNERSHIP_MISMATCH", ex.getErrorCode());
+        assertEquals(new BigDecimal("0.00"), customerBatch.getUsedQuantity());
+    }
+
+    @Test
+    @DisplayName("customer-supplied plan uses only matching order stock and preserves lineage in workshop")
+    void transferToFactory_customerPlanPreservesOwnershipAndLineage() {
+        ProductionPlan customerPlan = new ProductionPlan();
+        customerPlan.setId(PLAN_ID);
+        customerPlan.setFactoryId(FACTORY_ID);
+        customerPlan.setMaterialSupplyMode(MaterialSupplyMode.CUSTOMER_SUPPLIED);
+        customerPlan.setCustomerId("customer-1");
+        customerPlan.setSourceOrderId("so-1");
+        customerPlan.setSourceOrderItemId("so-item-1");
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
+                .thenReturn(Optional.of(customerPlan));
+
+        MaterialBatch customerBatch = batch("batch-1", "MAT-001", WH_LOGISTICS, "10.00", "0.00", "3.50");
+        customerBatch.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        customerBatch.setOwnerCustomerId("customer-1");
+        customerBatch.setSourceSalesOrderId("so-1");
+        customerBatch.setSourceSalesOrderItemId("so-item-1");
+        batchStore.put("batch-1", customerBatch);
+        MaterialBatch customerBatch2 = batch("batch-2", "MAT-002", WH_LOGISTICS, "5.00", "0.00", "2.00");
+        customerBatch2.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        customerBatch2.setOwnerCustomerId("customer-1");
+        customerBatch2.setSourceSalesOrderId("so-1");
+        customerBatch2.setSourceSalesOrderItemId("so-item-1");
+        batchStore.put("batch-2", customerBatch2);
+        FactoryMaterialRequisition mr = buildMrInPicking();
+        when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.transferToFactory(FACTORY_ID, MR_ID, OPERATOR);
+
+        MaterialBatch workshop = findWorkshopBatch("MAT-001");
+        assertEquals(InventoryOwnership.CUSTOMER_OWNED, workshop.getOwnership());
+        assertEquals("customer-1", workshop.getOwnerCustomerId());
+        assertEquals("so-1", workshop.getSourceSalesOrderId());
+        assertEquals("so-item-1", workshop.getSourceSalesOrderItemId());
     }
 
     // ==================== close: return + workshop drawdown ====================

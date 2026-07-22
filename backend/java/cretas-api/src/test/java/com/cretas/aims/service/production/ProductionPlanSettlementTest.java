@@ -16,6 +16,7 @@ import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.exception.BusinessException;
@@ -765,6 +766,10 @@ class ProductionPlanSettlementTest {
     @DisplayName("仓库确认实收等于报产时生成成品库存且不挂中转账")
     void confirmWarehouseReceipt_exactMatch_postsFinishedGoodsOnly() {
         ProductionPlan plan = plan();
+        plan.setOutputOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        plan.setCustomerId("CUSTOMER-001");
+        plan.setSourceOrderId("SO-001");
+        plan.setSourceOrderItemId("101");
         ProductionSettlement settlement = settled();
         when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
         when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
@@ -787,6 +792,13 @@ class ProductionPlanSettlementTest {
         assertEquals("fg-1", response.getFinishedGoodsBatchId());
         assertEquals(null, response.getTransitLedgerId());
         assertEquals(new BigDecimal("90"), response.getWarehouseReceivedQuantity());
+        ArgumentCaptor<FinishedGoodsBatch> batchCaptor = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(finishedGoodsBatchRepository).save(batchCaptor.capture());
+        FinishedGoodsBatch savedBatch = batchCaptor.getValue();
+        assertEquals(InventoryOwnership.CUSTOMER_OWNED, savedBatch.getOwnership());
+        assertEquals("CUSTOMER-001", savedBatch.getOwnerCustomerId());
+        assertEquals("SO-001", savedBatch.getSourceSalesOrderId());
+        assertEquals("101", savedBatch.getSourceSalesOrderItemId());
         verify(productionTransitLedgerRepository, never()).save(any());
     }
 

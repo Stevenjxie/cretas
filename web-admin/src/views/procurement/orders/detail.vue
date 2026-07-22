@@ -191,7 +191,14 @@ async function handleAction(action: string) {
 }
 
 function goWarehouseReceive(): void {
-  router.push({ path: '/procurement/receives', query: { purchaseOrderId: orderId.value } });
+  router.push({
+    path: '/warehouse/materials',
+    query: {
+      view: 'receiving',
+      purchaseOrderId: orderId.value,
+      orderNo: String(order.value?.orderNumber || ''),
+    },
+  });
 }
 
 async function loadPriceComparison() {

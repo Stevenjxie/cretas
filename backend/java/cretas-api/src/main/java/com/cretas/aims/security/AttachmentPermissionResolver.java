@@ -69,6 +69,7 @@ public class AttachmentPermissionResolver {
         m.put(EntityType.SALES_ORDER, "sales");
         m.put(EntityType.PURCHASE_ORDER, "procurement");
         m.put(EntityType.PURCHASE_RECEIPT, "procurement");
+        m.put(EntityType.CUSTOMER_SUPPLIED_RECEIPT, "warehouse");
         m.put(EntityType.QUALITY_CHECK, "quality");
         m.put(EntityType.PRODUCTION_BATCH, "production");
         m.put(EntityType.PRODUCTION_REPORT, "production");
@@ -164,9 +165,24 @@ public class AttachmentPermissionResolver {
         if (module == null) {
             throw new BusinessException(403, "未知的附件实体类型 — 仅管理员可访问");
         }
-        String[] perms = write
-                ? new String[]{module + ":read_write"}
-                : new String[]{module + ":read", module + ":read_write"};
+        // 采购收货的写入口归仓储，采购仅保留来源单据的只读追溯。
+        // 附件必须与收货动作使用同一职责边界，否则 warehouse_worker 能收货却无法上传供货凭证。
+        String[] perms;
+        if (entityType == EntityType.PURCHASE_RECEIPT) {
+            perms = write
+                    ? new String[]{"warehouse:read_write", "inventory:write"}
+                    : new String[]{"warehouse:read", "warehouse:read_write",
+                            "procurement:read", "procurement:read_write"};
+        } else if (entityType == EntityType.CUSTOMER_SUPPLIED_RECEIPT) {
+            perms = write
+                    ? new String[]{"warehouse:read_write", "inventory:write"}
+                    : new String[]{"warehouse:read", "warehouse:read_write",
+                            "sales:read", "sales:read_write"};
+        } else {
+            perms = write
+                    ? new String[]{module + ":read_write"}
+                    : new String[]{module + ":read", module + ":read_write"};
+        }
         boolean ok;
         try {
             ok = permissionService.hasAnyPermission(user, perms);

@@ -92,6 +92,9 @@ import java.util.Optional;
 @Repository
 public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, String> {
 
+    Optional<MaterialBatch> findByFactoryIdAndSourceDocTypeAndSourceEventKey(
+            String factoryId, String sourceDocType, String sourceEventKey);
+
     /**
      * 根据批次号查找
      */
@@ -389,10 +392,30 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
            "FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
            "AND m.materialTypeId = :materialTypeId AND m.status = 'AVAILABLE' " +
            "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
            "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0")
     BigDecimal sumAvailableRawStockQuantityByMaterialType(
             @Param("factoryId") String factoryId,
             @Param("materialTypeId") String materialTypeId);
+
+    /**
+     * Customer-supplied stock is usable only by the production plan sourced
+     * from the same customer and sales order. It never contributes to the
+     * factory-owned availability used for procurement shortfall calculation.
+     */
+    @Query("SELECT COALESCE(SUM(m.receiptQuantity - m.usedQuantity - m.reservedQuantity), 0) " +
+           "FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
+           "AND m.materialTypeId = :materialTypeId AND m.status = 'AVAILABLE' " +
+           "AND m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED " +
+           "AND m.ownerCustomerId = :customerId " +
+           "AND m.sourceSalesOrderId = :salesOrderId " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0")
+    BigDecimal sumAvailableCustomerSuppliedRawStock(
+            @Param("factoryId") String factoryId,
+            @Param("materialTypeId") String materialTypeId,
+            @Param("customerId") String customerId,
+            @Param("salesOrderId") String salesOrderId);
 
     /**
      * T144: 读取指定原料类型的可用批次实际库存单位 (MaterialBatch.quantityUnit, e.g. "kg")。
@@ -422,12 +445,29 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
            "WHERE m.factoryId = :factoryId " +
            "AND m.materialTypeId = :materialTypeId AND m.status = 'AVAILABLE' " +
            "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
            "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
            "GROUP BY m.quantityUnit " +
            "ORDER BY COUNT(m) DESC")
     List<String> findRawStockUnitsByMaterialType(
             @Param("factoryId") String factoryId,
             @Param("materialTypeId") String materialTypeId);
+
+    @Query("SELECT m.quantityUnit FROM MaterialBatch m " +
+           "WHERE m.factoryId = :factoryId " +
+           "AND m.materialTypeId = :materialTypeId AND m.status = 'AVAILABLE' " +
+           "AND m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED " +
+           "AND m.ownerCustomerId = :customerId " +
+           "AND m.sourceSalesOrderId = :salesOrderId " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
+           "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
+           "GROUP BY m.quantityUnit " +
+           "ORDER BY COUNT(m) DESC")
+    List<String> findCustomerSuppliedRawStockUnits(
+            @Param("factoryId") String factoryId,
+            @Param("materialTypeId") String materialTypeId,
+            @Param("customerId") String customerId,
+            @Param("salesOrderId") String salesOrderId);
 
     /**
      * 汇总指定原料类型在指定 warehouse 的可用库存总量。D1 双仓流转 (PR #309 A1=A, 2026-05-10 spec)。

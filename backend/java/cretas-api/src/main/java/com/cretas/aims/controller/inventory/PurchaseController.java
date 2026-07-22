@@ -8,6 +8,7 @@ import com.cretas.aims.dto.inventory.UpdatePurchaseOrderRequest;
 import com.cretas.aims.dto.inventory.MaterialPriceComparisonDTO;
 import com.cretas.aims.dto.inventory.PurchaseSuggestionResponse;
 import com.cretas.aims.dto.inventory.PurchaseApprovalRecoveryResponse;
+import com.cretas.aims.dto.inventory.PurchaseReceivingTaskResponse;
 import com.cretas.aims.dto.inventory.RecoverPurchaseApprovalRequest;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
@@ -444,10 +445,22 @@ public class PurchaseController {
 
     // ==================== 入库管理 ====================
 
-    @RequireModule("purchase_order")
+    @RequireModule("warehouse")
+    @GetMapping("/receiving-tasks")
+    @Operation(summary = "仓储待收货任务（只读派生）")
+    @RequirePermission({"warehouse:read_write", "warehouse:read", "inventory:write"})
+    public ApiResponse<List<PurchaseReceivingTaskResponse>> getReceivingTasks(
+            @PathVariable @NotBlank String factoryId,
+            @RequestParam(required = false) String purchaseOrderId,
+            @RequestParam(required = false) String orderNumber) {
+        return ApiResponse.success("查询成功",
+                purchaseService.getPendingReceivingTasks(factoryId, purchaseOrderId, orderNumber));
+    }
+
+    @RequireModule("warehouse")
     @PostMapping("/receives")
     @Operation(summary = "创建入库单")
-    @RequirePermission({"procurement:read_write", "inventory:write"})
+    @RequirePermission({"warehouse:read_write", "inventory:write"})
     public ApiResponse<PurchaseReceiveRecord> createReceive(
             @PathVariable @NotBlank String factoryId,
             @RequestHeader("Authorization") String authorization,
@@ -469,9 +482,10 @@ public class PurchaseController {
      * <p>权限对齐入库单读取 (procurement read/write + inventory:write), 让实际收货的仓管/采购员
      * 都能拿到默认仓 —— 不像 {@code /factory/warehouse-defaults} 仅超管可读。read-only, 不改任何库存。
      */
+    @RequireModule("warehouse")
     @GetMapping("/receives/default-warehouse")
     @Operation(summary = "采购入库默认仓 (解析 PURCHASE_INBOUND_DEFAULT 配置)")
-    @RequirePermission({"procurement:read_write", "procurement:read", "inventory:write"})
+    @RequirePermission({"warehouse:read_write", "warehouse:read", "inventory:write"})
     public ApiResponse<com.cretas.aims.entity.factory.FactoryWarehouse> getDefaultReceiveWarehouse(
             @PathVariable @NotBlank String factoryId) {
         com.cretas.aims.entity.factory.FactoryWarehouse warehouse = null;
@@ -488,9 +502,10 @@ public class PurchaseController {
         return ApiResponse.success("查询成功", warehouse);
     }
 
+    @RequireModule("warehouse")
     @GetMapping("/receives")
     @Operation(summary = "入库单列表")
-    @RequirePermission({"procurement:read_write", "procurement:read"})
+    @RequirePermission({"warehouse:read_write", "warehouse:read"})
     public ApiResponse<PageResponse<PurchaseReceiveRecord>> listReceives(
             @PathVariable @NotBlank String factoryId,
             @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码必须大于0") int page,
@@ -499,9 +514,10 @@ public class PurchaseController {
         return ApiResponse.success("查询成功", result);
     }
 
+    @RequireModule("warehouse")
     @GetMapping("/receives/{receiveId}")
     @Operation(summary = "入库单详情")
-    @RequirePermission({"procurement:read_write", "procurement:read"})
+    @RequirePermission({"warehouse:read_write", "warehouse:read"})
     public ApiResponse<PurchaseReceiveRecord> getReceive(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String receiveId) {
@@ -509,10 +525,10 @@ public class PurchaseController {
         return ApiResponse.success("查询成功", record);
     }
 
-    @RequireModule("purchase_order")
+    @RequireModule("warehouse")
     @PostMapping("/receives/{receiveId}/confirm")
     @Operation(summary = "确认入库（生成物料批次）")
-    @RequirePermission({"procurement:read_write", "inventory:write"})
+    @RequirePermission({"warehouse:read_write", "inventory:write"})
     public ApiResponse<PurchaseReceiveRecord> confirmReceive(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String receiveId,
@@ -522,13 +538,14 @@ public class PurchaseController {
         return ApiResponse.success("入库确认成功，物料批次已创建", record);
     }
 
+    @RequireModule("warehouse")
     @GetMapping("/receives/by-order/{orderId}")
     @Operation(summary = "按采购订单查询入库记录")
-    @RequirePermission({"procurement:read_write", "procurement:read"})
+    @RequirePermission({"warehouse:read_write", "warehouse:read", "procurement:read"})
     public ApiResponse<List<PurchaseReceiveRecord>> getReceivesByOrder(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String orderId) {
-        List<PurchaseReceiveRecord> records = purchaseService.getReceiveRecordsByOrder(orderId);
+        List<PurchaseReceiveRecord> records = purchaseService.getReceiveRecordsByOrder(factoryId, orderId);
         return ApiResponse.success("查询成功", records);
     }
 

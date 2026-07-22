@@ -110,7 +110,7 @@ class PurchaseServiceImplOverReceiveTest {
         order.setId(PO_ID);
         order.setFactoryId(FACTORY_ID);
         order.setStatus(PurchaseOrderStatus.APPROVED);
-        when(purchaseOrderRepository.findById(PO_ID)).thenReturn(Optional.of(order));
+        when(purchaseOrderRepository.findByIdAndFactoryIdForUpdate(PO_ID, FACTORY_ID)).thenReturn(Optional.of(order));
 
         PurchaseOrderItem orderItem = new PurchaseOrderItem();
         orderItem.setPurchaseOrderId(PO_ID);
@@ -205,7 +205,7 @@ class PurchaseServiceImplOverReceiveTest {
         assertFalse(thrown instanceof BusinessException && ((BusinessException) thrown).getCode() == 409,
                 "no-order receive should bypass cap, but got 409: " + thrown.getMessage());
         // purchaseOrderRepository / purchaseOrderItemRepository should NOT be queried
-        verify(purchaseOrderRepository, never()).findById(anyString());
+        verify(purchaseOrderRepository, never()).findByIdAndFactoryIdForUpdate(anyString(), anyString());
         verify(purchaseOrderItemRepository, never()).findByPurchaseOrderId(anyString());
     }
 
@@ -221,7 +221,7 @@ class PurchaseServiceImplOverReceiveTest {
         order.setId(PO_ID);
         order.setFactoryId(FACTORY_ID);
         order.setStatus(PurchaseOrderStatus.DRAFT);  // not in PO_OPS_RECEIVABLE
-        when(purchaseOrderRepository.findById(PO_ID)).thenReturn(Optional.of(order));
+        when(purchaseOrderRepository.findByIdAndFactoryIdForUpdate(PO_ID, FACTORY_ID)).thenReturn(Optional.of(order));
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.createReceiveRecord(FACTORY_ID, buildRequest(new BigDecimal("50")), 1L));

@@ -3,9 +3,13 @@ package com.cretas.aims.service.production;
 import com.cretas.aims.dto.production.CreateProductionPlanRequest;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.enums.InventoryOwnership;
+import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
+import com.cretas.aims.entity.enums.SalesProcessingMode;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.exception.BusinessException;
@@ -30,6 +34,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -46,6 +51,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -111,6 +117,13 @@ class ProductionPlanFinanceGateTest {
                 salesOrderRepository, salesOrderItemRepository);
 
         when(productTypeRepository.existsById(PRODUCT_TYPE_ID)).thenReturn(true);
+        ProductType productType = new ProductType();
+        productType.setId(PRODUCT_TYPE_ID);
+        productType.setFactoryId(FACTORY_ID);
+        productType.setUnit("kg");
+        lenient().when(productTypeRepository.findById(PRODUCT_TYPE_ID)).thenReturn(Optional.of(productType));
+        lenient().when(productTypeRepository.findByIdAndFactoryId(PRODUCT_TYPE_ID, FACTORY_ID))
+                .thenReturn(Optional.of(productType));
 
         lenient().when(productionPlanMapper.toEntity(any(CreateProductionPlanRequest.class), any(), any()))
                 .thenAnswer(inv -> {
@@ -123,6 +136,11 @@ class ProductionPlanFinanceGateTest {
                     plan.setPlannedQuantity(req.getPlannedQuantity());
                     plan.setSourceType(req.getSourceType());
                     plan.setSourceOrderId(req.getSourceOrderId());
+                    plan.setSourceOrderItemId(req.getSourceOrderItemId());
+                    plan.setCustomerId(req.getCustomerId());
+                    plan.setProcessingMode(req.getProcessingMode());
+                    plan.setMaterialSupplyMode(req.getMaterialSupplyMode());
+                    plan.setOutputOwnership(req.getOutputOwnership());
                     plan.setStatus(ProductionPlanStatus.PENDING);
                     return plan;
                 });
@@ -149,11 +167,20 @@ class ProductionPlanFinanceGateTest {
     }
 
     private void stubSalesOrder(SalesOrderStatus status) {
+        stubSalesOrder(status, null, null);
+    }
+
+    private void stubSalesOrder(SalesOrderStatus status,
+                                SalesProcessingMode processingMode,
+                                MaterialSupplyMode materialSupplyMode) {
         SalesOrder so = new SalesOrder();
         so.setId(SO_ID);
         so.setFactoryId(FACTORY_ID);
+        so.setCustomerId("CUSTOMER-001");
         so.setCustomerName("叮咚好食光");
         so.setStatus(status);
+        so.setProcessingMode(processingMode);
+        so.setMaterialSupplyMode(materialSupplyMode);
         when(salesOrderRepository.findById(SO_ID)).thenReturn(Optional.of(so));
     }
 
@@ -285,5 +312,94 @@ class ProductionPlanFinanceGateTest {
                 () -> service.createProductionPlan(FACTORY_ID, req, 1L));
         assertEquals(409, ex.getCode().intValue());
         verify(productionPlanRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("普通销售 + 工厂供料冻结为公司自有产出")
+    void standardSale_snapshotsCompanyOwnedOutput() {
+        try (MockedStatic<TransactionSynchronizationManager> txSync = mockTxSync()) {
+            stubSalesOrder(SalesOrderStatus.FINANCE_APPROVED,
+                    SalesProcessingMode.STANDARD_SALE, MaterialSupplyMode.FACTORY_SUPPLIED);
+
+            service.createProductionPlan(FACTORY_ID, customerOrderRequestByItem(), 1L);
+
+            ArgumentCaptor<ProductionPlan> captor = ArgumentCaptor.forClass(ProductionPlan.class);
+            verify(productionPlanRepository).save(captor.capture());
+            ProductionPlan saved = captor.getValue();
+            assertEquals("CUSTOMER-001", saved.getCustomerId());
+            assertEquals(SalesProcessingMode.STANDARD_SALE, saved.getProcessingMode());
+            assertEquals(MaterialSupplyMode.FACTORY_SUPPLIED, saved.getMaterialSupplyMode());
+            assertEquals(InventoryOwnership.COMPANY_OWNED, saved.getOutputOwnership());
+            assertEquals(SO_ID, saved.getSourceOrderId());
+            assertEquals(String.valueOf(SO_ITEM_ID), saved.getSourceOrderItemId());
+        }
+    }
+
+    @Test
+    @DisplayName("来料加工 + 客户供料冻结为客户自有产出")
+    void tollProcessing_snapshotsCustomerOwnedOutput() {
+        try (MockedStatic<TransactionSynchronizationManager> txSync = mockTxSync()) {
+            stubSalesOrder(SalesOrderStatus.FINANCE_APPROVED,
+                    SalesProcessingMode.TOLL_PROCESSING, MaterialSupplyMode.CUSTOMER_SUPPLIED);
+
+            service.createProductionPlan(FACTORY_ID, customerOrderRequestByItem(), 1L);
+
+            ArgumentCaptor<ProductionPlan> captor = ArgumentCaptor.forClass(ProductionPlan.class);
+            verify(productionPlanRepository).save(captor.capture());
+            ProductionPlan saved = captor.getValue();
+            assertEquals("CUSTOMER-001", saved.getCustomerId());
+            assertEquals(SalesProcessingMode.TOLL_PROCESSING, saved.getProcessingMode());
+            assertEquals(MaterialSupplyMode.CUSTOMER_SUPPLIED, saved.getMaterialSupplyMode());
+            assertEquals(InventoryOwnership.CUSTOMER_OWNED, saved.getOutputOwnership());
+        }
+    }
+
+    @Test
+    @DisplayName("历史销售订单合同双 null 时保持归属未知，不伪造公司自有")
+    void legacySalesContract_preservesNullOwnershipSnapshot() {
+        try (MockedStatic<TransactionSynchronizationManager> txSync = mockTxSync()) {
+            stubSalesOrder(SalesOrderStatus.FINANCE_APPROVED);
+
+            service.createProductionPlan(FACTORY_ID, customerOrderRequestByItem(), 1L);
+
+            ArgumentCaptor<ProductionPlan> captor = ArgumentCaptor.forClass(ProductionPlan.class);
+            verify(productionPlanRepository).save(captor.capture());
+            assertNull(captor.getValue().getProcessingMode());
+            assertNull(captor.getValue().getMaterialSupplyMode());
+            assertNull(captor.getValue().getOutputOwnership());
+        }
+    }
+
+    @Test
+    @DisplayName("复制计划保留客户、合同、产出归属与销售来源快照")
+    void copyPlan_preservesOwnershipAndSalesLineageSnapshot() {
+        ProductionPlan source = new ProductionPlan();
+        source.setId("PP-SOURCE");
+        source.setFactoryId(FACTORY_ID);
+        source.setPlanNumber("PP-SOURCE-NO");
+        source.setProductTypeId(PRODUCT_TYPE_ID);
+        source.setPlannedQuantity(BigDecimal.ONE);
+        source.setSourceType(PlanSourceType.CUSTOMER_ORDER);
+        source.setSourceOrderId(SO_ID);
+        source.setSourceOrderIds(java.util.List.of(SO_ID));
+        source.setSourceOrderItemId(String.valueOf(SO_ITEM_ID));
+        source.setCustomerId("CUSTOMER-001");
+        source.setProcessingMode(SalesProcessingMode.TOLL_PROCESSING);
+        source.setMaterialSupplyMode(MaterialSupplyMode.CUSTOMER_SUPPLIED);
+        source.setOutputOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        when(productionPlanRepository.findById("PP-SOURCE")).thenReturn(Optional.of(source));
+
+        service.copyProductionPlan(FACTORY_ID, "PP-SOURCE", 7L);
+
+        ArgumentCaptor<ProductionPlan> captor = ArgumentCaptor.forClass(ProductionPlan.class);
+        verify(productionPlanRepository).save(captor.capture());
+        ProductionPlan copy = captor.getValue();
+        assertEquals(source.getCustomerId(), copy.getCustomerId());
+        assertEquals(source.getProcessingMode(), copy.getProcessingMode());
+        assertEquals(source.getMaterialSupplyMode(), copy.getMaterialSupplyMode());
+        assertEquals(source.getOutputOwnership(), copy.getOutputOwnership());
+        assertEquals(source.getSourceOrderId(), copy.getSourceOrderId());
+        assertEquals(source.getSourceOrderIds(), copy.getSourceOrderIds());
+        assertEquals(source.getSourceOrderItemId(), copy.getSourceOrderItemId());
     }
 }

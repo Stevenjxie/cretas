@@ -4,7 +4,12 @@ import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+
+import jakarta.persistence.LockModeType;
 
 import java.util.List;
 import java.util.Optional;
@@ -27,4 +32,9 @@ public interface PurchaseReceiveRecordRepository extends JpaRepository<PurchaseR
             String factoryId, String purchaseOrderId);
 
     Optional<PurchaseReceiveRecord> findByFactoryIdAndReceiveNumber(String factoryId, String receiveNumber);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select r from PurchaseReceiveRecord r where r.id = :id and r.factoryId = :factoryId")
+    Optional<PurchaseReceiveRecord> findByIdAndFactoryIdForUpdate(
+            @Param("id") String id, @Param("factoryId") String factoryId);
 }
