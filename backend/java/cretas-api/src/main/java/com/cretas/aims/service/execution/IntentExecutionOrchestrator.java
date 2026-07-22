@@ -1375,6 +1375,9 @@ public class IntentExecutionOrchestrator {
             // forwarded in full and is not reduced to a revenue report.
             return Optional.of("RESTAURANT_OPS_SALES_SUMMARY");
         }
+        if (isDishOptimizationAnalysis(unicodeSafeInput)) {
+            return Optional.of("RESTAURANT_OPS_GROSS_MARGIN");
+        }
         if (isCostMarginClarificationQuestion(unicodeSafeInput)
                 || isRestaurantContextualMarginFollowup(unicodeSafeInput)
                 || isMarginProhibitedActionAnalysis(unicodeSafeInput)) {
@@ -2448,6 +2451,16 @@ public class IntentExecutionOrchestrator {
                 "\u8ba2\u5355\u96c6\u4e2d", "\u4eba\u5458\u4e0d\u8db3", "\u4eba\u624b\u4e0d\u8db3",
                 "\u5de5\u5e8f\u74f6\u9888", "\u6d41\u7a0b\u74f6\u9888", "\u51fa\u9910\u6162", "\u4e0a\u83dc\u6162");
         return asksForEvidence && hasDiagnosticAlternatives;
+    }
+
+    private boolean isDishOptimizationAnalysis(String input) {
+        boolean hasDishScope = containsAny(input, "\u83dc\u5355", "\u83dc\u54c1", "\u83dc");
+        boolean asksForOptimization = containsAny(input, "\u4f18\u5316", "\u8c03\u6574", "\u6dd8\u6c70", "\u4e0b\u67b6");
+        int dimensions = 0;
+        for (String metric : new String[]{"\u9500\u91cf", "\u9500\u552e\u989d", "\u6bdb\u5229", "\u9000\u83dc", "\u5dee\u8bc4", "\u5236\u4f5c\u65f6\u957f", "\u635f\u8017"}) {
+            if (input.contains(metric)) dimensions++;
+        }
+        return hasDishScope && asksForOptimization && dimensions >= 3;
     }
 
     private boolean isCostMarginClarificationQuestion(String input) {

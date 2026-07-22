@@ -79,6 +79,31 @@ class IntentRecognitionPipelineDishReferenceTest {
     }
 
     @Test
+    @DisplayName("dish-specific metric selects DISH after actual gross-margin route with a stale STORE slot")
+    void dishMetricWinsAfterGrossMarginRouteWhenBothSlotsExist() {
+        ConversationContext context = ConversationContext.builder()
+                .sessionId("sid-dish-both")
+                .lastIntentCode("RESTAURANT_OPS_GROSS_MARGIN")
+                .build();
+        context.setSlot(EntitySlot.SlotType.DISH, EntitySlot.dish("d1", "叮咚牛肉面"));
+        context.setSlot(EntitySlot.SlotType.STORE, EntitySlot.store("s1", "人民广场店"));
+
+        PreprocessedQuery result = IntentRecognitionPipelineServiceImpl.ensureDishReferenceResolved(
+                "它的销量是多少",
+                "叮咚牛肉面的销量是多少",
+                context,
+                PreprocessedQuery.builder()
+                        .originalInput("它的销量是多少")
+                        .finalQuery("叮咚牛肉面的销量是多少")
+                        .build());
+
+        assertThat(result.getResolvedReferences()).containsKey("它");
+        PreprocessedQuery.ResolvedReference ref = result.getResolvedReferences().get("它");
+        assertThat(ref.getEntityType()).isEqualTo("DISH");
+        assertThat(ref.getEntityName()).isEqualTo("叮咚牛肉面");
+    }
+
+    @Test
     @DisplayName("No-op when originalInput has no dish reference pattern")
     void noOpWhenNoDishPattern() {
         ConversationContext context = ConversationContext.builder()

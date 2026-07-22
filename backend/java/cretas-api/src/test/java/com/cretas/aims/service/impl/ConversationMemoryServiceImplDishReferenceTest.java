@@ -47,6 +47,30 @@ class ConversationMemoryServiceImplDishReferenceTest {
     }
 
     @Test
+    @DisplayName("dish-specific metric resolves ambiguous pronoun after actual gross-margin route")
+    void dishMetric_resolvesAmbiguousPronounAfterGrossMarginRoute() {
+        ConversationMemoryRepository repo = mock(ConversationMemoryRepository.class);
+        ConversationMemory memory = memoryWithSlots(Map.of(
+                "DISH", slot("DISH", "201", "叮咚卤猪蹄", "菜品 叮咚卤猪蹄"),
+                "STORE", slot("STORE", "101", "人民广场店", "门店 人民广场店")
+        ));
+        memory.setLastIntentCode("RESTAURANT_OPS_GROSS_MARGIN");
+        when(repo.findBySessionId("sid-dish-both")).thenReturn(Optional.of(memory));
+        ConversationMemoryServiceImpl service = new ConversationMemoryServiceImpl(repo, null);
+
+        String resolved = service.resolveReference(
+                "sid-dish-both",
+                "它的销量是多少");
+
+        assertThat(resolved)
+                .isEqualTo("菜品 叮咚卤猪蹄的销量是多少")
+                .doesNotContain("人民广场店");
+
+        String stillAmbiguous = service.resolveReference("sid-dish-both", "它的毛利呢");
+        assertThat(stillAmbiguous).isEqualTo("它的毛利呢");
+    }
+
+    @Test
     @DisplayName("DISH slot present, STORE slot absent: 那家 still resolves as supplier (STORE/SUPPLIER parity zero-regression)")
     void dishSlotPresent_noStoreSlot_supplierReferenceStillWorks() {
         ConversationMemoryRepository repo = mock(ConversationMemoryRepository.class);

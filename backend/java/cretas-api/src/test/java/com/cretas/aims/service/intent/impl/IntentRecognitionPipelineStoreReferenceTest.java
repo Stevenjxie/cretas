@@ -71,4 +71,28 @@ class IntentRecognitionPipelineStoreReferenceTest {
         assertThat(result.getResolvedReferences().get("那它").getEntityType()).isEqualTo("STORE");
         assertThat(result.getResolvedReferences().get("那它").getEntityName()).isEqualTo("青花椒大丸百货店");
     }
+
+    @Test
+    @DisplayName("store last intent selects STORE for ambiguous pronoun with a stale DISH slot")
+    void storeLastIntentWinsWhenBothSlotsExist() {
+        ConversationContext context = ConversationContext.builder()
+                .sessionId("sid-store-both")
+                .lastIntentCode("RESTAURANT_STORE_REVENUE_RANK")
+                .build();
+        context.setSlot(EntitySlot.SlotType.STORE, EntitySlot.store("11", "青花椒大丸百货店"));
+        context.setSlot(EntitySlot.SlotType.DISH, EntitySlot.dish("21", "招牌酸菜鱼"));
+
+        PreprocessedQuery result = IntentRecognitionPipelineServiceImpl.ensureStoreReferenceResolved(
+                "那它的毛利率也是第一吗",
+                "门店 青花椒大丸百货店的毛利率也是第一吗",
+                context,
+                PreprocessedQuery.builder()
+                        .originalInput("那它的毛利率也是第一吗")
+                        .finalQuery("门店 青花椒大丸百货店的毛利率也是第一吗")
+                        .build());
+
+        assertThat(result.getResolvedReferences()).containsKey("那它");
+        assertThat(result.getResolvedReferences().get("那它").getEntityType()).isEqualTo("STORE");
+        assertThat(result.getResolvedReferences().get("那它").getEntityName()).isEqualTo("青花椒大丸百货店");
+    }
 }
