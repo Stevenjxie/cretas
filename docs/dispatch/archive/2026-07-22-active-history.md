@@ -68,3 +68,11 @@
 - 验证：销售订单目标 Vitest `6 files / 34 tests` PASS；唯一 Web release build `4457 modules` PASS，web tree `5ef7f95db8d45ef15e192d276a4d8b7bbc68b9e4`，archive SHA-256 `f02dd2e3dd12fcd5807fd21caf525de98a6ff7fe086b7c343e4d7578eab3be21`。
 - 续测边界：部署后复用 F006 `SO-20260722-0002` 从“确认并提交 OA 审批”继续，不重建订单；实现/构建期间生产业务写入 0，未触碰 LIUSHANMEN。
 - Scope 锁：已释放。
+
+## BUG-F006-R3-OA-FINANCE-ROUTE-001 — 财务经理个人 OA 路由 403
+
+- 状态：`review-ready; NOT_DEPLOYED`；Owner：`/root`；Base SHA：`78ec4c2070cc0646afc07ce25f9d88d2a7acabd1`。
+- 生产 headed 现场：销售主管从页面创建高金额 `SO-20260722-0003`，唯一创建 POST 与唯一 OA 提交 POST 均为 200，订单进入 `PENDING_FINANCE_REVIEW`，详情解析财务节点、角色及 `f006_finance_mgr`；财务经理访问统一 `/workflow/pending` 时被前端路由守卫直接导向 403，未发起审批写请求。
+- 根因与修复：财务专用菜单已经包含个人 OA，但历史 `ROLE_PATH_WHITELIST.finance_manager` 漏掉 `/workflow`；仅补该共享 OA 前缀，后端仍按 factory、当前节点角色和明确 assignee 逐任务鉴权，不扩大采购、销售或其他模块权限。
+- 验证：Web 路由/财审/菜单目标 Vitest `3 files / 63 tests` PASS，`git diff --check` PASS；部署后从同一 `SO-20260722-0003` 财务节点续测，不创建第二订单。
+- Scope 锁：已释放。
