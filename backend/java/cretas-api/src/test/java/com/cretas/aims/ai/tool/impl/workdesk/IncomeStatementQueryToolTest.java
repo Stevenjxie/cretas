@@ -196,4 +196,35 @@ class IncomeStatementQueryToolTest {
         }
         throw new IllegalArgumentException("Field not found: " + name);
     }
+
+    @Test
+    @DisplayName("UT-ISQ-EMPTY: all-zero period → targeted no-data message, never a zero dump")
+    @SuppressWarnings("unchecked")
+    void allZeroPeriodDeclinesInsteadOfZeroDump() throws Exception {
+        IncomeStatementDTO dto = IncomeStatementDTO.builder()
+                .factoryId(FACTORY_ID).startYear(2026).startMonth(7).endYear(2026).endMonth(7)
+                .costDataAvailable(true)
+                .grossMarginStatus(IncomeStatementDTO.GrossMarginStatus.NO_REVENUE)
+                .grossMarginStatusMessage("期间营业收入为零或缺失，毛利率不可计算")
+                .revenues(List.of()).costs(List.of()).expenses(List.of())
+                .totalRevenue(BigDecimal.ZERO)
+                .totalCost(BigDecimal.ZERO)
+                .grossProfit(BigDecimal.ZERO)
+                .totalExpense(BigDecimal.ZERO)
+                .operatingProfit(BigDecimal.ZERO)
+                .incomeTax(BigDecimal.ZERO)
+                .netProfit(BigDecimal.ZERO)
+                .generatedAt("2026-07-22T10:00:00").build();
+        when(incomeStatementService.generate(anyString(), eq(2026), eq(7), eq(2026), eq(7)))
+                .thenReturn(dto);
+
+        Map<String, Object> result = invoke("doExecute", FACTORY_ID,
+                Map.of("startYear", 2026, "startMonth", 7), ctx());
+        String message = (String) result.get("message");
+        assertTrue(message.contains("暂无已过账的利润表数据"), message);
+        assertTrue(message.contains("不会用零值替代"), message);
+        assertFalse(message.contains("¥0"), message);
+        Map<String, Object> data = (Map<String, Object>) result.get("data");
+        assertEquals(Boolean.TRUE, data.get("noPostedData"));
+    }
 }

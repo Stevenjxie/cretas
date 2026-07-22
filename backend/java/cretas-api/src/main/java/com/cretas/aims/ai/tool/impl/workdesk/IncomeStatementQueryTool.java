@@ -192,6 +192,20 @@ public class IncomeStatementQueryTool extends AbstractBusinessTool {
                 ? String.format("%d-%02d", startYear, startMonth)
                 : String.format("%d-%02d 至 %d-%02d", startYear, startMonth, endYear, endMonth);
 
+        // Sheet 7/22 空成功类: 全零期间此前返回 "营业收入 ¥0.00 / … ¥0.00" 的
+        // 零值 dump — 看似查询成功, 实为无数据。改为定向缺数说明, 不用零值替代。
+        boolean revenueEmpty = dto.getTotalRevenue() == null || dto.getTotalRevenue().signum() == 0;
+        boolean costEmpty = dto.getTotalCost() == null || dto.getTotalCost().signum() == 0;
+        boolean expenseEmpty = dto.getTotalExpense() == null || dto.getTotalExpense().signum() == 0;
+        if (revenueEmpty && costEmpty && expenseEmpty) {
+            data.put("noPostedData", true);
+            String emptyMessage = String.format(
+                    "%s 暂无已过账的利润表数据，不能给出营业收入或利润数字，也不会用零值替代。"
+                            + "请先确认该期间的财务凭证已录入或同步，或换一个有数据的期间查询",
+                    periodLabel);
+            return buildSimpleResult(emptyMessage, data);
+        }
+
         String message;
         if (missingCostData) {
             message = String.format(

@@ -361,4 +361,32 @@ class GoldBackedRestaurantToolDelegateTest {
         verify(gold, never()).fetchTieredIntentAnswer(anyString(), anyString(), anyString(), anyString());
         verify(gold).fetchTieredIntentAnswer(eq(FACTORY_ID), anyString(), eq("restaurant_peak_month_gold"));
     }
+
+    @Test
+    @DisplayName("userInput missing from params but present in context request → gate recovers it and delegates")
+    void contextRequestRecoversUserInputForDelegateGate() throws Exception {
+        GoldFinanceClient gold = mock(GoldFinanceClient.class);
+        when(gold.fetchTieredIntentAnswer(eq(FACTORY_ID), anyString(), eq("restaurant_peak_month_gold")))
+                .thenReturn(Map.of(
+                        "delegate", true,
+                        "answer_text", "最近30天营收共36万。",
+                        "charts", List.of(),
+                        "kpis", List.of(),
+                        "code", "RESTAURANT_OPS_SALES_SUMMARY",
+                        "contract_pass", true
+                ));
+
+        com.cretas.aims.dto.ai.IntentExecuteRequest req = new com.cretas.aims.dto.ai.IntentExecuteRequest();
+        req.setUserInput("过去一个月营业额");
+        Map<String, Object> context = new HashMap<>();
+        context.put("request", req);
+
+        RestaurantPeakMonthGoldTool tool = newTool(gold);
+        Map<String, Object> result = tool.doExecute(FACTORY_ID, paramsWithInput(null), context);
+
+        assertThat(result).containsEntry("tieredDelegate", true);
+        assertThat((String) result.get("message")).startsWith("最近30天营收共36万。");
+        verify(gold).fetchTieredIntentAnswer(eq(FACTORY_ID), eq("过去一个月营业额"), eq("restaurant_peak_month_gold"));
+        verify(gold, never()).fetchDataRange(anyString());
+    }
 }
