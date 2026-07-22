@@ -27,6 +27,18 @@ describe('sales order OA web contract', () => {
     expect(detail).toContain('await Promise.all([loadOrder(), loadApprovalProgress()])');
   });
 
+  it('keeps approval actions inside the unified OA workbench', () => {
+    expect(detail).toContain('前往 OA 审批中心');
+    expect(detail).not.toContain('/finance-approve');
+    expect(detail).not.toContain('/finance-reject');
+    expect(detail).not.toContain('openFinanceReview');
+    expect(detail).not.toContain('submitFinanceReview');
+    expect(detail).not.toContain('提交财务审核');
+    expect(list).not.toContain('提交财务审核');
+    expect(list).not.toContain('免审通过');
+    expect(list).toContain('按 OA 规则自动通过');
+  });
+
   it('keeps batch submission truthful instead of aggregating guessed outcomes', () => {
     expect(list).not.toContain('pendingReviewCount');
     expect(list).not.toContain('exemptCount');

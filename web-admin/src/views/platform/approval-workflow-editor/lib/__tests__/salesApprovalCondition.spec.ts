@@ -14,6 +14,7 @@ describe('sales approval graph edge condition', () => {
   it('accepts the persisted expression with or without the SpEL variable prefix', () => {
     expect(parseSalesApprovalAmountThreshold('amount > 1200.5')).toBe(1200.5);
     expect(parseSalesApprovalAmountThreshold(' #amount > 0 ')).toBe(0);
+    expect(parseSalesApprovalAmountThreshold('#context.amount > 5000')).toBe(5000);
   });
 
   it('does not overwrite custom or invalid graph conditions', () => {

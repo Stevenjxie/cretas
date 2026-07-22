@@ -261,9 +261,9 @@ function actionConfirmMessage(action: string, labelText: string): string {
 const statusMap: Record<string, { text: string; type: string }> = {
   DRAFT: { text: '草稿', type: 'info' },
   CONFIRMED: { text: '已确认', type: '' },
-  PENDING_FINANCE_REVIEW: { text: '待财务审核', type: 'warning' },
-  FINANCE_APPROVED: { text: '财务已批准', type: 'success' },
-  FINANCE_REJECTED: { text: '财务已驳回', type: 'danger' },
+  PENDING_FINANCE_REVIEW: { text: '待 OA 审批', type: 'warning' },
+  FINANCE_APPROVED: { text: '审批已通过', type: 'success' },
+  FINANCE_REJECTED: { text: '审批已驳回', type: 'danger' },
   PROCESSING: { text: '处理中', type: 'warning' },
   PARTIAL_DELIVERED: { text: '部分发货', type: 'warning' },
   COMPLETED: { text: '已完成', type: 'success' },
@@ -611,9 +611,9 @@ async function loadPurchaseOrders() {
 async function handleAction(action: string) {
   if (submitting.value) return;
   const map: Record<string, { label: string; url: string }> = {
-    confirm: { label: '确认并判定审批', url: `/${factoryId.value}/sales/orders/${orderId.value}/confirm` },
+    confirm: { label: '确认并提交 OA 审批', url: `/${factoryId.value}/sales/orders/${orderId.value}/confirm` },
     cancel: { label: '取消订单', url: `/${factoryId.value}/sales/orders/${orderId.value}/cancel` },
-    'submit-for-review': { label: '提交审批判定', url: `/${factoryId.value}/sales/orders/${orderId.value}/submit-for-review` },
+    'submit-for-review': { label: '提交 OA 审批', url: `/${factoryId.value}/sales/orders/${orderId.value}/submit-for-review` },
   };
   const a = map[action];
   if (!a) return;
@@ -637,7 +637,7 @@ async function handleAction(action: string) {
 }
 
 // Apr 18 2026 bug #51: 用户报告"开始生产"按钮报错"请求资源不存在"其实按钮前端根本没实现。
-// SO 财务审核通过后的下一步是创建生产计划(SO → ProductionPlan 关联), 此按钮
+// SO OA 审批通过后的下一步是创建生产计划（SO → ProductionPlan 关联），此按钮
 // 跳到生产计划页并带 salesOrderId 提示, 用户在那边新建 plan。不直接改 SO 状态(那
 // 是 plan 开始生产后的联动), 只承担"导航 + 提示"职责, 避免前端伪装后端未实现的能力。
 async function handleStartProduction() {
@@ -647,72 +647,6 @@ async function handleStartProduction() {
     path: '/production/plans',
     query: { salesOrderId: String(orderId.value), action: 'create' },
   });
-}
-
-// 六扇门 V1 §2.2 (audit fix 2026-04-26 #6): finance review dialog with cost breakdown
-// Pre-fix: only ElMessageBox.prompt with notes — no place to record cost.
-// Post-fix: rich dialog showing 订单总额 / 预估成本 (input) / 预估利润 (auto-calc) / 备注.
-const financeReviewVisible = ref(false);
-const financeReviewForm = ref<{
-  notes: string;
-  estimatedCost: number | null;
-  isApprove: boolean;
-}>({ notes: '', estimatedCost: null, isApprove: true });
-const financeReviewProfit = computed(() => {
-  const total = Number(order.value?.totalAmount || 0);
-  const cost = financeReviewForm.value.estimatedCost;
-  if (cost == null) return null;
-  return total - Number(cost);
-});
-
-// P2-3 R2 fix: 字段隐藏期间, 始终设 null 避免无意中持久化历史值.
-// 旧逻辑预填上次拒批的 estimatedCost → 此 PR 隐藏 input 后用户看不到也清不了 →
-// 重审通过时静默把旧值再次提交 → 违反"禁止降级处理/假数据"原则.
-// 重启用此字段时改回 `order.value?.estimatedCost ? Number(...) : null`.
-const ESTIMATED_COST_ENABLED = false;
-
-function openFinanceReview(action: 'approve' | 'reject') {
-  const isApprove = action === 'approve';
-  financeReviewForm.value = {
-    notes: '',
-    estimatedCost: ESTIMATED_COST_ENABLED && order.value?.estimatedCost
-      ? Number(order.value.estimatedCost)
-      : null,
-    isApprove,
-  };
-  financeReviewVisible.value = true;
-}
-
-async function submitFinanceReview() {
-  if (submitting.value) return;
-  const { isApprove, notes, estimatedCost } = financeReviewForm.value;
-  const labelText = isApprove ? '审核通过' : '审核驳回';
-  if (!isApprove && !notes?.trim()) {
-    return ElMessage.warning('请填写驳回原因');
-  }
-  submitting.value = true;
-  try {
-    const url = `/${factoryId.value}/sales/orders/${orderId.value}/${isApprove ? 'finance-approve' : 'finance-reject'}`;
-    const body: TableRow = { notes: notes || '' };
-    // P2-3 R2 fix: 双重防御 — 即使 form 状态被脏化 (e.g. 直接 devtools 改),
-    // ESTIMATED_COST_ENABLED=false 时也不发送, 防止静默降级.
-    if (ESTIMATED_COST_ENABLED && isApprove && estimatedCost != null) body.estimatedCost = estimatedCost;
-    const res = await post(url, body);
-    if (res.success) {
-      ElMessage.success(`${labelText}成功`);
-      financeReviewVisible.value = false;
-      loadOrder();
-    } else { ElMessage.error(res.message || `${labelText}失败`); }
-  } catch (e) {
-    handleCatchError(e, `${labelText}失败,请检查网络`);
-  } finally {
-    submitting.value = false;
-  }
-}
-
-// Backward-compat for any external caller (no longer used in template)
-async function handleFinanceAction(action: 'approve' | 'reject') {
-  openFinanceReview(action);
 }
 
 function openDeliveryDialog() {
@@ -1291,25 +1225,25 @@ const approvalTimeline = computed<Array<{
     });
   }
 
-  // 节点 3: 提交财务审核 (从 status 推断, 无独立时间字段)
+  // 节点 3：提交 OA 审批（从 status 推断，无独立时间字段）
   if (o.status === 'PENDING_FINANCE_REVIEW') {
     nodes.push({
       type: 'warning',
-      title: '已提交财务审核',
+      title: '已提交 OA 审批',
       user: '系统',
       time: String(o.updatedAt || ''),
     });
   }
 
-  // 节点 4: 财务审核通过 / 驳回
+  // 节点 4：OA 审批通过 / 驳回
   if (o.financeReviewedAt) {
     const isApproved = ['FINANCE_APPROVED', 'PROCESSING', 'PARTIAL_DELIVERED', 'COMPLETED'].includes(String(o.status));
     nodes.push({
       type: isApproved ? 'success' : 'danger',
-      title: isApproved ? '财务审核通过' : '财务审核驳回',
+      title: isApproved ? 'OA 审批通过' : 'OA 审批驳回',
       user: o.financeReviewedByName
         ? String(o.financeReviewedByName)
-        : (o.financeReviewedBy ? `财务账号 ${o.financeReviewedBy}` : '系统自动审批'),
+        : (o.financeReviewedBy ? `审批账号 ${o.financeReviewedBy}` : '系统自动审批'),
       time: String(o.financeReviewedAt),
       notes: o.financeReviewNotes ? String(o.financeReviewNotes) : undefined,
     });
@@ -1556,10 +1490,9 @@ async function handleQuickPayFull() {
             </el-tag>
           </div>
           <div class="header-right" v-if="order && canWrite">
-            <el-button v-if="order.status === 'DRAFT'" type="success" :loading="submitting" @click="handleAction('confirm')">确认并判定审批</el-button>
-            <el-button v-if="order.status === 'CONFIRMED'" type="warning" :loading="submitting" @click="handleAction('submit-for-review')">提交/判定审批</el-button>
-            <el-button v-if="order.status === 'PENDING_FINANCE_REVIEW'" type="success" :loading="submitting" @click="openFinanceReview('approve')">审核通过</el-button>
-            <el-button v-if="order.status === 'PENDING_FINANCE_REVIEW'" type="danger" :loading="submitting" @click="openFinanceReview('reject')">审核驳回</el-button>
+            <el-button v-if="order.status === 'DRAFT'" type="success" :loading="submitting" @click="handleAction('confirm')">确认并提交 OA 审批</el-button>
+            <el-button v-if="order.status === 'CONFIRMED'" type="warning" :loading="submitting" @click="handleAction('submit-for-review')">提交 OA 审批</el-button>
+            <el-button v-if="order.status === 'PENDING_FINANCE_REVIEW'" type="primary" plain @click="goToApprovalProgress">前往 OA 审批中心</el-button>
             <el-tooltip
               v-if="order.status === 'FINANCE_APPROVED'"
               :content="productionAction.tooltip"
@@ -2484,76 +2417,6 @@ async function handleQuickPayFull() {
           :disabled="!paymentForm.amount || paymentForm.amount <= 0 || paymentOverLimit"
           @click="handleCreatePayment"
         >登记收款</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 六扇门 V1 §2.2 (audit fix 2026-04-26 #6): finance review dialog with cost breakdown -->
-    <el-dialog
-      v-model="financeReviewVisible"
-      :title="financeReviewForm.isApprove ? '财务审核通过' : '财务审核驳回'"
-      width="560px"
-      :close-on-click-modal="false"
-    >
-      <el-form label-width="110px">
-        <el-form-item label="订单号">
-          <span style="font-family:monospace">{{ order?.orderNumber }}</span>
-        </el-form-item>
-        <el-form-item label="客户">
-          <span>{{ order?.customerName || order?.customerId }}</span>
-        </el-form-item>
-        <el-form-item v-if="canViewPrice" label="订单总额">
-          <span style="font-weight:600;color:#67C23A">{{ formatAmount(Number(order?.totalAmount || 0)) }}</span>
-        </el-form-item>
-        <!--
-          P2-3 (audio May 7 客户通话): 客户要求暂时隐藏 "预估成本" 字段.
-          原话: "这个建议暂时先去掉, 容易产生那个冲突的, 财务那边肯定会比较跳的".
-          客户后期 (V2) 计划自动从 BOM 推导, 届时再启用此字段.
-
-          双轨说明:
-          - LEGACY (本文件): v-if="false" 暂时隐藏
-          - CANVAS DynamicModulePage: estimatedCost 字段未在 sales_order
-            field_schema (V20260409_02) 中暴露, 已经不显示, 无需 schema migration
-
-          重新启用方式: 改 v-if="false" 为 v-if="financeReviewForm.isApprove"
-        -->
-        <el-form-item v-if="false" label="预估成本 (元)">
-          <el-input-number
-            v-model="financeReviewForm.estimatedCost"
-            :min="0" :precision="2"
-            placeholder="录入 BOM 材料成本 + 工时/制造费"
-            style="width:100%"
-            controls-position="right"
-          />
-          <div style="color:#909399;font-size:12px;margin-top:4px">
-            提示: V1.5 手动录入,V2 将自动从 BOM 推导
-          </div>
-        </el-form-item>
-        <!-- 预估利润依赖 estimatedCost, estimatedCost 未填则 financeReviewProfit=null, 此 form-item 自动隐藏 (无需独立改动) -->
-        <el-form-item v-if="canViewPrice && financeReviewForm.isApprove && financeReviewProfit !== null" label="预估利润">
-          <span :style="{ fontWeight: 600, color: financeReviewProfit >= 0 ? '#67C23A' : '#F56C6C' }">
-            {{ formatAmount(financeReviewProfit) }}
-            <span v-if="Number(order?.totalAmount || 0) > 0" style="color:#909399;font-size:12px;margin-left:8px">
-              (毛利率 {{ ((financeReviewProfit / Number(order?.totalAmount || 1)) * 100).toFixed(1) }}%)
-            </span>
-          </span>
-        </el-form-item>
-        <el-form-item :label="financeReviewForm.isApprove ? '审核备注' : '驳回原因'">
-          <el-input
-            v-model="financeReviewForm.notes"
-            type="textarea" :rows="3"
-            :placeholder="financeReviewForm.isApprove ? '(选填) 财务审核意见' : '请说明驳回原因'"
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="financeReviewVisible = false">取消</el-button>
-        <el-button
-          :type="financeReviewForm.isApprove ? 'success' : 'danger'"
-          :loading="submitting"
-          @click="submitFinanceReview"
-        >
-          {{ financeReviewForm.isApprove ? '确认审核通过' : '确认驳回' }}
-        </el-button>
       </template>
     </el-dialog>
 

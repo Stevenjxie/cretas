@@ -357,7 +357,7 @@ function handleRowActionClick(actionId: string, row: TableRow) {
   switch (actionId) {
     case 'view-detail': goDetail(String(row.id)); break;
     case 'edit': handleEdit(row); break;
-    // T131 Part 1 — 'approve' (DRAFT→CONFIRMED) 仍走 confirm; 提交财务审核走独立的链式/单次路径.
+    // T131 Part 1 — 'approve' (DRAFT→CONFIRMED) 仍走 confirm；提交 OA 审批走独立的链式/单次路径。
     case 'approve': handleAction(String(row.id), 'confirm'); break;
     case 'submit': case 'submit-for-review':
       void handleSubmitForReviewRow(row); break;
@@ -842,9 +842,9 @@ const quantityRefs = ref<Array<{ focus: () => void } | null>>([]);
 const statusMap: Record<string, { text: string; type: string }> = {
   DRAFT: { text: '草稿', type: 'info' },
   CONFIRMED: { text: '已确认', type: '' },
-  PENDING_FINANCE_REVIEW: { text: '待财务审核', type: 'warning' },
-  FINANCE_APPROVED: { text: '财务已批准', type: 'success' },
-  FINANCE_REJECTED: { text: '财务已驳回', type: 'danger' },
+  PENDING_FINANCE_REVIEW: { text: '待 OA 审批', type: 'warning' },
+  FINANCE_APPROVED: { text: '审批已通过', type: 'success' },
+  FINANCE_REJECTED: { text: '审批已驳回', type: 'danger' },
   PROCESSING: { text: '处理中', type: 'warning' },
   PARTIAL_DELIVERED: { text: '部分发货', type: 'warning' },
   COMPLETED: { text: '已完成', type: 'success' },
@@ -1354,8 +1354,8 @@ async function handleAction(orderId: string, action: string) {
     // R23-Pre3: FINANCE_REJECTED → resubmit for finance review (backend already
     // supports CONFIRMED || FINANCE_REJECTED → PENDING_FINANCE_REVIEW transition).
     resubmit: { label: '重新提交', url: `/${factoryId.value}/sales/orders/${orderId}/submit-for-review` },
-    // T131 Part 1 — CONFIRMED/FINANCE_REJECTED 单次提交财务审核 (与 resubmit 同端点, 文案不同).
-    'submit-for-review': { label: '提交财务审核', url: `/${factoryId.value}/sales/orders/${orderId}/submit-for-review` },
+    // T131 Part 1 — CONFIRMED/FINANCE_REJECTED 单次提交 OA 审批（与 resubmit 同端点，文案不同）。
+    'submit-for-review': { label: '提交 OA 审批', url: `/${factoryId.value}/sales/orders/${orderId}/submit-for-review` },
   };
   const a = map[action];
   if (!a) return;
@@ -1367,12 +1367,12 @@ async function handleAction(orderId: string, action: string) {
   } catch (error) { if (error !== 'cancel') ElMessage.error(`${a.label}失败`); }
 }
 
-// ==================== T131 提交财务审核 (链式) + 多选批量 ====================
+// ==================== T131 提交 OA 审批（链式）+ 多选批量 ====================
 //
 // 后端状态机 (不变):
 //   confirm:              DRAFT → CONFIRMED
 //   submit-for-review:    CONFIRMED | FINANCE_REJECTED → PENDING_FINANCE_REVIEW
-// DRAFT 行"提交财务审核"需链式: 先 confirm 再 submit-for-review.
+// DRAFT 行“提交 OA 审批”需链式：先 confirm 再 submit-for-review。
 //
 // 链式部分失败语义 (审计 #1 风险):
 //   confirm OK + submit-for-review 失败 → 订单停在 CONFIRMED (可对"已确认"行重试提审, 可恢复).
@@ -1412,7 +1412,7 @@ function extractErrMessage(e: unknown, fallback: string): string {
 }
 
 /**
- * 提交财务审核底层 helper. 不弹 toast / 不 loadData — 由调用方 (单行/批量) 统一处理结果.
+ * 提交 OA 审批底层 helper。不弹 toast / 不 loadData，由调用方（单行/批量）统一处理结果。
  * @returns 'success' (DRAFT 链式两步都成 或 非 DRAFT 单次成) /
  *          'confirmed_only' (DRAFT 已 confirm 但 submit 失败) /
  *          抛错 (confirm 本身失败, 由调用方 catch → 'failed').
@@ -1569,12 +1569,12 @@ async function handleBatchSubmitForReview(): Promise<void> {
       }
     }
     let msg = `已完成提审 ${success} 条；已确认待提审 ${confirmedOnly} 条（可对「已确认」行重试）；失败 ${failed} 条。`;
-    msg = `已提交 ${success} 条；进入财务审核 ${pendingReview} 条；免审通过 ${autoApproved} 条；已确认待重试 ${confirmedOnly} 条；失败 ${failed} 条。`;
+    msg = `已提交 ${success} 条；进入 OA 审批 ${pendingReview} 条；按 OA 规则自动通过 ${autoApproved} 条；已确认待重试 ${confirmedOnly} 条；失败 ${failed} 条。`;
     if (confirmedOnly > 0) {
-      msg += '已确认订单可直接「提交财务审核」重试，无需重走确认。';
+      msg += '已确认订单可直接「提交 OA 审批」重试，无需重走确认。';
     }
     showSingletonNotification({
-      title: '批量提交财务审核结果',
+      title: '批量提交 OA 审批结果',
       message: msg,
       type: failed > 0 ? 'warning' : 'success',
       duration: 0,
@@ -2189,7 +2189,7 @@ function handleMergePurchase() {
           :disabled="!hasBatchSubmittable || batchLoading"
           :loading="batchLoading"
           @click="handleBatchSubmitForReview"
-        >批量提交/判定审批</el-button>
+        >批量提交 OA 审批</el-button>
         <el-button
           type="success" size="small"
           :disabled="!hasBatchConfirmable || batchLoading"
@@ -2431,7 +2431,7 @@ function handleMergePurchase() {
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="goDetail(row.id)">详情</el-button>
             <el-button v-if="row.status === 'DRAFT' && canWrite" type="warning" link size="small" @click="handleEdit(row)">编辑</el-button>
-            <!-- T131/N9 — 提交后按审批阈值自动分流. DRAFT 链式 (先确认再判定); CONFIRMED 单次. per-row loading. -->
+            <!-- T131/N9 — 提交后按已发布 OA 规则自动路由。DRAFT 链式（先确认再路由）；CONFIRMED 单次。 -->
             <el-button
               v-if="['DRAFT','CONFIRMED'].includes(row.status) && canWrite"
               type="primary"
@@ -2440,7 +2440,7 @@ function handleMergePurchase() {
               :loading="submittingIds.has(row.id)"
               :disabled="submittingIds.has(row.id)"
               @click="handleSubmitForReviewRow(row)"
-            >提交/判定审批</el-button>
+            >提交 OA 审批</el-button>
             <!-- T131 — 「确认」保留为 DRAFT 的次要操作 (仅 DRAFT→CONFIRMED, 不送财务). -->
             <el-button v-if="row.status === 'DRAFT' && canWrite" type="success" link size="small" @click="handleAction(row.id, 'confirm')">确认</el-button>
             <el-button v-if="['DRAFT','CONFIRMED'].includes(row.status) && canWrite" type="danger" link size="small" @click="handleAction(row.id, 'cancel')">取消</el-button>

@@ -193,6 +193,7 @@ import EndNode from './components/nodes/EndNode.vue'
 import PropertyPanel from './components/PropertyPanel.vue'
 import WorkflowSimulator from './components/WorkflowSimulator.vue'
 import ConditionRulesPanel from './components/ConditionRulesPanel.vue'
+import { parseSalesApprovalAmountThreshold } from './lib/salesApprovalCondition'
 import type { SimulatorInput } from './composables/useSimulator'
 import {
   getDecisionTypes,
@@ -496,14 +497,19 @@ function onNodeClick({ node }: { node: Node }) {
 
 function onEdgeClick({ edge }: { edge: Edge }) {
   const sourceNode = nodes.value.find(node => node.id === edge.source)
+  const targetNode = nodes.value.find(node => node.id === edge.target)
+  const condition = (edge.data?.condition as string) ?? ''
   selectedElement.value = {
     kind: 'edge',
     id: edge.id,
     data: {
       label: edge.label ? String(edge.label) : '',
-      condition: (edge.data?.condition as string) ?? '',
+      condition,
       priority: Number(edge.data?.priority ?? 0),
-      salesAmountThresholdEligible: sourceNode?.type === 'condition',
+      salesAmountThresholdEligible: (
+        (sourceNode?.type === 'condition' && targetNode?.type === 'approval')
+        || parseSalesApprovalAmountThreshold(condition) !== null
+      ),
     },
   }
 }

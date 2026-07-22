@@ -17,6 +17,11 @@ describe('sales order approval threshold editor', () => {
     expect(properties).toContain('localData.condition = buildSalesApprovalAmountCondition(v)');
   });
 
+  it('only exposes the amount editor on the approval branch or an existing amount rule', () => {
+    expect(editor).toContain("sourceNode?.type === 'condition' && targetNode?.type === 'approval'");
+    expect(editor).toContain('parseSalesApprovalAmountThreshold(condition) !== null');
+  });
+
   it('does not offer the disconnected WorkflowRule editor for sales order routing', () => {
     expect(editor).toContain("selectedDecisionType !== 'SALES_ORDER_APPROVAL'");
     expect(properties).toContain('v-if="!isSalesOrderDecision"');

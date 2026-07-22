@@ -1,4 +1,4 @@
-const SALES_AMOUNT_EDGE_PATTERN = /^\s*#?amount\s*>\s*(\d+(?:\.\d+)?)\s*$/i;
+const SALES_AMOUNT_EDGE_PATTERN = /^\s*#?(?:context\.)?amount\s*>\s*(\d+(?:\.\d+)?)\s*$/i;
 
 /**
  * 解析 WorkflowEngine 实际读取的销售金额分支条件。
