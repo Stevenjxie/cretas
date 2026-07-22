@@ -12,6 +12,7 @@ describe('统一仓储待收货入口', () => {
   const panel = source('src/views/warehouse/materials/PendingPurchaseReceivingPanel.vue');
   const dropZone = source('src/components/attachment/AttachmentDropZone.vue');
   const receiveApi = source('src/api/purchaseReceive.ts');
+  const deepE2e = source('scripts/rn-closed-loop-deep-e2e.mjs');
   const router = source('src/router/index.ts');
   const menu = source('src/components/layout/menuConfig.ts');
 
@@ -68,5 +69,7 @@ describe('统一仓储待收货入口', () => {
     expect(panel).toContain('/warehouse/receiving/receipts');
     expect(panel).not.toContain('/purchase/receives');
     expect(detail).not.toContain('/purchase/receives');
+    expect(deepE2e).toContain('/warehouse/receiving/receipts');
+    expect(deepE2e).not.toContain('/purchase/receives');
   });
 });

@@ -177,11 +177,11 @@ async function createReceiveAndPayment(sessions, chain) {
   };
 
   let receiveSession = sessions.warehouse;
-  let createdReceiveResp = await api(receiveSession, 'POST', '/purchase/receives', receivePayload, { allowStatus: [403] });
+  let createdReceiveResp = await api(receiveSession, 'POST', '/warehouse/receiving/receipts', receivePayload, { allowStatus: [403] });
   if (createdReceiveResp.status === 403) {
     logStep('warehouse create purchase receive permission', 'FAIL', { status: 403, body: createdReceiveResp.body });
     receiveSession = sessions.admin;
-    createdReceiveResp = await api(receiveSession, 'POST', '/purchase/receives', receivePayload);
+    createdReceiveResp = await api(receiveSession, 'POST', '/warehouse/receiving/receipts', receivePayload);
   } else {
     logStep('warehouse create purchase receive permission', 'PASS', { status: createdReceiveResp.status });
   }
@@ -191,17 +191,17 @@ async function createReceiveAndPayment(sessions, chain) {
   evidence.created.receiveId = receiveId;
   logStep('create purchase receive record', 'PASS', { receiveId, actor: receiveSession.username });
 
-  let confirmResp = await api(sessions.warehouse, 'POST', `/purchase/receives/${receiveId}/confirm`, undefined, { allowStatus: [403] });
+  let confirmResp = await api(sessions.warehouse, 'POST', `/warehouse/receiving/receipts/${receiveId}/confirm`, undefined, { allowStatus: [403] });
   if (confirmResp.status === 403) {
     logStep('warehouse confirm purchase receive permission', 'FAIL', { status: 403, body: confirmResp.body });
-    confirmResp = await api(sessions.admin, 'POST', `/purchase/receives/${receiveId}/confirm`);
+    confirmResp = await api(sessions.admin, 'POST', `/warehouse/receiving/receipts/${receiveId}/confirm`);
   } else {
     logStep('warehouse confirm purchase receive permission', 'PASS', { status: confirmResp.status });
   }
   const confirmedReceive = dataOf(confirmResp.body);
   logStep('confirm purchase receive and generate raw material inventory', 'PASS', { receiveId, status: confirmedReceive.status });
 
-  const receives = firstArray((await api(sessions.procurement, 'GET', `/purchase/receives/by-order/${chain.orderId}`)).body);
+  const receives = firstArray((await api(sessions.procurement, 'GET', `/warehouse/receiving/receipts/by-order/${chain.orderId}`)).body);
   assert(receives.some(r => String(r.id) === String(receiveId)), 'Receive record not persisted by order', { receiveId, count: receives.length });
   logStep('read back receive record by purchase order', 'PASS', { receiveId, count: receives.length });
 

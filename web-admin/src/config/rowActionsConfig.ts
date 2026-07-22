@@ -128,7 +128,7 @@ export const STATUS_ACTIONS_MAP: Readonly<Record<EntityType, Readonly<Record<str
   // NEVER matched a real receive status → 100% of receives fell to
   // DEFAULT_UNKNOWN_STATUS_ACTIONS (仅详情): DRAFT receives couldn't 确认入库,
   // CONFIRMED couldn't 打印. 'edit'/'delete' dropped — no handler in list.vue and
-  // no PUT/DELETE /purchase/receives/{id} endpoint exists.
+  // canonical warehouse receiving exposes no edit/delete mutation endpoint.
   whInbound: {
     DRAFT: ['submit', 'view-detail'],
     PENDING_QC: ['view-detail'],
