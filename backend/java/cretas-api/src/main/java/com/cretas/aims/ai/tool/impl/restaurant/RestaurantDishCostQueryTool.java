@@ -77,7 +77,9 @@ public class RestaurantDishCostQueryTool extends AbstractBusinessTool {
         props.put("productName", Map.of("type", "string", "description", "菜品名称 (支持模糊匹配, 如 \"白卤猪舌\" 或 \"猪舌\")"));
         props.put("portions", Map.of("type", "integer", "description", "份数 (默认 1)"));
         schema.put("properties", props);
-        schema.put("required", List.of("productName"));
+        // required 置空: LLM 参数收集层会在 dispatch 前反问必填参数, 使 doExecute
+        // 的 tiered 委派门(session 菜品继承)永远没机会执行。缺参在 doExecute 内处理。
+        schema.put("required", Collections.emptyList());
         return schema;
     }
 

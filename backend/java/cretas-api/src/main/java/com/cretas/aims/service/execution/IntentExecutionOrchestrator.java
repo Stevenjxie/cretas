@@ -2751,6 +2751,15 @@ public class IntentExecutionOrchestrator {
                                                                    IntentExecuteRequest request,
                                                                    Long userId,
                                                                    String userRole) {
+        // Sheet 7/22 菜品链轮5: 「怎么优化」若 session 里刚聊过某道菜, 应答该菜
+        // 的优化依据而非全店 owner 建议。仅当 Python 委派给出 GROSS_MARGIN
+        // (菜品限域) 答案时采用; 其余情况 (全店语境/无 session) 原 owner 流程。
+        IntentExecuteResponse dishScoped = tryRestaurantTieredDelegate(
+                factoryId, request.getUserInput(), request);
+        if (dishScoped != null
+                && "RESTAURANT_OPS_GROSS_MARGIN".equals(dishScoped.getIntentCode())) {
+            return dishScoped;
+        }
         Map<String, Object> context = request.getContext() == null
                 ? Collections.emptyMap()
                 : request.getContext();
