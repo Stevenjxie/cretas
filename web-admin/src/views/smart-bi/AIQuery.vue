@@ -312,6 +312,87 @@ function multiChartWithMeta(cfg: ChartConfig): ChartWithMeta | null {
   };
 }
 
+// 客户反馈 (Sheet 7/20): 复杂问题无法生成图表时, 数据要能导出 xlsx 供
+// 数据分析师做高级分析。凡带图表/表格数据的 AI 回答均可一键导出。
+function messageHasExportableData(msg: ChatMessage): boolean {
+  return Boolean(
+    msg.role === 'assistant'
+    && !msg.loading && !msg.streaming
+    && (msg.chartConfig?.option || msg.charts?.length || msg.table?.data?.length),
+  );
+}
+
+function chartOptionToRows(
+  opt: Record<string, unknown>, chartType: string,
+): Record<string, unknown>[] {
+  const ct = (chartType || '').toLowerCase();
+  const series = normalizeSeriesData(opt, ct);
+  if (!series.length) return [];
+  if (ct === 'pie') {
+    const data = (series[0]?.data ?? []) as Array<Record<string, unknown> | number>;
+    return data.map(d =>
+      typeof d === 'object' && d !== null
+        ? { 名称: (d as Record<string, unknown>)['name'], 数值: (d as Record<string, unknown>)['value'] }
+        : { 数值: d },
+    );
+  }
+  const labels = extractChartLabels(opt, ct);
+  const rowCount = labels.length || Math.max(...series.map(s => s.data?.length ?? 0), 0);
+  const rows: Record<string, unknown>[] = [];
+  for (let i = 0; i < rowCount; i++) {
+    const row: Record<string, unknown> = { 类别: labels[i] ?? i + 1 };
+    for (const s of series) {
+      const cell = s.data?.[i];
+      row[s.name || '数值'] = (
+        typeof cell === 'object' && cell !== null && 'value' in (cell as Record<string, unknown>)
+          ? (cell as Record<string, unknown>)['value']
+          : cell
+      );
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+async function exportMessageData(msg: ChatMessage): Promise<void> {
+  try {
+    const XLSX = await import('xlsx');
+    const wb = XLSX.utils.book_new();
+    const usedNames = new Set<string>();
+    const sheetName = (raw: string, fallback: string): string => {
+      let name = (raw || fallback).replace(/[\\/?*[\]:]/g, '').slice(0, 28) || fallback;
+      let unique = name; let n = 2;
+      while (usedNames.has(unique)) unique = `${name}_${n++}`;
+      usedNames.add(unique);
+      return unique;
+    };
+    const chartCfgs: ChartConfig[] = [
+      ...(msg.chartConfig?.option ? [msg.chartConfig] : []),
+      ...(msg.charts ?? []),
+    ];
+    chartCfgs.forEach((cfg, i) => {
+      const opt = cfg.option as Record<string, unknown> | undefined;
+      if (!opt) return;
+      const rows = chartOptionToRows(opt, cfg.type ?? '');
+      if (!rows.length) return;
+      const ws = XLSX.utils.json_to_sheet(rows);
+      XLSX.utils.book_append_sheet(wb, ws, sheetName(chartOptionTitle(opt, cfg.title ?? ''), `图表${i + 1}`));
+    });
+    if (msg.table?.data?.length) {
+      const ws = XLSX.utils.json_to_sheet(msg.table.data);
+      XLSX.utils.book_append_sheet(wb, ws, sheetName('明细数据', '明细数据'));
+    }
+    if (!wb.SheetNames.length) {
+      ElMessage({ message: '本条回答没有可导出的结构化数据', type: 'info' });
+      return;
+    }
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    XLSX.writeFile(wb, `AI分析数据_${stamp}.xlsx`);
+  } catch (e) {
+    ElMessage({ message: `导出失败: ${e instanceof Error ? e.message : String(e)}`, type: 'error', duration: 0, showClose: true });
+  }
+}
+
 // 当前分析上下文 (用于连续对话)
 const currentData = ref<unknown[]>([]);
 const currentFields = ref<Array<{ original: string; standard: string }>>([]);
@@ -2369,6 +2450,13 @@ function handleKeydown(event: KeyboardEvent) {
                   />
                 </div>
 
+                <!-- 数据导出 (Sheet 7/20 客户建议: 图表数据可导出 xlsx 做高级分析) -->
+                <div v-if="messageHasExportableData(message)" class="chart-export-row">
+                  <el-link type="primary" underline="never" @click="exportMessageData(message)">
+                    <el-icon style="margin-right: 4px"><Download /></el-icon>导出数据 (xlsx)
+                  </el-link>
+                </div>
+
                 <!-- 图表展示 (only show if chart has proper ECharts option) -->
                 <div v-if="(message.chartConfig && message.chartConfig.option) || message.chart" class="message-chart">
                   <div :id="`chart-${message.id}`" class="chart-container"></div>
@@ -3007,6 +3095,11 @@ function handleKeydown(event: KeyboardEvent) {
   .message-warning {
     margin-top: 12px;
     max-width: 640px;
+    font-size: 13px;
+  }
+
+  .chart-export-row {
+    margin-top: 10px;
     font-size: 13px;
   }
 
