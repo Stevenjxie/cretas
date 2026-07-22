@@ -2,6 +2,8 @@ package com.cretas.aims.service.inventory;
 
 import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
+import com.cretas.aims.entity.config.ApprovalWorkflow;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.enums.SalesProcessingMode;
 import com.cretas.aims.entity.enums.MaterialSupplyMode;
@@ -19,6 +21,7 @@ import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.finance.ArApService;
+import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.service.inventory.impl.SalesServiceImpl;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import jakarta.persistence.EntityManager;
@@ -83,6 +86,7 @@ class SalesServiceImplEmptyPriceE2Test {
     @Mock EntityManager                 entityManager;
     @Mock Query                         nativeQuery;
     @Mock WorkflowEngineService         workflowEngine;
+    @Mock ApprovalWorkflowService       approvalWorkflowService;
 
     SalesServiceImpl salesService;
 
@@ -109,9 +113,18 @@ class SalesServiceImplEmptyPriceE2Test {
         ReflectionTestUtils.setField(salesService, "arApTransactionRepository", arApTransactionRepository);
         ReflectionTestUtils.setField(salesService, "entityManager", entityManager);
         ReflectionTestUtils.setField(salesService, "workflowEngine", workflowEngine);
-        when(workflowEngine.hasActiveWorkflow(FACTORY_ID, "SALES_ORDER")).thenReturn(true);
-        when(workflowEngine.startWorkflow(
-                eq(FACTORY_ID), eq("SALES_ORDER"), anyString(), anyMap(), anyLong()))
+        ReflectionTestUtils.setField(salesService, "approvalWorkflowService", approvalWorkflowService);
+        ApprovalWorkflow activeWorkflow = ApprovalWorkflow.builder()
+                .id("wf-sales")
+                .factoryId(FACTORY_ID)
+                .decisionType(DecisionType.SALES_ORDER_APPROVAL)
+                .publishStatus("published")
+                .enabled(true)
+                .build();
+        when(approvalWorkflowService.getActiveByDecisionType(
+                FACTORY_ID, DecisionType.SALES_ORDER_APPROVAL)).thenReturn(Optional.of(activeWorkflow));
+        when(workflowEngine.startWorkflowWithDefinition(
+                eq(FACTORY_ID), eq("SALES_ORDER"), anyString(), anyMap(), anyLong(), eq(activeWorkflow)))
                 .thenAnswer(inv -> ApprovalWorkflowInstance.builder()
                         .id("wf-inst-e2")
                         .factoryId(FACTORY_ID)
