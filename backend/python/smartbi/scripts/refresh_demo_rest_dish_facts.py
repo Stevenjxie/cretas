@@ -162,6 +162,42 @@ async def apply_refresh(conn: Any, target_end: date) -> Dict[str, Any]:
         FACTORY_ID, tpl_start, tpl_end, target_end, MARKER,
     )
     inserted = int(result.rsplit(" ", 1)[-1])
+    rescaled = "UPDATE 0"
+    if inserted:
+        # 双 demo 数据空间对齐: agg_daily 的多数近月天是 QHJ gold 克隆
+        # (~4x 于本租户交易流水)。菜品级答案与营收概览若差 4 倍, demo 叙事
+        # 就断了 — 按日把克隆明细等比放大到 agg 口径; 自有格网天 factor≈1
+        # 原样保留, 无 agg 行的天跳过 (保持交易级对账)。
+        rescaled = await conn.execute(
+            """
+            WITH agg_day AS (
+              SELECT date, SUM(net_amount) AS rev
+                FROM agg_daily WHERE factory_id = $1 GROUP BY date
+            ),
+            dish_day AS (
+              SELECT t.date, SUM(i.amount) AS rev
+                FROM fact_pos_item i
+                JOIN fact_pos_transaction t ON t.id = i.transaction_id
+                JOIN dim_product p
+                  ON p.product_id = i.product_id AND p.factory_id = i.factory_id
+               WHERE i.factory_id = $1 AND i.source_item_raw = $2
+               GROUP BY t.date
+            ),
+            factors AS (
+              SELECT d.date, a.rev / NULLIF(d.rev, 0) AS factor
+                FROM dish_day d JOIN agg_day a ON a.date = d.date
+               WHERE a.rev / NULLIF(d.rev, 0) BETWEEN 1.01 AND 25
+            )
+            UPDATE fact_pos_item i
+               SET qty = ROUND(i.qty * f.factor, 2),
+                   amount = ROUND(i.amount * f.factor, 2)
+              FROM fact_pos_transaction t, factors f
+             WHERE t.id = i.transaction_id
+               AND i.factory_id = $1 AND i.source_item_raw = $2
+               AND t.date = f.date
+            """,
+            FACTORY_ID, MARKER,
+        )
     if inserted:
         # Fresh rows shift planner estimates; stale stats regressed the
         # margin anchor scans from seconds to minutes before (agg_daily 前科).
@@ -181,6 +217,7 @@ async def apply_refresh(conn: Any, target_end: date) -> Dict[str, Any]:
     return {
         "stray_items_deleted": int(strays.rsplit(" ", 1)[-1]),
         "inserted_items": inserted,
+        "rescaled_items": int(rescaled.rsplit(" ", 1)[-1]),
         "joined_max_date_after": str(verification["joined_max_date"]),
         "marker_rows_after": int(verification["marker_rows"]),
     }
