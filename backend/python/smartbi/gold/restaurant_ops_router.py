@@ -295,6 +295,11 @@ def match_restaurant_ops(query: str) -> Optional[str]:
     if not query:
         return None
     q = query.strip()
+    # Explicit "行业参考做法" requests are the most specific intent of all —
+    # they must win before any metric keyword (毛利/损耗/…) grabs the query.
+    from smartbi.gold.restaurant_playbook import PLAYBOOK_CODE, PLAYBOOK_TRIGGERS
+    if any(trigger in q for trigger in PLAYBOOK_TRIGGERS):
+        return PLAYBOOK_CODE
     # Time comparisons are a sales-summary question, not the generic
     # all-history trend report.  This must run before the broad "环比/趋势"
     # pattern so "上个月和上上个月营收相比" keeps both requested periods.
@@ -350,6 +355,8 @@ def reconcile_restaurant_ops_code(
         return expected_code
 
     def _specificity(code: str) -> int:
+        if code == "RESTAURANT_OPS_PLAYBOOK":
+            return 3  # explicit phrase request — never overridden by a hint
         if code == "RESTAURANT_OPS_SALES_SUMMARY" and _is_explicit_sales_period_comparison(query):
             return 3
         return 1 if code in _GENERIC_RESTAURANT_OPS_CODES else 2
@@ -3304,7 +3311,10 @@ async def resolve_staffing_advice(smartbi_pool, factory_id: str) -> OpsAnswer:
     )
 
 
+from smartbi.gold.restaurant_playbook import resolve_playbook as _resolve_playbook
+
 _RESOLVERS = {
+    "RESTAURANT_OPS_PLAYBOOK": _resolve_playbook,
     "RESTAURANT_OPS_WASTAGE_TOP": resolve_wastage_top,
     "RESTAURANT_OPS_STOCK_SHORTAGE": resolve_stock_shortage,
     "RESTAURANT_OPS_RECIPE_COST": resolve_recipe_cost,

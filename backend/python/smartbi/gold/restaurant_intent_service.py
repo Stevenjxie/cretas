@@ -235,6 +235,13 @@ async def tiered_answer(
     calls ``parse_restaurant_query`` itself exactly as before.
     """
     try:
+        from smartbi.gold.restaurant_playbook import PLAYBOOK_TRIGGERS
+        if any(trigger in (query or "") for trigger in PLAYBOOK_TRIGGERS):
+            # Explicit playbook phrases are served by the deterministic T1
+            # keyword resolver; the tiered parser doesn't know the code and
+            # would degrade the request to a clarification. Fail open so the
+            # caller's resolve_by_code fallback answers it.
+            return None
         spec = precomputed_spec if precomputed_spec is not None else await parse_restaurant_query(
             query, pool, factory_id=factory_id, session_key=session_key,
         )
