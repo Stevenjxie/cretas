@@ -701,3 +701,18 @@
 - **Commit/PR/main 状态**：本条随最终提交更新 exact commit/main。
 - **部署状态**：`NOT_DEPLOYED`。
 - **回归状态**：`TARGET_TESTS_PASSED_AWAITING_MERGE`；修复和验证期间生产业务 mutation=0，未创建生产计划、未修改 Workflow/SKU，未触碰 LIUSHANMEN。
+
+## F006 R3 销售订单统一 OA 断链（2026-07-22）
+
+### BUG-F006-R3-SALES-OA-INSTANCE-001
+
+- **发现阶段/时间/页面/步骤**：F006 采购→销售→生产 headed MVP，2026-07-22；新建并确认 `SO-20260722-0001` 后业务状态自动进入 `FINANCE_APPROVED`，但个人 OA“我发起的”没有该订单，审批节点、角色和实例均不存在。
+- **期望/实际/业务影响**：销售订单提交必须和采购订单一样启动唯一、持久化的统一 OA instance；免人工审批只能自动走到 OA 终态，不能绕过 OA 留痕。实际 F006 销售仍由 legacy `approval_chain_configs` 直接修改业务状态，`/workflow/my-created` 正确返回“无实例”，导致同一系统采购有 OA、销售无 OA，超过阈值的人工财审也没有可处理待办。
+- **证据路径**：`C:/Users/Steve/my-prototype-logistics/tmp/e2e-f006-mvp-sales-20260722101705`、`C:/Users/Steve/my-prototype-logistics/tmp/e2e-f006-mvp-sales-production-readonly-20260722101937`。本轮销售 mutation 仅创建并确认该唯一测试单；发现断链后立即停止后续写入，生产入口只读验证 `actualBusinessWrites=0`。
+- **根因**：采购 `submitOrder()` 已强制 active graph 并由 `WorkflowEngine` 原子创建实例；销售 `confirmOrder()` 在无 active graph 时 fallback legacy threshold，低额/外部订单直接 `approveFinanceForOrder`，高额只写 `PENDING_FINANCE_REVIEW`，两路都不创建 `approval_workflow_instances`。销售 Controller 还未把本次确认人传给 workflow；OA action controller 仅适配 PURCHASE_ORDER。审查同时发现三处同因残留：待人工审批订单仍发布 confirmed event 并提前生成财务凭证；运行中实例没有阻止管理员原地修改定义；OA action 虽要求 `idempotencyKey`，却没有持久化唯一账本。
+- **修复**：F006 初始化并发布 `SALES_ORDER_APPROVAL` graph，保持既有政策：外部渠道及金额不超过5000元自动通过、超过5000元进入财务审批。所有分支均由 `WorkflowEngine` 创建唯一实例；确认接口以 JWT 当前用户作为发起人；缺 active graph/引擎/发起人 fail-closed；OA action adapter 负责 approve/reject 后事务性回写销售状态，业务页旧财审入口不得绕过 OA。实例以确切 active definition 启动并写绑定摘要，存在 RUNNING 实例时禁止修改、删除、归档或停用其定义；销售凭证只在财务批准事件后生成，待审批阶段不记账。新增通用 OA action durable ledger，以 PostgreSQL transaction advisory lock 和 `(factoryId, instanceId, idempotencyKey)` 唯一键保证同键同请求返回原结果、同键异请求409、失败事务不留下 completed 记录。OA 待办批量回填销售订单号、客户与金额。已发布模板可由有对应管理员角色的用户在“Canvas 配置编辑器 → 审批工作流 → 销售订单审批”中维护条件、阈值和审批角色；SQL 只提供首次默认模板，不覆盖工厂现有有效配置，也不回填或改写历史业务记录。迁移采用明确切流：新提交只走统一 OA；旧审批配置与历史记录仅只读兼容，旧写入口在已接入 OA 的工厂 fail-closed，待消费者归零后再独立审计删除，不允许新旧两条可写路径静默并行。
+- **修改文件**：`SalesController`、`SalesService/Impl`、`WorkflowInstanceController`、`ApprovalWorkflowServiceImpl`、销售凭证 listener、OA action idempotency Entity/Repository/Service、F006 SALES_ORDER workflow 与幂等账本 Flyway；Web 销售订单/旧财审页、OA 待办、Canvas/ApprovalWorkflowEditor、旧审批链兼容页及对应 Java/Web 目标测试；不修改既有生产销售单或 OA 实例。
+- **测试**：执行者 Java 目标测试 43/43 PASS，含真实 PostgreSQL JPA repository startup gate；Web Vitest 10 files/29 tests PASS，`vue-tsc --noEmit` PASS；迁移契约、真实销售金额阈值引擎、销售低额自动终态仍持久实例、高额财务待办、真实发起人、缺路由事务回滚、重复提交、OA approve/reject、业务页绕过、自批/跨厂、待审批不提前记账、definition running guard、OA action replay/冲突/失败回滚均纳入最终 release gate。
+- **Commit/PR/main 状态**：`IN_PROGRESS`；完成目标测试、审查和合入后更新 exact commit/main。
+- **部署状态**：`NOT_DEPLOYED`。
+- **回归状态**：`PRODUCT_DEFECT_CONFIRMED_FIX_IN_PROGRESS`；现有 `SO-20260722-0001` 保留为现场，不重建、不桥接、不修改，部署后新单验证统一 OA；未触碰 LIUSHANMEN。
