@@ -1410,3 +1410,140 @@ def test_demo_data_factory_real_tenants_never_mapped():
     assert _r.demo_data_factory_for_code(
         "RESTAURANT_OPS_SALES_SUMMARY", "F006", store_scoped=True,
     ) == "F006"
+
+
+# --- R9: 实体检测 (Sheet 7/22 用户复测缺口) — 时间/菜品 ---
+
+
+def test_rolling_year_window():
+    rng, label = _resolve_sales_date_range("过去一年营收多少", today=date(2026, 7, 22))
+    assert label == "最近一年"
+    assert rng == (date(2025, 7, 23), date(2026, 7, 22))
+
+
+def test_rolling_two_year_window_capped():
+    rng, label = _resolve_sales_date_range("近两年营收", today=date(2026, 7, 22))
+    assert label == "最近2年"
+    assert (rng[1] - rng[0]).days + 1 == 730
+
+
+@pytest.mark.parametrize("query", ["明天营业额会是多少", "下周营收预计多少", "下个月营业额"])
+def test_future_phrases_get_future_sentinel(query):
+    rng, label = _resolve_sales_date_range(query, today=date(2026, 7, 22))
+    assert rng == (None, None)
+    assert label == "未来时间"
+
+
+def test_action_clause_tomorrow_keeps_real_window():
+    rng, label = _resolve_sales_date_range(
+        "本周营收怎么样，明天先做什么", today=date(2026, 7, 22),
+    )
+    assert label == "本周"
+
+
+def test_sales_summary_declines_future_without_substitution(monkeypatch):
+    import smartbi.gold.queries as _q
+
+    async def _boom(*a, **kw):
+        raise AssertionError("future questions must not query finance data")
+
+    monkeypatch.setattr(_q, "finance_summary", _boom)
+    monkeypatch.setattr(_q, "store_comparison", _boom)
+    answer = asyncio.run(resolve_sales_summary(
+        object(), "RES_TEST", role="restaurant_owner",
+        query="明天营业额会是多少", today=date(2026, 7, 22),
+    ))
+    assert "尚未发生" in answer.answer_text
+    assert "不会用历史数据替代" in answer.answer_text
+    assert answer.meta.get("future_request") is True
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("米饭的毛利率是多少", "米饭"),
+    ("招牌藤椒味(单人份)的毛利是多少", "招牌藤椒味(单人份)"),
+    ("招牌藤椒味卖得怎么样", "招牌藤椒味"),
+    ("整体毛利率是多少", None),
+    ("哪道菜毛利最高", None),
+    ("菜品毛利率排行", None),
+    ("哪家店卖得最好", None),
+    ("昨天米饭的销量是多少", "米饭"),
+])
+def test_extract_dish_candidate(query, expected):
+    assert _r.extract_dish_candidate(query) == expected
+
+
+def test_dish_sales_phrase_routes_to_gross_margin():
+    assert match_restaurant_ops("招牌藤椒味卖得怎么样") == "RESTAURANT_OPS_GROSS_MARGIN"
+    assert match_restaurant_ops("哪家店卖得最好") != "RESTAURANT_OPS_GROSS_MARGIN"
+
+
+def _dish_rows():
+    return [
+        {"product_id": 1, "dish_name": "米饭(单人份)", "normalized_name": "米饭",
+         "total_qty": 100.0, "total_revenue": 500.0, "bills": 90,
+         "window_start": date(2026, 4, 1), "window_end": date(2026, 4, 30)},
+        {"product_id": 2, "dish_name": "招牌藤椒味(单人份)", "normalized_name": "招牌藤椒味",
+         "total_qty": 50.0, "total_revenue": 4000.0, "bills": 45,
+         "window_start": date(2026, 4, 1), "window_end": date(2026, 4, 30)},
+        {"product_id": 3, "dish_name": "藤椒味双人份", "normalized_name": "藤椒味双人",
+         "total_qty": 20.0, "total_revenue": 3000.0, "bills": 18,
+         "window_start": date(2026, 4, 1), "window_end": date(2026, 4, 30)},
+    ]
+
+
+def test_match_dish_rows_exact_beats_containment():
+    hits = _r._match_dish_rows("米饭", _dish_rows())
+    assert len(hits) == 1 and hits[0]["product_id"] == 1
+
+
+def test_match_dish_rows_containment_multi():
+    hits = _r._match_dish_rows("藤椒味", _dish_rows())
+    assert {h["product_id"] for h in hits} == {2, 3}
+
+
+def _gross_margin_pool(rows):
+    class _Conn:
+        def transaction(self):
+            return _NoopTransaction()
+
+        async def execute(self, *_args):
+            return None
+
+        async def fetch(self, sql, *_args):
+            if "FROM fact_pos_item" in sql and "GROUP BY p.product_id" in sql:
+                return rows
+            if "agg_restaurant_product_cost" in sql:
+                return []
+            return []
+
+    class _Ctx:
+        async def __aenter__(self):
+            return _Conn()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class _Pool:
+        def acquire(self):
+            return _Ctx()
+
+    return _Pool()
+
+
+def test_named_unknown_dish_declines_without_ranking():
+    result = asyncio.run(_r.resolve_gross_margin(
+        _gross_margin_pool(_dish_rows()), "RES_TEST",
+        role="restaurant_manager", query="月球烤肉的毛利率是多少",
+    ))
+    assert "没有找到名为「月球烤肉」的菜品" in result.answer_text
+    assert "不会用全部菜品的榜单替代" in result.answer_text
+    assert result.meta.get("dish_not_found") == "月球烤肉"
+
+
+def test_named_ambiguous_dish_asks_clarification():
+    result = asyncio.run(_r.resolve_gross_margin(
+        _gross_margin_pool(_dish_rows()), "RES_TEST",
+        role="restaurant_manager", query="藤椒味的毛利是多少",
+    ))
+    assert "匹配到多道菜品" in result.answer_text
+    assert result.meta.get("dish_mention_ambiguous") == "藤椒味"

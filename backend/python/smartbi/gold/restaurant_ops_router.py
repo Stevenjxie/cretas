@@ -300,6 +300,15 @@ def match_restaurant_ops(query: str) -> Optional[str]:
     from smartbi.gold.restaurant_playbook import PLAYBOOK_CODE, PLAYBOOK_TRIGGERS
     if any(trigger in q for trigger in PLAYBOOK_TRIGGERS):
         return PLAYBOOK_CODE
+    # Named-dish sales questions ("招牌藤椒味卖得怎么样") previously fell to
+    # the LLM fallback which answered from a factory-report frame. The POS
+    # dish data lives in the gross-margin resolver; dish scoping above
+    # narrows the answer to the named dish.
+    if (
+        re.search(r"卖得(?:怎么样|如何|好不好)", q)
+        and not any(tok in q for tok in ("门店", "分店", "店铺", "哪家店", "哪个店"))
+    ):
+        return "RESTAURANT_OPS_GROSS_MARGIN"
     # Time comparisons are a sales-summary question, not the generic
     # all-history trend report.  This must run before the broad "环比/趋势"
     # pattern so "上个月和上上个月营收相比" keeps both requested periods.
@@ -397,6 +406,66 @@ def _range_text(start_date: Any, end_date: Any) -> str:
     if start_date and end_date and _date_text(start_date) == _date_text(end_date):
         return f"{_date_text(start_date)} 当天"
     return f"{_date_text(start_date)} 至 {_date_text(end_date)}"
+
+
+_FUTURE_WINDOW_LABEL = "未来时间"
+
+# Explicit dish mentions ("米饭的毛利率"). The candidate is only trusted after
+# it matches the tenant's own dish rows — an unmatched candidate produces a
+# targeted "没有找到该菜品" decline instead of the all-dish ranking.
+_DISH_GENERIC_TOKENS = frozenset({
+    "整体", "总体", "全部", "所有", "各", "菜品", "菜", "什么菜", "哪道菜",
+    "哪个菜", "哪些菜", "单品", "产品", "本店", "门店", "今天", "昨天", "上月",
+})
+_DISH_QUERY_RE = re.compile(
+    r"^[「\"']?(.{1,30}?)[」\"']?(?:的)?"
+    r"(?:毛利率|毛利|销量|销售额|营收|卖得)"
+    r"(?:是多少|有多少|怎么样|如何|好不好|多少)?[?？。!！]?$"
+)
+_DISH_LEADING_TIME_RE = re.compile(
+    r"^(?:今天|今日|昨天|昨日|前天|本周|这周|上周|本月|这个月|上个月|上月"
+    r"|今年|去年|最近\S{0,4}|近\S{0,4}|过去\S{0,4})+"
+)
+
+
+def extract_dish_candidate(query: Optional[str]) -> Optional[str]:
+    """Pull an explicit dish-name candidate from a margin/sales question."""
+    if not query:
+        return None
+    text = query.strip()
+    if any(tok in text for tok in ("门店", "分店", "店铺", "哪家店", "哪个店")):
+        return None
+    match = _DISH_QUERY_RE.match(text)
+    if not match:
+        return None
+    candidate = _DISH_LEADING_TIME_RE.sub("", match.group(1).strip())
+    candidate = candidate.strip("的， ,")
+    if len(candidate) < 2 or candidate in _DISH_GENERIC_TOKENS:
+        return None
+    if any(tok in candidate for tok in ("排行", "排名", "趋势", "对比", "分析", "整体", "全部")):
+        return None
+    return candidate[:60]
+
+
+def _match_dish_rows(candidate: str, rows) -> list:
+    """POS rows whose dish name matches the candidate (exact first)."""
+    exact = [
+        r for r in rows
+        if candidate in (r["dish_name"], r["normalized_name"])
+    ]
+    if exact:
+        return exact[:1]
+    hits = []
+    seen = set()
+    for r in rows:
+        name = r["dish_name"] or ""
+        norm = r["normalized_name"] or ""
+        if candidate in name or candidate in norm or (norm and norm in candidate):
+            key = r["product_id"]
+            if key not in seen:
+                seen.add(key)
+                hits.append(r)
+    return hits[:6]
 
 
 # Follow-up phrases that reference earlier dates ("沿用刚才的日期") are only
@@ -747,14 +816,14 @@ def _parse_small_count(raw: Optional[str], default: int = 1) -> int:
 
 
 def _relative_period_match(text: str) -> Optional[Tuple[int, str]]:
-    match = re.search(r"(?:最近|近|过去)\s*([0-9一二两三四五六七八九十俩仨]{0,4})\s*个?\s*(天|日|周|星期|月)", text)
+    match = re.search(r"(?:最近|近|过去)\s*([0-9一二两三四五六七八九十俩仨]{0,4})\s*个?\s*(天|日|周|星期|月|年)", text)
     if match is None:
         # "这两个月" / "这3周" style: 这 + explicit numeral + unit. The numeral
         # is REQUIRED here ({1,4}, not {0,4}) so bare "这个月" / "这周" keep
         # falling through to the named-window branches in
         # _resolve_sales_date_range (本月 / 本周) instead of becoming a
         # rolling window.
-        match = re.search(r"这\s*([0-9一二两三四五六七八九十俩仨]{1,4})\s*个?\s*(天|日|周|星期|月)", text)
+        match = re.search(r"这\s*([0-9一二两三四五六七八九十俩仨]{1,4})\s*个?\s*(天|日|周|星期|月|年)", text)
     if not match:
         return None
     count = max(1, _parse_small_count(match.group(1), default=1))
@@ -812,6 +881,12 @@ def _resolve_sales_date_range(
             days = max(1, min(count * 30, 365))
             label = "最近30天" if count == 1 else f"最近{count}个月"
             return (anchor - timedelta(days=days - 1), anchor), label
+        if unit == "年":
+            # Sheet 7/22 实体检测缺口: "过去一年" 此前落到全部历史 (19个月),
+            # 属于"用其他日期替代"。滚动一年窗, 上限两年 (demo 数据边界)。
+            days = max(365, min(count * 365, 730))
+            label = "最近一年" if count == 1 else f"最近{count}年"
+            return (anchor - timedelta(days=days - 1), anchor), label
 
     # 半年 = 滚动 ~183 天 (2026-07-08 时间词汇加硬)。上半年/下半年是日历半年
     # 不是滚动窗口, 不在此猜测 —— 落到全部历史, 诚实回退好过错窗口。
@@ -841,6 +916,15 @@ def _resolve_sales_date_range(
 
     if any(token in text for token in ("今天", "今日")):
         return (anchor, anchor), "今天"
+
+    # Future-only phrasing must never fall through to 全部历史 — answering a
+    # question about tomorrow with historical totals is silent date
+    # substitution. Checked last so action clauses alongside a real window
+    # ("本周营收，下周目标怎么定") keep the historical window above.
+    if any(token in text for token in (
+        "明天", "明日", "后天", "下周", "下星期", "下个月", "下月", "明年", "未来",
+    )):
+        return (None, None), _FUTURE_WINDOW_LABEL
 
     return (None, None), "全部历史"
 
@@ -1386,6 +1470,38 @@ async def resolve_gross_margin(
             """,
             factory_id, analysis_days,
         )
+        # Sheet 7/22 实体检测: 点名单菜的问题 ("米饭的毛利率") 此前返回全菜品
+        # 榜 — 菜品版的全店榜退化。候选名必须命中本租户菜品行才限域; 命不中
+        # 定向拒答, 多命中请求澄清。泛指问法 (整体/哪道/排行) 不受影响。
+        dish_candidate = extract_dish_candidate(query)
+        if dish_candidate and pos_rows:
+            matched_rows = _match_dish_rows(dish_candidate, pos_rows)
+            if not matched_rows:
+                return OpsAnswer(
+                    code="RESTAURANT_OPS_GROSS_MARGIN",
+                    title=f"{dish_candidate} — 菜品查询",
+                    answer_text=(
+                        f"没有找到名为「{dish_candidate}」的菜品，"
+                        "不能给出该菜的销量或毛利，也不会用全部菜品的榜单替代。"
+                        "请核对菜名；可以先问「哪个菜卖得最好」查看在售菜品。"
+                    ),
+                    charts=[], kpis=[],
+                    meta={"dish_not_found": dish_candidate},
+                )
+            if len(matched_rows) > 1:
+                options = "、".join(r["dish_name"] for r in matched_rows[:3])
+                return OpsAnswer(
+                    code="RESTAURANT_OPS_GROSS_MARGIN",
+                    title="请确认菜品",
+                    answer_text=(
+                        f"「{dish_candidate}」匹配到多道菜品：{options}。"
+                        "请指定其中一道后再查询。"
+                    ),
+                    charts=[], kpis=[],
+                    meta={"dish_mention_ambiguous": dish_candidate,
+                          "candidates": [r["dish_name"] for r in matched_rows]},
+                )
+            pos_rows = matched_rows
         if trend_requested:
             monthly_pos_rows = await conn.fetch(
                 """
@@ -2452,6 +2568,18 @@ async def resolve_sales_summary(
         "先不要做", "不要做", "先别做", "不该做", "避免做", "暂时别",
     ))
     date_range, window_label = spec.date_range, spec.window_label
+    if window_label == _FUTURE_WINDOW_LABEL:
+        return OpsAnswer(
+            code="RESTAURANT_OPS_SALES_SUMMARY",
+            title="经营销售概览",
+            answer_text=(
+                "您问的是尚未发生的未来时间（如明天/下周），还没有营业数据可统计，"
+                "也不会用历史数据替代来作答。可以改问「今天」「昨天」或指定具体历史日期；"
+                "如需展望，可以看「最近30天」或「营收趋势」作为参考。"
+            ),
+            charts=[], kpis=[],
+            meta={"future_request": True, "window_label": window_label},
+        )
     summary = await finance_summary(smartbi_pool, factory_id, date_range, top_n_stores=5)
     comparison_summary: Optional[Dict[str, Any]] = None
     if spec.comparison_label and spec.comparison_range[0] and spec.comparison_range[1]:
