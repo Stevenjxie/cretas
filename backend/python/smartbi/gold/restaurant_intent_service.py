@@ -469,6 +469,11 @@ def should_delegate(
         from smartbi.gold.restaurant_ops_router import store_dish_split_dish
         if store_dish_split_dish(query):
             return True
+        # 盈亏存在性问 ("有没有店在亏损") — 裸「亏损」不在 _profit_intent
+        # 词典里, 规则 3 接不住; 存在性正则命中即放行 (R15b)。
+        from smartbi.gold.restaurant_ops_router import _NEGATIVE_MARGIN_EXISTENCE_RE
+        if _NEGATIVE_MARGIN_EXISTENCE_RE.search(query):
+            return True
     if spec is None:
         return False
     if spec.clarification_needed:
