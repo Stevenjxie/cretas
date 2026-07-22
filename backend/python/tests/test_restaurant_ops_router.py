@@ -1558,3 +1558,44 @@ def test_named_ambiguous_dish_asks_clarification():
 ])
 def test_rolling_window_revenue_routes_to_sales_summary(query, expected):
     assert match_restaurant_ops(query) == expected
+
+
+# --- R11: 菜品链 — 单独问准确识别 + 多轮继承 (用户 7/22 晚) ---
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("米饭的销量是多少", "米饭"),
+    ("米饭的成本如何", "米饭"),
+    ("招牌藤椒味的成本是多少", "招牌藤椒味"),
+    ("这个过去一个月的销量如何", None),
+    ("最近一个月的营收情况如何？毛利有多少", None),
+    ("米饭的销量是多少；继续追问：这个过去一个月的销量如何", "米饭"),
+    ("米饭的销量是多少；继续追问：成本如何", "米饭"),
+])
+def test_dish_candidate_singleturn_and_contextualized(query, expected):
+    assert _r.extract_dish_candidate(query) == expected
+
+
+@pytest.mark.parametrize("query", [
+    "米饭的销量是多少",
+    "米饭的成本如何",
+    "招牌藤椒味的销售额是多少",
+])
+def test_named_dish_metric_routes_to_gross_margin(query):
+    assert match_restaurant_ops(query) == "RESTAURANT_OPS_GROSS_MARGIN"
+
+
+def test_generic_metric_questions_not_stolen_by_dish_rule():
+    assert match_restaurant_ops("最近一个月的营收情况如何？毛利有多少") == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert match_restaurant_ops("菜品毛利率排行") == "RESTAURANT_OPS_GROSS_MARGIN"
+
+
+def test_dish_scoped_answer_prepends_sales_header():
+    result = asyncio.run(_r.resolve_gross_margin(
+        _gross_margin_pool(_dish_rows()), "RES_TEST",
+        role="restaurant_manager", query="米饭的销量是多少",
+    ))
+    assert result.answer_text.startswith("「米饭(单人份)」")
+    assert "销量 100 份" in result.answer_text
+    assert "营收 ¥500.00" in result.answer_text
+    assert result.meta.get("targetDish") == "米饭(单人份)"

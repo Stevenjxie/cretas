@@ -362,6 +362,7 @@ async def tiered_answer(
 
 def should_delegate(
     spec: Optional[RestaurantQuerySpec], java_tool_name: Optional[str] = None,
+    query: Optional[str] = None,
 ) -> bool:
     """Phase 2 delegate gate (design doc section 3): decide whether the Java
     ``GoldBackedRestaurantTool.doExecute`` entry point should hand this query
@@ -401,6 +402,13 @@ def should_delegate(
     as "spec（parse 结果）+ `java_tool_name`" without carving out a
     per-tool rule yet).
     """
+    # Dish-scoped questions ("米饭的销量") delegate unconditionally: the
+    # Java Gold tools have no per-dish answer path, while the Python
+    # gross-margin resolver scopes to the named dish (Sheet 7/22 菜品链).
+    if query and extract_store_mention(query) is None:
+        from smartbi.gold.restaurant_ops_router import extract_dish_candidate
+        if extract_dish_candidate(query):
+            return True
     if spec is None:
         return False
     if spec.clarification_needed:
