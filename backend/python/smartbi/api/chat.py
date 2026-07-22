@@ -1435,7 +1435,15 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                     )
                     if ops_answer:
                         customer_answer = sanitize_customer_ai_text(ops_answer.answer_text)
-                        displayable_result = has_displayable_business_result(customer_answer)
+                        guard_clarification = any(
+                            key in (ops_answer.meta or {})
+                            for key in ("missing_reference", "store_not_found",
+                                        "store_mention_ambiguous")
+                        )
+                        displayable_result = (
+                            guard_clarification
+                            or has_displayable_business_result(customer_answer)
+                        )
                         response = GeneralAnalysisResponse(
                             success=displayable_result,
                             error=None if displayable_result else "本次没有获得可展示的业务结果",
@@ -1529,7 +1537,11 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                     )
                     if ops_answer:
                         customer_answer = sanitize_customer_ai_text(ops_answer.answer_text)
-                        displayable_result = has_displayable_business_result(customer_answer)
+                        displayable_result = any(
+                            key in (ops_answer.meta or {})
+                            for key in ("missing_reference", "store_not_found",
+                                        "store_mention_ambiguous")
+                        ) or has_displayable_business_result(customer_answer)
                         response = GeneralAnalysisResponse(
                             success=displayable_result,
                             error=None if displayable_result else "本次没有获得可展示的业务结果",
@@ -2391,9 +2403,17 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                             )
                             if ops_answer:
                                 fallback_answer = sanitize_customer_ai_text(ops_answer.answer_text)
-                                fallback_contract_pass = has_displayable_business_result(fallback_answer)
+                                fallback_guard = any(
+                                    key in (ops_answer.meta or {})
+                                    for key in ("missing_reference", "store_not_found",
+                                                "store_mention_ambiguous")
+                                )
+                                fallback_contract_pass = (
+                                    fallback_guard
+                                    or has_displayable_business_result(fallback_answer)
+                                )
                                 tiered_ops = {
-                                    "kind": "answer",
+                                    "kind": "clarification" if fallback_guard else "answer",
                                     "answer_text": fallback_answer,
                                     "charts": ops_answer.charts,
                                     "kpis": ops_answer.kpis,

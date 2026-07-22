@@ -43,7 +43,10 @@ from smartbi.gold.restaurant_intent import (
     log_intent_capture,
     parse_restaurant_query,
 )
-from smartbi.gold.restaurant_ops_router import resolve_by_code as _resolve_tiered
+from smartbi.gold.restaurant_ops_router import (
+    extract_store_mention,
+    resolve_by_code as _resolve_tiered,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -249,13 +252,28 @@ async def tiered_answer(
         resolver_query = build_resolver_query(query, spec)
         execution_kwargs = _resolver_kwargs(spec, role, resolver_query)
         plan = spec.planned_intents or (spec.intent,)
+        store_mention = (
+            extract_store_mention(resolver_query) or extract_store_mention(query)
+            if "RESTAURANT_OPS_STORE_MARGIN" in plan
+            else None
+        )
         planned_results: List[Tuple[str, Any]] = []
         for code in plan:
+            code_kwargs = execution_kwargs
+            code_factory = factory_id
+            if code == "RESTAURANT_OPS_STORE_MARGIN" and store_mention:
+                code_kwargs = dict(execution_kwargs)
+                code_kwargs["store_mention"] = store_mention
+                # Store-scoped demo reads live in the seeded gold tenant —
+                # same rule as chat.py `_restaurant_analysis_data_factory_id`.
+                # Auth/session/cache identity stays on the trusted tenant.
+                if factory_id.upper() == "DEMO_REST":
+                    code_factory = "RES_3101_009"
             resolved = await _resolve_tiered(
                 code,
                 pool,
-                factory_id,
-                **execution_kwargs,
+                code_factory,
+                **code_kwargs,
             )
             if resolved is not None:
                 planned_results.append((code, resolved))
@@ -266,6 +284,22 @@ async def tiered_answer(
         )
         if not tiered_result:
             return None
+
+        # Guard declines (missing date reference, unknown/ambiguous store) are
+        # clarifications: their text must reach the user verbatim instead of
+        # being replaced by the generic "no displayable result" wrapper.
+        guard_meta = getattr(tiered_result, "meta", None) or {}
+        if any(
+            key in guard_meta
+            for key in ("missing_reference", "store_not_found", "store_mention_ambiguous")
+        ):
+            return {
+                "kind": "clarification",
+                "answer_text": sanitize_customer_ai_text(
+                    str(getattr(tiered_result, "answer_text", "") or "")
+                ),
+                "spec": spec,
+            }
 
         result_kpis = getattr(tiered_result, "kpis", None) or []
         result_meta = getattr(tiered_result, "meta", None) or {}
