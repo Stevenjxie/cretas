@@ -678,7 +678,7 @@ public class IntentExecutionOrchestrator {
                 response = toolDispatchService.executeWithTool(toolOpt.get(), factoryId, request, intent, userId, userRole, matchResult);
             } else {
                 log.warn("Tool 未找到: toolName={}, intentCode={}", toolName, intent.getIntentCode());
-                response = toolDispatchService.buildNoToolResponse(intent);
+                response = noToolResponseWithRestaurantFallback(intent, factoryId, request);
             }
         } else if (dynamicToolSelectionService.isSkillsEnabled()
                 && dynamicToolSelectionService.requiresDynamicSelection(matchResult)) {
@@ -705,7 +705,7 @@ public class IntentExecutionOrchestrator {
             } else {
                 long count = branchNoMatch.incrementAndGet();
                 log.warn("[Branch:NoMatch] 无路由匹配: intentCode={}, total={}", intent.getIntentCode(), count);
-                response = toolDispatchService.buildNoToolResponse(intent);
+                response = noToolResponseWithRestaurantFallback(intent, factoryId, request);
             }
         }
 
@@ -860,7 +860,7 @@ public class IntentExecutionOrchestrator {
             if (toolOpt.isPresent()) {
                 response = toolDispatchService.executeWithTool(toolOpt.get(), factoryId, request, intent, userId, userRole, null);
             } else {
-                response = toolDispatchService.buildNoToolResponse(intent);
+                response = noToolResponseWithRestaurantFallback(intent, factoryId, request);
             }
         } else {
             // Sprint 9 P0.1 fix (2026-05-21): explicit intent path 同 execute() 一样需 Skill fallback.
@@ -871,7 +871,7 @@ public class IntentExecutionOrchestrator {
                 log.info("[Explicit-Intent] 显式 Skill 路由成功: intentCode={}", intent.getIntentCode());
                 response = explicitSkillFallback;
             } else {
-                response = toolDispatchService.buildNoToolResponse(intent);
+                response = noToolResponseWithRestaurantFallback(intent, factoryId, request);
             }
         }
 
@@ -1571,6 +1571,24 @@ public class IntentExecutionOrchestrator {
                 .resultData(delegatedData)
                 .executedAt(LocalDateTime.now())
                 .build();
+    }
+
+    /**
+     * R13e: 意图已识别但无执行器 (误匹配到未配置意图, 如「那招牌藤椒味(单人份)呢」
+     * → RESTAURANT_DISH_CREATE) 是死胡同出口 — 餐饮租户先问 tiered 路由再放弃,
+     * 避免用户拿到"请联系管理员配置"而实际数据可答。
+     */
+    private IntentExecuteResponse noToolResponseWithRestaurantFallback(AIIntentConfig intent,
+                                                                       String factoryId,
+                                                                       IntentExecuteRequest request) {
+        IntentExecuteResponse delegated = tryRestaurantTieredDelegate(
+                factoryId, request != null ? request.getUserInput() : null, request);
+        if (delegated != null) {
+            log.info("[Branch:TieredDelegate] no-tool 出口被 tiered 路由接管: intentCode={}",
+                    intent != null ? intent.getIntentCode() : null);
+            return delegated;
+        }
+        return toolDispatchService.buildNoToolResponse(intent);
     }
 
     private static boolean isRestaurantTenant(String factoryId) {
