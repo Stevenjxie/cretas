@@ -16,6 +16,7 @@ import asyncio
 import hashlib
 import json as _json
 import logging
+from datetime import date
 import time
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
@@ -460,6 +461,144 @@ def _trusted_restaurant_session_key(
     return build_trusted_restaurant_session_key(
         factory_id, trusted_user_id, session_id,
     )
+
+
+_RESTAURANT_ANALYSIS_CONTEXT_FIELDS = frozenset({
+    "store_id",
+    "store_name",
+    "start_date",
+    "end_date",
+    "comparison_start_date",
+    "comparison_end_date",
+    "time_anchor_date",
+})
+_RESTAURANT_ANALYSIS_DATE_FIELDS = frozenset({
+    "start_date",
+    "end_date",
+    "comparison_start_date",
+    "comparison_end_date",
+    "time_anchor_date",
+})
+_RESTAURANT_ANALYSIS_FIELD_LABELS = {
+    "store_id": "门店编号",
+    "store_name": "门店名称",
+    "start_date": "开始日期",
+    "end_date": "结束日期",
+    "comparison_start_date": "对比开始日期",
+    "comparison_end_date": "对比结束日期",
+    "time_anchor_date": "时间基准日期",
+}
+
+
+def _validated_restaurant_analysis_context(
+    context: Optional[Dict[str, Any]],
+    table_type: Optional[str],
+) -> Dict[str, Any]:
+    """Validate the only request-body fields restaurant resolvers may consume.
+
+    Tenant identity is deliberately absent from the allow-list. Authorization,
+    session partitioning, and cache partitioning continue to use middleware state.
+    """
+    if table_type != "restaurant_ops" or not context:
+        return {}
+    unknown = sorted(set(context) - _RESTAURANT_ANALYSIS_CONTEXT_FIELDS)
+    if unknown:
+        raise HTTPException(status_code=422, detail="餐饮分析上下文字段不受支持")
+
+    validated: Dict[str, Any] = {}
+    for key in _RESTAURANT_ANALYSIS_CONTEXT_FIELDS:
+        raw_value = context.get(key)
+        if raw_value is None:
+            continue
+        field_label = _RESTAURANT_ANALYSIS_FIELD_LABELS[key]
+        if not isinstance(raw_value, str):
+            raise HTTPException(status_code=422, detail=f"餐饮分析的{field_label}格式无效")
+        value = raw_value.strip()
+        if not value:
+            continue
+        max_length = 160 if key == "store_name" else 64
+        if key in _RESTAURANT_ANALYSIS_DATE_FIELDS:
+            max_length = 10
+        if len(value) > max_length:
+            raise HTTPException(status_code=422, detail=f"餐饮分析的{field_label}过长")
+        if key in _RESTAURANT_ANALYSIS_DATE_FIELDS:
+            try:
+                parsed = date.fromisoformat(value)
+            except ValueError:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"餐饮分析的{field_label}必须使用年-月-日格式",
+                ) from None
+            if parsed.isoformat() != value:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"餐饮分析的{field_label}必须使用年-月-日格式",
+                )
+            validated[key] = parsed
+        else:
+            validated[key] = value
+
+    for start_key, end_key in (
+        ("start_date", "end_date"),
+        ("comparison_start_date", "comparison_end_date"),
+    ):
+        has_start = start_key in validated
+        has_end = end_key in validated
+        if has_start != has_end:
+            raise HTTPException(status_code=422, detail="餐饮分析日期范围必须同时提供开始和结束日期")
+        if has_start and validated[start_key] > validated[end_key]:
+            raise HTTPException(status_code=422, detail="餐饮分析开始日期不能晚于结束日期")
+        if has_start and (validated[end_key] - validated[start_key]).days + 1 > 366:
+            raise HTTPException(status_code=422, detail="餐饮分析的单个日期范围不能超过366天")
+    if "comparison_start_date" in validated and "start_date" not in validated:
+        raise HTTPException(status_code=422, detail="对比日期必须与主日期范围同时提供")
+
+    has_comparison = "comparison_start_date" in validated
+    anchor = validated.get("time_anchor_date")
+    if has_comparison and anchor is None:
+        raise HTTPException(status_code=422, detail="日期对比必须提供有效的时间基准日期")
+    if has_comparison:
+        primary_start = validated["start_date"]
+        primary_end = validated["end_date"]
+        comparison_start = validated["comparison_start_date"]
+        comparison_end = validated["comparison_end_date"]
+        ranges_are_disjoint = (
+            primary_end < comparison_start
+            or comparison_end < primary_start
+        )
+        if not ranges_are_disjoint:
+            raise HTTPException(status_code=422, detail="主日期范围与对比日期范围不能重叠")
+
+    if anchor is not None:
+        try:
+            earliest_allowed = anchor.replace(year=anchor.year - 2)
+        except ValueError:
+            # A leap-day anchor maps to the last valid day in February.
+            earliest_allowed = anchor.replace(year=anchor.year - 2, day=28)
+        ranges = []
+        if "start_date" in validated:
+            ranges.append((validated["start_date"], validated["end_date"]))
+        if has_comparison:
+            ranges.append((
+                validated["comparison_start_date"],
+                validated["comparison_end_date"],
+            ))
+        if any(end > anchor for _start, end in ranges):
+            raise HTTPException(status_code=422, detail="餐饮分析日期不能晚于时间基准日期")
+        if any(start < earliest_allowed for start, _end in ranges):
+            raise HTTPException(status_code=422, detail="餐饮分析日期不能早于时间基准日期前两年")
+    return validated
+
+
+def _restaurant_analysis_data_factory_id(
+    trusted_factory_id: str,
+    context: Dict[str, Any],
+) -> str:
+    """Map demo store reads only; never use this value for auth/session/cache."""
+    store_scoped = bool(context.get("store_id") or context.get("store_name"))
+    if store_scoped and trusted_factory_id.upper() == "DEMO_REST":
+        return "RES_3101_009"
+    return trusted_factory_id
 
 
 # ============================================================================
@@ -1144,6 +1283,10 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
     # Trusted tenant and optional upload ownership are established before any
     # response-cache or sheet-cache lookup. Body identity fields are ignored.
     trusted_factory_id = _require_trusted_factory_id(http_request)
+    restaurant_context = _validated_restaurant_analysis_context(
+        request.context,
+        request.table_type,
+    )
     (
         trusted_role,
         trusted_user_key,
@@ -1181,6 +1324,7 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
         data=request.data,
         table_type=request.table_type,
         expected_intent=request.expected_intent,
+        context=restaurant_context,
     )
     session_sensitive_restaurant = bool(
         request.table_type == "restaurant_ops" and request.session_id
@@ -1226,6 +1370,84 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                     effective_ops_query, inherited_context = contextualize_restaurant_followup(
                         query, parent,
                     )
+
+                structured_ops_code = reconcile_restaurant_ops_code(
+                    effective_ops_query,
+                    expected_ops_code,
+                )
+                structured_margin_scope = bool(
+                    restaurant_context
+                    and (
+                        restaurant_context.get("store_id")
+                        or restaurant_context.get("store_name")
+                        or restaurant_context.get("comparison_start_date")
+                    )
+                    and any(token in effective_ops_query for token in ("毛利", "毛利率", "利润"))
+                )
+                if structured_margin_scope:
+                    structured_ops_code = "RESTAURANT_OPS_STORE_MARGIN"
+
+                if pool and restaurant_context and structured_ops_code:
+                    primary_range = (
+                        (
+                            restaurant_context["start_date"],
+                            restaurant_context["end_date"],
+                        )
+                        if restaurant_context.get("start_date")
+                        else None
+                    )
+                    comparison_range = (
+                        (
+                            restaurant_context["comparison_start_date"],
+                            restaurant_context["comparison_end_date"],
+                        )
+                        if restaurant_context.get("comparison_start_date")
+                        else None
+                    )
+                    analysis_factory_id = _restaurant_analysis_data_factory_id(
+                        factory_id_hdr,
+                        restaurant_context,
+                    )
+                    ops_answer = await resolve_by_code(
+                        structured_ops_code,
+                        pool,
+                        analysis_factory_id,
+                        role=trusted_role,
+                        query=effective_ops_query,
+                        date_range=primary_range,
+                        comparison_date_range=comparison_range,
+                        store_id=restaurant_context.get("store_id"),
+                        store_name=restaurant_context.get("store_name"),
+                        today=restaurant_context.get("time_anchor_date"),
+                    )
+                    if ops_answer:
+                        customer_answer = sanitize_customer_ai_text(ops_answer.answer_text)
+                        displayable_result = has_displayable_business_result(customer_answer)
+                        response = GeneralAnalysisResponse(
+                            success=displayable_result,
+                            error=None if displayable_result else "本次没有获得可展示的业务结果",
+                            answer=customer_answer,
+                            aiAnalysis=customer_answer,
+                            sessionId=request.session_id,
+                            thinkingEnabled=request.enable_thinking,
+                            insights=[],
+                            charts=ops_answer.charts,
+                            processing_time_ms=int((time.time() - start_time) * 1000),
+                        )
+                        if request.session_id and trusted_session_user_id is not None:
+                            from smartbi.services.chat_session_service import ChatSessionService
+                            await ChatSessionService(pool).upsert(
+                                session_id=request.session_id,
+                                factory_id=factory_id_hdr,
+                                parent_query=(effective_ops_query if inherited_context else query),
+                                parent_answer_summary=customer_answer,
+                                parent_template_code=structured_ops_code,
+                                parent_upload_id=None,
+                                user_id=trusted_session_user_id,
+                            )
+                        if not session_sensitive_restaurant:
+                            _chat_cache_set(cache_key, response.dict())
+                        return response
 
                 if pool:
                     # Every restaurant tier now goes through the same structured

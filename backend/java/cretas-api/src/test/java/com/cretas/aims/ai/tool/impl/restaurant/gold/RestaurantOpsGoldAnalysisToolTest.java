@@ -29,7 +29,7 @@ class RestaurantOpsGoldAnalysisToolTest {
     void opsReportCarriesOwnerDecisionBridgeFollowups() throws Exception {
         GoldFinanceClient gold = mock(GoldFinanceClient.class);
         when(gold.fetchRestaurantOpsAnalysis(
-                eq("DEMO_REST"), any(), any(), eq("RESTAURANT_OPS_WASTAGE_TOP")))
+                eq("DEMO_REST"), any(), any(), eq("RESTAURANT_OPS_WASTAGE_TOP"), any()))
                 .thenReturn(Map.of(
                         "success", true,
                         "answer", "损耗金额排名已经算好，活鱼和底料是主要风险。",
@@ -63,7 +63,7 @@ class RestaurantOpsGoldAnalysisToolTest {
         assertThat(followups).isNotEmpty();
         assertThat(followups.get(0)).containsEntry("ownerActionScenario", "cost_margin");
         verify(gold).fetchRestaurantOpsAnalysis(
-                eq("DEMO_REST"), any(), any(), eq("RESTAURANT_OPS_WASTAGE_TOP"));
+                eq("DEMO_REST"), any(), any(), eq("RESTAURANT_OPS_WASTAGE_TOP"), any());
     }
 
     @Test
@@ -71,7 +71,7 @@ class RestaurantOpsGoldAnalysisToolTest {
     void blankRestaurantAnswerIsNotReportedAsCompleted() throws Exception {
         GoldFinanceClient gold = mock(GoldFinanceClient.class);
         when(gold.fetchRestaurantOpsAnalysis(
-                eq("DEMO_REST"), any(), any(), eq("RESTAURANT_OPS_SALES_SUMMARY")))
+                eq("DEMO_REST"), any(), any(), eq("RESTAURANT_OPS_SALES_SUMMARY"), any()))
                 .thenReturn(Map.of("success", true, "answer", "   "));
 
         RestaurantOpsGoldAnalysisTool tool = new RestaurantOpsGoldAnalysisTool(gold);
@@ -164,7 +164,7 @@ class RestaurantOpsGoldAnalysisToolTest {
     void unavailableAnswerUsesFailedOuterContract() throws Exception {
         GoldFinanceClient gold = mock(GoldFinanceClient.class);
         when(gold.fetchRestaurantOpsAnalysis(
-                eq("DEMO_REST"), any(), any(), eq("RESTAURANT_OPS_SALES_SUMMARY")))
+                eq("DEMO_REST"), any(), any(), eq("RESTAURANT_OPS_SALES_SUMMARY"), any()))
                 .thenThrow(new IOException("downstream unavailable"));
         RestaurantOpsGoldAnalysisTool tool = new RestaurantOpsGoldAnalysisTool(gold);
         ObjectMapper objectMapper = new ObjectMapper();
@@ -195,7 +195,7 @@ class RestaurantOpsGoldAnalysisToolTest {
     void unknownTransportFailureStillThrows() throws Exception {
         GoldFinanceClient gold = mock(GoldFinanceClient.class);
         when(gold.fetchRestaurantOpsAnalysis(
-                eq("DEMO_REST"), any(), any(), eq("RESTAURANT_OPS_WASTAGE_TOP")))
+                eq("DEMO_REST"), any(), any(), eq("RESTAURANT_OPS_WASTAGE_TOP"), any()))
                 .thenThrow(new IOException("downstream unavailable"));
         RestaurantOpsGoldAnalysisTool tool = new RestaurantOpsGoldAnalysisTool(gold);
 
@@ -209,11 +209,93 @@ class RestaurantOpsGoldAnalysisToolTest {
                 .hasMessage("downstream unavailable");
     }
 
+    @Test
+    @DisplayName("指定门店作用域保留鉴权租户并转发结构化上下文")
+    void storeScopedDemoPreservesAuthFactoryAndForwardsContext() throws Exception {
+        GoldFinanceClient gold = mock(GoldFinanceClient.class);
+        Map<String, Object> expectedContext = Map.of(
+                "store_id", "44",
+                "store_name", "鲜行者打浦桥日月光店");
+        when(gold.fetchRestaurantOpsAnalysis(
+                eq("DEMO_REST"), any(), any(),
+                eq("RESTAURANT_OPS_STORE_MARGIN"), eq(expectedContext)))
+                .thenReturn(Map.of(
+                        "success", true,
+                        "answer", "鲜行者打浦桥日月光店的毛利率排名结果已生成。"));
+
+        RestaurantOpsGoldAnalysisTool tool = new RestaurantOpsGoldAnalysisTool(gold);
+        Map<String, Object> result = tool.doExecute(
+                "DEMO_REST",
+                Map.of(
+                        "userInput", "那它的毛利率也是第一吗？",
+                        "intentCode", "RESTAURANT_OPS_STORE_MARGIN",
+                        "store_id", "44",
+                        "store_name", "鲜行者打浦桥日月光店"),
+                Collections.emptyMap());
+
+        assertThat(result).containsEntry("dataAvailable", true);
+        verify(gold).fetchRestaurantOpsAnalysis(
+                eq("DEMO_REST"), any(), any(),
+                eq("RESTAURANT_OPS_STORE_MARGIN"), eq(expectedContext));
+    }
+
+    @Test
+    @DisplayName("指定门店下游不可用时不得换成营业额或全店榜")
+    void scopedStoreOutageNamesTargetAndDoesNotSubstituteGlobalRanking() throws Exception {
+        GoldFinanceClient gold = mock(GoldFinanceClient.class);
+        when(gold.fetchRestaurantOpsAnalysis(
+                eq("DEMO_REST"), any(), any(),
+                eq("RESTAURANT_OPS_STORE_MARGIN"), any()))
+                .thenThrow(new IOException("downstream unavailable"));
+        RestaurantOpsGoldAnalysisTool tool = new RestaurantOpsGoldAnalysisTool(gold);
+
+        Map<String, Object> result = tool.doExecute(
+                "DEMO_REST",
+                Map.of(
+                        "userInput", "那它的毛利率也是第一吗？",
+                        "intentCode", "RESTAURANT_OPS_STORE_MARGIN",
+                        "store_id", "44",
+                        "store_name", "鲜行者打浦桥日月光店"),
+                Collections.emptyMap());
+
+        assertThat(result).containsEntry("dataAvailable", false);
+        assertThat(result.get("answer").toString())
+                .contains("鲜行者打浦桥日月光店", "毛利率", "不会用营业额或其他门店榜单替代")
+                .doesNotContain("Python", "Gold", "restaurant_ops", "IOException");
+    }
+
+    @Test
+    @DisplayName("结构化双日期下游不可用时严格沿用两个绝对日期")
+    void structuredComparisonOutageUsesExactDates() throws Exception {
+        GoldFinanceClient gold = mock(GoldFinanceClient.class);
+        when(gold.fetchRestaurantOpsAnalysis(
+                eq("DEMO_REST"), any(), any(),
+                eq("RESTAURANT_OPS_GROSS_MARGIN"), any()))
+                .thenThrow(new IOException("downstream unavailable"));
+        RestaurantOpsGoldAnalysisTool tool = new RestaurantOpsGoldAnalysisTool(gold);
+
+        Map<String, Object> result = tool.doExecute(
+                "DEMO_REST",
+                Map.of(
+                        "userInput", "那毛利呢？请沿用刚才比较的两个日期。",
+                        "intentCode", "RESTAURANT_OPS_GROSS_MARGIN",
+                        "startDate", "2026-07-20",
+                        "endDate", "2026-07-20",
+                        "comparisonStartDate", "2026-07-19",
+                        "comparisonEndDate", "2026-07-19",
+                        "timeAnchorDate", "2026-07-21"),
+                Collections.emptyMap());
+
+        assertThat(result).containsEntry("dataAvailable", false);
+        assertThat(result.get("answer").toString())
+                .contains("2026-07-20", "2026-07-19", "毛利", "不会用其他日期、营业额或其他指标替代")
+                .doesNotContain("Python", "Gold", "restaurant_ops", "IOException");
+    }
     private static Map<String, Object> executeWithTransportFailure(
             String question,
             String intentCode) throws Exception {
         GoldFinanceClient gold = mock(GoldFinanceClient.class);
-        when(gold.fetchRestaurantOpsAnalysis(eq("DEMO_REST"), any(), any(), eq(intentCode)))
+        when(gold.fetchRestaurantOpsAnalysis(eq("DEMO_REST"), any(), any(), eq(intentCode), any()))
                 .thenThrow(new IOException("downstream unavailable"));
         RestaurantOpsGoldAnalysisTool tool = new RestaurantOpsGoldAnalysisTool(gold);
         return tool.doExecute(

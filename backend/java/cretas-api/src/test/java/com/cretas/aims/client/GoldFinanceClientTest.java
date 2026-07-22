@@ -76,9 +76,17 @@ class GoldFinanceClientTest {
         servletRequest.setAttribute("role", "restaurant_manager");
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(servletRequest));
 
+        Map<String, Object> analysisContext = Map.of(
+                "store_id", "44",
+                "store_name", "鲜行者打浦桥日月光店",
+                "start_date", "2026-07-20",
+                "end_date", "2026-07-20",
+                "comparison_start_date", "2026-07-19",
+                "comparison_end_date", "2026-07-19",
+                "time_anchor_date", "2026-07-21");
         Map<String, Object> result = client.fetchRestaurantOpsAnalysis(
                 "REST-OPS", "show restaurant costs", "session-ops",
-                "RESTAURANT_OPS_GROSS_MARGIN");
+                "RESTAURANT_OPS_GROSS_MARGIN", analysisContext);
 
         assertEquals("ops answer", result.get("answer"));
         RecordedRequest request = server.takeRequest();
@@ -93,8 +101,15 @@ class GoldFinanceClientTest {
         assertEquals("session-ops", body.path("session_id").asText());
         assertEquals("RESTAURANT_OPS_GROSS_MARGIN", body.path("expected_intent").asText());
         assertFalse(body.path("allow_tenant_data_fallback").asBoolean(true));
+        assertEquals("44", body.path("context").path("store_id").asText());
+        assertEquals("鲜行者打浦桥日月光店", body.path("context").path("store_name").asText());
+        assertEquals("2026-07-20", body.path("context").path("start_date").asText());
+        assertEquals("2026-07-19", body.path("context").path("comparison_start_date").asText());
+        assertEquals("2026-07-21", body.path("context").path("time_anchor_date").asText());
         assertFalse(body.has("factory_id"));
         assertFalse(body.has("user_id"));
+        assertFalse(body.path("context").has("factory_id"));
+        assertFalse(body.path("context").has("user_id"));
     }
 
     @Test

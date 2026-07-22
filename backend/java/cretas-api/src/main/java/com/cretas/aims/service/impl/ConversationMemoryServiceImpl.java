@@ -104,7 +104,8 @@ public class ConversationMemoryServiceImpl implements ConversationMemoryService 
      * 时间范围指代模式
      */
     private static final Pattern TIME_RANGE_REFERENCE_PATTERN = Pattern.compile(
-            "(那段时间|同期|这段时间|这个时间段|那个时间段|上次|之前)"
+            "(那段时间|同期|这段时间|这个时间段|那个时间段|上次|之前|"
+                    + "沿用刚才比较的两个日期|刚才比较的两个日期|刚才的两个日期|这两个日期|这两天|同样两个日期)"
     );
 
     /**

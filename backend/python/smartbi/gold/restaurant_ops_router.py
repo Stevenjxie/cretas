@@ -1635,7 +1635,10 @@ async def resolve_store_margin(
     smartbi_pool, factory_id: str, days: int = 30, top_n: int = 10,
     *, role: Optional[str] = None,
     date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
+    comparison_date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
     query: Optional[str] = None,
+    store_id: Optional[str] = None,
+    store_name: Optional[str] = None,
 ) -> OpsAnswer:
     """Per-store gross margin: fact_pos_item × fact_pos_transaction.store_id
     × dim_store.name × recipe food_cost. Connects POS bill → store → dish → cost
@@ -1662,6 +1665,106 @@ async def resolve_store_margin(
     exact_end = date_range[1] if date_range else None
     if (exact_start is None) != (exact_end is None):
         raise ValueError("date_range must include both start and end")
+
+    comparison_start = comparison_date_range[0] if comparison_date_range else None
+    comparison_end = comparison_date_range[1] if comparison_date_range else None
+    if (comparison_start is None) != (comparison_end is None):
+        raise ValueError("comparison_date_range must include both start and end")
+    if comparison_date_range and not (exact_start and exact_end):
+        raise ValueError("comparison_date_range requires an explicit primary date_range")
+
+    if comparison_start and comparison_end:
+        primary = await resolve_store_margin(
+            smartbi_pool,
+            factory_id,
+            days,
+            top_n,
+            role=role,
+            date_range=(exact_start, exact_end),
+            query=query,
+            store_id=store_id,
+            store_name=store_name,
+        )
+        comparison = await resolve_store_margin(
+            smartbi_pool,
+            factory_id,
+            days,
+            top_n,
+            role=role,
+            date_range=(comparison_start, comparison_end),
+            query=query,
+            store_id=store_id,
+            store_name=store_name,
+        )
+        primary_label = f"{_date_text(exact_start)} 至 {_date_text(exact_end)}"
+        comparison_label = f"{_date_text(comparison_start)} 至 {_date_text(comparison_end)}"
+
+        def _period_margin(answer: OpsAnswer) -> Tuple[Optional[float], Optional[float], Optional[str]]:
+            target = answer.meta.get("targetStore")
+            if isinstance(target, dict):
+                return (
+                    target.get("gross_profit"),
+                    target.get("margin_rate"),
+                    target.get("name"),
+                )
+            return answer.meta.get("totalProfit"), answer.meta.get("avgRate"), None
+
+        primary_profit, primary_rate, resolved_name = _period_margin(primary)
+        comparison_profit, comparison_rate, comparison_name = _period_margin(comparison)
+        target_label = resolved_name or comparison_name or store_name or (
+            f"门店 {store_id}" if store_id else "全部门店"
+        )
+        missing_labels = []
+        if primary_profit is None or primary_rate is None:
+            missing_labels.append(primary_label)
+        if comparison_profit is None or comparison_rate is None:
+            missing_labels.append(comparison_label)
+        if missing_labels:
+            return OpsAnswer(
+                code="RESTAURANT_OPS_STORE_MARGIN",
+                title=f"{target_label}毛利区间比较",
+                answer_text=(
+                    f"{target_label}在{'、'.join(missing_labels)}缺少可可靠计算毛利的销售与成本数据，"
+                    f"因此不能比较{primary_label}和{comparison_label}的毛利。"
+                    "没有用其他日期、营业额或其他指标替代。请先补齐对应日期的账单、配方和最近进价。"
+                ),
+                charts=[],
+                kpis=[],
+                meta={
+                    "primaryRange": [exact_start.isoformat(), exact_end.isoformat()],
+                    "comparisonRange": [comparison_start.isoformat(), comparison_end.isoformat()],
+                    "targetStoreId": store_id,
+                    "targetStoreName": store_name,
+                    "comparisonComplete": False,
+                },
+            )
+        delta = float(primary_profit) - float(comparison_profit)
+        direction = "高于" if delta > 0 else "低于" if delta < 0 else "持平"
+        return OpsAnswer(
+            code="RESTAURANT_OPS_STORE_MARGIN",
+            title=f"{target_label}毛利区间比较",
+            answer_text=(
+                f"{target_label}在{primary_label}的毛利为 ¥{float(primary_profit):,.2f}，"
+                f"毛利率 {float(primary_rate) * 100:.1f}%；"
+                f"在{comparison_label}的毛利为 ¥{float(comparison_profit):,.2f}，"
+                f"毛利率 {float(comparison_rate) * 100:.1f}%。"
+                f"前一范围毛利{direction}后一范围 ¥{abs(delta):,.2f}。"
+            ),
+            charts=[{
+                "chartType": "bar",
+                "title": f"{target_label}毛利区间比较",
+                "xAxis": {"data": [primary_label, comparison_label]},
+                "series": [{"name": "毛利", "type": "bar", "data": [primary_profit, comparison_profit]}],
+            }],
+            kpis=[],
+            meta={
+                "primaryRange": [exact_start.isoformat(), exact_end.isoformat()],
+                "comparisonRange": [comparison_start.isoformat(), comparison_end.isoformat()],
+                "targetStoreId": store_id,
+                "targetStoreName": target_label,
+                "comparisonComplete": True,
+            },
+        )
 
     async with smartbi_pool.acquire() as conn:
         await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
@@ -1693,6 +1796,8 @@ async def resolve_store_margin(
                    AND s2.factory_id = t2.factory_id
                  WHERE i2.factory_id = $1
                    AND t2.factory_id = $1
+                   AND ($5::text IS NULL OR s2.store_id::text = $5::text)
+                   AND ($6::text IS NULL OR s2.name = $6::text)
             )
             SELECT s.store_id, s.name AS store_name,
                    p.name AS dish_name, p.normalized_name,
@@ -1724,11 +1829,13 @@ async def resolve_store_margin(
               CROSS JOIN anchor
              WHERE i.factory_id = $1 AND t.factory_id = $1
                AND anchor.end_date IS NOT NULL
+               AND ($5::text IS NULL OR s.store_id::text = $5::text)
+               AND ($6::text IS NULL OR s.name = $6::text)
                AND t.date >= COALESCE($3::date, anchor.end_date - ($2::int))
                AND t.date <= COALESCE($4::date, anchor.end_date)
              GROUP BY s.store_id, s.name, p.name, p.normalized_name
             """,
-            factory_id, days, exact_start, exact_end,
+            factory_id, days, exact_start, exact_end, store_id, store_name,
         )
         store_bill_rows = await conn.fetch(
             """
@@ -1739,8 +1846,13 @@ async def resolve_store_margin(
                   JOIN dim_product p2
                     ON p2.product_id = i2.product_id
                    AND p2.factory_id = i2.factory_id
+                  JOIN dim_store s2
+                    ON s2.store_id = t2.store_id
+                   AND s2.factory_id = t2.factory_id
                  WHERE i2.factory_id = $1
                    AND t2.factory_id = $1
+                   AND ($5::text IS NULL OR s2.store_id::text = $5::text)
+                   AND ($6::text IS NULL OR s2.name = $6::text)
             ), scope AS (
                 SELECT DISTINCT store_id FROM agg_daily WHERE factory_id = $1
                 UNION
@@ -1751,26 +1863,52 @@ async def resolve_store_margin(
             )
             SELECT t.store_id, COUNT(DISTINCT t.id)::int AS bills
               FROM fact_pos_transaction t
+              JOIN dim_store s
+                ON s.store_id = t.store_id
+               AND s.factory_id = t.factory_id
               JOIN scope ON scope.store_id = t.store_id
               CROSS JOIN anchor
              WHERE t.factory_id = $1
                AND anchor.end_date IS NOT NULL
                AND t.date >= COALESCE($3::date, anchor.end_date - ($2::int))
                AND t.date <= COALESCE($4::date, anchor.end_date)
+               AND ($5::text IS NULL OR s.store_id::text = $5::text)
+               AND ($6::text IS NULL OR s.name = $6::text)
              GROUP BY t.store_id
             """,
-            factory_id, days, exact_start, exact_end,
+            factory_id, days, exact_start, exact_end, store_id, store_name,
         )
+
+    if store_id or store_name:
+        store_dish_rows = [
+            row for row in store_dish_rows
+            if (not store_id or str(row["store_id"]) == str(store_id))
+            and (not store_name or str(row["store_name"]) == store_name)
+        ]
+        scoped_store_ids = {str(row["store_id"]) for row in store_dish_rows}
+        store_bill_rows = [
+            row for row in store_bill_rows
+            if str(row["store_id"]) in scoped_store_ids
+        ]
 
     if not store_dish_rows:
         requested_label = (
             f"{_date_text(exact_start)} 至 {_date_text(exact_end)}"
             if exact_start and exact_end else f"近 {days} 天"
         )
+        target_label = store_name or (f"门店 {store_id}" if store_id else "门店")
+        scoped_no_data = bool(store_id or store_name)
         return OpsAnswer(
             code="RESTAURANT_OPS_STORE_MARGIN",
-            title=f"门店毛利分析（{requested_label}）",
-            answer_text=f"{requested_label}没有可用的收银销售数据，没有用其他时间范围替代。请先确认营业账单已同步。",
+            title=f"{target_label}毛利分析（{requested_label}）",
+            answer_text=((
+                f"指定的{target_label}在{requested_label}没有可用的销售与成本数据，"
+                "不能计算该店毛利或排名，也没有退化为全店榜、其他日期或营业额指标。"
+                "请确认门店名称或编号，并补齐对应日期的营业账单、配方和最近进价。"
+            ) if scoped_no_data else (
+                f"{requested_label}没有可用的收银销售数据，没有用其他时间范围替代。"
+                "请先确认营业账单已同步。"
+            )),
             charts=[], kpis=[],
             meta={
                 "window_days": days,
@@ -1778,6 +1916,9 @@ async def resolve_store_margin(
                 "window_end": _date_text(exact_end) if exact_end else None,
                 "scope_matches_request": True,
                 "no_pos_data": True,
+                "targetStoreId": store_id,
+                "targetStoreName": store_name,
+                "storeScoped": bool(store_id or store_name),
             },
         )
 
@@ -1901,7 +2042,16 @@ async def resolve_store_margin(
     invalid_cost_count = sum(s["invalid_cost_dishes"] for s in store_list)
 
     query_text = (query or "").strip()
-    mentioned_store = next(
+    structured_store = next(
+        (
+            store
+            for store in store_list
+            if (not store_id or str(store["store_id"]) == str(store_id))
+            and (not store_name or store.get("name") == store_name)
+        ),
+        None,
+    ) if (store_id or store_name) else None
+    mentioned_store = structured_store or next(
         (
             store
             for store in store_list
@@ -1910,8 +2060,10 @@ async def resolve_store_margin(
         None,
     )
     asks_target_margin_rank = bool(
-        mentioned_store
-        and any(token in query_text for token in ("毛利率", "毛利排名", "也是第一", "第几"))
+        mentioned_store and (
+            bool(store_id or store_name)
+            or any(token in query_text for token in ("毛利率", "毛利排名", "也是第一", "第几"))
+        )
     )
     if asks_target_margin_rank:
         target_store = mentioned_store

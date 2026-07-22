@@ -48,6 +48,12 @@ public class RestaurantOpsGoldAnalysisTool extends AbstractBusinessTool {
                 "type", "string",
                 "description", "当前命中的意图代码"));
 
+        for (String parameter : List.of(
+                "store_id", "store_name", "startDate", "endDate",
+                "comparisonStartDate", "comparisonEndDate", "timeAnchorDate")) {
+            properties.put(parameter, Map.of("type", "string"));
+        }
+
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
         schema.put("properties", properties);
@@ -111,12 +117,13 @@ public class RestaurantOpsGoldAnalysisTool extends AbstractBusinessTool {
         }
 
         String intentCode = asString(params.get("intentCode"));
+        Map<String, Object> analysisContext = buildAnalysisContext(params);
         Map<String, Object> response;
         try {
             response = gold.fetchRestaurantOpsAnalysis(
-                    factoryId, question, sessionId, intentCode);
+                    factoryId, question, sessionId, intentCode, analysisContext);
         } catch (IOException transportFailure) {
-            String unavailableAnswer = unavailableAnswer(question);
+            String unavailableAnswer = unavailableAnswer(question, analysisContext);
             if (unavailableAnswer == null) {
                 throw transportFailure;
             }
@@ -173,10 +180,29 @@ public class RestaurantOpsGoldAnalysisTool extends AbstractBusinessTool {
      * described without inventing a metric. Unknown questions deliberately return {@code null} so
      * the original exception remains visible to the normal tool failure path.
      */
-    private static String unavailableAnswer(String question) {
+    private static String unavailableAnswer(String question, Map<String, Object> analysisContext) {
         String text = question == null ? "" : question.toLowerCase();
         LocalDate today = LocalDate.now(ZoneId.of("Asia/Shanghai"));
         DateTimeFormatter date = DateTimeFormatter.ISO_LOCAL_DATE;
+
+        String storeName = asString(analysisContext.get("store_name"));
+        if (storeName != null && containsAny(text, "毛利", "毛利率")) {
+            return "已识别到您问的是" + storeName
+                    + "的毛利率，但目前无法可靠取得该店的成本覆盖和毛利排名数据，"
+                    + "因此不能给出结论，也不会用营业额或其他门店榜单替代。请稍后重试。";
+        }
+
+        String primaryStart = asString(analysisContext.get("start_date"));
+        String primaryEnd = asString(analysisContext.get("end_date"));
+        String baselineStart = asString(analysisContext.get("comparison_start_date"));
+        String baselineEnd = asString(analysisContext.get("comparison_end_date"));
+        if (primaryStart != null && primaryEnd != null
+                && baselineStart != null && baselineEnd != null
+                && containsAny(text, "毛利", "毛利率")) {
+            return primaryStart + " 和 " + baselineStart
+                    + " 的毛利数据目前无法可靠读取，因此不能判断哪天更高，"
+                    + "也不会用其他日期、营业额或其他指标替代。请稍后重试。";
+        }
 
         if (containsAny(text, "今天", "今日")
                 && containsAny(text, "营收", "营业额", "销售额")
@@ -216,6 +242,27 @@ public class RestaurantOpsGoldAnalysisTool extends AbstractBusinessTool {
         }
 
         return null;
+    }
+
+    private static Map<String, Object> buildAnalysisContext(Map<String, Object> params) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        copyNonBlank(params, result, "store_id", "store_id");
+        copyNonBlank(params, result, "store_name", "store_name");
+        copyNonBlank(params, result, "startDate", "start_date");
+        copyNonBlank(params, result, "endDate", "end_date");
+        copyNonBlank(params, result, "comparisonStartDate", "comparison_start_date");
+        copyNonBlank(params, result, "comparisonEndDate", "comparison_end_date");
+        copyNonBlank(params, result, "timeAnchorDate", "time_anchor_date");
+        return result;
+    }
+
+    private static void copyNonBlank(
+            Map<String, Object> source, Map<String, Object> target,
+            String sourceKey, String targetKey) {
+        String value = asString(source.get(sourceKey));
+        if (value != null && !value.isBlank() && value.length() <= 160) {
+            target.put(targetKey, value.trim());
+        }
     }
 
     private static boolean containsAny(String text, String... candidates) {

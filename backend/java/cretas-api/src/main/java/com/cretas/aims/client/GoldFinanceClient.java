@@ -1307,6 +1307,17 @@ public class GoldFinanceClient {
             String sessionId,
             String expectedIntent
     ) throws IOException {
+        return fetchRestaurantOpsAnalysis(
+                factoryId, question, sessionId, expectedIntent, java.util.Collections.emptyMap());
+    }
+
+    public Map<String, Object> fetchRestaurantOpsAnalysis(
+            String factoryId,
+            String question,
+            String sessionId,
+            String expectedIntent,
+            Map<String, Object> analysisContext
+    ) throws IOException {
         requireFactory(factoryId);
         if (question == null || question.trim().isEmpty()) {
             throw new IllegalArgumentException("question required");
@@ -1325,7 +1336,9 @@ public class GoldFinanceClient {
                                 ? sessionId : "java-restaurant-ops",
                         false,
                         0,
-                        false);
+                        false,
+                        analysisContext == null || analysisContext.isEmpty()
+                                ? null : analysisContext);
         PythonGeneralAnalysisResponse response = pythonSmartBIClient.analyzeGeneral(
                 factoryId,
                 currentUserId(),
