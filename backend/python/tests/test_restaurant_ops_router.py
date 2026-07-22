@@ -279,8 +279,8 @@ def test_sales_summary_no_data_names_both_comparison_dates(monkeypatch):
         today=date(2026, 7, 21),
     ))
 
-    assert "昨天（2026-07-20 至 2026-07-20）" in answer.answer_text
-    assert "前天（2026-07-19 至 2026-07-19）" in answer.answer_text
+    assert "昨天（2026-07-20 当天）" in answer.answer_text
+    assert "前天（2026-07-19 当天）" in answer.answer_text
     assert "不能可靠判断两个日期谁高谁低" in answer.answer_text
 
 
@@ -1200,7 +1200,169 @@ def test_store_margin_comparison_missing_period_names_dates_without_fallback(mon
         store_id="S-1", store_name="人民路店",
     ))
     assert "2026-07-18 至 2026-07-19" in result.answer_text
-    assert "缺少可可靠计算毛利" in result.answer_text
+    assert "缺少可靠计算毛利所需" in result.answer_text
+    assert "毛利与毛利率" in result.answer_text
     assert "没有用其他日期、营业额或其他指标替代" in result.answer_text
     assert result.charts == []
     assert result.meta["comparisonComplete"] is False
+
+
+# --- R7: explicit store mention extraction + canonicalization (scenario F) ---
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("月球一号幻想店的毛利率是多少？", "月球一号幻想店"),
+    ("查一下鲜行者打浦桥日月光店的毛利率", "鲜行者打浦桥日月光店"),
+    ("哪家店业绩最好？", None),
+    ("那它的毛利率也是第一吗？", None),
+    ("各门店毛利对比", None),
+    ("门店毛利分析", None),
+])
+def test_extract_store_mention(query, expected):
+    assert _r.extract_store_mention(query) == expected
+
+
+def _mention_pool(exact_names, contains_names):
+    class _Conn:
+        async def execute(self, *_args):
+            return None
+
+        async def fetch(self, query, *_args):
+            if "name = $2" in query:
+                return [{"name": n} for n in exact_names]
+            if "LIKE" in query:
+                return [{"name": n} for n in contains_names]
+            return []
+
+    class _Ctx:
+        async def __aenter__(self):
+            return _Conn()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class _Pool:
+        def acquire(self):
+            return _Ctx()
+
+    return _Pool()
+
+
+def test_store_mention_unknown_store_declines_without_global_fallback():
+    result = asyncio.run(_r.resolve_store_margin(
+        _mention_pool([], []),
+        "RES_TEST",
+        role="restaurant_manager",
+        query="月球一号幻想店的毛利率是多少？",
+        store_mention="月球一号幻想店",
+    ))
+    assert "没有找到名为「月球一号幻想店」的门店" in result.answer_text
+    assert "不会退化为全店榜" in result.answer_text
+    assert result.meta.get("store_not_found") == "月球一号幻想店"
+    assert result.charts == []
+
+
+def test_store_mention_ambiguous_asks_for_clarification():
+    result = asyncio.run(_r.resolve_store_margin(
+        _mention_pool([], ["青花椒大融城店", "青花椒上海示范店"]),
+        "RES_TEST",
+        role="restaurant_manager",
+        query="青花椒店的毛利率是多少？",
+        store_mention="青花椒店",
+    ))
+    assert "匹配到多家门店" in result.answer_text
+    assert "青花椒大融城店" in result.answer_text
+    assert result.meta.get("store_mention_ambiguous") == "青花椒店"
+
+
+def test_store_mention_canonical_single_match_scopes_answer(monkeypatch):
+    class _Conn:
+        async def execute(self, *_args):
+            return None
+
+        async def fetch(self, query, *_args):
+            if "FROM dim_store" in query and "name = $2" in query:
+                return [{"name": "人民路店"}]
+            if "FROM fact_pos_item" in query or "fact_pos_transaction" in query:
+                return []
+            return []
+
+    class _Ctx:
+        async def __aenter__(self):
+            return _Conn()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class _Pool:
+        def acquire(self):
+            return _Ctx()
+
+    result = asyncio.run(_r.resolve_store_margin(
+        _Pool(),
+        "RES_TEST",
+        role="restaurant_manager",
+        query="人民路店的毛利率是多少？",
+        store_mention="人民路店",
+    ))
+    assert "指定的人民路店" in result.answer_text
+    assert "毛利、毛利率或排名" in result.answer_text
+    assert result.meta.get("targetStoreName") == "人民路店"
+
+
+# --- R7: cold date back-reference must decline, not pick a default window ---
+
+
+def test_date_backref_without_restored_range_declines():
+    result = asyncio.run(_r.resolve_by_code(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        None,
+        "RES_TEST",
+        role="restaurant_manager",
+        query="那毛利呢？请沿用刚才比较的两个日期。",
+    ))
+    assert result is not None
+    assert "没有找到可沿用的比较日期" in result.answer_text
+    assert "默认时间范围" in result.answer_text
+    assert result.meta.get("missing_reference") == "date_range"
+
+
+def test_date_backref_with_restored_range_dispatches(monkeypatch):
+    captured = {}
+
+    async def _stub(pool, factory_id, **kwargs):
+        captured["kwargs"] = kwargs
+        return OpsAnswer(code="RESTAURANT_OPS_GROSS_MARGIN", title="t",
+                         answer_text="ok", charts=[], kpis=[], meta={})
+
+    monkeypatch.setitem(_r._RESOLVERS, "RESTAURANT_OPS_GROSS_MARGIN", _stub)
+    result = asyncio.run(_r.resolve_by_code(
+        "RESTAURANT_OPS_GROSS_MARGIN",
+        None,
+        "RES_TEST",
+        query="那毛利呢？请沿用刚才比较的两个日期。",
+        date_range=(date(2026, 7, 20), date(2026, 7, 20)),
+        comparison_date_range=(date(2026, 7, 19), date(2026, 7, 19)),
+    ))
+    assert result.answer_text == "ok"
+    assert captured["kwargs"]["date_range"] == (date(2026, 7, 20), date(2026, 7, 20))
+
+
+def test_plain_query_without_backref_is_not_declined(monkeypatch):
+    async def _stub(pool, factory_id, **kwargs):
+        return OpsAnswer(code="RESTAURANT_OPS_GROSS_MARGIN", title="t",
+                         answer_text="normal", charts=[], kpis=[], meta={})
+
+    monkeypatch.setitem(_r._RESOLVERS, "RESTAURANT_OPS_GROSS_MARGIN", _stub)
+    result = asyncio.run(_r.resolve_by_code(
+        "RESTAURANT_OPS_GROSS_MARGIN", None, "RES_TEST", query="整体毛利率是多少",
+    ))
+    assert result.answer_text == "normal"
+
+
+# --- R7: single-day ranges read as one date ---
+
+
+def test_range_text_collapses_single_day():
+    assert _r._range_text(date(2026, 7, 21), date(2026, 7, 21)) == "2026-07-21 当天"
+    assert _r._range_text(date(2026, 7, 20), date(2026, 7, 21)) == "2026-07-20 至 2026-07-21"
