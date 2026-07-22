@@ -92,7 +92,7 @@ async def _set_tenant(conn: "asyncpg.Connection", factory_id: str) -> None:
     a ``conn.transaction()`` block when invoking this — otherwise the setting
     only lives for the duration of the SELECT itself.
     """
-    await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+    await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
 
 
 @pytest.fixture

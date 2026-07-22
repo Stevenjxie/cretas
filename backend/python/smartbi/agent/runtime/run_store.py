@@ -1419,7 +1419,7 @@ class PostgresRunStore:
     @staticmethod
     async def _bind(connection, context):
         await connection.execute(
-            "SELECT set_config('app.factory_id', $1, true)", context.factory_id
+            "SELECT set_config('app.factory_id', $1, false)", context.factory_id
         )
         await connection.execute(
             "SELECT set_config('app.user_id', $1, true)", context.user_id

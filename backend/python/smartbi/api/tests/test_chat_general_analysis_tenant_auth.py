@@ -106,7 +106,11 @@ def test_general_analysis_store_context_maps_only_data_factory(monkeypatch):
     assert captured["kwargs"]["today"] == date(2026, 7, 21)
 
 
-def test_general_analysis_time_anchor_is_passed_without_factory_mapping(monkeypatch):
+def test_general_analysis_time_anchor_passes_and_sales_reads_demo_gold(monkeypatch):
+    """R8 contract update: revenue/store/trend answers for the demo tenant
+    read the seeded gold tenant so their store universe agrees with the
+    Java-native ranking tools. Auth/session identity stays DEMO_REST (see
+    the session/cache assertions in the store-context test above)."""
     captured = {}
     _install_structured_resolver(monkeypatch, captured)
     request = chat.GeneralAnalysisRequest(
@@ -120,7 +124,7 @@ def test_general_analysis_time_anchor_is_passed_without_factory_mapping(monkeypa
     response = asyncio.run(chat.general_analysis(request, _http_request()))
 
     assert response.success is True
-    assert captured["factory_id"] == "DEMO_REST"
+    assert captured["factory_id"] == "RES_3101_009"
     assert captured["code"] == "RESTAURANT_OPS_SALES_SUMMARY"
     assert captured["kwargs"]["today"] == date(2026, 7, 21)
 

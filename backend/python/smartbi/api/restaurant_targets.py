@@ -46,7 +46,7 @@ async def _get_pool():
 
 async def _set_tenant(conn, factory_id: str) -> None:
     """Parameterized RLS tenant context (injection-safe)."""
-    await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+    await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
 
 
 class TargetUpsertRequest(BaseModel):

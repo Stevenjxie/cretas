@@ -114,7 +114,7 @@ async def fetch_store_rows(pool, factory_id: str, days: int) -> List[Dict[str, A
     # its own txn and FORCE RLS returns 0 rows (feedback_asyncpg_rls_guc_must_be_in_transaction).
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+            await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
             rows = await conn.fetch(_SQL_PER_STORE, factory_id, days)
     return [dict(r) for r in rows]
 

@@ -199,7 +199,7 @@ async def top_ingredients(
 
     async def _query(window_days: int):
         async with pool.acquire() as conn:
-            await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+            await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
             return await conn.fetch(
                 """
                 SELECT i.ingredient_id, i.name, i.category, i.unit,
@@ -296,7 +296,7 @@ async def daily_trend(
         return {"success": False, "message": f"unsupported kpi_kind: {kpi_kind}"}
 
     async with pool.acquire() as conn:
-        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
         # Safe to interpolate col since it's from a whitelist
         rows = await conn.fetch(
             f"""
@@ -343,7 +343,7 @@ async def gross_margin(request: Request, days: int = Query(30, ge=1, le=365)) ->
     # For cleanliness: extend resolver to return structured rows.
     # For now: call back into the DB to build the structured list:
     async with pool.acquire() as conn:
-        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
         pos_rows = await conn.fetch(
             """
             SELECT p.name AS dish_name, p.normalized_name,
@@ -415,7 +415,7 @@ async def gross_margin(request: Request, days: int = Query(30, ge=1, le=365)) ->
     cost_map: Dict[str, float] = {}
     if cretas_map:
         async with pool.acquire() as conn:
-            await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+            await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
             cost_rows = await conn.fetch(
                 """
                 SELECT product_source_pk, food_cost::float AS food_cost
@@ -652,7 +652,7 @@ async def summary(request: Request, days: int = Query(30, ge=1, le=365)) -> Dict
     # so FE sees 0 KPI instead of 500 error.
     import asyncpg as _asyncpg
     async with pool.acquire() as conn:
-        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
         try:
             totals = await conn.fetchrow(
                 """

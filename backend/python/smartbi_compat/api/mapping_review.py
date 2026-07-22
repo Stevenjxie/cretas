@@ -73,7 +73,7 @@ async def list_pending(
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(
-                "SELECT set_config('app.factory_id', $1, true)", auth.factory_id
+                "SELECT set_config('app.factory_id', $1, false)", auth.factory_id
             )
             rows = await conn.fetch(
                 """SELECT id, upload_id, template_key, column_name, detected_standard,
@@ -111,7 +111,7 @@ async def confirm_mapping(
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(
-                "SELECT set_config('app.factory_id', $1, true)", auth.factory_id
+                "SELECT set_config('app.factory_id', $1, false)", auth.factory_id
             )
             for it in body.items:
                 col = it.column_name.strip().lower()

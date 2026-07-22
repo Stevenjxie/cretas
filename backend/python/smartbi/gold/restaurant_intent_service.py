@@ -44,6 +44,7 @@ from smartbi.gold.restaurant_intent import (
     parse_restaurant_query,
 )
 from smartbi.gold.restaurant_ops_router import (
+    demo_data_factory_for_code,
     extract_store_mention,
     resolve_by_code as _resolve_tiered,
 )
@@ -271,15 +272,14 @@ async def tiered_answer(
                 # every store, which is the forbidden all-store fallback.
                 effective_code = "RESTAURANT_OPS_STORE_MARGIN"
             code_kwargs = execution_kwargs
-            code_factory = factory_id
             if effective_code == "RESTAURANT_OPS_STORE_MARGIN" and store_mention:
                 code_kwargs = dict(execution_kwargs)
                 code_kwargs["store_mention"] = store_mention
-                # Store-scoped demo reads live in the seeded gold tenant —
-                # same rule as chat.py `_restaurant_analysis_data_factory_id`.
-                # Auth/session/cache identity stays on the trusted tenant.
-                if factory_id.upper() == "DEMO_REST":
-                    code_factory = "RES_3101_009"
+            code_factory = demo_data_factory_for_code(
+                effective_code,
+                factory_id,
+                store_scoped=bool(store_mention),
+            )
             resolved = await _resolve_tiered(
                 effective_code,
                 pool,

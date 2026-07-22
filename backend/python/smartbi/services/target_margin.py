@@ -124,7 +124,7 @@ def compute_cogs_from_rows(
 # ── DB: per-day COGS + coverage ───────────────────────────────────────────────
 async def _set_tenant(conn: asyncpg.Connection, factory_id: str) -> None:
     await conn.execute(
-        "SELECT set_config('app.factory_id', $1, true)", factory_id
+        "SELECT set_config('app.factory_id', $1, false)", factory_id
     )
 
 

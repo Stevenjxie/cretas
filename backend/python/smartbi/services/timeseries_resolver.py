@@ -83,7 +83,7 @@ async def query_timeseries(
         async with pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
-                    "SELECT set_config('app.factory_id', $1, true)", factory_id
+                    "SELECT set_config('app.factory_id', $1, false)", factory_id
                 )
                 rows = await conn.fetch(sql, *params)
         return [_row_to_dict(row) for row in rows]

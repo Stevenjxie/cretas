@@ -103,7 +103,7 @@ async def bind_app_context(
     audit: bool = False,
 ) -> None:
     await connection.execute(
-        "SELECT set_config('app.factory_id', $1, true)", factory_id
+        "SELECT set_config('app.factory_id', $1, false)", factory_id
     )
     await connection.execute("SELECT set_config('app.user_id', $1, true)", user_id)
     await connection.execute(

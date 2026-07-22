@@ -127,7 +127,7 @@ async def detect_price_anomalies(
     eps = Decimal(str(epsilon_pct))
 
     async with pool.acquire() as conn:
-        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
         # All price points per (food, supplier), newest first. We fetch the
         # whole recent window (trailing_n + 1) per group so we can compute the
         # latest-vs-trailing comparison in Python (clearer than a window-fn SQL).
@@ -308,7 +308,7 @@ async def record_anomaly_ack(
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(
-                "SELECT set_config('app.factory_id', $1, true)", factory_id
+                "SELECT set_config('app.factory_id', $1, false)", factory_id
             )
             row = await conn.fetchrow(
                 """
@@ -358,7 +358,7 @@ async def list_anomaly_acks(
             f"list_anomaly_acks: factory_id required (got {factory_id!r})"
         )
     async with pool.acquire() as conn:
-        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
         if normalized_name:
             rows = await conn.fetch(
                 """

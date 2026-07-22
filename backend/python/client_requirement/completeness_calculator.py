@@ -196,7 +196,7 @@ async def _compute_pos_entity(
             # call). SET LOCAL scopes to the transaction.
             async with conn.transaction():
                 await conn.execute(
-                    "SELECT set_config('app.factory_id', $1, true)", factory_id
+                    "SELECT set_config('app.factory_id', $1, false)", factory_id
                 )
                 row = await conn.fetchrow(query, factory_id)
     finally:

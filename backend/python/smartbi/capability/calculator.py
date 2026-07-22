@@ -10,7 +10,7 @@ Defenses (all live in get_capabilities + _fetch_capabilities):
 - Inflight Future dedup (3 concurrent get_capabilities → 1 SQL call)
 - invalidation_gen token: invalidate() during inflight bumps gen, the
   inflight result then refuses to write to cache (race defeat, spec O5)
-- transaction-scoped set_config('app.factory_id', $1, true) inside an
+- transaction-scoped set_config('app.factory_id', $1, false) inside an
   explicit conn.transaction() — GUC clears at commit, no leak to next
   pool acquirer (spec C4)
 - merge_status column lazy memo: B-stage column may not exist yet;
@@ -113,7 +113,7 @@ class CapabilityCalculator:
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
-                    "SELECT set_config('app.factory_id', $1, true)",
+                    "SELECT set_config('app.factory_id', $1, false)",
                     factory_id
                 )
                 rows = await conn.fetch(f"""

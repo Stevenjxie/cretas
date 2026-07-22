@@ -422,7 +422,7 @@ async def test_factory_dispatch_reads_gold_with_rls_and_returns_oee_metrics(
         date(2026, 5, 10),
     )
     assert pool.conn.executed == [
-        ("SELECT set_config('app.factory_id', $1, true)", ("F001",))
+        ("SELECT set_config('app.factory_id', $1, false)", ("F001",))
     ]
 
 

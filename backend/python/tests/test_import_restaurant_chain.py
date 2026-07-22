@@ -862,7 +862,7 @@ def test_rls_scope_set_before_inserts(
             conn, "R_ILTEATRO_REAL", "2024-02", product_sales_csv, stats,
         )
         # Find SET position. After P1 fix (audit 2026-05-11) the helper uses
-        # `SELECT set_config('app.factory_id', $1, true)` instead of the literal
+        # `SELECT set_config('app.factory_id', $1, false)` instead of the literal
         # `SET app.factory_id = $1` (which PostgreSQL rejects with bind params).
         set_idx = next(
             (i for i, (sql, _) in enumerate(conn.executed)

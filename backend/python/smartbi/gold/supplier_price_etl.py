@@ -77,7 +77,7 @@ async def upsert_supplier_price_batch(
     async with smartbi_pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(
-                "SELECT set_config('app.factory_id', $1, true)", factory_id
+                "SELECT set_config('app.factory_id', $1, false)", factory_id
             )
             result = await conn.fetch(
                 """
@@ -132,7 +132,7 @@ async def get_supplier_price_trend(
         )
     normalized = _normalize_name(ingredient_name)
     async with pool.acquire() as conn:
-        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
         rows = await conn.fetch(
             """
             SELECT delivery_date, unit_price, supplier_name, quantity
@@ -170,7 +170,7 @@ async def get_latest_ingredient_prices(
             f"get_latest_ingredient_prices: factory_id required (got {factory_id!r})"
         )
     async with pool.acquire() as conn:
-        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
         rows = await conn.fetch(
             """
             SELECT DISTINCT ON (normalized_name)

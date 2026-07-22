@@ -84,7 +84,7 @@ async def _fetch_financial_data(
     prev = _prev_period(period_month)
     async with pool.acquire() as conn:
         try:
-            await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+            await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
         except Exception:  # noqa: BLE001
             pass
         cur_rows = await conn.fetch(_FINANCE_SQL, factory_id, period_month)

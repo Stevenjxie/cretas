@@ -46,7 +46,7 @@ async def _fetch_daily_revenue(
     start = anchor - timedelta(days=window_days)
     async with pool.acquire() as conn:
         await conn.execute(
-            "SELECT set_config('app.factory_id', $1, true)", factory_id
+            "SELECT set_config('app.factory_id', $1, false)", factory_id
         )
         if store_id is None:
             rows = await conn.fetch(
@@ -190,7 +190,7 @@ async def forecast_revenue(
     if anchor is None:
         async with pool.acquire() as conn:
             await conn.execute(
-                "SELECT set_config('app.factory_id', $1, true)", factory_id
+                "SELECT set_config('app.factory_id', $1, false)", factory_id
             )
             row = await conn.fetchrow(
                 "SELECT MAX(date) AS mx FROM agg_daily WHERE factory_id = $1",
@@ -243,7 +243,7 @@ async def _persist_forecast(
     anchor = _date.fromisoformat(result["anchor_date"])
     async with pool.acquire() as conn:
         await conn.execute(
-            "SELECT set_config('app.factory_id', $1, true)", factory_id
+            "SELECT set_config('app.factory_id', $1, false)", factory_id
         )
         async with conn.transaction():
             if store_id is None:

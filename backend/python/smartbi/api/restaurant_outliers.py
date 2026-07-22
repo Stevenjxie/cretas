@@ -121,7 +121,7 @@ async def _query_dismissed_this_month(factory_id: str) -> List[Dict[str, Any]]:
         # W0.4 finding 3: GUC inside transaction
         async with conn.transaction():
             await conn.execute(
-                "SELECT set_config('app.factory_id', $1, true)", factory_id
+                "SELECT set_config('app.factory_id', $1, false)", factory_id
             )
             rows = await conn.fetch(
                 """
@@ -352,7 +352,7 @@ async def dismiss_outlier(
             # W0.4 finding 3: GUC inside transaction
             async with conn.transaction():
                 await conn.execute(
-                    "SELECT set_config('app.factory_id', $1, true)", factory_id
+                    "SELECT set_config('app.factory_id', $1, false)", factory_id
                 )
                 row = await conn.fetchrow(
                     """
@@ -437,7 +437,7 @@ async def undismiss_outlier(
         # W0.4 finding 3: GUC inside transaction
         async with conn.transaction():
             await conn.execute(
-                "SELECT set_config('app.factory_id', $1, true)", effective_fid
+                "SELECT set_config('app.factory_id', $1, false)", effective_fid
             )
             row = await conn.fetchrow(
                 "SELECT factory_id FROM outlier_dismissals WHERE id = $1",

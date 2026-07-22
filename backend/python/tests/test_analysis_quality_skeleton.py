@@ -460,7 +460,7 @@ async def test_factory_quality_dispatch_reads_gold_with_rls_and_returns_fpy_metr
     assert result["trendChart"]["data"][0]["defectRate"] == 10
     assert "agg_factory_batch_daily" in pool.conn.fetch_sql
     assert pool.conn.executed == [
-        ("SELECT set_config('app.factory_id', $1, true)", ("F001",))
+        ("SELECT set_config('app.factory_id', $1, false)", ("F001",))
     ]
 
 

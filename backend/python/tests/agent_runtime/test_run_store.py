@@ -790,7 +790,7 @@ async def test_postgres_append_binds_rls_update_and_insert_on_one_connection_tra
     assert pool.log == [("pool", "enter"), ("pool", "exit")]
     assert pool.connection.log[0] == ("transaction", "created", False)
     assert pool.connection.executes[0] == (
-        "SELECT set_config('app.factory_id', $1, true)",
+        "SELECT set_config('app.factory_id', $1, false)",
         ("A",),
     )
     assert pool.connection.executes[1] == (
@@ -818,7 +818,7 @@ async def test_postgres_events_replay_proves_owner_and_binds_after_sequence():
     assert events[0].event_type is AgentEventType.STEP_COMPLETED
     assert events[0].payload["evidenceId"] == "ev"
     assert pool.connection.executes[0] == (
-        "SELECT set_config('app.factory_id', $1, true)",
+        "SELECT set_config('app.factory_id', $1, false)",
         ("A",),
     )
     assert pool.connection.fetchrows[0][1] == (

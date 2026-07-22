@@ -121,7 +121,7 @@ class NarrativeCacheService:
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
-                    "SELECT set_config('app.factory_id', $1, true)",
+                    "SELECT set_config('app.factory_id', $1, false)",
                     factory_id,
                 )
                 row = await conn.fetchrow(
@@ -176,7 +176,7 @@ class NarrativeCacheService:
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
-                    "SELECT set_config('app.factory_id', $1, true)",
+                    "SELECT set_config('app.factory_id', $1, false)",
                     factory_id,
                 )
                 await conn.execute(
@@ -227,7 +227,7 @@ class NarrativeCacheService:
             async with self._pool.acquire() as conn:
                 async with conn.transaction():
                     await conn.execute(
-                        "SELECT set_config('app.factory_id', $1, true)",
+                        "SELECT set_config('app.factory_id', $1, false)",
                         factory_id,
                     )
                     row = await conn.fetchrow(
@@ -276,7 +276,7 @@ class NarrativeCacheService:
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
-                    "SELECT set_config('app.factory_id', $1, true)",
+                    "SELECT set_config('app.factory_id', $1, false)",
                     factory_id,
                 )
                 result = await conn.execute(
