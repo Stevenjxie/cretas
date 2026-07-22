@@ -435,26 +435,36 @@ def extract_store_mention(query: Optional[str]) -> Optional[str]:
 async def _canonicalize_store_mention(
     smartbi_pool, factory_id: str, mention: str,
 ) -> List[str]:
-    """dim_store names matching the mention (exact first, then containment)."""
+    """dim_store names matching the mention (exact first, then containment).
+
+    The RLS GUC must be set inside an explicit transaction: asyncpg runs
+    statements in their own implicit transactions, so a LOCAL ``set_config``
+    issued as a standalone statement is discarded before the next query and
+    row visibility silently degrades to whatever session GUC the pooled
+    connection last carried.
+    """
     async with smartbi_pool.acquire() as conn:
-        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
-        exact = await conn.fetch(
-            "SELECT name FROM dim_store WHERE factory_id = $1 AND name = $2 LIMIT 1",
-            factory_id, mention,
-        )
-        if exact:
-            return [exact[0]["name"]]
-        rows = await conn.fetch(
-            """
-            SELECT name FROM dim_store
-             WHERE factory_id = $1
-               AND (name LIKE '%' || $2 || '%' OR $2 LIKE '%' || name || '%')
-             ORDER BY LENGTH(name) ASC
-             LIMIT 6
-            """,
-            factory_id, mention,
-        )
-        return [r["name"] for r in rows]
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, true)", factory_id,
+            )
+            exact = await conn.fetch(
+                "SELECT name FROM dim_store WHERE factory_id = $1 AND name = $2 LIMIT 1",
+                factory_id, mention,
+            )
+            if exact:
+                return [exact[0]["name"]]
+            rows = await conn.fetch(
+                """
+                SELECT name FROM dim_store
+                 WHERE factory_id = $1
+                   AND (name LIKE '%' || $2 || '%' OR $2 LIKE '%' || name || '%')
+                 ORDER BY LENGTH(name) ASC
+                 LIMIT 6
+                """,
+                factory_id, mention,
+            )
+            return [r["name"] for r in rows]
 
 
 def _actual_window_text(start_date: Any, end_date: Any, requested_days: int) -> str:
@@ -1872,7 +1882,12 @@ async def resolve_store_margin(
         )
 
     async with smartbi_pool.acquire() as conn:
-        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        # Session-level GUC (is_local=false): asyncpg runs each statement in
+        # its own implicit transaction, so a LOCAL set_config is discarded
+        # before the next fetch and RLS visibility silently depends on
+        # whatever GUC the pooled connection last carried (real incident:
+        # store-scoped RES_3101_009 reads returned 0 rows).
+        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
         # Per-store per-dish aggregation — need this granularity to compute
         # cost correctly (dish-level food_cost × qty sold at each store).
         store_dish_rows = await conn.fetch(
