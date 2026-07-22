@@ -5,6 +5,7 @@
 
 ## 在飞任务
 
+- `BUG-F006-R3-SALES-PRODPLAN-BOM-POLICY-001` — `in-progress` — Owner: `/root` — Base SHA: `da15dcc44e723265144e17927bf19467c5ab9d06` — 生产 hotfix，串行占用 `ProductConfigurationReadinessService`、`ProductionPlanServiceImpl` 与销售来源生产计划目标测试 scope；修复旧/已激活 Workflow 节点缺少 `auxiliaryPolicy` 时 readiness 对 null 调用 immutable Set.contains 导致 500；新版本激活仍执行严格完整性门禁，已激活历史 BOM/Workflow 可按原 identity 固定到新计划而不被追溯性重判。验证同订单行失败零残留、有效计划唯一/重复 409。生产现场仅 query-only，不修改 `SO-20260722-0002`、item 728 或 LIUSHANMEN。验收：readiness + Workflow pin + sales batch plan 目标测试、最终 release lifecycle、exact-main 部署与同记录续测交接。
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
 - `ENH-F006-SUPPLIER-IMPORT-001`（含 `REQ-F006-SUPPLIER-REQUIRED-CONTACT-001`、`ENH-F006-SUPPLIER-DETAIL-STATUS-001`）— `in-progress` — Owner: `/root` — Base SHA: `3ddf6751603476205457fcf8aa0ee9f1adbea792` — 复用现有供应链 Excel 共享能力，统一供应商必填资料、导入预览/幂等确认、状态生命周期、采购门禁与详情信息架构；只合入 `main`，严格 `NOT_DEPLOYED`，生产业务写入为 0。
 - `BUG-F006-MATERIAL-CATEGORY-CASCADE-001`（含 `BUG-F006-MATERIAL-AUTOFILL-UNIT-001`）— `in-progress` — Owner: `/root` — Base SHA: `3ddf6751603476205457fcf8aa0ee9f1adbea792` — 修复原料类型字典 category/L1/L2/L3 单一真值、异步级联与单位建议来源/手动覆盖语义，后端 fail-closed 校验；只合入 `main`，严格 `NOT_DEPLOYED`，生产业务写入为 0。

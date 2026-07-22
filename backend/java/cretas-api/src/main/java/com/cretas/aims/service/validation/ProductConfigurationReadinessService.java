@@ -242,7 +242,11 @@ public class ProductConfigurationReadinessService {
             long bindingCount = seasonings.stream()
                     .filter(item -> matchesProcess(item, processNodeId, processId, pinnedGraph != null))
                     .count();
-            boolean validPolicy = AUXILIARY_POLICIES.contains(policy);
+            // Set.of(...).contains(null) throws NPE. Legacy/published workflow snapshots may
+            // legitimately lack this newer field. Readiness and future activation remain
+            // fail-closed, while production-plan admission separately preserves already-active
+            // historical BOM/Workflow snapshots without rewriting them.
+            boolean validPolicy = policy != null && AUXILIARY_POLICIES.contains(policy);
             boolean complete = validPolicy && ("NOT_REQUIRED".equals(policy) || bindingCount > 0);
             processStatuses.add(ProductConfigurationCompletenessReport.ProcessAuxiliaryStatus.builder()
                     .workflowProcessNodeId(processNodeId).workProcessId(processId)
