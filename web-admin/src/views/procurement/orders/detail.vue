@@ -133,7 +133,7 @@ async function loadOrder() {
 async function loadReceives() {
   if (!factoryId.value || !orderId.value) return;
   try {
-    const res = await get(`/${factoryId.value}/purchase/receives/by-order/${orderId.value}`);
+    const res = await get(`/${factoryId.value}/warehouse/receiving/receipts/by-order/${orderId.value}`);
     if (res.success) receives.value = Array.isArray(res.data) ? res.data : [];
   } catch { /* ignore */ }
 }

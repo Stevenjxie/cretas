@@ -465,6 +465,11 @@ public class PurchaseController {
             @PathVariable @NotBlank String factoryId,
             @RequestHeader("Authorization") String authorization,
             @Valid @RequestBody CreateReceiveRecordRequest request) {
+        if (request.getPurchaseOrderId() == null || request.getPurchaseOrderId().isBlank()) {
+            throw new BusinessException(410, "无来源手工收货入口已停用")
+                    .withCode("PURCHASE_RECEIPT_SOURCE_REQUIRED")
+                    .withHint("请从仓储管理的待收货任务进入，系统会自动带入已审批采购订单");
+        }
         Long userId = extractUserId(authorization);
         log.info("创建入库单: factoryId={}, supplierId={}", factoryId, request.getSupplierId());
         PurchaseReceiveRecord record = purchaseService.createReceiveRecord(factoryId, request, userId);

@@ -136,6 +136,8 @@ class PurchaseServiceImplConfirmReceiveOverReceiveTest {
         poItem.setPurchaseOrderId(PO_ID);
         poItem.setMaterialTypeId(MAT_ID);
         poItem.setMaterialName(MAT_NAME);
+        poItem.setUnit("kg");
+        poItem.setPriceUnit("kg");
         poItem.setQuantity(orderedQty);
         poItem.setReceivedQuantity(alreadyReceived);
         lenient().when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of(poItem));

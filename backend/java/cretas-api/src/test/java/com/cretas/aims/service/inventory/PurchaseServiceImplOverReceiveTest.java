@@ -109,13 +109,15 @@ class PurchaseServiceImplOverReceiveTest {
         PurchaseOrder order = new PurchaseOrder();
         order.setId(PO_ID);
         order.setFactoryId(FACTORY_ID);
-        order.setStatus(PurchaseOrderStatus.APPROVED);
+        order.setStatus(PurchaseOrderStatus.FINANCE_APPROVED);
         when(purchaseOrderRepository.findByIdAndFactoryIdForUpdate(PO_ID, FACTORY_ID)).thenReturn(Optional.of(order));
 
         PurchaseOrderItem orderItem = new PurchaseOrderItem();
         orderItem.setPurchaseOrderId(PO_ID);
         orderItem.setMaterialTypeId(MAT_ID);
         orderItem.setMaterialName(MAT_NAME);
+        orderItem.setUnit("kg");
+        orderItem.setPriceUnit("kg");
         orderItem.setQuantity(orderedQty);
         orderItem.setReceivedQuantity(alreadyReceived);
         when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID))

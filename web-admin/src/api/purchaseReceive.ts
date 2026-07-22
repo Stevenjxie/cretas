@@ -87,7 +87,7 @@ export function getPendingPurchaseReceivingTasks(
   factoryId: string,
   filters?: { purchaseOrderId?: string; orderNumber?: string },
 ) {
-  return get<PurchaseReceivingTask[]>(`/${factoryId}/purchase/receiving-tasks`, {
+  return get<PurchaseReceivingTask[]>(`/${factoryId}/warehouse/receiving/tasks`, {
     params: {
       purchaseOrderId: filters?.purchaseOrderId || undefined,
       orderNumber: filters?.orderNumber || undefined,
@@ -122,6 +122,6 @@ export function getOrderReceiveSequence(factoryId: string, orderId: string) {
  */
 export function getPurchaseInboundDefaultWarehouse(factoryId: string) {
   return get<FactoryWarehouse | null>(
-    `/${factoryId}/purchase/receives/default-warehouse`
+    `/${factoryId}/warehouse/receiving/default-warehouse`
   );
 }

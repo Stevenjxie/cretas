@@ -15,7 +15,7 @@ import {
   type FactoryWarehouse,
 } from '@/api/factoryWarehouse';
 import AttachmentList from '@/components/attachment/AttachmentList.vue';
-import AttachmentUploadButton from '@/components/attachment/AttachmentUploadButton.vue';
+import AttachmentDropZone from '@/components/attachment/AttachmentDropZone.vue';
 import { safePrint } from '@/api/printApi';
 import { displayUnit } from '@/utils/unitPricing';
 import { fmtQty } from '@/utils/tableFormatters';
@@ -50,6 +50,7 @@ interface ReceiptDetail {
 const loading = ref(false);
 const tasks = ref<PurchaseReceivingTask[]>([]);
 const dialogVisible = ref(false);
+const openingTaskId = ref('');
 const submitting = ref(false);
 const confirming = ref(false);
 const formRef = ref<FormInstance>();
@@ -57,6 +58,7 @@ const selectedTask = ref<PurchaseReceivingTask | null>(null);
 const receipt = ref<ReceiptDetail | null>(null);
 const warehouseOptions = ref<FactoryWarehouse[]>([]);
 const attachmentRefreshKey = ref(0);
+const attachmentQueue = ref({ pending: 0, failed: 0 });
 const form = ref({
   purchaseOrderId: '',
   supplierId: '',
@@ -140,37 +142,57 @@ async function loadWarehouses() {
 }
 
 async function loadExistingReceipt(receiptId: string) {
-  const response = await get<ReceiptDetail>(`/${props.factoryId}/purchase/receives/${receiptId}`);
-  if (response.success && response.data) receipt.value = response.data;
+  const response = await get<ReceiptDetail>(`/${props.factoryId}/warehouse/receiving/receipts/${receiptId}`);
+  if (!response.success || !response.data) throw new Error('活动收货单加载失败');
+  receipt.value = response.data;
 }
 
 async function openReceive(task: PurchaseReceivingTask) {
+  if (openingTaskId.value) return;
   if (task.receiptConflict) {
-    ElMessage.error(`该采购单存在 ${task.activeReceiptCount} 张活动收货草稿，请先由仓储主管核对；系统不会自动取消或合并历史草稿`);
+    ElMessage.error(task.activeReceiptCount > 1
+      ? `该采购单存在 ${task.activeReceiptCount} 张活动收货草稿，请先由仓储主管核对；系统不会自动取消或合并历史草稿`
+      : '该历史收货草稿缺少明确的采购订单行身份，系统无法安全分配同物料多行；请由仓储主管核对');
     return;
   }
-  selectedTask.value = task;
-  receipt.value = null;
-  attachmentRefreshKey.value = 0;
-  form.value = {
-    purchaseOrderId: task.purchaseOrderId,
-    supplierId: task.supplierId,
-    receiveDate: localDateText(),
-    warehouseId: task.warehouseId || '',
-    remark: '',
-    items: task.items
-      .filter((item) => Number(item.remainingReceivableQuantity) > 0)
-      .map((item) => ({
-        purchaseOrderItemId: item.purchaseOrderItemId,
-        materialTypeId: item.materialTypeId,
-        materialName: item.materialName,
-        receivedQuantity: Number(item.remainingReceivableQuantity),
-        unit: item.unit,
-      })),
-  };
-  dialogVisible.value = true;
-  await loadWarehouses();
-  if (task.activeReceiptId) await loadExistingReceipt(task.activeReceiptId);
+  openingTaskId.value = task.purchaseOrderId;
+  try {
+    selectedTask.value = task;
+    receipt.value = null;
+    attachmentRefreshKey.value = 0;
+    attachmentQueue.value = { pending: 0, failed: 0 };
+    form.value = {
+      purchaseOrderId: task.purchaseOrderId,
+      supplierId: task.supplierId,
+      receiveDate: localDateText(),
+      warehouseId: task.warehouseId || '',
+      remark: '',
+      items: task.items
+        .filter((item) => Number(item.remainingReceivableQuantity) > 0)
+        .map((item) => ({
+          purchaseOrderItemId: item.purchaseOrderItemId,
+          materialTypeId: item.materialTypeId,
+          materialName: item.materialName,
+          receivedQuantity: Number(item.remainingReceivableQuantity),
+          unit: item.unit,
+        })),
+    };
+    await loadWarehouses();
+    if (task.activeReceiptId) await loadExistingReceipt(task.activeReceiptId);
+    dialogVisible.value = true;
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '收货任务加载失败，请刷新后重试');
+    selectedTask.value = null;
+    receipt.value = null;
+  } finally {
+    openingTaskId.value = '';
+  }
+}
+
+function remainingLimit(row: ReceiveItemForm): number {
+  const line = selectedTask.value?.items.find((item) =>
+    item.purchaseOrderItemId === row.purchaseOrderItemId);
+  return Number(line?.remainingReceivableQuantity || 0);
 }
 
 async function createReceipt() {
@@ -182,7 +204,7 @@ async function createReceipt() {
   }
   submitting.value = true;
   try {
-    const response = await post<ReceiptDetail>(`/${props.factoryId}/purchase/receives`, form.value);
+    const response = await post<ReceiptDetail>(`/${props.factoryId}/warehouse/receiving/receipts`, form.value);
     if (response.success && response.data) {
       receipt.value = response.data;
       ElMessage.success('收货单草稿已创建；请上传供货凭证并核对后确认入库');
@@ -195,17 +217,25 @@ async function createReceipt() {
 
 async function confirmReceipt() {
   if (!receipt.value || confirming.value) return;
-  const lines = (receipt.value.items || [])
-    .map((item) => `• ${item.materialName}：${fmtQty(item.receivedQuantity)}${displayUnit(item.unit)}`)
-    .join('\n');
-  await ElMessageBox.confirm(
-    `${lines}\n\n确认后才会生成库存批次；重复确认不会重复入库。`,
-    `确认收货入库 — ${receipt.value.receiveNumber}`,
-    { type: 'warning', confirmButtonText: '确认收货入库', cancelButtonText: '返回核对' },
-  );
   confirming.value = true;
   try {
-    await post(`/${props.factoryId}/purchase/receives/${receipt.value.id}/confirm`);
+    if (attachmentQueue.value.pending > 0) {
+      ElMessage.warning('附件仍在上传，请等待完成后再确认入库');
+      return;
+    }
+    if (attachmentQueue.value.failed > 0) {
+      ElMessage.error('存在上传失败的附件，请重试或删除后再确认入库');
+      return;
+    }
+    const lines = (receipt.value.items || [])
+      .map((item) => `• ${item.materialName}：${fmtQty(item.receivedQuantity)}${displayUnit(item.unit)}`)
+      .join('\n');
+    await ElMessageBox.confirm(
+      `${lines}\n\n确认后才会生成库存批次；重复确认不会重复入库。`,
+      `确认收货入库 — ${receipt.value.receiveNumber}`,
+      { type: 'warning', confirmButtonText: '确认收货入库', cancelButtonText: '返回核对' },
+    );
+    await post(`/${props.factoryId}/warehouse/receiving/receipts/${receipt.value.id}/confirm`);
     ElMessage.success('收货入库完成，库存批次已生成');
     dialogVisible.value = false;
     await loadTasks();
@@ -288,7 +318,8 @@ defineExpose({ loadTasks });
       </el-table-column>
       <el-table-column label="操作" width="130" fixed="right">
         <template #default="{ row }">
-          <el-button v-if="canWrite" type="danger" :disabled="row.receiptConflict" @click="openReceive(row)">
+          <el-button v-if="canWrite" type="danger" :disabled="row.receiptConflict || Boolean(openingTaskId)"
+            :loading="openingTaskId === row.purchaseOrderId" @click="openReceive(row)">
             {{ row.activeReceiptId ? '继续收货' : '收货' }}
           </el-button>
           <span v-else>只读</span>
@@ -296,7 +327,8 @@ defineExpose({ loadTasks });
       </el-table-column>
     </el-table>
 
-    <el-dialog v-model="dialogVisible" :title="`采购收货 — ${selectedTask?.orderNumber || ''}`" width="920px" :close-on-click-modal="false">
+    <el-dialog v-model="dialogVisible" :title="`采购收货 — ${selectedTask?.orderNumber || ''}`"
+      width="min(920px, calc(100vw - 32px))" :close-on-click-modal="false">
       <template v-if="selectedTask">
         <el-descriptions :column="3" border>
           <el-descriptions-item label="来源">采购订单</el-descriptions-item>
@@ -324,7 +356,8 @@ defineExpose({ loadTasks });
             <el-table-column prop="materialName" label="物料" min-width="210" />
             <el-table-column label="本次实收" width="190">
               <template #default="{ row }">
-                <el-input-number v-model="row.receivedQuantity" :min="0.001" :precision="3" :controls="false" style="width:120px" />
+                <el-input-number v-model="row.receivedQuantity" :min="0.001" :max="remainingLimit(row)"
+                  :precision="3" :controls="false" style="width:120px" />
                 <span class="unit-suffix">{{ displayUnit(row.unit) }}</span>
               </template>
             </el-table-column>
@@ -343,9 +376,10 @@ defineExpose({ loadTasks });
           <el-divider content-position="left">供应商供货单 / 收货凭证</el-divider>
           <AttachmentList entity-type="PURCHASE_RECEIPT" :entity-id="receipt.id" :factory-id="factoryId"
             :refresh-key="attachmentRefreshKey" empty-text="尚未上传供货凭证" />
-          <AttachmentUploadButton v-if="canWrite" entity-type="PURCHASE_RECEIPT" :entity-id="receipt.id" :factory-id="factoryId"
-            business-tag="RECEIVE_PHOTO" file-category="PHOTO" accept="image/*,.pdf,.xlsx,.xls" button-label="拍照 / 上传供货凭证"
-            @uploaded="attachmentRefreshKey++" />
+          <AttachmentDropZone v-if="canWrite" entity-type="PURCHASE_RECEIPT" :entity-id="receipt.id" :factory-id="factoryId"
+            business-tag="RECEIVE_PHOTO" file-category="PHOTO" accept="image/*,.pdf,.xlsx,.xls"
+            @uploaded="attachmentRefreshKey++"
+            @queue-change="attachmentQueue = { pending: $event.pending, failed: $event.failed }" />
         </template>
       </template>
 
@@ -371,4 +405,8 @@ defineExpose({ loadTasks });
 .receive-form { margin-top: 16px; }
 .unit-suffix { margin-left: 8px; color: #606266; }
 .receipt-lines { margin: 12px 0; }
+@media (max-width: 720px) {
+  .task-heading { flex-direction: column; }
+  :deep(.el-dialog__body) { padding: 12px; overflow-x: auto; }
+}
 </style>

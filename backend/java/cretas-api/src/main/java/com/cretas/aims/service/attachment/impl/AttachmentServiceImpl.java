@@ -13,6 +13,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.AttachmentRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
+import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
 import com.cretas.aims.service.OssService;
 import com.cretas.aims.service.attachment.AttachmentService;
 import com.cretas.aims.service.attachment.dto.RegisterAttachmentRequest;
@@ -72,6 +73,9 @@ public class AttachmentServiceImpl implements AttachmentService {
     private final PurchaseOrderRepository purchaseOrderRepository;
     private final OssService ossService;
     private final OssConfig ossConfig;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private PurchaseReceiveRecordRepository purchaseReceiveRecordRepository;
 
     /** OSS 直接客户端 — pre-signed PUT 用; {@code aliyun.oss.enabled=false} 时为 null. */
     @Autowired(required = false)
@@ -144,6 +148,17 @@ public class AttachmentServiceImpl implements AttachmentService {
     }
 
     private void validateEntityBinding(String factoryId, RegisterAttachmentRequest req) {
+        if (EntityType.PURCHASE_RECEIPT == req.getEntityType()) {
+            if (purchaseReceiveRecordRepository == null) {
+                throw new BusinessException(503, "收货单归属校验服务暂不可用，附件未绑定");
+            }
+            var receipt = purchaseReceiveRecordRepository.findById(req.getEntityId())
+                    .orElseThrow(() -> new BusinessException(404, "收货单不存在，附件不能绑定到临时或伪造ID"));
+            if (!factoryId.equals(receipt.getFactoryId())) {
+                throw new BusinessException(403, "收货凭证跨工厂绑定被拒绝");
+            }
+            return;
+        }
         if (EntityType.PURCHASE_ORDER != req.getEntityType()) return;
         var order = purchaseOrderRepository.findById(req.getEntityId())
                 .orElseThrow(() -> new BusinessException(404, "采购订单不存在，附件不能绑定到临时或伪造ID"));

@@ -5,10 +5,12 @@ import com.cretas.aims.config.OssConfig;
 import com.cretas.aims.entity.Attachment;
 import com.cretas.aims.entity.Attachment.EntityType;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
+import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.AttachmentRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
+import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
 import com.cretas.aims.service.OssService;
 import com.cretas.aims.service.attachment.dto.RegisterAttachmentRequest;
 import com.cretas.aims.service.attachment.dto.UpdateAttachmentRequest;
@@ -50,6 +52,9 @@ class AttachmentServiceImplTest {
     private PurchaseOrderRepository purchaseOrderRepository;
 
     @Mock
+    private PurchaseReceiveRecordRepository purchaseReceiveRecordRepository;
+
+    @Mock
     private OssService ossService;
 
     @Mock
@@ -81,6 +86,10 @@ class AttachmentServiceImplTest {
             Field f = AttachmentServiceImpl.class.getDeclaredField("ossClient");
             f.setAccessible(true);
             f.set(service, ossClient);
+            Field receiptRepository = AttachmentServiceImpl.class
+                    .getDeclaredField("purchaseReceiveRecordRepository");
+            receiptRepository.setAccessible(true);
+            receiptRepository.set(service, purchaseReceiveRecordRepository);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -151,6 +160,25 @@ class AttachmentServiceImplTest {
             BusinessException ex = assertThrows(BusinessException.class,
                     () -> service.register(FACTORY_ID, sampleRequest(), null));
             assertEquals(401, ex.getCode());
+        }
+
+        @Test
+        @DisplayName("收货凭证只能绑定当前工厂真实收货单")
+        void registerPurchaseReceipt_crossFactoryRejected() {
+            RegisterAttachmentRequest req = sampleRequest();
+            req.setEntityType(EntityType.PURCHASE_RECEIPT);
+            req.setEntityId("RCV-OTHER");
+            PurchaseReceiveRecord receipt = new PurchaseReceiveRecord();
+            receipt.setId("RCV-OTHER");
+            receipt.setFactoryId(OTHER_FACTORY);
+            when(purchaseReceiveRecordRepository.findById("RCV-OTHER"))
+                    .thenReturn(Optional.of(receipt));
+
+            BusinessException error = assertThrows(BusinessException.class,
+                    () -> service.register(FACTORY_ID, req, UPLOADER_ID));
+
+            assertEquals(403, error.getCode());
+            verify(attachmentRepository, never()).save(any());
         }
 
         @Test

@@ -1504,6 +1504,10 @@ public class PurchaseServiceImpl implements PurchaseService {
                 }
             }
         }
+        boolean legacyLineIdentityAmbiguous = legacyAllocatedByMaterial.keySet().stream()
+                .anyMatch(materialTypeId -> orderItems.stream()
+                        .filter(item -> Objects.equals(materialTypeId, item.getMaterialTypeId()))
+                        .count() > 1);
 
         List<PurchaseReceivingTaskResponse.Item> lines = new ArrayList<>();
         BigDecimal remainingTotal = BigDecimal.ZERO;
@@ -1555,7 +1559,7 @@ public class PurchaseServiceImpl implements PurchaseService {
                 .activeReceiptId(activeReceipt != null ? activeReceipt.getId() : null)
                 .activeReceiptNumber(activeReceipt != null ? activeReceipt.getReceiveNumber() : null)
                 .activeReceiptCount(activeReceipts.size())
-                .receiptConflict(activeReceipts.size() > 1)
+                .receiptConflict(activeReceipts.size() > 1 || legacyLineIdentityAmbiguous)
                 .items(lines)
                 .build();
     }
@@ -1596,21 +1600,12 @@ public class PurchaseServiceImpl implements PurchaseService {
         if (request.getPurchaseOrderId() != null && !request.getPurchaseOrderId().isEmpty()) {
             order = purchaseOrderRepository.findByIdAndFactoryIdForUpdate(request.getPurchaseOrderId(), factoryId)
                     .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在或不属于当前组织"));
-            if (order.getStatus() == null
-                    || !com.cretas.aims.domain.OrderUsageWhitelists.PO_OPS_RECEIVABLE.contains(order.getStatus())) {
-                throw new BusinessException(409, "只有已审批、财务已审核或部分到货状态的订单可以入库")
-                        .withHint("请刷新订单列表查看最新状态");
+            if (order.getStatus() != PurchaseOrderStatus.FINANCE_APPROVED
+                    && order.getStatus() != PurchaseOrderStatus.PARTIAL_RECEIVED) {
+                throw new BusinessException(409, "采购订单完成财务审核后才能进入仓储收货")
+                        .withCode("PURCHASE_RECEIPT_FINANCE_APPROVAL_REQUIRED")
+                        .withHint("请在 OA 审批中心完成整条审批链后刷新仓储待收货任务");
             }
-
-            // PR #173 reviewer follow-up I-2: 早返超收上限校验.
-            // 旧行为: cap 校验只在 confirmReceive → updateOrderReceiveStatus (line ~845) 触发,
-            // 即用户走完 DRAFT 创建 + QC 流程, 在 confirm 阶段才知道超收 → 体验差.
-            // 新行为: 在 DRAFT 创建时同步校验 (基于 request.items 的累计预估),
-            // 用户立即看到 "超出可入库上限" 提示, 不用再走质检流程.
-            // 注: confirmReceive 也保留 updateOrderReceiveStatus 内的二次校验作为防御
-            // (防止 DRAFT → PENDING_QC → CONFIRMED 期间另一并发入库已 commit, 致使原本合法的草稿在
-            // confirm 时变非法).
-            validateOverReceiveCap(order, request.getItems());
 
             List<PurchaseReceiveRecord> activeReceipts = receiveRecordRepository
                     .findByFactoryIdAndPurchaseOrderIdOrderByCreatedAtAsc(factoryId, order.getId()).stream()
@@ -1633,7 +1628,10 @@ public class PurchaseServiceImpl implements PurchaseService {
                 PurchaseOrderItem poLine = resolvePurchaseOrderItem(
                         poLines, line.getPurchaseOrderItemId(), line.getMaterialTypeId());
                 line.setPurchaseOrderItemId(poLine.getId());
+                line.setUnit(validateReceiveLineUnit(factoryId, poLine, line.getUnit()));
             }
+            // 必须在行身份与 canonical 单位均锁定后再比较数量，禁止 kg/case 等跨单位裸数相加。
+            validateOverReceiveCap(order, request.getItems());
         }
 
         // 显式目标仓必须在 DRAFT 创建前完成归属/启用状态/仓型校验。
@@ -1693,14 +1691,13 @@ public class PurchaseServiceImpl implements PurchaseService {
             item.setUnit(quantityUnit);
             // BUG-RCV: 行价为空 → 继承 PO 行价 (合同价); 无 PO / PO 无此物料价 → 保持 null (诚实, 不伪造 0).
             PurchasePriceQuote inheritedQuote = poLinePrices.get(String.valueOf(itemDTO.getPurchaseOrderItemId()));
-            BigDecimal sourcePrice = itemDTO.getUnitPrice() != null
-                    ? itemDTO.getUnitPrice()
-                    : inheritedQuote != null ? inheritedQuote.unitPrice() : null;
-            String sourcePriceUnit = itemDTO.getUnitPrice() != null
-                    ? firstNonBlank(itemDTO.getPriceUnit(), quantityUnit)
-                    : inheritedQuote != null
-                            ? firstNonBlank(inheritedQuote.priceUnit(), quantityUnit)
-                            : quantityUnit;
+            // PO 收货价只能来自已审批采购行快照；仓储请求中的价格字段不具有改价权限。
+            BigDecimal sourcePrice = order != null
+                    ? inheritedQuote != null ? inheritedQuote.unitPrice() : null
+                    : itemDTO.getUnitPrice();
+            String sourcePriceUnit = order != null
+                    ? inheritedQuote != null ? firstNonBlank(inheritedQuote.priceUnit(), quantityUnit) : quantityUnit
+                    : firstNonBlank(itemDTO.getPriceUnit(), quantityUnit);
             BigDecimal resolvedPrice = sourcePrice != null
                     ? convertPricePerUnit(factoryId, itemDTO.getMaterialTypeId(), sourcePrice,
                             sourcePriceUnit, quantityUnit)
@@ -1759,7 +1756,12 @@ public class PurchaseServiceImpl implements PurchaseService {
                     .withHint("请刷新入库单列表查看最新状态");
         }
 
-        if (attachmentRepository != null && attachmentRepository.countByFactoryIdAndEntityTypeAndEntityId(
+        if (attachmentRepository == null) {
+            throw new BusinessException(503, "收货凭证服务暂不可用，当前不能确认入库")
+                    .withCode("PURCHASE_RECEIPT_ATTACHMENT_SERVICE_UNAVAILABLE")
+                    .withHint("请稍后重试；系统未执行任何库存写入");
+        }
+        if (attachmentRepository.countByFactoryIdAndEntityTypeAndEntityId(
                 factoryId, com.cretas.aims.entity.Attachment.EntityType.PURCHASE_RECEIPT, receiveId) <= 0) {
             throw new BusinessException(409, "确认收货前必须上传供应商供货单或收货凭证")
                     .withCode("PURCHASE_RECEIPT_ATTACHMENT_REQUIRED")
@@ -1777,6 +1779,13 @@ public class PurchaseServiceImpl implements PurchaseService {
         if (record.getPurchaseOrderId() != null) {
             purchaseOrderRepository.findByIdAndFactoryIdForUpdate(record.getPurchaseOrderId(), factoryId)
                     .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在或不属于当前组织"));
+            List<PurchaseOrderItem> poLines = purchaseOrderItemRepository
+                    .findByPurchaseOrderId(record.getPurchaseOrderId());
+            for (PurchaseReceiveItem receiveItem : record.getItems()) {
+                PurchaseOrderItem poLine = resolvePurchaseOrderItem(
+                        poLines, receiveItem.getPurchaseOrderItemId(), receiveItem.getMaterialTypeId());
+                validateReceiveLineUnit(factoryId, poLine, receiveItem.getUnit());
+            }
             validateOverReceiveCapForConfirm(record);
         }
 
@@ -2472,6 +2481,27 @@ public class PurchaseServiceImpl implements PurchaseService {
             throw new BusinessException(400, fieldName + "不是已登记单位: " + rawUnit);
         }
         return normalized.code();
+    }
+
+    /**
+     * Warehouse receipt quantities are recorded in the immutable PO line quantity unit.
+     * Cross-unit receipt conversion is deliberately fail-closed until a pinned packaging
+     * conversion snapshot can prove the relationship; bare numeric comparison is unsafe.
+     */
+    private String validateReceiveLineUnit(
+            String factoryId, PurchaseOrderItem poLine, String requestedUnit) {
+        String orderUnit = canonicalUnit(factoryId,
+                firstNonBlank(poLine.getPurchasePackageUnitSnapshot(), poLine.getUnit()),
+                "采购订单行数量单位");
+        String receiveUnit = canonicalUnit(factoryId, requestedUnit, "收货数量单位");
+        if (!orderUnit.equals(receiveUnit)) {
+            throw new BusinessException(400,
+                    "收货单位必须与采购订单行一致：订单为 " + orderUnit + "，本次为 " + receiveUnit)
+                    .withCode("PURCHASE_RECEIPT_UNIT_MISMATCH")
+                    .withHint("请按采购订单锁定单位收货；系统不会猜测跨单位换算")
+                    .withHintTarget("unit");
+        }
+        return receiveUnit;
     }
 
     private String canonicalUnitOrRaw(String factoryId, String rawUnit) {

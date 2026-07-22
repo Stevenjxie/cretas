@@ -10,6 +10,8 @@ describe('统一仓储待收货入口', () => {
   const detail = source('src/views/procurement/orders/detail.vue');
   const materials = source('src/views/warehouse/materials/list.vue');
   const panel = source('src/views/warehouse/materials/PendingPurchaseReceivingPanel.vue');
+  const dropZone = source('src/components/attachment/AttachmentDropZone.vue');
+  const receiveApi = source('src/api/purchaseReceive.ts');
   const router = source('src/router/index.ts');
   const menu = source('src/components/layout/menuConfig.ts');
 
@@ -42,7 +44,8 @@ describe('统一仓储待收货入口', () => {
     expect(panel).toContain("row.activeReceiptId ? '继续收货' : '收货'");
     expect(panel).toContain('purchaseOrderId: task.purchaseOrderId');
     expect(panel).toContain('supplierId: task.supplierId');
-    expect(panel).toContain('拍照 / 上传供货凭证');
+    expect(panel).toContain('<AttachmentDropZone');
+    expect(dropZone).toContain('松开即可上传');
     expect(panel).toContain('打印收货单');
     expect(panel).toContain('确认收货入库');
     expect(materials).not.toContain('>入库登记</el-button>');
@@ -57,5 +60,13 @@ describe('统一仓储待收货入口', () => {
   it('采购任务查询错误不会被吞掉后伪装成空待办', () => {
     expect(panel).toContain('await getPendingPurchaseReceivingTasks');
     expect(panel).not.toContain('Promise.allSettled');
+  });
+
+  it('新页面只调用仓储命名空间，不再使用旧采购收货 API', () => {
+    expect(receiveApi).toContain('/warehouse/receiving/tasks');
+    expect(receiveApi).toContain('/warehouse/receiving/default-warehouse');
+    expect(panel).toContain('/warehouse/receiving/receipts');
+    expect(panel).not.toContain('/purchase/receives');
+    expect(detail).not.toContain('/purchase/receives');
   });
 });

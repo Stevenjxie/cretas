@@ -110,6 +110,25 @@ class PurchaseServiceImplReceivingTaskTest {
     }
 
     @Test
+    void legacyDraftWithoutOrderLineIdentityIsConflictForDuplicateMaterialLines() {
+        PurchaseOrder order = order(PurchaseOrderStatus.FINANCE_APPROVED);
+        PurchaseOrderItem first = item("4", "0");
+        PurchaseOrderItem second = item("6", "0");
+        second.setId(2L);
+        PurchaseReceiveRecord legacyDraft = receipt("RCV-LEGACY", PurchaseReceiveStatus.DRAFT, "5");
+        when(orderRepository.findByIdAndFactoryId(PO_ID, FACTORY)).thenReturn(Optional.of(order));
+        when(itemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of(first, second));
+        when(receiveRepository.findByFactoryIdAndPurchaseOrderIdOrderByCreatedAtAsc(FACTORY, PO_ID))
+                .thenReturn(List.of(legacyDraft));
+
+        PurchaseReceivingTaskResponse task = service
+                .getPendingReceivingTasks(FACTORY, PO_ID, null).get(0);
+
+        assertTrue(task.isReceiptConflict());
+        assertEquals(1, task.getActiveReceiptCount());
+    }
+
+    @Test
     void multipleHistoricalActiveReceiptsAreVisibleAsConflict() {
         PurchaseOrder order = order(PurchaseOrderStatus.FINANCE_APPROVED);
         when(orderRepository.findByIdAndFactoryId(PO_ID, FACTORY)).thenReturn(Optional.of(order));
