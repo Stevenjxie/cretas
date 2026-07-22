@@ -66,6 +66,11 @@ public class DynamicToolSelectionService {
 
     private static final double DYNAMIC_LEARN_MIN_SIMILARITY = 0.55;
 
+    // R14c: 餐饮租户 dynamic no-tool 死胡同出口 (误匹配 SYSTEM_HELP 等无候选工具
+    // 的意图, 如「你们能做什么」) 先问 Python tiered 路由再放弃。
+    @Autowired(required = false)
+    private com.cretas.aims.ai.tool.impl.restaurant.TieredIntentDelegate tieredIntentDelegate;
+
     // ==================== 公开方法 ====================
 
     /**
@@ -90,14 +95,14 @@ public class DynamicToolSelectionService {
             List<ToolRouterService.ToolCandidate> candidates = toolRouterService.retrieveCandidateTools(query, 10);
             if (candidates.isEmpty()) {
                 log.warn("动态工具选择: 未找到候选工具, query={}", query);
-                return buildNoToolResponse(intent);
+                return noToolResponseWithRestaurantFallback(intent, factoryId, request);
             }
 
             // 2.1. Track B: 按工厂业态过滤动态候选工具(纯向量检索跨业态, 餐饮工厂排除制造业工具)
             candidates = filterCandidatesByBusinessType(candidates, factoryId);
             if (candidates.isEmpty()) {
                 log.warn("动态工具选择: 业态过滤后无候选工具, query={}", query);
-                return buildNoToolResponse(intent);
+                return noToolResponseWithRestaurantFallback(intent, factoryId, request);
             }
 
             log.info("动态工具选择: 找到 {} 个候选工具", candidates.size());
@@ -128,7 +133,7 @@ public class DynamicToolSelectionService {
             ToolRouterService.SelectedTools selectedTools = toolRouterService.selectTools(query, matchResult, candidates);
             if (selectedTools.getTools() == null || selectedTools.getTools().isEmpty()) {
                 log.warn("动态工具选择: LLM 未选中任何工具");
-                return buildNoToolResponse(intent);
+                return noToolResponseWithRestaurantFallback(intent, factoryId, request);
             }
 
             log.info("动态工具选择: LLM 选中 {} 个工具, 执行顺序={}",
@@ -173,8 +178,56 @@ public class DynamicToolSelectionService {
 
         } catch (Exception e) {
             log.error("动态工具选择执行失败: {}", e.getMessage(), e);
-            return buildNoToolResponse(intent);
+            return noToolResponseWithRestaurantFallback(intent, factoryId, request);
         }
+    }
+
+    /**
+     * R14c: 餐饮租户的 dynamic no-tool 出口先试 tiered 路由再回落死胡同提示。
+     */
+    private IntentExecuteResponse noToolResponseWithRestaurantFallback(AIIntentConfig intent,
+                                                                       String factoryId,
+                                                                       IntentExecuteRequest request) {
+        if (tieredIntentDelegate != null && isRestaurantTenant(factoryId)
+                && request != null && request.getUserInput() != null) {
+            try {
+                Map<String, Object> delegateParams = new HashMap<>();
+                delegateParams.put("userInput", request.getUserInput());
+                Map<String, Object> delegateContext = new HashMap<>();
+                delegateContext.put("request", request);
+                Map<String, Object> delegated = tieredIntentDelegate.tryDelegate(
+                        factoryId, delegateParams, delegateContext, "dynamic_no_tool");
+                if (delegated != null && delegated.get("message") != null) {
+                    String delegatedMessage = delegated.get("message").toString();
+                    Map<String, Object> delegatedData = new HashMap<>();
+                    delegatedData.put("charts", delegated.getOrDefault("charts", List.of()));
+                    delegatedData.put("kpis", delegated.getOrDefault("kpis", List.of()));
+                    delegatedData.put("source", "restaurant_ops_gold");
+                    log.info("[Branch:TieredDelegate] dynamic no-tool 出口被 tiered 路由接管: intentCode={}",
+                            intent != null ? intent.getIntentCode() : null);
+                    return IntentExecuteResponse.builder()
+                            .intentRecognized(true)
+                            .intentCode(delegated.get("code") != null ? delegated.get("code").toString() : null)
+                            .status("SUCCESS")
+                            .message(delegatedMessage)
+                            .formattedText(delegatedMessage)
+                            .resultData(delegatedData)
+                            .executedAt(LocalDateTime.now())
+                            .build();
+                }
+            } catch (Exception e) {
+                log.warn("[Branch:TieredDelegate] dynamic no-tool delegate 失败(回落原提示): {}", e.getMessage());
+            }
+        }
+        return buildNoToolResponse(intent);
+    }
+
+    private static boolean isRestaurantTenant(String factoryId) {
+        if (factoryId == null) {
+            return false;
+        }
+        String normalized = factoryId.trim().toUpperCase(Locale.ROOT);
+        return "DEMO_REST".equals(normalized) || normalized.startsWith("RES_");
     }
 
     /** Track B: 按工厂业态过滤动态候选工具, 排除异业态(如餐饮工厂排除制造业工具)。 */
