@@ -144,6 +144,17 @@ public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
         // javadoc). Any miss/exception here falls straight through to the
         // unchanged original flow.
         String userInput = getString(params, "userInput");
+        if (userInput == null || userInput.isBlank()) {
+            // LLM tool-calls often omit userInput from params (they only fill
+            // schema slots such as days/month), which silently skipped the
+            // delegate gate and served the all-history default for windowed
+            // questions like "过去一个月营业额". The orchestrator always puts
+            // the original request into the tool context — recover it there.
+            Object requestObj = context != null ? context.get("request") : null;
+            if (requestObj instanceof com.cretas.aims.dto.ai.IntentExecuteRequest req) {
+                userInput = req.getUserInput();
+            }
+        }
         if (userInput != null && !userInput.isBlank() && shouldDelegateToTieredIntent(userInput)) {
             Map<String, Object> delegated = tryDelegateToTieredIntent(
                     factoryId, userInput, extractSessionId(context));
