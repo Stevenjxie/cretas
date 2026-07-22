@@ -52,6 +52,27 @@ export interface SalesOrderSummary {
   updatedAt?: string | null;
 }
 
+/**
+ * 销售订单统一 OA 进度。该读模型来自持久化 WorkflowEngine 实例，
+ * 不能由前端按金额或订单状态推测。
+ */
+export interface SalesOrderApprovalProgress {
+  hasInstance: boolean;
+  instanceId: string | null;
+  workflowId: string | null;
+  status: string | null;
+  currentNodeIds: string[];
+  currentNodeNames: string[];
+  approverRoles: string[];
+  assignees: string[];
+  initiatedBy: string | null;
+  initiatedAt: string | null;
+  completedAt: string | null;
+  stayMinutes: number | null;
+  deepLink: string | null;
+  message: string | null;
+}
+
 export interface LineCostBreakdown {
   productId: string | null;
   productName: string | null;
@@ -270,6 +291,17 @@ export function getOrderDetail(
   orderId: string,
 ): Promise<ApiResponse<SalesOrderSummary>> {
   return get<SalesOrderSummary>(`/${factoryId}/sales/orders/${orderId}`);
+}
+
+/** 读取销售订单实际绑定的 OA 实例、当前节点和审批角色。 */
+export function getSalesOrderApprovalProgress(
+  factoryId: string,
+  orderId: string,
+): Promise<ApiResponse<SalesOrderApprovalProgress>> {
+  return get<SalesOrderApprovalProgress>(
+    `/${factoryId}/sales/orders/${orderId}/approval-progress`,
+    { _silent: true } as never,
+  );
 }
 
 /** 财务成本核算 (Sprint4-H F-AR-1) — BOM 标准 + 预估 + 实际 + 利润对比. */

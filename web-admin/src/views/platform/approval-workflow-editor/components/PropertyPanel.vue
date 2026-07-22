@@ -98,14 +98,22 @@
               placeholder="如: 按金额阈值分流"
               @change="syncConfig({ description })"
             />
-            <div class="hint">分支条件可走两种配置: (1) 结构化 WorkflowRule (推荐); (2) edge.condition (raw SpEL)</div>
+            <div v-if="isSalesOrderDecision" class="hint">销售订单分支只使用运行引擎读取的连线条件，不使用独立 WorkflowRule。</div>
+            <div v-else class="hint">分支条件可走两种配置: (1) 结构化 WorkflowRule (推荐); (2) edge.condition (raw SpEL)</div>
           </el-form-item>
-          <el-form-item>
+          <el-form-item v-if="!isSalesOrderDecision">
             <el-button type="primary" plain size="small" @click="$emit('manage-rules')">
               管理流转规则 (WorkflowRule)
             </el-button>
             <div class="hint">Sprint 4 Wave 1 (C-WF-RULE-1) — 金额/部门/角色/SpEL 4 类规则, executor 优先评估</div>
           </el-form-item>
+          <el-alert
+            v-else
+            type="info"
+            :closable="false"
+            show-icon
+            title="销售订单金额分流由连线条件决定。请选择通向审批节点的连线设置金额阈值。"
+          />
         </template>
 
         <!-- parallel — 并行 -->
@@ -208,7 +216,25 @@
           <el-input v-model="localData.label" @change="emitUpdate" placeholder="如: >10000 / DEFAULT" />
           <div class="hint">设 label=DEFAULT 时, condition 节点优先评估其他 edge 后兜底走这里</div>
         </el-form-item>
-        <el-form-item label="条件 (SpEL)">
+        <el-form-item v-if="isSalesAmountThresholdEdge" label="销售订单金额阈值（元）">
+          <el-input-number
+            :model-value="salesAmountThreshold"
+            :min="0"
+            :precision="2"
+            :step="100"
+            :disabled="hasCustomSalesCondition"
+            controls-position="right"
+            style="width: 100%"
+            placeholder="请输入进入该分支的金额阈值"
+            @change="updateSalesAmountThreshold"
+          />
+          <div class="hint">订单金额大于该值时进入此分支；保存后直接写入运行引擎读取的连线条件。</div>
+          <div v-if="hasCustomSalesCondition" class="hint warn">
+            当前连线包含自定义条件，数字输入不会自动覆盖它。
+            <el-button link type="warning" @click="clearCustomSalesCondition">改用金额阈值</el-button>
+          </div>
+        </el-form-item>
+        <el-form-item v-else-if="!isSalesOrderDecision" label="条件 (SpEL)">
           <el-input
             :model-value="(localData.condition as string) ?? ''"
             placeholder="如: #amount > 10000"
@@ -232,9 +258,13 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import type { NodeType } from '@/api/approvalWorkflow'
+import type { DecisionType, NodeType } from '@/api/approvalWorkflow'
 import { useAuthStore } from '@/store/modules/auth'
 import { get } from '@/api/request'
+import {
+  buildSalesApprovalAmountCondition,
+  parseSalesApprovalAmountThreshold,
+} from '../lib/salesApprovalCondition'
 
 interface SelectedElement {
   kind: 'node' | 'edge'
@@ -243,7 +273,7 @@ interface SelectedElement {
   data: Record<string, unknown>
 }
 
-const props = defineProps<{ element: SelectedElement }>()
+const props = defineProps<{ element: SelectedElement; decisionType?: DecisionType }>()
 
 const emit = defineEmits<{
   update: [data: Record<string, unknown>]
@@ -253,6 +283,7 @@ const emit = defineEmits<{
 
 const kind = computed(() => props.element.kind)
 const nodeType = computed<NodeType | undefined>(() => props.element.type)
+const isSalesOrderDecision = computed(() => props.decisionType === 'SALES_ORDER_APPROVAL')
 
 const NODE_TYPE_LABELS: Record<NodeType, string> = {
   start: '开始',
@@ -278,6 +309,18 @@ const ROLE_OPTIONS = [
 
 // Local mutable copy of selected element data — emitted on change
 const localData = reactive<Record<string, unknown>>({ ...props.element.data })
+const isDefaultEdge = computed(() => String(localData.label ?? '').trim().toUpperCase() === 'DEFAULT')
+const isSalesAmountThresholdEdge = computed(() => (
+  isSalesOrderDecision.value
+  && Boolean(localData.salesAmountThresholdEligible)
+  && !isDefaultEdge.value
+))
+const salesAmountThreshold = computed(() => parseSalesApprovalAmountThreshold(localData.condition))
+const hasCustomSalesCondition = computed(() => (
+  isSalesAmountThresholdEdge.value
+  && Boolean(String(localData.condition ?? '').trim())
+  && salesAmountThreshold.value === null
+))
 
 watch(
   () => props.element,
@@ -389,6 +432,16 @@ function syncConfig(patch: Record<string, unknown>) {
 
 function updateEdgeCondition(v: string) {
   localData.condition = v
+  emitUpdate()
+}
+function updateSalesAmountThreshold(v: number | undefined) {
+  if (v == null || hasCustomSalesCondition.value) return
+  localData.condition = buildSalesApprovalAmountCondition(v)
+  localData.label = `金额大于 ${v} 元`
+  emitUpdate()
+}
+function clearCustomSalesCondition() {
+  localData.condition = ''
   emitUpdate()
 }
 function updateEdgePriority(v: number) {

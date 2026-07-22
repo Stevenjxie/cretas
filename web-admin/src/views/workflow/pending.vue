@@ -27,6 +27,11 @@ const total = ref(0);
 const page = ref(1);
 const size = ref(20);
 const moduleCode = ref('');
+const ACTIONABLE_MODULE_CODES = new Set(['PURCHASE_ORDER', 'SALES_ORDER']);
+
+function canAct(row: PendingApproval): boolean {
+  return ACTIONABLE_MODULE_CODES.has(row.moduleCode);
+}
 
 async function loadPending() {
   if (!factoryId.value) return;
@@ -105,6 +110,7 @@ onMounted(loadPending);
           </div>
           <el-select v-model="moduleCode" clearable placeholder="全部业务类型" style="width: 190px" @change="page = 1; loadPending()">
             <el-option label="采购订单" value="PURCHASE_ORDER" />
+            <el-option label="销售订单" value="SALES_ORDER" />
           </el-select>
         </div>
       </template>
@@ -122,7 +128,7 @@ onMounted(loadPending);
         <el-table-column prop="initiatedAt" label="提交时间" min-width="180" />
         <el-table-column label="操作" width="170" fixed="right">
           <template #default="{ row }">
-            <template v-if="row.moduleCode === 'PURCHASE_ORDER'">
+            <template v-if="canAct(row)">
               <el-button link type="primary" :loading="operatingId === row.instanceId" @click="act(row, 'APPROVE')">通过</el-button>
               <el-button link type="danger" :disabled="Boolean(operatingId)" @click="act(row, 'REJECT')">驳回</el-button>
             </template>

@@ -13,7 +13,12 @@ import { ArrowLeft } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
 import { displayUnit } from '@/utils/unitPricing';
 import { handleCatchError } from '@/utils/errorToast';
+import { enumLabel } from '@/utils/enumDisplay';
 import { getCustomer, type Customer } from '@/api/customer';
+import {
+  getSalesOrderApprovalProgress,
+  type SalesOrderApprovalProgress,
+} from '@/api/salesFinanceReview';
 import {
   actionableDeliveryCount,
   deliveryActionState,
@@ -55,6 +60,7 @@ const loading = ref(false);
 const submitting = ref(false);
 const notFound = ref(false);
 const order = ref<TableRow | null>(null);
+const approvalProgress = ref<SalesOrderApprovalProgress | null>(null);
 const deliveries = ref<TableRow[]>([]);
 const associatedProductionPlans = ref<TableRow[]>([]);
 const productionPlansLoading = ref(false);
@@ -224,29 +230,19 @@ function orderAmountHint(row: TableRow | null): string {
   return formatAmount(Number.isFinite(amount) ? amount : 0);
 }
 
-function isExternalChannelOrder(row: TableRow | null): boolean {
-  return Boolean(String(row?.externalOrderTitle || '').trim());
-}
-
 function approvalDecisionHint(row: TableRow | null): string {
   const amount = Number(row?.totalAmount || 0);
   const safeAmount = Number.isFinite(amount) ? amount : 0;
-  if (isExternalChannelOrder(row)) {
-    return `检测到外部渠道订单；是否免审由后台审批配置决定。订单金额：${formatAmount(safeAmount)}。`;
-  }
-  if (safeAmount > 5000) {
-    return `订单金额 ${formatAmount(safeAmount)} 超过默认阈值，预计进入财务审核。`;
-  }
-  return `订单金额 ${formatAmount(safeAmount)} 未超过默认阈值，预计免审通过。`;
+  return `订单金额：${formatAmount(safeAmount)}。系统将按当前已发布的销售订单 OA 规则自动路由；提交后可在个人 OA 查看实际节点和处理人。`;
 }
 
 function actionSuccessMessage(action: string, labelText: string, response: unknown): string {
   const status = responseOrderStatus(response);
   if ((action === 'confirm' || action === 'submit-for-review') && status === 'FINANCE_APPROVED') {
-    return `${labelText}成功，未触发审批阈值，已免审通过`;
+    return `${labelText}成功，已按当前 OA 规则自动通过`;
   }
   if ((action === 'confirm' || action === 'submit-for-review') && status === 'PENDING_FINANCE_REVIEW') {
-    return `${labelText}成功，已进入财务审核`;
+    return `${labelText}成功，已进入 OA 审批`;
   }
   return `${labelText}成功`;
 }
@@ -254,10 +250,10 @@ function actionSuccessMessage(action: string, labelText: string, response: unkno
 function actionConfirmMessage(action: string, labelText: string): string {
   const orderNumber = String(order.value?.orderNumber || orderId.value);
   if (action === 'confirm') {
-    return `确认销售订单 ${orderNumber} 并自动判定审批？\n\n${approvalDecisionHint(order.value)}\n系统会先确认订单，再按后台审批配置自动分流：超过阈值进入财务审核，未触发阈值或满足免审配置的订单自动通过。`;
+    return `确认销售订单 ${orderNumber} 并提交 OA 路由？\n\n${approvalDecisionHint(order.value)}`;
   }
   if (action === 'submit-for-review') {
-    return `确认将销售订单 ${orderNumber} 提交审批判定？\n\n${approvalDecisionHint(order.value)}\n系统会按后台审批配置自动分流，最终结果以后端返回为准。`;
+    return `确认将销售订单 ${orderNumber} 提交 OA 审批？\n\n${approvalDecisionHint(order.value)}`;
   }
   return `确认${labelText}销售订单 ${orderNumber}？订单金额：${orderAmountHint(order.value)}`;
 }
@@ -422,7 +418,7 @@ async function saveEditItems() {
 
 onMounted(async () => {
   await loadOrder();
-  await Promise.all([loadDeliveries(), loadAssociatedProductionPlans(), loadOrderCustomer()]);
+  await Promise.all([loadDeliveries(), loadAssociatedProductionPlans(), loadOrderCustomer(), loadApprovalProgress()]);
   loadInvoices();
   loadPayments();
   loadPurchaseOrders();
@@ -457,6 +453,32 @@ async function loadOrder() {
     order.value = null;
   }
   finally { loading.value = false; }
+}
+
+async function loadApprovalProgress() {
+  if (!factoryId.value || !orderId.value) return;
+  try {
+    const res = await getSalesOrderApprovalProgress(factoryId.value, orderId.value);
+    approvalProgress.value = res.success && res.data ? res.data : null;
+  } catch {
+    approvalProgress.value = null;
+  }
+}
+
+function approvalProgressStatusLabel(status: string | null): string {
+  const labels: Record<string, string> = {
+    RUNNING: '审批中',
+    APPROVED: '已通过',
+    REJECTED: '已驳回',
+    CANCELLED: '已撤回',
+    COMPLETED: '已完成',
+  };
+  return status ? (labels[status] ?? enumLabel(status)) : '-';
+}
+
+async function goToApprovalProgress() {
+  const deepLink = approvalProgress.value?.deepLink;
+  await router.push(deepLink || '/workflow/my-created');
 }
 
 async function loadFormulas() {
@@ -605,7 +627,10 @@ async function handleAction(action: string) {
   submitting.value = true;
   try {
     const res = await post(a.url);
-    if (res.success) { ElMessage.success(actionSuccessMessage(action, a.label, res)); loadOrder(); }
+    if (res.success) {
+      ElMessage.success(actionSuccessMessage(action, a.label, res));
+      await Promise.all([loadOrder(), loadApprovalProgress()]);
+    }
     else { ElMessage.error(res.message || `${a.label}失败，请重试`); }
   } catch (e) { handleCatchError(e, `${a.label}失败，请检查网络`); }
   finally { submitting.value = false; }
@@ -1802,6 +1827,42 @@ async function handleQuickPayFull() {
             <!-- ─── 审批进度时间线 (V3 P0-11 补强 — 客户金矿截图 49m17s 底部 timeline) ─── -->
             <div class="approval-timeline-section">
               <h3>审批进度</h3>
+              <el-descriptions
+                v-if="approvalProgress?.hasInstance"
+                :column="2"
+                border
+                class="oa-progress-summary"
+              >
+                <el-descriptions-item label="OA 状态">
+                  {{ approvalProgressStatusLabel(approvalProgress.status) }}
+                </el-descriptions-item>
+                <el-descriptions-item label="当前节点">
+                  {{ approvalProgress.currentNodeNames.join('、') || '流程已结束' }}
+                </el-descriptions-item>
+                <el-descriptions-item label="待处理角色">
+                  {{ approvalProgress.approverRoles.map(role => enumLabel(role)).join('、') || '-' }}
+                </el-descriptions-item>
+                <el-descriptions-item label="待处理人员">
+                  {{ approvalProgress.assignees.join('、') || '-' }}
+                </el-descriptions-item>
+                <el-descriptions-item label="提交时间">
+                  {{ formatBusinessDateTime(approvalProgress.initiatedAt) }}
+                </el-descriptions-item>
+                <el-descriptions-item label="停留时长">
+                  {{ approvalProgress.stayMinutes == null ? '-' : `${approvalProgress.stayMinutes} 分钟` }}
+                </el-descriptions-item>
+                <el-descriptions-item :span="2" label="操作">
+                  <el-button link type="primary" @click="goToApprovalProgress">前往个人 OA 查看</el-button>
+                </el-descriptions-item>
+              </el-descriptions>
+              <el-alert
+                v-else
+                type="info"
+                :closable="false"
+                show-icon
+                :title="approvalProgress?.message || '该订单尚未发起 OA 审批'"
+                class="oa-progress-summary"
+              />
               <el-empty v-if="approvalTimeline.length === 0" description="暂无审批记录" :image-size="60" />
               <el-timeline v-else>
                 <el-timeline-item

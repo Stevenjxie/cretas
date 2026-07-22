@@ -1394,29 +1394,15 @@ function responseOrderStatus(response: unknown): string {
 }
 
 function outcomeMessage(orderNumber: string, outcome: SubmitOutcome): string {
-  if (outcome === 'auto_approved') return `订单 ${orderNumber} 未触发审批阈值，已免审通过`;
-  if (outcome === 'pending_review') return `订单 ${orderNumber} 已进入财务审核`;
-  return `订单 ${orderNumber} 已提交财务审核`;
-}
-
-function orderAmount(row: TableRow): number {
-  const value = Number(row.totalAmount || 0);
-  return Number.isFinite(value) ? value : 0;
-}
-
-function isExternalChannelOrder(row: TableRow): boolean {
-  return Boolean(String(row.externalOrderTitle || '').trim());
+  if (outcome === 'auto_approved') return `订单 ${orderNumber} 已按当前 OA 规则自动通过`;
+  if (outcome === 'pending_review') return `订单 ${orderNumber} 已进入 OA 审批`;
+  return `订单 ${orderNumber} 已提交 OA 审批`;
 }
 
 function approvalDecisionHint(row: TableRow): string {
-  const amount = orderAmount(row);
-  if (isExternalChannelOrder(row)) {
-    return `检测到外部渠道订单；是否免审由后台审批配置决定。订单金额：${formatAmount(amount)}。`;
-  }
-  if (amount > 5000) {
-    return `订单金额 ${formatAmount(amount)} 超过默认阈值，预计进入财务审核。`;
-  }
-  return `订单金额 ${formatAmount(amount)} 未超过默认阈值，预计免审通过。`;
+  const amount = Number(row.totalAmount || 0);
+  const safeAmount = Number.isFinite(amount) ? amount : 0;
+  return `订单金额：${formatAmount(safeAmount)}。系统将按当前已发布的销售订单 OA 规则自动路由；提交后可在个人 OA 查看实际节点和处理人。`;
 }
 
 /** 取后端错误信息 (api-response-handling: error.response.data.message). */
@@ -1473,17 +1459,17 @@ async function submitOrderForFinanceReview(
   return 'success';
 }
 
-/** 单行"提交审批判定"入口 (fool-proof Rule 1/2 带订单号、金额、阈值预判 + Rule 4 per-row loading). */
+/** 单行提交 OA 入口：显示订单身份与金额，路由结果完全以后端已发布规则为准。 */
 async function handleSubmitForReviewRow(row: TableRow): Promise<void> {
   const orderId = String(row.id || '');
   const orderNumber = String(row.orderNumber || row.id || '');
   const status = String(row.status || '');
   const fromDraft = status === 'DRAFT';
   if (submittingIds.value.has(orderId)) return; // 防重复点击
-  // fool-proof Rule 1/2: 确认 dialog 带订单号 + 金额 + 阈值预判; 最终以后端可配置审批链为准.
+  // 确认框只陈述后端已发布 OA 规则会接管，不在前端预测阈值分支。
   const confirmMsg = fromDraft
-    ? `确认提交销售订单 ${orderNumber} 并自动判定审批？\n\n${approvalDecisionHint(row)}\n将先确认订单，再按后台审批配置自动分流：超过阈值进入财务审核，未触发阈值或满足免审配置的订单自动通过。`
-    : `确认将销售订单 ${orderNumber} 重新提交审批判定？\n\n${approvalDecisionHint(row)}\n系统会按后台审批配置自动分流，最终结果以后端返回为准。`;
+    ? `确认提交销售订单 ${orderNumber} 并进入 OA 路由？\n\n${approvalDecisionHint(row)}`
+    : `确认将销售订单 ${orderNumber} 重新提交 OA 审批？\n\n${approvalDecisionHint(row)}`;
   try {
     await ElMessageBox.confirm(confirmMsg, '提交审批判定', {
       confirmButtonText: '提交并判定',
@@ -1527,11 +1513,8 @@ async function confirmBatch(actionLabel: string, rows: TableRow[]): Promise<bool
   const preview = nums.slice(0, 5).join('、');
   const tail = nums.length > 5 ? ` 等共 ${nums.length} 条` : ` 共 ${nums.length} 条`;
   const shouldShowApprovalPreview = actionLabel.includes('审批');
-  const externalChannelCount = rows.filter(isExternalChannelOrder).length;
-  const pendingReviewCount = rows.filter((r) => !isExternalChannelOrder(r) && orderAmount(r) > 5000).length;
-  const exemptCount = shouldShowApprovalPreview ? rows.length - pendingReviewCount : 0;
   const approvalPreview = shouldShowApprovalPreview
-    ? `\n\n预计结果：${pendingReviewCount} 条进入财务审核，${exemptCount} 条可能免审或自动通过（其中外部渠道 ${externalChannelCount} 条）。最终以后端审批配置为准。`
+    ? '\n\n系统将逐单按当前已发布的销售订单 OA 规则自动路由；提交后可在个人 OA 查看每张订单的实际节点和处理人。'
     : '';
   try {
     await ElMessageBox.confirm(`确认对 ${preview}${tail} 执行「${actionLabel}」？${approvalPreview}`, `批量${actionLabel}`, {

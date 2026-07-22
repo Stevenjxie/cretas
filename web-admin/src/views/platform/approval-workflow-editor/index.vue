@@ -143,6 +143,7 @@
           v-if="selectedElement"
           :key="selectedElement.id"
           :element="selectedElement"
+          :decision-type="selectedDecisionType"
           @update="onPropertyUpdate"
           @delete="onDeleteSelected"
           @manage-rules="openRulesPanel"
@@ -163,7 +164,7 @@
 
     <!-- Sprint 4 Wave 1 (C-WF-RULE-1): WorkflowRule 管理 drawer -->
     <ConditionRulesPanel
-      v-if="rulesPanelOpen && rulesPanelNodeId && currentWorkflow && factoryId"
+      v-if="rulesPanelOpen && rulesPanelNodeId && currentWorkflow && factoryId && selectedDecisionType !== 'SALES_ORDER_APPROVAL'"
       v-model:visible="rulesPanelOpen"
       :factory-id="factoryId"
       :workflow-id="currentWorkflow.id"
@@ -296,6 +297,10 @@ function openRulesPanel() {
   const sel = selectedElement.value
   if (!sel || sel.kind !== 'node' || sel.type !== 'condition') {
     ElMessage.warning('仅 condition 节点支持流转规则')
+    return
+  }
+  if (selectedDecisionType.value === 'SALES_ORDER_APPROVAL') {
+    ElMessage.info('销售订单金额分流请选中通向审批节点的连线，在右侧填写金额阈值')
     return
   }
   if (!currentWorkflow.value?.id) {
@@ -490,6 +495,7 @@ function onNodeClick({ node }: { node: Node }) {
 }
 
 function onEdgeClick({ edge }: { edge: Edge }) {
+  const sourceNode = nodes.value.find(node => node.id === edge.source)
   selectedElement.value = {
     kind: 'edge',
     id: edge.id,
@@ -497,6 +503,7 @@ function onEdgeClick({ edge }: { edge: Edge }) {
       label: edge.label ? String(edge.label) : '',
       condition: (edge.data?.condition as string) ?? '',
       priority: Number(edge.data?.priority ?? 0),
+      salesAmountThresholdEligible: sourceNode?.type === 'condition',
     },
   }
 }
