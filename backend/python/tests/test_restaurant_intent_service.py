@@ -819,3 +819,34 @@ async def test_tiered_answer_non_store_intent_keeps_trusted_factory(monkeypatch)
     assert captured["factory_id"] == "DEMO_REST"
     assert "store_mention" not in captured["kwargs"]
     assert result["kind"] == "answer"
+
+
+@pytest.mark.asyncio
+async def test_tiered_answer_gross_margin_with_store_mention_reroutes_to_store_margin(monkeypatch):
+    spec = _spec(intent="RESTAURANT_OPS_GROSS_MARGIN")
+    captured = {}
+
+    async def _fake_parse(*a, **kw):
+        return spec
+
+    async def _fake_resolve(code, pool, factory_id, **kwargs):
+        captured["code"] = code
+        captured["factory_id"] = factory_id
+        captured["kwargs"] = kwargs
+        return OpsAnswer(
+            code=code, title="鲜行者打浦桥日月光店毛利分析",
+            answer_text="指定的鲜行者打浦桥日月光店在近 30 天没有可用的销售与成本数据，"
+                        "不能计算该店毛利、毛利率或排名。",
+            charts=[], kpis=[], meta={"targetStoreName": "鲜行者打浦桥日月光店"},
+        )
+
+    monkeypatch.setattr(svc, "parse_restaurant_query", _fake_parse)
+    monkeypatch.setattr(svc, "_resolve_tiered", _fake_resolve)
+
+    result = await tiered_answer(
+        "鲜行者打浦桥日月光店的毛利率是多少？", object(), "DEMO_REST", "restaurant_manager",
+    )
+    assert captured["code"] == "RESTAURANT_OPS_STORE_MARGIN"
+    assert captured["factory_id"] == "RES_3101_009"
+    assert captured["kwargs"]["store_mention"] == "鲜行者打浦桥日月光店"
+    assert result["kind"] == "answer"

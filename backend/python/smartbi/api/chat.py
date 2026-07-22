@@ -2360,6 +2360,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 factory_id_hdr = trusted_factory_id
                 if user_q and factory_id_hdr:
                     from smartbi.gold.restaurant_ops_router import (
+                        extract_store_mention as _extract_store_mention_stream,
                         is_supported_restaurant_ops_code,
                         reconcile_restaurant_ops_code,
                         resolve_by_code,
@@ -2394,10 +2395,25 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                         # prior deterministic fallback; normal requests use the
                         # contract-checked tiered result above.
                         if tiered_ops is None:
+                            stream_fallback_mention = (
+                                _extract_store_mention_stream(effective_user_q)
+                                if ops_code in ("RESTAURANT_OPS_STORE_MARGIN",
+                                                "RESTAURANT_OPS_GROSS_MARGIN")
+                                else None
+                            )
+                            stream_fallback_code = ops_code
+                            stream_fallback_factory = factory_id_hdr
+                            if stream_fallback_mention:
+                                stream_fallback_code = "RESTAURANT_OPS_STORE_MARGIN"
+                                stream_fallback_factory = _restaurant_analysis_data_factory_id(
+                                    factory_id_hdr,
+                                    {"store_name": stream_fallback_mention},
+                                )
                             ops_answer = (
                                 await resolve_by_code(
-                                    ops_code, pool, factory_id_hdr,
+                                    stream_fallback_code, pool, stream_fallback_factory,
                                     role=trusted_role, query=effective_user_q,
+                                    store_mention=stream_fallback_mention,
                                 )
                                 if ops_code else None
                             )
