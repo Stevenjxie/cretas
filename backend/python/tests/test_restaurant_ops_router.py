@@ -1741,3 +1741,34 @@ def test_r14d_non_dish_pos_items_filtered_from_ranking():
     assert _r._NON_DISH_POS_ITEM_RE.search("无需餐具")
     assert not _r._NON_DISH_POS_ITEM_RE.search("招牌藤椒味(单人份)")
     assert not _r._NON_DISH_POS_ITEM_RE.search("米饭")
+
+
+def test_r15_new_t1_rules():
+    assert _r.match_restaurant_ops("昨天卖了多少钱") == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert _r.match_restaurant_ops("今年比去年增长多少") == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert _r.match_restaurant_ops("订单量最近如何") == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert _r.match_restaurant_ops("客流量多少") == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert _r.match_restaurant_ops("有没有店在亏损") == "RESTAURANT_OPS_STORE_MARGIN"
+
+
+def test_r15_store_mention_existence_guard():
+    assert _r.extract_store_mention("有没有店在亏损") is None
+    assert _r.extract_store_mention("是否有门店亏钱") is None
+    assert _r.extract_store_mention("鲜行者打浦桥日月光店的毛利率") == "鲜行者打浦桥日月光店"
+
+
+def test_r15_store_dish_split_detection():
+    assert _r.store_dish_split_dish("哪家店的米饭卖得最好") == "米饭"
+    assert _r.store_dish_split_dish("哪家店的营收最高") is None
+    assert _r.store_dish_split_dish("哪家店业绩最好") is None
+
+
+def test_r15_negative_existence_covers_kuisun():
+    assert _r._NEGATIVE_MARGIN_EXISTENCE_RE.search("有没有店在亏损")
+
+
+def test_r15_single_day_spec_unchanged():
+    from datetime import date as _d
+    spec = _r._resolve_sales_query_spec("昨天卖了多少钱", today=_d(2026, 7, 22))
+    assert spec.date_range == (_d(2026, 7, 21), _d(2026, 7, 21))
+    assert spec.comparison_label is None
