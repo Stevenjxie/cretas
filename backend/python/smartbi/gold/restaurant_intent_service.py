@@ -242,6 +242,17 @@ async def tiered_answer(
             # would degrade the request to a clarification. Fail open so the
             # caller's resolve_by_code fallback answers it.
             return None
+        from smartbi.gold.restaurant_ops_router import (
+            RESTAURANT_CAPABILITIES_TEXT,
+            is_capability_question,
+        )
+        if is_capability_question(query):
+            # 零 DB 静态能力自述 — 原文直出, 不走 Answer Contract (R14/G4)。
+            return {
+                "kind": "clarification",
+                "answer_text": RESTAURANT_CAPABILITIES_TEXT,
+                "spec": None,
+            }
         spec = precomputed_spec if precomputed_spec is not None else await parse_restaurant_query(
             query, pool, factory_id=factory_id, session_key=session_key,
         )
@@ -420,8 +431,15 @@ def should_delegate(
     # Java Gold tools have no per-dish answer path, while the Python
     # gross-margin resolver scopes to the named dish (Sheet 7/22 菜品链).
     if query:
-        from smartbi.gold.restaurant_ops_router import extract_dish_candidate
-        if extract_dish_candidate(query):
+        from smartbi.gold.restaurant_ops_router import (
+            dish_ranking_direction,
+            extract_dish_candidates,
+            is_capability_question,
+        )
+        # 比较问 ("A和B哪个赚钱") 单菜提取拿不到 — 用复数提取 (R14)。
+        if extract_dish_candidates(query):
+            return True
+        if dish_ranking_direction(query) or is_capability_question(query):
             return True
     if spec is None:
         return False

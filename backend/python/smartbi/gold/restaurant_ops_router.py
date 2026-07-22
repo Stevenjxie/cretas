@@ -288,6 +288,69 @@ def _is_explicit_sales_period_comparison(query: str) -> bool:
     )
 
 
+_NEGATIVE_MARGIN_EXISTENCE_RE = re.compile(
+    r"(?:有没有|有无|是否有|存不存在|哪些|哪道|哪个)[^。？?]{0,10}?"
+    r"(?:毛利(?:率)?[^。？?]{0,4}?(?:负|亏)|负毛利|亏钱|亏本|赔钱)"
+    r"|负毛利|毛利(?:率)?(?:是|为)负"
+)
+_DISH_RANK_WORST_RE = re.compile(
+    r"卖得最差|卖得不好|最难卖|卖不动|销量最低|销量垫底|最不受欢迎|最滞销"
+)
+_DISH_RANK_BEST_RE = re.compile(
+    r"卖得最好|最好卖|最畅销|销量最高|最受欢迎|卖得好"
+)
+
+
+def dish_ranking_direction(query: "Optional[str]") -> "Optional[str]":
+    """「哪道菜卖得最差/最好」→ 'worst'/'best'; 门店排名/无菜品词 → None。"""
+    if not query:
+        return None
+    q = query.strip()
+    if any(tok in q for tok in ("门店", "分店", "店铺", "哪家店", "哪个店", "业绩")):
+        return None
+    if not any(tok in q for tok in ("菜", "单品", "产品")):
+        return None
+    if _DISH_RANK_WORST_RE.search(q):
+        return "worst"
+    if _DISH_RANK_BEST_RE.search(q):
+        return "best"
+    return None
+
+
+_CAPABILITY_RE = re.compile(
+    r"(?:你们?|系统|助手)(?:都|还)?(?:能|会|可以)(?:做|干|帮我做|帮忙做|回答|查|分析)(?:些)?什么"
+    r"|有(?:哪些|什么)功能"
+    r"|(?:怎么|如何)使用(?:你|系统|助手)"
+    r"|使用帮助"
+    r"|你(?:能|会|可以)帮我(?:做|干)?什么"
+)
+
+RESTAURANT_CAPABILITIES_TEXT = (
+    "我可以帮您分析门店经营数据，直接问就行：\n"
+    "• 营收/订单：「最近30天营业额」「今天营业额多少」「上周和上上周营收对比」\n"
+    "• 门店表现：「哪家店业绩最好」「各门店营收排名」「某某店的毛利率」\n"
+    "• 菜品分析：「米饭的销量」「某菜品的成本和毛利率」「哪道菜卖得最好/最差」「有没有毛利为负的菜」\n"
+    "• 盈亏判断：「最近亏钱了吗」「整体毛利率是多少」\n"
+    "• 经营方法：「毛利率低的行业参考做法」（菜单工程、损耗控制等）\n"
+    "支持多轮追问：问完一道菜后可以接着问「成本如何」「那某某菜呢」。"
+)
+
+
+def is_capability_question(query: "Optional[str]") -> bool:
+    return bool(query) and bool(_CAPABILITY_RE.search(query.strip()))
+
+
+async def resolve_capabilities(smartbi_pool, factory_id: str, **kwargs) -> "OpsAnswer":
+    """零 DB 静态能力自述 (餐饮语境) — 修掉 SYSTEM_HELP 死胡同 (R14/G4)。"""
+    return OpsAnswer(
+        code="RESTAURANT_OPS_CAPABILITIES",
+        title="我能帮您做什么",
+        answer_text=RESTAURANT_CAPABILITIES_TEXT,
+        charts=[], kpis=[],
+        meta={"capabilities": True},
+    )
+
+
 def match_restaurant_ops(query: str) -> Optional[str]:
     """Return the ops template code if query matches, else None.
 
@@ -302,6 +365,12 @@ def match_restaurant_ops(query: str) -> Optional[str]:
     from smartbi.gold.restaurant_playbook import PLAYBOOK_CODE, PLAYBOOK_TRIGGERS
     if any(trigger in q for trigger in PLAYBOOK_TRIGGERS):
         return PLAYBOOK_CODE
+    # 能力自述 ("你们能做什么") — 此前落 SYSTEM_HELP 无执行器死胡同 (R14/G4)。
+    if is_capability_question(q):
+        return "RESTAURANT_OPS_CAPABILITIES"
+    # 菜品销量排名 ("哪道菜卖得最差") — POS 行直接排, 不再依赖上传报表 (R14)。
+    if dish_ranking_direction(q):
+        return "RESTAURANT_OPS_GROSS_MARGIN"
     # Named-dish sales questions ("招牌藤椒味卖得怎么样") previously fell to
     # the LLM fallback which answered from a factory-report frame. The POS
     # dish data lives in the gross-margin resolver; dish scoping above
@@ -528,7 +597,9 @@ def extract_dish_candidate(query: "Optional[str]") -> "Optional[str]":
 
 _DISH_COMPARE_RE = re.compile(
     r"^(.{1,24}?)[和与、](.{1,24}?)哪(?:个|道)?"
-    r"(?:毛利率|毛利|销量|销售额|成本)(?:更)?(?:高|低|多|少|好)?[?？。]?$"
+    r"(?:(?:更)?(?:毛利率|毛利|销量|销售额|营收|成本)(?:更)?(?:高|低|多|少|好)?"
+    r"|(?:更)?(?:高|低|多|少|好|赚钱|挣钱|划算|好卖|卖得好|卖得多))"
+    r"[?？。]?$"
 )
 
 
@@ -1708,6 +1779,36 @@ async def resolve_gross_margin(
         else _actual_window_text(window_start, window_end, analysis_days)
     )
 
+    # Sheet 7/22 扫雷 R14: 「哪道菜卖得最差/最好」此前只有 Java 报表工具
+    # (依赖上传的商品销量报表, DEMO 无数据 → 死胡同)。POS 行就在手上, 按
+    # 销量直接排; 不涉及成本, 不需要毛利覆盖。
+    ranking_direction = (
+        dish_ranking_direction(query_text)
+        if not dish_scope_row and len(dish_candidates) < 2 else None
+    )
+    if ranking_direction:
+        ranked = sorted(
+            pos_rows, key=lambda r: float(r["total_qty"] or 0),
+            reverse=(ranking_direction == "best"),
+        )
+        rank_label = "卖得最好" if ranking_direction == "best" else "卖得最差"
+        lines = [f"{window_label}菜品销量排行（{rank_label}前 5）："]
+        for idx, r in enumerate(ranked[:5], 1):
+            lines.append(
+                f"{idx}. {r['dish_name']} — 销量 {float(r['total_qty'] or 0):,.0f} 份、"
+                f"营收 ¥{float(r['total_revenue'] or 0):,.2f}"
+            )
+        lines.append(
+            f"仅统计窗口内有销售记录的 {len(pos_rows)} 道菜品；未售出的菜品不在榜内。"
+        )
+        return OpsAnswer(
+            code="RESTAURANT_OPS_GROSS_MARGIN",
+            title=f"菜品销量排行（{rank_label}）",
+            answer_text="\n".join(lines),
+            charts=[], kpis=[],
+            meta={"dish_ranking": ranking_direction, "window_label": window_label},
+        )
+
     # Step 2: look up cretas product_types by name (primary) + dim_product_alias (fallback).
     # P0-2: alias lets merchants bind POS name → any product_type, handles the
     # "POS xlsx name vs recipe name" drift problem (括号/空格/[] differences).
@@ -1803,6 +1904,41 @@ async def resolve_gross_margin(
         [item for item in with_cost if item["revenue"] >= 1000],
         key=lambda item: item["margin_rate"],
     )[:3]
+
+    # Sheet 7/22 扫雷 R14 (G5): 「有没有毛利率是负的菜」是存在性问题, 此前
+    # 返回全局毛利榜 — 答非所问。直接过滤负毛利行给结论, 覆盖率如实披露。
+    if not dish_scope_row and _NEGATIVE_MARGIN_EXISTENCE_RE.search(query_text):
+        negative = sorted(
+            (i for i in with_cost if i["margin_rate"] is not None and i["margin_rate"] < 0),
+            key=lambda i: i["margin_rate"],
+        )
+        cov_pct = f"{coverage_ratio * 100:.1f}%"
+        if negative:
+            neg_lines = [f"{window_label}有 {len(negative)} 道毛利为负的菜品："]
+            for item in negative[:5]:
+                neg_lines.append(
+                    f"• {item['name']} — 毛利率 {item['margin_rate'] * 100:.1f}%、"
+                    f"营收 ¥{item['revenue']:,.2f}"
+                )
+            if len(negative) > 5:
+                neg_lines.append(f"（仅列前 5，共 {len(negative)} 道）")
+            neg_lines.append(
+                f"成本覆盖率 {cov_pct}；未覆盖成本的菜品无法判断盈亏，不在结论内。"
+            )
+            neg_answer = "\n".join(neg_lines)
+        else:
+            neg_answer = (
+                f"{window_label}可计算毛利的 {len(with_cost)} 道菜品中，"
+                f"没有毛利为负的菜。成本覆盖率 {cov_pct}；"
+                "未覆盖成本的菜品无法判断盈亏，不在结论内。"
+            )
+        return OpsAnswer(
+            code="RESTAURANT_OPS_GROSS_MARGIN",
+            title=f"负毛利菜品排查（{window_label}）",
+            answer_text=neg_answer,
+            charts=[], kpis=[],
+            meta={"negative_margin_check": True, "negative_count": len(negative)},
+        )
 
     # 拖毛利归因（确定性）: which single dish drags the BLENDED margin most, and
     # whether it's a rate problem or a volume-amplified one — answers "哪个菜拖
@@ -3605,6 +3741,7 @@ from smartbi.gold.restaurant_playbook import resolve_playbook as _resolve_playbo
 
 _RESOLVERS = {
     "RESTAURANT_OPS_PLAYBOOK": _resolve_playbook,
+    "RESTAURANT_OPS_CAPABILITIES": resolve_capabilities,
     "RESTAURANT_OPS_WASTAGE_TOP": resolve_wastage_top,
     "RESTAURANT_OPS_STOCK_SHORTAGE": resolve_stock_shortage,
     "RESTAURANT_OPS_RECIPE_COST": resolve_recipe_cost,
