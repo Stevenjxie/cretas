@@ -272,6 +272,7 @@ public class AIIntentConfigController {
                 userId, userRole);
 
         IntentExecuteResponse response = intentExecutorService.execute(factoryId, request, userId, userRole);
+        com.cretas.aims.service.execution.CustomerTextSanitizer.sanitize(response);
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 
@@ -541,6 +542,7 @@ public class AIIntentConfigController {
                 userId, userRole);
 
         IntentExecuteResponse response = intentExecutorService.executeMultiIntent(factoryId, request, userId, userRole);
+        com.cretas.aims.service.execution.CustomerTextSanitizer.sanitize(response);
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 
