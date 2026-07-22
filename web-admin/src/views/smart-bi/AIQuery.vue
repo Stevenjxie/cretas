@@ -546,9 +546,19 @@ const RESTAURANT_TIME_FOLLOWUPS: Array<{
     ],
   },
   {
-    patterns: ['哪家店业绩最好', '门店业绩', '门店销售', '门店对比'],
+    // Sheet 7/22: 问"哪家"是要第一名, 时间追问必须同题换窗, 不能换成对比/排名全览
+    patterns: ['哪家店业绩最好', '哪家门店业绩最好', '哪家店最赚钱'],
     followups: [
       { label: '上个月', question: '上个月哪家店业绩最好' },
+      { label: '本季度', question: '本季度哪家店业绩最好' },
+      { label: '今年', question: '今年哪家店业绩最好' },
+      { label: '近30天', question: '近30天哪家店业绩最好' },
+    ],
+  },
+  {
+    patterns: ['门店业绩', '门店销售', '门店对比'],
+    followups: [
+      { label: '上个月', question: '上个月门店业绩对比' },
       { label: '本季度', question: '本季度门店业绩对比' },
       { label: '今年', question: '今年各门店营收排名' },
       { label: '近30天', question: '近30天门店销售对比' },
