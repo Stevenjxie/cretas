@@ -1699,3 +1699,10 @@ def test_loss_colloquial_counts_as_profitability_ask():
     assert wants is True and asks is True
     wants2, asks2 = _r._profit_intent("上个月亏损了吗")
     assert asks2 is True
+
+
+def test_elliptical_entity_switch_beats_parent_inheritance():
+    combined = "米饭的销量是多少；继续追问：那招牌藤椒味呢？"
+    assert _r.extract_dish_candidate(combined) == "招牌藤椒味"
+    assert _r.extract_dish_candidate("米饭的销量是多少；继续追问：成本如何") == "米饭"
+    assert _r.extract_dish_candidate("那毛利呢") is None
