@@ -15,7 +15,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /** Real Hibernate startup gate for the PO-line receipt identity mapping. */
-@DataJpaTest
+@DataJpaTest(properties = {
+        "spring.jpa.hibernate.ddl-auto=none",
+        "spring.jpa.generate-ddl=false"
+})
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @ActiveProfiles("test")
 @EntityScan(basePackages = "com.cretas.aims.entity")
