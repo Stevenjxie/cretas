@@ -83,7 +83,9 @@ public class RestaurantDishCostQueryTool extends AbstractBusinessTool {
 
     @Override
     protected List<String> getRequiredParameters() {
-        return List.of("productName");
+        // productName 校验后移到 doExecute 委派门之后 — 否则「成本如何」类
+        // 追问在参数校验层就被反问, tiered 委派(session 菜品继承)没机会执行。
+        return Collections.emptyList();
     }
 
     @Override
@@ -92,6 +94,11 @@ public class RestaurantDishCostQueryTool extends AbstractBusinessTool {
         Map<String, Object> delegated = tieredDelegate.tryDelegate(factoryId, params, context, getToolName());
         if (delegated != null) {
             return delegated;
+        }
+        String productNameParam = getString(params, "productName");
+        if (productNameParam == null || productNameParam.isBlank()) {
+            return buildSimpleResult(
+                    "请提供菜品名称 (支持模糊匹配, 如 \"白卤猪舌\" 或 \"猪舌\")，我来查它的成本卡。", null);
         }
         String productName = getString(params, "productName");
         int portions = Math.max(1, getInteger(params, "portions", 1));

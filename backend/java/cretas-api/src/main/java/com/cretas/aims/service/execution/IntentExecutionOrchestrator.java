@@ -535,6 +535,11 @@ public class IntentExecutionOrchestrator {
         // 2b. 通用咨询/闲聊
         if (matchResult.getQuestionType() == QuestionType.GENERAL_QUESTION ||
             matchResult.getQuestionType() == QuestionType.CONVERSATIONAL) {
+            IntentExecuteResponse conversationalTieredDelegated =
+                    tryRestaurantTieredDelegate(factoryId, request.getUserInput(), request);
+            if (conversationalTieredDelegated != null) {
+                return conversationalTieredDelegated;
+            }
             String llmResponse = generateConversationalResponse(factoryId, request.getUserInput(),
                     matchResult.getQuestionType(), request.getEnableThinking(), request.getThinkingBudget());
             return IntentExecuteResponse.builder()
@@ -1118,6 +1123,11 @@ public class IntentExecutionOrchestrator {
             return null;
         }
 
+        IntentExecuteResponse earlyTieredDelegated = tryRestaurantTieredDelegate(factoryId, userInput, request);
+        if (earlyTieredDelegated != null) {
+            return earlyTieredDelegated;
+        }
+
         // Analysis request check
         if (earlyQuestionType == QuestionType.GENERAL_QUESTION &&
             analysisRouterService.isAnalysisRequest(userInput, earlyQuestionType)) {
@@ -1527,6 +1537,42 @@ public class IntentExecutionOrchestrator {
 
     // ==================== 分析流程 ====================
 
+    /**
+     * Sheet 7/22 菜品链: 餐饮租户的 GENERAL_QUESTION/CONVERSATIONAL/分析类
+     * null-intent 出口统一先问 Python tiered 路由 (菜品限域/时间窗/session
+     * 多轮继承在彼侧)。命中返回完整响应, 未命中返回 null 走原分支。
+     */
+    private IntentExecuteResponse tryRestaurantTieredDelegate(String factoryId,
+                                                              String userInput,
+                                                              IntentExecuteRequest request) {
+        if (tieredIntentDelegate == null || !isRestaurantTenant(factoryId)) {
+            return null;
+        }
+        java.util.Map<String, Object> delegateParams = new java.util.HashMap<>();
+        delegateParams.put("userInput", userInput);
+        java.util.Map<String, Object> delegateContext = new java.util.HashMap<>();
+        delegateContext.put("request", request);
+        java.util.Map<String, Object> delegated = tieredIntentDelegate.tryDelegate(
+                factoryId, delegateParams, delegateContext, "orchestrator_null_intent");
+        if (delegated == null || delegated.get("message") == null) {
+            return null;
+        }
+        String delegatedMessage = delegated.get("message").toString();
+        java.util.Map<String, Object> delegatedData = new java.util.HashMap<>();
+        delegatedData.put("charts", delegated.getOrDefault("charts", java.util.List.of()));
+        delegatedData.put("kpis", delegated.getOrDefault("kpis", java.util.List.of()));
+        delegatedData.put("source", "restaurant_ops_gold");
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode(delegated.get("code") != null ? delegated.get("code").toString() : null)
+                .status("SUCCESS")
+                .message(delegatedMessage)
+                .formattedText(delegatedMessage)
+                .resultData(delegatedData)
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
+
     private static boolean isRestaurantTenant(String factoryId) {
         if (factoryId == null) {
             return false;
@@ -1538,34 +1584,9 @@ public class IntentExecutionOrchestrator {
     private IntentExecuteResponse executeAnalysisFlow(String factoryId, String userInput,
                                                        IntentExecuteRequest request,
                                                        Long userId, String userRole) {
-        // Sheet 7/22 菜品链缺口3: 餐饮租户的 null-intent 分析问题此前直落
-        // 上传报表 QA/LLM (工厂语境作答)。先问 Python tiered 路由 (菜品限域/
-        // 时间窗/session 多轮继承都在那侧), 命中即用; 未命中/异常照旧走原
-        // 分析流程 (delegate never throws)。仅餐饮租户, 工厂租户零改变。
-        if (tieredIntentDelegate != null && isRestaurantTenant(factoryId)) {
-            java.util.Map<String, Object> delegateParams = new java.util.HashMap<>();
-            delegateParams.put("userInput", userInput);
-            java.util.Map<String, Object> delegateContext = new java.util.HashMap<>();
-            delegateContext.put("request", request);
-            java.util.Map<String, Object> delegated = tieredIntentDelegate.tryDelegate(
-                    factoryId, delegateParams, delegateContext, "analysis_flow_null_intent");
-            if (delegated != null && delegated.get("message") != null) {
-                String delegatedMessage = delegated.get("message").toString();
-                java.util.Map<String, Object> delegatedData = new java.util.HashMap<>();
-                delegatedData.put("charts", delegated.getOrDefault("charts", java.util.List.of()));
-                delegatedData.put("kpis", delegated.getOrDefault("kpis", java.util.List.of()));
-                delegatedData.put("source", "restaurant_ops_gold");
-                return IntentExecuteResponse.builder()
-                        .intentRecognized(true)
-                        .intentCode(delegated.get("code") != null
-                                ? delegated.get("code").toString() : null)
-                        .status("SUCCESS")
-                        .message(delegatedMessage)
-                        .formattedText(delegatedMessage)
-                        .resultData(delegatedData)
-                        .executedAt(LocalDateTime.now())
-                        .build();
-            }
+        IntentExecuteResponse tieredDelegated = tryRestaurantTieredDelegate(factoryId, userInput, request);
+        if (tieredDelegated != null) {
+            return tieredDelegated;
         }
         try {
             AnalysisTopic topic = analysisRouterService.detectAnalysisTopic(userInput);
