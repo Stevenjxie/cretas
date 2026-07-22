@@ -1639,3 +1639,56 @@ def test_comparative_two_dishes_extracted():
     assert _r.extract_dish_candidates("米饭和招牌藤椒味哪个毛利高") == ["米饭", "招牌藤椒味"]
     assert _r.extract_dish_candidates("米饭的毛利率是多少") == ["米饭"]
     assert _r.extract_dish_candidates("整体毛利率是多少") == []
+
+
+# --- R13: 泛化类修复 (G2 日历窗 / G3 复合指标 / G6 口语盈亏) ---
+
+
+def test_multi_metric_dish_extraction():
+    assert _r.extract_dish_candidate("米饭的销量和毛利率分别是多少") == "米饭"
+    assert _r.extract_dish_candidate("招牌藤椒味的营收和成本是多少") == "招牌藤椒味"
+
+
+def test_profit_colloquial_routes_to_sales_summary():
+    assert match_restaurant_ops("最近亏钱了吗") == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert match_restaurant_ops("现在赚钱吗") == "RESTAURANT_OPS_SALES_SUMMARY"
+
+
+def test_gross_margin_exact_calendar_window(monkeypatch):
+    captured = {}
+
+    class _Conn:
+        def transaction(self):
+            return _NoopTransaction()
+
+        async def execute(self, *_a):
+            return None
+
+        async def fetch(self, sql, *args):
+            if "FROM fact_pos_item" in sql and "GROUP BY p.product_id" in sql:
+                captured["args"] = args
+                return []
+            return []
+
+    class _Ctx:
+        async def __aenter__(self):
+            return _Conn()
+
+        async def __aexit__(self, *_a):
+            return None
+
+    class _Pool:
+        def acquire(self):
+            return _Ctx()
+
+    result = asyncio.run(_r.resolve_gross_margin(
+        _Pool(), "RES_TEST", role="restaurant_manager",
+        query="今年米饭的销量",
+        date_range=(date(2026, 1, 1), date(2026, 7, 22)),
+    ))
+    # exact calendar bounds forwarded to SQL ($3/$4)
+    assert captured["args"][2] == date(2026, 1, 1)
+    assert captured["args"][3] == date(2026, 7, 22)
+    # empty window → calendar-labelled decline, never anchored substitution
+    assert "2026-01-01 至 2026-07-22" in result.answer_text
+    assert "没有用其他时间范围替代" in result.answer_text
