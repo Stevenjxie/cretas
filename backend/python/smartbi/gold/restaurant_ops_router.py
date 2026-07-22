@@ -933,7 +933,7 @@ def _profit_intent(query: Optional[str]) -> Tuple[bool, bool]:
     text = query or ""
     asks_profitability = any(token in text for token in (
         "赚钱吗", "赚钱了吗", "赚不赚", "赚了", "挣钱吗", "挣钱了吗", "盈利吗", "盈利了吗",
-        "亏钱吗", "亏了吗", "亏不亏", "是否赚钱", "是否盈利",
+        "亏钱吗", "亏钱了吗", "亏了吗", "亏损了吗", "亏损吗", "亏本吗", "赔钱吗", "赔钱了吗", "亏不亏", "是否赚钱", "是否盈利", "是否亏损",
         # Colloquial split forms ("挣着钱没" does NOT contain the substring
         # "挣钱", so the tokens above miss it — live-caught 2026-07-07):
         "挣着钱", "赚着钱", "挣到钱", "赚到钱", "挣钱没", "赚钱没",
