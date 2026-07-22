@@ -126,6 +126,23 @@ class SalesFinanceApproveVoucherListenerTest {
     }
 
     @Test
+    void finance_approved_event_replay_generates_voucher_only_once() {
+        SalesOrder order = stubOrder(VoucherFlag.UNCREATED);
+        when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+        when(voucherService.createFromBusiness(FACTORY_ID, "SALES_ORDER", ORDER_ID))
+                .thenReturn(Voucher.builder().voucherNumber("V-2026-ONCE").build());
+        SalesOrderFinanceApprovedEvent event = new SalesOrderFinanceApprovedEvent(
+                this, FACTORY_ID, ORDER_ID, 99L);
+
+        listener.onFinanceApproved(event);
+        listener.onFinanceApproved(event);
+
+        verify(voucherService, times(1))
+                .createFromBusiness(FACTORY_ID, "SALES_ORDER", ORDER_ID);
+        assertThat(order.getVflag()).isEqualTo(VoucherFlag.CREATED);
+    }
+
+    @Test
     @DisplayName("SP5-VL-05: 已是 FAILED → 幂等, 不重复生成凭证")
     void onFinanceApproved_alreadyFailed_idempotent() {
         SalesOrder order = stubOrder(VoucherFlag.FAILED);

@@ -13,9 +13,11 @@ import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
+import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
+import com.cretas.aims.service.workflow.OaActionIdempotencyService;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.inventory.SalesService;
 import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
@@ -85,6 +87,12 @@ public class WorkflowInstanceController {
     @Autowired(required = false)
     private PurchaseOrderRepository purchaseOrderRepository;
 
+    @Autowired(required = false)
+    private SalesOrderRepository salesOrderRepository;
+
+    @Autowired(required = false)
+    private OaActionIdempotencyService oaActionIdempotencyService;
+
     /**
      * 查当前用户角色的"我待审"列表.
      *
@@ -139,6 +147,7 @@ public class WorkflowInstanceController {
         // 3. 批量 hydrate businessSummary (避免 1+N)
         Map<String, WorkflowInstancePendingDTO> partial = new HashMap<>();
         Set<String> poIds = new HashSet<>();
+        Set<String> soIds = new HashSet<>();
         for (ApprovalWorkflowInstance inst : instances.getContent()) {
             WorkflowInstancePendingDTO dto = WorkflowInstancePendingDTO.builder()
                     .instanceId(inst.getId())
@@ -149,6 +158,9 @@ public class WorkflowInstanceController {
             partial.put(inst.getId(), dto);
             if ("PURCHASE_ORDER".equals(inst.getModuleCode()) && inst.getBusinessEntityId() != null) {
                 poIds.add(inst.getBusinessEntityId());
+            }
+            if ("SALES_ORDER".equals(inst.getModuleCode()) && inst.getBusinessEntityId() != null) {
+                soIds.add(inst.getBusinessEntityId());
             }
         }
 
@@ -161,6 +173,7 @@ public class WorkflowInstanceController {
                 log.warn("批量加载 PO 失败 (businessSummary 退化为 fallback): {}", e.getMessage());
             }
         }
+        Map<String, SalesOrder> soById = loadSalesOrders(soIds);
 
         // 3b. 用户名 hydrate (initiatedBy)
         Map<Long, String> usernameById = new HashMap<>();
@@ -186,7 +199,7 @@ public class WorkflowInstanceController {
             WorkflowInstancePendingDTO dto = partial.get(inst.getId());
 
             // businessSummary
-            dto.setBusinessSummary(buildBusinessSummary(inst, poById));
+            dto.setBusinessSummary(buildBusinessSummary(inst, poById, soById));
 
             // currentNodeId + label
             if (inst.getCurrentNodeIds() != null && !inst.getCurrentNodeIds().isEmpty()) {
@@ -235,6 +248,10 @@ public class WorkflowInstanceController {
             throw new BusinessException(400, "OA 审批动作缺少幂等键")
                     .withCode("OA_IDEMPOTENCY_KEY_REQUIRED").withHintTarget("idempotencyKey");
         }
+        if (request.idempotencyKey().length() > 128) {
+            throw new BusinessException(400, "OA 审批幂等键不能超过 128 个字符")
+                    .withCode("OA_IDEMPOTENCY_KEY_TOO_LONG").withHintTarget("idempotencyKey");
+        }
         if (request.expectedNodeId() == null || request.expectedNodeId().isBlank()) {
             throw new BusinessException(400, "OA 审批动作缺少预期节点")
                     .withCode("OA_EXPECTED_NODE_REQUIRED").withHintTarget("expectedNodeId");
@@ -260,6 +277,33 @@ public class WorkflowInstanceController {
             throw new BusinessException(400, "当前入口只支持审批通过或驳回")
                     .withHintTarget("action");
         }
+        if (oaActionIdempotencyService == null) {
+            throw new BusinessException(503, "OA 审批幂等服务暂不可用，请稍后重试")
+                    .withCode("OA_IDEMPOTENCY_SERVICE_UNAVAILABLE");
+        }
+        OaActionIdempotencyService.ActionContext actionContext =
+                new OaActionIdempotencyService.ActionContext(
+                        factoryId,
+                        instanceId,
+                        request.idempotencyKey(),
+                        request.expectedNodeId(),
+                        action.name(),
+                        user.getId(),
+                        user.getRoleCode(),
+                        request.notes());
+        Map<String, Object> result = oaActionIdempotencyService.execute(
+                actionContext,
+                () -> executeDomainAction(factoryId, instanceId, instance, user, action, request.notes()));
+        return ApiResponse.success(result);
+    }
+
+    private Map<String, Object> executeDomainAction(
+            String factoryId,
+            String instanceId,
+            ApprovalWorkflowInstance instance,
+            User user,
+            HistoryAction action,
+            String notes) {
         String businessEntityId;
         String businessStatus;
         if ("PURCHASE_ORDER".equals(instance.getModuleCode())) {
@@ -270,7 +314,7 @@ public class WorkflowInstanceController {
                     user.getId(),
                     user.getRoleCode(),
                     action,
-                    request.notes());
+                    notes);
             businessEntityId = order.getId();
             businessStatus = order.getStatus().name();
         } else if ("SALES_ORDER".equals(instance.getModuleCode())) {
@@ -281,7 +325,7 @@ public class WorkflowInstanceController {
                     user.getId(),
                     user.getRoleCode(),
                     action,
-                    request.notes());
+                    notes);
             businessEntityId = order.getId();
             businessStatus = order.getStatus().name();
         } else {
@@ -291,11 +335,11 @@ public class WorkflowInstanceController {
         ApprovalWorkflowInstance updated = workflowEngine.getLatestInstance(
                 factoryId, instance.getModuleCode(), instance.getBusinessEntityId())
                 .orElse(instance);
-        return ApiResponse.success(Map.of(
+        return Map.of(
                 "instanceId", updated.getId(),
                 "workflowStatus", updated.getStatus().name(),
                 "businessEntityId", businessEntityId,
-                "businessStatus", businessStatus));
+                "businessStatus", businessStatus);
     }
 
     public record WorkflowActionRequest(
@@ -493,10 +537,14 @@ public class WorkflowInstanceController {
 
         // 1. 收 PO ids + initiator ids
         Set<String> poIds = new HashSet<>();
+        Set<String> soIds = new HashSet<>();
         Set<Long> initiatorIds = new HashSet<>();
         for (ApprovalWorkflowInstance inst : instances) {
             if ("PURCHASE_ORDER".equals(inst.getModuleCode()) && inst.getBusinessEntityId() != null) {
                 poIds.add(inst.getBusinessEntityId());
+            }
+            if ("SALES_ORDER".equals(inst.getModuleCode()) && inst.getBusinessEntityId() != null) {
+                soIds.add(inst.getBusinessEntityId());
             }
             if (inst.getInitiatedBy() != null) initiatorIds.add(inst.getInitiatedBy());
         }
@@ -510,6 +558,7 @@ public class WorkflowInstanceController {
                 log.warn("批量加载 PO 失败 (businessSummary 退化为 fallback): {}", e.getMessage());
             }
         }
+        Map<String, SalesOrder> soById = loadSalesOrders(soIds);
 
         // 3. 批量 fetch usernames
         Map<Long, String> usernameById = new HashMap<>();
@@ -533,7 +582,7 @@ public class WorkflowInstanceController {
                     .moduleCode(inst.getModuleCode())
                     .businessEntityId(inst.getBusinessEntityId())
                     .initiatedAt(inst.getInitiatedAt())
-                    .businessSummary(buildBusinessSummary(inst, poById))
+                    .businessSummary(buildBusinessSummary(inst, poById, soById))
                     .status(inst.getStatus().name())
                     .completedAt(inst.getCompletedAt())
                     .build();
@@ -571,7 +620,8 @@ public class WorkflowInstanceController {
     }
 
     private String buildBusinessSummary(ApprovalWorkflowInstance inst,
-                                        Map<String, PurchaseOrder> poById) {
+                                        Map<String, PurchaseOrder> poById,
+                                        Map<String, SalesOrder> soById) {
         String moduleCode = inst.getModuleCode();
         String bizId = inst.getBusinessEntityId();
         if ("PURCHASE_ORDER".equals(moduleCode)) {
@@ -591,11 +641,34 @@ public class WorkflowInstanceController {
             return "采购订单 " + bizId;
         }
         if ("SALES_ORDER".equals(moduleCode)) {
-            // Phase 2 加销售订单 hydrate. 目前 fallback.
+            SalesOrder so = soById.get(bizId);
+            if (so != null) {
+                StringBuilder sb = new StringBuilder();
+                sb.append(so.getOrderNumber() != null ? so.getOrderNumber() : bizId);
+                if (so.getTotalAmount() != null && so.getTotalAmount().compareTo(BigDecimal.ZERO) > 0) {
+                    sb.append(" ¥").append(so.getTotalAmount().toPlainString());
+                }
+                if (so.getCustomerName() != null && !so.getCustomerName().isBlank()) {
+                    sb.append(" (").append(so.getCustomerName()).append(")");
+                }
+                return sb.toString();
+            }
             return "销售订单 " + bizId;
         }
         // generic fallback
         return (moduleCode == null ? "业务单据" : moduleCode) + " " + bizId;
+    }
+
+    private Map<String, SalesOrder> loadSalesOrders(Set<String> soIds) {
+        Map<String, SalesOrder> soById = new HashMap<>();
+        if (!soIds.isEmpty() && salesOrderRepository != null) {
+            try {
+                salesOrderRepository.findAllById(soIds).forEach(so -> soById.put(so.getId(), so));
+            } catch (Exception e) {
+                log.warn("批量加载销售订单失败，OA 摘要降级为单据 ID: {}", e.getMessage());
+            }
+        }
+        return soById;
     }
 
     private Map<String, ApprovalWorkflowNode> loadNodes(String factoryId, String workflowId) {

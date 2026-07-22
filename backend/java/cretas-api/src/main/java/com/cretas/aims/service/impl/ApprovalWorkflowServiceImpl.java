@@ -7,12 +7,14 @@ import com.cretas.aims.entity.config.ApprovalWorkflowNode;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.config.ApprovalWorkflowRepository;
+import com.cretas.aims.repository.workflow.ApprovalWorkflowInstanceRepository;
 import com.cretas.aims.service.ApprovalWorkflowService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -33,6 +35,9 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
 
     private final ApprovalWorkflowRepository workflowRepository;
     private final ObjectMapper objectMapper;
+
+    @Autowired(required = false)
+    private ApprovalWorkflowInstanceRepository workflowInstanceRepository;
 
     private static final Set<String> VALID_NODE_TYPES = Set.of(
             "start", "approval", "condition", "parallel", "join", "notify", "end");
@@ -88,6 +93,7 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
             throw new BusinessException(403, "无权修改其他工厂的工作流")
                     .withHint("请切换到该工作流所属的工厂后再操作");
         }
+        assertNoRunningInstances(factoryId, id);
 
         // PATCH 语义: null 字段不动
         if (partial.getName() != null) existing.setName(partial.getName());
@@ -128,6 +134,7 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
         if (!existing.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权删除其他工厂的工作流");
         }
+        assertNoRunningInstances(factoryId, id);
 
         // @SQLDelete 在 BaseEntity 触发软删除 (设 deleted_at = NOW())
         workflowRepository.delete(existing);
@@ -205,6 +212,7 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
         if (!workflow.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权归档其他工厂的工作流");
         }
+        assertNoRunningInstances(factoryId, id);
 
         workflow.setPublishStatus("archived");
         return workflowRepository.save(workflow);
@@ -221,9 +229,23 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
         if (!workflow.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权修改其他工厂的工作流");
         }
+        assertNoRunningInstances(factoryId, id);
 
         workflow.setEnabled(enabled);
         return workflowRepository.save(workflow);
+    }
+
+    private void assertNoRunningInstances(String factoryId, String workflowId) {
+        if (workflowInstanceRepository != null
+                && !workflowInstanceRepository.findByFactoryIdAndWorkflowIdAndStatus(
+                        factoryId, workflowId,
+                        com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus.RUNNING)
+                .isEmpty()) {
+            throw new BusinessException(409,
+                    "该审批流程仍有进行中的实例，暂不能修改")
+                    .withCode("OA_WORKFLOW_RUNNING_INSTANCE_EXISTS")
+                    .withHint("请等待所有进行中的审批完成后再修改流程");
+        }
     }
 
     // ==================== JSONB serde ====================

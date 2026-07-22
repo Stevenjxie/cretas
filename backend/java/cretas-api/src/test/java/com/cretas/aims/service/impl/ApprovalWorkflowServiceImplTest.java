@@ -7,6 +7,8 @@ import com.cretas.aims.entity.config.ApprovalWorkflowNode;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.config.ApprovalWorkflowRepository;
+import com.cretas.aims.repository.workflow.ApprovalWorkflowInstanceRepository;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -15,6 +17,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 import java.util.Map;
@@ -48,6 +51,9 @@ class ApprovalWorkflowServiceImplTest {
     @Mock
     private ApprovalWorkflowRepository repository;
 
+    @Mock
+    private ApprovalWorkflowInstanceRepository workflowInstanceRepository;
+
     private ApprovalWorkflowServiceImpl service;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -58,6 +64,7 @@ class ApprovalWorkflowServiceImplTest {
     @BeforeEach
     void setUp() {
         service = new ApprovalWorkflowServiceImpl(repository, objectMapper);
+        ReflectionTestUtils.setField(service, "workflowInstanceRepository", workflowInstanceRepository);
     }
 
     // ==================== fixtures ====================
@@ -252,6 +259,33 @@ class ApprovalWorkflowServiceImplTest {
 
         assertThrows(EntityNotFoundException.class,
                 () -> service.update(FACTORY_ID, WORKFLOW_ID, new ApprovalWorkflow()));
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void running_instance_blocks_all_mutating_workflow_operations() {
+        ApprovalWorkflow existing = validSequentialWorkflow();
+        existing.setId(WORKFLOW_ID);
+        existing.setFactoryId(FACTORY_ID);
+        when(repository.findById(WORKFLOW_ID)).thenReturn(Optional.of(existing));
+        when(workflowInstanceRepository.findByFactoryIdAndWorkflowIdAndStatus(
+                FACTORY_ID, WORKFLOW_ID, ApprovalWorkflowInstance.InstanceStatus.RUNNING))
+                .thenReturn(List.of(ApprovalWorkflowInstance.builder().id("inst-running").build()));
+
+        BusinessException update = assertThrows(BusinessException.class,
+                () -> service.update(FACTORY_ID, WORKFLOW_ID, new ApprovalWorkflow()));
+        BusinessException delete = assertThrows(BusinessException.class,
+                () -> service.delete(FACTORY_ID, WORKFLOW_ID));
+        BusinessException archive = assertThrows(BusinessException.class,
+                () -> service.archive(FACTORY_ID, WORKFLOW_ID));
+        BusinessException toggle = assertThrows(BusinessException.class,
+                () -> service.toggleEnabled(FACTORY_ID, WORKFLOW_ID, false));
+
+        assertEquals("OA_WORKFLOW_RUNNING_INSTANCE_EXISTS", update.getErrorCode());
+        assertEquals("OA_WORKFLOW_RUNNING_INSTANCE_EXISTS", delete.getErrorCode());
+        assertEquals("OA_WORKFLOW_RUNNING_INSTANCE_EXISTS", archive.getErrorCode());
+        assertEquals("OA_WORKFLOW_RUNNING_INSTANCE_EXISTS", toggle.getErrorCode());
+        verify(repository, never()).delete(any());
         verify(repository, never()).save(any());
     }
 

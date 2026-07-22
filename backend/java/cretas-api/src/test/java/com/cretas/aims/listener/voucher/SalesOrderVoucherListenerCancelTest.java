@@ -3,7 +3,7 @@ package com.cretas.aims.listener.voucher;
 import com.cretas.aims.entity.enums.VoucherStatus;
 import com.cretas.aims.entity.finance.Voucher;
 import com.cretas.aims.event.SalesOrderCancelledEvent;
-import com.cretas.aims.repository.inventory.SalesOrderRepository;
+import com.cretas.aims.event.SalesOrderConfirmedEvent;
 import com.cretas.aims.service.voucher.VoucherService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -13,6 +13,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -27,7 +29,6 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 class SalesOrderVoucherListenerCancelTest {
 
-    @Mock private SalesOrderRepository salesOrderRepo;
     @Mock private VoucherService voucherService;
 
     private SalesOrderVoucherListener listener;
@@ -37,7 +38,7 @@ class SalesOrderVoucherListenerCancelTest {
 
     @BeforeEach
     void setUp() {
-        listener = new SalesOrderVoucherListener(salesOrderRepo, voucherService);
+        listener = new SalesOrderVoucherListener(voucherService);
     }
 
     @Test
@@ -87,5 +88,16 @@ class SalesOrderVoucherListenerCancelTest {
         listener.onSalesOrderCancelled(new SalesOrderCancelledEvent(this, FACTORY_ID, ORDER_ID, "客户撤单"));
 
         verify(voucherService).voidVoucher(eq(FACTORY_ID), eq("V-3"), anyString(), isNull());
+    }
+
+    @Test
+    void confirmed_event_no_longer_generates_sales_voucher() {
+        boolean hasConfirmedListener = java.util.Arrays.stream(
+                        SalesOrderVoucherListener.class.getDeclaredMethods())
+                .flatMap(method -> java.util.Arrays.stream(method.getParameterTypes()))
+                .anyMatch(SalesOrderConfirmedEvent.class::equals);
+
+        assertFalse(hasConfirmedListener,
+                "销售凭证只能在财务审批通过事件后生成，不能在订单确认时提前生成");
     }
 }

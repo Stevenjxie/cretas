@@ -938,16 +938,25 @@ public class SalesServiceImpl implements SalesService {
     }
 
     private boolean hasActiveSalesWorkflow(String factoryId) {
-        return workflowEngine != null && workflowEngine.hasActiveWorkflow(factoryId, "SALES_ORDER");
+        return approvalWorkflowService != null
+                && approvalWorkflowService.getActiveByDecisionType(
+                        factoryId, DecisionType.SALES_ORDER_APPROVAL).isPresent();
     }
 
-    private void requireActiveSalesWorkflow(String factoryId) {
-        if (!hasActiveSalesWorkflow(factoryId)) {
+    private ApprovalWorkflow requireActiveSalesWorkflow(String factoryId) {
+        if (approvalWorkflowService == null || workflowEngine == null) {
             throw new BusinessException(422, "当前工厂未配置已启用的销售订单 OA 审批流程")
                     .withCode("SALES_APPROVAL_WORKFLOW_REQUIRED")
                     .withHint("请先在统一 OA 中发布并启用 SALES_ORDER 审批流程")
                     .withHintTarget("approvalWorkflow");
         }
+        return approvalWorkflowService.getActiveByDecisionType(
+                        factoryId, DecisionType.SALES_ORDER_APPROVAL)
+                .orElseThrow(() -> new BusinessException(422,
+                        "当前工厂未配置已启用的销售订单 OA 审批流程")
+                        .withCode("SALES_APPROVAL_WORKFLOW_REQUIRED")
+                        .withHint("请先在统一 OA 中发布并启用销售订单审批流程")
+                        .withHintTarget("approvalWorkflow"));
     }
 
     private Map<String, Object> buildSalesApprovalContext(SalesOrder order) {
@@ -1016,7 +1025,7 @@ public class SalesServiceImpl implements SalesService {
 
     private SalesOrder routeSalesOrderByWorkflow(String factoryId, SalesOrder order, Map<String, Object> context,
                                                  String notes, Long initiatorUserId) {
-        requireActiveSalesWorkflow(factoryId);
+        ApprovalWorkflow activeWorkflow = requireActiveSalesWorkflow(factoryId);
         if (initiatorUserId == null) {
             throw new BusinessException(401, "无法识别销售订单审批发起人")
                     .withCode("SALES_APPROVAL_INITIATOR_REQUIRED");
@@ -1024,8 +1033,9 @@ public class SalesServiceImpl implements SalesService {
 
         ApprovalWorkflowInstance instance = workflowEngine.getCurrentInstance(factoryId, "SALES_ORDER", order.getId())
                 .filter(existing -> existing.getStatus() == InstanceStatus.RUNNING)
-                .orElseGet(() -> workflowEngine.startWorkflow(
-                        factoryId, "SALES_ORDER", order.getId(), context, initiatorUserId));
+                .orElseGet(() -> workflowEngine.startWorkflowWithDefinition(
+                        factoryId, "SALES_ORDER", order.getId(), context, initiatorUserId,
+                        activeWorkflow));
 
         if (instance.getStatus() == InstanceStatus.RUNNING) {
             checkTransitionAllowed(factoryId, order.getStatus().name(), "PENDING_FINANCE_REVIEW");
@@ -1231,8 +1241,10 @@ public class SalesServiceImpl implements SalesService {
     }
 
     private void assertNoOaApprovalBypass(String factoryId, String orderId) {
-        if (workflowEngine != null
-                && workflowEngine.getLatestInstance(factoryId, "SALES_ORDER", orderId).isPresent()) {
+        boolean activeWorkflowExists = hasActiveSalesWorkflow(factoryId);
+        boolean instanceExists = workflowEngine != null
+                && workflowEngine.getLatestInstance(factoryId, "SALES_ORDER", orderId).isPresent();
+        if (activeWorkflowExists || instanceExists) {
             throw new BusinessException(409, "该销售订单已进入统一 OA，不能从业务页面直接审批")
                     .withCode("SALES_APPROVAL_OA_ONLY")
                     .withHint("请前往 OA 审批中心处理当前待办")
