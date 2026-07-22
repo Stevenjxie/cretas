@@ -420,6 +420,36 @@ _STORE_MENTION_PREFIX_TRIM = re.compile(
 )
 
 
+_DEMO_GOLD_TENANT = "RES_3101_009"
+_DEMO_GOLD_MAPPED_CODES = frozenset({
+    "RESTAURANT_OPS_SALES_SUMMARY",
+    "RESTAURANT_OPS_STORE_MARGIN",
+    "RESTAURANT_OPS_TREND_ANALYSIS",
+})
+
+
+def demo_data_factory_for_code(
+    code: Optional[str], factory_id: Optional[str], *, store_scoped: bool = False,
+) -> Optional[str]:
+    """Data-read tenant for the demo account, unified per answer family.
+
+    Revenue/store/trend answers read the seeded gold tenant so their store
+    universe agrees with the Java-native ranking tools (previously the rank
+    said one store was #1 while the sales summary praised a store from a
+    different data space). Dish-margin and ops KPIs stay on the demo
+    tenant's own seed — the gold tenant has no recipe-cost data, so mapping
+    them would degrade real answers to zero coverage. Auth, session and
+    cache identity always stay on the trusted tenant.
+    """
+    if (
+        factory_id
+        and factory_id.upper() == "DEMO_REST"
+        and (store_scoped or (code or "") in _DEMO_GOLD_MAPPED_CODES)
+    ):
+        return _DEMO_GOLD_TENANT
+    return factory_id
+
+
 def extract_store_mention(query: Optional[str]) -> Optional[str]:
     """Pull an explicit store-name mention out of free text, or None."""
     if not query:
@@ -446,7 +476,7 @@ async def _canonicalize_store_mention(
     async with smartbi_pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(
-                "SELECT set_config('app.factory_id', $1, true)", factory_id,
+                "SELECT set_config('app.factory_id', $1, false)", factory_id,
             )
             exact = await conn.fetch(
                 "SELECT name FROM dim_store WHERE factory_id = $1 AND name = $2 LIMIT 1",
@@ -935,7 +965,7 @@ async def resolve_wastage_top(
 ) -> OpsAnswer:
     """Top N wastage ingredients + wastage type breakdown, last N days."""
     async with smartbi_pool.acquire() as conn:
-        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
         top_rows = await conn.fetch(
             """
             SELECT i.name, i.category, i.unit,
@@ -1041,7 +1071,7 @@ async def resolve_stock_shortage(
 ) -> OpsAnswer:
     """Top N stocktaking shortage ingredients, last N days."""
     async with smartbi_pool.acquire() as conn:
-        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
         rows = await conn.fetch(
             """
             SELECT i.name, i.category, i.unit,
@@ -1115,7 +1145,7 @@ async def resolve_recipe_cost(
     ETL needed yet — see 2026_04_24_recipe_product_source_pk.sql rationale).
     """
     async with smartbi_pool.acquire() as conn:
-        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
         rows = await conn.fetch(
             """
             SELECT c.product_source_pk, c.food_cost, c.ingredient_count, c.has_price_data
@@ -1187,7 +1217,7 @@ async def resolve_requisition_trend(
 ) -> OpsAnswer:
     """Requisition trend + Top N ingredients by qty, last N days."""
     async with smartbi_pool.acquire() as conn:
-        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
         trend = await conn.fetch(
             """
             SELECT date, requisition_qty_total::float AS qty,
@@ -1311,7 +1341,7 @@ async def resolve_gross_margin(
     # Need cretas connection for product_types name↔id lookup
     monthly_pos_rows: List[Any] = []
     async with smartbi_pool.acquire() as conn:
-        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
 
         # Step 1: POS sales aggregated per dish. Anchor the window to the
         # latest transaction that can be joined to dim_product; demo datasets
@@ -1446,7 +1476,7 @@ async def resolve_gross_margin(
     cost_map: Dict[str, float] = {}
     if cretas_map:
         async with smartbi_pool.acquire() as conn:
-            await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+            await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
             cost_rows = await conn.fetch(
                 """
                 SELECT product_source_pk, food_cost::float AS food_cost
@@ -2094,7 +2124,7 @@ async def resolve_store_margin(
     cost_by_pk: Dict[str, float] = {}
     if name_to_pk:
         async with smartbi_pool.acquire() as conn:
-            await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+            await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
             cr = await conn.fetch(
                 """
                 SELECT product_source_pk, food_cost::float AS c
@@ -3036,7 +3066,7 @@ async def resolve_inventory_warning(
     / resolve_store_margin / resolve_sales_summary).
     """
     async with smartbi_pool.acquire() as conn:
-        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
         anchor = await conn.fetchrow(
             "SELECT MAX(snapshot_date) AS max_date FROM fact_inventory_snapshot WHERE factory_id = $1",
             factory_id,
@@ -3163,7 +3193,7 @@ async def resolve_staffing_advice(smartbi_pool, factory_id: str) -> OpsAnswer:
     cost/price read, so it carries no PRICE_VIEW_ROLES gate.
     """
     async with smartbi_pool.acquire() as conn:
-        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
         rows = await conn.fetch(
             """
             SELECT daypart, weekday_type,

@@ -223,7 +223,7 @@ class ReadToolGateway:
                         f"{statement_timeout_ms}ms",
                     )
                     await connection.execute(
-                        "SELECT set_config('app.factory_id', $1, true)",
+                        "SELECT set_config('app.factory_id', $1, false)",
                         context.factory_id,
                     )
                     bound_pool = _BoundConnectionPool(connection)

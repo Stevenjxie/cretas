@@ -524,7 +524,7 @@ async def _async_worker_impl(
                     async with _rq_pool.acquire() as conn:
                         async with conn.transaction():
                             await conn.execute(
-                                "SELECT set_config('app.factory_id', $1, true)", factory_id
+                                "SELECT set_config('app.factory_id', $1, false)", factory_id
                             )
                             await conn.executemany(
                                 """INSERT INTO smart_bi_mapping_review_queue

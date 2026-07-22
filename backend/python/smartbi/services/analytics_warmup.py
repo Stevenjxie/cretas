@@ -122,7 +122,7 @@ async def _auto_pregenerate_recipe_drafts(
     # multiple await conn.execute calls in same conn.
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+            await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
             try:
                 rows = await conn.fetch("""
                     SELECT p.normalized_name AS name,

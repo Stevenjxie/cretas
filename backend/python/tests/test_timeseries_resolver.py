@@ -178,7 +178,7 @@ async def test_sets_factory_guc_inside_transaction_before_fetch(patch_pool):
 
     assert conn.transaction_entered is True
     assert conn.executed == [
-        ("SELECT set_config('app.factory_id', $1, true)", ("F001",))
+        ("SELECT set_config('app.factory_id', $1, false)", ("F001",))
     ]
     assert conn.transaction_exited is True
 
@@ -202,6 +202,6 @@ async def test_other_tenant_isolated_by_guc_returns_empty_list(patch_pool):
 
     assert await query_timeseries("F002") == []
     assert conn.executed == [
-        ("SELECT set_config('app.factory_id', $1, true)", ("F002",))
+        ("SELECT set_config('app.factory_id', $1, false)", ("F002",))
     ]
     assert conn.fetch_args == ("F002",)

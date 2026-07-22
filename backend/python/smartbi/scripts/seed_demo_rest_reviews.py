@@ -159,7 +159,7 @@ async def seed_reviews(factory_id: str, rows: list[dict[str, Any]], *, delete_ex
     conn = await asyncpg.connect(settings.postgres_url)
     try:
         async with conn.transaction():
-            await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+            await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
             if delete_existing:
                 await conn.execute(
                     """

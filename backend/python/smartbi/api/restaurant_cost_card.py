@@ -75,7 +75,7 @@ async def dish_cost_card(product_id: str, request: Request) -> dict[str, Any]:
 
     try:
         async with pool.acquire() as conn:
-            await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+            await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
             row = await conn.fetchrow(
                 """
                 SELECT product_source_pk,

@@ -71,7 +71,7 @@ def _weeks_touching_month(year: int, month: int) -> List[Tuple[str, date, date]]
 async def _set_tenant(conn: asyncpg.Connection, factory_id: str) -> None:
     """Parameterized RLS tenant context (injection-safe)."""
     await conn.execute(
-        "SELECT set_config('app.factory_id', $1, true)", factory_id
+        "SELECT set_config('app.factory_id', $1, false)", factory_id
     )
 
 

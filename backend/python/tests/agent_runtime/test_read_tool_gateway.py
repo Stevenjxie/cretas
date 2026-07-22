@@ -158,7 +158,7 @@ async def test_gateway_binds_rls_and_adapter_to_same_readonly_connection():
     assert ("transaction", "created", True) in pool.connection.events
     assert pool.connection.executes == [
         ("SELECT set_config('statement_timeout', $1, true)", ("14000ms",)),
-        ("SELECT set_config('app.factory_id', $1, true)", ("F001",)),
+        ("SELECT set_config('app.factory_id', $1, false)", ("F001",)),
     ]
     assert pool.connection.events[-1] == ("transaction", "exit", None)
     assert envelope.status is EvidenceStatus.OK

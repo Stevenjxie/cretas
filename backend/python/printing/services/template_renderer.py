@@ -550,7 +550,7 @@ async def load_template_from_db(factory_id: str, template_id: str) -> dict:
         async with conn.transaction():
             # Defence-in-depth: set the GUC even though we have explicit WHERE.
             await conn.execute(
-                "SELECT set_config('app.factory_id', $1, true)", factory_id
+                "SELECT set_config('app.factory_id', $1, false)", factory_id
             )
             row = await conn.fetchrow(
                 """

@@ -1340,6 +1340,7 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
         if query and factory_id_hdr:
             try:
                 from smartbi.gold.restaurant_ops_router import (
+                    demo_data_factory_for_code,
                     extract_store_mention,
                     is_supported_restaurant_ops_code,
                     reconcile_restaurant_ops_code,
@@ -1416,9 +1417,13 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                         {**restaurant_context, "store_name": store_mention}
                         if store_mention else restaurant_context
                     )
-                    analysis_factory_id = _restaurant_analysis_data_factory_id(
+                    analysis_factory_id = demo_data_factory_for_code(
+                        structured_ops_code,
                         factory_id_hdr,
-                        mapping_context,
+                        store_scoped=bool(
+                            mapping_context.get("store_id")
+                            or mapping_context.get("store_name")
+                        ),
                     )
                     ops_answer = await resolve_by_code(
                         structured_ops_code,
@@ -1525,10 +1530,10 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                         extract_store_mention(effective_ops_query)
                         if ops_code == "RESTAURANT_OPS_STORE_MARGIN" else None
                     )
-                    fallback_factory_id = _restaurant_analysis_data_factory_id(
+                    fallback_factory_id = demo_data_factory_for_code(
+                        ops_code,
                         factory_id_hdr,
-                        {"store_name": fallback_store_mention}
-                        if fallback_store_mention else {},
+                        store_scoped=bool(fallback_store_mention),
                     )
                     ops_answer = await resolve_by_code(
                         ops_code, pool, fallback_factory_id, role=trusted_role,
@@ -2120,6 +2125,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 factory_id_hdr = trusted_factory_id
                 if user_q and factory_id_hdr:
                     from smartbi.gold.restaurant_ops_router import (
+                        demo_data_factory_for_code as _demo_gold_factory_trend,
                         is_supported_restaurant_ops_code as _is_supported_ops_trend,
                         reconcile_restaurant_ops_code as _reconcile_ops_trend,
                         resolve_by_code as _resolve_ops_trend,
@@ -2137,7 +2143,11 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                         if pool_trend:
                             trend_answer = await _resolve_ops_trend(
                                 "RESTAURANT_OPS_TREND_ANALYSIS",
-                                pool_trend, factory_id_hdr, role=trusted_role,
+                                pool_trend,
+                                _demo_gold_factory_trend(
+                                    "RESTAURANT_OPS_TREND_ANALYSIS", factory_id_hdr,
+                                ),
+                                role=trusted_role,
                             )
                             if trend_answer:
                                 customer_answer = sanitize_customer_ai_text(trend_answer.answer_text)
@@ -2360,6 +2370,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 factory_id_hdr = trusted_factory_id
                 if user_q and factory_id_hdr:
                     from smartbi.gold.restaurant_ops_router import (
+                        demo_data_factory_for_code as _demo_gold_factory_stream,
                         extract_store_mention as _extract_store_mention_stream,
                         is_supported_restaurant_ops_code,
                         reconcile_restaurant_ops_code,
@@ -2402,13 +2413,13 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 else None
                             )
                             stream_fallback_code = ops_code
-                            stream_fallback_factory = factory_id_hdr
                             if stream_fallback_mention:
                                 stream_fallback_code = "RESTAURANT_OPS_STORE_MARGIN"
-                                stream_fallback_factory = _restaurant_analysis_data_factory_id(
-                                    factory_id_hdr,
-                                    {"store_name": stream_fallback_mention},
-                                )
+                            stream_fallback_factory = _demo_gold_factory_stream(
+                                stream_fallback_code,
+                                factory_id_hdr,
+                                store_scoped=bool(stream_fallback_mention),
+                            )
                             ops_answer = (
                                 await resolve_by_code(
                                     stream_fallback_code, pool, stream_fallback_factory,

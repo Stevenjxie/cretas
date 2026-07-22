@@ -302,7 +302,7 @@ async def list_unmatched_dishes(
         return {"success": False, "message": "smartbi_db pool unavailable"}
 
     async with pool.acquire() as conn:
-        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
         pos_rows = await conn.fetch(
             """
             SELECT p.name AS dish_name, p.normalized_name,

@@ -39,7 +39,7 @@ def validate_target_end(target_end: date) -> None:
 
 async def build_plan(conn: Any, target_end: date) -> Dict[str, Any]:
     validate_target_end(target_end)
-    await conn.execute("SELECT set_config('app.factory_id', $1, true)", FACTORY_ID)
+    await conn.execute("SELECT set_config('app.factory_id', $1, false)", FACTORY_ID)
     counts = await conn.fetchrow(
         """
         SELECT
@@ -123,7 +123,7 @@ async def apply_refresh(conn: Any, target_end: date) -> Dict[str, Any]:
 
 
 async def rollback_refresh(conn: Any) -> Dict[str, int]:
-    await conn.execute("SELECT set_config('app.factory_id', $1, true)", FACTORY_ID)
+    await conn.execute("SELECT set_config('app.factory_id', $1, false)", FACTORY_ID)
     result = await conn.execute(
         "DELETE FROM agg_daily WHERE factory_id=$1 AND version=$2",
         FACTORY_ID, SEED_VERSION,

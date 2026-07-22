@@ -242,7 +242,7 @@ async def _row_count(pool, table: str, factory_id: str) -> int:
         async with pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
-                    "SELECT set_config('app.factory_id', $1, true)", factory_id
+                    "SELECT set_config('app.factory_id', $1, false)", factory_id
                 )
                 return await conn.fetchval(
                     f"SELECT COUNT(*) FROM {table} WHERE factory_id = $1",
@@ -264,7 +264,7 @@ async def _last_success_run(pool, factory_id: str) -> Optional[str]:
         async with pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
-                    "SELECT set_config('app.factory_id', $1, true)", factory_id
+                    "SELECT set_config('app.factory_id', $1, false)", factory_id
                 )
                 val = await conn.fetchval(
                     "SELECT MAX(computed_at) FROM agg_restaurant_daily_ops"

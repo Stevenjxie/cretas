@@ -1380,3 +1380,33 @@ def test_plain_query_without_backref_is_not_declined(monkeypatch):
 def test_range_text_collapses_single_day():
     assert _r._range_text(date(2026, 7, 21), date(2026, 7, 21)) == "2026-07-21 当天"
     assert _r._range_text(date(2026, 7, 20), date(2026, 7, 21)) == "2026-07-20 至 2026-07-21"
+
+
+# --- R8: unified demo data-space mapping per answer family ---
+
+
+@pytest.mark.parametrize("code,expected", [
+    ("RESTAURANT_OPS_SALES_SUMMARY", "RES_3101_009"),
+    ("RESTAURANT_OPS_STORE_MARGIN", "RES_3101_009"),
+    ("RESTAURANT_OPS_TREND_ANALYSIS", "RES_3101_009"),
+    ("RESTAURANT_OPS_GROSS_MARGIN", "DEMO_REST"),
+    ("RESTAURANT_OPS_WASTAGE_TOP", "DEMO_REST"),
+    ("RESTAURANT_OPS_STOCK_SHORTAGE", "DEMO_REST"),
+])
+def test_demo_data_factory_per_code(code, expected):
+    assert _r.demo_data_factory_for_code(code, "DEMO_REST") == expected
+
+
+def test_demo_data_factory_store_scope_overrides_code():
+    assert _r.demo_data_factory_for_code(
+        "RESTAURANT_OPS_GROSS_MARGIN", "DEMO_REST", store_scoped=True,
+    ) == "RES_3101_009"
+
+
+def test_demo_data_factory_real_tenants_never_mapped():
+    assert _r.demo_data_factory_for_code(
+        "RESTAURANT_OPS_SALES_SUMMARY", "RES_3101_001",
+    ) == "RES_3101_001"
+    assert _r.demo_data_factory_for_code(
+        "RESTAURANT_OPS_SALES_SUMMARY", "F006", store_scoped=True,
+    ) == "F006"

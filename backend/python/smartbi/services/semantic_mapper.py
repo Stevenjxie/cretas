@@ -377,7 +377,7 @@ class SemanticMapper:
             async with pool.acquire() as conn:
                 async with conn.transaction():
                     await conn.execute(
-                        "SELECT set_config('app.factory_id', $1, true)", factory_id
+                        "SELECT set_config('app.factory_id', $1, false)", factory_id
                     )
                     rows = await conn.fetch(
                         """SELECT column_name, standard_name, confidence

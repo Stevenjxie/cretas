@@ -360,7 +360,7 @@ class HealthCheckMetricsBuilder:
         async def _rows(rec_type: str, s: date, e: date):
             async with pool.acquire() as conn:
                 await conn.execute(
-                    "SELECT set_config('app.factory_id', $1, true)", factory_id
+                    "SELECT set_config('app.factory_id', $1, false)", factory_id
                 )
                 return await conn.fetch(
                     """
@@ -490,7 +490,7 @@ class HealthCheckMetricsBuilder:
 
         # delivery_dependency from agg_daily_order_type_meal (clean 堂食/外卖).
         async with smartbi_pool.acquire() as conn:
-            await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+            await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
             ot_rows = await conn.fetch(
                 """
                 SELECT order_type,
@@ -512,7 +512,7 @@ class HealthCheckMetricsBuilder:
 
         # discount_rate + channel_collection_rate from fact_pos_transaction.
         async with smartbi_pool.acquire() as conn:
-            await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+            await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
             txn = await conn.fetchrow(
                 """
                 SELECT COALESCE(SUM(gross_amount), 0)::numeric(18,2)    AS gross,
@@ -551,7 +551,7 @@ class HealthCheckMetricsBuilder:
         #       "未上传撤单报表" (NOT a computed 0%).
         #   (2) bills < _VOID_MIN_BILLS in window → skip "订单样本不足".
         async with smartbi_pool.acquire() as conn:
-            await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+            await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
             avail_row = await conn.fetchrow(
                 "SELECT EXISTS(SELECT 1 FROM fact_pos_void WHERE factory_id = $1) AS has_data",
                 factory_id,
@@ -713,7 +713,7 @@ class HealthCheckMetricsBuilder:
 
         async def _five_star_pct(s: date, e: date) -> Optional[float]:
             async with smartbi_pool.acquire() as conn:
-                await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+                await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
                 row = await conn.fetchrow(
                     """
                     WITH r AS (
@@ -790,7 +790,7 @@ class HealthCheckMetricsBuilder:
             return {}
 
         async with smartbi_pool.acquire() as conn:
-            await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+            await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
             row = await conn.fetchrow(
                 """
                 SELECT COALESCE(SUM(requisition_cost_total), 0)::numeric(18,2) AS req_cost,
@@ -848,7 +848,7 @@ class HealthCheckMetricsBuilder:
             return None
 
         async with smartbi_pool.acquire() as conn:
-            await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+            await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
             row = await conn.fetchrow(
                 """
                 SELECT COALESCE(SUM(net_amount), 0)::numeric(18,2)   AS net_sum,

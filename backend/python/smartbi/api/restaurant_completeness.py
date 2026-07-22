@@ -228,7 +228,7 @@ async def _fetch_module_stats(
             async with smartbi_pool.acquire() as conn:
                 async with conn.transaction():
                     await conn.execute(
-                        "SELECT set_config('app.factory_id', $1, true)", factory_id
+                        "SELECT set_config('app.factory_id', $1, false)", factory_id
                     )
                     row = await conn.fetchrow(
                         """
@@ -385,7 +385,7 @@ async def _fetch_module_stats(
             async with smartbi_pool.acquire() as conn:
                 async with conn.transaction():
                     await conn.execute(
-                        "SELECT set_config('app.factory_id', $1, true)", factory_id
+                        "SELECT set_config('app.factory_id', $1, false)", factory_id
                     )
                     row = await conn.fetchrow(
                         """
@@ -411,7 +411,7 @@ async def _fetch_module_stats(
             async with smartbi_pool.acquire() as conn:
                 async with conn.transaction():
                     await conn.execute(
-                        "SELECT set_config('app.factory_id', $1, true)", factory_id
+                        "SELECT set_config('app.factory_id', $1, false)", factory_id
                     )
                     row = await conn.fetchrow(
                         """

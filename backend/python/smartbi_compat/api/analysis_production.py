@@ -394,7 +394,7 @@ async def _query_factory_batch_daily_gold(
         async with pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
-                    "SELECT set_config('app.factory_id', $1, true)", factory_id
+                    "SELECT set_config('app.factory_id', $1, false)", factory_id
                 )
                 return await conn.fetch(
                     """

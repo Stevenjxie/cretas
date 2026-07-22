@@ -11,7 +11,7 @@ Per W0.4 binding findings:
   Finding 2: created_at is nullable despite DEFAULT now() → use .isoformat() if
               not None pattern throughout.
   Finding 3: RLS FORCE on entity_resolution_admin_queue requires
-             SELECT set_config('app.factory_id', $1, true) per query.
+             SELECT set_config('app.factory_id', $1, false) per query.
              Phase A: require factoryId (cross-factory deferred to Phase B —
              would require BYPASSRLS or SECURITY DEFINER function).
   Finding 4: Default to status='PENDING' for partial-index hit
@@ -117,7 +117,7 @@ async def _fetch_queue_items(
         # smartbi/agent/budget_tracker.py:101-107 and narrative_cache.py:83-88.
         async with conn.transaction():
             await conn.execute(
-                "SELECT set_config('app.factory_id', $1, true)", factory_id
+                "SELECT set_config('app.factory_id', $1, false)", factory_id
             )
 
             rows = await conn.fetch(
@@ -434,7 +434,7 @@ async def _update_queue_resolved(
         async with conn.transaction():
             # W0.4 finding 3: GUC inside transaction
             await conn.execute(
-                "SELECT set_config('app.factory_id', $1, true)", factory_id
+                "SELECT set_config('app.factory_id', $1, false)", factory_id
             )
 
             # Two static SQL templates (no f-string interpolation) for safety —
@@ -533,7 +533,7 @@ async def _record_admin_confirm_history(
             # RLS FORCE: GUC inside the transaction so both the dim_* lookup and
             # the history upsert see the correct factory_id.
             await conn.execute(
-                "SELECT set_config('app.factory_id', $1, true)", factory_id
+                "SELECT set_config('app.factory_id', $1, false)", factory_id
             )
 
             # b_name = canonical name of the resolved entity (spec C-NEW-2:
@@ -875,7 +875,7 @@ async def reject_queue(
         # W0.4 finding 3: GUC inside transaction
         async with conn.transaction():
             await conn.execute(
-                "SELECT set_config('app.factory_id', $1, true)", item["factoryId"]
+                "SELECT set_config('app.factory_id', $1, false)", item["factoryId"]
             )
 
             # Two static SQL templates (no f-string interpolation) for safety —
@@ -1120,7 +1120,7 @@ async def get_history(
         async with conn.transaction():
             # W0.4 finding 3: GUC must be inside same transaction as the SELECT.
             await conn.execute(
-                "SELECT set_config('app.factory_id', $1, true)", item["factoryId"]
+                "SELECT set_config('app.factory_id', $1, false)", item["factoryId"]
             )
 
             # Fetch entity_type + raw_name from the target row.

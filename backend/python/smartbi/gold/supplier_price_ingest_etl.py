@@ -154,7 +154,7 @@ async def _load_existing_source_ids(smartbi_pool, factory_id: str) -> Set[str]:
     async with smartbi_pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(
-                "SELECT set_config('app.factory_id', $1, true)", factory_id
+                "SELECT set_config('app.factory_id', $1, false)", factory_id
             )
             rows = await conn.fetch(
                 """
@@ -215,7 +215,7 @@ async def _insert_ingest_rows(smartbi_pool, factory_id: str, rows: List[dict]) -
     async with smartbi_pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(
-                "SELECT set_config('app.factory_id', $1, true)", factory_id
+                "SELECT set_config('app.factory_id', $1, false)", factory_id
             )
             result = await conn.fetch(
                 """

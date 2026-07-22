@@ -110,7 +110,7 @@ async def test_set_factory_scope_prepares_against_real_pg(
 
         asyncpg.exceptions.PostgresSyntaxError: syntax error at or near "$1"
 
-    The fix uses ``SELECT set_config('app.factory_id', $1, true)`` — this
+    The fix uses ``SELECT set_config('app.factory_id', $1, false)`` — this
     test runs the actual helper end-to-end against a real PG and asserts
     the GUC was applied to the current transaction.
     """

@@ -229,7 +229,7 @@ async def get_value_summary(
         if set_tenant_guc:
             try:
                 await conn.execute(
-                    "SELECT set_config('app.factory_id', $1, true)", factory_id
+                    "SELECT set_config('app.factory_id', $1, false)", factory_id
                 )
             except Exception:  # noqa: BLE001 — fake conn in tests / GUC already set
                 pass

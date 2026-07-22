@@ -108,7 +108,7 @@ async def _row_count_with_rls(pool: Any, table: str, factory_id: str) -> int:
         async with pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
-                    "SELECT set_config('app.factory_id', $1, true)", factory_id
+                    "SELECT set_config('app.factory_id', $1, false)", factory_id
                 )
                 return await conn.fetchval(
                     f"SELECT COUNT(*) FROM {table} WHERE factory_id = $1",
@@ -126,7 +126,7 @@ async def _last_gold_run(pool: Any, factory_id: str) -> Optional[str]:
         async with pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
-                    "SELECT set_config('app.factory_id', $1, true)", factory_id
+                    "SELECT set_config('app.factory_id', $1, false)", factory_id
                 )
                 val = await conn.fetchval(
                     "SELECT MAX(updated_at) FROM agg_factory_batch_daily"

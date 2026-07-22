@@ -794,31 +794,36 @@ async def test_tiered_answer_missing_reference_guard_is_clarification(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_tiered_answer_non_store_intent_keeps_trusted_factory(monkeypatch):
-    spec = _spec(intent="RESTAURANT_OPS_SALES_SUMMARY")
+async def test_tiered_answer_sales_summary_reads_demo_gold_ops_stays_trusted(monkeypatch):
+    """R8 contract: revenue/store/trend answers for the demo tenant read the
+    seeded gold tenant (consistent store universe with the Java rank tools);
+    ops KPIs keep the trusted tenant's own seed."""
     captured = {}
 
-    async def _fake_parse(*a, **kw):
-        return spec
-
     async def _fake_resolve(code, pool, factory_id, **kwargs):
-        captured["factory_id"] = factory_id
-        captured["kwargs"] = kwargs
+        captured[code] = factory_id
         return OpsAnswer(
-            code=code, title="经营销售概览",
+            code=code, title="t",
             answer_text="昨天总营收 ¥73,365.44，共 537 单。",
             charts=[], kpis=[], meta={},
         )
 
-    monkeypatch.setattr(svc, "parse_restaurant_query", _fake_parse)
     monkeypatch.setattr(svc, "_resolve_tiered", _fake_resolve)
 
-    result = await tiered_answer(
-        "昨天营业额比前天高还是低？", object(), "DEMO_REST", None,
-    )
-    assert captured["factory_id"] == "DEMO_REST"
-    assert "store_mention" not in captured["kwargs"]
+    async def _parse_sales(*a, **kw):
+        return _spec(intent="RESTAURANT_OPS_SALES_SUMMARY")
+
+    monkeypatch.setattr(svc, "parse_restaurant_query", _parse_sales)
+    result = await tiered_answer("昨天营业额比前天高还是低？", object(), "DEMO_REST", None)
+    assert captured["RESTAURANT_OPS_SALES_SUMMARY"] == "RES_3101_009"
     assert result["kind"] == "answer"
+
+    async def _parse_wastage(*a, **kw):
+        return _spec(intent="RESTAURANT_OPS_WASTAGE_TOP")
+
+    monkeypatch.setattr(svc, "parse_restaurant_query", _parse_wastage)
+    await tiered_answer("损耗最多的食材", object(), "DEMO_REST", None)
+    assert captured["RESTAURANT_OPS_WASTAGE_TOP"] == "DEMO_REST"
 
 
 @pytest.mark.asyncio

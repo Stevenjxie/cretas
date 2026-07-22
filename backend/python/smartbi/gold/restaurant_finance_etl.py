@@ -100,7 +100,7 @@ class FinanceEtlStats:
 
 async def _set_tenant(conn: asyncpg.Connection, factory_id: str) -> None:
     """Set the RLS tenant context for this connection's transaction."""
-    await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+    await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
 
 
 def _resolve_date_range(
