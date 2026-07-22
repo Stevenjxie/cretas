@@ -254,14 +254,25 @@ async def tiered_answer(
         plan = spec.planned_intents or (spec.intent,)
         store_mention = (
             extract_store_mention(resolver_query) or extract_store_mention(query)
-            if "RESTAURANT_OPS_STORE_MARGIN" in plan
+            if ("RESTAURANT_OPS_STORE_MARGIN" in plan
+                or "RESTAURANT_OPS_GROSS_MARGIN" in plan)
             else None
         )
         planned_results: List[Tuple[str, Any]] = []
         for code in plan:
+            effective_code = code
+            if (
+                store_mention
+                and code == "RESTAURANT_OPS_GROSS_MARGIN"
+                and "RESTAURANT_OPS_STORE_MARGIN" not in plan
+            ):
+                # A margin question that names one store is a store-margin
+                # question; the dish-level resolver would silently answer for
+                # every store, which is the forbidden all-store fallback.
+                effective_code = "RESTAURANT_OPS_STORE_MARGIN"
             code_kwargs = execution_kwargs
             code_factory = factory_id
-            if code == "RESTAURANT_OPS_STORE_MARGIN" and store_mention:
+            if effective_code == "RESTAURANT_OPS_STORE_MARGIN" and store_mention:
                 code_kwargs = dict(execution_kwargs)
                 code_kwargs["store_mention"] = store_mention
                 # Store-scoped demo reads live in the seeded gold tenant —
@@ -270,13 +281,13 @@ async def tiered_answer(
                 if factory_id.upper() == "DEMO_REST":
                     code_factory = "RES_3101_009"
             resolved = await _resolve_tiered(
-                code,
+                effective_code,
                 pool,
                 code_factory,
                 **code_kwargs,
             )
             if resolved is not None:
-                planned_results.append((code, resolved))
+                planned_results.append((effective_code, resolved))
         tiered_result = (
             _combine_planned_answers(spec, planned_results)
             if len(plan) > 1
