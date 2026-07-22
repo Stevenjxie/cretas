@@ -38,7 +38,8 @@ class ProductWorkflowResolutionPlannedUnitTest {
         service = new ProductWorkflowResolutionServiceImpl(
                 activations, workflows, mock(ProductTypeRepository.class),
                 mock(RawMaterialTypeRepository.class),
-                new ObjectMapper(), units);
+                new ObjectMapper(), units,
+                mock(com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator.class));
         CanonicalUnit gram = new CanonicalUnit(
                 "g", UnitDimension.MASS, "g", BigDecimal.ONE, "克", 2);
         when(units.normalize("F1", "g"))

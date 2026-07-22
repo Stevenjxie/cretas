@@ -67,7 +67,7 @@
         type="warning"
         :closable="false"
         show-icon
-        title="SKU 单位已变化：成品产出已同步为当前基本单位。请核对并重新发布；已有计划不受影响，新计划才采用新单位。"
+        title="SKU 单位契约需要复核：请创建新草稿并重新发布；已有计划不受影响。"
       />
 
       <el-alert
@@ -252,40 +252,6 @@
         </div>
       </div>
     </div>
-
-    <aside
-      id="workflow-ai-panel"
-      :class="['ai-floating-bar', { 'is-collapsed': aiCollapsed }]"
-      aria-label="Workflow AI 助手"
-    >
-      <div class="ai-sidebar-header">
-        <span>Workflow AI</span>
-        <el-button
-          text
-          size="small"
-          class="ai-sidebar-toggle"
-          :aria-expanded="!aiCollapsed"
-          aria-controls="workflow-ai-composer"
-          @click="aiCollapsed = !aiCollapsed"
-        >{{ aiCollapsed ? '展开' : '收起' }}</el-button>
-      </div>
-      <div id="workflow-ai-composer" v-show="!aiCollapsed" class="ai-sidebar-composer">
-        <WorkProcessAIChatPanel
-          v-if="factoryId"
-          :key="`${factoryId}:${productTypeId}`"
-          :factory-id="factoryId"
-          :product-type-id="productTypeId"
-          :endpoint="`/${factoryId}/config/v2/ai/chat`"
-          module-code="product_process_workflow_config"
-          title="Workflow AI 助手"
-          :disabled="!canEdit"
-          :context="selectedNodeContext"
-          :context-label="aiContextLabel"
-          :quick-prompts="aiQuickPrompts"
-          @apply-draft="applyWorkflowAIDraft"
-        />
-      </div>
-    </aside>
 
     <el-dialog v-model="processDialogVisible" title="增加后续工序" width="480px" destroy-on-close>
       <el-form label-width="90px">
@@ -537,7 +503,6 @@ import {
   type WorkProcessItem,
   type WorkProcessOutputMaterialKind,
 } from '@/api/processProduction';
-import WorkProcessAIChatPanel from '@/views/system/components/WorkProcessAIChatPanel.vue';
 import UnitSelect from '@/components/common/UnitSelect.vue';
 import WorkflowMaterialNode from './WorkflowMaterialNode.vue';
 import WorkflowProcessNode from './WorkflowProcessNode.vue';
@@ -574,7 +539,6 @@ import {
   validateWorkflow,
 } from './workflowModel';
 import {
-  forkWorkflowUnitReviewDraft,
   reconcileProcessPortQuantities,
   reconcileWorkflowUnits,
   workflowReportingUnit,
@@ -1192,20 +1156,14 @@ async function reconcileLoadedUnits(): Promise<void> {
   rememberUnitIssues(result.errors);
   const unitsChanged = JSON.stringify(result.definition) !== JSON.stringify(current);
   if (definition.value.status === 'PUBLISHED') {
+    // Opening a published Workflow is read-only. The backend marker is broad and may be stale;
+    // current catalog reconciliation is authoritative. Never fork/save a draft merely by viewing.
+    unitReviewPending.value = result.errors.length > 0 || unitsChanged;
     if (result.errors.length > 0) showUnitIssues(result.errors);
-    if (result.errors.length > 0) return;
-    // 旧版本可能早于 unitReviewRequired 标记，或 SKU 数据曾通过导入/迁移更新。
-    // 只要当前 SKU 契约与发布图不一致，前端也必须主动进入待复核草稿，不能继续把 g/box
-    // 当作当前报工单位展示。发布版本本身仍保持不可变，重新发布后才影响新计划。
-    if (!unitReviewPending.value && !unitsChanged) return;
-    unitReviewPending.value = true;
+    return;
   }
-  const needsReviewDraft = definition.value.status === 'PUBLISHED' && unitReviewPending.value;
-  if (unitsChanged || needsReviewDraft) {
-    const reconciled = needsReviewDraft
-      ? forkWorkflowUnitReviewDraft(result.definition)
-      : result.definition;
-    hydrate(reconciled);
+  if (unitsChanged) {
+    hydrate(result.definition);
     dirty.value = true;
   }
 }
@@ -3201,13 +3159,11 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
 }
 .batch-selection-count { color: #1677c8; font-weight: 700; }
 
-/* 画布始终使用完整宽度；AI 是按需覆盖层，展开时不会重新挤压/缩放流程图。 */
+/* Workflow editor owns the remaining viewport and keeps the canvas full width. */
 .workflow-editor {
   --workflow-editor-height: calc(100dvh - var(--header-height, 64px) - 156px);
   position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(320px, 23vw, 380px);
-  gap: 12px;
+  display: block;
   height: max(360px, var(--workflow-editor-height));
   min-height: 0;
   max-height: none;
@@ -3284,31 +3240,12 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
 }
 .empty-canvas-action { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
 .empty-canvas-action :deep(.el-button) { pointer-events: auto; }
-.ai-floating-bar {
-  position: relative; z-index: 45;
-  min-width: 0; min-height: 0; height: 100%;
-  display: flex; flex-direction: column;
-  overflow-y: auto;
-  border: 1px solid #dce8f3; border-radius: 10px; background: #fff;
-  box-shadow: 0 2px 12px rgb(27 101 168 / 6%);
-}
-.ai-sidebar-header {
-  position: sticky; top: 0; z-index: 1;
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  min-height: 42px; padding: 0 10px; border-bottom: 1px solid #edf2f7; background: #fff;
-  color: #1a2332; font-size: 13px; font-weight: 600;
-}
-.ai-sidebar-composer { padding: 10px; }
-.ai-floating-bar.is-collapsed { height: auto; align-self: start; overflow: hidden; }
-.ai-floating-bar :deep(.work-process-ai-chat-panel) { pointer-events: auto; width: 100%; }
 @media (max-width: 1180px) {
-  .workflow-editor { grid-template-columns: minmax(0, 1fr) 300px; gap: 8px; }
   .toolbar-status .stage-note { display: none; }
 }
 @media (max-width: 900px) {
-  .workflow-editor { grid-template-columns: minmax(0, 1fr); height: auto; max-height: none; overflow: visible; }
+  .workflow-editor { height: auto; max-height: none; overflow: visible; }
   .workflow-main { min-height: 480px; }
-  .ai-floating-bar { height: auto; max-height: 260px; }
 }
 :deep(.vue-flow__edge-path) { stroke-linecap: round; }
 :deep(.vue-flow__node) { border: 0; background: transparent; }

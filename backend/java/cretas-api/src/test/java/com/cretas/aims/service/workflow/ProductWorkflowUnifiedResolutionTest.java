@@ -54,7 +54,8 @@ class ProductWorkflowUnifiedResolutionTest {
                 .stream().map(this::product).toList());
         service = new ProductWorkflowResolutionServiceImpl(
                 activations, workflows, products, mock(RawMaterialTypeRepository.class),
-                new ObjectMapper(), units);
+                new ObjectMapper(), units,
+                mock(com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator.class));
         for (String sku : List.of("P1", "P2", "P3")) {
             when(products.findByIdAndFactoryId(sku, "F1")).thenReturn(Optional.of(product(sku)));
         }

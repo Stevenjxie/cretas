@@ -20,6 +20,7 @@ import com.cretas.aims.service.workflow.WorkflowTopologyClassifier;
 import com.cretas.aims.service.workflow.PinnedWorkflowGraph;
 import com.cretas.aims.service.bom.BomWorkflowRevisionService;
 import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -54,6 +55,7 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
     private final RawMaterialTypeRepository rawMaterialTypeRepository;
     private final ObjectMapper objectMapper;
     private final UnitContractService unitContractService;
+    private final ProductProcessWorkflowUnitValidator unitValidator;
 
     @Override
     @Transactional(readOnly = true)
@@ -147,7 +149,7 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
         ProductProcessWorkflow workflow = workflowRepository.findByIdAndFactoryId(workflowId, factoryId)
                 .filter(row -> row.getStatus() == ProductProcessWorkflow.Status.PUBLISHED)
                 .filter(row -> java.util.Objects.equals(row.getDefinitionVersion(), definitionVersion))
-                .filter(row -> !Boolean.TRUE.equals(row.getUnitReviewRequired()))
+                .filter(row -> hasCurrentUnitContract(factoryId, row))
                 .orElseThrow(() -> new BusinessException(409, "生产计划固定的 Workflow 版本已失效")
                         .withCode("WORKFLOW_PINNED_VERSION_INVALID"));
         WorkflowTopology topology = parseTopology(workflow);
@@ -181,7 +183,7 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
         ProductProcessWorkflow workflow = workflowRepository.findByIdAndFactoryId(workflowId, factoryId)
                 .filter(row -> row.getStatus() == ProductProcessWorkflow.Status.PUBLISHED)
                 .filter(row -> java.util.Objects.equals(row.getDefinitionVersion(), definitionVersion))
-                .filter(row -> !Boolean.TRUE.equals(row.getUnitReviewRequired()))
+                .filter(row -> hasCurrentUnitContract(factoryId, row))
                 .filter(row -> java.util.Objects.equals(row.getProductTypeId(), ownerProductTypeId))
                 .orElseThrow(this::staleSelection);
         ProductProcessWorkflowActivation activation = activationRepository
@@ -403,15 +405,53 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
                 .findByIdAndFactoryId(act.getActiveWorkflowId(), factoryId).orElse(null);
         if (wf == null
                 || wf.getStatus() != ProductProcessWorkflow.Status.PUBLISHED
-                || Boolean.TRUE.equals(wf.getUnitReviewRequired())
                 || !java.util.Objects.equals(act.getActiveDefinitionVersion(), wf.getDefinitionVersion())) {
             return null;
         }
+        if (!hasCurrentUnitContract(factoryId, wf)) return null;
         WorkflowTopology topology = parseTopology(wf);
         if (topology.type() == WorkflowTopology.Type.INVALID) {
             return null;
         }
         return new ResolvedWorkflow(wf, new LinkedHashSet<>(topology.terminalOutputSkuIds()), topology);
+    }
+
+    /**
+     * unitReviewRequired is a broad invalidation marker set after unit master-data changes.
+     * It is not proof that this exact Workflow is currently incompatible. Revalidate marked
+     * definitions against the current factory/SKU contract so stale markers cannot hide an
+     * otherwise valid enabled Workflow, while genuinely incompatible graphs remain fail-closed.
+     */
+    private boolean hasCurrentUnitContract(String factoryId, ProductProcessWorkflow workflow) {
+        if (!Boolean.TRUE.equals(workflow.getUnitReviewRequired())) return true;
+        try {
+            return unitValidator.validate(factoryId, toDefinition(workflow)).valid();
+        } catch (RuntimeException error) {
+            log.warn("Workflow {} unit contract revalidation failed; excluding it from new plans",
+                    workflow.getId(), error);
+            return false;
+        }
+    }
+
+    private ProductProcessWorkflowDTO toDefinition(ProductProcessWorkflow workflow) {
+        try {
+            ProductProcessWorkflowDTO definition = new ProductProcessWorkflowDTO();
+            definition.setId(workflow.getId());
+            definition.setFactoryId(workflow.getFactoryId());
+            definition.setProductTypeId(workflow.getProductTypeId());
+            definition.setSchemaVersion(workflow.getSchemaVersion());
+            definition.setStatus(workflow.getStatus().name());
+            definition.setVersion(workflow.getDefinitionVersion());
+            definition.setLockVersion(workflow.getLockVersion());
+            definition.setUnitReviewRequired(workflow.getUnitReviewRequired());
+            definition.setNodes(objectMapper.readValue(
+                    workflow.getNodesJson(), new TypeReference<List<ProductProcessWorkflowDTO.Node>>() { }));
+            definition.setEdges(objectMapper.readValue(
+                    workflow.getEdgesJson(), new TypeReference<List<ProductProcessWorkflowDTO.Edge>>() { }));
+            return definition;
+        } catch (Exception error) {
+            throw new IllegalArgumentException("Workflow definition JSON is invalid", error);
+        }
     }
 
     private WorkflowTopology parseTopology(ProductProcessWorkflow wf) {

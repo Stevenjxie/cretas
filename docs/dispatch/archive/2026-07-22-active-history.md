@@ -44,3 +44,11 @@
 - 验证：Python 餐饮目标测试 `183 passed`；Java 工具/HTTP 契约/会话/中文时间指代目标测试 `36 passed`；最终 `git diff --check` 通过。
 - 发布：本轮按用户要求仅合入 `main`，不在当前任务部署；生产发布与严格只读复验已交接 Claude，必须等待 exact merged main SHA。
 - Scope 锁：`RTAI-S5`、`RTAI-S5-ROUTE-AUDIT`、`RTAI-S5-COREF-AUDIT`、`RTAI-S5-PYTHON` 已释放。
+
+## BUG-F006-R3-PRODPLAN-WORKFLOW-BINDING-001 — 生产计划误报 Workflow 未绑定
+
+- 状态：`review-ready; NOT_DEPLOYED`；Owner：`/root`；Base SHA：`23fcb6880287213e301e8eeb755574a6d0abe721`。
+- Headed 生产只读复现：F006 存货生产选择 `CPF0060016` 后 `resolve-by-outputs` 返回 `NONE`；实际 activation 为 enabled `108/v1`，发布图终端 SKU identity 正确且实时 `unitWarnings=[]`，仅遗留宽泛 `unitReviewRequired=true`。打开 Workflow 还会尝试自动 PUT 草稿，右侧 Workflow AI 固定显示；业务写入 0。
+- 修复：宽泛 review 标记改为触发实时单位契约复核，当前有效则允许生产计划解析/激活/运行时，真实不兼容继续 fail-closed；发布版页面只读加载不再自动 fork/save；移除右侧 AI 回归并恢复全宽画布。
+- 验证：Java 6 类 `55/55`，Web Vitest `3/3`，`vue-tsc --noEmit`，`git diff --check` 全部通过。
+- Scope 锁：已释放；最终 commit/main 以本任务合并回执为准。
