@@ -1772,3 +1772,11 @@ def test_r15_single_day_spec_unchanged():
     spec = _r._resolve_sales_query_spec("昨天卖了多少钱", today=_d(2026, 7, 22))
     assert spec.date_range == (_d(2026, 7, 21), _d(2026, 7, 21))
     assert spec.comparison_label is None
+
+
+def test_r17c_appended_window_hint_does_not_break_entity_switch():
+    combined = ("米饭的销量是多少；继续追问：这个过去一个月的销量如何；"
+                "继续追问：成本如何；继续追问：那招牌藤椒味(单人份)呢 最近30天")
+    assert _r.extract_dish_candidate(combined) == "招牌藤椒味(单人份)"
+    assert _r.extract_dish_candidate("那招牌藤椒味呢 毛利") == "招牌藤椒味"
+    assert _r.extract_dish_candidate("米饭的销量是多少 最近30天") == "米饭"

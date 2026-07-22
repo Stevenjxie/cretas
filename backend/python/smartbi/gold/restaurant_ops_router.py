@@ -589,8 +589,19 @@ _DISH_LEADING_TIME_RE = re.compile(
 )
 
 
+_RESOLVER_QUERY_HINT_RE = re.compile(
+    r"(?:\s+(?:最近\S{0,6}|近\S{0,6}|过去\S{0,6}|今天|今日|昨天|昨日|本周|这周"
+    r"|上周|本月|这个月|上个月|上月|今年|去年|半年|全部历史|毛利|赚钱了吗"
+    r"|\d{4}-\d{2}-\d{2}(?:\s*至\s*\d{4}-\d{2}-\d{2})?))+\s*$"
+)
+
+
 def _extract_dish_candidate_single(text: str) -> "Optional[str]":
-    # build_resolver_query 会在句尾追加「（窗口标签）」— 剥掉再做锚定匹配。
+    # build_resolver_query 会在整句尾部空格拼接窗口标签/盈亏词
+    # ("…那X呢 最近30天") — 先剥掉, 否则省略句「…呢」锚定失配,
+    # 实体切换静默回落父段旧菜 (R17c 实测事故)。
+    text = _RESOLVER_QUERY_HINT_RE.sub("", text).strip()
+    # 旧路径会在句尾追加「（窗口标签）」— 剥掉再做锚定匹配。
     text = re.sub(r"[（(][^（）()]{0,24}[）)]\s*$", "", text).strip()
     # 复合指标形态更具体, 先试 — 否则单指标懒惰前缀会吞掉「营收和」等垃圾段。
     match = _DISH_MULTI_METRIC_RE.match(text)
