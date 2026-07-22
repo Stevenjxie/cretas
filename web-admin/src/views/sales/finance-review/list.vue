@@ -1,14 +1,8 @@
 <script setup lang="ts">
 /**
- * Sprint4-H F-AR-1 — 财务待审销售单列表 (PC).
+ * Sprint4-H F-AR-1 — 销售订单 OA 待办只读索引 (PC).
  *
- * 流程: 销售员 submitForFinanceReview → 状态进 PENDING_FINANCE_REVIEW →
- *       财务进本列表点详情 → 查看成本核算 → approve/reject.
- *
- * RBAC:
- *   - 显示: 进入页即可 (路由 module: 'finance')
- *   - 操作 (approve/reject): detail.vue 的 v-if="canFinanceWrite" 控制,
- *     最终由后端 @RequirePermission("finance:read_write") 强制
+ * 旧列表继续提供订单与成本入口，但审批动作统一在个人 OA 中执行。
  */
 import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
@@ -51,8 +45,8 @@ async function load() {
   }
 }
 
-function goDetail(row: SalesOrderSummary) {
-  router.push({ name: 'SalesOrderFinanceReviewDetail', params: { id: row.id } });
+function goToUnifiedOa() {
+  router.push({ name: 'WorkflowPending', query: { moduleCode: 'SALES_ORDER' } });
 }
 
 function handlePageChange(page: number) {
@@ -72,8 +66,8 @@ onMounted(load);
   <div class="finance-review-list">
     <div class="page-header">
       <div>
-        <h2 class="title">财务待审销售单</h2>
-        <p class="subtitle">销售员提交财务审核 — 待财务复核成本与利润</p>
+        <h2 class="title">销售订单审批进度</h2>
+        <p class="subtitle">此处仅作待审订单索引；审批通过、驳回等操作统一在个人 OA 中处理</p>
       </div>
       <div class="actions">
         <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
@@ -86,7 +80,7 @@ onMounted(load);
       stripe
       style="width: 100%"
       empty-text="暂无待审销售单"
-      @row-click="goDetail"
+      @row-click="goToUnifiedOa"
     >
       <el-table-column prop="orderNumber" label="订单号" min-width="180" />
       <el-table-column prop="customerName" label="客户" min-width="180">
@@ -107,12 +101,12 @@ onMounted(load);
       </el-table-column>
       <el-table-column label="状态" min-width="120">
         <template #default>
-          <el-tag type="warning" effect="light">待财审</el-tag>
+          <el-tag type="warning" effect="light">待 OA 审批</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="操作" width="120" align="center" fixed="right">
         <template #default="{ row }">
-          <el-button link type="primary" @click.stop="goDetail(row)">审核</el-button>
+          <el-button link type="primary" @click.stop="goToUnifiedOa">前往 OA</el-button>
         </template>
       </el-table-column>
     </el-table>

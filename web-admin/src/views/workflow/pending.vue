@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { get, post } from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
@@ -19,6 +20,7 @@ interface PendingApproval {
 }
 
 const authStore = useAuthStore();
+const route = useRoute();
 const factoryId = computed(() => authStore.factoryId);
 const loading = ref(false);
 const operatingId = ref('');
@@ -26,7 +28,19 @@ const rows = ref<PendingApproval[]>([]);
 const total = ref(0);
 const page = ref(1);
 const size = ref(20);
+const ACTIONABLE_MODULE_CODES = new Set(['PURCHASE_ORDER', 'SALES_ORDER']);
 const moduleCode = ref('');
+const focusedInstanceId = ref('');
+let mounted = false;
+
+function queryValue(value: unknown): string {
+  const normalized = Array.isArray(value) ? value[0] : value;
+  return typeof normalized === 'string' ? normalized : '';
+}
+
+function canAct(row: PendingApproval): boolean {
+  return ACTIONABLE_MODULE_CODES.has(row.moduleCode);
+}
 
 async function loadPending() {
   if (!factoryId.value) return;
@@ -47,6 +61,28 @@ async function loadPending() {
   } finally {
     loading.value = false;
   }
+}
+
+watch(
+  () => [route.query.moduleCode, route.query.instanceId],
+  async ([moduleCodeQuery, instanceIdQuery]) => {
+    const requestedModuleCode = queryValue(moduleCodeQuery);
+    const nextModuleCode = ACTIONABLE_MODULE_CODES.has(requestedModuleCode)
+      ? requestedModuleCode
+      : '';
+    const moduleChanged = nextModuleCode !== moduleCode.value;
+    moduleCode.value = nextModuleCode;
+    focusedInstanceId.value = queryValue(instanceIdQuery);
+    if (mounted && moduleChanged) {
+      page.value = 1;
+      await loadPending();
+    }
+  },
+  { immediate: true },
+);
+
+function rowClassName({ row }: { row: PendingApproval }): string {
+  return row.instanceId === focusedInstanceId.value ? 'deep-linked-approval-row' : '';
 }
 
 async function act(row: PendingApproval, action: 'APPROVE' | 'REJECT') {
@@ -91,7 +127,10 @@ async function act(row: PendingApproval, action: 'APPROVE' | 'REJECT') {
   }
 }
 
-onMounted(loadPending);
+onMounted(async () => {
+  mounted = true;
+  await loadPending();
+});
 </script>
 
 <template>
@@ -105,11 +144,19 @@ onMounted(loadPending);
           </div>
           <el-select v-model="moduleCode" clearable placeholder="全部业务类型" style="width: 190px" @change="page = 1; loadPending()">
             <el-option label="采购订单" value="PURCHASE_ORDER" />
+            <el-option label="销售订单" value="SALES_ORDER" />
           </el-select>
         </div>
       </template>
 
-      <el-table v-loading="loading" :data="rows" border stripe empty-text="暂无待您审批的任务">
+      <el-table
+        v-loading="loading"
+        :data="rows"
+        :row-class-name="rowClassName"
+        border
+        stripe
+        empty-text="暂无待您审批的任务"
+      >
         <el-table-column label="业务类型" width="120">
           <template #default="{ row }">{{ enumLabel(row.moduleCode) }}</template>
         </el-table-column>
@@ -122,7 +169,7 @@ onMounted(loadPending);
         <el-table-column prop="initiatedAt" label="提交时间" min-width="180" />
         <el-table-column label="操作" width="170" fixed="right">
           <template #default="{ row }">
-            <template v-if="row.moduleCode === 'PURCHASE_ORDER'">
+            <template v-if="canAct(row)">
               <el-button link type="primary" :loading="operatingId === row.instanceId" @click="act(row, 'APPROVE')">通过</el-button>
               <el-button link type="danger" :disabled="Boolean(operatingId)" @click="act(row, 'REJECT')">驳回</el-button>
             </template>
@@ -151,4 +198,5 @@ onMounted(loadPending);
 .header h2 { margin: 0 0 6px; }
 .header p { margin: 0; color: var(--el-text-color-secondary); }
 .el-pagination { margin-top: 16px; justify-content: flex-end; }
+:deep(.deep-linked-approval-row > td.el-table__cell) { background: var(--el-color-primary-light-9) !important; }
 </style>

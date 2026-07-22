@@ -8,17 +8,23 @@
  *             错误 toast 改 sticky (duration:0 + showClose) per fool-proof-design 规范.
  */
 import { ref, computed, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put, del } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Edit, Delete as DeleteIcon, Refresh } from '@element-plus/icons-vue';
 import type { TableRow } from '@/types/api';
+import { canConfigureUnifiedOaForRole } from './unifiedOaAccess';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
+const router = useRouter();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('system'));
+const canConfigureUnifiedOa = computed(() => (
+  canConfigureUnifiedOaForRole(permissionStore.currentRole)
+));
 
 const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
@@ -81,6 +87,25 @@ const dialogTitle = computed(() => {
 });
 
 const submitting = ref(false);
+const UNIFIED_OA_DECISION_TYPES = new Set(['SALES_ORDER_APPROVAL']);
+
+function isUnifiedOaDecision(rowOrType: TableRow | string): boolean {
+  const decisionType = typeof rowOrType === 'string'
+    ? rowOrType
+    : String(rowOrType.decisionType || '');
+  return UNIFIED_OA_DECISION_TYPES.has(decisionType);
+}
+
+async function goToUnifiedOa(decisionType = 'SALES_ORDER_APPROVAL') {
+  if (!canConfigureUnifiedOa.value) {
+    ElMessage.info('当前账号无统一 OA 配置权限，请联系管理员配置');
+    return;
+  }
+  await router.push({
+    name: 'CanvasEditor',
+    query: { tab: 'approval', decisionType },
+  });
+}
 
 function openCreate() {
   editingId.value = null;
@@ -90,6 +115,11 @@ function openCreate() {
 }
 
 function openEdit(row: TableRow) {
+  if (isUnifiedOaDecision(row)) {
+    ElMessage.info('销售订单审批已迁移至统一 OA，此处仅保留历史配置只读展示');
+    void goToUnifiedOa(String(row.decisionType));
+    return;
+  }
   editingId.value = String(row.id || '');
   editingName.value = String(row.name || '');
   form.value = {
@@ -126,6 +156,12 @@ function openEdit(row: TableRow) {
 }
 
 async function handleSave() {
+  if (isUnifiedOaDecision(form.value.decisionType)) {
+    ElMessage.warning('销售订单审批请前往统一 OA 配置');
+    dialogVisible.value = false;
+    await goToUnifiedOa(form.value.decisionType);
+    return;
+  }
   if (!form.value.name?.trim()) {
     ElMessage.warning('请填写审批链名称');
     return;
@@ -176,6 +212,10 @@ async function handleSave() {
 }
 
 async function handleDelete(row: TableRow) {
+  if (isUnifiedOaDecision(row)) {
+    ElMessage.warning('销售订单历史审批链不可在旧页面删除，请前往统一 OA');
+    return;
+  }
   try {
     await ElMessageBox.confirm(
       `确定删除审批链「${row.name}」(决策类型: ${decisionTypeMap[String(row.decisionType)] || row.decisionType})?`,
@@ -191,6 +231,10 @@ async function handleDelete(row: TableRow) {
 }
 
 async function handleToggle(row: TableRow) {
+  if (isUnifiedOaDecision(row)) {
+    ElMessage.warning('销售订单历史审批链不可在旧页面变更，请前往统一 OA');
+    return;
+  }
   const willEnable = !row.enabled;
   try {
     const res = await put(
@@ -268,7 +312,7 @@ const decisionTypeGroups: { label: string; types: string[] }[] = [
   },
   {
     label: '销售 / 客户',
-    types: ['SALES_ORDER_APPROVAL', 'SALES_RETURN_APPROVAL', 'SALES_DISCOUNT_APPROVAL', 'CUSTOMER_CREDIT_APPROVAL', 'INVOICE_ISSUANCE_APPROVAL'],
+    types: ['SALES_RETURN_APPROVAL', 'SALES_DISCOUNT_APPROVAL', 'CUSTOMER_CREDIT_APPROVAL', 'INVOICE_ISSUANCE_APPROVAL'],
   },
   {
     label: '财务 / 凭证',
@@ -311,6 +355,7 @@ const decisionTypeGroups: { label: string; types: string[] }[] = [
             <el-tooltip :content="String(row.decisionType || '')" placement="top">
               <span>{{ decisionTypeMap[String(row.decisionType)] || row.decisionType }}</span>
             </el-tooltip>
+            <el-tag v-if="isUnifiedOaDecision(row)" type="info" size="small" style="margin-left: 6px">旧配置只读</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="name" label="名称" min-width="150" />
@@ -343,16 +388,29 @@ const decisionTypeGroups: { label: string; types: string[] }[] = [
             <el-tag v-else type="info" size="small">停用</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
-            <el-button v-if="canWrite" link type="primary" :icon="Edit" @click="openEdit(row)">编辑</el-button>
-            <el-button
-              v-if="canWrite"
-              link
-              :type="row.enabled ? 'warning' : 'success'"
-              @click="handleToggle(row)"
-            >{{ row.enabled ? '停用' : '启用' }}</el-button>
-            <el-button v-if="canWrite" link type="danger" :icon="DeleteIcon" @click="handleDelete(row)">删除</el-button>
+            <template v-if="isUnifiedOaDecision(row)">
+              <el-tooltip
+                v-if="canConfigureUnifiedOa"
+                content="销售订单审批已迁移至统一 OA；此处历史配置仅供查看"
+              >
+                <el-button link type="primary" @click="goToUnifiedOa(String(row.decisionType))">前往统一 OA</el-button>
+              </el-tooltip>
+              <el-tooltip v-else content="仅管理员可进入统一 OA 配置">
+                <el-tag type="info">请联系管理员配置</el-tag>
+              </el-tooltip>
+            </template>
+            <template v-else>
+              <el-button v-if="canWrite" link type="primary" :icon="Edit" @click="openEdit(row)">编辑</el-button>
+              <el-button
+                v-if="canWrite"
+                link
+                :type="row.enabled ? 'warning' : 'success'"
+                @click="handleToggle(row)"
+              >{{ row.enabled ? '停用' : '启用' }}</el-button>
+              <el-button v-if="canWrite" link type="danger" :icon="DeleteIcon" @click="handleDelete(row)">删除</el-button>
+            </template>
           </template>
         </el-table-column>
       </el-table>

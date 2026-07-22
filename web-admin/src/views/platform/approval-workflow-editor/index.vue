@@ -143,6 +143,7 @@
           v-if="selectedElement"
           :key="selectedElement.id"
           :element="selectedElement"
+          :decision-type="selectedDecisionType"
           @update="onPropertyUpdate"
           @delete="onDeleteSelected"
           @manage-rules="openRulesPanel"
@@ -163,7 +164,7 @@
 
     <!-- Sprint 4 Wave 1 (C-WF-RULE-1): WorkflowRule 管理 drawer -->
     <ConditionRulesPanel
-      v-if="rulesPanelOpen && rulesPanelNodeId && currentWorkflow && factoryId"
+      v-if="rulesPanelOpen && rulesPanelNodeId && currentWorkflow && factoryId && selectedDecisionType !== 'SALES_ORDER_APPROVAL'"
       v-model:visible="rulesPanelOpen"
       :factory-id="factoryId"
       :workflow-id="currentWorkflow.id"
@@ -175,7 +176,7 @@
 </template>
 
 <script setup lang="ts">
-import { markRaw, ref, computed, onMounted } from 'vue'
+import { markRaw, ref, computed, onMounted, watch } from 'vue'
 import { VueFlow, type Connection, type Node, type Edge, type NodeTypesObject } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
@@ -192,6 +193,7 @@ import EndNode from './components/nodes/EndNode.vue'
 import PropertyPanel from './components/PropertyPanel.vue'
 import WorkflowSimulator from './components/WorkflowSimulator.vue'
 import ConditionRulesPanel from './components/ConditionRulesPanel.vue'
+import { parseSalesApprovalAmountThreshold } from './lib/salesApprovalCondition'
 import type { SimulatorInput } from './composables/useSimulator'
 import {
   getDecisionTypes,
@@ -221,14 +223,17 @@ import '@vue-flow/controls/dist/style.css'
 
 // embedded=true: 当此组件被 canvas-editor 作为 Tab 内嵌时, 隐藏 h2 title 并
 // 调整高度以适应 canvas-editor 的 tab 容器 (Canvas 已有自己的 header + breadcrumb).
-const props = defineProps<{ embedded?: boolean }>()
+const props = defineProps<{
+  embedded?: boolean
+  initialDecisionType?: DecisionType
+}>()
 
 // ==================== State ====================
 
 const authStore = useAuthStore()
 const factoryId = computed(() => authStore.factoryId)
 
-const selectedDecisionType = ref<DecisionType>('QUALITY_RELEASE')
+const selectedDecisionType = ref<DecisionType>(props.initialDecisionType ?? 'QUALITY_RELEASE')
 const workflowName = ref('')
 const saving = ref(false)
 
@@ -296,6 +301,10 @@ function openRulesPanel() {
   const sel = selectedElement.value
   if (!sel || sel.kind !== 'node' || sel.type !== 'condition') {
     ElMessage.warning('仅 condition 节点支持流转规则')
+    return
+  }
+  if (selectedDecisionType.value === 'SALES_ORDER_APPROVAL') {
+    ElMessage.info('销售订单金额分流请选中通向审批节点的连线，在右侧填写金额阈值')
     return
   }
   if (!currentWorkflow.value?.id) {
@@ -490,13 +499,20 @@ function onNodeClick({ node }: { node: Node }) {
 }
 
 function onEdgeClick({ edge }: { edge: Edge }) {
+  const sourceNode = nodes.value.find(node => node.id === edge.source)
+  const targetNode = nodes.value.find(node => node.id === edge.target)
+  const condition = (edge.data?.condition as string) ?? ''
   selectedElement.value = {
     kind: 'edge',
     id: edge.id,
     data: {
       label: edge.label ? String(edge.label) : '',
-      condition: (edge.data?.condition as string) ?? '',
+      condition,
       priority: Number(edge.data?.priority ?? 0),
+      salesAmountThresholdEligible: (
+        (sourceNode?.type === 'condition' && targetNode?.type === 'approval')
+        || parseSalesApprovalAmountThreshold(condition) !== null
+      ),
     },
   }
 }
@@ -754,6 +770,16 @@ async function refreshWorkflowList() {
     console.warn('[refreshWorkflowList failed]', e)
   }
 }
+
+watch(
+  () => props.initialDecisionType,
+  async (nextDecisionType) => {
+    if (!nextDecisionType || nextDecisionType === selectedDecisionType.value) return
+    selectedDecisionType.value = nextDecisionType
+    resetEditor()
+    await refreshWorkflowList()
+  },
+)
 
 async function onWorkflowSelectionChange(id: string | undefined) {
   if (!factoryId.value || !id) {

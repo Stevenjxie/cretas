@@ -37,7 +37,11 @@
         <div class="canvas-content">
           <!-- Flow tabs (Phase A) -->
           <WorkflowDesigner v-if="activeTab === 'workflow' && selectedModule" :factory-id="factoryId" :module-code="selectedModule" />
-          <ApprovalWorkflowEditor v-else-if="activeTab === 'approval'" :embedded="true" />
+          <ApprovalWorkflowEditor
+            v-else-if="activeTab === 'approval'"
+            :embedded="true"
+            :initial-decision-type="initialApprovalDecisionType"
+          />
           <TriggerChainDesigner v-else-if="activeTab === 'triggers'" :factory-id="factoryId" />
           <ValidationRulePanel v-else-if="activeTab === 'validation'" :factory-id="factoryId" :module-code="selectedModule" />
 
@@ -122,12 +126,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useCanvasEditor } from './composables/useCanvasEditor'
 import { aiApplyDiffs, submitForReview, approveConfig, rejectConfig, publishNow as apiPublishNow, cancelApproval as apiCancelApproval } from '@/api/canvasApi'
 import { saveModuleConfig } from '@/api/configApi'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { ConfigDiff } from '@/types/canvas'
+import type { DecisionType } from '@/api/approvalWorkflow'
 
 // Components
 import CanvasHeader from './components/CanvasHeader.vue'
@@ -180,6 +186,30 @@ const {
   toggleLeft, toggleRight, enterFocusMode, exitFocusMode,
   loadVersion, applyResponsive, clearDirty,
 } = useCanvasEditor()
+const route = useRoute()
+
+const initialApprovalDecisionType = computed<DecisionType | undefined>(() => {
+  const value = Array.isArray(route.query.decisionType)
+    ? route.query.decisionType[0]
+    : route.query.decisionType
+  return value === 'SALES_ORDER_APPROVAL' ? value : undefined
+})
+
+function applyRouteDeepLink() {
+  const tab = Array.isArray(route.query.tab) ? route.query.tab[0] : route.query.tab
+  if (tab === 'approval') {
+    activeTab.value = 'approval'
+    isOnboarding.value = false
+  } else if (tab === 'workflow' || tab == null) {
+    activeTab.value = 'workflow'
+  }
+}
+
+watch(
+  () => [route.query.tab, route.query.decisionType],
+  applyRouteDeepLink,
+  { immediate: true },
+)
 
 // Round 7a: wrap every action handler with an in-flight lock. CanvasHeader's
 // emitLocked() already drops duplicate clicks client-side; this ensures that
@@ -295,8 +325,12 @@ function onKeydown(e: KeyboardEvent) {
 
 function checkScreen() { screenTooSmall.value = window.innerWidth < 1024 }
 
-onMounted(() => {
-  loadVersion()
+onMounted(async () => {
+  applyRouteDeepLink()
+  await loadVersion()
+  // Deep links must open the requested editor even when the generic Canvas
+  // onboarding heuristic would otherwise cover the tab.
+  applyRouteDeepLink()
   applyResponsive()
   checkScreen()
   window.addEventListener('keydown', onKeydown)

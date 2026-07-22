@@ -8,13 +8,20 @@ import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.config.ApprovalWorkflow;
 import com.cretas.aims.entity.config.ApprovalWorkflowNode;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
+import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.entity.enums.SalesOrderStatus;
+import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
+import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
+import com.cretas.aims.service.workflow.OaActionIdempotencyService;
+import com.cretas.aims.service.inventory.PurchaseService;
+import com.cretas.aims.service.inventory.SalesService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -48,6 +55,8 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.doReturn;
 
 /**
  * Tests for {@link WorkflowInstanceController} — issue #20 Phase 1 closure for ADR-001 AC-3.
@@ -82,6 +91,10 @@ class WorkflowInstanceControllerTest {
     @Mock private UserRepository userRepository;
     @Mock private MobileService mobileService;
     @Mock private PurchaseOrderRepository purchaseOrderRepository;
+    @Mock private SalesOrderRepository salesOrderRepository;
+    @Mock private OaActionIdempotencyService oaActionIdempotencyService;
+    @Mock private PurchaseService purchaseService;
+    @Mock private SalesService salesService;
 
     @InjectMocks private WorkflowInstanceController controller;
 
@@ -90,6 +103,13 @@ class WorkflowInstanceControllerTest {
         // purchaseOrderRepository 在 controller 是 @Autowired(required=false) 字段注入,
         // @InjectMocks 不会自动注入, 用 ReflectionTestUtils.
         ReflectionTestUtils.setField(controller, "purchaseOrderRepository", purchaseOrderRepository);
+        ReflectionTestUtils.setField(controller, "salesOrderRepository", salesOrderRepository);
+        ReflectionTestUtils.setField(controller, "oaActionIdempotencyService", oaActionIdempotencyService);
+        lenient().when(oaActionIdempotencyService.execute(any(), any())).thenAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            java.util.function.Supplier<Map<String, Object>> action = invocation.getArgument(1);
+            return action.get();
+        });
     }
 
     // ==================== Fixtures ====================
@@ -338,5 +358,97 @@ class WorkflowInstanceControllerTest {
                 eq(FACTORY_ID), eq(108L), any(Pageable.class));
         verify(workflowEngine).findCopiedTo(
                 eq(FACTORY_ID), eq(108L), eq("finance_manager"), any(Pageable.class));
+    }
+
+    @Test
+    @DisplayName("sales OA action delegates to sales domain adapter and returns projected status")
+    void sales_oa_action_delegates_to_sales_domain_adapter() {
+        mockAuth(108L, "f006_finance", "finance_manager");
+        ApprovalWorkflowInstance running = buildInstance(
+                "inst-sales", "wf-sales", "SALES_ORDER", "so-1",
+                List.of("approval_finance"), 200L);
+        when(workflowEngine.getInstance(FACTORY_ID, "inst-sales")).thenReturn(Optional.of(running));
+        when(workflowEngine.canTransition(eq(running), any(User.class)))
+                .thenReturn(true);
+
+        SalesOrder order = new SalesOrder();
+        order.setId("so-1");
+        order.setStatus(SalesOrderStatus.FINANCE_APPROVED);
+        when(salesService.applyWorkflowAction(
+                eq(FACTORY_ID), eq("so-1"), eq("inst-sales"), eq(108L),
+                eq("finance_manager"), eq(HistoryAction.APPROVE), eq("approved")))
+                .thenReturn(order);
+        ApprovalWorkflowInstance approved = buildInstance(
+                "inst-sales", "wf-sales", "SALES_ORDER", "so-1", List.of(), 200L);
+        approved.setStatus(InstanceStatus.APPROVED);
+        when(workflowEngine.getLatestInstance(FACTORY_ID, "SALES_ORDER", "so-1"))
+                .thenReturn(Optional.of(approved));
+
+        ApiResponse<Map<String, Object>> response = controller.executeAction(
+                FACTORY_ID,
+                "inst-sales",
+                AUTH_HEADER,
+                new WorkflowInstanceController.WorkflowActionRequest(
+                        "APPROVE", "approved", "idem-sales-1", "approval_finance"));
+
+        assertTrue(response.getSuccess());
+        assertEquals("APPROVED", response.getData().get("workflowStatus"));
+        assertEquals("FINANCE_APPROVED", response.getData().get("businessStatus"));
+        verify(salesService).applyWorkflowAction(
+                FACTORY_ID, "so-1", "inst-sales", 108L, "finance_manager",
+                HistoryAction.APPROVE, "approved");
+    }
+
+    @Test
+    void pending_sales_order_summary_is_batch_hydrated() {
+        mockAuth(108L, "f006_finance", "finance_manager");
+        ApprovalWorkflowInstance instance = buildInstance(
+                "inst-sales-summary", "wf-sales", "SALES_ORDER", "so-summary",
+                List.of("approval_finance"), 200L);
+        when(workflowEngine.findPendingForRole(
+                eq(FACTORY_ID), eq("finance_manager"), eq("SALES_ORDER"), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(instance), PageRequest.of(0, 20), 1L));
+        buildWorkflow("wf-sales", "财务审批", "finance_manager");
+        SalesOrder order = new SalesOrder();
+        order.setId("so-summary");
+        order.setOrderNumber("SO-20260722-0099");
+        order.setCustomerName("测试客户");
+        order.setTotalAmount(new BigDecimal("1440.00"));
+        when(salesOrderRepository.findAllById(any())).thenReturn(List.of(order));
+        when(userRepository.findAllById(any())).thenReturn(List.of());
+
+        ApiResponse<PageResponse<WorkflowInstancePendingDTO>> response =
+                controller.getPendingForUser(
+                        FACTORY_ID, AUTH_HEADER, "SALES_ORDER", 1, 20);
+
+        assertEquals("SO-20260722-0099 ¥1440.00 (测试客户)",
+                response.getData().getContent().get(0).getBusinessSummary());
+        verify(salesOrderRepository).findAllById(any());
+    }
+
+    @Test
+    void completed_action_replay_returns_durable_result_without_domain_reexecution() {
+        mockAuth(108L, "f006_finance", "finance_manager");
+        ApprovalWorkflowInstance approved = buildInstance(
+                "inst-replay", "wf-sales", "SALES_ORDER", "so-replay", List.of(), 200L);
+        approved.setStatus(InstanceStatus.APPROVED);
+        when(workflowEngine.getInstance(FACTORY_ID, "inst-replay")).thenReturn(Optional.of(approved));
+        doReturn(Map.of(
+                "instanceId", "inst-replay",
+                "workflowStatus", "APPROVED",
+                "businessEntityId", "so-replay",
+                "businessStatus", "FINANCE_APPROVED"))
+                .when(oaActionIdempotencyService).execute(any(), any());
+
+        ApiResponse<Map<String, Object>> response = controller.executeAction(
+                FACTORY_ID,
+                "inst-replay",
+                AUTH_HEADER,
+                new WorkflowInstanceController.WorkflowActionRequest(
+                        "APPROVE", "approved", "same-key", "approval_finance"));
+
+        assertEquals("APPROVED", response.getData().get("workflowStatus"));
+        verify(salesService, never()).applyWorkflowAction(
+                anyString(), anyString(), anyString(), any(), anyString(), any(), any());
     }
 }

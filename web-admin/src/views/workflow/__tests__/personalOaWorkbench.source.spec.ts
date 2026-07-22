@@ -24,10 +24,11 @@ describe('personal OA workbench contract', () => {
     expect(router).toContain("title: '抄送我的', module: 'dashboard'");
   });
 
-  it('uses truthful endpoints and does not expose fake domain actions', () => {
+  it('uses truthful endpoints and only enables domains backed by the unified action adapter', () => {
     expect(acted).toContain('/workflow/instances/acted');
     expect(copied).toContain('/workflow/instances/copied');
-    expect(pending).toContain("row.moduleCode === 'PURCHASE_ORDER'");
+    expect(pending).toContain("new Set(['PURCHASE_ORDER', 'SALES_ORDER'])");
+    expect(pending).toContain('v-if="canAct(row)"');
     expect(pending).toContain('该业务域正在接入统一 OA，当前仅可查看审批进度');
   });
 

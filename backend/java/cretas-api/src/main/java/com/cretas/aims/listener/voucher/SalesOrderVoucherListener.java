@@ -1,12 +1,8 @@
 package com.cretas.aims.listener.voucher;
 
-import com.cretas.aims.entity.enums.VoucherFlag;
 import com.cretas.aims.entity.enums.VoucherStatus;
 import com.cretas.aims.entity.finance.Voucher;
-import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.event.SalesOrderCancelledEvent;
-import com.cretas.aims.event.SalesOrderConfirmedEvent;
-import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.voucher.VoucherService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -30,18 +26,7 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class SalesOrderVoucherListener {
 
-    private final SalesOrderRepository salesOrderRepo;
     private final VoucherService voucherService;
-
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    @Async
-    public void onSalesOrderConfirmed(SalesOrderConfirmedEvent event) {
-        try {
-            handleVoucherGeneration(event.getFactoryId(), event.getSalesOrderId());
-        } catch (Exception e) {
-            log.error("SalesOrder voucher hook failed: orderId={}", event.getSalesOrderId(), e);
-        }
-    }
 
     /**
      * Bug 3 修复: 销售订单取消 → 作废其 SALES_RECEIPT 凭证 (若存在)。
@@ -75,25 +60,4 @@ public class SalesOrderVoucherListener {
         }
     }
 
-    private void handleVoucherGeneration(String factoryId, String salesOrderId) {
-        SalesOrder so = salesOrderRepo.findById(salesOrderId).orElse(null);
-        if (so == null) {
-            log.warn("SO not found after confirmed event: {}", salesOrderId);
-            return;
-        }
-        if (so.getVflag() != VoucherFlag.UNCREATED) {
-            log.debug("SO {} vflag={}, skip voucher generation", salesOrderId, so.getVflag());
-            return;
-        }
-        so.setVflag(VoucherFlag.PENDING);
-        salesOrderRepo.save(so);
-        try {
-            voucherService.createFromBusiness(factoryId, "SALES_ORDER", salesOrderId);
-            so.setVflag(VoucherFlag.CREATED);
-        } catch (Exception e) {
-            so.setVflag(VoucherFlag.FAILED);
-            log.error("Voucher generation failed for SO {}", salesOrderId, e);
-        }
-        salesOrderRepo.save(so);
-    }
 }

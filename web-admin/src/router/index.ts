@@ -784,19 +784,18 @@ const businessRoutes: RouteRecordRaw[] = [
           },
           // Sprint4-H F-AR-1 (Chat H): 销售订单财务审核 PC 入口.
           // 销售员 submitForFinanceReview 后状态进 PENDING_FINANCE_REVIEW,
-          // 财务在此查看成本核算 (BOM 标准/预估/实际/利润) 并 approve/reject.
-          // RBAC: detail.vue v-if + 后端 @RequirePermission("finance:read_write") 双层保护.
+          // 历史入口保留成本核算与审批状态只读展示；审批动作统一前往个人 OA。
           {
             path: 'finance-review',
             name: 'SalesOrderFinanceReviewList',
             component: () => import('@/views/sales/finance-review/list.vue'),
-            meta: { requiresAuth: true, title: '财务待审销售单', module: 'finance', roles: financeReviewRoles }
+            meta: { requiresAuth: true, title: '销售订单审批进度', module: 'finance', roles: financeReviewRoles }
           },
           {
             path: 'finance-review/:id',
             name: 'SalesOrderFinanceReviewDetail',
             component: () => import('@/views/sales/finance-review/detail.vue'),
-            meta: { requiresAuth: true, title: '销售财务审核详情', module: 'finance', hidden: true, roles: financeReviewRoles }
+            meta: { requiresAuth: true, title: '销售订单成本与审批进度', module: 'finance', hidden: true, roles: financeReviewRoles }
           },
           // Sprint 4 W2 S-REMIND-1: 我的提醒
           {

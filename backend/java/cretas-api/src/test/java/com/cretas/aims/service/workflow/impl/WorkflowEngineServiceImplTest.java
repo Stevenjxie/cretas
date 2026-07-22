@@ -121,8 +121,15 @@ class WorkflowEngineServiceImplTest {
     private ApprovalWorkflow buildWorkflow(List<ApprovalWorkflowNode> nodes,
                                             List<ApprovalWorkflowEdge> edges,
                                             String startNodeId) {
+        return buildWorkflow(DecisionType.PURCHASE_ORDER_APPROVAL, nodes, edges, startNodeId);
+    }
+
+    private ApprovalWorkflow buildWorkflow(DecisionType decisionType,
+                                            List<ApprovalWorkflowNode> nodes,
+                                            List<ApprovalWorkflowEdge> edges,
+                                            String startNodeId) {
         ApprovalWorkflow w = ApprovalWorkflow.builder()
-                .decisionType(DecisionType.PURCHASE_ORDER_APPROVAL)
+                .decisionType(decisionType)
                 .name("test-" + UUID.randomUUID())
                 .startNodeId(startNodeId)
                 .build();
@@ -135,7 +142,7 @@ class WorkflowEngineServiceImplTest {
             throw new RuntimeException(e);
         }
         // Mock service lookups.
-        lenient().when(workflowService.getActiveByDecisionType(FACTORY_ID, DecisionType.PURCHASE_ORDER_APPROVAL))
+        lenient().when(workflowService.getActiveByDecisionType(FACTORY_ID, decisionType))
                 .thenReturn(Optional.of(w));
         lenient().when(workflowService.getById(FACTORY_ID, WORKFLOW_ID)).thenReturn(Optional.of(w));
         return w;
@@ -178,6 +185,48 @@ class WorkflowEngineServiceImplTest {
     }
 
     // ==================== Tests ====================
+
+    @Test
+    @DisplayName("F006 sales threshold: <=5000 auto-completes OA, >5000 creates finance task")
+    void sales_amount_threshold_routes_inside_persisted_oa() {
+        buildWorkflow(
+                DecisionType.SALES_ORDER_APPROVAL,
+                List.of(
+                        node("start", "start", null),
+                        node("external", "condition", null),
+                        node("amount", "condition", null),
+                        node("finance", "approval", Map.of(
+                                "approverRoles", List.of("finance_manager"),
+                                "requiredApprovers", 1)),
+                        node("end_auto", "end", Map.of("outcome", "APPROVED")),
+                        node("end_approved", "end", Map.of("outcome", "APPROVED"))),
+                List.of(
+                        edge("e1", "start", "external", null, 0, null),
+                        edge("e2", "external", "end_auto", "#externalOrder == true", 0, "外部渠道"),
+                        edge("e3", "external", "amount", null, 99, "DEFAULT"),
+                        edge("e4", "amount", "finance", "#amount > 5000", 0, "超过5000元"),
+                        edge("e5", "amount", "end_auto", null, 99, "DEFAULT"),
+                        edge("e6", "finance", "end_approved", null, 0, "通过")),
+                "start");
+
+        ApprovalWorkflowInstance lowAmount = engine.startWorkflow(
+                FACTORY_ID, "SALES_ORDER", "SO-LOW", Map.of("amount", 5000, "externalOrder", false), INITIATOR_ID);
+        ApprovalWorkflowInstance highAmount = engine.startWorkflow(
+                FACTORY_ID, "SALES_ORDER", "SO-HIGH", Map.of("amount", 5000.01, "externalOrder", false), INITIATOR_ID);
+        ApprovalWorkflowInstance externalHighAmount = engine.startWorkflow(
+                FACTORY_ID,
+                "SALES_ORDER",
+                "SO-EXTERNAL-HIGH",
+                Map.of("amount", 5000.01, "externalOrder", true),
+                INITIATOR_ID);
+
+        assertEquals(InstanceStatus.APPROVED, lowAmount.getStatus());
+        assertTrue(lowAmount.getCurrentNodeIds().isEmpty());
+        assertEquals(InstanceStatus.RUNNING, highAmount.getStatus());
+        assertEquals(List.of("finance"), highAmount.getCurrentNodeIds());
+        assertEquals(InstanceStatus.APPROVED, externalHighAmount.getStatus());
+        assertTrue(externalHighAmount.getCurrentNodeIds().isEmpty());
+    }
 
     @Test
     @DisplayName("happy_path_2_step_approval: start → approve(node1) → approve(node2) → APPROVED")

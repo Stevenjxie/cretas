@@ -22,6 +22,8 @@ import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
+import com.cretas.aims.entity.config.ApprovalWorkflowNode;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.BusinessLinkRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
@@ -32,6 +34,8 @@ import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.inventory.SalesService;
 import com.cretas.aims.service.product.ProductPackagingSpecService;
+import com.cretas.aims.service.ApprovalWorkflowService;
+import com.cretas.aims.service.workflow.WorkflowEngineService;
 import com.cretas.aims.utils.TokenUtils;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -53,8 +57,14 @@ import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Positive;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 
 @Slf4j
 @RestController
@@ -79,6 +89,12 @@ public class SalesController {
     // 改价留痕 + 审批
     private final SalesPriceAdjustmentService priceAdjustmentService;
     private final ProductPackagingSpecService productPackagingSpecService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private WorkflowEngineService workflowEngine;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ApprovalWorkflowService approvalWorkflowService;
 
     /** Sprint 5 Track C-2 — owner_type / target_type literal pinned to SalesOrder. */
     private static final String SO_ENTITY_TYPE = "SALES_ORDER";
@@ -398,6 +414,78 @@ public class SalesController {
         return ApiResponse.success("查询成功", order);
     }
 
+    @GetMapping("/orders/{orderId}/approval-progress")
+    @Operation(summary = "销售订单 OA 审批进度（只读）")
+    @RequirePermission({"sales:read_write", "sales:read"})
+    public ApiResponse<Map<String, Object>> getApprovalProgress(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String orderId) {
+        salesService.getSalesOrderById(factoryId, orderId);
+        if (workflowEngine == null) {
+            return ApiResponse.success(Map.of(
+                    "hasInstance", false,
+                    "message", "OA 审批服务不可用"));
+        }
+        Optional<ApprovalWorkflowInstance> found = workflowEngine.getLatestInstance(
+                factoryId, "SALES_ORDER", orderId);
+        if (found.isEmpty()) {
+            return ApiResponse.success(Map.of(
+                    "hasInstance", false,
+                    "message", "尚未创建 OA 审批实例"));
+        }
+
+        ApprovalWorkflowInstance instance = found.get();
+        List<String> currentNodeIds = instance.getCurrentNodeIds() == null
+                ? List.of() : instance.getCurrentNodeIds();
+        List<String> nodeNames = new ArrayList<>();
+        Set<String> roles = new LinkedHashSet<>();
+        if (approvalWorkflowService != null) {
+            approvalWorkflowService.getById(factoryId, instance.getWorkflowId()).ifPresent(workflow -> {
+                Map<String, ApprovalWorkflowNode> nodes = new java.util.HashMap<>();
+                for (ApprovalWorkflowNode node : approvalWorkflowService.deserializeNodes(workflow.getNodesJson())) {
+                    nodes.put(node.getId(), node);
+                }
+                for (String nodeId : currentNodeIds) {
+                    ApprovalWorkflowNode node = nodes.get(nodeId);
+                    nodeNames.add(node == null || node.getLabel() == null ? nodeId : node.getLabel());
+                    if (node != null && node.getConfig() != null) {
+                        Object configured = node.getConfig().get("approverRoles");
+                        if (configured instanceof Iterable<?> iterable) {
+                            iterable.forEach(value -> roles.add(String.valueOf(value)));
+                        }
+                    }
+                }
+            });
+        }
+
+        Set<String> assignees = new LinkedHashSet<>();
+        for (String role : roles) {
+            userRepository.findByFactoryIdAndRoleCode(factoryId, role).stream()
+                    .filter(user -> Boolean.TRUE.equals(user.getIsActive()))
+                    .map(User::getUsername)
+                    .filter(java.util.Objects::nonNull)
+                    .forEach(assignees::add);
+        }
+        long stayMinutes = instance.getInitiatedAt() == null
+                ? 0L
+                : Math.max(0L, Duration.between(instance.getInitiatedAt(), LocalDateTime.now()).toMinutes());
+        Map<String, Object> progress = new java.util.LinkedHashMap<>();
+        progress.put("hasInstance", true);
+        progress.put("instanceId", instance.getId());
+        progress.put("workflowId", instance.getWorkflowId());
+        progress.put("status", instance.getStatus().name());
+        progress.put("currentNodeIds", currentNodeIds);
+        progress.put("currentNodeNames", nodeNames);
+        progress.put("approverRoles", roles);
+        progress.put("assignees", assignees);
+        progress.put("initiatedBy", instance.getInitiatedBy());
+        progress.put("initiatedAt", instance.getInitiatedAt());
+        progress.put("completedAt", instance.getCompletedAt());
+        progress.put("stayMinutes", stayMinutes);
+        progress.put("deepLink", "/workflow/my-created?instanceId=" + instance.getId());
+        return ApiResponse.success(progress);
+    }
+
     @PostMapping("/orders/{orderId}/items/{itemId}/repair-source-warehouse")
     @Operation(summary = "幂等补齐历史销售订单行来源仓",
             description = "只允许填充缺失值；相同值重放不写入，不同既有值拒绝覆盖")
@@ -428,8 +516,10 @@ public class SalesController {
     @RequirePermission("sales:read_write")
     public ApiResponse<SalesOrder> confirmOrder(
             @PathVariable @NotBlank String factoryId,
-            @PathVariable @NotBlank String orderId) {
-        SalesOrder order = salesService.confirmOrder(factoryId, orderId);
+            @PathVariable @NotBlank String orderId,
+            @RequestHeader("Authorization") String authorization) {
+        Long initiatorUserId = extractUserId(authorization);
+        SalesOrder order = salesService.confirmOrder(factoryId, orderId, initiatorUserId);
         return ApiResponse.success("销售订单已确认", order);
     }
 
@@ -488,8 +578,10 @@ public class SalesController {
     @RequirePermission("sales:read_write")
     public ApiResponse<SalesOrder> submitForFinanceReview(
             @PathVariable @NotBlank String factoryId,
-            @PathVariable @NotBlank String orderId) {
-        SalesOrder order = salesService.submitForFinanceReview(factoryId, orderId);
+            @PathVariable @NotBlank String orderId,
+            @RequestHeader("Authorization") String authorization) {
+        Long initiatorUserId = extractUserId(authorization);
+        SalesOrder order = salesService.submitForFinanceReview(factoryId, orderId, initiatorUserId);
         return ApiResponse.success("销售订单已提交财务审核", order);
     }
 

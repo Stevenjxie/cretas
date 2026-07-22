@@ -22,6 +22,7 @@ import com.cretas.aims.entity.inventory.*;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus;
+import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.entity.ProductType;
@@ -798,42 +799,43 @@ public class SalesServiceImpl implements SalesService {
     @Transactional
     @Loggable(module = "SALES_ORDER", action = "CONFIRM", entityType = "SalesOrder",
               entityIdParam = "orderId")
-    public SalesOrder confirmOrder(String factoryId, String orderId) {
-        SalesOrder order = getSalesOrderById(factoryId, orderId);
+    public SalesOrder confirmOrder(String factoryId, String orderId, Long initiatorUserId) {
+        SalesOrder order = salesOrderRepository.findByIdAndFactoryIdForUpdate(orderId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("销售订单不存在: " + orderId));
         runConfiguredValidation(factoryId, "STATUS_CHANGE", Map.of(
                 "status", order.getStatus().name(), "targetStatus", "CONFIRMED"));
         if (order.getStatus() != SalesOrderStatus.DRAFT) {
             throw new BusinessException(409, "只有草稿状态的订单可以确认")
                     .withHint("请刷新订单列表查看最新状态");
         }
+        requireActiveSalesWorkflow(factoryId);
         checkTransitionAllowed(factoryId, order.getStatus().name(), "CONFIRMED");
         order.setStatus(SalesOrderStatus.CONFIRMED);
         order.setConfirmedAt(LocalDateTime.now());
         SalesOrder saved = salesOrderRepository.save(order);
         log.info("确认销售订单: orderId={}, orderNumber={}", orderId, saved.getOrderNumber());
 
-        // 注意: 供应链联动不再在确认时触发
-        // 新流程: CONFIRMED -> 提交财务审核 -> 财务批准后才触发供应链联动
-        // 发布确认事件仅用于通知（不再驱动生产）
-        try {
-            applicationEventPublisher.publishEvent(new SalesOrderConfirmedEvent(this, factoryId, saved.getId()));
-            log.info("已发布SalesOrderConfirmedEvent(仅通知): SO={}", saved.getId());
-        } catch (Exception e) {
-            log.error("发布SalesOrderConfirmedEvent失败: SO={}", saved.getId(), e);
-        }
+        SalesOrder routed = routeSalesOrderByApprovalPolicy(
+                factoryId, saved, "订单确认后进入统一 OA 审批", initiatorUserId);
 
-        if (!hasSalesApprovalPolicy(factoryId)) {
-            return saved;
+        // Only notify after the persisted OA route has been established. A missing or
+        // invalid graph must roll the transaction back without dispatching downstream work.
+        try {
+            applicationEventPublisher.publishEvent(new SalesOrderConfirmedEvent(this, factoryId, routed.getId()));
+            log.info("已发布SalesOrderConfirmedEvent(仅通知): SO={}", routed.getId());
+        } catch (Exception e) {
+            log.error("发布SalesOrderConfirmedEvent失败: SO={}", routed.getId(), e);
         }
-        return routeSalesOrderByApprovalPolicy(factoryId, saved, "订单确认后按销售审批阈值自动提交", null);
+        return routed;
     }
 
     @Override
     @Transactional
     @Loggable(module = "SALES_ORDER", action = "SUBMIT_FINANCE", entityType = "SalesOrder",
               entityIdParam = "orderId")
-    public SalesOrder submitForFinanceReview(String factoryId, String orderId) {
-        SalesOrder order = getSalesOrderById(factoryId, orderId);
+    public SalesOrder submitForFinanceReview(String factoryId, String orderId, Long initiatorUserId) {
+        SalesOrder order = salesOrderRepository.findByIdAndFactoryIdForUpdate(orderId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("销售订单不存在: " + orderId));
         runConfiguredValidation(factoryId, "STATUS_CHANGE", Map.of(
                 "status", order.getStatus().name(), "targetStatus", "PENDING_FINANCE_REVIEW"));
         if (order.getStatus() != SalesOrderStatus.CONFIRMED
@@ -842,24 +844,8 @@ public class SalesServiceImpl implements SalesService {
                     .withHint("请刷新订单列表查看最新状态");
         }
 
-        if (hasSalesApprovalPolicy(factoryId)) {
-            return routeSalesOrderByApprovalPolicy(factoryId, order, "按销售审批阈值提交", null);
-        }
-
-        // E-2 空价草稿支持: 进入财审前强制所有行有单价且总额 > 0
-        // 需求依据: 行717 "后期审核时报价/单价应有数据不能空"
-        // (草稿/确认阶段允许空价，提审是第一个强制点)
-        validatePriceBeforeFinanceReview(factoryId, orderId, order);
-
-        checkTransitionAllowed(factoryId, order.getStatus().name(), "PENDING_FINANCE_REVIEW");
-        order.setStatus(SalesOrderStatus.PENDING_FINANCE_REVIEW);
-        // 清除上一次审核记录，重新审核
-        order.setFinanceReviewedBy(null);
-        order.setFinanceReviewedAt(null);
-        order.setFinanceReviewNotes(null);
-        SalesOrder saved = salesOrderRepository.save(order);
-        log.info("销售订单已提交财务审核: orderId={}, orderNumber={}", orderId, saved.getOrderNumber());
-        return saved;
+        return routeSalesOrderByApprovalPolicy(
+                factoryId, order, "销售订单重新进入统一 OA 审批", initiatorUserId);
     }
 
     /**
@@ -906,35 +892,12 @@ public class SalesServiceImpl implements SalesService {
         }
     }
 
-    private SalesOrder routeSalesOrderByApprovalPolicy(String factoryId, SalesOrder order, String notes, Long reviewerId) {
+    private SalesOrder routeSalesOrderByApprovalPolicy(
+            String factoryId, SalesOrder order, String notes, Long initiatorUserId) {
         validatePriceBeforeFinanceReview(factoryId, order.getId(), order);
 
         Map<String, Object> context = buildSalesApprovalContext(order);
-        if (Boolean.TRUE.equals(context.get("externalOrder"))) {
-            return approveFinanceForOrder(factoryId, order, "外部渠道订单免审，自动通过", null, reviewerId);
-        }
-
-        if (hasActiveSalesWorkflow(factoryId)) {
-            return routeSalesOrderByWorkflow(factoryId, order, context, notes, reviewerId);
-        }
-
-        boolean requiresApproval = approvalChainService != null
-                && approvalChainService.requiresApproval(factoryId, DecisionType.SALES_ORDER_APPROVAL, context);
-        String decisionSnapshot = buildSalesApprovalDecisionSnapshot(factoryId, order, context, requiresApproval);
-
-        if (requiresApproval) {
-            checkTransitionAllowed(factoryId, order.getStatus().name(), "PENDING_FINANCE_REVIEW");
-            order.setStatus(SalesOrderStatus.PENDING_FINANCE_REVIEW);
-            order.setFinanceReviewedBy(null);
-            order.setFinanceReviewedAt(null);
-            order.setFinanceReviewNotes(decisionSnapshot);
-            SalesOrder saved = salesOrderRepository.save(order);
-            log.info("销售订单触发阈值审批: orderId={}, orderNumber={}, amount={}",
-                    order.getId(), saved.getOrderNumber(), saved.getTotalAmount());
-            return saved;
-        }
-
-        return approveFinanceForOrder(factoryId, order, decisionSnapshot, null, reviewerId);
+        return routeSalesOrderByWorkflow(factoryId, order, context, notes, initiatorUserId);
     }
 
     private String buildSalesApprovalDecisionSnapshot(
@@ -974,20 +937,26 @@ public class SalesServiceImpl implements SalesService {
         return rule == null || rule.isBlank() ? "未配置" : rule;
     }
 
-    private boolean hasSalesApprovalPolicy(String factoryId) {
-        if (hasActiveSalesWorkflow(factoryId)) {
-            return true;
-        }
-        return approvalChainService != null
-                && !approvalChainService.getConfigsByDecisionType(factoryId, DecisionType.SALES_ORDER_APPROVAL).isEmpty();
+    private boolean hasActiveSalesWorkflow(String factoryId) {
+        return approvalWorkflowService != null
+                && approvalWorkflowService.getActiveByDecisionType(
+                        factoryId, DecisionType.SALES_ORDER_APPROVAL).isPresent();
     }
 
-    private boolean hasActiveSalesWorkflow(String factoryId) {
-        if (workflowEngine != null && workflowEngine.hasActiveWorkflow(factoryId, "SALES_ORDER")) {
-            return true;
+    private ApprovalWorkflow requireActiveSalesWorkflow(String factoryId) {
+        if (approvalWorkflowService == null || workflowEngine == null) {
+            throw new BusinessException(422, "当前工厂未配置已启用的销售订单 OA 审批流程")
+                    .withCode("SALES_APPROVAL_WORKFLOW_REQUIRED")
+                    .withHint("请先在统一 OA 中发布并启用 SALES_ORDER 审批流程")
+                    .withHintTarget("approvalWorkflow");
         }
-        return approvalWorkflowService != null
-                && approvalWorkflowService.getActiveByDecisionType(factoryId, DecisionType.SALES_ORDER_APPROVAL).isPresent();
+        return approvalWorkflowService.getActiveByDecisionType(
+                        factoryId, DecisionType.SALES_ORDER_APPROVAL)
+                .orElseThrow(() -> new BusinessException(422,
+                        "当前工厂未配置已启用的销售订单 OA 审批流程")
+                        .withCode("SALES_APPROVAL_WORKFLOW_REQUIRED")
+                        .withHint("请先在统一 OA 中发布并启用销售订单审批流程")
+                        .withHintTarget("approvalWorkflow"));
     }
 
     private Map<String, Object> buildSalesApprovalContext(SalesOrder order) {
@@ -1055,18 +1024,18 @@ public class SalesServiceImpl implements SalesService {
     }
 
     private SalesOrder routeSalesOrderByWorkflow(String factoryId, SalesOrder order, Map<String, Object> context,
-                                                 String notes, Long reviewerId) {
-        if (workflowEngine == null) {
-            throw new BusinessException(409,
-                    "销售订单审批工作流已配置，但审批引擎不可用，无法判定是否需要财审")
-                    .withHint("请检查审批工作流引擎配置，或改用审批链金额阈值配置")
-                    .withHintTarget("approvalWorkflow");
+                                                 String notes, Long initiatorUserId) {
+        ApprovalWorkflow activeWorkflow = requireActiveSalesWorkflow(factoryId);
+        if (initiatorUserId == null) {
+            throw new BusinessException(401, "无法识别销售订单审批发起人")
+                    .withCode("SALES_APPROVAL_INITIATOR_REQUIRED");
         }
 
         ApprovalWorkflowInstance instance = workflowEngine.getCurrentInstance(factoryId, "SALES_ORDER", order.getId())
                 .filter(existing -> existing.getStatus() == InstanceStatus.RUNNING)
-                .orElseGet(() -> workflowEngine.startWorkflow(
-                        factoryId, "SALES_ORDER", order.getId(), context, order.getCreatedBy()));
+                .orElseGet(() -> workflowEngine.startWorkflowWithDefinition(
+                        factoryId, "SALES_ORDER", order.getId(), context, initiatorUserId,
+                        activeWorkflow));
 
         if (instance.getStatus() == InstanceStatus.RUNNING) {
             checkTransitionAllowed(factoryId, order.getStatus().name(), "PENDING_FINANCE_REVIEW");
@@ -1081,14 +1050,11 @@ public class SalesServiceImpl implements SalesService {
         }
 
         if (instance.getStatus() == InstanceStatus.APPROVED) {
-            return approveFinanceForOrder(factoryId, order, "销售审批工作流自动通过", null, reviewerId);
+            return approveFinanceForOrder(factoryId, order, "销售审批工作流自动通过", null, null);
         }
 
         if (instance.getStatus() == InstanceStatus.REJECTED) {
-            checkTransitionAllowed(factoryId, order.getStatus().name(), "FINANCE_REJECTED");
-            order.setStatus(SalesOrderStatus.FINANCE_REJECTED);
-            order.setFinanceReviewNotes("销售审批工作流自动拒绝");
-            return salesOrderRepository.save(order);
+            return rejectFinanceForOrder(factoryId, order, "销售审批工作流自动拒绝", null);
         }
 
         throw new BusinessException(409,
@@ -1122,6 +1088,62 @@ public class SalesServiceImpl implements SalesService {
 
     @Override
     @Transactional
+    @Loggable(module = "SALES_ORDER", action = "OA_ACTION", entityType = "SalesOrder",
+              entityIdParam = "orderId")
+    public SalesOrder applyWorkflowAction(String factoryId,
+                                          String orderId,
+                                          String instanceId,
+                                          Long actorId,
+                                          String actorRole,
+                                          HistoryAction action,
+                                          String notes) {
+        SalesOrder order = salesOrderRepository.findByIdAndFactoryIdForUpdate(orderId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("销售订单不存在: " + orderId));
+        if (workflowEngine == null) {
+            throw new BusinessException(503, "OA 审批服务不可用")
+                    .withCode("SALES_APPROVAL_ENGINE_UNAVAILABLE");
+        }
+        ApprovalWorkflowInstance instance = workflowEngine.getInstance(factoryId, instanceId)
+                .orElseThrow(() -> new ResourceNotFoundException("OA 审批实例不存在: " + instanceId));
+        if (!"SALES_ORDER".equals(instance.getModuleCode())
+                || !orderId.equals(instance.getBusinessEntityId())) {
+            throw new BusinessException(400, "审批实例与销售订单不匹配")
+                    .withCode("SALES_APPROVAL_IDENTITY_MISMATCH");
+        }
+        if (instance.getStatus() != InstanceStatus.RUNNING) {
+            return order;
+        }
+        if (actorId != null && actorId.equals(instance.getInitiatedBy())) {
+            throw new BusinessException(403, "发起人不能审批自己的销售订单")
+                    .withCode("SALES_SELF_APPROVAL_FORBIDDEN")
+                    .withHint("请由当前 OA 节点授权的其他审批人处理");
+        }
+        if (action == HistoryAction.REJECT && (notes == null || notes.isBlank())) {
+            throw new BusinessException(422, "驳回销售订单必须填写原因")
+                    .withHintTarget("notes");
+        }
+
+        ApprovalWorkflowInstance updated = workflowEngine.transitionNode(
+                instanceId, actorId, actorRole, action, notes);
+        if (updated.getStatus() == InstanceStatus.RUNNING) {
+            if (order.getStatus() != SalesOrderStatus.PENDING_FINANCE_REVIEW) {
+                checkTransitionAllowed(factoryId, order.getStatus().name(), "PENDING_FINANCE_REVIEW");
+                order.setStatus(SalesOrderStatus.PENDING_FINANCE_REVIEW);
+            }
+            return salesOrderRepository.save(order);
+        }
+        if (updated.getStatus() == InstanceStatus.APPROVED) {
+            return approveFinanceForOrder(factoryId, order, notes, null, actorId);
+        }
+        if (updated.getStatus() == InstanceStatus.REJECTED) {
+            return rejectFinanceForOrder(factoryId, order, notes, actorId);
+        }
+        throw new BusinessException(409, "销售订单 OA 审批实例状态无法回写: " + updated.getStatus())
+                .withCode("SALES_APPROVAL_STATE_UNSUPPORTED");
+    }
+
+    @Override
+    @Transactional
     public SalesOrder financeApproveOrder(String factoryId, String orderId, String notes, Long reviewerId) {
         return financeApproveOrder(factoryId, orderId, notes, null, reviewerId);
     }
@@ -1136,6 +1158,7 @@ public class SalesServiceImpl implements SalesService {
     public SalesOrder financeApproveOrder(String factoryId, String orderId, String notes,
                                            java.math.BigDecimal estimatedCost, Long reviewerId) {
         SalesOrder order = getSalesOrderById(factoryId, orderId);
+        assertNoOaApprovalBypass(factoryId, orderId);
         // 强制加载 items，防止事件处理器中 LazyInitializationException
         org.hibernate.Hibernate.initialize(order.getItems());
         if (order.getStatus() != SalesOrderStatus.PENDING_FINANCE_REVIEW) {
@@ -1192,9 +1215,19 @@ public class SalesServiceImpl implements SalesService {
     @Transactional
     public SalesOrder financeRejectOrder(String factoryId, String orderId, String reason, Long reviewerId) {
         SalesOrder order = getSalesOrderById(factoryId, orderId);
+        assertNoOaApprovalBypass(factoryId, orderId);
         if (order.getStatus() != SalesOrderStatus.PENDING_FINANCE_REVIEW) {
             throw new BusinessException(409, "只有待财务审核状态的订单可以驳回")
                     .withHint("请刷新订单列表查看最新状态");
+        }
+        return rejectFinanceForOrder(factoryId, order, reason, reviewerId);
+    }
+
+    private SalesOrder rejectFinanceForOrder(
+            String factoryId, SalesOrder order, String reason, Long reviewerId) {
+        if (order.getStatus() == SalesOrderStatus.CONFIRMED) {
+            checkTransitionAllowed(factoryId, order.getStatus().name(), "PENDING_FINANCE_REVIEW");
+            order.setStatus(SalesOrderStatus.PENDING_FINANCE_REVIEW);
         }
         checkTransitionAllowed(factoryId, order.getStatus().name(), "FINANCE_REJECTED");
         order.setStatus(SalesOrderStatus.FINANCE_REJECTED);
@@ -1203,8 +1236,20 @@ public class SalesServiceImpl implements SalesService {
         order.setFinanceReviewNotes(reason);
         SalesOrder saved = salesOrderRepository.save(order);
         log.info("销售订单财务审核驳回: orderId={}, orderNumber={}, reviewerId={}, reason={}",
-                orderId, saved.getOrderNumber(), reviewerId, reason);
+                order.getId(), saved.getOrderNumber(), reviewerId, reason);
         return saved;
+    }
+
+    private void assertNoOaApprovalBypass(String factoryId, String orderId) {
+        boolean activeWorkflowExists = hasActiveSalesWorkflow(factoryId);
+        boolean instanceExists = workflowEngine != null
+                && workflowEngine.getLatestInstance(factoryId, "SALES_ORDER", orderId).isPresent();
+        if (activeWorkflowExists || instanceExists) {
+            throw new BusinessException(409, "该销售订单已进入统一 OA，不能从业务页面直接审批")
+                    .withCode("SALES_APPROVAL_OA_ONLY")
+                    .withHint("请前往 OA 审批中心处理当前待办")
+                    .withHintTarget("approvalCenter");
+        }
     }
 
     /**
