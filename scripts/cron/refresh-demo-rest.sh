@@ -67,5 +67,10 @@ YESTERDAY=$(date -d yesterday +%F)
     --apply \
     --confirm RES_3101_009 \
     --end "$YESTERDAY"
+  echo "=== refresh DEMO_REST agg_daily from own POS grain (end=$YESTERDAY) ==="
+  python -m smartbi.scripts.refresh_demo_rest_agg_daily \
+    --apply \
+    --confirm DEMO_REST \
+    --end "$YESTERDAY"
   echo "=== done (rc=$?) ==="
 } >> "$LOG" 2>&1

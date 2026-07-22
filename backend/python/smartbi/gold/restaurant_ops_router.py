@@ -385,6 +385,78 @@ def _date_text(value: Any) -> str:
     return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
 
+def _range_text(start_date: Any, end_date: Any) -> str:
+    """Render a date range; a single-day range reads as one date, not "X 至 X"."""
+    if start_date and end_date and _date_text(start_date) == _date_text(end_date):
+        return f"{_date_text(start_date)} 当天"
+    return f"{_date_text(start_date)} 至 {_date_text(end_date)}"
+
+
+# Follow-up phrases that reference earlier dates ("沿用刚才的日期") are only
+# answerable when the caller actually restored那些日期. Without a restored
+# range, silently answering with a default window substitutes dates the user
+# never asked for, so those queries must be declined instead.
+_DATE_BACKREF_RE = re.compile(
+    r"(?:沿用|刚才|之前|先前|上面|上述|前面)[^。！？]{0,12}?(?:日期|时间|区间|范围)"
+    r"|(?:同样|相同)的(?:日期|时间|区间|范围)"
+)
+_DATE_BACKREF_CODES = frozenset({
+    "RESTAURANT_OPS_SALES_SUMMARY",
+    "RESTAURANT_OPS_GROSS_MARGIN",
+    "RESTAURANT_OPS_STORE_MARGIN",
+})
+
+# Explicit "XX店" mentions in a store-margin question. Generic tokens are not
+# store names; a candidate must survive dictionary lookup before use.
+_STORE_MENTION_STOPWORDS = frozenset({
+    "哪家店", "哪个店", "哪家门店", "这家店", "那家店", "各门店", "各家店",
+    "各店", "所有门店", "全部门店", "门店", "分店", "店铺", "本店", "单店",
+    "每家店", "每个店", "一家店", "旗舰店", "连锁店",
+})
+_STORE_MENTION_RE = re.compile(r"[一-龥A-Za-z0-9·]{2,24}(?:门店|店)")
+_STORE_MENTION_PREFIX_TRIM = re.compile(
+    r"^(?:请|帮我|帮忙|查一下|查查|查询|查|看看|看一下|看|分析一下|分析"
+    r"|对比|比较|了解|统计|计算|那|这|把|给|在|的|和|与|跟|是|说说|讲讲)+"
+)
+
+
+def extract_store_mention(query: Optional[str]) -> Optional[str]:
+    """Pull an explicit store-name mention out of free text, or None."""
+    if not query:
+        return None
+    for match in _STORE_MENTION_RE.finditer(query):
+        candidate = _STORE_MENTION_PREFIX_TRIM.sub("", match.group(0))
+        if len(candidate) < 3 or candidate in _STORE_MENTION_STOPWORDS:
+            continue
+        return candidate[:160]
+    return None
+
+
+async def _canonicalize_store_mention(
+    smartbi_pool, factory_id: str, mention: str,
+) -> List[str]:
+    """dim_store names matching the mention (exact first, then containment)."""
+    async with smartbi_pool.acquire() as conn:
+        await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+        exact = await conn.fetch(
+            "SELECT name FROM dim_store WHERE factory_id = $1 AND name = $2 LIMIT 1",
+            factory_id, mention,
+        )
+        if exact:
+            return [exact[0]["name"]]
+        rows = await conn.fetch(
+            """
+            SELECT name FROM dim_store
+             WHERE factory_id = $1
+               AND (name LIKE '%' || $2 || '%' OR $2 LIKE '%' || name || '%')
+             ORDER BY LENGTH(name) ASC
+             LIMIT 6
+            """,
+            factory_id, mention,
+        )
+        return [r["name"] for r in rows]
+
+
 def _actual_window_text(start_date: Any, end_date: Any, requested_days: int) -> str:
     if start_date and end_date:
         return f"{_date_text(start_date)} 至 {_date_text(end_date)}"
@@ -1639,6 +1711,7 @@ async def resolve_store_margin(
     query: Optional[str] = None,
     store_id: Optional[str] = None,
     store_name: Optional[str] = None,
+    store_mention: Optional[str] = None,
 ) -> OpsAnswer:
     """Per-store gross margin: fact_pos_item × fact_pos_transaction.store_id
     × dim_store.name × recipe food_cost. Connects POS bill → store → dish → cost
@@ -1661,6 +1734,38 @@ async def resolve_store_margin(
             kpis=[],
             meta={"rbac_masked": True},
         )
+    if store_mention and not store_id and not store_name:
+        matched_names = await _canonicalize_store_mention(
+            smartbi_pool, factory_id, store_mention,
+        )
+        if len(matched_names) == 1:
+            store_name = matched_names[0]
+        elif len(matched_names) > 1:
+            options = "、".join(matched_names[:3])
+            return OpsAnswer(
+                code="RESTAURANT_OPS_STORE_MARGIN",
+                title="请确认门店",
+                answer_text=(
+                    f"「{store_mention}」匹配到多家门店：{options}。"
+                    "请指定其中一家后再查询该店毛利率。"
+                ),
+                charts=[], kpis=[],
+                meta={"store_mention_ambiguous": store_mention,
+                      "candidates": matched_names},
+            )
+        else:
+            return OpsAnswer(
+                code="RESTAURANT_OPS_STORE_MARGIN",
+                title=f"{store_mention}毛利分析",
+                answer_text=(
+                    f"没有找到名为「{store_mention}」的门店，"
+                    "不能计算该店的毛利或毛利率，也不会退化为全店榜或其他门店的数据。"
+                    "请核对门店名称；可以先问「哪家店业绩最好」查看现有门店。"
+                ),
+                charts=[], kpis=[],
+                meta={"store_not_found": store_mention},
+            )
+
     exact_start = date_range[0] if date_range else None
     exact_end = date_range[1] if date_range else None
     if (exact_start is None) != (exact_end is None):
@@ -1696,8 +1801,8 @@ async def resolve_store_margin(
             store_id=store_id,
             store_name=store_name,
         )
-        primary_label = f"{_date_text(exact_start)} 至 {_date_text(exact_end)}"
-        comparison_label = f"{_date_text(comparison_start)} 至 {_date_text(comparison_end)}"
+        primary_label = _range_text(exact_start, exact_end)
+        comparison_label = _range_text(comparison_start, comparison_end)
 
         def _period_margin(answer: OpsAnswer) -> Tuple[Optional[float], Optional[float], Optional[str]]:
             target = answer.meta.get("targetStore")
@@ -1724,8 +1829,8 @@ async def resolve_store_margin(
                 code="RESTAURANT_OPS_STORE_MARGIN",
                 title=f"{target_label}毛利区间比较",
                 answer_text=(
-                    f"{target_label}在{'、'.join(missing_labels)}缺少可可靠计算毛利的销售与成本数据，"
-                    f"因此不能比较{primary_label}和{comparison_label}的毛利。"
+                    f"{target_label}在{'、'.join(missing_labels)}缺少可靠计算毛利所需的销售与成本数据，"
+                    f"因此不能比较{primary_label}和{comparison_label}的毛利与毛利率。"
                     "没有用其他日期、营业额或其他指标替代。请先补齐对应日期的账单、配方和最近进价。"
                 ),
                 charts=[],
@@ -1893,7 +1998,7 @@ async def resolve_store_margin(
 
     if not store_dish_rows:
         requested_label = (
-            f"{_date_text(exact_start)} 至 {_date_text(exact_end)}"
+            _range_text(exact_start, exact_end)
             if exact_start and exact_end else f"近 {days} 天"
         )
         target_label = store_name or (f"门店 {store_id}" if store_id else "门店")
@@ -1903,7 +2008,7 @@ async def resolve_store_margin(
             title=f"{target_label}毛利分析（{requested_label}）",
             answer_text=((
                 f"指定的{target_label}在{requested_label}没有可用的销售与成本数据，"
-                "不能计算该店毛利或排名，也没有退化为全店榜、其他日期或营业额指标。"
+                "不能计算该店毛利、毛利率或排名，也没有退化为全店榜、其他日期或营业额指标。"
                 "请确认门店名称或编号，并补齐对应日期的营业账单、配方和最近进价。"
             ) if scoped_no_data else (
                 f"{requested_label}没有可用的收银销售数据，没有用其他时间范围替代。"
@@ -2325,7 +2430,7 @@ async def resolve_sales_summary(
         else (None, None)
     )
     actual_window = (
-        f"{window_label}（{_date_text(sales_scope_start)} 至 {_date_text(sales_scope_end)}）"
+        f"{window_label}（{_range_text(sales_scope_start, sales_scope_end)}）"
         if sales_scope_start and sales_scope_end else window_label
     )
 
@@ -2353,8 +2458,8 @@ async def resolve_sales_summary(
         comparison_note = ""
         if comparison_meta:
             comparison_window = (
-                f"{comparison_meta['baseline_label']}（{comparison_meta['baseline_start']} 至 "
-                f"{comparison_meta['baseline_end']}）"
+                f"{comparison_meta['baseline_label']}"
+                f"（{_range_text(comparison_meta['baseline_start'], comparison_meta['baseline_end'])}）"
             )
             comparison_bill_count = int((comparison_summary or {}).get("bill_count") or 0)
             if comparison_bill_count > 0:
@@ -2506,7 +2611,8 @@ async def resolve_sales_summary(
         baseline_bills = int(baseline.get("bill_count") or 0)
         baseline_avg_bill = baseline.get("avg_bill_value")
         baseline_range_text = (
-            f"{spec.comparison_label}（{comparison_meta['baseline_start']} 至 {comparison_meta['baseline_end']}）"
+            f"{spec.comparison_label}"
+            f"（{_range_text(comparison_meta['baseline_start'], comparison_meta['baseline_end'])}）"
         )
         if baseline_bills <= 0:
             comparison_meta.update({"baseline_no_data": True})
@@ -3177,6 +3283,25 @@ async def resolve_by_code(
     resolver = _RESOLVERS.get(code)
     if resolver is None:
         return None
+    query_text = kwargs.get("query") or ""
+    if (
+        code in _DATE_BACKREF_CODES
+        and query_text
+        and _DATE_BACKREF_RE.search(query_text)
+        and not kwargs.get("date_range")
+        and not kwargs.get("comparison_date_range")
+    ):
+        return OpsAnswer(
+            code=code,
+            title="需要先确认比较日期",
+            answer_text=(
+                "这轮对话里没有找到可沿用的比较日期，因此不能按「刚才的日期」回答，"
+                "也不会用默认时间范围替代。"
+                "请直接给出两个具体日期或日期范围（例如 2026-07-20 和 2026-07-21）。"
+            ),
+            charts=[], kpis=[],
+            meta={"missing_reference": "date_range"},
+        )
     sig = inspect.signature(resolver)
     accepts_var_kw = any(
         p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
