@@ -76,3 +76,11 @@
 - 根因与修复：财务专用菜单已经包含个人 OA，但历史 `ROLE_PATH_WHITELIST.finance_manager` 漏掉 `/workflow`；仅补该共享 OA 前缀，后端仍按 factory、当前节点角色和明确 assignee 逐任务鉴权，不扩大采购、销售或其他模块权限。
 - 验证：Web 路由/财审/菜单目标 Vitest `3 files / 63 tests` PASS，`git diff --check` PASS；部署后从同一 `SO-20260722-0003` 财务节点续测，不创建第二订单。
 - Scope 锁：已释放。
+
+## BUG-F006-R3-OA-PRESENTATION-001 — 统一 OA 待办显示内部码、空角色与 ISO 时间
+
+- 状态：`review-ready; NOT_DEPLOYED`；Owner：`/root`；Base SHA：`9a95c6daeb48a14b04532fb5bc68dc9318745eb1`。
+- 生产 headed 证据：财务经理已从个人 OA 对同一 `SO-20260722-0003` 完成唯一一次审批，订单、已处理和我发起的状态均正确；待办行仍显示“未知状态（SALES_ORDER）”、授权角色 `-` 与原始 ISO 时间。
+- 根因与修复：待办 Controller 的节点 hydrate 分支漏回填已配置 `approverRoles`，Web 共享枚举缺销售/采购模块与财务角色中文标签，提交时间直接绑定原值；现补齐同源节点角色投影并复用共享枚举与 `formatDateTime`，不改变 OA 权限、任务可见性或状态机。
+- 验证：`WorkflowInstanceControllerTest` 8/8 PASS；Web OA 目标 Vitest 2 files / 6 tests PASS；发布后仅做同一已完成实例的只读页面回归，禁止新增审批或订单写入。
+- Scope 锁：已释放。

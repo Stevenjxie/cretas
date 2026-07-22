@@ -737,6 +737,18 @@
 - **根因**：个人 OA 菜单和 `/workflow/**` 路由已迁移到共享 `dashboard` 模块，但历史 finance-manager 路径白名单只允许 `/dashboard`、`/finance` 和旧财审页面，遗漏新的统一 `/workflow` 前缀；菜单、模块权限和路径白名单三层契约不一致。
 - **修复/修改文件**：仅在 `web-admin/src/router/guards.ts` 的 finance-manager 白名单加入 `/workflow`；后端 OA 鉴权、任务过滤和订单状态机不变，不扩大其他业务模块权限。新增 `personalOaAccess.spec.ts`，同时复用财审路由与菜单契约测试。
 - **测试**：Web 目标 Vitest `3 files / 63 tests` PASS，覆盖 finance-manager 个人 OA 路径、四个共享队列、财审角色与菜单一致性。
+- **Commit/PR/main 状态**：实现 commit `0c7cb8370b49bb70c6f9f68e1055f8a607590518`；PR [#1628](https://github.com/Stevenjxie/cretas/pull/1628) 已合入；发布时 exact main `9a95c6daeb48a14b04532fb5bc68dc9318745eb1`。
+- **部署状态**：`DEPLOYED`；Web 四方 index SHA-256 `4c15dabf17edd5865cfdbe6576d2ecfc38f9c9d6baf4ca7fa81d0fea5b4d43e9` 一致。
+- **回归状态**：`PASS`；复用同一 `SO-20260722-0003`，财务经理进入待办、执行唯一 OA action POST=200，已处理与销售“我发起的”均为已完成，销售详情 `OA状态=已通过/流程已结束`；未创建第二订单，未触碰 LIUSHANMEN。
+
+### BUG-F006-R3-OA-PRESENTATION-001
+
+- **发现阶段/时间/页面/步骤**：上述路由修复部署后的同一生产 headed 续测，2026-07-22；财务经理个人 OA 待办已可正常处理 `SO-20260722-0003`，但待办表格显示内部码、空授权角色与原始 ISO 时间。
+- **期望/实际/业务影响**：应显示“销售订单”“财务主管”和本地化到秒的提交时间；实际显示“未知状态（SALES_ORDER）”、`-`、`2026-07-22T21:26:36...`，不阻塞审批但破坏 OA 业务可读性与授权透明度。
+- **证据路径**：`C:/tmp/cretas-f006-sales-oa-20260722/web-admin/.playwright-mcp/f006-sales-oa-write-20260722135603/30-finance-pending-high-order.png`、`33-finance-acted.png`、`40-high-order-final-readback.png`、`result.json`。
+- **根因**：`getPendingForUser()` 已解析当前节点名称却漏回填节点配置中的 `approverRoles`；Web `enumDisplay` 没有统一 OA 模块/角色标签，`pending.vue` 直接输出 `initiatedAt`。
+- **修复/修改文件**：Controller 待办 DTO 复用节点配置回填角色；共享枚举补采购/销售模块及财务/超级管理员中文标签；待办页复用 `formatDateTime`。修改 `WorkflowInstanceController`、对应 Controller 测试、`enumDisplay.ts`、`pending.vue` 与 OA 目标测试。
+- **测试**：Java `WorkflowInstanceControllerTest` 8/8 PASS；Web OA Vitest 2 files / 6 tests PASS；`git diff --check` PASS。
 - **Commit/PR/main 状态**：等待本条最终 commit/PR/main 回填。
 - **部署状态**：`NOT_DEPLOYED`。
-- **回归状态**：`TARGET_TEST_PASS_AWAITING_RELEASE`；从同一 `SO-20260722-0003` 财务节点续测，禁止创建第二订单；未触碰 LIUSHANMEN。
+- **回归状态**：`TARGET_TESTS_PASSED_AWAITING_RELEASE`；发布后只读刷新同一已完成实例，不再产生审批或订单 mutation。

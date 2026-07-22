@@ -13,6 +13,10 @@ export const COMMON_ENUM_LABELS: Record<string, string> = {
   CREDIT: '赊账',
   POS: 'POS',
   OTHER: '其他',
+  PURCHASE_ORDER: '采购订单',
+  SALES_ORDER: '销售订单',
+  finance_manager: '财务主管',
+  factory_super_admin: '工厂超级管理员',
 };
 
 export function enumLabel(
@@ -26,4 +30,3 @@ export function enumLabel(
     || COMMON_ENUM_LABELS[normalized]
     || `未知状态（${normalized}）`;
 }
-
