@@ -1582,10 +1582,9 @@ async def resolve_gross_margin(
         if len(dish_candidates) >= 2 and pos_rows:
             compare_rows = []
             for cand in dish_candidates:
-                hits = _match_dish_rows(cand, pos_rows)
-                if len(hits) == 1:
-                    compare_rows.append(hits[0])
-            if len(compare_rows) >= 2:
+                # 多规格菜 ("招牌藤椒味"→单人份/双人份) 全部纳入对比。
+                compare_rows.extend(_match_dish_rows(cand, pos_rows))
+            if len({r["product_id"] for r in compare_rows}) >= 2:
                 seen_pid = set()
                 pos_rows = [
                     r for r in compare_rows
