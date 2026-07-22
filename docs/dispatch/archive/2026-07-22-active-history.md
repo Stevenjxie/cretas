@@ -60,3 +60,11 @@
 - 修复：宽泛 review 标记改为触发实时单位契约复核，当前有效则允许生产计划解析/激活/运行时，真实不兼容继续 fail-closed；发布版页面只读加载不再自动 fork/save；移除右侧 AI 回归并恢复全宽画布。
 - 验证：Java 6 类 `55/55`，Web Vitest `3/3`，`vue-tsc --noEmit`，`git diff --check` 全部通过。
 - Scope 锁：已释放；最终 commit/main 以本任务合并回执为准。
+
+## BUG-F006-SALES-DETAIL-PURCHASE-PERMISSION-001 — 销售详情越权加载采购关联阻塞 OA
+
+- 状态：`review-ready`；Owner：`/root`；Base SHA：`27eeb2374cda55c75eaaf4c768b836baaee4f24e`；实现 commit：`8e2cb88b2852a8558c4fffeb17f624356713063d`。
+- 根因与修复：销售详情无条件加载关联采购接口，销售主管收到 403 全局通知并无法点击 OA 提交；现以共享 `permissionStore.canAccess('procurement')` 同时门禁请求与页签，不放宽销售权限，有采购读取权限的角色保持原能力。
+- 验证：销售订单目标 Vitest `6 files / 34 tests` PASS；唯一 Web release build `4457 modules` PASS，web tree `5ef7f95db8d45ef15e192d276a4d8b7bbc68b9e4`，archive SHA-256 `f02dd2e3dd12fcd5807fd21caf525de98a6ff7fe086b7c343e4d7578eab3be21`。
+- 续测边界：部署后复用 F006 `SO-20260722-0002` 从“确认并提交 OA 审批”继续，不重建订单；实现/构建期间生产业务写入 0，未触碰 LIUSHANMEN。
+- Scope 锁：已释放。

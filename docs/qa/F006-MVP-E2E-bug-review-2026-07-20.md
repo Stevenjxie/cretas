@@ -724,7 +724,7 @@
 - **证据路径**：`C:/tmp/cretas-f006-sales-oa-20260722/web-admin/.playwright-mcp/f006-sales-oa-write-20260722124816/11-low-detail-draft.png`、`99-failure-stop.png`、`trace.zip`、`result.json`；订单保持 `DRAFT`，只读核验 OA instance 数量为 0。
 - **根因**：`web-admin/src/views/sales/orders/detail.vue` 的 `loadPurchaseOrders()` 与“关联采购”页签没有使用共享 `permissionStore.canAccess('procurement')` 门禁；局部 catch 无法阻止 Axios 全局 403 通知。
 - **修复/修改文件**：新增 `canViewLinkedPurchases` 权限投影；无采购读取权限时请求在发送前返回且隐藏关联采购页签，有权限角色保持原查询与查看能力。修改 `detail.vue`、`salesOrderOaContract.source.spec.ts`。
-- **测试**：Web 目标测试覆盖权限投影、请求发送前门禁及页签显隐；部署后复用同一 `SO-20260722-0002` 从 OA 提交点继续 headed 验收，不创建第二张订单。
-- **Commit/PR/main 状态**：`IN_PROGRESS`。
+- **测试**：销售订单目标 Vitest `6 files / 34 tests` PASS，覆盖权限投影、请求发送前门禁及页签显隐；唯一 Web release build `4457 modules` PASS，web tree `5ef7f95db8d45ef15e192d276a4d8b7bbc68b9e4`，archive SHA-256 `f02dd2e3dd12fcd5807fd21caf525de98a6ff7fe086b7c343e4d7578eab3be21`。部署后复用同一 `SO-20260722-0002` 从 OA 提交点继续 headed 验收，不创建第二张订单。
+- **Commit/PR/main 状态**：实现 commit `8e2cb88b2852a8558c4fffeb17f624356713063d`；`PR_PENDING`。
 - **部署状态**：`NOT_DEPLOYED`。
-- **回归状态**：`TARGET_TEST_PASSED_AWAITING_RELEASE`；修复期间生产业务写入 0，未触碰 LIUSHANMEN。
+- **回归状态**：`TARGET_TESTS_AND_RELEASE_BUILD_PASSED_AWAITING_RELEASE`；修复期间生产业务写入 0，未触碰 LIUSHANMEN。
