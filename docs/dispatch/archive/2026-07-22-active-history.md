@@ -87,8 +87,8 @@
 
 ## BUG-F006-R3-SALES-PRODPLAN-BOM-POLICY-001 — 销售订单创建生产计划 CE901995
 
-- 状态：`merged-ready; DEPLOY_AUTHORIZED`；Owner：`/root`；Base SHA：`da15dcc44e723265144e17927bf19467c5ab9d06`；实现 commit：`0837a475c134094e60604d82afbb9f4c3a21aa91`；PR [#1637](https://github.com/Stevenjxie/cretas/pull/1637)。
+- 状态：`merged+deployed+service-verified`；Owner：`/root`；Base SHA：`da15dcc44e723265144e17927bf19467c5ab9d06`；实现 commit：`0837a475c134094e60604d82afbb9f4c3a21aa91`；PR [#1637](https://github.com/Stevenjxie/cretas/pull/1637)；deployed main `da476ecdc7a946b1d6e144d8ed0f2e2566de25c2`。
 - 生产只读真值：`SO-20260722-0002` / item 728 在失败后严格 0 条生产计划；ACTIVE BOM `9e2eafed-9205-4627-aa4e-8acf20c460fd` v1 与 ENABLED Workflow `105/v1` 保持原样，未重试、未桥接、未触碰 LIUSHANMEN。
 - 根因与修复：旧已激活 Workflow 节点没有后续新增的 `auxiliaryPolicy`，readiness 对 immutable `Set.of` 执行 `contains(null)` 抛 NPE；现将 readiness/未来激活保持 null-safe 且 fail-closed，同时生产计划只要求并固定现存 ACTIVE BOM + ENABLED Workflow，不对历史已激活版本追溯重判新规则。
 - 验证：唯一 release lifecycle 完成编译、11/11 目标测试和最终 JAR；覆盖 null policy、未来完整性门禁、历史 ACTIVE pin、同订单行唯一/重复 409、订单锁及失败零保存。
-- Scope 锁随最终 PR 合入释放；生产部署后测试 Chat 从同一订单和 item 继续，不重建订单。
+- 生产版本 `v20260722_232844`，JAR MD5 `36a24eab818a2cc0ae0ffa2b900e030d`，active `blue/10010`；5/5 切流观察、systemd、端口、直连/网关健康通过。部署后 query-only 仍为计划 0 行、订单 `FINANCE_APPROVED`；Scope 锁已释放，测试 Chat 从同一订单和 item 继续，不重建订单。

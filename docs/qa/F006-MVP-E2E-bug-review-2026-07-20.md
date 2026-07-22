@@ -761,6 +761,6 @@
 - **根因**：已激活 Workflow 的旧节点快照缺少后续新增的 `auxiliaryPolicy`，`string(...)` 返回 null；Java immutable `Set.of` 的 `contains(null)` 会抛 NPE。计划创建又错误地对已经 ACTIVE 的历史 BOM 重跑“未来版本激活完整性”规则，既可能 500，也会在仅修 null 后把同一合法历史链改成阻塞性 409。
 - **修复/修改文件**：readiness 对 null 策略显式判定无效，查询与未来激活继续生成 `BOM_AUXILIARY_DECISION_REQUIRED` 并严格 fail-closed；生产计划准入改为要求并固定当前 ACTIVE BOM + ENABLED Workflow 的原 identity/version，不追溯重判或改写历史已激活版本。修改 `ProductConfigurationReadinessService`、`ProductionPlanServiceImpl`、对应目标测试及复盘/台账；不桥接或改写现有 BOM/Workflow/订单。
 - **测试**：唯一 release lifecycle `release-jar-manifest.sh build --tests 'ProductConfigurationReadinessServiceTest,ProductionPlanWorkflowSelectionTest,ProductionPlanSalesBatchDateTest'` 构建成功，11/11 通过（4+3+4），并生成最终可信 JAR manifest；覆盖 null policy 无 NPE、未来完整性门禁、历史 ACTIVE BOM/Workflow 固定、同订单行有效计划重复创建 409、日期独立、订单锁与保存前失败无部分写。
-- **Commit/PR/main 状态**：实现 commit `0837a475c134094e60604d82afbb9f4c3a21aa91`；PR [#1637](https://github.com/Stevenjxie/cretas/pull/1637)，等待受控合入后以 exact main 为准。
-- **部署状态**：`NOT_DEPLOYED`。
-- **回归状态**：`IN_PROGRESS`；部署后测试 Chat 仅从同一 `SO-20260722-0002` / item 728 继续，不得重建订单。
+- **Commit/PR/main 状态**：实现 commit `0837a475c134094e60604d82afbb9f4c3a21aa91`；PR [#1637](https://github.com/Stevenjxie/cretas/pull/1637)；exact merged/deployed main `da476ecdc7a946b1d6e144d8ed0f2e2566de25c2`。
+- **部署状态**：`DEPLOYED`；生产版本 `v20260722_232844`，JAR MD5 `36a24eab818a2cc0ae0ffa2b900e030d`，active `blue/10010`；5/5 切流观察、systemd/端口、直连与网关健康通过。
+- **回归状态**：`READY_FOR_SAME_RECORD_RESUME`；部署后 query-only 再确认计划仍为 0 行、订单仍为 `FINANCE_APPROVED`。测试 Chat 仅从同一 `SO-20260722-0002` / item 728 继续，不得重建订单。
