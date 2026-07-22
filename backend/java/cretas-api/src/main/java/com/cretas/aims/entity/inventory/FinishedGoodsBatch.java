@@ -3,7 +3,6 @@ package com.cretas.aims.entity.inventory;
 import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.ProductType;
-import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.*;
 
@@ -139,23 +138,6 @@ public class FinishedGoodsBatch extends BaseEntity {
     /** 关联生产计划ID（可选） */
     @Column(name = "production_plan_id", length = 191)
     private String productionPlanId;
-
-    /** Legal ownership snapshot inherited from the production plan or source transfer batch. */
-    @Enumerated(EnumType.STRING)
-    @Column(name = "ownership", length = 32)
-    private InventoryOwnership ownership = InventoryOwnership.COMPANY_OWNED;
-
-    /** Customer that legally owns the batch when {@link #ownership} is customer-owned. */
-    @Column(name = "owner_customer_id", length = 191)
-    private String ownerCustomerId;
-
-    /** Sales-order lineage snapshot; opaque across factories, so intentionally no FK. */
-    @Column(name = "source_sales_order_id", length = 191)
-    private String sourceSalesOrderId;
-
-    /** Sales-order-line lineage snapshot; opaque across factories, so intentionally no FK. */
-    @Column(name = "source_sales_order_item_id", length = 191)
-    private String sourceSalesOrderItemId;
 
     /**
      * D1 双仓流转 (2026-05-10 spec, PR #309 A1=A).

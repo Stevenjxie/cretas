@@ -1,14 +1,9 @@
 package com.cretas.aims.dto.inventory;
 
 import com.cretas.aims.dto.sales.ExtraFeeItem;
-import com.cretas.aims.entity.enums.MaterialSupplyMode;
-import com.cretas.aims.entity.enums.SalesProcessingMode;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-
-import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotNull;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -39,20 +34,6 @@ public class UpdateSalesOrderRequest {
     private List<ExtraFeeItem> extraFees;
 
     private LocalDate requiredDeliveryDate;
-
-    @NotNull(message = "加工方式不能为空")
-    private SalesProcessingMode processingMode;
-
-    @NotNull(message = "物料供应方式不能为空")
-    private MaterialSupplyMode materialSupplyMode;
-
-    /**
-     * Null preserves existing customer-supplied requirements; a non-null list replaces them.
-     * An explicit empty list is invalid for customer-supplied toll processing and clears stale
-     * requirements only when switching to a mode that forbids them.
-     */
-    @Valid
-    private List<CreateSalesOrderRequest.SuppliedMaterialRequirementDTO> suppliedMaterials;
 
     /** 行项目更新 (为null时不更新行项) */
     private List<CreateSalesOrderRequest.SalesOrderItemDTO> items;

@@ -89,20 +89,6 @@ function goPO(poId: string) {
   router.push(`/procurement/orders/${poId}`);
 }
 
-function requesterText(row: PurchaseRequisition) {
-  return row.sourceType === 'PRODUCTION_PLAN_SHORTAGE' && row.requesterId === 0
-    ? '系统缺料计算'
-    : `#${row.requesterId}`;
-}
-
-function quantityText(item: PurchaseRequisition['requestedItems'][number]) {
-  const shortage = item.shortfallQuantity ?? item.quantity;
-  if (item.requiredQuantity == null || item.availableQuantity == null) {
-    return `${shortage} ${item.unit}`;
-  }
-  return `需求 ${item.requiredQuantity} / 可用 ${item.availableQuantity} / 缺口 ${shortage} ${item.unit}`;
-}
-
 function onCreated() {
   ElMessage.success('请购单已创建, 状态为草稿. 请在"我的请购"或本页编辑后提交审批.');
   pagination.value.page = 1;
@@ -197,16 +183,7 @@ async function handleDelete(row: PurchaseRequisition) {
       >
         <el-table-column prop="requisitionNumber" label="单号" width="200" />
         <el-table-column prop="requesterId" label="请购人" width="100" align="center">
-          <template #default="{ row }">{{ requesterText(row) }}</template>
-        </el-table-column>
-        <el-table-column label="来源" min-width="190">
-          <template #default="{ row }">
-            <template v-if="row.sourceType === 'PRODUCTION_PLAN_SHORTAGE'">
-              <el-tag type="danger" size="small">生产缺料</el-tag>
-              <span class="source-number">{{ row.sourceNo || row.sourceId || '-' }}</span>
-            </template>
-            <span v-else class="muted">手工请购</span>
-          </template>
+          <template #default="{ row }">#{{ row.requesterId }}</template>
         </el-table-column>
         <el-table-column label="明细" min-width="220">
           <template #default="{ row }">
@@ -218,8 +195,8 @@ async function handleDelete(row: PurchaseRequisition) {
               <span class="muted">
                 {{ row.requestedItems
                   .slice(0, 2)
-                  .map((it: PurchaseRequisition['requestedItems'][number]) => `${it.materialName || '-'}（${quantityText(it)}）`)
-                  .join('；') }}{{ row.requestedItems.length > 2 ? ' …' : '' }}
+                  .map((it: { materialName?: string }) => it.materialName || '-')
+                  .join(', ') }}{{ row.requestedItems.length > 2 ? ' …' : '' }}
               </span>
             </span>
           </template>
@@ -348,9 +325,5 @@ async function handleDelete(row: PurchaseRequisition) {
 }
 .muted {
   color: #909399;
-}
-.source-number {
-  margin-left: 6px;
-  color: #606266;
 }
 </style>

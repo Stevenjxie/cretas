@@ -4,7 +4,6 @@ import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.inventory.CreateTransferRequest;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.RawMaterialType;
-import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.TransferItemType;
 import com.cretas.aims.entity.enums.TransferStatus;
@@ -760,7 +759,6 @@ public class TransferServiceImpl implements TransferService {
 
             BigDecimal remaining = item.getQuantity();
             String firstConsumedBatchId = null;
-            MaterialBatch firstConsumedBatch = null;
             for (MaterialBatch batch : batches) {
                 if (remaining.compareTo(BigDecimal.ZERO) <= 0) break;
                 // 使用乐观锁思路: 读取→计算→保存，@Transactional 保证原子性
@@ -768,19 +766,13 @@ public class TransferServiceImpl implements TransferService {
                         .subtract(batch.getUsedQuantity())
                         .subtract(batch.getReservedQuantity() != null ? batch.getReservedQuantity() : BigDecimal.ZERO);
                 if (available.compareTo(BigDecimal.ZERO) <= 0) continue;
-                if (firstConsumedBatch != null) {
-                    assertSameInventoryLineage(firstConsumedBatch, batch, item);
-                }
                 BigDecimal deduct = remaining.min(available);
                 batch.setUsedQuantity(batch.getUsedQuantity().add(deduct));
                 if (batch.getReceiptQuantity().subtract(batch.getUsedQuantity()).compareTo(BigDecimal.ZERO) <= 0) {
                     batch.setStatus(MaterialBatchStatus.DEPLETED);
                 }
                 materialBatchRepository.saveAndFlush(batch); // flush 立即写入，减少并发窗口
-                if (firstConsumedBatchId == null) {
-                    firstConsumedBatchId = batch.getId();
-                    firstConsumedBatch = batch;
-                }
+                if (firstConsumedBatchId == null) firstConsumedBatchId = batch.getId();
                 inventoryLowStockEventPublisher.publishIfLowStock(factoryId, batch, "TRANSFER_OUT");
                 remaining = remaining.subtract(deduct);
                 log.info("扣减原料批次: batchId={}, deduct={}, remaining={}, preselected={}",
@@ -809,13 +801,9 @@ public class TransferServiceImpl implements TransferService {
 
             BigDecimal remaining = item.getQuantity();
             String firstConsumedBatchId = null;
-            FinishedGoodsBatch firstConsumedBatch = null;
             for (FinishedGoodsBatch batch : batches) {
                 if (remaining.compareTo(BigDecimal.ZERO) <= 0) break;
                 BigDecimal available = batch.getAvailableQuantity();
-                if (firstConsumedBatch != null) {
-                    assertSameInventoryLineage(firstConsumedBatch, batch, item);
-                }
                 BigDecimal deduct = remaining.min(available);
                 if (intraFactory) {
                     // MES↔ERP Fix #4: 同厂调拨 = 内部搬仓, 非销售. 减 producedQuantity (对齐
@@ -829,10 +817,7 @@ public class TransferServiceImpl implements TransferService {
                 }
                 if (batch.isDepleted()) batch.setStatus("DEPLETED");
                 finishedGoodsBatchRepository.save(batch);
-                if (firstConsumedBatchId == null) {
-                    firstConsumedBatchId = batch.getId();
-                    firstConsumedBatch = batch;
-                }
+                if (firstConsumedBatchId == null) firstConsumedBatchId = batch.getId();
                 remaining = remaining.subtract(deduct);
             }
             if (remaining.compareTo(BigDecimal.ZERO) > 0) {
@@ -848,37 +833,6 @@ public class TransferServiceImpl implements TransferService {
                 item.setSourceBatchId(firstConsumedBatchId);
             }
         }
-    }
-
-    private void assertSameInventoryLineage(MaterialBatch first, MaterialBatch candidate,
-                                            InternalTransferItem item) {
-        if (first.getOwnership() != candidate.getOwnership()
-                || !Objects.equals(first.getOwnerCustomerId(), candidate.getOwnerCustomerId())
-                || !Objects.equals(first.getSourceSalesOrderId(), candidate.getSourceSalesOrderId())
-                || !Objects.equals(first.getSourceSalesOrderItemId(), candidate.getSourceSalesOrderItemId())) {
-            throw mixedInventoryLineage(item, first.getId(), candidate.getId());
-        }
-    }
-
-    private void assertSameInventoryLineage(FinishedGoodsBatch first, FinishedGoodsBatch candidate,
-                                            InternalTransferItem item) {
-        if (first.getOwnership() != candidate.getOwnership()
-                || !Objects.equals(first.getOwnerCustomerId(), candidate.getOwnerCustomerId())
-                || !Objects.equals(first.getSourceSalesOrderId(), candidate.getSourceSalesOrderId())
-                || !Objects.equals(first.getSourceSalesOrderItemId(), candidate.getSourceSalesOrderItemId())) {
-            throw mixedInventoryLineage(item, first.getId(), candidate.getId());
-        }
-    }
-
-    private BusinessException mixedInventoryLineage(InternalTransferItem item,
-                                                     String firstBatchId,
-                                                     String candidateBatchId) {
-        return new BusinessException(409, String.format(
-                "调拨行不能合并不同库存归属或销售来源的批次: %s / %s",
-                firstBatchId, candidateBatchId))
-                .withCode("TRANSFER_MIXED_INVENTORY_LINEAGE")
-                .withHint("请按库存归属客户和销售订单来源拆分调拨行")
-                .withHintTarget(item.getItemName() != null ? item.getItemName() : "items");
     }
 
     /**
@@ -1166,10 +1120,8 @@ public class TransferServiceImpl implements TransferService {
                 ? targetWarehouseId
                 : warehouseResolver.resolveLogisticsId(targetFactoryId);  // raw material 默认 WH-LOG
 
-        if (item.getItemType() == TransferItemType.RAW_MATERIAL
-                || item.getItemType() == TransferItemType.PACKAGING_MATERIAL) {
+        if (item.getItemType() == TransferItemType.RAW_MATERIAL) {
             // 调入方创建原料批次
-            MaterialBatch sourceBatch = loadMaterialLineageSource(item);
             MaterialBatch batch = new MaterialBatch();
             batch.setId(UUID.randomUUID().toString());
             batch.setFactoryId(targetFactoryId);
@@ -1186,7 +1138,6 @@ public class TransferServiceImpl implements TransferService {
             batch.setStatus(MaterialBatchStatus.AVAILABLE);
             batch.setCreatedBy(userId);
             batch.setWarehouseId(resolvedTargetWarehouseId);  // D1 双仓
-            inheritInventoryLineage(batch, sourceBatch);
             materialBatchRepository.save(batch);
             item.setTargetBatchId(batch.getId());
 
@@ -1220,7 +1171,6 @@ public class TransferServiceImpl implements TransferService {
             }
         } else {
             // 调入方创建成品批次
-            FinishedGoodsBatch sourceBatch = loadFinishedGoodsLineageSource(item);
             FinishedGoodsBatch batch = new FinishedGoodsBatch();
             batch.setFactoryId(targetFactoryId);
             batch.setBatchNumber(String.format("TRF-FG-%s-%04d",
@@ -1235,51 +1185,17 @@ public class TransferServiceImpl implements TransferService {
             //   否则 unitCost=null → 下游成本口径把内部搬库的成品当零成本 (honest-null → 0)。
             //   源批次 id = item.sourceBatchId (SHIP 时 deductSourceInventory 记录的首个消耗批次)。
             //   诚实 null: 源批次无成本 (unitCost=null) → 目标亦 null, 不伪造 ¥0。unitPrice(售价) 独立处理。
-            batch.setUnitCost(sourceBatch != null ? sourceBatch.getUnitCost() : null);
+            if (item.getSourceBatchId() != null) {
+                finishedGoodsBatchRepository.findById(item.getSourceBatchId())
+                        .map(FinishedGoodsBatch::getUnitCost)
+                        .ifPresent(batch::setUnitCost);
+            }
             batch.setProductionDate(LocalDate.now());
-            batch.setProductionPlanId(sourceBatch != null ? sourceBatch.getProductionPlanId() : null);
             batch.setStatus("AVAILABLE");
             batch.setCreatedBy(userId);
             batch.setWarehouseId(resolvedTargetWarehouseId);  // D1 双仓
-            inheritInventoryLineage(batch, sourceBatch);
             finishedGoodsBatchRepository.save(batch);
             item.setTargetBatchId(batch.getId());
         }
-    }
-
-    private MaterialBatch loadMaterialLineageSource(InternalTransferItem item) {
-        if (item.getSourceBatchId() == null) {
-            return null; // legacy transfer: preserve unknown lineage as null
-        }
-        return materialBatchRepository.findById(item.getSourceBatchId())
-                .orElseThrow(() -> new BusinessException(409,
-                        "调拨源原料批次不存在，无法继承库存归属: " + item.getSourceBatchId())
-                        .withCode("TRANSFER_SOURCE_BATCH_MISSING")
-                        .withHint("请核对调拨发货记录后重试"));
-    }
-
-    private FinishedGoodsBatch loadFinishedGoodsLineageSource(InternalTransferItem item) {
-        if (item.getSourceBatchId() == null) {
-            return null; // legacy transfer: preserve unknown lineage as null
-        }
-        return finishedGoodsBatchRepository.findById(item.getSourceBatchId())
-                .orElseThrow(() -> new BusinessException(409,
-                        "调拨源成品批次不存在，无法继承库存归属: " + item.getSourceBatchId())
-                        .withCode("TRANSFER_SOURCE_BATCH_MISSING")
-                        .withHint("请核对调拨发货记录后重试"));
-    }
-
-    private void inheritInventoryLineage(MaterialBatch target, MaterialBatch source) {
-        target.setOwnership(source != null ? source.getOwnership() : null);
-        target.setOwnerCustomerId(source != null ? source.getOwnerCustomerId() : null);
-        target.setSourceSalesOrderId(source != null ? source.getSourceSalesOrderId() : null);
-        target.setSourceSalesOrderItemId(source != null ? source.getSourceSalesOrderItemId() : null);
-    }
-
-    private void inheritInventoryLineage(FinishedGoodsBatch target, FinishedGoodsBatch source) {
-        target.setOwnership(source != null ? source.getOwnership() : null);
-        target.setOwnerCustomerId(source != null ? source.getOwnerCustomerId() : null);
-        target.setSourceSalesOrderId(source != null ? source.getSourceSalesOrderId() : null);
-        target.setSourceSalesOrderItemId(source != null ? source.getSourceSalesOrderItemId() : null);
     }
 }

@@ -191,8 +191,6 @@ class SalesServiceImplCreateTaxAmountTest {
 
         CreateSalesOrderRequest req = new CreateSalesOrderRequest();
         req.setCustomerId(CUSTOMER_ID);
-        req.setProcessingMode(com.cretas.aims.entity.enums.SalesProcessingMode.STANDARD_SALE);
-        req.setMaterialSupplyMode(com.cretas.aims.entity.enums.MaterialSupplyMode.FACTORY_SUPPLIED);
         // 行1: 继承 13% — qty 100 × 10.00 = 1000.00 → tax 130.00
         CreateSalesOrderRequest.SalesOrderItemDTO i1 = new CreateSalesOrderRequest.SalesOrderItemDTO();
         i1.setProductTypeId(PRODUCT_TYPE_ID);
@@ -237,8 +235,6 @@ class SalesServiceImplCreateTaxAmountTest {
         when(salesOrderItemRepository.findBySalesOrderId("SO-UPD-001")).thenReturn(List.of());
 
         UpdateSalesOrderRequest req = new UpdateSalesOrderRequest();
-        req.setProcessingMode(com.cretas.aims.entity.enums.SalesProcessingMode.STANDARD_SALE);
-        req.setMaterialSupplyMode(com.cretas.aims.entity.enums.MaterialSupplyMode.FACTORY_SUPPLIED);
         CreateSalesOrderRequest.SalesOrderItemDTO item = new CreateSalesOrderRequest.SalesOrderItemDTO();
         item.setProductTypeId(PRODUCT_TYPE_ID);
         item.setProductName("叮咚卤猪舌");
@@ -260,8 +256,6 @@ class SalesServiceImplCreateTaxAmountTest {
     private CreateSalesOrderRequest buildRequest(BigDecimal unitPrice, BigDecimal itemTaxRate) {
         CreateSalesOrderRequest req = new CreateSalesOrderRequest();
         req.setCustomerId(CUSTOMER_ID);
-        req.setProcessingMode(com.cretas.aims.entity.enums.SalesProcessingMode.STANDARD_SALE);
-        req.setMaterialSupplyMode(com.cretas.aims.entity.enums.MaterialSupplyMode.FACTORY_SUPPLIED);
         CreateSalesOrderRequest.SalesOrderItemDTO item = new CreateSalesOrderRequest.SalesOrderItemDTO();
         item.setProductTypeId(PRODUCT_TYPE_ID);
         item.setProductName("叮咚卤猪舌");

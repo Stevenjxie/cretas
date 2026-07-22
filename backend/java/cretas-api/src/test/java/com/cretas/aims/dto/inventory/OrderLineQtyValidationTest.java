@@ -174,8 +174,6 @@ class OrderLineQtyValidationTest {
 
         CreateSalesOrderRequest req = new CreateSalesOrderRequest();
         req.setCustomerId("CUST-001");
-        req.setProcessingMode(com.cretas.aims.entity.enums.SalesProcessingMode.STANDARD_SALE);
-        req.setMaterialSupplyMode(com.cretas.aims.entity.enums.MaterialSupplyMode.FACTORY_SUPPLIED);
         req.setOrderDate(LocalDate.now());
         req.setItems(List.of(item));
         return req;

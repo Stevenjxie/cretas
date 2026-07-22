@@ -657,29 +657,17 @@
 - **部署状态**：`DEPLOYED`；Java `v20260721_233852`，active `green/10020`，5/5 切流后健康通过；`verify-release` 的 systemd、直连健康及 `approval-recovery` JAR marker 均通过。
 - **回归状态**：`RECOVERED_AND_VERIFIED`；部署后先 query-only 证明 `PO-20260721-0001` 为 `SUBMITTED`、无实例，取得用户单独明确授权后使用固定幂等键严格执行1次恢复 POST。创建唯一实例 `6949ac9a-fd33-40e2-a45e-26db666035d2`，流程 `awf-f006-po-default` 自动完成为 `APPROVED`，订单投影为 `FINANCE_APPROVED`；刷新后匹配实例严格1个、审批历史1条、待办0，金额 `1440.00`、税额 `187.20`、9行及供应商 identity 不变。除该次授权恢复外业务 mutation=0，未取消、重提、重建订单，未触碰 LIUSHANMEN。
 
-## BUG-F006-R3-PURCHASE-RECEIVING-ROUTE-001 — 审批完成采购单无法进入仓储待收货任务
+## F006 R3 采购审批后仓储收货断链（2026-07-22）
 
-- **发现阶段/时间**：F006 R3 采购 OA 完成后的仓储衔接回归，2026-07-22。
-- **页面/步骤**：`PO-20260721-0001` 已财务审核通过；采购详情点击“前往仓储收货任务”后落到只有既有库存批次的原料入库历史页，无法定位该采购单的待收货任务。
-- **期望/实际/业务影响**：采购 OA 完成后应由现有采购收货记录与订单剩余量投影出唯一待收货任务，并在统一原料/物料入库页面置顶显示；实际入口、读模型和仓储收货写边界断裂，仓管无法继续且旧采购页可重复创建活动草稿，存在重复占用或双入库风险。
+### BUG-F006-R3-PURCHASE-RECEIVING-ROUTE-001
+
+- **发现阶段/时间/页面/步骤**：F006 R3 采购 OA 完成后的仓储续跑，2026-07-22；`PO-20260721-0001` 财务已审核，从采购详情点击“前往仓储收货任务”却进入仅有历史批次的原料页面，无法定位采购待收任务。
+- **期望/实际/业务影响**：审批完成采购单应以只读投影出现在统一仓储页面，仓储人员从来源任务创建/续办唯一活动收货单并确认入库；实际路由指向旧采购入库/批次视图且没有待办投影，原始采购到库存链阻塞。
 - **证据路径**：`D:/Temp/codex-clipboard-a9975166-798c-403b-9714-633d4e441983.png`、`D:/Temp/codex-clipboard-20d8d21b-ae86-4841-a454-44551959e430.png`。
-- **根因**：采购详情仍指向批次历史语义；现有采购收货记录缺少稳定采购行 identity，活动草稿占用未纳入剩余可收量；页面没有把采购、客户来料和生产入库投影统一呈现，且附件/打印/RBAC 分散在旧路径。
-- **修复**：复用现有 PurchaseOrder/PurchaseReceiveRecord/MaterialBatch，不新增平行收货系统；统一页面增加采购/客户来料/生产待入库区，采购详情携带 `purchaseOrderId + orderNo` 精确定位；收货按采购行 identity、活动草稿占用和已收量事务校验，默认超收容差0，仓储权限、附件、打印、分批和重复确认门禁统一收口。
-- **修改文件**：`PurchaseController/PurchaseServiceImpl/PurchaseReceiveItem`、采购收货 DTO/Repository、`AttachmentPermissionResolver`、`PrintController`、Flyway `V20261028_101`/`105`、Web 采购详情、仓储统一面板及目标测试。
-- **测试**：采购待收货投影、活动草稿冲突、确认时剩余量复核、超收拒绝、附件权限、打印、真实 JPA Repository Context、Web 路由与统一任务区契约均纳入本批目标门禁。
-- **Commit/PR/main 状态**：本批实现提交/PR/main 以最终合入记录为准。
+- **根因**：采购详情仍指向采购模块旧收货页面；现有采购收货 Entity/Service/批次物化能力没有面向仓储工作台的待收货读模型；活动草稿占用只按物料聚合，无法安全区分同订单同物料多行；收货附件权限仍按采购模块判断。
+- **修复**：复用既有 `PurchaseReceiveRecord`、确认入库和库存批次写路径，仅新增 `FINANCE_APPROVED/PARTIAL_RECEIVED` 采购单的仓储待收货投影；采购详情零写跳转到 `/warehouse/materials` 并携带订单 ID/单号；统一仓储页置顶浅红待收行，支持目标仓库、分批数量、供货凭证、打印和确认；同订单活动草稿 fail-closed，收货行固定 `purchaseOrderItemId`，创建与确认均锁定并校验剩余量；仓储拥有唯一写权限，采购只读追溯。客供料、销售缺料、生产入库和 ownership 扩展明确不在本批。
+- **修改文件**：`PurchaseController/PurchaseService/PurchaseServiceImpl`、采购收货 DTO/Entity/Repository/Flyway、附件权限与打印；Web `procurement/orders/detail.vue`、`warehouse/materials/*`、采购收货 API、router/menu 及目标测试。
+- **测试**：待最终 release lifecycle 与 Web 目标测试完成后回填；Repository 变更包含真实 JPA Context 门禁。
+- **Commit/PR/main 状态**：`IN_PROGRESS`。
 - **部署状态**：`NOT_DEPLOYED`。
-- **回归状态**：`CODE_TARGET_TEST_IN_PROGRESS`；按用户最新决定不由修复任务运行 Playwright，生产业务 mutation=0，未修改、重提、重建或桥接 `PO-20260721-0001`。
-
-## BUG-F006-R3-CLOSED-LOOP-CUSTOMER-SUPPLY-001 — 销售供料模式、客供库存与生产消费链断裂
-
-- **发现阶段/时间**：采购收货修复的销售→生产→仓储同因核验，2026-07-22。
-- **页面/步骤**：销售订单缺少稳定加工/供料模式与结构化客供料需求；客供库存、公司库存、生产计划、调拨和结算之间缺少统一所有权/来源门禁；销售客供料跳仓储还会把销售单号误当采购单号并隐藏目标任务。
-- **期望/实际/业务影响**：普通销售/代加工及客户自带/工厂备料应贯穿订单、计划、库存和仓储任务；客供料只供同客户同订单使用，不进入采购应付或公司采购建议；实际链路可能出现页面无任务、客户库存被公司计划统计/消费或客供不足错误触发公司采购。
-- **根因**：加工/供料字段未贯通 DTO/Entity/UI；客供料原先由销售详情直接收货且没有结构化需求实体；MaterialBatch/FinishedGoodsBatch/ProductionPlan 缺少 ownership/customer/order lineage；库存汇总、分配、消费与结单查询只按物料和工厂过滤；销售/采购共用模糊 `orderNo` 路由参数。
-- **修复**：新增销售加工与供料契约、结构化客供料需求和仓储唯一确认入口；库存与计划保存 ownership/customer/order/item 来源快照，普通备料查询排除客户库存，客供计划只能读取同客户同订单批次；分配、消费、结单与调拨再次校验所有权；客供不足禁止生成工厂采购需求；缺料采购需求保存销售/计划来源并幂等；销售仓储路由使用独立 `salesOrderNo`，旧链接在 customer-supplied 模式下安全兼容。
-- **修改文件**：销售订单 DTO/Entity/Service/Web，客供料 Requirement Controller/Service/Repository，`MaterialBatch/FinishedGoodsBatch/ProductionPlan` 及 mapper，`MaterialBatchRepository`、`ProductionPlanServiceImpl`、`TransferServiceImpl`、`ProcurementSuggestionService`、采购需求页面与 Flyway `V20261028_100`/`102`/`103`/`104`。
-- **测试**：销售合同合法组合、结构化需求、客供收货、生产计划所有权、库存查询隔离、非法批次消费/结单拒绝、客供不足禁止采购、调拨继承、真实 JPA Context，以及 Web 销售→仓储生产者/消费者路由测试。
-- **Commit/PR/main 状态**：本批实现提交/PR/main 以最终合入记录为准。
-- **部署状态**：`NOT_DEPLOYED`。
-- **回归状态**：`CODE_TARGET_TEST_IN_PROGRESS`；用户自行执行 Playwright，修复任务生产业务写入0、历史桥接0，未触碰 LIUSHANMEN。
+- **回归状态**：`CODE_REVIEW_IN_PROGRESS`；按用户决定不由 Codex 运行 Playwright，部署后由用户从同一 `PO-20260721-0001` 做页面续测；当前生产业务 mutation=0，未取消、重建、重提或桥接采购单，未触碰 LIUSHANMEN。

@@ -2,12 +2,8 @@ package com.cretas.aims.service.sales.impl;
 
 import com.cretas.aims.dto.sales.BatchAllocationDTO;
 import com.cretas.aims.entity.ProductType;
-import com.cretas.aims.entity.enums.InventoryOwnership;
-import com.cretas.aims.entity.enums.SalesProcessingMode;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesDeliveryItem;
-import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
-import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation;
 import com.cretas.aims.exception.BusinessException;
@@ -157,7 +153,6 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                 throw new BusinessException(403, "成品批次不属于当前工厂: " + dto.getFinishedGoodsBatchId())
                         .withHint("跨工厂调用被拒绝, 请选择本工厂的成品批次").withHintTarget("finishedGoodsBatchId");
             }
-            assertBatchOwnershipMatchesDelivery(item, batch);
             // T4-D5 (#572) + 🔴 G1: warehouse guard.
             if (hasExplicitSource) {
                 // EXPLICIT source → batch must be in that exact warehouse (409 guard preserved).
@@ -234,7 +229,6 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
     }
 
     @Override
-    @Transactional(readOnly = true)
     public List<Map<String, Object>> recommendFifo(
             String factoryId, String deliveryItemId, String productTypeId, BigDecimal requiredQty,
             String unit, String sourceWarehouseCode) {
@@ -297,9 +291,6 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
 
         for (var batch : batches) {
             if (remaining.compareTo(BigDecimal.ZERO) <= 0) break;
-            if (!isBatchOwnershipAllowedForDelivery(deliveryItem, batch)) {
-                continue;
-            }
             BigDecimal availableNative = batch.getAvailableQuantity();
             if (availableNative.compareTo(BigDecimal.ZERO) <= 0) continue;
 
@@ -341,47 +332,6 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                 remaining.compareTo(BigDecimal.ZERO) <= 0);
 
         return result;
-    }
-
-    /**
-     * Finished-goods ownership is a legal allocation boundary, not a display attribute.
-     * Standard/factory sales can only consume company (or legacy null) inventory. Toll-processing
-     * deliveries can only consume customer-owned output produced for the same customer and sales
-     * order. Historical null ownership remains company-compatible, but an explicitly
-     * customer-owned row is never downgraded into the public saleable pool.
-     */
-    private void assertBatchOwnershipMatchesDelivery(SalesDeliveryItem item, FinishedGoodsBatch batch) {
-        if (isBatchOwnershipAllowedForDelivery(item, batch)) {
-            return;
-        }
-        throw new BusinessException(409, "成品批次的库存归属与当前销售订单不一致")
-                .withCode("DELIVERY_BATCH_OWNERSHIP_MISMATCH")
-                .withHint("普通销售只能使用公司自有库存；代加工成品只能发给同一客户、同一销售订单")
-                .withHintTarget("finishedGoodsBatchId");
-    }
-
-    private boolean isBatchOwnershipAllowedForDelivery(SalesDeliveryItem item, FinishedGoodsBatch batch) {
-        if (batch == null) {
-            return false;
-        }
-        boolean customerOwned = batch.getOwnership() == InventoryOwnership.CUSTOMER_OWNED;
-        SalesDeliveryRecord delivery = item != null ? item.getDeliveryRecord() : null;
-        SalesOrder order = delivery != null ? delivery.getSalesOrder() : null;
-        boolean tollProcessing = order != null
-                && order.getProcessingMode() == SalesProcessingMode.TOLL_PROCESSING;
-
-        if (!tollProcessing) {
-            return !customerOwned;
-        }
-        if (!customerOwned || delivery.getCustomerId() == null || delivery.getSalesOrderId() == null) {
-            return false;
-        }
-        boolean sameCustomer = delivery.getCustomerId().equals(batch.getOwnerCustomerId());
-        boolean sameOrder = delivery.getSalesOrderId().equals(batch.getSourceSalesOrderId());
-        boolean sameLine = item.getSalesOrderItemId() == null
-                || batch.getSourceSalesOrderItemId() == null
-                || String.valueOf(item.getSalesOrderItemId()).equals(batch.getSourceSalesOrderItemId());
-        return sameCustomer && sameOrder && sameLine;
     }
 
     /**

@@ -15,9 +15,6 @@ import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.enums.CustomerSource;
 import com.cretas.aims.entity.enums.SalesDeliveryStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
-import com.cretas.aims.entity.enums.SalesProcessingMode;
-import com.cretas.aims.entity.enums.MaterialSupplyMode;
-import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.inventory.*;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
@@ -42,7 +39,6 @@ import com.cretas.aims.service.ApprovalChainService;
 import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.SalesService;
-import com.cretas.aims.service.inventory.SalesOrderSuppliedMaterialRequirementService;
 import com.cretas.aims.service.inventory.FgQuantityUnitConverter;
 import com.cretas.aims.service.product.ProductPackagingSpecService;
 import com.cretas.aims.service.rules.annotation.RuleEvaluate;
@@ -86,10 +82,6 @@ public class SalesServiceImpl implements SalesService {
     /** Validates user-selected source warehouse codes against the current factory. */
     @org.springframework.beans.factory.annotation.Autowired
     private FactoryWarehouseRepository factoryWarehouseRepository;
-
-    /** Required in the Spring runtime; field injection preserves historical unit-test constructors. */
-    @org.springframework.beans.factory.annotation.Autowired
-    private SalesOrderSuppliedMaterialRequirementService suppliedMaterialRequirementService;
 
     /** P0-13 批次分配校验（可选注入，避免破坏现有构造器）。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -309,11 +301,6 @@ public class SalesServiceImpl implements SalesService {
     @Loggable(module = "SALES_ORDER", action = "CREATE", entityType = "SalesOrder",
               summary = "'创建销售单 客户=' + #request.customerId")
     public SalesOrder createSalesOrder(String factoryId, CreateSalesOrderRequest request, Long userId) {
-        validateSupplyContract(
-                request.getProcessingMode(), request.getMaterialSupplyMode(), request.getItems());
-        validateSuppliedMaterialPayload(
-                request.getProcessingMode(), request.getMaterialSupplyMode(),
-                request.getSuppliedMaterials(), false);
         // Canvas V2: DB-driven validation — pre-compute totalAmount so rules can reference it
         BigDecimal preComputedTotal = BigDecimal.ZERO;
         Set<String> seenProductIdsForCheck = new HashSet<>();
@@ -390,8 +377,6 @@ public class SalesServiceImpl implements SalesService {
         order.setStatus(SalesOrderStatus.DRAFT);
         // P3 多仓: 外部渠道采购单标题 (如 "0601-熟食T+2"). Nullable.
         order.setExternalOrderTitle(request.getExternalOrderTitle());
-        order.setProcessingMode(request.getProcessingMode());
-        order.setMaterialSupplyMode(request.getMaterialSupplyMode());
         order.setCreatedBy(userId);
 
         // Sprint 4 W2 S-INVOICE-CLIENT-1 Option 3 三层 default 链 — 第 1→2 层 prefill:
@@ -626,8 +611,6 @@ public class SalesServiceImpl implements SalesService {
             item.setBoxQuantity(itemDTO.getBoxQuantity());
             item.setSourceWarehouseCode(normalizeSourceWarehouseCode(
                     factoryId, itemDTO.getSourceWarehouseCode()));
-            item.setProcessingMode(request.getProcessingMode());
-            item.setMaterialSupplyMode(request.getMaterialSupplyMode());
             // P3 多仓字段 (V20260915_01) — 全 nullable, 普通订单不传不影响现有逻辑
             item.setDestWarehouseName(itemDTO.getDestWarehouseName());
             item.setDestWarehouseCode(itemDTO.getDestWarehouseCode());
@@ -645,13 +628,6 @@ public class SalesServiceImpl implements SalesService {
         }
 
         salesOrderItemRepository.saveAll(items);
-
-        List<SalesOrderSuppliedMaterialRequirement> suppliedMaterials = List.of();
-        if (request.getSuppliedMaterials() != null && !request.getSuppliedMaterials().isEmpty()) {
-            suppliedMaterials = requireSuppliedMaterialRequirementService()
-                    .createForOrder(order, request.getSuppliedMaterials());
-        }
-        order.setSuppliedMaterials(new ArrayList<>(suppliedMaterials));
 
         order.setTotalAmount(totalAmount);
         // SP4: tax_amount = Σ (lineAmountWithTax − lineAmount) across items.
@@ -713,7 +689,6 @@ public class SalesServiceImpl implements SalesService {
     }
 
     @Override
-    @Transactional(readOnly = true)
     public SalesOrder getSalesOrderById(String factoryId, String orderId) {
         SalesOrder order = salesOrderRepository.findById(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("销售订单不存在"));
@@ -721,7 +696,6 @@ public class SalesServiceImpl implements SalesService {
             throw new BusinessException(403, "无权访问该销售订单")
                     .withHint("当前销售订单不属于该工厂, 无法访问");
         }
-        org.hibernate.Hibernate.initialize(order.getSuppliedMaterials());
         return order;
     }
 
@@ -1960,14 +1934,6 @@ public class SalesServiceImpl implements SalesService {
                 SalesOrder.class, orderId);
         }
 
-        validateSupplyContract(
-                request.getProcessingMode(), request.getMaterialSupplyMode(), request.getItems());
-        validateSuppliedMaterialPayload(
-                request.getProcessingMode(), request.getMaterialSupplyMode(),
-                request.getSuppliedMaterials(), true);
-        order.setProcessingMode(request.getProcessingMode());
-        order.setMaterialSupplyMode(request.getMaterialSupplyMode());
-
         // Canvas V2: DB-driven validation for UPDATE — pre-compute totalAmount if items changed
         BigDecimal updateTotal = order.getTotalAmount() != null ? order.getTotalAmount() : BigDecimal.ZERO;
         boolean hasDupOnUpdate = false;
@@ -2080,8 +2046,6 @@ public class SalesServiceImpl implements SalesService {
                 item.setBarcode(itemDTO.getBarcode());
                 item.setAppointmentTime(itemDTO.getAppointmentTime());
                 item.setRequiredArrivalDate(itemDTO.getRequiredArrivalDate());
-                item.setProcessingMode(request.getProcessingMode());
-                item.setMaterialSupplyMode(request.getMaterialSupplyMode());
                 newItems.add(item);
                 // E-2 空价草稿: unitPrice null → getLineAmount() null, 该行贡献 0 (同 createSalesOrder 防 NPE)
                 BigDecimal lineAmount = item.getLineAmount();
@@ -2100,30 +2064,6 @@ public class SalesServiceImpl implements SalesService {
                     .reduce(BigDecimal.ZERO, BigDecimal::add)
                     .setScale(2, java.math.RoundingMode.HALF_UP);
             order.setTaxAmount(taxAmountSumUpdate);
-        } else {
-            // Header modes are the MVP single truth. Keep draft-line snapshots aligned
-            // even when this edit does not replace order items.
-            List<SalesOrderItem> existingItems = salesOrderItemRepository.findBySalesOrderId(order.getId());
-            existingItems.forEach(item -> {
-                item.setProcessingMode(request.getProcessingMode());
-                item.setMaterialSupplyMode(request.getMaterialSupplyMode());
-            });
-            if (!existingItems.isEmpty()) {
-                salesOrderItemRepository.saveAll(existingItems);
-            }
-        }
-
-        if (suppliedMaterialRequirementService != null) {
-            List<SalesOrderSuppliedMaterialRequirement> suppliedMaterials =
-                    suppliedMaterialRequirementService.updateForOrder(
-                            order,
-                            request.getSuppliedMaterials(),
-                            request.getItems() != null && !request.getItems().isEmpty());
-            order.setSuppliedMaterials(new ArrayList<>(suppliedMaterials));
-        } else if (request.getSuppliedMaterials() != null
-                && !request.getSuppliedMaterials().isEmpty()) {
-            throw new IllegalStateException(
-                    "SalesOrderSuppliedMaterialRequirementService is required for suppliedMaterials");
         }
 
         // Canvas V3: Update dynamic custom fields via DynamicFieldService
@@ -2241,7 +2181,6 @@ public class SalesServiceImpl implements SalesService {
               entityIdParam = "sourceOrderId")
     public SalesOrder copySalesOrder(String factoryId, String sourceOrderId, Long userId) {
         SalesOrder source = getSalesOrderById(factoryId, sourceOrderId);
-        validatePersistedSupplyContract(source);
         // 强制初始化 items (lazy collection)
         org.hibernate.Hibernate.initialize(source.getItems());
 
@@ -2270,8 +2209,6 @@ public class SalesServiceImpl implements SalesService {
         newOrder.setDefaultTaxRate(source.getDefaultTaxRate());
         newOrder.setDefaultInvoiceType(source.getDefaultInvoiceType());
         newOrder.setBoxQuantity(source.getBoxQuantity());
-        newOrder.setProcessingMode(source.getProcessingMode());
-        newOrder.setMaterialSupplyMode(source.getMaterialSupplyMode());
         // 重置状态字段
         newOrder.setStatus(SalesOrderStatus.DRAFT);
         newOrder.setCreatedBy(userId);
@@ -2305,8 +2242,6 @@ public class SalesServiceImpl implements SalesService {
             newItem.setPackagingBaseUnit(srcItem.getPackagingBaseUnit());
             newItem.setPackagingFactor(srcItem.getPackagingFactor());
             newItem.setSourceWarehouseCode(srcItem.getSourceWarehouseCode());
-            newItem.setProcessingMode(srcItem.getProcessingMode());
-            newItem.setMaterialSupplyMode(srcItem.getMaterialSupplyMode());
             // deliveredQuantity / lockedQty / reservedQty 默认 ZERO — 不复制状态量
             newItems.add(newItem);
 
@@ -2316,21 +2251,6 @@ public class SalesServiceImpl implements SalesService {
             }
         }
         salesOrderItemRepository.saveAll(newItems);
-
-        if (suppliedMaterialRequirementService != null) {
-            Map<Long, Long> copiedItemIds = new HashMap<>();
-            for (int index = 0; index < source.getItems().size() && index < newItems.size(); index++) {
-                Long sourceItemId = source.getItems().get(index).getId();
-                Long copiedItemId = newItems.get(index).getId();
-                if (sourceItemId != null && copiedItemId != null) {
-                    copiedItemIds.put(sourceItemId, copiedItemId);
-                }
-            }
-            List<SalesOrderSuppliedMaterialRequirement> copiedRequirements =
-                    suppliedMaterialRequirementService.copyForOrder(
-                            source, newOrder, copiedItemIds);
-            newOrder.setSuppliedMaterials(new ArrayList<>(copiedRequirements));
-        }
         newOrder.setTotalAmount(totalAmount);
         newOrder = salesOrderRepository.save(newOrder);
 
@@ -3517,7 +3437,7 @@ public class SalesServiceImpl implements SalesService {
             List<com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation> allocations =
                     batchAllocationService.listByDeliveryItem(factoryId, String.valueOf(item.getId()));
             if (allocations != null && !allocations.isEmpty()) {
-                deductByAllocations(factoryId, salesOrderId, item, allocations);
+                deductByAllocations(factoryId, item, allocations);
                 return;
             }
         }
@@ -3542,9 +3462,6 @@ public class SalesServiceImpl implements SalesService {
                     .findShippableBatchesAllWarehousesExcluding(
                             factoryId, item.getProductTypeId(), WarehouseCodes.WH_RD);
         }
-        batches = batches.stream()
-                .filter(batch -> isBatchOwnershipAllowedForSalesOrder(factoryId, salesOrderId, item, batch))
-                .toList();
 
         // 🔴 C1 (2026-07-05): FG batches for one product may be recorded in DIFFERENT native units
         // (one 小结'd with productWeight → kg, another without → 盒/件, F006 confirmed live). All
@@ -3646,7 +3563,7 @@ public class SalesServiceImpl implements SalesService {
      * 但发货时可能因并发/其它单发货导致可用下降 → 若某批可用已不足以覆盖其分配量 (超出亚单位换算漂移),
      * loud-fail 409 提示重新分配, <b>绝不静默少发或超发</b>。
      */
-    private void deductByAllocations(String factoryId, String salesOrderId, SalesDeliveryItem item,
+    private void deductByAllocations(String factoryId, SalesDeliveryItem item,
             List<com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation> allocations) {
         String targetUnit = item.getUnit();
         // Defensive null-check: legacy unit tests may construct with null productTypeRepository.
@@ -3668,7 +3585,6 @@ public class SalesServiceImpl implements SalesService {
                 throw new BusinessException(403, "分配的成品批次不属于当前工厂: " + alloc.getBatchNumber())
                         .withHint("跨工厂数据被拒绝, 请重新分配批次").withHintTarget("finishedGoodsBatchId");
             }
-            assertBatchOwnershipMatchesSalesOrder(factoryId, salesOrderId, item, batch);
             String allocUnit = alloc.getUnit() != null ? alloc.getUnit() : targetUnit;
             // 分配量换算到 targetUnit (通常 allocUnit==targetUnit → 恒等), 统一在发货单位记账。
             BigDecimal allocQtyInTarget = FgQuantityUnitConverter
@@ -3721,46 +3637,6 @@ public class SalesServiceImpl implements SalesService {
                     .withHint("请到「发货记录 → 分配批次」重新分配, 确保分配总量等于发货数量")
                     .withHintTarget("发货记录 Tab");
         }
-    }
-
-    private void assertBatchOwnershipMatchesSalesOrder(
-            String factoryId, String salesOrderId, SalesDeliveryItem item, FinishedGoodsBatch batch) {
-        if (isBatchOwnershipAllowedForSalesOrder(factoryId, salesOrderId, item, batch)) {
-            return;
-        }
-        throw new BusinessException(409, "成品批次的库存归属与当前销售订单不一致")
-                .withCode("DELIVERY_BATCH_OWNERSHIP_MISMATCH")
-                .withHint("普通销售只能使用公司自有库存；代加工成品只能发给同一客户、同一销售订单")
-                .withHintTarget("finishedGoodsBatchId");
-    }
-
-    private boolean isBatchOwnershipAllowedForSalesOrder(
-            String factoryId, String salesOrderId, SalesDeliveryItem item, FinishedGoodsBatch batch) {
-        if (batch == null || !Objects.equals(factoryId, batch.getFactoryId())) {
-            return false;
-        }
-        boolean customerOwned = batch.getOwnership() == InventoryOwnership.CUSTOMER_OWNED;
-        SalesOrder order = null;
-        if (salesOrderRepository != null && salesOrderId != null && !salesOrderId.isBlank()) {
-            order = salesOrderRepository.findById(salesOrderId)
-                    .filter(candidate -> Objects.equals(factoryId, candidate.getFactoryId()))
-                    .orElse(null);
-        }
-        boolean tollProcessing = order != null
-                && order.getProcessingMode() == SalesProcessingMode.TOLL_PROCESSING;
-        if (!tollProcessing) {
-            return !customerOwned;
-        }
-        if (!customerOwned || order.getCustomerId() == null || order.getId() == null) {
-            return false;
-        }
-        boolean sameCustomer = Objects.equals(order.getCustomerId(), batch.getOwnerCustomerId());
-        boolean sameOrder = Objects.equals(order.getId(), batch.getSourceSalesOrderId());
-        boolean sameLine = item == null
-                || item.getSalesOrderItemId() == null
-                || batch.getSourceSalesOrderItemId() == null
-                || Objects.equals(String.valueOf(item.getSalesOrderItemId()), batch.getSourceSalesOrderItemId());
-        return sameCustomer && sameOrder && sameLine;
     }
 
     /**
@@ -4086,83 +3962,6 @@ public class SalesServiceImpl implements SalesService {
         target.setPackagingUnit(source.getPackagingUnit());
         target.setPackagingBaseUnit(source.getPackagingBaseUnit());
         target.setPackagingFactor(source.getPackagingFactor());
-    }
-
-    private void validateSupplyContract(
-            SalesProcessingMode processingMode,
-            MaterialSupplyMode materialSupplyMode,
-            List<CreateSalesOrderRequest.SalesOrderItemDTO> items) {
-        if (processingMode == null || materialSupplyMode == null) {
-            throw new BusinessException(400, "加工方式和物料供应方式必须明确选择")
-                    .withCode("SALES_ORDER_SUPPLY_CONTRACT_REQUIRED")
-                    .withHintTarget(processingMode == null ? "processingMode" : "materialSupplyMode");
-        }
-        if (processingMode == SalesProcessingMode.STANDARD_SALE
-                && materialSupplyMode == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
-            throw new BusinessException(400, "普通销售不能选择客户自带原料")
-                    .withCode("SALES_ORDER_SUPPLY_CONTRACT_INVALID")
-                    .withHint("如客户提供原料，请将加工方式改为代加工")
-                    .withHintTarget("materialSupplyMode");
-        }
-        if (items == null) {
-            return;
-        }
-        for (CreateSalesOrderRequest.SalesOrderItemDTO item : items) {
-            if ((item.getProcessingMode() != null && item.getProcessingMode() != processingMode)
-                    || (item.getMaterialSupplyMode() != null
-                    && item.getMaterialSupplyMode() != materialSupplyMode)) {
-                throw new BusinessException(400, "当前版本暂不支持同一销售订单内混合加工或供料方式")
-                        .withCode("SALES_ORDER_MIXED_SUPPLY_MODE_UNSUPPORTED")
-                        .withHint("请拆分为供料方式一致的销售订单")
-                        .withHintTarget("items");
-            }
-        }
-    }
-
-    private void validateSuppliedMaterialPayload(
-            SalesProcessingMode processingMode,
-            MaterialSupplyMode materialSupplyMode,
-            List<CreateSalesOrderRequest.SuppliedMaterialRequirementDTO> suppliedMaterials,
-            boolean nullMeansPreserve) {
-        boolean customerSuppliedToll = processingMode == SalesProcessingMode.TOLL_PROCESSING
-                && materialSupplyMode == MaterialSupplyMode.CUSTOMER_SUPPLIED;
-        boolean hasPayload = suppliedMaterials != null && !suppliedMaterials.isEmpty();
-        if (customerSuppliedToll
-                && (!nullMeansPreserve || suppliedMaterials != null)
-                && !hasPayload) {
-            throw new BusinessException(400, "代加工且客户自带原料时必须填写客供物料需求")
-                    .withCode("CUSTOMER_SUPPLIED_REQUIREMENTS_REQUIRED")
-                    .withHintTarget("suppliedMaterials");
-        }
-        if (!customerSuppliedToll && hasPayload) {
-            throw new BusinessException(400,
-                    "只有代加工且客户自带原料的销售订单可以携带 suppliedMaterials")
-                    .withCode("CUSTOMER_SUPPLIED_REQUIREMENTS_MODE_INVALID")
-                    .withHintTarget("suppliedMaterials");
-        }
-    }
-
-    private SalesOrderSuppliedMaterialRequirementService requireSuppliedMaterialRequirementService() {
-        if (suppliedMaterialRequirementService == null) {
-            throw new IllegalStateException(
-                    "SalesOrderSuppliedMaterialRequirementService is required for suppliedMaterials");
-        }
-        return suppliedMaterialRequirementService;
-    }
-
-    private void validatePersistedSupplyContract(SalesOrder source) {
-        validateSupplyContract(source.getProcessingMode(), source.getMaterialSupplyMode(), null);
-        if (source.getItems() == null) {
-            return;
-        }
-        for (SalesOrderItem item : source.getItems()) {
-            if (item.getProcessingMode() != source.getProcessingMode()
-                    || item.getMaterialSupplyMode() != source.getMaterialSupplyMode()) {
-                throw new BusinessException(409, "源销售订单的供料契约不完整，不能复制")
-                        .withCode("SALES_ORDER_SUPPLY_SNAPSHOT_INCONSISTENT")
-                        .withHint("请先在草稿编辑中明确并保存加工方式与物料供应方式");
-            }
-        }
     }
 
     private String normalizeSourceWarehouseCode(String factoryId, String sourceWarehouseCode) {

@@ -3,8 +3,6 @@ package com.cretas.aims.entity.inventory;
 import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.security.PriceSensitive;
-import com.cretas.aims.entity.enums.MaterialSupplyMode;
-import com.cretas.aims.entity.enums.SalesProcessingMode;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.*;
 
@@ -197,15 +195,6 @@ public class SalesOrderItem extends BaseEntity {
      */
     @Column(name = "source_warehouse_code", length = 20)
     private String sourceWarehouseCode;
-
-    /** Order-line snapshot. Mixed modes are deliberately rejected by the current MVP service contract. */
-    @Enumerated(EnumType.STRING)
-    @Column(name = "processing_mode", length = 32)
-    private SalesProcessingMode processingMode;
-
-    @Enumerated(EnumType.STRING)
-    @Column(name = "material_supply_mode", length = 32)
-    private MaterialSupplyMode materialSupplyMode;
 
     /** 成本小计 = 数量 × 成本单价. Price-sensitive: returns null when costUnitPrice stripped. */
     @Transient

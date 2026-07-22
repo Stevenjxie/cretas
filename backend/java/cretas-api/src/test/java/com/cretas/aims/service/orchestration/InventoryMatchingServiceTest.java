@@ -7,8 +7,6 @@ import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
-import com.cretas.aims.entity.enums.InventoryOwnership;
-import com.cretas.aims.entity.enums.SalesProcessingMode;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseDefaultRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
@@ -181,64 +179,5 @@ class InventoryMatchingServiceTest {
         // 验证 NO 全 warehouse legacy method 调用
         verify(finishedGoodsBatchRepository, never())
                 .findAvailableBatches(anyString(), anyString());
-    }
-
-    @Test
-    @DisplayName("普通销售预留排除客户所有成品")
-    void reserveStock_standardSaleSkipsCustomerOwnedBatch() {
-        SalesOrder order = new SalesOrder();
-        order.setId("SO-STANDARD");
-        order.setFactoryId(FACTORY_ID);
-        order.setCustomerId("C-1");
-        order.setProcessingMode(SalesProcessingMode.STANDARD_SALE);
-        when(salesOrderRepository.findById(order.getId())).thenReturn(Optional.of(order));
-
-        FinishedGoodsBatch batch = customerOwnedBatch(order.getId(), "C-1");
-        when(finishedGoodsBatchRepository
-                .findAvailableBatchesByWarehouse(FACTORY_ID, PRODUCT_TYPE_ID, WH_LOG_ID))
-                .thenReturn(List.of(batch));
-
-        service.reserveStock(FACTORY_ID, order.getId(), null, PRODUCT_TYPE_ID, BigDecimal.ONE);
-
-        verifyNoInteractions(reservationLedgerService);
-    }
-
-    @Test
-    @DisplayName("代加工预留只允许同客户同销售订单成品")
-    void reserveStock_tollProcessingUsesMatchingCustomerOwnedBatch() {
-        SalesOrder order = new SalesOrder();
-        order.setId("SO-TOLL");
-        order.setFactoryId(FACTORY_ID);
-        order.setCustomerId("C-1");
-        order.setProcessingMode(SalesProcessingMode.TOLL_PROCESSING);
-        when(salesOrderRepository.findById(order.getId())).thenReturn(Optional.of(order));
-
-        FinishedGoodsBatch wrong = customerOwnedBatch("SO-OTHER", "C-1");
-        FinishedGoodsBatch matching = customerOwnedBatch(order.getId(), "C-1");
-        matching.setId("FGB-MATCH");
-        when(finishedGoodsBatchRepository
-                .findAvailableBatchesByWarehouse(FACTORY_ID, PRODUCT_TYPE_ID, WH_LOG_ID))
-                .thenReturn(List.of(wrong, matching));
-
-        service.reserveStock(FACTORY_ID, order.getId(), null, PRODUCT_TYPE_ID, BigDecimal.ONE);
-
-        verify(reservationLedgerService).reserve(
-                FACTORY_ID, order.getId(), null, matching, BigDecimal.ONE);
-    }
-
-    private FinishedGoodsBatch customerOwnedBatch(String salesOrderId, String customerId) {
-        FinishedGoodsBatch batch = new FinishedGoodsBatch();
-        batch.setId("FGB-CUSTOMER");
-        batch.setFactoryId(FACTORY_ID);
-        batch.setBatchNumber("FGB-CUSTOMER");
-        batch.setProductTypeId(PRODUCT_TYPE_ID);
-        batch.setProducedQuantity(BigDecimal.TEN);
-        batch.setShippedQuantity(BigDecimal.ZERO);
-        batch.setReservedQuantity(BigDecimal.ZERO);
-        batch.setWarehouseId(WH_LOG_ID);
-        batch.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
-        batch.setOwnerCustomerId(customerId);
-        batch.setSourceSalesOrderId(salesOrderId);
-        return batch;
     }
 }

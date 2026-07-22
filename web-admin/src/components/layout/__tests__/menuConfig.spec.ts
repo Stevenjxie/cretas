@@ -218,16 +218,13 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     ]);
     expect(childPaths('/procurement')).toEqual([
       '/procurement/orders',
-      '/procurement/requisitions',
       '/procurement/finance-review',
       '/procurement/suppliers',
       '/procurement/price-lists',
     ]);
   });
 
-  it('exposes production shortage demand for procurement review without restoring a purchase-side receiving action', () => {
-    expect(childPaths('/procurement')).toContain('/procurement/requisitions');
-    expect(findDescendant('/procurement', '/procurement/requisitions')?.title).toBe('采购需求/缺料任务');
+  it('does not expose purchase receiving as a procurement write entry', () => {
     expect(childPaths('/procurement')).not.toContain('/procurement/receives');
   });
 

@@ -53,16 +53,6 @@ import {
   packagingOptionsForUnit,
   packagingSelectionError,
 } from './salesOrderUnitContract';
-import {
-  MATERIAL_SUPPLY_MODE_OPTIONS,
-  SALES_PROCESSING_MODE_OPTIONS,
-  materialSupplyModeLabel,
-  newSalesOrderSupplyContract,
-  processingModeLabel,
-  supplyContractValidationError,
-  type MaterialSupplyMode,
-  type SalesProcessingMode,
-} from './salesOrderSupplyContract';
 
 // G1: 税率分组开票对话框 (客户原话 2645-2660s)
 // Sprint 4 W2 S-INVOICE-CLIENT-1: defaultInvoiceType 字段从 SO 行带过来 (后端在 SO 创建时已 prefill 自 customer)
@@ -224,10 +214,7 @@ async function submitBomSalesOrder(parent: BomSalesOrderParent, children: BomSal
   if (!children.length) {
     throw new Error('请至少添加 1 项明细');
   }
-  const payload = {
-    ...buildBomSalesOrderPayload(parent, children),
-    ...newSalesOrderSupplyContract(),
-  };
+  const payload = buildBomSalesOrderPayload(parent, children);
   const res = await post(`/${factoryId.value}/sales/orders`, payload);
   if (!res?.success) {
     throw new Error(res?.message || '提交失败');
@@ -597,22 +584,10 @@ interface OrderItem {
   contractPriceHint?: { price: number; source: string; priceListName: string } | null;
 }
 
-interface SuppliedMaterialForm {
-  materialTypeId: string;
-  materialName: string;
-  expectedQuantity: number;
-  unit: string;
-  expectedArrivalAt: string;
-  targetWarehouseId: string;
-  salesOrderItemId?: number;
-}
-
 const packagingRequestSequence = new WeakMap<OrderItem, number>();
 
 const form = ref({
   customerId: '',
-  processingMode: 'STANDARD_SALE' as SalesProcessingMode | '',
-  materialSupplyMode: 'FACTORY_SUPPLIED' as MaterialSupplyMode | '',
   requiredDeliveryDate: '',
   deliveryAddress: '',
   remark: '',
@@ -620,7 +595,6 @@ const form = ref({
   shippingIncluded: false,
   shippingFee: 0,
   extraFees: [] as Array<{ name: string; amount: number; remark: string }>,
-  suppliedMaterials: [] as SuppliedMaterialForm[],
   items: [{ productTypeId: '', quantity: 0, unit: '份', unitPrice: 0, taxRate: 13 }] as OrderItem[],
   contractFileUrl: '' as string | null,
   contractFileName: '' as string | null,
@@ -658,64 +632,6 @@ function clearContract() {
 const customers = ref<TableRow[]>([]);
 const products = ref<TableRow[]>([]);
 const salesEmployees = ref<TableRow[]>([]);
-const suppliedMaterialOptions = ref<TableRow[]>([]);
-
-async function loadSuppliedMaterialOptions() {
-  if (!factoryId.value) return;
-  try {
-    const res = await get(`/${factoryId.value}/raw-material-types/active`);
-    suppliedMaterialOptions.value = Array.isArray(res.data)
-      ? res.data
-      : Array.isArray((res.data as TableRow | undefined)?.content)
-        ? ((res.data as TableRow).content as TableRow[])
-        : [];
-  } catch {
-    suppliedMaterialOptions.value = [];
-  }
-}
-
-function addSuppliedMaterial() {
-  form.value.suppliedMaterials.push({
-    materialTypeId: '',
-    materialName: '',
-    expectedQuantity: 0,
-    unit: '',
-    expectedArrivalAt: '',
-    targetWarehouseId: '',
-  });
-}
-
-function removeSuppliedMaterial(index: number) {
-  form.value.suppliedMaterials.splice(index, 1);
-}
-
-function onSuppliedMaterialSelect(row: SuppliedMaterialForm) {
-  const material = suppliedMaterialOptions.value.find((candidate) => String(candidate.id) === row.materialTypeId);
-  row.materialName = String(material?.name || '');
-  row.unit = canonicalUnitCode(material?.unit || material?.measurementUnit || '');
-}
-
-function suppliedMaterialValidationError(): string | null {
-  if (form.value.processingMode !== 'TOLL_PROCESSING' || form.value.materialSupplyMode !== 'CUSTOMER_SUPPLIED') {
-    return null;
-  }
-  if (form.value.suppliedMaterials.length === 0) return '请至少添加一项客户自带原料需求';
-  for (const row of form.value.suppliedMaterials) {
-    if (!row.materialTypeId) return '请选择全部客户自带原料';
-    if (!(Number(row.expectedQuantity) > 0)) return `“${row.materialName || '客户自带原料'}”预计数量必须大于 0`;
-    if (!row.unit) return `“${row.materialName || '客户自带原料'}”缺少库存计量单位`;
-    if (!row.expectedArrivalAt) return `请填写“${row.materialName || '客户自带原料'}”预计到货时间`;
-    if (!row.targetWarehouseId) return `请选择“${row.materialName || '客户自带原料'}”目标仓库`;
-  }
-  return null;
-}
-
-function suppliedMaterialsPayload(): SuppliedMaterialForm[] {
-  return form.value.processingMode === 'TOLL_PROCESSING'
-    && form.value.materialSupplyMode === 'CUSTOMER_SUPPLIED'
-    ? form.value.suppliedMaterials
-    : [];
-}
 
 // 2026-07-02 fix (LIUSHANMEN "同仓库多名字"): 来源仓库下拉之前是硬编码
 // "总仓 (WH-LOG)" / "线边仓 (WH-WKS)" 两个选项 — 客户在仓库配置里改了 DB name
@@ -740,8 +656,6 @@ const warehouseSelectOptions = computed(() => {
     value: String(w.code || ''),
   }));
 });
-const customerMaterialWarehouseOptions = computed(() => warehouseList.value.filter((warehouse) =>
-  ['RAW', 'LOGISTICS', 'OUTSOURCE', 'OTHER'].includes(String(warehouse.type || ''))));
 
 const productCategoryLabels: Record<string, string> = {
   FINISHED_PRODUCT: '成品',
@@ -891,7 +805,7 @@ async function loadGoldSummary() {
 
 onMounted(() => {
   loadData(); loadCustomers(); loadProducts(); loadSalesEmployees();
-  loadGoldSummary(); loadWarehouses(); loadSuppliedMaterialOptions();
+  loadGoldSummary(); loadWarehouses();
   window.addEventListener('beforeunload', handleBeforeUnload);
 });
 onBeforeUnmount(() => { window.removeEventListener('beforeunload', handleBeforeUnload); });
@@ -1289,10 +1203,6 @@ function toOrderItemPayload(items: OrderItem[]): Array<Record<string, unknown>> 
 
 async function handleCreate() {
   if (!form.value.customerId) return ElMessage.warning('请选择客户');
-  const supplyContractError = supplyContractValidationError(form.value);
-  if (supplyContractError) return ElMessage.warning(supplyContractError);
-  const suppliedMaterialError = suppliedMaterialValidationError();
-  if (suppliedMaterialError) return ElMessage.warning(suppliedMaterialError);
   // T130 Feature A — 只校验/提交"已选产品"的行, 忽略末尾自动空行 (不再因尾部空行报"请为所有明细选择产品").
   const selectedItems = getSubmittableItems();
   if (selectedItems.length === 0) return ElMessage.warning('请至少添加一个订单明细');
@@ -1319,7 +1229,6 @@ async function handleCreate() {
     // 提交体只带已选行, 末尾空行永不发后端.
     const res = await post(`/${factoryId.value}/sales/orders`, {
       ...form.value,
-      suppliedMaterials: suppliedMaterialsPayload(),
       items: toOrderItemPayload(selectedItems),
     });
     if (res.success) { ElMessage.success('创建成功'); dialogVisible.value = false; loadData(); }
@@ -1746,46 +1655,25 @@ async function handleBatchDelete(): Promise<void> {
 
 const editingOrderId = ref<string | null>(null);
 
-async function handleEdit(row: TableRow) {
+function handleEdit(row: TableRow) {
   editingOrderId.value = String(row.id);
-  let editableRow = row;
-  try {
-    const detail = await get<TableRow>(`/${factoryId.value}/sales/orders/${editingOrderId.value}`);
-    if (detail.success && detail.data) editableRow = detail.data;
-  } catch {
-    editingOrderId.value = null;
-    return;
-  }
   form.value = {
-    customerId: String(editableRow.customerId || editableRow.customer?.id || ''),
-    processingMode: String(editableRow.processingMode || '') as SalesProcessingMode | '',
-    materialSupplyMode: String(editableRow.materialSupplyMode || '') as MaterialSupplyMode | '',
-    requiredDeliveryDate: String(editableRow.requiredDeliveryDate || ''),
-    deliveryAddress: String(editableRow.deliveryAddress || ''),
-    remark: String(editableRow.remark || ''),
-    salesperson: String(editableRow.salesperson || ''),
-    shippingIncluded: !!editableRow.shippingIncluded,
-    shippingFee: Number(editableRow.shippingFee || 0),
-    extraFees: Array.isArray(editableRow.extraFees)
-      ? (editableRow.extraFees as Array<TableRow>).map((f) => ({
+    customerId: String(row.customerId || row.customer?.id || ''),
+    requiredDeliveryDate: String(row.requiredDeliveryDate || ''),
+    deliveryAddress: String(row.deliveryAddress || ''),
+    remark: String(row.remark || ''),
+    salesperson: String(row.salesperson || ''),
+    shippingIncluded: !!row.shippingIncluded,
+    shippingFee: Number(row.shippingFee || 0),
+    extraFees: Array.isArray(row.extraFees)
+      ? (row.extraFees as Array<TableRow>).map((f) => ({
           name: String(f.name || ''),
           amount: Number(f.amount || 0),
           remark: String(f.remark || ''),
         }))
       : [],
-    suppliedMaterials: Array.isArray(editableRow.suppliedMaterials)
-      ? (editableRow.suppliedMaterials as TableRow[]).map((material) => ({
-          materialTypeId: String(material.materialTypeId || ''),
-          materialName: String(material.materialName || ''),
-          expectedQuantity: Number(material.expectedQuantity || 0),
-          unit: canonicalUnitCode(material.unit || ''),
-          expectedArrivalAt: String(material.expectedArrivalAt || ''),
-          targetWarehouseId: String(material.targetWarehouseId || ''),
-          salesOrderItemId: material.salesOrderItemId == null ? undefined : Number(material.salesOrderItemId),
-        }))
-      : [],
-    items: Array.isArray(editableRow.items) && editableRow.items.length > 0
-      ? editableRow.items.map((item: TableRow) => ({
+    items: Array.isArray(row.items) && row.items.length > 0
+      ? row.items.map((item: TableRow) => ({
           productTypeId: String(item.productTypeId || item.productType?.id || ''),
           quantity: Number(item.quantity || 0),
           unit: canonicalUnitCode(item.unit || '份'),
@@ -1810,10 +1698,10 @@ async function handleEdit(row: TableRow) {
           sourceWarehouseCode: String(item.sourceWarehouseCode || ''),
         }))
       : [emptyOrderItem()],
-    contractFileUrl: (editableRow.contractFileUrl ? String(editableRow.contractFileUrl) : null) as string | null,
-    contractFileName: (editableRow.contractFileName ? String(editableRow.contractFileName) : null) as string | null,
+    contractFileUrl: (row.contractFileUrl ? String(row.contractFileUrl) : null) as string | null,
+    contractFileName: (row.contractFileName ? String(row.contractFileName) : null) as string | null,
     customFields: {} as TableRow,
-    version: typeof editableRow.version === 'number' ? editableRow.version : null,
+    version: typeof row.version === 'number' ? row.version : null,
   };
   // T130 Feature B — handleEdit 是程序赋值 form.customerId (非用户 @change), 不触发 onCustomerSelect,
   // 故业务员保留订单原值; 显式标 touched 防止后续误覆盖.
@@ -1831,10 +1719,6 @@ async function handleSave() {
   if (editingOrderId.value) {
     // Update existing order
     if (!form.value.customerId) return ElMessage.warning('请选择客户');
-    const supplyContractError = supplyContractValidationError(form.value);
-    if (supplyContractError) return ElMessage.warning(supplyContractError);
-    const suppliedMaterialError = suppliedMaterialValidationError();
-    if (suppliedMaterialError) return ElMessage.warning(suppliedMaterialError);
     // T130 Feature A — 编辑提交同样剔除末尾空行, 并对已选行做与创建一致的校验.
     const selectedItems = getSubmittableItems();
     if (selectedItems.length === 0) return ElMessage.warning('请至少添加一个订单明细');
@@ -1853,7 +1737,6 @@ async function handleSave() {
     try {
       const res = await put(`/${factoryId.value}/sales/orders/${editingOrderId.value}`, {
         ...form.value,
-        suppliedMaterials: suppliedMaterialsPayload(),
         items: toOrderItemPayload(selectedItems),
       });
       if (res.success) { ElMessage.success('保存成功'); dialogVisible.value = false; editingOrderId.value = null; loadData(); }
@@ -1886,7 +1769,6 @@ async function openCreateDialog() {
   salespersonTouched.value = false;
   form.value = {
     customerId: '',
-    ...newSalesOrderSupplyContract(),
     requiredDeliveryDate: '',
     deliveryAddress: '',
     remark: '',
@@ -1894,7 +1776,6 @@ async function openCreateDialog() {
     shippingIncluded: false,
     shippingFee: 0,
     extraFees: [] as Array<{ name: string; amount: number; remark: string }>,
-    suppliedMaterials: [] as SuppliedMaterialForm[],
     // T130 Feature C+D — 首行走 emptyOrderItem() (单位='份' + 仓库记忆 + 全字段一致).
     items: [emptyOrderItem()] as OrderItem[],
     customFields: {} as TableRow,
@@ -1904,7 +1785,7 @@ async function openCreateDialog() {
   };
   // 张权 Apr 28 反馈: 新建对话框 dropdown 显示 onMounted 时的旧 cache.
   // 强制刷新让用户刚建的客户/产品立即可选.
-  await Promise.all([loadCustomers(), loadProducts(), loadSalesEmployees(), loadWarehouses(), loadSuppliedMaterialOptions()]);
+  await Promise.all([loadCustomers(), loadProducts(), loadSalesEmployees()]);
   dialogVisible.value = true;
 }
 
@@ -1947,12 +1828,6 @@ function handleAiFill(params: TableRow) {
     return;
   }
   form.value.customerId = customerResolution.id;
-  form.value.processingMode = (params.processingMode === 'TOLL_PROCESSING'
-    ? 'TOLL_PROCESSING'
-    : 'STANDARD_SALE') as SalesProcessingMode;
-  form.value.materialSupplyMode = (params.materialSupplyMode === 'CUSTOMER_SUPPLIED'
-    ? 'CUSTOMER_SUPPLIED'
-    : 'FACTORY_SUPPLIED') as MaterialSupplyMode;
   form.value.requiredDeliveryDate = String(params.requiredDeliveryDate || '');
   form.value.deliveryAddress = String(params.deliveryAddress || '');
   form.value.remark = String(params.remark || '');
@@ -2284,17 +2159,6 @@ function handleMergePurchase() {
         <el-table-column label="客户" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">{{ row.customerName || row.customer?.name || row.customerId || '-' }}</template>
         </el-table-column>
-        <el-table-column label="加工方式" width="100" align="center">
-          <template #default="{ row }">{{ processingModeLabel(row.processingMode) }}</template>
-        </el-table-column>
-        <el-table-column label="物料供应" width="130" align="center">
-          <template #default="{ row }">
-            <el-tag
-              size="small"
-              :type="row.materialSupplyMode === 'CUSTOMER_SUPPLIED' ? 'warning' : 'info'"
-            >{{ materialSupplyModeLabel(row.materialSupplyMode) }}</el-tag>
-          </template>
-        </el-table-column>
         <el-table-column prop="salesperson" label="业务员" width="100" show-overflow-tooltip />
         <el-table-column prop="orderDate" label="下单日期" width="120" />
         <!--
@@ -2621,83 +2485,6 @@ function handleMergePurchase() {
           <el-select v-model="form.customerId" placeholder="请选择" filterable style="width: 100%" @change="onCustomerSelect">
             <el-option v-for="c in customers" :key="c.id" :label="c.name" :value="c.id" />
           </el-select>
-        </el-form-item>
-        <el-row :gutter="16">
-          <el-col :span="12">
-            <el-form-item label="加工方式" required>
-              <el-select v-model="form.processingMode" placeholder="请选择加工方式" style="width: 100%">
-                <el-option
-                  v-for="option in SALES_PROCESSING_MODE_OPTIONS"
-                  :key="option.value"
-                  :label="option.label"
-                  :value="option.value"
-                />
-              </el-select>
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="物料供应方式" required>
-              <el-select v-model="form.materialSupplyMode" placeholder="请选择物料供应方式" style="width: 100%">
-                <el-option
-                  v-for="option in MATERIAL_SUPPLY_MODE_OPTIONS"
-                  :key="option.value"
-                  :label="option.label"
-                  :value="option.value"
-                  :disabled="option.value === 'CUSTOMER_SUPPLIED' && form.processingMode === 'STANDARD_SALE'"
-                />
-              </el-select>
-              <div class="form-help-text">
-                客户自带原料仅适用于代加工；仓储收货必须在统一待入库页面完成。
-              </div>
-            </el-form-item>
-          </el-col>
-        </el-row>
-        <el-form-item
-          v-if="form.processingMode === 'TOLL_PROCESSING' && form.materialSupplyMode === 'CUSTOMER_SUPPLIED'"
-          label="客户自带原料"
-          required
-        >
-          <div class="supplied-material-editor">
-            <el-alert
-              type="warning"
-              :closable="false"
-              show-icon
-              title="这里只登记客户预计送来的原料；销售订单确认后由仓储统一页面执行实收，不会在销售侧直接增加库存。"
-            />
-            <el-table :data="form.suppliedMaterials" border empty-text="请添加客户自带原料需求">
-              <el-table-column label="原料" min-width="220">
-                <template #default="{ row }">
-                  <el-select v-model="row.materialTypeId" filterable placeholder="选择原料" style="width:100%" @change="onSuppliedMaterialSelect(row)">
-                    <el-option v-for="material in suppliedMaterialOptions" :key="material.id"
-                      :label="`${material.name} (${material.code || '无编码'})`" :value="String(material.id)" />
-                  </el-select>
-                </template>
-              </el-table-column>
-              <el-table-column label="预计数量" width="165">
-                <template #default="{ row }">
-                  <el-input-number v-model="row.expectedQuantity" :min="0.0001" :precision="4" :controls="false" style="width:105px" />
-                  <span class="supplied-unit">{{ displayUnit(row.unit) || '未配置' }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="预计到货时间" width="205">
-                <template #default="{ row }">
-                  <el-date-picker v-model="row.expectedArrivalAt" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" style="width:100%" />
-                </template>
-              </el-table-column>
-              <el-table-column label="目标仓库" min-width="190">
-                <template #default="{ row }">
-                  <el-select v-model="row.targetWarehouseId" filterable placeholder="选择仓库" style="width:100%">
-                    <el-option v-for="warehouse in customerMaterialWarehouseOptions" :key="warehouse.id"
-                      :label="`${warehouse.name} (${warehouse.code})`" :value="String(warehouse.id)" />
-                  </el-select>
-                </template>
-              </el-table-column>
-              <el-table-column label="操作" width="80">
-                <template #default="{ $index }"><el-button type="danger" link @click="removeSuppliedMaterial($index)">移除</el-button></template>
-              </el-table-column>
-            </el-table>
-            <el-button :icon="Plus" style="margin-top:10px" @click="addSuppliedMaterial">添加客户自带原料</el-button>
-          </div>
         </el-form-item>
         <el-form-item label="交货日期"><el-date-picker v-model="form.requiredDeliveryDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
         <el-form-item label="交货地址"><el-input v-model="form.deliveryAddress" /></el-form-item>
@@ -3117,10 +2904,6 @@ function handleMergePurchase() {
   }
 }
 .search-bar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
-.form-help-text { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5; }
-.supplied-material-editor { width: 100%; }
-.supplied-material-editor .el-alert { margin-bottom: 10px; }
-.supplied-unit { margin-left: 6px; color: var(--el-text-color-secondary); }
 /* T131 Part 3 — 多选批量操作栏 */
 .bulk-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   margin-bottom: 12px; padding: 8px 12px; background: #ecf5ff; border: 1px solid #d9ecff; border-radius: 4px;

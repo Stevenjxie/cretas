@@ -40,13 +40,6 @@ export interface RequisitionItem {
   materialName?: string | null;
   quantity: number;
   unit: string;
-  requiredQuantity?: number | null;
-  availableQuantity?: number | null;
-  reservedQuantity?: number | null;
-  shortfallQuantity?: number | null;
-  sourceProductionPlanId?: string | null;
-  sourceSalesOrderId?: string | null;
-  sourceSalesOrderItemId?: string | null;
   suggestedSupplierId?: string | null;
   remark?: string | null;
   // 允许后端透传扩展字段 (Canvas dynamic fields 等)
@@ -59,9 +52,6 @@ export interface PurchaseRequisition {
   requisitionNumber: string;
   requesterId: number;
   requesterDeptId?: string | null;
-  sourceType?: 'PRODUCTION_PLAN_SHORTAGE' | string | null;
-  sourceId?: string | null;
-  sourceNo?: string | null;
   requestedItems: RequisitionItem[];
   status: PurchaseRequisitionStatus;
   expectedDate?: string | null;

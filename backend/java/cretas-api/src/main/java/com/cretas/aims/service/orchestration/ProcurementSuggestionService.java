@@ -1,17 +1,18 @@
 package com.cretas.aims.service.orchestration;
 
 import com.cretas.aims.dto.orchestration.MaterialShortfall;
-import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.RawMaterialType;
-import com.cretas.aims.entity.enums.PurchaseRequisitionStatus;
-import com.cretas.aims.entity.enums.MaterialSupplyMode;
-import com.cretas.aims.entity.inventory.PurchaseRequisition;
+import com.cretas.aims.entity.enums.PurchaseOrderStatus;
+import com.cretas.aims.entity.enums.PurchaseType;
+import com.cretas.aims.entity.inventory.PurchaseOrder;
+import com.cretas.aims.entity.inventory.PurchaseOrderItem;
 import com.cretas.aims.exception.BusinessException;
-import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
-import com.cretas.aims.repository.inventory.PurchaseRequisitionRepository;
+import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
+import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,117 +20,138 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
- * Converts a production-plan material shortfall into one reviewable purchase
- * requisition. It deliberately does not create a purchase order: supplier,
- * price, tax, specification and delivery terms must be confirmed by purchasing.
+ * 采购建议服务
+ *
+ * <p>根据BOM展开后发现的原辅料短缺，自动生成草稿状态的采购订单（一种短缺物料对应一张采购单）。
+ * 生成的采购单处于 {@link PurchaseOrderStatus#DRAFT} 状态，供采购员补充供应商、单价等信息后提交。</p>
+ *
+ * <h3>注意事项</h3>
+ * <ul>
+ *   <li>自动生成的采购单中 {@code supplierId} 默认填充占位值 {@code "PENDING"}，
+ *       采购员必须在提交前更新为真实供应商ID。</li>
+ *   <li>{@code createdBy} 使用系统账号标识 {@code 0L}，可在后续流程中替换为实际操作人。</li>
+ *   <li>单价默认为 0，需采购员填写。</li>
+ * </ul>
+ *
+ * @author Cretas Team
+ * @since 2026-02-19
  */
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ProcurementSuggestionService {
 
-    static final String SOURCE_TYPE = "PRODUCTION_PLAN_SHORTAGE";
-    private static final long SYSTEM_USER_ID = 0L;
-
-    private final PurchaseRequisitionRepository requisitionRepository;
-    private final RawMaterialTypeRepository rawMaterialTypeRepository;
-    private final ProductionPlanRepository productionPlanRepository;
+    private static final Logger log = LoggerFactory.getLogger(ProcurementSuggestionService.class);
 
     /**
-     * Generate or return the unique shortage requisition for a production plan.
-     * The plan row is locked so concurrent recalculation cannot create two
-     * active demand records for the same source.
+     * 自动生成采购单时使用的供应商ID占位值。
+     * 采购员提交前必须替换为真实供应商。
+     */
+    private static final String SUPPLIER_PENDING = "PENDING";
+
+    /** 系统自动生成使用的 createdBy 标识（0 = 系统账号） */
+    private static final long SYSTEM_USER_ID = 0L;
+
+    private final PurchaseOrderRepository purchaseOrderRepository;
+    private final PurchaseOrderItemRepository purchaseOrderItemRepository;
+    private final RawMaterialTypeRepository rawMaterialTypeRepository;
+
+    /**
+     * 根据原辅料短缺清单，为每种短缺物料生成一张草稿采购订单。
+     *
+     * <p>流程：</p>
+     * <ol>
+     *   <li>验证短缺列表非空。</li>
+     *   <li>为每种短缺物料创建一张 {@link PurchaseOrderStatus#DRAFT} 状态的采购单。</li>
+     *   <li>从 {@link RawMaterialType} 中获取计量单位（若查询失败则默认为 "kg"）。</li>
+     *   <li>先保存采购单主体（获得UUID），再保存行项目，最后更新金额。</li>
+     * </ol>
+     *
+     * @param factoryId        工厂ID
+     * @param productionPlanId 触发此建议的生产计划ID（写入备注，便于追溯）
+     * @param shortfalls       原辅料短缺信息列表
+     * @return 已持久化的草稿采购订单列表
+     * @throws BusinessException 若 shortfalls 为空
      */
     @Transactional
-    public PurchaseRequisition generateSuggestions(String factoryId,
+    public List<PurchaseOrder> generateSuggestions(String factoryId,
                                                     String productionPlanId,
                                                     List<MaterialShortfall> shortfalls) {
         if (shortfalls == null || shortfalls.isEmpty()) {
-            throw new BusinessException(400, "原辅料缺口列表为空，无需生成采购需求")
-                    .withHint("请先确认生产计划存在实际缺口")
-                    .withHintTarget("shortfalls");
+            throw new BusinessException(400, "原辅料短缺列表为空，无需生成采购建议")
+                    .withHint("请先确认生产计划存在原辅料短缺").withHintTarget("shortfalls");
         }
 
-        ProductionPlan plan = productionPlanRepository.findByIdForUpdate(productionPlanId)
-                .orElseThrow(() -> new BusinessException(404, "生产计划不存在，无法生成采购需求"));
-        if (!factoryId.equals(plan.getFactoryId())) {
-            throw new BusinessException(403, "生产计划不属于当前工厂");
-        }
-        if (plan.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
-            throw new BusinessException(409, "客供料不足不能自动转为工厂采购需求")
-                    .withCode("CUSTOMER_SUPPLIED_SHORTAGE_PURCHASE_FORBIDDEN")
-                    .withHint("请等待客户补充来料，或在销售订单中受控变更物料供应方式并保留审计")
-                    .withHintTarget("materialSupplyMode");
-        }
+        List<PurchaseOrder> suggestions = new ArrayList<>();
+        String dateStr = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
 
-        return requisitionRepository
-                .findByFactoryIdAndSourceTypeAndSourceId(factoryId, SOURCE_TYPE, productionPlanId)
-                .orElseGet(() -> createRequisition(factoryId, plan, shortfalls));
-    }
+        for (int i = 0; i < shortfalls.size(); i++) {
+            MaterialShortfall sf = shortfalls.get(i);
 
-    private PurchaseRequisition createRequisition(String factoryId,
-                                                   ProductionPlan plan,
-                                                   List<MaterialShortfall> shortfalls) {
-        List<Map<String, Object>> requestedItems = new ArrayList<>();
-        for (MaterialShortfall shortfall : shortfalls) {
-            if (shortfall == null || shortfall.getMaterialTypeId() == null
-                    || shortfall.getShortfallQuantity() == null
-                    || shortfall.getShortfallQuantity().compareTo(BigDecimal.ZERO) <= 0) {
-                throw new BusinessException(400, "采购需求包含无效的物料缺口")
-                        .withHint("物料、缺口数量和单位必须完整，缺口数量必须大于0");
+            // ── 1. 构建采购订单主体 ──────────────────────────────────────────
+            PurchaseOrder po = new PurchaseOrder();
+            po.setFactoryId(factoryId);
+            po.setOrderNumber("PO-AUTO-" + dateStr + "-" + (i + 1));
+            po.setOrderDate(LocalDate.now());
+            po.setStatus(PurchaseOrderStatus.DRAFT);
+            po.setPurchaseType(PurchaseType.DIRECT);
+            po.setRemark("系统自动生成 - 生产计划[" + productionPlanId + "]原辅料缺口采购建议");
+            // supplierId 必填但未知，使用占位值；采购员提交前需更新
+            po.setSupplierId(SUPPLIER_PENDING);
+            po.setCreatedBy(SYSTEM_USER_ID);
+            po.setTotalAmount(BigDecimal.ZERO);
+            po.setTaxAmount(BigDecimal.ZERO);
+            // @PrePersist 会自动生成 UUID
+            PurchaseOrder savedPo = purchaseOrderRepository.save(po);
+
+            // ── 2. 查询物料类型以获取计量单位 ───────────────────────────────
+            String unit = "kg"; // 默认单位
+            String materialName = sf.getMaterialTypeName();
+            try {
+                RawMaterialType mt = rawMaterialTypeRepository
+                        .findById(sf.getMaterialTypeId())
+                        .orElse(null);
+                if (mt != null) {
+                    if (mt.getUnit() != null && !mt.getUnit().isBlank()) {
+                        unit = mt.getUnit();
+                    }
+                    if (mt.getName() != null && !mt.getName().isBlank()) {
+                        materialName = mt.getName();
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("采购建议: 查询物料类型失败，使用默认单位。materialTypeId={}, error={}",
+                        sf.getMaterialTypeId(), e.getMessage());
             }
 
-            RawMaterialType material = rawMaterialTypeRepository.findById(shortfall.getMaterialTypeId())
-                    .orElseThrow(() -> new BusinessException(400,
-                            "缺口物料不存在: " + shortfall.getMaterialTypeId()));
-            if (!factoryId.equals(material.getFactoryId())) {
-                throw new BusinessException(403, "缺口物料不属于当前工厂");
-            }
-            if (material.getUnit() == null || material.getUnit().isBlank()) {
-                throw new BusinessException(400, "缺口物料未配置库存基本单位: " + material.getName());
-            }
+            // ── 3. 构建行项目 ────────────────────────────────────────────────
+            PurchaseOrderItem item = new PurchaseOrderItem();
+            item.setPurchaseOrderId(savedPo.getId());
+            item.setMaterialTypeId(sf.getMaterialTypeId());
+            item.setMaterialName(materialName);
+            item.setQuantity(sf.getShortfallQuantity());
+            item.setUnit(unit);
+            item.setPriceUnit(unit);
+            item.setQuantityToPriceFactor(BigDecimal.ONE);
+            item.setUnitPrice(BigDecimal.ZERO); // 采购员填写实际单价
+            item.setTaxRate(BigDecimal.ZERO);
+            item.setReceivedQuantity(BigDecimal.ZERO);
+            item.setRemark("缺口量: " + sf.getShortfallQuantity() + " " + unit
+                    + "，已有库存: " + sf.getAvailableQuantity() + " " + unit);
+            purchaseOrderItemRepository.save(item);
 
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("materialTypeId", material.getId());
-            item.put("materialName", material.getName());
-            item.put("requiredQuantity", shortfall.getRequiredQuantity());
-            item.put("availableQuantity", shortfall.getAvailableQuantity());
-            item.put("shortfallQuantity", shortfall.getShortfallQuantity());
-            item.put("quantity", shortfall.getShortfallQuantity());
-            item.put("unit", material.getUnit());
-            item.put("sourceProductionPlanId", plan.getId());
-            item.put("sourceSalesOrderId", plan.getSourceOrderId());
-            item.put("sourceSalesOrderItemId", plan.getSourceOrderItemId());
-            requestedItems.add(item);
+            suggestions.add(savedPo);
+
+            log.info("采购建议已生成: material={} ({}), shortfall={} {}, PO={}",
+                    materialName, sf.getMaterialTypeId(),
+                    sf.getShortfallQuantity(), unit,
+                    savedPo.getOrderNumber());
         }
 
-        PurchaseRequisition requisition = new PurchaseRequisition();
-        requisition.setFactoryId(factoryId);
-        requisition.setRequisitionNumber(generateRequisitionNumber(factoryId));
-        requisition.setRequesterId(SYSTEM_USER_ID);
-        requisition.setRequestedItems(requestedItems);
-        requisition.setStatus(PurchaseRequisitionStatus.DRAFT);
-        requisition.setExpectedDate(plan.getPlannedDate());
-        requisition.setReason("生产计划缺料，待采购核对供应商、规格、价格、税率与交期");
-        requisition.setRemark("来源生产计划: " + plan.getPlanNumber());
-        requisition.setSourceType(SOURCE_TYPE);
-        requisition.setSourceId(plan.getId());
-        requisition.setSourceNo(plan.getPlanNumber());
-
-        PurchaseRequisition saved = requisitionRepository.save(requisition);
-        log.info("Created purchase requisition from material shortage: factoryId={}, planId={}, requisition={}, items={}",
-                factoryId, plan.getId(), saved.getRequisitionNumber(), requestedItems.size());
-        return saved;
-    }
-
-    private String generateRequisitionNumber(String factoryId) {
-        String today = LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE);
-        long count = requisitionRepository.countByFactoryIdAndDate(factoryId, LocalDate.now());
-        return String.format("PR-%s-%03d", today, count + 1);
+        log.info("采购建议批量生成完成: factoryId={}, planId={}, 共生成{}张草稿采购单",
+                factoryId, productionPlanId, suggestions.size());
+        return suggestions;
     }
 }

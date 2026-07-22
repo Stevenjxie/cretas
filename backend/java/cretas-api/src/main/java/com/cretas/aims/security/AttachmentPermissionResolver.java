@@ -69,7 +69,6 @@ public class AttachmentPermissionResolver {
         m.put(EntityType.SALES_ORDER, "sales");
         m.put(EntityType.PURCHASE_ORDER, "procurement");
         m.put(EntityType.PURCHASE_RECEIPT, "procurement");
-        m.put(EntityType.CUSTOMER_SUPPLIED_RECEIPT, "warehouse");
         m.put(EntityType.QUALITY_CHECK, "quality");
         m.put(EntityType.PRODUCTION_BATCH, "production");
         m.put(EntityType.PRODUCTION_REPORT, "production");
@@ -173,11 +172,6 @@ public class AttachmentPermissionResolver {
                     ? new String[]{"warehouse:read_write", "inventory:write"}
                     : new String[]{"warehouse:read", "warehouse:read_write",
                             "procurement:read", "procurement:read_write"};
-        } else if (entityType == EntityType.CUSTOMER_SUPPLIED_RECEIPT) {
-            perms = write
-                    ? new String[]{"warehouse:read_write", "inventory:write"}
-                    : new String[]{"warehouse:read", "warehouse:read_write",
-                            "sales:read", "sales:read_write"};
         } else {
             perms = write
                     ? new String[]{module + ":read_write"}

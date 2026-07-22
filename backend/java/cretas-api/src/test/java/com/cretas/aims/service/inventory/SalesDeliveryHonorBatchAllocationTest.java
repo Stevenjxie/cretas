@@ -1,17 +1,13 @@
 package com.cretas.aims.service.inventory;
 
 import com.cretas.aims.entity.ProductType;
-import com.cretas.aims.entity.enums.InventoryOwnership;
-import com.cretas.aims.entity.enums.SalesProcessingMode;
 import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesDeliveryItem;
-import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
-import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.impl.SalesServiceImpl;
 import com.cretas.aims.service.sales.SalesDeliveryBatchAllocationService;
@@ -59,9 +55,6 @@ class SalesDeliveryHonorBatchAllocationTest {
     private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
 
     @Mock
-    private SalesOrderRepository salesOrderRepository;
-
-    @Mock
     private WarehouseResolver warehouseResolver;
 
     @Mock
@@ -78,13 +71,10 @@ class SalesDeliveryHonorBatchAllocationTest {
     @BeforeEach
     void setUp() {
         salesService = new SalesServiceImpl(
-                salesOrderRepository, null, null, finishedGoodsBatchRepository,
+                null, null, null, finishedGoodsBatchRepository,
                 null, null, null, null);
         ReflectionTestUtils.setField(salesService, "warehouseResolver", warehouseResolver);
         ReflectionTestUtils.setField(salesService, "batchAllocationService", batchAllocationService);
-        org.mockito.Mockito.lenient().when(finishedGoodsBatchRepository
-                        .findByIdAndFactoryIdForUpdate(anyString(), org.mockito.ArgumentMatchers.eq(FACTORY_A)))
-                .thenAnswer(invocation -> finishedGoodsBatchRepository.findById(invocation.getArgument(0)));
     }
 
     /** 三参重载 — 允许测试注入 mock productTypeRepository (跨单位场景)。 */
@@ -98,15 +88,11 @@ class SalesDeliveryHonorBatchAllocationTest {
     }
 
     private void invokeDeduct(SalesServiceImpl svc, SalesDeliveryItem item) throws Exception {
-        invokeDeduct(svc, null, item);
-    }
-
-    private void invokeDeduct(SalesServiceImpl svc, String salesOrderId, SalesDeliveryItem item) throws Exception {
         Method m = SalesServiceImpl.class.getDeclaredMethod(
                 "deductFinishedGoodsInventory", String.class, String.class, SalesDeliveryItem.class);
         m.setAccessible(true);
         try {
-            m.invoke(svc, FACTORY_A, salesOrderId, item);
+            m.invoke(svc, FACTORY_A, (String) null, item);
         } catch (java.lang.reflect.InvocationTargetException e) {
             if (e.getCause() instanceof RuntimeException re) throw re;
             throw e;
@@ -148,56 +134,6 @@ class SalesDeliveryHonorBatchAllocationTest {
         a.setAllocatedQty(qty);
         a.setUnit(unit);
         return a;
-    }
-
-    @Test
-    @DisplayName("普通销售最终扣减拒绝客户所有成品")
-    void ship_standardSaleRejectsCustomerOwnedBatch() throws Exception {
-        SalesOrder order = order("SO-STANDARD", SalesProcessingMode.STANDARD_SALE, "C-1");
-        when(salesOrderRepository.findById(order.getId())).thenReturn(Optional.of(order));
-        FinishedGoodsBatch batch = buildBatch("id-customer", "B-CUSTOMER", "kg",
-                BigDecimal.TEN, BigDecimal.ZERO);
-        batch.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
-        batch.setOwnerCustomerId("C-1");
-        batch.setSourceSalesOrderId(order.getId());
-        when(finishedGoodsBatchRepository.findById("id-customer")).thenReturn(Optional.of(batch));
-        when(batchAllocationService.listByDeliveryItem(FACTORY_A, ITEM_ID_STR))
-                .thenReturn(List.of(alloc("id-customer", "B-CUSTOMER", BigDecimal.ONE, "kg")));
-
-        SalesDeliveryItem item = buildItem(BigDecimal.ONE, "kg");
-        BusinessException error = assertThrows(BusinessException.class,
-                () -> invokeDeduct(salesService, order.getId(), item));
-
-        assertEquals("DELIVERY_BATCH_OWNERSHIP_MISMATCH", error.getErrorCode());
-        assertEquals(0, BigDecimal.ZERO.compareTo(batch.getShippedQuantity()));
-    }
-
-    @Test
-    @DisplayName("代加工最终扣减允许同客户同销售订单的客户成品")
-    void ship_tollProcessingAcceptsMatchingCustomerOwnedBatch() throws Exception {
-        SalesOrder order = order("SO-TOLL", SalesProcessingMode.TOLL_PROCESSING, "C-1");
-        when(salesOrderRepository.findById(order.getId())).thenReturn(Optional.of(order));
-        FinishedGoodsBatch batch = buildBatch("id-own", "B-OWN", "kg",
-                BigDecimal.TEN, BigDecimal.ZERO);
-        batch.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
-        batch.setOwnerCustomerId("C-1");
-        batch.setSourceSalesOrderId(order.getId());
-        when(finishedGoodsBatchRepository.findById("id-own")).thenReturn(Optional.of(batch));
-        when(batchAllocationService.listByDeliveryItem(FACTORY_A, ITEM_ID_STR))
-                .thenReturn(List.of(alloc("id-own", "B-OWN", BigDecimal.ONE, "kg")));
-
-        invokeDeduct(salesService, order.getId(), buildItem(BigDecimal.ONE, "kg"));
-
-        assertEquals(0, BigDecimal.ONE.compareTo(batch.getShippedQuantity()));
-    }
-
-    private SalesOrder order(String id, SalesProcessingMode mode, String customerId) {
-        SalesOrder order = new SalesOrder();
-        order.setId(id);
-        order.setFactoryId(FACTORY_A);
-        order.setCustomerId(customerId);
-        order.setProcessingMode(mode);
-        return order;
     }
 
     // ============================================================

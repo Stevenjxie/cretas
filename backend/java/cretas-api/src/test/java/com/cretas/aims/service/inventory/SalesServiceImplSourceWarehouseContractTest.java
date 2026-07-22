@@ -1,7 +1,6 @@
 package com.cretas.aims.service.inventory;
 
 import com.cretas.aims.dto.inventory.CreateSalesOrderRequest;
-import com.cretas.aims.dto.inventory.UpdateSalesOrderRequest;
 import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
@@ -125,8 +124,6 @@ class SalesServiceImplSourceWarehouseContractTest {
     void createAndGetRoundTripRetainsSourceWarehouseAndUnitContract() {
         CreateSalesOrderRequest request = new CreateSalesOrderRequest();
         request.setCustomerId("CUSTOMER-1");
-        request.setProcessingMode(com.cretas.aims.entity.enums.SalesProcessingMode.STANDARD_SALE);
-        request.setMaterialSupplyMode(com.cretas.aims.entity.enums.MaterialSupplyMode.FACTORY_SUPPLIED);
         CreateSalesOrderRequest.SalesOrderItemDTO line = new CreateSalesOrderRequest.SalesOrderItemDTO();
         line.setProductTypeId(PRODUCT_ID);
         line.setQuantity(new BigDecimal("5"));
@@ -139,19 +136,11 @@ class SalesServiceImplSourceWarehouseContractTest {
         request.setItems(List.of(line));
 
         SalesOrder created = service.createSalesOrder(FACTORY_ID, request, 1L);
-        assertThat(created.getProcessingMode())
-                .isEqualTo(com.cretas.aims.entity.enums.SalesProcessingMode.STANDARD_SALE);
-        assertThat(created.getMaterialSupplyMode())
-                .isEqualTo(com.cretas.aims.entity.enums.MaterialSupplyMode.FACTORY_SUPPLIED);
         assertThat(persistedItems).singleElement().satisfies(saved -> {
             assertThat(saved.getUnit()).isEqualTo("box");
             assertThat(saved.getSourceWarehouseCode()).isEqualTo("WH-LOG");
             assertThat(saved.getPackagingSpecId()).isNull();
             assertThat(saved.getBoxQuantity()).isEqualByComparingTo("0.63");
-            assertThat(saved.getProcessingMode())
-                    .isEqualTo(com.cretas.aims.entity.enums.SalesProcessingMode.STANDARD_SALE);
-            assertThat(saved.getMaterialSupplyMode())
-                    .isEqualTo(com.cretas.aims.entity.enums.MaterialSupplyMode.FACTORY_SUPPLIED);
         });
 
         created.setItems(new ArrayList<>(persistedItems));
@@ -163,120 +152,6 @@ class SalesServiceImplSourceWarehouseContractTest {
             assertThat(saved.getPackagingSpecId()).isNull();
             assertThat(saved.getBoxQuantity()).isEqualByComparingTo("0.63");
         });
-    }
-
-    @Test
-    @DisplayName("new orders fail closed when the supply contract is missing or mixed by line")
-    void createRejectsMissingOrMixedSupplyContractBeforeWrite() {
-        CreateSalesOrderRequest missing = baseSupplyRequest();
-        assertThatThrownBy(() -> service.createSalesOrder(FACTORY_ID, missing, 1L))
-                .isInstanceOfSatisfying(BusinessException.class, exception ->
-                        assertThat(exception.getErrorCode())
-                                .isEqualTo("SALES_ORDER_SUPPLY_CONTRACT_REQUIRED"));
-
-        CreateSalesOrderRequest mixed = baseSupplyRequest();
-        mixed.setProcessingMode(com.cretas.aims.entity.enums.SalesProcessingMode.TOLL_PROCESSING);
-        mixed.setMaterialSupplyMode(com.cretas.aims.entity.enums.MaterialSupplyMode.CUSTOMER_SUPPLIED);
-        mixed.getItems().get(0).setMaterialSupplyMode(
-                com.cretas.aims.entity.enums.MaterialSupplyMode.FACTORY_SUPPLIED);
-        assertThatThrownBy(() -> service.createSalesOrder(FACTORY_ID, mixed, 1L))
-                .isInstanceOfSatisfying(BusinessException.class, exception ->
-                        assertThat(exception.getErrorCode())
-                                .isEqualTo("SALES_ORDER_MIXED_SUPPLY_MODE_UNSUPPORTED"));
-
-        verify(salesOrderRepository, never()).save(any(SalesOrder.class));
-    }
-
-    @Test
-    @DisplayName("standard sale cannot silently opt into customer-owned material")
-    void createRejectsCustomerSuppliedStandardSale() {
-        CreateSalesOrderRequest request = baseSupplyRequest();
-        request.setProcessingMode(com.cretas.aims.entity.enums.SalesProcessingMode.STANDARD_SALE);
-        request.setMaterialSupplyMode(com.cretas.aims.entity.enums.MaterialSupplyMode.CUSTOMER_SUPPLIED);
-
-        assertThatThrownBy(() -> service.createSalesOrder(FACTORY_ID, request, 1L))
-                .isInstanceOfSatisfying(BusinessException.class, exception ->
-                        assertThat(exception.getErrorCode())
-                                .isEqualTo("SALES_ORDER_SUPPLY_CONTRACT_INVALID"));
-    }
-
-    @Test
-    @DisplayName("editing a legacy draft writes one explicit header contract and aligned line snapshots")
-    void updateLegacyDraftPersistsAlignedSupplySnapshots() {
-        SalesOrder order = new SalesOrder();
-        order.setId("SO-LEGACY-DRAFT");
-        order.setFactoryId(FACTORY_ID);
-        order.setStatus(SalesOrderStatus.DRAFT);
-        order.setTotalAmount(BigDecimal.ONE);
-        SalesOrderItem legacyLine = orderItem("WH-LOG");
-        legacyLine.setSalesOrderId(order.getId());
-        when(salesOrderRepository.findById(order.getId())).thenReturn(Optional.of(order));
-        when(salesOrderItemRepository.findBySalesOrderId(order.getId()))
-                .thenReturn(List.of(legacyLine));
-
-        UpdateSalesOrderRequest request = new UpdateSalesOrderRequest();
-        request.setProcessingMode(com.cretas.aims.entity.enums.SalesProcessingMode.TOLL_PROCESSING);
-        request.setMaterialSupplyMode(com.cretas.aims.entity.enums.MaterialSupplyMode.CUSTOMER_SUPPLIED);
-
-        SalesOrder updated = service.updateSalesOrder(FACTORY_ID, order.getId(), request);
-
-        assertThat(updated.getProcessingMode())
-                .isEqualTo(com.cretas.aims.entity.enums.SalesProcessingMode.TOLL_PROCESSING);
-        assertThat(updated.getMaterialSupplyMode())
-                .isEqualTo(com.cretas.aims.entity.enums.MaterialSupplyMode.CUSTOMER_SUPPLIED);
-        assertThat(legacyLine.getProcessingMode()).isEqualTo(updated.getProcessingMode());
-        assertThat(legacyLine.getMaterialSupplyMode()).isEqualTo(updated.getMaterialSupplyMode());
-        verify(salesOrderItemRepository).saveAll(List.of(legacyLine));
-    }
-
-    @Test
-    @DisplayName("copy preserves valid header and line snapshots and rejects legacy-null sources")
-    void copyPreservesSupplyContractAndRejectsLegacyNullSource() {
-        SalesOrder source = new SalesOrder();
-        source.setId("SO-SOURCE");
-        source.setFactoryId(FACTORY_ID);
-        source.setOrderNumber("SO-20260721-0001");
-        source.setCustomerId("CUSTOMER-1");
-        source.setOrderDate(java.time.LocalDate.now());
-        source.setProcessingMode(com.cretas.aims.entity.enums.SalesProcessingMode.TOLL_PROCESSING);
-        source.setMaterialSupplyMode(com.cretas.aims.entity.enums.MaterialSupplyMode.CUSTOMER_SUPPLIED);
-        SalesOrderItem sourceLine = orderItem("WH-LOG");
-        sourceLine.setSalesOrderId(source.getId());
-        sourceLine.setProcessingMode(source.getProcessingMode());
-        sourceLine.setMaterialSupplyMode(source.getMaterialSupplyMode());
-        source.setItems(new ArrayList<>(List.of(sourceLine)));
-        when(salesOrderRepository.findById(source.getId())).thenReturn(Optional.of(source));
-
-        SalesOrder copied = service.copySalesOrder(FACTORY_ID, source.getId(), 2L);
-
-        assertThat(copied.getProcessingMode()).isEqualTo(source.getProcessingMode());
-        assertThat(copied.getMaterialSupplyMode()).isEqualTo(source.getMaterialSupplyMode());
-        assertThat(persistedItems).singleElement().satisfies(item -> {
-            assertThat(item.getProcessingMode()).isEqualTo(source.getProcessingMode());
-            assertThat(item.getMaterialSupplyMode()).isEqualTo(source.getMaterialSupplyMode());
-        });
-
-        SalesOrder legacy = new SalesOrder();
-        legacy.setId("SO-LEGACY");
-        legacy.setFactoryId(FACTORY_ID);
-        legacy.setItems(new ArrayList<>());
-        when(salesOrderRepository.findById(legacy.getId())).thenReturn(Optional.of(legacy));
-        assertThatThrownBy(() -> service.copySalesOrder(FACTORY_ID, legacy.getId(), 2L))
-                .isInstanceOfSatisfying(BusinessException.class, exception ->
-                        assertThat(exception.getErrorCode())
-                                .isEqualTo("SALES_ORDER_SUPPLY_CONTRACT_REQUIRED"));
-    }
-
-    private CreateSalesOrderRequest baseSupplyRequest() {
-        CreateSalesOrderRequest request = new CreateSalesOrderRequest();
-        request.setCustomerId("CUSTOMER-1");
-        CreateSalesOrderRequest.SalesOrderItemDTO line = new CreateSalesOrderRequest.SalesOrderItemDTO();
-        line.setProductTypeId(PRODUCT_ID);
-        line.setQuantity(BigDecimal.ONE);
-        line.setUnit("box");
-        line.setUnitPrice(BigDecimal.ONE);
-        request.setItems(List.of(line));
-        return request;
     }
 
     @Test

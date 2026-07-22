@@ -30,9 +30,6 @@ public interface PurchaseRequisitionRepository extends JpaRepository<PurchaseReq
 
     Optional<PurchaseRequisition> findByFactoryIdAndRequisitionNumber(String factoryId, String requisitionNumber);
 
-    Optional<PurchaseRequisition> findByFactoryIdAndSourceTypeAndSourceId(
-            String factoryId, String sourceType, String sourceId);
-
     /**
      * Sequence helper — 当天该工厂的请购单计数, 用于生成 PR-YYYYMMDD-NNN 单号.
      */

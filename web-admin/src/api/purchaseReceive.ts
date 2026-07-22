@@ -6,7 +6,7 @@
 //
 // axios baseURL = '/api/mobile' so caller-side URLs start at "/{factoryId}/...".
 // 同 orderCopy.ts 模式 (不带 /mobile/ 前缀).
-import { get, post } from './request';
+import { get } from './request';
 import type { FactoryWarehouse } from './factoryWarehouse';
 
 /** 累计已收 — 单行明细 (后端 PurchaseServiceImpl.getCumulativeReceived lines). */
@@ -83,57 +83,6 @@ export interface PurchaseReceivingTask {
  * 生产结单后等待仓库确认的既有 settlement 投影。
  * 来源是真实 ProductionSettlement，不是另一套入库任务。
  */
-export interface ProductionReceivingTask {
-  id: string;
-  direction: 'FINISHED_GOODS_RECEIPT';
-  status: 'PENDING_CONFIRMATION';
-  sourceNumber: string;
-  productName: string;
-  batchNumber?: string | null;
-  plannedQuantity?: number | null;
-  reportedQuantity: number;
-  receivedQuantity?: number | null;
-  toleranceQuantity?: number | null;
-  unit: string;
-  fromLocation?: string | null;
-  toWarehouseName?: string | null;
-  submittedBy?: number | null;
-  submittedAt?: string | null;
-  note?: string | null;
-}
-
-export interface CustomerSuppliedReceivingTask {
-  taskId: string;
-  source: 'SALES_ORDER_CUSTOMER_SUPPLIED';
-  status: 'PENDING' | 'PARTIALLY_RECEIVED';
-  factoryId: string;
-  customerId: string;
-  customerName: string;
-  salesOrderId: string;
-  salesOrderNumber: string;
-  salesOrderItemId?: number | null;
-  materialTypeId: string;
-  materialName: string;
-  expectedQuantity: number;
-  receivedQuantity: number;
-  remainingQuantity: number;
-  unit: string;
-  expectedArrivalAt: string;
-  targetWarehouseId: string;
-  targetWarehouseCode?: string | null;
-  targetWarehouseName?: string | null;
-}
-
-export interface ConfirmCustomerSuppliedReceiptRequest {
-  idempotencyKey: string;
-  receivedQuantity: number;
-  productionDate?: string;
-  expireDate?: string;
-  externalBatchNumber?: string;
-  originPlace?: string;
-  notes?: string;
-}
-
 export function getPendingPurchaseReceivingTasks(
   factoryId: string,
   filters?: { purchaseOrderId?: string; orderNumber?: string },
@@ -144,29 +93,6 @@ export function getPendingPurchaseReceivingTasks(
       orderNumber: filters?.orderNumber || undefined,
     },
   });
-}
-
-export function getPendingProductionReceivingTasks(factoryId: string) {
-  return get<ProductionReceivingTask[]>(`/${factoryId}/warehouse/transit-ledgers`, {
-    params: { status: 'PENDING_CONFIRMATION' },
-  });
-}
-
-export function getPendingCustomerSuppliedReceivingTasks(factoryId: string) {
-  return get<CustomerSuppliedReceivingTask[]>(
-    `/${factoryId}/warehouse/customer-supplied-receiving-tasks`,
-  );
-}
-
-export function confirmCustomerSuppliedReceipt(
-  factoryId: string,
-  taskId: string,
-  request: ConfirmCustomerSuppliedReceiptRequest,
-) {
-  return post(
-    `/${factoryId}/warehouse/customer-supplied-receiving-tasks/${taskId}/receipts`,
-    request,
-  );
 }
 
 /**

@@ -157,31 +157,6 @@ class AttachmentPermissionResolverTest {
         verify(permissionService).hasAnyPermission(eq(procurementManager), eq(expected));
     }
 
-    @Test
-    @DisplayName("✅ 客户来料凭证写入与收货动作使用同一仓储权限")
-    void customerSuppliedReceipt_write_usesWarehousePermissions() {
-        User warehouseWorker = userWithRole(106L, FactoryUserRole.warehouse_worker);
-        String[] expected = {"warehouse:read_write", "inventory:write"};
-        when(permissionService.hasAnyPermission(eq(warehouseWorker), eq(expected))).thenReturn(true);
-
-        assertDoesNotThrow(() -> resolver.requireWrite(
-                warehouseWorker, EntityType.CUSTOMER_SUPPLIED_RECEIPT));
-        verify(permissionService).hasAnyPermission(eq(warehouseWorker), eq(expected));
-    }
-
-    @Test
-    @DisplayName("❌ 仅采购权限不能查看客户来料凭证")
-    void customerSuppliedReceipt_read_doesNotLeakToProcurementOnlyRole() {
-        User procurementManager = userWithRole(107L, FactoryUserRole.procurement_manager);
-        String[] expected = {"warehouse:read", "warehouse:read_write", "sales:read", "sales:read_write"};
-        when(permissionService.hasAnyPermission(eq(procurementManager), eq(expected))).thenReturn(false);
-
-        BusinessException exception = assertThrows(BusinessException.class,
-                () -> resolver.requireRead(procurementManager, EntityType.CUSTOMER_SUPPLIED_RECEIPT));
-        assertEquals(403, exception.getCode());
-        verify(permissionService).hasAnyPermission(eq(procurementManager), eq(expected));
-    }
-
     // ==================== Upload guardrails ====================
 
     @Test

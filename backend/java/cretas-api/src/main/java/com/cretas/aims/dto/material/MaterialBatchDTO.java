@@ -1,7 +1,6 @@
 package com.cretas.aims.dto.material;
 
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
-import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.security.PriceSensitive;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -123,18 +122,6 @@ public class MaterialBatchDTO {
     /** D1 双仓流转 (PR #309 A1=A) — 仓库名称, 例如 "物流仓" / "鲜棉仓". */
     @Schema(description = "仓库名称 (物流仓 / 鲜棉仓)")
     private String warehouseName;
-
-    @Schema(description = "库存法律归属")
-    private InventoryOwnership ownership;
-
-    @Schema(description = "库存归属客户ID（仅客户自有）")
-    private String ownerCustomerId;
-
-    @Schema(description = "来源销售订单ID快照")
-    private String sourceSalesOrderId;
-
-    @Schema(description = "来源销售订单行ID快照")
-    private String sourceSalesOrderItemId;
 
     @Schema(description = "存储位置")
     private String storageLocation;

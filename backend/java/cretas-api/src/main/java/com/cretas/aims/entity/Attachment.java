@@ -118,7 +118,6 @@ public class Attachment extends BaseEntity {
         CUSTOMER_TRACKING,
         PURCHASE_ORDER,
         PURCHASE_RECEIPT,
-        CUSTOMER_SUPPLIED_RECEIPT,
         QUALITY_CHECK,
         PRODUCTION_BATCH,
         PAYMENT_VOUCHER,

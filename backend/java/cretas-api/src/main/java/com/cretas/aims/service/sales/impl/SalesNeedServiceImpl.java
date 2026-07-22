@@ -123,8 +123,6 @@ public class SalesNeedServiceImpl implements SalesNeedService {
         req.setOrderDate(LocalDate.now());
         req.setRequiredDeliveryDate(need.getExpectedDeliveryDate());
         req.setRemark(buildSoRemark(need));
-        req.setProcessingMode(com.cretas.aims.entity.enums.SalesProcessingMode.STANDARD_SALE);
-        req.setMaterialSupplyMode(com.cretas.aims.entity.enums.MaterialSupplyMode.FACTORY_SUPPLIED);
 
         SalesOrderItemDTO item = new SalesOrderItemDTO();
         item.setProductTypeId(need.getProductId());

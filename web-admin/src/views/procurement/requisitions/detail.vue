@@ -394,7 +394,7 @@ function goBack() {
 
         <el-descriptions :column="2" border style="margin-top: 16px">
           <el-descriptions-item :label="requesterLabel">
-            {{ requisition.sourceType === 'PRODUCTION_PLAN_SHORTAGE' && requisition.requesterId === 0 ? '系统缺料计算' : `#${requisition.requesterId}` }}
+            #{{ requisition.requesterId }}
           </el-descriptions-item>
           <el-descriptions-item :label="requesterDeptLabel">
             {{ requisition.requesterDeptId || '-' }}
@@ -404,10 +404,6 @@ function goBack() {
           </el-descriptions-item>
           <el-descriptions-item label="创建时间">
             {{ requisition.createdAt ? String(requisition.createdAt).replace('T', ' ').slice(0, 19) : '-' }}
-          </el-descriptions-item>
-          <el-descriptions-item v-if="requisition.sourceType" label="需求来源" :span="2">
-            <el-tag v-if="requisition.sourceType === 'PRODUCTION_PLAN_SHORTAGE'" type="danger" size="small">生产缺料</el-tag>
-            <span style="margin-left: 8px">{{ requisition.sourceNo || requisition.sourceId || '-' }}</span>
           </el-descriptions-item>
           <el-descriptions-item label="审批人">
             {{ requisition.approverId ? '#' + requisition.approverId : '-' }}
@@ -449,14 +445,8 @@ function goBack() {
               {{ row.materialName || row.materialTypeId || '-' }}
             </template>
           </el-table-column>
-          <el-table-column label="需求/现有/缺口" min-width="190" align="right">
-            <template #default="{ row }">
-              <template v-if="row.requiredQuantity != null && row.availableQuantity != null">
-                {{ row.requiredQuantity }} / {{ row.availableQuantity }} /
-                <strong>{{ row.shortfallQuantity ?? row.quantity }}</strong>
-              </template>
-              <template v-else>{{ row.quantity ?? '-' }}</template>
-            </template>
+          <el-table-column label="数量" width="120" align="right">
+            <template #default="{ row }">{{ row.quantity ?? '-' }}</template>
           </el-table-column>
           <el-table-column label="单位" width="80" align="center">
             <template #default="{ row }">{{ row.unit || '-' }}</template>

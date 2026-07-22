@@ -4,6 +4,7 @@
 **当前真值**：`origin/main` 为代码与合并真值；本文件为当前任务状态真值。完成记录见 [2026-07-22-active-history.md](archive/2026-07-22-active-history.md)，此前历史见 [2026-07-21-active-history.md](archive/2026-07-21-active-history.md)。
 
 ## 在飞任务
+- `BUG-F006-R3-PURCHASE-RECEIVING-ROUTE-001` — `in-progress` — Owner: `/root` — Base SHA: `53b3f02c6261da8136ce73bc9618e8618bd61bce` — 仅修复已完成 OA/财审采购单到仓储待收货、受约束收货单、确认后既有库存批次物化的原始链路；客供料、销售缺料、生产入库与 ownership 扩展延期到本链部署回归通过后，生产业务写入 0，`NOT_DEPLOYED`。
 - `RTAI-S5` — `review` — Owner: 当前协调者 — Base SHA: `78607525badf000f72ea0744818e5c89884cb2d1` — 菜品综合优化确定性路由、下游不可用能力边界、餐饮会话快速识别旁路与门店/菜品指代消歧已实现；Java 目标回归 71 项、持久化/工具注入链路 10 项通过，待合并、生产发布与零写只读复验。
 - `RTAI-S5-ROUTE-AUDIT` — `review` — Owner: `/root/rtai_r5_route` — Base SHA: `78607525badf000f72ea0744818e5c89884cb2d1` — 只读路由审计完成，证据已由协调者核验。
 - `RTAI-S5-COREF-AUDIT` — `review` — Owner: `/root/rtai_r5_coref` — Base SHA: `78607525badf000f72ea0744818e5c89884cb2d1` — 只读会话链路审计完成，证据已由协调者核验。
@@ -40,6 +41,7 @@
 - `BUG-F006-R2-WORKFLOW-INPUT-MODE-DERIVATION` — `in-progress` — Owner: `/root` — Base SHA: `457b3b5e9` — BOM 未完整前 Workflow 投入方式只显示“待 BOM 配置”，不得猜测 AT_LEAST_ONE；BOM 完整后由必需主项、替代集合与可选项结构化派生每组 ALL_REQUIRED/EXACTLY_ONE/OPTIONAL 只读规则，发布与报工共用同一 pinned 快照，严格 `NOT_DEPLOYED`。
 
 ## Scope 锁地图
+- `BUG-F006-R3-PURCHASE-RECEIVING-ROUTE-001`：Java 采购待收货投影、采购收货行身份/活动草稿/超收/确认幂等、仓储模块权限、收货附件与打印、Flyway/JPA/Service/Controller 目标测试；Web Admin 采购详情跳转、统一仓储页采购待收货面板、仓储菜单与目标测试；复盘/ACTIVE/当日归档。验收：采购详情导航零写、同厂 FINANCE_APPROVED/PARTIAL_RECEIVED 订单正确出现、活动草稿不重复、同物料多行按 order item 精确归属、仓储确认后沿用唯一库存批次路径、采购侧无确认入库写入口、客供料/生产/ownership 不进入本批、`NOT_DEPLOYED`。
 - `RTAI-S5`：仅餐饮 AI 意图路由、Python matcher 的餐饮会话指代旁路、会话实体继承、餐饮 Gold 分析工具的故障语义、对应 Java 目标测试、生产只读审计 runner/evidence、ACTIVE 与当日归档；不触碰工厂 AI、Python 指标计算、Web 业务页面或数据库。验收：菜品优化进入餐饮综合能力边界回答且下游瞬时不可用时仍逐项说明能力缺口，门店追问保持上一轮门店实体且不返回全局菜品报告，同文案不同会话不共享实体，正确缺数回答不误报，生产零业务写。
 - `RTAI-S5-ROUTE-AUDIT`：只读检查餐饮意图分类/owner-action 路由及已有测试，不编辑任何文件。
 - `RTAI-S5-COREF-AUDIT`：只读检查 conversation memory/store reference/多轮参数注入及已有测试，不编辑任何文件。
