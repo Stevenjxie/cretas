@@ -196,7 +196,7 @@ public class DashboardStatisticsServiceImpl implements DashboardStatisticsServic
         // 简化计算：月消耗量 * 12 / 当前库存价值
         LocalDate monthStart = LocalDate.now().withDayOfMonth(1);
         BigDecimal monthlyConsumption = materialBatchRepository.calculateConsumedValue(
-                factoryId, monthStart, LocalDate.now());
+                factoryId, monthStart.atStartOfDay(), LocalDate.now().plusDays(1).atStartOfDay());
         BigDecimal turnoverRate = BigDecimal.valueOf(4.5); // 默认值
         if (totalValue != null && totalValue.compareTo(BigDecimal.ZERO) > 0 && monthlyConsumption != null) {
             // 年化周转率 = (月消耗量 * 12) / 库存价值

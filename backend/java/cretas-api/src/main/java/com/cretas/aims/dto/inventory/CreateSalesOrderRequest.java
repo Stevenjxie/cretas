@@ -1,18 +1,23 @@
 package com.cretas.aims.dto.inventory;
 
 import com.cretas.aims.dto.sales.ExtraFeeItem;
+import com.cretas.aims.entity.enums.MaterialSupplyMode;
+import com.cretas.aims.entity.enums.SalesProcessingMode;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -68,6 +73,19 @@ public class CreateSalesOrderRequest {
     @Size(max = 100, message = "采购单标题长度不能超过100个字符")
     private String externalOrderTitle;
 
+    @NotNull(message = "加工方式不能为空")
+    private SalesProcessingMode processingMode;
+
+    @NotNull(message = "物料供应方式不能为空")
+    private MaterialSupplyMode materialSupplyMode;
+
+    /**
+     * Structured customer-supplied raw-material requirements. Required only for
+     * {@code TOLL_PROCESSING + CUSTOMER_SUPPLIED}; forbidden for every other mode.
+     */
+    @Valid
+    private List<SuppliedMaterialRequirementDTO> suppliedMaterials;
+
     @Valid
     @NotEmpty(message = "订单行项目不能为空")
     private List<SalesOrderItemDTO> items;
@@ -78,6 +96,40 @@ public class CreateSalesOrderRequest {
      * 写入 cf_{fieldCode} 物理列. 不配的字段前端不传, 这个 Map 为 null.
      */
     private Map<String, Object> customFields;
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class SuppliedMaterialRequirementDTO {
+
+        @NotBlank(message = "客供物料ID不能为空")
+        @Size(max = 191, message = "客供物料ID长度不能超过191个字符")
+        private String materialTypeId;
+
+        /** Display value from the client; persistence always snapshots the factory material master. */
+        @Size(max = 200, message = "客供物料名称长度不能超过200个字符")
+        private String materialName;
+
+        @NotNull(message = "客供物料预计数量不能为空")
+        @DecimalMin(value = "0.01", message = "客供物料预计数量必须不小于0.01")
+        @Digits(integer = 8, fraction = 2, message = "客供物料预计数量最多8位整数和2位小数")
+        private BigDecimal expectedQuantity;
+
+        @NotBlank(message = "客供物料单位不能为空")
+        @Size(max = 20, message = "客供物料单位长度不能超过20个字符")
+        private String unit;
+
+        @NotNull(message = "客供物料预计到货时间不能为空")
+        private LocalDateTime expectedArrivalAt;
+
+        @NotBlank(message = "客供物料目标仓库不能为空")
+        @Size(max = 64, message = "目标仓库ID长度不能超过64个字符")
+        private String targetWarehouseId;
+
+        /** Optional lineage to a persisted sales-order finished-product line. */
+        @Positive(message = "销售订单行ID必须大于0")
+        private Long salesOrderItemId;
+    }
 
     @Data
     @NoArgsConstructor
@@ -151,5 +203,11 @@ public class CreateSalesOrderRequest {
 
         /** 行级要求到达日期. Nullable. */
         private LocalDate requiredArrivalDate;
+
+        /** Optional explicit snapshot; when present it must equal the order-header mode. */
+        private SalesProcessingMode processingMode;
+
+        /** Optional explicit snapshot; mixed material supply within one order is not supported yet. */
+        private MaterialSupplyMode materialSupplyMode;
     }
 }

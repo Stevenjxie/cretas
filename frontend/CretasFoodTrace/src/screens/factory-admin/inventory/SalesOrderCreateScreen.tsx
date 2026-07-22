@@ -189,6 +189,10 @@ export default function SalesOrderCreateScreen() {
 
     const payload: CreateSalesOrderRequest = {
       customerId,
+      // This compact RN screen has no structured customer-material editor. Keep its
+      // contract explicit and fail-safe instead of relying on a backend default.
+      processingMode: 'STANDARD_SALE',
+      materialSupplyMode: 'FACTORY_SUPPLIED',
       orderDate: todayIso(),
       requiredDeliveryDate: requiredDeliveryDate || undefined,
       remark: remark || undefined,

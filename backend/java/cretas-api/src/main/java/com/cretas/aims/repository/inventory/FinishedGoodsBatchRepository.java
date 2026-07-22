@@ -56,6 +56,7 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
      */
     @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
             "AND b.status = 'AVAILABLE' " +
+            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
             "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0 " +
             "ORDER BY b.expireDate ASC NULLS LAST, b.productionDate ASC")
     List<FinishedGoodsBatch> findAvailableForFeedByFactory(@Param("factoryId") String factoryId);
@@ -63,6 +64,7 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
     /** 查询有可用库存的成品批次（FEFO 出库 — 先到期先出） */
     @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
             "AND b.productTypeId = :productTypeId AND b.status = 'AVAILABLE' " +
+            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
             "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0 " +
             "ORDER BY b.expireDate ASC NULLS LAST, b.productionDate ASC")
     List<FinishedGoodsBatch> findAvailableBatches(
@@ -77,12 +79,48 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             "AND b.productTypeId = :productTypeId " +
             "AND b.warehouseId = :warehouseId " +
             "AND b.status = 'AVAILABLE' " +
+            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
             "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0 " +
             "ORDER BY b.expireDate ASC NULLS LAST, b.productionDate ASC")
     List<FinishedGoodsBatch> findAvailableBatchesByWarehouse(
             @Param("factoryId") String factoryId,
             @Param("productTypeId") String productTypeId,
             @Param("warehouseId") String warehouseId);
+
+    /**
+     * Customer-owned output is never part of the ordinary saleable pool. It is
+     * queryable only through the exact customer + sales-order scope frozen on
+     * the production plan.
+     */
+    @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
+            "AND b.productTypeId = :productTypeId " +
+            "AND b.warehouseId = :warehouseId " +
+            "AND b.status = 'AVAILABLE' " +
+            "AND b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED " +
+            "AND b.ownerCustomerId = :customerId " +
+            "AND b.sourceSalesOrderId = :salesOrderId " +
+            "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0 " +
+            "ORDER BY b.expireDate ASC NULLS LAST, b.productionDate ASC")
+    List<FinishedGoodsBatch> findAvailableCustomerOwnedBatchesByWarehouse(
+            @Param("factoryId") String factoryId,
+            @Param("productTypeId") String productTypeId,
+            @Param("warehouseId") String warehouseId,
+            @Param("customerId") String customerId,
+            @Param("salesOrderId") String salesOrderId);
+
+    @Query("SELECT f FROM FinishedGoodsBatch f JOIN FactoryWarehouse w ON f.warehouseId = w.id " +
+           "WHERE f.factoryId = :factoryId AND f.productTypeId = :productTypeId " +
+           "AND f.status = 'AVAILABLE' AND f.ownership = com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED " +
+           "AND f.ownerCustomerId = :customerId AND f.sourceSalesOrderId = :salesOrderId " +
+           "AND (f.producedQuantity - f.shippedQuantity - f.reservedQuantity) > 0 " +
+           "AND (w.code IS NULL OR w.code <> :excludedWarehouseCode) " +
+           "ORDER BY f.expireDate ASC NULLS LAST, f.productionDate ASC, f.id ASC")
+    List<FinishedGoodsBatch> findAvailableCustomerOwnedBatchesFefoAllWarehousesExcluding(
+            @Param("factoryId") String factoryId,
+            @Param("productTypeId") String productTypeId,
+            @Param("excludedWarehouseCode") String excludedWarehouseCode,
+            @Param("customerId") String customerId,
+            @Param("salesOrderId") String salesOrderId);
 
     /**
      * R6 #6 (2026-06-22): 发货可出库批次 (FEFO) —— 过滤条件用<b>物理未发量</b>
@@ -96,6 +134,7 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             "AND b.productTypeId = :productTypeId " +
             "AND b.warehouseId = :warehouseId " +
             "AND b.status = 'AVAILABLE' " +
+            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
             "AND (b.producedQuantity - b.shippedQuantity) > 0 " +
             "ORDER BY b.expireDate ASC NULLS LAST, b.productionDate ASC")
     List<FinishedGoodsBatch> findShippableBatchesByWarehouse(
@@ -103,9 +142,40 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             @Param("productTypeId") String productTypeId,
             @Param("warehouseId") String warehouseId);
 
+    @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
+            "AND b.productTypeId = :productTypeId " +
+            "AND b.warehouseId = :warehouseId " +
+            "AND b.status = 'AVAILABLE' " +
+            "AND b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED " +
+            "AND b.ownerCustomerId = :customerId " +
+            "AND b.sourceSalesOrderId = :salesOrderId " +
+            "AND (b.producedQuantity - b.shippedQuantity) > 0 " +
+            "ORDER BY b.expireDate ASC NULLS LAST, b.productionDate ASC")
+    List<FinishedGoodsBatch> findShippableCustomerOwnedBatchesByWarehouse(
+            @Param("factoryId") String factoryId,
+            @Param("productTypeId") String productTypeId,
+            @Param("warehouseId") String warehouseId,
+            @Param("customerId") String customerId,
+            @Param("salesOrderId") String salesOrderId);
+
+    @Query("SELECT f FROM FinishedGoodsBatch f JOIN FactoryWarehouse w ON f.warehouseId = w.id " +
+           "WHERE f.factoryId = :factoryId AND f.productTypeId = :productTypeId " +
+           "AND f.status = 'AVAILABLE' AND f.ownership = com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED " +
+           "AND f.ownerCustomerId = :customerId AND f.sourceSalesOrderId = :salesOrderId " +
+           "AND (f.producedQuantity - f.shippedQuantity) > 0 " +
+           "AND (w.code IS NULL OR w.code <> :excludedWarehouseCode) " +
+           "ORDER BY f.expireDate ASC NULLS LAST, f.productionDate ASC, f.id ASC")
+    List<FinishedGoodsBatch> findShippableCustomerOwnedBatchesAllWarehousesExcluding(
+            @Param("factoryId") String factoryId,
+            @Param("productTypeId") String productTypeId,
+            @Param("excludedWarehouseCode") String excludedWarehouseCode,
+            @Param("customerId") String customerId,
+            @Param("salesOrderId") String salesOrderId);
+
     /** FIFO 推荐：按生产日期升序返回可用成品批次（先进先出） */
     @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
             "AND b.productTypeId = :productTypeId AND b.status = 'AVAILABLE' " +
+            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
             "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0 " +
             "ORDER BY b.productionDate ASC NULLS LAST")
     List<FinishedGoodsBatch> findAvailableBatchesFifo(
@@ -119,6 +189,7 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             "AND b.productTypeId = :productTypeId " +
             "AND b.warehouseId = :warehouseId " +
             "AND b.status = 'AVAILABLE' " +
+            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
             "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0 " +
             "ORDER BY b.productionDate ASC NULLS LAST")
     List<FinishedGoodsBatch> findAvailableBatchesFifoByWarehouse(
@@ -145,6 +216,7 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             "AND b.factoryId = :factoryId " +
             "AND b.productTypeId = :productTypeId " +
             "AND b.status = 'AVAILABLE' " +
+            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
             "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0 " +
             "ORDER BY b.expireDate ASC NULLS LAST, b.productionDate ASC")
     List<FinishedGoodsBatch> findAvailableBatchesFefoAllWarehousesExcluding(
@@ -167,6 +239,7 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             "AND b.factoryId = :factoryId " +
             "AND b.productTypeId = :productTypeId " +
             "AND b.status = 'AVAILABLE' " +
+            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
             "AND (b.producedQuantity - b.shippedQuantity) > 0 " +
             "ORDER BY b.expireDate ASC NULLS LAST, b.productionDate ASC")
     List<FinishedGoodsBatch> findShippableBatchesAllWarehousesExcluding(
@@ -185,6 +258,7 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             "AND b.factoryId = :factoryId " +
             "AND b.productTypeId = :productTypeId " +
             "AND b.status = 'AVAILABLE' " +
+            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
             "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0")
     List<String> findWarehouseCodesWithAvailableStock(
             @Param("factoryId") String factoryId,
@@ -195,6 +269,7 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
     @Query("SELECT COALESCE(SUM(b.producedQuantity - b.shippedQuantity - b.reservedQuantity), 0) " +
             "FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
             "AND b.productTypeId = :productTypeId AND b.status = 'AVAILABLE' " +
+            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
             "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0")
     BigDecimal sumAvailableQuantityByProductType(
             @Param("factoryId") String factoryId,
@@ -208,6 +283,7 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             "FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
             "AND b.productTypeId = :productTypeId AND b.status = 'AVAILABLE' " +
             "AND b.unit = :unit " +
+            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
             "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0")
     BigDecimal sumAvailableQuantityByProductTypeAndUnit(
             @Param("factoryId") String factoryId,
@@ -223,6 +299,7 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             "AND b.productTypeId = :productTypeId " +
             "AND b.warehouseId = :warehouseId " +
             "AND b.status = 'AVAILABLE' " +
+            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
             "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0")
     BigDecimal sumAvailableQuantityByProductTypeAndWarehouse(
             @Param("factoryId") String factoryId,
@@ -263,6 +340,7 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
     @Query("SELECT COALESCE(SUM(b.producedQuantity - b.shippedQuantity - b.reservedQuantity), 0) " +
             "FROM FinishedGoodsBatch b WHERE b.productTypeId = :productTypeId " +
             "AND b.status = 'AVAILABLE' " +
+            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
             "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0")
     BigDecimal sumAvailableQuantityByProductTypeAllFactories(
             @Param("productTypeId") String productTypeId);
@@ -278,6 +356,7 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
      */
     @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.productTypeId = :productTypeId " +
             "AND b.status = 'AVAILABLE' " +
+            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
             "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0 " +
             "ORDER BY b.expireDate ASC NULLS LAST, b.productionDate ASC")
     List<FinishedGoodsBatch> findAvailableBatchesAllFactories(
@@ -301,6 +380,7 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             "WHERE b.warehouseId = w.id AND w.code = :warehouseCode " +
             "AND b.productTypeId = :productTypeId " +
             "AND b.status = 'AVAILABLE' " +
+            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
             "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0")
     BigDecimal sumAvailableQuantityByProductTypeAllFactoriesAndWarehouseCode(
             @Param("productTypeId") String productTypeId,
@@ -332,6 +412,7 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             "WHERE b.warehouseId = w.id AND w.code = :warehouseCode " +
             "AND b.productTypeId = :productTypeId " +
             "AND b.status = 'AVAILABLE' " +
+            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
             "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0 " +
             "ORDER BY b.expireDate ASC NULLS LAST, b.productionDate ASC")
     List<FinishedGoodsBatch> findAvailableBatchesAllFactoriesByWarehouseCode(
@@ -381,6 +462,7 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             "AND b.productTypeId = :productTypeId " +
             "AND b.unit = :unit " +
             "AND b.status = 'AVAILABLE' " +
+            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
             "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0")
     BigDecimal sumShippableQuantityByProductTypeAndWarehouseCodeAndUnit(
             @Param("factoryId") String factoryId,
@@ -410,6 +492,7 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             "AND b.productTypeId = :productTypeId " +
             "AND b.unit = :unit " +
             "AND b.status = 'AVAILABLE' " +
+            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
             "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0")
     BigDecimal sumSaleableQuantityByProductTypeAndUnitExcludeRd(
             @Param("factoryId") String factoryId,

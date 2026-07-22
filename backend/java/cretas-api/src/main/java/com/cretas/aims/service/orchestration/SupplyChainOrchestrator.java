@@ -5,12 +5,14 @@ import com.cretas.aims.entity.*;
 import com.cretas.aims.entity.config.FactoryTriggerChain;
 import com.cretas.aims.entity.enums.*;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
+import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.event.*;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.config.FactoryTriggerChainRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
+import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.BatchConsumptionService;
 import com.cretas.aims.service.LinkArrayService;
 import com.cretas.aims.service.QualityInspectionService;
@@ -64,6 +66,7 @@ public class SupplyChainOrchestrator {
     private final QualityInspectionService qualityInspectionService;
     private final BatchConsumptionService batchConsumptionService;
     private final ProductTypeRepository productTypeRepository;
+    private final SalesOrderRepository salesOrderRepository;
 
     /** D1 双仓流转 (2026-05-10 spec, PR #309 A1=A) — production output 默认 WH-WKS. */
     @org.springframework.beans.factory.annotation.Autowired
@@ -148,6 +151,21 @@ public class SupplyChainOrchestrator {
                 event.getFactoryId(), event.getSalesOrderId(), event.getApprovedBy());
 
         try {
+            SalesOrder sourceOrder = salesOrderRepository.findById(event.getSalesOrderId())
+                    .filter(order -> event.getFactoryId().equals(order.getFactoryId()))
+                    .orElse(null);
+            if (sourceOrder == null) {
+                log.warn("销售订单不存在或不属于当前工厂，跳过供应链联动: factoryId={}, SO={}",
+                        event.getFactoryId(), event.getSalesOrderId());
+                return;
+            }
+            if (sourceOrder.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
+                // 客供料由仓储统一待收货任务驱动。这里禁止占用公司成品库存、自动生成
+                // 采购建议或公司应付；后续生产计划必须从该销售订单显式创建并冻结归属。
+                log.info("客供料销售订单跳过公司库存/采购联动，等待仓储客供收货: SO={}",
+                        event.getSalesOrderId());
+                return;
+            }
             StockCheckResult result = inventoryMatchingService.checkAvailability(
                     event.getFactoryId(), event.getSalesOrderId());
 

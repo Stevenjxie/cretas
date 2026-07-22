@@ -1,6 +1,8 @@
 package com.cretas.aims.service.inventory;
 
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.enums.InventoryOwnership;
+import com.cretas.aims.entity.enums.SalesProcessingMode;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
@@ -88,7 +90,7 @@ class SalesOrderFulfillmentWarehouseTest {
     void setUp() {
         // Mirror SalesServiceImplSalespersonTest pattern: 8-arg ctor with null + reflective injection.
         salesService = new SalesServiceImpl(
-                null,    // salesOrderRepository
+                salesOrderRepository,
                 null,    // salesOrderItemRepository
                 null,    // deliveryRecordRepository
                 finishedGoodsBatchRepository,
@@ -105,11 +107,15 @@ class SalesOrderFulfillmentWarehouseTest {
 
     /** Invoke private deductFinishedGoodsInventory via reflection. */
     private void invokeDeduct(SalesDeliveryItem item) throws Exception {
+        invokeDeduct(null, item);
+    }
+
+    private void invokeDeduct(String salesOrderId, SalesDeliveryItem item) throws Exception {
         Method m = SalesServiceImpl.class.getDeclaredMethod(
                 "deductFinishedGoodsInventory", String.class, String.class, SalesDeliveryItem.class);
         m.setAccessible(true);
         try {
-            m.invoke(salesService, FACTORY_A, (String) null, item);
+            m.invoke(salesService, FACTORY_A, salesOrderId, item);
         } catch (java.lang.reflect.InvocationTargetException e) {
             // Unwrap so callers can catch BusinessException directly.
             if (e.getCause() instanceof RuntimeException) {
@@ -214,6 +220,71 @@ class SalesOrderFulfillmentWarehouseTest {
 
         verify(finishedGoodsBatchRepository, times(1)).save(eq(oldBatch));
         verify(finishedGoodsBatchRepository, times(1)).save(eq(newBatch));
+    }
+
+    @Test
+    @DisplayName("代加工订单仅扣同一客户、同一销售订单的客供成品")
+    void deduct_customerOwnedFinishedGoods_usesExactCustomerAndSalesOrderScope() throws Exception {
+        SalesOrder order = new SalesOrder();
+        order.setId("SO-CUSTOMER-1");
+        order.setFactoryId(FACTORY_A);
+        order.setCustomerId("CUS-1");
+        order.setProcessingMode(SalesProcessingMode.TOLL_PROCESSING);
+        when(salesOrderRepository.findById(order.getId())).thenReturn(Optional.of(order));
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(order.getId(), FACTORY_A))
+                .thenReturn(Optional.of(order));
+
+        FinishedGoodsBatch ownedBatch = buildAvailableBatch(
+                "B-CUSTOMER-1", WH_LOG_ID, new BigDecimal("5"));
+        ownedBatch.setUnit("box");
+        ownedBatch.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        ownedBatch.setOwnerCustomerId(order.getCustomerId());
+        ownedBatch.setSourceSalesOrderId(order.getId());
+        when(finishedGoodsBatchRepository.findShippableCustomerOwnedBatchesAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD, order.getCustomerId(), order.getId()))
+                .thenReturn(List.of(ownedBatch));
+
+        SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("2"));
+        item.setUnit("box");
+        invokeDeduct(order.getId(), item);
+
+        assertEquals(0, ownedBatch.getShippedQuantity().compareTo(new BigDecimal("2")));
+        verify(finishedGoodsBatchRepository).findShippableCustomerOwnedBatchesAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD, order.getCustomerId(), order.getId());
+        verify(finishedGoodsBatchRepository, never())
+                .findShippableBatchesAllWarehousesExcluding(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("普通销售订单即使异常候选返回客供成品也必须拒绝扣减")
+    void deduct_standardOrder_rejectsCustomerOwnedFinishedGoodsDefenseInDepth() throws Exception {
+        SalesOrder order = new SalesOrder();
+        order.setId("SO-STANDARD-1");
+        order.setFactoryId(FACTORY_A);
+        order.setCustomerId("CUS-1");
+        order.setProcessingMode(SalesProcessingMode.STANDARD_SALE);
+        when(salesOrderRepository.findById(order.getId())).thenReturn(Optional.of(order));
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(order.getId(), FACTORY_A))
+                .thenReturn(Optional.of(order));
+
+        FinishedGoodsBatch customerOwned = buildAvailableBatch(
+                "B-CUSTOMER-FORBIDDEN", WH_LOG_ID, BigDecimal.ONE);
+        customerOwned.setUnit("box");
+        customerOwned.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        customerOwned.setOwnerCustomerId("CUS-1");
+        customerOwned.setSourceSalesOrderId("SO-OTHER");
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
+                .thenReturn(List.of(customerOwned));
+
+        SalesDeliveryItem item = buildDeliveryItem(BigDecimal.ONE);
+        item.setUnit("box");
+        BusinessException error = assertThrows(
+                BusinessException.class, () -> invokeDeduct(order.getId(), item));
+
+        assertEquals("CUSTOMER_OWNED_FINISHED_GOODS_FORBIDDEN", error.getErrorCode());
+        assertEquals(0, customerOwned.getShippedQuantity().compareTo(BigDecimal.ZERO));
+        verify(finishedGoodsBatchRepository, never()).save(customerOwned);
     }
 
     // ============================================================
@@ -331,6 +402,8 @@ class SalesOrderFulfillmentWarehouseTest {
         batch.setUnitCost(new BigDecimal("4.1667"));
 
         when(salesOrderRepository.findById(order.getId())).thenReturn(Optional.of(order));
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(order.getId(), FACTORY_A))
+                .thenReturn(Optional.of(order));
         when(salesOrderItemRepository.findBySalesOrderId(order.getId())).thenReturn(List.of(orderItem));
         when(productTypeRepository.findById(PRODUCT_TYPE)).thenReturn(Optional.of(productType));
         when(batchAllocationService.listByDeliveryItem(FACTORY_A, "167"))
@@ -401,6 +474,8 @@ class SalesOrderFulfillmentWarehouseTest {
         batchB.setUnitCost(new BigDecimal("26.0000"));
 
         when(salesOrderRepository.findById(order.getId())).thenReturn(Optional.of(order));
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(order.getId(), FACTORY_A))
+                .thenReturn(Optional.of(order));
         when(salesOrderItemRepository.findBySalesOrderId(order.getId())).thenReturn(List.of(orderItem));
         when(productTypeRepository.findById(PRODUCT_TYPE)).thenReturn(Optional.of(productType));
         when(batchAllocationService.listByDeliveryItem(FACTORY_A, "167"))

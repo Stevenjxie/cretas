@@ -1,10 +1,13 @@
 package com.cretas.aims.service.shortage;
 
 import com.cretas.aims.dto.orchestration.LineItemMatch;
+import com.cretas.aims.entity.enums.MaterialSupplyMode;
+import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.entity.inventory.SalesOrderShortageReport;
 import com.cretas.aims.event.SalesOrderFinanceApprovedEvent;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
+import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.repository.inventory.SalesOrderShortageReportRepository;
 import com.cretas.aims.service.notification.NotificationService;
 import com.cretas.aims.service.shortage.dto.ProcurementSuggestion;
@@ -54,6 +57,7 @@ public class SalesOrderShortageReportListener {
     private final SalesOrderShortageReportRepository reportRepository;
     private final SalesOrderItemRepository salesOrderItemRepository;
     private final NotificationService notificationService;
+    private final SalesOrderRepository salesOrderRepository;
 
     @Async
     @EventListener
@@ -63,6 +67,20 @@ public class SalesOrderShortageReportListener {
         String salesOrderId = event.getSalesOrderId();
         log.info("[ShortageReport] async snapshot: factoryId={}, SO={}, approvedBy={}",
                 factoryId, salesOrderId, event.getApprovedBy());
+
+        SalesOrder sourceOrder = salesOrderRepository.findById(salesOrderId)
+                .filter(order -> factoryId.equals(order.getFactoryId()))
+                .orElse(null);
+        if (sourceOrder == null) {
+            log.warn("[ShortageReport] sales order missing or cross-factory, skip: factoryId={}, SO={}",
+                    factoryId, salesOrderId);
+            return;
+        }
+        if (sourceOrder.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
+            log.info("[ShortageReport] customer-supplied order skips company procurement suggestions: SO={}",
+                    salesOrderId);
+            return;
+        }
 
         ShortageReport report;
         try {

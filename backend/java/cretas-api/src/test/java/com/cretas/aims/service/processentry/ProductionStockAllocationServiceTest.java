@@ -2,10 +2,14 @@ package com.cretas.aims.service.processentry;
 
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionInputAllocationRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.processentry.impl.ProductionStockAllocationServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,9 +21,11 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -30,6 +36,8 @@ class ProductionStockAllocationServiceTest {
     @Mock
     private ProductionInputAllocationRepository allocationRepository;
     @Mock
+    private ProductionPlanRepository productionPlanRepository;
+    @Mock
     private WarehouseResolver warehouseResolver;
 
     private ProductionStockAllocationService service;
@@ -37,7 +45,9 @@ class ProductionStockAllocationServiceTest {
     @BeforeEach
     void setUp() {
         service = new ProductionStockAllocationServiceImpl(
-                materialBatchRepository, allocationRepository, warehouseResolver);
+                materialBatchRepository, allocationRepository, productionPlanRepository, warehouseResolver);
+        lenient().when(productionPlanRepository.findByIdAndFactoryId("PLAN-1", "F006"))
+                .thenReturn(Optional.of(factorySuppliedPlan()));
     }
 
     @Test
@@ -56,7 +66,7 @@ class ProductionStockAllocationServiceTest {
                 .thenReturn(BigDecimal.ZERO);
 
         List<ProductionStockAllocationService.PlannedAllocation> result =
-                service.plan("F006", List.of(input));
+                service.plan("F006", "PLAN-1", List.of(input));
 
         assertThat(result).extracting(ProductionStockAllocationService.PlannedAllocation::materialBatchId)
                 .containsExactly("B1", "B2");
@@ -78,7 +88,7 @@ class ProductionStockAllocationServiceTest {
                 .thenReturn(new BigDecimal("1"));
 
         List<ProductionStockAllocationService.PlannedAllocation> result =
-                service.plan("F006", List.of(input));
+                service.plan("F006", "PLAN-1", List.of(input));
 
         assertThat(result).singleElement().satisfies(allocation -> {
             assertThat(allocation.quantity()).isEqualByComparingTo("2");
@@ -99,7 +109,7 @@ class ProductionStockAllocationServiceTest {
         when(allocationRepository.sumPendingQuantityByMaterialBatchId("F006", "B1"))
                 .thenReturn(BigDecimal.ZERO);
 
-        assertThat(service.plan("F006", List.of(input)))
+        assertThat(service.plan("F006", "PLAN-1", List.of(input)))
                 .singleElement()
                 .satisfies(allocation -> {
                     assertThat(allocation.quantity()).isEqualByComparingTo("2");
@@ -119,7 +129,7 @@ class ProductionStockAllocationServiceTest {
         when(allocationRepository.sumPendingQuantityByMaterialBatchId("F006", "B1"))
                 .thenReturn(BigDecimal.ZERO);
 
-        assertThatThrownBy(() -> service.plan("F006", List.of(input)))
+        assertThatThrownBy(() -> service.plan("F006", "PLAN-1", List.of(input)))
                 .isInstanceOfSatisfying(ProductionStockShortageException.class, error -> {
                     assertThat(error.getMessage())
                             .isEqualTo("当前只能保存草稿，生产库中投料量不足。需要 10kg，可用 7kg，缺少 3kg，请联系仓管补料");
@@ -142,7 +152,7 @@ class ProductionStockAllocationServiceTest {
                 .thenThrow(new BusinessException(500, "missing workshop")
                         .withCode("WORKSHOP_WAREHOUSE_NOT_CONFIGURED"));
 
-        assertThatThrownBy(() -> service.plan("F006", List.of(input)))
+        assertThatThrownBy(() -> service.plan("F006", "PLAN-1", List.of(input)))
                 .isInstanceOfSatisfying(BusinessException.class, error ->
                         assertThat(error.getErrorCode()).isEqualTo("WORKSHOP_WAREHOUSE_NOT_CONFIGURED"));
     }
@@ -161,7 +171,7 @@ class ProductionStockAllocationServiceTest {
         when(allocationRepository.sumPendingQuantityByMaterialBatchId("F006", "B1"))
                 .thenReturn(new BigDecimal("3"));
 
-        assertThatThrownBy(() -> service.planExplicit("F006", List.of(input)))
+        assertThatThrownBy(() -> service.planExplicit("F006", "PLAN-1", List.of(input)))
                 .isInstanceOfSatisfying(ProductionStockShortageException.class, error -> {
                     assertThat(error.getShortage().getRequired()).isEqualByComparingTo("5");
                     assertThat(error.getShortage().getAvailable()).isEqualByComparingTo("4");
@@ -184,12 +194,120 @@ class ProductionStockAllocationServiceTest {
         when(allocationRepository.sumPendingQuantityByMaterialBatchId("F006", "B1"))
                 .thenReturn(new BigDecimal("1"));
 
-        assertThat(service.planExplicit("F006", List.of(input)))
+        assertThat(service.planExplicit("F006", "PLAN-1", List.of(input)))
                 .singleElement()
                 .satisfies(allocation -> {
                     assertThat(allocation.quantity()).isEqualByComparingTo("2");
                     assertThat(allocation.unit()).isEqualTo("kg");
                 });
+    }
+
+    @Test
+    void customerSuppliedPlanAllocatesOnlySameCustomerAndSalesOrderStock() {
+        ProductionPlan plan = customerSuppliedPlan();
+        MaterialBatch customerBatch = batch(
+                "CB1", "RAW-1", "WKS-1", "5", LocalDate.of(2026, 7, 20));
+        customerBatch.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        customerBatch.setOwnerCustomerId("CUS-1");
+        customerBatch.setSourceSalesOrderId("SO-1");
+        customerBatch.setSourceSalesOrderItemId("ITEM-1");
+
+        when(productionPlanRepository.findByIdAndFactoryId("PLAN-1", "F006"))
+                .thenReturn(Optional.of(plan));
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        when(materialBatchRepository.findAvailableCustomerSuppliedBatchesFEFOByWarehouseForUpdate(
+                "F006", "RAW-1", "WKS-1", "CUS-1", "SO-1"))
+                .thenReturn(List.of(customerBatch));
+        when(allocationRepository.sumPendingQuantityByMaterialBatchId("F006", "CB1"))
+                .thenReturn(BigDecimal.ZERO);
+
+        assertThat(service.plan("F006", "PLAN-1", List.of(total("RAW-1", "3"))))
+                .singleElement()
+                .satisfies(allocation -> {
+                    assertThat(allocation.materialBatchId()).isEqualTo("CB1");
+                    assertThat(allocation.quantity()).isEqualByComparingTo("3");
+                });
+    }
+
+    @Test
+    void explicitCustomerBatchFromAnotherCustomerOrOrderIsRejected() {
+        ProductionPlan plan = customerSuppliedPlan();
+        MaterialBatch wrongCustomer = batch(
+                "CB1", "RAW-1", "WKS-1", "5", LocalDate.of(2026, 7, 20));
+        wrongCustomer.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        wrongCustomer.setOwnerCustomerId("CUS-OTHER");
+        wrongCustomer.setSourceSalesOrderId("SO-OTHER");
+
+        ProcessSheetRowRequest.RawInput input = new ProcessSheetRowRequest.RawInput();
+        input.setMaterialBatchId("CB1");
+        input.setSkuId("RAW-1");
+        input.setQuantity(BigDecimal.ONE);
+
+        when(productionPlanRepository.findByIdAndFactoryId("PLAN-1", "F006"))
+                .thenReturn(Optional.of(plan));
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        when(materialBatchRepository.findByIdAndFactoryIdForUpdate("CB1", "F006"))
+                .thenReturn(Optional.of(wrongCustomer));
+
+        assertThatThrownBy(() -> service.planExplicit(
+                "F006", "PLAN-1", List.of(input)))
+                .isInstanceOfSatisfying(BusinessException.class, error ->
+                        assertThat(error.getErrorCode())
+                                .isEqualTo("CUSTOMER_SUPPLIED_MATERIAL_SCOPE_MISMATCH"));
+    }
+
+    @Test
+    void factorySuppliedPlanCannotExplicitlyConsumeCustomerOwnedStock() {
+        MaterialBatch customerBatch = batch(
+                "CB1", "RAW-1", "WKS-1", "5", LocalDate.of(2026, 7, 20));
+        customerBatch.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        customerBatch.setOwnerCustomerId("CUS-1");
+        customerBatch.setSourceSalesOrderId("SO-1");
+
+        ProcessSheetRowRequest.RawInput input = new ProcessSheetRowRequest.RawInput();
+        input.setMaterialBatchId("CB1");
+        input.setSkuId("RAW-1");
+        input.setQuantity(BigDecimal.ONE);
+
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        when(materialBatchRepository.findByIdAndFactoryIdForUpdate("CB1", "F006"))
+                .thenReturn(Optional.of(customerBatch));
+
+        assertThatThrownBy(() -> service.planExplicit(
+                "F006", "PLAN-1", List.of(input)))
+                .isInstanceOfSatisfying(BusinessException.class, error ->
+                        assertThat(error.getErrorCode())
+                                .isEqualTo("CUSTOMER_OWNED_MATERIAL_FORBIDDEN"));
+    }
+
+    @Test
+    void allocationFailsClosedWhenPlanIdentityCannotBeResolved() {
+        when(productionPlanRepository.findByIdAndFactoryId("MISSING", "F006"))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.plan(
+                "F006", "MISSING", List.of(total("RAW-1", "1"))))
+                .isInstanceOfSatisfying(BusinessException.class, error ->
+                        assertThat(error.getErrorCode()).isEqualTo("PRODUCTION_PLAN_NOT_FOUND"));
+    }
+
+    private static ProductionPlan factorySuppliedPlan() {
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId("PLAN-1");
+        plan.setFactoryId("F006");
+        plan.setMaterialSupplyMode(MaterialSupplyMode.FACTORY_SUPPLIED);
+        return plan;
+    }
+
+    private static ProductionPlan customerSuppliedPlan() {
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId("PLAN-1");
+        plan.setFactoryId("F006");
+        plan.setCustomerId("CUS-1");
+        plan.setSourceOrderId("SO-1");
+        plan.setSourceOrderItemId("ITEM-1");
+        plan.setMaterialSupplyMode(MaterialSupplyMode.CUSTOMER_SUPPLIED);
+        return plan;
     }
 
     private static ProcessSheetRowRequest.MaterialInputTotal total(String materialTypeId, String quantity) {

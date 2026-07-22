@@ -5,10 +5,14 @@ import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
 import com.cretas.aims.dto.processentry.ProductionStockShortageDTO;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionInputAllocation;
+import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionInputAllocationRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
+import com.cretas.aims.service.processentry.ProductionInventoryOwnershipGuard;
 import com.cretas.aims.service.processentry.ProductionStockAllocationService;
 import com.cretas.aims.service.processentry.ProductionStockShortageException;
 import lombok.RequiredArgsConstructor;
@@ -31,15 +35,19 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
 
     private final MaterialBatchRepository materialBatchRepository;
     private final ProductionInputAllocationRepository allocationRepository;
+    private final ProductionPlanRepository productionPlanRepository;
     private final WarehouseResolver warehouseResolver;
 
     @Override
     public List<PlannedAllocation> plan(
             String factoryId,
+            String planId,
             List<ProcessSheetRowRequest.MaterialInputTotal> materialInputTotals) {
         if (materialInputTotals == null || materialInputTotals.isEmpty()) {
             return List.of();
         }
+
+        ProductionPlan plan = requirePlan(factoryId, planId);
 
         String workshopId = warehouseResolver.resolveWorkshopId(factoryId);
         if (workshopId == null || workshopId.isBlank()) {
@@ -61,12 +69,13 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             BigDecimal required = reportingQuantityToKg(input.getQuantity(), input.getUnit());
             List<MaterialBatch> batches = batchesByMaterial.computeIfAbsent(
                     materialTypeId,
-                    key -> materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
-                            factoryId, key, workshopId));
+                    key -> findEligibleBatchesForUpdate(factoryId, plan, key, workshopId));
 
             BigDecimal remaining = required;
             BigDecimal availableForInput = BigDecimal.ZERO;
             for (MaterialBatch batch : batches) {
+                ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed(
+                        plan, batch, "生产报工投料");
                 BigDecimal available = availableByBatch.computeIfAbsent(batch.getId(), ignored -> {
                     BigDecimal pending = nz(allocationRepository
                             .sumPendingQuantityByMaterialBatchId(factoryId, batch.getId()));
@@ -127,10 +136,12 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
     @Override
     public List<PlannedAllocation> planExplicit(
             String factoryId,
+            String planId,
             List<ProcessSheetRowRequest.RawInput> rawMaterialInputs) {
         if (rawMaterialInputs == null || rawMaterialInputs.isEmpty()) {
             return List.of();
         }
+        ProductionPlan plan = requirePlan(factoryId, planId);
         String workshopId = warehouseResolver.resolveWorkshopId(factoryId);
         if (workshopId == null || workshopId.isBlank()) {
             throw new BusinessException(500, "未配置生产库，不能锁定投料批次")
@@ -163,6 +174,8 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                     .orElseThrow(() -> new BusinessException(409, "投料批次不存在或不属于当前工厂")
                             .withCode("PRODUCTION_INPUT_BATCH_NOT_FOUND")
                             .withSeverity("BLOCKING"));
+            ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed(
+                    plan, batch, "生产报工投料");
             lockedByBatch.put(batchId, batch);
         }
 
@@ -304,6 +317,49 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
         entity.setStatus("ALLOCATED");
         entity.setCreatedBy(userId);
         return entity;
+    }
+
+    private ProductionPlan requirePlan(String factoryId, String planId) {
+        if (planId == null || planId.isBlank()) {
+            throw new BusinessException(409, "生产报工缺少生产计划归属")
+                    .withCode("PRODUCTION_PLAN_OWNERSHIP_CONTEXT_REQUIRED")
+                    .withSeverity("BLOCKING");
+        }
+        return productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+                .orElseThrow(() -> new BusinessException(409, "生产计划不存在或不属于当前工厂")
+                        .withCode("PRODUCTION_PLAN_NOT_FOUND")
+                        .withSeverity("BLOCKING"));
+    }
+
+    private List<MaterialBatch> findEligibleBatchesForUpdate(String factoryId,
+                                                              ProductionPlan plan,
+                                                              String materialTypeId,
+                                                              String warehouseId) {
+        if (plan.getMaterialSupplyMode() != MaterialSupplyMode.CUSTOMER_SUPPLIED) {
+            return materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
+                    factoryId, materialTypeId, warehouseId);
+        }
+
+        ProductionInventoryOwnershipGuard.requireCustomerSuppliedPlanLineage(
+                plan, "生产报工投料");
+        return materialBatchRepository
+                .findAvailableCustomerSuppliedBatchesFEFOByWarehouseForUpdate(
+                        factoryId,
+                        materialTypeId,
+                        warehouseId,
+                        plan.getCustomerId(),
+                        plan.getSourceOrderId())
+                .stream()
+                .filter(batch -> isCompatibleSalesOrderItem(plan, batch))
+                .toList();
+    }
+
+    private boolean isCompatibleSalesOrderItem(ProductionPlan plan, MaterialBatch batch) {
+        String planItemId = plan.getSourceOrderItemId();
+        String batchItemId = batch.getSourceSalesOrderItemId();
+        return planItemId == null || planItemId.isBlank()
+                || batchItemId == null || batchItemId.isBlank()
+                || Objects.equals(planItemId, batchItemId);
     }
 
     private void validateInput(ProcessSheetRowRequest.MaterialInputTotal input) {

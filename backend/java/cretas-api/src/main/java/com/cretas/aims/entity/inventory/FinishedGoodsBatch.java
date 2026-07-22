@@ -3,6 +3,7 @@ package com.cretas.aims.entity.inventory;
 import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.*;
 
@@ -138,6 +139,26 @@ public class FinishedGoodsBatch extends BaseEntity {
     /** 关联生产计划ID（可选） */
     @Column(name = "production_plan_id", length = 191)
     private String productionPlanId;
+
+    /**
+     * Legal ownership copied from the pinned production plan. Legacy rows may
+     * remain null; new ordinary inventory defaults to company-owned.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "ownership", length = 32)
+    private InventoryOwnership ownership = InventoryOwnership.COMPANY_OWNED;
+
+    /** Customer owner for toll-processing output; null for company stock. */
+    @Column(name = "owner_customer_id", length = 191)
+    private String ownerCustomerId;
+
+    /** Sales-order lineage frozen when production output is posted. */
+    @Column(name = "source_sales_order_id", length = 191)
+    private String sourceSalesOrderId;
+
+    /** Optional sales-order-line lineage for mixed/multi-line orders. */
+    @Column(name = "source_sales_order_item_id", length = 50)
+    private String sourceSalesOrderItemId;
 
     /**
      * D1 双仓流转 (2026-05-10 spec, PR #309 A1=A).

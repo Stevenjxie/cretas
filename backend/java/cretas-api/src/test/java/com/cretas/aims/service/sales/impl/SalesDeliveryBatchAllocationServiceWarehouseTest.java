@@ -3,11 +3,16 @@ package com.cretas.aims.service.sales.impl;
 import com.cretas.aims.dto.sales.BatchAllocationDTO;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesDeliveryItem;
+import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
+import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.entity.enums.InventoryOwnership;
+import com.cretas.aims.entity.enums.SalesProcessingMode;
 import com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesDeliveryItemRepository;
+import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.repository.sales.SalesDeliveryItemBatchAllocationRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import org.junit.jupiter.api.Test;
@@ -52,6 +57,7 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
     @Mock FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     @Mock WarehouseResolver warehouseResolver;
     @Mock ProductTypeRepository productTypeRepository;
+    @Mock SalesOrderRepository salesOrderRepository;
 
     @InjectMocks SalesDeliveryBatchAllocationServiceImpl service;
 
@@ -91,6 +97,19 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
         b.setProductTypeId(PRODUCT_ID);
         b.setUnit("kg");
         return b;
+    }
+
+    private SalesOrder customerOwnedOrder(SalesDeliveryItem item) {
+        SalesOrder order = new SalesOrder();
+        order.setId("SO-CUSTOMER-1");
+        order.setFactoryId(FID);
+        order.setCustomerId("CUS-1");
+        order.setProcessingMode(SalesProcessingMode.TOLL_PROCESSING);
+        SalesDeliveryRecord record = new SalesDeliveryRecord();
+        record.setSalesOrderId(order.getId());
+        item.setDeliveryRecord(record);
+        when(salesOrderRepository.findById(order.getId())).thenReturn(Optional.of(order));
+        return order;
     }
 
     // ─────────────── allocateBatches ───────────────
@@ -377,5 +396,88 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
                 () -> service.allocateBatches(FID, ITEM_ID, List.of(dto)));
         assertEquals(409, ex.getCode());
         assertTrue(ex.getMessage().contains("单位"));
+    }
+
+    @Test
+    void recommendFifo_customerOwnedOrderUsesSameCustomerAndSalesOrderQuery() {
+        SalesDeliveryItem item = deliveryItem("WH-LOG", new BigDecimal("2"));
+        item.setProductTypeId(PRODUCT_ID);
+        customerOwnedOrder(item);
+        when(deliveryItemRepository.findById(42L)).thenReturn(Optional.of(item));
+        when(warehouseResolver.resolveId(FID, "WH-LOG")).thenReturn(WH_LOG_ID);
+
+        FinishedGoodsBatch owned = batch("owned-1", WH_LOG_ID, new BigDecimal("2"));
+        owned.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        owned.setOwnerCustomerId("CUS-1");
+        owned.setSourceSalesOrderId("SO-CUSTOMER-1");
+        when(finishedGoodsBatchRepository.findAvailableCustomerOwnedBatchesByWarehouse(
+                FID, PRODUCT_ID, WH_LOG_ID, "CUS-1", "SO-CUSTOMER-1"))
+                .thenReturn(List.of(owned));
+
+        var result = service.recommendFifo(
+                FID, ITEM_ID, PRODUCT_ID, new BigDecimal("2"), "kg", "WH-LOG");
+
+        assertEquals(1, result.size());
+        assertEquals("owned-1", result.get(0).get("batchId"));
+        verify(finishedGoodsBatchRepository, never())
+                .findAvailableBatchesFifoByWarehouse(any(), any(), any());
+    }
+
+    @Test
+    void allocateBatches_customerOwnedOrderRejectsAnotherSalesOrdersBatch() {
+        SalesDeliveryItem item = deliveryItem("WH-LOG", BigDecimal.ONE);
+        item.setProductTypeId(PRODUCT_ID);
+        customerOwnedOrder(item);
+        when(deliveryItemRepository.findById(42L)).thenReturn(Optional.of(item));
+        when(warehouseResolver.resolveId(FID, "WH-LOG")).thenReturn(WH_LOG_ID);
+
+        FinishedGoodsBatch wrong = batch("owned-other", WH_LOG_ID, BigDecimal.ONE);
+        wrong.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        wrong.setOwnerCustomerId("CUS-1");
+        wrong.setSourceSalesOrderId("SO-OTHER");
+        when(finishedGoodsBatchRepository.findById("owned-other"))
+                .thenReturn(Optional.of(wrong));
+
+        BatchAllocationDTO dto = new BatchAllocationDTO();
+        dto.setFinishedGoodsBatchId("owned-other");
+        dto.setAllocatedQty(BigDecimal.ONE);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.allocateBatches(FID, ITEM_ID, List.of(dto)));
+        assertEquals("CUSTOMER_OWNED_FINISHED_GOODS_SCOPE_MISMATCH", ex.getErrorCode());
+        verify(allocationRepository, never()).saveAll(anyList());
+    }
+
+    @Test
+    void allocateBatches_standardOrderRejectsCustomerOwnedBatch() {
+        SalesDeliveryItem item = deliveryItem("WH-LOG", BigDecimal.ONE);
+        item.setProductTypeId(PRODUCT_ID);
+        SalesOrder order = new SalesOrder();
+        order.setId("SO-STANDARD-1");
+        order.setFactoryId(FID);
+        order.setCustomerId("CUS-1");
+        order.setProcessingMode(SalesProcessingMode.STANDARD_SALE);
+        SalesDeliveryRecord record = new SalesDeliveryRecord();
+        record.setSalesOrderId(order.getId());
+        item.setDeliveryRecord(record);
+        when(salesOrderRepository.findById(order.getId())).thenReturn(Optional.of(order));
+        when(deliveryItemRepository.findById(42L)).thenReturn(Optional.of(item));
+        when(warehouseResolver.resolveId(FID, "WH-LOG")).thenReturn(WH_LOG_ID);
+
+        FinishedGoodsBatch customerOwned = batch("owned-forbidden", WH_LOG_ID, BigDecimal.ONE);
+        customerOwned.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        customerOwned.setOwnerCustomerId("CUS-1");
+        customerOwned.setSourceSalesOrderId("SO-OTHER");
+        when(finishedGoodsBatchRepository.findById("owned-forbidden"))
+                .thenReturn(Optional.of(customerOwned));
+
+        BatchAllocationDTO dto = new BatchAllocationDTO();
+        dto.setFinishedGoodsBatchId("owned-forbidden");
+        dto.setAllocatedQty(BigDecimal.ONE);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.allocateBatches(FID, ITEM_ID, List.of(dto)));
+        assertEquals("CUSTOMER_OWNED_FINISHED_GOODS_FORBIDDEN", ex.getErrorCode());
+        verify(allocationRepository, never()).saveAll(anyList());
     }
 }
