@@ -87,7 +87,9 @@ def test_content_has_no_internal_identifiers_or_fabricated_citations():
 
 
 @pytest.mark.asyncio
-async def test_tiered_yields_to_deterministic_playbook(monkeypatch):
+async def test_tiered_serves_playbook_directly(monkeypatch):
+    """R16b: 反转后委托路径无 resolve_by_code 兜底 — tiered 必须直答 playbook
+    (零 DB), 且解析器仍不运行。"""
     import smartbi.gold.restaurant_intent_service as svc
 
     async def _boom(*a, **kw):
@@ -97,4 +99,5 @@ async def test_tiered_yields_to_deterministic_playbook(monkeypatch):
     result = await svc.tiered_answer(
         "毛利率偏低的行业参考做法", object(), "DEMO_REST", "restaurant_manager",
     )
-    assert result is None
+    assert result is not None and result["kind"] == "clarification"
+    assert "菜单工程" in result["answer_text"] or "行业参考做法" in result["answer_text"]
