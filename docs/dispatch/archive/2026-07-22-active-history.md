@@ -2,11 +2,11 @@
 
 ## BUG-F006-R3-SALES-OA-INSTANCE-001
 
-- Status: `merged-ready; NOT_DEPLOYED`; Owner: `/root`; rebased implementation head before documentation closeout: `0b92f3a3b1ec3fe8ff72799d18070eaa3f294342`; PR [#1614](https://github.com/Stevenjxie/cretas/pull/1614).
+- Status: `merged+deployed+service-verified`; Owner: `/root`; implementation PR [#1614](https://github.com/Stevenjxie/cretas/pull/1614), exact deployed implementation main `a0982983c0c88b63d1dff246ef7be61eaef1fd13`.
 - Scope: sales confirmation -> persisted unified OA instance -> automatic terminal approval or finance OA task -> transactional sales-state and voucher projection. New sales submissions use unified OA only; legacy approval records/config remain read-only compatible and are not dual-written or backfilled.
 - F006 default policy: external orders and orders at or below 5000 yuan auto-complete inside OA; orders above 5000 yuan create one finance task. The threshold and assignee roles are maintained in the unified OA Canvas definition; the migration seeds only the first missing default and never overwrites an existing active definition.
 - Verification: immutable Java release lifecycle 11 selected classes / 63 tests including real PostgreSQL JPA startup; Web Vitest 10 files / 29 tests, `vue-tsc --noEmit`, and immutable Vite release build (4457 modules) all passed. Durable OA action idempotency, definition-running guards, finance voucher timing, deep-link reactivity and role routing are covered.
-- Production boundary: implementation business writes 0; existing `SO-20260722-0001`, PO, inventory and LIUSHANMEN records were not changed or bridged. Scope locks `BUG-F006-R3-SALES-OA-INSTANCE-001`, `BUG-F006-R3-SALES-OA-BACKEND-CLOSEOUT-001` and `BUG-F006-R3-SALES-OA-WEB-CLOSEOUT-001` released for PR merge.
+- Production release: Java `v20260722_201341`, blue/10010 -> green/10020, artifact MD5 `d4089d36fa060a771c9e903f94f9bc43`, post-switch health 5/5 and unified verification passed; Web four-way index SHA-256 `842d132378e23fafa0ce9d81510788c872af8a0d578171f9e6814286e8e5ee63` passed. Flyway `20261029.01`/`20261029.02` are successful and F006 has exactly one published+enabled `SALES_ORDER_APPROVAL` definition. Implementation/deployment business writes 0; existing `SO-20260722-0001`, PO, inventory and LIUSHANMEN records were not changed or bridged. Test Java 10011 remained unhealthy and was not modified because authorization covered production only.
 
 ## BUG-F006-R3-PURCHASE-RECEIVING-ROUTE-001
 
