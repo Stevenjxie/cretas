@@ -651,6 +651,20 @@ public class IntentExecutionOrchestrator {
             }
         }
 
+        // 3.55. R15: 餐饮租户分析问先试 tiered 路由, 再进 slot-filling。
+        // 「今年比去年增长多少」曾被指标查询 slot-filling 抢走并把 UPPER_SNAKE
+        // 指标码直接问用户。写操作动词的问句不拦, 保留其参数收集流程。
+        if (isRestaurantTenant(factoryId) && request.getUserInput() != null
+                && !RESTAURANT_WRITE_VERB.matcher(request.getUserInput()).find()) {
+            IntentExecuteResponse preSlotDelegated =
+                    tryRestaurantTieredDelegate(factoryId, request.getUserInput(), request);
+            if (preSlotDelegated != null) {
+                log.info("[Branch:TieredDelegate] slot-filling 前被 tiered 路由接管: intentCode={}",
+                        intent.getIntentCode());
+                return preSlotDelegated;
+            }
+        }
+
         // 3.6. Slot Filling
         if (userId != null && !Boolean.TRUE.equals(request.getSkipSlotFilling()) && slotFillingService != null) {
             IntentExecuteResponse slotFillingResponse = slotFillingService.checkAndStartSlotFilling(
@@ -1590,6 +1604,10 @@ public class IntentExecutionOrchestrator {
         }
         return toolDispatchService.buildNoToolResponse(intent);
     }
+
+    // R15: 写操作动词 — 命中则不做 slot-filling 前置委托, 保留参数收集流程。
+    private static final java.util.regex.Pattern RESTAURANT_WRITE_VERB =
+            java.util.regex.Pattern.compile("创建|新增|新建|添加|录入|登记|修改|更新|删除|作废|取消|审批|下单|入库|出库|盘点");
 
     private static boolean isRestaurantTenant(String factoryId) {
         if (factoryId == null) {
