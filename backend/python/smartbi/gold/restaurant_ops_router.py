@@ -319,6 +319,12 @@ def match_restaurant_ops(query: str) -> Optional[str]:
         and extract_dish_candidate(q)
     ):
         return "RESTAURANT_OPS_GROSS_MARGIN"
+    # 口语盈亏问 ("最近亏钱了吗") — 交给带盈亏判定的销售概览。
+    if (
+        re.search(r"(亏钱|亏损|盈利|赚钱)(了吗|吗|没有|了没)", q)
+        and not any(tok in q for tok in ("门店", "分店", "哪家店"))
+    ):
+        return "RESTAURANT_OPS_SALES_SUMMARY"
     # Time comparisons are a sales-summary question, not the generic
     # all-history trend report.  This must run before the broad "环比/趋势"
     # pattern so "上个月和上上个月营收相比" keeps both requested periods.
@@ -438,6 +444,11 @@ _DISH_GENERIC_TOKENS = frozenset({
     "哪个菜", "哪些菜", "单品", "产品", "本店", "门店", "今天", "昨天", "上月",
     "这个", "这道", "那道", "它", "该菜", "这", "那个",
 })
+_DISH_MULTI_METRIC_RE = re.compile(
+    r"^[「\"']?(.{1,30}?)[」\"']?(?:的)?"
+    r"(?:(?:毛利率|毛利|销量|销售额|营收|成本率|成本)[和与、]?){2,}"
+    r"(?:分别)?(?:是多少|有多少|怎么样|如何|多少)?[?？。!！]?$"
+)
 _DISH_QUERY_RE = re.compile(
     r"^[「\"']?(.{1,30}?)[」\"']?(?:的)?"
     r"(?:毛利率|毛利|销量|销售额|营收|成本率|成本|卖得)"
@@ -453,7 +464,10 @@ _DISH_LEADING_TIME_RE = re.compile(
 def _extract_dish_candidate_single(text: str) -> "Optional[str]":
     # build_resolver_query 会在句尾追加「（窗口标签）」— 剥掉再做锚定匹配。
     text = re.sub(r"[（(][^（）()]{0,24}[）)]\s*$", "", text).strip()
-    match = _DISH_QUERY_RE.match(text)
+    # 复合指标形态更具体, 先试 — 否则单指标懒惰前缀会吞掉「营收和」等垃圾段。
+    match = _DISH_MULTI_METRIC_RE.match(text)
+    if not match:
+        match = _DISH_QUERY_RE.match(text)
     if not match:
         return None
     candidate = _DISH_LEADING_TIME_RE.sub("", match.group(1).strip())
@@ -1485,6 +1499,7 @@ async def resolve_requisition_trend(
 async def resolve_gross_margin(
     smartbi_pool, factory_id: str, days: int = 30, top_n: int = 10,
     *, role: Optional[str] = None, query: Optional[str] = None,
+    date_range: Optional[Tuple[Optional[date], Optional[date]]] = None,
 ) -> OpsAnswer:
     """Cross-module gross margin analysis: POS sold_price × recipe food_cost.
 
@@ -1525,6 +1540,8 @@ async def resolve_gross_margin(
         "趋势", "走势", "曲线", "按月", "月份", "参照线", "计划线", "预警线",
     ))
     requested_period = _relative_period_match(query_text)
+    exact_start = date_range[0] if date_range else None
+    exact_end = date_range[1] if date_range else None
     analysis_days = days
     if trend_requested:
         if requested_period and requested_period[1] == "月":
@@ -1566,12 +1583,12 @@ async def resolve_gross_margin(
                AND t.factory_id = $1
                AND p.factory_id = $1
                AND anchor.end_date IS NOT NULL
-               AND t.date >= anchor.end_date - ($2::int)
-               AND t.date <= anchor.end_date
+               AND t.date >= COALESCE($3::date, anchor.end_date - ($2::int))
+               AND t.date <= COALESCE($4::date, anchor.end_date)
              GROUP BY p.product_id, p.name, p.normalized_name
              ORDER BY total_revenue DESC NULLS LAST
             """,
-            factory_id, analysis_days,
+            factory_id, analysis_days, exact_start, exact_end,
         )
         # Sheet 7/22 实体检测: 点名单菜的问题 ("米饭的毛利率") 此前返回全菜品
         # 榜 — 菜品版的全店榜退化。候选名必须命中本租户菜品行才限域; 命不中
@@ -1660,20 +1677,30 @@ async def resolve_gross_margin(
             "今天先不要做：不要在销售明细缺失时批量提价、下架菜品或取消套餐；先完成数据同步。"
             if prohibited_actions_requested else ""
         )
+        requested_window = (
+            _range_text(exact_start, exact_end)
+            if exact_start and exact_end else f"近 {analysis_days} 天"
+        )
         return OpsAnswer(
             code="RESTAURANT_OPS_GROSS_MARGIN",
-            title=f"菜品毛利分析 (近{analysis_days}天)",
+            title=f"菜品毛利分析 ({requested_window})",
             answer_text=(
-                f"近 {analysis_days} 天没有可用于计算的销售记录。\n"
+                f"{requested_window}没有可用于计算的菜品销售记录，没有用其他时间范围替代。\n"
                 f"请确认销售数据已经同步，并补齐菜品配方和食材单价后再试。{no_data_guard}"
             ),
             charts=[], kpis=[],
-            meta={"window_days": analysis_days, "no_pos_data": True},
+            meta={"window_days": analysis_days, "no_pos_data": True,
+                  "window_start": _date_text(exact_start) if exact_start else None,
+                  "window_end": _date_text(exact_end) if exact_end else None},
         )
 
     window_start = min((r["window_start"] for r in pos_rows if r["window_start"]), default=None)
     window_end = max((r["window_end"] for r in pos_rows if r["window_end"]), default=None)
-    window_label = _actual_window_text(window_start, window_end, analysis_days)
+    window_label = (
+        _range_text(exact_start, exact_end)
+        if exact_start and exact_end
+        else _actual_window_text(window_start, window_end, analysis_days)
+    )
 
     # Step 2: look up cretas product_types by name (primary) + dim_product_alias (fallback).
     # P0-2: alias lets merchants bind POS name → any product_type, handles the
