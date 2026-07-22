@@ -72,5 +72,10 @@ YESTERDAY=$(date -d yesterday +%F)
     --apply \
     --confirm DEMO_REST \
     --end "$YESTERDAY"
+  echo "=== refresh DEMO_REST dish-level POS items (end=$YESTERDAY) ==="
+  python -m smartbi.scripts.refresh_demo_rest_dish_facts \
+    --apply \
+    --confirm DEMO_REST \
+    --end "$YESTERDAY"
   echo "=== done (rc=$?) ==="
 } >> "$LOG" 2>&1
