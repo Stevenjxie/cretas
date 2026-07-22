@@ -1,28 +1,21 @@
 <script setup lang="ts">
 /**
- * Sprint4-H F-AR-1 — 销售单财务审核详情页 (PC).
+ * Sprint4-H F-AR-1 — 销售单成本与审批进度只读页 (PC).
  *
  * 业务流程:
  *   - 加载订单 + 成本核算 (FinanceCostBreakdown)
  *   - 展示 BOM 标准成本 / 当前预估成本 / 实际成本 / 预估 vs 实际利润对比
- *   - 财务可选录入 estimatedCost 覆盖现值 → approve
- *   - reject 必填 notes
- *
- * RBAC: v-if="canFinanceWrite" 隐藏 approve/reject 按钮.
- * 后端 @RequirePermission("finance:read_write") 强制 — UI 仅是友好遮挡.
+ *   - 审批动作统一前往个人 OA，业务页不再调用直批端点
  */
 import { ref, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
-import { usePermissionStore } from '@/store/modules/permission';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage } from 'element-plus';
 import { ArrowLeft } from '@element-plus/icons-vue';
 import {
   getOrderDetail,
   getOrderCostBreakdown,
   getOrderMultiStageCost,
-  financeApprove,
-  financeReject,
   getProductPriceTrend,
   getActiveQuotes,
   type SalesOrderSummary,
@@ -41,13 +34,9 @@ import ThreePriceCostBreakdown from '@/components/ThreePriceCostBreakdown.vue';
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
-const permissionStore = usePermissionStore();
 
 const factoryId = computed(() => authStore.factoryId);
 const orderId = computed(() => String(route.params.id || ''));
-
-/** 后端 @RequirePermission("finance:read_write") — UI 镜像. */
-const canFinanceWrite = computed(() => permissionStore.canWrite('finance'));
 
 const order = ref<SalesOrderSummary | null>(null);
 const breakdown = ref<FinanceCostBreakdown | null>(null);
@@ -55,10 +44,7 @@ const breakdown = ref<FinanceCostBreakdown | null>(null);
 // 六扇门多段生产成本逐段分配 (两点报工成本拆分核心) — 非阻塞独立加载
 const multiStage = ref<MultiStageCostBreakdown | null>(null);
 const multiStageLoading = ref(false);
-const notes = ref('');
-const overrideEstimatedCost = ref<number | null>(null);
 const loading = ref(false);
-const submitting = ref(false);
 
 // B3 售价趋势 — 按产品类型分组，key=productTypeId
 const priceTrendMap = ref<Record<string, SalesPriceTrendDTO[]>>({});
@@ -93,8 +79,7 @@ const canReview = computed(
  * 影响范围:
  *   - 成本核算 card 的 "当前预估成本" cell
  *   - 成本核算 card 的 "预估利润" cell (依赖 currentEstimatedProfit)
- *   - 审核操作 form 的 "预估成本 覆盖输入" item
- *   - approve payload 的 estimatedCost 字段 (隐藏时不发送 override)
+ *   - 历史展示中的预估成本字段
  */
 const SHOW_PRE_ESTIMATED_COST = false;
 
@@ -109,10 +94,6 @@ async function load() {
     if (orderRes.success && orderRes.data) order.value = orderRes.data;
     if (breakdownRes.success && breakdownRes.data) {
       breakdown.value = breakdownRes.data;
-      // 预填 current estimated cost 到 override 输入框
-      if (breakdownRes.data.currentEstimatedCost != null) {
-        overrideEstimatedCost.value = breakdownRes.data.currentEstimatedCost;
-      }
       // B3: 异步加载各产品线的售价趋势 (非阻塞, 独立 loading)
       void loadPriceTrends(breakdownRes.data.lines);
       // 三层价格: 异步加载各产品线的运营报价 (研发预估价), 非阻塞
@@ -313,59 +294,11 @@ function lineRowClassName({ row }: { row: LineCostBreakdown }): string {
   return '';
 }
 
-async function handleApprove() {
-  try {
-    await ElMessageBox.confirm(
-      `确认通过销售单 ${order.value?.orderNumber} 的财务审核?`,
-      '财务审核通过',
-      { type: 'success', confirmButtonText: '确认通过', cancelButtonText: '取消' },
-    );
-  } catch {
-    return;
-  }
-  submitting.value = true;
-  try {
-    // Issue #778: feature flag — disabled state 不发送 estimatedCost override,
-    // 保留后端 service 计算的当前预估值不变.
-    const res = await financeApprove(factoryId.value, orderId.value, {
-      notes: notes.value || undefined,
-      estimatedCost: SHOW_PRE_ESTIMATED_COST
-        ? (overrideEstimatedCost.value ?? undefined)
-        : undefined,
-    });
-    if (res.success) {
-      ElMessage.success('财务审核已通过');
-      router.back();
-    }
-  } finally {
-    submitting.value = false;
-  }
-}
-
-async function handleReject() {
-  if (!notes.value.trim()) {
-    ElMessage.warning('驳回必须填写备注说明原因');
-    return;
-  }
-  try {
-    await ElMessageBox.confirm(
-      `确认驳回销售单 ${order.value?.orderNumber}? 备注: ${notes.value}`,
-      '财务驳回',
-      { type: 'warning', confirmButtonText: '确认驳回', cancelButtonText: '取消' },
-    );
-  } catch {
-    return;
-  }
-  submitting.value = true;
-  try {
-    const res = await financeReject(factoryId.value, orderId.value, notes.value);
-    if (res.success) {
-      ElMessage.success('已驳回, 订单退回销售员');
-      router.back();
-    }
-  } finally {
-    submitting.value = false;
-  }
+async function goToUnifiedOa() {
+  await router.push({
+    name: 'WorkflowPending',
+    query: { moduleCode: 'SALES_ORDER' },
+  });
 }
 
 onMounted(load);
@@ -871,52 +804,20 @@ onMounted(load);
       style="margin-bottom: 16px"
     />
 
-    <!-- 审核操作 -->
-    <el-card v-if="canReview && canFinanceWrite" shadow="never" class="action-card">
+    <!-- 旧财审详情仅保留成本与历史信息；审批动作统一进入个人 OA。 -->
+    <el-card v-if="canReview" shadow="never" class="action-card">
       <template #header>
-        <span class="card-title">审核意见</span>
+        <span class="card-title">OA 审批</span>
       </template>
-      <el-form label-position="top">
-        <!-- Issue #778: 预估成本输入暂时隐藏 (feature flag SHOW_PRE_ESTIMATED_COST). -->
-        <el-form-item v-if="SHOW_PRE_ESTIMATED_COST" label="预估成本 (财务核定, 覆盖系统当前值)">
-          <el-input-number
-            v-model="overrideEstimatedCost"
-            :min="0"
-            :precision="2"
-            :step="100"
-            placeholder="留空则保持当前值不变"
-            style="width: 240px"
-            :disabled="submitting"
-          />
-        </el-form-item>
-        <el-form-item label="审核备注 (驳回必填, 通过可选)">
-          <el-input
-            v-model="notes"
-            type="textarea"
-            :rows="3"
-            placeholder="驳回必填, 通过可选"
-            maxlength="500"
-            show-word-limit
-            :disabled="submitting"
-          />
-        </el-form-item>
-      </el-form>
+      <el-alert
+        type="info"
+        :closable="false"
+        title="销售订单审批已迁移至统一 OA 审批中心"
+        description="此页面仅展示成本核算和历史信息；通过、驳回等审批动作请在个人 OA 中处理。"
+        show-icon
+      />
       <div class="action-row">
-        <el-button
-          plain
-          type="danger"
-          :loading="submitting"
-          @click="handleReject"
-        >
-          驳回
-        </el-button>
-        <el-button
-          type="primary"
-          :loading="submitting"
-          @click="handleApprove"
-        >
-          通过
-        </el-button>
+        <el-button type="primary" @click="goToUnifiedOa">前往统一 OA</el-button>
       </div>
     </el-card>
 
@@ -935,15 +836,6 @@ onMounted(load);
       </p>
     </el-card>
 
-    <!-- 非审核可见但当前角色无权写: 提示 -->
-    <el-alert
-      v-if="canReview && !canFinanceWrite"
-      type="warning"
-      :closable="false"
-      title="当前角色无财务写权限, 仅可查看"
-      description="approve/reject 需要 finance:read_write (后端 @RequirePermission 强制)"
-      style="margin-top: 12px"
-    />
   </div>
 </template>
 

@@ -223,14 +223,17 @@ import '@vue-flow/controls/dist/style.css'
 
 // embedded=true: 当此组件被 canvas-editor 作为 Tab 内嵌时, 隐藏 h2 title 并
 // 调整高度以适应 canvas-editor 的 tab 容器 (Canvas 已有自己的 header + breadcrumb).
-const props = defineProps<{ embedded?: boolean }>()
+const props = defineProps<{
+  embedded?: boolean
+  initialDecisionType?: DecisionType
+}>()
 
 // ==================== State ====================
 
 const authStore = useAuthStore()
 const factoryId = computed(() => authStore.factoryId)
 
-const selectedDecisionType = ref<DecisionType>('QUALITY_RELEASE')
+const selectedDecisionType = ref<DecisionType>(props.initialDecisionType ?? 'QUALITY_RELEASE')
 const workflowName = ref('')
 const saving = ref(false)
 

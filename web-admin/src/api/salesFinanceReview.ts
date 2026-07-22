@@ -1,18 +1,15 @@
 /**
- * Sprint4-H F-AR-1 — 销售订单财务审核 API client.
+ * Sprint4-H F-AR-1 — 销售订单成本与审批进度只读 API client.
  *
  * <p>对接 SalesController 端点 (Sprint 2-J + Sprint4-H):
  *   - GET  /orders/by-status?status=PENDING_FINANCE_REVIEW
  *   - GET  /orders/{id}
  *   - GET  /orders/{id}/cost-breakdown  (新增, Sprint4-H F-AR-1)
- *   - POST /orders/{id}/finance-approve  body: { notes, estimatedCost }
- *   - POST /orders/{id}/finance-reject   body: { notes }  (必填)
  *
- * <p>RBAC: approve/reject 后端 @RequirePermission({"finance:read_write", "sales:read_write"}).
  * cost-breakdown 后端 @RequirePermission({"finance:read_write", "finance:read", "sales:read_write"}).
- * 前端按钮 v-if 用 permissionStore.canWrite('finance').
+ * 审批写操作统一由个人 OA 工作台发起，本客户端不再暴露业务页直批函数。
  */
-import { get, post } from './request';
+import { get } from './request';
 import type { ApiResponse } from '@/types/api';
 
 // ============================================================================
@@ -324,36 +321,6 @@ export function getOrderMultiStageCost(
 ): Promise<ApiResponse<MultiStageCostBreakdown>> {
   return get<MultiStageCostBreakdown>(
     `/${factoryId}/sales/orders/${orderId}/multi-stage-cost`,
-  );
-}
-
-/**
- * 财务审核通过. 可选 estimatedCost (覆盖当前 SalesOrder.estimatedCost).
- * (PENDING_FINANCE_REVIEW → FINANCE_APPROVED, 触发供应链联动).
- */
-export function financeApprove(
-  factoryId: string,
-  orderId: string,
-  opts: { notes?: string; estimatedCost?: number } = {},
-): Promise<ApiResponse<SalesOrderSummary>> {
-  return post<SalesOrderSummary>(
-    `/${factoryId}/sales/orders/${orderId}/finance-approve`,
-    {
-      notes: opts.notes ?? null,
-      estimatedCost: opts.estimatedCost ?? null,
-    },
-  );
-}
-
-/** 财务驳回 (PENDING_FINANCE_REVIEW → FINANCE_REJECTED). notes 必填. */
-export function financeReject(
-  factoryId: string,
-  orderId: string,
-  notes: string,
-): Promise<ApiResponse<SalesOrderSummary>> {
-  return post<SalesOrderSummary>(
-    `/${factoryId}/sales/orders/${orderId}/finance-reject`,
-    { notes },
   );
 }
 

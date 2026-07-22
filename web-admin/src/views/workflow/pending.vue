@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
+import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { get, post } from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
@@ -19,6 +20,7 @@ interface PendingApproval {
 }
 
 const authStore = useAuthStore();
+const route = useRoute();
 const factoryId = computed(() => authStore.factoryId);
 const loading = ref(false);
 const operatingId = ref('');
@@ -26,8 +28,15 @@ const rows = ref<PendingApproval[]>([]);
 const total = ref(0);
 const page = ref(1);
 const size = ref(20);
-const moduleCode = ref('');
 const ACTIONABLE_MODULE_CODES = new Set(['PURCHASE_ORDER', 'SALES_ORDER']);
+const requestedModuleCode = Array.isArray(route.query.moduleCode)
+  ? route.query.moduleCode[0]
+  : route.query.moduleCode;
+const moduleCode = ref(
+  typeof requestedModuleCode === 'string' && ACTIONABLE_MODULE_CODES.has(requestedModuleCode)
+    ? requestedModuleCode
+    : '',
+);
 
 function canAct(row: PendingApproval): boolean {
   return ACTIONABLE_MODULE_CODES.has(row.moduleCode);
