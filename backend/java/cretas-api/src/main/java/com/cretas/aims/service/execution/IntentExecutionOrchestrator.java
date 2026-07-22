@@ -141,6 +141,10 @@ public class IntentExecutionOrchestrator {
     @Autowired(required = false)
     private com.cretas.aims.ai.tool.impl.restaurant.TieredIntentDelegate tieredIntentDelegate;
 
+    // R16 tiered-first 反转开关: 关掉即完全回到 Java-first + gate 摆渡的旧行为。
+    @Value("${cretas.restaurant.tiered-first.enabled:true}")
+    private boolean tieredFirstEnabled;
+
     @Autowired(required = false)
     private ResultFormatterService resultFormatterService;
 
@@ -488,6 +492,32 @@ public class IntentExecutionOrchestrator {
             if (conversationResponse != null) {
                 return conversationResponse;
             }
+        }
+
+        // 0.35. R16 tiered-first 反转 (餐饮租户默认): 分析类问题先问 Python
+        // tiered 路由, 命中即答。此前是 Java 误匹配工具兜底、十几个 gate 逐点
+        // 摆渡 ("三点齐活"脆弱链); 反转后 gate 退化为非反转路径 (显式
+        // intentCode / SSE) 的保险, 并经 ATTEMPTED_CONTEXT_KEY 去重, 同一
+        // 请求不会二次调用 Python。放在会话延续之后, 不打断参数收集续轮;
+        // 写操作动词的问句不拦, 保留原参数收集/确认流程。
+        if (tieredFirstEnabled
+                && !factoryPackConstrained
+                && !Boolean.TRUE.equals(request.getPreviewOnly())
+                && isRestaurantTenant(factoryId)
+                && userInput != null && !userInput.isEmpty()
+                && !RESTAURANT_WRITE_VERB.matcher(userInput).find()) {
+            IntentExecuteResponse tieredFirst =
+                    tryRestaurantTieredDelegate(factoryId, userInput, request);
+            if (tieredFirst != null) {
+                log.info("[Branch:TieredFirst] 反转入口命中: factoryId={}", factoryId);
+                return tieredFirst;
+            }
+            if (request.getContext() == null) {
+                request.setContext(new HashMap<>());
+            }
+            request.getContext().put(
+                    com.cretas.aims.ai.tool.impl.restaurant.TieredIntentDelegate.ATTEMPTED_CONTEXT_KEY,
+                    Boolean.TRUE);
         }
 
         // 0.3. 早期问题类型检测
