@@ -3364,4 +3364,16 @@ async def resolve_by_code(
         filtered = kwargs
     else:
         filtered = {k: v for k, v in kwargs.items() if k in sig.parameters}
-    return await resolver(smartbi_pool, factory_id, **filtered)
+    # Pin the tenant contextvar to the DATA factory for the resolver's whole
+    # call tree: pool.setup stamps `app.factory_id` from this contextvar on
+    # every acquired connection, so helpers that never set the GUC themselves
+    # (finance_summary, store_comparison, trend bundles…) stay RLS-visible
+    # when the data factory differs from the trusted request tenant (demo →
+    # seeded gold tenant reads). Auth/session/cache stay on the caller's ctx.
+    from smartbi.tenant_ctx import reset_factory_id, set_factory_id
+
+    ctx_token = set_factory_id(factory_id)
+    try:
+        return await resolver(smartbi_pool, factory_id, **filtered)
+    finally:
+        reset_factory_id(ctx_token)
