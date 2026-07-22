@@ -314,6 +314,16 @@ def match_restaurant_ops(query: str) -> Optional[str]:
     # pattern so "上个月和上上个月营收相比" keeps both requested periods.
     if _is_explicit_sales_period_comparison(q):
         return "RESTAURANT_OPS_SALES_SUMMARY"
+    # Rolling-window revenue asks ("过去一个月营业额") are windowed sales
+    # summaries, not trend reports. T1 previously missed them entirely, so
+    # T2/T3 classification drifted and Java's all-history trend tool answered
+    # with 19 months of data for a 30-day question (Sheet 7/22).
+    if (
+        _relative_period_match(q)
+        and any(tok in q for tok in ("营业额", "营收", "销售额", "流水"))
+        and not any(tok in q for tok in ("趋势", "走势", "同比", "环比", "变化", "增长", "下降"))
+    ):
+        return "RESTAURANT_OPS_SALES_SUMMARY"
     # Preserve an explicit overall-margin metric, but keep mixed
     # revenue-plus-margin questions on the richer sales summary resolver.
     if (
