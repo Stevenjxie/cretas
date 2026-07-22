@@ -1,6 +1,8 @@
 package com.cretas.aims.service.production;
 
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.mapper.ProductionPlanMapper;
 import com.cretas.aims.repository.ConversionRepository;
@@ -12,6 +14,7 @@ import com.cretas.aims.repository.ProductionLineRepository;
 import com.cretas.aims.repository.ProductionPlanBatchUsageRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.BomService;
@@ -40,12 +43,14 @@ class ProductionPlanWorkflowSelectionTest {
 
     private ProductTypeRepository productTypeRepository;
     private ProductWorkflowResolutionService workflowResolutionService;
+    private BomRecipeRepository bomRecipeRepository;
     private ProductionPlanServiceImpl service;
 
     @BeforeEach
     void setUp() {
         productTypeRepository = mock(ProductTypeRepository.class);
         workflowResolutionService = mock(ProductWorkflowResolutionService.class);
+        bomRecipeRepository = mock(BomRecipeRepository.class);
         service = new ProductionPlanServiceImpl(
                 mock(ProductionPlanRepository.class), mock(ProductionBatchRepository.class),
                 mock(MaterialBatchRepository.class),
@@ -55,6 +60,7 @@ class ProductionPlanWorkflowSelectionTest {
                 mock(ExcelUtil.class), mock(SalesOrderRepository.class),
                 mock(SalesOrderItemRepository.class));
         ReflectionTestUtils.setField(service, "workflowResolutionService", workflowResolutionService);
+        ReflectionTestUtils.setField(service, "bomRecipeRepository", bomRecipeRepository);
 
         ProductType owner = new ProductType();
         owner.setId("OWNER");
@@ -90,5 +96,36 @@ class ProductionPlanWorkflowSelectionTest {
                         "F1", "OWNER", List.of("FG-1"), 88L, null));
 
         assertEquals("WORKFLOW_SELECTION_INCOMPLETE", error.getErrorCode());
+    }
+
+    @Test
+    void legacyActiveBomIsPinnedWithoutReapplyingNewActivationCompletenessRules() {
+        WorkflowPlanOutputContract active = new WorkflowPlanOutputContract(
+                105L, 1, Map.of("OWNER", "kg"), "kg");
+        when(workflowResolutionService.resolveActivePlanOutputContract(
+                "F1", "OWNER", null)).thenReturn(Optional.of(active));
+        BomRecipe recipe = BomRecipe.builder()
+                .id("BOM-ACTIVE-V1")
+                .factoryId("F1")
+                .productTypeId("OWNER")
+                .version(1)
+                .status(BomRecipe.Status.ACTIVE)
+                .isCurrent(true)
+                .build();
+        when(bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                "F1", "OWNER", BomRecipe.Status.ACTIVE)).thenReturn(Optional.of(recipe));
+
+        Object authority = ReflectionTestUtils.invokeMethod(
+                service, "resolvePlanUnitAuthority", "F1", "OWNER", null);
+        ProductionPlan plan = new ProductionPlan();
+        plan.setFactoryId("F1");
+        plan.setProductTypeId("OWNER");
+
+        ReflectionTestUtils.invokeMethod(service, "applyPlanUnitAuthority", plan, authority);
+
+        assertEquals(105L, plan.getSelectedWorkflowId());
+        assertEquals(1, plan.getSelectedWorkflowVersion());
+        assertEquals("BOM-ACTIVE-V1", plan.getSelectedBomRecipeId());
+        assertEquals(1, plan.getSelectedBomVersion());
     }
 }

@@ -189,10 +189,6 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Autowired(required = false)
     private ProductProcessWorkflowRepository productProcessWorkflowRepository;
 
-    /** Shared BOM/Workflow readiness source of truth for plan admission. */
-    @Autowired(required = false)
-    private com.cretas.aims.service.validation.ProductConfigurationReadinessService configurationReadinessService;
-
     /** 以销定产批量建计划: 取产品工序名拼 processName (镜像前端 loadBomProcesses). required=false 兼容单测. */
     @Autowired(required = false)
     private com.cretas.aims.service.ProductWorkProcessService productWorkProcessService;
@@ -414,23 +410,26 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         plan.setWorkflowSelectionMode(authority.mode());
         plan.setSelectedWorkflowId(authority.workflowId());
         plan.setSelectedWorkflowVersion(authority.workflowVersion());
-        if (authority.mode() == ProductionBatch.WorkflowSelectionMode.WORKFLOW
-                && configurationReadinessService != null) {
-            configurationReadinessService.requireActiveBomComplete(
-                    plan.getFactoryId(), plan.getProductTypeId());
-        }
         if (bomRecipeRepository == null) {
             return;
         }
-        bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
-                        plan.getFactoryId(), plan.getProductTypeId(), BomRecipe.Status.ACTIVE)
-                .ifPresentOrElse(recipe -> {
-                    plan.setSelectedBomRecipeId(recipe.getId());
-                    plan.setSelectedBomVersion(recipe.getVersion());
-                }, () -> {
-                    plan.setSelectedBomRecipeId(null);
-                    plan.setSelectedBomVersion(null);
-                });
+        Optional<BomRecipe> activeRecipe = bomRecipeRepository
+                .findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                        plan.getFactoryId(), plan.getProductTypeId(), BomRecipe.Status.ACTIVE);
+        if (authority.mode() == ProductionBatch.WorkflowSelectionMode.WORKFLOW
+                && activeRecipe.isEmpty()) {
+            throw new BusinessException(409, "当前产品没有已激活的 BOM")
+                    .withCode("ACTIVE_BOM_REQUIRED")
+                    .withHint("请先完成并激活 BOM，再创建生产计划")
+                    .withSeverity("warning");
+        }
+        activeRecipe.ifPresentOrElse(recipe -> {
+            plan.setSelectedBomRecipeId(recipe.getId());
+            plan.setSelectedBomVersion(recipe.getVersion());
+        }, () -> {
+            plan.setSelectedBomRecipeId(null);
+            plan.setSelectedBomVersion(null);
+        });
     }
 
     private record PlanUnitAuthority(

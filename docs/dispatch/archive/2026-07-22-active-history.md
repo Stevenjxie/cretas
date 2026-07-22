@@ -84,3 +84,11 @@
 - 根因与修复：待办 Controller 的节点 hydrate 分支漏回填已配置 `approverRoles`，Web 共享枚举缺销售/采购模块与财务角色中文标签，提交时间直接绑定原值；现补齐同源节点角色投影并复用共享枚举与 `formatDateTime`，不改变 OA 权限、任务可见性或状态机。
 - 验证：`WorkflowInstanceControllerTest` 8/8 PASS；Web OA 目标 Vitest 2 files / 6 tests PASS；发布后仅做同一已完成实例的只读页面回归，禁止新增审批或订单写入。
 - Scope 锁：已释放。
+
+## BUG-F006-R3-SALES-PRODPLAN-BOM-POLICY-001 — 销售订单创建生产计划 CE901995
+
+- 状态：`merged-ready; DEPLOY_AUTHORIZED`；Owner：`/root`；Base SHA：`da15dcc44e723265144e17927bf19467c5ab9d06`；实现 commit：`0837a475c134094e60604d82afbb9f4c3a21aa91`；PR [#1637](https://github.com/Stevenjxie/cretas/pull/1637)。
+- 生产只读真值：`SO-20260722-0002` / item 728 在失败后严格 0 条生产计划；ACTIVE BOM `9e2eafed-9205-4627-aa4e-8acf20c460fd` v1 与 ENABLED Workflow `105/v1` 保持原样，未重试、未桥接、未触碰 LIUSHANMEN。
+- 根因与修复：旧已激活 Workflow 节点没有后续新增的 `auxiliaryPolicy`，readiness 对 immutable `Set.of` 执行 `contains(null)` 抛 NPE；现将 readiness/未来激活保持 null-safe 且 fail-closed，同时生产计划只要求并固定现存 ACTIVE BOM + ENABLED Workflow，不对历史已激活版本追溯重判新规则。
+- 验证：唯一 release lifecycle 完成编译、11/11 目标测试和最终 JAR；覆盖 null policy、未来完整性门禁、历史 ACTIVE pin、同订单行唯一/重复 409、订单锁及失败零保存。
+- Scope 锁随最终 PR 合入释放；生产部署后测试 Chat 从同一订单和 item 继续，不重建订单。

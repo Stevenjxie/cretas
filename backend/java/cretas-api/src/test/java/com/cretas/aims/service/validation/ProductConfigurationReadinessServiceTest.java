@@ -6,6 +6,7 @@ import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductProcessWorkflowActivationRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
@@ -33,6 +34,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -163,6 +165,30 @@ class ProductConfigurationReadinessServiceTest {
                 report.getProcessAuxiliaryStatuses().getFirst().getWorkflowProcessNodeId());
         assertEquals(1, report.getProcessAuxiliaryStatuses().getFirst().getBindingCount());
         verify(bomWorkflowRevisionService, never()).resolvePinnedGraph(FACTORY, recipe);
+    }
+
+    @Test
+    void activePinnedBomWithMissingAuxiliaryPolicyFailsClosedWithoutNullPointer() {
+        BomRecipe recipe = pinnedRecipe(BomRecipe.Status.ACTIVE, true);
+        ProductProcessWorkflowDTO.Node process = processNode("legacy-process", "WP-LEGACY", null);
+        PinnedWorkflowGraph graph = graph(
+                List.of("RAW-A"),
+                List.of(process),
+                List.of(new PinnedWorkflowGraph.ProcessStep("legacy-process", "WP-LEGACY", 1)));
+        stubCommon(recipe, List.of());
+        when(recipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                FACTORY, PRODUCT, BomRecipe.Status.ACTIVE)).thenReturn(Optional.of(recipe));
+        when(bomWorkflowRevisionService.resolvePinnedGraph(FACTORY, recipe)).thenReturn(graph);
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.requireActiveBomComplete(FACTORY, PRODUCT));
+
+        assertEquals("ACTIVE_BOM_INCOMPLETE", error.getErrorCode());
+        ProductConfigurationCompletenessReport report = service.evaluate(FACTORY, PRODUCT, recipe.getId());
+        assertFalse(report.isBomComplete());
+        assertTrue(report.getIssues().stream().anyMatch(issue ->
+                "BOM_AUXILIARY_DECISION_REQUIRED".equals(issue.getCode())
+                        && "legacy-process".equals(issue.getTarget())));
     }
 
     private void stubCommon(BomRecipe recipe, List<BomSeasoningItem> bindings) {
