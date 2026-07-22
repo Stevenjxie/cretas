@@ -1547,3 +1547,14 @@ def test_named_ambiguous_dish_asks_clarification():
     ))
     assert "匹配到多道菜品" in result.answer_text
     assert result.meta.get("dish_mention_ambiguous") == "藤椒味"
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("过去一个月营业额", "RESTAURANT_OPS_SALES_SUMMARY"),
+    ("最近3个月营收", "RESTAURANT_OPS_SALES_SUMMARY"),
+    ("过去一年营收多少", "RESTAURANT_OPS_SALES_SUMMARY"),
+    ("最近3个月营收趋势", "RESTAURANT_OPS_TREND_ANALYSIS"),
+    ("营收趋势", "RESTAURANT_OPS_TREND_ANALYSIS"),
+])
+def test_rolling_window_revenue_routes_to_sales_summary(query, expected):
+    assert match_restaurant_ops(query) == expected
