@@ -1208,7 +1208,9 @@ async def post_restaurant_tiered_answer(
             and "优化" not in query
             and capability_clarification_question(query) is None
         ):
-            return {"delegate": False}
+            from smartbi.gold.restaurant_ops_router import extract_dish_candidate
+            if extract_dish_candidate(query) is None:
+                return {"delegate": False}
 
         pool = await get_pg_pool()
         if not pool:
@@ -1236,7 +1238,7 @@ async def post_restaurant_tiered_answer(
             factory_id=fid,
             session_key=clarification_session_key,
         )
-        if not inherited_context and not should_delegate(spec, body.java_tool_name):
+        if not inherited_context and not should_delegate(spec, body.java_tool_name, query=effective_query):
             return {"delegate": False}
 
         # 2026-07-08 clarification-loop v1: `parse_restaurant_query` above

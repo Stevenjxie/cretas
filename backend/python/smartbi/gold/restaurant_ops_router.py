@@ -309,6 +309,14 @@ def match_restaurant_ops(query: str) -> Optional[str]:
         and not any(tok in q for tok in ("门店", "分店", "店铺", "哪家店", "哪个店"))
     ):
         return "RESTAURANT_OPS_GROSS_MARGIN"
+    # Named-dish metric asks ("米饭的销量是多少" / "…的成本如何") — the POS
+    # dish data + dish scoping live in the gross-margin resolver. Generic
+    # phrasings never produce a candidate, so this cannot steal 排行/整体.
+    if (
+        any(tok in q for tok in ("销量", "销售额", "成本", "毛利"))
+        and extract_dish_candidate(q)
+    ):
+        return "RESTAURANT_OPS_GROSS_MARGIN"
     # Time comparisons are a sales-summary question, not the generic
     # all-history trend report.  This must run before the broad "环比/趋势"
     # pattern so "上个月和上上个月营收相比" keeps both requested periods.
@@ -426,35 +434,65 @@ _FUTURE_WINDOW_LABEL = "未来时间"
 _DISH_GENERIC_TOKENS = frozenset({
     "整体", "总体", "全部", "所有", "各", "菜品", "菜", "什么菜", "哪道菜",
     "哪个菜", "哪些菜", "单品", "产品", "本店", "门店", "今天", "昨天", "上月",
+    "这个", "这道", "那道", "它", "该菜", "这", "那个",
 })
 _DISH_QUERY_RE = re.compile(
     r"^[「\"']?(.{1,30}?)[」\"']?(?:的)?"
-    r"(?:毛利率|毛利|销量|销售额|营收|卖得)"
+    r"(?:毛利率|毛利|销量|销售额|营收|成本率|成本|卖得)"
     r"(?:是多少|有多少|怎么样|如何|好不好|多少)?[?？。!！]?$"
 )
+_DISH_LEADING_PRONOUN_RE = re.compile(r"^(?:这个|这道|那个|那道|它|该菜|这|那)+")
 _DISH_LEADING_TIME_RE = re.compile(
     r"^(?:今天|今日|昨天|昨日|前天|本周|这周|上周|本月|这个月|上个月|上月"
     r"|今年|去年|最近\S{0,4}|近\S{0,4}|过去\S{0,4})+"
 )
 
 
-def extract_dish_candidate(query: Optional[str]) -> Optional[str]:
-    """Pull an explicit dish-name candidate from a margin/sales question."""
+def _extract_dish_candidate_single(text: str) -> "Optional[str]":
+    match = _DISH_QUERY_RE.match(text)
+    if not match:
+        return None
+    candidate = _DISH_LEADING_TIME_RE.sub("", match.group(1).strip())
+    candidate = _DISH_LEADING_PRONOUN_RE.sub("", candidate)
+    candidate = _DISH_LEADING_TIME_RE.sub("", candidate)
+    candidate = candidate.strip("的， ,")
+    if len(candidate) < 2 or candidate in _DISH_GENERIC_TOKENS:
+        return None
+    if any(tok in candidate for tok in (
+        "排行", "排名", "趋势", "对比", "分析", "整体", "全部",
+        "情况", "如何", "怎么", "多少", "？", "?", "营收", "营业额",
+        "销售", "销量", "毛利", "成本", "盈利", "赚钱", "利润",
+        "过去", "最近", "个月", "一年", "继续追问",
+    )):
+        return None
+    return candidate[:60]
+
+
+def extract_dish_candidate(query: "Optional[str]") -> "Optional[str]":
+    """Pull an explicit dish-name candidate from a margin/sales question.
+
+    Contextualized follow-ups arrive as "父问题；继续追问：子问题" — each
+    segment is tried independently (parent first: it names the dish that a
+    pronoun follow-up refers back to).
+    """
     if not query:
         return None
     text = query.strip()
     if any(tok in text for tok in ("门店", "分店", "店铺", "哪家店", "哪个店")):
         return None
-    match = _DISH_QUERY_RE.match(text)
-    if not match:
-        return None
-    candidate = _DISH_LEADING_TIME_RE.sub("", match.group(1).strip())
-    candidate = candidate.strip("的， ,")
-    if len(candidate) < 2 or candidate in _DISH_GENERIC_TOKENS:
-        return None
-    if any(tok in candidate for tok in ("排行", "排名", "趋势", "对比", "分析", "整体", "全部")):
-        return None
-    return candidate[:60]
+    segments = [text]
+    if "继续追问" in text:
+        segments = [
+            seg.replace("继续追问：", "").replace("继续追问:", "").strip()
+            for seg in re.split(r"[；;]", text)
+        ]
+    for segment in segments:
+        if not segment:
+            continue
+        candidate = _extract_dish_candidate_single(segment)
+        if candidate:
+            return candidate
+    return None
 
 
 def _match_dish_rows(candidate: str, rows) -> list:
@@ -1484,6 +1522,7 @@ async def resolve_gross_margin(
         # 榜 — 菜品版的全店榜退化。候选名必须命中本租户菜品行才限域; 命不中
         # 定向拒答, 多命中请求澄清。泛指问法 (整体/哪道/排行) 不受影响。
         dish_candidate = extract_dish_candidate(query)
+        dish_scope_row = None
         if dish_candidate and pos_rows:
             matched_rows = _match_dish_rows(dish_candidate, pos_rows)
             if not matched_rows:
@@ -1512,6 +1551,7 @@ async def resolve_gross_margin(
                           "candidates": [r["dish_name"] for r in matched_rows]},
                 )
             pos_rows = matched_rows
+            dish_scope_row = matched_rows[0]
         if trend_requested:
             monthly_pos_rows = await conn.fetch(
                 """
@@ -1846,6 +1886,15 @@ async def resolve_gross_margin(
         )
         charts = []
 
+    if dish_scope_row is not None:
+        # Sheet 7/22 菜品链: 点名单菜时先给该菜的销量/营收头行, 再接毛利正文,
+        # 数字全部来自同一 POS 行, 不会跨窗口混算。
+        answer = (
+            f"「{dish_scope_row['dish_name']}」{window_label}销量 "
+            f"{float(dish_scope_row['total_qty'] or 0):,.0f} 份、"
+            f"营收 ¥{float(dish_scope_row['total_revenue'] or 0):,.2f}、"
+            f"覆盖订单 {int(dish_scope_row['bills'] or 0)} 单。\n" + answer
+        )
     return OpsAnswer(
         code="RESTAURANT_OPS_GROSS_MARGIN",
         title=f"菜品毛利分析 ({window_label})",
@@ -1867,6 +1916,7 @@ async def resolve_gross_margin(
             "cost_covered_revenue": total_rev_with_cost,
             "covered_cost": total_rev_with_cost - total_profit,
             "marginFormula": "毛利=可计算毛利的营收-对应菜品成本",
+            "targetDish": dish_scope_row["dish_name"] if dish_scope_row is not None else None,
             "marginInvariantPass": margin_invariant_pass,
             "cost_coverage_ratio": coverage_ratio,
             "trend_requested": trend_requested,
@@ -2539,6 +2589,7 @@ async def resolve_store_margin(
             "totalProfit": total_profit, "avgRate": avg_rate,
             "coveredCost": covered_cost,
             "marginFormula": "毛利=可计算毛利的营收-对应菜品成本",
+            "targetDish": dish_scope_row["dish_name"] if dish_scope_row is not None else None,
             "marginInvariantPass": margin_invariant_pass,
             "costCoverageRatio": coverage_ratio,
             "invalidCostCount": invalid_cost_count,

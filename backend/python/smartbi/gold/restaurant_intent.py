@@ -378,7 +378,7 @@ def capability_clarification_question(query: str) -> Optional[str]:
 
 
 _FOLLOWUP_PREFIXES = (
-    "那", "这个", "那个", "它", "刚才", "继续", "再", "为什么", "怎么做", "怎么办",
+    "那", "这个", "那个", "它", "刚才", "继续", "再", "为什么", "怎么做", "怎么办", "怎么",
     "哪些动作", "先别", "明天看", "和上", "与上", "跟上", "比上", "呢",
 )
 _NEW_TOPIC_TOKENS = ("换个话题", "换一个问题", "另一个问题", "另外问", "新话题")
@@ -405,8 +405,8 @@ def contextualize_restaurant_followup(
         len(current) <= 32
         and (
             current.startswith(_FOLLOWUP_PREFIXES)
-            or current.endswith(("呢", "吗", "怎么办", "为什么"))
-            or any(token in current for token in ("相比", "对比", "比呢", "高还是低"))
+            or current.endswith(("呢", "吗", "怎么办", "为什么", "如何", "怎么样", "合理"))
+            or any(token in current for token in ("相比", "对比", "比呢", "高还是低", "是否"))
         )
     )
     if not has_followup_signal:
