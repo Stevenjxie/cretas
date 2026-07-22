@@ -1,23 +1,23 @@
 package com.cretas.aims.service.inventory;
 
-import com.cretas.aims.entity.Customer;
-import com.cretas.aims.entity.config.ApprovalChainConfig;
-import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
-import com.cretas.aims.entity.enums.CustomerSource;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
+import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus;
+import com.cretas.aims.event.SalesOrderConfirmedEvent;
 import com.cretas.aims.event.SalesOrderFinanceApprovedEvent;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesDeliveryRecordRepository;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
-import com.cretas.aims.service.ApprovalChainService;
-import com.cretas.aims.service.config.FactoryConfigService;
 import com.cretas.aims.service.finance.ArApService;
 import com.cretas.aims.service.inventory.impl.SalesServiceImpl;
+import com.cretas.aims.service.workflow.WorkflowEngineService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -28,15 +28,20 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -44,6 +49,7 @@ class SalesServiceImplApprovalThresholdN9Test {
 
     private static final String FACTORY = "F006";
     private static final String ORDER_ID = "SO-ID-1";
+    private static final Long INITIATOR = 901L;
 
     @Mock private SalesOrderRepository salesOrderRepository;
     @Mock private SalesOrderItemRepository salesOrderItemRepository;
@@ -53,8 +59,7 @@ class SalesServiceImplApprovalThresholdN9Test {
     @Mock private ProductTypeRepository productTypeRepository;
     @Mock private ArApService arApService;
     @Mock private ApplicationEventPublisher eventPublisher;
-    @Mock private ApprovalChainService approvalChainService;
-    @Mock private FactoryConfigService factoryConfigService;
+    @Mock private WorkflowEngineService workflowEngine;
 
     private SalesServiceImpl salesService;
 
@@ -69,154 +74,163 @@ class SalesServiceImplApprovalThresholdN9Test {
                 productTypeRepository,
                 arApService,
                 eventPublisher);
-        ReflectionTestUtils.setField(salesService, "approvalChainService", approvalChainService);
-        when(salesOrderRepository.save(any(SalesOrder.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(approvalChainService.getConfigsByDecisionType(FACTORY, DecisionType.SALES_ORDER_APPROVAL))
-                .thenReturn(List.of(ApprovalChainConfig.builder()
-                        .factoryId(FACTORY)
-                        .decisionType(DecisionType.SALES_ORDER_APPROVAL)
-                        .name("sales amount threshold")
-                        .approvalLevel(1)
-                        .approverRoles("[\"finance_manager\"]")
-                        .build()));
+        ReflectionTestUtils.setField(salesService, "workflowEngine", workflowEngine);
+        lenient().when(salesOrderRepository.save(any(SalesOrder.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
     }
 
     @Test
-    void confirm_above_threshold_routes_to_pending_finance_review() {
-        SalesOrder order = salesOrder(SalesOrderStatus.DRAFT, "6000.00");
-        when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
-        when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID)).thenReturn(List.of(item()));
-        when(approvalChainService.requiresApproval(eq(FACTORY), eq(DecisionType.SALES_ORDER_APPROVAL), anyMap()))
-                .thenReturn(true);
+    void confirm_starts_persisted_oa_with_actual_jwt_initiator() {
+        SalesOrder order = order(SalesOrderStatus.DRAFT);
+        mockConfirmInput(order);
+        when(workflowEngine.hasActiveWorkflow(FACTORY, "SALES_ORDER")).thenReturn(true);
+        ApprovalWorkflowInstance running = instance(InstanceStatus.RUNNING, INITIATOR);
+        when(workflowEngine.startWorkflow(
+                eq(FACTORY), eq("SALES_ORDER"), eq(ORDER_ID), anyMap(), eq(INITIATOR)))
+                .thenReturn(running);
 
-        SalesOrder result = salesService.confirmOrder(FACTORY, ORDER_ID);
+        SalesOrder result = salesService.confirmOrder(FACTORY, ORDER_ID, INITIATOR);
 
         assertEquals(SalesOrderStatus.PENDING_FINANCE_REVIEW, result.getStatus());
+        verify(workflowEngine).startWorkflow(
+                eq(FACTORY), eq("SALES_ORDER"), eq(ORDER_ID), anyMap(), eq(INITIATOR));
+        verify(eventPublisher).publishEvent(any(SalesOrderConfirmedEvent.class));
         verify(eventPublisher, never()).publishEvent(any(SalesOrderFinanceApprovedEvent.class));
     }
 
     @Test
-    void confirm_below_threshold_auto_finance_approves() {
-        SalesOrder order = salesOrder(SalesOrderStatus.DRAFT, "4000.00");
-        when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
-        when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID)).thenReturn(List.of(item()));
-        when(approvalChainService.requiresApproval(eq(FACTORY), eq(DecisionType.SALES_ORDER_APPROVAL), anyMap()))
-                .thenReturn(false);
+    void confirm_auto_route_still_persists_terminal_oa_instance() {
+        SalesOrder order = order(SalesOrderStatus.DRAFT);
+        mockConfirmInput(order);
+        when(workflowEngine.hasActiveWorkflow(FACTORY, "SALES_ORDER")).thenReturn(true);
+        when(workflowEngine.startWorkflow(
+                eq(FACTORY), eq("SALES_ORDER"), eq(ORDER_ID), anyMap(), eq(INITIATOR)))
+                .thenReturn(instance(InstanceStatus.APPROVED, INITIATOR));
 
-        SalesOrder result = salesService.confirmOrder(FACTORY, ORDER_ID);
+        SalesOrder result = salesService.confirmOrder(FACTORY, ORDER_ID, INITIATOR);
 
         assertEquals(SalesOrderStatus.FINANCE_APPROVED, result.getStatus());
-        verify(approvalChainService)
-                .requiresApproval(eq(FACTORY), eq(DecisionType.SALES_ORDER_APPROVAL), anyMap());
+        verify(workflowEngine).startWorkflow(
+                eq(FACTORY), eq("SALES_ORDER"), eq(ORDER_ID), anyMap(), eq(INITIATOR));
         verify(eventPublisher).publishEvent(any(SalesOrderFinanceApprovedEvent.class));
     }
 
     @Test
-    void confirm_external_order_title_auto_finance_approves_without_threshold_check() {
-        SalesOrder order = salesOrder(SalesOrderStatus.DRAFT, "6000.00");
-        order.setExternalOrderTitle("external-channel-0601-T2");
-        when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
-        when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID)).thenReturn(List.of(item()));
+    void confirm_without_active_sales_graph_fails_before_domain_mutation() {
+        SalesOrder order = order(SalesOrderStatus.DRAFT);
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY))
+                .thenReturn(Optional.of(order));
+        when(workflowEngine.hasActiveWorkflow(FACTORY, "SALES_ORDER")).thenReturn(false);
 
-        SalesOrder result = salesService.confirmOrder(FACTORY, ORDER_ID);
+        BusinessException error = assertThrows(
+                BusinessException.class,
+                () -> salesService.confirmOrder(FACTORY, ORDER_ID, INITIATOR));
+
+        assertEquals("SALES_APPROVAL_WORKFLOW_REQUIRED", error.getErrorCode());
+        assertEquals(SalesOrderStatus.DRAFT, order.getStatus());
+        verify(salesOrderRepository, never()).save(any(SalesOrder.class));
+        verify(eventPublisher, never()).publishEvent(any(SalesOrderConfirmedEvent.class));
+    }
+
+    @Test
+    void repeated_confirm_under_order_lock_starts_only_one_oa_instance() {
+        SalesOrder order = order(SalesOrderStatus.DRAFT);
+        mockConfirmInput(order);
+        when(workflowEngine.hasActiveWorkflow(FACTORY, "SALES_ORDER")).thenReturn(true);
+        when(workflowEngine.startWorkflow(
+                eq(FACTORY), eq("SALES_ORDER"), eq(ORDER_ID), anyMap(), eq(INITIATOR)))
+                .thenReturn(instance(InstanceStatus.RUNNING, INITIATOR));
+
+        SalesOrder first = salesService.confirmOrder(FACTORY, ORDER_ID, INITIATOR);
+        BusinessException replay = assertThrows(
+                BusinessException.class,
+                () -> salesService.confirmOrder(FACTORY, ORDER_ID, INITIATOR));
+
+        assertEquals(SalesOrderStatus.PENDING_FINANCE_REVIEW, first.getStatus());
+        assertEquals(409, replay.getCode());
+        verify(salesOrderRepository, times(2))
+                .findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY);
+        verify(workflowEngine, times(1)).startWorkflow(
+                eq(FACTORY), eq("SALES_ORDER"), eq(ORDER_ID), anyMap(), eq(INITIATOR));
+    }
+
+    @Test
+    void oa_approve_projects_terminal_state_back_to_sales_order() {
+        SalesOrder order = order(SalesOrderStatus.PENDING_FINANCE_REVIEW);
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY))
+                .thenReturn(Optional.of(order));
+        ApprovalWorkflowInstance running = instance(InstanceStatus.RUNNING, 101L);
+        when(workflowEngine.getInstance(FACTORY, "inst-1")).thenReturn(Optional.of(running));
+        when(workflowEngine.transitionNode(
+                "inst-1", 202L, "finance_manager", HistoryAction.APPROVE, "approved"))
+                .thenReturn(instance(InstanceStatus.APPROVED, 101L));
+
+        SalesOrder result = salesService.applyWorkflowAction(
+                FACTORY, ORDER_ID, "inst-1", 202L, "finance_manager",
+                HistoryAction.APPROVE, "approved");
 
         assertEquals(SalesOrderStatus.FINANCE_APPROVED, result.getStatus());
-        verify(approvalChainService, never())
-                .requiresApproval(eq(FACTORY), eq(DecisionType.SALES_ORDER_APPROVAL), anyMap());
+        assertEquals(202L, result.getFinanceReviewedBy());
         verify(eventPublisher).publishEvent(any(SalesOrderFinanceApprovedEvent.class));
     }
 
     @Test
-    void confirm_platform_customer_auto_finance_approves_without_channel_specific_logic() {
-        SalesOrder order = salesOrder(SalesOrderStatus.DRAFT, "6000.00");
-        Customer customer = new Customer();
-        customer.setId("C-001");
-        customer.setFactoryId(FACTORY);
-        customer.setName("Marketplace Customer");
-        customer.setSource(CustomerSource.PLATFORM);
+    void oa_reject_projects_reason_back_to_sales_order() {
+        SalesOrder order = order(SalesOrderStatus.PENDING_FINANCE_REVIEW);
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY))
+                .thenReturn(Optional.of(order));
+        ApprovalWorkflowInstance running = instance(InstanceStatus.RUNNING, 101L);
+        when(workflowEngine.getInstance(FACTORY, "inst-1")).thenReturn(Optional.of(running));
+        when(workflowEngine.transitionNode(
+                "inst-1", 202L, "finance_manager", HistoryAction.REJECT, "price mismatch"))
+                .thenReturn(instance(InstanceStatus.REJECTED, 101L));
 
-        when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
-        when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID)).thenReturn(List.of(item()));
-        when(customerRepository.findByIdAndFactoryId("C-001", FACTORY)).thenReturn(Optional.of(customer));
+        SalesOrder result = salesService.applyWorkflowAction(
+                FACTORY, ORDER_ID, "inst-1", 202L, "finance_manager",
+                HistoryAction.REJECT, "price mismatch");
 
-        SalesOrder result = salesService.confirmOrder(FACTORY, ORDER_ID);
-
-        assertEquals(SalesOrderStatus.FINANCE_APPROVED, result.getStatus());
-        verify(approvalChainService, never())
-                .requiresApproval(eq(FACTORY), eq(DecisionType.SALES_ORDER_APPROVAL), anyMap());
-        verify(eventPublisher).publishEvent(any(SalesOrderFinanceApprovedEvent.class));
+        assertEquals(SalesOrderStatus.FINANCE_REJECTED, result.getStatus());
+        assertEquals("price mismatch", result.getFinanceReviewNotes());
     }
 
-    /**
-     * 六扇门财审阈值状态机回归: 即便 sales_order 状态机 schema 缺少 CONFIRMED → FINANCE_APPROVED
-     * 直通边 (真实 seed 只有 CONFIRMED → PENDING_FINANCE_REVIEW → FINANCE_APPROVED),
-     * 低额订单自动通过路径也必须能落到 FINANCE_APPROVED, 不能 409 卡死在 DRAFT/CONFIRMED.
-     *
-     * <p>这是真实 prod/test env 暴露的 bug: 之前 N9 单测 factoryConfigService=null → checkTransitionAllowed
-     * 默认 ALLOW, mock 通过但真实带 schema 配置的环境 409. 本测试显式 wire schema 以复现.
-     */
     @Test
-    void confirm_below_threshold_auto_approves_even_when_schema_lacks_direct_confirmed_to_approved_edge() {
-        ReflectionTestUtils.setField(salesService, "factoryConfigService", factoryConfigService);
-        // 模拟真实 seed: 缺 CONFIRMED → FINANCE_APPROVED, 但有合法中间边
-        when(factoryConfigService.isTransitionAllowed(FACTORY, "sales_order", "DRAFT", "CONFIRMED"))
-                .thenReturn(true);
-        when(factoryConfigService.isTransitionAllowed(FACTORY, "sales_order", "CONFIRMED", "PENDING_FINANCE_REVIEW"))
-                .thenReturn(true);
-        when(factoryConfigService.isTransitionAllowed(FACTORY, "sales_order", "PENDING_FINANCE_REVIEW", "FINANCE_APPROVED"))
-                .thenReturn(true);
-        // CONFIRMED → FINANCE_APPROVED 显式 NOT allowed (真实 schema 没有这条边).
-        // lenient: 修复后此路径绝不应被查询 (走中间态), stub 留作意图文档; 若被查询会拿到 false → 409.
-        org.mockito.Mockito.lenient()
-                .when(factoryConfigService.isTransitionAllowed(FACTORY, "sales_order", "CONFIRMED", "FINANCE_APPROVED"))
-                .thenReturn(false);
+    void direct_finance_endpoint_cannot_bypass_existing_oa_instance() {
+        SalesOrder order = order(SalesOrderStatus.PENDING_FINANCE_REVIEW);
+        when(salesOrderRepository.findById(ORDER_ID))
+                .thenReturn(Optional.of(order));
+        when(workflowEngine.getLatestInstance(FACTORY, "SALES_ORDER", ORDER_ID))
+                .thenReturn(Optional.of(instance(InstanceStatus.RUNNING, 101L)));
 
-        SalesOrder order = salesOrder(SalesOrderStatus.DRAFT, "4000.00");
-        when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
-        when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID)).thenReturn(List.of(item()));
-        when(approvalChainService.requiresApproval(eq(FACTORY), eq(DecisionType.SALES_ORDER_APPROVAL), anyMap()))
-                .thenReturn(false);
+        BusinessException error = assertThrows(
+                BusinessException.class,
+                () -> salesService.financeApproveOrder(FACTORY, ORDER_ID, "bypass", 202L));
+        BusinessException rejectError = assertThrows(
+                BusinessException.class,
+                () -> salesService.financeRejectOrder(FACTORY, ORDER_ID, "bypass", 202L));
 
-        SalesOrder result = salesService.confirmOrder(FACTORY, ORDER_ID);
-
-        assertEquals(SalesOrderStatus.FINANCE_APPROVED, result.getStatus());
-        verify(eventPublisher).publishEvent(any(SalesOrderFinanceApprovedEvent.class));
+        assertEquals("SALES_APPROVAL_OA_ONLY", error.getErrorCode());
+        assertEquals("SALES_APPROVAL_OA_ONLY", rejectError.getErrorCode());
+        assertEquals(SalesOrderStatus.PENDING_FINANCE_REVIEW, order.getStatus());
+        verify(salesOrderRepository, never()).save(any(SalesOrder.class));
     }
 
-    /**
-     * 高额订单仍走人工审批路径 (CONFIRMED → PENDING_FINANCE_REVIEW), 不自动通过.
-     * 防止本次修复把高额单也误自动放过.
-     */
-    @Test
-    void confirm_above_threshold_still_routes_to_pending_finance_review_with_schema() {
-        ReflectionTestUtils.setField(salesService, "factoryConfigService", factoryConfigService);
-        when(factoryConfigService.isTransitionAllowed(FACTORY, "sales_order", "DRAFT", "CONFIRMED"))
-                .thenReturn(true);
-        when(factoryConfigService.isTransitionAllowed(FACTORY, "sales_order", "CONFIRMED", "PENDING_FINANCE_REVIEW"))
-                .thenReturn(true);
-
-        SalesOrder order = salesOrder(SalesOrderStatus.DRAFT, "6000.00");
-        when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+    private void mockConfirmInput(SalesOrder order) {
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY))
+                .thenReturn(Optional.of(order));
         when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID)).thenReturn(List.of(item()));
-        when(approvalChainService.requiresApproval(eq(FACTORY), eq(DecisionType.SALES_ORDER_APPROVAL), anyMap()))
-                .thenReturn(true);
-
-        SalesOrder result = salesService.confirmOrder(FACTORY, ORDER_ID);
-
-        assertEquals(SalesOrderStatus.PENDING_FINANCE_REVIEW, result.getStatus());
-        verify(eventPublisher, never()).publishEvent(any(SalesOrderFinanceApprovedEvent.class));
     }
 
-    private SalesOrder salesOrder(SalesOrderStatus status, String totalAmount) {
+    private SalesOrder order(SalesOrderStatus status) {
         SalesOrder order = new SalesOrder();
         order.setId(ORDER_ID);
         order.setFactoryId(FACTORY);
-        order.setOrderNumber("SO-20260612-001");
+        order.setOrderNumber("SO-20260722-0001");
         order.setCustomerId("C-001");
-        order.setOrderDate(LocalDate.of(2026, 6, 12));
+        order.setOrderDate(LocalDate.of(2026, 7, 22));
         order.setCreatedBy(101L);
         order.setStatus(status);
-        order.setTotalAmount(new BigDecimal(totalAmount));
+        order.setTotalAmount(new BigDecimal("6000.00"));
+        order.setItems(new ArrayList<>());
         return order;
     }
 
@@ -227,5 +241,21 @@ class SalesServiceImplApprovalThresholdN9Test {
         item.setQuantity(new BigDecimal("10"));
         item.setUnitPrice(new BigDecimal("10.00"));
         return item;
+    }
+
+    private ApprovalWorkflowInstance instance(InstanceStatus status, Long initiatedBy) {
+        return ApprovalWorkflowInstance.builder()
+                .id("inst-1")
+                .factoryId(FACTORY)
+                .workflowId("wf-sales")
+                .moduleCode("SALES_ORDER")
+                .businessEntityId(ORDER_ID)
+                .status(status)
+                .currentNodeIds(status == InstanceStatus.RUNNING
+                        ? new ArrayList<>(List.of("approval_finance"))
+                        : new ArrayList<>())
+                .contextJson(Map.of())
+                .initiatedBy(initiatedBy)
+                .build();
     }
 }

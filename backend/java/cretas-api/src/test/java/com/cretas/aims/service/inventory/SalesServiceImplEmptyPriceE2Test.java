@@ -3,8 +3,11 @@ package com.cretas.aims.service.inventory;
 import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
+import com.cretas.aims.entity.enums.SalesProcessingMode;
+import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
@@ -17,6 +20,7 @@ import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.finance.ArApService;
 import com.cretas.aims.service.inventory.impl.SalesServiceImpl;
+import com.cretas.aims.service.workflow.WorkflowEngineService;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
 import org.junit.jupiter.api.BeforeEach;
@@ -78,6 +82,7 @@ class SalesServiceImplEmptyPriceE2Test {
     @Mock ArApTransactionRepository     arApTransactionRepository;
     @Mock EntityManager                 entityManager;
     @Mock Query                         nativeQuery;
+    @Mock WorkflowEngineService         workflowEngine;
 
     SalesServiceImpl salesService;
 
@@ -103,6 +108,20 @@ class SalesServiceImplEmptyPriceE2Test {
         ReflectionTestUtils.setField(salesService, "warehouseResolver", warehouseResolver);
         ReflectionTestUtils.setField(salesService, "arApTransactionRepository", arApTransactionRepository);
         ReflectionTestUtils.setField(salesService, "entityManager", entityManager);
+        ReflectionTestUtils.setField(salesService, "workflowEngine", workflowEngine);
+        when(workflowEngine.hasActiveWorkflow(FACTORY_ID, "SALES_ORDER")).thenReturn(true);
+        when(workflowEngine.startWorkflow(
+                eq(FACTORY_ID), eq("SALES_ORDER"), anyString(), anyMap(), anyLong()))
+                .thenAnswer(inv -> ApprovalWorkflowInstance.builder()
+                        .id("wf-inst-e2")
+                        .factoryId(FACTORY_ID)
+                        .workflowId("wf-sales")
+                        .moduleCode("SALES_ORDER")
+                        .businessEntityId(inv.getArgument(2))
+                        .status(ApprovalWorkflowInstance.InstanceStatus.RUNNING)
+                        .currentNodeIds(new java.util.ArrayList<>(List.of("approval_finance")))
+                        .initiatedBy(inv.getArgument(4))
+                        .build());
 
         // advisory lock mock
         when(entityManager.createNativeQuery(anyString())).thenReturn(nativeQuery);
@@ -203,7 +222,7 @@ class SalesServiceImplEmptyPriceE2Test {
     void submitForFinanceReview_nullUnitPrice_throws409WithLineName() {
         SalesOrder order = stubConfirmedOrder("SO-E2-001", new BigDecimal("0"));
 
-        when(salesOrderRepository.findById(ORDER_ID))
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY_ID))
                 .thenReturn(Optional.of(order));
 
         SalesOrderItem item = new SalesOrderItem();
@@ -216,7 +235,7 @@ class SalesServiceImplEmptyPriceE2Test {
         when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID))
                 .thenReturn(List.of(item));
 
-        assertThatThrownBy(() -> salesService.submitForFinanceReview(FACTORY_ID, ORDER_ID))
+        assertThatThrownBy(() -> salesService.submitForFinanceReview(FACTORY_ID, ORDER_ID, 901L))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> {
                     BusinessException be = (BusinessException) ex;
@@ -234,7 +253,7 @@ class SalesServiceImplEmptyPriceE2Test {
     void submitForFinanceReview_zeroPriceItem_throws409() {
         SalesOrder order = stubConfirmedOrder("SO-E2-002", new BigDecimal("0"));
 
-        when(salesOrderRepository.findById(ORDER_ID))
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY_ID))
                 .thenReturn(Optional.of(order));
 
         SalesOrderItem item = new SalesOrderItem();
@@ -247,7 +266,7 @@ class SalesServiceImplEmptyPriceE2Test {
         when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID))
                 .thenReturn(List.of(item));
 
-        assertThatThrownBy(() -> salesService.submitForFinanceReview(FACTORY_ID, ORDER_ID))
+        assertThatThrownBy(() -> salesService.submitForFinanceReview(FACTORY_ID, ORDER_ID, 901L))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> {
                     BusinessException be = (BusinessException) ex;
@@ -261,7 +280,7 @@ class SalesServiceImplEmptyPriceE2Test {
     void submitForFinanceReview_partialMissingPrice_allLinesListed() {
         SalesOrder order = stubConfirmedOrder("SO-E2-003", new BigDecimal("500"));
 
-        when(salesOrderRepository.findById(ORDER_ID))
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY_ID))
                 .thenReturn(Optional.of(order));
 
         SalesOrderItem item1 = new SalesOrderItem();
@@ -282,7 +301,7 @@ class SalesServiceImplEmptyPriceE2Test {
         when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID))
                 .thenReturn(List.of(item1, item2, item3));
 
-        assertThatThrownBy(() -> salesService.submitForFinanceReview(FACTORY_ID, ORDER_ID))
+        assertThatThrownBy(() -> salesService.submitForFinanceReview(FACTORY_ID, ORDER_ID, 901L))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> {
                     BusinessException be = (BusinessException) ex;
@@ -299,7 +318,7 @@ class SalesServiceImplEmptyPriceE2Test {
     void submitForFinanceReview_allPricesPositive_succeeds() {
         SalesOrder order = stubConfirmedOrder("SO-E2-004", new BigDecimal("5000"));
 
-        when(salesOrderRepository.findById(ORDER_ID))
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY_ID))
                 .thenReturn(Optional.of(order));
 
         SalesOrderItem item = new SalesOrderItem();
@@ -313,7 +332,7 @@ class SalesServiceImplEmptyPriceE2Test {
         when(salesOrderRepository.save(any(SalesOrder.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
 
-        SalesOrder result = salesService.submitForFinanceReview(FACTORY_ID, ORDER_ID);
+        SalesOrder result = salesService.submitForFinanceReview(FACTORY_ID, ORDER_ID, 901L);
 
         assertThat(result.getStatus()).isEqualTo(SalesOrderStatus.PENDING_FINANCE_REVIEW);
     }
@@ -345,6 +364,8 @@ class SalesServiceImplEmptyPriceE2Test {
         com.cretas.aims.dto.inventory.CreateSalesOrderRequest req =
                 new com.cretas.aims.dto.inventory.CreateSalesOrderRequest();
         req.setCustomerId(CUSTOMER_ID);
+        req.setProcessingMode(SalesProcessingMode.STANDARD_SALE);
+        req.setMaterialSupplyMode(MaterialSupplyMode.FACTORY_SUPPLIED);
 
         com.cretas.aims.dto.inventory.CreateSalesOrderRequest.SalesOrderItemDTO item =
                 new com.cretas.aims.dto.inventory.CreateSalesOrderRequest.SalesOrderItemDTO();

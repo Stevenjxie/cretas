@@ -8,6 +8,7 @@ import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.config.ApprovalWorkflow;
 import com.cretas.aims.entity.config.ApprovalWorkflowNode;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
+import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.UserRepository;
@@ -16,6 +17,7 @@ import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import com.cretas.aims.service.inventory.PurchaseService;
+import com.cretas.aims.service.inventory.SalesService;
 import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.utils.TokenUtils;
 import io.swagger.v3.oas.annotations.Operation;
@@ -77,6 +79,7 @@ public class WorkflowInstanceController {
     private final UserRepository userRepository;
     private final MobileService mobileService;
     private final PurchaseService purchaseService;
+    private final SalesService salesService;
 
     /** Optional — 用于 hydrate PURCHASE_ORDER businessSummary. */
     @Autowired(required = false)
@@ -236,8 +239,9 @@ public class WorkflowInstanceController {
             throw new BusinessException(400, "OA 审批动作缺少预期节点")
                     .withCode("OA_EXPECTED_NODE_REQUIRED").withHintTarget("expectedNodeId");
         }
-        if (instance.getCurrentNodeIds() == null
-                || !instance.getCurrentNodeIds().contains(request.expectedNodeId())) {
+        if (instance.getStatus() == ApprovalWorkflowInstance.InstanceStatus.RUNNING
+                && (instance.getCurrentNodeIds() == null
+                || !instance.getCurrentNodeIds().contains(request.expectedNodeId()))) {
             throw new BusinessException(409, "审批节点已变化，请刷新待办后重试")
                     .withCode("OA_TASK_NODE_CHANGED");
         }
@@ -256,26 +260,42 @@ public class WorkflowInstanceController {
             throw new BusinessException(400, "当前入口只支持审批通过或驳回")
                     .withHintTarget("action");
         }
-        if (!"PURCHASE_ORDER".equals(instance.getModuleCode())) {
+        String businessEntityId;
+        String businessStatus;
+        if ("PURCHASE_ORDER".equals(instance.getModuleCode())) {
+            PurchaseOrder order = purchaseService.applyWorkflowAction(
+                    factoryId,
+                    instance.getBusinessEntityId(),
+                    instanceId,
+                    user.getId(),
+                    user.getRoleCode(),
+                    action,
+                    request.notes());
+            businessEntityId = order.getId();
+            businessStatus = order.getStatus().name();
+        } else if ("SALES_ORDER".equals(instance.getModuleCode())) {
+            SalesOrder order = salesService.applyWorkflowAction(
+                    factoryId,
+                    instance.getBusinessEntityId(),
+                    instanceId,
+                    user.getId(),
+                    user.getRoleCode(),
+                    action,
+                    request.notes());
+            businessEntityId = order.getId();
+            businessStatus = order.getStatus().name();
+        } else {
             throw new BusinessException(422, "该业务域尚未迁移到统一 OA 动作适配器")
                     .withCode("OA_DOMAIN_ADAPTER_REQUIRED");
         }
-        PurchaseOrder order = purchaseService.applyWorkflowAction(
-                factoryId,
-                instance.getBusinessEntityId(),
-                instanceId,
-                user.getId(),
-                user.getRoleCode(),
-                action,
-                request.notes());
         ApprovalWorkflowInstance updated = workflowEngine.getLatestInstance(
                 factoryId, instance.getModuleCode(), instance.getBusinessEntityId())
                 .orElse(instance);
         return ApiResponse.success(Map.of(
                 "instanceId", updated.getId(),
                 "workflowStatus", updated.getStatus().name(),
-                "businessEntityId", order.getId(),
-                "businessStatus", order.getStatus().name()));
+                "businessEntityId", businessEntityId,
+                "businessStatus", businessStatus));
     }
 
     public record WorkflowActionRequest(

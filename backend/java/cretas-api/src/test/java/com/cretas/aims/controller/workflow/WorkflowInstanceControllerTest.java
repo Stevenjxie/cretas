@@ -8,6 +8,9 @@ import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.config.ApprovalWorkflow;
 import com.cretas.aims.entity.config.ApprovalWorkflowNode;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
+import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.entity.enums.SalesOrderStatus;
+import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus;
 import com.cretas.aims.repository.UserRepository;
@@ -15,6 +18,8 @@ import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
+import com.cretas.aims.service.inventory.PurchaseService;
+import com.cretas.aims.service.inventory.SalesService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -82,6 +87,8 @@ class WorkflowInstanceControllerTest {
     @Mock private UserRepository userRepository;
     @Mock private MobileService mobileService;
     @Mock private PurchaseOrderRepository purchaseOrderRepository;
+    @Mock private PurchaseService purchaseService;
+    @Mock private SalesService salesService;
 
     @InjectMocks private WorkflowInstanceController controller;
 
@@ -338,5 +345,44 @@ class WorkflowInstanceControllerTest {
                 eq(FACTORY_ID), eq(108L), any(Pageable.class));
         verify(workflowEngine).findCopiedTo(
                 eq(FACTORY_ID), eq(108L), eq("finance_manager"), any(Pageable.class));
+    }
+
+    @Test
+    @DisplayName("sales OA action delegates to sales domain adapter and returns projected status")
+    void sales_oa_action_delegates_to_sales_domain_adapter() {
+        mockAuth(108L, "f006_finance", "finance_manager");
+        ApprovalWorkflowInstance running = buildInstance(
+                "inst-sales", "wf-sales", "SALES_ORDER", "so-1",
+                List.of("approval_finance"), 200L);
+        when(workflowEngine.getInstance(FACTORY_ID, "inst-sales")).thenReturn(Optional.of(running));
+        when(workflowEngine.canTransition(eq(running), any(User.class)))
+                .thenReturn(true);
+
+        SalesOrder order = new SalesOrder();
+        order.setId("so-1");
+        order.setStatus(SalesOrderStatus.FINANCE_APPROVED);
+        when(salesService.applyWorkflowAction(
+                eq(FACTORY_ID), eq("so-1"), eq("inst-sales"), eq(108L),
+                eq("finance_manager"), eq(HistoryAction.APPROVE), eq("approved")))
+                .thenReturn(order);
+        ApprovalWorkflowInstance approved = buildInstance(
+                "inst-sales", "wf-sales", "SALES_ORDER", "so-1", List.of(), 200L);
+        approved.setStatus(InstanceStatus.APPROVED);
+        when(workflowEngine.getLatestInstance(FACTORY_ID, "SALES_ORDER", "so-1"))
+                .thenReturn(Optional.of(approved));
+
+        ApiResponse<Map<String, Object>> response = controller.executeAction(
+                FACTORY_ID,
+                "inst-sales",
+                AUTH_HEADER,
+                new WorkflowInstanceController.WorkflowActionRequest(
+                        "APPROVE", "approved", "idem-sales-1", "approval_finance"));
+
+        assertTrue(response.getSuccess());
+        assertEquals("APPROVED", response.getData().get("workflowStatus"));
+        assertEquals("FINANCE_APPROVED", response.getData().get("businessStatus"));
+        verify(salesService).applyWorkflowAction(
+                FACTORY_ID, "so-1", "inst-sales", 108L, "finance_manager",
+                HistoryAction.APPROVE, "approved");
     }
 }

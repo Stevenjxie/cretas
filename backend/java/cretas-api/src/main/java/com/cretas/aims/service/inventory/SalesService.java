@@ -10,6 +10,7 @@ import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
+import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 
 import java.util.List;
 import java.util.Map;
@@ -29,10 +30,19 @@ public interface SalesService {
 
     PageResponse<SalesOrder> getSalesOrdersByStatus(String factoryId, SalesOrderStatus status, int page, int size);
 
-    SalesOrder confirmOrder(String factoryId, String orderId);
+    SalesOrder confirmOrder(String factoryId, String orderId, Long initiatorUserId);
 
     /** 提交财务审核: CONFIRMED -> PENDING_FINANCE_REVIEW */
-    SalesOrder submitForFinanceReview(String factoryId, String orderId);
+    SalesOrder submitForFinanceReview(String factoryId, String orderId, Long initiatorUserId);
+
+    /** Apply an OA action and project the persisted workflow state back to the sales order. */
+    SalesOrder applyWorkflowAction(String factoryId,
+                                   String orderId,
+                                   String instanceId,
+                                   Long actorId,
+                                   String actorRole,
+                                   HistoryAction action,
+                                   String notes);
 
     /** 财务审核通过: PENDING_FINANCE_REVIEW -> FINANCE_APPROVED, 触发供应链联动 */
     SalesOrder financeApproveOrder(String factoryId, String orderId, String notes, Long reviewerId);
