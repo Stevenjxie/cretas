@@ -57,6 +57,9 @@ public class RestaurantEconomicsAnalysisTool extends AbstractBusinessTool {
     private final RestaurantCostRigidityAnalysisTool costRigidityTool;
 
     @Autowired
+    private TieredIntentDelegate tieredDelegate;
+
+    @Autowired
     public RestaurantEconomicsAnalysisTool(
             RestaurantStorePnlOnePagerTool storePnlTool,
             RestaurantShrinkageAnalysisTool shrinkageTool,
@@ -121,6 +124,10 @@ public class RestaurantEconomicsAnalysisTool extends AbstractBusinessTool {
             String factoryId,
             Map<String, Object> params,
             Map<String, Object> context) {
+        Map<String, Object> delegated = tieredDelegate.tryDelegate(factoryId, params, context, getToolName());
+        if (delegated != null) {
+            return delegated;
+        }
 
         log.info("RestaurantEconomicsAnalysisTool invoked — factory: {}, params keys: {}",
                  factoryId, params.keySet());
