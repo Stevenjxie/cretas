@@ -50,6 +50,11 @@ import java.util.concurrent.ExecutorService;
 @Service
 public class SseStreamingService {
 
+    // R16: 餐饮租户 SSE no-tool 死胡同出口先走 tiered 路由 (非反转路径的保险)。
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.ai.tool.impl.restaurant.TieredIntentDelegate sseTieredIntentDelegate;
+
+
     private static final long SSE_TIMEOUT_MS = 120_000L;
 
     private final ExecutorService sseExecutor = java.util.concurrent.Executors.newFixedThreadPool(
@@ -546,7 +551,7 @@ public class SseStreamingService {
                 response = toolDispatchService.executeWithTool(toolOpt.get(), factoryId, request, intent, userId, userRole, matchResult);
             } else {
                 log.warn("[SSE] Tool 未找到: toolName={}", toolName);
-                response = toolDispatchService.buildNoToolResponse(intent);
+                response = noToolResponseWithRestaurantFallback(intent, factoryId, request);
             }
         } else {
             // Sprint 9 P0.1 fix (2026-05-21): tool_name=NULL — 走 explicit Skill fallback (cover
@@ -559,7 +564,7 @@ public class SseStreamingService {
                 response = explicitSkillFallback;
             } else {
                 log.warn("[SSE] 无 Tool 绑定 + 无 Skill 匹配: intentCode={}", intent.getIntentCode());
-                response = toolDispatchService.buildNoToolResponse(intent);
+                response = noToolResponseWithRestaurantFallback(intent, factoryId, request);
             }
         }
 
@@ -923,5 +928,44 @@ public class SseStreamingService {
                 .confidence(matchResult.getConfidence())
                 .executedAt(LocalDateTime.now())
                 .build();
+    }
+
+    /** R16: SSE no-tool 出口的餐饮 tiered 兜底 — 未命中回落原死胡同提示。 */
+    private IntentExecuteResponse noToolResponseWithRestaurantFallback(
+            AIIntentConfig intent, String factoryId, IntentExecuteRequest request) {
+        String normalizedFactory = factoryId != null ? factoryId.trim().toUpperCase(java.util.Locale.ROOT) : "";
+        boolean restaurantTenant = "DEMO_REST".equals(normalizedFactory) || normalizedFactory.startsWith("RES_");
+        if (sseTieredIntentDelegate != null && restaurantTenant
+                && request != null && request.getUserInput() != null) {
+            try {
+                Map<String, Object> delegateParams = new java.util.HashMap<>();
+                delegateParams.put("userInput", request.getUserInput());
+                Map<String, Object> delegateContext = new java.util.HashMap<>();
+                delegateContext.put("request", request);
+                Map<String, Object> delegated = sseTieredIntentDelegate.tryDelegate(
+                        factoryId, delegateParams, delegateContext, "sse_no_tool");
+                if (delegated != null && delegated.get("message") != null) {
+                    String delegatedMessage = delegated.get("message").toString();
+                    Map<String, Object> delegatedData = new java.util.HashMap<>();
+                    delegatedData.put("charts", delegated.getOrDefault("charts", java.util.List.of()));
+                    delegatedData.put("kpis", delegated.getOrDefault("kpis", java.util.List.of()));
+                    delegatedData.put("source", "restaurant_ops_gold");
+                    log.info("[SSE][Branch:TieredDelegate] no-tool 出口被 tiered 路由接管: intentCode={}",
+                            intent != null ? intent.getIntentCode() : null);
+                    return IntentExecuteResponse.builder()
+                            .intentRecognized(true)
+                            .intentCode(delegated.get("code") != null ? delegated.get("code").toString() : null)
+                            .status("SUCCESS")
+                            .message(delegatedMessage)
+                            .formattedText(delegatedMessage)
+                            .resultData(delegatedData)
+                            .executedAt(java.time.LocalDateTime.now())
+                            .build();
+                }
+            } catch (Exception e) {
+                log.warn("[SSE][Branch:TieredDelegate] delegate 失败(回落原提示): {}", e.getMessage());
+            }
+        }
+        return toolDispatchService.buildNoToolResponse(intent);
     }
 }

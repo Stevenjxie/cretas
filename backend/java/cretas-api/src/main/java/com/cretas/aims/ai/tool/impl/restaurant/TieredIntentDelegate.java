@@ -27,6 +27,14 @@ import java.util.Map;
 @Component
 public class TieredIntentDelegate {
 
+    /**
+     * R16 tiered-first 反转去重: 反转入口尝试过委派后在 request context 打此
+     * 标记, 下游全部 gate (工具头 / no-tool 出口 / slot-filling 前置) 见标记
+     * 即跳过 — 同一请求绝不二次调用 Python (tiered parse 可能含 T3 LLM)。
+     * 未经过反转入口的路径 (显式 intentCode / SSE) 无标记, gate 照常兜底。
+     */
+    public static final String ATTEMPTED_CONTEXT_KEY = "tieredDelegateAttempted";
+
     @Autowired
     private GoldFinanceClient gold;
 
@@ -41,6 +49,15 @@ public class TieredIntentDelegate {
             Map<String, Object> context,
             String toolName) {
         try {
+            if (context != null && Boolean.TRUE.equals(context.get(ATTEMPTED_CONTEXT_KEY))) {
+                return null;
+            }
+            Object earlyRequestObj = context != null ? context.get("request") : null;
+            if (earlyRequestObj instanceof IntentExecuteRequest earlyReq
+                    && earlyReq.getContext() != null
+                    && Boolean.TRUE.equals(earlyReq.getContext().get(ATTEMPTED_CONTEXT_KEY))) {
+                return null;
+            }
             String userInput = params != null ? asString(params.get("userInput")) : null;
             String sessionId = null;
             Object requestObj = context != null ? context.get("request") : null;

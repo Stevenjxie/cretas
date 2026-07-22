@@ -90,6 +90,29 @@ class TieredIntentDelegateTest {
     }
 
     @Test
+    @DisplayName("R16: attempted flag in context or request-context dedups to null")
+    void attemptedFlagDedup() throws Exception {
+        GoldFinanceClient gold = mock(GoldFinanceClient.class);
+        TieredIntentDelegate delegate = newDelegate(gold);
+        Map<String, Object> params = new HashMap<>();
+        params.put("userInput", "米饭的销量是多少");
+
+        Map<String, Object> flaggedContext = new HashMap<>();
+        flaggedContext.put(TieredIntentDelegate.ATTEMPTED_CONTEXT_KEY, Boolean.TRUE);
+        assertThat(delegate.tryDelegate(FACTORY_ID, params, flaggedContext, "t")).isNull();
+
+        IntentExecuteRequest req = new IntentExecuteRequest();
+        req.setUserInput("米饭的销量是多少");
+        Map<String, Object> reqCtx = new HashMap<>();
+        reqCtx.put(TieredIntentDelegate.ATTEMPTED_CONTEXT_KEY, Boolean.TRUE);
+        req.setContext(reqCtx);
+        Map<String, Object> outerContext = new HashMap<>();
+        outerContext.put("request", req);
+        assertThat(delegate.tryDelegate(FACTORY_ID, params, outerContext, "t")).isNull();
+        org.mockito.Mockito.verifyNoInteractions(gold);
+    }
+
+    @Test
     @DisplayName("gold client throwing → null, never propagates")
     void exceptionIsSwallowed() throws Exception {
         GoldFinanceClient gold = mock(GoldFinanceClient.class);
