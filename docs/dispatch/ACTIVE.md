@@ -4,9 +4,6 @@
 **当前真值**：`origin/main` 为代码与合并真值；本文件为当前任务状态真值。完成记录见 [2026-07-22-active-history.md](archive/2026-07-22-active-history.md)，此前历史见 [2026-07-21-active-history.md](archive/2026-07-21-active-history.md)。
 
 ## 在飞任务
-- `RTAI-S5` — `review` — Owner: 当前协调者 — Base SHA: `78607525badf000f72ea0744818e5c89884cb2d1` — 菜品综合优化确定性路由、下游不可用能力边界、餐饮会话快速识别旁路与门店/菜品指代消歧已实现；Java 目标回归 71 项、持久化/工具注入链路 10 项通过，待合并、生产发布与零写只读复验。
-- `RTAI-S5-ROUTE-AUDIT` — `review` — Owner: `/root/rtai_r5_route` — Base SHA: `78607525badf000f72ea0744818e5c89884cb2d1` — 只读路由审计完成，证据已由协调者核验。
-- `RTAI-S5-COREF-AUDIT` — `review` — Owner: `/root/rtai_r5_coref` — Base SHA: `78607525badf000f72ea0744818e5c89884cb2d1` — 只读会话链路审计完成，证据已由协调者核验。
 
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
 - `ENH-F006-SUPPLIER-IMPORT-001`（含 `REQ-F006-SUPPLIER-REQUIRED-CONTACT-001`、`ENH-F006-SUPPLIER-DETAIL-STATUS-001`）— `in-progress` — Owner: `/root` — Base SHA: `3ddf6751603476205457fcf8aa0ee9f1adbea792` — 复用现有供应链 Excel 共享能力，统一供应商必填资料、导入预览/幂等确认、状态生命周期、采购门禁与详情信息架构；只合入 `main`，严格 `NOT_DEPLOYED`，生产业务写入为 0。
@@ -40,9 +37,6 @@
 - `BUG-F006-R2-WORKFLOW-INPUT-MODE-DERIVATION` — `in-progress` — Owner: `/root` — Base SHA: `457b3b5e9` — BOM 未完整前 Workflow 投入方式只显示“待 BOM 配置”，不得猜测 AT_LEAST_ONE；BOM 完整后由必需主项、替代集合与可选项结构化派生每组 ALL_REQUIRED/EXACTLY_ONE/OPTIONAL 只读规则，发布与报工共用同一 pinned 快照，严格 `NOT_DEPLOYED`。
 
 ## Scope 锁地图
-- `RTAI-S5`：仅餐饮 AI 意图路由、Python matcher 的餐饮会话指代旁路、会话实体继承、餐饮 Gold 分析工具的故障语义、对应 Java 目标测试、生产只读审计 runner/evidence、ACTIVE 与当日归档；不触碰工厂 AI、Python 指标计算、Web 业务页面或数据库。验收：菜品优化进入餐饮综合能力边界回答且下游瞬时不可用时仍逐项说明能力缺口，门店追问保持上一轮门店实体且不返回全局菜品报告，同文案不同会话不共享实体，正确缺数回答不误报，生产零业务写。
-- `RTAI-S5-ROUTE-AUDIT`：只读检查餐饮意图分类/owner-action 路由及已有测试，不编辑任何文件。
-- `RTAI-S5-COREF-AUDIT`：只读检查 conversation memory/store reference/多轮参数注入及已有测试，不编辑任何文件。
 - `SEC-CREDENTIAL-ROTATION-20260719`：`scripts/systemd/` 中遗留明文启动脚本、现有/新增 secret 扫描配置与测试、`.gitignore` / 凭证模板、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-19-active-history.md`；外部状态仅限已授权的 Cretas 47/139 服务器配置、PostgreSQL 角色密码、相关阿里云/API 凭证与必要服务重启。验收：tracked tree 与完整 Git 历史脱敏盘点、scanner gate、exact-main 发布门禁、Java/Python/网关健康、登录与 Restaurant Agent 只读 smoke、核心 ERP 零写入。
 - `ENH-F006-SUPPLIER-IMPORT-001`：供应商 Java Entity/DTO/Controller/Service/Repository、采购下单与供应关系门禁、共享 Excel 导入基础设施及目标测试；Web Admin 供应商列表/统一详情/新增编辑/导入与 API/types/tests；`docs/qa/F006-MVP-E2E-bug-review-2026-07-20.md`、`docs/dispatch/ACTIVE.md` 与当日归档。验收：真实 JPA Context（如触及 Entity/Repository）、Java API/Service、Web 组件/payload/build、预览零业务写、幂等与跨工厂隔离、历史只读兼容、`NOT_DEPLOYED`。
 - `BUG-F006-MATERIAL-CATEGORY-CASCADE-001`：Web Admin 原料类型字典创建/编辑级联与单位建议组件/helper/tests；Java 原料类型 DTO/Service/Controller 层级和单位兼容校验及目标测试；共享文档仅限复盘、ACTIVE 与当日归档。验收：L1/L2/L3 异步防 stale、单一 category 真值、manual/auto 来源、后端错配 4xx、kg/g 与 box/case/slice 合法生产形态、`NOT_DEPLOYED`。

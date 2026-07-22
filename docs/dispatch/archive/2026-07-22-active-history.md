@@ -24,3 +24,14 @@
 - 生产：Java `v20260722_034103`，active `blue/10010`；Python 健康；每日刷新任务单实例且脚本哈希核验通过。
 - 验证：服务级发布校验通过；严格生产审计记录 17 次餐饮 AI 调用，`actualBusinessWrites=0`、`blockedMutationAttempts=0`、HTTP 与控制台错误均为 0。
 - Scope 锁：`RTAI-S4`、`RTAI-S4-JAVA`、`RTAI-S4-PYTHON`、`RTAI-S4-CRON` 已释放。
+
+## RTAI-S5 — 餐饮 AI 多轮日期与门店作用域收口（R5/R6）
+
+- 状态：`merged; NOT_DEPLOYED`；Owner：`/root`；R6 基线 main `53b3f02c6261da8136ce73bc9618e8618bd61bce`。
+- R5：PR [#1576](https://github.com/Stevenjxie/cretas/pull/1576) 已发布并完成 13 个生产单轮场景零写复验，进一步暴露日期追问和门店“它”追问两条真实多轮缺陷。
+- R6：保存并恢复同一会话的绝对双日期；按 factory/user/session 校验所有权；显式新日期与非法、反向、重叠、越界日期整组 fail-closed；Java→Python 仅转发门店/日期白名单上下文，鉴权租户保持原值。
+- 门店语义：演示租户仅在受控门店查询内部映射 canonical 数据空间；SQL 与结果层双重限域；指定门店不存在或缺数时返回定向中文缺口，禁止退化为全店榜或营业额排名。
+- 日期语义：两个绝对日期范围分别计算毛利；缺任一范围时点名缺数日期，不替换成其他日期、营业额或其他指标；客户回答不暴露内部英文标识、工具名或异常名。
+- 验证：Python 餐饮目标测试 `183 passed`；Java 工具/HTTP 契约/会话/中文时间指代目标测试 `36 passed`；最终 `git diff --check` 通过。
+- 发布：本轮按用户要求仅合入 `main`，不在当前任务部署；生产发布与严格只读复验已交接 Claude，必须等待 exact merged main SHA。
+- Scope 锁：`RTAI-S5`、`RTAI-S5-ROUTE-AUDIT`、`RTAI-S5-COREF-AUDIT`、`RTAI-S5-PYTHON` 已释放。

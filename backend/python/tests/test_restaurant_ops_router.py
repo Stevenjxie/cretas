@@ -1069,3 +1069,138 @@ class TestMarginDragger:
         # Both below min_revenue → nothing to compare.
         assert _compute_margin_dragger(
             [_dish("A", 100, 0.1), _dish("B", 200, 0.2)], 0.5, 300) is None
+
+
+def _store_margin_row(store_id, store_name, revenue, qty, start, end):
+    return {
+        "store_id": store_id, "store_name": store_name,
+        "dish_name": "测试菜", "normalized_name": "测试菜",
+        "qty": float(qty), "revenue": float(revenue), "bills": 8,
+        "window_start": start, "window_end": end,
+    }
+
+
+def _store_margin_runtime(monkeypatch, rows_by_range):
+    class _Connection:
+        def __init__(self):
+            self.calls = []
+
+        async def execute(self, *_args):
+            return None
+
+        async def fetch(self, query, *args):
+            self.calls.append((query, args))
+            if "FROM agg_restaurant_product_cost" in query:
+                return [{"product_source_pk": "PT-DISH", "c": 10.0}]
+            current_rows = rows_by_range.get((args[2], args[3]), [])
+            if "COUNT(DISTINCT t.id)::int AS bills" in query:
+                return [{"store_id": sid, "bills": 8}
+                        for sid in {row["store_id"] for row in current_rows}]
+            if "SELECT s.store_id, s.name AS store_name" in query:
+                return list(current_rows)
+            raise AssertionError(f"unexpected SmartBI query: {query}")
+
+    connection = _Connection()
+
+    class _AcquireContext:
+        async def __aenter__(self):
+            return connection
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class _Pool:
+        def acquire(self):
+            return _AcquireContext()
+
+    class _CretasConnection:
+        async def fetch(self, query, *_args):
+            if "FROM product_types" in query:
+                return [{"id": "PT-DISH", "name": "测试菜"}]
+            raise AssertionError(f"unexpected Cretas query: {query}")
+
+        async def close(self):
+            return None
+
+    async def _connect(_url):
+        return _CretasConnection()
+
+    import asyncpg
+    monkeypatch.setattr(asyncpg, "connect", _connect)
+    return _Pool(), connection
+
+
+def test_store_margin_structured_target_exists_and_never_returns_full_store_chart(monkeypatch):
+    start, end = date(2026, 7, 20), date(2026, 7, 21)
+    rows = [
+        _store_margin_row("S-1", "人民路店", 2000, 100, start, end),
+        _store_margin_row("S-2", "湖滨路店", 5000, 100, start, end),
+    ]
+    pool, connection = _store_margin_runtime(monkeypatch, {(start, end): rows})
+    result = asyncio.run(_r.resolve_store_margin(
+        pool, "RES_TEST", role="restaurant_manager", date_range=(start, end),
+        query="这家店毛利率怎么样", store_id="S-1", store_name="人民路店",
+    ))
+    assert "人民路店" in result.answer_text
+    assert result.meta["targetStore"]["store_id"] == "S-1"
+    assert result.charts == []
+    scoped_calls = [args for query, args in connection.calls if "$5::text" in query]
+    assert scoped_calls
+    assert all(args[4:6] == ("S-1", "人民路店") for args in scoped_calls)
+
+
+def test_store_margin_structured_target_missing_is_directed_no_data(monkeypatch):
+    start, end = date(2026, 7, 20), date(2026, 7, 21)
+    pool, _ = _store_margin_runtime(monkeypatch, {
+        (start, end): [_store_margin_row("S-2", "湖滨路店", 5000, 100, start, end)]
+    })
+    result = asyncio.run(_r.resolve_store_margin(
+        pool, "RES_TEST", role="restaurant_manager", date_range=(start, end),
+        query="这家店毛利率怎么样", store_id="S-404", store_name="不存在店",
+    ))
+    assert "不存在店" in result.answer_text
+    assert "2026-07-20 至 2026-07-21" in result.answer_text
+    assert "没有退化为全店榜" in result.answer_text
+    assert result.meta["no_pos_data"] is True
+    assert result.charts == []
+
+
+def test_store_margin_comparison_uses_both_exact_date_ranges(monkeypatch):
+    primary = (date(2026, 7, 20), date(2026, 7, 21))
+    baseline = (date(2026, 7, 18), date(2026, 7, 19))
+    pool, connection = _store_margin_runtime(monkeypatch, {
+        primary: [_store_margin_row("S-1", "人民路店", 2000, 100, *primary)],
+        baseline: [_store_margin_row("S-1", "人民路店", 1500, 100, *baseline)],
+    })
+    result = asyncio.run(_r.resolve_store_margin(
+        pool, "RES_TEST", role="restaurant_manager", date_range=primary,
+        comparison_date_range=baseline, query="比较人民路店两个日期范围的毛利",
+        store_id="S-1", store_name="人民路店",
+    ))
+    assert "2026-07-20 至 2026-07-21" in result.answer_text
+    assert "2026-07-18 至 2026-07-19" in result.answer_text
+    assert "毛利为 ¥1,000.00" in result.answer_text
+    assert "毛利为 ¥500.00" in result.answer_text
+    assert "营业额" not in result.answer_text
+    assert result.meta["comparisonComplete"] is True
+    date_args = [args[2:4] for query, args in connection.calls if "$5::text" in query]
+    assert primary in date_args and baseline in date_args
+
+
+def test_store_margin_comparison_missing_period_names_dates_without_fallback(monkeypatch):
+    primary = (date(2026, 7, 20), date(2026, 7, 21))
+    baseline = (date(2026, 7, 18), date(2026, 7, 19))
+    pool, _ = _store_margin_runtime(monkeypatch, {
+        primary: [_store_margin_row("S-1", "人民路店", 2000, 100, *primary)],
+        baseline: [],
+    })
+    result = asyncio.run(_r.resolve_store_margin(
+        pool, "RES_TEST", role="restaurant_manager", date_range=primary,
+        comparison_date_range=baseline, query="比较人民路店两个日期范围的毛利",
+        store_id="S-1", store_name="人民路店",
+    ))
+    assert "2026-07-18 至 2026-07-19" in result.answer_text
+    assert "缺少可可靠计算毛利" in result.answer_text
+    assert "没有用其他日期、营业额或其他指标替代" in result.answer_text
+    assert result.charts == []
+    assert result.meta["comparisonComplete"] is False

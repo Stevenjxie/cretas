@@ -752,7 +752,21 @@ public class PythonSmartBIClient {
             @JsonProperty("session_id") String sessionId,
             @JsonProperty("enable_thinking") Boolean enableThinking,
             @JsonProperty("thinking_budget") Integer thinkingBudget,
-            @JsonProperty("allow_tenant_data_fallback") Boolean allowTenantDataFallback) {
+            @JsonProperty("allow_tenant_data_fallback") Boolean allowTenantDataFallback,
+            @JsonProperty("context") Map<String, Object> context) {
+
+        public GeneralAnalysisCall(
+                String query,
+                List<Map<String, Object>> data,
+                String tableType,
+                String expectedIntent,
+                String sessionId,
+                Boolean enableThinking,
+                Integer thinkingBudget,
+                Boolean allowTenantDataFallback) {
+            this(query, data, tableType, expectedIntent, sessionId, enableThinking,
+                    thinkingBudget, allowTenantDataFallback, null);
+        }
 
         public GeneralAnalysisCall(
                 String query,
@@ -763,7 +777,7 @@ public class PythonSmartBIClient {
                 Integer thinkingBudget,
                 Boolean allowTenantDataFallback) {
             this(query, data, tableType, null, sessionId, enableThinking,
-                    thinkingBudget, allowTenantDataFallback);
+                    thinkingBudget, allowTenantDataFallback, null);
         }
 
         public GeneralAnalysisCall {
@@ -771,6 +785,7 @@ public class PythonSmartBIClient {
                 throw new IllegalArgumentException("query is required");
             }
             data = data == null ? null : List.copyOf(data);
+            context = context == null ? null : Map.copyOf(context);
             if (thinkingBudget != null && (thinkingBudget < 0 || thinkingBudget > 100_000)) {
                 throw new IllegalArgumentException("thinking budget is invalid");
             }

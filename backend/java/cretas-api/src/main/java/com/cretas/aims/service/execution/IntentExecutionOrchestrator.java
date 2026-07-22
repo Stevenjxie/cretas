@@ -22,6 +22,7 @@ import com.cretas.aims.config.IntentKnowledgeBase;
 import com.cretas.aims.config.IntentKnowledgeBase.QuestionType;
 import com.cretas.aims.dto.ai.*;
 import com.cretas.aims.dto.cache.SemanticCacheHit;
+import com.cretas.aims.dto.conversation.ConversationContext;
 import com.cretas.aims.dto.conversation.ConversationMessage;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.dto.intent.IntentValidationFact;
@@ -47,7 +48,11 @@ import org.springframework.stereotype.Service;
 import jakarta.annotation.PostConstruct;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
@@ -74,6 +79,11 @@ public class IntentExecutionOrchestrator {
 
     private static final Pattern DISH_REFERENCE_PATTERN = Pattern.compile(
             "那道菜|这道菜|该菜品|这个菜|那个菜|这款菜|那款菜|它");
+
+    private static final Pattern RESTAURANT_COMPARISON_REFERENCE_PATTERN = Pattern.compile(
+            "沿用刚才.*(?:两个日期|日期范围)|刚才比较的两个日期|刚才的两个日期|这两个日期|这两天|同样两个日期");
+    private static final Pattern RESTAURANT_EXPLICIT_TIME_OVERRIDE_PATTERN = Pattern.compile(
+            "今天|今日|昨天|昨日|前天|前日|本周|上周|本月|上月|近\\d+天|\\d{4}-\\d{2}-\\d{2}");
 
     private static final Pattern RESTAURANT_OWNER_ACTION_DIRECT_PATTERN = Pattern.compile(
             "老板|店长|区域经理|今天.*动作|今天.*应该|今天.*最应该|今天.*怎么|今天.*要不要|今天.*适合|今天.*查|今天.*调|今天.*改|今天.*提高|"
@@ -267,6 +277,10 @@ public class IntentExecutionOrchestrator {
             return buildFactoryPackNoMatch(factoryPackRoute, factoryPackRoute.reason());
         }
         boolean factoryPackConstrained = factoryPackRoute.isConstrained();
+
+        if (isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))) {
+            hydrateRestaurantComparisonContext(factoryId, userId, request);
+        }
 
         // 0. 显式意图代码
         if (request.getIntentCode() != null && !request.getIntentCode().isEmpty()) {
@@ -1802,6 +1816,147 @@ public class IntentExecutionOrchestrator {
                         && "STORE".equalsIgnoreCase(ref.getEntityType()));
     }
 
+    void hydrateRestaurantComparisonContext(
+            String factoryId, Long userId, IntentExecuteRequest request) {
+        if (request == null || request.getSessionId() == null || request.getSessionId().isBlank()
+                || request.getUserInput() == null
+                || !RESTAURANT_COMPARISON_REFERENCE_PATTERN.matcher(request.getUserInput()).find()
+                || RESTAURANT_EXPLICIT_TIME_OVERRIDE_PATTERN.matcher(request.getUserInput()).find()) {
+            return;
+        }
+        String sessionId = request.getSessionId();
+        try {
+            ConversationContext owner = conversationMemoryService.getContext(sessionId);
+            if (owner != null
+                    && (!Objects.equals(factoryId, owner.getFactoryId())
+                    || !Objects.equals(userId, owner.getUserId()))) {
+                log.warn("[restaurant-context] rejected foreign session: sessionId={}, factoryId={}, userId={}",
+                        sessionId, factoryId, userId);
+                request.setSessionId(null);
+                return;
+            }
+
+            com.cretas.aims.dto.conversation.EntitySlot slot = conversationMemoryService.getEntitySlot(
+                    sessionId,
+                    com.cretas.aims.dto.conversation.EntitySlot.SlotType.TIME_RANGE);
+            if (slot == null || slot.getMetadata() == null) {
+                return;
+            }
+            Map<String, Object> metadata = slot.getMetadata();
+            String primaryStartValue = valueAsString(metadata.get("primaryStart"));
+            String primaryEndValue = valueAsString(metadata.get("primaryEnd"));
+            String comparisonStartValue = valueAsString(metadata.get("comparisonStart"));
+            String comparisonEndValue = valueAsString(metadata.get("comparisonEnd"));
+            String anchorValue = valueAsString(metadata.get("anchorDate"));
+            if (!validIsoDate(primaryStartValue) || !validIsoDate(primaryEndValue)
+                    || !validIsoDate(comparisonStartValue) || !validIsoDate(comparisonEndValue)
+                    || !validIsoDate(anchorValue)) {
+                return;
+            }
+
+            LocalDate primaryStart = LocalDate.parse(primaryStartValue);
+            LocalDate primaryEnd = LocalDate.parse(primaryEndValue);
+            LocalDate comparisonStart = LocalDate.parse(comparisonStartValue);
+            LocalDate comparisonEnd = LocalDate.parse(comparisonEndValue);
+            LocalDate anchor = LocalDate.parse(anchorValue);
+            boolean overlaps = !primaryEnd.isBefore(comparisonStart)
+                    && !comparisonEnd.isBefore(primaryStart);
+            boolean invalidRange = primaryStart.isAfter(primaryEnd)
+                    || comparisonStart.isAfter(comparisonEnd)
+                    || primaryEnd.isAfter(anchor)
+                    || comparisonEnd.isAfter(anchor)
+                    || ChronoUnit.DAYS.between(primaryStart, primaryEnd) >= 366
+                    || ChronoUnit.DAYS.between(comparisonStart, comparisonEnd) >= 366
+                    || primaryStart.isBefore(anchor.minusYears(2))
+                    || comparisonStart.isBefore(anchor.minusYears(2))
+                    || overlaps;
+            if (invalidRange) {
+                log.warn("[restaurant-context] ignored invalid comparison dates: sessionId={}", sessionId);
+                return;
+            }
+
+            Map<String, Object> hydrated = new LinkedHashMap<>();
+            if (request.getContext() != null) {
+                hydrated.putAll(request.getContext());
+            }
+            hydrated.put("startDate", primaryStartValue);
+            hydrated.put("endDate", primaryEndValue);
+            hydrated.put("comparisonStartDate", comparisonStartValue);
+            hydrated.put("comparisonEndDate", comparisonEndValue);
+            hydrated.put("timeAnchorDate", anchorValue);
+            request.setContext(hydrated);
+            log.info("[restaurant-context] restored comparison dates sessionId={} primary={}..{} baseline={}..{}",
+                    sessionId, primaryStartValue, primaryEndValue,
+                    comparisonStartValue, comparisonEndValue);
+        } catch (Exception e) {
+            request.setSessionId(null);
+            log.warn("[restaurant-context] comparison-date restore failed closed: sessionId={}, error={}",
+                    sessionId, e.getMessage());
+        }
+    }
+    private void persistRestaurantComparisonContext(
+            String sessionId, String userInput, IntentMatchResult intentResult) {
+        if (sessionId == null || sessionId.isBlank() || userInput == null || intentResult == null
+                || intentResult.getBestMatch() == null) {
+            return;
+        }
+        String intentCode = intentResult.getBestMatch().getIntentCode();
+        if (intentCode == null || !intentCode.startsWith("RESTAURANT_")) {
+            return;
+        }
+        boolean compareSignal = containsAny(userInput, "比", "比较", "对比", "高还是低", "高于", "低于");
+        if (!compareSignal) {
+            return;
+        }
+        LocalDate anchor = LocalDate.now(ZoneId.of("Asia/Shanghai"));
+        LocalDate primary;
+        LocalDate comparison;
+        if (containsAny(userInput, "昨天", "昨日") && containsAny(userInput, "前天", "前日")) {
+            primary = anchor.minusDays(1);
+            comparison = anchor.minusDays(2);
+        } else if (containsAny(userInput, "今天", "今日") && containsAny(userInput, "昨天", "昨日")) {
+            primary = anchor;
+            comparison = anchor.minusDays(1);
+        } else {
+            return;
+        }
+        com.cretas.aims.dto.conversation.EntitySlot slot =
+                com.cretas.aims.dto.conversation.EntitySlot.timeRange(
+                        primary + " 与 " + comparison,
+                        comparison.atStartOfDay(),
+                        primary.atTime(LocalTime.MAX));
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("start", comparison.atStartOfDay().toString());
+        metadata.put("end", primary.atTime(LocalTime.MAX).toString());
+        metadata.put("primaryStart", primary.toString());
+        metadata.put("primaryEnd", primary.toString());
+        metadata.put("comparisonStart", comparison.toString());
+        metadata.put("comparisonEnd", comparison.toString());
+        metadata.put("anchorDate", anchor.toString());
+        metadata.put("comparisonKind", "previous_day");
+        slot.setMetadata(metadata);
+        conversationMemoryService.updateEntitySlot(
+                sessionId,
+                com.cretas.aims.dto.conversation.EntitySlot.SlotType.TIME_RANGE,
+                slot);
+    }
+
+    private static boolean validIsoDate(String value) {
+        if (value == null) {
+            return false;
+        }
+        try {
+            LocalDate.parse(value);
+            return true;
+        } catch (java.time.format.DateTimeParseException ignored) {
+            return false;
+        }
+    }
+
+    private static String valueAsString(Object value) {
+        return value == null ? null : value.toString();
+    }
+
     boolean shouldBypassEarlyPhraseShortcutForStoreReference(String userInput) {
         return userInput != null && (
                 STORE_REFERENCE_PATTERN.matcher(userInput).find()
@@ -2928,6 +3083,7 @@ public class IntentExecutionOrchestrator {
             String assistantMessage = response.getMessage() != null ? response.getMessage() : "执行完成";
             conversationMemoryService.addMessage(sessionId, ConversationMessage.user(userInput));
             conversationMemoryService.addMessage(sessionId, ConversationMessage.assistant(assistantMessage));
+            persistRestaurantComparisonContext(sessionId, userInput, intentResult);
             // Extract entities from response data
             extractAndUpdateEntitySlots(sessionId, response, intentResult);
             if (intentResult != null && intentResult.getBestMatch() != null) {
