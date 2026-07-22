@@ -37,7 +37,6 @@
 - `BUG-F006-R2-WORKFLOW-INPUT-MODE-DERIVATION` — `in-progress` — Owner: `/root` — Base SHA: `457b3b5e9` — BOM 未完整前 Workflow 投入方式只显示“待 BOM 配置”，不得猜测 AT_LEAST_ONE；BOM 完整后由必需主项、替代集合与可选项结构化派生每组 ALL_REQUIRED/EXACTLY_ONE/OPTIONAL 只读规则，发布与报工共用同一 pinned 快照，严格 `NOT_DEPLOYED`。
 
 ## Scope 锁地图
-
 - `SEC-CREDENTIAL-ROTATION-20260719`：`scripts/systemd/` 中遗留明文启动脚本、现有/新增 secret 扫描配置与测试、`.gitignore` / 凭证模板、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-19-active-history.md`；外部状态仅限已授权的 Cretas 47/139 服务器配置、PostgreSQL 角色密码、相关阿里云/API 凭证与必要服务重启。验收：tracked tree 与完整 Git 历史脱敏盘点、scanner gate、exact-main 发布门禁、Java/Python/网关健康、登录与 Restaurant Agent 只读 smoke、核心 ERP 零写入。
 - `ENH-F006-SUPPLIER-IMPORT-001`：供应商 Java Entity/DTO/Controller/Service/Repository、采购下单与供应关系门禁、共享 Excel 导入基础设施及目标测试；Web Admin 供应商列表/统一详情/新增编辑/导入与 API/types/tests；`docs/qa/F006-MVP-E2E-bug-review-2026-07-20.md`、`docs/dispatch/ACTIVE.md` 与当日归档。验收：真实 JPA Context（如触及 Entity/Repository）、Java API/Service、Web 组件/payload/build、预览零业务写、幂等与跨工厂隔离、历史只读兼容、`NOT_DEPLOYED`。
 - `BUG-F006-MATERIAL-CATEGORY-CASCADE-001`：Web Admin 原料类型字典创建/编辑级联与单位建议组件/helper/tests；Java 原料类型 DTO/Service/Controller 层级和单位兼容校验及目标测试；共享文档仅限复盘、ACTIVE 与当日归档。验收：L1/L2/L3 异步防 stale、单一 category 真值、manual/auto 来源、后端错配 4xx、kg/g 与 box/case/slice 合法生产形态、`NOT_DEPLOYED`。
