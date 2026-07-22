@@ -1,5 +1,13 @@
 # Dispatch 完成归档 — 2026-07-22
 
+## BUG-F006-R3-SALES-OA-INSTANCE-001
+
+- Status: `merged-ready; NOT_DEPLOYED`; Owner: `/root`; rebased implementation head before documentation closeout: `0b92f3a3b1ec3fe8ff72799d18070eaa3f294342`; PR [#1614](https://github.com/Stevenjxie/cretas/pull/1614).
+- Scope: sales confirmation -> persisted unified OA instance -> automatic terminal approval or finance OA task -> transactional sales-state and voucher projection. New sales submissions use unified OA only; legacy approval records/config remain read-only compatible and are not dual-written or backfilled.
+- F006 default policy: external orders and orders at or below 5000 yuan auto-complete inside OA; orders above 5000 yuan create one finance task. The threshold and assignee roles are maintained in the unified OA Canvas definition; the migration seeds only the first missing default and never overwrites an existing active definition.
+- Verification: immutable Java release lifecycle 11 selected classes / 63 tests including real PostgreSQL JPA startup; Web Vitest 10 files / 29 tests, `vue-tsc --noEmit`, and immutable Vite release build (4457 modules) all passed. Durable OA action idempotency, definition-running guards, finance voucher timing, deep-link reactivity and role routing are covered.
+- Production boundary: implementation business writes 0; existing `SO-20260722-0001`, PO, inventory and LIUSHANMEN records were not changed or bridged. Scope locks `BUG-F006-R3-SALES-OA-INSTANCE-001`, `BUG-F006-R3-SALES-OA-BACKEND-CLOSEOUT-001` and `BUG-F006-R3-SALES-OA-WEB-CLOSEOUT-001` released for PR merge.
+
 ## BUG-F006-R3-PURCHASE-RECEIVING-ROUTE-001
 
 - Status: `review`; Owner: `/root`; Base SHA: `53b3f02c6261da8136ce73bc9618e8618bd61bce`.

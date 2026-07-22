@@ -5,9 +5,6 @@
 
 ## 在飞任务
 
-- `BUG-F006-R3-SALES-OA-INSTANCE-001` — `in-progress` — Owner: `/root` — Base SHA: `4b01a2301143d13971fc4d7f1f5b3337571125a4` — 修复 F006 销售订单确认仍走 legacy approval chain、自动财审后没有统一 OA 实例/发起人记录/财务待办的问题；保持既有金额阈值语义，补 SALES_ORDER graph、真实提交人和 OA action adapter，从同一生产测试单只读续测；未经再次授权不部署。
-- `BUG-F006-R3-SALES-OA-BACKEND-CLOSEOUT-001` — `review` — Owner: `/root/audit_backend_receiving` — Base SHA: `bff367e40aacf7233caa120be569f09ec4b8886d` — Commit `20df3e53b87549ced07cd138869aa6c6ca289e7e`；销售 OA 定义固定、旧直批门禁、提前凭证、待办摘要与 durable action idempotency ledger 已收口；执行者 43/43 目标测试及真实 PostgreSQL JPA gate 通过，待协调者最终 release gate。
-- `BUG-F006-R3-SALES-OA-WEB-CLOSEOUT-001` — `review` — Owner: `/root/audit_frontend_receiving` — Base SHA: `bff367e40aacf7233caa120be569f09ec4b8886d` — Commits `2681be1a9cdbbce7da2ffaaf70d75e412d40aa63`、`f24db81a395115bf4b008636dc4c12c4c2164e7a`；旧审批入口、直批调用、Canvas/OA 深链响应式同步与角色矩阵已收口，执行者 Vitest 10 files/29 tests、`vue-tsc --noEmit` 通过，待协调者最终 Web release gate。
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: Codex coordinator — Base SHA: `1ba9a241a77144a80851051efbac584abf4db69d` — tracked tree、47/139 非受控副本、数据库/JWT/internal/BaoTa 轮换和生产验收已完成；仍需各供应商控制台吊销无法由当前 API 权限完成的旧长期凭证，详情见 [凭证轮换收尾记录](../security/credential-rotation-closeout-2026-07-20.md)。
 - `ENH-F006-SUPPLIER-IMPORT-001`（含 `REQ-F006-SUPPLIER-REQUIRED-CONTACT-001`、`ENH-F006-SUPPLIER-DETAIL-STATUS-001`）— `in-progress` — Owner: `/root` — Base SHA: `3ddf6751603476205457fcf8aa0ee9f1adbea792` — 复用现有供应链 Excel 共享能力，统一供应商必填资料、导入预览/幂等确认、状态生命周期、采购门禁与详情信息架构；只合入 `main`，严格 `NOT_DEPLOYED`，生产业务写入为 0。
 - `BUG-F006-MATERIAL-CATEGORY-CASCADE-001`（含 `BUG-F006-MATERIAL-AUTOFILL-UNIT-001`）— `in-progress` — Owner: `/root` — Base SHA: `3ddf6751603476205457fcf8aa0ee9f1adbea792` — 修复原料类型字典 category/L1/L2/L3 单一真值、异步级联与单位建议来源/手动覆盖语义，后端 fail-closed 校验；只合入 `main`，严格 `NOT_DEPLOYED`，生产业务写入为 0。
@@ -40,7 +37,6 @@
 - `BUG-F006-R2-WORKFLOW-INPUT-MODE-DERIVATION` — `in-progress` — Owner: `/root` — Base SHA: `457b3b5e9` — BOM 未完整前 Workflow 投入方式只显示“待 BOM 配置”，不得猜测 AT_LEAST_ONE；BOM 完整后由必需主项、替代集合与可选项结构化派生每组 ALL_REQUIRED/EXACTLY_ONE/OPTIONAL 只读规则，发布与报工共用同一 pinned 快照，严格 `NOT_DEPLOYED`。
 
 ## Scope 锁地图
-- `BUG-F006-R3-SALES-OA-INSTANCE-001`：销售订单确认 Controller/Service 的 OA 提交人和 WorkflowEngine 路由、SALES_ORDER OA action adapter、F006 销售审批图 Flyway；Web OA 待办销售动作、销售提交真实路由预览与 Canvas 金额阈值业务化编辑；对应 Java/Web 目标测试、F006 bug review 与本 ACTIVE/当日归档。验收：低额/免审仍自动通过但持久化唯一 APPROVED OA 实例，高额生成唯一财务待办并仅在 OA 处理，管理员可在统一 OA 配置阈值且提交预览与运行真值一致，前端无硬编码5000，重复确认幂等、缺图 fail-closed、跨厂/自批门禁、业务状态事务回写；不得修改生产 SO/PO/库存，部署前停留 main。
 - `SEC-CREDENTIAL-ROTATION-20260719`：`scripts/systemd/` 中遗留明文启动脚本、现有/新增 secret 扫描配置与测试、`.gitignore` / 凭证模板、`docs/dispatch/ACTIVE.md`、`docs/dispatch/archive/2026-07-19-active-history.md`；外部状态仅限已授权的 Cretas 47/139 服务器配置、PostgreSQL 角色密码、相关阿里云/API 凭证与必要服务重启。验收：tracked tree 与完整 Git 历史脱敏盘点、scanner gate、exact-main 发布门禁、Java/Python/网关健康、登录与 Restaurant Agent 只读 smoke、核心 ERP 零写入。
 - `ENH-F006-SUPPLIER-IMPORT-001`：供应商 Java Entity/DTO/Controller/Service/Repository、采购下单与供应关系门禁、共享 Excel 导入基础设施及目标测试；Web Admin 供应商列表/统一详情/新增编辑/导入与 API/types/tests；`docs/qa/F006-MVP-E2E-bug-review-2026-07-20.md`、`docs/dispatch/ACTIVE.md` 与当日归档。验收：真实 JPA Context（如触及 Entity/Repository）、Java API/Service、Web 组件/payload/build、预览零业务写、幂等与跨工厂隔离、历史只读兼容、`NOT_DEPLOYED`。
 - `BUG-F006-MATERIAL-CATEGORY-CASCADE-001`：Web Admin 原料类型字典创建/编辑级联与单位建议组件/helper/tests；Java 原料类型 DTO/Service/Controller 层级和单位兼容校验及目标测试；共享文档仅限复盘、ACTIVE 与当日归档。验收：L1/L2/L3 异步防 stale、单一 category 真值、manual/auto 来源、后端错配 4xx、kg/g 与 box/case/slice 合法生产形态、`NOT_DEPLOYED`。
