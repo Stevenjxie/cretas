@@ -734,3 +734,88 @@ async def test_endpoint_no_pool_delegate_false(monkeypatch):
     body = TieredIntentAnswerRequest(factory_id="QHJ01", query="营收趋势")
     result = await post_restaurant_tiered_answer(_fake_request(), body)
     assert result == {"delegate": False}
+
+
+# ─── R7b: store-mention forwarding, demo mapping, guard clarification ────
+
+
+@pytest.mark.asyncio
+async def test_tiered_answer_store_mention_maps_demo_and_declines_unknown(monkeypatch):
+    spec = _spec(intent="RESTAURANT_OPS_STORE_MARGIN")
+    captured = {}
+
+    async def _fake_parse(*a, **kw):
+        return spec
+
+    async def _fake_resolve(code, pool, factory_id, **kwargs):
+        captured["code"] = code
+        captured["factory_id"] = factory_id
+        captured["kwargs"] = kwargs
+        return OpsAnswer(
+            code=code, title="月球一号幻想店毛利分析",
+            answer_text="没有找到名为「月球一号幻想店」的门店，不能计算该店的毛利或毛利率。",
+            charts=[], kpis=[], meta={"store_not_found": "月球一号幻想店"},
+        )
+
+    monkeypatch.setattr(svc, "parse_restaurant_query", _fake_parse)
+    monkeypatch.setattr(svc, "_resolve_tiered", _fake_resolve)
+
+    result = await tiered_answer(
+        "月球一号幻想店的毛利率是多少？", object(), "DEMO_REST", "restaurant_manager",
+    )
+    assert captured["factory_id"] == "RES_3101_009"
+    assert captured["kwargs"]["store_mention"] == "月球一号幻想店"
+    assert result["kind"] == "clarification"
+    assert "没有找到名为「月球一号幻想店」的门店" in result["answer_text"]
+
+
+@pytest.mark.asyncio
+async def test_tiered_answer_missing_reference_guard_is_clarification(monkeypatch):
+    spec = _spec(intent="RESTAURANT_OPS_GROSS_MARGIN")
+
+    async def _fake_parse(*a, **kw):
+        return spec
+
+    async def _fake_resolve(code, pool, factory_id, **kwargs):
+        return OpsAnswer(
+            code=code, title="需要先确认比较日期",
+            answer_text="这轮对话里没有找到可沿用的比较日期。",
+            charts=[], kpis=[], meta={"missing_reference": "date_range"},
+        )
+
+    monkeypatch.setattr(svc, "parse_restaurant_query", _fake_parse)
+    monkeypatch.setattr(svc, "_resolve_tiered", _fake_resolve)
+
+    result = await tiered_answer(
+        "那毛利呢？请沿用刚才比较的两个日期。", object(), "DEMO_REST", None,
+    )
+    assert result["kind"] == "clarification"
+    assert "没有找到可沿用的比较日期" in result["answer_text"]
+
+
+@pytest.mark.asyncio
+async def test_tiered_answer_non_store_intent_keeps_trusted_factory(monkeypatch):
+    spec = _spec(intent="RESTAURANT_OPS_SALES_SUMMARY")
+    captured = {}
+
+    async def _fake_parse(*a, **kw):
+        return spec
+
+    async def _fake_resolve(code, pool, factory_id, **kwargs):
+        captured["factory_id"] = factory_id
+        captured["kwargs"] = kwargs
+        return OpsAnswer(
+            code=code, title="经营销售概览",
+            answer_text="昨天总营收 ¥73,365.44，共 537 单。",
+            charts=[], kpis=[], meta={},
+        )
+
+    monkeypatch.setattr(svc, "parse_restaurant_query", _fake_parse)
+    monkeypatch.setattr(svc, "_resolve_tiered", _fake_resolve)
+
+    result = await tiered_answer(
+        "昨天营业额比前天高还是低？", object(), "DEMO_REST", None,
+    )
+    assert captured["factory_id"] == "DEMO_REST"
+    assert "store_mention" not in captured["kwargs"]
+    assert result["kind"] == "answer"
