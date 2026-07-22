@@ -41,7 +41,7 @@
             placeholder="选择食材"
             @change="loadTrend"
           >
-            <el-option v-for="ing in trendIngredients" :key="ing" :label="ing" :value="ing" />
+            <el-option v-for="ing in trendIngredients" :key="ing.value" :label="ing.label" :value="ing.value" />
           </el-select>
         </div>
         <div ref="trendChartEl" v-loading="trendLoading" class="trend-chart"></div>
