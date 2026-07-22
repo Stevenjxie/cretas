@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { get, post } from '@/api/request';
@@ -29,14 +29,14 @@ const total = ref(0);
 const page = ref(1);
 const size = ref(20);
 const ACTIONABLE_MODULE_CODES = new Set(['PURCHASE_ORDER', 'SALES_ORDER']);
-const requestedModuleCode = Array.isArray(route.query.moduleCode)
-  ? route.query.moduleCode[0]
-  : route.query.moduleCode;
-const moduleCode = ref(
-  typeof requestedModuleCode === 'string' && ACTIONABLE_MODULE_CODES.has(requestedModuleCode)
-    ? requestedModuleCode
-    : '',
-);
+const moduleCode = ref('');
+const focusedInstanceId = ref('');
+let mounted = false;
+
+function queryValue(value: unknown): string {
+  const normalized = Array.isArray(value) ? value[0] : value;
+  return typeof normalized === 'string' ? normalized : '';
+}
 
 function canAct(row: PendingApproval): boolean {
   return ACTIONABLE_MODULE_CODES.has(row.moduleCode);
@@ -61,6 +61,28 @@ async function loadPending() {
   } finally {
     loading.value = false;
   }
+}
+
+watch(
+  () => [route.query.moduleCode, route.query.instanceId],
+  async ([moduleCodeQuery, instanceIdQuery]) => {
+    const requestedModuleCode = queryValue(moduleCodeQuery);
+    const nextModuleCode = ACTIONABLE_MODULE_CODES.has(requestedModuleCode)
+      ? requestedModuleCode
+      : '';
+    const moduleChanged = nextModuleCode !== moduleCode.value;
+    moduleCode.value = nextModuleCode;
+    focusedInstanceId.value = queryValue(instanceIdQuery);
+    if (mounted && moduleChanged) {
+      page.value = 1;
+      await loadPending();
+    }
+  },
+  { immediate: true },
+);
+
+function rowClassName({ row }: { row: PendingApproval }): string {
+  return row.instanceId === focusedInstanceId.value ? 'deep-linked-approval-row' : '';
 }
 
 async function act(row: PendingApproval, action: 'APPROVE' | 'REJECT') {
@@ -105,7 +127,10 @@ async function act(row: PendingApproval, action: 'APPROVE' | 'REJECT') {
   }
 }
 
-onMounted(loadPending);
+onMounted(async () => {
+  mounted = true;
+  await loadPending();
+});
 </script>
 
 <template>
@@ -124,7 +149,14 @@ onMounted(loadPending);
         </div>
       </template>
 
-      <el-table v-loading="loading" :data="rows" border stripe empty-text="暂无待您审批的任务">
+      <el-table
+        v-loading="loading"
+        :data="rows"
+        :row-class-name="rowClassName"
+        border
+        stripe
+        empty-text="暂无待您审批的任务"
+      >
         <el-table-column label="业务类型" width="120">
           <template #default="{ row }">{{ enumLabel(row.moduleCode) }}</template>
         </el-table-column>
@@ -166,4 +198,5 @@ onMounted(loadPending);
 .header h2 { margin: 0 0 6px; }
 .header p { margin: 0; color: var(--el-text-color-secondary); }
 .el-pagination { margin-top: 16px; justify-content: flex-end; }
+:deep(.deep-linked-approval-row > td.el-table__cell) { background: var(--el-color-primary-light-9) !important; }
 </style>

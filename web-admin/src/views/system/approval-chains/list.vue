@@ -15,12 +15,16 @@ import { get, post, put, del } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Edit, Delete as DeleteIcon, Refresh } from '@element-plus/icons-vue';
 import type { TableRow } from '@/types/api';
+import { canConfigureUnifiedOaForRole } from './unifiedOaAccess';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const router = useRouter();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('system'));
+const canConfigureUnifiedOa = computed(() => (
+  canConfigureUnifiedOaForRole(permissionStore.currentRole)
+));
 
 const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
@@ -93,6 +97,10 @@ function isUnifiedOaDecision(rowOrType: TableRow | string): boolean {
 }
 
 async function goToUnifiedOa(decisionType = 'SALES_ORDER_APPROVAL') {
+  if (!canConfigureUnifiedOa.value) {
+    ElMessage.info('当前账号无统一 OA 配置权限，请联系管理员配置');
+    return;
+  }
   await router.push({
     name: 'CanvasEditor',
     query: { tab: 'approval', decisionType },
@@ -382,12 +390,17 @@ const decisionTypeGroups: { label: string; types: string[] }[] = [
         </el-table-column>
         <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
-            <el-tooltip
-              v-if="isUnifiedOaDecision(row)"
-              content="销售订单审批已迁移至统一 OA；此处历史配置仅供查看"
-            >
-              <el-button link type="primary" @click="goToUnifiedOa(String(row.decisionType))">前往统一 OA</el-button>
-            </el-tooltip>
+            <template v-if="isUnifiedOaDecision(row)">
+              <el-tooltip
+                v-if="canConfigureUnifiedOa"
+                content="销售订单审批已迁移至统一 OA；此处历史配置仅供查看"
+              >
+                <el-button link type="primary" @click="goToUnifiedOa(String(row.decisionType))">前往统一 OA</el-button>
+              </el-tooltip>
+              <el-tooltip v-else content="仅管理员可进入统一 OA 配置">
+                <el-tag type="info">请联系管理员配置</el-tag>
+              </el-tooltip>
+            </template>
             <template v-else>
               <el-button v-if="canWrite" link type="primary" :icon="Edit" @click="openEdit(row)">编辑</el-button>
               <el-button

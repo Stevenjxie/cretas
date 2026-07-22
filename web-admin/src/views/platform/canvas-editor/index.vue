@@ -126,7 +126,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useCanvasEditor } from './composables/useCanvasEditor'
 import { aiApplyDiffs, submitForReview, approveConfig, rejectConfig, publishNow as apiPublishNow, cancelApproval as apiCancelApproval } from '@/api/canvasApi'
@@ -200,8 +200,16 @@ function applyRouteDeepLink() {
   if (tab === 'approval') {
     activeTab.value = 'approval'
     isOnboarding.value = false
+  } else if (tab === 'workflow' || tab == null) {
+    activeTab.value = 'workflow'
   }
 }
+
+watch(
+  () => [route.query.tab, route.query.decisionType],
+  applyRouteDeepLink,
+  { immediate: true },
+)
 
 // Round 7a: wrap every action handler with an in-flight lock. CanvasHeader's
 // emitLocked() already drops duplicate clicks client-side; this ensures that

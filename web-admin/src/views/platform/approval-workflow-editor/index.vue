@@ -176,7 +176,7 @@
 </template>
 
 <script setup lang="ts">
-import { markRaw, ref, computed, onMounted } from 'vue'
+import { markRaw, ref, computed, onMounted, watch } from 'vue'
 import { VueFlow, type Connection, type Node, type Edge, type NodeTypesObject } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
@@ -770,6 +770,16 @@ async function refreshWorkflowList() {
     console.warn('[refreshWorkflowList failed]', e)
   }
 }
+
+watch(
+  () => props.initialDecisionType,
+  async (nextDecisionType) => {
+    if (!nextDecisionType || nextDecisionType === selectedDecisionType.value) return
+    selectedDecisionType.value = nextDecisionType
+    resetEditor()
+    await refreshWorkflowList()
+  },
+)
 
 async function onWorkflowSelectionChange(id: string | undefined) {
   if (!factoryId.value || !id) {
