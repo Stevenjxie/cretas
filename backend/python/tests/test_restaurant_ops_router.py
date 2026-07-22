@@ -1692,3 +1692,10 @@ def test_gross_margin_exact_calendar_window(monkeypatch):
     # empty window → calendar-labelled decline, never anchored substitution
     assert "2026-01-01 至 2026-07-22" in result.answer_text
     assert "没有用其他时间范围替代" in result.answer_text
+
+
+def test_loss_colloquial_counts_as_profitability_ask():
+    wants, asks = _r._profit_intent("最近亏钱了吗")
+    assert wants is True and asks is True
+    wants2, asks2 = _r._profit_intent("上个月亏损了吗")
+    assert asks2 is True
