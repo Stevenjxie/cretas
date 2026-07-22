@@ -213,6 +213,13 @@ public class WorkflowInstanceController {
                 if (node != null) {
                     dto.setCurrentNodeLabel(node.getLabel() != null
                             ? node.getLabel() : node.getId());
+                    Object configuredRoles = node.getConfig() == null
+                            ? null : node.getConfig().get("approverRoles");
+                    if (configuredRoles instanceof Iterable<?> iterable) {
+                        List<String> approverRoles = new ArrayList<>();
+                        iterable.forEach(value -> approverRoles.add(String.valueOf(value)));
+                        dto.setApproverRoles(approverRoles);
+                    }
                 }
             }
 

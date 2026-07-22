@@ -225,6 +225,7 @@ class WorkflowInstanceControllerTest {
         assertEquals(poId, dto.getBusinessEntityId());
         assertEquals("approval_finance", dto.getCurrentNodeId());
         assertEquals("财务审批", dto.getCurrentNodeLabel());
+        assertEquals(List.of("finance_manager"), dto.getApproverRoles());
         assertEquals("f006_procurement_mgr", dto.getInitiatedByUsername());
         // businessSummary 应含订单号 + 金额 + 供应商名
         assertNotNull(dto.getBusinessSummary());

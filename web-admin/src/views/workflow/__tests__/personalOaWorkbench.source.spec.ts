@@ -37,4 +37,14 @@ describe('personal OA workbench contract', () => {
     expect(copied).toContain('抄送我的');
     expect(`${acted}${copied}`).not.toMatch(/[锛閿鍔寮]/u);
   });
+
+  it('renders pending business identity, approver roles and local time without internal-code leakage', () => {
+    const enumDisplay = source('src/utils/enumDisplay.ts');
+    expect(enumDisplay).toContain("SALES_ORDER: '销售订单'");
+    expect(enumDisplay).toContain("PURCHASE_ORDER: '采购订单'");
+    expect(enumDisplay).toContain("finance_manager: '财务主管'");
+    expect(pending).toContain("import { formatDateTime } from '@/utils/dateFormat'");
+    expect(pending).toContain('{{ formatDateTime(row.initiatedAt) }}');
+    expect(pending).toContain('row.approverRoles?.map');
+  });
 });

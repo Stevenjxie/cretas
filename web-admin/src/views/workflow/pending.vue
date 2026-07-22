@@ -6,6 +6,7 @@ import { get, post } from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
 import { enumLabel } from '@/utils/enumDisplay';
 import { handleCatchError } from '@/utils/errorToast';
+import { formatDateTime } from '@/utils/dateFormat';
 
 interface PendingApproval {
   instanceId: string;
@@ -166,7 +167,9 @@ onMounted(async () => {
           <template #default="{ row }">{{ row.approverRoles?.map((role: string) => enumLabel(role)).join('、') || '-' }}</template>
         </el-table-column>
         <el-table-column prop="initiatedByUsername" label="申请人" width="130" />
-        <el-table-column prop="initiatedAt" label="提交时间" min-width="180" />
+        <el-table-column label="提交时间" min-width="180">
+          <template #default="{ row }">{{ formatDateTime(row.initiatedAt) }}</template>
+        </el-table-column>
         <el-table-column label="操作" width="170" fixed="right">
           <template #default="{ row }">
             <template v-if="canAct(row)">
