@@ -469,6 +469,10 @@ def _extract_dish_candidate_single(text: str) -> "Optional[str]":
     if not match:
         match = _DISH_QUERY_RE.match(text)
     if not match:
+        # 省略句实体切换: 「那招牌藤椒味呢」— 无指标词, 实体显式点名,
+        # 指标由上文继承 (垃圾候选被下方 generic/reject 表拦截)。
+        match = re.match(r"^那?[「\"']?(.{2,24}?)[」\"']?呢[?？]?$", text)
+    if not match:
         return None
     candidate = _DISH_LEADING_TIME_RE.sub("", match.group(1).strip())
     candidate = _DISH_LEADING_PRONOUN_RE.sub("", candidate)
@@ -507,10 +511,12 @@ def extract_dish_candidate(query: "Optional[str]") -> "Optional[str]":
             return None
     segments = [text]
     if "继续追问" in text:
+        # 追问段优先: 「那招牌藤椒味呢」显式点名新菜时切换实体;
+        # 追问段无菜名 (「成本如何」「这个…」) 再回落父问题段继承。
         segments = [
             seg.replace("继续追问：", "").replace("继续追问:", "").strip()
             for seg in re.split(r"[；;]", text)
-        ]
+        ][::-1]
     for segment in segments:
         if not segment:
             continue
