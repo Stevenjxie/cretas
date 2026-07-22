@@ -97,6 +97,10 @@ async def apply_refresh(conn: Any, target_end: date) -> Dict[str, Any]:
         FACTORY_ID, SEED_VERSION, target_end,
     )
     inserted = int(result.rsplit(" ", 1)[-1])
+    if inserted:
+        # Fresh rows shift the planner's row estimates; without new stats the
+        # store-margin anchor scans have regressed from seconds to minutes.
+        await conn.execute("ANALYZE agg_daily")
     verification = await conn.fetchrow(
         """
         SELECT COUNT(*) AS rows, MAX(date) AS max_date,
