@@ -166,7 +166,6 @@ class PurchaseServiceImplReceivingTaskTest {
         supplier.setFactoryId(FACTORY);
         when(supplierRepository.findByIdAndFactoryId(SUPPLIER_ID, FACTORY)).thenReturn(Optional.of(supplier));
         when(orderRepository.findByIdAndFactoryIdForUpdate(PO_ID, FACTORY)).thenReturn(Optional.of(order));
-        when(itemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of(item("10", "0")));
         when(receiveRepository.findByFactoryIdAndPurchaseOrderIdOrderByCreatedAtAsc(FACTORY, PO_ID))
                 .thenReturn(List.of(receipt("RCV-EXISTING", PurchaseReceiveStatus.DRAFT, "5")));
 

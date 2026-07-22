@@ -98,6 +98,7 @@ class PurchaseServiceImplReceivePriceInheritTest {
         PurchaseOrder po = new PurchaseOrder();
         po.setId(PO_ID);
         po.setFactoryId(FACTORY);
+        po.setSupplierId("SUP-1");
         po.setStatus(PurchaseOrderStatus.FINANCE_APPROVED);
         lenient().when(purchaseOrderRepository.findByIdAndFactoryIdForUpdate(PO_ID, FACTORY)).thenReturn(Optional.of(po));
         lenient().when(receiveRecordRepository.findByFactoryIdAndPurchaseOrderIdOrderByCreatedAtAsc(FACTORY, PO_ID))
@@ -199,6 +200,8 @@ class PurchaseServiceImplReceivePriceInheritTest {
 
     private PurchaseOrderItem poItem(String materialTypeId, BigDecimal unitPrice) {
         PurchaseOrderItem it = new PurchaseOrderItem();
+        it.setId(MAT_A.equals(materialTypeId) ? 1L : 2L);
+        it.setPurchaseOrderId(PO_ID);
         it.setMaterialTypeId(materialTypeId);
         it.setUnitPrice(unitPrice);
         it.setUnit("kg");
